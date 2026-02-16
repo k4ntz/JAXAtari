@@ -2,9 +2,11 @@ import gymnasium
 import gymnasium.envs.functional_jax_env
 import jax
 import chex
+import warnings
 from typing import Any, Dict, Union, Optional
 import functools
 import numpy as np
+from dataclasses import is_dataclass, asdict
 from gymnasium.envs.functional_jax_env import FunctionalJaxEnv
 
 # Import necessary components from the user's framework
@@ -18,10 +20,12 @@ def to_gymnasium_space(space: Space) -> gymnasium.Space:
         return gymnasium.spaces.Discrete(space.n)
     elif isinstance(space, Box):
         # Pass shape explicitly to allow gymnasium to handle scalar bounds correctly.
+        # Gymnasium expects shape elements to be Python ints, not JAX/numpy arrays.
+        shape = tuple(int(d) for d in space.shape)
         return gymnasium.spaces.Box(
             low=np.array(space.low),
             high=np.array(space.high),
-            shape=space.shape,
+            shape=shape,
             dtype=space.dtype
         )
     elif isinstance(space, TupleSpace):
@@ -95,23 +99,40 @@ class JaxAtariFuncEnv:
         It also calculates the standard `terminated` and `truncated` flags.
         """
         base_info = self._base_env._get_info(next_state)
-        # Convert NamedTuple or tuple to dict
-        if isinstance(base_info, tuple) and hasattr(base_info, '_asdict'):
-            info = base_info._asdict()
+        
+        # 1. Check Modern (Dataclass / Flax)
+        if is_dataclass(base_info):
+            info = asdict(base_info)
         elif isinstance(base_info, dict):
             info = base_info
+        
+        # 2. Check Legacy (NamedTuple)
+        elif isinstance(base_info, tuple) and hasattr(base_info, '_fields'):
+             warnings.warn(
+                 "Environment returned a NamedTuple for 'info'. This is deprecated. "
+                 "Please return a Dict or a Flax PyTreeNode.",
+                 UserWarning
+             )
+             info = base_info._asdict()
         else:
             info = {}
-        #info["truncated"] = False
+            
         return info
 
     def state_info(self, state: Any) -> Dict:
         """Returns info about a state, primarily for the reset info dict."""
         base_info = self._base_env._get_info(state)
-        if isinstance(base_info, tuple) and hasattr(base_info, '_asdict'):
-            return base_info._asdict()
+        
+        if is_dataclass(base_info):
+            return asdict(base_info)
         elif isinstance(base_info, dict):
             return base_info
+        elif isinstance(base_info, tuple) and hasattr(base_info, '_fields'):
+             warnings.warn(
+                 "Environment returned a NamedTuple for 'info'. This is deprecated.",
+                 UserWarning
+             )
+             return base_info._asdict()
         else:
             return {}
 
@@ -126,6 +147,15 @@ class JaxAtariFuncEnv:
     def render_close(self):
         """Closes the renderer."""
         pass
+
+#TODO: This is a dirty hack, required for gymnasium EpisodicLifeEnv wrapper
+class FakeALE:
+    def __init__(self, wrapped_env):
+        self.wrapped_env = wrapped_env
+    def lives(self):
+        if hasattr(self.wrapped_env.state, 'lives'):
+            return self.wrapped_env.state.lives
+        return 0
 
 class GymnasiumJaxAtariWrapper(FunctionalJaxEnv):
     """
@@ -207,6 +237,9 @@ class GymnasiumJaxAtariWrapper(FunctionalJaxEnv):
         
         # Keep a reference to the raw env for rendering
         self._jaxatari_env = jaxatari_env
+
+        # Required for compatibility with EpisodicLifeEnv wrapper (ale.lives())
+        self.ale = FakeALE(self)
 
     @property
     def unwrapped(self):

@@ -1,18 +1,24 @@
 import os
+from flax import struct
 import jax.numpy as jnp
 import jax
 from functools import partial
 import numpy as np
-from typing import Dict, Any, List, Tuple, NamedTuple
+from typing import Dict, Any, List, Optional, Tuple, NamedTuple, Union
 from jax.scipy.ndimage import map_coordinates
+from platformdirs import user_data_dir
 
-class RendererConfig(NamedTuple):
+def get_base_sprite_dir() -> str:
+    """Returns the base directory for JAXAtari sprites: ~/.local/share/jaxatari/sprites"""
+    return os.path.join(user_data_dir("jaxatari"), "sprites")
+
+class RendererConfig(struct.PyTreeNode):
     """Configuration for the rendering pipeline."""
     # TODO: uses HWC since everything does right now, but might be counterintuitive during usage
     # Target dimensions
-    game_dimensions: Tuple[int, int] = (210, 160)  # (height, width) this is normally constant except for some games (sir lancelot for example)
-    channels: int = 3  # 1 for grayscale, 3 for RGB
-    downscale: Tuple[int, int] = None  # (height, width) to downscale to, or None for no downscaling
+    game_dimensions: Tuple[int, int] = struct.field(pytree_node=False, default=(210, 160))  # (height, width) this is normally constant except for some games (sir lancelot for example)
+    channels: int = struct.field(pytree_node=False, default=3)  # 1 for grayscale, 3 for RGB
+    downscale: Tuple[int, int] = struct.field(pytree_node=False, default=None)  # (height, width) to downscale to, or None for no downscaling
 
     @property
     def width_scaling(self) -> float:
@@ -23,10 +29,144 @@ class RendererConfig(NamedTuple):
         return self.downscale[0] / self.game_dimensions[0] if self.downscale else 1.0
 
 class JaxRenderingUtils:
+    """
+    ASSET CONFIGURATION GUIDE
+    =========================
+
+    The `load_and_setup_assets` function expects a list of dictionaries, where each dictionary
+    defines a single game asset or a group of related assets. This configuration is declarative:
+    it tells the engine *what* to load, *how* to process it, and *what* variants to generate.
+
+    General Structure
+    -----------------
+    An asset entry is a Python dictionary with the following standard keys:
+
+        {
+            'name': str,         # (Required) Unique identifier for the asset.
+            'type': str,         # (Required) One of: 'background', 'single', 'group', 'digits', 'procedural'.
+            'file': str,         # (Depends on type) Path to a single .npy file.
+            'files': list,       # (Depends on type) List of paths for grouped assets.
+            'pattern': str,      # (Depends on type) String format pattern for numbered sequences.
+            'data': array,       # (Optional) Raw JAX/Numpy array data (bypass file loading).
+            'transpose': bool,   # (Optional) If True, transposes input (W, H, C) -> (H, W, C).
+            'recolorings': dict  # (Optional) definitions for generating color variants.
+        }
+
+    Supported Asset Types
+    ---------------------
+
+    1. **'background'**
+    - Represents the static background of the game.
+    - Must be a single `.npy` file or raw data.
+    - **Required:** 'file' OR 'data'.
+    - **Example:**
+        {'name': 'bg', 'type': 'background', 'file': 'background.npy'}
+
+    2. **'single'**
+    - A standalone sprite (e.g., a car, a ball).
+    - **Required:** 'file' OR 'data'.
+    - **Optional:** 'transpose' (default False).
+    - **Example:**
+        {'name': 'player', 'type': 'single', 'file': 'player.npy', 'transpose': True}
+
+    3. **'group'**
+    - A collection of related sprites that should share dimensions (padding) and flipping logic.
+    - Useful for animation frames (e.g., walk cycles) or state variations (e.g., normal/hit).
+    - The engine automatically pads all sprites in the group to the maximum width/height found.
+    - **Required:** 'files' (list of strings) OR 'data' (list of arrays).
+    - **Example:**
+        {
+            'name': 'hero', 
+            'type': 'group', 
+            'files': ['hero_idle.npy', 'hero_jump.npy', 'hero_walk.npy']
+        }
+    - **Access:** `SHAPE_MASKS['hero']` returns a stack (N, H, W). Index 0 is idle, 1 is jump, etc.
+
+    4. **'digits'**
+    - Specialized loader for score digits (0-9).
+    - **Required:** 'pattern' (e.g., "num_{}.npy") OR 'data' (pre-stacked array).
+    - **Behavior:** Iterates 0-9, formats the pattern, loads files, and pads them.
+    - **Example:**
+        {'name': 'score', 'type': 'digits', 'pattern': 'assets/numbers/n_{}.npy'}
+
+    5. **'procedural'**
+    - Assets generated via code rather than loaded from disk.
+    - **Required:** 'data' (The raw RGBA array).
+    - **Example:**
+        {'name': 'laser', 'type': 'procedural', 'data': jnp.ones((4, 2, 4))}
+
+    --------------------------------------------------------------------------------
+
+    Recoloring System (Opt-in)
+    --------------------------
+    You can automatically generate color variants of any asset ('single', 'group', or 'digits') 
+    by adding a `recolorings` dictionary. The engine will process the base asset and create 
+    new entries in the `SHAPE_MASKS` dictionary with the specified suffixes.
+
+    **Key:** `recolorings`
+    **Value:** A dictionary mapping `suffix_name` -> `Recoloring Rule`.
+
+    **Recoloring Rules:**
+    A rule defines how pixels should be modified. There are three levels of control:
+
+    **Level 1: Global Replacement (Simple)**
+    Replace ALL non-transparent pixels with a single target color.
+    - **Format:** `(R, G, B)` tuple.
+    - **Use Case:** "Make this entire car red."
+
+        {
+            'name': 'car', 
+            'type': 'single', 
+            'file': 'car.npy',
+            'recolorings': {
+                'red': (255, 0, 0),    # Generates mask 'car_red'
+                'blue': (0, 0, 255)    # Generates mask 'car_blue'
+            }
+        }
+
+    **Level 2: Selective Replacement (Targeted)**
+    Replace ONLY pixels that match a specific source color.
+    - **Format:** `{'source': (r,g,b), 'target': (r,g,b)}`.
+    - **Use Case:** "Change the character's green shirt to red, but keep their pink face."
+
+        {
+            'name': 'hero',
+            'type': 'single',
+            'file': 'hero.npy', # Contains green (0,255,0) pixels and pink pixels
+            'recolorings': {
+                'team_red': {
+                    'source': (0, 255, 0),  # Find Green
+                    'target': (255, 0, 0)   # Make it Red
+                }
+            }
+        }
+        # Result: 'hero_team_red' has a red shirt and a pink face.
+
+    **Level 3: Complex Chained Replacement**
+    Apply multiple replacements in sequence.
+    - **Format:** A list of dictionaries `[rule1, rule2, ...]`.
+    - **Use Case:** "Swap the shirt color AND the shoe color."
+
+        {
+            'name': 'hero',
+            'recolorings': {
+                'evil_mode': [
+                    {'source': (0, 255, 0), 'target': (0, 0, 0)},    # Shirt Green -> Black
+                    {'source': (255, 255, 255), 'target': (255, 0, 0)} # Shoes White -> Red
+                ]
+            }
+        }
+
+    **Palette Management:**
+    The engine automatically scans all generated variants and adds their new unique colors 
+    to the global palette during initialization. No manual palette management is required.
+    """
+
     def __init__(self, config: RendererConfig, transparent_id: int = 255):
         self.config = config
-        # A special ID to represent transparency. Must be an ID not used by any color (No Atari game should have more than 255 colors in the palette)
-        # there should never be a need to change this!
+        # A special ID to represent transparency. Must be an ID not used by any color.
+        # Default is 255, but will be automatically updated to max(color_id) + 1
+        # when the palette is created in load_and_setup_assets().
         self.TRANSPARENT_ID = transparent_id
 
         # Precompute full-raster coordinate grids for mask-based drawing.
@@ -51,9 +191,21 @@ class JaxRenderingUtils:
             JAX array of shape (Height, Width, 4).
         """
         frame = jnp.load(fileName)
-        if frame.ndim != 3 or frame.shape[2] != 4:
+        if frame.ndim != 3:
             raise ValueError(
-                f"Invalid frame format in {fileName}. Source .npy must be loadable with 3 dims and 4 channels (RGBA)."
+                f"Invalid frame format in {fileName}. Source .npy must be loadable with 3 dims."
+            )
+        
+        # Handle RGB (3 channels) by converting to RGBA
+        if frame.shape[2] == 3:
+            # Convert RGB to RGBA
+            # Pixels with (0,0,0) are treated as transparent (alpha=0), others are opaque (alpha=255)
+            is_transparent = (frame[:, :, 0] == 0) & (frame[:, :, 1] == 0) & (frame[:, :, 2] == 0)
+            alpha_channel = jnp.where(is_transparent, 0, 255).astype(frame.dtype)
+            frame = jnp.concatenate([frame, alpha_channel[:, :, None]], axis=2)
+        elif frame.shape[2] != 4:
+            raise ValueError(
+                f"Invalid frame format in {fileName}. Source .npy must have 3 channels (RGB) or 4 channels (RGBA)."
             )
 
         if transpose:
@@ -74,9 +226,11 @@ class JaxRenderingUtils:
         """
         digits = []
         max_height, max_width = 0, 0
+        # base_path = Path(user_data_dir("jaxatari"))
 
         # Load digits assuming loadFrame returns (H, W, C)
         for i in range(num_chars):
+            # path = os.path.join(base_path, path_pattern.format(i))
             digit = self.loadFrame(path_pattern.format(i), transpose=False) # Ensure HWC
             max_height = max(max_height, digit.shape[0]) # Axis 0 is Height
             max_width = max(max_width, digit.shape[1])   # Axis 1 is Width
@@ -103,6 +257,31 @@ class JaxRenderingUtils:
 
         return jnp.array(padded_digits)
 
+    def _load_and_pad_digits_from_paths(self, path_list: List[str], num_chars: int = 10):
+        """Loads digit sprites from a list of paths, pads to max dimensions. Used when resolve_path is needed (e.g. mod_path)."""
+        digits = []
+        max_height, max_width = 0, 0
+        for i in range(min(num_chars, len(path_list))):
+            digit = self.loadFrame(path_list[i], transpose=False)
+            max_height = max(max_height, digit.shape[0])
+            max_width = max(max_width, digit.shape[1])
+            digits.append(digit)
+        padded_digits = []
+        for digit in digits:
+            pad_h = max_height - digit.shape[0]
+            pad_w = max_width - digit.shape[1]
+            pad_top = pad_h // 2
+            pad_bottom = pad_h - pad_top
+            pad_left = pad_w // 2
+            pad_right = pad_w - pad_left
+            padded_digit = jnp.pad(
+                digit,
+                ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
+                mode="constant",
+                constant_values=0,
+            )
+            padded_digits.append(padded_digit)
+        return jnp.array(padded_digits)
 
     def _create_id_mask(self, sprite_data, color_to_id: Dict) -> np.ndarray:
         """Converts a single 3D RGBA sprite into a 2D integer ID mask."""
@@ -195,14 +374,86 @@ class JaxRenderingUtils:
                 constant_values=0
             )
             padded_sprites.append(padded_sprite)
-            
-            # --- THE FINAL, CRITICAL FIX ---
-            # The flip_offset for EACH sprite is its OWN padding amount,
-            # not the maximum padding of the group.
+
             flip_offset = jnp.array([pad_w, pad_h], dtype=jnp.int32)
             flip_offsets.append(flip_offset)
 
         return padded_sprites, flip_offsets
+    
+    # ============= Advanced Recoloring Logic =============
+
+    def _apply_global_replace(self, sprites: jnp.ndarray, target_rgb: Tuple[int, int, int]) -> jnp.ndarray:
+        """Internal: Replaces ALL non-transparent pixels with target_rgb."""
+        alpha = sprites[..., 3]
+        is_visible = alpha > 0
+        new_color_arr = jnp.array(target_rgb, dtype=sprites.dtype)
+        
+        mask_expanded = jnp.expand_dims(is_visible, axis=-1)
+        current_rgb = sprites[..., :3]
+        target_rgb = jnp.ones_like(current_rgb) * new_color_arr
+        
+        new_rgb_part = jnp.where(mask_expanded, target_rgb, current_rgb)
+        return jnp.concatenate([new_rgb_part, sprites[..., 3:4]], axis=-1)
+
+    def _apply_selective_replace(self, sprites: jnp.ndarray, source_rgb: Tuple[int, int, int], target_rgb: Tuple[int, int, int]) -> jnp.ndarray:
+        """Internal: Replaces ONLY pixels matching source_rgb with target_rgb."""
+        sr, sg, sb = source_rgb
+        
+        # Check matching RGB and non-zero alpha
+        matches_source = (
+            (sprites[..., 0] == sr) & 
+            (sprites[..., 1] == sg) & 
+            (sprites[..., 2] == sb) & 
+            (sprites[..., 3] > 0)
+        )
+        
+        mask_expanded = jnp.expand_dims(matches_source, axis=-1)
+        new_color_arr = jnp.array(target_rgb, dtype=sprites.dtype)
+        
+        current_rgb = sprites[..., :3]
+        target_rgb_plane = jnp.ones_like(current_rgb) * new_color_arr
+        
+        new_rgb_part = jnp.where(mask_expanded, target_rgb_plane, current_rgb)
+        return jnp.concatenate([new_rgb_part, sprites[..., 3:4]], axis=-1)
+
+    def perform_recoloring(self, sprites: jnp.ndarray, rule: Union[Tuple, Dict, List]) -> jnp.ndarray:
+        """
+        Applies one or more recoloring rules to a sprite tensor.
+        
+        Supported Rules:
+        1. Simple Tuple: (R, G, B) 
+           -> Global Replace: Turns everything non-transparent to this color.
+           
+        2. Dictionary: {'target': (R, G, B), 'source': (Optional Source RGB)}
+           -> If 'source' is present: Selective Replace (Source -> Target).
+           -> If 'source' is missing: Global Replace.
+           
+        3. List of Dictionaries: [{'source': A, 'target': B}, {'source': C, 'target': D}]
+           -> Chained replacements applied in order.
+        """
+        # Case 1: Simple Tuple (Global Replace)
+        if isinstance(rule, (tuple, list)) and isinstance(rule[0], (int, float)):
+             return self._apply_global_replace(sprites, rule)
+        
+        # Normalize single dict to list of dicts for unified processing
+        rules_list = [rule] if isinstance(rule, dict) else rule
+        
+        current_sprites = sprites
+        for r in rules_list:
+            target = r.get('target')
+            source = r.get('source')
+            
+            if target is None:
+                raise ValueError(f"Recoloring rule missing 'target': {r}")
+                
+            if source is not None:
+                # Specific replacement
+                current_sprites = self._apply_selective_replace(current_sprites, source, target)
+            else:
+                # Global replacement
+                current_sprites = self._apply_global_replace(current_sprites, target)
+                
+        return current_sprites
     
     # ---------------------------------------------------------------------------- #
     #                          Internal Processing Methods                         #
@@ -227,19 +478,45 @@ class JaxRenderingUtils:
                             palette_list.append(rgb)
                             next_id += 1
         
+        # Determine dtype based on palette size to avoid overflow
+        # uint8: 0-255 colors (IDs 0-254, TRANSPARENT_ID 255), 
+        # uint16: 256-65535 colors (IDs 0-65534, TRANSPARENT_ID 65535),
+        # uint32: 65536+ colors (TRANSPARENT_ID 65536+)
+        palette_size = len(palette_list)
+        if palette_size >= 65536:
+            dtype = jnp.uint32
+        elif palette_size >= 256:
+            dtype = jnp.uint16
+        else:
+            dtype = jnp.uint8
+
         # Create the final JAX array for the palette
         if self.config.channels == 1:
             gray_palette = [int(0.299*r + 0.587*g + 0.114*b) for r, g, b in palette_list]
-            PALETTE = jnp.array(gray_palette, dtype=jnp.uint8).reshape(-1, 1)
+            PALETTE = jnp.array(gray_palette, dtype=dtype).reshape(-1, 1)
         else:
-            PALETTE = jnp.array(palette_list, dtype=jnp.uint8)
+            PALETTE = jnp.array(palette_list, dtype=dtype)
             
         return PALETTE, color_to_id
 
     def _create_id_mask(self, rgba_sprite: jnp.ndarray, color_to_id: Dict) -> jnp.ndarray:
         """Converts a single RGBA sprite to a palette-ID mask."""
         h, w, _ = rgba_sprite.shape
-        id_mask = np.full((h, w), self.TRANSPARENT_ID, dtype=np.uint8)
+        
+        # Determine the appropriate dtype based on max color ID to avoid overflow
+        # TRANSPARENT_ID will be max_color_id + 1, so we need to account for that
+        # uint8: max_color_id 0-254 (TRANSPARENT_ID 1-255), 
+        # uint16: max_color_id 255-65534 (TRANSPARENT_ID 256-65535),
+        # uint32: max_color_id 65535+ (TRANSPARENT_ID 65536+)
+        max_color_id = max(color_to_id.values()) if color_to_id else 0
+        if max_color_id >= 65535:  # TRANSPARENT_ID would be 65536+, need uint32
+            dtype = np.uint32
+        elif max_color_id >= 255:  # TRANSPARENT_ID would be 256+, need uint16
+            dtype = np.uint16
+        else:
+            dtype = np.uint8
+        
+        id_mask = np.full((h, w), self.TRANSPARENT_ID, dtype=dtype)
 
         # Use numpy for faster iteration
         sprite_np = np.array(rgba_sprite)
@@ -267,8 +544,9 @@ class JaxRenderingUtils:
                     for mask in shape_masks[name]:
                         # Calculate new dimensions based on scaling factors
                         original_h, original_w = mask.shape
-                        scaled_h = int(original_h * self.config.height_scaling)
-                        scaled_w = int(original_w * self.config.width_scaling)
+
+                        scaled_h = jnp.maximum(1, jnp.round(original_h * self.config.height_scaling)).astype(jnp.int32)
+                        scaled_w = jnp.maximum(1, jnp.round(original_w * self.config.width_scaling)).astype(jnp.int32)
                         
                         scaled_mask = jax.image.resize(
                             mask, 
@@ -280,8 +558,9 @@ class JaxRenderingUtils:
                 else: # Single sprite
                     # Calculate new dimensions based on scaling factors
                     original_h, original_w = shape_masks[name].shape
-                    scaled_h = int(original_h * self.config.height_scaling)
-                    scaled_w = int(original_w * self.config.width_scaling)
+
+                    scaled_h = jnp.maximum(1, jnp.round(original_h * self.config.height_scaling)).astype(jnp.int32)
+                    scaled_w = jnp.maximum(1, jnp.round(original_w * self.config.width_scaling)).astype(jnp.int32)
                     
                     scaled_mask = jax.image.resize(
                         shape_masks[name], 
@@ -309,7 +588,6 @@ class JaxRenderingUtils:
         
         return id_mask
 
-
     def load_and_setup_assets(self, asset_config: list, base_path: str):
         """
         Loads, processes, and prepares all game assets from a configuration list.
@@ -319,89 +597,169 @@ class JaxRenderingUtils:
         - Padding and stacking sprite groups.
         - Calculating and storing flip offsets correctly and internally.
         - Generating the palette, shape masks, and background raster.
+        - recoloring assets, if requested in the asset config
 
         Args:
             base_path: The directory path where sprite .npy files are located.
             asset_config: A list of dictionaries defining the assets to load.
                           Each dict should have 'name', 'type', and path info.
+                          For optional parameters, see the extensive documentation of the JaxRenderingUtils class.
 
         Returns:
             A tuple: (PALETTE, SHAPE_MASKS, BACKGROUND, COLOR_TO_ID, FLIP_OFFSETS)
         """
-        raw_sprites_dict = {}
+        raw_sprites_dict = {} 
         FLIP_OFFSETS = {}
         background_rgba = None
 
-        # 1. Load all assets from the configuration manifest
+        # 1. Pre-scan for Mod Path Injection and allowed fallback filenames
+        mod_path = None
+        mod_path_filenames = None  # None = allow fallback for any file (legacy); set = only these may use mod_path
         for asset in asset_config:
-            name, asset_type = asset.get('name'), asset.get('type')
+            if asset.get("type") == "mod_path":
+                mod_path = asset.get("path")
+            elif asset.get("type") == "mod_path_filenames":
+                mod_path_filenames = set(asset.get("filenames", ()))
 
+        def resolve_path(filename):
+            full_path = os.path.join(base_path, filename)
+            if os.path.exists(full_path):
+                return full_path
+            # Only fall back to mod path when env is modded and this file is from a mod override
+            if mod_path and (mod_path_filenames is None or filename in mod_path_filenames):
+                mod_full_path = os.path.join(mod_path, filename)
+                if os.path.exists(mod_full_path):
+                    return mod_full_path
+            return full_path
+
+        # 2. Load assets (standard loop)
+        for asset in asset_config:
+            asset_type = asset.get("type")
+            if asset_type in ("mod_path", "mod_path_filenames"):
+                continue  # Skip meta-tags
+            name = asset.get("name")
+
+            # --- Background ---
             if asset_type == 'background':
-                # Support either file-backed or procedural backgrounds
                 if 'file' in asset:
-                    path = os.path.join(base_path, asset['file'])
-                    background_rgba = self.loadFrame(path)
+                    background_rgba = self.loadFrame(resolve_path(asset['file']))
                 elif 'data' in asset:
                     background_rgba = asset['data']
                 else:
-                    raise ValueError("Background asset must include 'file' or 'data'.")
+                    raise ValueError("Background missing file/data")
                 continue
+
+            # --- Load Base Data ---
+            base_data = None
+            current_flip_offset = jnp.array([0, 0])
 
             if asset_type == 'single':
                 if 'file' in asset:
-                    path = os.path.join(base_path, asset['file'])
-                    raw_sprites_dict[name] = self.loadFrame(path)
+                    base_data = self.loadFrame(resolve_path(asset['file']), transpose=asset.get('transpose', False))
                 elif 'data' in asset:
-                    raw_sprites_dict[name] = asset['data']
-                else:
-                    raise ValueError(f"Single asset '{name}' must include 'file' or 'data'.")
-                FLIP_OFFSETS[name] = jnp.array([0, 0])
-
+                    base_data = asset['data']
+                
             elif asset_type == 'group':
                 if 'files' in asset:
-                    paths = [os.path.join(base_path, f) for f in asset['files']]
-                    sprites_to_pad = [self.loadFrame(p) for p in paths]
+                    sprites = [self.loadFrame(resolve_path(f)) for f in asset['files']]
                 elif 'data' in asset:
-                    # Allow passing a list/stack of RGBA sprites directly
-                    data = asset['data']
-                    sprites_to_pad = list(data) if isinstance(data, (list, tuple)) else [s for s in data]
-                else:
-                    raise ValueError(f"Group asset '{name}' must include 'files' or 'data'.")
-
-                padded_sprites, flip_offset = self.pad_to_match(sprites_to_pad)
-                raw_sprites_dict[name] = jnp.stack(padded_sprites)
-                # Use per-sprite offsets; keep API-compatible scalar by picking first if uniform
-                FLIP_OFFSETS[name] = flip_offset[0]
+                    sprites = list(asset['data'])
+                padded, offsets = self.pad_to_match(sprites)
+                base_data = jnp.stack(padded)
+                current_flip_offset = offsets[0] 
 
             elif asset_type == 'digits':
                 if 'pattern' in asset:
-                    pattern = os.path.join(base_path, asset['pattern'])
-                    raw_sprites_dict[name] = self.load_and_pad_digits(pattern)
+                    digit_paths = [resolve_path(asset['pattern'].format(i)) for i in range(10)]
+                    base_data = self._load_and_pad_digits_from_paths(digit_paths)
                 elif 'data' in asset:
-                    # Accept preloaded/padded digit stacks directly
-                    raw_sprites_dict[name] = asset['data']
-                else:
-                    raise ValueError(f"Digits asset '{name}' must include 'pattern' or 'data'.")
-                FLIP_OFFSETS[name] = jnp.array([0, 0])
+                    base_data = asset['data']
 
             elif asset_type == 'procedural':
-                # For procedural assets, the data is already provided.
-                raw_sprites_dict[name] = asset['data']
-                FLIP_OFFSETS[name] = jnp.array([0, 0])
-                
+                base_data = asset['data']
+            
+            if base_data is None:
+                 raise ValueError(f"Could not load data for {name}")
+
+            # Store Base Asset
+            raw_sprites_dict[name] = base_data
+            FLIP_OFFSETS[name] = current_flip_offset
+
+            # --- Handle Recolorings (Opt-in) ---
+            recolorings = asset.get('recolorings', None)
+            
+            if recolorings:
+                if not isinstance(recolorings, dict):
+                    raise ValueError(f"Asset '{name}': 'recolorings' must be a dict.")
+
+                for suffix, rule in recolorings.items():
+                    new_name = f"{name}_{suffix}"
+                    
+                    # New unified function handles tuple, dict, or list of dicts
+                    recolored_data = self.perform_recoloring(base_data, rule)
+                    
+                    raw_sprites_dict[new_name] = recolored_data
+                    FLIP_OFFSETS[new_name] = current_flip_offset
+
         if background_rgba is None:
-            raise ValueError("Asset config must include an asset of type 'background'")
+            raise ValueError("No background asset found")
 
-        # 2. Build palette from all loaded sprites and the background
-        all_assets = list(raw_sprites_dict.values()) + [background_rgba]
-        PALETTE, COLOR_TO_ID = self._create_palette(all_assets)
+        # 2. Palette Generation
+        all_scan_assets = [background_rgba] + list(raw_sprites_dict.values())
+        PALETTE, COLOR_TO_ID = self._create_palette(all_scan_assets)
+        
+        # Update TRANSPARENT_ID to be one higher than the highest color ID
+        # This ensures it never conflicts with any actual color ID
+        if COLOR_TO_ID:
+            max_color_id = max(COLOR_TO_ID.values())
+            self.TRANSPARENT_ID = max_color_id + 1
+        # If no colors (shouldn't happen), keep the default TRANSPARENT_ID
 
-        # 3. Create palette-indexed shape masks for all sprites
+        # Extend palette to include TRANSPARENT_ID entry to prevent out-of-bounds indexing
+        # Use black (0,0,0) as the default color for transparent pixels
+        palette_size = PALETTE.shape[0]
+        required_size = self.TRANSPARENT_ID + 1
+        if palette_size < required_size:
+            if self.config.channels == 1:
+                # Grayscale: pad with black (0)
+                padding = jnp.zeros((required_size - palette_size, 1), dtype=PALETTE.dtype)
+            else:
+                # RGB: pad with black (0,0,0)
+                padding = jnp.zeros((required_size - palette_size, 3), dtype=PALETTE.dtype)
+            PALETTE = jnp.concatenate([PALETTE, padding], axis=0)
+
+        # Extend palette to include TRANSPARENT_ID entry to prevent out-of-bounds indexing
+        # Use black (0,0,0) as the default color for transparent pixels
+        palette_size = PALETTE.shape[0]
+        required_size = self.TRANSPARENT_ID + 1
+        if palette_size < required_size:
+            if self.config.channels == 1:
+                # Grayscale: pad with black (0)
+                padding = jnp.zeros((required_size - palette_size, 1), dtype=PALETTE.dtype)
+            else:
+                # RGB: pad with black (0,0,0)
+                padding = jnp.zeros((required_size - palette_size, 3), dtype=PALETTE.dtype)
+            PALETTE = jnp.concatenate([PALETTE, padding], axis=0)
+
+        # Extend palette to include TRANSPARENT_ID entry to prevent out-of-bounds indexing
+        # Use black (0,0,0) as the default color for transparent pixels
+        palette_size = PALETTE.shape[0]
+        required_size = self.TRANSPARENT_ID + 1
+        if palette_size < required_size:
+            if self.config.channels == 1:
+                # Grayscale: pad with black (0)
+                padding = jnp.zeros((required_size - palette_size, 1), dtype=PALETTE.dtype)
+            else:
+                # RGB: pad with black (0,0,0)
+                padding = jnp.zeros((required_size - palette_size, 3), dtype=PALETTE.dtype)
+            PALETTE = jnp.concatenate([PALETTE, padding], axis=0)
+
+        # 3. Mask Generation
         SHAPE_MASKS = self._create_shape_masks(raw_sprites_dict, COLOR_TO_ID)
 
-        # 4. Create the final background raster
+        # 4. Background Raster
         BACKGROUND = self._create_background_raster(background_rgba, COLOR_TO_ID)
-        
+
         return PALETTE, SHAPE_MASKS, BACKGROUND, COLOR_TO_ID, FLIP_OFFSETS
 
     
@@ -803,7 +1161,7 @@ class JaxRenderingUtils:
         pos_scaled = jnp.round(positions * jnp.array([width_scale, height_scale])).astype(jnp.int32)
         size_scaled = jnp.round(sizes * jnp.array([width_scale, height_scale])).astype(jnp.int32)
         rung_scaled = int(max(1, round(rung_height * height_scale)))
-        space_scaled = int(max(1, round(space_height * height_scale)))
+        space_scaled = int(max(0, round(space_height * height_scale)))
         
         def _create_single_ladder_mask(pos, size):
             should_draw = pos[0] != -1
@@ -828,9 +1186,38 @@ class JaxRenderingUtils:
 
     # ========= Final rendering step: palette lookup ===========
     @partial(jax.jit, static_argnames=['self'])
-    def render_from_palette(self, object_raster: jnp.ndarray, palette: jnp.ndarray) -> jnp.ndarray:
-        """Generates the final image using a palette lookup."""
-        final_image = palette[object_raster]
+    def render_from_palette(self, 
+                            object_raster: jnp.ndarray, 
+                            base_palette: jnp.ndarray,
+                            indices_to_update: Optional[jnp.ndarray] = None,
+                            new_color_ids: Optional[jnp.ndarray] = None
+                           ) -> jnp.ndarray:
+        """
+        Generates the final image using a palette lookup.
+        
+        Optionally accepts dynamic updates to swap colors in the palette
+        for this frame only. Used for recoloring sprites.
+        """
+        
+        frame_palette = base_palette
+
+        def apply_updates(p):
+            # Get the actual RGB color values from the new IDs
+            new_colors = p[new_color_ids]
+            # Set those colors at the old indices
+            return p.at[indices_to_update].set(new_colors)
+
+        # Use lax.cond to make this JIT-friendly.
+        # This is a JAX-native "scatter update" (palette[indices] = colors).
+        frame_palette = jax.lax.cond(
+            (indices_to_update is not None) and (new_color_ids is not None),
+            apply_updates,
+            lambda p: p, # No updates
+            frame_palette
+        )
+
+        # The final lookup uses the dynamically created palette
+        final_image = frame_palette[object_raster]
 
         if self.config.channels == 1 and final_image.ndim == 2:
             final_image = final_image[..., None] # Ensure channel dim exists for grayscale

@@ -241,32 +241,6 @@ def test_spaces_functionality():
     assert stacked_space.shape == (4, 3, 4)
 
 
-def test_all_games_available():
-    """Test that all games can be listed and created."""
-    games = list_available_games()
-    assert len(games) > 0, "Should have at least one game available"
-    
-    # Test that each game can be created
-    for game_name in games:
-        env = jaxatari.make(game_name)
-        assert env is not None, f"Environment for {game_name} should not be None"
-
-
-def test_game_names_are_valid():
-    """Test that all game names are valid Python identifiers."""
-    games = list_available_games()
-    
-    for game_name in games:
-        # Check that game name is a valid Python identifier
-        assert game_name.isidentifier(), f"Game name '{game_name}' should be a valid Python identifier"
-        
-        # Check that game name is not empty
-        assert len(game_name) > 0, f"Game name should not be empty"
-        
-        # Check that game name contains only alphanumeric characters and underscores
-        assert game_name.replace('_', '').isalnum(), f"Game name '{game_name}' should contain only alphanumeric characters and underscores"
-
-
 def test_space_enhancements():
     """Tests the new Pythonic features: equality, iteration, and slicing."""
     

@@ -5,9 +5,10 @@ import jax
 import jax.numpy as jnp
 import chex
 from jax import Array
+from flax import struct
 
 import jaxatari.spaces as spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.games.kangaroo_levels import (
@@ -16,66 +17,113 @@ from jaxatari.games.kangaroo_levels import (
     Kangaroo_Level_2,
     Kangaroo_Level_3,
 )
+from jaxatari.modification import AutoDerivedConstants
 
-class KangarooConstants(NamedTuple):
-    RESET: int = 18
-    RENDER_SCALE_FACTOR: int = 4
-    SCREEN_WIDTH: int = 160
-    SCREEN_HEIGHT: int = 210
-    PLAYER_WIDTH: int = 8
-    PLAYER_HEIGHT: int = 24
-    ENEMY_WIDTH: int = 8
-    ENEMY_HEIGHT: int = 24
-    FRUIT_WIDTH: int = 8
-    FRUIT_HEIGHT: int = 12
-    MAX_PLATFORMS: int = 10
-    BELL_WIDTH: int = 6
-    BELL_HEIGHT: int = 11
-    CHILD_WIDTH: int = 8
-    CHILD_HEIGHT: int = 15
-    MONKEY_WIDTH: int = 6
-    MONKEY_HEIGHT: int = 15
-    MONKEY_COLOR: Tuple[int, int, int] = (227, 159, 89)
-    BACKGROUND_COLOR: Tuple[int, int, int] = (80, 0, 132)
-    PLAYER_COLOR: Tuple[int, int, int] = (223, 183, 85)
-    ENEMY_COLOR: Tuple[int, int, int] = (227, 151, 89)
-    FRUIT_COLOR_STATE_1: Tuple[int, int, int] = (214, 92, 92)
-    FRUIT_COLOR_STATE_2: Tuple[int, int, int] = (230, 250, 92)
-    FRUIT_COLOR_STATE_3: Tuple[int, int, int] = (255, 92, 250)
-    FRUIT_COLOR_STATE_4: Tuple[int, int, int] = (0, 92, 250)
-    FRUIT_COLOR: list = [
+
+def get_default_asset_config() -> tuple:
+        # 1. Define the game-specific asset manifest in a clear, declarative way.
+        asset_config = [
+            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+            {
+                'name': 'ape', 'type': 'group',
+                'files': ['ape_standing.npy', 'ape_climb_left.npy', 'ape_moving.npy', 'throwing_ape.npy', 'ape_climb_right.npy']
+            },
+            {
+                'name': 'kangaroo', 'type': 'group',
+                'files': ['kangaroo.npy', 'kangaroo_dead.npy', 'kangaroo_climb.npy', 'kangaroo_ducking.npy', 'kangaroo_jump.npy', 'kangaroo_boxing.npy', 'kangaroo_walk.npy', 'kangaroo_jump_high.npy']
+            },
+            {
+                'name': 'bell', 'type': 'group',
+                'files': ['bell.npy', 'ringing_bell.npy']
+            },
+            {
+                'name': 'fruit', 'type': 'group',
+                'files': ['strawberry.npy', 'tomato.npy', 'cherry.npy', 'pineapple.npy']
+            },
+            {
+                'name': 'child', 'type': 'group',
+                'files': ['child.npy', 'child_jump.npy']
+            },
+            {'name': 'coconut', 'type': 'single', 'file': 'coconut.npy'},
+            {'name': 'falling_coconut', 'type': 'single', 'file': 'falling_coconut.npy'},
+            {'name': 'lives', 'type': 'single', 'file': 'kangaroo_lives.npy'},
+            {
+                'name': 'score_digits', 'type': 'digits',
+                'pattern': 'score_{}.npy'
+            },
+            {
+                'name': 'time_digits', 'type': 'digits',
+                'pattern': 'time_{}.npy'
+            }
+        ]
+        return asset_config
+
+
+class KangarooConstants(AutoDerivedConstants):
+    RESET: int = struct.field(pytree_node=False, default=18)
+    RENDER_SCALE_FACTOR: int = struct.field(pytree_node=False, default=4)
+    SCREEN_WIDTH: int = struct.field(pytree_node=False, default=160)
+    SCREEN_HEIGHT: int = struct.field(pytree_node=False, default=210)
+    PLAYER_WIDTH: int = struct.field(pytree_node=False, default=8)
+    PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=24)
+    ENEMY_WIDTH: int = struct.field(pytree_node=False, default=8)
+    ENEMY_HEIGHT: int = struct.field(pytree_node=False, default=24)
+    FRUIT_WIDTH: int = struct.field(pytree_node=False, default=8)
+    FRUIT_HEIGHT: int = struct.field(pytree_node=False, default=12)
+    MAX_PLATFORMS: int = struct.field(pytree_node=False, default=10)
+    BELL_WIDTH: int = struct.field(pytree_node=False, default=6)
+    BELL_HEIGHT: int = struct.field(pytree_node=False, default=11)
+    CHILD_WIDTH: int = struct.field(pytree_node=False, default=8)
+    CHILD_HEIGHT: int = struct.field(pytree_node=False, default=15)
+    MONKEY_WIDTH: int = struct.field(pytree_node=False, default=6)
+    MONKEY_HEIGHT: int = struct.field(pytree_node=False, default=15)
+    MONKEY_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (227, 159, 89))
+    PLAYER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (223, 183, 85))
+    ENEMY_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (227, 151, 89))
+    FRUIT_COLOR_STATE_1: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (214, 92, 92))
+    FRUIT_COLOR_STATE_2: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (230, 250, 92))
+    FRUIT_COLOR_STATE_3: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (255, 92, 250))
+    FRUIT_COLOR_STATE_4: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (0, 92, 250))
+    FRUIT_COLOR: list = struct.field(pytree_node=False, default_factory=lambda: [
         (214, 92, 92),
         (230, 250, 92),
         (255, 92, 250),
         (0, 92, 250),
-    ]
-    COCONUT_COLOR: Tuple[int, int, int] = (162, 98, 33)
-    PLATFORM_COLOR: Tuple[int, int, int] = (162, 98, 33)
-    LADDER_COLOR: Tuple[int, int, int] = (129, 78, 26)
-    BELL_COLOR: Tuple[int, int, int] = (210, 164, 74)
-    PLAYER_START_X: int = 23
-    PLAYER_START_Y: int = 148
-    MOVEMENT_SPEED: int = 1
-    LEFT_CLIP: int = 16
-    RIGHT_CLIP: int = 144
-    COCONUT_WIDTH: int = 2
-    COCONUT_HEIGHT: int = 3
-    LADDER_HEIGHT: chex.Array = jnp.array(35)
-    LADDER_WIDTH: chex.Array = jnp.array(8)
-    P_HEIGHT: chex.Array = jnp.array(4)
-    LEVEL_1: LevelConstants = Kangaroo_Level_1
-    LEVEL_2: LevelConstants = Kangaroo_Level_2
-    LEVEL_3: LevelConstants = Kangaroo_Level_3
+    ])
+    COCONUT_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (162, 98, 33))
+    PLATFORM_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (162, 98, 33))
+    LADDER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (129, 78, 26))
+    BELL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (210, 164, 74))
+    PLAYER_START_X: int = struct.field(pytree_node=False, default=23)
+    PLAYER_START_Y: int = struct.field(pytree_node=False, default=148)
+    MOVEMENT_SPEED: int = struct.field(pytree_node=False, default=1)
+    LEFT_CLIP: int = struct.field(pytree_node=False, default=16)    
+    RIGHT_CLIP: int = struct.field(pytree_node=False, default=144)
+    FALLING_COCONUT_WIDTH: int = struct.field(pytree_node=False, default=2)
+    FALLING_COCONUT_HEIGHT: int = struct.field(pytree_node=False, default=3)
+    THROWN_COCONUT_WIDTH: int = struct.field(pytree_node=False, default=2)
+    THROWN_COCONUT_HEIGHT: int = struct.field(pytree_node=False, default=3)
+    LADDER_HEIGHT: chex.Array = struct.field(pytree_node=False, default=35)
+    LADDER_WIDTH: chex.Array = struct.field(pytree_node=False, default=8)
+    P_HEIGHT: chex.Array = struct.field(pytree_node=False, default=4)
+    LEVEL_1: LevelConstants = struct.field(pytree_node=False, default=Kangaroo_Level_1)
+    LEVEL_2: LevelConstants = struct.field(pytree_node=False, default=Kangaroo_Level_2)
+    LEVEL_3: LevelConstants = struct.field(pytree_node=False, default=Kangaroo_Level_3)
+    # sprites to enable asset overrides
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=get_default_asset_config)
+
 
 # -------- Entity Classes --------
-class Entity(NamedTuple):
+@struct.dataclass
+class Entity:
     x: chex.Array
     y: chex.Array
     w: chex.Array
     h: chex.Array
 
 
-class PlayerState(NamedTuple):
+@struct.dataclass
+class PlayerState:
     # Player position
     x: chex.Array
     y: chex.Array
@@ -106,7 +154,8 @@ class PlayerState(NamedTuple):
     needs_release: chex.Array  # New field to track if spacebar needs to be released
 
 
-class LevelState(NamedTuple):
+@struct.dataclass
+class LevelState:
     """All level related state variables."""
 
     timer: chex.Array
@@ -155,7 +204,8 @@ class LevelState(NamedTuple):
     bell_animation: chex.Array
 
 
-class KangarooState(NamedTuple):
+@struct.dataclass
+class KangarooState:
     player: PlayerState
     level: LevelState
     score: chex.Array
@@ -167,33 +217,29 @@ class KangarooState(NamedTuple):
     lives: chex.Array
 
 
-class KangarooObservation(NamedTuple):
-    player_x: chex.Array
-    player_y: chex.Array
-    player_o: chex.Array
-    platform_positions: chex.Array
-    ladder_positions: chex.Array
-    fruit_positions: chex.Array
-    bell_position: chex.Array
-    child_position: chex.Array
-    falling_coco_position: chex.Array
-    monkey_positions: chex.Array
-    coco_positions: chex.Array
+@struct.dataclass
+class KangarooObservation:
+    player: ObjectObservation
+    platforms: ObjectObservation
+    ladders: ObjectObservation
+    fruits: ObjectObservation
+    bell: ObjectObservation
+    child: ObjectObservation
+    falling_coconut: ObjectObservation
+    monkeys: ObjectObservation
+    thrown_coconuts: ObjectObservation
 
 
-class KangarooInfo(NamedTuple):
+@struct.dataclass
+class KangarooInfo:
     score: chex.Array
     level: chex.Array
 
 
 class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInfo, KangarooConstants]):
-    def __init__(self, consts: KangarooConstants = None, reward_funcs: list[callable]=None):
-        super().__init__(consts)
-        self.frame_stack_size = 4
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
-        self.action_set = [
+    # Minimal ALE action set (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.NOOP,
             Action.FIRE,
             Action.UP,
@@ -211,8 +257,13 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             Action.UPRIGHTFIRE,
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE
-        ]
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: KangarooConstants = None):
+        super().__init__(consts)
         self.consts = consts or KangarooConstants()
         self.obs_size = 111
         self.renderer = KangarooRenderer(self.consts)
@@ -625,6 +676,37 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         return jnp.where(has_platform_below, platform_y, jnp.array(1000))
 
     @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
+    def _bell_step(self, state: KangarooState) -> Tuple[chex.Array, chex.Array]:
+        """Handles bell collision detection and timer management.
+        
+        Returns:
+            bell_timer: Updated bell timer value
+            respawn_timer_done: Boolean indicating if respawn timer has completed
+        """
+        bell_collision = self._entities_collide(
+            state.player.x,
+            state.player.y,
+            self.consts.PLAYER_WIDTH,
+            state.player.height,
+            state.level.bell_position[0],
+            state.level.bell_position[1],
+            self.consts.BELL_WIDTH,
+            self.consts.BELL_HEIGHT,
+        )
+        bell_active = ~jnp.any(state.level.fruit_stages == 3)
+
+        RESPAWN_AFTER_TICKS = 40
+
+        counter = state.level.bell_timer
+        counter_start = bell_collision & (counter == 0) & bell_active
+        counter = jnp.where(counter_start, 1, counter)
+        counter = jnp.where(counter > 0, counter + 1, counter)
+        counter = jnp.where(counter == RESPAWN_AFTER_TICKS + 1, 0, counter)
+        respawn_timer_done = counter == RESPAWN_AFTER_TICKS
+
+        return counter, respawn_timer_done
+
+    @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
     def _fruits_step(self, state: KangarooState) -> Tuple[chex.Array, chex.Array]:
         fruit_x = state.level.fruit_positions[:, 0]
         fruit_y = state.level.fruit_positions[:, 1]
@@ -652,26 +734,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         )
         new_score = jnp.sum(score_additions)
 
-        bell_collision = self._entities_collide(
-            state.player.x,
-            state.player.y,
-            self.consts.PLAYER_WIDTH,
-            state.player.height,
-            state.level.bell_position[0],
-            state.level.bell_position[1],
-            self.consts.BELL_WIDTH,
-            self.consts.BELL_HEIGHT,
-        )
-        bell_active = ~jnp.any(state.level.fruit_stages == 3)
-
-        RESPAWN_AFTER_TICKS = 40
-
-        counter = state.level.bell_timer
-        counter_start = bell_collision & (counter == 0) & bell_active
-        counter = jnp.where(counter_start, 1, counter)
-        counter = jnp.where(counter > 0, counter + 1, counter)
-        counter = jnp.where(counter == RESPAWN_AFTER_TICKS + 1, 0, counter)
-        respawn_timer_done = counter == RESPAWN_AFTER_TICKS
+        bell_timer, respawn_timer_done = self._bell_step(state)
 
         def get_new_stages(respawn_timer_done, active, stage):
             return jnp.where(
@@ -690,7 +753,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             lambda: new_activations,
         )
 
-        return new_score, activations, new_stages, counter
+        return new_score, activations, new_stages, bell_timer
 
     @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
     def _child_step(self, state: KangarooState) -> Tuple[chex.Array]:
@@ -773,19 +836,36 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
                     action == Action.RIGHT,
                     action == Action.UPRIGHT,
                     action == Action.DOWNRIGHT,
+                    action == Action.RIGHTFIRE,
+                    action == Action.UPRIGHTFIRE,
+                    action == Action.DOWNRIGHTFIRE,
                 ]
             )
         )
 
         press_left = jnp.any(
             jnp.array(
-                [action == Action.LEFT, action == Action.UPLEFT, action == Action.DOWNLEFT]
+                [
+                    action == Action.LEFT,
+                    action == Action.UPLEFT,
+                    action == Action.DOWNLEFT,
+                    action == Action.LEFTFIRE,
+                    action == Action.UPLEFTFIRE,
+                    action == Action.DOWNLEFTFIRE,
+                ]
             )
         )
 
         press_up = jnp.any(
             jnp.array(
-                [action == Action.UP, action == Action.UPRIGHT, action == Action.UPLEFT]
+                [
+                    action == Action.UP,
+                    action == Action.UPRIGHT,
+                    action == Action.UPLEFT,
+                    action == Action.UPFIRE,
+                    action == Action.UPRIGHTFIRE,
+                    action == Action.UPLEFTFIRE,
+                ]
             )
         )
 
@@ -794,6 +874,9 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             jnp.array(
                 [
                     action == Action.FIRE,
+                    action == Action.RIGHTFIRE,
+                    action == Action.LEFTFIRE,
+                    action == Action.UPFIRE,
                     action == Action.DOWNFIRE,
                     action == Action.UPLEFTFIRE,
                     action == Action.UPRIGHTFIRE,
@@ -809,6 +892,9 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
                     action == Action.DOWN,
                     action == Action.DOWNLEFT,
                     action == Action.DOWNRIGHT,
+                    action == Action.DOWNFIRE,
+                    action == Action.DOWNLEFTFIRE,
+                    action == Action.DOWNRIGHTFIRE,
                 ]
             )
         )
@@ -890,11 +976,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         new_is_crouching = press_down & ~new_is_climbing & ~new_is_jumping
 
         candidate_vel_x = jnp.where(
-            new_is_crouching,
-            0,
-            jnp.where(
                 press_left, -self.consts.MOVEMENT_SPEED, jnp.where(press_right, self.consts.MOVEMENT_SPEED, 0)
-            ),
         )
 
         standing_still = jnp.equal(candidate_vel_x, 0)
@@ -1088,8 +1170,8 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             state.player.height,
             state.level.coco_positions[:, 0],
             state.level.coco_positions[:, 1],
-            self.consts.COCONUT_WIDTH,
-            self.consts.COCONUT_HEIGHT,
+            self.consts.THROWN_COCONUT_WIDTH,
+            self.consts.THROWN_COCONUT_HEIGHT,
             state.level.coco_states,
         )
 
@@ -1102,8 +1184,8 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             state.player.height - 8,
             state.level.falling_coco_position[0],
             state.level.falling_coco_position[1],
-            self.consts.COCONUT_WIDTH,
-            self.consts.COCONUT_HEIGHT,
+            self.consts.FALLING_COCONUT_WIDTH,
+            self.consts.FALLING_COCONUT_HEIGHT,
             0.1,
         )
 
@@ -1162,7 +1244,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             ~state.level.falling_coco_dropping
             & falling_coco_exists
             & (
-                ((state.level.falling_coco_position[0] + self.consts.COCONUT_WIDTH) > state.player.x)
+                ((state.level.falling_coco_position[0] + self.consts.FALLING_COCONUT_WIDTH) > state.player.x)
                 & (state.level.falling_coco_position[0] < (state.player.x + self.consts.PLAYER_WIDTH))
             )
             & update_positions
@@ -1219,8 +1301,8 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
                 fist_h,
                 state.level.falling_coco_position[0],
                 state.level.falling_coco_position[1],
-                self.consts.COCONUT_WIDTH,
-                self.consts.COCONUT_HEIGHT,
+                self.consts.FALLING_COCONUT_WIDTH,
+                self.consts.FALLING_COCONUT_HEIGHT,
                 0.01,
             )
             & punching
@@ -1261,6 +1343,73 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             new_falling_coco_counter,
             new_falling_coco_skip_update,
             score_addition,
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _update_coco_state(
+        self,
+        old_m_state: chex.Array,
+        new_m_state: chex.Array,
+        old_m_timer: chex.Array,
+        new_m_timer: chex.Array,
+        c_state: chex.Array,
+        c_pos_x: chex.Array,
+    ) -> chex.Array:
+        return jnp.where(
+            (old_m_state != 3) & (new_m_state == 3),
+            1,
+            jnp.where(
+                (c_state == 1) & (old_m_timer == 3) & (new_m_timer == 2),
+                2,
+                jnp.where(c_pos_x <= 15, 0, c_state),
+            ),
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _update_coco_positions(
+        self,
+        new_c_state: chex.Array,
+        old_c_state: chex.Array,
+        stepc: chex.Array,
+        old_c_pos: chex.Array,
+        new_m_pos: chex.Array,
+        spawn_position: chex.Array,
+    ) -> chex.Array:
+        return jnp.where(
+            new_c_state == 2,
+            jnp.where(
+                stepc % 2 == 0,
+                jnp.array([old_c_pos[0] - 2, old_c_pos[1]]),
+                old_c_pos,
+            ),
+            jnp.where(
+                (new_c_state == 1) & (old_c_state == 0),
+                jnp.array(
+                    [
+                        new_m_pos[0] - 6,
+                        jnp.where(
+                            spawn_position,
+                            new_m_pos[1] - 5,
+                            new_m_pos[1]
+                            + self.consts.MONKEY_HEIGHT
+                            - self.consts.THROWN_COCONUT_HEIGHT,
+                        ),
+                    ]
+                ),
+                old_c_pos,
+            ),
+        )
+
+    @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
+    def _monkey_controller2(self, state: KangarooState, punching: chex.Array):
+        return (
+            state.level.monkey_states,       # new_monkey_states (all zeros)
+            state.level.monkey_positions,    # new_monkey_positions (all spawn coords/off-screen)
+            state.level.monkey_throw_timers, # new_monkey_throw_timers (all zeros)
+            jnp.zeros((), dtype=jnp.int32),  # score_addition (0)
+            state.level.coco_positions,      # new_coco_positions (all off-screen)
+            state.level.coco_states,         # new_coco_states (all zeros)
+            jnp.array(False),                # flip (should be False)
         )
 
     @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
@@ -1316,7 +1465,9 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         )
 
         in_state_1 = new_monkey_states == 1
-        should_transition = (state.level.monkey_positions[:, 1] + self.consts.MONKEY_HEIGHT) >= 172
+        should_transition = (
+            state.level.monkey_positions[:, 1] + self.consts.MONKEY_HEIGHT
+        ) >= 172
         new_monkey_states = jnp.where(
             in_state_1 & should_transition,
             5,
@@ -1437,20 +1588,8 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             state.level.step_counter,
         )
 
-        def update_coco_state(
-            old_m_state, new_m_state, old_m_timer, new_m_timer, c_state, c_pos_x
-        ):
-            return jnp.where(
-                (old_m_state != 3) & (new_m_state == 3),
-                1,
-                jnp.where(
-                    (c_state == 1) & (old_m_timer == 3) & (new_m_timer == 2),
-                    2,
-                    jnp.where(c_pos_x <= 15, 0, c_state),
-                ),
-            )
-
-        new_coco_states = jax.vmap(update_coco_state, in_axes=(0, 0, 0, 0, 0, 0))(
+        # Call the extracted _update_coco_state method
+        new_coco_states = jax.vmap(self._update_coco_state, in_axes=(0, 0, 0, 0, 0, 0))(
             state.level.monkey_states,
             new_monkey_states,
             state.level.monkey_throw_timers,
@@ -1459,39 +1598,19 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             state.level.coco_positions[:, 0],
         )
 
-        def update_coco_positions(new_c_state, old_c_state, stepc, old_c_pos, new_m_pos):
-            return jnp.where(
-                new_c_state == 2,
-                jnp.where(
-                    stepc % 2 == 0,
-                    jnp.array([old_c_pos[0] - 2, old_c_pos[1]]),
-                    old_c_pos,
-                ),
-                jnp.where(
-                    (new_c_state == 1) & (old_c_state == 0),
-                    jnp.array(
-                        [
-                            new_m_pos[0] - 6,
-                            jnp.where(
-                                state.level.spawn_position,
-                                new_m_pos[1] - 5,
-                                new_m_pos[1] + self.consts.MONKEY_HEIGHT - self.consts.COCONUT_HEIGHT,
-                            ),
-                        ]
-                    ),
-                    old_c_pos,
-                ),
-            )
-
-        new_coco_positions = jax.vmap(update_coco_positions, in_axes=(0, 0, None, 0, 0))(
+        # Call the extracted _update_coco_positions method
+        new_coco_positions = jax.vmap(
+            self._update_coco_positions, in_axes=(0, 0, None, 0, 0, None)
+        )(
             new_coco_states,
             state.level.coco_states,
             state.level.step_counter,
             state.level.coco_positions,
             new_monkey_positions,
+            state.level.spawn_position,
         )
 
-        # Handle punching at the very end, after all other state transitions to avoid race conditions
+        # Handle punching at the very end
         fist_w = 3
         fist_h = 4
         fist_x = jnp.where(
@@ -1530,7 +1649,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         )
         new_monkey_positions = jax.vmap(
             lambda pos, punched: jnp.where(punched, jnp.array([152, 5]), pos),
-            in_axes=(0, 0)
+            in_axes=(0, 0),
         )(new_monkey_positions, monkeys_punched)
 
         flip = jnp.any((state.level.monkey_states != 3) & (new_monkey_states == 3))
@@ -1545,77 +1664,24 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
             flip,
         )
 
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: KangarooObservation) -> chex.Array:
-        """Converts the observation to a flat array."""
-        return jnp.concatenate(
-            [
-                obs.player_x.flatten(),
-                obs.player_y.flatten(),
-                obs.player_o.flatten(),
-                obs.platform_positions.flatten(),
-                obs.ladder_positions.flatten(),
-                obs.fruit_positions.flatten(),
-                obs.bell_position.flatten(),
-                obs.child_position.flatten(),
-                obs.falling_coco_position.flatten(),
-                obs.coco_positions.flatten(),
-                obs.monkey_positions.flatten(),
-            ]
-        )
-
     def render(self, state: KangarooState) -> jnp.ndarray:
         return self.renderer.render(state)
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
-        """Returns the observation space for Kangaroo.
-        The observation contains:
-        - player_x: int (0-160)
-        - player_y: int (0-210)
-        - player_o: int (-1 or 1 for orientation)
-        - platform_positions: array of shape (20, 2) with x,y coordinates (0-160, 0-210)
-        - ladder_positions: array of shape (20, 2) with x,y coordinates (0-160, 0-210)
-        - fruit_positions: array of shape (3, 2) with x,y coordinates (0-160, 0-210)
-        - bell_position: array of shape (2,) with x,y coordinates (0-160, 0-210)
-        - child_position: array of shape (2,) with x,y coordinates (0-160, 0-210)
-        - falling_coco_position: array of shape (2,) with x,y coordinates (0-160, 0-210)
-        - monkey_positions: array of shape (4, 2) with x,y coordinates (0-160, 0-210)
-        - coco_positions: array of shape (4, 2) with x,y coordinates (0-160, 0-210)
-        """
-        return spaces.Dict(
-            {
-                "player_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "player_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "player_o": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
-                "platform_positions": spaces.Box(
-                    low=-1, high=210, shape=(20, 2), dtype=jnp.int32
-                ),
-                "ladder_positions": spaces.Box(
-                    low=-1, high=210, shape=(20, 2), dtype=jnp.int32
-                ),
-                "fruit_positions": spaces.Box(
-                    low=-1, high=160, shape=(3, 2), dtype=jnp.int32
-                ),
-                "bell_position": spaces.Box(
-                    low=-1, high=160, shape=(2,), dtype=jnp.int32
-                ),
-                "child_position": spaces.Box(
-                    low=0, high=160, shape=(2,), dtype=jnp.int32
-                ),
-                "falling_coco_position": spaces.Box(
-                    low=-1, high=160, shape=(2,), dtype=jnp.int32
-                ),
-                "monkey_positions": spaces.Box(
-                    low=-1, high=160, shape=(4, 2), dtype=jnp.int32
-                ),
-                "coco_positions": spaces.Box(
-                    low=-1, high=160, shape=(4, 2), dtype=jnp.int32
-                ),
-            }
-        )
+        return spaces.Dict({
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "platforms": spaces.get_object_space(n=self.consts.MAX_PLATFORMS * 2, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)), # Padded to 20
+            "ladders": spaces.get_object_space(n=self.consts.MAX_PLATFORMS * 2, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)), # Padded to 20
+            "fruits": spaces.get_object_space(n=3, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "bell": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "child": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "falling_coconut": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "monkeys": spaces.get_object_space(n=4, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "thrown_coconuts": spaces.get_object_space(n=4, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+        })
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(
@@ -1707,6 +1773,9 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
 
     @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
     def step(self, state: KangarooState, action: chex.Array) -> Tuple[KangarooObservation, KangarooState, float, bool, KangarooInfo]:
+        # Translate compact agent action index to ALE console action
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
         reset_cond = jnp.any(jnp.array([action == self.consts.RESET]))
 
         (
@@ -1918,45 +1987,129 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: KangarooState) -> KangarooObservation:
-        fruit_mask = state.level.fruit_actives[:, jnp.newaxis]
-        fruit_positions = jnp.where(
-            fruit_mask, state.level.fruit_positions, jnp.array([-1, -1])
+        # --- Player ---
+        p_ori = jnp.where(state.player.orientation == 1, 90.0, 270.0)
+        player = ObjectObservation.create(
+            x=jnp.clip(state.player.x.astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(state.player.y.astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),
+            height=state.player.height.astype(jnp.int32),
+            orientation=p_ori.astype(jnp.float32),
+            active=jnp.array(1, dtype=jnp.int32)
         )
 
-        bell_mask = jnp.any(state.level.bell_position != jnp.array([-1, -1]))
-        bell_position = jnp.where(
-            bell_mask, state.level.bell_position, jnp.array([-1, -1])
+        # --- Platforms ---
+        plat_pos = state.level.platform_positions
+        plat_size = state.level.platform_sizes
+        plat_active = plat_pos[:, 0] != -1
+        platforms = ObjectObservation.create(
+            x=jnp.clip(plat_pos[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(plat_pos[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.clip(plat_size[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            height=jnp.clip(plat_size[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            active=plat_active.astype(jnp.int32)
         )
 
-        falling_coco_mask = state.level.falling_coco_dropping[None]
-        falling_coco_position = jnp.where(
-            falling_coco_mask, state.level.falling_coco_position, jnp.array([-1, -1])
+        # --- Ladders ---
+        lad_pos = state.level.ladder_positions
+        lad_size = state.level.ladder_sizes
+        lad_active = lad_pos[:, 0] != -1
+        ladders = ObjectObservation.create(
+            x=jnp.clip(lad_pos[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(lad_pos[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.clip(lad_size[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            height=jnp.clip(lad_size[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            active=lad_active.astype(jnp.int32)
         )
 
-        monkey_mask = state.level.monkey_states[:, jnp.newaxis]
-        monkey_positions = jnp.where(
-            monkey_mask, state.level.monkey_positions, jnp.array([-1, -1])
+        # --- Fruits ---
+        fruit_pos = state.level.fruit_positions
+        fruit_active = state.level.fruit_actives
+        fruits = ObjectObservation.create(
+            x=jnp.clip(fruit_pos[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(fruit_pos[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.full((3,), self.consts.FRUIT_WIDTH, dtype=jnp.int32),
+            height=jnp.full((3,), self.consts.FRUIT_HEIGHT, dtype=jnp.int32),
+            visual_id=state.level.fruit_stages.astype(jnp.int32), # Use stage as ID
+            active=fruit_active.astype(jnp.int32)
         )
 
-        coco_mask = state.level.coco_states[:, jnp.newaxis]
-        coco_positions = jnp.where(
-            coco_mask, state.level.coco_positions, jnp.array([-1, -1])
+        # --- Bell ---
+        bell_pos = state.level.bell_position
+        bell_active = bell_pos[0] != -1
+        bell = ObjectObservation.create(
+            x=jnp.clip(jnp.array(bell_pos[0], dtype=jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(jnp.array(bell_pos[1], dtype=jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.array(self.consts.BELL_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.BELL_HEIGHT, dtype=jnp.int32),
+            active=bell_active.astype(jnp.int32)
+        )
+
+        # --- Child ---
+        child_pos = state.level.child_position
+        child_active = child_pos[0] != -1
+        child_ori = jnp.where(state.level.child_velocity > 0, 90.0, 270.0)
+        child = ObjectObservation.create(
+            x=jnp.clip(jnp.array(child_pos[0], dtype=jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(jnp.array(child_pos[1], dtype=jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.array(self.consts.CHILD_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.CHILD_HEIGHT, dtype=jnp.int32),
+            orientation=jnp.array(child_ori, dtype=jnp.float32),
+            active=child_active.astype(jnp.int32)
+        )
+
+        # --- Falling Coconut ---
+        fc_pos = state.level.falling_coco_position
+        fc_active = (fc_pos[0] != 13) | (fc_pos[1] != -1)
+        falling_coconut = ObjectObservation.create(
+            x=jnp.clip(jnp.array(fc_pos[0], dtype=jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(jnp.array(fc_pos[1], dtype=jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.array(self.consts.FALLING_COCONUT_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.FALLING_COCONUT_HEIGHT, dtype=jnp.int32),
+            active=fc_active.astype(jnp.int32)
+        )
+
+        # --- Monkeys ---
+        m_pos = state.level.monkey_positions
+        m_states = state.level.monkey_states
+        m_active = m_states != 0
+        # State 4 is moving right, State 2 is moving left
+        m_ori = jnp.select([m_states == 4, m_states == 2], [90.0, 270.0], default=0.0)
+
+        monkeys = ObjectObservation.create(
+            x=jnp.clip(m_pos[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(m_pos[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.full((4,), self.consts.MONKEY_WIDTH, dtype=jnp.int32),
+            height=jnp.full((4,), self.consts.MONKEY_HEIGHT, dtype=jnp.int32),
+            orientation=m_ori.astype(jnp.float32),
+            state=m_states.astype(jnp.int32), # 1=down, 2=left, 3=throw, 4=right, 5=up
+            active=m_active.astype(jnp.int32)
+        )
+
+        # --- Thrown Coconuts ---
+        c_pos = state.level.coco_positions
+        c_states = state.level.coco_states
+        c_active = c_states != 0
+        thrown_coconuts = ObjectObservation.create(
+            x=jnp.clip(c_pos[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(c_pos[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.full((4,), self.consts.THROWN_COCONUT_WIDTH, dtype=jnp.int32),
+            height=jnp.full((4,), self.consts.THROWN_COCONUT_HEIGHT, dtype=jnp.int32),
+            state=c_states.astype(jnp.int32), # 1=charging, 2=throwing
+            active=c_active.astype(jnp.int32)
         )
 
         return KangarooObservation(
-            player_x=state.player.x,
-            player_y=state.player.y,
-            player_o=state.player.orientation,
-            platform_positions=state.level.platform_positions,
-            ladder_positions=state.level.ladder_positions,
-            fruit_positions=fruit_positions,
-            bell_position=bell_position,
-            child_position=state.level.child_position,
-            falling_coco_position=falling_coco_position,
-            monkey_positions=monkey_positions,
-            coco_positions=coco_positions,
+            player=player,
+            platforms=platforms,
+            ladders=ladders,
+            fruits=fruits,
+            bell=bell,
+            child=child,
+            falling_coconut=falling_coconut,
+            monkeys=monkeys,
+            thrown_coconuts=thrown_coconuts
         )
-
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: KangarooState) -> KangarooInfo:
         return KangarooInfo(
@@ -1976,7 +2129,7 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
 
 
 class KangarooRenderer(JAXGameRenderer):
-    def __init__(self, consts=None):
+    def __init__(self, consts: KangarooConstants = None, config: render_utils.RendererConfig = None):
         """
         Initializes the renderer by loading sprites, including level backgrounds.
 
@@ -1984,13 +2137,19 @@ class KangarooRenderer(JAXGameRenderer):
             sprite_path: Path to the directory containing sprite .npy files.
         """
         self.consts = consts or KangarooConstants()
+        super().__init__(self.consts)
 
-        self.rendering_config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
-            channels=3,
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(210, 160),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
 
-        self.jr = render_utils.JaxRenderingUtils(self.rendering_config)
+        self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # Load and process all sprites
         (
@@ -2009,84 +2168,19 @@ class KangarooRenderer(JAXGameRenderer):
         self.ladder_rung_height = 4
         self.ladder_space_height = 4
             
-    
     def _load_sprites(self):
         """Defines the asset manifest for Kangaroo and loads them via the utility function."""
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/kangaroo"
-
-        # 1. Define the game-specific asset manifest in a clear, declarative way.
-        asset_config = [
-            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            {
-                'name': 'ape', 'type': 'group',
-                'files': ['ape_standing.npy', 'ape_climb_left.npy', 'ape_moving.npy', 'throwing_ape.npy', 'ape_climb_right.npy']
-            },
-            {
-                'name': 'kangaroo', 'type': 'group',
-                'files': ['kangaroo.npy', 'kangaroo_dead.npy', 'kangaroo_climb.npy', 'kangaroo_ducking.npy', 'kangaroo_jump.npy', 'kangaroo_boxing.npy', 'kangaroo_walk.npy', 'kangaroo_jump_high.npy']
-            },
-            {
-                'name': 'bell', 'type': 'group',
-                'files': ['bell.npy', 'ringing_bell.npy']
-            },
-            {
-                'name': 'fruit', 'type': 'group',
-                'files': ['strawberry.npy', 'tomato.npy', 'cherry.npy', 'pineapple.npy']
-            },
-            {
-                'name': 'child', 'type': 'group',
-                'files': ['child.npy', 'child_jump.npy']
-            },
-            {'name': 'coconut', 'type': 'single', 'file': 'coconut.npy'},
-            {'name': 'thrown_coconut', 'type': 'single', 'file': 'thrown_coconut.npy'},
-            {'name': 'lives', 'type': 'single', 'file': 'kangaroo_lives.npy'},
-            {
-                'name': 'score_digits', 'type': 'digits',
-                'pattern': 'score_{}.npy'
-            },
-            {
-                'name': 'time_digits', 'type': 'digits',
-                'pattern': 'time_{}.npy'
-            }
-        ]
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "kangaroo")
 
         # 2. Make one call to the utility function. Done.
-        return self.jr.load_and_setup_assets(asset_config, sprite_path)
-        
+        return self.jr.load_and_setup_assets(self.consts.ASSET_CONFIG, sprite_path)
+    
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: KangarooState) -> chex.Array:
-        # --- 1. Initialize Raster ---
-        raster = self.jr.create_object_raster(self.BACKGROUND)
-        
-        raster = self.jr.draw_rects(
-            raster,
-            state.level.platform_positions,
-            state.level.platform_sizes,
-            self.PLATFORM_COLOR_ID
-        )
+    def _render_hook_post_ui(self, raster: jnp.ndarray, state: KangarooState):
+        return raster
 
-        raster = self.jr.draw_ladders(
-            raster,
-            state.level.ladder_positions,
-            state.level.ladder_sizes,
-            self.ladder_rung_height,
-            self.ladder_space_height,
-            self.LADDER_COLOR_ID
-        )
-        
-        # --- 3. Draw Dynamic Objects ---
-        # Fruits
-        def _draw_fruit(i, current_raster):
-            should_draw = state.level.fruit_actives[i]
-            fruit_type = state.level.fruit_stages[i].astype(int)
-            pos = state.level.fruit_positions[i]
-            fruit_mask = self.SHAPE_MASKS["fruit"][fruit_type]
-            fruit_offset = self.FLIP_OFFSETS["fruit"]         
-            draw_fn = lambda r: self.jr.render_at(r, pos[0].astype(int), pos[1].astype(int), fruit_mask, flip_offset=fruit_offset)
-            return jax.lax.cond(should_draw, draw_fn, lambda r: r, current_raster)
-        raster = jax.lax.fori_loop(0, state.level.fruit_positions.shape[0], _draw_fruit, raster)
-
-        # Bell
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_bell(self, raster: jnp.ndarray, state: KangarooState):
         bell_anim_on = ((state.level.bell_animation >= 176) & (state.level.bell_animation <= 192)) | \
                        ((state.level.bell_animation >= 128) & (state.level.bell_animation <= 143)) | \
                        ((state.level.bell_animation >= 80) & (state.level.bell_animation <= 95)) | \
@@ -2100,22 +2194,110 @@ class KangarooRenderer(JAXGameRenderer):
         raster = jax.lax.cond(should_draw_bell,
             lambda r: self.jr.render_at(r, state.level.bell_position[0].astype(int), state.level.bell_position[1].astype(int), bell_mask, flip_horizontal=flip_bell, flip_offset=bell_offset),
             lambda r: r, raster)
+        return raster
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_ladders(self, raster: jnp.ndarray, state: KangarooState):
+        """Draws the ladders using the utility function."""
+        return self.jr.draw_ladders(
+            raster,
+            state.level.ladder_positions,
+            state.level.ladder_sizes,
+            self.ladder_rung_height,
+            self.ladder_space_height,
+            self.LADDER_COLOR_ID
+        )     
 
-        # Monkeys (Apes)
-        def _draw_monkey(i, current_raster):
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_single_fruit(self, i, raster, state: KangarooState):
+        """
+        Draws a single fruit based on index i. 
+        Designed to be called within a jax.lax.fori_loop.
+        """
+        should_draw = state.level.fruit_actives[i]
+        fruit_type = state.level.fruit_stages[i].astype(int)
+        pos = state.level.fruit_positions[i]
+        
+        fruit_mask = self.SHAPE_MASKS["fruit"][fruit_type]
+        fruit_offset = self.FLIP_OFFSETS["fruit"]           
+        
+        draw_fn = lambda r: self.jr.render_at(
+            r, 
+            pos[0].astype(int), 
+            pos[1].astype(int), 
+            fruit_mask, 
+            flip_offset=fruit_offset
+        )
+        
+        return jax.lax.cond(should_draw, draw_fn, lambda r: r, raster)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_single_monkey(self, i, raster, state: KangarooState):
+            """
+            Draws a single monkey based on index i. 
+            Designed to be called within a jax.lax.fori_loop.
+            """
             state_idx = state.level.monkey_states[i].astype(int)
             pos = state.level.monkey_positions[i]
-            monkey_sprite_idx = jnp.array([0, 1, 2, 3, 2, 4])[state_idx] # Map game state to sprite index
+            
+            # Map game state to sprite index
+            monkey_sprite_idx = jnp.array([0, 1, 2, 3, 2, 4])[state_idx] 
+            
             is_walking = (state_idx == 2) | (state_idx == 4)
             use_standing_anim = is_walking & ((state.level.step_counter % 32) < 16)
-            final_sprite_idx = jax.lax.select(use_standing_anim, 0, monkey_sprite_idx) # Index 0 is 'standing'
+            
+            # Index 0 is 'standing'
+            final_sprite_idx = jax.lax.select(use_standing_anim, 0, monkey_sprite_idx) 
+            
             monkey_mask = self.SHAPE_MASKS["ape"][final_sprite_idx]
             flip_offset = self.FLIP_OFFSETS["ape"]
             flip_h = (state_idx == 4)
             should_draw = (state_idx != 0)
-            draw_fn = lambda r: self.jr.render_at_clipped(r, pos[0].astype(int), pos[1].astype(int), monkey_mask, flip_horizontal=flip_h, flip_offset=flip_offset)
-            return jax.lax.cond(should_draw, draw_fn, lambda r: r, current_raster)
-        raster = jax.lax.fori_loop(0, state.level.monkey_positions.shape[0], _draw_monkey, raster)
+            
+            draw_fn = lambda r: self.jr.render_at_clipped(
+                r, 
+                pos[0].astype(int), 
+                pos[1].astype(int), 
+                monkey_mask, 
+                flip_horizontal=flip_h, 
+                flip_offset=flip_offset
+            )
+            
+            return jax.lax.cond(should_draw, draw_fn, lambda r: r, raster)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: KangarooState) -> chex.Array:
+        # --- 1. Initialize Raster ---
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+        
+        raster = self.jr.draw_rects(
+            raster,
+            state.level.platform_positions,
+            state.level.platform_sizes,
+            self.PLATFORM_COLOR_ID
+        )
+
+        raster = self._draw_ladders(raster, state)
+        
+        # --- 3. Draw Dynamic Objects ---
+        # Fruits - UPDATED CALL
+        raster = jax.lax.fori_loop(
+            0, 
+            state.level.fruit_positions.shape[0], 
+            lambda i, r: self._draw_single_fruit(i, r, state), 
+            raster
+        )
+
+        # Bell
+        raster = self._draw_bell(raster, state)
+
+        # Monkeys (Apes)
+        raster = jax.lax.fori_loop(
+            0, 
+            state.level.monkey_positions.shape[0], 
+            lambda i, r: self._draw_single_monkey(i, r, state), 
+            raster
+        )
 
         # Player (Kangaroo)
         is_walking_anim = (state.player.walk_animation > 6) & (state.player.walk_animation < 16) & \
@@ -2157,10 +2339,10 @@ class KangarooRenderer(JAXGameRenderer):
             lambda r: r, raster)
 
         # Coconuts
-        coconut_offset = self.FLIP_OFFSETS["thrown_coconut"]
-        should_draw_falling_coco = state.level.falling_coco_dropping
+        coconut_offset = self.FLIP_OFFSETS["falling_coconut"]
+        should_draw_falling_coco = (state.level.falling_coco_position[0] != 13) | (state.level.falling_coco_position[1] != -1)
         raster = jax.lax.cond(should_draw_falling_coco,
-            lambda r: self.jr.render_at(r, state.level.falling_coco_position[0].astype(int), state.level.falling_coco_position[1].astype(int), self.SHAPE_MASKS["thrown_coconut"], flip_offset=coconut_offset),
+            lambda r: self.jr.render_at(r, state.level.falling_coco_position[0].astype(int), state.level.falling_coco_position[1].astype(int), self.SHAPE_MASKS["falling_coconut"], flip_offset=coconut_offset),
             lambda r: r, raster)
         def _draw_coco(i, current_raster):
             should_draw = (state.level.coco_states[i] != 0)
@@ -2182,6 +2364,9 @@ class KangarooRenderer(JAXGameRenderer):
         # Timer
         timer_digits = self.jr.int_to_digits(jnp.maximum(state.level.timer.astype(int), 0), max_digits=4)
         raster = self.jr.render_label(raster, 80, 190, timer_digits, self.SHAPE_MASKS["time_digits"], spacing=4, max_digits=4)
+
+        # Hook for modifications
+        raster = self._render_hook_post_ui(raster, state)
 
         # --- 5. Final Palette Lookup ---
         return self.jr.render_from_palette(raster, self.PALETTE)

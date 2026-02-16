@@ -59,7 +59,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.11"
           cache: "pip"
 
       - name: Create venv & install package
@@ -70,14 +70,21 @@ jobs:
           pip install -e ".[gh_ci]"
         shell: bash
 
+      - name: Install sprites (CI ownership pre-confirmed)
+        run: |
+          . .venv/bin/activate
+          JAXATARI_CONFIRM_OWNERSHIP=1 install-sprites
+        shell: bash
+
       - name: Run tests
+        if: always()
         id: run_tests
         run: |
           set -o pipefail
           echo "Running tests for game: ${{ matrix.game }}"
 
           . .venv/bin/activate
-          pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes 2>&1 | tee pytest_output_with_color.txt
+          pytest -n auto --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes tests/ 2>&1 | tee pytest_output_with_color.txt
         shell: bash
 
       - name: Get pytest output
@@ -95,7 +102,7 @@ jobs:
           matrix-key: ${{ matrix.game }}
           outputs: |-
             test_outcome: ${{ steps.run_tests.outcome }}
-      
+
       - name: Upload report artifact
         if: always()
         uses: actions/upload-artifact@v4
