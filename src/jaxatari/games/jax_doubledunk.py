@@ -1605,13 +1605,17 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         return self.renderer.render(state)
 
 class DunkRenderer(JAXGameRenderer):
-    def __init__(self, consts: DunkConstants = None):
+    def __init__(self, consts: DunkConstants = None, config: render_utils.RendererConfig = None):
         super().__init__()
         self.consts = consts or DunkConstants()
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.WINDOW_HEIGHT, self.consts.WINDOW_WIDTH),
-            channels=3,
-        )
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.WINDOW_HEIGHT, self.consts.WINDOW_WIDTH),
+                channels=3,
+            )
+        else:
+            self.config = config
+            
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # --- UPDATED ASSET CONFIGURATION ---
