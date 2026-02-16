@@ -79,20 +79,18 @@ class GhostMode(IntEnum):
 # -------- Constants --------
 # GENERAL
 RESET_LEVEL = 1 # the starting level, loaded when reset is called
-RESET_TIMER = 40  # Timer for resetting the game after death
+RESET_TIMER = 40 # Timer for resetting the game after death
+INITIAL_LIVES = 3 # Number of starting bonus lives
+MAX_LIVE_COUNT = 4 # Maximum possible number of lives
 MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
-MAX_LIVE_COUNT = 8
-PELLETS_TO_COLLECT = 154  # Total pellets to collect in the maze (including power pellets)
-# PELLETS_TO_COLLECT = 4
-INITIAL_LIVES = 2 # Number of starting bonus lives
-BONUS_LIFE_LIMIT = 10000 # Maximum number of bonus lives
+PELLETS_TO_COLLECT = 154 # Total pellets to collect in the maze (including power pellets)
+BONUS_LIFE_SCORE = 10000 # Score at which a bonus life is rewarded
 COLLISION_THRESHOLD = 8 # Contacts below this distance count as collision
 
 # GHOST TIMINGS
 CHASE_DURATION = 20*4*8 # Estimated for now, should be 20s  TODO: Adjust value
 MAX_CHASE_OFFSET = CHASE_DURATION / 10 # Maximum value that can be added to the chase duration
 SCATTER_DURATION = 7*4*8 # Estimated for now, should be 7s  TODO: Adjust value
-# SCATTER_DURATION = 50
 MAX_SCATTER_OFFSET = SCATTER_DURATION / 10 # Maximum value that can be added to the scatter duration
 FRIGHTENED_DURATION = 62*8 # Duration of power pellet effect in frames (x8 steps)
 BLINKING_DURATION = 10*8
@@ -287,11 +285,16 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             ghosts_reward
         ) = self.ghosts_step(state, ate_power_pellet, key)
 
-        # 5) Calculate reward, new score and flag score change digit-wise
+        # 5) Calculate reward, new score, bonus life and flag score change digit-wise
         reward = pellet_reward + fruit_reward + ghosts_reward
         new_score = state.score + reward
         score_changed = self.flag_score_change(state.score, new_score)
-
+        new_lives = jax.lax.cond(
+            (new_score >= BONUS_LIFE_SCORE) & (state.score < BONUS_LIFE_SCORE),
+            lambda: new_lives + 1,
+            lambda: new_lives
+        )
+        
         # 6) Update state
         new_state = jax.lax.cond(
             frozen,
@@ -387,7 +390,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 state.freeze_timer > 1,
                 lambda: (decrement_timer(state), True, False), # Frozen
                 lambda: jax.lax.cond(
-                    state.lives < 0,
+                    state.lives == 0,
                     lambda: (decrement_timer(state), True, True), # Game Over,
                     lambda: (reset_entities(decrement_timer(state)), True, False) # Level Reset
                 )
@@ -1048,7 +1051,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         # Remove one life if a life is lost
         background = jax.lax.cond(
             state.freeze_timer == RESET_TIMER-1,
-            lambda: MsPacmanRenderer.render_lives(background, state.lives, self.SPRITES["pacman"][1][1]),
+            lambda: MsPacmanRenderer.render_lives(background, state.lives - 1, self.SPRITES["pacman"][1][1]),
             lambda: background
         )
 
