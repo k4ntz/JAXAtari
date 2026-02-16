@@ -174,10 +174,11 @@ STEAL_ACTIONS = {Action.FIRE}
 
 class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkConstants]):
     
-    def __init__(self):
+    def __init__(self, consts: DunkConstants = None):
         """Initialize the game environment."""
-        self.constants = DunkConstants()
-        self.renderer = DunkRenderer(self.constants)
+        consts = consts or DunkConstants()
+        super().__init__(consts)
+        self.renderer = DunkRenderer(self.consts)
 
     def reset(self, key) -> Tuple[DunkObservation, DunkGameState]:
         """Resets the environment to the initial state."""
@@ -190,20 +191,20 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         player = EntityPosition(
             x=jnp.array(state.player1_inside.x, dtype=jnp.int32),
             y=jnp.array(state.player1_inside.y, dtype=jnp.int32),
-            width=jnp.array(self.constants.PLAYER_WIDTH, dtype=jnp.int32),  
-            height=jnp.array(self.constants.PLAYER_HEIGHT, dtype=jnp.int32), 
+            width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),  
+            height=jnp.array(self.consts.PLAYER_HEIGHT, dtype=jnp.int32), 
         )
         enemy = EntityPosition(
             x=jnp.array(state.player2_inside.x, dtype=jnp.int32),
             y=jnp.array(state.player2_inside.y, dtype=jnp.int32),
-            width=jnp.array(self.constants.PLAYER_WIDTH, dtype=jnp.int32),  
-            height=jnp.array(self.constants.PLAYER_HEIGHT, dtype=jnp.int32), 
+            width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),  
+            height=jnp.array(self.consts.PLAYER_HEIGHT, dtype=jnp.int32), 
         )
         ball = EntityPosition(
             x=jnp.array(state.ball.x, dtype=jnp.int32),
             y=jnp.array(state.ball.y, dtype=jnp.int32),
-            width=jnp.array(self.constants.BALL_SIZE[0], dtype=jnp.int32),
-            height=jnp.array(self.constants.BALL_SIZE[1], dtype=jnp.int32),
+            width=jnp.array(self.consts.BALL_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.BALL_SIZE[1], dtype=jnp.int32),
         )
         return DunkObservation(
             player=player,
@@ -236,7 +237,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
     
     def image_space(self) -> spaces.Box:
         """Returns the image space of the environment."""
-        return spaces.Box(low=0, high=255, shape=(self.constants.WINDOW_HEIGHT, self.constants.WINDOW_WIDTH, 3), dtype=jnp.uint8)
+        return spaces.Box(low=0, high=255, shape=(self.consts.WINDOW_HEIGHT, self.consts.WINDOW_WIDTH, 3), dtype=jnp.uint8)
 
     def obs_to_flat_array(self, obs: DunkObservation) -> jnp.ndarray:
         """Converts the observation to a flat array."""
@@ -351,7 +352,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         players = jax.tree_util.tree_map(lambda *args: jnp.stack(args), state.player1_inside, state.player1_outside, state.player2_inside, state.player2_outside)
         actions_stacked = jnp.stack(actions)
 
-        updated_players = jax.vmap(self._update_player_xy, in_axes=(0, 0, None))(players, actions_stacked, self.constants)
+        updated_players = jax.vmap(self._update_player_xy, in_axes=(0, 0, None))(players, actions_stacked, self.consts)
         
         updated_p1_inside, updated_p1_outside, updated_p2_inside, updated_p2_outside = [jax.tree_util.tree_map(lambda x: x[i], updated_players) for i in range(4)]
 
@@ -437,7 +438,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         
         players = jax.tree_util.tree_map(lambda *args: jnp.stack(args), state.player1_inside, state.player1_outside, state.player2_inside, state.player2_outside)
         
-        updated_players = jax.vmap(self._update_player_z, in_axes=(0, None, None))(players, self.constants, ball_holder_id)
+        updated_players = jax.vmap(self._update_player_z, in_axes=(0, None, None))(players, self.consts, ball_holder_id)
         
         updated_p1_inside, updated_p1_outside, updated_p2_inside, updated_p2_outside = [jax.tree_util.tree_map(lambda x: x[i], updated_players) for i in range(4)]
 
@@ -489,7 +490,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         new_ball = ball.replace(
             vel_x=0.0, 
             vel_y=2.0,  # Positive y is downwards
-            landing_y=float(self.constants.PLAYER_Y_MIN+30), # Ground level
+            landing_y=float(self.consts.PLAYER_Y_MIN+30), # Ground level
             receiver=PlayerID.NONE, # Reset receiver
             missed_shot=True
         )
@@ -548,7 +549,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         p2_has_ball = jnp.logical_or((state.ball.holder == PlayerID.PLAYER2_INSIDE), (state.ball.holder == PlayerID.PLAYER2_OUTSIDE))
         
         defensive_strat = state.strategy.defense_pattern
-        basket_x, basket_y = self.constants.BASKET_POSITION
+        basket_x, basket_y = self.consts.BASKET_POSITION
 
         # --- Defensive Logic (Target Calculation) ---
         
@@ -921,13 +922,13 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         key, offset_key_x = random.split(key)
 
         shooter_pos = jnp.array([shooter_x, shooter_y], dtype=jnp.float32)
-        basket_pos = jnp.array([self.constants.BASKET_POSITION[0], self.constants.BASKET_POSITION[1]], dtype=jnp.float32)
+        basket_pos = jnp.array([self.consts.BASKET_POSITION[0], self.consts.BASKET_POSITION[1]], dtype=jnp.float32)
         dist_to_basket = jnp.sqrt(jnp.sum((shooter_pos - basket_pos) ** 2))
         
         # --- Dunk Logic ---
-        is_dunk = jnp.logical_and((dist_to_basket < self.constants.DUNK_RADIUS), (shooter_z > 0))
+        is_dunk = jnp.logical_and((dist_to_basket < self.consts.DUNK_RADIUS), (shooter_z > 0))
         
-        is_inside = dist_to_basket < self.constants.INSIDE_RADIUS
+        is_inside = dist_to_basket < self.consts.INSIDE_RADIUS
         shot_bonus = jax.lax.select(jnp.logical_and(is_inside, is_inside_shooting), 2, jax.lax.select(jnp.logical_and(jnp.logical_not(is_inside), is_outside_shooting), 2, -2))
 
         offset_x = random.uniform(offset_key_x, shape=(), minval=-10 + shot_bonus, maxval=10 - shot_bonus)
@@ -958,7 +959,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             dists = jnp.sqrt((opp_xs - shooter_x)**2 + (opp_ys - shooter_y)**2)
             # A shot is blocked only if the defender is in the air, within radius, 
             # and positioned between the shooter and the basket (y_defender < y_shooter)
-            can_blocks = jnp.logical_and(jnp.logical_and((opp_zs > 0), (dists < self.constants.BLOCK_RADIUS)), (opp_ys < shooter_y))
+            can_blocks = jnp.logical_and(jnp.logical_and((opp_zs > 0), (dists < self.consts.BLOCK_RADIUS)), (opp_ys < shooter_y))
             
             blocked_by = jax.lax.select(can_blocks[0], opp_ids[0], jax.lax.select(can_blocks[1], opp_ids[1], PlayerID.NONE))
             return blocked_by
@@ -1113,7 +1114,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         masked_actions = tuple([masked_actions_stacked[i] for i in range(4)])
 
         # 2. Handle Jump (using masked actions)
-        updated_players, jumped_flags = jax.vmap(self._handle_jump, in_axes=(None, 0, 0, None))(state, players, masked_actions_stacked, self.constants)
+        updated_players, jumped_flags = jax.vmap(self._handle_jump, in_axes=(None, 0, 0, None))(state, players, masked_actions_stacked, self.consts)
         
         updated_p1_inside, updated_p1_outside, updated_p2_inside, updated_p2_outside = [jax.tree_util.tree_map(lambda x: x[i], updated_players) for i in range(4)]
 
@@ -1209,7 +1210,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         def continue_play(s):
             # Handle miss
             # Check if ball went past the basket line (Y < 10) while moving up
-            overshot = jnp.logical_and((s.ball.y < self.constants.BASKET_POSITION[1]), (s.ball.vel_y < 0))
+            overshot = jnp.logical_and((s.ball.y < self.consts.BASKET_POSITION[1]), (s.ball.vel_y < 0))
             is_miss = jnp.logical_or(jnp.logical_and(reached_target, jnp.logical_not(s.ball.is_goal)), overshot)
             
             s = jax.lax.cond(is_miss, self._handle_miss, lambda s_: s_, s)
@@ -1591,7 +1592,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _get_done(self, state: DunkGameState) -> bool:
         """Determines if the environment state is a terminal state"""
-        is_max_score_reached = jnp.logical_or((state.scores.player >= self.constants.MAX_SCORE), (state.scores.enemy >= self.constants.MAX_SCORE))
+        is_max_score_reached = jnp.logical_or((state.scores.player >= self.consts.MAX_SCORE), (state.scores.enemy >= self.consts.MAX_SCORE))
         return is_max_score_reached
 
     def _get_info(self, state: DunkGameState, all_rewards: jnp.array = None) -> DunkInfo:
