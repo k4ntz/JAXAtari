@@ -271,7 +271,6 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE]
-        self.obs_size = 2*4+3*3+3  # Working size
 
 
     @partial(jax.jit, static_argnums=(0,))
