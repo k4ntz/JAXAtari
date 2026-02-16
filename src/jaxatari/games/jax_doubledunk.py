@@ -12,6 +12,7 @@ from functools import partial
 import os
 from enum import IntEnum
 from jaxatari import spaces
+from flax import struct
 
 class PlayerID(IntEnum):
     NONE = 0
@@ -120,6 +121,7 @@ class GameTimers:
     travel: chex.Array
     out_of_bounds: chex.Array
     clearance: chex.Array
+    possession: chex.Array = 0
 
 @chex.dataclass(frozen=True)
 class GameStrategy:
@@ -145,20 +147,20 @@ class DunkGameState:
     controlled_player_id: chex.Array
     key: chex.PRNGKey
 
-class EntityPosition(NamedTuple):
+class EntityPosition(struct.PyTreeNode):
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
 
-class DunkObservation(NamedTuple):
+class DunkObservation(struct.PyTreeNode):
     player: EntityPosition
     enemy: EntityPosition
     ball: EntityPosition
     score_player: jnp.ndarray
     score_enemy: jnp.ndarray
 
-class DunkInfo(NamedTuple):
+class DunkInfo(struct.PyTreeNode):
     time: jnp.ndarray
 
 # Define action sets
@@ -1564,7 +1566,22 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             s = self._update_players_animations(s)
 
             # 6. Process ball flight, goals, misses, and possession changes
+            prev_holder = s.ball.holder
             final_s = self._update_ball(s)
+            
+            # --- Possession Timer Update ---
+            # Reset if holder changed or no one holds it
+            # Increment if holder is same and not NONE
+            new_holder = final_s.ball.holder
+            holder_changed = new_holder != prev_holder
+            is_held = new_holder != PlayerID.NONE
+            
+            new_possession = jax.lax.select(
+                jnp.logical_or(holder_changed, jnp.logical_not(is_held)),
+                0,
+                s.timers.possession + 1
+            )
+            final_s = final_s.replace(timers=final_s.timers.replace(possession=new_possession))
 
             final_s = final_s.replace(step_counter=final_s.step_counter + 1, key=key)
             return final_s
