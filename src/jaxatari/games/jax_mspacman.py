@@ -12,21 +12,22 @@ TODO
 
     Bugs:
     1)  [x] Fix type cast warning
-    2)  [ ] Fix frightened ghosts death loop in the lower left corner
-    3)  [ ] Fix frightened ghosts being able to revert
+    2)  [ ] Fix frightened ghosts death loop (following repeating patterns)
+    3)  [X] Fix frightened ghosts being able to revert
     4)  [x] Fix entity alignment (pacman, ghosts, fruits and pellets one pixel up)
+    5)  [ ] Pellet in the upper left corner is not consumable
 
     Optional:
     a)  [x] Correct speed
-    b)  [ ] Pacman death animation
-    c)  [ ] Bonus Life at 10000 score
+    b)  [-] Pacman death animation
+    c)  [x] Bonus Life at 10000 score
     d)  [ ] Fruit scale and animation
-    e)  [ ] Fruit movement patterns
+    e)  [-] Fruit movement patterns
     f)  [ ] Ghost starting positions
-    g)  [ ] Ghost behavioral quirks
+    g)  [-] Ghost behavioral quirks
     h)  [ ] Ghost enjailment
-    i)  [ ] Ghost timings
-    j)  [ ] Correct maze colors
+    i)  [x] Ghost timings
+    j)  [-] Correct maze colors
     k)  [ ] Make sure data types make sense
 """
 
@@ -78,8 +79,8 @@ class GhostMode(IntEnum):
 
 # -------- Constants --------
 # GENERAL
-RESET_LEVEL = 1 # the starting level, loaded when reset is called
-RESET_TIMER = 40 # Timer for resetting the game after death
+RESET_LEVEL = 1 # The starting level, loaded when reset is called
+TIME_SCALE = 56 # Approximate number of timesteps in a second
 INITIAL_LIVES = 3 # Number of starting bonus lives
 MAX_LIVE_COUNT = 4 # Maximum possible number of lives
 MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
@@ -88,19 +89,19 @@ BONUS_LIFE_SCORE = 10000 # Score at which a bonus life is rewarded
 COLLISION_THRESHOLD = 8 # Contacts below this distance count as collision
 
 # GHOST TIMINGS
-CHASE_DURATION = 20*4*8 # Estimated for now, should be 20s  TODO: Adjust value
-MAX_CHASE_OFFSET = CHASE_DURATION / 10 # Maximum value that can be added to the chase duration
-SCATTER_DURATION = 7*4*8 # Estimated for now, should be 7s  TODO: Adjust value
-MAX_SCATTER_OFFSET = SCATTER_DURATION / 10 # Maximum value that can be added to the scatter duration
-FRIGHTENED_DURATION = 62*8 # Duration of power pellet effect in frames (x8 steps)
-BLINKING_DURATION = 10*8
-ENJAILED_DURATION = 120 # in steps
-RETURN_DURATION = 2*8 # Estimated for now, should be as long as it takes the ghost to return from jail to the path TODO: Adjust value
+RESET_TIMER = 2*TIME_SCALE # Timer for resetting the game after death
+CHASE_DURATION = 20*TIME_SCALE # Approximately 20s
+SCATTER_DURATION = 7*TIME_SCALE # Approximately 7s
+FRIGHTENED_DURATION = 100*TIME_SCALE # Approximately 4s
+BLINKING_DURATION = 3*TIME_SCALE # Approximately 3s
+ENJAILED_DURATION = 5*TIME_SCALE # Approximately 5s
+RETURN_DURATION = TIME_SCALE/2 # Estimated for now, should be as long as it takes the ghost to return from jail to the path TODO: Adjust value
+MAX_CHASE_OFFSET = CHASE_DURATION/10 # Maximum value that can be added to the chase duration
+MAX_SCATTER_OFFSET = SCATTER_DURATION/10 # Maximum value that can be added to the scatter duration
 
 # FRUITS
 FRUIT_SPAWN_THRESHOLDS = jnp.array([50, 100]) # The original was more like ~70, ~170 but this version has a reduced number of pellets
-# FRUIT_SPAWN_THRESHOLDS = jnp.array([4, 100], dtype=jnp.uint16)
-FRUIT_WANDER_DURATION = jnp.array(20*8, dtype=jnp.uint16) # Chosen randomly for now, should follow a hardcoded path instead
+FRUIT_WANDER_DURATION = jnp.array(25*TIME_SCALE, dtype=jnp.uint16) # Approximately 25s
 
 # POSITIONS
 POWER_PELLET_TILES = jnp.array([[1, 3], [36, 3], [1, 36], [36, 36]])
@@ -329,7 +330,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                         timers=ghost_timers,
                         keys=state.ghosts.keys
                     ),
-                    fruit = fruit_state,
+                    fruit=fruit_state,
                     lives=new_lives,
                     score=new_score,
                     score_changed=score_changed,
@@ -541,10 +542,13 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 skip
             )
 
-            new_position = jax.lax.cond(
-                ((state.ghosts.modes[ghost_index] == GhostMode.FRIGHTENED) | (state.ghosts.modes[ghost_index] == GhostMode.BLINKING)) & (state.step_count % 2 == 0),
-                lambda: state.ghosts.positions[ghost_index],
-                lambda: get_new_position(state.ghosts.positions[ghost_index], new_action)
+            new_position, new_action = jax.lax.cond(
+                ((state.ghosts.modes[ghost_index] == GhostMode.FRIGHTENED) |
+                 (state.ghosts.modes[ghost_index] == GhostMode.BLINKING) |
+                 (state.ghosts.modes[ghost_index] == GhostMode.RETURNING)) &
+                 (state.step_count % 2 == 0),
+                lambda: (state.ghosts.positions[ghost_index], state.ghosts.actions[ghost_index]),
+                lambda: (get_new_position(state.ghosts.positions[ghost_index], new_action), new_action)
             )
 
             new_modes       = new_ghost_states[0].at[ghost_index].set(new_mode)
