@@ -215,10 +215,27 @@ class BattlezoneState(NamedTuple):
     random_key: chex.PRNGKey
     shot_spawn: chex.Array
 
+class PlayerObs(NamedTuple):
+    cur_fire_cd: chex.Array
+    score: chex.Array
+    life: chex.Array
 
-class BattlezoneObservation(NamedTuple):  # TODO: fill out properly
-    score: jnp.ndarray
-    lives: jnp.ndarray
+class EnemyObs(NamedTuple):
+    x: chex.Array
+    z: chex.Array
+    enemy_type: chex.Array
+    active: chex.Array
+
+class ProjectileObs(NamedTuple):
+    x: chex.Array
+    z: chex.Array
+    active: chex.Array
+
+
+class BattlezoneObservation(NamedTuple):
+    player: PlayerObs
+    enemies: EnemyObs
+    projectiles: ProjectileObs
 
 
 
@@ -254,7 +271,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE]
-        self.obs_size = 3*4+1+1  #?? TODO: change later, from pong currently
+        self.obs_size = 2*4+3*3+3  # Working size
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -912,30 +929,78 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         return new_state
 
     def _get_observation(self, state: BattlezoneState):
-        return BattlezoneObservation(  # TODO
+        player = PlayerObs(
+            cur_fire_cd=state.cur_fire_cd,
             score=state.score,
-            lives=state.life,
+            life=state.life,
+        )
+
+        enemies = EnemyObs(
+            x=state.enemies.x,
+            z=state.enemies.z,
+            enemy_type=state.enemies.enemy_type,
+            active=state.enemies.active
+        )
+
+        projectiles = ProjectileObs(
+            x=jnp.concatenate([
+                jnp.atleast_1d(state.player_projectile.x),
+                state.enemy_projectiles.x
+            ]),
+            z=jnp.concatenate([
+                jnp.atleast_1d(state.player_projectile.z),
+                state.enemy_projectiles.z
+            ]),
+            active=jnp.concatenate([
+                jnp.atleast_1d(state.player_projectile.active),
+                state.enemy_projectiles.active
+            ])
+        )
+
+        return BattlezoneObservation(  # TODO
+            player=player,
+            enemies=enemies,
+            projectiles=projectiles
         )
     
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: BattlezoneObservation) -> jnp.ndarray:
         """needs to contain everything the observation contains"""
-        return jnp.array([  # TODO
-            #obs.player.x.flatten(),
-            #obs.player.y.flatten(),
-            #etc.
-            obs.score.flatten()[0],
-            obs.lives.flatten()[0]
+        return jnp.concatenate([  # TODO
+            obs.player.cur_fire_cd.flatten(),
+            obs.player.score.flatten(),
+            obs.player.live.flatten(),
+            obs.enemies.x.flatten(),
+            obs.enemies.z.flatten(),
+            obs.enemies.enemy_type.flatten(),
+            obs.enemies.active.flatten(),
+            obs.projectiles.x.flatten(),
+            obs.projectiles.z.flatten(),
+            obs.projectiles.active.flatten(),
         ]
         )
 
 
     def observation_space(self) -> spaces.Dict:
         """description of observation (must match)"""
-        return spaces.Dict({  # TODO
-            "lives": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
-            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+        return spaces.Dict({
+            "player": spaces.Dict({
+                "cur_fire_cd": spaces.Box(low=0, high=self.consts.FIRE_CD, shape=(), dtype=jnp.int32),
+                "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+                "life": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
+            }),
+            "enemies": spaces.Dict({
+                "x": spaces.Box(low=-self.consts.WORLD_SIZE_X, high=self.consts.WORLD_SIZE_X, shape=(2,), dtype=jnp.float32),
+                "z": spaces.Box(low=-self.consts.WORLD_SIZE_Z, high=self.consts.WORLD_SIZE_Z, shape=(2,), dtype=jnp.float32),
+                "enemy_type": spaces.Box(low=0, high=3, shape=(2,), dtype=jnp.int32),
+                "active": spaces.Box(low=0, high=1, shape=(2,), dtype=jnp.bool_)
+            }),
+            "projectiles": spaces.Dict({
+                "x": spaces.Box(low=-self.consts.WORLD_SIZE_X, high=self.consts.WORLD_SIZE_X, shape=(3,), dtype=jnp.float32),
+                "z": spaces.Box(low=-self.consts.WORLD_SIZE_Z, high=self.consts.WORLD_SIZE_Z, shape=(3,), dtype=jnp.float32),
+                "active": spaces.Box(low=0, high=1, shape=(3,), dtype=jnp.bool_)
+            })
         })
 
 
