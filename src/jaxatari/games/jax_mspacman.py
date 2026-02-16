@@ -15,7 +15,8 @@ TODO
     2)  [ ] Fix frightened ghosts death loop (following repeating patterns)
     3)  [X] Fix frightened ghosts being able to revert
     4)  [x] Fix entity alignment (pacman, ghosts, fruits and pellets one pixel up)
-    5)  [ ] Pellet in the upper left corner is not consumable
+    5)  [x] Fix pellet in the upper left corner not being consumable
+    6)  [ ] Fix inconsistent PELLETS_TO_COLLECT behaviour
 
     Optional:
     a)  [x] Correct speed
@@ -29,6 +30,7 @@ TODO
     i)  [x] Ghost timings
     j)  [-] Correct maze colors
     k)  [ ] Make sure data types make sense
+    l)  [ ] Reduce frightened/jail time every level
 """
 
 
@@ -84,7 +86,7 @@ TIME_SCALE = 56 # Approximate number of timesteps in a second
 INITIAL_LIVES = 3 # Number of starting bonus lives
 MAX_LIVE_COUNT = 4 # Maximum possible number of lives
 MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
-PELLETS_TO_COLLECT = 154 # Total pellets to collect in the maze (including power pellets)
+PELLETS_TO_COLLECT = 150 # Total pellets to collect in the maze (including power pellets)
 BONUS_LIFE_SCORE = 10000 # Score at which a bonus life is rewarded
 COLLISION_THRESHOLD = 8 # Contacts below this distance count as collision
 
@@ -955,14 +957,18 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         def render_pellets(background):
             x_range, y_range = jnp.nonzero(state.level.pellets, size=state.level.pellets.size)
             x_offset = jnp.where(x_range < 9, 8, 12)
+            n_pellets = jnp.sum(state.level.pellets)
+            mask = jnp.arange(state.level.pellets.size) < n_pellets
+
             x_positions = x_range * 8 + x_offset
             y_positions = y_range * 12 + 9
-
             dx = jnp.arange(4)[:, None]   # (w, 1)
             dy = jnp.arange(2)[None, :]   # (1, h)
 
             rows = x_positions[:, None, None] + dx   # (N, w, 1)
             cols = y_positions[:, None, None] + dy   # (N, 1, h)
+            rows = jnp.where(mask[:, None, None], rows, -1)
+            cols = jnp.where(mask[:, None, None], cols, -1)
             return background.at[rows, cols].set(MsPacmanMaze.WALL_COLOR)
 
         def render_power_pellets(background):
