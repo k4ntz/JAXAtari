@@ -247,7 +247,8 @@ class MsPacmanMaze:
 
               # 3. Stack results
               dof_grid = jnp.stack([no_wall_above, no_wall_right, no_wall_left, no_wall_below], axis=-1)  # (height, width, 4)
-              return jnp.transpose(dof_grid, (1, 0, 2))  # (width, height, 4)
+              dof_grid = jnp.transpose(dof_grid, (1, 0, 2))  # (width, height, 4)
+              return dof_grid
 
        @staticmethod
        def load_background(maze_id: int):

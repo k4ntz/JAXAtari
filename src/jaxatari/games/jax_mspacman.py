@@ -14,7 +14,7 @@ TODO
     1)  [x] Fix type cast warning
     2)  [ ] Fix frightened ghosts death loop in the lower left corner
     3)  [ ] Fix frightened ghosts being able to revert
-    4)  [ ] Fix entity alignment (pacman, ghosts, fruits and pellets one pixel up / ghosts one pixel to the right)
+    4)  [x] Fix entity alignment (pacman, ghosts, fruits and pellets one pixel up)
 
     Optional:
     a)  [x] Correct speed
@@ -984,7 +984,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         def render_pacman(background):
             orientation = act_to_dir(state.player.action)
             pacman_sprite = self.SPRITES["pacman"][orientation][((state.step_count & 0b1000) >> 2)]
-            return aj.render_at(background, state.player.position[0], state.player.position[1], pacman_sprite)
+            return aj.render_at(background, state.player.position[0], state.player.position[1] - 1, pacman_sprite)
 
         def render_ghosts(background):
             ghosts_orientation = ((state.step_count & 0b10000) >> 4)
@@ -1000,7 +1000,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
                         lambda: self.SPRITES["ghost"][ghosts_orientation][4]    # frightened
                     )
                 )
-                return aj.render_at(raster, state.ghosts.positions[idx][0], state.ghosts.positions[idx][1], g_sprite)
+                return aj.render_at(raster, state.ghosts.positions[idx][0], state.ghosts.positions[idx][1] - 1, g_sprite)
 
             return jax.lax.fori_loop(
                 0,
@@ -1011,7 +1011,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
         
         def render_fruit(raster, fruit: FruitState, fruit_sprites):
             """Renders the fruit at its current position."""
-            return aj.render_at(raster, fruit.position[0], fruit.position[1], fruit_sprites[fruit.type])
+            return aj.render_at(raster, fruit.position[0], fruit.position[1] - 1, fruit_sprites[fruit.type])
         
 
         # -------- Render playing field --------
