@@ -1,0 +1,3750 @@
+import os
+from functools import partial
+from typing import NamedTuple, Tuple
+import jax
+import jax.lax
+import jax.numpy as jnp
+import chex
+
+import jaxatari.spaces as spaces
+from jaxatari.renderers import JAXGameRenderer
+from jaxatari.rendering import jax_rendering_utils as render_utils
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+
+def _get_default_asset_config():
+    return (
+        # Background (could be procedural or a single tile)
+        {"name": "background", "type": "background", "file": "background.npy"},
+
+        # Player sprite
+        {"name": "player", "type": "single", "file": "player_1.npy"},
+
+        # Enemy sprites
+        {"name": "zombie", "type": "single", "file": "green_1.npy"},      # ENEMY_ZOMBIE = 1
+        {"name": "wraith", "type": "single", "file": "ghost_1.npy"},      # ENEMY_WRAITH = 2
+        {"name": "skeleton", "type": "single", "file": "skel_1.npy"},     # ENEMY_SKELETON = 3
+        {"name": "wizard", "type": "single", "file": "wizard_1.npy"},     # ENEMY_WIZARD = 4
+        # Note: No sprite for ENEMY_GRIM_REAPER = 5 yet, will use colored box
+
+        # Item sprites
+        {"name": "pot", "type": "single", "file": "pot.npy"},             # Shield icon (was pot)
+        {"name": "skull", "type": "single", "file": "skull.npy"},         # Poison/Trap (danger items)
+        {"name": "stairs", "type": "single", "file": "stairs.npy"},       # Ladder up (exit door)
+        {"name": "trapdoor", "type": "single", "file": "trapdoor.npy"},   # Ladder down (descent)
+
+        # New props / tiles
+        {"name": "apple", "type": "single", "file": "apple.npy"},
+        {"name": "barrel", "type": "single", "file": "barrel.npy"},
+        {"name": "candle", "type": "single", "file": "candle.npy"},
+        {"name": "chain", "type": "single", "file": "chain.npy"},
+        {"name": "door", "type": "single", "file": "door.npy"},
+        {"name": "key", "type": "single", "file": "key.npy"},
+
+        # Digits for UI - commented out, using hardcoded digit patterns instead
+        # {"name": "digits", "type": "digits", "pattern": "digits/{}.npy"},
+    )
+
+
+
+# Game configuration and constants
+
+GAME_H = 160
+GAME_W = 160
+WORLD_W = GAME_W * 2  # World is 2x viewport size
+WORLD_H = 600  # Significantly taller world
+
+# --- Nav grid for enemy pathfinding ---
+CELL_SIZE = 8                      # size of one nav cell in pixels
+GRID_W = WORLD_W // CELL_SIZE
+GRID_H = WORLD_H // CELL_SIZE
+BIG_DIST = 10_000                  # "infinity" for distance field
+
+NUM_ENEMIES = 20  # Increased to allow more spawned enemies
+NUM_SPAWNERS = 3  # Spawner entities
+
+# Enemy types (5 = strongest, 1 = weakest)
+ENEMY_GRIM_REAPER = 5  # Strongest
+ENEMY_WIZARD = 4
+ENEMY_SKELETON = 3
+ENEMY_WRAITH = 2
+ENEMY_ZOMBIE = 1  # Weakest
+
+# Item configuration
+NUM_ITEMS = 20  # 5 fixed (key, ladders, cage door, cage reward) + 15 random
+# Item type codes
+ITEM_HEART = 1          # +health, no points
+ITEM_POISON = 2         # -4 health, no points
+ITEM_TRAP = 3           # -6 health, no points
+ITEM_STRONGBOX = 4      # +100 points
+ITEM_AMBER_CHALICE = 5 # +500 points
+ITEM_AMULET = 6         # +1000 points
+ITEM_GOLD_CHALICE = 7   # +3000 points
+ITEM_SHIELD = 8         # Damage reduction
+ITEM_GUN = 9            # Faster shooting
+ITEM_BOMB = 10          # Kill all enemies in area
+ITEM_KEY = 11           # Key used to unlock gated extras
+ITEM_LADDER_UP = 12     # Exit/door leading up (always accessible)
+ITEM_LADDER_DOWN = 13   # Ladder leading down (always open)
+ITEM_CAGE_DOOR = 14     # Door item that gates entry into the bonus cage
+
+# Level configuration
+MAX_LEVELS = 7          # Total number of levels (0..6)
+LADDER_INTERACTION_TIME = 60  # Steps player must stand on ladder to change level
+LADDER_WIDTH = 12       # Larger than regular items
+LADDER_HEIGHT = 12
+
+# Bomb configuration
+MAX_BOMBS = 15          # Maximum bombs player can carry
+DOUBLE_TAP_WINDOW = 10  # Steps within which two fires count as double-tap
+FIRE_RATE_LIMIT = 1     # Minimum steps between shots (fire rate limiter)
+BOMB_RADIUS = 80        # Kill radius for bomb in pixels
+
+# Default base size (unused now, kept for reference)
+ITEM_WIDTH = 6
+ITEM_HEIGHT = 6
+
+# Bullet configuration
+# Player bullet configuration
+MAX_BULLETS = 64             # Drastically higher simultaneous bullets
+BULLET_WIDTH = 4
+BULLET_HEIGHT = 4
+BULLET_SPEED = 3             # Slightly faster than player speed (2)
+BULLET_SPEED_WITH_GUN = 6    # Much faster when gun is active
+
+# Wizard projectile configuration
+ENEMY_MAX_BULLETS = 100
+ENEMY_BULLET_WIDTH = 3
+ENEMY_BULLET_HEIGHT = 3
+ENEMY_BULLET_SPEED = 2
+WIZARD_SHOOT_INTERVAL = 20  # base steps between shots for each wizard
+WIZARD_SHOOT_OFFSET_MAX = 20  # random offset added to shooting interval (0-20)
+
+# Lives configuration
+MAX_LIVES = 1  # Number of lives player starts with
+
+# Death freeze configuration (ticks to freeze before respawn)
+DEATH_FREEZE_TICKS = 60
+
+# Spawner configuration
+SPAWNER_WIDTH = 14
+SPAWNER_HEIGHT = 28  # 2:1 aspect ratio (height = 2 * width, original width)
+SPAWNER_HEALTH = 3  # Takes 3 hits to destroy
+SPAWNER_SPAWN_INTERVAL = 150  # Spawn enemy every 150 steps
+
+ENEMY_COLLISION_MARGIN = 1
+
+CHASE_RADIUS = 80          # pixels
+IDLE_SPEED = 1              # pixels per step (keep <= 1 for fewer collision issues)
+
+ORBIT_DIRS = jnp.array([
+    [ 1,  0],  # E
+    [ 1, -1],  # NE
+    [ 0, -1],  # N
+    [-1, -1],  # NW
+    [-1,  0],  # W
+    [-1,  1],  # SW
+    [ 0,  1],  # S
+    [ 1,  1],  # SE
+], dtype=jnp.int32)
+
+
+
+class DarkChambersConstants(NamedTuple):
+    """Constants that define gameplay, visuals, and world layout."""
+    # Dimensions
+    WIDTH: int = GAME_W
+    HEIGHT: int = GAME_H
+    WORLD_WIDTH: int = WORLD_W
+    WORLD_HEIGHT: int = WORLD_H
+    
+    # Color scheme
+    BACKGROUND_COLOR: Tuple[int, int, int] = (74, 74, 74)  # Dark gray floor from screenshot
+    PLAYER_COLOR: Tuple[int, int, int] = (200, 80, 60)
+    # Enemy colors by type (from weakest to strongest)
+    ZOMBIE_COLOR: Tuple[int, int, int] = (100, 100, 100)  # Gray
+    WRAITH_COLOR: Tuple[int, int, int] = (180, 180, 220)  # Light purple
+    SKELETON_COLOR: Tuple[int, int, int] = (220, 220, 200)  # Bone white
+    WIZARD_COLOR: Tuple[int, int, int] = (150, 80, 200)  # Purple
+    GRIM_REAPER_COLOR: Tuple[int, int, int] = (50, 50, 50)  # Dark gray/black
+    WALL_COLOR: Tuple[int, int, int] = (213, 117, 114)  # Salmon/coral pink walls from screenshot
+    HEART_COLOR: Tuple[int, int, int] = (220, 30, 30)
+    POISON_COLOR: Tuple[int, int, int] = (50, 200, 50)  # Green poison
+    TRAP_COLOR: Tuple[int, int, int] = (120, 70, 20)     # Brown trap
+    TREASURE_COLOR: Tuple[int, int, int] = (255, 220, 0) # Yellow for all treasures
+    SPAWNER_COLOR: Tuple[int, int, int] = (180, 50, 180) # Magenta/purple spawner
+    SHIELD_COLOR: Tuple[int, int, int] = (80, 120, 255) # Blue shield
+    GUN_COLOR: Tuple[int, int, int] = (40, 40, 40) # Black gun
+    BOMB_COLOR: Tuple[int, int, int] = (240, 240, 240) # White bomb
+    KEY_COLOR: Tuple[int, int, int] = (0, 255, 255) # Cyan key (easy to distinguish from gold)
+    LADDER_UP_COLOR: Tuple[int, int, int] = (140, 90, 40) # Brownish exit door
+    LADDER_DOWN_COLOR: Tuple[int, int, int] = (100, 60, 20) # Darker brown ladder down
+    UI_COLOR: Tuple[int, int, int] = (236, 236, 236)
+    BULLET_COLOR: Tuple[int, int, int] = (255, 200, 0)
+    
+    # Sizes
+    PLAYER_WIDTH: int = 12
+    PLAYER_HEIGHT: int = 24  # Double height for human-like shape
+    ENEMY_WIDTH: int = 10
+    ENEMY_HEIGHT: int = 20  # Double height for human-like shape
+    
+    PLAYER_SPEED: int = 2
+    WALL_THICKNESS: int = 8
+    
+    PLAYER_START_X: int = 160  # Center of world (WORLD_W/2 = 320/2)
+    PLAYER_START_Y: int = 210  # Center of world (WORLD_H/2 = 420/2)
+    
+    # Health mechanics (scaled to classic 31 strength units)
+    MAX_HEALTH: int = 31
+    STARTING_HEALTH: int = 31
+    HEALTH_GAIN: int = 10  # Heart potion gain
+    POISON_DAMAGE: int = 4   # Light damage
+    TRAP_DAMAGE: int = 6     # Heavier damage
+    
+    # Enemy damage by type (contact damage per step)
+    ZOMBIE_DAMAGE: int = 1  # Weakest
+    WRAITH_DAMAGE: int = 1
+    SKELETON_DAMAGE: int = 3
+    WIZARD_DAMAGE: int = 4
+    GRIM_REAPER_DAMAGE: int = 5  # Strongest
+    
+    # Enemy scoring (points awarded when killed)
+    ZOMBIE_POINTS: int = 10  # Weakest - explodes when killed
+    WRAITH_POINTS: int = 20
+    SKELETON_POINTS: int = 30
+    WIZARD_POINTS: int = 50
+    GRIM_REAPER_POINTS: int = 100  # Strongest
+
+
+class DarkChambersState(NamedTuple):
+    """Immutable snapshot of the current game state."""
+    player_x: chex.Array
+    player_y: chex.Array
+    player_direction: chex.Array  # 0=right, 1=left, 2=up, 3=down
+    
+    enemy_positions: chex.Array  # shape: (NUM_ENEMIES, 2)
+    enemy_types: chex.Array      # shape: (NUM_ENEMIES,) - 1=zombie, 2=wraith, 3=skeleton, 4=wizard, 5=grim_reaper
+    enemy_active: chex.Array     # shape: (NUM_ENEMIES,) - 1=alive, 0=dead
+    wizard_shoot_timers: chex.Array  # shape: (NUM_ENEMIES,) - countdown to next shot for wizards
+    
+    spawner_positions: chex.Array  # shape: (NUM_SPAWNERS, 2)
+    spawner_health: chex.Array     # shape: (NUM_SPAWNERS,) - health remaining
+    spawner_active: chex.Array     # shape: (NUM_SPAWNERS,) - 1=active, 0=destroyed
+    spawner_timers: chex.Array     # shape: (NUM_SPAWNERS,) - countdown to next spawn
+    
+    bullet_positions: chex.Array  # (MAX_BULLETS, 4) - x, y, dx, dy
+    bullet_active: chex.Array     # (MAX_BULLETS,) - 1=active, 0=inactive
+    enemy_bullet_positions: chex.Array  # (ENEMY_MAX_BULLETS, 4) - x, y, dx, dy
+    enemy_bullet_active: chex.Array     # (ENEMY_MAX_BULLETS,) - 1=active, 0=inactive
+    
+    health: chex.Array
+    score: chex.Array
+    
+    item_positions: chex.Array  # (NUM_ITEMS, 2)
+    item_types: chex.Array      # 1=heart, 2=poison
+    item_active: chex.Array     # 1=active, 0=collected
+    
+    has_key: chex.Array         # 1=has key, 0=no key
+    shield_active: chex.Array   # 1=shield active, 0=no shield
+    gun_active: chex.Array      # 1=gun active, 0=no gun
+    bomb_count: chex.Array      # number of bombs (0-15)
+    last_fire_step: chex.Array  # step counter when fire was last pressed (for double-tap)
+    
+    current_level: chex.Array   # current level index (0 to MAX_LEVELS-1)
+    map_index: chex.Array       # current map variant (0=middle, 1=left, 2=right)
+    ladder_timer: chex.Array    # time standing on ladder (0 to LADDER_INTERACTION_TIME)
+    lives: chex.Array           # remaining lives (0 to MAX_LIVES)
+    
+    step_counter: chex.Array
+    death_counter: chex.Array    # >0 means freeze frames remaining before respawn
+    key: chex.PRNGKey
+
+    damage_cooldown: chex.Array
+
+class EntityPosition(NamedTuple):
+    """Axis-aligned rectangle: top-left position and size."""
+    x: jnp.ndarray
+    y: jnp.ndarray
+    width: jnp.ndarray
+    height: jnp.ndarray
+
+
+class DarkChambersObservation(NamedTuple):
+    """Compact observation used by agents and the UI."""
+    player: EntityPosition
+    enemies: jnp.ndarray  # (NUM_ENEMIES, 5): x, y, width, height, active
+    health: jnp.ndarray
+    score: jnp.ndarray
+    step: jnp.ndarray
+
+
+class DarkChambersInfo(NamedTuple):
+    """Auxiliary info not intended for learning signals."""
+    time: jnp.ndarray
+
+class DarkChambersRenderer(JAXGameRenderer):
+    """Software renderer for Dark Chambers."""
+    
+    def __init__(self, consts: DarkChambersConstants = None):
+        super().__init__(consts)
+        self.consts = consts or DarkChambersConstants()
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(GAME_H, GAME_W),  # (height, width)
+            channels=3
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+        
+        # Load sprites using the asset system
+        final_asset_config = list(_get_default_asset_config())
+        
+        # Create procedural sprites for colors not in the main sprites (enemies, items, UI, etc.)
+        def create_color_sprite(color):
+            """Make a 1×1 sprite for the given color (ensures it’s in the palette)."""
+            rgba = (*color, 255)
+            return jnp.array([[rgba]], dtype=jnp.uint8)
+        
+        # Add all game colors as procedural sprites to ensure they're in the palette
+        color_sprites = {
+            'zombie_color': create_color_sprite(self.consts.ZOMBIE_COLOR),
+            'wraith_color': create_color_sprite(self.consts.WRAITH_COLOR),
+            'skeleton_color': create_color_sprite(self.consts.SKELETON_COLOR),
+            'wizard_color': create_color_sprite(self.consts.WIZARD_COLOR),
+            'grim_reaper_color': create_color_sprite(self.consts.GRIM_REAPER_COLOR),
+            'wall_color': create_color_sprite(self.consts.WALL_COLOR),
+            'heart_color': create_color_sprite(self.consts.HEART_COLOR),
+            'poison_color': create_color_sprite(self.consts.POISON_COLOR),
+            'trap_color': create_color_sprite(self.consts.TRAP_COLOR),
+            'treasure_color': create_color_sprite(self.consts.TREASURE_COLOR),
+            'spawner_color': create_color_sprite(self.consts.SPAWNER_COLOR),
+            'shield_color': create_color_sprite(self.consts.SHIELD_COLOR),
+            'gun_color': create_color_sprite(self.consts.GUN_COLOR),
+            'bomb_color': create_color_sprite(self.consts.BOMB_COLOR),
+            'key_color': create_color_sprite(self.consts.KEY_COLOR),
+            'ladder_up_color': create_color_sprite(self.consts.LADDER_UP_COLOR),
+            'ladder_down_color': create_color_sprite(self.consts.LADDER_DOWN_COLOR),
+            'ui_color': create_color_sprite(self.consts.UI_COLOR),
+            'bullet_color': create_color_sprite(self.consts.BULLET_COLOR),
+        }
+        
+        # Append procedural color sprites to asset config
+        for name, sprite_data in color_sprites.items():
+            final_asset_config.append({'name': name, 'type': 'procedural', 'data': sprite_data})
+        
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/darkchambers"
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+        
+        # Override background with solid color based on BACKGROUND_COLOR constant
+        bg_color_id = self.COLOR_TO_ID.get(self.consts.BACKGROUND_COLOR)
+        if bg_color_id is not None:
+            self.BACKGROUND = jnp.full((GAME_H, GAME_W), bg_color_id, dtype=jnp.uint8)
+
+        # Ensure background is always (160, 160) to avoid shape mismatch
+        if self.BACKGROUND.shape == (210, 160):
+            self.BACKGROUND = self.BACKGROUND[:160, :]
+        
+        # Print sprite sizes for debugging
+        print("\n=== SPRITE SIZES ===")
+        if "player" in self.SHAPE_MASKS:
+            print(f"Player sprite shape: {self.SHAPE_MASKS['player'].shape}")
+        if "zombie" in self.SHAPE_MASKS:
+            print(f"Zombie sprite shape: {self.SHAPE_MASKS['zombie'].shape}")
+        if "wraith" in self.SHAPE_MASKS:
+            print(f"Wraith sprite shape: {self.SHAPE_MASKS['wraith'].shape}")
+        if "skeleton" in self.SHAPE_MASKS:
+            print(f"Skeleton sprite shape: {self.SHAPE_MASKS['skeleton'].shape}")
+        if "wizard" in self.SHAPE_MASKS:
+            print(f"Wizard sprite shape: {self.SHAPE_MASKS['wizard'].shape}")
+        
+        # Item sprites
+        if "pot" in self.SHAPE_MASKS:
+            print(f"Pot (shield) sprite shape: {self.SHAPE_MASKS['pot'].shape}")
+        if "skull" in self.SHAPE_MASKS:
+            print(f"Skull sprite shape: {self.SHAPE_MASKS['skull'].shape}")
+        if "stairs" in self.SHAPE_MASKS:
+            print(f"Stairs sprite shape: {self.SHAPE_MASKS['stairs'].shape}")
+        if "trapdoor" in self.SHAPE_MASKS:
+            print(f"Trapdoor sprite shape: {self.SHAPE_MASKS['trapdoor'].shape}")
+        if "apple" in self.SHAPE_MASKS:
+            print(f"Apple sprite shape: {self.SHAPE_MASKS['apple'].shape}")
+        if "barrel" in self.SHAPE_MASKS:
+            print(f"Barrel sprite shape: {self.SHAPE_MASKS['barrel'].shape}")
+        if "candle" in self.SHAPE_MASKS:
+            print(f"Candle sprite shape: {self.SHAPE_MASKS['candle'].shape}")
+        if "chain" in self.SHAPE_MASKS:
+            print(f"Chain sprite shape: {self.SHAPE_MASKS['chain'].shape}")
+        if "door" in self.SHAPE_MASKS:
+            print(f"Door sprite shape: {self.SHAPE_MASKS['door'].shape}")
+        if "key" in self.SHAPE_MASKS:
+            print(f"Key sprite shape: {self.SHAPE_MASKS['key'].shape}")
+        print("===================\n")
+        
+        # Helper to scale palette-index masks to a target size (centered pad/crop)
+        def _scale_mask(mask: jnp.ndarray, target_h: int, target_w: int) -> jnp.ndarray:
+            if mask is None:
+                return None
+            if mask.ndim == 2:
+                h, w = int(mask.shape[0]), int(mask.shape[1])
+                sx = max(1, target_w // w)
+                sy = max(1, target_h // h)
+                scaled = jnp.repeat(jnp.repeat(mask, sy, axis=0), sx, axis=1)
+                sh, sw = int(scaled.shape[0]), int(scaled.shape[1])
+                pad_h = max(0, target_h - sh)
+                pad_w = max(0, target_w - sw)
+                pad_top = pad_h // 2
+                pad_bottom = pad_h - pad_top
+                pad_left = pad_w // 2
+                pad_right = pad_w - pad_left
+                scaled_padded = jnp.pad(scaled, ((pad_top, pad_bottom), (pad_left, pad_right)), mode="constant", constant_values=0)
+                final_h = int(scaled_padded.shape[0])
+                final_w = int(scaled_padded.shape[1])
+                ct = max(0, (final_h - target_h) // 2)
+                cl = max(0, (final_w - target_w) // 2)
+                cb = ct + target_h
+                cr = cl + target_w
+                return scaled_padded[ct:cb, cl:cr]
+            elif mask.ndim == 3:
+                # Assume (N, H, W) stack
+                N = int(mask.shape[0])
+                def _scale_one(m):
+                    return _scale_mask(m, target_h, target_w)
+                return jax.vmap(_scale_one, in_axes=0, out_axes=0)(mask)
+            else:
+                return mask
+
+        # Ensure player sprite visually matches gameplay size by upscaling if needed
+        player_mask = self.SHAPE_MASKS.get("player")
+        if player_mask is not None:
+            target_w = int(self.consts.PLAYER_WIDTH)
+            target_h = int(self.consts.PLAYER_HEIGHT)
+            self.PLAYER_SCALED_MASK = _scale_mask(player_mask, target_h, target_w)
+            print(f"Scaled player to {target_h}×{target_w}")
+        else:
+            # Fallback: use original player mask without scaling
+            self.PLAYER_SCALED_MASK = self.SHAPE_MASKS.get("player")
+
+        # Scale enemy sprites to match gameplay size (10×20)
+        target_enemy_w = int(self.consts.ENEMY_WIDTH)
+        target_enemy_h = int(self.consts.ENEMY_HEIGHT)
+        
+        self.ENEMY_SCALED_MASKS = {}
+        for enemy_name in ["zombie", "wraith", "skeleton", "wizard"]:
+            enemy_mask = self.SHAPE_MASKS.get(enemy_name)
+            if enemy_mask is not None:
+                self.ENEMY_SCALED_MASKS[enemy_name] = _scale_mask(enemy_mask, target_enemy_h, target_enemy_w)
+                print(f"Scaled {enemy_name} to {target_enemy_h}×{target_enemy_w}")
+            else:
+                self.ENEMY_SCALED_MASKS[enemy_name] = None
+        
+
+        # Scale item sprites to 12×12 boxes for consistent rendering
+        target_item_w = 12
+        target_item_h = 12
+        self.ITEM_SCALED_MASKS = {}
+        item_sprites = {
+            "pot": "pot",          # ITEM_SHIELD (shield icon)
+            "skull": "skull",      # ITEM_POISON
+            "trapdoor": "trapdoor", # ITEM_TRAP
+            "stairs": "stairs",    # ITEM_LADDER_UP
+            "stairs_down": "stairs", # ITEM_LADDER_DOWN (use same stairs sprite)
+            "apple": "apple",      # ITEM_HEART
+            "barrel": "barrel",    # ITEM_BOMB
+            "candle": "candle",    # ITEM_AMBER_CHALICE
+            "chain": "chain",      # ITEM_AMULET
+            "key": "key",         # ITEM_KEY
+            "door": "door",       # ITEM_CAGE_DOOR
+        }
+        for item_key, sprite_name in item_sprites.items():
+            item_mask = self.SHAPE_MASKS.get(sprite_name)
+            if item_mask is not None:
+                self.ITEM_SCALED_MASKS[item_key] = _scale_mask(item_mask, target_item_h, target_item_w)
+                print(f"Scaled {sprite_name} to {target_item_h}×{target_item_w}")
+            else:
+                self.ITEM_SCALED_MASKS[item_key] = None
+
+        # --- Spawner as skull: scale skull sprite to 14x28 for spawner (2:1 aspect, original width) ---
+        skull_mask = self.SHAPE_MASKS.get("skull")
+        if skull_mask is not None:
+            self.SPAWNER_SKULL_MASK = _scale_mask(skull_mask, SPAWNER_HEIGHT, SPAWNER_WIDTH)
+            print(f"Scaled skull sprite to {SPAWNER_WIDTH}x{SPAWNER_HEIGHT} for spawner (2:1 aspect, original width)")
+        else:
+            self.SPAWNER_SKULL_MASK = None
+
+        # Grim Reaper has no sprite, will use colored box
+        self.HEART_MASK_6 = None
+        self.POISON_MASK_6 = None
+        self.TREASURE_MASKS = {}
+
+        # Create color ID mapping for easy access
+        self.WALL_ID = self.COLOR_TO_ID[self.consts.WALL_COLOR]
+        self.HEART_ID = self.COLOR_TO_ID[self.consts.HEART_COLOR]
+        self.POISON_ID = self.COLOR_TO_ID[self.consts.POISON_COLOR]
+        self.TRAP_ID = self.COLOR_TO_ID[self.consts.TRAP_COLOR]
+        self.TREASURE_ID = self.COLOR_TO_ID[self.consts.TREASURE_COLOR]
+        self.SPAWNER_ID = self.COLOR_TO_ID[self.consts.SPAWNER_COLOR]
+        self.SHIELD_ID = self.COLOR_TO_ID[self.consts.SHIELD_COLOR]
+        self.GUN_ID = self.COLOR_TO_ID[self.consts.GUN_COLOR]
+        self.BOMB_ID = self.COLOR_TO_ID[self.consts.BOMB_COLOR]
+        self.KEY_ID = self.COLOR_TO_ID[self.consts.KEY_COLOR]
+        self.LADDER_UP_ID = self.COLOR_TO_ID[self.consts.LADDER_UP_COLOR]
+        self.LADDER_DOWN_ID = self.COLOR_TO_ID[self.consts.LADDER_DOWN_COLOR]
+        self.UI_ID = self.COLOR_TO_ID[self.consts.UI_COLOR]
+        self.BULLET_ID = self.COLOR_TO_ID[self.consts.BULLET_COLOR]
+        self.ZOMBIE_ID = self.COLOR_TO_ID[self.consts.ZOMBIE_COLOR]
+        self.WRAITH_ID = self.COLOR_TO_ID[self.consts.WRAITH_COLOR]
+        self.SKELETON_ID = self.COLOR_TO_ID[self.consts.SKELETON_COLOR]
+        self.WIZARD_ID = self.COLOR_TO_ID[self.consts.WIZARD_COLOR]
+        self.GRIM_REAPER_ID = self.COLOR_TO_ID[self.consts.GRIM_REAPER_COLOR]
+
+        # Digit patterns (0-9) 3x5 bitmap (rows top->bottom, cols left->right)
+        # 1 = pixel on, 0 = off
+        self.DIGIT_PATTERNS = jnp.array([
+            # 0
+            [[1,1,1],
+             [1,0,1],
+             [1,0,1],
+             [1,0,1],
+             [1,1,1]],
+            # 1
+            [[0,1,0],
+             [1,1,0],
+             [0,1,0],
+             [0,1,0],
+             [1,1,1]],
+            # 2
+            [[1,1,1],
+             [0,0,1],
+             [1,1,1],
+             [1,0,0],
+             [1,1,1]],
+            # 3
+            [[1,1,1],
+             [0,0,1],
+             [1,1,1],
+             [0,0,1],
+             [1,1,1]],
+            # 4
+            [[1,0,1],
+             [1,0,1],
+             [1,1,1],
+             [0,0,1],
+             [0,0,1]],
+            # 5
+            [[1,1,1],
+             [1,0,0],
+             [1,1,1],
+             [0,0,1],
+             [1,1,1]],
+            # 6
+            [[1,1,1],
+             [1,0,0],
+             [1,1,1],
+             [1,0,1],
+             [1,1,1]],
+            # 7
+            [[1,1,1],
+             [0,0,1],
+             [0,1,0],
+             [0,1,0],
+             [0,1,0]],
+            # 8
+            [[1,1,1],
+             [1,0,1],
+             [1,1,1],
+             [1,0,1],
+             [1,1,1]],
+            # 9
+            [[1,1,1],
+             [1,0,1],
+             [1,1,1],
+             [0,0,1],
+             [1,1,1]],
+        ], dtype=jnp.uint8)
+        
+        # Walls in world coordinates - format: [x, y, width, height]
+        # Multiple levels with different layouts
+        # Shape: (MAX_LEVELS, max_walls_per_level, 4)
+        # Define 3 portal holes per side (top, middle, bottom)
+        portal_hole_height = 40
+        portal_gap = (self.consts.WORLD_HEIGHT - 3 * portal_hole_height) // 4
+        portal_y_starts = [
+            portal_gap,
+            portal_gap * 2 + portal_hole_height,
+            portal_gap * 3 + portal_hole_height * 2
+        ]
+        portal_y_ends = [y + portal_hole_height for y in portal_y_starts]
+        
+        # Middle map (map_index=0) - original layout, adjusted for new portals and height
+        # Borders
+        border_top = [0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS]
+        border_bottom = [0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS]
+        # Left wall - 3 gaps for portals
+        left_walls = []
+        prev_end = 0
+        for y_start, y_end in zip(portal_y_starts, portal_y_ends):
+            left_walls.append([0, prev_end, self.consts.WALL_THICKNESS, y_start - prev_end])
+            prev_end = y_end
+        left_walls.append([0, prev_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - prev_end])
+        # Right wall - 3 gaps for portals
+        right_walls = []
+        prev_end = 0
+        for y_start, y_end in zip(portal_y_starts, portal_y_ends):
+            right_walls.append([self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, prev_end, self.consts.WALL_THICKNESS, y_start - prev_end])
+            prev_end = y_end
+        right_walls.append([self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, prev_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - prev_end])
+        # Labyrinth structure - Level 0 (adjusted for new height)
+        maze = [
+            [60, 100, 120, 6],
+            [200, 200, 80, 6],
+            [80, 300, 100, 6],
+            [40, 400, 140, 6],
+            [161, 500, 6, 80],
+        ]
+        # Note: DO NOT include border_top, border_bottom, left_walls, right_walls here
+        # Those are now in BOUNDARY_WALLS and will be concatenated separately
+        middle_level_0_walls = jnp.array(maze, dtype=jnp.int32)
+        
+        # Left map (map_index=1) - vertical corridor pattern, adjusted for portals/height
+        left_level_0_walls = jnp.array([
+            [80, 80, 6, 200],
+            [180, 200, 6, 200],
+            [40, 300, 100, 6],
+            [120, 400, 120, 6],
+            [230, 480, 6, 100],
+        ], dtype=jnp.int32)
+        
+        # Right map (map_index=2) - horizontal chambers, adjusted for portals/height
+        right_level_0_walls = jnp.array([
+            [50, 100, 140, 6],
+            [140, 200, 6, 200],
+            [70, 300, 130, 6],
+            [50, 400, 110, 6],
+            [200, 500, 6, 70],
+        ], dtype=jnp.int32)
+        
+        # Middle map level 1 (reuse portal wall logic)
+        middle_level_1_walls = jnp.array([
+            [50, 120, 100, 6],
+            [180, 220, 100, 6],
+            [100, 320, 120, 6],
+            [60, 420, 100, 6],
+            [81, 540, 6, 60],
+        ], dtype=jnp.int32)
+        
+        # Left map level 1 - alternating pattern (reuse portal wall logic)
+        left_level_1_walls = jnp.array([
+            [60, 90, 110, 6],
+            [70, 170, 6, 90],
+            [140, 250, 100, 6],
+            [190, 320, 6, 80],
+            [50, 440, 120, 6],
+        ], dtype=jnp.int32)
+        
+        # Right map level 1 - grid-like pattern (reuse portal wall logic)
+        right_level_1_walls = jnp.array([
+            [80, 110, 120, 6],
+            [160, 180, 6, 90],
+            [40, 300, 130, 6],
+            [60, 370, 6, 90],
+            [170, 420, 90, 6],
+        ], dtype=jnp.int32)
+
+        # --- Hard-coded 4×4 cages (interior in nav cells) ---
+        self.CAGE_INTERIOR_CELLS = 4
+        self.CAGE_WALL_THICKNESS = 4
+        self.CAGE_DOOR_GAP = 16  # wider opening for smooth in/out
+        self.CAGE_DOOR_SIZE = LADDER_WIDTH  # reuse ladder sizing for the door box
+        cage_interior_size = self.CAGE_INTERIOR_CELLS * CELL_SIZE
+        cage_outer_size = cage_interior_size + 2 * self.CAGE_WALL_THICKNESS
+        self.CAGE_OUTER_SIZE = cage_outer_size
+        self.CAGE_REWARD_TYPE = ITEM_AMULET
+        reward_size = jnp.array([11, 11], dtype=jnp.int32)
+
+        def build_cage(origin):
+            cx, cy = origin
+            gap_side = (cage_outer_size - self.CAGE_DOOR_GAP) // 2
+
+            top = jnp.array([cx, cy, cage_outer_size, self.CAGE_WALL_THICKNESS], dtype=jnp.int32)
+            bottom_left = jnp.array([cx, cy + cage_outer_size - self.CAGE_WALL_THICKNESS, gap_side, self.CAGE_WALL_THICKNESS], dtype=jnp.int32)
+            bottom_right = jnp.array([
+                cx + gap_side + self.CAGE_DOOR_GAP,
+                cy + cage_outer_size - self.CAGE_WALL_THICKNESS,
+                gap_side,
+                self.CAGE_WALL_THICKNESS
+            ], dtype=jnp.int32)
+            left = jnp.array([cx, cy, self.CAGE_WALL_THICKNESS, cage_outer_size], dtype=jnp.int32)
+            right = jnp.array([cx + cage_outer_size - self.CAGE_WALL_THICKNESS, cy, self.CAGE_WALL_THICKNESS, cage_outer_size], dtype=jnp.int32)
+            cage_walls = jnp.stack([top, bottom_left, bottom_right, left, right], axis=0)
+
+            # Door is centered at the bottom opening
+            door_x = cx + gap_side + (self.CAGE_DOOR_GAP - self.CAGE_DOOR_SIZE) // 2
+            door_y = cy + cage_outer_size - self.CAGE_DOOR_SIZE
+            door_pos = jnp.array([door_x, door_y], dtype=jnp.int32)
+
+            # Reward is centered inside the cage interior
+            reward_x = cx + self.CAGE_WALL_THICKNESS + (cage_interior_size - reward_size[0]) // 2
+            reward_y = cy + self.CAGE_WALL_THICKNESS + (cage_interior_size - reward_size[1]) // 2
+            reward_pos = jnp.array([reward_x, reward_y], dtype=jnp.int32)
+
+            # Entry position (where player teleports) is centered inside
+            entry_x = cx + self.CAGE_WALL_THICKNESS + (cage_interior_size - self.consts.PLAYER_WIDTH) // 2
+            entry_y = cy + self.CAGE_WALL_THICKNESS + (cage_interior_size - self.consts.PLAYER_HEIGHT) // 2
+            entry_pos = jnp.array([entry_x, entry_y], dtype=jnp.int32)
+            return cage_walls, door_pos, reward_pos, entry_pos
+
+        def add_cage(level_walls, origin):
+            cage_walls, door_pos, reward_pos, entry_pos = build_cage(origin)
+            return jnp.concatenate([level_walls, cage_walls], axis=0), door_pos, reward_pos, entry_pos
+
+        cage_origin_level0 = jnp.array([180, 20], dtype=jnp.int32)
+        cage_origin_level1 = jnp.array([180, 60], dtype=jnp.int32)
+        
+        # Cage positions for left map - clear areas avoiding all walls
+        cage_origin_level0_left = jnp.array([140, 280], dtype=jnp.int32)   # Lower middle - between walls at x=120-240 and below y=250
+        cage_origin_level1_left = jnp.array([180, 120], dtype=jnp.int32)   # Upper right - clear between vertical walls
+        
+        # Cage positions for right map - clear areas avoiding all walls
+        cage_origin_level0_right = jnp.array([200, 230], dtype=jnp.int32)  # Lower right - below wall at y=220, right of vertical at x=140
+        cage_origin_level1_right = jnp.array([200, 230], dtype=jnp.int32)  # Lower right - below wall at y=200, clear of vertical at x=160
+
+        # Add cages to all 3 map variants
+        middle_level_0_walls, level0_door_m, level0_reward_m, level0_entry_m = add_cage(middle_level_0_walls, cage_origin_level0)
+        middle_level_1_walls, level1_door_m, level1_reward_m, level1_entry_m = add_cage(middle_level_1_walls, cage_origin_level1)
+        
+        left_level_0_walls, level0_door_l, level0_reward_l, level0_entry_l = add_cage(left_level_0_walls, cage_origin_level0_left)
+        left_level_1_walls, level1_door_l, level1_reward_l, level1_entry_l = add_cage(left_level_1_walls, cage_origin_level1_left)
+        
+        right_level_0_walls, level0_door_r, level0_reward_r, level0_entry_r = add_cage(right_level_0_walls, cage_origin_level0_right)
+        right_level_1_walls, level1_door_r, level1_reward_r, level1_entry_r = add_cage(right_level_1_walls, cage_origin_level1_right)
+
+        # Create additional levels by offsetting and varying walls
+        def offset_walls(base, dx, dy):
+            # Offset all interior labyrinth walls by (dx, dy)
+            # (Border/portal walls now come from BOUNDARY_WALLS only)
+            xy = base[:, 0:2] + jnp.array([dx, dy])
+            wh = base[:, 2:4]
+            return jnp.concatenate([xy, wh], axis=1)
+
+        def offset_pos(pos, dx, dy):
+            return pos + jnp.array([dx, dy], dtype=jnp.int32)
+
+        # Create higher levels by offsetting middle map base levels (for all 3 maps the same offset pattern)
+        middle_level_2_walls = offset_walls(middle_level_1_walls, 10, -10)
+        middle_level_3_walls = offset_walls(middle_level_0_walls, -15, 20)
+        middle_level_4_walls = offset_walls(middle_level_1_walls, 25, 10)
+        middle_level_5_walls = offset_walls(middle_level_0_walls, -30, -20)
+        middle_level_6_walls = offset_walls(middle_level_1_walls, 5, 25)
+        
+        left_level_2_walls = offset_walls(left_level_1_walls, 10, -10)
+        left_level_3_walls = offset_walls(left_level_0_walls, -15, 20)
+        left_level_4_walls = offset_walls(left_level_1_walls, 25, 10)
+        left_level_5_walls = offset_walls(left_level_0_walls, -30, -20)
+        left_level_6_walls = offset_walls(left_level_1_walls, 5, 25)
+        
+        right_level_2_walls = offset_walls(right_level_1_walls, 10, -10)
+        right_level_3_walls = offset_walls(right_level_0_walls, -15, 20)
+        right_level_4_walls = offset_walls(right_level_1_walls, 25, 10)
+        right_level_5_walls = offset_walls(right_level_0_walls, -30, -20)
+        right_level_6_walls = offset_walls(right_level_1_walls, 5, 25)
+
+        # Use middle map for cage positions (same for all 3 maps)
+        # MIDDLE MAP cage positions
+        level0_door_pos_m = level0_door_m
+        level0_reward_pos_m = level0_reward_m
+        level0_entry_pos_m = level0_entry_m
+
+        level1_door_pos_m = level1_door_m
+        level1_reward_pos_m = level1_reward_m
+        level1_entry_pos_m = level1_entry_m
+
+        level2_door_pos_m = offset_pos(level1_door_m, 10, -10)
+        level2_reward_pos_m = offset_pos(level1_reward_m, 10, -10)
+        level2_entry_pos_m = offset_pos(level1_entry_m, 10, -10)
+
+        level3_door_pos_m = offset_pos(level0_door_m, -15, 20)
+        level3_reward_pos_m = offset_pos(level0_reward_m, -15, 20)
+        level3_entry_pos_m = offset_pos(level0_entry_m, -15, 20)
+
+        level4_door_pos_m = offset_pos(level1_door_m, 25, 10)
+        level4_reward_pos_m = offset_pos(level1_reward_m, 25, 10)
+        level4_entry_pos_m = offset_pos(level1_entry_m, 25, 10)
+
+        level5_door_pos_m = offset_pos(level0_door_m, -30, -20)
+        level5_reward_pos_m = offset_pos(level0_reward_m, -30, -20)
+        level5_entry_pos_m = offset_pos(level0_entry_m, -30, -20)
+
+        level6_door_pos_m = offset_pos(level1_door_m, 5, 25)
+        level6_reward_pos_m = offset_pos(level1_reward_m, 5, 25)
+        level6_entry_pos_m = offset_pos(level1_entry_m, 5, 25)
+        
+        # LEFT MAP cage positions
+        level0_door_pos_l = level0_door_l
+        level0_reward_pos_l = level0_reward_l
+        level0_entry_pos_l = level0_entry_l
+
+        level1_door_pos_l = level1_door_l
+        level1_reward_pos_l = level1_reward_l
+        level1_entry_pos_l = level1_entry_l
+
+        level2_door_pos_l = offset_pos(level1_door_l, 10, -10)
+        level2_reward_pos_l = offset_pos(level1_reward_l, 10, -10)
+        level2_entry_pos_l = offset_pos(level1_entry_l, 10, -10)
+
+        level3_door_pos_l = offset_pos(level0_door_l, -15, 20)
+        level3_reward_pos_l = offset_pos(level0_reward_l, -15, 20)
+        level3_entry_pos_l = offset_pos(level0_entry_l, -15, 20)
+
+        level4_door_pos_l = offset_pos(level1_door_l, 25, 10)
+        level4_reward_pos_l = offset_pos(level1_reward_l, 25, 10)
+        level4_entry_pos_l = offset_pos(level1_entry_l, 25, 10)
+
+        level5_door_pos_l = offset_pos(level0_door_l, -30, -20)
+        level5_reward_pos_l = offset_pos(level0_reward_l, -30, -20)
+        level5_entry_pos_l = offset_pos(level0_entry_l, -30, -20)
+
+        level6_door_pos_l = offset_pos(level1_door_l, 5, 25)
+        level6_reward_pos_l = offset_pos(level1_reward_l, 5, 25)
+        level6_entry_pos_l = offset_pos(level1_entry_l, 5, 25)
+        
+        # RIGHT MAP cage positions
+        level0_door_pos_r = level0_door_r
+        level0_reward_pos_r = level0_reward_r
+        level0_entry_pos_r = level0_entry_r
+
+        level1_door_pos_r = level1_door_r
+        level1_reward_pos_r = level1_reward_r
+        level1_entry_pos_r = level1_entry_r
+
+        level2_door_pos_r = offset_pos(level1_door_r, 10, -10)
+        level2_reward_pos_r = offset_pos(level1_reward_r, 10, -10)
+        level2_entry_pos_r = offset_pos(level1_entry_r, 10, -10)
+
+        level3_door_pos_r = offset_pos(level0_door_r, -15, 20)
+        level3_reward_pos_r = offset_pos(level0_reward_r, -15, 20)
+        level3_entry_pos_r = offset_pos(level0_entry_r, -15, 20)
+
+        level4_door_pos_r = offset_pos(level1_door_r, 25, 10)
+        level4_reward_pos_r = offset_pos(level1_reward_r, 25, 10)
+        level4_entry_pos_r = offset_pos(level1_entry_r, 25, 10)
+
+        level5_door_pos_r = offset_pos(level0_door_r, -30, -20)
+        level5_reward_pos_r = offset_pos(level0_reward_r, -30, -20)
+        level5_entry_pos_r = offset_pos(level0_entry_r, -30, -20)
+
+        level6_door_pos_r = offset_pos(level1_door_r, 5, 25)
+        level6_reward_pos_r = offset_pos(level1_reward_r, 5, 25)
+        level6_entry_pos_r = offset_pos(level1_entry_r, 5, 25)
+
+        # Stack into 3D arrays: (3 maps, 7 levels, 2 coords)
+        self.CAGE_DOOR_POSITIONS = jnp.stack([
+            jnp.stack([level0_door_pos_m, level1_door_pos_m, level2_door_pos_m, level3_door_pos_m, level4_door_pos_m, level5_door_pos_m, level6_door_pos_m], axis=0),
+            jnp.stack([level0_door_pos_l, level1_door_pos_l, level2_door_pos_l, level3_door_pos_l, level4_door_pos_l, level5_door_pos_l, level6_door_pos_l], axis=0),
+            jnp.stack([level0_door_pos_r, level1_door_pos_r, level2_door_pos_r, level3_door_pos_r, level4_door_pos_r, level5_door_pos_r, level6_door_pos_r], axis=0),
+        ], axis=0)
+
+        self.CAGE_REWARD_POSITIONS = jnp.stack([
+            jnp.stack([level0_reward_pos_m, level1_reward_pos_m, level2_reward_pos_m, level3_reward_pos_m, level4_reward_pos_m, level5_reward_pos_m, level6_reward_pos_m], axis=0),
+            jnp.stack([level0_reward_pos_l, level1_reward_pos_l, level2_reward_pos_l, level3_reward_pos_l, level4_reward_pos_l, level5_reward_pos_l, level6_reward_pos_l], axis=0),
+            jnp.stack([level0_reward_pos_r, level1_reward_pos_r, level2_reward_pos_r, level3_reward_pos_r, level4_reward_pos_r, level5_reward_pos_r, level6_reward_pos_r], axis=0),
+        ], axis=0)
+
+        self.CAGE_ENTRY_POSITIONS = jnp.stack([
+            jnp.stack([level0_entry_pos_m, level1_entry_pos_m, level2_entry_pos_m, level3_entry_pos_m, level4_entry_pos_m, level5_entry_pos_m, level6_entry_pos_m], axis=0),
+            jnp.stack([level0_entry_pos_l, level1_entry_pos_l, level2_entry_pos_l, level3_entry_pos_l, level4_entry_pos_l, level5_entry_pos_l, level6_entry_pos_l], axis=0),
+            jnp.stack([level0_entry_pos_r, level1_entry_pos_r, level2_entry_pos_r, level3_entry_pos_r, level4_entry_pos_r, level5_entry_pos_r, level6_entry_pos_r], axis=0),
+        ], axis=0)
+        
+        # Stack levels into 3D array: shape (3 maps, MAX_LEVELS, num_walls, 4)
+        # Map index 0 = middle, 1 = left, 2 = right
+        middle_walls_stack = jnp.stack([
+            middle_level_0_walls, middle_level_1_walls, middle_level_2_walls, 
+            middle_level_3_walls, middle_level_4_walls, middle_level_5_walls, middle_level_6_walls
+        ], axis=0)
+        
+        left_walls_stack = jnp.stack([
+            left_level_0_walls, left_level_1_walls, left_level_2_walls,
+            left_level_3_walls, left_level_4_walls, left_level_5_walls, left_level_6_walls
+        ], axis=0)
+        
+        right_walls_stack = jnp.stack([
+            right_level_0_walls, right_level_1_walls, right_level_2_walls,
+            right_level_3_walls, right_level_4_walls, right_level_5_walls, right_level_6_walls
+        ], axis=0)
+        
+        self.LEVEL_WALLS = jnp.stack([middle_walls_stack, left_walls_stack, right_walls_stack], axis=0)
+        
+        # Default to middle map level 0 for compatibility
+        self.WALLS = middle_level_0_walls
+
+        def build_boundary_walls():
+            portal_hole_height = 40
+            portal_gap = (self.consts.WORLD_HEIGHT - 3 * portal_hole_height) // 4
+            portal_y_starts = jnp.array([
+                portal_gap,
+                portal_gap * 2 + portal_hole_height,
+                portal_gap * 3 + portal_hole_height * 2
+            ], dtype=jnp.int32)
+            portal_y_ends = portal_y_starts + portal_hole_height
+
+            bt = jnp.array([0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS], dtype=jnp.int32)
+            bb = jnp.array([0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS], dtype=jnp.int32)
+            lw1 = jnp.array([0, 0, self.consts.WALL_THICKNESS, portal_y_starts[0]], dtype=jnp.int32)
+            lw2 = jnp.array([0, portal_y_ends[0], self.consts.WALL_THICKNESS, portal_y_starts[1] - portal_y_ends[0]], dtype=jnp.int32)
+            lw3 = jnp.array([0, portal_y_ends[1], self.consts.WALL_THICKNESS, portal_y_starts[2] - portal_y_ends[1]], dtype=jnp.int32)
+            lw4 = jnp.array([0, portal_y_ends[2], self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_ends[2]], dtype=jnp.int32)
+            rw1 = jnp.array([self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, 0, self.consts.WALL_THICKNESS, portal_y_starts[0]], dtype=jnp.int32)
+            rw2 = jnp.array([self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_ends[0], self.consts.WALL_THICKNESS, portal_y_starts[1] - portal_y_ends[0]], dtype=jnp.int32)
+            rw3 = jnp.array([self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_ends[1], self.consts.WALL_THICKNESS, portal_y_starts[2] - portal_y_ends[1]], dtype=jnp.int32)
+            rw4 = jnp.array([self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, portal_y_ends[2], self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - portal_y_ends[2]], dtype=jnp.int32)
+            return jnp.stack([bt, bb, lw1, lw2, lw3, lw4, rw1, rw2, rw3, rw4], axis=0)
+
+        # Shared boundary walls (with portal gaps) for rendering and collision
+        self.BOUNDARY_WALLS = build_boundary_walls()
+
+        # --- Navigation grid: mark nav cells that are blocked by walls ---
+        def make_occupancy(walls):
+            # walls: (num_walls, 4) = [x, y, w, h]
+            walls = jnp.concatenate([walls, self.BOUNDARY_WALLS], axis=0)
+            xs = jnp.arange(GRID_W) * CELL_SIZE
+            ys = jnp.arange(GRID_H) * CELL_SIZE
+            cx, cy = jnp.meshgrid(xs, ys)   # shape (GRID_H, GRID_W)
+
+            # Treat each cell as a CELL_SIZE x CELL_SIZE rect (top-left at cx,cy)
+            cx = cx[..., None]
+            cy = cy[..., None]
+
+            wx = walls[:, 0]
+            wy = walls[:, 1]
+            ww = walls[:, 2]
+            wh = walls[:, 3]
+
+            overlap_x = (cx <= (wx + ww - 1)) & ((cx + CELL_SIZE - 1) >= wx)
+            overlap_y = (cy <= (wy + wh - 1)) & ((cy + CELL_SIZE - 1) >= wy)
+            blocked = jnp.any(overlap_x & overlap_y, axis=-1)  # (GRID_H, GRID_W) bool
+            return blocked
+
+        # Shape: (3 maps, MAX_LEVELS, GRID_H, GRID_W)
+        self.LEVEL_WALL_GRID = jnp.stack([
+            jnp.stack([make_occupancy(self.LEVEL_WALLS[map_idx, level_idx]) 
+                      for level_idx in range(MAX_LEVELS)], axis=0)
+            for map_idx in range(3)
+        ], axis=0)
+        
+        # Per-item sizes (width, height) indexed by item type code
+        # Index 0 unused placeholder for alignment
+        self.ITEM_TYPE_SIZES = jnp.array([
+            [0, 0],                 # 0 (unused)
+            [6, 6],                 # 1 HEART
+            [6, 6],                 # 2 POISON
+            [6, 6],                 # 3 TRAP
+            [7, 7],                 # 4 STRONGBOX (small)
+            [9, 9],                 # 5 AMBER CHALICE (medium)
+            [11, 11],               # 6 AMULET (large)
+            [13, 13],               # 7 GOLD CHALICE (largest)
+            [6, 6],                 # 8 SHIELD
+            [6, 6],                 # 9 GUN
+            [6, 6],                 # 10 BOMB
+            [6, 6],                 # 11 KEY (small key)
+            [LADDER_WIDTH, LADDER_HEIGHT],  # 12 LADDER_UP (larger)
+            [LADDER_WIDTH, LADDER_HEIGHT],  # 13 LADDER_DOWN (larger)
+            [LADDER_WIDTH, LADDER_HEIGHT],  # 14 CAGE_DOOR (box-sized door)
+        ], dtype=jnp.int32)
+
+        # Color id mapping per item type (aligning with palette above)
+        self.ITEM_TYPE_COLOR_IDS = jnp.array([
+            0,   # unused
+            8,   # HEART (red)
+            9,   # POISON (green)
+            13,  # TRAP (brown)
+            12,  # STRONGBOX (yellow)
+            12,  # AMBER CHALICE (yellow)
+            12,  # AMULET (yellow)
+            12,  # GOLD CHALICE (yellow)
+            15,  # SHIELD (blue)
+            16,  # GUN (black)
+            17,  # BOMB (white)
+            18,  # KEY (gold)
+            19,  # LADDER_UP (brown exit door)
+            20,  # LADDER_DOWN (dark brown ladder)
+            19,  # CAGE_DOOR (reuse ladder-up tint)
+        ], dtype=jnp.int32)
+        # Python constants for item type color IDs (indexed by item_type - 1)
+        self.ITEM_TYPE_COLOR_IDS_PY = [
+            self.HEART_ID,         # 1: ITEM_HEART
+            self.POISON_ID,        # 2: ITEM_POISON
+            self.TRAP_ID,          # 3: ITEM_TRAP
+            self.TREASURE_ID,      # 4: ITEM_STRONGBOX
+            self.TREASURE_ID,      # 5: ITEM_AMBER_CHALICE
+            self.TREASURE_ID,      # 6: ITEM_AMULET
+            self.TREASURE_ID,      # 7: ITEM_GOLD_CHALICE
+            self.SHIELD_ID,        # 8: ITEM_SHIELD
+            self.GUN_ID,           # 9: ITEM_GUN
+            self.BOMB_ID,          # 10: ITEM_BOMB
+            self.KEY_ID,           # 11: ITEM_KEY
+            self.LADDER_UP_ID,     # 12: ITEM_LADDER_UP
+            self.LADDER_DOWN_ID,   # 13: ITEM_LADDER_DOWN
+            self.LADDER_UP_ID,     # 14: ITEM_CAGE_DOOR
+        ]
+    
+    def render(self, state: DarkChambersState) -> jnp.ndarray:
+        """Return an RGB image for the current state (H×W×3, uint8)."""
+        # Start with background sprite
+        object_raster = self.jr.create_object_raster(self.BACKGROUND)
+        
+        # Camera follows player
+        cam_x = jnp.clip(
+            state.player_x - GAME_W // 2, 
+            0, 
+            self.consts.WORLD_WIDTH - GAME_W
+        ).astype(jnp.int32)
+        cam_y = jnp.clip(
+            state.player_y - GAME_H // 2, 
+            0, 
+            self.consts.WORLD_HEIGHT - GAME_H
+        ).astype(jnp.int32)
+        
+        # Draw walls for current level and map
+        # Note: Wall textures can't be dynamically indexed in JAX due to tracing limitations
+        # Using solid color rendering for walls
+        current_level_walls = self.LEVEL_WALLS[state.map_index, state.current_level]
+        wall_positions = (current_level_walls[:, 0:2] - jnp.array([cam_x, cam_y])).astype(jnp.int32)
+        wall_sizes = current_level_walls[:, 2:4]
+        object_raster = self.jr.draw_rects(
+            object_raster, 
+            positions=wall_positions, 
+            sizes=wall_sizes, 
+            color_id=self.WALL_ID
+        )
+
+        # Reinforce map borders every frame (with portal gaps) so edges never disappear
+        boundary_walls = self.BOUNDARY_WALLS
+        boundary_positions = (boundary_walls[:, 0:2] - jnp.array([cam_x, cam_y])).astype(jnp.int32)
+        boundary_sizes = boundary_walls[:, 2:4]
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=boundary_positions,
+            sizes=boundary_sizes,
+            color_id=self.WALL_ID
+        )
+
+        # Level indicator: "LEVEL X" under health bar (top-left)
+        # Render the word LEVEL (fixed 5 letters) and a single digit X = current_level+1
+        # Using 3x5 digit patterns; for letters, approximate with simple blocks
+        level_text_x = 4
+        level_text_y = 20  # below health bar
+
+        # Render "LEVEL" as five 3x5 glyphs encoded similarly to digits
+        # Simple L,E,V,E,L patterns (manually defined)
+        L = jnp.array([[1,0,0],
+                       [1,0,0],
+                       [1,0,0],
+                       [1,0,0],
+                       [1,1,1]], dtype=jnp.uint8)
+        E = jnp.array([[1,1,1],
+                       [1,0,0],
+                       [1,1,1],
+                       [1,0,0],
+                       [1,1,1]], dtype=jnp.uint8)
+        V = jnp.array([[1,0,1],
+                       [1,0,1],
+                       [1,0,1],
+                       [0,1,0],
+                       [0,1,0]], dtype=jnp.uint8)
+        letters = jnp.stack([L, E, V, E, L], axis=0)  # shape (5,5,3)
+        spacing = 1
+        letter_width = 3
+        letter_height = 5
+        # Compute positions for letters
+        letter_offsets = jnp.arange(5) * (letter_width + spacing)
+        xs = jnp.arange(letter_width)
+        ys = jnp.arange(letter_height)
+        grid_x = xs[None, None, :].repeat(5, axis=0).repeat(letter_height, axis=1)
+        grid_y = ys[None, :, None].repeat(5, axis=0).repeat(letter_width, axis=2)
+        base_x = level_text_x + letter_offsets[:, None, None]
+        px_letters = base_x + grid_x
+        py_letters = level_text_y + grid_y
+        active_letters = (letters == 1)
+        # Mask out inactive pixels by moving them off-screen (-100)
+        px_letters_masked = jnp.where(active_letters, px_letters, -100)
+        py_letters_masked = jnp.where(active_letters, py_letters, -100)
+        flat_px_letters = px_letters_masked.reshape(-1)
+        flat_py_letters = py_letters_masked.reshape(-1)
+        letter_positions = jnp.stack([flat_px_letters, flat_py_letters], axis=1).astype(jnp.int32)
+        letter_sizes = jnp.ones((letter_positions.shape[0], 2), dtype=jnp.int32)
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=letter_positions,
+            sizes=letter_sizes,
+            color_id=self.UI_ID
+        )
+
+        # Render level number (1-based)
+        level_num = (state.current_level + 1).astype(jnp.int32)
+        tens = level_num // 10
+        ones = level_num % 10
+        # Only render ones (levels 1..7)
+        digit = ones
+        pattern = self.DIGIT_PATTERNS[digit]
+        digit_x = level_text_x + 5 * (letter_width + spacing) + 2  # after "LEVEL"
+        digit_y = level_text_y
+        xs_d = jnp.arange(3)
+        ys_d = jnp.arange(5)
+        grid_x_d = xs_d[None, :].repeat(5, axis=0)
+        grid_y_d = ys_d[:, None].repeat(3, axis=1)
+        px_d = digit_x + grid_x_d
+        py_d = digit_y + grid_y_d
+        active_d = (pattern == 1)
+        # Avoid boolean advanced indexing in JIT: mask and flatten
+        px_d_masked = jnp.where(active_d, px_d, -100)
+        py_d_masked = jnp.where(active_d, py_d, -100)
+        digit_positions = jnp.stack([px_d_masked.reshape(-1), py_d_masked.reshape(-1)], axis=1).astype(jnp.int32)
+        digit_sizes = jnp.ones((digit_positions.shape[0], 2), dtype=jnp.int32)
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=digit_positions,
+            sizes=digit_sizes,
+            color_id=self.UI_ID
+        )
+        
+        # Player (use scaled sprite, analogous to enemy rendering)
+        player_screen_x = (state.player_x - cam_x).astype(jnp.int32)
+        player_screen_y = (state.player_y - cam_y).astype(jnp.int32)
+        
+        # Render player sprite using same pattern as enemies
+        player_sprite = self.PLAYER_SCALED_MASK
+        has_player_sprite = player_sprite is not None
+        object_raster = jax.lax.cond(
+            has_player_sprite,
+            lambda r: self.jr.render_at_clipped(r, player_screen_x, player_screen_y, player_sprite),
+            lambda r: r,
+            object_raster
+        )
+        
+        # Enemies - use sprites for types 1-4, colored box for Grim Reaper (type 5)
+        enemy_world_pos = state.enemy_positions.astype(jnp.int32)
+        enemy_screen_pos = (enemy_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
+        num_enemies = enemy_screen_pos.shape[0]
+        enemy_active_mask = (state.enemy_active == 1)
+        
+        # Use same approach as boxes: mask inactive enemies to off-screen position
+        _off = jnp.array([-100, -100], dtype=jnp.int32)
+        masked_enemy_pos = jnp.where(
+            enemy_active_mask[:, None],
+            enemy_screen_pos,
+            _off
+        )
+        
+        # Render each enemy type using sprites (types 1-4)
+        def render_one_enemy(i, raster):
+            ex = masked_enemy_pos[i, 0]
+            ey = masked_enemy_pos[i, 1]
+            enemy_type = state.enemy_types[i]
+            is_active = enemy_active_mask[i]
+            
+            # Use render_at_clipped to handle partial visibility automatically
+            # No visibility check needed - render_at_clipped handles off-screen clipping
+            
+            # Type 1: Zombie
+            is_zombie = (enemy_type == 1) & is_active
+            zombie_sprite = self.ENEMY_SCALED_MASKS.get("zombie")
+            raster = jax.lax.cond(
+                is_zombie & (zombie_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, ex, ey, zombie_sprite),
+                lambda r: r,
+                raster
+            )
+            
+            # Type 2: Wraith
+            is_wraith = (enemy_type == 2) & is_active
+            wraith_sprite = self.ENEMY_SCALED_MASKS.get("wraith")
+            raster = jax.lax.cond(
+                is_wraith & (wraith_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, ex, ey, wraith_sprite),
+                lambda r: r,
+                raster
+            )
+            
+            # Type 3: Skeleton
+            is_skeleton = (enemy_type == 3) & is_active
+            skeleton_sprite = self.ENEMY_SCALED_MASKS.get("skeleton")
+            raster = jax.lax.cond(
+                is_skeleton & (skeleton_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, ex, ey, skeleton_sprite),
+                lambda r: r,
+                raster
+            )
+            
+            # Type 4: Wizard
+            is_wizard = (enemy_type == 4) & is_active
+            wizard_sprite = self.ENEMY_SCALED_MASKS.get("wizard")
+            raster = jax.lax.cond(
+                is_wizard & (wizard_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, ex, ey, wizard_sprite),
+                lambda r: r,
+                raster
+            )
+            
+            return raster
+        
+        # Render all enemies with sprites
+        object_raster = jax.lax.fori_loop(0, NUM_ENEMIES, render_one_enemy, object_raster)
+        
+        # Type 5: Grim Reaper (use colored box - no sprite yet)
+        grim_reaper_mask = (state.enemy_types == 5) & enemy_active_mask
+        grim_reaper_positions = jnp.where(
+            grim_reaper_mask[:, None],
+            masked_enemy_pos,
+            _off
+        )
+        enemy_sizes = jnp.tile(
+            jnp.array([self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT], dtype=jnp.int32)[None, :],
+            (num_enemies, 1)
+        )
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=grim_reaper_positions,
+            sizes=enemy_sizes,
+            color_id=self.GRIM_REAPER_ID
+        )
+        
+        # Items - mask inactive ones by moving off-screen
+        items_world_pos = state.item_positions.astype(jnp.int32)
+        items_screen_pos = (items_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
+        
+        # Masking for inactive items
+        off_screen = jnp.array([-100, -100], dtype=jnp.int32)
+        masked_item_pos = jnp.where(
+            state.item_active[:, None] == 1,
+            items_screen_pos,
+            off_screen
+        )
+        
+        # Draw items by type using sprites (for heart, poison, trap, ladder_up) or rectangles (for others)
+        def draw_item_type(raster, t, positions_world):
+            mask = (state.item_types == t) & (state.item_active == 1)
+            pos = jnp.where(mask[:, None], positions_world, off_screen)
+            size_wh = self.ITEM_TYPE_SIZES[t]
+            sizes = jnp.tile(size_wh[None, :], (NUM_ITEMS, 1))
+            color_id_py = self.ITEM_TYPE_COLOR_IDS_PY[t-1]  # t in 1..12
+            return self.jr.draw_rects(
+                raster,
+                positions=pos,
+                sizes=sizes,
+                color_id=color_id_py
+            )
+        
+        # Render items with sprites for specific types
+        def render_item_sprite(i, raster):
+            item_type = state.item_types[i]
+            is_active = state.item_active[i] == 1
+            item_x = masked_item_pos[i, 0]
+            item_y = masked_item_pos[i, 1]
+            
+            # ITEM_SHIELD = 8 -> pot sprite (shield icon)
+            is_shield = (item_type == ITEM_SHIELD) & is_active
+            pot_sprite = self.ITEM_SCALED_MASKS.get("pot")
+            raster = jax.lax.cond(
+                is_shield & (pot_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, pot_sprite),
+                lambda r: r,
+                raster
+            )
+            
+            # ITEM_POISON = 2 -> skull sprite
+            is_poison = (item_type == ITEM_POISON) & is_active
+            skull_sprite = self.ITEM_SCALED_MASKS.get("skull")
+            # Draw a visible box under/for poison so it isn't invisible on dark backgrounds
+            poison_size = self.ITEM_TYPE_SIZES[ITEM_POISON]
+            poison_sizes = jnp.array([poison_size], dtype=jnp.int32)
+            poison_pos = jnp.array([[item_x, item_y]], dtype=jnp.int32)
+            poison_color = self.ITEM_TYPE_COLOR_IDS_PY[ITEM_POISON - 1]
+            raster = jax.lax.cond(
+                is_poison,
+                lambda r: self.jr.draw_rects(r, positions=poison_pos, sizes=poison_sizes, color_id=poison_color),
+                lambda r: r,
+                raster
+            )
+            raster = jax.lax.cond(
+                is_poison & (skull_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, skull_sprite),
+                lambda r: r,
+                raster
+            )
+            
+            # ITEM_TRAP = 3 -> trapdoor sprite
+            is_trap = (item_type == ITEM_TRAP) & is_active
+            trapdoor_sprite = self.ITEM_SCALED_MASKS.get("trapdoor")
+            # Draw a visible box under/for traps so they aren't invisible on dark backgrounds
+            trap_size = self.ITEM_TYPE_SIZES[ITEM_TRAP]
+            trap_sizes = jnp.array([trap_size], dtype=jnp.int32)
+            trap_pos = jnp.array([[item_x, item_y]], dtype=jnp.int32)
+            trap_color = self.ITEM_TYPE_COLOR_IDS_PY[ITEM_TRAP - 1]
+            raster = jax.lax.cond(
+                is_trap,
+                lambda r: self.jr.draw_rects(r, positions=trap_pos, sizes=trap_sizes, color_id=trap_color),
+                lambda r: r,
+                raster
+            )
+            raster = jax.lax.cond(
+                is_trap & (trapdoor_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, trapdoor_sprite),
+                lambda r: r,
+                raster
+            )
+            
+            # ITEM_LADDER_UP = 12 -> stairs sprite
+            is_ladder_up = (item_type == ITEM_LADDER_UP) & is_active
+            stairs_sprite = self.ITEM_SCALED_MASKS.get("stairs")
+            raster = jax.lax.cond(
+                is_ladder_up & (stairs_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, stairs_sprite),
+                lambda r: r,
+                raster
+            )
+
+            # ITEM_CAGE_DOOR = 14 -> door sprite scaled to box
+            is_cage_door = (item_type == ITEM_CAGE_DOOR) & is_active
+            door_sprite = self.ITEM_SCALED_MASKS.get("door")
+            raster = jax.lax.cond(
+                is_cage_door & (door_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, door_sprite),
+                lambda r: r,
+                raster
+            )
+            
+            # ITEM_LADDER_DOWN = 13 -> stairs sprite (same as ladder_up)
+            is_ladder_down = (item_type == ITEM_LADDER_DOWN) & is_active
+            stairs_down_sprite = self.ITEM_SCALED_MASKS.get("stairs_down")
+            raster = jax.lax.cond(
+                is_ladder_down & (stairs_down_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, stairs_down_sprite),
+                lambda r: r,
+                raster
+            )
+            
+            # ITEM_HEART = 1 -> apple sprite
+            apple_sprite = self.ITEM_SCALED_MASKS.get("apple")
+            if apple_sprite is not None:
+                is_heart = (item_type == ITEM_HEART) & is_active
+                raster = jax.lax.cond(
+                    is_heart,
+                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, apple_sprite),
+                    lambda r: r,
+                    raster
+                )
+            
+            # ITEM_BOMB = 10 -> barrel sprite
+            barrel_sprite = self.ITEM_SCALED_MASKS.get("barrel")
+            if barrel_sprite is not None:
+                is_bomb = (item_type == ITEM_BOMB) & is_active
+                raster = jax.lax.cond(
+                    is_bomb,
+                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, barrel_sprite),
+                    lambda r: r,
+                    raster
+                )
+            
+            # ITEM_AMBER_CHALICE = 5 -> candle sprite (+500 points treasure)
+            candle_sprite = self.ITEM_SCALED_MASKS.get("candle")
+            if candle_sprite is not None:
+                is_amber_chalice = (item_type == ITEM_AMBER_CHALICE) & is_active
+                raster = jax.lax.cond(
+                    is_amber_chalice,
+                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, candle_sprite),
+                    lambda r: r,
+                    raster
+                )
+            
+            # ITEM_AMULET = 6 -> chain sprite (+1000 points treasure)
+            chain_sprite = self.ITEM_SCALED_MASKS.get("chain")
+            if chain_sprite is not None:
+                is_amulet = (item_type == ITEM_AMULET) & is_active
+                raster = jax.lax.cond(
+                    is_amulet,
+                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, chain_sprite),
+                    lambda r: r,
+                    raster
+                )
+            
+            # ITEM_KEY = 11 -> key sprite
+            key_sprite = self.ITEM_SCALED_MASKS.get("key")
+            if key_sprite is not None:
+                is_key = (item_type == ITEM_KEY) & is_active
+                raster = jax.lax.cond(
+                    is_key,
+                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, key_sprite),
+                    lambda r: r,
+                    raster
+                )
+            
+            return raster
+        
+        # First render sprite-based items using fori_loop
+        object_raster = jax.lax.fori_loop(0, NUM_ITEMS, render_item_sprite, object_raster)
+        
+        # Then render remaining items (treasures, powerups, etc.) as colored boxes
+        # Skip types that now use sprites: HEART(1), POISON(2), TRAP(3), AMBER_CHALICE(5), AMULET(6), SHIELD(8), BOMB(10), KEY(11), LADDER_UP(12), LADDER_DOWN(13), CAGE_DOOR(14)
+        for t in [4, 7, 9]:  # STRONGBOX(4), HOURGLASS(7), TORCH(9)
+            object_raster = draw_item_type(object_raster, t, masked_item_pos)
+        
+        # Spawners: render as large skulls (24x24)
+        spawner_world_pos = state.spawner_positions.astype(jnp.int32)
+        spawner_screen_pos = (spawner_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
+        spawner_active_mask = state.spawner_active == 1
+        for i in range(NUM_SPAWNERS):
+            if self.SPAWNER_SKULL_MASK is not None:
+                object_raster = jax.lax.cond(
+                    spawner_active_mask[i],
+                    lambda r: self.jr.render_at_clipped(r, spawner_screen_pos[i, 0], spawner_screen_pos[i, 1], self.SPAWNER_SKULL_MASK),
+                    lambda r: r,
+                    object_raster
+                )
+        # (If no skull sprite, fallback to colored box)
+        if self.SPAWNER_SKULL_MASK is None:
+            masked_spawner_pos = jnp.where(
+                spawner_active_mask[:, None],
+                spawner_screen_pos,
+                off_screen
+            )
+            spawner_sizes = jnp.tile(
+                jnp.array([SPAWNER_WIDTH, SPAWNER_HEIGHT], dtype=jnp.int32)[None, :],
+                (NUM_SPAWNERS, 1)
+            )
+            object_raster = self.jr.draw_rects(
+                object_raster,
+                positions=masked_spawner_pos,
+                sizes=spawner_sizes,
+                color_id=self.SPAWNER_ID
+            )
+        
+        # Health bar (5 boxes proportional to max health=31) top-left
+        health_val = jnp.clip(state.health, 0, self.consts.MAX_HEALTH).astype(jnp.int32)
+        # Number of filled segments = floor(health * 5 / MAX_HEALTH)
+        segments = (health_val * 5) // self.consts.MAX_HEALTH  # 0..5
+        bar_indices = jnp.arange(5)
+        bar_spacing = ITEM_WIDTH + 2
+        bar_x = 4 + bar_indices * bar_spacing
+        bar_y = jnp.full(5, 4, dtype=jnp.int32)
+        bar_active = bar_indices < segments
+        bar_pos_x = jnp.where(bar_active, bar_x, -100)
+        bar_positions = jnp.stack([bar_pos_x, bar_y], axis=1).astype(jnp.int32)
+        bar_sizes = jnp.tile(
+            jnp.array([ITEM_WIDTH, ITEM_HEIGHT], dtype=jnp.int32)[None, :],
+            (5, 1)
+        )
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=bar_positions,
+            sizes=bar_sizes,
+            color_id=self.HEART_ID
+        )
+        # Health digits below bar (supports up to 1000)
+        digit_width = 3
+        digit_height = 5
+        spacing = 1
+        thousands = health_val // 1000
+        hundreds = (health_val // 100) % 10
+        tens = (health_val // 10) % 10
+        ones = health_val % 10
+        digits = jnp.array([thousands, hundreds, tens, ones], dtype=jnp.int32)
+        active_mask = jnp.array([
+            thousands > 0,
+            (thousands > 0) | (hundreds > 0),
+            (thousands > 0) | (hundreds > 0) | (tens > 0),
+            True
+        ])
+        active_count = jnp.sum(active_mask.astype(jnp.int32))
+        start_x_digits = 4  # left aligned
+        start_y_digits = 4 + ITEM_HEIGHT + 2  # below bar
+        position_index = (jnp.cumsum(active_mask.astype(jnp.int32)) - 1)
+        base_x = jnp.where(active_mask, start_x_digits + position_index * (digit_width + spacing), -100)
+        patterns = self.DIGIT_PATTERNS[digits]
+        xs = jnp.arange(digit_width)
+        ys = jnp.arange(digit_height)
+        grid_x = xs[None, None, :].repeat(4, axis=0).repeat(digit_height, axis=1)
+        grid_y = ys[None, :, None].repeat(4, axis=0).repeat(digit_width, axis=2)
+        px = base_x[:, None, None] + grid_x
+        py = start_y_digits + grid_y
+        pixel_active = (patterns == 1) & (base_x[:, None, None] >= 0)
+        px = jnp.where(pixel_active, px, -100)
+        py = jnp.where(pixel_active, py, -100)
+        flat_px = px.reshape(-1)
+        flat_py = py.reshape(-1)
+        digit_positions = jnp.stack([flat_px, flat_py], axis=1).astype(jnp.int32)
+        pixel_sizes = jnp.ones((digit_positions.shape[0], 2), dtype=jnp.int32)
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=digit_positions,
+            sizes=pixel_sizes,
+            color_id=self.HEART_ID
+        )
+        
+        # Lives count below health digits
+        lives_val = jnp.clip(state.lives, 0, 99).astype(jnp.int32)
+        digit_width = 3
+        digit_height = 5
+        spacing = 1
+        lives_tens = lives_val // 10
+        lives_ones = lives_val % 10
+        lives_digits = jnp.array([lives_tens, lives_ones], dtype=jnp.int32)
+        lives_active_mask = jnp.array([lives_tens > 0, True])
+        lives_position_index = (jnp.cumsum(lives_active_mask.astype(jnp.int32)) - 1)
+        lives_base_x = jnp.where(lives_active_mask, 4 + lives_position_index * (digit_width + spacing), -100)
+        lives_patterns = self.DIGIT_PATTERNS[lives_digits]
+        lives_xs = jnp.arange(digit_width)
+        lives_ys = jnp.arange(digit_height)
+        lives_grid_x = lives_xs[None, None, :].repeat(2, axis=0).repeat(digit_height, axis=1)
+        lives_grid_y = lives_ys[None, :, None].repeat(2, axis=0).repeat(digit_width, axis=2)
+        lives_px = lives_base_x[:, None, None] + lives_grid_x
+        lives_py = (4 + ITEM_HEIGHT + 2 + digit_height + 2 + 8) + lives_grid_y  # below health digits
+        lives_pixel_active = (lives_patterns == 1) & (lives_base_x[:, None, None] >= 0)
+        lives_px = jnp.where(lives_pixel_active, lives_px, -100)
+        lives_py = jnp.where(lives_pixel_active, lives_py, -100)
+        lives_flat_px = lives_px.reshape(-1)
+        lives_flat_py = lives_py.reshape(-1)
+        lives_digit_positions = jnp.stack([lives_flat_px, lives_flat_py], axis=1).astype(jnp.int32)
+        lives_digit_sizes = jnp.ones((lives_digit_positions.shape[0], 2), dtype=jnp.int32)
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=lives_digit_positions,
+            sizes=lives_digit_sizes,
+            color_id=self.HEART_ID
+        )
+        
+        # Numeric score display (7 digits: 0-9999999, no bar)
+        score_val = jnp.clip(state.score, 0, 9999999).astype(jnp.int32)
+        digit_width = 3
+        digit_height = 5
+        spacing = 1
+        millions = score_val // 1000000
+        hundred_thousands = (score_val // 100000) % 10
+        ten_thousands = (score_val // 10000) % 10
+        thousands = (score_val // 1000) % 10
+        hundreds = (score_val // 100) % 10
+        tens = (score_val // 10) % 10
+        ones = score_val % 10
+        digits = jnp.array([millions, hundred_thousands, ten_thousands, thousands, hundreds, tens, ones], dtype=jnp.int32)
+        active_mask = jnp.array([
+            millions > 0,
+            (millions > 0) | (hundred_thousands > 0),
+            (millions > 0) | (hundred_thousands > 0) | (ten_thousands > 0),
+            (millions > 0) | (hundred_thousands > 0) | (ten_thousands > 0) | (thousands > 0),
+            (millions > 0) | (hundred_thousands > 0) | (ten_thousands > 0) | (thousands > 0) | (hundreds > 0),
+            (millions > 0) | (hundred_thousands > 0) | (ten_thousands > 0) | (thousands > 0) | (hundreds > 0) | (tens > 0),
+            True  # ones always shown
+        ])
+        position_index = (jnp.cumsum(active_mask.astype(jnp.int32)) - 1)
+        score_start_x = self.config.game_dimensions[1] - 7 * (digit_width + spacing) - 4  # right-aligned
+        base_x = jnp.where(active_mask, score_start_x + position_index * (digit_width + spacing), -100)
+        patterns = self.DIGIT_PATTERNS[digits]
+        xs = jnp.arange(digit_width)
+        ys = jnp.arange(digit_height)
+        grid_x = xs[None, None, :].repeat(7, axis=0).repeat(digit_height, axis=1)
+        grid_y = ys[None, :, None].repeat(7, axis=0).repeat(digit_width, axis=2)
+        px = base_x[:, None, None] + grid_x
+        py = 4 + grid_y  # top-right, no bar above
+        pixel_active = (patterns == 1) & (base_x[:, None, None] >= 0)
+        px = jnp.where(pixel_active, px, -100)
+        py = jnp.where(pixel_active, py, -100)
+        flat_px = px.reshape(-1)
+        flat_py = py.reshape(-1)
+        score_digit_positions = jnp.stack([flat_px, flat_py], axis=1).astype(jnp.int32)
+        score_digit_sizes = jnp.ones((score_digit_positions.shape[0], 2), dtype=jnp.int32)
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=score_digit_positions,
+            sizes=score_digit_sizes,
+            color_id=self.UI_ID
+        )
+        
+        # Removed step counter display from top-center UI
+        
+        # Bullets
+        bullet_world_pos = state.bullet_positions[:, :2].astype(jnp.int32)
+        bullet_screen_pos = (bullet_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
+        bullet_mask = state.bullet_active == 1
+        masked_bullet_pos = jnp.where(
+            bullet_mask[:, None],
+            bullet_screen_pos,
+            off_screen
+        )
+        bullet_sizes = jnp.tile(
+            jnp.array([BULLET_WIDTH, BULLET_HEIGHT], dtype=jnp.int32)[None, :],
+            (MAX_BULLETS, 1)
+        )
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=masked_bullet_pos,
+            sizes=bullet_sizes,
+            color_id=self.BULLET_ID
+        )
+        # Enemy bullets
+        ebullet_world_pos = state.enemy_bullet_positions[:, :2].astype(jnp.int32)
+        ebullet_screen_pos = (ebullet_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
+        ebullet_mask = state.enemy_bullet_active == 1
+        masked_ebullet_pos = jnp.where(ebullet_mask[:, None], ebullet_screen_pos, off_screen)
+        ebullet_sizes = jnp.tile(
+            jnp.array([ENEMY_BULLET_WIDTH, ENEMY_BULLET_HEIGHT], dtype=jnp.int32)[None, :],
+            (ENEMY_MAX_BULLETS, 1)
+        )
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=masked_ebullet_pos,
+            sizes=ebullet_sizes,
+            color_id=self.UI_ID
+        )
+        
+        # Shield indicator in bottom-left corner
+        shield_indicator_active = state.shield_active == 1
+        shield_x = 4
+        shield_y = self.config.game_dimensions[0] - ITEM_HEIGHT - 4
+        shield_pos = jnp.where(
+            shield_indicator_active,
+            jnp.array([[shield_x, shield_y]], dtype=jnp.int32),
+            jnp.array([[-100, -100]], dtype=jnp.int32)
+        )
+        shield_size = jnp.array([[ITEM_WIDTH, ITEM_HEIGHT]], dtype=jnp.int32)
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=shield_pos,
+            sizes=shield_size,
+            color_id=self.SHIELD_ID
+        )
+        
+        # Gun indicator next to shield (bottom-left corner)
+        gun_indicator_active = state.gun_active == 1
+        gun_x = 4 + ITEM_WIDTH + 2  # Next to shield
+        gun_y = self.config.game_dimensions[0] - ITEM_HEIGHT - 4
+        gun_pos = jnp.where(
+            gun_indicator_active,
+            jnp.array([[gun_x, gun_y]], dtype=jnp.int32),
+            jnp.array([[-100, -100]], dtype=jnp.int32)
+        )
+        gun_size = jnp.array([[ITEM_WIDTH, ITEM_HEIGHT]], dtype=jnp.int32)
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=gun_pos,
+            sizes=gun_size,
+            color_id=self.GUN_ID
+        )
+        
+        # Bomb indicator next to gun (bottom-left corner)
+        bomb_has_any = state.bomb_count > 0
+        bomb_indicator_x = 4 + (ITEM_WIDTH + 2) * 2  # Next to gun
+        bomb_indicator_y = self.config.game_dimensions[0] - ITEM_HEIGHT - 4
+        bomb_indicator_pos = jnp.where(
+            bomb_has_any,
+            jnp.array([[bomb_indicator_x, bomb_indicator_y]], dtype=jnp.int32),
+            jnp.array([[-100, -100]], dtype=jnp.int32)
+        )
+        bomb_indicator_size = jnp.array([[ITEM_WIDTH, ITEM_HEIGHT]], dtype=jnp.int32)
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=bomb_indicator_pos,
+            sizes=bomb_indicator_size,
+            color_id=17
+        )
+        
+        # Bomb counter in bottom-right corner
+        bomb_count_x = self.config.game_dimensions[1] - 12 - 4  # Space for 2-digit number
+        bomb_count_y = self.config.game_dimensions[0] - ITEM_HEIGHT - 4
+        
+        # Bomb count digits (0-15) in bottom-right corner
+        bomb_count_val = jnp.clip(state.bomb_count, 0, MAX_BOMBS).astype(jnp.int32)
+        digit_width = 3
+        digit_height = 5
+        spacing = 1
+        tens = bomb_count_val // 10
+        ones = bomb_count_val % 10
+        digits = jnp.array([tens, ones], dtype=jnp.int32)
+        active_mask = jnp.array([tens > 0, True])
+        bomb_digits_start_x = bomb_count_x
+        bomb_digits_y = bomb_count_y + 1  # Slight offset for alignment
+        position_index = (jnp.cumsum(active_mask.astype(jnp.int32)) - 1)
+        base_x = jnp.where(active_mask, bomb_digits_start_x + position_index * (digit_width + spacing), -100)
+        patterns = self.DIGIT_PATTERNS[digits]
+        xs = jnp.arange(digit_width)
+        ys = jnp.arange(digit_height)
+        grid_x = xs[None, None, :].repeat(2, axis=0).repeat(digit_height, axis=1)
+        grid_y = ys[None, :, None].repeat(2, axis=0).repeat(digit_width, axis=2)
+        px = base_x[:, None, None] + grid_x
+        py = bomb_digits_y + grid_y
+        pixel_active = (patterns == 1) & (base_x[:, None, None] >= 0)
+        px = jnp.where(pixel_active, px, -100)
+        py = jnp.where(pixel_active, py, -100)
+        flat_px = px.reshape(-1)
+        flat_py = py.reshape(-1)
+        bomb_digit_positions = jnp.stack([flat_px, flat_py], axis=1).astype(jnp.int32)
+        bomb_digit_sizes = jnp.ones((bomb_digit_positions.shape[0], 2), dtype=jnp.int32)
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=bomb_digit_positions,
+            sizes=bomb_digit_sizes,
+            color_id=self.BOMB_ID
+        )
+        
+        # Convert to RGB
+        img = self.jr.render_from_palette(object_raster, self.PALETTE)
+        return img
+
+
+class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation, DarkChambersInfo, DarkChambersConstants]):
+    """JAX environment for the game Dark Chambers."""
+    
+    def __init__(self, consts: DarkChambersConstants = None):
+        super().__init__(consts=consts or DarkChambersConstants())
+        self.renderer = DarkChambersRenderer(self.consts)
+        w_eff = int(self.consts.ENEMY_WIDTH  - 2 * ENEMY_COLLISION_MARGIN)
+        h_eff = int(self.consts.ENEMY_HEIGHT - 2 * ENEMY_COLLISION_MARGIN)
+
+        r_x = max(0, (w_eff // 2) // CELL_SIZE)
+        r_y = max(0, (h_eff // 2) // CELL_SIZE)
+
+        self._wall_inflate_kh = 2 * r_y + 1
+        self._wall_inflate_kw = 2 * r_x + 1
+
+    def _pos_to_cell(self, x, y):
+        """Convert pixel coordinates to grid-cell indices (cy, cx)."""
+        cy = (y // CELL_SIZE).astype(jnp.int32)
+        cx = (x // CELL_SIZE).astype(jnp.int32)
+        cy = jnp.clip(cy, 0, GRID_H - 1)
+        cx = jnp.clip(cx, 0, GRID_W - 1)
+        return cy, cx
+
+    def _distance_field(
+        self,
+        map_index: chex.Array,
+        level: chex.Array,
+        player_x: chex.Array,
+        player_y: chex.Array,
+        enemy_positions: chex.Array,
+        enemy_active: chex.Array,
+    ):
+        """Compute 4-neighbor grid distances to the player.
+
+        Alive enemies are treated as obstacles. Returns an int32 array
+        of shape (GRID_H, GRID_W) with distances in cells.
+        """
+        # Base wall grid from the level and current map
+        wall_grid = self.renderer.LEVEL_WALL_GRID[map_index, level]  # (H, W) bool
+        H, W = wall_grid.shape
+
+        # --- Inflate walls for enemy clearance (STATIC kernel size, JIT-safe) ---
+        wall_i = wall_grid.astype(jnp.int32)
+
+        inflated_i = jax.lax.reduce_window(
+            wall_i,
+            init_value=0,
+            computation=jax.lax.max,
+            window_dimensions=(self._wall_inflate_kh, self._wall_inflate_kw),
+            window_strides=(1, 1),
+            padding="SAME",
+        )
+        wall_grid = inflated_i.astype(bool)
+
+        # --- Enemy occupancy grid (treat alive enemies as walls) ---
+        # Use enemy centers to map to nav cells
+        centers_x = enemy_positions[:, 0] + self.consts.ENEMY_WIDTH // 2
+        centers_y = enemy_positions[:, 1] + self.consts.ENEMY_HEIGHT // 2
+
+        enemy_cy, enemy_cx = self._pos_to_cell(centers_x, centers_y)  # arrays
+
+        # clip indices for safe scatter
+        enemy_cy = jnp.clip(enemy_cy, 0, H - 1)
+        enemy_cx = jnp.clip(enemy_cx, 0, W - 1)
+
+        # scatter as int32 sum then >0 (handles duplicates cleanly)
+        enemy_grid_i = jnp.zeros((H, W), dtype=jnp.int32)
+        add_vals = enemy_active.astype(jnp.int32)
+        enemy_grid_i = enemy_grid_i.at[enemy_cy, enemy_cx].add(add_vals)
+        enemy_grid = enemy_grid_i > 0
+
+        # Combined obstacle grid: walls OR enemies
+        blocked = wall_grid | enemy_grid
+
+        # --- Distance init ---
+        dist = jnp.full((H, W), BIG_DIST, dtype=jnp.int32)
+
+        py, px = self._pos_to_cell(player_x, player_y)
+        py = jnp.clip(py, 0, H - 1)
+        px = jnp.clip(px, 0, W - 1)
+
+        # If player cell is blocked, still seed it (otherwise field becomes useless)
+        dist = dist.at[py, px].set(0)
+        frontier = jnp.zeros((H, W), dtype=bool).at[py, px].set(True)
+
+        def body(t, carry):
+            dist, frontier = carry
+
+            def shift_frontier(f, dy, dx):
+                if dy == -1:
+                    return jnp.pad(f[1:, :], ((0, 1), (0, 0)))
+                elif dy == 1:
+                    return jnp.pad(f[:-1, :], ((1, 0), (0, 0)))
+                elif dx == -1:
+                    return jnp.pad(f[:, 1:], ((0, 0), (0, 1)))
+                else:  # dx == 1
+                    return jnp.pad(f[:, :-1], ((0, 0), (1, 0)))
+
+            dirs = ((-1, 0), (1, 0), (0, -1), (0, 1))
+
+            new_frontier = jnp.zeros_like(frontier)
+            new_dist = dist
+
+            for dy, dx in dirs:
+                f_n = shift_frontier(frontier, dy, dx)
+                cand = f_n & ~blocked & (dist > t + 1)
+                new_frontier = new_frontier | cand
+                new_dist = jnp.where(cand, t + 1, new_dist)
+
+            return (new_dist, new_frontier)
+
+        max_steps = GRID_W + GRID_H
+        dist, _ = jax.lax.fori_loop(0, max_steps, body, (dist, frontier))
+        return dist
+
+
+    
+
+    @partial(jax.jit, static_argnums=(0,))
+    def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(0)) -> Tuple[DarkChambersObservation, DarkChambersState]:
+        """Reset the environment and return the initial observation and state."""
+        
+        # Use middle map (0), level 0 walls for initial spawn (plus boundaries)
+        WALLS = jnp.concatenate([
+            self.renderer.LEVEL_WALLS[0, 0],
+            self.renderer.BOUNDARY_WALLS,
+        ], axis=0)
+        
+        def check_wall_overlap(pos_x, pos_y, width, height):
+            """Check if a rectangle overlaps with any wall."""
+            wx = WALLS[:, 0]
+            wy = WALLS[:, 1]
+            ww = WALLS[:, 2]
+            wh = WALLS[:, 3]
+            overlap_x = (pos_x <= (wx + ww - 1)) & ((pos_x + width - 1) >= wx)
+            overlap_y = (pos_y <= (wy + wh - 1)) & ((pos_y + height - 1) >= wy)
+            return jnp.any(overlap_x & overlap_y)
+        
+        # Spawn enemies (retry until not on wall and not near player spawn)
+        def spawn_enemy(carry, i):
+            positions, key = carry
+            
+            # Define exclusion zone around player start (upper left corner)
+            SPAWN_EXCLUSION_RADIUS = 60  # Keep enemies at least 60 pixels away from player start
+            
+            def try_spawn(retry_idx, retry_carry):
+                pos, key_in, found_valid = retry_carry
+                key_out, subkey = jax.random.split(key_in)
+                x = jax.random.randint(subkey, (), 30, self.consts.WORLD_WIDTH - 30, dtype=jnp.int32)
+                key_out, subkey = jax.random.split(key_out)
+                y = jax.random.randint(subkey, (), 30, self.consts.WORLD_HEIGHT - 30, dtype=jnp.int32)
+                
+                on_wall = check_wall_overlap(x, y, self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT)
+                
+                # Check if too close to player spawn point
+                dx = x - self.consts.PLAYER_START_X
+                dy = y - self.consts.PLAYER_START_Y
+                dist_sq = dx * dx + dy * dy
+                too_close_to_spawn = dist_sq < (SPAWN_EXCLUSION_RADIUS * SPAWN_EXCLUSION_RADIUS)
+                
+                # Valid if not on wall AND not too close to spawn
+                is_valid = (~on_wall) & (~too_close_to_spawn)
+                # Update position if this is better (valid and haven't found valid yet)
+                new_pos = jnp.where(is_valid & (~found_valid), jnp.array([x, y]), pos)
+                new_found = found_valid | is_valid
+                
+                return (new_pos, key_out, new_found)
+            
+            # Try up to 20 times
+            init_pos = jnp.array([30, 30])
+            final_pos, key, _ = jax.lax.fori_loop(0, 20, try_spawn, (init_pos, key, False))
+            
+            new_positions = positions.at[i].set(final_pos)
+            return (new_positions, key), None
+        
+        key, subkey = jax.random.split(key)
+        enemy_positions_init = jnp.zeros((NUM_ENEMIES, 2), dtype=jnp.int32)
+        (enemy_positions, key), _ = jax.lax.scan(spawn_enemy, (enemy_positions_init, subkey), jnp.arange(NUM_ENEMIES))
+        
+        # Spawn random number of enemies (5-10)
+        key, subkey = jax.random.split(key)
+        num_active_enemies = jax.random.randint(subkey, (), 5, 11, dtype=jnp.int32)
+        
+        # Spawn enemies with random types (favor stronger types, exclude Grim Reaper)
+        key, subkey = jax.random.split(key)
+        enemy_types = jax.random.randint(
+            subkey, (NUM_ENEMIES,), ENEMY_WRAITH, ENEMY_WIZARD + 1, dtype=jnp.int32
+        )  # Random types from 2 (Wraith) to 4 (Wizard), excluding 5 (Grim Reaper)
+        # Only activate the first num_active_enemies
+        enemy_active = jnp.where(jnp.arange(NUM_ENEMIES) < num_active_enemies, 1, 0)
+        
+        # Initialize wizard shooting timers with random offsets (base interval + 0-20 random offset)
+        key, subkey = jax.random.split(key)
+        wizard_shoot_timers = jax.random.randint(
+            subkey, (NUM_ENEMIES,), 0, WIZARD_SHOOT_INTERVAL + WIZARD_SHOOT_OFFSET_MAX, dtype=jnp.int32
+        )
+        
+        # Spawn spawners (retry until not on wall)
+        def spawn_spawner(carry, i):
+            positions, key = carry
+            
+            def try_spawn_spawner(retry_idx, retry_carry):
+                pos, key_in, found_valid = retry_carry
+                key_out, subkey = jax.random.split(key_in)
+                x = jax.random.randint(subkey, (), 50, self.consts.WORLD_WIDTH - 50, dtype=jnp.int32)
+                key_out, subkey = jax.random.split(key_out)
+                y = jax.random.randint(subkey, (), 50, self.consts.WORLD_HEIGHT - 50, dtype=jnp.int32)
+                
+                on_wall = check_wall_overlap(x, y, SPAWNER_WIDTH, SPAWNER_HEIGHT)
+                # Update position if this is better (not on wall and haven't found valid yet)
+                new_pos = jnp.where((~on_wall) & (~found_valid), jnp.array([x, y]), pos)
+                new_found = found_valid | (~on_wall)
+                
+                return (new_pos, key_out, new_found)
+            
+            # Try up to 20 times
+            init_pos = jnp.array([100, 100])
+            final_pos, key, _ = jax.lax.fori_loop(0, 20, try_spawn_spawner, (init_pos, key, False))
+            
+            new_positions = positions.at[i].set(final_pos)
+            return (new_positions, key), None
+        
+        key, subkey = jax.random.split(key)
+        spawner_positions_init = jnp.zeros((NUM_SPAWNERS, 2), dtype=jnp.int32)
+        (spawner_positions, key), _ = jax.lax.scan(spawn_spawner, (spawner_positions_init, subkey), jnp.arange(NUM_SPAWNERS))
+        
+        spawner_health = jnp.full(NUM_SPAWNERS, SPAWNER_HEALTH, dtype=jnp.int32)
+        spawner_active = jnp.ones(NUM_SPAWNERS, dtype=jnp.int32)  # ENABLED: all spawners active
+        key, subkey = jax.random.split(key)
+        spawner_timers = jax.random.randint(
+            subkey, (NUM_SPAWNERS,), 0, SPAWNER_SPAWN_INTERVAL, dtype=jnp.int32
+        )
+        
+        # Spawn items (retry until not on wall)
+        def spawn_item(carry, i):
+            positions, key = carry
+            
+            def try_spawn_item(retry_idx, retry_carry):
+                pos, key_in, found_valid = retry_carry
+                key_out, subkey = jax.random.split(key_in)
+                x = jax.random.randint(subkey, (), 30, self.consts.WORLD_WIDTH - 30, dtype=jnp.int32)
+                key_out, subkey = jax.random.split(key_out)
+                y = jax.random.randint(subkey, (), 30, self.consts.WORLD_HEIGHT - 30, dtype=jnp.int32)
+                
+                # Use max item size to avoid large treasures spawning on walls
+                on_wall = check_wall_overlap(x, y, 13, 13)
+                # Update position if this is better (not on wall and haven't found valid yet)
+                new_pos = jnp.where((~on_wall) & (~found_valid), jnp.array([x, y]), pos)
+                new_found = found_valid | (~on_wall)
+                
+                return (new_pos, key_out, new_found)
+            
+            # Try up to 20 times
+            init_pos = jnp.array([30, 30])
+            final_pos, key, _ = jax.lax.fori_loop(0, 20, try_spawn_item, (init_pos, key, False))
+            
+            new_positions = positions.at[i].set(final_pos)
+            return (new_positions, key), None
+        
+        key, subkey = jax.random.split(key)
+        item_positions_init = jnp.zeros((NUM_ITEMS, 2), dtype=jnp.int32)
+        # Spawn only regular items (indices 5+), leave first 5 for fixed key, ladders, and cage props
+        (item_positions_temp, key), _ = jax.lax.scan(spawn_item, (item_positions_init, subkey), jnp.arange(5, NUM_ITEMS))
+        
+        # Place key at a random valid position away from player spawn; ladders fixed
+        # Avoid walls and avoid upper-left spawn area (player starts around 24,24)
+        KEY_EXCLUSION_RADIUS = 80
+
+        def try_spawn_key(retry_idx, retry_carry):
+            pos, key_in, found_valid = retry_carry
+            key_out, sk = jax.random.split(key_in)
+            x = jax.random.randint(sk, (), 16, self.consts.WORLD_WIDTH - 24, dtype=jnp.int32)
+            key_out, sk = jax.random.split(key_out)
+            y = jax.random.randint(sk, (), 16, self.consts.WORLD_HEIGHT - 24, dtype=jnp.int32)
+            on_wall = check_wall_overlap(x, y, 13, 13)
+            dx = x - self.consts.PLAYER_START_X
+            dy = y - self.consts.PLAYER_START_Y
+            dist_sq = dx * dx + dy * dy
+            too_close = dist_sq < (KEY_EXCLUSION_RADIUS * KEY_EXCLUSION_RADIUS)
+            is_valid = (~on_wall) & (~too_close)
+            new_pos = jnp.where(is_valid & (~found_valid), jnp.array([x, y]), pos)
+            new_found = found_valid | is_valid
+            return (new_pos, key_out, new_found)
+
+        init_key_pos = jnp.array([100, 100], dtype=jnp.int32)
+        key_pos, key, _ = jax.lax.fori_loop(0, 20, try_spawn_key, (init_key_pos, key, False))
+        exit_pos = jnp.array([300, 350], dtype=jnp.int32)
+        ladder_down_pos = jnp.array([40, 70], dtype=jnp.int32)
+        cage_door_pos = self.renderer.CAGE_DOOR_POSITIONS[0, 0]  # Middle map, level 0
+        cage_reward_pos = self.renderer.CAGE_REWARD_POSITIONS[0, 0]  # Middle map, level 0
+        
+        # Combine: first 5 positions are key, exit, ladder_down, cage door, cage reward, rest are randomly spawned
+        item_positions = item_positions_temp.at[0:5].set(jnp.array([key_pos, exit_pos, ladder_down_pos, cage_door_pos, cage_reward_pos]))
+        
+        # On level 0, hide the downward ladder by placing it off-screen (ladder_down is at index 2)
+        item_positions = item_positions.at[2].set(jnp.array([-1000, -1000], dtype=jnp.int32))
+        
+        # Weighted distribution of item types (no extra keys here to enforce exactly one key per level)
+        # Reserve first 5 slots for key, ladders, cage door, cage reward; rest are regular items without keys
+        # Only spawn items that have sprites (exclude STRONGBOX, GOLD_CHALICE)
+        key, subkey = jax.random.split(key)
+        all_item_types = jnp.array([
+            ITEM_HEART,          # health +10 -> apple sprite
+            ITEM_POISON,         # -4 health -> skull sprite
+            ITEM_TRAP,           # -6 health -> trapdoor sprite
+            ITEM_AMBER_CHALICE,  # 500 pts -> candle sprite
+            ITEM_AMULET,         # 1000 pts -> chain sprite
+            ITEM_SHIELD,         # damage reduction -> pot sprite
+            ITEM_GUN,            # faster shooting -> no sprite (colored box)
+            ITEM_BOMB,           # kill all enemies -> barrel sprite
+        ], dtype=jnp.int32)
+        # Probabilities for regular items; normalized to sum to 1.0
+        spawn_probs = jnp.array([
+            0.20,  # heart
+            0.10,  # poison
+            0.18,  # trap
+            0.14,  # amber chalice
+            0.10,  # amulet
+            0.08,  # shield
+            0.06,  # gun
+            0.14,  # bomb
+        ], dtype=jnp.float32)
+        spawn_probs = spawn_probs / jnp.sum(spawn_probs)
+        # Spawn regular items (leave first 5 for key, ladders, cage contents)
+        regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 5,), p=spawn_probs)
+        # Add key, ladders, cage door and reward at beginning
+        item_types = jnp.concatenate([
+            jnp.array([ITEM_KEY, ITEM_LADDER_UP, ITEM_LADDER_DOWN, ITEM_CAGE_DOOR, self.renderer.CAGE_REWARD_TYPE], dtype=jnp.int32),
+            regular_items
+        ])
+        item_active = jnp.ones(NUM_ITEMS, dtype=jnp.int32)
+        
+        state = DarkChambersState(
+            player_x=jnp.array(self.consts.PLAYER_START_X, dtype=jnp.int32),
+            player_y=jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32),
+            player_direction=jnp.array(0, dtype=jnp.int32),
+            enemy_positions=enemy_positions,
+            enemy_types=enemy_types,
+            enemy_active=enemy_active,
+                wizard_shoot_timers=wizard_shoot_timers,
+            spawner_positions=spawner_positions,
+            spawner_health=spawner_health,
+            spawner_active=spawner_active,
+            spawner_timers=spawner_timers,
+            bullet_positions=jnp.zeros((MAX_BULLETS, 4), dtype=jnp.int32),
+            bullet_active=jnp.zeros(MAX_BULLETS, dtype=jnp.int32),
+            enemy_bullet_positions=jnp.zeros((ENEMY_MAX_BULLETS, 4), dtype=jnp.int32),
+            enemy_bullet_active=jnp.zeros(ENEMY_MAX_BULLETS, dtype=jnp.int32),
+            health=jnp.array(self.consts.STARTING_HEALTH, dtype=jnp.int32),
+            damage_cooldown=jnp.array(0, dtype=jnp.int32),
+            score=jnp.array(0, dtype=jnp.int32),
+            item_positions=item_positions,
+            item_types=item_types,
+            item_active=item_active,
+            has_key=jnp.array(0, dtype=jnp.int32),  # Start without key
+            shield_active=jnp.array(0, dtype=jnp.int32),
+            gun_active=jnp.array(0, dtype=jnp.int32),
+            bomb_count=jnp.array(0, dtype=jnp.int32),
+            last_fire_step=jnp.array(-1000, dtype=jnp.int32),  # Initialize to far past
+            current_level=jnp.array(0, dtype=jnp.int32),  # Start at level 0
+            map_index=jnp.array(0, dtype=jnp.int32),  # Start at middle map
+            ladder_timer=jnp.array(0, dtype=jnp.int32),   # Not on ladder initially
+            lives=jnp.array(MAX_LIVES, dtype=jnp.int32),  # Start with MAX_LIVES
+            step_counter=jnp.array(0, dtype=jnp.int32),
+            death_counter=jnp.array(0, dtype=jnp.int32),
+            key=key,
+        )
+        
+        obs = self._get_observation(state)
+        return obs, state
+    
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: DarkChambersState, action: int) -> Tuple[DarkChambersObservation, DarkChambersState, float, bool, DarkChambersInfo]:
+        """Apply an action and return (obs, state, reward, done, info)."""
+        a = jnp.asarray(action)
+
+        # If we're in a death freeze, either decrement or respawn now
+        def handle_freeze(_: None):
+            # When counter > 1: just decrement and freeze everything else
+            def dec_only(_: None):
+                frozen_state = state._replace(
+                    death_counter=state.death_counter - 1,
+                    step_counter=state.step_counter + 1,
+                )
+                obs = self._get_observation(frozen_state)
+                reward = self._get_reward(state, frozen_state)
+                done = self._get_done(frozen_state)
+                info = self._get_info(frozen_state)
+                return obs, frozen_state, reward, done, info
+
+            # When counter hits 1: perform respawn (keep game progress!)
+            def respawn_now(_: None):
+                # Respawn position depends on current level
+                # Use safe positions that avoid walls in all map variants
+                respawn_x = jnp.where(state.current_level == 0, jnp.array(50, dtype=jnp.int32), jnp.array(40, dtype=jnp.int32))
+                respawn_y = jnp.where(state.current_level == 0, jnp.array(50, dtype=jnp.int32), jnp.array(70, dtype=jnp.int32))
+
+                # KEEP EVERYTHING: score, collected items, level, powerups, etc.
+                # Only restore health and clear bullets for clean respawn
+                respawned_state = state._replace(
+                    player_x=respawn_x,
+                    player_y=respawn_y,
+                    health=jnp.array(self.consts.STARTING_HEALTH, dtype=jnp.int32),
+                    damage_cooldown=jnp.array(0, dtype=jnp.int32),
+                    bullet_positions=jnp.zeros((MAX_BULLETS, 4), dtype=jnp.int32),
+                    bullet_active=jnp.zeros((MAX_BULLETS,), dtype=jnp.int32),
+                    enemy_bullet_positions=jnp.zeros((ENEMY_MAX_BULLETS, 4), dtype=jnp.int32),
+                    enemy_bullet_active=jnp.zeros((ENEMY_MAX_BULLETS,), dtype=jnp.int32),
+                    death_counter=jnp.array(0, dtype=jnp.int32),
+                    step_counter=state.step_counter + 1,
+                )
+                obs = self._get_observation(respawned_state)
+                reward = self._get_reward(state, respawned_state)
+                done = self._get_done(respawned_state)
+                info = self._get_info(respawned_state)
+                return obs, respawned_state, reward, done, info
+
+            return jax.lax.cond(state.death_counter > 1, dec_only, respawn_now, operand=None)
+
+        def handle_normal(_: None):
+            # Normal logic continues below (existing code)
+            # We will return at the end of this function.
+            
+            # Track player direction from action (prioritize horizontal for diagonals)
+            new_direction = jnp.where((a == Action.RIGHT) | (a == Action.UPRIGHT) | (a == Action.DOWNRIGHT), 0,
+                            jnp.where((a == Action.LEFT) | (a == Action.UPLEFT) | (a == Action.DOWNLEFT), 1,
+                            jnp.where((a == Action.UP) | (a == Action.UPRIGHT) | (a == Action.UPLEFT), 2,
+                            jnp.where((a == Action.DOWN) | (a == Action.DOWNRIGHT) | (a == Action.DOWNLEFT), 3, 
+                                      state.player_direction))))
+            
+            # Calculate movement deltas - support diagonal movement
+            dx = jnp.where((a == Action.LEFT) | (a == Action.UPLEFT) | (a == Action.DOWNLEFT), -self.consts.PLAYER_SPEED,
+                   jnp.where((a == Action.RIGHT) | (a == Action.UPRIGHT) | (a == Action.DOWNRIGHT), self.consts.PLAYER_SPEED, 0))
+            dy = jnp.where((a == Action.UP) | (a == Action.UPRIGHT) | (a == Action.UPLEFT), -self.consts.PLAYER_SPEED,
+                   jnp.where((a == Action.DOWN) | (a == Action.DOWNRIGHT) | (a == Action.DOWNLEFT), self.consts.PLAYER_SPEED, 0))
+            
+            # --- SLOW DOWN PLAYER MOVEMENT ---
+            PLAYER_MOVE_EVERY = 2  # 1=normal, 2=half speed, 3=1/3 speed, etc.
+            player_move_tick = (state.step_counter % PLAYER_MOVE_EVERY) == 0
+
+            dx = jnp.where(player_move_tick, dx, 0)
+            dy = jnp.where(player_move_tick, dy, 0)
+
+            prop_x = state.player_x + dx
+            prop_y = state.player_y + dy
+            
+            prop_x = jnp.clip(prop_x, 0, self.consts.WORLD_WIDTH - self.consts.PLAYER_WIDTH)
+            prop_y = jnp.clip(prop_y, 0, self.consts.WORLD_HEIGHT - self.consts.PLAYER_HEIGHT)
+            
+            # Check if player is in ANY portal zone (top, middle, bottom)
+            portal_hole_height = 40
+            portal_gap = (self.consts.WORLD_HEIGHT - 3 * portal_hole_height) // 4
+            portal_y_starts = [
+                portal_gap,
+                portal_gap * 2 + portal_hole_height,
+                portal_gap * 3 + portal_hole_height * 2
+            ]
+            portal_y_ends = [y + portal_hole_height for y in portal_y_starts]
+            # Player is in portal zone if in any of the three
+            in_portal_zone = False
+            for y_start, y_end in zip(portal_y_starts, portal_y_ends):
+                in_portal_zone = in_portal_zone | ((prop_y >= y_start - self.consts.PLAYER_HEIGHT) & (prop_y <= y_end))
+            
+            # Cycle through maps: exit left → go left map, exit right → go right map
+            # Middle(0) → Left(1) → Middle(0) → Right(2) → Middle(0)
+            should_wrap_right = in_portal_zone & (prop_x <= 0)
+            should_wrap_left = in_portal_zone & (prop_x >= self.consts.WORLD_WIDTH - self.consts.PLAYER_WIDTH)
+            
+            # Track if player crossed portal (for zombie spawning)
+            crossed_portal = should_wrap_right | should_wrap_left
+            
+            # Update map_index based on which direction player exits
+            # Exit left from middle(0) → left(1), from left(1) → middle(0), from right(2) → middle(0)
+            # Exit right from middle(0) → right(2), from right(2) → middle(0), from left(1) → middle(0)
+            new_map_index = jnp.where(
+                should_wrap_right,
+                jnp.where(state.map_index == 0, 1, 0),  # middle→left, others→middle
+                jnp.where(
+                    should_wrap_left,
+                    jnp.where(state.map_index == 0, 2, 0),  # middle→right, others→middle
+                    state.map_index  # no change
+                )
+            )
+            
+            # Teleport to opposite edge when crossing portal
+            prop_x = jnp.where(should_wrap_right, self.consts.WORLD_WIDTH - self.consts.PLAYER_WIDTH - 2, prop_x)
+            prop_x = jnp.where(should_wrap_left, 2, prop_x)
+            
+            # Wall collision check - include boundary walls (with portal gaps)
+            WALLS = jnp.concatenate(
+                [
+                    self.renderer.LEVEL_WALLS[new_map_index, state.current_level],
+                    self.renderer.BOUNDARY_WALLS,
+                ],
+                axis=0,
+            )
+            
+            def collides(px, py):
+                wx = WALLS[:, 0]
+                wy = WALLS[:, 1]
+                ww = WALLS[:, 2]
+                wh = WALLS[:, 3]
+                overlap_x = (px <= (wx + ww - 1)) & ((px + self.consts.PLAYER_WIDTH - 1) >= wx)
+                overlap_y = (py <= (wy + wh - 1)) & ((py + self.consts.PLAYER_HEIGHT - 1) >= wy)
+                return jnp.any(overlap_x & overlap_y)
+            
+            # Test each axis separately
+            try_x = prop_x
+            collide_x = collides(try_x, state.player_y)
+            new_x = jnp.where(~collide_x, try_x, state.player_x)
+            
+            try_y = prop_y
+            collide_y = collides(new_x, try_y)
+            new_y = jnp.where(~collide_y, try_y, state.player_y)
+            
+            # Shooting - spawn bullet on FIRE action (or detonate bomb on double-tap)
+            fire_pressed = (a == Action.FIRE) | (a == Action.UPFIRE) | (a == Action.DOWNFIRE) | (a == Action.LEFTFIRE) | (a == Action.RIGHTFIRE) | \
+                           (a == Action.UPRIGHTFIRE) | (a == Action.UPLEFTFIRE) | (a == Action.DOWNRIGHTFIRE) | (a == Action.DOWNLEFTFIRE)
+            
+            # Double-tap detection: fire pressed within DOUBLE_TAP_WINDOW steps
+            steps_since_last_fire = state.step_counter - state.last_fire_step
+            is_double_tap = fire_pressed & (steps_since_last_fire <= DOUBLE_TAP_WINDOW) & (steps_since_last_fire > 0)
+            has_bombs = state.bomb_count > 0
+            should_detonate_bomb = is_double_tap & has_bombs
+            
+            # Update last_fire_step when fire is pressed
+            new_last_fire_step = jnp.where(fire_pressed, state.step_counter, state.last_fire_step)
+            
+            # Find first inactive bullet slot
+            first_inactive = jnp.argmax(state.bullet_active == 0)
+            can_spawn = jnp.any(state.bullet_active == 0)
+            
+            # Fire rate limiting: ensure minimum time between shots
+            # Gun powerup reduces fire rate limit to 1 (even faster shooting)
+            fire_rate_threshold = jnp.where(state.gun_active == 1, 1, FIRE_RATE_LIMIT)
+            can_fire_now = steps_since_last_fire >= fire_rate_threshold
+            can_spawn = can_spawn & can_fire_now
+            
+            # Determine bullet speed based on gun powerup
+            current_bullet_speed = jnp.where(state.gun_active == 1, BULLET_SPEED_WITH_GUN, BULLET_SPEED)
+            
+            # Direction vectors based on fire action (not player direction)
+            # Cardinal directions
+            dir_x = jnp.where(a == Action.RIGHTFIRE, current_bullet_speed,
+                    jnp.where(a == Action.LEFTFIRE, -current_bullet_speed,
+                    jnp.where(a == Action.FIRE, jnp.where(new_direction == 0, current_bullet_speed,
+                                                jnp.where(new_direction == 1, -current_bullet_speed, 0)),
+                    0)))
+            dir_y = jnp.where(a == Action.UPFIRE, -current_bullet_speed,
+                    jnp.where(a == Action.DOWNFIRE, current_bullet_speed,
+                    jnp.where(a == Action.FIRE, jnp.where(new_direction == 2, -current_bullet_speed,
+                                                jnp.where(new_direction == 3, current_bullet_speed, 0)),
+                    0)))
+            
+            # Diagonal directions
+            dir_x = jnp.where(a == Action.UPRIGHTFIRE, current_bullet_speed,
+                    jnp.where(a == Action.DOWNRIGHTFIRE, current_bullet_speed,
+                    jnp.where(a == Action.UPLEFTFIRE, -current_bullet_speed,
+                    jnp.where(a == Action.DOWNLEFTFIRE, -current_bullet_speed, dir_x))))
+            dir_y = jnp.where(a == Action.UPRIGHTFIRE, -current_bullet_speed,
+                    jnp.where(a == Action.UPLEFTFIRE, -current_bullet_speed,
+                    jnp.where(a == Action.DOWNRIGHTFIRE, current_bullet_speed,
+                    jnp.where(a == Action.DOWNLEFTFIRE, current_bullet_speed, dir_y))))
+            
+            # Spawn position offset from player center
+            spawn_x = new_x + self.consts.PLAYER_WIDTH // 2
+            spawn_y = new_y + self.consts.PLAYER_HEIGHT // 2
+            
+            # Create new bullet
+            new_bullet = jnp.array([spawn_x, spawn_y, dir_x, dir_y], dtype=jnp.int32)
+            
+            # Update bullets array
+            should_spawn = fire_pressed & can_spawn
+            new_bullet_positions = jnp.where(
+                jnp.arange(MAX_BULLETS)[:, None] == first_inactive,
+                jnp.where(should_spawn, new_bullet, state.bullet_positions),
+                state.bullet_positions
+            )
+            new_bullet_active = jnp.where(
+                (jnp.arange(MAX_BULLETS) == first_inactive) & should_spawn,
+                1,
+                state.bullet_active
+            )
+            
+            # Move existing bullets
+            moved_bullets = state.bullet_positions + jnp.concatenate([state.bullet_positions[:, 2:], jnp.zeros((MAX_BULLETS, 2), dtype=jnp.int32)], axis=1)
+            
+            # Check bounds and deactivate out-of-bounds bullets
+            in_bounds = (moved_bullets[:, 0] >= 0) & (moved_bullets[:, 0] < self.consts.WORLD_WIDTH) & \
+                        (moved_bullets[:, 1] >= 0) & (moved_bullets[:, 1] < self.consts.WORLD_HEIGHT)
+            
+            # Check wall collisions for bullets
+            def check_bullet_wall_collision(bullet_pos):
+                bx, by = bullet_pos[0], bullet_pos[1]
+                b_overlap_x = (bx <= (WALLS[:,0] + WALLS[:,2] - 1)) & ((bx + BULLET_WIDTH - 1) >= WALLS[:,0])
+                b_overlap_y = (by <= (WALLS[:,1] + WALLS[:,3] - 1)) & ((by + BULLET_HEIGHT - 1) >= WALLS[:,1])
+                return jnp.any(b_overlap_x & b_overlap_y)
+            
+            bullet_wall_collisions = jax.vmap(check_bullet_wall_collision)(moved_bullets[:, :2])
+            
+            updated_bullet_positions = jnp.where(
+                state.bullet_active[:, None] == 1,
+                moved_bullets,
+                state.bullet_positions
+            )
+            updated_bullet_active = state.bullet_active & in_bounds.astype(jnp.int32) & (~bullet_wall_collisions).astype(jnp.int32)
+            
+            # Merge spawned and moved bullets
+            final_bullet_positions = jnp.where(
+                should_spawn & (jnp.arange(MAX_BULLETS)[:, None] == first_inactive),
+                new_bullet,
+                updated_bullet_positions
+            )
+            final_bullet_active = jnp.where(
+                should_spawn & (jnp.arange(MAX_BULLETS) == first_inactive),
+                1,
+                updated_bullet_active
+            )
+            # Wizard shooting: DISABLED
+            # Keep timers but never trigger shooting
+            new_wizard_timers = state.wizard_shoot_timers - 1
+
+            # Disable wizard shooting - set should_shoot to always False
+            should_shoot = jnp.zeros(NUM_ENEMIES, dtype=bool)
+
+            # Reset timers for wizards that shoot (base interval + random offset)
+            rng, subkey = jax.random.split(state.key)
+            new_offsets = jax.random.randint(
+                subkey, (NUM_ENEMIES,), 0, WIZARD_SHOOT_OFFSET_MAX + 1, dtype=jnp.int32
+            )
+            reset_timers = WIZARD_SHOOT_INTERVAL + new_offsets
+            new_wizard_timers = jnp.where(should_shoot, reset_timers, new_wizard_timers)
+
+            # Spawn bullets for all shooting wizards
+            # Process each wizard that should shoot
+            def spawn_wizard_bullet(carry, wizard_idx):
+                bullet_positions, bullet_active, key_in = carry
+
+                # Check if this wizard should shoot
+                shoots = should_shoot[wizard_idx]
+
+                # Find first inactive bullet slot
+                first_inactive_idx = jnp.argmax(bullet_active == 0)
+                can_spawn_bullet = jnp.any(bullet_active == 0) & shoots
+
+                # Calculate bullet trajectory towards player
+                wiz_pos = state.enemy_positions[wizard_idx]
+                wiz_cx = wiz_pos[0] + self.consts.ENEMY_WIDTH // 2
+                wiz_cy = wiz_pos[1] + self.consts.ENEMY_HEIGHT // 2
+                p_cx = new_x + self.consts.PLAYER_WIDTH // 2
+                p_cy = new_y + self.consts.PLAYER_HEIGHT // 2
+                dir_x_e = jnp.sign(p_cx - wiz_cx) * ENEMY_BULLET_SPEED
+                dir_y_e = jnp.sign(p_cy - wiz_cy) * ENEMY_BULLET_SPEED
+
+                bullet_spawn = jnp.array([wiz_cx, wiz_cy, dir_x_e, dir_y_e], dtype=jnp.int32)
+
+                # Update bullet arrays if this wizard can spawn
+                new_positions = jnp.where(
+                    (jnp.arange(ENEMY_MAX_BULLETS)[:, None] == first_inactive_idx) & can_spawn_bullet,
+                    bullet_spawn,
+                    bullet_positions
+                )
+                new_active = jnp.where(
+                    (jnp.arange(ENEMY_MAX_BULLETS) == first_inactive_idx) & can_spawn_bullet,
+                    1,
+                    bullet_active
+                )
+
+                return (new_positions, new_active, key_in), None
+
+            # Process all wizards sequentially to spawn bullets
+            (new_enemy_bullet_positions, new_enemy_bullet_active, rng), _ = jax.lax.scan(
+                spawn_wizard_bullet,
+                (state.enemy_bullet_positions, state.enemy_bullet_active, rng),
+                jnp.arange(NUM_ENEMIES)
+            )
+
+            # Move enemy bullets
+            moved_enemy_bullets = new_enemy_bullet_positions + jnp.concatenate([
+                new_enemy_bullet_positions[:, 2:], jnp.zeros((ENEMY_MAX_BULLETS, 2), dtype=jnp.int32)
+            ], axis=1)
+            e_in_bounds = (
+                (moved_enemy_bullets[:, 0] >= 0)
+                & (moved_enemy_bullets[:, 0] < self.consts.WORLD_WIDTH)
+                & (moved_enemy_bullets[:, 1] >= 0)
+                & (moved_enemy_bullets[:, 1] < self.consts.WORLD_HEIGHT)
+            )
+            def check_enemy_bullet_wall_collision(bpos):
+                bx, by = bpos[0], bpos[1]
+                b_overlap_x = (bx <= (WALLS[:,0] + WALLS[:,2] - 1)) & ((bx + ENEMY_BULLET_WIDTH - 1) >= WALLS[:,0])
+                b_overlap_y = (by <= (WALLS[:,1] + WALLS[:,3] - 1)) & ((by + ENEMY_BULLET_HEIGHT - 1) >= WALLS[:,1])
+                return jnp.any(b_overlap_x & b_overlap_y)
+            enemy_bullet_wall_collisions = jax.vmap(check_enemy_bullet_wall_collision)(moved_enemy_bullets[:, :2])
+            updated_enemy_bullet_positions = jnp.where(
+                new_enemy_bullet_active[:, None] == 1,
+                moved_enemy_bullets,
+                new_enemy_bullet_positions
+            )
+            updated_enemy_bullet_active = new_enemy_bullet_active & e_in_bounds.astype(jnp.int32) & (~enemy_bullet_wall_collisions).astype(jnp.int32)
+            
+            # Final enemy bullet state
+            final_enemy_bullet_positions = updated_enemy_bullet_positions
+            final_enemy_bullet_active = updated_enemy_bullet_active
+            
+            # Enemy random walk
+            enemy_deltas = jax.random.randint(subkey, (NUM_ENEMIES, 2), -1, 2, dtype=jnp.int32)
+            enemy_alive = state.enemy_active == 1
+            
+            p_cx = new_x + self.consts.PLAYER_WIDTH // 2
+            p_cy = new_y + self.consts.PLAYER_HEIGHT // 2
+            
+            player_center = jnp.array(
+                [new_x + self.consts.PLAYER_WIDTH // 2,
+                new_y + self.consts.PLAYER_HEIGHT // 2],
+                dtype=jnp.int32
+            )
+            
+            enemy_centers = state.enemy_positions + jnp.array(
+                [self.consts.ENEMY_WIDTH // 2, self.consts.ENEMY_HEIGHT // 2],
+                dtype=jnp.int32
+            )
+            
+            dx = enemy_centers[:, 0] - player_center[0]
+            dy = enemy_centers[:, 1] - player_center[1]
+            dist2 = dx * dx + dy * dy
+            
+            chase_mask = (dist2 <= (CHASE_RADIUS * CHASE_RADIUS)) & enemy_alive
+            
+            
+            # distance field to player over nav grid
+            # enemies are treated as dynamic obstacles
+            dist_field = self._distance_field(
+                new_map_index,
+                state.current_level,
+                new_x,
+                new_y,
+                state.enemy_positions,
+                state.enemy_active,
+            )
+            
+            
+            def enemy_step(pos, alive):
+                # pos: [x, y] top-left of enemy
+                # compute nav-cell from enemy center
+                enemy_center = pos + jnp.array(
+                    [self.consts.ENEMY_WIDTH // 2, self.consts.ENEMY_HEIGHT // 2],
+                    dtype=jnp.int32,
+                )
+                cy, cx = self._pos_to_cell(enemy_center[0], enemy_center[1])
+            
+                cy = jnp.clip(cy, 0, GRID_H - 1)
+                cx = jnp.clip(cx, 0, GRID_W - 1)
+            
+                # 4-neighbourhood (no "stay in place" cell)
+                # 8-neighbourhood around (cy, cx)
+                neigh = jnp.array([
+                    [cy - 1, cx    ],  # up
+                    [cy + 1, cx    ],  # down
+                    [cy,     cx - 1],  # left
+                    [cy,     cx + 1],  # right
+                    [cy - 1, cx - 1],  # up-left
+                    [cy - 1, cx + 1],  # up-right
+                    [cy + 1, cx - 1],  # down-left
+                    [cy + 1, cx + 1],  # down-right
+                ], dtype=jnp.int32)
+            
+            
+                ny = jnp.clip(neigh[:, 0], 0, GRID_H - 1)
+                nx = jnp.clip(neigh[:, 1], 0, GRID_W - 1)
+            
+                in_bounds = (
+                    (neigh[:, 0] >= 0) & (neigh[:, 0] < GRID_H) &
+                    (neigh[:, 1] >= 0) & (neigh[:, 1] < GRID_W)
+                )
+            
+                # distances from distance field
+                dists = dist_field[ny, nx]
+            
+                # target centers of neighbour cells
+                target_centers = jnp.stack(
+                    [
+                        nx * CELL_SIZE + CELL_SIZE // 2,
+                        ny * CELL_SIZE + CELL_SIZE // 2,
+                    ],
+                    axis=1,
+                )  # shape (4, 2)
+            
+                # step vectors: 1 px per axis towards target center
+                step_vecs = jnp.sign(target_centers - enemy_center).astype(jnp.int32)
+
+                # --- collision check for each candidate step ---
+                # --- collision check for each candidate step ---
+                def collides_with_wall(step_vec):
+                    new_pos = pos + step_vec
+
+                    ex = new_pos[0] + ENEMY_COLLISION_MARGIN
+                    ey = new_pos[1] + ENEMY_COLLISION_MARGIN
+                    w = self.consts.ENEMY_WIDTH  - 2 * ENEMY_COLLISION_MARGIN
+                    h = self.consts.ENEMY_HEIGHT - 2 * ENEMY_COLLISION_MARGIN
+
+                    wx = WALLS[:, 0]
+                    wy = WALLS[:, 1]
+                    ww = WALLS[:, 2]
+                    wh = WALLS[:, 3]
+
+                    e_overlap_x = (ex <= (wx + ww - 1)) & ((ex + w - 1) >= wx)
+                    e_overlap_y = (ey <= (wy + wh - 1)) & ((ey + h - 1) >= wy)
+                    return jnp.any(e_overlap_x & e_overlap_y)
+
+                # collision for the candidate steps (8 steps)
+                collisions = jax.vmap(collides_with_wall)(step_vecs)  # (8,)
+
+                # --- NEW: detect which wall side we're "touching" (1px probes) ---
+                blocked_right = collides_with_wall(jnp.array([ 1,  0], dtype=jnp.int32))
+                blocked_left  = collides_with_wall(jnp.array([-1,  0], dtype=jnp.int32))
+                blocked_down  = collides_with_wall(jnp.array([ 0,  1], dtype=jnp.int32))
+                blocked_up    = collides_with_wall(jnp.array([ 0, -1], dtype=jnp.int32))
+
+                # --- NEW: forbid diagonals that move into a blocked side ---
+                is_diag = (step_vecs[:, 0] != 0) & (step_vecs[:, 1] != 0)
+
+                into_blocked_side = (
+                    ((step_vecs[:, 0] > 0) & blocked_right) |
+                    ((step_vecs[:, 0] < 0) & blocked_left)  |
+                    ((step_vecs[:, 1] > 0) & blocked_down)  |
+                    ((step_vecs[:, 1] < 0) & blocked_up)
+                )
+
+                diag_forbidden = is_diag & into_blocked_side
+
+                # valid = in grid, full-step doesn't collide, diagonal isn't into-wall, and enemy alive
+                valid = in_bounds & (~collisions) & (~diag_forbidden) & (alive == 1)
+
+            
+                # neighbours that are invalid get BIG_DIST so they won’t be chosen
+                dists_valid = jnp.where(valid, dists, BIG_DIST)
+            
+                best_idx = jnp.argmin(dists_valid)
+                best_step = step_vecs[best_idx]
+            
+                # if *all* neighbours invalid, don't move
+                any_valid = jnp.any(valid)
+                best_step = jnp.where(
+                    any_valid,
+                    best_step,
+                    jnp.array([0, 0], dtype=jnp.int32),
+                )
+            
+                # final step is zero if enemy is dead
+                return best_step * alive.astype(jnp.int32)
+            
+            
+            chosen_step = jax.vmap(enemy_step)(state.enemy_positions, enemy_alive)
+            
+            # --- idle "circular-ish" movement (8-dir orbit) ---
+            idxs = jnp.arange(NUM_ENEMIES, dtype=jnp.int32)
+            phase = (state.step_counter // 12 + idxs) % 8          # 12 = frames per segment
+            idle_step = ORBIT_DIRS[phase] * IDLE_SPEED             # (NUM_ENEMIES, 2)
+            idle_step = idle_step * enemy_alive[:, None].astype(jnp.int32)  # dead enemies don't move
+            
+            # --- choose chase vs idle ---
+            final_step = jnp.where(chase_mask[:, None], chosen_step, idle_step)
+
+            # --- SLOW DOWN ENEMY MOVEMENT ---
+            ENEMY_MOVE_EVERY = 2   # 1 = normal, 2 = half speed, 3 = slower, etc.
+
+            enemy_move_tick = (state.step_counter % ENEMY_MOVE_EVERY) == 0
+
+            final_step = jnp.where(
+                enemy_move_tick,
+                final_step,
+                jnp.zeros_like(final_step),
+            )
+
+            
+            def check_enemy_collision(enemy_pos):
+                # shrink collision box by a small margin to allow sliding along walls
+                ex = enemy_pos[0] + ENEMY_COLLISION_MARGIN
+                ey = enemy_pos[1] + ENEMY_COLLISION_MARGIN
+                w = self.consts.ENEMY_WIDTH  - 2 * ENEMY_COLLISION_MARGIN
+                h = self.consts.ENEMY_HEIGHT - 2 * ENEMY_COLLISION_MARGIN
+            
+                wx = WALLS[:, 0]
+                wy = WALLS[:, 1]
+                ww = WALLS[:, 2]
+                wh = WALLS[:, 3]
+            
+                e_overlap_x = (ex <= (wx + ww - 1)) & ((ex + w - 1) >= wx)
+                e_overlap_y = (ey <= (wy + wh - 1)) & ((ey + h - 1) >= wy)
+                return jnp.any(e_overlap_x & e_overlap_y)
+            
+            def move_enemy(enemy_pos, step_vec):
+                cur = enemy_pos
+            
+                step_full = step_vec
+                step_x = jnp.array([step_vec[0], 0], dtype=jnp.int32)
+                step_y = jnp.array([0, step_vec[1]], dtype=jnp.int32)
+            
+                def clip_pos(pos):
+                    clipped = jnp.clip(
+                        pos,
+                        jnp.array([0, 0], dtype=jnp.int32),
+                        jnp.array([self.consts.WORLD_WIDTH - self.consts.ENEMY_WIDTH, 
+                                   self.consts.WORLD_HEIGHT - self.consts.ENEMY_HEIGHT], dtype=jnp.int32),
+                    )
+                    
+                    # Apply wraparound for enemies in portal zone
+                    portal_hole_height = 40
+                    portal_y_start = (self.consts.WORLD_HEIGHT - portal_hole_height) // 2
+                    portal_y_end = portal_y_start + portal_hole_height
+                    in_portal_zone = (clipped[1] >= portal_y_start - self.consts.ENEMY_HEIGHT) & (clipped[1] <= portal_y_end)
+                    
+                    # Wraparound logic
+                    should_wrap_right = in_portal_zone & (clipped[0] <= 0)
+                    should_wrap_left = in_portal_zone & (clipped[0] >= self.consts.WORLD_WIDTH - self.consts.ENEMY_WIDTH)
+                    
+                    wrapped_x = jnp.where(should_wrap_right, self.consts.WORLD_WIDTH - self.consts.ENEMY_WIDTH - 2,
+                                jnp.where(should_wrap_left, 2, clipped[0]))
+                    
+                    return jnp.array([wrapped_x, clipped[1]], dtype=jnp.int32)
+            
+                pos_full = clip_pos(cur + step_full)
+                pos_x    = clip_pos(cur + step_x)
+                pos_y    = clip_pos(cur + step_y)
+            
+                col_full = check_enemy_collision(pos_full)
+                col_x    = check_enemy_collision(pos_x)
+                col_y    = check_enemy_collision(pos_y)
+            
+                use_full = ~col_full
+                use_x    = col_full & ~col_x
+                use_y    = col_full & col_x & ~col_y
+            
+                pos_after = jnp.where(
+                    use_full, pos_full,
+                    jnp.where(
+                        use_x, pos_x,
+                        jnp.where(use_y, pos_y, cur),
+                    ),
+                )
+                return pos_after
+            
+            new_enemy_positions = jax.vmap(move_enemy)(state.enemy_positions, final_step)
+            
+            def resolve_enemy_overlaps(cand_positions, prev_positions, active):
+                # cand_positions, prev_positions: (NUM_ENEMIES, 2)
+                # active: (NUM_ENEMIES,) 1/0
+                w = self.consts.ENEMY_WIDTH
+                h = self.consts.ENEMY_HEIGHT
+            
+                ex = cand_positions[:, 0]
+                ey = cand_positions[:, 1]
+            
+                ex_i = ex[:, None]
+                ex_j = ex[None, :]
+                ey_i = ey[:, None]
+                ey_j = ey[None, :]
+            
+                overlap_x = (ex_i <= ex_j + w - 1) & (ex_i + w - 1 >= ex_j)
+                overlap_y = (ey_i <= ey_j + h - 1) & (ey_i + h - 1 >= ey_j)
+                overlap = overlap_x & overlap_y
+            
+                # only consider active enemies
+                a_i = active[:, None].astype(bool)
+                a_j = active[None, :].astype(bool)
+                overlap = overlap & a_i & a_j
+            
+                # enemy with smaller index "wins" the tile, later ones lose
+                idx = jnp.arange(NUM_ENEMIES)
+                earlier = idx[:, None] < idx[None, :]  # True for (i,j) with i<j
+            
+                loser_matrix = overlap & earlier  # (i,j) True => j loses to i
+                loser_flags = jnp.any(loser_matrix, axis=0)  # for each j
+            
+                # losers revert to previous position
+                final_positions = jnp.where(
+                    loser_flags[:, None],
+                    prev_positions,
+                    cand_positions,
+                )
+                return final_positions
+            
+            new_enemy_positions = resolve_enemy_overlaps(
+                new_enemy_positions,
+                state.enemy_positions,
+                state.enemy_active,
+            )
+            
+            
+            # Item pickup detection
+            def check_item_collision(item_pos):
+                overlap_x = (new_x <= (item_pos[0] + ITEM_WIDTH - 1)) & ((new_x + self.consts.PLAYER_WIDTH - 1) >= item_pos[0])
+                overlap_y = (new_y <= (item_pos[1] + ITEM_HEIGHT - 1)) & ((new_y + self.consts.PLAYER_HEIGHT - 1) >= item_pos[1])
+                return overlap_x & overlap_y
+            
+            item_collisions = jax.vmap(check_item_collision)(state.item_positions)
+            item_collisions = item_collisions & (state.item_active == 1)
+            
+            # Apply item effects
+            collected_hearts = jnp.sum(item_collisions & (state.item_types == ITEM_HEART))
+            collected_poison = jnp.sum(item_collisions & (state.item_types == ITEM_POISON))
+            collected_traps = jnp.sum(item_collisions & (state.item_types == ITEM_TRAP))
+            collected_shields = jnp.any(item_collisions & (state.item_types == ITEM_SHIELD))
+            collected_guns = jnp.any(item_collisions & (state.item_types == ITEM_GUN))
+            collected_bombs = jnp.sum(item_collisions & (state.item_types == ITEM_BOMB))
+            collected_keys = jnp.any(item_collisions & (state.item_types == ITEM_KEY))
+            # Health change mapping: heart +HEALTH_GAIN, poison -POISON_DAMAGE, trap -TRAP_DAMAGE
+            health_change = (
+                collected_hearts * self.consts.HEALTH_GAIN
+                - collected_poison * self.consts.POISON_DAMAGE
+                - collected_traps * self.consts.TRAP_DAMAGE
+            )
+            new_health = jnp.clip(state.health + health_change, 0, self.consts.MAX_HEALTH)
+            
+            # Update shield status
+            new_shield_active = jnp.where(collected_shields, 1, state.shield_active)
+            
+            # Update gun status
+            new_gun_active = jnp.where(collected_guns, 1, state.gun_active)
+            
+            # Update key status (persists until level change)
+            new_has_key = jnp.where(collected_keys, 1, state.has_key)
+
+            # Cage door interaction (requires key)
+            collided_cage_door = jnp.any(item_collisions & (state.item_types == ITEM_CAGE_DOOR))
+            cage_entry_pos = self.renderer.CAGE_ENTRY_POSITIONS[new_map_index, state.current_level]
+            can_enter_cage = collided_cage_door & (new_has_key == 1)
+            blocked_cage = collided_cage_door & (new_has_key == 0)
+            new_x = jnp.where(can_enter_cage, cage_entry_pos[0], jnp.where(blocked_cage, state.player_x, new_x))
+            new_y = jnp.where(can_enter_cage, cage_entry_pos[1], jnp.where(blocked_cage, state.player_y, new_y))
+            
+            # Update bomb count (capped at MAX_BOMBS)
+            new_bomb_count = jnp.clip(state.bomb_count + collected_bombs, 0, MAX_BOMBS)
+            
+            # Ladder interaction: check if player is standing on a ladder
+            on_ladder_up = jnp.any(item_collisions & (state.item_types == ITEM_LADDER_UP))
+            on_ladder_down = jnp.any(item_collisions & (state.item_types == ITEM_LADDER_DOWN))
+            on_any_ladder = on_ladder_up | on_ladder_down
+            
+            # Update ladder timer: increment if on ladder, reset if not
+            new_ladder_timer = jnp.where(
+                on_any_ladder,
+                state.ladder_timer + 1,
+                jnp.array(0, dtype=jnp.int32)
+            )
+            
+            # Level transition when timer reaches threshold
+            should_change_level = new_ladder_timer >= LADDER_INTERACTION_TIME
+            going_up = should_change_level & on_ladder_up
+            going_down = should_change_level & on_ladder_down
+            
+            # Calculate new level (clamp to valid range)
+            level_after_up = jnp.clip(state.current_level + 1, 0, MAX_LEVELS - 1)
+            level_after_down = jnp.clip(state.current_level - 1, 0, MAX_LEVELS - 1)
+            new_level = jnp.where(going_up, level_after_up,
+                        jnp.where(going_down, level_after_down, state.current_level))
+            
+            # Reset ladder timer after transition
+            new_ladder_timer = jnp.where(should_change_level, 0, new_ladder_timer)
+            
+            # Score mapping only for treasure items
+            points_by_type = jnp.array([
+                0,                    # 0 unused
+                0,                    # 1 HEART
+                0,                    # 2 POISON
+                0,                    # 3 TRAP
+                100,                  # 4 STRONGBOX
+                500,                  # 5 AMBER CHALICE
+                1000,                 # 6 AMULET
+                3000,                 # 7 GOLD CHALICE
+                0,                    # 8 SHIELD
+                0,                    # 9 GUN
+                0,                    # 10 BOMB
+                0,                    # 11 KEY
+                0,                    # 12 LADDER_UP
+                0,                    # 13 LADDER_DOWN
+                0,                    # 14 CAGE_DOOR (no points)
+            ], dtype=jnp.int32)
+            item_points = points_by_type[state.item_types]
+            gained_points = jnp.sum(item_points * item_collisions.astype(jnp.int32))
+            new_score = state.score + gained_points
+            
+            # Remove collected items; ladders persist; cage door disappears after valid entry with key
+            is_ladder = (state.item_types == ITEM_LADDER_UP) | (state.item_types == ITEM_LADDER_DOWN)
+            is_cage_door = (state.item_types == ITEM_CAGE_DOOR)
+            should_remove_cage = is_cage_door & can_enter_cage
+            should_remove = (item_collisions & (~is_ladder) & (~is_cage_door)) | should_remove_cage
+            new_item_active = jnp.where(should_remove, 0, state.item_active)
+            
+            # Initialize positions/types for potential updates from drops
+            new_item_positions_after_drops = state.item_positions
+            new_item_types_after_drops = state.item_types
+            
+            # Bullet-enemy collision detection
+            def check_bullet_enemy_collision(bullet_pos, enemy_pos):
+                """Check if bullet hits enemy."""
+                b_overlap_x = (bullet_pos[0] <= (enemy_pos[0] + self.consts.ENEMY_WIDTH - 1)) & \
+                             ((bullet_pos[0] + BULLET_WIDTH - 1) >= enemy_pos[0])
+                b_overlap_y = (bullet_pos[1] <= (enemy_pos[1] + self.consts.ENEMY_HEIGHT - 1)) & \
+                             ((bullet_pos[1] + BULLET_HEIGHT - 1) >= enemy_pos[1])
+                return b_overlap_x & b_overlap_y
+            
+            # Vectorized collision for all bullet-enemy pairs
+            def check_all_enemies_for_bullet(bullet_idx):
+                bullet_pos = final_bullet_positions[bullet_idx]
+                is_active = final_bullet_active[bullet_idx] == 1
+                collisions = jax.vmap(lambda e_pos: check_bullet_enemy_collision(bullet_pos, e_pos))(new_enemy_positions)
+                return collisions & is_active & (state.enemy_active == 1)
+            
+            # Check all bullets against all enemies
+            all_collisions = jax.vmap(check_all_enemies_for_bullet)(jnp.arange(MAX_BULLETS))
+            
+            # Any bullet hit per enemy
+            enemy_hit = jnp.any(all_collisions, axis=0)
+            
+            # Bomb detonation: kill enemies within radius when bomb is used
+            # Calculate distance from player to each enemy
+            player_center_x = new_x + self.consts.PLAYER_WIDTH // 2
+            player_center_y = new_y + self.consts.PLAYER_HEIGHT // 2
+            enemy_center_x = new_enemy_positions[:, 0] + self.consts.ENEMY_WIDTH // 2
+            enemy_center_y = new_enemy_positions[:, 1] + self.consts.ENEMY_HEIGHT // 2
+            dx = enemy_center_x - player_center_x
+            dy = enemy_center_y - player_center_y
+            distance_sq = dx * dx + dy * dy
+            within_radius = distance_sq <= (BOMB_RADIUS * BOMB_RADIUS)
+            bomb_kills_enemies = should_detonate_bomb & within_radius & (state.enemy_active == 1)
+            
+            enemy_hit = enemy_hit | bomb_kills_enemies
+            
+            # Reduce bomb count when detonated
+            bomb_count_after_detonation = jnp.where(should_detonate_bomb, new_bomb_count - 1, new_bomb_count)
+            
+            # Enemy mutation system: when hit, enemy mutates to weaker form
+            new_enemy_types = jnp.where(bomb_kills_enemies, 0, 
+                              jnp.where(enemy_hit & (~bomb_kills_enemies), state.enemy_types - 1, state.enemy_types))
+            
+            # Award points when enemy is killed
+            zombies_killed = (enemy_hit & (~bomb_kills_enemies)) & (state.enemy_types == ENEMY_ZOMBIE)
+            
+            # Bomb kills award points for all enemy types and bullet progression hits
+            zombies_bombed = bomb_kills_enemies & (state.enemy_types == ENEMY_ZOMBIE)
+            wraiths_bombed = bomb_kills_enemies & (state.enemy_types == ENEMY_WRAITH)
+            skeletons_bombed = bomb_kills_enemies & (state.enemy_types == ENEMY_SKELETON)
+            wizards_bombed = bomb_kills_enemies & (state.enemy_types == ENEMY_WIZARD)
+            grim_reapers_bombed = bomb_kills_enemies & (state.enemy_types == ENEMY_GRIM_REAPER)
+            wraiths_hit = (enemy_hit & (~bomb_kills_enemies)) & (state.enemy_types == ENEMY_WRAITH)
+            skeletons_hit = (enemy_hit & (~bomb_kills_enemies)) & (state.enemy_types == ENEMY_SKELETON)
+            wizards_hit = (enemy_hit & (~bomb_kills_enemies)) & (state.enemy_types == ENEMY_WIZARD)
+            grim_reapers_hit = (enemy_hit & (~bomb_kills_enemies)) & (state.enemy_types == ENEMY_GRIM_REAPER)
+            
+            enemy_kill_score = (
+                jnp.sum(zombies_killed | zombies_bombed) * self.consts.ZOMBIE_POINTS +
+                jnp.sum(wraiths_hit | wraiths_bombed) * self.consts.WRAITH_POINTS +
+                jnp.sum(skeletons_hit | skeletons_bombed) * self.consts.SKELETON_POINTS +
+                jnp.sum(wizards_hit | wizards_bombed) * self.consts.WIZARD_POINTS +
+                jnp.sum(grim_reapers_hit | grim_reapers_bombed) * self.consts.GRIM_REAPER_POINTS
+            )
+            
+            # Deactivate enemies that have been killed (type becomes 0)
+            new_enemy_active = jnp.where(new_enemy_types <= 0, 0, state.enemy_active)
+            
+            # Drop items from killed zombies (20% chance)
+            zombies_just_killed = (state.enemy_active == 1) & (new_enemy_active == 0) & (state.enemy_types == ENEMY_ZOMBIE)
+            
+            # Generate random values for each enemy to determine if they drop items
+            rng, drop_rng = jax.random.split(rng)
+            drop_chances = jax.random.uniform(drop_rng, shape=(NUM_ENEMIES,))
+            should_drop = zombies_just_killed & (drop_chances < 0.2)  # 20% chance
+            
+            # Find inactive item slots to spawn drops
+            def try_spawn_item_drop(idx, carry):
+                rng, item_active, item_positions, item_types = carry
+                
+                # Check if this enemy should drop an item
+                drop_item = should_drop[idx]
+                
+                # Find first inactive item slot
+                inactive_slots = (item_active == 0)
+                has_slot = jnp.any(inactive_slots)
+                first_slot = jnp.argmax(inactive_slots)  # First True index
+                
+                # Generate random item type (only items with sprites)
+                rng, item_type_rng = jax.random.split(rng)
+                drop_types = jnp.array([
+                    ITEM_HEART, ITEM_POISON, ITEM_TRAP,
+                    ITEM_AMBER_CHALICE, ITEM_AMULET,
+                    ITEM_SHIELD, ITEM_GUN, ITEM_BOMB
+                ], dtype=jnp.int32)
+                random_item_type = jax.random.choice(item_type_rng, drop_types)
+                
+                # Spawn item at enemy position
+                enemy_pos = state.enemy_positions[idx]
+                
+                # Only spawn if enemy drops, there's a slot, and enemy was at valid position
+                should_spawn = drop_item & has_slot & (enemy_pos[0] > 0) & (enemy_pos[1] > 0)
+                
+                item_active = jax.lax.cond(
+                    should_spawn,
+                    lambda ia: ia.at[first_slot].set(1),
+                    lambda ia: ia,
+                    item_active
+                )
+                
+                item_positions = jax.lax.cond(
+                    should_spawn,
+                    lambda ip: ip.at[first_slot].set(enemy_pos),
+                    lambda ip: ip,
+                    item_positions
+                )
+                
+                item_types = jax.lax.cond(
+                    should_spawn,
+                    lambda it: it.at[first_slot].set(random_item_type),
+                    lambda it: it,
+                    item_types
+                )
+                
+                return rng, item_active, item_positions, item_types
+            
+            # Process all enemies for item drops
+            _, new_item_active_after_drops, new_item_positions_after_drops, new_item_types_after_drops = jax.lax.fori_loop(
+                0, NUM_ENEMIES,
+                try_spawn_item_drop,
+                (rng, new_item_active, state.item_positions, state.item_types)
+            )
+            
+            # Move dead enemies off-screen
+            final_enemy_positions = jnp.where(
+                new_enemy_active[:, None] == 1,
+                new_enemy_positions,
+                jnp.array([0, 0])
+            )
+            
+            # Deactivate bullets that hit enemies
+            bullet_hit_enemy = jnp.any(all_collisions, axis=1)
+            
+            # Bullet-spawner collision detection
+            def check_bullet_spawner_collision(bullet_pos, spawner_pos):
+                """Check if bullet hits spawner."""
+                b_overlap_x = (bullet_pos[0] <= (spawner_pos[0] + SPAWNER_WIDTH - 1)) & \
+                             ((bullet_pos[0] + BULLET_WIDTH - 1) >= spawner_pos[0])
+                b_overlap_y = (bullet_pos[1] <= (spawner_pos[1] + SPAWNER_HEIGHT - 1)) & \
+                             ((bullet_pos[1] + BULLET_HEIGHT - 1) >= spawner_pos[1])
+                return b_overlap_x & b_overlap_y
+            
+            def check_all_spawners_for_bullet(bullet_idx):
+                bullet_pos = final_bullet_positions[bullet_idx]
+                is_active = final_bullet_active[bullet_idx] == 1
+                collisions = jax.vmap(lambda s_pos: check_bullet_spawner_collision(bullet_pos, s_pos))(state.spawner_positions)
+                return collisions & is_active & (state.spawner_active == 1)
+            
+            spawner_collisions = jax.vmap(check_all_spawners_for_bullet)(jnp.arange(MAX_BULLETS))
+            spawner_hit = jnp.any(spawner_collisions, axis=0)
+            
+            # Reduce spawner health on hit
+            new_spawner_health = jnp.where(spawner_hit, state.spawner_health - 1, state.spawner_health)
+            new_spawner_active = jnp.where(new_spawner_health <= 0, 0, state.spawner_active)
+            
+            # Spawn item where spawner was destroyed
+            spawner_destroyed = (state.spawner_active == 1) & (new_spawner_active == 0)
+            
+            # Find first inactive item slot for spawner drops
+            def add_spawner_drop(carry, spawner_idx):
+                item_pos, item_types_arr, item_active_arr, key = carry
+                destroyed = spawner_destroyed[spawner_idx]
+                
+                # Find first inactive slot
+                first_inactive = jnp.argmax(item_active_arr == 0)
+                can_add = jnp.any(item_active_arr == 0) & destroyed
+                
+                # Random item type (heart or treasures with sprites only)
+                key, subkey = jax.random.split(key)
+                drop_types = jnp.array([ITEM_HEART, ITEM_AMBER_CHALICE, ITEM_AMULET], dtype=jnp.int32)
+                drop_type = jax.random.choice(subkey, drop_types)
+                
+                # Use spawner position (already placed off walls during reset)
+                spawner_pos = state.spawner_positions[spawner_idx]
+                
+                # Update arrays
+                new_pos = jnp.where(
+                    (jnp.arange(NUM_ITEMS)[:, None] == first_inactive) & can_add,
+                    spawner_pos,
+                    item_pos
+                )
+                new_types = jnp.where(
+                    (jnp.arange(NUM_ITEMS) == first_inactive) & can_add,
+                    drop_type,
+                    item_types_arr
+                )
+                new_active = jnp.where(
+                    (jnp.arange(NUM_ITEMS) == first_inactive) & can_add,
+                    1,
+                    item_active_arr
+                )
+                
+                return (new_pos, new_types, new_active, key), None
+            
+            rng, subkey = jax.random.split(rng)
+            (final_item_positions, final_item_types, final_item_active, rng), _ = jax.lax.scan(
+                add_spawner_drop,
+                (new_item_positions_after_drops, new_item_types_after_drops, new_item_active_after_drops, subkey),
+                jnp.arange(NUM_SPAWNERS)
+            )
+            
+            # Deactivate bullets that hit anything
+            bullet_hit_spawner = jnp.any(spawner_collisions, axis=1)
+            final_bullet_active2 = final_bullet_active & (~(bullet_hit_enemy | bullet_hit_spawner)).astype(jnp.int32)
+            
+            # Add enemy kill score to total
+            final_score = new_score + enemy_kill_score
+            
+            # Enemy contact damage (varies by enemy type)
+            alive_enemies_mask = new_enemy_active == 1
+            enemy_x = final_enemy_positions[:, 0]
+            enemy_y = final_enemy_positions[:, 1]
+            overlap_x = (new_x <= (enemy_x + self.consts.ENEMY_WIDTH - 1)) & ((new_x + self.consts.PLAYER_WIDTH - 1) >= enemy_x)
+            overlap_y = (new_y <= (enemy_y + self.consts.ENEMY_HEIGHT - 1)) & ((new_y + self.consts.PLAYER_HEIGHT - 1) >= enemy_y)
+            enemy_contacts = overlap_x & overlap_y & alive_enemies_mask
+            
+            # Calculate damage based on enemy type
+            damage_by_type = jnp.array([
+                0,  # Dead enemy (type 0)
+                self.consts.ZOMBIE_DAMAGE,
+                self.consts.WRAITH_DAMAGE,
+                self.consts.SKELETON_DAMAGE,
+                self.consts.WIZARD_DAMAGE,
+                self.consts.GRIM_REAPER_DAMAGE
+            ], dtype=jnp.int32)
+            
+            cooldown0 = state.damage_cooldown
+            cooldown1 = jnp.maximum(cooldown0 - 1, 0)
+            can_take_damage = cooldown0 == 0
+
+            contact_damage_each = jnp.where(
+                enemy_contacts,
+                damage_by_type[new_enemy_types],
+                0
+            )
+            raw_damage = jnp.max(contact_damage_each)  # take only the strongest single hit this tick
+            applied_damage = jnp.where(can_take_damage, raw_damage, 0)
+
+
+            HIT_COOLDOWN_TICKS = 8
+
+            shield_multiplier = jnp.where(new_shield_active == 1, 0.5, 1.0)
+            reduced_damage = (applied_damage * shield_multiplier).astype(jnp.int32)
+
+            
+            # Enemy bullet damage to player only
+            def enemy_bullet_hits_player(bpos):
+                bx, by = bpos[0], bpos[1]
+                overlap_x = (bx <= (new_x + self.consts.PLAYER_WIDTH - 1)) & ((bx + ENEMY_BULLET_WIDTH - 1) >= new_x)
+                overlap_y = (by <= (new_y + self.consts.PLAYER_HEIGHT - 1)) & ((by + ENEMY_BULLET_HEIGHT - 1) >= new_y)
+                return overlap_x & overlap_y
+            enemy_bullet_hits = jax.vmap(enemy_bullet_hits_player)(final_enemy_bullet_positions[:, :2]) & (final_enemy_bullet_active == 1)
+            enemy_bullet_damage = enemy_bullet_hits.astype(jnp.int32).any().astype(jnp.int32)
+            applied_bullet_damage = jnp.where(can_take_damage, enemy_bullet_damage, 0)
+
+            final_damage = jnp.maximum(applied_damage, applied_bullet_damage)
+
+            final_health = jnp.clip(new_health - final_damage, 0, self.consts.MAX_HEALTH)
+
+            cooldown2 = jnp.where(
+                final_damage > 0,
+                HIT_COOLDOWN_TICKS,
+                cooldown1,
+            )
+
+
+            final_enemy_bullet_active3 = final_enemy_bullet_active & (~enemy_bullet_hits).astype(jnp.int32)
+            
+            # Enemy spawning when crossing portals or changing levels
+            # Calculate level_changed early for enemy spawning trigger
+            level_changed_early = new_level != state.current_level
+            
+            active_enemy_count = jnp.sum(state.enemy_active)
+            many_enemies = active_enemy_count >= 10
+            
+            # Determine how many enemies to spawn (all types equally likely)
+            rng, subkey = jax.random.split(rng)
+            spawn_count_if_few = jax.random.randint(subkey, (), 1, 11, dtype=jnp.int32)  # 1-10 enemies
+            rng, subkey = jax.random.split(rng)
+            spawn_count_if_many = jax.random.randint(subkey, (), 1, 3, dtype=jnp.int32)  # 1-2 enemies
+            zombies_to_spawn = jnp.where(many_enemies, spawn_count_if_many, spawn_count_if_few)
+            
+            # Trigger spawning on portal cross or level change
+            should_trigger_spawn = crossed_portal | level_changed_early
+            
+            # Spawner logic: spawn enemies near active spawners (disabled, but keep for compatibility)
+            new_spawner_timers = state.spawner_timers - 1
+            should_spawn_enemy = (new_spawner_timers <= 0) & (new_spawner_active == 1)
+            
+            # Spawn enemies at random positions when portal crossed or level changed
+            def spawn_random_enemy(spawn_idx, carry):
+                enemy_pos, enemy_types_arr, enemy_active_arr, timers_arr, key = carry
+                
+                # Only spawn if spawn_idx < zombies_to_spawn
+                should_spawn_this = (spawn_idx < zombies_to_spawn) & should_trigger_spawn
+                
+                # Find first inactive enemy slot
+                first_inactive = jnp.argmax(enemy_active_arr == 0)
+                can_spawn = jnp.any(enemy_active_arr == 0) & should_spawn_this
+                
+                # Random enemy type (2-4: wraith, skeleton, wizard) - exclude Zombie and Grim Reaper
+                key, subkey = jax.random.split(key)
+                spawn_type = jax.random.randint(subkey, (), ENEMY_WRAITH, ENEMY_WIZARD + 1, dtype=jnp.int32)
+                
+                # Get current level and map walls for collision checking (include boundaries)
+                WALLS = jnp.concatenate(
+                    [
+                        self.renderer.LEVEL_WALLS[state.map_index, state.current_level],
+                        self.renderer.BOUNDARY_WALLS,
+                    ],
+                    axis=0,
+                )
+                
+                # Try to find valid spawn position (not on walls)
+                # We'll try multiple random positions and use the first valid one
+                def try_spawn_position(attempt, best_carry):
+                    best_pos, best_key, found_valid = best_carry
+                    
+                    new_key, subkey = jax.random.split(best_key)
+                    spawn_x = jax.random.randint(subkey, (), 50, self.consts.WORLD_WIDTH - 50, dtype=jnp.int32)
+                    new_key, subkey = jax.random.split(new_key)
+                    spawn_y = jax.random.randint(subkey, (), 50, self.consts.WORLD_HEIGHT - 50, dtype=jnp.int32)
+                    
+                    # Check wall collision
+                    wx = WALLS[:, 0]
+                    wy = WALLS[:, 1]
+                    ww = WALLS[:, 2]
+                    wh = WALLS[:, 3]
+                    overlap_x = (spawn_x <= (wx + ww - 1)) & ((spawn_x + self.consts.ENEMY_WIDTH - 1) >= wx)
+                    overlap_y = (spawn_y <= (wy + wh - 1)) & ((spawn_y + self.consts.ENEMY_HEIGHT - 1) >= wy)
+                    on_wall = jnp.any(overlap_x & overlap_y)
+                    
+                    # Use this position if it's valid and we haven't found one yet
+                    new_pos = jnp.where((~on_wall) & (~found_valid), jnp.array([spawn_x, spawn_y]), best_pos)
+                    new_found = found_valid | (~on_wall)
+                    
+                    return (new_pos, new_key, new_found)
+                
+                # Try up to 10 times to find a valid position
+                init_pos = jnp.array([100, 100])
+                spawn_pos, key, _ = jax.lax.fori_loop(0, 10, try_spawn_position, (init_pos, key, False))
+                
+                # Update arrays
+                new_pos = jnp.where(
+                    (jnp.arange(NUM_ENEMIES)[:, None] == first_inactive) & can_spawn,
+                    spawn_pos,
+                    enemy_pos
+                )
+                new_types = jnp.where(
+                    (jnp.arange(NUM_ENEMIES) == first_inactive) & can_spawn,
+                    spawn_type,
+                    enemy_types_arr
+                )
+                new_active = jnp.where(
+                    (jnp.arange(NUM_ENEMIES) == first_inactive) & can_spawn,
+                    1,
+                    enemy_active_arr
+                )
+                new_timers = jnp.where(
+                    (jnp.arange(NUM_ENEMIES) == first_inactive) & can_spawn,
+                    0,
+                    timers_arr
+                )
+                
+                return (new_pos, new_types, new_active, new_timers, key)
+            
+            # Spawn enemies using fori_loop (max 10 iterations)
+            init_carry = (new_enemy_positions, new_enemy_types, new_enemy_active, new_wizard_timers, rng)
+            (spawned_enemy_pos, spawned_enemy_types, spawned_enemy_active, spawned_wizard_timers, rng) = jax.lax.fori_loop(
+                0, 10, spawn_random_enemy, init_carry
+            )
+            
+            # Use spawned enemies if trigger active, otherwise use current
+            # Don't overwrite positions - let the spawner scan use the spawned values
+            spawner_affected_types = jnp.where(should_trigger_spawn, spawned_enemy_types, new_enemy_types)
+            spawner_affected_active = jnp.where(should_trigger_spawn, spawned_enemy_active, new_enemy_active)
+            spawner_affected_timers = jnp.where(should_trigger_spawn, spawned_wizard_timers, new_wizard_timers)
+            
+            # spawn each enemy exactly in the middle of the spawner
+            def try_spawn_from_spawner(carry, spawner_idx):
+                enemy_pos, enemy_types_arr, enemy_active_arr, timers_arr, key = carry
+                should_spawn = should_spawn_enemy[spawner_idx]
+                
+                # Find first inactive enemy slot
+                first_inactive = jnp.argmax(enemy_active_arr == 0)
+                can_spawn = jnp.any(enemy_active_arr == 0) & should_spawn
+                
+                # Random enemy type (2-4: wraith, skeleton, wizard) - exclude Zombie and Grim Reaper
+                key, subkey = jax.random.split(key)
+                spawn_type = jax.random.randint(subkey, (), ENEMY_WRAITH, ENEMY_WIZARD + 1, dtype=jnp.int32)
+                
+                # Random wizard timer for new enemy (in case it's a wizard)
+                key, subkey = jax.random.split(key)
+                new_timer = jax.random.randint(subkey, (), 0, WIZARD_SHOOT_INTERVAL + WIZARD_SHOOT_OFFSET_MAX, dtype=jnp.int32)
+                
+                spawner_pos = state.spawner_positions[spawner_idx]
+                
+                # Get current level walls for collision checking
+                WALLS_SPAWNER = self.renderer.LEVEL_WALLS[state.map_index, state.current_level]
+                
+                # Spawn enemy directly inside the spawner (centered)
+                spawn_offset_x = (SPAWNER_WIDTH - self.consts.ENEMY_WIDTH) // 2
+                spawn_offset_y = (SPAWNER_HEIGHT - self.consts.ENEMY_HEIGHT) // 2
+                spawn_pos_center = spawner_pos + jnp.array([spawn_offset_x, spawn_offset_y])
+                
+                # Check if centered position overlaps with walls
+                wx = WALLS_SPAWNER[:, 0]
+                wy = WALLS_SPAWNER[:, 1]
+                ww = WALLS_SPAWNER[:, 2]
+                wh = WALLS_SPAWNER[:, 3]
+                overlap_x_center = (spawn_pos_center[0] <= (wx + ww - 1)) & ((spawn_pos_center[0] + self.consts.ENEMY_WIDTH - 1) >= wx)
+                overlap_y_center = (spawn_pos_center[1] <= (wy + wh - 1)) & ((spawn_pos_center[1] + self.consts.ENEMY_HEIGHT - 1) >= wy)
+                center_on_wall = jnp.any(overlap_x_center & overlap_y_center)
+                
+                # If center is on wall, try random offsets from spawner
+                def try_nearby_pos(attempt, carry):
+                    best_pos, k, found = carry
+                    k, kx = jax.random.split(k)
+                    offset_x = jax.random.randint(kx, (), -20, 21, dtype=jnp.int32)
+                    k, ky = jax.random.split(k)
+                    offset_y = jax.random.randint(ky, (), -20, 21, dtype=jnp.int32)
+                    test_pos = spawner_pos + jnp.array([offset_x, offset_y])
+                    test_pos = jnp.clip(test_pos, jnp.array([16, 16]), jnp.array([self.consts.WORLD_WIDTH - 24, self.consts.WORLD_HEIGHT - 24]))
+                    
+                    # Check walls
+                    test_overlap_x = (test_pos[0] <= (wx + ww - 1)) & ((test_pos[0] + self.consts.ENEMY_WIDTH - 1) >= wx)
+                    test_overlap_y = (test_pos[1] <= (wy + wh - 1)) & ((test_pos[1] + self.consts.ENEMY_HEIGHT - 1) >= wy)
+                    test_on_wall = jnp.any(test_overlap_x & test_overlap_y)
+                    
+                    new_pos = jnp.where((~test_on_wall) & (~found), test_pos, best_pos)
+                    new_found = found | (~test_on_wall)
+                    return (new_pos, k, new_found)
+                
+                # Use alternative position if center is on wall
+                spawn_pos, key, _ = jax.lax.cond(
+                    center_on_wall,
+                    lambda k: jax.lax.fori_loop(0, 10, try_nearby_pos, (spawn_pos_center, k, False)),
+                    lambda k: (spawn_pos_center, k, True),
+                    key
+                )
+                
+                # Update arrays
+                new_pos = jnp.where(
+                    (jnp.arange(NUM_ENEMIES)[:, None] == first_inactive) & can_spawn,
+                    spawn_pos,
+                    enemy_pos
+                )
+                new_types = jnp.where(
+                    (jnp.arange(NUM_ENEMIES) == first_inactive) & can_spawn,
+                    spawn_type,
+                    enemy_types_arr
+                )
+                new_active = jnp.where(
+                    (jnp.arange(NUM_ENEMIES) == first_inactive) & can_spawn,
+                    1,
+                    enemy_active_arr
+                )
+                new_timers = jnp.where(
+                    (jnp.arange(NUM_ENEMIES) == first_inactive) & can_spawn,
+                    new_timer,
+                    timers_arr
+                )
+                
+                return (new_pos, new_types, new_active, new_timers, key), None
+
+            (enemy_positions_after_spawner, enemy_types_after_spawner, enemy_active_after_spawner, wizard_timers_after_spawner, rng), _ = jax.lax.scan(
+                try_spawn_from_spawner,
+                (spawned_enemy_pos, spawner_affected_types, spawner_affected_active, spawner_affected_timers, rng),
+                jnp.arange(NUM_SPAWNERS)
+            )
+            
+            # Reset spawner timers when they spawn
+            final_spawner_timers = jnp.where(should_spawn_enemy, SPAWNER_SPAWN_INTERVAL, new_spawner_timers)
+            
+            # Level transition: respawn items and reset player position when level OR map changes
+            level_changed = new_level != state.current_level
+            map_changed = new_map_index != state.map_index
+            world_changed = level_changed | map_changed
+            
+            # Reset player position on level/map change
+            spawn_x_up = jnp.array(40, dtype=jnp.int32)  # At down ladder after going up
+            spawn_y_up = jnp.array(70, dtype=jnp.int32)
+            spawn_x_down = jnp.array(300, dtype=jnp.int32)  # At up ladder after going down
+            spawn_y_down = jnp.array(350, dtype=jnp.int32)
+            
+            # Determine spawn position based on which ladder was used or map portal
+            # For map portal transitions (left/right exit), use portal position
+            spawn_x = jnp.where(going_up, spawn_x_up,
+                      jnp.where(going_down, spawn_x_down, new_x))  # Use new_x for portal transitions
+            spawn_y = jnp.where(going_up, spawn_y_up,
+                      jnp.where(going_down, spawn_y_down, new_y))  # Use new_y for portal transitions
+            
+            transition_x = jnp.where(world_changed, spawn_x, new_x)
+            transition_y = jnp.where(world_changed, spawn_y, new_y)
+            
+            # Respawn all items on level change
+            def respawn_items_for_level(key):
+                # New level and map walls for collision checks
+                WALLS_NEW = self.renderer.LEVEL_WALLS[new_map_index, new_level]
+                
+                def check_wall_overlap_item(x, y):
+                    wx = WALLS_NEW[:, 0]
+                    wy = WALLS_NEW[:, 1]
+                    ww = WALLS_NEW[:, 2]
+                    wh = WALLS_NEW[:, 3]
+                    # Use max item size to be safe
+                    overlap_x = (x <= (wx + ww - 1)) & ((x + 13 - 1) >= wx)
+                    overlap_y = (y <= (wy + wh - 1)) & ((y + 13 - 1) >= wy)
+                    return jnp.any(overlap_x & overlap_y)
+                
+                # Key: random valid position away from upper-left spawn area; ladders fixed
+                KEY_EXCLUSION_RADIUS = 80
+                def try_spawn_key(_, inner):
+                    pos, key_loc, found = inner
+                    key_loc, sk = jax.random.split(key_loc)
+                    x = jax.random.randint(sk, (), 16, self.consts.WORLD_WIDTH - 24, dtype=jnp.int32)
+                    key_loc, sk = jax.random.split(key_loc)
+                    y = jax.random.randint(sk, (), 16, self.consts.WORLD_HEIGHT - 24, dtype=jnp.int32)
+                    on_wall = check_wall_overlap_item(x, y)
+                    dx = x - self.consts.PLAYER_START_X
+                    dy = y - self.consts.PLAYER_START_Y
+                    dist_sq = dx * dx + dy * dy
+                    too_close = dist_sq < (KEY_EXCLUSION_RADIUS * KEY_EXCLUSION_RADIUS)
+                    is_valid = (~on_wall) & (~too_close)
+                    new_pos = jnp.where(is_valid & (~found), jnp.array([x, y]), pos)
+                    new_found = found | is_valid
+                    return (new_pos, key_loc, new_found)
+
+                key, key_sk = jax.random.split(key)
+                init_kpos = jnp.array([100, 100], dtype=jnp.int32)
+                key_pos, key_sk, _ = jax.lax.fori_loop(0, 20, try_spawn_key, (init_kpos, key_sk, False))
+                
+                # Spawn exit ladder at safe position (retry to avoid walls)
+                def try_spawn_exit(_, inner):
+                    pos, key_loc, found = inner
+                    key_loc, sk = jax.random.split(key_loc)
+                    x = jax.random.randint(sk, (), 250, self.consts.WORLD_WIDTH - 40, dtype=jnp.int32)
+                    key_loc, sk = jax.random.split(key_loc)
+                    y = jax.random.randint(sk, (), 300, self.consts.WORLD_HEIGHT - 40, dtype=jnp.int32)
+                    on_wall = check_wall_overlap_item(x, y)
+                    new_pos = jnp.where((~on_wall) & (~found), jnp.array([x, y]), pos)
+                    new_found = found | (~on_wall)
+                    return (new_pos, key_loc, new_found)
+                
+                key, key_sk = jax.random.split(key)
+                init_exit = jnp.array([280, 340], dtype=jnp.int32)
+                exit_pos, key_sk, _ = jax.lax.fori_loop(0, 20, try_spawn_exit, (init_exit, key_sk, False))
+                
+                # Hide ladder_down on level 0, otherwise spawn at safe position
+                def try_spawn_ladder_down(_, inner):
+                    pos, key_loc, found = inner
+                    key_loc, sk = jax.random.split(key_loc)
+                    x = jax.random.randint(sk, (), 20, 100, dtype=jnp.int32)
+                    key_loc, sk = jax.random.split(key_loc)
+                    y = jax.random.randint(sk, (), 40, 120, dtype=jnp.int32)
+                    on_wall = check_wall_overlap_item(x, y)
+                    new_pos = jnp.where((~on_wall) & (~found), jnp.array([x, y]), pos)
+                    new_found = found | (~on_wall)
+                    return (new_pos, key_loc, new_found)
+                
+                key, key_sk = jax.random.split(key)
+                init_ladder = jnp.array([40, 70], dtype=jnp.int32)
+                ladder_down_temp, key_sk, _ = jax.lax.fori_loop(0, 20, try_spawn_ladder_down, (init_ladder, key_sk, False))
+                ladder_down_pos = jnp.where(new_level == 0, jnp.array([-1000, -1000], dtype=jnp.int32), ladder_down_temp)
+                cage_door_pos = self.renderer.CAGE_DOOR_POSITIONS[new_map_index, new_level]
+                cage_reward_pos = self.renderer.CAGE_REWARD_POSITIONS[new_map_index, new_level]
+                
+                # Generate random positions for regular items with retries to avoid walls
+                def spawn_regular_item(carry, idx):
+                    positions_arr, key_in = carry
+                    
+                    def try_once(_, inner):
+                        pos, key_loc, found = inner
+                        key_loc, sk = jax.random.split(key_loc)
+                        x = jax.random.randint(sk, (), 16, self.consts.WORLD_WIDTH - 24, dtype=jnp.int32)
+                        key_loc, sk = jax.random.split(key_loc)
+                        y = jax.random.randint(sk, (), 16, self.consts.WORLD_HEIGHT - 24, dtype=jnp.int32)
+                        on_wall = check_wall_overlap_item(x, y)
+                        new_pos = jnp.where((~on_wall) & (~found), jnp.array([x, y]), pos)
+                        new_found = found | (~on_wall)
+                        return (new_pos, key_loc, new_found)
+                    
+                    init = (jnp.array([30, 30], dtype=jnp.int32), key_in, False)
+                    final_pos, key_out, _ = jax.lax.fori_loop(0, 20, try_once, init)
+                    positions_arr = positions_arr.at[idx].set(final_pos)
+                    return (positions_arr, key_out), None
+                
+                key, sk = jax.random.split(key)
+                init_positions = jnp.zeros((NUM_ITEMS - 5, 2), dtype=jnp.int32)  # -5 for key, ladders, cage props
+                (regular_positions, key), _ = jax.lax.scan(spawn_regular_item, (init_positions, sk), jnp.arange(NUM_ITEMS - 5))
+                
+                # Combine: first 5 are key, ladders, cage door and reward, rest are regular items
+                new_positions = jnp.concatenate([
+                    key_pos[None, :],
+                    exit_pos[None, :],
+                    ladder_down_pos[None, :],
+                    cage_door_pos[None, :],
+                    cage_reward_pos[None, :],
+                    regular_positions
+                ], axis=0)
+                
+                # Generate new item types - only items with sprites (exclude STRONGBOX, GOLD_CHALICE)
+                key, subkey = jax.random.split(key)
+                all_item_types = jnp.array([
+                    ITEM_HEART, ITEM_POISON, ITEM_TRAP,
+                    ITEM_AMBER_CHALICE, ITEM_AMULET,
+                    ITEM_SHIELD, ITEM_GUN, ITEM_BOMB
+                ], dtype=jnp.int32)
+                spawn_probs = jnp.array([0.20, 0.10, 0.18, 0.14, 0.10, 0.08, 0.06, 0.14], dtype=jnp.float32)
+                regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 5,), p=spawn_probs)
+                new_types = jnp.concatenate([
+                    jnp.array([ITEM_KEY, ITEM_LADDER_UP, ITEM_LADDER_DOWN, ITEM_CAGE_DOOR, self.renderer.CAGE_REWARD_TYPE]),
+                    regular_items
+                ])
+                new_active = jnp.ones(NUM_ITEMS, dtype=jnp.int32)
+                
+                return new_positions, new_types, new_active, key
+            
+            # Apply respawn if level OR map changed
+            respawned_positions, respawned_types, respawned_active, rng = respawn_items_for_level(rng)
+            transition_item_positions = jnp.where(world_changed, respawned_positions, final_item_positions)
+            transition_item_types = jnp.where(world_changed, respawned_types, final_item_types)
+            transition_item_active = jnp.where(world_changed, respawned_active, final_item_active)
+            
+            # On level change, ensure enemies are not overlapping new level walls
+            WALLS_NEWLVL = self.renderer.LEVEL_WALLS[new_map_index, new_level]
+            def enemy_on_wall(enemy_pos):
+                ex = enemy_pos[0]
+                ey = enemy_pos[1]
+                wx = WALLS_NEWLVL[:, 0]
+                wy = WALLS_NEWLVL[:, 1]
+                ww = WALLS_NEWLVL[:, 2]
+                wh = WALLS_NEWLVL[:, 3]
+                overlap_x = (ex <= (wx + ww - 1)) & ((ex + self.consts.ENEMY_WIDTH - 1) >= wx)
+                overlap_y = (ey <= (wy + wh - 1)) & ((ey + self.consts.ENEMY_HEIGHT - 1) >= wy)
+                return jnp.any(overlap_x & overlap_y)
+            
+            def relocate_enemy(carry, i):
+                positions_arr, key_in = carry
+                cur = enemy_positions_after_spawner[i]
+                is_active = enemy_active_after_spawner[i] == 1
+            
+                def try_once(_, inner):
+                    pos, key_loc, found = inner
+                    key_loc, kx, ky = jax.random.split(key_loc, 3)
+                    dx = jax.random.randint(kx, (), -12, 13, dtype=jnp.int32)
+                    dy = jax.random.randint(ky, (), -12, 13, dtype=jnp.int32)
+                    cand = cur + jnp.array([dx, dy])
+                    cand = jnp.clip(cand, jnp.array([16,16]), jnp.array([self.consts.WORLD_WIDTH - 24, self.consts.WORLD_HEIGHT - 24]))
+                    on_wall = enemy_on_wall(cand)
+                    new_pos = jnp.where((~on_wall) & (~found), cand, pos)
+                    new_found = found | (~on_wall)
+                    return (new_pos, key_loc, new_found)
+            
+                init = (cur, key_in, False)
+                final_pos, key_out, _ = jax.lax.fori_loop(0, 20, try_once, init)
+                # If enemy inactive or world didn't change, keep original
+                final_pos = jnp.where(world_changed & is_active, final_pos, cur)
+                positions_arr = positions_arr.at[i].set(final_pos)
+                return (positions_arr, key_out), None
+            
+            rng, sk = jax.random.split(rng)
+            init_epos = enemy_positions_after_spawner
+            (relocated_enemy_positions, rng), _ = jax.lax.scan(relocate_enemy, (init_epos, sk), jnp.arange(NUM_ENEMIES))
+            
+            # On level change going UP, spawn additional zombies
+            def spawn_level_enemies(key_in, positions_in, types_in, active_in, timers_in):
+                """Spawn 3-5 zombies when entering a new higher level."""
+                rng_local, subkey = jax.random.split(key_in)
+                num_to_spawn = 4  # Spawn 4 zombies per new level
+                
+                def spawn_one_zombie(carry, spawn_idx):
+                    pos_arr, typ_arr, act_arr, tim_arr, key_loc = carry
+                    # Find first inactive enemy slot
+                    first_inactive_idx = jnp.argmax(act_arr == 0)
+                    slot_available = jnp.any(act_arr == 0)
+                    
+                    # Random timer for new zombie (zombies don't shoot but keep consistent state)
+                    key_loc, sk = jax.random.split(key_loc)
+                    new_timer = jax.random.randint(sk, (), 0, WIZARD_SHOOT_INTERVAL + WIZARD_SHOOT_OFFSET_MAX, dtype=jnp.int32)
+                    
+                    # Random position avoiding walls
+                    def try_pos(_, inner):
+                        p, k, found = inner
+                        k, kx = jax.random.split(k)
+                        x = jax.random.randint(kx, (), 40, self.consts.WORLD_WIDTH - 40, dtype=jnp.int32)
+                        k, ky = jax.random.split(k)
+                        y = jax.random.randint(ky, (), 40, self.consts.WORLD_HEIGHT - 40, dtype=jnp.int32)
+                        on_wall = enemy_on_wall(jnp.array([x, y]))
+                        new_p = jnp.where((~on_wall) & (~found), jnp.array([x, y]), p)
+                        new_found = found | (~on_wall)
+                        return (new_p, k, new_found)
+                    
+                    init_p = jnp.array([100, 100], dtype=jnp.int32)
+                    final_p, key_loc, _ = jax.lax.fori_loop(0, 15, try_pos, (init_p, key_loc, False))
+                    
+                    # Update arrays if slot available
+                    pos_arr = jnp.where(
+                        (jnp.arange(NUM_ENEMIES)[:, None] == first_inactive_idx) & slot_available,
+                        final_p,
+                        pos_arr
+                    )
+                    typ_arr = jnp.where(
+                        (jnp.arange(NUM_ENEMIES) == first_inactive_idx) & slot_available,
+                        ENEMY_ZOMBIE,
+                        typ_arr
+                    )
+                    act_arr = jnp.where(
+                        (jnp.arange(NUM_ENEMIES) == first_inactive_idx) & slot_available,
+                        1,
+                        act_arr
+                    )
+                    tim_arr = jnp.where(
+                        (jnp.arange(NUM_ENEMIES) == first_inactive_idx) & slot_available,
+                        new_timer,
+                        tim_arr
+                    )
+                    return (pos_arr, typ_arr, act_arr, tim_arr, key_loc), None
+                
+                (new_pos, new_typ, new_act, new_tim, rng_local), _ = jax.lax.scan(
+                    spawn_one_zombie,
+                    (positions_in, types_in, active_in, timers_in, subkey),
+                    jnp.arange(num_to_spawn)
+                )
+                return new_pos, new_typ, new_act, new_tim, rng_local
+            
+            # Apply enemy spawning only if going up to a new level
+            spawned_pos, spawned_typ, spawned_act, spawned_tim, rng = jax.lax.cond(
+                level_changed & going_up,
+                lambda _: spawn_level_enemies(rng, relocated_enemy_positions, enemy_types_after_spawner, enemy_active_after_spawner, wizard_timers_after_spawner),
+                lambda _: (relocated_enemy_positions, enemy_types_after_spawner, enemy_active_after_spawner, wizard_timers_after_spawner, rng),
+                operand=None
+            )
+            
+            final_enemy_positions_after_level = spawned_pos
+            final_enemy_types_after_level = spawned_typ
+            final_enemy_active_after_level = spawned_act
+            final_wizard_timers_after_level = spawned_tim
+            
+            # On level change, respawn spawners avoiding new level walls
+            def respawn_spawners_for_level(key):
+                # Use renderer-level walls structure with map index
+                WALLS_NEW = self.renderer.LEVEL_WALLS[new_map_index, new_level]
+            
+                def check_wall_overlap_sp(x, y):
+                    wx = WALLS_NEW[:, 0]
+                    wy = WALLS_NEW[:, 1]
+                    ww = WALLS_NEW[:, 2]
+                    wh = WALLS_NEW[:, 3]
+                    overlap_x = (x <= (wx + ww - 1)) & ((x + SPAWNER_WIDTH - 1) >= wx)
+                    overlap_y = (y <= (wy + wh - 1)) & ((y + SPAWNER_HEIGHT - 1) >= wy)
+                    return jnp.any(overlap_x & overlap_y)
+            
+                def spawn_one(carry, i):
+                    pos_arr, key_in = carry
+            
+                    def try_once(_, inner):
+                        pos, key_loc, found = inner
+                        key_loc, sk = jax.random.split(key_loc)
+                        x = jax.random.randint(sk, (), 50, self.consts.WORLD_WIDTH - 50, dtype=jnp.int32)
+                        key_loc, sk = jax.random.split(key_loc)
+                        y = jax.random.randint(sk, (), 50, self.consts.WORLD_HEIGHT - 50, dtype=jnp.int32)
+                        on_wall = check_wall_overlap_sp(x, y)
+                        new_pos = jnp.where((~on_wall) & (~found), jnp.array([x, y]), pos)
+                        new_found = found | (~on_wall)
+                        return (new_pos, key_loc, new_found)
+            
+                    init = (jnp.array([100, 100], dtype=jnp.int32), key_in, False)
+                    final_pos, key_out, _ = jax.lax.fori_loop(0, 20, try_once, init)
+                    pos_arr = pos_arr.at[i].set(final_pos)
+                    return (pos_arr, key_out), None
+            
+                key, sk = jax.random.split(rng)
+                init_pos = jnp.zeros((NUM_SPAWNERS, 2), dtype=jnp.int32)
+                (new_sp_positions, key), _ = jax.lax.scan(spawn_one, (init_pos, sk), jnp.arange(NUM_SPAWNERS))
+                new_sp_health = jnp.full(NUM_SPAWNERS, SPAWNER_HEALTH, dtype=jnp.int32)
+                new_sp_active = jnp.zeros(NUM_SPAWNERS, dtype=jnp.int32)  # Disabled - no spawners on any level
+                key, sk = jax.random.split(key)
+                new_sp_timers = jax.random.randint(sk, (NUM_SPAWNERS,), 0, SPAWNER_SPAWN_INTERVAL, dtype=jnp.int32)
+                return new_sp_positions, new_sp_health, new_sp_active, new_sp_timers, key
+            
+            (transition_sp_positions, transition_sp_health, transition_sp_active, transition_sp_timers, rng) = respawn_spawners_for_level(rng)
+            # When level changes, use freshly respawned spawners; otherwise use the updated values
+            use_sp_positions = jnp.where(level_changed[..., None], transition_sp_positions, state.spawner_positions)
+            use_sp_health = jnp.where(level_changed, transition_sp_health, new_spawner_health)
+            use_sp_active = jnp.where(level_changed, transition_sp_active, new_spawner_active)
+            use_sp_timers = jnp.where(level_changed, transition_sp_timers, final_spawner_timers)
+            
+            # Death handling: start freeze instead of instant respawn
+            player_died = final_health <= 0
+            new_lives = jnp.where(player_died, state.lives - 1, state.lives)
+            
+            # Keep position; set health to 0 if dead; score unchanged here
+            final_x = transition_x
+            final_y = transition_y
+            final_health_after = jnp.where(player_died, jnp.array(0, dtype=jnp.int32), final_health)
+            death_counter_after = jnp.where(player_died & (new_lives > 0), jnp.array(DEATH_FREEZE_TICKS, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32))
+            
+            new_state = DarkChambersState(
+                player_x=final_x,
+                player_y=final_y,
+                player_direction=new_direction,
+                enemy_positions=final_enemy_positions_after_level,
+                enemy_types=final_enemy_types_after_level,
+                enemy_active=final_enemy_active_after_level,
+                    wizard_shoot_timers=final_wizard_timers_after_level,
+                spawner_positions=use_sp_positions,
+                spawner_health=use_sp_health,
+                spawner_active=use_sp_active,
+                spawner_timers=use_sp_timers,
+                bullet_positions=final_bullet_positions,
+                bullet_active=final_bullet_active2,
+                enemy_bullet_positions=final_enemy_bullet_positions,
+                enemy_bullet_active=final_enemy_bullet_active3,
+                health=final_health_after,
+                damage_cooldown=cooldown2,
+                score=final_score,
+                item_positions=transition_item_positions,
+                item_types=transition_item_types,
+                item_active=transition_item_active,
+                has_key=jnp.where(level_changed, 0, new_has_key),
+                shield_active=new_shield_active,
+                gun_active=new_gun_active,
+                bomb_count=bomb_count_after_detonation,
+                last_fire_step=new_last_fire_step,
+                current_level=new_level,
+                map_index=new_map_index,
+                ladder_timer=new_ladder_timer,
+                lives=new_lives,
+                step_counter=state.step_counter + 1,
+                death_counter=death_counter_after,
+                key=rng,
+            )
+            
+            # During an active freeze (from previous step), override updates and freeze or respawn
+            def do_freeze(_: None):
+                def dec_only(_: None):
+                    return state._replace(
+                        death_counter=state.death_counter - 1,
+                        step_counter=state.step_counter + 1,
+                    )
+                def respawn_now(_: None):
+                    respawn_x2 = jnp.where(state.current_level == 0, jnp.array(50, dtype=jnp.int32), jnp.array(40, dtype=jnp.int32))
+                    respawn_y2 = jnp.where(state.current_level == 0, jnp.array(50, dtype=jnp.int32), jnp.array(70, dtype=jnp.int32))
+                    # KEEP EVERYTHING: score, items, level, powerups - just restore health and clear bullets
+                    return state._replace(
+                        player_x=respawn_x2,
+                        player_y=respawn_y2,
+                        health=jnp.array(self.consts.STARTING_HEALTH, dtype=jnp.int32),
+                        damage_cooldown=jnp.array(0, dtype=jnp.int32),
+                        bullet_positions=jnp.zeros((MAX_BULLETS, 4), dtype=jnp.int32),
+                        bullet_active=jnp.zeros((MAX_BULLETS,), dtype=jnp.int32),
+                        enemy_bullet_positions=jnp.zeros((ENEMY_MAX_BULLETS, 4), dtype=jnp.int32),
+                        enemy_bullet_active=jnp.zeros((ENEMY_MAX_BULLETS,), dtype=jnp.int32),
+                        death_counter=jnp.array(0, dtype=jnp.int32),
+                        step_counter=state.step_counter + 1,
+                    )
+                return jax.lax.cond(state.death_counter > 1, dec_only, respawn_now, operand=None)
+            
+            return_state = jax.lax.cond(state.death_counter > 0, do_freeze, lambda _: new_state, operand=None)
+            
+            obs = self._get_observation(return_state)
+            reward = self._get_reward(state, return_state)
+            done = self._get_done(return_state)
+            info = self._get_info(return_state)
+            
+            return obs, return_state, reward, done, info
+
+        # Top-level choose freeze vs normal
+        return jax.lax.cond(state.death_counter > 0, handle_freeze, handle_normal, operand=None)
+    
+    def render(self, state: DarkChambersState) -> jnp.ndarray:
+        return self.renderer.render(state)
+    
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(18)
+    
+    def observation_space(self) -> spaces.Dict:
+        return spaces.Dict({
+            "player": spaces.Dict({
+                "x": spaces.Box(low=0, high=self.consts.WORLD_WIDTH - 1, shape=(), dtype=jnp.float64),
+                "y": spaces.Box(low=0, high=self.consts.WORLD_HEIGHT - 1, shape=(), dtype=jnp.float64),
+                "width": spaces.Box(low=0, high=self.consts.WORLD_WIDTH, shape=(), dtype=jnp.float64),
+                "height": spaces.Box(low=0, high=self.consts.WORLD_HEIGHT, shape=(), dtype=jnp.float64),
+            }),
+            "enemies": spaces.Box(
+                low=0,
+                high=float(max(self.consts.WORLD_WIDTH, self.consts.WORLD_HEIGHT)),
+                shape=(NUM_ENEMIES, 5),
+                dtype=jnp.float64,
+            ),
+            "health": spaces.Box(low=0, high=float(self.consts.MAX_HEALTH), shape=(), dtype=jnp.float64),
+            "score": spaces.Box(low=0, high=1e9, shape=(), dtype=jnp.float64),
+            "step": spaces.Box(low=0, high=1e9, shape=(), dtype=jnp.float64),
+        })
+    
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0, 
+            high=255, 
+            shape=(GAME_H, GAME_W, 3), 
+            dtype=jnp.uint8
+        )
+    
+    def _get_observation(self, state: DarkChambersState) -> DarkChambersObservation:
+        player = EntityPosition(
+        x=jnp.asarray(state.player_x, dtype=jnp.float32),
+        y=jnp.asarray(state.player_y, dtype=jnp.float32),
+        width=jnp.asarray(self.consts.PLAYER_WIDTH, dtype=jnp.float32),
+        height=jnp.asarray(self.consts.PLAYER_HEIGHT, dtype=jnp.float32),
+    )
+
+        enemy_widths  = jnp.full(NUM_ENEMIES, self.consts.ENEMY_WIDTH,  dtype=jnp.float32)
+        enemy_heights = jnp.full(NUM_ENEMIES, self.consts.ENEMY_HEIGHT, dtype=jnp.float32)
+
+        enemies_array = jnp.stack([
+            state.enemy_positions[:, 0].astype(jnp.float32),
+            state.enemy_positions[:, 1].astype(jnp.float32),
+            enemy_widths,
+            enemy_heights,
+            state.enemy_active.astype(jnp.float32),
+        ], axis=1)
+
+        
+        return DarkChambersObservation(
+            player=player,
+            enemies=enemies_array,
+            health=state.health,
+            score=state.score,
+            step=state.step_counter
+        )
+    
+    def _get_info(self, state: DarkChambersState, all_rewards: jnp.array = None) -> DarkChambersInfo:
+        return DarkChambersInfo(time=state.step_counter)
+    
+    # TODO: introduce shaped rewards later if needed
+    def _get_reward(self, previous_state: DarkChambersState, state: DarkChambersState) -> float:
+        return 0.1
+    
+    # Episode ends when the player has no lives left and health reaches zero.
+    def _get_done(self, state: DarkChambersState) -> bool:
+        return (state.lives <= 0) & (state.health <= 0)
+    
+
+    def obs_to_flat_array(self, obs: DarkChambersObservation) -> jnp.ndarray:
+        player_data = jnp.array([obs.player.x, obs.player.y, obs.player.width, obs.player.height], dtype=jnp.float64)
+        enemies_flat = obs.enemies.flatten()
+        health_data = jnp.array([obs.health], dtype=jnp.float64)
+        score_data = jnp.array([obs.score], dtype=jnp.float64)
+        step_data = jnp.array([obs.step], dtype=jnp.float64)
+        
+        return jnp.concatenate([player_data, enemies_flat, health_data, score_data, step_data])
