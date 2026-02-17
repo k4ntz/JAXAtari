@@ -1,16 +1,29 @@
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.pong_mod_plugins import LazyEnemyMod, RandomEnemyMod, AlwaysZeroScoreMod
+from jaxatari.games.mods.defender_mod_plugins import (
+    InfiniteSmartBombsMod,
+    SlowerBulletsMod,
+    NoLanderPickupMod,
+    StaticInvadersMod,
+    FasterLevelClearMod,
+    HardcoreStartMod,
+    FasterInvadersMod,
+    NoBrakesMod,
+)
 
-class PongEnvMod(JaxAtariModController):    
+class DefenderEnvMod(JaxAtariModController):    
     """
-    Game-specific Mod Controller for Pong.
-    It simply inherits all logic from JaxAtariModController and defines the PONG_MOD_REGISTRY.
+    Game-specific Mod Controller for Defender.
     """
 
     REGISTRY = {
-        "lazy_enemy": LazyEnemyMod,
-        "random_enemy": RandomEnemyMod,
-        "zero_score": AlwaysZeroScoreMod,
+        "infinite_smart_bombs": InfiniteSmartBombsMod,
+        "slower_bullets": SlowerBulletsMod,
+        "no_lander_pickup": NoLanderPickupMod,
+        "static_invaders": StaticInvadersMod,
+        "faster_level_clear": FasterLevelClearMod,
+        "hardcore_start": HardcoreStartMod,
+        "faster_invaders": FasterInvadersMod,
+        "no_brakes": NoBrakesMod,
     }
 
 
@@ -24,5 +37,5 @@ class PongEnvMod(JaxAtariModController):
             env=env,
             mods_config=mods_config,
             allow_conflicts=allow_conflicts,
-            registry=self.REGISTRY  # for pong this is the only specific part, but other games might need to do execute some other logic in the constructor.
+            registry=self.REGISTRY
         )
