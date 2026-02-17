@@ -12,7 +12,7 @@ TODO
 
     Bugs:
     1)  [x] Fix type cast warning
-    2)  [ ] Fix frightened ghosts death loop (following repeating patterns)
+    2)  [x] Fix frightened ghosts death loop (following repeating patterns)
     3)  [X] Fix frightened ghosts being able to revert
     4)  [x] Fix entity alignment (pacman, ghosts, fruits and pellets one pixel up)
     5)  [x] Fix pellet in the upper left corner not being consumable
@@ -163,7 +163,6 @@ class GhostsState(NamedTuple):
     actions: chex.Array             # Enum - 0: NOOP, 1: FIRE, 2: UP, 3: RIGHT, 4: LEFT, 5: DOWN
     modes: chex.Array               # Enum - 0: RANDOM, 1: CHASE, 2: SCTATTER, 3: FRIGHTENED, 4: BLINKING, 5: RETURNING, 6: ENJAILED
     timers: chex.Array              # Int - Triggers mode change when reaching 0, decrements every step
-    keys: chex.Array                # chex.PRNGKey - Unique random key, saved in state to prevent repeated generation
 
 class PlayerState(NamedTuple):
     position: chex.Array            # Tuple - (x, y)
@@ -329,8 +328,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                         types=state.ghosts.types,
                         actions=ghost_actions,
                         modes=ghost_modes,
-                        timers=ghost_timers,
-                        keys=state.ghosts.keys
+                        timers=ghost_timers
                     ),
                     fruit=fruit_state,
                     lives=new_lives,
@@ -540,7 +538,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 new_mode,
                 new_action,
                 state.ghosts.positions[ghost_index],
-                state.ghosts.keys[ghost_index],
+                ghost_keys[ghost_index],
                 skip
             )
 
@@ -677,6 +675,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         actions     = jnp.zeros(ghost_count, dtype=jnp.uint8)
         positions   = jnp.zeros((ghost_count, 2), dtype=jnp.int32)
         timers      = jnp.zeros(ghost_count, dtype=jnp.uint16)
+        ghost_keys  = jax.random.split(common_key, 4)
 
         ( # Iterate over all ghosts and update their mode, action, position and timer
             new_modes,
@@ -1584,16 +1583,12 @@ def reset_player():
     )
 
 def reset_ghosts():
-    seed = int(time.time() * 1000) % (2**32 - 1)  # TODO: time.time() is called once on jit compilation which makes random numbers predictable between resets
-    base_key = jax.random.PRNGKey(seed)
-    unique_keys = jax.random.split(base_key, 4)
     return GhostsState (
         positions   = INITIAL_GHOSTS_POSITIONS,
         types       = jnp.array([GhostType.BLINKY, GhostType.PINKY, GhostType.INKY, GhostType.SUE], dtype=jnp.uint8),
         actions     = jnp.array([Action.NOOP, Action.NOOP, Action.NOOP, Action.NOOP], dtype=jnp.uint8),
         modes       = jnp.array([GhostMode.RANDOM, GhostMode.RANDOM, GhostMode.SCATTER, GhostMode.SCATTER], dtype=jnp.uint8),
         timers      = jnp.array([SCATTER_DURATION, SCATTER_DURATION, SCATTER_DURATION, SCATTER_DURATION], dtype=jnp.uint16),
-        keys        = unique_keys
     )
 
 def reset_fruit():
