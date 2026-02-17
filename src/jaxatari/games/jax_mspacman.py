@@ -415,14 +415,14 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         new_action = jax.lax.cond(
             (action != Action.NOOP) & (action != Action.FIRE) & available[act_to_dir(action)],
             lambda: action,
-            lambda: jax.lax.cond(
-                (state.player.action > 1) & stop_wall(state.player.position, state.level.dofmaze)[act_to_dir(state.player.action)],
-                lambda: Action.NOOP,
-                lambda: state.player.action
-            )
+            lambda: state.player.action
         )
         # 3) Compute the next position
-        new_pos = get_new_position(state.player.position, new_action)
+        new_pos = jax.lax.cond(
+            stop_wall(state.player.position, state.level.dofmaze)[act_to_dir(state.player.action)],
+            lambda: state.player.position,
+            lambda: get_new_position(state.player.position, new_action)
+        ) 
         # 4) Update pellets based on the new player position
         (
             pellets,
