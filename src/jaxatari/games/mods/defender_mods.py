@@ -1,15 +1,14 @@
 from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.defender_mod_plugins import (
-    InfiniteSmartBombsMod,
-    SlowerBulletsMod,
-    HumanHaveParachutes,
-    StaticInvadersMod,
-    FasterLevelClearMod,
-    HardcoreStartMod,
-    FasterInvadersMod,
+    SmartBombsUnlimitedMod,
+    BulletTimewarpMod,
+    ParachutesEquippedMod,
+    EnemyEmpMod,
+    NoBackupMod,
+    MissingFundingMod,
+    EnemiesOnSpeedMod,
     NoBreaksInSpaceMod,
-    
-    )
+)
 
 
 class DefenderEnvMod(JaxAtariModController):
@@ -18,13 +17,13 @@ class DefenderEnvMod(JaxAtariModController):
     """
 
     REGISTRY = {
-        "infinite_smart_bombs": InfiniteSmartBombsMod,
-        "slower_bullets": SlowerBulletsMod,
-        "human_have_parachutes": HumanHaveParachutes,
-        "static_invaders": StaticInvadersMod,
-        "faster_level_clear": FasterLevelClearMod,
-        "hardcore_start": HardcoreStartMod,
-        "faster_invaders": FasterInvadersMod,
+        "smart_bombs_unlimited": SmartBombsUnlimitedMod,
+        "bullet_timewarp": BulletTimewarpMod,
+        "parachutes_equipped": ParachutesEquippedMod,
+        "enemy_emp": EnemyEmpMod,
+        "no_backup": NoBackupMod,
+        "missing_funding": MissingFundingMod,
+        "enemies_on_speed": EnemiesOnSpeedMod,
         "no_brakes_in_space": NoBreaksInSpaceMod,
     }
 

@@ -9,7 +9,7 @@ from jaxatari.environment import JAXAtariAction as Action
 # --- Simple Mods ---
 
 
-class InfiniteSmartBombsMod(JaxAtariPostStepModPlugin):
+class SmartBombsUnlimitedMod(JaxAtariPostStepModPlugin):
     """
     Prevents Smart Bomb count from decreasing, effectively giving infinite smart bombs.
     """
@@ -19,7 +19,7 @@ class InfiniteSmartBombsMod(JaxAtariPostStepModPlugin):
     }
 
 
-class SlowerBulletsMod(JaxAtariInternalModPlugin):
+class BulletTimewarpMod(JaxAtariInternalModPlugin):
     """
     Reduces the speed of enemy bullets.
     """
@@ -29,7 +29,7 @@ class SlowerBulletsMod(JaxAtariInternalModPlugin):
     }
 
 
-class HumanHaveParachutes(JaxAtariInternalModPlugin):
+class ParachutesEquippedMod(JaxAtariInternalModPlugin):
     """
     Humans can survive falling even from big heights by parachuting down instead of dying immediately.
     """
@@ -40,7 +40,7 @@ class HumanHaveParachutes(JaxAtariInternalModPlugin):
     }
 
 
-class StaticInvadersMod(JaxAtariInternalModPlugin):
+class EnemyEmpMod(JaxAtariInternalModPlugin):
     """
     Enemies do not move.
     """
@@ -80,7 +80,7 @@ class StaticInvadersMod(JaxAtariInternalModPlugin):
         return state
 
 
-class FasterLevelClearMod(JaxAtariInternalModPlugin):
+class NoBackupMod(JaxAtariInternalModPlugin):
     """
     Reduces the number of enemies required to clear a level.
     """
@@ -109,7 +109,7 @@ class FasterLevelClearMod(JaxAtariInternalModPlugin):
 
 # --- Difficult Mods ---
 
-class HardcoreStartMod(JaxAtariInternalModPlugin):
+class MissingFundingMod(JaxAtariInternalModPlugin):
     """
     Start with only 1 life and 1 bomb.
     """
@@ -120,7 +120,7 @@ class HardcoreStartMod(JaxAtariInternalModPlugin):
     }
 
 
-class FasterInvadersMod(JaxAtariInternalModPlugin):
+class EnemiesOnSpeedMod(JaxAtariInternalModPlugin):
     """
     Increases enemy and bullet speeds.
     """
