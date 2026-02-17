@@ -38,7 +38,7 @@ def _get_default_asset_config() -> tuple:
         {'name': 'spawn', 'type': 'single', 'file': 'spawn.npy'},
         {'name': 'lava_rock', 'type': 'single', 'file': 'lava_rock.npy'},
         {'name': 'falling_rock', 'type': 'single', 'file': 'falling_rock.npy'},
-        {'name': 'resting_rock', 'type': 'single', 'file': 'spawn.npy'},
+        {'name': 'resting_rock', 'type': 'single', 'file': 'falling_rock.npy'},  # Use falling rock as the bridge,
         {'name': 'monkey', 'type': 'single', 'file': 'monkey.npy'},
         {'name': 'coconut', 'type': 'single', 'file': 'coconut.npy'},
         {'name': 'voracious_plant', 'type': 'single', 'file': 'voracious_plant.npy'},
@@ -745,7 +745,6 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         final_x = jnp.where(should_spawn_final, spawn_x_final, new_x)
         final_y = jnp.where(should_spawn_final, spawn_y_final, new_y)
 
-
         new_age = jnp.where(should_spawn_final, 0, state.enemies_age + 1)
 
         SNAKE_LIFESPAN = 150
@@ -950,201 +949,360 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
 
     def _volcano_map_logic(self, state: CrossbowState) -> Tuple[CrossbowState, bool]:
-        rng, spawn_key, physics_key, scatter_key, floor_key, eye_key = jax.random.split(state.key, 6)
-        MAX_CONCURRENT_ENEMIES: int = 1
 
-        # --- Hit Detection ---
-        HIT_TOLERANCE = 8
-        cx, cy = state.cursor_x, state.cursor_y
-        ex, ey = state.enemies_x, state.enemies_y
-        hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE,
-                                cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
-        hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE,
-                                cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)
-        is_hit = jnp.logical_and(hit_x, hit_y)
-        valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
-        surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
-
-        point_values = jnp.array([0, 0, 0, 0, 0, 50, 100, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1000])
-        reward = jnp.sum(jnp.where(valid_kill, point_values[state.enemies_type], 0))
-
-        # --- Movement ---
-        new_dx = state.enemies_dx
-        new_dy = state.enemies_dy
-
-        # Falling rocks
-        gravity = 0.15
-        is_falling_rock = state.enemies_type == EnemyType.FALLING_ROCK
-        new_dy = jnp.where(is_falling_rock, state.enemies_dy + gravity, state.enemies_dy)
-        new_y = state.enemies_y + new_dy
-
-
-        # Lava moves horizontally
-        is_lava = state.enemies_type == EnemyType.BURNING_LAVA
-        lava_dx = jnp.where(state.enemies_x < 20, 0.5, jnp.where(state.enemies_x > self.consts.WIDTH-20, -0.5, state.enemies_dx))
-        new_x = state.enemies_x + jnp.where(is_lava, lava_dx, state.enemies_dx)
-
-        # Resting rocks & Eye stay static
-        is_static = jnp.logical_or(state.enemies_type == EnemyType.RESTING_ROCK, state.enemies_type == EnemyType.EYE)
-        new_x = jnp.where(is_static, state.enemies_x, new_x)
-        new_y = jnp.where(is_static, state.enemies_y, new_y)
-
-        # --- REFACTORED EYE SPAWN ---
-        available_slots = jnp.logical_not(surviving_enemies)
-        should_spawn_eye, eye_x, eye_y = self._compute_eye_spawn(state, eye_key, (20.0, 140.0), (20.0, 60.0))
-        eye_spawn_mask = self._get_eye_spawn_mask(available_slots, should_spawn_eye)
-        has_eye_spawn = jnp.any(eye_spawn_mask)
-
-        # Generic Spawn logic
-        current_enemy_count = jnp.sum(surviving_enemies)
-        spawn_chance = jax.random.uniform(spawn_key, (self.consts.MAX_ENEMIES,)) < 0.02
-
-        spawn_count = jnp.cumsum(spawn_chance & available_slots)
-        allowed_spawns = spawn_count <= (MAX_CONCURRENT_ENEMIES - current_enemy_count)
-        should_spawn_generic = jnp.logical_and(available_slots, jnp.logical_and(spawn_chance, allowed_spawns))
-
-        # Avoid Eye Slot
-        should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(eye_spawn_mask))
-
-        # Combine
-        should_spawn_final = jnp.logical_or(should_spawn_generic, eye_spawn_mask)
-
-        spawn_type_generic = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 5, 8)  # Lava/Rock types
-
-        spawn_x_generic = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH-20).astype(jnp.float32)
-        is_ground_enemy = jnp.logical_or(spawn_type_generic == EnemyType.BURNING_LAVA, spawn_type_generic == EnemyType.RESTING_ROCK)
-        spawn_y_generic = jnp.where(is_ground_enemy, float(self.consts.GROUND_Y_MIN), 0.0)
-
-        spawn_x = jnp.select([eye_spawn_mask, should_spawn_generic], [eye_x, spawn_x_generic], default=0.0)
-        spawn_y = jnp.select([eye_spawn_mask, should_spawn_generic], [eye_y, spawn_y_generic], default=0.0)
-
-        final_x = jnp.where(should_spawn_final, spawn_x, new_x)
-        final_y = jnp.where(should_spawn_final, spawn_y, new_y)
-        final_active = jnp.logical_or(surviving_enemies, should_spawn_final)
-        final_type = jnp.where(eye_spawn_mask, EnemyType.EYE,
-                               jnp.where(should_spawn_generic, spawn_type_generic, state.enemies_type))
-
-        # Age logic for Eye expiration
-        new_age = jnp.where(should_spawn_final, 0, state.enemies_age + 1)
-        final_active = self._cull_expired_eyes(final_type, new_age, final_active)
-
-        # --- Collision with friend ---
-        fx, fy = state.friend_x, state.friend_y
-        danger_x = jnp.logical_and(final_x < fx + self.consts.FRIEND_SIZE[0],
-                                   final_x + self.consts.ENEMY_SIZE[0] > fx)
-        danger_y = jnp.logical_and(final_y < fy + self.consts.FRIEND_SIZE[1],
-                                   final_y + self.consts.ENEMY_SIZE[1] > fy)
-        any_friend_hit = jnp.any(jnp.logical_and(danger_x, danger_y))
-
-        intermediate_state = state._replace(
-            score=(state.score + reward).astype(jnp.int32),enemies_active=final_active,enemies_x=final_x,enemies_y=final_y,enemies_dx=new_dx,enemies_dy=new_dy,enemies_type=final_type,enemies_age=new_age.astype(jnp.int32),key=rng,
-            eye_appeared=jnp.logical_or(state.eye_appeared, has_eye_spawn)
-        )
-
-        return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
-
-
-    def _jungle_map_logic(self, state: CrossbowState) -> Tuple[CrossbowState, bool]:
         rng, spawn_key, physics_key, scatter_key, eye_key = jax.random.split(state.key, 5)
-        HIT_TOLERANCE = 8
-        MAX_CONCURRENT_ENEMIES = 5
+
+        MAX_CONCURRENT_ENEMIES: int = 2
+
+        # === BRIDGE MECHANIC ===
+        GAP_START_X = 70
+        GAP_END_X = 90
+        BRIDGE_Y = float(self.consts.GROUND_Y_MIN)
+
         cx, cy = state.cursor_x, state.cursor_y
         ex, ey = state.enemies_x, state.enemies_y
-        hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE,
-                                cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
 
-        hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE,
-                                cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)
+        # Check if resting rock currently exists
+        is_resting = state.enemies_type == EnemyType.RESTING_ROCK
+        has_resting_rock = jnp.any(jnp.logical_and(state.enemies_active, is_resting))
 
+        # === STEP 1: Generous hit detection for resting rock FIRST ===
+        resting_mask = state.enemies_type == EnemyType.RESTING_ROCK
+        resting_hit_x = jnp.logical_and(cx < ex + 12, cx + self.consts.CURSOR_SIZE[0] > ex - 12)
+        resting_hit_y = jnp.logical_and(cy < ey + 12, cy + self.consts.CURSOR_SIZE[1] > ey - 12)
+
+        rock_just_shot = jnp.any(jnp.logical_and(state.is_firing,jnp.logical_and(state.enemies_active, jnp.logical_and(resting_mask, jnp.logical_and(resting_hit_x, resting_hit_y)))))
+
+        # Update persistent bridge flag
+        new_rope_1_broken = jnp.logical_or(state.rope_1_broken, rock_just_shot)
+        bridge_is_open = new_rope_1_broken
+
+        # === STEP 2: Generic hit detection for everything else (excluding resting rock) ===
+        HIT_TOLERANCE = 6
+        hit_x = jnp.logical_and( cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE, cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
+        hit_y = jnp.logical_and( cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE,cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE )
         is_hit = jnp.logical_and(hit_x, hit_y)
-        valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
+
+        # Exclude resting rock from generic kills
+        valid_kill = jnp.logical_and( state.is_firing, jnp.logical_and(state.enemies_active,  jnp.logical_and(is_hit, jnp.logical_not(resting_mask))) )
+        # Add resting rock kill via generous detection
+        resting_idx = jnp.argmax(resting_mask)
+        valid_kill = jnp.where( resting_mask, jnp.logical_and(rock_just_shot, state.enemies_active),   valid_kill)
+
         surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
 
-        # Reward
-        point_values = jnp.array([0, 0, 0, 0, 0, 0, 0, 0, 100, 50, 200, 0, 0, 0, 0, 0, 0, 0, 0, 1000])
+        # === SCORING ===
+        point_values = jnp.array([0, 0, 0, 0, 0, 100, 50, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1000])
         reward = jnp.sum(jnp.where(valid_kill, point_values[state.enemies_type], 0))
 
-        # --- Movement ---
-        new_dx = state.enemies_dx
-        new_dy = state.enemies_dy
+        # === FRIEND CONSTRAINT ===
+        friend_x_constrained = jnp.where( jnp.logical_and(jnp.logical_not(bridge_is_open), state.friend_x >= GAP_START_X - 10),  jnp.minimum(state.friend_x, GAP_START_X - 10),state.friend_x )
 
-        # Coconuts fall
-        is_coconut = state.enemies_type == EnemyType.COCONUT
-        gravity = 0.15
-        new_dy = jnp.where(is_coconut, state.enemies_dy + gravity, state.enemies_dy)
-        new_y = state.enemies_y + new_dy
+        # === BONUS LIFE ON FIRST COMPLETION ===
+        friend_completed = jnp.logical_and(bridge_is_open, friend_x_constrained >= self.consts.WIDTH - 10 )
+        is_first_completion = jnp.logical_and(friend_completed, jnp.logical_not(state.rope_2_broken))
+        bonus_life = jnp.where(is_first_completion, 1, 0)
+        new_lives = jnp.minimum(state.lives + bonus_life, 4)
+        new_rope_2_broken = jnp.logical_or(state.rope_2_broken, friend_completed)
 
-        # Monkeys move horizontally
-        is_monkey = state.enemies_type == EnemyType.MONKEY
-        monkey_dx = jnp.where(state.enemies_x < 20, 0.5, jnp.where(state.enemies_x > self.consts.WIDTH-20, -0.5, state.enemies_dx))
-        new_x = state.enemies_x + jnp.where(is_monkey, monkey_dx, state.enemies_dx)
+        # === MOVEMENT ===
+        GRAVITY = 0.12
+        is_falling_rock = state.enemies_type == EnemyType.FALLING_ROCK
+        is_lava = state.enemies_type == EnemyType.BURNING_LAVA
+        is_static = jnp.logical_or(is_resting, state.enemies_type == EnemyType.EYE)
 
-        # Plants/Eyes static
-        is_static = jnp.logical_or(state.enemies_type == EnemyType.VORACIOUS_PLANT, state.enemies_type == EnemyType.EYE)
-        new_x = jnp.where(is_static, state.enemies_x, new_x)
-        new_y = jnp.where(is_static, state.enemies_y, new_y)
+        new_dy = jnp.where(is_falling_rock, state.enemies_dy + GRAVITY,   jnp.where(is_lava, state.enemies_dy + GRAVITY,  state.enemies_dy))
 
-        # --- REFACTORED EYE SPAWN ---
+        new_x = jnp.where(is_static, state.enemies_x, state.enemies_x + state.enemies_dx)
+        new_y = jnp.where(is_static, state.enemies_y, state.enemies_y + new_dy)
+
+        # === SPAWNING ===
         available_slots = jnp.logical_not(surviving_enemies)
-        should_spawn_eye, eye_x, eye_y = self._compute_eye_spawn(state, eye_key, (20.0, 140.0), (20.0, 80.0))
+
+        # Eye spawn
+        should_spawn_eye, eye_x, eye_y = self._compute_eye_spawn( state, eye_key, (20.0, 140.0), (30.0, 70.0) )
         eye_spawn_mask = self._get_eye_spawn_mask(available_slots, should_spawn_eye)
         has_eye_spawn = jnp.any(eye_spawn_mask)
 
-        # Generic Spawn
+        # Bridge/resting rock spawn - always present until shot
+        should_spawn_bridge = jnp.logical_and(  jnp.logical_not(new_rope_1_broken),   jnp.logical_not(has_resting_rock))
+        bridge_slot_idx = jnp.argmax(available_slots)
+        bridge_spawn_mask = jnp.where( should_spawn_bridge, jax.nn.one_hot(bridge_slot_idx, self.consts.MAX_ENEMIES, dtype=bool), jnp.zeros(self.consts.MAX_ENEMIES, dtype=bool)  )
+
+        # Generic enemy spawning
         current_enemy_count = jnp.sum(surviving_enemies)
-        spawn_chance = jax.random.uniform(spawn_key, (self.consts.MAX_ENEMIES,)) < 0.03
+        spawn_chance = jax.random.uniform(spawn_key, (self.consts.MAX_ENEMIES,)) < 0.008
         spawn_count = jnp.cumsum(spawn_chance & available_slots)
         allowed_spawns = spawn_count <= (MAX_CONCURRENT_ENEMIES - current_enemy_count)
         should_spawn_generic = jnp.logical_and(available_slots, jnp.logical_and(spawn_chance, allowed_spawns))
-
-        # Avoid Eye Slot
         should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(eye_spawn_mask))
+        should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(bridge_spawn_mask))
 
-        # Combine
-        should_spawn_final = jnp.logical_or(should_spawn_generic, eye_spawn_mask)
+        # Type selection
+        type_roll = jax.random.uniform(physics_key, (self.consts.MAX_ENEMIES,))
+        spawn_type_generic = jnp.where(type_roll < 0.7, EnemyType.FALLING_ROCK, EnemyType.BURNING_LAVA)
 
-        spawn_type_generic = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 8, 11)  # Monkey/Coconut/Plant
+        # === POSITIONS ===
+        VOLCANO_VENT_X = jnp.array([35.0, 75.0, 115.0])
+        vent_choice = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 0, 3)
+        spawn_x_lava_base = VOLCANO_VENT_X[vent_choice]
+        spawn_x_lava_offset = jax.random.uniform( physics_key, (self.consts.MAX_ENEMIES,), minval=-5.0, maxval=5.0)
+        spawn_x_lava = spawn_x_lava_base + spawn_x_lava_offset
 
-        spawn_x_generic = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH-20).astype(jnp.float32)
-        spawn_y_generic = jnp.select(
-            [spawn_type_generic == EnemyType.MONKEY, spawn_type_generic == EnemyType.VORACIOUS_PLANT],
-            [50.0, float(self.consts.GROUND_Y_MIN)],
-            default=0.0
-        )
+        spawn_x_falling = jax.random.randint( physics_key, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH - 20  ).astype(jnp.float32)
 
-        spawn_x = jnp.select([eye_spawn_mask, should_spawn_generic], [eye_x, spawn_x_generic], default=0.0)
-        spawn_y = jnp.select([eye_spawn_mask, should_spawn_generic], [eye_y, spawn_y_generic], default=0.0)
+        SAFE_DISTANCE = 30
+        too_close = jnp.abs(spawn_x_falling - friend_x_constrained) < SAFE_DISTANCE
+        spawn_x_falling = jnp.where( too_close, jnp.where(spawn_x_falling < friend_x_constrained,spawn_x_falling - SAFE_DISTANCE, spawn_x_falling + SAFE_DISTANCE),spawn_x_falling  )
+        spawn_x_falling = jnp.clip(spawn_x_falling, 20, self.consts.WIDTH - 20)
+
+        spawn_x_generic = jnp.where( spawn_type_generic == EnemyType.BURNING_LAVA, spawn_x_lava, spawn_x_falling)
+
+        spawn_y_falling = jax.random.randint( physics_key, (self.consts.MAX_ENEMIES,), 18, 35 ).astype(jnp.float32)
+        spawn_y_lava = float(self.consts.GROUND_Y_MIN)
+        spawn_y_generic = jnp.where(spawn_type_generic == EnemyType.FALLING_ROCK, spawn_y_falling, spawn_y_lava  )
+
+        spawn_dy_lava = jax.random.uniform( physics_key, (self.consts.MAX_ENEMIES,), minval=-3.5, maxval=-2.0  )
+        spawn_dx_lava = jax.random.uniform( physics_key, (self.consts.MAX_ENEMIES,), minval=-0.8, maxval=0.8)
+
+        bridge_x = float(GAP_START_X + (GAP_END_X - GAP_START_X) // 2)
+        bridge_y = BRIDGE_Y
+
+        # === COMBINE SPAWNS ===
+        should_spawn_final = jnp.logical_or( should_spawn_generic,  jnp.logical_or(eye_spawn_mask, bridge_spawn_mask) )
+
+        spawn_x = jnp.select( [bridge_spawn_mask, eye_spawn_mask, should_spawn_generic],[bridge_x, eye_x, spawn_x_generic],  default=0.0   )
+        spawn_y = jnp.select( [bridge_spawn_mask, eye_spawn_mask, should_spawn_generic], [bridge_y, eye_y, spawn_y_generic],  default=0.0  )
+        final_type = jnp.select( [bridge_spawn_mask, eye_spawn_mask, should_spawn_generic],  [EnemyType.RESTING_ROCK, EnemyType.EYE, spawn_type_generic], default=state.enemies_type  )
+
+        # Velocities - lava gets arc physics, everything else starts at 0
+        final_dx = jnp.where(  jnp.logical_and(should_spawn_generic, spawn_type_generic == EnemyType.BURNING_LAVA),  spawn_dx_lava, jnp.where(should_spawn_final, 0.0, state.enemies_dx))
+        final_dy = jnp.where( jnp.logical_and(should_spawn_generic, spawn_type_generic == EnemyType.BURNING_LAVA),  spawn_dy_lava,  jnp.where(should_spawn_final, 0.0, new_dy) )
 
         final_x = jnp.where(should_spawn_final, spawn_x, new_x)
         final_y = jnp.where(should_spawn_final, spawn_y, new_y)
-        final_type = jnp.where(eye_spawn_mask, EnemyType.EYE,
-                               jnp.where(should_spawn_generic, spawn_type_generic, state.enemies_type))
-        final_active = jnp.logical_or(surviving_enemies, should_spawn_final)
 
-        # Eye Age
+        # === CULLING ===
+        is_on_screen = jnp.logical_and(jnp.logical_and(final_x > -10, final_x < self.consts.WIDTH + 10), jnp.logical_and(final_y > -10, final_y < self.consts.PLAY_AREA_HEIGHT - 20) )
+        # Resting rock is never culled by screen bounds (it sits at ground level)
+        is_resting_final = final_type == EnemyType.RESTING_ROCK
+        is_on_screen = jnp.logical_or(is_on_screen, is_resting_final)
+
+        final_active = jnp.logical_and( jnp.logical_or(surviving_enemies, should_spawn_final), is_on_screen )
+
+        # Age and eye expiration
         new_age = jnp.where(should_spawn_final, 0, state.enemies_age + 1)
         final_active = self._cull_expired_eyes(final_type, new_age, final_active)
 
-        # --- Collision with friend ---
-        fx, fy = state.friend_x, state.friend_y
-        danger_x = jnp.logical_and(final_x < fx + self.consts.FRIEND_SIZE[0],
-                                   final_x + self.consts.ENEMY_SIZE[0] > fx)
+        # === FRIEND COLLISION ===
+        fx, fy = friend_x_constrained, state.friend_y
+        danger_x = jnp.logical_and( final_x < fx + self.consts.FRIEND_SIZE[0],final_x + self.consts.ENEMY_SIZE[0] > fx )
+        danger_y = jnp.logical_and(  final_y < fy + self.consts.FRIEND_SIZE[1],  final_y + self.consts.ENEMY_SIZE[1] > fy  )
+        # Resting rock should not kill the friend (it's a bridge, not an enemy)
+        is_not_resting = jnp.logical_not(final_type == EnemyType.RESTING_ROCK)
+        friend_hit = jnp.any(jnp.logical_and( jnp.logical_and(danger_x, danger_y),  jnp.logical_and(final_active, is_not_resting)))
+        any_friend_hit = jnp.logical_and(friend_hit, state.dying_timer == 0)
 
-        danger_y = jnp.logical_and(final_y < fy + self.consts.FRIEND_SIZE[1],
-                                   final_y + self.consts.ENEMY_SIZE[1] > fy)
-
-        any_friend_hit = jnp.any(jnp.logical_and(danger_x, danger_y))
-
-        intermediate_state = state._replace(
-            score=(state.score + reward).astype(jnp.int32), enemies_active=final_active, enemies_x=final_x,
-            enemies_y=final_y,  enemies_dx=new_dx, enemies_dy=new_dy,  enemies_type=final_type, enemies_age=new_age.astype(jnp.int32), key=rng,
-            eye_appeared=jnp.logical_or(state.eye_appeared, has_eye_spawn)
-        )
+        intermediate_state = state._replace(score=(state.score + reward).astype(jnp.int32),  enemies_active=final_active, enemies_x=final_x.astype(jnp.float32),   enemies_y=final_y.astype(jnp.float32), enemies_dx=final_dx.astype(jnp.float32),  enemies_dy=final_dy.astype(jnp.float32),  enemies_type=final_type.astype(jnp.int32),  enemies_age=new_age.astype(jnp.int32),  key=rng,friend_x=friend_x_constrained.astype(jnp.int32),  lives=new_lives, rope_1_broken=new_rope_1_broken, rope_2_broken=new_rope_2_broken, eye_appeared=jnp.logical_or(state.eye_appeared, has_eye_spawn) )
 
         return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
 
+def _jungle_map_logic(self, state: CrossbowState) -> Tuple[CrossbowState, bool]:
+    rng, spawn_key, scatter_key, eye_key, coconut_key, k_type, k_x, k_coconut_dx = jax.random.split(state.key, 8)
+    HIT_TOLERANCE = 8
+    MAX_CONCURRENT_ENEMIES = 3
+    COCONUT_THROW_PROB = 0.008
 
+    cx, cy = state.cursor_x, state.cursor_y
+    ex, ey = state.enemies_x, state.enemies_y
 
+    hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE,
+                            cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
+    hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE,
+                            cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)
+    is_hit = jnp.logical_and(hit_x, hit_y)
+    valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
+    surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
+
+    point_values = jnp.array([0, 0, 0, 0, 0, 0, 0, 0, 100, 50, 200, 0, 0, 0, 0, 0, 0, 0, 0, 1000])
+    reward = jnp.sum(jnp.where(valid_kill, point_values[state.enemies_type], 0))
+
+    # --- Movement ---
+    is_coconut = state.enemies_type == EnemyType.COCONUT
+    is_monkey = state.enemies_type == EnemyType.MONKEY
+    is_static = jnp.logical_or(
+        state.enemies_type == EnemyType.VORACIOUS_PLANT,
+        state.enemies_type == EnemyType.EYE
+    )
+
+    # Coconuts fall with gravity
+    gravity = 0.10
+    new_dy = jnp.where(is_coconut, state.enemies_dy + gravity, state.enemies_dy)
+
+    # Monkeys bounce horizontally
+    monkey_dx = jnp.where(
+        state.enemies_x < 20, jnp.abs(state.enemies_dx),
+        jnp.where(state.enemies_x > self.consts.WIDTH - 20, -jnp.abs(state.enemies_dx),
+        state.enemies_dx)
+    )
+    new_dx = jnp.where(is_monkey, monkey_dx, state.enemies_dx)
+
+    new_x = jnp.where(is_static, state.enemies_x, state.enemies_x + new_dx)
+    new_y = jnp.where(is_static, state.enemies_y,
+             jnp.where(is_monkey, state.enemies_y, state.enemies_y + new_dy))
+
+    # --- Monkey throws coconut ---
+    throw_rolls = jax.random.uniform(coconut_key, (self.consts.MAX_ENEMIES,))
+    monkey_throws = jnp.logical_and(
+        jnp.logical_and(surviving_enemies, is_monkey),
+        throw_rolls < COCONUT_THROW_PROB
+    )
+    throwing_monkey_idx = jnp.argmax(monkey_throws)
+    any_monkey_throws = jnp.any(monkey_throws)
+
+    coconut_spawn_x = state.enemies_x[throwing_monkey_idx]
+    coconut_spawn_y = state.enemies_y[throwing_monkey_idx] + self.consts.ENEMY_SIZE[1]
+
+    # --- Eye spawn ---
+    available_slots = jnp.logical_not(surviving_enemies)
+    should_spawn_eye, eye_x, eye_y = self._compute_eye_spawn(
+        state, eye_key, (20.0, 140.0), (20.0, 80.0)
+    )
+    eye_spawn_mask = self._get_eye_spawn_mask(available_slots, should_spawn_eye)
+    has_eye_spawn = jnp.any(eye_spawn_mask)
+
+    # Coconut slot
+    available_for_coconut = jnp.logical_and(available_slots, jnp.logical_not(eye_spawn_mask))
+    coconut_slot_idx = jnp.argmax(available_for_coconut)
+    can_spawn_coconut = jnp.logical_and(any_monkey_throws, jnp.any(available_for_coconut))
+    coconut_spawn_mask = jnp.where(
+        can_spawn_coconut,
+        jax.nn.one_hot(coconut_slot_idx, self.consts.MAX_ENEMIES, dtype=bool),
+        jnp.zeros(self.consts.MAX_ENEMIES, dtype=bool)
+    )
+
+    # Generic spawn (monkeys and plants only)
+    current_enemy_count = jnp.sum(surviving_enemies)
+    spawn_chance = jax.random.uniform(spawn_key, (self.consts.MAX_ENEMIES,)) < 0.012
+    spawn_count = jnp.cumsum(spawn_chance & available_slots)
+    allowed_spawns = spawn_count <= (MAX_CONCURRENT_ENEMIES - current_enemy_count)
+    should_spawn_generic = jnp.logical_and(available_slots,
+                           jnp.logical_and(spawn_chance, allowed_spawns))
+    should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(eye_spawn_mask))
+    should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(coconut_spawn_mask))
+
+    # Use separate keys for type and position
+    type_roll = jax.random.uniform(k_type, (self.consts.MAX_ENEMIES,))
+    spawn_type_generic = jnp.where(type_roll < 0.5, EnemyType.MONKEY, EnemyType.VORACIOUS_PLANT)
+
+    spawn_x_generic = jax.random.randint(
+        k_x, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH - 20
+    ).astype(jnp.float32)
+    spawn_y_generic = jnp.where(
+        spawn_type_generic == EnemyType.MONKEY,
+        40.0,
+        float(self.consts.GROUND_Y_MIN)
+    )
+
+    # Monkeys start with horizontal velocity, plants stay static
+    spawn_dx_generic = jnp.where(
+        spawn_type_generic == EnemyType.MONKEY,
+        jnp.where(spawn_x_generic < self.consts.WIDTH / 2, 0.4, -0.4),
+        0.0
+    )
+
+    # Small horizontal arc for coconuts
+    coconut_dx = jax.random.uniform(
+        k_coconut_dx, (self.consts.MAX_ENEMIES,), minval=-0.5, maxval=0.5
+    )
+
+    # --- Combine all spawns ---
+    should_spawn_final = jnp.logical_or(
+        should_spawn_generic,
+        jnp.logical_or(eye_spawn_mask, coconut_spawn_mask)
+    )
+
+    spawn_x = jnp.select(
+        [eye_spawn_mask, coconut_spawn_mask, should_spawn_generic],
+        [eye_x, coconut_spawn_x, spawn_x_generic],
+        default=0.0
+    )
+    spawn_y = jnp.select(
+        [eye_spawn_mask, coconut_spawn_mask, should_spawn_generic],
+        [eye_y, coconut_spawn_y, spawn_y_generic],
+        default=0.0
+    )
+    final_type = jnp.select(
+        [eye_spawn_mask, coconut_spawn_mask, should_spawn_generic],
+        [EnemyType.EYE, EnemyType.COCONUT, spawn_type_generic],
+        default=state.enemies_type
+    )
+
+    # dx: coconuts get arc, monkeys get directional, others keep existing
+    final_dx = jnp.where(
+        coconut_spawn_mask, coconut_dx,
+        jnp.where(should_spawn_generic, spawn_dx_generic,
+        jnp.where(should_spawn_final, 0.0, new_dx))
+    )
+
+    # dy: reset to 0 for all new spawns to avoid inheriting stale velocity
+    final_dy = jnp.where(should_spawn_final, 0.0, new_dy)
+
+    final_x = jnp.where(should_spawn_final, spawn_x, new_x)
+    final_y = jnp.where(should_spawn_final, spawn_y, new_y)
+
+    # Cull coconuts that fall off screen
+    coconut_exited = jnp.logical_and(
+        final_type == EnemyType.COCONUT,
+        final_y > self.consts.PLAY_AREA_HEIGHT
+    )
+    final_active = jnp.logical_and(
+        jnp.logical_or(surviving_enemies, should_spawn_final),
+        jnp.logical_not(coconut_exited)
+    )
+
+    new_age = jnp.where(should_spawn_final, 0, state.enemies_age + 1)
+    final_active = self._cull_expired_eyes(final_type, new_age, final_active)
+
+    # --- Collision with friend ---
+    fx, fy = state.friend_x, state.friend_y
+    danger_x = jnp.logical_and(
+        final_x < fx + self.consts.FRIEND_SIZE[0],
+        final_x + self.consts.ENEMY_SIZE[0] > fx
+    )
+    danger_y = jnp.logical_and(
+        final_y < fy + self.consts.FRIEND_SIZE[1],
+        final_y + self.consts.ENEMY_SIZE[1] > fy
+    )
+    # Plants don't harm friend, only active enemies count
+    is_not_plant = jnp.logical_not(final_type == EnemyType.VORACIOUS_PLANT)
+    any_friend_hit = jnp.any(jnp.logical_and(
+        jnp.logical_and(danger_x, danger_y),
+        jnp.logical_and(final_active, is_not_plant)
+    ))
+
+    # Bonus life on first jungle completion
+    friend_completed = state.friend_x >= self.consts.WIDTH - 10
+    is_first_completion = jnp.logical_and(friend_completed, jnp.logical_not(state.rope_2_broken))
+    new_lives = jnp.minimum(state.lives + jnp.where(is_first_completion, 1, 0), 4)
+    new_rope_2_broken = jnp.logical_or(state.rope_2_broken, friend_completed)
+
+    intermediate_state = state._replace(
+        score=(state.score + reward).astype(jnp.int32),
+        enemies_active=final_active,
+        enemies_x=final_x,
+        enemies_y=final_y,
+        enemies_dx=final_dx,
+        enemies_dy=final_dy,
+        enemies_type=final_type,
+        enemies_age=new_age.astype(jnp.int32),
+        key=rng,
+        lives=new_lives,
+        rope_2_broken=new_rope_2_broken,
+        eye_appeared=jnp.logical_or(state.eye_appeared, has_eye_spawn)
+    )
+
+    return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
     def _generic_map_logic(self, state: CrossbowState) -> Tuple[CrossbowState, bool]:
         rng, spawn_key, scatter_key, eye_key = jax.random.split(state.key, 4)
         HIT_TOLERANCE = 8
@@ -1254,7 +1412,9 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             game_phase=jnp.array(GamePhase.START_SCREEN, dtype=jnp.int32), score=jnp.array(0, dtype=jnp.int32),
             lives=jnp.array(self.consts.MAX_LIVES, dtype=jnp.int32), step_counter=jnp.array(0, dtype=jnp.int32), key=state_key,
             rope_1_broken=jnp.array(False), rope_2_broken=jnp.array(False),
+           
             eye_appeared=jnp.array(False)
+            
         )
         return self.get_obs(state), state
 
@@ -1279,7 +1439,6 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
                 ],
                 s
             )
-
 
         state, game_over = jax.lax.cond(jnp.logical_and(is_gameplay, state.friend_active), _combat_router, lambda s: (s, False), state)
         state = state._replace(step_counter=state.step_counter + 1, key=new_key)
