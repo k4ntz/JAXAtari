@@ -30,12 +30,11 @@ class SlowerBulletsMod(JaxAtariInternalModPlugin):
     }
 
 
-class InfiniteSmartBombsMod(JaxAtariInternalModPlugin):
+class LanderDontPickupMod(JaxAtariInternalModPlugin):
     """
     Disables Lander's ability to pick up humans.
     """
 
-    SPACE_SHIP_INIT_BOMBS
 
 
 class StaticInvadersMod(JaxAtariInternalModPlugin):
@@ -53,33 +52,17 @@ class StaticInvadersMod(JaxAtariInternalModPlugin):
             # Use original delete logic
             delete_state, score = self._env._delete_enemy(enemy)
 
-            # Return enemy as is (static) unless deleted
-            # Important: we must handle the case where delete returns a new state (dead/inactive)
-
-            # If default enemy movement was called, it would return updated positions.
-            # Here we just return `enemy` (no position change) for active logic.
-            # But wait! jax.lax.switch requires all branches to return same type/shape.
-            # `enemy` is [x, y, type, arg1, arg2].
-            # `delete_state` is (new_enemy, score) tuple in `_delete_enemy` implementation!
-            # Wait, `_delete_enemy` returns (new_enemy, score).
-            # The original `_enemy_move_switch` implementations returns `enemy_state` (the array for the enemy).
-            # So `_delete_enemy` logic in `_enemy_move_switch` likely UNPACKS it or handles it.
-
-            # Let's check `_enemy_step` in `jax_defender.py` again.
-            # delete_state, score = self._delete_enemy(enemy) -> returns (enemy_array, score)
-            # lambda: delete_state -> returns enemy_array. Correct.
-
             return jax.lax.switch(
                 jnp.array(enemy_type, int),
                 [
-                    lambda: enemy,  # Inactive - no change
-                    lambda: enemy,  # Lander - static
-                    lambda: enemy,  # Pod - static
-                    lambda: enemy,  # Bomber - static
-                    lambda: enemy,  # Swarmer - static
-                    lambda: enemy,  # Mutant - static
-                    lambda: enemy,  # Baiter - static
-                    lambda: delete_state,  # Dead/Delete - must process
+                    lambda: enemy,
+                    lambda: enemy, 
+                    lambda: enemy,
+                    lambda: enemy,
+                    lambda: enemy,
+                    lambda: enemy,
+                    lambda: enemy, 
+                    lambda: delete_state, 
                 ],
             )
 
@@ -111,7 +94,7 @@ class FasterLevelClearMod(JaxAtariInternalModPlugin):
         )
 
         # Reduced requirement: Max 1 kill needed per type (if amount > 0)
-        reduced_goals = jnp.minimum(needed_kills, 1)
+        reduced_goals = jnp.minimum(needed_kills, 5)
 
         is_done = jnp.all(enemy_killed >= reduced_goals)
 
