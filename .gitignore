@@ -1,7 +1,7 @@
 env
 *__pycache__*
 
-.venv
+.venv*
 .vscode
 .idea
 *.bc
@@ -10,3 +10,10 @@ results/
 docs/build/
 .python-version
 
+scripts/benchmarks/outputs/
+scripts/benchmarks/wandb/
+
+
+outputs/
+models/
+wandb/
