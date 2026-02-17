@@ -25,16 +25,19 @@ class SlowerBulletsMod(JaxAtariInternalModPlugin):
     """
 
     constants_overrides = {
-        "PLAYER_SIZE": (4, 4),
-        "PLAYER_SIZE_SMALL": (4, 4),
+        "BULLET_SPEED": 1.5,  # Original speed is 3.0, so this is half speed
     }
 
 
-class LanderDontPickupMod(JaxAtariInternalModPlugin):
+class HumanHaveParachutes(JaxAtariInternalModPlugin):
     """
-    Disables Lander's ability to pick up humans.
+    Humans can survive falling even from big heights by parachuting down instead of dying immediately.
     """
 
+    constants_overrides = {
+        "HUMAN_DEADLY_FALL_HEIGHT": 300.0,  # Original is 80.0, so this allows safe falling from any height
+        "HUMAN_FALLING_SPEED": 0.25,  # Original is 5.0, so this makes falling much slower and safer
+    }
 
 
 class StaticInvadersMod(JaxAtariInternalModPlugin):
@@ -106,19 +109,15 @@ class FasterLevelClearMod(JaxAtariInternalModPlugin):
 
 # --- Difficult Mods ---
 
-
-class HardcoreStartMod(JaxAtariPostStepModPlugin):
+class HardcoreStartMod(JaxAtariInternalModPlugin):
     """
-    Start with only 1 life.
+    Start with only 1 life and 1 bomb.
     """
 
-    @partial(jax.jit, static_argnums=(0,))
-    def run(self, prev_state: DefenderState, new_state: DefenderState) -> DefenderState:
-        return jax.lax.cond(
-            new_state.step_counter == 0,
-            lambda: new_state._replace(space_ship_lives=jnp.array(1, dtype=jnp.int32)),
-            lambda: new_state,
-        )
+    constants_overrides = {
+        "SPACE_SHIP_INIT_LIVES": 1,
+        "SPACE_SHIP_INIT_BOMBS": 0,
+    }
 
 
 class FasterInvadersMod(JaxAtariInternalModPlugin):
@@ -126,199 +125,12 @@ class FasterInvadersMod(JaxAtariInternalModPlugin):
     Increases enemy and bullet speeds.
     """
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _bullet_update(self, state: DefenderState) -> DefenderState:
-        b_x = state.bullet_x
-        b_y = state.bullet_y
-        b_dir_x = state.bullet_dir_x
-        b_dir_y = state.bullet_dir_y
-
-        # MODIFIED: Increased speed (2x)
-        speed_x = b_dir_x * self._env.consts.BULLET_SPEED * 2.0
-        speed_y = b_dir_y * self._env.consts.BULLET_SPEED * 2.0
-
-        b_x, b_y = self._env._move_with_space_ship(
-            state,
-            b_x,
-            b_y,
-            speed_x,
-            speed_y,
-            self._env.consts.BULLET_MOVE_WITH_SPACE_SHIP,
-        )
-
-        is_bomber = jnp.logical_and(b_dir_x == 0.0, b_dir_y == 0.0)
-
-        def _bomber():
-            mask = (state.enemy_states[:, 2] == self._env.consts.BOMBER) & (
-                state.enemy_states[:, 3] > 0.0
-            )
-            match = jnp.nonzero(
-                mask, size=self._env.consts.BOMBER_MAX_AMOUNT, fill_value=-1
-            )[0]
-            enemy = state.enemy_states[match[0]]
-            new_ttl = enemy[3] - 1
-            return self._env._update_enemy(state, match[0], arg1=new_ttl)
-
-        state = jax.lax.cond(is_bomber, lambda: _bomber(), lambda: state)
-        return state._replace(bullet_x=b_x, bullet_y=b_y)
+    constants_overrides = {"ENEMY_SPEED": 0.24, "BULLET_SPEED": 5.0}
 
 
-class NoBrakesModActual(JaxAtariInternalModPlugin):
+class NoBreaksInSpaceMod(JaxAtariInternalModPlugin):
     """
     Ship cannot brake / stop.
     """
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _space_ship_step(
-        self, state: DefenderState, action: chex.Array
-    ) -> DefenderState:
-        # Inputs
-        left = jnp.any(
-            jnp.array(
-                [
-                    action == Action.LEFT,
-                    action == Action.LEFTFIRE,
-                    action == Action.UPLEFT,
-                    action == Action.DOWNLEFT,
-                    action == Action.UPLEFTFIRE,
-                    action == Action.DOWNLEFTFIRE,
-                ]
-            )
-        )
-        right = jnp.any(
-            jnp.array(
-                [
-                    action == Action.RIGHT,
-                    action == Action.RIGHTFIRE,
-                    action == Action.UPRIGHT,
-                    action == Action.DOWNRIGHT,
-                    action == Action.UPRIGHTFIRE,
-                    action == Action.DOWNRIGHTFIRE,
-                ]
-            )
-        )
-        up = jnp.any(
-            jnp.array(
-                [
-                    action == Action.UP,
-                    action == Action.UPFIRE,
-                    action == Action.UPRIGHT,
-                    action == Action.UPLEFT,
-                    action == Action.UPRIGHTFIRE,
-                    action == Action.UPLEFTFIRE,
-                ]
-            )
-        )
-        down = jnp.any(
-            jnp.array(
-                [
-                    action == Action.DOWN,
-                    action == Action.DOWNFIRE,
-                    action == Action.DOWNRIGHT,
-                    action == Action.DOWNLEFT,
-                    action == Action.DOWNRIGHTFIRE,
-                    action == Action.DOWNLEFTFIRE,
-                ]
-            )
-        )
-        shoot = jnp.any(
-            jnp.array(
-                [
-                    action == Action.FIRE,
-                    action == Action.DOWNFIRE,
-                    action == Action.UPFIRE,
-                    action == Action.RIGHTFIRE,
-                    action == Action.LEFTFIRE,
-                    action == Action.DOWNLEFTFIRE,
-                    action == Action.DOWNRIGHTFIRE,
-                    action == Action.UPRIGHTFIRE,
-                    action == Action.UPLEFTFIRE,
-                ]
-            )
-        )
-
-        direction_x = jnp.where(left, -1, 0) + jnp.where(right, 1, 0)
-        direction_y = jnp.where(up, -1, 0) + jnp.where(down, 1, 0)
-
-        space_ship_facing_right = jax.lax.cond(
-            direction_x != 0,
-            lambda: direction_x > 0,
-            lambda: state.space_ship_facing_right,
-        )
-
-        space_ship_speed = jax.lax.cond(
-            direction_x != 0,
-            lambda: state.space_ship_speed
-            + direction_x * self._env.consts.SPACE_SHIP_ACCELERATION,
-            # MODIFIED: NO BRAKES / NO FRICTION
-            lambda: state.space_ship_speed,
-        )
-
-        space_ship_speed = jnp.clip(
-            space_ship_speed,
-            -self._env.consts.SPACE_SHIP_MAX_SPEED,
-            self._env.consts.SPACE_SHIP_MAX_SPEED,
-        )
-
-        space_ship_x = state.space_ship_x
-        space_ship_y = state.space_ship_y
-
-        x_speed = space_ship_speed
-        y_speed = direction_y
-        space_ship_x, space_ship_y = self._env._move_and_clip(
-            space_ship_x,
-            space_ship_y,
-            x_speed,
-            y_speed,
-            self._env.consts.SPACE_SHIP_HEIGHT,
-        )
-
-        # Decrease shooting cooldown
-        shooting_cooldown = jax.lax.cond(
-            state.shooting_cooldown > 0,
-            lambda: state.shooting_cooldown - 1,
-            lambda: 0,
-        )
-
-        state = state._replace(
-            space_ship_speed=space_ship_speed,
-            space_ship_x=space_ship_x,
-            space_ship_y=space_ship_y,
-            space_ship_facing_right=space_ship_facing_right,
-            shooting_cooldown=shooting_cooldown,
-        )
-
-        # Shooting if the cooldown is down
-        shoot = jnp.logical_and(shoot, shooting_cooldown <= 0)
-
-        # Not be able to shoot in hyperspace
-        hyperspace = space_ship_y < (2 - self._env.consts.SPACE_SHIP_HEIGHT)
-        shoot_laser = jnp.logical_and(shoot, jnp.logical_not(hyperspace))
-
-        # Shoot bomb if inside city
-        in_city = (
-            self._env.consts.WORLD_HEIGHT
-            - self._env.consts.CITY_HEIGHT
-            - self._env.consts.SPACE_SHIP_HEIGHT
-        )
-        shoot_smart_bomb = jnp.logical_and(
-            shoot,
-            space_ship_y > in_city,
-        )
-
-        # Shoot laser if not in hyperspace and city
-        shoot_laser = jnp.logical_xor(shoot_laser, shoot_smart_bomb)
-
-        # If smart bomb is the chosen shot, look up if it is available
-        shoot_smart_bomb = jnp.logical_and(
-            shoot_smart_bomb, state.smart_bomb_amount > 0
-        )
-
-        state = jax.lax.cond(
-            shoot_laser, lambda: self._env._shoot_laser(state), lambda: state
-        )
-        state = jax.lax.cond(
-            shoot_smart_bomb, lambda: self._env._shoot_smart_bomb(state), lambda: state
-        )
-
-        return state
+    constants_overrides = {"SPACE_SHIP_BREAK": 0.0}
