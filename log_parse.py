@@ -17,7 +17,7 @@ from math import sqrt, cos, sin
 # Configuration: if STATIC_COORDS is True, transform enemy positions by undoing
 # the player's movement so displayed coordinates are in a static/world frame.
 # Tweak `MOVE_SPEED` and `ANGULAR_SPEED` to match the player's in-game movement.
-STATIC_COORDS = False
+STATIC_COORDS = True
 # linear movement per frame when holding UP/DOWN (units matching parsed X/Z)
 MOVE_SPEED = 0.25 - 0.00195308333
 TURN_MOVE_SPEED = 0.057674
@@ -475,6 +475,24 @@ angle_changes = [el for el in b_deltas if el > -0.1 and el != 0] # filter
 
 distance_changes = step_distances(ax, az) + step_distances(bx, bz)
 distance_changes = [el for el in distance_changes if 0 < el < 100]  # filter
+
+# Calculate position change vectors for each enemy
+def get_position_deltas(xs, zs):
+    """Calculate position change vectors (delta_x, delta_z) between consecutive steps."""
+    delta_xs = []
+    delta_zs = []
+    for i in range(len(xs) - 1):
+        dx = xs[i+1] - xs[i]
+        dz = zs[i+1] - zs[i]
+        # Only include if there was actual movement
+        if dx != 0 or dz != 0:
+            delta_xs.append(dx)
+            delta_zs.append(dz)
+    return delta_xs, delta_zs
+
+a_delta_xs, a_delta_zs = get_position_deltas(ax, az)
+b_delta_xs, b_delta_zs = get_position_deltas(bx, bz)
+
 # Validate EXTRA_ITEMS and prepare structures for plotting (points, lines, circles)
 extra_points = []     # list of (x,z)
 extra_lines = []      # list of ((x1,z1),(x2,z2))
@@ -510,13 +528,14 @@ for it in EXTRA_ITEMS:
 
 # Plot
 fig = make_subplots(
-    rows=3, cols=1, shared_xaxes=False, vertical_spacing=0.12,
+    rows=4, cols=1, shared_xaxes=False, vertical_spacing=0.08,
     subplot_titles=(
         "XZ positions over time",
         "Distribution of change in angle between steps (radians)",
-        "Distribution of Euclidean distance traveled per step"
+        "Distribution of Euclidean distance traveled per step",
+        "Position change vectors (ΔX, ΔZ) per enemy"
     ),
-    row_heights=[0.7, 0.18, 0.12]
+    row_heights=[0.55, 0.15, 0.10, 0.20]
 )
 
 fig.add_trace(go.Scatter(
@@ -565,12 +584,32 @@ if STATIC_COORDS:
 # fig.add_trace(go.Histogram(x=angle_changes, nbinsx=140, name="Δangle per step"), row=2, col=1)
 # fig.add_trace(go.Histogram(x=distance_changes, nbinsx=140, name="Distance per step"), row=3, col=1)
 
+# Add position change vector scatter plot
+fig.add_trace(go.Scatter(
+    x=a_delta_xs,
+    y=a_delta_zs,
+    mode="markers",
+    name="Enemy A Δ",
+    marker=dict(color="blue", symbol="circle", size=6, opacity=0.6),
+    hovertemplate="Enemy A<br>ΔX: %{x:.3f}<br>ΔZ: %{y:.3f}<extra></extra>"
+), row=4, col=1)
+fig.add_trace(go.Scatter(
+    x=b_delta_xs,
+    y=b_delta_zs,
+    mode="markers",
+    name="Enemy B Δ",
+    marker=dict(color="red", symbol="circle", size=6, opacity=0.6),
+    hovertemplate="Enemy B<br>ΔX: %{x:.3f}<br>ΔZ: %{y:.3f}<extra></extra>"
+), row=4, col=1)
+
 fig.update_xaxes(title_text="X", row=1, col=1)
 fig.update_yaxes(title_text="Z", row=1, col=1)
 fig.update_xaxes(title_text="Δangle (radians)", row=2, col=1)
 fig.update_yaxes(title_text="Count", row=2, col=1)
 fig.update_xaxes(title_text="Distance", row=3, col=1)
 fig.update_yaxes(title_text="Count", row=3, col=1)
+fig.update_xaxes(title_text="ΔX (change in X)", row=4, col=1)
+fig.update_yaxes(title_text="ΔZ (change in Z)", row=4, col=1)
 
 # Enforce a 1:1 data-to-pixel aspect ratio for the first subplot's axes.
 # Use Plotly's `scaleanchor` mechanism and compute an appropriate figure
@@ -636,12 +675,12 @@ else:
     subplot_px_height = int(target_width * (y_span / x_span))
     # Clamp the computed subplot pixel height to avoid extreme sizes
     subplot_px_height = max(200, min(subplot_px_height, 3000))
-    # Since the first subplot takes ~70% of the figure height (row_heights[0]),
+    # Since the first subplot takes ~55% of the figure height (row_heights[0]),
     # compute the figure height so that that fraction equals the needed subplot px.
-    fraction_first = 0.7
+    fraction_first = 0.55
     computed_fig_height = int(subplot_px_height / fraction_first)
     # Add some padding for the other subplots and margins
-    fig_height = max(900, computed_fig_height + 200)
+    fig_height = max(1100, computed_fig_height + 300)
     # Now it's safe to enforce 1:1 data-to-pixel aspect
     fig.update_yaxes(scaleanchor="x", scaleratio=1, row=1, col=1)
 
