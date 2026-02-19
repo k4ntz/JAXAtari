@@ -3,6 +3,7 @@ from functools import partial
 import chex
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import lax
 from dataclasses import dataclass
 from typing import Tuple, NamedTuple, List, Dict, Optional, Any
@@ -149,6 +150,16 @@ def _get_default_pitfall_asset_config() -> tuple:
             'type': 'group',
             'files': ['harryjumping1.npy', 'harryjumping2.npy'],
         },
+        {
+            'name': 'scorpion_left',
+            'type': 'group',
+            'files': ['scorpion_left1_alpha.npy', 'scorpion_left2_alpha.npy'],
+        },
+        {
+            'name': 'scorpion_right',
+            'type': 'group',
+            'files': ['scorpion_right1_alpha.npy', 'scorpion_right2_alpha.npy'],
+        },
     )
 
 
@@ -170,6 +181,13 @@ def wall_side_u8(room_byte: jnp.ndarray) -> jnp.ndarray:
 def pit_type(room_byte: jnp.ndarray) -> jnp.ndarray:
     """Pit type is bits 3..5 of the room byte (uint8 0..7)."""
     return pit_code_u8(room_byte)
+
+
+def has_scorpion_from_room_byte(room_byte: jnp.ndarray) -> jnp.ndarray:
+    """Scorpion is present when pit type does not include a ladder (pit_type not in {0,1})."""
+    pt = pit_code_u8(room_byte.astype(jnp.uint8))
+    has_ladder = (pt == jnp.uint8(0)) | (pt == jnp.uint8(1))
+    return ~has_ladder
 
 
 def room_hazards_from_room_byte(room_byte: jnp.ndarray) -> tuple[
@@ -294,6 +312,7 @@ class PitfallState(NamedTuple):
     down_pressed: chex.Array
     on_ladder: chex.Array
     current_ground_y: chex.Array 
+    scorpion_x: chex.Array
 
 
 class PitfallConstants(NamedTuple):
@@ -337,6 +356,15 @@ class PitfallConstants(NamedTuple):
     snake_w: int = 12
     snake_h: int = 6
     snake_hurt_cooldown_frames: int = 30
+
+    # Scorpion hazard (underground)
+    scorpion_spawn_x: int = 80
+    scorpion_w: int = 12
+    scorpion_h: int = 6
+    scorpion_y_offset: int = 0
+    scorpion_speed: float = 0.45
+    scorpion_anim_period: int = 10
+    scorpion_hurt_cooldown_frames: int = 30
 
     # Rendering tune: negative moves sprite up (player_y is treated as bottom/feet).
     harry_y_tune: int = 0
@@ -622,6 +650,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         time_left = state.time_left
         lives_left = state.lives_left
         hurt_cooldown = state.hurt_cooldown
+        scorpion_x = state.scorpion_x
 
         down_action = (
             (action == Action.DOWN) |
@@ -776,6 +805,10 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             jnp.where(exited_right, x_if_right_exit, x_after_move)
         )
 
+        entered_new_room = exited_left | exited_right
+        scorpion_spawn_x = jnp.asarray(consts.scorpion_spawn_x, dtype=jnp.float32)
+        scorpion_x = jnp.where(entered_new_room, scorpion_spawn_x, scorpion_x)
+
         player_w_f = jnp.asarray(4, dtype=jnp.float32)
         x = jnp.clip(x, 0.0, jnp.asarray(consts.screen_width, dtype=jnp.float32) - player_w_f)
 
@@ -830,6 +863,24 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         )
 
         has_logs, logs_are_rolling, log_count, log_xs, has_fireplace, has_snake = room_hazards_from_room_byte(new_room_byte)
+
+        has_scorpion = has_scorpion_from_room_byte(new_room_byte)
+        player_is_underground = current_ground_y == lower_ground
+
+        scorpion_speed = jnp.asarray(consts.scorpion_speed, dtype=jnp.float32)
+        player_center_x_f = x + jnp.asarray(2.0, dtype=jnp.float32)
+        dx_scorpion = player_center_x_f - scorpion_x
+        scorpion_step = jnp.clip(dx_scorpion, -scorpion_speed, scorpion_speed)
+        scorpion_x = jnp.where(
+            has_scorpion,
+            scorpion_x + scorpion_step,
+            scorpion_x,
+        )
+        scorpion_max_x = jnp.asarray(
+            max(0, consts.screen_width - consts.scorpion_w),
+            dtype=jnp.float32,
+        )
+        scorpion_x = jnp.clip(scorpion_x, 0.0, scorpion_max_x)
 
         total_frames = jnp.int32(self.consts.initial_time_seconds * self.consts.fps)
         frames_elapsed = jnp.maximum(total_frames - time_left, jnp.int32(0))
@@ -916,29 +967,67 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         overlap_snake = (x1 > snake_left) & (x0 < snake_right) & (y1 > snake_y0) & (y0 < snake_y1)
         hit_snake = has_snake & (snake_count > jnp.int32(0)) & overlap_snake & can_hurt
 
-        hit_hazard = hit_fire | hit_snake
+        scorpion_w = jnp.int32(consts.scorpion_w)
+        scorpion_h = jnp.int32(consts.scorpion_h)
+        scorpion_top = jnp.int32(consts.underground_y - consts.scorpion_h + consts.scorpion_y_offset)
+        scorpion_y0 = scorpion_top
+        scorpion_y1 = scorpion_top + scorpion_h
+
+        max_scorpion_start = jnp.maximum(screen_w_i - scorpion_w, jnp.int32(0))
+        scorpion_left = jnp.clip(scorpion_x.astype(jnp.int32), jnp.int32(0), max_scorpion_start)
+        scorpion_right = scorpion_left + scorpion_w
+
+        overlap_scorpion = (x1 > scorpion_left) & (x0 < scorpion_right) & (y1 > scorpion_y0) & (y0 < scorpion_y1)
+        hit_scorpion = has_scorpion & player_is_underground & overlap_scorpion & can_hurt
+        scorpion_x_before_reset = scorpion_x
+
+        hit_other_hazard = hit_fire | hit_snake
+        hit_hazard = hit_scorpion | hit_other_hazard
 
         lives_left = jnp.where(hit_hazard, lives_left - jnp.int32(1), lives_left)
         lives_left = jnp.maximum(lives_left, jnp.int32(0))
 
         respawn_x = jnp.asarray(consts.player_start_x, dtype=jnp.float32)
         respawn_y = jnp.asarray(consts.player_start_y - consts.fire_respawn_y_offset, dtype=jnp.float32)
+        respawn_underground_y = jnp.asarray(consts.underground_y, dtype=jnp.float32)
 
-        x = jnp.where(hit_hazard, respawn_x, x)
-        y = jnp.where(hit_hazard, respawn_y, y)
+        x = jnp.where(
+            hit_scorpion,
+            respawn_x,
+            jnp.where(hit_other_hazard, respawn_x, x),
+        )
+        y = jnp.where(
+            hit_scorpion,
+            respawn_underground_y,
+            jnp.where(hit_other_hazard, respawn_y, y),
+        )
         vx = jnp.where(hit_hazard, jnp.asarray(0.0, dtype=jnp.float32), vx)
         vy = jnp.where(hit_hazard, jnp.asarray(0.0, dtype=jnp.float32), vy)
-        on_ground = jnp.where(hit_hazard, jnp.array(False, dtype=jnp.bool_), on_ground)
+        on_ground = jnp.where(
+            hit_scorpion,
+            jnp.array(True, dtype=jnp.bool_),
+            jnp.where(hit_other_hazard, jnp.array(False, dtype=jnp.bool_), on_ground),
+        )
         on_ladder = jnp.where(hit_hazard, jnp.array(False, dtype=jnp.bool_), on_ladder)
         current_ground_y = jnp.where(
-            hit_hazard,
-            jnp.asarray(consts.ground_y, dtype=jnp.float32),
-            current_ground_y,
+            hit_scorpion,
+            jnp.asarray(consts.underground_y, dtype=jnp.float32),
+            jnp.where(
+                hit_other_hazard,
+                jnp.asarray(consts.ground_y, dtype=jnp.float32),
+                current_ground_y,
+            ),
         )
+        scorpion_x = jnp.where(hit_scorpion, scorpion_spawn_x, scorpion_x)
 
         next_hurt_cooldown = jnp.maximum(hurt_cooldown - jnp.int32(1), jnp.int32(0))
         next_hurt_cooldown = jnp.where(
-            hit_hazard,
+            hit_scorpion,
+            jnp.int32(consts.scorpion_hurt_cooldown_frames),
+            next_hurt_cooldown,
+        )
+        next_hurt_cooldown = jnp.where(
+            hit_other_hazard,
             jnp.int32(max(consts.fire_hurt_cooldown_frames, consts.snake_hurt_cooldown_frames)),
             next_hurt_cooldown,
         )
@@ -960,6 +1049,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             down_pressed=down_pressed,
             on_ladder=on_ladder,
             current_ground_y=current_ground_y,
+            scorpion_x=scorpion_x,
             screen_id=new_screen_id,
             room_byte=new_room_byte,
         )
@@ -1028,6 +1118,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             down_pressed=jnp.array(False, dtype=jnp.bool_),
             on_ladder=jnp.array(False, dtype=jnp.bool_),
             current_ground_y=jnp.array(consts.ground_y, dtype=jnp.float32),
+            scorpion_x=jnp.array(consts.scorpion_spawn_x, dtype=jnp.float32),
             screen_id=jnp.array(0, dtype=jnp.int32),
             room_byte=jnp.array(SEED, dtype=jnp.uint8),
         )
@@ -1074,6 +1165,83 @@ class PitfallRenderer(JAXGameRenderer):
             *[a for a in asset_config if a.get('type') != 'background'],
         ]
 
+        def _load_alpha_group(file_names: list[str], rgb: tuple[int, int, int]) -> list[jnp.ndarray]:
+            def _trim_rgba(frame_rgba: jnp.ndarray) -> jnp.ndarray:
+                frame_np = np.array(frame_rgba)
+                alpha = frame_np[:, :, 3] > 0
+                ys, xs = np.where(alpha)
+                if ys.size == 0 or xs.size == 0:
+                    return frame_rgba
+                y0, y1 = int(ys.min()), int(ys.max())
+                x0, x1 = int(xs.min()), int(xs.max())
+                return jnp.asarray(frame_np[y0:y1 + 1, x0:x1 + 1, :], dtype=jnp.uint8)
+
+            def _downscale_rgba(frame_rgba: jnp.ndarray, scale: float = 0.78) -> jnp.ndarray:
+                frame_np = np.array(frame_rgba)
+                h_frame, w_frame = frame_np.shape[:2]
+                new_h = max(1, int(round(h_frame * scale)))
+                new_w = max(1, int(round(w_frame * scale)))
+
+                y_idx = np.clip(np.round(np.arange(new_h) / scale).astype(np.int32), 0, h_frame - 1)
+                x_idx = np.clip(np.round(np.arange(new_w) / scale).astype(np.int32), 0, w_frame - 1)
+                resized = frame_np[y_idx][:, x_idx]
+                return jnp.asarray(resized, dtype=jnp.uint8)
+
+            frames = []
+            for file_name in file_names:
+                file_path = os.path.join(sprite_path, file_name)
+                frame_np = np.load(file_path)
+                frame = jnp.asarray(frame_np)
+
+                if frame.ndim == 2:
+                    alpha = jnp.where(frame > 0, jnp.uint8(255), jnp.uint8(0))
+                    h_frame, w_frame = alpha.shape
+                    color_rgb = jnp.stack(
+                        [
+                            jnp.full((h_frame, w_frame), jnp.uint8(rgb[0]), dtype=jnp.uint8),
+                            jnp.full((h_frame, w_frame), jnp.uint8(rgb[1]), dtype=jnp.uint8),
+                            jnp.full((h_frame, w_frame), jnp.uint8(rgb[2]), dtype=jnp.uint8),
+                        ],
+                        axis=2,
+                    )
+                    frame_rgba = jnp.concatenate([color_rgb, alpha[:, :, None]], axis=2)
+                elif frame.ndim == 3 and frame.shape[2] in (3, 4):
+                    frame_u8 = frame.astype(jnp.uint8)
+                    if frame_u8.shape[2] == 3:
+                        alpha = jnp.where(jnp.any(frame_u8 != 0, axis=2), jnp.uint8(255), jnp.uint8(0))
+                        frame_rgba = jnp.concatenate([frame_u8, alpha[:, :, None]], axis=2)
+                    else:
+                        frame_rgba = frame_u8
+                else:
+                    raise ValueError(f"Unsupported scorpion frame format for {file_name}: shape={frame.shape}")
+
+                frame_rgba = _trim_rgba(frame_rgba)
+                frame_rgba = _downscale_rgba(frame_rgba, scale=0.78)
+                frames.append(frame_rgba)
+            return frames
+
+        converted_asset_config = []
+        for asset in asset_config:
+            if asset.get('name') == 'scorpion_left' and asset.get('type') == 'group' and 'files' in asset:
+                converted_asset_config.append(
+                    {
+                        'name': 'scorpion_left',
+                        'type': 'group',
+                        'data': _load_alpha_group(asset['files'], (255, 255, 255)),
+                    }
+                )
+            elif asset.get('name') == 'scorpion_right' and asset.get('type') == 'group' and 'files' in asset:
+                converted_asset_config.append(
+                    {
+                        'name': 'scorpion_right',
+                        'type': 'group',
+                        'data': _load_alpha_group(asset['files'], (255, 255, 255)),
+                    }
+                )
+            else:
+                converted_asset_config.append(asset)
+        asset_config = converted_asset_config
+
         def _color_swatch(rgb: tuple[int, int, int]) -> jnp.ndarray:
             return jnp.array([rgb[0], rgb[1], rgb[2], 255], dtype=jnp.uint8).reshape(1, 1, 4)
 
@@ -1117,10 +1285,25 @@ class PitfallRenderer(JAXGameRenderer):
                 constant_values=int(self.jr.TRANSPARENT_ID),
             )
 
-        harry_idle = _ensure_3d(self.SHAPE_MASKS['harry_idle'])
-        harry_run = _ensure_3d(self.SHAPE_MASKS['harry_run'])
-        harry_climb = _ensure_3d(self.SHAPE_MASKS['harry_climb'])
-        harry_jump = _ensure_3d(self.SHAPE_MASKS['harry_jump'])
+        def _downscale_mask_stack(mask_stack: jnp.ndarray, scale: float) -> jnp.ndarray:
+            masks_np = np.array(_ensure_3d(mask_stack))
+            frames_out = []
+            for frame in masks_np:
+                h_frame, w_frame = frame.shape
+                new_h = max(1, int(round(h_frame * scale)))
+                new_w = max(1, int(round(w_frame * scale)))
+                y_idx = np.clip(np.round(np.arange(new_h) / scale).astype(np.int32), 0, h_frame - 1)
+                x_idx = np.clip(np.round(np.arange(new_w) / scale).astype(np.int32), 0, w_frame - 1)
+                resized = frame[y_idx][:, x_idx]
+                frames_out.append(resized.astype(np.uint8))
+            return jnp.asarray(np.stack(frames_out, axis=0), dtype=jnp.uint8)
+
+        sprite_scale = 0.70
+
+        harry_idle = _downscale_mask_stack(self.SHAPE_MASKS['harry_idle'], sprite_scale)
+        harry_run = _downscale_mask_stack(self.SHAPE_MASKS['harry_run'], sprite_scale)
+        harry_climb = _downscale_mask_stack(self.SHAPE_MASKS['harry_climb'], sprite_scale)
+        harry_jump = _downscale_mask_stack(self.SHAPE_MASKS['harry_jump'], sprite_scale)
 
         max_h = max(int(harry_idle.shape[1]), int(harry_run.shape[1]), int(harry_climb.shape[1]), int(harry_jump.shape[1]))
         max_w = max(int(harry_idle.shape[2]), int(harry_run.shape[2]), int(harry_climb.shape[2]), int(harry_jump.shape[2]))
@@ -1130,12 +1313,19 @@ class PitfallRenderer(JAXGameRenderer):
             extra_pad_w = jnp.int32(max_w - int(masks_3d.shape[2]))
             extra_pad_h = jnp.int32(max_h - int(masks_3d.shape[1]))
             base_offset = self.FLIP_OFFSETS.get(name, jnp.array([0, 0], dtype=jnp.int32))
+            base_offset = jnp.round(base_offset.astype(jnp.float32) * jnp.asarray(sprite_scale, dtype=jnp.float32)).astype(jnp.int32)
             return _pad_to(masks_3d, max_h, max_w), base_offset + jnp.array([extra_pad_w, extra_pad_h], dtype=jnp.int32)
 
         self.HARRY_IDLE_MASKS, self.HARRY_IDLE_FLIP_OFFSET = _pad_and_offset('harry_idle', harry_idle)
         self.HARRY_RUN_MASKS, self.HARRY_RUN_FLIP_OFFSET = _pad_and_offset('harry_run', harry_run)
         self.HARRY_CLIMB_MASKS, self.HARRY_CLIMB_FLIP_OFFSET = _pad_and_offset('harry_climb', harry_climb)
         self.HARRY_JUMP_MASKS, self.HARRY_JUMP_FLIP_OFFSET = _pad_and_offset('harry_jump', harry_jump)
+        scorpion_left = _downscale_mask_stack(self.SHAPE_MASKS['scorpion_left'], sprite_scale)
+        scorpion_right = _downscale_mask_stack(self.SHAPE_MASKS['scorpion_right'], sprite_scale)
+        scorpion_h = max(int(scorpion_left.shape[1]), int(scorpion_right.shape[1]))
+        scorpion_w = max(int(scorpion_left.shape[2]), int(scorpion_right.shape[2]))
+        self.SCORPION_LEFT_MASKS = _pad_to(scorpion_left, scorpion_h, scorpion_w)
+        self.SCORPION_RIGHT_MASKS = _pad_to(scorpion_right, scorpion_h, scorpion_w)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: PitfallState) -> jnp.ndarray:
@@ -1145,6 +1335,7 @@ class PitfallRenderer(JAXGameRenderer):
         pt = pit_code_u8(rb)
 
         has_ladder = (pt == jnp.uint8(0)) | (pt == jnp.uint8(1))
+        has_scorpion = has_scorpion_from_room_byte(rb)
         has_wall = has_ladder
 
         # ---- Holes (black cutouts) ----
@@ -1272,6 +1463,31 @@ class PitfallRenderer(JAXGameRenderer):
         snake_pos = jnp.where(has_snake, jnp.array([snake_left, snake_top], dtype=jnp.int32), jnp.array([-1, -1], dtype=jnp.int32))
         snake_size = jnp.array([snake_w, snake_h], dtype=jnp.int32)
         raster = self.jr.draw_rects(raster, snake_pos[None, :], snake_size[None, :], int(self.SNAKE_ID))
+
+        scorpion_period = jnp.int32(max(1, int(self.consts.scorpion_anim_period)))
+        scorpion_anim_idx = jnp.mod(frames_elapsed // scorpion_period, jnp.int32(2)).astype(jnp.int32)
+        scorpion_facing_right = (state.player_x - state.scorpion_x) >= jnp.asarray(0.0, dtype=jnp.float32)
+        scorpion_mask = jnp.where(
+            scorpion_facing_right,
+            self.SCORPION_RIGHT_MASKS[scorpion_anim_idx],
+            self.SCORPION_LEFT_MASKS[scorpion_anim_idx],
+        )
+        scorpion_h_sprite = jnp.int32(scorpion_mask.shape[0])
+        scorpion_top = jnp.int32(self.consts.underground_y) - scorpion_h_sprite + jnp.int32(1) + jnp.int32(self.consts.scorpion_y_offset)
+
+        raster = lax.cond(
+            has_scorpion,
+            lambda r: self.jr.render_at_clipped(
+                r,
+                state.scorpion_x.astype(jnp.int32),
+                scorpion_top,
+                scorpion_mask,
+                flip_horizontal=jnp.array(False, dtype=jnp.bool_),
+                flip_offset=jnp.array([0, 0], dtype=jnp.int32),
+            ),
+            lambda r: r,
+            raster,
+        )
 
         moving = jnp.abs(state.player_vx) > jnp.asarray(0.0, dtype=jnp.float32)
         flip = state.player_vx < jnp.asarray(0.0, dtype=jnp.float32)
