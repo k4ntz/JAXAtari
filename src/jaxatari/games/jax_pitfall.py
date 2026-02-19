@@ -125,6 +125,11 @@ def _get_default_pitfall_asset_config() -> tuple:
     return (
         {'name': 'background', 'type': 'background'},
         {
+            'name': 'backdrop_wall_and_ladder',
+            'type': 'single',
+            'file': 'backdrop_wall_and_ladder.npy',
+        },
+        {
             'name': 'harry_idle',
             'type': 'group',
             'files': ['harryidle1.npy'],
@@ -403,7 +408,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         WW = self.consts.tunnel_wall_width
 
         LEFT_WALL_X = 11
-        RIGHT_WALL_X = 144
+        RIGHT_WALL_X = 136
 
         def clamp_wall_x(x: int) -> int:
             return max(0, min(W - WW, x))
@@ -480,6 +485,13 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         )
 
         entering_ladder = (~state.on_ladder) & (enter_from_upper | enter_from_lower)
+
+        centered_x_on_ladder = (
+            ladder_x.astype(jnp.float32)
+            + (ladder_w.astype(jnp.float32) - player_w.astype(jnp.float32)) * 0.5
+            - 1.0
+        )
+        x = jnp.where(entering_ladder, centered_x_on_ladder, x)
 
         climb_speed = jnp.asarray(1.5, dtype=jnp.float32)
 
@@ -1222,7 +1234,39 @@ class PitfallRenderer(JAXGameRenderer):
 
         converted_asset_config = []
         for asset in asset_config:
-            if asset.get('name') == 'scorpion_left' and asset.get('type') == 'group' and 'files' in asset:
+            if asset.get('name') == 'backdrop_wall_and_ladder' and asset.get('type') == 'single' and 'file' in asset:
+                file_path = os.path.join(sprite_path, asset['file'])
+                backdrop_np = np.load(file_path)
+                backdrop = jnp.asarray(backdrop_np, dtype=jnp.uint8)
+
+                if backdrop.ndim == 2:
+                    alpha = jnp.where(backdrop > 0, jnp.uint8(255), jnp.uint8(0))
+                    backdrop = jnp.stack([backdrop, backdrop, backdrop, alpha], axis=2).astype(jnp.uint8)
+                elif backdrop.ndim == 3 and backdrop.shape[2] == 3:
+                    alpha = jnp.where(jnp.any(backdrop != 0, axis=2), jnp.uint8(255), jnp.uint8(0))
+                    backdrop = jnp.concatenate([backdrop.astype(jnp.uint8), alpha[:, :, None]], axis=2)
+                elif not (backdrop.ndim == 3 and backdrop.shape[2] == 4):
+                    raise ValueError(f"Unsupported backdrop format for backdrop_wall_and_ladder: shape={backdrop.shape}")
+
+                bh, bw = int(backdrop.shape[0]), int(backdrop.shape[1])
+                if bh != h or bw != w:
+                    raise ValueError(
+                        f"backdrop_wall_and_ladder has unexpected size {(bh, bw)}; expected {(h, w)}"
+                    )
+
+                top_black_rows = 6
+                left_black_cols = 8
+                backdrop = backdrop.at[:top_black_rows, :, :].set(backdrop[top_black_rows:top_black_rows + 1, :, :])
+                backdrop = backdrop.at[:, :left_black_cols, :].set(backdrop[:, left_black_cols:left_black_cols + 1, :])
+
+                converted_asset_config.append(
+                    {
+                        'name': 'backdrop_wall_and_ladder',
+                        'type': 'single',
+                        'data': backdrop,
+                    }
+                )
+            elif asset.get('name') == 'scorpion_left' and asset.get('type') == 'group' and 'files' in asset:
                 converted_asset_config.append(
                     {
                         'name': 'scorpion_left',
@@ -1247,7 +1291,7 @@ class PitfallRenderer(JAXGameRenderer):
 
         asset_config.extend(
             [
-                {'name': 'color_ladder', 'type': 'procedural', 'data': _color_swatch((0, 0, 255))},
+                {'name': 'color_ladder', 'type': 'procedural', 'data': _color_swatch((134, 134, 29))},
                 {'name': 'color_wall', 'type': 'procedural', 'data': _color_swatch((180, 40, 0))},
                 {'name': 'color_wood', 'type': 'procedural', 'data': _color_swatch((110, 70, 25))},
                 {'name': 'color_fire', 'type': 'procedural', 'data': _color_swatch((255, 120, 0))},
@@ -1327,6 +1371,41 @@ class PitfallRenderer(JAXGameRenderer):
         self.SCORPION_LEFT_MASKS = _pad_to(scorpion_left, scorpion_h, scorpion_w)
         self.SCORPION_RIGHT_MASKS = _pad_to(scorpion_right, scorpion_h, scorpion_w)
 
+    def _prefer_backdrop_in_region(
+        self,
+        raster: jnp.ndarray,
+        base: jnp.ndarray,
+        x0: jnp.ndarray,
+        y0: jnp.ndarray,
+        w: jnp.ndarray,
+        h: jnp.ndarray,
+    ) -> jnp.ndarray:
+        """
+        Overwrite raster pixels with base pixels inside the region where the base is non-transparent.
+        """
+        H = int(self.consts.screen_height)
+        W = int(self.consts.screen_width)
+
+        x0 = jnp.clip(x0.astype(jnp.int32), 0, W)
+        y0 = jnp.clip(y0.astype(jnp.int32), 0, H)
+        w = jnp.maximum(jnp.int32(0), jnp.minimum(w.astype(jnp.int32), W - x0))
+        h = jnp.maximum(jnp.int32(0), jnp.minimum(h.astype(jnp.int32), H - y0))
+
+        def _apply(r: jnp.ndarray) -> jnp.ndarray:
+            ys = jnp.arange(H, dtype=jnp.int32)[:, None]
+            xs = jnp.arange(W, dtype=jnp.int32)[None, :]
+
+            in_y = (ys >= y0) & (ys < (y0 + h))
+            in_x = (xs >= x0) & (xs < (x0 + w))
+            region_mask = in_y & in_x
+
+            keep_base = base != jnp.asarray(self.jr.TRANSPARENT_ID, dtype=base.dtype)
+            mask = region_mask & keep_base
+
+            return jnp.where(mask, base, r)
+
+        return lax.cond((w > 0) & (h > 0), _apply, lambda r: r, raster)
+
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: PitfallState) -> jnp.ndarray:
         raster = self.jr.create_object_raster(self.BACKGROUND)
@@ -1337,6 +1416,25 @@ class PitfallRenderer(JAXGameRenderer):
         has_ladder = (pt == jnp.uint8(0)) | (pt == jnp.uint8(1))
         has_scorpion = has_scorpion_from_room_byte(rb)
         has_wall = has_ladder
+        wall_side_bit = wall_side_u8(rb)
+        has_right_wall_ladder_backdrop = (
+            (pt == jnp.uint8(0)) &
+            (wall_side_bit == jnp.uint8(1))
+        )
+
+        raster = lax.cond(
+            has_right_wall_ladder_backdrop,
+            lambda r: self.jr.render_at_clipped(
+                r,
+                jnp.int32(0),
+                jnp.int32(0),
+                self.SHAPE_MASKS['backdrop_wall_and_ladder'],
+                flip_horizontal=jnp.array(False, dtype=jnp.bool_),
+                flip_offset=jnp.array([0, 0], dtype=jnp.int32),
+            ),
+            lambda r: r,
+            raster,
+        )
 
         # ---- Holes (black cutouts) ----
         has_side_holes = pt == jnp.uint8(1)
@@ -1356,8 +1454,9 @@ class PitfallRenderer(JAXGameRenderer):
         hole_top = jnp.int32(int(self.consts.ground_y))
         hole_h = jnp.int32(max(0, int(self.consts.underground_y) - int(self.consts.ground_y)))
 
+        draw_center_hole = has_ladder & (~has_right_wall_ladder_backdrop)
         ladder_hole_pos = jnp.where(
-            has_ladder,
+            draw_center_hole,
             jnp.array([ladder_x, hole_top], dtype=jnp.int32),
             jnp.array([-1, -1], dtype=jnp.int32),
         )
@@ -1378,20 +1477,21 @@ class PitfallRenderer(JAXGameRenderer):
         raster = self.jr.draw_rects(raster, left_pos[None, :], hole_size[None, :], int(self.HOLE_ID))
         raster = self.jr.draw_rects(raster, right_pos[None, :], hole_size[None, :], int(self.HOLE_ID))
 
-        wall_side_bit = wall_side_u8(rb)
         wall_x = jnp.where(wall_side_bit == jnp.uint8(1), self.right_wall_x_px, self.left_wall_x_px).astype(jnp.int32)
 
         ladder_x = self.ladder_x_px.astype(jnp.int32)
         ladder_top = jnp.int32(int(self.consts.ground_y) - 1)
         ladder_h = jnp.int32(int(self.consts.underground_y + 1) - int(self.consts.ground_y - 1))
 
-        ladder_pos = jnp.where(has_ladder, jnp.array([ladder_x, ladder_top], dtype=jnp.int32), jnp.array([-1, -1], dtype=jnp.int32))
+        draw_ladder_rect = has_ladder & (~has_right_wall_ladder_backdrop)
+        ladder_pos = jnp.where(draw_ladder_rect, jnp.array([ladder_x, ladder_top], dtype=jnp.int32), jnp.array([-1, -1], dtype=jnp.int32))
         ladder_size = jnp.array([jnp.int32(self.consts.ladder_width), ladder_h], dtype=jnp.int32)
         raster = self.jr.draw_rects(raster, ladder_pos[None, :], ladder_size[None, :], int(self.LADDER_ID))
 
         wall_top = jnp.int32(int(self.consts.ground_y))
         wall_h = jnp.int32(max(0, int(self.consts.underground_y) - int(self.consts.ground_y)))
-        wall_pos = jnp.where(has_wall, jnp.array([wall_x, wall_top], dtype=jnp.int32), jnp.array([-1, -1], dtype=jnp.int32))
+        draw_wall_rect = has_wall & (~has_right_wall_ladder_backdrop)
+        wall_pos = jnp.where(draw_wall_rect, jnp.array([wall_x, wall_top], dtype=jnp.int32), jnp.array([-1, -1], dtype=jnp.int32))
         wall_size = jnp.array([jnp.int32(self.consts.tunnel_wall_width), wall_h], dtype=jnp.int32)
         raster = self.jr.draw_rects(raster, wall_pos[None, :], wall_size[None, :], int(self.WALL_ID))
 
@@ -1464,6 +1564,8 @@ class PitfallRenderer(JAXGameRenderer):
         snake_size = jnp.array([snake_w, snake_h], dtype=jnp.int32)
         raster = self.jr.draw_rects(raster, snake_pos[None, :], snake_size[None, :], int(self.SNAKE_ID))
 
+        raster_base = raster
+
         scorpion_period = jnp.int32(max(1, int(self.consts.scorpion_anim_period)))
         scorpion_anim_idx = jnp.mod(frames_elapsed // scorpion_period, jnp.int32(2)).astype(jnp.int32)
         scorpion_facing_right = (state.player_x - state.scorpion_x) >= jnp.asarray(0.0, dtype=jnp.float32)
@@ -1529,6 +1631,18 @@ class PitfallRenderer(JAXGameRenderer):
             harry_mask,
             flip_horizontal=flip,
             flip_offset=flip_offset,
+        )
+
+        cap_x0 = jnp.maximum(ladder_x - jnp.int32(1), jnp.int32(0))
+        cap_y0 = jnp.maximum(hole_top - jnp.int32(4), jnp.int32(0))
+        cap_w = ladder_w + jnp.int32(2)
+        cap_h = jnp.int32(6)
+
+        raster = lax.cond(
+            has_right_wall_ladder_backdrop,
+            lambda r: self._prefer_backdrop_in_region(r, raster_base, cap_x0, cap_y0, cap_w, cap_h),
+            lambda r: r,
+            raster,
         )
 
         frame = self.jr.render_from_palette(raster, self.PALETTE)
