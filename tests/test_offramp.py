@@ -103,8 +103,9 @@ class TestOfframpState:
         state = move_player_onto_offramp(env, state)
         assert state.player_on_offramp
 
-        # Advance to merge zone (scroll_end = 700)
-        state = state._replace(scrolling_step_counter=jnp.array(700, dtype=jnp.int32))
+        # Advance to merge zone: scroll_end=700 means merge appears at x=0 then.
+        # Use a value just past scroll_end so merge is on screen and offramp is still active.
+        state = state._replace(scrolling_step_counter=jnp.array(703, dtype=jnp.int32))
 
         # Move DOWN to descend back to the main road
         for _ in range(20):
@@ -184,11 +185,12 @@ class TestOfframpInactive:
         assert not bool(in_split)
 
     def test_offramp_inactive_after_scroll_end(self):
-        """After scroll_end, the offramp should be inactive."""
+        """After the merge exits the screen, the offramp should be inactive."""
         env = make_env()
         _, state = env.reset(jax.random.PRNGKey(0))
-        # scroll_end = 700; go well past it
-        state = state._replace(scrolling_step_counter=jnp.array(750, dtype=jnp.int32))
+        # scroll_end = 700; merge exits at ~700 + (160+16)//3 = 758.
+        # Use a value well past the exit.
+        state = state._replace(scrolling_step_counter=jnp.array(800, dtype=jnp.int32))
 
         offramp_active, _, _, _, _ = env._get_offramp_info(state)
         assert not bool(offramp_active)

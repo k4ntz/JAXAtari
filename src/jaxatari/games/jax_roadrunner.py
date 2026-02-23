@@ -25,8 +25,9 @@ class RoadSectionConfig(NamedTuple):
 class OfframpConfig(NamedTuple):
     """Configuration for an offramp section in a level."""
     enabled: bool = False
-    scroll_start: int = 0  # Scroll step when the split first becomes visible (from the right)
-    scroll_end: int = 0    # Scroll step when the merge first becomes visible (from the right)
+    scroll_start: int = 0  # Scroll step when the split first appears on the left screen edge
+    scroll_end: int = 0    # Scroll step when the merge first appears on the left screen edge;
+                           # the offramp remains active until the merge sprite exits the screen
 
 
 class LevelConfig(NamedTuple):
@@ -654,12 +655,16 @@ class JaxRoadRunner(
             scroll_end = jnp.array(0)
 
         counter = state.scrolling_step_counter
-        offramp_active = enabled & (counter >= scroll_start) & (counter < scroll_end)
 
         # Screen x of split leading edge: 0 at scroll_start, grows right each step
         split_x = (counter - scroll_start) * SPEED
         # Screen x of merge leading edge: 0 at scroll_end, grows right each step
         merge_x = (counter - scroll_end) * SPEED
+
+        # The offramp is active from when the split appears until the merge exits the right
+        # edge of the screen.  Extending through the full merge animation ensures the player
+        # can exit during the merge and that the merge sprite is rendered correctly.
+        offramp_active = enabled & (counter >= scroll_start) & (merge_x < W + RAMP_W)
 
         # Transition is possible when the respective sprite overlaps the visible area
         in_split_zone = enabled & (split_x > -RAMP_W) & (split_x < W + RAMP_W)
@@ -799,6 +804,8 @@ class JaxRoadRunner(
             self._get_offramp_info(state)
         road_top_after, _, _ = self._get_road_bounds(state)
         in_transition = in_split_zone | in_merge_zone
+        # Use the midpoint of the gap between the offramp bottom and main road top as the
+        # Y threshold: player is "on the offramp" when their top is above this midpoint.
         threshold_y = (offramp_bottom + road_top_after) // 2
         on_offramp_by_y = player_y.astype(jnp.int32) < threshold_y
         new_on_offramp = jnp.where(
@@ -2428,7 +2435,10 @@ class RoadRunnerRenderer(JAXGameRenderer):
         W = self.consts.WIDTH
         MARGIN = self.consts.SIDE_MARGIN
 
-        offramp_active = enabled & (counter >= scroll_start) & (counter < scroll_end)
+        # Screen x of merge leading edge (used to determine when to stop rendering)
+        merge_x_check = (counter - scroll_end) * SPEED
+        # Active from split appearance until the merge sprite exits the right screen edge
+        offramp_active = enabled & (counter >= scroll_start) & (merge_x_check < W + RAMP_W)
 
         # Static Y position of the offramp road
         offramp_top = self.consts.ROAD_TOP_Y - self.consts.OFFRAMP_GAP - OFFRAMP_H
