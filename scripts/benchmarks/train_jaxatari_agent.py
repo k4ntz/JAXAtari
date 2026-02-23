@@ -10,7 +10,7 @@ import numpy as np
 from typing import Dict, Any, Tuple, List, Callable
 from collections import deque
 from tqdm import tqdm
-from scripts.benchmarks.ppo_agent_old import ActorCritic, create_ppo_train_state, ppo_loss_fn, ppo_update_minibatch 
+from scripts.benchmarks.ppo_agent_old import ActorCritic, create_ppo_train_state, ppo_loss_fn, ppo_update_minibatch
 import pygame
 from functools import partial
 
@@ -109,7 +109,7 @@ def compute_advantages(
     """JIT-compiled function to compute advantages and returns."""
     advantages = jnp.zeros_like(rewards)
     last_gae_lam = 0
-    
+
     for t in reversed(range(num_steps)):
         if t == num_steps - 1:
             next_non_terminal = 1.0 - dones[t]
@@ -117,11 +117,11 @@ def compute_advantages(
         else:
             next_non_terminal = 1.0 - dones[t]
             next_values = values[t+1]
-        
+
         delta = rewards[t] + gamma * next_values * next_non_terminal - values[t]
         advantages = advantages.at[t].set(delta + gamma * gae_lambda * next_non_terminal * last_gae_lam)
         last_gae_lam = advantages[t]
-    
+
     returns = advantages + values
     return advantages, returns
 
@@ -146,7 +146,7 @@ def update_minibatch_vmapped(
     def single_update(carry, x):
         train_state = carry
         mb_indices = x
-        
+
         train_state, loss, aux_info = ppo_update_minibatch(
             train_state,
             obs[mb_indices],
@@ -164,35 +164,35 @@ def update_minibatch_vmapped(
             }
         )
         return train_state, (loss, aux_info)
-    
+
     # Create minibatch indices
     total_batch_size = obs.shape[0]
     minibatch_size = total_batch_size // num_minibatches
     indices = jnp.arange(total_batch_size)
     indices = jnp.reshape(indices, (num_minibatches, minibatch_size))
-    
+
     # Vmap the updates
     final_state, (losses, aux_infos) = jax.lax.scan(single_update, train_state, indices)
-    
+
     # Average the losses and aux_infos
     avg_loss = jax.tree.map(lambda x: jnp.mean(x, axis=0), losses)
     avg_aux_info = jax.tree.map(lambda x: jnp.mean(x, axis=0), aux_infos)
-    
+
     return final_state, avg_loss, avg_aux_info
 
 
 def train_ppo_with_jaxatari(config: Dict[str, Any]):
-    np.random.seed(config["SEED"]) 
+    np.random.seed(config["SEED"])
     main_rng = jax.random.PRNGKey(config["SEED"])
 
-    game_name = config["ENV_NAME_JAXATARI"] 
+    game_name = config["ENV_NAME_JAXATARI"]
 
     if game_name != "pong":
         # TODO: change the core to support other games
         raise ValueError(f"Game {game_name} is not supported for PPO training right now.")
 
     buffer_window = config["BUFFER_WINDOW"]
-    
+
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     )
@@ -250,11 +250,11 @@ def train_ppo_with_jaxatari(config: Dict[str, Any]):
     rollout_dones = jnp.zeros((config["NUM_STEPS"], config["NUM_ENVS"]), dtype=jnp.bool_)
     rollout_values = jnp.zeros((config["NUM_STEPS"], config["NUM_ENVS"]), dtype=jnp.float32)
 
-    episode_rewards_deque = deque(maxlen=100 * config["NUM_ENVS"]) 
-    all_episode_rewards_history = [] 
+    episode_rewards_deque = deque(maxlen=100 * config["NUM_ENVS"])
+    all_episode_rewards_history = []
     all_mean_rewards_history, all_timesteps_history = [], []
     all_pg_loss_hist, all_vf_loss_hist, all_ent_hist = [], [], []
-    current_episode_rewards_np = np.zeros(config["NUM_ENVS"]) 
+    current_episode_rewards_np = np.zeros(config["NUM_ENVS"])
 
     # Create progress bar for overall training
     pbar = tqdm(total=config["NUM_UPDATES"], desc="Training Progress", position=0)
@@ -264,7 +264,7 @@ def train_ppo_with_jaxatari(config: Dict[str, Any]):
 
         # Create progress bar for rollout steps
         rollout_pbar = tqdm(total=config["NUM_STEPS"], desc="Rollout", position=1, leave=False)
-        
+
         # Track rewards during rollout for immediate feedback
         rollout_rewards_sum = 0
         rollout_rewards_count = 0
@@ -319,7 +319,7 @@ def train_ppo_with_jaxatari(config: Dict[str, Any]):
             rollout_log_probs = rollout_log_probs.at[step_idx].set(log_probs)
             rollout_rewards = rollout_rewards.at[step_idx].set(rewards)
             rollout_dones = rollout_dones.at[step_idx].set(dones)
-            
+
             current_obs_stacked_norm_flat = next_obs_norm
             current_batched_env_states = next_batched_env_states
 
@@ -328,12 +328,12 @@ def train_ppo_with_jaxatari(config: Dict[str, Any]):
                 "env_steps": total_env_steps_so_far,
                 "avg_reward": f"{rollout_rewards_sum / rollout_rewards_count:.2f}" if rollout_rewards_count > 0 else "N/A"
             })
-    
+
         rollout_pbar.close()
 
         # Get final value for advantage calculation
         _, last_val = train_state.apply_fn({'params': train_state.params}, current_obs_stacked_norm_flat)
-        
+
         # Use JIT-compiled advantage calculation
         advantages, returns = compute_advantages(
             rollout_rewards,
@@ -348,7 +348,7 @@ def train_ppo_with_jaxatari(config: Dict[str, Any]):
         b_obs = rollout_obs_flat.reshape((-1,) + obs_shape_flat)
         b_actions = rollout_actions.reshape(-1)
         b_log_probs_old = rollout_log_probs.reshape(-1)
-        b_values_old = rollout_values.reshape(-1) 
+        b_values_old = rollout_values.reshape(-1)
         b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
 
@@ -381,7 +381,7 @@ def train_ppo_with_jaxatari(config: Dict[str, Any]):
                 config["VF_COEF"],
                 config["MAX_GRAD_NORM"]
             )
-            
+
         if update_idx % config.get("LOG_INTERVAL_UPDATES", 10) == 0:
             mean_all_rewards = np.mean(list(episode_rewards_deque))
             all_mean_rewards_history.append(mean_all_rewards)

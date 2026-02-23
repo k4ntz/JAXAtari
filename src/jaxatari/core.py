@@ -51,6 +51,7 @@ GAME_MODULES = {
     "videopinball": "jaxatari.games.jax_videopinball",
     "wordzapper": "jaxatari.games.jax_wordzapper",
     # Add new games here
+    "gopher": "jaxatari.games.jax_gopher",
 }
 
 # Mod modules registry: for each game, provide the Controller class path
@@ -162,3 +163,20 @@ def make_renderer(game_name: str) -> JAXGameRenderer:
         return renderer_class()
     except (ImportError, AttributeError) as e:
       raise ImportError(f"Failed to load renderer for '{game_name}': {e}") from e
+
+def modify(env, env_name: str, mod_name: str):
+    """
+    Official JAXAtari modification entry point.
+    This is what pqn_agent.py is looking for!
+    """
+    if mod_name is None or mod_name.lower() == "none":
+        return env
+
+    # This part handles the logic for applying a mod based on a string name
+    # For now, we manually check for our new lazy gopher mod
+    if mod_name.lower() == "lazyenemywrapper":
+        from jaxatari.wrappers import LazyEnemyWrapper
+        return LazyEnemyWrapper(env)
+
+    # If the mod isn't found, just return the normal environment
+    return env

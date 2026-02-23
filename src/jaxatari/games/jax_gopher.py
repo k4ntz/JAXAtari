@@ -8,6 +8,8 @@ import jax
 import jax.lax
 import jax.numpy as jnp
 import chex
+import flax.struct
+from jaxatari.environment import ObjectObservation
 
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
@@ -65,21 +67,14 @@ def _get_default_asset_config() -> tuple:
 #  GAME CONSTANTS
 # ==========================================================================================
 
-class GopherConstants(NamedTuple):
+@flax.struct.dataclass
+class GopherConstants:
     # --- Screen / Dimensions ---
     WIDTH: int = 160                                   
     HEIGHT: int = 210
     NUM_TILES: int = 40
     TILE_WIDTH: int = 4                                # Tunnel tile width
     
-    # Grid Dimensions
-    GROUND_HEIGHT: int = 24
-    NUM_COLUMNS: int = 42
-    NUM_ROWS: int = 30
-    
-    # --- FIXED: Added NUM_TILES alias ---
-    NUM_TILES: int = 40  # Same as NUM_COLUMNS
-    TILE_WIDTH: int = 4  # 168 / 42 = 4
 
     # --- Entity Sizes ---
     PLAYER_SIZE: Tuple[int, int] = (13, 50)
@@ -99,9 +94,9 @@ class GopherConstants(NamedTuple):
     PEEK_DECISION_Y: float = 168.0
     CEILING_Y: float = 148.0
     
-    PLAYER_START_X: float = 74.0
-    PLAYER_START_Y: float = 96.0
-    GOPHER_START_X: float = 144.0
+    PLAYER_START_X: float = 72.0
+    PLAYER_START_Y: float = 95.0
+    GOPHER_START_X: float = 143.0
     GOPHER_START_Y: float = 183.0
     GOPHER_TOP_Y: float = 148.0
     DUCK_Y_POS: float = 30                            
@@ -136,7 +131,7 @@ class GopherConstants(NamedTuple):
     PUSH_DOWN_OFFSET: int = 3.0
     
     BONK_X_TOLERANCE: float = 13.0
-    BONK_Y_THRESHOLD: float = 170.0
+    BONK_Y_THRESHOLD: float = 176.0
     SPRITE_OFFSET_PLAYER_SEED: int = 3
 
     # --- Timers(in frames) ---
@@ -154,7 +149,7 @@ class GopherConstants(NamedTuple):
     PROB_DIG_L3: float = 0.6         
     PROB_CONTINUE_AFTER_L3: float = 0.8  
     PROB_PEEK_AT_SURFACE: float = 0.5    
-    PROB_STEAL_NORMAL: float = 1.0          
+    PROB_STEAL_NORMAL: float = 0.7          
     PROB_DUCK_SPAWN: float = 0.02
     # Smarter gopher probabilities
     PROB_STEAL_SMART: float = 0.9
@@ -163,12 +158,14 @@ class GopherConstants(NamedTuple):
     SCORE_FOR_DUCK: int = 500               # Threshold for bonus duck to show up
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
-class GopherState(NamedTuple):
+@flax.struct.dataclass
+class GopherState:
     # --- Player ---
     player_x: chex.Array  
     player_speed: chex.Array                        
     player_has_seed: chex.Array             # 0 = No, 1 = Yes
     bonk_timer: chex.Array
+    prev_fire_pressed: chex.Array  # To check for "Tap" vs "Hold"
     
     # --- Gopher ---
     gopher_position: chex.Array            
@@ -285,13 +282,29 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         valid_fire = fire_pressed & jnp.logical_not(is_frozen)
         is_bonking = state.bonk_timer > 0
         
-        # Timer increments up to 14 frames then resets
-        def increment_timer(t): return jax.lax.select(t >= 14, 0 , t + 1)
-        new_bonk_timer = jax.lax.cond(
-            jnp.logical_or(valid_fire, is_bonking),
-            increment_timer, lambda t: 0, operand = state.bonk_timer
-        )
 
+
+        # --- NEW: Press-Release Fire Logic ---
+        # 1. Check if button is currently down
+        current_fire_down = (action == Action.FIRE) | (action == Action.DOWNFIRE) | \
+                            (action == Action.LEFTFIRE) | (action == Action.RIGHTFIRE)
+        
+        # 2. Check if it was NOT down last frame (A fresh tap)
+        is_fresh_press = current_fire_down & jnp.logical_not(state.prev_fire_pressed)
+        
+        # 3. Can only start bonk if not frozen and not already bonking
+        valid_start = is_fresh_press & jnp.logical_not(is_frozen) & (state.bonk_timer == 0)
+
+        # Timer increments up to 14 frames then resets
+        def handle_timer(t):
+            return jax.lax.cond(
+                t == 0,
+                lambda _: jax.lax.select(valid_start, 1, 0), # Start new swing
+                lambda _: jax.lax.select(t >= 5, 0, t + 1),  # Increment or Reset
+                operand=None
+            )
+
+        new_bonk_timer = handle_timer(state.bonk_timer)
         new_state = state._replace(
             player_x = proposed_player_x, 
             player_speed = final_speed,
@@ -410,7 +423,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         Detects if Player hit Gopher.
         """
         # Check Player Attack Window 
-        is_attacking = (state.bonk_timer > 0) & (state.bonk_timer < 10)
+        is_attacking = (state.bonk_timer >= 3)
         
         # Check Horizontal Alignment
         p_center = state.player_x + (self.consts.PLAYER_SIZE[0] / 2.0)
@@ -428,12 +441,14 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         is_run_bonk = hit_connects & (act == GopherAction.STEALING)
         
         # Type 2: Hole Bonk (Peeking, Prep, or High Dig)
-        # is_peeking = (act == GopherAction.SEEING_CARROT)
-        # is_prepping = (act == GopherAction.PREPARE_STEAL)
-        # is_climbing_exposed = (act == GopherAction.DIGGING_UP) & (y < self.consts.BONK_Y_THRESHOLD)
+        is_peeking = (act == GopherAction.SEEING_CARROT) | (act == GopherAction.PREPARE_STEAL)
         
-        # is_exposed = is_peeking | is_prepping | is_climbing_exposed
-        is_exposed = (y < self.consts.PEEK_DECISION_Y)                     
+        is_climbing = (act == GopherAction.DIGGING_UP) | \
+                      (act == GopherAction.DIGGING_DOWN) | \
+                      (act == GopherAction.PREPARE_CLIMB)
+        is_exposed_climb = is_climbing & (y < self.consts.BONK_Y_THRESHOLD)
+        
+        is_exposed = is_peeking | is_exposed_climb                   
         is_hole_bonk = hit_connects & is_exposed
         return is_hole_bonk, is_run_bonk
         
@@ -471,7 +486,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
 
         
         # --- Wake up from start delay ---
-        finish_start_delay = (curr_act == GopherAction.START_DELAY) & (timer == 0) & fire_pressed
+        finish_start_delay = (curr_act == GopherAction.START_DELAY) & (timer == 0)
         next_act = jax.lax.select(finish_start_delay, jnp.array(GopherAction.IDLE), next_act)
 
         # --- Walking ---
@@ -678,11 +693,13 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         final_y = jnp.clip(new_y, self.consts.CEILING_Y, self.consts.GOPHER_START_Y)
         return final_x, final_y, final_act, final_timer, new_holes
     
-    def _resolve_collisions_and_reset(self, state: GopherState, is_stealing: bool, is_any_bonk: bool, current_x: float, current_y: float) -> GopherState:
+    def _resolve_collisions_and_reset(self, state: GopherState, is_any_bonk: bool) -> GopherState:
         """
         Handles Carrot eating, Game Over, and Resets.
         """
-        
+        current_x = state.gopher_position[0]
+        is_stealing = state.gopher_action == GopherAction.STEALING
+
         # Carrot Collision
         gx = current_x
         c_pos = jnp.array(self.consts.CARROT_X_POSITION)
@@ -773,9 +790,9 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
             operand=None
         )
 
-        return final_state
+        return final_state, game_over
     
-    def _gopher_step(self, state: GopherState, fire_pressed: bool) -> GopherState:
+    def _gopher_step(self, state: GopherState, fire_pressed: bool) -> Tuple[GopherState, bool]:
         '''
         Handle main Gopher move
         '''
@@ -826,12 +843,9 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
             key=key
         )
 
-        # Check game over condition and reset
-        final_state = self._resolve_collisions_and_reset(
-            state_post_physics, is_stealing, is_run_bonk, final_x, final_y
-        )
 
-        return final_state
+
+        return state_post_physics, is_any_bonk
 
     def _process_duck_and_seed(self, state: GopherState, key: chex.Array) -> GopherState:
         """
@@ -962,6 +976,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
             player_speed=jnp.array(0.0),
             player_has_seed=jnp.array(0, dtype=jnp.int32),
             bonk_timer=jnp.array(0, dtype=jnp.int32),
+            prev_fire_pressed=jnp.array(False),
             
             # --- Gopher ---
             gopher_position=jnp.array([self.consts.GOPHER_START_X, self.consts.GOPHER_START_Y], dtype=jnp.float32),
@@ -994,23 +1009,62 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
             key=key,
             frame_count=jnp.array(0)
         )
-        obs = self.render(state)
+        obs = self._get_obs(state)
         return obs, state
+    
+    def _get_obs(self, state: GopherState) -> GopherObservation:
+        """
+        Transforms the internal state into the standardized ObjectObservation.
+        """
+        # Create the Objects Matrix (Shape: [3, 4] for x, y, w, h)
+        player_obj = jnp.array([
+            state.player_x, self.consts.PLAYER_START_Y, 
+            self.consts.PLAYER_SIZE[0], self.consts.PLAYER_SIZE[1]
+        ], dtype=jnp.float32)
+        
+        gopher_obj = jnp.array([
+            state.gopher_position[0], state.gopher_position[1], 
+            self.consts.GOPHER_SIZE[0], self.consts.GOPHER_SIZE[1]
+        ], dtype=jnp.float32)
+        
+        duck_obj = jnp.array([
+            state.duck_x, self.consts.DUCK_Y_POS, 
+            self.consts.DUCK_SIZE[0], self.consts.DUCK_SIZE[1]
+        ], dtype=jnp.float32)
+        
+        objects_matrix = jnp.stack([player_obj, gopher_obj, duck_obj])
 
+        # Create the Globals Vector (All the flags, scores, and binary layouts)
+        globals_vector = jnp.concatenate([
+            state.hole_layout.flatten(),                                 # 18 values
+            state.carrots_present.flatten(),                             # 3 values
+            jnp.array([state.seed_x, state.seed_y, state.seed_active]),  # 3 values
+            jnp.atleast_1d(state.score),                                 # 1 value
+            jnp.array([state.gopher_action, state.gopher_direction_x])   # 2 values
+        ], axis=0).astype(jnp.float32)
+
+        return ObjectObservation(
+            objects=objects_matrix,
+            globals=globals_vector
+        )
+        
     def step(self, state: GopherState, action: chex.Array) -> tuple[chex.Array, GopherState, jnp.ndarray, jnp.ndarray, dict]:
         key, k_duck = jax.random.split(state.key)
         state = state._replace(key=key) 
-
+        
+        old_score = state.score
         state, fire_pressed = self._player_step(state, action)
         state = self._handle_repairs(state)
         state = self._handle_planting(state)           
         state = self._process_duck_and_seed(state, k_duck) 
 
-        state = self._gopher_step(state, fire_pressed)
+        state, is_any_bonk = self._gopher_step(state, fire_pressed)
+        state, game_over = self._resolve_collisions_and_reset(state, is_any_bonk)
         state = state._replace(frame_count=state.frame_count + 1)
-        obs = self.render(state)
-        reward = jnp.array(0.0)
-        done = jnp.array(False)
+        
+        obs = self._get_obs(state)
+        reward = (state.score - old_score).astype(jnp.float32)
+        done = game_over
         info = self._get_info(state)
         return obs, state, reward, done, info
     
@@ -1020,6 +1074,29 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
     
     def action_space(self): 
         return spaces.Discrete(len(self.action_set))
+    
+    def observation_space(self) -> spaces.Space:
+        """
+        Defines the shape and limits of the GopherObservation data.
+        """
+        return spaces.Dict({
+        # 3 Objects, 4 Features each (x, y, w, h)
+        "objects": spaces.Box(
+            low=0.0, 
+            high=float(self.consts.WIDTH), 
+            shape=(3, 4), 
+            dtype=jnp.float32
+        ),
+        
+        # 27 Global values (18 holes + 3 carrots + 3 seed data + 1 score + 2 gopher state)
+        "globals": spaces.Box(
+            low=-1.0, 
+            high=1_000_000.0, 
+            shape=(27,), 
+            dtype=jnp.float32
+        )
+    })
+    
     
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: GopherState, ) -> GopherInfo:
@@ -1083,10 +1160,15 @@ class GopherRenderer(JAXGameRenderer):
         raster = jax.lax.fori_loop(0, 3, draw_one_carrot, raster)
         
         # --- Player ---
-        base_idx = jax.lax.select(state.bonk_timer < 2, 0, jax.lax.select(state.bonk_timer < 4, 1, jax.lax.select(state.bonk_timer < 8, 2, 0)))
+        t = state.bonk_timer
+        sprite_select = jax.lax.select(t == 0, 0,
+                        jax.lax.select(t == 1, 1,
+                        jax.lax.select(t == 2, 2, 
+                        1)))
+        # base_idx = jax.lax.select(state.bonk_timer < 2, 0, jax.lax.select(state.bonk_timer < 4, 1, jax.lax.select(state.bonk_timer < 8, 2, 0)))
         final_player_idx = jax.lax.select(state.player_has_seed == 1, 
-                                          base_idx + self.consts.SPRITE_OFFSET_PLAYER_SEED, 
-                                          base_idx)
+                                          sprite_select + self.consts.SPRITE_OFFSET_PLAYER_SEED, 
+                                          sprite_select)
         
         player_mask = self.SHAPE_MASKS["player"][final_player_idx]
         raster = self.jr.render_at(raster, jnp.int32(state.player_x), jnp.int32(self.consts.PLAYER_START_Y), player_mask)
