@@ -1541,7 +1541,7 @@ class JaxRoadRunner(
 
         spawn_y = spawn_road_top - consts.CANNON_SIZE[1] # Keep the subtraction, as the road_top is technically the top pixel of the road surface. If it spawns too high, we need to adjust the subtraction. Wait, previously it said "it needs to sit right on top of the road". The road is at Y=road_top. Things are drawn from top-left, so Y=road_top-height puts it exactly on top of the road. But maybe it needs to overlap, so let's adjust it by adding CANNON_SIZE[1]//2. Actually, let's just make spawn_y = spawn_road_top - consts.CANNON_SIZE[1] + 3. Or just spawn_road_top - 12. Let's make it spawn_y = spawn_road_top - consts.CANNON_SIZE[1] + 6
 
-        spawn_y = spawn_road_top - consts.CANNON_SIZE[1] + 6
+        spawn_y = spawn_road_top - consts.CANNON_SIZE[1] + 2
 
         next_cannon_spawn_step = state.scrolling_step_counter + jax.random.randint(
             rng_interval, (), cannon_spawn_bounds[0],
