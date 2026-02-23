@@ -28,6 +28,7 @@ class OfframpConfig(NamedTuple):
     scroll_start: int = 0  # Scroll step when the split first appears on the left screen edge
     scroll_end: int = 0    # Scroll step when the merge first appears on the left screen edge;
                            # the offramp remains active until the merge sprite exits the screen
+    bridges: Tuple[int, ...] = ()  # Scroll steps at which vertical bridges appear across the median
 
 
 class LevelConfig(NamedTuple):
@@ -115,6 +116,7 @@ class RoadRunnerConstants(NamedTuple):
     OFFRAMP_HEIGHT: int = 16   # Height of offramp road in pixels (narrow "one lane")
     OFFRAMP_GAP: int = 8       # Gap (median) between offramp bottom and main road top
     OFFRAMP_RAMP_WIDTH: int = 24  # Width of the diagonal split/merge transition in pixels
+    OFFRAMP_BRIDGE_WIDTH: int = 8  # Width of a bridge segment crossing the median
     # --- Decoration Type Constants ---
     DECO_CACTUS = 0
     DECO_SIGN_THIS_WAY = 1
@@ -185,6 +187,7 @@ RoadRunner_Level_1 = LevelConfig(
         enabled=True,
         scroll_start=200,
         scroll_end=700,
+        bridges=(450,),  # one bridge roughly in the middle of the offramp stretch
     ),
 )
 
@@ -337,26 +340,33 @@ def _build_spawn_enabled_array(
     )
 
 
+MAX_OFFRAMP_BRIDGES: int = 8  # Maximum number of bridges per offramp section
+
+
 def _build_offramp_arrays(
     levels: Tuple[LevelConfig, ...],
 ) -> jnp.ndarray:
     """
     Build offramp data arrays from level configs.
 
-    Returns array of shape (num_levels, 3) with columns:
-      [enabled (0/1), scroll_start, scroll_end]
+    Returns array of shape (num_levels, 3 + MAX_OFFRAMP_BRIDGES) with columns:
+      [enabled (0/1), scroll_start, scroll_end, bridge_0, bridge_1, ..., bridge_N]
+    Bridge columns hold the scroll-step position of each bridge, or -1 if absent.
     """
     if not levels:
-        return jnp.zeros((0, 3), dtype=jnp.int32)
+        return jnp.zeros((0, 3 + MAX_OFFRAMP_BRIDGES), dtype=jnp.int32)
 
     rows = []
     for cfg in levels:
         offramp = getattr(cfg, 'offramp', OfframpConfig())
+        bridges = list(offramp.bridges)[:MAX_OFFRAMP_BRIDGES]
+        # Pad to fixed length with -1
+        bridges += [-1] * (MAX_OFFRAMP_BRIDGES - len(bridges))
         rows.append([
             1 if offramp.enabled else 0,
             offramp.scroll_start,
             offramp.scroll_end,
-        ])
+        ] + bridges)
     return jnp.array(rows, dtype=jnp.int32)
 
 
@@ -671,6 +681,51 @@ class JaxRoadRunner(
         offramp_top = (offramp_bottom - self.consts.OFFRAMP_HEIGHT).astype(jnp.int32)
         return offramp_active, split_x, merge_x, offramp_top, offramp_bottom
 
+    def _get_bridge_screen_xs(self, state: "RoadRunnerState") -> jnp.ndarray:
+        """Return array of shape (MAX_OFFRAMP_BRIDGES,) with the screen-X left edge of each
+        bridge.  A value of -9999 means the bridge slot is unused (scroll_step == -1)."""
+        SPEED = self.consts.PLAYER_MOVE_SPEED
+        counter = state.scrolling_step_counter
+
+        if self._level_count == 0:
+            return jnp.full((MAX_OFFRAMP_BRIDGES,), -9999, dtype=jnp.int32)
+
+        level_idx = self._get_level_index(state)
+        row = self._offramp_data[level_idx]  # shape (3 + MAX_OFFRAMP_BRIDGES,)
+        bridge_scroll_steps = row[3:]  # shape (MAX_OFFRAMP_BRIDGES,)
+
+        # Screen-X: bridge_scroll_step gives the step at which the bridge's left edge
+        # reaches x=0 (same convention as split_x / merge_x).
+        # A bridge scrolls leftward: screen_x = (counter - bridge_step) * SPEED
+        # bridge_step == -1 means unused; return a sentinel off-screen.
+        bridge_xs = (counter - bridge_scroll_steps) * SPEED
+        # Replace unused slots (bridge_scroll_steps == -1) with off-screen sentinel
+        bridge_xs = jnp.where(bridge_scroll_steps >= 0, bridge_xs, jnp.full_like(bridge_xs, -9999))
+        return bridge_xs
+
+    def _player_at_bridge(
+        self, state: "RoadRunnerState", x_pos: chex.Array
+    ) -> chex.Array:
+        """Return True if the player (left edge at x_pos) overlaps any active bridge."""
+        BRIDGE_W = self.consts.OFFRAMP_BRIDGE_WIDTH
+        PLAYER_W = self.consts.PLAYER_SIZE[0]
+        W = self.consts.WIDTH
+
+        offramp_active, _, _, _, _ = self._get_offramp_info(state)
+        bridge_xs = self._get_bridge_screen_xs(state)
+
+        # Overlap: player right > bridge left AND player left < bridge right, AND bridge on screen
+        def overlaps_bridge(bx):
+            on_screen = (bx >= 0) & (bx < W)
+            overlaps = (x_pos + PLAYER_W > bx) & (x_pos < bx + BRIDGE_W)
+            return on_screen & overlaps
+
+        # OR together all bridge overlaps
+        any_bridge = jnp.any(
+            jnp.array([overlaps_bridge(bridge_xs[i]) for i in range(MAX_OFFRAMP_BRIDGES)])
+        )
+        return offramp_active & any_bridge
+
     def _check_player_bounds(
         self, state: RoadRunnerState, x_pos: chex.Array, y_pos: chex.Array
     ) -> tuple[chex.Array, chex.Array]:
@@ -687,11 +742,11 @@ class JaxRoadRunner(
         PLAYER_W = self.consts.PLAYER_SIZE[0]
 
         # The player can only cross between roads when they are physically at one of the
-        # diagonal connecting sections (split or merge).  This mirrors how the enemy is
-        # always constrained to its current road.
+        # diagonal connecting sections (split or merge) OR at a bridge.
         at_split = (x_pos + PLAYER_W > split_x - RAMP_W) & (x_pos < split_x)
         at_merge = (x_pos + PLAYER_W > merge_x) & (x_pos < merge_x + RAMP_W)
-        in_transition = offramp_active & (at_split | at_merge)
+        at_bridge = self._player_at_bridge(state, x_pos)
+        in_transition = offramp_active & (at_split | at_merge | at_bridge)
 
         # When the offramp is active and the player is on the main road (and not standing
         # at a diagonal transition), the gap/median above the main road is occupied by the
@@ -819,8 +874,8 @@ class JaxRoadRunner(
         new_y_history = new_y_history.at[0].set(state.player_y)
 
         # Determine which road the player is on after movement.
-        # Use the player's proposed X to check whether they are at a diagonal section.
-        # Outside diagonal sections the current road is preserved (bounds already enforce it).
+        # Use the player's proposed X to check whether they are at a diagonal section or bridge.
+        # Outside those crossing points the current road is preserved (bounds already enforce it).
         offramp_active, split_x, merge_x, offramp_top, offramp_bottom = \
             self._get_offramp_info(state)
         road_top_after, _, _ = self._get_road_bounds(state)
@@ -828,7 +883,8 @@ class JaxRoadRunner(
         PLAYER_W = self.consts.PLAYER_SIZE[0]
         at_split = (player_x + PLAYER_W > split_x - RAMP_W) & (player_x < split_x)
         at_merge = (player_x + PLAYER_W > merge_x) & (player_x < merge_x + RAMP_W)
-        in_transition = offramp_active & (at_split | at_merge)
+        at_bridge = self._player_at_bridge(state, player_x)
+        in_transition = offramp_active & (at_split | at_merge | at_bridge)
         # Use the midpoint of the gap between the offramp bottom and main road top as the
         # Y threshold: player is "on the offramp" when their top is above this midpoint.
         threshold_y = (offramp_bottom + road_top_after) // 2
@@ -982,12 +1038,14 @@ class JaxRoadRunner(
         #   1. Player is on the offramp (above gap), enemy on main road.
         #   2. Player is in the upper part of the main road whose 32-px sprite extends into
         #      the gap zone — the median acts as a physical barrier in both cases.
-        # The condition: offramp is active AND the player's top (player_y) is above road_top,
-        # meaning the player is either on the offramp or has their head in the gap area.
+        # EXCEPTION: if the player is at a bridge, the median is bridged — collisions are
+        # possible there (the player is crossing between roads).
+        # The condition: offramp is active AND player is above road_top AND NOT at a bridge.
         offramp_active, _, _, _, _ = self._get_offramp_info(state)
         road_top, _, _ = self._get_road_bounds(state)
         player_above_road_top = state.player_y < road_top
-        collision = collision & ~(offramp_active & (state.player_on_offramp | player_above_road_top))
+        at_bridge = self._player_at_bridge(state, state.player_x)
+        collision = collision & ~(offramp_active & (state.player_on_offramp | player_above_road_top) & ~at_bridge)
 
         return jax.lax.cond(
             collision,
@@ -2140,8 +2198,10 @@ class RoadRunnerRenderer(JAXGameRenderer):
         life_sprite = self._create_life_sprite()
         offramp_road_sprite = self._create_offramp_road_sprite()
         offramp_split_sprite = self._create_offramp_split_sprite()
+        offramp_bridge_sprite = self._create_offramp_bridge_sprite()
         asset_config = self._get_asset_config(
-            road_sprite, life_sprite, offramp_road_sprite, offramp_split_sprite
+            road_sprite, life_sprite, offramp_road_sprite, offramp_split_sprite,
+            offramp_bridge_sprite,
         )
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/roadrunner"
 
@@ -2241,6 +2301,17 @@ class RoadRunnerRenderer(JAXGameRenderer):
         is_road = (y < OFFRAMP_H) | (y >= diagonal_y)
         return jnp.where(is_road[:, :, jnp.newaxis], road_color_rgba, bg_color_rgba)
 
+    def _create_offramp_bridge_sprite(self) -> jnp.ndarray:
+        """Create the bridge sprite: a solid black vertical strip filling the gap (median).
+
+        The bridge connects the bottom of the offramp road to the top of the main road,
+        spanning exactly OFFRAMP_GAP rows and OFFRAMP_BRIDGE_WIDTH columns.
+        """
+        GAP_H = self.consts.OFFRAMP_GAP
+        BRIDGE_W = self.consts.OFFRAMP_BRIDGE_WIDTH
+        road_color_rgba = jnp.array([0, 0, 0, 255], dtype=jnp.uint8)
+        return jnp.broadcast_to(road_color_rgba, (GAP_H, BRIDGE_W, 4)).copy()
+
     def _create_seed_sprite(self) -> jnp.ndarray:
         seed_color_rgba = (0, 0, 255, 255)
         seed_shape = (self.consts.SEED_SIZE[0], self.consts.SEED_SIZE[1], 4)
@@ -2272,6 +2343,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
         life_sprite: jnp.ndarray,
         offramp_road_sprite: jnp.ndarray,
         offramp_split_sprite: jnp.ndarray,
+        offramp_bridge_sprite: jnp.ndarray,
     ) -> list:
         asset_config = [
             {"name": "background", "type": "background", "file": "background.npy"},
@@ -2304,6 +2376,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "offramp_split", "type": "procedural", "data": offramp_split_sprite},
             {"name": "offramp_merge", "type": "procedural",
              "data": jnp.fliplr(offramp_split_sprite)},
+            {"name": "offramp_bridge", "type": "procedural", "data": offramp_bridge_sprite},
         ]
 
         return asset_config
@@ -2533,6 +2606,29 @@ class RoadRunnerRenderer(JAXGameRenderer):
                 lambda cv: cv,
                 c,
             )
+
+            # --- Bridge sprites: one per configured bridge ---
+            # Each bridge is a solid vertical strip filling the gap (median).
+            # bridge Y is just below the offramp road band.
+            bridge_y = offramp_top + OFFRAMP_H
+            bridge_xs = row[3:]  # shape (MAX_OFFRAMP_BRIDGES,)
+            BRIDGE_W = self.consts.OFFRAMP_BRIDGE_WIDTH
+
+            def render_one_bridge(i, cv):
+                bstep = bridge_xs[i]
+                bx = (counter - bstep) * SPEED
+                bx_clamped = jnp.clip(bx, 0, W - BRIDGE_W).astype(jnp.int32)
+                on_screen = (bstep >= 0) & (bx >= 0) & (bx < W)
+                return jax.lax.cond(
+                    on_screen,
+                    lambda can: self.jr.render_at(
+                        can, bx_clamped, bridge_y, self.SHAPE_MASKS["offramp_bridge"]
+                    ),
+                    lambda can: can,
+                    cv,
+                )
+
+            c = jax.lax.fori_loop(0, MAX_OFFRAMP_BRIDGES, render_one_bridge, c)
             return c
 
         return jax.lax.cond(offramp_active, _render_active, lambda c: c, canvas)

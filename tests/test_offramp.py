@@ -12,6 +12,7 @@ from jaxatari.games.jax_roadrunner import (
     RoadRunnerConstants,
     DEFAULT_LEVELS,
     Action,
+    MAX_OFFRAMP_BRIDGES,
 )
 
 
@@ -377,3 +378,123 @@ class TestOfframpNoPositionJump:
             f"Offramp activating pushed player from y={y_before} to y={y_after}; "
             "should not cause a sudden large position change"
         )
+
+
+# ---------------------------------------------------------------------------
+# Bridge tests
+# ---------------------------------------------------------------------------
+
+class TestOfframpBridge:
+    """Verify bridge configuration, physics, and rendering."""
+
+    def _make_env_with_bridge(self, bridge_scroll: int = 450) -> JaxRoadRunner:
+        """Create an env where Level 1 has a single bridge at the given scroll step."""
+        base_level = DEFAULT_LEVELS[0]
+        bridge_level = base_level._replace(
+            offramp=OfframpConfig(
+                enabled=True,
+                scroll_start=200,
+                scroll_end=700,
+                bridges=(bridge_scroll,),
+            )
+        )
+        consts = RoadRunnerConstants(levels=(bridge_level, DEFAULT_LEVELS[1]))
+        return JaxRoadRunner(consts)
+
+    def test_bridge_config_stored(self):
+        """Bridge scroll steps must be preserved in the OfframpConfig."""
+        env = make_env()  # Level 1 already has bridges=(450,)
+        level = env.consts.levels[0]
+        assert level.offramp.enabled
+        assert len(level.offramp.bridges) >= 1
+
+    def test_bridge_data_in_offramp_array(self):
+        """Bridge scroll positions must be stored in the precomputed offramp data array."""
+        from jaxatari.games.jax_roadrunner import MAX_OFFRAMP_BRIDGES
+        env = self._make_env_with_bridge(450)
+        # Row 0 = [enabled, scroll_start, scroll_end, bridge_0, bridge_1, ...]
+        row = env._offramp_data[0]
+        assert int(row[0]) == 1, "enabled flag"
+        assert int(row[3]) == 450, "first bridge scroll step"
+        # Remaining slots should be -1 (unused)
+        for i in range(4, 3 + MAX_OFFRAMP_BRIDGES):
+            assert int(row[i]) == -1, f"unused bridge slot {i} should be -1"
+
+    def test_player_can_cross_at_bridge(self):
+        """Player on the main road can move onto the offramp when standing at a bridge."""
+        env = self._make_env_with_bridge(450)
+        _, state = env.reset(jax.random.PRNGKey(0))
+        consts = env.consts
+
+        # Teleport scroll so the bridge is at the player's X (x=70, width=8).
+        # bridge_x = (counter - 450) * 3; we want bridge_x in (62, 78).
+        # counter = 450 + 23 = 473 → bridge_x = 69 ✓
+        state = state._replace(scrolling_step_counter=jnp.array(473, dtype=jnp.int32))
+
+        # Confirm bridge is detected at the player's X
+        at_bridge = env._player_at_bridge(state, jnp.array(70, dtype=jnp.int32))
+        assert bool(at_bridge), "Player should be detected at bridge"
+
+        # Player should be able to move UP onto the offramp
+        for _ in range(15):
+            _, state, _, _, _ = env.step(state, Action.UP)
+            if state.player_on_offramp:
+                break
+
+        assert bool(state.player_on_offramp), "Player should be able to cross at bridge"
+
+    def test_player_cannot_cross_away_from_bridge(self):
+        """Player cannot cross the median at a position away from any bridge."""
+        env = self._make_env_with_bridge(450)
+        _, state = env.reset(jax.random.PRNGKey(0))
+        consts = env.consts
+
+        # Offramp active (scroll=300) but bridge_x = (300-450)*3 = -450 (off screen)
+        state = state._replace(scrolling_step_counter=jnp.array(300, dtype=jnp.int32))
+        at_bridge = env._player_at_bridge(state, jnp.array(70, dtype=jnp.int32))
+        assert not bool(at_bridge), "Bridge should be off-screen at scroll=300"
+
+        for _ in range(20):
+            _, state, _, _, _ = env.step(state, Action.UP)
+
+        assert not bool(state.player_on_offramp), (
+            "Player should not cross to offramp when no bridge is at their position"
+        )
+        assert int(state.player_y) >= consts.ROAD_TOP_Y, (
+            "Player should be blocked at road_top when away from bridge/diagonal"
+        )
+
+    def test_bridge_renders_black_pixels_in_gap(self):
+        """The gap (median) rows should contain black pixels where a bridge is rendered."""
+        import numpy as np
+        env = self._make_env_with_bridge(450)
+        _, state = env.reset(jax.random.PRNGKey(0))
+        consts = env.consts
+
+        # Teleport so bridge is on screen (same as test_player_can_cross_at_bridge)
+        state = state._replace(scrolling_step_counter=jnp.array(473, dtype=jnp.int32))
+        frame = np.array(env.render(state))
+
+        gap_top = consts.ROAD_TOP_Y - consts.OFFRAMP_GAP   # bottom of offramp = top of gap
+        gap_bottom = consts.ROAD_TOP_Y                       # top of main road = bottom of gap
+        # Bridge left edge ≈ 69 pixels, width = BRIDGE_WIDTH
+        bridge_left = 69
+        bridge_right = bridge_left + consts.OFFRAMP_BRIDGE_WIDTH
+
+        region = frame[gap_top:gap_bottom, bridge_left:bridge_right]
+        black_pixels = int(np.sum(np.all(region == [0, 0, 0], axis=2)))
+        assert black_pixels > 0, (
+            "Gap region at bridge position should contain black (road) pixels"
+        )
+
+    def test_bridge_sprite_dimensions(self):
+        """Bridge sprite must be exactly GAP_H rows × BRIDGE_WIDTH columns."""
+        import numpy as np
+        env = make_env()
+        consts = env.consts
+        bridge_sprite = np.array(env.renderer._create_offramp_bridge_sprite())
+        assert bridge_sprite.shape[0] == consts.OFFRAMP_GAP, "bridge height == OFFRAMP_GAP"
+        assert bridge_sprite.shape[1] == consts.OFFRAMP_BRIDGE_WIDTH, "bridge width == OFFRAMP_BRIDGE_WIDTH"
+        # Should be solid black
+        assert np.all(bridge_sprite[:, :, :3] == 0), "bridge sprite should be solid black"
+
