@@ -35,6 +35,8 @@ class LevelConfig(NamedTuple):
     ravine_spawn_config: Optional[Tuple[int, int]] = None
     spawn_landmines: bool = False
     landmine_spawn_config: Optional[Tuple[int, int]] = None
+    spawn_cannons: bool = False
+    cannon_spawn_config: Optional[Tuple[int, int]] = None
     future_entity_types: Dict[str, Any] = {}
     render_road_stripes: bool = True
     # Dynamic road height configuration (for alternating heights)
@@ -61,7 +63,7 @@ class RoadRunnerConstants(NamedTuple):
     ENEMY_SIZE: Tuple[int, int] = (4, 4)
     SEED_SIZE: Tuple[int, int] = (5, 5)
     PLAYER_PICKUP_OFFSET: int = PLAYER_SIZE[1] * 3 // 4  # Bottom 25% of player height
-    PLAYER_ROAD_TOP_OFFSET: int = 20
+    PLAYER_ROAD_TOP_OFFSET: int = 10
     ROAD_HEIGHT: int = 70
     ROAD_TOP_Y: int = 110
     ROAD_DASH_LENGTH: int = 5
@@ -92,6 +94,11 @@ class RoadRunnerConstants(NamedTuple):
     LANDMINE_SIZE: Tuple[int, int] = (4, 4)
     LANDMINE_SPAWN_MIN_INTERVAL: int = 120
     LANDMINE_SPAWN_MAX_INTERVAL: int = 240
+    CANNON_SIZE: Tuple[int, int] = (5, 12)
+    BULLET_SIZE: Tuple[int, int] = (2, 2)
+    BULLET_SPEED: int = 2
+    CANNON_SPAWN_MIN_INTERVAL: int = 120
+    CANNON_SPAWN_MAX_INTERVAL: int = 240
     DEATH_ANIMATION_DURATION: int = 60  # 1 second at 60 FPS
     # Enemy speed variation - speeds as offsets from PLAYER_MOVE_SPEED
     ENEMY_SLOW_SPEED_OFFSET: int = -1        # Speed = PLAYER_MOVE_SPEED - 1 = 2
@@ -231,6 +238,7 @@ RoadRunner_Level_3 = LevelConfig(
     spawn_seeds=True,
     spawn_trucks=True,
     spawn_landmines=True,
+    spawn_cannons=True,
     seed_spawn_config=(
         _BASE_CONSTS.SEED_SPAWN_MIN_INTERVAL,
         _BASE_CONSTS.SEED_SPAWN_MAX_INTERVAL,
@@ -243,16 +251,70 @@ RoadRunner_Level_3 = LevelConfig(
         _BASE_CONSTS.LANDMINE_SPAWN_MIN_INTERVAL,
         _BASE_CONSTS.LANDMINE_SPAWN_MAX_INTERVAL,
     ),
+    cannon_spawn_config=(
+        _BASE_CONSTS.CANNON_SPAWN_MIN_INTERVAL,
+        _BASE_CONSTS.CANNON_SPAWN_MAX_INTERVAL,
+    ),
     # Dynamic road height: alternates between 70 and 50 pixels
     dynamic_road_heights=(70, 50),
     dynamic_road_interval=400,
     dynamic_road_transition_length=10,
 )
 
+RoadRunner_Level_4 = LevelConfig(
+    level_number=4,
+    scroll_distance_to_complete=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
+    road_sections=(
+        RoadSectionConfig(
+            scroll_start=0,
+            scroll_end=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
+            road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
+            road_top=0,
+            road_height=30,
+            road_pattern_style=0,
+        ),
+    ),
+    spawn_seeds=False,
+    spawn_trucks=False,
+    spawn_landmines=False,
+    spawn_cannons=True,
+    cannon_spawn_config=(
+        _BASE_CONSTS.CANNON_SPAWN_MIN_INTERVAL,
+        _BASE_CONSTS.CANNON_SPAWN_MAX_INTERVAL,
+    ),
+    decorations=(
+        # --- INTRO (0-6s) ---
+        (50, 60, 1, _BASE_CONSTS.DECO_SIGN_THIS_WAY),
+        (0, 45, 2, _BASE_CONSTS.DECO_CACTUS),
+        (30, 55, 1, _BASE_CONSTS.DECO_CACTUS),
+        (180, 70, 1, _BASE_CONSTS.DECO_SIGN_BIRD_SEED),
+        (350, 60, 1, _BASE_CONSTS.DECO_SIGN_CARS_AHEAD),
+
+        # --- THE DESERT RUN (13 Cacti) ---
+        (420, 45, 3, _BASE_CONSTS.DECO_CACTUS),
+        (500, 55, 2, _BASE_CONSTS.DECO_CACTUS),
+        (580, 45, 3, _BASE_CONSTS.DECO_CACTUS),
+        (660, 55, 2, _BASE_CONSTS.DECO_CACTUS),
+        (740, 45, 3, _BASE_CONSTS.DECO_CACTUS),
+        (820, 55, 2, _BASE_CONSTS.DECO_CACTUS),
+        (900, 45, 3, _BASE_CONSTS.DECO_CACTUS),
+        (980, 55, 2, _BASE_CONSTS.DECO_CACTUS),
+        (1060, 45, 3, _BASE_CONSTS.DECO_CACTUS),
+        (1140, 55, 2, _BASE_CONSTS.DECO_CACTUS),
+        (1220, 45, 3, _BASE_CONSTS.DECO_CACTUS),
+        (1300, 55, 2, _BASE_CONSTS.DECO_CACTUS),
+        (1380, 45, 3, _BASE_CONSTS.DECO_CACTUS),
+
+        # --- OUTRO ---
+        (1800, 60, 1, _BASE_CONSTS.DECO_SIGN_EXIT),
+    ),
+)
+
 DEFAULT_LEVELS: Tuple[LevelConfig, ...] = (
-    RoadRunner_Level_1,
-    RoadRunner_Level_2,
-    RoadRunner_Level_3,
+    #RoadRunner_Level_1,
+    #RoadRunner_Level_2,
+    #RoadRunner_Level_3,
+    RoadRunner_Level_4,
 )
 
 
@@ -607,6 +669,13 @@ class RoadRunnerState(NamedTuple):
     landmine_x: chex.Array
     landmine_y: chex.Array
     next_landmine_spawn_step: chex.Array
+    cannon_x: chex.Array
+    cannon_y: chex.Array
+    next_cannon_spawn_step: chex.Array
+    cannon_has_fired: chex.Array
+    cannon_is_mirrored: chex.Array
+    bullet_x: chex.Array
+    bullet_y: chex.Array
     death_timer: chex.Array
     instant_death: chex.Array # Boolean, if true, skip death animation/delay
     enemy_speed_phase_start: chex.Array  # Scroll step when current speed phase cycle began
@@ -700,6 +769,7 @@ class JaxRoadRunner(
         self._level_spawn_trucks = _build_spawn_enabled_array(levels, 'spawn_trucks')
         self._level_spawn_ravines = _build_spawn_enabled_array(levels, 'spawn_ravines')
         self._level_spawn_landmines = _build_spawn_enabled_array(levels, 'spawn_landmines')
+        self._level_spawn_cannons = _build_spawn_enabled_array(levels, 'spawn_cannons')
 
         # Build spawn interval arrays
         self._seed_spawn_intervals = _build_spawn_interval_array(
@@ -717,6 +787,10 @@ class JaxRoadRunner(
         self._landmine_spawn_intervals = _build_spawn_interval_array(
             levels, 'landmine_spawn_config',
             self.consts.LANDMINE_SPAWN_MIN_INTERVAL, self.consts.LANDMINE_SPAWN_MAX_INTERVAL
+        )
+        self._cannon_spawn_intervals = _build_spawn_interval_array(
+            levels, 'cannon_spawn_config',
+            self.consts.CANNON_SPAWN_MIN_INTERVAL, self.consts.CANNON_SPAWN_MAX_INTERVAL
         )
 
         # Build road section arrays
@@ -1421,6 +1495,148 @@ class JaxRoadRunner(
             landmine_x=jnp.where(collision, jnp.array(-1, dtype=jnp.int32), state.landmine_x)
         )
 
+    def _update_and_spawn_cannon_and_bullets(self, state: RoadRunnerState,
+                                             spawn_road_top: chex.Array) -> RoadRunnerState:
+        """
+        Update cannon position (moves with scroll_offset like ravines),
+        and spawn new bullets from cannons.
+        Bullets spawn from active cannons and move rightwards.
+        """
+        consts = self.consts
+        level_idx = self._get_level_index(state)
+        if self._level_count > 0:
+            spawn_cannons_enabled = self._level_spawn_cannons[level_idx]
+            cannon_spawn_bounds = self._cannon_spawn_intervals[level_idx]
+        else:
+            spawn_cannons_enabled = jnp.array(False, dtype=jnp.bool_)
+            cannon_spawn_bounds = jnp.array(
+                [consts.CANNON_SPAWN_MIN_INTERVAL, consts.CANNON_SPAWN_MAX_INTERVAL],
+                dtype=jnp.int32,
+            )
+
+        scroll_offset = jnp.where(state.is_scrolling, consts.PLAYER_MOVE_SPEED, 0)
+
+        # Cannon Movement (acts like a stationary object that scrolls with the environment)
+        updated_cannon_x = jnp.where(
+            state.cannon_x >= 0,
+            state.cannon_x + scroll_offset,
+            state.cannon_x
+        )
+        
+        # Despawn cannon if off-screen (moved past right edge, or too far)
+        cannon_active = (updated_cannon_x >= 0) & (updated_cannon_x < consts.WIDTH)
+        updated_cannon_x = jnp.where(cannon_active, updated_cannon_x, -1)
+        # Cannon y is fixed to spawn_road_top - CANNON_SIZE[1]
+        updated_cannon_y = jnp.where(cannon_active, state.cannon_y, -1)
+
+        # Cannon Spawning Logic
+        rng_interval, rng_after = jax.random.split(state.rng, 2)
+        
+        should_spawn_cannon = (
+            (updated_cannon_x < 0)  # No active cannon
+            & state.is_scrolling
+            & (state.scrolling_step_counter >= state.next_cannon_spawn_step)
+            & spawn_cannons_enabled
+        )
+
+        spawn_y = spawn_road_top - consts.CANNON_SIZE[1] # Keep the subtraction, as the road_top is technically the top pixel of the road surface. If it spawns too high, we need to adjust the subtraction. Wait, previously it said "it needs to sit right on top of the road". The road is at Y=road_top. Things are drawn from top-left, so Y=road_top-height puts it exactly on top of the road. But maybe it needs to overlap, so let's adjust it by adding CANNON_SIZE[1]//2. Actually, let's just make spawn_y = spawn_road_top - consts.CANNON_SIZE[1] + 3. Or just spawn_road_top - 12. Let's make it spawn_y = spawn_road_top - consts.CANNON_SIZE[1] + 6
+
+        spawn_y = spawn_road_top - consts.CANNON_SIZE[1] + 6
+
+        next_cannon_spawn_step = state.scrolling_step_counter + jax.random.randint(
+            rng_interval, (), cannon_spawn_bounds[0],
+            cannon_spawn_bounds[1] + 1, dtype=jnp.int32,
+        )
+
+        updated_cannon_x = jnp.where(should_spawn_cannon, jnp.array(0, dtype=jnp.int32), updated_cannon_x)
+        updated_cannon_y = jnp.where(should_spawn_cannon, spawn_y, updated_cannon_y)
+        next_cannon_spawn_step = jnp.where(should_spawn_cannon, next_cannon_spawn_step, state.next_cannon_spawn_step)
+        
+        # Reset has_fired flag if a new cannon spawns
+        updated_cannon_has_fired = jnp.where(should_spawn_cannon, jnp.array(False, dtype=jnp.bool_), state.cannon_has_fired)
+
+        # Toggle mirrored state when spawning a new cannon
+        updated_cannon_is_mirrored = jnp.where(should_spawn_cannon, ~state.cannon_is_mirrored, state.cannon_is_mirrored)
+
+        # Bullet Movement
+        # Normal cannons: bullet moves right at BULLET_SPEED
+        # Mirrored cannons: bullet moves left at -BULLET_SPEED * 2.5 (faster to compensate for scroll)
+        bullet_velocity = jnp.where(
+            state.cannon_is_mirrored,
+            jnp.int32(-consts.BULLET_SPEED * 2.5),  # Leftward for mirrored (faster)
+            consts.BULLET_SPEED                      # Rightward for normal
+        )
+        updated_bullet_x = jnp.where(
+            state.bullet_x >= 0,
+            state.bullet_x + bullet_velocity + scroll_offset,
+            state.bullet_x
+        )
+
+        bullet_active = (updated_bullet_x >= 0) & (updated_bullet_x < consts.WIDTH)
+        updated_bullet_x = jnp.where(bullet_active, updated_bullet_x, -1)
+        updated_bullet_y = jnp.where(bullet_active, state.bullet_y, -1)
+
+        # Bullet Spawning Logic
+        # A bullet spawns if cannon is active, it hasn't fired yet, and no bullet is currently active.
+        cannon_is_active = updated_cannon_x >= 0
+
+        # For mirrored cannons, only shoot after reaching the right half of screen
+        cannon_can_shoot = jnp.where(
+            updated_cannon_is_mirrored,
+            updated_cannon_x > ((consts.WIDTH // 4) * 3),  # Mirrored: wait until past middle (x > WIDTH/2)
+            jnp.array(True, dtype=jnp.bool_)  # Normal: can always shoot
+        )
+
+        should_spawn_bullet = cannon_is_active & (updated_bullet_x < 0) & ~updated_cannon_has_fired & cannon_can_shoot
+
+        # Bullet spawn position depends on cannon direction
+        # Normal: spawn at right side of cannon
+        # Mirrored: spawn at left side of cannon
+        b_spawn_x = jnp.where(
+            updated_cannon_is_mirrored,
+            updated_cannon_x,  # Left side for mirrored
+            updated_cannon_x + consts.CANNON_SIZE[0]  # Right side for normal
+        )
+        # Cannon bullet holes usually near middle:
+        b_spawn_y = updated_cannon_y + (consts.CANNON_SIZE[1] // 2) - (consts.BULLET_SIZE[1] // 2)
+
+        updated_bullet_x = jnp.where(should_spawn_bullet, b_spawn_x, updated_bullet_x)
+        updated_bullet_y = jnp.where(should_spawn_bullet, b_spawn_y, updated_bullet_y)
+        
+        updated_cannon_has_fired = updated_cannon_has_fired | should_spawn_bullet
+
+        return state._replace(
+            cannon_x=updated_cannon_x,
+            cannon_y=updated_cannon_y,
+            next_cannon_spawn_step=next_cannon_spawn_step,
+            cannon_has_fired=updated_cannon_has_fired,
+            cannon_is_mirrored=updated_cannon_is_mirrored,
+            bullet_x=updated_bullet_x,
+            bullet_y=updated_bullet_y,
+            rng=rng_after,
+        )
+
+    def _check_bullet_collisions(self, state: RoadRunnerState) -> RoadRunnerState:
+        active = state.bullet_x >= 0
+        
+        # Expand player hitbox vertically so bullets don't pass underneath due to cannon visual offset
+        player_hit_y = state.player_y
+        hit_height = self.consts.PLAYER_SIZE[1] + 8
+
+        overlap = _check_aabb_collision(
+            state.player_x, player_hit_y,
+            self.consts.PLAYER_SIZE[0], hit_height,
+            state.bullet_x, state.bullet_y,
+            self.consts.BULLET_SIZE[0], self.consts.BULLET_SIZE[1],
+        )
+        collision = active & overlap & (state.death_timer == 0) & jnp.logical_not(state.is_jumping)
+
+        return state._replace(
+            death_timer=jnp.where(collision, jnp.array(self.consts.DEATH_ANIMATION_DURATION, dtype=jnp.int32), state.death_timer),
+            bullet_x=jnp.where(collision, jnp.array(-1, dtype=jnp.int32), state.bullet_x),
+            is_round_over=state.is_round_over | collision,
+        )
+
     def reset(self, key=None) -> Tuple[RoadRunnerObservation, RoadRunnerState]:
         # Initialize RNG key
         if key is None:
@@ -1456,7 +1672,9 @@ class JaxRoadRunner(
             last_picked_up_seed_id=jnp.array(0, dtype=jnp.int32),
             truck_x=jnp.array(-1, dtype=jnp.int32),
             truck_y=jnp.array(-1, dtype=jnp.int32),
-            next_truck_spawn_step=jnp.array(0, dtype=jnp.int32),
+            next_truck_spawn_step=jnp.array(
+                self.consts.TRUCK_SPAWN_MIN_INTERVAL, dtype=jnp.int32
+            ),
             current_level=jnp.array(0, dtype=jnp.int32),
             level_transition_timer=jnp.array(0, dtype=jnp.int32),
             is_in_transition=jnp.array(False, dtype=jnp.bool_),
@@ -1465,13 +1683,24 @@ class JaxRoadRunner(
             is_jumping=jnp.array(False, dtype=jnp.bool_),
             ravines=jnp.full((3, 2), -1, dtype=jnp.int32),
             next_ravine_spawn_scroll_step=jnp.array(0, dtype=jnp.int32),
-            instant_death=jnp.array(False, dtype=jnp.bool_),
             landmine_x=jnp.array(-1, dtype=jnp.int32),
             landmine_y=jnp.array(-1, dtype=jnp.int32),
-            next_landmine_spawn_step=jnp.array(0, dtype=jnp.int32),
+            next_landmine_spawn_step=jnp.array(
+                self.consts.LANDMINE_SPAWN_MIN_INTERVAL, dtype=jnp.int32
+            ),
+            cannon_x=jnp.array(-1, dtype=jnp.int32),
+            cannon_y=jnp.array(-1, dtype=jnp.int32),
+            next_cannon_spawn_step=jnp.array(
+                self.consts.CANNON_SPAWN_MIN_INTERVAL, dtype=jnp.int32
+            ),
+            cannon_has_fired=jnp.array(False, dtype=jnp.bool_),
+            cannon_is_mirrored=jnp.array(False, dtype=jnp.bool_),
+            bullet_x=jnp.array(-1, dtype=jnp.int32),
+            bullet_y=jnp.array(-1, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
             enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
+            instant_death=jnp.array(False, dtype=jnp.bool_),
         )
         state = self._initialize_spawn_timers(state, jnp.array(0, dtype=jnp.int32))
         initial_obs = self._get_observation(state)
@@ -1505,6 +1734,9 @@ class JaxRoadRunner(
             st = self._check_ravine_collisions(st)
             st = self._update_and_spawn_landmines(st, spawn_top, spawn_bottom)
             st = self._check_landmine_collisions(st)
+            # Add cannon update and bullet collision check
+            st = self._update_and_spawn_cannon_and_bullets(st, spawn_top)
+            st = self._check_bullet_collisions(st)
             st = self._check_level_completion(st)
 
             reward = (st.score - state.score).astype(jnp.float32)
@@ -1595,6 +1827,13 @@ class JaxRoadRunner(
             landmine_x=jnp.array(-1, dtype=jnp.int32),
             landmine_y=jnp.array(-1, dtype=jnp.int32),
             next_landmine_spawn_step=jnp.array(0, dtype=jnp.int32),
+            cannon_x=jnp.array(-1, dtype=jnp.int32),
+            cannon_y=jnp.array(-1, dtype=jnp.int32),
+            next_cannon_spawn_step=jnp.array(0, dtype=jnp.int32),
+            cannon_has_fired=jnp.array(False, dtype=jnp.bool_),
+            cannon_is_mirrored=jnp.array(False, dtype=jnp.bool_),
+            bullet_x=jnp.array(-1, dtype=jnp.int32),
+            bullet_y=jnp.array(-1, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
             enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
@@ -1730,6 +1969,7 @@ class JaxRoadRunner(
             truck_bounds = self._truck_spawn_intervals[level_idx]
             ravine_bounds = self._ravine_spawn_intervals[level_idx]
             landmine_bounds = self._landmine_spawn_intervals[level_idx]
+            cannon_bounds = self._cannon_spawn_intervals[level_idx]
         else:
             seed_bounds = jnp.array(
                 [self.consts.SEED_SPAWN_MIN_INTERVAL, self.consts.SEED_SPAWN_MAX_INTERVAL],
@@ -1744,6 +1984,14 @@ class JaxRoadRunner(
                     self.consts.RAVINE_SPAWN_MIN_INTERVAL,
                     self.consts.RAVINE_SPAWN_MAX_INTERVAL,
                 ],
+                dtype=jnp.int32,
+            )
+            landmine_bounds = jnp.array(
+                [self.consts.LANDMINE_SPAWN_MIN_INTERVAL, self.consts.LANDMINE_SPAWN_MAX_INTERVAL],
+                dtype=jnp.int32,
+            )
+            cannon_bounds = jnp.array(
+                [self.consts.CANNON_SPAWN_MIN_INTERVAL, self.consts.CANNON_SPAWN_MAX_INTERVAL],
                 dtype=jnp.int32,
             )
 
@@ -1779,12 +2027,21 @@ class JaxRoadRunner(
             landmine_bounds[1] + 1,
             dtype=jnp.int32,
         )
+        rng, cannon_key = jax.random.split(rng)
+        next_cannon_spawn_step = state.scrolling_step_counter + jax.random.randint(
+            cannon_key,
+            (),
+            cannon_bounds[0],
+            cannon_bounds[1] + 1,
+            dtype=jnp.int32,
+        )
         return state._replace(
             rng=rng,
             next_seed_spawn_scroll_step=next_seed_spawn_scroll_step,
             next_truck_spawn_step=next_truck_spawn_step,
             next_ravine_spawn_scroll_step=next_ravine_spawn_scroll_step,
             next_landmine_spawn_step=next_landmine_spawn_step,
+            next_cannon_spawn_step=next_cannon_spawn_step,
         )
 
     def _get_current_road_section(self, state: RoadRunnerState) -> RoadSectionConfig:
@@ -2240,6 +2497,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "sign_birdseed", "type": "single", "file": "sign_birdseed.npy"},
             {"name": "sign_cars_ahead", "type": "single", "file": "sign_cars_ahead.npy"},
             {"name": "sign_exit", "type": "single", "file": "sign_exit.npy"},
+            {"name": "canon", "type": "single", "file": "canon.npy"},
+            {"name": "bullet", "type": "single", "file": "bullet.npy"},
         ]
 
         return asset_config
@@ -2687,6 +2946,30 @@ class RoadRunnerRenderer(JAXGameRenderer):
 
         # Render Truck
         canvas = self._render_truck(canvas, state.truck_x, state.truck_y)
+        
+        # Render Cannon and Bullet
+        def render_cannon(can):
+            cannon_sprite = self.SHAPE_MASKS["canon"]
+            # Flip sprite horizontally if mirrored
+            flipped_sprite = jnp.where(
+                state.cannon_is_mirrored,
+                jnp.fliplr(cannon_sprite),
+                cannon_sprite
+            )
+            return self.jr.render_at(can, state.cannon_x, state.cannon_y, flipped_sprite)
+
+        canvas = jax.lax.cond(
+            state.cannon_x >= 0,
+            render_cannon,
+            lambda can: can,
+            canvas,
+        )
+        canvas = jax.lax.cond(
+            state.bullet_x >= 0,
+            lambda can: self.jr.render_at(can, state.bullet_x, state.bullet_y, self.SHAPE_MASKS["bullet"]),
+            lambda can: can,
+            canvas,
+        )
 
         final_frame = self.jr.render_from_palette(canvas, self.PALETTE)
 
