@@ -72,6 +72,14 @@ class GopherConstants(NamedTuple):
     NUM_TILES: int = 40
     TILE_WIDTH: int = 4                                # Tunnel tile width
     
+    # Grid Dimensions
+    GROUND_HEIGHT: int = 24
+    NUM_COLUMNS: int = 42
+    NUM_ROWS: int = 30
+    
+    # --- FIXED: Added NUM_TILES alias ---
+    NUM_TILES: int = 40  # Same as NUM_COLUMNS
+    TILE_WIDTH: int = 4  # 168 / 42 = 4
 
     # --- Entity Sizes ---
     PLAYER_SIZE: Tuple[int, int] = (13, 50)
