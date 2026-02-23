@@ -87,6 +87,7 @@ class RoadRunnerConstants(NamedTuple):
     LEVEL_COMPLETE_SCROLL_DISTANCE: int = 100
     STARTING_LIVES: int = 3
     JUMP_TIME_DURATION: int = 20  # Jump duration in steps (~0.33 seconds at 60 FPS)
+    FALL_ANIMATION_DURATION: int = 10  # Fall animation duration in frames
     SIDE_MARGIN: int = 8
     RAVINE_SIZE: Tuple[int, int] = (13, 32)
     RAVINE_SPAWN_MIN_INTERVAL: int = 30
@@ -312,9 +313,9 @@ RoadRunner_Level_4 = LevelConfig(
 
 DEFAULT_LEVELS: Tuple[LevelConfig, ...] = (
     #RoadRunner_Level_1,
-    #RoadRunner_Level_2,
+    RoadRunner_Level_2,
     #RoadRunner_Level_3,
-    RoadRunner_Level_4,
+    #RoadRunner_Level_4,
 )
 
 
@@ -678,6 +679,9 @@ class RoadRunnerState(NamedTuple):
     bullet_y: chex.Array
     death_timer: chex.Array
     instant_death: chex.Array # Boolean, if true, skip death animation/delay
+    is_falling: chex.Array  # Boolean flag indicating if player is falling into ravine
+    fall_timer: chex.Array  # Countdown timer for fall animation (0 when not falling)
+    fall_clip_y: chex.Array  # Y coordinate below which player sprite should be clipped during fall
     enemy_speed_phase_start: chex.Array  # Scroll step when current speed phase cycle began
     enemy_flattened_timer: chex.Array  # Timer for enemy being run over
 
@@ -1382,7 +1386,7 @@ class JaxRoadRunner(
     def _check_ravine_collisions(self, state: RoadRunnerState) -> RoadRunnerState:
         """
         Check collision with ravines.
-        If player overlaps with ravine AND is NOT jumping, they fall (die).
+        If player overlaps with ravine AND is NOT jumping, they start falling animation.
         """
         # Player feet area (bottom 4 pixels)
         player_feet_y = state.player_y + self.consts.PLAYER_SIZE[1] - 4
@@ -1402,7 +1406,36 @@ class JaxRoadRunner(
 
             collision = active & overlap & jnp.logical_not(st.is_jumping)
 
-            return st._replace(instant_death=st.instant_death | collision)
+            # Center player on ravine when collision first occurs
+            ravine_center_x = r_x + (self.consts.RAVINE_SIZE[0] - self.consts.PLAYER_SIZE[0]) // 2
+            new_player_x = jnp.where(
+                collision & jnp.logical_not(st.is_falling),
+                ravine_center_x,
+                st.player_x
+            )
+
+            # Calculate clip boundary (bottom of road/ravine)
+            ravine_bottom_y = r_y + self.consts.RAVINE_SIZE[1]
+            new_fall_clip_y = jnp.where(
+                collision & jnp.logical_not(st.is_falling),
+                ravine_bottom_y,
+                st.fall_clip_y
+            )
+
+            # Start fall animation instead of instant death
+            new_is_falling = st.is_falling | collision
+            new_fall_timer = jnp.where(
+                collision & jnp.logical_not(st.is_falling),
+                jnp.array(self.consts.FALL_ANIMATION_DURATION, dtype=jnp.int32),
+                st.fall_timer
+            )
+
+            return st._replace(
+                player_x=new_player_x,
+                is_falling=new_is_falling,
+                fall_timer=new_fall_timer,
+                fall_clip_y=new_fall_clip_y
+            )
 
         return jax.lax.fori_loop(0, 3, check_ravine, state)
 
@@ -1701,6 +1734,9 @@ class JaxRoadRunner(
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
             enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
             instant_death=jnp.array(False, dtype=jnp.bool_),
+            is_falling=jnp.array(False, dtype=jnp.bool_),
+            fall_timer=jnp.array(0, dtype=jnp.int32),
+            fall_clip_y=jnp.array(0, dtype=jnp.int32),
         )
         state = self._initialize_spawn_timers(state, jnp.array(0, dtype=jnp.int32))
         initial_obs = self._get_observation(state)
@@ -1746,6 +1782,23 @@ class JaxRoadRunner(
 
             return st, reward, should_reset
 
+        def _fall_timer_branch(data):
+            """Handle falling into ravine animation"""
+            st, _ = data
+            new_timer = jnp.maximum(st.fall_timer - 1, 0)
+            timer_expired = new_timer == 0
+
+            # Move player downward during fall animation (4 pixels per frame for faster fall)
+            new_player_y = st.player_y + 4
+
+            st = st._replace(
+                fall_timer=new_timer,
+                player_y=new_player_y,
+                instant_death=st.instant_death | timer_expired,
+                is_falling=jnp.logical_not(timer_expired) & st.is_falling,
+            )
+            return st, jnp.float32(0.0), st.instant_death
+
         def _death_timer_branch(data):
              st, _ = data
              new_timer = jnp.maximum(st.death_timer - 1, 0)
@@ -1760,14 +1813,16 @@ class JaxRoadRunner(
             st, _ = data
             return st, jnp.float32(0.0), jnp.array(False, dtype=jnp.bool_)
 
-        # Use switch instead of nested conds: 0=gameplay, 1=death_timer, 2=transition
+        # Use switch instead of nested conds: 0=gameplay, 1=fall_timer, 2=death_timer, 3=transition
         branch_idx = jnp.where(
-            state.is_in_transition, 2,
-            jnp.where(state.death_timer > 0, 1, 0)
+            state.is_in_transition, 3,
+            jnp.where(state.death_timer > 0, 2,
+                jnp.where(state.fall_timer > 0, 1, 0)
+            )
         )
         state, reward, should_reset = jax.lax.switch(
             branch_idx,
-            [_gameplay_branch, _death_timer_branch, _transition_branch],
+            [_gameplay_branch, _fall_timer_branch, _death_timer_branch, _transition_branch],
             operand
         )
 
@@ -1823,6 +1878,9 @@ class JaxRoadRunner(
             jump_timer=jnp.array(0, dtype=jnp.int32),
             is_jumping=jnp.array(False, dtype=jnp.bool_),
             instant_death=jnp.array(False, dtype=jnp.bool_),
+            is_falling=jnp.array(False, dtype=jnp.bool_),
+            fall_timer=jnp.array(0, dtype=jnp.int32),
+            fall_clip_y=jnp.array(0, dtype=jnp.int32),
             ravines=jnp.full((3, 2), -1, dtype=jnp.int32),
             landmine_x=jnp.array(-1, dtype=jnp.int32),
             landmine_y=jnp.array(-1, dtype=jnp.int32),
@@ -1943,6 +2001,9 @@ class JaxRoadRunner(
             ravines=jnp.full((3, 2), -1, dtype=jnp.int32),
             next_ravine_spawn_scroll_step=jnp.array(0, dtype=jnp.int32),
             instant_death=jnp.array(False, dtype=jnp.bool_),
+            is_falling=jnp.array(False, dtype=jnp.bool_),
+            fall_timer=jnp.array(0, dtype=jnp.int32),
+            fall_clip_y=jnp.array(0, dtype=jnp.int32),
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
             enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
         )
@@ -2852,6 +2913,27 @@ class RoadRunnerRenderer(JAXGameRenderer):
         canvas = self._render_decorations(canvas, state)
 
         # Render Player
+        def _clip_sprite_bottom(sprite_mask, player_y, clip_y):
+            """Clip sprite vertically at clip_y - only show pixels above this y coordinate"""
+            # Calculate how many rows to keep (from top of sprite)
+            # If player_y is above clip_y, we see the full sprite
+            # As player moves down, we see less of the sprite
+            sprite_height = sprite_mask.shape[0]
+            visible_height = jnp.maximum(0, clip_y - player_y)
+            visible_height = jnp.minimum(visible_height, sprite_height)
+
+            # Create row mask
+            row_indices = jnp.arange(sprite_height)
+            row_mask = row_indices < visible_height
+
+            # Apply mask - set invisible pixels to transparent
+            clipped_mask = jnp.where(
+                row_mask[:, None],
+                sprite_mask,
+                self.jr.TRANSPARENT_ID
+            )
+            return clipped_mask
+
         def _render_burnt_player(c):
              return self.jr.render_at(c, state.player_x, state.player_y, self.SHAPE_MASKS["player_burnt"])
 
@@ -2865,6 +2947,13 @@ class RoadRunnerRenderer(JAXGameRenderer):
                 self.SHAPE_MASKS["player_run1"],
                 self.SHAPE_MASKS["player_run2"],
             )
+            # Clip sprite if falling
+            player_mask = jax.lax.cond(
+                state.is_falling,
+                lambda m: _clip_sprite_bottom(m, state.player_y, state.fall_clip_y),
+                lambda m: m,
+                player_mask,
+            )
             return self.jr.render_at(c, state.player_x, state.player_y, player_mask)
 
         def _render_jumping_player(c):
@@ -2875,11 +2964,18 @@ class RoadRunnerRenderer(JAXGameRenderer):
                 lambda: jnp.fliplr(jump_mask),
                 lambda: jump_mask,
             )
+            # Clip sprite if falling (shouldn't happen during jump, but for safety)
+            jump_mask = jax.lax.cond(
+                state.is_falling,
+                lambda m: _clip_sprite_bottom(m, state.player_y, state.fall_clip_y),
+                lambda m: m,
+                jump_mask,
+            )
             return self.jr.render_at(c, state.player_x, state.player_y, jump_mask)
 
         # Switch between burnt, jumping, Normal
         # Priority: Burnt (Death) > Jump > Normal
-        
+
         def _render_alive_player(c):
             return jax.lax.cond(
                 state.is_jumping,
