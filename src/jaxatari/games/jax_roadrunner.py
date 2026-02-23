@@ -63,7 +63,7 @@ class RoadRunnerConstants(NamedTuple):
     ENEMY_SIZE: Tuple[int, int] = (4, 4)
     SEED_SIZE: Tuple[int, int] = (5, 5)
     PLAYER_PICKUP_OFFSET: int = PLAYER_SIZE[1] * 3 // 4  # Bottom 25% of player height
-    PLAYER_ROAD_TOP_OFFSET: int = 20
+    PLAYER_ROAD_TOP_OFFSET: int = 10
     ROAD_HEIGHT: int = 70
     ROAD_TOP_Y: int = 110
     ROAD_DASH_LENGTH: int = 5
@@ -673,6 +673,7 @@ class RoadRunnerState(NamedTuple):
     cannon_y: chex.Array
     next_cannon_spawn_step: chex.Array
     cannon_has_fired: chex.Array
+    cannon_is_mirrored: chex.Array
     bullet_x: chex.Array
     bullet_y: chex.Array
     death_timer: chex.Array
@@ -1554,11 +1555,20 @@ class JaxRoadRunner(
         # Reset has_fired flag if a new cannon spawns
         updated_cannon_has_fired = jnp.where(should_spawn_cannon, jnp.array(False, dtype=jnp.bool_), state.cannon_has_fired)
 
+        # Toggle mirrored state when spawning a new cannon
+        updated_cannon_is_mirrored = jnp.where(should_spawn_cannon, ~state.cannon_is_mirrored, state.cannon_is_mirrored)
+
         # Bullet Movement
-        # Bullet moves right at BULLET_SPEED + scroll_offset
+        # Normal cannons: bullet moves right at BULLET_SPEED
+        # Mirrored cannons: bullet moves left at -BULLET_SPEED * 2.5 (faster to compensate for scroll)
+        bullet_velocity = jnp.where(
+            state.cannon_is_mirrored,
+            jnp.int32(-consts.BULLET_SPEED * 2.5),  # Leftward for mirrored (faster)
+            consts.BULLET_SPEED                      # Rightward for normal
+        )
         updated_bullet_x = jnp.where(
             state.bullet_x >= 0,
-            state.bullet_x + consts.BULLET_SPEED + scroll_offset,
+            state.bullet_x + bullet_velocity + scroll_offset,
             state.bullet_x
         )
 
@@ -1569,10 +1579,24 @@ class JaxRoadRunner(
         # Bullet Spawning Logic
         # A bullet spawns if cannon is active, it hasn't fired yet, and no bullet is currently active.
         cannon_is_active = updated_cannon_x >= 0
-        should_spawn_bullet = cannon_is_active & (updated_bullet_x < 0) & ~updated_cannon_has_fired
 
-        # Bullet spawns at center-right of cannon
-        b_spawn_x = updated_cannon_x + consts.CANNON_SIZE[0]
+        # For mirrored cannons, only shoot after reaching the right half of screen
+        cannon_can_shoot = jnp.where(
+            updated_cannon_is_mirrored,
+            updated_cannon_x > ((consts.WIDTH // 4) * 3),  # Mirrored: wait until past middle (x > WIDTH/2)
+            jnp.array(True, dtype=jnp.bool_)  # Normal: can always shoot
+        )
+
+        should_spawn_bullet = cannon_is_active & (updated_bullet_x < 0) & ~updated_cannon_has_fired & cannon_can_shoot
+
+        # Bullet spawn position depends on cannon direction
+        # Normal: spawn at right side of cannon
+        # Mirrored: spawn at left side of cannon
+        b_spawn_x = jnp.where(
+            updated_cannon_is_mirrored,
+            updated_cannon_x,  # Left side for mirrored
+            updated_cannon_x + consts.CANNON_SIZE[0]  # Right side for normal
+        )
         # Cannon bullet holes usually near middle:
         b_spawn_y = updated_cannon_y + (consts.CANNON_SIZE[1] // 2) - (consts.BULLET_SIZE[1] // 2)
 
@@ -1586,6 +1610,7 @@ class JaxRoadRunner(
             cannon_y=updated_cannon_y,
             next_cannon_spawn_step=next_cannon_spawn_step,
             cannon_has_fired=updated_cannon_has_fired,
+            cannon_is_mirrored=updated_cannon_is_mirrored,
             bullet_x=updated_bullet_x,
             bullet_y=updated_bullet_y,
             rng=rng_after,
@@ -1669,6 +1694,7 @@ class JaxRoadRunner(
                 self.consts.CANNON_SPAWN_MIN_INTERVAL, dtype=jnp.int32
             ),
             cannon_has_fired=jnp.array(False, dtype=jnp.bool_),
+            cannon_is_mirrored=jnp.array(False, dtype=jnp.bool_),
             bullet_x=jnp.array(-1, dtype=jnp.int32),
             bullet_y=jnp.array(-1, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
@@ -1805,6 +1831,7 @@ class JaxRoadRunner(
             cannon_y=jnp.array(-1, dtype=jnp.int32),
             next_cannon_spawn_step=jnp.array(0, dtype=jnp.int32),
             cannon_has_fired=jnp.array(False, dtype=jnp.bool_),
+            cannon_is_mirrored=jnp.array(False, dtype=jnp.bool_),
             bullet_x=jnp.array(-1, dtype=jnp.int32),
             bullet_y=jnp.array(-1, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
@@ -1942,6 +1969,7 @@ class JaxRoadRunner(
             truck_bounds = self._truck_spawn_intervals[level_idx]
             ravine_bounds = self._ravine_spawn_intervals[level_idx]
             landmine_bounds = self._landmine_spawn_intervals[level_idx]
+            cannon_bounds = self._cannon_spawn_intervals[level_idx]
         else:
             seed_bounds = jnp.array(
                 [self.consts.SEED_SPAWN_MIN_INTERVAL, self.consts.SEED_SPAWN_MAX_INTERVAL],
@@ -1956,6 +1984,14 @@ class JaxRoadRunner(
                     self.consts.RAVINE_SPAWN_MIN_INTERVAL,
                     self.consts.RAVINE_SPAWN_MAX_INTERVAL,
                 ],
+                dtype=jnp.int32,
+            )
+            landmine_bounds = jnp.array(
+                [self.consts.LANDMINE_SPAWN_MIN_INTERVAL, self.consts.LANDMINE_SPAWN_MAX_INTERVAL],
+                dtype=jnp.int32,
+            )
+            cannon_bounds = jnp.array(
+                [self.consts.CANNON_SPAWN_MIN_INTERVAL, self.consts.CANNON_SPAWN_MAX_INTERVAL],
                 dtype=jnp.int32,
             )
 
@@ -1991,12 +2027,21 @@ class JaxRoadRunner(
             landmine_bounds[1] + 1,
             dtype=jnp.int32,
         )
+        rng, cannon_key = jax.random.split(rng)
+        next_cannon_spawn_step = state.scrolling_step_counter + jax.random.randint(
+            cannon_key,
+            (),
+            cannon_bounds[0],
+            cannon_bounds[1] + 1,
+            dtype=jnp.int32,
+        )
         return state._replace(
             rng=rng,
             next_seed_spawn_scroll_step=next_seed_spawn_scroll_step,
             next_truck_spawn_step=next_truck_spawn_step,
             next_ravine_spawn_scroll_step=next_ravine_spawn_scroll_step,
             next_landmine_spawn_step=next_landmine_spawn_step,
+            next_cannon_spawn_step=next_cannon_spawn_step,
         )
 
     def _get_current_road_section(self, state: RoadRunnerState) -> RoadSectionConfig:
@@ -2903,9 +2948,19 @@ class RoadRunnerRenderer(JAXGameRenderer):
         canvas = self._render_truck(canvas, state.truck_x, state.truck_y)
         
         # Render Cannon and Bullet
+        def render_cannon(can):
+            cannon_sprite = self.SHAPE_MASKS["canon"]
+            # Flip sprite horizontally if mirrored
+            flipped_sprite = jnp.where(
+                state.cannon_is_mirrored,
+                jnp.fliplr(cannon_sprite),
+                cannon_sprite
+            )
+            return self.jr.render_at(can, state.cannon_x, state.cannon_y, flipped_sprite)
+
         canvas = jax.lax.cond(
             state.cannon_x >= 0,
-            lambda can: self.jr.render_at(can, state.cannon_x, state.cannon_y, self.SHAPE_MASKS["canon"]),
+            render_cannon,
             lambda can: can,
             canvas,
         )
