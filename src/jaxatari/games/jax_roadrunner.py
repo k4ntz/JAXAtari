@@ -22,6 +22,13 @@ class RoadSectionConfig(NamedTuple):
     road_pattern_style: int = 0
 
 
+class OfframpConfig(NamedTuple):
+    """Configuration for an offramp section in a level."""
+    enabled: bool = False
+    scroll_start: int = 0  # Scroll step when the split first becomes visible (from the right)
+    scroll_end: int = 0    # Scroll step when the merge first becomes visible (from the right)
+
+
 class LevelConfig(NamedTuple):
     level_number: int
     scroll_distance_to_complete: int
@@ -36,6 +43,7 @@ class LevelConfig(NamedTuple):
     spawn_landmines: bool = False
     landmine_spawn_config: Optional[Tuple[int, int]] = None
     future_entity_types: Dict[str, Any] = {}
+    offramp: OfframpConfig = OfframpConfig()
 
 
 # --- Constants ---
@@ -102,6 +110,10 @@ class RoadRunnerConstants(NamedTuple):
     # Enemy Flattened (Run Over) State
     ENEMY_FLATTENED_DURATION: int = 120  # 2 seconds at 60 FPS
     ENEMY_FLATTENED_SCORE: int = 1000
+    # --- Offramp Constants ---
+    OFFRAMP_HEIGHT: int = 35   # Height of offramp road in pixels
+    OFFRAMP_GAP: int = 8       # Gap (median) between offramp bottom and main road top
+    OFFRAMP_RAMP_WIDTH: int = 16  # Width of the stepped split/merge transition in pixels
     # --- Decoration Type Constants ---
     DECO_CACTUS = 0
     DECO_SIGN_THIS_WAY = 1
@@ -167,6 +179,11 @@ RoadRunner_Level_1 = LevelConfig(
 
         # --- OUTRO ---
         (1800, 60, 1, _BASE_CONSTS.DECO_SIGN_EXIT),
+    ),
+    offramp=OfframpConfig(
+        enabled=True,
+        scroll_start=200,
+        scroll_end=700,
     ),
 )
 
@@ -319,6 +336,29 @@ def _build_spawn_enabled_array(
     )
 
 
+def _build_offramp_arrays(
+    levels: Tuple[LevelConfig, ...],
+) -> jnp.ndarray:
+    """
+    Build offramp data arrays from level configs.
+
+    Returns array of shape (num_levels, 3) with columns:
+      [enabled (0/1), scroll_start, scroll_end]
+    """
+    if not levels:
+        return jnp.zeros((0, 3), dtype=jnp.int32)
+
+    rows = []
+    for cfg in levels:
+        offramp = getattr(cfg, 'offramp', OfframpConfig())
+        rows.append([
+            1 if offramp.enabled else 0,
+            offramp.scroll_start,
+            offramp.scroll_end,
+        ])
+    return jnp.array(rows, dtype=jnp.int32)
+
+
 def _check_aabb_collision(
     x1: chex.Array, y1: chex.Array, w1: int, h1: int,
     x2: chex.Array, y2: chex.Array, w2: int, h2: int,
@@ -461,6 +501,7 @@ class RoadRunnerState(NamedTuple):
     instant_death: chex.Array # Boolean, if true, skip death animation/delay
     enemy_speed_phase_start: chex.Array  # Scroll step when current speed phase cycle began
     enemy_flattened_timer: chex.Array  # Timer for enemy being run over
+    player_on_offramp: chex.Array  # Boolean, whether the player is currently on the offramp
 
 class EntityPosition(NamedTuple):
     x: jnp.ndarray
@@ -576,6 +617,9 @@ class JaxRoadRunner(
             self._road_section_counts,
         ) = _build_road_section_arrays(levels, self.consts)
 
+        # Build offramp data array: shape (num_levels, 3) = [enabled, scroll_start, scroll_end]
+        self._offramp_data = _build_offramp_arrays(levels)
+
     def _handle_input(self, action: chex.Array) -> tuple[chex.Array, chex.Array, chex.Array]:
         """Handles user input to determine player velocity and jump action."""
         # Map action to the corresponding index in the action_set
@@ -585,13 +629,72 @@ class JaxRoadRunner(
         is_fire_action = (action == Action.FIRE) | ((action >= Action.UPFIRE) & (action <= Action.DOWNLEFTFIRE))
         return vel[0], vel[1], is_fire_action
 
+    def _get_offramp_info(
+        self, state: "RoadRunnerState"
+    ) -> tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
+        """Return (offramp_active, in_split_zone, in_merge_zone, offramp_top, offramp_bottom).
+
+        offramp_top / offramp_bottom are the screen Y coordinates of the offramp road.
+        in_split_zone / in_merge_zone are True when the respective transition sprite is on
+        screen (the player can cross between roads during these windows).
+        """
+        SPEED = self.consts.PLAYER_MOVE_SPEED
+        RAMP_W = self.consts.OFFRAMP_RAMP_WIDTH
+        W = self.consts.WIDTH
+
+        if self._level_count > 0:
+            level_idx = self._get_level_index(state)
+            row = self._offramp_data[level_idx]
+            enabled = row[0] > 0
+            scroll_start = row[1]
+            scroll_end = row[2]
+        else:
+            enabled = jnp.array(False)
+            scroll_start = jnp.array(0)
+            scroll_end = jnp.array(0)
+
+        counter = state.scrolling_step_counter
+        offramp_active = enabled & (counter >= scroll_start) & (counter < scroll_end)
+
+        # Screen x of split leading edge: 0 at scroll_start, grows right each step
+        split_x = (counter - scroll_start) * SPEED
+        # Screen x of merge leading edge: 0 at scroll_end, grows right each step
+        merge_x = (counter - scroll_end) * SPEED
+
+        # Transition is possible when the respective sprite overlaps the visible area
+        in_split_zone = enabled & (split_x > -RAMP_W) & (split_x < W + RAMP_W)
+        in_merge_zone = enabled & (merge_x > -RAMP_W) & (merge_x < W + RAMP_W)
+
+        road_top, _, _ = self._get_road_bounds(state)
+        offramp_bottom = (road_top - self.consts.OFFRAMP_GAP).astype(jnp.int32)
+        offramp_top = (offramp_bottom - self.consts.OFFRAMP_HEIGHT).astype(jnp.int32)
+        return offramp_active, in_split_zone, in_merge_zone, offramp_top, offramp_bottom
+
     def _check_player_bounds(
         self, state: RoadRunnerState, x_pos: chex.Array, y_pos: chex.Array
     ) -> tuple[chex.Array, chex.Array]:
         road_top, road_bottom, _ = self._get_road_bounds(state)
-        min_y = road_top - (self.consts.PLAYER_SIZE[1] - 5)
-        max_y = road_bottom - self.consts.PLAYER_SIZE[1]
-        checked_y = jnp.clip(y_pos, min_y, max_y)
+        main_min_y = road_top - (self.consts.PLAYER_SIZE[1] - 5)
+        main_max_y = road_bottom - self.consts.PLAYER_SIZE[1]
+
+        offramp_active, in_split_zone, in_merge_zone, offramp_top, offramp_bottom = \
+            self._get_offramp_info(state)
+        off_min_y = offramp_top - (self.consts.PLAYER_SIZE[1] - 5)
+        off_max_y = offramp_bottom - self.consts.PLAYER_SIZE[1]
+
+        in_transition = in_split_zone | in_merge_zone
+
+        # During a transition the player can freely move between both Y ranges.
+        # Otherwise they are constrained to whichever road they are currently on.
+        checked_y = jnp.where(
+            in_transition & offramp_active,
+            jnp.clip(y_pos, off_min_y, main_max_y),
+            jnp.where(
+                state.player_on_offramp & offramp_active,
+                jnp.clip(y_pos, off_min_y, off_max_y),
+                jnp.clip(y_pos, main_min_y, main_max_y),
+            ),
+        )
         checked_x = jnp.clip(
             x_pos,
             self.consts.SIDE_MARGIN,
@@ -689,6 +792,21 @@ class JaxRoadRunner(
         new_y_history = jnp.roll(state.player_y_history, shift=1)
         new_y_history = new_y_history.at[0].set(state.player_y)
 
+        # Determine which road the player is on after movement.
+        # In a transition zone (split or merge on screen) the road is chosen by Y position.
+        # Outside transition zones the current road is preserved (bounds already enforce it).
+        offramp_active, in_split_zone, in_merge_zone, offramp_top, offramp_bottom = \
+            self._get_offramp_info(state)
+        road_top_after, _, _ = self._get_road_bounds(state)
+        in_transition = in_split_zone | in_merge_zone
+        threshold_y = (offramp_bottom + road_top_after) // 2
+        on_offramp_by_y = player_y.astype(jnp.int32) < threshold_y
+        new_on_offramp = jnp.where(
+            in_transition & offramp_active,
+            on_offramp_by_y,
+            state.player_on_offramp & offramp_active,
+        )
+
         return state._replace(
             player_x=player_x.astype(jnp.int32),
             player_y=player_y.astype(jnp.int32),
@@ -698,6 +816,7 @@ class JaxRoadRunner(
             player_y_history=new_y_history,
             jump_timer=new_jump_timer,
             is_jumping=is_jumping,
+            player_on_offramp=new_on_offramp,
         )
 
     def _enemy_step(self, state: RoadRunnerState) -> RoadRunnerState:
@@ -949,7 +1068,7 @@ class JaxRoadRunner(
         )
 
         # Prepare for spawning: split RNG and check conditions
-        rng_spawn_y, rng_interval, rng_after = jax.random.split(state.rng, 3)
+        rng_road, rng_spawn_y, rng_interval, rng_after = jax.random.split(state.rng, 4)
         available_slots = updated_x == -1
         should_spawn = (
             state.is_scrolling
@@ -958,16 +1077,24 @@ class JaxRoadRunner(
             & spawn_seeds_enabled
         )
 
+        # Determine whether to spawn on offramp or main road
+        offramp_active, _, _, offramp_top_y, offramp_bottom_y = self._get_offramp_info(state)
+        use_offramp = offramp_active & (jax.random.uniform(rng_road) > 0.5)
+        spawn_min_y = jnp.where(use_offramp, offramp_top_y.astype(jnp.int32), road_top)
+        spawn_max_y = jnp.where(
+            use_offramp,
+            (offramp_bottom_y - consts.SEED_SIZE[1]).astype(jnp.int32),
+            road_bottom - consts.SEED_SIZE[1],
+        )
+
         def _spawn(st: RoadRunnerState) -> RoadRunnerState:
             slot_idx = jnp.argmax(available_slots)
-            # Generate random Y position within road bounds
-            spawn_min = road_top
-            spawn_max = road_bottom - consts.SEED_SIZE[1]
+            # Generate random Y position within selected road bounds
             seed_y = jax.random.randint(
                 rng_spawn_y,
                 (),
-                spawn_min,
-                jnp.maximum(spawn_min + 1, spawn_max + 1),
+                spawn_min_y,
+                jnp.maximum(spawn_min_y + 1, spawn_max_y + 1),
                 dtype=jnp.int32,
             )
             # Spawn at x=0, update next spawn step
@@ -1318,7 +1445,7 @@ class JaxRoadRunner(
         updated_landmine_y = jnp.where(landmine_active, state.landmine_y, -1)
 
         # Prepare for spawning
-        rng_spawn_y, rng_interval, rng_after = jax.random.split(state.rng, 3)
+        rng_road, rng_spawn_y, rng_interval, rng_after = jax.random.split(state.rng, 4)
         
         should_spawn = (
             (updated_landmine_x < 0)  # No landmine currently active
@@ -1328,15 +1455,23 @@ class JaxRoadRunner(
             & jnp.logical_not(state.is_in_transition)
         )
 
+        # Determine whether to spawn on offramp or main road
+        offramp_active, _, _, offramp_top_y, offramp_bottom_y = self._get_offramp_info(state)
+        use_offramp = offramp_active & (jax.random.uniform(rng_road) > 0.5)
+        spawn_min_y = jnp.where(use_offramp, offramp_top_y.astype(jnp.int32), road_top)
+        spawn_max_y = jnp.where(
+            use_offramp,
+            (offramp_bottom_y - consts.LANDMINE_SIZE[1]).astype(jnp.int32),
+            road_bottom - consts.LANDMINE_SIZE[1],
+        )
+
         def _spawn(st: RoadRunnerState) -> RoadRunnerState:
-            # Generate random Y position within road bounds
-            spawn_min = road_top
-            spawn_max = road_bottom - consts.LANDMINE_SIZE[1]
+            # Generate random Y position within selected road bounds
             landmine_y = jax.random.randint(
                 rng_spawn_y,
                 (),
-                spawn_min,
-                jnp.maximum(spawn_min + 1, spawn_max + 1),
+                spawn_min_y,
+                jnp.maximum(spawn_min_y + 1, spawn_max_y + 1),
                 dtype=jnp.int32,
             )
             
@@ -1452,6 +1587,7 @@ class JaxRoadRunner(
             death_timer=jnp.array(0, dtype=jnp.int32),
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
             enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
+            player_on_offramp=jnp.array(False, dtype=jnp.bool_),
         )
         state = self._initialize_spawn_timers(state, jnp.array(0, dtype=jnp.int32))
         initial_obs = self._get_observation(state)
@@ -1593,6 +1729,7 @@ class JaxRoadRunner(
             death_timer=jnp.array(0, dtype=jnp.int32),
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
             enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
+            player_on_offramp=jnp.array(False, dtype=jnp.bool_),
         )
         level_idx = self._get_level_index(reset_state)
         return self._initialize_spawn_timers(reset_state, level_idx)
@@ -1696,6 +1833,7 @@ class JaxRoadRunner(
             instant_death=jnp.array(False, dtype=jnp.bool_),
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
             enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
+            player_on_offramp=jnp.array(False, dtype=jnp.bool_),
         )
 
     def _get_level_index(self, state: RoadRunnerState) -> jnp.ndarray:
@@ -1956,8 +2094,10 @@ class RoadRunnerRenderer(JAXGameRenderer):
 
         road_sprite = self._create_road_sprite()
         life_sprite = self._create_life_sprite()
+        offramp_road_sprite = self._create_offramp_road_sprite()
+        offramp_split_sprite = self._create_offramp_split_sprite()
         asset_config = self._get_asset_config(
-            road_sprite, life_sprite
+            road_sprite, life_sprite, offramp_road_sprite, offramp_split_sprite
         )
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/roadrunner"
 
@@ -1974,6 +2114,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
             self._road_section_data,
             self._road_section_counts,
         ) = _build_road_section_arrays(self.consts.levels, self.consts)
+        # Build offramp data for the renderer
+        self._offramp_data = _build_offramp_arrays(self.consts.levels)
 
     def _create_road_sprite(self) -> jnp.ndarray:
         ROAD_HEIGHT = self.consts.ROAD_HEIGHT
@@ -2006,6 +2148,55 @@ class RoadRunnerRenderer(JAXGameRenderer):
 
         return road_sprite
 
+    def _create_offramp_road_sprite(self) -> jnp.ndarray:
+        """Create the offramp road sprite (thin, scrollable, same dash pattern)."""
+        H = self.consts.OFFRAMP_HEIGHT
+        WIDTH = self.consts.WIDTH
+        DASH_LENGTH = self.consts.ROAD_DASH_LENGTH
+        GAP_HEIGHT = self.consts.ROAD_GAP_HEIGHT
+        PATTERN_WIDTH = self.consts.ROAD_PATTERN_WIDTH
+        SCROLL_WIDTH = WIDTH + PATTERN_WIDTH
+
+        road_color_rgba = jnp.array([0, 0, 0, 255], dtype=jnp.uint8)
+        marking_color_rgba = jnp.array([255, 255, 255, 255], dtype=jnp.uint8)
+
+        y, x = jnp.indices((H, SCROLL_WIDTH))
+        is_marking_col = (x % PATTERN_WIDTH) >= (3 * DASH_LENGTH)
+        is_marking_row = (y % (GAP_HEIGHT + 1)) == GAP_HEIGHT
+        is_not_last_row = y < (H - 1)
+        is_marking = is_marking_col & is_marking_row & is_not_last_row
+
+        return jnp.where(
+            is_marking[:, :, jnp.newaxis],
+            marking_color_rgba,
+            road_color_rgba,
+        )
+
+    def _create_offramp_split_sprite(self) -> jnp.ndarray:
+        """Create the stepped-diagonal transition sprite for the split/merge points.
+
+        The sprite covers the vertical span from offramp_top to the main road top
+        (OFFRAMP_HEIGHT + OFFRAMP_GAP rows) and is OFFRAMP_RAMP_WIDTH columns wide.
+
+        Column 0  (left  = fully separated): offramp rows visible, gap is background.
+        Column W-1 (right = not yet split):   all background (single road, no offramp).
+        """
+        RAMP_W = self.consts.OFFRAMP_RAMP_WIDTH
+        OFFRAMP_H = self.consts.OFFRAMP_HEIGHT
+        GAP_H = self.consts.OFFRAMP_GAP
+        total_h = OFFRAMP_H + GAP_H
+
+        road_color_rgba = jnp.array([0, 0, 0, 255], dtype=jnp.uint8)
+        bg_r, bg_g, bg_b = self.consts.BACKGROUND_COLOR
+        bg_color_rgba = jnp.array([bg_r, bg_g, bg_b, 255], dtype=jnp.uint8)
+
+        y, x = jnp.indices((total_h, RAMP_W))
+        # Number of offramp rows revealed at this column:
+        # full offramp at x=0, zero at x=RAMP_W-1 (stepped diagonal).
+        visible_offramp = OFFRAMP_H * (RAMP_W - x) // RAMP_W
+        is_road = (y < visible_offramp) & (y < OFFRAMP_H)
+        return jnp.where(is_road[:, :, jnp.newaxis], road_color_rgba, bg_color_rgba)
+
     def _create_seed_sprite(self) -> jnp.ndarray:
         seed_color_rgba = (0, 0, 255, 255)
         seed_shape = (self.consts.SEED_SIZE[0], self.consts.SEED_SIZE[1], 4)
@@ -2035,6 +2226,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
         self,
         road_sprite: jnp.ndarray,
         life_sprite: jnp.ndarray,
+        offramp_road_sprite: jnp.ndarray,
+        offramp_split_sprite: jnp.ndarray,
     ) -> list:
         asset_config = [
             {"name": "background", "type": "background", "file": "background.npy"},
@@ -2062,6 +2255,11 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "sign_birdseed", "type": "single", "file": "sign_birdseed.npy"},
             {"name": "sign_cars_ahead", "type": "single", "file": "sign_cars_ahead.npy"},
             {"name": "sign_exit", "type": "single", "file": "sign_exit.npy"},
+            # Offramp sprites
+            {"name": "offramp_road", "type": "procedural", "data": offramp_road_sprite},
+            {"name": "offramp_split", "type": "procedural", "data": offramp_split_sprite},
+            {"name": "offramp_merge", "type": "procedural",
+             "data": jnp.fliplr(offramp_split_sprite)},
         ]
 
         return asset_config
@@ -2210,6 +2408,88 @@ class RoadRunnerRenderer(JAXGameRenderer):
             canvas,
         )
 
+    def _render_offramp(
+        self, canvas: jnp.ndarray, state: RoadRunnerState, road_offset: jnp.ndarray
+    ) -> jnp.ndarray:
+        """Render the offramp road band and its split/merge transition sprites."""
+        if self._level_count == 0:
+            return canvas
+
+        level_idx = jnp.clip(state.current_level, 0, self._level_count - 1).astype(jnp.int32)
+        row = self._offramp_data[level_idx]
+        enabled = row[0] > 0
+        scroll_start = row[1]
+        scroll_end = row[2]
+
+        counter = state.scrolling_step_counter
+        SPEED = self.consts.PLAYER_MOVE_SPEED
+        RAMP_W = self.consts.OFFRAMP_RAMP_WIDTH
+        OFFRAMP_H = self.consts.OFFRAMP_HEIGHT
+        W = self.consts.WIDTH
+        MARGIN = self.consts.SIDE_MARGIN
+
+        offramp_active = enabled & (counter >= scroll_start) & (counter < scroll_end)
+
+        # Static Y position of the offramp road
+        offramp_top = self.consts.ROAD_TOP_Y - self.consts.OFFRAMP_GAP - OFFRAMP_H
+
+        def _render_active(c: jnp.ndarray) -> jnp.ndarray:
+            # Screen x of split leading edge (0 at scroll_start, grows rightward)
+            split_x = (counter - scroll_start) * SPEED
+            # Screen x of merge leading edge (0 at scroll_end, grows rightward)
+            merge_x = (counter - scroll_end) * SPEED
+
+            # Offramp road band: visible between the merge and the split leading edges
+            left_x = jnp.maximum(MARGIN, merge_x)
+            right_x = jnp.minimum(W - MARGIN, split_x)
+
+            # Slice the scrolling offramp road pattern
+            offramp_road = jax.lax.dynamic_slice(
+                self.SHAPE_MASKS["offramp_road"],
+                (0, road_offset),
+                (OFFRAMP_H, W),
+            )
+
+            x_coords = jnp.arange(W)
+            col_visible = (x_coords >= left_x) & (x_coords < right_x)
+            background_value = jnp.array(
+                self.COLOR_TO_ID.get(self.consts.BACKGROUND_COLOR, 0),
+                dtype=offramp_road.dtype,
+            )
+            col_mask = jnp.broadcast_to(col_visible[jnp.newaxis, :], (OFFRAMP_H, W))
+            offramp_road_masked = jnp.where(col_mask, offramp_road, background_value)
+            c = self.jr.render_at(c, 0, offramp_top, offramp_road_masked)
+
+            # --- Split sprite: rendered just left of split_x ---
+            # The sprite spans [split_x - RAMP_W, split_x] in screen x.
+            s_x = split_x - RAMP_W
+            s_x_clamped = jnp.clip(s_x, 0, W).astype(jnp.int32)
+            split_on_screen = (split_x > MARGIN) & (s_x < W - MARGIN)
+            c = jax.lax.cond(
+                split_on_screen,
+                lambda cv: self.jr.render_at(
+                    cv, s_x_clamped, offramp_top, self.SHAPE_MASKS["offramp_split"]
+                ),
+                lambda cv: cv,
+                c,
+            )
+
+            # --- Merge sprite: rendered just right of merge_x ---
+            # The sprite spans [merge_x, merge_x + RAMP_W] in screen x.
+            m_x_clamped = jnp.clip(merge_x, 0, W).astype(jnp.int32)
+            merge_on_screen = (merge_x > MARGIN - RAMP_W) & (merge_x < W - MARGIN)
+            c = jax.lax.cond(
+                merge_on_screen,
+                lambda cv: self.jr.render_at(
+                    cv, m_x_clamped, offramp_top, self.SHAPE_MASKS["offramp_merge"]
+                ),
+                lambda cv: cv,
+                c,
+            )
+            return c
+
+        return jax.lax.cond(offramp_active, _render_active, lambda c: c, canvas)
+
     def _get_animated_sprite(
         self,
         is_moving: chex.Array,
@@ -2293,6 +2573,9 @@ class RoadRunnerRenderer(JAXGameRenderer):
 
         # Render the sliced road portion
         canvas = self.jr.render_at(canvas, 0, self.consts.ROAD_TOP_Y, road_mask)
+
+        # Render Offramp (above the main road)
+        canvas = self._render_offramp(canvas, state, offset)
 
         # Render Ravines
         canvas = self._render_ravines(canvas, state.ravines)
