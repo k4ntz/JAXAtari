@@ -116,7 +116,7 @@ class RoadRunnerConstants(NamedTuple):
     OFFRAMP_HEIGHT: int = 16   # Height of offramp road in pixels (narrow "one lane")
     OFFRAMP_GAP: int = 8       # Gap (median) between offramp bottom and main road top
     OFFRAMP_RAMP_WIDTH: int = 24  # Width of the diagonal split/merge transition in pixels
-    OFFRAMP_BRIDGE_WIDTH: int = 8  # Width of a bridge segment crossing the median
+    OFFRAMP_BRIDGE_WIDTH: int = 16  # Width of a bridge segment crossing the median
     # --- Decoration Type Constants ---
     DECO_CACTUS = 0
     DECO_SIGN_THIS_WAY = 1
@@ -1034,18 +1034,17 @@ class JaxRoadRunner(
         collision = collision & (state.enemy_flattened_timer == 0)
 
         # Don't trigger game over if the player is separated from the enemy by the median.
-        # This covers two cases:
+        # This covers:
         #   1. Player is on the offramp (above gap), enemy on main road.
         #   2. Player is in the upper part of the main road whose 32-px sprite extends into
         #      the gap zone — the median acts as a physical barrier in both cases.
-        # EXCEPTION: if the player is at a bridge, the median is bridged — collisions are
-        # possible there (the player is crossing between roads).
-        # The condition: offramp is active AND player is above road_top AND NOT at a bridge.
+        #   3. Player is on a bridge crossing the gap — they are above road_top and physically
+        #      separated from the enemy on the main road.
+        # The condition: offramp is active AND player is above road_top (covers all cases above).
         offramp_active, _, _, _, _ = self._get_offramp_info(state)
         road_top, _, _ = self._get_road_bounds(state)
         player_above_road_top = state.player_y < road_top
-        at_bridge = self._player_at_bridge(state, state.player_x)
-        collision = collision & ~(offramp_active & (state.player_on_offramp | player_above_road_top) & ~at_bridge)
+        collision = collision & ~(offramp_active & (state.player_on_offramp | player_above_road_top))
 
         return jax.lax.cond(
             collision,

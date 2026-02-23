@@ -498,3 +498,33 @@ class TestOfframpBridge:
         # Should be solid black
         assert np.all(bridge_sprite[:, :, :3] == 0), "bridge sprite should be solid black"
 
+    def test_enemy_cannot_catch_player_on_bridge(self):
+        """Enemy must not catch the player while the player is traversing a bridge."""
+        env = self._make_env_with_bridge(450)
+        _, state = env.reset(jax.random.PRNGKey(0))
+        consts = env.consts
+
+        # Teleport scroll so the bridge is at the player's X (scroll=473 → bridge_x=69)
+        state = state._replace(scrolling_step_counter=jnp.array(473, dtype=jnp.int32))
+
+        # Confirm bridge is at player position
+        at_bridge = env._player_at_bridge(state, jnp.array(state.player_x, dtype=jnp.int32))
+        assert bool(at_bridge), "Setup: bridge should be at player X"
+
+        # Move player up so they are in the gap area (above road_top, below offramp)
+        # Push up a few steps — they won't be fully on the offramp yet, just crossing
+        for _ in range(5):
+            _, state, _, _, _ = env.step(state, Action.UP)
+
+        # Place the enemy directly at the player's position (worst-case collision attempt)
+        state = state._replace(
+            enemy_x=jnp.array(state.player_x, dtype=jnp.int32),
+            enemy_y=jnp.array(state.player_y, dtype=jnp.int32),
+            enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
+        )
+
+        _, state, _, _, _ = env.step(state, Action.NOOP)
+        assert not bool(state.is_round_over), (
+            "Enemy must not catch player while player is crossing a bridge"
+        )
+
