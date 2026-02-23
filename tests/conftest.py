@@ -19,7 +19,10 @@ from jaxatari.wrappers import (
 def pytest_addoption(parser):
     """Adds the --game command-line option to pytest."""
     parser.addoption(
-        "--game", action="store", default=None, help="Run tests for a specific game by name"
+        "--game",
+        action="store",
+        default=None,
+        help="Run tests for specific games by name (comma-separated, e.g. 'skiing,spacewar')",
     )
 
 def pytest_configure(config):
@@ -79,6 +82,17 @@ def discover_games() -> list[str]:
         print(f"Could not discover games: {e}", file=sys.stderr)
         return
 
+def parse_game_list(option_value: str | None) -> list[str] | None:
+    """
+    Parse a comma-separated --game option into a list of normalized game names.
+    Returns None if option_value is None or empty.
+    """
+    if not option_value:
+        return None
+    items = [item.strip().lower() for item in option_value.split(",")]
+    items = [item for item in items if item]
+    return items or None
+
 def pytest_generate_tests(metafunc):
     """
     Dynamically parametrizes any test that uses the 'game_name' fixture.
@@ -90,9 +104,9 @@ def pytest_generate_tests(metafunc):
     is_regression_test = metafunc.cls is not None and "TestRegression" in metafunc.cls.__name__
 
     if 'game_name' in metafunc.fixturenames:
-        specified_game = metafunc.config.getoption("--game")
-        if specified_game:
-            metafunc.parametrize("game_name", [specified_game])
+        specified_games = parse_game_list(metafunc.config.getoption("--game"))
+        if specified_games:
+            metafunc.parametrize("game_name", specified_games)
         else:
             if is_regression_test:
                 # For regression tests, only use games that have snapshots.
