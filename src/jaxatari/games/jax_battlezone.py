@@ -93,7 +93,7 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 class EnemyType(IntEnum):
     TANK = 0
     SAUCER = 1
-    # FIGHTER_JET = 2
+    FIGHTER_JET = 2
     # SUPER_TANK = 3
 
 
@@ -152,12 +152,17 @@ class BattlezoneConstants(NamedTuple):
     ENEMY_HITBOX_SIZE: float = 4.5 #todo change  # full hitbox size is twice this in both directions (square)
     ENEMY_SPAWN_PROBS: jnp.array = jnp.array([
         # TANK, SAUCER, FIGHTER_JET, SUPER_TANK
-        [1.0, 0.0],# 0.0, 0.0],   #1_000
-        [0.8, 0.2],# 0.0, 0.0],   #2_000
-        [0.6, 0.4],# 0.1, 0.0],   #7_000
-        [0.5, 0.5]#, 0.2, 0.1]    #12_000
+        [1.0, 0.0, 0.0], #, 0.0],   #1_000
+        [0.8, 0.2, 0.0], #, 0.0],   #2_000
+        [0.6, 0.4, 0.1], #, 0.0],   #7_000
+        [0.5, 0.5, 0.2], #, 0.1]    #12_000
         ])
     RADAR_MAX_SCAN_RADIUS: int = 110  #todo change
+    FIGHTER_AREA_X: Tuple[float, float] = (-12.5, 12.5)
+    FIGHTER_AREA_Z: Tuple[float, float] = (75.0, 126.0)
+    FIGHTER_SLOW_DOWN_DISTANCE: float = 48.0
+    FIGHTER_SHOOTING_DISTANCE: float = 30.0
+    FIGHTER_DESPAWN_FRAMES: int = 24
 
     # --- timing ---
     FIRE_CD: int = 114  # player
@@ -169,7 +174,7 @@ class BattlezoneConstants(NamedTuple):
     # --- misc ---
     RADAR_ROTATION_SPEED: float = -0.05
     DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.05 #todo change
-    ENEMY_SCORES: chex.Array = jnp.array([1000,5000,2000,3000], dtype=jnp.int32)
+    ENEMY_SCORES: chex.Array = jnp.array([1000, 5000, 2000, 3000], dtype=jnp.int32)
 
 
 class Projectile(NamedTuple):
@@ -187,7 +192,7 @@ class Enemy(NamedTuple):
     z: chex.Array
     distance: chex.Array
     enemy_type: chex.Array
-    orientation_angle: chex.Array
+    orientation_angle: chex.Array  # 0 = towards positive z
     active: chex.Array
     death_anim_counter: chex.Array
     shoot_cd: chex.Array
@@ -195,6 +200,7 @@ class Enemy(NamedTuple):
     dist_moved_temp: chex.Array
     point_store_1_temp: chex.Array      # Especially for Saucer
     point_store_2_temp: chex.Array      # Especially for Saucer
+
 
 
 # immutable state container
@@ -623,40 +629,70 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         return distance
 
     @partial(jax.jit, static_argnums=(0,))
-    def spawn_enemy(self, key, enemy:Enemy, score, state):
+    def spawn_enemy(self, key, enemy: Enemy, score, state):
         def score_to_spawn_indx(score):
             threshold = jnp.array([1000, 2000, 7000, 12000])
             return jnp.sum(score >= threshold)
+
         def no_spawn(args):
             enemy, key, score = args
             return enemy
+
         def do_spawn(args):
             enemy, key, score = args
-            # Enemy spawnprobs
             spawn_probs_index = score_to_spawn_indx(score)
             spawn_probs = self.consts.ENEMY_SPAWN_PROBS[spawn_probs_index]
-            # Random keys
             key, k_dist, k_theta, k_type, k_orient = jax.random.split(key, 5)
-            # Enemy position
-            distance = jnp.sqrt(jax.random.uniform(k_dist, minval=.2, maxval=.9))*self.consts.RADAR_MAX_SCAN_RADIUS
-            theta = jax.random.uniform(k_theta, minval=0.0, maxval=2*jnp.pi)
             enemy_type = jax.random.choice(k_type, a=len(EnemyType), p=spawn_probs)
 
-            return enemy._replace(x=distance*jnp.cos(theta),
-                                  z=distance*jnp.sin(theta),
-                                  distance=distance,
-                                  enemy_type=enemy_type,
-                                  orientation_angle=jax.random.uniform(k_orient, minval=0.0, maxval=2*jnp.pi),
-                                  active=True,
-                                  shoot_cd=self.consts.ENEMY_SHOOT_CDS[enemy_type],
-                                  phase=0,
-                                  dist_moved_temp=0.0,
-                                  point_store_1_temp=jnp.zeros((2,), dtype=jnp.float32),
-                                  point_store_2_temp=jnp.zeros((2,), dtype=jnp.float32),
-                                  )
+            def spawn_fighter():
+                # Custom spawn logic for fighter jets
+                # spawn in a specific area (FIGHTER_AREA_X, FIGHTER_AREA_Z)
+                x = jax.random.uniform(k_dist, minval=self.consts.FIGHTER_AREA_X[0], maxval=self.consts.FIGHTER_AREA_X[1])
+                z = jax.random.uniform(k_theta, minval=self.consts.FIGHTER_AREA_Z[0], maxval=self.consts.FIGHTER_AREA_Z[1])
+                distance = self._get_distance(x, z)
+                orientation_angle = jax.random.uniform(k_orient, minval=0.0, maxval=2*jnp.pi)
+                return enemy._replace(
+                    x=x,
+                    z=z,
+                    distance=distance,
+                    enemy_type=enemy_type,
+                    orientation_angle=orientation_angle,
+                    active=True,
+                    shoot_cd=self.consts.ENEMY_SHOOT_CDS[enemy_type],
+                    phase=0,
+                    dist_moved_temp=0.0,
+                    point_store_1_temp=jnp.zeros((2,), dtype=jnp.float32),
+                    point_store_2_temp=jnp.zeros((2,), dtype=jnp.float32),
+                )
 
-        cond = jnp.logical_or(enemy.active, enemy.death_anim_counter>0)
-        cond = jnp.logical_or(cond, jnp.logical_and(score<1000, state.shot_spawn==False))
+            def spawn_default():
+                distance = jnp.sqrt(jax.random.uniform(k_dist, minval=.2, maxval=.9)) * self.consts.RADAR_MAX_SCAN_RADIUS
+                theta = jax.random.uniform(k_theta, minval=0.0, maxval=2*jnp.pi)
+                orientation_angle = jax.random.uniform(k_orient, minval=0.0, maxval=2*jnp.pi)
+                return enemy._replace(
+                    x=distance * jnp.cos(theta),
+                    z=distance * jnp.sin(theta),
+                    distance=distance,
+                    enemy_type=enemy_type,
+                    orientation_angle=orientation_angle,
+                    active=True,
+                    shoot_cd=self.consts.ENEMY_SHOOT_CDS[enemy_type],
+                    phase=0,
+                    dist_moved_temp=0.0,
+                    point_store_1_temp=jnp.zeros((2,), dtype=jnp.float32),
+                    point_store_2_temp=jnp.zeros((2,), dtype=jnp.float32),
+                )
+
+            # Use custom logic for fighter jets
+            return jax.lax.cond(
+                enemy_type == EnemyType.FIGHTER_JET,
+                spawn_fighter,
+                spawn_default
+            )
+
+        cond = jnp.logical_or(enemy.active, enemy.death_anim_counter > 0)
+        cond = jnp.logical_or(cond, jnp.logical_and(score < 1000, state.shot_spawn == False))
         cond = jnp.any(cond)
 
         return jax.lax.cond(cond, no_spawn, do_spawn, (enemy, key, score))
@@ -671,40 +707,50 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
         # ---------Helper Functions---------
 
-        def move_to_player(enemy: Enemy, towards: int = -1) -> Enemy:
-            """Enemy towards player with -1 and away with 1"""
+        def move_to_direction(enemy: Enemy, angle: float, towards: int = -1) -> Enemy:
+            """Enemy towards direction with -1 and away with 1"""
 
-            direction_x = -jnp.sin(perfect_angle)
-            direction_z = jnp.cos(perfect_angle)
-            new_x = enemy.x +direction_x*towards*speed
-            new_z = enemy.z +direction_z*towards*speed
-            new_x = (new_x + self.consts.WORLD_SIZE_X/2) % self.consts.WORLD_SIZE_X - self.consts.WORLD_SIZE_X/2
-            new_z = (new_z + self.consts.WORLD_SIZE_Z/2) % self.consts.WORLD_SIZE_Z - self.consts.WORLD_SIZE_Z/2
+            direction_x = -jnp.sin(angle)
+            direction_z = jnp.cos(angle)
+            new_x = enemy.x + direction_x * towards * speed
+            new_z = enemy.z + direction_z * towards * speed
+            new_x = (new_x + self.consts.WORLD_SIZE_X / 2) % self.consts.WORLD_SIZE_X - self.consts.WORLD_SIZE_X / 2
+            new_z = (new_z + self.consts.WORLD_SIZE_Z / 2) % self.consts.WORLD_SIZE_Z - self.consts.WORLD_SIZE_Z / 2
             
-            return enemy._replace(x=new_x, z=new_z)
+            return enemy._replace(x=new_x, z=new_z, distance=self._get_distance(new_x, new_z))
         
-        def move_orthogonal_to_player(enemy: Enemy, direction: int = 1) -> Enemy:
-            """Enemy right of player with -1 and left with 1"""
+        def move_orthogonal_to_direction(enemy: Enemy, angle: float, direction: int = 1) -> Enemy:
+            """Enemy right of direction with -1 and left with 1 (from direction's POV)"""
 
-            ortho_angle = (perfect_angle + jnp.sign(direction)*(jnp.pi/2)) % (2*jnp.pi)
+            ortho_angle = (angle + jnp.sign(direction) * (jnp.pi/2)) % (2*jnp.pi)
             direction_x = -jnp.sin(ortho_angle)
             direction_z = jnp.cos(ortho_angle)
-            new_x = enemy.x +direction_x*speed*jnp.abs(direction)
-            new_z = enemy.z +direction_z*speed*jnp.abs(direction)
-            new_x = (new_x + self.consts.WORLD_SIZE_X/2) % self.consts.WORLD_SIZE_X - self.consts.WORLD_SIZE_X/2
-            new_z = (new_z + self.consts.WORLD_SIZE_Z/2) % self.consts.WORLD_SIZE_Z - self.consts.WORLD_SIZE_Z/2
+            new_x = enemy.x + direction_x * speed * jnp.abs(direction)
+            new_z = enemy.z + direction_z * speed * jnp.abs(direction)
+            new_x = (new_x + self.consts.WORLD_SIZE_X / 2) % self.consts.WORLD_SIZE_X - self.consts.WORLD_SIZE_X / 2
+            new_z = (new_z + self.consts.WORLD_SIZE_Z / 2) % self.consts.WORLD_SIZE_Z - self.consts.WORLD_SIZE_Z / 2
             
-            return enemy._replace(x=new_x, z=new_z)
+            return enemy._replace(x=new_x, z=new_z, distance=self._get_distance(new_x, new_z))
+
+        def move_to_player(enemy: Enemy, towards: int = -1) -> Enemy:
+            """Enemy towards player with -1 and away with 1"""            
+            return move_to_direction(enemy, perfect_angle, towards)
+        
+        def move_orthogonal_to_player(enemy: Enemy, direction: int = 1) -> Enemy:
+            """Enemy right of player with -1 and left with 1 (from player's POV)"""            
+            return move_orthogonal_to_direction(enemy, perfect_angle, direction)
 
         def enemy_turn(enemy: Enemy) -> Enemy:
             return enemy._replace(orientation_angle=enemy.orientation_angle+jnp.sign(angle_diff)*rot_speed)
 
         def shoot_projectile(args) -> Tuple[Enemy, Projectile]:
-            enemy, projectile= args
+
+            enemy, projectile = args
             new_enemy = enemy._replace(shoot_cd=self.consts.ENEMY_SHOOT_CDS[enemy.enemy_type])
-            return new_enemy, projectile._replace(
+
+            return new_enemy, projectile._replace(  # TODO: check whether we have enemy friendly fire enabled. it should be. potentially, we need to displace the spawn position of the projectile to avoid it shooting itself
                 orientation_angle=perfect_angle,
-                x = enemy.x+self.consts.ENEMY_HITBOX_SIZE/2,
+                x = enemy.x,
                 z = enemy.z,
                 active=True,
                 time_to_live=jnp.array(self.consts.PROJECTILE_TTL, dtype=jnp.int32)
@@ -734,7 +780,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
 
         def saucer_movement(saucer: Enemy) -> Enemy:
-            min_dist = 27.0
+            min_dist = 27.0  # TODO: move to constants
             # TODO: try reflecting roattion center when going from + to - x etc or add a separate strafing mechanism that resets phases
 
             def near_player(saucer):
@@ -771,8 +817,10 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
                     # saucer tries to stay outside the player's aim.
                     saucer = jax.lax.cond(
-                        (saucer.x > -(2*self.consts.ENEMY_HITBOX_SIZE)-1) & (saucer.x < 1.0) & (saucer.z > 0.0), 
-                        lambda x: move_orthogonal_to_player(x, -jnp.sign(self.consts.ENEMY_HITBOX_SIZE + saucer.x)*0.5), 
+                        (saucer.x > -self.consts.ENEMY_HITBOX_SIZE - 1.0) 
+                        & (saucer.x < self.consts.ENEMY_HITBOX_SIZE + 1.0) 
+                        & (saucer.z > 0.0), 
+                        lambda x: move_orthogonal_to_player(x, -jnp.sign(saucer.x)*0.5), 
                         lambda x: move_to_player(x, 0.5),
                         saucer
                     )
@@ -876,15 +924,98 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             return jax.lax.cond(saucer.distance < min_dist, near_player, far_player, saucer)
 
 
-        shoot_cond = jnp.all(jnp.array([enemy.enemy_type != EnemyType.SAUCER,
+        def fighter_movement(fighter: Enemy) -> Enemy:
+
+            
+            def p0(fighter: Enemy):
+                """right after spawning: setup"""
+                return fighter._replace(
+                    phase=1, 
+                    # abuse dist_moved_temp as directional indicator
+                    dist_moved_temp=jnp.sign(fighter.x),
+                    point_store_1_temp=jnp.array([0.0, fighter.z]),
+                    point_store_2_temp=jnp.array([0.0, 0.0]),
+                    orientation_angle=jnp.pi,  # parallel to z axis facing player at spawn time
+                    shoot_cd=0
+                    )
+
+            def p1(fighter):
+                """diagonal movement"""
+                # do diagonal step in direction dependent on dist_moved_temp with speed dependent on distance
+                speed_multiplier = jnp.where(fighter.distance < self.consts.FIGHTER_SLOW_DOWN_DISTANCE, 0.5, 1.0)
+                # go 1/sqrt(2) in both directions to achieve diagonal movement of one unit
+                fighter = move_to_direction(fighter, fighter.orientation_angle, speed_multiplier / jnp.sqrt(2.0))
+                fighter = move_orthogonal_to_direction(fighter, fighter.orientation_angle, -fighter.dist_moved_temp * speed_multiplier / jnp.sqrt(2.0))
+                # find orthogonal distance from fighter to the line connecting point_store_2_temp and point_store_1_temp
+                # Let A = point_store_2_temp, B = point_store_1_temp, P = (fighter.x, fighter.z)
+                A = fighter.point_store_2_temp
+                B = fighter.point_store_1_temp
+                P = jnp.array([fighter.x, fighter.z])
+                BA = B - A
+                PA = P - A
+                # Compute orthogonal distance from P to line AB
+                orth_dist = -(BA[0] * PA[1] - BA[1] * PA[0]) / jnp.sqrt(BA[0]**2 + BA[1]**2 + 1e-8)
+
+                AB = B - A
+                AP = P - A
+                den = jnp.sqrt(AB[0]**2 + AB[1]**2 + 1e-8)
+                # signed distance to the line through A perpendicular to AB
+                vert_dist = (AP[0] * AB[0] + AP[1] * AB[1]) / den
+
+                # check out of bounds orthogonal direction: negate dist_moved_temp
+                fighter = jax.lax.cond(  # if in bounds...
+                    (orth_dist > self.consts.FIGHTER_AREA_X[0]) 
+                    & (orth_dist < self.consts.FIGHTER_AREA_X[1]), 
+                    lambda f: f, 
+                    lambda f: f._replace(dist_moved_temp=jnp.sign(orth_dist)), 
+                    fighter
+                )
+                # check shooting range: shoot, set phase as counter, (also= go to pX)
+                fighter = jax.lax.cond(
+                    (fighter.distance <= self.consts.FIGHTER_SHOOTING_DISTANCE)
+                    | (jnp.abs(vert_dist) < 5.0),  # despawn fallback
+                    lambda f: f._replace(phase=self.consts.FIGHTER_DESPAWN_FRAMES + 10),
+                    lambda f: f,
+                    fighter
+                )
+
+                return fighter
+                
+
+            def pX(fighter):
+                """keep going and despawn"""
+                # do diagonal step with slow speed in direction dependent on dist_moved_temp
+                fighter = move_to_direction(fighter, fighter.orientation_angle, -0.5 / jnp.sqrt(2.0))
+                fighter = move_orthogonal_to_direction(fighter, fighter.orientation_angle, fighter.dist_moved_temp * 0.5 / jnp.sqrt(2.0))
+                # decrement phase
+                fighter = fighter._replace(phase=fighter.phase - 1)
+                # check counter elapsed: despawn
+                fighter = jax.lax.cond(
+                    fighter.phase <= 10,
+                    lambda f: f._replace(active=False),
+                    lambda f: f,
+                    fighter
+                )
+                return fighter
+            
+            # for all phases >=2, pX is chosen
+            return jax.lax.switch(fighter.phase, (p0, p1, pX), fighter)
+
+        shoot_cond = (jnp.all(jnp.array([enemy.enemy_type == EnemyType.TANK,
                                         enemy.shoot_cd <= 0,
                                         jnp.abs(angle_diff) <= rot_speed,
-                                        enemy.distance <= 31.0, # TODO change
+                                        enemy.distance <= 31.0, # TODO extract to consts
                                         enemy.active]))
 
+                    | jnp.all(jnp.array([enemy.enemy_type == EnemyType.FIGHTER_JET,
+                                         enemy.shoot_cd <= 0,
+                                         enemy.distance <= self.consts.FIGHTER_SHOOTING_DISTANCE,
+                                         enemy.active]))                
+                    )
+        
         new_enemy, new_projectile = jax.lax.cond(shoot_cond, shoot_projectile, lambda x: x,
                                                  (enemy, projectile))
-        return (jax.lax.switch(enemy.enemy_type, (tank_movement, saucer_movement), new_enemy),
+        return (jax.lax.switch(enemy.enemy_type, (tank_movement, saucer_movement, fighter_movement), new_enemy),
                 new_projectile)
 
     # ---------------------------------------------
@@ -1073,11 +1204,19 @@ class BattlezoneRenderer(JAXGameRenderer):
              self.pad_to_shape(self.SHAPE_MASKS["saucer_left"], pad, pad),
              self.pad_to_shape(self.SHAPE_MASKS["saucer_left"], pad, pad),
              self.pad_to_shape(self.SHAPE_MASKS["saucer_left"], pad, pad),
-            self.pad_to_shape(self.SHAPE_MASKS["saucer_right"],pad, pad),
+             self.pad_to_shape(self.SHAPE_MASKS["saucer_right"],pad, pad),
              self.pad_to_shape(self.SHAPE_MASKS["saucer_right"], pad, pad),
              self.pad_to_shape(self.SHAPE_MASKS["saucer_right"], pad, pad)
              ],
-
+            [
+                self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
+                self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
+                self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
+                self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
+                self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
+                self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
+                self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
+            ]
              ])
         self.enemy_explosion_mask = jnp.array([self.pad_to_shape(self.SHAPE_MASKS["enemy_explosion_1"], pad, pad),
                                 self.pad_to_shape(self.SHAPE_MASKS["enemy_explosion_2"], pad, pad),
@@ -1120,6 +1259,7 @@ class BattlezoneRenderer(JAXGameRenderer):
             {'name': 'tank_enemy_04', 'type': 'single', 'file': 'tank_enemy_04.npy'},
             {'name': 'saucer_left', 'type': 'single', 'file': 'saucer_left.npy'},
             {'name': 'saucer_right', 'type': 'single', 'file': 'saucer_right.npy'},
+            {'name': 'fighter_jet', 'type': 'single', 'file': 'fighter.npy'},
             {'name': 'projectile_big', 'type': 'single', 'file': 'projectile_big.npy'},
             {'name': 'projectile_small', 'type': 'single', 'file': 'projectile_small.npy'},
             #anims
