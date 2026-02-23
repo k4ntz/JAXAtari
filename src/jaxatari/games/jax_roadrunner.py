@@ -695,11 +695,18 @@ class JaxRoadRunner(
 
         # When the offramp is active and the player is on the main road (and not standing
         # at a diagonal transition), the gap/median above the main road is occupied by the
-        # offramp structure.  Clamp main_min_y to road_top so the player's sprite cannot
-        # penetrate the gap or the offramp band from below.
+        # offramp structure.  Block further upward movement past road_top.
+        # IMPORTANT: if the player is already above road_top (e.g., was in the top lane
+        # before the offramp appeared), use their current y as the soft floor so the
+        # offramp activating does NOT suddenly snap the player downward.
+        soft_blocked_min_y = jnp.where(
+            state.player_y < road_top,
+            state.player_y,   # already above road_top: freeze at current y, no downward push
+            road_top,         # below road_top: normal hard floor
+        )
         main_min_y_blocked = jnp.where(
             offramp_active & ~in_transition,
-            road_top,
+            soft_blocked_min_y,
             main_min_y,
         )
 
@@ -969,6 +976,18 @@ class JaxRoadRunner(
 
         # Don't trigger game over if enemy is flattened
         collision = collision & (state.enemy_flattened_timer == 0)
+
+        # Don't trigger game over if the player is separated from the enemy by the median.
+        # This covers two cases:
+        #   1. Player is on the offramp (above gap), enemy on main road.
+        #   2. Player is in the upper part of the main road whose 32-px sprite extends into
+        #      the gap zone — the median acts as a physical barrier in both cases.
+        # The condition: offramp is active AND the player's top (player_y) is above road_top,
+        # meaning the player is either on the offramp or has their head in the gap area.
+        offramp_active, _, _, _, _ = self._get_offramp_info(state)
+        road_top, _, _ = self._get_road_bounds(state)
+        player_above_road_top = state.player_y < road_top
+        collision = collision & ~(offramp_active & (state.player_on_offramp | player_above_road_top))
 
         return jax.lax.cond(
             collision,
@@ -2189,13 +2208,14 @@ class RoadRunnerRenderer(JAXGameRenderer):
         The sprite covers the vertical span from offramp_top to the main road top
         (OFFRAMP_HEIGHT + OFFRAMP_GAP rows) and is OFFRAMP_RAMP_WIDTH columns wide.
 
-        Column 0  (left  = fully separated): only the offramp road rows at the top.
-        Column W-1 (right = still merged):   the entire sprite height is solid road,
-                                             connecting the offramp to the main road.
+        Column 0  (left  = fully separated): only the offramp rows are road.
+        Column W-1 (right = still merged):   the entire sprite height is road.
 
-        The formula `y < OFFRAMP_H + GAP_H * x // (RAMP_W - 1)` produces a continuous
-        diagonal fill: the gap area (median) fills with road progressively from right to
-        left, creating the visual of the roads diverging as the section scrolls leftward.
+        The formula fills from the diagonal line DOWN to the bottom of the sprite,
+        ensuring the full bottom row is always road (flush connection to the main road
+        at every column).  The diagonal runs through the gap area from top-right to
+        bottom-left, making the connecting section look like a proper ramp rather
+        than a triangle with a single point of contact.
         """
         RAMP_W = self.consts.OFFRAMP_RAMP_WIDTH
         OFFRAMP_H = self.consts.OFFRAMP_HEIGHT
@@ -2207,10 +2227,18 @@ class RoadRunnerRenderer(JAXGameRenderer):
         bg_color_rgba = jnp.array([bg_r, bg_g, bg_b, 255], dtype=jnp.uint8)
 
         y, x = jnp.indices((total_h, RAMP_W))
-        # At x=0 (left, separated):      road for rows 0..OFFRAMP_H-1, gap is background.
-        # At x=RAMP_W-1 (right, merged): road for all rows 0..total_h-1.
-        # The diagonal fills the gap area from right to left as x decreases.
-        is_road = y < OFFRAMP_H + GAP_H * x // jnp.maximum(RAMP_W - 1, 1)  # guard against RAMP_W=1
+        # The diagonal line in the gap area runs from (x=RAMP_W-1, y=OFFRAMP_H) on the
+        # right (merged) to (x=0, y=total_h-1) on the left (separated bottom).
+        # Road fills:
+        #   • always the offramp band (y < OFFRAMP_H)
+        #   • the gap region BELOW the diagonal (y >= diagonal_y(x))
+        # This guarantees the bottom row (y=total_h-1) is road at every column,
+        # creating a full-width flush connection to the main road.
+        # Using RAMP_W (not RAMP_W-1) as denominator ensures diagonal_y(x=0) = total_h-1,
+        # so the leftmost column's bottom row is road; RAMP_W-1 would give total_h, missing it.
+        safe_denom = jnp.maximum(RAMP_W, 1)
+        diagonal_y = OFFRAMP_H + GAP_H * (RAMP_W - 1 - x) // safe_denom
+        is_road = (y < OFFRAMP_H) | (y >= diagonal_y)
         return jnp.where(is_road[:, :, jnp.newaxis], road_color_rgba, bg_color_rgba)
 
     def _create_seed_sprite(self) -> jnp.ndarray:

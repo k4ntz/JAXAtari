@@ -299,3 +299,81 @@ class TestOfframpRendering:
         assert count_black(frame_partial) < count_black(frame_full), (
             "Partial split should have fewer offramp pixels than fully-open offramp"
         )
+
+    def test_split_sprite_bottom_row_fully_connected(self):
+        """The bottom row of the split sprite must be all road (fully connected to main road)."""
+        import numpy as np
+        env = make_env()
+        consts = env.consts
+        # Build the split sprite via the renderer helper (before palette conversion)
+        split_sprite = np.array(env.renderer._create_offramp_split_sprite())
+        OFFRAMP_H = consts.OFFRAMP_HEIGHT
+        GAP_H = consts.OFFRAMP_GAP
+        last_row = split_sprite[OFFRAMP_H + GAP_H - 1, :, :]
+        # Last row should be black (road color = 0,0,0) across all columns.
+        is_black = np.all(last_row[:, :3] == 0, axis=1)
+        assert np.all(is_black), (
+            "Split sprite bottom row should be all road (black) so it connects "
+            "fully to the main road"
+        )
+
+
+class TestOfframpCollision:
+    """Verify enemy-player collision is suppressed across the median."""
+
+    def test_no_collision_when_player_on_offramp(self):
+        """Enemy should not catch player when player is on offramp and enemy on main road."""
+        env = make_env()
+        _, state = env.reset(jax.random.PRNGKey(0))
+
+        # Get player onto the offramp
+        state = fast_forward_to_split(env, state)
+        state = move_player_onto_offramp(env, state)
+        assert bool(state.player_on_offramp), "Setup: player should be on offramp"
+
+        # Advance past the split so no diagonal is near the player
+        state = state._replace(scrolling_step_counter=jnp.array(280, dtype=jnp.int32))
+
+        # Place enemy at the very top of the main road (closest possible to offramp)
+        consts = env.consts
+        enemy_y_top = consts.ROAD_TOP_Y - (consts.PLAYER_SIZE[1] // 3)  # top of main road enemy range
+        state = state._replace(
+            enemy_x=jnp.array(state.player_x, dtype=jnp.int32),
+            enemy_y=jnp.array(enemy_y_top, dtype=jnp.int32),
+            enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
+        )
+
+        # Step once — should NOT trigger game over
+        _, state, _, _, _ = env.step(state, Action.NOOP)
+        assert not bool(state.is_round_over), (
+            "Enemy at top of main road must not catch player on offramp"
+        )
+
+
+class TestOfframpNoPositionJump:
+    """Verify the offramp activating does not abruptly move the player."""
+
+    def test_player_not_pushed_when_offramp_activates(self):
+        """A player in the top lane must not be snapped downward when the offramp appears."""
+        env = make_env()
+        _, state = env.reset(jax.random.PRNGKey(0))
+        consts = env.consts
+        # Move player to the top of the normal main-road range (y~83) before
+        # the offramp exists (scroll=0).
+        for _ in range(30):
+            _, state, _, _, _ = env.step(state, Action.UP)
+        y_before = int(state.player_y)
+        assert y_before < consts.ROAD_TOP_Y, (
+            f"Setup: player should be above road_top ({consts.ROAD_TOP_Y}), got y={y_before}"
+        )
+
+        # Teleport to the offramp-active zone (scroll=300) and take a single NOOP step.
+        state = state._replace(scrolling_step_counter=jnp.array(300, dtype=jnp.int32))
+        _, state, _, _, _ = env.step(state, Action.NOOP)
+        y_after = int(state.player_y)
+
+        # Player should NOT have been pushed down by more than the normal step size.
+        assert abs(y_after - y_before) <= consts.PLAYER_MOVE_SPEED, (
+            f"Offramp activating pushed player from y={y_before} to y={y_after}; "
+            "should not cause a sudden large position change"
+        )
