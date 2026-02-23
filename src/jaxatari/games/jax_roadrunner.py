@@ -693,6 +693,16 @@ class JaxRoadRunner(
         at_merge = (x_pos + PLAYER_W > merge_x) & (x_pos < merge_x + RAMP_W)
         in_transition = offramp_active & (at_split | at_merge)
 
+        # When the offramp is active and the player is on the main road (and not standing
+        # at a diagonal transition), the gap/median above the main road is occupied by the
+        # offramp structure.  Clamp main_min_y to road_top so the player's sprite cannot
+        # penetrate the gap or the offramp band from below.
+        main_min_y_blocked = jnp.where(
+            offramp_active & ~in_transition,
+            road_top,
+            main_min_y,
+        )
+
         # During a transition the player can freely move between both Y ranges.
         # Otherwise they are constrained to whichever road they are currently on.
         checked_y = jnp.where(
@@ -701,7 +711,7 @@ class JaxRoadRunner(
             jnp.where(
                 state.player_on_offramp & offramp_active,
                 jnp.clip(y_pos, off_min_y, off_max_y),
-                jnp.clip(y_pos, main_min_y, main_max_y),
+                jnp.clip(y_pos, main_min_y_blocked, main_max_y),
             ),
         )
         checked_x = jnp.clip(

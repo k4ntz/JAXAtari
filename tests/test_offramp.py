@@ -171,25 +171,43 @@ class TestOfframpBounds:
             _, state, _, _, _ = env.step(state, Action.UP)
 
         assert int(state.player_y) >= expected_min_y, (
-            f"player_y={state.player_y} should be >= {expected_min_y} when on main road"
+            f"player_y={state.player_y} should be >= {expected_min_y} when on main road (no offramp)"
         )
+
+    def test_player_cannot_penetrate_offramp_from_below(self):
+        """When the offramp is active above the player, the player cannot go above road_top."""
+        env = make_env()
+        consts = env.consts
+        road_top = consts.ROAD_TOP_Y  # 110 — player's top must not go above this
+
+        _, state = env.reset(jax.random.PRNGKey(0))
+        # Offramp is active (scroll=300) but split and merge diagonals are off screen.
+        # No transition zone is reachable at the player's default X (~70).
+        state = state._replace(scrolling_step_counter=jnp.array(300, dtype=jnp.int32))
+
+        for _ in range(30):
+            _, state, _, _, _ = env.step(state, Action.UP)
+
+        assert int(state.player_y) >= road_top, (
+            f"player_y={state.player_y} should be >= road_top={road_top}; "
+            "player must not penetrate the median/offramp from below"
+        )
+        assert not bool(state.player_on_offramp), "Player should not be on offramp"
 
     def test_player_cannot_cross_when_away_from_diagonal(self):
         """Player stays on their current road when the offramp is active but they are away from a diagonal."""
         env = make_env()
         _, state = env.reset(jax.random.PRNGKey(0))
         consts = env.consts
-        main_min_y = consts.ROAD_TOP_Y - (consts.PLAYER_SIZE[1] - 5)  # 83
+        road_top = consts.ROAD_TOP_Y  # blocked at road_top when offramp is active
 
-        # Offramp is active (scroll=300) but split_x=(300-200)*3=300 >> WIDTH=160 (off screen to the
-        # right), and the merge hasn't started yet (counter=300 < scroll_end=700, merge_x negative).
-        # Player should be blocked at main road bounds — no diagonal is reachable.
+        # Offramp active at scroll=300, but split_x ≫ WIDTH and merge hasn't started.
         state = state._replace(scrolling_step_counter=jnp.array(300, dtype=jnp.int32))
 
         for _ in range(30):
             _, state, _, _, _ = env.step(state, Action.UP)
 
-        assert int(state.player_y) >= main_min_y, (
+        assert int(state.player_y) >= road_top, (
             f"player_y={state.player_y} should not cross to offramp when away from diagonal"
         )
         assert not bool(state.player_on_offramp), "Player should not be on offramp"
