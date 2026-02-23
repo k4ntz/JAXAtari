@@ -30,8 +30,12 @@ def make_env(offramp_enabled: bool = True) -> JaxRoadRunner:
     return JaxRoadRunner(consts)
 
 
-def fast_forward_to_split(env: JaxRoadRunner, state, scroll: int = 215):
-    """Teleport the scroll counter to a position where the split is on screen."""
+def fast_forward_to_split(env: JaxRoadRunner, state, scroll: int = 225):
+    """Teleport the scroll counter to a position where the player (x=70) is within the split sprite.
+
+    With scroll=225, RAMP_W=24:  split_x = (225-200)*3 = 75, sprite at x=[51, 75].
+    Player at x=70, width=8: right edge 78 > 51 AND left 70 < 75 → player is at the split.
+    """
     return state._replace(scrolling_step_counter=jnp.array(scroll, dtype=jnp.int32))
 
 
@@ -103,9 +107,10 @@ class TestOfframpState:
         state = move_player_onto_offramp(env, state)
         assert state.player_on_offramp
 
-        # Advance to merge zone: scroll_end=700 means merge appears at x=0 then.
-        # Use a value just past scroll_end so merge is on screen and offramp is still active.
-        state = state._replace(scrolling_step_counter=jnp.array(703, dtype=jnp.int32))
+        # Advance to a scroll position where the merge sprite is at the player's X (x=70).
+        # With RAMP_W=24: need merge_x in (46, 78). scroll=720 → merge_x = (720-700)*3 = 60.
+        # Player at x=70: right edge (70+8=78) > merge_x (60) AND left edge (70) < merge_x+RAMP_W (84) → overlap ✓
+        state = state._replace(scrolling_step_counter=jnp.array(720, dtype=jnp.int32))
 
         # Move DOWN to descend back to the main road
         for _ in range(20):
@@ -169,6 +174,26 @@ class TestOfframpBounds:
             f"player_y={state.player_y} should be >= {expected_min_y} when on main road"
         )
 
+    def test_player_cannot_cross_when_away_from_diagonal(self):
+        """Player stays on their current road when the offramp is active but they are away from a diagonal."""
+        env = make_env()
+        _, state = env.reset(jax.random.PRNGKey(0))
+        consts = env.consts
+        main_min_y = consts.ROAD_TOP_Y - (consts.PLAYER_SIZE[1] - 5)  # 83
+
+        # Offramp is active (scroll=300) but split_x=(300-200)*3=300 >> WIDTH=160 (off screen to the
+        # right), and the merge hasn't started yet (counter=300 < scroll_end=700, merge_x negative).
+        # Player should be blocked at main road bounds — no diagonal is reachable.
+        state = state._replace(scrolling_step_counter=jnp.array(300, dtype=jnp.int32))
+
+        for _ in range(30):
+            _, state, _, _, _ = env.step(state, Action.UP)
+
+        assert int(state.player_y) >= main_min_y, (
+            f"player_y={state.player_y} should not cross to offramp when away from diagonal"
+        )
+        assert not bool(state.player_on_offramp), "Player should not be on offramp"
+
 
 class TestOfframpInactive:
     """Verify the offramp is inactive outside its scroll range."""
@@ -180,15 +205,15 @@ class TestOfframpInactive:
         # scroll_start = 200; ensure we're before it
         state = state._replace(scrolling_step_counter=jnp.array(50, dtype=jnp.int32))
 
-        offramp_active, in_split, in_merge, _, _ = env._get_offramp_info(state)
+        offramp_active, split_x, _, _, _ = env._get_offramp_info(state)
         assert not bool(offramp_active)
-        assert not bool(in_split)
+        assert int(split_x) < 0, "Split sprite should not have appeared yet"
 
     def test_offramp_inactive_after_scroll_end(self):
         """After the merge exits the screen, the offramp should be inactive."""
         env = make_env()
         _, state = env.reset(jax.random.PRNGKey(0))
-        # scroll_end = 700; merge exits at ~700 + (160+16)//3 = 758.
+        # scroll_end = 700; merge exits at ~700 + (160+24)//3 = ~761.
         # Use a value well past the exit.
         state = state._replace(scrolling_step_counter=jnp.array(800, dtype=jnp.int32))
 
@@ -241,7 +266,7 @@ class TestOfframpRendering:
         """During the split transition, only part of the offramp Y region is filled."""
         env = make_env()
         _, state = env.reset(jax.random.PRNGKey(0))
-        # scroll=215: split at x=45, so offramp visible only in x=[8, 45]
+        # scroll=215: split_x=45, sprite at [21,45], offramp only visible in x=[8, 45]
         state_full = state._replace(scrolling_step_counter=jnp.array(300, dtype=jnp.int32))
         state_partial = state._replace(scrolling_step_counter=jnp.array(215, dtype=jnp.int32))
         frame_full = env.render(state_full)
