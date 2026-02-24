@@ -26,6 +26,7 @@ def _warn_deprecated_obs_to_flat_array(env: JaxEnvironment) -> None:
 
 # Map of game names to their module paths
 GAME_MODULES = {
+    "airraid": "jaxatari.games.jax_airraid",
     "alien": "jaxatari.games.jax_alien",
     "asterix": "jaxatari.games.jax_asterix",
     "asteroids": "jaxatari.games.jax_asteroids",
@@ -65,6 +66,7 @@ GAME_MODULES = {
     "timepilot": "jaxatari.games.jax_timepilot",
     "tron": "jaxatari.games.jax_tron",
     "turmoil": "jaxatari.games.jax_turmoil",
+    "venture": "jaxatari.games.jax_venture",
     "videocheckers": "jaxatari.games.jax_videocheckers",
     "videocube": "jaxatari.games.jax_videocube",
     "videopinball": "jaxatari.games.jax_videopinball",
