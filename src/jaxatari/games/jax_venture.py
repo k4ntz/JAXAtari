@@ -1554,10 +1554,21 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
             "chaser": single_obj
         })
 
+    # def image_space(self) -> spaces.Box:
+    #     """Returns the image observation space."""
+    #     return spaces.Box(low=0, high=255, shape=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH, 3),
+    #                       dtype=jnp.uint8)
+
     def image_space(self) -> spaces.Box:
-        """Returns the image observation space."""
-        return spaces.Box(low=0, high=255, shape=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH, 3),
-                          dtype=jnp.uint8)
+        """Returns the image space.
+        The image is a RGB image with shape (210, 160, 3).
+        """
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(210, 160, 3),
+            dtype=jnp.uint8
+        )
 
 
 def _get_venture_asset_config() -> list[dict]:
@@ -1637,16 +1648,18 @@ class VentureRenderer(JAXGameRenderer):
     """Renders the Venture game state using JAX and sprite assets."""
     
     def __init__(self, consts: VentureConstants = None, config: render_utils.RendererConfig = None):
+        super().__init__(consts)
         self.consts = consts or VentureConstants()
-        super().__init__(self.consts)
         
         if config is None:
             self.config = render_utils.RendererConfig(
                 game_dimensions=(210, 160),
-                channels=3
+                channels=3,
+                downscale=None
             )
         else:
             self.config = config
+
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "venture")
@@ -1715,10 +1728,11 @@ class VentureRenderer(JAXGameRenderer):
         
         return assets
 
-    def render(self, state: GameState) -> chex.Array:
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state):
         """Renders the game state to an RGBA image array."""
         # Start with black background (ID 0)
-        canvas = jnp.zeros(self.config.game_dimensions, dtype=jnp.uint8)
+        canvas = self.jr.create_object_raster(self.BACKGROUND)
         
         # --- Draw Map/Room Walls ---
         # Select correct wall mask based on world and level
