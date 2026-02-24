@@ -414,7 +414,7 @@ class VentureObservation(struct.PyTreeNode):
     player: ObjectObservation
     monsters: ObjectObservation
     portals: ObjectObservation
-    chests: ObjectObservation
+    chest: ObjectObservation
     lasers: ObjectObservation
     chaser: ObjectObservation
 
@@ -1447,7 +1447,7 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
         room_idx = level_idx - 1
         chest_active = (level_idx > 0) & state.chests_active[room_idx] & (state.collected_chest_in_current_visit != room_idx)
 
-        chests = ObjectObservation.create(
+        chest = ObjectObservation.create(
             x=jnp.where(chest_active, chest_pos[0], -1.0),
             y=jnp.where(chest_active, chest_pos[1], -1.0),
             width=jnp.array(self.consts.CHEST_WIDTH, dtype=jnp.float32),
@@ -1498,7 +1498,7 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
             player=player,
             monsters=monsters,
             portals=portals,
-            chests=chests,
+            chest=chest,
             lasers=lasers,
             chaser=chaser
         )
@@ -1527,20 +1527,6 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
 
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space of the environment."""
-        # player_space = spaces.Dict({
-        #     "x": spaces.Box(low=0, high=self.consts.SCREEN_WIDTH, shape=(), dtype=jnp.float32),
-        #     "y": spaces.Box(low=0, high=self.consts.SCREEN_HEIGHT, shape=(), dtype=jnp.float32),
-        #     "width": spaces.Box(low=0, high=self.consts.SCREEN_WIDTH, shape=(), dtype=jnp.float32),
-        #     "height": spaces.Box(low=0, high=self.consts.SCREEN_HEIGHT, shape=(), dtype=jnp.float32),
-        # })
-        # monster_space = spaces.Dict({
-        #     "x": spaces.Box(low=0, high=self.consts.SCREEN_WIDTH, shape=(self.consts.TOTAL_MONSTERS,),
-        #                     dtype=jnp.float32),
-        #     "y": spaces.Box(low=0, high=self.consts.SCREEN_HEIGHT, shape=(self.consts.TOTAL_MONSTERS,),
-        #                     dtype=jnp.float32),
-        #     "width": spaces.Box(low=0, high=self.consts.SCREEN_WIDTH, shape=(), dtype=jnp.float32),
-        #     "height": spaces.Box(low=0, high=self.consts.SCREEN_HEIGHT, shape=(), dtype=jnp.float32),
-        # })
         h = int(self.consts.SCREEN_HEIGHT)
         w = int(self.consts.SCREEN_WIDTH)
         screen_size = (h, w)
@@ -1549,15 +1535,10 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
             "player": single_obj,
             "monsters": spaces.get_object_space(n=self.consts.TOTAL_MONSTERS, screen_size=screen_size),
             "portals": spaces.get_object_space(n=self.consts.JAX_TRANSITIONS.shape[2], screen_size=screen_size),  # Max portals per level based on manifest
-            "chests": spaces.get_object_space(n=self.consts.CHEST_POSITIONS.shape[0], screen_size=screen_size),  # One chest per room
+            "chest": single_obj, 
             "lasers": spaces.get_object_space(n=4, screen_size=screen_size),  # 4 lasers max in the current game design
             "chaser": single_obj
         })
-
-    # def image_space(self) -> spaces.Box:
-    #     """Returns the image observation space."""
-    #     return spaces.Box(low=0, high=255, shape=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH, 3),
-    #                       dtype=jnp.uint8)
 
     def image_space(self) -> spaces.Box:
         """Returns the image space.
