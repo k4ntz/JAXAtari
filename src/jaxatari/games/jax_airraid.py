@@ -5,7 +5,6 @@ import jax
 import jax.numpy as jnp
 import jax.random as random
 import chex
-import pygame
 from flax import struct
 import jaxatari.spaces as spaces
 
@@ -1010,13 +1009,7 @@ class AirRaidRenderer(JAXGameRenderer):
 
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        default_sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "airraid")
-        local_sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites/airraid")
-        sprite_path = (
-            default_sprite_path
-            if os.path.exists(os.path.join(default_sprite_path, "background.npy"))
-            else local_sprite_path
-        )
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "airraid")
 
         padded_background = self._load_and_pad_background(sprite_path)
         black_bar_sprite = self._create_black_bar_sprite()
