@@ -1,9 +1,13 @@
 GAME_NAME: "pong"
 ALE_ENV_ID: "ALE/Pong-v5"
 GXM_ENV_ID: "Pong-v5"
+ENVPOOL_ENV_ID: "Pong-v5"
 GXM_ENV_TYPE: "envpool"
 GXM_PLATFORMS: ["gpu", "cpu"]
-BENCHMARK_BACKENDS: ["jaxatari"] #["jaxatari", "ale", "gxm"]
+BENCHMARK_BACKENDS: ["jaxatari"] #["jaxatari", "ale", "gxm", "envpool"]
+ALE_TIMEOUT_S: 3600
+GXM_TIMEOUT_S: 3600
+ENVPOOL_TIMEOUT_S: 3600
 
 JAXATARI_MODES: ["oc", "pixel"]
 JAXATARI_PIXEL_OPTIONS: ["resized", "grayscale", "native"]
