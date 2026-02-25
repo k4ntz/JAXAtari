@@ -962,13 +962,9 @@ class JaxRoadRunner(
         return offramp_active & any_bridge
 
     def _check_player_bounds(
-        self, x_pos: chex.Array, y_pos: chex.Array,
+        self, state: RoadRunnerState, x_pos: chex.Array, y_pos: chex.Array,
         road_top: chex.Array, road_bottom: chex.Array,
     ) -> tuple[chex.Array, chex.Array]:
-        min_y = road_top - (self.consts.PLAYER_SIZE[1] - self.consts.PLAYER_ROAD_TOP_OFFSET)
-        max_y = road_bottom - self.consts.PLAYER_SIZE[1]
-        checked_y = jnp.clip(y_pos, min_y, max_y)
-        road_top, road_bottom, _ = self._get_road_bounds(state)
         main_min_y = road_top - (self.consts.PLAYER_SIZE[1] - 5)
         main_max_y = road_bottom - self.consts.PLAYER_SIZE[1]
 
@@ -1084,7 +1080,7 @@ class JaxRoadRunner(
         player_x = state.player_x + final_vel_x
         player_y = state.player_y + vel_y
 
-        player_x, player_y = self._check_player_bounds(player_x, player_y, road_top, road_bottom)
+        player_x, player_y = self._check_player_bounds(state, player_x, player_y, road_top, road_bottom)
 
         is_moving = (vel_x != 0) | (vel_y != 0)
 
@@ -1416,18 +1412,23 @@ class JaxRoadRunner(
             )
             # Get the seeds id, then increment the next id in the state
             seed_id = st.next_seed_id
-            st = st._replace(next_seed_id=seed_id+1)
 
-        # Build spawned seeds array
-        spawned_seeds = updated_seeds.at[slot_idx].set(
-            jnp.array([0, seed_y, seed_id], dtype=jnp.int32)
-        )
+            # Build spawned seeds array
+            spawned_seeds = updated_seeds.at[slot_idx].set(
+                jnp.array([0, seed_y, seed_id], dtype=jnp.int32)
+            )
+            return st._replace(
+                seeds=spawned_seeds,
+                next_seed_spawn_scroll_step=next_spawn_step,
+                next_seed_id=seed_id + 1,
+                rng=rng_after,
+            )
 
-        return state._replace(
-            seeds=jnp.where(should_spawn, spawned_seeds, updated_seeds),
-            next_seed_spawn_scroll_step=jnp.where(should_spawn, next_spawn_step, state.next_seed_spawn_scroll_step),
-            next_seed_id=jnp.where(should_spawn, seed_id + 1, state.next_seed_id),
-            rng=rng_after,
+        return jax.lax.cond(
+            should_spawn,
+            _spawn,
+            lambda st: st._replace(seeds=updated_seeds, rng=rng_after),
+            state,
         )
 
     def _update_and_spawn_truck(self, state: RoadRunnerState,
@@ -1747,9 +1748,7 @@ class JaxRoadRunner(
                 jnp.maximum(spawn_min_y + 1, spawn_max_y + 1),
                 dtype=jnp.int32,
             )
-            
-            landmine_x = jnp.array(0, dtype=jnp.int32)
-            
+
             next_spawn_step = st.step_counter + jax.random.randint(
                 rng_interval,
                 (),
@@ -1757,12 +1756,22 @@ class JaxRoadRunner(
                 landmine_spawn_bounds[1] + 1,
                 dtype=jnp.int32,
             )
+            return st._replace(
+                landmine_x=jnp.array(0, dtype=jnp.int32),
+                landmine_y=landmine_y,
+                next_landmine_spawn_step=next_spawn_step,
+                rng=rng_after,
+            )
 
-        return state._replace(
-            landmine_x=jnp.where(should_spawn, jnp.array(0, dtype=jnp.int32), updated_landmine_x),
-            landmine_y=jnp.where(should_spawn, landmine_y_spawn, updated_landmine_y),
-            next_landmine_spawn_step=jnp.where(should_spawn, next_spawn_step, state.next_landmine_spawn_step),
-            rng=rng_after,
+        return jax.lax.cond(
+            should_spawn,
+            _spawn,
+            lambda st: st._replace(
+                landmine_x=updated_landmine_x,
+                landmine_y=updated_landmine_y,
+                rng=rng_after,
+            ),
+            state,
         )
 
     def _check_landmine_collisions(self, state: RoadRunnerState) -> RoadRunnerState:
@@ -2622,7 +2631,7 @@ class JaxRoadRunner(
 
 # --- Renderer Class (Simplified) ---
 class RoadRunnerRenderer(JAXGameRenderer):
-    def __init__(self, consts: RoadRunnerConstants = None):
+    def __init__(self, consts: RoadRunnerConstants = None, config: render_utils.RendererConfig = None):
         super().__init__()
         self.consts = consts or RoadRunnerConstants()
         self.deco_id_to_sprite = {
@@ -2633,10 +2642,14 @@ class RoadRunnerRenderer(JAXGameRenderer):
             4: "sign_exit"
         }
 
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         road_sprite = self._create_road_sprite(stripes=True)
@@ -2666,8 +2679,6 @@ class RoadRunnerRenderer(JAXGameRenderer):
         ) = _build_road_section_arrays(self.consts.levels, self.consts)
         # Build offramp data for the renderer
         self._offramp_data = _build_offramp_arrays(self.consts.levels)
-
-    def _create_road_sprite(self) -> jnp.ndarray:
 
         # Build dynamic road height config arrays for renderer
         levels = self.consts.levels
@@ -2802,8 +2813,9 @@ class RoadRunnerRenderer(JAXGameRenderer):
         total_h = OFFRAMP_H + GAP_H
 
         road_color_rgba = jnp.array([0, 0, 0, 255], dtype=jnp.uint8)
-        bg_r, bg_g, bg_b = self.consts.BACKGROUND_COLOR
-        bg_color_rgba = jnp.array([bg_r, bg_g, bg_b, 255], dtype=jnp.uint8)
+        # Use alpha=0 for non-road pixels: the rendering pipeline treats pixels with
+        # alpha <= 128 as TRANSPARENT_ID, so they show the background through naturally.
+        bg_color_rgba = jnp.array([0, 0, 0, 0], dtype=jnp.uint8)
 
         y, x = jnp.indices((total_h, RAMP_W))
         # The diagonal line in the gap area runs from (x=RAMP_W-1, y=OFFRAMP_H) on the
@@ -3057,6 +3069,20 @@ class RoadRunnerRenderer(JAXGameRenderer):
         OFFRAMP_H = self.consts.OFFRAMP_HEIGHT
         W = self.consts.WIDTH
         MARGIN = self.consts.SIDE_MARGIN
+        PATTERN_WIDTH = self.consts.ROAD_PATTERN_WIDTH
+        SCROLL_W = W + PATTERN_WIDTH  # unscaled total sprite width
+
+        # Compute scaled dimensions from the actual (possibly downscaled) sprite.
+        # road_mask is already in scaled space; all dynamic_slice sizes must match it.
+        offramp_sprite = self.SHAPE_MASKS["offramp_road"]
+        ofr_sprite_h = offramp_sprite.shape[0]  # Python int — static for dynamic_slice
+        ofr_sprite_w = offramp_sprite.shape[1]
+        # Width of the visible portion of the sprite (covers the canvas width)
+        ofr_slice_w = ofr_sprite_w - int(round(PATTERN_WIDTH * ofr_sprite_w / SCROLL_W))
+        # Scale the dynamic road_offset into sprite column space
+        scaled_road_offset = (road_offset * ofr_sprite_w // SCROLL_W).astype(jnp.int32)
+        # Scale x coordinates for column masking
+        x_scale = ofr_sprite_w / SCROLL_W  # float, used for left_x / right_x scaling
 
         # Screen x of merge leading edge (used to determine when to stop rendering)
         merge_x_check = (counter - scroll_end) * SPEED
@@ -3076,21 +3102,19 @@ class RoadRunnerRenderer(JAXGameRenderer):
             left_x = jnp.maximum(MARGIN, merge_x)
             right_x = jnp.minimum(W - MARGIN, split_x)
 
-            # Slice the scrolling offramp road pattern
+            # Slice the scrolling offramp road pattern using scaled dimensions
             offramp_road = jax.lax.dynamic_slice(
-                self.SHAPE_MASKS["offramp_road"],
-                (0, road_offset),
-                (OFFRAMP_H, W),
+                offramp_sprite,
+                (0, scaled_road_offset),
+                (ofr_sprite_h, ofr_slice_w),
             )
 
-            x_coords = jnp.arange(W)
-            col_visible = (x_coords >= left_x) & (x_coords < right_x)
-            background_value = jnp.array(
-                self.COLOR_TO_ID.get(self.consts.BACKGROUND_COLOR, 0),
-                dtype=offramp_road.dtype,
-            )
-            col_mask = jnp.broadcast_to(col_visible[jnp.newaxis, :], (OFFRAMP_H, W))
-            offramp_road_masked = jnp.where(col_mask, offramp_road, background_value)
+            x_coords = jnp.arange(ofr_slice_w)
+            # Scale left_x / right_x into sprite column space for the column mask
+            col_visible = (x_coords >= left_x * x_scale) & (x_coords < right_x * x_scale)
+            # Use TRANSPARENT_ID for masked-out columns so they show the background through.
+            col_mask = jnp.broadcast_to(col_visible[jnp.newaxis, :], (ofr_sprite_h, ofr_slice_w))
+            offramp_road_masked = jnp.where(col_mask, offramp_road, self.jr.TRANSPARENT_ID)
             c = self.jr.render_at(c, 0, offramp_top, offramp_road_masked)
 
             # --- Split sprite: rendered just left of split_x ---
@@ -3223,6 +3247,19 @@ class RoadRunnerRenderer(JAXGameRenderer):
             % PATTERN_WIDTH
         )
 
+        # Compute slice dimensions from the actual sprite shape so this works
+        # correctly even when the renderer has been hot-swapped with a downscaled config.
+        # road_mask has shape (sprite_h, sprite_w) where sprite_w = scaled SCROLL_WIDTH.
+        SCROLL_W = self.consts.WIDTH + PATTERN_WIDTH   # total sprite width (unscaled)
+        sprite_h = road_mask.shape[0]                  # Python int — static for dynamic_slice
+        sprite_w = road_mask.shape[1]
+        # Scale static_road_width and left_padding proportionally
+        scaled_static_width = sprite_w * static_road_width // SCROLL_W
+        scaled_left_pad     = sprite_w * left_padding     // SCROLL_W
+        # Scale the dynamic scroll offset
+        scaled_scroll = (scroll_offset * sprite_w // SCROLL_W).astype(jnp.int32)
+        scaled_src_x  = scaled_scroll + scaled_left_pad
+
         if self._level_count > 0:
             dynamic_enabled = self._dynamic_road_enabled[level_idx]
             heights_config = self._dynamic_road_heights[level_idx]
@@ -3235,12 +3272,9 @@ class RoadRunnerRenderer(JAXGameRenderer):
             def render_dynamic_road(c):
                 """Render road with per-column height calculation using vectorized masking."""
                 # Calculate world x for each column
-                # Invert: rightmost column (high index) should be at current scroll position
-                # Leftmost column should show older (higher scroll) positions
-                # This makes transitions move LEFT as player scrolls RIGHT
                 world_scroll = state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED
-                col_indices = jnp.arange(static_road_width, dtype=jnp.int32)
-                world_x = world_scroll + (static_road_width - 1 - col_indices)
+                col_indices = jnp.arange(scaled_static_width, dtype=jnp.int32)
+                world_x = world_scroll + (scaled_static_width - 1 - col_indices)
 
                 dynamic_height, _, _ = _get_dynamic_road_height(
                     world_x,
@@ -3251,50 +3285,36 @@ class RoadRunnerRenderer(JAXGameRenderer):
                 )
                 col_heights = dynamic_height.astype(jnp.int32)
 
-
-                col_heights = jnp.clip(col_heights, 1, self.consts.ROAD_HEIGHT)
+                col_heights = jnp.clip(col_heights, 1, sprite_h)
 
                 # Calculate vertical offsets for centering (per column)
-                height_diffs = self.consts.ROAD_HEIGHT - col_heights
+                height_diffs = sprite_h - col_heights
                 road_top_offsets = height_diffs // 2
 
-                # Max height for slicing (use full road height)
-                max_height = self.consts.ROAD_HEIGHT
-
-                # Slice road at max height
-                src_x = scroll_offset + left_padding
+                # Slice road at max (sprite) height
                 road_slice = jax.lax.dynamic_slice(
                     road_mask,
-                    (0, src_x),
-                    (max_height, static_road_width)
+                    (0, scaled_src_x),
+                    (sprite_h, scaled_static_width)
                 )
 
                 # Create row indices for the road slice
-                row_indices = jnp.arange(max_height, dtype=jnp.int32)
+                row_indices = jnp.arange(sprite_h, dtype=jnp.int32)
 
-                # Broadcasting: road_top_offsets is (static_road_width,), row_indices is (max_height,)
-                # Create 2D mask: (max_height, static_road_width)
-                # For each column, show pixels where row >= top_offset AND row < top_offset + height
-                row_grid = row_indices[:, None]  # (max_height, 1)
-                top_grid = road_top_offsets[None, :]  # (1, static_road_width)
-                height_grid = col_heights[None, :]  # (1, static_road_width)
+                row_grid = row_indices[:, None]
+                top_grid = road_top_offsets[None, :]
+                height_grid = col_heights[None, :]
 
                 # Pixel is visible if: row >= top_offset AND row < top_offset + height
                 visible_mask = (row_grid >= top_grid) & (row_grid < top_grid + height_grid)
 
-                # Apply mask by setting non-visible pixels to TRANSPARENT_ID
-                # road_slice is a 2D palette ID mask (max_height, static_road_width)
                 masked_slice = jnp.where(
                     visible_mask,
                     road_slice,
                     self.jr.TRANSPARENT_ID
                 )
 
-                # Render the masked road at the base Y position
-                dest_x = left_padding
-                dest_y = self.consts.ROAD_TOP_Y
-
-                return self.jr.render_at(c, dest_x, dest_y, masked_slice)
+                return self.jr.render_at(c, left_padding, self.consts.ROAD_TOP_Y, masked_slice)
 
             def render_static_road(c):
                 """Render road with single uniform height using max-height slicing."""
@@ -3302,49 +3322,40 @@ class RoadRunnerRenderer(JAXGameRenderer):
                 height_diff = self.consts.ROAD_HEIGHT - current_road_height
                 centered_road_top = height_diff // 2
 
-                max_height = self.consts.ROAD_HEIGHT
-                src_x = scroll_offset + left_padding
-
-                # Slice at max height
+                # Slice at sprite height
                 road_slice = jax.lax.dynamic_slice(
                     road_mask,
-                    (0, src_x),
-                    (max_height, static_road_width)
+                    (0, scaled_src_x),
+                    (sprite_h, scaled_static_width)
                 )
 
                 # Create visibility mask for centered road
-                row_indices = jnp.arange(max_height, dtype=jnp.int32)
+                row_indices = jnp.arange(sprite_h, dtype=jnp.int32)
                 visible_mask = (row_indices >= centered_road_top) & (row_indices < centered_road_top + current_road_height)
 
-                # Apply mask - broadcast to 2D
                 masked_slice = jnp.where(
                     visible_mask[:, None],
                     road_slice,
                     self.jr.TRANSPARENT_ID
                 )
 
-                dest_x = left_padding
-                dest_y = self.consts.ROAD_TOP_Y
-
-                return self.jr.render_at(c, dest_x, dest_y, masked_slice)
+                return self.jr.render_at(c, left_padding, self.consts.ROAD_TOP_Y, masked_slice)
 
             # Choose rendering path based on whether dynamic heights are enabled
             canvas = jax.lax.cond(dynamic_enabled, render_dynamic_road, render_static_road, canvas)
         else:
             # No levels configured, use default full-height road
-            max_height = self.consts.ROAD_HEIGHT
-            src_x = scroll_offset + left_padding
             road_slice = jax.lax.dynamic_slice(
                 road_mask,
-                (0, src_x),
-                (max_height, static_road_width)
+                (0, scaled_src_x),
+                (sprite_h, scaled_static_width)
             )
 
             canvas = self.jr.render_at(canvas, left_padding, self.consts.ROAD_TOP_Y, road_slice)
 
 
         # Render Offramp (above the main road)
-        canvas = self._render_offramp(canvas, state, offset)
+        canvas = self._render_offramp(canvas, state, scroll_offset)
 
         # Render Ravines
         canvas = self._render_ravines(canvas, state.ravines)
@@ -3521,14 +3532,18 @@ class RoadRunnerRenderer(JAXGameRenderer):
         final_frame = self.jr.render_from_palette(canvas, self.PALETTE)
 
         # --- Mask Side Margins ---
-        # Force pixels in the side margins to be black
+        # Force pixels in the side margins to be black.
+        # Use the actual frame dimensions (handles downscaling correctly).
+        actual_h, actual_w, actual_c = final_frame.shape
         margin = self.consts.SIDE_MARGIN
         width = self.consts.WIDTH
+        # Scale the margin to match the actual frame width
+        scaled_margin = int(round(margin * actual_w / width))
 
         # Create a mask for valid gameplay area (True for valid, False for margin)
-        col_indices = jnp.arange(width)
-        valid_cols = (col_indices >= margin) & (col_indices < (width - margin))
-        # Broadcast to full image shape (H, W, 3)
+        col_indices = jnp.arange(actual_w)
+        valid_cols = (col_indices >= scaled_margin) & (col_indices < (actual_w - scaled_margin))
+        # Broadcast to full image shape (H, W, C)
         margin_mask = jnp.broadcast_to(valid_cols[None, :, None], final_frame.shape)
 
         # Use black for the margins
