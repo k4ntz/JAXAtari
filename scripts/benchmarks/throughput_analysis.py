@@ -7,8 +7,6 @@ from contextlib import contextmanager
 from itertools import combinations
 from typing import Any, Dict, List, Tuple
 
-os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-
 import hydra
 import jax
 import jax.numpy as jnp
@@ -18,13 +16,39 @@ import ale_py
 from omegaconf import DictConfig, OmegaConf
 import wandb
 
-import jaxatari
-from jaxatari.wrappers import AtariWrapper, ObjectCentricWrapper, FlattenObservationWrapper, PixelObsWrapper
+# import jaxatari
+# from jaxatari.wrappers import AtariWrapper, ObjectCentricWrapper, FlattenObservationWrapper, PixelObsWrapper
+
+
+#### NOTE
+# To 
+# GXM and envpool (without XLA) works with envpool==0.6.6 and jax+jaxlib==0.6.2, gxm==0.1.3
+# uv pip install wandb "jax[cuda12]" hydra-core "gxm[envpool]" 
+
+# For XLA envpool to work, we need to use envpool==0.6.6, but jax==0.3.13 and jaxlib==0.3.10 (directly from jax server) and numpy==1.24.4 and scipy==1.8.1
+# uv pip install jax==0.3.13 jaxlib==0.3.10+cuda11.cudnn82 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+# Since envpool async is faster than scanned xla (which is also async??), we can just keep using the higher jax versions
+
+# performance of scanned XLA (8 envs, 10000 steps): 40k throughput (7.97s)
+# performance of scanned XLA (128 envs, 10000 steps): 240k throughput (21.388s)
+# performance of scanned XLA (256 envs, 10000 steps): 299k throughput (34.207s) 
+# performance of scanned XLA (512 envs, 10000 steps): 361k throughput (56.5s)
+#(that's already multiplied by 4 for frame skip) 
+# performance of async envpool (256 envs, 10000 steps): 640k throughput (24.3s) [batch_size=128]
+# performance of async envpool (256 envs, 10000 steps): ~800k throughput (24.3s) NUMA, [batch_size=128]
+# GXM
+# performance of gxm envpool (256 envs, 10000 steps): 193k throughput (52.3s) -> is it synchronous?, nope.. even worse :(
+# Synced envpool
+# performance of sync envpool (256 envs, 10000 steps): 398k throughput (24.7s)
+# performance of sync envpool (512 envs, 10000 steps): 490k throughput (41s)
+# With NUMA synced envpool (256 envs): 101k throughput (100s) -> lol
 
 JAXATARI_BACKEND = "jaxatari"
 ALE_BACKEND = "ale"
 GXM_BACKEND = "gxm"
-ENVPOOL_BACKEND = "envpool"
+ENVPOOL_XLA_BACKEND = "envpool_xla"
+ENVPOOL_ASYNC_BACKEND = "envpool_async"
+ENVPOOL_SYNC_BACKEND = "envpool_sync"
 JAX_MODE_OC = "oc"
 JAX_MODE_PIXEL = "pixel"
 PIXEL_OPT_RESIZED = "resized"
@@ -225,6 +249,7 @@ def _create_envpool_env(
     envpool_env_id: str,
     num_envs: int,
     atari_frame_skip: int,
+    batch_size: int = None,
 ):
     try:
         envpool_module = importlib.import_module("envpool")
@@ -236,13 +261,13 @@ def _create_envpool_env(
     env = envpool_module.make_gym(
         envpool_env_id,
         num_envs=num_envs,
-        batch_size=num_envs,
+        batch_size=batch_size if batch_size is not None else num_envs,
         frame_skip=atari_frame_skip,
     )
     return env, "envpool.make_gym"
 
 
-def _run_envpool_benchmark(
+def _run_envpool_xla_benchmark(
     envpool_env_id: str,
     num_envs: int,
     num_steps: int,
@@ -256,19 +281,70 @@ def _run_envpool_benchmark(
         atari_frame_skip=atari_frame_skip,
     )
 
-    env.async_reset()
-
     env.action_space.seed(seed)
-    action_batch = np.full((num_envs,), given_action, dtype=np.int32)
+    action_batch = jnp.full((num_envs,), given_action, dtype=jnp.int32)
 
-    start = time.perf_counter()
-    for _ in range(num_steps):
-        info = env.recv()[-1]
-        env.send(action_batch, info["env_id"])
-    runtime_s = time.perf_counter() - start
-    env.close()
+    try:
+        handle, _, _, step_env = env.xla()
+
+        def envpool_rollout(initial_handle, action):
+            def body_fn(curr_handle, _):
+                next_handle, _ = step_env(curr_handle, action)
+                return next_handle, None
+
+            final_handle, _ = jax.lax.scan(body_fn, initial_handle, xs=None, length=num_steps)
+            return final_handle
+
+        rollout = jax.jit(envpool_rollout)
+        compile_s, runtime_s = _compile_and_time_rollout(rollout, handle, action_batch)
+    finally:
+        env.close()
 
     total_env_steps = num_envs * num_steps * atari_frame_skip
+    throughput = total_env_steps / runtime_s
+    return {
+        "compile_s": compile_s,
+        "runtime_s": runtime_s,
+        "total_env_steps": total_env_steps,
+        "throughput_env_steps_per_sec": throughput,
+        "envpool_impl": f"{envpool_impl}.xla",
+    }
+
+
+def _run_envpool_async_benchmark(
+    envpool_env_id: str,
+    num_envs: int,
+    num_steps: int,
+    atari_frame_skip: int,
+    seed: int,
+    given_action: int,
+) -> Dict[str, Any]:
+    env, envpool_impl = _create_envpool_env(
+        envpool_env_id=envpool_env_id,
+        num_envs=num_envs,
+        atari_frame_skip=atari_frame_skip,
+        batch_size=128
+    )
+
+    env.async_reset()
+    env.action_space.seed(seed)
+    # action_batch = np.full((num_envs,), given_action, dtype=np.int32)
+    action_batch = np.full((128,), given_action, dtype=np.int32)
+
+    try:
+        actual_size = 0
+        start = time.perf_counter()
+        # for _ in range(num_steps):
+        while actual_size < num_envs * num_steps:
+            info = env.recv()[-1]
+            actual_size += len(info["env_id"])
+            env.send(action_batch, info["env_id"])
+        runtime_s = time.perf_counter() - start
+    finally:
+        env.close()
+
+    # total_env_steps = num_envs * num_steps * atari_frame_skip
+    total_env_steps = actual_size * atari_frame_skip
     throughput = total_env_steps / runtime_s
     return {
         "compile_s": 0.0,
@@ -279,8 +355,46 @@ def _run_envpool_benchmark(
     }
 
 
+def _run_envpool_sync_benchmark(
+    envpool_env_id: str,
+    num_envs: int,
+    num_steps: int,
+    atari_frame_skip: int,
+    seed: int,
+    given_action: int,
+) -> Dict[str, Any]:
+    env, envpool_impl = _create_envpool_env(
+        envpool_env_id=envpool_env_id,
+        num_envs=num_envs,
+        atari_frame_skip=atari_frame_skip,
+    )
+
+    env.action_space.seed(seed)
+    action_batch = np.full((num_envs,), given_action, dtype=np.int32)
+
+    try:
+        env.reset()
+        start = time.perf_counter()
+        for _ in range(num_steps):
+            step_result = env.step(action_batch)
+        runtime_s = time.perf_counter() - start
+    finally:
+        env.close()
+
+    total_env_steps = num_envs * num_steps * atari_frame_skip
+    throughput = total_env_steps / runtime_s
+    return {
+        "compile_s": 0.0,
+        "runtime_s": runtime_s,
+        "total_env_steps": total_env_steps,
+        "throughput_env_steps_per_sec": throughput,
+        "envpool_impl": f"{envpool_impl}.sync",
+    }
+
+
 def _create_gxm_env(
     gxm_env_id: str,
+    atari_frame_skip: int,
 ):
     try:
         gxm_module = importlib.import_module("gxm")
@@ -299,7 +413,7 @@ def _create_gxm_env(
     if hasattr(gxm_module, "make"):
         _try_add(
             "gxm.make",
-            lambda: gxm_module.make(gxm_target_env),
+            lambda: gxm_module.make(gxm_target_env, frame_skip=atari_frame_skip),
         )
 
     errors = []
@@ -326,6 +440,7 @@ def _run_gxm_benchmark(
 ) -> Dict[str, Any]:
     env, gxm_impl = _create_gxm_env(
         gxm_env_id=gxm_env_id,
+        atari_frame_skip=atari_frame_skip,
     )
 
     base_key = jax.random.PRNGKey(seed)
@@ -338,8 +453,6 @@ def _run_gxm_benchmark(
 
     env_states, timesteps = vmapped_init(init_keys)
     env_states, timesteps = vmapped_reset(reset_keys, env_states)
-    effective_num_steps = num_steps * atari_frame_skip
-
     def gxm_rollout(initial_states, initial_timesteps, rollout_key):
         # Equivalent to nested scans for this benchmark because action is fixed.
         def body_fn(carry, _):
@@ -353,14 +466,14 @@ def _run_gxm_benchmark(
             body_fn,
             (initial_states, initial_timesteps, rollout_key),
             xs=None,
-            length=effective_num_steps,
+            length=num_steps,
         )
         return final_carry
 
     rollout = jax.jit(gxm_rollout, backend=gxm_platform)
     compile_s, runtime_s = _compile_and_time_rollout(rollout, env_states, timesteps, base_key)
 
-    total_env_steps = num_envs * effective_num_steps
+    total_env_steps = num_envs * num_steps * atari_frame_skip
     throughput = total_env_steps / runtime_s
     return {
         "compile_s": compile_s,
@@ -457,9 +570,18 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     for atari_frame_skip in atari_frame_skips:
         for backend in backends:
-            if backend not in (JAXATARI_BACKEND, ALE_BACKEND, GXM_BACKEND, ENVPOOL_BACKEND):
+            if backend not in (
+                JAXATARI_BACKEND,
+                ALE_BACKEND,
+                GXM_BACKEND,
+                ENVPOOL_XLA_BACKEND,
+                ENVPOOL_ASYNC_BACKEND,
+                ENVPOOL_SYNC_BACKEND,
+            ):
                 raise ValueError(
-                    f"Unknown backend '{backend}'. Expected one of: [{JAXATARI_BACKEND}, {ALE_BACKEND}, {GXM_BACKEND}, {ENVPOOL_BACKEND}]"
+                    "Unknown backend "
+                    f"'{backend}'. Expected one of: [{JAXATARI_BACKEND}, {ALE_BACKEND}, {GXM_BACKEND}, "
+                    f"{ENVPOOL_XLA_BACKEND}, {ENVPOOL_ASYNC_BACKEND}, {ENVPOOL_SYNC_BACKEND}]"
                 )
 
             for num_envs in env_counts:
@@ -624,14 +746,176 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
 
                     run_step += 1
                     continue
-                elif backend == ENVPOOL_BACKEND:
+                elif backend == ENVPOOL_XLA_BACKEND:
                     env_seed = base_seed + run_step
                     try:
                         envpool_metrics = _run_with_timeout(
-                            _run_envpool_benchmark,
+                            _run_envpool_xla_benchmark,
                             timeout_seconds=envpool_timeout_s,
                             context=(
-                                f"EnvPool benchmark (envs={num_envs}, frame_skip={atari_frame_skip})"
+                                f"EnvPool XLA benchmark (envs={num_envs}, frame_skip={atari_frame_skip})"
+                            ),
+                            envpool_env_id=envpool_env_id,
+                            num_envs=num_envs,
+                            num_steps=num_steps,
+                            atari_frame_skip=atari_frame_skip,
+                            seed=env_seed,
+                            given_action=given_action,
+                        )
+                    except Exception as error:
+                        print(
+                            f"backend={backend:8s} | fs={atari_frame_skip:2d} | env_id={envpool_env_id:16s} | "
+                            f"envs={num_envs:4d} | steps={num_steps} | ERROR={type(error).__name__}: {error}"
+                        )
+                        run_step += 1
+                        continue
+
+                    compile_s = envpool_metrics["compile_s"]
+                    runtime_s = envpool_metrics["runtime_s"]
+                    total_env_steps = envpool_metrics["total_env_steps"]
+                    throughput = envpool_metrics["throughput_env_steps_per_sec"]
+                    envpool_impl = envpool_metrics["envpool_impl"]
+                    row = {
+                        "backend": backend,
+                        "game_name": game_name,
+                        "ale_env_id": "",
+                        "gxm_env_id": envpool_env_id,
+                        "gxm_env_type": "envpool-standard",
+                        "gxm_impl": envpool_impl,
+                        "jaxatari_mode": "",
+                        "pixel_options": "",
+                        "atari_frame_skip": atari_frame_skip,
+                        "jax_platform": "",
+                        "num_envs": num_envs,
+                        "num_steps": num_steps,
+                        "total_env_steps": total_env_steps,
+                        "given_action": given_action,
+                        "compile_s": compile_s,
+                        "runtime_s": runtime_s,
+                        "throughput_env_steps_per_sec": throughput,
+                    }
+                    results.append(row)
+
+                    wandb.log(
+                        {
+                            "benchmark/backend": backend,
+                            "benchmark/game_name": game_name,
+                            "benchmark/ale_env_id": "",
+                            "benchmark/gxm_env_id": envpool_env_id,
+                            "benchmark/gxm_env_type": "envpool-standard",
+                            "benchmark/gxm_impl": envpool_impl,
+                            "benchmark/jaxatari_mode": "",
+                            "benchmark/pixel_options": "",
+                            "benchmark/atari_frame_skip": atari_frame_skip,
+                            "benchmark/jax_platform": "",
+                            "benchmark/num_envs": num_envs,
+                            "benchmark/num_steps": num_steps,
+                            "benchmark/total_env_steps": total_env_steps,
+                            "benchmark/given_action": given_action,
+                            "benchmark/compile_s": compile_s,
+                            "benchmark/runtime_s": runtime_s,
+                            "benchmark/throughput_env_steps_per_sec": throughput,
+                        },
+                        step=run_step,
+                    )
+
+                    print(
+                        f"backend={backend:8s} | fs={atari_frame_skip:2d} | impl={envpool_impl:16s} | "
+                        f"envs={num_envs:4d} | steps={num_steps} | run={runtime_s:.3f}s | "
+                        f"throughput={throughput:,.2f} env-steps/s"
+                    )
+
+                    run_step += 1
+                    continue
+                elif backend == ENVPOOL_ASYNC_BACKEND:
+                    env_seed = base_seed + run_step
+                    try:
+                        envpool_metrics = _run_with_timeout(
+                            _run_envpool_async_benchmark,
+                            timeout_seconds=envpool_timeout_s,
+                            context=(
+                                f"EnvPool async benchmark (envs={num_envs}, frame_skip={atari_frame_skip})"
+                            ),
+                            envpool_env_id=envpool_env_id,
+                            num_envs=num_envs,
+                            num_steps=num_steps,
+                            atari_frame_skip=atari_frame_skip,
+                            seed=env_seed,
+                            given_action=given_action,
+                        )
+                    except Exception as error:
+                        print(
+                            f"backend={backend:8s} | fs={atari_frame_skip:2d} | env_id={envpool_env_id:16s} | "
+                            f"envs={num_envs:4d} | steps={num_steps} | ERROR={type(error).__name__}: {error}"
+                        )
+                        run_step += 1
+                        continue
+
+                    compile_s = envpool_metrics["compile_s"]
+                    runtime_s = envpool_metrics["runtime_s"]
+                    total_env_steps = envpool_metrics["total_env_steps"]
+                    throughput = envpool_metrics["throughput_env_steps_per_sec"]
+                    envpool_impl = envpool_metrics["envpool_impl"]
+                    row = {
+                        "backend": backend,
+                        "game_name": game_name,
+                        "ale_env_id": "",
+                        "gxm_env_id": envpool_env_id,
+                        "gxm_env_type": "envpool-standard",
+                        "gxm_impl": envpool_impl,
+                        "jaxatari_mode": "",
+                        "pixel_options": "",
+                        "atari_frame_skip": atari_frame_skip,
+                        "jax_platform": "",
+                        "num_envs": num_envs,
+                        "num_steps": num_steps,
+                        "total_env_steps": total_env_steps,
+                        "given_action": given_action,
+                        "compile_s": compile_s,
+                        "runtime_s": runtime_s,
+                        "throughput_env_steps_per_sec": throughput,
+                    }
+                    results.append(row)
+
+                    wandb.log(
+                        {
+                            "benchmark/backend": backend,
+                            "benchmark/game_name": game_name,
+                            "benchmark/ale_env_id": "",
+                            "benchmark/gxm_env_id": envpool_env_id,
+                            "benchmark/gxm_env_type": "envpool-standard",
+                            "benchmark/gxm_impl": envpool_impl,
+                            "benchmark/jaxatari_mode": "",
+                            "benchmark/pixel_options": "",
+                            "benchmark/atari_frame_skip": atari_frame_skip,
+                            "benchmark/jax_platform": "",
+                            "benchmark/num_envs": num_envs,
+                            "benchmark/num_steps": num_steps,
+                            "benchmark/total_env_steps": total_env_steps,
+                            "benchmark/given_action": given_action,
+                            "benchmark/compile_s": compile_s,
+                            "benchmark/runtime_s": runtime_s,
+                            "benchmark/throughput_env_steps_per_sec": throughput,
+                        },
+                        step=run_step,
+                    )
+
+                    print(
+                        f"backend={backend:8s} | fs={atari_frame_skip:2d} | impl={envpool_impl:16s} | "
+                        f"envs={num_envs:4d} | steps={num_steps} | run={runtime_s:.3f}s | "
+                        f"throughput={throughput:,.2f} env-steps/s"
+                    )
+
+                    run_step += 1
+                    continue
+                elif backend == ENVPOOL_SYNC_BACKEND:
+                    env_seed = base_seed + run_step
+                    try:
+                        envpool_metrics = _run_with_timeout(
+                            _run_envpool_sync_benchmark,
+                            timeout_seconds=envpool_timeout_s,
+                            context=(
+                                f"EnvPool sync benchmark (envs={num_envs}, frame_skip={atari_frame_skip})"
                             ),
                             envpool_env_id=envpool_env_id,
                             num_envs=num_envs,

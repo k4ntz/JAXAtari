@@ -3,8 +3,8 @@ ALE_ENV_ID: "ALE/Pong-v5"
 GXM_ENV_ID: "Pong-v5"
 ENVPOOL_ENV_ID: "Pong-v5"
 GXM_ENV_TYPE: "envpool"
-GXM_PLATFORMS: ["gpu", "cpu"]
-BENCHMARK_BACKENDS: ["jaxatari"] #["jaxatari", "ale", "gxm", "envpool"]
+GXM_PLATFORMS: ["gpu"]
+BENCHMARK_BACKENDS: ["jaxatari"] #["jaxatari", "ale", "gxm", "envpool_xla", "envpool_async", "envpool_sync"]
 ALE_TIMEOUT_S: 3600
 GXM_TIMEOUT_S: 3600
 ENVPOOL_TIMEOUT_S: 3600
