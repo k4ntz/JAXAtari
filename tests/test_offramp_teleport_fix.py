@@ -406,3 +406,74 @@ def test_collision_valid_when_both_on_main_road_top_lane():
         "Collision between player and enemy in the top lane of the main road "
         "should be detected, but was falsely suppressed"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test: phantom extension fix — merge is unidirectional (offramp → main only)
+# ---------------------------------------------------------------------------
+
+def test_merge_zone_does_not_allow_main_to_offramp():
+    """
+    After the player has descended to the main road via the merge, pressing UP
+    while still in the merge zone must NOT snap them back to the offramp
+    (the phantom-extension bug).
+
+    The merge is the END of the offramp road.  There is nothing above it to the
+    right.  A main-road player at the merge must be kept on the main road even
+    if their proposed y enters the gap zone.
+    """
+    env = make_env_with_offramp(scroll_start=100, scroll_end=300)
+    consts = env.consts
+
+    road_top = consts.ROAD_TOP_Y
+    offramp_bottom = road_top - consts.OFFRAMP_GAP      # 102
+    off_max_y = offramp_bottom - consts.PLAYER_SIZE[1]  # 70
+    main_min_y = road_top - (consts.PLAYER_SIZE[1] - 5) # 83
+    SPEED = consts.PLAYER_MOVE_SPEED
+    RAMP_W = consts.OFFRAMP_RAMP_WIDTH
+
+    # scroll_counter where merge is in the middle of the screen
+    # merge_x = (counter - scroll_end) * SPEED = 70  → counter = 300 + 70//3 ≈ 323
+    scroll_counter = 323
+    merge_x = (scroll_counter - 300) * SPEED  # ≈ 69
+
+    # Place the player squarely in the merge zone, on the MAIN road (not offramp)
+    player_x = merge_x + RAMP_W // 2 - consts.PLAYER_SIZE[0] // 2
+    player_x = max(consts.SIDE_MARGIN, min(player_x, consts.WIDTH - consts.PLAYER_SIZE[0] - consts.SIDE_MARGIN))
+
+    state = active_offramp_state(env, scroll_counter=scroll_counter)
+    state = state._replace(
+        player_x=jnp.array(player_x, dtype=jnp.int32),
+        player_y=jnp.array(main_min_y, dtype=jnp.int32),  # on main road
+        player_on_offramp=jnp.array(False),               # just came off offramp
+    )
+
+    road_top_v, road_bottom_v, _ = env._get_road_bounds(state)
+
+    # Sanity: player overlaps the merge zone
+    at_merge_raw = (player_x + consts.PLAYER_SIZE[0] > merge_x) & (player_x < merge_x + RAMP_W)
+    assert at_merge_raw, (
+        f"Player (x={player_x}) should overlap merge zone [merge_x={merge_x}, "
+        f"merge_x+RAMP_W={merge_x + RAMP_W}]"
+    )
+
+    # Propose y = main_min_y - SPEED (falls in gap) — MUST be rejected upward movement
+    proposed_y = main_min_y - SPEED   # e.g. 80, in the gap (70 < 80 < 83)
+    assert off_max_y < proposed_y < main_min_y, (
+        f"proposed_y={proposed_y} should be in the gap ({off_max_y}, {main_min_y})"
+    )
+
+    checked_x, checked_y = env._check_player_bounds(
+        state,
+        jnp.array(player_x, dtype=jnp.int32),
+        jnp.array(proposed_y, dtype=jnp.int32),
+        road_top_v,
+        road_bottom_v,
+    )
+
+    # With the fix: player stays on the main road — NOT snapped up to off_max_y
+    assert int(checked_y) >= main_min_y, (
+        f"Player on main road at merge zone pressed UP; should stay on main road "
+        f"(y >= {main_min_y}), but was snapped to y={int(checked_y)} "
+        f"(off_max_y={off_max_y}) — phantom-extension bug!"
+    )

@@ -981,7 +981,11 @@ class JaxRoadRunner(
         at_split = (x_pos + PLAYER_W > split_x - RAMP_W) & (x_pos < split_x)
         at_merge = (x_pos + PLAYER_W > merge_x) & (x_pos < merge_x + RAMP_W)
         at_bridge = self._player_at_bridge(state, x_pos)
-        in_transition = offramp_active & (at_split | at_merge | at_bridge)
+        # The merge is the END of the offramp — it only allows descent (offramp → main road).
+        # A player already on the main road must not be able to re-enter the offramp via the
+        # merge; the road has ended there and there is nothing above the merge to the right.
+        at_merge_descending = at_merge & state.player_on_offramp
+        in_transition = offramp_active & (at_split | at_merge_descending | at_bridge)
 
         # During a transition (split, merge, or bridge), the player can cross between roads.
         # When the proposed y falls in the gap zone (off_max_y < y < main_min_y), complete
@@ -1112,7 +1116,10 @@ class JaxRoadRunner(
         at_split = (player_x + PLAYER_W > split_x - RAMP_W) & (player_x < split_x)
         at_merge = (player_x + PLAYER_W > merge_x) & (player_x < merge_x + RAMP_W)
         at_bridge = self._player_at_bridge(state, player_x)
-        in_transition = offramp_active & (at_split | at_merge | at_bridge)
+        # Merge is unidirectional: only offramp → main road.  A main-road player must not
+        # be able to snap back to the offramp via the merge (phantom-extension bug).
+        at_merge_descending = at_merge & state.player_on_offramp
+        in_transition = offramp_active & (at_split | at_merge_descending | at_bridge)
         # Player is "on the offramp" only when their top edge is within the offramp band.
         # off_max_y is the lowest valid top-edge position on the offramp road.
         # Once the player descends even one pixel below it they are committed to the
