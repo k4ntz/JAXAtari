@@ -1128,7 +1128,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
 # ==========================================================================================
 
 class GopherRenderer(JAXGameRenderer):
-    def __init__(self, consts: GopherConstants = None):
+    def __init__(self, consts: GopherConstants = None, config=None, **kwargs):
         super().__init__(consts)
         self.consts = consts or GopherConstants()
         self.config = render_utils.RendererConfig(game_dimensions=(210, 160), channels=3)

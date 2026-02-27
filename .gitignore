@@ -10,3 +10,10 @@ results/
 docs/build/
 .python-version
 
+outputs/
+wandb/
+extracted_frames/
+models/
+*.npy
+*.safetensors
+wandb_backup/
