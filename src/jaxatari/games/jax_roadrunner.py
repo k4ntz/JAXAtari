@@ -2690,10 +2690,9 @@ class RoadRunnerRenderer(JAXGameRenderer):
         road_no_stripes_sprite = self._create_road_sprite(stripes=False)
         life_sprite = self._create_life_sprite()
         offramp_road_sprite = self._create_offramp_road_sprite()
-        offramp_split_sprite = self._create_offramp_split_sprite()
         offramp_bridge_sprite = self._create_offramp_bridge_sprite()
         asset_config = self._get_asset_config(
-            road_sprite, road_no_stripes_sprite, life_sprite, offramp_road_sprite, offramp_split_sprite,
+            road_sprite, road_no_stripes_sprite, life_sprite, offramp_road_sprite,
             offramp_bridge_sprite,
         )
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/roadrunner"
@@ -2908,7 +2907,6 @@ class RoadRunnerRenderer(JAXGameRenderer):
         road_no_stripes_sprite: jnp.ndarray,
         life_sprite: jnp.ndarray,
         offramp_road_sprite: jnp.ndarray,
-        offramp_split_sprite: jnp.ndarray,
         offramp_bridge_sprite: jnp.ndarray,
     ) -> list:
         asset_config = [
@@ -2942,9 +2940,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "bullet", "type": "single", "file": "bullet.npy"},
             # Offramp sprites
             {"name": "offramp_road", "type": "procedural", "data": offramp_road_sprite},
-            {"name": "offramp_split", "type": "procedural", "data": offramp_split_sprite},
-            {"name": "offramp_merge", "type": "procedural",
-             "data": jnp.fliplr(offramp_split_sprite)},
+            {"name": "offramp_split", "type": "single", "file": "offramp_split.npy"},
+            {"name": "offramp_merge", "type": "single", "file": "offramp_merge.npy"},
             {"name": "offramp_bridge", "type": "procedural", "data": offramp_bridge_sprite},
         ]
 
