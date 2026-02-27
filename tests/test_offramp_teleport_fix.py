@@ -477,3 +477,118 @@ def test_merge_zone_does_not_allow_main_to_offramp():
         f"(y >= {main_min_y}), but was snapped to y={int(checked_y)} "
         f"(off_max_y={off_max_y}) — phantom-extension bug!"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test: player on offramp is forced to main road when merge passes their position
+# ---------------------------------------------------------------------------
+
+def test_player_forced_to_main_road_when_merge_passes():
+    """
+    If the player stays on the offramp past the merge point (merge_x > player_x +
+    PLAYER_W) and no bridge is active at their position, they must be snapped to the
+    main road on the next bounds check.  The offramp road no longer covers them.
+    """
+    env = make_env_with_offramp(scroll_start=100, scroll_end=300)
+    consts = env.consts
+
+    road_top = consts.ROAD_TOP_Y
+    offramp_bottom = road_top - consts.OFFRAMP_GAP      # 102
+    off_max_y = offramp_bottom - consts.PLAYER_SIZE[1]  # 70
+    main_min_y = road_top - (consts.PLAYER_SIZE[1] - 5) # 83
+    SPEED = consts.PLAYER_MOVE_SPEED
+    PLAYER_W = consts.PLAYER_SIZE[0]
+
+    # Choose a scroll counter where merge_x > player_x + PLAYER_W
+    # player_x ≈ 70 (PLAYER_START_X).  merge_x = (counter - 300)*SPEED.
+    # merge_x > 70 + 8 = 78 → counter > 300 + 78/3 = 326.
+    scroll_counter = 340   # merge_x = 40*3 = 120 >> 78
+    merge_x = (scroll_counter - 300) * SPEED   # 120
+
+    player_x = 70   # standard player position
+    assert merge_x > player_x + PLAYER_W, (
+        f"merge_x={merge_x} should be past player right edge {player_x + PLAYER_W}"
+    )
+
+    state = active_offramp_state(env, scroll_counter=scroll_counter)
+    state = state._replace(
+        player_x=jnp.array(player_x, dtype=jnp.int32),
+        player_y=jnp.array(off_max_y, dtype=jnp.int32),   # on the offramp
+        player_on_offramp=jnp.array(True),
+    )
+
+    road_top_v, road_bottom_v, _ = env._get_road_bounds(state)
+
+    # Propose any y — the player should be clamped to main road range
+    for proposed_y in [off_max_y - 3, off_max_y, off_max_y + 2]:
+        checked_x, checked_y = env._check_player_bounds(
+            state,
+            jnp.array(player_x, dtype=jnp.int32),
+            jnp.array(proposed_y, dtype=jnp.int32),
+            road_top_v,
+            road_bottom_v,
+        )
+        assert int(checked_y) >= main_min_y, (
+            f"Merge has passed player (merge_x={merge_x} > player_right={player_x+PLAYER_W}); "
+            f"player should be on main road (y >= {main_min_y}), "
+            f"but bounds returned y={int(checked_y)} for proposed_y={proposed_y}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test: seeds are NOT spawned on the offramp after the merge enters the screen
+# ---------------------------------------------------------------------------
+
+def test_no_offramp_seeds_spawned_after_merge_enters_screen():
+    """
+    Seeds spawn at x=0 and scroll rightward.  Once the merge enters the screen
+    (merge_x > 0), seeds spawned at y=offramp_y would land outside the offramp
+    road band (which has already shrunk past x=0).  The spawn logic must therefore
+    restrict offramp spawning to merge_x <= 0.
+    """
+    env = make_env_with_offramp(scroll_start=100, scroll_end=300)
+    consts = env.consts
+    road_top = consts.ROAD_TOP_Y
+    offramp_bottom = road_top - consts.OFFRAMP_GAP      # 102
+    offramp_top = offramp_bottom - consts.OFFRAMP_HEIGHT # 86
+
+    # scroll_counter past scroll_end=300 → merge_x = (counter - 300)*3 > 0
+    scroll_counter = 320   # merge_x = 60 (on-screen)
+
+    key = jax.random.PRNGKey(0)
+    _, state = env.reset(key)
+    state = state._replace(
+        scrolling_step_counter=jnp.array(scroll_counter, dtype=jnp.int32),
+        is_scrolling=jnp.array(True),
+        # Set next_seed_spawn_scroll_step to 0 so spawning is always attempted
+        next_seed_spawn_scroll_step=jnp.array(0, dtype=jnp.int32),
+        # Clear existing seeds
+        seeds=state.seeds.at[:].set(-1),
+    )
+
+    _, merge_x_val, _, _, _ = env._get_offramp_info(state)
+    assert int(merge_x_val) > 0, f"merge_x should be >0 but got {int(merge_x_val)}"
+
+    # Run 50 seed spawn steps and collect all spawned seed Y values
+    spawned_ys = []
+    for _ in range(50):
+        key, subkey = jax.random.split(key)
+        road_top_v, road_bottom_v, _ = env._get_road_bounds(state)
+        state = env._update_and_spawn_seeds(state, road_top_v, road_bottom_v)
+        for i in range(state.seeds.shape[0]):
+            sx, sy = int(state.seeds[i, 0]), int(state.seeds[i, 1])
+            if sx >= 0 and sy >= 0:
+                spawned_ys.append(sy)
+        # Advance counter slightly
+        state = state._replace(
+            scrolling_step_counter=state.scrolling_step_counter + 1,
+            next_seed_spawn_scroll_step=jnp.array(0, dtype=jnp.int32),
+            seeds=state.seeds.at[:].set(-1),
+        )
+
+    # None of the spawned seeds should be in the offramp Y band
+    for y in spawned_ys:
+        assert not (offramp_top <= y < offramp_bottom), (
+            f"Seed spawned at y={y} is in offramp band [{offramp_top}, {offramp_bottom}) "
+            f"even though merge_x={int(merge_x_val)} > 0 — phantom seed bug!"
+        )

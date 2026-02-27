@@ -1005,11 +1005,19 @@ class JaxRoadRunner(
         # Outside a transition the player is constrained to their current road.
         # The main road uses its full vertical range including the top lane — hitbox
         # separation in _check_game_over handles enemy-through-median concerns.
+        #
+        # Once the merge sprite has scrolled past the player's position the offramp road
+        # strip no longer covers them, so we treat it as ended regardless of player_on_offramp.
+        # Bridges are an exception: if a bridge is active at the player's x the player can
+        # still cross, so the merge-has-passed rule is suppressed in that case.
+        # De Morgan: ~(merge_has_passed & ~at_bridge) = ~merge_has_passed | at_bridge
+        merge_has_passed = merge_x > x_pos + PLAYER_W
+        on_offramp_road = state.player_on_offramp & offramp_active & (~merge_has_passed | at_bridge)
         checked_y = jnp.where(
             in_transition,
             y_transition,
             jnp.where(
-                state.player_on_offramp & offramp_active,
+                on_offramp_road,
                 jnp.clip(y_pos, off_min_y, off_max_y),
                 jnp.clip(y_pos, main_min_y, main_max_y),
             ),
@@ -1129,10 +1137,15 @@ class JaxRoadRunner(
         # the bridge/merge diagonal scrolled away and in_transition turned False.
         off_max_y_int = offramp_bottom - self.consts.PLAYER_SIZE[1]
         on_offramp_by_y = player_y.astype(jnp.int32) <= off_max_y_int
+        # After the merge has scrolled past the player's position there is no more offramp
+        # road beneath them.  Clear player_on_offramp so the main-road bounds take over.
+        # Bridges override this: if the player is at a bridge they are still crossing.
+        merge_has_passed = merge_x > player_x + PLAYER_W
         new_on_offramp = jnp.where(
             in_transition,
             on_offramp_by_y,
-            state.player_on_offramp & offramp_active,
+            # De Morgan: ~(merge_has_passed & ~at_bridge) = ~merge_has_passed | at_bridge
+            state.player_on_offramp & offramp_active & (~merge_has_passed | at_bridge),
         )
 
         return state._replace(
@@ -1397,9 +1410,12 @@ class JaxRoadRunner(
             & spawn_seeds_enabled
         )
 
-        # Determine whether to spawn on offramp or main road
-        offramp_active, _, _, offramp_top_y, offramp_bottom_y = self._get_offramp_info(state)
-        use_offramp = offramp_active & (jax.random.uniform(rng_road) > 0.5)
+        # Determine whether to spawn on offramp or main road.
+        # Only spawn on the offramp while the merge hasn't entered the screen yet
+        # (merge_x <= 0).  Once the merge appears, the offramp road band shrinks from the
+        # left and new seeds spawned at x=0 would land outside it on the median/background.
+        offramp_active, _, merge_x_spawn, offramp_top_y, offramp_bottom_y = self._get_offramp_info(state)
+        use_offramp = offramp_active & (merge_x_spawn <= 0) & (jax.random.uniform(rng_road) > 0.5)
         spawn_min_y = jnp.where(use_offramp, offramp_top_y.astype(jnp.int32), road_top)
         spawn_max_y = jnp.where(
             use_offramp,
@@ -1744,9 +1760,12 @@ class JaxRoadRunner(
             & jnp.logical_not(state.is_in_transition)
         )
 
-        # Determine whether to spawn on offramp or main road
-        offramp_active, _, _, offramp_top_y, offramp_bottom_y = self._get_offramp_info(state)
-        use_offramp = offramp_active & (jax.random.uniform(rng_road) > 0.5)
+        # Determine whether to spawn on offramp or main road.
+        # Only spawn on the offramp while the merge hasn't entered the screen yet
+        # (merge_x <= 0).  Once the merge appears, the offramp road band shrinks from the
+        # left and new landmines spawned at x=0 would land outside it on the median/background.
+        offramp_active, _, merge_x_spawn, offramp_top_y, offramp_bottom_y = self._get_offramp_info(state)
+        use_offramp = offramp_active & (merge_x_spawn <= 0) & (jax.random.uniform(rng_road) > 0.5)
         spawn_min_y = jnp.where(use_offramp, offramp_top_y.astype(jnp.int32), road_top)
         spawn_max_y = jnp.where(
             use_offramp,
