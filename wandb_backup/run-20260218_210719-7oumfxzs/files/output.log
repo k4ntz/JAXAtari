@@ -1,0 +1,27 @@
+/home/adrian/yuhang/praktikum-ki/git/JAXAtari/src/jaxatari/spaces.py:122: UserWarning: Explicitly requested dtype float64 requested in asarray is not available, and will be truncated to dtype float32. To enable more dtypes, set the jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell environment variable. See https://github.com/jax-ml/jax#current-gotchas for more.
+  self.low = jnp.broadcast_to(jnp.asarray(low, dtype=dtype), self.shape)
+/home/adrian/yuhang/praktikum-ki/git/JAXAtari/src/jaxatari/spaces.py:123: UserWarning: Explicitly requested dtype float64 requested in asarray is not available, and will be truncated to dtype float32. To enable more dtypes, set the jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell environment variable. See https://github.com/jax-ml/jax#current-gotchas for more.
+  self.high = jnp.broadcast_to(jnp.asarray(high, dtype=dtype), self.shape)
+/home/adrian/yuhang/praktikum-ki/git/JAXAtari/src/jaxatari/spaces.py:122: UserWarning: Explicitly requested dtype float64 requested in asarray is not available, and will be truncated to dtype float32. To enable more dtypes, set the jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell environment variable. See https://github.com/jax-ml/jax#current-gotchas for more.
+  self.low = jnp.broadcast_to(jnp.asarray(low, dtype=dtype), self.shape)
+/home/adrian/yuhang/praktikum-ki/git/JAXAtari/src/jaxatari/spaces.py:123: UserWarning: Explicitly requested dtype float64 requested in asarray is not available, and will be truncated to dtype float32. To enable more dtypes, set the jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell environment variable. See https://github.com/jax-ml/jax#current-gotchas for more.
+  self.high = jnp.broadcast_to(jnp.asarray(high, dtype=dtype), self.shape)
+/home/adrian/yuhang/praktikum-ki/git/JAXAtari/src/jaxatari/wrappers.py:603: UserWarning: Explicitly requested dtype float64 requested in array is not available, and will be truncated to dtype float32. To enable more dtypes, set the jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell environment variable. See https://github.com/jax-ml/jax#current-gotchas for more.
+  lambda s: jnp.array(s.low, dtype=s.dtype),
+/home/adrian/yuhang/praktikum-ki/git/JAXAtari/src/jaxatari/wrappers.py:608: UserWarning: Explicitly requested dtype float64 requested in array is not available, and will be truncated to dtype float32. To enable more dtypes, set the jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell environment variable. See https://github.com/jax-ml/jax#current-gotchas for more.
+  lambda s: jnp.array(s.high, dtype=s.dtype),
+/home/adrian/yuhang/praktikum-ki/git/JAXAtari/src/jaxatari/spaces.py:122: UserWarning: Explicitly requested dtype float64 requested in asarray is not available, and will be truncated to dtype float32. To enable more dtypes, set the jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell environment variable. See https://github.com/jax-ml/jax#current-gotchas for more.
+  self.low = jnp.broadcast_to(jnp.asarray(low, dtype=dtype), self.shape)
+/home/adrian/yuhang/praktikum-ki/git/JAXAtari/src/jaxatari/spaces.py:123: UserWarning: Explicitly requested dtype float64 requested in asarray is not available, and will be truncated to dtype float32. To enable more dtypes, set the jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell environment variable. See https://github.com/jax-ml/jax#current-gotchas for more.
+  self.high = jnp.broadcast_to(jnp.asarray(high, dtype=dtype), self.shape)
+/home/adrian/yuhang/praktikum-ki/git/JAXAtari/src/jaxatari/spaces.py:122: UserWarning: Explicitly requested dtype float64 requested in asarray is not available, and will be truncated to dtype float32. To enable more dtypes, set the jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell environment variable. See https://github.com/jax-ml/jax#current-gotchas for more.
+  self.low = jnp.broadcast_to(jnp.asarray(low, dtype=dtype), self.shape)
+/home/adrian/yuhang/praktikum-ki/git/JAXAtari/src/jaxatari/spaces.py:123: UserWarning: Explicitly requested dtype float64 requested in asarray is not available, and will be truncated to dtype float32. To enable more dtypes, set the jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell environment variable. See https://github.com/jax-ml/jax#current-gotchas for more.
+  self.high = jnp.broadcast_to(jnp.asarray(high, dtype=dtype), self.shape)
+/home/adrian/yuhang/praktikum-ki/git/JAXAtari/src/jaxatari/wrappers.py:603: UserWarning: Explicitly requested dtype float64 requested in array is not available, and will be truncated to dtype float32. To enable more dtypes, set the jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell environment variable. See https://github.com/jax-ml/jax#current-gotchas for more.
+  lambda s: jnp.array(s.low, dtype=s.dtype),
+/home/adrian/yuhang/praktikum-ki/git/JAXAtari/src/jaxatari/wrappers.py:608: UserWarning: Explicitly requested dtype float64 requested in array is not available, and will be truncated to dtype float32. To enable more dtypes, set the jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell environment variable. See https://github.com/jax-ml/jax#current-gotchas for more.
+  lambda s: jnp.array(s.high, dtype=s.dtype),
+Compile time: 7.973942518234253 seconds.
+Run time: 1259.461653470993 seconds.
+Total: 1267.4357466697693 seconds.

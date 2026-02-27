@@ -1,5 +1,3 @@
-
-from jaxatari.core import make, make_renderer, list_available_games, modify
 from pathlib import Path
 from platformdirs import user_data_dir
 
@@ -27,5 +25,4 @@ def check_ownership():
         )
 
 # ... rest of your package imports ...
-
-
+from jaxatari.core import make, list_available_games

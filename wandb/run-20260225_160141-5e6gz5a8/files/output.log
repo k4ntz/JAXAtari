@@ -1,0 +1,28 @@
+Error executing job with overrides: ['+alg=pqn_jaxatari_object']
+Traceback (most recent call last):
+  File "/home/adrian/yuhang/praktikum-ki/git/JAXAtari/scripts/benchmarks/pqn_agent.py", line 736, in main
+    single_run(config)
+  File "/home/adrian/yuhang/praktikum-ki/git/JAXAtari/scripts/benchmarks/pqn_agent.py", line 642, in single_run
+    train_vjit = jax.jit(jax.vmap(make_train(config)))
+                                  ^^^^^^^^^^^^^^^^^^
+  File "/home/adrian/yuhang/praktikum-ki/git/JAXAtari/scripts/benchmarks/pqn_agent.py", line 152, in make_train
+    env = jaxatari.make(config["ENV_NAME"].lower(), mods=mods_config)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/adrian/yuhang/praktikum-ki/git/JAXAtari/src/jaxatari/core.py", line 120, in make
+    check_ownership()  # Ensure ownership confirmed
+    ^^^^^^^^^^^^^^^^^
+  File "/home/adrian/yuhang/praktikum-ki/git/JAXAtari/src/jaxatari/__init__.py", line 16, in check_ownership
+    raise RuntimeError(
+RuntimeError:
+❌  OWNERSHIP NOT CONFIRMED
+----------------------------------------------------
+To use JaxAtari, you must confirm ownership of the original
+ Atari 2600 ROMs and download the required assets.
+
+Please run the following command in your terminal:
+
+    .venv/bin/install-sprites
+----------------------------------------------------
+
+
+Set the environment variable HYDRA_FULL_ERROR=1 for a complete stack trace.

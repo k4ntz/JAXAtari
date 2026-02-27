@@ -1,0 +1,31 @@
+{
+  "os":  "Linux-6.18.7-200.nobara.fc43.x86_64-x86_64-with-glibc2.42",
+  "python":  "CPython 3.12.12",
+  "startedAt":  "2026-02-25T11:51:01.381318Z",
+  "args":  [
+    "+alg=ppo_jaxatari_object"
+  ],
+  "program":  "/home/adrian/yuhang/praktikum-ki/git/JAXAtari/scripts/benchmarks/ppo_agent.py",
+  "codePath":  "scripts/benchmarks/ppo_agent.py",
+  "codePathLocal":  "scripts/benchmarks/ppo_agent.py",
+  "git":  {
+    "remote":  "https://github.com/k4ntz/JAXAtari.git",
+    "commit":  "92962d85b8223211345285713ed3aacc6773caae"
+  },
+  "email":  "bestnaomiiiii@gmail.com",
+  "root":  "/home/adrian/yuhang/praktikum-ki/git/JAXAtari",
+  "host":  "nobara-pc",
+  "executable":  "/home/adrian/yuhang/praktikum-ki/git/JAXAtari/.venv/bin/python",
+  "cpu_count":  8,
+  "cpu_count_logical":  8,
+  "disk":  {
+    "/":  {
+      "total":  "2009650196480",
+      "used":  "687326490624"
+    }
+  },
+  "memory":  {
+    "total":  "32708849664"
+  },
+  "writerId":  "o4z0f98ly62qjicwvjz7vfhia92rejor"
+}

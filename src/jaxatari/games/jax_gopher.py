@@ -250,9 +250,11 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         Handles player horizontal movement and bonking input.
         """
 
+        real_action = jnp.array(self.action_set)[action]
+
         # --- Player walking ---
-        left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
-        right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
+        left = jnp.logical_or(real_action == Action.LEFT, real_action == Action.LEFTFIRE)
+        right = jnp.logical_or(real_action == Action.RIGHT, real_action == Action.RIGHTFIRE)
         new_speed = jax.lax.select(left, -self.consts.PLAYER_SPEED, jax.lax.select(right, self.consts.PLAYER_SPEED, 0.0))
 
         # Wall Collision
@@ -273,30 +275,28 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         )
 
         # --- Fire bonk logic ---
-        fire_pressed = (action == Action.FIRE) | (action == Action.DOWNFIRE) | \
-                      (action == Action.LEFTFIRE) | (action == Action.RIGHTFIRE)
+        fire_pressed = (real_action == Action.FIRE) | (real_action == Action.DOWNFIRE) | \
+                      (real_action == Action.LEFTFIRE) | (real_action == Action.RIGHTFIRE)
         valid_fire = fire_pressed & jnp.logical_not(is_frozen)
         is_bonking = state.bonk_timer > 0
         
 
 
-        # --- NEW: Press-Release Fire Logic ---
-        # 1. Check if button is currently down
-        current_fire_down = (action == Action.FIRE) | (action == Action.DOWNFIRE) | \
-                            (action == Action.LEFTFIRE) | (action == Action.RIGHTFIRE)
         
-        # 2. Check if it was NOT down last frame (A fresh tap)
+        
+        current_fire_down = fire_pressed
+       
         is_fresh_press = current_fire_down & jnp.logical_not(state.prev_fire_pressed)
         
-        # 3. Can only start bonk if not frozen and not already bonking
+        
         valid_start = is_fresh_press & jnp.logical_not(is_frozen) & (state.bonk_timer == 0)
 
-        # Timer increments up to 14 frames then resets
+        
         def handle_timer(t):
             return jax.lax.cond(
                 t == 0,
-                lambda _: jax.lax.select(valid_start, 1, 0), # Start new swing
-                lambda _: jax.lax.select(t >= 5, 0, t + 1),  # Increment or Reset
+                lambda _: jax.lax.select(valid_start, 1, 0), 
+                lambda _: jax.lax.select(t >= 5, 0, t + 1),  
                 operand=None
             )
 
@@ -304,7 +304,8 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         new_state = state.replace(
             player_x = proposed_player_x, 
             player_speed = final_speed,
-            bonk_timer = new_bonk_timer
+            bonk_timer = new_bonk_timer,
+            prev_fire_pressed = current_fire_down
         )
         return new_state, fire_pressed
 
@@ -801,6 +802,11 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         act_step1, timer_step2, holes_step1, dir_mod, new_target_idx = self._determine_next_state(
             state, loc, timer_step1, rolls, fire_pressed
         )
+        
+        # Check the grid under hole
+        just_started_climb = (act_step1 == GopherAction.PREPARE_CLIMB) & (state.gopher_action != GopherAction.PREPARE_CLIMB)
+        just_dug_l1 = (holes_step1[loc["h_idx"], 0] == 1) & (state.hole_layout[loc["h_idx"], 0] == 0)
+        break_roof = just_dug_l1 | just_started_climb
         state = state.replace(hole_layout=holes_step1)
 
         # Bonk check
@@ -817,6 +823,16 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
             state_pre_phys, act_step1, timer_step2, jax.random.uniform(k2)
         )
         final_dir = new_dir_raw * dir_mod
+
+        # Garantie the tunnels under hole
+        t1 = (jnp.array(self.consts.HOLE_POSITION_X)[loc["h_idx"]] // 4).astype(jnp.int32)
+        t2 = t1 + 1
+        new_tunnels = jax.lax.cond(
+            break_roof,
+            lambda t: t.at[t1].set(1).at[t2].set(1),
+            lambda t: t,
+            operand=new_tunnels
+        )
 
         # Vertical 
         rolls_vert = jax.random.uniform(k3, shape=(2,))
@@ -1055,11 +1071,15 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         state = self._process_duck_and_seed(state, k_duck) 
 
         state, is_any_bonk = self._gopher_step(state, fire_pressed)
+        score_before_reset = state.score
         state, game_over = self._resolve_collisions_and_reset(state, is_any_bonk)
         state = state.replace(frame_count=state.frame_count + 1)
         
         obs = self._get_obs(state)
-        reward = (state.score - old_score).astype(jnp.float32)
+        bonk_bonus = jax.lax.select(is_any_bonk, 100, 0)
+        true_final_score = score_before_reset + bonk_bonus
+        
+        reward = (true_final_score - old_score).astype(jnp.float32)
         done = game_over
         info = self._get_info(state)
         return obs, state, reward, done, info

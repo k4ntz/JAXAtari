@@ -18,10 +18,10 @@ VF_COEF: 0.5
 ACTIVATION: "tanh"
 
 # env specific
-ENV_NAME: "gopher"
+ENV_NAME: "Pong"
 ENV_KWARGS: {}
 OBJECT_CENTRIC: True
-MOD_NAME: None
+MOD_NAME: LazyEnemyWrapper
 
 # Testing
 TEST_NUM_ENVS: 1024

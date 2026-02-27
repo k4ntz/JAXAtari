@@ -1,0 +1,15 @@
+Error executing job with overrides: ['+alg=pqn_jaxatari_object']
+Traceback (most recent call last):
+  File "/home/adrian/yuhang/praktikum-ki/git/JAXAtari/scripts/benchmarks/pqn_agent.py", line 736, in main
+    single_run(config)
+  File "/home/adrian/yuhang/praktikum-ki/git/JAXAtari/scripts/benchmarks/pqn_agent.py", line 642, in single_run
+    train_vjit = jax.jit(jax.vmap(make_train(config)))
+                                  ^^^^^^^^^^^^^^^^^^
+  File "/home/adrian/yuhang/praktikum-ki/git/JAXAtari/scripts/benchmarks/pqn_agent.py", line 152, in make_train
+    env = jaxatari.make(config["ENV_NAME"].lower(), mods=mods_config)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/adrian/yuhang/praktikum-ki/git/JAXAtari/src/jaxatari/core.py", line 134, in make
+    raise NotImplementedError(
+NotImplementedError: The game 'gopher' does not exist. Available games: ['alien', 'asterix', 'asteroids', 'atlantis', 'bankheist', 'berzerk', 'blackjack', 'breakout', 'centipede', 'choppercommand', 'enduro', 'fishingderby', 'flagcapture', 'freeway', 'frostbite', 'galaxian', 'hangman', 'hauntedhouse', 'humancannonball', 'kangaroo', 'kingkong', 'klax', 'lasergates', 'namethisgame', 'phoenix', 'pong', 'riverraid', 'seaquest', 'sirlancelot', 'skiing', 'slotmachine', 'spaceinvaders', 'spacewar', 'tennis', 'tetris', 'timepilot', 'tron', 'turmoil', 'videocheckers', 'videocube', 'videopinball', 'wordzapper']
+
+Set the environment variable HYDRA_FULL_ERROR=1 for a complete stack trace.

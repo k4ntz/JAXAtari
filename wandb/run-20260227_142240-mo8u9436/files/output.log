@@ -1,0 +1,10 @@
+Compile time: 10.65238070487976 seconds.
+Rendering video...
+m[2K[1mwandb[0m: [38;5;178m⢿[0m Encoding video...
+Video done.
+Rendering video...
+Video done.
+Run time: 162.75148749351501 seconds.
+Total: 173.4039590358734 seconds.
+Average return of default env: [2160.4521], length: [973.1058].
+Average return of modified env (None): [2160.4521], length: [973.1058].
