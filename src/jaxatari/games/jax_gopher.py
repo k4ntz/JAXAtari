@@ -1118,6 +1118,13 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
             "gopher_state": spaces.Box(low=-1, high=20, shape=(2,), dtype=jnp.int32),
         })
     
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(210, 160, 3),
+            dtype=jnp.uint8
+        )
     
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: GopherState, ) -> GopherInfo:
@@ -1131,7 +1138,7 @@ class GopherRenderer(JAXGameRenderer):
     def __init__(self, consts: GopherConstants = None, config=None, **kwargs):
         super().__init__(consts)
         self.consts = consts or GopherConstants()
-        self.config = render_utils.RendererConfig(game_dimensions=(210, 160), channels=3)
+        self.config = config or render_utils.RendererConfig(game_dimensions=(210, 160), channels=3)
         self.jr = render_utils.JaxRenderingUtils(self.config)
         final_asset_config = list(self.consts.ASSET_CONFIG)
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/gopher"
