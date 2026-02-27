@@ -42,6 +42,7 @@ class BasicMathConstants(NamedTuple):
     SCREEN_HEIGHT: int = 210 * SCALINGFACTOR
 
     GAMEMODE: int = 5
+    DIFFCULTY: int = 0
 
     COLOR_CODES = [
         [(18, 46, 137), (113, 115, 25)],
@@ -59,7 +60,6 @@ class BasicMathConstants(NamedTuple):
     bar1 = (X_OFFSET, num1[1] + 30 * SCALINGFACTOR)
     symbol = (X_OFFSET + 5 * SCALINGFACTOR, num1[1])
 
-
     INITIAL_NUMARR = chex.Array = jnp.array([-1, -1, -1, -1, -1, -1], dtype=jnp.int32)
 
     ASSET_CONFIG: tuple = _get_default_asset_config()
@@ -71,6 +71,8 @@ class BasicMathState(NamedTuple):
     numberProb: chex.Array
     problemNum1: chex.Array
     problemNum2: chex.Array
+    inactive: chex.Array
+    difficultyTime: chex.Array
     key: chex.PRNGKey
     step_counter: chex.PRNGKey
 
@@ -132,7 +134,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
            )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: BasicMathState, ) -> BasicMathState:
+    def _get_info(self, state: BasicMathState, ) -> BasicMathInfo:
         return BasicMathInfo(score=state.score, round=state.numberProb)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -158,7 +160,6 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: BasicMathState) -> bool:
         return jnp.greater_equal(state.numberProb, 10)
-
     
     def _generate_problem(self, state: BasicMathState, gameMode: int) -> BasicMathState:
         key, k1 = jax.random.split(state.key)
@@ -214,16 +215,16 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             operand=state.score,
         )
 
-        x, y, key = self._generate_problem(state, gameMode)
-
         return BasicMathState(
             self.consts.INITIAL_NUMARR,
             state.arrPos,
             score,
             state.numberProb + 1,
-            x,
-            y,
-            key,
+            state.problemNum1,
+            state.problemNum2,
+            jnp.array(90).astype(jnp.int32),
+            state.difficultyTime,
+            state.key,
             state.step_counter
         )
     
@@ -273,6 +274,8 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             state.numberProb,
             state.problemNum1,
             state.problemNum2,
+            state.inactive,
+            state.difficultyTime,
             state.key,
             state.step_counter
         )
@@ -319,6 +322,8 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             state.numberProb,
             state.problemNum1,
             state.problemNum2,
+            state.inactive,
+            state.difficultyTime,
             state.key,
             state.step_counter
         )
@@ -334,6 +339,8 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             numberProb= jnp.array(0).astype(jnp.int32),
             problemNum1=jnp.array(1).astype(jnp.int32),
             problemNum2=jnp.array(1).astype(jnp.int32),
+            inactive=jnp.array(0).astype(jnp.int32),
+            difficultyTime=jnp.array(-1).astype(jnp.int32),
             key=key,
             step_counter=jnp.array(0).astype(jnp.int32)
         )
@@ -342,23 +349,24 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         return obs, state
     
-    @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: BasicMathState, action: chex.Array) -> Tuple[BasicMathObservation, BasicMathState, float, bool, BasicMathInfo]:
-        previous_state = state
-
-        gameMode = self.consts.GAMEMODE
-        chosenGameMode = (gameMode - 1) % 4
+    def _active(self, state: BasicMathState, action: chex.Array, gameMode: int) -> BasicMathState:
         act = state.step_counter % 2 == 0
         is_fire = action == Action.FIRE
 
         state = jax.lax.cond(
-            act, lambda s: self._change_pos(s, action), lambda s: s, operand=state
+            act, 
+            lambda s: self._change_pos(s, action), 
+            lambda s: s, 
+            operand=state
         )
         state = jax.lax.cond(
-            act, lambda s: self._change_value(s, action), lambda s: s, operand=state
+            act, 
+            lambda s: self._change_value(s, action), 
+            lambda s: s, 
+            operand=state
         )
         state = jax.lax.cond(
-            jnp.logical_and(is_fire, act), lambda s: self._evaluate_issue(s, chosenGameMode), lambda s: s, operand=state
+            jnp.logical_and(is_fire, act), lambda s: self._evaluate_issue(s, gameMode), lambda s: s, operand=state
         )
 
         new_state = BasicMathState(
@@ -368,7 +376,60 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             state.numberProb,
             state.problemNum1,
             state.problemNum2,
+            state.inactive,
+            state.difficultyTime,
             state.key,
+            state.step_counter + 1
+        )
+
+        return new_state
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: BasicMathState, action: chex.Array) -> Tuple[BasicMathObservation, BasicMathState, float, bool, BasicMathInfo]:
+        gameMode = self.consts.GAMEMODE
+        chosenGameMode = (gameMode - 1) % 4
+        
+        previous_state = state
+
+        active = jnp.equal(state.inactive, 0)
+
+        state = jax.lax.cond(
+            active, 
+            lambda s: self._active(s, action, chosenGameMode), 
+            lambda s: s, 
+            operand=state
+        )
+
+        timer = jax.lax.cond(
+            jnp.logical_not(active),
+            lambda: state.inactive - 1,
+            lambda: state.inactive,
+        )
+
+        reset = jnp.logical_and(jnp.equal(state.inactive, 1), jnp.equal(timer, 0))
+
+        x, y, key = jax.lax.cond(
+            reset, 
+            lambda: self._generate_problem(state, chosenGameMode), 
+            lambda: (state.problemNum1, state.problemNum2, state.key)
+        )
+
+        arr = jax.lax.cond(
+            reset, 
+            lambda: self.consts.INITIAL_NUMARR, 
+            lambda: state.numArr
+        )
+
+        new_state = BasicMathState(
+            arr,
+            state.arrPos,
+            state.score,
+            state.numberProb,
+            x,
+            y,
+            timer,
+            state.difficultyTime,
+            key,
             state.step_counter + 1
         )
 
@@ -418,7 +479,7 @@ class BasicMathRenderer(JAXGameRenderer):
         raster = self.jr.create_object_raster(self.BACKGROUND)
         underscore_mask = self.SHAPE_MASKS["underscore"]
         symbol = self.SHAPE_MASKS["symbols"]
-        raster = self.jr.render_at(raster, 35 * self.consts.SCALINGFACTOR + state.arrPos * 15 * self.consts.SCALINGFACTOR, self.consts.bar0[1], underscore_mask[0])    
+        raster = self.jr.render_at(raster, (35  + state.arrPos * 15) * self.consts.SCALINGFACTOR, self.consts.bar0[1], underscore_mask[0])    
         raster = self.jr.render_at(raster, *self.consts.bar1, underscore_mask[1])
         raster = self.jr.render_at(raster, *self.consts.symbol, symbol[self.chosenGamemode])
         digit_masks = self._stack_num_masks()
@@ -436,7 +497,7 @@ class BasicMathRenderer(JAXGameRenderer):
             is_active = num != -1
             
             return jax.lax.cond(is_active, 
-                                lambda ras: self.jr.render_label_selective(ras, 35 * self.consts.SCALINGFACTOR + i * 15 * self.consts.SCALINGFACTOR, self.consts.num2[1], digit, digit_masks, 0, 1, spacing=0),
+                                lambda ras: self.jr.render_label_selective(ras, (35 + i * 15) * self.consts.SCALINGFACTOR, self.consts.num2[1], digit, digit_masks, 0, 1, spacing=0),
                                 lambda ras: ras, 
                                 r)
         raster = jax.lax.fori_loop(0, 6, render_nums, raster)
