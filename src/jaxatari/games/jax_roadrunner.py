@@ -3148,11 +3148,11 @@ class RoadRunnerRenderer(JAXGameRenderer):
             offramp_road_masked = jnp.where(col_mask, offramp_road, self.jr.TRANSPARENT_ID)
             c = self.jr.render_at(c, 0, offramp_top, offramp_road_masked)
 
-            # --- Split sprite: rendered just left of split_x ---
-            # The sprite spans [split_x - RAMP_W, split_x] in screen x.
-            s_x = split_x - RAMP_W
+            # --- Split sprite: rendered just right of split_x ---
+            # The sprite spans [split_x, split_x + RAMP_W] in screen x.
+            s_x = split_x
             s_x_clamped = jnp.clip(s_x, 0, W).astype(jnp.int32)
-            split_on_screen = (split_x > MARGIN) & (s_x < W - MARGIN)
+            split_on_screen = (split_x > MARGIN - RAMP_W) & (s_x < W - MARGIN)
             c = jax.lax.cond(
                 split_on_screen,
                 lambda cv: self.jr.render_at(
@@ -3162,10 +3162,11 @@ class RoadRunnerRenderer(JAXGameRenderer):
                 c,
             )
 
-            # --- Merge sprite: rendered just right of merge_x ---
-            # The sprite spans [merge_x, merge_x + RAMP_W] in screen x.
-            m_x_clamped = jnp.clip(merge_x, 0, W).astype(jnp.int32)
-            merge_on_screen = (merge_x > MARGIN - RAMP_W) & (merge_x < W - MARGIN)
+            # --- Merge sprite: rendered just left of merge_x ---
+            # The sprite spans [merge_x - RAMP_W, merge_x] in screen x.
+            m_x = merge_x - RAMP_W
+            m_x_clamped = jnp.clip(m_x, 0, W).astype(jnp.int32)
+            merge_on_screen = (merge_x > MARGIN) & (m_x < W - MARGIN)
             c = jax.lax.cond(
                 merge_on_screen,
                 lambda cv: self.jr.render_at(
