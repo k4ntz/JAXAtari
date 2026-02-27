@@ -11,6 +11,7 @@ from jaxatari.wrappers import JaxatariWrapper
 
 # Map of game names to their module paths
 GAME_MODULES = {
+    "amidar": "jaxatari.games.jax_amidar",
     "airraid": "jaxatari.games.jax_airraid",
     "alien": "jaxatari.games.jax_alien",
     "asterix": "jaxatari.games.jax_asterix",
