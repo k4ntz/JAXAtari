@@ -94,7 +94,7 @@ class RoadRunnerConstants(NamedTuple):
     TRUCK_SPAWN_MIN_INTERVAL: int = 120
     TRUCK_SPAWN_MAX_INTERVAL: int = 240
     LEVEL_TRANSITION_DURATION: int = 30
-    LEVEL_COMPLETE_SCROLL_DISTANCE: int = 100
+    LEVEL_COMPLETE_SCROLL_DISTANCE: int = 3000
     STARTING_LIVES: int = 3
     JUMP_TIME_DURATION: int = 20  # Jump duration in steps (~0.33 seconds at 60 FPS)
     FALL_ANIMATION_DURATION: int = 10  # Fall animation duration in frames
@@ -333,7 +333,7 @@ RoadRunner_Level_4 = LevelConfig(
 )
 
 DEFAULT_LEVELS: Tuple[LevelConfig, ...] = (
-    #RoadRunner_Level_1,
+    RoadRunner_Level_1,
     RoadRunner_Level_2,
     #RoadRunner_Level_3,
     #RoadRunner_Level_4,
