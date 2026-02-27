@@ -1,3 +1,0 @@
-- +alg=pqn_jaxatari_object
-- alg.ENV_NAME=gopher
-- +alg.ENV_KWARGS.mods=[reward_inversion]
