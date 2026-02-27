@@ -219,41 +219,190 @@ def test_ascending_player_flagged_on_offramp_only_when_in_band():
 
 
 # ---------------------------------------------------------------------------
-# Test: soft floor preserves player position in gap after descend
+# Test: player in gap without transition snaps to main road (not median stuck)
 # ---------------------------------------------------------------------------
 
-def test_soft_floor_keeps_player_in_gap_after_descend():
+def test_player_in_gap_no_transition_snaps_to_main_road():
     """
-    After the player descends below off_max_y but the bridge has gone, the soft
-    floor should hold the player at their current y (not teleport up or down).
+    If a player somehow ends up in the gap zone (y in (off_max_y, main_min_y)) with
+    no active transition, they are snapped DOWN to main_min_y on the very next bounds
+    check.  This prevents 'running on the median'.
     """
     env = make_env_with_offramp(scroll_start=100, scroll_end=500)
     consts = env.consts
 
-    road_top = consts.ROAD_TOP_Y           # 110
+    road_top = consts.ROAD_TOP_Y
     offramp_bottom = road_top - consts.OFFRAMP_GAP  # 102
     off_max_y = offramp_bottom - consts.PLAYER_SIZE[1]  # 70
+    main_min_y = road_top - (consts.PLAYER_SIZE[1] - 5)  # 83
 
     state = active_offramp_state(env)
-    # Player is in the gap, not on bridge, not in transition
     gap_y = off_max_y + 6   # 76, clearly in the gap
 
     state = state._replace(
         player_y=jnp.array(gap_y, dtype=jnp.int32),
         player_on_offramp=jnp.array(False),
+        # player_x far from any split/merge/bridge → no transition
+        player_x=jnp.array(consts.SIDE_MARGIN + 4, dtype=jnp.int32),
     )
 
     road_top_v, road_bottom_v, _ = env._get_road_bounds(state)
 
-    # The soft floor must keep y >= gap_y (player cannot go up through the gap)
+    # Any proposed y should be clipped to [main_min_y, main_max_y]
+    for proposed_y in [gap_y - 2, gap_y, gap_y + 1, main_min_y - 1]:
+        checked_x, checked_y = env._check_player_bounds(
+            state,
+            jnp.array(consts.SIDE_MARGIN + 4, dtype=jnp.int32),
+            jnp.array(proposed_y, dtype=jnp.int32),
+            road_top_v,
+            road_bottom_v,
+        )
+        assert int(checked_y) >= main_min_y, (
+            f"Player in gap (state.player_y={gap_y}) with no transition, "
+            f"proposed y={proposed_y} should snap to main_min_y={main_min_y}, "
+            f"but got y={int(checked_y)}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test: Issue 1 — player can use top lane of main road when offramp is active
+# ---------------------------------------------------------------------------
+
+def test_player_can_use_top_lane_when_offramp_active():
+    """
+    When the offramp is active, the player should NOT be restricted to a tighter
+    y range.  They must still be able to reach the top lane (main_min_y) on the
+    main road even with no transition point nearby.
+    """
+    env = make_env_with_offramp(scroll_start=100, scroll_end=500)
+    consts = env.consts
+
+    road_top = consts.ROAD_TOP_Y
+    main_min_y = road_top - (consts.PLAYER_SIZE[1] - 5)  # 83
+
+    state = active_offramp_state(env)
+    state = state._replace(
+        player_on_offramp=jnp.array(False),
+        # x far from any transition
+        player_x=jnp.array(consts.SIDE_MARGIN + 4, dtype=jnp.int32),
+        player_y=jnp.array(main_min_y + 10, dtype=jnp.int32),  # somewhere in main road
+    )
+
+    road_top_v, road_bottom_v, _ = env._get_road_bounds(state)
+
+    # Propose y = main_min_y (very top of main road) — must be accepted
     checked_x, checked_y = env._check_player_bounds(
         state,
         jnp.array(consts.SIDE_MARGIN + 4, dtype=jnp.int32),
-        jnp.array(gap_y - 2, dtype=jnp.int32),   # tried to go up
+        jnp.array(main_min_y, dtype=jnp.int32),
         road_top_v,
         road_bottom_v,
     )
-    assert int(checked_y) >= gap_y, (
-        f"Soft floor should prevent upward movement through gap: "
-        f"y went from {gap_y} to {int(checked_y)}"
+    assert int(checked_y) == main_min_y, (
+        f"Top lane (y={main_min_y}) should be accessible when offramp is active, "
+        f"but player was pushed to y={int(checked_y)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test: Issue 2 — crossing at transition snaps gap to destination road in one step
+# ---------------------------------------------------------------------------
+
+def test_crossing_at_split_snaps_gap_to_offramp():
+    """
+    At a split/merge/bridge, when the player's proposed y falls in the gap zone
+    (off_max_y < y < main_min_y), they are immediately landed on the destination
+    road — no multi-step traversal of the median.
+    """
+    env = make_env_with_offramp(scroll_start=100, scroll_end=500, bridges=(150,))
+    consts = env.consts
+
+    road_top = consts.ROAD_TOP_Y
+    offramp_bottom = road_top - consts.OFFRAMP_GAP  # 102
+    off_max_y = offramp_bottom - consts.PLAYER_SIZE[1]  # 70
+    main_min_y = road_top - (consts.PLAYER_SIZE[1] - 5)  # 83
+    SPEED = consts.PLAYER_MOVE_SPEED
+
+    scroll_counter = 200
+    bridge_screen_x = (scroll_counter - 150) * SPEED
+    BRIDGE_W = consts.OFFRAMP_BRIDGE_WIDTH
+    PLAYER_W = consts.PLAYER_SIZE[0]
+    player_x = bridge_screen_x + (BRIDGE_W - PLAYER_W) // 2
+
+    state = active_offramp_state(env, scroll_counter=scroll_counter)
+
+    # --- Ascending: from main road, one UP step → land on offramp ---
+    state_main = state._replace(
+        player_x=jnp.array(player_x, dtype=jnp.int32),
+        player_y=jnp.array(main_min_y, dtype=jnp.int32),
+        player_on_offramp=jnp.array(False),
+    )
+    assert bool(env._player_at_bridge(state_main, jnp.array(player_x))), \
+        "Player should be on bridge"
+
+    road_top_v, road_bottom_v, _ = env._get_road_bounds(state_main)
+    # One step UP: proposed y = main_min_y - SPEED = 80 (in gap)
+    _, cy_up = env._check_player_bounds(
+        state_main,
+        jnp.array(player_x),
+        jnp.array(main_min_y - SPEED),
+        road_top_v,
+        road_bottom_v,
+    )
+    assert int(cy_up) == off_max_y, (
+        f"One UP step at bridge from y={main_min_y} should land on offramp (y={off_max_y}), "
+        f"but got y={int(cy_up)}"
+    )
+
+    # --- Descending: from offramp, one DOWN step → land on main road ---
+    state_off = state._replace(
+        player_x=jnp.array(player_x, dtype=jnp.int32),
+        player_y=jnp.array(off_max_y, dtype=jnp.int32),
+        player_on_offramp=jnp.array(True),
+    )
+    _, cy_down = env._check_player_bounds(
+        state_off,
+        jnp.array(player_x),
+        jnp.array(off_max_y + SPEED),   # one step DOWN: in gap
+        road_top_v,
+        road_bottom_v,
+    )
+    assert int(cy_down) == main_min_y, (
+        f"One DOWN step at bridge from y={off_max_y} should land on main road (y={main_min_y}), "
+        f"but got y={int(cy_down)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test: Issue 1 — collision on top lane IS valid (no false suppression)
+# ---------------------------------------------------------------------------
+
+def test_collision_valid_when_both_on_main_road_top_lane():
+    """
+    If both player and enemy are on the main road (player in top lane at y=main_min_y),
+    the collision must NOT be suppressed — they are on the same surface.
+    """
+    env = make_env_with_offramp(scroll_start=100, scroll_end=500)
+    consts = env.consts
+
+    road_top = consts.ROAD_TOP_Y
+    main_min_y = road_top - (consts.PLAYER_SIZE[1] - 5)  # 83
+
+    state = active_offramp_state(env)
+
+    # Player and enemy at the same top-lane position on the main road
+    state = state._replace(
+        player_y=jnp.array(main_min_y, dtype=jnp.int32),
+        player_x=jnp.array(20, dtype=jnp.int32),
+        enemy_y=jnp.array(main_min_y, dtype=jnp.int32),
+        enemy_x=jnp.array(20, dtype=jnp.int32),
+        player_on_offramp=jnp.array(False),
+        is_round_over=jnp.array(False),
+        enemy_flattened_timer=jnp.array(0),
+    )
+
+    result = env._check_game_over(state)
+    assert bool(result.is_round_over), (
+        "Collision between player and enemy in the top lane of the main road "
+        "should be detected, but was falsely suppressed"
     )

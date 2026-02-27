@@ -983,32 +983,31 @@ class JaxRoadRunner(
         at_bridge = self._player_at_bridge(state, x_pos)
         in_transition = offramp_active & (at_split | at_merge | at_bridge)
 
-        # When the offramp is active and the player is on the main road (and not standing
-        # at a diagonal transition), the gap/median above the main road is occupied by the
-        # offramp structure.  Block further upward movement past road_top.
-        # IMPORTANT: if the player is already above road_top (e.g., was in the top lane
-        # before the offramp appeared), use their current y as the soft floor so the
-        # offramp activating does NOT suddenly snap the player downward.
-        soft_blocked_min_y = jnp.where(
-            state.player_y < road_top,
-            state.player_y,   # already above road_top: freeze at current y, no downward push
-            road_top,         # below road_top: normal hard floor
+        # During a transition (split, merge, or bridge), the player can cross between roads.
+        # When the proposed y falls in the gap zone (off_max_y < y < main_min_y), complete
+        # the crossing in one step to the destination road — no parking in the median.
+        y_in_gap = (y_pos > off_max_y) & (y_pos < main_min_y)
+        y_cross = jnp.where(
+            state.player_on_offramp,
+            main_min_y,   # was on offramp, moving down → land on main road
+            off_max_y,    # was on main road, moving up → land on offramp
         )
-        main_min_y_blocked = jnp.where(
-            offramp_active & ~in_transition,
-            soft_blocked_min_y,
-            main_min_y,
+        y_transition = jnp.where(
+            y_in_gap,
+            y_cross,
+            jnp.clip(y_pos, off_min_y, main_max_y),
         )
 
-        # During a transition the player can freely move between both Y ranges.
-        # Otherwise they are constrained to whichever road they are currently on.
+        # Outside a transition the player is constrained to their current road.
+        # The main road uses its full vertical range including the top lane — hitbox
+        # separation in _check_game_over handles enemy-through-median concerns.
         checked_y = jnp.where(
             in_transition,
-            jnp.clip(y_pos, off_min_y, main_max_y),
+            y_transition,
             jnp.where(
                 state.player_on_offramp & offramp_active,
                 jnp.clip(y_pos, off_min_y, off_max_y),
-                jnp.clip(y_pos, main_min_y_blocked, main_max_y),
+                jnp.clip(y_pos, main_min_y, main_max_y),
             ),
         )
         checked_x = jnp.clip(
@@ -1263,17 +1262,21 @@ class JaxRoadRunner(
         collision = collision & (state.enemy_flattened_timer == 0)
 
         # Don't trigger game over if the player is separated from the enemy by the median.
-        # This covers:
-        #   1. Player is on the offramp (above gap), enemy on main road.
-        #   2. Player is in the upper part of the main road whose 32-px sprite extends into
-        #      the gap zone — the median acts as a physical barrier in both cases.
-        #   3. Player is on a bridge crossing the gap — they are above road_top and physically
-        #      separated from the enemy on the main road.
-        # The condition: offramp is active AND player is above road_top (covers all cases above).
-        offramp_active, _, _, _, _ = self._get_offramp_info(state)
+        # The enemy always stays on the main road.  A collision across the median is only
+        # possible if both sprites overlap AND are on the same road surface.
+        # We suppress the collision when the offramp is active and:
+        #   1. player_on_offramp — player is on the upper road (offramp band), OR
+        #   2. player_in_gap — player's top edge is in the forbidden gap zone while
+        #      traversing a crossing point (split/merge/bridge).
+        # Crucially we do NOT suppress when the player is simply in the top lane of the
+        # main road (y ∈ [main_min_y, road_top-1]) — both player and enemy can occupy
+        # the top lane and a collision there is valid.
+        offramp_active, _, _, _, offramp_bottom = self._get_offramp_info(state)
         road_top, _, _ = self._get_road_bounds(state)
-        player_above_road_top = state.player_y < road_top
-        collision = collision & ~(offramp_active & (state.player_on_offramp | player_above_road_top))
+        off_max_y = offramp_bottom - self.consts.PLAYER_SIZE[1]
+        main_min_y = road_top - (self.consts.PLAYER_SIZE[1] - 5)
+        player_in_gap = (state.player_y > off_max_y) & (state.player_y < main_min_y)
+        collision = collision & ~(offramp_active & (state.player_on_offramp | player_in_gap))
 
         return state._replace(
             is_round_over=state.is_round_over | collision,
