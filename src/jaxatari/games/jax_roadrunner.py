@@ -1114,10 +1114,15 @@ class JaxRoadRunner(
         at_merge = (player_x + PLAYER_W > merge_x) & (player_x < merge_x + RAMP_W)
         at_bridge = self._player_at_bridge(state, player_x)
         in_transition = offramp_active & (at_split | at_merge | at_bridge)
-        # Use the midpoint of the gap between the offramp bottom and main road top as the
-        # Y threshold: player is "on the offramp" when their top is above this midpoint.
-        threshold_y = (offramp_bottom + road_top_after) // 2
-        on_offramp_by_y = player_y.astype(jnp.int32) < threshold_y
+        # Player is "on the offramp" only when their top edge is within the offramp band.
+        # off_max_y is the lowest valid top-edge position on the offramp road.
+        # Once the player descends even one pixel below it they are committed to the
+        # main road.  The old midpoint-of-gap threshold left a wide dead-zone (y in
+        # [off_max_y+1 .. midpoint-1]) where the player was still flagged "on offramp"
+        # while physically in the gap, causing a snap back to the offramp the moment
+        # the bridge/merge diagonal scrolled away and in_transition turned False.
+        off_max_y_int = offramp_bottom - self.consts.PLAYER_SIZE[1]
+        on_offramp_by_y = player_y.astype(jnp.int32) <= off_max_y_int
         new_on_offramp = jnp.where(
             in_transition,
             on_offramp_by_y,
