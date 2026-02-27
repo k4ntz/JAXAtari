@@ -160,6 +160,20 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: BasicMathState) -> bool:
         return jnp.greater_equal(state.numberProb, 10)
+
+
+    def _int_to_fixed_digits(self, x, length=3):
+        powers = 10 ** jnp.arange(length - 1, -1, -1)
+        digits = (x // powers) % 10
+
+        # detect where number starts (first non-zero digit)
+        started = jnp.cumsum(digits != 0) > 0
+        digits = jnp.where(started, digits, -1)
+
+        # if x == 0 → all -1
+        digits = jnp.where(x == 0, jnp.full((length,), -1), digits)
+
+        return digits
     
     def _generate_problem(self, state: BasicMathState, gameMode: int) -> BasicMathState:
         key, k1 = jax.random.split(state.key)
@@ -215,8 +229,13 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             operand=state.score,
         )
 
+        arr_a = self._int_to_fixed_digits(result[0], 3)
+        arr_b = self._int_to_fixed_digits(result[1], 3)
+
+        stacked = jnp.concatenate([arr_a, arr_b])
+
         return BasicMathState(
-            self.consts.INITIAL_NUMARR,
+            stacked,
             state.arrPos,
             score,
             state.numberProb + 1,
