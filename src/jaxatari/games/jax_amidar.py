@@ -10,15 +10,17 @@
 
 from functools import partial
 import os
-from typing import NamedTuple, Tuple
+from typing import Tuple
 import chex
 import jax
 import jax.numpy as jnp
+from flax import struct
 from jaxatari import spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
+from jaxatari.modification import AutoDerivedConstants
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.rendering import jax_rendering_utils as aj
-from jaxatari.games.amidar_mazes import original as chosen_maze # change this to change the maze
+from jaxatari.rendering import jax_rendering_utils as render_utils
+import jaxatari.games.amidar_mazes as chosen_maze # change this to change the maze
 
 # Functions to precompute some constants so they only need to be calculated once
 
@@ -189,90 +191,125 @@ def calculate_corner_rectangles(RECTANGLE_BOUNDS):
     # jax.debug.print("Corners found: {corners}", corners=corners)
     return corners
 
-class AmidarConstants(NamedTuple):
+class AmidarConstants(AutoDerivedConstants):
     """Constants for the Amidar game. Some constants are precomputed from others to avoid recomputation."""
     # General
-    WIDTH: int = 160
-    HEIGHT: int = 210
-    DIFFICULTY_SETTING: int = 0 # Valid settings are 0 (starts at level 3) and 3 (starts at level 1). If invalid, the game starts at Level 3
-    INITIAL_LIVES: int = 3
-    MAX_LIVES: int = 3
-    FREEZE_DURATION: int = 256  # Duration for which the game is frozen in the beginning and after being hit by an enemy
-    CHICKEN_MODE_DURATION: int = 640
+    WIDTH: int = struct.field(pytree_node=False, default_factory=lambda: 160)
+    HEIGHT: int = struct.field(pytree_node=False, default_factory=lambda: 210)
+    DIFFICULTY_SETTING: int = struct.field(pytree_node=False, default_factory=lambda: 0) # Valid settings are 0 (starts at level 3) and 3 (starts at level 1). If invalid, the game starts at Level 3
+    INITIAL_LIVES: int = struct.field(pytree_node=False, default_factory=lambda: 3)
+    MAX_LIVES: int = struct.field(pytree_node=False, default_factory=lambda: 3)
+    FREEZE_DURATION: int = struct.field(pytree_node=False, default_factory=lambda: 256)  # Duration for which the game is frozen in the beginning and after being hit by an enemy
+    CHICKEN_MODE_DURATION: int = struct.field(pytree_node=False, default_factory=lambda: 640)
 
     # Directions
-    UP: int = 0 
-    LEFT: int = 1
-    DOWN: int = 2
-    RIGHT: int = 3
+    UP: int = struct.field(pytree_node=False, default_factory=lambda: 0)
+    LEFT: int = struct.field(pytree_node=False, default_factory=lambda: 1)
+    DOWN: int = struct.field(pytree_node=False, default_factory=lambda: 2)
+    RIGHT: int = struct.field(pytree_node=False, default_factory=lambda: 3)
 
     # Rendering
-    PATH_COLOR_BROWN = jnp.array([162, 98, 33, 255], dtype=jnp.uint8)  # Brown color for the path
-    PATH_COLOR_GREEN = jnp.array([82, 126, 45, 255], dtype=jnp.uint8)  # Green color for the path
-    WALKED_ON_COLOR = jnp.array([104, 72, 198, 255], dtype=jnp.uint8)  # Purple color for the walked on paths
-    PATH_THICKNESS_HORIZONTAL = chosen_maze.PATH_THICKNESS_HORIZONTAL
-    PATH_THICKNESS_VERTICAL = chosen_maze.PATH_THICKNESS_VERTICAL 
+    PATH_COLOR_BROWN: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([162, 98, 33, 255], dtype=jnp.uint8))  # Brown color for the path
+    PATH_COLOR_GREEN: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([82, 126, 45, 255], dtype=jnp.uint8))  # Green color for the path
+    WALKED_ON_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([104, 72, 198, 255], dtype=jnp.uint8))  # Purple color for the walked on paths
+    PATH_THICKNESS_HORIZONTAL: int = struct.field(pytree_node=False, default_factory=lambda: chosen_maze.PATH_THICKNESS_HORIZONTAL)
+    PATH_THICKNESS_VERTICAL: int = struct.field(pytree_node=False, default_factory=lambda: chosen_maze.PATH_THICKNESS_VERTICAL)
 
     # Points
-    PIXELS_PER_POINT_HORIZONTAL: int = 3 # Values to calculate how many points an Edge is worth based on how long it is
-    PIXELS_PER_POINT_VERTICAL: int = 30 # Each vertical edge is worth 1 point, since they are 30 pixels long
-    BONUS_POINTS_PER_RECTANGLE: int = 48 # Bonus points for completing a rectangle
-    BONUS_POINTS_PER_CHICKEN: int = 99 # Bonus points for catching a chicken
+    PIXELS_PER_POINT_HORIZONTAL: int = struct.field(pytree_node=False, default_factory=lambda: 3) # Values to calculate how many points an Edge is worth based on how long it is
+    PIXELS_PER_POINT_VERTICAL: int = struct.field(pytree_node=False, default_factory=lambda: 30) # Each vertical edge is worth 1 point, since they are 30 pixels long
+    BONUS_POINTS_PER_RECTANGLE: int = struct.field(pytree_node=False, default_factory=lambda: 48) # Bonus points for completing a rectangle
+    BONUS_POINTS_PER_CHICKEN: int = struct.field(pytree_node=False, default_factory=lambda: 99) # Bonus points for catching a chicken
 
     # Player
-    PLAYER_SIZE: tuple[int, int] = (7, 7)  # Object sizes (width, height)
-    PLAYER_SPRITE_OFFSET: tuple[int, int] = (-1, 0) # Offset for the player sprite in relation to the position in the code (because the top left corner of the player sprite is of the path to the left)
-    INITIAL_PLAYER_POSITION: chex.Array = chosen_maze.INITIAL_PLAYER_POSITION
-    INITIAL_PLAYER_DIRECTION: chex.Array = UP
-    PLAYER_STARTING_PATH = chosen_maze.PLAYER_STARTING_PATH
+    PLAYER_SIZE: tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (7, 7))  # Object sizes (width, height)
+    PLAYER_SPRITE_OFFSET: tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (-1, 0)) # Offset for the player sprite in relation to the position in the code (because the top left corner of the player sprite is of the path to the left)
+    INITIAL_PLAYER_POSITION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: chosen_maze.INITIAL_PLAYER_POSITION)
+    INITIAL_PLAYER_DIRECTION: int = struct.field(pytree_node=False, default_factory=lambda: 0)
+    PLAYER_STARTING_PATH: int = struct.field(pytree_node=False, default_factory=lambda: chosen_maze.PLAYER_STARTING_PATH)
 
     # Jumping
     # The jumping mechanics are like this to resemble the ALE version. 
     # There, until frame 477 the jump lasts 30 frames, then it increases and after frame 508 the jumps last 70 frames. 
     # The jump frequency is used to mirror that pressing jump only works every x frames. This increases once at frame 508.
-    MAX_JUMPS: int = 4  # Maximum number of jumps the player can perform per life
-    INITIAL_JUMP_FREQUENCY: int = 2  # Initial jump frequency (frames)
-    JUMP_FREQUENCY: int = 5  # Jump frequency (frames)
-    INITIAL_JUMP_DURATION: int = 30  # Initial jump duration (frames)
-    JUMP_DURATION: int = 70  # Jump duration after the increase (frames)
-    START_JUMP_DURATION_INCREASE: int = 477  # Start of jump duration increase (frames)
-    END_JUMP_DURATION_INCREASE: int = 508  # End of jump duration increase (frames)
+    MAX_JUMPS: int = struct.field(pytree_node=False, default_factory=lambda: 4)  # Maximum number of jumps the player can perform per life
+    INITIAL_JUMP_FREQUENCY: int = struct.field(pytree_node=False, default_factory=lambda: 2)  # Initial jump frequency (frames)
+    JUMP_FREQUENCY: int = struct.field(pytree_node=False, default_factory=lambda: 5)  # Jump frequency (frames)
+    INITIAL_JUMP_DURATION: int = struct.field(pytree_node=False, default_factory=lambda: 30)  # Initial jump duration (frames)
+    JUMP_DURATION: int = struct.field(pytree_node=False, default_factory=lambda: 70)  # Jump duration after the increase (frames)
+    START_JUMP_DURATION_INCREASE: int = struct.field(pytree_node=False, default_factory=lambda: 477)  # Start of jump duration increase (frames)
+    END_JUMP_DURATION_INCREASE: int = struct.field(pytree_node=False, default_factory=lambda: 508)  # End of jump duration increase (frames)
 
     # Enemies
-    MAX_ENEMIES: int = chosen_maze.MAX_ENEMIES  # Maximum number of enemies on screen
-    START_ENEMIES: int = 5  # Number of enemies the lower levels have
-    INCREASE_ENEMY_NUMBER_LEVEL: int = 3 # Level at which to switch from START_ENEMIES to MAX_ENEMIES
-    ENEMY_SIZE: tuple[int, int] = (7, 7)  # Object sizes (width, height)
-    CHICKEN_SIZE: tuple[int, int] = (5, 7)  # Object sizes (width, height)
-    ENEMY_SPRITE_OFFSET: tuple[int, int] = (-1, 0) # Offset for the enemy sprite in relation to the position in the code (because the top left corner of the enemy sprite is of the path to the left)
-    INITIAL_ENEMY_POSITIONS: chex.Array = chosen_maze.INITIAL_ENEMY_POSITIONS
-    INITIAL_ENEMY_DIRECTIONS: chex.Array = jnp.array([RIGHT] * MAX_ENEMIES)  # All enemies start moving right
+    MAX_ENEMIES: int = struct.field(pytree_node=False, default_factory=lambda: chosen_maze.MAX_ENEMIES)  # Maximum number of enemies on screen
+    START_ENEMIES: int = struct.field(pytree_node=False, default_factory=lambda: 5)  # Number of enemies the lower levels have
+    INCREASE_ENEMY_NUMBER_LEVEL: int = struct.field(pytree_node=False, default_factory=lambda: 3) # Level at which to switch from START_ENEMIES to MAX_ENEMIES
+    ENEMY_SIZE: tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (7, 7))  # Object sizes (width, height)
+    CHICKEN_SIZE: tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (5, 7))  # Object sizes (width, height)
+    ENEMY_SPRITE_OFFSET: tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (-1, 0)) # Offset for the enemy sprite in relation to the position in the code (because the top left corner of the enemy sprite is of the path to the left)
+    INITIAL_ENEMY_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: chosen_maze.INITIAL_ENEMY_POSITIONS)
+    INITIAL_ENEMY_DIRECTIONS: chex.Array = struct.field(pytree_node=False, default=None)  # All enemies start moving right
     # Enemy Types
-    SHADOW: int = 0 
-    WARRIOR: int = 1  
-    PIG: int = 2
-    CHICKEN: int = 3
-    INVALID_ENEMY: int = -1
+    SHADOW: int = struct.field(pytree_node=False, default_factory=lambda: 0)
+    WARRIOR: int = struct.field(pytree_node=False, default_factory=lambda: 1)
+    PIG: int = struct.field(pytree_node=False, default_factory=lambda: 2)
+    CHICKEN: int = struct.field(pytree_node=False, default_factory=lambda: 3)
+    INVALID_ENEMY: int = struct.field(pytree_node=False, default_factory=lambda: -1)
 
     # Path Structure
-    PATH_CORNERS: chex.Array = chosen_maze.PATH_CORNERS
-    HORIZONTAL_PATH_EDGES: chex.Array = chosen_maze.HORIZONTAL_PATH_EDGES
-    VERTICAL_PATH_EDGES: chex.Array = chosen_maze.VERTICAL_PATH_EDGES
-    PATH_EDGES: chex.Array = chosen_maze.PATH_EDGES
-    RECTANGLES: chex.Array = chosen_maze.RECTANGLES
-    RECTANGLE_BOUNDS: chex.Array = chosen_maze.RECTANGLE_BOUNDS
-    CORNER_RECTANGLES: chex.Array = chosen_maze.CORNER_RECTANGLES
-    SHORT_PATHS: chex.Array = chosen_maze.SHORT_PATHS # Array of [corner_index, corner_index, edge_index] Short paths are paths between corners that are directly next to each other. These are marked as walked on once both it's corners have been walked on, even if one hasn't walked between them. 
+    PATH_CORNERS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: chosen_maze.PATH_CORNERS)
+    HORIZONTAL_PATH_EDGES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: chosen_maze.HORIZONTAL_PATH_EDGES)
+    VERTICAL_PATH_EDGES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: chosen_maze.VERTICAL_PATH_EDGES)
+    PATH_EDGES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: chosen_maze.PATH_EDGES)
+    RECTANGLES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: chosen_maze.RECTANGLES)
+    RECTANGLE_BOUNDS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: chosen_maze.RECTANGLE_BOUNDS)
+    CORNER_RECTANGLES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: chosen_maze.CORNER_RECTANGLES)
+    SHORT_PATHS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: chosen_maze.SHORT_PATHS) # Array of [corner_index, corner_index, edge_index] Short paths are paths between corners that are directly next to each other. These are marked as walked on once both it's corners have been walked on, even if one hasn't walked between them.
 
     # Precomputed Constants
     # Path/Rendering
-    PATH_MASK, RENDERING_PATH_MASK = generate_path_mask(WIDTH, HEIGHT, PATH_THICKNESS_HORIZONTAL, PATH_THICKNESS_VERTICAL, HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES, PATH_CORNERS, jnp.full((HORIZONTAL_PATH_EDGES.shape[0],), True), jnp.full((VERTICAL_PATH_EDGES.shape[0],), True), jnp.full((PATH_CORNERS.shape[0],), True))  # Path mask are the single lines which restrict the movement, while rendering path mask includes the width of the paths for rendering
-    PATH_PATTERN_BROWN, PATH_PATTERN_GREEN, WALKED_ON_PATTERN = generate_path_pattern(WIDTH, HEIGHT, PATH_COLOR_BROWN, PATH_COLOR_GREEN, WALKED_ON_COLOR)
-    PATH_SPRITE_BROWN: chex.Array = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, PATH_PATTERN_BROWN, jnp.full((HEIGHT, WIDTH, 4), 0, dtype=jnp.uint8))
-    PATH_SPRITE_GREEN: chex.Array = jnp.where(RENDERING_PATH_MASK[:, :, None] == 1, PATH_PATTERN_GREEN, jnp.full((HEIGHT, WIDTH, 4), 0, dtype=jnp.uint8))
+    PATH_MASK: chex.Array = struct.field(pytree_node=False, default=None)
+    RENDERING_PATH_MASK: chex.Array = struct.field(pytree_node=False, default=None)
+    PATH_PATTERN_BROWN: chex.Array = struct.field(pytree_node=False, default=None)
+    PATH_PATTERN_GREEN: chex.Array = struct.field(pytree_node=False, default=None)
+    WALKED_ON_PATTERN: chex.Array = struct.field(pytree_node=False, default=None)
+    PATH_SPRITE_BROWN: chex.Array = struct.field(pytree_node=False, default=None)
+    PATH_SPRITE_GREEN: chex.Array = struct.field(pytree_node=False, default=None)
+
+    def compute_derived(self):
+        path_mask, rendering_path_mask = generate_path_mask(
+            self.WIDTH,
+            self.HEIGHT,
+            self.PATH_THICKNESS_HORIZONTAL,
+            self.PATH_THICKNESS_VERTICAL,
+            self.HORIZONTAL_PATH_EDGES,
+            self.VERTICAL_PATH_EDGES,
+            self.PATH_CORNERS,
+            jnp.full((self.HORIZONTAL_PATH_EDGES.shape[0],), True),
+            jnp.full((self.VERTICAL_PATH_EDGES.shape[0],), True),
+            jnp.full((self.PATH_CORNERS.shape[0],), True),
+        )
+        path_pattern_brown, path_pattern_green, walked_on_pattern = generate_path_pattern(
+            self.WIDTH,
+            self.HEIGHT,
+            self.PATH_COLOR_BROWN,
+            self.PATH_COLOR_GREEN,
+            self.WALKED_ON_COLOR,
+        )
+        return {
+            "INITIAL_ENEMY_DIRECTIONS": jnp.array([self.RIGHT] * self.MAX_ENEMIES),
+            "PATH_MASK": path_mask,
+            "RENDERING_PATH_MASK": rendering_path_mask,
+            "PATH_PATTERN_BROWN": path_pattern_brown,
+            "PATH_PATTERN_GREEN": path_pattern_green,
+            "WALKED_ON_PATTERN": walked_on_pattern,
+            "PATH_SPRITE_BROWN": jnp.where(rendering_path_mask[:, :, None] == 1, path_pattern_brown, jnp.full((self.HEIGHT, self.WIDTH, 4), 0, dtype=jnp.uint8)),
+            "PATH_SPRITE_GREEN": jnp.where(rendering_path_mask[:, :, None] == 1, path_pattern_green, jnp.full((self.HEIGHT, self.WIDTH, 4), 0, dtype=jnp.uint8)),
+        }
     
 # immutable state container
-class AmidarState(NamedTuple):
+@struct.dataclass
+class AmidarState:
     frame_counter: chex.Array
     random_key: chex.Array  # Random key for JAX operations
     freeze_counter: chex.Array  # Counter for freezing the game
@@ -293,29 +330,20 @@ class AmidarState(NamedTuple):
     jump_counter: chex.Array
     times_jumped: chex.Array
 
-class EntityPosition(NamedTuple):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    active: jnp.ndarray
-
-class AmidarObservation(NamedTuple):
-    player_gorilla: EntityPosition
-    player_paint_roller: EntityPosition
-    shadows: chex.Array
-    warriors: chex.Array
-    pigs: chex.Array
-    chickens: chex.Array
+@struct.dataclass
+class AmidarObservation:
+    player_gorilla: ObjectObservation
+    player_paint_roller: ObjectObservation
+    enemy: ObjectObservation
     lives: chex.Array
-    paths: chex.Array
-    walked_on_paths: chex.Array
-    completed_rectangles: chex.Array
+    paths: ObjectObservation
+    walked_on_paths: ObjectObservation
+    completed_rectangles: ObjectObservation
 
-class AmidarInfo(NamedTuple):
+@struct.dataclass
+class AmidarInfo:
     level: jnp.ndarray
     frame_counter: jnp.ndarray
-    all_rewards: chex.Array
 
 def get_player_speed(frame_counter: chex.Array) -> chex.Array:
     """
@@ -720,8 +748,9 @@ def activate_next_level(constants, level, lives, enemy_positions, enemy_directio
 
 
 class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, AmidarConstants]):
-    def __init__(self, constants: AmidarConstants = None, reward_funcs: list[callable]=None):
-        super().__init__()
+    def __init__(self, consts: AmidarConstants = None, constants: AmidarConstants = None, reward_funcs: list[callable]=None):
+        consts = consts or constants or AmidarConstants()
+        super().__init__(consts)
         self.frame_stack_size = 4
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
@@ -738,9 +767,9 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             Action.UPFIRE,
             Action.DOWNFIRE,
         ]
-        self.constants = constants or AmidarConstants()
+        self.constants = consts
         self.obs_size = 4 #TODO add as needed
-        self.renderer = AmidarRenderer(constants)
+        self.renderer = AmidarRenderer(consts)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AmidarState) -> bool:
@@ -751,18 +780,10 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
         return state.score - previous_state.score
     
     @partial(jax.jit, static_argnums=(0,))
-    def _get_all_rewards(self, previous_state: AmidarState, state: AmidarState) -> jnp.ndarray:
-        if self.reward_funcs is None:
-            return jnp.zeros(1)
-        rewards = jnp.array([reward_func(previous_state, state) for reward_func in self.reward_funcs])
-        return rewards
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: AmidarState, all_rewards: jnp.ndarray) -> AmidarInfo:
+    def _get_info(self, state: AmidarState) -> AmidarInfo:
         return AmidarInfo(
             level=state.level,
             frame_counter=state.frame_counter,
-            all_rewards=all_rewards,
         )
 
     def reset(self, key = jax.random.key(3)) -> Tuple[AmidarObservation, AmidarState]:
@@ -800,66 +821,31 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
         return initial_obs, state
     
 
-    def observation_space(self) -> spaces.Box:
+    def observation_space(self) -> spaces.Dict:
         """ 
         Returns the observation space for Amidar.
         The observation contains:
         - player_gorilla: PlayerEntity (x, y, width, height, active)
         - player_paint_roller: PlayerEntity (x, y, width, height, active)
-        - shadows: array of shape (MAX_ENEMIES, 5) with x,y,width,height,active for each shadow
-        - warriors: array of shape (MAX_ENEMIES, 5) with x,y,width,height,active for each warrior
-        - pigs: array of shape (MAX_ENEMIES, 5) with x,y,width,height,active for each pig
-        - chickens: array of shape (MAX_ENEMIES, 5) with x,y,width,height,active for each chicken
+        - enemy: ObjectObservation group of all enemies, with enemy type encoded in visual_id and state
         - lives: int (0-MAX_LIVES)
         - paths: array of shape (num_edges, 5) with x,y,width,height,active for each path
         - walked_on_paths: array of shape (num_edges, 5) with x,y,width,height,active for each path (active when walked on)
         - completed_rectangles: array of shape (num_rectangles, 5) with x,y,width,height,active for each rectangle (active when completed)
         """
-        HEIGHT = self.constants.HEIGHT
-        WIDTH = self.constants.WIDTH
-        MAX_ENEMIES = self.constants.MAX_ENEMIES
-        path_shape = self.constants.PATH_EDGES.shape[0]
-
-        def enemy_box(enemy_size_wh):
-            # per-entity [x, y, w, h, active] bounds
-            hi_vec = jnp.array([WIDTH, HEIGHT, enemy_size_wh[0], enemy_size_wh[1], 1], dtype=jnp.int32)
-            lo_vec = jnp.zeros_like(hi_vec)
-            high = jnp.broadcast_to(hi_vec, (MAX_ENEMIES, 5))
-            low = jnp.broadcast_to(lo_vec, (MAX_ENEMIES, 5))
-            return spaces.Box(low=low, high=high, shape=(MAX_ENEMIES, 5), dtype=jnp.int32)
-
-        def wha_box(n):
-            # generic [x, y, w, h, active] for paths/rectangles
-            hi_vec = jnp.array([WIDTH, HEIGHT, WIDTH, HEIGHT, 1], dtype=jnp.int32)
-            lo_vec = jnp.zeros_like(hi_vec)
-            high = jnp.broadcast_to(hi_vec, (n, 5))
-            low = jnp.broadcast_to(lo_vec, (n, 5))
-            return spaces.Box(low=low, high=high, shape=(n, 5), dtype=jnp.int32)
-
+        screen_size = (self.constants.HEIGHT, self.constants.WIDTH)
+        max_enemies = self.constants.MAX_ENEMIES
+        path_count = self.constants.PATH_EDGES.shape[0]
+        rectangle_count = self.constants.RECTANGLES.shape[0]
 
         return spaces.Dict({
-            "player_gorilla": spaces.Dict({
-                "x": spaces.Box(low=0, high=WIDTH, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=HEIGHT, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=WIDTH, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=HEIGHT, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "player_paint_roller": spaces.Dict({
-                "x": spaces.Box(low=0, high=WIDTH, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=HEIGHT, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=WIDTH, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=HEIGHT, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "shadows": enemy_box(self.constants.ENEMY_SIZE),
-            "warriors": enemy_box(self.constants.ENEMY_SIZE),
-            "pigs": enemy_box(self.constants.ENEMY_SIZE),
-            "chickens": enemy_box(self.constants.CHICKEN_SIZE),
+            "player_gorilla": spaces.get_object_space(n=None, screen_size=screen_size),
+            "player_paint_roller": spaces.get_object_space(n=None, screen_size=screen_size),
+            "enemy": spaces.get_object_space(n=max_enemies, screen_size=screen_size),
             "lives": spaces.Box(low=0, high=self.constants.MAX_LIVES, shape=(), dtype=jnp.int32),
-            "paths": wha_box(path_shape),
-            "walked_on_paths": wha_box(path_shape),
-            "completed_rectangles": wha_box(self.constants.RECTANGLES.shape[0]),
+            "paths": spaces.get_object_space(n=path_count, screen_size=screen_size),
+            "walked_on_paths": spaces.get_object_space(n=path_count, screen_size=screen_size),
+            "completed_rectangles": spaces.get_object_space(n=rectangle_count, screen_size=screen_size),
         })
 
     def state_space(self) -> spaces.Box:
@@ -867,24 +853,6 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
-    
-    def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
-        return jnp.concatenate([jnp.array([entity.x]), jnp.array([entity.y]), jnp.array([entity.width]), jnp.array([entity.height]), jnp.array([entity.active])])
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: AmidarObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            self.flatten_entity_position(obs.player_gorilla),
-            self.flatten_entity_position(obs.player_paint_roller),
-            obs.shadows.flatten(),
-            obs.warriors.flatten(),
-            obs.pigs.flatten(),
-            obs.chickens.flatten(),
-            obs.lives.flatten(),
-            obs.paths.flatten(),
-            obs.walked_on_paths.flatten(),
-            obs.completed_rectangles.flatten(),
-        ])
 
     def image_space(self) -> spaces.Box:
         """
@@ -966,9 +934,10 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             return new_state
         
         def freeze_game():
-            new_state = state._replace(freeze_counter=state.freeze_counter - 1) # Decrement the freeze counter
-            new_state = new_state._replace(frame_counter=state.frame_counter + 1)  # Update the frame counter to ensure it changes with each step
-            return new_state
+            return state.replace(
+                freeze_counter=state.freeze_counter - 1,
+                frame_counter=state.frame_counter + 1,
+            )
         
         # Check if the game is frozen
         is_frozen = state.freeze_counter > 0
@@ -981,60 +950,55 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
 
         done = self._get_done(new_state)
         env_reward = self._get_env_reward(previous_state, new_state)
-        all_rewards = self._get_all_rewards(previous_state, new_state)
-        info = self._get_info(new_state, all_rewards)
+        info = self._get_info(new_state)
 
         return observation, new_state, env_reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: AmidarState):
         # create player
-        player_gorilla = EntityPosition(
+        player_gorilla = ObjectObservation.create(
             x=state.player_x,
             y=state.player_y,
             width=jnp.array(self.constants.PLAYER_SIZE[0]),
             height=jnp.array(self.constants.PLAYER_SIZE[1]),
-            active=state.level % 2 == 1,
+            active=(state.level % 2 == 1).astype(jnp.int32),
         )
 
-        player_paint_roller = EntityPosition(
+        player_paint_roller = ObjectObservation.create(
             x=state.player_x,
             y=state.player_y,
             width=jnp.array(self.constants.PLAYER_SIZE[0]),
             height=jnp.array(self.constants.PLAYER_SIZE[1]),
-            active=state.level % 2 == 0,
+            active=(state.level % 2 == 0).astype(jnp.int32),
         )
-
-        # Define a function to convert enemy positions to entity format
-        def convert_to_entity(pos, size, active):
-            return jnp.array([
-                pos[0],  # x position
-                pos[1],  # y position
-                size[0],  # width
-                size[1],  # height
-                active,  # active flag
-            ])
 
         # Apply conversion to each type of entity using vmap
 
         true = jnp.full_like(state.enemy_types, True)
         false = jnp.full_like(state.enemy_types, False)
 
-        # shadows
-        is_shadow = jnp.where(state.enemy_types == self.constants.SHADOW, true, false)
-        shadows = jax.vmap(convert_to_entity, in_axes=(0, None, 0))(state.enemy_positions, self.constants.ENEMY_SIZE, is_shadow)
+        enemy_x = state.enemy_positions[:, 0]
+        enemy_y = state.enemy_positions[:, 1]
+        default_enemy_w = jnp.full((self.constants.MAX_ENEMIES,), self.constants.ENEMY_SIZE[0], dtype=jnp.int32)
+        default_enemy_h = jnp.full((self.constants.MAX_ENEMIES,), self.constants.ENEMY_SIZE[1], dtype=jnp.int32)
+        enemy_w = jnp.where(state.enemy_types == self.constants.CHICKEN, self.constants.CHICKEN_SIZE[0], default_enemy_w)
+        enemy_h = jnp.where(state.enemy_types == self.constants.CHICKEN, self.constants.CHICKEN_SIZE[1], default_enemy_h)
 
-        # warriors
-        is_warrior = jnp.where(state.enemy_types == self.constants.WARRIOR, true, false)
-        warriors = jax.vmap(convert_to_entity, in_axes=(0, None, 0))(state.enemy_positions, self.constants.ENEMY_SIZE, is_warrior)
-        
-        # pigs
-        is_pig = jnp.where(state.enemy_types == self.constants.PIG, true, false)
-        pigs = jax.vmap(convert_to_entity, in_axes=(0, None, 0))(state.enemy_positions, self.constants.ENEMY_SIZE, is_pig)
+        active_enemy = jnp.where(state.enemy_types == self.constants.INVALID_ENEMY, false, true).astype(jnp.int32)
 
-        # chickens
-        is_chicken = jnp.where(state.enemy_types == self.constants.CHICKEN, true, false)
-        chickens = jax.vmap(convert_to_entity, in_axes=(0, None, 0))(state.enemy_positions, self.constants.CHICKEN_SIZE, is_chicken)
+        enemy_visual_id = jnp.where(state.enemy_types == self.constants.INVALID_ENEMY, 0, state.enemy_types + 1).astype(jnp.int32)
+        enemy_state = jnp.where(state.enemy_types == self.constants.INVALID_ENEMY, 0, state.enemy_types + 1).astype(jnp.int32)
+
+        enemy = ObjectObservation.create(
+            x=enemy_x,
+            y=enemy_y,
+            width=enemy_w,
+            height=enemy_h,
+            active=active_enemy,
+            visual_id=enemy_visual_id,
+            state=enemy_state,
+        )
 
         def make_path_edge_entity_horizontal(edge):
             start = edge[0]
@@ -1061,8 +1025,8 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
         horizontal_edges = jax.vmap(make_path_edge_entity_horizontal, in_axes=0)(self.constants.HORIZONTAL_PATH_EDGES)
         vertical_edges = jax.vmap(make_path_edge_entity_vertical, in_axes=0)(self.constants.VERTICAL_PATH_EDGES)
 
-        paths = jnp.concatenate([horizontal_edges, vertical_edges], axis=0)
-        walked_on_paths = paths.at[:, 4].set(state.walked_on_paths.astype(paths.dtype))
+        paths_arr = jnp.concatenate([horizontal_edges, vertical_edges], axis=0)
+        walked_on_paths_arr = paths_arr.at[:, 4].set(state.walked_on_paths.astype(paths_arr.dtype))
 
         def make_completed_rectangle_entity(rectangle_bound, completed):
             return jnp.array([
@@ -1073,15 +1037,34 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
                 completed,  # active flag
             ])
 
-        completed_rectangles = jax.vmap(make_completed_rectangle_entity, in_axes=(0, 0))(self.constants.RECTANGLE_BOUNDS, state.completed_rectangles)
+        completed_rectangles_arr = jax.vmap(make_completed_rectangle_entity, in_axes=(0, 0))(self.constants.RECTANGLE_BOUNDS, state.completed_rectangles)
+
+        paths = ObjectObservation.create(
+            x=paths_arr[:, 0],
+            y=paths_arr[:, 1],
+            width=paths_arr[:, 2],
+            height=paths_arr[:, 3],
+            active=paths_arr[:, 4],
+        )
+        walked_on_paths = ObjectObservation.create(
+            x=walked_on_paths_arr[:, 0],
+            y=walked_on_paths_arr[:, 1],
+            width=walked_on_paths_arr[:, 2],
+            height=walked_on_paths_arr[:, 3],
+            active=walked_on_paths_arr[:, 4],
+        )
+        completed_rectangles = ObjectObservation.create(
+            x=completed_rectangles_arr[:, 0],
+            y=completed_rectangles_arr[:, 1],
+            width=completed_rectangles_arr[:, 2],
+            height=completed_rectangles_arr[:, 3],
+            active=completed_rectangles_arr[:, 4],
+        )
 
         return AmidarObservation(
             player_gorilla=player_gorilla,
             player_paint_roller=player_paint_roller,
-            shadows=shadows,
-            warriors=warriors,
-            pigs=pigs,
-            chickens=chickens,
+            enemy=enemy,
             lives=state.lives,
             paths=paths,
             walked_on_paths=walked_on_paths,
@@ -1092,64 +1075,62 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
     def get_action_space(self) -> jnp.ndarray:
         return jnp.array(self.action_set)
 
-def load_sprites():
-    """Load all sprites required for Amidar rendering."""
-    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-    # Load sprites
-
-    DIGITS = aj.load_and_pad_digits(os.path.join(MODULE_DIR, "./sprites/amidar/score/{}.npy"))
-
-    player_ghost = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/player_ghost.npy"))
-
-    player_paint_roller = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/player_paint_roller.npy"))
-
-    bg = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/background.npy"), transpose=True)
-
-    life = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/life.npy"))
-
-    warrior = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/enemy/warrior.npy"))
-
-    pig = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/enemy/pig.npy"))
-
-    chicken = aj.loadFrame(os.path.join(MODULE_DIR, "sprites/amidar/enemy/chicken.npy"))
-
-    # Convert all sprites to the expected format (add frame dimension)
-    SPRITE_BG = jnp.expand_dims(bg, axis=0)
-    SPRITE_LIFE = jnp.expand_dims(life, axis=0)
-    SPRITE_PLAYER_GHOST = jnp.expand_dims(player_ghost, axis=0)
-    SPRITE_PLAYER_PAINT_ROLLER = jnp.expand_dims(player_paint_roller, axis=0)
-    SPRITE_WARRIOR = jnp.expand_dims(warrior, axis=0)
-    SPRITE_PIG = jnp.expand_dims(pig, axis=0)
-    SPRITE_CHICKEN = jnp.expand_dims(chicken, axis=0)
-
-    return (
-        SPRITE_BG,
-        DIGITS,
-        SPRITE_LIFE,
-        SPRITE_PLAYER_GHOST,
-        SPRITE_PLAYER_PAINT_ROLLER,
-        SPRITE_WARRIOR,
-        SPRITE_PIG,
-        SPRITE_CHICKEN,
-    )
-
-
 class AmidarRenderer(JAXGameRenderer):
     """JAX-based Amidar game renderer, optimized with JIT compilation."""
 
-    def __init__(self, constants: AmidarConstants = None):
-        self.constants = constants or AmidarConstants()
+    def __init__(self, consts: AmidarConstants = None, config: render_utils.RendererConfig = None):
+        self.constants = consts or AmidarConstants()
+        super().__init__(self.constants)
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.constants.HEIGHT, self.constants.WIDTH),
+                channels=3,
+                downscale=None,
+            )
+        else:
+            self.config = config
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        sprite_dir = os.path.join(render_utils.get_base_sprite_dir(), "amidar")
+        warrior_rgba = self.jr.loadFrame(os.path.join(sprite_dir, "enemy/warrior.npy"))
+        shadow_rgba = jnp.broadcast_to(jnp.array([0, 0, 0, 255], dtype=jnp.uint8), warrior_rgba.shape).at[5:].set(0)
+
+        asset_config = [
+            {"name": "background", "type": "background", "data": self.jr.loadFrame(os.path.join(sprite_dir, "background.npy"), transpose=True)},
+            {"name": "player_ghost", "type": "single", "file": "player_ghost.npy"},
+            {"name": "player_paint_roller", "type": "single", "file": "player_paint_roller.npy"},
+            {"name": "life", "type": "single", "file": "life.npy"},
+            {"name": "warrior", "type": "single", "file": "enemy/warrior.npy"},
+            {"name": "pig", "type": "single", "file": "enemy/pig.npy"},
+            {"name": "chicken", "type": "single", "file": "enemy/chicken.npy"},
+            {"name": "shadow", "type": "procedural", "data": shadow_rgba},
+            {"name": "digits", "type": "digits", "pattern": "score/{}.npy"},
+            {"name": "path_brown", "type": "procedural", "data": self.constants.PATH_SPRITE_BROWN},
+            {"name": "path_green", "type": "procedural", "data": self.constants.PATH_SPRITE_GREEN},
+            {"name": "walked_pattern", "type": "procedural", "data": self.constants.WALKED_ON_PATTERN},
+        ]
+
         (
-            self.SPRITE_BG,
-            self.DIGITS,
-            self.SPRITE_LIFE,
-            self.SPRITE_PLAYER_GHOST,
-            self.SPRITE_PLAYER_PAINT_ROLLER,
-            self.SPRITE_WARRIOR,
-            self.SPRITE_PIG,
-            self.SPRITE_CHICKEN,
-        ) = load_sprites()
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS,
+        ) = self.jr.load_and_setup_assets(asset_config, sprite_dir)
+
+        target_h, target_w = self.config.game_dimensions
+        if self.BACKGROUND.shape != (target_h, target_w):
+            bg_fill = self.BACKGROUND[0, 0]
+            self.BACKGROUND = jnp.full((target_h, target_w), bg_fill, dtype=self.BACKGROUND.dtype)
+
+        self.EMPTY_ENEMY_MASK = jnp.full_like(self.SHAPE_MASKS["warrior"], self.jr.TRANSPARENT_ID)
+        self.ENEMY_MASKS = jnp.stack([
+            self.SHAPE_MASKS["shadow"],
+            self.SHAPE_MASKS["warrior"],
+            self.SHAPE_MASKS["pig"],
+            self.SHAPE_MASKS["chicken"],
+            self.EMPTY_ENEMY_MASK,
+        ])
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
@@ -1162,29 +1143,20 @@ class AmidarRenderer(JAXGameRenderer):
         Returns:
             A JAX array representing the rendered frame.
         """
-        # Create empty raster with CORRECT orientation for atraJaxis framework
-        # Note: For pygame, the raster is expected to be (width, height, channels)
-        # where width corresponds to the horizontal dimension of the screen
+        object_raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        raster = jnp.zeros((self.constants.HEIGHT, self.constants.WIDTH, 3))
-        
         empty_mask = jnp.zeros((self.constants.WIDTH, self.constants.HEIGHT), dtype=jnp.uint8)
-        empty_raster = jnp.zeros_like(raster, dtype=jnp.uint8)
-
-        # Render background - (0, 0) is top-left corner
-        frame_bg = aj.get_sprite_frame(self.SPRITE_BG, 0)
-        raster = aj.render_at(raster, 0, 0, frame_bg)
 
         # Render paths
-        path_sprite = jax.lax.cond(state.level%2 == 1, lambda: self.constants.PATH_SPRITE_BROWN, lambda: self.constants.PATH_SPRITE_GREEN)
-        raster = aj.render_at(raster, 0, 0, path_sprite)
+        path_mask = jax.lax.cond(state.level % 2 == 1, lambda: self.SHAPE_MASKS["path_brown"], lambda: self.SHAPE_MASKS["path_green"])
+        object_raster = self.jr.render_at(object_raster, 0, 0, path_mask)
 
         # Render walked on paths
         walked_on_paths_horizontal = state.walked_on_paths[0:jnp.shape(self.constants.HORIZONTAL_PATH_EDGES)[0]]
         walked_on_paths_vertical = state.walked_on_paths[jnp.shape(self.constants.HORIZONTAL_PATH_EDGES)[0]:]
         _, walked_on_rendering_mask = generate_path_mask(self.constants.WIDTH, self.constants.HEIGHT, self.constants.PATH_THICKNESS_HORIZONTAL, self.constants.PATH_THICKNESS_VERTICAL, self.constants.HORIZONTAL_PATH_EDGES, self.constants.VERTICAL_PATH_EDGES, self.constants.PATH_CORNERS, horizontal_cond=walked_on_paths_horizontal, vertical_cond=walked_on_paths_vertical, corner_cond=state.walked_on_corners)
-        walked_on_paths_sprite = jnp.where(walked_on_rendering_mask[:, :, None] == 1, self.constants.WALKED_ON_PATTERN, jnp.full((self.constants.HEIGHT, self.constants.WIDTH, 4), 0, dtype=jnp.uint8))
-        raster = aj.render_at(raster, 0, 0, walked_on_paths_sprite)
+        walked_on_paths_mask = jnp.where(walked_on_rendering_mask == 1, self.SHAPE_MASKS["walked_pattern"], self.jr.TRANSPARENT_ID)
+        object_raster = self.jr.render_at(object_raster, 0, 0, walked_on_paths_mask)
 
         # Render completed rectangles
         # Still computed in the (HEIGHT, WIDTH) format and transposed later since the code uses (x, y) coordinates
@@ -1202,191 +1174,56 @@ class AmidarRenderer(JAXGameRenderer):
         completed_rectangles_mask = jnp.any(rectangle_masks, axis=0).astype(jnp.uint8)
         completed_rectangles_mask = jnp.transpose(completed_rectangles_mask, (1, 0))  # Transpose to match the HWC format for rendering
 
-        completed_rectangles_sprite = jnp.where(completed_rectangles_mask[:, :, None] == 1, self.constants.WALKED_ON_PATTERN, jnp.full((self.constants.HEIGHT, self.constants.WIDTH, 4), 0, dtype=jnp.uint8))
-        raster = aj.render_at(raster, 0, 0, completed_rectangles_sprite)
+        completed_rectangles_pattern = jnp.where(completed_rectangles_mask == 1, self.SHAPE_MASKS["walked_pattern"], self.jr.TRANSPARENT_ID)
+        object_raster = self.jr.render_at(object_raster, 0, 0, completed_rectangles_pattern)
 
         # Render score
         max_digits = 8  # Maximum number of digits to render
-        score_array = aj.int_to_digits(state.score, max_digits=max_digits)
-        # convert the score to a list of digits
-        number_of_digits = (jnp.log10(state.score)+1).astype(jnp.int32)
-        number_of_digits = jnp.maximum(number_of_digits, 1)  # Ensure at least one digit is rendered
-
-        def get_digit_sprite(i):
-            
-            def get_digit_sprite():
-                digit_index_in_array = 8 - number_of_digits + i
-                digit_value = score_array[digit_index_in_array]
-                sprite_to_render = self.DIGITS[digit_value] # Gets (W, H, C) sprite
-                return sprite_to_render
-
-            # if there is no digit, return an empty sprite
-            sprite_to_render = jax.lax.cond(i >= number_of_digits, lambda: jnp.zeros((7, 7, 4), dtype=jnp.uint8), get_digit_sprite)
-            return sprite_to_render
-
-        digit_sprites = jax.vmap(get_digit_sprite)(jnp.arange(max_digits))  # Render all digits in parallel
-        x_positions = jnp.arange(0, max_digits * 8, step=8) + 105-(number_of_digits * 8)  # Calculate x positions for each digit
-        digit_rasters = jax.vmap(aj.render_at, in_axes=(None, 0, None, 0))(empty_raster, x_positions, 176, digit_sprites)
-        digits_raster = jnp.sum(digit_rasters, axis=0)  # Combine all digit rasters into one, adding works because irrelevant values are zero
-        raster = jnp.add(raster, digits_raster)  # Combine the raster with the digits raster
+        score_array = self.jr.int_to_digits(state.score, max_digits=max_digits)
+        number_of_digits = jnp.where(state.score > 0, jnp.floor(jnp.log10(state.score)).astype(jnp.int32) + 1, 1)
+        score_start_idx = max_digits - number_of_digits
+        score_x = 105 - (number_of_digits * 8)
+        object_raster = self.jr.render_label_selective(
+            object_raster,
+            score_x,
+            176,
+            score_array,
+            self.SHAPE_MASKS["digits"],
+            score_start_idx,
+            number_of_digits,
+            spacing=8,
+            max_digits_to_render=8,
+        )
 
         # Render lives
         max_lives_rendered = 3
         lives = state.lives
-        life_sprite = aj.get_sprite_frame(self.SPRITE_LIFE, 0)  # Get the life sprite frame
-        life_sprites = jax.vmap(lambda i: jax.lax.cond(i < lives, lambda: life_sprite, lambda: jnp.zeros_like(life_sprite, dtype=jnp.uint8)))(jnp.arange(max_lives_rendered))
-        x_positions = 148 - jnp.arange(0, max_lives_rendered * 16, step=16)  # Calculate x positions for each life
-        life_rasters = jax.vmap(aj.render_at, in_axes=(None, 0, None, 0))(empty_raster, x_positions, 175, life_sprites)
-        lives_raster = jnp.sum(life_rasters, axis=0)  # Combine all life rasters into one
-        raster = jnp.add(raster, lives_raster)  # Combine the raster with the lives raster
+        life_mask = self.SHAPE_MASKS["life"]
+        x_positions = 148 - jnp.arange(0, max_lives_rendered * 16, step=16)
+
+        def render_life(i, raster_in):
+            return jax.lax.cond(
+                i < lives,
+                lambda r: self.jr.render_at(r, x_positions[i], 175, life_mask),
+                lambda r: r,
+                raster_in,
+            )
+
+        object_raster = jax.lax.fori_loop(0, max_lives_rendered, render_life, object_raster)
 
         # Render enemies
-        frame_warrior = aj.get_sprite_frame(self.SPRITE_WARRIOR, 0)
-        frame_pig = aj.get_sprite_frame(self.SPRITE_PIG, 0)
-        frame_chicken = aj.get_sprite_frame(self.SPRITE_CHICKEN, 0)
-        frame_shadow = jnp.broadcast_to(jnp.array([0, 0, 0, 255]), frame_warrior.shape).at[5:].set(0).at[:, :3].set(0)
-        # jax.debug.print("w: {}, c: {}", frame_warrior.shape, frame_chicken.shape)
-        frames_enemies = jnp.array([frame_shadow, frame_warrior, frame_pig, frame_chicken, jnp.zeros_like(frame_warrior)])
-
         # Use scan to accumulate the raster updates
-        def scan_render_enemy(raster, enemy_data):
+        def scan_render_enemy(raster_in, enemy_data):
             enemy_pos, enemy_type = enemy_data
-            frame_enemy = frames_enemies[enemy_type]  # Get the correct frame for the enemy type
-            new_raster = aj.render_at(raster, enemy_pos[0]+self.constants.ENEMY_SPRITE_OFFSET[0], enemy_pos[1]+self.constants.ENEMY_SPRITE_OFFSET[1], frame_enemy)
+            safe_enemy_type = jnp.where(enemy_type == self.constants.INVALID_ENEMY, 4, enemy_type)
+            enemy_mask = self.ENEMY_MASKS[safe_enemy_type]
+            new_raster = self.jr.render_at(raster_in, enemy_pos[0]+self.constants.ENEMY_SPRITE_OFFSET[0], enemy_pos[1]+self.constants.ENEMY_SPRITE_OFFSET[1], enemy_mask)
             return new_raster, None
 
-        raster, _ = jax.lax.scan(scan_render_enemy, raster, (state.enemy_positions, state.enemy_types))
+        object_raster, _ = jax.lax.scan(scan_render_enemy, object_raster, (state.enemy_positions, state.enemy_types))
         
         # Render player
-        sprite_player = jax.lax.cond(state.level%2 == 1, lambda: self.SPRITE_PLAYER_GHOST, lambda: self.SPRITE_PLAYER_PAINT_ROLLER)
-        frame_player = aj.get_sprite_frame(sprite_player, 0)
-        raster = aj.render_at(raster, state.player_x+self.constants.PLAYER_SPRITE_OFFSET[0], state.player_y+self.constants.PLAYER_SPRITE_OFFSET[1], frame_player)
+        player_mask = jax.lax.cond(state.level % 2 == 1, lambda: self.SHAPE_MASKS["player_ghost"], lambda: self.SHAPE_MASKS["player_paint_roller"])
+        object_raster = self.jr.render_at(object_raster, state.player_x+self.constants.PLAYER_SPRITE_OFFSET[0], state.player_y+self.constants.PLAYER_SPRITE_OFFSET[1], player_mask)
 
-        ###### For DEBUGGING #######
-        # loops are fine for debugging 
-
-        # # Render path edges
-        # def render_path(i, raster):
-        #     path = jnp.array(self.constants.PATH_EDGES[i])
-        #     raster = render_line(raster, path, (255, 0, 0))
-        #     return raster
-        # raster = jax.lax.fori_loop(0, jnp.shape(self.constants.PATH_EDGES)[0], render_path, raster)
-
-        # # Render path mask
-        # transposed_path_mask = jnp.transpose(self.constants.PATH_MASK, (1, 0))  # Transpose to match the HWC format for rendering
-        # all_white = jnp.full_like(raster, 255, dtype=jnp.uint8)
-        # raster = jnp.where(transposed_path_mask[:, :, None] == 1, all_white, raster)
-
-        # # Render rendering path mask
-        # all_white = jnp.full_like(raster, 255, dtype=jnp.uint8)
-        # raster = jnp.where(self.constants.RENDERING_PATH_MASK[:, :, None] == 1, all_white, raster)
-
-        # # Render corner rectangles
-        # edges_in_corner_rectangle = jnp.any(self.constants.RECTANGLES[self.constants.CORNER_RECTANGLES], axis=0)
-        # def render_corner_rectangle_edges(i, raster):
-        #     in_corner = edges_in_corner_rectangle[i] == 1   
-        #     raster = jax.lax.cond(
-        #         in_corner,
-        #         lambda raster: render_line(raster, self.constants.PATH_EDGES[i], (0, 255, 0)),  # Render in green if part of a corner rectangle
-        #         lambda raster: raster,  # Otherwise, do nothing
-        #         raster
-        #     )
-        #     return raster
-        # raster = jax.lax.fori_loop(0, jnp.shape(self.constants.PATH_EDGES)[0], render_corner_rectangle_edges, raster)
-
-
-        # # Render completed rectangles mask
-        # all_white = jnp.full_like(raster, 255, dtype=jnp.uint8)
-        # raster = jnp.where(completed_rectangles_mask[:, :, None] == 1, all_white, raster)
-
-        # # Render path pattern
-        # raster = aj.render_at(raster, 0, 0, self.constants.PATH_PATTERN)
-
-        # # Render walked on pattern
-        # raster = aj.render_at(raster, 0, 0, self.constants.WALKED_ON_PATTERN)
-
-        # # Render walked on paths
-        # def render_walked_paths(i, raster):
-        #     # Check if the path edge has been walked on
-        #     walked_on = state.walked_on_paths[i] == 1   
-            
-        #     raster = jax.lax.cond(
-        #         walked_on,
-        #         lambda raster: render_line(raster, self.constants.PATH_EDGES[i], (0, 255, 0)),  # Render in green if walked on
-        #         lambda raster: raster,  # Otherwise, do nothing
-        #         raster
-        #     )
-
-        #     return raster
-
-        # raster = jax.lax.fori_loop(0, jnp.shape(self.constants.PATH_EDGES)[0], render_walked_paths, raster)
-
-        return jnp.array(raster, dtype=jnp.uint8)  # Ensure the raster is returned as a JAX array with uint8 type
-
-@jax.jit
-def render_line(raster, coords, color):
-    """Renders a line on the raster from coords [[x1, y1], [x2, y2]] with the given color.
-    Coordinates are given as (w, h) i.e., (x, y), while raster is indexed as (h, w, c).
-
-    Args:
-        raster: JAX array of shape (Height, Width, Channels) for the target image.
-        coords: JAX array of shape (2, 2), where coords[0] = [x1, y1] and coords[1] = [x2, y2].
-        color: RGB or RGBA tuple/list/array for the line color.
-
-    Returns:
-        Updated raster with the line rendered.
-    """
-    color = jnp.asarray(color)
-    coords = jnp.asarray(coords, dtype=jnp.int32)
-
-    if color.shape[0] not in (3, 4):
-        raise ValueError("Color must be an RGB or RGBA array.")
-
-    # Match raster dtype and clamp channels to raster channels (use static Python int to avoid dynamic slice)
-    channels = min(color.shape[0], raster.shape[2])
-    color = color[:channels].astype(raster.dtype)
-
-    x1, y1 = coords[0]
-    x2, y2 = coords[1]
-
-    # Bresenham parameters
-    dx = jnp.abs(x2 - x1)
-    dy = jnp.abs(y2 - y1)
-    sx = jnp.where(x1 < x2, 1, -1)
-    sy = jnp.where(y1 < y2, 1, -1)
-    err = dx - dy
-
-    # Steps: cover longest axis
-    num_steps = jnp.maximum(dx, dy) + 1
-
-    raster_h, raster_w, _ = raster.shape
-
-    def loop_body(i, carry):
-        raster, x, y, err = carry
-
-        # Bounds check for (y, x) since raster is (h, w, c)
-        in_bounds = jnp.logical_and(
-            jnp.logical_and(0 <= x, x < raster_w),
-            jnp.logical_and(0 <= y, y < raster_h),
-        )
-
-        def set_pixel(r):
-            return r.at[y, x, :channels].set(color)
-
-        raster = jax.lax.cond(in_bounds, set_pixel, lambda r: r, operand=raster)
-
-        # Update Bresenham
-        e2 = 2 * err
-        err = jnp.where(e2 > -dy, err - dy, err)
-        x = jnp.where(e2 > -dy, x + sx, x)
-        err = jnp.where(e2 < dx, err + dx, err)
-        y = jnp.where(e2 < dx, y + sy, y)
-
-        return raster, x, y, err
-
-    raster, _, _, _ = jax.lax.fori_loop(0, num_steps, loop_body, (raster, x1, y1, err))
-
-    return raster
-
-if __name__ == "__main__":
-    print("please use the play script to run the game")
+        return self.jr.render_from_palette(object_raster, self.PALETTE)
