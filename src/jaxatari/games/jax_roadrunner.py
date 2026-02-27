@@ -126,7 +126,7 @@ class RoadRunnerConstants(NamedTuple):
     ENEMY_FLATTENED_DURATION: int = 120  # 2 seconds at 60 FPS
     ENEMY_FLATTENED_SCORE: int = 1000
     # --- Offramp Constants ---
-    OFFRAMP_HEIGHT: int = 16   # Height of offramp road in pixels (narrow "one lane")
+    OFFRAMP_HEIGHT: int = 12   # Height of offramp road in pixels (narrow "one lane")
     OFFRAMP_GAP: int = 8       # Gap (median) between offramp bottom and main road top
     OFFRAMP_RAMP_WIDTH: int = 24  # Width of the diagonal split/merge transition in pixels
     OFFRAMP_BRIDGE_WIDTH: int = 16  # Width of a bridge segment crossing the median
