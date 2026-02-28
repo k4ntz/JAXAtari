@@ -731,7 +731,39 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         
         # Calculate distance from current node to current position
         vec_to_self_sq = (state.player_x - current_node_x) * (state.player_x - current_node_x) + (state.player_y - current_node_y) * (state.player_y - current_node_y)
-        overshot = vec_to_self_sq >= vec_to_target_sq
+        
+        # Portal Detection Logic
+        # 1. Get movement vector from current direction
+        move_dx = jnp.where(state.player_direction == Action.RIGHT, 1, 
+                       jnp.where(state.player_direction == Action.LEFT, -1, 0))
+        move_dy = jnp.where(state.player_direction == Action.DOWN, 1,
+                       jnp.where(state.player_direction == Action.UP, -1, 0))
+        
+        # 2. Check if we are moving AWAY from the target (Dot Product < 0)
+        #    This happens when target is wrapped around (e.g. Left -> Right)
+        dot_prod = move_dx * dx_to_target + move_dy * dy_to_target
+        
+        # 3. Check if nodes are far apart (Portal)
+        #    is_portal = (dist > 2*TILE_SIZE) AND (moving away from target)
+        nodes_dist_sq = vec_to_target_sq
+        is_portal = jnp.logical_and(
+            nodes_dist_sq > (self.consts.TILE_SIZE * 2)**2,
+            dot_prod < 0
+        )
+        
+        # 4. Define overshot condition
+        #    Normal: reached target (dist_to_self >= dist_between_nodes)
+        #    Portal: moved 1 tile away from current node (into the void)
+        normal_overshot = vec_to_self_sq >= vec_to_target_sq
+        
+        # Asymmetric Portal Overshot:
+        # - Positive Dir (RIGHT/DOWN): standard tile size buffer (travel 8 pixels then wrap)
+        # - Negative Dir (LEFT/UP): immediate wrap (travel 1 pixel then wrap) to avoid off-screen delay
+        portal_threshold_sq = 1
+        
+        portal_overshot = vec_to_self_sq > portal_threshold_sq
+        
+        overshot = jnp.where(is_portal, portal_overshot, normal_overshot)
         
         # If overshot target (reached/passed the target node)
         # Update current node to target, then get new target
