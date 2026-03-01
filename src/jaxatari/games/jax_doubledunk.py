@@ -1767,7 +1767,15 @@ class DunkRenderer(JAXGameRenderer):
                 [get_p1_inside_mask, get_p1_outside_mask, get_p2_inside_mask, get_p2_outside_mask]
             )
 
-            return self.jr.render_at(current_raster, x, visual_y, final_mask)
+            # Check if player is completely off-screen (like in SingleMode)
+            is_hidden = jnp.logical_or(x < -10, x > 200)
+
+            return jax.lax.cond(
+                is_hidden,
+                lambda r: r,
+                lambda r: self.jr.render_at(r, x, visual_y, final_mask),
+                current_raster
+            )
 
         raster = jax.lax.fori_loop(0, 4, render_player_body, raster)
 
@@ -1814,8 +1822,11 @@ class DunkRenderer(JAXGameRenderer):
                 lambda r: r,
                 current_raster
             )
+            
+            p2_is_hidden = state.player2_inside.x < -10
+            
             current_raster = jax.lax.cond(
-                is_visible,
+                jnp.logical_and(is_visible, jnp.logical_not(p2_is_hidden)),
                 lambda r: self.jr.render_at(r, p2_x, y_pos, p2_mask),
                 lambda r: r,
                 current_raster

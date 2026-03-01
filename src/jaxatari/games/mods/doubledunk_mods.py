@@ -4,8 +4,9 @@ from jaxatari.games.mods.doubledunk.doubledunk_mod_plugins import (
     TimerMod,
     SuperDunkMod,
     TenSecondViolationInternalMod,
-    TenSecondViolationPostStepMod
-)
+    TenSecondViolationPostStepMod,
+    SingleMode
+    )
 
 class DoubleDunkEnvMod(JaxAtariModController):
     """
@@ -18,6 +19,7 @@ class DoubleDunkEnvMod(JaxAtariModController):
         "ten_second_violation_internal": TenSecondViolationInternalMod,
         "ten_second_violation_post": TenSecondViolationPostStepMod,
         "ten_second_violation": ["ten_second_violation_internal", "ten_second_violation_post"],
+        "single_mode": SingleMode,
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "doubledunk", "sprites")
