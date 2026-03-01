@@ -29,6 +29,33 @@ class OthelloConstants(NamedTuple):
     CURSOR_COLOR: Tuple[int, int, int] = (255, 0, 0)
 
     INPUT_DELAY: int = 12
+    ASSET_CONFIG: list = getattr(object(), 'unused', [
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {'name': 'piece_white', 'type': 'single', 'file': 'piece_white.npy'},
+        {'name': 'piece_black', 'type': 'single', 'file': 'piece_black.npy'},
+        {'name': 'cursor', 'type': 'single', 'file': 'cursor.npy'},
+        {'name': 'empty_cursor', 'type': 'single', 'file': 'empty_cursor.npy'},
+        {'name': 'score_0_player', 'type': 'single', 'file': 'player_score_0.npy'}, 
+        {'name': 'score_1_player', 'type': 'single', 'file': 'player_score_1.npy'},
+        {'name': 'score_2_player', 'type': 'single', 'file': 'player_score_2.npy'},
+        {'name': 'score_3_player', 'type': 'single', 'file': 'player_score_3.npy'},
+        {'name': 'score_4_player', 'type': 'single', 'file': 'player_score_4.npy'},
+        {'name': 'score_5_player', 'type': 'single', 'file': 'player_score_5.npy'},
+        {'name': 'score_6_player', 'type': 'single', 'file': 'player_score_6.npy'},
+        {'name': 'score_7_player', 'type': 'single', 'file': 'player_score_7.npy'},
+        {'name': 'score_8_player', 'type': 'single', 'file': 'player_score_8.npy'},
+        {'name': 'score_9_player', 'type': 'single', 'file': 'player_score_9.npy'},
+        {'name': 'score_0_enemy', 'type': 'single', 'file': 'enemy_score_0.npy'},
+        {'name': 'score_1_enemy', 'type': 'single', 'file': 'enemy_score_1.npy'},
+        {'name': 'score_2_enemy', 'type': 'single', 'file': 'enemy_score_2.npy'},
+        {'name': 'score_3_enemy', 'type': 'single', 'file': 'enemy_score_3.npy'},
+        {'name': 'score_4_enemy', 'type': 'single', 'file': 'enemy_score_4.npy'},
+        {'name': 'score_5_enemy', 'type': 'single', 'file': 'enemy_score_5.npy'},
+        {'name': 'score_6_enemy', 'type': 'single', 'file': 'enemy_score_6.npy'},
+        {'name': 'score_7_enemy', 'type': 'single', 'file': 'enemy_score_7.npy'},
+        {'name': 'score_8_enemy', 'type': 'single', 'file': 'enemy_score_8.npy'},
+        {'name': 'score_9_enemy', 'type': 'single', 'file': 'enemy_score_9.npy'},
+    ])
 
     START_BOARD: chex.Array = jnp.array([
         [0, 0, 0, 0, 0, 0, 0, 0],
@@ -777,13 +804,13 @@ class OthelloRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        asset_config = self._get_asset_config()
+        asset_config = getattr(self.consts, 'ASSET_CONFIG', self._get_legacy_asset_config())
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/othello"
         (
             self.PALETTE, self.SHAPE_MASKS, self.BACKGROUND, self.COLOR_TO_ID, self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
-    def _get_asset_config(self) -> list:
+    def _get_legacy_asset_config(self) -> list:
         return [
             {'name': 'background', 'type': 'background', 'file': 'background.npy'},
             {'name': 'piece_white', 'type': 'single', 'file': 'piece_white.npy'},
