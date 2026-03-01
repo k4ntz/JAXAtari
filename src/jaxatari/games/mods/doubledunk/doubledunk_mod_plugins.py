@@ -412,3 +412,69 @@ class SingleMode(JaxAtariPostStepModPlugin):
             player2_outside=p2_out,
             ball=new_ball
         )
+
+class OneVsOneInternalMod(JaxAtariInternalModPlugin):
+    """
+    Internal mod for 1v1 mode. Overrides passing logic to skip pass steps in strategies.
+    """
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _handle_passing(self, state, actions):
+        from jaxatari.games.jax_doubledunk import OffensiveAction
+        
+        # Determine if the current step requires a pass
+        current_step = state.strategy.offense_step
+        pattern = state.strategy.offense_pattern
+        is_pass_step = jnp.logical_and(
+            current_step < 4, 
+            pattern[current_step] == OffensiveAction.PASS
+        )
+        
+        # In 1v1 mode, we completely disable actual passing because the teammate is missing.
+        # But if the strategy demands a pass, we just skip it (increment step).
+        step_increment = jax.lax.select(
+            is_pass_step, 
+            1, # Force increment to skip
+            0
+        )
+        
+        # We return the unmodified ball state and say we did not pass
+        return state.ball, step_increment, False
+
+class OneVsOnePostMod(JaxAtariPostStepModPlugin):
+    """
+    Post step mod for 1v1 mode. Keeps outside players off-screen and forces ball turnover if they somehow catch it.
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state, new_state):
+        from jaxatari.games.jax_doubledunk import PlayerID
+        
+        # Move outside players off-screen
+        p1_out = new_state.player1_outside.replace(x=-50, y=0, vel_x=0, vel_y=0, z=0, is_out_of_bounds=True)
+        p2_out = new_state.player2_outside.replace(x=-50, y=0, vel_x=0, vel_y=0, z=0, is_out_of_bounds=True)
+        
+        # Turn over the ball if an outside player somehow gets it
+        holder = new_state.ball.holder
+        is_out_holding = jnp.logical_or(holder == PlayerID.PLAYER1_OUTSIDE, holder == PlayerID.PLAYER2_OUTSIDE)
+        
+        new_ball = jax.lax.cond(
+            is_out_holding,
+            lambda b: b.replace(holder=PlayerID.NONE, x=80.0, y=100.0, vel_x=0.0, vel_y=0.0),
+            lambda b: b,
+            new_state.ball
+        )
+        
+        # Ensure controlled player is always INSIDE
+        ctrl_id = new_state.controlled_player_id
+        new_ctrl_id = jax.lax.select(
+            ctrl_id == PlayerID.PLAYER1_OUTSIDE,
+            PlayerID.PLAYER1_INSIDE,
+            ctrl_id
+        )
+        
+        return new_state.replace(
+            player1_outside=p1_out,
+            player2_outside=p2_out,
+            ball=new_ball,
+            controlled_player_id=new_ctrl_id
+        )
