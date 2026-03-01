@@ -136,6 +136,17 @@ ENEMY_COLLISION_MARGIN = 1
 CHASE_RADIUS = 80          # pixels
 IDLE_SPEED = 1              # pixels per step (keep <= 1 for fewer collision issues)
 
+# --- Enemy patrol/aggro state machine params ---
+AGGRO_EVAL_EVERY = 12      # every N ticks, decide whether to aggro
+AGGRO_RADIUS = 80          # reuse/replace CHASE_RADIUS if you want
+CHASE_TICKS = 90           # T_chase: how long to chase once triggered
+CONFUSE_TICKS = 30         # back-off/confuse duration
+CONFUSE_PROB_NUM = 1       # probability = CONFUSE_PROB_NUM / CONFUSE_PROB_DEN
+CONFUSE_PROB_DEN = 256
+STUCK_TICKS = 45           # if not making progress, trigger confuse
+
+
+
 ORBIT_DIRS = jnp.array([
     [ 1,  0],  # E
     [ 1, -1],  # NE
@@ -187,7 +198,7 @@ class DarkChambersConstants(NamedTuple):
     ENEMY_WIDTH: int = 10
     ENEMY_HEIGHT: int = 20  # Double height for human-like shape
     
-    PLAYER_SPEED: int = 2
+    PLAYER_SPEED: int = 1
     WALL_THICKNESS: int = 8
     
     PLAYER_START_X: int = 160  # Center of world (WORLD_W/2 = 320/2)
@@ -259,6 +270,17 @@ class DarkChambersState(NamedTuple):
     key: chex.PRNGKey
 
     damage_cooldown: chex.Array
+
+    enemy_dir: chex.Array
+    enemy_chase_timer: chex.Array
+    enemy_confuse_timer: chex.Array
+    enemy_patrol_box: chex.Array 
+    enemy_stuck_counter: chex.Array
+
+    enemy_idle_timer: chex.Array
+    enemy_pause_timer: chex.Array
+
+
 
 class EntityPosition(NamedTuple):
     """Axis-aligned rectangle: top-left position and size."""
@@ -1723,7 +1745,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         player_y: chex.Array,
         enemy_positions: chex.Array,
         enemy_active: chex.Array,
+        enemy_exclude_idx: chex.Array,   # int32 scalar, -1 means “exclude nobody”
     ):
+
         """Compute 4-neighbor grid distances to the player.
 
         Alive enemies are treated as obstacles. Returns an int32 array
@@ -1759,7 +1783,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
         # scatter as int32 sum then >0 (handles duplicates cleanly)
         enemy_grid_i = jnp.zeros((H, W), dtype=jnp.int32)
-        add_vals = enemy_active.astype(jnp.int32)
+        idxs = jnp.arange(enemy_active.shape[0], dtype=jnp.int32)
+        exclude = (idxs == enemy_exclude_idx) & (enemy_exclude_idx >= 0)
+        add_vals = jnp.where(exclude, 0, enemy_active).astype(jnp.int32)
+
         enemy_grid_i = enemy_grid_i.at[enemy_cy, enemy_cx].add(add_vals)
         enemy_grid = enemy_grid_i > 0
 
@@ -1806,7 +1833,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         max_steps = GRID_W + GRID_H
         dist, _ = jax.lax.fori_loop(0, max_steps, body, (dist, frontier))
         return dist
-
 
     
 
@@ -1888,6 +1914,37 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         wizard_shoot_timers = jax.random.randint(
             subkey, (NUM_ENEMIES,), 0, WIZARD_SHOOT_INTERVAL + WIZARD_SHOOT_OFFSET_MAX, dtype=jnp.int32
         )
+
+        # --- Enemy movement state init ---
+        key, subkey = jax.random.split(key)
+        enemy_dir = jax.random.randint(subkey, (NUM_ENEMIES,), 0, 8, dtype=jnp.int32)  # 0..7 for ORBIT_DIRS
+        enemy_chase_timer = jnp.zeros((NUM_ENEMIES,), dtype=jnp.int32)
+        enemy_confuse_timer = jnp.zeros((NUM_ENEMIES,), dtype=jnp.int32)
+
+        key, subkey = jax.random.split(key)
+        enemy_idle_timer = jax.random.randint(subkey, (NUM_ENEMIES,), 10, 60, dtype=jnp.int32)  # how long to keep current dir
+
+        key, subkey = jax.random.split(key)
+        enemy_pause_timer = jax.random.randint(subkey, (NUM_ENEMIES,), 0, 10, dtype=jnp.int32)  # start mostly moving
+        enemy_pause_timer = jnp.minimum(enemy_pause_timer, 1)  # basically 0 or 1 at start
+
+
+        # --- Enemy patrol box + stuck counter init ---
+        # patrol box = current 160x160 "room" (screen-sized) that contains the spawn point
+        ex = enemy_positions[:, 0]
+        ey = enemy_positions[:, 1]
+
+        room_min_x = (ex // GAME_W) * GAME_W
+        room_min_y = (ey // GAME_H) * GAME_H
+
+        room_max_x = jnp.minimum(room_min_x + GAME_W - self.consts.ENEMY_WIDTH, self.consts.WORLD_WIDTH - self.consts.ENEMY_WIDTH)
+        room_max_y = jnp.minimum(room_min_y + GAME_H - self.consts.ENEMY_HEIGHT, self.consts.WORLD_HEIGHT - self.consts.ENEMY_HEIGHT)
+
+        enemy_patrol_box = jnp.stack([room_min_x, room_min_y, room_max_x, room_max_y], axis=1).astype(jnp.int32)  # (N,4)
+        enemy_stuck_counter = jnp.zeros((NUM_ENEMIES,), dtype=jnp.int32)
+
+
+
         
         # Spawn spawners (retry until not on wall)
         def spawn_spawner(carry, i):
@@ -2023,7 +2080,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             regular_items
         ])
         item_active = jnp.ones(NUM_ITEMS, dtype=jnp.int32)
-        
+
         state = DarkChambersState(
             player_x=jnp.array(self.consts.PLAYER_START_X, dtype=jnp.int32),
             player_y=jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32),
@@ -2031,7 +2088,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             enemy_positions=enemy_positions,
             enemy_types=enemy_types,
             enemy_active=enemy_active,
-                wizard_shoot_timers=wizard_shoot_timers,
+            wizard_shoot_timers=wizard_shoot_timers,
             spawner_positions=spawner_positions,
             spawner_health=spawner_health,
             spawner_active=spawner_active,
@@ -2058,6 +2115,13 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             step_counter=jnp.array(0, dtype=jnp.int32),
             death_counter=jnp.array(0, dtype=jnp.int32),
             key=key,
+            enemy_dir=enemy_dir,
+            enemy_chase_timer=enemy_chase_timer,
+            enemy_confuse_timer=enemy_confuse_timer,
+            enemy_patrol_box=enemy_patrol_box,
+            enemy_stuck_counter=enemy_stuck_counter,
+            enemy_idle_timer=enemy_idle_timer,
+            enemy_pause_timer=enemy_pause_timer,
         )
         
         obs = self._get_observation(state)
@@ -2130,7 +2194,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                    jnp.where((a == Action.DOWN) | (a == Action.DOWNRIGHT) | (a == Action.DOWNLEFT), self.consts.PLAYER_SPEED, 0))
             
             # --- SLOW DOWN PLAYER MOVEMENT ---
-            PLAYER_MOVE_EVERY = 2  # 1=normal, 2=half speed, 3=1/3 speed, etc.
+            PLAYER_MOVE_EVERY = 1  # 1=normal, 2=half speed, 3=1/3 speed, etc.
             player_move_tick = (state.step_counter % PLAYER_MOVE_EVERY) == 0
 
             dx = jnp.where(player_move_tick, dx, 0)
@@ -2189,6 +2253,101 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 ],
                 axis=0,
             )
+            def check_enemy_collision(enemy_pos):
+                # shrink collision box by a small margin to allow sliding along walls
+                ex = enemy_pos[0] + ENEMY_COLLISION_MARGIN
+                ey = enemy_pos[1] + ENEMY_COLLISION_MARGIN
+                w = self.consts.ENEMY_WIDTH  - 2 * ENEMY_COLLISION_MARGIN
+                h = self.consts.ENEMY_HEIGHT - 2 * ENEMY_COLLISION_MARGIN
+
+                wx = WALLS[:, 0]
+                wy = WALLS[:, 1]
+                ww = WALLS[:, 2]
+                wh = WALLS[:, 3]
+
+                e_overlap_x = (ex <= (wx + ww - 1)) & ((ex + w - 1) >= wx)
+                e_overlap_y = (ey <= (wy + wh - 1)) & ((ey + h - 1) >= wy)
+                return jnp.any(e_overlap_x & e_overlap_y)
+
+            def clip_and_portal_wrap_enemy(pos):
+                clipped = jnp.clip(
+                    pos,
+                    jnp.array([0, 0], dtype=jnp.int32),
+                    jnp.array(
+                        [self.consts.WORLD_WIDTH - self.consts.ENEMY_WIDTH,
+                        self.consts.WORLD_HEIGHT - self.consts.ENEMY_HEIGHT],
+                        dtype=jnp.int32,
+                    ),
+                )
+
+                # NOTE: your enemy portal logic currently uses only the *middle* portal.
+                portal_hole_height = 40
+                portal_y_start = (self.consts.WORLD_HEIGHT - portal_hole_height) // 2
+                portal_y_end = portal_y_start + portal_hole_height
+                in_portal_zone = (clipped[1] >= portal_y_start - self.consts.ENEMY_HEIGHT) & (clipped[1] <= portal_y_end)
+
+                should_wrap_right = in_portal_zone & (clipped[0] <= 0)
+                should_wrap_left  = in_portal_zone & (clipped[0] >= self.consts.WORLD_WIDTH - self.consts.ENEMY_WIDTH)
+
+                wrapped_x = jnp.where(
+                    should_wrap_right,
+                    self.consts.WORLD_WIDTH - self.consts.ENEMY_WIDTH - 2,
+                    jnp.where(should_wrap_left, 2, clipped[0]),
+                )
+                return jnp.array([wrapped_x, clipped[1]], dtype=jnp.int32)
+
+            def move_enemy(enemy_pos, step_vec):
+                """Apply step with wall sliding (full, else x-only, else y-only) + clipping + portal wrap."""
+                cur = enemy_pos
+
+                step_full = step_vec
+                step_x = jnp.array([step_vec[0], 0], dtype=jnp.int32)
+                step_y = jnp.array([0, step_vec[1]], dtype=jnp.int32)
+
+                pos_full = clip_and_portal_wrap_enemy(cur + step_full)
+                pos_x    = clip_and_portal_wrap_enemy(cur + step_x)
+                pos_y    = clip_and_portal_wrap_enemy(cur + step_y)
+
+                col_full = check_enemy_collision(pos_full)
+                col_x    = check_enemy_collision(pos_x)
+                col_y    = check_enemy_collision(pos_y)
+
+                use_full = ~col_full
+                use_x    = col_full & ~col_x
+                use_y    = col_full & col_x & ~col_y
+
+                return jnp.where(
+                    use_full, pos_full,
+                    jnp.where(use_x, pos_x, jnp.where(use_y, pos_y, cur)),
+                )
+
+            def resolve_enemy_overlaps(cand_positions, prev_positions, active):
+                w = self.consts.ENEMY_WIDTH
+                h = self.consts.ENEMY_HEIGHT
+
+                ex = cand_positions[:, 0]
+                ey = cand_positions[:, 1]
+
+                ex_i = ex[:, None]
+                ex_j = ex[None, :]
+                ey_i = ey[:, None]
+                ey_j = ey[None, :]
+
+                overlap_x = (ex_i <= ex_j + w - 1) & (ex_i + w - 1 >= ex_j)
+                overlap_y = (ey_i <= ey_j + h - 1) & (ey_i + h - 1 >= ey_j)
+                overlap = overlap_x & overlap_y
+
+                a_i = active[:, None].astype(bool)
+                a_j = active[None, :].astype(bool)
+                overlap = overlap & a_i & a_j
+
+                idx = jnp.arange(NUM_ENEMIES)
+                earlier = idx[:, None] < idx[None, :]
+                loser_matrix = overlap & earlier
+                loser_flags = jnp.any(loser_matrix, axis=0)
+
+                return jnp.where(loser_flags[:, None], prev_positions, cand_positions)
+
             
             def collides(px, py):
                 wx = WALLS[:, 0]
@@ -2397,57 +2556,92 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             final_enemy_bullet_positions = updated_enemy_bullet_positions
             final_enemy_bullet_active = updated_enemy_bullet_active
             
-            # Enemy random walk
-            enemy_deltas = jax.random.randint(subkey, (NUM_ENEMIES, 2), -1, 2, dtype=jnp.int32)
+            # ---------------------------
+            # Enemy movement: patrol -> aggro eval -> chase -> confuse/back-off
+            # ---------------------------
+
             enemy_alive = state.enemy_active == 1
-            
-            p_cx = new_x + self.consts.PLAYER_WIDTH // 2
-            p_cy = new_y + self.consts.PLAYER_HEIGHT // 2
-            
+
+            # Player center
             player_center = jnp.array(
                 [new_x + self.consts.PLAYER_WIDTH // 2,
-                new_y + self.consts.PLAYER_HEIGHT // 2],
+                 new_y + self.consts.PLAYER_HEIGHT // 2],
                 dtype=jnp.int32
             )
-            
+
+            # Enemy centers
             enemy_centers = state.enemy_positions + jnp.array(
                 [self.consts.ENEMY_WIDTH // 2, self.consts.ENEMY_HEIGHT // 2],
                 dtype=jnp.int32
             )
-            
-            dx = enemy_centers[:, 0] - player_center[0]
-            dy = enemy_centers[:, 1] - player_center[1]
-            dist2 = dx * dx + dy * dy
-            
-            chase_mask = (dist2 <= (CHASE_RADIUS * CHASE_RADIUS)) & enemy_alive
-            
-            
-            # distance field to player over nav grid
-            # enemies are treated as dynamic obstacles
-            dist_field = self._distance_field(
-                new_map_index,
-                state.current_level,
-                new_x,
-                new_y,
-                state.enemy_positions,
-                state.enemy_active,
+
+            # Distance check for aggro (squared)
+            dxy = enemy_centers - player_center[None, :]
+            dist2 = dxy[:, 0] * dxy[:, 0] + dxy[:, 1] * dxy[:, 1]
+            in_aggro = dist2 <= (AGGRO_RADIUS * AGGRO_RADIUS)
+
+            stuck_counter = state.enemy_stuck_counter  # if you use it later
+
+            # --- Parameters: tweak these to make enemies chase less/more ---
+            NUDGE_RADIUS = 90          # px: only nudge if player is close (smaller => less chasing)
+            NUDGE_EVERY = 25           # evaluate nudges every N ticks (bigger => less chasing)
+            NUDGE_PROB_NUM = 1         # probability = NUM / DEN per evaluation
+            NUDGE_PROB_DEN = 8         # 1/8 = 12.5% chance per eval tick
+            NUDGE_MIN = 2              # nudge lasts 2..6 steps
+            NUDGE_MAX = 6
+
+            # Evaluate only every N ticks
+            eval_tick = (state.step_counter % NUDGE_EVERY) == 0
+
+            # Timers decrement
+            chase_timer = jnp.maximum(state.enemy_chase_timer - 1, 0)     # now used as "nudge_timer"
+            confuse_timer = jnp.maximum(state.enemy_confuse_timer - 1, 0)
+
+            # close-by check (override your in_aggro)
+            in_nudge_radius = dist2 <= (NUDGE_RADIUS * NUDGE_RADIUS)
+
+            # Random trigger to start a nudge burst
+            rng, sk = jax.random.split(rng)
+            u = jax.random.randint(sk, (NUM_ENEMIES,), 0, NUDGE_PROB_DEN, dtype=jnp.int32)
+            trigger = (u < NUDGE_PROB_NUM)
+
+            # Start a burst only if not already nudging or confusing
+            start_nudge = eval_tick & (chase_timer == 0) & (confuse_timer == 0) & in_nudge_radius & trigger & enemy_alive
+
+            rng, sk = jax.random.split(rng)
+            burst_len = jax.random.randint(sk, (NUM_ENEMIES,), NUDGE_MIN, NUDGE_MAX + 1, dtype=jnp.int32)
+            chase_timer = jnp.where(start_nudge, burst_len, chase_timer)
+
+            # Optional: keep your confuse logic, but make it rarer / only when stuck (recommended)
+            # If you want to keep random confuse, leave this in, but set probs very low.
+
+
+            need_field = jnp.any((chase_timer > 0) & enemy_alive)
+
+            dist_field = jax.lax.cond(
+                need_field,
+                lambda _: self._distance_field(
+                    new_map_index,
+                    state.current_level,
+                    new_x,
+                    new_y,
+                    state.enemy_positions,
+                    state.enemy_active,
+                    jnp.array(-1, dtype=jnp.int32),
+                ),
+                # if no one nudges, fill with BIG_DIST so chase_step becomes no-op
+                lambda _: jnp.full((GRID_H, GRID_W), BIG_DIST, dtype=jnp.int32),
+                operand=None,
             )
-            
-            
-            def enemy_step(pos, alive):
-                # pos: [x, y] top-left of enemy
-                # compute nav-cell from enemy center
+
+
+            def chase_step(pos, alive):
                 enemy_center = pos + jnp.array(
                     [self.consts.ENEMY_WIDTH // 2, self.consts.ENEMY_HEIGHT // 2],
                     dtype=jnp.int32,
                 )
                 cy, cx = self._pos_to_cell(enemy_center[0], enemy_center[1])
-            
-                cy = jnp.clip(cy, 0, GRID_H - 1)
-                cx = jnp.clip(cx, 0, GRID_W - 1)
-            
-                # 4-neighbourhood (no "stay in place" cell)
-                # 8-neighbourhood around (cy, cx)
+
                 neigh = jnp.array([
                     [cy - 1, cx    ],  # up
                     [cy + 1, cx    ],  # down
@@ -2458,228 +2652,221 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                     [cy + 1, cx - 1],  # down-left
                     [cy + 1, cx + 1],  # down-right
                 ], dtype=jnp.int32)
-            
-            
+
                 ny = jnp.clip(neigh[:, 0], 0, GRID_H - 1)
                 nx = jnp.clip(neigh[:, 1], 0, GRID_W - 1)
-            
+
                 in_bounds = (
                     (neigh[:, 0] >= 0) & (neigh[:, 0] < GRID_H) &
                     (neigh[:, 1] >= 0) & (neigh[:, 1] < GRID_W)
                 )
-            
-                # distances from distance field
+
                 dists = dist_field[ny, nx]
-            
-                # target centers of neighbour cells
+
                 target_centers = jnp.stack(
-                    [
-                        nx * CELL_SIZE + CELL_SIZE // 2,
-                        ny * CELL_SIZE + CELL_SIZE // 2,
-                    ],
+                    [nx * CELL_SIZE + CELL_SIZE // 2,
+                     ny * CELL_SIZE + CELL_SIZE // 2],
                     axis=1,
-                )  # shape (4, 2)
-            
-                # step vectors: 1 px per axis towards target center
+                )
+
                 step_vecs = jnp.sign(target_centers - enemy_center).astype(jnp.int32)
 
-                # --- collision check for each candidate step ---
-                # --- collision check for each candidate step ---
                 def collides_with_wall(step_vec):
                     new_pos = pos + step_vec
-
                     ex = new_pos[0] + ENEMY_COLLISION_MARGIN
                     ey = new_pos[1] + ENEMY_COLLISION_MARGIN
                     w = self.consts.ENEMY_WIDTH  - 2 * ENEMY_COLLISION_MARGIN
                     h = self.consts.ENEMY_HEIGHT - 2 * ENEMY_COLLISION_MARGIN
-
-                    wx = WALLS[:, 0]
-                    wy = WALLS[:, 1]
-                    ww = WALLS[:, 2]
-                    wh = WALLS[:, 3]
-
+                    wx = WALLS[:, 0]; wy = WALLS[:, 1]; ww = WALLS[:, 2]; wh = WALLS[:, 3]
                     e_overlap_x = (ex <= (wx + ww - 1)) & ((ex + w - 1) >= wx)
                     e_overlap_y = (ey <= (wy + wh - 1)) & ((ey + h - 1) >= wy)
                     return jnp.any(e_overlap_x & e_overlap_y)
 
-                # collision for the candidate steps (8 steps)
-                collisions = jax.vmap(collides_with_wall)(step_vecs)  # (8,)
+                collisions = jax.vmap(collides_with_wall)(step_vecs)
 
-                # --- NEW: detect which wall side we're "touching" (1px probes) ---
                 blocked_right = collides_with_wall(jnp.array([ 1,  0], dtype=jnp.int32))
                 blocked_left  = collides_with_wall(jnp.array([-1,  0], dtype=jnp.int32))
                 blocked_down  = collides_with_wall(jnp.array([ 0,  1], dtype=jnp.int32))
                 blocked_up    = collides_with_wall(jnp.array([ 0, -1], dtype=jnp.int32))
 
-                # --- NEW: forbid diagonals that move into a blocked side ---
                 is_diag = (step_vecs[:, 0] != 0) & (step_vecs[:, 1] != 0)
-
                 into_blocked_side = (
                     ((step_vecs[:, 0] > 0) & blocked_right) |
                     ((step_vecs[:, 0] < 0) & blocked_left)  |
                     ((step_vecs[:, 1] > 0) & blocked_down)  |
                     ((step_vecs[:, 1] < 0) & blocked_up)
                 )
-
                 diag_forbidden = is_diag & into_blocked_side
 
-                # valid = in grid, full-step doesn't collide, diagonal isn't into-wall, and enemy alive
                 valid = in_bounds & (~collisions) & (~diag_forbidden) & (alive == 1)
-
-            
-                # neighbours that are invalid get BIG_DIST so they won’t be chosen
                 dists_valid = jnp.where(valid, dists, BIG_DIST)
-            
+
                 best_idx = jnp.argmin(dists_valid)
                 best_step = step_vecs[best_idx]
-            
-                # if *all* neighbours invalid, don't move
                 any_valid = jnp.any(valid)
-                best_step = jnp.where(
-                    any_valid,
-                    best_step,
-                    jnp.array([0, 0], dtype=jnp.int32),
-                )
-            
-                # final step is zero if enemy is dead
+                best_step = jnp.where(any_valid, best_step, jnp.array([0, 0], dtype=jnp.int32))
                 return best_step * alive.astype(jnp.int32)
-            
-            
-            chosen_step = jax.vmap(enemy_step)(state.enemy_positions, enemy_alive)
-            
-            # --- idle "circular-ish" movement (8-dir orbit) ---
-            idxs = jnp.arange(NUM_ENEMIES, dtype=jnp.int32)
-            phase = (state.step_counter // 12 + idxs) % 8          # 12 = frames per segment
-            idle_step = ORBIT_DIRS[phase] * IDLE_SPEED             # (NUM_ENEMIES, 2)
-            idle_step = idle_step * enemy_alive[:, None].astype(jnp.int32)  # dead enemies don't move
-            
-            # --- choose chase vs idle ---
-            final_step = jnp.where(chase_mask[:, None], chosen_step, idle_step)
 
-            # --- SLOW DOWN ENEMY MOVEMENT ---
-            ENEMY_MOVE_EVERY = 2   # 1 = normal, 2 = half speed, 3 = slower, etc.
+            chase_steps = jax.vmap(chase_step)(state.enemy_positions, enemy_alive)
 
-            enemy_move_tick = (state.step_counter % ENEMY_MOVE_EVERY) == 0
+            # --- Confuse/back-off: step away from player (1px axis) ---
+            away = jnp.sign(enemy_centers - player_center[None, :]).astype(jnp.int32)
+            confuse_steps = away * enemy_alive[:, None].astype(jnp.int32)
 
-            final_step = jnp.where(
-                enemy_move_tick,
-                final_step,
-                jnp.zeros_like(final_step),
+            # --- Patrol: rectangle-like loop inside patrol box with wall/bounds turning ---
+            # Directions: 0=E,1=S,2=W,3=N
+            DIR4 = jnp.array([[1,0],[0,1],[-1,0],[0,-1]], dtype=jnp.int32)
+
+            def patrol_one(pos, dir4, box, alive):
+                step = DIR4[dir4] * IDLE_SPEED
+
+                def would_collide_or_leave(step_vec):
+                    new_pos = pos + step_vec
+
+                    # patrol-box clamp check (no clipping; turning happens instead)
+                    min_x, min_y, max_x, max_y = box
+                    out_box = (new_pos[0] < min_x) | (new_pos[0] > max_x) | (new_pos[1] < min_y) | (new_pos[1] > max_y)
+
+                    ex = new_pos[0] + ENEMY_COLLISION_MARGIN
+                    ey = new_pos[1] + ENEMY_COLLISION_MARGIN
+                    w = self.consts.ENEMY_WIDTH  - 2 * ENEMY_COLLISION_MARGIN
+                    h = self.consts.ENEMY_HEIGHT - 2 * ENEMY_COLLISION_MARGIN
+
+                    wx = WALLS[:, 0]; wy = WALLS[:, 1]; ww = WALLS[:, 2]; wh = WALLS[:, 3]
+                    e_overlap_x = (ex <= (wx + ww - 1)) & ((ex + w - 1) >= wx)
+                    e_overlap_y = (ey <= (wy + wh - 1)) & ((ey + h - 1) >= wy)
+                    hit_wall = jnp.any(e_overlap_x & e_overlap_y)
+                    return hit_wall | out_box
+
+                blocked = would_collide_or_leave(step)
+
+                # turn right when blocked
+                new_dir = jnp.where(blocked, (dir4 + 1) & 3, dir4)
+
+                # after turning, try that direction this tick
+                step2 = DIR4[new_dir] * IDLE_SPEED
+                blocked2 = would_collide_or_leave(step2)
+                final_step = jnp.where(blocked2, jnp.array([0,0], dtype=jnp.int32), step2)
+
+                final_step = final_step * alive.astype(jnp.int32)
+                return final_step, new_dir
+
+            # --- Dynamic patrol box: player's current 160x160 room ---
+            room_min_x = (new_x // GAME_W) * GAME_W
+            room_min_y = (new_y // GAME_H) * GAME_H
+
+            room_max_x = jnp.minimum(
+                room_min_x + GAME_W - self.consts.ENEMY_WIDTH,
+                self.consts.WORLD_WIDTH - self.consts.ENEMY_WIDTH,
+            )
+            room_max_y = jnp.minimum(
+                room_min_y + GAME_H - self.consts.ENEMY_HEIGHT,
+                self.consts.WORLD_HEIGHT - self.consts.ENEMY_HEIGHT,
             )
 
+            player_patrol_box = jnp.array([room_min_x, room_min_y, room_max_x, room_max_y], dtype=jnp.int32)
+            dynamic_patrol_box = jnp.tile(player_patrol_box[None, :], (NUM_ENEMIES, 1))
             
-            def check_enemy_collision(enemy_pos):
-                # shrink collision box by a small margin to allow sliding along walls
-                ex = enemy_pos[0] + ENEMY_COLLISION_MARGIN
-                ey = enemy_pos[1] + ENEMY_COLLISION_MARGIN
-                w = self.consts.ENEMY_WIDTH  - 2 * ENEMY_COLLISION_MARGIN
-                h = self.consts.ENEMY_HEIGHT - 2 * ENEMY_COLLISION_MARGIN
-            
-                wx = WALLS[:, 0]
-                wy = WALLS[:, 1]
-                ww = WALLS[:, 2]
-                wh = WALLS[:, 3]
-            
-                e_overlap_x = (ex <= (wx + ww - 1)) & ((ex + w - 1) >= wx)
-                e_overlap_y = (ey <= (wy + wh - 1)) & ((ey + h - 1) >= wy)
-                return jnp.any(e_overlap_x & e_overlap_y)
-            
-            def move_enemy(enemy_pos, step_vec):
-                cur = enemy_pos
-            
-                step_full = step_vec
-                step_x = jnp.array([step_vec[0], 0], dtype=jnp.int32)
-                step_y = jnp.array([0, step_vec[1]], dtype=jnp.int32)
-            
-                def clip_pos(pos):
-                    clipped = jnp.clip(
-                        pos,
-                        jnp.array([0, 0], dtype=jnp.int32),
-                        jnp.array([self.consts.WORLD_WIDTH - self.consts.ENEMY_WIDTH, 
-                                   self.consts.WORLD_HEIGHT - self.consts.ENEMY_HEIGHT], dtype=jnp.int32),
-                    )
-                    
-                    # Apply wraparound for enemies in portal zone
-                    portal_hole_height = 40
-                    portal_y_start = (self.consts.WORLD_HEIGHT - portal_hole_height) // 2
-                    portal_y_end = portal_y_start + portal_hole_height
-                    in_portal_zone = (clipped[1] >= portal_y_start - self.consts.ENEMY_HEIGHT) & (clipped[1] <= portal_y_end)
-                    
-                    # Wraparound logic
-                    should_wrap_right = in_portal_zone & (clipped[0] <= 0)
-                    should_wrap_left = in_portal_zone & (clipped[0] >= self.consts.WORLD_WIDTH - self.consts.ENEMY_WIDTH)
-                    
-                    wrapped_x = jnp.where(should_wrap_right, self.consts.WORLD_WIDTH - self.consts.ENEMY_WIDTH - 2,
-                                jnp.where(should_wrap_left, 2, clipped[0]))
-                    
-                    return jnp.array([wrapped_x, clipped[1]], dtype=jnp.int32)
-            
-                pos_full = clip_pos(cur + step_full)
-                pos_x    = clip_pos(cur + step_x)
-                pos_y    = clip_pos(cur + step_y)
-            
-                col_full = check_enemy_collision(pos_full)
-                col_x    = check_enemy_collision(pos_x)
-                col_y    = check_enemy_collision(pos_y)
-            
-                use_full = ~col_full
-                use_x    = col_full & ~col_x
-                use_y    = col_full & col_x & ~col_y
-            
-                pos_after = jnp.where(
-                    use_full, pos_full,
-                    jnp.where(
-                        use_x, pos_x,
-                        jnp.where(use_y, pos_y, cur),
-                    ),
-                )
-                return pos_after
-            
-            new_enemy_positions = jax.vmap(move_enemy)(state.enemy_positions, final_step)
-            
-            def resolve_enemy_overlaps(cand_positions, prev_positions, active):
-                # cand_positions, prev_positions: (NUM_ENEMIES, 2)
-                # active: (NUM_ENEMIES,) 1/0
-                w = self.consts.ENEMY_WIDTH
-                h = self.consts.ENEMY_HEIGHT
-            
-                ex = cand_positions[:, 0]
-                ey = cand_positions[:, 1]
-            
-                ex_i = ex[:, None]
-                ex_j = ex[None, :]
-                ey_i = ey[:, None]
-                ey_j = ey[None, :]
-            
-                overlap_x = (ex_i <= ex_j + w - 1) & (ex_i + w - 1 >= ex_j)
-                overlap_y = (ey_i <= ey_j + h - 1) & (ey_i + h - 1 >= ey_j)
-                overlap = overlap_x & overlap_y
-            
-                # only consider active enemies
-                a_i = active[:, None].astype(bool)
-                a_j = active[None, :].astype(bool)
-                overlap = overlap & a_i & a_j
-            
-                # enemy with smaller index "wins" the tile, later ones lose
-                idx = jnp.arange(NUM_ENEMIES)
-                earlier = idx[:, None] < idx[None, :]  # True for (i,j) with i<j
-            
-                loser_matrix = overlap & earlier  # (i,j) True => j loses to i
-                loser_flags = jnp.any(loser_matrix, axis=0)  # for each j
-            
-                # losers revert to previous position
-                final_positions = jnp.where(
-                    loser_flags[:, None],
-                    prev_positions,
-                    cand_positions,
-                )
-                return final_positions
-            
+            box = player_patrol_box
+            in_view = (
+                (state.enemy_positions[:, 0] >= box[0]) &
+                (state.enemy_positions[:, 0] <= box[2]) &
+                (state.enemy_positions[:, 1] >= box[1]) &
+                (state.enemy_positions[:, 1] <= box[3])
+            ) & enemy_alive
+
+
+            # 8-direction random walk (pixel steps)
+            DIR8 = jnp.array([
+                [ 1,  0], [ 1, -1], [ 0, -1], [-1, -1],
+                [-1,  0], [-1,  1], [ 0,  1], [ 1,  1],
+            ], dtype=jnp.int32)
+
+            IDLE_SPEED = 1  # or 2 if you want them more active
+
+            idle_timer = jnp.maximum(state.enemy_idle_timer - 1, 0)
+            pause_timer = jnp.maximum(state.enemy_pause_timer - 1, 0)
+
+            # Occasionally start a short pause (rare, short)
+            PAUSE_EVERY = 30               # evaluate once per N ticks
+            PAUSE_PROB_NUM = 1
+            PAUSE_PROB_DEN = 12            # 1/12 chance per eval (~rare)
+            PAUSE_MIN = 2
+            PAUSE_MAX = 6
+
+            pause_eval_tick = (state.step_counter % PAUSE_EVERY) == 0
+            rng, sk = jax.random.split(rng)
+            u_pause = jax.random.randint(sk, (NUM_ENEMIES,), 0, PAUSE_PROB_DEN, dtype=jnp.int32)
+            start_pause = pause_eval_tick & (pause_timer == 0) & (u_pause < PAUSE_PROB_NUM) & in_view
+
+            rng, sk = jax.random.split(rng)
+            pause_len = jax.random.randint(sk, (NUM_ENEMIES,), PAUSE_MIN, PAUSE_MAX + 1, dtype=jnp.int32)
+            pause_timer = jnp.where(start_pause, pause_len, pause_timer)
+
+            can_patrol = enemy_alive  # move even off-screen
+
+            pick_new_dir = (idle_timer == 0) & can_patrol & (pause_timer == 0)
+
+            rng, sk = jax.random.split(rng)
+            new_dir = jax.random.randint(sk, (NUM_ENEMIES,), 0, 8, dtype=jnp.int32)
+
+            rng, sk = jax.random.split(rng)
+            new_idle_len = jax.random.randint(sk, (NUM_ENEMIES,), 15, 80, dtype=jnp.int32)
+
+            enemy_dir = jnp.where(pick_new_dir, new_dir, state.enemy_dir)
+            idle_timer = jnp.where(pick_new_dir, new_idle_len, idle_timer)
+
+            # Proposed step (0 if paused or not in view)
+            step_vec = DIR8[enemy_dir] * IDLE_SPEED
+            step_vec = jnp.where((pause_timer > 0)[:, None] | (~can_patrol)[:, None], 0, step_vec)
+
+            # Apply movement
+            cand_enemy_positions = jax.vmap(move_enemy)(state.enemy_positions, step_vec)
+            cand_enemy_positions = resolve_enemy_overlaps(cand_enemy_positions, state.enemy_positions, state.enemy_active)
+
+            # Detect if stuck (didn't move while trying to)
+            moved = jnp.any(cand_enemy_positions != state.enemy_positions, axis=1)
+            tried_to_move = jnp.any(step_vec != 0, axis=1)
+            stuck_now = tried_to_move & (~moved) & in_view
+
+            # If stuck, force direction change next tick
+            idle_timer = jnp.where(stuck_now, 0, idle_timer)
+
+            # This becomes your patrol baseline positions
+            patrol_positions = cand_enemy_positions
+            new_enemy_dir = enemy_dir
+
+
+            # --- Select mode (chase/confuse overrides wander) ---
+            in_confuse = (confuse_timer > 0) & enemy_alive
+            in_chase   = (confuse_timer == 0) & (chase_timer > 0) & enemy_alive
+
+            desired_step = jnp.where(in_confuse[:, None], confuse_steps,
+                        jnp.where(in_chase[:, None], chase_steps, (patrol_positions - state.enemy_positions)))
+
+
+            # --- Existing slow-down gate ---
+            ENEMY_MOVE_EVERY = 2
+            enemy_move_tick = (state.step_counter % ENEMY_MOVE_EVERY) == 0
+            desired_step = jnp.where(enemy_move_tick, desired_step, jnp.zeros_like(desired_step))
+
+            # --- Move with your existing move_enemy() / overlap resolve ---
+            new_enemy_positions = jax.vmap(move_enemy)(state.enemy_positions, desired_step)
+
             new_enemy_positions = resolve_enemy_overlaps(
                 new_enemy_positions,
                 state.enemy_positions,
                 state.enemy_active,
             )
+
+            # --- Stuck detection => confuse (only while chasing) ---
+            moved = jnp.any(new_enemy_positions != state.enemy_positions, axis=1)
+            stuck_counter = jnp.where(in_chase & (~moved), state.enemy_stuck_counter + 1, 0)
+
+            stuck_trigger = (stuck_counter >= STUCK_TICKS) & enemy_alive
+            confuse_timer = jnp.where(stuck_trigger, CONFUSE_TICKS, confuse_timer)
+            chase_timer = jnp.where(stuck_trigger, 0, chase_timer)
+            stuck_counter = jnp.where(stuck_trigger, 0, stuck_counter)
             
             
             # Item pickup detection
@@ -3598,10 +3785,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 player_x=final_x,
                 player_y=final_y,
                 player_direction=new_direction,
-                enemy_positions=final_enemy_positions_after_level,
                 enemy_types=final_enemy_types_after_level,
                 enemy_active=final_enemy_active_after_level,
-                    wizard_shoot_timers=final_wizard_timers_after_level,
+                wizard_shoot_timers=final_wizard_timers_after_level,
                 spawner_positions=use_sp_positions,
                 spawner_health=use_sp_health,
                 spawner_active=use_sp_active,
@@ -3628,41 +3814,22 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 step_counter=state.step_counter + 1,
                 death_counter=death_counter_after,
                 key=rng,
+                enemy_positions=new_enemy_positions,
+                enemy_dir=new_enemy_dir,
+                enemy_chase_timer=chase_timer,
+                enemy_confuse_timer=confuse_timer,
+                enemy_stuck_counter=stuck_counter,
+                enemy_patrol_box=state.enemy_patrol_box,
+                enemy_idle_timer=idle_timer,
+                enemy_pause_timer=pause_timer,
             )
             
-            # During an active freeze (from previous step), override updates and freeze or respawn
-            def do_freeze(_: None):
-                def dec_only(_: None):
-                    return state._replace(
-                        death_counter=state.death_counter - 1,
-                        step_counter=state.step_counter + 1,
-                    )
-                def respawn_now(_: None):
-                    respawn_x2 = jnp.where(state.current_level == 0, jnp.array(50, dtype=jnp.int32), jnp.array(40, dtype=jnp.int32))
-                    respawn_y2 = jnp.where(state.current_level == 0, jnp.array(50, dtype=jnp.int32), jnp.array(70, dtype=jnp.int32))
-                    # KEEP EVERYTHING: score, items, level, powerups - just restore health and clear bullets
-                    return state._replace(
-                        player_x=respawn_x2,
-                        player_y=respawn_y2,
-                        health=jnp.array(self.consts.STARTING_HEALTH, dtype=jnp.int32),
-                        damage_cooldown=jnp.array(0, dtype=jnp.int32),
-                        bullet_positions=jnp.zeros((MAX_BULLETS, 4), dtype=jnp.int32),
-                        bullet_active=jnp.zeros((MAX_BULLETS,), dtype=jnp.int32),
-                        enemy_bullet_positions=jnp.zeros((ENEMY_MAX_BULLETS, 4), dtype=jnp.int32),
-                        enemy_bullet_active=jnp.zeros((ENEMY_MAX_BULLETS,), dtype=jnp.int32),
-                        death_counter=jnp.array(0, dtype=jnp.int32),
-                        step_counter=state.step_counter + 1,
-                    )
-                return jax.lax.cond(state.death_counter > 1, dec_only, respawn_now, operand=None)
-            
-            return_state = jax.lax.cond(state.death_counter > 0, do_freeze, lambda _: new_state, operand=None)
-            
-            obs = self._get_observation(return_state)
-            reward = self._get_reward(state, return_state)
-            done = self._get_done(return_state)
-            info = self._get_info(return_state)
-            
-            return obs, return_state, reward, done, info
+            obs = self._get_observation(new_state)
+            reward = self._get_reward(state, new_state)
+            done = self._get_done(new_state)
+            info = self._get_info(new_state)
+            return obs, new_state, reward, done, info
+
 
         # Top-level choose freeze vs normal
         return jax.lax.cond(state.death_counter > 0, handle_freeze, handle_normal, operand=None)
