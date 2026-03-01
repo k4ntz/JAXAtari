@@ -389,9 +389,9 @@ class DarkChambersRenderer(JAXGameRenderer):
                 return None
             if mask.ndim == 2:
                 h, w = int(mask.shape[0]), int(mask.shape[1])
-                sx = max(1, target_w // w)
-                sy = max(1, target_h // h)
-                scaled = jnp.repeat(jnp.repeat(mask, sy, axis=0), sx, axis=1)
+                # Use uniform scale factor to preserve aspect ratio (prevents distortion)
+                scale = max(1, min(target_w // w, target_h // h))
+                scaled = jnp.repeat(jnp.repeat(mask, scale, axis=0), scale, axis=1)
                 sh, sw = int(scaled.shape[0]), int(scaled.shape[1])
                 pad_h = max(0, target_h - sh)
                 pad_w = max(0, target_w - sw)
