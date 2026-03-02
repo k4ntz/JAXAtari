@@ -165,7 +165,7 @@ class GopherState:
     player_speed: chex.Array                        
     player_has_seed: chex.Array             # 0 = No, 1 = Yes
     bonk_timer: chex.Array
-    prev_fire_pressed: chex.Array  # To check for "Tap" vs "Hold"
+    prev_fire_pressed: chex.Array  
     
     # --- Gopher ---
     gopher_position: chex.Array            
@@ -210,8 +210,9 @@ class GopherObservation:
     seeds: jnp.ndarray  
     score_player: jnp.ndarray
     gopher_state: jnp.ndarray 
-       
-class GopherInfo(NamedTuple):
+
+@flax.struct.dataclass       
+class GopherInfo:
     difficulty_level: jnp.ndarray
     time:jnp.ndarray
 
@@ -236,21 +237,22 @@ class GopherAction(IntEnum):
 # ==========================================================================================
 
 class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, GopherConstants]):
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN,
+         Action.UPFIRE, Action.RIGHTFIRE, Action.LEFTFIRE, Action.DOWNFIRE],
+        dtype=jnp.int32
+    )
     def __init__(self, consts: GopherConstants = None):
         consts = consts or GopherConstants()
         super().__init__(consts)     
         self.renderer = GopherRenderer(self.consts)
-        self.action_set = [
-            Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN,
-            Action.UPFIRE, Action.RIGHTFIRE, Action.LEFTFIRE, Action.DOWNFIRE
-        ]
-    
+
     def _player_step(self, state: GopherState, action: chex.Array) -> GopherState:
         """
         Handles player horizontal movement and bonking input.
         """
 
-        real_action = jnp.array(self.action_set)[action]
+        real_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
 
         # --- Player walking ---
         left = jnp.logical_or(real_action == Action.LEFT, real_action == Action.LEFTFIRE)
@@ -279,10 +281,6 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
                       (real_action == Action.LEFTFIRE) | (real_action == Action.RIGHTFIRE)
         valid_fire = fire_pressed & jnp.logical_not(is_frozen)
         is_bonking = state.bonk_timer > 0
-        
-
-
-        
         
         current_fire_down = fire_pressed
        
@@ -1089,10 +1087,12 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         return self.renderer.render(state)
     
     def action_space(self): 
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
     
     def observation_space(self) -> spaces.Space:
-        # Helper to create a space for the new ObjectObservation format
+        """
+        Helper to create a space for the new ObjectObservation format
+        """
         def make_object_space():
              return spaces.Dict({
                 "x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(1,), dtype=jnp.float32),
