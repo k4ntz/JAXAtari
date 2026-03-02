@@ -1118,10 +1118,44 @@ class AmidarRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, sprite_dir)
 
-        target_h, target_w = self.config.game_dimensions
-        if self.BACKGROUND.shape != (target_h, target_w):
-            bg_fill = self.BACKGROUND[0, 0]
-            self.BACKGROUND = jnp.full((target_h, target_w), bg_fill, dtype=self.BACKGROUND.dtype)
+        self.RENDER_HEIGHT, self.RENDER_WIDTH = self.SHAPE_MASKS["walked_pattern"].shape
+        self.RENDER_PATH_THICKNESS_HORIZONTAL = max(
+            1, int(round(self.constants.PATH_THICKNESS_HORIZONTAL * float(self.config.height_scaling)))
+        )
+        self.RENDER_PATH_THICKNESS_VERTICAL = max(
+            1, int(round(self.constants.PATH_THICKNESS_VERTICAL * float(self.config.width_scaling)))
+        )
+
+        path_scale = jnp.array([self.config.width_scaling, self.config.height_scaling], dtype=jnp.float32)
+        self.RENDER_HORIZONTAL_PATH_EDGES = jnp.round(
+            self.constants.HORIZONTAL_PATH_EDGES.astype(jnp.float32) * path_scale
+        ).astype(jnp.int32)
+        self.RENDER_VERTICAL_PATH_EDGES = jnp.round(
+            self.constants.VERTICAL_PATH_EDGES.astype(jnp.float32) * path_scale
+        ).astype(jnp.int32)
+        self.RENDER_PATH_CORNERS = jnp.round(
+            self.constants.PATH_CORNERS.astype(jnp.float32) * path_scale
+        ).astype(jnp.int32)
+
+        rect_scale = jnp.array(
+            [self.config.width_scaling, self.config.height_scaling, self.config.width_scaling, self.config.height_scaling],
+            dtype=jnp.float32,
+        )
+        scaled_rect_bounds = jnp.round(self.constants.RECTANGLE_BOUNDS.astype(jnp.float32) * rect_scale).astype(jnp.int32)
+        self.RENDER_RECTANGLE_BOUNDS = jnp.stack(
+            [
+                jnp.clip(scaled_rect_bounds[:, 0], 0, self.RENDER_WIDTH - 1),
+                jnp.clip(scaled_rect_bounds[:, 1], 0, self.RENDER_HEIGHT - 1),
+                jnp.clip(scaled_rect_bounds[:, 2], 0, self.RENDER_WIDTH - 1),
+                jnp.clip(scaled_rect_bounds[:, 3], 0, self.RENDER_HEIGHT - 1),
+            ],
+            axis=1,
+        )
+
+        # target_h, target_w = self.config.game_dimensions
+        # if self.BACKGROUND.shape != (target_h, target_w):
+        #     bg_fill = self.BACKGROUND[0, 0]
+        #     self.BACKGROUND = jnp.full((target_h, target_w), bg_fill, dtype=self.BACKGROUND.dtype)
 
         self.EMPTY_ENEMY_MASK = jnp.full_like(self.SHAPE_MASKS["warrior"], self.jr.TRANSPARENT_ID)
         self.ENEMY_MASKS = jnp.stack([
@@ -1144,8 +1178,7 @@ class AmidarRenderer(JAXGameRenderer):
             A JAX array representing the rendered frame.
         """
         object_raster = self.jr.create_object_raster(self.BACKGROUND)
-
-        empty_mask = jnp.zeros((self.constants.WIDTH, self.constants.HEIGHT), dtype=jnp.uint8)
+        empty_mask = jnp.zeros((self.RENDER_WIDTH, self.RENDER_HEIGHT), dtype=jnp.uint8)
 
         # Render paths
         path_mask = jax.lax.cond(state.level % 2 == 1, lambda: self.SHAPE_MASKS["path_brown"], lambda: self.SHAPE_MASKS["path_green"])
@@ -1154,14 +1187,25 @@ class AmidarRenderer(JAXGameRenderer):
         # Render walked on paths
         walked_on_paths_horizontal = state.walked_on_paths[0:jnp.shape(self.constants.HORIZONTAL_PATH_EDGES)[0]]
         walked_on_paths_vertical = state.walked_on_paths[jnp.shape(self.constants.HORIZONTAL_PATH_EDGES)[0]:]
-        _, walked_on_rendering_mask = generate_path_mask(self.constants.WIDTH, self.constants.HEIGHT, self.constants.PATH_THICKNESS_HORIZONTAL, self.constants.PATH_THICKNESS_VERTICAL, self.constants.HORIZONTAL_PATH_EDGES, self.constants.VERTICAL_PATH_EDGES, self.constants.PATH_CORNERS, horizontal_cond=walked_on_paths_horizontal, vertical_cond=walked_on_paths_vertical, corner_cond=state.walked_on_corners)
+        _, walked_on_rendering_mask = generate_path_mask(
+            self.RENDER_WIDTH,
+            self.RENDER_HEIGHT,
+            self.RENDER_PATH_THICKNESS_HORIZONTAL,
+            self.RENDER_PATH_THICKNESS_VERTICAL,
+            self.RENDER_HORIZONTAL_PATH_EDGES,
+            self.RENDER_VERTICAL_PATH_EDGES,
+            self.RENDER_PATH_CORNERS,
+            horizontal_cond=walked_on_paths_horizontal,
+            vertical_cond=walked_on_paths_vertical,
+            corner_cond=state.walked_on_corners,
+        )
         walked_on_paths_mask = jnp.where(walked_on_rendering_mask == 1, self.SHAPE_MASKS["walked_pattern"], self.jr.TRANSPARENT_ID)
         object_raster = self.jr.render_at(object_raster, 0, 0, walked_on_paths_mask)
 
         # Render completed rectangles
         # Still computed in the (HEIGHT, WIDTH) format and transposed later since the code uses (x, y) coordinates
         # Create coordinate grids for vectorized operations
-        x_coords, y_coords = jnp.meshgrid(jnp.arange(self.constants.WIDTH), jnp.arange(self.constants.HEIGHT), indexing='ij')
+        x_coords, y_coords = jnp.meshgrid(jnp.arange(self.RENDER_WIDTH), jnp.arange(self.RENDER_HEIGHT), indexing='ij')
         def create_rectangle_mask(rectangle_bounds, is_completed):
             rect_min_x, rect_min_y, rect_max_x, rect_max_y = rectangle_bounds
             def create_mask():
@@ -1170,7 +1214,7 @@ class AmidarRenderer(JAXGameRenderer):
                 rect_mask = jnp.logical_and(in_rect_x, in_rect_y).astype(jnp.uint8)
                 return rect_mask
             return jax.lax.cond(is_completed, create_mask, lambda: empty_mask)
-        rectangle_masks = jax.vmap(create_rectangle_mask, in_axes=(0, 0))(self.constants.RECTANGLE_BOUNDS, state.completed_rectangles)
+        rectangle_masks = jax.vmap(create_rectangle_mask, in_axes=(0, 0))(self.RENDER_RECTANGLE_BOUNDS, state.completed_rectangles)
         completed_rectangles_mask = jnp.any(rectangle_masks, axis=0).astype(jnp.uint8)
         completed_rectangles_mask = jnp.transpose(completed_rectangles_mask, (1, 0))  # Transpose to match the HWC format for rendering
 
@@ -1225,5 +1269,6 @@ class AmidarRenderer(JAXGameRenderer):
         # Render player
         player_mask = jax.lax.cond(state.level % 2 == 1, lambda: self.SHAPE_MASKS["player_ghost"], lambda: self.SHAPE_MASKS["player_paint_roller"])
         object_raster = self.jr.render_at(object_raster, state.player_x+self.constants.PLAYER_SPRITE_OFFSET[0], state.player_y+self.constants.PLAYER_SPRITE_OFFSET[1], player_mask)
+        rendered = self.jr.render_from_palette(object_raster, self.PALETTE)
 
-        return self.jr.render_from_palette(object_raster, self.PALETTE)
+        return rendered
