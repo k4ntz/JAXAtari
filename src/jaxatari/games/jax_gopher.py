@@ -1091,7 +1091,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         return jnp.sum(state.carrots_present) == 0
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(self, state: GopherState, action: chex.Array, next_state: GopherState) -> chex.Array:
+    def _get_reward(self, state: GopherState, next_state: GopherState) -> chex.Array:
         return jnp.float32(next_state.score - state.score)
     
     def action_space(self): 
