@@ -216,6 +216,12 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             lambda: state.score
         )
 
+        inactive_time = jax.lax.cond(
+            is_correct,
+            lambda: jnp.array(60).astype(jnp.int32),
+            lambda: jnp.array(270).astype(jnp.int32)
+        )
+
         return BasicMathState(
             jnp.concatenate([res_a, res_b]),
             state.arrPos,
@@ -223,7 +229,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             state.numberProb + 1,
             state.problemNum1,
             state.problemNum2,
-            jnp.array(270).astype(jnp.int32),
+            inactive_time,
             state.difficultyTime,
             state.key,
             state.step_counter
@@ -504,7 +510,13 @@ class BasicMathRenderer(JAXGameRenderer):
         raster = self.jr.create_object_raster(self.BACKGROUND)
         underscore_mask = self.SHAPE_MASKS["underscore"]
         symbol = self.SHAPE_MASKS["symbols"]
-        raster = self.jr.render_at(raster, (35  + state.arrPos * 15) * self.consts.SCALINGFACTOR, self.consts.bar0[1], underscore_mask[0])    
+
+
+        raster = jax.lax.cond(
+            jnp.logical_and(jnp.less(state.step_counter % 150, 120), jnp.equal(state.inactive, 0)), # NOOP
+            lambda: self.jr.render_at(raster, (31  + state.arrPos * 15) * self.consts.SCALINGFACTOR, self.consts.bar0[1], underscore_mask[0]),
+            lambda: raster
+        )
         raster = self.jr.render_at(raster, *self.consts.bar1, underscore_mask[1])
         raster = self.jr.render_at(raster, *self.consts.symbol, symbol[self.chosenGamemode])
         digit_masks = self._stack_num_masks()
@@ -525,6 +537,10 @@ class BasicMathRenderer(JAXGameRenderer):
                                 lambda ras: self.jr.render_label_selective(ras, (35 + i * 15) * self.consts.SCALINGFACTOR, self.consts.num2[1], digit, digit_masks, 0, 1, spacing=0),
                                 lambda ras: ras, 
                                 r)
-        raster = jax.lax.fori_loop(0, 6, render_nums, raster)
+        raster = jax.lax.cond(
+            jnp.less(state.inactive % 90, 60),
+            lambda: jax.lax.fori_loop(0, 6, render_nums, raster),
+            lambda: raster
+        )
 
         return self.jr.render_from_palette(raster, self.PALETTE)
