@@ -11,8 +11,6 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
-from dataclasses import dataclass
-
 def _create_background_sprite(consts: "BasicMathConstants", gameMode: int) -> jnp.ndarray:
     bg_color_rgba = (*consts.COLOR_CODES[gameMode][0], 255)
     return jnp.tile(
@@ -190,19 +188,6 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         )
 
         return x, y, key
-        
-    
-    def _evaluate_arr(self, arr: chex.Array):
-        arr = arr.clip(min=0)
-
-        a, b = arr[:3], arr[3:]
-
-        weights = jnp.array([100, 10, 1], dtype=jnp.int32)
-
-        val_a = jnp.dot(a, weights)
-        val_b = jnp.dot(b, weights)
-
-        return val_a, val_b
     
     def _evaluate_issue(self, state: BasicMathState, gameMode: int) -> BasicMathState:
         ops = [
@@ -214,27 +199,25 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         result = ops[gameMode](state.problemNum1, state.problemNum2)
 
-        a, b = self._evaluate_arr(state.numArr)
-
+        a, b = state.numArr[:3], state.numArr[3:]
+        res_a, res_b = self._int_to_fixed_digits(result[0], 3), self._int_to_fixed_digits(result[1], 3)
         is_correct = jax.lax.cond(
-            jnp.equal(gameMode, 3),
-            lambda _: jnp.logical_and(jnp.equal(a, result[0]), jnp.equal(b, result[1])),
-            lambda _: jnp.equal(a, result[0]),
-            operand=None,
+            gameMode == 3,
+            lambda: jnp.logical_and(
+                jnp.all(a == res_a),
+                jnp.all(b == res_b)
+            ),
+            lambda: jnp.all(a == res_a)
         )
 
         score = jax.lax.cond(
             is_correct,
-            lambda s: s + 1,
-            lambda s: s,
-            operand=state.score,
+            lambda: state.score + 1,
+            lambda: state.score
         )
 
-        arr_a = self._int_to_fixed_digits(result[0], 3)
-        arr_b = self._int_to_fixed_digits(result[1], 3)
-
         return BasicMathState(
-            jnp.concatenate([arr_a, arr_b]),
+            jnp.concatenate([res_a, res_b]),
             state.arrPos,
             score,
             state.numberProb + 1,
