@@ -878,10 +878,29 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
         def take_step():
             random_key, random_enemies_key = jax.random.split(state.random_key)
 
-            player_state = jax.lax.cond(get_player_speed(state.frame_counter), player_step, lambda constants, state, action: (0, state.player_x, state.player_y, state.player_direction, state.last_walked_corner, state.walked_on_paths, state.walked_on_corners, state.completed_rectangles, False, False), self.constants, state, action)
+            player_state = jax.lax.cond(
+                get_player_speed(state.frame_counter),
+                lambda: player_step(self.constants, state, action),
+                lambda: (
+                    0,
+                    state.player_x,
+                    state.player_y,
+                    state.player_direction,
+                    state.last_walked_corner,
+                    state.walked_on_paths,
+                    state.walked_on_corners,
+                    state.completed_rectangles,
+                    False,
+                    False,
+                ),
+            )
             (points_scored_player_step, player_x, player_y, player_direction, last_walked_corner, walked_on_paths, walked_on_corners, completed_rectangles, corners_completed, next_level) = player_state
 
-            enemies_state = jax.lax.cond(get_enemy_speed(state.frame_counter, state.level), enemies_step, lambda constants, state, random_key: (state.enemy_positions, state.enemy_directions), self.constants, state, random_enemies_key)
+            enemies_state = jax.lax.cond(
+                get_enemy_speed(state.frame_counter, state.level),
+                lambda: enemies_step(self.constants, state, random_enemies_key),
+                lambda: (state.enemy_positions, state.enemy_directions),
+            )
             (enemy_positions, enemy_directions) = enemies_state
 
             # CHICKEN MODE-handling
@@ -907,7 +926,27 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
                 lambda: (enemy_positions, enemy_directions, player_x, player_y, player_direction, state.lives, state.freeze_counter, times_jumped))  # Keep the current enemy positions and directions
 
             # Update the level if all edges are completed
-            level, lives, enemy_positions, enemy_directions, enemy_types, freeze_counter, walked_on_paths, walked_on_corners, completed_rectangles, player_x, player_y, player_direction, chicken_counter, jump_counter, times_jumped = jax.lax.cond(next_level, activate_next_level, lambda constants, level, lives, enemy_positions, enemy_directions, enemy_types: (level, lives, enemy_positions, enemy_directions, enemy_types, freeze_counter, walked_on_paths, walked_on_corners, completed_rectangles, player_x, player_y, player_direction, chicken_counter, jump_counter, times_jumped), self.constants, state.level, lives, enemy_positions, enemy_directions, enemy_types)
+            level, lives, enemy_positions, enemy_directions, enemy_types, freeze_counter, walked_on_paths, walked_on_corners, completed_rectangles, player_x, player_y, player_direction, chicken_counter, jump_counter, times_jumped = jax.lax.cond(
+                next_level,
+                lambda: activate_next_level(self.constants, state.level, lives, enemy_positions, enemy_directions, enemy_types),
+                lambda: (
+                    state.level,
+                    lives,
+                    enemy_positions,
+                    enemy_directions,
+                    enemy_types,
+                    freeze_counter,
+                    walked_on_paths,
+                    walked_on_corners,
+                    completed_rectangles,
+                    player_x,
+                    player_y,
+                    player_direction,
+                    chicken_counter,
+                    jump_counter,
+                    times_jumped,
+                ),
+            )
 
             new_state = AmidarState(
                 frame_counter=state.frame_counter + 1,  # Increment the frame counter
