@@ -1058,7 +1058,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
             gopher_state=jnp.array([state.gopher_action, state.gopher_direction_x])
         )
         
-    def step(self, state: GopherState, action: chex.Array) -> tuple[chex.Array, GopherState, jnp.ndarray, jnp.ndarray, dict]:
+    def _step(self, state: GopherState, action: chex.Array) -> tuple[chex.Array, GopherState, jnp.ndarray, jnp.ndarray, dict]:
         key, k_duck = jax.random.split(state.key)
         state = state.replace(key=key) 
         
