@@ -35,9 +35,8 @@ class EntityPosition(NamedTuple):
     height: jnp.ndarray
 
 class BasicMathConstants(NamedTuple):
-    SCALINGFACTOR: int = 1
-    SCREEN_WIDTH: int = 160 * SCALINGFACTOR
-    SCREEN_HEIGHT: int = 210 * SCALINGFACTOR
+    SCREEN_WIDTH: int = 160
+    SCREEN_HEIGHT: int = 210
 
     GAMEMODE: int = 5
     DIFFICULTY: int = 0
@@ -49,14 +48,14 @@ class BasicMathConstants(NamedTuple):
         [(161, 104, 35), (65, 144, 58)]
     ]
 
-    X_OFFSET: int = 47 * SCALINGFACTOR
-    Y_OFFSET: int = 35 * SCALINGFACTOR
-    num0 = (X_OFFSET + 20 * SCALINGFACTOR, Y_OFFSET + 20 * SCALINGFACTOR)
-    num1 = (num0[0], num0[1] + 40 * SCALINGFACTOR)
-    num2 = (num1[0], num1[1] + 40 * SCALINGFACTOR)
-    bar0 = (num2[0], num2[1] + 29 * SCALINGFACTOR)
-    bar1 = (X_OFFSET, num1[1] + 30 * SCALINGFACTOR)
-    symbol = (X_OFFSET + 5 * SCALINGFACTOR, num1[1])
+    X_OFFSET: int = 47
+    Y_OFFSET: int = 35
+    num0 = (X_OFFSET + 20, Y_OFFSET + 20)
+    num1 = (num0[0], num0[1] + 40)
+    num2 = (num1[0], num1[1] + 40)
+    bar0 = (num2[0], num2[1] + 29)
+    bar1 = (X_OFFSET, num1[1] + 30)
+    symbol = (X_OFFSET + 5, num1[1])
 
     INITIAL_NUMARR = chex.Array = jnp.array([-1, -1, -1, -1, -1, -1], dtype=jnp.int32)
     DIFFICULTY_TIMES = chex.Array = jnp.array([-1, -1, 360, 720], dtype=jnp.int32)
@@ -144,7 +143,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
     
     def _get_observation(self, state: BasicMathState):
         pos = EntityPosition(
-            x=jnp.array(35 * self.consts.SCALINGFACTOR + state.arrPos * 15 * self.consts.SCALINGFACTOR),
+            x=jnp.array(35 + state.arrPos * 15),
             y=jnp.array(self.consts.bar0[1]),
             width=jnp.array(20),
             height=jnp.array(2),
@@ -514,7 +513,7 @@ class BasicMathRenderer(JAXGameRenderer):
 
         raster = jax.lax.cond(
             jnp.logical_and(jnp.less(state.step_counter % 150, 120), jnp.equal(state.inactive, 0)),
-            lambda: self.jr.render_at(raster, (31  + state.arrPos * 15) * self.consts.SCALINGFACTOR, self.consts.bar0[1], underscore_mask[0]),
+            lambda: self.jr.render_at(raster, (31  + state.arrPos * 15), self.consts.bar0[1], underscore_mask[0]),
             lambda: raster
         )
         raster = self.jr.render_at(raster, *self.consts.bar1, underscore_mask[1])
@@ -534,7 +533,7 @@ class BasicMathRenderer(JAXGameRenderer):
             is_active = num != -1
             
             return jax.lax.cond(is_active, 
-                                lambda ras: self.jr.render_label_selective(ras, (35 + i * 15) * self.consts.SCALINGFACTOR, self.consts.num2[1], digit, digit_masks, 0, 1, spacing=0),
+                                lambda ras: self.jr.render_label_selective(ras, 35 + i * 15, self.consts.num2[1], digit, digit_masks, 0, 1, spacing=0),
                                 lambda ras: ras, 
                                 r)
         raster = jax.lax.cond(
