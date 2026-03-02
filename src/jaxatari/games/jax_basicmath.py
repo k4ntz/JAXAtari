@@ -360,7 +360,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         return obs, state
     
     def _active(self, state: BasicMathState, action: chex.Array, gameMode: int, difficulty_time: chex.Array) -> BasicMathState:
-        act = state.step_counter % 2 == 0
+        act = state.step_counter % 4 == 0
         countDown = jnp.equal(difficulty_time, 0)
 
         new_action = jax.lax.cond(
@@ -513,7 +513,7 @@ class BasicMathRenderer(JAXGameRenderer):
 
 
         raster = jax.lax.cond(
-            jnp.logical_and(jnp.less(state.step_counter % 150, 120), jnp.equal(state.inactive, 0)), # NOOP
+            jnp.logical_and(jnp.less(state.step_counter % 150, 120), jnp.equal(state.inactive, 0)),
             lambda: self.jr.render_at(raster, (31  + state.arrPos * 15) * self.consts.SCALINGFACTOR, self.consts.bar0[1], underscore_mask[0]),
             lambda: raster
         )
