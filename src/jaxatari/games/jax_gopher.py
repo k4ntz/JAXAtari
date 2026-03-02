@@ -252,7 +252,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         Handles player horizontal movement and bonking input.
         """
 
-        real_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+        real_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
 
         # --- Player walking ---
         left = jnp.logical_or(real_action == Action.LEFT, real_action == Action.LEFTFIRE)
@@ -339,7 +339,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         l1_dug = state.hole_layout[h_idx, 0] == 1
         
         # Map holes to tunnel tiles
-        t1 = (hole_positions[h_idx] // 4).astype(jnp.int32)
+        t1 = jnp.int32(hole_positions[h_idx] // 4)
         t2 = t1 + 1
         t_left_outer = jnp.maximum(0, t1 - 1)
         t_right_outer = jnp.minimum(self.consts.NUM_TILES - 1, t2 + 1)
@@ -598,7 +598,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
 
         # --- Dig tunel ---
         center_x = curr_x + 6.0
-        current_center_idx = (center_x // 4.0).astype(jnp.int32) % 40
+        current_center_idx = jnp.int32(center_x // 4.0) % 40
         is_edge_transition = (new_x < 2.0) | (new_x > 144.0)
         
         is_normal_move = (next_act == GopherAction.WALKING) | (next_act == GopherAction.DIGGING_TUNNEL)
@@ -823,7 +823,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         final_dir = new_dir_raw * dir_mod
 
         # Garantie the tunnels under hole
-        t1 = (jnp.array(self.consts.HOLE_POSITION_X)[loc["h_idx"]] // 4).astype(jnp.int32)
+        t1 = jnp.int32(jnp.array(self.consts.HOLE_POSITION_X)[loc["h_idx"]] // 4)
         t2 = t1 + 1
         new_tunnels = jax.lax.cond(
             break_roof,
@@ -1077,7 +1077,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         bonk_bonus = jax.lax.select(is_any_bonk, 100, 0)
         true_final_score = score_before_reset + bonk_bonus
         
-        reward = (true_final_score - old_score).astype(jnp.float32)
+        reward = jnp.float32(true_final_score - old_score)
         done = game_over
         info = self._get_info(state)
         return obs, state, reward, done, info
@@ -1085,6 +1085,14 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: GopherState) -> jnp.ndarray:
         return self.renderer.render(state)
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _is_terminal(self, state: GopherState) -> bool:
+        return jnp.sum(state.carrots_present) == 0
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, state: GopherState, action: chex.Array, next_state: GopherState) -> chex.Array:
+        return jnp.float32(next_state.score - state.score)
     
     def action_space(self): 
         return spaces.Discrete(len(self.ACTION_SET))
