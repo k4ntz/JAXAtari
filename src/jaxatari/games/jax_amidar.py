@@ -1151,11 +1151,11 @@ class AmidarRenderer(JAXGameRenderer):
             ],
             axis=1,
         )
-
-        # target_h, target_w = self.config.game_dimensions
-        # if self.BACKGROUND.shape != (target_h, target_w):
-        #     bg_fill = self.BACKGROUND[0, 0]
-        #     self.BACKGROUND = jnp.full((target_h, target_w), bg_fill, dtype=self.BACKGROUND.dtype)
+        
+        # since the background asset is only a single pixel, we need to tile it to the correct size for rendering 
+        if self.BACKGROUND.shape != (self.RENDER_HEIGHT, self.RENDER_WIDTH):
+            bg_fill = self.BACKGROUND[0, 0]
+            self.BACKGROUND = jnp.full((self.RENDER_HEIGHT, self.RENDER_WIDTH), bg_fill, dtype=self.BACKGROUND.dtype)
 
         self.EMPTY_ENEMY_MASK = jnp.full_like(self.SHAPE_MASKS["warrior"], self.jr.TRANSPARENT_ID)
         self.ENEMY_MASKS = jnp.stack([
