@@ -218,6 +218,11 @@ class CrossbowObservation(NamedTuple):
 
 class CrossbowInfo(NamedTuple):
     time: jnp.ndarray
+    game_phase: jnp.ndarray
+    num_enemies: jnp.ndarray
+    is_dying: jnp.ndarray
+    rope_1_broken: jnp.ndarray
+    rope_2_broken: jnp.ndarray
 
 
 class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInfo, CrossbowConstants]):
@@ -248,13 +253,20 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         return (new_state.score - state.score).astype(float)
 
     def _get_done(self, state: CrossbowState) -> bool:
-        return jnp.logical_or(state.lives == 0, state.step_counter > 4000)
+        return jnp.logical_or(state.lives <= 0, state.step_counter > self.max_episode_steps)
 
     def _get_observation(self, state):
         return CrossbowObservation(state.cursor_x, state.cursor_y, state.friend_x, state.game_phase, state.lives, state.score)
 
     def _get_info(self, state):
-        return CrossbowInfo(time=state.step_counter)
+        return CrossbowInfo(
+            time=state.step_counter,
+            game_phase=state.game_phase,
+            num_enemies=jnp.sum(state.enemies_active),
+            is_dying=state.dying_timer > 0,
+            rope_1_broken=state.rope_1_broken,
+            rope_2_broken=state.rope_2_broken,
+        )
 
     def obs_to_flat_array(self, obs: CrossbowObservation) -> jnp.ndarray:
         return jnp.stack([
@@ -1448,30 +1460,6 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
         return self.get_obs(state), state, reward, done, self.get_info(state)
 
-    def _get_observation(self, state): return CrossbowObservation(state.cursor_x, state.cursor_y, state.friend_x, state.game_phase, state.lives, state.score)
-    def _get_info(self, state): return CrossbowInfo(time=state.step_counter)
-
-    def obs_to_flat_array(self, obs: CrossbowObservation) -> jnp.ndarray:
-        return jnp.stack([
-            obs.cursor_x,
-            obs.cursor_y,
-            obs.friend_x,
-            obs.game_phase,
-            obs.lives,
-            obs.score
-        ], axis=-1).astype(jnp.int32)
-
-    def action_space(self): return spaces.Discrete(18)
-    def observation_space(self):
-        return spaces.Dict({
-            "cursor_x": spaces.Box(0, self.consts.WIDTH, (), jnp.int32),
-            "cursor_y": spaces.Box(0, self.consts.HEIGHT, (), jnp.int32),
-            "friend_x": spaces.Box(0, self.consts.WIDTH, (), jnp.int32),
-            "game_phase": spaces.Discrete(8),
-            "lives": spaces.Box(0, self.consts.MAX_LIVES, (), jnp.int32),
-            "score": spaces.Box(0, 9999999, (), jnp.int32),
-        })
-    def image_space(self): return spaces.Box(0, 255, (210, 160, 3), jnp.uint8)
     def render(self, state: CrossbowState) -> jnp.ndarray: return self.renderer.render(state)
 
 class CrossbowRenderer(JAXGameRenderer):
@@ -1621,11 +1609,11 @@ class CrossbowRenderer(JAXGameRenderer):
             bat_idx = jnp.where(age < 48, jnp.minimum(age // 16, 2), 3 + ((age - 48) // 8) % 2)
             stal_idx = jnp.where(enemy_type == EnemyType.STALACTITE_HANGING, 1, 0)
 
-            snake_mask = jax.lax.switch(snake_frame_idx, [lambda j=j: self.snake_anim_masks[j] for j in range(5)])
-            eye_mask = jax.lax.switch(eye_frame_idx, [lambda j=j: self.eye_anim_masks[j] for j in range(5)])
-            bat_mask = jax.lax.switch(bat_idx, [lambda j=j: self.bat_anim_masks[j] for j in range(5)])
-            stal_mask = jax.lax.switch(stal_idx, [lambda j=j: self.stalactite_masks[j] for j in range(2)])
-            arrow_mask = jax.lax.switch(final_arrow_idx, [lambda j=j: self.arrow_sprites[j] for j in range(8)])
+            snake_mask = self.snake_anim_masks[snake_frame_idx]
+            eye_mask = self.eye_anim_masks[eye_frame_idx]
+            bat_mask = self.bat_anim_masks[bat_idx]
+            stal_mask = self.stalactite_masks[stal_idx]
+            arrow_mask = self.arrow_sprites[final_arrow_idx]
 
             # Pick the mask
             m = jax.lax.switch(enemy_type, [
