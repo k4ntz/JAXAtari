@@ -991,7 +991,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 fighter = fighter._replace(phase=fighter.phase - 1)
                 # check counter elapsed: despawn
                 fighter = jax.lax.cond(
-                    fighter.phase <= 10,
+                    jnp.logical_and(fighter.phase <= 10, fighter.death_anim_counter==0),
                     lambda f: f._replace(active=False),
                     lambda f: f,
                     fighter
