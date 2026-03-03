@@ -149,7 +149,7 @@ class BattlezoneConstants(NamedTuple):
 
     # --- game mechanics ---
     HITBOX_SIZE: float = 6.0  # player
-    ENEMY_HITBOX_SIZE: float = 4.5 #todo change  # full hitbox size is twice this in both directions (square)
+    ENEMY_HITBOX_SIZE: float = 6.0 #todo change  # full hitbox size is twice this in both directions (square)
     ENEMY_SPAWN_PROBS: jnp.array = jnp.array([
         # TANK, SAUCER, FIGHTER_JET, SUPER_TANK
         [1.0, 0.0, 0.0], #, 0.0],   #1_000
@@ -1280,13 +1280,13 @@ class BattlezoneRenderer(JAXGameRenderer):
         # replace with actual color indices
         color_id1 = self.COLOR_TO_ID[self.consts.CHAINS_COL_1]
         color_id2 = self.COLOR_TO_ID[self.consts.CHAINS_COL_2]
-        jnp.where(row_values == 0, color_id1, color_id2)
+        row_values = jnp.where(row_values == 0, color_id1, color_id2)
         # create and scroll array
         arr = jnp.broadcast_to(row_values[:, None], (h, w))
         scrolled = jnp.roll(arr, shift=scroll, axis=0)
 
 
-        return jnp.where(chainMask==255, chainMask, scrolled)
+        return jnp.where(chainMask==self.jr.TRANSPARENT_ID, chainMask, scrolled)
 
 
     def _scroll_grass_back(self, grass_mask, scroll):
@@ -1462,11 +1462,11 @@ class BattlezoneRenderer(JAXGameRenderer):
             zoomed_mask = self.zoom_mask(enemy_mask, zoom_factor)
             x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
 
-            rightmost_col = jnp.max(jnp.where(jnp.any(zoomed_mask != 255, axis=0),
+            rightmost_col = jnp.max(jnp.where(jnp.any(zoomed_mask != self.jr.TRANSPARENT_ID, axis=0),
                                             jnp.arange(zoomed_mask.shape[1]),
-                                            self.jr.TRANSPARENT_ID))
+                                            0))
 
-            return self.jr.render_at_clipped(raster, x - (rightmost_col // 2), self.consts.ENEMY_POS_Y, zoomed_mask)
+            return self.jr.render_at_clipped(raster, x- (rightmost_col // 2), self.consts.ENEMY_POS_Y, zoomed_mask)
         
         def enemy_inactive(enemy):
 
@@ -1490,9 +1490,9 @@ class BattlezoneRenderer(JAXGameRenderer):
                 zoomed_mask = self.zoom_mask(mask, zoom_factor)
                 x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
 
-                rightmost_col = jnp.max(jnp.where(jnp.any(zoomed_mask != 255, axis=0),
+                rightmost_col = jnp.max(jnp.where(jnp.any(zoomed_mask != self.jr.TRANSPARENT_ID, axis=0),
                                             jnp.arange(zoomed_mask.shape[1]),
-                                            self.jr.TRANSPARENT_ID))
+                                            0))
 
                 return self.jr.render_at_clipped(raster, x - (rightmost_col // 2), self.consts.ENEMY_POS_Y, zoomed_mask)
             
@@ -1511,9 +1511,9 @@ class BattlezoneRenderer(JAXGameRenderer):
             projectile_mask = self.projectile_masks[projectile_mask_index]
             x, y = self.world_cords_to_viewport_cords(projectile.x, projectile.z)
 
-            rightmost_col = jnp.max(jnp.where(jnp.any(projectile_mask != 255, axis=0),
+            rightmost_col = jnp.max(jnp.where(jnp.any(projectile_mask != self.jr.TRANSPARENT_ID, axis=0),
                                             jnp.arange(projectile_mask.shape[1]),
-                                            self.jr.TRANSPARENT_ID))
+                                            0))
             
             return self.jr.render_at_clipped(raster, x - (rightmost_col // 2), y, projectile_mask)
             
