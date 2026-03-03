@@ -1107,202 +1107,202 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
         return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
 
-def _jungle_map_logic(self, state: CrossbowState) -> Tuple[CrossbowState, bool]:
-    rng, spawn_key, scatter_key, eye_key, coconut_key, k_type, k_x, k_coconut_dx = jax.random.split(state.key, 8)
-    HIT_TOLERANCE = 8
-    MAX_CONCURRENT_ENEMIES = 3
-    COCONUT_THROW_PROB = 0.008
+    def _jungle_map_logic(self, state: CrossbowState) -> Tuple[CrossbowState, bool]:
+        rng, spawn_key, scatter_key, eye_key, coconut_key, k_type, k_x, k_coconut_dx = jax.random.split(state.key, 8)
+        HIT_TOLERANCE = 8
+        MAX_CONCURRENT_ENEMIES = 3
+        COCONUT_THROW_PROB = 0.008
 
-    cx, cy = state.cursor_x, state.cursor_y
-    ex, ey = state.enemies_x, state.enemies_y
+        cx, cy = state.cursor_x, state.cursor_y
+        ex, ey = state.enemies_x, state.enemies_y
 
-    hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE,
+        hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE,
                             cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
-    hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE,
+        hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE,
                             cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)
-    is_hit = jnp.logical_and(hit_x, hit_y)
-    valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
-    surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
+        is_hit = jnp.logical_and(hit_x, hit_y)
+        valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
+        surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
 
-    point_values = jnp.array([0, 0, 0, 0, 0, 0, 0, 0, 100, 50, 200, 0, 0, 0, 0, 0, 0, 0, 0, 1000])
-    reward = jnp.sum(jnp.where(valid_kill, point_values[state.enemies_type], 0))
+        point_values = jnp.array([0, 0, 0, 0, 0, 0, 0, 0, 100, 50, 200, 0, 0, 0, 0, 0, 0, 0, 0, 1000])
+        reward = jnp.sum(jnp.where(valid_kill, point_values[state.enemies_type], 0))
 
-    # --- Movement ---
-    is_coconut = state.enemies_type == EnemyType.COCONUT
-    is_monkey = state.enemies_type == EnemyType.MONKEY
-    is_static = jnp.logical_or(
-        state.enemies_type == EnemyType.VORACIOUS_PLANT,
-        state.enemies_type == EnemyType.EYE
-    )
+        # --- Movement ---
+        is_coconut = state.enemies_type == EnemyType.COCONUT
+        is_monkey = state.enemies_type == EnemyType.MONKEY
+        is_static = jnp.logical_or(
+            state.enemies_type == EnemyType.VORACIOUS_PLANT,
+            state.enemies_type == EnemyType.EYE
+        )
 
-    # Coconuts fall with gravity
-    gravity = 0.10
-    new_dy = jnp.where(is_coconut, state.enemies_dy + gravity, state.enemies_dy)
+        # Coconuts fall with gravity
+        gravity = 0.10
+        new_dy = jnp.where(is_coconut, state.enemies_dy + gravity, state.enemies_dy)
 
-    # Monkeys bounce horizontally
-    monkey_dx = jnp.where(
-        state.enemies_x < 20, jnp.abs(state.enemies_dx),
-        jnp.where(state.enemies_x > self.consts.WIDTH - 20, -jnp.abs(state.enemies_dx),
-        state.enemies_dx)
-    )
-    new_dx = jnp.where(is_monkey, monkey_dx, state.enemies_dx)
+        # Monkeys bounce horizontally
+        monkey_dx = jnp.where(
+            state.enemies_x < 20, jnp.abs(state.enemies_dx),
+            jnp.where(state.enemies_x > self.consts.WIDTH - 20, -jnp.abs(state.enemies_dx),
+            state.enemies_dx)
+        )
+        new_dx = jnp.where(is_monkey, monkey_dx, state.enemies_dx)
 
-    new_x = jnp.where(is_static, state.enemies_x, state.enemies_x + new_dx)
-    new_y = jnp.where(is_static, state.enemies_y,
+        new_x = jnp.where(is_static, state.enemies_x, state.enemies_x + new_dx)
+        new_y = jnp.where(is_static, state.enemies_y,
              jnp.where(is_monkey, state.enemies_y, state.enemies_y + new_dy))
 
-    # --- Monkey throws coconut ---
-    throw_rolls = jax.random.uniform(coconut_key, (self.consts.MAX_ENEMIES,))
-    monkey_throws = jnp.logical_and(
-        jnp.logical_and(surviving_enemies, is_monkey),
-        throw_rolls < COCONUT_THROW_PROB
-    )
-    throwing_monkey_idx = jnp.argmax(monkey_throws)
-    any_monkey_throws = jnp.any(monkey_throws)
+        # --- Monkey throws coconut ---
+        throw_rolls = jax.random.uniform(coconut_key, (self.consts.MAX_ENEMIES,))
+        monkey_throws = jnp.logical_and(
+            jnp.logical_and(surviving_enemies, is_monkey),
+            throw_rolls < COCONUT_THROW_PROB
+        )
+        throwing_monkey_idx = jnp.argmax(monkey_throws)
+        any_monkey_throws = jnp.any(monkey_throws)
 
-    coconut_spawn_x = state.enemies_x[throwing_monkey_idx]
-    coconut_spawn_y = state.enemies_y[throwing_monkey_idx] + self.consts.ENEMY_SIZE[1]
+        coconut_spawn_x = state.enemies_x[throwing_monkey_idx]
+        coconut_spawn_y = state.enemies_y[throwing_monkey_idx] + self.consts.ENEMY_SIZE[1]
 
-    # --- Eye spawn ---
-    available_slots = jnp.logical_not(surviving_enemies)
-    should_spawn_eye, eye_x, eye_y = self._compute_eye_spawn(
-        state, eye_key, (20.0, 140.0), (20.0, 80.0)
-    )
-    eye_spawn_mask = self._get_eye_spawn_mask(available_slots, should_spawn_eye)
-    has_eye_spawn = jnp.any(eye_spawn_mask)
+        # --- Eye spawn ---
+        available_slots = jnp.logical_not(surviving_enemies)
+        should_spawn_eye, eye_x, eye_y = self._compute_eye_spawn(
+            state, eye_key, (20.0, 140.0), (20.0, 80.0)
+        )
+        eye_spawn_mask = self._get_eye_spawn_mask(available_slots, should_spawn_eye)
+        has_eye_spawn = jnp.any(eye_spawn_mask)
 
-    # Coconut slot
-    available_for_coconut = jnp.logical_and(available_slots, jnp.logical_not(eye_spawn_mask))
-    coconut_slot_idx = jnp.argmax(available_for_coconut)
-    can_spawn_coconut = jnp.logical_and(any_monkey_throws, jnp.any(available_for_coconut))
-    coconut_spawn_mask = jnp.where(
-        can_spawn_coconut,
-        jax.nn.one_hot(coconut_slot_idx, self.consts.MAX_ENEMIES, dtype=bool),
-        jnp.zeros(self.consts.MAX_ENEMIES, dtype=bool)
-    )
+        # Coconut slot
+        available_for_coconut = jnp.logical_and(available_slots, jnp.logical_not(eye_spawn_mask))
+        coconut_slot_idx = jnp.argmax(available_for_coconut)
+        can_spawn_coconut = jnp.logical_and(any_monkey_throws, jnp.any(available_for_coconut))
+        coconut_spawn_mask = jnp.where(
+            can_spawn_coconut,
+            jax.nn.one_hot(coconut_slot_idx, self.consts.MAX_ENEMIES, dtype=bool),
+            jnp.zeros(self.consts.MAX_ENEMIES, dtype=bool)
+        )
 
-    # Generic spawn (monkeys and plants only)
-    current_enemy_count = jnp.sum(surviving_enemies)
-    spawn_chance = jax.random.uniform(spawn_key, (self.consts.MAX_ENEMIES,)) < 0.012
-    spawn_count = jnp.cumsum(spawn_chance & available_slots)
-    allowed_spawns = spawn_count <= (MAX_CONCURRENT_ENEMIES - current_enemy_count)
-    should_spawn_generic = jnp.logical_and(available_slots,
+        # Generic spawn (monkeys and plants only)
+        current_enemy_count = jnp.sum(surviving_enemies)
+        spawn_chance = jax.random.uniform(spawn_key, (self.consts.MAX_ENEMIES,)) < 0.012
+        spawn_count = jnp.cumsum(spawn_chance & available_slots)
+        allowed_spawns = spawn_count <= (MAX_CONCURRENT_ENEMIES - current_enemy_count)
+        should_spawn_generic = jnp.logical_and(available_slots,
                            jnp.logical_and(spawn_chance, allowed_spawns))
-    should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(eye_spawn_mask))
-    should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(coconut_spawn_mask))
+        should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(eye_spawn_mask))
+        should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(coconut_spawn_mask))
 
-    # Use separate keys for type and position
-    type_roll = jax.random.uniform(k_type, (self.consts.MAX_ENEMIES,))
-    spawn_type_generic = jnp.where(type_roll < 0.5, EnemyType.MONKEY, EnemyType.VORACIOUS_PLANT)
+        # Use separate keys for type and position
+        type_roll = jax.random.uniform(k_type, (self.consts.MAX_ENEMIES,))
+        spawn_type_generic = jnp.where(type_roll < 0.5, EnemyType.MONKEY, EnemyType.VORACIOUS_PLANT)
 
-    spawn_x_generic = jax.random.randint(
-        k_x, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH - 20
-    ).astype(jnp.float32)
-    spawn_y_generic = jnp.where(
-        spawn_type_generic == EnemyType.MONKEY,
-        40.0,
-        float(self.consts.GROUND_Y_MIN)
-    )
+        spawn_x_generic = jax.random.randint(
+            k_x, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH - 20
+        ).astype(jnp.float32)
+        spawn_y_generic = jnp.where(
+            spawn_type_generic == EnemyType.MONKEY,
+            40.0,
+            float(self.consts.GROUND_Y_MIN)
+        )
 
-    # Monkeys start with horizontal velocity, plants stay static
-    spawn_dx_generic = jnp.where(
-        spawn_type_generic == EnemyType.MONKEY,
-        jnp.where(spawn_x_generic < self.consts.WIDTH / 2, 0.4, -0.4),
-        0.0
-    )
+        # Monkeys start with horizontal velocity, plants stay static
+        spawn_dx_generic = jnp.where(
+            spawn_type_generic == EnemyType.MONKEY,
+            jnp.where(spawn_x_generic < self.consts.WIDTH / 2, 0.4, -0.4),
+            0.0
+        )
 
-    # Small horizontal arc for coconuts
-    coconut_dx = jax.random.uniform(
-        k_coconut_dx, (self.consts.MAX_ENEMIES,), minval=-0.5, maxval=0.5
-    )
+        # Small horizontal arc for coconuts
+        coconut_dx = jax.random.uniform(
+            k_coconut_dx, (self.consts.MAX_ENEMIES,), minval=-0.5, maxval=0.5
+        )
+        # --- Combine all spawns ---
+        should_spawn_final = jnp.logical_or(
+            should_spawn_generic,
+            jnp.logical_or(eye_spawn_mask, coconut_spawn_mask)
+        )
 
-    # --- Combine all spawns ---
-    should_spawn_final = jnp.logical_or(
-        should_spawn_generic,
-        jnp.logical_or(eye_spawn_mask, coconut_spawn_mask)
-    )
+        spawn_x = jnp.select(
+            [eye_spawn_mask, coconut_spawn_mask, should_spawn_generic],
+            [eye_x, coconut_spawn_x, spawn_x_generic],
+         default=0.0
+        )
+        spawn_y = jnp.select(
+            [eye_spawn_mask, coconut_spawn_mask, should_spawn_generic],
+            [eye_y, coconut_spawn_y, spawn_y_generic],
+            default=0.0
+        )
+        final_type = jnp.select(
+            [eye_spawn_mask, coconut_spawn_mask, should_spawn_generic],
+            [EnemyType.EYE, EnemyType.COCONUT, spawn_type_generic],
+            default=state.enemies_type
+        )
 
-    spawn_x = jnp.select(
-        [eye_spawn_mask, coconut_spawn_mask, should_spawn_generic],
-        [eye_x, coconut_spawn_x, spawn_x_generic],
-        default=0.0
-    )
-    spawn_y = jnp.select(
-        [eye_spawn_mask, coconut_spawn_mask, should_spawn_generic],
-        [eye_y, coconut_spawn_y, spawn_y_generic],
-        default=0.0
-    )
-    final_type = jnp.select(
-        [eye_spawn_mask, coconut_spawn_mask, should_spawn_generic],
-        [EnemyType.EYE, EnemyType.COCONUT, spawn_type_generic],
-        default=state.enemies_type
-    )
+        # dx: coconuts get arc, monkeys get directional, others keep existing
+        final_dx = jnp.where(
+            coconut_spawn_mask, coconut_dx,
+            jnp.where(should_spawn_generic, spawn_dx_generic,
+                      jnp.where(should_spawn_final, 0.0, new_dx))
+        )
 
-    # dx: coconuts get arc, monkeys get directional, others keep existing
-    final_dx = jnp.where(
-        coconut_spawn_mask, coconut_dx,
-        jnp.where(should_spawn_generic, spawn_dx_generic,
-        jnp.where(should_spawn_final, 0.0, new_dx))
-    )
+        # dy: reset to 0 for all new spawns to avoid inheriting stale velocity
+        final_dy = jnp.where(should_spawn_final, 0.0, new_dy)
 
-    # dy: reset to 0 for all new spawns to avoid inheriting stale velocity
-    final_dy = jnp.where(should_spawn_final, 0.0, new_dy)
+        final_x = jnp.where(should_spawn_final, spawn_x, new_x)
+        final_y = jnp.where(should_spawn_final, spawn_y, new_y)
 
-    final_x = jnp.where(should_spawn_final, spawn_x, new_x)
-    final_y = jnp.where(should_spawn_final, spawn_y, new_y)
+        # Cull coconuts that fall off screen
+        coconut_exited = jnp.logical_and(
+            final_type == EnemyType.COCONUT,
+            final_y > self.consts.PLAY_AREA_HEIGHT
+        )
+        final_active = jnp.logical_and(
+            jnp.logical_or(surviving_enemies, should_spawn_final),
+            jnp.logical_not(coconut_exited)
+        )
 
-    # Cull coconuts that fall off screen
-    coconut_exited = jnp.logical_and(
-        final_type == EnemyType.COCONUT,
-        final_y > self.consts.PLAY_AREA_HEIGHT
-    )
-    final_active = jnp.logical_and(
-        jnp.logical_or(surviving_enemies, should_spawn_final),
-        jnp.logical_not(coconut_exited)
-    )
+        new_age = jnp.where(should_spawn_final, 0, state.enemies_age + 1)
+        final_active = self._cull_expired_eyes(final_type, new_age, final_active)
 
-    new_age = jnp.where(should_spawn_final, 0, state.enemies_age + 1)
-    final_active = self._cull_expired_eyes(final_type, new_age, final_active)
+        # --- Collision with friend ---
+        fx, fy = state.friend_x, state.friend_y
+        danger_x = jnp.logical_and(
+            final_x < fx + self.consts.FRIEND_SIZE[0],
+            final_x + self.consts.ENEMY_SIZE[0] > fx
+        )
+        danger_y = jnp.logical_and(
+            final_y < fy + self.consts.FRIEND_SIZE[1],
+            final_y + self.consts.ENEMY_SIZE[1] > fy
+        )
+        # Plants don't harm friend, only active enemies count
+        is_not_plant = jnp.logical_not(final_type == EnemyType.VORACIOUS_PLANT)
+        any_friend_hit = jnp.any(jnp.logical_and(
+            jnp.logical_and(danger_x, danger_y),
+            jnp.logical_and(final_active, is_not_plant)
+        ))
 
-    # --- Collision with friend ---
-    fx, fy = state.friend_x, state.friend_y
-    danger_x = jnp.logical_and(
-        final_x < fx + self.consts.FRIEND_SIZE[0],
-        final_x + self.consts.ENEMY_SIZE[0] > fx
-    )
-    danger_y = jnp.logical_and(
-        final_y < fy + self.consts.FRIEND_SIZE[1],
-        final_y + self.consts.ENEMY_SIZE[1] > fy
-    )
-    # Plants don't harm friend, only active enemies count
-    is_not_plant = jnp.logical_not(final_type == EnemyType.VORACIOUS_PLANT)
-    any_friend_hit = jnp.any(jnp.logical_and(
-        jnp.logical_and(danger_x, danger_y),
-        jnp.logical_and(final_active, is_not_plant)
-    ))
+        # Bonus life on first jungle completion
+        friend_completed = state.friend_x >= self.consts.WIDTH - 10
+        is_first_completion = jnp.logical_and(friend_completed, jnp.logical_not(state.rope_2_broken))
+        new_lives = jnp.minimum(state.lives + jnp.where(is_first_completion, 1, 0), 4)
+        new_rope_2_broken = jnp.logical_or(state.rope_2_broken, friend_completed)
 
-    # Bonus life on first jungle completion
-    friend_completed = state.friend_x >= self.consts.WIDTH - 10
-    is_first_completion = jnp.logical_and(friend_completed, jnp.logical_not(state.rope_2_broken))
-    new_lives = jnp.minimum(state.lives + jnp.where(is_first_completion, 1, 0), 4)
-    new_rope_2_broken = jnp.logical_or(state.rope_2_broken, friend_completed)
+        intermediate_state = state._replace(
+            score=(state.score + reward).astype(jnp.int32),
+            enemies_active=final_active,
+            enemies_x=final_x,
+            enemies_y=final_y,
+            enemies_dx=final_dx,
+            enemies_dy=final_dy,
+            enemies_type=final_type,
+            enemies_age=new_age.astype(jnp.int32),
+            key=rng,
+            lives=new_lives,
+            rope_2_broken=new_rope_2_broken,
+            eye_appeared=jnp.logical_or(state.eye_appeared, has_eye_spawn)
+        )
 
-    intermediate_state = state._replace(
-        score=(state.score + reward).astype(jnp.int32),
-        enemies_active=final_active,
-        enemies_x=final_x,
-        enemies_y=final_y,
-        enemies_dx=final_dx,
-        enemies_dy=final_dy,
-        enemies_type=final_type,
-        enemies_age=new_age.astype(jnp.int32),
-        key=rng,
-        lives=new_lives,
-        rope_2_broken=new_rope_2_broken,
-        eye_appeared=jnp.logical_or(state.eye_appeared, has_eye_spawn)
-    )
+        return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
 
-    return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
     def _generic_map_logic(self, state: CrossbowState) -> Tuple[CrossbowState, bool]:
         rng, spawn_key, scatter_key, eye_key = jax.random.split(state.key, 4)
         HIT_TOLERANCE = 8
