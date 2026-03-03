@@ -143,10 +143,13 @@ def make_train(config):
         "NUM_MINIBATCHES"
     ] == 0, "NUM_MINIBATCHES must divide NUM_STEPS*NUM_ENVS"
 
-    env = jaxatari.make(config["ENV_NAME"].lower())
-    mod_env = env
+    mods_config = []
     if config.get("MOD_NAME", None) is not None:
-        mod_env = jaxatari.modify(env, config.get("ENV_NAME", None).lower(), config.get("MOD_NAME", None).lower())
+        mods = config["MOD_NAME"]
+        mods_config = mods if isinstance(mods, list) else [mods]
+
+    env = jaxatari.make(config["ENV_NAME"].lower(), mods_config=mods_config)
+    mod_env = env
     renderer = jaxatari.make_renderer(config["ENV_NAME"].lower())
 
     def apply_wrappers(env):
