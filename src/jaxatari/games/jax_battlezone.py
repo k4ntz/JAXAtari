@@ -1190,6 +1190,7 @@ class BattlezoneRenderer(JAXGameRenderer):
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
         #----------------------create padded enemy masks for uniform shape-----------------------
+        self.transparent_id = len(self.PALETTE)-1        #they changed this from -1 maybe there is some method now??
         pad = 140
         self.padded_enemy_masks = jnp.array([
             [self.pad_to_shape(self.SHAPE_MASKS["tank_enemy_01"],pad, pad),
@@ -1361,7 +1362,7 @@ class BattlezoneRenderer(JAXGameRenderer):
         x, y = arr.shape
         pad_x = shape_target_x - x
         pad_y = shape_target_y - y
-        return jnp.pad(arr, ((0, pad_x), (0, pad_y)), mode='constant', constant_values=-1)
+        return jnp.pad(arr, ((0, pad_x), (0, pad_y)), mode='constant', constant_values=self.transparent_id)
 
     def get_enemy_mask(self, enemy:Enemy):
         # selects the correct mask fo the given enemy
@@ -1419,8 +1420,8 @@ class BattlezoneRenderer(JAXGameRenderer):
 
             # Compute coordinates in the original mask to sample
             # Zoom center is at the middle of the **non-padded region**
-            valid_rows = jnp.any(mask != -1, axis=1)
-            valid_cols = jnp.any(mask != -1, axis=0)
+            valid_rows = jnp.any(mask != self.transparent_id, axis=1)
+            valid_cols = jnp.any(mask != self.transparent_id, axis=0)
             x_min, x_max = jnp.argmax(valid_rows), x - jnp.argmax(valid_rows[::-1]) - 1
             y_min, y_max = jnp.argmax(valid_cols), y - jnp.argmax(valid_cols[::-1]) - 1
             cx, cy = (x_min + x_max) / 2, (y_min + y_max) / 2
@@ -1438,14 +1439,14 @@ class BattlezoneRenderer(JAXGameRenderer):
             y0 = jnp.floor(y_orig).astype(int)
             zoomed_mask = mask[x0, y0]
 
-            # Zero edges: set padding outside zoomed area to -1
+            # Zero edges: set padding outside zoomed area to self.transparent_id
             rows = jnp.arange(x)[:, None]
             cols = jnp.arange(y)[None, :]
             #edge = (rows < x_min) | (rows > x_max) | (cols < y_min) | (cols > y_max)
             z = zoom_factor+1
             edge = (rows < x_min+z) | (rows >= x_max - z) | \
                    (cols < y_min+z) | (cols >= y_max - z)
-            zoomed_mask = jnp.where(edge, -1, zoomed_mask)
+            zoomed_mask = jnp.where(edge, self.transparent_id, zoomed_mask)
 
             return zoomed_mask
 
@@ -1464,7 +1465,7 @@ class BattlezoneRenderer(JAXGameRenderer):
 
             rightmost_col = jnp.max(jnp.where(jnp.any(zoomed_mask != 255, axis=0),
                                             jnp.arange(zoomed_mask.shape[1]),
-                                            -1))
+                                            self.transparent_id))
 
             return self.jr.render_at_clipped(raster, x - (rightmost_col // 2), self.consts.ENEMY_POS_Y, zoomed_mask)
         
@@ -1492,7 +1493,7 @@ class BattlezoneRenderer(JAXGameRenderer):
 
                 rightmost_col = jnp.max(jnp.where(jnp.any(zoomed_mask != 255, axis=0),
                                             jnp.arange(zoomed_mask.shape[1]),
-                                            -1))
+                                            self.transparent_id))
 
                 return self.jr.render_at_clipped(raster, x - (rightmost_col // 2), self.consts.ENEMY_POS_Y, zoomed_mask)
             
@@ -1513,7 +1514,7 @@ class BattlezoneRenderer(JAXGameRenderer):
 
             rightmost_col = jnp.max(jnp.where(jnp.any(projectile_mask != 255, axis=0),
                                             jnp.arange(projectile_mask.shape[1]),
-                                            -1))
+                                            self.transparent_id))
             
             return self.jr.render_at_clipped(raster, x - (rightmost_col // 2), y, projectile_mask)
             
