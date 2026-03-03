@@ -77,6 +77,7 @@ from enum import IntEnum, unique
 
 import os
 from functools import partial
+from flax import struct
 from typing import NamedTuple, Tuple
 import jax.lax
 import jax.numpy as jnp
@@ -97,87 +98,86 @@ class EnemyType(IntEnum):
     # SUPER_TANK = 3
 
 
-class BattlezoneConstants(NamedTuple):
-
+class BattlezoneConstants(struct.PyTreeNode):
     # --- rendering: positions ---
-    WIDTH: int = 160  # rgb_array size
-    HEIGHT: int = 210
-    WALL_TOP_Y: int = 0     # correct
-    WALL_TOP_HEIGHT: int = 36   # correct
-    WALL_BOTTOM_Y: int = 177    # correct
-    WALL_BOTTOM_HEIGHT: int = 33    # correct
-    TANK_SPRITE_POS_X: int = 43
-    TANK_SPRITE_POS_Y: int = 140
-    TARGET_INDICATOR_POS_X: int = 80
-    TARGET_INDICATOR_POS_Y: int = 77
-    CHAINS_POS_Y: int = 158
-    CHAINS_L_POS_X: int = 19
-    CHAINS_R_POS_X: int = 109
-    MOUNTAINS_Y: int = 36
-    GRASS_BACK_Y: int = 95
-    HORIZON_Y: int = 92
-    GRASS_FRONT_Y: int = 137
-    RADAR_CENTER_X: int = 80
-    RADAR_CENTER_Y: int = 18
-    RADAR_RADIUS: int = 10
-    LIFE_POS_X: int = 64
-    LIFE_POS_Y: int = 189
-    LIFE_X_OFFSET: int = 8
-    SCORE_POS_X: int = 89
-    SCORE_POS_Y: int = 179
-    ENEMY_POS_Y: int = 85
+    WIDTH: int = struct.field(default=160, pytree_node=False)
+    HEIGHT: int = struct.field(default=210, pytree_node=False)
+    WALL_TOP_Y: int = struct.field(default=0, pytree_node=False)
+    WALL_TOP_HEIGHT: int = struct.field(default=36, pytree_node=False)
+    WALL_BOTTOM_Y: int = struct.field(default=177, pytree_node=False)
+    WALL_BOTTOM_HEIGHT: int = struct.field(default=33, pytree_node=False)
+    TANK_SPRITE_POS_X: int = struct.field(default=43, pytree_node=False)
+    TANK_SPRITE_POS_Y: int = struct.field(default=140, pytree_node=False)
+    TARGET_INDICATOR_POS_X: int = struct.field(default=80, pytree_node=False)
+    TARGET_INDICATOR_POS_Y: int = struct.field(default=77, pytree_node=False)
+    CHAINS_POS_Y: int = struct.field(default=158, pytree_node=False)
+    CHAINS_L_POS_X: int = struct.field(default=19, pytree_node=False)
+    CHAINS_R_POS_X: int = struct.field(default=109, pytree_node=False)
+    MOUNTAINS_Y: int = struct.field(default=36, pytree_node=False)
+    GRASS_BACK_Y: int = struct.field(default=95, pytree_node=False)
+    HORIZON_Y: int = struct.field(default=92, pytree_node=False)
+    GRASS_FRONT_Y: int = struct.field(default=137, pytree_node=False)
+    RADAR_CENTER_X: int = struct.field(default=80, pytree_node=False)
+    RADAR_CENTER_Y: int = struct.field(default=18, pytree_node=False)
+    RADAR_RADIUS: int = struct.field(default=10, pytree_node=False)
+    LIFE_POS_X: int = struct.field(default=64, pytree_node=False)
+    LIFE_POS_Y: int = struct.field(default=189, pytree_node=False)
+    LIFE_X_OFFSET: int = struct.field(default=8, pytree_node=False)
+    SCORE_POS_X: int = struct.field(default=89, pytree_node=False)
+    SCORE_POS_Y: int = struct.field(default=179, pytree_node=False)
+    ENEMY_POS_Y: int = struct.field(default=85, pytree_node=False)
 
     # --- rendering: colors ---
-    SCORE_COLOR: Tuple[int, int, int] = (26,102,26)  # (45, 129, 105) but we need to change pallette first
-    TARGET_INDICATOR_COLOR_ACTIVE: Tuple[int, int, int] = (255, 255, 0)
-    TARGET_INDICATOR_COLOR_INACTIVE: Tuple[int, int, int] = (0, 0, 0)
-    CHAINS_COL_1: Tuple[int, int, int] = (111,111,111)
-    CHAINS_COL_2: Tuple[int, int, int] = (74, 74, 74)
-    RADAR_COLOR_1: Tuple[int, int, int] = (111,210,111)
-    RADAR_COLOR_2: Tuple[int, int, int] = (236,236,236)
-    LIFE_SCORE_COLOR: Tuple[int, int, int] = (45,129,105)
+    SCORE_COLOR: Tuple[int, int, int] = struct.field(default=(26,102,26), pytree_node=False)
+    TARGET_INDICATOR_COLOR_ACTIVE: Tuple[int, int, int] = struct.field(default=(255,255,0), pytree_node=False)
+    TARGET_INDICATOR_COLOR_INACTIVE: Tuple[int, int, int] = struct.field(default=(0,0,0), pytree_node=False)
+    CHAINS_COL_1: Tuple[int, int, int] = struct.field(default=(111,111,111), pytree_node=False)
+    CHAINS_COL_2: Tuple[int, int, int] = struct.field(default=(74,74,74), pytree_node=False)
+    RADAR_COLOR_1: Tuple[int, int, int] = struct.field(default=(111,210,111), pytree_node=False)
+    RADAR_COLOR_2: Tuple[int, int, int] = struct.field(default=(236,236,236), pytree_node=False)
+    LIFE_SCORE_COLOR: Tuple[int, int, int] = struct.field(default=(45,129,105), pytree_node=False)
 
     # --- world movement ---
-    WORLD_SIZE_X: int = 256  # world size in x direction
-    WORLD_SIZE_Z: int = 256  # world size in z direction
-    PLAYER_ROTATION_SPEED: float = 2*jnp.pi/536
-    PLAYER_SPEED: float = 0.25
-    PLAYER_SPEED_DRIVETURN: float = 0.057674
-    PROJECTILE_SPEED: float = 0.5
-    ENEMY_SPEED: jnp.array = jnp.array([0.25, 0.25, 1.0, 1.0]) #todo change
-    ENEMY_ROT_SPEED: jnp.array = jnp.array([2*jnp.pi/2048, 0.01, 0.01, 0.01]) #todo change
+    WORLD_SIZE_X: int = struct.field(default=256, pytree_node=False)
+    WORLD_SIZE_Z: int = struct.field(default=256, pytree_node=False)
+    PLAYER_ROTATION_SPEED: float = struct.field(default=2*jnp.pi/536, pytree_node=False)
+    PLAYER_SPEED: float = struct.field(default=0.25, pytree_node=False)
+    PLAYER_SPEED_DRIVETURN: float = struct.field(default=0.057674, pytree_node=False)
+    PROJECTILE_SPEED: float = struct.field(default=0.5, pytree_node=False)
+    ENEMY_SPEED: chex.Array = struct.field(default_factory=lambda: jnp.array([0.25, 0.25, 1.0, 1.0]))
+    ENEMY_ROT_SPEED: chex.Array = struct.field(default_factory=lambda: jnp.array([2 * jnp.pi / 2048, 0.01, 0.01, 0.01]))
 
     # --- game mechanics ---
-    HITBOX_SIZE: float = 6.0  # player
-    ENEMY_HITBOX_SIZE: float = 6.0 #todo change  # full hitbox size is twice this in both directions (square)
-    ENEMY_SPAWN_PROBS: jnp.array = jnp.array([
-        # TANK, SAUCER, FIGHTER_JET, SUPER_TANK
-        [1.0, 0.0, 0.0], #, 0.0],   #1_000
-        [0.8, 0.2, 0.0], #, 0.0],   #2_000
-        [0.6, 0.4, 0.1], #, 0.0],   #7_000
-        [0.5, 0.5, 0.2], #, 0.1]    #12_000
-        ])
-    RADAR_MAX_SCAN_RADIUS: int = 110  #todo change
-    FIGHTER_AREA_X: Tuple[float, float] = (-12.5, 12.5)
-    FIGHTER_AREA_Z: Tuple[float, float] = (75.0, 126.0)
-    FIGHTER_SLOW_DOWN_DISTANCE: float = 48.0
-    FIGHTER_SHOOTING_DISTANCE: float = 30.0
-    FIGHTER_DESPAWN_FRAMES: int = 24
+    HITBOX_SIZE: float = struct.field(default=6.0, pytree_node=False)
+    ENEMY_HITBOX_SIZE: float = struct.field(default=4.5, pytree_node=False)
+    ENEMY_SPAWN_PROBS: chex.Array = struct.field(default_factory=lambda: jnp.array([
+        [1.0, 0.0, 0.0],
+        [0.8, 0.2, 0.0],
+        [0.6, 0.4, 0.1],
+        [0.5, 0.5, 0.2]
+    ]))
+    RADAR_MAX_SCAN_RADIUS: int = struct.field(default=110, pytree_node=False)
+    FIGHTER_AREA_X: Tuple[float, float] = struct.field(default=(-12.5, 12.5), pytree_node=False)
+    FIGHTER_AREA_Z: Tuple[float, float] = struct.field(default=(75.0, 126.0), pytree_node=False)
+    FIGHTER_SLOW_DOWN_DISTANCE: float = struct.field(default=48.0, pytree_node=False)
+    FIGHTER_SHOOTING_DISTANCE: float = struct.field(default=30.0, pytree_node=False)
+    FIGHTER_DESPAWN_FRAMES: int = struct.field(default=24, pytree_node=False)
 
     # --- timing ---
-    FIRE_CD: int = 114  # player
-    PROJECTILE_TTL: int = 110
-    DEATH_ANIM_LENGTH: int = 30
-    ENEMY_DEATH_ANIM_LENGTH: int = 30
-    ENEMY_SHOOT_CDS: jnp.array = jnp.array([400, 400, 400, 400]) #todo change
+    FIRE_CD: int = struct.field(default=114, pytree_node=False)
+    PROJECTILE_TTL: int = struct.field(default=110, pytree_node=False)
+    DEATH_ANIM_LENGTH: int = struct.field(default=30, pytree_node=False)
+    ENEMY_DEATH_ANIM_LENGTH: int = struct.field(default=30, pytree_node=False)
+    ENEMY_SHOOT_CDS: chex.Array = struct.field(default_factory=lambda: jnp.array([400, 400, 400, 400]))
 
     # --- misc ---
-    RADAR_ROTATION_SPEED: float = -0.05
-    DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = 0.05 #todo change
-    ENEMY_SCORES: chex.Array = jnp.array([1000, 5000, 2000, 3000], dtype=jnp.int32)
+    RADAR_ROTATION_SPEED: float = struct.field(default=-0.05, pytree_node=False)
+    DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = struct.field(default=0.05, pytree_node=False)
+    ENEMY_SCORES: chex.Array = struct.field(
+            default_factory=lambda: jnp.array([1000, 5000, 2000, 3000], dtype=jnp.int32))
 
-
-class Projectile(NamedTuple):
+@struct.dataclass
+class Projectile:
     """Class holding projectiles. properties are arrays."""
     x: chex.Array
     z: chex.Array
@@ -186,8 +186,8 @@ class Projectile(NamedTuple):
     distance: chex.Array
     time_to_live: chex.Array
 
-
-class Enemy(NamedTuple):
+@struct.dataclass
+class Enemy:
     x: chex.Array
     z: chex.Array
     distance: chex.Array
@@ -204,7 +204,8 @@ class Enemy(NamedTuple):
 
 
 # immutable state container
-class BattlezoneState(NamedTuple):
+@struct.dataclass
+class BattlezoneState:
     score: chex.Array
     life: chex.Array
     cur_fire_cd: chex.Array  # player current fire cooldown
@@ -221,31 +222,34 @@ class BattlezoneState(NamedTuple):
     random_key: chex.PRNGKey
     shot_spawn: chex.Array
 
-class PlayerObs(NamedTuple):
+@struct.dataclass
+class PlayerObs:
     cur_fire_cd: chex.Array
     score: chex.Array
     life: chex.Array
 
-class EnemyObs(NamedTuple):
+@struct.dataclass
+class EnemyObs:
     x: chex.Array
     z: chex.Array
     enemy_type: chex.Array
     active: chex.Array
 
-class ProjectileObs(NamedTuple):
+@struct.dataclass
+class ProjectileObs:
     x: chex.Array
     z: chex.Array
     active: chex.Array
 
-
-class BattlezoneObservation(NamedTuple):
+@struct.dataclass
+class BattlezoneObservation:
     player: PlayerObs
     enemies: EnemyObs
     projectiles: ProjectileObs
 
 
-
-class BattlezoneInfo(NamedTuple):  # TODO: fill out properly
+@struct.dataclass
+class BattlezoneInfo:  # TODO: fill out properly
     time: jnp.ndarray
 
 
@@ -311,7 +315,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         will_fire = jnp.logical_and(wants_fire, state.cur_fire_cd <= 0)
         
         def fire_projectile(state: BattlezoneState):
-            return state._replace(
+            return state.replace(
                 cur_fire_cd=jnp.array(self.consts.FIRE_CD, dtype=jnp.int32),
                 player_projectile= Projectile(
                     x=jnp.array(-0.2, dtype=jnp.float32),
@@ -358,7 +362,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                                (updated_projectiles, angle_change))
         new_player_projectile = self._obj_player_rotation_update(new_player_projectile, angle_change)
 
-        return new_state._replace(
+        return new_state.replace(
             chains_l_anim_counter=(state.chains_l_anim_counter + chain_l_offset)%32,
             chains_r_anim_counter=(state.chains_r_anim_counter + chain_r_offset)%32,
             mountains_anim_counter=(state.mountains_anim_counter + mountains_offset)%160,
@@ -378,7 +382,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                                         (state.enemies, state.enemy_projectiles))
         shoot_cd = new_enemies.shoot_cd
         new_shoot_cd = jnp.where(shoot_cd > 0, shoot_cd - 1, shoot_cd)
-        return state._replace(enemies=new_enemies._replace(death_anim_counter=new_death_anim_counter,
+        return state.replace(enemies=new_enemies.replace(death_anim_counter=new_death_anim_counter,
                                                            shoot_cd=new_shoot_cd),
                               enemy_projectiles=new_projectiles)
 
@@ -391,7 +395,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         new_x = projectile.x - dir_x*self.consts.PROJECTILE_SPEED
         new_z = projectile.z - dir_z*self.consts.PROJECTILE_SPEED
 
-        return projectile._replace(
+        return projectile.replace(
             x=new_x,
             z=new_z,
             time_to_live=jnp.where(projectile.time_to_live>0, projectile.time_to_live-1, 0),
@@ -406,7 +410,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             enemy, hit = in_tuple
             new_score = state1.score + jnp.where(hit, self.consts.ENEMY_SCORES[enemy.enemy_type], 0)
 
-            return state1._replace(score=new_score), None
+            return state1.replace(score=new_score), None
 
         new_state, _ = jax.lax.scan(_score_func, state, (state.enemies, hit_arr))
         new_enemies_active = jnp.logical_and(new_state.enemies.active, jnp.invert(hit_arr))
@@ -414,10 +418,10 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                             self.consts.ENEMY_DEATH_ANIM_LENGTH, new_state.enemies.death_anim_counter)
         new_player_projectile_active = jnp.logical_and(new_state.player_projectile.active, jnp.invert(jnp.any(hit_arr)))
 
-        return new_state._replace(
-            enemies=new_state.enemies._replace(active=new_enemies_active,
+        return new_state.replace(
+            enemies=new_state.enemies.replace(active=new_enemies_active,
                                                death_anim_counter=new_enemies_death_anim_counter),
-            player_projectile=new_state.player_projectile._replace(active=new_player_projectile_active)
+            player_projectile=new_state.player_projectile.replace(active=new_player_projectile_active)
         )
 
 
@@ -478,29 +482,29 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         previous_state = state
         def normal_step(state):
             # update counters
-            new_state = state._replace(step_counter=state.step_counter+1, cur_fire_cd=state.cur_fire_cd-1)
-            new_state = new_state._replace(radar_rotation_counter=(state.radar_rotation_counter
+            new_state = state.replace(step_counter=state.step_counter+1, cur_fire_cd=state.cur_fire_cd-1)
+            new_state = new_state.replace(radar_rotation_counter=(state.radar_rotation_counter
                                                                +self.consts.RADAR_ROTATION_SPEED)%360)
 
             #-------------------projectiles-------------
             # move player projectile forwards
             new_player_projectile = self._single_projectile_step(state.player_projectile)
-            new_state = new_state._replace(player_projectile=new_player_projectile)
+            new_state = new_state.replace(player_projectile=new_player_projectile)
             # check whether player projectile hit an enemy
             new_state = self._player_projectile_collision_step(new_state)
 
             new_enemy_projectiles = jax.vmap(self._single_projectile_step, 0)(state.enemy_projectiles)
-            new_state = new_state._replace(enemy_projectiles=new_enemy_projectiles)
+            new_state = new_state.replace(enemy_projectiles=new_enemy_projectiles)
             player_hit = jnp.any(jax.vmap(self._enemy_projectile_collision_check, 0)(new_state.enemy_projectiles))
-            new_state = new_state._replace(death_anim_counter=jnp.where(player_hit,
+            new_state = new_state.replace(death_anim_counter=jnp.where(player_hit,
                                                 jnp.array(self.consts.DEATH_ANIM_LENGTH, dtype=jnp.int32),
                                                 new_state.death_anim_counter))
             #------------------------------------------
 
             #-------------------spawn-------------------
             split_key, key = jax.random.split(new_state.random_key, 2)
-            new_state = new_state._replace(random_key=key)
-            new_state = new_state._replace(enemies=jax.vmap(self.spawn_enemy, in_axes=(0, 0, None, None))
+            new_state = new_state.replace(random_key=key)
+            new_state = new_state.replace(enemies=jax.vmap(self.spawn_enemy, in_axes=(0, 0, None, None))
                 (jax.random.split(split_key,new_state.enemies.active.shape[0]), new_state.enemies, new_state.score, new_state))
             #-------------------------------------------
 
@@ -511,7 +515,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
         def death_step(state):
             new_death_counter = state.death_anim_counter - 1
-            new_state = state._replace(death_anim_counter=new_death_counter)
+            new_state = state.replace(death_anim_counter=new_death_counter)
             new_state = jax.lax.cond(new_death_counter <= 0, self.player_shot_reset, lambda x: x, new_state)
             return new_state
 
@@ -536,7 +540,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         new_x = obj.x + offset_x
         new_z = obj.z + offset_z
 
-        return obj._replace(
+        return obj.replace(
             x=self.wrap_coord(new_x, self.consts.WORLD_SIZE_X), 
             z=self.wrap_coord(new_z, self.consts.WORLD_SIZE_Z), 
             distance=self._get_distance(new_x, new_z)
@@ -553,7 +557,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         new_x = obj.x + offset_x
         new_z = obj.z + offset_z
         
-        return obj._replace(
+        return obj.replace(
             x=self.wrap_coord(new_x, self.consts.WORLD_SIZE_X), 
             z=self.wrap_coord(new_z, self.consts.WORLD_SIZE_Z), 
             distance=self._get_distance(new_x, new_z),
@@ -603,7 +607,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         opp = jnp.tan(alpha)*dist
         beta = jnp.atan(dist/opp)
         angle = ((jnp.pi/2)-beta)*angle_change
-        return obj._replace(orientation_angle=
+        return obj.replace(orientation_angle=
                             (obj.orientation_angle-angle)%(2*jnp.pi))
 
 
@@ -652,7 +656,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 z = jax.random.uniform(k_theta, minval=self.consts.FIGHTER_AREA_Z[0], maxval=self.consts.FIGHTER_AREA_Z[1])
                 distance = self._get_distance(x, z)
                 orientation_angle = jax.random.uniform(k_orient, minval=0.0, maxval=2*jnp.pi)
-                return enemy._replace(
+                return enemy.replace(
                     x=x,
                     z=z,
                     distance=distance,
@@ -670,7 +674,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 distance = jnp.sqrt(jax.random.uniform(k_dist, minval=.2, maxval=.9)) * self.consts.RADAR_MAX_SCAN_RADIUS
                 theta = jax.random.uniform(k_theta, minval=0.0, maxval=2*jnp.pi)
                 orientation_angle = jax.random.uniform(k_orient, minval=0.0, maxval=2*jnp.pi)
-                return enemy._replace(
+                return enemy.replace(
                     x=distance * jnp.cos(theta),
                     z=distance * jnp.sin(theta),
                     distance=distance,
@@ -717,7 +721,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             new_x = (new_x + self.consts.WORLD_SIZE_X / 2) % self.consts.WORLD_SIZE_X - self.consts.WORLD_SIZE_X / 2
             new_z = (new_z + self.consts.WORLD_SIZE_Z / 2) % self.consts.WORLD_SIZE_Z - self.consts.WORLD_SIZE_Z / 2
             
-            return enemy._replace(x=new_x, z=new_z, distance=self._get_distance(new_x, new_z))
+            return enemy.replace(x=new_x, z=new_z, distance=self._get_distance(new_x, new_z))
         
         def move_orthogonal_to_direction(enemy: Enemy, angle: float, direction: int = 1) -> Enemy:
             """Enemy right of direction with -1 and left with 1 (from direction's POV)"""
@@ -730,7 +734,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             new_x = (new_x + self.consts.WORLD_SIZE_X / 2) % self.consts.WORLD_SIZE_X - self.consts.WORLD_SIZE_X / 2
             new_z = (new_z + self.consts.WORLD_SIZE_Z / 2) % self.consts.WORLD_SIZE_Z - self.consts.WORLD_SIZE_Z / 2
             
-            return enemy._replace(x=new_x, z=new_z, distance=self._get_distance(new_x, new_z))
+            return enemy.replace(x=new_x, z=new_z, distance=self._get_distance(new_x, new_z))
 
         def move_to_player(enemy: Enemy, towards: int = -1) -> Enemy:
             """Enemy towards player with -1 and away with 1"""            
@@ -741,14 +745,14 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             return move_orthogonal_to_direction(enemy, perfect_angle, direction)
 
         def enemy_turn(enemy: Enemy) -> Enemy:
-            return enemy._replace(orientation_angle=enemy.orientation_angle+jnp.sign(angle_diff)*rot_speed)
+            return enemy.replace(orientation_angle=enemy.orientation_angle+jnp.sign(angle_diff)*rot_speed)
 
         def shoot_projectile(args) -> Tuple[Enemy, Projectile]:
 
             enemy, projectile = args
-            new_enemy = enemy._replace(shoot_cd=self.consts.ENEMY_SHOOT_CDS[enemy.enemy_type])
+            new_enemy = enemy.replace(shoot_cd=self.consts.ENEMY_SHOOT_CDS[enemy.enemy_type])
 
-            return new_enemy, projectile._replace(  # TODO: check whether we have enemy friendly fire enabled. it should be. potentially, we need to displace the spawn position of the projectile to avoid it shooting itself
+            return new_enemy, projectile.replace(  # TODO: check whether we have enemy friendly fire enabled. it should be. potentially, we need to displace the spawn position of the projectile to avoid it shooting itself
                 orientation_angle=perfect_angle,
                 x = enemy.x,
                 z = enemy.z,
@@ -785,7 +789,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
             def near_player(saucer):
                 """movement of the saucer when too near to the player"""
-                saucer = saucer._replace(phase=1)
+                saucer = saucer.replace(phase=1)
 
                 # strafe speed is maximal when player points at middle of hitbox, minimal at edges, quadratic relation
                 # 3 and 1 match my playtesting at 60fps, we scale with 4*speed (=1 in my test case) so changes to the speed are reflected here
@@ -813,7 +817,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 """movement of the saucer when far enough away from the player"""
 
                 def p0(saucer):
-                    saucer = saucer._replace(dist_moved_temp=saucer.dist_moved_temp + speed)
+                    saucer = saucer.replace(dist_moved_temp=saucer.dist_moved_temp + speed)
 
                     # saucer tries to stay outside the player's aim.
                     saucer = jax.lax.cond(
@@ -827,8 +831,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                     saucer = move_to_player(saucer, 0.5)
 
                     def next_phase(saucer):
-                        saucer = saucer._replace(dist_moved_temp=0.0)
-                        saucer = saucer._replace(phase=1)
+                        saucer = saucer.replace(dist_moved_temp=0.0)
+                        saucer = saucer.replace(phase=1)
                         return saucer
 
                     def cont_move(saucer):
@@ -862,9 +866,9 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                     intersection_point_x = jnp.where(dist_sq1>dist_sq2, x_1, x_2)
                     intersection_point_y = jnp.where(dist_sq1>dist_sq2, z_1, z_2)
                     # Update saucer
-                    saucer = saucer._replace(point_store_1_temp=jnp.array([rot_centre_x, rot_centre_z]))    # Centre of rotation
-                    saucer = saucer._replace(point_store_2_temp=jnp.array([intersection_point_x, intersection_point_y]))    # Stop point for rotation
-                    return saucer._replace(phase=2)
+                    saucer = saucer.replace(point_store_1_temp=jnp.array([rot_centre_x, rot_centre_z]))    # Centre of rotation
+                    saucer = saucer.replace(point_store_2_temp=jnp.array([intersection_point_x, intersection_point_y]))    # Stop point for rotation
+                    return saucer.replace(phase=2)
 
                 def p2(saucer):
                     rot_centre_x = saucer.point_store_1_temp[0]
@@ -887,19 +891,19 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                     new_z = rot_centre_z + vz_new
                     new_x_wrapped = (new_x + self.consts.WORLD_SIZE_X/2) % self.consts.WORLD_SIZE_X - self.consts.WORLD_SIZE_X/2
                     new_z_wrapped = (new_z + self.consts.WORLD_SIZE_Z/2) % self.consts.WORLD_SIZE_Z - self.consts.WORLD_SIZE_Z/2
-                    saucer = saucer._replace(x = new_x_wrapped, z = new_z_wrapped)
+                    saucer = saucer.replace(x = new_x_wrapped, z = new_z_wrapped)
 
                     # if the saucer position wraps, we need to wrap the stored points too
                     def wrap_stored_points_x(saucer):
                         wrap_direction = jnp.sign(new_x - new_x_wrapped)  # + = right wrap, - = left wrap
-                        return saucer._replace(
+                        return saucer.replace(
                             point_store_1_temp=saucer.point_store_1_temp.at[0].add(-wrap_direction*self.consts.WORLD_SIZE_X),
                             point_store_2_temp=saucer.point_store_2_temp.at[0].add(-wrap_direction*self.consts.WORLD_SIZE_X)
                         )
 
                     def wrap_stored_points_z(saucer):
                         wrap_direction = jnp.sign(new_z - new_z_wrapped)  # + = up wrap, - = down wrap
-                        return saucer._replace(
+                        return saucer.replace(
                             point_store_1_temp=saucer.point_store_1_temp.at[1].add(-wrap_direction*self.consts.WORLD_SIZE_Z),
                             point_store_2_temp=saucer.point_store_2_temp.at[1].add(-wrap_direction*self.consts.WORLD_SIZE_Z)
                         )
@@ -908,7 +912,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                     jax.lax.cond(new_z != new_z_wrapped, wrap_stored_points_z, lambda saucer: saucer, saucer)
 
                     def next_phase(saucer):
-                        return saucer._replace(point_store_1_temp=jnp.zeros((2,), dtype=jnp.float32),
+                        return saucer.replace(point_store_1_temp=jnp.zeros((2,), dtype=jnp.float32),
                                                  point_store_2_temp=jnp.zeros((2,), dtype=jnp.float32),
                                                  phase=0)
 
@@ -929,7 +933,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             
             def p0(fighter: Enemy):
                 """right after spawning: setup"""
-                return fighter._replace(
+                return fighter.replace(
                     phase=1, 
                     # abuse dist_moved_temp as directional indicator
                     dist_moved_temp=jnp.sign(fighter.x),
@@ -967,14 +971,14 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                     (orth_dist > self.consts.FIGHTER_AREA_X[0]) 
                     & (orth_dist < self.consts.FIGHTER_AREA_X[1]), 
                     lambda f: f, 
-                    lambda f: f._replace(dist_moved_temp=jnp.sign(orth_dist)), 
+                    lambda f: f.replace(dist_moved_temp=jnp.sign(orth_dist)),
                     fighter
                 )
                 # check shooting range: shoot, set phase as counter, (also= go to pX)
                 fighter = jax.lax.cond(
                     (fighter.distance <= self.consts.FIGHTER_SHOOTING_DISTANCE)
                     | (jnp.abs(vert_dist) < 5.0),  # despawn fallback
-                    lambda f: f._replace(phase=self.consts.FIGHTER_DESPAWN_FRAMES + 10),
+                    lambda f: f.replace(phase=self.consts.FIGHTER_DESPAWN_FRAMES + 10),
                     lambda f: f,
                     fighter
                 )
@@ -988,11 +992,11 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 fighter = move_to_direction(fighter, fighter.orientation_angle, -0.5 / jnp.sqrt(2.0))
                 fighter = move_orthogonal_to_direction(fighter, fighter.orientation_angle, fighter.dist_moved_temp * 0.5 / jnp.sqrt(2.0))
                 # decrement phase
-                fighter = fighter._replace(phase=fighter.phase - 1)
+                fighter = fighter.replace(phase=fighter.phase - 1)
                 # check counter elapsed: despawn
                 fighter = jax.lax.cond(
                     jnp.logical_and(fighter.phase <= 10, fighter.death_anim_counter==0),
-                    lambda f: f._replace(active=False),
+                    lambda f: f.replace(active=False),
                     lambda f: f,
                     fighter
                 )
@@ -1029,10 +1033,10 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
         split_key, key = jax.random.split(state.random_key, 2)
         # Set enemies to inactive
-        inactive_enemies = state.enemies._replace(active=jnp.zeros_like(state.enemies.active))
-        new_state = state._replace(enemies = inactive_enemies)
-        new_state = new_state._replace(shot_spawn=jnp.ones_like(new_state.shot_spawn))
-        new_state = new_state._replace(
+        inactive_enemies = state.enemies.replace(active=jnp.zeros_like(state.enemies.active))
+        new_state = state.replace(enemies = inactive_enemies)
+        new_state = new_state.replace(shot_spawn=jnp.ones_like(new_state.shot_spawn))
+        new_state = new_state.replace(
             life=new_state.life-1,
             enemies=jax.vmap(self.spawn_enemy, in_axes=(0, 0, None, None))
                 (jax.random.split(split_key,new_state.enemies.active.shape[0]), new_state.enemies, new_state.score, new_state),
