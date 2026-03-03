@@ -74,6 +74,53 @@ class DunkConstants:
     INSIDE_PLAYER_INSIDE_SHOT = 2
     OUTSIDE_PLAYER_OUTSIDE_SHOT = 2
 
+    # Initial positions
+    P1_INSIDE_START: Tuple[int, int] = (100, 70)
+    P1_OUTSIDE_START_X: int = 75
+    P1_OUTSIDE_START_Y_HOLDER: int = 155
+    P1_OUTSIDE_START_Y_NOT_HOLDER: int = 145
+    P2_INSIDE_START: Tuple[int, int] = (50, 60)
+    P2_OUTSIDE_START_X: int = 75
+    P2_OUTSIDE_START_Y_HOLDER: int = 155
+    P2_OUTSIDE_START_Y_NOT_HOLDER: int = 145
+    BALL_START: Tuple[float, float] = (75.0, 150.0)
+
+    ASSET_CONFIG: list = struct.field(pytree_node=False, default_factory=lambda: [
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
+
+        # Team 1 (Player) - Blue/Black
+        {'name': 'player_inside_1', 'type': 'single', 'file': 'player_inside_1.npy'},
+        {'name': 'player_inside_guard', 'type': 'single', 'file': 'player_inside_guard.npy'},
+        {'name': 'player_inside_jump', 'type': 'single', 'file': 'player_inside_jump.npy'},
+        {'name': 'player_outside_1', 'type': 'single', 'file': 'player_outside_1.npy'},
+        {'name': 'player_outside_guard', 'type': 'single', 'file': 'player_outside_guard.npy'},
+        {'name': 'player_outside_jump', 'type': 'single', 'file': 'player_outside_jump.npy'},
+
+        # Team 2 (Enemy) - Red/White
+        {'name': 'enemy_inside_1', 'type': 'single', 'file': 'enemy_inside_1.npy'},
+        {'name': 'enemy_inside_guard', 'type': 'single', 'file': 'enemy_inside_guard.npy'},
+        {'name': 'enemy_inside_jump', 'type': 'single', 'file': 'enemy_inside_jump.npy'},
+        {'name': 'enemy_outside_1', 'type': 'single', 'file': 'enemy_outside_1.npy'},
+        {'name': 'enemy_outside_guard', 'type': 'single', 'file': 'enemy_outside_guard.npy'},
+        {'name': 'enemy_outside_jump', 'type': 'single', 'file': 'enemy_outside_jump.npy'},
+
+        # Indicators
+        {'name': 'player_off', 'type': 'single', 'file': 'player_off.npy'},
+        {'name': 'player_def', 'type': 'single', 'file': 'player_def.npy'},
+        {'name': 'enemy_off', 'type': 'single', 'file': 'enemy_off.npy'},
+        {'name': 'enemy_def', 'type': 'single', 'file': 'enemy_def.npy'},
+
+        {'name': 'player_score', 'type': 'digits', 'pattern': 'player_score_{}.npy', 'files': [f'player_score_{i}.npy' for i in range(10)]},
+        {'name': 'enemy_score', 'type': 'digits', 'pattern': 'enemy_score_{}.npy', 'files': [f'enemy_score_{i}.npy' for i in range(10)]},
+        {'name': 'goal_24p', 'type': 'single', 'file': 'goal_24p.npy'},
+
+        {'name': 'travel', 'type': 'single', 'file': 'travel.npy'},
+        {'name': 'out_of_bounds', 'type': 'single', 'file': 'out_of_bounds.npy'},
+        {'name': 'clearance', 'type': 'single', 'file': 'clearance.npy'},
+        {'name': 'turnover', 'type': 'single', 'file': 'turnover.npy'},
+    ])
+
 @chex.dataclass(frozen=True)
 class PlayerState:
     id: chex.Array # ID of the Player (see PlayerID) Practically a constant and is primarily used to check if the player is holding a ball for later purposes.
@@ -265,15 +312,15 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         
         is_p2_holder = jnp.logical_or((holder == PlayerID.PLAYER2_INSIDE), (holder == PlayerID.PLAYER2_OUTSIDE))
         
-        p1_out_y = jax.lax.select(is_p2_holder, jnp.array(145, dtype=jnp.int32), jnp.array(155, dtype=jnp.int32))
-        p2_out_y = jax.lax.select(is_p2_holder, jnp.array(155, dtype=jnp.int32), jnp.array(145, dtype=jnp.int32))
+        p1_out_y = jax.lax.select(is_p2_holder, jnp.array(self.consts.P1_OUTSIDE_START_Y_NOT_HOLDER, dtype=jnp.int32), jnp.array(self.consts.P1_OUTSIDE_START_Y_HOLDER, dtype=jnp.int32))
+        p2_out_y = jax.lax.select(is_p2_holder, jnp.array(self.consts.P2_OUTSIDE_START_Y_HOLDER, dtype=jnp.int32), jnp.array(self.consts.P2_OUTSIDE_START_Y_NOT_HOLDER, dtype=jnp.int32))
 
         return DunkGameState(
-            player1_inside=PlayerState(id=1, x=100, y=70, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
-            player1_outside=PlayerState(id=2, x=75, y=p1_out_y, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
-            player2_inside=PlayerState(id=3, x=50, y=60, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
-            player2_outside=PlayerState(id=4, x=75, y=p2_out_y, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
-            ball=BallState(x=75.0, y=150.0, vel_x=0.0, vel_y=0.0, holder=holder, target_x=0.0, target_y=0.0, landing_y=0.0, is_goal=False, shooter=PlayerID.NONE, receiver=PlayerID.NONE, shooter_pos_x=0, shooter_pos_y=0, missed_shot=False),
+            player1_inside=PlayerState(id=1, x=self.consts.P1_INSIDE_START[0], y=self.consts.P1_INSIDE_START[1], vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
+            player1_outside=PlayerState(id=2, x=self.consts.P1_OUTSIDE_START_X, y=p1_out_y, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
+            player2_inside=PlayerState(id=3, x=self.consts.P2_INSIDE_START[0], y=self.consts.P2_INSIDE_START[1], vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
+            player2_outside=PlayerState(id=4, x=self.consts.P2_OUTSIDE_START_X, y=p2_out_y, vel_x=0, vel_y=0, z=0, vel_z=0, role=0, animation_frame=0, animation_direction=1, is_out_of_bounds=False, jumped_with_ball=False, triggered_travel=False, clearance_needed=False, triggered_clearance=False),
+            ball=BallState(x=self.consts.BALL_START[0], y=self.consts.BALL_START[1], vel_x=0.0, vel_y=0.0, holder=holder, target_x=0.0, target_y=0.0, landing_y=0.0, is_goal=False, shooter=PlayerID.NONE, receiver=PlayerID.NONE, shooter_pos_x=0, shooter_pos_y=0, missed_shot=False),
             scores=GameScores(
                 player=jnp.array(0, dtype=jnp.int32),
                 enemy=jnp.array(0, dtype=jnp.int32)
@@ -1635,42 +1682,8 @@ class DunkRenderer(JAXGameRenderer):
             
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # --- UPDATED ASSET CONFIGURATION ---
-        asset_config = [
-            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
-
-            # Team 1 (Player) - Blue/Black
-            {'name': 'player_inside_1', 'type': 'single', 'file': 'player_inside_1.npy'},
-            {'name': 'player_inside_guard', 'type': 'single', 'file': 'player_inside_guard.npy'},
-            {'name': 'player_inside_jump', 'type': 'single', 'file': 'player_inside_jump.npy'},
-            {'name': 'player_outside_1', 'type': 'single', 'file': 'player_outside_1.npy'},
-            {'name': 'player_outside_guard', 'type': 'single', 'file': 'player_outside_guard.npy'},
-            {'name': 'player_outside_jump', 'type': 'single', 'file': 'player_outside_jump.npy'},
-
-            # Team 2 (Enemy) - Red/White
-            {'name': 'enemy_inside_1', 'type': 'single', 'file': 'enemy_inside_1.npy'},
-            {'name': 'enemy_inside_guard', 'type': 'single', 'file': 'enemy_inside_guard.npy'},
-            {'name': 'enemy_inside_jump', 'type': 'single', 'file': 'enemy_inside_jump.npy'},
-            {'name': 'enemy_outside_1', 'type': 'single', 'file': 'enemy_outside_1.npy'},
-            {'name': 'enemy_outside_guard', 'type': 'single', 'file': 'enemy_outside_guard.npy'},
-            {'name': 'enemy_outside_jump', 'type': 'single', 'file': 'enemy_outside_jump.npy'},
-
-            # Indicators
-            {'name': 'player_off', 'type': 'single', 'file': 'player_off.npy'},
-            {'name': 'player_def', 'type': 'single', 'file': 'player_def.npy'},
-            {'name': 'enemy_off', 'type': 'single', 'file': 'enemy_off.npy'},
-            {'name': 'enemy_def', 'type': 'single', 'file': 'enemy_def.npy'},
-
-            {'name': 'player_score', 'type': 'digits', 'pattern': 'player_score_{}.npy', 'files': [f'player_score_{i}.npy' for i in range(10)]},
-            {'name': 'enemy_score', 'type': 'digits', 'pattern': 'enemy_score_{}.npy', 'files': [f'enemy_score_{i}.npy' for i in range(10)]},
-            {'name': 'goal_24p', 'type': 'single', 'file': 'goal_24p.npy'},
-
-            {'name': 'travel', 'type': 'single', 'file': 'travel.npy'},
-            {'name': 'out_of_bounds', 'type': 'single', 'file': 'out_of_bounds.npy'},
-            {'name': 'clearance', 'type': 'single', 'file': 'clearance.npy'},
-            {'name': 'turnover', 'type': 'single', 'file': 'turnover.npy'},
-        ]
+        # Use ASSET_CONFIG from constants so it can be overridden by mods
+        asset_config = self.consts.ASSET_CONFIG
         
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/doubledunk"
 

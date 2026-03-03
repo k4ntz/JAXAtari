@@ -478,3 +478,21 @@ class OneVsOnePostMod(JaxAtariPostStepModPlugin):
             ball=new_ball,
             controlled_player_id=new_ctrl_id
         )
+
+class HalfCourtMod(JaxAtariInternalModPlugin):
+    """
+    Halves the playable width of the court, making it a much tighter space to play.
+    """
+    constants_overrides = {
+        "PLAYER_Y_MIN": 80,
+        "PLAYER_Y_MAX": 160,
+        "BASKET_POSITION": (80, 60),
+        "AREA_3_POINT": (45, 160, 90),
+        "P1_INSIDE_START": (100, 100),
+        "P2_INSIDE_START": (50, 110),
+    }
+
+    # Override the background to visually match the new boundaries
+    asset_overrides = {
+        'background': {'name': 'background', 'type': 'background', 'file': 'background_mod.npy'}
+    }
