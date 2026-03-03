@@ -139,32 +139,61 @@ class CrossbowConstants(NamedTuple):
     WIDTH: int = 160
     HEIGHT: int = 210
 
+    # --- Player / Cursor ---
     CURSOR_SPEED: int = 2
-    CURSOR_SIZE: Tuple[int, int] = (4, 4)
+    CURSOR_SIZE: Tuple[int, int] = (2, 2)
+    CURSOR_VISIBLE_ON_FIRE_ONLY: bool = False
+
+    # --- Friend ---
     FRIEND_SPEED: float = 0.5
+
+    # --- Global Enemy Settings ---
     ENEMY_SPEED: float = 0.5
     MAX_ENEMIES: int = 6
+
+    # --- Game Flow ---
     MAX_LIVES: int = 3
     DYING_DURATION: int = 45
-
     GET_READY_DURATION: int = 180
     FADE_OUT_DURATION: int = 45
     FADE_IN_DURATION: int = 30
     MAX_SCATTER_PIXELS: int = 100
 
+    # --- Level-specific Tuning ---
+    # Desert
+    DESERT_SPAWN_PROB: float = 0.03
+    # Cavern
+    CAVERN_MAX_BATS: int = 1
+    CAVERN_MAX_STALACTITES: int = 2
+    CAVERN_BAT_ATTACK_PROB: float = 0.02
+    CAVERN_BAT_KILLING_FRAMES: int = 45
+    CAVERN_SPAWN_PROB: float = 0.10
+    # Volcano
+    VOLCANO_MAX_ENEMIES: int = 2
+    VOLCANO_SPAWN_PROB: float = 0.008
+    # Jungle
+    JUNGLE_MAX_ENEMIES: int = 3
+    JUNGLE_COCONUT_THROW_PROB: float = 0.008
+    JUNGLE_SPAWN_PROB: float = 0.012
+    # Drawbridge
+    DRAWBRIDGE_MAX_ARCHERS: int = 4
+    DRAWBRIDGE_ARCHER_LIFESPAN: int = 120
+    DRAWBRIDGE_ARCHER_SHOOT_TIME: int = 60
+    DRAWBRIDGE_SPAWN_PROB: float = 0.012
+    # Castle Hall
+    CASTLE_HALL_MAX_ENEMIES: int = 2
+    CASTLE_HALL_SPAWN_PROB: float = 0.03
+
+    # --- Internal Geometry ---
     FRIEND_SIZE: Tuple[int, int] = (8, 27)
     ENEMY_SIZE: Tuple[int, int] = (8, 8)
-    SHOT_SIZE: Tuple[int, int] = (6, 6)
+    SHOT_SIZE: Tuple[int, int] = (2, 2)
     PLAY_AREA_HEIGHT: int = 180
-
     GROUND_Y_MIN: int = 130
     GROUND_Y_MAX: int = 165
-
     BAT_DIMENSIONS: Tuple[int, int] = (8, 9)
     STALACTITE_DIMENSIONS: Tuple[int, int] = (8, 16)
-
     ASSET_CONFIG: tuple = _get_default_asset_config()
-
     ROPE_1_POS: Tuple[int, int] = (110, 60)
     ROPE_2_POS: Tuple[int, int] = (110, 100)
 
@@ -435,13 +464,8 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
     def _drawbridge_map_logic(self, state: CrossbowState) -> Tuple[CrossbowState, bool]:
         rng, key_spawn_general, key_type_general, key_x_archer, key_y_archer, key_y_vulture, key_scatter, key_eye = jax.random.split(state.key, 8)
         is_dying = state.dying_timer > 0
-        HIT_TOLERANCE = 8
-        ARCHER_LIFESPAN = 120
-        ARCHER_SHOOT_TIME = 60
-        ARROW_SPEED = 3.0
-        MAX_ARCHERS = 4
-        ARCHER_MIN_SEP = 25.0
 
+        HIT_TOLERANCE, ARROW_SPEED, ARCHER_MIN_SEP = 8, 3.0, 25.0
         cx, cy = state.cursor_x, state.cursor_y
         rope_1_hit = jnp.logical_and(state.is_firing, jnp.logical_and(jnp.abs(cx - self.consts.ROPE_1_POS[0]) < 15, jnp.abs(cy - self.consts.ROPE_1_POS[1]) < 15))
         rope_2_hit = jnp.logical_and(state.is_firing, jnp.logical_and(jnp.abs(cx - self.consts.ROPE_2_POS[0]) < 15, jnp.abs(cy - self.consts.ROPE_2_POS[1]) < 15))
@@ -453,8 +477,8 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         friend_x_constrained = jnp.where(jnp.logical_not(bridge_open), jnp.minimum(state.friend_x, MOAT_EDGE_X), state.friend_x)
 
         ex, ey = state.enemies_x, state.enemies_y
-        hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE, cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
-        hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE, cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)
+        hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE, cx + self.consts.SHOT_SIZE[0] > ex - HIT_TOLERANCE)
+        hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE, cy + self.consts.SHOT_SIZE[1] > ey - HIT_TOLERANCE)
         is_hit = jnp.logical_and(hit_x, hit_y)
         valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
         point_values = jnp.array([0, 0, 0, 200, 0, 0, 0, 0, 0, 0, 0, 0, 100, 50, 0, 0, 0, 0, 0, 1000])
@@ -462,11 +486,11 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
 
         is_archer = state.enemies_type == EnemyType.ARCHER
-        new_timer = jnp.where(jnp.logical_and(surviving_enemies, is_archer), state.enemies_timer - 1, state.enemies_timer)
+        new_timer = jnp.where(jnp.logical_and(surviving_enemies, is_archer), state.enemies_timer - 1, self.consts.DRAWBRIDGE_ARCHER_LIFESPAN)
         archer_expired = jnp.logical_and(is_archer, new_timer <= 0)
         enemies_active_after_expiry = jnp.logical_and(surviving_enemies, jnp.logical_not(archer_expired))
 
-        archers_shooting = jnp.logical_and(enemies_active_after_expiry, jnp.logical_and(is_archer, new_timer == ARCHER_SHOOT_TIME))
+        archers_shooting = jnp.logical_and(enemies_active_after_expiry, jnp.logical_and(is_archer, new_timer == self.consts.DRAWBRIDGE_ARCHER_SHOOT_TIME))
         shooter_idx = jnp.argmax(archers_shooting)
         can_shoot = jnp.any(archers_shooting)
         shooter_x, shooter_y = state.enemies_x[shooter_idx], state.enemies_y[shooter_idx]
@@ -505,8 +529,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         has_eye_spawn = jnp.any(eye_spawn_mask)
 
         spawn_roll = jax.random.uniform(key_spawn_general, shape=(self.consts.MAX_ENEMIES,))
-        # Original probability: 0.012 for generic
-        generic_spawn_trigger = spawn_roll < 0.012
+        generic_spawn_trigger = spawn_roll < self.consts.DRAWBRIDGE_SPAWN_PROB
         # Only spawn where we have space AND we aren't putting an eye
         should_spawn_generic = jnp.logical_and(slots_available_for_new, generic_spawn_trigger)
         should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(eye_spawn_mask))
@@ -520,7 +543,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
         active_archers_mask = jnp.logical_and(enemies_active_w_arrow, enemies_type_w_arrow == EnemyType.ARCHER)
         num_active_archers = jnp.sum(active_archers_mask)
-        limit_reached = num_active_archers >= MAX_ARCHERS
+        limit_reached = num_active_archers >= self.consts.DRAWBRIDGE_MAX_ARCHERS
         dist_to_others = jnp.abs(enemies_y_w_arrow - spawn_y_archer)
         conflict_mask = jnp.logical_and(active_archers_mask, dist_to_others < ARCHER_MIN_SEP)
         has_overlap = jnp.any(conflict_mask)
@@ -545,7 +568,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         current_x = jnp.where(should_spawn_final, spawn_x_final, enemies_x_w_arrow)
         current_y = jnp.where(should_spawn_final, spawn_y_final, enemies_y_w_arrow)
 
-        spawn_timer = jnp.where(spawn_type_candidate == EnemyType.ARCHER, ARCHER_LIFESPAN, 0)
+        spawn_timer = jnp.where(spawn_type_candidate == EnemyType.ARCHER, self.consts.DRAWBRIDGE_ARCHER_LIFESPAN, 0)
         final_timer = jnp.where(should_spawn_final, spawn_timer, new_timer)
         final_dx_state = jnp.where(should_spawn_final, 0.0, enemies_dx_w_arrow)
         final_dy_state = jnp.where(should_spawn_final, 0.0, enemies_dy_w_arrow)
@@ -598,18 +621,15 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
     def _castle_hall_map_logic(self, state: CrossbowState) -> Tuple[CrossbowState, bool]:
         rng, spawn_key, type_key, scatter_key, lava_key, eye_key = jax.random.split(state.key, 6)
         is_dying = state.dying_timer > 0
-        HIT_TOLERANCE = 8
-        LAVA_SPEED = 1.5
-        ARROW_FALL_SPEED = 1.5
-        MAX_CONCURRENT_ENEMIES = 2
+        HIT_TOLERANCE, LAVA_SPEED, ARROW_FALL_SPEED = 8, 1.5, 1.5
 
         cx, cy = state.cursor_x, state.cursor_y
         ex, ey = state.enemies_x, state.enemies_y
 
         hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE,
-                                cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
+                                cx + self.consts.SHOT_SIZE[0] > ex - HIT_TOLERANCE)
         hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE,
-                                cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)
+                                cy + self.consts.SHOT_SIZE[1] > ey - HIT_TOLERANCE)
         is_hit = jnp.logical_and(hit_x, hit_y)
         valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
         surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
@@ -640,10 +660,10 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         has_eye_spawn = jnp.any(eye_spawn_mask)
 
         current_enemy_count = jnp.sum(surviving_enemies)
-        spawn_chance = jax.random.uniform(spawn_key, shape=(self.consts.MAX_ENEMIES,)) < 0.03
+        spawn_chance = jax.random.uniform(spawn_key, shape=(self.consts.MAX_ENEMIES,)) < self.consts.CASTLE_HALL_SPAWN_PROB
 
         spawn_count = jnp.cumsum(spawn_chance & available_slots)
-        allowed_spawns = spawn_count <= (MAX_CONCURRENT_ENEMIES - current_enemy_count)
+        allowed_spawns = spawn_count <= (self.consts.CASTLE_HALL_MAX_ENEMIES - current_enemy_count)
         should_spawn_generic = jnp.logical_and(available_slots, jnp.logical_and(spawn_chance, allowed_spawns))
 
         should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(eye_spawn_mask))
@@ -701,8 +721,8 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         HIT_TOLERANCE = 8
         cx, cy = state.cursor_x, state.cursor_y
         ex, ey = state.enemies_x, state.enemies_y
-        hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE, cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
-        hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE, cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)
+        hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE, cx + self.consts.SHOT_SIZE[0] > ex - HIT_TOLERANCE)
+        hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE, cy + self.consts.SHOT_SIZE[1] > ey - HIT_TOLERANCE)
         is_hit = jnp.logical_and(hit_x, hit_y)
         valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
         surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
@@ -726,7 +746,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         should_spawn_eye, eye_x, eye_y = self._compute_eye_spawn(state, eye_key, (20.0, 140.0), (20.0, 70.0))
         eye_spawn_mask = self._get_eye_spawn_mask(available_slots, should_spawn_eye)
         has_eye_spawn = jnp.any(eye_spawn_mask)
-        spawn_chance = jax.random.uniform(spawn_key, shape=(self.consts.MAX_ENEMIES,)) < 0.03
+        spawn_chance = jax.random.uniform(spawn_key, shape=(self.consts.MAX_ENEMIES,)) < self.consts.DESERT_SPAWN_PROB
         should_spawn_generic = jnp.logical_and(available_slots, spawn_chance)
         should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(eye_spawn_mask))
 
@@ -743,7 +763,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         spawn_x_random = jax.random.randint(snake_x_key, (self.consts.MAX_ENEMIES,), 20, 140).astype(jnp.float32)
         spawn_ground_y = jax.random.randint(spawn_key, (self.consts.MAX_ENEMIES,), self.consts.GROUND_Y_MIN, self.consts.GROUND_Y_MAX).astype(jnp.float32)
         spawn_air_y = jax.random.randint(spawn_key, (self.consts.MAX_ENEMIES,), 20, 80).astype(jnp.float32)
-        spawn_snake_y = jax.random.randint(snake_y_key, (self.consts.MAX_ENEMIES,), 80, 120).astype(jnp.float32)
+        spawn_snake_y = jax.random.randint(snake_y_key, (self.consts.MAX_ENEMIES,), 60, 100).astype(jnp.float32)
 
         is_new_snake = new_types == EnemyType.SNAKE
         is_new_vulture = new_types == EnemyType.VULTURE
@@ -791,20 +811,14 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         spawn_chance_key, bat_x_key, stal_x_key, air_y_key, ceiling_y_key = jax.random.split(spawn_key, 5)
         is_dying = state.dying_timer > 0
 
-        MAX_BATS = 1
-        MAX_STALACTITES = 2
-        MAX_ENEMIES = MAX_BATS + MAX_STALACTITES
-        BAT_ATTACK_PROB = 0.02
         BAT_ATTACK_SPEED = 1.5
-        BAT_KILLING_FRAMES = 45
-
         HIT_TOLERANCE = 8
         cx, cy = state.cursor_x, state.cursor_y
         ex, ey = state.enemies_x, state.enemies_y
         ew, eh = self._get_enemy_shape(state.enemies_type)
 
-        hit_x = jnp.logical_and(cx < ex + ew + HIT_TOLERANCE, cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
-        hit_y = jnp.logical_and(cy < ey + eh + HIT_TOLERANCE, cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)
+        hit_x = jnp.logical_and(cx < ex + ew + HIT_TOLERANCE, cx + self.consts.SHOT_SIZE[0] > ex - HIT_TOLERANCE)
+        hit_y = jnp.logical_and(cy < ey + eh + HIT_TOLERANCE, cy + self.consts.SHOT_SIZE[1] > ey - HIT_TOLERANCE)
         is_hit = jnp.logical_and(hit_x, hit_y)
 
         valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
@@ -821,7 +835,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         attack_probs = jax.random.uniform(attack_key, shape=(self.consts.MAX_ENEMIES,))
         start_attacking = jnp.logical_and(
             jnp.logical_and(is_bat_just_flying, surviving_enemies),
-            attack_probs < BAT_ATTACK_PROB
+            attack_probs < self.consts.CAVERN_BAT_ATTACK_PROB
         )
 
         target_x = state.friend_x + 4.0
@@ -863,7 +877,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         new_timer = jnp.where(bat_on_friend, state.enemies_timer + 1, state.enemies_timer)
         new_timer = jnp.where(jnp.logical_not(surviving_enemies), 0, new_timer)
 
-        bat_kills_friend = jnp.any(jnp.logical_and(bat_on_friend, new_timer >= BAT_KILLING_FRAMES))
+        bat_kills_friend = jnp.any(jnp.logical_and(bat_on_friend, new_timer >= self.consts.CAVERN_BAT_KILLING_FRAMES))
 
         DEPTH_TOLERANCE = 10
         danger_x = jnp.logical_and(final_x < fx + self.consts.FRIEND_SIZE[0], final_x + ew > fx)
@@ -881,7 +895,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         eye_spawn_mask = self._get_eye_spawn_mask(available_slots, should_spawn_eye)
         has_eye_spawn = jnp.any(eye_spawn_mask)
 
-        spawn_chance = jax.random.uniform(spawn_chance_key, shape=(self.consts.MAX_ENEMIES,)) < 0.10
+        spawn_chance = jax.random.uniform(spawn_chance_key, shape=(self.consts.MAX_ENEMIES,)) < self.consts.CAVERN_SPAWN_PROB
         should_spawn_generic = jnp.logical_and(available_slots, spawn_chance)
         should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(eye_spawn_mask))
 
@@ -890,8 +904,8 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         active_stal_mask = jnp.logical_and(surviving_enemies, state.enemies_type == EnemyType.STALACTITE_FALLING)
         num_active_bats = jnp.sum(active_bats_mask)
         num_active_stal = jnp.sum(active_stal_mask)
-        bat_limit_reached = num_active_bats >= MAX_BATS
-        stal_limit_reached = num_active_stal >= MAX_STALACTITES
+        bat_limit_reached = num_active_bats >= self.consts.CAVERN_MAX_BATS
+        stal_limit_reached = num_active_stal >= self.consts.CAVERN_MAX_STALACTITES
 
         spawn_allowed = jnp.where(spawn_is_bat, jnp.logical_not(bat_limit_reached), jnp.logical_not(stal_limit_reached))
         should_spawn_generic = jnp.logical_and(should_spawn_generic, spawn_allowed)
@@ -964,8 +978,6 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
         rng, spawn_key, physics_key, scatter_key, eye_key = jax.random.split(state.key, 5)
 
-        MAX_CONCURRENT_ENEMIES: int = 2
-
         # === BRIDGE MECHANIC ===
         GAP_START_X = 70
         GAP_END_X = 90
@@ -980,8 +992,8 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
         # === STEP 1: Generous hit detection for resting rock FIRST ===
         resting_mask = state.enemies_type == EnemyType.RESTING_ROCK
-        resting_hit_x = jnp.logical_and(cx < ex + 12, cx + self.consts.CURSOR_SIZE[0] > ex - 12)
-        resting_hit_y = jnp.logical_and(cy < ey + 12, cy + self.consts.CURSOR_SIZE[1] > ey - 12)
+        resting_hit_x = jnp.logical_and(cx < ex + 12, cx + self.consts.SHOT_SIZE[0] > ex - 12)
+        resting_hit_y = jnp.logical_and(cy < ey + 12, cy + self.consts.SHOT_SIZE[1] > ey - 12)
 
         rock_just_shot = jnp.any(jnp.logical_and(state.is_firing,jnp.logical_and(state.enemies_active, jnp.logical_and(resting_mask, jnp.logical_and(resting_hit_x, resting_hit_y)))))
 
@@ -991,8 +1003,8 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
         # === STEP 2: Generic hit detection for everything else (excluding resting rock) ===
         HIT_TOLERANCE = 6
-        hit_x = jnp.logical_and( cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE, cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
-        hit_y = jnp.logical_and( cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE,cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE )
+        hit_x = jnp.logical_and( cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE, cx + self.consts.SHOT_SIZE[0] > ex - HIT_TOLERANCE)
+        hit_y = jnp.logical_and( cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE,cy + self.consts.SHOT_SIZE[1] > ey - HIT_TOLERANCE )
         is_hit = jnp.logical_and(hit_x, hit_y)
 
         # Exclude resting rock from generic kills
@@ -1043,9 +1055,9 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
         # Generic enemy spawning
         current_enemy_count = jnp.sum(surviving_enemies)
-        spawn_chance = jax.random.uniform(spawn_key, (self.consts.MAX_ENEMIES,)) < 0.008
+        spawn_chance = jax.random.uniform(spawn_key, (self.consts.MAX_ENEMIES,)) < self.consts.VOLCANO_SPAWN_PROB
         spawn_count = jnp.cumsum(spawn_chance & available_slots)
-        allowed_spawns = spawn_count <= (MAX_CONCURRENT_ENEMIES - current_enemy_count)
+        allowed_spawns = spawn_count <= (self.consts.VOLCANO_MAX_ENEMIES - current_enemy_count)
         should_spawn_generic = jnp.logical_and(available_slots, jnp.logical_and(spawn_chance, allowed_spawns))
         should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(eye_spawn_mask))
         should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(bridge_spawn_mask))
@@ -1122,16 +1134,14 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
     def _jungle_map_logic(self, state: CrossbowState) -> Tuple[CrossbowState, bool]:
         rng, spawn_key, scatter_key, eye_key, coconut_key, k_type, k_x, k_coconut_dx = jax.random.split(state.key, 8)
         HIT_TOLERANCE = 8
-        MAX_CONCURRENT_ENEMIES = 3
-        COCONUT_THROW_PROB = 0.008
 
         cx, cy = state.cursor_x, state.cursor_y
         ex, ey = state.enemies_x, state.enemies_y
 
         hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE,
-                            cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
+                            cx + self.consts.SHOT_SIZE[0] > ex - HIT_TOLERANCE)
         hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE,
-                            cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)
+                            cy + self.consts.SHOT_SIZE[1] > ey - HIT_TOLERANCE)
         is_hit = jnp.logical_and(hit_x, hit_y)
         valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
         surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
@@ -1167,7 +1177,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         throw_rolls = jax.random.uniform(coconut_key, (self.consts.MAX_ENEMIES,))
         monkey_throws = jnp.logical_and(
             jnp.logical_and(surviving_enemies, is_monkey),
-            throw_rolls < COCONUT_THROW_PROB
+            throw_rolls < self.consts.JUNGLE_COCONUT_THROW_PROB
         )
         throwing_monkey_idx = jnp.argmax(monkey_throws)
         any_monkey_throws = jnp.any(monkey_throws)
@@ -1195,9 +1205,9 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
         # Generic spawn (monkeys and plants only)
         current_enemy_count = jnp.sum(surviving_enemies)
-        spawn_chance = jax.random.uniform(spawn_key, (self.consts.MAX_ENEMIES,)) < 0.012
+        spawn_chance = jax.random.uniform(spawn_key, (self.consts.MAX_ENEMIES,)) < self.consts.JUNGLE_SPAWN_PROB
         spawn_count = jnp.cumsum(spawn_chance & available_slots)
-        allowed_spawns = spawn_count <= (MAX_CONCURRENT_ENEMIES - current_enemy_count)
+        allowed_spawns = spawn_count <= (self.consts.JUNGLE_MAX_ENEMIES - current_enemy_count)
         should_spawn_generic = jnp.logical_and(available_slots,
                            jnp.logical_and(spawn_chance, allowed_spawns))
         should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(eye_spawn_mask))
@@ -1320,8 +1330,8 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         HIT_TOLERANCE = 8
         cx, cy = state.cursor_x, state.cursor_y
         ex, ey = state.enemies_x, state.enemies_y
-        hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE, cx + self.consts.CURSOR_SIZE[0] > ex - HIT_TOLERANCE)
-        hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE, cy + self.consts.CURSOR_SIZE[1] > ey - HIT_TOLERANCE)
+        hit_x = jnp.logical_and(cx < ex + self.consts.ENEMY_SIZE[0] + HIT_TOLERANCE, cx + self.consts.SHOT_SIZE[0] > ex - HIT_TOLERANCE)
+        hit_y = jnp.logical_and(cy < ey + self.consts.ENEMY_SIZE[1] + HIT_TOLERANCE, cy + self.consts.SHOT_SIZE[1] > ey - HIT_TOLERANCE)
         is_hit = jnp.logical_and(hit_x, hit_y)
         valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
         surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
@@ -1645,7 +1655,12 @@ class CrossbowRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_ENEMIES, _draw_e, raster)
 
-        raster = self.jr.render_at(raster, state.cursor_x, state.cursor_y, self.SHAPE_MASKS["cursor"])
+        raster = jax.lax.cond(
+            jnp.logical_or(jnp.logical_not(self.consts.CURSOR_VISIBLE_ON_FIRE_ONLY), state.is_firing),
+            lambda r: self.jr.render_at(r, state.cursor_x, state.cursor_y, self.SHAPE_MASKS["cursor"]),
+            lambda r: r,
+            raster
+        )
         raster = jax.lax.cond(state.is_firing, lambda r: self.jr.render_at(r, state.cursor_x, state.cursor_y, self.SHAPE_MASKS["shot"]), lambda r: r, raster)
         score_digits = self.jr.int_to_digits(state.score, max_digits=6)
         num_digits = jnp.select([state.score < 10, state.score < 100, state.score < 1000, state.score < 10000, state.score < 100000], [1, 2, 3, 4, 5], 6)
