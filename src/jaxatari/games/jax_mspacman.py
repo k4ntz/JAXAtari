@@ -1008,8 +1008,8 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
 
 
 class MsPacmanRenderer(JAXGameRenderer):
-    def __init__(self, consts: MsPacmanConstants = None, wall_grid: jnp.ndarray = None, pellet_template: jnp.ndarray = None):
-        super().__init__(consts)
+    def __init__(self, consts: MsPacmanConstants = None, wall_grid: jnp.ndarray = None, pellet_template: jnp.ndarray = None, config=None):
+        super().__init__(consts, config=config)
         self.consts = consts or DEFAULT_MSPACMAN_CONSTANTS
         self.config = render_utils.RendererConfig(
             game_dimensions=(self.consts.screen_height, self.consts.screen_width),
