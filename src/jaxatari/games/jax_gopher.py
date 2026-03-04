@@ -978,7 +978,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
             player_has_seed=new_has_seed
         )
     
-    def reset(self, key: chex.PRNGKey) -> tuple[chex.Array, GopherState]:
+    def _reset(self, key: chex.PRNGKey) -> tuple[chex.Array, GopherState]:
         key, subkey = jax.random.split(key)       
         tunnel_layout = jnp.zeros(self.consts.NUM_TILES, dtype=jnp.int32)
         tunnel_layout = tunnel_layout.at[0].set(1).at[1].set(1).at[2].set(1).at[3].set(1)
