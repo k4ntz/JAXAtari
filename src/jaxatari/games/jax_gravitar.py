@@ -1,16 +1,19 @@
 import os
 import jax
+import jax.image as jim
 import jax.numpy as jnp
 from functools import partial
 
 from jax import Array
 from jax.scipy import ndimage
 import numpy as np
+from flax import struct
 import jaxatari.spaces as spaces
 from jaxatari.core import JaxEnvironment
 from typing import NamedTuple, Tuple, Dict, Any, Optional
 from enum import IntEnum
 from jaxatari.renderers import JAXGameRenderer
+from jaxatari.rendering import jax_rendering_utils as render_utils
 import jax.debug
 
 """
@@ -42,87 +45,87 @@ def _get_default_ship_angles():
     ], dtype=jnp.float32)
 
 
-class GravitarConstants(NamedTuple):
+class GravitarConstants(struct.PyTreeNode):
     """Constants for Gravitar game configuration."""
     
     # World scaling
-    WORLD_SCALE: float = 3.0
-    FORCE_SPRITES: bool = True
-    SCALE: int = 1
+    WORLD_SCALE: float = struct.field(pytree_node=False, default=3.0)
+    FORCE_SPRITES: bool = struct.field(pytree_node=False, default=True)
+    SCALE: int = struct.field(pytree_node=False, default=1)
     
     # Object limits
-    MAX_BULLETS: int = 16 # reduced from 64 for faster compilation
-    MAX_ENEMIES: int = 4 # reduced from 16 for faster compilation
+    MAX_BULLETS: int = struct.field(pytree_node=False, default=16) # reduced from 64 for faster compilation
+    MAX_ENEMIES: int = struct.field(pytree_node=False, default=4) # reduced from 16 for faster compilation
     
     # Action constants
-    NOOP: int = 0
-    FIRE: int = 1
-    UP: int = 2
-    RIGHT: int = 3
-    LEFT: int = 4
-    DOWN: int = 5
-    UPRIGHT: int = 6
-    UPLEFT: int = 7
-    DOWNRIGHT: int = 8
-    DOWNLEFT: int = 9
-    UPFIRE: int = 10
-    RIGHTFIRE: int = 11
-    LEFTFIRE: int = 12
-    DOWNFIRE: int = 13
-    UPRIGHTFIRE: int = 14
-    UPLEFTFIRE: int = 15
-    DOWNRIGHTFIRE: int = 16
-    DOWNLEFTFIRE: int = 17
+    NOOP: int = struct.field(pytree_node=False, default=0)
+    FIRE: int = struct.field(pytree_node=False, default=1)
+    UP: int = struct.field(pytree_node=False, default=2)
+    RIGHT: int = struct.field(pytree_node=False, default=3)
+    LEFT: int = struct.field(pytree_node=False, default=4)
+    DOWN: int = struct.field(pytree_node=False, default=5)
+    UPRIGHT: int = struct.field(pytree_node=False, default=6)
+    UPLEFT: int = struct.field(pytree_node=False, default=7)
+    DOWNRIGHT: int = struct.field(pytree_node=False, default=8)
+    DOWNLEFT: int = struct.field(pytree_node=False, default=9)
+    UPFIRE: int = struct.field(pytree_node=False, default=10)
+    RIGHTFIRE: int = struct.field(pytree_node=False, default=11)
+    LEFTFIRE: int = struct.field(pytree_node=False, default=12)
+    DOWNFIRE: int = struct.field(pytree_node=False, default=13)
+    UPRIGHTFIRE: int = struct.field(pytree_node=False, default=14)
+    UPLEFTFIRE: int = struct.field(pytree_node=False, default=15)
+    DOWNRIGHTFIRE: int = struct.field(pytree_node=False, default=16)
+    DOWNLEFTFIRE: int = struct.field(pytree_node=False, default=17)
     
     # HUD settings
-    HUD_HEIGHT: int = 24
-    MAX_LIVES: int = 6
-    HUD_PADDING: int = 5
-    HUD_SHIP_WIDTH: int = 10
-    HUD_SHIP_HEIGHT: int = 12
-    HUD_SHIP_SPACING: int = 12
+    HUD_HEIGHT: int = struct.field(pytree_node=False, default=24)
+    MAX_LIVES: int = struct.field(pytree_node=False, default=6)
+    HUD_PADDING: int = struct.field(pytree_node=False, default=5)
+    HUD_SHIP_WIDTH: int = struct.field(pytree_node=False, default=10)
+    HUD_SHIP_HEIGHT: int = struct.field(pytree_node=False, default=12)
+    HUD_SHIP_SPACING: int = struct.field(pytree_node=False, default=12)
     
     # Window dimensions
-    WINDOW_WIDTH: int = 160
-    WINDOW_HEIGHT: int = 210
+    WINDOW_WIDTH: int = struct.field(pytree_node=False, default=160)
+    WINDOW_HEIGHT: int = struct.field(pytree_node=False, default=210)
     
     # Spawn and respawn timing
-    SAUCER_SPAWN_DELAY_FRAMES: int = 200
-    SAUCER_RESPAWN_DELAY_FRAMES: int = 180 * 3
-    UFO_RESPAWN_DELAY_FRAMES: int = 180 * 2
+    SAUCER_SPAWN_DELAY_FRAMES: int = struct.field(pytree_node=False, default=200)
+    SAUCER_RESPAWN_DELAY_FRAMES: int = struct.field(pytree_node=False, default=180 * 3)
+    UFO_RESPAWN_DELAY_FRAMES: int = struct.field(pytree_node=False, default=180 * 2)
     
     # Movement speeds and physics
-    SAUCER_SPEED_MAP: float = 0.18
-    SAUCER_SPEED_ARENA: float = 0.18
-    SAUCER_RADIUS: float = 3.0
-    SHIP_RADIUS: float = 2.0
-    TRACTOR_BEAM_RANGE: float = 15.0
-    PLAYER_BULLET_SPEED: float = 1.3
-    SAUCER_BULLET_SPEED: float = 1.3
-    UFO_HIT_RADIUS: float = 3.0
+    SAUCER_SPEED_MAP: float = struct.field(pytree_node=False, default=0.18)
+    SAUCER_SPEED_ARENA: float = struct.field(pytree_node=False, default=0.18)
+    SAUCER_RADIUS: float = struct.field(pytree_node=False, default=3.0)
+    SHIP_RADIUS: float = struct.field(pytree_node=False, default=2.0)
+    TRACTOR_BEAM_RANGE: float = struct.field(pytree_node=False, default=15.0)
+    PLAYER_BULLET_SPEED: float = struct.field(pytree_node=False, default=1.3)
+    SAUCER_BULLET_SPEED: float = struct.field(pytree_node=False, default=1.3)
+    UFO_HIT_RADIUS: float = struct.field(pytree_node=False, default=3.0)
     
     # HP and damage
-    SAUCER_INIT_HP: int = 1
+    SAUCER_INIT_HP: int = struct.field(pytree_node=False, default=1)
     
     # Animation timing
-    SAUCER_EXPLOSION_FRAMES: int = 60
-    SAUCER_FIRE_INTERVAL_FRAMES: int = 24
-    ENEMY_EXPLOSION_FRAMES: int = 60
-    PLAYER_FIRE_COOLDOWN_FRAMES: int = 30
+    SAUCER_EXPLOSION_FRAMES: int = struct.field(pytree_node=False, default=60)
+    SAUCER_FIRE_INTERVAL_FRAMES: int = struct.field(pytree_node=False, default=24)
+    ENEMY_EXPLOSION_FRAMES: int = struct.field(pytree_node=False, default=60)
+    PLAYER_FIRE_COOLDOWN_FRAMES: int = struct.field(pytree_node=False, default=30)
     
     # Bonuses
-    SOLAR_SYSTEM_BONUS_FUEL: float = 7000.0
-    SOLAR_SYSTEM_BONUS_LIVES: int = 2
-    SOLAR_SYSTEM_BONUS_SCORE: float = 4000.0
+    SOLAR_SYSTEM_BONUS_FUEL: float = struct.field(pytree_node=False, default=7000.0)
+    SOLAR_SYSTEM_BONUS_LIVES: int = struct.field(pytree_node=False, default=2)
+    SOLAR_SYSTEM_BONUS_SCORE: float = struct.field(pytree_node=False, default=4000.0)
     
     # Ship rotation
-    SHIP_ANGLES: jnp.ndarray = _get_default_ship_angles()
-    ROTATION_COOLDOWN_FRAMES: int = 15
+    SHIP_ANGLES: jnp.ndarray = struct.field(pytree_node=False, default_factory=_get_default_ship_angles)
+    ROTATION_COOLDOWN_FRAMES: int = struct.field(pytree_node=False, default=15)
     
     # Debug settings
-    SHIP_ANCHOR_X: Optional[float] = None
-    SHIP_ANCHOR_Y: Optional[float] = None
-    DEBUG_DRAW_SHIP_ORIGIN: bool = True
+    SHIP_ANCHOR_X: Optional[float] = struct.field(pytree_node=False, default=None)
+    SHIP_ANCHOR_Y: Optional[float] = struct.field(pytree_node=False, default=None)
+    DEBUG_DRAW_SHIP_ORIGIN: bool = struct.field(pytree_node=False, default=True)
     
     # Reactor physics
     REACTOR_START_Y: float = 30.0
@@ -3275,11 +3278,22 @@ class JaxGravitar(JaxEnvironment):
 
 
 class GravitarRenderer(JAXGameRenderer):
-    def __init__(self, width: int = None, height: int = None, consts: GravitarConstants = None):
+    def __init__(self, width: int = None, height: int = None, consts: GravitarConstants = None, config: render_utils.RendererConfig = None):
         super().__init__()
         self.consts = consts or GravitarConstants()
         self.width = width if width is not None else self.consts.WINDOW_WIDTH
         self.height = height if height is not None else self.consts.WINDOW_HEIGHT
+        
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.height, self.width),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
+        self.jr = render_utils.JaxRenderingUtils(self.config)
 
         jax_sprites = _load_and_convert_sprites()
         
@@ -3750,8 +3764,25 @@ class GravitarRenderer(JAXGameRenderer):
 
             is_in_reactor = (state.mode == 1) & (state.current_level == 4)
             final_frame = jax.lax.cond(is_in_reactor, draw_reactor_timer, lambda fc: fc, frame_after_lives)
-            
-            return final_frame
+
+            # If native downscaling is configured, apply it here so the renderer
+            # returns the downscaled image natively (used by PixelObsWrapper hot-swap).
+            if getattr(self, 'config', None) and self.config.downscale:
+                th, tw = self.config.downscale
+                resized = jim.resize(final_frame.astype(jnp.float32), (th, tw, final_frame.shape[2]), method='bilinear')
+                return resized.astype(jnp.uint8)
+            else:
+                return final_frame
+                def _maybe_downscale(f):
+                    if getattr(self, 'config', None) and self.config.downscale:
+                        th, tw = self.config.downscale
+                        # jax.image.resize expects float inputs; use bilinear and cast back
+                        resized = jim.resize(f.astype(jnp.float32), (th, tw, f.shape[2]), method='bilinear')
+                        return resized.astype(jnp.uint8)
+                    else:
+                        return f
+
+                return _maybe_downscale(final_frame)
 
         frame = draw_hud(frame)
 
