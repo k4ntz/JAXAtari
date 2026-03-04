@@ -120,7 +120,7 @@ class GravitarConstants(struct.PyTreeNode):
     
     # Ship rotation
     SHIP_ANGLES: jnp.ndarray = struct.field(pytree_node=False, default_factory=_get_default_ship_angles)
-    ROTATION_COOLDOWN_FRAMES: int = struct.field(pytree_node=False, default=15)
+    ROTATION_COOLDOWN_FRAMES: int = struct.field(pytree_node=False, default=25)
     
     # Debug settings
     SHIP_ANCHOR_X: Optional[float] = struct.field(pytree_node=False, default=None)
@@ -1178,15 +1178,13 @@ def ship_step(state: ShipState,
     is_thrusting_now = jnp.isin(action, thrust_actions) & (fuel > 0.0)
     
     # --- Physics Parameters ---
-    rotation_speed = 0.2 / WORLD_SCALE
-    thrust_power = 0.05 / WORLD_SCALE  # Increased from 0.03 to better overcome gravity
-    gravity = 0.005 / WORLD_SCALE
-    max_speed = 1.0 / WORLD_SCALE
+    thrust_power = 0.2 / WORLD_SCALE  # Increased from 0.03 to better overcome gravity
+    gravity = 0.05 / WORLD_SCALE
+    max_speed = 3.0 / WORLD_SCALE
 
     # 0.0 = full stop on collision (inelastic)
     # 1.0 = perfect bounce (elastic)
-    # We start with a softer value, e.g., 0.5 (retains 50% energy)
-    bounce_damping = 0.5
+    bounce_damping = 0.8
 
     # --- 1. Initialize velocity variables for this frame ---
     #     we get the initial velocity from the state
@@ -1249,7 +1247,7 @@ def ship_step(state: ShipState,
     is_map_mode = (terrain_bank_idx == 0)
     is_terrant2 = (terrain_bank_idx == 2)
     
-    # Sun position (the OBSTACLE sprite) - ALE center coordinates: (81, 85)
+    # Sun position (the OBSTACLE sprite) - ALE center coordinates: (82, 86)
     sun_x = 82.0
     sun_y = 86.0
     
@@ -1260,8 +1258,8 @@ def ship_step(state: ShipState,
     dist_to_sun = jnp.maximum(dist_to_sun, 1.0)  # Avoid division by zero
     
     # Gravity magnitude (stronger when closer to sun)
-    gravity_strength = gravity * (100.0 / dist_to_sun)  # Inverse distance law
-    gravity_strength = jnp.clip(gravity_strength, 0.0, gravity * 3.0)  # Cap maximum gravity
+    gravity_strength = gravity * (2.0 / dist_to_sun)  # Inverse distance law
+    gravity_strength = jnp.clip(gravity_strength, 0.0, gravity * 5.0)  # Cap maximum gravity
     
     # Level center for terrant2's radial gravity
     level_center_x = window_size[0] / 2.0
@@ -1292,8 +1290,16 @@ def ship_step(state: ShipState,
                             vy + (dy_to_center / dist_to_center) * radial_gravity_strength,
                             vy + gravity))
 
-    # --- 4. Apply maximum speed limit ---
+    # --- 4. Apply velocity damping ---
+    # This makes the ship take time to get going, matching ALE behavior
+    """damping_factor = 0.99  # Retain 99% of velocity each frame
+    vx = vx * damping_factor
+    vy = vy * damping_factor"""
+
+    # --- 5. Apply maximum speed limit ---
     speed_sq = vx ** 2 + vy ** 2
+    # Debug: print current speed magnitude each physics step
+    jax.debug.print("current speed: {x}", x=jnp.sqrt(speed_sq))
 
     def cap_velocity(v_tuple):
         v_x, v_y, spd_sq = v_tuple
@@ -1312,7 +1318,7 @@ def ship_step(state: ShipState,
         (vx, vy, speed_sq)
     )
 
-    # --- 5. Position and Boundary Collision ---
+    # --- 6. Position and Boundary Collision ---
     window_width, window_height = window_size
     
     # Define boundaries to prevent sprite overflow
@@ -3011,7 +3017,7 @@ class JaxGravitar(JaxEnvironment):
             done = bool(done.item() if hasattr(done, "item") else done)
         except Exception:
             pass
-        jax.debug.print("JaxGravitar.step is returning reward: {x}", x=reward)
+        #jax.debug.print("JaxGravitar.step is returning reward: {x}", x=reward)
 
         return obs, ns, reward, done, info
 
@@ -3063,11 +3069,12 @@ class JaxGravitar(JaxEnvironment):
         spawn_x = jnp.array(76.0, dtype=jnp.float32)
         spawn_y = jnp.array(131.0, dtype=jnp.float32)
 
+        # INITIAL SPEED
         ship_state = ShipState(
             x=spawn_x,
             y=spawn_y,
-            vx=jnp.array(jnp.cos(-jnp.pi / 4) * 0.3, dtype=jnp.float32),
-            vy=jnp.array(jnp.sin(-jnp.pi / 4) * 0.3, dtype=jnp.float32),
+            vx=jnp.array(jnp.cos(-jnp.pi / 4) * 0.06, dtype=jnp.float32),
+            vy=jnp.array(jnp.sin(-jnp.pi / 4) * 0.04, dtype=jnp.float32),
             angle=jnp.array(-jnp.pi / 2, dtype=jnp.float32),
             is_thrusting=jnp.array(False),
             rotation_cooldown=jnp.int32(0)
