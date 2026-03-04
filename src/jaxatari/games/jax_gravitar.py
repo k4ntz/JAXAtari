@@ -3777,19 +3777,15 @@ class GravitarRenderer(JAXGameRenderer):
             if getattr(self, 'config', None) and self.config.downscale:
                 th, tw = self.config.downscale
                 resized = jim.resize(final_frame.astype(jnp.float32), (th, tw, final_frame.shape[2]), method='bilinear')
-                return resized.astype(jnp.uint8)
-            else:
-                return final_frame
-                def _maybe_downscale(f):
-                    if getattr(self, 'config', None) and self.config.downscale:
-                        th, tw = self.config.downscale
-                        # jax.image.resize expects float inputs; use bilinear and cast back
-                        resized = jim.resize(f.astype(jnp.float32), (th, tw, f.shape[2]), method='bilinear')
-                        return resized.astype(jnp.uint8)
-                    else:
-                        return f
-
-                return _maybe_downscale(final_frame)
+                final_frame = resized.astype(jnp.uint8)
+            
+            # Convert to grayscale if configured
+            if getattr(self, 'config', None) and self.config.channels == 1:
+                # Standard RGB to grayscale conversion: 0.299*R + 0.587*G + 0.114*B
+                gray = (0.299 * final_frame[..., 0] + 0.587 * final_frame[..., 1] + 0.114 * final_frame[..., 2])
+                final_frame = gray.astype(jnp.uint8)[..., None]  # Add channel dimension
+            
+            return final_frame
 
         frame = draw_hud(frame)
 
