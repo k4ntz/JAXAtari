@@ -1100,9 +1100,19 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
     def _get_reward(self, state: GopherState, next_state: GopherState) -> chex.Array:
         return jnp.float32(next_state.score - state.score)
     
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_lives(self, state: GopherState) -> chex.Array:
+        return jnp.sum(state.carrots_present)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_score(self, state: GopherState) -> chex.Array:
+        return jnp.atleast_1d(state.score)
+    
+    @property
     def action_space(self): 
         return spaces.Discrete(len(self.ACTION_SET))
     
+    @property
     def observation_space(self) -> spaces.Space:
         """
         Helper to create a space for the new ObjectObservation format
@@ -1132,6 +1142,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
             "gopher_state": spaces.Box(low=-1, high=20, shape=(2,), dtype=jnp.int32),
         })
     
+    @property
     def image_space(self) -> spaces.Box:
         return spaces.Box(
             low=0,
