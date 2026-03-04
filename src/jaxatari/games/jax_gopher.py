@@ -1085,7 +1085,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         
         reward = jnp.float32(true_final_score - old_score)
         done = game_over
-        info = self.get_info(state)
+        info = self._get_info(state)
         return obs, state, reward, done, info
     
     @partial(jax.jit, static_argnums=(0,))
