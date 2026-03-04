@@ -76,7 +76,7 @@ class GravitarConstants(NamedTuple):
     
     # HUD settings
     HUD_HEIGHT: int = 24
-    MAX_LIVES: int = 3
+    MAX_LIVES: int = 6
     HUD_PADDING: int = 5
     HUD_SHIP_WIDTH: int = 10
     HUD_SHIP_HEIGHT: int = 12
@@ -117,7 +117,7 @@ class GravitarConstants(NamedTuple):
     
     # Ship rotation
     SHIP_ANGLES: jnp.ndarray = _get_default_ship_angles()
-    ROTATION_COOLDOWN_FRAMES: int = 6
+    ROTATION_COOLDOWN_FRAMES: int = 8
     
     # Debug settings
     SHIP_ANCHOR_X: Optional[float] = None
@@ -744,8 +744,9 @@ def create_empty_enemies():
 
 @jax.jit
 def create_env_state(rng: jnp.ndarray) -> EnvState:
-    spawn_x = jnp.array(WINDOW_WIDTH * 0.50, dtype=jnp.float32)
-    spawn_y = jnp.array(WINDOW_HEIGHT * 0.56, dtype=jnp.float32)
+    # ALE spawn location coordinates: (75, 131)
+    spawn_x = jnp.array(76.0, dtype=jnp.float32)
+    spawn_y = jnp.array(130.0, dtype=jnp.float32)
 
     return EnvState(
         mode=jnp.int32(1),
@@ -1176,7 +1177,7 @@ def ship_step(state: ShipState,
     # --- Physics Parameters ---
     rotation_speed = 0.2 / WORLD_SCALE
     thrust_power = 0.05 / WORLD_SCALE  # Increased from 0.03 to better overcome gravity
-    gravity = 0.008 / WORLD_SCALE
+    gravity = 0.005 / WORLD_SCALE
     max_speed = 1.0 / WORLD_SCALE
 
     # 0.0 = full stop on collision (inelastic)
@@ -1245,9 +1246,9 @@ def ship_step(state: ShipState,
     is_map_mode = (terrain_bank_idx == 0)
     is_terrant2 = (terrain_bank_idx == 2)
     
-    # Sun position (the OBSTACLE sprite: 57% width, 38% height)
-    sun_x = window_size[0] * 0.57
-    sun_y = window_size[1] * 0.38
+    # Sun position (the OBSTACLE sprite) - ALE center coordinates: (81, 85)
+    sun_x = 82.0
+    sun_y = 86.0
     
     # Calculate direction to sun (for map mode)
     dx_to_sun = sun_x - state.x
@@ -2786,15 +2787,19 @@ class JaxGravitar(JaxEnvironment):
         # --- Map layout and collision radii ---
         MAP_SCALE = 3
         HITBOX_SCALE = 0.90
+        # Layout stores exact ALE center pixel coordinates directly (no fraction conversion)
         layout = [
-            (SpriteIdx.PLANET1, 0.82, 0.18), (SpriteIdx.PLANET2, 0.22, 0.24),
-            (SpriteIdx.REACTOR, 0.18, 0.43), (SpriteIdx.SPAWN_LOC, 0.50, 0.56),
-            (SpriteIdx.OBSTACLE, 0.57, 0.38), (SpriteIdx.PLANET3, 0.76, 0.76),
-            (SpriteIdx.PLANET4, 0.14, 0.88),
+            (SpriteIdx.PLANET1, 126, 46),
+            (SpriteIdx.PLANET2, 37, 67),
+            (SpriteIdx.REACTOR, 22, 107),
+            (SpriteIdx.SPAWN_LOC, 75, 131),
+            (SpriteIdx.OBSTACLE, 82, 86),
+            (SpriteIdx.PLANET3, 142, 157),
+            (SpriteIdx.PLANET4, 30, 177),
         ]
         px, py, pr, pi = [], [], [], []
-        for idx, xp, yp in layout:
-            cx, cy = xp * self.consts.WINDOW_WIDTH, yp * self.consts.WINDOW_HEIGHT
+        for idx, center_x, center_y in layout:
+            cx, cy = float(center_x), float(center_y)
             spr = self.sprites[idx]
             if spr is not None:
                 r = 8.0 / self.consts.WORLD_SCALE if idx == SpriteIdx.OBSTACLE else 0.3 * max(spr.shape[1],
@@ -2997,8 +3002,9 @@ class JaxGravitar(JaxEnvironment):
                   reactor_destroyed: Optional[jnp.ndarray] = None,
                   planets_cleared_mask: Optional[jnp.ndarray] = None
                   ) -> tuple[dict[str, Array], EnvState]:
-        spawn_x = jnp.array(WINDOW_WIDTH * 0.50, dtype=jnp.float32)
-        spawn_y = jnp.array(WINDOW_HEIGHT * 0.56, dtype=jnp.float32)
+        # ALE spawn location coordinates: (75, 131)
+        spawn_x = jnp.array(76.0, dtype=jnp.float32)
+        spawn_y = jnp.array(131.0, dtype=jnp.float32)
 
         ship_state = ShipState(
             x=spawn_x,
