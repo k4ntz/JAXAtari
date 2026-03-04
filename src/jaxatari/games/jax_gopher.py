@@ -242,6 +242,11 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
          Action.UPFIRE, Action.RIGHTFIRE, Action.LEFTFIRE, Action.DOWNFIRE],
         dtype=jnp.int32
     )
+
+    @property
+    def action_set(self):
+        return self.ACTION_SET
+    
     def __init__(self, consts: GopherConstants = None):
         consts = consts or GopherConstants()
         super().__init__(consts)     
@@ -1022,6 +1027,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         obs = self._get_obs(state)
         return obs, state
     
+    @partial(jax.jit, static_argnums=(0,))
     def _get_obs(self, state: GopherState) -> GopherObservation:
         player_obs = ObjectObservation.create(
             x=jnp.array([state.player_x]), 
