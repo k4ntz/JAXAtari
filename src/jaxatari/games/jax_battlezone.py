@@ -151,8 +151,8 @@ class BattlezoneConstants(struct.PyTreeNode):
     ENEMY_SPAWN_PROBS: chex.Array = struct.field(default_factory=lambda: jnp.array([
         [1.0, 0.0, 0.0],
         [0.8, 0.2, 0.0],
-        [0.6, 0.4, 0.1],
-        [0.5, 0.5, 0.2]
+        [0.6, 0.3, 0.1],
+        [0.5, 0.3, 0.2]
     ]))
     RADAR_MAX_SCAN_RADIUS: int = struct.field(default=110, pytree_node=False)
     FIGHTER_AREA_X: Tuple[float, float] = struct.field(default=(-12.5, 12.5), pytree_node=False)
@@ -1135,23 +1135,15 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
     def observation_space(self) -> spaces.Dict:
         """description of observation (must match)"""
+        object_space = spaces.get_object_space(n=2, screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
+        projectile_object_space = spaces.get_object_space(n=3, screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
         return spaces.Dict({
-            "player": spaces.Dict({
-                "cur_fire_cd": spaces.Box(low=0, high=self.consts.FIRE_CD, shape=(), dtype=jnp.int32),
-                "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
-                "life": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
-            }),
-            "enemies": spaces.Dict({
-                "x": spaces.Box(low=-self.consts.WORLD_SIZE_X, high=self.consts.WORLD_SIZE_X, shape=(2,), dtype=jnp.float32),
-                "z": spaces.Box(low=-self.consts.WORLD_SIZE_Z, high=self.consts.WORLD_SIZE_Z, shape=(2,), dtype=jnp.float32),
-                "enemy_type": spaces.Box(low=0, high=3, shape=(2,), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(2,), dtype=jnp.bool_)
-            }),
-            "projectiles": spaces.Dict({
-                "x": spaces.Box(low=-self.consts.WORLD_SIZE_X, high=self.consts.WORLD_SIZE_X, shape=(3,), dtype=jnp.float32),
-                "z": spaces.Box(low=-self.consts.WORLD_SIZE_Z, high=self.consts.WORLD_SIZE_Z, shape=(3,), dtype=jnp.float32),
-                "active": spaces.Box(low=0, high=1, shape=(3,), dtype=jnp.bool_)
-            })
+            "enemies": object_space,
+            "radar_dots": object_space,
+            "projectiles": projectile_object_space,
+            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
+            "life": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
+            "enemy_types": spaces.Box(low=jnp.array([-1,-1]), high=jnp.array([4,4]), shape=(2,), dtype=jnp.int32)
         })
 
 
@@ -1173,7 +1165,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: BattlezoneState, state: BattlezoneState):
-        return (state.score - previous_state.score)*state.life  # TODO: temporary intuition change later
+        return (state.score - previous_state.score + jnp.log(state.step_counter))*state.life  # TODO: temporary intuition change later
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: BattlezoneState) -> bool:
@@ -1745,11 +1737,4 @@ def extract_sprite(rgb_array, color_list, filename="output_rgba.npy"):
 
 
 if __name__ == "__main__":
-    #env = JaxBattlezone()
-    #initial_obs, state = env.reset()
-    #for i in range(100):
-        #obs, state, env_reward, done, info = env.step(state, 0)
-
-
-
-    try_gym_battlezone()
+    pass
