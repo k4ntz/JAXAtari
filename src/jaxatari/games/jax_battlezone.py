@@ -1,7 +1,9 @@
 import gymnasium as gym
 import ale_py
 from gymnasium.utils import play
+from netaddr.strategy.ipv4 import width
 from pygame.examples.scroll import zoom_factor
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 
 """
 Collecting necessary information about BattleZone.
@@ -175,6 +177,11 @@ class BattlezoneConstants(struct.PyTreeNode):
     DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = struct.field(default=0.05, pytree_node=False)
     ENEMY_SCORES: chex.Array = struct.field(
             default_factory=lambda: jnp.array([1000, 5000, 2000, 3000], dtype=jnp.int32))
+    CAMERA_FOCAL_LENGTH: float = struct.field(default=60, pytree_node=False)
+    ENEMY_WIDTHS: chex.Array = struct.field(
+            default_factory=lambda: jnp.array([24, 32, 32, 24], dtype=jnp.int32))
+    ENEMY_HEIGHTS: chex.Array = struct.field(
+            default_factory=lambda: jnp.array([14, 18, 17, 14], dtype=jnp.int32))
 
 @struct.dataclass
 class Projectile:
@@ -222,30 +229,15 @@ class BattlezoneState:
     random_key: chex.PRNGKey
     shot_spawn: chex.Array
 
-@struct.dataclass
-class PlayerObs:
-    cur_fire_cd: chex.Array
-    score: chex.Array
-    life: chex.Array
-
-@struct.dataclass
-class EnemyObs:
-    x: chex.Array
-    z: chex.Array
-    enemy_type: chex.Array
-    active: chex.Array
-
-@struct.dataclass
-class ProjectileObs:
-    x: chex.Array
-    z: chex.Array
-    active: chex.Array
 
 @struct.dataclass
 class BattlezoneObservation:
-    player: PlayerObs
-    enemies: EnemyObs
-    projectiles: ProjectileObs
+    enemies: ObjectObservation
+    radar_dots: ObjectObservation
+    projectiles: ObjectObservation
+    score: jnp.ndarray
+    life: jnp.ndarray
+    enemy_types: jnp.ndarray
 
 
 @struct.dataclass
@@ -1062,57 +1054,86 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
         return new_state
 
+    def world_cords_to_viewport_cords(self, x, z, f):
+        u = ((f * (x / z))+self.consts.WIDTH/2).astype(jnp.int32)
+        vOffset = self.consts.HORIZON_Y
+        v = ((f/(z-self.consts.HITBOX_SIZE)) + vOffset).astype(jnp.int32)
+        return u, v
+
+    def check_in_radar(self, enemies: Enemy) -> chex.Array:
+        return jnp.logical_and((enemies.distance <= self.consts.RADAR_MAX_SCAN_RADIUS), enemies.active)
+
+
     def _get_observation(self, state: BattlezoneState):
-        player = PlayerObs(
-            cur_fire_cd=state.cur_fire_cd,
+        #-------------------------------enemies----------------------------------------------
+        enemies_u, _ = self.world_cords_to_viewport_cords(state.enemies.x, state.enemies.z,
+                                                                  self.consts.CAMERA_FOCAL_LENGTH)
+        zoom_factor = jnp.clip(((-0.15 * (state.enemies.distance) + 21.0) / 20.0), 0.0, 1.0)
+        pixels_deleted_due_to_zoom = (jnp.round(1.0 / zoom_factor) +1)
+        enemies_width = self.consts.ENEMY_WIDTHS[state.enemies.enemy_type]-pixels_deleted_due_to_zoom
+        enemies_heights = self.consts.ENEMY_HEIGHTS[state.enemies.enemy_type]-pixels_deleted_due_to_zoom
+        enemies_visible = jnp.logical_and(jnp.logical_and(enemies_u < (self.consts.WIDTH+enemies_width//2),
+                                  enemies_u > (0-enemies_width//2)), state.enemies.z > 0)
+        enemy_mask = jnp.logical_and(state.enemies.active, enemies_visible)
+        enemies_u = jnp.where(enemy_mask, enemies_u-(enemies_width/2), -100)
+        enemies = ObjectObservation.create(
+            x=enemies_u,
+            y=jnp.where(enemy_mask, jnp.full((len(enemies_u),),
+                                             self.consts.ENEMY_POS_Y-(enemies_heights/2)), -100),
+            width = jnp.where(enemy_mask, enemies_width, -100),
+            height = jnp.where(enemy_mask, enemies_heights, -100),
+        )
+
+        #---------------------------------projectiles------------------------------------------------
+        enemy_projectiles_u, enemy_projectiles_v = self.world_cords_to_viewport_cords(state.enemy_projectiles.x,
+                                                            state.enemy_projectiles.z, self.consts.CAMERA_FOCAL_LENGTH)
+        enemy_projectiles_visible = jnp.logical_and(jnp.logical_and(enemies_u < self.consts.WIDTH,
+                                                          enemies_u > 0), state.enemies.z > 0)
+        enemy_projectiles_mask = jnp.logical_and(enemy_projectiles_visible, state.enemy_projectiles.active)
+        player_projectiles_u, player_projectiles_v = self.world_cords_to_viewport_cords(state.player_projectile.x,
+                                                        state.player_projectile.z, self.consts.CAMERA_FOCAL_LENGTH)
+        projectiles_x = jnp.concatenate([
+                jnp.where(state.player_projectile.active, jnp.atleast_1d(player_projectiles_u-1), -100),
+                jnp.where(enemy_projectiles_mask, enemy_projectiles_u-1, -100)
+            ])
+        projectiles_y = jnp.concatenate([
+                jnp.where(state.player_projectile.active, jnp.atleast_1d(player_projectiles_v-1), -100),
+                jnp.where(enemy_projectiles_mask, enemy_projectiles_v-1, -100)
+            ])
+        projectiles = ObjectObservation.create(
+            x=projectiles_x,
+            y=projectiles_y,
+            width=jnp.full((len(projectiles_x),),2),
+            height=jnp.full((len(projectiles_x),),3),
+        )
+        #-----------------------------radar----------------------------------------
+        # Check if enemy in radar radius
+        in_radar = jax.vmap(self.check_in_radar, in_axes=(0))(state.enemies)
+        # jax.debug.print("{}, {}",enemies_x, enemies_z)
+        # Scale to radar size
+        scale_val = self.consts.RADAR_RADIUS / self.consts.RADAR_MAX_SCAN_RADIUS
+        radar_enemies_x = state.enemies.x * scale_val
+        radar_enemies_z = state.enemies.z * scale_val * (-1)
+        # Offset to radar center
+        radar_enemies_x = jnp.round(radar_enemies_x + self.consts.RADAR_CENTER_X).astype(jnp.int32)
+        radar_enemies_z = jnp.round(radar_enemies_z + self.consts.RADAR_CENTER_Y).astype(jnp.int32)
+        # Only allow in range enemies
+        radar_enemies_x = jnp.where(in_radar, radar_enemies_x, -1)
+        radar_enemies_z = jnp.where(in_radar, radar_enemies_z, -1)
+        radar_dots = ObjectObservation.create(
+            x=radar_enemies_x,
+            y=radar_enemies_z,
+            width=jnp.full((len(radar_enemies_x),), 1),
+            height=jnp.full((len(radar_enemies_x),), 1)
+        )
+        #----------------------------------------------------------------------------
+        return BattlezoneObservation(
+            enemies=enemies,
+            radar_dots=radar_dots,
+            projectiles=projectiles,
             score=state.score,
             life=state.life,
-        )
-
-        enemies = EnemyObs(
-            x=state.enemies.x,
-            z=state.enemies.z,
-            enemy_type=state.enemies.enemy_type,
-            active=state.enemies.active
-        )
-
-        projectiles = ProjectileObs(
-            x=jnp.concatenate([
-                jnp.atleast_1d(state.player_projectile.x),
-                state.enemy_projectiles.x
-            ]),
-            z=jnp.concatenate([
-                jnp.atleast_1d(state.player_projectile.z),
-                state.enemy_projectiles.z
-            ]),
-            active=jnp.concatenate([
-                jnp.atleast_1d(state.player_projectile.active),
-                state.enemy_projectiles.active
-            ])
-        )
-
-        return BattlezoneObservation(  # TODO
-            player=player,
-            enemies=enemies,
-            projectiles=projectiles
-        )
-    
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: BattlezoneObservation) -> jnp.ndarray:
-        """needs to contain everything the observation contains"""
-        return jnp.concatenate([  # TODO
-            obs.player.cur_fire_cd.flatten(),
-            obs.player.score.flatten(),
-            obs.player.live.flatten(),
-            obs.enemies.x.flatten(),
-            obs.enemies.z.flatten(),
-            obs.enemies.enemy_type.flatten(),
-            obs.enemies.active.flatten(),
-            obs.projectiles.x.flatten(),
-            obs.projectiles.z.flatten(),
-            obs.projectiles.active.flatten(),
-        ]
+            enemy_types=jnp.where(enemy_mask, state.enemies.enemy_type, -1),
         )
 
 
@@ -1388,7 +1409,7 @@ class BattlezoneRenderer(JAXGameRenderer):
         return rotated_sprite
 
 
-    def world_cords_to_viewport_cords(self, x, z, f=60.0):
+    def world_cords_to_viewport_cords(self, x, z, f):
         #f = (screen_height / 2) / tan(FOVv / 2)
         def anchor(_):
             # Behind the camera or invalid
@@ -1464,7 +1485,7 @@ class BattlezoneRenderer(JAXGameRenderer):
             zoom_factor = jnp.clip(((-0.15 * (enemy.distance) + 21.0)/20.0), 0.0, 1.0)
             zoom_factor = jnp.round(1.0 / zoom_factor)
             zoomed_mask = self.zoom_mask(enemy_mask, zoom_factor)
-            x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
+            x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z, self.consts.CAMERA_FOCAL_LENGTH)
 
             rightmost_col = jnp.max(jnp.where(jnp.any(zoomed_mask != self.jr.TRANSPARENT_ID, axis=0),
                                             jnp.arange(zoomed_mask.shape[1]),
@@ -1492,7 +1513,7 @@ class BattlezoneRenderer(JAXGameRenderer):
                 zoom_factor = ((jnp.sqrt(jnp.square(enemy.x) + jnp.square(enemy.z)) - 20.0) *
                                self.consts.DISTANCE_TO_ZOOM_FACTOR_CONSTANT).astype(int)
                 zoomed_mask = self.zoom_mask(mask, zoom_factor)
-                x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z)
+                x, y = self.world_cords_to_viewport_cords(enemy.x, enemy.z, self.consts.CAMERA_FOCAL_LENGTH)
 
                 rightmost_col = jnp.max(jnp.where(jnp.any(zoomed_mask != self.jr.TRANSPARENT_ID, axis=0),
                                             jnp.arange(zoomed_mask.shape[1]),
@@ -1513,7 +1534,7 @@ class BattlezoneRenderer(JAXGameRenderer):
         def projectile_active(projectile):
             projectile_mask_index = jnp.where(projectile.distance <= 15, 0, 1)
             projectile_mask = self.projectile_masks[projectile_mask_index]
-            x, y = self.world_cords_to_viewport_cords(projectile.x, projectile.z)
+            x, y = self.world_cords_to_viewport_cords(projectile.x, projectile.z, self.consts.CAMERA_FOCAL_LENGTH)
 
             rightmost_col = jnp.max(jnp.where(jnp.any(projectile_mask != self.jr.TRANSPARENT_ID, axis=0),
                                             jnp.arange(projectile_mask.shape[1]),
