@@ -1,7 +1,20 @@
 import gymnasium as gym
 import ale_py
-from gymnasium.utils import play
+import matplotlib.pyplot as plt
+import os
+import jax.lax
+import jax.numpy as jnp
+import chex
+import jaxatari.spaces as spaces
+
+from jaxatari.renderers import JAXGameRenderer
+from jaxatari.rendering import jax_rendering_utils as render_utils
+from enum import IntEnum, unique
+from typing import NamedTuple, Tuple
+from functools import partial
+from flax import struct
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
+from gymnasium.utils import play
 
 """
 Collecting necessary information about BattleZone.
@@ -72,21 +85,6 @@ What do we need to research about each enemy (+player)?
 
 
 """
-import matplotlib.pyplot as plt
-from enum import IntEnum, unique
-
-import os
-from functools import partial
-from flax import struct
-from typing import NamedTuple, Tuple
-import jax.lax
-import jax.numpy as jnp
-import chex
-
-import jaxatari.spaces as spaces
-from jaxatari.renderers import JAXGameRenderer
-from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 
 
