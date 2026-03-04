@@ -87,18 +87,18 @@ class GravitarConstants(NamedTuple):
     WINDOW_HEIGHT: int = 210
     
     # Spawn and respawn timing
-    SAUCER_SPAWN_DELAY_FRAMES: int = 60 * 3
+    SAUCER_SPAWN_DELAY_FRAMES: int = 200
     SAUCER_RESPAWN_DELAY_FRAMES: int = 180 * 3
     UFO_RESPAWN_DELAY_FRAMES: int = 180 * 2
     
     # Movement speeds and physics
-    SAUCER_SPEED_MAP: float = 0.4 / 3.0  # 0.4 / WORLD_SCALE
-    SAUCER_SPEED_ARENA: float = 0.4 / 3.0
+    SAUCER_SPEED_MAP: float = 0.18
+    SAUCER_SPEED_ARENA: float = 0.18
     SAUCER_RADIUS: float = 3.0
     SHIP_RADIUS: float = 2.0
     TRACTOR_BEAM_RANGE: float = 15.0
-    PLAYER_BULLET_SPEED: float = 4.0 / 3.0  # 4.0 / WORLD_SCALE
-    SAUCER_BULLET_SPEED: float = 2.0 / 3.0  # 2.0 / WORLD_SCALE
+    PLAYER_BULLET_SPEED: float = 1.3
+    SAUCER_BULLET_SPEED: float = 1.3
     UFO_HIT_RADIUS: float = 3.0
     
     # HP and damage
@@ -117,7 +117,7 @@ class GravitarConstants(NamedTuple):
     
     # Ship rotation
     SHIP_ANGLES: jnp.ndarray = _get_default_ship_angles()
-    ROTATION_COOLDOWN_FRAMES: int = 8
+    ROTATION_COOLDOWN_FRAMES: int = 15
     
     # Debug settings
     SHIP_ANCHOR_X: Optional[float] = None
@@ -2849,8 +2849,15 @@ class JaxGravitar(JaxEnvironment):
             cx, cy = float(center_x), float(center_y)
             spr = self.sprites[idx]
             if spr is not None:
-                r = 8.0 / self.consts.WORLD_SCALE if idx == SpriteIdx.OBSTACLE else 0.3 * max(spr.shape[1],
-                                                                                  spr.shape[0]) * MAP_SCALE * HITBOX_SCALE
+                # SPAWN_LOC is just a visual marker, no collision needed
+                if idx == SpriteIdx.SPAWN_LOC:
+                    r = 0.0
+                # OBSTACLE (13x8 sprite) needs smaller hitbox than planets
+                elif idx == SpriteIdx.OBSTACLE:
+                    r = 0.15 * max(spr.shape[1], spr.shape[0]) * MAP_SCALE * HITBOX_SCALE
+                else:
+                    # Planets and reactor use larger circular hitbox
+                    r = 0.3 * max(spr.shape[1], spr.shape[0]) * MAP_SCALE * HITBOX_SCALE
             else:
                 r = 4
             px.append(cx)
