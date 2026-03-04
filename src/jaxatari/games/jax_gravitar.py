@@ -2664,6 +2664,8 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
         # === BRANCH 2: RETURN TO THE MAP ===
         def _return_to_map(_):
             """Handles the transition from a level back to the map (due to win, loss, or crash)."""
+            # Check if returning from arena (level == -1) - in this case, preserve ship position
+            is_from_arena = (level == -1)
             is_a_death_event = (level == -2) | info.get("crash", False) | info.get("hit_by_bullet", False) | info.get(
                 "reactor_crash_exit", False)
 
@@ -2688,17 +2690,37 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
                                                    jnp.zeros_like(current_state.planets_cleared_mask),
                                                    current_state.planets_cleared_mask)
                 
-                obs_reset, map_state = env_instance.reset_map(
-                    subkey_for_reset,
-                    lives=final_lives,
-                    score=final_score,
-                    fuel=final_fuel,
-                    reactor_destroyed=final_reactor_destroyed,
-                    planets_cleared_mask=final_planets_cleared
-                )
-                map_state = map_state._replace(key=new_main_key)
+                # If returning from arena, preserve current ship position; otherwise reset to spawn
+                def _arena_return_state():
+                    # Keep the ship exactly as it was restored in step_arena
+                    return current_state._replace(
+                        mode=jnp.int32(0),
+                        key=new_main_key,
+                        fuel=final_fuel,
+                        lives=final_lives,
+                        score=final_score,
+                        reactor_destroyed=final_reactor_destroyed,
+                        planets_cleared_mask=final_planets_cleared
+                    )
+                
+                def _level_return_state():
+                    # Normal level completion - reset to map spawn
+                    obs_reset, map_state = env_instance.reset_map(
+                        subkey_for_reset,
+                        lives=final_lives,
+                        score=final_score,
+                        fuel=final_fuel,
+                        reactor_destroyed=final_reactor_destroyed,
+                        planets_cleared_mask=final_planets_cleared
+                    )
+                    return map_state._replace(key=new_main_key)
+                
+                final_state = jax.lax.cond(is_from_arena, _arena_return_state, _level_return_state)
+                obs_out = {'vector': jnp.array([final_state.state.x, final_state.state.y, 
+                                                final_state.state.vx, final_state.state.vy, 
+                                                final_state.state.angle], dtype=jnp.float32)}
                 win_info = {**info, "level_cleared": jnp.array(True)}
-                return obs_reset, map_state, reward, jnp.array(False), win_info, jnp.array(True), level
+                return obs_out, final_state, reward, jnp.array(False), win_info, jnp.array(True), level
 
             def _on_death(_):
                 lives_after_death = current_state.lives - 1
