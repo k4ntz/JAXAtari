@@ -2344,6 +2344,13 @@ def step_arena(env_state: EnvState, action: int):
     bullets = update_bullets(bullets)
     cooldown = jnp.where(can_fire, PLAYER_FIRE_COOLDOWN_FRAMES, jnp.maximum(env_state.cooldown - 1, 0))
 
+    # --- Calculate fuel consumption ---
+    thrust_actions = jnp.array([2, 6, 7, 10, 14, 15])
+    is_thrusting = jnp.isin(action, thrust_actions)
+    FUEL_CONSUME_THRUST = 1.0
+    fuel_consumed = jnp.where(is_thrusting, FUEL_CONSUME_THRUST, 0.0)
+    fuel_after_actions = jnp.maximum(0.0, env_state.fuel - fuel_consumed)
+
     # --- 3. Saucer Movement and Firing ---
     saucer_after_move = jax.lax.cond(saucer.alive,
                                      lambda s: _update_saucer_seek(s, ship_after_move.x, ship_after_move.y,
@@ -2426,6 +2433,7 @@ def step_arena(env_state: EnvState, action: int):
         crash_timer=crash_timer_next,
         mode_timer=env_state.mode_timer + 1,
         score=env_state.score + reward,
+        fuel=fuel_after_actions,
         prev_action=action,
     )
 
@@ -2677,8 +2685,13 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
             # Check if returning from arena (mode=2) vs planet level (mode=1)
             # Both return with level=-1, so we need to use mode to distinguish
             is_from_arena = (current_state.mode == 2)
+            
+            # Death event detection:
+            # For arena (mode=2, level=-1): it's a death if saucer is still alive or death animation playing
+            # A win only occurs if saucer is dead (alive=False) AND death animation finished (death_timer=0)
+            is_arena_death = is_from_arena & (level == -1) & (current_state.saucer.alive | (current_state.saucer.death_timer > 0))
             is_a_death_event = (level == -2) | info.get("crash", False) | info.get("hit_by_bullet", False) | info.get(
-                "reactor_crash_exit", False)
+                "reactor_crash_exit", False) | is_arena_death
 
             def _on_win(_):
                 new_main_key, subkey_for_reset = jax.random.split(current_state.key)
