@@ -1024,11 +1024,11 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
             key=key,
             frame_count=jnp.array(0)
         )
-        obs = self.get_obs(state)
+        obs = self._get_observation(state)
         return obs, state
     
     @partial(jax.jit, static_argnums=(0,))
-    def get_obs(self, state: GopherState) -> GopherObservation:
+    def _get_observation(self, state: GopherState) -> GopherObservation:
         player_obs = ObjectObservation.create(
             x=jnp.array([state.player_x]), 
             y=jnp.array([self.consts.PLAYER_START_Y]), 
@@ -1079,7 +1079,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         state, game_over = self._resolve_collisions_and_reset(state, is_any_bonk)
         state = state.replace(frame_count=state.frame_count + 1)
         
-        obs = self.get_obs(state)
+        obs = self._get_observation(state)
         bonk_bonus = jax.lax.select(is_any_bonk, 100, 0)
         true_final_score = score_before_reset + bonk_bonus
         
@@ -1093,20 +1093,13 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         return self.renderer.render(state)
     
     @partial(jax.jit, static_argnums=(0,))
-    def is_terminal(self, state: GopherState) -> bool:
+    def _get_done(self, state: GopherState) -> bool:
         return jnp.sum(state.carrots_present) == 0
 
     @partial(jax.jit, static_argnums=(0,))
-    def get_reward(self, state: GopherState, next_state: GopherState) -> chex.Array:
+    def _get_reward(self, state: GopherState, next_state: GopherState) -> chex.Array:
         return jnp.float32(next_state.score - state.score)
     
-    @partial(jax.jit, static_argnums=(0,))
-    def get_lives(self, state: GopherState) -> chex.Array:
-        return jnp.sum(state.carrots_present)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def get_score(self, state: GopherState) -> chex.Array:
-        return jnp.atleast_1d(state.score)
     
     def action_space(self): 
         return spaces.Discrete(len(self.ACTION_SET))
@@ -1151,7 +1144,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         )
     
     @partial(jax.jit, static_argnums=(0,))
-    def get_info(self, state: GopherState, ) -> GopherInfo:
+    def _get_info(self, state: GopherState, all_rewards=None) -> GopherInfo:
         return GopherInfo(time=state.frame_count, difficulty_level=jnp.array(1, dtype=jnp.int32))
 
 # ==========================================================================================
