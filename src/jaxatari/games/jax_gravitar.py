@@ -1815,6 +1815,15 @@ def step_map(env_state: EnvState, action: int):
 
     hit_planet = allowed & (dist2 <= (pr * 0.85 + SHIP_RADIUS) ** 2)
     can_enter_planet = jnp.any(hit_planet) & (~is_crashing_now)
+    
+    # Save current position when entering a planet level (will be used on level completion)
+    def _save_map_position(env):
+        return env._replace(
+            map_return_x=env.state.x,
+            map_return_y=env.state.y
+        )
+    
+    new_env = jax.lax.cond(can_enter_planet, _save_map_position, lambda e: e, new_env)
 
     # Check if ship is close enough to saucer to trigger arena battle
     # Use a larger trigger radius (3x the collision radius) to match "fly near" behavior
@@ -2665,8 +2674,9 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
         # === BRANCH 2: RETURN TO THE MAP ===
         def _return_to_map(_):
             """Handles the transition from a level back to the map (due to win, loss, or crash)."""
-            # Check if returning from arena (level == -1) - in this case, preserve ship position
-            is_from_arena = (level == -1)
+            # Check if returning from arena (mode=2) vs planet level (mode=1)
+            # Both return with level=-1, so we need to use mode to distinguish
+            is_from_arena = (current_state.mode == 2)
             is_a_death_event = (level == -2) | info.get("crash", False) | info.get("hit_by_bullet", False) | info.get(
                 "reactor_crash_exit", False)
 
@@ -2705,7 +2715,24 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
                     )
                 
                 def _level_return_state():
-                    # Normal level completion - reset to map spawn
+                    # Check if returning from reactor level (level 4)
+                    is_from_reactor = (current_state.current_level == 4)
+                    
+                    # Reactor: spawn at original spawn point (73, 129)
+                    # Planets: restore to position where player entered the level
+                    return_x = jnp.where(is_from_reactor, jnp.float32(73.0), current_state.map_return_x)
+                    return_y = jnp.where(is_from_reactor, jnp.float32(129.0), current_state.map_return_y)
+                    
+                    restored_ship = ShipState(
+                        x=return_x,
+                        y=return_y,
+                        vx=jnp.float32(0.0),
+                        vy=jnp.float32(0.0),
+                        angle=jnp.float32(-jnp.pi / 2),
+                        is_thrusting=jnp.array(False),
+                        rotation_cooldown=jnp.int32(0)
+                    )
+                    # Call reset_map to properly initialize all map state, then override ship position
                     obs_reset, map_state = env_instance.reset_map(
                         subkey_for_reset,
                         lives=final_lives,
@@ -2714,7 +2741,14 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
                         reactor_destroyed=final_reactor_destroyed,
                         planets_cleared_mask=final_planets_cleared
                     )
-                    return map_state._replace(key=new_main_key)
+                    # Override ship position to restore where the player entered from (or spawn for reactor)
+                    # Preserve map_return coordinates in case they're needed again
+                    return map_state._replace(
+                        key=new_main_key,
+                        state=restored_ship,
+                        map_return_x=current_state.map_return_x,
+                        map_return_y=current_state.map_return_y
+                    )
                 
                 final_state = jax.lax.cond(is_from_arena, _arena_return_state, _level_return_state)
                 obs_out = {'vector': jnp.array([final_state.state.x, final_state.state.y, 
