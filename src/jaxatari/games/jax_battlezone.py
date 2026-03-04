@@ -1,8 +1,6 @@
 import gymnasium as gym
 import ale_py
 from gymnasium.utils import play
-from netaddr.strategy.ipv4 import width
-from pygame.examples.scroll import zoom_factor
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 
 """
