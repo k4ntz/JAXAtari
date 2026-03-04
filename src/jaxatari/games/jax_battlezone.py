@@ -239,7 +239,7 @@ class BattlezoneObservation:
 
 
 @struct.dataclass
-class BattlezoneInfo:  # TODO: fill out properly
+class BattlezoneInfo:
     time: jnp.ndarray
 
 
@@ -293,10 +293,10 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             action == Action.UPFIRE,
             action == Action.RIGHTFIRE,
             action == Action.DOWNFIRE, 
-            action == Action.UPLEFTFIRE,  # TODO: why doesn't this work?
+            action == Action.UPLEFTFIRE,
             action == Action.UPRIGHTFIRE,
             action == Action.DOWNLEFTFIRE,
-            action == Action.DOWNRIGHTFIRE,  # TODO: why doesn't this work?
+            action == Action.DOWNRIGHTFIRE,
         ]), axis=0)
         
         direction = jnp.stack([noop, up, right, left, down, upRight, upLeft, downRight, downLeft])  # leave order as is!
@@ -1175,12 +1175,12 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: BattlezoneState, state: BattlezoneState):
-        return state.score - previous_state.score  # TODO: temporary intuition change later
+        return (state.score - previous_state.score)*state.life  # TODO: temporary intuition change later
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: BattlezoneState) -> bool:
         player_dead = state.life == 0
-        return player_dead  # if lives are < 0 TODO change later
+        return player_dead
 
 
 
