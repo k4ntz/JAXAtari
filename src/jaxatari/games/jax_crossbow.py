@@ -1107,12 +1107,22 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         final_y = jnp.where(should_spawn_final, spawn_y, new_y)
 
         # === CULLING ===
-        is_on_screen = jnp.logical_and(jnp.logical_and(final_x > -10, final_x < self.consts.WIDTH + 10), jnp.logical_and(final_y > -10, final_y < self.consts.PLAY_AREA_HEIGHT - 20) )
+        lava_returned_to_ground = jnp.logical_and(
+            final_type == EnemyType.BURNING_LAVA,
+            final_y >= float(self.consts.GROUND_Y_MIN)
+        )
+        is_on_screen = jnp.logical_and(
+            jnp.logical_and(final_x > -10, final_x < self.consts.WIDTH + 10),
+            jnp.logical_and(final_y > -10, final_y < self.consts.PLAY_AREA_HEIGHT - 20) )
+        is_on_screen= jnp.logical_and(is_on_screen, jnp.logical_not(lava_returned_to_ground))
         # Resting rock is never culled by screen bounds (it sits at ground level)
         is_resting_final = final_type == EnemyType.RESTING_ROCK
         is_on_screen = jnp.logical_or(is_on_screen, is_resting_final)
+        
+        
 
         final_active = jnp.logical_and( jnp.logical_or(surviving_enemies, should_spawn_final), is_on_screen )
+        
 
         # Age and eye expiration
         new_age = jnp.where(should_spawn_final, 0, state.enemies_age + 1)
