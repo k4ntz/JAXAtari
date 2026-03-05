@@ -267,6 +267,46 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         return move_y, move_x, step_size, speed_sign
 
     @partial(jax.jit, static_argnums=(0,))
+    def _sample_enemy_spawn_road(self, rng_key: chex.PRNGKey) -> chex.Array:
+        """Sample road index for enemy spawns.
+
+        Extracted as a modding hook; default behavior is unchanged.
+        """
+        return jax.random.randint(rng_key, shape=(), minval=0, maxval=2).astype(jnp.int32)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _collectible_score_values(self, state: UpNDownState, collectible_type_ids: chex.Array) -> chex.Array:
+        """Return score values for collectible types.
+
+        Extracted as a modding hook; default behavior is unchanged.
+        """
+        return self.consts.COLLECTIBLE_SCORES[collectible_type_ids]
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _on_level_completed(self, state: UpNDownState) -> UpNDownState:
+        """Optional callback invoked only when all flags are collected.
+
+        Default is a no-op and preserves existing game behavior.
+        """
+        return state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _jump_speed_allows_start(self, player_speed: chex.Array) -> chex.Array:
+        """Return whether jump start is allowed for the current speed.
+
+        Extracted as a modding hook; default behavior is unchanged.
+        """
+        return player_speed >= 0
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _adjust_enemy_spawn_timer(self, state: UpNDownState, spawn_timer: chex.Array) -> chex.Array:
+        """Optional hook to post-process enemy spawn timer.
+
+        Extracted as a modding hook; default behavior is unchanged.
+        """
+        return spawn_timer
+
+    @partial(jax.jit, static_argnums=(0,))
     def _get_slope_and_intercept_from_indices(self, current_road: chex.Array, road_index_A: chex.Array, road_index_B: chex.Array) -> Tuple[chex.Array, chex.Array]:
         """Calculate slope and intercept for the current road segment."""
         road_index = jnp.where(current_road == 0, road_index_A, road_index_B)
@@ -858,8 +898,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         # Deactivate collected items
         final_active = jnp.logical_and(active_after_despawn, ~collections)
         
-        # Update score - vectorized lookup without vmap overhead
-        scores = self.consts.COLLECTIBLE_SCORES[spawned_type_id]
+        # Update score - extracted into hook for easier modding
+        scores = self._collectible_score_values(state, spawned_type_id)
         score_delta = jnp.sum(jnp.where(collections, scores, 0))
         
         # Create final collectibles state
@@ -1034,7 +1074,13 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         )
         is_jumping = jnp.logical_or(
             jnp.logical_and(state.is_jumping, state.jump_cooldown > 0),
-            jnp.logical_and(state.is_on_road, jnp.logical_and(player_speed >= 0, jnp.logical_and(can_start_jump, jump_pressed))),
+            jnp.logical_and(
+                state.is_on_road,
+                jnp.logical_and(
+                    self._jump_speed_allows_start(player_speed),
+                    jnp.logical_and(can_start_jump, jump_pressed),
+                ),
+            ),
         )
         
         # Detect when a new jump is starting (was not jumping, now is jumping)
@@ -1206,10 +1252,17 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         
         updated_flags = state.flags._replace(collected=new_collected)
         
-        return state._replace(
+        next_state = state._replace(
             score=state.score + bonus,
             flags=updated_flags,
             flags_collected_mask=new_mask
+        )
+
+        return jax.lax.cond(
+            all_flags_collected,
+            lambda s: self._on_level_completed(s),
+            lambda s: s,
+            next_state,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1371,7 +1424,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         spawn_side = jax.random.choice(key_spawn_side, jnp.array([-1.0, 1.0]))
         raw_spawn_y = state.player_car.position.y + spawn_side * spawn_offset
         spawn_y = -(((raw_spawn_y) * -1) % self.consts.TRACK_LENGTH)
-        spawn_road = jax.random.randint(key_spawn_direction, shape=(), minval=0, maxval=2)
+        spawn_road = self._sample_enemy_spawn_road(key_spawn_direction)
 
         segment_spawn = self._get_road_segment(spawn_y)
         spawn_x = jnp.where(
@@ -1465,6 +1518,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             active=final_active,
             age=enemy_age,
         )
+
+        spawn_timer = self._adjust_enemy_spawn_timer(state, spawn_timer)
 
         return state._replace(
             enemy_cars=next_enemy_cars,
@@ -1924,7 +1979,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         - player_score: int (0-999999)
         - lives: int (0-5)
         - is_jumping: int (0 or 1)
-        - jump_cooldown: int (0-28)
+        - jump_cooldown: int (0-48)
         - is_on_steep_road: int (0 or 1)
         - round_started: int (0 or 1)
         """
@@ -1936,7 +1991,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
                     "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                     "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
                 }),
-                "speed": spaces.Box(low=-6, high=6, shape=(), dtype=jnp.int32),
+                "speed": spaces.Box(low=-self.consts.MAX_SPEED, high=self.consts.MAX_SPEED, shape=(), dtype=jnp.int32),
                 "type": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
                 "current_road": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
                 "road_index_A": spaces.Box(low=0, high=30, shape=(), dtype=jnp.int32),
@@ -1950,7 +2005,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
                     "width": spaces.Box(low=0, high=160, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
                     "height": spaces.Box(low=0, high=210, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
                 }),
-                "speed": spaces.Box(low=-6, high=6, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
+                "speed": spaces.Box(low=-(self.consts.ENEMY_SPEED_MAX + 1), high=(self.consts.ENEMY_SPEED_MAX + 1), shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
                 "type": spaces.Box(low=0, high=3, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
                 "current_road": spaces.Box(low=0, high=2, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
                 "road_index_A": spaces.Box(low=0, high=30, shape=(self.consts.MAX_ENEMY_CARS,), dtype=jnp.int32),
@@ -1978,7 +2033,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             "player_score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
             "is_jumping": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            "jump_cooldown": spaces.Box(low=0, high=28, shape=(), dtype=jnp.int32),
+            "jump_cooldown": spaces.Box(low=0, high=48, shape=(), dtype=jnp.int32),
             "is_on_steep_road": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             "round_started": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
         })
