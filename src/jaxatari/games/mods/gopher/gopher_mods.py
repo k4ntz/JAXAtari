@@ -1,10 +1,12 @@
 import os
 from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.gopher.gopher_mod_plugins import (
-    RewardShapingMod,
     GreedyGopherMod,
     MirrorButtonMod,
-    RewardInversionMod
+    PinkGopherMod,
+    HeavyShovelMod,
+    FastSeedMod
+
 )
 
 class GopherEnvMod(JaxAtariModController):
@@ -13,13 +15,15 @@ class GopherEnvMod(JaxAtariModController):
     """
 
     REGISTRY = {
-        "reward_shaping": RewardShapingMod,
+        
         "greedy_gopher": GreedyGopherMod,
         "mirror_button": MirrorButtonMod,
-        "reward_inversion": RewardInversionMod,
+        "pink_gopher": PinkGopherMod,
+        "heavy_shovel": HeavyShovelMod,
+        "fast_seed": FastSeedMod,
     }
 
-    # Points to where gopher sprites would be if you had modded ones
+    
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "gopher", "sprites")
 
     def __init__(self,
