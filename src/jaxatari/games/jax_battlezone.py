@@ -1050,7 +1050,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
         return new_state
 
-    def world_cords_to_viewport_cords(self, x, z, f):
+    def world_cords_to_viewport_cords_arr(self, x, z, f):
         u = ((f * (x / z))+self.consts.WIDTH/2).astype(jnp.int32)
         vOffset = self.consts.HORIZON_Y
         v = ((f/(z-self.consts.HITBOX_SIZE)) + vOffset).astype(jnp.int32)
@@ -1062,7 +1062,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
     def _get_observation(self, state: BattlezoneState):
         #-------------------------------enemies----------------------------------------------
-        enemies_u, _ = self.world_cords_to_viewport_cords(state.enemies.x, state.enemies.z,
+        enemies_u, _ = self.world_cords_to_viewport_cords_arr(state.enemies.x, state.enemies.z,
                                                                   self.consts.CAMERA_FOCAL_LENGTH)
         zoom_factor = jnp.clip(((-0.15 * (state.enemies.distance) + 21.0) / 20.0), 0.0, 1.0)
         pixels_deleted_due_to_zoom = (jnp.round(1.0 / zoom_factor) +1)
@@ -1081,12 +1081,12 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         )
 
         #---------------------------------projectiles------------------------------------------------
-        enemy_projectiles_u, enemy_projectiles_v = self.world_cords_to_viewport_cords(state.enemy_projectiles.x,
+        enemy_projectiles_u, enemy_projectiles_v = self.world_cords_to_viewport_cords_arr(state.enemy_projectiles.x,
                                                             state.enemy_projectiles.z, self.consts.CAMERA_FOCAL_LENGTH)
         enemy_projectiles_visible = jnp.logical_and(jnp.logical_and(enemies_u < self.consts.WIDTH,
                                                           enemies_u > 0), state.enemies.z > 0)
         enemy_projectiles_mask = jnp.logical_and(enemy_projectiles_visible, state.enemy_projectiles.active)
-        player_projectiles_u, player_projectiles_v = self.world_cords_to_viewport_cords(state.player_projectile.x,
+        player_projectiles_u, player_projectiles_v = self.world_cords_to_viewport_cords_arr(state.player_projectile.x,
                                                         state.player_projectile.z, self.consts.CAMERA_FOCAL_LENGTH)
         projectiles_x = jnp.concatenate([
                 jnp.where(state.player_projectile.active, jnp.atleast_1d(player_projectiles_u-1), -100),
