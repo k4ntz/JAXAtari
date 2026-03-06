@@ -141,6 +141,8 @@ class RoadRunnerConstants(NamedTuple):
     DECO_SIGN_CARS_AHEAD = 3
     DECO_SIGN_EXIT = 4
     DECO_TUMBLEWEED = 5
+    DECO_SIGN_ACME_MINES = 6
+    DECO_SIGN_STEEL_SHOT = 7  # placeholder sprite; replace with final asset when available
     # --- Ravine-linked entity spawn constants ---
     # How many scroll steps *before* the next ravine spawns that seeds/mines should appear.
     # At PLAYER_MOVE_SPEED=3 px/step: 15 steps → 45 px ahead, 12 steps → 36 px ahead.
@@ -267,35 +269,59 @@ RoadRunner_Level_2 = LevelConfig(
 
 RoadRunner_Level_3 = LevelConfig(
     level_number=3,
-    scroll_distance_to_complete=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
+    scroll_distance_to_complete=1500,
+    # Road narrows from 5 lanes (70px) to 3 lanes (42px) four times across the level.
+    # Timestamps are relative to level start (02:07); 1 second ≈ 25 scroll steps.
     road_sections=(
-        RoadSectionConfig(
-            scroll_start=0,
-            scroll_end=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
-            road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
-            road_top=0,
-            road_height=70,  # Base height (will be modulated by dynamic_road_heights)
-        ),
+        RoadSectionConfig(scroll_start=0,    scroll_end=300,  road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(70), road_height=70),   # wide  (02:07-02:19)
+        RoadSectionConfig(scroll_start=300,  scroll_end=400,  road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(42), road_height=42),   # narrow (02:19-02:23)
+        RoadSectionConfig(scroll_start=400,  scroll_end=625,  road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(70), road_height=70),   # wide  (02:23-02:32)
+        RoadSectionConfig(scroll_start=625,  scroll_end=825,  road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(42), road_height=42),   # narrow (02:32-02:40)
+        RoadSectionConfig(scroll_start=825,  scroll_end=1025, road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(70), road_height=70),   # wide  (02:40-02:48)
+        RoadSectionConfig(scroll_start=1025, scroll_end=1125, road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(42), road_height=42),   # narrow (02:48-02:52)
+        RoadSectionConfig(scroll_start=1125, scroll_end=1350, road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(70), road_height=70),   # wide  (02:52-03:01)
+        RoadSectionConfig(scroll_start=1350, scroll_end=1450, road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(42), road_height=42),   # narrow (03:01-03:05)
+        RoadSectionConfig(scroll_start=1450, scroll_end=1500, road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(70), road_height=70),   # wide  (03:05-end)
     ),
     spawn_seeds=True,
     spawn_trucks=True,
-    seed_spawn_config=(
-        _BASE_CONSTS.SEED_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.SEED_SPAWN_MAX_INTERVAL,
-    ),
-    truck_spawn_config=(
-        _BASE_CONSTS.TRUCK_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.TRUCK_SPAWN_MAX_INTERVAL,
-    ),
-    # Dynamic road height: alternates between 70 and 50 pixels
-    dynamic_road_heights=(70, 50),
-    dynamic_road_interval=400,
-    dynamic_road_transition_length=10,
-    offramp=OfframpConfig(
-        enabled=True,
-        scroll_start=200,
-        scroll_end=700,
-        bridges=(450,),
+    spawn_landmines=True,
+    # Seeds at similar frequency to Level 1
+    seed_spawn_config=(15, 45),
+    # ~5 trucks over the level; first appear around the first narrow section
+    truck_spawn_config=(200, 350),
+    # ~6-7 mines over the level, matching video density
+    landmine_spawn_config=(150, 300),
+    render_road_stripes=True,
+    decorations=(
+        # --- Intro sign ---
+        (50, 55, 1, _BASE_CONSTS.DECO_SIGN_STEEL_SHOT),     # "STEEL SHOT" placeholder at level start
+        # --- Lots of cacti (more than Level 1) ---
+        # Decoration formula: appears at scroll step T = d_x * 2 * d_slowdown / PLAYER_MOVE_SPEED
+        # (PLAYER_MOVE_SPEED=3, so T = d_x * 2 * d_slowdown / 3)
+        (75,  45, 2, _BASE_CONSTS.DECO_CACTUS),             # T≈100
+        (88,  55, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈176
+        (188, 45, 2, _BASE_CONSTS.DECO_CACTUS),             # T≈251
+        (163, 60, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈326
+        (300, 45, 2, _BASE_CONSTS.DECO_CACTUS),             # T≈400
+        (238, 55, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈476
+        # --- ACME MINES sign (~02:25, T≈450) ---
+        (675, 60, 1, _BASE_CONSTS.DECO_SIGN_ACME_MINES),    # T≈450
+        (413, 45, 2, _BASE_CONSTS.DECO_CACTUS),             # T≈551
+        (313, 55, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈626
+        (525, 45, 2, _BASE_CONSTS.DECO_CACTUS),             # T≈700
+        (388, 60, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈776
+        (638, 45, 2, _BASE_CONSTS.DECO_CACTUS),             # T≈851
+        (463, 55, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈926
+        (750, 45, 2, _BASE_CONSTS.DECO_CACTUS),             # T≈1000
+        (538, 60, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈1076
+        (863, 45, 2, _BASE_CONSTS.DECO_CACTUS),             # T≈1151
+        (625, 55, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈1250
+        (1013, 45, 2, _BASE_CONSTS.DECO_CACTUS),            # T≈1351
+        (725, 60, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈1450
+        # --- Exit sign ---
+        # d_x=2000 with d_slowdown=1 appears at scroll step T = 2000*2*1/3 ≈ 1333, well within 1500
+        (2000, 60, 1, _BASE_CONSTS.DECO_SIGN_EXIT),         # T≈1333
     ),
 )
 
@@ -2743,6 +2769,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
             3: "sign_cars_ahead",
             4: "sign_exit",
             5: "tumbleweed",
+            6: "sign_acme_mines",
+            7: "sign_steel_shot",
         }
 
         # Use injected config if provided, else default
@@ -3005,6 +3033,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "sign_birdseed", "type": "single", "file": "sign_birdseed.npy"},
             {"name": "sign_cars_ahead", "type": "single", "file": "sign_cars_ahead.npy"},
             {"name": "sign_exit", "type": "single", "file": "sign_exit.npy"},
+            {"name": "sign_acme_mines", "type": "single", "file": "sign_acme_mines.npy"},
+            {"name": "sign_steel_shot", "type": "single", "file": "sign_steel_shot.npy"},
             {"name": "canon", "type": "single", "file": "canon.npy"},
             {"name": "bullet", "type": "single", "file": "bullet.npy"},
             # Offramp sprites
