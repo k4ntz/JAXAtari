@@ -87,6 +87,11 @@ ITEM_LADDER_UP = 12     # Exit/door leading up (always accessible)
 ITEM_LADDER_DOWN = 13   # Ladder leading down (always open)
 ITEM_CAGE_DOOR = 14     # Door item that gates entry into the bonus cage
 
+# New potion item types (mods)
+ITEM_SPEED_POTION = 15  # Temporarily increases player movement speed (2x for 120 steps)
+ITEM_HEAL_POTION = 16   # Fully restores player health to MAX_HEALTH on pickup
+ITEM_POISON_POTION = 17 # Creates poison cloud that damages enemies in radius over time
+
 # Level configuration
 MAX_LEVELS = 7          # Total number of levels (0..6)
 LADDER_INTERACTION_TIME = 60  # Steps player must stand on ladder to change level
@@ -191,6 +196,9 @@ class DarkChambersConstants(NamedTuple):
     LADDER_DOWN_COLOR: Tuple[int, int, int] = (100, 60, 20) # Darker brown ladder down
     UI_COLOR: Tuple[int, int, int] = (236, 236, 236)
     BULLET_COLOR: Tuple[int, int, int] = (255, 200, 0)
+    SPEED_POTION_COLOR: Tuple[int, int, int] = (255, 100, 0)   # Orange
+    HEAL_POTION_COLOR: Tuple[int, int, int] = (255, 0, 255)    # Magenta
+    POISON_POTION_COLOR: Tuple[int, int, int] = (0, 255, 0)    # Green
     
     # Sizes
     PLAYER_WIDTH: int = 12
@@ -224,6 +232,18 @@ class DarkChambersConstants(NamedTuple):
     SKELETON_POINTS: int = 30
     WIZARD_POINTS: int = 50
     GRIM_REAPER_POINTS: int = 100  # Strongest
+    
+    # Potion effect durations and parameters
+    # MOD SYSTEM: These constants control the behavior of potion items added via mods
+    # Color assignments for visual identification:
+    #   - Speed Potion (ITEM_SPEED_POTION=15): Orange (255, 100, 0) - 8×8 pixel square
+    #   - Heal Potion (ITEM_HEAL_POTION=16): Magenta (255, 0, 255) - 8×8 pixel square  
+    #   - Poison Potion (ITEM_POISON_POTION=17): Bright Green (0, 255, 0) - 8×8 pixel square
+    SPEED_POTION_DURATION: int = 120  # 120 steps (~4 seconds at 30 FPS)
+    SPEED_POTION_MULTIPLIER: int = 2  # 2x movement speed
+    POISON_DURATION: int = 360        # 360 steps (~12 seconds at 30 FPS) - increased from 180 for longer effect
+    POISON_RADIUS: int = 60           # Damage radius in pixels - reduced from 80 for more targeted effect
+    POISON_DAMAGE_INTERVAL: int = 30  # Apply damage every 30 steps (once per second) - prevents instant kills
 
 
 class DarkChambersState(NamedTuple):
@@ -279,6 +299,12 @@ class DarkChambersState(NamedTuple):
 
     enemy_idle_timer: chex.Array
     enemy_pause_timer: chex.Array
+    
+    # Potion effect state tracking
+    speed_boost_timer: chex.Array      # Countdown for speed boost effect (0 = inactive)
+    poison_cloud_x: chex.Array         # X position of active poison cloud
+    poison_cloud_y: chex.Array         # Y position of active poison cloud
+    poison_cloud_timer: chex.Array     # Countdown for poison effect (0 = inactive)
 
 
 
@@ -346,6 +372,9 @@ class DarkChambersRenderer(JAXGameRenderer):
             'ladder_down_color': create_color_sprite(self.consts.LADDER_DOWN_COLOR),
             'ui_color': create_color_sprite(self.consts.UI_COLOR),
             'bullet_color': create_color_sprite(self.consts.BULLET_COLOR),
+            'speed_potion_color': create_color_sprite(self.consts.SPEED_POTION_COLOR),
+            'heal_potion_color': create_color_sprite(self.consts.HEAL_POTION_COLOR),
+            'poison_potion_color': create_color_sprite(self.consts.POISON_POTION_COLOR),
         }
         
         # Append procedural color sprites to asset config
@@ -1197,6 +1226,9 @@ class DarkChambersRenderer(JAXGameRenderer):
             [LADDER_WIDTH, LADDER_HEIGHT],  # 12 LADDER_UP (larger)
             [LADDER_WIDTH, LADDER_HEIGHT],  # 13 LADDER_DOWN (larger)
             [LADDER_WIDTH, LADDER_HEIGHT],  # 14 CAGE_DOOR (box-sized door)
+            [8, 8],                 # 15 SPEED_POTION (medium)
+            [8, 8],                 # 16 HEAL_POTION (medium)
+            [8, 8],                 # 17 POISON_POTION (medium)
         ], dtype=jnp.int32)
 
         # Color id mapping per item type (aligning with palette above)
@@ -1216,6 +1248,9 @@ class DarkChambersRenderer(JAXGameRenderer):
             19,  # LADDER_UP (brown exit door)
             20,  # LADDER_DOWN (dark brown ladder)
             19,  # CAGE_DOOR (reuse ladder-up tint)
+            21,  # SPEED_POTION (orange)
+            22,  # HEAL_POTION (magenta)
+            23,  # POISON_POTION (green)
         ], dtype=jnp.int32)
         # Python constants for item type color IDs (indexed by item_type - 1)
         self.ITEM_TYPE_COLOR_IDS_PY = [
@@ -1233,6 +1268,9 @@ class DarkChambersRenderer(JAXGameRenderer):
             self.LADDER_UP_ID,     # 12: ITEM_LADDER_UP
             self.LADDER_DOWN_ID,   # 13: ITEM_LADDER_DOWN
             self.LADDER_UP_ID,     # 14: ITEM_CAGE_DOOR
+            self.COLOR_TO_ID[self.consts.SPEED_POTION_COLOR],   # 15: ITEM_SPEED_POTION
+            self.COLOR_TO_ID[self.consts.HEAL_POTION_COLOR],    # 16: ITEM_HEAL_POTION
+            self.COLOR_TO_ID[self.consts.POISON_POTION_COLOR],  # 17: ITEM_POISON_POTION
         ]
     
     def render(self, state: DarkChambersState) -> jnp.ndarray:
@@ -1633,7 +1671,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         
         # Then render remaining items (treasures, powerups, etc.) as colored boxes
         # Skip types that now use sprites: HEART(1), POISON(2), TRAP(3), AMBER_CHALICE(5), AMULET(6), SHIELD(8), BOMB(10), KEY(11), LADDER_UP(12), LADDER_DOWN(13), CAGE_DOOR(14)
-        for t in [4, 7, 9]:  # STRONGBOX(4), HOURGLASS(7), TORCH(9)
+        for t in [4, 7, 9, 15, 16, 17]:  # STRONGBOX(4), HOURGLASS(7), TORCH(9), SPEED_POTION(15), HEAL_POTION(16), POISON_POTION(17)
             object_raster = draw_item_type(object_raster, t, masked_item_pos)
         
         # Spawners: render as large skulls (24x24)
@@ -2294,17 +2332,23 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             ITEM_SHIELD,         # damage reduction -> pot sprite
             ITEM_GUN,            # faster shooting -> no sprite (colored box)
             ITEM_BOMB,           # kill all enemies -> barrel sprite
+            ITEM_SPEED_POTION,   # 2x speed for 120 steps -> orange box
+            ITEM_HEAL_POTION,    # restore to max health -> magenta box
+            ITEM_POISON_POTION,  # create poison cloud -> green box
         ], dtype=jnp.int32)
         # Probabilities for regular items; normalized to sum to 1.0
         spawn_probs = jnp.array([
-            0.20,  # heart
-            0.10,  # poison
-            0.18,  # trap
-            0.14,  # amber chalice
-            0.10,  # amulet
-            0.08,  # shield
-            0.06,  # gun
-            0.14,  # bomb
+            0.18,  # heart (reduced from 0.20)
+            0.08,  # poison (reduced from 0.10)
+            0.15,  # trap (reduced from 0.18)
+            0.12,  # amber chalice (reduced from 0.14)
+            0.08,  # amulet (reduced from 0.10)
+            0.07,  # shield (reduced from 0.08)
+            0.05,  # gun (reduced from 0.06)
+            0.12,  # bomb (reduced from 0.14)
+            0.08,  # speed potion (NEW)
+            0.08,  # heal potion (NEW)
+            0.07,  # poison potion (NEW)
         ], dtype=jnp.float32)
         spawn_probs = spawn_probs / jnp.sum(spawn_probs)
         # Spawn regular items (leave first 5 for key, ladders, cage contents)
@@ -2402,6 +2446,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             enemy_stuck_counter=enemy_stuck_counter,
             enemy_idle_timer=enemy_idle_timer,
             enemy_pause_timer=enemy_pause_timer,
+            speed_boost_timer=jnp.array(0, dtype=jnp.int32),
+            poison_cloud_x=jnp.array(0, dtype=jnp.int32),
+            poison_cloud_y=jnp.array(0, dtype=jnp.int32),
+            poison_cloud_timer=jnp.array(0, dtype=jnp.int32),
         )
         
         obs = self._get_observation(state)
@@ -2468,10 +2516,16 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                                       state.player_direction))))
             
             # Calculate movement deltas - support diagonal movement
-            dx = jnp.where((a == Action.LEFT) | (a == Action.UPLEFT) | (a == Action.DOWNLEFT), -self.consts.PLAYER_SPEED,
-                   jnp.where((a == Action.RIGHT) | (a == Action.UPRIGHT) | (a == Action.DOWNRIGHT), self.consts.PLAYER_SPEED, 0))
-            dy = jnp.where((a == Action.UP) | (a == Action.UPRIGHT) | (a == Action.UPLEFT), -self.consts.PLAYER_SPEED,
-                   jnp.where((a == Action.DOWN) | (a == Action.DOWNRIGHT) | (a == Action.DOWNLEFT), self.consts.PLAYER_SPEED, 0))
+            # Apply speed boost if active (from speed potion mod)
+            effective_speed = jnp.where(
+                state.speed_boost_timer > 0,
+                self.consts.PLAYER_SPEED * self.consts.SPEED_POTION_MULTIPLIER,
+                self.consts.PLAYER_SPEED
+            )
+            dx = jnp.where((a == Action.LEFT) | (a == Action.UPLEFT) | (a == Action.DOWNLEFT), -effective_speed,
+                   jnp.where((a == Action.RIGHT) | (a == Action.UPRIGHT) | (a == Action.DOWNRIGHT), effective_speed, 0))
+            dy = jnp.where((a == Action.UP) | (a == Action.UPRIGHT) | (a == Action.UPLEFT), -effective_speed,
+                   jnp.where((a == Action.DOWN) | (a == Action.DOWNRIGHT) | (a == Action.DOWNLEFT), effective_speed, 0))
             
             # --- SLOW DOWN PLAYER MOVEMENT ---
             PLAYER_MOVE_EVERY = 1  # 1=normal, 2=half speed, 3=1/3 speed, etc.
@@ -3289,33 +3343,53 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             
             enemy_hit = enemy_hit | bomb_kills_enemies
             
+            # Poison cloud damage: apply gradual damage to enemies within radius
+            # Only apply poison damage if cloud timer is active AND on damage interval (every 30 steps)
+            # This prevents instant kills and makes it a gradual damage-over-time effect
+            cloud_active = state.poison_cloud_timer > 0
+            damage_tick = (state.step_counter % self.consts.POISON_DAMAGE_INTERVAL) == 0
+            poison_center_x = state.poison_cloud_x
+            poison_center_y = state.poison_cloud_y
+            
+            # Calculate distance from poison cloud to each enemy
+            dx_poison = enemy_center_x - poison_center_x
+            dy_poison = enemy_center_y - poison_center_y
+            distance_sq_poison = dx_poison * dx_poison + dy_poison * dy_poison
+            within_poison_radius = distance_sq_poison <= (self.consts.POISON_RADIUS * self.consts.POISON_RADIUS)
+            # Poison hits enemies (decrements type by 1) every damage interval, NOT instant kill
+            poison_hits_enemies = cloud_active & damage_tick & within_poison_radius & (state.enemy_active == 1)
+            
+            enemy_hit = enemy_hit | poison_hits_enemies
+            
             # Reduce bomb count when detonated
             bomb_count_after_detonation = jnp.where(should_detonate_bomb, new_bomb_count - 1, new_bomb_count)
             
             # Enemy mutation system: when hit, enemy mutates to weaker form
-            new_enemy_types = jnp.where(bomb_kills_enemies, 0, 
-                              jnp.where(enemy_hit & (~bomb_kills_enemies), state.enemy_types - 1, state.enemy_types))
+            # Bomb instantly kills (set type to 0), poison and regular hits decrement type by 1
+            instant_kills = bomb_kills_enemies
+            new_enemy_types = jnp.where(instant_kills, 0, 
+                              jnp.where(enemy_hit & (~instant_kills), state.enemy_types - 1, state.enemy_types))
             
             # Award points when enemy is killed
-            zombies_killed = (enemy_hit & (~bomb_kills_enemies)) & (state.enemy_types == ENEMY_ZOMBIE)
+            zombies_killed = (enemy_hit & (~instant_kills)) & (state.enemy_types == ENEMY_ZOMBIE)
             
-            # Bomb kills award points for all enemy types and bullet progression hits
-            zombies_bombed = bomb_kills_enemies & (state.enemy_types == ENEMY_ZOMBIE)
-            wraiths_bombed = bomb_kills_enemies & (state.enemy_types == ENEMY_WRAITH)
-            skeletons_bombed = bomb_kills_enemies & (state.enemy_types == ENEMY_SKELETON)
-            wizards_bombed = bomb_kills_enemies & (state.enemy_types == ENEMY_WIZARD)
-            grim_reapers_bombed = bomb_kills_enemies & (state.enemy_types == ENEMY_GRIM_REAPER)
-            wraiths_hit = (enemy_hit & (~bomb_kills_enemies)) & (state.enemy_types == ENEMY_WRAITH)
-            skeletons_hit = (enemy_hit & (~bomb_kills_enemies)) & (state.enemy_types == ENEMY_SKELETON)
-            wizards_hit = (enemy_hit & (~bomb_kills_enemies)) & (state.enemy_types == ENEMY_WIZARD)
-            grim_reapers_hit = (enemy_hit & (~bomb_kills_enemies)) & (state.enemy_types == ENEMY_GRIM_REAPER)
+            # Instant kills (bomb only) award points for all enemy types; poison and bullet hits award points on progression
+            zombies_instant = instant_kills & (state.enemy_types == ENEMY_ZOMBIE)
+            wraiths_instant = instant_kills & (state.enemy_types == ENEMY_WRAITH)
+            skeletons_instant = instant_kills & (state.enemy_types == ENEMY_SKELETON)
+            wizards_instant = instant_kills & (state.enemy_types == ENEMY_WIZARD)
+            grim_reapers_instant = instant_kills & (state.enemy_types == ENEMY_GRIM_REAPER)
+            wraiths_hit = (enemy_hit & (~instant_kills)) & (state.enemy_types == ENEMY_WRAITH)
+            skeletons_hit = (enemy_hit & (~instant_kills)) & (state.enemy_types == ENEMY_SKELETON)
+            wizards_hit = (enemy_hit & (~instant_kills)) & (state.enemy_types == ENEMY_WIZARD)
+            grim_reapers_hit = (enemy_hit & (~instant_kills)) & (state.enemy_types == ENEMY_GRIM_REAPER)
             
             enemy_kill_score = (
-                jnp.sum(zombies_killed | zombies_bombed) * self.consts.ZOMBIE_POINTS +
-                jnp.sum(wraiths_hit | wraiths_bombed) * self.consts.WRAITH_POINTS +
-                jnp.sum(skeletons_hit | skeletons_bombed) * self.consts.SKELETON_POINTS +
-                jnp.sum(wizards_hit | wizards_bombed) * self.consts.WIZARD_POINTS +
-                jnp.sum(grim_reapers_hit | grim_reapers_bombed) * self.consts.GRIM_REAPER_POINTS
+                jnp.sum(zombies_killed | zombies_instant) * self.consts.ZOMBIE_POINTS +
+                jnp.sum(wraiths_hit | wraiths_instant) * self.consts.WRAITH_POINTS +
+                jnp.sum(skeletons_hit | skeletons_instant) * self.consts.SKELETON_POINTS +
+                jnp.sum(wizards_hit | wizards_instant) * self.consts.WIZARD_POINTS +
+                jnp.sum(grim_reapers_hit | grim_reapers_instant) * self.consts.GRIM_REAPER_POINTS
             )
             
             # Deactivate enemies that have been killed (type becomes 0)
@@ -3753,9 +3827,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 all_item_types = jnp.array([
                     ITEM_HEART, ITEM_POISON, ITEM_TRAP,
                     ITEM_AMBER_CHALICE, ITEM_AMULET,
-                    ITEM_SHIELD, ITEM_GUN, ITEM_BOMB
+                    ITEM_SHIELD, ITEM_GUN, ITEM_BOMB,
+                    ITEM_SPEED_POTION, ITEM_HEAL_POTION, ITEM_POISON_POTION
                 ], dtype=jnp.int32)
-                spawn_probs = jnp.array([0.20, 0.10, 0.18, 0.14, 0.10, 0.08, 0.06, 0.14], dtype=jnp.float32)
+                spawn_probs = jnp.array([0.18, 0.08, 0.15, 0.12, 0.08, 0.07, 0.05, 0.12, 0.08, 0.08, 0.07], dtype=jnp.float32)
                 regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 5,), p=spawn_probs)
                 new_types = jnp.concatenate([
                     jnp.array([ITEM_KEY, ITEM_LADDER_UP, ITEM_LADDER_DOWN, ITEM_CAGE_DOOR, self.renderer.CAGE_REWARD_TYPE]),
@@ -4063,6 +4138,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 enemy_patrol_box=state.enemy_patrol_box,
                 enemy_idle_timer=idle_timer,
                 enemy_pause_timer=pause_timer,
+                speed_boost_timer=state.speed_boost_timer,
+                poison_cloud_x=state.poison_cloud_x,
+                poison_cloud_y=state.poison_cloud_y,
+                poison_cloud_timer=state.poison_cloud_timer,
             )
             
             obs = self._get_observation(new_state)
