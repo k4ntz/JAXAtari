@@ -1026,18 +1026,26 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     def _player_step(self, state: UpNDownState, action: chex.Array) -> UpNDownState:
         up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
         down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
-        jump_pressed = jnp.logical_or(action == Action.FIRE, jnp.logical_or(action == Action.UPFIRE, action == Action.DOWNFIRE))
-        
-        # Check if on a steep road section FIRST (before applying speed changes)
-        is_on_steep_road = self._is_steep_road_segment(
-            state.player_car.current_road,
-            state.player_car.road_index_A,
-            state.player_car.road_index_B,
+        jump = jnp.logical_or(action == Action.FIRE, jnp.logical_or(action == Action.UPFIRE, action == Action.DOWNFIRE))
+        player_speed = state.player_car.speed.astype(jnp.int32)
+
+        player_speed = jax.lax.cond(
+            jnp.logical_and(state.player_car.speed < self.consts.MAX_SPEED, up),
+            lambda s: s + 1,
+            lambda s: s,
+            operand=player_speed,
         )
-        
-        # Calculate progress through steep segment (0.0 = bottom, 1.0 = top)
-        steep_progress = self._get_steep_segment_progress(
-            state.player_car.position.y,
+
+        player_speed = jax.lax.cond(
+            jnp.logical_and(state.player_car.speed > -self.consts.MAX_SPEED, down),
+            lambda s: s - 1,
+            lambda s: s,
+            operand=player_speed,
+        )
+
+        # Check if on a steep road section (no X direction change) and apply speed reduction
+        # This simulates steep road sections that require a jump to pass when going upward
+        is_on_steep_road = self._is_steep_road_segment(
             state.player_car.current_road,
             state.player_car.road_index_A,
             state.player_car.road_index_B,
@@ -1063,7 +1071,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         
         player_speed = jnp.where(
             jnp.logical_and(
-                jnp.logical_and(should_change_speed, is_accelerating), 
+                jnp.logical_and(up,True), 
                 jnp.logical_and(player_speed < self.consts.MAX_SPEED, can_accelerate)
             ),
             player_speed + 1,
@@ -1620,7 +1628,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
                 width=self.consts.PLAYER_SIZE[0],
                 height=self.consts.PLAYER_SIZE[1],
             ),
-            speed=jnp.array(0.0, dtype=jnp.float32),
+            speed=jnp.array(0, dtype=jnp.int32),
             direction_x=jnp.array(0, dtype=jnp.int32),
             current_road=respawn_road,
             road_index_A=start_segment,
