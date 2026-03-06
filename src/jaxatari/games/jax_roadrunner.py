@@ -149,11 +149,11 @@ def _centered_top(height: int) -> int:
 
 RoadRunner_Level_1 = LevelConfig(
     level_number=1,
-    scroll_distance_to_complete=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
+    scroll_distance_to_complete=1500,
     road_sections=(
         RoadSectionConfig(
             scroll_start=0,
-            scroll_end=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
+            scroll_end=1500,
             road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
             road_top=0,
             road_height=_DEFAULT_ROAD_HEIGHT,
@@ -163,12 +163,12 @@ RoadRunner_Level_1 = LevelConfig(
     spawn_seeds=True,
     spawn_trucks=True,
     seed_spawn_config=(
-        _BASE_CONSTS.SEED_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.SEED_SPAWN_MAX_INTERVAL,
+        15,
+        45,
     ),
     truck_spawn_config=(
-        _BASE_CONSTS.TRUCK_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.TRUCK_SPAWN_MAX_INTERVAL,
+        240,
+        360,
     ),
     decorations=(
         # --- INTRO (0-6s) ---
@@ -195,12 +195,6 @@ RoadRunner_Level_1 = LevelConfig(
 
         # --- OUTRO ---
         (1800, 60, 1, _BASE_CONSTS.DECO_SIGN_EXIT),
-    ),
-    offramp=OfframpConfig(
-        enabled=True,
-        scroll_start=200,
-        scroll_end=700,
-        bridges=(450,),  # one bridge roughly in the middle of the offramp stretch
     ),
 )
 
@@ -230,8 +224,8 @@ RoadRunner_Level_2 = LevelConfig(
             road_height=32,
         ),
     ),
-    spawn_seeds=False,
-    spawn_trucks=False,
+    spawn_seeds=True,
+    spawn_trucks=True,
     spawn_ravines=True,
     truck_spawn_config=(
         _BASE_CONSTS.TRUCK_SPAWN_MIN_INTERVAL,
@@ -259,8 +253,6 @@ RoadRunner_Level_3 = LevelConfig(
     ),
     spawn_seeds=True,
     spawn_trucks=True,
-    spawn_landmines=True,
-    spawn_cannons=True,
     seed_spawn_config=(
         _BASE_CONSTS.SEED_SPAWN_MIN_INTERVAL,
         _BASE_CONSTS.SEED_SPAWN_MAX_INTERVAL,
@@ -269,18 +261,16 @@ RoadRunner_Level_3 = LevelConfig(
         _BASE_CONSTS.TRUCK_SPAWN_MIN_INTERVAL,
         _BASE_CONSTS.TRUCK_SPAWN_MAX_INTERVAL,
     ),
-    landmine_spawn_config=(
-        _BASE_CONSTS.LANDMINE_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.LANDMINE_SPAWN_MAX_INTERVAL,
-    ),
-    cannon_spawn_config=(
-        _BASE_CONSTS.CANNON_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.CANNON_SPAWN_MAX_INTERVAL,
-    ),
     # Dynamic road height: alternates between 70 and 50 pixels
     dynamic_road_heights=(70, 50),
     dynamic_road_interval=400,
     dynamic_road_transition_length=10,
+    offramp=OfframpConfig(
+        enabled=True,
+        scroll_start=200,
+        scroll_end=700,
+        bridges=(450,),
+    ),
 )
 
 RoadRunner_Level_4 = LevelConfig(
@@ -296,14 +286,9 @@ RoadRunner_Level_4 = LevelConfig(
             road_pattern_style=0,
         ),
     ),
-    spawn_seeds=False,
-    spawn_trucks=False,
+    spawn_seeds=True,
+    spawn_trucks=True,
     spawn_landmines=False,
-    spawn_cannons=True,
-    cannon_spawn_config=(
-        _BASE_CONSTS.CANNON_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.CANNON_SPAWN_MAX_INTERVAL,
-    ),
     decorations=(
         # --- INTRO (0-6s) ---
         (50, 60, 1, _BASE_CONSTS.DECO_SIGN_THIS_WAY),
@@ -335,8 +320,8 @@ RoadRunner_Level_4 = LevelConfig(
 DEFAULT_LEVELS: Tuple[LevelConfig, ...] = (
     RoadRunner_Level_1,
     RoadRunner_Level_2,
-    #RoadRunner_Level_3,
-    #RoadRunner_Level_4,
+    RoadRunner_Level_3,
+    RoadRunner_Level_4,
 )
 
 
@@ -858,6 +843,12 @@ class JaxRoadRunner(
 
         # Build offramp data array: shape (num_levels, 3) = [enabled, scroll_start, scroll_end]
         self._offramp_data = _build_offramp_arrays(levels)
+
+        # Build per-level scroll distances array
+        self._level_scroll_distances = jnp.array(
+            [cfg.scroll_distance_to_complete for cfg in levels],
+            dtype=jnp.int32,
+        ) if levels else jnp.array([self.consts.LEVEL_COMPLETE_SCROLL_DISTANCE], dtype=jnp.int32)
 
         (
             self._dynamic_road_enabled,
@@ -2219,7 +2210,8 @@ class JaxRoadRunner(
         return self._initialize_spawn_timers(reset_state, level_idx)
 
     def _check_level_completion(self, state: RoadRunnerState) -> RoadRunnerState:
-        target_distance = self.consts.LEVEL_COMPLETE_SCROLL_DISTANCE
+        level_idx = self._get_level_index(state)
+        target_distance = self._level_scroll_distances[level_idx]
         level_complete = state.scrolling_step_counter >= target_distance
         max_level_index = max(self._level_count - 1, 0)
         has_next_level = state.current_level < max_level_index
