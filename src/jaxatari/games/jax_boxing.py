@@ -4,15 +4,17 @@ A GPU-accelerated, JAX-based implementation of the Atari 2600 Boxing game.
 """
 
 import os
+from dataclasses import replace
 from functools import partial
-from typing import NamedTuple, Tuple
+from typing import Tuple
 
 import chex
 import jax
 import jax.numpy as jnp
+from flax import struct
 
 import jaxatari.spaces as spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
@@ -24,7 +26,7 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 def _get_default_asset_config() -> tuple:
     """
     Returns the default declarative asset manifest for Boxing.
-    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
+    Kept immutable (tuple of dicts) to fit immutable constants defaults.
     """
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
@@ -60,7 +62,7 @@ def _get_default_asset_config() -> tuple:
 # Constants 
 # =============================================================================
 
-class BoxingConstants(NamedTuple):
+class BoxingConstants(struct.PyTreeNode):
     """
     Immutable game constants derived from the Boxing Technical Specification.
     
@@ -137,7 +139,8 @@ class BoxingConstants(NamedTuple):
 # State 
 # =============================================================================
 
-class BoxingState(NamedTuple):
+@struct.dataclass
+class BoxingState:
     """
     Complete game state for Boxing, structured per Technical Specification.
     """
@@ -195,40 +198,34 @@ class BoxingState(NamedTuple):
 # Observation (for agent)
 # =============================================================================
 
-class EntityPosition(NamedTuple):
-    """Position and dimensions of a game entity."""
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-
-
-class BoxingObservation(NamedTuple):
+@struct.dataclass
+class BoxingObservation:
     """
     Observable game state for Boxing.
     
     Includes both boxer positions and game state information
     for object-centric reinforcement learning.
     """
-    left_boxer: EntityPosition
-    right_boxer: EntityPosition
-    score_left: jnp.ndarray
-    score_right: jnp.ndarray
-    clock_minutes: jnp.ndarray
-    clock_seconds: jnp.ndarray
+    left_boxer: ObjectObservation
+    right_boxer: ObjectObservation
+    score_left: chex.Array
+    score_right: chex.Array
+    clock_minutes: chex.Array
+    clock_seconds: chex.Array
 
 
 # =============================================================================
 # Info 
 # =============================================================================
 
-class BoxingInfo(NamedTuple):
+@struct.dataclass
+class BoxingInfo:
     """
     Auxiliary info returned with each step.
     """
-    time: jnp.ndarray  # Total frames elapsed
-    clock_minutes: jnp.ndarray
-    clock_seconds: jnp.ndarray
+    time: chex.Array  # Total frames elapsed
+    clock_minutes: chex.Array
+    clock_seconds: chex.Array
 
 
 # =============================================================================
@@ -241,7 +238,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
     Responds to directional input and respects boundary constraints.
     """
     
-    def __init__(self, consts: BoxingConstants = None):
+    def __init__(self, consts: BoxingConstants | None = None):
         consts = consts or BoxingConstants()
         super().__init__(consts)
         self.renderer = BoxingRenderer(self.consts)
@@ -382,7 +379,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             )
         )
         
-        return state._replace(
+        return replace(state,
             left_boxer_x=new_x.astype(jnp.int32),
             left_boxer_y=new_y.astype(jnp.int32),
         )
@@ -528,7 +525,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             jnp.where(just_reached_max, 1, 0).astype(jnp.int32)
         )
         
-        return state._replace(
+        return replace(state,
             left_boxer_punch_active=punch_active,
             left_boxer_animation_value=new_anim,
             left_boxer_punch_landed=new_punch_landed,
@@ -628,7 +625,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             state.cpu_dancing_value
         ).astype(jnp.int32)
         
-        return state._replace(
+        return replace(state,
             left_boxer_score=new_score,
             hit_boxer_stun_timer=new_stun_timer,
             hit_boxer_index=new_hit_index,
@@ -687,7 +684,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         new_minutes = jnp.maximum(new_minutes, 0).astype(jnp.int32)
         new_seconds = jnp.clip(new_seconds, 0, 59).astype(jnp.int32)
         
-        return state._replace(
+        return replace(state,
             frame_count=new_frame_count.astype(jnp.int32),
             clock_seconds=new_seconds,
             clock_minutes=new_minutes,
@@ -717,7 +714,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         new_right_x = jnp.where(collision, prev_right_x, state.right_boxer_x).astype(jnp.int32)
         new_right_y = jnp.where(collision, prev_right_y, state.right_boxer_y).astype(jnp.int32)
         
-        return state._replace(
+        return replace(state,
             left_boxer_x=new_left_x,
             left_boxer_y=new_left_y,
             right_boxer_x=new_right_x,
@@ -821,7 +818,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         # Decrement dancing value
         new_dancing = jnp.maximum(state.cpu_dancing_value - 1, 0).astype(jnp.int32)
         
-        return state._replace(
+        return replace(state,
             right_boxer_x=new_x,
             right_boxer_y=new_y,
             cpu_target_x=cpu_target_x,
@@ -925,7 +922,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             jnp.where(just_reached_max, 1, 0).astype(jnp.int32)
         )
         
-        return state._replace(
+        return replace(state,
             right_boxer_punch_active=punch_active,
             right_boxer_animation_value=new_anim,
             right_boxer_punch_landed=new_punch_landed,
@@ -1020,7 +1017,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             state.cpu_dancing_value
         ).astype(jnp.int32)
         
-        return state._replace(
+        return replace(state,
             right_boxer_score=new_score,
             hit_boxer_stun_timer=new_stun_timer,
             hit_boxer_index=new_hit_index,
@@ -1042,7 +1039,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         prev_right_y = state.right_boxer_y
         
         # Update key for this step
-        state = state._replace(key=step_key)
+        state = replace(state, key=step_key)
         
         # Process player movement
         state = self._player_step(state, action)
@@ -1067,13 +1064,14 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         
         # Decrement stun timer
         new_stun = jnp.maximum(state.hit_boxer_stun_timer - 1, 0).astype(jnp.int32)
-        state = state._replace(hit_boxer_stun_timer=new_stun)
+        state = replace(state, hit_boxer_stun_timer=new_stun)
         
         # Update game timer
         state = self._timer_step(state)
         
         # Increment step counter
-        state = state._replace(
+        state = replace(
+            state,
             step_counter=state.step_counter + 1,
             key=new_state_key,
         )
@@ -1092,18 +1090,26 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
     
     def _get_observation(self, state: BoxingState) -> BoxingObservation:
         """Extract observable state."""
-        left_boxer = EntityPosition(
+        left_boxer = ObjectObservation(
             x=state.left_boxer_x,
             y=state.left_boxer_y,
             width=jnp.array(self.consts.W_BOXER),
             height=jnp.array(self.consts.SPRITE_HEIGHT),
+            active=jnp.array(1),
+            visual_id=jnp.array(0),
+            state=jnp.array(0),
+            orientation=jnp.array(0),
         )
         
-        right_boxer = EntityPosition(
+        right_boxer = ObjectObservation(
             x=state.right_boxer_x,
             y=state.right_boxer_y,
             width=jnp.array(self.consts.W_BOXER),
             height=jnp.array(self.consts.SPRITE_HEIGHT),
+            active=jnp.array(1),
+            visual_id=jnp.array(0),
+            state=jnp.array(0),
+            orientation=jnp.array(0),
         )
         
         return BoxingObservation(
@@ -1123,10 +1129,18 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             obs.left_boxer.y.flatten(),
             obs.left_boxer.width.flatten(),
             obs.left_boxer.height.flatten(),
+            obs.left_boxer.active.flatten(),
+            obs.left_boxer.visual_id.flatten(),
+            obs.left_boxer.state.flatten(),
+            obs.left_boxer.orientation.flatten(),
             obs.right_boxer.x.flatten(),
             obs.right_boxer.y.flatten(),
             obs.right_boxer.width.flatten(),
             obs.right_boxer.height.flatten(),
+            obs.right_boxer.active.flatten(),
+            obs.right_boxer.visual_id.flatten(),
+            obs.right_boxer.state.flatten(),
+            obs.right_boxer.orientation.flatten(),
             obs.score_left.flatten(),
             obs.score_right.flatten(),
             obs.clock_minutes.flatten(),
@@ -1139,19 +1153,16 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
     
     def observation_space(self) -> spaces.Dict:
         """Return the observation space structure."""
+        c = self.consts
+        h = int(c.HEIGHT)
+        w = int(c.WIDTH)
+        screen_size = (h, w)
+
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+
         return spaces.Dict({
-            "left_boxer": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
-            "right_boxer": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
+            "left_boxer": single_obj,
+            "right_boxer": single_obj,
             "score_left": spaces.Box(low=0, high=100, shape=(), dtype=jnp.int32),
             "score_right": spaces.Box(low=0, high=100, shape=(), dtype=jnp.int32),
             "clock_minutes": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
@@ -1225,13 +1236,18 @@ class BoxingRenderer(JAXGameRenderer):
     - Digit sprites for score and timer display
     """
     
-    def __init__(self, consts: BoxingConstants = None):
-        super().__init__(consts)
+    def __init__(self, consts: BoxingConstants | None = None, config: render_utils.RendererConfig | None = None):
         self.consts = consts or BoxingConstants()
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
-            channels=3,
-        )
+        super().__init__(self.consts)
+
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(210, 160),
+                channels=3,
+            )
+        else:
+            self.config = config
+
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
         # Load sprites from asset config
