@@ -7,7 +7,8 @@ import jax.random as jrandom
 import numpy as np
 
 from jaxatari.environment import JAXAtariAction
-from utils import get_human_action, load_game_environment, load_game_mod, update_pygame
+from utils import get_human_action, update_pygame, load_game_environment, load_game_mods
+from jaxatari.core import make as jaxatari_make
 
 UPSCALE_FACTOR = 4
 
@@ -31,10 +32,17 @@ def main():
         help="Name of the game to play (e.g. 'freeway', 'pong'). The game must be in the src/jaxatari/games directory.",
     )
     parser.add_argument(
-        "-m", "--mod",
+        "-m", "--mods",
+        nargs='+',
         type=str,
         required=False,
-        help="Name of the mod class.",
+        help="Name of the mods class.",
+    )
+
+    parser.add_argument(
+        "--allow_conflicts",
+        action="store_true",
+        help="Allow loading conflicting mods (last mod in list takes priority).",
     )
 
     mode_group = parser.add_mutually_exclusive_group(required=False)
@@ -77,20 +85,54 @@ def main():
     args = parser.parse_args()
 
     execute_without_rendering = False
-    # Load the game environment
+    
+
     try:
-        env, renderer = load_game_environment(args.game)
-        if args.mod is not None:
-            mod = load_game_mod(args.game, args.mod)
-            env = mod(env)
-
-        if renderer is None:
-            execute_without_rendering = True
-            print("No renderer found, running without rendering.")
-
-    except (FileNotFoundError, ImportError) as e:
-        print(f"Error loading game: {e}")
+        # 1. Try the registered path (core.make)
+        env = jaxatari_make(
+            game_name=args.game,
+            mods_config=args.mods,
+            allow_conflicts=args.allow_conflicts
+        )
+        print(f"Successfully loaded registered game: '{args.game}'")
+    except (NotImplementedError, ImportError) as e:
+        # 2. If not registered, try the dynamic path
+        print(f"Game '{args.game}' not registered or import error ({e}). Trying dynamic load...")
+        try:
+            # 2a. Dynamically load the base game environment
+            # We only need the 'game' object; it will have its own .renderer
+            game_env, _ = load_game_environment(args.game)
+            
+            # 2b. Apply mods if requested
+            if args.mods:
+                print(f"Applying mods: {args.mods}")
+                # Get the function that applies the full modding pipeline
+                mod_applier = load_game_mods(
+                    game_name=args.game,
+                    mods_config=args.mods,
+                    allow_conflicts=args.allow_conflicts
+                )
+                # Apply the mods to the base env
+                env = mod_applier(game_env)
+            else:
+                # No mods, just use the dynamically loaded game
+                env = game_env
+            
+            print(f"Successfully loaded unregistered game: '{args.game}'")
+        except (FileNotFoundError, ImportError, ValueError, AttributeError) as e_dyn:
+            # 3. If dynamic loading also fails, then we exit
+            print(f"Error: Failed to load game '{args.game}' dynamically.")
+            print(f"Details: {e_dyn}")
+            sys.exit(1)
+    
+    except (FileNotFoundError, ValueError, AttributeError) as e_reg:
+        # 4. Catch other errors from the registered path (e.g., mod conflict)
+        print(f"Error loading registered game or mods: {e_reg}")
         sys.exit(1)
+
+    if not hasattr(env, "renderer"):
+        execute_without_rendering = True
+        print("No renderer found, running without rendering.")
 
     # Initialize the environment
     master_key = jrandom.PRNGKey(args.seed)
@@ -151,49 +193,56 @@ def main():
                 print(f"Action: {ACTION_NAMES[int(action)]} ({int(action)})")
 
             obs, state, reward, done, info = jitted_step(state, action)
-            image = jitted_render(state)
-            update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
-            clock.tick(frame_rate)
+            if not execute_without_rendering:
+                image = jitted_render(state)
+                update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
+                clock.tick(frame_rate)
 
-            # Check for quit event
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT or (
-                    event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
-                ):
-                    pygame.quit()
-                    sys.exit(0)
+                # Check for quit event
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT or (
+                        event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
+                    ):
+                        pygame.quit()
+                        sys.exit(0)
 
-        pygame.quit()
+        if not execute_without_rendering:
+            pygame.quit()
         sys.exit(0)
 
     # display the first frame (reset frame) -> purely for aesthetics
-    image = jitted_render(state)
-    update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
-    clock.tick(frame_rate)
+    if not execute_without_rendering:
+        image = jitted_render(state)
+        update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
+        clock.tick(frame_rate)
 
     # main game loop
     while running:
         # check for external actions
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
+        if not execute_without_rendering:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                    continue
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_p:  # pause
+                        pause = not pause
+                    elif event.key == pygame.K_r:  # reset
+                        reset_key = jrandom.fold_in(master_key, reset_counter)
+                        obs, state = jitted_reset(reset_key)
+                        reset_counter += 1
+                        total_return = 0
+                    elif event.key == pygame.K_f:
+                        frame_by_frame = not frame_by_frame
+                    elif event.key == pygame.K_n:
+                        next_frame_asked = True
+
+            if pause or (frame_by_frame and not next_frame_asked):
+                image = jitted_render(state)
+                update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
+                clock.tick(frame_rate)
                 continue
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_p:  # pause
-                    pause = not pause
-                elif event.key == pygame.K_r:  # reset
-                    reset_key = jrandom.fold_in(master_key, reset_counter)
-                    obs, state = jitted_reset(reset_key)
-                    reset_counter += 1
-                elif event.key == pygame.K_f:
-                    frame_by_frame = not frame_by_frame
-                elif event.key == pygame.K_n:
-                    next_frame_asked = True
-        if pause or (frame_by_frame and not next_frame_asked):
-            image = jitted_render(state)
-            update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
-            clock.tick(frame_rate)
-            continue
+        
         if args.random:
             # sample an action from the action space array
             action = action_space.sample(action_key)
@@ -201,18 +250,19 @@ def main():
         else:
             # get the pressed keys
             action = get_human_action()
-
             # Save the action to the save_keys dictionary
             if args.record:
                 # Save the action to the save_keys dictionary
                 save_keys[len(save_keys)] = action
 
         if not frame_by_frame or next_frame_asked:
-            action = get_human_action()
             obs, state, reward, done, info = jitted_step(state, action)
             total_return += reward
             if next_frame_asked:
                 next_frame_asked = False
+        else:
+            # Need to get action to update event queue even if paused
+            action = get_human_action()
 
         if done:
             print(f"Done. Total return {total_return}")
@@ -224,10 +274,17 @@ def main():
         # Render the environment
         if not execute_without_rendering:
             image = jitted_render(state)
-
             update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
-
             clock.tick(frame_rate)
+        
+        # Handle loop for no-rendering execution
+        if execute_without_rendering:
+            if done:
+                running = False # Run for one episode if not rendering
+            if pause or (frame_by_frame and not next_frame_asked):
+                continue
+            if frame_by_frame and next_frame_asked:
+                next_frame_asked = False
 
     if args.record:
         # Convert dictionary to array of actions
@@ -240,8 +297,9 @@ def main():
         }
         with open(args.record, "wb") as f:
             np.save(f, save_data)
-
-    pygame.quit()
+    
+    if not execute_without_rendering:
+        pygame.quit()
 
 
 if __name__ == "__main__":

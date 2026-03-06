@@ -39,7 +39,8 @@ class BreakoutConstants(NamedTuple):
     BALL_START_X: chex.Array = jnp.array([16, 78, 80, 142])
     BALL_START_Y: int = 122
     PLAYER_X_MIN: int = 8
-    PLAYER_X_MAX: int = 160 - 16
+    # PLAYER_X_MAX is calculated dynamically based on paddle width to support mods
+    # It will be computed as WINDOW_WIDTH - WALL_SIDE_WIDTH - max(PLAYER_SIZE[0], PLAYER_SIZE_SMALL[0])
     PLAYER_MAX_SPEED: int = 6
     PLAYER_ACCELERATION: chex.Array = jnp.array([3, 2, -1, 1, 1])
     PLAYER_WALL_ACCELERATION: chex.Array = jnp.array([1, 2, 1, 1, 1])
@@ -107,13 +108,16 @@ class BreakoutState(NamedTuple):
     all_blocks_cleared: chex.Array
 
 class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInfo, BreakoutConstants]):
-    def __init__(self, consts: BreakoutConstants = None, reward_funcs: list[callable]=None):
+    def __init__(self, consts: BreakoutConstants = None):
         consts = consts or BreakoutConstants()
         super().__init__(consts)
         self.renderer = BreakoutRenderer(self.consts)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs) 
-        self.reward_funcs = reward_funcs 
+    
+    def _get_player_x_max(self) -> int:
+        """Calculate the maximum X position for the player paddle.
+        This ensures the paddle doesn't extend beyond the right wall, accounting for variable paddle sizes."""
+        max_paddle_width = max(self.consts.PLAYER_SIZE[0], self.consts.PLAYER_SIZE_SMALL[0])
+        return self.consts.WINDOW_WIDTH - self.consts.WALL_SIDE_WIDTH - max_paddle_width 
 
     def get_human_action(self) -> chex.Array:
         """Records keyboard input and returns the corresponding action."""
@@ -139,9 +143,14 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
         left = action == Action.LEFT
         right = action == Action.RIGHT
 
+        # Calculate the maximum X position based on paddle width
+        # Use the maximum paddle width to ensure it works for both normal and small paddles
+        max_paddle_width = max(self.consts.PLAYER_SIZE[0], self.consts.PLAYER_SIZE_SMALL[0])
+        player_x_max = self.consts.WINDOW_WIDTH - self.consts.WALL_SIDE_WIDTH - max_paddle_width
+        
         # Check if the paddle is touching the left or right wall.
         touches_wall = jnp.logical_or(
-            state_player_x <= self.consts.PLAYER_X_MIN, state_player_x >= self.consts.PLAYER_X_MAX
+            state_player_x <= self.consts.PLAYER_X_MIN, state_player_x >= player_x_max
         )
 
         # Get the acceleration schedule based on whether the paddle is at a wall.
@@ -214,7 +223,8 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
         )
 
         # Update the paddle's horizontal position and clamp it within the game boundaries.
-        player_x = jnp.clip(state_player_x + player_speed, self.consts.PLAYER_X_MIN, self.consts.PLAYER_X_MAX)
+        # player_x_max was already calculated at the beginning of this function
+        player_x = jnp.clip(state_player_x + player_speed, self.consts.PLAYER_X_MIN, player_x_max)
 
         return player_x, player_speed, new_acceleration_counter
 
@@ -823,6 +833,28 @@ class BreakoutRenderer(JAXGameRenderer):
         procedural_sprites = self._create_procedural_sprites()
         asset_config = self._get_asset_config(procedural_sprites)
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/breakout"
+        
+        # Add ball and player colors to palette as 1x1 procedural sprites if they differ from defaults
+        # This ensures the colors are in the palette before we recolor
+        default_ball_color = (200, 72, 72)
+        default_player_color = (200, 72, 72)
+        
+        if self.consts.BALL_COLOR != default_ball_color:
+            ball_color_rgba = jnp.array(list(self.consts.BALL_COLOR) + [255], dtype=jnp.uint8).reshape(1, 1, 4)
+            asset_config.append({
+                'name': 'ball_color_override',
+                'type': 'procedural',
+                'data': ball_color_rgba
+            })
+        
+        if self.consts.PLAYER_COLOR != default_player_color:
+            player_color_rgba = jnp.array(list(self.consts.PLAYER_COLOR) + [255], dtype=jnp.uint8).reshape(1, 1, 4)
+            asset_config.append({
+                'name': 'player_color_override',
+                'type': 'procedural',
+                'data': player_color_rgba
+            })
+        
         (
             self.PALETTE,
             self.SHAPE_MASKS,
@@ -841,6 +873,9 @@ class BreakoutRenderer(JAXGameRenderer):
             self.COLOR_TO_ID[self.consts.BLOCK_COLORS[4]], # ID 5 -> Blue
             self.COLOR_TO_ID[self.consts.BLOCK_COLORS[5]], # ID 6 -> Indigo
         ])
+        
+        # Recolor ball and player sprites if colors differ from defaults
+        self._recolor_ball_and_player(sprite_path)
     
     @partial(jax.jit, static_argnums=(0,))
     def _render_blocks_inverse(self, raster: jnp.ndarray, blocks_state: jnp.ndarray) -> jnp.ndarray:
@@ -885,8 +920,66 @@ class BreakoutRenderer(JAXGameRenderer):
 
         return jax.vmap(draw_single_mask)(all_xs, all_ys)
 
+    def _recolor_3d_sprite(self, sprite_array: jnp.ndarray, new_rgb_color: jnp.ndarray) -> jnp.ndarray:
+        """
+        Recolors the non-transparent pixels of a 3D RGBA sprite array.
+        
+        Args:
+            sprite_array: The input array with shape (H, W, 4).
+            new_rgb_color: A 3-element array for the new RGB color.
+            
+        Returns:
+            A new array with the sprite recolored.
+        """
+        # Create a mask from the alpha channel (the 4th channel)
+        is_visible = sprite_array[:, :, 3] > 0
+        
+        # Use the mask to set the RGB values (:3) of visible pixels
+        recolored_array = sprite_array.at[is_visible, :3].set(new_rgb_color)
+        
+        return recolored_array
+    
+    def _recolor_ball_and_player(self, sprite_path: str):
+        """
+        Recolors ball and player sprites based on BALL_COLOR and PLAYER_COLOR in constants.
+        Note: If player sprite is procedural (due to custom PLAYER_SIZE), it's already created
+        with the correct color, so we skip recoloring it.
+        """
+        default_ball_color = (200, 72, 72)
+        default_player_color = (200, 72, 72)
+        default_player_size = (16, 4)
+        
+        # Recolor ball if color differs from default
+        if self.consts.BALL_COLOR != default_ball_color:
+            # Load the original ball sprite
+            ball_sprite_file = os.path.join(sprite_path, 'ball.npy')
+            original_ball_sprite = self.jr.loadFrame(ball_sprite_file)
+            
+            # Recolor the sprite
+            new_ball_color = jnp.array(self.consts.BALL_COLOR, dtype=jnp.uint8)
+            recolored_ball_sprite = self._recolor_3d_sprite(original_ball_sprite, new_ball_color)
+            
+            # Create a new mask from the recolored sprite
+            new_ball_mask = self.jr._create_id_mask(recolored_ball_sprite, self.COLOR_TO_ID)
+            self.SHAPE_MASKS["ball"] = new_ball_mask
+        
+        # Recolor player if color differs from default AND player size is default
+        # (If player size is custom, the procedural sprite already has the correct color)
+        if self.consts.PLAYER_COLOR != default_player_color and self.consts.PLAYER_SIZE == default_player_size:
+            # Load the original player sprite
+            player_sprite_file = os.path.join(sprite_path, 'player.npy')
+            original_player_sprite = self.jr.loadFrame(player_sprite_file)
+            
+            # Recolor the sprite
+            new_player_color = jnp.array(self.consts.PLAYER_COLOR, dtype=jnp.uint8)
+            recolored_player_sprite = self._recolor_3d_sprite(original_player_sprite, new_player_color)
+            
+            # Create a new mask from the recolored sprite
+            new_player_mask = self.jr._create_id_mask(recolored_player_sprite, self.COLOR_TO_ID)
+            self.SHAPE_MASKS["player"] = new_player_mask
+
     def _create_procedural_sprites(self) -> dict:
-        """Procedurally creates RGBA sprites for blocks and the bottom bar."""
+        """Procedurally creates RGBA sprites for blocks, the bottom bar, and player paddle if size differs from default."""
         # Create a (6, 1, 1, 4) stack of single-pixel sprites, one for each block color.
         # This will add the block colors to our palette.
         block_colors_rgba = jnp.array(self.consts.BLOCK_COLORS, dtype=jnp.uint8)
@@ -897,16 +990,28 @@ class BreakoutRenderer(JAXGameRenderer):
         bar_w, bar_h = 160, 14
         bottom_bar_sprite = jnp.zeros((bar_h, bar_w, 4), dtype=jnp.uint8).at[:, :, 3].set(255)
 
-        return {
+        result = {
             'block_colors': block_sprites,
             'bottom_bar': bottom_bar_sprite
         }
+        
+        # Create procedural player sprite if PLAYER_SIZE differs from default (16, 4)
+        default_player_size = (16, 4)
+        if self.consts.PLAYER_SIZE != default_player_size:
+            player_w, player_h = self.consts.PLAYER_SIZE
+            # Create a solid rectangle sprite with the player color
+            player_sprite = jnp.zeros((player_h, player_w, 4), dtype=jnp.uint8)
+            # Set RGB to player color and alpha to 255 (fully opaque)
+            player_color_rgba = jnp.array(list(self.consts.PLAYER_COLOR) + [255], dtype=jnp.uint8)
+            player_sprite = player_sprite.at[:, :, :].set(player_color_rgba)
+            result['player'] = player_sprite
+
+        return result
 
     def _get_asset_config(self, procedural_sprites: dict) -> list:
         """Returns the declarative manifest of all assets for the game."""
-        return [
+        asset_config = [
             {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            {'name': 'player', 'type': 'single', 'file': 'player.npy'},
             {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
             {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
             
@@ -914,6 +1019,14 @@ class BreakoutRenderer(JAXGameRenderer):
             {'name': 'block_colors', 'type': 'procedural', 'data': procedural_sprites['block_colors']},
             {'name': 'bottom_bar', 'type': 'procedural', 'data': procedural_sprites['bottom_bar']},
         ]
+        
+        # Use procedural player sprite if available (when PLAYER_SIZE differs from default), otherwise use file
+        if 'player' in procedural_sprites:
+            asset_config.append({'name': 'player', 'type': 'procedural', 'data': procedural_sprites['player']})
+        else:
+            asset_config.append({'name': 'player', 'type': 'single', 'file': 'player.npy'})
+        
+        return asset_config
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: BreakoutState) -> jnp.ndarray:
