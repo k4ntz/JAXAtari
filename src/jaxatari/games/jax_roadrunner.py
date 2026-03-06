@@ -200,43 +200,49 @@ RoadRunner_Level_1 = LevelConfig(
 
 RoadRunner_Level_2 = LevelConfig(
     level_number=2,
-    scroll_distance_to_complete=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
+    scroll_distance_to_complete=1500,
     road_sections=(
         RoadSectionConfig(
             scroll_start=0,
-            scroll_end=300,
-            road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
-            road_top=_centered_top(32),
-            road_height=32,
-        ),
-        RoadSectionConfig(
-            scroll_start=300,
-            scroll_end=700,
-            road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
-            road_top=_centered_top(32),
-            road_height=32,
-        ),
-        RoadSectionConfig(
-            scroll_start=700,
-            scroll_end=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
+            scroll_end=1500,
             road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
             road_top=_centered_top(32),
             road_height=32,
         ),
     ),
     spawn_seeds=True,
-    spawn_trucks=True,
+    spawn_trucks=False,
     spawn_ravines=True,
-    truck_spawn_config=(
-        _BASE_CONSTS.TRUCK_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.TRUCK_SPAWN_MAX_INTERVAL,
-    ),
+    # avg 125 scroll steps → ~12 seeds per level
+    seed_spawn_config=(100, 150),
+    # avg 65 scroll steps → ~23 ravines per level (first 15 evenly spaced, last 8 denser)
+    ravine_spawn_config=(50, 80),
     spawn_landmines=True,
-    landmine_spawn_config=(
-        _BASE_CONSTS.LANDMINE_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.LANDMINE_SPAWN_MAX_INTERVAL,
-    ),
+    # avg 375 scroll steps → ~4 mines per level
+    landmine_spawn_config=(300, 450),
     render_road_stripes=False,
+    decorations=(
+        # --- Pairs of cacti throughout the level ---
+        # Each pair: one on each side of the road, spaced ~200 scroll steps apart
+        # Appearance step ≈ d_x * 4/3 for lane-2, d_x * 2 for lane-3
+        (75, 45, 2, _BASE_CONSTS.DECO_CACTUS),    # appears ~step 100
+        (50, 55, 3, _BASE_CONSTS.DECO_CACTUS),    # appears ~step 100
+        (225, 45, 2, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 300
+        (150, 55, 3, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 300
+        (375, 45, 2, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 500
+        (250, 55, 3, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 500
+        (525, 45, 2, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 700
+        (350, 55, 3, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 700
+        (675, 45, 2, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 900
+        (450, 55, 3, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 900
+        (825, 45, 2, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 1100
+        (550, 55, 3, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 1100
+        (975, 45, 2, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 1300
+        (650, 55, 3, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 1300
+
+        # --- Exit sign (same position as Level 1) ---
+        (2000, 60, 1, _BASE_CONSTS.DECO_SIGN_EXIT),
+    ),
 )
 
 RoadRunner_Level_3 = LevelConfig(
