@@ -144,8 +144,8 @@ class RoadRunnerConstants(NamedTuple):
     # --- Ravine-linked entity spawn constants ---
     # How many scroll steps *before* the next ravine spawns that seeds/mines should appear.
     # At PLAYER_MOVE_SPEED=3 px/step: 15 steps → 45 px ahead, 12 steps → 36 px ahead.
-    RAVINE_SEED_AHEAD_SCROLL_STEPS: int = 15
-    RAVINE_MINE_AHEAD_SCROLL_STEPS: int = 12
+    RAVINE_SEED_AHEAD_SCROLL_STEPS: int = 8
+    RAVINE_MINE_AHEAD_SCROLL_STEPS: int = 8
     # Probability thresholds for picking which entity (if any) spawns with each ravine.
     # A single uniform draw r is used so seeds and mines can't both appear for the same ravine.
     # r < SEED_PROB → seed linked; SEED_PROB ≤ r < SEED_PROB+MINE_PROB → mine linked; else nothing.
