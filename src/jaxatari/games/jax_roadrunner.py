@@ -281,13 +281,11 @@ RoadRunner_Level_3 = LevelConfig(
             road_height=_DEFAULT_ROAD_HEIGHT,
         ),
     ),
-    # Road narrows from 5 lanes (70 px) to 3 lanes (42 px) four times across the level with
-    # smooth transitions. interval=600 world pixels gives 4 narrow phases at approximately
-    # scroll steps 193-359, 593-759, 993-1159, 1393-1500
-    # (video target: 300-400, 625-825, 1025-1125, 1350-1450).
-    dynamic_road_heights=(_DEFAULT_ROAD_HEIGHT, 42),
-    dynamic_road_interval=600,
-    dynamic_road_transition_length=100,
+    # Road alternates between wide (70 px) and narrower (50 px) with a sharp diagonal
+    # transition edge spanning 10 world pixels, matching the visual style of the original game.
+    dynamic_road_heights=(_DEFAULT_ROAD_HEIGHT, 50),
+    dynamic_road_interval=400,
+    dynamic_road_transition_length=10,
     spawn_seeds=True,
     spawn_trucks=True,
     spawn_landmines=True,
