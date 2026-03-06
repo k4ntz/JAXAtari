@@ -33,6 +33,9 @@ def _get_default_asset_config() -> tuple:
         # Idle sprites
         {'name': 'white_idle', 'type': 'single', 'file': 'white_idle.npy'},
         {'name': 'black_idle', 'type': 'single', 'file': 'black_idle.npy'},
+        # Stunned/hit sprites (squished head)
+        {'name': 'white_stunned', 'type': 'single', 'file': 'white_stunned.npy'},
+        {'name': 'black_stunned', 'type': 'single', 'file': 'black_stunned.npy'},
         # White boxer punch animation (left and right direction)
         {'name': 'white_punch_left_0', 'type': 'single', 'file': 'white_boxing_animation_left/0.npy'},
         {'name': 'white_punch_left_1', 'type': 'single', 'file': 'white_boxing_animation_left/1.npy'},
@@ -164,6 +167,7 @@ class BoxingState:
     # Combat state - placeholder for future phases
     hit_boxer_stun_timer: chex.Array
     hit_boxer_index: chex.Array  # 0 = left, 1 = right
+    punching_arm_index: chex.Array  # Index into PunchedBoxerOffsetValues (0-3)
     
     # Animation state - placeholder for future phases
     boxer_animation_values: chex.Array  # 8-element array
@@ -185,6 +189,7 @@ class BoxingState:
     cpu_horiz_offset: chex.Array  # Random horizontal offset (0-31)
     cpu_vert_offset: chex.Array  # Random vertical offset (0-63)
     cpu_dancing_value: chex.Array  # Timer controlling CPU "dancing" behavior
+    cpu_retracting: chex.Array  # 1 if CPU punch is committed to retracting back to 0
     
     # Game flow
     game_state: chex.Array  # 0 = active, 0xFF = game over
@@ -292,6 +297,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             # Combat state (inactive)
             hit_boxer_stun_timer=jnp.array(0, dtype=jnp.int32),
             hit_boxer_index=jnp.array(0, dtype=jnp.int32),
+            punching_arm_index=jnp.array(0, dtype=jnp.int32),
             
             # Animation state (idle)
             boxer_animation_values=jnp.zeros(8, dtype=jnp.int32),
@@ -313,6 +319,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             cpu_horiz_offset=jnp.array(0, dtype=jnp.int32),
             cpu_vert_offset=jnp.array(0, dtype=jnp.int32),
             cpu_dancing_value=jnp.array(0, dtype=jnp.int32),
+            cpu_retracting=jnp.array(0, dtype=jnp.int32),
             
             # Game active
             game_state=jnp.array(0, dtype=jnp.int32),
@@ -618,6 +625,13 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             state.hit_boxer_index
         ).astype(jnp.int32)
         
+        # Set punching arm index (left boxer's last_arm: 0 or 1)
+        new_punching_arm = jnp.where(
+            valid_hit,
+            state.left_boxer_last_arm,
+            state.punching_arm_index
+        ).astype(jnp.int32)
+        
         # Set dancing value when player scores (affects CPU behavior)
         new_dancing = jnp.where(
             valid_hit,
@@ -630,6 +644,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             hit_boxer_stun_timer=new_stun_timer,
             hit_boxer_index=new_hit_index,
             left_boxer_punch_landed=new_punch_landed,
+            punching_arm_index=new_punching_arm,
             cpu_dancing_value=new_dancing,
         )
     
@@ -721,6 +736,65 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             right_boxer_y=new_right_y,
         )
     
+    def _knockback_step(self, state: BoxingState) -> BoxingState:
+        """
+        Apply knockback to the stunned boxer per boxing.asm PunchedBoxerOffsetValues.
+
+        Offset table (interleaved vert, horiz pairs indexed by punchingArmIndex):
+            [+2, +1, -2, +1, +2, -1, -2, -1]
+
+        Horizontal is further negated when boxerIndexFacingRight >= 1
+        (i.e. the right boxer faces right, meaning left_x > right_x).
+        """
+        is_stunned = state.hit_boxer_stun_timer > 0
+        left_is_hit  = state.hit_boxer_index == 0
+        right_is_hit = state.hit_boxer_index == 1
+
+        # PunchedBoxerOffsetValues from boxing.asm (4 pairs of vert, horiz)
+        vert_offsets  = jnp.array([ 2, -2,  2, -2], dtype=jnp.int32)
+        horiz_offsets = jnp.array([ 1,  1, -1, -1], dtype=jnp.int32)
+
+        arm_idx = jnp.clip(state.punching_arm_index, 0, 3)
+        vert_offset  = vert_offsets[arm_idx]
+        horiz_offset = horiz_offsets[arm_idx]
+
+        # Per assembly: negate horizontal when boxerIndexFacingRight >= 1
+        # boxerIndexFacingRight == 1 means the right boxer faces right,
+        # which is when left_boxer_x > right_boxer_x.
+        right_faces_right = state.left_boxer_x > state.right_boxer_x
+        horiz_offset = jnp.where(right_faces_right, -horiz_offset, horiz_offset)
+
+        # Apply to left boxer if it was hit
+        new_left_x = jnp.where(
+            jnp.logical_and(is_stunned, left_is_hit),
+            jnp.clip(state.left_boxer_x + horiz_offset, self.consts.XMIN_BOXER, self.consts.XMAX_BOXER),
+            state.left_boxer_x
+        ).astype(jnp.int32)
+        new_left_y = jnp.where(
+            jnp.logical_and(is_stunned, left_is_hit),
+            jnp.clip(state.left_boxer_y + vert_offset, self.consts.YMIN, self.consts.YMAX),
+            state.left_boxer_y
+        ).astype(jnp.int32)
+
+        # Apply to right boxer if it was hit
+        new_right_x = jnp.where(
+            jnp.logical_and(is_stunned, right_is_hit),
+            jnp.clip(state.right_boxer_x + horiz_offset, self.consts.XMIN_BOXER, self.consts.XMAX_BOXER),
+            state.right_boxer_x
+        ).astype(jnp.int32)
+        new_right_y = jnp.where(
+            jnp.logical_and(is_stunned, right_is_hit),
+            jnp.clip(state.right_boxer_y + vert_offset, self.consts.YMIN, self.consts.YMAX),
+            state.right_boxer_y
+        ).astype(jnp.int32)
+
+        return replace(state,
+            left_boxer_x=new_left_x,
+            left_boxer_y=new_left_y,
+            right_boxer_x=new_right_x,
+            right_boxer_y=new_right_y,
+        )
+
     def _cpu_movement_step(self, state: BoxingState) -> BoxingState:
         """
         CPU AI movement logic based on Technical Specification.
@@ -868,14 +942,16 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         
         # Determine if CPU should "hold fire":
         # 1. If already punching (anim > 0) and hasn't reached max yet, keep holding
-        # 2. If not punching, start if in range and random says so
+        # 2. If already punching AND retracting, keep retracting to avoid oscillation
+        # 3. If not punching, start if in range and random says so
         already_punching = current_anim > 0
         reached_max = current_anim >= max_extension
+        is_retracting = state.cpu_retracting > 0
         
         cpu_fire_held = jnp.where(
             already_punching,
-            # Already punching: keep holding until we reach max
-            ~reached_max,
+            # Already punching: keep holding only if not yet at max AND not committed to retracting
+            jnp.logical_and(~reached_max, ~is_retracting),
             # Not punching: decide whether to start
             jnp.logical_and(
                 jnp.logical_and(in_range, should_start_punch),
@@ -922,12 +998,22 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             jnp.where(just_reached_max, 1, 0).astype(jnp.int32)
         )
         
+        # Update retracting flag:
+        # - Set to 1 when punch first reaches max extension
+        # - Clear to 0 when animation fully resets to 0
+        new_retracting = jnp.where(
+            animation_reset,
+            0,
+            jnp.where(just_reached_max, 1, state.cpu_retracting)
+        ).astype(jnp.int32)
+        
         return replace(state,
             right_boxer_punch_active=punch_active,
             right_boxer_animation_value=new_anim,
             right_boxer_punch_landed=new_punch_landed,
             right_boxer_last_arm=new_last_arm,
             extended_arm_maximum=new_extended_arm_max,
+            cpu_retracting=new_retracting,
             key=key,
         )
     
@@ -1010,6 +1096,13 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             state.hit_boxer_index
         ).astype(jnp.int32)
         
+        # Set punching arm index (right boxer's last_arm + 2 for CPU arms)
+        new_punching_arm = jnp.where(
+            valid_hit,
+            state.right_boxer_last_arm + 2,
+            state.punching_arm_index
+        ).astype(jnp.int32)
+        
         # Set dancing value when CPU scores
         new_dancing = jnp.where(
             valid_hit,
@@ -1022,6 +1115,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             hit_boxer_stun_timer=new_stun_timer,
             hit_boxer_index=new_hit_index,
             right_boxer_punch_landed=new_punch_landed,
+            punching_arm_index=new_punching_arm,
             cpu_dancing_value=new_dancing,
         )
     
@@ -1061,7 +1155,10 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         
         # Check for CPU hits on player
         state = self._cpu_hit_detection_step(state)
-        
+
+        # Apply knockback to the stunned boxer
+        state = self._knockback_step(state)
+
         # Decrement stun timer
         new_stun = jnp.maximum(state.hit_boxer_stun_timer - 1, 0).astype(jnp.int32)
         state = replace(state, hit_boxer_stun_timer=new_stun)
@@ -1346,16 +1443,31 @@ class BoxingRenderer(JAXGameRenderer):
             )
             return raster
         
-        # Render white boxer - use alternating arms based on last_arm
+        def render_white_stunned(raster):
+            return self.jr.render_at(
+                raster, state.left_boxer_x, state.left_boxer_y,
+                self.SHAPE_MASKS["white_stunned"]
+            )
+
+        # Render white boxer: stunned pose overrides everything else
+        white_is_stunned = jnp.logical_and(
+            state.hit_boxer_stun_timer > 0,
+            state.hit_boxer_index == 0
+        )
         raster = jax.lax.cond(
-            is_punching_left,
+            white_is_stunned,
+            render_white_stunned,
             lambda r: jax.lax.cond(
-                white_use_left_arm,
-                render_white_punch_left,
-                render_white_punch_right,
+                is_punching_left,
+                lambda r2: jax.lax.cond(
+                    white_use_left_arm,
+                    render_white_punch_left,
+                    render_white_punch_right,
+                    r2
+                ),
+                render_white_idle,
                 r
             ),
-            render_white_idle,
             raster
         )
         
@@ -1408,16 +1520,31 @@ class BoxingRenderer(JAXGameRenderer):
             )
             return raster
         
-        # Render black boxer - use alternating arms based on last_arm
+        def render_black_stunned(raster):
+            return self.jr.render_at(
+                raster, state.right_boxer_x, state.right_boxer_y,
+                self.SHAPE_MASKS["black_stunned"]
+            )
+
+        # Render black boxer: stunned pose overrides everything else
+        black_is_stunned = jnp.logical_and(
+            state.hit_boxer_stun_timer > 0,
+            state.hit_boxer_index == 1
+        )
         raster = jax.lax.cond(
-            is_punching_right,
+            black_is_stunned,
+            render_black_stunned,
             lambda r: jax.lax.cond(
-                black_use_left_arm,
-                render_black_punch_left,
-                render_black_punch_right,
+                is_punching_right,
+                lambda r2: jax.lax.cond(
+                    black_use_left_arm,
+                    render_black_punch_left,
+                    render_black_punch_right,
+                    r2
+                ),
+                render_black_idle,
                 r
             ),
-            render_black_idle,
             raster
         )
         
