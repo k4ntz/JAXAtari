@@ -36,6 +36,7 @@ GAME_MODULES = {
     "beamrider": "jaxatari.games.jax_beamrider",
     "berzerk": "jaxatari.games.jax_berzerk",
     "blackjack": "jaxatari.games.jax_blackjack",
+    "boxing": "jaxatari.games.jax_boxing",
     "breakout": "jaxatari.games.jax_breakout",
     "casino": "jaxatari.games.jax_casino",
     "centipede": "jaxatari.games.jax_centipede",
@@ -106,7 +107,8 @@ MOD_MODULES = {
     "spaceinvaders": "jaxatari.games.mods.spaceinvaders_mods.SpaceInvadersEnvMod",
     "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod",
     "alien": "jaxatari.games.mods.alien_mods.AlienEnvMod",
-    "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod"
+    "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod",
+    "boxing": "jaxatari.games.mods.boxing_mods.BoxingEnvMod",
 }
 
 
