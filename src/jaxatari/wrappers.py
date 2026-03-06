@@ -851,19 +851,20 @@ class LogWrapper(JaxatariWrapper):
         action: Union[int, float],
     ) -> Tuple[chex.Array, LogState, float, bool, Dict[Any, Any]]:
         obs, atari_state, reward, done, info = self._env.step(state.atari_state, action)
-        # use env_reward (unclipped) for logging when available
+        # use env_reward (unclipped/unchanged) for logging when available
         new_episode_return = state.episode_returns + info.get("env_reward", reward)
         new_episode_length = state.episode_lengths + 1
-        done_ = jnp.bool_(done)
+        # use env_done for logging when available (e.g. to ignore episodic_life)
+        done = info.get("env_done", jnp.bool_(done))
         state = LogState(
             atari_state=atari_state,
-            episode_returns=jnp.where(done_, jnp.float32(0), jnp.float32(new_episode_return)),
-            episode_lengths=jnp.where(done_, jnp.int32(0), jnp.int32(new_episode_length)),
+            episode_returns=jnp.where(done, jnp.float32(0), jnp.float32(new_episode_return)),
+            episode_lengths=jnp.where(done, jnp.int32(0), jnp.int32(new_episode_length)),
             returned_episode_returns=jnp.where(
-                done_, jnp.float32(new_episode_return), jnp.float32(state.returned_episode_returns)
+                done, jnp.float32(new_episode_return), jnp.float32(state.returned_episode_returns)
             ),
             returned_episode_lengths=jnp.where(
-                done_, jnp.int32(new_episode_length), jnp.int32(state.returned_episode_lengths)
+                done, jnp.int32(new_episode_length), jnp.int32(state.returned_episode_lengths)
             ),
         )
         info["returned_episode_returns"] = state.returned_episode_returns
