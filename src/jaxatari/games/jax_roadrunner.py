@@ -270,19 +270,24 @@ RoadRunner_Level_2 = LevelConfig(
 RoadRunner_Level_3 = LevelConfig(
     level_number=3,
     scroll_distance_to_complete=1500,
-    # Road narrows from 5 lanes (70px) to 3 lanes (42px) four times across the level.
-    # Timestamps are relative to level start (02:07); 1 second ≈ 25 scroll steps.
+    # Single full-level road section; narrowing/widening is handled by dynamic_road_heights
+    # which produces smooth per-column transitions instead of abrupt jumps.
     road_sections=(
-        RoadSectionConfig(scroll_start=0,    scroll_end=300,  road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(70), road_height=70),   # wide  (02:07-02:19)
-        RoadSectionConfig(scroll_start=300,  scroll_end=400,  road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(42), road_height=42),   # narrow (02:19-02:23)
-        RoadSectionConfig(scroll_start=400,  scroll_end=625,  road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(70), road_height=70),   # wide  (02:23-02:32)
-        RoadSectionConfig(scroll_start=625,  scroll_end=825,  road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(42), road_height=42),   # narrow (02:32-02:40)
-        RoadSectionConfig(scroll_start=825,  scroll_end=1025, road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(70), road_height=70),   # wide  (02:40-02:48)
-        RoadSectionConfig(scroll_start=1025, scroll_end=1125, road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(42), road_height=42),   # narrow (02:48-02:52)
-        RoadSectionConfig(scroll_start=1125, scroll_end=1350, road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(70), road_height=70),   # wide  (02:52-03:01)
-        RoadSectionConfig(scroll_start=1350, scroll_end=1450, road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(42), road_height=42),   # narrow (03:01-03:05)
-        RoadSectionConfig(scroll_start=1450, scroll_end=1500, road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN, road_top=_centered_top(70), road_height=70),   # wide  (03:05-end)
+        RoadSectionConfig(
+            scroll_start=0,
+            scroll_end=1500,
+            road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
+            road_top=_centered_top(_DEFAULT_ROAD_HEIGHT),
+            road_height=_DEFAULT_ROAD_HEIGHT,
+        ),
     ),
+    # Road narrows from 5 lanes (70 px) to 3 lanes (42 px) four times across the level with
+    # smooth transitions. interval=600 world pixels gives 4 narrow phases at approximately
+    # scroll steps 193-359, 593-759, 993-1159, 1393-1500
+    # (video target: 300-400, 625-825, 1025-1125, 1350-1450).
+    dynamic_road_heights=(_DEFAULT_ROAD_HEIGHT, 42),
+    dynamic_road_interval=600,
+    dynamic_road_transition_length=100,
     spawn_seeds=True,
     spawn_trucks=True,
     spawn_landmines=True,
