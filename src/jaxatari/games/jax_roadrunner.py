@@ -194,7 +194,7 @@ RoadRunner_Level_1 = LevelConfig(
         (1380, 45, 3, _BASE_CONSTS.DECO_CACTUS),
 
         # --- OUTRO ---
-        (1800, 60, 1, _BASE_CONSTS.DECO_SIGN_EXIT),
+        (2000, 60, 1, _BASE_CONSTS.DECO_SIGN_EXIT),
     ),
 )
 
