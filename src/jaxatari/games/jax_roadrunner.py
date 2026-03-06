@@ -53,6 +53,10 @@ class LevelConfig(NamedTuple):
     dynamic_road_interval: int = 400  # scroll distance between height switches
     dynamic_road_transition_length: int = 10  # transition zone length in scroll units
     offramp: OfframpConfig = OfframpConfig()
+    # Ravine-linked entity spawning: when True, seeds/mines are scheduled to appear
+    # just ahead of each ravine instead of on their own random timer.
+    ravine_linked_seed: bool = False
+    ravine_linked_mine: bool = False
 
 
 # --- Constants ---
@@ -136,6 +140,17 @@ class RoadRunnerConstants(NamedTuple):
     DECO_SIGN_BIRD_SEED = 2
     DECO_SIGN_CARS_AHEAD = 3
     DECO_SIGN_EXIT = 4
+    DECO_TUMBLEWEED = 5
+    # --- Ravine-linked entity spawn constants ---
+    # How many scroll steps *before* the next ravine spawns that seeds/mines should appear.
+    # At PLAYER_MOVE_SPEED=3 px/step: 15 steps → 45 px ahead, 12 steps → 36 px ahead.
+    RAVINE_SEED_AHEAD_SCROLL_STEPS: int = 15
+    RAVINE_MINE_AHEAD_SCROLL_STEPS: int = 12
+    # Probability thresholds for picking which entity (if any) spawns with each ravine.
+    # A single uniform draw r is used so seeds and mines can't both appear for the same ravine.
+    # r < SEED_PROB → seed linked; SEED_PROB ≤ r < SEED_PROB+MINE_PROB → mine linked; else nothing.
+    RAVINE_SEED_LINK_PROB: float = 0.52   # ≈ 12 seeds / 23 ravines for Level 2
+    RAVINE_MINE_LINK_PROB: float = 0.17   # ≈  4 mines / 23 ravines for Level 2
     levels: Tuple[LevelConfig, ...] = ()
 
 
@@ -213,32 +228,37 @@ RoadRunner_Level_2 = LevelConfig(
     spawn_seeds=True,
     spawn_trucks=False,
     spawn_ravines=True,
-    # avg 125 scroll steps → ~12 seeds per level
-    seed_spawn_config=(100, 150),
+    # Large fallback interval: seeds only appear via ravine-linked scheduling
+    seed_spawn_config=(10000, 10001),
     # avg 65 scroll steps → ~23 ravines per level (first 15 evenly spaced, last 8 denser)
     ravine_spawn_config=(50, 80),
     spawn_landmines=True,
-    # avg 375 scroll steps → ~4 mines per level
-    landmine_spawn_config=(300, 450),
+    # Large fallback interval: mines only appear via ravine-linked scheduling
+    landmine_spawn_config=(10000, 10001),
     render_road_stripes=False,
+    # Seeds and mines are scheduled just ahead of each ravine
+    ravine_linked_seed=True,
+    ravine_linked_mine=True,
     decorations=(
-        # --- Pairs of cacti throughout the level ---
-        # Each pair: one on each side of the road, spaced ~200 scroll steps apart
-        # Appearance step ≈ d_x * 4/3 for lane-2, d_x * 2 for lane-3
-        (75, 45, 2, _BASE_CONSTS.DECO_CACTUS),    # appears ~step 100
-        (50, 55, 3, _BASE_CONSTS.DECO_CACTUS),    # appears ~step 100
-        (225, 45, 2, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 300
-        (150, 55, 3, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 300
-        (375, 45, 2, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 500
-        (250, 55, 3, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 500
-        (525, 45, 2, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 700
-        (350, 55, 3, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 700
-        (675, 45, 2, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 900
-        (450, 55, 3, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 900
-        (825, 45, 2, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 1100
-        (550, 55, 3, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 1100
-        (975, 45, 2, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 1300
-        (650, 55, 3, _BASE_CONSTS.DECO_CACTUS),   # appears ~step 1300
+        # --- Pairs of cactus + tumbleweed throughout the level ---
+        # Each pair: cactus on one side of the road, tumbleweed on the other.
+        # Decoration format: (d_x, y, d_slowdown, type)
+        # Screen appearance at scroll step T ≈ d_x * 2 * d_slowdown / 3
+        # (slowdown=2: foreground layer, appears ~step d_x*4/3; slowdown=3: background, ~step d_x*2)
+        (75, 45, 2, _BASE_CONSTS.DECO_CACTUS),        # pair 1: appears ~step 100
+        (50, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),    # pair 1
+        (225, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 2: appears ~step 300
+        (150, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 2
+        (375, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 3: appears ~step 500
+        (250, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 3
+        (525, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 4: appears ~step 700
+        (350, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 4
+        (675, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 5: appears ~step 900
+        (450, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 5
+        (825, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 6: appears ~step 1100
+        (550, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 6
+        (975, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 7: appears ~step 1300
+        (650, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 7
 
         # --- Exit sign (same position as Level 1) ---
         (2000, 60, 1, _BASE_CONSTS.DECO_SIGN_EXIT),
@@ -817,6 +837,8 @@ class JaxRoadRunner(
         self._level_spawn_ravines = _build_spawn_enabled_array(levels, 'spawn_ravines')
         self._level_spawn_landmines = _build_spawn_enabled_array(levels, 'spawn_landmines')
         self._level_spawn_cannons = _build_spawn_enabled_array(levels, 'spawn_cannons')
+        self._level_ravine_linked_seed = _build_spawn_enabled_array(levels, 'ravine_linked_seed')
+        self._level_ravine_linked_mine = _build_spawn_enabled_array(levels, 'ravine_linked_mine')
 
         # Build spawn interval arrays
         self._seed_spawn_intervals = _build_spawn_interval_array(
@@ -1628,7 +1650,7 @@ class JaxRoadRunner(
         updated_ravines = jnp.stack([updated_x, updated_y], axis=-1)
         
         # Spawning Logic
-        rng_spawn, rng_interval, rng_after = jax.random.split(state.rng, 3)
+        rng_spawn, rng_interval, rng_link, rng_after = jax.random.split(state.rng, 4)
         available_slots = updated_x == -1
         
         should_spawn = (
@@ -1648,9 +1670,57 @@ class JaxRoadRunner(
         new_ravine = jnp.array([0, spawn_y], dtype=jnp.int32)
         spawned_ravines = updated_ravines.at[slot_idx].set(new_ravine)
 
+        # --- Ravine-linked entity scheduling ---
+        # When a ravine spawns, optionally pre-schedule a seed or mine to appear
+        # just ahead of it so the player encounters the entity before the ravine.
+        # A single random draw determines which (if any) entity is linked, ensuring
+        # seeds and mines never appear before the same ravine.
+        if self._level_count > 0:
+            ravine_linked_seed = self._level_ravine_linked_seed[level_idx]
+            ravine_linked_mine = self._level_ravine_linked_mine[level_idx]
+        else:
+            ravine_linked_seed = jnp.array(False, dtype=jnp.bool_)
+            ravine_linked_mine = jnp.array(False, dtype=jnp.bool_)
+
+        link_roll = jax.random.uniform(rng_link)
+        seed_threshold = jnp.float32(consts.RAVINE_SEED_LINK_PROB)
+        mine_threshold = jnp.float32(consts.RAVINE_SEED_LINK_PROB + consts.RAVINE_MINE_LINK_PROB)
+
+        should_link_seed = ravine_linked_seed & (link_roll < seed_threshold)
+        should_link_mine = ravine_linked_mine & (link_roll >= seed_threshold) & (link_roll < mine_threshold)
+
+        # Seed: schedule it RAVINE_SEED_AHEAD_SCROLL_STEPS before the next ravine spawns.
+        # next_spawn_step is the scrolling step at which the NEXT ravine will appear;
+        # the seed should spawn that many steps earlier (i.e. arrive at the player ahead of it).
+        linked_seed_scroll_step = next_spawn_step - jnp.int32(consts.RAVINE_SEED_AHEAD_SCROLL_STEPS)
+        new_next_seed_spawn_scroll_step = jnp.where(
+            should_spawn & should_link_seed,
+            linked_seed_scroll_step,
+            state.next_seed_spawn_scroll_step,
+        )
+
+        # Mine: same idea but using step_counter (mine timer is step-based, not scroll-based).
+        # When should_spawn is True, next_spawn_step = scrolling_step_counter + interval,
+        # so remaining is always positive (== the drawn interval).  The approximation
+        # remaining_scroll_steps ≈ remaining_step_counter_steps holds because the player
+        # is continuously scrolling when running; any small deviation is not significant.
+        remaining_scroll_to_next_ravine = next_spawn_step - state.scrolling_step_counter
+        mine_steps_from_now = remaining_scroll_to_next_ravine - jnp.int32(consts.RAVINE_MINE_AHEAD_SCROLL_STEPS)
+        # Only schedule if there is enough lead time to appear ahead of the ravine
+        enough_lead_time = mine_steps_from_now > jnp.int32(0)
+        should_link_mine = should_link_mine & enough_lead_time
+        linked_mine_step = state.step_counter + mine_steps_from_now
+        new_next_landmine_spawn_step = jnp.where(
+            should_spawn & should_link_mine,
+            linked_mine_step,
+            state.next_landmine_spawn_step,
+        )
+
         return state._replace(
             ravines=jnp.where(should_spawn, spawned_ravines, updated_ravines),
             next_ravine_spawn_scroll_step=jnp.where(should_spawn, next_spawn_step, state.next_ravine_spawn_scroll_step),
+            next_seed_spawn_scroll_step=new_next_seed_spawn_scroll_step,
+            next_landmine_spawn_step=new_next_landmine_spawn_step,
             rng=rng_after,
         )
 
@@ -2671,7 +2741,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
             1: "sign_this_way",
             2: "sign_birdseed",
             3: "sign_cars_ahead",
-            4: "sign_exit"
+            4: "sign_exit",
+            5: "tumbleweed",
         }
 
         # Use injected config if provided, else default
