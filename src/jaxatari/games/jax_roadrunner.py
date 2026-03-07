@@ -3316,8 +3316,15 @@ class RoadRunnerRenderer(JAXGameRenderer):
         # Active status already computed by _get_active_offramp_row
         offramp_active = any_active
 
-        # Static Y position of the offramp road
-        offramp_top = self.consts.ROAD_TOP_Y - self.consts.OFFRAMP_GAP - OFFRAMP_H
+        # Compute Y position of the offramp road, flush above the main road.
+        # For narrow roads (e.g. Level 4, road_height=30), the road is centered
+        # within the ROAD_HEIGHT area, so the visible road top is offset down from
+        # ROAD_TOP_Y.  The offramp must be positioned relative to this actual top.
+        section = self._get_render_section(state)
+        current_road_height = jnp.clip(section.road_height, 1, self.consts.ROAD_HEIGHT)
+        road_top_offset = (self.consts.ROAD_HEIGHT - current_road_height) // 2
+        actual_road_top = self.consts.ROAD_TOP_Y + road_top_offset
+        offramp_top = actual_road_top - self.consts.OFFRAMP_GAP - OFFRAMP_H
 
         def _render_active(c: jnp.ndarray) -> jnp.ndarray:
             # Screen x of split leading edge (0 at scroll_start, grows rightward)
