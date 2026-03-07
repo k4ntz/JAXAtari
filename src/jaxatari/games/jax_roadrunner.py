@@ -52,7 +52,13 @@ class LevelConfig(NamedTuple):
     dynamic_road_heights: Optional[Tuple[int, int]] = None  # (height_a, height_b)
     dynamic_road_interval: int = 400  # scroll distance between height switches
     dynamic_road_transition_length: int = 10  # transition zone length in scroll units
+    # Phase offset added to world_x before the modulo so the level starts inside zone A
+    dynamic_road_scroll_offset: int = 0
     offramp: OfframpConfig = OfframpConfig()
+    # Ravine-linked entity spawning: when True, seeds/mines are scheduled to appear
+    # just ahead of each ravine instead of on their own random timer.
+    ravine_linked_seed: bool = False
+    ravine_linked_mine: bool = False
 
 
 # --- Constants ---
@@ -136,6 +142,19 @@ class RoadRunnerConstants(NamedTuple):
     DECO_SIGN_BIRD_SEED = 2
     DECO_SIGN_CARS_AHEAD = 3
     DECO_SIGN_EXIT = 4
+    DECO_TUMBLEWEED = 5
+    DECO_SIGN_ACME_MINES = 6
+    DECO_SIGN_STEEL_SHOT = 7  # placeholder sprite; replace with final asset when available
+    # --- Ravine-linked entity spawn constants ---
+    # How many scroll steps *before* the next ravine spawns that seeds/mines should appear.
+    # At PLAYER_MOVE_SPEED=3 px/step: 15 steps → 45 px ahead, 12 steps → 36 px ahead.
+    RAVINE_SEED_AHEAD_SCROLL_STEPS: int = 8
+    RAVINE_MINE_AHEAD_SCROLL_STEPS: int = 8
+    # Probability thresholds for picking which entity (if any) spawns with each ravine.
+    # A single uniform draw r is used so seeds and mines can't both appear for the same ravine.
+    # r < SEED_PROB → seed linked; SEED_PROB ≤ r < SEED_PROB+MINE_PROB → mine linked; else nothing.
+    RAVINE_SEED_LINK_PROB: float = 0.52   # ≈ 12 seeds / 23 ravines for Level 2
+    RAVINE_MINE_LINK_PROB: float = 0.17   # ≈  4 mines / 23 ravines for Level 2
     levels: Tuple[LevelConfig, ...] = ()
 
 
@@ -149,11 +168,11 @@ def _centered_top(height: int) -> int:
 
 RoadRunner_Level_1 = LevelConfig(
     level_number=1,
-    scroll_distance_to_complete=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
+    scroll_distance_to_complete=1500,
     road_sections=(
         RoadSectionConfig(
             scroll_start=0,
-            scroll_end=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
+            scroll_end=1500,
             road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
             road_top=0,
             road_height=_DEFAULT_ROAD_HEIGHT,
@@ -163,12 +182,12 @@ RoadRunner_Level_1 = LevelConfig(
     spawn_seeds=True,
     spawn_trucks=True,
     seed_spawn_config=(
-        _BASE_CONSTS.SEED_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.SEED_SPAWN_MAX_INTERVAL,
+        15,
+        45,
     ),
     truck_spawn_config=(
-        _BASE_CONSTS.TRUCK_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.TRUCK_SPAWN_MAX_INTERVAL,
+        240,
+        360,
     ),
     decorations=(
         # --- INTRO (0-6s) ---
@@ -194,93 +213,124 @@ RoadRunner_Level_1 = LevelConfig(
         (1380, 45, 3, _BASE_CONSTS.DECO_CACTUS),
 
         # --- OUTRO ---
-        (1800, 60, 1, _BASE_CONSTS.DECO_SIGN_EXIT),
-    ),
-    offramp=OfframpConfig(
-        enabled=True,
-        scroll_start=200,
-        scroll_end=700,
-        bridges=(450,),  # one bridge roughly in the middle of the offramp stretch
+        (2000, 60, 1, _BASE_CONSTS.DECO_SIGN_EXIT),
     ),
 )
 
 RoadRunner_Level_2 = LevelConfig(
     level_number=2,
-    scroll_distance_to_complete=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
+    scroll_distance_to_complete=1500,
     road_sections=(
         RoadSectionConfig(
             scroll_start=0,
-            scroll_end=300,
-            road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
-            road_top=_centered_top(32),
-            road_height=32,
-        ),
-        RoadSectionConfig(
-            scroll_start=300,
-            scroll_end=700,
-            road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
-            road_top=_centered_top(32),
-            road_height=32,
-        ),
-        RoadSectionConfig(
-            scroll_start=700,
-            scroll_end=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
+            scroll_end=1500,
             road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
             road_top=_centered_top(32),
             road_height=32,
         ),
     ),
-    spawn_seeds=False,
+    spawn_seeds=True,
     spawn_trucks=False,
     spawn_ravines=True,
-    truck_spawn_config=(
-        _BASE_CONSTS.TRUCK_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.TRUCK_SPAWN_MAX_INTERVAL,
-    ),
+    # Large fallback interval: seeds only appear via ravine-linked scheduling
+    seed_spawn_config=(10000, 10001),
+    # avg 65 scroll steps → ~23 ravines per level (first 15 evenly spaced, last 8 denser)
+    ravine_spawn_config=(50, 80),
     spawn_landmines=True,
-    landmine_spawn_config=(
-        _BASE_CONSTS.LANDMINE_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.LANDMINE_SPAWN_MAX_INTERVAL,
-    ),
+    # Large fallback interval: mines only appear via ravine-linked scheduling
+    landmine_spawn_config=(10000, 10001),
     render_road_stripes=False,
+    # Seeds and mines are scheduled just ahead of each ravine
+    ravine_linked_seed=True,
+    ravine_linked_mine=True,
+    decorations=(
+        # --- Pairs of cactus + tumbleweed throughout the level ---
+        # Each pair: cactus on one side of the road, tumbleweed on the other.
+        # Decoration format: (d_x, y, d_slowdown, type)
+        # Screen appearance at scroll step T ≈ d_x * 2 * d_slowdown / 3
+        # (slowdown=2: foreground layer, appears ~step d_x*4/3; slowdown=3: background, ~step d_x*2)
+        (75, 45, 2, _BASE_CONSTS.DECO_CACTUS),        # pair 1: appears ~step 100
+        (50, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),    # pair 1
+        (225, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 2: appears ~step 300
+        (150, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 2
+        (375, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 3: appears ~step 500
+        (250, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 3
+        (525, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 4: appears ~step 700
+        (350, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 4
+        (675, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 5: appears ~step 900
+        (450, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 5
+        (825, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 6: appears ~step 1100
+        (550, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 6
+        (975, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 7: appears ~step 1300
+        (650, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 7
+
+        # --- Exit sign (same position as Level 1) ---
+        (2000, 60, 1, _BASE_CONSTS.DECO_SIGN_EXIT),
+    ),
 )
 
 RoadRunner_Level_3 = LevelConfig(
     level_number=3,
-    scroll_distance_to_complete=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
+    scroll_distance_to_complete=1500,
+    # Single full-level road section; narrowing/widening is handled by dynamic_road_heights
+    # which produces smooth per-column transitions instead of abrupt jumps.
     road_sections=(
         RoadSectionConfig(
             scroll_start=0,
-            scroll_end=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
+            scroll_end=1500,
             road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
-            road_top=0,
-            road_height=70,  # Base height (will be modulated by dynamic_road_heights)
+            road_top=_centered_top(_DEFAULT_ROAD_HEIGHT),
+            road_height=_DEFAULT_ROAD_HEIGHT,
         ),
     ),
+    # Road alternates between wide (70 px) and narrower (50 px) with a sharp diagonal
+    # transition edge spanning 10 world pixels, matching the visual style of the original game.
+    dynamic_road_heights=(_DEFAULT_ROAD_HEIGHT, 50),
+    dynamic_road_interval=400,
+    dynamic_road_transition_length=10,
+    # Shift phase by half_trans so world_x=0 lands at the start of zone A (not in a
+    # wrap-around B→A transition), ensuring the road starts at full width.
+    dynamic_road_scroll_offset=5,
     spawn_seeds=True,
     spawn_trucks=True,
     spawn_landmines=True,
-    spawn_cannons=True,
-    seed_spawn_config=(
-        _BASE_CONSTS.SEED_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.SEED_SPAWN_MAX_INTERVAL,
+    # Seeds at similar frequency to Level 1
+    seed_spawn_config=(15, 45),
+    # ~5 trucks over the level; first appear around the first narrow section
+    truck_spawn_config=(200, 350),
+    # ~6-7 mines over the level, matching video density
+    landmine_spawn_config=(150, 300),
+    render_road_stripes=True,
+    decorations=(
+        # --- Intro sign ---
+        (50, 55, 1, _BASE_CONSTS.DECO_SIGN_STEEL_SHOT),     # "STEEL SHOT" placeholder at level start
+        # --- Lots of cacti (more than Level 1) ---
+        # Decoration formula: appears at scroll step T = d_x * 2 * d_slowdown / PLAYER_MOVE_SPEED
+        # (PLAYER_MOVE_SPEED=3, so T = d_x * 2 * d_slowdown / 3)
+        (75,  45, 2, _BASE_CONSTS.DECO_CACTUS),             # T≈100
+        (88,  55, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈176
+        (188, 45, 2, _BASE_CONSTS.DECO_CACTUS),             # T≈251
+        (163, 60, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈326
+        (300, 45, 2, _BASE_CONSTS.DECO_CACTUS),             # T≈400
+        (238, 55, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈476
+        # --- ACME MINES sign (~02:25, T≈450) ---
+        (675, 60, 1, _BASE_CONSTS.DECO_SIGN_ACME_MINES),    # T≈450
+        (413, 45, 2, _BASE_CONSTS.DECO_CACTUS),             # T≈551
+        (313, 55, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈626
+        (525, 45, 2, _BASE_CONSTS.DECO_CACTUS),             # T≈700
+        (388, 60, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈776
+        (638, 45, 2, _BASE_CONSTS.DECO_CACTUS),             # T≈851
+        (463, 55, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈926
+        (750, 45, 2, _BASE_CONSTS.DECO_CACTUS),             # T≈1000
+        (538, 60, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈1076
+        (863, 45, 2, _BASE_CONSTS.DECO_CACTUS),             # T≈1151
+        (625, 55, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈1250
+        (1013, 45, 2, _BASE_CONSTS.DECO_CACTUS),            # T≈1351
+        (725, 60, 3, _BASE_CONSTS.DECO_CACTUS),             # T≈1450
+        # --- Exit sign ---
+        # d_x=2000 with d_slowdown=1 appears at scroll step T = 2000*2*1/3 ≈ 1333, well within 1500
+        (2000, 60, 1, _BASE_CONSTS.DECO_SIGN_EXIT),         # T≈1333
     ),
-    truck_spawn_config=(
-        _BASE_CONSTS.TRUCK_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.TRUCK_SPAWN_MAX_INTERVAL,
-    ),
-    landmine_spawn_config=(
-        _BASE_CONSTS.LANDMINE_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.LANDMINE_SPAWN_MAX_INTERVAL,
-    ),
-    cannon_spawn_config=(
-        _BASE_CONSTS.CANNON_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.CANNON_SPAWN_MAX_INTERVAL,
-    ),
-    # Dynamic road height: alternates between 70 and 50 pixels
-    dynamic_road_heights=(70, 50),
-    dynamic_road_interval=400,
-    dynamic_road_transition_length=10,
 )
 
 RoadRunner_Level_4 = LevelConfig(
@@ -296,14 +346,9 @@ RoadRunner_Level_4 = LevelConfig(
             road_pattern_style=0,
         ),
     ),
-    spawn_seeds=False,
-    spawn_trucks=False,
+    spawn_seeds=True,
+    spawn_trucks=True,
     spawn_landmines=False,
-    spawn_cannons=True,
-    cannon_spawn_config=(
-        _BASE_CONSTS.CANNON_SPAWN_MIN_INTERVAL,
-        _BASE_CONSTS.CANNON_SPAWN_MAX_INTERVAL,
-    ),
     decorations=(
         # --- INTRO (0-6s) ---
         (50, 60, 1, _BASE_CONSTS.DECO_SIGN_THIS_WAY),
@@ -335,8 +380,8 @@ RoadRunner_Level_4 = LevelConfig(
 DEFAULT_LEVELS: Tuple[LevelConfig, ...] = (
     RoadRunner_Level_1,
     RoadRunner_Level_2,
-    #RoadRunner_Level_3,
-    #RoadRunner_Level_4,
+    RoadRunner_Level_3,
+    RoadRunner_Level_4,
 )
 
 
@@ -396,7 +441,7 @@ def _build_road_section_arrays(
 
 def _build_dynamic_road_config_arrays(
     levels: Tuple[LevelConfig, ...]
-) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     enabled = jnp.array(
         [cfg.dynamic_road_heights is not None for cfg in levels],
         dtype=jnp.bool_
@@ -417,7 +462,12 @@ def _build_dynamic_road_config_arrays(
         dtype=jnp.int32
     ) if levels else jnp.array([], dtype=jnp.int32)
 
-    return enabled, heights, intervals, transition_lengths
+    scroll_offsets = jnp.array(
+        [cfg.dynamic_road_scroll_offset for cfg in levels],
+        dtype=jnp.int32
+    ) if levels else jnp.array([], dtype=jnp.int32)
+
+    return enabled, heights, intervals, transition_lengths, scroll_offsets
 
 
 def _build_spawn_interval_array(
@@ -826,6 +876,8 @@ class JaxRoadRunner(
         self._level_spawn_ravines = _build_spawn_enabled_array(levels, 'spawn_ravines')
         self._level_spawn_landmines = _build_spawn_enabled_array(levels, 'spawn_landmines')
         self._level_spawn_cannons = _build_spawn_enabled_array(levels, 'spawn_cannons')
+        self._level_ravine_linked_seed = _build_spawn_enabled_array(levels, 'ravine_linked_seed')
+        self._level_ravine_linked_mine = _build_spawn_enabled_array(levels, 'ravine_linked_mine')
 
         # Build spawn interval arrays
         self._seed_spawn_intervals = _build_spawn_interval_array(
@@ -859,11 +911,18 @@ class JaxRoadRunner(
         # Build offramp data array: shape (num_levels, 3) = [enabled, scroll_start, scroll_end]
         self._offramp_data = _build_offramp_arrays(levels)
 
+        # Build per-level scroll distances array
+        self._level_scroll_distances = jnp.array(
+            [cfg.scroll_distance_to_complete for cfg in levels],
+            dtype=jnp.int32,
+        ) if levels else jnp.array([self.consts.LEVEL_COMPLETE_SCROLL_DISTANCE], dtype=jnp.int32)
+
         (
             self._dynamic_road_enabled,
             self._dynamic_road_heights,
             self._dynamic_road_intervals,
-            self._dynamic_road_transition_lengths
+            self._dynamic_road_transition_lengths,
+            self._dynamic_road_scroll_offsets
         ) = _build_dynamic_road_config_arrays(levels)
 
     def _handle_input(self, action: chex.Array) -> tuple[chex.Array, chex.Array, chex.Array]:
@@ -1631,7 +1690,7 @@ class JaxRoadRunner(
         updated_ravines = jnp.stack([updated_x, updated_y], axis=-1)
         
         # Spawning Logic
-        rng_spawn, rng_interval, rng_after = jax.random.split(state.rng, 3)
+        rng_spawn, rng_interval, rng_link, rng_after = jax.random.split(state.rng, 4)
         available_slots = updated_x == -1
         
         should_spawn = (
@@ -1651,9 +1710,57 @@ class JaxRoadRunner(
         new_ravine = jnp.array([0, spawn_y], dtype=jnp.int32)
         spawned_ravines = updated_ravines.at[slot_idx].set(new_ravine)
 
+        # --- Ravine-linked entity scheduling ---
+        # When a ravine spawns, optionally pre-schedule a seed or mine to appear
+        # just ahead of it so the player encounters the entity before the ravine.
+        # A single random draw determines which (if any) entity is linked, ensuring
+        # seeds and mines never appear before the same ravine.
+        if self._level_count > 0:
+            ravine_linked_seed = self._level_ravine_linked_seed[level_idx]
+            ravine_linked_mine = self._level_ravine_linked_mine[level_idx]
+        else:
+            ravine_linked_seed = jnp.array(False, dtype=jnp.bool_)
+            ravine_linked_mine = jnp.array(False, dtype=jnp.bool_)
+
+        link_roll = jax.random.uniform(rng_link)
+        seed_threshold = jnp.float32(consts.RAVINE_SEED_LINK_PROB)
+        mine_threshold = jnp.float32(consts.RAVINE_SEED_LINK_PROB + consts.RAVINE_MINE_LINK_PROB)
+
+        should_link_seed = ravine_linked_seed & (link_roll < seed_threshold)
+        should_link_mine = ravine_linked_mine & (link_roll >= seed_threshold) & (link_roll < mine_threshold)
+
+        # Seed: schedule it RAVINE_SEED_AHEAD_SCROLL_STEPS before the next ravine spawns.
+        # next_spawn_step is the scrolling step at which the NEXT ravine will appear;
+        # the seed should spawn that many steps earlier (i.e. arrive at the player ahead of it).
+        linked_seed_scroll_step = next_spawn_step - jnp.int32(consts.RAVINE_SEED_AHEAD_SCROLL_STEPS)
+        new_next_seed_spawn_scroll_step = jnp.where(
+            should_spawn & should_link_seed,
+            linked_seed_scroll_step,
+            state.next_seed_spawn_scroll_step,
+        )
+
+        # Mine: same idea but using step_counter (mine timer is step-based, not scroll-based).
+        # When should_spawn is True, next_spawn_step = scrolling_step_counter + interval,
+        # so remaining is always positive (== the drawn interval).  The approximation
+        # remaining_scroll_steps ≈ remaining_step_counter_steps holds because the player
+        # is continuously scrolling when running; any small deviation is not significant.
+        remaining_scroll_to_next_ravine = next_spawn_step - state.scrolling_step_counter
+        mine_steps_from_now = remaining_scroll_to_next_ravine - jnp.int32(consts.RAVINE_MINE_AHEAD_SCROLL_STEPS)
+        # Only schedule if there is enough lead time to appear ahead of the ravine
+        enough_lead_time = mine_steps_from_now > jnp.int32(0)
+        should_link_mine = should_link_mine & enough_lead_time
+        linked_mine_step = state.step_counter + mine_steps_from_now
+        new_next_landmine_spawn_step = jnp.where(
+            should_spawn & should_link_mine,
+            linked_mine_step,
+            state.next_landmine_spawn_step,
+        )
+
         return state._replace(
             ravines=jnp.where(should_spawn, spawned_ravines, updated_ravines),
             next_ravine_spawn_scroll_step=jnp.where(should_spawn, next_spawn_step, state.next_ravine_spawn_scroll_step),
+            next_seed_spawn_scroll_step=new_next_seed_spawn_scroll_step,
+            next_landmine_spawn_step=new_next_landmine_spawn_step,
             rng=rng_after,
         )
 
@@ -2219,7 +2326,8 @@ class JaxRoadRunner(
         return self._initialize_spawn_timers(reset_state, level_idx)
 
     def _check_level_completion(self, state: RoadRunnerState) -> RoadRunnerState:
-        target_distance = self.consts.LEVEL_COMPLETE_SCROLL_DISTANCE
+        level_idx = self._get_level_index(state)
+        target_distance = self._level_scroll_distances[level_idx]
         level_complete = state.scrolling_step_counter >= target_distance
         max_level_index = max(self._level_count - 1, 0)
         has_next_level = state.current_level < max_level_index
@@ -2432,6 +2540,7 @@ class JaxRoadRunner(
             heights = self._dynamic_road_heights[level_idx]
             interval = self._dynamic_road_intervals[level_idx]
             trans_len = self._dynamic_road_transition_lengths[level_idx]
+            scroll_offset = self._dynamic_road_scroll_offsets[level_idx]
 
             # Get dynamic height if enabled
             # Use scroll_pos * PLAYER_MOVE_SPEED to match rendering speed
@@ -2443,6 +2552,7 @@ class JaxRoadRunner(
             collision_world_x = (
                 state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED
                 + (static_road_width - 1 - player_road_offset)
+                + scroll_offset
             )
             dynamic_height, _, _ = _get_dynamic_road_height(
                 collision_world_x,
@@ -2485,6 +2595,7 @@ class JaxRoadRunner(
             heights = self._dynamic_road_heights[level_idx]
             interval = self._dynamic_road_intervals[level_idx]
             trans_len = self._dynamic_road_transition_lengths[level_idx]
+            scroll_offset = self._dynamic_road_scroll_offsets[level_idx]
 
             # Map screen X to world X conceptually used for road generation
             # Rendering: world_scroll + (road_width - 1 - col_idx)
@@ -2498,6 +2609,7 @@ class JaxRoadRunner(
             world_x = (
                 state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED
                 + (static_road_width - 1 - x)
+                + scroll_offset
             )
 
             dynamic_height, _, _ = _get_dynamic_road_height(
@@ -2673,7 +2785,10 @@ class RoadRunnerRenderer(JAXGameRenderer):
             1: "sign_this_way",
             2: "sign_birdseed",
             3: "sign_cars_ahead",
-            4: "sign_exit"
+            4: "sign_exit",
+            5: "tumbleweed",
+            6: "sign_acme_mines",
+            7: "sign_steel_shot",
         }
 
         # Use injected config if provided, else default
@@ -2719,7 +2834,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
             self._dynamic_road_enabled,
             self._dynamic_road_heights,
             self._dynamic_road_intervals,
-            self._dynamic_road_transition_lengths
+            self._dynamic_road_transition_lengths,
+            self._dynamic_road_scroll_offsets
         ) = _build_dynamic_road_config_arrays(levels)
 
         # Pre-calculate unique road dimensions for rendering optimization
@@ -2936,6 +3052,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "sign_birdseed", "type": "single", "file": "sign_birdseed.npy"},
             {"name": "sign_cars_ahead", "type": "single", "file": "sign_cars_ahead.npy"},
             {"name": "sign_exit", "type": "single", "file": "sign_exit.npy"},
+            {"name": "sign_acme_mines", "type": "single", "file": "sign_acme_mines.npy"},
+            {"name": "sign_steel_shot", "type": "single", "file": "sign_steel_shot.npy"},
             {"name": "canon", "type": "single", "file": "canon.npy"},
             {"name": "bullet", "type": "single", "file": "bullet.npy"},
             # Offramp sprites
@@ -3299,6 +3417,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
             height_b = heights_config[1]
             interval = self._dynamic_road_intervals[level_idx]
             trans_len = self._dynamic_road_transition_lengths[level_idx]
+            dynamic_scroll_offset = self._dynamic_road_scroll_offsets[level_idx]
 
             # For dynamic roads, render per-column based on world position
             def render_dynamic_road(c):
@@ -3306,7 +3425,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
                 # Calculate world x for each column
                 world_scroll = state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED
                 col_indices = jnp.arange(scaled_static_width, dtype=jnp.int32)
-                world_x = world_scroll + (scaled_static_width - 1 - col_indices)
+                world_x = world_scroll + (scaled_static_width - 1 - col_indices) + dynamic_scroll_offset
 
                 dynamic_height, _, _ = _get_dynamic_road_height(
                     world_x,
