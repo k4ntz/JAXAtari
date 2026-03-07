@@ -361,17 +361,17 @@ RoadRunner_Level_4 = LevelConfig(
     # ~7 cannons over 1500 scroll steps → avg 215 steps between cannons
     cannon_spawn_config=(150, 280),
     # Fixed cannon positions flanking each offramp.
-    # Pattern per offramp: right-facing cannon → split → bridges → merge → left-facing cannon
+    # Pattern per offramp: left-facing cannon → split → bridges → merge → right-facing cannon
     # Each position is ~10 scroll steps before scroll_start / after scroll_end.
     cannon_scroll_steps=(
-        120,   # Right-facing cannon before offramp 1 split  (scroll_start=130)
-        345,   # Left-facing cannon after offramp 1 merge    (scroll_end=335)
-        535,   # Right-facing cannon before offramp 2 split  (scroll_start=545)
-        760,   # Left-facing cannon after offramp 2 merge    (scroll_end=750)
-        845,   # Right-facing cannon before offramp 3 split  (scroll_start=855)
-        1070,  # Left-facing cannon after offramp 3 merge    (scroll_end=1060)
-        1180,  # Right-facing cannon before offramp 4 split  (scroll_start=1190)
-        1405,  # Left-facing cannon after offramp 4 merge    (scroll_end=1395)
+        120,   # Left-facing cannon before offramp 1 split   (scroll_start=130)
+        345,   # Right-facing cannon after offramp 1 merge   (scroll_end=335)
+        535,   # Left-facing cannon before offramp 2 split   (scroll_start=545)
+        760,   # Right-facing cannon after offramp 2 merge   (scroll_end=750)
+        845,   # Left-facing cannon before offramp 3 split   (scroll_start=855)
+        1070,  # Right-facing cannon after offramp 3 merge   (scroll_end=1060)
+        1180,  # Left-facing cannon before offramp 4 split   (scroll_start=1190)
+        1405,  # Right-facing cannon after offramp 4 merge   (scroll_end=1395)
     ),
     render_road_stripes=True,
     # Four offramps, each sandwiched between left-facing and right-facing cannons.
@@ -2274,9 +2274,9 @@ class JaxRoadRunner(
                 self.consts.CANNON_SPAWN_MIN_INTERVAL, dtype=jnp.int32
             ),
             cannon_has_fired=jnp.array(False, dtype=jnp.bool_),
-            # Start mirrored=True so the first toggle (~True → False) produces a
-            # right-facing cannon, matching the pre-split position in the offramp pattern.
-            cannon_is_mirrored=jnp.array(True, dtype=jnp.bool_),
+            # Start mirrored=False so the first toggle (~False → True) produces a
+            # left-facing cannon, matching the pre-split position in the offramp pattern.
+            cannon_is_mirrored=jnp.array(False, dtype=jnp.bool_),
             bullet_x=jnp.array(-1, dtype=jnp.int32),
             bullet_y=jnp.array(-1, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
@@ -2439,8 +2439,8 @@ class JaxRoadRunner(
             cannon_y=jnp.array(-1, dtype=jnp.int32),
             next_cannon_spawn_step=jnp.array(0, dtype=jnp.int32),
             cannon_has_fired=jnp.array(False, dtype=jnp.bool_),
-            # Start mirrored=True so first toggle gives right-facing (pre-split pattern)
-            cannon_is_mirrored=jnp.array(True, dtype=jnp.bool_),
+            # Start mirrored=False so first toggle gives left-facing (pre-split pattern)
+            cannon_is_mirrored=jnp.array(False, dtype=jnp.bool_),
             bullet_x=jnp.array(-1, dtype=jnp.int32),
             bullet_y=jnp.array(-1, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
