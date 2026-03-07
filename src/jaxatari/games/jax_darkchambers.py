@@ -16,14 +16,86 @@ def _get_default_asset_config():
         # Background (could be procedural or a single tile)
         {"name": "background", "type": "background", "file": "background.npy"},
 
-        # Player sprite
-        {"name": "player", "type": "single", "file": "player_1.npy"},
+        # Player animation frames per direction
+        # right(×3): p1-3  |  left(×3): p4-6  |  up(×5): p7-11  |  down(×5): p12-16
+        {"name": "player_r0", "type": "single", "file": "p1.npy"},
+        {"name": "player_r1", "type": "single", "file": "p2.npy"},
+        {"name": "player_r2", "type": "single", "file": "p3.npy"},
+        {"name": "player_l0", "type": "single", "file": "p4.npy"},
+        {"name": "player_l1", "type": "single", "file": "p5.npy"},
+        {"name": "player_l2", "type": "single", "file": "p6.npy"},
+        {"name": "player_u0", "type": "single", "file": "p7.npy"},
+        {"name": "player_u1", "type": "single", "file": "p8.npy"},
+        {"name": "player_u2", "type": "single", "file": "p9.npy"},
+        {"name": "player_u3", "type": "single", "file": "p10.npy"},
+        {"name": "player_u4", "type": "single", "file": "p11.npy"},
+        {"name": "player_d0", "type": "single", "file": "p12.npy"},
+        {"name": "player_d1", "type": "single", "file": "p13.npy"},
+        {"name": "player_d2", "type": "single", "file": "p14.npy"},
+        {"name": "player_d3", "type": "single", "file": "p15.npy"},
+        {"name": "player_d4", "type": "single", "file": "p16.npy"},
 
-        # Enemy sprites
-        {"name": "zombie", "type": "single", "file": "green_1.npy"},      # ENEMY_ZOMBIE = 1
-        {"name": "wraith", "type": "single", "file": "ghost_1.npy"},      # ENEMY_WRAITH = 2
-        {"name": "skeleton", "type": "single", "file": "skel_1.npy"},     # ENEMY_SKELETON = 3
-        {"name": "wizard", "type": "single", "file": "wizard_1.npy"},     # ENEMY_WIZARD = 4
+        # Zombie animation frames per direction                             # ENEMY_ZOMBIE = 1
+        # right(×3): green_1-3  |  down(×5): green_4-8  |  up(×3): green_9-11  |  left(×3): green_12-14
+        {"name": "green_r0", "type": "single", "file": "green_1.npy"},
+        {"name": "green_r1", "type": "single", "file": "green_2.npy"},
+        {"name": "green_r2", "type": "single", "file": "green_3.npy"},
+        {"name": "green_d0", "type": "single", "file": "green_4.npy"},
+        {"name": "green_d1", "type": "single", "file": "green_5.npy"},
+        {"name": "green_d2", "type": "single", "file": "green_6.npy"},
+        {"name": "green_d3", "type": "single", "file": "green_7.npy"},
+        {"name": "green_d4", "type": "single", "file": "green_8.npy"},
+        {"name": "green_u0", "type": "single", "file": "green_9.npy"},
+        {"name": "green_u1", "type": "single", "file": "green_10.npy"},
+        {"name": "green_u2", "type": "single", "file": "green_11.npy"},
+        {"name": "green_l0", "type": "single", "file": "green_12.npy"},
+        {"name": "green_l1", "type": "single", "file": "green_13.npy"},
+        {"name": "green_l2", "type": "single", "file": "green_14.npy"},
+        # Ghost (wraith) animation frames per direction   # ENEMY_WRAITH = 2
+        # right(×2): ghost_1,ghost_2  |  left(×2): ghost_4,ghost_5
+        # down(×3):  ghost_6-8        |  up(×3):   ghost_9-11
+        {"name": "ghost_r0", "type": "single", "file": "ghost_1.npy"},
+        {"name": "ghost_r1", "type": "single", "file": "ghost_2.npy"},
+        {"name": "ghost_l0", "type": "single", "file": "ghost_4.npy"},
+        {"name": "ghost_l1", "type": "single", "file": "ghost_5.npy"},
+        {"name": "ghost_d0", "type": "single", "file": "ghost_6.npy"},
+        {"name": "ghost_d1", "type": "single", "file": "ghost_7.npy"},
+        {"name": "ghost_d2", "type": "single", "file": "ghost_8.npy"},
+        {"name": "ghost_u0", "type": "single", "file": "ghost_9.npy"},
+        {"name": "ghost_u1", "type": "single", "file": "ghost_10.npy"},
+        {"name": "ghost_u2", "type": "single", "file": "ghost_11.npy"},
+        # Skeleton animation frames per direction                          # ENEMY_SKELETON = 3
+        # right(×3): skel_4-6  |  down(×3): skel_7-9  |  left(×3): skel_1-3  |  up(×3): skel_10-12
+        {"name": "skel_r0", "type": "single", "file": "skel_4.npy"},
+        {"name": "skel_r1", "type": "single", "file": "skel_5.npy"},
+        {"name": "skel_r2", "type": "single", "file": "skel_6.npy"},
+        {"name": "skel_d0", "type": "single", "file": "skel_7.npy"},
+        {"name": "skel_d1", "type": "single", "file": "skel_8.npy"},
+        {"name": "skel_d2", "type": "single", "file": "skel_9.npy"},
+        {"name": "skel_l0", "type": "single", "file": "skel_1.npy"},
+        {"name": "skel_l1", "type": "single", "file": "skel_2.npy"},
+        {"name": "skel_l2", "type": "single", "file": "skel_3.npy"},
+        {"name": "skel_u0", "type": "single", "file": "skel_10.npy"},
+        {"name": "skel_u1", "type": "single", "file": "skel_11.npy"},
+        {"name": "skel_u2", "type": "single", "file": "skel_12.npy"},
+        # Wizard animation frames per direction                            # ENEMY_WIZARD = 4
+        # right(×3): wizard_1-3  |  down(×5): wizard_4-8  |  up(×5): wizard_9-13  |  left(×3): wizard_14-16
+        {"name": "wizard_r0", "type": "single", "file": "wizard_1.npy"},
+        {"name": "wizard_r1", "type": "single", "file": "wizard_2.npy"},
+        {"name": "wizard_r2", "type": "single", "file": "wizard_3.npy"},
+        {"name": "wizard_d0", "type": "single", "file": "wizard_4.npy"},
+        {"name": "wizard_d1", "type": "single", "file": "wizard_5.npy"},
+        {"name": "wizard_d2", "type": "single", "file": "wizard_6.npy"},
+        {"name": "wizard_d3", "type": "single", "file": "wizard_7.npy"},
+        {"name": "wizard_d4", "type": "single", "file": "wizard_8.npy"},
+        {"name": "wizard_u0", "type": "single", "file": "wizard_9.npy"},
+        {"name": "wizard_u1", "type": "single", "file": "wizard_10.npy"},
+        {"name": "wizard_u2", "type": "single", "file": "wizard_11.npy"},
+        {"name": "wizard_u3", "type": "single", "file": "wizard_12.npy"},
+        {"name": "wizard_u4", "type": "single", "file": "wizard_13.npy"},
+        {"name": "wizard_l0", "type": "single", "file": "wizard_14.npy"},
+        {"name": "wizard_l1", "type": "single", "file": "wizard_15.npy"},
+        {"name": "wizard_l2", "type": "single", "file": "wizard_16.npy"},
         # Note: No sprite for ENEMY_GRIM_REAPER = 5 yet, will use colored box
 
         # Item sprites
@@ -137,6 +209,35 @@ SPAWNER_HEALTH = 3  # Takes 3 hits to destroy
 SPAWNER_SPAWN_INTERVAL = 150  # Spawn enemy every 150 steps
 
 ENEMY_COLLISION_MARGIN = 1
+ENEMY_MOVE_EVERY = 2  # Enemies move every N game steps (used for movement throttle and animation timing)
+
+# Directional sprite index lookup tables.
+# Sprite order stored in PLAYER_DIRECTIONAL_MASKS / ENEMY_DIRECTIONAL_MASKS:
+#   index 0 = right (_1), 1 = down (_2), 2 = left (_3), 3 = up (_4)
+#
+# player_direction: 0=right, 1=left, 2=up, 3=down  →  sprite index
+PLAYER_DIR_TO_SPRITE = jnp.array([0, 2, 3, 1], dtype=jnp.int32)
+# Number of animation frames per player direction (sprite index order: 0=right, 1=down, 2=left, 3=up)
+PLAYER_NUM_FRAMES = jnp.array([3, 5, 3, 5], dtype=jnp.int32)
+# Default (idle) frame index per player sprite direction (0=right, 1=down, 2=left, 3=up)
+# right-idle=p1(idx 0), down-idle=p12(idx 0), left-idle=p6(idx 2), up-idle=p9(idx 2)
+PLAYER_IDLE_FRAME = jnp.array([0, 0, 2, 2], dtype=jnp.int32)
+#
+# enemy_dir is an index into DIR8 (0=E, 1=NE, 2=N, 3=NW, 4=W, 5=SW, 6=S, 7=SE)
+# Diagonals snap to the dominant axis (horizontal wins).
+DIR8_TO_SPRITE = jnp.array([0, 0, 3, 2, 2, 2, 1, 0], dtype=jnp.int32)
+
+# How many game steps between animation frame advances for all entities (higher = slower)
+ANIM_EVERY = 10
+
+# Number of animation frames per ghost direction (sprite index order: 0=right, 1=down, 2=left, 3=up)
+GHOST_NUM_FRAMES = jnp.array([2, 3, 2, 3], dtype=jnp.int32)
+# Number of animation frames per wizard direction (0=right, 1=down, 2=left, 3=up)
+WIZARD_NUM_FRAMES = jnp.array([3, 5, 3, 5], dtype=jnp.int32)
+# Number of animation frames per skeleton direction (0=right, 1=down, 2=left, 3=up)
+SKELETON_NUM_FRAMES = jnp.array([3, 3, 3, 3], dtype=jnp.int32)
+# Number of animation frames per zombie direction (0=right, 1=down, 2=left, 3=up)
+ZOMBIE_NUM_FRAMES = jnp.array([3, 5, 3, 3], dtype=jnp.int32)
 
 CHASE_RADIUS = 80          # pixels
 IDLE_SPEED = 1              # pixels per step (keep <= 1 for fewer collision issues)
@@ -251,7 +352,8 @@ class DarkChambersState(NamedTuple):
     player_x: chex.Array
     player_y: chex.Array
     player_direction: chex.Array  # 0=right, 1=left, 2=up, 3=down
-    
+    player_moving: chex.Array     # 1 if a directional button is held this step, else 0
+
     enemy_positions: chex.Array  # shape: (NUM_ENEMIES, 2)
     enemy_types: chex.Array      # shape: (NUM_ENEMIES,) - 1=zombie, 2=wraith, 3=skeleton, 4=wizard, 5=grim_reaper
     enemy_active: chex.Array     # shape: (NUM_ENEMIES,) - 1=alive, 0=dead
@@ -471,30 +573,134 @@ class DarkChambersRenderer(JAXGameRenderer):
             else:
                 return mask
 
-        # Ensure player sprite visually matches gameplay size by upscaling if needed
-        player_mask = self.SHAPE_MASKS.get("player")
-        if player_mask is not None:
-            target_w = int(self.consts.PLAYER_WIDTH)
-            target_h = int(self.consts.PLAYER_HEIGHT)
-            self.PLAYER_SCALED_MASK = _scale_mask(player_mask, target_h, target_w)
-            print(f"Scaled player to {target_h}×{target_w}")
-        else:
-            # Fallback: use original player mask without scaling
-            self.PLAYER_SCALED_MASK = self.SHAPE_MASKS.get("player")
+        # Player directional animation: (4, 5, H, W) — max 5 frames, pad shorter directions
+        # Sprite index order: 0=right, 1=down, 2=left, 3=up
+        target_w = int(self.consts.PLAYER_WIDTH)
+        target_h = int(self.consts.PLAYER_HEIGHT)
+        _zero_player = jnp.zeros((target_h, target_w), dtype=jnp.int32)
+        player_dir_frame_names = [
+            ["player_r0", "player_r1", "player_r2", "player_r2", "player_r2"],  # right: 3 frames, pad to 5
+            ["player_d0", "player_d1", "player_d2", "player_d3", "player_d4"],  # down:  5 frames
+            ["player_l0", "player_l1", "player_l2", "player_l2", "player_l2"],  # left:  3 frames, pad to 5
+            ["player_u0", "player_u1", "player_u2", "player_u3", "player_u4"],  # up:    5 frames
+        ]
+        player_dirs = []
+        for dir_names in player_dir_frame_names:
+            dir_frames = [
+                _scale_mask(self.SHAPE_MASKS[n], target_h, target_w)
+                if self.SHAPE_MASKS.get(n) is not None else _zero_player
+                for n in dir_names
+            ]
+            player_dirs.append(jnp.stack(dir_frames))  # (5, H, W)
+        self.PLAYER_ANIM_FRAMES = jnp.stack(player_dirs)  # (4, 5, H, W)
+        print(f"Built player animation frames: {self.PLAYER_ANIM_FRAMES.shape}")
+        # Legacy aliases
+        self.PLAYER_DIRECTIONAL_MASKS = None
+        self.PLAYER_SCALED_MASK = player_dirs[0][0]
 
-        # Scale enemy sprites to match gameplay size (10×20)
+        # Scale enemy sprites to match gameplay size (10×20) and stack 4 directional frames.
+        # Sprite order per enemy: 0=right, 1=down, 2=left, 3=up
         target_enemy_w = int(self.consts.ENEMY_WIDTH)
         target_enemy_h = int(self.consts.ENEMY_HEIGHT)
-        
-        self.ENEMY_SCALED_MASKS = {}
-        for enemy_name in ["zombie", "wraith", "skeleton", "wizard"]:
-            enemy_mask = self.SHAPE_MASKS.get(enemy_name)
-            if enemy_mask is not None:
-                self.ENEMY_SCALED_MASKS[enemy_name] = _scale_mask(enemy_mask, target_enemy_h, target_enemy_w)
-                print(f"Scaled {enemy_name} to {target_enemy_h}×{target_enemy_w}")
-            else:
-                self.ENEMY_SCALED_MASKS[enemy_name] = None
-        
+
+        self.ENEMY_SCALED_MASKS = {}        # legacy single-sprite dict (frame 0)
+        self.ENEMY_DIRECTIONAL_MASKS = {}   # (4, H, W) stacked dict; None for enemies with custom animation
+
+        # All enemy types use custom multi-frame animation — no generic 4-dir path needed
+
+        # Ghost (wraith) has custom multi-frame animation per direction.
+        # Build GHOST_ANIM_FRAMES: shape (4, 3, H, W)
+        # Direction order: 0=right, 1=down, 2=left, 3=up
+        # Frame counts:    right=2, down=3, left=2, up=3  (padded to max 3 with last frame)
+        _zero_frame = jnp.zeros((target_enemy_h, target_enemy_w), dtype=jnp.int32)
+        ghost_dir_frame_names = [
+            ["ghost_r0", "ghost_r1", "ghost_r1"],  # right: 2 frames, pad 3rd
+            ["ghost_d0", "ghost_d1", "ghost_d2"],  # down:  3 frames
+            ["ghost_l0", "ghost_l1", "ghost_l1"],  # left:  2 frames, pad 3rd
+            ["ghost_u0", "ghost_u1", "ghost_u2"],  # up:    3 frames
+        ]
+        ghost_dirs = []
+        for dir_names in ghost_dir_frame_names:
+            dir_frames = []
+            for name in dir_names:
+                m = self.SHAPE_MASKS.get(name)
+                dir_frames.append(_scale_mask(m, target_enemy_h, target_enemy_w) if m is not None else _zero_frame)
+            ghost_dirs.append(jnp.stack(dir_frames))  # (3, H, W)
+        self.GHOST_ANIM_FRAMES = jnp.stack(ghost_dirs)  # (4, 3, H, W)
+        print(f"Built ghost animation frames: {self.GHOST_ANIM_FRAMES.shape}")
+
+        # Ghost does not use the generic directional mask path
+        self.ENEMY_DIRECTIONAL_MASKS["wraith"] = None
+        self.ENEMY_SCALED_MASKS["wraith"] = None
+
+        # Wizard directional animation: (4, 5, H, W) — max 5 frames, pad shorter directions
+        # Direction order: 0=right, 1=down, 2=left, 3=up
+        wizard_dir_frame_names = [
+            ["wizard_r0", "wizard_r1", "wizard_r2", "wizard_r2", "wizard_r2"],  # right: 3 frames, pad to 5
+            ["wizard_d0", "wizard_d1", "wizard_d2", "wizard_d3", "wizard_d4"],  # down:  5 frames
+            ["wizard_l0", "wizard_l1", "wizard_l2", "wizard_l2", "wizard_l2"],  # left:  3 frames, pad to 5
+            ["wizard_u0", "wizard_u1", "wizard_u2", "wizard_u3", "wizard_u4"],  # up:    5 frames
+        ]
+        wizard_dirs = []
+        for dir_names in wizard_dir_frame_names:
+            dir_frames = []
+            for name in dir_names:
+                m = self.SHAPE_MASKS.get(name)
+                dir_frames.append(_scale_mask(m, target_enemy_h, target_enemy_w) if m is not None else _zero_frame)
+            wizard_dirs.append(jnp.stack(dir_frames))  # (5, H, W)
+        self.WIZARD_ANIM_FRAMES = jnp.stack(wizard_dirs)  # (4, 5, H, W)
+        print(f"Built wizard animation frames: {self.WIZARD_ANIM_FRAMES.shape}")
+
+        # Wizard does not use the generic directional mask path
+        self.ENEMY_DIRECTIONAL_MASKS["wizard"] = None
+        self.ENEMY_SCALED_MASKS["wizard"] = None
+
+        # Skeleton directional animation: (4, 3, H, W) — 3 frames per direction, no padding needed
+        # Direction order: 0=right, 1=down, 2=left, 3=up
+        skel_dir_frame_names = [
+            ["skel_r0", "skel_r1", "skel_r2"],  # right
+            ["skel_d0", "skel_d1", "skel_d2"],  # down
+            ["skel_l0", "skel_l1", "skel_l2"],  # left
+            ["skel_u0", "skel_u1", "skel_u2"],  # up
+        ]
+        skel_dirs = []
+        for dir_names in skel_dir_frame_names:
+            dir_frames = [
+                _scale_mask(self.SHAPE_MASKS[n], target_enemy_h, target_enemy_w)
+                if self.SHAPE_MASKS.get(n) is not None else _zero_frame
+                for n in dir_names
+            ]
+            skel_dirs.append(jnp.stack(dir_frames))  # (3, H, W)
+        self.SKELETON_ANIM_FRAMES = jnp.stack(skel_dirs)  # (4, 3, H, W)
+        print(f"Built skeleton animation frames: {self.SKELETON_ANIM_FRAMES.shape}")
+
+        # Skeleton does not use the generic directional mask path
+        self.ENEMY_DIRECTIONAL_MASKS["skeleton"] = None
+        self.ENEMY_SCALED_MASKS["skeleton"] = None
+
+        # Zombie directional animation: (4, 5, H, W) — max 5 frames, pad shorter directions
+        # Direction order: 0=right, 1=down, 2=left, 3=up
+        zombie_dir_frame_names = [
+            ["green_r0", "green_r1", "green_r2", "green_r2", "green_r2"],  # right: 3 frames, pad to 5
+            ["green_d0", "green_d1", "green_d2", "green_d3", "green_d4"],  # down:  5 frames
+            ["green_l0", "green_l1", "green_l2", "green_l2", "green_l2"],  # left:  3 frames, pad to 5
+            ["green_u0", "green_u1", "green_u2", "green_u2", "green_u2"],  # up:    3 frames, pad to 5
+        ]
+        zombie_dirs = []
+        for dir_names in zombie_dir_frame_names:
+            dir_frames = [
+                _scale_mask(self.SHAPE_MASKS[n], target_enemy_h, target_enemy_w)
+                if self.SHAPE_MASKS.get(n) is not None else _zero_frame
+                for n in dir_names
+            ]
+            zombie_dirs.append(jnp.stack(dir_frames))  # (5, H, W)
+        self.ZOMBIE_ANIM_FRAMES = jnp.stack(zombie_dirs)  # (4, 5, H, W)
+        print(f"Built zombie animation frames: {self.ZOMBIE_ANIM_FRAMES.shape}")
+
+        # Zombie does not use the generic directional mask path
+        self.ENEMY_DIRECTIONAL_MASKS["zombie"] = None
+        self.ENEMY_SCALED_MASKS["zombie"] = None
+
 
         # Scale item sprites to 12×12 boxes for consistent rendering
         target_item_w = 12
@@ -1393,19 +1599,18 @@ class DarkChambersRenderer(JAXGameRenderer):
             color_id=self.UI_ID
         )
         
-        # Player (use scaled sprite, analogous to enemy rendering)
+        # Player (use directional sprite based on player_direction)
         player_screen_x = (state.player_x - cam_x).astype(jnp.int32)
         player_screen_y = (state.player_y - cam_y).astype(jnp.int32)
-        
-        # Render player sprite using same pattern as enemies
-        player_sprite = self.PLAYER_SCALED_MASK
-        has_player_sprite = player_sprite is not None
-        object_raster = jax.lax.cond(
-            has_player_sprite,
-            lambda r: self.jr.render_at_clipped(r, player_screen_x, player_screen_y, player_sprite),
-            lambda r: r,
-            object_raster
-        )
+
+        if self.PLAYER_ANIM_FRAMES is not None:
+            sprite_idx = PLAYER_DIR_TO_SPRITE[state.player_direction.astype(jnp.int32)]
+            idle_frame = PLAYER_IDLE_FRAME[sprite_idx]
+            anim_tick  = (state.step_counter // ANIM_EVERY).astype(jnp.int32)
+            num_frames = PLAYER_NUM_FRAMES[sprite_idx]
+            anim_frame = jnp.where(state.player_moving, anim_tick % num_frames, idle_frame)
+            player_sprite = self.PLAYER_ANIM_FRAMES[sprite_idx, anim_frame]
+            object_raster = self.jr.render_at_clipped(object_raster, player_screen_x, player_screen_y, player_sprite)
         
         # Enemies - use sprites for types 1-4, colored box for Grim Reaper (type 5)
         enemy_world_pos = state.enemy_positions.astype(jnp.int32)
@@ -1421,56 +1626,79 @@ class DarkChambersRenderer(JAXGameRenderer):
             _off
         )
         
-        # Render each enemy type using sprites (types 1-4)
+        # Pre-fetch directional sprite stacks for each enemy type (static at trace time)
+        zombie_anim_frames   = self.ZOMBIE_ANIM_FRAMES    # (4, 5, H, W)
+        ghost_anim_frames    = self.GHOST_ANIM_FRAMES     # (4, 3, H, W)
+        skeleton_anim_frames = self.SKELETON_ANIM_FRAMES  # (4, 3, H, W)
+        wizard_anim_frames   = self.WIZARD_ANIM_FRAMES    # (4, 5, H, W)
+
+        # Render each enemy type using directional sprites (types 1-4)
         def render_one_enemy(i, raster):
             ex = masked_enemy_pos[i, 0]
             ey = masked_enemy_pos[i, 1]
             enemy_type = state.enemy_types[i]
             is_active = enemy_active_mask[i]
-            
-            # Use render_at_clipped to handle partial visibility automatically
-            # No visibility check needed - render_at_clipped handles off-screen clipping
-            
-            # Type 1: Zombie
+
+            # Map 8-direction enemy_dir to 4 sprite indices (0=right,1=down,2=left,3=up)
+            dir_idx = DIR8_TO_SPRITE[state.enemy_dir[i].astype(jnp.int32)]
+
+            # Type 1: Zombie — multi-frame walking animation
             is_zombie = (enemy_type == 1) & is_active
-            zombie_sprite = self.ENEMY_SCALED_MASKS.get("zombie")
-            raster = jax.lax.cond(
-                is_zombie & (zombie_sprite is not None),
-                lambda r: self.jr.render_at_clipped(r, ex, ey, zombie_sprite),
-                lambda r: r,
-                raster
-            )
-            
-            # Type 2: Wraith
+            if zombie_anim_frames is not None:
+                anim_tick  = (state.step_counter // ANIM_EVERY).astype(jnp.int32)
+                num_frames = ZOMBIE_NUM_FRAMES[dir_idx]   # 3 or 5
+                anim_frame = anim_tick % num_frames
+                zombie_sprite = zombie_anim_frames[dir_idx, anim_frame]
+                raster = jax.lax.cond(
+                    is_zombie,
+                    lambda r: self.jr.render_at_clipped(r, ex, ey, zombie_sprite),
+                    lambda r: r,
+                    raster
+                )
+
+            # Type 2: Wraith (ghost) — multi-frame walking animation
             is_wraith = (enemy_type == 2) & is_active
-            wraith_sprite = self.ENEMY_SCALED_MASKS.get("wraith")
-            raster = jax.lax.cond(
-                is_wraith & (wraith_sprite is not None),
-                lambda r: self.jr.render_at_clipped(r, ex, ey, wraith_sprite),
-                lambda r: r,
-                raster
-            )
-            
-            # Type 3: Skeleton
+            if ghost_anim_frames is not None:
+                # Cycle animation frame based on enemy movement ticks
+                anim_tick  = (state.step_counter // ANIM_EVERY).astype(jnp.int32)
+                num_frames = GHOST_NUM_FRAMES[dir_idx]   # 2 or 3 depending on direction
+                anim_frame = anim_tick % num_frames
+                ghost_sprite = ghost_anim_frames[dir_idx, anim_frame]
+                raster = jax.lax.cond(
+                    is_wraith,
+                    lambda r: self.jr.render_at_clipped(r, ex, ey, ghost_sprite),
+                    lambda r: r,
+                    raster
+                )
+
+            # Type 3: Skeleton — multi-frame walking animation
             is_skeleton = (enemy_type == 3) & is_active
-            skeleton_sprite = self.ENEMY_SCALED_MASKS.get("skeleton")
-            raster = jax.lax.cond(
-                is_skeleton & (skeleton_sprite is not None),
-                lambda r: self.jr.render_at_clipped(r, ex, ey, skeleton_sprite),
-                lambda r: r,
-                raster
-            )
-            
-            # Type 4: Wizard
+            if skeleton_anim_frames is not None:
+                anim_tick  = (state.step_counter // ANIM_EVERY).astype(jnp.int32)
+                num_frames = SKELETON_NUM_FRAMES[dir_idx]   # always 3
+                anim_frame = anim_tick % num_frames
+                skel_sprite = skeleton_anim_frames[dir_idx, anim_frame]
+                raster = jax.lax.cond(
+                    is_skeleton,
+                    lambda r: self.jr.render_at_clipped(r, ex, ey, skel_sprite),
+                    lambda r: r,
+                    raster
+                )
+
+            # Type 4: Wizard — multi-frame walking animation
             is_wizard = (enemy_type == 4) & is_active
-            wizard_sprite = self.ENEMY_SCALED_MASKS.get("wizard")
-            raster = jax.lax.cond(
-                is_wizard & (wizard_sprite is not None),
-                lambda r: self.jr.render_at_clipped(r, ex, ey, wizard_sprite),
-                lambda r: r,
-                raster
-            )
-            
+            if wizard_anim_frames is not None:
+                anim_tick  = (state.step_counter // ANIM_EVERY).astype(jnp.int32)
+                num_frames = WIZARD_NUM_FRAMES[dir_idx]   # 3 or 5
+                anim_frame = anim_tick % num_frames
+                wizard_sprite = wizard_anim_frames[dir_idx, anim_frame]
+                raster = jax.lax.cond(
+                    is_wizard,
+                    lambda r: self.jr.render_at_clipped(r, ex, ey, wizard_sprite),
+                    lambda r: r,
+                    raster
+                )
+
             return raster
         
         # Render all enemies with sprites
@@ -2409,6 +2637,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             player_x=spawn_x,
             player_y=spawn_y,
             player_direction=jnp.array(0, dtype=jnp.int32),
+            player_moving=jnp.array(0, dtype=jnp.int32),
             enemy_positions=enemy_positions,
             enemy_types=enemy_types,
             enemy_active=enemy_active,
@@ -2526,6 +2755,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                    jnp.where((a == Action.RIGHT) | (a == Action.UPRIGHT) | (a == Action.DOWNRIGHT), effective_speed, 0))
             dy = jnp.where((a == Action.UP) | (a == Action.UPRIGHT) | (a == Action.UPLEFT), -effective_speed,
                    jnp.where((a == Action.DOWN) | (a == Action.DOWNRIGHT) | (a == Action.DOWNLEFT), effective_speed, 0))
+            player_moving = jnp.where((dx != 0) | (dy != 0), 1, 0).astype(jnp.int32)
             
             # --- SLOW DOWN PLAYER MOVEMENT ---
             PLAYER_MOVE_EVERY = 1  # 1=normal, 2=half speed, 3=1/3 speed, etc.
@@ -3180,7 +3410,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
 
             # --- Existing slow-down gate ---
-            ENEMY_MOVE_EVERY = 2
             enemy_move_tick = (state.step_counter % ENEMY_MOVE_EVERY) == 0
             desired_step = jnp.where(enemy_move_tick, desired_step, jnp.zeros_like(desired_step))
 
@@ -4101,6 +4330,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 player_x=final_x,
                 player_y=final_y,
                 player_direction=new_direction,
+                player_moving=player_moving,
                 enemy_types=final_enemy_types_after_level,
                 enemy_active=safe_enemy_active,
                 wizard_shoot_timers=final_wizard_timers_after_level,
