@@ -1,6 +1,6 @@
-from collections import deque
-from functools import partial
 from typing import NamedTuple, Tuple
+from functools import partial
+from collections import deque
 import os
 
 import chex
@@ -91,11 +91,14 @@ class MsPacmanConstants(NamedTuple):
         (37, 43),   # Inky -> bottom-right
         (2, 43),    # Sue -> bottom-left
     )
+    # Level selection and layouts
+    level: int = 0
+    maze_layouts: Tuple[Tuple[str, ...], ...] = ()
+    # Kept for backward compat; when set, level 0 uses this
     maze_layout: Tuple[str, ...] = ()
 
-# Create default constants instance
-DEFAULT_MSPACMAN_CONSTANTS = MsPacmanConstants(
-    maze_layout=(
+# Level layouts
+maze_layout_level1 = (
         "1111111111111111111111111111111111111111",
         "1000000000100000000000000000010000000001",
         "1023232320102323232332323232010232323201",
@@ -110,7 +113,7 @@ DEFAULT_MSPACMAN_CONSTANTS = MsPacmanConstants(
         "1110201020111020111111110201110201020111",
         "1110301030111030111111110301110301030111",
         "0000301030000030000000000300000301030000",
-        "3323201023232323232G32323232323201023233",
+        "3323201023232323232332323232323201023233",
         "0000301000000030000000000300000001030000",
         "1110301111111030111111110301111111030111",
         "1110201111111020100000010201111111020111",
@@ -140,6 +143,158 @@ DEFAULT_MSPACMAN_CONSTANTS = MsPacmanConstants(
         "1023232323232323232332323232323232323201",
         "1000000000000000000000000000000000000001",
         "1111111111111111111111111111111111111111",
+    )
+
+maze_layout_level2 = (
+        "1111111111111111111111111111111111111111",
+        "1000000000000000000000000000000000000001",
+        "1023232323232323232332323232323232323201",
+        "1030000000003000000000000003000000000301",
+        "1030111111103011111001111103011111110301",
+        "10S0111111102011111001111102011111110S01",
+        "1030111111103011111001111103011111110301",
+        "1030001000003010000000000103000001000301",
+        "1023201023232010232323320102323201023201",
+        "1000301030003010300000030103000301030001",
+        "1110301030103010301111030103010301030111",
+        "1110201020102010201111020102010201020111",
+        "1110301030103010301111030103010301030111",
+        "1110301030103000300000030003010301030111",
+        "1110201020102323232332323232010201020111",
+        "1110301030100030000000000300010301030111",
+        "0000300030111030111111110301110300030000",
+        "3323232320111020100000010201110232323233",
+        "0030000000111030100000010301110300000300",
+        "1030111000000030100000010300000301110301",
+        "1020111023232320100000010232323201110201",
+        "1030111030000030100000010300000301110301",
+        "1030111030111030100000010301110301110301",
+        "1020111020111020111111110201110201110201",
+        "1030111030111030111111110301110301110301",
+        "1030111030100030000000000300010301110301",
+        "1020111020102323232P32323232010201110201",
+        "1030111030103000000000000003010301110301",
+        "1030000030003011111111111103000300000301",
+        "1023232323232011111111111102323232323201",
+        "1000003000003011111111111103000003000001",
+        "1111103011103010000000000103011103011111",
+        "1111102011102010232332320102011102011111",
+        "1111103011103010300000000103011103011111",
+        "1000003000103000301001000003010003000001",
+        "1023232320102323201001023232010202323201",
+        "1030000030103000001001000003010300000301",
+        "1030111030103011111001111103010301110301",
+        "10S0111020102011111001111102010201110S01",
+        "1030111030103011111001111103010301110301",
+        "0030000030103000000000000003010300000300",
+        "0023232320102323232332323232010232323200",
+        "0000000000100000000000000000010000000000",
+        "1111111111111111111111111111111111111111",
+    )
+
+maze_layout_level3 = (
+        "1111111111111111111111111111111111111111",
+        "1000000000000010000000000100000000000001",
+        "1023232323232010232332320102323232323201",
+        "1030000030003010300000030103000300000301",
+        "1030111030103000301111030003010301110301",
+        "10S0111020102323201111023232010201110S01",
+        "1030111030103000301111030003010301110301",
+        "1030000030103010300000030103010300000301",
+        "1023232320102010232332320102010232323201",
+        "1000000000103010000000000103010000000001",
+        "1111100011103011111001111103011100011111",
+        "1111100011102011111001111102011100011111",
+        "1111100011103011111001111103011100011111",
+        "1000000000003000000000000003000000000001",
+        "1023232323232323232332323232323232323201",
+        "1030000030000030000000000300000300000301",
+        "1030111030111030111111110301110301110301",
+        "1020111020111020100000010201110201110201",
+        "1030111030111030100000010301110301110301",
+        "1030100030001030100000010301000300010301",
+        "1020102323201020100000010201023232010201",
+        "1030103000301030100000010301030003010301",
+        "1030103010301030100000010301030103010301",
+        "1020102010201020111111110201020102010201",
+        "1030103010301030111111110301030103010301",
+        "0030003010300030000000000300030103000300",
+        "3323232010232323232P32323232320102323233",
+        "0000003010003000300000030003000103000000",
+        "1111103011103010301111030103011103011111",
+        "1111102011102010201111020102011102011111",
+        "1111103011103010301111030103011103011111",
+        "1000003000003010300000030103000003000001",
+        "1023232323232010232332320102323232323201",
+        "1030003000003010300000030103000003000301",
+        "1030103011103000301111030003011103010301",
+        "1020102011102323201111023232011102010201",
+        "1030103011103000301111030003011103010301",
+        "1030103011103010301111030103011103010301",
+        "1020102011102010201111020102011102010201",
+        "1030103011103010301111030103011103010301",
+        "1030003000003010300000030103000003000301",
+        "1023232323232010232332320102323232323201",
+        "1000000000000010000000000100000000000001",
+        "1111111111111111111111111111111111111111",
+    )
+
+maze_layout_level4 = (
+        "1111111111111111111111111111111111111111",
+        "1000000000000000000000000000000000000001",
+        "1023232323232323232332323232323232323201",
+        "1030003000003000000000000003000003000301",
+        "1030103011103011111111111103011103010301",
+        "10S0102011102011111111111102011102010S01",
+        "1030103011103011111111111103011103010301",
+        "1030103000003010000000000103000003010301",
+        "1020102323232010232332320102323232010201",
+        "1030100030003010300000030103000300010301",
+        "1030111030103010301111030103010301110301",
+        "1020111020102010201111020102010201110201",
+        "1030111030103010301111030103010301110301",
+        "1030000030103000300000030003010300000301",
+        "1023232320102323232332323232010232323201",
+        "1000300030100030000000000300010300030001",
+        "1110301030111030111111110301110301030111",
+        "1110201020111020100000010201110201020111",
+        "1110301030111030100000010301110301030111",
+        "0000301030000030100000010300000301030000",
+        "3323201023232320100000010232323201023233",
+        "0000001030000030100000010300000301000000",
+        "1111111030111030100000010301110301111111",
+        "1111111020111020111111110201110201111111",
+        "1111111030111030111111110301110301111111",
+        "0000001030100030000000000300010301000000",
+        "3323201020102323232P32323232010201023233",
+        "0000301030103000300000030003010301030000",
+        "1110301030103010301111030103010301030111",
+        "1110201020102010201111020102010201020111",
+        "1110301030103010301111030103010301030111",
+        "1000300030003010300000030103000300030001",
+        "1023232323232010232332320102323232323201",
+        "1030003000003010000000000103000003000301",
+        "1030103011103011111001111103011103010301",
+        "1020102011102011111001111102011102010201",
+        "1030103011103011111001111103011103010301",
+        "1030103011103010000000000103011103010301",
+        "10S0102011102010232332320102011102010S01",
+        "1030103011103010000000000103011103010301",
+        "1030003000003000001111000003000003000301",
+        "1023232323232323201111023232323232323201",
+        "1000000000000000001111000000000000000001",
+        "1111111111111111111111111111111111111111",
+    )
+
+# Create default constants instance
+DEFAULT_MSPACMAN_CONSTANTS = MsPacmanConstants(
+    level=0,
+    maze_layout=maze_layout_level1,
+    maze_layouts=(
+        maze_layout_level1,
+        maze_layout_level2,
+        maze_layout_level3,
+        maze_layout_level4,
     ),
 )
 # Define the game board's Y-offset and the UI's Y-offset
@@ -168,6 +323,7 @@ class MsPacmanState(NamedTuple):
     game_phase: chex.Array           # 0=start_screen, 1=playing, 2=game_over
     start_timer: chex.Array          # countdown before movement allowed
     death_timer: chex.Array          # countdown during death animation
+    level_idx: chex.Array            # current level index
     fruit_active: chex.Array         # 1 if fruit is currently visible
     fruit_path_idx: chex.Array       # current index along fruit path
     fruit_pos_x: chex.Array         # current fruit grid x
@@ -246,13 +402,72 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
 
-        (
-            self.wall_grid,
-            self.initial_pellets_raw,
-            self.pacman_spawn,
-            self.ghost_spawn_positions,
-            self.initial_pellet_count_raw,
-        ) = _parse_layout(self.consts.maze_layout, self.consts.num_ghosts)
+        # Select layout by level (fallback to legacy maze_layout for level 0)
+        layouts = self.consts.maze_layouts or (self.consts.maze_layout,)
+        level_idx = min(max(int(self.consts.level), 0), len(layouts) - 1)
+        self.selected_layout = layouts[level_idx]
+
+        # Precompute per-level assets
+        level_wall_grids = []
+        level_pellet_templates = []
+        level_initial_pellets = []
+        level_pac_spawns = []
+        level_ghost_spawns = []
+        level_pellet_counts = []
+        level_ghost_wall_grids = []
+        level_fruit_paths = []
+        level_fruit_path_lens = []
+
+        for layout in layouts:
+            wall_grid, pellets_raw, pac_spawn, ghost_spawns, pellet_count_raw = _parse_layout(layout, self.consts.num_ghosts)
+            # Pellet template keeps -1 markers
+            pellet_template = pellets_raw
+            # Initial pellets (0/1/2)
+            grid_h, grid_w = wall_grid.shape
+            pellets_grid = jnp.zeros((grid_h, grid_w), dtype=jnp.int32)
+            for y, row in enumerate(layout):
+                for x, char in enumerate(row):
+                    if char == '2':
+                        pellets_grid = pellets_grid.at[y, x].set(1)
+                    elif char == 'S':
+                        pellets_grid = pellets_grid.at[y, x].set(2)
+            # Ghost-walkable grid: same as wall_grid but pen area is passable
+            ghost_wall_grid = wall_grid.at[17:22, 17:22].set(0)
+            ghost_wall_grid = ghost_wall_grid.at[14:17, 19].set(0)
+            # Fruit path for this layout
+            f_path, f_len = self._compute_fruit_path_for_grid(wall_grid)
+
+            level_wall_grids.append(wall_grid)
+            level_pellet_templates.append(pellet_template)
+            level_pac_spawns.append(pac_spawn)
+            level_ghost_spawns.append(ghost_spawns)
+            level_initial_pellets.append(pellets_grid)
+            level_pellet_counts.append(jnp.sum(pellets_grid > 0))
+            level_ghost_wall_grids.append(ghost_wall_grid)
+            level_fruit_paths.append(f_path)
+            level_fruit_path_lens.append(f_len)
+
+        self.level_wall_grids = jnp.stack(level_wall_grids)
+        self.level_pellet_templates = jnp.stack(level_pellet_templates)
+        self.level_pac_spawns = jnp.stack(level_pac_spawns)
+        self.level_ghost_spawns = jnp.stack(level_ghost_spawns)
+        self.level_initial_pellets = jnp.stack(level_initial_pellets)
+        self.level_pellet_counts = jnp.stack(level_pellet_counts)
+        self.level_ghost_wall_grids = jnp.stack(level_ghost_wall_grids)
+        self.level_fruit_paths = jnp.stack(level_fruit_paths)
+        self.level_fruit_path_lens = jnp.stack(level_fruit_path_lens)
+
+        self.num_levels = self.level_wall_grids.shape[0]
+
+        # Select starting level assets
+        self.wall_grid = self.level_wall_grids[level_idx]
+        self.initial_pellets_raw = self.level_pellet_templates[level_idx]
+        self.initial_pellets = self.level_initial_pellets[level_idx]
+        self.pacman_spawn = self.level_pac_spawns[level_idx]
+        self.ghost_spawn_positions = self.level_ghost_spawns[level_idx]
+        self.initial_pellet_count_raw = self.level_pellet_counts[level_idx]
+        self.fruit_path = self.level_fruit_paths[level_idx]
+        self.fruit_path_len = self.level_fruit_path_lens[level_idx]
 
         # Preserve visual template (contains -1 markers for blocked-but-path-colored tiles)
         self.pellet_template = self.initial_pellets_raw
@@ -271,27 +486,24 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
         # Generate pellets using maze layout '2' and 'S' markers
         grid_h, grid_w = self.wall_grid.shape
         pellets = jnp.zeros((grid_h, grid_w), dtype=jnp.int32)
-        for y, row in enumerate(self.consts.maze_layout):
+        for y, row in enumerate(self.selected_layout):
             for x, char in enumerate(row):
                 if char == '2':
                     pellets = pellets.at[y, x].set(1)
                 elif char == 'S':
                     pellets = pellets.at[y, x].set(2)
 
-        self.initial_pellets = pellets
-        self.initial_pellet_count = int(jnp.sum(pellets > 0))
+        # Already per-level
+        self.initial_pellets = self.initial_pellets
+        self.initial_pellet_count = int(self.level_pellet_counts[level_idx])
 
-        # Ghost-walkable grid: same as wall_grid but pen area is passable
-        self.ghost_wall_grid = self.wall_grid.at[17:22, 17:22].set(0)  # pen interior
-        self.ghost_wall_grid = self.ghost_wall_grid.at[14:17, 19].set(0)  # pen exit column
+        # Ghost-walkable grid: same as wall_grid but pen area is passable (selected level)
+        self.ghost_wall_grid = self.level_ghost_wall_grids[level_idx]
 
         # Scatter targets as jnp array for ghost AI
         self.scatter_targets = jnp.array(self.consts.scatter_targets, dtype=jnp.int32)
         self.ghost_spawn_delays = jnp.array(self.consts.ghost_spawn_delays, dtype=jnp.int32)
         self.ghost_chain_rewards = jnp.array(self.consts.ghost_chain_rewards, dtype=jnp.int32)
-
-        # Compute U-shaped fruit path via BFS
-        self.fruit_path, self.fruit_path_len = self._compute_fruit_path()
 
         self._action_deltas = jnp.array(
             [
@@ -317,15 +529,16 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
             dtype=jnp.int32,
         )
 
+        # Renderer uses stacked per-level grids and will select per state.level_idx
         self.renderer = MsPacmanRenderer(
             self.consts,
-            self.wall_grid,
-            self.pellet_template,
+            self.level_wall_grids,
+            self.level_pellet_templates,
         )
 
-    def _compute_fruit_path(self):
-        """Compute U-shaped fruit path: enter upper-right, U through bottom, exit upper-left."""
-        wall_np = np.array(self.wall_grid)
+    def _compute_fruit_path_for_grid(self, wall_grid):
+        """Compute U-shaped fruit path for a given wall grid."""
+        wall_np = np.array(wall_grid)
         h, w = wall_np.shape
 
         def _bfs(start, goal):
@@ -373,6 +586,9 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
         ghost_modes = jnp.array([0, 3, 3, 3], dtype=jnp.int32)
         ghost_directions = jnp.zeros((self.consts.num_ghosts, 2), dtype=jnp.int32)
 
+        # Starting level index
+        level_idx = jnp.array(min(max(int(self.consts.level), 0), self.num_levels - 1), dtype=jnp.int32)
+
         state = MsPacmanState(
             pacman_x=self.pacman_spawn[0],
             pacman_y=self.pacman_spawn[1],
@@ -395,6 +611,7 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
             game_phase=jnp.array(1, dtype=jnp.int32),  # Start playing directly (ALE behavior)
             start_timer=jnp.array(self.consts.start_delay, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
+            level_idx=jnp.array(level_idx, dtype=jnp.int32),
             fruit_active=jnp.array(0, dtype=jnp.int32),
             fruit_path_idx=jnp.array(0, dtype=jnp.int32),
             fruit_pos_x=jnp.array(0, dtype=jnp.int32),
@@ -452,7 +669,12 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
         # Try buffered direction first
         buf_x = jnp.mod(state.pacman_x + buffered_direction[0], self.consts.grid_width)
         buf_y = jnp.clip(state.pacman_y + buffered_direction[1], 0, self.consts.grid_height - 1)
-        buf_blocked = self.wall_grid[buf_y, buf_x] == 1
+        # Use level-specific wall grid
+        wall_grid = self.level_wall_grids[state.level_idx]
+        ghost_wall_grid = self.level_ghost_wall_grids[state.level_idx]
+        fruit_path = self.level_fruit_paths[state.level_idx]
+        fruit_path_len = self.level_fruit_path_lens[state.level_idx]
+        buf_blocked = wall_grid[buf_y, buf_x] == 1
 
         # If buffered direction works, use it; otherwise try current direction
         use_buffered = jnp.logical_and(has_new_direction | jnp.any(buffered_direction != 0), ~buf_blocked)
@@ -464,7 +686,7 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
         tentative_x = jnp.mod(state.pacman_x + direction[0], self.consts.grid_width)
         tentative_y = jnp.clip(state.pacman_y + direction[1], 0, self.consts.grid_height - 1)
 
-        hit_wall = self.wall_grid[tentative_y, tentative_x] == 1
+        hit_wall = wall_grid[tentative_y, tentative_x] == 1
         pacman_x = jnp.where(hit_wall, state.pacman_x, tentative_x)
         pacman_y = jnp.where(hit_wall, state.pacman_y, tentative_y)
 
@@ -544,7 +766,7 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
         ghost_positions, ghost_directions, ghost_modes = self._move_ghosts(
             state.ghost_positions, state.ghost_directions, ghost_modes,
             pacman_x, pacman_y, direction,
-            ghost_global_mode, can_move_ghosts, state.time, state.key,
+            ghost_global_mode, can_move_ghosts, state.time, state.key, ghost_wall_grid,
         )
 
         # --- Ghost-Pacman collision ---
@@ -593,7 +815,7 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
 
         # Check for lethal collision (non-frightened, non-eaten ghost)
         lethal_ghost = jnp.logical_and(ghost_overlap, ghost_modes == 0)
-        hit_without_power = jnp.any(lethal_ghost)
+        hit_without_power = jnp.logical_and(jnp.any(lethal_ghost), ~in_death)
 
         # --- Death handling ---
         lives = state.lives - hit_without_power.astype(jnp.int32)
@@ -652,7 +874,7 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
         fruit_active = jnp.where(should_spawn, jnp.array(1, dtype=jnp.int32), fruit_active)
         fruit_path_idx = jnp.where(should_spawn, jnp.array(0, dtype=jnp.int32), fruit_path_idx)
         # Set initial position from path start
-        spawn_pos = self.fruit_path[0]
+        spawn_pos = fruit_path[0]
         fruit_pos_x = jnp.where(should_spawn, spawn_pos[0], fruit_pos_x)
         fruit_pos_y = jnp.where(should_spawn, spawn_pos[1], fruit_pos_y)
         fruit_spawned_count = fruit_spawned_count + should_spawn.astype(jnp.int32)
@@ -665,16 +887,56 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
         new_path_idx = jnp.minimum(fruit_path_idx + 1, self.consts.fruit_path_max - 1)
         fruit_path_idx = jnp.where(can_move_fruit, new_path_idx, fruit_path_idx)
         # Look up position from path
-        path_pos = self.fruit_path[fruit_path_idx]
+        path_pos = fruit_path[fruit_path_idx]
         fruit_pos_x = jnp.where(fruit_active == 1, path_pos[0], fruit_pos_x)
         fruit_pos_y = jnp.where(fruit_active == 1, path_pos[1], fruit_pos_y)
 
         # Fruit reached end of path → disappears
         fruit_active = jnp.where(
-            fruit_path_idx >= self.fruit_path_len - 1,
+            fruit_path_idx >= fruit_path_len - 1,
             jnp.array(0, dtype=jnp.int32),
             fruit_active,
         )
+
+        # --- Level progression when pellets cleared ---
+        level_complete = pellets_remaining == 0
+        next_level_idx = jnp.minimum(state.level_idx + 1, self.num_levels - 1)
+        level_idx = jnp.where(level_complete, next_level_idx, state.level_idx)
+
+        # Select assets for (potentially) new level
+        next_pellets = self.level_initial_pellets[level_idx]
+        next_pellet_count = self.level_pellet_counts[level_idx]
+        next_pac_spawn = self.level_pac_spawns[level_idx]
+        next_ghost_spawn = self.level_ghost_spawns[level_idx]
+        next_fruit_path = self.level_fruit_paths[level_idx]
+        next_fruit_path_len = self.level_fruit_path_lens[level_idx]
+        next_ghost_wall_grid = self.level_ghost_wall_grids[level_idx]
+
+        # Reset per-level state on level completion
+        pacman_x = jnp.where(level_complete, next_pac_spawn[0], pacman_x)
+        pacman_y = jnp.where(level_complete, next_pac_spawn[1], pacman_y)
+        direction = jnp.where(level_complete, jnp.array([-1, 0], dtype=jnp.int32), direction)
+        buffered_direction = jnp.where(level_complete, jnp.array([0, 0], dtype=jnp.int32), buffered_direction)
+        ghost_positions = jnp.where(level_complete, next_ghost_spawn, ghost_positions)
+        ghost_directions = jnp.where(level_complete, jnp.zeros_like(ghost_directions), ghost_directions)
+        ghost_modes = jnp.where(level_complete, jnp.array([0,3,3,3], dtype=jnp.int32), ghost_modes)
+        ghost_global_mode = jnp.where(level_complete, jnp.array(0, dtype=jnp.int32), ghost_global_mode)
+        mode_timer = jnp.where(level_complete, jnp.array(self.consts.scatter_duration, dtype=jnp.int32), mode_timer)
+        ghosts_eaten_count = jnp.where(level_complete, jnp.array(0, dtype=jnp.int32), ghosts_eaten_count)
+        pellets = jnp.where(level_complete, next_pellets, pellets)
+        pellets_remaining = jnp.where(level_complete, next_pellet_count.astype(jnp.int32), pellets_remaining)
+        pellets_eaten = jnp.where(level_complete, jnp.array(0, dtype=jnp.int32), pellets_eaten)
+        power_timer = jnp.where(level_complete, jnp.array(0, dtype=jnp.int32), power_timer)
+        start_timer = jnp.where(level_complete, jnp.array(self.consts.start_delay, dtype=jnp.int32), start_timer)
+        death_timer = jnp.where(level_complete, jnp.array(0, dtype=jnp.int32), death_timer)
+        fruit_active = jnp.where(level_complete, jnp.array(0, dtype=jnp.int32), fruit_active)
+        fruit_path_idx = jnp.where(level_complete, jnp.array(0, dtype=jnp.int32), fruit_path_idx)
+        fruit_pos_x = jnp.where(level_complete, next_fruit_path[0][0], fruit_pos_x)
+        fruit_pos_y = jnp.where(level_complete, next_fruit_path[0][1], fruit_pos_y)
+        fruit_spawned_count = jnp.where(level_complete, jnp.array(0, dtype=jnp.int32), fruit_spawned_count)
+        fruit_path = jnp.where(level_complete, next_fruit_path, fruit_path)
+        fruit_path_len = jnp.where(level_complete, next_fruit_path_len, fruit_path_len)
+        ghost_wall_grid = jnp.where(level_complete, next_ghost_wall_grid, ghost_wall_grid)
 
         # Check if pacman ate the fruit
         ate_fruit = jnp.logical_and(
@@ -711,6 +973,7 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
             game_phase=game_phase,
             start_timer=start_timer,
             death_timer=death_timer,
+            level_idx=level_idx,
             fruit_active=fruit_active,
             fruit_path_idx=fruit_path_idx,
             fruit_pos_x=fruit_pos_x,
@@ -806,6 +1069,7 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
         can_move: chex.Array,
         time: chex.Array,
         key: chex.Array,
+        ghost_wall_grid: chex.Array,
     ) -> Tuple[chex.Array, chex.Array, chex.Array]:
         """Move all ghosts using per-ghost targeting and tile-based pathfinding."""
         blinky_pos = ghost_positions[0]
@@ -847,7 +1111,7 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
                 d = dir_table[d_idx]
                 nx = jnp.mod(gx + d[0], self.consts.grid_width)
                 ny = jnp.clip(gy + d[1], 0, self.consts.grid_height - 1)
-                blocked = self.ghost_wall_grid[ny, nx] == 1
+                blocked = ghost_wall_grid[ny, nx] == 1
                 is_reverse = jnp.logical_and(d[0] == reverse_dir[0], d[1] == reverse_dir[1])
                 # Manhattan distance to target
                 dist = jnp.abs(nx - target[0]) + jnp.abs(ny - target[1])
@@ -1008,8 +1272,8 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
 
 
 class MsPacmanRenderer(JAXGameRenderer):
-    def __init__(self, consts: MsPacmanConstants = None, wall_grid: jnp.ndarray = None, pellet_template: jnp.ndarray = None):
-        super().__init__()
+    def __init__(self, consts: MsPacmanConstants = None, wall_grid: jnp.ndarray = None, pellet_template: jnp.ndarray = None, config=None):
+        super().__init__(consts, config=config)
         self.consts = consts or DEFAULT_MSPACMAN_CONSTANTS
         self.config = render_utils.RendererConfig(
             game_dimensions=(self.consts.screen_height, self.consts.screen_width),
@@ -1017,12 +1281,21 @@ class MsPacmanRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
+        # Support per-level arrays or single grids; renderer keeps stacked grids and per-level backgrounds
         if wall_grid is None:
             wall_grid = jnp.zeros((self.consts.grid_height, self.consts.grid_width), dtype=jnp.int32)
-        self.wall_grid = jnp.asarray(wall_grid, dtype=jnp.int32)
+        if wall_grid.ndim == 2:
+            wall_grid = wall_grid[None, ...]
         if pellet_template is None:
-            pellet_template = jnp.zeros_like(self.wall_grid)
-        self.pellet_template = jnp.asarray(pellet_template, dtype=jnp.int32)
+            pellet_template = jnp.zeros_like(wall_grid)
+        if pellet_template.ndim == 2:
+            pellet_template = pellet_template[None, ...]
+
+        self.wall_grids = jnp.asarray(wall_grid, dtype=jnp.int32)
+        self.pellet_templates = jnp.asarray(pellet_template, dtype=jnp.int32)
+        # For convenience keep level 0 references
+        self.wall_grid = self.wall_grids[0]
+        self.pellet_template = self.pellet_templates[0]
 
         # Grid layout
         grid_h, grid_w = self.wall_grid.shape
@@ -1032,8 +1305,13 @@ class MsPacmanRenderer(JAXGameRenderer):
         self.offset_x = max((self.consts.screen_width - grid_px_w) // 2, 0)
         self.offset_y = GAME_BOARD_OFFSET_Y
 
-        # Build background procedurally from wall grid
-        background_rgba = self._build_background()
+        # Build per-level RGBA backgrounds
+        backgrounds = []
+        for idx in range(self.wall_grids.shape[0]):
+            backgrounds.append(self._build_background(self.wall_grids[idx], self.pellet_templates[idx]))
+        self.backgrounds_rgba = jnp.stack(backgrounds)
+        # Use level 0 for asset setup; render will pick per-level
+        background_rgba = self.backgrounds_rgba[0]
 
         # Asset configuration for palette-based rendering
         sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites", "mspacman")
@@ -1067,6 +1345,22 @@ class MsPacmanRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
+        # Convert RGBA backgrounds to palette ID masks for rendering
+        bg_ids = []
+        for idx in range(self.backgrounds_rgba.shape[0]):
+            bg_rgba = np.array(self.backgrounds_rgba[idx])
+            # Map colors to ids; assume alpha 255
+            ids = np.zeros((bg_rgba.shape[0], bg_rgba.shape[1]), dtype=np.uint8)
+            for color, cid in self.COLOR_TO_ID.items():
+                if len(color) == 3:
+                    rgba = np.array([color[0], color[1], color[2], 255], dtype=np.uint8)
+                else:
+                    rgba = np.array(color, dtype=np.uint8)
+                mask = np.all(bg_rgba == rgba, axis=-1)
+                ids[mask] = cid
+            bg_ids.append(jnp.asarray(ids))
+        self.backgrounds = jnp.stack(bg_ids)
+
         # Pre-compute directional pacman masks: (4 frames, 4 dirs, H, W)
         # dir 0=left (base), 1=right (flip_h), 2=up (rot90 CW), 3=down (rot90 CCW)
         pac_masks = self.SHAPE_MASKS['pacman']  # (4, H, W)
@@ -1090,10 +1384,10 @@ class MsPacmanRenderer(JAXGameRenderer):
         power_color_id = self.COLOR_TO_ID.get(power_rgb, pellet_color_id)
         self.pellet_color_map = jnp.array([0, pellet_color_id, power_color_id], dtype=jnp.uint8)
 
-    def _build_background(self) -> jnp.ndarray:
-        """Build the maze background as an RGBA image from the wall grid."""
+    def _build_background(self, wall_grid: jnp.ndarray, pellet_template: jnp.ndarray):
+        """Build background RGBA image from wall grid and pellet template."""
         cell = self.cell
-        grid_h, grid_w = self.wall_grid.shape
+        grid_h, grid_w = wall_grid.shape
 
         # Build per-tile colors
         bg_color = np.array(self.consts.background_color, dtype=np.uint8)
@@ -1102,8 +1396,8 @@ class MsPacmanRenderer(JAXGameRenderer):
 
         # Create tile-level image
         tile_img = np.zeros((grid_h, grid_w, 3), dtype=np.uint8)
-        wall_np = np.array(self.wall_grid)
-        pellet_np = np.array(self.pellet_template)
+        wall_np = np.array(wall_grid)
+        pellet_np = np.array(pellet_template)
 
         for y in range(grid_h):
             for x in range(grid_w):
@@ -1133,7 +1427,13 @@ class MsPacmanRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: MsPacmanState) -> jnp.ndarray:
-        raster = self.jr.create_object_raster(self.BACKGROUND)
+        # Select correct background for current level
+        bg = self.backgrounds[state.level_idx]
+        # Ensure palette ID background is 2D (H, W)
+        bg = jnp.squeeze(bg)
+        if bg.ndim == 3:
+            bg = bg[..., 0]
+        raster = self.jr.create_object_raster(bg)
         cell = self.cell
 
         # --- Draw pellets using render_grid_inverse ---
@@ -1172,9 +1472,19 @@ class MsPacmanRenderer(JAXGameRenderer):
         anim_frame = (state.time // 4) % 4
         dir_x, dir_y = state.direction[0], state.direction[1]
         # Direction index: 0=left, 1=right, 2=up, 3=down
-        dir_idx = jnp.where(dir_x < 0, 0,
-                  jnp.where(dir_x > 0, 1,
-                  jnp.where(dir_y < 0, 2, 3)))
+        normal_dir_idx = jnp.where(dir_x < 0, 0,
+                         jnp.where(dir_x > 0, 1,
+                         jnp.where(dir_y < 0, 2, 3)))
+
+        # Handle death animation: spin counter-clockwise
+        is_dead = state.death_timer > 0
+        death_elapsed = self.consts.death_freeze_duration - state.death_timer
+        # Spin cycle directions: 2=up, 0=left, 3=down, 1=right
+        spin_dirs = jnp.array([2, 0, 3, 1], dtype=jnp.int32)
+        spin_idx = (death_elapsed // 4) % 4
+        death_dir_idx = spin_dirs[spin_idx]
+
+        dir_idx = jnp.where(is_dead, death_dir_idx, normal_dir_idx)
 
         pacman_mask = self.pacman_dir_masks[anim_frame, dir_idx]
         pac_px = self.offset_x + state.pacman_x * cell - 3  # center sprite
