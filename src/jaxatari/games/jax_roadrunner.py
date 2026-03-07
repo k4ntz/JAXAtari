@@ -52,6 +52,8 @@ class LevelConfig(NamedTuple):
     dynamic_road_heights: Optional[Tuple[int, int]] = None  # (height_a, height_b)
     dynamic_road_interval: int = 400  # scroll distance between height switches
     dynamic_road_transition_length: int = 10  # transition zone length in scroll units
+    # Phase offset added to world_x before the modulo so the level starts inside zone A
+    dynamic_road_scroll_offset: int = 0
     offramp: OfframpConfig = OfframpConfig()
     # Ravine-linked entity spawning: when True, seeds/mines are scheduled to appear
     # just ahead of each ravine instead of on their own random timer.
@@ -286,6 +288,9 @@ RoadRunner_Level_3 = LevelConfig(
     dynamic_road_heights=(_DEFAULT_ROAD_HEIGHT, 50),
     dynamic_road_interval=400,
     dynamic_road_transition_length=10,
+    # Shift phase by half_trans so world_x=0 lands at the start of zone A (not in a
+    # wrap-around B→A transition), ensuring the road starts at full width.
+    dynamic_road_scroll_offset=5,
     spawn_seeds=True,
     spawn_trucks=True,
     spawn_landmines=True,
@@ -436,7 +441,7 @@ def _build_road_section_arrays(
 
 def _build_dynamic_road_config_arrays(
     levels: Tuple[LevelConfig, ...]
-) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     enabled = jnp.array(
         [cfg.dynamic_road_heights is not None for cfg in levels],
         dtype=jnp.bool_
@@ -457,7 +462,12 @@ def _build_dynamic_road_config_arrays(
         dtype=jnp.int32
     ) if levels else jnp.array([], dtype=jnp.int32)
 
-    return enabled, heights, intervals, transition_lengths
+    scroll_offsets = jnp.array(
+        [cfg.dynamic_road_scroll_offset for cfg in levels],
+        dtype=jnp.int32
+    ) if levels else jnp.array([], dtype=jnp.int32)
+
+    return enabled, heights, intervals, transition_lengths, scroll_offsets
 
 
 def _build_spawn_interval_array(
@@ -911,7 +921,8 @@ class JaxRoadRunner(
             self._dynamic_road_enabled,
             self._dynamic_road_heights,
             self._dynamic_road_intervals,
-            self._dynamic_road_transition_lengths
+            self._dynamic_road_transition_lengths,
+            self._dynamic_road_scroll_offsets
         ) = _build_dynamic_road_config_arrays(levels)
 
     def _handle_input(self, action: chex.Array) -> tuple[chex.Array, chex.Array, chex.Array]:
@@ -2529,6 +2540,7 @@ class JaxRoadRunner(
             heights = self._dynamic_road_heights[level_idx]
             interval = self._dynamic_road_intervals[level_idx]
             trans_len = self._dynamic_road_transition_lengths[level_idx]
+            scroll_offset = self._dynamic_road_scroll_offsets[level_idx]
 
             # Get dynamic height if enabled
             # Use scroll_pos * PLAYER_MOVE_SPEED to match rendering speed
@@ -2540,6 +2552,7 @@ class JaxRoadRunner(
             collision_world_x = (
                 state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED
                 + (static_road_width - 1 - player_road_offset)
+                + scroll_offset
             )
             dynamic_height, _, _ = _get_dynamic_road_height(
                 collision_world_x,
@@ -2582,6 +2595,7 @@ class JaxRoadRunner(
             heights = self._dynamic_road_heights[level_idx]
             interval = self._dynamic_road_intervals[level_idx]
             trans_len = self._dynamic_road_transition_lengths[level_idx]
+            scroll_offset = self._dynamic_road_scroll_offsets[level_idx]
 
             # Map screen X to world X conceptually used for road generation
             # Rendering: world_scroll + (road_width - 1 - col_idx)
@@ -2595,6 +2609,7 @@ class JaxRoadRunner(
             world_x = (
                 state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED
                 + (static_road_width - 1 - x)
+                + scroll_offset
             )
 
             dynamic_height, _, _ = _get_dynamic_road_height(
@@ -2819,7 +2834,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
             self._dynamic_road_enabled,
             self._dynamic_road_heights,
             self._dynamic_road_intervals,
-            self._dynamic_road_transition_lengths
+            self._dynamic_road_transition_lengths,
+            self._dynamic_road_scroll_offsets
         ) = _build_dynamic_road_config_arrays(levels)
 
         # Pre-calculate unique road dimensions for rendering optimization
@@ -3401,6 +3417,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
             height_b = heights_config[1]
             interval = self._dynamic_road_intervals[level_idx]
             trans_len = self._dynamic_road_transition_lengths[level_idx]
+            dynamic_scroll_offset = self._dynamic_road_scroll_offsets[level_idx]
 
             # For dynamic roads, render per-column based on world position
             def render_dynamic_road(c):
@@ -3408,7 +3425,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
                 # Calculate world x for each column
                 world_scroll = state.scrolling_step_counter * self.consts.PLAYER_MOVE_SPEED
                 col_indices = jnp.arange(scaled_static_width, dtype=jnp.int32)
-                world_x = world_scroll + (scaled_static_width - 1 - col_indices)
+                world_x = world_scroll + (scaled_static_width - 1 - col_indices) + dynamic_scroll_offset
 
                 dynamic_height, _, _ = _get_dynamic_road_height(
                     world_x,
