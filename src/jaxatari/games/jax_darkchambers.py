@@ -120,8 +120,10 @@ def _get_default_asset_config():
 
 # Game configuration and constants
 
-GAME_H = 160
-GAME_W = 160
+GAME_H = 210  # Standard Atari height
+GAME_W = 160  # Standard Atari width
+UI_BAR_HEIGHT = 50  # Height of bottom UI bar (5% bigger than 48)
+GAMEPLAY_H = GAME_H - UI_BAR_HEIGHT  # Viewport height for gameplay (160)
 WORLD_W = GAME_W * 2  # World is 2x viewport size
 WORLD_H = 600  # Significantly taller world
 
@@ -296,6 +298,7 @@ class DarkChambersConstants(NamedTuple):
     LADDER_UP_COLOR: Tuple[int, int, int] = (140, 90, 40) # Brownish exit door
     LADDER_DOWN_COLOR: Tuple[int, int, int] = (100, 60, 20) # Darker brown ladder down
     UI_COLOR: Tuple[int, int, int] = (236, 236, 236)
+    HUD_COLOR: Tuple[int, int, int] = (199, 108, 58)  # HUD health/score color
     BULLET_COLOR: Tuple[int, int, int] = (255, 200, 0)
     SPEED_POTION_COLOR: Tuple[int, int, int] = (255, 100, 0)   # Orange
     HEAL_POTION_COLOR: Tuple[int, int, int] = (255, 0, 255)    # Magenta
@@ -473,6 +476,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             'ladder_up_color': create_color_sprite(self.consts.LADDER_UP_COLOR),
             'ladder_down_color': create_color_sprite(self.consts.LADDER_DOWN_COLOR),
             'ui_color': create_color_sprite(self.consts.UI_COLOR),
+            'hud_color': create_color_sprite(self.consts.HUD_COLOR),
             'bullet_color': create_color_sprite(self.consts.BULLET_COLOR),
             'speed_potion_color': create_color_sprite(self.consts.SPEED_POTION_COLOR),
             'heal_potion_color': create_color_sprite(self.consts.HEAL_POTION_COLOR),
@@ -496,10 +500,6 @@ class DarkChambersRenderer(JAXGameRenderer):
         bg_color_id = self.COLOR_TO_ID.get(self.consts.BACKGROUND_COLOR)
         if bg_color_id is not None:
             self.BACKGROUND = jnp.full((GAME_H, GAME_W), bg_color_id, dtype=jnp.uint8)
-
-        # Ensure background is always (160, 160) to avoid shape mismatch
-        if self.BACKGROUND.shape == (210, 160):
-            self.BACKGROUND = self.BACKGROUND[:160, :]
         
         # Print sprite sizes for debugging
         print("\n=== SPRITE SIZES ===")
@@ -538,7 +538,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         print("===================\n")
         
         # Helper to scale palette-index masks to a target size (centered pad/crop)
-        # Use background color for padding so sprite borders blend into background
+        # Use transparent ID for padding so sprite bounding boxes never erase walls/background.
         def _scale_mask(mask: jnp.ndarray, target_h: int, target_w: int) -> jnp.ndarray:
             if mask is None:
                 return None
@@ -554,8 +554,8 @@ class DarkChambersRenderer(JAXGameRenderer):
                 pad_bottom = pad_h - pad_top
                 pad_left = pad_w // 2
                 pad_right = pad_w - pad_left
-                # Use bg_color_id for padding so borders match background
-                pad_value = bg_color_id if bg_color_id is not None else 0
+                # Transparent padding prevents sprite rectangles from overwriting walls
+                pad_value = self.jr.TRANSPARENT_ID
                 scaled_padded = jnp.pad(scaled, ((pad_top, pad_bottom), (pad_left, pad_right)), mode="constant", constant_values=pad_value)
                 final_h = int(scaled_padded.shape[0])
                 final_w = int(scaled_padded.shape[1])
@@ -754,6 +754,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         self.LADDER_UP_ID = self.COLOR_TO_ID[self.consts.LADDER_UP_COLOR]
         self.LADDER_DOWN_ID = self.COLOR_TO_ID[self.consts.LADDER_DOWN_COLOR]
         self.UI_ID = self.COLOR_TO_ID[self.consts.UI_COLOR]
+        self.HUD_ID = self.COLOR_TO_ID[self.consts.HUD_COLOR]
         self.BULLET_ID = self.COLOR_TO_ID[self.consts.BULLET_COLOR]
         self.ZOMBIE_ID = self.COLOR_TO_ID[self.consts.ZOMBIE_COLOR]
         self.WRAITH_ID = self.COLOR_TO_ID[self.consts.WRAITH_COLOR]
@@ -1484,16 +1485,16 @@ class DarkChambersRenderer(JAXGameRenderer):
         # Start with background sprite
         object_raster = self.jr.create_object_raster(self.BACKGROUND)
         
-        # Camera follows player
+        # Camera follows player (viewport is reduced to GAMEPLAY_H due to UI bar)
         cam_x = jnp.clip(
             state.player_x - GAME_W // 2, 
             0, 
             self.consts.WORLD_WIDTH - GAME_W
         ).astype(jnp.int32)
         cam_y = jnp.clip(
-            state.player_y - GAME_H // 2, 
+            state.player_y - GAMEPLAY_H // 2, 
             0, 
-            self.consts.WORLD_HEIGHT - GAME_H
+            self.consts.WORLD_HEIGHT - GAMEPLAY_H
         ).astype(jnp.int32)
         
         # Draw walls for current level and map
@@ -1502,6 +1503,26 @@ class DarkChambersRenderer(JAXGameRenderer):
         current_level_walls = self.LEVEL_WALLS[state.map_index, state.current_level]
         wall_positions = (current_level_walls[:, 0:2] - jnp.array([cam_x, cam_y])).astype(jnp.int32)
         wall_sizes = current_level_walls[:, 2:4]
+
+        # Clip wall rects to visible gameplay viewport before drawing.
+        # This avoids x/y == -1, which the shared renderer interprets as "hidden".
+        wall_x0 = wall_positions[:, 0]
+        wall_y0 = wall_positions[:, 1]
+        wall_x1 = wall_x0 + wall_sizes[:, 0]
+        wall_y1 = wall_y0 + wall_sizes[:, 1]
+        wall_clip_x0 = jnp.clip(wall_x0, 0, GAME_W)
+        wall_clip_y0 = jnp.clip(wall_y0, 0, GAMEPLAY_H)
+        wall_clip_x1 = jnp.clip(wall_x1, 0, GAME_W)
+        wall_clip_y1 = jnp.clip(wall_y1, 0, GAMEPLAY_H)
+        wall_clip_w = jnp.maximum(0, wall_clip_x1 - wall_clip_x0)
+        wall_clip_h = jnp.maximum(0, wall_clip_y1 - wall_clip_y0)
+        wall_valid = (wall_clip_w > 0) & (wall_clip_h > 0)
+        wall_positions = jnp.stack([
+            jnp.where(wall_valid, wall_clip_x0, -100),
+            jnp.where(wall_valid, wall_clip_y0, -100)
+        ], axis=1).astype(jnp.int32)
+        wall_sizes = jnp.stack([wall_clip_w, wall_clip_h], axis=1).astype(jnp.int32)
+
         object_raster = self.jr.draw_rects(
             object_raster, 
             positions=wall_positions, 
@@ -1513,6 +1534,25 @@ class DarkChambersRenderer(JAXGameRenderer):
         boundary_walls = self.BOUNDARY_WALLS
         boundary_positions = (boundary_walls[:, 0:2] - jnp.array([cam_x, cam_y])).astype(jnp.int32)
         boundary_sizes = boundary_walls[:, 2:4]
+
+        # Same clipping workaround for boundary wall rects.
+        boundary_x0 = boundary_positions[:, 0]
+        boundary_y0 = boundary_positions[:, 1]
+        boundary_x1 = boundary_x0 + boundary_sizes[:, 0]
+        boundary_y1 = boundary_y0 + boundary_sizes[:, 1]
+        boundary_clip_x0 = jnp.clip(boundary_x0, 0, GAME_W)
+        boundary_clip_y0 = jnp.clip(boundary_y0, 0, GAMEPLAY_H)
+        boundary_clip_x1 = jnp.clip(boundary_x1, 0, GAME_W)
+        boundary_clip_y1 = jnp.clip(boundary_y1, 0, GAMEPLAY_H)
+        boundary_clip_w = jnp.maximum(0, boundary_clip_x1 - boundary_clip_x0)
+        boundary_clip_h = jnp.maximum(0, boundary_clip_y1 - boundary_clip_y0)
+        boundary_valid = (boundary_clip_w > 0) & (boundary_clip_h > 0)
+        boundary_positions = jnp.stack([
+            jnp.where(boundary_valid, boundary_clip_x0, -100),
+            jnp.where(boundary_valid, boundary_clip_y0, -100)
+        ], axis=1).astype(jnp.int32)
+        boundary_sizes = jnp.stack([boundary_clip_w, boundary_clip_h], axis=1).astype(jnp.int32)
+
         object_raster = self.jr.draw_rects(
             object_raster,
             positions=boundary_positions,
@@ -1520,84 +1560,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             color_id=self.WALL_ID
         )
 
-        # Level indicator: "LEVEL X" under health bar (top-left)
-        # Render the word LEVEL (fixed 5 letters) and a single digit X = current_level+1
-        # Using 3x5 digit patterns; for letters, approximate with simple blocks
-        level_text_x = 4
-        level_text_y = 20  # below health bar
-
-        # Render "LEVEL" as five 3x5 glyphs encoded similarly to digits
-        # Simple L,E,V,E,L patterns (manually defined)
-        L = jnp.array([[1,0,0],
-                       [1,0,0],
-                       [1,0,0],
-                       [1,0,0],
-                       [1,1,1]], dtype=jnp.uint8)
-        E = jnp.array([[1,1,1],
-                       [1,0,0],
-                       [1,1,1],
-                       [1,0,0],
-                       [1,1,1]], dtype=jnp.uint8)
-        V = jnp.array([[1,0,1],
-                       [1,0,1],
-                       [1,0,1],
-                       [0,1,0],
-                       [0,1,0]], dtype=jnp.uint8)
-        letters = jnp.stack([L, E, V, E, L], axis=0)  # shape (5,5,3)
-        spacing = 1
-        letter_width = 3
-        letter_height = 5
-        # Compute positions for letters
-        letter_offsets = jnp.arange(5) * (letter_width + spacing)
-        xs = jnp.arange(letter_width)
-        ys = jnp.arange(letter_height)
-        grid_x = xs[None, None, :].repeat(5, axis=0).repeat(letter_height, axis=1)
-        grid_y = ys[None, :, None].repeat(5, axis=0).repeat(letter_width, axis=2)
-        base_x = level_text_x + letter_offsets[:, None, None]
-        px_letters = base_x + grid_x
-        py_letters = level_text_y + grid_y
-        active_letters = (letters == 1)
-        # Mask out inactive pixels by moving them off-screen (-100)
-        px_letters_masked = jnp.where(active_letters, px_letters, -100)
-        py_letters_masked = jnp.where(active_letters, py_letters, -100)
-        flat_px_letters = px_letters_masked.reshape(-1)
-        flat_py_letters = py_letters_masked.reshape(-1)
-        letter_positions = jnp.stack([flat_px_letters, flat_py_letters], axis=1).astype(jnp.int32)
-        letter_sizes = jnp.ones((letter_positions.shape[0], 2), dtype=jnp.int32)
-        object_raster = self.jr.draw_rects(
-            object_raster,
-            positions=letter_positions,
-            sizes=letter_sizes,
-            color_id=self.UI_ID
-        )
-
-        # Render level number (1-based)
-        level_num = (state.current_level + 1).astype(jnp.int32)
-        tens = level_num // 10
-        ones = level_num % 10
-        # Only render ones (levels 1..7)
-        digit = ones
-        pattern = self.DIGIT_PATTERNS[digit]
-        digit_x = level_text_x + 5 * (letter_width + spacing) + 2  # after "LEVEL"
-        digit_y = level_text_y
-        xs_d = jnp.arange(3)
-        ys_d = jnp.arange(5)
-        grid_x_d = xs_d[None, :].repeat(5, axis=0)
-        grid_y_d = ys_d[:, None].repeat(3, axis=1)
-        px_d = digit_x + grid_x_d
-        py_d = digit_y + grid_y_d
-        active_d = (pattern == 1)
-        # Avoid boolean advanced indexing in JIT: mask and flatten
-        px_d_masked = jnp.where(active_d, px_d, -100)
-        py_d_masked = jnp.where(active_d, py_d, -100)
-        digit_positions = jnp.stack([px_d_masked.reshape(-1), py_d_masked.reshape(-1)], axis=1).astype(jnp.int32)
-        digit_sizes = jnp.ones((digit_positions.shape[0], 2), dtype=jnp.int32)
-        object_raster = self.jr.draw_rects(
-            object_raster,
-            positions=digit_positions,
-            sizes=digit_sizes,
-            color_id=self.UI_ID
-        )
+        # Top UI removed - now using bottom bar like ALE reference
         
         # Player (use directional sprite based on player_direction)
         player_screen_x = (state.player_x - cam_x).astype(jnp.int32)
@@ -1932,105 +1895,53 @@ class DarkChambersRenderer(JAXGameRenderer):
                 color_id=self.SPAWNER_ID
             )
         
-        # Health bar (5 boxes proportional to max health=31) top-left
+        # Bottom black UI bar (48 pixels tall - 3x original size)
+        bar_y_start = GAMEPLAY_H  # Start at end of gameplay area (160)
+        black_bar_pos = jnp.array([[0, bar_y_start]], dtype=jnp.int32)
+        black_bar_size = jnp.array([[GAME_W, UI_BAR_HEIGHT]], dtype=jnp.int32)
+        black_id = self.COLOR_TO_ID.get((0, 0, 0), self.COLOR_TO_ID.get(self.consts.BACKGROUND_COLOR))
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=black_bar_pos,
+            sizes=black_bar_size,
+            color_id=black_id
+        )
+        
+        # Top row Y position for health bar and score (same height)
+        top_row_y = bar_y_start + 8
+        
+        # Orange health bar on the LEFT (proportional to health)
         health_val = jnp.clip(state.health, 0, self.consts.MAX_HEALTH).astype(jnp.int32)
-        # Number of filled segments = floor(health * 5 / MAX_HEALTH)
-        segments = (health_val * 5) // self.consts.MAX_HEALTH  # 0..5
-        bar_indices = jnp.arange(5)
-        bar_spacing = ITEM_WIDTH + 2
-        bar_x = 4 + bar_indices * bar_spacing
-        bar_y = jnp.full(5, 4, dtype=jnp.int32)
-        bar_active = bar_indices < segments
-        bar_pos_x = jnp.where(bar_active, bar_x, -100)
-        bar_positions = jnp.stack([bar_pos_x, bar_y], axis=1).astype(jnp.int32)
-        bar_sizes = jnp.tile(
-            jnp.array([ITEM_WIDTH, ITEM_HEIGHT], dtype=jnp.int32)[None, :],
-            (5, 1)
+        max_health_bar_width = 70  # Wider for bigger bar
+        health_bar_width = (health_val * max_health_bar_width) // self.consts.MAX_HEALTH
+        health_bar_width = jnp.maximum(health_bar_width, 0)
+        
+        health_bar_height = 10  # Taller for bigger UI bar
+        health_bar_y = top_row_y
+        health_bar_x = 6  # Left side with padding
+        
+        health_bar_pos = jnp.array([[health_bar_x, health_bar_y]], dtype=jnp.int32)
+        health_bar_size = jnp.array([[health_bar_width, health_bar_height]], dtype=jnp.int32)
+        # Only draw if width > 0
+        health_bar_pos = jnp.where(
+            health_bar_width > 0,
+            health_bar_pos,
+            jnp.array([[-100, -100]], dtype=jnp.int32)
         )
         object_raster = self.jr.draw_rects(
             object_raster,
-            positions=bar_positions,
-            sizes=bar_sizes,
-            color_id=self.HEART_ID
-        )
-        # Health digits below bar (supports up to 1000)
-        digit_width = 3
-        digit_height = 5
-        spacing = 1
-        thousands = health_val // 1000
-        hundreds = (health_val // 100) % 10
-        tens = (health_val // 10) % 10
-        ones = health_val % 10
-        digits = jnp.array([thousands, hundreds, tens, ones], dtype=jnp.int32)
-        active_mask = jnp.array([
-            thousands > 0,
-            (thousands > 0) | (hundreds > 0),
-            (thousands > 0) | (hundreds > 0) | (tens > 0),
-            True
-        ])
-        active_count = jnp.sum(active_mask.astype(jnp.int32))
-        start_x_digits = 4  # left aligned
-        start_y_digits = 4 + ITEM_HEIGHT + 2  # below bar
-        position_index = (jnp.cumsum(active_mask.astype(jnp.int32)) - 1)
-        base_x = jnp.where(active_mask, start_x_digits + position_index * (digit_width + spacing), -100)
-        patterns = self.DIGIT_PATTERNS[digits]
-        xs = jnp.arange(digit_width)
-        ys = jnp.arange(digit_height)
-        grid_x = xs[None, None, :].repeat(4, axis=0).repeat(digit_height, axis=1)
-        grid_y = ys[None, :, None].repeat(4, axis=0).repeat(digit_width, axis=2)
-        px = base_x[:, None, None] + grid_x
-        py = start_y_digits + grid_y
-        pixel_active = (patterns == 1) & (base_x[:, None, None] >= 0)
-        px = jnp.where(pixel_active, px, -100)
-        py = jnp.where(pixel_active, py, -100)
-        flat_px = px.reshape(-1)
-        flat_py = py.reshape(-1)
-        digit_positions = jnp.stack([flat_px, flat_py], axis=1).astype(jnp.int32)
-        pixel_sizes = jnp.ones((digit_positions.shape[0], 2), dtype=jnp.int32)
-        object_raster = self.jr.draw_rects(
-            object_raster,
-            positions=digit_positions,
-            sizes=pixel_sizes,
-            color_id=self.HEART_ID
+            positions=health_bar_pos,
+            sizes=health_bar_size,
+            color_id=self.HUD_ID
         )
         
-        # Lives count below health digits
-        lives_val = jnp.clip(state.lives, 0, 99).astype(jnp.int32)
-        digit_width = 3
-        digit_height = 5
-        spacing = 1
-        lives_tens = lives_val // 10
-        lives_ones = lives_val % 10
-        lives_digits = jnp.array([lives_tens, lives_ones], dtype=jnp.int32)
-        lives_active_mask = jnp.array([lives_tens > 0, True])
-        lives_position_index = (jnp.cumsum(lives_active_mask.astype(jnp.int32)) - 1)
-        lives_base_x = jnp.where(lives_active_mask, 4 + lives_position_index * (digit_width + spacing), -100)
-        lives_patterns = self.DIGIT_PATTERNS[lives_digits]
-        lives_xs = jnp.arange(digit_width)
-        lives_ys = jnp.arange(digit_height)
-        lives_grid_x = lives_xs[None, None, :].repeat(2, axis=0).repeat(digit_height, axis=1)
-        lives_grid_y = lives_ys[None, :, None].repeat(2, axis=0).repeat(digit_width, axis=2)
-        lives_px = lives_base_x[:, None, None] + lives_grid_x
-        lives_py = (4 + ITEM_HEIGHT + 2 + digit_height + 2 + 8) + lives_grid_y  # below health digits
-        lives_pixel_active = (lives_patterns == 1) & (lives_base_x[:, None, None] >= 0)
-        lives_px = jnp.where(lives_pixel_active, lives_px, -100)
-        lives_py = jnp.where(lives_pixel_active, lives_py, -100)
-        lives_flat_px = lives_px.reshape(-1)
-        lives_flat_py = lives_py.reshape(-1)
-        lives_digit_positions = jnp.stack([lives_flat_px, lives_flat_py], axis=1).astype(jnp.int32)
-        lives_digit_sizes = jnp.ones((lives_digit_positions.shape[0], 2), dtype=jnp.int32)
-        object_raster = self.jr.draw_rects(
-            object_raster,
-            positions=lives_digit_positions,
-            sizes=lives_digit_sizes,
-            color_id=self.HEART_ID
-        )
-        
-        # Numeric score display (7 digits: 0-9999999, no bar)
+        # Score digits on the RIGHT (same row as health bar), suppress leading zeros
         score_val = jnp.clip(state.score, 0, 9999999).astype(jnp.int32)
-        digit_width = 3
-        digit_height = 5
-        spacing = 1
+        score_scale = 2
+        digit_width = 3 * score_scale
+        digit_height = 5 * score_scale
+        spacing = 2
+
         millions = score_val // 1000000
         hundred_thousands = (score_val // 100000) % 10
         ten_thousands = (score_val // 10000) % 10
@@ -2039,6 +1950,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         tens = (score_val // 10) % 10
         ones = score_val % 10
         digits = jnp.array([millions, hundred_thousands, ten_thousands, thousands, hundreds, tens, ones], dtype=jnp.int32)
+
         active_mask = jnp.array([
             millions > 0,
             (millions > 0) | (hundred_thousands > 0),
@@ -2046,29 +1958,60 @@ class DarkChambersRenderer(JAXGameRenderer):
             (millions > 0) | (hundred_thousands > 0) | (ten_thousands > 0) | (thousands > 0),
             (millions > 0) | (hundred_thousands > 0) | (ten_thousands > 0) | (thousands > 0) | (hundreds > 0),
             (millions > 0) | (hundred_thousands > 0) | (ten_thousands > 0) | (thousands > 0) | (hundreds > 0) | (tens > 0),
-            True  # ones always shown
+            True
         ])
+
         position_index = (jnp.cumsum(active_mask.astype(jnp.int32)) - 1)
-        score_start_x = self.config.game_dimensions[1] - 7 * (digit_width + spacing) - 4  # right-aligned
+        active_count = jnp.sum(active_mask.astype(jnp.int32))
+        total_width = active_count * digit_width + (active_count - 1) * spacing
+        score_start_x = GAME_W - total_width - 6
         base_x = jnp.where(active_mask, score_start_x + position_index * (digit_width + spacing), -100)
+
         patterns = self.DIGIT_PATTERNS[digits]
+        patterns = jnp.repeat(jnp.repeat(patterns, score_scale, axis=1), score_scale, axis=2)
         xs = jnp.arange(digit_width)
         ys = jnp.arange(digit_height)
         grid_x = xs[None, None, :].repeat(7, axis=0).repeat(digit_height, axis=1)
         grid_y = ys[None, :, None].repeat(7, axis=0).repeat(digit_width, axis=2)
+
         px = base_x[:, None, None] + grid_x
-        py = 4 + grid_y  # top-right, no bar above
+        py = top_row_y + grid_y
         pixel_active = (patterns == 1) & (base_x[:, None, None] >= 0)
         px = jnp.where(pixel_active, px, -100)
         py = jnp.where(pixel_active, py, -100)
-        flat_px = px.reshape(-1)
-        flat_py = py.reshape(-1)
-        score_digit_positions = jnp.stack([flat_px, flat_py], axis=1).astype(jnp.int32)
-        score_digit_sizes = jnp.ones((score_digit_positions.shape[0], 2), dtype=jnp.int32)
+
+        score_positions = jnp.stack([px.reshape(-1), py.reshape(-1)], axis=1).astype(jnp.int32)
+        score_sizes = jnp.ones((score_positions.shape[0], 2), dtype=jnp.int32)
         object_raster = self.jr.draw_rects(
             object_raster,
-            positions=score_digit_positions,
-            sizes=score_digit_sizes,
+            positions=score_positions,
+            sizes=score_sizes,
+            color_id=self.HUD_ID
+        )
+        
+        # Level indicator (bottom area of UI bar, centered)
+        level_digit_width = 3
+        level_digit_height = 5
+        level_val = (state.current_level + 1).astype(jnp.int32)  # 1-based
+        level_y = bar_y_start + 30  # Lower part of UI bar
+        level_pattern = self.DIGIT_PATTERNS[level_val]
+        level_x = GAME_W // 2 - level_digit_width // 2  # Centered
+        
+        xs = jnp.arange(level_digit_width)
+        ys = jnp.arange(level_digit_height)
+        px = level_x + xs[None, :].repeat(level_digit_height, axis=0)
+        py = level_y + ys[:, None].repeat(level_digit_width, axis=1)
+        
+        pixel_active = (level_pattern == 1)
+        px = jnp.where(pixel_active, px, -100)
+        py = jnp.where(pixel_active, py, -100)
+        
+        level_positions = jnp.stack([px.reshape(-1), py.reshape(-1)], axis=1).astype(jnp.int32)
+        level_sizes = jnp.ones((level_positions.shape[0], 2), dtype=jnp.int32)
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=level_positions,
+            sizes=level_sizes,
             color_id=self.UI_ID
         )
         
@@ -2109,13 +2052,15 @@ class DarkChambersRenderer(JAXGameRenderer):
             color_id=self.UI_ID
         )
         
-        # Shield indicator in bottom-left corner
+        # Power-up indicators in UI bar (lower section, left side)
+        indicator_y = bar_y_start + 30  # Same row as level indicator
+        
+        # Shield indicator
         shield_indicator_active = state.shield_active == 1
-        shield_x = 4
-        shield_y = self.config.game_dimensions[0] - ITEM_HEIGHT - 4
+        shield_x = 10
         shield_pos = jnp.where(
             shield_indicator_active,
-            jnp.array([[shield_x, shield_y]], dtype=jnp.int32),
+            jnp.array([[shield_x, indicator_y]], dtype=jnp.int32),
             jnp.array([[-100, -100]], dtype=jnp.int32)
         )
         shield_size = jnp.array([[ITEM_WIDTH, ITEM_HEIGHT]], dtype=jnp.int32)
@@ -2126,13 +2071,12 @@ class DarkChambersRenderer(JAXGameRenderer):
             color_id=self.SHIELD_ID
         )
         
-        # Gun indicator next to shield (bottom-left corner)
+        # Gun indicator next to shield
         gun_indicator_active = state.gun_active == 1
-        gun_x = 4 + ITEM_WIDTH + 2  # Next to shield
-        gun_y = self.config.game_dimensions[0] - ITEM_HEIGHT - 4
+        gun_x = shield_x + ITEM_WIDTH + 3
         gun_pos = jnp.where(
             gun_indicator_active,
-            jnp.array([[gun_x, gun_y]], dtype=jnp.int32),
+            jnp.array([[gun_x, indicator_y]], dtype=jnp.int32),
             jnp.array([[-100, -100]], dtype=jnp.int32)
         )
         gun_size = jnp.array([[ITEM_WIDTH, ITEM_HEIGHT]], dtype=jnp.int32)
@@ -2143,13 +2087,12 @@ class DarkChambersRenderer(JAXGameRenderer):
             color_id=self.GUN_ID
         )
         
-        # Bomb indicator next to gun (bottom-left corner)
+        # Bomb indicator next to gun
         bomb_has_any = state.bomb_count > 0
-        bomb_indicator_x = 4 + (ITEM_WIDTH + 2) * 2  # Next to gun
-        bomb_indicator_y = self.config.game_dimensions[0] - ITEM_HEIGHT - 4
+        bomb_indicator_x = gun_x + ITEM_WIDTH + 3
         bomb_indicator_pos = jnp.where(
             bomb_has_any,
-            jnp.array([[bomb_indicator_x, bomb_indicator_y]], dtype=jnp.int32),
+            jnp.array([[bomb_indicator_x, indicator_y]], dtype=jnp.int32),
             jnp.array([[-100, -100]], dtype=jnp.int32)
         )
         bomb_indicator_size = jnp.array([[ITEM_WIDTH, ITEM_HEIGHT]], dtype=jnp.int32)
@@ -2160,9 +2103,9 @@ class DarkChambersRenderer(JAXGameRenderer):
             color_id=17
         )
         
-        # Bomb counter in bottom-right corner
-        bomb_count_x = self.config.game_dimensions[1] - 12 - 4  # Space for 2-digit number
-        bomb_count_y = self.config.game_dimensions[0] - ITEM_HEIGHT - 4
+        # Bomb counter next to bomb icon
+        bomb_count_x = bomb_indicator_x + ITEM_WIDTH + 2
+        bomb_count_y = indicator_y
         
         # Bomb count digits (0-15) in bottom-right corner
         bomb_count_val = jnp.clip(state.bomb_count, 0, MAX_BOMBS).astype(jnp.int32)
@@ -2419,7 +2362,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
 
         # --- Enemy patrol box + stuck counter init ---
-        # patrol box = current 160x160 "room" (screen-sized) that contains the spawn point
+        # patrol box = current viewport-sized "room" that contains the spawn point
         ex = enemy_positions[:, 0]
         ey = enemy_positions[:, 1]
 
@@ -3315,7 +3258,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 final_step = final_step * alive.astype(jnp.int32)
                 return final_step, new_dir
 
-            # --- Dynamic patrol box: player's current 160x160 room ---
+            # --- Dynamic patrol box: player's current viewport-sized room ---
             room_min_x = (new_x // GAME_W) * GAME_W
             room_min_y = (new_y // GAME_H) * GAME_H
 
