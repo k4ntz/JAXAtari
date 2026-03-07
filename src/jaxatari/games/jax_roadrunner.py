@@ -604,6 +604,7 @@ def _build_offramp_arrays(
 
 
 MAX_FIXED_CANNONS: int = 16  # Maximum number of fixed cannon positions per level
+_NO_CANNON_STEP: int = 999999  # Sentinel: no more fixed cannon positions
 
 
 def _build_cannon_fixed_steps_array(
@@ -2120,7 +2121,7 @@ class JaxRoadRunner(
         if self._level_count > 0:
             fixed_steps = self._cannon_fixed_steps[level_idx]
             valid_next = (fixed_steps > state.scrolling_step_counter) & (fixed_steps >= 0)
-            fixed_candidates = jnp.where(valid_next, fixed_steps, jnp.int32(999999))
+            fixed_candidates = jnp.where(valid_next, fixed_steps, jnp.int32(_NO_CANNON_STEP))
             fixed_next = jnp.min(fixed_candidates)
             has_fixed = jnp.any(self._cannon_fixed_steps[level_idx] >= 0)
             next_cannon_spawn_step = jnp.where(has_fixed, fixed_next, random_next)
@@ -2273,6 +2274,8 @@ class JaxRoadRunner(
                 self.consts.CANNON_SPAWN_MIN_INTERVAL, dtype=jnp.int32
             ),
             cannon_has_fired=jnp.array(False, dtype=jnp.bool_),
+            # Start mirrored=True so the first toggle (~True → False) produces a
+            # right-facing cannon, matching the pre-split position in the offramp pattern.
             cannon_is_mirrored=jnp.array(True, dtype=jnp.bool_),
             bullet_x=jnp.array(-1, dtype=jnp.int32),
             bullet_y=jnp.array(-1, dtype=jnp.int32),
@@ -2436,6 +2439,7 @@ class JaxRoadRunner(
             cannon_y=jnp.array(-1, dtype=jnp.int32),
             next_cannon_spawn_step=jnp.array(0, dtype=jnp.int32),
             cannon_has_fired=jnp.array(False, dtype=jnp.bool_),
+            # Start mirrored=True so first toggle gives right-facing (pre-split pattern)
             cannon_is_mirrored=jnp.array(True, dtype=jnp.bool_),
             bullet_x=jnp.array(-1, dtype=jnp.int32),
             bullet_y=jnp.array(-1, dtype=jnp.int32),
@@ -2650,7 +2654,7 @@ class JaxRoadRunner(
         if self._level_count > 0:
             fixed_steps = self._cannon_fixed_steps[level_idx]
             valid = (fixed_steps >= state.scrolling_step_counter) & (fixed_steps >= 0)
-            candidates = jnp.where(valid, fixed_steps, jnp.int32(999999))
+            candidates = jnp.where(valid, fixed_steps, jnp.int32(_NO_CANNON_STEP))
             fixed_first = jnp.min(candidates)
             has_fixed = jnp.any(fixed_steps >= 0)
             next_cannon_spawn_step = jnp.where(has_fixed, fixed_first, random_cannon_step)
