@@ -46,6 +46,10 @@ class LevelConfig(NamedTuple):
     landmine_spawn_config: Optional[Tuple[int, int]] = None
     spawn_cannons: bool = False
     cannon_spawn_config: Optional[Tuple[int, int]] = None
+    # Fixed scroll-step positions at which cannons appear (deterministic placement).
+    # When non-empty, these override the random cannon_spawn_config interval.
+    # Cannons alternate normal/mirrored starting with normal (right-facing).
+    cannon_scroll_steps: Tuple[int, ...] = ()
     future_entity_types: Dict[str, Any] = {}
     render_road_stripes: bool = True
     # Dynamic road height configuration (for alternating heights)
@@ -356,6 +360,19 @@ RoadRunner_Level_4 = LevelConfig(
     landmine_spawn_config=(220, 380),
     # ~7 cannons over 1500 scroll steps → avg 215 steps between cannons
     cannon_spawn_config=(150, 280),
+    # Fixed cannon positions flanking each offramp.
+    # Pattern per offramp: right-facing cannon → split → bridges → merge → left-facing cannon
+    # Each position is ~10 scroll steps before scroll_start / after scroll_end.
+    cannon_scroll_steps=(
+        120,   # Right-facing cannon before offramp 1 split  (scroll_start=130)
+        345,   # Left-facing cannon after offramp 1 merge    (scroll_end=335)
+        535,   # Right-facing cannon before offramp 2 split  (scroll_start=545)
+        760,   # Left-facing cannon after offramp 2 merge    (scroll_end=750)
+        845,   # Right-facing cannon before offramp 3 split  (scroll_start=855)
+        1070,  # Left-facing cannon after offramp 3 merge    (scroll_end=1060)
+        1180,  # Right-facing cannon before offramp 4 split  (scroll_start=1190)
+        1405,  # Left-facing cannon after offramp 4 merge    (scroll_end=1395)
+    ),
     render_road_stripes=True,
     # Four offramps, each sandwiched between left-facing and right-facing cannons.
     # Pattern: left cannon → split → bridge → bridge → merge → right cannon
@@ -584,6 +601,30 @@ def _build_offramp_arrays(
             offramp_rows.append(list(disabled_row))
         level_rows.append(offramp_rows)
     return jnp.array(level_rows, dtype=jnp.int32)
+
+
+MAX_FIXED_CANNONS: int = 16  # Maximum number of fixed cannon positions per level
+
+
+def _build_cannon_fixed_steps_array(
+    levels: Tuple[LevelConfig, ...],
+) -> jnp.ndarray:
+    """Build fixed cannon scroll-step arrays from level configs.
+
+    Returns array of shape (num_levels, MAX_FIXED_CANNONS).
+    Each row holds the sorted scroll steps at which cannons should appear,
+    padded with -1 for unused slots.
+    """
+    if not levels:
+        return jnp.zeros((0, MAX_FIXED_CANNONS), dtype=jnp.int32)
+
+    rows = []
+    for cfg in levels:
+        steps = list(getattr(cfg, 'cannon_scroll_steps', ()))[:MAX_FIXED_CANNONS]
+        steps.sort()
+        steps += [-1] * (MAX_FIXED_CANNONS - len(steps))
+        rows.append(steps)
+    return jnp.array(rows, dtype=jnp.int32)
 
 
 def _find_active_offramp_row(
@@ -989,6 +1030,9 @@ class JaxRoadRunner(
 
         # Build offramp data array: shape (num_levels, MAX_OFFRAMPS, 3 + MAX_OFFRAMP_BRIDGES)
         self._offramp_data = _build_offramp_arrays(levels)
+
+        # Build fixed cannon scroll-step arrays: shape (num_levels, MAX_FIXED_CANNONS)
+        self._cannon_fixed_steps = _build_cannon_fixed_steps_array(levels)
 
         # Build per-level scroll distances array
         self._level_scroll_distances = jnp.array(
@@ -2067,10 +2111,21 @@ class JaxRoadRunner(
 
         spawn_y = spawn_road_top - consts.CANNON_SIZE[1] + 2
 
-        next_cannon_spawn_step = state.scrolling_step_counter + jax.random.randint(
+        # Compute next cannon spawn step: use fixed positions when available,
+        # otherwise fall back to random interval.
+        random_next = state.scrolling_step_counter + jax.random.randint(
             rng_interval, (), cannon_spawn_bounds[0],
             cannon_spawn_bounds[1] + 1, dtype=jnp.int32,
         )
+        if self._level_count > 0:
+            fixed_steps = self._cannon_fixed_steps[level_idx]
+            valid_next = (fixed_steps > state.scrolling_step_counter) & (fixed_steps >= 0)
+            fixed_candidates = jnp.where(valid_next, fixed_steps, jnp.int32(999999))
+            fixed_next = jnp.min(fixed_candidates)
+            has_fixed = jnp.any(self._cannon_fixed_steps[level_idx] >= 0)
+            next_cannon_spawn_step = jnp.where(has_fixed, fixed_next, random_next)
+        else:
+            next_cannon_spawn_step = random_next
 
         updated_cannon_x = jnp.where(should_spawn_cannon, jnp.array(0, dtype=jnp.int32), updated_cannon_x)
         updated_cannon_y = jnp.where(should_spawn_cannon, spawn_y, updated_cannon_y)
@@ -2218,7 +2273,7 @@ class JaxRoadRunner(
                 self.consts.CANNON_SPAWN_MIN_INTERVAL, dtype=jnp.int32
             ),
             cannon_has_fired=jnp.array(False, dtype=jnp.bool_),
-            cannon_is_mirrored=jnp.array(False, dtype=jnp.bool_),
+            cannon_is_mirrored=jnp.array(True, dtype=jnp.bool_),
             bullet_x=jnp.array(-1, dtype=jnp.int32),
             bullet_y=jnp.array(-1, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
@@ -2381,7 +2436,7 @@ class JaxRoadRunner(
             cannon_y=jnp.array(-1, dtype=jnp.int32),
             next_cannon_spawn_step=jnp.array(0, dtype=jnp.int32),
             cannon_has_fired=jnp.array(False, dtype=jnp.bool_),
-            cannon_is_mirrored=jnp.array(False, dtype=jnp.bool_),
+            cannon_is_mirrored=jnp.array(True, dtype=jnp.bool_),
             bullet_x=jnp.array(-1, dtype=jnp.int32),
             bullet_y=jnp.array(-1, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
@@ -2584,13 +2639,23 @@ class JaxRoadRunner(
             dtype=jnp.int32,
         )
         rng, cannon_key = jax.random.split(rng)
-        next_cannon_spawn_step = state.scrolling_step_counter + jax.random.randint(
+        random_cannon_step = state.scrolling_step_counter + jax.random.randint(
             cannon_key,
             (),
             cannon_bounds[0],
             cannon_bounds[1] + 1,
             dtype=jnp.int32,
         )
+        # Use fixed cannon positions when available for the level.
+        if self._level_count > 0:
+            fixed_steps = self._cannon_fixed_steps[level_idx]
+            valid = (fixed_steps >= state.scrolling_step_counter) & (fixed_steps >= 0)
+            candidates = jnp.where(valid, fixed_steps, jnp.int32(999999))
+            fixed_first = jnp.min(candidates)
+            has_fixed = jnp.any(fixed_steps >= 0)
+            next_cannon_spawn_step = jnp.where(has_fixed, fixed_first, random_cannon_step)
+        else:
+            next_cannon_spawn_step = random_cannon_step
         return state._replace(
             rng=rng,
             next_seed_spawn_scroll_step=next_seed_spawn_scroll_step,
