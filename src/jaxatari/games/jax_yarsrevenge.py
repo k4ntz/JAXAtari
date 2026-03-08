@@ -1760,6 +1760,10 @@ class YarsRevengeRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
+        # Set up scaled variables
+        self.scaled_height = round(self.consts.HEIGHT * self.config.height_scaling)
+        self.scaled_width = round(self.consts.WIDTH * self.config.width_scaling)
+
         asset_config = self._get_asset_config()
         sprite_path = (
             f"{os.path.dirname(os.path.abspath(__file__))}/sprites/yarsrevenge"
@@ -1782,7 +1786,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
         )[: self.consts.NEUTRAL_ZONE_DATA_SIZE]
 
         self.row_color_idx = (
-            jnp.arange(self.consts.HEIGHT)
+            jnp.arange(self.scaled_height)
             // self.consts.RENDERER_RANDOM_COLORS_PER_N_ROW
         )
         self.initial_dynamic_color_id = self.COLOR_TO_ID[(0, 1, 1)]
@@ -1876,7 +1880,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
                 "data": jnp.array((i, 1, 1, 255), dtype=jnp.uint8).reshape(1, 1, 4),
             }
             for i in range(
-                self.consts.HEIGHT // self.consts.RENDERER_RANDOM_COLORS_PER_N_ROW
+                self.scaled_height // self.consts.RENDERER_RANDOM_COLORS_PER_N_ROW
             )
         ]
 
@@ -1901,12 +1905,12 @@ class YarsRevengeRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _calculate_neutral_zone_slice(self, state):
-        interval = self.consts.NEUTRAL_ZONE_DATA_SIZE - self.consts.NEUTRAL_ZONE_SIZE[1]
+        interval = self.consts.NEUTRAL_ZONE_DATA_SIZE - round(self.consts.NEUTRAL_ZONE_SIZE[1] * self.config.height_scaling)
         begin = state.step_counter % (interval * 2)
         begin = jnp.where(begin <= interval, begin, (interval * 2) - begin)
 
         start_indices = jnp.array([begin])
-        slice_sizes = (self.consts.NEUTRAL_ZONE_SIZE[1],)
+        slice_sizes = (round(self.consts.NEUTRAL_ZONE_SIZE[1] * self.config.height_scaling),)
         return jax.lax.dynamic_slice(self.neutral_zone_data, start_indices, slice_sizes)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1967,7 +1971,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
         state, raster = info
 
         destroyer_mask = jnp.ones(
-            (self.consts.DESTROYER_SIZE[1], self.consts.DESTROYER_SIZE[0])
+            (round(self.consts.DESTROYER_SIZE[1] * self.config.height_scaling), round(self.consts.DESTROYER_SIZE[0] * self.config.width_scaling))
         )
         raster = self.jr.render_at(
             raster, state.destroyer.x, state.destroyer.y, destroyer_mask
@@ -1980,7 +1984,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
         state, raster = info
 
         energy_missile_mask = jnp.zeros(
-            (self.consts.ENERGY_MISSILE_SIZE[1], self.consts.ENERGY_MISSILE_SIZE[0])
+            (round(self.consts.ENERGY_MISSILE_SIZE[1] * self.config.height_scaling), round(self.consts.ENERGY_MISSILE_SIZE[0] * self.config.width_scaling))
         )
         raster = jnp.where(
             state.energy_missile_exist,
@@ -2001,11 +2005,11 @@ class YarsRevengeRenderer(JAXGameRenderer):
 
         cannon_color_map_slice = jax.lax.dynamic_slice(
             self.row_color_map,
-            (state.cannon.y.astype(jnp.int32),),
-            (self.consts.CANNON_SIZE[1],),
+            (round(state.cannon.y * self.config.height_scaling).astype(jnp.int32),),
+            (round(self.consts.CANNON_SIZE[1] * self.config.height_scaling),),
         )
         cannon_half_mask = jnp.repeat(
-            cannon_color_map_slice[:, None], (self.consts.CANNON_SIZE[1] // 2), axis=1
+            cannon_color_map_slice[:, None], (round(self.consts.CANNON_SIZE[1] * self.config.height_scaling) // 2), axis=1
         )
 
         cannon_mask = jnp.where(
@@ -2015,7 +2019,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
                 [
                     cannon_half_mask,
                     jnp.full(
-                        (self.consts.CANNON_SIZE[1], self.consts.CANNON_SIZE[0] // 2),
+                        cannon_half_mask.shape,
                         self.jr.TRANSPARENT_ID,
                     ),
                 ],
@@ -2188,14 +2192,14 @@ class YarsRevengeRenderer(JAXGameRenderer):
         state, raster = info
 
         # Calculate values for the animation
-        animation_step = jnp.minimum(state.game_state_timer, self.consts.HEIGHT)
+        animation_step = jnp.minimum(state.game_state_timer, self.scaled_height)
 
         half = animation_step // 2
-        row_idx = jnp.arange(self.consts.HEIGHT)
-        transparent = (row_idx < half) | (row_idx >= self.consts.HEIGHT - half)
+        row_idx = jnp.arange(self.scaled_height)
+        transparent = (row_idx < half) | (row_idx >= self.scaled_height - half)
 
         # Render qotile color in background
-        qotile_color_mask = jnp.ones((self.consts.HEIGHT, self.consts.WIDTH))
+        qotile_color_mask = jnp.ones((self.scaled_height, self.scaled_width))
         qotile_color_mask = jnp.where(
             transparent[:, None], self.jr.TRANSPARENT_ID, qotile_color_mask
         )
@@ -2222,8 +2226,8 @@ class YarsRevengeRenderer(JAXGameRenderer):
             transparent[:, None], self.jr.TRANSPARENT_ID, neutral_zone_mask
         )
         neutral_zone_mask = jnp.tile(
-            neutral_zone_mask, self.consts.WIDTH // neutral_zone_mask.shape[1] + 1
-        )[:, :160]
+            neutral_zone_mask, self.scaled_width // neutral_zone_mask.shape[1] + 1
+        )[:, :self.scaled_width]
         raster = self.jr.render_at(
             raster,
             0,
