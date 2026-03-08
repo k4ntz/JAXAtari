@@ -6,7 +6,9 @@ import os
 import chex
 import jax
 import jax.numpy as jnp
+import jax.image as jim
 import numpy as np
+from flax import struct
 
 from jaxatari.environment import JaxEnvironment
 import jaxatari.spaces as spaces
@@ -35,7 +37,8 @@ class MsPacmanInfo(NamedTuple):
     lives: chex.Array
 
 
-class MsPacmanConstants(NamedTuple):
+@struct.dataclass
+class MsPacmanConstants:
     screen_width: int = 160
     screen_height: int = 210
     cell_size: int = 4
@@ -1273,12 +1276,13 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
 
 class MsPacmanRenderer(JAXGameRenderer):
     def __init__(self, consts: MsPacmanConstants = None, wall_grid: jnp.ndarray = None, pellet_template: jnp.ndarray = None, config=None):
-        super().__init__(consts, config=config)
         self.consts = consts or DEFAULT_MSPACMAN_CONSTANTS
-        self.config = render_utils.RendererConfig(
+        # Honor provided config (for native downscaling/grayscale); otherwise use default
+        self.config = config or render_utils.RendererConfig(
             game_dimensions=(self.consts.screen_height, self.consts.screen_width),
             channels=3,
         )
+        super().__init__(consts, config=self.config)
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # Support per-level arrays or single grids; renderer keeps stacked grids and per-level backgrounds
@@ -1308,8 +1312,9 @@ class MsPacmanRenderer(JAXGameRenderer):
         # Build per-level RGBA backgrounds
         backgrounds = []
         for idx in range(self.wall_grids.shape[0]):
-            backgrounds.append(self._build_background(self.wall_grids[idx], self.pellet_templates[idx]))
-        self.backgrounds_rgba = jnp.stack(backgrounds)
+            bg_rgba = self._build_background(self.wall_grids[idx], self.pellet_templates[idx])
+            backgrounds.append(np.array(bg_rgba))
+        self.backgrounds_rgba = jnp.asarray(np.stack(backgrounds, axis=0))
         # Use level 0 for asset setup; render will pick per-level
         background_rgba = self.backgrounds_rgba[0]
 
@@ -1348,9 +1353,9 @@ class MsPacmanRenderer(JAXGameRenderer):
         # Convert RGBA backgrounds to palette ID masks for rendering
         bg_ids = []
         for idx in range(self.backgrounds_rgba.shape[0]):
-            bg_rgba = np.array(self.backgrounds_rgba[idx])
-            # Map colors to ids; assume alpha 255
-            ids = np.zeros((bg_rgba.shape[0], bg_rgba.shape[1]), dtype=np.uint8)
+            bg_rgba = np.array(self.backgrounds_rgba[idx])  # (H, W, 4)
+            h, w = bg_rgba.shape[:2]
+            ids = np.zeros((h, w), dtype=np.uint8)
             for color, cid in self.COLOR_TO_ID.items():
                 if len(color) == 3:
                     rgba = np.array([color[0], color[1], color[2], 255], dtype=np.uint8)
@@ -1358,16 +1363,28 @@ class MsPacmanRenderer(JAXGameRenderer):
                     rgba = np.array(color, dtype=np.uint8)
                 mask = np.all(bg_rgba == rgba, axis=-1)
                 ids[mask] = cid
-            bg_ids.append(jnp.asarray(ids))
-        self.backgrounds = jnp.stack(bg_ids)
+            bg_ids.append(ids)
+        self.backgrounds = jnp.asarray(np.stack(bg_ids, axis=0))
 
         # Pre-compute directional pacman masks: (4 frames, 4 dirs, H, W)
         # dir 0=left (base), 1=right (flip_h), 2=up (rot90 CW), 3=down (rot90 CCW)
         pac_masks = self.SHAPE_MASKS['pacman']  # (4, H, W)
         pac_flip_offset = self.FLIP_OFFSETS['pacman']
+
+        # Pad all frames to a shared square size to allow rotations/stacking
+        max_h = int(max([pac_masks[i].shape[0] for i in range(pac_masks.shape[0])]))
+        max_w = int(max([pac_masks[i].shape[1] for i in range(pac_masks.shape[0])]))
+        size = max(max_h, max_w)
+
+        def pad_to_size(mask):
+            h, w = mask.shape
+            pad_h = size - h
+            pad_w = size - w
+            return jnp.pad(mask, ((0, pad_h), (0, pad_w)), mode="constant")
+
         directional = []
         for frame_idx in range(4):
-            m = pac_masks[frame_idx]
+            m = pad_to_size(pac_masks[frame_idx])
             left = m                                    # base faces left
             right = jnp.flip(m, axis=1)                 # horizontal flip
             up = jnp.rot90(m, k=3)                      # 90° CW (mouth points up)
@@ -1388,6 +1405,12 @@ class MsPacmanRenderer(JAXGameRenderer):
         """Build background RGBA image from wall grid and pellet template."""
         cell = self.cell
         grid_h, grid_w = wall_grid.shape
+
+        # Target output size respects renderer config (native downscaling)
+        target_h, target_w = (
+            self.config.downscale if self.config.downscale is not None
+            else (self.consts.screen_height, self.consts.screen_width)
+        )
 
         # Build per-tile colors
         bg_color = np.array(self.consts.background_color, dtype=np.uint8)
@@ -1423,6 +1446,12 @@ class MsPacmanRenderer(JAXGameRenderer):
         # Convert to RGBA
         alpha = np.full((self.consts.screen_height, self.consts.screen_width, 1), 255, dtype=np.uint8)
         canvas_rgba = np.concatenate([canvas, alpha], axis=2)
+
+        # If renderer is downscaling, resize background to target dimensions
+        if self.config.downscale is not None:
+            canvas_rgba = np.array(
+                jim.resize(jnp.asarray(canvas_rgba), (target_h, target_w, 4), method="nearest")
+            )
         return jnp.asarray(canvas_rgba)
 
     @partial(jax.jit, static_argnums=(0,))
