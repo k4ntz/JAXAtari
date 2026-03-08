@@ -20,7 +20,7 @@ class LevelConstants(NamedTuple):
     child_position: chex.Array
 
 
-LADDER_HEIGHT = jnp.array(35)
+LADDER_HEIGHT = jnp.array(36)
 LADDER_WIDTH = jnp.array(8)
 P_HEIGHT = jnp.array(4)
 
