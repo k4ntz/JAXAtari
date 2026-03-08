@@ -130,6 +130,11 @@ def _get_default_pitfall_asset_config() -> tuple:
             'file': 'background_tree_variant_0.npy',
         },
         {
+            'name': 'background_tree_variant_1',
+            'type': 'single',
+            'file': 'background_tree_variant_1.npy',
+        },
+        {
             'name': 'background_tree_variant_2',
             'type': 'single',
             'file': 'background_tree_variant_2.npy',
@@ -1357,6 +1362,7 @@ class PitfallRenderer(JAXGameRenderer):
                 asset.get('type') == 'single'
                 and asset.get('name') in {
                     'background_tree_variant_0',
+                    'background_tree_variant_1',
                     'background_tree_variant_2',
                     'background_tree_variant_3',
                     'backdrop_wall_and_ladder',
@@ -1418,7 +1424,8 @@ class PitfallRenderer(JAXGameRenderer):
 
         transparent_pixel = jnp.full((1, 1), int(self.jr.TRANSPARENT_ID), dtype=self.BACKGROUND.dtype)
         self.BACKGROUND_TREE_VARIANT_0 = self.SHAPE_MASKS.get('background_tree_variant_0', transparent_pixel)
-        self.BACKGROUND_TREE_VARIANT_2 = self.SHAPE_MASKS.get('background_tree_variant_2', self.BACKGROUND_TREE_VARIANT_0)
+        self.BACKGROUND_TREE_VARIANT_1 = self.SHAPE_MASKS.get('background_tree_variant_1', self.BACKGROUND_TREE_VARIANT_0)
+        self.BACKGROUND_TREE_VARIANT_2 = self.SHAPE_MASKS.get('background_tree_variant_2', self.BACKGROUND_TREE_VARIANT_1)
         self.BACKGROUND_TREE_VARIANT_3 = self.SHAPE_MASKS.get('background_tree_variant_3', self.BACKGROUND_TREE_VARIANT_2)
         self.BACKDROP_WALL_AND_LADDER = self.SHAPE_MASKS.get('backdrop_wall_and_ladder', transparent_pixel)
         self.BACKDROP_CROCODILEPIT_AND_ROPE = self.SHAPE_MASKS.get('backdrop_crocodilepit_and_rope', transparent_pixel)
@@ -1484,7 +1491,7 @@ class PitfallRenderer(JAXGameRenderer):
         scorpion_w = max(int(scorpion_left.shape[2]), int(scorpion_right.shape[2]))
         self.SCORPION_LEFT_MASKS = _pad_to(scorpion_left, scorpion_h, scorpion_w)
         self.SCORPION_RIGHT_MASKS = _pad_to(scorpion_right, scorpion_h, scorpion_w)
-        self.TREE_VARIANT_TO_ASSET_IDX = jnp.array([0, 1, 2, 2], dtype=jnp.int32)
+        self.TREE_VARIANT_TO_ASSET_IDX = jnp.array([0, 1, 2, 3], dtype=jnp.int32)
 
     def _prefer_backdrop_in_region(
         self,
@@ -1541,6 +1548,16 @@ class PitfallRenderer(JAXGameRenderer):
                 flip_offset=jnp.array([0, 0], dtype=jnp.int32),
             )
 
+        def _render_tree_variant_1(r: jnp.ndarray) -> jnp.ndarray:
+            return self.jr.render_at_clipped(
+                r,
+                jnp.int32(0),
+                jnp.int32(0),
+                self.BACKGROUND_TREE_VARIANT_1,
+                flip_horizontal=jnp.array(False, dtype=jnp.bool_),
+                flip_offset=jnp.array([0, 0], dtype=jnp.int32),
+            )
+
         def _render_tree_variant_2(r: jnp.ndarray) -> jnp.ndarray:
             return self.jr.render_at_clipped(
                 r,
@@ -1565,6 +1582,7 @@ class PitfallRenderer(JAXGameRenderer):
             tree_bg_asset_idx,
             (
                 _render_tree_variant_0,
+                _render_tree_variant_1,
                 _render_tree_variant_2,
                 _render_tree_variant_3,
             ),
