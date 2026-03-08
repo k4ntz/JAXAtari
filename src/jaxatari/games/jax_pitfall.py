@@ -155,6 +155,11 @@ def _get_default_pitfall_asset_config() -> tuple:
             'file': 'backdrop_crocodilepit_and_rope.npy',
         },
         {
+            'name': 'wall',
+            'type': 'single',
+            'file': 'wall.npy',
+        },
+        {
             'name': 'harry_idle',
             'type': 'group',
             'files': ['harryidle1.npy'],
@@ -455,8 +460,8 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         W = self.consts.screen_width
         WW = self.consts.tunnel_wall_width
 
-        LEFT_WALL_X = 11
-        RIGHT_WALL_X = 144
+        LEFT_WALL_X = 23
+        RIGHT_WALL_X = 132
 
         def clamp_wall_x(x: int) -> int:
             return max(0, min(W - WW, x))
@@ -1198,12 +1203,12 @@ class PitfallRenderer(JAXGameRenderer):
             return max(0, min(screen_w - wall_w, x))
 
         if left_wall_x_px is None:
-            left_wall_x_px = jnp.array(_clamp_wall_x(11), dtype=jnp.int32)
+            left_wall_x_px = jnp.array(_clamp_wall_x(23), dtype=jnp.int32)
         else:
             left_wall_x_px = jnp.asarray(left_wall_x_px, dtype=jnp.int32)
 
         if right_wall_x_px is None:
-            right_wall_x_px = jnp.array(_clamp_wall_x(136), dtype=jnp.int32)
+            right_wall_x_px = jnp.array(_clamp_wall_x(132), dtype=jnp.int32)
         else:
             right_wall_x_px = jnp.asarray(right_wall_x_px, dtype=jnp.int32)
 
@@ -1429,6 +1434,22 @@ class PitfallRenderer(JAXGameRenderer):
         self.BACKGROUND_TREE_VARIANT_3 = self.SHAPE_MASKS.get('background_tree_variant_3', self.BACKGROUND_TREE_VARIANT_2)
         self.BACKDROP_WALL_AND_LADDER = self.SHAPE_MASKS.get('backdrop_wall_and_ladder', transparent_pixel)
         self.BACKDROP_CROCODILEPIT_AND_ROPE = self.SHAPE_MASKS.get('backdrop_crocodilepit_and_rope', transparent_pixel)
+        wall_mask = self.SHAPE_MASKS.get('wall', transparent_pixel)
+        self.WALL_MASK = wall_mask[0] if wall_mask.ndim == 3 else wall_mask
+        wall_extension_rows = min(3, int(self.WALL_MASK.shape[0]))
+        self.WALL_RENDER_MASK = jnp.concatenate(
+            [self.WALL_MASK[:wall_extension_rows], self.WALL_MASK],
+            axis=0,
+        )
+        wall_red_id = jnp.asarray(self.COLOR_TO_ID.get((167, 26, 26), int(self.WALL_ID)), dtype=self.WALL_RENDER_MASK.dtype)
+        wall_top_row = self.WALL_RENDER_MASK[0]
+        self.WALL_RENDER_MASK = self.WALL_RENDER_MASK.at[0].set(
+            jnp.where(
+                wall_top_row != jnp.asarray(self.jr.TRANSPARENT_ID, dtype=self.WALL_RENDER_MASK.dtype),
+                wall_red_id,
+                wall_top_row,
+            )
+        )
         self.HAS_BACKDROP_WALL_AND_LADDER = jnp.array(
             'backdrop_wall_and_ladder' in self.SHAPE_MASKS, dtype=jnp.bool_
         )
@@ -1682,12 +1703,22 @@ class PitfallRenderer(JAXGameRenderer):
         ladder_size = jnp.array([jnp.int32(self.consts.ladder_width), ladder_h], dtype=jnp.int32)
         raster = self.jr.draw_rects(raster, ladder_pos[None, :], ladder_size[None, :], int(self.LADDER_ID))
 
-        wall_top = jnp.int32(int(self.consts.ground_y))
-        wall_h = jnp.int32(max(0, int(self.consts.underground_y) - int(self.consts.ground_y)))
-        draw_wall_rect = has_wall & (~has_right_wall_ladder_backdrop)
-        wall_pos = jnp.where(draw_wall_rect, jnp.array([wall_x, wall_top], dtype=jnp.int32), jnp.array([-1, -1], dtype=jnp.int32))
-        wall_size = jnp.array([jnp.int32(self.consts.tunnel_wall_width), wall_h], dtype=jnp.int32)
-        raster = self.jr.draw_rects(raster, wall_pos[None, :], wall_size[None, :], int(self.WALL_ID))
+        wall_h = jnp.int32(int(self.WALL_RENDER_MASK.shape[0]))
+        wall_top = jnp.int32(int(self.consts.underground_y)) - wall_h
+        draw_wall_sprite = has_wall & (~has_right_wall_ladder_backdrop)
+        raster = lax.cond(
+            draw_wall_sprite,
+            lambda r: self.jr.render_at_clipped(
+                r,
+                wall_x,
+                wall_top,
+                self.WALL_RENDER_MASK,
+                flip_horizontal=jnp.array(False, dtype=jnp.bool_),
+                flip_offset=jnp.array([0, 0], dtype=jnp.int32),
+            ),
+            lambda r: r,
+            raster,
+        )
 
         has_logs, logs_are_rolling, log_count, log_xs, has_fireplace, has_snake = room_hazards_from_room_byte(rb)
 
