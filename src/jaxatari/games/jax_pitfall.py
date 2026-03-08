@@ -125,9 +125,29 @@ def _get_default_pitfall_asset_config() -> tuple:
     return (
         {'name': 'background', 'type': 'background'},
         {
+            'name': 'background_tree_variant_0',
+            'type': 'single',
+            'file': 'background_tree_variant_0.npy',
+        },
+        {
+            'name': 'background_tree_variant_2',
+            'type': 'single',
+            'file': 'background_tree_variant_2.npy',
+        },
+        {
+            'name': 'background_tree_variant_3',
+            'type': 'single',
+            'file': 'background_tree_variant_3.npy',
+        },
+        {
             'name': 'backdrop_wall_and_ladder',
             'type': 'single',
             'file': 'backdrop_wall_and_ladder.npy',
+        },
+        {
+            'name': 'backdrop_crocodilepit_and_rope',
+            'type': 'single',
+            'file': 'backdrop_crocodilepit_and_rope.npy',
         },
         {
             'name': 'harry_idle',
@@ -183,6 +203,11 @@ def wall_side_u8(room_byte: jnp.ndarray) -> jnp.ndarray:
     return (room_byte.astype(jnp.uint8) >> jnp.uint8(7)) & jnp.uint8(1)
 
 
+def tree_variant_u8(room_byte: jnp.ndarray) -> jnp.ndarray:
+    """Bits 6..7 (uint8 0..3)."""
+    return (room_byte.astype(jnp.uint8) >> jnp.uint8(6)) & jnp.uint8(0x3)
+
+
 def pit_type(room_byte: jnp.ndarray) -> jnp.ndarray:
     """Pit type is bits 3..5 of the room byte (uint8 0..7)."""
     return pit_code_u8(room_byte)
@@ -193,6 +218,24 @@ def has_scorpion_from_room_byte(room_byte: jnp.ndarray) -> jnp.ndarray:
     pt = pit_code_u8(room_byte.astype(jnp.uint8))
     has_ladder = (pt == jnp.uint8(0)) | (pt == jnp.uint8(1))
     return ~has_ladder
+
+
+def has_vine_from_room_byte(room_byte: jnp.ndarray) -> jnp.ndarray:
+    """Vine/rope presence from room-byte decode rules."""
+    rb = room_byte.astype(jnp.uint8)
+    pt = pit_code_u8(rb)
+    obj = obj_code_u8(rb)
+
+    is_croc_pit = pt == jnp.uint8(0b100)
+    is_croc_vine_obj = (
+        (obj == jnp.uint8(0b010)) |
+        (obj == jnp.uint8(0b011)) |
+        (obj == jnp.uint8(0b110)) |
+        (obj == jnp.uint8(0b111))
+    )
+
+    is_shifting_tar = pt == jnp.uint8(0b110)
+    return (is_croc_pit & is_croc_vine_obj) | is_shifting_tar
 
 
 def room_hazards_from_room_byte(room_byte: jnp.ndarray) -> tuple[
@@ -408,7 +451,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         WW = self.consts.tunnel_wall_width
 
         LEFT_WALL_X = 11
-        RIGHT_WALL_X = 136
+        RIGHT_WALL_X = 144
 
         def clamp_wall_x(x: int) -> int:
             return max(0, min(W - WW, x))
@@ -485,13 +528,6 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         )
 
         entering_ladder = (~state.on_ladder) & (enter_from_upper | enter_from_lower)
-
-        centered_x_on_ladder = (
-            ladder_x.astype(jnp.float32)
-            + (ladder_w.astype(jnp.float32) - player_w.astype(jnp.float32)) * 0.5
-            - 1.0
-        )
-        x = jnp.where(entering_ladder, centered_x_on_ladder, x)
 
         climb_speed = jnp.asarray(1.5, dtype=jnp.float32)
 
@@ -1142,13 +1178,37 @@ class PitfallRenderer(JAXGameRenderer):
 
     def __init__(
         self,
-        consts,
-        ladder_x_px,
-        left_wall_x_px,
-        right_wall_x_px,
+        consts: PitfallConstants | None = None,
+        ladder_x_px: chex.Array | None = None,
+        left_wall_x_px: chex.Array | None = None,
+        right_wall_x_px: chex.Array | None = None,
     ):
         super().__init__()
         self.consts = consts or PitfallConstants()
+
+        screen_w = int(self.consts.screen_width)
+        wall_w = int(self.consts.tunnel_wall_width)
+
+        def _clamp_wall_x(x: int) -> int:
+            return max(0, min(screen_w - wall_w, x))
+
+        if left_wall_x_px is None:
+            left_wall_x_px = jnp.array(_clamp_wall_x(11), dtype=jnp.int32)
+        else:
+            left_wall_x_px = jnp.asarray(left_wall_x_px, dtype=jnp.int32)
+
+        if right_wall_x_px is None:
+            right_wall_x_px = jnp.array(_clamp_wall_x(136), dtype=jnp.int32)
+        else:
+            right_wall_x_px = jnp.asarray(right_wall_x_px, dtype=jnp.int32)
+
+        if ladder_x_px is None:
+            ladder_x_default = int(round(140 * screen_w / 300.0))
+            ladder_x_default = max(0, min(screen_w - int(self.consts.ladder_width), ladder_x_default))
+            ladder_x_px = jnp.array(ladder_x_default, dtype=jnp.int32)
+        else:
+            ladder_x_px = jnp.asarray(ladder_x_px, dtype=jnp.int32)
+
         self.ladder_x_px = ladder_x_px
         self.left_wall_x_px = left_wall_x_px
         self.right_wall_x_px = right_wall_x_px
@@ -1232,40 +1292,81 @@ class PitfallRenderer(JAXGameRenderer):
                 frames.append(frame_rgba)
             return frames
 
+        def _normalize_to_rgba_u8(image: np.ndarray, asset_name: str) -> np.ndarray:
+            if image.ndim == 2:
+                alpha = np.where(image > 0, np.uint8(255), np.uint8(0))
+                rgb = np.stack([image, image, image], axis=2).astype(np.uint8)
+                return np.concatenate([rgb, alpha[:, :, None]], axis=2).astype(np.uint8)
+            if image.ndim == 3 and image.shape[2] == 3:
+                image_u8 = image.astype(np.uint8)
+                alpha = np.where(np.any(image_u8 != 0, axis=2), np.uint8(255), np.uint8(0))
+                return np.concatenate([image_u8, alpha[:, :, None]], axis=2).astype(np.uint8)
+            if image.ndim == 3 and image.shape[2] == 4:
+                return image.astype(np.uint8)
+            raise ValueError(f"Unsupported backdrop format for {asset_name}: shape={image.shape}")
+
+        def _cleanup_leading_black_edges(backdrop_rgba: np.ndarray, max_strip: int = 16) -> np.ndarray:
+            rgb = backdrop_rgba[:, :, :3]
+            h_img, w_img = rgb.shape[:2]
+
+            top_limit = min(max_strip, h_img)
+            left_limit = min(max_strip, w_img)
+
+            top_strip = 0
+            for y in range(top_limit):
+                if np.all(rgb[y] == 0):
+                    top_strip += 1
+                else:
+                    break
+
+            left_strip = 0
+            for x in range(left_limit):
+                if np.all(rgb[:, x] == 0):
+                    left_strip += 1
+                else:
+                    break
+
+            cleaned = backdrop_rgba.copy()
+            if 0 < top_strip < h_img:
+                cleaned[:top_strip, :, :] = cleaned[top_strip:top_strip + 1, :, :]
+            if 0 < left_strip < w_img:
+                cleaned[:, :left_strip, :] = cleaned[:, left_strip:left_strip + 1, :]
+            return cleaned
+
+        def _load_fullscreen_backdrop(asset_name: str, file_name: str) -> dict | None:
+            file_path = os.path.join(sprite_path, file_name)
+            if not os.path.exists(file_path):
+                return None
+            backdrop_np = np.load(file_path)
+            backdrop_rgba = _normalize_to_rgba_u8(backdrop_np, asset_name)
+
+            bh, bw = int(backdrop_rgba.shape[0]), int(backdrop_rgba.shape[1])
+            if (bh, bw) != (h, w):
+                raise ValueError(f"{asset_name} has unexpected size {(bh, bw)}; expected {(h, w)}")
+
+            backdrop_rgba = _cleanup_leading_black_edges(backdrop_rgba)
+            return {
+                'name': asset_name,
+                'type': 'single',
+                'data': jnp.asarray(backdrop_rgba, dtype=jnp.uint8),
+            }
+
         converted_asset_config = []
         for asset in asset_config:
-            if asset.get('name') == 'backdrop_wall_and_ladder' and asset.get('type') == 'single' and 'file' in asset:
-                file_path = os.path.join(sprite_path, asset['file'])
-                backdrop_np = np.load(file_path)
-                backdrop = jnp.asarray(backdrop_np, dtype=jnp.uint8)
-
-                if backdrop.ndim == 2:
-                    alpha = jnp.where(backdrop > 0, jnp.uint8(255), jnp.uint8(0))
-                    backdrop = jnp.stack([backdrop, backdrop, backdrop, alpha], axis=2).astype(jnp.uint8)
-                elif backdrop.ndim == 3 and backdrop.shape[2] == 3:
-                    alpha = jnp.where(jnp.any(backdrop != 0, axis=2), jnp.uint8(255), jnp.uint8(0))
-                    backdrop = jnp.concatenate([backdrop.astype(jnp.uint8), alpha[:, :, None]], axis=2)
-                elif not (backdrop.ndim == 3 and backdrop.shape[2] == 4):
-                    raise ValueError(f"Unsupported backdrop format for backdrop_wall_and_ladder: shape={backdrop.shape}")
-
-                bh, bw = int(backdrop.shape[0]), int(backdrop.shape[1])
-                if bh != h or bw != w:
-                    raise ValueError(
-                        f"backdrop_wall_and_ladder has unexpected size {(bh, bw)}; expected {(h, w)}"
-                    )
-
-                top_black_rows = 6
-                left_black_cols = 8
-                backdrop = backdrop.at[:top_black_rows, :, :].set(backdrop[top_black_rows:top_black_rows + 1, :, :])
-                backdrop = backdrop.at[:, :left_black_cols, :].set(backdrop[:, left_black_cols:left_black_cols + 1, :])
-
-                converted_asset_config.append(
-                    {
-                        'name': 'backdrop_wall_and_ladder',
-                        'type': 'single',
-                        'data': backdrop,
-                    }
-                )
+            if (
+                asset.get('type') == 'single'
+                and asset.get('name') in {
+                    'background_tree_variant_0',
+                    'background_tree_variant_2',
+                    'background_tree_variant_3',
+                    'backdrop_wall_and_ladder',
+                    'backdrop_crocodilepit_and_rope',
+                }
+                and 'file' in asset
+            ):
+                converted_backdrop = _load_fullscreen_backdrop(asset['name'], asset['file'])
+                if converted_backdrop is not None:
+                    converted_asset_config.append(converted_backdrop)
             elif asset.get('name') == 'scorpion_left' and asset.get('type') == 'group' and 'files' in asset:
                 converted_asset_config.append(
                     {
@@ -1291,7 +1392,7 @@ class PitfallRenderer(JAXGameRenderer):
 
         asset_config.extend(
             [
-                {'name': 'color_ladder', 'type': 'procedural', 'data': _color_swatch((134, 134, 29))},
+                {'name': 'color_ladder', 'type': 'procedural', 'data': _color_swatch((0, 0, 255))},
                 {'name': 'color_wall', 'type': 'procedural', 'data': _color_swatch((180, 40, 0))},
                 {'name': 'color_wood', 'type': 'procedural', 'data': _color_swatch((110, 70, 25))},
                 {'name': 'color_fire', 'type': 'procedural', 'data': _color_swatch((255, 120, 0))},
@@ -1314,6 +1415,19 @@ class PitfallRenderer(JAXGameRenderer):
         self.FIRE_ID = self.SHAPE_MASKS['color_fire'][0, 0].astype(self.BACKGROUND.dtype)
         self.SNAKE_ID = self.SHAPE_MASKS['color_snake'][0, 0].astype(self.BACKGROUND.dtype)
         self.HOLE_ID = self.SHAPE_MASKS['color_hole'][0, 0].astype(self.BACKGROUND.dtype)
+
+        transparent_pixel = jnp.full((1, 1), int(self.jr.TRANSPARENT_ID), dtype=self.BACKGROUND.dtype)
+        self.BACKGROUND_TREE_VARIANT_0 = self.SHAPE_MASKS.get('background_tree_variant_0', transparent_pixel)
+        self.BACKGROUND_TREE_VARIANT_2 = self.SHAPE_MASKS.get('background_tree_variant_2', self.BACKGROUND_TREE_VARIANT_0)
+        self.BACKGROUND_TREE_VARIANT_3 = self.SHAPE_MASKS.get('background_tree_variant_3', self.BACKGROUND_TREE_VARIANT_2)
+        self.BACKDROP_WALL_AND_LADDER = self.SHAPE_MASKS.get('backdrop_wall_and_ladder', transparent_pixel)
+        self.BACKDROP_CROCODILEPIT_AND_ROPE = self.SHAPE_MASKS.get('backdrop_crocodilepit_and_rope', transparent_pixel)
+        self.HAS_BACKDROP_WALL_AND_LADDER = jnp.array(
+            'backdrop_wall_and_ladder' in self.SHAPE_MASKS, dtype=jnp.bool_
+        )
+        self.HAS_BACKDROP_CROCODILEPIT_AND_ROPE = jnp.array(
+            'backdrop_crocodilepit_and_rope' in self.SHAPE_MASKS, dtype=jnp.bool_
+        )
 
         def _ensure_3d(mask_stack: jnp.ndarray) -> jnp.ndarray:
             return mask_stack[None, :, :] if mask_stack.ndim == 2 else mask_stack
@@ -1370,6 +1484,7 @@ class PitfallRenderer(JAXGameRenderer):
         scorpion_w = max(int(scorpion_left.shape[2]), int(scorpion_right.shape[2]))
         self.SCORPION_LEFT_MASKS = _pad_to(scorpion_left, scorpion_h, scorpion_w)
         self.SCORPION_RIGHT_MASKS = _pad_to(scorpion_right, scorpion_h, scorpion_w)
+        self.TREE_VARIANT_TO_ASSET_IDX = jnp.array([0, 1, 2, 2], dtype=jnp.int32)
 
     def _prefer_backdrop_in_region(
         self,
@@ -1412,14 +1527,61 @@ class PitfallRenderer(JAXGameRenderer):
 
         rb = state.room_byte.astype(jnp.uint8)
         pt = pit_code_u8(rb)
+        tree_variant = tree_variant_u8(rb)
+
+        tree_bg_asset_idx = self.TREE_VARIANT_TO_ASSET_IDX[tree_variant.astype(jnp.int32)]
+
+        def _render_tree_variant_0(r: jnp.ndarray) -> jnp.ndarray:
+            return self.jr.render_at_clipped(
+                r,
+                jnp.int32(0),
+                jnp.int32(0),
+                self.BACKGROUND_TREE_VARIANT_0,
+                flip_horizontal=jnp.array(False, dtype=jnp.bool_),
+                flip_offset=jnp.array([0, 0], dtype=jnp.int32),
+            )
+
+        def _render_tree_variant_2(r: jnp.ndarray) -> jnp.ndarray:
+            return self.jr.render_at_clipped(
+                r,
+                jnp.int32(0),
+                jnp.int32(0),
+                self.BACKGROUND_TREE_VARIANT_2,
+                flip_horizontal=jnp.array(False, dtype=jnp.bool_),
+                flip_offset=jnp.array([0, 0], dtype=jnp.int32),
+            )
+
+        def _render_tree_variant_3(r: jnp.ndarray) -> jnp.ndarray:
+            return self.jr.render_at_clipped(
+                r,
+                jnp.int32(0),
+                jnp.int32(0),
+                self.BACKGROUND_TREE_VARIANT_3,
+                flip_horizontal=jnp.array(False, dtype=jnp.bool_),
+                flip_offset=jnp.array([0, 0], dtype=jnp.int32),
+            )
+
+        raster = lax.switch(
+            tree_bg_asset_idx,
+            (
+                _render_tree_variant_0,
+                _render_tree_variant_2,
+                _render_tree_variant_3,
+            ),
+            raster,
+        )
 
         has_ladder = (pt == jnp.uint8(0)) | (pt == jnp.uint8(1))
         has_scorpion = has_scorpion_from_room_byte(rb)
         has_wall = has_ladder
         wall_side_bit = wall_side_u8(rb)
         has_right_wall_ladder_backdrop = (
-            (pt == jnp.uint8(0)) &
-            (wall_side_bit == jnp.uint8(1))
+            has_ladder & (wall_side_bit == jnp.uint8(1)) & self.HAS_BACKDROP_WALL_AND_LADDER
+        )
+        has_croc_rope_backdrop = (
+            (pt == jnp.uint8(0b100))
+            & has_vine_from_room_byte(rb)
+            & self.HAS_BACKDROP_CROCODILEPIT_AND_ROPE
         )
 
         raster = lax.cond(
@@ -1428,7 +1590,21 @@ class PitfallRenderer(JAXGameRenderer):
                 r,
                 jnp.int32(0),
                 jnp.int32(0),
-                self.SHAPE_MASKS['backdrop_wall_and_ladder'],
+                self.BACKDROP_WALL_AND_LADDER,
+                flip_horizontal=jnp.array(False, dtype=jnp.bool_),
+                flip_offset=jnp.array([0, 0], dtype=jnp.int32),
+            ),
+            lambda r: r,
+            raster,
+        )
+
+        raster = lax.cond(
+            has_croc_rope_backdrop,
+            lambda r: self.jr.render_at_clipped(
+                r,
+                jnp.int32(0),
+                jnp.int32(0),
+                self.BACKDROP_CROCODILEPIT_AND_ROPE,
                 flip_horizontal=jnp.array(False, dtype=jnp.bool_),
                 flip_offset=jnp.array([0, 0], dtype=jnp.int32),
             ),
@@ -1702,14 +1878,16 @@ class PitfallRenderer(JAXGameRenderer):
         pit_d = pit_code_u8(rb_u8).astype(jnp.int32)
         obj_d = obj_code_u8(rb_u8).astype(jnp.int32)
         wall_d = wall_side_u8(rb_u8).astype(jnp.int32)
+        tree_d = tree_variant_u8(rb_u8).astype(jnp.int32)
         pit_digits = self.jr.int_to_digits(pit_d, max_digits=1)
         obj_digits = self.jr.int_to_digits(obj_d, max_digits=1)
         wall_digits = self.jr.int_to_digits(wall_d, max_digits=1)
+        tree_digits = self.jr.int_to_digits(tree_d, max_digits=1)
 
         # Old layout:
         # score at (2, 20); lives at (9, 4); time at (9, 20)
         # screen_id at (2, 120); room_byte hex at (2, 90)
-        # pit/obj/wall at (9, 90/98/106)
+        # pit/obj/wall/tree at (9, 90/98/106/114)
 
         frame = _draw_digits(frame, score_digits, score_row, timer_x, digit_spacing, score_color)
         frame = _draw_digits(frame, lives_digits, timer_row, 4, digit_spacing, lives_color)
@@ -1726,5 +1904,6 @@ class PitfallRenderer(JAXGameRenderer):
         frame = _draw_digits(frame, pit_digits, timer_row, 90, digit_spacing, debug_color)
         frame = _draw_digits(frame, obj_digits, timer_row, 98, digit_spacing, debug_color)
         frame = _draw_digits(frame, wall_digits, timer_row, 106, digit_spacing, debug_color)
+        frame = _draw_digits(frame, tree_digits, timer_row, 114, digit_spacing, debug_color)
 
         return frame
