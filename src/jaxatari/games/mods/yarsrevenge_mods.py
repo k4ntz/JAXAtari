@@ -1,4 +1,4 @@
-from jaxatari.games.mods.yarsrevenge_mod_plugins import MoreSwirlsMod, NoAnimationsMod, OneShieldShapeMod, SpeedUpMod, StaticEnergyShieldMod
+from jaxatari.games.mods.yarsrevenge.yarsrevenge_mod_plugins import MoreSwirlsMod, NoAnimationsMod, OneShieldShapeMod, SpeedUpMod, StaticEnergyShieldMod
 from jaxatari.modification import JaxAtariModController
 
 class YarsRevengeEnvMod(JaxAtariModController):

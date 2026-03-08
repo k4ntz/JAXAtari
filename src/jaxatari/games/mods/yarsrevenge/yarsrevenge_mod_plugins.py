@@ -22,14 +22,14 @@ class NoAnimationsMod(JaxAtariPostStepModPlugin):
 
         return_state = jax.lax.cond(
             not_playing,
-            lambda: new_state._replace(
+            lambda: new_state.replace(
                 game_state=jnp.where(
                     new_state.game_state == YarsRevengeGameState.SCOREBOARD,
                     YarsRevengeGameState.PLAYING,
                     new_state.game_state,
                 ),  # Skip scoreboard
                 game_state_timer=300,  # Large enough frame time to skip both animations
-                yar=new_state.yar._replace(
+                yar=new_state.yar.replace(
                     x=jnp.array(10).astype(jnp.float32),
                     y=jnp.array(105).astype(jnp.float32),
                     direction=jnp.array(Direction.RIGHT).astype(jnp.int32),

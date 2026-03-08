@@ -1,8 +1,9 @@
 import os
 from enum import IntEnum
 from functools import partial
-from typing import Callable, NamedTuple, Optional, Tuple
+from typing import Callable, Optional, Tuple
 
+from flax.struct import dataclass, field, PyTreeNode
 import jax
 import jax.numpy as jnp
 from jax import Array
@@ -164,7 +165,8 @@ class YarsRevengeGameState(IntEnum):
     QOTILE_DEATH_ANIMATION = 3
 
 
-class Entity(NamedTuple):
+@dataclass
+class Entity:
     """Simple rectangular entity with only position + size."""
 
     x: jnp.ndarray  # float32
@@ -173,7 +175,8 @@ class Entity(NamedTuple):
     h: jnp.ndarray  # int32
 
 
-class DirectionEntity(NamedTuple):
+@dataclass
+class DirectionEntity:
     """
     Same as `Entity` but with an additional direction field.
     All direction values use the `Direction` enum.
@@ -186,7 +189,7 @@ class DirectionEntity(NamedTuple):
     direction: jnp.ndarray
 
 
-class YarsRevengeConstants(NamedTuple):
+class YarsRevengeConstants(PyTreeNode):
     """
     Game-wide constants for Yar's Revenge.
     """
@@ -243,14 +246,16 @@ class YarsRevengeConstants(NamedTuple):
     QOTILE_DEATH_FRAMES: int = 223  # Animation duration on Qotile's Death
     YAR_DEATH_FRAMES: int = 86  # Animation duration on Yar's Death
     YAR_DEATH_TURN_FRAMES: int = 4  # Frame amount where yar rotates to up on death
-    YAR_DEATH_EXPLOSION_CUTOFFS: jnp.ndarray = jnp.array(
-        [
-            40,
-            56,
-            72,
-            76,
-            80,
-        ]
+    YAR_DEATH_EXPLOSION_CUTOFFS: jnp.ndarray = field(
+        default_factory=lambda: jnp.array(
+            [
+                40,
+                56,
+                72,
+                76,
+                80,
+            ]
+        )
     )  # Frame amount cutoffs for explosion animation
 
     # Points
@@ -279,53 +284,60 @@ class YarsRevengeConstants(NamedTuple):
     ENERGY_CELL_HEIGHT: int = 8
 
     # 16 rows × 8 columns grid (top-to-bottom, left-to-right)
-    INITIAL_ENERGY_SHIELD: jnp.ndarray = jnp.array(
-        [
+    INITIAL_ENERGY_SHIELD: jnp.ndarray = field(
+        default_factory=lambda: jnp.array(
             [
-                [0, 0, 0, 0, 1, 1, 1, 1],
-                [0, 0, 0, 1, 1, 1, 1, 1],
-                [0, 0, 1, 1, 1, 1, 1, 1],
-                [0, 1, 1, 1, 1, 1, 1, 0],
-                [1, 1, 1, 1, 1, 1, 0, 0],
-                [1, 1, 1, 1, 1, 0, 0, 0],
-                [1, 1, 1, 1, 0, 0, 0, 0],
-                [1, 1, 1, 1, 0, 0, 0, 0],
-                [1, 1, 1, 1, 0, 0, 0, 0],
-                [1, 1, 1, 1, 0, 0, 0, 0],
-                [1, 1, 1, 1, 1, 0, 0, 0],
-                [1, 1, 1, 1, 1, 1, 0, 0],
-                [0, 1, 1, 1, 1, 1, 1, 0],
-                [0, 0, 1, 1, 1, 1, 1, 1],
-                [0, 0, 0, 1, 1, 1, 1, 1],
-                [0, 0, 0, 0, 1, 1, 1, 1],
+                [
+                    [0, 0, 0, 0, 1, 1, 1, 1],
+                    [0, 0, 0, 1, 1, 1, 1, 1],
+                    [0, 0, 1, 1, 1, 1, 1, 1],
+                    [0, 1, 1, 1, 1, 1, 1, 0],
+                    [1, 1, 1, 1, 1, 1, 0, 0],
+                    [1, 1, 1, 1, 1, 0, 0, 0],
+                    [1, 1, 1, 1, 0, 0, 0, 0],
+                    [1, 1, 1, 1, 0, 0, 0, 0],
+                    [1, 1, 1, 1, 0, 0, 0, 0],
+                    [1, 1, 1, 1, 0, 0, 0, 0],
+                    [1, 1, 1, 1, 1, 0, 0, 0],
+                    [1, 1, 1, 1, 1, 1, 0, 0],
+                    [0, 1, 1, 1, 1, 1, 1, 0],
+                    [0, 0, 1, 1, 1, 1, 1, 1],
+                    [0, 0, 0, 1, 1, 1, 1, 1],
+                    [0, 0, 0, 0, 1, 1, 1, 1],
+                ],
+                jnp.ones((16, 8)),
             ],
-            jnp.ones((16, 8)),
-        ],
-        dtype=jnp.int32,
+            dtype=jnp.int32,
+        )
     )
 
     # Missile hit kernel used for a 3×3 convolution that detects
     # neighbouring hits in a plus shape.
-    MISSILE_HIT_KERNEL: jnp.ndarray = jnp.array(
-        [
-            [0, 1, 0],
-            [1, 1, 1],
-            [0, 1, 0],
-        ],
-        dtype=jnp.int32,
+    MISSILE_HIT_KERNEL: jnp.ndarray = field(
+        default_factory=lambda: jnp.array(
+            [
+                [0, 1, 0],
+                [1, 1, 1],
+                [0, 1, 0],
+            ],
+            dtype=jnp.int32,
+        )
     )
 
     NEUTRAL_ZONE_DATA: str = "TU Darmstadt"
     NEUTRAL_ZONE_DATA_SIZE: int = 254
 
     RENDERER_RANDOM_COLORS_PER_N_ROW: int = 2
-    RENDERER_QOTILE_COLOR_HUE_VALUES: jnp.ndarray = jnp.arange(0, 331, 30)
+    RENDERER_QOTILE_COLOR_HUE_VALUES: jnp.ndarray = field(
+        default_factory=lambda: jnp.arange(0, 331, 30)
+    )
     RENDERER_QOTILE_BRIGHTNESS_STEP_BEGIN: float = 0.2
     RENDERER_QOTILE_BRIGHTNESS_STEP_END: float = 0.8
     RENDERER_QOTILE_STEP_MOD: int = 100
 
 
-class YarsRevengeState(NamedTuple):
+@dataclass
+class YarsRevengeState:
     """
     Immutable representation of the complete game state.
     """
@@ -360,11 +372,12 @@ class YarsRevengeState(NamedTuple):
 
     # Shield + neutral zone
     energy_shield: Entity  # top-left corner of the shield grid
-    energy_shield_state: jnp.ndarray  # 16×8 boolean array - live cells
-    neutral_zone: Entity  # static area that Yar cannot enter
+    energy_shield_state: jnp.ndarray  # 16x8 boolean array for energy shells
+    neutral_zone: Entity  # static area where no fire action is taken
 
 
-class YarsRevengeObservation(NamedTuple):
+@dataclass
+class YarsRevengeObservation:
     """
     The part of the state that is returned to the agent.
     """
@@ -386,7 +399,8 @@ class YarsRevengeObservation(NamedTuple):
     lives: jnp.ndarray
 
 
-class YarsRevengeInfo(NamedTuple):
+@dataclass
+class YarsRevengeInfo:
     time: jnp.ndarray  # step counter
 
 
@@ -754,7 +768,7 @@ class JaxYarsRevenge(
             wrap_y=True,
         )
 
-        new_yar_entity = state.yar._replace(
+        new_yar_entity = state.yar.replace(
             x=new_yar_x, y=new_yar_y, direction=new_yar_direction
         )
 
@@ -770,7 +784,7 @@ class JaxYarsRevenge(
             new_yar_x - self.consts.ENERGY_CELL_WIDTH,
             new_yar_x,
         )
-        new_yar_entity = new_yar_entity._replace(x=new_yar_x)
+        new_yar_entity = new_yar_entity.replace(x=new_yar_x)
 
         # Qotile collision detection
         yar_qotile_collusion = self._check_entity_collusion(
@@ -868,10 +882,10 @@ class JaxYarsRevenge(
         )
 
         return dict(
-            qotile=state.qotile._replace(
+            qotile=state.qotile.replace(
                 y=new_qotile_y, direction=new_qotile_direction
             ),
-            energy_shield=state.energy_shield._replace(y=new_energy_shield_y),
+            energy_shield=state.energy_shield.replace(y=new_energy_shield_y),
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -888,7 +902,7 @@ class JaxYarsRevenge(
         x = state.destroyer.x + self.consts.DESTROYER_SPEED * dx
         y = state.destroyer.y + self.consts.DESTROYER_SPEED * dy
 
-        return dict(destroyer=state.destroyer._replace(x=x, y=y))
+        return dict(destroyer=state.destroyer.replace(x=x, y=y))
 
     @partial(jax.jit, static_argnums=(0,))
     def _cannon_step(
@@ -966,7 +980,7 @@ class JaxYarsRevenge(
             dict(
                 cannon_exist=new_cannon_exists.astype(jnp.int32),
                 cannon_fired=new_cannon_fired.astype(jnp.int32),
-                cannon=state.cannon._replace(x=x, y=y),
+                cannon=state.cannon.replace(x=x, y=y),
                 energy_shield_state=new_energy_shield_state,
             ),
             cannon_exists,
@@ -1067,7 +1081,7 @@ class JaxYarsRevenge(
         return (
             dict(
                 energy_missile_exist=new_em_exists.astype(jnp.int32),
-                energy_missile=state.energy_missile._replace(
+                energy_missile=state.energy_missile.replace(
                     x=new_energy_missile_x,
                     y=new_energy_missile_y,
                     direction=new_energy_missile_direction,
@@ -1154,7 +1168,7 @@ class JaxYarsRevenge(
 
         return dict(
             swirl_exist=new_swirl_exists.astype(jnp.int32),
-            swirl=state.swirl._replace(x=new_swirl_x, y=new_swirl_y),
+            swirl=state.swirl.replace(x=new_swirl_x, y=new_swirl_y),
             swirl_dx=new_swirl_dx,
             swirl_dy=new_swirl_dy,
         )
@@ -1293,11 +1307,11 @@ class JaxYarsRevenge(
             branch,
             [
                 lambda: (
-                    self._construct_initial_state((new_state.stage + 1) % 2)._replace(
+                    self._construct_initial_state((new_state.stage + 1) % 2).replace(
                         score=new_state.score, lives=new_state.lives
                     )
                 ),  # Advance to the next stage
-                lambda: self._construct_initial_state(new_state.stage)._replace(
+                lambda: self._construct_initial_state(new_state.stage).replace(
                     score=new_state.score,
                     lives=new_state.lives,
                     energy_shield_state=new_state.energy_shield_state,
@@ -1321,21 +1335,21 @@ class JaxYarsRevenge(
         yar_updates, yar_neutral, devour_reset, yar_score = self._yar_step(
             state, direction_flags
         )
-        new_state = new_state._replace(**yar_updates)
+        new_state = new_state.replace(**yar_updates)
 
         # Qotile
         qotile_updates = self._qotile_step(state)
-        new_state = new_state._replace(**qotile_updates)
+        new_state = new_state.replace(**qotile_updates)
 
         # Destroyer
         destroyer_updates = self._destroyer_step(state)
-        new_state = new_state._replace(**destroyer_updates)
+        new_state = new_state.replace(**destroyer_updates)
 
         # Cannon
         cannon_updates, cannon_exists, cannon_fired, cannon_score = self._cannon_step(
             state, fire, yar_neutral, new_state.energy_shield_state, devour_reset
         )
-        new_state = new_state._replace(**cannon_updates)
+        new_state = new_state.replace(**cannon_updates)
 
         # Energy missile
         em_updates, em_score = self._energy_missile_step(
@@ -1346,27 +1360,27 @@ class JaxYarsRevenge(
             cannon_exists,
             cannon_fired,
         )
-        new_state = new_state._replace(**em_updates)
+        new_state = new_state.replace(**em_updates)
 
         # Swirl
         swirl_updates = self._swirl_step(state)
-        new_state = new_state._replace(**swirl_updates)
+        new_state = new_state.replace(**swirl_updates)
 
         # Stage specific
         stage_specific_updates = self._stage_specific_step(
             state, new_state.energy_shield_state
         )
-        new_state = new_state._replace(**stage_specific_updates)
+        new_state = new_state.replace(**stage_specific_updates)
 
         # Game ending (lives and advancement)
         ending_updates, ending_score = self._game_ending_calculation(
             state, yar_neutral, cannon_exists, cannon_fired
         )
-        new_state = new_state._replace(**ending_updates)
+        new_state = new_state.replace(**ending_updates)
 
         # Calculate the new score
         total_score_gained = yar_score + cannon_score + em_score + ending_score
-        new_state = new_state._replace(score=state.score + total_score_gained)
+        new_state = new_state.replace(score=state.score + total_score_gained)
 
         return new_state
 
@@ -1400,8 +1414,8 @@ class JaxYarsRevenge(
                 state.game_state_timer % self.consts.YAR_DEATH_TURN_FRAMES == 0,
                 jnp.logical_and(yar_death, state.yar.direction != Direction.UP),
             ),
-            lambda: new_state._replace(
-                yar=state.yar._replace(direction=(state.yar.direction - 1) % 8)
+            lambda: new_state.replace(
+                yar=state.yar.replace(direction=(state.yar.direction - 1) % 8)
             ),  # Counter-clockwise rotation
             lambda: new_state,
         )
@@ -1409,7 +1423,7 @@ class JaxYarsRevenge(
         # Allow yar movement on qotile death animation, also energy missile handling
         new_state = jax.lax.cond(
             qotile_death,
-            lambda: new_state._replace(
+            lambda: new_state.replace(
                 **{
                     k: v
                     for k, v in self._yar_step(new_state, direction_flags)[0].items()
@@ -1435,10 +1449,10 @@ class JaxYarsRevenge(
         # Calculate next state
         new_state = jax.lax.cond(
             state.game_state_timer >= target_animation_frames,
-            lambda: self._finalize_next_state(new_state)._replace(
+            lambda: self._finalize_next_state(new_state).replace(
                 game_state=YarsRevengeGameState.SCOREBOARD
             ),  # Switch to new state
-            lambda: new_state._replace(
+            lambda: new_state.replace(
                 game_state_timer=state.game_state_timer + 1
             ),  # Increment the timer
         )
@@ -1463,10 +1477,10 @@ class JaxYarsRevenge(
             YarsRevengeGameState.PLAYING,
             YarsRevengeGameState.SCOREBOARD,
         )
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             game_state=new_game_state,
             game_state_timer=0,
-            yar=state.yar._replace(
+            yar=state.yar.replace(
                 x=jnp.array(10).astype(jnp.float32),
                 y=jnp.array(105).astype(jnp.float32),
                 direction=jnp.array(Direction.RIGHT).astype(jnp.int32),
@@ -1497,7 +1511,7 @@ class JaxYarsRevenge(
         )
 
         # Increment the step counter
-        new_state = new_state._replace(
+        new_state = new_state.replace(
             step_counter=state.step_counter + 1,
         )
 
@@ -1713,56 +1727,6 @@ class JaxYarsRevenge(
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs):
-        """
-        Convert the observation into a 1-D float array.
-        """
-        return jnp.concatenate(
-            [
-                obs.yar.x.flatten().astype(jnp.float32),
-                obs.yar.y.flatten().astype(jnp.float32),
-                obs.yar.w.flatten().astype(jnp.float32),
-                obs.yar.h.flatten().astype(jnp.float32),
-                obs.yar.direction.flatten().astype(jnp.float32),
-                obs.qotile.x.flatten().astype(jnp.float32),
-                obs.qotile.y.flatten().astype(jnp.float32),
-                obs.qotile.w.flatten().astype(jnp.float32),
-                obs.qotile.h.flatten().astype(jnp.float32),
-                obs.qotile.direction.flatten().astype(jnp.float32),
-                obs.destroyer.x.flatten().astype(jnp.float32),
-                obs.destroyer.y.flatten().astype(jnp.float32),
-                obs.destroyer.w.flatten().astype(jnp.float32),
-                obs.destroyer.h.flatten().astype(jnp.float32),
-                obs.swirl_exist.flatten().astype(jnp.float32),
-                obs.swirl.x.flatten().astype(jnp.float32),
-                obs.swirl.y.flatten().astype(jnp.float32),
-                obs.swirl.w.flatten().astype(jnp.float32),
-                obs.swirl.h.flatten().astype(jnp.float32),
-                obs.swirl_dx.flatten().astype(jnp.float32),
-                obs.swirl_dy.flatten().astype(jnp.float32),
-                obs.energy_missile_exist.flatten().astype(jnp.float32),
-                obs.energy_missile.x.flatten().astype(jnp.float32),
-                obs.energy_missile.y.flatten().astype(jnp.float32),
-                obs.energy_missile.w.flatten().astype(jnp.float32),
-                obs.energy_missile.h.flatten().astype(jnp.float32),
-                obs.energy_missile.direction.flatten().astype(jnp.float32),
-                obs.cannon_exist.flatten().astype(jnp.float32),
-                obs.cannon_fired.flatten().astype(jnp.float32),
-                obs.cannon.x.flatten().astype(jnp.float32),
-                obs.cannon.y.flatten().astype(jnp.float32),
-                obs.cannon.w.flatten().astype(jnp.float32),
-                obs.cannon.h.flatten().astype(jnp.float32),
-                obs.cannon.direction.flatten().astype(jnp.float32),
-                obs.energy_shield.x.flatten().astype(jnp.float32),
-                obs.energy_shield.y.flatten().astype(jnp.float32),
-                obs.energy_shield.w.flatten().astype(jnp.float32),
-                obs.energy_shield.h.flatten().astype(jnp.float32),
-                obs.energy_shield_state.flatten().astype(jnp.float32),
-                obs.lives.flatten().astype(jnp.float32),
-            ]
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state, all_rewards: Optional[Array] = None):
         """Return auxiliary information about the current state."""
         return YarsRevengeInfo(time=state.step_counter)
@@ -1788,10 +1752,10 @@ class YarsRevengeRenderer(JAXGameRenderer):
     visualisation can be reused in other contexts.
     """
 
-    def __init__(self, consts: Optional[YarsRevengeConstants] = None):
+    def __init__(self, consts: Optional[YarsRevengeConstants] = None, config: Optional[render_utils.RendererConfig] = None):
         super().__init__(consts)
         self.consts = consts or YarsRevengeConstants()
-        self.config = render_utils.RendererConfig(
+        self.config = config or render_utils.RendererConfig(
             game_dimensions=(210, 160), channels=3
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
