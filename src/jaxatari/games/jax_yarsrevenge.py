@@ -2283,12 +2283,17 @@ class YarsRevengeRenderer(JAXGameRenderer):
         val = slice
 
         brightness_bits = (val >> 4) & 0b111  # Only the first three bits
-        hue_bits = val & 0b1111  # Only the last four bits
-
         brightness_factor = brightness_bits.astype(jnp.float32) / 7.0
-        hue_angle_degree = (hue_bits.astype(jnp.float32) * 360.0) / 15.0
 
-        return self._hb_to_rgb(hue_angle_degree, brightness_factor)
+        if self.config.channels == 1:
+            return (brightness_factor * 255).astype(jnp.uint8)[..., None]
+        else:
+            hue_bits = val & 0b1111  # Only the last four bits
+            hue_angle_degree = (hue_bits.astype(jnp.float32) * 360.0) / 15.0
+
+            return self._hb_to_rgb(hue_angle_degree, brightness_factor)
+        
+        
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: YarsRevengeState):
@@ -2336,9 +2341,13 @@ class YarsRevengeRenderer(JAXGameRenderer):
             )
             / self.consts.RENDERER_QOTILE_STEP_MOD
         ) + self.consts.RENDERER_QOTILE_BRIGHTNESS_STEP_BEGIN
-        color = self._hb_to_rgb(
-            self.consts.RENDERER_QOTILE_COLOR_HUE_VALUES[used_hue_index], brightness
-        )
+
+        if self.config.channels == 1:
+            color = ((brightness * 255).astype(jnp.uint8))[..., None]
+        else:
+            color = self._hb_to_rgb(
+                self.consts.RENDERER_QOTILE_COLOR_HUE_VALUES[used_hue_index], brightness
+            )
 
         modified_palette = modified_palette.at[1].set(color)
 
