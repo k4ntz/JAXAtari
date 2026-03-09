@@ -1983,7 +1983,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
     def _render_energy_missile(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
         state, raster = info
 
-        energy_missile_mask = jnp.zeros(
+        energy_missile_mask = jnp.ones(
             (round(self.consts.ENERGY_MISSILE_SIZE[1] * self.config.height_scaling), round(self.consts.ENERGY_MISSILE_SIZE[0] * self.config.width_scaling))
         )
         raster = jnp.where(
