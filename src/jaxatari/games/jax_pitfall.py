@@ -382,8 +382,9 @@ class PitfallConstants(NamedTuple):
     player_start_y: int = 130  # same as ground_y (standing on ground)
 
     player_speed: float = 3.0  # pixels per frame horizontally
-    jump_velocity: float = -7.8  # initial upward velocity
-    gravity: float = 1.0       # downward accel each frame
+    jump_velocity: float = -4.8  # slightly softer launch with more airtime
+    gravity: float = 0.8       # slower upward decay to reduce snappiness
+    fall_speed: float = 3.0    # slower constant fall for more original Pitfall airtime
 
     fps: int = 30
     initial_time_seconds: int = 1200  # 20 minutes
@@ -392,6 +393,8 @@ class PitfallConstants(NamedTuple):
     ladder_width: int = 10
     initial_score: int = 2000
     tunnel_wall_width: int = 8
+    wall_contact_overlap: int = 0  # keep Harry fully outside tunnel walls on both sides
+    right_wall_block_player_width: int = 9  # lets Harry stand closer when approaching a right-side wall
 
     # Side holes beside ladder (underground)
     hole_width: int = 17            # px
@@ -425,7 +428,8 @@ class PitfallConstants(NamedTuple):
     scorpion_hurt_cooldown_frames: int = 30
 
     # Rendering tune: negative moves sprite up (player_y is treated as bottom/feet).
-    harry_y_tune: int = 0
+    harry_y_tune: int = -2
+    underground_harry_y_tune: int = 2  # push Harry slightly down only on lower ground
 
     ASSET_CONFIG: tuple = _get_default_pitfall_asset_config()
 
@@ -478,6 +482,15 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             self.ladder_x_px,
             self.left_wall_x_px,
             self.right_wall_x_px,
+        )
+        self.wall_block_player_width_px = jnp.array(
+            max(
+                int(self.renderer.HARRY_IDLE_MASKS.shape[2]),
+                int(self.renderer.HARRY_RUN_MASKS.shape[2]),
+                int(self.renderer.HARRY_CLIMB_MASKS.shape[2]),
+                int(self.renderer.HARRY_JUMP_MASKS.shape[2]),
+            ),
+            dtype=jnp.int32,
         )
 
 
@@ -795,14 +808,25 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         )
 
         gravity = jnp.asarray(consts.gravity, dtype=jnp.float32)
+        fall_speed = jnp.asarray(consts.fall_speed, dtype=jnp.float32)
         apply_gravity = (~on_ground) & (~state.on_ladder)
-        vy = vy + gravity * apply_gravity.astype(jnp.float32)
+        vy = jnp.where(
+            apply_gravity & (vy < 0),
+            jnp.minimum(vy + gravity, 0.0),
+            vy,
+        )
+        vy = jnp.where(
+            apply_gravity & (vy >= 0),
+            fall_speed,
+            vy,
+        )
 
         y = y + vy
         x = x + vx
 
         wall_w = jnp.int32(consts.tunnel_wall_width)
-        player_w_i = jnp.int32(4)
+        wall_block_player_w = self.wall_block_player_width_px.astype(jnp.int32)
+        right_wall_block_player_w = jnp.int32(consts.right_wall_block_player_width)
 
         block = layout.has_wall & on_lower_level
 
@@ -811,7 +835,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         x = jnp.where(
             block & (layout.wall_side == jnp.int32(1)),
-            jnp.minimum(x, (wall_left - player_w_i).astype(x.dtype)),
+            jnp.minimum(x, (wall_left - right_wall_block_player_w).astype(x.dtype)),
             x,
         )
 
@@ -1484,7 +1508,13 @@ class PitfallRenderer(JAXGameRenderer):
                 frames_out.append(resized.astype(np.uint8))
             return jnp.asarray(np.stack(frames_out, axis=0), dtype=jnp.uint8)
 
-        sprite_scale = 0.70
+        def _shrink_mask_stack(mask_stack: jnp.ndarray, border: int = 1) -> jnp.ndarray:
+            mask_stack = _ensure_3d(mask_stack)
+            if int(mask_stack.shape[1]) <= border * 2 or int(mask_stack.shape[2]) <= border * 2:
+                return mask_stack
+            return mask_stack[:, border:-border, border:-border]
+
+        sprite_scale = 0.80
 
         harry_idle = _downscale_mask_stack(self.SHAPE_MASKS['harry_idle'], sprite_scale)
         harry_run = _downscale_mask_stack(self.SHAPE_MASKS['harry_run'], sprite_scale)
@@ -1508,6 +1538,8 @@ class PitfallRenderer(JAXGameRenderer):
         self.HARRY_JUMP_MASKS, self.HARRY_JUMP_FLIP_OFFSET = _pad_and_offset('harry_jump', harry_jump)
         scorpion_left = _downscale_mask_stack(self.SHAPE_MASKS['scorpion_left'], sprite_scale)
         scorpion_right = _downscale_mask_stack(self.SHAPE_MASKS['scorpion_right'], sprite_scale)
+        scorpion_left = _shrink_mask_stack(scorpion_left, border=1)
+        scorpion_right = _shrink_mask_stack(scorpion_right, border=1)
         scorpion_h = max(int(scorpion_left.shape[1]), int(scorpion_right.shape[1]))
         scorpion_w = max(int(scorpion_left.shape[2]), int(scorpion_right.shape[2]))
         self.SCORPION_LEFT_MASKS = _pad_to(scorpion_left, scorpion_h, scorpion_w)
@@ -1706,19 +1738,6 @@ class PitfallRenderer(JAXGameRenderer):
         wall_h = jnp.int32(int(self.WALL_RENDER_MASK.shape[0]))
         wall_top = jnp.int32(int(self.consts.underground_y)) - wall_h
         draw_wall_sprite = has_wall & (~has_right_wall_ladder_backdrop)
-        raster = lax.cond(
-            draw_wall_sprite,
-            lambda r: self.jr.render_at_clipped(
-                r,
-                wall_x,
-                wall_top,
-                self.WALL_RENDER_MASK,
-                flip_horizontal=jnp.array(False, dtype=jnp.bool_),
-                flip_offset=jnp.array([0, 0], dtype=jnp.int32),
-            ),
-            lambda r: r,
-            raster,
-        )
 
         has_logs, logs_are_rolling, log_count, log_xs, has_fireplace, has_snake = room_hazards_from_room_byte(rb)
 
@@ -1847,7 +1866,12 @@ class PitfallRenderer(JAXGameRenderer):
 
         harry_h = jnp.int32(harry_mask.shape[0])
         y_top = state.player_y.astype(jnp.int32) - harry_h + jnp.int32(1)
-        y_top = y_top + jnp.int32(int(self.consts.harry_y_tune))
+        underground_tune = jnp.where(
+            state.current_ground_y == jnp.asarray(self.consts.underground_y, dtype=jnp.float32),
+            jnp.int32(int(self.consts.underground_harry_y_tune)),
+            jnp.int32(0),
+        )
+        y_top = y_top + jnp.int32(int(self.consts.harry_y_tune)) + underground_tune
 
         raster = self.jr.render_at_clipped(
             raster,
@@ -1856,6 +1880,20 @@ class PitfallRenderer(JAXGameRenderer):
             harry_mask,
             flip_horizontal=flip,
             flip_offset=flip_offset,
+        )
+
+        raster = lax.cond(
+            draw_wall_sprite,
+            lambda r: self.jr.render_at_clipped(
+                r,
+                wall_x,
+                wall_top,
+                self.WALL_RENDER_MASK,
+                flip_horizontal=jnp.array(False, dtype=jnp.bool_),
+                flip_offset=jnp.array([0, 0], dtype=jnp.int32),
+            ),
+            lambda r: r,
+            raster,
         )
 
         cap_x0 = jnp.maximum(ladder_x - jnp.int32(1), jnp.int32(0))
