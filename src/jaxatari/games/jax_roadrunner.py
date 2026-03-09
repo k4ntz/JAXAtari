@@ -46,6 +46,10 @@ class LevelConfig(NamedTuple):
     landmine_spawn_config: Optional[Tuple[int, int]] = None
     spawn_cannons: bool = False
     cannon_spawn_config: Optional[Tuple[int, int]] = None
+    # Fixed scroll-step positions at which cannons appear (deterministic placement).
+    # When non-empty, these override the random cannon_spawn_config interval.
+    # Cannons alternate normal/mirrored starting with normal (right-facing).
+    cannon_scroll_steps: Tuple[int, ...] = ()
     future_entity_types: Dict[str, Any] = {}
     render_road_stripes: bool = True
     # Dynamic road height configuration (for alternating heights)
@@ -54,7 +58,7 @@ class LevelConfig(NamedTuple):
     dynamic_road_transition_length: int = 10  # transition zone length in scroll units
     # Phase offset added to world_x before the modulo so the level starts inside zone A
     dynamic_road_scroll_offset: int = 0
-    offramp: OfframpConfig = OfframpConfig()
+    offramps: Tuple[OfframpConfig, ...] = ()
     # Ravine-linked entity spawning: when True, seeds/mines are scheduled to appear
     # just ahead of each ravine instead of on their own random timer.
     ravine_linked_seed: bool = False
@@ -335,45 +339,79 @@ RoadRunner_Level_3 = LevelConfig(
 
 RoadRunner_Level_4 = LevelConfig(
     level_number=4,
-    scroll_distance_to_complete=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
+    scroll_distance_to_complete=1500,
     road_sections=(
         RoadSectionConfig(
             scroll_start=0,
-            scroll_end=_BASE_CONSTS.LEVEL_COMPLETE_SCROLL_DISTANCE,
+            scroll_end=1500,
             road_width=_BASE_CONSTS.WIDTH - 2 * _BASE_CONSTS.SIDE_MARGIN,
-            road_top=0,
+            road_top=_centered_top(30),
             road_height=30,
             road_pattern_style=0,
         ),
     ),
     spawn_seeds=True,
-    spawn_trucks=True,
-    spawn_landmines=False,
+    spawn_trucks=False,
+    spawn_landmines=True,
+    spawn_cannons=True,
+    # ~4 seeds over 1500 scroll steps → avg 375 steps between seeds
+    seed_spawn_config=(300, 450),
+    # ~5 mines over 1500 scroll steps → avg 300 steps between mines
+    landmine_spawn_config=(220, 380),
+    # ~7 cannons over 1500 scroll steps → avg 215 steps between cannons
+    cannon_spawn_config=(150, 280),
+    # Fixed cannon positions flanking each offramp.
+    # Pattern per offramp: left-facing cannon → split → bridges → merge → right-facing cannon
+    # Each position is ~10 scroll steps before scroll_start / after scroll_end.
+    cannon_scroll_steps=(
+        120,   # Left-facing cannon before offramp 1 split   (scroll_start=130)
+        345,   # Right-facing cannon after offramp 1 merge   (scroll_end=335)
+        535,   # Left-facing cannon before offramp 2 split   (scroll_start=545)
+        760,   # Right-facing cannon after offramp 2 merge   (scroll_end=750)
+        845,   # Left-facing cannon before offramp 3 split   (scroll_start=855)
+        1070,  # Right-facing cannon after offramp 3 merge   (scroll_end=1060)
+        1180,  # Left-facing cannon before offramp 4 split   (scroll_start=1190)
+        1405,  # Right-facing cannon after offramp 4 merge   (scroll_end=1395)
+    ),
+    render_road_stripes=True,
+    # Four offramps, each sandwiched between left-facing and right-facing cannons.
+    # Pattern: left cannon → split → bridge → bridge → merge → right cannon
+    # All offramps have the same internal structure (length ≈ 205 scroll steps).
+    # Video timestamps (level starts at 03:09, rate ≈ 25.86 steps/s):
+    #   Offramp 1: 03:14–03:22, Offramp 2: 03:30–03:38,
+    #   Offramp 3: 03:42–03:51, Offramp 4: 03:55–04:04
+    offramps=(
+        OfframpConfig(enabled=True, scroll_start=130, scroll_end=335,
+                      bridges=(180, 260)),
+        OfframpConfig(enabled=True, scroll_start=545, scroll_end=750,
+                      bridges=(595, 675)),
+        OfframpConfig(enabled=True, scroll_start=855, scroll_end=1060,
+                      bridges=(905, 985)),
+        OfframpConfig(enabled=True, scroll_start=1190, scroll_end=1395,
+                      bridges=(1240, 1320)),
+    ),
     decorations=(
-        # --- INTRO (0-6s) ---
-        (50, 60, 1, _BASE_CONSTS.DECO_SIGN_THIS_WAY),
-        (0, 45, 2, _BASE_CONSTS.DECO_CACTUS),
-        (30, 55, 1, _BASE_CONSTS.DECO_CACTUS),
-        (180, 70, 1, _BASE_CONSTS.DECO_SIGN_BIRD_SEED),
-        (350, 60, 1, _BASE_CONSTS.DECO_SIGN_CARS_AHEAD),
+        # --- Pairs of cactus + tumbleweed throughout the level (like Level 2) ---
+        # Each pair: cactus on one side of the road, tumbleweed on the other.
+        # Decoration format: (d_x, y, d_slowdown, type)
+        # Screen appearance at scroll step T ≈ d_x * 2 * d_slowdown / 3
+        (75, 45, 2, _BASE_CONSTS.DECO_CACTUS),        # pair 1: appears ~step 100
+        (50, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),    # pair 1
+        (225, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 2: appears ~step 300
+        (150, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 2
+        (375, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 3: appears ~step 500
+        (250, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 3
+        (525, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 4: appears ~step 700
+        (350, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 4
+        (675, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 5: appears ~step 900
+        (450, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 5
+        (825, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 6: appears ~step 1100
+        (550, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 6
+        (975, 45, 2, _BASE_CONSTS.DECO_CACTUS),       # pair 7: appears ~step 1300
+        (650, 55, 3, _BASE_CONSTS.DECO_TUMBLEWEED),   # pair 7
 
-        # --- THE DESERT RUN (13 Cacti) ---
-        (420, 45, 3, _BASE_CONSTS.DECO_CACTUS),
-        (500, 55, 2, _BASE_CONSTS.DECO_CACTUS),
-        (580, 45, 3, _BASE_CONSTS.DECO_CACTUS),
-        (660, 55, 2, _BASE_CONSTS.DECO_CACTUS),
-        (740, 45, 3, _BASE_CONSTS.DECO_CACTUS),
-        (820, 55, 2, _BASE_CONSTS.DECO_CACTUS),
-        (900, 45, 3, _BASE_CONSTS.DECO_CACTUS),
-        (980, 55, 2, _BASE_CONSTS.DECO_CACTUS),
-        (1060, 45, 3, _BASE_CONSTS.DECO_CACTUS),
-        (1140, 55, 2, _BASE_CONSTS.DECO_CACTUS),
-        (1220, 45, 3, _BASE_CONSTS.DECO_CACTUS),
-        (1300, 55, 2, _BASE_CONSTS.DECO_CACTUS),
-        (1380, 45, 3, _BASE_CONSTS.DECO_CACTUS),
-
-        # --- OUTRO ---
-        (1800, 60, 1, _BASE_CONSTS.DECO_SIGN_EXIT),
+        # --- Exit sign (same position as Level 1) ---
+        (2000, 60, 1, _BASE_CONSTS.DECO_SIGN_EXIT),
     ),
 )
 
@@ -525,6 +563,7 @@ def _build_spawn_enabled_array(
     )
 
 
+MAX_OFFRAMPS: int = 4  # Maximum number of offramp sections per level
 MAX_OFFRAMP_BRIDGES: int = 8  # Maximum number of bridges per offramp section
 
 
@@ -534,25 +573,107 @@ def _build_offramp_arrays(
     """
     Build offramp data arrays from level configs.
 
-    Returns array of shape (num_levels, 3 + MAX_OFFRAMP_BRIDGES) with columns:
+    Returns array of shape (num_levels, MAX_OFFRAMPS, 3 + MAX_OFFRAMP_BRIDGES) with columns:
       [enabled (0/1), scroll_start, scroll_end, bridge_0, bridge_1, ..., bridge_N]
     Bridge columns hold the scroll-step position of each bridge, or -1 if absent.
+    Each level may contain up to MAX_OFFRAMPS offramp sections.
+    """
+    cols = 3 + MAX_OFFRAMP_BRIDGES
+    if not levels:
+        return jnp.zeros((0, MAX_OFFRAMPS, cols), dtype=jnp.int32)
+
+    disabled_row = [0, 0, 0] + [-1] * MAX_OFFRAMP_BRIDGES
+    level_rows = []
+    for cfg in levels:
+        offramps = getattr(cfg, 'offramps', ())
+        offramp_rows = []
+        for offramp in offramps[:MAX_OFFRAMPS]:
+            bridges = list(offramp.bridges)[:MAX_OFFRAMP_BRIDGES]
+            # Pad to fixed length with -1
+            bridges += [-1] * (MAX_OFFRAMP_BRIDGES - len(bridges))
+            offramp_rows.append([
+                1 if offramp.enabled else 0,
+                offramp.scroll_start,
+                offramp.scroll_end,
+            ] + bridges)
+        # Pad with disabled offramp rows
+        while len(offramp_rows) < MAX_OFFRAMPS:
+            offramp_rows.append(list(disabled_row))
+        level_rows.append(offramp_rows)
+    return jnp.array(level_rows, dtype=jnp.int32)
+
+
+MAX_FIXED_CANNONS: int = 16  # Maximum number of fixed cannon positions per level
+_NO_CANNON_STEP: int = 999999  # Sentinel: no more fixed cannon positions
+
+
+def _build_cannon_fixed_steps_array(
+    levels: Tuple[LevelConfig, ...],
+) -> jnp.ndarray:
+    """Build fixed cannon scroll-step arrays from level configs.
+
+    Returns array of shape (num_levels, MAX_FIXED_CANNONS).
+    Each row holds the sorted scroll steps at which cannons should appear,
+    padded with -1 for unused slots.
     """
     if not levels:
-        return jnp.zeros((0, 3 + MAX_OFFRAMP_BRIDGES), dtype=jnp.int32)
+        return jnp.zeros((0, MAX_FIXED_CANNONS), dtype=jnp.int32)
 
     rows = []
     for cfg in levels:
-        offramp = getattr(cfg, 'offramp', OfframpConfig())
-        bridges = list(offramp.bridges)[:MAX_OFFRAMP_BRIDGES]
-        # Pad to fixed length with -1
-        bridges += [-1] * (MAX_OFFRAMP_BRIDGES - len(bridges))
-        rows.append([
-            1 if offramp.enabled else 0,
-            offramp.scroll_start,
-            offramp.scroll_end,
-        ] + bridges)
+        steps = list(getattr(cfg, 'cannon_scroll_steps', ()))[:MAX_FIXED_CANNONS]
+        steps.sort()
+        steps += [-1] * (MAX_FIXED_CANNONS - len(steps))
+        rows.append(steps)
     return jnp.array(rows, dtype=jnp.int32)
+
+
+def _find_active_offramp_row(
+    offramp_data: jnp.ndarray,
+    state,
+    level_count: int,
+    consts,
+) -> tuple:
+    """Find the currently active offramp for this level.
+
+    Works as a standalone function so both JaxRoadRunner and RoadRunnerRenderer
+    can share the same logic.
+
+    Args:
+        offramp_data: shape (num_levels, MAX_OFFRAMPS, 3 + MAX_OFFRAMP_BRIDGES)
+        state: game state with scrolling_step_counter and current_level
+        level_count: number of configured levels
+        consts: RoadRunnerConstants (needs PLAYER_MOVE_SPEED, OFFRAMP_RAMP_WIDTH, WIDTH)
+
+    Returns:
+        (any_active, row) where:
+          any_active: scalar bool — True when an offramp is on-screen
+          row: shape (3 + MAX_OFFRAMP_BRIDGES,) — data for the active offramp
+    """
+    SPEED = consts.PLAYER_MOVE_SPEED
+    RAMP_W = consts.OFFRAMP_RAMP_WIDTH
+    W = consts.WIDTH
+    cols = 3 + MAX_OFFRAMP_BRIDGES
+
+    if level_count == 0:
+        return jnp.array(False), jnp.zeros(cols, dtype=jnp.int32)
+
+    level_idx = jnp.clip(state.current_level, 0, level_count - 1).astype(jnp.int32)
+    all_rows = offramp_data[level_idx]  # (MAX_OFFRAMPS, cols)
+
+    enabled = all_rows[:, 0] > 0
+    scroll_starts = all_rows[:, 1]
+    scroll_ends = all_rows[:, 2]
+
+    counter = state.scrolling_step_counter
+    merge_xs = (counter - scroll_ends) * SPEED
+    active_mask = enabled & (counter >= scroll_starts) & (merge_xs < W + RAMP_W)
+
+    any_active = jnp.any(active_mask)
+    # argmax returns the index of the first True; if none, returns 0 (disabled row)
+    active_idx = jnp.argmax(active_mask)
+    row = all_rows[active_idx]
+    return any_active, row
 
 
 def _check_aabb_collision(
@@ -908,8 +1029,11 @@ class JaxRoadRunner(
             self._road_section_counts,
         ) = _build_road_section_arrays(levels, self.consts)
 
-        # Build offramp data array: shape (num_levels, 3) = [enabled, scroll_start, scroll_end]
+        # Build offramp data array: shape (num_levels, MAX_OFFRAMPS, 3 + MAX_OFFRAMP_BRIDGES)
         self._offramp_data = _build_offramp_arrays(levels)
+
+        # Build fixed cannon scroll-step arrays: shape (num_levels, MAX_FIXED_CANNONS)
+        self._cannon_fixed_steps = _build_cannon_fixed_steps_array(levels)
 
         # Build per-level scroll distances array
         self._level_scroll_distances = jnp.array(
@@ -934,6 +1058,19 @@ class JaxRoadRunner(
         is_fire_action = (action == Action.FIRE) | ((action >= Action.UPFIRE) & (action <= Action.DOWNLEFTFIRE))
         return vel[0], vel[1], is_fire_action
 
+    def _get_active_offramp_row(
+        self, state: "RoadRunnerState"
+    ) -> tuple[chex.Array, jnp.ndarray]:
+        """Find the currently active offramp for this level.
+
+        Returns (any_active, row) where:
+          any_active: scalar bool — True when an offramp is on-screen
+          row: shape (3 + MAX_OFFRAMP_BRIDGES,) — data for the active offramp
+               (or the first row if none is active; callers gate on any_active).
+        """
+        return _find_active_offramp_row(
+            self._offramp_data, state, self._level_count, self.consts)
+
     def _get_offramp_info(
         self, state: "RoadRunnerState"
     ) -> tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
@@ -947,16 +1084,9 @@ class JaxRoadRunner(
         RAMP_W = self.consts.OFFRAMP_RAMP_WIDTH
         W = self.consts.WIDTH
 
-        if self._level_count > 0:
-            level_idx = self._get_level_index(state)
-            row = self._offramp_data[level_idx]
-            enabled = row[0] > 0
-            scroll_start = row[1]
-            scroll_end = row[2]
-        else:
-            enabled = jnp.array(False)
-            scroll_start = jnp.array(0)
-            scroll_end = jnp.array(0)
+        any_active, row = self._get_active_offramp_row(state)
+        scroll_start = row[1]
+        scroll_end = row[2]
 
         counter = state.scrolling_step_counter
 
@@ -965,10 +1095,7 @@ class JaxRoadRunner(
         # Screen x of merge leading edge: 0 at scroll_end, grows right each step
         merge_x = (counter - scroll_end) * SPEED
 
-        # The offramp is active from when the split appears until the merge exits the right
-        # edge of the screen.  Extending through the full merge animation ensures the player
-        # can exit during the merge and that the merge sprite is rendered correctly.
-        offramp_active = enabled & (counter >= scroll_start) & (merge_x < W + RAMP_W)
+        offramp_active = any_active
 
         road_top, _, _ = self._get_road_bounds(state)
         offramp_bottom = (road_top - self.consts.OFFRAMP_GAP).astype(jnp.int32)
@@ -984,8 +1111,7 @@ class JaxRoadRunner(
         if self._level_count == 0:
             return jnp.full((MAX_OFFRAMP_BRIDGES,), -9999, dtype=jnp.int32)
 
-        level_idx = self._get_level_index(state)
-        row = self._offramp_data[level_idx]  # shape (3 + MAX_OFFRAMP_BRIDGES,)
+        _, row = self._get_active_offramp_row(state)
         bridge_scroll_steps = row[3:]  # shape (MAX_OFFRAMP_BRIDGES,)
 
         # Screen-X: bridge_scroll_step gives the step at which the bridge's left edge
@@ -1986,10 +2112,21 @@ class JaxRoadRunner(
 
         spawn_y = spawn_road_top - consts.CANNON_SIZE[1] + 2
 
-        next_cannon_spawn_step = state.scrolling_step_counter + jax.random.randint(
+        # Compute next cannon spawn step: use fixed positions when available,
+        # otherwise fall back to random interval.
+        random_next = state.scrolling_step_counter + jax.random.randint(
             rng_interval, (), cannon_spawn_bounds[0],
             cannon_spawn_bounds[1] + 1, dtype=jnp.int32,
         )
+        if self._level_count > 0:
+            fixed_steps = self._cannon_fixed_steps[level_idx]
+            valid_next = (fixed_steps > state.scrolling_step_counter) & (fixed_steps >= 0)
+            fixed_candidates = jnp.where(valid_next, fixed_steps, jnp.int32(_NO_CANNON_STEP))
+            fixed_next = jnp.min(fixed_candidates)
+            has_fixed = jnp.any(self._cannon_fixed_steps[level_idx] >= 0)
+            next_cannon_spawn_step = jnp.where(has_fixed, fixed_next, random_next)
+        else:
+            next_cannon_spawn_step = random_next
 
         updated_cannon_x = jnp.where(should_spawn_cannon, jnp.array(0, dtype=jnp.int32), updated_cannon_x)
         updated_cannon_y = jnp.where(should_spawn_cannon, spawn_y, updated_cannon_y)
@@ -2137,6 +2274,8 @@ class JaxRoadRunner(
                 self.consts.CANNON_SPAWN_MIN_INTERVAL, dtype=jnp.int32
             ),
             cannon_has_fired=jnp.array(False, dtype=jnp.bool_),
+            # Start mirrored=False so the first toggle (~False → True) produces a
+            # left-facing cannon, matching the pre-split position in the offramp pattern.
             cannon_is_mirrored=jnp.array(False, dtype=jnp.bool_),
             bullet_x=jnp.array(-1, dtype=jnp.int32),
             bullet_y=jnp.array(-1, dtype=jnp.int32),
@@ -2300,6 +2439,7 @@ class JaxRoadRunner(
             cannon_y=jnp.array(-1, dtype=jnp.int32),
             next_cannon_spawn_step=jnp.array(0, dtype=jnp.int32),
             cannon_has_fired=jnp.array(False, dtype=jnp.bool_),
+            # Start mirrored=False so first toggle gives left-facing (pre-split pattern)
             cannon_is_mirrored=jnp.array(False, dtype=jnp.bool_),
             bullet_x=jnp.array(-1, dtype=jnp.int32),
             bullet_y=jnp.array(-1, dtype=jnp.int32),
@@ -2503,13 +2643,23 @@ class JaxRoadRunner(
             dtype=jnp.int32,
         )
         rng, cannon_key = jax.random.split(rng)
-        next_cannon_spawn_step = state.scrolling_step_counter + jax.random.randint(
+        random_cannon_step = state.scrolling_step_counter + jax.random.randint(
             cannon_key,
             (),
             cannon_bounds[0],
             cannon_bounds[1] + 1,
             dtype=jnp.int32,
         )
+        # Use fixed cannon positions when available for the level.
+        if self._level_count > 0:
+            fixed_steps = self._cannon_fixed_steps[level_idx]
+            valid = (fixed_steps >= state.scrolling_step_counter) & (fixed_steps >= 0)
+            candidates = jnp.where(valid, fixed_steps, jnp.int32(_NO_CANNON_STEP))
+            fixed_first = jnp.min(candidates)
+            has_fixed = jnp.any(fixed_steps >= 0)
+            next_cannon_spawn_step = jnp.where(has_fixed, fixed_first, random_cannon_step)
+        else:
+            next_cannon_spawn_step = random_cannon_step
         return state._replace(
             rng=rng,
             next_seed_spawn_scroll_step=next_seed_spawn_scroll_step,
@@ -3206,9 +3356,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
         if self._level_count == 0:
             return canvas
 
-        level_idx = jnp.clip(state.current_level, 0, self._level_count - 1).astype(jnp.int32)
-        row = self._offramp_data[level_idx]
-        enabled = row[0] > 0
+        any_active, row = _find_active_offramp_row(
+            self._offramp_data, state, self._level_count, self.consts)
         scroll_start = row[1]
         scroll_end = row[2]
 
@@ -3233,13 +3382,18 @@ class RoadRunnerRenderer(JAXGameRenderer):
         # Scale x coordinates for column masking
         x_scale = ofr_sprite_w / SCROLL_W  # float, used for left_x / right_x scaling
 
-        # Screen x of merge leading edge (used to determine when to stop rendering)
-        merge_x_check = (counter - scroll_end) * SPEED
-        # Active from split appearance until the merge sprite exits the right screen edge
-        offramp_active = enabled & (counter >= scroll_start) & (merge_x_check < W + RAMP_W)
+        # Active status already computed by _get_active_offramp_row
+        offramp_active = any_active
 
-        # Static Y position of the offramp road
-        offramp_top = self.consts.ROAD_TOP_Y - self.consts.OFFRAMP_GAP - OFFRAMP_H
+        # Compute Y position of the offramp road, flush above the main road.
+        # For narrow roads (e.g. Level 4, road_height=30), the road is centered
+        # within the ROAD_HEIGHT area, so the visible road top is offset down from
+        # ROAD_TOP_Y.  The offramp must be positioned relative to this actual top.
+        section = self._get_render_section(state)
+        current_road_height = jnp.clip(section.road_height, 1, self.consts.ROAD_HEIGHT)
+        road_top_offset = (self.consts.ROAD_HEIGHT - current_road_height) // 2
+        actual_road_top = self.consts.ROAD_TOP_Y + road_top_offset
+        offramp_top = actual_road_top - self.consts.OFFRAMP_GAP - OFFRAMP_H
 
         def _render_active(c: jnp.ndarray) -> jnp.ndarray:
             # Screen x of split leading edge (0 at scroll_start, grows rightward)
