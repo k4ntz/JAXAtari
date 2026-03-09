@@ -138,12 +138,12 @@ class BattlezoneConstants(struct.PyTreeNode):
     # --- world movement ---
     WORLD_SIZE_X: int = struct.field(default=256, pytree_node=False)
     WORLD_SIZE_Z: int = struct.field(default=256, pytree_node=False)
-    PLAYER_ROTATION_SPEED: float = struct.field(default=2*jnp.pi/536, pytree_node=False)
-    PLAYER_SPEED: float = struct.field(default=0.25, pytree_node=False)
-    PLAYER_SPEED_DRIVETURN: float = struct.field(default=0.057674, pytree_node=False)
-    PROJECTILE_SPEED: float = struct.field(default=0.5, pytree_node=False)
-    ENEMY_SPEED: chex.Array = struct.field(default_factory=lambda: jnp.array([0.25, 0.25, 1.0, 1.0]))
-    ENEMY_ROT_SPEED: chex.Array = struct.field(default_factory=lambda: jnp.array([2 * jnp.pi / 2048, 0.01, 0.01, 0.01]))
+    PLAYER_ROTATION_SPEED: float = struct.field(default=jnp.pi/134, pytree_node=False)
+    PLAYER_SPEED: float = struct.field(default=0.5, pytree_node=False)
+    PLAYER_SPEED_DRIVETURN: float = struct.field(default=0.115348, pytree_node=False)
+    PROJECTILE_SPEED: float = struct.field(default=1, pytree_node=False)
+    ENEMY_SPEED: chex.Array = struct.field(default_factory=lambda: jnp.array([0.5, 0.5, 2.0, 2.0]))
+    ENEMY_ROT_SPEED: chex.Array = struct.field(default_factory=lambda: jnp.array([jnp.pi/512, 0.02, 0.02, 0.02]))
 
     # --- game mechanics ---
     HITBOX_SIZE: float = struct.field(default=6.0, pytree_node=False)
@@ -159,14 +159,14 @@ class BattlezoneConstants(struct.PyTreeNode):
     FIGHTER_AREA_Z: Tuple[float, float] = struct.field(default=(75.0, 126.0), pytree_node=False)
     FIGHTER_SLOW_DOWN_DISTANCE: float = struct.field(default=48.0, pytree_node=False)
     FIGHTER_SHOOTING_DISTANCE: float = struct.field(default=30.0, pytree_node=False)
-    FIGHTER_DESPAWN_FRAMES: int = struct.field(default=24, pytree_node=False)
+    FIGHTER_DESPAWN_FRAMES: int = struct.field(default=12, pytree_node=False)
 
     # --- timing ---
-    FIRE_CD: int = struct.field(default=114, pytree_node=False)
-    PROJECTILE_TTL: int = struct.field(default=110, pytree_node=False)
-    DEATH_ANIM_LENGTH: int = struct.field(default=30, pytree_node=False)
-    ENEMY_DEATH_ANIM_LENGTH: int = struct.field(default=30, pytree_node=False)
-    ENEMY_SHOOT_CDS: chex.Array = struct.field(default_factory=lambda: jnp.array([400, 400, 400, 400]))
+    FIRE_CD: int = struct.field(default=57, pytree_node=False)
+    PROJECTILE_TTL: int = struct.field(default=55, pytree_node=False)
+    DEATH_ANIM_LENGTH: int = struct.field(default=15, pytree_node=False)
+    ENEMY_DEATH_ANIM_LENGTH: int = struct.field(default=15, pytree_node=False)
+    ENEMY_SHOOT_CDS: chex.Array = struct.field(default_factory=lambda: jnp.array([200, 200, 200, 200]))
 
     # --- misc ---
     RADAR_ROTATION_SPEED: float = struct.field(default=-0.05, pytree_node=False)
