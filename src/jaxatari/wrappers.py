@@ -851,6 +851,7 @@ class LogWrapper(JaxatariWrapper):
         action: Union[int, float],
     ) -> Tuple[chex.Array, LogState, float, bool, Dict[Any, Any]]:
         obs, atari_state, reward, done, info = self._env.step(state.atari_state, action)
+        actual_done = done
         # use env_reward (unclipped/unchanged) for logging when available
         new_episode_return = state.episode_returns + info.get("env_reward", reward)
         new_episode_length = state.episode_lengths + 1
@@ -870,7 +871,8 @@ class LogWrapper(JaxatariWrapper):
         info["returned_episode_returns"] = state.returned_episode_returns
         info["returned_episode_lengths"] = state.returned_episode_lengths
         info["returned_episode"] = done
-        return obs, state, reward, done, info
+        # Still need to return the actual/wrapped done signal (e.g. affected by episodic life)
+        return obs, state, reward, actual_done, info
 
 @struct.dataclass
 class MultiRewardLogState:
