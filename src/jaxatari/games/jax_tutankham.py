@@ -13,6 +13,7 @@ from functools import partial
 from PIL import Image
 import numpy as np
 import jaxatari.spaces as spaces
+import time
 
 
 def _get_default_asset_config() -> tuple:
@@ -95,13 +96,13 @@ class Entity(NamedTuple):
 # Constants
 # ---------------------------------------------------------------------
 class TutankhamConstants(NamedTuple):
+    # Game Window
     WIDTH: int = 160
     HEIGHT: int = 210
-    SPEED: float = 2.5
-    PIXEL_COLOR: chex.Array = jnp.array([255, 255, 255], dtype=jnp.int32)  # white
-
+    
+    # Player constants
+    PLAYER_SPEED: float = 2.5
     PLAYER_SIZE: chex.Array = jnp.array([5, 10], dtype=jnp.int32)
-
     PLAYER_LIVES: int = 3
 
     # Missile constants
@@ -163,6 +164,9 @@ class TutankhamConstants(NamedTuple):
 # Game State
 # ---------------------------------------------------------------------
 class TutankhamState(NamedTuple):
+    # key state for creature spawn randomness
+    rng_key: int
+
     player_x: chex.Array
     player_y: chex.Array
     player_lives: int
@@ -374,6 +378,9 @@ class JaxTutankham(JaxEnvironment):
     # Reset
     # -----------------------------
     def reset(self, key=None):
+        # Generate random seed based on current time for creature spawn randomness
+        seed = int(time.time())
+        key = jax.random.PRNGKey(seed)
         start_x = self.consts.WIDTH // 2
         start_y = self.consts.HEIGHT // 2
         tutankham_score = 0
@@ -399,7 +406,8 @@ class JaxTutankham(JaxEnvironment):
                                 laser_flash_count=laser_flash_count,
                                 laser_flash_cooldown=laser_flash_cooldown,
                                 has_key=has_key,
-                                last_directional_action=0
+                                last_directional_action=0,
+                                rng_key=key
                                )
         return state, state #TODO: (EnvObs, EnvState)
     
@@ -407,7 +415,7 @@ class JaxTutankham(JaxEnvironment):
     # Player Step
     @partial(jax.jit, static_argnums=(0,))
     def player_step(self, player_x, player_y, action, last_directional_action):
-        speed = self.consts.SPEED
+        speed = self.consts.PLAYER_SPEED
 
         dx = jnp.array([
         0,          # 0  NOOP
@@ -613,7 +621,7 @@ class JaxTutankham(JaxEnvironment):
             x, y, creature_type, active = creature_states[i]
             if active == self.consts.INACTIVE:  # TODO: find correct spawner x,y
                 new_x = 0
-                new_y = np.random.randint(0, self.consts.HEIGHT)
+                new_y = 0
                 new_creature_type = np.random.randint(0, len(self.consts.CREATURE_POINTS))
                 new_creature_states[i] = np.array([new_x, new_y, new_creature_type, self.consts.ACTIVE])
 
@@ -669,8 +677,9 @@ class JaxTutankham(JaxEnvironment):
     @partial(jax.jit, static_argnums=(0,))
     def respawn_player(self, player_x, player_y, player_lives):
         '''
-        Resets player position to last checkpoint and decreases lives by 1. 
-        Sets bullet state and creature states to default values.
+        Resets player position to last checkpoint and decreases lives by 1
+        Sets bullet state and creature states to default values
+        Resets creature spawn timer to 0
         '''
         
         # TODO: Replace with hardcoded per-room checkpoints
@@ -760,6 +769,7 @@ class JaxTutankham(JaxEnvironment):
         player_lives = state.player_lives
         has_key = state.has_key
         last_directional_action = state.last_directional_action
+        rng_key = state.rng_key
 
         player_x, player_y, last_directional_action = self.player_step(player_x, player_y, action, last_directional_action)
 
@@ -767,7 +777,7 @@ class JaxTutankham(JaxEnvironment):
 
         creature_states = self.creature_step(creature_states)
 
-        #creature_states, last_creature_spawn = self.spawner_step(creature_states, last_creature_spawn)
+        creature_states, last_creature_spawn = self.spawner_step(creature_states, last_creature_spawn)
 
         # laser flash step should go after creature step to immediately remove creatures
         creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)
@@ -804,7 +814,8 @@ class JaxTutankham(JaxEnvironment):
                                laser_flash_count=laser_flash_count,
                                laser_flash_cooldown=laser_flash_cooldown,
                                has_key=has_key,
-                               last_directional_action=last_directional_action
+                               last_directional_action=last_directional_action,
+                               rng_key=rng_key
                                )
 
         reward = 0.0
