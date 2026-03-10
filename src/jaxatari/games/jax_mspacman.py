@@ -61,8 +61,8 @@ class MsPacmanConstants:
     chase_duration: int = 1200           # ~20 seconds
     # Ghost pen position (center of maze, grid coords)
     pen_x: int = 19
-    pen_y: int = 17
-    pen_door_y: int = 15                 # y-coord of pen exit
+    pen_y: int = 16
+    pen_door_y: int = 14                 # y-coord of pen exit
     # Start-of-level delay
     start_delay: int = 60               # frames before movement begins
     # Death animation
@@ -91,8 +91,8 @@ class MsPacmanConstants:
     scatter_targets: Tuple[Tuple[int, int], ...] = (
         (37, 0),    # Blinky -> top-right
         (2, 0),     # Pinky -> top-left
-        (37, 43),   # Inky -> bottom-right
-        (2, 43),    # Sue -> bottom-left
+        (37, 41),   # Inky -> bottom-right
+        (2, 41),    # Sue -> bottom-left
     )
     # Level selection and layouts
     level: int = 0
@@ -1441,6 +1441,10 @@ class MsPacmanRenderer(JAXGameRenderer):
         h = min(pixel_img.shape[0], canvas.shape[0] - self.offset_y)
         w = min(pixel_img.shape[1], canvas.shape[1] - self.offset_x)
         canvas[self.offset_y:self.offset_y + h, self.offset_x:self.offset_x + w] = pixel_img[:h, :w]
+        
+        # Stripes at the bottom of the maze (rows 170 and 171)
+        canvas[1, :] = wall_color
+        canvas[170:172, :] = wall_color
 
         # Convert to RGBA
         alpha = np.full((self.consts.screen_height, self.consts.screen_width, 1), 255, dtype=np.uint8)
@@ -1624,17 +1628,5 @@ class MsPacmanRenderer(JAXGameRenderer):
             raster, fruit_ui_x, fruit_ui_y, scoreboard_fruit_mask
         )
 
-        #return self.jr.render_from_palette(raster, self.PALETTE)
-        rgb_image = self.jr.render_from_palette(raster, self.PALETTE)
-        stripe_color = jnp.array([228, 111, 111], dtype=jnp.uint8) # Change RGB as needed
-        
-        # Stripe at the top (row 1)
-        rgb_image = rgb_image.at[1, :].set(stripe_color)
-
-        # Stripe at the bottom of the maze (just above the scoreboard)
-        rgb_image = rgb_image.at[170, :].set(stripe_color)
-        rgb_image = rgb_image.at[171, :].set(stripe_color)
-
-        
-        return rgb_image
+        return self.jr.render_from_palette(raster, self.PALETTE)
 
