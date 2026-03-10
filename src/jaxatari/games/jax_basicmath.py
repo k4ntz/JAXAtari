@@ -28,12 +28,6 @@ def _get_default_asset_config() -> tuple:
         {'name': 'underscore', 'type': 'group', 'files': underscore_files}
     )
 
-class EntityPosition(NamedTuple):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-
 class BasicMathConstants(NamedTuple):
     SCREEN_WIDTH: int = 160
     SCREEN_HEIGHT: int = 210
@@ -75,10 +69,13 @@ class BasicMathState(NamedTuple):
     step_counter: chex.PRNGKey
 
 class BasicMathObservation(NamedTuple):
-    pos: EntityPosition
-    numArr: jnp.ndarray
+    x: jnp.ndarray
+    y: jnp.ndarray
+    width: jnp.ndarray
+    height: jnp.ndarray
     problemNum1: jnp.ndarray
     problemNum2: jnp.ndarray
+    numArr: jnp.ndarray
 
 class BasicMathInfo(NamedTuple):
     score: chex.Array
@@ -110,12 +107,10 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
     
     def observation_space(self) -> spaces:
         return spaces.Dict({
-            "pos": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
-            }),
+            "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
+            "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
+            "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
+            "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
             "problemNum1": spaces.Box(low=0, high=10, shape=(), dtype=jnp.float32),
             "problemNum2": spaces.Box(low=0, high=10, shape=(), dtype=jnp.float32),
             "numArr": spaces.Box(
@@ -130,10 +125,10 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
     def obs_to_flat_array(self, obs: BasicMathObservation) -> jnp.ndarray:
         return jnp.concatenate([
             jnp.array([
-                obs.pos.x.flatten().astype(jnp.float32),
-                obs.pos.y.flatten().astype(jnp.float32),
-                obs.pos.width.flatten().astype(jnp.float32),
-                obs.pos.height.flatten().astype(jnp.float32),
+                obs.x.flatten().astype(jnp.float32),
+                obs.y.flatten().astype(jnp.float32),
+                obs.width.flatten().astype(jnp.float32),
+                obs.height.flatten().astype(jnp.float32),
                 obs.problemNum1.flatten().astype(jnp.float32),
                 obs.problemNum2.flatten().astype(jnp.float32),
             ]),
@@ -151,17 +146,14 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         )
     
     def _get_observation(self, state: BasicMathState):
-        pos = EntityPosition(
-            x=jnp.array(35 + state.arrPos * 15),
-            y=jnp.array(self.consts.bar0[1]),
-            width=jnp.array(20),
-            height=jnp.array(2),
-        )
         return BasicMathObservation(
-            pos,
-            state.problemNum1, 
-            state.problemNum2,
-            state.numArr
+            jnp.array([35 + state.arrPos * 15], dtype=jnp.float32),
+            jnp.array([self.consts.bar0[1]], dtype=jnp.float32),
+            jnp.array([20], dtype=jnp.float32),
+            jnp.array([2], dtype=jnp.float32),
+            jnp.array(state.problemNum1, dtype=jnp.float32), 
+            jnp.array(state.problemNum2, dtype=jnp.float32),
+            state.numArr.astype(jnp.float32)
         )
 
     @partial(jax.jit, static_argnums=(0,))
