@@ -111,18 +111,18 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
     def observation_space(self) -> spaces:
         return spaces.Dict({
             "pos": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
+                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
+                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.float32),
+                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.float32),
             }),
-            "problemNum1": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
-            "problemNum2": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
+            "problemNum1": spaces.Box(low=0, high=10, shape=(), dtype=jnp.float32),
+            "problemNum2": spaces.Box(low=0, high=10, shape=(), dtype=jnp.float32),
             "numArr": spaces.Box(
                 low=-1,
                 high=10,
                 shape=(6,),
-                dtype=jnp.int32
+                dtype=jnp.float32
             )
         })
     
@@ -130,14 +130,14 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
     def obs_to_flat_array(self, obs: BasicMathObservation) -> jnp.ndarray:
         return jnp.concatenate([
             jnp.array([
-                obs.pos.x,
-                obs.pos.y,
-                obs.pos.width,
-                obs.pos.height,
-                obs.problemNum1,
-                obs.problemNum2,
+                obs.pos.x.flatten().astype(jnp.float32),
+                obs.pos.y.flatten().astype(jnp.float32),
+                obs.pos.width.flatten().astype(jnp.float32),
+                obs.pos.height.flatten().astype(jnp.float32),
+                obs.problemNum1.flatten().astype(jnp.float32),
+                obs.problemNum2.flatten().astype(jnp.float32),
             ]),
-            obs.numArr
+            obs.numArr.flatten().astype(jnp.float32)
         ])
 
     @partial(jax.jit, static_argnums=(0,))
@@ -159,9 +159,9 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         )
         return BasicMathObservation(
             pos,
-            state.numArr, 
             state.problemNum1, 
-            state.problemNum2
+            state.problemNum2,
+            state.numArr
         )
 
     @partial(jax.jit, static_argnums=(0,))
