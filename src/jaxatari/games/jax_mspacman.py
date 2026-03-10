@@ -102,7 +102,6 @@ class MsPacmanConstants:
 
 # Level layouts
 maze_layout_level1 = (
-        "4444444444444444444444444444444444444444",
         "1000000000100000000000000000010000000001",
         "1023232320102323232332323232010232323201",
         "1030000030103000000000000003010300000301",
@@ -125,7 +124,7 @@ maze_layout_level1 = (
         "0010232323232320100000010232323232320100",
         "0010300000000030100000010300000000030100",
         "1110301111111030100000010301111111030111",
-        "1110201111111020100000010201111111020111",
+        "1110201111111020111111110201111111020111",
         "1110301111111030111111110301111111030111",
         "0000301000000030000000000300000001030000",
         "3323201023232323232P32323232323201023233",
@@ -145,11 +144,9 @@ maze_layout_level1 = (
         "1030000030000000300000030000000300000301",
         "1023232323232323232332323232323232323201",
         "1000000000000000000000000000000000000001",
-        "4444444444444444444444444444444444444444",
     )
 
 maze_layout_level2 = (
-        "4444444444444444444444444444444444444444",
         "1000000000000000000000000000000000000001",
         "1023232323232323232332323232323232323201",
         "1030000000003000000000000003000000000301",
@@ -182,21 +179,19 @@ maze_layout_level2 = (
         "1000003000003011111111111103000003000001",
         "1111103011103010000000000103011103011111",
         "1111102011102010232332320102011102011111",
-        "1111103011103010300000000103011103011111",
-        "1000003000103000301001000003010003000001",
+        "1111103011103010300000030103011103011111",
+        "1000003000103000301001030003010003000001",
         "1023232320102323201001023232010202323201",
         "1030000030103000001001000003010300000301",
         "1030111030103011111001111103010301110301",
         "10S0111020102011111001111102010201110S01",
         "1030111030103011111001111103010301110301",
-        "0030000030103000000000000003010300000300",
+        "3330000030103000000000000003010300000333",
         "0023232320102323232332323232010232323200",
         "0000000000100000000000000000010000000000",
-        "4444444444444444444444444444444444444444",
     )
 
 maze_layout_level3 = (
-        "4444444444444444444444444444444444444444",
         "1000000000000010000000000100000000000001",
         "1023232323232010232332320102323232323201",
         "1030000030003010300000030103000300000301",
@@ -239,11 +234,9 @@ maze_layout_level3 = (
         "1030003000003010300000030103000003000301",
         "1023232323232010232332320102323232323201",
         "1000000000000010000000000100000000000001",
-        "4444444444444444444444444444444444444444",
     )
 
 maze_layout_level4 = (
-        "4444444444444444444444444444444444444444",
         "1000000000000000000000000000000000000001",
         "1023232323232323232332323232323232323201",
         "1030003000003000000000000003000003000301",
@@ -286,7 +279,6 @@ maze_layout_level4 = (
         "1030003000003000001111000003000003000301",
         "1023232323232323201111023232323232323201",
         "1000000000000000001111000000000000000001",
-        "4444444444444444444444444444444444444444",
     )
 
 # Create default constants instance
@@ -347,9 +339,6 @@ def _parse_layout(layout: Tuple[str, ...], expected_ghosts: int):
         for x, char in enumerate(row):
             if char in ("#", "1"):
                 wall_row.append(1)
-                pellet_row.append(0)
-            elif char == "4":
-                wall_row.append(4) # Special boundary wall ID
                 pellet_row.append(0)
             elif char == "0":
                 # Visually corridor but blocked for player movement (pellet=-1 signals visual)
@@ -1310,7 +1299,7 @@ class MsPacmanRenderer(JAXGameRenderer):
         grid_px_w = grid_w * self.cell
         grid_px_h = grid_h * self.cell
         self.offset_x = max((self.consts.screen_width - grid_px_w) // 2, 0)
-        self.offset_y = 1#GAME_BOARD_OFFSET_Y
+        self.offset_y = 2#GAME_BOARD_OFFSET_Y
 
         # Build per-level RGBA backgrounds
         backgrounds = []
@@ -1335,14 +1324,14 @@ class MsPacmanRenderer(JAXGameRenderer):
 
         asset_config = [
             {'name': 'bg', 'type': 'background', 'data': background_rgba},
-            {'name': 'pacman', 'type': 'group', 'files': [f'pacman_{i}.npy' for i in range(5)]},
+            {'name': 'pacman', 'type': 'group', 'files': [f'pacman_{i}.npy' for i in range(4)]},
             {'name': 'ghost', 'type': 'group', 'files': [
                 'ghost_blinky.npy', 'ghost_pinky.npy', 'ghost_inky.npy', 'ghost_sue.npy',
                 'ghost_blue.npy', 'ghost_white.npy',
             ]},
             {'name': 'ghost_eyes', 'type': 'procedural', 'data': jnp.array(eyes_sprite)},
             {'name': 'score', 'type': 'digits', 'pattern': 'score_{}.npy'},
-            {'name': 'fruit', 'type': 'group', 'files': ['cherry_sprite.npy']},
+            {'name': 'fruit', 'type': 'group', 'files': ['fruit_cherry.npy']},
         ]
 
         (
@@ -1405,7 +1394,7 @@ class MsPacmanRenderer(JAXGameRenderer):
         self.pellet_color_map = jnp.array([0, pellet_color_id, power_color_id], dtype=jnp.uint8)
 
     def _build_background(self, wall_grid: jnp.ndarray, pellet_template: jnp.ndarray):
-        """Build background RGBA image from wall grid and pellet template with 1px thin boundaries."""
+        """Build background RGBA image from wall grid and pellet template."""
         cell = self.cell
         grid_h, grid_w = wall_grid.shape
 
@@ -1420,45 +1409,28 @@ class MsPacmanRenderer(JAXGameRenderer):
         wall_color = np.array(self.consts.wall_color, dtype=np.uint8)
         corridor_color = np.array(self.consts.blocked_color, dtype=np.uint8)
 
+        # Create tile-level image
+        tile_img = np.zeros((grid_h, grid_w, 3), dtype=np.uint8)
         wall_np = np.array(wall_grid)
         pellet_np = np.array(pellet_template)
 
-        all_rows = []
         for y in range(grid_h):
-            row_tiles = []
             for x in range(grid_w):
-                # Identify color for each tile
-                if wall_np[y, x] == 4:
-                    color = wall_color # Boundary wall color
-                elif wall_np[y, x] == 1:
-                    # Visual corridor check
-                    color = wall_color if pellet_np[y, x] != -1 else corridor_color
+                if wall_np[y, x] == 1:
+                    if pellet_np[y, x] == -1:
+                        tile_img[y, x] = corridor_color  # soft wall = blue
+                    else:
+                        tile_img[y, x] = wall_color
                 else:
-                    color = corridor_color # Path/Background
-                row_tiles.append(color)
-            
-            # Convert row to pixels and scale horizontally (width always stays 4px per tile)
-            row_pixels = np.array(row_tiles).reshape(1, grid_w, 3)
-            row_pixels = np.repeat(row_pixels, cell, axis=1) 
+                    tile_img[y, x] = corridor_color  # corridors
 
-            # Vertical scaling logic:
-            if np.any(wall_np[y, :] == 4):
-                # Only repeat 1 time vertically to create a 1-pixel high row
-                row_pixels = np.repeat(row_pixels, 1, axis=0) 
-            else:
-                # Standard rows are repeated by the full cell size (4px)
-                row_pixels = np.repeat(row_pixels, cell, axis=0)
-                
-            all_rows.append(row_pixels)
-
-        # Assemble the final image from the rows of varying heights
-        pixel_img = np.concatenate(all_rows, axis=0)
+        # Scale up to pixel resolution
+        pixel_img = np.repeat(np.repeat(tile_img, cell, axis=0), cell, axis=1)
 
         # Place on full screen canvas
         canvas = np.zeros((self.consts.screen_height, self.consts.screen_width, 3), dtype=np.uint8)
+        # Fill with background color
         canvas[:] = bg_color
-        
-        # Calculate fit within the canvas relative to offset_y
         h = min(pixel_img.shape[0], canvas.shape[0] - self.offset_y)
         w = min(pixel_img.shape[1], canvas.shape[1] - self.offset_x)
         canvas[self.offset_y:self.offset_y + h, self.offset_x:self.offset_x + w] = pixel_img[:h, :w]
@@ -1467,7 +1439,7 @@ class MsPacmanRenderer(JAXGameRenderer):
         alpha = np.full((self.consts.screen_height, self.consts.screen_width, 1), 255, dtype=np.uint8)
         canvas_rgba = np.concatenate([canvas, alpha], axis=2)
 
-        # Apply native downscaling if configured
+        # If renderer is downscaling, resize background to target dimensions
         if self.config.downscale is not None:
             canvas_rgba = np.array(
                 jim.resize(jnp.asarray(canvas_rgba), (target_h, target_w, 4), method="nearest")
@@ -1502,7 +1474,7 @@ class MsPacmanRenderer(JAXGameRenderer):
         raster = self.jr.render_grid_inverse(
             raster,
             regular_grid,
-            grid_origin=(self.offset_x + 0, self.offset_y - 2),
+            grid_origin=(self.offset_x + 1, self.offset_y + 1),
             cell_size=(4, 2),
             color_map=self.pellet_color_map,
             cell_padding=(0, 2),
@@ -1624,12 +1596,18 @@ class MsPacmanRenderer(JAXGameRenderer):
             lives_to_show, life_mask,
             spacing=12, max_value=3,
         )
-        
-        # --- Cherry
-        cherry_mask = self.SHAPE_MASKS['fruit'][0]
-        raster = self.jr.render_at_clipped(
-            raster, 140, self.consts.screen_height - 18, cherry_mask
-        )
 
-        return self.jr.render_from_palette(raster, self.PALETTE)
+        #return self.jr.render_from_palette(raster, self.PALETTE)
+        rgb_image = self.jr.render_from_palette(raster, self.PALETTE)
+        stripe_color = jnp.array([228, 111, 111], dtype=jnp.uint8) # Change RGB as needed
+        
+        # Stripe at the top (row 1)
+        rgb_image = rgb_image.at[1, :].set(stripe_color)
+
+        # Stripe at the bottom of the maze (just above the scoreboard)
+        rgb_image = rgb_image.at[170, :].set(stripe_color)
+        rgb_image = rgb_image.at[171, :].set(stripe_color)
+
+        
+        return rgb_image
 
