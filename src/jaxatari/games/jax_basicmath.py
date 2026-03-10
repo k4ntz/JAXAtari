@@ -118,20 +118,27 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             }),
             "problemNum1": spaces.Box(low=0, high=20, shape=(), dtype=jnp.int32),
             "problemNum2": spaces.Box(low=0, high=20, shape=(), dtype=jnp.int32),
-            "numArr": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+            "numArr": spaces.Box(
+                low=0,
+                high=210,
+                shape=(5,),
+                dtype=jnp.int32
+            )
         })
     
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: BasicMathObservation) -> jnp.ndarray:
-        return jnp.array([
-            obs.pos.x,
-            obs.pos.y,
-            obs.pos.width,
-            obs.pos.height,
-            obs.problemNum1,
-            obs.problemNum2,
+        return jnp.concatenate([
+            jnp.array([
+                obs.pos.x,
+                obs.pos.y,
+                obs.pos.width,
+                obs.pos.height,
+                obs.problemNum1,
+                obs.problemNum2,
+            ]),
             obs.numArr
-        ], dtype=jnp.int32)
+        ])
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: BasicMathState, ) -> BasicMathInfo:
