@@ -148,13 +148,13 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
     def _get_observation(self, state: BasicMathState):
         arr = state.numArr
         return BasicMathObservation(
-            jnp.array([35 + state.arrPos * 15], dtype=jnp.float32),
-            jnp.array([self.consts.bar0[1]], dtype=jnp.float32),
-            jnp.array([20], dtype=jnp.float32),
-            jnp.array([2], dtype=jnp.float32),
-            jnp.array(state.problemNum1, dtype=jnp.float32), 
-            jnp.array(state.problemNum2, dtype=jnp.float32),
-            jnp.array([arr[0], arr[1], arr[2], arr[3], arr[4], arr[5]],jnp.float32)
+            x=jnp.array([35 + state.arrPos * 15], dtype=jnp.float32),
+            y=jnp.array([self.consts.bar0[1]], dtype=jnp.float32),
+            width=jnp.array([20], dtype=jnp.float32),
+            height=jnp.array([2], dtype=jnp.float32),
+            problemNum1=jnp.array(state.problemNum1, dtype=jnp.float32), 
+            problemNum2=jnp.array(state.problemNum2, dtype=jnp.float32),
+            numArr=jnp.array([arr[0], arr[1], arr[2], arr[3], arr[4], arr[5]],jnp.float32)
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -469,7 +469,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
 class BasicMathRenderer(JAXGameRenderer):
     def __init__(self, consts: BasicMathConstants = None):
-        super().__init__(consts)
+        super().__init__()
         self.consts = consts or BasicMathConstants()
         self.config = render_utils.RendererConfig(
             game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
