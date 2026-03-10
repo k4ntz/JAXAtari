@@ -97,7 +97,7 @@ class Entity(NamedTuple):
 class TutankhamConstants(NamedTuple):
     WIDTH: int = 160
     HEIGHT: int = 210
-    SPEED: int = 4
+    SPEED: int = 3
     PIXEL_COLOR: chex.Array = jnp.array([255, 255, 255], dtype=jnp.int32)  # white
 
     PLAYER_SIZE: chex.Array = jnp.array([5, 10], dtype=jnp.int32)
@@ -184,6 +184,8 @@ class TutankhamState(NamedTuple):
     respawn_step_counter: int  # counts the number of steps taken in the game
 
     has_key: bool  # whether the player has collected the key or not
+
+    last_directional_action: int  # last action that had a directional component
 
 
 # ---------------------------------------------------------------------
@@ -406,14 +408,15 @@ class JaxTutankham(JaxEnvironment):
                                 laser_flash_count=laser_flash_count,
                                 laser_flash_cooldown=laser_flash_cooldown,
                                 respawn_step_counter=respawn_step_counter,
-                                has_key=has_key
+                                has_key=has_key,
+                                last_directional_action=0
                                )
         return state, state #TODO: (EnvObs, EnvState)
     
     
     # Player Step
     @partial(jax.jit, static_argnums=(0,))
-    def player_step(self, player_x, player_y, action):
+    def player_step(self, player_x, player_y, action, last_directional_action):
         speed = self.consts.SPEED
 
         dx = jnp.array([
@@ -428,8 +431,8 @@ class JaxTutankham(JaxEnvironment):
         0,          # 8  DOWNRIGHT
         0,          # 9  DOWNLEFT
         0,          # 10 UPFIRE
-        speed,      # 11 RIGHTFIRE
-        -speed,     # 12 LEFTFIRE
+        0,          # 11 RIGHTFIRE
+        0,          # 12 LEFTFIRE
         0,          # 13 DOWNFIRE
         0,          # 14 UPRIGHTFIRE
         0,          # 15 UPLEFTFIRE
@@ -444,28 +447,32 @@ class JaxTutankham(JaxEnvironment):
             0,          # 3  RIGHT
             0,          # 4  LEFT
             speed,      # 5  DOWN
-            -speed,     # 6  UPRIGHT
-            -speed,     # 7  UPLEFT
-            speed,      # 8  DOWNRIGHT
-            speed,      # 9  DOWNLEFT
-            -speed,     # 10 UPFIRE
+            0,     # 6  UPRIGHT
+            0,     # 7  UPLEFT
+            0,      # 8  DOWNRIGHT
+            0,      # 9  DOWNLEFT
+            0,     # 10 UPFIRE
             0,          # 11 RIGHTFIRE
             0,          # 12 LEFTFIRE
-            speed,      # 13 DOWNFIRE
-            -speed,     # 14 UPRIGHTFIRE
-            -speed,     # 15 UPLEFTFIRE
-            speed,      # 16 DOWNRIGHTFIRE
-            speed,      # 17 DOWNLEFTFIRE
+            0,      # 13 DOWNFIRE
+            0,     # 14 UPRIGHTFIRE
+            0,     # 15 UPLEFTFIRE
+            0,      # 16 DOWNRIGHTFIRE
+            0,      # 17 DOWNLEFTFIRE
         ])
 
+        # If the current action has no directional component, fall back to the last directional action
+        has_movement = (dx[action] != 0) | (dy[action] != 0)
+        effective_action = jnp.where(has_movement, action, last_directional_action)
+        new_last_directional_action = jnp.where(has_movement, action, last_directional_action)
 
-        player_x = player_x + dx[action]
-        player_y = player_y + dy[action]
+        player_x = player_x + dx[effective_action]
+        player_y = player_y + dy[effective_action]
 
         player_x = jnp.clip(player_x, 0, self.consts.WIDTH - 1)
         player_y = jnp.clip(player_y, 0, self.consts.HEIGHT - 1)
 
-        return player_x, player_y
+        return player_x, player_y, new_last_directional_action
     
 
     #Bullet Step
@@ -679,6 +686,33 @@ class JaxTutankham(JaxEnvironment):
         )
 
         return horizontal_overlap & vertical_overlap
+    '''
+    # mögliche vmap implmentierung
+    @jax.jit
+    def check_collisions_batch(pos1, size1, pos2, size2):
+        """
+        pos1: (N, 2) array of [x, y]
+        size1: (N, 2) array of [w, h]
+        pos2: (M, 2) array of [x, y]
+        size2: (M, 2) array of [w, h]
+        Returns: (N, M) boolean matrix of collisions
+        """
+        
+        # helper to check one-to-many
+        def single_vs_batch(p1, s1, p2_batch, s2_batch):
+            rect1_left, rect1_top = p1
+            rect1_right, rect1_bottom = p1 + s1
+
+            rect2_lefts, rect2_tops = p2_batch[:, 0], p2_batch[:, 1]
+            rect2_rights, rect2_bottoms = p2_batch[:, 0] + s2_batch[:, 0], p2_batch[:, 1] + s2_batch[:, 1]
+
+            h_overlap = (rect1_left < rect2_rights) & (rect1_right > rect2_lefts)
+            v_overlap = (rect1_top < rect2_bottoms) & (rect1_bottom > rect2_tops)
+            return h_overlap & v_overlap
+
+        # Use vmap to check all pos1 against all pos2
+        return jax.vmap(lambda p, s: single_vs_batch(p, s, pos2, size2))(pos1, size1)
+    '''
 
     @partial(jax.jit, static_argnums=(0,))
     def resolve_collisions(self, player_x, player_y, creature_states, bullet_state, player_lives):
@@ -772,8 +806,9 @@ class JaxTutankham(JaxEnvironment):
         player_lives = state.player_lives
         respawn_step_counter = state.respawn_step_counter
         has_key = state.has_key
+        last_directional_action = state.last_directional_action
 
-        player_x, player_y = self.player_step(player_x, player_y, action)
+        player_x, player_y, last_directional_action = self.player_step(player_x, player_y, action, last_directional_action)
 
         bullet_state, amonition_timer =self.bullet_step(bullet_state, player_x, player_y, amonition_timer, action)
 
@@ -816,7 +851,8 @@ class JaxTutankham(JaxEnvironment):
                                laser_flash_count=laser_flash_count,
                                laser_flash_cooldown=laser_flash_cooldown,
                                respawn_step_counter=respawn_step_counter,
-                               has_key=has_key
+                               has_key=has_key,
+                               last_directional_action=last_directional_action
                                )
 
         reward = 0.0
