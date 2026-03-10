@@ -93,7 +93,9 @@ class NodeGroup(NamedTuple):
     @staticmethod
     def read_maze_file(textfile):
         """Read maze file (translated from readMazeFile)."""
-        return np.loadtxt(textfile, dtype='<U1')
+        with open(textfile, 'r') as f:
+            lines = [list(line.strip()) for line in f.readlines()]
+        return np.array(lines, dtype='<U1')
     
     @staticmethod
     def construct_key(col, row, tile_size):
