@@ -405,7 +405,6 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         previous_state = state
 
         active = jnp.equal(state.inactive, 0)
-        countDown = jnp.greater(difficulty_time, 0)
 
         state = jax.lax.cond(
             active, 
@@ -435,10 +434,12 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         )
 
         new_difficulty_time = jax.lax.cond(
-            jnp.logical_and(countDown, active), 
+            active,
             lambda: state.difficultyTime - 1, 
             lambda: state.difficultyTime
         )
+
+        jax.debug.print("x value: {}", new_difficulty_time)
 
         new_difficulty_time = jax.lax.cond(
             reset, 
