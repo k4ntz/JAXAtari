@@ -121,7 +121,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             "numArr": spaces.Box(
                 low=0,
                 high=210,
-                shape=(5,),
+                shape=(6,),
                 dtype=jnp.int32
             )
         })
@@ -466,6 +466,8 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             key,
             state.step_counter + 1
         )
+
+        jax.debug.print("{x}", x=state.numArr.shape)
 
         done = self._get_done(state)
         reward = self._get_reward(previous_state, state)
