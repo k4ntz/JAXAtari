@@ -116,11 +116,11 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
                 "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
             }),
-            "problemNum1": spaces.Box(low=0, high=20, shape=(), dtype=jnp.int32),
-            "problemNum2": spaces.Box(low=0, high=20, shape=(), dtype=jnp.int32),
+            "problemNum1": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
+            "problemNum2": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
             "numArr": spaces.Box(
-                low=0,
-                high=210,
+                low=-1,
+                high=10,
                 shape=(6,),
                 dtype=jnp.int32
             )
