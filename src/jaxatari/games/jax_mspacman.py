@@ -43,7 +43,7 @@ class MsPacmanConstants:
     screen_height: int = 210
     cell_size: int = 4
     grid_width: int = 40
-    grid_height: int = 44
+    grid_height: int = 42
     num_ghosts: int = 4
     # ALE-accurate scoring
     pellet_reward: int = 10
@@ -154,7 +154,7 @@ maze_layout_level2 = (
         "10S0111111102011111001111102011111110S01",
         "1030111111103011111001111103011111110301",
         "1030001000003010000000000103000001000301",
-        "1023201023232010232323320102323201023201",
+        "1023201023232010232332320102323201023201",
         "1000301030003010300000030103000301030001",
         "1110301030103010301111030103010301030111",
         "1110201020102010201111020102010201020111",
@@ -164,12 +164,12 @@ maze_layout_level2 = (
         "1110301030100030000000000300010301030111",
         "0000300030111030111111110301110300030000",
         "3323232320111020100000010201110232323233",
-        "0030000000111030100000010301110300000300",
-        "1030111000000030100000010300000301110301",
+        "0030000030111030100000010301110300000300",
+        "1030111030000030100000010300000301110301",
         "1020111023232320100000010232323201110201",
         "1030111030000030100000010300000301110301",
         "1030111030111030100000010301110301110301",
-        "1020111020111020111111110201110201110201",
+        "1020111020111020100000010201110201110201",
         "1030111030111030111111110301110301110301",
         "1030111030100030000000000300010301110301",
         "1020111020102323232P32323232010201110201",
@@ -181,13 +181,13 @@ maze_layout_level2 = (
         "1111102011102010232332320102011102011111",
         "1111103011103010300000030103011103011111",
         "1000003000103000301001030003010003000001",
-        "1023232320102323201001023232010202323201",
+        "1023232320102323201001023232010232323201",
         "1030000030103000001001000003010300000301",
         "1030111030103011111001111103010301110301",
         "10S0111020102011111001111102010201110S01",
         "1030111030103011111001111103010301110301",
-        "3330000030103000000000000003010300000333",
-        "0023232320102323232332323232010232323200",
+        "0030000030103000000000000003010300000300",
+        "3323232320102323232332323232010232323233",
         "0000000000100000000000000000010000000000",
     )
 
@@ -200,11 +200,11 @@ maze_layout_level3 = (
         "1030111030103000301111030003010301110301",
         "1030000030103010300000030103010300000301",
         "1023232320102010232332320102010232323201",
-        "1000000000103010000000000103010000000001",
-        "1111100011103011111001111103011100011111",
-        "1111100011102011111001111102011100011111",
-        "1111100011103011111001111103011100011111",
-        "1000000000003000000000000003000000000001",
+        "1000003000103010000000000103010003000001",
+        "1111103011103011111001111103011103011111",
+        "1111102011102011111001111102011102011111",
+        "1111103011103011111001111103011103011111",
+        "1000003000003000000000000003000003000001",
         "1023232323232323232332323232323232323201",
         "1030000030000030000000000300000300000301",
         "1030111030111030111111110301110301110301",
@@ -229,7 +229,7 @@ maze_layout_level3 = (
         "1020102011102323201111023232011102010201",
         "1030103011103000301111030003011103010301",
         "1030103011103010301111030103011103010301",
-        "1020102011102010201111020102011102010201",
+        "10S0102011102010201111020102011102010S01",
         "1030103011103010301111030103011103010301",
         "1030003000003010300000030103000003000301",
         "1023232323232010232332320102323232323201",
@@ -552,13 +552,13 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
 
         # Waypoints for U-shape: right entry → down right side → across bottom → up left side → left exit
         # Row 14 is the upper tunnel, row 26 is the lower tunnel
-        waypoints = [(38, 14), (30, 14), (30, 26), (4, 26), (4, 14), (1, 14)]
+        waypoints = [(38, 13), (30, 13), (30, 25), (4, 25), (4, 13), (1, 13)]        
         segments = []
         for i in range(len(waypoints) - 1):
             seg = _bfs(waypoints[i], waypoints[i + 1])
             if seg is None:
                 # Fallback: straight path across row 14
-                fallback = [(x, 14) for x in range(38, 0, -1)]
+                fallback = [(x, 13) for x in range(38, 0, -1)]
                 path_arr = np.array(fallback, dtype=np.int32)
                 padded = np.zeros((self.consts.fruit_path_max, 2), dtype=np.int32)
                 plen = min(len(fallback), self.consts.fruit_path_max)
@@ -1324,15 +1324,22 @@ class MsPacmanRenderer(JAXGameRenderer):
 
         asset_config = [
             {'name': 'bg', 'type': 'background', 'data': background_rgba},
-            {'name': 'pacman', 'type': 'group', 'files': [f'pacman_{i}.npy' for i in range(4)]},
+            {'name': 'pacman', 'type': 'group', 'files': [f'pacman_{i}.npy' for i in range(3)]},
+            {'name': 'pacman_lives', 'type': 'group', 'files': ['MsPacman_lives.npy']},
+
             {'name': 'ghost', 'type': 'group', 'files': [
                 'ghost_blinky.npy', 'ghost_pinky.npy', 'ghost_inky.npy', 'ghost_sue.npy',
                 'ghost_blue.npy', 'ghost_white.npy',
             ]},
             {'name': 'ghost_eyes', 'type': 'procedural', 'data': jnp.array(eyes_sprite)},
             {'name': 'score', 'type': 'digits', 'pattern': 'score_{}.npy'},
-            {'name': 'fruit', 'type': 'group', 'files': ['fruit_cherry.npy']},
-        ]
+            {'name': 'fruit', 'type': 'group', 'files': [
+                'fruit_cherry.npy', 
+                'fruit_banana.npy', 
+                'fruit_pear.npy', 
+                'fruit_apple.npy'
+            ]},        
+            ]
 
         (
             self.PALETTE,
@@ -1474,7 +1481,7 @@ class MsPacmanRenderer(JAXGameRenderer):
         raster = self.jr.render_grid_inverse(
             raster,
             regular_grid,
-            grid_origin=(self.offset_x + 1, self.offset_y + 1),
+            grid_origin=(self.offset_x + 0, self.offset_y + 1),
             cell_size=(4, 2),
             color_map=self.pellet_color_map,
             cell_padding=(0, 2),
@@ -1558,7 +1565,15 @@ class MsPacmanRenderer(JAXGameRenderer):
 
         # --- Draw fruit ---
         def draw_fruit(r):
-            fruit_mask = self.SHAPE_MASKS['fruit'][0]
+            # Find how many fruits we loaded to prevent out-of-bounds crashing
+            num_fruits = self.SHAPE_MASKS['fruit'].shape[0]
+            
+            # Use the level_idx, but cap it at the max available fruits
+            fruit_sprite_idx = jnp.minimum(state.level_idx, num_fruits - 1)
+            
+            # Select the dynamic fruit mask!
+            fruit_mask = self.SHAPE_MASKS['fruit'][fruit_sprite_idx]
+            
             fx = self.offset_x + state.fruit_pos_x * cell - 4
             fy = self.offset_y + state.fruit_pos_y * cell - 4
             return self.jr.render_at_clipped(r, fx, fy, fruit_mask)
@@ -1578,8 +1593,8 @@ class MsPacmanRenderer(JAXGameRenderer):
         digit_masks = self.SHAPE_MASKS['score']
 
         # Score position: right-aligned near top-right
-        score_x = 90
-        score_y = self.consts.screen_height - 18
+        score_x = 87
+        score_y = self.consts.screen_height - 23
 
         raster = self.jr.render_label_selective(
             raster, score_x, score_y,
@@ -1590,11 +1605,23 @@ class MsPacmanRenderer(JAXGameRenderer):
 
         # --- Draw lives (lives - 1 remaining icons) ---
         lives_to_show = jnp.maximum(state.lives - 1, 0)
-        life_mask = self.SHAPE_MASKS['pacman'][4]  # Use first pacman frame
+        life_mask = self.SHAPE_MASKS['pacman_lives'][0]  # Use first pacman frame
         raster = self.jr.render_indicator(
-            raster, 10, self.consts.screen_height - 18,
+            raster, 9, self.consts.screen_height - 37,
             lives_to_show, life_mask,
-            spacing=12, max_value=3,
+            spacing=16, max_value=3,
+        )
+        
+        # --- Draw level fruit on scoreboard ---
+        num_fruits = self.SHAPE_MASKS['fruit'].shape[0]
+        fruit_sprite_idx = jnp.minimum(state.level_idx, num_fruits - 1)
+        scoreboard_fruit_mask = self.SHAPE_MASKS['fruit'][fruit_sprite_idx]
+        
+        fruit_ui_x = 128 
+        fruit_ui_y = self.consts.screen_height - 37
+        
+        raster = self.jr.render_at_clipped(
+            raster, fruit_ui_x, fruit_ui_y, scoreboard_fruit_mask
         )
 
         #return self.jr.render_from_palette(raster, self.PALETTE)
