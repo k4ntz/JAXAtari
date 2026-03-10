@@ -58,7 +58,7 @@ class BasicMathConstants(NamedTuple):
     symbol = (X_OFFSET + 5, num1[1])
 
     INITIAL_NUMARR = chex.Array = jnp.array([-1, -1, -1, -1, -1, -1], dtype=jnp.int32)
-    DIFFICULTY_TIMES = chex.Array = jnp.array([-1, -1, 360, 720], dtype=jnp.int32)
+    DIFFICULTY_TIMES = chex.Array = jnp.array([-1, 180, 360, 720], dtype=jnp.int32)
 
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
@@ -338,9 +338,6 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         return self.renderer.render(state)
     
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[BasicMathObservation, BasicMathState]:
-        difficulty = self.consts.DIFFICULTY
-        difficulty_time = self.consts.DIFFICULTY_TIMES[difficulty]
-
         state = BasicMathState(
             self.consts.INITIAL_NUMARR,
             arrPos= jnp.array(2).astype(jnp.int32),
@@ -349,7 +346,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             problemNum1=jnp.array(1).astype(jnp.int32),
             problemNum2=jnp.array(1).astype(jnp.int32),
             inactive=jnp.array(0).astype(jnp.int32),
-            difficultyTime=difficulty_time,
+            difficultyTime=self.consts.DIFFICULTY_TIMES[self.consts.DIFFICULTY],
             key=key,
             step_counter=jnp.array(0).astype(jnp.int32)
         )
@@ -358,32 +355,31 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         return obs, state
     
-    def _active(self, state: BasicMathState, action: chex.Array, gameMode: int, difficulty_time: chex.Array) -> BasicMathState:
-        act = state.step_counter % 4 == 0
-        countDown = jnp.equal(difficulty_time, 0)
-
-        new_action = jax.lax.cond(
-            countDown, 
-            lambda: Action.FIRE, 
-            lambda: action
-        )
-
-        is_fire = jnp.equal(new_action, Action.FIRE)
+    def _active(self, state: BasicMathState, action: chex.Array, gameMode: int) -> BasicMathState:
+        act = jnp.equal(state.step_counter % 4, 0)
+        countDown = jnp.equal(state.difficultyTime, 0)
+        is_fire = jnp.equal(action, Action.FIRE)
+        eval_issue = jnp.logical_or(jnp.logical_and(is_fire, act), countDown)
 
         state = jax.lax.cond(
             act, 
-            lambda s: self._change_pos(s, new_action), 
+            lambda s: self._change_pos(s, action), 
             lambda s: s, 
             operand=state
         )
+
         state = jax.lax.cond(
             act, 
-            lambda s: self._change_value(s, new_action),
+            lambda s: self._change_value(s, action),
             lambda s: s, 
             operand=state
         )
+
         state = jax.lax.cond(
-            jnp.logical_and(is_fire, act), lambda s: self._evaluate_issue(s, gameMode), lambda s: s, operand=state
+            eval_issue, 
+            lambda s: self._evaluate_issue(s, gameMode), 
+            lambda s: s, 
+            operand=state
         )
 
         new_state = BasicMathState(
@@ -403,7 +399,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
     
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: BasicMathState, action: chex.Array) -> Tuple[BasicMathObservation, BasicMathState, float, bool, BasicMathInfo]:
-        chosenGameMode = (self.consts.GAMEMODE - 1) % 4        
+        chosenGameMode = (self.consts.GAMEMODE - 1) % 4
         difficulty_time = self.consts.DIFFICULTY_TIMES[self.consts.DIFFICULTY]
         
         previous_state = state
@@ -413,7 +409,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         state = jax.lax.cond(
             active, 
-            lambda s: self._active(s, action, chosenGameMode, state.difficultyTime), 
+            lambda s: self._active(s, action, chosenGameMode), 
             lambda s: s, 
             operand=state
         )
@@ -447,7 +443,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         new_difficulty_time = jax.lax.cond(
             reset, 
             lambda: difficulty_time, 
-            lambda: state.difficultyTime
+            lambda: new_difficulty_time
         )
 
         new_state = BasicMathState(
@@ -475,7 +471,7 @@ class BasicMathRenderer(JAXGameRenderer):
         super().__init__(consts)
         self.consts = consts or BasicMathConstants()
         self.config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
+            game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
             channels=3,
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
