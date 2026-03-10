@@ -146,6 +146,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         )
     
     def _get_observation(self, state: BasicMathState):
+        arr = state.numArr
         return BasicMathObservation(
             jnp.array([35 + state.arrPos * 15], dtype=jnp.float32),
             jnp.array([self.consts.bar0[1]], dtype=jnp.float32),
@@ -153,7 +154,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             jnp.array([2], dtype=jnp.float32),
             jnp.array(state.problemNum1, dtype=jnp.float32), 
             jnp.array(state.problemNum2, dtype=jnp.float32),
-            state.numArr.astype(jnp.float32)
+            jnp.array([arr[0], arr[1], arr[2], arr[3], arr[4], arr[5]],jnp.float32)
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -458,8 +459,6 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             key,
             state.step_counter + 1
         )
-
-        jax.debug.print("{x}", x=state.numArr.shape)
 
         done = self._get_done(state)
         reward = self._get_reward(previous_state, state)
