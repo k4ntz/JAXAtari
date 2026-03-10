@@ -659,94 +659,80 @@ class JaxTutankham(JaxEnvironment):
 
     @partial(jax.jit, static_argnums=(0,))
     def check_entity_collision(self, x1, y1, size1, x2, y2, size2):
-        """Check collision between two single entities"""
-        # Calculate edges for rectangle 1
-        rect1_left = x1
-        rect1_right = x1 + size1[0]
-        rect1_top = y1
-        rect1_bottom = y1 + size1[1]
-
-        # Calculate edges for rectangle 2
-        rect2_left = x2
-        rect2_right = x2 + size2[0]
-        rect2_top = y2
-        rect2_bottom = y2 + size2[1]
-
-        # Check overlap
-        horizontal_overlap = (
-        (rect1_left < rect2_right) &
-        (rect1_right > rect2_left)
+        '''Check AABB collision between two entities.'''
+        return (
+            (x1 < x2 + size2[0]) & (x1 + size1[0] > x2) &
+            (y1 < y2 + size2[1]) & (y1 + size1[1] > y2)
         )
 
-        vertical_overlap = (
-            (rect1_top < rect2_bottom) &
-            (rect1_bottom > rect2_top)
-        )
-
-        return horizontal_overlap & vertical_overlap
- 
-    @partial(jax.jit, static_argnums=(0,))
-    def resolve_collisions(self, player_x, player_y, creature_states, bullet_state, player_lives, last_creature_spawn):
-
-        # check bullet/creature collision
-        if bullet_state[3]:  # bullet is active
-
-            for idx, creature in enumerate(creature_states):
-                creature_x, creature_y, creature_type, active = creature
-
-                if active == self.consts.ACTIVE:
-                    collision = self.check_entity_collision(
-                        bullet_state[0], bullet_state[1], self.consts.BULLET_SIZE,
-                        creature_x, creature_y, self.consts.CREATURE_SIZE
-                    )
-
-                    if collision:
-                        # Deactivate bullet and creature
-                        bullet_state = np.array([0, 0, 0, False])
-                        # TODO: kill creature logic (score etc)
-                        creature_states[idx] = np.array([creature_x, creature_y, creature_type, self.consts.INACTIVE])
-                        break  # Bullet can only hit one creature
-
-        # check player/creature collision
-        for idx, creature in enumerate(creature_states):
-            creature_x, creature_y, creature_type, active = creature
-
-            if active == self.consts.ACTIVE:
-                collision = self.check_entity_collision(
-                    player_x, player_y, self.consts.PLAYER_SIZE,
-                    creature_x, creature_y, self.consts.CREATURE_SIZE
-                )
-
-                if collision:
-                    player_lives -= 1
-                    return self.respawn_player(self, player_x, player_y, player_lives)
-    
-        return player_x, player_y, bullet_state, creature_states, player_lives, last_creature_spawn
 
     @partial(jax.jit, static_argnums=(0,))
     def respawn_player(self, player_x, player_y, player_lives):
-        '''
-        Is called when player has died.
-        Respawn at checkpoint and reset creature states, 
-        bullet state and respawn step counter
-        '''
-
-        # TODO: Implement hardcoded checkpoints instead of last checkpoint position
-        checkpoint_x = 30
-        checkpoint_y = 30
-
-        # reset player position to checkpoint
-        final_player_x = checkpoint_x
-        final_player_y = checkpoint_y
+        '''Returns the full game state after a player death (position reset, creatures/bullet cleared).'''
         
-        creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4)) # inactive creatures
-        bullet_state = jnp.array([0, 0, 0, 0]) # bullet inactive
-        last_creature_spawn = 0
+        # TODO: Replace with hardcoded per-room checkpoints
+        respawn_x = jnp.int32(30)
+        respawn_y = jnp.int32(30)
+
+        creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4), dtype=jnp.int32)
+        bullet_state = jnp.zeros(4, dtype=jnp.int32)
+        last_creature_spawn = jnp.int32(0)
+
+        return respawn_x, respawn_y, bullet_state, creature_states, player_lives - 1, last_creature_spawn
 
 
-        return (final_player_x, final_player_y, 
-                bullet_state, creature_states, 
-                player_lives, last_creature_spawn)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def resolve_collisions(self, player_x, player_y, creature_states, bullet_state, player_lives, last_creature_spawn):
+        active_mask = creature_states[:, 3] == self.consts.ACTIVE
+
+        # check bullet-creature collisions (vectorized over all creatures)
+        def bullet_hits_creature(creature):
+            return self.check_entity_collision(
+                bullet_state[0], bullet_state[1], self.consts.BULLET_SIZE,
+                creature[0], creature[1], self.consts.CREATURE_SIZE,
+            )
+
+        bullet_hits = jax.vmap(bullet_hits_creature)(creature_states)
+        bullet_hits = bullet_hits & active_mask & (bullet_state[3] == 1)
+
+        any_bullet_hit = jnp.any(bullet_hits)
+        # Deactivate only the first hit creature (cumsum trick: first True stays 1)
+        first_bullet_hit = (jnp.cumsum(bullet_hits) == 1) & bullet_hits
+
+        new_creature_active = jnp.where(first_bullet_hit, self.consts.INACTIVE, creature_states[:, 3])
+        new_creature_states = creature_states.at[:, 3].set(new_creature_active)
+        new_bullet_state = jnp.where(any_bullet_hit, jnp.zeros(4, dtype=bullet_state.dtype), bullet_state)
+
+
+
+        # check player-creature collisions (vectorized over all creatures)
+        def player_hits_creature(creature):
+            return self.check_entity_collision(
+                player_x, player_y, self.consts.PLAYER_SIZE,
+                creature[0], creature[1], self.consts.CREATURE_SIZE,
+            )
+
+        player_hits = jax.vmap(player_hits_creature)(new_creature_states)
+        player_hits = player_hits & (new_creature_states[:, 3] == self.consts.ACTIVE)
+
+        player_hit = jnp.any(player_hits) # is true if player collides with any active creature
+
+        # Compute respawn state unconditionally, then select with jnp.where
+        (respawn_x, respawn_y,
+         respawn_bullet, respawn_creatures,
+         respawn_lives, respawn_spawn) = self.respawn_player(player_x, player_y, player_lives)
+
+        final_player_x = jnp.where(player_hit, respawn_x, player_x)
+        final_player_y = jnp.where(player_hit, respawn_y, player_y)
+        final_bullet_state = jnp.where(player_hit, respawn_bullet, new_bullet_state)
+        final_creature_states = jnp.where(player_hit, respawn_creatures, new_creature_states)
+        final_player_lives = jnp.where(player_hit, respawn_lives, player_lives)
+        final_last_creature_spawn = jnp.where(player_hit, respawn_spawn, last_creature_spawn)
+
+        return (final_player_x, final_player_y,
+                final_bullet_state, final_creature_states,
+                final_player_lives, final_last_creature_spawn)
 
 
 
@@ -781,24 +767,19 @@ class JaxTutankham(JaxEnvironment):
         creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)
 
         # temporary store previous lives and creature states for respawn & collision detection
-        prev_player_lives = player_lives
         prev_creature_states = creature_states.copy()
         # TODO: add ITEM collisions (+key collection) -> has_key update
-        bullet_state, creature_states, player_lives = self.resolve_collisions(player_x, player_y, creature_states, bullet_state, player_lives)
+
+        
+        (player_x, player_y,
+         bullet_state, creature_states,
+         player_lives, last_creature_spawn) = self.resolve_collisions(
+            player_x, player_y, creature_states, bullet_state, player_lives, last_creature_spawn)
 
         # TODO:Update score based on creature deaths & items collected
         # score_update() bekommt prev_creature_states & creature_states und prev_item_states & item_states
 
-        (player_x, player_y, 
-         creature_states, bullet_state, 
-         last_creature_spawn
-         ) = self.respawn_player(
-            player_x, player_y,
-            prev_player_lives, player_lives,
-            creature_states,
-            bullet_state,
-            last_creature_spawn
-        )
+
 
         state = TutankhamState(player_x=player_x,
                                player_y=player_y,
