@@ -97,7 +97,7 @@ class Entity(NamedTuple):
 class TutankhamConstants(NamedTuple):
     WIDTH: int = 160
     HEIGHT: int = 210
-    SPEED: int = 3
+    SPEED: float = 2.5
     PIXEL_COLOR: chex.Array = jnp.array([255, 255, 255], dtype=jnp.int32)  # white
 
     PLAYER_SIZE: chex.Array = jnp.array([5, 10], dtype=jnp.int32)
@@ -743,9 +743,8 @@ class JaxTutankham(JaxEnvironment):
 
 
 
-    # -----------------------------
-    # Step logic (pure Python)
-    # -----------------------------
+
+    # Step logic
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: TutankhamState, action: int):
 
