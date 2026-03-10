@@ -439,8 +439,6 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             lambda: state.difficultyTime
         )
 
-        jax.debug.print("x value: {}", new_difficulty_time)
-
         new_difficulty_time = jax.lax.cond(
             reset, 
             lambda: difficulty_time, 
