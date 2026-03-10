@@ -536,18 +536,26 @@ class JaxTutankham(JaxEnvironment):
     @partial(jax.jit, static_argnums=(0,))
     def laser_flash_step(self, creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action):
 
-        laser_flash_cooldown = max(laser_flash_cooldown - 1, 0)
-        if action == Action.UPFIRE and laser_flash_count > 0 and laser_flash_cooldown == 0:
-            new_laser_flash_count = laser_flash_count - 1  # use one laser flash
-            new_laser_flash_cooldown = self.consts.LASER_FLASH_COOLDOWN  # reset cooldown
-            last_creature_spawn = 0  # reset creature spawn timer on laser flash use
+        # decrease cooldown timer in every step
+        laser_flash_cooldown = jnp.maximum(laser_flash_cooldown - 1, 0)
 
-            new_creature_states = creature_states.copy()
-            new_creature_states[:, -1] = 0  # set all creatures to inactive
+        # check if laser flash is being fired this step
+        is_firing = (action == Action.UPFIRE) & (laser_flash_count > 0) & (laser_flash_cooldown == 0)
 
-            return new_creature_states, new_laser_flash_cooldown, new_laser_flash_count, last_creature_spawn
+        # if firing, set all creatures to inactive, decrease flash count by 1, reset cooldown and reset creature spawn timer
+        new_laser_flash_count = jnp.where(is_firing, laser_flash_count - 1, laser_flash_count)
+        new_laser_flash_cooldown = jnp.where(is_firing, self.consts.LASER_FLASH_COOLDOWN, laser_flash_cooldown)
+        new_last_creature_spawn = jnp.where(is_firing, 0, last_creature_spawn)
 
-        return creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn
+        # active mask contains 1 for active creatures and 0 for inactive creatures, if firing set all to 0
+        active_mask = creature_states[:, -1]
+        # if firing, set all active_mask values to 0, otherwise keep them as they are
+        new_active_mask = jnp.where(is_firing, 0, active_mask)
+
+        new_creature_states = creature_states.at[:, -1].set(new_active_mask)
+
+        return new_creature_states, new_laser_flash_cooldown, new_laser_flash_count, new_last_creature_spawn
+
 
     # creature step
     @partial(jax.jit, static_argnums=(0,))
@@ -817,7 +825,7 @@ class JaxTutankham(JaxEnvironment):
         #creature_states, last_creature_spawn = self.spawner_step(creature_states, last_creature_spawn)
 
         # laser flash step should go after creature step to immediately remove creatures
-        "creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)"
+        creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)
 
         # temporary store previous lives and creature states for respawn & collision detection
         "prev_player_lives = player_lives"
