@@ -278,23 +278,6 @@ class ChopperCommandState:
     enemy_speed: chex.Array                 # states the speed of the enemies e.g. all enemies are killed
 
 @struct.dataclass
-class PlayerEntity:
-    x: jnp.ndarray
-    y: jnp.ndarray
-    o: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    active: jnp.ndarray
-
-@struct.dataclass
-class EntityPosition:
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    active: jnp.ndarray
-
-@struct.dataclass
 class ChopperCommandObservation:
     player: ObjectObservation
     trucks: ObjectObservation
@@ -359,18 +342,6 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         """Render the game state to a raster image."""
         return self.renderer.render(state)
 
-    def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
-        return jnp.array(
-            [entity.x, entity.y, entity.width, entity.height, entity.active],
-            dtype=jnp.float32
-        )
-
-    def flatten_player_entity(self, entity: PlayerEntity) -> jnp.ndarray:
-        return jnp.array(
-            [entity.x, entity.y, entity.o, entity.width, entity.height, entity.active],
-            dtype=jnp.float32
-        )
-
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
 
@@ -379,13 +350,34 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         Returns the observation space for Chopper Command.
         All coordinates are converted to screen space (0-160, 0-210).
         """
+        # We override the default object space to allow "radar-style" X coordinates for enemies,
+        # which can be negative (off-screen left) or greater than WIDTH (off-screen right).
+        # Y, width and height remain bounded by the visible screen.
+        h, w = self.consts.HEIGHT, self.consts.WIDTH
+        radar_low_x = -2000
+        radar_high_x = 2000
+
+        def _radar_object_space(n: Optional[int]) -> spaces.Dict:
+            shape = () if n is None else (n,)
+            return spaces.Dict({
+                "x": spaces.Box(low=radar_low_x, high=radar_high_x, shape=shape, dtype=jnp.int16),
+                "y": spaces.Box(low=0, high=h, shape=shape, dtype=jnp.int16),
+                "width": spaces.Box(low=0, high=w, shape=shape, dtype=jnp.int16),
+                "height": spaces.Box(low=0, high=h, shape=shape, dtype=jnp.int16),
+                "active": spaces.Box(low=0, high=1, shape=shape, dtype=jnp.int8),
+                "visual_id": spaces.Box(low=0, high=255, shape=shape, dtype=jnp.int16),
+                "state": spaces.Box(low=0, high=255, shape=shape, dtype=jnp.int16),
+                "orientation": spaces.Box(low=0.0, high=360.0, shape=shape, dtype=jnp.float32),
+            })
+
         return spaces.Dict({
-            "player": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
-            "trucks": spaces.get_object_space(n=self.consts.MAX_TRUCKS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
-            "jets": spaces.get_object_space(n=self.consts.MAX_JETS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
-            "choppers": spaces.get_object_space(n=self.consts.MAX_CHOPPERS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
-            "enemy_missiles": spaces.get_object_space(n=self.consts.MAX_ENEMY_MISSILES, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
-            "player_missiles": spaces.get_object_space(n=self.consts.MAX_PLAYER_MISSILES, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            # Player stays on-screen, but we can safely share the same radar bounds.
+            "player": _radar_object_space(n=None),
+            "trucks": _radar_object_space(n=self.consts.MAX_TRUCKS),
+            "jets": _radar_object_space(n=self.consts.MAX_JETS),
+            "choppers": _radar_object_space(n=self.consts.MAX_CHOPPERS),
+            "enemy_missiles": _radar_object_space(n=self.consts.MAX_ENEMY_MISSILES),
+            "player_missiles": _radar_object_space(n=self.consts.MAX_PLAYER_MISSILES),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.uint32),
             "lives": spaces.Box(low=0, high=99, shape=(), dtype=jnp.uint8),
         })
@@ -423,28 +415,37 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         )
 
         # --- Enemies Helper ---
-        # Converts global world coordinates to relative screen coordinates matching the renderer logic
+        # Converts global world coordinates to relative screen coordinates matching the renderer logic.
+        # X is left unclipped to act as a "radar" distance signal, while Y is safely clipped to screen bounds.
         def convert_enemies(positions, size, death_threshold):
             # positions: [x, y, dir, death_timer]
             # Logic: screen_x = enemy_world_x - player_world_x + (screen_center + local_offset - size//2)
             static_center_x = screen_center + state.local_player_offset - (size[0] // 2)
-            screen_x = positions[:, 0] - state.player_x + static_center_x
             
+            # 1. Unclipped relative X coordinate (radar-style distance to screen)
+            screen_x = positions[:, 0] - state.player_x + static_center_x
             screen_y = positions[:, 1]
             direction = positions[:, 2]
             timer = positions[:, 3]
             
-            # Active if direction is set and not fully dead
+            # 2. Active if direction is set and not fully dead
             active = (direction != 0) & (timer > death_threshold)
             orientation = jnp.where(direction == 1, 90.0, jnp.where(direction == -1, 270.0, 0.0))
             
+            # 3. Optional radar-style state flag:
+            #    0 = On-Screen, 1 = Off-Screen Left, 2 = Off-Screen Right
+            is_off_left = (screen_x + size[0]) <= 0
+            is_off_right = screen_x >= self.consts.WIDTH
+            obj_state = jnp.where(is_off_left, 1, jnp.where(is_off_right, 2, 0))
+
             return ObjectObservation.create(
-                x=jnp.clip(screen_x.astype(jnp.int32), 0, self.consts.WIDTH),
-                y=jnp.clip(screen_y.astype(jnp.int32), 0, self.consts.HEIGHT),
+                x=screen_x.astype(jnp.int32),  # DO NOT CLIP X (radar distance)
+                y=jnp.clip(screen_y.astype(jnp.int32), 0, self.consts.HEIGHT),  # Safe to clip Y
                 width=jnp.full(screen_x.shape, size[0], dtype=jnp.int32),
                 height=jnp.full(screen_x.shape, size[1], dtype=jnp.int32),
                 orientation=orientation.astype(jnp.float32),
-                active=active.astype(jnp.int32)
+                active=active.astype(jnp.int32),
+                state=obj_state.astype(jnp.int32),
             )
 
         trucks = convert_enemies(state.truck_positions, self.consts.TRUCK_SIZE, self.consts.FRAMES_DEATH_ANIMATION_TRUCK)
@@ -454,35 +455,47 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         # --- Enemy Missiles ---
         # Renderer aligns missiles with the chopper size center
         static_center_x_missile = screen_center + state.local_player_offset - (self.consts.CHOPPER_SIZE[0] // 2)
-        em_x = state.enemy_missile_positions[:, 0] - state.player_x + static_center_x_missile
+        raw_em_x = state.enemy_missile_positions[:, 0] - state.player_x + static_center_x_missile
         em_y = state.enemy_missile_positions[:, 1]
-        em_active = em_y > 2 # Active check from renderer
-        
+        em_active = em_y > 2  # Active check from renderer
+
+        # State: 0 = On-screen, 1 = Off-left, 2 = Off-right
+        is_em_off_left = (raw_em_x + self.consts.ENEMY_MISSILE_SIZE[0]) <= 0
+        is_em_off_right = raw_em_x >= self.consts.WIDTH
+        em_state = jnp.where(is_em_off_left, 1, jnp.where(is_em_off_right, 2, 0))
+
         enemy_missiles = ObjectObservation.create(
-            x=jnp.clip(em_x.astype(jnp.int32), 0, self.consts.WIDTH),
+            x=raw_em_x.astype(jnp.int32),  # DO NOT CLIP X
             y=jnp.clip(em_y.astype(jnp.int32), 0, self.consts.HEIGHT),
-            width=jnp.full(em_x.shape, self.consts.ENEMY_MISSILE_SIZE[0], dtype=jnp.int32),
-            height=jnp.full(em_x.shape, self.consts.ENEMY_MISSILE_SIZE[1], dtype=jnp.int32),
-            active=em_active.astype(jnp.int32)
+            width=jnp.full(raw_em_x.shape, self.consts.ENEMY_MISSILE_SIZE[0], dtype=jnp.int32),
+            height=jnp.full(raw_em_x.shape, self.consts.ENEMY_MISSILE_SIZE[1], dtype=jnp.int32),
+            active=em_active.astype(jnp.int32),
+            state=em_state.astype(jnp.int32),
         )
 
         # --- Player Missiles ---
         # Renderer logic: screen_x = missile_x - player_x + chopper_position_top_left
         chopper_pos_tl = player_screen_x_center - (self.consts.PLAYER_SIZE[0] // 2)
-        
-        pm_x = state.player_missile_positions[:, 0] - state.player_x + chopper_pos_tl
+
+        raw_pm_x = state.player_missile_positions[:, 0] - state.player_x + chopper_pos_tl
         pm_y = state.player_missile_positions[:, 1]
         pm_dir = state.player_missile_positions[:, 2]
         pm_active = pm_dir != 0
         pm_orientation = jnp.where(pm_dir == 1, 90.0, jnp.where(pm_dir == -1, 270.0, 0.0))
 
+        # State: 0 = On-screen, 1 = Off-left, 2 = Off-right
+        is_pm_off_left = (raw_pm_x + self.consts.PLAYER_MISSILE_SIZE[0]) <= 0
+        is_pm_off_right = raw_pm_x >= self.consts.WIDTH
+        pm_state = jnp.where(is_pm_off_left, 1, jnp.where(is_pm_off_right, 2, 0))
+
         player_missiles = ObjectObservation.create(
-            x=jnp.clip(pm_x.astype(jnp.int32), 0, self.consts.WIDTH),
+            x=raw_pm_x.astype(jnp.int32),  # DO NOT CLIP X
             y=jnp.clip(pm_y.astype(jnp.int32), 0, self.consts.HEIGHT),
-            width=jnp.full(pm_x.shape, self.consts.PLAYER_MISSILE_SIZE[0], dtype=jnp.int32),
-            height=jnp.full(pm_x.shape, self.consts.PLAYER_MISSILE_SIZE[1], dtype=jnp.int32),
+            width=jnp.full(raw_pm_x.shape, self.consts.PLAYER_MISSILE_SIZE[0], dtype=jnp.int32),
+            height=jnp.full(raw_pm_x.shape, self.consts.PLAYER_MISSILE_SIZE[1], dtype=jnp.int32),
             orientation=pm_orientation.astype(jnp.float32),
-            active=pm_active.astype(jnp.int32)
+            active=pm_active.astype(jnp.int32),
+            state=pm_state.astype(jnp.int32),
         )
 
         return ChopperCommandObservation(
