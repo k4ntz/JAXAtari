@@ -64,6 +64,10 @@ class LevelConfig(NamedTuple):
     # just ahead of each ravine instead of on their own random timer.
     ravine_linked_seed: bool = False
     ravine_linked_mine: bool = False
+    # Relative spawn weights for each pickup type: (birdseed, puddle, quad_seed).
+    # Weights are normalized at init time into a cumulative distribution.
+    # A weight of 0 disables that type. Example: (1.0, 0.5, 0.5) → 50% birdseed, 25% each.
+    pickup_weights: Tuple[float, float, float] = (1.0, 0.0, 0.0)
 
 
 # --- Constants ---
@@ -83,6 +87,16 @@ class RoadRunnerConstants(NamedTuple):
     PLAYER_SIZE: Tuple[int, int] = (8, 32)
     ENEMY_SIZE: Tuple[int, int] = (4, 4)
     SEED_SIZE: Tuple[int, int] = (5, 5)
+    PUDDLE_SIZE: Tuple[int, int] = (10, 3)
+    QUAD_SEED_SIZE: Tuple[int, int] = (5, 4)
+    # Pickup type IDs
+    PICKUP_BIRDSEED: int = 0
+    PICKUP_PUDDLE: int = 1
+    PICKUP_QUAD_SEED: int = 2
+    NUM_PICKUP_TYPES: int = 3
+    # Flat point values for non-birdseed pickups (birdseed uses streak formula)
+    PUDDLE_VALUE: int = 1000
+    QUAD_SEED_VALUE: int = 1000
     PLAYER_PICKUP_OFFSET: int = PLAYER_SIZE[1] * 3 // 4  # Bottom 25% of player height
     PLAYER_ROAD_TOP_OFFSET: int = 15
     ROAD_HEIGHT: int = 70
@@ -239,6 +253,7 @@ RoadRunner_Level_2 = LevelConfig(
     spawn_ravines=True,
     # Large fallback interval: seeds only appear via ravine-linked scheduling
     seed_spawn_config=(10000, 10001),
+    pickup_weights=(0.8, 0.1, 0.1),
     # avg 65 scroll steps → ~23 ravines per level (first 15 evenly spaced, last 8 denser)
     ravine_spawn_config=(50, 80),
     spawn_landmines=True,
@@ -301,6 +316,7 @@ RoadRunner_Level_3 = LevelConfig(
     spawn_landmines=True,
     # Seeds at similar frequency to Level 1
     seed_spawn_config=(15, 45),
+    pickup_weights=(0.8, 0.1, 0.1),
     # ~5 trucks over the level; first appear around the first narrow section
     truck_spawn_config=(200, 350),
     # ~6-7 mines over the level, matching video density
@@ -540,6 +556,42 @@ def _build_spawn_interval_array(
         ],
         dtype=jnp.int32,
     )
+
+
+def _build_pickup_cdf_array(
+    levels: Tuple[LevelConfig, ...],
+    num_types: int,
+) -> jnp.ndarray:
+    """Build per-level cumulative distribution arrays for pickup type selection.
+
+    Each level's pickup_weights tuple is normalized so the last entry equals 1.0.
+    Returns shape (num_levels, num_types). At spawn time, a uniform draw is compared
+    against this CDF to select the pickup type via jnp.searchsorted.
+    """
+    if not levels:
+        # Default: 100% birdseed
+        cdf = [0.0] * num_types
+        cdf[0] = 1.0
+        return jnp.array([cdf], dtype=jnp.float32)
+
+    cdfs = []
+    for cfg in levels:
+        weights = list(cfg.pickup_weights)
+        total = sum(weights)
+        if total <= 0:
+            # Fallback: 100% birdseed
+            weights = [1.0] + [0.0] * (num_types - 1)
+            total = 1.0
+        # Normalize to cumulative
+        cumulative = []
+        running = 0.0
+        for w in weights:
+            running += w / total
+            cumulative.append(running)
+        # Ensure last entry is exactly 1.0
+        cumulative[-1] = 1.0
+        cdfs.append(cumulative)
+    return jnp.array(cdfs, dtype=jnp.float32)
 
 
 def _build_spawn_enabled_array(
@@ -873,7 +925,7 @@ class RoadRunnerState(NamedTuple):
     is_scrolling: chex.Array
     scrolling_step_counter: chex.Array
     is_round_over: chex.Array
-    seeds: chex.Array # 2D array of shape (4, 3)
+    seeds: chex.Array # 2D array of shape (4, 4) — [x, y, seed_id, pickup_type]
     next_seed_spawn_scroll_step: chex.Array # Scrolling step counter value at which to spawn next seed
     rng: chex.Array # PRNG state
     seed_pickup_streak: chex.Array
@@ -1050,6 +1102,23 @@ class JaxRoadRunner(
             self._dynamic_road_transition_lengths,
             self._dynamic_road_scroll_offsets
         ) = _build_dynamic_road_config_arrays(levels)
+
+        # Build per-type pickup sizes lookup: shape (NUM_PICKUP_TYPES, 2) — [width, height]
+        self._pickup_sizes = jnp.array([
+            list(self.consts.SEED_SIZE),
+            list(self.consts.PUDDLE_SIZE),
+            list(self.consts.QUAD_SEED_SIZE),
+        ], dtype=jnp.int32)
+
+        # Build per-type pickup values: birdseed uses 0 as sentinel (streak formula used instead)
+        self._pickup_values = jnp.array([
+            0,  # birdseed: uses SEED_BASE_VALUE * streak
+            self.consts.PUDDLE_VALUE,
+            self.consts.QUAD_SEED_VALUE,
+        ], dtype=jnp.int32)
+
+        # Build per-level pickup weight CDFs: shape (num_levels, NUM_PICKUP_TYPES)
+        self._pickup_cdfs = _build_pickup_cdf_array(levels, self.consts.NUM_PICKUP_TYPES)
 
     def _handle_input(self, action: chex.Array) -> tuple[chex.Array, chex.Array, chex.Array]:
         """Handles user input to determine player velocity and jump action."""
@@ -1505,12 +1574,19 @@ class JaxRoadRunner(
     def _seed_picked_up(self, state: RoadRunnerState, seed_idx: int) -> RoadRunnerState:
         state = self.update_streak(state, seed_idx, self.consts.MAX_STREAK)
 
-        # Set seed to inactive (-1, -1)
+        pickup_type = state.seeds[seed_idx, 3]
+        # Set seed to inactive
         updated_seeds = state.seeds.at[seed_idx].set(
-            jnp.array([-1, -1, -1], dtype=jnp.int32)
+            jnp.array([-1, -1, -1, -1], dtype=jnp.int32)
         )
-        # Increment score by 100 Placeholder value
-        new_score = state.score + self.consts.SEED_BASE_VALUE * state.seed_pickup_streak
+        # Birdseed (type 0): streak-based scoring; others: flat value from lookup
+        is_birdseed = pickup_type == self.consts.PICKUP_BIRDSEED
+        score_gain = jnp.where(
+            is_birdseed,
+            self.consts.SEED_BASE_VALUE * state.seed_pickup_streak,
+            self._pickup_values[pickup_type],
+        )
+        new_score = state.score + score_gain
         return state._replace(
             seeds=updated_seeds,
             score=new_score.astype(jnp.int32),
@@ -1529,13 +1605,18 @@ class JaxRoadRunner(
             """Check collision for seed at index i and pick it up if colliding."""
             seed_x = st.seeds[i, 0]
             seed_y = st.seeds[i, 1]
+            pickup_type = st.seeds[i, 3]
             is_active = seed_x >= 0
+
+            # Look up per-type collision size
+            seed_w = self._pickup_sizes[pickup_type, 0]
+            seed_h = self._pickup_sizes[pickup_type, 1]
 
             collision = is_active & _check_aabb_collision(
                 state.player_x, player_pickup_y,
                 self.consts.PLAYER_SIZE[0], pickup_height,
                 seed_x, seed_y,
-                self.consts.SEED_SIZE[0], self.consts.SEED_SIZE[1],
+                seed_w, seed_h,
             )
 
             return jax.lax.cond(
@@ -1588,7 +1669,7 @@ class JaxRoadRunner(
         )
 
         # Prepare for spawning: split RNG and check conditions
-        rng_road, rng_spawn_y, rng_interval, rng_after = jax.random.split(state.rng, 4)
+        rng_road, rng_spawn_y, rng_interval, rng_type, rng_after = jax.random.split(state.rng, 5)
         available_slots = updated_x == -1
         should_spawn = (
             state.is_scrolling
@@ -1631,9 +1712,16 @@ class JaxRoadRunner(
             # Get the seeds id, then increment the next id in the state
             seed_id = st.next_seed_id
 
-            # Build spawned seeds array
+            # Select pickup type from per-level CDF
+            pickup_cdf = self._pickup_cdfs[level_idx]
+            type_roll = jax.random.uniform(rng_type)
+            pickup_type = jnp.searchsorted(pickup_cdf, type_roll).astype(jnp.int32)
+            # Clamp to valid range
+            pickup_type = jnp.clip(pickup_type, 0, self.consts.NUM_PICKUP_TYPES - 1)
+
+            # Build spawned seeds array (x=0, y, id, pickup_type)
             spawned_seeds = updated_seeds.at[slot_idx].set(
-                jnp.array([0, seed_y, seed_id], dtype=jnp.int32)
+                jnp.array([0, seed_y, seed_id, pickup_type], dtype=jnp.int32)
             )
             return st._replace(
                 seeds=spawned_seeds,
@@ -2246,7 +2334,7 @@ class JaxRoadRunner(
             is_scrolling=jnp.array(False, dtype=jnp.bool_),
             scrolling_step_counter=jnp.array(0, dtype=jnp.int32),
             is_round_over=jnp.array(False, dtype=jnp.bool_),
-            seeds=jnp.full((4, 3), -1, dtype=jnp.int32),  # Initialize all seeds as inactive (-1, -1)
+            seeds=jnp.full((4, 4), -1, dtype=jnp.int32),  # Initialize all seeds as inactive (-1, -1)
             next_seed_spawn_scroll_step=jnp.array(0, dtype=jnp.int32),
             rng=key,
             seed_pickup_streak=jnp.array(0, dtype=jnp.int32),
@@ -2427,7 +2515,7 @@ class JaxRoadRunner(
             enemy_x=jnp.array(self.consts.ENEMY_X, dtype=jnp.int32),
             enemy_y=jnp.array(self.consts.ENEMY_Y, dtype=jnp.int32),
             is_round_over=jnp.array(False, dtype=jnp.bool_),
-            seeds=jnp.full((4, 3), -1, dtype=jnp.int32),
+            seeds=jnp.full((4, 4), -1, dtype=jnp.int32),
             scrolling_step_counter=jnp.array(0, dtype=jnp.int32),
             seed_pickup_streak=jnp.array(0, dtype=jnp.int32),
             last_picked_up_seed_id=jnp.array(0, dtype=jnp.int32),
@@ -2834,14 +2922,19 @@ class JaxRoadRunner(
             active=jnp.array(is_active, dtype=jnp.int32),
         )
 
-        # Seeds: shape (4, 3) where col 0=x, col 1=y; active when x >= 0
+        # Seeds: shape (4, 4) where col 0=x, col 1=y, col 3=pickup_type; active when x >= 0
         seed_is_active = state.seeds[:, 0] >= 0
+        # Clamp type to valid range for inactive seeds (type col is -1 when inactive)
+        seed_types = jnp.clip(state.seeds[:, 3], 0, self.consts.NUM_PICKUP_TYPES - 1)
+        seed_widths = self._pickup_sizes[seed_types, 0]
+        seed_heights = self._pickup_sizes[seed_types, 1]
         seeds_obs = ObjectObservation.create(
             x=jnp.where(seed_is_active, state.seeds[:, 0], jnp.zeros(4, dtype=jnp.int32)),
             y=jnp.where(seed_is_active, state.seeds[:, 1], jnp.zeros(4, dtype=jnp.int32)),
-            width=jnp.full(4, self.consts.SEED_SIZE[0], dtype=jnp.int32),
-            height=jnp.full(4, self.consts.SEED_SIZE[1], dtype=jnp.int32),
+            width=jnp.where(seed_is_active, seed_widths, jnp.zeros(4, dtype=jnp.int32)),
+            height=jnp.where(seed_is_active, seed_heights, jnp.zeros(4, dtype=jnp.int32)),
             active=seed_is_active.astype(jnp.int32),
+            visual_id=jnp.where(seed_is_active, seed_types, jnp.zeros(4, dtype=jnp.int32)),
         )
 
         # Truck: single entity, active when x >= 0
@@ -2966,6 +3059,20 @@ class RoadRunnerRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+
+        # Build stacked pickup sprite array for type-based rendering.
+        # Pad all pickup sprites to the same bounding box (max_h, max_w) with 0 (transparent).
+        pickup_sprite_names = ["seed", "puddle", "quad_seed"]
+        pickup_sprites = [self.SHAPE_MASKS[name] for name in pickup_sprite_names]
+        max_h = max(s.shape[0] for s in pickup_sprites)
+        max_w = max(s.shape[1] for s in pickup_sprites)
+        padded = []
+        for s in pickup_sprites:
+            pad_h = max_h - s.shape[0]
+            pad_w = max_w - s.shape[1]
+            padded.append(jnp.pad(s, ((0, pad_h), (0, pad_w))))
+        self._pickup_sprites = jnp.stack(padded)  # (NUM_TYPES, max_h, max_w)
+
         self._level_count = len(self.consts.levels)
         (
             self._max_road_sections,
@@ -3187,6 +3294,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
             {"name": "score_blank", "type": "single", "file": "score_10.npy"},
             {"name": "seed", "type": "single", "file": "birdseed.npy"},
+            {"name": "puddle", "type": "single", "file": "puddle.npy"},
+            {"name": "quad_seed", "type": "single", "file": "quad_seed.npy"},
             {"name": "truck", "type": "single", "file": "truck.npy"},
             {"name": "life", "type": "single", "file": "lives.npy"},
             {"name": "ravine", "type": "single", "file": "ravine.npy"},
@@ -3265,16 +3374,16 @@ class RoadRunnerRenderer(JAXGameRenderer):
         return jax.lax.fori_loop(0, num_squares, render_square, canvas)
 
     def _render_seeds(self, canvas: jnp.ndarray, seeds: jnp.ndarray) -> jnp.ndarray:
-        # Only render active seeds (x >= 0)
+        # Render active seeds with per-type sprites
         def render_seed(i, c):
             seed_x = seeds[i, 0]
             seed_y = seeds[i, 1]
+            pickup_type = jnp.clip(seeds[i, 3], 0, self.consts.NUM_PICKUP_TYPES - 1)
+            sprite = self._pickup_sprites[pickup_type]
             # Only render if seed is active (x >= 0)
             return jax.lax.cond(
                 seed_x >= 0,
-                lambda can: self.jr.render_at(
-                    can, seed_x, seed_y, self.SHAPE_MASKS["seed"]
-                ),
+                lambda can: self.jr.render_at(can, seed_x, seed_y, sprite),
                 lambda can: can,
                 c,
             )
