@@ -29,8 +29,10 @@ class SpeedPotionMod(JaxAtariPostStepModPlugin):
     """
     
     # Note: ITEM_SPEED_POTION is a module-level constant (imported above), not a NamedTuple field
-    # Only override NamedTuple fields here
-    constants_overrides = {}
+    # Enable speed potion item spawning when this mod is active.
+    constants_overrides = {
+        "ENABLE_SPEED_POTION_SPAWN": True,
+    }
     
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state: DarkChambersState, new_state: DarkChambersState) -> DarkChambersState:
@@ -125,7 +127,10 @@ class HealPotionMod(JaxAtariPostStepModPlugin):
     """
     
     # Note: ITEM_HEAL_POTION is a module-level constant (imported above), not a NamedTuple field
-    constants_overrides = {}
+    # Enable heal potion item spawning when this mod is active.
+    constants_overrides = {
+        "ENABLE_HEAL_POTION_SPAWN": True,
+    }
     
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state: DarkChambersState, new_state: DarkChambersState) -> DarkChambersState:
@@ -217,7 +222,10 @@ class PoisonPotionMod(JaxAtariPostStepModPlugin):
     
     # Note: ITEM_POISON_POTION is a module-level constant (imported above), not a NamedTuple field
     # POISON_RADIUS, POISON_DURATION, POISON_DAMAGE_INTERVAL are already in DarkChambersConstants
-    constants_overrides = {}
+    # Enable poison potion item spawning when this mod is active.
+    constants_overrides = {
+        "ENABLE_POISON_POTION_SPAWN": True,
+    }
     
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state: DarkChambersState, new_state: DarkChambersState) -> DarkChambersState:

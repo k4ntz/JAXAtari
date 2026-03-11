@@ -349,6 +349,14 @@ class DarkChambersConstants(NamedTuple):
     POISON_RADIUS: int = 60           # Damage radius in pixels - reduced from 80 for more targeted effect
     POISON_DAMAGE_INTERVAL: int = 30  # Apply damage every 30 steps (once per second) - prevents instant kills
 
+    # Potion item spawn toggles (disabled by default; enabled by mods via constants_overrides)
+    ENABLE_SPEED_POTION_SPAWN: bool = False
+    ENABLE_HEAL_POTION_SPAWN: bool = False
+    ENABLE_POISON_POTION_SPAWN: bool = False
+
+    # Base poison item spawn toggle (keeps poison logic intact, only disables spawning)
+    ENABLE_DEFAULT_POISON_SPAWN: bool = False
+
 
 class DarkChambersState(NamedTuple):
     """Immutable snapshot of the current game state."""
@@ -1731,17 +1739,6 @@ class DarkChambersRenderer(JAXGameRenderer):
             # ITEM_POISON = 2 -> skull sprite
             is_poison = (item_type == ITEM_POISON) & is_active
             skull_sprite = self.ITEM_SCALED_MASKS.get("skull")
-            # Draw a visible box under/for poison so it isn't invisible on dark backgrounds
-            poison_size = self.ITEM_TYPE_SIZES[ITEM_POISON]
-            poison_sizes = jnp.array([poison_size], dtype=jnp.int32)
-            poison_pos = jnp.array([[item_x, item_y]], dtype=jnp.int32)
-            poison_color = self.ITEM_TYPE_COLOR_IDS_PY[ITEM_POISON - 1]
-            raster = jax.lax.cond(
-                is_poison,
-                lambda r: self.jr.draw_rects(r, positions=poison_pos, sizes=poison_sizes, color_id=poison_color),
-                lambda r: r,
-                raster
-            )
             raster = jax.lax.cond(
                 is_poison & (skull_sprite is not None),
                 lambda r: self.jr.render_at_clipped(r, item_x, item_y, skull_sprite),
@@ -2507,19 +2504,19 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             ITEM_HEAL_POTION,    # restore to max health -> magenta box
             ITEM_POISON_POTION,  # create poison cloud -> green box
         ], dtype=jnp.int32)
-        # Probabilities for regular items; normalized to sum to 1.0
+        # Probabilities for regular items; potion spawns are mod-gated (default off)
         spawn_probs = jnp.array([
             0.18,  # heart (reduced from 0.20)
-            0.08,  # poison (reduced from 0.10)
+            0.08 if self.consts.ENABLE_DEFAULT_POISON_SPAWN else 0.0,  # poison
             0.15,  # trap (reduced from 0.18)
             0.12,  # amber chalice (reduced from 0.14)
             0.08,  # amulet (reduced from 0.10)
             0.07,  # shield (reduced from 0.08)
             0.05,  # gun (reduced from 0.06)
             0.12,  # bomb (reduced from 0.14)
-            0.08,  # speed potion (NEW)
-            0.08,  # heal potion (NEW)
-            0.07,  # poison potion (NEW)
+            0.08 if self.consts.ENABLE_SPEED_POTION_SPAWN else 0.0,   # speed potion
+            0.08 if self.consts.ENABLE_HEAL_POTION_SPAWN else 0.0,     # heal potion
+            0.07 if self.consts.ENABLE_POISON_POTION_SPAWN else 0.0,   # poison potion
         ], dtype=jnp.float32)
         spawn_probs = spawn_probs / jnp.sum(spawn_probs)
         # Spawn regular items (leave first 5 for key, ladders, cage contents)
@@ -2529,6 +2526,12 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             jnp.array([ITEM_KEY, ITEM_LADDER_UP, ITEM_LADDER_DOWN, ITEM_CAGE_DOOR, self.renderer.CAGE_REWARD_TYPE], dtype=jnp.int32),
             regular_items
         ])
+        disallowed_potions = (
+            ((item_types == ITEM_SPEED_POTION) & (~jnp.array(self.consts.ENABLE_SPEED_POTION_SPAWN)))
+            | ((item_types == ITEM_HEAL_POTION) & (~jnp.array(self.consts.ENABLE_HEAL_POTION_SPAWN)))
+            | ((item_types == ITEM_POISON_POTION) & (~jnp.array(self.consts.ENABLE_POISON_POTION_SPAWN)))
+        )
+        item_types = jnp.where(disallowed_potions, ITEM_HEART, item_types)
         item_active = jnp.ones(NUM_ITEMS, dtype=jnp.int32)
 
         # Safety pass: suppress entities that still overlap walls after spawn attempts.
@@ -3590,7 +3593,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 # Generate random item type (only items with sprites)
                 rng, item_type_rng = jax.random.split(rng)
                 drop_types = jnp.array([
-                    ITEM_HEART, ITEM_POISON, ITEM_TRAP,
+                    ITEM_HEART,
+                    ITEM_POISON if self.consts.ENABLE_DEFAULT_POISON_SPAWN else ITEM_HEART,
+                    ITEM_TRAP,
                     ITEM_AMBER_CHALICE, ITEM_AMULET,
                     ITEM_SHIELD, ITEM_GUN, ITEM_BOMB
                 ], dtype=jnp.int32)
@@ -4002,7 +4007,20 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                     ITEM_SHIELD, ITEM_GUN, ITEM_BOMB,
                     ITEM_SPEED_POTION, ITEM_HEAL_POTION, ITEM_POISON_POTION
                 ], dtype=jnp.int32)
-                spawn_probs = jnp.array([0.18, 0.08, 0.15, 0.12, 0.08, 0.07, 0.05, 0.12, 0.08, 0.08, 0.07], dtype=jnp.float32)
+                spawn_probs = jnp.array([
+                    0.18,
+                    0.08 if self.consts.ENABLE_DEFAULT_POISON_SPAWN else 0.0,
+                    0.15,
+                    0.12,
+                    0.08,
+                    0.07,
+                    0.05,
+                    0.12,
+                    0.08 if self.consts.ENABLE_SPEED_POTION_SPAWN else 0.0,
+                    0.08 if self.consts.ENABLE_HEAL_POTION_SPAWN else 0.0,
+                    0.07 if self.consts.ENABLE_POISON_POTION_SPAWN else 0.0,
+                ], dtype=jnp.float32)
+                spawn_probs = spawn_probs / jnp.sum(spawn_probs)
                 regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 5,), p=spawn_probs)
                 new_types = jnp.concatenate([
                     jnp.array([ITEM_KEY, ITEM_LADDER_UP, ITEM_LADDER_DOWN, ITEM_CAGE_DOOR, self.renderer.CAGE_REWARD_TYPE]),
@@ -4021,6 +4039,12 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             transition_item_positions = jnp.where(world_changed, respawned_positions, final_item_positions)
             transition_item_types = jnp.where(world_changed, respawned_types, final_item_types)
             transition_item_active = jnp.where(world_changed, respawned_active, final_item_active)
+            disallowed_potions = (
+                ((transition_item_types == ITEM_SPEED_POTION) & (~jnp.array(self.consts.ENABLE_SPEED_POTION_SPAWN)))
+                | ((transition_item_types == ITEM_HEAL_POTION) & (~jnp.array(self.consts.ENABLE_HEAL_POTION_SPAWN)))
+                | ((transition_item_types == ITEM_POISON_POTION) & (~jnp.array(self.consts.ENABLE_POISON_POTION_SPAWN)))
+            )
+            transition_item_types = jnp.where(disallowed_potions, ITEM_HEART, transition_item_types)
             
             # On level change, ensure enemies are not overlapping new level walls
             WALLS_NEWLVL = self.renderer.LEVEL_WALLS[new_map_index, new_level]
