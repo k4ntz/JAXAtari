@@ -577,6 +577,11 @@ def _build_pickup_cdf_array(
     cdfs = []
     for cfg in levels:
         weights = list(cfg.pickup_weights)
+        if len(weights) != num_types:
+            raise ValueError(
+                f"pickup_weights has {len(weights)} entries but NUM_PICKUP_TYPES={num_types}. "
+                "Each LevelConfig.pickup_weights must have exactly NUM_PICKUP_TYPES entries."
+            )
         total = sum(weights)
         if total <= 0:
             # Fallback: 100% birdseed
@@ -1608,9 +1613,13 @@ class JaxRoadRunner(
             pickup_type = st.seeds[i, 3]
             is_active = seed_x >= 0
 
+            # Clamp pickup_type to valid range to avoid out-of-bounds indices in JAX
+            num_pickup_types = self._pickup_sizes.shape[0]
+            safe_pickup_type = jnp.clip(pickup_type, 0, num_pickup_types - 1)
+
             # Look up per-type collision size
-            seed_w = self._pickup_sizes[pickup_type, 0]
-            seed_h = self._pickup_sizes[pickup_type, 1]
+            seed_w = self._pickup_sizes[safe_pickup_type, 0]
+            seed_h = self._pickup_sizes[safe_pickup_type, 1]
 
             collision = is_active & _check_aabb_collision(
                 state.player_x, player_pickup_y,
@@ -2334,7 +2343,7 @@ class JaxRoadRunner(
             is_scrolling=jnp.array(False, dtype=jnp.bool_),
             scrolling_step_counter=jnp.array(0, dtype=jnp.int32),
             is_round_over=jnp.array(False, dtype=jnp.bool_),
-            seeds=jnp.full((4, 4), -1, dtype=jnp.int32),  # Initialize all seeds as inactive (-1, -1)
+            seeds=jnp.full((4, 4), -1, dtype=jnp.int32),  # Initialize all seeds as inactive [-1, -1, -1, -1] ([x, y, seed_id, pickup_type])
             next_seed_spawn_scroll_step=jnp.array(0, dtype=jnp.int32),
             rng=key,
             seed_pickup_streak=jnp.array(0, dtype=jnp.int32),
