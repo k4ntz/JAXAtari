@@ -413,7 +413,8 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
         level_fruit_paths = []
         level_fruit_path_lens = []
 
-        for layout in layouts:
+        # Use enumerate to track the level index (0, 1, 2, 3...)
+        for level_idx_iter, layout in enumerate(layouts):
             wall_grid, pellets_raw, pac_spawn, ghost_spawns, pellet_count_raw = _parse_layout(layout, self.consts.num_ghosts)
             # Pellet template keeps -1 markers
             pellet_template = pellets_raw
@@ -427,10 +428,11 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
                     elif char == 'S':
                         pellets_grid = pellets_grid.at[y, x].set(2)
             # Ghost-walkable grid: same as wall_grid but pen area is passable
-            ghost_wall_grid = wall_grid.at[17:22, 17:22].set(0)
-            ghost_wall_grid = ghost_wall_grid.at[14:17, 19].set(0)
-            # Fruit path for this layout
-            f_path, f_len = self._compute_fruit_path_for_grid(wall_grid)
+            ghost_wall_grid = wall_grid.at[16:21, 17:22].set(0)
+            ghost_wall_grid = ghost_wall_grid.at[13:16, 19].set(0)
+            
+            # Pass the level index into our function!
+            f_path, f_len = self._compute_fruit_path_for_grid(wall_grid, level_idx_iter)
 
             level_wall_grids.append(wall_grid)
             level_pellet_templates.append(pellet_template)
@@ -531,8 +533,8 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
             self.level_pellet_templates,
         )
 
-    def _compute_fruit_path_for_grid(self, wall_grid):
-        """Compute U-shaped fruit path for a given wall grid."""
+    def _compute_fruit_path_for_grid(self, wall_grid, level_idx):
+        """Compute fruit path using BFS. Uses full path for Level 1, and just start/end for the rest."""
         wall_np = np.array(wall_grid)
         h, w = wall_np.shape
 
@@ -550,32 +552,42 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
                         q.append(((nx, ny), path + [(nx, ny)]))
             return None
 
-        # Waypoints for U-shape: right entry → down right side → across bottom → up left side → left exit
-        # Row 14 is the upper tunnel, row 26 is the lower tunnel
-        waypoints = [(38, 13), (30, 13), (30, 25), (4, 25), (4, 13), (1, 13)]        
+        # Level 0 keeps the classic U-shape. 
+        # Levels 1, 2, and 3 only have a Start and End coordinate! 
+        # The BFS will automatically calculate the shortest valid path between them!
+        level_waypoints = {
+            0: [(38, 13), (30, 13), (30, 25), (4, 25), (4, 13), (1, 13)],  
+            1: [(38, 16), (1, 16)],  # Level 2 (Just start and end)
+            2: [(38, 25), (1, 25)],  # Level 3 (Just start and end)
+            3: [(38, 19), (1, 19)],  # Level 4 (Just start and end)
+        }
+
+        # Fetch the waypoints for this level, fallback to Level 1 if not found
+        waypoints = level_waypoints.get(level_idx, level_waypoints[0])
+        
         segments = []
         for i in range(len(waypoints) - 1):
             seg = _bfs(waypoints[i], waypoints[i + 1])
             if seg is None:
-                # Fallback: straight path across row 14
-                fallback = [(x, 13) for x in range(38, 0, -1)]
+                # Safe Fallback: Just sit at the start point if the pathfinder hits a wall
+                fallback = [waypoints[0]]
                 path_arr = np.array(fallback, dtype=np.int32)
                 padded = np.zeros((self.consts.fruit_path_max, 2), dtype=np.int32)
-                plen = min(len(fallback), self.consts.fruit_path_max)
-                padded[:plen] = path_arr[:plen]
-                return jnp.array(padded), plen
-            segments.append(seg if i == 0 else seg[1:])  # skip duplicate at junction
+                padded[0] = path_arr[0]
+                return jnp.array(padded), 1
+            segments.append(seg if i == 0 else seg[1:]) 
 
         full_path = []
         for seg in segments:
             full_path.extend(seg)
 
+        # Pad the path array up to 128 steps to satisfy JAX static shapes
         path_arr = np.array(full_path, dtype=np.int32)
         plen = min(len(full_path), self.consts.fruit_path_max)
         padded = np.zeros((self.consts.fruit_path_max, 2), dtype=np.int32)
         padded[:plen] = path_arr[:plen]
         return jnp.array(padded), plen
-
+    
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[MsPacmanObservation, MsPacmanState]:
         # Ghost initial modes: 0=in_pen for ghosts 1-3, 0=normal for ghost 0 (Blinky)
         ghost_modes = jnp.array([0, 3, 3, 3], dtype=jnp.int32)
