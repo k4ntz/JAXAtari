@@ -50,7 +50,7 @@ class Args:
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "cleanRL"
     """the wandb's project name"""
-    wandb_entity: str = "paul-seitz-tu-darmstadt"
+    wandb_entity: str = ""
     """the entity (team) of wandb's project"""
     capture_video: bool = True
     """whether to capture videos of the agent performances (check out `videos` folder)"""
@@ -74,7 +74,7 @@ class Args:
     """modifications applied during training"""
     eval_mods: tuple[str] = ()
     """modifications to use for evaluation (if empty, fall back to `mods`)"""
-    total_timesteps: int = 100_000 # so with frameskip=4 -> 40M frames (?)
+    total_timesteps: int = 10_000_000 # so with frameskip=4 -> 40M frames (?)
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
