@@ -908,6 +908,7 @@ class RoadRunnerState(NamedTuple):
     enemy_speed_phase_start: chex.Array  # Scroll step when current speed phase cycle began
     enemy_flattened_timer: chex.Array  # Timer for enemy being run over
     player_on_offramp: chex.Array  # Boolean, whether the player is currently on the offramp
+    terminal: chex.Array  # Boolean, True when the episode just ended (game over)
 
 @struct.dataclass
 class RoadRunnerObservation(struct.PyTreeNode):
@@ -2288,6 +2289,7 @@ class JaxRoadRunner(
             is_falling=jnp.array(False, dtype=jnp.bool_),
             fall_timer=jnp.array(0, dtype=jnp.int32),
             fall_clip_y=jnp.array(0, dtype=jnp.int32),
+            terminal=jnp.array(False, dtype=jnp.bool_),
         )
         state = self._initialize_spawn_timers(state, jnp.array(0, dtype=jnp.int32))
         initial_obs = self._get_observation(state)
@@ -2396,13 +2398,15 @@ class JaxRoadRunner(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: RoadRunnerState, state: RoadRunnerState) -> float:
-        diff = state.score - previous_state.score
-        # If score decreased (reset), we return 0.0.
-        return jax.lax.select(diff < 0, 0.0, diff.astype(jnp.float32))
+        score_diff = state.score - previous_state.score
+        score_reward = jax.lax.select(score_diff < 0, 0.0, score_diff.astype(jnp.float32))
+        scroll_delta = jnp.maximum(state.scrolling_step_counter - previous_state.scrolling_step_counter, 0)
+        scroll_bonus = scroll_delta.astype(jnp.float32) * 0.05
+        return score_reward + scroll_bonus
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: RoadRunnerState) -> bool:
-        return state.is_round_over & (state.lives == 0)
+        return state.terminal
 
     def _handle_round_end(self, state: RoadRunnerState) -> RoadRunnerState:
         """Handle end of round - merged next_life and game_over into one path."""
@@ -2468,6 +2472,7 @@ class JaxRoadRunner(
             rng=jnp.where(is_game_over, new_key, rng),
             next_ravine_spawn_scroll_step=jnp.array(0, dtype=jnp.int32),
             player_on_offramp=jnp.array(False, dtype=jnp.bool_),
+            terminal=is_game_over,
         )
         level_idx = self._get_level_index(reset_state)
         return self._initialize_spawn_timers(reset_state, level_idx)
@@ -2830,43 +2835,43 @@ class JaxRoadRunner(
         )
 
         # Seeds: shape (4, 3) where col 0=x, col 1=y; active when x >= 0
-        seed_active = (state.seeds[:, 0] >= 0).astype(jnp.int32)
+        seed_is_active = state.seeds[:, 0] >= 0
         seeds_obs = ObjectObservation.create(
-            x=jnp.where(seed_active, state.seeds[:, 0], jnp.zeros(4, dtype=jnp.int32)),
-            y=jnp.where(seed_active, state.seeds[:, 1], jnp.zeros(4, dtype=jnp.int32)),
+            x=jnp.where(seed_is_active, state.seeds[:, 0], jnp.zeros(4, dtype=jnp.int32)),
+            y=jnp.where(seed_is_active, state.seeds[:, 1], jnp.zeros(4, dtype=jnp.int32)),
             width=jnp.full(4, self.consts.SEED_SIZE[0], dtype=jnp.int32),
             height=jnp.full(4, self.consts.SEED_SIZE[1], dtype=jnp.int32),
-            active=seed_active,
+            active=seed_is_active.astype(jnp.int32),
         )
 
         # Truck: single entity, active when x >= 0
-        truck_active = jnp.array(state.truck_x >= 0, dtype=jnp.int32)
+        truck_is_active = state.truck_x >= 0
         truck_obs = ObjectObservation.create(
-            x=jnp.where(truck_active, state.truck_x, jnp.array(0, dtype=jnp.int32)),
-            y=jnp.where(truck_active, state.truck_y, jnp.array(0, dtype=jnp.int32)),
+            x=jnp.where(truck_is_active, state.truck_x, jnp.array(0, dtype=jnp.int32)),
+            y=jnp.where(truck_is_active, state.truck_y, jnp.array(0, dtype=jnp.int32)),
             width=jnp.array(self.consts.TRUCK_SIZE[0], dtype=jnp.int32),
             height=jnp.array(self.consts.TRUCK_SIZE[1], dtype=jnp.int32),
-            active=truck_active,
+            active=truck_is_active.astype(jnp.int32),
         )
 
         # Landmine: single entity, active when x >= 0
-        landmine_active = jnp.array(state.landmine_x >= 0, dtype=jnp.int32)
+        landmine_is_active = state.landmine_x >= 0
         landmine_obs = ObjectObservation.create(
-            x=jnp.where(landmine_active, state.landmine_x, jnp.array(0, dtype=jnp.int32)),
-            y=jnp.where(landmine_active, state.landmine_y, jnp.array(0, dtype=jnp.int32)),
+            x=jnp.where(landmine_is_active, state.landmine_x, jnp.array(0, dtype=jnp.int32)),
+            y=jnp.where(landmine_is_active, state.landmine_y, jnp.array(0, dtype=jnp.int32)),
             width=jnp.array(self.consts.LANDMINE_SIZE[0], dtype=jnp.int32),
             height=jnp.array(self.consts.LANDMINE_SIZE[1], dtype=jnp.int32),
-            active=landmine_active,
+            active=landmine_is_active.astype(jnp.int32),
         )
 
         # Bullet: single entity, active when x >= 0
-        bullet_active = jnp.array(state.bullet_x >= 0, dtype=jnp.int32)
+        bullet_is_active = state.bullet_x >= 0
         bullet_obs = ObjectObservation.create(
-            x=jnp.where(bullet_active, state.bullet_x, jnp.array(0, dtype=jnp.int32)),
-            y=jnp.where(bullet_active, state.bullet_y, jnp.array(0, dtype=jnp.int32)),
+            x=jnp.where(bullet_is_active, state.bullet_x, jnp.array(0, dtype=jnp.int32)),
+            y=jnp.where(bullet_is_active, state.bullet_y, jnp.array(0, dtype=jnp.int32)),
             width=jnp.array(self.consts.BULLET_SIZE[0], dtype=jnp.int32),
             height=jnp.array(self.consts.BULLET_SIZE[1], dtype=jnp.int32),
-            active=bullet_active,
+            active=bullet_is_active.astype(jnp.int32),
         )
 
         return RoadRunnerObservation(
@@ -2905,7 +2910,7 @@ class JaxRoadRunner(
             "landmine": single,
             "bullet": single,
             "lives": spaces.Box(low=0, high=self.consts.STARTING_LIVES, shape=(), dtype=jnp.int32),
-            "current_level": spaces.Box(low=0, high=len(self.consts.levels), shape=(), dtype=jnp.int32),
+            "current_level": spaces.Box(low=0, high=len(self.consts.levels) - 1, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
