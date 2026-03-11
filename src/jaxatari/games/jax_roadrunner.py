@@ -5,11 +5,12 @@ import jax
 import jax.lax
 import jax.numpy as jnp
 import chex
+from flax import struct
 
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 
 
 # --- Level Configuration ---
@@ -83,7 +84,7 @@ class RoadRunnerConstants(NamedTuple):
     ENEMY_SIZE: Tuple[int, int] = (4, 4)
     SEED_SIZE: Tuple[int, int] = (5, 5)
     PLAYER_PICKUP_OFFSET: int = PLAYER_SIZE[1] * 3 // 4  # Bottom 25% of player height
-    PLAYER_ROAD_TOP_OFFSET: int = 10
+    PLAYER_ROAD_TOP_OFFSET: int = 15
     ROAD_HEIGHT: int = 70
     ROAD_TOP_Y: int = 110
     ROAD_DASH_LENGTH: int = 5
@@ -907,19 +908,20 @@ class RoadRunnerState(NamedTuple):
     enemy_speed_phase_start: chex.Array  # Scroll step when current speed phase cycle began
     enemy_flattened_timer: chex.Array  # Timer for enemy being run over
     player_on_offramp: chex.Array  # Boolean, whether the player is currently on the offramp
+    terminal: chex.Array  # Boolean, True when the episode just ended (game over)
 
-class EntityPosition(NamedTuple):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-
-
-class RoadRunnerObservation(NamedTuple):
-    player: EntityPosition
-    enemy: EntityPosition
+@struct.dataclass
+class RoadRunnerObservation(struct.PyTreeNode):
+    player: ObjectObservation
+    enemy: ObjectObservation
     score: jnp.ndarray
-    ravine: EntityPosition
+    ravine: ObjectObservation
+    seeds: ObjectObservation    # n=4
+    truck: ObjectObservation
+    landmine: ObjectObservation
+    bullet: ObjectObservation
+    lives: jnp.ndarray
+    current_level: jnp.ndarray
 
 
 class RoadRunnerInfo(NamedTuple):
@@ -1150,12 +1152,12 @@ class JaxRoadRunner(
         self, state: RoadRunnerState, x_pos: chex.Array, y_pos: chex.Array,
         road_top: chex.Array, road_bottom: chex.Array,
     ) -> tuple[chex.Array, chex.Array]:
-        main_min_y = road_top - (self.consts.PLAYER_SIZE[1] - 5)
+        main_min_y = road_top - (self.consts.PLAYER_SIZE[1] - self.consts.PLAYER_ROAD_TOP_OFFSET)
         main_max_y = road_bottom - self.consts.PLAYER_SIZE[1]
 
         offramp_active, split_x, merge_x, offramp_top, offramp_bottom = \
             self._get_offramp_info(state)
-        off_min_y = offramp_top - (self.consts.PLAYER_SIZE[1] - 5)
+        off_min_y = offramp_top - (self.consts.PLAYER_SIZE[1] - self.consts.PLAYER_ROAD_TOP_OFFSET)
         off_max_y = offramp_bottom - self.consts.PLAYER_SIZE[1]
 
         RAMP_W = self.consts.OFFRAMP_RAMP_WIDTH
@@ -1479,7 +1481,7 @@ class JaxRoadRunner(
         offramp_active, _, _, _, offramp_bottom = self._get_offramp_info(state)
         road_top, _, _ = self._get_road_bounds(state)
         off_max_y = offramp_bottom - self.consts.PLAYER_SIZE[1]
-        main_min_y = road_top - (self.consts.PLAYER_SIZE[1] - 5)
+        main_min_y = road_top - (self.consts.PLAYER_SIZE[1] - self.consts.PLAYER_ROAD_TOP_OFFSET)
         player_in_gap = (state.player_y > off_max_y) & (state.player_y < main_min_y)
         collision = collision & ~(offramp_active & (state.player_on_offramp | player_in_gap))
 
@@ -2287,6 +2289,7 @@ class JaxRoadRunner(
             is_falling=jnp.array(False, dtype=jnp.bool_),
             fall_timer=jnp.array(0, dtype=jnp.int32),
             fall_clip_y=jnp.array(0, dtype=jnp.int32),
+            terminal=jnp.array(False, dtype=jnp.bool_),
         )
         state = self._initialize_spawn_timers(state, jnp.array(0, dtype=jnp.int32))
         initial_obs = self._get_observation(state)
@@ -2325,7 +2328,10 @@ class JaxRoadRunner(
             st = self._check_bullet_collisions(st)
             st = self._check_level_completion(st)
 
-            reward = (st.score - state.score).astype(jnp.float32)
+            score_reward = (st.score - state.score).astype(jnp.float32)
+            scroll_delta = jnp.maximum(st.scrolling_step_counter - state.scrolling_step_counter, 0)
+            scroll_bonus = scroll_delta.astype(jnp.float32) * 0.05
+            reward = score_reward + scroll_bonus
 
             player_at_end = st.player_x >= self.consts.WIDTH - self.consts.PLAYER_SIZE[0]
             should_reset = st.instant_death | (st.is_round_over & player_at_end)
@@ -2376,6 +2382,9 @@ class JaxRoadRunner(
             operand
         )
 
+        # Compute done before round end resets the state (lives would be cleared)
+        done = should_reset & (state.lives <= 1)
+
         # Handle round end ONCE (instead of duplicated in gameplay + death branches)
         state = jax.lax.cond(
             should_reset, self._handle_round_end, lambda inner: inner, state
@@ -2385,17 +2394,19 @@ class JaxRoadRunner(
         observation = self._get_observation(state)
         info = self._get_info(state)
 
-        return observation, state, reward, False, info
+        return observation, state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: RoadRunnerState, state: RoadRunnerState) -> float:
-        diff = state.score - previous_state.score
-        # If score decreased (reset), we return 0.0.
-        return jax.lax.select(diff < 0, 0.0, diff.astype(jnp.float32))
+        score_diff = state.score - previous_state.score
+        score_reward = jax.lax.select(score_diff < 0, 0.0, score_diff.astype(jnp.float32))
+        scroll_delta = jnp.maximum(state.scrolling_step_counter - previous_state.scrolling_step_counter, 0)
+        scroll_bonus = scroll_delta.astype(jnp.float32) * 0.05
+        return score_reward + scroll_bonus
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: RoadRunnerState) -> bool:
-        return state.is_round_over & (state.lives == 0)
+        return state.terminal
 
     def _handle_round_end(self, state: RoadRunnerState) -> RoadRunnerState:
         """Handle end of round - merged next_life and game_over into one path."""
@@ -2461,6 +2472,7 @@ class JaxRoadRunner(
             rng=jnp.where(is_game_over, new_key, rng),
             next_ravine_spawn_scroll_step=jnp.array(0, dtype=jnp.int32),
             player_on_offramp=jnp.array(False, dtype=jnp.bool_),
+            terminal=is_game_over,
         )
         level_idx = self._get_level_index(reset_state)
         return self._initialize_spawn_timers(reset_state, level_idx)
@@ -2476,11 +2488,6 @@ class JaxRoadRunner(
         )
 
         def _start_transition(st: RoadRunnerState) -> RoadRunnerState:
-            jax.debug.print(
-                "Level {lvl} reached scroll {scroll} → preparing transition",
-                lvl=st.current_level + 1,
-                scroll=st.scrolling_step_counter,
-            )
             return st._replace(
                 is_in_transition=jnp.array(True, dtype=jnp.bool_),
                 level_transition_timer=jnp.array(
@@ -2790,13 +2797,13 @@ class JaxRoadRunner(
         return self.renderer.render(state)
 
     def _get_observation(self, state: RoadRunnerState) -> RoadRunnerObservation:
-        player = EntityPosition(
+        player = ObjectObservation.create(
             x=state.player_x,
             y=state.player_y,
             width=jnp.array(self.consts.PLAYER_SIZE[0]),
             height=jnp.array(self.consts.PLAYER_SIZE[1]),
         )
-        enemy = EntityPosition(
+        enemy = ObjectObservation.create(
             x=state.enemy_x,
             y=state.enemy_y,
             width=jnp.array(self.consts.ENEMY_SIZE[0]),
@@ -2809,28 +2816,75 @@ class JaxRoadRunner(
         # Let's find the ravine with smallest x >= 0
         ravine_x = state.ravines[:, 0]
         ravine_y = state.ravines[:, 1]
-        
+
         # Mask out inactive ones with a large value
         masked_x = jnp.where(active_ravines_mask, ravine_x, self.consts.WIDTH * 2)
         idx = jnp.argmin(masked_x)
-        
+
         nearest_ravine_x = ravine_x[idx]
         nearest_ravine_y = ravine_y[idx]
-        
+
         is_active = active_ravines_mask[idx]
-        
-        ravine_obs = EntityPosition(
+
+        ravine_obs = ObjectObservation.create(
             x=jnp.where(is_active, nearest_ravine_x, jnp.array(0, dtype=jnp.int32)),
             y=jnp.where(is_active, nearest_ravine_y, jnp.array(0, dtype=jnp.int32)),
             width=jnp.where(is_active, jnp.array(self.consts.RAVINE_SIZE[0]), jnp.array(0)),
             height=jnp.where(is_active, jnp.array(self.consts.RAVINE_SIZE[1]), jnp.array(0)),
+            active=jnp.array(is_active, dtype=jnp.int32),
+        )
+
+        # Seeds: shape (4, 3) where col 0=x, col 1=y; active when x >= 0
+        seed_is_active = state.seeds[:, 0] >= 0
+        seeds_obs = ObjectObservation.create(
+            x=jnp.where(seed_is_active, state.seeds[:, 0], jnp.zeros(4, dtype=jnp.int32)),
+            y=jnp.where(seed_is_active, state.seeds[:, 1], jnp.zeros(4, dtype=jnp.int32)),
+            width=jnp.full(4, self.consts.SEED_SIZE[0], dtype=jnp.int32),
+            height=jnp.full(4, self.consts.SEED_SIZE[1], dtype=jnp.int32),
+            active=seed_is_active.astype(jnp.int32),
+        )
+
+        # Truck: single entity, active when x >= 0
+        truck_is_active = state.truck_x >= 0
+        truck_obs = ObjectObservation.create(
+            x=jnp.where(truck_is_active, state.truck_x, jnp.array(0, dtype=jnp.int32)),
+            y=jnp.where(truck_is_active, state.truck_y, jnp.array(0, dtype=jnp.int32)),
+            width=jnp.array(self.consts.TRUCK_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.TRUCK_SIZE[1], dtype=jnp.int32),
+            active=truck_is_active.astype(jnp.int32),
+        )
+
+        # Landmine: single entity, active when x >= 0
+        landmine_is_active = state.landmine_x >= 0
+        landmine_obs = ObjectObservation.create(
+            x=jnp.where(landmine_is_active, state.landmine_x, jnp.array(0, dtype=jnp.int32)),
+            y=jnp.where(landmine_is_active, state.landmine_y, jnp.array(0, dtype=jnp.int32)),
+            width=jnp.array(self.consts.LANDMINE_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.LANDMINE_SIZE[1], dtype=jnp.int32),
+            active=landmine_is_active.astype(jnp.int32),
+        )
+
+        # Bullet: single entity, active when x >= 0
+        bullet_is_active = state.bullet_x >= 0
+        bullet_obs = ObjectObservation.create(
+            x=jnp.where(bullet_is_active, state.bullet_x, jnp.array(0, dtype=jnp.int32)),
+            y=jnp.where(bullet_is_active, state.bullet_y, jnp.array(0, dtype=jnp.int32)),
+            width=jnp.array(self.consts.BULLET_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.BULLET_SIZE[1], dtype=jnp.int32),
+            active=bullet_is_active.astype(jnp.int32),
         )
 
         return RoadRunnerObservation(
-             player=player, 
-             enemy=enemy, 
-             score=state.score, 
-             ravine=ravine_obs
+            player=player,
+            enemy=enemy,
+            score=state.score,
+            ravine=ravine_obs,
+            seeds=seeds_obs,
+            truck=truck_obs,
+            landmine=landmine_obs,
+            bullet=bullet_obs,
+            lives=state.lives,
+            current_level=state.current_level,
         )
 
     def _get_info(self, state: RoadRunnerState) -> RoadRunnerInfo:
@@ -2840,81 +2894,24 @@ class JaxRoadRunner(
             step=state.step_counter
         )
 
-    def obs_to_flat_array(self, obs: RoadRunnerObservation) -> jnp.ndarray:
-        """Convert observation to a flat array."""
-        player_arr = jnp.array([obs.player.x, obs.player.y, obs.player.width, obs.player.height])
-        enemy_arr = jnp.array([obs.enemy.x, obs.enemy.y, obs.enemy.width, obs.enemy.height])
-        ravine_arr = jnp.array([obs.ravine.x, obs.ravine.y, obs.ravine.width, obs.ravine.height])
-        score_arr = jnp.array([obs.score])
-
-        # Flatten and concatenate
-        return jnp.concatenate([
-            player_arr.reshape(-1),
-            enemy_arr.reshape(-1),
-            ravine_arr.reshape(-1),
-            score_arr.reshape(-1)
-        ]).astype(jnp.int32)
-
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
 
     def observation_space(self) -> spaces.Dict:
-        # Simplified observation space
-        return spaces.Dict(
-            {
-                "player": spaces.Dict(
-                    {
-                        "x": spaces.Box(
-                            low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32
-                        ),
-                        "y": spaces.Box(
-                            low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32
-                        ),
-                        "width": spaces.Box(
-                            low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32
-                        ),
-                        "height": spaces.Box(
-                            low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32
-                        ),
-                    }
-                ),
-                "enemy": spaces.Dict(
-                    {
-                        "x": spaces.Box(
-                            low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32
-                        ),
-                        "y": spaces.Box(
-                            low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32
-                        ),
-                        "width": spaces.Box(
-                            low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32
-                        ),
-                        "height": spaces.Box(
-                            low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32
-                        ),
-                    }
-                ),
-                "score": spaces.Box(
-                    low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32
-                ),
-                "ravine": spaces.Dict(
-                    {
-                        "x": spaces.Box(
-                            low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32
-                        ),
-                        "y": spaces.Box(
-                            low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32
-                        ),
-                        "width": spaces.Box(
-                            low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32
-                        ),
-                        "height": spaces.Box(
-                            low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32
-                        ),
-                    }
-                ),
-            }
-        )
+        single = spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
+        multi4 = spaces.get_object_space(n=4, screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
+        return spaces.Dict({
+            "player": single,
+            "enemy": single,
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+            "ravine": single,
+            "seeds": multi4,
+            "truck": single,
+            "landmine": single,
+            "bullet": single,
+            "lives": spaces.Box(low=0, high=self.consts.STARTING_LIVES, shape=(), dtype=jnp.int32),
+            "current_level": spaces.Box(low=0, high=len(self.consts.levels) - 1, shape=(), dtype=jnp.int32),
+        })
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(
