@@ -367,6 +367,15 @@ class PitfallState(NamedTuple):
     current_ground_y: chex.Array 
     scorpion_x: chex.Array
     touching_wood: chex.Array
+    climb_active: chex.Array
+    facing_left: chex.Array
+    log_push_remaining: chex.Array
+    ladder_exit_frames: chex.Array
+    respawn_phase: chex.Array
+    respawn_timer: chex.Array
+    respawn_target_x: chex.Array
+    respawn_target_y: chex.Array
+    respawn_target_ground_y: chex.Array
 
 
 class PitfallConstants(NamedTuple):
@@ -378,28 +387,31 @@ class PitfallConstants(NamedTuple):
     player_start_y: int = 130  # same as ground_y (standing on ground)
 
     player_speed: float = 3.0  # pixels per frame horizontally
-    jump_velocity: float = -4.8  # slightly softer launch with more airtime
-    gravity: float = 0.8       # slower upward decay to reduce snappiness
-    fall_speed: float = 3.0    # slower constant fall for more original Pitfall airtime
+    jump_velocity: float = -4.0  # softer launch for floatier arcs
+    gravity: float = 0.55       # symmetric gravity for longer hang-time
+    fall_speed: float = 3.0    # terminal velocity cap on descent
 
     fps: int = 30
     initial_time_seconds: int = 1200  # 20 minutes
     max_lives: int = 3          # Pitfall lives
     ladder_x: int = 80
-    ladder_width: int = 10
+    ladder_width: int = 16
+    ladder_hole_fall_width: int = 10  # narrower than full ladder sprite for fall-through detection
+    ladder_entry_width: int = 10  # require Harry to be centered over the opening before upper ladder entry
+    ladder_top_peek_offset: int = 6  # keep most of Harry in the hole; face/shoulders emerge at top
     initial_score: int = 2000
     tunnel_wall_width: int = 8
     wall_contact_overlap: int = 0  # keep Harry fully outside tunnel walls on both sides
     right_wall_block_player_width: int = 9  # lets Harry stand closer when approaching a right-side wall
 
     # Side holes beside ladder (underground)
-    hole_width: int = 17            # px
-    hole_gap_from_ladder: int = 26   # px gap from ladder edge
+    hole_width: int = 12            # px (from ladder_with_pits sprite, cols 2-13 and 54-65)
+    hole_gap_from_ladder: int = 12   # px floor bridge between ladder edge and hole
 
     # Stationary wood logs (upper ground hazard)
     wood_drain_per_frame: int = 2  # score points drained each frame while touching any log
-    wood_w: int = 10              # log diameter in px (circle radius ~ wood_w//2)
-    wood_h: int = 10               # log diameter in px
+    wood_w: int = 6               # log width in px (from log sprite)
+    wood_h: int = 14              # log height in px (from log sprite)
     wood_y_offset: int = 0         # fine-tune vertical placement relative to ground
     wood_visual_contact_pad_x: int = 3  # start log interaction pose slightly before full overlap
     wood_visual_contact_shift_x: int = -3  # shift visual slide trigger slightly left
@@ -424,6 +436,21 @@ class PitfallConstants(NamedTuple):
     scorpion_speed: float = 0.45
     scorpion_anim_period: int = 10
     scorpion_hurt_cooldown_frames: int = 30
+
+    # Log pushback when climbing a ladder
+    log_push_amount: float = 6.0    # total px to push Harry down on log hit
+    log_push_speed: float = 2.0     # px/frame push rate (≈3 frames for full push)
+    ladder_exit_grace_frames: int = 6  # preserve jump-out motion and block instant ladder recapture
+    ladder_exit_jump_speed: float = 1.35  # tuned so the exit arc lands on the inner ground rims near each hole
+    ladder_exit_initial_hop: float = 1.0  # minimal visual nudge to clear the ladder lip without doing the heavy lifting
+    normal_jump_horizontal_scale: float = 0.7  # keep standard jumps to ~70% of run-speed carry
+    death_pause_frames: int = 45  # ~1.5 seconds at 30 FPS
+    respawn_drop_speed: float = 1.0  # gentle deterministic fall during respawn animation
+    respawn_drop_spawn_y_offset: int = 20  # spawn this far above the upper ground line before drop-in
+    underground_respawn_x: int = 20  # left opening area for underground re-entry
+    underground_respawn_spawn_above_reveal: int = 4  # start feet a few px above reveal line
+    underground_respawn_reveal_y_offset: int = 1  # clip reveal just below the upper ledge
+    underground_respawn_wall_clearance: int = 2  # start just below the wall top rather than high above ground
 
     # Rendering tune: negative moves sprite up (player_y is treated as bottom/feet).
     harry_y_tune: int = -2
@@ -490,6 +517,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             ),
             dtype=jnp.int32,
         )
+        self.wall_render_height_px = jnp.array(int(self.renderer.WALL_RENDER_MASK.shape[0]), dtype=jnp.int32)
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -505,6 +533,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         state: PitfallState,
         room_byte: chex.Array,
         x: chex.Array,
+        vx: chex.Array,
         y: chex.Array,
         vy: chex.Array,
         down_pressed: chex.Array,
@@ -513,42 +542,55 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         move_right: chex.Array,
         on_ground: chex.Array,
         current_ground_y: chex.Array,
-    ) -> tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
+    ) -> tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
         """
         Handles ladder enter/stay/exit.
 
         Returns:
-            x, y, vy, on_ground, on_ladder, current_ground_y
+            x, vx, y, vy, on_ground, on_ladder, current_ground_y, climb_active, exit_top_jump
         """
         consts = self.consts
         layout = self._screen_layout(room_byte)
         ladder_x = layout.ladder_x
         has_ladder = layout.has_ladder
         ladder_w = jnp.asarray(consts.ladder_width, dtype=jnp.int32)
+        ladder_entry_w = jnp.asarray(consts.ladder_entry_width, dtype=jnp.int32)
         player_w = jnp.asarray(4, dtype=jnp.int32)
+        sprite_w = self.wall_block_player_width_px.astype(jnp.int32)  # actual sprite width (13)
 
         x_int = x.astype(jnp.int32)
         player_right = x_int + player_w
+        player_center = x_int + sprite_w // jnp.int32(2)
         ladder_right = ladder_x + ladder_w
 
         overlap_left = player_right > ladder_x
         overlap_right = x_int < ladder_right
         near_ladder = has_ladder & overlap_left & overlap_right
+        entry_inset = (ladder_w - ladder_entry_w) // jnp.int32(2)
+        entry_x0 = ladder_x + entry_inset
+        entry_x1 = entry_x0 + ladder_entry_w
+        centered_on_ladder = has_ladder & (player_center >= entry_x0) & (player_center < entry_x1)
 
         upper_ground = jnp.asarray(consts.ground_y, dtype=jnp.float32)
         lower_ground = jnp.asarray(consts.underground_y, dtype=jnp.float32)
+        ladder_top_y = upper_ground + jnp.asarray(consts.ladder_top_peek_offset, dtype=jnp.float32)
 
         on_upper = current_ground_y == upper_ground
         on_lower = current_ground_y == lower_ground
+        ladder_exit_active = state.ladder_exit_frames > jnp.int32(0)
 
         enter_from_upper = (
-            on_ground & on_upper & near_ladder & (down_pressed | move_jump)
+            on_ground & on_upper & centered_on_ladder & (down_pressed | move_jump) & (~ladder_exit_active)
         )
         enter_from_lower = (
-            on_ground & on_lower & near_ladder & move_jump
+            on_ground & on_lower & near_ladder & move_jump & (~ladder_exit_active)
         )
 
         entering_ladder = (~state.on_ladder) & (enter_from_upper | enter_from_lower)
+
+        # Snap Harry to the centre of the ladder on entry (+1px right)
+        ladder_center_x = (ladder_x + ladder_w // jnp.int32(2) - sprite_w // jnp.int32(2) + jnp.int32(1)).astype(x.dtype)
+        x = jnp.where(entering_ladder, ladder_center_x, x)
 
         climb_speed = jnp.asarray(1.5, dtype=jnp.float32)
 
@@ -569,7 +611,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         y_climb = y + climb_delta
 
-        y_climb = jnp.clip(y_climb, upper_ground, lower_ground)
+        y_climb = jnp.clip(y_climb, ladder_top_y, lower_ground)
 
         y = jnp.where(on_ladder_now, y_climb, y)
         vy = jnp.where(on_ladder_now, 0.0, vy)
@@ -579,15 +621,15 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             on_ground,   # keep whatever step computed if not on ladder
         )
 
-        at_top = jnp.abs(y - upper_ground) <= 2.0
+        at_top = jnp.abs(y - ladder_top_y) <= 2.0
         at_bottom = jnp.abs(y - lower_ground) <= 2.0
 
-        horiz_exit = move_left | move_right
-        exit_top = on_ladder_now & at_top & horiz_exit
+        jump_dir_input = move_left | move_right
+        exit_top_jump = on_ladder_now & at_top & jump_dir_input
 
         exit_bottom = on_ladder_now & at_bottom & down_pressed
 
-        exiting = exit_top | exit_bottom
+        exiting = exit_top_jump | exit_bottom
 
         exit_dir = jnp.where(
             move_left,
@@ -599,17 +641,19 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             ),
         )
 
-        exit_step = jnp.asarray(8.0, dtype=jnp.float32)
-        exit_dx = exit_dir * exit_step
-
-        hop_height = jnp.asarray(2.0, dtype=jnp.float32)
         jump_v = jnp.asarray(consts.jump_velocity, dtype=jnp.float32)
+        jump_vx = jnp.asarray(consts.ladder_exit_jump_speed, dtype=jnp.float32) * exit_dir
 
-        x = jnp.where(exit_top, x + exit_dx, x)
-        y = jnp.where(exit_top, upper_ground - hop_height, y)
-        vy = jnp.where(exit_top, jump_v, vy)
+        # Small visual nudge so Harry clears the ladder lip immediately, while
+        # the arc itself is still carried primarily by the jump velocity.
+        initial_hop_x = jnp.asarray(consts.ladder_exit_initial_hop, dtype=jnp.float32) * exit_dir
+        x = jnp.where(exit_top_jump, x + initial_hop_x, x)
+
+        y = jnp.where(exit_top_jump, ladder_top_y, y)
+        vy = jnp.where(exit_top_jump, jump_v, vy)
+        vx = jnp.where(exit_top_jump, jump_vx, vx)
         on_ground = jnp.where(
-            exit_top,
+            exit_top_jump,
             jnp.array(False, dtype=jnp.bool_),
             on_ground,
         )
@@ -618,7 +662,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         x = jnp.clip(x, 0.0, max_x)
 
         new_ground_y = jnp.where(
-            exit_top,
+            exit_top_jump,
             upper_ground,
             jnp.where(exit_bottom, lower_ground, current_ground_y),
         )
@@ -633,7 +677,9 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         on_ladder = on_ladder_now & (~exiting)
         current_ground_y = jnp.where(exiting, new_ground_y, current_ground_y)
 
-        return x, y, vy, on_ground, on_ladder, current_ground_y
+        climb_active = on_ladder & (climb_delta != 0.0)
+
+        return x, vx, y, vy, on_ground, on_ladder, current_ground_y, climb_active, exit_top_jump
 
     def _screen_layout(self, room_byte: chex.Array) -> ScreenLayout:
         rb = room_byte.astype(jnp.uint8)
@@ -716,6 +762,9 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         vx = state.player_vx
         vy = state.player_vy
         on_ground = state.on_ground
+        ladder_exit_frames = state.ladder_exit_frames
+        transition_active = state.respawn_phase != jnp.int32(0)
+        gameplay_active = ~transition_active
         time_left = state.time_left
         lives_left = state.lives_left
         hurt_cooldown = state.hurt_cooldown
@@ -755,27 +804,41 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             (action == Action.UPRIGHTFIRE)
         )
 
-        has_input = action != Action.NOOP
-        timer_started = state.timer_started | has_input
+        down_pressed = down_pressed & gameplay_active
+        move_left = move_left & gameplay_active
+        move_right = move_right & gameplay_active
+        move_jump = move_jump & gameplay_active
 
-        time_left = state.time_left - timer_started.astype(jnp.int32)
+        has_input = action != Action.NOOP
+        timer_started = state.timer_started | (has_input & gameplay_active)
+
+        time_left = state.time_left - (timer_started & gameplay_active).astype(jnp.int32)
         time_left = jnp.maximum(time_left, 0)
 
         layout = self._screen_layout(state.room_byte)
         ladder_x = layout.ladder_x
         has_ladder = layout.has_ladder
         ladder_w = jnp.asarray(consts.ladder_width, dtype=jnp.int32)
+        ladder_fall_w = jnp.asarray(consts.ladder_hole_fall_width, dtype=jnp.int32)
         player_w = jnp.asarray(4, dtype=jnp.int32)
+        sprite_w = self.wall_block_player_width_px.astype(jnp.int32)  # actual sprite width (13)
 
         x_int = x.astype(jnp.int32)
         player_right = x_int + player_w
-        player_center = x_int + player_w // 2
+        # Collision center: visual sprite center, shifted 1px left when idle
+        is_moving = move_left | move_right
+        idle_shift = jnp.where(is_moving, jnp.int32(0), jnp.int32(-1))
+        player_center = x_int + sprite_w // jnp.int32(2) + idle_shift
         ladder_right = ladder_x + ladder_w
 
         overlap_left = player_right > ladder_x
         overlap_right = x_int < ladder_right
         near_ladder = has_ladder & overlap_left & overlap_right
-        over_ladder = has_ladder & (player_center >= ladder_x) & (player_center < ladder_right)
+        # Fall-through uses the narrower ladder_hole_fall_width
+        fall_inset = (ladder_w - ladder_fall_w) // jnp.int32(2)
+        fall_x0 = ladder_x + fall_inset
+        fall_x1 = fall_x0 + ladder_fall_w
+        over_ladder = has_ladder & (player_center >= fall_x0) & (player_center < fall_x1)
 
         has_side_hole, over_side_hole, hole_left_x, hole_right_x, hole_w = self._side_hole_info(
             room_byte=state.room_byte,
@@ -784,21 +847,46 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         over_any_hole = over_ladder | over_side_hole
 
+        prev_x_int = state.player_x.astype(jnp.int32)
+        prev_is_moving = jnp.abs(state.player_vx) > jnp.asarray(0.0, dtype=jnp.float32)
+        prev_idle_shift = jnp.where(prev_is_moving, jnp.int32(0), jnp.int32(-1))
+        prev_player_center = prev_x_int + sprite_w // jnp.int32(2) + prev_idle_shift
+        prev_over_ladder = has_ladder & (prev_player_center >= fall_x0) & (prev_player_center < fall_x1)
+        _, prev_over_side_hole, _, _, _ = self._side_hole_info(
+            room_byte=state.room_byte,
+            player_center_x=prev_player_center.astype(jnp.int32),
+        )
+        prev_over_any_hole = prev_over_ladder | prev_over_side_hole
+
         upper_ground = jnp.asarray(consts.ground_y, dtype=jnp.float32)
         lower_ground = jnp.asarray(consts.underground_y, dtype=jnp.float32)
         
         on_upper_level = state.current_ground_y == upper_ground
         on_lower_level = state.current_ground_y == lower_ground
+        ladder_exit_active = ladder_exit_frames > jnp.int32(0)
 
         falling_through_hole = over_any_hole & on_upper_level & (~on_ground) & (~state.on_ladder) & (vy >= 0)
 
         speed = jnp.asarray(consts.player_speed, dtype=jnp.float32)
+        jump_horiz_speed = speed * jnp.asarray(consts.normal_jump_horizontal_scale, dtype=jnp.float32)
         vx = jnp.where(move_left, -speed, jnp.where(move_right, speed, 0.0))
+        # When airborne, preserve launch momentum (no mid-air steering) so
+        # regular jumps still have enough carry while being shorter than full-speed runs.
+        airborne = (~on_ground) & (~state.on_ladder)
+        air_vx = jnp.where(
+            state.player_vx < 0,
+            -jnp.minimum(jnp.abs(state.player_vx), jump_horiz_speed),
+            jnp.where(state.player_vx > 0, jnp.minimum(jnp.abs(state.player_vx), jump_horiz_speed), 0.0),
+        )
+        vx = jnp.where(airborne, air_vx, vx)
+        vx = jnp.where(airborne & ladder_exit_active, state.player_vx, vx)
         vx = jnp.where(state.on_ladder, 0.0, vx)
-        vx = jnp.where(falling_through_hole, 0.0, vx)
+        vx = jnp.where(falling_through_hole & (~ladder_exit_active), 0.0, vx)
 
         trying_to_enter_ladder = near_ladder & on_lower_level & move_jump
-        jump_mask = on_ground & move_jump & (~state.on_ladder) & (~trying_to_enter_ladder)
+        jump_mask = on_ground & move_jump & (~state.on_ladder) & (~trying_to_enter_ladder) & (~ladder_exit_active)
+        jump_launch_vx = jnp.where(move_left, -jump_horiz_speed, jnp.where(move_right, jump_horiz_speed, 0.0))
+        vx = jnp.where(jump_mask, jump_launch_vx, vx)
         vy = jnp.where(
             jump_mask,
             jnp.asarray(consts.jump_velocity, dtype=jnp.float32),
@@ -808,14 +896,10 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         gravity = jnp.asarray(consts.gravity, dtype=jnp.float32)
         fall_speed = jnp.asarray(consts.fall_speed, dtype=jnp.float32)
         apply_gravity = (~on_ground) & (~state.on_ladder)
+        # Symmetric gravity on both ascent and descent (capped at fall_speed)
         vy = jnp.where(
-            apply_gravity & (vy < 0),
-            jnp.minimum(vy + gravity, 0.0),
-            vy,
-        )
-        vy = jnp.where(
-            apply_gravity & (vy >= 0),
-            fall_speed,
+            apply_gravity,
+            jnp.minimum(vy + gravity, fall_speed),
             vy,
         )
 
@@ -896,6 +980,12 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         clamp_mask = ~state.on_ladder
 
         raw_on_ground_upper = (y >= previous_ground) & (~over_any_hole)
+        # One-frame edge grace: if Harry was grounded and just crossed from
+        # solid ground into a hole this frame, keep him grounded for that
+        # frame only. Next frame he can fall normally.
+        just_entered_hole = over_any_hole & (~prev_over_any_hole)
+        held_by_ground = state.on_ground & (y >= previous_ground) & on_upper_level & just_entered_hole
+        raw_on_ground_upper = raw_on_ground_upper | held_by_ground
 
         falling_to_lower = on_upper_level & over_any_hole & (y >= lower_ground)
 
@@ -928,10 +1018,11 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         landing_y = jnp.where(falling_to_lower, lower_ground, previous_ground)
         y = jnp.where(clamp_mask & on_ground, landing_y, y)
 
-        x, y, vy, on_ground, on_ladder, current_ground_y = self._apply_ladder(
+        x, vx, y, vy, on_ground, on_ladder, current_ground_y, climb_active, started_ladder_exit = self._apply_ladder(
             state=state,
             room_byte=new_room_byte,
             x=x,
+            vx=vx,
             y=y,
             vy=vy,
             down_pressed=down_pressed,
@@ -941,6 +1032,14 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             on_ground=on_ground,
             current_ground_y=current_ground_y,
         )
+
+        ladder_exit_frames = jnp.maximum(ladder_exit_frames - jnp.int32(1), jnp.int32(0))
+        ladder_exit_frames = jnp.where(
+            started_ladder_exit,
+            jnp.int32(consts.ladder_exit_grace_frames),
+            ladder_exit_frames,
+        )
+        ladder_exit_frames = jnp.where(on_ladder, jnp.int32(0), ladder_exit_frames)
 
         has_logs, logs_are_rolling, log_count, log_xs, has_fireplace, has_snake = room_hazards_from_room_byte(new_room_byte)
 
@@ -952,7 +1051,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         dx_scorpion = player_center_x_f - scorpion_x
         scorpion_step = jnp.clip(dx_scorpion, -scorpion_speed, scorpion_speed)
         scorpion_x = jnp.where(
-            has_scorpion,
+            has_scorpion & gameplay_active,
             scorpion_x + scorpion_step,
             scorpion_x,
         )
@@ -1019,11 +1118,41 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         touching_any = jnp.any(active & overlap_x & overlap_y)
         touching_wood = has_logs & jnp.any(active & visual_overlap_x & overlap_y)
-        scoring_touching_wood = has_logs & touching_any
+        scoring_touching_wood = has_logs & touching_any & gameplay_active
 
         drain = jnp.int32(consts.wood_drain_per_frame)
         score = jnp.where(scoring_touching_wood, score - drain, score)
         score = jnp.maximum(score, jnp.int32(0))
+
+        # --- Log pushback on ladder -------------------------------------------
+        # Rising-edge: only trigger when touching_wood transitions False→True
+        log_hit_on_ladder = on_ladder & touching_wood & (~state.touching_wood)
+        log_push_remaining = jnp.where(
+            log_hit_on_ladder,
+            jnp.asarray(consts.log_push_amount, dtype=jnp.float32),
+            state.log_push_remaining,
+        )
+        push_speed = jnp.asarray(consts.log_push_speed, dtype=jnp.float32)
+        push_this_frame = jnp.minimum(log_push_remaining, push_speed)
+        push_this_frame = jnp.where(
+            on_ladder & (log_push_remaining > 0), push_this_frame, jnp.float32(0.0)
+        )
+        pushed_y = y + push_this_frame
+        y = jnp.where(
+            on_ladder,
+            jnp.clip(
+                pushed_y,
+                jnp.asarray(consts.ground_y, dtype=jnp.float32),
+                jnp.asarray(consts.underground_y, dtype=jnp.float32),
+            ),
+            y,
+        )
+        log_push_remaining = jnp.maximum(log_push_remaining - push_this_frame, jnp.float32(0.0))
+        # Reset push state when not on ladder
+        log_push_remaining = jnp.where(on_ladder, log_push_remaining, jnp.float32(0.0))
+        # Animate climb sprite during the push
+        climb_active = climb_active | (on_ladder & (push_this_frame > 0))
+        # ----------------------------------------------------------------------
 
         fire_x_center = jnp.int32(132)
 
@@ -1039,7 +1168,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         fire_right = fire_left + fire_w
 
         overlap_fire = (x1 > fire_left) & (x0 < fire_right) & (y1 > fire_y0) & (y0 < fire_y1)
-        can_hurt = hurt_cooldown == jnp.int32(0)
+        can_hurt = (hurt_cooldown == jnp.int32(0)) & gameplay_active
         hit_fire = has_fireplace & overlap_fire & can_hurt
 
         snake_count = has_snake.astype(jnp.int32)
@@ -1077,39 +1206,28 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         lives_left = jnp.where(hit_hazard, lives_left - jnp.int32(1), lives_left)
         lives_left = jnp.maximum(lives_left, jnp.int32(0))
+        lost_final_life = hit_hazard & (lives_left <= jnp.int32(0))
 
         respawn_x = jnp.asarray(consts.player_start_x, dtype=jnp.float32)
-        respawn_y = jnp.asarray(consts.player_start_y - consts.fire_respawn_y_offset, dtype=jnp.float32)
+        scorpion_respawn_x = jnp.asarray(consts.underground_respawn_x, dtype=jnp.float32)
+        respawn_ground_y = jnp.asarray(consts.ground_y, dtype=jnp.float32)
         respawn_underground_y = jnp.asarray(consts.underground_y, dtype=jnp.float32)
-
-        x = jnp.where(
-            hit_scorpion,
+        respawn_target_x = jnp.where(
+            lost_final_life,
             respawn_x,
-            jnp.where(hit_other_hazard, respawn_x, x),
+            jnp.where(hit_scorpion, scorpion_respawn_x, respawn_x),
         )
-        y = jnp.where(
-            hit_scorpion,
-            respawn_underground_y,
-            jnp.where(hit_other_hazard, respawn_y, y),
+        respawn_target_y = jnp.where(
+            lost_final_life,
+            respawn_ground_y,
+            jnp.where(hit_scorpion, respawn_underground_y, respawn_ground_y),
         )
+        respawn_target_ground_y = respawn_target_y
+
         vx = jnp.where(hit_hazard, jnp.asarray(0.0, dtype=jnp.float32), vx)
         vy = jnp.where(hit_hazard, jnp.asarray(0.0, dtype=jnp.float32), vy)
-        on_ground = jnp.where(
-            hit_scorpion,
-            jnp.array(True, dtype=jnp.bool_),
-            jnp.where(hit_other_hazard, jnp.array(False, dtype=jnp.bool_), on_ground),
-        )
         on_ladder = jnp.where(hit_hazard, jnp.array(False, dtype=jnp.bool_), on_ladder)
-        current_ground_y = jnp.where(
-            hit_scorpion,
-            jnp.asarray(consts.underground_y, dtype=jnp.float32),
-            jnp.where(
-                hit_other_hazard,
-                jnp.asarray(consts.ground_y, dtype=jnp.float32),
-                current_ground_y,
-            ),
-        )
-        scorpion_x = jnp.where(hit_scorpion, scorpion_spawn_x, scorpion_x)
+        ladder_exit_frames = jnp.where(hit_hazard, jnp.int32(0), ladder_exit_frames)
 
         next_hurt_cooldown = jnp.maximum(hurt_cooldown - jnp.int32(1), jnp.int32(0))
         next_hurt_cooldown = jnp.where(
@@ -1123,7 +1241,13 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             next_hurt_cooldown,
         )
 
-        done = (time_left <= 0) | (lives_left <= 0)
+        respawn_phase = jnp.where(hit_hazard, jnp.int32(1), state.respawn_phase)
+        respawn_timer = jnp.where(hit_hazard, jnp.int32(consts.death_pause_frames), state.respawn_timer)
+        stored_respawn_target_x = jnp.where(hit_hazard, respawn_target_x, state.respawn_target_x)
+        stored_respawn_target_y = jnp.where(hit_hazard, respawn_target_y, state.respawn_target_y)
+        stored_respawn_target_ground_y = jnp.where(hit_hazard, respawn_target_ground_y, state.respawn_target_ground_y)
+
+        done = (time_left <= 0)
 
         new_state = PitfallState(
             player_x=x,
@@ -1142,15 +1266,113 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             current_ground_y=current_ground_y,
             scorpion_x=scorpion_x,
             touching_wood=touching_wood,
+            climb_active=climb_active,
+            facing_left=jnp.where(
+                move_left, jnp.array(True, dtype=jnp.bool_),
+                jnp.where(move_right, jnp.array(False, dtype=jnp.bool_), state.facing_left),
+            ),
+            log_push_remaining=log_push_remaining,
+            ladder_exit_frames=ladder_exit_frames,
+            respawn_phase=respawn_phase,
+            respawn_timer=respawn_timer,
+            respawn_target_x=stored_respawn_target_x,
+            respawn_target_y=stored_respawn_target_y,
+            respawn_target_ground_y=stored_respawn_target_ground_y,
             screen_id=new_screen_id,
             room_byte=new_room_byte,
         )
 
-        obs = self._get_observation(new_state)
-        reward = self._get_reward(state, new_state)
-        info = self._get_info(new_state)
+        is_pause_phase = state.respawn_phase == jnp.int32(1)
+        is_drop_phase = state.respawn_phase == jnp.int32(2)
+        start_drop = is_pause_phase & (state.respawn_timer <= jnp.int32(1))
+        pause_timer_next = jnp.maximum(state.respawn_timer - jnp.int32(1), jnp.int32(0))
+        underground_respawn = state.respawn_target_ground_y == jnp.asarray(consts.underground_y, dtype=jnp.float32)
+        wall_top_y = jnp.asarray(
+            consts.underground_y - self.wall_render_height_px.astype(jnp.int32) + consts.underground_respawn_wall_clearance,
+            dtype=jnp.float32,
+        )
+        respawn_spawn_y = jnp.where(
+            underground_respawn,
+            jnp.asarray(
+                wall_top_y + consts.underground_respawn_spawn_above_reveal,
+                dtype=jnp.float32,
+            ),
+            jnp.asarray(
+                consts.ground_y - consts.respawn_drop_spawn_y_offset,
+                dtype=jnp.float32,
+            ),
+        )
+        respawn_drop_speed = jnp.asarray(consts.respawn_drop_speed, dtype=jnp.float32)
+        drop_y = jnp.minimum(state.player_y + respawn_drop_speed, state.respawn_target_y)
+        landed = is_drop_phase & (drop_y >= state.respawn_target_y)
 
-        return obs, new_state, reward, done, info
+        transition_state = PitfallState(
+            player_x=jnp.where(start_drop | is_drop_phase, state.respawn_target_x, state.player_x),
+            player_y=jnp.where(
+                start_drop,
+                respawn_spawn_y,
+                jnp.where(is_drop_phase, drop_y, state.player_y),
+            ),
+            player_vx=jnp.array(0.0, dtype=jnp.float32),
+            player_vy=jnp.where(
+                start_drop | (is_drop_phase & (~landed)),
+                respawn_drop_speed,
+                jnp.array(0.0, dtype=jnp.float32),
+            ),
+            on_ground=jnp.where(
+                start_drop,
+                jnp.array(False, dtype=jnp.bool_),
+                jnp.where(is_drop_phase, landed, state.on_ground),
+            ),
+            score=state.score,
+            timer_started=state.timer_started,
+            time_left=state.time_left,
+            lives_left=state.lives_left,
+            done=state.done,
+            hurt_cooldown=state.hurt_cooldown,
+            down_pressed=jnp.array(False, dtype=jnp.bool_),
+            on_ladder=jnp.array(False, dtype=jnp.bool_),
+            current_ground_y=jnp.where(
+                start_drop | is_drop_phase,
+                state.respawn_target_ground_y,
+                state.current_ground_y,
+            ),
+            scorpion_x=jnp.where(
+                start_drop & underground_respawn,
+                scorpion_spawn_x,
+                state.scorpion_x,
+            ),
+            touching_wood=jnp.array(False, dtype=jnp.bool_),
+            climb_active=jnp.array(False, dtype=jnp.bool_),
+            facing_left=state.facing_left,
+            log_push_remaining=jnp.array(0.0, dtype=jnp.float32),
+            ladder_exit_frames=jnp.int32(0),
+            respawn_phase=jnp.where(
+                is_pause_phase,
+                jnp.where(start_drop, jnp.int32(2), jnp.int32(1)),
+                jnp.where(is_drop_phase, jnp.where(landed, jnp.int32(0), jnp.int32(2)), jnp.int32(0)),
+            ),
+            respawn_timer=jnp.where(is_pause_phase & (~start_drop), pause_timer_next, jnp.int32(0)),
+            respawn_target_x=state.respawn_target_x,
+            respawn_target_y=state.respawn_target_y,
+            respawn_target_ground_y=state.respawn_target_ground_y,
+            screen_id=state.screen_id,
+            room_byte=state.room_byte,
+        )
+
+        final_state = jax.tree.map(
+            lambda normal_value, transition_value: jnp.where(transition_active, transition_value, normal_value),
+            new_state,
+            transition_state,
+        )
+        final_done = (final_state.time_left <= 0) | ((final_state.lives_left <= 0) & (final_state.respawn_phase == jnp.int32(0)))
+        final_state = final_state._replace(done=final_done)
+
+        obs = self._get_observation(final_state)
+        reward = self._get_reward(state, final_state)
+        info = self._get_info(final_state)
+
+        return obs, final_state, reward, final_state.done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: PitfallState) -> PitfallObservation:
@@ -1212,6 +1434,15 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             current_ground_y=jnp.array(consts.ground_y, dtype=jnp.float32),
             scorpion_x=jnp.array(consts.scorpion_spawn_x, dtype=jnp.float32),
             touching_wood=jnp.array(False, dtype=jnp.bool_),
+            climb_active=jnp.array(False, dtype=jnp.bool_),
+            facing_left=jnp.array(False, dtype=jnp.bool_),
+            log_push_remaining=jnp.array(0.0, dtype=jnp.float32),
+            ladder_exit_frames=jnp.array(0, dtype=jnp.int32),
+            respawn_phase=jnp.array(0, dtype=jnp.int32),
+            respawn_timer=jnp.array(0, dtype=jnp.int32),
+            respawn_target_x=jnp.array(consts.player_start_x, dtype=jnp.float32),
+            respawn_target_y=jnp.array(consts.ground_y, dtype=jnp.float32),
+            respawn_target_ground_y=jnp.array(consts.ground_y, dtype=jnp.float32),
             screen_id=jnp.array(0, dtype=jnp.int32),
             room_byte=jnp.array(SEED, dtype=jnp.uint8),
         )
@@ -1396,6 +1627,31 @@ class PitfallRenderer(JAXGameRenderer):
                 'data': jnp.asarray(backdrop_rgba, dtype=jnp.uint8),
             }
 
+        def _load_trimmed_sprite(
+            file_name: str,
+            crop_box: tuple[int, int, int, int],
+            black_transparent: bool = True,
+        ) -> jnp.ndarray:
+            """Load a full-screen sprite .npy, crop to *crop_box* (y0,x0,y1,x1),
+            optionally mark black pixels transparent, and return RGBA."""
+            file_path = os.path.join(sprite_path, file_name)
+            img_np = np.load(file_path)
+            img_rgba = _normalize_to_rgba_u8(img_np, file_name)
+            y0, x0, y1, x1 = crop_box
+            cropped = img_rgba[y0:y1, x0:x1].copy()
+            if black_transparent:
+                is_black = np.all(cropped[:, :, :3] == 0, axis=2)
+                cropped[is_black, 3] = 0
+            return jnp.asarray(cropped, dtype=jnp.uint8)
+
+        # Load trimmed log / ladder sprites (bounding boxes measured from sprite files)
+        log_left_rgba = _load_trimmed_sprite('log_left.npy', (118, 25, 132, 31))
+        log_right_rgba = _load_trimmed_sprite('log_right.npy', (119, 24, 133, 30))
+        ladder_rgba = _load_trimmed_sprite('ladder.npy', (117, 72, 178, 88), black_transparent=False)
+        ladder_with_pits_rgba = _load_trimmed_sprite(
+            'ladder_with_pits.npy', (119, 46, 178, 114), black_transparent=False,
+        )
+
         converted_asset_config = []
         for asset in asset_config:
             if (
@@ -1437,12 +1693,14 @@ class PitfallRenderer(JAXGameRenderer):
 
         asset_config.extend(
             [
-                {'name': 'color_ladder', 'type': 'procedural', 'data': _color_swatch((0, 0, 255))},
-                {'name': 'color_wall', 'type': 'procedural', 'data': _color_swatch((180, 40, 0))},
                 {'name': 'color_wood', 'type': 'procedural', 'data': _color_swatch((110, 70, 25))},
                 {'name': 'color_fire', 'type': 'procedural', 'data': _color_swatch((255, 120, 0))},
                 {'name': 'color_snake', 'type': 'procedural', 'data': _color_swatch((20, 200, 0))},
                 {'name': 'color_hole', 'type': 'procedural', 'data': _color_swatch((0, 0, 0))},
+                {'name': 'log_left_sprite', 'type': 'single', 'data': log_left_rgba},
+                {'name': 'log_right_sprite', 'type': 'single', 'data': log_right_rgba},
+                {'name': 'ladder_sprite', 'type': 'single', 'data': ladder_rgba},
+                {'name': 'ladder_with_pits_sprite', 'type': 'single', 'data': ladder_with_pits_rgba},
             ]
         )
 
@@ -1454,8 +1712,6 @@ class PitfallRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
-        self.LADDER_ID = self.SHAPE_MASKS['color_ladder'][0, 0].astype(self.BACKGROUND.dtype)
-        self.WALL_ID = self.SHAPE_MASKS['color_wall'][0, 0].astype(self.BACKGROUND.dtype)
         self.WOOD_ID = self.SHAPE_MASKS['color_wood'][0, 0].astype(self.BACKGROUND.dtype)
         self.FIRE_ID = self.SHAPE_MASKS['color_fire'][0, 0].astype(self.BACKGROUND.dtype)
         self.SNAKE_ID = self.SHAPE_MASKS['color_snake'][0, 0].astype(self.BACKGROUND.dtype)
@@ -1474,7 +1730,7 @@ class PitfallRenderer(JAXGameRenderer):
             [self.WALL_MASK[:wall_extension_rows], self.WALL_MASK],
             axis=0,
         )
-        wall_red_id = jnp.asarray(self.COLOR_TO_ID.get((167, 26, 26), int(self.WALL_ID)), dtype=self.WALL_RENDER_MASK.dtype)
+        wall_red_id = jnp.asarray(self.COLOR_TO_ID.get((167, 26, 26), int(self.WOOD_ID)), dtype=self.WALL_RENDER_MASK.dtype)
         wall_top_row = self.WALL_RENDER_MASK[0]
         self.WALL_RENDER_MASK = self.WALL_RENDER_MASK.at[0].set(
             jnp.where(
@@ -1483,6 +1739,17 @@ class PitfallRenderer(JAXGameRenderer):
                 wall_top_row,
             )
         )
+
+        # Log / ladder sprite masks (trimmed from full-screen captures)
+        _log_left = self.SHAPE_MASKS.get('log_left_sprite', transparent_pixel)
+        self.LOG_LEFT_MASK = _log_left[0] if _log_left.ndim == 3 else _log_left
+        _log_right = self.SHAPE_MASKS.get('log_right_sprite', transparent_pixel)
+        self.LOG_RIGHT_MASK = _log_right[0] if _log_right.ndim == 3 else _log_right
+        _ladder = self.SHAPE_MASKS.get('ladder_sprite', transparent_pixel)
+        self.LADDER_SPRITE_MASK = _ladder[0] if _ladder.ndim == 3 else _ladder
+        _lwp = self.SHAPE_MASKS.get('ladder_with_pits_sprite', transparent_pixel)
+        self.LADDER_WITH_PITS_MASK = _lwp[0] if _lwp.ndim == 3 else _lwp
+
         self.HAS_BACKDROP_CROCODILEPIT_AND_ROPE = jnp.array(
             'backdrop_crocodilepit_and_rope' in self.SHAPE_MASKS, dtype=jnp.bool_
         )
@@ -1615,8 +1882,6 @@ class PitfallRenderer(JAXGameRenderer):
 
         has_ladder = (pt == jnp.uint8(0)) | (pt == jnp.uint8(1))
         has_scorpion = has_scorpion_from_room_byte(rb)
-        has_wall = has_ladder
-        wall_side_bit = wall_side_u8(rb)
         has_croc_rope_backdrop = (
             (pt == jnp.uint8(0b100))
             & has_vine_from_room_byte(rb)
@@ -1637,58 +1902,63 @@ class PitfallRenderer(JAXGameRenderer):
             raster,
         )
 
-        # ---- Holes (black cutouts) ----
-        has_side_holes = pt == jnp.uint8(1)
+        # ---- Underground elements: holes + ladder sprites ----
+        has_simple_ladder = pt == jnp.uint8(0)
+        has_ladder_with_pits = pt == jnp.uint8(1)
 
         ladder_x = self.ladder_x_px.astype(jnp.int32)
         ladder_w = jnp.int32(self.consts.ladder_width)
-
         hole_w = jnp.int32(self.consts.hole_width)
-        gap = jnp.int32(self.consts.hole_gap_from_ladder)
-
-        W = jnp.int32(self.consts.screen_width)
-        max_start = jnp.maximum(W - hole_w, jnp.int32(0))
-
-        left_x = jnp.clip(ladder_x - gap - hole_w, 0, max_start)
-        right_x = jnp.clip(ladder_x + ladder_w + gap, 0, max_start)
-
         hole_top = jnp.int32(int(self.consts.ground_y))
         hole_h = jnp.int32(max(0, int(self.consts.underground_y) - int(self.consts.ground_y)))
 
-        draw_center_hole = has_ladder
+        # Center hole for standalone ladder – fill shaft below ground,
+        # then the ladder sprite overlays with rungs + hole opening.
         ladder_hole_pos = jnp.where(
-            draw_center_hole,
+            has_simple_ladder,
             jnp.array([ladder_x, hole_top], dtype=jnp.int32),
             jnp.array([-1, -1], dtype=jnp.int32),
         )
         ladder_hole_size = jnp.array([ladder_w, hole_h], dtype=jnp.int32)
         raster = self.jr.draw_rects(raster, ladder_hole_pos[None, :], ladder_hole_size[None, :], int(self.HOLE_ID))
 
-        left_pos = jnp.where(
-            has_side_holes,
-            jnp.array([left_x, hole_top], dtype=jnp.int32),
-            jnp.array([-1, -1], dtype=jnp.int32),
+        # Simple ladder sprite (center hole drawn above, sprite only adds the ladder)
+        ladder_sprite_top = jnp.int32(int(self.consts.ground_y) - 13)
+        raster = lax.cond(
+            has_simple_ladder,
+            lambda r: self.jr.render_at_clipped(
+                r,
+                ladder_x,
+                ladder_sprite_top,
+                self.LADDER_SPRITE_MASK,
+                flip_horizontal=jnp.array(False, dtype=jnp.bool_),
+                flip_offset=jnp.array([0, 0], dtype=jnp.int32),
+            ),
+            lambda r: r,
+            raster,
         )
-        right_pos = jnp.where(
-            has_side_holes,
-            jnp.array([right_x, hole_top], dtype=jnp.int32),
-            jnp.array([-1, -1], dtype=jnp.int32),
-        )
-        hole_size = jnp.array([hole_w, hole_h], dtype=jnp.int32)
-        raster = self.jr.draw_rects(raster, left_pos[None, :], hole_size[None, :], int(self.HOLE_ID))
-        raster = self.jr.draw_rects(raster, right_pos[None, :], hole_size[None, :], int(self.HOLE_ID))
 
+        # Ladder-with-pits sprite (includes left hole + ladder + right hole)
+        # Fixed offset 26: ladder structure starts at sprite col 26
+        lwp_x = ladder_x - jnp.int32(26)
+        lwp_top = jnp.int32(int(self.consts.ground_y) - 11)
+        raster = lax.cond(
+            has_ladder_with_pits,
+            lambda r: self.jr.render_at_clipped(
+                r,
+                lwp_x,
+                lwp_top,
+                self.LADDER_WITH_PITS_MASK,
+                flip_horizontal=jnp.array(False, dtype=jnp.bool_),
+                flip_offset=jnp.array([0, 0], dtype=jnp.int32),
+            ),
+            lambda r: r,
+            raster,
+        )
+
+        wall_side_bit = (rb >> jnp.uint8(7)) & jnp.uint8(1)
+        has_wall = has_simple_ladder | has_ladder_with_pits
         wall_x = jnp.where(wall_side_bit == jnp.uint8(1), self.right_wall_x_px, self.left_wall_x_px).astype(jnp.int32)
-
-        ladder_x = self.ladder_x_px.astype(jnp.int32)
-        ladder_top = jnp.int32(int(self.consts.ground_y) - 1)
-        ladder_h = jnp.int32(int(self.consts.underground_y + 1) - int(self.consts.ground_y - 1))
-
-        draw_ladder_rect = has_ladder
-        ladder_pos = jnp.where(draw_ladder_rect, jnp.array([ladder_x, ladder_top], dtype=jnp.int32), jnp.array([-1, -1], dtype=jnp.int32))
-        ladder_size = jnp.array([jnp.int32(self.consts.ladder_width), ladder_h], dtype=jnp.int32)
-        raster = self.jr.draw_rects(raster, ladder_pos[None, :], ladder_size[None, :], int(self.LADDER_ID))
-
         wall_h = jnp.int32(int(self.WALL_RENDER_MASK.shape[0]))
         wall_top = jnp.int32(int(self.consts.underground_y)) - wall_h
         draw_wall_sprite = has_wall
@@ -1706,41 +1976,34 @@ class PitfallRenderer(JAXGameRenderer):
         moving_centers = jnp.mod(log_xs + dx, W)
         log_centers = jnp.where(logs_are_rolling, moving_centers, log_xs)
 
-        wood_w = jnp.int32(self.consts.wood_w)
-        wood_h = jnp.int32(self.consts.wood_h)
         wood_top_static = int(self.consts.ground_y - self.consts.wood_h + self.consts.wood_y_offset)
         wood_top = jnp.int32(wood_top_static)
+        log_half_w = jnp.int32(self.consts.wood_w // 2)
 
-        wood_h_static = int(self.consts.wood_h)
-        W_static = int(self.consts.screen_width)
+        # Moving-log animation: alternate sprite + 1px vertical bobble
+        log_anim_phase = jnp.mod(frames_elapsed // jnp.int32(8), jnp.int32(2))
+        use_right_frame = logs_are_rolling & (log_anim_phase == jnp.int32(1))
+        bobble_y = jnp.where(logs_are_rolling, log_anim_phase, jnp.int32(0))
 
-        y_idx = jnp.arange(wood_h_static, dtype=jnp.float32)[:, None]
-        x_idx = jnp.arange(W_static, dtype=jnp.float32)[None, :]
-        cy = (jnp.float32(wood_h_static) - 1.0) / 2.0
-        r = (jnp.minimum(jnp.float32(self.consts.wood_w), jnp.float32(self.consts.wood_h)) - 1.0) / 2.0
-
-        def _draw_one_log_region(region: jnp.ndarray, center_x: jnp.ndarray) -> jnp.ndarray:
-            cx = center_x.astype(jnp.float32)
-            ddx = jnp.abs(x_idx - cx)
-            ddx = jnp.minimum(ddx, jnp.float32(W_static) - ddx)
-            ddy = jnp.abs(y_idx - cy)
-            mask = (ddx * ddx + ddy * ddy) <= (r * r)
-            return jnp.where(mask, self.WOOD_ID, region)
+        log_mask = jnp.where(use_right_frame, self.LOG_RIGHT_MASK, self.LOG_LEFT_MASK)
 
         def _draw_logs(r: jnp.ndarray) -> jnp.ndarray:
-            region = lax.dynamic_slice(r, (wood_top, 0), (wood_h_static, W_static))
-
-            def body(i, reg):
+            def body(i, rr):
                 active_i = jnp.int32(i) < log_count
+                cx = log_centers[i].astype(jnp.int32)
+                x = cx - log_half_w
+                y = wood_top + bobble_y
                 return lax.cond(
                     active_i,
-                    lambda rr: _draw_one_log_region(rr, log_centers[i]),
+                    lambda rr: self.jr.render_at_clipped(
+                        rr, x, y, log_mask,
+                        flip_horizontal=jnp.array(False, dtype=jnp.bool_),
+                        flip_offset=jnp.array([0, 0], dtype=jnp.int32),
+                    ),
                     lambda rr: rr,
-                    reg,
+                    rr,
                 )
-
-            region = lax.fori_loop(0, 3, body, region)
-            return lax.dynamic_update_slice(r, region, (wood_top, 0))
+            return lax.fori_loop(0, 3, body, r)
 
         fire_x_center = jnp.int32(132)
         fire_w = jnp.int32(self.consts.fire_w)
@@ -1786,10 +2049,15 @@ class PitfallRenderer(JAXGameRenderer):
         )
 
         moving = jnp.abs(state.player_vx) > jnp.asarray(0.0, dtype=jnp.float32)
-        flip = state.player_vx < jnp.asarray(0.0, dtype=jnp.float32)
+        # Use facing_left for idle/jump sprites so Harry remembers direction
+        flip = jnp.where(moving, state.player_vx < 0.0, state.facing_left)
 
         run_idx = jnp.mod(frames_elapsed // jnp.int32(3), jnp.int32(5)).astype(jnp.int32)
-        climb_idx = jnp.mod(frames_elapsed // jnp.int32(8), jnp.int32(2)).astype(jnp.int32)
+        climb_idx = jnp.where(
+            state.climb_active,
+            jnp.mod(frames_elapsed // jnp.int32(8), jnp.int32(2)),
+            jnp.int32(0),
+        ).astype(jnp.int32)
         jump_idx = jnp.where(state.player_vy < jnp.asarray(0.0, dtype=jnp.float32), jnp.int32(0), jnp.int32(1))
 
         def _use_climb(_):
@@ -1841,10 +2109,42 @@ class PitfallRenderer(JAXGameRenderer):
                 flip_offset=flip_offset,
             )
 
+        # Save raster before Harry+logs for lip occlusion (lip only covers
+        # ladder area so logs outside the lip bbox are unaffected).
+        raster_base = raster
+
         raster = lax.cond(
             state.touching_wood,
             lambda r: _draw_harry(lax.cond(has_logs, _draw_logs, lambda rr: rr, r)),
             lambda r: lax.cond(has_logs, _draw_logs, lambda rr: rr, _draw_harry(r)),
+            raster,
+        )
+
+        underground_respawn_reveal = (
+            (state.respawn_phase == jnp.int32(2))
+            & (state.respawn_target_ground_y == jnp.asarray(self.consts.underground_y, dtype=jnp.float32))
+        )
+        reveal_y = jnp.int32(int(self.consts.ground_y + self.consts.underground_respawn_reveal_y_offset))
+
+        def _clip_underground_respawn(r: jnp.ndarray) -> jnp.ndarray:
+            H, W = r.shape
+            yy = jnp.arange(H, dtype=jnp.int32)[:, None]
+            xx = jnp.arange(W, dtype=jnp.int32)[None, :]
+            harry_w = jnp.int32(harry_mask.shape[1])
+            harry_x0 = state.player_x.astype(jnp.int32)
+            harry_x1 = harry_x0 + harry_w
+            hidden_mask = (
+                (xx >= harry_x0)
+                & (xx < harry_x1)
+                & (yy >= y_top)
+                & (yy < jnp.minimum(y_top + harry_h, reveal_y))
+            )
+            return jnp.where(hidden_mask, raster_base, r)
+
+        raster = lax.cond(
+            underground_respawn_reveal,
+            _clip_underground_respawn,
+            lambda r: r,
             raster,
         )
 
@@ -1861,6 +2161,38 @@ class PitfallRenderer(JAXGameRenderer):
             lambda r: r,
             raster,
         )
+
+        # Re-stamp logs into lip region so lip occlusion doesn't erase them
+        raster_base = lax.cond(has_logs, _draw_logs, lambda r: r, raster_base)
+
+        # Lip occlusion: restore backdrop pixels in a thin strip around the
+        # ladder/pit opening so ladder rungs appear in front of Harry.
+        lip_y0 = jnp.int32(int(self.consts.ground_y) - 4)
+        lip_y1 = jnp.int32(int(self.consts.ground_y) + 2)
+        has_any_ladder = has_simple_ladder | has_ladder_with_pits
+
+        # For simple ladder, lip covers just the ladder width.
+        # For ladder_with_pits, lip covers the full sprite.
+        lip_x0 = jnp.where(has_ladder_with_pits, lwp_x, ladder_x)
+        lip_x1 = jnp.where(
+            has_ladder_with_pits,
+            lwp_x + jnp.int32(self.LADDER_WITH_PITS_MASK.shape[1]),
+            ladder_x + jnp.int32(self.consts.ladder_width),
+        )
+        transparent_id = jnp.asarray(self.jr.TRANSPARENT_ID, dtype=raster.dtype)
+
+        def _apply_lip(r: jnp.ndarray) -> jnp.ndarray:
+            # For each pixel in the lip bbox, if the base raster (before Harry)
+            # is non-transparent, restore it on top of Harry.
+            H, W = r.shape
+            yy = jnp.arange(H, dtype=jnp.int32)[:, None]
+            xx = jnp.arange(W, dtype=jnp.int32)[None, :]
+            in_lip = (yy >= lip_y0) & (yy < lip_y1) & (xx >= lip_x0) & (xx < lip_x1)
+            base_not_transparent = raster_base != transparent_id
+            mask = in_lip & base_not_transparent
+            return jnp.where(mask, raster_base, r)
+
+        raster = lax.cond(has_any_ladder, _apply_lip, lambda r: r, raster)
 
         frame = self.jr.render_from_palette(raster, self.PALETTE)
 
