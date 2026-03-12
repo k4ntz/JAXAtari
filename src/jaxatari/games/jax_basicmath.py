@@ -466,9 +466,7 @@ class BasicMathRenderer(JAXGameRenderer):
         # Use injected config if provided, else default
         if config is None:
             self.config = render_utils.RendererConfig(
-                game_dimensions=(210, 160),
-                channels=3,
-                downscale=None
+                game_dimensions=(210, 160)
             )
         else:
             self.config = config
