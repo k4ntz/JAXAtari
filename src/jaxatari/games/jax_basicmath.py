@@ -158,11 +158,9 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         powers = 10 ** jnp.arange(length - 1, -1, -1)
         digits = (x // powers) % 10
 
-        # detect where number starts (first non-zero digit)
         started = jnp.cumsum(digits != 0) > 0
         digits = jnp.where(started, digits, -1)
 
-        # if x == 0 → all -1
         digits = jnp.where(jnp.equal(x, 0), jnp.full((length,), -1), digits)
 
         return digits
@@ -212,7 +210,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         inactive_time = jax.lax.cond(
             is_correct,
             lambda: jnp.array(60).astype(jnp.int32),
-            lambda: jnp.array(270).astype(jnp.int32)
+            lambda: jnp.array(120).astype(jnp.int32)
         )
 
         return BasicMathState(
@@ -229,40 +227,38 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         )
     
     def _change_value(self, state: BasicMathState, action: chex.Array) -> BasicMathState:
-        up = jnp.equal(action, Action.UP)
-        down = jnp.equal(action, Action.DOWN)
-
         arr = state.numArr
         value = arr[state.arrPos]
 
-        up_edge = jnp.logical_and(up, jnp.equal(value, 9))
-        up_add = jnp.logical_and(up, jnp.logical_not(up_edge))
+        up = jnp.equal(action, Action.UP)
+        down = jnp.equal(action, Action.DOWN)
 
-        value = jax.lax.cond(
-            up_edge,
-            lambda: -1,
-            lambda: value,
+        case = jnp.select(
+            [
+                jnp.logical_and(up, value == 9),
+                jnp.logical_and(up, value != 9),
+                jnp.logical_and(down, value == -1),
+                jnp.logical_and(down, value != -1),
+            ],
+            [
+                0,
+                1,
+                2,
+                3,
+            ],
+            default=4,
         )
 
-        value = jax.lax.cond(
-            up_add,
-            lambda: value + 1,
-            lambda: value,
-        )
+        def up_edge(v): return -1
+        def up_add(v): return v + 1
+        def down_edge(v): return 9
+        def down_add(v): return v - 1
+        def noop(v): return v
 
-        down_edge = jnp.logical_and(down, jnp.equal(value, -1))
-        down_add = jnp.logical_and(down, jnp.logical_not(down_edge))
-
-        value = jax.lax.cond(
-            down_edge,
-            lambda: 9,
-            lambda: value,
-        )
-
-        value = jax.lax.cond(
-            down_add,
-            lambda: value - 1,
-            lambda: value,
+        value = jax.lax.switch(
+            case,
+            (up_edge, up_add, down_edge, down_add, noop),
+            value
         )
 
         new_arr = arr.at[state.arrPos].set(value)
@@ -281,43 +277,42 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         )
     
     def _change_pos(self, state: BasicMathState, action: chex.Array) -> BasicMathState:
+        pos = state.arrPos
+
         left = jnp.equal(action, Action.LEFT)
         right = jnp.equal(action, Action.RIGHT)
 
-        player_pos = state.arrPos
-
-        on_left = jnp.logical_and(left, jnp.equal(state.arrPos, 0))
-        on_right = jnp.logical_and(right, jnp.equal(state.arrPos, 5))
-        move_left = jnp.logical_and(left, jnp.logical_not(on_left))
-        move_right = jnp.logical_and(right, jnp.logical_not(on_right))
-
-        player_pos = jax.lax.cond(
-            on_left,
-            lambda: 5,
-            lambda: player_pos,
+        case = jnp.select(
+            [
+                jnp.logical_and(left, pos == 0),
+                jnp.logical_and(right, pos == 5),
+                jnp.logical_and(left, pos != 0),
+                jnp.logical_and(right, pos != 5),
+            ],
+            [
+                0,
+                1,
+                2,
+                3,
+            ],
+            default=4,
         )
 
-        player_pos = jax.lax.cond(
-            on_right,
-            lambda: 0,
-            lambda: player_pos,
-        )
+        def wrap_left(p): return 5
+        def wrap_right(p): return 0
+        def move_left(p): return p - 1
+        def move_right(p): return p + 1
+        def noop(p): return p
 
-        player_pos = jax.lax.cond(
-            move_left,
-            lambda: player_pos - 1,
-            lambda: player_pos,
-        )
-
-        player_pos = jax.lax.cond(
-            move_right,
-            lambda: player_pos + 1,
-            lambda: player_pos,
+        pos = jax.lax.switch(
+            case,
+            (wrap_left, wrap_right, move_left, move_right, noop),
+            pos,
         )
 
         return BasicMathState(
             state.numArr,
-            player_pos,
+            pos,
             state.score,
             state.numberProb,
             state.problemNum1,
