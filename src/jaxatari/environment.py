@@ -33,6 +33,7 @@ class JAXAtariAction:
     UPLEFTFIRE: int = 15
     DOWNRIGHTFIRE: int = 16
     DOWNLEFTFIRE: int = 17
+    HAMMER: int = 18
 
     @classmethod
     def get_all_values(cls) -> jnp.ndarray:
@@ -41,7 +42,8 @@ class JAXAtariAction:
             cls.NOOP, cls.FIRE, cls.UP, cls.RIGHT, cls.LEFT, cls.DOWN,
             cls.UPRIGHT, cls.UPLEFT, cls.DOWNRIGHT, cls.DOWNLEFT,
             cls.UPFIRE, cls.RIGHTFIRE, cls.LEFTFIRE, cls.DOWNFIRE,
-            cls.UPRIGHTFIRE, cls.UPLEFTFIRE, cls.DOWNRIGHTFIRE, cls.DOWNLEFTFIRE
+            cls.UPRIGHTFIRE, cls.UPLEFTFIRE, cls.DOWNRIGHTFIRE, cls.DOWNLEFTFIRE,
+            cls.HAMMER
         ], dtype=jnp.int32)
 
 class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo, EnvConstants]):

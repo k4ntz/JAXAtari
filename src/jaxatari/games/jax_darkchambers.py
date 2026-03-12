@@ -165,6 +165,7 @@ ITEM_CAGE_DOOR = 14     # Door item that gates entry into the bonus cage
 ITEM_SPEED_POTION = 15  # Temporarily increases player movement speed (2x for 120 steps)
 ITEM_HEAL_POTION = 16   # Fully restores player health to MAX_HEALTH on pickup
 ITEM_POISON_POTION = 17 # Creates poison cloud that damages enemies in radius over time
+ITEM_HAMMER = 18        # Kills all enemies within radius; limited uses per episode
 
 # Level configuration
 MAX_LEVELS = 7          # Total number of levels (0..6)
@@ -177,6 +178,8 @@ MAX_BOMBS = 15          # Maximum bombs player can carry
 DOUBLE_TAP_WINDOW = 10  # Steps within which two fires count as double-tap
 FIRE_RATE_LIMIT = 1     # Minimum steps between shots (fire rate limiter)
 BOMB_RADIUS = 80        # Kill radius for bomb in pixels
+MAX_HAMMERS = 3         # Maximum hammers player can carry
+HAMMER_RADIUS = 100     # Kill radius for hammer in pixels
 
 # Default base size (unused now, kept for reference)
 ITEM_WIDTH = 6
@@ -357,6 +360,9 @@ class DarkChambersConstants(NamedTuple):
     # Base poison item spawn toggle (keeps poison logic intact, only disables spawning)
     ENABLE_DEFAULT_POISON_SPAWN: bool = False
 
+    HAMMER_COLOR: Tuple[int, int, int] = (148, 0, 211)  # Brown hammer
+    ENABLE_HAMMER_SPAWN: bool = True
+
 
 class DarkChambersState(NamedTuple):
     """Immutable snapshot of the current game state."""
@@ -391,6 +397,7 @@ class DarkChambersState(NamedTuple):
     shield_active: chex.Array   # 1=shield active, 0=no shield
     gun_active: chex.Array      # 1=gun active, 0=no gun
     bomb_count: chex.Array      # number of bombs (0-15)
+    hammer_count: chex.Array    # number of hammers (0-MAX_HAMMERS)
     last_fire_step: chex.Array  # step counter when fire was last pressed (for double-tap)
     
     current_level: chex.Array   # current level index (0 to MAX_LEVELS-1)
@@ -489,6 +496,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             'speed_potion_color': create_color_sprite(self.consts.SPEED_POTION_COLOR),
             'heal_potion_color': create_color_sprite(self.consts.HEAL_POTION_COLOR),
             'poison_potion_color': create_color_sprite(self.consts.POISON_POTION_COLOR),
+            'hammer_color': create_color_sprite(self.consts.HAMMER_COLOR),
         }
         
         # Append procedural color sprites to asset config
@@ -769,6 +777,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         self.SKELETON_ID = self.COLOR_TO_ID[self.consts.SKELETON_COLOR]
         self.WIZARD_ID = self.COLOR_TO_ID[self.consts.WIZARD_COLOR]
         self.GRIM_REAPER_ID = self.COLOR_TO_ID[self.consts.GRIM_REAPER_COLOR]
+        self.HAMMER_ID = self.COLOR_TO_ID[self.consts.HAMMER_COLOR]
 
         # Digit patterns (0-9) 3x5 bitmap (rows top->bottom, cols left->right)
         # 1 = pixel on, 0 = off
@@ -1444,6 +1453,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             [8, 8],                 # 15 SPEED_POTION (medium)
             [8, 8],                 # 16 HEAL_POTION (medium)
             [8, 8],                 # 17 POISON_POTION (medium)
+            [8, 8],                 # 18 HAMMER
         ], dtype=jnp.int32)
 
         # Color id mapping per item type (aligning with palette above)
@@ -1466,6 +1476,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             21,  # SPEED_POTION (orange)
             22,  # HEAL_POTION (magenta)
             23,  # POISON_POTION (green)
+            24,  # HAMMER (brown)
         ], dtype=jnp.int32)
         # Python constants for item type color IDs (indexed by item_type - 1)
         self.ITEM_TYPE_COLOR_IDS_PY = [
@@ -1486,6 +1497,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             self.COLOR_TO_ID[self.consts.SPEED_POTION_COLOR],   # 15: ITEM_SPEED_POTION
             self.COLOR_TO_ID[self.consts.HEAL_POTION_COLOR],    # 16: ITEM_HEAL_POTION
             self.COLOR_TO_ID[self.consts.POISON_POTION_COLOR],  # 17: ITEM_POISON_POTION
+            self.COLOR_TO_ID[self.consts.HAMMER_COLOR],         # 18: ITEM_HAMMER
         ]
     
     def render(self, state: DarkChambersState) -> jnp.ndarray:
@@ -1859,7 +1871,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         
         # Then render remaining items (treasures, powerups, etc.) as colored boxes
         # Skip types that now use sprites: HEART(1), POISON(2), TRAP(3), AMBER_CHALICE(5), AMULET(6), SHIELD(8), BOMB(10), KEY(11), LADDER_UP(12), LADDER_DOWN(13), CAGE_DOOR(14)
-        for t in [4, 7, 9, 15, 16, 17]:  # STRONGBOX(4), HOURGLASS(7), TORCH(9), SPEED_POTION(15), HEAL_POTION(16), POISON_POTION(17)
+        for t in [4, 7, 9, 15, 16, 17, 18]:  # STRONGBOX(4), HOURGLASS(7), TORCH(9), SPEED_POTION(15), HEAL_POTION(16), POISON_POTION(17), HAMMER(18)
             object_raster = draw_item_type(object_raster, t, masked_item_pos)
         
         # Spawners: render as large skulls (24x24)
@@ -2137,7 +2149,44 @@ class DarkChambersRenderer(JAXGameRenderer):
             sizes=bomb_digit_sizes,
             color_id=self.BOMB_ID
         )
-        
+
+        # Hammer indicator in HUD (shown next to bomb count when player has hammers)
+        hammer_has_any = state.hammer_count > 0
+        hammer_indicator_x = bomb_count_x + 12  # Fixed offset after bomb count area
+        hammer_indicator_pos = jnp.where(
+            hammer_has_any,
+            jnp.array([[hammer_indicator_x, indicator_y]], dtype=jnp.int32),
+            jnp.array([[-100, -100]], dtype=jnp.int32)
+        )
+        hammer_indicator_size = jnp.array([[ITEM_WIDTH, ITEM_HEIGHT]], dtype=jnp.int32)
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=hammer_indicator_pos,
+            sizes=hammer_indicator_size,
+            color_id=self.HAMMER_ID
+        )
+
+        # Hammer count digit
+        hammer_count_val_hud = jnp.clip(state.hammer_count, 0, MAX_HAMMERS).astype(jnp.int32)
+        h_digit_x = hammer_indicator_x + ITEM_WIDTH + 2
+        h_digit_y = indicator_y + 1
+        h_pattern = self.DIGIT_PATTERNS[hammer_count_val_hud]
+        h_xs = jnp.arange(3)
+        h_ys = jnp.arange(5)
+        h_px = h_digit_x + h_xs[None, :].repeat(5, axis=0)
+        h_py = h_digit_y + h_ys[:, None].repeat(3, axis=1)
+        h_active = (h_pattern == 1) & hammer_has_any
+        h_px = jnp.where(h_active, h_px, -100)
+        h_py = jnp.where(h_active, h_py, -100)
+        hammer_digit_positions = jnp.stack([h_px.reshape(-1), h_py.reshape(-1)], axis=1).astype(jnp.int32)
+        hammer_digit_sizes = jnp.ones((hammer_digit_positions.shape[0], 2), dtype=jnp.int32)
+        object_raster = self.jr.draw_rects(
+            object_raster,
+            positions=hammer_digit_positions,
+            sizes=hammer_digit_sizes,
+            color_id=self.HAMMER_ID
+        )
+
         # Convert to RGB
         img = self.jr.render_from_palette(object_raster, self.PALETTE)
         return img
@@ -2503,6 +2552,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             ITEM_SPEED_POTION,   # 2x speed for 120 steps -> orange box
             ITEM_HEAL_POTION,    # restore to max health -> magenta box
             ITEM_POISON_POTION,  # create poison cloud -> green box
+            ITEM_HAMMER,         # kills all in radius -> brown box
         ], dtype=jnp.int32)
         # Probabilities for regular items; potion spawns are mod-gated (default off)
         spawn_probs = jnp.array([
@@ -2517,6 +2567,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             0.08 if self.consts.ENABLE_SPEED_POTION_SPAWN else 0.0,   # speed potion
             0.08 if self.consts.ENABLE_HEAL_POTION_SPAWN else 0.0,     # heal potion
             0.07 if self.consts.ENABLE_POISON_POTION_SPAWN else 0.0,   # poison potion
+            0.06 if self.consts.ENABLE_HAMMER_SPAWN else 0.0,          # hammer
         ], dtype=jnp.float32)
         spawn_probs = spawn_probs / jnp.sum(spawn_probs)
         # Spawn regular items (leave first 5 for key, ladders, cage contents)
@@ -2530,6 +2581,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             ((item_types == ITEM_SPEED_POTION) & (~jnp.array(self.consts.ENABLE_SPEED_POTION_SPAWN)))
             | ((item_types == ITEM_HEAL_POTION) & (~jnp.array(self.consts.ENABLE_HEAL_POTION_SPAWN)))
             | ((item_types == ITEM_POISON_POTION) & (~jnp.array(self.consts.ENABLE_POISON_POTION_SPAWN)))
+            | ((item_types == ITEM_HAMMER) & (~jnp.array(self.consts.ENABLE_HAMMER_SPAWN)))
         )
         item_types = jnp.where(disallowed_potions, ITEM_HEART, item_types)
         item_active = jnp.ones(NUM_ITEMS, dtype=jnp.int32)
@@ -2606,6 +2658,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             shield_active=jnp.array(0, dtype=jnp.int32),
             gun_active=jnp.array(0, dtype=jnp.int32),
             bomb_count=jnp.array(0, dtype=jnp.int32),
+            hammer_count=jnp.array(0, dtype=jnp.int32),
             last_fire_step=jnp.array(-1000, dtype=jnp.int32),  # Initialize to far past
             current_level=jnp.array(0, dtype=jnp.int32),  # Start at level 0
             map_index=jnp.array(0, dtype=jnp.int32),  # Start at middle map
@@ -2885,6 +2938,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             steps_since_last_fire = state.step_counter - state.last_fire_step
             is_double_tap = fire_pressed & (steps_since_last_fire <= DOUBLE_TAP_WINDOW) & (steps_since_last_fire > 0)
             has_bombs = state.bomb_count > 0
+            has_hammer = state.hammer_count > 0
+            # Hammer: activated by dedicated H key (Action.HAMMER)
+            should_use_hammer = (a == Action.HAMMER) & has_hammer
             should_detonate_bomb = is_double_tap & has_bombs
             
             # Update last_fire_step when fire is pressed
@@ -3394,6 +3450,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             collected_shields = jnp.any(item_collisions & (state.item_types == ITEM_SHIELD))
             collected_guns = jnp.any(item_collisions & (state.item_types == ITEM_GUN))
             collected_bombs = jnp.sum(item_collisions & (state.item_types == ITEM_BOMB))
+            collected_hammers = jnp.sum(item_collisions & (state.item_types == ITEM_HAMMER))
             collected_keys = jnp.any(item_collisions & (state.item_types == ITEM_KEY))
             # Health change mapping: heart +HEALTH_GAIN, poison -POISON_DAMAGE, trap -TRAP_DAMAGE
             health_change = (
@@ -3422,7 +3479,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             
             # Update bomb count (capped at MAX_BOMBS)
             new_bomb_count = jnp.clip(state.bomb_count + collected_bombs, 0, MAX_BOMBS)
-            
+
+            # Update hammer count (capped at MAX_HAMMERS)
+            new_hammer_count = jnp.clip(state.hammer_count + collected_hammers, 0, MAX_HAMMERS)
+
             # Ladder interaction: check if player is standing on a ladder
             on_ladder_up = jnp.any(item_collisions & (state.item_types == ITEM_LADDER_UP))
             on_ladder_down = jnp.any(item_collisions & (state.item_types == ITEM_LADDER_DOWN))
@@ -3466,6 +3526,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 0,                    # 12 LADDER_UP
                 0,                    # 13 LADDER_DOWN
                 0,                    # 14 CAGE_DOOR (no points)
+                0,                    # 15 SPEED_POTION
+                0,                    # 16 HEAL_POTION
+                0,                    # 17 POISON_POTION
+                0,                    # 18 HAMMER
             ], dtype=jnp.int32)
             item_points = points_by_type[state.item_types]
             gained_points = jnp.sum(item_points * item_collisions.astype(jnp.int32))
@@ -3515,8 +3579,12 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             distance_sq = dx * dx + dy * dy
             within_radius = distance_sq <= (BOMB_RADIUS * BOMB_RADIUS)
             bomb_kills_enemies = should_detonate_bomb & within_radius & (state.enemy_active == 1)
-            
-            enemy_hit = enemy_hit | bomb_kills_enemies
+
+            # Hammer detonation: instantly kill all enemies within HAMMER_RADIUS
+            within_hammer_radius = distance_sq <= (HAMMER_RADIUS * HAMMER_RADIUS)
+            hammer_kills_enemies = should_use_hammer & within_hammer_radius & (state.enemy_active == 1)
+
+            enemy_hit = enemy_hit | bomb_kills_enemies | hammer_kills_enemies
             
             # Poison cloud damage: apply gradual damage to enemies within radius
             # Only apply poison damage if cloud timer is active AND on damage interval (every 30 steps)
@@ -3538,10 +3606,13 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             
             # Reduce bomb count when detonated
             bomb_count_after_detonation = jnp.where(should_detonate_bomb, new_bomb_count - 1, new_bomb_count)
-            
+
+            # Reduce hammer count when used
+            hammer_count_after_use = jnp.where(should_use_hammer, new_hammer_count - 1, new_hammer_count)
+
             # Enemy mutation system: when hit, enemy mutates to weaker form
-            # Bomb instantly kills (set type to 0), poison and regular hits decrement type by 1
-            instant_kills = bomb_kills_enemies
+            # Bomb/hammer instantly kill (set type to 0), poison and regular hits decrement type by 1
+            instant_kills = bomb_kills_enemies | hammer_kills_enemies
             new_enemy_types = jnp.where(instant_kills, 0, 
                               jnp.where(enemy_hit & (~instant_kills), state.enemy_types - 1, state.enemy_types))
             
@@ -4005,7 +4076,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                     ITEM_HEART, ITEM_POISON, ITEM_TRAP,
                     ITEM_AMBER_CHALICE, ITEM_AMULET,
                     ITEM_SHIELD, ITEM_GUN, ITEM_BOMB,
-                    ITEM_SPEED_POTION, ITEM_HEAL_POTION, ITEM_POISON_POTION
+                    ITEM_SPEED_POTION, ITEM_HEAL_POTION, ITEM_POISON_POTION,
+                    ITEM_HAMMER,
                 ], dtype=jnp.int32)
                 spawn_probs = jnp.array([
                     0.18,
@@ -4019,6 +4091,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                     0.08 if self.consts.ENABLE_SPEED_POTION_SPAWN else 0.0,
                     0.08 if self.consts.ENABLE_HEAL_POTION_SPAWN else 0.0,
                     0.07 if self.consts.ENABLE_POISON_POTION_SPAWN else 0.0,
+                    0.06 if self.consts.ENABLE_HAMMER_SPAWN else 0.0,
                 ], dtype=jnp.float32)
                 spawn_probs = spawn_probs / jnp.sum(spawn_probs)
                 regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 5,), p=spawn_probs)
@@ -4043,6 +4116,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 ((transition_item_types == ITEM_SPEED_POTION) & (~jnp.array(self.consts.ENABLE_SPEED_POTION_SPAWN)))
                 | ((transition_item_types == ITEM_HEAL_POTION) & (~jnp.array(self.consts.ENABLE_HEAL_POTION_SPAWN)))
                 | ((transition_item_types == ITEM_POISON_POTION) & (~jnp.array(self.consts.ENABLE_POISON_POTION_SPAWN)))
+                | ((transition_item_types == ITEM_HAMMER) & (~jnp.array(self.consts.ENABLE_HAMMER_SPAWN)))
             )
             transition_item_types = jnp.where(disallowed_potions, ITEM_HEART, transition_item_types)
             
@@ -4319,6 +4393,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 shield_active=new_shield_active,
                 gun_active=new_gun_active,
                 bomb_count=bomb_count_after_detonation,
+                hammer_count=hammer_count_after_use,
                 last_fire_step=new_last_fire_step,
                 current_level=new_level,
                 map_index=new_map_index,
@@ -4355,7 +4430,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         return self.renderer.render(state)
     
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(18)
+        return spaces.Discrete(19)
     
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
