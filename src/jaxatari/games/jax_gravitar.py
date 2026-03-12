@@ -329,19 +329,19 @@ TERRANT_SCALE_OVERRIDES = {
 LEVEL_LAYOUTS = {
     # Level 0 (Planet 1)
     0: [
-        {'type': SpriteIdx.ENEMY_ORANGE, 'coords': (37, 44)},  # 158
-        {'type': SpriteIdx.ENEMY_ORANGE, 'coords': (82, 32)},  # 146     114
-        {'type': SpriteIdx.ENEMY_ORANGE, 'coords': (152, -3)},  # 112
+        {'type': SpriteIdx.ENEMY_ORANGE, 'coords': (37, 43)},
+        {'type': SpriteIdx.ENEMY_ORANGE, 'coords': (82, 31)},
+        {'type': SpriteIdx.ENEMY_ORANGE, 'coords': (152, -3)},
         {'type': SpriteIdx.ENEMY_GREEN, 'coords': (22, 71)},
-        {'type': SpriteIdx.FUEL_TANK, 'coords': (104, 60)},  # 174 114
+        {'type': SpriteIdx.FUEL_TANK, 'coords': (104, 59)},
     ],
     # Level 1 (Planet 2)
     1: [
-        {'type': SpriteIdx.ENEMY_ORANGE, 'coords': (92 + 32, 16)},
-        {'type': SpriteIdx.ENEMY_ORANGE_FLIPPED, 'coords': (51 + 32, 78)},
-        {'type': SpriteIdx.ENEMY_ORANGE_FLIPPED, 'coords': (8 + 32, 39)},
-        {'type': SpriteIdx.ENEMY_GREEN, 'coords': (12 + 32, 58)},
-        {'type': SpriteIdx.FUEL_TANK, 'coords': (29 + 32, -1)},
+        {'type': SpriteIdx.ENEMY_ORANGE, 'coords': (124, 18)},
+        {'type': SpriteIdx.ENEMY_ORANGE_FLIPPED, 'coords': (83, 78)},
+        {'type': SpriteIdx.ENEMY_ORANGE_FLIPPED, 'coords': (40, 38)},
+        {'type': SpriteIdx.ENEMY_GREEN, 'coords': (44, 58)},
+        {'type': SpriteIdx.FUEL_TANK, 'coords': (61, -2)},
     ],
     # Level 2 (Planet 3)
     2: [
@@ -353,22 +353,22 @@ LEVEL_LAYOUTS = {
     ],
     # Level 3 (Planet 4)
     3: [
-        {'type': SpriteIdx.ENEMY_ORANGE, 'coords': (88, 93 - 114 + 48)},
-        {'type': SpriteIdx.ENEMY_ORANGE_FLIPPED, 'coords': (116, 73 - 114 + 51)},
-        {'type': SpriteIdx.ENEMY_ORANGE, 'coords': (122, 180 - 114 + 47)},
-        {'type': SpriteIdx.ENEMY_GREEN, 'coords': (76, 126 - 114 + 47)},
-        {'type': SpriteIdx.FUEL_TANK, 'coords': (19, 162 - 114 + 47)},
+        {'type': SpriteIdx.ENEMY_ORANGE, 'coords': (88, 27)},
+        {'type': SpriteIdx.ENEMY_ORANGE_FLIPPED, 'coords': (116, 11)},
+        {'type': SpriteIdx.ENEMY_ORANGE, 'coords': (122, 113)},
+        {'type': SpriteIdx.ENEMY_GREEN, 'coords': (76, 59)},
+        {'type': SpriteIdx.FUEL_TANK, 'coords': (19, 95)},
     ],
     # Level 4 (Reactor)
     4: [],
 }
 
 LEVEL_OFFSETS = {
-    0: (0, 30),
-    1: (0, 0),
-    2: (0, 30),
-    3: (0, 30),
-    4: (0, 0),
+    0: (0, 50),
+    1: (0, 7),
+    2: (0, 44),
+    3: (0, 26),
+    4: (0, 14),
 }
 
 SPRITE_TO_LEVEL_ID = {
@@ -1178,9 +1178,11 @@ def ship_step(state: ShipState,
     is_thrusting_now = jnp.isin(action, thrust_actions) & (fuel > 0.0)
     
     # --- Physics Parameters ---
-    thrust_power = 0.2 / WORLD_SCALE  # Increased from 0.03 to better overcome gravity
-    gravity = 0.05 / WORLD_SCALE
-    max_speed = 3.0 / WORLD_SCALE
+    THRUST_POWER = 0.038 / WORLD_SCALE  # Increased from 0.03 to better overcome gravity
+    SOLAR_GRAVITY = 0.044 / WORLD_SCALE
+    PLANETARY_GRAVITY = 0.003 / WORLD_SCALE
+    REACTOR_GRAVITY = 0.0001 / WORLD_SCALE
+    MAX_SPEED = 3.0 / WORLD_SCALE
 
     # 0.0 = full stop on collision (inelastic)
     # 1.0 = perfect bounce (elastic)
@@ -1192,7 +1194,7 @@ def ship_step(state: ShipState,
     vy = state.vy
 
     # --- 2. Rotation Logic (Discrete 12-angle system) ---
-    rotation_cooldown_frames = 3  # Frames between rotations (adjust for desired rotation speed)
+    rotation_cooldown_frames = 5  # Frames between rotations (adjust for desired rotation speed)
     
     rotate_right_actions = jnp.array([3, 6, 8, 11, 14, 16])
     rotate_left_actions = jnp.array([4, 7, 9, 12, 15, 17])
@@ -1233,19 +1235,23 @@ def ship_step(state: ShipState,
     can_thrust = fuel > 0.0
 
     # Forward thrust (vector addition), controlled by the UP key
-    vx = jnp.where(thrust_pressed & can_thrust, vx + jnp.cos(angle) * thrust_power, vx)
-    vy = jnp.where(thrust_pressed & can_thrust, vy + jnp.sin(angle) * thrust_power, vy)
+    vx = jnp.where(thrust_pressed & can_thrust, vx + jnp.cos(angle) * THRUST_POWER, vx)
+    vy = jnp.where(thrust_pressed & can_thrust, vy + jnp.sin(angle) * THRUST_POWER, vy)
 
     # Reverse thrust (vector subtraction), controlled by the DOWN key
-    vx = jnp.where(down_pressed & can_thrust, vx - jnp.cos(angle) * thrust_power, vx)
-    vy = jnp.where(down_pressed & can_thrust, vy - jnp.sin(angle) * thrust_power, vy)
+    vx = jnp.where(down_pressed & can_thrust, vx - jnp.cos(angle) * THRUST_POWER, vx)
+    vy = jnp.where(down_pressed & can_thrust, vy - jnp.sin(angle) * THRUST_POWER, vy)
 
     # Apply gravity based on mode and terrain
     # Map mode (terrain_bank_idx == 0): pull toward sun
-    # Terrant2 (bank_idx == 2): pull toward center (radial gravity)
+    # Terrant2 (bank_idx == 2) and Reactor (bank_idx == 5): pull toward center (radial gravity)
     # Other planets: pull downward
     is_map_mode = (terrain_bank_idx == 0)
-    is_terrant2 = (terrain_bank_idx == 2)
+    is_planet = (terrain_bank_idx == 1) | (terrain_bank_idx == 2) | (terrain_bank_idx == 3) | (terrain_bank_idx == 4)
+    is_reactor = (terrain_bank_idx == 5)
+    is_central_gravity = (terrain_bank_idx == 2) | (terrain_bank_idx == 5)
+
+    gravity = jnp.where(is_map_mode, SOLAR_GRAVITY, jnp.where(is_planet, PLANETARY_GRAVITY, REACTOR_GRAVITY))
     
     # Sun position (the OBSTACLE sprite) - ALE center coordinates: (82, 86)
     sun_x = 82.0
@@ -1258,7 +1264,7 @@ def ship_step(state: ShipState,
     dist_to_sun = jnp.maximum(dist_to_sun, 1.0)  # Avoid division by zero
     
     # Gravity magnitude (stronger when closer to sun)
-    gravity_strength = gravity * (2.0 / dist_to_sun)  # Inverse distance law
+    gravity_strength = gravity * (3.2 / dist_to_sun)  # Inverse distance law
     gravity_strength = jnp.clip(gravity_strength, 0.0, gravity * 5.0)  # Cap maximum gravity
     
     # Level center for terrant2's radial gravity
@@ -1281,12 +1287,12 @@ def ship_step(state: ShipState,
     # Other planets: downward only
     vx = jnp.where(is_map_mode, 
                    vx + (dx_to_sun / dist_to_sun) * gravity_strength,
-                   jnp.where(is_terrant2,
+                   jnp.where(is_central_gravity,
                             vx + (dx_to_center / dist_to_center) * radial_gravity_strength,
                             vx))
     vy = jnp.where(is_map_mode,
                    vy + (dy_to_sun / dist_to_sun) * gravity_strength,
-                   jnp.where(is_terrant2,
+                   jnp.where(is_central_gravity,
                             vy + (dy_to_center / dist_to_center) * radial_gravity_strength,
                             vy + gravity))
 
@@ -1304,7 +1310,7 @@ def ship_step(state: ShipState,
     def cap_velocity(v_tuple):
         v_x, v_y, spd_sq = v_tuple
         speed = jnp.sqrt(spd_sq)
-        scale = max_speed / speed
+        scale = MAX_SPEED / speed
 
         return v_x * scale, v_y * scale
 
@@ -1312,7 +1318,7 @@ def ship_step(state: ShipState,
         return v_tuple[0], v_tuple[1]
 
     vx, vy = jax.lax.cond(
-        speed_sq > max_speed ** 2,
+        speed_sq > MAX_SPEED ** 2,
         cap_velocity,
         no_op,
         (vx, vy, speed_sq)
@@ -1718,8 +1724,8 @@ def step_map(env_state: EnvState, action: int):
     is_thrusting = jnp.isin(actual_action, thrust_actions)
     is_using_shield_tractor = jnp.isin(actual_action, shield_tractor_actions)
     
-    FUEL_CONSUME_THRUST = 1.0
-    FUEL_CONSUME_SHIELD_TRACTOR = 1.5
+    FUEL_CONSUME_THRUST = 4.0
+    FUEL_CONSUME_SHIELD_TRACTOR = 10.0
     
     fuel_consumed = jnp.where(is_thrusting, FUEL_CONSUME_THRUST, 0.0)
     fuel_consumed += jnp.where(is_using_shield_tractor, FUEL_CONSUME_SHIELD_TRACTOR, 0.0)
@@ -1979,8 +1985,8 @@ def _step_level_core(env_state: EnvState, action: int):
     is_thrusting = jnp.isin(actual_action, thrust_actions)
     is_using_shield_tractor = jnp.isin(actual_action, shield_tractor_actions)
 
-    FUEL_CONSUME_THRUST = 1.0 
-    FUEL_CONSUME_SHIELD_TRACTOR = 1.5
+    FUEL_CONSUME_THRUST = 4.0 
+    FUEL_CONSUME_SHIELD_TRACTOR = 10.0
     
     fuel_consumed = jnp.where(is_thrusting, FUEL_CONSUME_THRUST, 0.0)
     fuel_consumed += jnp.where(is_using_shield_tractor, FUEL_CONSUME_SHIELD_TRACTOR, 0.0)
@@ -2356,7 +2362,7 @@ def step_arena(env_state: EnvState, action: int):
     # --- Calculate fuel consumption ---
     thrust_actions = jnp.array([2, 6, 7, 10, 14, 15])
     is_thrusting = jnp.isin(action, thrust_actions)
-    FUEL_CONSUME_THRUST = 1.0
+    FUEL_CONSUME_THRUST = 4.0
     fuel_consumed = jnp.where(is_thrusting, FUEL_CONSUME_THRUST, 0.0)
     fuel_after_actions = jnp.maximum(0.0, env_state.fuel - fuel_consumed)
 
@@ -3073,8 +3079,8 @@ class JaxGravitar(JaxEnvironment):
         ship_state = ShipState(
             x=spawn_x,
             y=spawn_y,
-            vx=jnp.array(jnp.cos(-jnp.pi / 4) * 0.06, dtype=jnp.float32),
-            vy=jnp.array(jnp.sin(-jnp.pi / 4) * 0.04, dtype=jnp.float32),
+            vx=jnp.array(jnp.cos(-jnp.pi / 4) * 0.075, dtype=jnp.float32),
+            vy=jnp.array(jnp.sin(-jnp.pi / 4) * 0.02, dtype=jnp.float32),
             angle=jnp.array(-jnp.pi / 2, dtype=jnp.float32),
             is_thrusting=jnp.array(False),
             rotation_cooldown=jnp.int32(0)
