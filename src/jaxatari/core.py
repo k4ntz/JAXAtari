@@ -13,6 +13,7 @@ GAME_MODULES = {
     "asterix": "jaxatari.games.jax_asterix",
     "asteroids": "jaxatari.games.jax_asteroids",
     "atlantis": "jaxatari.games.jax_atlantis",
+    "basicmath": "jaxatari.games.jax_basicmath",
     "bankheist": "jaxatari.games.jax_bankheist",
     "berzerk": "jaxatari.games.jax_berzerk",
     "blackjack": "jaxatari.games.jax_blackjack",
@@ -60,6 +61,7 @@ MOD_MODULES = {
     "freeway": "jaxatari.games.mods.freeway_mods.FreewayEnvMod",
     "breakout": "jaxatari.games.mods.breakout_mods.BreakoutEnvMod",
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
+    "basicmath": "jaxatari.games.mods.basicmath_mods.BasicMathEnvMod",
 }
 
 
