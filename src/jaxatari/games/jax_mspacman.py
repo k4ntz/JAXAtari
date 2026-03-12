@@ -1153,7 +1153,7 @@ class JaxMsPacman(JaxEnvironment[MsPacmanState, MsPacmanObservation, MsPacmanInf
             new_y = jnp.clip(gy + best_dir[1], 0, self.consts.grid_height - 1)
 
             # Check if new position is blocked
-            new_blocked = self.ghost_wall_grid[new_y, new_x] == 1
+            new_blocked = ghost_wall_grid[new_y, new_x] == 1
             new_x = jnp.where(new_blocked, gx, new_x)
             new_y = jnp.where(new_blocked, gy, new_y)
             best_dir = jnp.where(new_blocked, jnp.array([0, 0], dtype=jnp.int32), best_dir)
