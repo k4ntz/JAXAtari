@@ -1,10 +1,11 @@
 import os
 from functools import partial
-from typing import NamedTuple, Tuple
+from typing import Tuple
 import jax
 import jax.lax
 import jax.numpy as jnp
 import chex
+from flax import struct
 
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
@@ -28,7 +29,7 @@ def _get_default_asset_config() -> tuple:
         {'name': 'underscore', 'type': 'group', 'files': underscore_files}
     )
 
-class BasicMathConstants(NamedTuple):
+class BasicMathConstants(struct.PyTreeNode):
     SCREEN_WIDTH: int = 160
     SCREEN_HEIGHT: int = 210
 
@@ -56,7 +57,7 @@ class BasicMathConstants(NamedTuple):
 
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
-class BasicMathState(NamedTuple):
+class BasicMathState(struct.PyTreeNode):
     numArr: chex.Array
     arrPos: chex.Array
     score: chex.Array
@@ -68,14 +69,14 @@ class BasicMathState(NamedTuple):
     key: chex.PRNGKey
     step_counter: chex.PRNGKey
 
-class BasicMathObservation(NamedTuple):
+class BasicMathObservation(struct.PyTreeNode):
     x: jnp.ndarray
     y: jnp.ndarray
     problemNum1: jnp.ndarray
     problemNum2: jnp.ndarray
     numArr: jnp.ndarray
 
-class BasicMathInfo(NamedTuple):
+class BasicMathInfo(struct.PyTreeNode):
     score: chex.Array
     round: chex.Array
 
