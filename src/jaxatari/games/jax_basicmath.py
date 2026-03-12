@@ -71,8 +71,6 @@ class BasicMathState(NamedTuple):
 class BasicMathObservation(NamedTuple):
     x: jnp.ndarray
     y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
     problemNum1: jnp.ndarray
     problemNum2: jnp.ndarray
     numArr: jnp.ndarray
@@ -109,8 +107,6 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         return spaces.Dict({
                     "x": spaces.Box(low=0.0, high=160.0, shape=(1,), dtype=jnp.float32),
                     "y": spaces.Box(low=0.0, high=210.0, shape=(1,), dtype=jnp.float32),
-                    "width": spaces.Box(low=0.0, high=160.0, shape=(1,), dtype=jnp.float32),
-                    "height": spaces.Box(low=0.0, high=210.0, shape=(1,), dtype=jnp.float32),
                     "problemNum1": spaces.Box(low=0.0, high=10.0, shape=(1,), dtype=jnp.float32),
                     "problemNum2": spaces.Box(low=0.0, high=10.0, shape=(1,), dtype=jnp.float32),
                     "numArr": spaces.Box(
@@ -127,8 +123,6 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             jnp.array([
                 obs.x.flatten().astype(jnp.float32),
                 obs.y.flatten().astype(jnp.float32),
-                obs.width.flatten().astype(jnp.float32),
-                obs.height.flatten().astype(jnp.float32),
                 obs.problemNum1.flatten().astype(jnp.float32),
                 obs.problemNum2.flatten().astype(jnp.float32),
             ]),
@@ -149,8 +143,6 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         return BasicMathObservation(
             x=jnp.array([35.0 + state.arrPos * 15.0], dtype=jnp.float32),
             y=jnp.array([float(self.consts.bar0[1])], dtype=jnp.float32),
-            width=jnp.array([20.0], dtype=jnp.float32),
-            height=jnp.array([2.0], dtype=jnp.float32),
             problemNum1=jnp.array([state.problemNum1], dtype=jnp.float32).reshape((1,)), 
             problemNum2=jnp.array([state.problemNum2], dtype=jnp.float32).reshape((1,)),
             numArr=state.numArr.astype(jnp.float32)
@@ -467,12 +459,20 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         return obs, new_state, reward, done, info
 
 class BasicMathRenderer(JAXGameRenderer):
-    def __init__(self, consts: BasicMathConstants = None):
-        super().__init__()
+    def __init__(self, consts: BasicMathConstants = None, config: render_utils.RendererConfig = None):
+        super().__init__(consts)
         self.consts = consts or BasicMathConstants()
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
-        )
+
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(210, 160),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
+        
         self.jr = render_utils.JaxRenderingUtils(self.config)
         self.chosenGamemode = (self.consts.GAMEMODE - 1) % 4
 
