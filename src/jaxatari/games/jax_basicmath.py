@@ -1,3 +1,4 @@
+import random
 import os
 from functools import partial
 from typing import Tuple
@@ -45,6 +46,7 @@ class BasicMathConstants(struct.PyTreeNode):
 
     X_OFFSET: int = 47
     Y_OFFSET: int = 35
+    BAR_OFFSET: int = 31
     num0 = (X_OFFSET + 20, Y_OFFSET + 20)
     num1 = (num0[0], num0[1] + 40)
     num2 = (num1[0], num1[1] + 40)
@@ -52,8 +54,10 @@ class BasicMathConstants(struct.PyTreeNode):
     bar1 = (X_OFFSET, num1[1] + 30)
     symbol = (X_OFFSET + 5, num1[1])
 
-    INITIAL_NUMARR = chex.Array = jnp.array([-1, -1, -1, -1, -1, -1], dtype=jnp.int32)
-    DIFFICULTY_TIMES = chex.Array = jnp.array([-1, 180, 360, 720], dtype=jnp.int32)
+    problemNumLen = 1
+    numArrLen = 6 + 2 * (problemNumLen - 1)
+
+    DIFFICULTY_TIMES = jnp.array([-1, 180, 360, 720], dtype=jnp.int32)
 
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
@@ -169,7 +173,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         key, k1 = jax.random.split(state.key)
         key, k2 = jax.random.split(key)
 
-        x = jax.random.randint(k1, shape=(), minval=1, maxval=10)
+        x = jax.random.randint(k1, shape=(), minval=1, maxval=10**self.consts.problemNumLen)
 
         y = jax.lax.cond(
             jnp.logical_or(gameMode == 1, gameMode == 3),
@@ -181,6 +185,8 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         return x, y, key
     
     def _evaluate_issue(self, state: BasicMathState, gameMode: int) -> BasicMathState:
+        midNumArr = self.consts.numArrLen // 2
+
         ops = [
             lambda a, b: (a + b, 0),
             lambda a, b: (a - b, 0),
@@ -190,8 +196,8 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         result = ops[gameMode](state.problemNum1, state.problemNum2)
 
-        a, b = state.numArr[:3], state.numArr[3:]
-        res_a, res_b = self._int_to_fixed_digits(result[0], 3), self._int_to_fixed_digits(result[1], 3)
+        a, b = state.numArr[:midNumArr], state.numArr[midNumArr:]
+        res_a, res_b = self._int_to_fixed_digits(result[0], midNumArr), self._int_to_fixed_digits(result[1], midNumArr)
         is_correct = jax.lax.cond(
             gameMode == 3,
             lambda: jnp.logical_and(
@@ -277,6 +283,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         )
     
     def _change_pos(self, state: BasicMathState, action: chex.Array) -> BasicMathState:
+        end = self.consts.numArrLen - 1
         pos = state.arrPos
 
         left = jnp.equal(action, Action.LEFT)
@@ -285,9 +292,9 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         case = jnp.select(
             [
                 jnp.logical_and(left, pos == 0),
-                jnp.logical_and(right, pos == 5),
+                jnp.logical_and(right, pos == end),
                 jnp.logical_and(left, pos != 0),
-                jnp.logical_and(right, pos != 5),
+                jnp.logical_and(right, pos != end),
             ],
             [
                 0,
@@ -298,7 +305,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             default=4,
         )
 
-        def wrap_left(p): return 5
+        def wrap_left(p): return end
         def wrap_right(p): return 0
         def move_left(p): return p - 1
         def move_right(p): return p + 1
@@ -326,9 +333,9 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
     def render(self, state: BasicMathState) -> jnp.ndarray:
         return self.renderer.render(state)
     
-    def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[BasicMathObservation, BasicMathState]:
+    def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(random.randint(0, 1000))) -> Tuple[BasicMathObservation, BasicMathState]:
         state = BasicMathState(
-            self.consts.INITIAL_NUMARR,
+            jnp.full((self.consts.numArrLen,), -1, dtype=jnp.int32),
             arrPos= jnp.array(2).astype(jnp.int32),
             score= jnp.array(0).astype(jnp.int32),
             numberProb= jnp.array(0).astype(jnp.int32),
@@ -418,7 +425,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         arr = jax.lax.cond(
             reset, 
-            lambda: self.consts.INITIAL_NUMARR, 
+            lambda: jnp.full((self.consts.numArrLen,), -1, dtype=jnp.int32), 
             lambda: state.numArr
         )
 
@@ -502,15 +509,15 @@ class BasicMathRenderer(JAXGameRenderer):
 
         raster = jax.lax.cond(
             jnp.logical_and(jnp.less(state.step_counter % 150, 120), jnp.equal(state.inactive, 0)),
-            lambda: self.jr.render_at(raster, (31  + state.arrPos * 15), self.consts.bar0[1], underscore_mask[0]),
+            lambda: self.jr.render_at(raster, (self.consts.BAR_OFFSET  + state.arrPos * 15), self.consts.bar0[1], underscore_mask[0]),
             lambda: raster
         )
         raster = self.jr.render_at(raster, *self.consts.bar1, underscore_mask[1])
         raster = self.jr.render_at(raster, *self.consts.symbol, symbol[self.chosenGamemode])
         digit_masks = self._stack_num_masks()
 
-        digit0 = self.jr.int_to_digits(state.problemNum1, max_digits=1)
-        digit1 = self.jr.int_to_digits(state.problemNum2, max_digits=1)
+        digit0 = self.jr.int_to_digits(state.problemNum1, max_digits=self.consts.problemNumLen)
+        digit1 = self.jr.int_to_digits(state.problemNum2, max_digits=self.consts.problemNumLen)
         
         raster = self.jr.render_label_selective(raster, *self.consts.num0, digit0, digit_masks, 0, state.problemNum1, spacing=0)
         raster = self.jr.render_label_selective(raster, *self.consts.num1, digit1, digit_masks, 0, state.problemNum2, spacing=0)
@@ -522,12 +529,12 @@ class BasicMathRenderer(JAXGameRenderer):
             is_active = num != -1
             
             return jax.lax.cond(is_active, 
-                                lambda ras: self.jr.render_label_selective(ras, 35 + i * 15, self.consts.num2[1], digit, digit_masks, 0, 1, spacing=0),
+                                lambda ras: self.jr.render_label_selective(ras, self.consts.Y_OFFSET + i * 15, self.consts.num2[1], digit, digit_masks, 0, 1, spacing=0),
                                 lambda ras: ras, 
                                 r)
         raster = jax.lax.cond(
             jnp.less(state.inactive % 90, 60),
-            lambda: jax.lax.fori_loop(0, 6, render_nums, raster),
+            lambda: jax.lax.fori_loop(0, self.consts.numArrLen, render_nums, raster),
             lambda: raster
         )
 
