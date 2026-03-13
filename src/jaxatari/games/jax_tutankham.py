@@ -114,10 +114,6 @@ class TutankhamConstants(NamedTuple):
     LASER_FLASH_COOLDOWN: int = 60  # frames
 
     # Creature constants -------------------------------------
-    CREATURE_SIZE: chex.Array = jnp.array([10, 10], dtype=jnp.int32)
-
-    INACTIVE: int = 0
-    ACTIVE: int = 1
 
     # Creature Types
     SNAKE: int = 0
@@ -133,15 +129,19 @@ class TutankhamConstants(NamedTuple):
     MYSTERY: int = 10
     WEAPON: int = 11
 
+    CREATURE_SIZE: chex.Array = jnp.array([10, 10], dtype=jnp.int32)
+
+    INACTIVE: int = 0
+    ACTIVE: int = 1
+
     CREATURE_SPEED: chex.Array = jnp.array([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
                                            dtype=jnp.int32)  # speed for each creature type
     CREATURE_POINTS: chex.Array = jnp.array([1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 0, 3],
-                                            dtype=jnp.int32)  # points for each creature type
+                                            dtype=jnp.int32)  # points for defeating each creature type
 
     MAX_CREATURES: int = 2  # max number of creatures on screen at once
 
-    # Item constants
-    ITEM_SIZE: chex.Array = jnp.array([5, 5], dtype=jnp.int32)
+    # Item constants ----------------------------------------------------
 
     # Item Types
     KEY: int = 0
@@ -151,8 +151,9 @@ class TutankhamConstants(NamedTuple):
     CHALICE: int = 4
     CROWN_02: int = 5
 
-    # KEY_
-    ITEM_POINTS: chex.Array = jnp.array([50, 100, 75, 150], dtype=jnp.int32)  # points for each item type
+    ITEM_SIZE: chex.Array = jnp.array([5, 5], dtype=jnp.int32)
+
+    ITEM_POINTS: chex.Array = jnp.array([50, 100, 75, 150], dtype=jnp.int32)  # points for collecting each item type
 
 
     # Asset config baked into constants
@@ -194,7 +195,7 @@ class TutankhamState(NamedTuple):
     creature_states: chex.Array  # (3, 4) array with (x, y, creature_type, active) for each creature
     last_creature_spawn: int  # time since last creature spawn
 
-    # item_states: chex.Array = None  # (N, 4) array with (x, y, item_type, collected) for each item (optional)
+    item_states: chex.Array # (N, 4) array with (x, y, item_type, collected) for each item
 
     has_key: bool  # whether the player has collected the key or not
 
@@ -401,8 +402,9 @@ class JaxTutankham(JaxEnvironment):
         player_lives = self.consts.PLAYER_LIVES
         amonition_timer = self.consts.AMMO_SUPPLY
         bullet_state = jnp.array([0, 0, 0, 0], dtype=jnp.int32) # TODO bullet state [3] is Flase still?
-        #creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
-        creature_states = jnp.array([[50, 50, 0, 1], [50, 100, 1, 1]], dtype=jnp.int32) # TODO delete
+        creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
+        item_states = jnp.zeros((4, 4))  # (x, y, item_type, collected) for each item # TODO
+
         last_creature_spawn = 0
         laser_flash_count = self.consts.MAX_LASER_FLASHES
         laser_flash_cooldown = self.consts.LASER_FLASH_COOLDOWN
@@ -417,6 +419,7 @@ class JaxTutankham(JaxEnvironment):
                                 bullet_state=bullet_state,
                                 amonition_timer=amonition_timer,
                                 creature_states=creature_states,
+                                item_states=item_states,
                                 last_creature_spawn=last_creature_spawn,
                                 laser_flash_count=laser_flash_count,
                                 laser_flash_cooldown=laser_flash_cooldown,
@@ -626,14 +629,13 @@ class JaxTutankham(JaxEnvironment):
         first_free_slot = jnp.argmax(inactive_mask)  # index of first inactive creature
 
         # Random creature type
-        #n_types = len(self.consts.CREATURE_POINTS)
-        #new_type = jax.random.randint(key_type, shape=(), minval=0, maxval=n_types)
         new_type = jax.random.choice(key_type, self.consts.LEVEL_CREATURES[level])  # creature type depends on current level
+        jax.debug.print("New creature type: {}", new_type)
         new_creature = jnp.array([0, 60, new_type, self.consts.ACTIVE], dtype=jnp.int32)
 
         do_spawn = should_spawn & has_free_slot
 
-        # Conditionally overwrite the first free slot
+        # if do spawn is true, insert new creature at first free slot, otherwise keep creature states unchanged
         new_row = jnp.where(do_spawn, new_creature, creature_states[first_free_slot])
         new_creature_states = creature_states.at[first_free_slot].set(new_row)
 
@@ -731,7 +733,7 @@ class JaxTutankham(JaxEnvironment):
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def resolve_player_collisions(self, player_x, player_y, creature_states, bullet_state, player_lives, last_creature_spawn):
+    def resolve_player_creature_collisions(self, player_x, player_y, creature_states, bullet_state, player_lives, last_creature_spawn):
 
         # check player-creature collisions (vectorized over all creatures)
         def player_hits_creature(creature):
@@ -761,6 +763,36 @@ class JaxTutankham(JaxEnvironment):
                 final_bullet_state, final_creature_states,
                 final_player_lives, final_last_creature_spawn)
 
+    # @partial(jax.jit, static_argnums=(0,))
+    # def resolve_player_item_collisions(self, player_x, player_y, item_states):
+
+    #     # check player-creature collisions (vectorized over all creatures)
+    #     def player_hits_creature(creature):
+    #         return self.check_entity_collision(
+    #             player_x, player_y, self.consts.PLAYER_SIZE,
+    #             creature[0], creature[1], self.consts.CREATURE_SIZE,
+    #         )
+
+    #     player_hits = jax.vmap(player_hits_creature)(creature_states)
+    #     player_hits = player_hits & (creature_states[:, 3] == self.consts.ACTIVE)
+
+    #     player_hit = jnp.any(player_hits) # is true if player collides with any active creature
+
+    #     # Compute respawn state unconditionally, then select with jnp.where
+    #     (respawn_x, respawn_y,
+    #      respawn_bullet, respawn_creatures,
+    #      respawn_lives, respawn_spawn) = self.respawn_player(player_x, player_y, player_lives)
+
+    #     final_player_x = jnp.where(player_hit, respawn_x, player_x)
+    #     final_player_y = jnp.where(player_hit, respawn_y, player_y)
+    #     final_bullet_state = jnp.where(player_hit, respawn_bullet, bullet_state)
+    #     final_creature_states = jnp.where(player_hit, respawn_creatures, creature_states)
+    #     final_player_lives = jnp.where(player_hit, respawn_lives, player_lives)
+    #     final_last_creature_spawn = jnp.where(player_hit, respawn_spawn, last_creature_spawn)
+
+    #     return (final_player_x, final_player_y,
+    #             final_bullet_state, final_creature_states,
+    #             final_player_lives, final_last_creature_spawn)
 
 
 
@@ -773,6 +805,7 @@ class JaxTutankham(JaxEnvironment):
         tutankham_score = state.tutankham_score
         bullet_state = state.bullet_state
         creature_states = state.creature_states
+        item_states = state.item_states
         laser_flash_count = state.laser_flash_count
         last_creature_spawn = state.last_creature_spawn
         laser_flash_cooldown = state.laser_flash_cooldown
@@ -802,7 +835,7 @@ class JaxTutankham(JaxEnvironment):
         (player_x, player_y, 
          bullet_state, creature_states, 
          player_lives, last_creature_spawn
-         ) = self.resolve_player_collisions(
+         ) = self.resolve_player_creature_collisions(
              player_x, player_y, 
              creature_states, bullet_state, 
              player_lives, last_creature_spawn
@@ -822,6 +855,7 @@ class JaxTutankham(JaxEnvironment):
                                bullet_state=bullet_state,
                                amonition_timer=amonition_timer,
                                creature_states=creature_states,
+                               item_states=item_states,
                                last_creature_spawn=last_creature_spawn,
                                laser_flash_count=laser_flash_count,
                                laser_flash_cooldown=laser_flash_cooldown,
