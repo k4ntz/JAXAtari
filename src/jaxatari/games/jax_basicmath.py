@@ -1,5 +1,5 @@
-import random
 import os
+import numpy as np
 from functools import partial
 from typing import Tuple
 import jax
@@ -71,7 +71,7 @@ class BasicMathState(struct.PyTreeNode):
     inactive: chex.Array
     difficultyTime: chex.Array
     key: chex.PRNGKey
-    step_counter: chex.PRNGKey
+    step_counter: chex.Array
 
 class BasicMathObservation(struct.PyTreeNode):
     x: jnp.ndarray
@@ -169,8 +169,8 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         return digits
     
-    def _generate_problem(self, state: BasicMathState, gameMode: int) -> BasicMathState:
-        key, k1 = jax.random.split(state.key)
+    def _generate_problem(self, key, gameMode: int) -> BasicMathState:
+        key, k1 = jax.random.split(key)
         key, k2 = jax.random.split(key)
 
         x = jax.random.randint(k1, shape=(), minval=1, maxval=10**self.consts.problemNumLen)
@@ -333,17 +333,19 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
     def render(self, state: BasicMathState) -> jnp.ndarray:
         return self.renderer.render(state)
     
-    def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(random.randint(0, 1000))) -> Tuple[BasicMathObservation, BasicMathState]:
+    def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(np.random.randint(0, 2**32))) -> Tuple[BasicMathObservation, BasicMathState]:
+        probNum1, probNum2, key = self._generate_problem(key, (self.consts.GAMEMODE - 1) % 4)
+
         state = BasicMathState(
             jnp.full((self.consts.numArrLen,), -1, dtype=jnp.int32),
             arrPos= jnp.array(2).astype(jnp.int32),
             score= jnp.array(0).astype(jnp.int32),
             numberProb= jnp.array(0).astype(jnp.int32),
-            problemNum1=jnp.array(1).astype(jnp.int32),
-            problemNum2=jnp.array(1).astype(jnp.int32),
+            problemNum1=probNum1,
+            problemNum2=probNum2,
             inactive=jnp.array(0).astype(jnp.int32),
             difficultyTime=self.consts.DIFFICULTY_TIMES[self.consts.DIFFICULTY],
-            key=key,
+            key=jax.random.PRNGKey(np.random.randint(0, 2**32)),
             step_counter=jnp.array(0).astype(jnp.int32)
         )
 
@@ -419,7 +421,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         x, y, key = jax.lax.cond(
             reset, 
-            lambda: self._generate_problem(state, chosenGameMode), 
+            lambda: self._generate_problem(state.key, chosenGameMode), 
             lambda: (state.problemNum1, state.problemNum2, state.key)
         )
 
