@@ -13,7 +13,7 @@ from functools import partial
 from PIL import Image
 import numpy as np
 import jaxatari.spaces as spaces
-
+import time
 
 @jax.jit
 def compute_binary_matrix(data: jnp.ndarray) -> jnp.ndarray:
@@ -133,13 +133,13 @@ class Entity(NamedTuple):
 # Constants
 # ---------------------------------------------------------------------
 class TutankhamConstants(NamedTuple):
+    # Game Window
     WIDTH: int = 160
     HEIGHT: int = 210
-    SPEED: int = 4
-    PIXEL_COLOR: chex.Array = jnp.array([255, 255, 255], dtype=jnp.int32)  # white
-
+    
+    # Player constants
+    PLAYER_SPEED: float = 2.5
     PLAYER_SIZE: chex.Array = jnp.array([5, 8], dtype=jnp.int32)
-
     PLAYER_LIVES: int = 3
 
     # Missile constants
@@ -151,10 +151,6 @@ class TutankhamConstants(NamedTuple):
     LASER_FLASH_COOLDOWN: int = 60  # frames
 
     # Creature constants -------------------------------------
-    CREATURE_SIZE: chex.Array = jnp.array([10, 10], dtype=jnp.int32)
-
-    INACTIVE: int = 0
-    ACTIVE: int = 1
 
     # Creature Types
     SNAKE: int = 0
@@ -170,15 +166,19 @@ class TutankhamConstants(NamedTuple):
     MYSTERY: int = 10
     WEAPON: int = 11
 
-    CREATURE_SPEED: chex.Array = jnp.array([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+    CREATURE_SIZE: chex.Array = jnp.array([10, 10], dtype=jnp.int32)
+
+    INACTIVE: int = 0
+    ACTIVE: int = 1
+
+    CREATURE_SPEED: chex.Array = jnp.array([1, 3, 7, 2, 2, 2, 2, 2, 2, 2, 2, 2],
                                            dtype=jnp.int32)  # speed for each creature type
     CREATURE_POINTS: chex.Array = jnp.array([1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 0, 3],
-                                            dtype=jnp.int32)  # points for each creature type
+                                            dtype=jnp.int32)  # points for defeating each creature type
 
     MAX_CREATURES: int = 2  # max number of creatures on screen at once
 
-    # Item constants
-    ITEM_SIZE: chex.Array = jnp.array([5, 5], dtype=jnp.int32)
+    # Item constants ----------------------------------------------------
 
     # Item Types
     KEY: int = 0
@@ -188,10 +188,10 @@ class TutankhamConstants(NamedTuple):
     CHALICE: int = 4
     CROWN_02: int = 5
 
-    # KEY_
-    ITEM_POINTS: chex.Array = jnp.array([50, 100, 75, 150], dtype=jnp.int32)  # points for each item type
+    ITEM_SIZE: chex.Array = jnp.array([5, 5], dtype=jnp.int32)
 
-    RESPAWN_CHECKPOINT_UPDATE_INTERVAL: int = 180  # frames between respawn checkpoint updates
+    ITEM_POINTS: chex.Array = jnp.array([50, 100, 75, 150], dtype=jnp.int32)  # points for collecting each item type
+
 
     # Asset config baked into constants
     ASSET_CONFIG: tuple = _get_default_asset_config()
@@ -199,35 +199,50 @@ class TutankhamConstants(NamedTuple):
     VALID_POS: chex.Array = create_binary_matrix(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_level_one.npy")
 
 
+    # Level -----------------------------------------
+
+    # Define which creatures can spawn in each level 
+    LEVEL_CREATURES: chex.Array = jnp.array([
+        [SNAKE, SCORPION, BAT],
+        [TURTLE, JACKEL, CONDOR],
+        [LION, MOTH, VIRUS],
+        [MONKEY, MYSTERY, WEAPON]
+    ])
+    
+
+
 # ---------------------------------------------------------------------
 # Game State
 # ---------------------------------------------------------------------
 class TutankhamState(NamedTuple):
+    # key state for creature spawn randomness
+    rng_key: int
+
+    level: int  # current level (up to 16 Levels)
+
     player_x: chex.Array
     player_y: chex.Array
     player_lives: int
     tutankham_score: int  # current score
 
-    checkpoint_x: int  # respawn checkpoint x
-    checkpoint_y: int  # respawn checkpoint y
 
     bullet_state: chex.Array  # (, 4) array with (x, y, bullet_rotation, bullet_active)
     laser_flash_count: int  # number of laser flashes that can be fired
     laser_flash_cooldown: int  # cooldown timer for next laser flash
     amonition_timer: int  # if timer runs out, player can not fire again
 
-    creature_states: chex.Array  # (3, 4) array with (x, y, creature_type, active) for each creature
+    creature_states: chex.Array  # (2, 4) array with (x, y, creature_type, active) for each creature
     last_creature_spawn: int  # time since last creature spawn
 
-    # item_states: chex.Array = None  # (N, 4) array with (x, y, item_type, collected) for each item (optional)
+    item_states: chex.Array # (N, 4) array with (x, y, item_type, collected) for each item
 
     player_direction: int   # Last horizontal direction: 3=RIGHT, 4=LEFT
     is_moving: bool         # True if the player moved this frame
     step_counter: int       # Increments every frame, drives animation clock
 
-    respawn_step_counter: int  # counts the number of steps taken in the game
-
     has_key: bool  # whether the player has collected the key or not
+
+    last_directional_action: int  # last action that had a directional component
 
 
 # ---------------------------------------------------------------------
@@ -433,52 +448,55 @@ class JaxTutankham(JaxEnvironment):
     # Reset
     # -----------------------------
     def reset(self, key=None):
+        # Generate random seed based on current time for creature spawn randomness
+        seed = int(time.time())
+        key = jax.random.PRNGKey(seed)
+        level = 0
         start_x = self.consts.WIDTH // 2
         start_y = self.consts.HEIGHT // 2
         start_x = 140
-        checkpoint_x = start_x
-        checkpoint_y = start_y
         tutankham_score = 0
         player_lives = self.consts.PLAYER_LIVES
         amonition_timer = self.consts.AMMO_SUPPLY
         bullet_state = jnp.array([0, 0, 0, 0], dtype=jnp.int32) # TODO bullet state [3] is Flase still?
-        #creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
-        creature_states = jnp.array([[50, 50, 0, 1], [50, 100, 1, 1]], dtype=jnp.int32) # TODO delete
+        creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
+        item_states = jnp.zeros((4, 4))  # (x, y, item_type, collected) for each item # TODO
+
         last_creature_spawn = 0
         laser_flash_count = self.consts.MAX_LASER_FLASHES
         laser_flash_cooldown = self.consts.LASER_FLASH_COOLDOWN
-        respawn_step_counter = 0
         has_key = False
         player_direction = 3  # Start facing RIGHT
         is_moving = False
         step_counter = 0
 
 
-        state = TutankhamState(player_x=start_x,
+        state = TutankhamState(level=level,
+                               player_x=start_x,
                                 player_y=start_y,
-                                checkpoint_x=checkpoint_x,
-                                checkpoint_y=checkpoint_y,
                                 tutankham_score=tutankham_score,
                                 player_lives=player_lives,
                                 bullet_state=bullet_state,
                                 amonition_timer=amonition_timer,
                                 creature_states=creature_states,
+                                item_states=item_states,
                                 last_creature_spawn=last_creature_spawn,
                                 laser_flash_count=laser_flash_count,
                                 laser_flash_cooldown=laser_flash_cooldown,
                                 player_direction=player_direction,
                                 is_moving=is_moving,
                                 step_counter=step_counter,
-                                respawn_step_counter=respawn_step_counter,
-                                has_key=has_key
+                                has_key=has_key,
+                                last_directional_action=0,
+                                rng_key=key
                                )
         return state, state #TODO: (EnvObs, EnvState)
     
     
     # Player Step
     @partial(jax.jit, static_argnums=(0,))
-    def player_step(self, player_x, player_y, action, player_direction, step_counter):
-        speed = self.consts.SPEED
+    def player_step(self, player_x, player_y, action, last_directional_action, player_direction, step_counter):
+        speed = self.consts.PLAYER_SPEED
 
         dx = jnp.array([
         0,          # 0  NOOP
@@ -492,8 +510,8 @@ class JaxTutankham(JaxEnvironment):
         0,          # 8  DOWNRIGHT
         0,          # 9  DOWNLEFT
         0,          # 10 UPFIRE
-        speed,      # 11 RIGHTFIRE
-        -speed,     # 12 LEFTFIRE
+        0,          # 11 RIGHTFIRE
+        0,          # 12 LEFTFIRE
         0,          # 13 DOWNFIRE
         0,          # 14 UPRIGHTFIRE
         0,          # 15 UPLEFTFIRE
@@ -508,24 +526,31 @@ class JaxTutankham(JaxEnvironment):
             0,          # 3  RIGHT
             0,          # 4  LEFT
             speed,      # 5  DOWN
-            -speed,     # 6  UPRIGHT
-            -speed,     # 7  UPLEFT
-            speed,      # 8  DOWNRIGHT
-            speed,      # 9  DOWNLEFT
-            -speed,     # 10 UPFIRE
+            0,     # 6  UPRIGHT
+            0,     # 7  UPLEFT
+            0,      # 8  DOWNRIGHT
+            0,      # 9  DOWNLEFT
+            0,     # 10 UPFIRE
             0,          # 11 RIGHTFIRE
             0,          # 12 LEFTFIRE
-            speed,      # 13 DOWNFIRE
-            -speed,     # 14 UPRIGHTFIRE
-            -speed,     # 15 UPLEFTFIRE
-            speed,      # 16 DOWNRIGHTFIRE
-            speed,      # 17 DOWNLEFTFIRE
+            0,      # 13 DOWNFIRE
+            0,     # 14 UPRIGHTFIRE
+            0,     # 15 UPLEFTFIRE
+            0,      # 16 DOWNRIGHTFIRE
+            0,      # 17 DOWNLEFTFIRE
         ])
+        # If the current action has no directional component, fall back to the last directional action
+        has_movement = (dx[action] != 0) | (dy[action] != 0)
+        effective_action = jnp.where(has_movement, action, last_directional_action)
+        new_last_directional_action = jnp.where(has_movement, action, last_directional_action)
+
+
         w = self.consts.PLAYER_SIZE[0]
         h = self.consts.PLAYER_SIZE[1]
+
         old_x, old_y = player_x, player_y
-        new_x = player_x + dx[action]
-        new_y = player_y + dy[action]
+        new_x = player_x + dx[effective_action]
+        new_y = player_y + dy[effective_action]
         # Check all 4 corners of the hitbox at the new position
         tl_walkable = self.consts.VALID_POS[new_y, new_x]
         tr_walkable = self.consts.VALID_POS[new_y, new_x + w - 1]
@@ -535,6 +560,7 @@ class JaxTutankham(JaxEnvironment):
         iswalkable = tl_walkable & tr_walkable & bl_walkable & br_walkable
         player_x = jnp.where(iswalkable, new_x, old_x)
         player_y = jnp.where(iswalkable, new_y, old_y)
+
         player_x = jnp.clip(player_x, 0, self.consts.WIDTH - 1)
         player_y = jnp.clip(player_y, 0, self.consts.VALID_POS.shape[0] - 1)
 
@@ -544,8 +570,7 @@ class JaxTutankham(JaxEnvironment):
                         jnp.where(dx[action] < 0, 4, player_direction))
         new_step_counter = step_counter + 1
 
-        return player_x, player_y, new_direction, is_moving_now, new_step_counter
-    
+        return player_x, player_y, new_last_directional_action, new_direction, is_moving_now, new_step_counter
 
     #Bullet Step
     @partial(jax.jit, static_argnums=(0,))
@@ -568,7 +593,7 @@ class JaxTutankham(JaxEnvironment):
 
         space = jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE)
 
-        new_bullet = bullet_state#array with (x, y, bullet_rotation, bullet_active)
+        new_bullet = bullet_state #array with (x, y, bullet_rotation, bullet_active)
 
 
         # --- update bullet x position if active (bullet only travels horizontal so no vertical movement) ---        
@@ -608,18 +633,26 @@ class JaxTutankham(JaxEnvironment):
     @partial(jax.jit, static_argnums=(0,))
     def laser_flash_step(self, creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action):
 
-        laser_flash_cooldown = max(laser_flash_cooldown - 1, 0)
-        if action == Action.UPFIRE and laser_flash_count > 0 and laser_flash_cooldown == 0:
-            new_laser_flash_count = laser_flash_count - 1  # use one laser flash
-            new_laser_flash_cooldown = self.consts.LASER_FLASH_COOLDOWN  # reset cooldown
-            last_creature_spawn = 0  # reset creature spawn timer on laser flash use
+        # decrease cooldown timer in every step
+        laser_flash_cooldown = jnp.maximum(laser_flash_cooldown - 1, 0)
 
-            new_creature_states = creature_states.copy()
-            new_creature_states[:, -1] = 0  # set all creatures to inactive
+        # check if laser flash is being fired this step
+        is_firing = (action == Action.UPFIRE) & (laser_flash_count > 0) & (laser_flash_cooldown == 0)
 
-            return new_creature_states, new_laser_flash_cooldown, new_laser_flash_count, last_creature_spawn
+        # if firing, set all creatures to inactive, decrease flash count by 1, reset cooldown and reset creature spawn timer
+        new_laser_flash_count = jnp.where(is_firing, laser_flash_count - 1, laser_flash_count)
+        new_laser_flash_cooldown = jnp.where(is_firing, self.consts.LASER_FLASH_COOLDOWN, laser_flash_cooldown)
+        new_last_creature_spawn = jnp.where(is_firing, 0, last_creature_spawn)
 
-        return creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn
+        # active mask contains 1 for active creatures and 0 for inactive creatures, if firing set all to 0
+        active_mask = creature_states[:, -1]
+        # if firing, set all active_mask values to 0, otherwise keep them as they are
+        new_active_mask = jnp.where(is_firing, 0, active_mask)
+
+        new_creature_states = creature_states.at[:, -1].set(new_active_mask)
+
+        return new_creature_states, new_laser_flash_cooldown, new_laser_flash_count, new_last_creature_spawn
+
 
     # creature step
     @partial(jax.jit, static_argnums=(0,))
@@ -645,7 +678,6 @@ class JaxTutankham(JaxEnvironment):
             y_new = y * active_new
 
             return jnp.array([x_new, y_new, creature_type, active_new], dtype=jnp.int32)
-            return jnp.array([x_new, y_new, creature_type, active_new], dtype=jnp.int32)
 
 
         # iterate over creatures and move them
@@ -656,46 +688,40 @@ class JaxTutankham(JaxEnvironment):
 
     # creature spawner step
     @partial(jax.jit, static_argnums=(0,))
-    def spawner_step(self, creature_states, last_creature_spawn):
+    def spawner_step(self, creature_states, last_creature_spawn, level, rng_key):
+        GROWTH = 0.0003
+        MAX_PROB = 0.8
 
-        # last_creature_spawn = vergangene Zeit (in Sekunden) seit letztem Frame
+        # Increment timer every step
+        new_last_creature_spawn = last_creature_spawn + 1
 
-        # Parameter # TODO: REMOVE HARDCODED VALUES
-        GROWTH = 0.0003  # Chance steigt pro Sekunde
-        MAX_PROB = 0.8  # Deckelung (optional)
+        # Spawn chance grows linearly with time, capped at MAX_PROB
+        spawn_chance = jnp.clip(new_last_creature_spawn * GROWTH, 0.0, MAX_PROB)
 
-        # 1) aktive Creatures zählen
-        active_count = np.sum(creature_states[:, 3] == self.consts.ACTIVE)
-        if active_count >= self.consts.MAX_CREATURES:
-            return creature_states, last_creature_spawn  # nichts tun, Limit erreicht
+        # Split key: one for the probability roll, one for the creature type
+        rng_key, key_roll, key_type = jax.random.split(rng_key, 3)
+        roll = jax.random.uniform(key_roll)
+        should_spawn = roll < spawn_chance
 
-        # 2) Spawn-Timer erhöhen
-        last_creature_spawn += 1
+        # Only spawn if there is a free slot
+        inactive_mask = creature_states[:, 3] == self.consts.INACTIVE
+        has_free_slot = jnp.any(inactive_mask)
+        first_free_slot = jnp.argmax(inactive_mask)  # index of first inactive creature
 
-        # 3) Spawn-Chance berechnen
-        spawn_chance = last_creature_spawn * GROWTH
-        spawn_chance = min(spawn_chance, MAX_PROB)
+        # Random creature type
+        new_type = jax.random.choice(key_type, self.consts.LEVEL_CREATURES[level])  # creature type depends on current level
+        new_creature = jnp.array([0, 60, new_type, self.consts.ACTIVE], dtype=jnp.int32)
 
-        # 4) treffen wir den Zufall?
-        if np.random.random() > spawn_chance:
-            return creature_states, last_creature_spawn  # nein → nichts machen
+        do_spawn = should_spawn & has_free_slot
 
-        # 5) Ja → wir spawnen einen!
-        new_creature_states = creature_states.copy()
+        # if do spawn is true, insert new creature at first free slot, otherwise keep creature states unchanged
+        new_row = jnp.where(do_spawn, new_creature, creature_states[first_free_slot])
+        new_creature_states = creature_states.at[first_free_slot].set(new_row)
 
-        for i in range(self.consts.MAX_CREATURES):
-            x, y, creature_type, active = creature_states[i]
-            if active == self.consts.INACTIVE:  # TODO: find correct spawner x,y
-                new_x = 0
-                new_y = np.random.randint(0, self.consts.HEIGHT)
-                new_creature_type = np.random.randint(0, len(self.consts.CREATURE_POINTS))
-                new_creature_states[i] = np.array([new_x, new_y, new_creature_type, self.consts.ACTIVE])
+        # Reset timer on spawn
+        final_last_creature_spawn = jnp.where(do_spawn, jnp.int32(0), new_last_creature_spawn)
 
-                # Timer zurücksetzen: Start von vorne
-                last_creature_spawn = 0
-                break
-
-        return new_creature_states, last_creature_spawn
+        return new_creature_states, final_last_creature_spawn, rng_key
 
 
 
@@ -733,174 +759,195 @@ class JaxTutankham(JaxEnvironment):
 
     @partial(jax.jit, static_argnums=(0,))
     def check_entity_collision(self, x1, y1, size1, x2, y2, size2):
-        """Check collision between two single entities"""
-        # Calculate edges for rectangle 1
-        rect1_left = x1
-        rect1_right = x1 + size1[0]
-        rect1_top = y1
-        rect1_bottom = y1 + size1[1]
-
-        # Calculate edges for rectangle 2
-        rect2_left = x2
-        rect2_right = x2 + size2[0]
-        rect2_top = y2
-        rect2_bottom = y2 + size2[1]
-
-        # Check overlap
-        horizontal_overlap = (
-        (rect1_left < rect2_right) &
-        (rect1_right > rect2_left)
+        '''Check AABB collision between two entities.'''
+        return (
+            (x1 < x2 + size2[0]) & (x1 + size1[0] > x2) &
+            (y1 < y2 + size2[1]) & (y1 + size1[1] > y2)
         )
 
-        vertical_overlap = (
-            (rect1_top < rect2_bottom) &
-            (rect1_bottom > rect2_top)
-        )
-
-        return horizontal_overlap & vertical_overlap
 
     @partial(jax.jit, static_argnums=(0,))
-    def resolve_collisions(self, player_x, player_y, creature_states, bullet_state, player_lives):
+    def respawn_player(self, player_x, player_y, player_lives):
+        '''
+        Resets player position to last checkpoint and decreases lives by 1
+        Sets bullet state and creature states to default values
+        Resets creature spawn timer to 0
+        '''
+        
+        # TODO: Replace with hardcoded per-room checkpoints
+        respawn_x = jnp.int32(30)
+        respawn_y = jnp.int32(30)
 
-        # check bullet/creature collision
-        if bullet_state[3]:  # bullet is active
+        creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4), dtype=jnp.int32)
+        bullet_state = jnp.zeros(4, dtype=jnp.int32)
+        last_creature_spawn = jnp.int32(0)
 
-            for idx, creature in enumerate(creature_states):
-                creature_x, creature_y, creature_type, active = creature
+        return respawn_x, respawn_y, bullet_state, creature_states, player_lives - 1, last_creature_spawn
 
-                if active == self.consts.ACTIVE:
-                    collision = self.check_entity_collision(
-                        bullet_state[0], bullet_state[1], self.consts.BULLET_SIZE,
-                        creature_x, creature_y, self.consts.CREATURE_SIZE
-                    )
 
-                    if collision:
-                        # Deactivate bullet and creature
-                        bullet_state = np.array([0, 0, 0, False])
-                        # TODO: kill creature logic (score etc)
-                        creature_states[idx] = np.array([creature_x, creature_y, creature_type, self.consts.INACTIVE])
-                        break  # Bullet can only hit one creature
-
-        # check player/creature collision
-        for idx, creature in enumerate(creature_states):
-            creature_x, creature_y, creature_type, active = creature
-
-            if active == self.consts.ACTIVE:
-                collision = self.check_entity_collision(
-                    player_x, player_y, self.consts.PLAYER_SIZE,
-                    creature_x, creature_y, self.consts.CREATURE_SIZE
-                )
-
-                if collision:
-                    player_lives -= 1
-                    # TODO: respawn player logic
-                    creature_states[idx] = np.array(
-                        [creature_x, creature_y, creature_type, self.consts.INACTIVE])  # Deactivate creature
-                    # Optionally, reset player position or apply other penalties
-                    break  # Handle one collision at a time
-
-        return bullet_state, creature_states, player_lives
 
     @partial(jax.jit, static_argnums=(0,))
-    def respawn_player(self, player_x, player_y, checkpoint_x, checkpoint_y, prev_player_lives, current_player_lives,
-                       creature_states, bullet_state, last_creature_spawn, respawn_step_counter):
-        # TODO: Implement hardcoded checkpoints instead of last checkpoint position
-        if current_player_lives < prev_player_lives:
-            # Respawn player at checkpoint
-            player_x = checkpoint_x
-            player_y = checkpoint_y
+    def resolve_bullet_collisions(self, creature_states, bullet_state):
+        active_mask = creature_states[:, 3] == self.consts.ACTIVE
 
-            # Reset creature states
-            creature_states = np.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
+        # check bullet-creature collisions (vectorized over all creatures)
+        def bullet_hits_creature(creature):
+            return self.check_entity_collision(
+                bullet_state[0], bullet_state[1], self.consts.BULLET_SIZE,
+                creature[0], creature[1], self.consts.CREATURE_SIZE,
+            )
 
-            # Reset bullet state
-            bullet_state = np.array([0, 0, 0, False])
+        bullet_hits = jax.vmap(bullet_hits_creature)(creature_states)
+        bullet_hits = bullet_hits & active_mask & (bullet_state[3] == 1)
 
-            # reset spawn timer
-            last_creature_spawn = 0
+        any_bullet_hit = jnp.any(bullet_hits)
+        # Deactivate only the first hit creature (cumsum trick: first True stays 1)
+        first_bullet_hit = (jnp.cumsum(bullet_hits) == 1) & bullet_hits
 
-            # reset respawn step counter
-            respawn_step_counter = 0
+        new_creature_active = jnp.where(first_bullet_hit, self.consts.INACTIVE, creature_states[:, 3])
+        new_creature_states = creature_states.at[:, 3].set(new_creature_active)
+        new_bullet_state = jnp.where(any_bullet_hit, jnp.zeros(4, dtype=bullet_state.dtype), bullet_state)
 
-        elif respawn_step_counter == self.consts.RESPAWN_CHECKPOINT_UPDATE_INTERVAL:
-            checkpoint_x = player_x
-            checkpoint_y = player_y
-            respawn_step_counter = 0
-        else:
-            respawn_step_counter += 1
+        return new_creature_states, new_bullet_state
 
-        return player_x, player_y, checkpoint_x, checkpoint_y, creature_states, bullet_state, respawn_step_counter, last_creature_spawn
 
-    # -----------------------------
-    # Step logic (pure Python)
-    # -----------------------------
+    @partial(jax.jit, static_argnums=(0,))
+    def resolve_player_creature_collisions(self, player_x, player_y, creature_states, bullet_state, player_lives, last_creature_spawn):
+
+        # check player-creature collisions (vectorized over all creatures)
+        def player_hits_creature(creature):
+            return self.check_entity_collision(
+                player_x, player_y, self.consts.PLAYER_SIZE,
+                creature[0], creature[1], self.consts.CREATURE_SIZE,
+            )
+
+        player_hits = jax.vmap(player_hits_creature)(creature_states)
+        player_hits = player_hits & (creature_states[:, 3] == self.consts.ACTIVE)
+
+        player_hit = jnp.any(player_hits) # is true if player collides with any active creature
+
+        # Compute respawn state unconditionally, then select with jnp.where
+        (respawn_x, respawn_y,
+         respawn_bullet, respawn_creatures,
+         respawn_lives, respawn_spawn) = self.respawn_player(player_x, player_y, player_lives)
+
+        final_player_x = jnp.where(player_hit, respawn_x, player_x)
+        final_player_y = jnp.where(player_hit, respawn_y, player_y)
+        final_bullet_state = jnp.where(player_hit, respawn_bullet, bullet_state)
+        final_creature_states = jnp.where(player_hit, respawn_creatures, creature_states)
+        final_player_lives = jnp.where(player_hit, respawn_lives, player_lives)
+        final_last_creature_spawn = jnp.where(player_hit, respawn_spawn, last_creature_spawn)
+
+        return (final_player_x, final_player_y,
+                final_bullet_state, final_creature_states,
+                final_player_lives, final_last_creature_spawn)
+
+    # @partial(jax.jit, static_argnums=(0,))
+    # def resolve_player_item_collisions(self, player_x, player_y, item_states):
+
+    #     # check player-creature collisions (vectorized over all creatures)
+    #     def player_hits_creature(creature):
+    #         return self.check_entity_collision(
+    #             player_x, player_y, self.consts.PLAYER_SIZE,
+    #             creature[0], creature[1], self.consts.CREATURE_SIZE,
+    #         )
+
+    #     player_hits = jax.vmap(player_hits_creature)(creature_states)
+    #     player_hits = player_hits & (creature_states[:, 3] == self.consts.ACTIVE)
+
+    #     player_hit = jnp.any(player_hits) # is true if player collides with any active creature
+
+    #     # Compute respawn state unconditionally, then select with jnp.where
+    #     (respawn_x, respawn_y,
+    #      respawn_bullet, respawn_creatures,
+    #      respawn_lives, respawn_spawn) = self.respawn_player(player_x, player_y, player_lives)
+
+    #     final_player_x = jnp.where(player_hit, respawn_x, player_x)
+    #     final_player_y = jnp.where(player_hit, respawn_y, player_y)
+    #     final_bullet_state = jnp.where(player_hit, respawn_bullet, bullet_state)
+    #     final_creature_states = jnp.where(player_hit, respawn_creatures, creature_states)
+    #     final_player_lives = jnp.where(player_hit, respawn_lives, player_lives)
+    #     final_last_creature_spawn = jnp.where(player_hit, respawn_spawn, last_creature_spawn)
+
+    #     return (final_player_x, final_player_y,
+    #             final_bullet_state, final_creature_states,
+    #             final_player_lives, final_last_creature_spawn)
+
+
+
+    # Step logic
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: TutankhamState, action: int):
-
+        level=state.level
         player_x = state.player_x
         player_y = state.player_y
-        checkpoint_x = state.checkpoint_x
-        checkpoint_y = state.checkpoint_y
         tutankham_score = state.tutankham_score
         bullet_state = state.bullet_state
         creature_states = state.creature_states
+        item_states = state.item_states
         laser_flash_count = state.laser_flash_count
         last_creature_spawn = state.last_creature_spawn
         laser_flash_cooldown = state.laser_flash_cooldown
         amonition_timer = state.amonition_timer
         player_lives = state.player_lives
-        respawn_step_counter = state.respawn_step_counter
         has_key = state.has_key
+        last_directional_action = state.last_directional_action
+        player_direction= state.player_direction
+        step_counter = state.step_counter
+        rng_key = state.rng_key
 
-        player_x, player_y, player_direction, is_moving, step_counter = self.player_step(
-            player_x, player_y, action, state.player_direction, state.step_counter
+        player_x, player_y, last_directional_action, player_direction, is_moving, step_counter = self.player_step(
+            player_x, player_y, action, last_directional_action, player_direction, step_counter
         )
 
         bullet_state, amonition_timer =self.bullet_step(bullet_state, player_x, player_y, amonition_timer, action)
 
         creature_states = self.creature_step(creature_states)
 
-        #creature_states, last_creature_spawn = self.spawner_step(creature_states, last_creature_spawn)
+        creature_states, last_creature_spawn, rng_key = self.spawner_step(creature_states, last_creature_spawn, level, rng_key)
 
         # laser flash step should go after creature step to immediately remove creatures
-        "creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)"
+        creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)
 
         # temporary store previous lives and creature states for respawn & collision detection
-        "prev_player_lives = player_lives"
-        "prev_creature_states = creature_states.copy()"
+        prev_creature_states = creature_states.copy()
         # TODO: add ITEM collisions (+key collection) -> has_key update
-        "bullet_state, creature_states, player_lives = self.resolve_collisions(player_x, player_y, creature_states, bullet_state, player_lives)"
+
+        creature_states, bullet_state = self.resolve_bullet_collisions(creature_states, bullet_state)
+
+        (player_x, player_y, 
+         bullet_state, creature_states, 
+         player_lives, last_creature_spawn
+         ) = self.resolve_player_creature_collisions(
+             player_x, player_y, 
+             creature_states, bullet_state, 
+             player_lives, last_creature_spawn
+             )
+  
 
         # TODO:Update score based on creature deaths & items collected
         # score_update() bekommt prev_creature_states & creature_states und prev_item_states & item_states
 
-        """player_x, player_y, checkpoint_x, checkpoint_y, creature_states, bullet_state, respawn_step_counter, last_creature_spawn = self.respawn_player(
-            player_x, player_y,
-            checkpoint_x, checkpoint_y,
-            prev_player_lives, player_lives,
-            creature_states,
-            bullet_state,
-            last_creature_spawn,
-            respawn_step_counter
-        )"""
 
-        state = TutankhamState(player_x=player_x,
+
+        state = TutankhamState(level=level,
+                               player_x=player_x,
                                player_y=player_y,
-                               checkpoint_x=checkpoint_x,
-                               checkpoint_y=checkpoint_y,
                                tutankham_score=tutankham_score,
                                player_lives=player_lives,
                                bullet_state=bullet_state,
                                amonition_timer=amonition_timer,
                                creature_states=creature_states,
+                               item_states=item_states,
                                last_creature_spawn=last_creature_spawn,
                                laser_flash_count=laser_flash_count,
                                laser_flash_cooldown=laser_flash_cooldown,
                                player_direction=player_direction,
                                is_moving=is_moving,
                                step_counter=step_counter,
-                               respawn_step_counter=respawn_step_counter,
-                               has_key=has_key
+                               has_key=has_key,
+                               last_directional_action=last_directional_action,
+                               rng_key=rng_key
                                )
 
         reward = 0.0
