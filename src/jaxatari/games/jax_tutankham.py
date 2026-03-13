@@ -164,7 +164,7 @@ class TutankhamConstants(NamedTuple):
 
     # Define which creatures can spawn in each level 
     LEVEL_CREATURES: chex.Array = jnp.array([
-        [SNAKE, SCORPION, BAT],
+        [SNAKE, BAT, BAT],
         [TURTLE, JACKEL, CONDOR],
         [LION, MOTH, VIRUS],
         [MONKEY, MYSTERY, WEAPON]
@@ -395,7 +395,7 @@ class JaxTutankham(JaxEnvironment):
         # Generate random seed based on current time for creature spawn randomness
         seed = int(time.time())
         key = jax.random.PRNGKey(seed)
-        level = 1
+        level = 0
         start_x = self.consts.WIDTH // 2
         start_y = self.consts.HEIGHT // 2
         tutankham_score = 0
@@ -597,7 +597,6 @@ class JaxTutankham(JaxEnvironment):
             y_new = y * active_new
 
             return jnp.array([x_new, y_new, creature_type, active_new], dtype=jnp.int32)
-            return jnp.array([x_new, y_new, creature_type, active_new], dtype=jnp.int32)
 
 
         # iterate over creatures and move them
@@ -630,7 +629,6 @@ class JaxTutankham(JaxEnvironment):
 
         # Random creature type
         new_type = jax.random.choice(key_type, self.consts.LEVEL_CREATURES[level])  # creature type depends on current level
-        jax.debug.print("New creature type: {}", new_type)
         new_creature = jnp.array([0, 60, new_type, self.consts.ACTIVE], dtype=jnp.int32)
 
         do_spawn = should_spawn & has_free_slot
