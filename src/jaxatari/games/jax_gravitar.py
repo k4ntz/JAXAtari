@@ -822,10 +822,10 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
 
 @jax.jit
 def make_level_start_state(level_id: int) -> ShipState:
-    START_Y = jnp.float32(30.0)
+    START_Y = jnp.float32(35.0)
     REACTOR_START_Y = jnp.float32(60.0)  # Lower spawn point for reactor
 
-    x = jnp.array(WINDOW_WIDTH / 2, dtype=jnp.float32)
+    x = jnp.array(WINDOW_WIDTH / 2 + 5.0, dtype=jnp.float32)
     y = jnp.array(START_Y, dtype=jnp.float32)
 
     angle = jnp.array(-jnp.pi / 2, dtype=jnp.float32)  # Pointing up for normal levels
@@ -1271,7 +1271,7 @@ def ship_step(state: ShipState,
     gravity_strength = jnp.clip(gravity_strength, 0.0, gravity * 5.0)  # Cap maximum gravity
     
     # Level center for terrant2's radial gravity
-    level_center_x = window_size[0] / 2.0
+    level_center_x = window_size[0] / 2.0 + 5.0  # Slightly right of center to match ALE's layout
     level_center_y = window_size[1] / 2.0
     
     # Calculate direction to level center (for terrant2)
