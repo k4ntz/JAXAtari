@@ -92,7 +92,9 @@ class GravitarConstants(struct.PyTreeNode):
     # Spawn and respawn timing
     SAUCER_SPAWN_DELAY_FRAMES: int = struct.field(pytree_node=False, default=200)
     SAUCER_RESPAWN_DELAY_FRAMES: int = struct.field(pytree_node=False, default=180 * 3)
+    UFO_SPAWN_DELAY_FRAMES: int = struct.field(pytree_node=False, default=180 * 2)
     UFO_RESPAWN_DELAY_FRAMES: int = struct.field(pytree_node=False, default=180 * 2)
+    UFO_SPAWN_Y_THRESHOLD: float = struct.field(pytree_node=False, default=50.0)
     
     # Movement speeds and physics
     SAUCER_SPEED_MAP: float = struct.field(pytree_node=False, default=0.18)
@@ -148,6 +150,7 @@ MAX_LIVES = _DEFAULT_CONSTS.MAX_LIVES
 SAUCER_SPAWN_DELAY_FRAMES = _DEFAULT_CONSTS.SAUCER_SPAWN_DELAY_FRAMES
 SAUCER_RESPAWN_DELAY_FRAMES = _DEFAULT_CONSTS.SAUCER_RESPAWN_DELAY_FRAMES
 UFO_RESPAWN_DELAY_FRAMES = _DEFAULT_CONSTS.UFO_RESPAWN_DELAY_FRAMES
+UFO_SPAWN_Y_THRESHOLD = _DEFAULT_CONSTS.UFO_SPAWN_Y_THRESHOLD
 SAUCER_SPEED_MAP = _DEFAULT_CONSTS.SAUCER_SPEED_MAP
 SAUCER_SPEED_ARENA = _DEFAULT_CONSTS.SAUCER_SPEED_ARENA
 PLAYER_BULLET_SPEED = _DEFAULT_CONSTS.PLAYER_BULLET_SPEED
@@ -1178,7 +1181,7 @@ def ship_step(state: ShipState,
     is_thrusting_now = jnp.isin(action, thrust_actions) & (fuel > 0.0)
     
     # --- Physics Parameters ---
-    THRUST_POWER = 0.038 / WORLD_SCALE  # Increased from 0.03 to better overcome gravity
+    THRUST_POWER = 0.035 / WORLD_SCALE  # Increased from 0.03 to better overcome gravity
     SOLAR_GRAVITY = 0.044 / WORLD_SCALE
     PLANETARY_GRAVITY = 0.003 / WORLD_SCALE
     REACTOR_GRAVITY = 0.0001 / WORLD_SCALE
@@ -1186,7 +1189,7 @@ def ship_step(state: ShipState,
 
     # 0.0 = full stop on collision (inelastic)
     # 1.0 = perfect bounce (elastic)
-    bounce_damping = 0.8
+    bounce_damping = 0.75
 
     # --- 1. Initialize velocity variables for this frame ---
     #     we get the initial velocity from the state
@@ -1296,16 +1299,11 @@ def ship_step(state: ShipState,
                             vy + (dy_to_center / dist_to_center) * radial_gravity_strength,
                             vy + gravity))
 
-    # --- 4. Apply velocity damping ---
-    # This makes the ship take time to get going, matching ALE behavior
-    """damping_factor = 0.99  # Retain 99% of velocity each frame
-    vx = vx * damping_factor
-    vy = vy * damping_factor"""
 
-    # --- 5. Apply maximum speed limit ---
+    # --- 4. Apply maximum speed limit ---
     speed_sq = vx ** 2 + vy ** 2
     # Debug: print current speed magnitude each physics step
-    jax.debug.print("current speed: {x}", x=jnp.sqrt(speed_sq))
+    #jax.debug.print("current speed: {x}", x=jnp.sqrt(speed_sq))
 
     def cap_velocity(v_tuple):
         v_x, v_y, spd_sq = v_tuple
@@ -1324,7 +1322,7 @@ def ship_step(state: ShipState,
         (vx, vy, speed_sq)
     )
 
-    # --- 6. Position and Boundary Collision ---
+    # --- 5. Position and Boundary Collision ---
     window_width, window_height = window_size
     
     # Define boundaries to prevent sprite overflow
@@ -1936,8 +1934,16 @@ def _step_level_core(env_state: EnvState, action: int):
             ufo_bullets=create_empty_bullets_16(),
         )
 
-    # UFO spawns in planet levels when timer is 0, but not in reactor (5) or Planet 2 (2)
-    can_spawn_ufo = (env_state.mode == 1) & (env_state.ufo_spawn_timer == 0) & (~env_state.ufo.alive) & (env_state.terrain_bank_idx != 5) & (env_state.terrain_bank_idx != 2)
+    # UFO spawns in planet levels when timer is 0 and ship has descended low enough, but not in reactor (5) and Planet 2 (2)
+    ship_low_enough_for_ufo = env_state.state.y >= jnp.float32(UFO_SPAWN_Y_THRESHOLD)
+    can_spawn_ufo = (
+        (env_state.mode == 1)
+        & (env_state.ufo_spawn_timer == 0)
+        & (~env_state.ufo.alive)
+        & (env_state.terrain_bank_idx != 5)
+        & (env_state.terrain_bank_idx != 2)
+        & ship_low_enough_for_ufo
+    )
     state_after_spawn = jax.lax.cond(can_spawn_ufo, _spawn_ufo_once, lambda e: e, env_state)
 
     is_in_reactor = (env_state.current_level == 4)
@@ -2257,12 +2263,28 @@ def _step_level_core(env_state: EnvState, action: int):
         s, b, eb, fc, cd = operands
         ship_respawn = make_level_start_state(s.current_level)
         ship_respawn = ship_respawn._replace(x=ship_respawn.x + s.respawn_shift_x)
-        return (ship_respawn, create_empty_bullets_64(), create_empty_bullets_16(), jnp.zeros((MAX_ENEMIES,), dtype=jnp.int32), 0)
+        return (
+            ship_respawn,
+            create_empty_bullets_64(),
+            create_empty_bullets_16(),
+            jnp.zeros((MAX_ENEMIES,), dtype=jnp.int32),
+            0,
+            make_empty_ufo(),
+            jnp.int32(UFO_RESPAWN_DELAY_FRAMES),
+        )
 
     def _keep_state_no_respawn(operands):
-        return (ship_after_move, bullets, enemy_bullets, fire_cooldown, cooldown)
+        return (
+            ship_after_move,
+            bullets,
+            enemy_bullets,
+            fire_cooldown,
+            cooldown,
+            ufo,
+            state_after_ufo.ufo_spawn_timer,
+        )
 
-    state, bullets, enemy_bullets, fire_cooldown, cooldown = jax.lax.cond(
+    state, bullets, enemy_bullets, fire_cooldown, cooldown, ufo, ufo_spawn_timer = jax.lax.cond(
         respawn_now & ~game_over,
         _respawn_level_state,
         _keep_state_no_respawn,
@@ -2295,6 +2317,7 @@ def _step_level_core(env_state: EnvState, action: int):
         state=state, bullets=bullets, cooldown=cooldown, enemies=enemies,
         enemy_bullets=enemy_bullets, fire_cooldown=fire_cooldown, key=key,
         ufo=ufo, ufo_bullets=create_empty_bullets_16(),
+        ufo_spawn_timer=ufo_spawn_timer,
         fuel_tanks=new_fuel_tanks,
         fuel=final_fuel,
         shield_active=is_using_shield_tractor,
@@ -3218,7 +3241,7 @@ class JaxGravitar(JaxEnvironment):
             reactor_dest_x=jnp.float32(95),
             reactor_dest_y=jnp.float32(114),
             mode_timer=jnp.int32(0), ufo=make_empty_ufo(),
-            ufo_spawn_timer=jnp.int32(0),
+            ufo_spawn_timer=jnp.int32(UFO_RESPAWN_DELAY_FRAMES),
             level_offset=jnp.array(level_offset, dtype=jnp.float32),
             reactor_timer=initial_timer.astype(jnp.int32),
             reactor_activated=jnp.array(False),
