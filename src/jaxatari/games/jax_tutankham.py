@@ -138,7 +138,7 @@ class TutankhamConstants(NamedTuple):
     HEIGHT: int = 210
     
     # Player constants
-    PLAYER_SPEED: float = 2.5
+    PLAYER_SPEED: int = 2
     PLAYER_SIZE: chex.Array = jnp.array([5, 8], dtype=jnp.int32)
     PLAYER_LIVES: int = 3
 
@@ -565,9 +565,9 @@ class JaxTutankham(JaxEnvironment):
         player_y = jnp.clip(player_y, 0, self.consts.VALID_POS.shape[0] - 1)
 
         # Animation / orientation state
-        is_moving_now = jnp.logical_and(iswalkable, jnp.logical_or(dx[action] != 0, dy[action] != 0))
-        new_direction = jnp.where(dx[action] > 0, 3,
-                        jnp.where(dx[action] < 0, 4, player_direction))
+        is_moving_now = jnp.logical_and(iswalkable, jnp.logical_or(dx[effective_action] != 0, dy[effective_action] != 0))
+        new_direction = jnp.where(dx[effective_action] > 0, 3,
+                        jnp.where(dx[effective_action] < 0, 4, player_direction))
         new_step_counter = step_counter + 1
 
         return player_x, player_y, new_last_directional_action, new_direction, is_moving_now, new_step_counter
