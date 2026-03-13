@@ -13,11 +13,11 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
-def _create_background_sprite(consts: "BasicMathConstants", gameMode: int) -> jnp.ndarray:
+def _create_background_sprite(consts: "BasicMathConstants", dim: Tuple, gameMode: int) -> jnp.ndarray:
     bg_color_rgba = (*consts.COLOR_CODES[gameMode][0], 255)
     return jnp.tile(
         jnp.array(bg_color_rgba, dtype=jnp.uint8),
-        (consts.SCREEN_HEIGHT, consts.SCREEN_WIDTH, 1),
+        (dim[0], dim[1], 1),
     )
 
 def _get_default_asset_config() -> tuple:
@@ -479,7 +479,7 @@ class BasicMathRenderer(JAXGameRenderer):
 
         final_asset_config = list(self.consts.ASSET_CONFIG)
 
-        wall_sprite = _create_background_sprite(self.consts, self.chosenGamemode)
+        wall_sprite = _create_background_sprite(self.consts, self.config.game_dimensions, self.chosenGamemode)
 
         final_asset_config.append({'name': 'background', 'type': 'background', 'data': wall_sprite},)
 
