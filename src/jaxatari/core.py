@@ -35,6 +35,7 @@ GAME_MODULES = {
     "bankheist": "jaxatari.games.jax_bankheist",
     "berzerk": "jaxatari.games.jax_berzerk",
     "blackjack": "jaxatari.games.jax_blackjack",
+    "boxing": "jaxatari.games.jax_boxing",
     "breakout": "jaxatari.games.jax_breakout",
     "centipede": "jaxatari.games.jax_centipede",
     "choppercommand": "jaxatari.games.jax_choppercommand",
@@ -84,6 +85,7 @@ MOD_MODULES = {
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
     "videopinball": "jaxatari.games.mods.videopinball_mods.VideoPinballEnvMod",
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
+    "boxing": "jaxatari.games.mods.boxing_mods.BoxingEnvMod",
 }
 
 
