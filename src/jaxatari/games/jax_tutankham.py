@@ -134,7 +134,7 @@ class TutankhamConstants(NamedTuple):
     INACTIVE: int = 0
     ACTIVE: int = 1
 
-    CREATURE_SPEED: chex.Array = jnp.array([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+    CREATURE_SPEED: chex.Array = jnp.array([1, 3, 7, 2, 2, 2, 2, 2, 2, 2, 2, 2],
                                            dtype=jnp.int32)  # speed for each creature type
     CREATURE_POINTS: chex.Array = jnp.array([1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 0, 3],
                                             dtype=jnp.int32)  # points for defeating each creature type
@@ -164,7 +164,7 @@ class TutankhamConstants(NamedTuple):
 
     # Define which creatures can spawn in each level 
     LEVEL_CREATURES: chex.Array = jnp.array([
-        [SNAKE, BAT, BAT],
+        [SNAKE, SCORPION, BAT],
         [TURTLE, JACKEL, CONDOR],
         [LION, MOTH, VIRUS],
         [MONKEY, MYSTERY, WEAPON]
@@ -192,7 +192,7 @@ class TutankhamState(NamedTuple):
     laser_flash_cooldown: int  # cooldown timer for next laser flash
     amonition_timer: int  # if timer runs out, player can not fire again
 
-    creature_states: chex.Array  # (3, 4) array with (x, y, creature_type, active) for each creature
+    creature_states: chex.Array  # (2, 4) array with (x, y, creature_type, active) for each creature
     last_creature_spawn: int  # time since last creature spawn
 
     item_states: chex.Array # (N, 4) array with (x, y, item_type, collected) for each item
