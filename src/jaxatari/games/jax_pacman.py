@@ -753,14 +753,22 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         
         # 4. Define overshot condition
         #    Normal: reached target (dist_to_self >= dist_between_nodes)
-        #    Portal: moved 1 tile away from current node (into the void)
+        #    Portal: travel a short distance from current node before wrap (spatial delay)
         normal_overshot = vec_to_self_sq >= vec_to_target_sq
         
-        # Asymmetric Portal Overshot:
-        # - Positive Dir (RIGHT/DOWN): standard tile size buffer (travel 8 pixels then wrap)
-        # - Negative Dir (LEFT/UP): immediate wrap (travel 1 pixel then wrap) to avoid off-screen delay
-        portal_threshold_sq = 1
-        
+        # Portal overshot: use direction-dependent threshold to fix asymmetric delay.
+        # - Left portal, moving LEFT: we go off-screen (negative x), so 2-pixel threshold
+        #   gives 2 frames of "tunnel" that are not visible → feels quick.
+        # - Right portal, moving RIGHT: we stay on-screen (217, 218...) so the same
+        #   threshold would show Pacman for 2 extra frames → feels like more delay.
+        # Use threshold 0 when moving in positive direction (RIGHT/DOWN) so we wrap
+        # after 1 pixel; use 1 for negative direction (LEFT/UP). Both directions
+        # then feel like a quick wrap.
+        moving_positive = jnp.logical_or(
+            state.player_direction == Action.RIGHT,
+            state.player_direction == Action.DOWN
+        )
+        portal_threshold_sq = jnp.where(moving_positive, 0, 1)
         portal_overshot = vec_to_self_sq > portal_threshold_sq
         
         overshot = jnp.where(is_portal, portal_overshot, normal_overshot)
