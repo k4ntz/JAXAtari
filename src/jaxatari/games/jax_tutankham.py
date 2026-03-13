@@ -154,10 +154,21 @@ class TutankhamConstants(NamedTuple):
     # KEY_
     ITEM_POINTS: chex.Array = jnp.array([50, 100, 75, 150], dtype=jnp.int32)  # points for each item type
 
-    RESPAWN_CHECKPOINT_UPDATE_INTERVAL: int = 180  # frames between respawn checkpoint updates
 
     # Asset config baked into constants
     ASSET_CONFIG: tuple = _get_default_asset_config()
+
+
+    # Level -----------------------------------------
+
+    # Define which creatures can spawn in each level 
+    LEVEL_CREATURES: chex.Array = jnp.array([
+        [SNAKE, SCORPION, BAT],
+        [TURTLE, JACKEL, CONDOR],
+        [LION, MOTH, VIRUS],
+        [MONKEY, MYSTERY, WEAPON]
+    ])
+    
 
 
 # ---------------------------------------------------------------------
@@ -166,6 +177,8 @@ class TutankhamConstants(NamedTuple):
 class TutankhamState(NamedTuple):
     # key state for creature spawn randomness
     rng_key: int
+
+    level: int  # current level (up to 16 Levels)
 
     player_x: chex.Array
     player_y: chex.Array
@@ -381,6 +394,7 @@ class JaxTutankham(JaxEnvironment):
         # Generate random seed based on current time for creature spawn randomness
         seed = int(time.time())
         key = jax.random.PRNGKey(seed)
+        level = 1
         start_x = self.consts.WIDTH // 2
         start_y = self.consts.HEIGHT // 2
         tutankham_score = 0
@@ -395,7 +409,8 @@ class JaxTutankham(JaxEnvironment):
         has_key = False
 
 
-        state = TutankhamState(player_x=start_x,
+        state = TutankhamState(level=level,
+                               player_x=start_x,
                                 player_y=start_y,
                                 tutankham_score=tutankham_score,
                                 player_lives=player_lives,
@@ -590,46 +605,42 @@ class JaxTutankham(JaxEnvironment):
 
     # creature spawner step
     @partial(jax.jit, static_argnums=(0,))
-    def spawner_step(self, creature_states, last_creature_spawn):
+    def spawner_step(self, creature_states, last_creature_spawn, level, rng_key):
+        GROWTH = 0.0003
+        MAX_PROB = 0.8
 
-        # last_creature_spawn = vergangene Zeit (in Sekunden) seit letztem Frame
+        # Increment timer every step
+        new_last_creature_spawn = last_creature_spawn + 1
 
-        # Parameter # TODO: REMOVE HARDCODED VALUES
-        GROWTH = 0.0003  # Chance steigt pro Sekunde
-        MAX_PROB = 0.8  # Deckelung (optional)
+        # Spawn chance grows linearly with time, capped at MAX_PROB
+        spawn_chance = jnp.clip(new_last_creature_spawn * GROWTH, 0.0, MAX_PROB)
 
-        # 1) aktive Creatures zählen
-        active_count = np.sum(creature_states[:, 3] == self.consts.ACTIVE)
-        if active_count >= self.consts.MAX_CREATURES:
-            return creature_states, last_creature_spawn  # nichts tun, Limit erreicht
+        # Split key: one for the probability roll, one for the creature type
+        rng_key, key_roll, key_type = jax.random.split(rng_key, 3)
+        roll = jax.random.uniform(key_roll)
+        should_spawn = roll < spawn_chance
 
-        # 2) Spawn-Timer erhöhen
-        last_creature_spawn += 1
+        # Only spawn if there is a free slot
+        inactive_mask = creature_states[:, 3] == self.consts.INACTIVE
+        has_free_slot = jnp.any(inactive_mask)
+        first_free_slot = jnp.argmax(inactive_mask)  # index of first inactive creature
 
-        # 3) Spawn-Chance berechnen
-        spawn_chance = last_creature_spawn * GROWTH
-        spawn_chance = min(spawn_chance, MAX_PROB)
+        # Random creature type
+        #n_types = len(self.consts.CREATURE_POINTS)
+        #new_type = jax.random.randint(key_type, shape=(), minval=0, maxval=n_types)
+        new_type = jax.random.choice(key_type, self.consts.LEVEL_CREATURES[level])  # creature type depends on current level
+        new_creature = jnp.array([0, 60, new_type, self.consts.ACTIVE], dtype=jnp.int32)
 
-        # 4) treffen wir den Zufall?
-        if np.random.random() > spawn_chance:
-            return creature_states, last_creature_spawn  # nein → nichts machen
+        do_spawn = should_spawn & has_free_slot
 
-        # 5) Ja → wir spawnen einen!
-        new_creature_states = creature_states.copy()
+        # Conditionally overwrite the first free slot
+        new_row = jnp.where(do_spawn, new_creature, creature_states[first_free_slot])
+        new_creature_states = creature_states.at[first_free_slot].set(new_row)
 
-        for i in range(self.consts.MAX_CREATURES):
-            x, y, creature_type, active = creature_states[i]
-            if active == self.consts.INACTIVE:  # TODO: find correct spawner x,y
-                new_x = 0
-                new_y = 0
-                new_creature_type = np.random.randint(0, len(self.consts.CREATURE_POINTS))
-                new_creature_states[i] = np.array([new_x, new_y, new_creature_type, self.consts.ACTIVE])
+        # Reset timer on spawn
+        final_last_creature_spawn = jnp.where(do_spawn, jnp.int32(0), new_last_creature_spawn)
 
-                # Timer zurücksetzen: Start von vorne
-                last_creature_spawn = 0
-                break
-
-        return new_creature_states, last_creature_spawn
+        return new_creature_states, final_last_creature_spawn, rng_key
 
 
 
@@ -756,7 +767,7 @@ class JaxTutankham(JaxEnvironment):
     # Step logic
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: TutankhamState, action: int):
-
+        level=state.level
         player_x = state.player_x
         player_y = state.player_y
         tutankham_score = state.tutankham_score
@@ -777,7 +788,7 @@ class JaxTutankham(JaxEnvironment):
 
         creature_states = self.creature_step(creature_states)
 
-        creature_states, last_creature_spawn = self.spawner_step(creature_states, last_creature_spawn)
+        creature_states, last_creature_spawn, rng_key = self.spawner_step(creature_states, last_creature_spawn, level, rng_key)
 
         # laser flash step should go after creature step to immediately remove creatures
         creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)
@@ -803,7 +814,8 @@ class JaxTutankham(JaxEnvironment):
 
 
 
-        state = TutankhamState(player_x=player_x,
+        state = TutankhamState(level=level,
+                               player_x=player_x,
                                player_y=player_y,
                                tutankham_score=tutankham_score,
                                player_lives=player_lives,
