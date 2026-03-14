@@ -150,6 +150,9 @@ class RoadRunnerConstants(NamedTuple):
     # Enemy Flattened (Run Over) State
     ENEMY_FLATTENED_DURATION: int = 120  # 2 seconds at 60 FPS
     ENEMY_FLATTENED_SCORE: int = 1000
+    # Enemy Burnt (Landmine) State
+    ENEMY_BURNT_DURATION: int = 120  # 2 seconds at 60 FPS
+    ENEMY_BURNT_SCORE: int = 1000
     # --- Offramp Constants ---
     OFFRAMP_HEIGHT: int = 12   # Height of offramp road in pixels (narrow "one lane")
     OFFRAMP_GAP: int = 8       # Gap (median) between offramp bottom and main road top
@@ -433,8 +436,8 @@ RoadRunner_Level_4 = LevelConfig(
 )
 
 DEFAULT_LEVELS: Tuple[LevelConfig, ...] = (
-    RoadRunner_Level_1,
-    RoadRunner_Level_2,
+        #RoadRunner_Level_1,
+        #RoadRunner_Level_2,
     RoadRunner_Level_3,
     RoadRunner_Level_4,
 )
@@ -964,6 +967,7 @@ class RoadRunnerState(NamedTuple):
     fall_clip_y: chex.Array  # Y coordinate below which player sprite should be clipped during fall
     enemy_speed_phase_start: chex.Array  # Scroll step when current speed phase cycle began
     enemy_flattened_timer: chex.Array  # Timer for enemy being run over
+    enemy_burnt_timer: chex.Array  # Timer for enemy stepping on landmine
     player_on_offramp: chex.Array  # Boolean, whether the player is currently on the offramp
     terminal: chex.Array  # Boolean, True when the episode just ended (game over)
 
@@ -1445,6 +1449,19 @@ class JaxRoadRunner(
                 enemy_flattened_timer=new_timer
             )
 
+        def burnt_logic(st: RoadRunnerState) -> RoadRunnerState:
+            new_timer = st.enemy_burnt_timer - 1
+            # Update position only based on scrolling (stuck to road)
+            new_enemy_x = self._handle_scrolling(st, st.enemy_x)
+            new_enemy_x, new_enemy_y = self._check_enemy_bounds(new_enemy_x, st.enemy_y, road_top, road_bottom)
+
+            return st._replace(
+                enemy_x=new_enemy_x.astype(jnp.int32),
+                enemy_y=new_enemy_y.astype(jnp.int32),
+                enemy_is_moving=False,
+                enemy_burnt_timer=new_timer
+            )
+
         def normal_logic(st: RoadRunnerState) -> RoadRunnerState:
             # Calculate current speed phase based on scroll distance
             total_cycle = (self.consts.ENEMY_SLOW_DURATION +
@@ -1523,12 +1540,13 @@ class JaxRoadRunner(
                 enemy_looks_right=enemy_looks_right,
             )
 
-        # Use switch instead of nested conds: 0=normal, 1=flattened, 2=game_over
+        # Use switch instead of nested conds: 0=normal, 1=flattened, 2=game_over, 3=burnt
         branch_idx = jnp.where(
             state.is_round_over, 2,
-            jnp.where(state.enemy_flattened_timer > 0, 1, 0)
+            jnp.where(state.enemy_flattened_timer > 0, 1,
+                jnp.where(state.enemy_burnt_timer > 0, 3, 0))
         )
-        return jax.lax.switch(branch_idx, [normal_logic, flattened_logic, game_over_logic], state)
+        return jax.lax.switch(branch_idx, [normal_logic, flattened_logic, game_over_logic, burnt_logic], state)
 
     def _check_game_over(self, state: RoadRunnerState) -> RoadRunnerState:
         # Check if the enemy and the player overlap
@@ -1539,8 +1557,8 @@ class JaxRoadRunner(
             self.consts.ENEMY_SIZE[0], self.consts.ENEMY_SIZE[1],
         )
 
-        # Don't trigger game over if enemy is flattened
-        collision = collision & (state.enemy_flattened_timer == 0)
+        # Don't trigger game over if enemy is flattened or burnt
+        collision = collision & (state.enemy_flattened_timer == 0) & (state.enemy_burnt_timer == 0)
 
         # Don't trigger game over if the player is separated from the enemy by the median.
         # The enemy always stays on the main road.  A collision across the median is only
@@ -1857,8 +1875,8 @@ class JaxRoadRunner(
             player_x=jnp.where(player_collision, (state.truck_x + self.consts.TRUCK_SIZE[0] + 2).astype(jnp.int32), state.player_x),
         )
 
-        # Handle enemy collision with jnp.where (only if not already flattened)
-        should_flatten = enemy_collision & (state.enemy_flattened_timer == 0)
+        # Handle enemy collision with jnp.where (only if not already flattened or burnt)
+        should_flatten = enemy_collision & (state.enemy_flattened_timer == 0) & (state.enemy_burnt_timer == 0)
         state = state._replace(
             enemy_flattened_timer=jnp.where(should_flatten, jnp.array(self.consts.ENEMY_FLATTENED_DURATION, dtype=jnp.int32), state.enemy_flattened_timer),
             score=jnp.where(should_flatten, state.score + self.consts.ENEMY_FLATTENED_SCORE, state.score),
@@ -2142,7 +2160,7 @@ class JaxRoadRunner(
 
     def _check_landmine_collisions(self, state: RoadRunnerState) -> RoadRunnerState:
         """
-        Check collision between player and landmine.
+        Check collision between player/enemy and landmine.
         """
         active = state.landmine_x >= 0
 
@@ -2150,17 +2168,38 @@ class JaxRoadRunner(
         player_pickup_y = state.player_y + self.consts.PLAYER_PICKUP_OFFSET
         pickup_height = self.consts.PLAYER_SIZE[1] - self.consts.PLAYER_PICKUP_OFFSET
 
-        overlap = _check_aabb_collision(
+        player_overlap = _check_aabb_collision(
             state.player_x, player_pickup_y,
             self.consts.PLAYER_SIZE[0], pickup_height,
             state.landmine_x, state.landmine_y,
             self.consts.LANDMINE_SIZE[0], self.consts.LANDMINE_SIZE[1],
         )
-        collision = active & overlap & (state.death_timer == 0)
+        player_collision = active & player_overlap & (state.death_timer == 0)
+
+        # Enemy collision with landmine — use bottom portion of sprite (feet),
+        # same approach as the player's PLAYER_PICKUP_OFFSET.
+        # Enemy run sprites are 32 tall, 8 wide; feet are the bottom 8 pixels.
+        enemy_foot_offset = 24
+        enemy_sprite_h = 32
+        enemy_sprite_w = 8
+        enemy_foot_y = state.enemy_y + enemy_foot_offset
+        enemy_foot_h = enemy_sprite_h - enemy_foot_offset
+        enemy_overlap = _check_aabb_collision(
+            state.enemy_x, enemy_foot_y,
+            enemy_sprite_w, enemy_foot_h,
+            state.landmine_x, state.landmine_y,
+            self.consts.LANDMINE_SIZE[0], self.consts.LANDMINE_SIZE[1],
+        )
+        enemy_collision = active & enemy_overlap & (state.enemy_burnt_timer == 0) & (state.enemy_flattened_timer == 0)
+
+        # Either collision consumes the landmine
+        any_collision = player_collision | enemy_collision
 
         return state._replace(
-            death_timer=jnp.where(collision, jnp.array(self.consts.DEATH_ANIMATION_DURATION, dtype=jnp.int32), state.death_timer),
-            landmine_x=jnp.where(collision, jnp.array(-1, dtype=jnp.int32), state.landmine_x)
+            death_timer=jnp.where(player_collision, jnp.array(self.consts.DEATH_ANIMATION_DURATION, dtype=jnp.int32), state.death_timer),
+            enemy_burnt_timer=jnp.where(enemy_collision, jnp.array(self.consts.ENEMY_BURNT_DURATION, dtype=jnp.int32), state.enemy_burnt_timer),
+            score=jnp.where(enemy_collision, state.score + self.consts.ENEMY_BURNT_SCORE, state.score),
+            landmine_x=jnp.where(any_collision, jnp.array(-1, dtype=jnp.int32), state.landmine_x),
         )
 
     def _update_and_spawn_cannon_and_bullets(self, state: RoadRunnerState,
@@ -2381,6 +2420,7 @@ class JaxRoadRunner(
             death_timer=jnp.array(0, dtype=jnp.int32),
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
             enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
+            enemy_burnt_timer=jnp.array(0, dtype=jnp.int32),
             player_on_offramp=jnp.array(False, dtype=jnp.bool_),
             instant_death=jnp.array(False, dtype=jnp.bool_),
             is_falling=jnp.array(False, dtype=jnp.bool_),
@@ -2554,6 +2594,7 @@ class JaxRoadRunner(
             death_timer=jnp.array(0, dtype=jnp.int32),
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
             enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
+            enemy_burnt_timer=jnp.array(0, dtype=jnp.int32),
             # Conditionally reset score, lives, level, step_counter, rng
             score=jnp.where(is_game_over, jnp.array(0, dtype=jnp.int32), state.score),
             lives=jnp.where(is_game_over, jnp.array(self.consts.STARTING_LIVES, dtype=jnp.int32), state.lives - 1),
@@ -2663,6 +2704,7 @@ class JaxRoadRunner(
             fall_clip_y=jnp.array(0, dtype=jnp.int32),
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
             enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
+            enemy_burnt_timer=jnp.array(0, dtype=jnp.int32),
             player_on_offramp=jnp.array(False, dtype=jnp.bool_),
         )
 
@@ -3298,6 +3340,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "enemy_run1", "type": "single", "file": "enemy_run1.npy"},
             {"name": "enemy_run2", "type": "single", "file": "enemy_run2.npy"},
             {"name": "enemy_run_over", "type": "single", "file": "enemy_run_over.npy"},
+            {"name": "enemy_burnt", "type": "single", "file": "enemy_burnt.npy"},
             {"name": "road", "type": "procedural", "data": road_sprite},
             {"name": "road_no_stripes", "type": "procedural", "data": road_no_stripes_sprite},
             {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
@@ -3893,10 +3936,17 @@ class RoadRunnerRenderer(JAXGameRenderer):
                 lambda: flattened_mask
             )
 
+            burnt_mask = self.SHAPE_MASKS["enemy_burnt"]
+
+            # Priority: burnt > flattened > normal animated
             final_mask = jax.lax.cond(
-                state.enemy_flattened_timer > 0,
-                lambda: flattened_mask,
-                lambda: enemy_mask
+                state.enemy_burnt_timer > 0,
+                lambda: burnt_mask,
+                lambda: jax.lax.cond(
+                    state.enemy_flattened_timer > 0,
+                    lambda: flattened_mask,
+                    lambda: enemy_mask
+                )
             )
 
             return self.jr.render_at(c, state.enemy_x, state.enemy_y, final_mask)
