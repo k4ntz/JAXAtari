@@ -12,6 +12,10 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 
+# Enemy sprite configuration (mirrors how player constants are handled elsewhere)
+ENEMY_SPRITE_HEIGHT = 32
+ENEMY_SPRITE_WIDTH = 8
+ENEMY_FOOT_OFFSET = 24
 
 # --- Level Configuration ---
 class RoadSectionConfig(NamedTuple):
@@ -2179,14 +2183,11 @@ class JaxRoadRunner(
         # Enemy collision with landmine — use bottom portion of sprite (feet),
         # same approach as the player's PLAYER_PICKUP_OFFSET.
         # Enemy run sprites are 32 tall, 8 wide; feet are the bottom 8 pixels.
-        enemy_foot_offset = 24
-        enemy_sprite_h = 32
-        enemy_sprite_w = 8
-        enemy_foot_y = state.enemy_y + enemy_foot_offset
-        enemy_foot_h = enemy_sprite_h - enemy_foot_offset
+        enemy_foot_y = state.enemy_y + ENEMY_FOOT_OFFSET
+        enemy_foot_h = ENEMY_SPRITE_HEIGHT - ENEMY_FOOT_OFFSET
         enemy_overlap = _check_aabb_collision(
             state.enemy_x, enemy_foot_y,
-            enemy_sprite_w, enemy_foot_h,
+            ENEMY_SPRITE_WIDTH, enemy_foot_h,
             state.landmine_x, state.landmine_y,
             self.consts.LANDMINE_SIZE[0], self.consts.LANDMINE_SIZE[1],
         )
