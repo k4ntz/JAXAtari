@@ -436,8 +436,8 @@ RoadRunner_Level_4 = LevelConfig(
 )
 
 DEFAULT_LEVELS: Tuple[LevelConfig, ...] = (
-        #RoadRunner_Level_1,
-        #RoadRunner_Level_2,
+    RoadRunner_Level_1,
+    RoadRunner_Level_2,
     RoadRunner_Level_3,
     RoadRunner_Level_4,
 )
