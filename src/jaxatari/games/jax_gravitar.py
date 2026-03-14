@@ -98,7 +98,7 @@ class GravitarConstants(struct.PyTreeNode):
     
     # Movement speeds and physics
     SAUCER_SPEED_MAP: float = struct.field(pytree_node=False, default=0.18)
-    SAUCER_SPEED_ARENA: float = struct.field(pytree_node=False, default=0.18)
+    SAUCER_SPEED_ARENA: float = struct.field(pytree_node=False, default=0.36)
     SAUCER_RADIUS: float = struct.field(pytree_node=False, default=3.0)
     SHIP_RADIUS: float = struct.field(pytree_node=False, default=2.0)
     TRACTOR_BEAM_RANGE: float = struct.field(pytree_node=False, default=15.0)
@@ -515,6 +515,9 @@ class EnvState(NamedTuple):
     saucer: SaucerState
     map_return_x: jnp.ndarray  # float32
     map_return_y: jnp.ndarray  # float32
+    map_return_vx: jnp.ndarray  # float32
+    map_return_vy: jnp.ndarray  # float32
+    map_return_angle: jnp.ndarray  # float32
     saucer_spawn_timer: jnp.ndarray  # Tracks if a saucer has spawned in the current level
 
     ufo: UFOState
@@ -811,6 +814,9 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
         saucer=make_default_saucer(),
         map_return_x=jnp.float32(0.0),
         map_return_y=jnp.float32(0.0),
+        map_return_vx=jnp.float32(0.0),
+        map_return_vy=jnp.float32(0.0),
+        map_return_angle=jnp.float32(-jnp.pi / 2),
         saucer_spawn_timer=jnp.int32(SAUCER_SPAWN_DELAY_FRAMES),
         ufo=make_empty_ufo(),
         ufo_spawn_timer=jnp.int32(0),
@@ -1188,7 +1194,7 @@ def ship_step(state: ShipState,
     # --- Physics Parameters ---
     THRUST_POWER = 0.035 / WORLD_SCALE  # Increased from 0.03 to better overcome gravity
     SOLAR_GRAVITY = 0.044 / WORLD_SCALE
-    PLANETARY_GRAVITY = 0.003 / WORLD_SCALE
+    PLANETARY_GRAVITY = 0.0032 / WORLD_SCALE
     REACTOR_GRAVITY = 0.0001 / WORLD_SCALE
     MAX_SPEED = 3.0 / WORLD_SCALE
 
@@ -1836,7 +1842,10 @@ def step_map(env_state: EnvState, action: int):
     def _save_map_position(env):
         return env._replace(
             map_return_x=env.state.x,
-            map_return_y=env.state.y
+            map_return_y=env.state.y,
+            map_return_vx=env.state.vx,
+            map_return_vy=env.state.vy,
+            map_return_angle=env.state.angle,
         )
     
     new_env = jax.lax.cond(can_enter_planet, _save_map_position, lambda e: e, new_env)
@@ -1851,11 +1860,15 @@ def step_map(env_state: EnvState, action: int):
         W, H = jnp.float32(WINDOW_WIDTH), jnp.float32(WINDOW_HEIGHT)
         # Save current position BEFORE modifying state
         return_x, return_y = env.state.x, env.state.y
+        ship_approached_from_above = env.state.y < sauc_final.y
+
+        ship_spawn_y = jnp.where(ship_approached_from_above, H * 0.20, H * 0.80)
+        saucer_spawn_y = jnp.where(ship_approached_from_above, H * 0.80, H * 0.20)
         return env._replace(
             mode=jnp.int32(2), mode_timer=jnp.int32(0),
-            state=env.state._replace(x=W * 0.20, y=H * 0.50, vx=0.0, vy=0.0),
+            state=env.state._replace(x=W * 0.80, y=ship_spawn_y, vx=env.state.vx, vy=env.state.vy),
             saucer=sauc_final._replace(
-                x=W * 0.80, y=H * 0.50, vx=-SAUCER_SPEED_ARENA, vy=0.0,
+                x=W * 0.20, y=saucer_spawn_y, vx=SAUCER_SPEED_ARENA, vy=0.0,
                 hp=SAUCER_INIT_HP, alive=True, death_timer=0
             ),
             # Clear all bullets when entering arena to prevent rogue bullets
@@ -1863,7 +1876,10 @@ def step_map(env_state: EnvState, action: int):
             enemy_bullets=create_empty_bullets_16(),
             # Save the position for restoration after arena
             map_return_x=return_x,
-            map_return_y=return_y
+            map_return_y=return_y,
+            map_return_vx=env.state.vx,
+            map_return_vy=env.state.vy,
+            map_return_angle=env.state.angle,
         )
 
     new_env = jax.lax.cond(hit_to_arena, _enter_arena, lambda e: e, new_env)
@@ -2392,17 +2408,16 @@ def step_arena(env_state: EnvState, action: int):
     fuel_after_actions = jnp.maximum(0.0, env_state.fuel - fuel_consumed)
 
     # --- 3. Saucer Movement and Firing ---
+    fire_key, new_main_key = jax.random.split(env_state.key)
     saucer_after_move = jax.lax.cond(saucer.alive,
                                      lambda s: _update_saucer_seek(s, ship_after_move.x, ship_after_move.y,
                                                                    SAUCER_SPEED_ARENA), lambda s: s, operand=saucer)
-    can_shoot_saucer = saucer_after_move.alive & (_bullets_alive_count(env_state.enemy_bullets) < 1) & (
-                (env_state.mode_timer % SAUCER_FIRE_INTERVAL_FRAMES) == 0)
-
-    enemy_bullets = jax.lax.cond(can_shoot_saucer,
-                                 lambda eb: _fire_single_from_to(eb, saucer_after_move.x, saucer_after_move.y,
-                                                                 ship_after_move.x, ship_after_move.y,
-                                                                 SAUCER_BULLET_SPEED), lambda eb: eb,
-                                 operand=env_state.enemy_bullets)
+    enemy_bullets = _saucer_fire_random(
+        saucer_after_move,
+        env_state.enemy_bullets,
+        env_state.mode_timer,
+        fire_key,
+    )
     enemy_bullets = update_bullets(enemy_bullets)
 
     # --- 4. Collision Detection ---
@@ -2470,6 +2485,7 @@ def step_arena(env_state: EnvState, action: int):
         cooldown=cooldown,
         saucer=saucer_final,
         enemy_bullets=enemy_bullets,
+        key=new_main_key,
         crash_timer=crash_timer_next,
         mode_timer=env_state.mode_timer + 1,
         score=env_state.score + reward,
@@ -2484,14 +2500,16 @@ def step_arena(env_state: EnvState, action: int):
         restored_ship = ShipState(
             x=env.map_return_x,
             y=env.map_return_y,
-            vx=jnp.float32(0.0),
-            vy=jnp.float32(0.0),
-            angle=env.state.angle,
+            vx=env.map_return_vx,
+            vy=env.map_return_vy,
+            angle=env.map_return_angle,
             is_thrusting=jnp.array(False),
             rotation_cooldown=jnp.int32(0)
         )
         return env._replace(
-            mode=jnp.int32(0), 
+            # Keep arena mode for this transition frame so step_full can
+            # correctly take the arena-return branch and preserve trajectory.
+            mode=jnp.int32(2), 
             state=restored_ship,
             saucer=make_default_saucer(),
             saucer_spawn_timer=jnp.int32(SAUCER_RESPAWN_DELAY_FRAMES)
@@ -3149,6 +3167,9 @@ class JaxGravitar(JaxEnvironment):
             saucer_spawn_timer=jnp.int32(SAUCER_SPAWN_DELAY_FRAMES), 
             map_return_x=jnp.float32(0.0),
             map_return_y=jnp.float32(0.0),
+            map_return_vx=jnp.float32(0.0),
+            map_return_vy=jnp.float32(0.0),
+            map_return_angle=jnp.float32(-jnp.pi / 2),
             ufo=make_empty_ufo(), ufo_spawn_timer=jnp.int32(0), 
             ufo_home_x=jnp.float32(0.0), 
             ufo_home_y=jnp.float32(0.0),
@@ -3270,7 +3291,7 @@ class JaxGravitar(JaxEnvironment):
             surf = self.sprites[SpriteIdx(idx)]
             th, tw = surf.shape[0], surf.shape[1]
             
-            # Calculate scale with overrides (terrant2 uses 0.80)
+            # Calculate scale with overrides
             scale = min(W / tw, H / th)
             extra = TERRANT_SCALE_OVERRIDES.get(SpriteIdx(idx), 1.0)
             scale *= float(extra)
