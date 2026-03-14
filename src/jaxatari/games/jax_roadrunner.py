@@ -156,7 +156,7 @@ class RoadRunnerConstants(NamedTuple):
     ENEMY_FLATTENED_SCORE: int = 1000
     # Enemy Burnt (Landmine) State
     ENEMY_BURNT_DURATION: int = 120  # 2 seconds at 60 FPS
-    ENEMY_BURNT_SCORE: int = 1000
+    ENEMY_BURNT_SCORE: int = 200
     # --- Offramp Constants ---
     OFFRAMP_HEIGHT: int = 12   # Height of offramp road in pixels (narrow "one lane")
     OFFRAMP_GAP: int = 8       # Gap (median) between offramp bottom and main road top
