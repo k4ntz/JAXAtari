@@ -2600,7 +2600,7 @@ def _ufo_alive_step(e, ship, bullets):
     hp_after_hit = u_after_move.hp - jnp.where(hit_by_bullet, 1, 0)
     was_alive = u_after_move.alive
 
-    is_dead_now = hit_by_ship | (hp_after_hit <= 0)
+    is_dead_now = (hp_after_hit <= 0)
     just_died = was_alive & is_dead_now
 
     u_final = u_after_move._replace(
@@ -2811,7 +2811,9 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
                 return obs_out, final_state, reward, jnp.array(False), win_info, jnp.array(True), level
 
             def _on_death(_):
-                lives_after_death = current_state.lives - 1
+                # `step_core` already applied the life decrement for death events.
+                # Avoid decrementing again here to prevent double-counting lives.
+                lives_after_death = current_state.lives
                 death_info = {**info, "level_cleared": jnp.array(False)}
                 is_game_over = (lives_after_death <= 0)
                 new_main_key, subkey_for_reset = jax.random.split(current_state.key)
