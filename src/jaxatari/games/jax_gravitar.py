@@ -103,7 +103,8 @@ class GravitarConstants(struct.PyTreeNode):
     SHIP_RADIUS: float = struct.field(pytree_node=False, default=2.0)
     TRACTOR_BEAM_RANGE: float = struct.field(pytree_node=False, default=15.0)
     PLAYER_BULLET_SPEED: float = struct.field(pytree_node=False, default=1.3)
-    SAUCER_BULLET_SPEED: float = struct.field(pytree_node=False, default=1.3)
+    SAUCER_BULLET_SPEED: float = struct.field(pytree_node=False, default=2.0)
+    ENEMY_BULLET_SPEED: float = struct.field(pytree_node=False, default=2.0)
     UFO_HIT_RADIUS: float = struct.field(pytree_node=False, default=3.0)
     
     # HP and damage
@@ -111,7 +112,7 @@ class GravitarConstants(struct.PyTreeNode):
     
     # Animation timing
     SAUCER_EXPLOSION_FRAMES: int = struct.field(pytree_node=False, default=60)
-    SAUCER_FIRE_INTERVAL_FRAMES: int = struct.field(pytree_node=False, default=24)
+    SAUCER_FIRE_INTERVAL_FRAMES: int = struct.field(pytree_node=False, default=8)
     ENEMY_EXPLOSION_FRAMES: int = struct.field(pytree_node=False, default=60)
     PLAYER_FIRE_COOLDOWN_FRAMES: int = struct.field(pytree_node=False, default=30)
     
@@ -122,7 +123,7 @@ class GravitarConstants(struct.PyTreeNode):
     
     # Ship rotation
     SHIP_ANGLES: jnp.ndarray = struct.field(pytree_node=False, default_factory=_get_default_ship_angles)
-    ROTATION_COOLDOWN_FRAMES: int = struct.field(pytree_node=False, default=25)
+    ROTATION_COOLDOWN_FRAMES: int = struct.field(pytree_node=False, default=5)
     
     # Debug settings
     SHIP_ANCHOR_X: Optional[float] = struct.field(pytree_node=False, default=None)
@@ -130,7 +131,7 @@ class GravitarConstants(struct.PyTreeNode):
     DEBUG_DRAW_SHIP_ORIGIN: bool = struct.field(pytree_node=False, default=True)
     
     # Reactor physics
-    REACTOR_START_Y: float = 30.0
+    REACTOR_START_Y: float = struct.field(pytree_node=False, default=30.0)
 
 
 # Module-level constants used by free functions (not methods)
@@ -142,6 +143,7 @@ HUD_HEIGHT = _DEFAULT_CONSTS.HUD_HEIGHT
 WORLD_SCALE = _DEFAULT_CONSTS.WORLD_SCALE
 SHIP_RADIUS = _DEFAULT_CONSTS.SHIP_RADIUS
 SHIP_ANGLES = _DEFAULT_CONSTS.SHIP_ANGLES
+ROTATION_COOLDOWN_FRAMES = _DEFAULT_CONSTS.ROTATION_COOLDOWN_FRAMES
 MAX_BULLETS = _DEFAULT_CONSTS.MAX_BULLETS
 MAX_ENEMIES = _DEFAULT_CONSTS.MAX_ENEMIES
 NOOP = _DEFAULT_CONSTS.NOOP
@@ -155,6 +157,7 @@ SAUCER_SPEED_MAP = _DEFAULT_CONSTS.SAUCER_SPEED_MAP
 SAUCER_SPEED_ARENA = _DEFAULT_CONSTS.SAUCER_SPEED_ARENA
 PLAYER_BULLET_SPEED = _DEFAULT_CONSTS.PLAYER_BULLET_SPEED
 SAUCER_BULLET_SPEED = _DEFAULT_CONSTS.SAUCER_BULLET_SPEED
+ENEMY_BULLET_SPEED = _DEFAULT_CONSTS.ENEMY_BULLET_SPEED
 SAUCER_RADIUS = _DEFAULT_CONSTS.SAUCER_RADIUS
 UFO_HIT_RADIUS = _DEFAULT_CONSTS.UFO_HIT_RADIUS
 TRACTOR_BEAM_RANGE = _DEFAULT_CONSTS.TRACTOR_BEAM_RANGE
@@ -303,6 +306,7 @@ class SpriteIdx(IntEnum):
     DIGIT_9 = 38
     ENEMY_ORANGE_FLIPPED = 39
     SHIELD = 40
+    REACTOR_DEST_HIT = 41  # reactor_destination_hit.npy
 
 
 # Map angle index to sprite index (defined after SpriteIdx enum)
@@ -685,6 +689,7 @@ def load_sprites_tuple() -> tuple:
         SpriteIdx.PLANET3: "planet3",
         SpriteIdx.PLANET4: "planet4",
         SpriteIdx.REACTOR_DEST: "reactor_destination",
+        SpriteIdx.REACTOR_DEST_HIT: "reactor_destination_hit",
         SpriteIdx.SCORE_UI: "score",
         SpriteIdx.HP_UI: "HP",
         SpriteIdx.SHIP_THRUST_BACK: "ship_thrust_back",
@@ -822,7 +827,7 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
 
 @jax.jit
 def make_level_start_state(level_id: int) -> ShipState:
-    START_Y = jnp.float32(35.0)
+    START_Y = jnp.float32(44.0)
     REACTOR_START_Y = jnp.float32(60.0)  # Lower spawn point for reactor
 
     x = jnp.array(WINDOW_WIDTH / 2 + 5.0, dtype=jnp.float32)
@@ -1197,8 +1202,6 @@ def ship_step(state: ShipState,
     vy = state.vy
 
     # --- 2. Rotation Logic (Discrete 12-angle system) ---
-    rotation_cooldown_frames = 5  # Frames between rotations (adjust for desired rotation speed)
-    
     rotate_right_actions = jnp.array([3, 6, 8, 11, 14, 16])
     rotate_left_actions = jnp.array([4, 7, 9, 12, 15, 17])
     right = jnp.isin(action, rotate_right_actions)
@@ -1224,7 +1227,7 @@ def ship_step(state: ShipState,
     did_rotate = (next_idx != current_idx)
     new_rotation_cooldown = jnp.where(
         did_rotate,
-        jnp.int32(rotation_cooldown_frames),
+        jnp.int32(ROTATION_COOLDOWN_FRAMES),
         jnp.maximum(jnp.int32(0), state.rotation_cooldown - 1)
     )
 
@@ -2104,9 +2107,8 @@ def _step_level_core(env_state: EnvState, action: int):
         random_angle = jnp.where(is_flipped, random_offset, -jnp.pi + random_offset)
 
         # Bullet speed
-        bullet_speed = 1.5 / WORLD_SCALE
-        vx = jnp.cos(random_angle) * bullet_speed
-        vy = jnp.sin(random_angle) * bullet_speed
+        vx = jnp.cos(random_angle) * ENEMY_BULLET_SPEED
+        vy = jnp.sin(random_angle) * ENEMY_BULLET_SPEED
 
         x_out = jnp.where(should_fire_mask, ex_center, -1.0)
         y_out = jnp.where(should_fire_mask, ey_center, -1.0)
@@ -3238,8 +3240,8 @@ class JaxGravitar(JaxEnvironment):
             terrain_offset=jnp.array([ox, oy]),
             terrain_bank_idx=bank_idx,
             reactor_dest_active=(level_id == 4),
-            reactor_dest_x=jnp.float32(95),
-            reactor_dest_y=jnp.float32(114),
+            reactor_dest_x=jnp.float32(96.0),
+            reactor_dest_y=jnp.float32(125.0),
             mode_timer=jnp.int32(0), ufo=make_empty_ufo(),
             ufo_spawn_timer=jnp.int32(UFO_RESPAWN_DELAY_FRAMES),
             level_offset=jnp.array(level_offset, dtype=jnp.float32),
@@ -3565,9 +3567,16 @@ class GravitarRenderer(JAXGameRenderer):
         frame = jax.lax.cond((state.mode == 0) | (state.mode == 2), draw_saucer, lambda f: f, frame)
 
         def draw_reactor_destination(f):
-            blit_func = self.blit_branches[int(SpriteIdx.REACTOR_DEST)]
-
-            return blit_func(f, state.reactor_dest_x, state.reactor_dest_y)
+            return jax.lax.cond(
+                state.reactor_activated,
+                lambda f_in: self.blit_branches[int(SpriteIdx.REACTOR_DEST_HIT)](
+                    f_in, state.reactor_dest_x, state.reactor_dest_y
+                ),
+                lambda f_in: self.blit_branches[int(SpriteIdx.REACTOR_DEST)](
+                    f_in, state.reactor_dest_x, state.reactor_dest_y
+                ),
+                f,
+            )
 
         # The destination is only drawn under specific conditions.
         should_draw_destination = (state.mode == 1) & (
