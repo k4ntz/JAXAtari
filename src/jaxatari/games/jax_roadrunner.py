@@ -72,6 +72,8 @@ class LevelConfig(NamedTuple):
     # Weights are normalized at init time into a cumulative distribution.
     # A weight of 0 disables that type. Example: (1.0, 0.5, 0.5) → 50% birdseed, 25% each.
     pickup_weights: Tuple[float, float, float] = (1.0, 0.0, 0.0)
+    enemy_hoverboard: bool = False
+    enemy_rocket_phase: bool = False
 
 
 # --- Constants ---
@@ -140,14 +142,12 @@ class RoadRunnerConstants(NamedTuple):
     CANNON_SPAWN_MIN_INTERVAL: int = 120
     CANNON_SPAWN_MAX_INTERVAL: int = 240
     DEATH_ANIMATION_DURATION: int = 60  # 1 second at 60 FPS
-    # Enemy speed variation - speeds as offsets from PLAYER_MOVE_SPEED
-    ENEMY_SLOW_SPEED_OFFSET: int = -1        # Speed = PLAYER_MOVE_SPEED - 1 = 2
-    ENEMY_FAST_SPEED_OFFSET: int = 1         # Speed = PLAYER_MOVE_SPEED + 1 = 4
-    ENEMY_SAME_SPEED_OFFSET: int = 0         # Speed = PLAYER_MOVE_SPEED = 3
-    # Enemy speed cycle durations (in scroll distance units)
-    ENEMY_SLOW_DURATION: int = 60            # Default slow phase duration
-    ENEMY_FAST_DURATION: int = 60            # ~1 second at 60 FPS  
-    ENEMY_SAME_DURATION: int = 300           # ~5 seconds at 60 FPS
+    # Enemy speed variation - multipliers of PLAYER_MOVE_SPEED (float for fine-grained control)
+    # Phases:                                     slow, fast, rocket, same
+    ENEMY_SPEED_MULTIPLIERS: Tuple[float, ...] = (0.90, 1.20, 1.5,   1.0)
+    # Per-phase durations (in scroll distance units)
+    ENEMY_PHASE_DURATIONS: Tuple[int, ...] = (60, 60, 40, 300)
+    ENEMY_ROCKET_PHASE_INDEX: int = 2  # index into the above tuples
     # Enemy approach slowdown/reversal multiplier (when player moves right)
     # Positive values slow down (0.5 = half speed), negative values reverse direction (-0.5 = move away at half speed)
     ENEMY_APPROACH_SLOWDOWN: float = -0.5     # Moves backwards at half speed when player approaches
@@ -299,6 +299,8 @@ RoadRunner_Level_2 = LevelConfig(
 RoadRunner_Level_3 = LevelConfig(
     level_number=3,
     scroll_distance_to_complete=1500,
+    enemy_hoverboard=False,
+    enemy_rocket_phase=True,
     # Single full-level road section; narrowing/widening is handled by dynamic_road_heights
     # which produces smooth per-column transitions instead of abrupt jumps.
     road_sections=(
@@ -364,6 +366,8 @@ RoadRunner_Level_3 = LevelConfig(
 RoadRunner_Level_4 = LevelConfig(
     level_number=4,
     scroll_distance_to_complete=1500,
+    enemy_hoverboard=True,
+    enemy_rocket_phase=False,
     road_sections=(
         RoadSectionConfig(
             scroll_start=0,
@@ -970,6 +974,11 @@ class RoadRunnerState(NamedTuple):
     fall_timer: chex.Array  # Countdown timer for fall animation (0 when not falling)
     fall_clip_y: chex.Array  # Y coordinate below which player sprite should be clipped during fall
     enemy_speed_phase_start: chex.Array  # Scroll step when current speed phase cycle began
+    enemy_speed_phase: chex.Array  # int32, current phase index (0-3)
+    enemy_move_remainder_x: chex.Array  # float32, sub-pixel accumulator for enemy x movement
+    enemy_move_remainder_y: chex.Array  # float32, sub-pixel accumulator for enemy y movement
+    enemy_hoverboard_active: chex.Array  # bool, hoverboard patrol mode
+    enemy_hoverboard_direction: chex.Array  # int32, +1 (right) or -1 (left)
     enemy_flattened_timer: chex.Array  # Timer for enemy being run over
     enemy_burnt_timer: chex.Array  # Timer for enemy stepping on landmine
     player_on_offramp: chex.Array  # Boolean, whether the player is currently on the offramp
@@ -1066,6 +1075,8 @@ class JaxRoadRunner(
         self._level_spawn_cannons = _build_spawn_enabled_array(levels, 'spawn_cannons')
         self._level_ravine_linked_seed = _build_spawn_enabled_array(levels, 'ravine_linked_seed')
         self._level_ravine_linked_mine = _build_spawn_enabled_array(levels, 'ravine_linked_mine')
+        self._level_enemy_hoverboard = _build_spawn_enabled_array(levels, 'enemy_hoverboard')
+        self._level_enemy_rocket_phase = _build_spawn_enabled_array(levels, 'enemy_rocket_phase')
 
         # Build spawn interval arrays
         self._seed_spawn_intervals = _build_spawn_interval_array(
@@ -1467,45 +1478,45 @@ class JaxRoadRunner(
             )
 
         def normal_logic(st: RoadRunnerState) -> RoadRunnerState:
-            # Calculate current speed phase based on scroll distance
-            total_cycle = (self.consts.ENEMY_SLOW_DURATION +
-                           self.consts.ENEMY_FAST_DURATION +
-                           self.consts.ENEMY_SAME_DURATION)
-            
+            # Array-based speed phase lookup
+            durations = jnp.array(self.consts.ENEMY_PHASE_DURATIONS)
+            multipliers = jnp.array(self.consts.ENEMY_SPEED_MULTIPLIERS)
+            total_cycle = jnp.sum(durations)
+
             cycle_progress = (st.scrolling_step_counter - st.enemy_speed_phase_start) % total_cycle
-            
-            # Determine current phase speed offset
-            in_slow = cycle_progress < self.consts.ENEMY_SLOW_DURATION
-            in_fast = (cycle_progress >= self.consts.ENEMY_SLOW_DURATION) & \
-                      (cycle_progress < self.consts.ENEMY_SLOW_DURATION + self.consts.ENEMY_FAST_DURATION)
-            
-            speed_offset = jnp.where(
-                in_slow,
-                self.consts.ENEMY_SLOW_SPEED_OFFSET,
-                jnp.where(
-                    in_fast,
-                    self.consts.ENEMY_FAST_SPEED_OFFSET,
-                    self.consts.ENEMY_SAME_SPEED_OFFSET
-                )
+
+            # Use cumsum + searchsorted to find phase index
+            cumulative = jnp.cumsum(durations)
+            phase_idx = jnp.searchsorted(cumulative, cycle_progress, side='right')
+            phase_idx = jnp.minimum(phase_idx, len(self.consts.ENEMY_SPEED_MULTIPLIERS) - 1)
+
+            # If rocket phase is disabled for this level, treat it as "same" speed
+            level_idx = self._get_level_index(st)
+            rocket_enabled = self._level_enemy_rocket_phase[level_idx]
+            phase_idx = jnp.where(
+                (~rocket_enabled) & (phase_idx == self.consts.ENEMY_ROCKET_PHASE_INDEX),
+                len(self.consts.ENEMY_SPEED_MULTIPLIERS) - 1,  # fall back to "same" phase
+                phase_idx
             )
-            
-            base_speed = self.consts.PLAYER_MOVE_SPEED + speed_offset
-            
+
+            # Float speed from multiplier (e.g. 1.1 * 3 = 3.3 px/frame)
+            base_speed = self.consts.PLAYER_MOVE_SPEED * multipliers[phase_idx]
+
             # Check if player is moving right (approaching enemy)
-            # Player velocity is the difference between current position and previous position
             player_vel_x = st.player_x - st.player_x_history[0]
             is_approaching = player_vel_x > 0
-            
+
+            # Rocket phase skips approach slowdown (relentless)
+            is_rocket = (phase_idx == self.consts.ENEMY_ROCKET_PHASE_INDEX)
             slowdown = jnp.where(
-                is_approaching,
+                is_approaching & ~is_rocket,
                 self.consts.ENEMY_APPROACH_SLOWDOWN,
                 1.0
             )
-            
-            # Calculate final speed (absolute value for clipping bounds)
-            # Negative slowdown will reverse direction via the multiplier on delta
-            final_speed = (base_speed * jnp.abs(slowdown)).astype(jnp.int32)
-            final_speed = jnp.maximum(final_speed, 1)
+
+            # Float final speed (preserve fractional part)
+            final_speed = base_speed * jnp.abs(slowdown)
+            final_speed = jnp.maximum(final_speed, 0.1)
 
             # Get the distance to the player, with a configurable frame delay.
             delayed_player_x = st.player_x_history[
@@ -1516,23 +1527,31 @@ class JaxRoadRunner(
             ]
             delta_x = delayed_player_x - st.enemy_x
             delta_y = delayed_player_y - st.enemy_y
-            
+
             # Apply direction modifier (negative slowdown reverses direction)
             direction_modifier = jnp.where(slowdown < 0, -1.0, 1.0)
-            modified_delta_x = delta_x * direction_modifier
-            modified_delta_y = delta_y * direction_modifier
+            modified_delta_x = (delta_x * direction_modifier).astype(jnp.float32)
+            modified_delta_y = (delta_y * direction_modifier).astype(jnp.float32)
 
             # Determine enemy movement and orientation
             enemy_is_moving = (delta_x != 0) | (delta_y != 0)
             enemy_looks_right = _update_orientation(modified_delta_x, st.enemy_looks_right)
 
-            # Update enemy position, clipping movement to final_speed to prevent jittering
-            new_enemy_x = st.enemy_x + jnp.clip(
-                modified_delta_x, -final_speed, final_speed
-            )
-            new_enemy_y = st.enemy_y + jnp.clip(
-                modified_delta_y, -final_speed, final_speed
-            )
+            # Clip desired movement to final_speed, accumulate sub-pixel remainder
+            clipped_x = jnp.clip(modified_delta_x, -final_speed, final_speed)
+            clipped_y = jnp.clip(modified_delta_y, -final_speed, final_speed)
+
+            total_x = clipped_x + st.enemy_move_remainder_x
+            total_y = clipped_y + st.enemy_move_remainder_y
+
+            # Integer part becomes the actual pixel movement, fractional part carries over
+            int_move_x = jnp.trunc(total_x).astype(jnp.int32)
+            int_move_y = jnp.trunc(total_y).astype(jnp.int32)
+            new_remainder_x = total_x - int_move_x
+            new_remainder_y = total_y - int_move_y
+
+            new_enemy_x = st.enemy_x + int_move_x
+            new_enemy_y = st.enemy_y + int_move_y
 
             new_enemy_x = self._handle_scrolling(st, new_enemy_x)
 
@@ -1542,15 +1561,57 @@ class JaxRoadRunner(
                 enemy_y=new_enemy_y.astype(jnp.int32),
                 enemy_is_moving=enemy_is_moving,
                 enemy_looks_right=enemy_looks_right,
+                enemy_speed_phase=phase_idx,
+                enemy_move_remainder_x=new_remainder_x,
+                enemy_move_remainder_y=new_remainder_y,
             )
 
-        # Use switch instead of nested conds: 0=normal, 1=flattened, 2=game_over, 3=burnt
+        def hoverboard_logic(st: RoadRunnerState) -> RoadRunnerState:
+            # Patrol left-right at road center
+            patrol_speed = self.consts.PLAYER_MOVE_SPEED + 1
+            direction = st.enemy_hoverboard_direction
+
+            # Move horizontally in patrol direction, apply scroll offset
+            new_enemy_x = st.enemy_x + (patrol_speed * direction)
+            new_enemy_x = self._handle_scrolling(st, new_enemy_x)
+
+            # Fixed Y at road center
+            center_y = (road_top + road_bottom) // 2 - self.consts.ENEMY_SIZE[1] // 2
+            new_enemy_y = center_y
+
+            # Bounce at side margins
+            at_right = new_enemy_x >= (self.consts.WIDTH - self.consts.SIDE_MARGIN - self.consts.ENEMY_SIZE[0])
+            at_left = new_enemy_x <= self.consts.SIDE_MARGIN
+            new_direction = jnp.where(at_right, -1, jnp.where(at_left, 1, direction))
+
+            # Clamp x within bounds
+            new_enemy_x = jnp.clip(
+                new_enemy_x,
+                self.consts.SIDE_MARGIN,
+                self.consts.WIDTH - self.consts.SIDE_MARGIN - self.consts.ENEMY_SIZE[0]
+            )
+
+            enemy_looks_right = new_direction > 0
+
+            return st._replace(
+                enemy_x=new_enemy_x.astype(jnp.int32),
+                enemy_y=new_enemy_y.astype(jnp.int32),
+                enemy_is_moving=True,
+                enemy_looks_right=enemy_looks_right,
+                enemy_hoverboard_direction=new_direction,
+            )
+
+        # Use switch: 0=normal, 1=flattened, 2=game_over, 3=burnt, 4=hoverboard
+        level_idx = self._get_level_index(state)
+        is_hoverboard = self._level_enemy_hoverboard[level_idx]
+
         branch_idx = jnp.where(
             state.is_round_over, 2,
             jnp.where(state.enemy_flattened_timer > 0, 1,
-                jnp.where(state.enemy_burnt_timer > 0, 3, 0))
+                jnp.where(state.enemy_burnt_timer > 0, 3,
+                    jnp.where(is_hoverboard, 4, 0)))
         )
-        return jax.lax.switch(branch_idx, [normal_logic, flattened_logic, game_over_logic, burnt_logic], state)
+        return jax.lax.switch(branch_idx, [normal_logic, flattened_logic, game_over_logic, burnt_logic, hoverboard_logic], state)
 
     def _check_game_over(self, state: RoadRunnerState) -> RoadRunnerState:
         # Check if the enemy and the player overlap
@@ -2420,6 +2481,11 @@ class JaxRoadRunner(
             bullet_y=jnp.array(-1, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
+            enemy_speed_phase=jnp.array(0, dtype=jnp.int32),
+            enemy_move_remainder_x=jnp.array(0.0, dtype=jnp.float32),
+            enemy_move_remainder_y=jnp.array(0.0, dtype=jnp.float32),
+            enemy_hoverboard_active=jnp.array(False, dtype=jnp.bool_),
+            enemy_hoverboard_direction=jnp.array(-1, dtype=jnp.int32),
             enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
             enemy_burnt_timer=jnp.array(0, dtype=jnp.int32),
             player_on_offramp=jnp.array(False, dtype=jnp.bool_),
@@ -2704,6 +2770,11 @@ class JaxRoadRunner(
             fall_timer=jnp.array(0, dtype=jnp.int32),
             fall_clip_y=jnp.array(0, dtype=jnp.int32),
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
+            enemy_speed_phase=jnp.array(0, dtype=jnp.int32),
+            enemy_move_remainder_x=jnp.array(0.0, dtype=jnp.float32),
+            enemy_move_remainder_y=jnp.array(0.0, dtype=jnp.float32),
+            enemy_hoverboard_active=jnp.array(False, dtype=jnp.bool_),
+            enemy_hoverboard_direction=jnp.array(-1, dtype=jnp.int32),
             enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
             enemy_burnt_timer=jnp.array(0, dtype=jnp.int32),
             player_on_offramp=jnp.array(False, dtype=jnp.bool_),
@@ -3083,6 +3154,12 @@ class RoadRunnerRenderer(JAXGameRenderer):
             7: "sign_steel_shot",
         }
 
+        self._level_count = len(self.consts.levels)
+        self._level_enemy_hoverboard = _build_spawn_enabled_array(
+            self.consts.levels, 'enemy_hoverboard')
+        self._level_enemy_rocket_phase = _build_spawn_enabled_array(
+            self.consts.levels, 'enemy_rocket_phase')
+
         # Use injected config if provided, else default
         if config is None:
             self.config = render_utils.RendererConfig(
@@ -3342,6 +3419,9 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "enemy_run2", "type": "single", "file": "enemy_run2.npy"},
             {"name": "enemy_run_over", "type": "single", "file": "enemy_run_over.npy"},
             {"name": "enemy_burnt", "type": "single", "file": "enemy_burnt.npy"},
+            {"name": "enemy_rocket", "type": "single", "file": "enemy_rocket.npy"},
+            {"name": "enemy_hoverboard1", "type": "single", "file": "enemy_hoverboard1.npy"},
+            {"name": "enemy_hoverboard2", "type": "single", "file": "enemy_hoverboard2.npy"},
             {"name": "road", "type": "procedural", "data": road_sprite},
             {"name": "road_no_stripes", "type": "procedural", "data": road_no_stripes_sprite},
             {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
@@ -3683,6 +3763,12 @@ class RoadRunnerRenderer(JAXGameRenderer):
         return heights, widths
 
     @partial(jax.jit, static_argnums=(0,))
+    def _get_level_index(self, state: RoadRunnerState) -> jnp.ndarray:
+        if self._level_count == 0:
+            return jnp.array(0, dtype=jnp.int32)
+        max_index = self._level_count - 1
+        return jnp.clip(state.current_level, 0, max_index).astype(jnp.int32)
+
     def render(self, state: RoadRunnerState) -> jnp.ndarray:
         canvas = self.jr.create_object_raster(self.BACKGROUND)
 
@@ -3919,38 +4005,80 @@ class RoadRunnerRenderer(JAXGameRenderer):
 
         # Render Enemy
         def _render_enemy(c):
-            enemy_mask = self._get_animated_sprite(
-                state.enemy_is_moving,
-                state.enemy_looks_right,
-                state.step_counter,
-                self.consts.PLAYER_ANIMATION_SPEED,  # Assuming same speed for now
-                self.SHAPE_MASKS["enemy"],
-                self.SHAPE_MASKS["enemy_run1"],
-                self.SHAPE_MASKS["enemy_run2"],
-            )
+            # Determine which sprite mode we're in
+            level_idx = self._get_level_index(state)
+            is_hoverboard = self._level_enemy_hoverboard[level_idx]
+            rocket_enabled = self._level_enemy_rocket_phase[level_idx]
+            is_rocket = rocket_enabled & (state.enemy_speed_phase == self.consts.ENEMY_ROCKET_PHASE_INDEX)
 
-            flattened_mask = self.SHAPE_MASKS["enemy_run_over"]
-            # Apply flip to run-over sprite as well if needed
-            flattened_mask = jax.lax.cond(
-                state.enemy_looks_right,
-                lambda: jnp.fliplr(flattened_mask),
-                lambda: flattened_mask
-            )
+            def _render_burnt_enemy():
+                return self.jr.render_at(c, state.enemy_x, state.enemy_y,
+                                         self.SHAPE_MASKS["enemy_burnt"])
 
-            burnt_mask = self.SHAPE_MASKS["enemy_burnt"]
+            def _render_flattened_enemy():
+                flattened_mask = self.SHAPE_MASKS["enemy_run_over"]
+                flattened_mask = jax.lax.cond(
+                    state.enemy_looks_right,
+                    lambda: jnp.fliplr(flattened_mask),
+                    lambda: flattened_mask
+                )
+                return self.jr.render_at(c, state.enemy_x, state.enemy_y, flattened_mask)
 
-            # Priority: burnt > flattened > normal animated
-            final_mask = jax.lax.cond(
+            def _render_hoverboard_enemy():
+                hoverboard_mask = self._get_animated_sprite(
+                    state.enemy_is_moving,
+                    state.enemy_looks_right,
+                    state.step_counter,
+                    self.consts.PLAYER_ANIMATION_SPEED,
+                    self.SHAPE_MASKS["enemy_rocket"],
+                    self.SHAPE_MASKS["enemy_rocket"],
+                    self.SHAPE_MASKS["enemy_rocket"],
+                )
+                return self.jr.render_at(c, state.enemy_x, state.enemy_y, hoverboard_mask)
+
+            def _render_rocket_enemy():
+                rocket_mask = self.SHAPE_MASKS["enemy_hoverboard1"]
+                rocket_mask = jax.lax.cond(
+                    state.enemy_looks_right,
+                    lambda: jnp.fliplr(rocket_mask),
+                    lambda: rocket_mask
+                )
+                return self.jr.render_at(c, state.enemy_x, state.enemy_y, rocket_mask)
+
+            def _render_normal_enemy():
+                enemy_mask = self._get_animated_sprite(
+                    state.enemy_is_moving,
+                    state.enemy_looks_right,
+                    state.step_counter,
+                    self.consts.PLAYER_ANIMATION_SPEED,
+                    self.SHAPE_MASKS["enemy"],
+                    self.SHAPE_MASKS["enemy_run1"],
+                    self.SHAPE_MASKS["enemy_run2"],
+                )
+                return self.jr.render_at(c, state.enemy_x, state.enemy_y, enemy_mask)
+
+            def _render_active_enemy():
+                # Priority: hoverboard > rocket > normal
+                return jax.lax.cond(
+                    is_hoverboard,
+                    _render_hoverboard_enemy,
+                    lambda: jax.lax.cond(
+                        is_rocket,
+                        _render_rocket_enemy,
+                        _render_normal_enemy
+                    )
+                )
+
+            # Priority: burnt > flattened > active
+            return jax.lax.cond(
                 state.enemy_burnt_timer > 0,
-                lambda: burnt_mask,
+                _render_burnt_enemy,
                 lambda: jax.lax.cond(
                     state.enemy_flattened_timer > 0,
-                    lambda: flattened_mask,
-                    lambda: enemy_mask
+                    _render_flattened_enemy,
+                    _render_active_enemy
                 )
             )
-
-            return self.jr.render_at(c, state.enemy_x, state.enemy_y, final_mask)
 
         # Render the enemy only if it is on screen
         # else return the canvas unchanged
