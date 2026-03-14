@@ -193,7 +193,7 @@ class TutankhamConstants(NamedTuple):
 
 
     # Levels -----------------------------------------
-    LEVEL_ITEMS: chex.Array = jnp.array([
+    MAP_ITEMS: chex.Array = jnp.array([
         # Level 1 (MAP 1)
         [
             [40, 40, KEY], 
@@ -233,157 +233,26 @@ class TutankhamConstants(NamedTuple):
             [40, 40, KEY],
             [40, 40, KEY],
             [40, 40, KEY] # MAP 4 has 7 items (no padding)
-        ],
-        # Level 5 (MAP 1)
-        [
-            [40, 40, KEY], 
-            [40, 40, KEY], 
-            [40, 40, KEY], 
-            [40, 40, KEY], 
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [0, 0, 0] # Padding for levels with fewer items
-        ],
-        # Level 6 (MAP 2)
-        [
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [0, 0, 0] # Padding for levels with fewer items
-        ],
-        # Level 7 (MAP 3)
-        [
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [0, 0, 0] # Padding for levels with fewer items
-        ],
-        # Level 8 (MAP 4)
-        [
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY] # MAP 4 has 7 items (no padding)
-        ],
-        # Level 9 (MAP 1)
-        [
-            [40, 40, KEY], 
-            [40, 40, KEY], 
-            [40, 40, KEY], 
-            [40, 40, KEY], 
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [0, 0, 0] # Padding for levels with fewer items
-        ],
-        # Level 10 (MAP 2)
-        [
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [0, 0, 0] # Padding for levels with fewer items
-        ],
-        # Level 11 (MAP 3)
-        [
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [0, 0, 0] # Padding for levels with fewer items
-        ],
-        # Level 12 (MAP 4)
-        [
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY] # MAP 4 has 7 items (no padding)
-        ],
-        # Level 13 (MAP 1)
-        [
-            [40, 40, KEY], 
-            [40, 40, KEY], 
-            [40, 40, KEY], 
-            [40, 40, KEY], 
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [0, 0, 0] # Padding for levels with fewer items
-        ],
-        # Level 14 (MAP 2)
-        [
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [0, 0, 0] # Padding for levels with fewer items
-        ],
-        # Level 15 (MAP 3)
-        [
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [0, 0, 0] # Padding for levels with fewer items
-        ],
-        # Level 16 (MAP 4)
-        [
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY] # MAP 4 has 7 items (no padding)
         ]
-    ], dtype=jnp.int32)
+    ], dtype=jnp.int32) # Repeat for 16 levels (4 maps x 4 difficulty levels)
+
 
     # Number of valid item types per level (non-padded entries), shape (16,)
-    LEVEL_N_ITEMS: chex.Array = jnp.array(
-        [6, 6, 6, 7, 6, 6, 6, 7, 6, 6, 6, 7, 6, 6, 6, 7], dtype=jnp.int32
+    MAP_N_ITEMS: chex.Array = jnp.array(
+        [6, 6, 6, 7], dtype=jnp.int32
     )
 
     # Valid creature types per level, shape (16, 4), padded with 0
-    LEVEL_CREATURES: chex.Array = jnp.array([
-        [SNAKE, SCORPION, BAT, 0],          # Level 1 (MAP 1)
-        [TURTLE, JACKEL, CONDOR, 0],        # Level 2 (MAP 2)
-        [SNAKE, LION, MOTH, 0],             # Level 3 (MAP 3)
-        [VIRUS, MONKEY, MYSTERY, WEAPON],   # Level 4 (MAP 4)
-        [SNAKE, SCORPION, BAT, 0],          # Level 5 (MAP 1)
-        [TURTLE, JACKEL,  CONDOR, 0],       # Level 6 (MAP 2)
-        [SNAKE, LION, MOTH, 0],             # Level 7 (MAP 3)
-        [VIRUS, MONKEY, MYSTERY, WEAPON],   # Level 8 (MAP 4)
-        [SNAKE, SCORPION, BAT, 0],          # Level 9 (MAP 1)
-        [TURTLE, JACKEL, CONDOR, 0],        # Level 10 (MAP 2)
-        [SNAKE, LION, MOTH, 0],             # Level 11 (MAP 3)
-        [VIRUS, MONKEY, MYSTERY, WEAPON],   # Level 12 (MAP 4)
-        [SNAKE, SCORPION, BAT, 0],          # Level 13 (MAP 1)
-        [TURTLE, JACKEL, CONDOR, 0],        # Level 14 (MAP 2)
-        [SNAKE, LION, MOTH, 0],             # Level 15 (MAP 3)
-        [VIRUS, MONKEY, MYSTERY, WEAPON],   # Level 16 (MAP 4)
+    MAP_CREATURES: chex.Array = jnp.array([
+        [SNAKE, SCORPION, BAT, 0],          # MAP 1
+        [TURTLE, JACKEL, CONDOR, 0],        # MAP 2
+        [SNAKE, LION, MOTH, 0],             # MAP 3
+        [VIRUS, MONKEY, MYSTERY, WEAPON]    # MAP 4
     ], dtype=jnp.int32)
 
     # Number of valid creature types per level (non-padded entries), shape (16,)
-    LEVEL_N_CREATURES: chex.Array = jnp.array(
-        [3, 3, 3, 4, 3, 3, 3, 4, 3, 3, 3, 4, 3, 3, 3, 4], dtype=jnp.int32
+    MAP_N_CREATURES: chex.Array = jnp.array(
+        [3, 3, 3, 4], dtype=jnp.int32
     )
 
 
@@ -402,6 +271,43 @@ class TutankhamConstants(NamedTuple):
         1.4, 1.4, 1.4, 1.4,
         1.6, 1.6, 1.6, 1.6,
     ], dtype=jnp.float32)
+
+
+    # Level checkpoints
+    MAP_CHECKPOINTS: chex.Array = jnp.array([
+        # MAP 1
+        [
+            [0  , 100, 130, 85],
+            [100, 200, 105, 140],
+            [200, 300, 105, 140],
+            [300, 400, 105, 140],
+            [400, 500, 105, 140]
+        ],
+        # MAP 2
+        [
+            [0, 100, 105, 140],
+            [0, 100, 105, 140],
+            [0, 100, 105, 140],
+            [0, 100, 105, 140],
+            [0, 100, 105, 140]
+        ],
+        # MAP 3
+        [
+            [0, 100, 105, 140],
+            [0, 100, 105, 140],
+            [0, 100, 105, 140],
+            [0, 100, 105, 140],
+            [0, 100, 105, 140]
+        ],
+        # MAP 4
+        [
+            [0, 100, 105, 140],
+            [0, 100, 105, 140],
+            [0, 100, 105, 140],
+            [0, 100, 105, 140],
+            [0, 100, 105, 140]
+        ]
+    ], dtype=jnp.int32)
 
 
 
@@ -654,8 +560,9 @@ class JaxTutankham(JaxEnvironment):
         bullet_state = jnp.array([0, 0, 0, 0], dtype=jnp.int32)  # (x, y, bullet_rotation, bullet_active)
         creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
 
-        load_items = self.consts.LEVEL_ITEMS[level]  # (7, 3) array (x, y, item_type) padded
-        n_real_items = self.consts.LEVEL_N_ITEMS[level]  # number of actual items (non-padded)
+        load_items = self.consts.MAP_ITEMS[level%4]  # (7, 3) array (x, y, item_type) padded
+        n_real_items = self.consts.MAP_N_ITEMS[level%4]  # number of actual items (non-padded)
+        #TODO:
         # Only mark real items as active; padding rows stay inactive
         active = (jnp.arange(load_items.shape[0]) < n_real_items).astype(jnp.int32).reshape(-1, 1)
         item_states = jnp.hstack([load_items, active])  # (7, 4) array for map_4 or (6, 4) for all other maps (x, y, item_type, active)
@@ -909,12 +816,10 @@ class JaxTutankham(JaxEnvironment):
         has_free_slot = jnp.any(inactive_mask)
         first_free_slot = jnp.argmax(inactive_mask)  # index of first inactive creature
 
-        # TODO: ???
-        # Pick a random creature type from those valid for this level.
-        # LEVEL_N_CREATURES[level] is dynamic but randint supports traced maxval.
-        n_types = self.consts.LEVEL_N_CREATURES[level]
-        type_idx = jax.random.randint(key_type, shape=(), minval=0, maxval=n_types)
-        new_type = self.consts.LEVEL_CREATURES[level, type_idx]
+        # get number of valid creature types for current level
+        n_types = self.consts.MAP_N_CREATURES[level%4]
+        type_idx = jax.random.randint(key_type, shape=(), minval=0, maxval=n_types) # random index to select creature type from valid types for current level
+        new_type = self.consts.MAP_CREATURES[level%4, type_idx]
         new_creature = jnp.array([0, 60, new_type, self.consts.ACTIVE], dtype=jnp.int32)
 
         do_spawn = should_spawn & has_free_slot
@@ -972,22 +877,34 @@ class JaxTutankham(JaxEnvironment):
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def respawn_player(self, player_x, player_y, player_lives):
+    def respawn_player(self, player_x, player_y, player_lives, level, last_directional_action):
         '''
-        Resets player position to last checkpoint and decreases lives by 1
+        Resets player position to last checkpoint for each checkpoint zone and decreases lives by 1
         Sets bullet state and creature states to default values
         Resets creature spawn timer to 0
         '''
         
-        # TODO: Replace with hardcoded per-room checkpoints
-        respawn_x = jnp.int32(30)
-        respawn_y = jnp.int32(30)
+        
+        checkpoints = self.consts.MAP_CHECKPOINTS[level%4] # (5, 4) array with (y_min, y_max, respawn_x, respawn_y) for each checkpoint zone in current map
+        
+        # player_y is between y_min (col 0) and y_max (col 1)
+        is_in_zone = (player_y >= checkpoints[:, 0]) & (player_y <= checkpoints[:, 1])
+
+        # extract the respawn coordinates from the checkpoints
+        # if multiple zones overlap, this takes the first one found
+        checkpoint_idx = jnp.argmax(is_in_zone)
+        
+        # get respawn_x and respawn_y from the checkpoint
+        respawn_x = checkpoints[checkpoint_idx, 2]
+        respawn_y = checkpoints[checkpoint_idx, 3]
+
 
         creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4), dtype=jnp.int32)
         bullet_state = jnp.zeros(4, dtype=jnp.int32)
         last_creature_spawn = jnp.int32(0)
 
-        return respawn_x, respawn_y, bullet_state, creature_states, player_lives - 1, last_creature_spawn
+        #set last_directional_action to 0, to avoid player moving immediately on respawn based on previous action
+        return respawn_x, respawn_y, bullet_state, creature_states, player_lives - 1, last_creature_spawn, 0 
 
 
 
@@ -1017,7 +934,7 @@ class JaxTutankham(JaxEnvironment):
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def resolve_player_creature_collisions(self, player_x, player_y, creature_states, bullet_state, player_lives, last_creature_spawn):
+    def resolve_player_creature_collisions(self, player_x, player_y, creature_states, bullet_state, player_lives, last_creature_spawn, level, last_directional_action):
 
         # check player-creature collisions (vectorized over all creatures)
         def player_hits_creature(creature):
@@ -1034,7 +951,7 @@ class JaxTutankham(JaxEnvironment):
         # Compute respawn state unconditionally, then select with jnp.where
         (respawn_x, respawn_y,
          respawn_bullet, respawn_creatures,
-         respawn_lives, respawn_spawn) = self.respawn_player(player_x, player_y, player_lives)
+         respawn_lives, respawn_spawn, respawn_directional_action) = self.respawn_player(player_x, player_y, player_lives, level, last_directional_action)
 
         final_player_x = jnp.where(player_hit, respawn_x, player_x)
         final_player_y = jnp.where(player_hit, respawn_y, player_y)
@@ -1042,10 +959,11 @@ class JaxTutankham(JaxEnvironment):
         final_creature_states = jnp.where(player_hit, respawn_creatures, creature_states)
         final_player_lives = jnp.where(player_hit, respawn_lives, player_lives)
         final_last_creature_spawn = jnp.where(player_hit, respawn_spawn, last_creature_spawn)
+        final_last_directional_action = jnp.where(player_hit, respawn_directional_action, last_directional_action)
 
         return (final_player_x, final_player_y,
                 final_bullet_state, final_creature_states,
-                final_player_lives, final_last_creature_spawn)
+                final_player_lives, final_last_creature_spawn, final_last_directional_action)
 
     @partial(jax.jit, static_argnums=(0,))
     def resolve_player_item_collisions(self, player_x, player_y, item_states):
@@ -1114,11 +1032,13 @@ class JaxTutankham(JaxEnvironment):
 
         (player_x, player_y, 
          bullet_state, creature_states, 
-         player_lives, last_creature_spawn
+         player_lives, last_creature_spawn,
+         last_directional_action
          ) = self.resolve_player_creature_collisions(
              player_x, player_y, 
              creature_states, bullet_state, 
-             player_lives, last_creature_spawn
+             player_lives, last_creature_spawn,
+             level, last_directional_action
              )
         
         item_states = self.resolve_player_item_collisions(player_x, player_y, item_states)
