@@ -255,24 +255,6 @@ class TutankhamConstants(NamedTuple):
         [3, 3, 3, 4], dtype=jnp.int32
     )
 
-
-    # Spawn-rate per level, shape (16,)
-    LEVEL_SPAWN_RATES: chex.Array = jnp.array([
-        0.0003, 0.0003, 0.0003, 0.0003,
-        0.0006, 0.0006, 0.0006, 0.0006,
-        0.0009, 0.0009, 0.0009, 0.0009,
-        0.0012, 0.0012, 0.0012, 0.0012,
-    ], dtype=jnp.float32)
-
-    # Speed multiplier per level, shape (16,)
-    LEVEL_CREATURE_SPEED_MULTIPLIERS: chex.Array = jnp.array([
-        1.0, 1.0, 1.0, 1.0,
-        1.2, 1.2, 1.2, 1.2,
-        1.4, 1.4, 1.4, 1.4,
-        1.6, 1.6, 1.6, 1.6,
-    ], dtype=jnp.float32)
-
-
     # Level checkpoints
     MAP_CHECKPOINTS: chex.Array = jnp.array([
         # MAP 1
@@ -308,6 +290,61 @@ class TutankhamConstants(NamedTuple):
             [0, 100, 105, 140]
         ]
     ], dtype=jnp.int32)
+
+
+    # Positions of creature spawners on the map, shape (N_SPAWNERS, 2)
+    MAP_SPAWNER_POSITIONS: chex.Array = jnp.array([
+        # MAP 1
+        [
+            [75  ,115],
+            [50, 120],
+            [400, 400],
+            [400, 400],
+            [400, 400]
+        ],
+        # MAP 2
+        [
+            [0, 100],
+            [0, 100],
+            [0, 100],
+            [0, 100],
+            [0, 100]
+        ],
+        # MAP 3
+        [
+            [0, 100],
+            [0, 100],
+            [0, 100],
+            [0, 100],
+            [0, 100]
+        ],
+        # MAP 4
+        [
+            [0, 100],
+            [0, 100],
+            [0, 100],
+            [0, 100],
+            [0, 100]
+        ]
+    ], dtype=jnp.int32)
+
+
+
+    # Spawn-rate per level, shape (16,)
+    LEVEL_SPAWN_RATES: chex.Array = jnp.array([
+        0.0003, 0.0003, 0.0003, 0.0003,
+        0.0006, 0.0006, 0.0006, 0.0006,
+        0.0009, 0.0009, 0.0009, 0.0009,
+        0.0012, 0.0012, 0.0012, 0.0012,
+    ], dtype=jnp.float32)
+
+    # Speed multiplier per level, shape (16,)
+    LEVEL_CREATURE_SPEED_MULTIPLIERS: chex.Array = jnp.array([
+        1.0, 1.0, 1.0, 1.0,
+        1.2, 1.2, 1.2, 1.2,
+        1.4, 1.4, 1.4, 1.4,
+        1.6, 1.6, 1.6, 1.6,
+    ], dtype=jnp.float32)
 
 
 
@@ -797,32 +834,49 @@ class JaxTutankham(JaxEnvironment):
     # creature spawner step
     @partial(jax.jit, static_argnums=(0,))
     def spawner_step(self, creature_states, last_creature_spawn, level, rng_key):
+        spawners = self.consts.MAP_SPAWNER_POSITIONS[level%4] # (n, 2) array with (x, y) positions of the n spawners for current level
         growth = self.consts.LEVEL_SPAWN_RATES[level]
         MAX_PROB = 0.8
-
         # Increment timer every step
         new_last_creature_spawn = last_creature_spawn + 1
+
+        # check  which spawners are on screen
+        #on_screen_mask = jax.vmap(self.is_onscreen)(spawners[:, 0], spawners[:, 1])
+        on_screen_mask = jnp.array([True, True, False, False, False]) # TODO: remove after testing
+        any_on_screen = jnp.any(on_screen_mask)
 
         # Spawn chance grows linearly with time, capped at MAX_PROB
         spawn_chance = jnp.clip(new_last_creature_spawn * growth, 0.0, MAX_PROB)
 
         # Split key: one for the probability roll, one for the creature type
-        rng_key, key_roll, key_type = jax.random.split(rng_key, 3)
+        rng_key, key_roll, key_type, key_spawner = jax.random.split(rng_key, 4)
         roll = jax.random.uniform(key_roll)
         should_spawn = roll < spawn_chance
 
-        # Only spawn if there is a free slot
+        p_weights = on_screen_mask.astype(jnp.float32)
+        selected_spawner_idx = jax.random.choice(key_spawner, spawners.shape[0], p=p_weights)
+        chosen_pos = spawners[selected_spawner_idx]
+
+
+        # Only spawn if there is a free slot in creature_states
         inactive_mask = creature_states[:, 3] == self.consts.INACTIVE
         has_free_slot = jnp.any(inactive_mask)
         first_free_slot = jnp.argmax(inactive_mask)  # index of first inactive creature
 
-        # get number of valid creature types for current level
-        n_types = self.consts.MAP_N_CREATURES[level%4]
+        # Select creature type based on current map
+        n_types = self.consts.MAP_N_CREATURES[level%4] # get number of valid creature types for current level
         type_idx = jax.random.randint(key_type, shape=(), minval=0, maxval=n_types) # random index to select creature type from valid types for current level
         new_type = self.consts.MAP_CREATURES[level%4, type_idx]
-        new_creature = jnp.array([0, 60, new_type, self.consts.ACTIVE], dtype=jnp.int32)
 
-        do_spawn = should_spawn & has_free_slot
+        do_spawn = should_spawn & has_free_slot & any_on_screen
+
+        # Construct the new creature with chosen spawner coordinates
+        new_creature = jnp.array([
+            chosen_pos[0],      # X from selected spawner
+            chosen_pos[1],      # Y from selected spawner
+            new_type, 
+            self.consts.ACTIVE
+        ], dtype=jnp.int32)
 
         # if do spawn is true, insert new creature at first free slot, otherwise keep creature states unchanged
         new_row = jnp.where(do_spawn, new_creature, creature_states[first_free_slot])
