@@ -31,3 +31,12 @@ class HyperGravityMod(JaxAtariInternalModPlugin):
         "PLANETARY_GRAVITY": 0.0096,  # 0.0032 * 3
         "REACTOR_GRAVITY": 0.001,  # 0.0001 * 10
     }
+
+
+class FuelCrisisMod(JaxAtariInternalModPlugin):
+    """Increase fuel consumption rate by 5x."""
+
+    constants_overrides = {
+        "FUEL_CONSUME_THRUST": 20.0,
+        "FUEL_CONSUME_SHIELD_TRACTOR": 50.0,
+    }

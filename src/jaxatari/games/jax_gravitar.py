@@ -129,6 +129,7 @@ class GravitarConstants(struct.PyTreeNode):
     REACTOR_GRAVITY: float = struct.field(pytree_node=False, default=0.0001)
     FUEL_CONSUME_THRUST: float = struct.field(pytree_node=False, default=4.0)
     FUEL_CONSUME_SHIELD_TRACTOR: float = struct.field(pytree_node=False, default=10.0)
+    STARTING_FUEL: float = struct.field(pytree_node=False, default=10000.0)
 
     # Bonuses
     SOLAR_SYSTEM_BONUS_FUEL: float = struct.field(pytree_node=False, default=7000.0)
@@ -191,6 +192,7 @@ MAX_ACTIVE_SAUCER_BULLETS = _DEFAULT_CONSTS.MAX_ACTIVE_SAUCER_BULLETS
 MAX_ACTIVE_ENEMY_BULLETS = _DEFAULT_CONSTS.MAX_ACTIVE_ENEMY_BULLETS
 FUEL_CONSUME_THRUST = _DEFAULT_CONSTS.FUEL_CONSUME_THRUST
 FUEL_CONSUME_SHIELD_TRACTOR = _DEFAULT_CONSTS.FUEL_CONSUME_SHIELD_TRACTOR
+STARTING_FUEL = _DEFAULT_CONSTS.STARTING_FUEL
 
 
 @jax.jit
@@ -883,7 +885,7 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
         planets_py=jnp.zeros(7, dtype=jnp.float32),
         planets_pr=jnp.zeros(7, dtype=jnp.float32),
         planets_id=jnp.zeros(7, dtype=jnp.int32),
-        fuel=jnp.array(10000.0, dtype=jnp.float32),
+        fuel=jnp.array(STARTING_FUEL, dtype=jnp.float32),
         current_level=jnp.int32(-1),
         terrain_sprite_idx=jnp.int32(-1),
         terrain_mask=jnp.zeros((WINDOW_HEIGHT, WINDOW_WIDTH), dtype=jnp.uint8),
@@ -3304,7 +3306,7 @@ class JaxGravitar(JaxEnvironment):
             enemy_bullets=create_empty_bullets_16(), fire_cooldown=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.int32),
             key=key, key_alt=key, score=jnp.array(score if score is not None else 0.0, dtype=jnp.float32),
             done=jnp.array(False), lives=jnp.array(lives if lives is not None else self.consts.MAX_LIVES, dtype=jnp.int32),
-            fuel=jnp.array(fuel if fuel is not None else 10000.0, dtype=jnp.float32),
+            fuel=jnp.array(fuel if fuel is not None else self.consts.STARTING_FUEL, dtype=jnp.float32),
             shield_active=jnp.array(False),
             reactor_timer=jnp.int32(0),
             reactor_activated=jnp.array(False),
