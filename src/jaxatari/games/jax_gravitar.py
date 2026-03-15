@@ -4,13 +4,12 @@ import jax.image as jim
 import jax.numpy as jnp
 from functools import partial
 
-from jax import Array
 from jax.scipy import ndimage
 import numpy as np
 from flax import struct
 import jaxatari.spaces as spaces
 from jaxatari.core import JaxEnvironment
-from typing import NamedTuple, Tuple, Dict, Any, Optional
+from typing import Tuple, Optional
 from enum import IntEnum
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
@@ -128,6 +127,8 @@ class GravitarConstants(struct.PyTreeNode):
     SOLAR_GRAVITY: float = struct.field(pytree_node=False, default=0.044)
     PLANETARY_GRAVITY: float = struct.field(pytree_node=False, default=0.0032)
     REACTOR_GRAVITY: float = struct.field(pytree_node=False, default=0.0001)
+    FUEL_CONSUME_THRUST: float = struct.field(pytree_node=False, default=4.0)
+    FUEL_CONSUME_SHIELD_TRACTOR: float = struct.field(pytree_node=False, default=10.0)
 
     # Bonuses
     SOLAR_SYSTEM_BONUS_FUEL: float = struct.field(pytree_node=False, default=7000.0)
@@ -188,6 +189,8 @@ MAX_ACTIVE_PLAYER_BULLETS_LEVEL = _DEFAULT_CONSTS.MAX_ACTIVE_PLAYER_BULLETS_LEVE
 MAX_ACTIVE_PLAYER_BULLETS_ARENA = _DEFAULT_CONSTS.MAX_ACTIVE_PLAYER_BULLETS_ARENA
 MAX_ACTIVE_SAUCER_BULLETS = _DEFAULT_CONSTS.MAX_ACTIVE_SAUCER_BULLETS
 MAX_ACTIVE_ENEMY_BULLETS = _DEFAULT_CONSTS.MAX_ACTIVE_ENEMY_BULLETS
+FUEL_CONSUME_THRUST = _DEFAULT_CONSTS.FUEL_CONSUME_THRUST
+FUEL_CONSUME_SHIELD_TRACTOR = _DEFAULT_CONSTS.FUEL_CONSUME_SHIELD_TRACTOR
 
 
 @jax.jit
@@ -425,7 +428,8 @@ LEVEL_ID_TO_BANK_IDX = {
 
 # ========== Bullet State ==========
 # Defines the state of bullets
-class Bullets(NamedTuple):
+@struct.dataclass
+class Bullets:
     x: jnp.ndarray  # shape(MAX_BULLETS, )
     y: jnp.ndarray
     vx: jnp.ndarray
@@ -433,10 +437,14 @@ class Bullets(NamedTuple):
     alive: jnp.ndarray  # boolean array
     sprite_idx: jnp.ndarray  # sprite index for each bullet (for different bullet types)
 
+    def _replace(self, **kwargs):
+        return self.replace(**kwargs)
+
 
 # ========== Enemies States ==========
 # Initializes the state of enemies
-class Enemies(NamedTuple):
+@struct.dataclass
+class Enemies:
     x: jnp.ndarray  # shape (MAX_ENEMIES,)
     y: jnp.ndarray
     w: jnp.ndarray
@@ -446,9 +454,13 @@ class Enemies(NamedTuple):
     death_timer: jnp.ndarray
     hp: jnp.ndarray
 
+    def _replace(self, **kwargs):
+        return self.replace(**kwargs)
+
 
 # ========== Ship State ==========
-class ShipState(NamedTuple):
+@struct.dataclass
+class ShipState:
     x: jnp.ndarray
     y: jnp.ndarray
     vx: jnp.ndarray
@@ -457,9 +469,13 @@ class ShipState(NamedTuple):
     is_thrusting: jnp.ndarray  # Boolean flag to track if ship is actively thrusting
     rotation_cooldown: jnp.ndarray  # Frames until next rotation is allowed
 
+    def _replace(self, **kwargs):
+        return self.replace(**kwargs)
+
 
 # ========== Saucer State ==========
-class SaucerState(NamedTuple):
+@struct.dataclass
+class SaucerState:
     x: jnp.ndarray
     y: jnp.ndarray
     vx: jnp.ndarray
@@ -468,9 +484,13 @@ class SaucerState(NamedTuple):
     alive: jnp.ndarray
     death_timer: jnp.ndarray
 
+    def _replace(self, **kwargs):
+        return self.replace(**kwargs)
+
 
 # ========== UFO State ==========
-class UFOState(NamedTuple):
+@struct.dataclass
+class UFOState:
     x: jnp.ndarray  # f32
     y: jnp.ndarray  # f32
     vx: jnp.ndarray  # f32
@@ -479,9 +499,13 @@ class UFOState(NamedTuple):
     alive: jnp.ndarray  # bool
     death_timer: jnp.ndarray
 
+    def _replace(self, **kwargs):
+        return self.replace(**kwargs)
+
 
 # ========== FuelTanks State ==========
-class FuelTanks(NamedTuple):
+@struct.dataclass
+class FuelTanks:
     x: jnp.ndarray  # (MAX_ENEMIES,)
     y: jnp.ndarray
     w: jnp.ndarray
@@ -489,9 +513,13 @@ class FuelTanks(NamedTuple):
     sprite_idx: jnp.ndarray
     active: jnp.ndarray  # A boolean array to indicate if it's still active
 
+    def _replace(self, **kwargs):
+        return self.replace(**kwargs)
+
 
 # ========== Env State ==========
-class EnvState(NamedTuple):
+@struct.dataclass
+class EnvState:
     mode: jnp.ndarray
     state: ShipState
     bullets: Bullets
@@ -560,7 +588,39 @@ class EnvState(NamedTuple):
     solar_gravity: jnp.ndarray  # float32
     planetary_gravity: jnp.ndarray  # float32
     reactor_gravity: jnp.ndarray  # float32
+    fuel_consume_thrust: jnp.ndarray  # float32
+    fuel_consume_shield_tractor: jnp.ndarray  # float32
     prev_action: jnp.ndarray  # int32, previous action taken
+
+    def _replace(self, **kwargs):
+        return self.replace(**kwargs)
+
+
+@struct.dataclass
+class GravitarObservation:
+    vector: jnp.ndarray
+
+
+@struct.dataclass
+class GravitarInfo:
+    lives: jnp.ndarray
+    score: jnp.ndarray
+    fuel: jnp.ndarray
+    mode: jnp.ndarray
+    crash_timer: jnp.ndarray
+    done: jnp.ndarray
+    current_level: jnp.ndarray
+    crash: jnp.ndarray = struct.field(default_factory=lambda: jnp.array(False))
+    hit_by_bullet: jnp.ndarray = struct.field(default_factory=lambda: jnp.array(False))
+    reactor_crash_exit: jnp.ndarray = struct.field(default_factory=lambda: jnp.array(False))
+    all_rewards: jnp.ndarray = struct.field(default_factory=lambda: jnp.zeros((5,), dtype=jnp.float32))
+    level_cleared: jnp.ndarray = struct.field(default_factory=lambda: jnp.array(False))
+
+    def _replace(self, **kwargs):
+        return self.replace(**kwargs)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
 
 # ========== Init Function ==========
 
@@ -864,6 +924,8 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
         solar_gravity=jnp.float32(_DEFAULT_CONSTS.SOLAR_GRAVITY),
         planetary_gravity=jnp.float32(_DEFAULT_CONSTS.PLANETARY_GRAVITY),
         reactor_gravity=jnp.float32(_DEFAULT_CONSTS.REACTOR_GRAVITY),
+        fuel_consume_thrust=jnp.float32(_DEFAULT_CONSTS.FUEL_CONSUME_THRUST),
+        fuel_consume_shield_tractor=jnp.float32(_DEFAULT_CONSTS.FUEL_CONSUME_SHIELD_TRACTOR),
         prev_action=jnp.int32(0),
     )
 
@@ -1702,23 +1764,32 @@ def step_core_map(state: ShipState,
                   solar_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.SOLAR_GRAVITY),
                   planetary_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.PLANETARY_GRAVITY),
                   reactor_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.REACTOR_GRAVITY)
-                  ) -> Tuple[jnp.ndarray, ShipState, float, bool, dict, bool, int]:
+                  ) -> Tuple[GravitarObservation, ShipState, float, bool, GravitarInfo, bool, int]:
     new_state = ship_step(state, action, window_size, hud_height, fuel=fuel, terrain_bank_idx=terrain_bank_idx,
                           solar_gravity=solar_gravity,
                           planetary_gravity=planetary_gravity,
                           reactor_gravity=reactor_gravity)
 
-    obs = jnp.array([
+    obs_vector = jnp.array([
         new_state.x,
         new_state.y,
         new_state.vx,
         new_state.vy,
         new_state.angle
     ])
+    obs = GravitarObservation(vector=obs_vector)
 
     reward = 0.0
     done = False
-    info = {}
+    info = GravitarInfo(
+        lives=jnp.int32(0),
+        score=jnp.float32(0.0),
+        fuel=fuel,
+        mode=jnp.int32(0),
+        crash_timer=jnp.int32(0),
+        done=jnp.array(False),
+        current_level=jnp.int32(-1),
+    )
     planet_x = jnp.array([60.0, 120.0, 200.0])
     planet_y = jnp.array([120.0, 200.0, 80.0])
     planet_r = jnp.array([3, 3, 3])
@@ -1784,11 +1855,8 @@ def step_map(env_state: EnvState, action: int):
     is_thrusting = jnp.isin(actual_action, thrust_actions)
     is_using_shield_tractor = jnp.isin(actual_action, shield_tractor_actions)
     
-    FUEL_CONSUME_THRUST = 4.0
-    FUEL_CONSUME_SHIELD_TRACTOR = 10.0
-    
-    fuel_consumed = jnp.where(is_thrusting, FUEL_CONSUME_THRUST, 0.0)
-    fuel_consumed += jnp.where(is_using_shield_tractor, FUEL_CONSUME_SHIELD_TRACTOR, 0.0)
+    fuel_consumed = jnp.where(is_thrusting, env_state.fuel_consume_thrust, 0.0)
+    fuel_consumed += jnp.where(is_using_shield_tractor, env_state.fuel_consume_shield_tractor, 0.0)
     new_fuel = jnp.maximum(0.0, env_state.fuel - fuel_consumed)
     
     # Detect fire button press (not hold) - only fire on transition from not-pressed to pressed
@@ -1952,22 +2020,29 @@ def step_map(env_state: EnvState, action: int):
     final_level_id = jnp.where(reset_signal_from_crash, -2, level_id)
 
     obs_vector = jnp.array([new_env.state.x, new_env.state.y, new_env.state.vx, new_env.state.vy, new_env.state.angle])
-    obs = {'vector': obs_vector}  
+    obs = GravitarObservation(vector=obs_vector)
 
     reward_saucer = jnp.where(just_died, jnp.float32(100.0), jnp.float32(0.0))
     reward = reward_saucer
-    info = {
-        "crash": start_crash,
-        "hit_by_bullet": hit_ship_by_bullet,
-        "reactor_crash_exit": jnp.array(False),
-        "all_rewards": jnp.array([
-            jnp.float32(0.0),  # enemies
-            jnp.float32(0.0),  # reactor
-            jnp.float32(0.0),  # ufo
-            reward_saucer,  # saucer_kill
-            jnp.float32(0.0),  # no penalty
+    info = GravitarInfo(
+        lives=new_env.lives,
+        score=new_env.score,
+        fuel=new_env.fuel,
+        mode=new_env.mode,
+        crash_timer=new_env.crash_timer,
+        done=new_env.done,
+        current_level=new_env.current_level,
+        crash=start_crash,
+        hit_by_bullet=hit_ship_by_bullet,
+        reactor_crash_exit=jnp.array(False),
+        all_rewards=jnp.array([
+            jnp.float32(0.0),
+            jnp.float32(0.0),
+            jnp.float32(0.0),
+            reward_saucer,
+            jnp.float32(0.0),
         ], dtype=jnp.float32),
-    }
+    )
 
     new_env = new_env._replace(score=new_env.score + reward, shield_active=is_using_shield_tractor)
 
@@ -2072,11 +2147,8 @@ def _step_level_core(env_state: EnvState, action: int):
     is_thrusting = jnp.isin(actual_action, thrust_actions)
     is_using_shield_tractor = jnp.isin(actual_action, shield_tractor_actions)
 
-    FUEL_CONSUME_THRUST = 4.0 
-    FUEL_CONSUME_SHIELD_TRACTOR = 10.0
-    
-    fuel_consumed = jnp.where(is_thrusting, FUEL_CONSUME_THRUST, 0.0)
-    fuel_consumed += jnp.where(is_using_shield_tractor, FUEL_CONSUME_SHIELD_TRACTOR, 0.0)
+    fuel_consumed = jnp.where(is_thrusting, state_after_spawn.fuel_consume_thrust, 0.0)
+    fuel_consumed += jnp.where(is_using_shield_tractor, state_after_spawn.fuel_consume_shield_tractor, 0.0)
 
     ship = ship_after_move
     tanks = state_after_spawn.fuel_tanks
@@ -2183,19 +2255,23 @@ def _step_level_core(env_state: EnvState, action: int):
         ex_center = enemies.x
         ey_center = enemies.y
 
-        # Generate random angles for bullets in 180-degree arc
+        # Generate random angles for bullets in a slightly wider arc than 180 degrees
         # Normal bunkers: shoot upward (away from ground below)
         # Flipped bunkers: shoot downward (away from ground above)
         # Use position + frame counter to create pseudo-random angles
         angle_seed = (enemies.x + enemies.y + jnp.float32(state_after_ufo.mode_timer)) * 0.1
-        random_offset = (angle_seed % 1.0) * jnp.pi  # Random value between 0 and π
+        fire_arc = jnp.pi + jnp.deg2rad(20.0)  # 200° total arc (was 180°)
+        half_arc = fire_arc * 0.5
+        random_offset = (angle_seed % 1.0) * fire_arc
         
         # Check if enemy is flipped
         is_flipped = (enemies.sprite_idx == int(SpriteIdx.ENEMY_ORANGE_FLIPPED))
         
-        # Normal: angle between -π and 0 (upward hemisphere)
-        # Flipped: angle between 0 and π (downward hemisphere)
-        random_angle = jnp.where(is_flipped, random_offset, -jnp.pi + random_offset)
+        # Normal: centered upward (-π/2), widened to 200°
+        # Flipped: centered downward (+π/2), widened to 200°
+        normal_start = -jnp.pi * 0.5 - half_arc
+        flipped_start = jnp.pi * 0.5 - half_arc
+        random_angle = jnp.where(is_flipped, flipped_start + random_offset, normal_start + random_offset)
 
         # Bullet speed
         vx = jnp.cos(random_angle) * ENEMY_BULLET_SPEED
@@ -2429,15 +2505,22 @@ def _step_level_core(env_state: EnvState, action: int):
     )
 
     obs_vector = jnp.array([state.x, state.y, state.vx, state.vy, state.angle])
-    obs = {'vector': obs_vector}
+    obs = GravitarObservation(vector=obs_vector)
 
     reward = score_delta
-    info = {
-        "crash": start_crash,
-        "hit_by_bullet": hit_by_enemy_bullet,
-        "reactor_crash_exit": reset_from_reactor_crash,
-        "all_rewards": all_rewards,
-    }
+    info = GravitarInfo(
+        lives=final_env_state.lives,
+        score=final_env_state.score,
+        fuel=final_env_state.fuel,
+        mode=final_env_state.mode,
+        crash_timer=final_env_state.crash_timer,
+        done=final_env_state.done,
+        current_level=final_env_state.current_level,
+        crash=start_crash,
+        hit_by_bullet=hit_by_enemy_bullet,
+        reactor_crash_exit=reset_from_reactor_crash,
+        all_rewards=all_rewards,
+    )
 
     return obs, final_env_state, reward, game_over, info, reset, jnp.int32(-1)
 
@@ -2482,8 +2565,7 @@ def step_arena(env_state: EnvState, action: int):
     # --- Calculate fuel consumption ---
     thrust_actions = jnp.array([2, 6, 7, 10, 14, 15])
     is_thrusting = jnp.isin(action, thrust_actions)
-    FUEL_CONSUME_THRUST = 4.0
-    fuel_consumed = jnp.where(is_thrusting, FUEL_CONSUME_THRUST, 0.0)
+    fuel_consumed = jnp.where(is_thrusting, env_state.fuel_consume_thrust, 0.0)
     fuel_after_actions = jnp.maximum(0.0, env_state.fuel - fuel_consumed)
 
     # --- 3. Saucer Movement and Firing ---
@@ -2544,20 +2626,27 @@ def step_arena(env_state: EnvState, action: int):
     # --- 6. Assemble and Return ---
     obs_vector = jnp.array(
         [ship_after_move.x, ship_after_move.y, ship_after_move.vx, ship_after_move.vy, ship_after_move.angle])
-    obs = {'vector': obs_vector}
+    obs = GravitarObservation(vector=obs_vector)
     reward = jnp.where(just_died, 100.0, 0.0)
-    info = {
-        "crash": start_crash,
-        "hit_by_bullet": hit_ship_by_bullet,
-        "reactor_crash_exit": jnp.array(False),
-        "all_rewards": jnp.array([
-            jnp.float32(0.0),  # enemies
-            jnp.float32(0.0),  # reactor
-            jnp.float32(0.0),  # ufo
-            reward,  # saucer_kill
-            jnp.float32(0.0),  # penalty
+    info = GravitarInfo(
+        lives=env_state.lives,
+        score=env_state.score,
+        fuel=fuel_after_actions,
+        mode=env_state.mode,
+        crash_timer=crash_timer_next,
+        done=env_state.done,
+        current_level=env_state.current_level,
+        crash=start_crash,
+        hit_by_bullet=hit_ship_by_bullet,
+        reactor_crash_exit=jnp.array(False),
+        all_rewards=jnp.array([
+            jnp.float32(0.0),
+            jnp.float32(0.0),
+            jnp.float32(0.0),
+            reward,
+            jnp.float32(0.0),
         ], dtype=jnp.float32),
-    }
+    )
 
     final_env_state = env_state._replace(
         state=ship_after_move,
@@ -2751,23 +2840,29 @@ def step_core(env_state: EnvState, action: int):
 
         # 1. Create an info dictionary with the same structure as the _game_is_running branch
         #    to satisfy the type requirements of jax.lax.cond.
-        info = {
-            "crash": jnp.array(False),
-            "hit_by_bullet": jnp.array(False),
-            "reactor_crash_exit": jnp.array(False),
-
-            "all_rewards": jnp.array([
-                jnp.float32(0.0),  # enemies
-                jnp.float32(0.0),  # reactor
-                jnp.float32(0.0),  # ufo
-                jnp.float32(0.0),  # saucer_kill
-                jnp.float32(0.0),  # penalty
+        info = GravitarInfo(
+            lives=state.lives,
+            score=state.score,
+            fuel=state.fuel,
+            mode=state.mode,
+            crash_timer=state.crash_timer,
+            done=state.done,
+            current_level=state.current_level,
+            crash=jnp.array(False),
+            hit_by_bullet=jnp.array(False),
+            reactor_crash_exit=jnp.array(False),
+            all_rewards=jnp.array([
+                jnp.float32(0.0),
+                jnp.float32(0.0),
+                jnp.float32(0.0),
+                jnp.float32(0.0),
+                jnp.float32(0.0),
             ], dtype=jnp.float32),
-        }
+        )
 
         # 2. Return a tuple with the same pytree structure as the other branch.
         obs_vector = jnp.array([state.state.x, state.state.y, state.state.vx, state.state.vy, state.state.angle])
-        obs = {'vector': obs_vector}
+        obs = GravitarObservation(vector=obs_vector)
 
         return obs, state, 0.0, True, info, False, -1
 
@@ -2814,7 +2909,7 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
             obs_reset, next_state = env_instance.reset_level(subkey_for_reset, level, current_state)
             next_state = next_state._replace(key=new_main_key)
 
-            enter_info = {**info, "level_cleared": jnp.array(False)}
+            enter_info = info.replace(level_cleared=jnp.array(False))
             return obs_reset, next_state, reward, jnp.array(False), enter_info, jnp.array(True), level
 
         # === BRANCH 2: RETURN TO THE MAP ===
@@ -2902,10 +2997,10 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
                     )
                 
                 final_state = jax.lax.cond(is_from_arena, _arena_return_state, _level_return_state)
-                obs_out = {'vector': jnp.array([final_state.state.x, final_state.state.y, 
-                                                final_state.state.vx, final_state.state.vy, 
-                                                final_state.state.angle], dtype=jnp.float32)}
-                win_info = {**info, "level_cleared": jnp.array(True)}
+                obs_out = GravitarObservation(vector=jnp.array([final_state.state.x, final_state.state.y,
+                                                                final_state.state.vx, final_state.state.vy,
+                                                                final_state.state.angle], dtype=jnp.float32))
+                win_info = info.replace(level_cleared=jnp.array(True))
                 return obs_out, final_state, reward, jnp.array(False), win_info, jnp.array(True), level
 
             def _on_death(_):
@@ -2916,7 +3011,7 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
                     current_state.lives,
                     current_state.lives - 1,
                 )
-                death_info = {**info, "level_cleared": jnp.array(False)}
+                death_info = info.replace(level_cleared=jnp.array(False))
                 is_game_over = (lives_after_death <= 0)
                 new_main_key, subkey_for_reset = jax.random.split(current_state.key)
                 obs_reset, map_state = env_instance.reset_map(
@@ -2939,7 +3034,7 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
 
     def _no_reset(operands):
         obs, new_env_state, reward, done, info, reset, level = operands
-        no_reset_info = {**info, "level_cleared": jnp.array(False)}
+        no_reset_info = info.replace(level_cleared=jnp.array(False))
         return obs, new_env_state, reward, done, no_reset_info, reset, level
 
     obs, new_env_state, reward, done, info, reset, level = step_core(env_state, action)
@@ -3090,53 +3185,44 @@ class JaxGravitar(JaxEnvironment):
         """
         return state.done
 
-    def _get_observation(self, state: EnvState) -> Dict[str, jnp.ndarray]:
+    def _get_observation(self, state: EnvState) -> GravitarObservation:
         """
         Extracts the structured observation from the environment state.
         Args:
             state: The current environment state.
 
-        Returns: A dictionary containing the vector observation.
+        Returns: A structured observation dataclass containing the vector observation.
         """
         ship = state.state
         obs_vector = jnp.array([
             ship.x, ship.y, ship.vx, ship.vy, ship.angle
         ], dtype=jnp.float32)
 
-        return {'vector': obs_vector}
+        return GravitarObservation(vector=obs_vector)
 
-    def _get_info(self, state: EnvState, all_rewards: Optional[jnp.ndarray] = None) -> Dict[str, Any]:
+    def _get_info(self, state: EnvState, all_rewards: Optional[jnp.ndarray] = None) -> GravitarInfo:
         """
         Extracts debugging information from the environment state.
         Args:
             state: The current environment state.
             all_rewards: Optional array of rewards from the last step, if available.
 
-        Returns: A dictionary of information.
+        Returns: A structured info dataclass.
         """
-        info = {
-            "lives": state.lives,
-            "score": state.score,
-            "fuel": state.fuel,
-            "mode": state.mode,
-            "crash_timer": state.crash_timer,
-            "done": state.done,
-            "current_level": state.current_level,
-        }
-
-        if all_rewards is not None:
-            reward_names = [
-                "enemies", "reactor", "ufo",
-                "saucer_kill", "penalty"
-            ]
-            for i, name in enumerate(reward_names):
-                if i < len(all_rewards):
-                    info[f"reward_{name}"] = all_rewards[i]
-
-        return info
+        rewards = all_rewards if all_rewards is not None else jnp.zeros((5,), dtype=jnp.float32)
+        return GravitarInfo(
+            lives=state.lives,
+            score=state.score,
+            fuel=state.fuel,
+            mode=state.mode,
+            crash_timer=state.crash_timer,
+            done=state.done,
+            current_level=state.current_level,
+            all_rewards=rewards,
+        )
 
     # === Implement all required abstract methods ===
-    def reset(self, key: jnp.ndarray) -> tuple[dict[str, Array], EnvState]:
+    def reset(self, key: jnp.ndarray) -> tuple[GravitarObservation, EnvState]:
         """Implements the main reset entry point of the environment."""
         return self.reset_map(key)
 
@@ -3170,17 +3256,6 @@ class JaxGravitar(JaxEnvironment):
     def image_space(self) -> spaces.Box:
         return spaces.Box(low=0, high=255, shape=(WINDOW_HEIGHT, WINDOW_WIDTH, 3), dtype=jnp.uint8)
 
-    def obs_to_flat_array(self, obs: Any) -> jnp.ndarray:
-
-        if isinstance(obs, dict):
-            leaves, _ = jax.tree_util.tree_flatten(obs)
-            return jnp.concatenate([leaf.flatten() for leaf in leaves])
-        elif isinstance(obs, tuple):
-            leaves, _ = jax.tree_util.tree_flatten(obs)
-            return jnp.concatenate([leaf.flatten() for leaf in leaves])
-        else:
-            return obs.flatten()
-
     def get_ram(self, state: EnvState) -> jnp.ndarray:
         return jnp.zeros(128, dtype=jnp.uint8)
 
@@ -3199,7 +3274,7 @@ class JaxGravitar(JaxEnvironment):
                   fuel: Optional[float] = None,
                   reactor_destroyed: Optional[jnp.ndarray] = None,
                   planets_cleared_mask: Optional[jnp.ndarray] = None
-                  ) -> tuple[dict[str, Array], EnvState]:
+                  ) -> tuple[GravitarObservation, EnvState]:
         # ALE spawn location coordinates: (75, 131)
         spawn_x = jnp.array(76.0, dtype=jnp.float32)
         spawn_y = jnp.array(131.0, dtype=jnp.float32)
@@ -3271,6 +3346,8 @@ class JaxGravitar(JaxEnvironment):
             solar_gravity=jnp.float32(self.consts.SOLAR_GRAVITY),
             planetary_gravity=jnp.float32(self.consts.PLANETARY_GRAVITY),
             reactor_gravity=jnp.float32(self.consts.REACTOR_GRAVITY),
+            fuel_consume_thrust=jnp.float32(self.consts.FUEL_CONSUME_THRUST),
+            fuel_consume_shield_tractor=jnp.float32(self.consts.FUEL_CONSUME_SHIELD_TRACTOR),
             prev_action=jnp.int32(0),
         )
 
@@ -3279,8 +3356,7 @@ class JaxGravitar(JaxEnvironment):
             ship_state.x, ship_state.y, ship_state.vx, ship_state.vy, ship_state.angle
         ], dtype=jnp.float32)
 
-        # Return it inside a dictionary to match the new observation_space
-        return {'vector': obs_vector}, env_state
+        return GravitarObservation(vector=obs_vector), env_state
 
     def reset_level(self, key: jnp.ndarray, level_id: jnp.ndarray, prev_env_state: EnvState):
         level_id = jnp.asarray(level_id, dtype=jnp.int32)
@@ -3371,8 +3447,7 @@ class JaxGravitar(JaxEnvironment):
             ship_state.x, ship_state.y, ship_state.vx, ship_state.vy, ship_state.angle
         ], dtype=jnp.float32)
 
-        # Return it inside a dictionary
-        return {'vector': obs_vector}, env_state
+        return GravitarObservation(vector=obs_vector), env_state
 
     # --- Helper Methods ---
     def _build_terrain_bank(self) -> jnp.ndarray:
