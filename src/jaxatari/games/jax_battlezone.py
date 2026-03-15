@@ -1180,9 +1180,9 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             enemies=enemies,
             radar_dots=radar_dots,
             projectiles=projectiles,
-            score=state.score,
-            life=state.life,
-            enemy_types=jnp.where(enemy_mask, state.enemies.enemy_type, -1),
+            score=jnp.array(state.score),
+            life=jnp.array(state.life),
+            enemy_types=jnp.where(enemy_mask, jnp.array(state.enemies.enemy_type), -1),
         )
 
 
@@ -1234,11 +1234,11 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 #-------------------------------------renderer-------------------------------------
 class BattlezoneRenderer(JAXGameRenderer):
 
-    def __init__(self, consts: BattlezoneConstants = None):
+    def __init__(self, consts: BattlezoneConstants = None, config=None):
         super().__init__()
 
         self.consts = consts or BattlezoneConstants()
-        self.config = render_utils.RendererConfig(
+        self.config = config or render_utils.RendererConfig(
             game_dimensions=(210, 160),
             channels=3,
             # downscale=(84, 84)
