@@ -783,7 +783,11 @@ class JaxTutankham(JaxEnvironment):
                         jnp.where(dx[effective_action] < 0, 4, player_direction))
         new_step_counter = step_counter + 1
 
-        return player_x, player_y, new_last_directional_action, new_direction, is_moving_now, new_step_counter
+
+        # update camera offset based on player y position
+        camera_offset = jnp.where(player_y < self.consts.HEIGHT // 2, 0, player_y - self.consts.HEIGHT // 2)
+
+        return player_x, player_y, new_last_directional_action, new_direction, is_moving_now, new_step_counter, camera_offset
 
     #Bullet Step
     @partial(jax.jit, static_argnums=(0,))
@@ -1135,12 +1139,15 @@ class JaxTutankham(JaxEnvironment):
         rng_key = state.rng_key
         camera_offset = state.camera_offset
 
-        player_x, player_y, last_directional_action, player_direction, is_moving, step_counter = self.player_step(
-            player_x, player_y, action, last_directional_action, player_direction, step_counter, level
+        # move player based on action input and check for teleporter trigger, also update camera offset
+        (player_x, player_y, 
+         last_directional_action, player_direction, 
+         is_moving, step_counter, camera_offset)= self.player_step(
+            player_x, player_y, 
+            action, last_directional_action, 
+            player_direction, step_counter, level
         )
 
-        # update camera offset based on player y position
-        camera_offset = jnp.where(player_y < self.consts.HEIGHT // 2, 0, player_y - self.consts.HEIGHT // 2)
 
         bullet_state, amonition_timer =self.bullet_step(bullet_state, player_x, player_y, amonition_timer, action)
 
