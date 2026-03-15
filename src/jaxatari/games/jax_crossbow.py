@@ -1162,26 +1162,30 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         # --- Movement ---
         is_coconut = state.enemies_type == EnemyType.COCONUT
         is_monkey = state.enemies_type == EnemyType.MONKEY
-        is_static = jnp.logical_or(
-            state.enemies_type == EnemyType.VORACIOUS_PLANT,
-            state.enemies_type == EnemyType.EYE
-        )
+        is_plant = state.enemies_type == EnemyType.VORACIOUS_PLANT
+        
+        is_static = state.enemies_type == EnemyType.EYE
+        
+        
+        
 
         # Coconuts fall with gravity
         gravity = 0.10
-        new_dy = jnp.where(is_coconut, state.enemies_dy + gravity, state.enemies_dy)
+        new_dy = jnp.where(is_coconut, state.enemies_dy + gravity,jnp.where(is_plant, -0.3,state.enemies_dy))
 
         # Monkeys bounce horizontally
-        monkey_dx = jnp.where(
-            state.enemies_x < 20, jnp.abs(state.enemies_dx),
-            jnp.where(state.enemies_x > self.consts.WIDTH - 20, -jnp.abs(state.enemies_dx),
-            state.enemies_dx)
+        monkey_dy = jnp.where(
+            state.enemies_y < 30, jnp.abs(state.enemies_dy),
+            jnp.where(state.enemies_y > 80, -jnp.abs(state.enemies_dy),
+            state.enemies_dy)
         )
-        new_dx = jnp.where(is_monkey, monkey_dx, state.enemies_dx)
-
+        new_dy = jnp.where(is_monkey, monkey_dy, new_dy)
+        
+        new_dx = jnp.where(is_monkey, 0.0, state.enemies_dx)
+        
         new_x = jnp.where(is_static, state.enemies_x, state.enemies_x + new_dx)
-        new_y = jnp.where(is_static, state.enemies_y,
-             jnp.where(is_monkey, state.enemies_y, state.enemies_y + new_dy))
+        new_y = jnp.where(is_static, state.enemies_y, state.enemies_y + new_dy)
+        
 
         # --- Monkey throws coconut ---
         throw_rolls = jax.random.uniform(coconut_key, (self.consts.MAX_ENEMIES,))
@@ -1232,16 +1236,18 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         ).astype(jnp.float32)
         spawn_y_generic = jnp.where(
             spawn_type_generic == EnemyType.MONKEY,
-            40.0,
+            60.0,
             float(self.consts.GROUND_Y_MIN)
         )
 
         # Monkeys start with horizontal velocity, plants stay static
-        spawn_dx_generic = jnp.where(
+        spawn_dy_generic = jnp.where(
             spawn_type_generic == EnemyType.MONKEY,
-            jnp.where(spawn_x_generic < self.consts.WIDTH / 2, 0.4, -0.4),
+            0.4,
             0.0
         )
+        spawn_dx_generic = jnp.zeros(self.consts.MAX_ENEMIES)
+        
 
         # Small horizontal arc for coconuts
         coconut_dx = jax.random.uniform(
@@ -1276,8 +1282,9 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
                       jnp.where(should_spawn_final, 0.0, new_dx))
         )
 
-        # dy: reset to 0 for all new spawns to avoid inheriting stale velocity
-        final_dy = jnp.where(should_spawn_final, 0.0, new_dy)
+        # dy: new spawns get their initial velocity, existing enemies keep accumulated dy
+        final_dy = jnp.where(should_spawn_generic, spawn_dy_generic,jnp.where(should_spawn_final, 0.0, new_dy))
+        
 
         final_x = jnp.where(should_spawn_final, spawn_x, new_x)
         final_y = jnp.where(should_spawn_final, spawn_y, new_y)
@@ -1287,10 +1294,12 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             final_type == EnemyType.COCONUT,
             final_y > self.consts.PLAY_AREA_HEIGHT
         )
-        final_active = jnp.logical_and(
-            jnp.logical_or(surviving_enemies, should_spawn_final),
-            jnp.logical_not(coconut_exited)
-        )
+        
+        #Cull plants that rise too high
+        plant_exited = jnp.logical_and(final_type == EnemyType.VORACIOUS_PLANT, final_y < 10)
+        
+        final_active = jnp.logical_and(jnp.logical_or(surviving_enemies, should_spawn_final),jnp.logical_and(jnp.logical_not(coconut_exited),jnp.logical_not(plant_exited)))
+        
 
         new_age = jnp.where(should_spawn_final, 0, state.enemies_age + 1)
         final_active = self._cull_expired_eyes(final_type, new_age, final_active)
@@ -1305,13 +1314,10 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             final_y < fy + self.consts.FRIEND_SIZE[1],
             final_y + self.consts.ENEMY_SIZE[1] > fy
         )
-        # Plants don't harm friend, only active enemies count
-        is_not_plant = jnp.logical_not(final_type == EnemyType.VORACIOUS_PLANT)
-        any_friend_hit = jnp.any(jnp.logical_and(
-            jnp.logical_and(danger_x, danger_y),
-            jnp.logical_and(final_active, is_not_plant)
-        ))
-
+        
+        
+        # active enemies including plants can kill the friend now
+        any_friend_hit = jnp.any(jnp.logical_and( jnp.logical_and(danger_x, danger_y), final_active))
         # Bonus life on first jungle completion
         friend_completed = state.friend_x >= self.consts.WIDTH - 10
         is_first_completion = jnp.logical_and(friend_completed, jnp.logical_not(state.rope_2_broken))
