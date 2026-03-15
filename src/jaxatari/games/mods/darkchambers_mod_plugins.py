@@ -300,3 +300,73 @@ class PoisonPotionMod(JaxAtariPostStepModPlugin):
             poison_cloud_y=jnp.array(0, dtype=jnp.int32),
             poison_cloud_timer=jnp.array(0, dtype=jnp.int32)
         )
+
+
+# ============================================================================
+# MOD 4: GRIM REAPER ENEMIES
+# ============================================================================
+class GrimReaperEnemiesMod(JaxAtariPostStepModPlugin):
+    """
+    Enables spawning of the highest enemy tier (Grim Reaper).
+
+    This unlocks enemy type 5 in regular enemy and spawner-based spawn pools.
+    """
+
+    constants_overrides = {
+        "ENABLE_GRIM_REAPER_ENEMIES": True,
+    }
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: DarkChambersState, new_state: DarkChambersState) -> DarkChambersState:
+        return new_state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        return obs, state
+
+
+# ============================================================================
+# MOD 5: WIZARD BULLET SHOOTING
+# ============================================================================
+class WizardBulletShootingMod(JaxAtariPostStepModPlugin):
+    """
+    Enables wizard projectile attacks.
+
+    Wizards fire tracked enemy bullets at the player based on their shoot timers.
+    """
+
+    constants_overrides = {
+        "ENABLE_WIZARD_BULLETS": True,
+    }
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: DarkChambersState, new_state: DarkChambersState) -> DarkChambersState:
+        return new_state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        return obs, state
+
+
+# ============================================================================
+# MOD 6: HAMMER ITEM SPAWNING
+# ============================================================================
+class HammerMod(JaxAtariPostStepModPlugin):
+    """
+    Enables hammer item spawning.
+
+    When active, ITEM_HAMMER enters level spawn pools according to
+    probabilities defined in the base environment.
+    """
+
+    constants_overrides = {
+        "ENABLE_HAMMER_SPAWN": True,
+    }
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: DarkChambersState, new_state: DarkChambersState) -> DarkChambersState:
+        return new_state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        return obs, state

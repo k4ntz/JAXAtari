@@ -3,6 +3,9 @@ from jaxatari.games.mods.darkchambers_mod_plugins import (
     SpeedPotionMod,
     HealPotionMod,
     PoisonPotionMod,
+    GrimReaperEnemiesMod,
+    WizardBulletShootingMod,
+    HammerMod,
 )
 
 
@@ -39,6 +42,18 @@ class DarkchambersEnvMod(JaxAtariModController):
        - Cloud lasts 180 steps, damages enemies within 80px radius
        - Tracks position and countdown timer
        - Enables area control and crowd management
+
+     4. grim_reaper_enemies
+         - Enables the highest enemy tier (Grim Reaper) in spawn pools
+         - Applies to initial and spawner-based enemy generation
+
+     5. wizard_bullet_shooting
+         - Enables wizard projectile attacks
+         - Wizards fire enemy bullets toward the player on timer
+
+     6. hammer
+         - Enables hammer item spawning in level item pools
+         - Hammer remains usable through the existing HAMMER action
     
     Integration Details:
     --------------------
@@ -54,12 +69,20 @@ class DarkchambersEnvMod(JaxAtariModController):
     python3 scripts/play.py -g Darkchambers -m heal_potion poison_potion
     python3 scripts/play.py -g Darkchambers -m speed_potion heal_potion poison_potion
     python3 scripts/play.py -g Darkchambers -m speed_potion heal_potion --allow_conflicts
+    python3 scripts/play.py -g Darkchambers -m grim_reaper_enemies
+    python3 scripts/play.py -g Darkchambers -m wizard_bullet_shooting
+    python3 scripts/play.py -g Darkchambers -m grim_reaper_enemies wizard_bullet_shooting
+    python3 scripts/play.py -g Darkchambers -m hammer
+    python3 scripts/play.py -g Darkchambers -m speed_potion heal_potion poison_potion hammer
     """
 
     REGISTRY = {
         "speed_potion": SpeedPotionMod,
         "heal_potion": HealPotionMod,
         "poison_potion": PoisonPotionMod,
+        "grim_reaper_enemies": GrimReaperEnemiesMod,
+        "wizard_bullet_shooting": WizardBulletShootingMod,
+        "hammer": HammerMod,
     }
 
     def __init__(self,

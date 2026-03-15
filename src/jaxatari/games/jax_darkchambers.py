@@ -145,6 +145,7 @@ ENEMY_ZOMBIE = 1  # Weakest
 
 # Item configuration
 NUM_ITEMS = 20  # 5 fixed (key, ladders, cage door, cage reward) + 15 random
+INITIAL_REGULAR_ITEM_COUNT = 8  # Fewer random items active at once to reduce clutter
 # Item type codes
 ITEM_HEART = 1          # +health, no points
 ITEM_POISON = 2         # -4 health, no points
@@ -176,10 +177,12 @@ LADDER_HEIGHT = 12
 # Bomb configuration
 MAX_BOMBS = 15          # Maximum bombs player can carry
 DOUBLE_TAP_WINDOW = 10  # Steps within which two fires count as double-tap
-FIRE_RATE_LIMIT = 1     # Minimum steps between shots (fire rate limiter)
+FIRE_RATE_LIMIT = 20    # Slightly slower base fire rate (~0.67s at 30 FPS)
+FIRE_RATE_LIMIT_WITH_GUN = 10  # Gun still speeds up shooting noticeably
 BOMB_RADIUS = 80        # Kill radius for bomb in pixels
 MAX_HAMMERS = 3         # Maximum hammers player can carry
 HAMMER_RADIUS = 100     # Kill radius for hammer in pixels
+ENEMY_HITS_PER_TIER = 2 # Bullet/poison hits needed before an enemy drops one tier
 
 # Default base size (unused now, kept for reference)
 ITEM_WIDTH = 6
@@ -211,7 +214,7 @@ DEATH_FREEZE_TICKS = 60
 SPAWNER_WIDTH = 14
 SPAWNER_HEIGHT = 28  # 2:1 aspect ratio (height = 2 * width, original width)
 SPAWNER_HEALTH = 3  # Takes 3 hits to destroy
-SPAWNER_SPAWN_INTERVAL = 150  # Spawn enemy every 150 steps
+SPAWNER_SPAWN_INTERVAL = 320  # Spawn enemies significantly less often
 
 ENEMY_COLLISION_MARGIN = 1
 ENEMY_MOVE_EVERY = 2  # Enemies move every N game steps (used for movement throttle and animation timing)
@@ -361,7 +364,11 @@ class DarkChambersConstants(NamedTuple):
     ENABLE_DEFAULT_POISON_SPAWN: bool = False
 
     HAMMER_COLOR: Tuple[int, int, int] = (148, 0, 211)  # Brown hammer
-    ENABLE_HAMMER_SPAWN: bool = True
+    ENABLE_HAMMER_SPAWN: bool = False
+
+    # Advanced enemy features (disabled by default; enabled by mods)
+    ENABLE_GRIM_REAPER_ENEMIES: bool = False
+    ENABLE_WIZARD_BULLETS: bool = False
 
 
 class DarkChambersState(NamedTuple):
@@ -374,6 +381,7 @@ class DarkChambersState(NamedTuple):
     enemy_positions: chex.Array  # shape: (NUM_ENEMIES, 2)
     enemy_types: chex.Array      # shape: (NUM_ENEMIES,) - 1=zombie, 2=wraith, 3=skeleton, 4=wizard, 5=grim_reaper
     enemy_active: chex.Array     # shape: (NUM_ENEMIES,) - 1=alive, 0=dead
+    enemy_hitpoints: chex.Array  # shape: (NUM_ENEMIES,) - hits remaining before dropping one tier
     wizard_shoot_timers: chex.Array  # shape: (NUM_ENEMIES,) - countdown to next shot for wizards
     
     spawner_positions: chex.Array  # shape: (NUM_SPAWNERS, 2)
@@ -399,6 +407,7 @@ class DarkChambersState(NamedTuple):
     bomb_count: chex.Array      # number of bombs (0-15)
     hammer_count: chex.Array    # number of hammers (0-MAX_HAMMERS)
     last_fire_step: chex.Array  # step counter when fire was last pressed (for double-tap)
+    last_shot_step: chex.Array  # step counter when a bullet was actually spawned
     
     current_level: chex.Array   # current level index (0 to MAX_LEVELS-1)
     map_index: chex.Array       # current map variant (0=middle, 1=left, 2=right)
@@ -439,7 +448,14 @@ class EntityPosition(NamedTuple):
 class DarkChambersObservation(NamedTuple):
     """Compact observation used by agents and the UI."""
     player: EntityPosition
-    enemies: jnp.ndarray  # (NUM_ENEMIES, 5): x, y, width, height, active
+    enemies: jnp.ndarray  # (NUM_ENEMIES, 6): screen_x, screen_y, width, height, type, in_view
+    items: jnp.ndarray    # (NUM_ITEMS, 6): screen_x, screen_y, width, height, type, in_view
+    spawners: jnp.ndarray  # (NUM_SPAWNERS, 5): screen_x, screen_y, width, height, in_view
+    player_bullets: jnp.ndarray  # (MAX_BULLETS, 5): screen_x, screen_y, width, height, in_view
+    enemy_bullets: jnp.ndarray  # (ENEMY_MAX_BULLETS, 5): screen_x, screen_y, width, height, in_view
+    portals: jnp.ndarray  # (6, 3): screen_x, screen_y, in_view
+    walls: jnp.ndarray    # (num_wall_segments, 5): screen_x, screen_y, width, height, in_view
+    border_distances: jnp.ndarray  # (4,): left, right, top, bottom (player->camera viewport border)
     health: jnp.ndarray
     score: jnp.ndarray
     step: jnp.ndarray
@@ -2375,15 +2391,20 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         enemy_positions_init = jnp.zeros((NUM_ENEMIES, 2), dtype=jnp.int32)
         (enemy_positions, key), _ = jax.lax.scan(spawn_enemy, (enemy_positions_init, subkey), jnp.arange(NUM_ENEMIES))
         
-        # Spawn random number of enemies (5-10)
+        # Spawn random number of enemies (3-6)
         key, subkey = jax.random.split(key)
-        num_active_enemies = jax.random.randint(subkey, (), 5, 11, dtype=jnp.int32)
+        num_active_enemies = jax.random.randint(subkey, (), 3, 7, dtype=jnp.int32)
         
-        # Spawn enemies with random types (favor stronger types, exclude Grim Reaper)
+        # Spawn enemies with random types (favor stronger types; grim reaper is mod-gated)
         key, subkey = jax.random.split(key)
+        enemy_type_high = jnp.where(
+            jnp.array(self.consts.ENABLE_GRIM_REAPER_ENEMIES),
+            ENEMY_GRIM_REAPER + 1,
+            ENEMY_WIZARD + 1,
+        )
         enemy_types = jax.random.randint(
-            subkey, (NUM_ENEMIES,), ENEMY_WRAITH, ENEMY_WIZARD + 1, dtype=jnp.int32
-        )  # Random types from 2 (Wraith) to 4 (Wizard), excluding 5 (Grim Reaper)
+            subkey, (NUM_ENEMIES,), ENEMY_WRAITH, enemy_type_high, dtype=jnp.int32
+        )  # Random types from 2 (Wraith) to 4/5 (Wizard/Grim Reaper)
         # Only activate the first num_active_enemies
         enemy_active = jnp.where(jnp.arange(NUM_ENEMIES) < num_active_enemies, 1, 0)
         
@@ -2584,7 +2605,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             | ((item_types == ITEM_HAMMER) & (~jnp.array(self.consts.ENABLE_HAMMER_SPAWN)))
         )
         item_types = jnp.where(disallowed_potions, ITEM_HEART, item_types)
-        item_active = jnp.ones(NUM_ITEMS, dtype=jnp.int32)
+        regular_item_mask = (jnp.arange(NUM_ITEMS) < (5 + INITIAL_REGULAR_ITEM_COUNT)).astype(jnp.int32)
+        item_active = jnp.where(jnp.arange(NUM_ITEMS) < 5, 1, regular_item_mask)
 
         # Safety pass: suppress entities that still overlap walls after spawn attempts.
         def rect_overlaps_walls(pos: chex.Array, width: chex.Array, height: chex.Array) -> chex.Array:
@@ -2602,6 +2624,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             lambda p: rect_overlaps_walls(p, self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT)
         )(enemy_positions)
         enemy_active = enemy_active & (~enemy_wall_overlap).astype(jnp.int32)
+        enemy_hitpoints = jnp.where(enemy_active == 1, ENEMY_HITS_PER_TIER, 0).astype(jnp.int32)
 
         spawner_wall_overlap = jax.vmap(
             lambda p: rect_overlaps_walls(p, SPAWNER_WIDTH, SPAWNER_HEIGHT)
@@ -2639,6 +2662,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             enemy_positions=enemy_positions,
             enemy_types=enemy_types,
             enemy_active=enemy_active,
+            enemy_hitpoints=enemy_hitpoints,
             wizard_shoot_timers=wizard_shoot_timers,
             spawner_positions=spawner_positions,
             spawner_health=spawner_health,
@@ -2660,6 +2684,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             bomb_count=jnp.array(0, dtype=jnp.int32),
             hammer_count=jnp.array(0, dtype=jnp.int32),
             last_fire_step=jnp.array(-1000, dtype=jnp.int32),  # Initialize to far past
+            last_shot_step=jnp.array(-1000, dtype=jnp.int32),  # Initialize to far past
             current_level=jnp.array(0, dtype=jnp.int32),  # Start at level 0
             map_index=jnp.array(0, dtype=jnp.int32),  # Start at middle map
             ladder_timer=jnp.array(0, dtype=jnp.int32),   # Not on ladder initially
@@ -2949,11 +2974,12 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             # Find first inactive bullet slot
             first_inactive = jnp.argmax(state.bullet_active == 0)
             can_spawn = jnp.any(state.bullet_active == 0)
+            steps_since_last_shot = state.step_counter - state.last_shot_step
             
             # Fire rate limiting: ensure minimum time between shots
-            # Gun powerup reduces fire rate limit to 1 (even faster shooting)
-            fire_rate_threshold = jnp.where(state.gun_active == 1, 1, FIRE_RATE_LIMIT)
-            can_fire_now = steps_since_last_fire >= fire_rate_threshold
+            # Gun powerup lowers the delay further for faster follow-up shots
+            fire_rate_threshold = jnp.where(state.gun_active == 1, FIRE_RATE_LIMIT_WITH_GUN, FIRE_RATE_LIMIT)
+            can_fire_now = steps_since_last_shot >= fire_rate_threshold
             can_spawn = can_spawn & can_fire_now
             
             # Determine bullet speed based on gun powerup
@@ -2991,6 +3017,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             
             # Update bullets array
             should_spawn = fire_pressed & can_spawn
+            new_last_shot_step = jnp.where(should_spawn, state.step_counter, state.last_shot_step)
             new_bullet_positions = jnp.where(
                 jnp.arange(MAX_BULLETS)[:, None] == first_inactive,
                 jnp.where(should_spawn, new_bullet, state.bullet_positions),
@@ -3036,12 +3063,15 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 1,
                 updated_bullet_active
             )
-            # Wizard shooting: DISABLED
-            # Keep timers but never trigger shooting
+            # Wizard shooting: mod-gated
             new_wizard_timers = state.wizard_shoot_timers - 1
-
-            # Disable wizard shooting - set should_shoot to always False
-            should_shoot = jnp.zeros(NUM_ENEMIES, dtype=bool)
+            wizard_shooting_enabled = jnp.array(self.consts.ENABLE_WIZARD_BULLETS)
+            should_shoot = (
+                wizard_shooting_enabled
+                & (state.enemy_types == ENEMY_WIZARD)
+                & (state.enemy_active == 1)
+                & (new_wizard_timers <= 0)
+            )
 
             # Reset timers for wizards that shoot (base interval + random offset)
             rng, subkey = jax.random.split(state.key)
@@ -3566,7 +3596,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             all_collisions = jax.vmap(check_all_enemies_for_bullet)(jnp.arange(MAX_BULLETS))
             
             # Any bullet hit per enemy
-            enemy_hit = jnp.any(all_collisions, axis=0)
+            bullet_hits_enemies = jnp.any(all_collisions, axis=0) & (state.enemy_active == 1)
             
             # Bomb detonation: kill enemies within radius when bomb is used
             # Calculate distance from player to each enemy
@@ -3584,8 +3614,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             within_hammer_radius = distance_sq <= (HAMMER_RADIUS * HAMMER_RADIUS)
             hammer_kills_enemies = should_use_hammer & within_hammer_radius & (state.enemy_active == 1)
 
-            enemy_hit = enemy_hit | bomb_kills_enemies | hammer_kills_enemies
-            
             # Poison cloud damage: apply gradual damage to enemies within radius
             # Only apply poison damage if cloud timer is active AND on damage interval (every 30 steps)
             # This prevents instant kills and makes it a gradual damage-over-time effect
@@ -3602,33 +3630,47 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             # Poison hits enemies (decrements type by 1) every damage interval, NOT instant kill
             poison_hits_enemies = cloud_active & damage_tick & within_poison_radius & (state.enemy_active == 1)
             
-            enemy_hit = enemy_hit | poison_hits_enemies
-            
             # Reduce bomb count when detonated
             bomb_count_after_detonation = jnp.where(should_detonate_bomb, new_bomb_count - 1, new_bomb_count)
 
             # Reduce hammer count when used
             hammer_count_after_use = jnp.where(should_use_hammer, new_hammer_count - 1, new_hammer_count)
 
-            # Enemy mutation system: when hit, enemy mutates to weaker form
-            # Bomb/hammer instantly kill (set type to 0), poison and regular hits decrement type by 1
             instant_kills = bomb_kills_enemies | hammer_kills_enemies
-            new_enemy_types = jnp.where(instant_kills, 0, 
-                              jnp.where(enemy_hit & (~instant_kills), state.enemy_types - 1, state.enemy_types))
+            non_instant_hits = (bullet_hits_enemies | poison_hits_enemies) & (~instant_kills) & (state.enemy_active == 1)
+            enemy_hitpoints_after_hit = jnp.where(
+                non_instant_hits,
+                jnp.maximum(state.enemy_hitpoints - 1, 0),
+                state.enemy_hitpoints,
+            ).astype(jnp.int32)
+            enemy_killed_by_hits = non_instant_hits & (enemy_hitpoints_after_hit <= 0) & (state.enemy_types == ENEMY_ZOMBIE)
+            tier_dropped = non_instant_hits & (enemy_hitpoints_after_hit <= 0) & (state.enemy_types > ENEMY_ZOMBIE)
+
+            # Enemy mutation system: every displayed enemy tier takes two hits.
+            new_enemy_types = jnp.where(
+                instant_kills | enemy_killed_by_hits,
+                0,
+                jnp.where(tier_dropped, state.enemy_types - 1, state.enemy_types),
+            ).astype(jnp.int32)
+            new_enemy_hitpoints = jnp.where(
+                instant_kills | (new_enemy_types <= 0),
+                0,
+                jnp.where(tier_dropped, ENEMY_HITS_PER_TIER, enemy_hitpoints_after_hit),
+            ).astype(jnp.int32)
             
-            # Award points when enemy is killed
-            zombies_killed = (enemy_hit & (~instant_kills)) & (state.enemy_types == ENEMY_ZOMBIE)
+            # Award points when an enemy actually drops a tier or dies instantly
+            zombies_killed = tier_dropped & (state.enemy_types == ENEMY_ZOMBIE)
             
-            # Instant kills (bomb only) award points for all enemy types; poison and bullet hits award points on progression
+            # Instant kills award points for all enemy types; bullet/poison only score when a tier actually breaks
             zombies_instant = instant_kills & (state.enemy_types == ENEMY_ZOMBIE)
             wraiths_instant = instant_kills & (state.enemy_types == ENEMY_WRAITH)
             skeletons_instant = instant_kills & (state.enemy_types == ENEMY_SKELETON)
             wizards_instant = instant_kills & (state.enemy_types == ENEMY_WIZARD)
             grim_reapers_instant = instant_kills & (state.enemy_types == ENEMY_GRIM_REAPER)
-            wraiths_hit = (enemy_hit & (~instant_kills)) & (state.enemy_types == ENEMY_WRAITH)
-            skeletons_hit = (enemy_hit & (~instant_kills)) & (state.enemy_types == ENEMY_SKELETON)
-            wizards_hit = (enemy_hit & (~instant_kills)) & (state.enemy_types == ENEMY_WIZARD)
-            grim_reapers_hit = (enemy_hit & (~instant_kills)) & (state.enemy_types == ENEMY_GRIM_REAPER)
+            wraiths_hit = tier_dropped & (state.enemy_types == ENEMY_WRAITH)
+            skeletons_hit = tier_dropped & (state.enemy_types == ENEMY_SKELETON)
+            wizards_hit = tier_dropped & (state.enemy_types == ENEMY_WIZARD)
+            grim_reapers_hit = tier_dropped & (state.enemy_types == ENEMY_GRIM_REAPER)
             
             enemy_kill_score = (
                 jnp.sum(zombies_killed | zombies_instant) * self.consts.ZOMBIE_POINTS +
@@ -3863,20 +3905,26 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
             spawner_affected_types = new_enemy_types
             spawner_affected_active = new_enemy_active
+            spawner_affected_hitpoints = new_enemy_hitpoints
             spawner_affected_timers = new_wizard_timers
             
             # spawn each enemy exactly in the middle of the spawner (or not at all)
             def try_spawn_from_spawner(carry, spawner_idx):
-                enemy_pos, enemy_types_arr, enemy_active_arr, timers_arr, key = carry
+                enemy_pos, enemy_types_arr, enemy_active_arr, enemy_hp_arr, timers_arr, key = carry
                 should_spawn = should_spawn_enemy[spawner_idx]
                 
                 # Find first inactive enemy slot
                 first_inactive = jnp.argmax(enemy_active_arr == 0)
                 can_spawn = jnp.any(enemy_active_arr == 0) & should_spawn
                 
-                # Random enemy type (2-4: wraith, skeleton, wizard) - exclude Zombie and Grim Reaper
+                # Random enemy type (2-4/5: wraith, skeleton, wizard, optional grim reaper)
                 key, subkey = jax.random.split(key)
-                spawn_type = jax.random.randint(subkey, (), ENEMY_WRAITH, ENEMY_WIZARD + 1, dtype=jnp.int32)
+                enemy_type_high = jnp.where(
+                    jnp.array(self.consts.ENABLE_GRIM_REAPER_ENEMIES),
+                    ENEMY_GRIM_REAPER + 1,
+                    ENEMY_WIZARD + 1,
+                )
+                spawn_type = jax.random.randint(subkey, (), ENEMY_WRAITH, enemy_type_high, dtype=jnp.int32)
                 
                 # Random wizard timer for new enemy (in case it's a wizard)
                 key, subkey = jax.random.split(key)
@@ -3926,17 +3974,22 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                     1,
                     enemy_active_arr
                 )
+                new_hitpoints = jnp.where(
+                    (jnp.arange(NUM_ENEMIES) == first_inactive) & can_spawn_at_pos,
+                    ENEMY_HITS_PER_TIER,
+                    enemy_hp_arr
+                )
                 new_timers = jnp.where(
                     (jnp.arange(NUM_ENEMIES) == first_inactive) & can_spawn_at_pos,
                     new_timer,
                     timers_arr
                 )
                 
-                return (new_pos, new_types, new_active, new_timers, key), None
+                return (new_pos, new_types, new_active, new_hitpoints, new_timers, key), None
 
-            (enemy_positions_after_spawner, enemy_types_after_spawner, enemy_active_after_spawner, wizard_timers_after_spawner, rng), _ = jax.lax.scan(
+            (enemy_positions_after_spawner, enemy_types_after_spawner, enemy_active_after_spawner, enemy_hitpoints_after_spawner, wizard_timers_after_spawner, rng), _ = jax.lax.scan(
                 try_spawn_from_spawner,
-                (new_enemy_positions, spawner_affected_types, spawner_affected_active, spawner_affected_timers, rng),
+                (new_enemy_positions, spawner_affected_types, spawner_affected_active, spawner_affected_hitpoints, spawner_affected_timers, rng),
                 jnp.arange(NUM_SPAWNERS)
             )
             
@@ -4099,7 +4152,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                     jnp.array([ITEM_KEY, ITEM_LADDER_UP, ITEM_LADDER_DOWN, ITEM_CAGE_DOOR, self.renderer.CAGE_REWARD_TYPE]),
                     regular_items
                 ])
-                new_active = jnp.ones(NUM_ITEMS, dtype=jnp.int32)
+                regular_item_mask = (jnp.arange(NUM_ITEMS) < (5 + INITIAL_REGULAR_ITEM_COUNT)).astype(jnp.int32)
+                new_active = jnp.where(jnp.arange(NUM_ITEMS) < 5, 1, regular_item_mask)
 
                 cage_valid_here = self.renderer.CAGE_VALID[new_map_index, new_level]
                 new_active = new_active.at[3].set(cage_valid_here)
@@ -4162,13 +4216,13 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             (relocated_enemy_positions, rng), _ = jax.lax.scan(relocate_enemy, (init_epos, sk), jnp.arange(NUM_ENEMIES))
             
             # On level change going UP, spawn additional zombies
-            def spawn_level_enemies(key_in, positions_in, types_in, active_in, timers_in):
+            def spawn_level_enemies(key_in, positions_in, types_in, active_in, hitpoints_in, timers_in):
                 """Spawn 3-5 zombies when entering a new higher level."""
                 rng_local, subkey = jax.random.split(key_in)
                 num_to_spawn = 4  # Spawn 4 zombies per new level
                 
                 def spawn_one_zombie(carry, spawn_idx):
-                    pos_arr, typ_arr, act_arr, tim_arr, key_loc = carry
+                    pos_arr, typ_arr, act_arr, hp_arr, tim_arr, key_loc = carry
                     # Find first inactive enemy slot
                     first_inactive_idx = jnp.argmax(act_arr == 0)
                     slot_available = jnp.any(act_arr == 0)
@@ -4208,31 +4262,37 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                         1,
                         act_arr
                     )
+                    hp_arr = jnp.where(
+                        (jnp.arange(NUM_ENEMIES) == first_inactive_idx) & slot_available,
+                        ENEMY_HITS_PER_TIER,
+                        hp_arr
+                    )
                     tim_arr = jnp.where(
                         (jnp.arange(NUM_ENEMIES) == first_inactive_idx) & slot_available,
                         new_timer,
                         tim_arr
                     )
-                    return (pos_arr, typ_arr, act_arr, tim_arr, key_loc), None
+                    return (pos_arr, typ_arr, act_arr, hp_arr, tim_arr, key_loc), None
                 
-                (new_pos, new_typ, new_act, new_tim, rng_local), _ = jax.lax.scan(
+                (new_pos, new_typ, new_act, new_hp, new_tim, rng_local), _ = jax.lax.scan(
                     spawn_one_zombie,
-                    (positions_in, types_in, active_in, timers_in, subkey),
+                    (positions_in, types_in, active_in, hitpoints_in, timers_in, subkey),
                     jnp.arange(num_to_spawn)
                 )
-                return new_pos, new_typ, new_act, new_tim, rng_local
+                return new_pos, new_typ, new_act, new_hp, new_tim, rng_local
             
             # Apply enemy spawning only if going up to a new level
-            spawned_pos, spawned_typ, spawned_act, spawned_tim, rng = jax.lax.cond(
+            spawned_pos, spawned_typ, spawned_act, spawned_hp, spawned_tim, rng = jax.lax.cond(
                 level_changed & going_up,
-                lambda _: spawn_level_enemies(rng, relocated_enemy_positions, enemy_types_after_spawner, enemy_active_after_spawner, wizard_timers_after_spawner),
-                lambda _: (relocated_enemy_positions, enemy_types_after_spawner, enemy_active_after_spawner, wizard_timers_after_spawner, rng),
+                lambda _: spawn_level_enemies(rng, relocated_enemy_positions, enemy_types_after_spawner, enemy_active_after_spawner, enemy_hitpoints_after_spawner, wizard_timers_after_spawner),
+                lambda _: (relocated_enemy_positions, enemy_types_after_spawner, enemy_active_after_spawner, enemy_hitpoints_after_spawner, wizard_timers_after_spawner, rng),
                 operand=None
             )
             
             final_enemy_positions_after_level = spawned_pos
             final_enemy_types_after_level = spawned_typ
             final_enemy_active_after_level = spawned_act
+            final_enemy_hitpoints_after_level = spawned_hp
             final_wizard_timers_after_level = spawned_tim
             
             # On level change, respawn spawners avoiding new level walls
@@ -4356,6 +4416,11 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 final_enemy_positions_after_level,
                 jnp.array([0, 0], dtype=jnp.int32),
             )
+            final_enemy_hitpoints_state = jnp.where(
+                safe_enemy_active == 1,
+                final_enemy_hitpoints_after_level,
+                0,
+            ).astype(jnp.int32)
 
             # Death handling: start freeze instead of instant respawn
             player_died = final_health <= 0
@@ -4374,6 +4439,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 player_moving=player_moving,
                 enemy_types=final_enemy_types_after_level,
                 enemy_active=safe_enemy_active,
+                enemy_hitpoints=final_enemy_hitpoints_state,
                 wizard_shoot_timers=final_wizard_timers_after_level,
                 spawner_positions=use_sp_positions,
                 spawner_health=use_sp_health,
@@ -4395,6 +4461,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 bomb_count=bomb_count_after_detonation,
                 hammer_count=hammer_count_after_use,
                 last_fire_step=new_last_fire_step,
+                last_shot_step=new_last_shot_step,
                 current_level=new_level,
                 map_index=new_map_index,
                 ladder_timer=new_ladder_timer,
@@ -4433,22 +4500,65 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         return spaces.Discrete(19)
     
     def observation_space(self) -> spaces.Dict:
+        wall_segment_count = int(self.renderer.LEVEL_WALLS.shape[2] + self.renderer.BOUNDARY_WALLS.shape[0])
         return spaces.Dict({
             "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=self.consts.WORLD_WIDTH - 1, shape=(), dtype=jnp.float64),
-                "y": spaces.Box(low=0, high=self.consts.WORLD_HEIGHT - 1, shape=(), dtype=jnp.float64),
-                "width": spaces.Box(low=0, high=self.consts.WORLD_WIDTH, shape=(), dtype=jnp.float64),
-                "height": spaces.Box(low=0, high=self.consts.WORLD_HEIGHT, shape=(), dtype=jnp.float64),
+                "x": spaces.Box(low=0, high=GAME_W - 1, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=GAMEPLAY_H - 1, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=GAME_W, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=GAMEPLAY_H, shape=(), dtype=jnp.int32),
             }),
             "enemies": spaces.Box(
-                low=0,
-                high=float(max(self.consts.WORLD_WIDTH, self.consts.WORLD_HEIGHT)),
-                shape=(NUM_ENEMIES, 5),
-                dtype=jnp.float64,
+                low=-1,
+                high=max(GAME_W, GAMEPLAY_H),
+                shape=(NUM_ENEMIES, 6),
+                dtype=jnp.int32,
             ),
-            "health": spaces.Box(low=0, high=float(self.consts.MAX_HEALTH), shape=(), dtype=jnp.float64),
-            "score": spaces.Box(low=0, high=1e9, shape=(), dtype=jnp.float64),
-            "step": spaces.Box(low=0, high=1e9, shape=(), dtype=jnp.float64),
+            "items": spaces.Box(
+                low=-1,
+                high=max(GAME_W, GAMEPLAY_H),
+                shape=(NUM_ITEMS, 6),
+                dtype=jnp.int32,
+            ),
+            "spawners": spaces.Box(
+                low=-1,
+                high=max(GAME_W, GAMEPLAY_H),
+                shape=(NUM_SPAWNERS, 5),
+                dtype=jnp.int32,
+            ),
+            "player_bullets": spaces.Box(
+                low=-1,
+                high=max(GAME_W, GAMEPLAY_H),
+                shape=(MAX_BULLETS, 5),
+                dtype=jnp.int32,
+            ),
+            "enemy_bullets": spaces.Box(
+                low=-1,
+                high=max(GAME_W, GAMEPLAY_H),
+                shape=(ENEMY_MAX_BULLETS, 5),
+                dtype=jnp.int32,
+            ),
+            "portals": spaces.Box(
+                low=-1,
+                high=max(GAME_W, GAMEPLAY_H),
+                shape=(6, 3),
+                dtype=jnp.int32,
+            ),
+            "walls": spaces.Box(
+                low=-1,
+                high=max(GAME_W, GAMEPLAY_H),
+                shape=(wall_segment_count, 5),
+                dtype=jnp.int32,
+            ),
+            "border_distances": spaces.Box(
+                low=0,
+                high=max(GAME_W, GAMEPLAY_H),
+                shape=(4,),
+                dtype=jnp.int32,
+            ),
+            "health": spaces.Box(low=0, high=self.consts.MAX_HEALTH, shape=(), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=1_000_000_000, shape=(), dtype=jnp.int32),
+            "step": spaces.Box(low=0, high=1_000_000_000, shape=(), dtype=jnp.int32),
         })
     
     def image_space(self) -> spaces.Box:
@@ -4460,50 +4570,251 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         )
     
     def _get_observation(self, state: DarkChambersState) -> DarkChambersObservation:
-        player = EntityPosition(
-        x=jnp.asarray(state.player_x, dtype=jnp.float32),
-        y=jnp.asarray(state.player_y, dtype=jnp.float32),
-        width=jnp.asarray(self.consts.PLAYER_WIDTH, dtype=jnp.float32),
-        height=jnp.asarray(self.consts.PLAYER_HEIGHT, dtype=jnp.float32),
-    )
+        cam_x = jnp.clip(
+            state.player_x - GAME_W // 2,
+            0,
+            self.consts.WORLD_WIDTH - GAME_W,
+        ).astype(jnp.int32)
+        cam_y = jnp.clip(
+            state.player_y - GAMEPLAY_H // 2,
+            0,
+            self.consts.WORLD_HEIGHT - GAMEPLAY_H,
+        ).astype(jnp.int32)
 
-        enemy_widths  = jnp.full(NUM_ENEMIES, self.consts.ENEMY_WIDTH,  dtype=jnp.float32)
-        enemy_heights = jnp.full(NUM_ENEMIES, self.consts.ENEMY_HEIGHT, dtype=jnp.float32)
+        player_screen_x = (state.player_x - cam_x).astype(jnp.int32)
+        player_screen_y = (state.player_y - cam_y).astype(jnp.int32)
+        player = EntityPosition(
+            x=jnp.asarray(player_screen_x, dtype=jnp.int32),
+            y=jnp.asarray(player_screen_y, dtype=jnp.int32),
+            width=jnp.asarray(self.consts.PLAYER_WIDTH, dtype=jnp.int32),
+            height=jnp.asarray(self.consts.PLAYER_HEIGHT, dtype=jnp.int32),
+        )
+
+        enemy_widths = jnp.full(NUM_ENEMIES, self.consts.ENEMY_WIDTH, dtype=jnp.int32)
+        enemy_heights = jnp.full(NUM_ENEMIES, self.consts.ENEMY_HEIGHT, dtype=jnp.int32)
+        enemy_screen_positions = (state.enemy_positions - jnp.array([cam_x, cam_y], dtype=jnp.int32)).astype(jnp.int32)
+        enemy_x_raw = enemy_screen_positions[:, 0]
+        enemy_y_raw = enemy_screen_positions[:, 1]
+        enemy_is_active = state.enemy_active.astype(jnp.int32)
+        enemy_in_view = (
+            (enemy_is_active == 1)
+            & (enemy_x_raw + enemy_widths > 0)
+            & (enemy_x_raw < GAME_W)
+            & (enemy_y_raw + enemy_heights > 0)
+            & (enemy_y_raw < GAMEPLAY_H)
+        ).astype(jnp.int32)
+        enemy_x = jnp.where(enemy_in_view, jnp.clip(enemy_x_raw, 0, GAME_W - 1), -1).astype(jnp.int32)
+        enemy_y = jnp.where(enemy_in_view, jnp.clip(enemy_y_raw, 0, GAMEPLAY_H - 1), -1).astype(jnp.int32)
 
         enemies_array = jnp.stack([
-            state.enemy_positions[:, 0].astype(jnp.float32),
-            state.enemy_positions[:, 1].astype(jnp.float32),
+            enemy_x,
+            enemy_y,
             enemy_widths,
             enemy_heights,
-            state.enemy_active.astype(jnp.float32),
+            jnp.where(enemy_in_view == 1, state.enemy_types.astype(jnp.int32), 0).astype(jnp.int32),
+            enemy_in_view,
         ], axis=1)
+
+        item_screen_positions = (state.item_positions - jnp.array([cam_x, cam_y], dtype=jnp.int32)).astype(jnp.int32)
+        item_sizes = self.renderer.ITEM_TYPE_SIZES[state.item_types].astype(jnp.int32)
+        item_x_raw = item_screen_positions[:, 0]
+        item_y_raw = item_screen_positions[:, 1]
+        item_w = item_sizes[:, 0]
+        item_h = item_sizes[:, 1]
+        item_active = state.item_active.astype(jnp.int32)
+        item_in_view = (
+            (item_active == 1)
+            & (item_x_raw + item_w > 0)
+            & (item_x_raw < GAME_W)
+            & (item_y_raw + item_h > 0)
+            & (item_y_raw < GAMEPLAY_H)
+        ).astype(jnp.int32)
+        item_x = jnp.where(item_in_view == 1, jnp.clip(item_x_raw, 0, GAME_W - 1), -1).astype(jnp.int32)
+        item_y = jnp.where(item_in_view == 1, jnp.clip(item_y_raw, 0, GAMEPLAY_H - 1), -1).astype(jnp.int32)
+        item_type_visible = jnp.where(item_in_view == 1, state.item_types.astype(jnp.int32), 0).astype(jnp.int32)
+        items_array = jnp.stack([
+            item_x,
+            item_y,
+            item_w,
+            item_h,
+            item_type_visible,
+            item_in_view,
+        ], axis=1)
+
+        spawner_screen_positions = (state.spawner_positions - jnp.array([cam_x, cam_y], dtype=jnp.int32)).astype(jnp.int32)
+        spawner_x_raw = spawner_screen_positions[:, 0]
+        spawner_y_raw = spawner_screen_positions[:, 1]
+        spawner_w = jnp.full(NUM_SPAWNERS, SPAWNER_WIDTH, dtype=jnp.int32)
+        spawner_h = jnp.full(NUM_SPAWNERS, SPAWNER_HEIGHT, dtype=jnp.int32)
+        spawner_in_view = (
+            (state.spawner_active == 1)
+            & (spawner_x_raw + spawner_w > 0)
+            & (spawner_x_raw < GAME_W)
+            & (spawner_y_raw + spawner_h > 0)
+            & (spawner_y_raw < GAMEPLAY_H)
+        ).astype(jnp.int32)
+        spawner_x = jnp.where(spawner_in_view == 1, jnp.clip(spawner_x_raw, 0, GAME_W - 1), -1).astype(jnp.int32)
+        spawner_y = jnp.where(spawner_in_view == 1, jnp.clip(spawner_y_raw, 0, GAMEPLAY_H - 1), -1).astype(jnp.int32)
+        spawners_array = jnp.stack([
+            spawner_x,
+            spawner_y,
+            spawner_w,
+            spawner_h,
+            spawner_in_view,
+        ], axis=1)
+
+        bullet_screen_positions = (state.bullet_positions[:, :2] - jnp.array([cam_x, cam_y], dtype=jnp.int32)).astype(jnp.int32)
+        bullet_x_raw = bullet_screen_positions[:, 0]
+        bullet_y_raw = bullet_screen_positions[:, 1]
+        bullet_w = jnp.full(MAX_BULLETS, BULLET_WIDTH, dtype=jnp.int32)
+        bullet_h = jnp.full(MAX_BULLETS, BULLET_HEIGHT, dtype=jnp.int32)
+        bullet_in_view = (
+            (state.bullet_active == 1)
+            & (bullet_x_raw + bullet_w > 0)
+            & (bullet_x_raw < GAME_W)
+            & (bullet_y_raw + bullet_h > 0)
+            & (bullet_y_raw < GAMEPLAY_H)
+        ).astype(jnp.int32)
+        bullet_x = jnp.where(bullet_in_view == 1, jnp.clip(bullet_x_raw, 0, GAME_W - 1), -1).astype(jnp.int32)
+        bullet_y = jnp.where(bullet_in_view == 1, jnp.clip(bullet_y_raw, 0, GAMEPLAY_H - 1), -1).astype(jnp.int32)
+        player_bullets_array = jnp.stack([
+            bullet_x,
+            bullet_y,
+            bullet_w,
+            bullet_h,
+            bullet_in_view,
+        ], axis=1)
+
+        enemy_bullet_screen_positions = (state.enemy_bullet_positions[:, :2] - jnp.array([cam_x, cam_y], dtype=jnp.int32)).astype(jnp.int32)
+        enemy_bullet_x_raw = enemy_bullet_screen_positions[:, 0]
+        enemy_bullet_y_raw = enemy_bullet_screen_positions[:, 1]
+        enemy_bullet_w = jnp.full(ENEMY_MAX_BULLETS, ENEMY_BULLET_WIDTH, dtype=jnp.int32)
+        enemy_bullet_h = jnp.full(ENEMY_MAX_BULLETS, ENEMY_BULLET_HEIGHT, dtype=jnp.int32)
+        enemy_bullet_in_view = (
+            (state.enemy_bullet_active == 1)
+            & (enemy_bullet_x_raw + enemy_bullet_w > 0)
+            & (enemy_bullet_x_raw < GAME_W)
+            & (enemy_bullet_y_raw + enemy_bullet_h > 0)
+            & (enemy_bullet_y_raw < GAMEPLAY_H)
+        ).astype(jnp.int32)
+        enemy_bullet_x = jnp.where(enemy_bullet_in_view == 1, jnp.clip(enemy_bullet_x_raw, 0, GAME_W - 1), -1).astype(jnp.int32)
+        enemy_bullet_y = jnp.where(enemy_bullet_in_view == 1, jnp.clip(enemy_bullet_y_raw, 0, GAMEPLAY_H - 1), -1).astype(jnp.int32)
+        enemy_bullets_array = jnp.stack([
+            enemy_bullet_x,
+            enemy_bullet_y,
+            enemy_bullet_w,
+            enemy_bullet_h,
+            enemy_bullet_in_view,
+        ], axis=1)
+
+        portal_hole_height = 40
+        portal_gap = (self.consts.WORLD_HEIGHT - 3 * portal_hole_height) // 4
+        portal_y_centers = jnp.array([
+            portal_gap + portal_hole_height // 2,
+            portal_gap * 2 + portal_hole_height + portal_hole_height // 2,
+            portal_gap * 3 + 2 * portal_hole_height + portal_hole_height // 2,
+        ], dtype=jnp.int32)
+        portal_x = jnp.concatenate([
+            jnp.zeros((3,), dtype=jnp.int32),
+            jnp.full((3,), self.consts.WORLD_WIDTH - 1, dtype=jnp.int32),
+        ])
+        portal_y = jnp.concatenate([portal_y_centers, portal_y_centers])
+        portal_world = jnp.stack([portal_x, portal_y], axis=1)
+        portal_screen = (portal_world - jnp.array([cam_x, cam_y], dtype=jnp.int32)).astype(jnp.int32)
+        portal_in_view = (
+            (portal_screen[:, 0] >= 0)
+            & (portal_screen[:, 0] < GAME_W)
+            & (portal_screen[:, 1] >= 0)
+            & (portal_screen[:, 1] < GAMEPLAY_H)
+        ).astype(jnp.int32)
+        portal_x = jnp.where(portal_in_view == 1, jnp.clip(portal_screen[:, 0], 0, GAME_W - 1), -1).astype(jnp.int32)
+        portal_y = jnp.where(portal_in_view == 1, jnp.clip(portal_screen[:, 1], 0, GAMEPLAY_H - 1), -1).astype(jnp.int32)
+        portals_array = jnp.stack([
+            portal_x,
+            portal_y,
+            portal_in_view,
+        ], axis=1)
+
+        current_level_walls = self.renderer.LEVEL_WALLS[state.map_index, state.current_level]
+        all_walls = jnp.concatenate([current_level_walls, self.renderer.BOUNDARY_WALLS], axis=0).astype(jnp.int32)
+        wall_screen_pos = (all_walls[:, 0:2] - jnp.array([cam_x, cam_y], dtype=jnp.int32)).astype(jnp.int32)
+        wall_sizes = all_walls[:, 2:4].astype(jnp.int32)
+
+        wall_x0 = wall_screen_pos[:, 0]
+        wall_y0 = wall_screen_pos[:, 1]
+        wall_x1 = wall_x0 + wall_sizes[:, 0]
+        wall_y1 = wall_y0 + wall_sizes[:, 1]
+
+        wall_clip_x0 = jnp.clip(wall_x0, 0, GAME_W)
+        wall_clip_y0 = jnp.clip(wall_y0, 0, GAMEPLAY_H)
+        wall_clip_x1 = jnp.clip(wall_x1, 0, GAME_W)
+        wall_clip_y1 = jnp.clip(wall_y1, 0, GAMEPLAY_H)
+        wall_clip_w = jnp.maximum(0, wall_clip_x1 - wall_clip_x0).astype(jnp.int32)
+        wall_clip_h = jnp.maximum(0, wall_clip_y1 - wall_clip_y0).astype(jnp.int32)
+        wall_in_view = ((wall_clip_w > 0) & (wall_clip_h > 0)).astype(jnp.int32)
+
+        wall_x = jnp.where(wall_in_view == 1, wall_clip_x0, -1).astype(jnp.int32)
+        wall_y = jnp.where(wall_in_view == 1, wall_clip_y0, -1).astype(jnp.int32)
+        walls_array = jnp.stack([
+            wall_x,
+            wall_y,
+            wall_clip_w,
+            wall_clip_h,
+            wall_in_view,
+        ], axis=1)
+
+        border_distances = jnp.stack([
+            jnp.maximum(0, player_screen_x),
+            jnp.maximum(0, GAME_W - (player_screen_x + self.consts.PLAYER_WIDTH)),
+            jnp.maximum(0, player_screen_y),
+            jnp.maximum(0, GAMEPLAY_H - (player_screen_y + self.consts.PLAYER_HEIGHT)),
+        ], axis=0).astype(jnp.int32)
 
         
         return DarkChambersObservation(
             player=player,
             enemies=enemies_array,
-            health=state.health,
-            score=state.score,
-            step=state.step_counter
+            items=items_array,
+            spawners=spawners_array,
+            player_bullets=player_bullets_array,
+            enemy_bullets=enemy_bullets_array,
+            portals=portals_array,
+            walls=walls_array,
+            border_distances=border_distances,
+            health=state.health.astype(jnp.int32),
+            score=state.score.astype(jnp.int32),
+            step=state.step_counter.astype(jnp.int32)
         )
     
+    @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: DarkChambersState, all_rewards: jnp.array = None) -> DarkChambersInfo:
         return DarkChambersInfo(time=state.step_counter)
     
-    # TODO: introduce shaped rewards later if needed
+    @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: DarkChambersState, state: DarkChambersState) -> float:
-        return 0.1
+        return state.score - previous_state.score
     
     # Episode ends when the player has no lives left and health reaches zero.
+    @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: DarkChambersState) -> bool:
         return (state.lives <= 0) & (state.health <= 0)
     
 
     def obs_to_flat_array(self, obs: DarkChambersObservation) -> jnp.ndarray:
-        player_data = jnp.array([obs.player.x, obs.player.y, obs.player.width, obs.player.height], dtype=jnp.float64)
-        enemies_flat = obs.enemies.flatten()
-        health_data = jnp.array([obs.health], dtype=jnp.float64)
-        score_data = jnp.array([obs.score], dtype=jnp.float64)
-        step_data = jnp.array([obs.step], dtype=jnp.float64)
-        
-        return jnp.concatenate([player_data, enemies_flat, health_data, score_data, step_data])
+        return jnp.concatenate([
+            obs.player.x.flatten(),
+            obs.player.y.flatten(),
+            obs.player.height.flatten(),
+            obs.player.width.flatten(),
+            obs.enemies.flatten(),
+            obs.items.flatten(),
+            obs.spawners.flatten(),
+            obs.player_bullets.flatten(),
+            obs.enemy_bullets.flatten(),
+            obs.portals.flatten(),
+            obs.walls.flatten(),
+            obs.border_distances.flatten(),
+            obs.health.flatten(),
+            obs.score.flatten(),
+            obs.step.flatten(),
+        ])
