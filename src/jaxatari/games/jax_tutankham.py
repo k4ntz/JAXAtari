@@ -129,7 +129,7 @@ class TutankhamConstants(NamedTuple):
     # Game Window
     WIDTH: int = 160
     HEIGHT: int = 210
-    
+
     # Player constants
     PLAYER_SPEED: int = 2
     PLAYER_SIZE: chex.Array = jnp.array([5, 8], dtype=jnp.int32)
@@ -386,6 +386,8 @@ class TutankhamState(NamedTuple):
 
     level: int  # current level (up to 16 Levels)
 
+    camera_offset: int  # vertical offset for camera scrolling
+
     player_x: chex.Array
     player_y: chex.Array
     player_lives: int
@@ -641,6 +643,8 @@ class JaxTutankham(JaxEnvironment):
         is_moving = False
         step_counter = 0
 
+        camera_offset = jnp.where(start_x < self.consts.HEIGHT // 2, 0, start_y - self.consts.HEIGHT // 2)
+
 
         state = TutankhamState(level=level,
                                player_x=start_x,
@@ -659,9 +663,19 @@ class JaxTutankham(JaxEnvironment):
                                 step_counter=step_counter,
                                 has_key=has_key,
                                 last_directional_action=0,
-                                rng_key=key
+                                rng_key=key,
+                                camera_offset=camera_offset
                                )
         return state, state #TODO: (EnvObs, EnvState)
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def is_onscreen(self,y: jax.Array, height: jax.Array, camera_offset: jax.Array) -> jnp.ndarray:
+        """
+        Returns True if a sprite's top edge is above the bottom footer (y=175) and its bottom edge is below the top header (y=35).
+        """
+        sprite_top_edge = y - camera_offset
+        sprite_bottom_edge = sprite_top_edge + height
+        return jnp.logical_and(sprite_bottom_edge > 35, sprite_top_edge < 175)
     
     @partial(jax.jit, static_argnums=(0,))
     def teleporter_check(self, player_x, player_y, action, level):
@@ -890,16 +904,15 @@ class JaxTutankham(JaxEnvironment):
 
     # creature spawner step
     @partial(jax.jit, static_argnums=(0,))
-    def spawner_step(self, creature_states, last_creature_spawn, level, rng_key):
+    def spawner_step(self, creature_states, last_creature_spawn, level, rng_key, camera_offset):
         spawners = self.consts.MAP_SPAWNER_POSITIONS[level%4] # (n, 2) array with (x, y) positions of the n spawners for current level
         growth = self.consts.LEVEL_SPAWN_RATES[level]
         MAX_PROB = 0.8
         # Increment timer every step
         new_last_creature_spawn = last_creature_spawn + 1
 
-        # check  which spawners are on screen
-        #on_screen_mask = jax.vmap(self.is_onscreen)(spawners[:, 0], spawners[:, 1])
-        on_screen_mask = jnp.array([True, True, False, False, False]) # TODO: remove after testing
+        # check  which spawners are on screen # TODO: height 
+        on_screen_mask = jax.vmap(self.is_onscreen, in_axes=(0, None, None))(spawners[:, 1], 1, camera_offset)
         any_on_screen = jnp.any(on_screen_mask)
 
         # Spawn chance grows linearly with time, capped at MAX_PROB
@@ -1120,16 +1133,20 @@ class JaxTutankham(JaxEnvironment):
         player_direction= state.player_direction
         step_counter = state.step_counter
         rng_key = state.rng_key
+        camera_offset = state.camera_offset
 
         player_x, player_y, last_directional_action, player_direction, is_moving, step_counter = self.player_step(
             player_x, player_y, action, last_directional_action, player_direction, step_counter, level
         )
 
+        # update camera offset based on player y position
+        camera_offset = jnp.where(player_y < self.consts.HEIGHT // 2, 0, player_y - self.consts.HEIGHT // 2)
+
         bullet_state, amonition_timer =self.bullet_step(bullet_state, player_x, player_y, amonition_timer, action)
 
         creature_states = self.creature_step(creature_states)
 
-        creature_states, last_creature_spawn, rng_key = self.spawner_step(creature_states, last_creature_spawn, level, rng_key)
+        creature_states, last_creature_spawn, rng_key = self.spawner_step(creature_states, last_creature_spawn, level, rng_key, camera_offset)
 
         # laser flash step should go after creature step to immediately remove creatures
         creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)
@@ -1138,8 +1155,8 @@ class JaxTutankham(JaxEnvironment):
         prev_creature_states = creature_states.copy()
         prev_item_states = item_states.copy()
         prev_lives = player_lives
-        # TODO: add ITEM collisions (+key collection) -> has_key update
 
+        # resolve bullet-creature collisions
         creature_states, bullet_state = self.resolve_bullet_collisions(creature_states, bullet_state)
 
         (player_x, player_y, 
@@ -1153,10 +1170,13 @@ class JaxTutankham(JaxEnvironment):
              level, last_directional_action
              )
         
+        # resolve player-item collisions
         item_states = self.resolve_player_item_collisions(player_x, player_y, item_states)
 
         # check if player has collected the key
         has_key = self.check_key(item_states, has_key)
+
+
   
 
         # TODO: vor update score goal_true ermitteln und update score geben damit score entsprechend gehandled wird
@@ -1186,7 +1206,8 @@ class JaxTutankham(JaxEnvironment):
                                step_counter=step_counter,
                                has_key=has_key,
                                last_directional_action=last_directional_action,
-                               rng_key=rng_key
+                               rng_key=rng_key, 
+                               camera_offset=camera_offset
                                )
 
         reward = 0.0
