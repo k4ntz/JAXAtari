@@ -943,40 +943,7 @@ class JaxTutankham(JaxEnvironment):
         final_last_creature_spawn = jnp.where(do_spawn, jnp.int32(0), new_last_creature_spawn)
 
         return new_creature_states, final_last_creature_spawn, rng_key
-
-
-
-    # score update based on creature deaths & item collections
-    @partial(jax.jit, static_argnums=(0,))
-    def update_score(self, score, prev_creature_states, new_creature_states, prev_item_states, new_item_states,
-                     laser_flash_cooldown):
-
-        def detect_creature_deaths(prev_creature_states, new_creature_states):
-            """Erkennt Todes-Events: active: 1 → 0."""
-            old_active = prev_creature_states[:, 3] == 1.0
-            new_active = new_creature_states[:, 3] == 1.0
-            died = jnp.logical_and(old_active, jnp.logical_not(new_active))  # TODO: translate to pure python
-            return died  # shape: (MAX_CREATURES,)
-
-        new_score = score
-
-        # if TRUE then laser flash was used this frame and all creature deaths will not be counted
-        # only bullet kills count towards score
-        if not laser_flash_cooldown == self.consts.LASER_FLASH_COOLDOWN:
-
-            # detect creature deaths
-            deaths = detect_creature_deaths(prev_creature_states, new_creature_states)
-
-            # update score based on creature deaths
-            for i in range(deaths.shape[0]):
-                if deaths[i]:
-                    creature_type = int(prev_creature_states[i, 2])
-                    points = int(self.consts.CREATURE_POINTS[creature_type])
-                    new_score += points
-
-        # TODO: item collection logic
-
-        return new_score
+    
 
     @partial(jax.jit, static_argnums=(0,))
     def check_entity_collision(self, x1, y1, size1, x2, y2, size2):
@@ -1034,7 +1001,7 @@ class JaxTutankham(JaxEnvironment):
         bullet_hits = bullet_hits & active_mask & (bullet_state[3] == 1)
 
         any_bullet_hit = jnp.any(bullet_hits)
-        # Deactivate only the first hit creature (cumsum trick: first True stays 1)
+        # Deactivate only the first hit creature (if multiple collisions happen in the same step, only the first one counts)
         first_bullet_hit = (jnp.cumsum(bullet_hits) == 1) & bullet_hits
 
         new_creature_active = jnp.where(first_bullet_hit, self.consts.INACTIVE, creature_states[:, 3])
@@ -1099,6 +1066,29 @@ class JaxTutankham(JaxEnvironment):
         new_item_states = item_states.at[:, 3].set(new_item_active)
 
         return new_item_states
+    
+
+    # score update based on creature deaths & item collections
+    @partial(jax.jit, static_argnums=(0,))
+    def update_score(self, score, prev_creature_states, new_creature_states, prev_item_states, new_item_states, prev_lives, new_lives):
+        
+        # check if player has died
+        has_died = (prev_lives > new_lives)
+
+        # compare previous and new creature_states to detect deaths
+        killed_creatures_mask = (prev_creature_states[:, 3] == self.consts.ACTIVE) & (new_creature_states[:, 3] == self.consts.INACTIVE)
+        creature_points = killed_creatures_mask * self.consts.CREATURE_POINTS[prev_creature_states[:, 2]]
+        # if player has died, don't give points for defeated creatures in this step, otherwise sum up points for defeated creatures
+        total_score_for_defeating_creatures = jnp.where(has_died, 0, jnp.sum(creature_points))
+        
+        # compare previous and new item_states to detect collections
+        collected_items_mask = (prev_item_states[:, 3] == self.consts.ACTIVE) & (new_item_states[:, 3] == self.consts.INACTIVE)
+        item_points = collected_items_mask * self.consts.ITEM_POINTS[prev_item_states[:, 2]]
+        total_score_for_collected_items = jnp.sum(item_points)
+
+        new_score = score + total_score_for_defeating_creatures + total_score_for_collected_items
+
+        return new_score
 
 
     # Step logic
@@ -1135,8 +1125,10 @@ class JaxTutankham(JaxEnvironment):
         # laser flash step should go after creature step to immediately remove creatures
         creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)
 
-        # temporary store previous lives and creature states for respawn & collision detection
+        # store creature_states and item_states before resolving collisions (for score update)
         prev_creature_states = creature_states.copy()
+        prev_item_states = item_states.copy()
+        prev_lives = player_lives
         # TODO: add ITEM collisions (+key collection) -> has_key update
 
         creature_states, bullet_state = self.resolve_bullet_collisions(creature_states, bullet_state)
@@ -1155,8 +1147,13 @@ class JaxTutankham(JaxEnvironment):
         item_states = self.resolve_player_item_collisions(player_x, player_y, item_states)
   
 
-        # TODO:Update score based on creature deaths & items collected
-        # score_update() bekommt prev_creature_states & creature_states und prev_item_states & item_states
+        # TODO: vor update score goal_true ermitteln und update score geben damit score entsprechend gehandled wird
+        # Update score based on creature deaths & items collected
+        tutankham_score = self.update_score(tutankham_score, 
+                                            prev_creature_states, creature_states, 
+                                            prev_item_states, item_states,
+                                            prev_lives, player_lives
+                                            )
 
 
 
@@ -1185,6 +1182,7 @@ class JaxTutankham(JaxEnvironment):
         info = 0
 
         jax.debug.print("Player position: ({}, {})", player_x, player_y)
+        jax.debug.print("Score: ({})", tutankham_score)
         # return observation, new_state, env_reward, done, info
         return state, state, reward, done, info
 
