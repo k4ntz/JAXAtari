@@ -104,7 +104,7 @@ class GravitarConstants(struct.PyTreeNode):
     TRACTOR_BEAM_RANGE: float = struct.field(pytree_node=False, default=15.0)
     PLAYER_BULLET_SPEED: float = struct.field(pytree_node=False, default=1.3)
     SAUCER_BULLET_SPEED: float = struct.field(pytree_node=False, default=2.0)
-    ENEMY_BULLET_SPEED: float = struct.field(pytree_node=False, default=2.0)
+    ENEMY_BULLET_SPEED: float = struct.field(pytree_node=False, default=1.3)
     UFO_HIT_RADIUS: float = struct.field(pytree_node=False, default=3.0)
     
     # HP and damage
@@ -114,7 +114,7 @@ class GravitarConstants(struct.PyTreeNode):
     SAUCER_EXPLOSION_FRAMES: int = struct.field(pytree_node=False, default=60)
     SAUCER_FIRE_INTERVAL_FRAMES: int = struct.field(pytree_node=False, default=8)
     ENEMY_EXPLOSION_FRAMES: int = struct.field(pytree_node=False, default=60)
-    PLAYER_FIRE_COOLDOWN_FRAMES: int = struct.field(pytree_node=False, default=30)
+    PLAYER_FIRE_COOLDOWN_FRAMES: int = struct.field(pytree_node=False, default=8)
     
     # Bonuses
     SOLAR_SYSTEM_BONUS_FUEL: float = struct.field(pytree_node=False, default=7000.0)
@@ -1745,7 +1745,7 @@ def step_map(env_state: EnvState, action: int):
     fire_just_pressed = is_fire_pressed & (~was_fire_pressed)
     
     can_fire = fire_just_pressed & (env_state.cooldown == 0) & (
-                _bullets_alive_count(env_state.bullets) < 2)
+                _bullets_alive_count(env_state.bullets) < 1)
 
     bullets = jax.lax.cond(
         can_fire,
@@ -2829,9 +2829,13 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
                 return obs_out, final_state, reward, jnp.array(False), win_info, jnp.array(True), level
 
             def _on_death(_):
-                # `step_core` already applied the life decrement for death events.
-                # Avoid decrementing again here to prevent double-counting lives.
-                lives_after_death = current_state.lives
+                # Level mode (1) already decrements lives in `_step_level_core`.
+                # Map/Arena modes (0/2) rely on this reset handler to decrement.
+                lives_after_death = jnp.where(
+                    current_state.mode == jnp.int32(1),
+                    current_state.lives,
+                    current_state.lives - 1,
+                )
                 death_info = {**info, "level_cleared": jnp.array(False)}
                 is_game_over = (lives_after_death <= 0)
                 new_main_key, subkey_for_reset = jax.random.split(current_state.key)
