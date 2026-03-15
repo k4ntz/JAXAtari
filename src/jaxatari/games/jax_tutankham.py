@@ -897,7 +897,7 @@ class JaxTutankham(JaxEnvironment):
 
     # creature step
     @partial(jax.jit, static_argnums=(0,))
-    def creature_step(self, creature_states):
+    def creature_step(self, creature_states, camera_offset):
 
         # Update creature position if active
         def move_creature(creature_state):
@@ -909,6 +909,7 @@ class JaxTutankham(JaxEnvironment):
             #speed *= self.consts.CREATURE_SPEED_MULTIPLIER[self.level]
 
             x_new = x + speed * active # TODO: If creature active, Move right for simplicity
+            y_new = y  # TODO: add creature pathing
 
             # Deactivate if out of bounds
             active_new = jnp.where(
@@ -916,6 +917,11 @@ class JaxTutankham(JaxEnvironment):
                 self.consts.INACTIVE,
                 active
             )
+
+            # deactivate creature if it is off screen
+            # check  which spawners are on screen # TODO: height is currently hardcoded to one specific creature size
+            creature_on_screen = self.is_onscreen(y_new, self.consts.CREATURE_SIZE[1], camera_offset)
+            active_new = jnp.where(creature_on_screen, active_new, self.consts.INACTIVE)
 
             # If inactive, reset position to (0, 0)
             x_new = x_new * active_new
@@ -1194,7 +1200,7 @@ class JaxTutankham(JaxEnvironment):
 
         bullet_state, amonition_timer =self.bullet_step(bullet_state, player_x, player_y, amonition_timer, action)
 
-        creature_states = self.creature_step(creature_states)
+        creature_states = self.creature_step(creature_states, camera_offset)
 
         creature_states, last_creature_spawn, rng_key = self.spawner_step(creature_states, last_creature_spawn, level, rng_key, camera_offset)
 
