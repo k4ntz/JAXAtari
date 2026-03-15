@@ -259,7 +259,7 @@ class TutankhamConstants(NamedTuple):
     MAP_CHECKPOINTS: chex.Array = jnp.array([
         # MAP 1
         [
-            [0  , 200, 130, 85],
+            [0  , 200, 130, 85], # [checkpoint zone top y, checkpoint zone bottom y, checkpoint_x, checkpoint_y]
             [200, 400, 105, 140],
             [800, 1200, 105, 140],
             [1200, 1600, 105, 140],
@@ -359,6 +359,27 @@ class TutankhamConstants(NamedTuple):
         ]
     ], dtype=jnp.int32)
 
+    # define goal zones for each map
+    GOAL_SIZE: chex.Array = jnp.array([5, 5], dtype=jnp.int32) #TODO: adjust based on actual goal sprite size
+    MAP_GOAL_POSITIONS: chex.Array = jnp.array([
+        # MAP 1
+        [
+            [17, 687]
+        ],
+        # MAP 2
+        [
+            [128, 155]
+        ],
+        # MAP 3
+        [
+            [128, 155]
+        ],
+        # MAP 4
+        [
+            [128, 155]
+        ]
+    ], dtype=jnp.int32)
+
     # Spawn-rate per level, shape (16,)
     LEVEL_SPAWN_RATES: chex.Array = jnp.array([
         0.0003, 0.0003, 0.0003, 0.0003,
@@ -409,6 +430,7 @@ class TutankhamState(NamedTuple):
     step_counter: int       # Increments every frame, drives animation clock
 
     has_key: bool  # whether the player has collected the key or not
+    goal_reached: bool  # whether the player has reached the goal with the key to complete the level
 
     last_directional_action: int  # last action that had a directional component
 
@@ -620,9 +642,10 @@ class JaxTutankham(JaxEnvironment):
         seed = int(time.time())
         key = jax.random.PRNGKey(seed)
         level = 0
-        start_x = 140
-        start_y = self.consts.HEIGHT // 2
+        start_x = 130
+        start_y = 75
         tutankham_score = 0
+        goal_reached = False
         player_lives = self.consts.PLAYER_LIVES
         amonition_timer = self.consts.AMMO_SUPPLY
         bullet_state = jnp.array([0, 0, 0, 0], dtype=jnp.int32)  # (x, y, bullet_rotation, bullet_active)
@@ -664,7 +687,8 @@ class JaxTutankham(JaxEnvironment):
                                 has_key=has_key,
                                 last_directional_action=0,
                                 rng_key=key,
-                                camera_offset=camera_offset
+                                camera_offset=camera_offset,
+                                goal_reached=goal_reached
                                )
         return state, state #TODO: (EnvObs, EnvState)
     
@@ -1092,11 +1116,26 @@ class JaxTutankham(JaxEnvironment):
         new_has_key = has_key | has_collected_key
 
         return new_has_key
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def check_goal(self, player_x, player_y, has_key, level):
+        # check if collides with goal and has the key to complete the level
+        goal_position = self.consts.MAP_GOAL_POSITIONS[level%4] # (x, y) coordinates of the goal tile for current level
+        on_goal = self.check_entity_collision(
+            player_x, player_y, self.consts.PLAYER_SIZE,
+            goal_position[0], goal_position[1], self.consts.GOAL_SIZE
+        )
+        complete_level = on_goal & has_key
+
+        return complete_level
 
 
     # score update based on creature deaths & item collections
     @partial(jax.jit, static_argnums=(0,))
-    def update_score(self, score, prev_creature_states, new_creature_states, prev_item_states, new_item_states, prev_lives, new_lives):
+    def update_score(self, score, prev_creature_states, new_creature_states, 
+                     prev_item_states, new_item_states, 
+                     prev_lives, new_lives,
+                     goal_reached, amonition_timer):
         
         # check if player has died
         has_died = (prev_lives > new_lives)
@@ -1112,7 +1151,10 @@ class JaxTutankham(JaxEnvironment):
         item_points = collected_items_mask * self.consts.ITEM_POINTS[prev_item_states[:, 2]]
         total_score_for_collected_items = jnp.sum(item_points)
 
-        new_score = score + total_score_for_defeating_creatures + total_score_for_collected_items
+        # if goal is reached, give a score bonus based on remaining amonition
+        goal_bonus = jnp.where(goal_reached, amonition_timer, 0) #TODO: adjust bonus scaling
+
+        new_score = score + total_score_for_defeating_creatures + total_score_for_collected_items + goal_bonus
 
         return new_score
 
@@ -1138,6 +1180,7 @@ class JaxTutankham(JaxEnvironment):
         step_counter = state.step_counter
         rng_key = state.rng_key
         camera_offset = state.camera_offset
+        goal_reached = state.goal_reached
 
         # move player based on action input and check for teleporter trigger, also update camera offset
         (player_x, player_y, 
@@ -1183,6 +1226,9 @@ class JaxTutankham(JaxEnvironment):
         # check if player has collected the key
         has_key = self.check_key(item_states, has_key)
 
+        # check if player has reached the goal with the key to complete the level
+        goal_reached = self.check_goal(player_x, player_y, has_key, level)
+
 
   
 
@@ -1191,7 +1237,8 @@ class JaxTutankham(JaxEnvironment):
         tutankham_score = self.update_score(tutankham_score, 
                                             prev_creature_states, creature_states, 
                                             prev_item_states, item_states,
-                                            prev_lives, player_lives
+                                            prev_lives, player_lives,
+                                            goal_reached, amonition_timer
                                             )
 
 
@@ -1214,7 +1261,8 @@ class JaxTutankham(JaxEnvironment):
                                has_key=has_key,
                                last_directional_action=last_directional_action,
                                rng_key=rng_key, 
-                               camera_offset=camera_offset
+                               camera_offset=camera_offset,
+                               goal_reached=goal_reached
                                )
 
         reward = 0.0
