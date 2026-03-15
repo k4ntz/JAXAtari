@@ -123,7 +123,12 @@ class GravitarConstants(struct.PyTreeNode):
     MAX_ACTIVE_PLAYER_BULLETS_ARENA: int = struct.field(pytree_node=False, default=2)
     MAX_ACTIVE_SAUCER_BULLETS: int = struct.field(pytree_node=False, default=2)
     MAX_ACTIVE_ENEMY_BULLETS: int = struct.field(pytree_node=False, default=2)
-    
+
+    # Physics moddable
+    SOLAR_GRAVITY: float = struct.field(pytree_node=False, default=0.044)
+    PLANETARY_GRAVITY: float = struct.field(pytree_node=False, default=0.0032)
+    REACTOR_GRAVITY: float = struct.field(pytree_node=False, default=0.0001)
+
     # Bonuses
     SOLAR_SYSTEM_BONUS_FUEL: float = struct.field(pytree_node=False, default=7000.0)
     SOLAR_SYSTEM_BONUS_LIVES: int = struct.field(pytree_node=False, default=2)
@@ -552,6 +557,9 @@ class EnvState(NamedTuple):
     max_active_saucer_bullets: jnp.ndarray  # int32
     max_active_enemy_bullets: jnp.ndarray  # int32
     enemy_fire_cooldown_frames: jnp.ndarray  # int32
+    solar_gravity: jnp.ndarray  # float32
+    planetary_gravity: jnp.ndarray  # float32
+    reactor_gravity: jnp.ndarray  # float32
     prev_action: jnp.ndarray  # int32, previous action taken
 
 # ========== Init Function ==========
@@ -853,6 +861,9 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
         max_active_saucer_bullets=jnp.int32(MAX_ACTIVE_SAUCER_BULLETS),
         max_active_enemy_bullets=jnp.int32(MAX_ACTIVE_ENEMY_BULLETS),
         enemy_fire_cooldown_frames=jnp.int32(ENEMY_FIRE_COOLDOWN_FRAMES),
+        solar_gravity=jnp.float32(_DEFAULT_CONSTS.SOLAR_GRAVITY),
+        planetary_gravity=jnp.float32(_DEFAULT_CONSTS.PLANETARY_GRAVITY),
+        reactor_gravity=jnp.float32(_DEFAULT_CONSTS.REACTOR_GRAVITY),
         prev_action=jnp.int32(0),
     )
 
@@ -1212,16 +1223,19 @@ def ship_step(state: ShipState,
               hud_height: int,
               fuel: jnp.ndarray,
               terrain_bank_idx: jnp.ndarray = jnp.int32(0),
-              allow_exit_top: jnp.ndarray = jnp.bool_(False)) -> ShipState:
+              allow_exit_top: jnp.ndarray = jnp.bool_(False),
+              solar_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.SOLAR_GRAVITY),
+              planetary_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.PLANETARY_GRAVITY),
+              reactor_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.REACTOR_GRAVITY)) -> ShipState:
     # --- Track thrusting state for rendering ---
     thrust_actions = jnp.array([2, 6, 7, 10, 14, 15])  # UP, UPRIGHT, UPLEFT, UPFIRE, UPRIGHTFIRE, UPLEFTFIRE
     is_thrusting_now = jnp.isin(action, thrust_actions) & (fuel > 0.0)
     
     # --- Physics Parameters ---
     THRUST_POWER = 0.035 / WORLD_SCALE  # Increased from 0.03 to better overcome gravity
-    SOLAR_GRAVITY = 0.044 / WORLD_SCALE
-    PLANETARY_GRAVITY = 0.0032 / WORLD_SCALE
-    REACTOR_GRAVITY = 0.0001 / WORLD_SCALE
+    scaled_solar_gravity = solar_gravity / WORLD_SCALE
+    scaled_planetary_gravity = planetary_gravity / WORLD_SCALE
+    scaled_reactor_gravity = reactor_gravity / WORLD_SCALE
     MAX_SPEED = 3.0 / WORLD_SCALE
 
     # 0.0 = full stop on collision (inelastic)
@@ -1289,8 +1303,8 @@ def ship_step(state: ShipState,
     is_reactor = (terrain_bank_idx == 5)
     is_central_gravity = (terrain_bank_idx == 2) | (terrain_bank_idx == 5)
 
-    gravity = jnp.where(is_map_mode, SOLAR_GRAVITY, jnp.where(is_planet, PLANETARY_GRAVITY, REACTOR_GRAVITY))
-    
+    gravity = jnp.where(is_map_mode, scaled_solar_gravity, jnp.where(is_planet, scaled_planetary_gravity, scaled_reactor_gravity))
+
     # Sun position (the OBSTACLE sprite) - ALE center coordinates: (82, 86)
     sun_x = 82.0
     sun_y = 86.0
@@ -1682,9 +1696,17 @@ def check_collision(bullets: Bullets, enemies: Enemies):
 def step_core_map(state: ShipState,
                   action: int,
                   window_size: Tuple[int, int],
-                  hud_height: int
+                  hud_height: int,
+                  fuel: jnp.ndarray = jnp.float32(0.0),
+                  terrain_bank_idx: jnp.ndarray = jnp.int32(0),
+                  solar_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.SOLAR_GRAVITY),
+                  planetary_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.PLANETARY_GRAVITY),
+                  reactor_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.REACTOR_GRAVITY)
                   ) -> Tuple[jnp.ndarray, ShipState, float, bool, dict, bool, int]:
-    new_state = ship_step(state, action, window_size, hud_height)
+    new_state = ship_step(state, action, window_size, hud_height, fuel=fuel, terrain_bank_idx=terrain_bank_idx,
+                          solar_gravity=solar_gravity,
+                          planetary_gravity=planetary_gravity,
+                          reactor_gravity=reactor_gravity)
 
     obs = jnp.array([
         new_state.x,
@@ -1751,7 +1773,10 @@ def step_map(env_state: EnvState, action: int):
     )
 
     actual_action = jnp.where(was_crashing, NOOP, action)
-    ship_after_move = ship_step(ship_state_before_move, actual_action, (WINDOW_WIDTH, WINDOW_HEIGHT), HUD_HEIGHT, env_state.fuel, env_state.terrain_bank_idx)
+    ship_after_move = ship_step(ship_state_before_move, actual_action, (WINDOW_WIDTH, WINDOW_HEIGHT), HUD_HEIGHT, env_state.fuel, env_state.terrain_bank_idx,
+                                solar_gravity=env_state.solar_gravity,
+                                planetary_gravity=env_state.planetary_gravity,
+                                reactor_gravity=env_state.reactor_gravity)
     
     # Calculate fuel consumption in map mode
     thrust_actions = jnp.array([2, 6, 7, 10, 14, 15])
@@ -2018,7 +2043,10 @@ def _step_level_core(env_state: EnvState, action: int):
     )
     actual_action = jnp.where(was_crashing, NOOP, action)
 
-    ship_after_move = ship_step(ship_state_before_move, actual_action, (WINDOW_WIDTH, WINDOW_HEIGHT), HUD_HEIGHT, state_after_spawn.fuel, state_after_spawn.terrain_bank_idx, allow_exit_top)
+    ship_after_move = ship_step(ship_state_before_move, actual_action, (WINDOW_WIDTH, WINDOW_HEIGHT), HUD_HEIGHT, state_after_spawn.fuel, state_after_spawn.terrain_bank_idx, allow_exit_top,
+                                solar_gravity=state_after_spawn.solar_gravity,
+                                planetary_gravity=state_after_spawn.planetary_gravity,
+                                reactor_gravity=state_after_spawn.reactor_gravity)
     
     # Detect fire button press (not hold) - only fire on transition from not-pressed to pressed
     fire_actions = jnp.array([1, 10, 11, 12, 13, 14, 15, 16, 17])
@@ -2427,7 +2455,10 @@ def step_arena(env_state: EnvState, action: int):
     # --- 2. Ship Movement and Player Firing ---
     # If the ship is crashing, ignore player input and force no movement
     actual_action = jnp.where(is_crashing, NOOP, action)
-    ship_after_move = ship_step(ship, actual_action, (WINDOW_WIDTH, WINDOW_HEIGHT), HUD_HEIGHT, env_state.fuel, env_state.terrain_bank_idx)
+    ship_after_move = ship_step(ship, actual_action, (WINDOW_WIDTH, WINDOW_HEIGHT), HUD_HEIGHT, env_state.fuel, env_state.terrain_bank_idx,
+                                solar_gravity=env_state.solar_gravity,
+                                planetary_gravity=env_state.planetary_gravity,
+                                reactor_gravity=env_state.reactor_gravity)
 
     # Detect fire button press (not hold) - only fire on transition
     fire_actions = jnp.array([1, 10, 11, 12, 13, 14, 15, 16, 17])
@@ -3237,6 +3268,9 @@ class JaxGravitar(JaxEnvironment):
             max_active_saucer_bullets=jnp.int32(self.consts.MAX_ACTIVE_SAUCER_BULLETS),
             max_active_enemy_bullets=jnp.int32(self.consts.MAX_ACTIVE_ENEMY_BULLETS),
             enemy_fire_cooldown_frames=jnp.int32(self.consts.ENEMY_FIRE_COOLDOWN_FRAMES),
+            solar_gravity=jnp.float32(self.consts.SOLAR_GRAVITY),
+            planetary_gravity=jnp.float32(self.consts.PLANETARY_GRAVITY),
+            reactor_gravity=jnp.float32(self.consts.REACTOR_GRAVITY),
             prev_action=jnp.int32(0),
         )
 
