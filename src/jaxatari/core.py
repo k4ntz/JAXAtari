@@ -84,6 +84,7 @@ MOD_MODULES = {
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
     "videopinball": "jaxatari.games.mods.videopinball_mods.VideoPinballEnvMod",
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
+    "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
 }
 
 
