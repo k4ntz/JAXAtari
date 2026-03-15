@@ -45,12 +45,15 @@ class BackgammonConstants(NamedTuple):
     WHITE = 1
     BLACK = -1
     DOUBLING_CUBE = 1  # Multiplier for gammon/backgammon scoring
+    # Visual theme - one of "classic" (green), "brown" (wooden), "blue" (tournament)
+    THEME: str = "classic"
 
 
 class BackgammonState(NamedTuple):
     """Represents the complete state of a backgammon game."""
     board: jnp.ndarray  # (2, 26)
-    dice: jnp.ndarray  # (4,)
+    dice: jnp.ndarray  # (4,) - remaining moves available
+    original_dice: jnp.ndarray  # (2,) - original roll values for display (ALE shows these)
     current_player: int
     is_game_over: bool
     key: jax.random.PRNGKey
@@ -63,6 +66,7 @@ class BackgammonState(NamedTuple):
     await_keyup: bool = False
     last_valid_drop: int = -1  # -1 means no persistent highlight
     picked_bar_side: int = -1  # 24 (left), 26 (right), or -1 if not from bar
+    move_repeat_timer: int = 0  # Frames since last cursor move (for hold-to-repeat)
 
 
 
@@ -96,7 +100,7 @@ class GamePhase(IntEnum):
     1 (SELECTING_CHECKER) -> FIRE on checker -> 2 (MOVING_CHECKER)  
     2 (MOVING_CHECKER) -> FIRE on valid dest -> 1 or 0 (if turn ends)
     
-    TURN_COMPLETE (3) was planned but not implemented - the game auto-advances
+    TURN_COMPLETE (3) seemed to be planned but not implemented yet - the game currently auto-advances
     to the next player when all dice are consumed.
     """
     WAITING_FOR_ROLL = 0
@@ -156,11 +160,16 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         consts: Game constants (optional, uses defaults if None)
         reward_funcs: Custom reward functions (optional)
         theme: Board color theme - one of "classic" (green), "brown" (wooden), "blue" (tournament)
+               If None, uses consts.THEME (which defaults to "classic")
     """
 
-    def __init__(self, consts: BackgammonConstants = None, reward_funcs: list[callable] = None, theme: str = "classic"):
+    def __init__(self, consts: BackgammonConstants = None, reward_funcs: list[callable] = None, theme: str = None):
         consts = consts or BackgammonConstants()
         super().__init__(consts)
+        
+        # Theme priority: explicit parameter > consts.THEME > "classic"
+        if theme is None:
+            theme = consts.THEME
         
         # Validate and store theme
         if theme not in BACKGAMMON_THEMES:
@@ -169,7 +178,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
         # Pre-compute all possible moves (from_point, to_point) for points 0..25
         # Shape: (676, 2) = 26×26 combinations
-        # This will be used for vectorized move validation in Phase 3 (sequence generation)
+        # This will be used for vectorized move validation
         NUM_ACTION_PAIRS = 26 * 26
         self._action_pairs = jnp.array([(i, j) for i in range(26) for j in range(26)], dtype=jnp.int32)
         assert self._action_pairs.shape == (NUM_ACTION_PAIRS, 2), \
@@ -184,10 +193,6 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         self.reward_funcs = reward_funcs
 
         # Define action set for jaxatari compatibility (interactive mode)
-        # NOTE: For AI agent training (PPO/PQN), you can either:
-        #   1. Use these interactive actions (LEFT/RIGHT/FIRE/NOOP) to simulate cursor movement
-        #   2. Or add a direct move API: step_move(state, move_index) where move_index ∈ [0, 675]
-        # Current implementation: Interactive mode
         self.action_set = [
             JAXAtariAction.LEFT,  # Move cursor left
             JAXAtariAction.RIGHT,  # Move cursor right
@@ -247,9 +252,13 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             current_player == self.consts.WHITE, lambda _: 0, lambda _: 23, operand=None
         )
 
+        # Store original dice for display (always 2 values)
+        original_dice = jnp.array([first, second], dtype=jnp.int32)
+
         return BackgammonState(
             board=board,
             dice=dice,
+            original_dice=original_dice,
             current_player=current_player,
             is_game_over=False,
             key=key,
@@ -261,6 +270,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             last_action=JAXAtariAction.NOOP,
             await_keyup=False,
             last_valid_drop=-1,
+            move_repeat_timer=0,
         )
 
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[jnp.ndarray, BackgammonState]:
@@ -467,12 +477,15 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         """
         def do_pass(_):
             next_dice, new_key = self.roll_dice(state.key)
+            # New roll means new original_dice for display
+            new_original = jnp.array([next_dice[0], next_dice[1]], dtype=jnp.int32)
             next_player = -state.current_player
             next_cursor = jax.lax.cond(
                 next_player == self.consts.WHITE, lambda _: jnp.int32(0), lambda _: jnp.int32(23), operand=None
             )
             return state._replace(
                 dice=next_dice,
+                original_dice=new_original,
                 key=new_key,
                 current_player=next_player,
                 game_phase=jnp.int32(1),          # SELECTING_CHECKER
@@ -689,12 +702,15 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
         def next_turn(k):
             next_dice, new_key = JaxBackgammonEnv.roll_dice(k)
-            return next_dice, -state.current_player, new_key
+            # New turn gets new original_dice for display
+            new_original = jnp.array([next_dice[0], next_dice[1]], dtype=jnp.int32)
+            return next_dice, new_original, -state.current_player, new_key
 
         def same_turn(k):
-            return new_dice, state.current_player, k
+            # Keep the same original_dice during the turn
+            return new_dice, state.original_dice, state.current_player, k
 
-        next_dice, next_player, new_key = jax.lax.cond(all_dice_used, next_turn, same_turn, key)
+        next_dice, next_original, next_player, new_key = jax.lax.cond(all_dice_used, next_turn, same_turn, key)
 
         white_won = new_board[0, self.consts.HOME_INDEX] == self.consts.NUM_CHECKERS
         black_won = new_board[1, self.consts.HOME_INDEX] == self.consts.NUM_CHECKERS
@@ -703,6 +719,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         new_state = BackgammonState(
             board=new_board,
             dice=next_dice,
+            original_dice=next_original,
             current_player=next_player,
             is_game_over=game_over,
             key=new_key,
@@ -919,10 +936,13 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         Rolls dice and transitions to SELECTING_CHECKER phase.
         Auto-passes if no legal moves available.
         
-        Returns: Updated state with new dice and game_phase.
+        Returns: Updated state with new dice, original_dice, and game_phase.
         """
         dice, key = self.roll_dice(state.key)
-        new_state = state._replace(dice=dice, key=key, game_phase=1)
+        # Store original roll for display (ALE always shows 2 dice with original values)
+        # For doubles, both display dice show the same value
+        original_dice = jnp.array([dice[0], dice[1]], dtype=jnp.int32)
+        new_state = state._replace(dice=dice, original_dice=original_dice, key=key, game_phase=1)
         # Auto-pass if no legal move with these dice
         return self._auto_pass_if_stuck(new_state)
 
@@ -1075,38 +1095,50 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             operand=state
         )
 
+    # Repeat delay for held LEFT/RIGHT (in frames, ~8 frames = ~133ms at 60fps)
+    MOVE_REPEAT_DELAY: int = 8
+    MOVE_INITIAL_DELAY: int = 12  # Longer delay before first repeat
+
     @partial(jax.jit, static_argnums=(0,))
     def _apply_debounce(self, state: BackgammonState, action: jnp.ndarray, 
                         new_state: BackgammonState) -> BackgammonState:
         """
-        Apply debounce logic: arm await_keyup for LEFT/RIGHT/FIRE actions.
+        Apply debounce logic: arm await_keyup for FIRE only.
+        LEFT/RIGHT use repeat timer for continuous movement.
         
         Returns: State with debounce flags updated.
         """
         is_left = action == JAXAtariAction.LEFT
         is_right = action == JAXAtariAction.RIGHT
         is_fire = action == JAXAtariAction.FIRE
-        should_arm = is_left | is_right | is_fire
+        is_movement = is_left | is_right
         
+        # Only FIRE needs full debounce (wait for key release)
+        # Movement actions reset the repeat timer instead
         return jax.lax.cond(
-            should_arm,
-            lambda s: s._replace(await_keyup=True, last_action=action),
-            lambda s: s,
+            is_fire,
+            lambda s: s._replace(await_keyup=True, last_action=action, move_repeat_timer=0),
+            lambda s: jax.lax.cond(
+                is_movement,
+                lambda s2: s2._replace(last_action=action, move_repeat_timer=0),
+                lambda s2: s2,
+                operand=s
+            ),
             operand=new_state
         )
 
     @partial(jax.jit, static_argnums=(0,))
     def _handle_blocked_input(self, state: BackgammonState, action: jnp.ndarray) -> BackgammonState:
         """
-        Handle input when awaiting key-up (debounce active).
-        Only NOOP clears the debounce; other actions are ignored.
+        Handle input when awaiting key-up (debounce active for FIRE).
+        NOOP clears the debounce; LEFT/RIGHT can still move with repeat timer.
         
         Returns: State with await_keyup potentially cleared.
         """
         is_noop = action == JAXAtariAction.NOOP
         return jax.lax.cond(
             is_noop,
-            lambda s: s._replace(await_keyup=False, last_action=JAXAtariAction.NOOP),
+            lambda s: s._replace(await_keyup=False, last_action=JAXAtariAction.NOOP, move_repeat_timer=0),
             lambda s: s,
             operand=state
         )
@@ -1118,24 +1150,79 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: BackgammonState, action: jnp.ndarray):
         """
-        Interactive step with JAX-safe debounce.
+        Interactive step with JAX-safe debounce and continuous movement.
         
         This is the main entry point for gameplay. It follows the orchestrator pattern:
         - Delegates to helper functions for specific logic
-        - Handles debounce for key-press/release behavior
+        - Handles debounce for FIRE key-press/release behavior
+        - Allows continuous LEFT/RIGHT movement when held
         - Returns (observation, new_state, reward, done, info)
         
-        Each key press triggers once; holding does nothing until NOOP arrives.
+        FIRE triggers once per press; LEFT/RIGHT repeat when held.
         """
-        # Branch 1: Debounce active - wait for key release (NOOP)
+        is_left = action == JAXAtariAction.LEFT
+        is_right = action == JAXAtariAction.RIGHT
+        is_movement = is_left | is_right
+        
+        # Check if this is a repeated movement (same direction held)
+        same_direction = (action == state.last_action) & is_movement
+        timer = state.move_repeat_timer + 1
+        
+        # Use longer delay for first repeat, shorter for subsequent
+        delay = jax.lax.select(
+            timer < self.MOVE_INITIAL_DELAY + self.MOVE_REPEAT_DELAY,
+            self.MOVE_INITIAL_DELAY,
+            self.MOVE_REPEAT_DELAY
+        )
+        repeat_ready = timer >= delay
+        
+        # Branch 1: Debounce active (FIRE held) - wait for key release, but allow movement
         def when_blocked(s):
-            ns = self._handle_blocked_input(s, action)
+            # Allow movement even when FIRE is blocked
+            def do_movement(s2):
+                can_repeat = same_direction & repeat_ready
+                def process_repeat(s3):
+                    ns, _, _ = self._process_action(s3, action)
+                    return ns._replace(last_action=action, move_repeat_timer=0)
+                def increment_timer(s3):
+                    return s3._replace(move_repeat_timer=timer)
+                return jax.lax.cond(can_repeat, process_repeat, increment_timer, operand=s2)
+            
+            ns = jax.lax.cond(
+                is_movement,
+                do_movement,
+                lambda s2: self._handle_blocked_input(s2, action),
+                operand=s
+            )
             return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
 
-        # Branch 2: Ready for input - process action and arm debounce
+        # Branch 2: Ready for input - process action
         def when_free(s):
-            ns, reward, done = self._process_action(s, action)
-            ns = self._apply_debounce(s, action, ns)
+            # For movement: check if same direction held (repeat) or new direction
+            def handle_movement(s2):
+                can_repeat = same_direction & repeat_ready
+                def process_move(s3):
+                    ns, reward, done = self._process_action(s3, action)
+                    ns = ns._replace(last_action=action, move_repeat_timer=0)
+                    return ns, reward, done
+                def wait_for_repeat(s3):
+                    # First press or waiting for repeat delay
+                    new_dir = ~same_direction
+                    def first_press(s4):
+                        ns, reward, done = self._process_action(s4, action)
+                        ns = ns._replace(last_action=action, move_repeat_timer=0)
+                        return ns, reward, done
+                    def increment(s4):
+                        return s4._replace(move_repeat_timer=timer), 0.0, False
+                    return jax.lax.cond(new_dir, first_press, increment, operand=s3)
+                return jax.lax.cond(can_repeat, process_move, wait_for_repeat, operand=s2)
+            
+            def handle_other(s2):
+                ns, reward, done = self._process_action(s2, action)
+                ns = self._apply_debounce(s, action, ns)
+                return ns, reward, done
+            
+            ns, reward, done = jax.lax.cond(is_movement, handle_movement, handle_other, operand=s)
             obs = self._get_observation(ns)
             info = self._get_info(ns)
             return obs, ns, reward, done, info
@@ -1290,10 +1377,6 @@ class BackgammonRenderer(JAXGameRenderer):
     """
     JAX-native Backgammon renderer using JaxRenderingUtils.
     
-    Follows the palette-based rendering pattern from Renderer Guide:
-    1. Load sprites and create palette in __init__
-    2. render() creates object_raster, stamps sprites, converts to RGB
-    
     Supports multiple color themes:
     - "classic": Original green theme
     - "brown": Wooden/brown theme  
@@ -1309,29 +1392,30 @@ class BackgammonRenderer(JAXGameRenderer):
         self.frame_height = 210
         self.frame_width = 160
         
-        # Geometry constants (same as original)
-        self.top_margin_for_dice = 25
-        self.board_margin = 8
-        self.triangle_length = 60
-        self.triangle_thickness = 12
-        self.bar_thickness = 14
-        self.checker_width = 4
+        # Geometry constants (updated to match extracted ALE sprites)
+        self.top_margin_for_dice = 15
+        self.board_margin = 24
+        self.triangle_length = 48
+        self.triangle_thickness = 11
+        self.bar_thickness = 11
+        self.checker_width = 4          # ALE checker is 4x4 pixels
         self.checker_height = 4
         self.base_margin = 2
-        self.band_top_margin = 1.2
-        self.band_bottom_margin = 1
-        self.chip_gap_y = 2
-        self.chip_gap_x = 4
+        self.band_top_margin = 0.5
+        self.band_bottom_margin = 0.5
+        self.chip_gap_y = 1              # Gap between checker rows (ALE: row0 at y=39, row1 at y=44 -> offset=5)
+        self.chip_gap_x = 4              # Gap between checker columns (ALE: col_step=8 = 4+4)
         self.checker_stack_offset = self.checker_height + self.chip_gap_y
         self.bar_edge_padding = 2
         self.bar_vertical_padding = 2
-        self.dice_size = 12
+        self.dice_width = 14 
+        self.dice_height = 17
         self.pip_size = 2
         
-        # Computed positions
-        self.bar_y = self.top_margin_for_dice + self.frame_height // 2 - self.bar_thickness // 2 - 10
+        # Computed positions (ALE bar is at y=110-120)
+        self.bar_y = 110  # Fixed to match ALE
         self.bar_x = self.board_margin
-        self.bar_width = self.frame_width - 2 * self.board_margin
+        self.bar_width = self.frame_width - 2 * self.board_margin - 7
         
         # Pre-compute triangle positions
         self.triangle_positions = self._compute_triangle_positions()
@@ -1390,35 +1474,46 @@ class BackgammonRenderer(JAXGameRenderer):
         ]
     
     def _compute_triangle_positions(self):
-        """Compute (x, y) positions for all 24 triangles + bar positions."""
+        """Compute (x, y) positions for all 24 triangles + bar positions.
+        
+        ALE layout (verified from frame analysis):
+        - Upper band: y=38-108 (6 triangles, each 11 rows with 1-row gaps)
+        - Bar: y=110-120 (teal)
+        - Lower band: y=122-192 (6 triangles, each 11 rows with 1-row gaps)
+        - Triangle stride: 12 rows (11 triangle + 1 gap)
+        """
         left_x = self.board_margin
         right_x = self.frame_width - self.board_margin - self.triangle_length
         
-        y_top = self.top_margin_for_dice + self.board_margin
-        y_bottom = self.frame_height - self.board_margin
-        band_h = 6 * self.triangle_thickness
+        # ALE-accurate positions
+        upper_band_start = 38  # First upper triangle starts here
+        lower_band_start = 122  # First lower triangle starts here
+        triangle_stride = 12   # 11 rows + 1 gap between triangles
         
         positions = []
         
         # 0..5 (lower-right) bottom -> top
+        # Point 0 is at bottom (y=182), point 5 is at top (y=122)
         for i in range(6):
-            y = y_bottom - (i + 1) * self.triangle_thickness
+            y = lower_band_start + (5 - i) * triangle_stride
             positions.append((right_x, y))
         
         # 6..11 (upper-right) bottom -> top
+        # Point 6 is at bottom (y=98), point 11 is at top (y=38)
         for i in range(6):
-            y = y_top + (5 - i) * self.triangle_thickness
+            y = upper_band_start + (5 - i) * triangle_stride
             positions.append((right_x, y))
         
         # 12..17 (upper-left) top -> bottom
+        # Point 12 is at top (y=38), point 17 is at bottom (y=98)
         for i in range(6):
-            y = y_top + i * self.triangle_thickness
+            y = upper_band_start + i * triangle_stride
             positions.append((left_x, y))
         
         # 18..23 (lower-left) top -> bottom
-        lower_left_top_y = y_bottom - band_h
+        # Point 18 is at top (y=122), point 23 is at bottom (y=182)
         for i in range(6):
-            y = lower_left_top_y + i * self.triangle_thickness
+            y = lower_band_start + i * triangle_stride
             positions.append((left_x, y))
         
         # bar-left (24): center of left half of the bar
@@ -1612,9 +1707,14 @@ class BackgammonRenderer(JAXGameRenderer):
             x + self.triangle_length - self.checker_width - self.base_margin
         )
         
-        band_bottom = y + self.triangle_thickness - self.band_bottom_margin
-        row0_y = jnp.int32(band_bottom - self.checker_height)
-        row1_y = jnp.int32(row0_y - self.checker_stack_offset)
+        # ALE stacks checkers from TIP toward BASE:
+        # For upper triangles (pointing DOWN): tip is at bottom (higher y), base at top (lower y)
+        # For lower triangles (pointing UP): tip is at top (lower y), base at bottom (higher y)
+        # First checker (i=0, row=0) goes near the TIP (y + 1 + offset)
+        # Second checker (i=1, row=1) goes near the BASE (y + 1)
+        # For upper triangles (y=38): TIP row at y=44, BASE row at y=39
+        near_base_y = jnp.int32(y + 1)  # Row closer to wide part of triangle
+        near_tip_y = jnp.int32(near_base_y + self.checker_stack_offset)  # Row closer to triangle point
         col_step = self.checker_width + self.chip_gap_x
         
         def draw_stack(r, count, mask):
@@ -1622,7 +1722,8 @@ class BackgammonRenderer(JAXGameRenderer):
                 col = i // 2
                 row = i & 1
                 cx = base_x + dir_sign * (col * col_step)
-                cy = jnp.where(row == 0, row0_y, row1_y)
+                # row=0 (first/single checker) goes near tip, row=1 (second) goes near base
+                cy = jnp.where(row == 0, near_tip_y, near_base_y)
                 return self.jr.render_at(f, cx, cy, mask)
             return jax.lax.fori_loop(0, count, draw_single, r)
         
@@ -1632,7 +1733,17 @@ class BackgammonRenderer(JAXGameRenderer):
     
     @partial(jax.jit, static_argnums=(0,))
     def _draw_bar_checkers(self, raster, state):
-        """Draw checkers on the bar."""
+        """Draw checkers on the bar.
+        
+        ALE layout:
+        - White checkers on LEFT side of bar, starting at x=26, expanding RIGHT
+        - Black/Red checkers on RIGHT side of bar, starting at x=130, expanding LEFT
+        - Stacking order (same as triangles): Base first, then Top
+          - i=0: col 0, row 0 (y=116, base/bottom)
+          - i=1: col 0, row 1 (y=111, top)
+          - i=2: col 1, row 0 (y=116, base/bottom)
+          - i=3: col 1, row 1 (y=111, top)
+        """
         player_idx = self.env.get_player_index(state.current_player)
         picked_from_bar = (state.game_phase == 2) & (state.picked_checker_from == self.env.consts.BAR_INDEX)
         
@@ -1641,25 +1752,42 @@ class BackgammonRenderer(JAXGameRenderer):
         white_bar = jnp.maximum(white_bar, 0)
         black_bar = jnp.maximum(black_bar, 0)
         
-        col_step = self.checker_width + self.chip_gap_x
-        row_step = self.checker_stack_offset
-        two_cols_w = 2 * self.checker_width + self.chip_gap_x
+        col_step = self.checker_width + self.chip_gap_x  # 4 + 4 = 8
+        row_step = self.checker_stack_offset  # 5
         
-        base_x_left = self.bar_x + self.bar_edge_padding
-        base_x_right = self.bar_x + self.bar_width - self.bar_edge_padding - two_cols_w
-        base_y_bottom = self.bar_y + self.bar_thickness - self.bar_vertical_padding - self.checker_height
+        # White starts at x=26 (left edge), expands right
+        base_x_white = self.bar_x + 2  # x=26
         
-        def draw_stack(r, count, base_x, mask):
+        # Black starts at x=130 (right edge), expands left
+        base_x_black = self.bar_x + 106  # x=130 (24 + 106)
+        
+        # Y positions: base (bottom) at y=116, top at y=111
+        # Bar is at y=110
+        base_y = self.bar_y + 6  # y=116 for row 0 (base/bottom)
+        top_y = self.bar_y + 1   # y=111 for row 1 (top)
+        
+        def draw_white_stack(r, count, mask):
+            """White expands left to right (positive X direction)"""
             def draw_single(i, f):
-                row = i // 2
-                col = i % 2
-                x = base_x + col * col_step
-                y = base_y_bottom - row * row_step
+                col = i // 2
+                row = i % 2
+                x = base_x_white + col * col_step
+                y = jnp.where(row == 0, base_y, top_y)
                 return self.jr.render_at(f, x, y, mask)
             return jax.lax.fori_loop(0, count, draw_single, r)
         
-        raster = draw_stack(raster, black_bar, base_x_left, self.SHAPE_MASKS["black_checker"])
-        raster = draw_stack(raster, white_bar, base_x_right, self.SHAPE_MASKS["white_checker"])
+        def draw_black_stack(r, count, mask):
+            """Black expands right to left (negative X direction)"""
+            def draw_single(i, f):
+                col = i // 2
+                row = i % 2
+                x = base_x_black - col * col_step  # Subtract to go left
+                y = jnp.where(row == 0, base_y, top_y)
+                return self.jr.render_at(f, x, y, mask)
+            return jax.lax.fori_loop(0, count, draw_single, r)
+        
+        raster = draw_white_stack(raster, white_bar, self.SHAPE_MASKS["white_checker"])
+        raster = draw_black_stack(raster, black_bar, self.SHAPE_MASKS["black_checker"])
         return raster
     
     @partial(jax.jit, static_argnums=(0,))
@@ -1735,8 +1863,13 @@ class BackgammonRenderer(JAXGameRenderer):
             
             return self.jr.render_at(r, cx - self.checker_width // 2, cy - self.checker_height // 2, mask)
         
+        # Don't draw floating checker when cursor is at HOME (bearing off position)
+        # This matches ALE behavior where cursor/checker disappears off the board
+        should_draw = (state.game_phase == 2) & (state.cursor_position != self.env.consts.HOME_INDEX)
         return jax.lax.cond(
-            state.game_phase == 2,
+            should_draw,
+            # Previous version wouldn't bear off out of the view of the player
+            #state.game_phase == 2
             draw_checker,
             lambda r: r,
             operand=raster
@@ -1744,10 +1877,17 @@ class BackgammonRenderer(JAXGameRenderer):
     
     @partial(jax.jit, static_argnums=(0,))
     def _draw_dice(self, raster, state):
-        """Draw dice above the board."""
-        total_width = 4 * (self.dice_size + 3)
-        start_x = self.frame_width // 2 - total_width // 2 + 12
-        dice_y = self.board_margin
+        """Draw dice above the board.
+        
+        ALE behavior:
+        - Always shows exactly 2 dice, never 4 (even for doubles)
+        - Dice values don't change when moves are used (Issue 3)
+        - For doubles, both dice show the same pip value
+        """
+        dice_gap = 6  # ALE has 6px gap between dice
+        # ALE: Die 1 at x=64-77, Die 2 at x=84-97
+        start_x = 64  # Fixed to match ALE exactly
+        dice_y = 17  # ALE dice start at y=17
         
         is_white_player = (state.current_player == self.env.consts.WHITE)
         die_mask = jax.lax.select(is_white_player,
@@ -1757,49 +1897,65 @@ class BackgammonRenderer(JAXGameRenderer):
             self.SHAPE_MASKS["pip_black"],
             self.SHAPE_MASKS["pip_white"])
         
+        # Use original_dice for display - these never change during a turn
+        display_dice = state.original_dice
+        
         def draw_single_die(i, r):
-            val = state.dice[i]
-            dx = start_x + i * (self.dice_size + 3)
+            val = display_dice[i]
+            dx = start_x + i * (self.dice_width + dice_gap)
             
             def draw_val(_):
                 # Draw die background
                 r2 = self.jr.render_at(r, dx, dice_y, die_mask)
                 
-                # Draw pips based on value
-                center_x = dx + self.dice_size // 2
-                center_y = dice_y + self.dice_size // 2
+                # ALE pip positions (absolute within die, 14×17 die):
+                # Top-left: (2, 2), Top-right: (10, 2)
+                # Middle-left: (2, 7), Center: (6, 7), Middle-right: (10, 7)
+                # Bottom-left: (2, 12), Bottom-right: (10, 12)
                 
-                def dot(f, x, y):
-                    return self.jr.render_at(f, x - self.pip_size // 2, y - self.pip_size // 2, pip_mask)
+                def dot(f, local_x, local_y):
+                    return self.jr.render_at(f, dx + local_x, dice_y + local_y, pip_mask)
                 
-                # Pip patterns for values 1-6
-                def p1(_): return dot(r2, center_x, center_y)
+                # Pip positions (top-left corner of 2×2 pip)
+                TL_X, TL_Y = 2, 2    # top-left
+                TR_X, TR_Y = 10, 2   # top-right  
+                ML_X, ML_Y = 2, 7    # middle-left
+                C_X, C_Y = 6, 7      # center
+                MR_X, MR_Y = 10, 7   # middle-right
+                BL_X, BL_Y = 2, 12   # bottom-left
+                BR_X, BR_Y = 10, 12  # bottom-right
+                
+                def p1(_): return dot(r2, C_X, C_Y)
                 def p2(_):
-                    f = dot(r2, center_x - 3, center_y - 3)
-                    return dot(f, center_x + 3, center_y + 3)
+                    f = dot(r2, TL_X, TL_Y)
+                    return dot(f, BR_X, BR_Y)
                 def p3(_):
-                    f = dot(r2, center_x - 3, center_y - 3)
-                    f = dot(f, center_x, center_y)
-                    return dot(f, center_x + 3, center_y + 3)
+                    f = dot(r2, TL_X, TL_Y)
+                    f = dot(f, C_X, C_Y)
+                    return dot(f, BR_X, BR_Y)
                 def p4(_):
-                    f = dot(r2, center_x - 3, center_y - 3)
-                    f = dot(f, center_x + 3, center_y - 3)
-                    f = dot(f, center_x - 3, center_y + 3)
-                    return dot(f, center_x + 3, center_y + 3)
+                    f = dot(r2, TL_X, TL_Y)
+                    f = dot(f, TR_X, TR_Y)
+                    f = dot(f, BL_X, BL_Y)
+                    return dot(f, BR_X, BR_Y)
                 def p5(_):
-                    f = p4(None)
-                    return dot(f, center_x, center_y)
+                    f = dot(r2, TL_X, TL_Y)
+                    f = dot(f, TR_X, TR_Y)
+                    f = dot(f, C_X, C_Y)
+                    f = dot(f, BL_X, BL_Y)
+                    return dot(f, BR_X, BR_Y)
                 def p6(_):
-                    f = dot(r2, center_x - 3, center_y - 3)
-                    f = dot(f, center_x - 3, center_y)
-                    f = dot(f, center_x - 3, center_y + 3)
-                    f = dot(f, center_x + 3, center_y - 3)
-                    f = dot(f, center_x + 3, center_y)
-                    return dot(f, center_x + 3, center_y + 3)
+                    f = dot(r2, TL_X, TL_Y)
+                    f = dot(f, ML_X, ML_Y)
+                    f = dot(f, BL_X, BL_Y)
+                    f = dot(f, TR_X, TR_Y)
+                    f = dot(f, MR_X, MR_Y)
+                    return dot(f, BR_X, BR_Y)
                 
                 funcs = [p1, p2, p3, p4, p5, p6]
                 return jax.lax.switch(jnp.clip(val - 1, 0, 5), funcs, operand=None)
             
             return jax.lax.cond(val > 0, draw_val, lambda _: r, operand=None)
         
-        return jax.lax.fori_loop(0, 4, draw_single_die, raster)
+        # Only draw 2 dice (ALE never shows 4)
+        return jax.lax.fori_loop(0, 2, draw_single_die, raster)

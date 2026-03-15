@@ -31,6 +31,7 @@ GAME_MODULES = {
     "asterix": "jaxatari.games.jax_asterix",
     "asteroids": "jaxatari.games.jax_asteroids",
     "atlantis": "jaxatari.games.jax_atlantis",
+    "backgammon": "jaxatari.games.jax_backgammon",
     "bankheist": "jaxatari.games.jax_bankheist",
     "berzerk": "jaxatari.games.jax_berzerk",
     "blackjack": "jaxatari.games.jax_blackjack",
@@ -83,6 +84,7 @@ MOD_MODULES = {
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
     "videopinball": "jaxatari.games.mods.videopinball_mods.VideoPinballEnvMod",
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
+    "backgammon": "jaxatari.games.mods.backgammon_mods.BackgammonEnvMod"
 }
 
 
