@@ -259,11 +259,11 @@ class TutankhamConstants(NamedTuple):
     MAP_CHECKPOINTS: chex.Array = jnp.array([
         # MAP 1
         [
-            [0  , 100, 130, 85],
-            [100, 200, 105, 140],
-            [200, 300, 105, 140],
-            [300, 400, 105, 140],
-            [400, 500, 105, 140]
+            [0  , 200, 130, 85],
+            [200, 400, 105, 140],
+            [800, 1200, 105, 140],
+            [1200, 1600, 105, 140],
+            [2000, 2400, 105, 140]
         ],
         # MAP 2
         [
@@ -328,7 +328,36 @@ class TutankhamConstants(NamedTuple):
         ]
     ], dtype=jnp.int32)
 
-
+    MAP_TELEPORTER_POSITIONS: chex.Array = jnp.array([
+        # MAP 1
+        [
+            [128, 155, Action.LEFT, 25, 155], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [25, 155, Action.RIGHT, 128, 155],
+            [145, 605, Action.LEFT, 10, 605], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [10, 605, Action.RIGHT, 145, 605]
+        ],
+        # MAP 2
+        [
+            [128, 155, Action.LEFT, 25, 155], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [25, 155, Action.RIGHT, 128, 155],
+            [110, 605, Action.LEFT, 10, 605], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [10, 605, Action.RIGHT, 110, 605]
+        ],
+        # MAP 3
+        [
+            [128, 155, Action.LEFT, 25, 155], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [25, 155, Action.RIGHT, 128, 155],
+            [110, 605, Action.LEFT, 10, 605], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [10, 605, Action.RIGHT, 110, 605]
+        ],
+        # MAP 4
+        [
+            [128, 155, Action.LEFT, 25, 155], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [25, 155, Action.RIGHT, 128, 155],
+            [110, 605, Action.LEFT, 10, 605], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [10, 605, Action.RIGHT, 110, 605]
+        ]
+    ], dtype=jnp.int32)
 
     # Spawn-rate per level, shape (16,)
     LEVEL_SPAWN_RATES: chex.Array = jnp.array([
@@ -634,10 +663,29 @@ class JaxTutankham(JaxEnvironment):
                                )
         return state, state #TODO: (EnvObs, EnvState)
     
+    @partial(jax.jit, static_argnums=(0,))
+    def teleporter_check(self, player_x, player_y, action, level):
+        # Check if player is on a teleporter and has the correct action input to trigger it
+        teleporters = self.consts.MAP_TELEPORTER_POSITIONS[level%4]  # (N, 5) N teleporters for current map with (x_in, y_in, trigger_action, x_out, y_out)
+        teleporter_height = 10 # Define a vertical hitbox for the teleporter
+
+        teleport_trigger_action = (teleporters[:, 2] == action) # check if trigger action matches the current action input
+        player_on_teleporter_x = (teleporters[:, 0] == player_x)
+        player_on_teleporter_y_range = (player_y >= teleporters[:, 1]) & (player_y < teleporters[:, 1] + teleporter_height)
+
+
+        teleporter_active_mask = player_on_teleporter_x & player_on_teleporter_y_range & teleport_trigger_action
+        should_teleport = jnp.any(teleporter_active_mask)
+
+        teleporter_out_x = jnp.sum(teleporters[:, 3] * teleporter_active_mask)
+        teleporter_out_y = jnp.sum(teleporters[:, 4] * teleporter_active_mask)
+
+        return teleporter_out_x, teleporter_out_y, should_teleport
     
+
     # Player Step
     @partial(jax.jit, static_argnums=(0,))
-    def player_step(self, player_x, player_y, action, last_directional_action, player_direction, step_counter):
+    def player_step(self, player_x, player_y, action, last_directional_action, player_direction, step_counter, level):
         speed = self.consts.PLAYER_SPEED
 
         dx = jnp.array([
@@ -681,14 +729,19 @@ class JaxTutankham(JaxEnvironment):
             0,      # 16 DOWNRIGHTFIRE
             0,      # 17 DOWNLEFTFIRE
         ])
+        # For wall collision
+        w = self.consts.PLAYER_SIZE[0]
+        h = self.consts.PLAYER_SIZE[1]
+
+
         # If the current action has no directional component, fall back to the last directional action
         has_movement = (dx[action] != 0) | (dy[action] != 0)
         effective_action = jnp.where(has_movement, action, last_directional_action)
         new_last_directional_action = jnp.where(has_movement, action, last_directional_action)
 
-
-        w = self.consts.PLAYER_SIZE[0]
-        h = self.consts.PLAYER_SIZE[1]
+        # If player hits teleporter and right action input is triggered then teleport player to teleporter out coordinates
+        # Is always computed, but only effects player poisition if should_teleport is True
+        teleporter_out_x, teleporter_out_y, should_teleport = self.teleporter_check(player_x, player_y, effective_action, level)
 
         old_x, old_y = player_x, player_y
         new_x = player_x + dx[effective_action]
@@ -705,6 +758,10 @@ class JaxTutankham(JaxEnvironment):
 
         player_x = jnp.clip(player_x, 0, self.consts.WIDTH - 1)
         player_y = jnp.clip(player_y, 0, self.consts.VALID_POS.shape[0] - 1)
+
+        # If teleporter is triggered, the player position is set to teleporter out coordinates 
+        player_x = jnp.where(should_teleport, teleporter_out_x, player_x)
+        player_y = jnp.where(should_teleport, teleporter_out_y, player_y)
 
         # Animation / orientation state
         is_moving_now = jnp.logical_and(iswalkable, jnp.logical_or(dx[effective_action] != 0, dy[effective_action] != 0))
@@ -1066,7 +1123,7 @@ class JaxTutankham(JaxEnvironment):
         rng_key = state.rng_key
 
         player_x, player_y, last_directional_action, player_direction, is_moving, step_counter = self.player_step(
-            player_x, player_y, action, last_directional_action, player_direction, step_counter
+            player_x, player_y, action, last_directional_action, player_direction, step_counter, level
         )
 
         bullet_state, amonition_timer =self.bullet_step(bullet_state, player_x, player_y, amonition_timer, action)
@@ -1127,6 +1184,7 @@ class JaxTutankham(JaxEnvironment):
         done = self._get_done(state)
         info = 0
 
+        jax.debug.print("Player position: ({}, {})", player_x, player_y)
         # return observation, new_state, env_reward, done, info
         return state, state, reward, done, info
 
