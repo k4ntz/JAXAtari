@@ -114,7 +114,15 @@ class GravitarConstants(struct.PyTreeNode):
     SAUCER_EXPLOSION_FRAMES: int = struct.field(pytree_node=False, default=60)
     SAUCER_FIRE_INTERVAL_FRAMES: int = struct.field(pytree_node=False, default=8)
     ENEMY_EXPLOSION_FRAMES: int = struct.field(pytree_node=False, default=60)
+    ENEMY_FIRE_COOLDOWN_FRAMES: int = struct.field(pytree_node=False, default=10)
     PLAYER_FIRE_COOLDOWN_FRAMES: int = struct.field(pytree_node=False, default=8)
+
+    # Bullet caps (moddable)
+    MAX_ACTIVE_PLAYER_BULLETS_MAP: int = struct.field(pytree_node=False, default=1)
+    MAX_ACTIVE_PLAYER_BULLETS_LEVEL: int = struct.field(pytree_node=False, default=2)
+    MAX_ACTIVE_PLAYER_BULLETS_ARENA: int = struct.field(pytree_node=False, default=2)
+    MAX_ACTIVE_SAUCER_BULLETS: int = struct.field(pytree_node=False, default=2)
+    MAX_ACTIVE_ENEMY_BULLETS: int = struct.field(pytree_node=False, default=2)
     
     # Bonuses
     SOLAR_SYSTEM_BONUS_FUEL: float = struct.field(pytree_node=False, default=7000.0)
@@ -165,10 +173,16 @@ SAUCER_INIT_HP = _DEFAULT_CONSTS.SAUCER_INIT_HP
 SAUCER_EXPLOSION_FRAMES = _DEFAULT_CONSTS.SAUCER_EXPLOSION_FRAMES
 SAUCER_FIRE_INTERVAL_FRAMES = _DEFAULT_CONSTS.SAUCER_FIRE_INTERVAL_FRAMES
 ENEMY_EXPLOSION_FRAMES = _DEFAULT_CONSTS.ENEMY_EXPLOSION_FRAMES
+ENEMY_FIRE_COOLDOWN_FRAMES = _DEFAULT_CONSTS.ENEMY_FIRE_COOLDOWN_FRAMES
 PLAYER_FIRE_COOLDOWN_FRAMES = _DEFAULT_CONSTS.PLAYER_FIRE_COOLDOWN_FRAMES
 SOLAR_SYSTEM_BONUS_FUEL = _DEFAULT_CONSTS.SOLAR_SYSTEM_BONUS_FUEL
 SOLAR_SYSTEM_BONUS_LIVES = _DEFAULT_CONSTS.SOLAR_SYSTEM_BONUS_LIVES
 SOLAR_SYSTEM_BONUS_SCORE = _DEFAULT_CONSTS.SOLAR_SYSTEM_BONUS_SCORE
+MAX_ACTIVE_PLAYER_BULLETS_MAP = _DEFAULT_CONSTS.MAX_ACTIVE_PLAYER_BULLETS_MAP
+MAX_ACTIVE_PLAYER_BULLETS_LEVEL = _DEFAULT_CONSTS.MAX_ACTIVE_PLAYER_BULLETS_LEVEL
+MAX_ACTIVE_PLAYER_BULLETS_ARENA = _DEFAULT_CONSTS.MAX_ACTIVE_PLAYER_BULLETS_ARENA
+MAX_ACTIVE_SAUCER_BULLETS = _DEFAULT_CONSTS.MAX_ACTIVE_SAUCER_BULLETS
+MAX_ACTIVE_ENEMY_BULLETS = _DEFAULT_CONSTS.MAX_ACTIVE_ENEMY_BULLETS
 
 
 @jax.jit
@@ -532,6 +546,12 @@ class EnvState(NamedTuple):
     reactor_timer: jnp.ndarray 
     reactor_activated: jnp.ndarray 
     exit_allowed: jnp.ndarray  # bool, whether ship can exit through top of level
+    max_active_player_bullets_map: jnp.ndarray  # int32
+    max_active_player_bullets_level: jnp.ndarray  # int32
+    max_active_player_bullets_arena: jnp.ndarray  # int32
+    max_active_saucer_bullets: jnp.ndarray  # int32
+    max_active_enemy_bullets: jnp.ndarray  # int32
+    enemy_fire_cooldown_frames: jnp.ndarray  # int32
     prev_action: jnp.ndarray  # int32, previous action taken
 
 # ========== Init Function ==========
@@ -827,6 +847,12 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
         reactor_destroyed=jnp.array(False),
         planets_cleared_mask=jnp.zeros(7, dtype=bool),
         exit_allowed=jnp.array(False),
+        max_active_player_bullets_map=jnp.int32(MAX_ACTIVE_PLAYER_BULLETS_MAP),
+        max_active_player_bullets_level=jnp.int32(MAX_ACTIVE_PLAYER_BULLETS_LEVEL),
+        max_active_player_bullets_arena=jnp.int32(MAX_ACTIVE_PLAYER_BULLETS_ARENA),
+        max_active_saucer_bullets=jnp.int32(MAX_ACTIVE_SAUCER_BULLETS),
+        max_active_enemy_bullets=jnp.int32(MAX_ACTIVE_ENEMY_BULLETS),
+        enemy_fire_cooldown_frames=jnp.int32(ENEMY_FIRE_COOLDOWN_FRAMES),
         prev_action=jnp.int32(0),
     )
 
@@ -1445,9 +1471,10 @@ def _saucer_fire_one(sauc: SaucerState,
                      ship_y: jnp.ndarray,
                      prev_enemy_bullets: Bullets,
                      mode_timer: jnp.ndarray,
+               max_active_bullets: jnp.ndarray = jnp.int32(1),
                      ) -> Bullets:
     can_fire = sauc.alive & ((mode_timer % SAUCER_FIRE_INTERVAL_FRAMES) == 0) \
-               & (_bullets_alive_count(prev_enemy_bullets) < jnp.int32(1))
+           & (_bullets_alive_count(prev_enemy_bullets) < max_active_bullets)
 
     def do_fire(_):
         merged = _fire_single_from_to(
@@ -1457,7 +1484,7 @@ def _saucer_fire_one(sauc: SaucerState,
             SAUCER_BULLET_SPEED
         )
 
-        return _enforce_cap_keep_old(merged, cap=1)
+        return _enforce_cap_keep_old(merged, cap=max_active_bullets)
 
     return jax.lax.cond(can_fire, do_fire, lambda _: prev_enemy_bullets, operand=None)
 
@@ -1467,10 +1494,11 @@ def _saucer_fire_random(sauc: SaucerState,
                         prev_enemy_bullets: Bullets,
                         mode_timer: jnp.ndarray,
                         key: jnp.ndarray,
+                        max_active_bullets: jnp.ndarray = jnp.int32(2),
                         ) -> Bullets:
     """Saucer fires in random directions with max 2 bullets"""
     can_fire = sauc.alive & ((mode_timer % SAUCER_FIRE_INTERVAL_FRAMES) == 0) \
-               & (_bullets_alive_count(prev_enemy_bullets) < jnp.int32(2))
+               & (_bullets_alive_count(prev_enemy_bullets) < max_active_bullets)
 
     def do_fire(_):
         # Generate random angle (0 to 2*pi)
@@ -1490,7 +1518,7 @@ def _saucer_fire_random(sauc: SaucerState,
         )
         
         merged = merge_bullets(prev_enemy_bullets, one, max_len=16)
-        return _enforce_cap_keep_old(merged, cap=2)
+        return _enforce_cap_keep_old(merged, cap=max_active_bullets)
 
     return jax.lax.cond(can_fire, do_fire, lambda _: prev_enemy_bullets, operand=None)
 
@@ -1745,7 +1773,7 @@ def step_map(env_state: EnvState, action: int):
     fire_just_pressed = is_fire_pressed & (~was_fire_pressed)
     
     can_fire = fire_just_pressed & (env_state.cooldown == 0) & (
-                _bullets_alive_count(env_state.bullets) < 1)
+                _bullets_alive_count(env_state.bullets) < env_state.max_active_player_bullets_map)
 
     bullets = jax.lax.cond(
         can_fire,
@@ -1796,7 +1824,13 @@ def step_map(env_state: EnvState, action: int):
 
     # Saucer fires in random directions (360 degrees) with max 2 bullets
     fire_key, new_main_key = jax.random.split(new_env.key)
-    enemy_bullets = _saucer_fire_random(sauc_final, new_env.enemy_bullets, mode_timer, fire_key)
+    enemy_bullets = _saucer_fire_random(
+        sauc_final,
+        new_env.enemy_bullets,
+        mode_timer,
+        fire_key,
+        new_env.max_active_saucer_bullets,
+    )
     enemy_bullets = update_bullets(enemy_bullets)
 
     new_env = new_env._replace(
@@ -1993,7 +2027,7 @@ def _step_level_core(env_state: EnvState, action: int):
     fire_just_pressed = is_fire_pressed & (~was_fire_pressed)
     
     can_fire_player = fire_just_pressed & (
-                state_after_spawn.cooldown == 0) & (_bullets_alive_count(state_after_spawn.bullets) < 2)
+                state_after_spawn.cooldown == 0) & (_bullets_alive_count(state_after_spawn.bullets) < state_after_spawn.max_active_player_bullets_level)
 
     bullets = jax.lax.cond(
         can_fire_player,
@@ -2090,7 +2124,19 @@ def _step_level_core(env_state: EnvState, action: int):
 
     # Turrets ready to fire: active, cooldown expired, not exploding, and is a turret
     turrets_ready_mask = (enemies.w > 0) & (current_fire_cooldown == 0) & (enemies.death_timer == 0) & is_turret
-    should_fire_mask = turrets_ready_mask
+
+    current_enemy_bullets_alive = _bullets_alive_count(current_enemy_bullets)
+    space_left_enemy_bullets = jnp.maximum(state_after_ufo.max_active_enemy_bullets - current_enemy_bullets_alive, 0)
+    
+    # Randomly select which ready turrets get to fire if they exceed space_left
+    current_key, rank_key = jax.random.split(current_key)
+    rand_vals = jax.random.uniform(rank_key, shape=turrets_ready_mask.shape)
+    # Assign -1 to non-ready turrets so they rank lowest
+    scores = jnp.where(turrets_ready_mask, rand_vals, -1.0)
+    # Rank: 0 is highest score. Add 1 for each strictly greater score
+    ranks = jnp.sum(scores[:, None] > scores[None, :], axis=0)
+
+    should_fire_mask = turrets_ready_mask & (ranks < space_left_enemy_bullets)
     any_turret_firing = jnp.any(should_fire_mask)
 
     # 3. Calculate the cooldown for the "next frame"
@@ -2098,8 +2144,9 @@ def _step_level_core(env_state: EnvState, action: int):
     next_frame_cooldown = jnp.maximum(current_fire_cooldown - 1, 0)
     # Then, for turrets that "just" fired, reset their cooldown to random interval (60-120 frames)
     # Use deterministic approach: vary based on position
-    base_interval = 60
-    varied_interval = base_interval + jnp.int32((enemies.x * 0.5) % 60)  # Varies by position
+    base_interval = state_after_ufo.enemy_fire_cooldown_frames
+    variance_max = jnp.maximum(jnp.int32(1), base_interval)
+    varied_interval = base_interval + jnp.int32((enemies.x * 0.5) % variance_max)  # Varies by position
     next_frame_cooldown = jnp.where(should_fire_mask, varied_interval, next_frame_cooldown)
 
     # 4. If any turrets are firing, generate new bullets
@@ -2150,6 +2197,7 @@ def _step_level_core(env_state: EnvState, action: int):
 
     # 5. Merge bullets and assign the state to final variables
     enemy_bullets = merge_bullets(current_enemy_bullets, new_enemy_bullets)
+    enemy_bullets = _enforce_cap_keep_old(enemy_bullets, cap=state_after_ufo.max_active_enemy_bullets)
     fire_cooldown = next_frame_cooldown
     key = current_key
     # === Enemy LOGIC Over===
@@ -2388,7 +2436,7 @@ def step_arena(env_state: EnvState, action: int):
     fire_just_pressed = is_fire_pressed & (~was_fire_pressed)
     
     can_fire = fire_just_pressed & (env_state.cooldown == 0) & (
-                _bullets_alive_count(env_state.bullets) < 2)
+                _bullets_alive_count(env_state.bullets) < env_state.max_active_player_bullets_arena)
 
     bullets = jax.lax.cond(
         can_fire,
@@ -2417,6 +2465,7 @@ def step_arena(env_state: EnvState, action: int):
         env_state.enemy_bullets,
         env_state.mode_timer,
         fire_key,
+        env_state.max_active_saucer_bullets,
     )
     enemy_bullets = update_bullets(enemy_bullets)
 
@@ -3182,6 +3231,12 @@ class JaxGravitar(JaxEnvironment):
             reactor_destroyed=final_reactor_destroyed, 
             planets_cleared_mask=final_cleared_mask,
             exit_allowed=jnp.array(False),
+            max_active_player_bullets_map=jnp.int32(self.consts.MAX_ACTIVE_PLAYER_BULLETS_MAP),
+            max_active_player_bullets_level=jnp.int32(self.consts.MAX_ACTIVE_PLAYER_BULLETS_LEVEL),
+            max_active_player_bullets_arena=jnp.int32(self.consts.MAX_ACTIVE_PLAYER_BULLETS_ARENA),
+            max_active_saucer_bullets=jnp.int32(self.consts.MAX_ACTIVE_SAUCER_BULLETS),
+            max_active_enemy_bullets=jnp.int32(self.consts.MAX_ACTIVE_ENEMY_BULLETS),
+            enemy_fire_cooldown_frames=jnp.int32(self.consts.ENEMY_FIRE_COOLDOWN_FRAMES),
             prev_action=jnp.int32(0),
         )
 
