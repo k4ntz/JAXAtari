@@ -1068,6 +1068,15 @@ class JaxTutankham(JaxEnvironment):
         return new_item_states
     
 
+    @partial(jax.jit, static_argnums=(0,))
+    def check_key(self, item_states, has_key):
+        # check if player has collected the key item
+        has_collected_key = item_states[0, 3] == self.consts.INACTIVE # key item is always at index 0 in item_states
+        new_has_key = has_key | has_collected_key
+
+        return new_has_key
+
+
     # score update based on creature deaths & item collections
     @partial(jax.jit, static_argnums=(0,))
     def update_score(self, score, prev_creature_states, new_creature_states, prev_item_states, new_item_states, prev_lives, new_lives):
@@ -1145,6 +1154,9 @@ class JaxTutankham(JaxEnvironment):
              )
         
         item_states = self.resolve_player_item_collisions(player_x, player_y, item_states)
+
+        # check if player has collected the key
+        has_key = self.check_key(item_states, has_key)
   
 
         # TODO: vor update score goal_true ermitteln und update score geben damit score entsprechend gehandled wird
