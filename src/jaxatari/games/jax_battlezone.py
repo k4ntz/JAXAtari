@@ -1091,12 +1091,16 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             )
         )
         enemy_mask = jnp.logical_and(state.enemies.active, enemies_visible)
-        enemies_u = enemy_mask, enemies_u - (enemies_width / 2)
+        enemies_u = enemies_u - (enemies_width / 2)
         enemies = ObjectObservation.create(
             x=enemies_u,
-            y=jnp.full(
-                (len(enemies_u),),
-                self.consts.ENEMY_POS_Y - (enemies_heights / 2)
+            y=jnp.clip(
+                jnp.full(
+                    (len(enemies_u),),
+                    self.consts.ENEMY_POS_Y - (enemies_heights / 2)
+                ), 
+                0, 
+                self.consts.HEIGHT
             ),
             width = enemies_width,
             height = enemies_heights,
@@ -1130,10 +1134,10 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             jnp.atleast_1d(player_projectiles_v - 1),
             enemy_projectiles_v - 1
         ])
-        projectiles_active = jnp.concatenate([state.player_projectile.active, enemy_projectiles_mask])
+        projectiles_active = jnp.concatenate([jnp.atleast_1d(state.player_projectile.active), enemy_projectiles_mask])
         projectiles = ObjectObservation.create(
             x=projectiles_x,
-            y=projectiles_y,
+            y=jnp.clip(projectiles_y, 0, self.consts.HEIGHT),
             width=jnp.full(
                 (len(projectiles_x),),
                 2
