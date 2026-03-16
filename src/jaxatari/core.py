@@ -19,6 +19,7 @@ GAME_MODULES = {
     "breakout": "jaxatari.games.jax_breakout",
     "centipede": "jaxatari.games.jax_centipede",
     "choppercommand": "jaxatari.games.jax_choppercommand",
+    "crossbow": "jaxatari.games.jax_crossbow",
     "enduro": "jaxatari.games.jax_enduro",
     "fishingderby": "jaxatari.games.jax_fishingderby",
     "freeway": "jaxatari.games.jax_freeway",
@@ -60,6 +61,7 @@ MOD_MODULES = {
     "freeway": "jaxatari.games.mods.freeway_mods.FreewayEnvMod",
     "breakout": "jaxatari.games.mods.breakout_mods.BreakoutEnvMod",
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
+    "crossbow": "jaxatari.games.mods.crossbow_mods.CrossbowEnvMod",
 }
 
 
