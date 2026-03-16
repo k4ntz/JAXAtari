@@ -65,19 +65,19 @@ def _get_default_asset_config():
         {"name": "ghost_u1", "type": "single", "file": "ghost_10.npy"},
         {"name": "ghost_u2", "type": "single", "file": "ghost_11.npy"},
         # Skeleton animation frames per direction                          # ENEMY_SKELETON = 3
-        # right(×3): skel_4-6  |  down(×3): skel_7-9  |  left(×3): skel_1-3  |  up(×3): skel_10-12
+        # right(×3): skel_4-6  |  down(×3): skel_left/mid/right  |  left(×3): skel_1-3  |  up(×3): skel_up_left/mid/right
         {"name": "skel_r0", "type": "single", "file": "skel_4.npy"},
         {"name": "skel_r1", "type": "single", "file": "skel_5.npy"},
         {"name": "skel_r2", "type": "single", "file": "skel_6.npy"},
-        {"name": "skel_d0", "type": "single", "file": "skel_7.npy"},
-        {"name": "skel_d1", "type": "single", "file": "skel_8.npy"},
-        {"name": "skel_d2", "type": "single", "file": "skel_9.npy"},
+        {"name": "skel_d0", "type": "single", "file": "skel_left.npy"},
+        {"name": "skel_d1", "type": "single", "file": "skel_mid.npy"},
+        {"name": "skel_d2", "type": "single", "file": "skel_right.npy"},
         {"name": "skel_l0", "type": "single", "file": "skel_1.npy"},
         {"name": "skel_l1", "type": "single", "file": "skel_2.npy"},
         {"name": "skel_l2", "type": "single", "file": "skel_3.npy"},
-        {"name": "skel_u0", "type": "single", "file": "skel_10.npy"},
-        {"name": "skel_u1", "type": "single", "file": "skel_11.npy"},
-        {"name": "skel_u2", "type": "single", "file": "skel_12.npy"},
+        {"name": "skel_u0", "type": "single", "file": "skel_up_left.npy"},
+        {"name": "skel_u1", "type": "single", "file": "skel_up_mid.npy"},
+        {"name": "skel_u2", "type": "single", "file": "skel_up_right.npy"},
         # Wizard animation frames per direction                            # ENEMY_WIZARD = 4
         # right(×3): wizard_1-3  |  down(×5): wizard_4-8  |  up(×5): wizard_9-13  |  left(×3): wizard_14-16
         {"name": "wizard_r0", "type": "single", "file": "wizard_1.npy"},
@@ -133,7 +133,7 @@ GRID_W = WORLD_W // CELL_SIZE
 GRID_H = WORLD_H // CELL_SIZE
 BIG_DIST = 10_000                  # "infinity" for distance field
 
-NUM_ENEMIES = 20  # Increased to allow more spawned enemies
+NUM_ENEMIES = 10  # Increased to allow more spawned enemies
 NUM_SPAWNERS = 3  # Spawner entities
 
 # Enemy types (5 = strongest, 1 = weakest)
@@ -217,7 +217,7 @@ SPAWNER_HEALTH = 3  # Takes 3 hits to destroy
 SPAWNER_SPAWN_INTERVAL = 320  # Spawn enemies significantly less often
 
 ENEMY_COLLISION_MARGIN = 1
-ENEMY_MOVE_EVERY = 2  # Enemies move every N game steps (used for movement throttle and animation timing)
+ENEMY_MOVE_EVERY = 4  # Enemies move every N game steps (used for movement throttle and animation timing)
 
 # Directional sprite index lookup tables.
 # Sprite order stored in PLAYER_DIRECTIONAL_MASKS / ENEMY_DIRECTIONAL_MASKS:
@@ -312,9 +312,9 @@ class DarkChambersConstants(NamedTuple):
     
     # Sizes
     PLAYER_WIDTH: int = 12
-    PLAYER_HEIGHT: int = 24  # Double height for human-like shape
+    PLAYER_HEIGHT: int = 28
     ENEMY_WIDTH: int = 10
-    ENEMY_HEIGHT: int = 20  # Double height for human-like shape
+    ENEMY_HEIGHT: int = 28
     
     PLAYER_SPEED: int = 1
     WALL_THICKNESS: int = 8
@@ -408,6 +408,7 @@ class DarkChambersState(NamedTuple):
     hammer_count: chex.Array    # number of hammers (0-MAX_HAMMERS)
     last_fire_step: chex.Array  # step counter when fire was last pressed (for double-tap)
     last_shot_step: chex.Array  # step counter when a bullet was actually spawned
+    fire_was_pressed: chex.Array  # 1 if fire was pressed last step (for single-shot detection)
     
     current_level: chex.Array   # current level index (0 to MAX_LEVELS-1)
     map_index: chex.Array       # current map variant (0=middle, 1=left, 2=right)
@@ -2685,6 +2686,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             hammer_count=jnp.array(0, dtype=jnp.int32),
             last_fire_step=jnp.array(-1000, dtype=jnp.int32),  # Initialize to far past
             last_shot_step=jnp.array(-1000, dtype=jnp.int32),  # Initialize to far past
+            fire_was_pressed=jnp.array(0, dtype=jnp.int32),
             current_level=jnp.array(0, dtype=jnp.int32),  # Start at level 0
             map_index=jnp.array(0, dtype=jnp.int32),  # Start at middle map
             ladder_timer=jnp.array(0, dtype=jnp.int32),   # Not on ladder initially
@@ -2782,7 +2784,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             player_moving = jnp.where((dx != 0) | (dy != 0), 1, 0).astype(jnp.int32)
             
             # --- SLOW DOWN PLAYER MOVEMENT ---
-            PLAYER_MOVE_EVERY = 1  # 1=normal, 2=half speed, 3=1/3 speed, etc.
+            PLAYER_MOVE_EVERY = 2  # 1=normal, 2=half speed, 3=1/3 speed, etc.
             player_move_tick = (state.step_counter % PLAYER_MOVE_EVERY) == 0
 
             dx = jnp.where(player_move_tick, dx, 0)
@@ -2959,17 +2961,21 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             fire_pressed = (a == Action.FIRE) | (a == Action.UPFIRE) | (a == Action.DOWNFIRE) | (a == Action.LEFTFIRE) | (a == Action.RIGHTFIRE) | \
                            (a == Action.UPRIGHTFIRE) | (a == Action.UPLEFTFIRE) | (a == Action.DOWNRIGHTFIRE) | (a == Action.DOWNLEFTFIRE)
             
+            # Only fire on initial press, not while held
+            fire_just_pressed = fire_pressed & (state.fire_was_pressed == 0)
+
             # Double-tap detection: fire pressed within DOUBLE_TAP_WINDOW steps
             steps_since_last_fire = state.step_counter - state.last_fire_step
-            is_double_tap = fire_pressed & (steps_since_last_fire <= DOUBLE_TAP_WINDOW) & (steps_since_last_fire > 0)
+            is_double_tap = fire_just_pressed & (steps_since_last_fire <= DOUBLE_TAP_WINDOW) & (steps_since_last_fire > 0)
             has_bombs = state.bomb_count > 0
             has_hammer = state.hammer_count > 0
             # Hammer: activated by dedicated H key (Action.HAMMER)
             should_use_hammer = (a == Action.HAMMER) & has_hammer
             should_detonate_bomb = is_double_tap & has_bombs
             
-            # Update last_fire_step when fire is pressed
-            new_last_fire_step = jnp.where(fire_pressed, state.step_counter, state.last_fire_step)
+            # Update last_fire_step when fire is first pressed
+            new_last_fire_step = jnp.where(fire_just_pressed, state.step_counter, state.last_fire_step)
+            new_fire_was_pressed = fire_pressed.astype(jnp.int32)
             
             # Find first inactive bullet slot
             first_inactive = jnp.argmax(state.bullet_active == 0)
@@ -2979,7 +2985,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             # Fire rate limiting: ensure minimum time between shots
             # Gun powerup lowers the delay further for faster follow-up shots
             fire_rate_threshold = jnp.where(state.gun_active == 1, FIRE_RATE_LIMIT_WITH_GUN, FIRE_RATE_LIMIT)
-            can_fire_now = steps_since_last_shot >= fire_rate_threshold
+            can_fire_now = fire_just_pressed & (steps_since_last_shot >= fire_rate_threshold)
             can_spawn = can_spawn & can_fire_now
             
             # Determine bullet speed based on gun powerup
@@ -3407,7 +3413,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             new_dir = jax.random.randint(sk, (NUM_ENEMIES,), 0, 8, dtype=jnp.int32)
 
             rng, sk = jax.random.split(rng)
-            new_idle_len = jax.random.randint(sk, (NUM_ENEMIES,), 15, 80, dtype=jnp.int32)
+            new_idle_len = jax.random.randint(sk, (NUM_ENEMIES,), 300, 700, dtype=jnp.int32)
 
             enemy_dir = jnp.where(pick_new_dir, new_dir, state.enemy_dir)
             idle_timer = jnp.where(pick_new_dir, new_idle_len, idle_timer)
@@ -3430,7 +3436,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
             # This becomes your patrol baseline positions
             patrol_positions = cand_enemy_positions
-            new_enemy_dir = enemy_dir
 
 
             # --- Select mode (chase/confuse overrides wander) ---
@@ -3453,6 +3458,26 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 state.enemy_positions,
                 state.enemy_active,
             )
+
+            # --- Derive animation direction from actual movement ---
+            # This ensures up/down sprites play when chasing north/south, not just during patrol
+            actual_delta = new_enemy_positions - state.enemy_positions
+            dx = actual_delta[:, 0]
+            dy = actual_delta[:, 1]
+            # DIR8: 0=E(1,0) 1=NE(1,-1) 2=N(0,-1) 3=NW(-1,-1) 4=W(-1,0) 5=SW(-1,1) 6=S(0,1) 7=SE(1,1)
+            actual_dir8 = jnp.where(
+                (dx > 0) & (dy > 0), 7,
+                jnp.where((dx > 0) & (dy < 0), 1,
+                jnp.where((dx < 0) & (dy > 0), 5,
+                jnp.where((dx < 0) & (dy < 0), 3,
+                jnp.where(dx > 0, 0,
+                jnp.where(dx < 0, 4,
+                jnp.where(dy > 0, 6,
+                jnp.where(dy < 0, 2,
+                enemy_dir
+                ))))))))
+            is_moving = jnp.any(actual_delta != 0, axis=1)
+            new_enemy_dir = jnp.where(is_moving, actual_dir8, enemy_dir)
 
             # --- Stuck detection => confuse (only while chasing) ---
             moved = jnp.any(new_enemy_positions != state.enemy_positions, axis=1)
@@ -3689,7 +3714,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             # Generate random values for each enemy to determine if they drop items
             rng, drop_rng = jax.random.split(rng)
             drop_chances = jax.random.uniform(drop_rng, shape=(NUM_ENEMIES,))
-            should_drop = zombies_just_killed & (drop_chances < 0.2)  # 20% chance
+            should_drop = zombies_just_killed & (drop_chances < 0.05)  # 5% chance
             
             # Find inactive item slots to spawn drops
             def try_spawn_item_drop(idx, carry):
@@ -4462,6 +4487,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 hammer_count=hammer_count_after_use,
                 last_fire_step=new_last_fire_step,
                 last_shot_step=new_last_shot_step,
+                fire_was_pressed=new_fire_was_pressed,
                 current_level=new_level,
                 map_index=new_map_index,
                 ladder_timer=new_ladder_timer,
