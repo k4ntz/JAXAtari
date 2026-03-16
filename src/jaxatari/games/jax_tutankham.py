@@ -117,6 +117,7 @@ def _get_default_asset_config() -> tuple:
         # {'name': 'flashbangs', 'type': 'single', 'pattern': 'flashbangs.npy'},
         # {'name': 'points', 'type': 'digits', 'pattern': 'lives.npy'},
         # {'name': 'time', 'type': 'single', 'pattern': 'time.npy'},
+        {'name': 'goal', 'type': 'single', 'file': 'room_exitdoor.npy'},
         {'name': 'header_footer', 'type': 'single', 'file': 'ui_header_footer.npy'},
         {'name': 'background', 'type': 'background', 'file': 'background_full.npy'},
     )
@@ -664,6 +665,18 @@ class TutankhamRenderer(JAXGameRenderer):
                               ),
                               lambda r: r,
                               raster)
+                              
+        raster = jax.lax.cond(is_onscreen(self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 1], 8, camera_offset),
+                              lambda r: self.jr.render_at_clipped(
+                                  raster,
+                                  self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 0],
+                                  self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 1] - camera_offset,
+                                  self.SHAPE_MASKS["goal"],
+                                  flip_offset=ZERO_FLIP
+                                  # self.FLIP_OFFSETS['player_group'],
+                              ),
+                              lambda r: r,
+                              raster)
         # 6. Render Bullets
         raster = jax.lax.cond(state.bullet_state[3] == 1,
                               lambda r: self.jr.render_at_clipped(
@@ -805,15 +818,6 @@ class JaxTutankham(JaxEnvironment):
                                )
         return state, state #TODO: (EnvObs, EnvState)
 
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def is_onscreen(self,y: jax.Array, height: jax.Array, camera_offset: jax.Array) -> jnp.ndarray:
-        """
-        Returns True if a sprite's top edge is above the bottom footer (y=175) and its bottom edge is below the top header (y=35).
-        """
-        sprite_top_edge = y - camera_offset
-        sprite_bottom_edge = sprite_top_edge + height
-        return jnp.logical_and(sprite_bottom_edge > 35, sprite_top_edge < 175)
     
     @partial(jax.jit, static_argnums=(0,))
     def teleporter_check(self, player_x, player_y, action, level):
@@ -1022,7 +1026,7 @@ class JaxTutankham(JaxEnvironment):
 
             # deactivate creature if it is off screen
             # check  which spawners are on screen # TODO: height is currently hardcoded to one specific creature size
-            creature_on_screen = self.is_onscreen(creature_y, self.consts.CREATURE_SIZE[1], camera_offset)
+            creature_on_screen = is_onscreen(creature_y, self.consts.CREATURE_SIZE[1], camera_offset)
             active_new = jnp.where(creature_on_screen, active_new, self.consts.INACTIVE)
 
             # If inactive, reset position to (0, 0)
@@ -1048,7 +1052,7 @@ class JaxTutankham(JaxEnvironment):
         new_last_creature_spawn = last_creature_spawn + 1
 
         # check  which spawners are on screen # TODO: height 
-        on_screen_mask = jax.vmap(self.is_onscreen, in_axes=(0, None, None))(spawners[:, 1], 1, camera_offset)
+        on_screen_mask = jax.vmap(is_onscreen, in_axes=(0, None, None))(spawners[:, 1], 1, camera_offset)
         any_on_screen = jnp.any(on_screen_mask)
 
         # Spawn chance grows linearly with time, capped at MAX_PROB
