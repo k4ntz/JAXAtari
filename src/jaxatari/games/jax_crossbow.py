@@ -142,6 +142,7 @@ class CrossbowConstants(NamedTuple):
     # --- Player / Cursor ---
     CURSOR_SPEED: int = 2
     CURSOR_SIZE: Tuple[int, int] = (2, 2)
+    FIRE_COOLDOWN_DURATION: int = 10
     CURSOR_VISIBLE_ON_FIRE_ONLY: bool = False
 
     # --- Friend ---
@@ -154,7 +155,6 @@ class CrossbowConstants(NamedTuple):
     # --- Game Flow ---
     MAX_LIVES: int = 3
     DYING_DURATION: int = 45
-    GET_READY_DURATION: int = 180
     FADE_OUT_DURATION: int = 45
     FADE_IN_DURATION: int = 30
     MAX_SCATTER_PIXELS: int = 100
@@ -233,6 +233,7 @@ class CrossbowState(NamedTuple):
     rope_1_broken: chex.Array
     rope_2_broken: chex.Array
     eye_appeared: chex.Array
+    fire_cooldown: chex.Array
 
 
 # --- OBSERVATION & INFO ---
@@ -398,6 +399,9 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         return new_state, is_game_over
 
     def _cursor_step(self, state: CrossbowState, action: chex.Array) -> CrossbowState:
+        is_fire = jnp.isin(action, jnp.array([Action.FIRE, Action.UPFIRE, Action.RIGHTFIRE, Action.LEFTFIRE, Action.DOWNFIRE, Action.UPRIGHTFIRE, Action.UPLEFTFIRE, Action.DOWNRIGHTFIRE, Action.DOWNLEFTFIRE]))
+        new_cooldown = jnp.where(is_fire, self.consts.FIRE_COOLDOWN_DURATION, jnp.maximum(0, state.fire_cooldown - 1))
+        can_move = state.fire_cooldown == 0
         is_up = jnp.isin(action, jnp.array([Action.UP, Action.UPRIGHT, Action.UPLEFT, Action.UPFIRE, Action.UPRIGHTFIRE, Action.UPLEFTFIRE]))
         is_down = jnp.isin(action, jnp.array([Action.DOWN, Action.DOWNRIGHT, Action.DOWNLEFT, Action.DOWNFIRE, Action.DOWNRIGHTFIRE, Action.DOWNLEFTFIRE]))
         is_left = jnp.isin(action, jnp.array([Action.LEFT, Action.UPLEFT, Action.DOWNLEFT, Action.LEFTFIRE, Action.UPLEFTFIRE, Action.DOWNLEFTFIRE]))
@@ -406,10 +410,11 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         dx = jnp.where(is_right, self.consts.CURSOR_SPEED, dx)
         dy = jnp.where(is_up, -self.consts.CURSOR_SPEED, 0)
         dy = jnp.where(is_down, self.consts.CURSOR_SPEED, dy)
+        dx = jnp.where(can_move, dx, 0)
+        dy = jnp.where(can_move, dy, 0)
         new_x = jnp.clip(state.cursor_x + dx, 13, self.consts.WIDTH - 5 - self.consts.CURSOR_SIZE[0])
         new_y = jnp.clip(state.cursor_y + dy, 18, self.consts.PLAY_AREA_HEIGHT - self.consts.CURSOR_SIZE[1])
-        is_fire = jnp.isin(action, jnp.array([Action.FIRE, Action.UPFIRE, Action.RIGHTFIRE, Action.LEFTFIRE, Action.DOWNFIRE, Action.UPRIGHTFIRE, Action.UPLEFTFIRE, Action.DOWNRIGHTFIRE, Action.DOWNLEFTFIRE]))
-        return state._replace(cursor_x=new_x.astype(jnp.int32), cursor_y=new_y.astype(jnp.int32), is_firing=is_fire)
+        return state._replace(cursor_x=new_x.astype(jnp.int32), cursor_y=new_y.astype(jnp.int32), is_firing=is_fire, fire_cooldown=new_cooldown.astype(jnp.int32))
 
     def _friend_step(self, state: CrossbowState) -> CrossbowState:
         is_dying = state.dying_timer > 0
@@ -1451,8 +1456,8 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             lives=jnp.array(self.consts.MAX_LIVES, dtype=jnp.int32), step_counter=jnp.array(0, dtype=jnp.int32), key=state_key,
             rope_1_broken=jnp.array(False), rope_2_broken=jnp.array(False),
            
-            eye_appeared=jnp.array(False)
-            
+            eye_appeared=jnp.array(False),
+            fire_cooldown=jnp.array(0, dtype=jnp.int32)
         )
         return self.get_obs(state), state
 
@@ -1677,7 +1682,8 @@ class CrossbowRenderer(JAXGameRenderer):
             lambda r: r,
             raster
         )
-        raster = jax.lax.cond(state.is_firing, lambda r: self.jr.render_at(r, state.cursor_x, state.cursor_y, self.SHAPE_MASKS["shot"]), lambda r: r, raster)
+        show_shot = jnp.logical_or(state.is_firing, state.fire_cooldown > 0)
+        raster = jax.lax.cond(show_shot, lambda r: self.jr.render_at(r, state.cursor_x, state.cursor_y, self.SHAPE_MASKS["shot"]), lambda r: r, raster)
         score_digits = self.jr.int_to_digits(state.score, max_digits=6)
         num_digits = jnp.select([state.score < 10, state.score < 100, state.score < 1000, state.score < 10000, state.score < 100000], [1, 2, 3, 4, 5], 6)
         raster = self.jr.render_label_selective(raster, 98 - 8 * (num_digits - 1), 186, score_digits, self.SHAPE_MASKS["digits"], 6 - num_digits, num_digits, spacing=8, max_digits_to_render=6)
