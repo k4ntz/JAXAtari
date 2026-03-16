@@ -628,11 +628,6 @@ class JaxTutankham(JaxEnvironment):
             Action.UPLEFTFIRE,
             Action.UPRIGHTFIRE
         ]
-        
-
-    @partial(jax.jit, static_argnums=(0,))
-    def map_transition(self, state: TutankhamState) -> TutankhamState:
-        return state._replace()
 
     # -----------------------------
     # Reset
@@ -650,20 +645,14 @@ class JaxTutankham(JaxEnvironment):
         amonition_timer = self.consts.AMMO_SUPPLY
         bullet_state = jnp.array([0, 0, 0, 0], dtype=jnp.int32)  # (x, y, bullet_rotation, bullet_active)
         creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
-
-        load_items = self.consts.MAP_ITEMS[level%4]  # (7, 3) array (x, y, item_type) padded
-        n_real_items = self.consts.MAP_N_ITEMS[level%4]  # number of actual items (non-padded)
-        #TODO:
-        # Only mark real items as active; padding rows stay inactive
-        active = (jnp.arange(load_items.shape[0]) < n_real_items).astype(jnp.int32).reshape(-1, 1)
-        item_states = jnp.hstack([load_items, active])  # (7, 4) array for map_4 or (6, 4) for all other maps (x, y, item_type, active)
-
+        item_states = self.initialize_item_state(level)  # (N, 4) array with (x, y, item_type, active)
         last_creature_spawn = 0
         laser_flash_count = self.consts.MAX_LASER_FLASHES
         laser_flash_cooldown = self.consts.LASER_FLASH_COOLDOWN
         has_key = False
         player_direction = 3  # Start facing RIGHT
         is_moving = False
+        last_directional_action = 0
         step_counter = 0
 
         camera_offset = jnp.where(start_x < self.consts.HEIGHT // 2, 0, start_y - self.consts.HEIGHT // 2)
@@ -685,12 +674,24 @@ class JaxTutankham(JaxEnvironment):
                                 is_moving=is_moving,
                                 step_counter=step_counter,
                                 has_key=has_key,
-                                last_directional_action=0,
+                                last_directional_action=last_directional_action,
                                 rng_key=key,
                                 camera_offset=camera_offset,
                                 goal_reached=goal_reached
                                )
         return state, state #TODO: (EnvObs, EnvState)
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def initialize_item_state(self, level):
+
+        load_items = self.consts.MAP_ITEMS[level%4]  # (7, 3) array (x, y, item_type) padded
+        n_real_items = self.consts.MAP_N_ITEMS[level%4]  # number of actual items without padding
+        #TODO:
+        # Only mark real items as active; padding rows stay inactive
+        active = (jnp.arange(load_items.shape[0]) < n_real_items).astype(jnp.int32).reshape(-1, 1)
+        item_states = jnp.hstack([load_items, active])  # (7, 4) array for map_4 or (6, 4) for all other maps (x, y, item_type, active)
+
+        return item_states
     
     @partial(jax.jit, static_argnums=(0,))
     def is_onscreen(self,y: jax.Array, height: jax.Array, camera_offset: jax.Array) -> jnp.ndarray:
@@ -1126,7 +1127,7 @@ class JaxTutankham(JaxEnvironment):
     @partial(jax.jit, static_argnums=(0,))
     def check_goal(self, player_x, player_y, has_key, level):
         # check if collides with goal and has the key to complete the level
-        goal_position = self.consts.MAP_GOAL_POSITIONS[level%4] # (x, y) coordinates of the goal tile for current level
+        goal_position = self.consts.MAP_GOAL_POSITIONS[level%4, 0] # (x, y) coordinates of the goal tile for current level
         on_goal = self.check_entity_collision(
             player_x, player_y, self.consts.PLAYER_SIZE,
             goal_position[0], goal_position[1], self.consts.GOAL_SIZE
@@ -1134,6 +1135,42 @@ class JaxTutankham(JaxEnvironment):
         complete_level = on_goal & has_key
 
         return complete_level
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def map_transition(self, goal_reached, level, 
+                       player_x, player_y, bullet_state, 
+                       creature_states, item_states, 
+                       last_creature_spawn, amonition_timer, 
+                       laser_flash_cooldown, has_key):
+        '''
+        If goal_reached is True:
+        increment level,
+        reset player position to start coordinates of the next level, 
+        reset bullet state, 
+        reset creature states, 
+        initialize item states for the new level, 
+        reset last creature spawn timer to zero, 
+        reset amonition timer, 
+        set laser flash cooldown to zero, 
+        reset has_key to False
+        '''
+
+        level = jnp.where(goal_reached, level + 1, level)
+        player_x = jnp.where(goal_reached, self.consts.MAP_CHECKPOINTS[level%4, 0, 2], player_x) # respawn_x of first checkpoint is the start coordinates for each map
+        player_y = jnp.where(goal_reached, self.consts.MAP_CHECKPOINTS[level%4, 0, 3], player_y) # respawn_y of first checkpoint is the start coordinates for each map
+        bullet_state = jnp.where(goal_reached, jnp.zeros((4,), dtype=bullet_state.dtype), bullet_state)
+        creature_states = jnp.where(goal_reached, jnp.zeros_like(creature_states), creature_states)
+        item_states = jnp.where(goal_reached, self.initialize_item_state(level), item_states)
+        last_creature_spawn = jnp.where(goal_reached, 0, last_creature_spawn)
+        amonition_timer = jnp.where(goal_reached, self.consts.AMMO_SUPPLY, amonition_timer)
+        laser_flash_cooldown = jnp.where(goal_reached, 0, laser_flash_cooldown)
+        has_key = jnp.where(goal_reached, False, has_key)
+
+        # TODO: add rendering stuff for level transition
+        return level, player_x, player_y, bullet_state, creature_states, item_states, last_creature_spawn, amonition_timer, laser_flash_cooldown, has_key
+
+    
+    # TODO: END of GAME logic level = 16
 
 
     # score update based on creature deaths & item collections
@@ -1235,10 +1272,6 @@ class JaxTutankham(JaxEnvironment):
         # check if player has reached the goal with the key to complete the level
         goal_reached = self.check_goal(player_x, player_y, has_key, level)
 
-
-  
-
-        # TODO: vor update score goal_true ermitteln und update score geben damit score entsprechend gehandled wird
         # Update score based on creature deaths & items collected
         tutankham_score = self.update_score(tutankham_score, 
                                             prev_creature_states, creature_states, 
@@ -1246,6 +1279,17 @@ class JaxTutankham(JaxEnvironment):
                                             prev_lives, player_lives,
                                             goal_reached, amonition_timer
                                             )
+        
+        # Prepares state for the next level if goal is reached for current level
+        (level, player_x, player_y, 
+         bullet_state, creature_states, item_states, 
+         last_creature_spawn, amonition_timer, laser_flash_cooldown, 
+         has_key) = self.map_transition(
+             goal_reached, level, 
+             player_x, player_y, bullet_state, 
+             creature_states, item_states, 
+             last_creature_spawn, amonition_timer, 
+             laser_flash_cooldown, has_key)
 
 
 
