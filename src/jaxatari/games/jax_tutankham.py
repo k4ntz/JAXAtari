@@ -653,7 +653,7 @@ class TutankhamRenderer(JAXGameRenderer):
         # 3. Render Walls
         # 4. Render Teleporter and Spawner
         # 5. Render Treasures
-        raster = jax.lax.cond(state.item_states[0][3] == 1,
+        raster = jax.lax.cond(state.item_states[0][3] == 1 & is_onscreen(state.item_states[0][1], 8, camera_offset),
                               lambda r: self.jr.render_at_clipped(
                                   r,
                                   state.item_states[0][0],
@@ -784,24 +784,24 @@ class JaxTutankham(JaxEnvironment):
 
         state = TutankhamState(level=level,
                                player_x=start_x,
-                                player_y=start_y,
-                                tutankham_score=tutankham_score,
-                                player_lives=player_lives,
-                                bullet_state=bullet_state,
-                                amonition_timer=amonition_timer,
-                                creature_states=creature_states,
-                                item_states=item_states,
-                                last_creature_spawn=last_creature_spawn,
-                                laser_flash_count=laser_flash_count,
-                                laser_flash_cooldown=laser_flash_cooldown,
-                                player_direction=player_direction,
-                                is_moving=is_moving,
-                                step_counter=step_counter,
-                                has_key=has_key,
-                                last_directional_action=last_directional_action,
-                                rng_key=key,
-                                camera_offset=camera_offset,
-                                goal_reached=goal_reached
+                               player_y=start_y,
+                               tutankham_score=tutankham_score,
+                               player_lives=player_lives,
+                               bullet_state=bullet_state,
+                               amonition_timer=amonition_timer,
+                               creature_states=creature_states,
+                               item_states=item_states,
+                               last_creature_spawn=last_creature_spawn,
+                               laser_flash_count=laser_flash_count,
+                               laser_flash_cooldown=laser_flash_cooldown,
+                               player_direction=player_direction,
+                               is_moving=is_moving,
+                               step_counter=step_counter,
+                               has_key=has_key,
+                               last_directional_action=last_directional_action,
+                               rng_key=key,
+                               camera_offset=camera_offset,
+                               goal_reached=goal_reached
                                )
         return state, state #TODO: (EnvObs, EnvState)
     
