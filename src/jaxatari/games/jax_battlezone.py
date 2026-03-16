@@ -1702,7 +1702,11 @@ class BattlezoneRenderer(JAXGameRenderer):
             def render_single_enemy_wrapped(raster, enemy):  # so that i dont have to pass self
                 return self.render_single_enemy(raster, enemy), None
 
-            raster, _ = jax.lax.scan(render_single_enemy_wrapped, raster, state.enemies)
+            # most distant first
+            order = jnp.argsort(state.enemies.distance)[::-1]
+            enemies_sorted = jax.tree.map(lambda x: x[order], state.enemies)
+
+            raster, _ = jax.lax.scan(render_single_enemy_wrapped, raster, enemies_sorted)
 
             #------------------------------projectiles---------------
             raster = self.render_single_projectile(raster, state.player_projectile)
