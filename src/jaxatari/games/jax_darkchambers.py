@@ -252,7 +252,7 @@ IDLE_SPEED = 1              # pixels per step (keep <= 1 for fewer collision iss
 
 # --- Enemy patrol/aggro state machine params ---
 AGGRO_EVAL_EVERY = 12      # every N ticks, decide whether to aggro
-AGGRO_RADIUS = 80          # reuse/replace CHASE_RADIUS if you want
+AGGRO_RADIUS = 80
 CHASE_TICKS = 90           # T_chase: how long to chase once triggered
 CONFUSE_TICKS = 30         # back-off/confuse duration
 CONFUSE_PROB_NUM = 1       # probability = CONFUSE_PROB_NUM / CONFUSE_PROB_DEN
@@ -2870,7 +2870,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                     ),
                 )
 
-                # NOTE: your enemy portal logic currently uses only the *middle* portal.
                 portal_hole_height = 40
                 portal_y_start = (self.consts.WORLD_HEIGHT - portal_hole_height) // 2
                 portal_y_end = portal_y_start + portal_hole_height
@@ -3182,7 +3181,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             dist2 = dxy[:, 0] * dxy[:, 0] + dxy[:, 1] * dxy[:, 1]
             in_aggro = dist2 <= (AGGRO_RADIUS * AGGRO_RADIUS)
 
-            stuck_counter = state.enemy_stuck_counter  # if you use it later
+            stuck_counter = state.enemy_stuck_counter
 
             # --- Parameters: tweak these to make enemies chase less/more ---
             NUDGE_RADIUS = 90          # px: only nudge if player is close (smaller => less chasing)
@@ -3199,7 +3198,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             chase_timer = jnp.maximum(state.enemy_chase_timer - 1, 0)     # now used as "nudge_timer"
             confuse_timer = jnp.maximum(state.enemy_confuse_timer - 1, 0)
 
-            # close-by check (override your in_aggro)
             in_nudge_radius = dist2 <= (NUDGE_RADIUS * NUDGE_RADIUS)
 
             # Random trigger to start a nudge burst
@@ -3213,10 +3211,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             rng, sk = jax.random.split(rng)
             burst_len = jax.random.randint(sk, (NUM_ENEMIES,), NUDGE_MIN, NUDGE_MAX + 1, dtype=jnp.int32)
             chase_timer = jnp.where(start_nudge, burst_len, chase_timer)
-
-            # Optional: keep your confuse logic, but make it rarer / only when stuck (recommended)
-            # If you want to keep random confuse, leave this in, but set probs very low.
-
 
             need_field = jnp.any((chase_timer > 0) & enemy_alive)
 
@@ -3384,7 +3378,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 [-1,  0], [-1,  1], [ 0,  1], [ 1,  1],
             ], dtype=jnp.int32)
 
-            IDLE_SPEED = 1  # or 2 if you want them more active
+            IDLE_SPEED = 1
 
             idle_timer = jnp.maximum(state.enemy_idle_timer - 1, 0)
             pause_timer = jnp.maximum(state.enemy_pause_timer - 1, 0)
@@ -3434,7 +3428,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             # If stuck, force direction change next tick
             idle_timer = jnp.where(stuck_now, 0, idle_timer)
 
-            # This becomes your patrol baseline positions
             patrol_positions = cand_enemy_positions
 
 
@@ -3450,7 +3443,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             enemy_move_tick = (state.step_counter % ENEMY_MOVE_EVERY) == 0
             desired_step = jnp.where(enemy_move_tick, desired_step, jnp.zeros_like(desired_step))
 
-            # --- Move with your existing move_enemy() / overlap resolve ---
             new_enemy_positions = jax.vmap(move_enemy)(state.enemy_positions, desired_step)
 
             new_enemy_positions = resolve_enemy_overlaps(
