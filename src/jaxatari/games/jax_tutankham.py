@@ -480,7 +480,7 @@ def can_walk_to(entity_size: jax.Array, new_x: jax.Array, new_y: jax.Array, old_
     player_x = jnp.where(is_walkable, new_x, old_x)
     player_y = jnp.where(is_walkable, new_y, old_y)
     player_x = jnp.clip(player_x, 0, 160 - 1)
-    player_y = jnp.clip(player_y, 0, 210 - 1)
+    player_y = jnp.clip(player_y, 0, valid_pos_mat.shape[0] - 1)
     return player_x, player_y, is_walkable
 
 @staticmethod
