@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.othello_mod_plugins import (
-    RandomAIMod,
+    MinMaxAIMod,
     LargeBoardMod,
     SmallBoardMod,
     BombMod
@@ -15,7 +15,7 @@ class OthelloEnvMod(JaxAtariModController):
     """
 
     REGISTRY = {
-        "random_ai": RandomAIMod,
+        "min_max_ai": MinMaxAIMod,
         "large_board": LargeBoardMod,
         "small_board": SmallBoardMod,
         "bomb": BombMod,

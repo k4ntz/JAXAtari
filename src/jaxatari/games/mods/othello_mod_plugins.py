@@ -5,57 +5,72 @@ from typing import Tuple
 from jaxatari.games.jax_othello import OthelloState
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
 
-class RandomAIMod(JaxAtariInternalModPlugin):
+class MinMaxAIMod(JaxAtariInternalModPlugin):
     @partial(jax.jit, static_argnums=(0,))
-    def _ai_turn(self, state: OthelloState) -> OthelloState:
+    def _ai_turn(self, state):
         AI_PLAYER = self._env.consts.PLAYER_2
+        OPPONENT = self._env.consts.PLAYER_1
+        BOARD_DIM = self._env.consts.BOARD_SIZE
+        COUNT_FIELDS = BOARD_DIM * BOARD_DIM
+
+        def _simulate_move(board, y, x, player):
+            mask = self._env._get_flip_mask(board, y, x, player)
+            nb = board.at[y, x].set(player)
+            nb = jnp.where(mask, player, nb)
+            return nb
+
+        def _evaluate_board(board, last_y, last_x):
+            pos_score = self._env._get_dynamic_position_score(board, last_y, last_x)
+            p1_count, p2_count = self._env._count_pieces(board)
+            material_score = p2_count - p1_count
+            return (material_score + pos_score).astype(jnp.float32)
 
         def _score_root_move(idx):
-            y, x = idx // self._env.consts.BOARD_SIZE, idx % self._env.consts.BOARD_SIZE
+            y, x = idx // BOARD_DIM, idx % BOARD_DIM
             is_valid = self._env._is_valid_move(state.board, y, x, AI_PLAYER)
-            return jax.lax.select(is_valid, 0.0, -1e9)
 
-        all_scores = jax.vmap(_score_root_move)(jnp.arange(self._env.consts.BOARD_SIZE * self._env.consts.BOARD_SIZE))
+            def _get_score():
+                my_board = _simulate_move(state.board, y, x, AI_PLAYER)
+                return _evaluate_board(my_board, y, x)
+
+            return jax.lax.cond(is_valid, _get_score, lambda: -1e9)
+
+        all_scores = jax.vmap(_score_root_move)(jnp.arange(COUNT_FIELDS))
 
         rng_key = jax.random.PRNGKey(state.lfsr_state)
-        noise = jax.random.uniform(rng_key, shape=(self._env.consts.BOARD_SIZE * self._env.consts.BOARD_SIZE,), minval=0.0, maxval=0.1)
-        scores_with_noise = all_scores + noise
-
-        best_idx = jnp.argmax(scores_with_noise)
+        noise = jax.random.uniform(rng_key, shape=(COUNT_FIELDS,), minval=0.0, maxval=0.1)
+        best_idx = jnp.argmax(all_scores + noise)
         best_score = jnp.max(all_scores)
-
+        
         next_lfsr = self._env._atari_lfsr_step(state.lfsr_state)
 
         def _execute_move():
-            y = best_idx // self._env.consts.BOARD_SIZE
-            x = best_idx % self._env.consts.BOARD_SIZE
+            y, x = best_idx // BOARD_DIM, best_idx % BOARD_DIM
             flip_mask = self._env._get_flip_mask(state.board, y, x, AI_PLAYER)
-
-            return state._replace(
-                cursor_y=jnp.array(y, dtype=jnp.int32),
-                cursor_x=jnp.array(x, dtype=jnp.int32),  
-                
+            
+            return state.replace(
+                cursor_y=y.astype(jnp.int32),
+                cursor_x=x.astype(jnp.int32),
                 phase=jnp.array(self._env.consts.PHASE_ANIMATION, dtype=jnp.int32),
                 animation_sub_phase=jnp.array(self._env.consts.SUBPHASE_INITIAL_PLACE, dtype=jnp.int32),
                 pieces_to_flip=flip_mask,
                 target_player=jnp.array(AI_PLAYER, dtype=jnp.int32),
-                target_x=jnp.array(x, dtype=jnp.int32),
-                target_y=jnp.array(y, dtype=jnp.int32),
+                target_x=x.astype(jnp.int32),
+                target_y=y.astype(jnp.int32),
                 animation_timer=jnp.array(self._env.consts.FRAMES_TO_PLACE, dtype=jnp.int32),
                 passes=jnp.array(0, dtype=jnp.int32),
                 lfsr_state=next_lfsr
             )
 
         def _pass_turn():
-            return state._replace(
-                current_player=jnp.array(self._env.consts.PLAYER_1, dtype=jnp.int32),
+            return state.replace(
+                current_player=jnp.array(OPPONENT, dtype=jnp.int32),
                 passes=state.passes + 1,
                 lfsr_state=next_lfsr,
                 turn_start_frame=state.step_counter + 1
             )
 
         return jax.lax.cond(best_score > -0.9e9, _execute_move, _pass_turn)
-
 
 class BombMod(JaxAtariInternalModPlugin):
     @partial(jax.jit, static_argnums=(0,))
@@ -68,7 +83,7 @@ class BombMod(JaxAtariInternalModPlugin):
         def _initiate_place():
             flip_mask = self._env._get_flip_mask(state.board, y, x, player)
             
-            new_state = state._replace(
+            new_state = state.replace(
                 phase=jnp.array(self._env.consts.PHASE_ANIMATION, dtype=jnp.int32),
                 animation_sub_phase=jnp.array(self._env.consts.SUBPHASE_INITIAL_PLACE, dtype=jnp.int32),
                 pieces_to_flip=flip_mask,
@@ -78,7 +93,7 @@ class BombMod(JaxAtariInternalModPlugin):
                 animation_timer=jnp.array(self._env.consts.FRAMES_TO_PLACE, dtype=jnp.int32),
                 passes=jnp.array(0, dtype=jnp.int32)
             )
-            return new_state._replace(hide_cursor=jnp.array(False, dtype=jnp.bool_)), True
+            return new_state.replace(hide_cursor=jnp.array(False, dtype=jnp.bool_)), True
 
         def _initiate_destroy():
             new_board = state.board.at[y, x].set(self._env.consts.EMPTY)
@@ -86,7 +101,7 @@ class BombMod(JaxAtariInternalModPlugin):
             p2_count = jnp.sum(new_board == self._env.consts.PLAYER_2)
             next_player = jnp.where(player == self._env.consts.PLAYER_1, self._env.consts.PLAYER_2, self._env.consts.PLAYER_1)
             
-            new_state = state._replace(
+            new_state = state.replace(
                 board=new_board,
                 player_1_score=p1_count,
                 player_2_score=p2_count,
@@ -98,7 +113,7 @@ class BombMod(JaxAtariInternalModPlugin):
             return new_state, True
 
         def _fail_move():
-            return state._replace(hide_cursor=jnp.array(True, dtype=jnp.bool_)), False
+            return state.replace(hide_cursor=jnp.array(True, dtype=jnp.bool_)), False
 
         return jax.lax.cond(
             is_valid_place,
