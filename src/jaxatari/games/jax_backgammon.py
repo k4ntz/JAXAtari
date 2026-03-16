@@ -1,16 +1,17 @@
-# Third party imports
 import chex
 import jax
 import jax.numpy as jnp
 from functools import partial
-from typing import NamedTuple, Tuple, List, Optional
+from typing import Tuple, List, Optional, Any
 import os
 from enum import IntEnum
+from flax import struct
 
 # Project imports
-from jaxatari.environment import JaxEnvironment, JAXAtariAction
+from jaxatari.environment import JaxEnvironment, JAXAtariAction, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
+from jaxatari.modification import AutoDerivedConstants
 import jaxatari.spaces as spaces
 
 """
@@ -23,7 +24,32 @@ It includes the environment class, state structures, move validation and executi
 """
 
 
-class BackgammonConstants(NamedTuple):
+def _get_asset_config() -> tuple:
+    """Returns the declarative manifest of all assets for backgammon."""
+    return (
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        # Checkers
+        {'name': 'white_checker', 'type': 'single', 'file': 'white_checker.npy'},
+        {'name': 'black_checker', 'type': 'single', 'file': 'black_checker.npy'},
+        {'name': 'highlight_checker', 'type': 'single', 'file': 'highlight_checker.npy'},
+        # Triangles (6 variants: light/dark × left/right + highlight × left/right)
+        {'name': 'triangle_light_right', 'type': 'single', 'file': 'triangle_light_right.npy'},
+        {'name': 'triangle_dark_right', 'type': 'single', 'file': 'triangle_dark_right.npy'},
+        {'name': 'triangle_light_left', 'type': 'single', 'file': 'triangle_light_left.npy'},
+        {'name': 'triangle_dark_left', 'type': 'single', 'file': 'triangle_dark_left.npy'},
+        {'name': 'triangle_highlight_right', 'type': 'single', 'file': 'triangle_highlight_right.npy'},
+        {'name': 'triangle_highlight_left', 'type': 'single', 'file': 'triangle_highlight_left.npy'},
+        # Bar highlights
+        {'name': 'bar_highlight_left', 'type': 'single', 'file': 'bar_highlight_left.npy'},
+        {'name': 'bar_highlight_right', 'type': 'single', 'file': 'bar_highlight_right.npy'},
+        # Dice
+        {'name': 'die_white', 'type': 'single', 'file': 'die_white.npy'},
+        {'name': 'die_red', 'type': 'single', 'file': 'die_red.npy'},
+        {'name': 'pip_black', 'type': 'single', 'file': 'pip_black.npy'},
+        {'name': 'pip_white', 'type': 'single', 'file': 'pip_white.npy'},
+    )
+
+class BackgammonConstants(AutoDerivedConstants):
     """Constants for game Environment.
     
     Board layout:
@@ -35,21 +61,62 @@ class BackgammonConstants(NamedTuple):
     - White home: Points 18-23 (WHITE_HOME_RANGE)
     - Black home: Points 0-5 (BLACK_HOME_RANGE)
     """
-    NUM_POINTS = 24
-    NUM_CHECKERS = 15
-    BAR_INDEX = 24
-    HOME_INDEX = 25
+    NUM_POINTS: int = struct.field(pytree_node=False, default=24)
+    NUM_CHECKERS: int = struct.field(pytree_node=False, default=15)
+    BAR_INDEX: int = struct.field(pytree_node=False, default=24)
+    HOME_INDEX: int = struct.field(pytree_node=False, default=25)
     # Home board ranges - used for bearing-off eligibility checks
-    WHITE_HOME_RANGE = jnp.array(range(18, 24))
-    BLACK_HOME_RANGE = jnp.array(range(0, 6))
-    WHITE = 1
-    BLACK = -1
-    DOUBLING_CUBE = 1  # Multiplier for gammon/backgammon scoring
-    # Visual theme - one of "classic" (green), "brown" (wooden), "blue" (tournament)
-    THEME: str = "classic"
+    WHITE_HOME_RANGE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(range(18, 24)))
+    BLACK_HOME_RANGE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(range(0, 6)))
+    WHITE: int = struct.field(pytree_node=False, default=1)
+    BLACK: int = struct.field(pytree_node=False, default=-1)
+    DOUBLING_CUBE: int = struct.field(pytree_node=False, default=1)  # Multiplier for gammon/backgammon scoring
+
+    # Theme for board colors: "classic", "brown", "blue"
+    THEME: str = struct.field(pytree_node=False, default="classic")
+
+    # Frame dimensions
+    FRAME_HEIGHT: int = struct.field(pytree_node=False, default=210)
+    FRAME_WIDTH: int = struct.field(pytree_node=False, default=160)
+
+    # Geometry constants (same as original)
+    TOP_MARGIN_FOR_DICE: int = struct.field(pytree_node=False, default=25)
+    BOARD_MARGIN: int = struct.field(pytree_node=False, default=8)
+    TRIANGLE_LENGTH: int = struct.field(pytree_node=False, default=60)
+    TRIANGLE_THICKNESS: int = struct.field(pytree_node=False, default=12)
+    BAR_THICKNESS: int = struct.field(pytree_node=False, default=14)
+    CHECKER_WIDTH: int = struct.field(pytree_node=False, default=4)
+    CHECKER_HEIGHT: int = struct.field(pytree_node=False, default=4)
+    BASE_MARGIN: int = struct.field(pytree_node=False, default=2)
+    BAND_TOP_MARGIN: float = struct.field(pytree_node=False, default=1.2)
+    BAND_BOTTOM_MARGIN: int = struct.field(pytree_node=False, default=1)
+    CHIP_GAP_Y: int = struct.field(pytree_node=False, default=2)
+    CHIP_GAP_X: int = struct.field(pytree_node=False, default=4)
+    BAR_EDGE_PADDING: int = struct.field(pytree_node=False, default=2)
+    BAR_VERTICAL_PADDING: int = struct.field(pytree_node=False, default=2)
+    DICE_SIZE: int = struct.field(pytree_node=False, default=12)
+    PIP_SIZE: int = struct.field(pytree_node=False, default=2)
+
+    # Derived constants (computed from base constants via compute_derived)
+    CHECKER_STACK_OFFSET: Optional[int] = struct.field(pytree_node=False, default=None)
+    BAR_Y: Optional[int] = struct.field(pytree_node=False, default=None)
+    BAR_X: Optional[int] = struct.field(pytree_node=False, default=None)
+    BAR_WIDTH: Optional[int] = struct.field(pytree_node=False, default=None)
+
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_asset_config)
+
+    def compute_derived(self):
+        """Compute derived constants from base geometry constants."""
+        return {
+            'CHECKER_STACK_OFFSET': self.CHECKER_HEIGHT + self.CHIP_GAP_Y,
+            'BAR_Y': self.TOP_MARGIN_FOR_DICE + self.FRAME_HEIGHT // 2 - self.BAR_THICKNESS // 2 - 10,
+            'BAR_X': self.BOARD_MARGIN,
+            'BAR_WIDTH': self.FRAME_WIDTH - 2 * self.BOARD_MARGIN,
+        }
 
 
-class BackgammonState(NamedTuple):
+@struct.dataclass
+class BackgammonState:
     """Represents the complete state of a backgammon game."""
     board: jnp.ndarray  # (2, 26)
     dice: jnp.ndarray  # (4,) - remaining moves available
@@ -69,22 +136,22 @@ class BackgammonState(NamedTuple):
     move_repeat_timer: int = 0  # Frames since last cursor move (for hold-to-repeat)
 
 
-
-class BackgammonInfo(NamedTuple):
+@struct.dataclass
+class BackgammonInfo:
     """Contains auxiliary information about the environment (e.g., timing or metadata)."""
     player: jnp.ndarray
     dice: jnp.ndarray
     all_rewards: chex.Array
 
-
-class BackgammonObservation(NamedTuple):
-    """Complete backgammon observation structure for object-centric observations."""
-    board: jnp.ndarray  # (2, 26) - full board state [white_checkers, black_checkers]
-    dice: jnp.ndarray  # (4,) - available dice values
-    current_player: jnp.ndarray  # (1,) - current player (-1 for black, 1 for white)
-    is_game_over: jnp.ndarray  # (1,) - game over flag
-    bar_counts: jnp.ndarray  # (2,) - checkers on bar [white, black]
-    home_counts: jnp.ndarray  # (2,) - checkers borne off [white, black]
+@struct.dataclass
+class BackgammonObservation:
+    """Object-centric styled observation of the game."""
+    board: jnp.ndarray
+    dice: jnp.ndarray
+    current_player: jnp.ndarray
+    is_game_over: jnp.ndarray
+    bar_counts: jnp.ndarray
+    home_counts: jnp.ndarray
 
 
 class GamePhase(IntEnum):
@@ -163,18 +230,9 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
                If None, uses consts.THEME (which defaults to "classic")
     """
 
-    def __init__(self, consts: BackgammonConstants = None, reward_funcs: list[callable] = None, theme: str = None):
-        consts = consts or BackgammonConstants()
-        super().__init__(consts)
-        
-        # Theme priority: explicit parameter > consts.THEME > "classic"
-        if theme is None:
-            theme = consts.THEME
-        
-        # Validate and store theme
-        if theme not in BACKGAMMON_THEMES:
-            raise ValueError(f"Invalid theme '{theme}'. Must be one of: {BACKGAMMON_THEMES}")
-        self.theme = theme
+    def __init__(self, consts: BackgammonConstants = None, config: jr.RendererConfig = None):
+        self.consts = consts or BackgammonConstants()
+        super().__init__(self.consts)
 
         # Pre-compute all possible moves (from_point, to_point) for points 0..25
         # Shape: (676, 2) = 26×26 combinations
@@ -187,10 +245,8 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         # Special action indices for interactive play
         self._roll_action_index = self._action_pairs.shape[0]
 
-        self.renderer = BackgammonRenderer(self, theme=theme)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
+        self.renderer = BackgammonRenderer(self, config=config)
+        self.reward_funcs = None
 
         # Define action set for jaxatari compatibility (interactive mode)
         self.action_set = [
@@ -406,7 +462,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
     @partial(jax.jit, static_argnums=(0,))
     def _any_move_with_single_die(self, state: BackgammonState, die_value) -> bool:
         die = jnp.asarray(die_value, dtype=jnp.int32)
-        test_state = state._replace(dice=jnp.array([die, 0, 0, 0], dtype=jnp.int32))
+        test_state = state.replace(dice=jnp.array([die, 0, 0, 0], dtype=jnp.int32))
         mask = jax.vmap(lambda mv: self._is_valid_move_basic(test_state, mv))(self._action_pairs)
         return jnp.any(mask)
 
@@ -431,7 +487,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
             def must_use_hi(_):
                 # Check if current move uses the higher die
-                state_hi = state._replace(dice=jnp.array([hi, 0, 0, 0], dtype=jnp.int32))
+                state_hi = state.replace(dice=jnp.array([hi, 0, 0, 0], dtype=jnp.int32))
                 uses_hi = self._is_valid_move_basic(state_hi, move)
                 
                 # If rule active: Move is only legal if it uses the higher die
@@ -483,7 +539,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             next_cursor = jax.lax.cond(
                 next_player == self.consts.WHITE, lambda _: jnp.int32(0), lambda _: jnp.int32(23), operand=None
             )
-            return state._replace(
+            return state.replace(
                 dice=next_dice,
                 original_dice=new_original,
                 key=new_key,
@@ -766,7 +822,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         def do_roll(_):
             # Roll dice and switch to selecting phase
             new_dice, new_key = self.roll_dice(state.key)
-            new_state = state._replace(
+            new_state = state.replace(
                 dice=new_dice,
                 key=new_key,
                 game_phase=jnp.int32(1),  # SELECTING_CHECKER
@@ -927,7 +983,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         )
 
         new_cursor = jax.lax.cond(can_move, lambda _: target_if_move, lambda _: pos, operand=None)
-        return state._replace(cursor_position=new_cursor)
+        return state.replace(cursor_position=new_cursor)
 
     @partial(jax.jit, static_argnums=(0,))
     def _handle_roll_dice(self, state: BackgammonState) -> BackgammonState:
@@ -942,7 +998,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         # Store original roll for display (ALE always shows 2 dice with original values)
         # For doubles, both display dice show the same value
         original_dice = jnp.array([dice[0], dice[1]], dtype=jnp.int32)
-        new_state = state._replace(dice=dice, original_dice=original_dice, key=key, game_phase=1)
+        new_state = state.replace(dice=dice, original_dice=original_dice, key=key, game_phase=1)
         # Auto-pass if no legal move with these dice
         return self._auto_pass_if_stuck(new_state)
 
@@ -970,7 +1026,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
         return jax.lax.cond(
             has_checker,
-            lambda s: s._replace(
+            lambda s: s.replace(
                 picked_checker_from=picked_from,
                 picked_bar_side=picked_bar_side,
                 game_phase=2
@@ -1002,7 +1058,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
                 lambda _: s.cursor_position,
                 operand=None
             )
-            final_state = ns._replace(
+            final_state = ns.replace(
                 picked_checker_from=-1,
                 picked_bar_side=-1,
                 game_phase=next_phase,
@@ -1021,7 +1077,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
                 lambda _: s.picked_checker_from,
                 operand=None
             )
-            ns = s._replace(
+            ns = s.replace(
                 picked_checker_from=-1,
                 picked_bar_side=-1,
                 game_phase=1,
@@ -1117,10 +1173,10 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         # Movement actions reset the repeat timer instead
         return jax.lax.cond(
             is_fire,
-            lambda s: s._replace(await_keyup=True, last_action=action, move_repeat_timer=0),
+            lambda s: s.replace(await_keyup=True, last_action=action, move_repeat_timer=0),
             lambda s: jax.lax.cond(
                 is_movement,
-                lambda s2: s2._replace(last_action=action, move_repeat_timer=0),
+                lambda s2: s2.replace(last_action=action, move_repeat_timer=0),
                 lambda s2: s2,
                 operand=s
             ),
@@ -1138,7 +1194,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         is_noop = action == JAXAtariAction.NOOP
         return jax.lax.cond(
             is_noop,
-            lambda s: s._replace(await_keyup=False, last_action=JAXAtariAction.NOOP, move_repeat_timer=0),
+            lambda s: s.replace(await_keyup=False, last_action=JAXAtariAction.NOOP, move_repeat_timer=0),
             lambda s: s,
             operand=state
         )
@@ -1183,9 +1239,9 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
                 can_repeat = same_direction & repeat_ready
                 def process_repeat(s3):
                     ns, _, _ = self._process_action(s3, action)
-                    return ns._replace(last_action=action, move_repeat_timer=0)
+                    return ns.replace(last_action=action, move_repeat_timer=0)
                 def increment_timer(s3):
-                    return s3._replace(move_repeat_timer=timer)
+                    return s3.replace(move_repeat_timer=timer)
                 return jax.lax.cond(can_repeat, process_repeat, increment_timer, operand=s2)
             
             ns = jax.lax.cond(
@@ -1203,17 +1259,17 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
                 can_repeat = same_direction & repeat_ready
                 def process_move(s3):
                     ns, reward, done = self._process_action(s3, action)
-                    ns = ns._replace(last_action=action, move_repeat_timer=0)
+                    ns = ns.replace(last_action=action, move_repeat_timer=0)
                     return ns, reward, done
                 def wait_for_repeat(s3):
                     # First press or waiting for repeat delay
                     new_dir = ~same_direction
                     def first_press(s4):
                         ns, reward, done = self._process_action(s4, action)
-                        ns = ns._replace(last_action=action, move_repeat_timer=0)
+                        ns = ns.replace(last_action=action, move_repeat_timer=0)
                         return ns, reward, done
                     def increment(s4):
-                        return s4._replace(move_repeat_timer=timer), 0.0, False
+                        return s4.replace(move_repeat_timer=timer), 0.0, False
                     return jax.lax.cond(new_dir, first_press, increment, operand=s3)
                 return jax.lax.cond(can_repeat, process_move, wait_for_repeat, operand=s2)
             
@@ -1238,7 +1294,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             obs.dice.flatten(),
             obs.current_player.flatten(),
             obs.is_game_over.flatten(),
-            obs.bar_counts.flatten(),  # 2 elements
+            obs.bar_counts.flatten(),
             obs.home_counts.flatten()
         ]).astype(jnp.int32)
 
@@ -1355,8 +1411,6 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         return state.is_game_over
 
     def get_valid_moves(self, state: BackgammonState) -> List[Tuple[int, int]]:
-        player = state.current_player
-
         @jax.jit
         def _check_all_moves(state):
             return jax.vmap(lambda move: self.is_valid_move(state, move))(self._action_pairs)
@@ -1383,10 +1437,27 @@ class BackgammonRenderer(JAXGameRenderer):
     - "blue": Tournament/blue theme
     """
     
-    def __init__(self, env=None, theme: str = "classic"):
-        super().__init__()
+    def __init__(self, env: "JaxBackgammonEnv" = None, config: Optional[jr.RendererConfig] = None, consts: Optional[Any] = None):
+        # Allow being called without env (as in some wrapper tests or modifications)
+        # but ensure config and consts are handled.
+        if config is None:
+            # Create a default config if not provided
+            from jaxatari.rendering.jax_rendering_utils import RendererConfig
+            config = RendererConfig()
+            
+        super().__init__(env, config=config)
         self.env = env
-        self.theme = theme
+        
+        # Determine consts from env or argument
+        self.consts = consts if consts is not None else (env.consts if env else None)
+        
+        # Determine theme from env or consts
+        if env is not None:
+            self.theme = env.consts.THEME
+        elif self.consts is not None:
+            self.theme = getattr(self.consts, "THEME", "classic")
+        else:
+            self.theme = "classic"
         
         # Frame dimensions
         self.frame_height = 210
@@ -1423,7 +1494,7 @@ class BackgammonRenderer(JAXGameRenderer):
         # Setup JaxRenderingUtils
         from jaxatari.rendering import jax_rendering_utils as render_utils
         
-        self.config = render_utils.RendererConfig(
+        self.config = config or render_utils.RendererConfig(
             game_dimensions=(self.frame_height, self.frame_width),
             channels=3,
         )
@@ -1523,6 +1594,10 @@ class BackgammonRenderer(JAXGameRenderer):
         
         return jnp.array(positions, dtype=jnp.int32)
     
+    def _get_player_index(self, player):
+        """Helper to get player index without env dependency."""
+        return jnp.where(player == self.consts.WHITE, 0, 1)
+
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: BackgammonState) -> jnp.ndarray:
         """
@@ -1605,11 +1680,11 @@ class BackgammonRenderer(JAXGameRenderer):
         def get_highlight_index(_):
             def moving_origin(_):
                 return jax.lax.cond(
-                    state.picked_checker_from == jnp.int32(self.env.consts.BAR_INDEX),
+                    state.picked_checker_from == jnp.int32(self.consts.BAR_INDEX),
                     lambda __: jax.lax.select(
                         state.picked_bar_side == jnp.int32(26),
                         jnp.int32(26),
-                        jnp.int32(self.env.consts.BAR_INDEX)
+                        jnp.int32(self.consts.BAR_INDEX)
                     ),
                     lambda __: jnp.int32(state.picked_checker_from),
                     operand=None
@@ -1655,7 +1730,7 @@ class BackgammonRenderer(JAXGameRenderer):
                 hi < jnp.int32(24),
                 on_triangle,
                 lambda r2: jax.lax.cond(
-                    hi == jnp.int32(self.env.consts.BAR_INDEX),
+                    hi == jnp.int32(self.consts.BAR_INDEX),
                     on_bar_left,
                     lambda r3: jax.lax.cond(hi == jnp.int32(26), on_bar_right, noop, operand=r3),
                     operand=r2
@@ -1670,7 +1745,7 @@ class BackgammonRenderer(JAXGameRenderer):
         """Draw checkers on all 24 points."""
         
         def draw_point_checkers(point_idx, r):
-            player_idx = self.env.get_player_index(state.current_player)
+            player_idx = self._get_player_index(state.current_player)
             white_count = state.board[0, point_idx]
             black_count = state.board[1, point_idx]
             
@@ -1744,11 +1819,11 @@ class BackgammonRenderer(JAXGameRenderer):
           - i=2: col 1, row 0 (y=116, base/bottom)
           - i=3: col 1, row 1 (y=111, top)
         """
-        player_idx = self.env.get_player_index(state.current_player)
-        picked_from_bar = (state.game_phase == 2) & (state.picked_checker_from == self.env.consts.BAR_INDEX)
+        player_idx = self._get_player_index(state.current_player)
+        picked_from_bar = (state.game_phase == 2) & (state.picked_checker_from == self.consts.BAR_INDEX)
         
-        white_bar = state.board[0, self.env.consts.BAR_INDEX] - jnp.where(picked_from_bar & (player_idx == 0), 1, 0)
-        black_bar = state.board[1, self.env.consts.BAR_INDEX] - jnp.where(picked_from_bar & (player_idx == 1), 1, 0)
+        white_bar = state.board[0, self.consts.BAR_INDEX] - jnp.where(picked_from_bar & (player_idx == 0), 1, 0)
+        black_bar = state.board[1, self.consts.BAR_INDEX] - jnp.where(picked_from_bar & (player_idx == 1), 1, 0)
         white_bar = jnp.maximum(white_bar, 0)
         black_bar = jnp.maximum(black_bar, 0)
         
@@ -1793,16 +1868,17 @@ class BackgammonRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def _draw_floating_checker(self, raster, state):
         """Draw the checker being moved (floating at cursor position)."""
+        num_moves = state.dice[0] + state.dice[1] + state.dice[2] + state.dice[3]
         
         def draw_checker(r):
-            player_idx = self.env.get_player_index(state.current_player)
+            player_idx = self._get_player_index(state.current_player)
             mask = jax.lax.select(player_idx == 0,
                 self.SHAPE_MASKS["white_checker"],
                 self.SHAPE_MASKS["black_checker"])
             
             pos = state.cursor_position
-            is_home = (pos == self.env.consts.HOME_INDEX)
-            is_bar_left = (pos == jnp.int32(self.env.consts.BAR_INDEX))
+            is_home = (pos == jnp.int32(self.consts.HOME_INDEX))
+            is_bar_left = (pos == jnp.int32(self.consts.BAR_INDEX))
             is_bar_right = (pos == jnp.int32(26))
             
             # Compute position
@@ -1865,7 +1941,7 @@ class BackgammonRenderer(JAXGameRenderer):
         
         # Don't draw floating checker when cursor is at HOME (bearing off position)
         # This matches ALE behavior where cursor/checker disappears off the board
-        should_draw = (state.game_phase == 2) & (state.cursor_position != self.env.consts.HOME_INDEX)
+        should_draw = (state.game_phase == 2) & (state.cursor_position != self.consts.HOME_INDEX)
         return jax.lax.cond(
             should_draw,
             # Previous version wouldn't bear off out of the view of the player
@@ -1889,7 +1965,7 @@ class BackgammonRenderer(JAXGameRenderer):
         start_x = 64  # Fixed to match ALE exactly
         dice_y = 17  # ALE dice start at y=17
         
-        is_white_player = (state.current_player == self.env.consts.WHITE)
+        is_white_player = (state.current_player == self.consts.WHITE)
         die_mask = jax.lax.select(is_white_player,
             self.SHAPE_MASKS["die_white"],
             self.SHAPE_MASKS["die_red"])

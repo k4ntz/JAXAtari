@@ -111,7 +111,7 @@ class NoHitsMod(JaxAtariPostStepModPlugin):
             operand=(new_state.board, hits_to_undo, last_to, opponent_idx)
         )
         
-        return new_state._replace(board=new_board)
+        return new_state.replace(board=new_board)
 
 
 class RewardShapingMod(JaxAtariPostStepModPlugin):
@@ -253,7 +253,7 @@ class ShortGameMod(JaxAtariPostStepModPlugin):
     def after_reset(self, obs, state: BackgammonState) -> Tuple[Any, BackgammonState]:
         """Replace initial board with endgame position."""
         endgame_board = self._create_endgame_board()
-        new_state = state._replace(board=endgame_board)
+        new_state = state.replace(board=endgame_board)
         # Note: obs should be recomputed by environment if needed
         return obs, new_state
 
@@ -275,6 +275,10 @@ class SimplifyBackgammonMod(JaxAtariPostStepModPlugin):
     
     # Can be overridden via constants_overrides
     num_checkers: int = 5
+    
+    constants_overrides = {
+        "NUM_CHECKERS": 5
+    }
     
     @partial(jax.jit, static_argnums=(0,))
     def _create_simplified_board(self) -> jnp.ndarray:
@@ -299,7 +303,7 @@ class SimplifyBackgammonMod(JaxAtariPostStepModPlugin):
     def after_reset(self, obs, state: BackgammonState) -> Tuple[Any, BackgammonState]:
         """Replace initial board with simplified position."""
         simplified_board = self._create_simplified_board()
-        new_state = state._replace(board=simplified_board)
+        new_state = state.replace(board=simplified_board)
         return obs, new_state
     
     @partial(jax.jit, static_argnums=(0,))
@@ -313,7 +317,7 @@ class SimplifyBackgammonMod(JaxAtariPostStepModPlugin):
         
         game_over = (white_off >= self.num_checkers) | (black_off >= self.num_checkers)
         
-        return new_state._replace(is_game_over=game_over)
+        return new_state.replace(is_game_over=game_over)
 
 
 class ALEControlsMod(JaxAtariPostStepModPlugin):
