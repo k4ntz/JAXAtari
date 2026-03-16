@@ -102,7 +102,7 @@ class BattlezoneConstants(struct.PyTreeNode):
     DISTANCE_TO_ZOOM_FACTOR_CONSTANT: float = struct.field(default=0.05, pytree_node=False)
     ENEMY_SCORES: chex.Array = struct.field(
             default_factory=lambda: jnp.array([1000, 5000, 2000, 3000], dtype=jnp.int32))
-    CAMERA_FOCAL_LENGTH: float = struct.field(default=60, pytree_node=False)
+    CAMERA_FOCAL_LENGTH: float = struct.field(default=180, pytree_node=False)
     ENEMY_WIDTHS: chex.Array = struct.field(
             default_factory=lambda: jnp.array([24, 32, 32, 24], dtype=jnp.int32))
     ENEMY_HEIGHTS: chex.Array = struct.field(
@@ -284,7 +284,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         return new_state.replace(
             chains_l_anim_counter=(state.chains_l_anim_counter + chain_l_offset) % 32,
             chains_r_anim_counter=(state.chains_r_anim_counter + chain_r_offset) % 32,
-            mountains_anim_counter=(state.mountains_anim_counter + mountains_offset) % 160,
+            mountains_anim_counter=(state.mountains_anim_counter + mountains_offset * 5) % 160,
             grass_anim_counter=(state.grass_anim_counter + grass_offset) % 30,
             radar_rotation_counter=state.radar_rotation_counter,
             enemies=updated_enemies,
@@ -1197,7 +1197,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             "projectiles": projectile_object_space,
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "life": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
-            "enemy_types": spaces.Box(low=jnp.array([-1,-1]), high=jnp.array([4,4]), shape=(2,), dtype=jnp.int32)
+            "enemy_types": spaces.Box(low=jnp.array([-1, -1]), high=jnp.array([4, 4]), shape=(2,), dtype=jnp.int32)
         })
 
 
