@@ -166,7 +166,7 @@ class TutankhamConstants(NamedTuple):
     INACTIVE: int = 0
     ACTIVE: int = 1
 
-    CREATURE_SPEED: chex.Array = jnp.array([1.6, 1.5, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+    CREATURE_SPEED: chex.Array = jnp.array([1.51, 1.59, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2],
                                            dtype=jnp.float32)  # speed for each creature type
     CREATURE_POINTS: chex.Array = jnp.array([1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 0, 3],
                                             dtype=jnp.int32)  # points for defeating each creature type
@@ -358,10 +358,10 @@ class TutankhamConstants(NamedTuple):
     MAP_TELEPORTER_POSITIONS: chex.Array = jnp.array([
         # MAP 1
         [
-            [128, 153, Action.LEFT, 26, 153], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
-            [26, 153, Action.RIGHT, 128, 153],
-            [145, 604, Action.LEFT, 10, 604], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
-            [10, 604, Action.RIGHT, 145, 604]
+            [128, 153, Action.LEFT, 27, 153], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [27, 153, Action.RIGHT, 128, 153],
+            [144, 604, Action.LEFT, 11, 604], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [11, 604, Action.RIGHT, 144, 604]
         ],
         # MAP 2
         [
