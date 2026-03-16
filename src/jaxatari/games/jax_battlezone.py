@@ -1091,19 +1091,16 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             )
         )
         enemy_mask = jnp.logical_and(state.enemies.active, enemies_visible)
-        enemies_u = jnp.where(enemy_mask, enemies_u - (enemies_width / 2), -100)
+        enemies_u = enemy_mask, enemies_u - (enemies_width / 2)
         enemies = ObjectObservation.create(
             x=enemies_u,
-            y=jnp.where(
-                enemy_mask, 
-                jnp.full(
-                    (len(enemies_u),),
-                    self.consts.ENEMY_POS_Y - (enemies_heights / 2)
-                ), 
-                -100
+            y=jnp.full(
+                (len(enemies_u),),
+                self.consts.ENEMY_POS_Y - (enemies_heights / 2)
             ),
-            width = jnp.where(enemy_mask, enemies_width, -100),
-            height = jnp.where(enemy_mask, enemies_heights, -100),
+            width = enemies_width,
+            height = enemies_heights,
+            active = enemy_mask
         )
 
         #---------------------------------projectiles------------------------------------------------
@@ -1126,13 +1123,14 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             self.consts.CAMERA_FOCAL_LENGTH
         )
         projectiles_x = jnp.concatenate([
-                jnp.where(state.player_projectile.active, jnp.atleast_1d(player_projectiles_u - 1), -100),
-                jnp.where(enemy_projectiles_mask, enemy_projectiles_u - 1, -100)
-            ])
+            jnp.atleast_1d(player_projectiles_u - 1),
+            enemy_projectiles_u - 1,
+        ])
         projectiles_y = jnp.concatenate([
-                jnp.where(state.player_projectile.active, jnp.atleast_1d(player_projectiles_v - 1), -100),
-                jnp.where(enemy_projectiles_mask, enemy_projectiles_v - 1, -100)
-            ])
+            jnp.atleast_1d(player_projectiles_v - 1),
+            enemy_projectiles_v - 1
+        ])
+        projectiles_active = jnp.concatenate([state.player_projectile.active, enemy_projectiles_mask])
         projectiles = ObjectObservation.create(
             x=projectiles_x,
             y=projectiles_y,
@@ -1144,6 +1142,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 (len(projectiles_x),),
                 3
             ),
+            active=projectiles_active
         )
 
         #-----------------------------radar----------------------------------------
@@ -1160,8 +1159,6 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         radar_enemies_z = jnp.round(radar_enemies_z + self.consts.RADAR_CENTER_Y).astype(jnp.int32)
 
         # Only allow in range enemies
-        radar_enemies_x = jnp.where(in_radar, radar_enemies_x, -1)
-        radar_enemies_z = jnp.where(in_radar, radar_enemies_z, -1)
         radar_dots = ObjectObservation.create(
             x=radar_enemies_x,
             y=radar_enemies_z,
@@ -1172,7 +1169,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             height=jnp.full(
                 (len(radar_enemies_x),),
                 1
-            )
+            ),
+            active=in_radar
         )
         #----------------------------------------------------------------------------
 
