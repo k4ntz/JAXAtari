@@ -176,7 +176,7 @@ class TutankhamConstants(NamedTuple):
     # Item constants ----------------------------------------------------
 
     # Item Types
-    KEY: int = 0
+    KEY_MAP1: int = 0
     CROWN_01_MAP1: int = 1
     RING_MAP1: int = 2
     RUBY_MAP1: int = 3
@@ -207,7 +207,7 @@ class TutankhamConstants(NamedTuple):
 
     ITEM_SIZE: chex.Array = jnp.array([5, 5], dtype=jnp.int32)
 
-    ITEM_POINTS: chex.Array = jnp.array([20, 15, 25, 25, 20, 40, 40, 30, 25, 40, 20, 20, 60, 35, 30, 25, 30, 5, 55, 40, 25, 80, 20, 40, 35], dtype=jnp.int32)  # points for collecting each item type
+    ITEM_POINTS: chex.Array = jnp.array([20, 15, 25, 25, 20, 45, 40, 30, 25, 40, 20, 20, 60, 35, 30, 25, 30, 5, 55, 40, 25, 80, 20, 40, 35], dtype=jnp.int32)  # points for collecting each item type
 
     # Asset config baked into constants
     ASSET_CONFIG: tuple = _get_default_asset_config()
@@ -219,43 +219,43 @@ class TutankhamConstants(NamedTuple):
     MAP_ITEMS: chex.Array = jnp.array([
         # Level 1 (MAP 1)
         [
-            [51, 87, KEY, 1], # [x, y, item_type, active]
-            [99, 183, KEY, 1], 
-            [68, 262, KEY, 1], 
-            [8, 311, KEY, 1], 
-            [93, 382, KEY, 1],
-            [18, 494, KEY, 1],
+            [51, 87, KEY_MAP1, 1], # [x, y, item_type, active]
+            [99, 183, CROWN_01_MAP1, 1], 
+            [68, 262, RING_MAP1, 1], 
+            [8, 311, RUBY_MAP1, 1], 
+            [93, 382, CHALICE_MAP1, 1],
+            [18, 494, CROWN_02_MAP1, 1],
             [0, 0, 0, 0] # Padding for levels with fewer items -> this item is always inactive
         ],
         # Level 2 (MAP 2)
         [
-            [40, 40, KEY, 1],
-            [40, 40, KEY, 1],
-            [40, 40, KEY, 1],
-            [40, 40, KEY, 1],
-            [40, 40, KEY, 1],
-            [40, 40, KEY, 1],
+            [40, 40, KEY_MAP1, 1],
+            [40, 40, KEY_MAP1, 1],
+            [40, 40, KEY_MAP1, 1],
+            [40, 40, KEY_MAP1, 1],
+            [40, 40, KEY_MAP1, 1],
+            [40, 40, KEY_MAP1, 1],
             [0, 0, 0, 0] # Padding for levels with fewer items -> this item is always inactive
         ],
         # Level 3 (MAP 3)
         [
-            [40, 40, KEY, 1],
-            [40, 40, KEY, 1],
-            [40, 40, KEY, 1],
-            [40, 40, KEY, 1],
-            [40, 40, KEY, 1],
-            [40, 40, KEY, 1],
+            [40, 40, KEY_MAP1, 1],
+            [40, 40, KEY_MAP1, 1],
+            [40, 40, KEY_MAP1, 1],
+            [40, 40, KEY_MAP1, 1],
+            [40, 40, KEY_MAP1, 1],
+            [40, 40, KEY_MAP1, 1],
             [0, 0, 0, 0] # Padding for levels with fewer items -> this item is always inactive
         ],
         # Level 4 (MAP 4)
         [
-            [40, 40, KEY, 1],
-            [40, 40, KEY, 1],
-            [40, 40, KEY, 1],
-            [40, 40, KEY, 1],
-            [40, 40, KEY, 1],
-            [40, 40, KEY, 1],
-            [40, 40, KEY, 1] # MAP 4 has 7 items (no padding)
+            [40, 40, KEY_MAP1, 1],
+            [40, 40, KEY_MAP1, 1],
+            [40, 40, KEY_MAP1, 1],
+            [40, 40, KEY_MAP1, 1],
+            [40, 40, KEY_MAP1, 1],
+            [40, 40, KEY_MAP1, 1],
+            [40, 40, KEY_MAP1, 1] # MAP 4 has 7 items (no padding)
         ]
     ], dtype=jnp.int32) # Repeat for 16 levels (4 maps x 4 difficulty levels)
 
@@ -282,15 +282,13 @@ class TutankhamConstants(NamedTuple):
     MAP_CHECKPOINTS: chex.Array = jnp.array([
         # MAP 1
         [
-            [0  , 200, 130, 85], # [checkpoint zone top y, checkpoint zone bottom y, checkpoint_x, checkpoint_y]
-            [200, 400, 105, 140],
-            [800, 1200, 105, 140],
-            [1200, 1600, 105, 140],
-            [2000, 2400, 105, 140]
+            [0  , 198, 130, 85], # [checkpoint zone top y, checkpoint zone bottom y, checkpoint_x, checkpoint_y]
+            [199, 402, 78, 199],
+            [403, 567, 12, 403],
+            [568, 700, 80, 568]
         ],
         # MAP 2
         [
-            [0, 100, 105, 140],
             [0, 100, 105, 140],
             [0, 100, 105, 140],
             [0, 100, 105, 140],
@@ -301,12 +299,10 @@ class TutankhamConstants(NamedTuple):
             [0, 100, 105, 140],
             [0, 100, 105, 140],
             [0, 100, 105, 140],
-            [0, 100, 105, 140],
             [0, 100, 105, 140]
         ],
         # MAP 4
         [
-            [0, 100, 105, 140],
             [0, 100, 105, 140],
             [0, 100, 105, 140],
             [0, 100, 105, 140],
@@ -902,7 +898,7 @@ class JaxTutankham(JaxEnvironment):
         has_movement = (dx[action] != 0) | (dy[action] != 0)
         effective_action = jnp.where(has_movement, action, last_directional_action)
         new_last_directional_action = jnp.where(has_movement, action, last_directional_action)
-        #new_last_directional_action = 0 # TODO: only for testing
+        new_last_directional_action = 0 # TODO: only for testing
 
         # If player hits teleporter and right action input is triggered then teleport player to teleporter out coordinates
         # Is always computed, but only effects player poisition if should_teleport is True
@@ -1220,8 +1216,6 @@ class JaxTutankham(JaxEnvironment):
         
         item_collected = jax.vmap(player_collects_item)(item_states)
         item_collected = item_collected & (item_states[:, 3] == self.consts.ACTIVE)
-
-        item_collected = jnp.any(item_collected) # is true if player collides with any active item
 
         # deactivate collected item
         new_item_active = jnp.where(item_collected, self.consts.INACTIVE, item_states[:, 3])
