@@ -279,8 +279,11 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
     def get_info(self, state: CrossbowState) -> CrossbowInfo:
         return self._get_info(state)
 
-    def _get_env_reward(self, state: CrossbowState, new_state: CrossbowState) -> float:
+    def _get_reward(self, state: CrossbowState, new_state: CrossbowState) -> float:
         return (new_state.score - state.score).astype(float)
+
+    def _get_env_reward(self, state: CrossbowState, new_state: CrossbowState) -> float:
+        return self._get_reward(state, new_state)
 
     def _get_done(self, state: CrossbowState) -> bool:
         return jnp.logical_or(state.lives <= 0, state.step_counter > self.max_episode_steps)
@@ -1494,8 +1497,8 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
     def render(self, state: CrossbowState) -> jnp.ndarray: return self.renderer.render(state)
 
 class CrossbowRenderer(JAXGameRenderer):
-    def __init__(self, consts: CrossbowConstants = None):
-        super().__init__(consts)
+    def __init__(self, consts: CrossbowConstants = None, **kwargs):
+        super().__init__(consts, **kwargs)
         self.consts = consts or CrossbowConstants()
         self.jr = render_utils.JaxRenderingUtils(render_utils.RendererConfig(game_dimensions=(210, 160), channels=3))
         base_dir = os.path.dirname(os.path.abspath(__file__))
