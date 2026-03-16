@@ -595,13 +595,7 @@ class TutankhamRenderer(JAXGameRenderer):
             flip_offset=ZERO_FLIP
         )
 
-        raster = self.jr.render_at_clipped(
-            raster,
-            0,  # x
-            0,  # y
-            self.SHAPE_MASKS["header_footer"],
-            flip_offset=ZERO_FLIP
-        )
+        
 
         # raster = jax.lax.cond(
         #    floor_checks[0] & not_vanishing,
@@ -721,6 +715,13 @@ class TutankhamRenderer(JAXGameRenderer):
 
 
         # 8. Render UI
+        raster = self.jr.render_at_clipped(
+            raster,
+            0,  # x
+            0,  # y
+            self.SHAPE_MASKS["header_footer"],
+            flip_offset=ZERO_FLIP
+        )
         # 9. Final Palette Lookup
         return self.jr.render_from_palette(
             raster,
@@ -1032,7 +1033,7 @@ class JaxTutankham(JaxEnvironment):
 
             # deactivate creature if it is off screen
             # check  which spawners are on screen # TODO: height is currently hardcoded to one specific creature size
-            creature_on_screen = self.is_onscreen(y_new, self.consts.CREATURE_SIZE[1], camera_offset)
+            creature_on_screen = self.is_onscreen(creature_y, self.consts.CREATURE_SIZE[1], camera_offset)
             active_new = jnp.where(creature_on_screen, active_new, self.consts.INACTIVE)
 
             # If inactive, reset position to (0, 0)
