@@ -1501,7 +1501,12 @@ class CrossbowRenderer(JAXGameRenderer):
     def __init__(self, consts: CrossbowConstants = None, **kwargs):
         super().__init__(consts, **kwargs)
         self.consts = consts or CrossbowConstants()
-        self.jr = render_utils.JaxRenderingUtils(render_utils.RendererConfig(game_dimensions=(210, 160), channels=3))
+        self.config = render_utils.RendererConfig(
+            game_dimensions=(210, 160),
+            channels=self.config.channels,
+            downscale=self.config.downscale,
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
         base_dir = os.path.dirname(os.path.abspath(__file__))
         (self.PALETTE, self.SHAPE_MASKS, self.BACKGROUND, _, _) = self.jr.load_and_setup_assets(
             self.consts.ASSET_CONFIG, os.path.join(base_dir, "sprites", "crossbow")
