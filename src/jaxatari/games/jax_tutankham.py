@@ -219,12 +219,12 @@ class TutankhamConstants(NamedTuple):
     MAP_ITEMS: chex.Array = jnp.array([
         # Level 1 (MAP 1)
         [
-            [40, 100, KEY, 1], # [x, y, item_type, active]
-            [40, 40, KEY, 1], 
-            [40, 40, KEY, 1], 
-            [40, 40, KEY, 1], 
-            [40, 40, KEY, 1],
-            [40, 40, KEY, 1],
+            [51, 87, KEY, 1], # [x, y, item_type, active]
+            [99, 183, KEY, 1], 
+            [68, 262, KEY, 1], 
+            [8, 311, KEY, 1], 
+            [93, 382, KEY, 1],
+            [18, 494, KEY, 1],
             [0, 0, 0, 0] # Padding for levels with fewer items -> this item is always inactive
         ],
         # Level 2 (MAP 2)
@@ -319,14 +319,18 @@ class TutankhamConstants(NamedTuple):
     MAP_SPAWNER_POSITIONS: chex.Array = jnp.array([
         # MAP 1
         [
-            [75  ,115],
-            [50, 115],
-            [400, 400],
-            [400, 400],
-            [400, 400]
+            [77  ,107],
+            [28, 235],
+            [107, 235],
+            [39, 345],
+            [119, 345],
+            [77, 479],
+            [77, 643]
         ],
         # MAP 2
         [
+            [0, 100],
+            [0, 100],
             [0, 100],
             [0, 100],
             [0, 100],
@@ -339,10 +343,14 @@ class TutankhamConstants(NamedTuple):
             [0, 100],
             [0, 100],
             [0, 100],
+            [0, 100],
+            [0, 100],
             [0, 100]
         ],
         # MAP 4
         [
+            [0, 100],
+            [0, 100],
             [0, 100],
             [0, 100],
             [0, 100],
@@ -354,15 +362,15 @@ class TutankhamConstants(NamedTuple):
     MAP_TELEPORTER_POSITIONS: chex.Array = jnp.array([
         # MAP 1
         [
-            [128, 155, Action.LEFT, 25, 155], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
-            [25, 155, Action.RIGHT, 128, 155],
-            [145, 605, Action.LEFT, 10, 605], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
-            [10, 605, Action.RIGHT, 145, 605]
+            [128, 153, Action.LEFT, 26, 153], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [26, 153, Action.RIGHT, 128, 153],
+            [145, 604, Action.LEFT, 10, 604], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [10, 604, Action.RIGHT, 145, 604]
         ],
         # MAP 2
         [
-            [128, 155, Action.LEFT, 25, 155], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
-            [25, 155, Action.RIGHT, 128, 155],
+            [128, 155, Action.LEFT, 26, 155], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [26, 155, Action.RIGHT, 128, 155],
             [110, 605, Action.LEFT, 10, 605], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
             [10, 605, Action.RIGHT, 110, 605]
         ],
@@ -387,7 +395,7 @@ class TutankhamConstants(NamedTuple):
     MAP_GOAL_POSITIONS: chex.Array = jnp.array([
         # MAP 1
         [
-            [17, 687]
+            [18, 684]
         ],
         # MAP 2
         [
@@ -823,7 +831,7 @@ class JaxTutankham(JaxEnvironment):
     def teleporter_check(self, player_x, player_y, action, level):
         # Check if player is on a teleporter and has the correct action input to trigger it
         teleporters = self.consts.MAP_TELEPORTER_POSITIONS[level%4]  # (N, 5) N teleporters for current map with (x_in, y_in, trigger_action, x_out, y_out)
-        teleporter_height = 10 # Define a vertical hitbox for the teleporter
+        teleporter_height = 3 # Define a vertical hitbox for the teleporter
 
         teleport_trigger_action = (teleporters[:, 2] == action) # check if trigger action matches the current action input
         player_on_teleporter_x = (teleporters[:, 0] == player_x)
@@ -894,6 +902,7 @@ class JaxTutankham(JaxEnvironment):
         has_movement = (dx[action] != 0) | (dy[action] != 0)
         effective_action = jnp.where(has_movement, action, last_directional_action)
         new_last_directional_action = jnp.where(has_movement, action, last_directional_action)
+        #new_last_directional_action = 0 # TODO: only for testing
 
         # If player hits teleporter and right action input is triggered then teleport player to teleporter out coordinates
         # Is always computed, but only effects player poisition if should_teleport is True
