@@ -3040,8 +3040,19 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
         return obs, new_env_state, reward, done, no_reset_info, reset, level
 
     obs, new_env_state, reward, done, info, reset, level = step_core(env_state, action)
-    operands = (obs, new_env_state, reward, done, info, reset, level)
-    return jax.lax.cond(reset, _handle_reset, _no_reset, operands)
+
+    # Ensure life-loss transitions go through reset handling only outside level
+    # mode. In level mode, `_step_level_core` already handles in-level respawn
+    # and should not be redirected back to the solar-system map.
+    life_lost = new_env_state.lives < env_state.lives
+    is_level_mode = env_state.mode == jnp.int32(1)
+    forced_death_reset = life_lost & (~reset) & (~done) & (~is_level_mode)
+
+    effective_reset = reset | forced_death_reset
+    effective_level = jnp.where(forced_death_reset, jnp.int32(-2), level)
+
+    operands = (obs, new_env_state, reward, done, info, effective_reset, effective_level)
+    return jax.lax.cond(effective_reset, _handle_reset, _no_reset, operands)
 
 
 def get_action_from_key():
