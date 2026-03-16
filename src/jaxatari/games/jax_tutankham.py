@@ -95,7 +95,7 @@ def _get_default_asset_config() -> tuple:
 
         # Treasures
         # {'name': 'key', 'type': 'single', 'file': 'key.npy'},
-        # {'name': 'crown', 'type': 'single', 'file': 'crown.npy'},
+         {'name': 'crown_02', 'type': 'single', 'file': 'treasure_crown_white.npy'},
         # {'name': 'ring', 'type': 'single', 'file': 'ring.npy'},
         # {'name': 'ruby', 'type': 'single', 'file': 'ruby.npy'},
         # {'name': 'chalice', 'type': 'single', 'file': 'chalice.npy'},
@@ -117,6 +117,7 @@ def _get_default_asset_config() -> tuple:
         # {'name': 'flashbangs', 'type': 'single', 'pattern': 'flashbangs.npy'},
         # {'name': 'points', 'type': 'digits', 'pattern': 'lives.npy'},
         # {'name': 'time', 'type': 'single', 'pattern': 'time.npy'},
+        {'name': 'header_footer', 'type': 'single', 'file': 'ui_header_footer.npy'},
         {'name': 'background', 'type': 'background', 'file': 'background_full.npy'},
     )
     return config
@@ -138,7 +139,7 @@ class TutankhamConstants(NamedTuple):
     # Missile constants
     BULLET_SIZE: chex.Array = jnp.array([1, 2], dtype=jnp.int32)
     BULLET_SPEED: int = 8
-    AMMO_SUPPLY: int = 900  # frames until ammo runs out
+    AMMO_SUPPLY: int = 900000  # frames until ammo runs out
 
     MAX_LASER_FLASHES: int = 3
     LASER_FLASH_COOLDOWN: int = 60  # frames
@@ -175,16 +176,37 @@ class TutankhamConstants(NamedTuple):
 
     # Item Types
     KEY: int = 0
-    CROWN_01: int = 1
-    RING: int = 2
-    RUBY: int = 3
-    CHALICE: int = 4
-    CROWN_02: int = 5
+    CROWN_01_MAP1: int = 1
+    RING_MAP1: int = 2
+    RUBY_MAP1: int = 3
+    CHALICE_MAP1: int = 4
+    CROWN_02_MAP1: int = 5
+
+    KEY_MAP2: int = 6
+    RING_MAP2: int = 7
+    CROWN_MAP2: int = 8
+    EMEERALD_MAP2: int = 9
+    GOBLET_MAP2: int = 10
+    BUST_MAP2: int = 11
+
+    KEY_MAP3: int = 12
+    TRIDENT_MAP3: int = 13
+    RING_MAP3: int = 14
+    GERB_MAP3: int = 15
+    DIAMIND_MAP3: int = 16
+    CANDELABRA_MAP3: int = 17
+    
+    KEY_MAP4: int = 18
+    RING_MAP4: int = 19
+    AMULET_MAP4: int = 20
+    FAN_MAP4: int = 21
+    CRYST_MAP4: int = 22
+    ZIRCON_MAP4: int = 23
+    DAGGER_MAP4: int = 24
 
     ITEM_SIZE: chex.Array = jnp.array([5, 5], dtype=jnp.int32)
 
-    ITEM_POINTS: chex.Array = jnp.array([50, 100, 75, 150], dtype=jnp.int32)  # points for collecting each item type
-
+    ITEM_POINTS: chex.Array = jnp.array([20, 15, 25, 25, 20, 40, 40, 30, 25, 40, 20, 20, 60, 35, 30, 25, 30, 5, 55, 40, 25, 80, 20, 40, 35], dtype=jnp.int32)  # points for collecting each item type
 
     # Asset config baked into constants
     ASSET_CONFIG: tuple = _get_default_asset_config()
@@ -196,7 +218,7 @@ class TutankhamConstants(NamedTuple):
     MAP_ITEMS: chex.Array = jnp.array([
         # Level 1 (MAP 1)
         [
-            [40, 40, KEY], 
+            [40, 100, KEY],
             [40, 40, KEY], 
             [40, 40, KEY], 
             [40, 40, KEY], 
@@ -297,7 +319,7 @@ class TutankhamConstants(NamedTuple):
         # MAP 1
         [
             [75  ,115],
-            [50, 120],
+            [50, 115],
             [400, 400],
             [400, 400],
             [400, 400]
@@ -407,9 +429,90 @@ class TutankhamState(NamedTuple):
     step_counter: int       # Increments every frame, drives animation clock
 
     has_key: bool  # whether the player has collected the key or not
-
     last_directional_action: int  # last action that had a directional component
+@jax.jit
+def is_onscreen(y: jax.Array, height: jax.Array, camera_offset: jax.Array) -> jnp.ndarray:
+    """
+    Returns True if a sprite's top edge is above the bottom footer (y=175) and its bottom edge is below the top header (y=35).
+    """
+    sprite_top_edge = y - camera_offset
+    sprite_bottom_edge = sprite_top_edge + height    
+    return jnp.logical_and(sprite_bottom_edge > 35, sprite_top_edge < 175)
 
+
+@jax.jit
+def can_walk_to(entity_size: jax.Array, new_x: jax.Array, new_y: jax.Array, old_x: jax.Array, old_y: jax.Array, valid_pos_mat: jax.Array) -> jnp.ndarray:
+    entity_width = entity_size[0]
+    entity_height = entity_size[1]
+
+    # Check all 4 corners of the hitbox at the new position
+    tl_walkable = valid_pos_mat[new_y, new_x]
+    tr_walkable = valid_pos_mat[new_y, new_x + entity_width - 1]
+    bl_walkable = valid_pos_mat[new_y + entity_height - 1, new_x]
+    br_walkable = valid_pos_mat[new_y + entity_height - 1, new_x + entity_width - 1]
+    # The move is valid only if all four corners of the hitbox are on valid floor
+    is_walkable = tl_walkable & tr_walkable & bl_walkable & br_walkable
+    player_x = jnp.where(is_walkable, new_x, old_x)
+    player_y = jnp.where(is_walkable, new_y, old_y)
+    player_x = jnp.clip(player_x, 0, 160 - 1)
+    player_y = jnp.clip(player_y, 0, 210 - 1)
+    return player_x, player_y, is_walkable
+
+@staticmethod
+def get_creature_name(creature_id: int) -> str:
+    """
+    Gibt den Namen der Kreatur basierend auf der ID zurück.
+    """
+    creature_names = {
+        0: "snake",
+        1: "scorpion",
+        2: "bat",
+        3: "turtle",
+        4: "jackel",
+        5: "condor",
+        6: "lion",
+        7: "moth",
+        8: "virus",
+        9: "monkey",
+        10: "mystery",
+        11: "weapon"
+    }
+    return creature_names.get(creature_id)
+
+@staticmethod
+def get_item_name(item_id: int) -> str:
+    """
+    Gibt den Namen des Items basierend auf der ID zurück.
+    """
+    item_names = {
+        0: "key_map1",
+        1: "crown_01_map1",
+        2: "ring_map1",
+        3: "ruby_map1",
+        4: "chalice_map1",
+        5: "crown_02_map1",
+        6: "key_map2",
+        7: "ring_map2",
+        8: "crown_map2",
+        9: "emerald_map2",
+        10: "goblet_map2",
+        11: "bust_map2",
+        12: "key_map3",
+        13: "trident_map3",
+        14: "ring_map3",
+        15: "gerb_map3",
+        16: "diamond_map3",
+        17: "candelabra_map3",
+        18: "key_map4",
+        19: "ring_map4",
+        20: "amulet_map4",
+        21: "fan_map4",
+        22: "crystal_map4",
+        23: "zircon_map4",
+        24: "dagger_map4"
+    }
+    return item_names.get(item_id)
+   
 
 # ---------------------------------------------------------------------
 # Renderer (No JAX)
@@ -464,6 +567,14 @@ class TutankhamRenderer(JAXGameRenderer):
             0,  # x
             -camera_offset,  # y
             self.SHAPE_MASKS["floor_level_one"],
+            flip_offset=ZERO_FLIP
+        )
+
+        raster = self.jr.render_at_clipped(
+            raster,
+            0,  # x
+            0,  # y
+            self.SHAPE_MASKS["header_footer"],
             flip_offset=ZERO_FLIP
         )
 
@@ -523,6 +634,17 @@ class TutankhamRenderer(JAXGameRenderer):
         # 3. Render Walls
         # 4. Render Teleporter and Spawner
         # 5. Render Treasures
+        raster = jax.lax.cond(state.item_states[0][3] == 1,
+                              lambda r: self.jr.render_at_clipped(
+                                  r,
+                                  state.item_states[0][0],
+                                  state.item_states[0][1] - camera_offset,
+                                  self.SHAPE_MASKS["crown_02"],
+                                  flip_offset=ZERO_FLIP
+                                  # self.FLIP_OFFSETS['player_group'],
+                              ),
+                              lambda r: r,
+                              raster)
         # 6. Render Bullets
         raster = jax.lax.cond(state.bullet_state[3] == 1,
                               lambda r: self.jr.render_at_clipped(
@@ -743,28 +865,16 @@ class JaxTutankham(JaxEnvironment):
         # Is always computed, but only effects player poisition if should_teleport is True
         teleporter_out_x, teleporter_out_y, should_teleport = self.teleporter_check(player_x, player_y, effective_action, level)
 
-        old_x, old_y = player_x, player_y
         new_x = player_x + dx[effective_action]
         new_y = player_y + dy[effective_action]
-        # Check all 4 corners of the hitbox at the new position
-        tl_walkable = self.consts.VALID_POS[new_y, new_x]
-        tr_walkable = self.consts.VALID_POS[new_y, new_x + w - 1]
-        bl_walkable = self.consts.VALID_POS[new_y + h - 1, new_x]
-        br_walkable = self.consts.VALID_POS[new_y + h - 1, new_x + w - 1]
-        # The move is valid only if all four corners of the hitbox are on valid floor
-        iswalkable = tl_walkable & tr_walkable & bl_walkable & br_walkable
-        player_x = jnp.where(iswalkable, new_x, old_x)
-        player_y = jnp.where(iswalkable, new_y, old_y)
-
-        player_x = jnp.clip(player_x, 0, self.consts.WIDTH - 1)
-        player_y = jnp.clip(player_y, 0, self.consts.VALID_POS.shape[0] - 1)
-
+        player_x, player_y, is_walkable = can_walk_to(self.consts.PLAYER_SIZE, new_x, new_y, player_x, player_y, self.consts.VALID_POS)
+        
         # If teleporter is triggered, the player position is set to teleporter out coordinates 
         player_x = jnp.where(should_teleport, teleporter_out_x, player_x)
         player_y = jnp.where(should_teleport, teleporter_out_y, player_y)
 
         # Animation / orientation state
-        is_moving_now = jnp.logical_and(iswalkable, jnp.logical_or(dx[effective_action] != 0, dy[effective_action] != 0))
+        is_moving_now = jnp.logical_and(is_walkable, jnp.logical_or(dx[effective_action] != 0, dy[effective_action] != 0))
         new_direction = jnp.where(dx[effective_action] > 0, 3,
                         jnp.where(dx[effective_action] < 0, 4, player_direction))
         new_step_counter = step_counter + 1
@@ -859,27 +969,28 @@ class JaxTutankham(JaxEnvironment):
 
         # Update creature position if active
         def move_creature(creature_state):
-            x, y, creature_type, active = creature_state
+            creature_x, creature_y, creature_type, active = creature_state
 
             speed = self.consts.CREATURE_SPEED[creature_type.astype(int)]
 
             # TODO speed multiplier based on level difficulty
             #speed *= self.consts.CREATURE_SPEED_MULTIPLIER[self.level]
 
-            x_new = x + speed * active # TODO: If creature active, Move right for simplicity
-
+            new_x = creature_x + speed * active # TODO: If creature active, Move right for simplicity
+            new_y = creature_y
+            creature_x, creature_y, is_walkable = can_walk_to(self.consts.CREATURE_SIZE, new_x.astype(jnp.int32), new_y.astype(jnp.int32), creature_x, creature_y, self.consts.VALID_POS)
             # Deactivate if out of bounds
             active_new = jnp.where(
-                x_new >= self.consts.WIDTH,
+                creature_x >= self.consts.WIDTH,
                 self.consts.INACTIVE,
                 active
             )
 
             # If inactive, reset position to (0, 0)
-            x_new = x_new * active_new
-            y_new = y * active_new
+            creature_x = creature_x * active_new
+            creature_y = creature_y * active_new
 
-            return jnp.array([x_new, y_new, creature_type, active_new], dtype=jnp.int32)
+            return jnp.array([creature_x, creature_y, creature_type, active_new], dtype=jnp.int32)
 
 
         # iterate over creatures and move them
@@ -1184,7 +1295,7 @@ class JaxTutankham(JaxEnvironment):
         done = self._get_done(state)
         info = 0
 
-        jax.debug.print("Player position: ({}, {})", player_x, player_y)
+        #jax.debug.print("Player position: ({}, {})", player_x, player_y)
         # return observation, new_state, env_reward, done, info
         return state, state, reward, done, info
 
