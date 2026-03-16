@@ -3015,20 +3015,46 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
                 )
                 death_info = info.replace(level_cleared=jnp.array(False))
                 is_game_over = (lives_after_death <= 0)
-                new_main_key, subkey_for_reset = jax.random.split(current_state.key)
-                obs_reset, map_state = env_instance.reset_map(
-                    subkey_for_reset,
-                    lives=lives_after_death,
-                    score=current_state.score,
-                    fuel=current_state.fuel,
-                    reactor_destroyed=current_state.reactor_destroyed,
-                    planets_cleared_mask=current_state.planets_cleared_mask
+
+                # In level mode, `_step_level_core` already produced the correct
+                # in-level respawn state when lives remain. Do not bounce back to
+                # the solar-system map in that case.
+                stay_in_level = (current_state.mode == jnp.int32(1)) & (~is_game_over)
+
+                def _continue_level_respawn():
+                    obs_out = GravitarObservation(
+                        vector=jnp.array([
+                            current_state.state.x,
+                            current_state.state.y,
+                            current_state.state.vx,
+                            current_state.state.vy,
+                            current_state.state.angle,
+                        ], dtype=jnp.float32)
+                    )
+                    next_state = current_state._replace(done=jnp.array(False))
+                    return obs_out, next_state, reward, jnp.array(False), death_info, jnp.array(False), level
+
+                def _reset_to_map_after_death():
+                    new_main_key, subkey_for_reset = jax.random.split(current_state.key)
+                    obs_reset, map_state = env_instance.reset_map(
+                        subkey_for_reset,
+                        lives=lives_after_death,
+                        score=current_state.score,
+                        fuel=current_state.fuel,
+                        reactor_destroyed=current_state.reactor_destroyed,
+                        planets_cleared_mask=current_state.planets_cleared_mask
+                    )
+                    final_map_state = map_state._replace(
+                        key=new_main_key,
+                        done=is_game_over
+                    )
+                    return obs_reset, final_map_state, reward, is_game_over, death_info, jnp.array(True), level
+
+                return jax.lax.cond(
+                    stay_in_level,
+                    lambda: _continue_level_respawn(),
+                    lambda: _reset_to_map_after_death(),
                 )
-                final_map_state = map_state._replace(
-                    key=new_main_key,
-                    done=is_game_over
-                )
-                return obs_reset, final_map_state, reward, is_game_over, death_info, jnp.array(True), level
 
             return jax.lax.cond(is_a_death_event, _on_death, _on_win, operand=None)
 
