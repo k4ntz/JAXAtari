@@ -155,6 +155,7 @@ class CrossbowConstants(NamedTuple):
     # --- Game Flow ---
     MAX_LIVES: int = 3
     DYING_DURATION: int = 45
+    GET_READY_DURATION: int = 180
     FADE_OUT_DURATION: int = 45
     FADE_IN_DURATION: int = 30
     MAX_SCATTER_PIXELS: int = 100
