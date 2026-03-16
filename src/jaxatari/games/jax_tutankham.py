@@ -218,43 +218,43 @@ class TutankhamConstants(NamedTuple):
     MAP_ITEMS: chex.Array = jnp.array([
         # Level 1 (MAP 1)
         [
-            [40, 100, KEY],
-            [40, 40, KEY], 
-            [40, 40, KEY], 
-            [40, 40, KEY], 
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [0, 0, 0] # Padding for levels with fewer items
+            [40, 100, KEY, 1], # [x, y, item_type, active]
+            [40, 40, KEY, 1], 
+            [40, 40, KEY, 1], 
+            [40, 40, KEY, 1], 
+            [40, 40, KEY, 1],
+            [40, 40, KEY, 1],
+            [0, 0, 0, 0] # Padding for levels with fewer items -> this item is always inactive
         ],
         # Level 2 (MAP 2)
         [
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [0, 0, 0] # Padding for levels with fewer items
+            [40, 40, KEY, 1],
+            [40, 40, KEY, 1],
+            [40, 40, KEY, 1],
+            [40, 40, KEY, 1],
+            [40, 40, KEY, 1],
+            [40, 40, KEY, 1],
+            [0, 0, 0, 0] # Padding for levels with fewer items -> this item is always inactive
         ],
         # Level 3 (MAP 3)
         [
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [0, 0, 0] # Padding for levels with fewer items
+            [40, 40, KEY, 1],
+            [40, 40, KEY, 1],
+            [40, 40, KEY, 1],
+            [40, 40, KEY, 1],
+            [40, 40, KEY, 1],
+            [40, 40, KEY, 1],
+            [0, 0, 0, 0] # Padding for levels with fewer items -> this item is always inactive
         ],
         # Level 4 (MAP 4)
         [
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY],
-            [40, 40, KEY] # MAP 4 has 7 items (no padding)
+            [40, 40, KEY, 1],
+            [40, 40, KEY, 1],
+            [40, 40, KEY, 1],
+            [40, 40, KEY, 1],
+            [40, 40, KEY, 1],
+            [40, 40, KEY, 1],
+            [40, 40, KEY, 1] # MAP 4 has 7 items (no padding)
         ]
     ], dtype=jnp.int32) # Repeat for 16 levels (4 maps x 4 difficulty levels)
 
@@ -480,7 +480,7 @@ def can_walk_to(entity_size: jax.Array, new_x: jax.Array, new_y: jax.Array, old_
     player_x = jnp.where(is_walkable, new_x, old_x)
     player_y = jnp.where(is_walkable, new_y, old_y)
     player_x = jnp.clip(player_x, 0, 160 - 1)
-    player_y = jnp.clip(player_y, 0, 210 - 1)
+    player_y = jnp.clip(player_y, 0, valid_pos_mat.shape[0] - 1)
     return player_x, player_y, is_walkable
 
 @staticmethod
@@ -769,7 +769,7 @@ class JaxTutankham(JaxEnvironment):
         amonition_timer = self.consts.AMMO_SUPPLY
         bullet_state = jnp.array([0, 0, 0, 0], dtype=jnp.int32)  # (x, y, bullet_rotation, bullet_active)
         creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
-        item_states = self.initialize_item_state(level)  # (N, 4) array with (x, y, item_type, active)
+        item_states = self.consts.MAP_ITEMS[level%4]  # (N, 4) array with (x, y, item_type, active)
         last_creature_spawn = 0
         laser_flash_count = self.consts.MAX_LASER_FLASHES
         laser_flash_cooldown = self.consts.LASER_FLASH_COOLDOWN
@@ -804,18 +804,7 @@ class JaxTutankham(JaxEnvironment):
                                goal_reached=goal_reached
                                )
         return state, state #TODO: (EnvObs, EnvState)
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def initialize_item_state(self, level):
 
-        load_items = self.consts.MAP_ITEMS[level%4]  # (7, 3) array (x, y, item_type) padded
-        n_real_items = self.consts.MAP_N_ITEMS[level%4]  # number of actual items without padding
-        #TODO:
-        # Only mark real items as active; padding rows stay inactive
-        active = (jnp.arange(load_items.shape[0]) < n_real_items).astype(jnp.int32).reshape(-1, 1)
-        item_states = jnp.hstack([load_items, active])  # (7, 4) array for map_4 or (6, 4) for all other maps (x, y, item_type, active)
-
-        return item_states
     
     @partial(jax.jit, static_argnums=(0,))
     def is_onscreen(self,y: jax.Array, height: jax.Array, camera_offset: jax.Array) -> jnp.ndarray:
@@ -1272,7 +1261,7 @@ class JaxTutankham(JaxEnvironment):
         player_y = jnp.where(goal_reached, self.consts.MAP_CHECKPOINTS[level%4, 0, 3], player_y) # respawn_y of first checkpoint is the start coordinates for each map
         bullet_state = jnp.where(goal_reached, jnp.zeros((4,), dtype=bullet_state.dtype), bullet_state)
         creature_states = jnp.where(goal_reached, jnp.zeros_like(creature_states), creature_states)
-        item_states = jnp.where(goal_reached, self.initialize_item_state(level), item_states)
+        item_states = jnp.where(goal_reached, self.consts.MAP_ITEMS[level%4], item_states)
         last_creature_spawn = jnp.where(goal_reached, 0, last_creature_spawn)
         amonition_timer = jnp.where(goal_reached, self.consts.AMMO_SUPPLY, amonition_timer)
         laser_flash_cooldown = jnp.where(goal_reached, 0, laser_flash_cooldown)
