@@ -3231,17 +3231,6 @@ class JaxGravitar(JaxEnvironment):
     def step(self, env_state: EnvState, action: int):
         """Implements the main step entry point of the environment."""
         obs, ns, reward, done, info, _reset, _level = step_full(env_state, action, self)
-        # Convert JAX types to standard Python types for compatibility
-        try:
-            reward = float(reward.item() if hasattr(reward, "item") else reward)
-        except Exception:
-            pass
-        try:
-            done = bool(done.item() if hasattr(done, "item") else done)
-        except Exception:
-            pass
-        #jax.debug.print("JaxGravitar.step is returning reward: {x}", x=reward)
-
         return obs, ns, reward, done, info
 
     def action_space(self) -> spaces.Discrete:
