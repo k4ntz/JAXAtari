@@ -1053,8 +1053,10 @@ class JaxTutankham(JaxEnvironment):
         spawners = self.consts.MAP_SPAWNER_POSITIONS[level%4] # (n, 2) array with (x, y) positions of the n spawners for current level
         growth = self.consts.LEVEL_SPAWN_RATES[level]
         MAX_PROB = 0.8
-        # Increment timer every step
-        new_last_creature_spawn = last_creature_spawn + 1
+
+        # Only increment timer if less than MAX_CREATURES are currently active
+        active_count = jnp.sum(creature_states[:, 3] == self.consts.ACTIVE)
+        new_last_creature_spawn = jnp.where(active_count < 2, last_creature_spawn + 1, last_creature_spawn)
 
         # check  which spawners are on screen # TODO: height 
         on_screen_mask = jax.vmap(is_onscreen, in_axes=(0, None, None))(spawners[:, 1], 1, camera_offset)
