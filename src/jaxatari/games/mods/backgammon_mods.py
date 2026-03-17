@@ -10,6 +10,8 @@ from jaxatari.games.mods.backgammon_mod_plugins import (
     NoHitsMod,
     RewardShapingMod,
     ALEControlsMod,
+    HighlightLegalMovesMod,
+    SetupModeMod,
 )
 
 
@@ -26,10 +28,14 @@ class BackgammonEnvMod(JaxAtariModController):
         "classic_theme": ClassicThemeMod, #Default theme without any mod applied
         "short_game": ShortGameMod,
         "simplify": SimplifyBackgammonMod,
+        "highlight_legal_moves": HighlightLegalMovesMod,
+        "setup_mode": SetupModeMod,
         # Complex mods
         "no_hits": NoHitsMod,
         "reward_shaping": RewardShapingMod,
+        "reward_shaping_wrapper": RewardShapingMod,
         "ale_controls": ALEControlsMod,
+        "hold_to_scroll_release_to_drop": ALEControlsMod,
     }
 
     def __init__(
