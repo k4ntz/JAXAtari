@@ -494,9 +494,17 @@ class BasicMathRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
-        sprite_color = jnp.array(self.consts.COLOR_CODES[0][1], dtype=jnp.uint8)
+        sprite_color_rgb = jnp.array(self.consts.COLOR_CODES[0][1], dtype=jnp.uint8)
 
-        broadcasted_color = jnp.broadcast_to(sprite_color, (5, 1))
+        palette_channels = self.PALETTE.shape[1]
+
+        if palette_channels == 1:
+            gray_val = (0.299 * sprite_color_rgb[0] + 0.587 * sprite_color_rgb[1] + 0.114 * sprite_color_rgb[2]).astype(jnp.uint8)
+            target_color = jnp.array([gray_val], dtype=jnp.uint8)
+        else:
+            target_color = sprite_color_rgb
+
+        broadcasted_color = jnp.broadcast_to(target_color, (5, palette_channels))
 
         self.PALETTE = self.PALETTE.at[:5, :].set(broadcasted_color)
 
