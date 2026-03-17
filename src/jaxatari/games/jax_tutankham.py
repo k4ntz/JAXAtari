@@ -92,7 +92,7 @@ def _get_default_asset_config() -> tuple:
         # UI
         # {'name': 'lives', 'type': 'single', 'pattern': 'lives.npy'},
         # {'name': 'flashbangs', 'type': 'single', 'pattern': 'flashbangs.npy'},
-        # {'name': 'points', 'type': 'digits', 'pattern': 'lives.npy'},
+        {'name': 'digits', 'type': 'group', 'files': ['digit_0.npy', 'digit_1.npy', 'digit_2.npy', 'digit_3.npy', 'digit_4.npy', 'digit_5.npy', 'digit_6.npy', 'digit_7.npy', 'digit_8.npy', 'digit_9.npy']},
         # {'name': 'time', 'type': 'single', 'pattern': 'time.npy'},
         {'name': 'goal', 'type': 'group', 'files': ['map1_exitdoor.npy', 'map2_exitdoor.npy', 'map3_exitdoor.npy', 'map4_exitdoor.npy']},
         {'name': 'ui_footer_header', 'type': 'group', 'files': ['ui_map1_footer_header.npy', 'ui_map2_footer_header.npy', 'ui_map3_footer_header.npy', 'ui_map4_footer_header.npy']},
@@ -634,6 +634,38 @@ class TutankhamRenderer(JAXGameRenderer):
             self.SHAPE_MASKS["ui_footer_header"][level_index],
             flip_offset=ZERO_FLIP
         )
+        
+        # Render Score
+        def render_score_digit(i: int, raster: jnp.ndarray):
+            # calculate value of 10^(5-i)
+            # score is maximum 999999 so 6 digits
+            # extract digit i (where i=0 is most significant digit, i=5 is least)
+            divisor = 10 ** (5 - i)
+            digit_val = (state.tutankham_score // divisor) % 10
+            jax.debug.print("score value: {}", state.tutankham_score)
+            digit_mask = self.SHAPE_MASKS["digits"][digit_val]
+            # score is located at bottom left, approximately at x=24, y=190
+            # each digit is 6 wide, with 2 pixel spacing
+            digit_x = 24 + (i * 8)
+            digit_y = 190
+            
+            # Only draw if it's the last digit (index 5) or if the score is large enough
+            should_draw = (i == 5) | (state.tutankham_score >= divisor)
+            
+            return jax.lax.cond(
+                should_draw,
+                lambda r: self.jr.render_at_clipped(
+                    raster,
+                    digit_x,
+                    digit_y,
+                    digit_mask,
+                    flip_offset=ZERO_FLIP
+                ),
+                lambda r: raster,
+                operand=raster
+            )
+            
+        raster = jax.lax.fori_loop(0, 6, render_score_digit, raster)
         # 9. Final Palette Lookup
         return self.jr.render_from_palette(
             raster,
