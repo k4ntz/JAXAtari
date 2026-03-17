@@ -321,208 +321,217 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         BUCKET_IDX = 6
         ACTIVE = 7
         EXPLODES_IN = 8
-        def update_bombs_func_true(operand):
-            bombs, buckets_pos, mad_bomber_pos, level, bombs_dropped, score, level_finished, level_success, frames_counter, bombs_falling_and_exploding, bombs_should_explode, key = operand
 
-            # Dropping new bombs
+        def maybe_spawn_bomb(bombs, bombs_dropped, level_finished, level_success, key):
             group_index = self.get_group_index(level)
             max_bombs = self.consts.BOMBS_COUNT_GROUPS[group_index]
+            spawn_interval = self.consts.BOMB_INTERVAL_PX_GROUPS[group_index]
 
             spawn_now = (
-                    (bombs_dropped < max_bombs)
-                    & (~level_finished)
-                    & (frames_counter % self.consts.BOMB_INTERVAL_PX_GROUPS[group_index] == 0)
+                (bombs_dropped < max_bombs)
+                & (~level_finished)
+                & (frames_counter % spawn_interval == 0)
             )
 
-            is_active = bombs[:, 7]
-            free_mask = is_active == 0
+            free_mask = bombs[:, ACTIVE] == 0
             has_free_slot = jnp.any(free_mask)
-            free_index = jnp.argmax(free_mask)  # safe because guarded
-            def spawn_bomb(args):
-                bombs, bombs_dropped, key, level_finished, level_success = args
-                key, subkey = jax.random.split(key)
+            free_index = jnp.argmax(free_mask)
 
+            def do_spawn(args):
+                bombs_, bombs_dropped_, key_, level_finished_, level_success_ = args
+                key_, subkey = jax.random.split(key_)
                 new_bomb = jnp.array([
                     mad_bomber_pos[0] + 1,
                     mad_bomber_pos[1] + self.consts.BOMB_SPAWN_HELP_VALUE_Y,
                     0,
-                    jax.random.randint(subkey, (), 0, 2),  # bomb_type
-                    self.consts.DEFAULT_STATE,  # explode_state
-                    self.consts.DEFAULT_STATE,  # explode_bucket_state
-                    self.consts.DEFAULT_STATE,  # on_bucket_index
-                    1,  # is_active
-                    self.consts.DEFAULT_STATE  # expires_in
+                    jax.random.randint(subkey, (), 0, 2),
+                    self.consts.DEFAULT_STATE,
+                    self.consts.DEFAULT_STATE,
+                    self.consts.DEFAULT_STATE,
+                    1,
+                    self.consts.DEFAULT_STATE,
                 ], dtype=jnp.int32)
 
-                bombs = bombs.at[free_index].set(new_bomb)
-                bombs_dropped = bombs_dropped + 1
+                bombs_ = bombs_.at[free_index].set(new_bomb)
+                return bombs_, bombs_dropped_ + 1, key_, level_finished_, level_success_
 
-                return bombs, bombs_dropped, key, level_finished, level_success
+            def skip_spawn(args):
+                bombs_, bombs_dropped_, key_, level_finished_, level_success_ = args
+                all_inactive = jnp.all(bombs_[:, ACTIVE] == 0)
+                level_complete = (~(bombs_dropped_ < max_bombs)) & all_inactive
+                level_finished_ = jnp.where(level_complete, True, level_finished_)
+                level_success_ = jnp.where(level_complete, True, level_success_)
+                return bombs_, bombs_dropped_, key_, level_finished_, level_success_
 
-            def no_spawn(args):
-                bombs, bombs_dropped, key, level_finished, level_success = args
-
-                all_inactive = jnp.all(bombs[:, 7] == 0)
-                level_finished = jnp.where(~(bombs_dropped < max_bombs) & all_inactive, True, level_finished)
-                level_success = jnp.where(~(bombs_dropped < max_bombs) & all_inactive, True, level_success)
-
-                return bombs, bombs_dropped, key, level_finished, level_success
-
-            bombs, bombs_dropped, key, level_finished, level_success = jax.lax.cond(
+            return jax.lax.cond(
                 spawn_now & has_free_slot,
-                spawn_bomb,
-                no_spawn,
-                (bombs, bombs_dropped, key, level_finished, level_success)
+                do_spawn,
+                skip_spawn,
+                (bombs, bombs_dropped, key, level_finished, level_success),
             )
-            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-            # First for loop
-            def update_bomb1(bomb):
-                def active_case(operand):
-                    bomb, scoreDelta = operand
-                    x = bomb[X]
-                    y = bomb[Y]
-                    bucket_explode_state = bomb[BUCKET_EXPLODE]
-                    bucket_idx = bomb[BUCKET_IDX]
+        def update_bucket_collision(bomb):
+            def active_case(operand):
+                bomb_, score_delta = operand
+                x = bomb_[X]
+                y = bomb_[Y]
+                bucket_explode_state = bomb_[BUCKET_EXPLODE]
+                bucket_idx = bomb_[BUCKET_IDX]
 
-                    # --------------------------------------------------
-                    # 3. Bucket collision (only if not already exploding)
-                    # --------------------------------------------------
-                    def check_bucket():
-                        def scan_bucket(j, res):
-                            hit, idx = res
-                            bucket = buckets_pos[j]
-                            bucket_is_active = bucket[2] != 0
-
-                            hit = (
-                                    (y + self.consts.BOMB_SIZE[1] >= bucket[1])
-                                    & (x + self.consts.BOMB_SIZE[0] >= bucket[0])
-                                    & (x <= bucket[0] + self.consts.BUCKET_SIZE[0])
-                            )
-                            idx = jnp.where(bucket_is_active & hit & (idx == -1), j, idx)
-                            return hit, idx
-
-                        hit, idx = jax.lax.fori_loop(
-                            0,
-                            buckets_pos.shape[0],
-                            scan_bucket,
-                            (False, -1),
+                def check_bucket_collision():
+                    def scan_bucket(j, res):
+                        hit_any, first_idx = res
+                        bucket = buckets_pos[j]
+                        bucket_is_active = bucket[2] != 0
+                        hit = (
+                            (y + self.consts.BOMB_SIZE[1] >= bucket[1])
+                            & (x + self.consts.BOMB_SIZE[0] >= bucket[0])
+                            & (x <= bucket[0] + self.consts.BUCKET_SIZE[0])
                         )
+                        should_capture = bucket_is_active & hit & (first_idx == -1)
+                        hit_any = hit_any | should_capture
+                        first_idx = jnp.where(should_capture, j, first_idx)
+                        return hit_any, first_idx
 
-                        return (
-                            jnp.where(hit, 0, bucket_explode_state),
-                            jnp.where(hit, idx, bucket_idx),
-                            jnp.where(hit, level, 0),
-                        )
-                    bucket_explode_state, bucket_idx, scoreDelta = jax.lax.cond(
-                        jnp.logical_and(~bombs_should_explode, bucket_explode_state == self.consts.DEFAULT_STATE),
-                        check_bucket,
-                        lambda: (bucket_explode_state, bucket_idx, 0),
+                    hit, idx = jax.lax.fori_loop(
+                        0,
+                        buckets_pos.shape[0],
+                        scan_bucket,
+                        (False, -1),
                     )
-                    bucket_explode_state = jnp.where(
-                        bucket_explode_state != self.consts.DEFAULT_STATE,
-                        bucket_explode_state + 1,
-                        bucket_explode_state,
+                    return (
+                        jnp.where(hit, 0, bucket_explode_state),
+                        jnp.where(hit, idx, bucket_idx),
+                        jnp.where(hit, level, 0),
                     )
-                    bomb = bomb.at[BUCKET_EXPLODE].set(bucket_explode_state)\
-                                .at[BUCKET_IDX].set(bucket_idx)
-                    return bomb, scoreDelta
 
-                return jax.lax.cond(
-                    bomb[ACTIVE] == 1,
-                    active_case,
-                    lambda x: x,
-                    operand=(bomb, 0),
+                bucket_explode_state, bucket_idx, score_delta = jax.lax.cond(
+                    (~bombs_should_explode) & (bucket_explode_state == self.consts.DEFAULT_STATE),
+                    check_bucket_collision,
+                    lambda: (bucket_explode_state, bucket_idx, 0),
                 )
-            bombs, all_score_delta = jax.vmap(update_bomb1)(bombs)
-            score = score + jnp.sum(all_score_delta)
-            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-            # Second for loop
-            hits_bottom = (~free_mask) & ((bombs[:, 1] + self.consts.BOMB_SIZE[1]) >= self.consts.BOTTOM_EDGE_Y)
+                bucket_explode_state = jnp.where(
+                    bucket_explode_state != self.consts.DEFAULT_STATE,
+                    bucket_explode_state + 1,
+                    bucket_explode_state,
+                )
+
+                bomb_ = (
+                    bomb_.at[BUCKET_EXPLODE].set(bucket_explode_state)
+                    .at[BUCKET_IDX].set(bucket_idx)
+                )
+                return bomb_, score_delta
+
+            return jax.lax.cond(
+                bomb[ACTIVE] == 1,
+                active_case,
+                lambda x: x,
+                operand=(bomb, 0),
+            )
+
+        def trigger_ground_explosion(bombs, bombs_should_explode, level_finished, level_success):
+            hits_bottom = (
+                (bombs[:, ACTIVE] == 1)
+                & ((bombs[:, Y] + self.consts.BOMB_SIZE[1]) >= self.consts.BOTTOM_EDGE_Y)
+            )
             trigger_explosion = jnp.any(hits_bottom) & (~bombs_should_explode)
+
             bombs = bombs.at[:, EXPLODES_IN].set(
-                jnp.where(trigger_explosion & (bombs[:, ACTIVE] == 1), self.consts.EXPIRES_IN_VALUES, bombs[:, EXPLODES_IN])
+                jnp.where(
+                    trigger_explosion & (bombs[:, ACTIVE] == 1),
+                    self.consts.EXPIRES_IN_VALUES,
+                    bombs[:, EXPLODES_IN],
+                )
             )
             bombs_should_explode = bombs_should_explode | trigger_explosion
             level_finished = level_finished | trigger_explosion
             level_success = jnp.where(trigger_explosion, False, level_success)
+            return bombs, bombs_should_explode, level_finished, level_success
 
-            def update_bomb2(bomb):
-                def active_case(operand):
-                    bomb, bombs_should_explode, level_finished, level_success = operand
-                    x = bomb[X]
-                    y = bomb[Y]
-                    fuse = bomb[FUSE]
-                    explode_state = bomb[EXPLODE]
-                    bucket_explode_state = bomb[BUCKET_EXPLODE]
-                    bucket_idx = bomb[BUCKET_IDX]
-                    explodes_in = bomb[EXPLODES_IN]
+        def advance_bomb_state(bomb):
+            def active_case(operand):
+                bomb_, bombs_should_explode_, level_finished_, level_success_ = operand
+                x = bomb_[X]
+                y = bomb_[Y]
+                fuse = bomb_[FUSE]
+                explode_state = bomb_[EXPLODE]
+                bucket_explode_state = bomb_[BUCKET_EXPLODE]
+                bucket_idx = bomb_[BUCKET_IDX]
+                explodes_in = bomb_[EXPLODES_IN]
 
-                    # --------------------------------------------------
-                    # 2. Air explosion progression
-                    # --------------------------------------------------
-                    explode_state = jnp.where(
-                        bombs_should_explode & (explodes_in == 0),
-                        explode_state + 1,
-                        explode_state,
-                    )
-                    explodes_in = jnp.where(explodes_in > 0, explodes_in - 1, explodes_in)
-
-                    # --------------------------------------------------
-                    # 5. Normal falling
-                    # --------------------------------------------------
-                    def fall():
-                        key_, sub = jax.random.split(key)
-                        new_fuse = jax.random.randint(
-                            sub, (), 0, self.consts.BOMB_FUSE_STATES
-                        )
-                        return (
-                            x,
-                            y + self.consts.BOMB_SPEED_GROUPS[self.get_group_index(level)],
-                            new_fuse,
-                            self.consts.DEFAULT_STATE,
-                            self.consts.DEFAULT_STATE,
-                            bucket_idx,
-                            key_,
-                        )
-                    x_, y_, fuse_, explode_state_, bucket_explode_state_, bucket_idx_, key_ = jax.lax.cond(
-                        (~bombs_should_explode) & (bucket_explode_state == self.consts.DEFAULT_STATE),
-                        fall,
-                        lambda: (x, y, fuse, explode_state, bucket_explode_state, bucket_idx, key),
-                    )
-
-                    done = (
-                            (explode_state_ >= self.consts.BOMB_EXPLODE_STATES)
-                            | (bucket_explode_state_ >= self.consts.BOMB_BUCKET_EXPLODE_STATES)
-                    )
-                    bomb = jnp.array([
-                        x_, y_, fuse_, bomb[TYPE],
-                        explode_state_, bucket_explode_state_,
-                        bucket_idx_, jnp.where(done, 0, bomb[ACTIVE]),
-                        explodes_in
-                    ])
-                    return bomb, bombs_should_explode, level_finished, level_success
-
-                return jax.lax.cond(
-                    bomb[ACTIVE] == 1,
-                    active_case,
-                    lambda x: x,
-                    operand=(bomb, bombs_should_explode, level_finished, level_success),
+                explode_state = jnp.where(
+                    bombs_should_explode_ & (explodes_in == 0),
+                    explode_state + 1,
+                    explode_state,
                 )
-            bombs, all_bombs_should_explode, all_level_finished, all_level_success= jax.vmap(update_bomb2)(bombs)
+                explodes_in = jnp.where(explodes_in > 0, explodes_in - 1, explodes_in)
+
+                def fall():
+                    key_, sub = jax.random.split(key)
+                    new_fuse = jax.random.randint(sub, (), 0, self.consts.BOMB_FUSE_STATES)
+                    return (
+                        x,
+                        y + self.consts.BOMB_SPEED_GROUPS[self.get_group_index(level)],
+                        new_fuse,
+                        self.consts.DEFAULT_STATE,
+                        self.consts.DEFAULT_STATE,
+                        bucket_idx,
+                        key_,
+                    )
+
+                x_, y_, fuse_, explode_state_, bucket_explode_state_, bucket_idx_, key_ = jax.lax.cond(
+                    (~bombs_should_explode_) & (bucket_explode_state == self.consts.DEFAULT_STATE),
+                    fall,
+                    lambda: (x, y, fuse, explode_state, bucket_explode_state, bucket_idx, key),
+                )
+
+                done = (
+                    (explode_state_ >= self.consts.BOMB_EXPLODE_STATES)
+                    | (bucket_explode_state_ >= self.consts.BOMB_BUCKET_EXPLODE_STATES)
+                )
+                bomb_ = jnp.array([
+                    x_, y_, fuse_, bomb_[TYPE],
+                    explode_state_, bucket_explode_state_,
+                    bucket_idx_, jnp.where(done, 0, bomb_[ACTIVE]),
+                    explodes_in,
+                ])
+                return bomb_, bombs_should_explode_, level_finished_, level_success_
+
+            return jax.lax.cond(
+                bomb[ACTIVE] == 1,
+                active_case,
+                lambda x: x,
+                operand=(bomb, bombs_should_explode, level_finished, level_success),
+            )
+
+        def update_bombs_when_active(operand):
+            bombs, buckets_pos, mad_bomber_pos, level, bombs_dropped, score, level_finished, level_success, frames_counter, bombs_falling_and_exploding, bombs_should_explode, key = operand
+
+            bombs, bombs_dropped, key, level_finished, level_success = maybe_spawn_bomb(
+                bombs, bombs_dropped, level_finished, level_success, key
+            )
+
+            bombs, score_deltas = jax.vmap(update_bucket_collision)(bombs)
+            score = score + jnp.sum(score_deltas)
+
+            bombs, bombs_should_explode, level_finished, level_success = trigger_ground_explosion(
+                bombs, bombs_should_explode, level_finished, level_success
+            )
+
+            bombs, all_bombs_should_explode, all_level_finished, all_level_success = jax.vmap(advance_bomb_state)(bombs)
             bombs_should_explode = bombs_should_explode | jnp.any(all_bombs_should_explode)
             level_finished = level_finished | jnp.any(all_level_finished)
             level_success = level_success | jnp.any(all_level_success)
-            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-
 
             return bombs, buckets_pos, mad_bomber_pos, level, bombs_dropped, score, level_finished, level_success, frames_counter, bombs_falling_and_exploding, bombs_should_explode, key
-            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-        return jax.lax.cond(bombs_falling_and_exploding, update_bombs_func_true, lambda x: x,
-                            (bombs, buckets_pos, mad_bomber_pos, level, bombs_dropped, score, level_finished, level_success, frames_counter, bombs_falling_and_exploding, bombs_should_explode, key))
+        return jax.lax.cond(
+            bombs_falling_and_exploding,
+            update_bombs_when_active,
+            lambda x: x,
+            (bombs, buckets_pos, mad_bomber_pos, level, bombs_dropped, score, level_finished, level_success, frames_counter, bombs_falling_and_exploding, bombs_should_explode, key),
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def update_background_step(self, bombs, buckets_pos, bombs_should_explode, background_flickering, background_state, bombs_dropped, bombs_falling_and_exploding,
@@ -544,9 +553,6 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         background_flickering = jnp.where(start_flicker, True, background_flickering)
         bombs_dropped = jnp.where(start_flicker, 0, bombs_dropped)
 
-        # ------------------------------------------------------------
-        # Phase B1: level finished — failure path
-        # ------------------------------------------------------------
         failure_step = (
                 level_finished
                 & (~level_success)
@@ -607,9 +613,6 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
             ),
         )
 
-        # ------------------------------------------------------------
-        # Phase B2: level finished — success path
-        # ------------------------------------------------------------
         success_reset = (
                 level_finished
                 & level_success
@@ -622,9 +625,6 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         level_success = jnp.where(success_reset, False, level_success)
         level = jnp.where(success_reset, level + 1, level)
 
-        # ------------------------------------------------------------
-        # Return updated state
-        # ------------------------------------------------------------
         return bombs_should_explode, background_flickering, background_state, bombs_dropped, bombs_falling_and_exploding, level_finished, level_success, level, lives, buckets_pos
 
     @partial(jax.jit, static_argnums=(0,))
@@ -847,50 +847,66 @@ class KaboomRenderer(JAXGameRenderer):
         self.SCORES = self.SHAPE_MASKS['scores']
 
         # Create randomized backgrounds
-        self.COLORED_BACKGROUNDS_STACKED = self._create_random_backgrounds()
+        self.BACKGROUND_TOP_VARIANTS, self.BACKGROUND_BOTTOM_VARIANTS = self._create_random_backgrounds()
 
-    def _create_random_backgrounds(self, n_variants: int = 10, key=None):
+    def _create_random_backgrounds(self, n_variants: int = 32, key=None):
         """
-        Create a stack of random backgrounds based on the 2D background masks.
+        Create separate stacks of random solid-color top and bottom backgrounds.
 
-        Each pixel is replaced by a random value (like fill() in PyGame).
-        Keeps everything 2D to match self.BACKGROUNDS.
+        The top and bottom masks have different shapes, so they must be generated
+        and stored independently to stay compatible with JAX shape requirements.
 
         Returns:
-            jnp.Array of shape (n_variants, 3, H, W)
-            - 3 = (top, bottom, border)
+            tuple[jnp.Array, jnp.Array]
+            - top variants: (n_variants, H_top, W_top)
+            - bottom variants: (n_variants, H_bottom, W_bottom)
         """
-        backgrounds = self.BACKGROUNDS  # tuple: (top, bottom, border)
         if key is None:
             key = jax.random.PRNGKey(0)
 
-        H, W = backgrounds[0].shape  # assume all backgrounds have same shape
-        stacked_backgrounds = []
+        top_h, top_w = self.BACKGROUNDS[0].shape
+        bottom_h, bottom_w = self.BACKGROUNDS[1].shape
 
-        for i in range(n_variants):
-            key, subkey_top, subkey_bottom, subkey_border = jax.random.split(key, 4)
+        top_variants = []
+        bottom_variants = []
 
-            bg_top = jax.random.randint(subkey_top, shape=(H, W), minval=0, maxval=256)
-            bg_bottom = jax.random.randint(subkey_bottom, shape=(H, W), minval=0, maxval=256)
-            bg_border = jax.random.randint(subkey_border, shape=(H, W), minval=0, maxval=256)
+        for _ in range(n_variants):
+            key, subkey_top, subkey_bottom = jax.random.split(key, 3)
 
-            # Stack top, bottom, border into one array per variant
-            bg_variant = jnp.stack([bg_top, bg_bottom, bg_border], axis=0)  # (3, H, W)
-            stacked_backgrounds.append(bg_variant)
+            top_color = jax.random.randint(subkey_top, shape=(), minval=0, maxval=19, dtype=jnp.uint8)
+            bottom_color = jax.random.randint(subkey_bottom, shape=(), minval=0, maxval=19, dtype=jnp.uint8)
 
-        return jnp.stack(stacked_backgrounds, axis=0)  # (n_variants, 3, H, W)
+            top_variants.append(jnp.full((top_h, top_w), top_color, dtype=jnp.uint8))
+            bottom_variants.append(jnp.full((bottom_h, bottom_w), bottom_color, dtype=jnp.uint8))
+
+        return jnp.stack(top_variants, axis=0), jnp.stack(bottom_variants, axis=0)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: KaboomState) -> chex.Array:
         # Background_border
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
+        top_flicker_idx = jnp.mod(state.background_state, self.consts.BACKGROUND_STATES)
+        bottom_flicker_idx = jnp.mod(state.background_state, self.consts.BACKGROUND_STATES)
+        background_top = jax.lax.cond(
+            state.background_flickering,
+            lambda _: self.BACKGROUND_TOP_VARIANTS[top_flicker_idx],
+            lambda _: self.BACKGROUNDS[0],
+            operand=None,
+        )
+        background_bottom = jax.lax.cond(
+            state.background_flickering,
+            lambda _: self.BACKGROUND_BOTTOM_VARIANTS[bottom_flicker_idx],
+            lambda _: self.BACKGROUNDS[1],
+            operand=None,
+        )
+
         # Background_top
         raster = self.jr.render_at(
             raster,
             x=self.consts.BACKGROUND_TOP_POS[0],
             y=self.consts.BACKGROUND_TOP_POS[1],
-            sprite_mask=self.BACKGROUNDS[0],  # top
+            sprite_mask=background_top,
         )
 
         # Background_bottom
@@ -898,7 +914,7 @@ class KaboomRenderer(JAXGameRenderer):
             raster,
             x=self.consts.BACKGROUND_BOTTOM_POS[0],
             y=self.consts.BACKGROUND_BOTTOM_POS[1],
-            sprite_mask=self.BACKGROUNDS[1],  # top
+            sprite_mask=background_bottom,
         )
 
         # Score
