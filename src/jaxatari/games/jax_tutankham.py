@@ -221,12 +221,12 @@ class TutankhamConstants(NamedTuple):
         ],
         # Level 3 (MAP 3)
         [
-            [51, 87, KEY_MAP1, 1], # [x, y, item_type, active]
-            [99, 183, CROWN_01_MAP1, 1], 
-            [68, 262, RING_MAP1, 1], 
-            [8, 311, RUBY_MAP1, 1], 
-            [93, 382, CHALICE_MAP1, 1],
-            [18, 494, CROWN_02_MAP1, 1],
+            [24, 413, KEY_MAP1, 1], # [x, y, item_type, active]
+            [15, 173, CROWN_01_MAP1, 1], 
+            [128, 98, RING_MAP1, 1], 
+            [17, 278, RUBY_MAP1, 1], 
+            [108, 325, CHALICE_MAP1, 1],
+            [27, 656, CROWN_02_MAP1, 1],
             [0, 0, 0, 0] # Padding for levels with fewer items -> this item is always inactive
         ],
         # Level 4 (MAP 4)
@@ -268,21 +268,21 @@ class TutankhamConstants(NamedTuple):
         ],
         # MAP 2
         [
-            [0  , 198, 136, 60], # [checkpoint zone top y, checkpoint zone bottom y, checkpoint_x, checkpoint_y]
+            [0  , 198, 136, 60],
             [199, 402, 78, 199],
             [403, 567, 12, 403],
             [568, 700, 80, 568]
         ],
         # MAP 3
         [
-            [0, 200, 105, 140],
+            [0, 200, 16, 93],
             [0, 100, 105, 140],
             [0, 100, 105, 140],
             [0, 100, 105, 140]
         ],
         # MAP 4
         [
-            [0, 200, 105, 140],
+            [0, 200, 82, 95],
             [0, 100, 105, 140],
             [0, 100, 105, 140],
             [0, 100, 105, 140]
@@ -324,15 +324,15 @@ class TutankhamConstants(NamedTuple):
         ],
         # MAP 3
         [
-            [0, 100],
-            [0, 100],
-            [0, 100],
-            [0, 100],
-            [0, 100],
-            [0, 100],
-            [0, 100],
-            [0, 0],
-            [0, 0],
+            [19, 141],
+            [100, 140],
+            [19, 247],
+            [100, 247],
+            [19, 363],
+            [136, 363],
+            [29, 433],
+            [103, 671],
+            [51, 671],
             [0, 0],
             [0, 0],
             [0, 0]
@@ -371,17 +371,17 @@ class TutankhamConstants(NamedTuple):
         ],
         # MAP 3
         [
-            [128, 155, Action.LEFT, 25, 155], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
-            [25, 155, Action.RIGHT, 128, 155],
-            [110, 605, Action.LEFT, 10, 605], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
-            [10, 605, Action.RIGHT, 110, 605]
+            [136, 292, Action.LEFT, 19, 292], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [19, 292, Action.RIGHT, 136, 292],
+            [0, 0, 0, 0, 0], # Padding for maps with fewer teleporters
+            [0, 0, 0, 0, 0]
         ],
         # MAP 4
         [
-            [128, 155, Action.LEFT, 25, 155], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
-            [25, 155, Action.RIGHT, 128, 155],
-            [110, 605, Action.LEFT, 10, 605], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
-            [10, 605, Action.RIGHT, 110, 605]
+            [55, 148, Action.RIGHT, 100, 148], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [100, 148, Action.LEFT, 55, 148],
+            [132, 372, Action.LEFT, 10, 372], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [10, 372, Action.RIGHT, 110, 372]
         ]
     ], dtype=jnp.int32)
 
@@ -398,7 +398,7 @@ class TutankhamConstants(NamedTuple):
         ],
         # MAP 3
         [
-            [128, 155]
+            [107, 714]
         ],
         # MAP 4
         [
@@ -748,9 +748,9 @@ class JaxTutankham(JaxEnvironment):
 
 
         #TODO: only for testing
-        level = 1
-        start_x = 136
-        start_y = 60
+        level = 3
+        start_x = 82
+        start_y = 95
         item_states = self.consts.MAP_ITEMS[level%4]
         #---------------------
 
