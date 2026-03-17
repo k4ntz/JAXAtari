@@ -221,7 +221,7 @@ class TutankhamConstants(NamedTuple):
         ],
         # Level 3 (MAP 3)
         [
-            [24, 413, KEY_MAP1, 1], # [x, y, item_type, active]
+            [22, 411, KEY_MAP1, 1], # [x, y, item_type, active]
             [15, 173, CROWN_01_MAP1, 1], 
             [128, 98, RING_MAP1, 1], 
             [17, 278, RUBY_MAP1, 1], 
@@ -231,13 +231,13 @@ class TutankhamConstants(NamedTuple):
         ],
         # Level 4 (MAP 4)
         [
-            [51, 87, KEY_MAP1, 1], # [x, y, item_type, active]
-            [99, 183, CROWN_01_MAP1, 1], 
-            [68, 262, RING_MAP1, 1], 
-            [8, 311, RUBY_MAP1, 1], 
-            [93, 382, CHALICE_MAP1, 1],
-            [18, 494, CROWN_02_MAP1, 1],
-            [0, 0, 0, 1] # MAP 4 has 7 items (no padding)
+            [144, 110, KEY_MAP1, 1], # [x, y, item_type, active]
+            [125, 221, CROWN_01_MAP1, 1], 
+            [117, 269, RING_MAP1, 1], 
+            [19, 326, RUBY_MAP1, 1], 
+            [55, 510, CHALICE_MAP1, 1],
+            [112, 401, CROWN_02_MAP1, 1],
+            [66, 607, CROWN_02_MAP1, 1] # MAP 4 has 7 items (no padding)
         ]
     ], dtype=jnp.int32) # Repeat for 16 levels (4 maps x 4 difficulty levels)
 
@@ -264,28 +264,28 @@ class TutankhamConstants(NamedTuple):
             [0  , 198, 130, 85], # [checkpoint zone top y, checkpoint zone bottom y, checkpoint_x, checkpoint_y]
             [199, 402, 78, 199],
             [403, 567, 12, 403],
-            [568, 700, 80, 568]
+            [568, 800, 80, 568]
         ],
         # MAP 2
         [
             [0  , 198, 136, 60],
             [199, 402, 78, 199],
             [403, 567, 12, 403],
-            [568, 700, 80, 568]
+            [568, 800, 80, 568]
         ],
         # MAP 3
         [
             [0, 200, 16, 93],
             [0, 100, 105, 140],
             [0, 100, 105, 140],
-            [0, 100, 105, 140]
+            [0, 800, 105, 140]
         ],
         # MAP 4
         [
             [0, 200, 82, 95],
             [0, 100, 105, 140],
             [0, 100, 105, 140],
-            [0, 100, 105, 140]
+            [0, 800, 105, 140]
         ]
     ], dtype=jnp.int32)
 
@@ -333,23 +333,23 @@ class TutankhamConstants(NamedTuple):
             [29, 433],
             [103, 671],
             [51, 671],
-            [0, 0],
+            [0, 0], # Padding for maps with fewer spawners
             [0, 0],
             [0, 0]
         ],
         # MAP 4
         [
-            [0, 100],
-            [0, 100],
-            [0, 100],
-            [0, 100],
-            [0, 100],
-            [0, 100],
-            [0, 100],
-            [0, 0],
-            [0, 0],
-            [0, 0],
-            [0, 0],
+            [31, 127],
+            [124, 127],
+            [125, 203],
+            [31, 303],
+            [112, 303],
+            [133, 347],
+            [21, 346],
+            [78, 479],
+            [61, 593],
+            [141, 594],
+            [0, 0], # Padding for maps with fewer spawners
             [0, 0]
         ]
     ], dtype=jnp.int32)
@@ -357,8 +357,8 @@ class TutankhamConstants(NamedTuple):
     MAP_TELEPORTER_POSITIONS: chex.Array = jnp.array([
         # MAP 1
         [
-            [128, 153, Action.LEFT, 27, 153], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
-            [27, 153, Action.RIGHT, 128, 153],
+            [128, 152, Action.LEFT, 27, 152], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [27, 152, Action.RIGHT, 128, 152],
             [144, 604, Action.LEFT, 11, 604], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
             [11, 604, Action.RIGHT, 144, 604]
         ],
@@ -380,8 +380,8 @@ class TutankhamConstants(NamedTuple):
         [
             [55, 148, Action.RIGHT, 100, 148], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
             [100, 148, Action.LEFT, 55, 148],
-            [132, 372, Action.LEFT, 10, 372], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
-            [10, 372, Action.RIGHT, 110, 372]
+            [132, 372, Action.LEFT, 23, 372], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [23, 372, Action.RIGHT, 132, 372]
         ]
     ], dtype=jnp.int32)
 
@@ -398,11 +398,11 @@ class TutankhamConstants(NamedTuple):
         ],
         # MAP 3
         [
-            [107, 714]
+            [107, 717]
         ],
         # MAP 4
         [
-            [128, 155]
+            [77, 721]
         ]
     ], dtype=jnp.int32)
 
@@ -748,10 +748,10 @@ class JaxTutankham(JaxEnvironment):
 
 
         #TODO: only for testing
-        level = 3
-        start_x = 82
-        start_y = 95
-        item_states = self.consts.MAP_ITEMS[level%4]
+        # level = 3
+        # start_x = 82
+        # start_y = 95
+        # item_states = self.consts.MAP_ITEMS[level%4]
         #---------------------
 
         camera_offset = jnp.where(start_x < self.consts.HEIGHT // 2, 0, start_y - self.consts.HEIGHT // 2)
@@ -879,7 +879,6 @@ class JaxTutankham(JaxEnvironment):
         has_movement = (dx[action] != 0) | (dy[action] != 0)
         effective_action = jnp.where(has_movement, action, last_directional_action)
         new_last_directional_action = jnp.where(has_movement, action, last_directional_action)
-        new_last_directional_action = 0 # TODO: only for testing
 
         # If player hits teleporter and right action input is triggered then teleport player to teleporter out coordinates
         # Is always computed, but only effects player poisition if should_teleport is True
@@ -888,6 +887,13 @@ class JaxTutankham(JaxEnvironment):
         new_x = player_x + dx[effective_action]
         new_y = player_y + dy[effective_action]
         player_x, player_y, is_walkable = can_walk_to(self.consts.PLAYER_SIZE, new_x, new_y, player_x, player_y, self.consts.VALID_POS_MAPS[level%4])        
+        
+        # is_walkable = True # TODO: only for testing---------------------------
+        # player_x = new_x
+        # player_y = new_y
+        # new_last_directional_action = 0
+        #--------------------------------------------------------------------
+
         # If teleporter is triggered, the player position is set to teleporter out coordinates 
         player_x = jnp.where(should_teleport, teleporter_out_x, player_x)
         player_y = jnp.where(should_teleport, teleporter_out_y, player_y)
