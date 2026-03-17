@@ -211,33 +211,33 @@ class TutankhamConstants(NamedTuple):
         ],
         # Level 2 (MAP 2)
         [
-            [40, 40, KEY_MAP1, 1],
-            [40, 40, KEY_MAP1, 1],
-            [40, 40, KEY_MAP1, 1],
-            [40, 40, KEY_MAP1, 1],
-            [40, 40, KEY_MAP1, 1],
-            [40, 40, KEY_MAP1, 1],
+            [21, 287, KEY_MAP1, 1], # [x, y, item_type, active]
+            [44, 151, CROWN_01_MAP1, 1], 
+            [127, 98, RING_MAP1, 1], 
+            [33, 412, RUBY_MAP1, 1], 
+            [92, 382, CHALICE_MAP1, 1],
+            [23, 547, CROWN_02_MAP1, 1],
             [0, 0, 0, 0] # Padding for levels with fewer items -> this item is always inactive
         ],
         # Level 3 (MAP 3)
         [
-            [40, 40, KEY_MAP1, 1],
-            [40, 40, KEY_MAP1, 1],
-            [40, 40, KEY_MAP1, 1],
-            [40, 40, KEY_MAP1, 1],
-            [40, 40, KEY_MAP1, 1],
-            [40, 40, KEY_MAP1, 1],
+            [51, 87, KEY_MAP1, 1], # [x, y, item_type, active]
+            [99, 183, CROWN_01_MAP1, 1], 
+            [68, 262, RING_MAP1, 1], 
+            [8, 311, RUBY_MAP1, 1], 
+            [93, 382, CHALICE_MAP1, 1],
+            [18, 494, CROWN_02_MAP1, 1],
             [0, 0, 0, 0] # Padding for levels with fewer items -> this item is always inactive
         ],
         # Level 4 (MAP 4)
         [
-            [40, 40, KEY_MAP1, 1],
-            [40, 40, KEY_MAP1, 1],
-            [40, 40, KEY_MAP1, 1],
-            [40, 40, KEY_MAP1, 1],
-            [40, 40, KEY_MAP1, 1],
-            [40, 40, KEY_MAP1, 1],
-            [40, 40, KEY_MAP1, 1] # MAP 4 has 7 items (no padding)
+            [51, 87, KEY_MAP1, 1], # [x, y, item_type, active]
+            [99, 183, CROWN_01_MAP1, 1], 
+            [68, 262, RING_MAP1, 1], 
+            [8, 311, RUBY_MAP1, 1], 
+            [93, 382, CHALICE_MAP1, 1],
+            [18, 494, CROWN_02_MAP1, 1],
+            [0, 0, 0, 1] # MAP 4 has 7 items (no padding)
         ]
     ], dtype=jnp.int32) # Repeat for 16 levels (4 maps x 4 difficulty levels)
 
@@ -268,10 +268,10 @@ class TutankhamConstants(NamedTuple):
         ],
         # MAP 2
         [
-            [0, 200, 112, 140],
-            [0, 100, 105, 140],
-            [0, 100, 105, 140],
-            [0, 100, 105, 140]
+            [0  , 198, 136, 60], # [checkpoint zone top y, checkpoint zone bottom y, checkpoint_x, checkpoint_y]
+            [199, 402, 78, 199],
+            [403, 567, 12, 403],
+            [568, 700, 80, 568]
         ],
         # MAP 3
         [
@@ -300,17 +300,27 @@ class TutankhamConstants(NamedTuple):
             [39, 345],
             [119, 345],
             [77, 479],
-            [77, 643]
+            [77, 643],
+            [0, 0], # Padding for maps with fewer spawners
+            [0, 0],
+            [0, 0],
+            [0, 0],
+            [0, 0]
         ],
         # MAP 2
         [
-            [0, 100],
-            [0, 100],
-            [0, 100],
-            [0, 100],
-            [0, 100],
-            [0, 100],
-            [0, 100]
+            [10, 119],
+            [143, 119],
+            [27, 195],
+            [107, 195],
+            [17, 294],
+            [136, 294],
+            [80, 454],
+            [78, 535],
+            [32, 603],
+            [112, 603],
+            [91, 675],
+            [64, 675]
         ],
         # MAP 3
         [
@@ -320,7 +330,12 @@ class TutankhamConstants(NamedTuple):
             [0, 100],
             [0, 100],
             [0, 100],
-            [0, 100]
+            [0, 100],
+            [0, 0],
+            [0, 0],
+            [0, 0],
+            [0, 0],
+            [0, 0]
         ],
         # MAP 4
         [
@@ -330,7 +345,12 @@ class TutankhamConstants(NamedTuple):
             [0, 100],
             [0, 100],
             [0, 100],
-            [0, 100]
+            [0, 100],
+            [0, 0],
+            [0, 0],
+            [0, 0],
+            [0, 0],
+            [0, 0]
         ]
     ], dtype=jnp.int32)
 
@@ -344,10 +364,10 @@ class TutankhamConstants(NamedTuple):
         ],
         # MAP 2
         [
-            [128, 155, Action.LEFT, 26, 155], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
-            [26, 155, Action.RIGHT, 128, 155],
-            [110, 605, Action.LEFT, 10, 605], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
-            [10, 605, Action.RIGHT, 110, 605]
+            [59, 340, Action.RIGHT, 96, 340], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [96, 340, Action.LEFT, 59, 340],
+            [0, 0, 0, 0, 0], # Padding for maps with fewer teleporters
+            [0, 0, 0, 0, 0]
         ],
         # MAP 3
         [
@@ -374,7 +394,7 @@ class TutankhamConstants(NamedTuple):
         ],
         # MAP 2
         [
-            [128, 155]
+            [19, 634]
         ],
         # MAP 3
         [
@@ -641,7 +661,6 @@ class TutankhamRenderer(JAXGameRenderer):
             # extract digit i (where i=0 is most significant digit, i=5 is least)
             divisor = 10 ** (5 - i)
             digit_val = (state.tutankham_score // divisor) % 10
-            jax.debug.print("score value: {}", state.tutankham_score)
             digit_mask = self.SHAPE_MASKS["digits"][digit_val]
             # score is located at bottom left, approximately at x=24, y=190
             # each digit is 6 wide, with 2 pixel spacing
@@ -712,13 +731,6 @@ class JaxTutankham(JaxEnvironment):
         amonition_timer = self.consts.AMMO_SUPPLY
         bullet_state = jnp.array([0, 0, 0, 0], dtype=jnp.int32)  # (x, y, bullet_rotation, bullet_active)
         creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
-
-        creature_states = jnp.array([
-            [30, 105, self.consts.SNAKE, 1],
-            [30, 105, self.consts.SCORPION, 1]
-            ],
-            dtype=jnp.int32)
-
         item_states = self.consts.MAP_ITEMS[level%4]  # (N, 4) array with (x, y, item_type, active)
         last_creature_spawn = 0
         laser_flash_count = self.consts.MAX_LASER_FLASHES
@@ -733,6 +745,14 @@ class JaxTutankham(JaxEnvironment):
         player_subpixel=0.0
         creature_subpixels=jnp.zeros(self.consts.MAX_CREATURES, dtype=jnp.float32)
         bullet_subpixel=0.0
+
+
+        #TODO: only for testing
+        level = 1
+        start_x = 136
+        start_y = 60
+        item_states = self.consts.MAP_ITEMS[level%4]
+        #---------------------
 
         camera_offset = jnp.where(start_x < self.consts.HEIGHT // 2, 0, start_y - self.consts.HEIGHT // 2)
 
@@ -768,7 +788,7 @@ class JaxTutankham(JaxEnvironment):
     def teleporter_check(self, player_x, player_y, action, level):
         # Check if player is on a teleporter and has the correct action input to trigger it
         teleporters = self.consts.MAP_TELEPORTER_POSITIONS[level%4]  # (N, 5) N teleporters for current map with (x_in, y_in, trigger_action, x_out, y_out)
-        teleporter_height = 3 # Define a vertical hitbox for the teleporter
+        teleporter_height = 4 # Define a vertical hitbox for the teleporter
 
         teleport_trigger_action = (teleporters[:, 2] == action) # check if trigger action matches the current action input
         player_on_teleporter_x = (teleporters[:, 0] == player_x)
@@ -1024,9 +1044,14 @@ class JaxTutankham(JaxEnvironment):
         active_count = jnp.sum(creature_states[:, 3] == self.consts.ACTIVE)
         new_last_creature_spawn = jnp.where(active_count < 2, last_creature_spawn + 1, last_creature_spawn)
 
-        # check  which spawners are on screen # TODO: height 
+        # deactivate spawners at at (0, 0) which are only used as padding
+        valid_spawner_mask = (spawners[:, 0] != 0) | (spawners[:, 1] != 0)
+        # check which spawners are on screen
         on_screen_mask = jax.vmap(is_onscreen, in_axes=(0, None, None))(spawners[:, 1], 1, camera_offset)
-        any_on_screen = jnp.any(on_screen_mask)
+
+        # combine masks to get active spawners
+        active_spawner_mask = on_screen_mask & valid_spawner_mask
+        any_on_screen = jnp.any(active_spawner_mask)
 
         # Spawn chance grows linearly with time, capped at MAX_PROB
         spawn_chance = jnp.clip(new_last_creature_spawn * growth, 0.0, MAX_PROB)
@@ -1036,7 +1061,7 @@ class JaxTutankham(JaxEnvironment):
         roll = jax.random.uniform(key_roll)
         should_spawn = roll < spawn_chance
 
-        p_weights = on_screen_mask.astype(jnp.float32)
+        p_weights = active_spawner_mask.astype(jnp.float32)
         selected_spawner_idx = jax.random.choice(key_spawner, spawners.shape[0], p=p_weights)
         chosen_pos = spawners[selected_spawner_idx]
 
@@ -1401,7 +1426,7 @@ class JaxTutankham(JaxEnvironment):
         done = self._get_done(state)
         info = 0
 
-        #jax.debug.print("Player position: ({}, {})", player_x, player_y)
+        jax.debug.print("Player position: ({}, {})", player_x, player_y)
         #jax.debug.print("Score: ({})", tutankham_score)
         # return observation, new_state, env_reward, done, info
         return state, state, reward, done, info
