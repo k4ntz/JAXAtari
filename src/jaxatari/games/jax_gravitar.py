@@ -2955,6 +2955,7 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
                     return current_state._replace(
                         mode=jnp.int32(0),
                         key=new_main_key,
+                        done=jnp.array(False),
                         fuel=final_fuel,
                         lives=final_lives,
                         score=final_score,
@@ -3016,23 +3017,26 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
                 death_info = info.replace(level_cleared=jnp.array(False))
                 is_game_over = (lives_after_death <= 0)
 
-                # In level mode, `_step_level_core` already produced the correct
-                # in-level respawn state when lives remain. Do not bounce back to
-                # the solar-system map in that case.
-                stay_in_level = (current_state.mode == jnp.int32(1)) & (~is_game_over)
+                # In level mode, keep in-level respawn when lives remain,
+                # except for reactor level (4), which should return to the
+                # solar-system spawn on death.
+                is_level_mode = (current_state.mode == jnp.int32(1))
+                is_reactor_level = (current_state.current_level == jnp.int32(4))
+                stay_in_level = is_level_mode & (~is_game_over) & (~is_reactor_level)
 
                 def _continue_level_respawn():
-                    obs_out = GravitarObservation(
-                        vector=jnp.array([
-                            current_state.state.x,
-                            current_state.state.y,
-                            current_state.state.vx,
-                            current_state.state.vy,
-                            current_state.state.angle,
-                        ], dtype=jnp.float32)
+                    # Rebuild the current level from its start configuration while
+                    # preserving already-updated meta state (lives/score/fuel/etc.)
+                    # from `current_state`.
+                    new_main_key, subkey_for_reset = jax.random.split(current_state.key)
+                    respawn_level = current_state.current_level
+                    obs_reset, next_state = env_instance.reset_level(
+                        subkey_for_reset,
+                        respawn_level,
+                        current_state,
                     )
-                    next_state = current_state._replace(done=jnp.array(False))
-                    return obs_out, next_state, reward, jnp.array(False), death_info, jnp.array(False), level
+                    next_state = next_state._replace(key=new_main_key, done=jnp.array(False))
+                    return obs_reset, next_state, reward, jnp.array(False), death_info, jnp.array(False), respawn_level
 
                 def _reset_to_map_after_death():
                     new_main_key, subkey_for_reset = jax.random.split(current_state.key)
@@ -3063,6 +3067,12 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
     def _no_reset(operands):
         obs, new_env_state, reward, done, info, reset, level = operands
         no_reset_info = info.replace(level_cleared=jnp.array(False))
+        new_env_state = jax.lax.cond(
+            done,
+            lambda s: s._replace(done=jnp.array(True)),
+            lambda s: s,
+            new_env_state,
+        )
         return obs, new_env_state, reward, done, no_reset_info, reset, level
 
     obs, new_env_state, reward, done, info, reset, level = step_core(env_state, action)
@@ -3454,6 +3464,7 @@ class JaxGravitar(JaxEnvironment):
             enemy_bullets=create_empty_bullets_16(),
             fire_cooldown=jnp.full((MAX_ENEMIES,), 60, dtype=jnp.int32),
             key=key, crash_timer=jnp.int32(0), current_level=level_id,
+            done=jnp.array(False),
             terrain_sprite_idx=terrain_sprite_idx,
             terrain_mask=jnp.zeros((WINDOW_HEIGHT, WINDOW_WIDTH), dtype=jnp.uint8),
             terrain_scale=scale,
