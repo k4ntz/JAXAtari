@@ -1,5 +1,5 @@
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.gravitar.gravitar_mod_plugins import RapidFireMod, ZeroGravityMod, HyperGravityMod, FuelCrisisMod
+from jaxatari.games.mods.gravitar.gravitar_mod_plugins import RapidFireMod, ZeroGravityMod, HyperGravityMod, FuelCrisisMod, HarmlessEnemiesMod, ValuableReactorMod
 
 
 class GravitarEnvMod(JaxAtariModController):
@@ -10,6 +10,8 @@ class GravitarEnvMod(JaxAtariModController):
         "zero_gravity": ZeroGravityMod,
         "hyper_gravity": HyperGravityMod,
         "fuel_crisis": FuelCrisisMod,
+        "harmless_enemies": HarmlessEnemiesMod,
+        "valuable_reactor": ValuableReactorMod,
     }
 
     def __init__(

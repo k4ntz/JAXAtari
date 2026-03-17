@@ -130,6 +130,7 @@ class GravitarConstants(struct.PyTreeNode):
     FUEL_CONSUME_THRUST: float = struct.field(pytree_node=False, default=4.0)
     FUEL_CONSUME_SHIELD_TRACTOR: float = struct.field(pytree_node=False, default=10.0)
     STARTING_FUEL: float = struct.field(pytree_node=False, default=10000.0)
+    ALLOW_TRACTOR_IN_REACTOR: bool = struct.field(pytree_node=False, default=False)
 
     # Bonuses
     SOLAR_SYSTEM_BONUS_FUEL: float = struct.field(pytree_node=False, default=7000.0)
@@ -147,6 +148,11 @@ class GravitarConstants(struct.PyTreeNode):
     
     # Reactor physics
     REACTOR_START_Y: float = struct.field(pytree_node=False, default=30.0)
+    # Optional per-object layout override for reactor level (level 4).
+    # Each entry supports either:
+    # - {'type': <SpriteIdx/int>, 'coords': (<x>, <y>)}
+    # - (<SpriteIdx/int>, <x>, <y>)
+    REACTOR_LEVEL_LAYOUT: tuple = struct.field(pytree_node=False, default_factory=tuple)
 
 
 # Module-level constants used by free functions (not methods)
@@ -302,11 +308,11 @@ class SpriteIdx(IntEnum):
 
     # Reactor & terrain
     REACTOR = 15  # reactor.npy
-    REACTOR_TERR = 16  # reactor_terrant.npy
-    TERRANT1 = 17  # terrant1.npy
-    TERRANT2 = 18  # terrant2.npy
-    TERRANT3 = 19  # terrant_3.npy
-    TERRANT4 = 20  # terrant_4.npy
+    REACTOR_TERR = 16  # reactor_terrain.npy
+    TERRAIN1 = 17  # terrain1.npy
+    TERRAIN2 = 18  # terrain2.npy
+    TERRAIN3 = 19  # terrain3.npy
+    TERRAIN4 = 20  # terrain4.npy
 
     # Planets & UI
     PLANET1 = 21  # planet1.npy
@@ -353,8 +359,8 @@ SHIP_SPRITE_INDICES = jnp.array([
     int(SpriteIdx.SHIP_NNW),  # 15: NNW
 ], dtype=jnp.int32)
 
-TERRANT_SCALE_OVERRIDES = {
-    SpriteIdx.TERRANT2: 1,
+TERRAIN_SCALE_OVERRIDES = {
+    SpriteIdx.TERRAIN2: 1,
 }
 
 LEVEL_LAYOUTS = {
@@ -411,10 +417,10 @@ SPRITE_TO_LEVEL_ID = {
 }
 
 LEVEL_ID_TO_TERRAIN_SPRITE = {
-    0: SpriteIdx.TERRANT1,
-    1: SpriteIdx.TERRANT2,
-    2: SpriteIdx.TERRANT3,
-    3: SpriteIdx.TERRANT4,
+    0: SpriteIdx.TERRAIN1,
+    1: SpriteIdx.TERRAIN2,
+    2: SpriteIdx.TERRAIN3,
+    3: SpriteIdx.TERRAIN4,
     4: SpriteIdx.REACTOR_TERR,
 }
 
@@ -546,7 +552,7 @@ class EnvState:
     fuel: jnp.ndarray
 
     current_level: jnp.ndarray  # int32, current level ID (typically -1 in map mode)
-    terrain_sprite_idx: jnp.ndarray  # int32, terrain sprite for the current level (TERRANT* / REACTOR_TERR)
+    terrain_sprite_idx: jnp.ndarray  # int32, terrain sprite for the current level (TERRAIN* / REACTOR_TERR)
     terrain_mask: jnp.ndarray  # (Hmask, Wmask) bool/uint8
     terrain_scale: jnp.ndarray  # float32, rendering scale factor
     terrain_offset: jnp.ndarray  # (2,) float32, screen-top-left offset [ox, oy]
@@ -592,6 +598,7 @@ class EnvState:
     reactor_gravity: jnp.ndarray  # float32
     fuel_consume_thrust: jnp.ndarray  # float32
     fuel_consume_shield_tractor: jnp.ndarray  # float32
+    allow_tractor_in_reactor: jnp.ndarray  # bool
     prev_action: jnp.ndarray  # int32, previous action taken
 
     def _replace(self, **kwargs):
@@ -648,7 +655,7 @@ def make_default_saucer() -> SaucerState:
     )
 
 
-# Maps planet sprite indices to terrain bank indices (0=empty, 1..4 correspond to TERRANT1..4)
+# Maps planet sprite indices to terrain bank indices (0=empty, 1..4 correspond to TERRAIN1..4)
 @jax.jit
 def planet_to_bank_idx(psi: jnp.ndarray) -> jnp.ndarray:
     b = jnp.int32(0)
@@ -661,17 +668,17 @@ def planet_to_bank_idx(psi: jnp.ndarray) -> jnp.ndarray:
 
 
 @jax.jit
-def map_planet_to_terrant(planet_sprite_idx: jnp.ndarray) -> jnp.ndarray:
+def map_planet_to_terrain(planet_sprite_idx: jnp.ndarray) -> jnp.ndarray:
     P1 = jnp.int32(int(SpriteIdx.PLANET1))
     P2 = jnp.int32(int(SpriteIdx.PLANET2))
     P3 = jnp.int32(int(SpriteIdx.PLANET3))
     P4 = jnp.int32(int(SpriteIdx.PLANET4))
     PR = jnp.int32(int(SpriteIdx.REACTOR))
 
-    T1 = jnp.int32(int(SpriteIdx.TERRANT1))
-    T2 = jnp.int32(int(SpriteIdx.TERRANT2))
-    T3 = jnp.int32(int(SpriteIdx.TERRANT3))
-    T4 = jnp.int32(int(SpriteIdx.TERRANT4))
+    T1 = jnp.int32(int(SpriteIdx.TERRAIN1))
+    T2 = jnp.int32(int(SpriteIdx.TERRAIN2))
+    T3 = jnp.int32(int(SpriteIdx.TERRAIN3))
+    T4 = jnp.int32(int(SpriteIdx.TERRAIN4))
     TR = jnp.int32(int(SpriteIdx.REACTOR_TERR))
 
     invalid = jnp.int32(-1)
@@ -772,11 +779,11 @@ def load_sprites_tuple() -> tuple:
         SpriteIdx.OBSTACLE: "obstacle",
         SpriteIdx.SPAWN_LOC: "spawn_location",
         SpriteIdx.REACTOR: "reactor",
-        SpriteIdx.REACTOR_TERR: "reactor_terrant",
-        SpriteIdx.TERRANT1: "terrant1",
-        SpriteIdx.TERRANT2: "terrant2",
-        SpriteIdx.TERRANT3: "terrant_3",
-        SpriteIdx.TERRANT4: "terrant_4",
+        SpriteIdx.REACTOR_TERR: "reactor_terrain",
+        SpriteIdx.TERRAIN1: "terrain1",
+        SpriteIdx.TERRAIN2: "terrain2",
+        SpriteIdx.TERRAIN3: "terrain3",
+        SpriteIdx.TERRAIN4: "terrain4",
         SpriteIdx.PLANET1: "planet1",
         SpriteIdx.PLANET2: "planet2",
         SpriteIdx.PLANET3: "planet3",
@@ -928,6 +935,7 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
         reactor_gravity=jnp.float32(_DEFAULT_CONSTS.REACTOR_GRAVITY),
         fuel_consume_thrust=jnp.float32(_DEFAULT_CONSTS.FUEL_CONSUME_THRUST),
         fuel_consume_shield_tractor=jnp.float32(_DEFAULT_CONSTS.FUEL_CONSUME_SHIELD_TRACTOR),
+        allow_tractor_in_reactor=jnp.array(_DEFAULT_CONSTS.ALLOW_TRACTOR_IN_REACTOR),
         prev_action=jnp.int32(0),
     )
 
@@ -1360,7 +1368,7 @@ def ship_step(state: ShipState,
 
     # Apply gravity based on mode and terrain
     # Map mode (terrain_bank_idx == 0): pull toward sun
-    # Terrant2 (bank_idx == 2) and Reactor (bank_idx == 5): pull toward center (radial gravity)
+    # Terrain2 (bank_idx == 2) and Reactor (bank_idx == 5): pull toward center (radial gravity)
     # Other planets: pull downward
     is_map_mode = (terrain_bank_idx == 0)
     is_planet = (terrain_bank_idx == 1) | (terrain_bank_idx == 2) | (terrain_bank_idx == 3) | (terrain_bank_idx == 4)
@@ -1383,23 +1391,23 @@ def ship_step(state: ShipState,
     gravity_strength = gravity * (3.2 / dist_to_sun)  # Inverse distance law
     gravity_strength = jnp.clip(gravity_strength, 0.0, gravity * 5.0)  # Cap maximum gravity
     
-    # Level center for terrant2's radial gravity
+    # Level center for terrain2's radial gravity
     level_center_x = window_size[0] / 2.0 + 5.0  # Slightly right of center to match ALE's layout
     level_center_y = window_size[1] / 2.0
     
-    # Calculate direction to level center (for terrant2)
+    # Calculate direction to level center (for terrain2)
     dx_to_center = level_center_x - state.x
     dy_to_center = level_center_y - state.y
     dist_to_center = jnp.sqrt(dx_to_center**2 + dy_to_center**2)
     dist_to_center = jnp.maximum(dist_to_center, 1.0)
     
-    # Radial gravity strength for terrant2
+    # Radial gravity strength for terrain2
     radial_gravity_strength = gravity * (50.0 / dist_to_center)
     radial_gravity_strength = jnp.clip(radial_gravity_strength, 0.0, gravity * 2.0)
     
     # Apply gravitational pull based on terrain type
     # Map mode: toward sun
-    # Terrant2: toward center (radial)
+    # Terrain2: toward center (radial)
     # Other planets: downward only
     vx = jnp.where(is_map_mode, 
                    vx + (dx_to_sun / dist_to_sun) * gravity_strength,
@@ -2174,7 +2182,7 @@ def _step_level_core(env_state: EnvState, action: int):
     # Tractor beam pickup: when shield/tractor is active in planet levels (not reactor)
     is_planet_level = state_after_spawn.mode == 1
     is_reactor = state_after_spawn.terrain_sprite_idx == int(SpriteIdx.REACTOR_TERR)
-    can_use_tractor = is_planet_level & ~is_reactor
+    can_use_tractor = is_planet_level & ((~is_reactor) | state_after_spawn.allow_tractor_in_reactor)
     
     # Calculate distance from ship to each tank
     dx = tanks.x - ship.x
@@ -2319,6 +2327,23 @@ def _step_level_core(env_state: EnvState, action: int):
 
     hit_enemy_mask = check_ship_enemy_collisions(ship_after_move, enemies, SHIP_RADIUS)
     enemies = enemies._replace(death_timer=jnp.where(hit_enemy_mask, ENEMY_EXPLOSION_FRAMES, enemies.death_timer))
+
+    # Green enemies carry hidden tanks at the same coordinates; reveal those
+    # tanks once the corresponding green enemy is killed.
+    green_sprite_idx = int(SpriteIdx.ENEMY_GREEN)
+    was_green_alive = (state_after_ufo.enemies.sprite_idx == green_sprite_idx) & (state_after_ufo.enemies.hp > 0)
+    is_green_dead_now = (enemies.sprite_idx == green_sprite_idx) & (enemies.hp <= 0)
+    green_killed_by_hp = was_green_alive & is_green_dead_now
+    green_killed_by_contact = (enemies.sprite_idx == green_sprite_idx) & hit_enemy_mask
+    green_just_killed = green_killed_by_hp | green_killed_by_contact
+
+    same_x = jnp.abs(new_fuel_tanks.x[:, None] - enemies.x[None, :]) < 0.51
+    same_y = jnp.abs(new_fuel_tanks.y[:, None] - enemies.y[None, :]) < 0.51
+    same_position = same_x & same_y
+    tank_matches_killed_green = jnp.any(same_position & green_just_killed[None, :], axis=1)
+
+    hidden_tank_to_reveal = (~new_fuel_tanks.active) & (new_fuel_tanks.sprite_idx == int(SpriteIdx.FUEL_TANK)) & tank_matches_killed_green
+    new_fuel_tanks = new_fuel_tanks._replace(active=new_fuel_tanks.active | hidden_tank_to_reveal)
 
     enemy_bullets, hit_by_enemy_bullet = consume_ship_hits(ship_after_move, enemy_bullets, SHIP_RADIUS)
     hit_terr = terrain_hit(state_after_ufo, ship_after_move.x, ship_after_move.y, 2)
@@ -3157,16 +3182,26 @@ class JaxGravitar(JaxEnvironment):
         self.terrain_bank = self._build_terrain_bank()
 
         # --- Convert all level data to JAX arrays ---
+        # Reactor layout can be overridden through constants to support mods that
+        # add enemies/fuel tanks in level 4 without patching base code.
         num_levels = max(LEVEL_LAYOUTS.keys()) + 1
-        max_objects = max(len(v) for v in LEVEL_LAYOUTS.values()) if LEVEL_LAYOUTS else 0
+        reactor_override = tuple(self.consts.REACTOR_LEVEL_LAYOUT)
+        max_default_objects = max(len(v) for v in LEVEL_LAYOUTS.values()) if LEVEL_LAYOUTS else 0
+        max_objects = max(max_default_objects, len(reactor_override))
         layout_types = np.full((num_levels, max_objects), -1, dtype=np.int32)
         layout_coords_x = np.zeros((num_levels, max_objects), dtype=np.float32)
         layout_coords_y = np.zeros((num_levels, max_objects), dtype=np.float32)
         for level_id, layout_data in LEVEL_LAYOUTS.items():
-            for i, obj in enumerate(layout_data):
-                layout_types[level_id, i] = obj['type']
-                layout_coords_x[level_id, i] = obj['coords'][0]
-                layout_coords_y[level_id, i] = obj['coords'][1]
+            level_layout_data = reactor_override if (level_id == 4 and len(reactor_override) > 0) else layout_data
+            for i, obj in enumerate(level_layout_data):
+                if isinstance(obj, dict):
+                    obj_type = obj["type"]
+                    coord_x, coord_y = obj["coords"]
+                else:
+                    obj_type, coord_x, coord_y = obj
+                layout_types[level_id, i] = int(obj_type)
+                layout_coords_x[level_id, i] = coord_x
+                layout_coords_y[level_id, i] = coord_y
         self.jax_layout = {"types": jnp.array(layout_types), "coords_x": jnp.array(layout_coords_x),
                            "coords_y": jnp.array(layout_coords_y)}
 
@@ -3187,7 +3222,7 @@ class JaxGravitar(JaxEnvironment):
             terr_surf = self.sprites[terrain_sprite_enum]
             th, tw = terr_surf.shape[0], terr_surf.shape[1]
             scale = min(WINDOW_WIDTH / tw, WINDOW_HEIGHT / th)
-            extra = TERRANT_SCALE_OVERRIDES.get(terrain_sprite_enum, 1.0)
+            extra = TERRAIN_SCALE_OVERRIDES.get(terrain_sprite_enum, 1.0)
             scale *= float(extra)
             sw, sh = int(tw * scale), int(th * scale)
             level_offset = LEVEL_OFFSETS.get(level_id, (0, 0))
@@ -3386,6 +3421,7 @@ class JaxGravitar(JaxEnvironment):
             reactor_gravity=jnp.float32(self.consts.REACTOR_GRAVITY),
             fuel_consume_thrust=jnp.float32(self.consts.FUEL_CONSUME_THRUST),
             fuel_consume_shield_tractor=jnp.float32(self.consts.FUEL_CONSUME_SHIELD_TRACTOR),
+            allow_tractor_in_reactor=jnp.array(self.consts.ALLOW_TRACTOR_IN_REACTOR),
             prev_action=jnp.int32(0),
         )
 
@@ -3412,19 +3448,24 @@ class JaxGravitar(JaxEnvironment):
                 enemies_in, tanks_in, e_idx_in, t_idx_in = val
                 orig_idx = jnp.where(obj_type == SpriteIdx.ENEMY_ORANGE_FLIPPED, SpriteIdx.ENEMY_ORANGE, obj_type)
                 w, h = self.jax_sprite_dims[orig_idx]
+                tank_w, tank_h = self.jax_sprite_dims[int(SpriteIdx.FUEL_TANK)]
                 
-                # For terrant2 (level 1), coordinates are designed for 160-width but sprite is 96-width
+                # For terrain2 (level 1), coordinates are designed for 160-width but sprite is 96-width
                 # Scale coordinates to account for this: multiply by (96/160) for x coords
                 terrain_sprite = self.jax_level_to_terrain[level_id]
-                is_terrant2 = (terrain_sprite == int(SpriteIdx.TERRANT2))
+                is_terrain2 = (terrain_sprite == int(SpriteIdx.TERRAIN2))
                 coord_x = self.jax_layout["coords_x"][level_id, i]
                 coord_y = self.jax_layout["coords_y"][level_id, i]
-                # Adjust x coordinate for terrant2's narrower width
-                adjusted_coord_x = jnp.where(is_terrant2, coord_x * 0.6, coord_x)  # 96/160 = 0.6
+                # Adjust x coordinate for terrain2's narrower width
+                adjusted_coord_x = jnp.where(is_terrain2, coord_x * 0.6, coord_x)  # 96/160 = 0.6
                 
                 x = ox + coord_x * scale
                 y = oy + coord_y * scale
                 is_tank = (obj_type == SpriteIdx.FUEL_TANK).astype(jnp.int32)
+                is_green_enemy = (obj_type == SpriteIdx.ENEMY_GREEN).astype(jnp.int32)
+                spawn_tank = jnp.maximum(is_tank, is_green_enemy)
+                spawned_tank_active = is_tank  # explicit tank active, green-linked tank hidden
+
                 new_enemies = enemies_in._replace(x=enemies_in.x.at[e_idx_in].set(jnp.where(is_tank, -1.0, x)),
                                                   y=enemies_in.y.at[e_idx_in].set(jnp.where(is_tank, -1.0, y)),
                                                   w=enemies_in.w.at[e_idx_in].set(jnp.where(is_tank, 0.0, w)),
@@ -3432,15 +3473,15 @@ class JaxGravitar(JaxEnvironment):
                                                   sprite_idx=enemies_in.sprite_idx.at[e_idx_in].set(
                                                       jnp.where(is_tank, -1, obj_type)),
                                                   hp=enemies_in.hp.at[e_idx_in].set(jnp.where(is_tank, 0, 1)), )
-                new_tanks = tanks_in._replace(x=tanks_in.x.at[t_idx_in].set(jnp.where(is_tank, x, -1.0)),
-                                              y=tanks_in.y.at[t_idx_in].set(jnp.where(is_tank, y, -1.0)),
-                                              w=tanks_in.w.at[t_idx_in].set(jnp.where(is_tank, w, 0.0)),
-                                              h=tanks_in.h.at[t_idx_in].set(jnp.where(is_tank, h, 0.0)),
+                new_tanks = tanks_in._replace(x=tanks_in.x.at[t_idx_in].set(jnp.where(spawn_tank, x, -1.0)),
+                                              y=tanks_in.y.at[t_idx_in].set(jnp.where(spawn_tank, y, -1.0)),
+                                              w=tanks_in.w.at[t_idx_in].set(jnp.where(spawn_tank, tank_w, 0.0)),
+                                              h=tanks_in.h.at[t_idx_in].set(jnp.where(spawn_tank, tank_h, 0.0)),
                                               sprite_idx=tanks_in.sprite_idx.at[t_idx_in].set(
-                                                  jnp.where(is_tank, obj_type, -1)),
+                                                  jnp.where(spawn_tank, int(SpriteIdx.FUEL_TANK), -1)),
                                               active=tanks_in.active.at[t_idx_in].set(
-                                                  jnp.where(is_tank, True, False)), )
-                return new_enemies, new_tanks, e_idx_in + (1 - is_tank), t_idx_in + is_tank
+                                                  jnp.where(spawn_tank, spawned_tank_active.astype(bool), False)), )
+                return new_enemies, new_tanks, e_idx_in + (1 - is_tank), t_idx_in + spawn_tank
 
             return jax.lax.cond(obj_type != -1, place_obj, lambda x: x, (enemies, tanks, e_idx, t_idx))
 
@@ -3500,13 +3541,13 @@ class JaxGravitar(JaxEnvironment):
             
             # Calculate scale with overrides
             scale = min(W / tw, H / th)
-            extra = TERRANT_SCALE_OVERRIDES.get(SpriteIdx(idx), 1.0)
+            extra = TERRAIN_SCALE_OVERRIDES.get(SpriteIdx(idx), 1.0)
             scale *= float(extra)
             
             # Calculate scaled dimensions
             sw, sh = int(tw * scale), int(th * scale)
             
-            # For terrant2 (narrow sprite), we need to center it within the full window width
+            # For terrain2 (narrow sprite), we need to center it within the full window width
             # The offset should place the scaled sprite in the center
             ox, oy = (W - sw) // 2, (H - sh) // 2
             
@@ -3537,8 +3578,8 @@ class JaxGravitar(JaxEnvironment):
             return color_map
 
         terrains_to_build = [
-            (SpriteIdx.TERRANT1, 1), (SpriteIdx.TERRANT2, 2), (SpriteIdx.TERRANT3, 3),
-            (SpriteIdx.TERRANT4, 4), (SpriteIdx.REACTOR_TERR, 5),
+            (SpriteIdx.TERRAIN1, 1), (SpriteIdx.TERRAIN2, 2), (SpriteIdx.TERRAIN3, 3),
+            (SpriteIdx.TERRAIN4, 4), (SpriteIdx.REACTOR_TERR, 5),
         ]
         for sprite_idx, bank_idx in terrains_to_build:
             bank.append(sprite_to_mask(int(sprite_idx), bank_idx))
@@ -3765,9 +3806,9 @@ class GravitarRenderer(JAXGameRenderer):
 
         # Combine all level actor drawing functions into one group.
         def draw_level_actors(f):
-            frame_with_enemies = draw_enemies(f)
-            frame_with_tanks = draw_fuel_tanks(frame_with_enemies)
-            frame_with_ufo = draw_ufo(frame_with_tanks)
+            frame_with_tanks = draw_fuel_tanks(f)
+            frame_with_enemies = draw_enemies(frame_with_tanks)
+            frame_with_ufo = draw_ufo(frame_with_enemies)
 
             return frame_with_ufo
 
@@ -3954,7 +3995,7 @@ class GravitarRenderer(JAXGameRenderer):
             # Check if we should also show tractor beam (only in planet surface levels, not reactor)
             is_planet_level = state.mode == 1
             is_reactor = state.terrain_sprite_idx == int(SpriteIdx.REACTOR_TERR)
-            can_show_tractor = is_planet_level & ~is_reactor
+            can_show_tractor = is_planet_level & ((~is_reactor) | state.allow_tractor_in_reactor)
             
             # Draw tractor beam (thrust back sprite) at the back of the ship in planet surface levels only
             def draw_tractor(frame_in):

@@ -40,3 +40,25 @@ class FuelCrisisMod(JaxAtariInternalModPlugin):
         "FUEL_CONSUME_THRUST": 20.0,
         "FUEL_CONSUME_SHIELD_TRACTOR": 50.0,
     }
+
+class HarmlessEnemiesMod(JaxAtariInternalModPlugin):
+    """Make all enemies harmless by disabling their bullets."""
+
+    constants_overrides = {
+        "MAX_ACTIVE_ENEMY_BULLETS": 0,
+        "MAX_ACTIVE_SAUCER_BULLETS": 0,
+    }
+
+
+class ValuableReactorMod(JaxAtariInternalModPlugin):
+    """Populate reactor level with 3 enemies and 2 fuel tanks."""
+
+    constants_overrides = {
+        "ALLOW_TRACTOR_IN_REACTOR": True,
+        "REACTOR_LEVEL_LAYOUT": (
+            {"type": 5, "coords": (104, 104)},   # ENEMY_ORANGE
+            {"type": 6, "coords": (56, 144)},   # ENEMY_GREEN
+            {"type": 39, "coords": (80, 18)},  # ENEMY_ORANGE_FLIPPED
+            {"type": 12, "coords": (66, 88)}, # FUEL_TANK
+        ),
+    }
