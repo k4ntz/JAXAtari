@@ -4,14 +4,16 @@ from typing import NamedTuple, Tuple
 import jax
 import jax.numpy as jnp
 import chex
+from flax import struct
 
 from jaxatari import spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
+from jaxatari.modification import AutoDerivedConstants
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
 
-def _get_default_asset_config() -> tuple:
+def get_default_asset_config() -> tuple:
     """
     Returns the default declarative asset manifest for Kaboom.
     Kept immutable (tuple of dicts) to fit NamedTuple defaults.
@@ -45,10 +47,10 @@ def _get_default_asset_config() -> tuple:
         {
             'name': 'bombs',
             'type': 'group',
-            'files': (
+            'files': [
                 'bomb1.npy',
                 'bomb2.npy',
-            ),
+            ],
         },
         {
             'name': 'bomb_fuse_states',
@@ -96,61 +98,81 @@ def _get_default_asset_config() -> tuple:
     )
 
 
-# Game contents
-class KaboomConstants(NamedTuple):
-    EXPIRES_IN_VALUES: chex.Array = jnp.array([0, 12, 24, 36, 48, 60, 72, 84, 96, 108, 120, 132, 144, 156, 168])
-    ASSET_CONFIG: tuple = _get_default_asset_config()
-    WIDTH: int = 160
-    HEIGHT: int = 210
-    BUCKET_SPEED_X: int = 5  # in px
-    BUCKET_X_OFFSET: int = 40  # in px
-    BOMB_FUSE_STATES: int = 3  # bomb fuse animations count
-    BOMB_EXPLODE_STATES: int = 11  # bomb animations count 4 + 4 + 3
-    BOMB_BUCKET_EXPLODE_STATES: int = 12  # bomb animations count 4 + 4 + 4
-    BOMB_SPAWN_HELP_VALUE_Y: int = 20
-    BOMB_SIZE: tuple[int, int] = (5, 12)
-    BACKGROUND_STATES: int = 32  # background flickers 16 times 2 frames each
-    DEFAULT_STATE: int = -1
-    MAX_SCORE: int = 999_999
-    BOMBS_COUNT_GROUPS = jnp.array([10, 20, 30, 40, 50, 75, 100,150])  # bombs count
-    MAD_BOMBER_SPEED_GROUPS = jnp.array([1, 2, 2, 3, 3, 4, 4, 4])  # in px
-    MAD_BOMBER_RANDOMNESS_NUMBERS = jnp.array([1, 1, 2, 2, 3, 3, 4, 4])  # just numbers
-    BOMB_SPEED_GROUPS = jnp.array([1, 1, 2, 2, 3, 3, 3, 4])  # in px
-    BOMB_INTERVAL_PX_GROUPS = jnp.array([36, 18, 18, 10, 12, 6, 6, 3])  # in frames
-    BACKGROUND_SIZE: tuple[int, int] = (160, 210)
-    CUR_BACKGROUND_TOP: tuple[int, int] = (160, 210)
-    BACKGROUND_TOP_SIZE: tuple[int, int] = (144, 40)
-    BACKGROUND_TOP_POS: tuple[int, int] = (8, 7)
-    SCORE_POS: tuple[int, int] = (92, 8)
-    CUR_BACKGROUND_BOTTOM: tuple[int, int] = (144, 142)
-    BACKGROUND_BOTTOM_SIZE: tuple[int, int] = (144, 142)
-    BACKGROUND_BOTTOM_POS: tuple[int, int] = (8, 47)
-    BUCKET_SIZE: tuple[int, int] = (14, 8)
-    BOTTOM_EDGE_Y: int = 189
-    MAD_BOMBER_SIZE: tuple[int, int] = (7, 30)
-    MAD_BOMBER_POS_X: int = 22
-    MAD_BOMBER_POS_Y: int = 20
-    BUCKET_THREE_POS_X: int = 73
-    BUCKET_THREE_POS_Y: int = 180
-    BUCKET_TWO_POS_X: int = 73
-    BUCKET_TWO_POS_Y: int = 164
-    BUCKET_ONE_POS_X: int = 73
-    BUCKET_ONE_POS_Y: int = 148
-    BUCKET_MIN_ALLOWED_POS_X: int = 18
-    BUCKET_MAX_ALLOWED_POS_X: int = 128
+class KaboomConstants(AutoDerivedConstants):
+    EXPIRES_IN_VALUES: chex.Array = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([0, 12, 24, 36, 48, 60, 72, 84, 96, 108, 120, 132, 144, 156, 168])
+    )
+    ASSET_CONFIG: tuple = struct.field(
+        pytree_node=False,
+        default_factory=get_default_asset_config
+    )
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    BUCKET_SPEED_X: int = struct.field(pytree_node=False, default=5)  # in px
+    BUCKET_X_OFFSET: int = struct.field(pytree_node=False, default=40)  # in px
+    BOMB_FUSE_STATES: int = struct.field(pytree_node=False, default=3)  # bomb fuse animations count
+    BOMB_EXPLODE_STATES: int = struct.field(pytree_node=False, default=11)  # bomb animations count 4 + 4 + 3
+    BOMB_BUCKET_EXPLODE_STATES: int = struct.field(pytree_node=False, default=12)  # bomb animations count 4 + 4 + 4
+    BOMB_SPAWN_HELP_VALUE_Y: int = struct.field(pytree_node=False, default=20)
+    BOMB_SIZE: tuple[int, int] = struct.field(pytree_node=False, default=(5, 12))
+    BACKGROUND_STATES: int = struct.field(pytree_node=False, default=32)  # background flickers 16 times 2 frames each
+    DEFAULT_STATE: int = struct.field(pytree_node=False, default=-1)
+    MAX_SCORE: int = struct.field(pytree_node=False, default=999_999)
+    BOMBS_COUNT_GROUPS: chex.Array = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([10, 20, 30, 40, 50, 75, 100, 150])
+    )  # bombs count
+    MAD_BOMBER_SPEED_GROUPS: chex.Array = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([1, 2, 2, 3, 3, 4, 4, 4])
+    )  # in px
+    MAD_BOMBER_RANDOMNESS_NUMBERS: chex.Array = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([1, 1, 2, 2, 3, 3, 4, 4])
+    )  # just numbers
+    BOMB_SPEED_GROUPS: chex.Array = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([1, 1, 2, 2, 3, 3, 3, 4])
+    )  # in px
+    BOMB_INTERVAL_PX_GROUPS: chex.Array = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([36, 18, 18, 10, 12, 6, 6, 3])
+    )  # in frames
+    BACKGROUND_SIZE: tuple[int, int] = struct.field(pytree_node=False, default=(160, 210))
+    CUR_BACKGROUND_TOP: tuple[int, int] = struct.field(pytree_node=False, default=(160, 210))
+    BACKGROUND_TOP_SIZE: tuple[int, int] = struct.field(pytree_node=False, default=(144, 40))
+    BACKGROUND_TOP_POS: tuple[int, int] = struct.field(pytree_node=False, default=(8, 7))
+    SCORE_POS: tuple[int, int] = struct.field(pytree_node=False, default=(92, 8))
+    CUR_BACKGROUND_BOTTOM: tuple[int, int] = struct.field(pytree_node=False, default=(144, 142))
+    BACKGROUND_BOTTOM_SIZE: tuple[int, int] = struct.field(pytree_node=False, default=(144, 142))
+    BACKGROUND_BOTTOM_POS: tuple[int, int] = struct.field(pytree_node=False, default=(8, 47))
+    BUCKET_SIZE: tuple[int, int] = struct.field(pytree_node=False, default=(14, 8))
+    BOTTOM_EDGE_Y: int = struct.field(pytree_node=False, default=189)
+    MAD_BOMBER_SIZE: tuple[int, int] = struct.field(pytree_node=False, default=(7, 30))
+    MAD_BOMBER_POS_X: int = struct.field(pytree_node=False, default=22)
+    MAD_BOMBER_POS_Y: int = struct.field(pytree_node=False, default=20)
+    BUCKET_THREE_POS_X: int = struct.field(pytree_node=False, default=73)
+    BUCKET_THREE_POS_Y: int = struct.field(pytree_node=False, default=180)
+    BUCKET_TWO_POS_X: int = struct.field(pytree_node=False, default=73)
+    BUCKET_TWO_POS_Y: int = struct.field(pytree_node=False, default=164)
+    BUCKET_ONE_POS_X: int = struct.field(pytree_node=False, default=73)
+    BUCKET_ONE_POS_Y: int = struct.field(pytree_node=False, default=148)
+    BUCKET_MIN_ALLOWED_POS_X: int = struct.field(pytree_node=False, default=18)
+    BUCKET_MAX_ALLOWED_POS_X: int = struct.field(pytree_node=False, default=128)
 
 
-# Agent's observation
-class KaboomObservation(NamedTuple):
-    mad_bomber_pos: chex.Array  # tuple[int, int]
-    buckets_pos: chex.Array
-    bombs: chex.Array
-    score: chex.Array
-    lives: chex.Array
+@struct.dataclass
+class KaboomObservation:
+    mad_bomber_pos: ObjectObservation  # tuple[int, int]
+    buckets_pos: ObjectObservation
+    bombs: ObjectObservation
+    score: ObjectObservation
+    lives: ObjectObservation
 
 
-# Current game state
-class KaboomState(NamedTuple):
+@struct.dataclass
+class KaboomState:
     mad_bomber_pos_x: chex.Array
     mad_bomber_pos_y: chex.Array
     mad_bomber_going_left: chex.Array
@@ -169,23 +191,26 @@ class KaboomState(NamedTuple):
     bombs_exploding: chex.Array
     background_flickering: chex.Array
     background_state: chex.Array
+    waiting_for_restart: chex.Array
     level_success: chex.Array
     level_finished: chex.Array
     key: chex.PRNGKey
 
 
-class KaboomInfo(NamedTuple):
+@struct.dataclass
+class KaboomInfo:
     score: chex.Array
 
 
 class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, KaboomConstants]):
     def __init__(self, consts: KaboomConstants = None):
-        consts = consts or KaboomConstants()
         super().__init__(consts)
-        self.renderer = KaboomRenderer(consts)
+        self.consts = consts or KaboomConstants()
+        self.renderer = KaboomRenderer(self.consts)
         self.action_set = [
             Action.RIGHT,
             Action.LEFT,
+            Action.FIRE,
         ]
 
     @partial(jax.jit, static_argnums=(0,))
@@ -212,6 +237,7 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
             bombs_exploding=jnp.array(False, dtype=jnp.bool),
             background_flickering=jnp.array(False, dtype=jnp.bool),
             background_state=jnp.array(self.consts.DEFAULT_STATE, dtype=jnp.int32),
+            waiting_for_restart=jnp.array(False, dtype=jnp.bool),
             level_finished=jnp.array(False, dtype=jnp.bool),
             level_success=jnp.array(False, dtype=jnp.bool),
             key=state_key
@@ -572,7 +598,7 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
 
     @partial(jax.jit, static_argnums=(0,))
     def update_background_step(self, bombs, buckets_pos, bombs_should_explode, background_flickering, background_state, bombs_dropped, bombs_falling_and_exploding,
-                               level_finished, level_success, level, lives):
+                               waiting_for_restart, level_finished, level_success, level, lives):
         X = 0
         Y = 1
         FUSE = 2
@@ -604,7 +630,7 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
 
         animation_done = background_state >= self.consts.BACKGROUND_STATES
 
-        def failure_reset():
+        def enter_waiting_for_restart():
             # deactivate the topmost active bucket
             active_mask = buckets_pos[:, 2] == 1
             remove_idx = jnp.argmax(active_mask)
@@ -614,8 +640,9 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
             new_level = jnp.where(level > 1, level - 1, level)
             return (
                 0,  # bombs_dropped
-                True,  # bombs_falling_and_exploding
-                False,  # level_finished
+                False,  # bombs_falling_and_exploding
+                True,  # waiting_for_restart
+                True,  # level_finished
                 False,  # level_success
                 False,  # background_flickering
                 self.consts.DEFAULT_STATE,  # background_state
@@ -627,6 +654,7 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         (
             bombs_dropped,
             bombs_falling_and_exploding,
+            waiting_for_restart,
             level_finished,
             level_success,
             background_flickering,
@@ -636,10 +664,11 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
             buckets_pos,
         ) = jax.lax.cond(
             failure_step & animation_done,
-            failure_reset,
+            enter_waiting_for_restart,
             lambda: (
                 bombs_dropped,
                 bombs_falling_and_exploding,
+                waiting_for_restart,
                 level_finished,
                 level_success,
                 background_flickering,
@@ -662,7 +691,7 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         level_success = jnp.where(success_reset, False, level_success)
         level = jnp.where(success_reset, level + 1, level)
 
-        return bombs_should_explode, background_flickering, background_state, bombs_dropped, bombs_falling_and_exploding, level_finished, level_success, level, lives, buckets_pos
+        return bombs_should_explode, background_flickering, background_state, bombs_dropped, bombs_falling_and_exploding, waiting_for_restart, level_finished, level_success, level, lives, buckets_pos
 
     @partial(jax.jit, static_argnums=(0,))
     def update_mad_bomber_step(self, mad_bomber_motion_counter, mad_bomber_pos_x, mad_bomber_going_left, level,
@@ -738,48 +767,88 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: KaboomState, action: chex.Array) -> Tuple[
         KaboomObservation, KaboomState, float, bool, KaboomInfo]:
-        buckets_pos, buckets_moving_state, buckets_were_moving_right, buckets_jitter_state, frames_counter, key \
-            = self.update_bucket_step(state, action, state.buckets_pos, state.buckets_moving_state,
-                                      state.buckets_were_moving_right, state.buckets_jitter_state, state.frames_counter,
-                                      state.key)
+        restart_pressed = state.waiting_for_restart & (action == self.action_set[2])
 
-        bombs, buckets_pos, mad_bomber_pos, level, bombs_dropped, score, level_finished, level_success, frames_counter, bombs_falling_and_exploding, bombs_should_explode, key \
-            = self.update_bombs_step(state.bombs_states, buckets_pos,
-                                     (state.mad_bomber_pos_x, state.mad_bomber_pos_y), state.level, state.bombs_dropped,
-                                     state.score, state.level_finished, state.level_success, frames_counter,
-                                     state.bombs_falling_and_exploding, state.bombs_exploding, key)
+        def restart_after_failure():
+            return KaboomState(
+                mad_bomber_pos_x=state.mad_bomber_pos_x,
+                mad_bomber_pos_y=state.mad_bomber_pos_y,
+                mad_bomber_going_left=state.mad_bomber_going_left,
+                mad_bomber_motion_counter=state.mad_bomber_motion_counter,
+                bombs_states=state.bombs_states,
+                buckets_pos=state.buckets_pos,
+                buckets_jitter_state=state.buckets_jitter_state,
+                buckets_moving_state=state.buckets_moving_state,
+                buckets_were_moving_right=state.buckets_were_moving_right,
+                score=state.score,
+                lives=state.lives,
+                level=state.level,
+                bombs_dropped=jnp.array(0),
+                frames_counter=state.frames_counter + 1,
+                bombs_falling_and_exploding=True,
+                bombs_exploding=False,
+                background_flickering=False,
+                background_state=jnp.array(self.consts.DEFAULT_STATE, dtype=jnp.int32),
+                waiting_for_restart=False,
+                level_finished=False,
+                level_success=False,
+                key=state.key,
+            )
 
-        bombs_should_explode, background_flickering, background_state, bombs_dropped, bombs_falling_and_exploding, level_finished, level_success, level, lives, buckets_pos \
-            = self.update_background_step(bombs, buckets_pos, bombs_should_explode, state.background_flickering, state.background_state, bombs_dropped, bombs_falling_and_exploding,
-                               level_finished, level_success, level, state.lives)
+        def wait_on_failure():
+            return state.replace(frames_counter=state.frames_counter + 1)
 
-        mad_bomber_motion_counter, mad_bomber_pos_x, mad_bomber_going_left, key \
-            = self.update_mad_bomber_step(state.mad_bomber_motion_counter, mad_bomber_pos[0],
-                                          state.mad_bomber_going_left, level, level_finished, bombs_dropped, key)
+        def normal_step():
+            buckets_pos, buckets_moving_state, buckets_were_moving_right, buckets_jitter_state, frames_counter, key \
+                = self.update_bucket_step(state, action, state.buckets_pos, state.buckets_moving_state,
+                                          state.buckets_were_moving_right, state.buckets_jitter_state, state.frames_counter,
+                                          state.key)
 
-        frames_counter += 1
-        new_state = KaboomState(
-            mad_bomber_pos_x=mad_bomber_pos_x,
-            mad_bomber_pos_y=mad_bomber_pos[1],
-            mad_bomber_going_left=mad_bomber_going_left,
-            mad_bomber_motion_counter=mad_bomber_motion_counter,
-            bombs_states=bombs,
-            buckets_pos=buckets_pos,
-            buckets_jitter_state=buckets_jitter_state,
-            buckets_moving_state=buckets_moving_state,
-            buckets_were_moving_right=buckets_were_moving_right,
-            score=score,
-            lives=lives,
-            level=level,
-            bombs_dropped=bombs_dropped,
-            frames_counter=frames_counter,
-            bombs_falling_and_exploding=bombs_falling_and_exploding,
-            bombs_exploding=bombs_should_explode,
-            background_flickering=background_flickering,
-            background_state=background_state,
-            level_finished=level_finished,
-            level_success=level_success,
-            key=key
+            bombs, buckets_pos, mad_bomber_pos, level, bombs_dropped, score, level_finished, level_success, frames_counter, bombs_falling_and_exploding, bombs_should_explode, key \
+                = self.update_bombs_step(state.bombs_states, buckets_pos,
+                                         (state.mad_bomber_pos_x, state.mad_bomber_pos_y), state.level, state.bombs_dropped,
+                                         state.score, state.level_finished, state.level_success, frames_counter,
+                                         state.bombs_falling_and_exploding, state.bombs_exploding, key)
+
+            bombs_should_explode, background_flickering, background_state, bombs_dropped, bombs_falling_and_exploding, waiting_for_restart, level_finished, level_success, level, lives, buckets_pos \
+                = self.update_background_step(bombs, buckets_pos, bombs_should_explode, state.background_flickering, state.background_state, bombs_dropped, bombs_falling_and_exploding,
+                                   state.waiting_for_restart, level_finished, level_success, level, state.lives)
+
+            mad_bomber_motion_counter, mad_bomber_pos_x, mad_bomber_going_left, key \
+                = self.update_mad_bomber_step(state.mad_bomber_motion_counter, mad_bomber_pos[0],
+                                              state.mad_bomber_going_left, level, level_finished, bombs_dropped, key)
+
+            frames_counter += 1
+            return KaboomState(
+                mad_bomber_pos_x=mad_bomber_pos_x,
+                mad_bomber_pos_y=mad_bomber_pos[1],
+                mad_bomber_going_left=mad_bomber_going_left,
+                mad_bomber_motion_counter=mad_bomber_motion_counter,
+                bombs_states=bombs,
+                buckets_pos=buckets_pos,
+                buckets_jitter_state=buckets_jitter_state,
+                buckets_moving_state=buckets_moving_state,
+                buckets_were_moving_right=buckets_were_moving_right,
+                score=score,
+                lives=lives,
+                level=level,
+                bombs_dropped=bombs_dropped,
+                frames_counter=frames_counter,
+                bombs_falling_and_exploding=bombs_falling_and_exploding,
+                bombs_exploding=bombs_should_explode,
+                background_flickering=background_flickering,
+                background_state=background_state,
+                waiting_for_restart=waiting_for_restart,
+                level_finished=level_finished,
+                level_success=level_success,
+                key=key
+            )
+
+        new_state = jax.lax.cond(
+            state.waiting_for_restart,
+            lambda _: jax.lax.cond(restart_pressed, lambda __: restart_after_failure(), lambda __: wait_on_failure(), operand=None),
+            lambda _: normal_step(),
+            operand=None,
         )
 
         done = self._get_done(new_state)
@@ -852,17 +921,20 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
 
 
 class KaboomRenderer(JAXGameRenderer):
-    def __init__(self, consts: KaboomConstants = None):
-        super().__init__()
+    def __init__(self, consts: KaboomConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or KaboomConstants()
-        self.metadata = {"render_modes": ["rgb_array"], "render_fps": 30}
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH)
-        )
-        self.jr = render_utils.JaxRenderingUtils(self.config)
+        super().__init__(self.consts)
 
-        # 1. Start from (possibly modded) asset config provided via constants
-        final_asset_config = list(self.consts.ASSET_CONFIG)
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3
+            )
+        else:
+            self.config = config
+
+        self.jr = render_utils.JaxRenderingUtils(self.config)
 
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/kaboom"
 
@@ -873,7 +945,7 @@ class KaboomRenderer(JAXGameRenderer):
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS,
-        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+        ) = self.jr.load_and_setup_assets(self.consts.ASSET_CONFIG, sprite_path)
 
         # Pre-stack all related sprites for easy indexing in the render loop
         self.BACKGROUNDS = [self.SHAPE_MASKS['bg_top'], self.SHAPE_MASKS['bg_bottom']]

@@ -3,13 +3,14 @@ from functools import partial
 import chex
 import jax
 import jax.numpy as jnp
-from dataclasses import dataclass
 from typing import Tuple, NamedTuple, List, Dict, Optional, Any
+from flax import struct
 
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
+from jaxatari.modification import AutoDerivedConstants
 
 def _get_default_asset_config() -> tuple:
     """
@@ -35,71 +36,60 @@ def _get_default_asset_config() -> tuple:
         {'name': 'car_yellow', 'type': 'single', 'file': 'car_yellow.npy'},
         {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
     )
- 
-"""Per-lane car movement timing (frames per pixel, sign = direction).
-Negative values move left, positive values move right. Absolute value is the
-frame interval at which the car advances by one pixel.
-THIS IS THE CONSTANT THAT DEFINES THE 10 DIFFERENT PATTERNS.
-"""
-CAR_UPDATE: List[int] = [
-    -5,  # Lane 0
-    -4,  # Lane 1
-    -3,  # Lane 2
-    -2,  # Lane 3
-    -1,  # Lane 4
-    1,   # Lane 5
-    2,   # Lane 6
-    3,   # Lane 7
-    4,   # Lane 8
-    5,   # Lane 9
-]
 
- 
-
-class FreewayConstants(NamedTuple):
-    screen_width: int = 160
-    screen_height: int = 210
-    chicken_width: int = 6
-    chicken_height: int = 8
-    chicken_x: int = 44  # Fixed x position
-    car_width: int = 8
-    car_height: int = 10
-    num_lanes: int = 10
-    lane_spacing: int = 16
-    car_speeds: List[float] = None
-    lane_borders: List[int] = None
-    top_border: int = 15
-    top_path: int = 8
-    bottom_border: int = 180
+class FreewayConstants(AutoDerivedConstants):
+    screen_width: int = struct.field(pytree_node=False, default=160)
+    screen_height: int = struct.field(pytree_node=False, default=210)
+    chicken_width: int = struct.field(pytree_node=False, default=6)
+    chicken_height: int = struct.field(pytree_node=False, default=8)
+    chicken_x: int = struct.field(pytree_node=False, default=44)  # Fixed x position
+    car_width: int = struct.field(pytree_node=False, default=8)
+    car_height: int = struct.field(pytree_node=False, default=10)
+    num_lanes: int = struct.field(pytree_node=False, default=10)
+    lane_spacing: int = struct.field(pytree_node=False, default=16)
+    top_border: int = struct.field(pytree_node=False, default=15)
+    top_path: int = struct.field(pytree_node=False, default=8)
+    bottom_border: int = struct.field(pytree_node=False, default=180)
     # Collision response tuning
-    throw_back_frames: int = 24  # frames the chicken is pushed back after hit
-    stun_frames: int = 28        # frames the chicken cannot move after hit
+    throw_back_frames: int = struct.field(pytree_node=False, default=24)  # frames the chicken is pushed back after hit
+    stun_frames: int = struct.field(pytree_node=False, default=28)        # frames the chicken cannot move after hit
     # After scoring (reaching the top and resetting), prevent movement for N frames
-    post_score_stun_frames: int = 28
+    post_score_stun_frames: int = struct.field(pytree_node=False, default=28)
     # Vertical offset to apply to chicken spawn after scoring (positive = lower on screen)
-    post_score_spawn_offset_y: int = 1
+    post_score_spawn_offset_y: int = struct.field(pytree_node=False, default=1)
     # Collision box insets (shrink AABB without changing render sizes)
-    chicken_hit_inset_x: int = 1
-    chicken_hit_inset_y_top: int = -2    # Top edge of chicken (when cars approach from above)
-    chicken_hit_inset_y_bottom: int = 0 # Bottom edge of chicken (when cars approach from below)
-    car_hit_inset_x: int = 0
-    car_hit_inset_y_top: int = 2        # Top edge of car (for cars approaching from above)
-    car_hit_inset_y_bottom: int = 0     # Bottom edge of car (for cars approaching from below)
+    chicken_hit_inset_x: int = struct.field(pytree_node=False, default=1)
+    chicken_hit_inset_y_top: int = struct.field(pytree_node=False, default=-2)    # Top edge of chicken (when cars approach from above)
+    chicken_hit_inset_y_bottom: int = struct.field(pytree_node=False, default=0) # Bottom edge of chicken (when cars approach from below)
+    car_hit_inset_x: int = struct.field(pytree_node=False, default=0)
+    car_hit_inset_y_top: int = struct.field(pytree_node=False, default=2)        # Top edge of car (for cars approaching from above)
+    car_hit_inset_y_bottom: int = struct.field(pytree_node=False, default=0)     # Bottom edge of car (for cars approaching from below)
     # Fine-tune horizontal respawn offset applied when wrapping
     # Positive shifts right-moving lanes further right on re-entry (and vice versa for left-moving)
-    respawn_offset: int = 8
+    respawn_offset: int = struct.field(pytree_node=False, default=8)
     # Fine-tune vertical car alignment within each lane (applied at reset)
-    car_y_offset: int = 1
+    car_y_offset: int = struct.field(pytree_node=False, default=1)
     # Per-lane cadence phase offset (frames) for N-frame movement; allows aligning cadence to reference
-    cadence_phase_offset: List[int] = (
+    cadence_phase_offset: List[int] = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         -2, -2, -2, 0, 0,
         0, 0, -2, -2, 3
-    )
+    ]))
     # This list defines the period and direction for each lane's pattern
-    car_update = CAR_UPDATE
+    CAR_UPDATES: List[int] = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
+        -5,  # Lane 0
+        -4,  # Lane 1
+        -3,  # Lane 2
+        -2,  # Lane 3
+        -1,  # Lane 4
+        1,   # Lane 5
+        2,   # Lane 6
+        3,   # Lane 7
+        4,   # Lane 8
+        5,   # Lane 9
+    ]))
     # Per-lane initial phase offsets in pixels to align with ALE (applied to x at reset)
     # Lanes 0-4 move left; lanes 5-9 move right
-    lane_phase_offset = [
+    lane_phase_offset: List[int] = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         5,  # lane 0 (+5 px)
         5,  # lane 1
         5,  # lane 2
@@ -110,28 +100,16 @@ class FreewayConstants(NamedTuple):
         157, # lane 7
         157, # lane 8
         157, # lane 9
-    ]
+    ]))
     # Upper 5 lanes move left (-), lower 5 lanes move right (+)
     # Value at i is the frequency in which car at lane i moves one pixel
-    lane_borders = [
-        top_border + top_path,  # Lane 0
-        1 * lane_spacing + (top_border + top_path),  # Lane 1
-        2 * lane_spacing + (top_border + top_path),  # Lane 2
-        3 * lane_spacing + (top_border + top_path),  # Lane 3
-        4 * lane_spacing + (top_border + top_path),  # Lane 4
-        5 * lane_spacing + (top_border + top_path),  # Lane 5
-        6 * lane_spacing + (top_border + top_path),  # Lane 6
-        7 * lane_spacing + (top_border + top_path),  # Lane 7
-        8 * lane_spacing + (top_border + top_path),  # Lane 8
-        9 * lane_spacing + (top_border + top_path),  # Lane 10
-        10 * lane_spacing
-        + (top_border + top_path)
-        + 2,  # Lane 10
-    ]
+
+    lane_borders: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
+    
     # Car colors for each lane (10 lanes). If color is None, use original sprite color.
     # Otherwise, recolor the car sprite to the specified RGB color.
     # Note: Use None for original color, (0, 0, 0) for actual black.
-    CAR_COLORS: List[Optional[Tuple[int, int, int]]] = [
+    CAR_COLORS: List[Optional[Tuple[int, int, int]]] = struct.field(pytree_node=False, default_factory=lambda: [
         None,  # Lane 0 - use original color
         None,  # Lane 1 - use original color
         None,  # Lane 2 - use original color
@@ -142,33 +120,50 @@ class FreewayConstants(NamedTuple):
         None,  # Lane 7 - use original color
         None,  # Lane 8 - use original color
         None,  # Lane 9 - use original color
-    ]
+    ])
 
     # Game Duration Config
     # Original Atari 2600 timer logic results in exactly 8192 frames
-    game_duration_frames: int = 8192
+    game_duration_frames: int = struct.field(pytree_node=False, default=8192)
     # Score starts blinking at 2:00 (7680 frames) to warn players of imminent game over
-    blink_start_frames: int = 7680
+    blink_start_frames: int = struct.field(pytree_node=False, default=7680)
     # Rate at which score colors cycle (frames per color change)
-    score_blink_rate: int = 2
+    score_blink_rate: int = struct.field(pytree_node=False, default=2)
     
     # Colors for the blinking score cycle (RGB)
-    SCORE_BLINK_COLORS: List[Tuple[int, int, int]] = (
+    SCORE_BLINK_COLORS: List[Tuple[int, int, int]] = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
          (210, 210, 64), # Yellow (original)
          (210, 64, 64),  # Red
          (64, 210, 64),  # Green
          (64, 64, 210),  # Blue
          (210, 64, 210), # Magenta
          (64, 210, 210), # Cyan
-    )
+    ]))
 
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
+    
+    def compute_derived(self):
+        """Compute derived constants based on static fields."""
+        return {
+            'lane_borders': jnp.array([
+                self.top_border + self.top_path,  # Lane 0
+                1 * self.lane_spacing + (self.top_border + self.top_path),  # Lane 1
+                2 * self.lane_spacing + (self.top_border + self.top_path),  # Lane 2
+                3 * self.lane_spacing + (self.top_border + self.top_path),  # Lane 3
+                4 * self.lane_spacing + (self.top_border + self.top_path),  # Lane 4
+                5 * self.lane_spacing + (self.top_border + self.top_path),  # Lane 5
+                6 * self.lane_spacing + (self.top_border + self.top_path),  # Lane 6
+                7 * self.lane_spacing + (self.top_border + self.top_path),  # Lane 7
+                8 * self.lane_spacing + (self.top_border + self.top_path),  # Lane 8
+                9 * self.lane_spacing + (self.top_border + self.top_path),  # Lane 10
+                10 * self.lane_spacing + (self.top_border + self.top_path) + 2,  # Lane 10
+            ], dtype=jnp.int32),
+        }
 
-
-class FreewayState(NamedTuple):
+@struct.dataclass
+class FreewayState:
     """Represents the current state of the game"""
-
     chicken_y: chex.Array
     cars: chex.Array  # Shape: (num_lanes, 2) for x,y positions (ints for render/collide)
     # Per-lane cadence counters (frames), advance independently to sync movement patterns per lane
@@ -177,27 +172,34 @@ class FreewayState(NamedTuple):
     time: chex.Array
     cooldown: chex.Array  # Cooldown after collision
     walking_frames: chex.Array
-    lives_lost: chex.Array
     game_over: chex.Array
 
-
-class EntityPosition(NamedTuple):
+@struct.dataclass
+class EntityPosition:
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
 
 
-class FreewayObservation(NamedTuple):
-    chicken: EntityPosition
-    car: jnp.ndarray  # Shape: (10, 4) with x,y,width,height for each car
+@struct.dataclass
+class FreewayObservation:
+    chicken: ObjectObservation
+    car: ObjectObservation # ObjectObservation that includes arrays for all values with the information of all 10 cars
 
 
-class FreewayInfo(NamedTuple):
+@struct.dataclass
+class FreewayInfo:
     time: jnp.ndarray
 
 
 class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, FreewayConstants]):
+    # Map agent action indices (0, 1, 2) to ALE console actions
+    # 0 -> NOOP, 1 -> UP, 2 -> DOWN
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.UP, Action.DOWN], dtype=jnp.int32
+    )
+
     def __init__(self, consts: FreewayConstants = None):
         if consts is None:
             consts = FreewayConstants()
@@ -232,7 +234,7 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         cars = cars.at[:, 0].add(phase)
 
         # Initialize per-lane cadence counters using configured phase offsets
-        periods0 = jnp.abs(jnp.array(self.consts.car_update, dtype=jnp.int32))
+        periods0 = jnp.abs(jnp.array(self.consts.CAR_UPDATES, dtype=jnp.int32))
         phases0 = jnp.array(self.consts.cadence_phase_offset, dtype=jnp.int32) % periods0
 
         state = FreewayState(
@@ -243,7 +245,6 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
             time=jnp.array(0, dtype=jnp.int32),
             cooldown=jnp.array(0, dtype=jnp.int32),
             walking_frames=jnp.array(0, dtype=jnp.int32),
-            lives_lost=jnp.array(0, dtype=jnp.int32),
             game_over=jnp.array(False, dtype=jnp.bool_),
         )
 
@@ -252,6 +253,9 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: FreewayState, action: int) -> tuple[FreewayObservation, FreewayState, float, bool, FreewayInfo]:
         """Take a step in the game given an action"""
+        # Translate compact agent action (0, 1, 2) to ALE console action constant
+        atari_action = jnp.take(self.ACTION_SET, action)
+
         # Update chicken position if not in cooldown
         dy = jnp.where(
             jnp.logical_and(
@@ -259,7 +263,11 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
                 state.cooldown <= (self.consts.stun_frames + self.consts.throw_back_frames)
             ),
             1.0,
-            jnp.where(action == Action.UP, -1.0, jnp.where(action == Action.DOWN, 1.0, 0.0)),
+            jnp.where(
+                atari_action == Action.UP,
+                -1.0,
+                jnp.where(atari_action == Action.DOWN, 1.0, 0.0),
+            ),
         )
 
         dy = jnp.where(
@@ -280,9 +288,9 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
             self.consts.bottom_border + self.consts.chicken_height - 1,
         ).astype(jnp.int32)
 
-        # Implements the [0, 0, ..., 1] repeating pattern based on CAR_UPDATE
-        periods = jnp.abs(jnp.array(self.consts.car_update, dtype=jnp.int32))
-        signs = jnp.sign(jnp.array(self.consts.car_update, dtype=jnp.int32))
+        # Implements the [0, 0, ..., 1] repeating pattern based on CAR_UPDATES
+        periods = jnp.abs(jnp.array(self.consts.CAR_UPDATES, dtype=jnp.int32))
+        signs = jnp.sign(jnp.array(self.consts.CAR_UPDATES, dtype=jnp.int32))
         # Per-lane cadence counters: move when the counter reaches period-1, then keep advancing
         should_move_mask = (state.lane_time == (periods - 1))
         delta_x = jnp.where(should_move_mask, signs, 0).astype(jnp.int32)
@@ -381,12 +389,6 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
             state.game_over,
         )
 
-        new_live_lost = jnp.where(
-            any_collision,
-            state.lives_lost + 1,
-            state.lives_lost,
-        )
-
         new_state = FreewayState(
             chicken_y=new_y,
             cars=new_cars,
@@ -395,7 +397,6 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
             time=new_time,
             cooldown=new_cooldown,
             walking_frames=new_walking_frames.astype(jnp.int32),
-            lives_lost=new_live_lost,
             game_over=game_over,
         )
         done = self._get_done(new_state)
@@ -408,18 +409,19 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: FreewayState):
         # create chicken
-        chicken = EntityPosition(
+        chicken = ObjectObservation.create(
             x=jnp.array(self.consts.chicken_x, dtype=jnp.int32),
             y=state.chicken_y,
             width=jnp.array(self.consts.chicken_width, dtype=jnp.int32),
             height=jnp.array(self.consts.chicken_height, dtype=jnp.int32),
+            active=jnp.array(True, dtype=jnp.bool_),
         )
 
         # create cars
-        cars = jnp.zeros((self.consts.num_lanes, 4), dtype=jnp.int32)
+        cars_pos = jnp.zeros((self.consts.num_lanes, 4), dtype=jnp.int32)
         for i in range(self.consts.num_lanes):
             car_pos = state.cars.at[i].get()
-            cars = cars.at[i].set(
+            cars_pos = cars_pos.at[i].set(
                 jnp.array(
                     [
                         car_pos.at[0].get(),  # x position
@@ -430,6 +432,22 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
                     dtype=jnp.int32
                 )
             )
+
+        # get the car orientation by checking the sign of the lane's CAR_UPDATES value (positive = right, negative = left) in degree (left = 270°, right = 90°)
+        car_orientation = jnp.where(
+            jnp.array(self.consts.CAR_UPDATES, dtype=jnp.int32) < 0, 270, 90
+        )
+
+        cars = ObjectObservation.create(
+            x=cars_pos[:, 0],
+            y=cars_pos[:, 1],
+            width=cars_pos[:, 2],
+            height=cars_pos[:, 3],
+            active=jnp.ones((self.consts.num_lanes,), dtype=jnp.bool_),
+            visual_id=jnp.arange(self.consts.num_lanes, dtype=jnp.int32),
+            orientation=car_orientation.astype(jnp.int32)
+        )
+
         return FreewayObservation(chicken=chicken, car=cars)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -445,28 +463,18 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         return state.game_over
 
     def action_space(self) -> spaces.Discrete:
-        """Returns the action space for Freeway.
-        Actions are:
-        0: NOOP
-        1: UP
-        2: DOWN
-        """
-        return spaces.Discrete(3)
+        """Returns the action space for Freeway."""
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space for Freeway.
         The observation contains:
-        - chicken: EntityPosition (x, y, width, height)
-        - car: array of shape (10, 4) with x,y,width,height for each car
+        - chicken: ObjectObservation (x, y, width, height, active, visual_id, state, orientation)
+        - car: array of ObjectObservation (10 cars, each with x, y, width, height, active, visual_id, orientation)
         """
         return spaces.Dict({
-            "chicken": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-            }),
-            "car": spaces.Box(low=0, high=210, shape=(10, 4), dtype=jnp.int32),
+            "chicken": spaces.get_object_space(n=None, screen_size=(self.consts.screen_height, self.consts.screen_width)),
+            "car": spaces.get_object_space(n=self.consts.num_lanes, screen_size=(self.consts.screen_height, self.consts.screen_width)),
         })
 
     def image_space(self) -> spaces.Box:
@@ -484,38 +492,27 @@ class JaxFreeway(JaxEnvironment[FreewayState, FreewayObservation, FreewayInfo, F
         """Render the game state to a raster image."""
         return self.renderer.render(state)
 
-    def obs_to_flat_array(self, obs: FreewayObservation) -> jnp.ndarray:
-        """Convert observation to a flat array."""
-        # Flatten chicken position and dimensions
-        chicken_flat = jnp.concatenate([
-            obs.chicken.x.reshape(-1),
-            obs.chicken.y.reshape(-1),
-            obs.chicken.width.reshape(-1),
-            obs.chicken.height.reshape(-1)
-        ])
-        
-        # Flatten car positions and dimensions
-        cars_flat = obs.car.reshape(-1)
-        
-        # Concatenate all components
-        return jnp.concatenate([chicken_flat, cars_flat]).astype(jnp.int32)
-
 
 class FreewayRenderer(JAXGameRenderer):
-    def __init__(self, consts: FreewayConstants = None):
-        super().__init__()
+    def __init__(self, consts: FreewayConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or FreewayConstants()
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        super().__init__(self.consts)
+        
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(210, 160),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
         # Load and setup assets using the new pattern
         # Convert tuple to list so we can modify it
         asset_config = list(self.consts.ASSET_CONFIG)
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/freeway"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "freeway")
         
         # Map lane index to car sprite name
         car_sprite_names = [
