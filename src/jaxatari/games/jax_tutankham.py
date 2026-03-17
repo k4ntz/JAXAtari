@@ -37,7 +37,11 @@ def compute_binary_matrix(level: int, data: jnp.ndarray) -> jnp.ndarray:
         is_map_color = jnp.all(data[..., :3] == map_colors[level - 1][:3], axis=-1)
         
     # Convert boolean mask to binary matrix (0s and 1s)
-    return is_map_color.astype(jnp.int8)
+    binary_matrix = is_map_color.astype(jnp.int8)
+    # Ensure sides are not walkable (0)
+    binary_matrix = binary_matrix.at[:, 0].set(0)
+    binary_matrix = binary_matrix.at[:, -1].set(0)
+    return binary_matrix
 
     
 def create_binary_matrix(level: int, npy_path: str) -> jnp.ndarray:
@@ -1236,7 +1240,8 @@ class JaxTutankham(JaxEnvironment):
         total_score_for_collected_items = jnp.sum(item_points)
 
         # if goal is reached, give a score bonus based on remaining amonition
-        goal_bonus = jnp.where(goal_reached, amonition_timer, 0) #TODO: adjust bonus scaling
+        #goal_bonus = jnp.where(goal_reached, amonition_timer, 0) #TODO: adjust bonus scaling
+        goal_bonus = 0 # TODO: DELETE
 
         new_score = score + total_score_for_defeating_creatures + total_score_for_collected_items + goal_bonus
 
