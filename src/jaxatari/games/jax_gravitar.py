@@ -3107,7 +3107,7 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
     # and should not be redirected back to the solar-system map.
     life_lost = new_env_state.lives < env_state.lives
     is_level_mode = env_state.mode == jnp.int32(1)
-    forced_death_reset = life_lost & (~reset) & (~done) & (~is_level_mode)
+    forced_death_reset = life_lost & (~reset) & (~is_level_mode)
 
     effective_reset = reset | forced_death_reset
     effective_level = jnp.where(forced_death_reset, jnp.int32(-2), level)
