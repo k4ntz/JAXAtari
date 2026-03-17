@@ -135,17 +135,16 @@ class TutankhamConstants(NamedTuple):
     MOTH: int = 7
     VIRUS: int = 8
     MONKEY: int = 9
-    MYSTERY: int = 10
-    WEAPON: int = 11
+    MYSTERY_WEAPON: int = 10
 
     CREATURE_SIZE: chex.Array = jnp.array([10, 10], dtype=jnp.int32)
 
     INACTIVE: int = 0
     ACTIVE: int = 1
 
-    CREATURE_SPEED: chex.Array = jnp.array([1.51, 1.59, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+    CREATURE_SPEED: chex.Array = jnp.array([1.51, 1.59, 3, 2, 2, 2, 2, 2, 2, 2, 2],
                                            dtype=jnp.float32)  # speed for each creature type
-    CREATURE_POINTS: chex.Array = jnp.array([1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 0, 3],
+    CREATURE_POINTS: chex.Array = jnp.array([1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 3],
                                             dtype=jnp.int32)  # points for defeating each creature type
 
     MAX_CREATURES: int = 2  # max number of creatures on screen at once
@@ -248,18 +247,15 @@ class TutankhamConstants(NamedTuple):
         [6, 6, 6, 7], dtype=jnp.int32
     )
 
-    # Valid creature types per level, shape (16, 4), padded with 0
+    # creature types per level, shape (16, 3)
     MAP_CREATURES: chex.Array = jnp.array([
-        [SNAKE, SCORPION, BAT, 0],          # MAP 1
-        [TURTLE, JACKEL, CONDOR, 0],        # MAP 2
-        [SNAKE, LION, MOTH, 0],             # MAP 3
-        [VIRUS, MONKEY, MYSTERY, WEAPON]    # MAP 4
+        [SNAKE, SCORPION, BAT],          # MAP 1
+        [TURTLE, JACKEL, CONDOR],        # MAP 2
+        [SNAKE, LION, MOTH],             # MAP 3
+        [VIRUS, MONKEY, MYSTERY_WEAPON]  # MAP 4
     ], dtype=jnp.int32)
 
-    # Number of valid creature types per level (non-padded entries), shape (16,)
-    MAP_N_CREATURES: chex.Array = jnp.array(
-        [3, 3, 3, 4], dtype=jnp.int32
-    )
+    
 
     # Level checkpoints
     MAP_CHECKPOINTS: chex.Array = jnp.array([
@@ -1051,8 +1047,7 @@ class JaxTutankham(JaxEnvironment):
         first_free_slot = jnp.argmax(inactive_mask)  # index of first inactive creature
 
         # Select creature type based on current map
-        n_types = self.consts.MAP_N_CREATURES[level%4] # get number of valid creature types for current level
-        type_idx = jax.random.randint(key_type, shape=(), minval=0, maxval=n_types) # random index to select creature type from valid types for current level
+        type_idx = jax.random.randint(key_type, shape=(), minval=0, maxval=self.consts.MAP_CREATURES.shape[1])
         new_type = self.consts.MAP_CREATURES[level%4, type_idx]
 
         do_spawn = should_spawn & has_free_slot & any_on_screen
