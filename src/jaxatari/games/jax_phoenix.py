@@ -414,6 +414,13 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         
         # If not bat level, visual state is generic (3/Full)
         final_state = jnp.where(is_bat_level, wing_state, 3)
+        
+        # Encode death animation in the observation state while keeping enemies active on-screen.
+        # Convention for this env:
+        # - base state (0..3): wing status (bat levels) or generic (non-bat)
+        # - +4: enemy is in death animation (still present, but different)
+        dying_mask = jnp.where(is_bat_level, state.bat_dying, state.phoenix_dying).astype(jnp.int32)
+        obs_enemy_state = (final_state + (dying_mask * 4)).astype(jnp.int32)
 
         enemies = ObjectObservation.create(
             x=jnp.clip(state.enemies_x.astype(jnp.int32), 0, w),
@@ -421,7 +428,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             width=jnp.full((8,), c.ENEMY_WIDTH, dtype=jnp.int32),
             height=jnp.full((8,), c.ENEMY_HEIGHT, dtype=jnp.int32),
             active=((state.enemies_x > -1) & (state.enemies_y < h + 10)).astype(jnp.int32),
-            state=final_state  # Encodes wing status
+            state=obs_enemy_state
         )
 
         # --- Boss ---
