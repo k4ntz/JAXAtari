@@ -177,8 +177,8 @@ LADDER_HEIGHT = 12
 # Bomb configuration
 MAX_BOMBS = 15          # Maximum bombs player can carry
 DOUBLE_TAP_WINDOW = 10  # Steps within which two fires count as double-tap
-FIRE_RATE_LIMIT = 20    # Slightly slower base fire rate (~0.67s at 30 FPS)
-FIRE_RATE_LIMIT_WITH_GUN = 10  # Gun still speeds up shooting noticeably
+FIRE_RATE_LIMIT = 35    # Slower base fire rate (~1.2s at 30 FPS)
+FIRE_RATE_LIMIT_WITH_GUN = 18  # Gun still speeds up shooting noticeably
 BOMB_RADIUS = 80        # Kill radius for bomb in pixels
 MAX_HAMMERS = 3         # Maximum hammers player can carry
 HAMMER_RADIUS = 100     # Kill radius for hammer in pixels
@@ -193,8 +193,8 @@ ITEM_HEIGHT = 6
 MAX_BULLETS = 64             # Drastically higher simultaneous bullets
 BULLET_WIDTH = 4
 BULLET_HEIGHT = 4
-BULLET_SPEED = 3             # Slightly faster than player speed (2)
-BULLET_SPEED_WITH_GUN = 6    # Much faster when gun is active
+BULLET_SPEED = 2             # Same as player speed
+BULLET_SPEED_WITH_GUN = 4    # Faster when gun is active
 
 # Wizard projectile configuration
 ENEMY_MAX_BULLETS = 100
@@ -435,6 +435,9 @@ class DarkChambersState(NamedTuple):
     poison_cloud_x: chex.Array         # X position of active poison cloud
     poison_cloud_y: chex.Array         # Y position of active poison cloud
     poison_cloud_timer: chex.Array     # Countdown for poison effect (0 = inactive)
+
+    enemy_contact_cooldown: chex.Array  # shape: (NUM_ENEMIES,) - frames until next contact damage tick
+    enemy_moving: chex.Array            # shape: (NUM_ENEMIES,) - 1 if enemy moved this step, else 0
 
 
 
@@ -1642,12 +1645,14 @@ class DarkChambersRenderer(JAXGameRenderer):
             # Map 8-direction enemy_dir to 4 sprite indices (0=right,1=down,2=left,3=up)
             dir_idx = DIR8_TO_SPRITE[state.enemy_dir[i].astype(jnp.int32)]
 
+            anim_tick      = (state.step_counter // ANIM_EVERY).astype(jnp.int32)
+            is_enemy_moving = state.enemy_moving[i]
+
             # Type 1: Zombie — multi-frame walking animation
             is_zombie = (enemy_type == 1) & is_active
             if zombie_anim_frames is not None:
-                anim_tick  = (state.step_counter // ANIM_EVERY).astype(jnp.int32)
                 num_frames = ZOMBIE_NUM_FRAMES[dir_idx]   # 3 or 5
-                anim_frame = anim_tick % num_frames
+                anim_frame = jnp.where(is_enemy_moving, anim_tick % num_frames, jnp.array(0, dtype=jnp.int32))
                 zombie_sprite = zombie_anim_frames[dir_idx, anim_frame]
                 raster = jax.lax.cond(
                     is_zombie,
@@ -1659,10 +1664,8 @@ class DarkChambersRenderer(JAXGameRenderer):
             # Type 2: Wraith (ghost) — multi-frame walking animation
             is_wraith = (enemy_type == 2) & is_active
             if ghost_anim_frames is not None:
-                # Cycle animation frame based on enemy movement ticks
-                anim_tick  = (state.step_counter // ANIM_EVERY).astype(jnp.int32)
                 num_frames = GHOST_NUM_FRAMES[dir_idx]   # 2 or 3 depending on direction
-                anim_frame = anim_tick % num_frames
+                anim_frame = jnp.where(is_enemy_moving, anim_tick % num_frames, jnp.array(0, dtype=jnp.int32))
                 ghost_sprite = ghost_anim_frames[dir_idx, anim_frame]
                 raster = jax.lax.cond(
                     is_wraith,
@@ -1674,9 +1677,8 @@ class DarkChambersRenderer(JAXGameRenderer):
             # Type 3: Skeleton — multi-frame walking animation
             is_skeleton = (enemy_type == 3) & is_active
             if skeleton_anim_frames is not None:
-                anim_tick  = (state.step_counter // ANIM_EVERY).astype(jnp.int32)
                 num_frames = SKELETON_NUM_FRAMES[dir_idx]   # always 3
-                anim_frame = anim_tick % num_frames
+                anim_frame = jnp.where(is_enemy_moving, anim_tick % num_frames, jnp.array(0, dtype=jnp.int32))
                 skel_sprite = skeleton_anim_frames[dir_idx, anim_frame]
                 raster = jax.lax.cond(
                     is_skeleton,
@@ -1688,9 +1690,8 @@ class DarkChambersRenderer(JAXGameRenderer):
             # Type 4: Wizard — multi-frame walking animation
             is_wizard = (enemy_type == 4) & is_active
             if wizard_anim_frames is not None:
-                anim_tick  = (state.step_counter // ANIM_EVERY).astype(jnp.int32)
                 num_frames = WIZARD_NUM_FRAMES[dir_idx]   # 3 or 5
-                anim_frame = anim_tick % num_frames
+                anim_frame = jnp.where(is_enemy_moving, anim_tick % num_frames, jnp.array(0, dtype=jnp.int32))
                 wizard_sprite = wizard_anim_frames[dir_idx, anim_frame]
                 raster = jax.lax.cond(
                     is_wizard,
@@ -2046,7 +2047,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         # Bullets
         bullet_world_pos = state.bullet_positions[:, :2].astype(jnp.int32)
         bullet_screen_pos = (bullet_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
-        bullet_mask = state.bullet_active == 1
+        bullet_mask = (state.bullet_active == 1) & (bullet_screen_pos[:, 1] + BULLET_HEIGHT - 1 < GAMEPLAY_H)
         masked_bullet_pos = jnp.where(
             bullet_mask[:, None],
             bullet_screen_pos,
@@ -2705,8 +2706,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             poison_cloud_x=jnp.array(0, dtype=jnp.int32),
             poison_cloud_y=jnp.array(0, dtype=jnp.int32),
             poison_cloud_timer=jnp.array(0, dtype=jnp.int32),
+            enemy_contact_cooldown=jnp.zeros(NUM_ENEMIES, dtype=jnp.int32),
+            enemy_moving=jnp.ones(NUM_ENEMIES, dtype=jnp.int32),
         )
-        
+
         obs = self._get_observation(state)
         return obs, state
     
@@ -2744,6 +2747,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                     player_y=respawn_y,
                     health=jnp.array(self.consts.STARTING_HEALTH, dtype=jnp.int32),
                     damage_cooldown=jnp.array(0, dtype=jnp.int32),
+                    enemy_contact_cooldown=jnp.zeros(NUM_ENEMIES, dtype=jnp.int32),
                     bullet_positions=jnp.zeros((MAX_BULLETS, 4), dtype=jnp.int32),
                     bullet_active=jnp.zeros((MAX_BULLETS,), dtype=jnp.int32),
                     enemy_bullet_positions=jnp.zeros((ENEMY_MAX_BULLETS, 4), dtype=jnp.int32),
@@ -2783,6 +2787,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                    jnp.where((a == Action.DOWN) | (a == Action.DOWNRIGHT) | (a == Action.DOWNLEFT), effective_speed, 0))
             player_moving = jnp.where((dx != 0) | (dy != 0), 1, 0).astype(jnp.int32)
             
+            dx_raw = dx
+            dy_raw = dy
+
             # --- SLOW DOWN PLAYER MOVEMENT ---
             PLAYER_MOVE_EVERY = 2  # 1=normal, 2=half speed, 3=1/3 speed, etc.
             player_move_tick = (state.step_counter % PLAYER_MOVE_EVERY) == 0
@@ -2955,7 +2962,21 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             try_y = prop_y
             collide_y = collides(new_x, try_y)
             new_y = jnp.where(~collide_y, try_y, state.player_y)
-            
+
+            # Stop animation when the player is pressing against a wall in every pressed direction
+            collide_x_wall = collides(state.player_x + dx_raw, state.player_y)
+            collide_y_wall = collides(state.player_x, state.player_y + dy_raw)
+            pressing_x = (dx_raw != 0)
+            pressing_y = (dy_raw != 0)
+            facing_wall_x = pressing_x & collide_x_wall
+            facing_wall_y = pressing_y & collide_y_wall
+            fully_facing_wall = jnp.where(
+                pressing_x & pressing_y,
+                facing_wall_x & facing_wall_y,   # diagonal: both axes must be blocked
+                facing_wall_x | facing_wall_y,   # single axis: that axis blocked
+            ) & (player_moving == 1)
+            player_moving = jnp.where(fully_facing_wall, jnp.array(0, dtype=jnp.int32), player_moving)
+
             # Shooting - spawn bullet on FIRE action (or detonate bomb on double-tap)
             fire_pressed = (a == Action.FIRE) | (a == Action.UPFIRE) | (a == Action.DOWNFIRE) | (a == Action.LEFTFIRE) | (a == Action.RIGHTFIRE) | \
                            (a == Action.UPRIGHTFIRE) | (a == Action.UPLEFTFIRE) | (a == Action.DOWNRIGHTFIRE) | (a == Action.DOWNLEFTFIRE)
@@ -3439,6 +3460,12 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                         jnp.where(in_chase[:, None], chase_steps, (patrol_positions - state.enemy_positions)))
 
 
+            # Save pre-collision, pre-throttle intent for wall-facing detection.
+            # Use step_vec (not patrol_positions delta) because patrol_positions is already
+            # after collision resolution — when wall-blocked the delta would be ~0.
+            raw_intended_step = jnp.where(in_confuse[:, None], confuse_steps,
+                                jnp.where(in_chase[:, None], chase_steps, step_vec))
+
             # --- Existing slow-down gate ---
             enemy_move_tick = (state.step_counter % ENEMY_MOVE_EVERY) == 0
             desired_step = jnp.where(enemy_move_tick, desired_step, jnp.zeros_like(desired_step))
@@ -3470,6 +3497,13 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 ))))))))
             is_moving = jnp.any(actual_delta != 0, axis=1)
             new_enemy_dir = jnp.where(is_moving, actual_dir8, enemy_dir)
+            trying_to_move = jnp.any(raw_intended_step != 0, axis=1)
+            wall_blocked_now = trying_to_move & ~is_moving
+            new_moving_on_tick = jnp.where(wall_blocked_now,
+                                           jnp.zeros(NUM_ENEMIES, dtype=jnp.int32),
+                                           jnp.ones(NUM_ENEMIES, dtype=jnp.int32))
+            # Latch: only update on move-ticks; carry previous value on off-ticks
+            enemy_moving_arr = jnp.where(enemy_move_tick, new_moving_on_tick, state.enemy_moving)
 
             # --- Stuck detection => confuse (only while chasing) ---
             moved = jnp.any(new_enemy_positions != state.enemy_positions, axis=1)
@@ -3859,7 +3893,43 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             overlap_x = (new_x <= (enemy_x + self.consts.ENEMY_WIDTH - 1)) & ((new_x + self.consts.PLAYER_WIDTH - 1) >= enemy_x)
             overlap_y = (new_y <= (enemy_y + self.consts.ENEMY_HEIGHT - 1)) & ((new_y + self.consts.PLAYER_HEIGHT - 1) >= enemy_y)
             enemy_contacts = overlap_x & overlap_y & alive_enemies_mask
-            
+
+            # Enemy takes damage when contacting player (same tier-drop system as bullets)
+            # Each enemy has its own cooldown to prevent damage every single frame
+            ENEMY_CONTACT_COOLDOWN_TICKS = 15  # ~0.5s at 30 FPS between contact hits
+            contact_cooldown_expired = state.enemy_contact_cooldown == 0
+            contact_hits_enemies = enemy_contacts & contact_cooldown_expired
+            contact_enemy_hitpoints_after = jnp.where(
+                contact_hits_enemies,
+                jnp.maximum(new_enemy_hitpoints - 1, 0),
+                new_enemy_hitpoints,
+            ).astype(jnp.int32)
+            contact_enemy_killed = contact_hits_enemies & (contact_enemy_hitpoints_after <= 0) & (new_enemy_types == ENEMY_ZOMBIE)
+            contact_tier_dropped = contact_hits_enemies & (contact_enemy_hitpoints_after <= 0) & (new_enemy_types > ENEMY_ZOMBIE)
+            new_enemy_types = jnp.where(
+                contact_enemy_killed,
+                0,
+                jnp.where(contact_tier_dropped, new_enemy_types - 1, new_enemy_types),
+            ).astype(jnp.int32)
+            new_enemy_hitpoints = jnp.where(
+                contact_tier_dropped,
+                ENEMY_HITS_PER_TIER,
+                jnp.where(contact_enemy_killed | (new_enemy_types <= 0), 0, contact_enemy_hitpoints_after),
+            ).astype(jnp.int32)
+            new_enemy_active = jnp.where(new_enemy_types <= 0, 0, new_enemy_active)
+            # Move newly-dead enemies off-screen
+            final_enemy_positions = jnp.where(
+                new_enemy_active[:, None] == 1,
+                final_enemy_positions,
+                jnp.array([0, 0]),
+            )
+            # Update per-enemy contact cooldown
+            new_enemy_contact_cooldown = jnp.where(
+                contact_hits_enemies,
+                ENEMY_CONTACT_COOLDOWN_TICKS,
+                jnp.maximum(state.enemy_contact_cooldown - 1, 0),
+            ).astype(jnp.int32)
+
             # Calculate damage based on enemy type
             damage_by_type = jnp.array([
                 0,  # Dead enemy (type 0)
@@ -4499,6 +4569,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 poison_cloud_x=state.poison_cloud_x,
                 poison_cloud_y=state.poison_cloud_y,
                 poison_cloud_timer=state.poison_cloud_timer,
+                enemy_contact_cooldown=new_enemy_contact_cooldown,
+                enemy_moving=enemy_moving_arr,
             )
             
             obs = self._get_observation(new_state)
