@@ -1521,7 +1521,8 @@ def _spawn_saucer_at(x, y, towards_x, towards_y, speed=jnp.float32(0.8)) -> Sauc
     return SaucerState(
         x=jnp.float32(x), y=jnp.float32(y),
         vx=vx, vy=vy,
-        hp=SAUCER_INIT_HP, alive=jnp.array(True),
+        hp=jnp.int32(SAUCER_INIT_HP),
+        alive=jnp.array(True),
         death_timer=jnp.int32(0),
     )
 
@@ -1545,10 +1546,10 @@ def _update_saucer_horizontal(s: SaucerState, target_x, reactor_y, speed) -> Sau
     dx = target_x - s.x
     # Determine direction: move left or right
     vx = jnp.where(dx > 0, speed, -speed)
-    vx = jnp.where(jnp.abs(dx) < speed, 0.0, vx)  # Stop if close enough
+    vx = jnp.where(jnp.abs(dx) < speed, jnp.float32(0.0), vx)  # Stop if close enough
     
     # Keep y fixed at reactor height
-    return s._replace(x=s.x + vx, y=reactor_y, vx=vx, vy=0.0)
+    return s._replace(x=s.x + vx, y=jnp.float32(reactor_y), vx=vx, vy=jnp.float32(0.0))
 
 
 @jax.jit
@@ -2005,8 +2006,13 @@ def step_map(env_state: EnvState, action: int):
             mode=jnp.int32(2), mode_timer=jnp.int32(0),
             state=env.state._replace(x=W * 0.80, y=ship_spawn_y, vx=env.state.vx, vy=env.state.vy),
             saucer=sauc_final._replace(
-                x=W * 0.20, y=saucer_spawn_y, vx=SAUCER_SPEED_ARENA, vy=0.0,
-                hp=SAUCER_INIT_HP, alive=True, death_timer=0
+                x=W * 0.20,
+                y=saucer_spawn_y,
+                vx=jnp.float32(SAUCER_SPEED_ARENA),
+                vy=jnp.float32(0.0),
+                hp=jnp.int32(SAUCER_INIT_HP),
+                alive=jnp.array(True),
+                death_timer=jnp.int32(0),
             ),
             # Clear all bullets when entering arena to prevent rogue bullets
             bullets=create_empty_bullets_64(),
@@ -2092,7 +2098,15 @@ def _step_level_core(env_state: EnvState, action: int):
 
         # 4. Return the updated environment state with spawn timer set to respawn delay
         return env._replace(
-            ufo=UFOState(x=x0, y=final_y0, vx=vx, vy=0.0, hp=1, alive=True, death_timer=0),
+            ufo=UFOState(
+                x=jnp.float32(x0),
+                y=jnp.float32(final_y0),
+                vx=jnp.float32(vx),
+                vy=jnp.float32(0.0),
+                hp=jnp.int32(1),
+                alive=jnp.array(True),
+                death_timer=jnp.int32(0),
+            ),
             ufo_spawn_timer=UFO_RESPAWN_DELAY_FRAMES, ufo_home_x=x0, ufo_home_y=final_y0,
             ufo_bullets=create_empty_bullets_16(),
         )
