@@ -84,7 +84,9 @@ MOD_MODULES = {
     "breakout": "jaxatari.games.mods.breakout_mods.BreakoutEnvMod",
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
     "videopinball": "jaxatari.games.mods.videopinball_mods.VideoPinballEnvMod",
-    "tennis": "jaxatari.games.mods.tennis_mods.TennisEnvMod",
+    'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
+    "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
+    "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
     "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
 }
 
