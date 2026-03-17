@@ -110,7 +110,7 @@ class TutankhamConstants(NamedTuple):
     HEIGHT: int = 210
 
     # Player constants
-    PLAYER_SPEED: float = 1.5
+    PLAYER_SPEED: float = 1
     PLAYER_SIZE: chex.Array = jnp.array([5, 8], dtype=jnp.int32)
     PLAYER_LIVES: int = 3
 
@@ -142,7 +142,7 @@ class TutankhamConstants(NamedTuple):
     INACTIVE: int = 0
     ACTIVE: int = 1
 
-    CREATURE_SPEED: chex.Array = jnp.array([1.51, 1.59, 3, 2, 2, 2, 2, 2, 2, 2, 2],
+    CREATURE_SPEED: chex.Array = jnp.array([0.85, 0.9, 1.1, 0.7, 1, 1.2, 1, 1.2, 1, 1.05, 1.3],
                                            dtype=jnp.float32)  # speed for each creature type
     CREATURE_POINTS: chex.Array = jnp.array([1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 3],
                                             dtype=jnp.int32)  # points for defeating each creature type
@@ -261,7 +261,7 @@ class TutankhamConstants(NamedTuple):
     MAP_CHECKPOINTS: chex.Array = jnp.array([
         # MAP 1
         [
-            [0  , 198, 130, 85], # [checkpoint zone top y, checkpoint zone bottom y, checkpoint_x, checkpoint_y]
+            [0  , 198, 134, 61], # [checkpoint zone top y, checkpoint zone bottom y, checkpoint_x, checkpoint_y]
             [199, 402, 78, 199],
             [403, 567, 12, 403],
             [568, 800, 80, 568]
@@ -723,8 +723,8 @@ class JaxTutankham(JaxEnvironment):
         seed = int(time.time())
         key = jax.random.PRNGKey(seed)
         level = 0
-        start_x = 130
-        start_y = 75
+        start_x = 134
+        start_y = 61
         tutankham_score = 0
         goal_reached = False
         player_lives = self.consts.PLAYER_LIVES
