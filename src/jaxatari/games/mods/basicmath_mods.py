@@ -2,7 +2,8 @@ from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.basicmath_mod_plugins import (
     BackgroundBlackColorMod,
     BackgroundRandomColorMod,
-    NumberRandomColorMod
+    NumberRandomColorMod,
+    BiggerNumbersMod
 )
 
 class BasicMathEnvMod(JaxAtariModController):
@@ -14,7 +15,8 @@ class BasicMathEnvMod(JaxAtariModController):
     REGISTRY = {
         "background_black": BackgroundBlackColorMod,
         "background_random": BackgroundRandomColorMod,
-        "number_random": NumberRandomColorMod
+        "number_random": NumberRandomColorMod,
+        "bigger_numbers": BiggerNumbersMod
     }
 
     def __init__(self,

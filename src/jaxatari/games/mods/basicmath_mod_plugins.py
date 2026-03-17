@@ -40,3 +40,10 @@ class NumberRandomColorMod(JaxAtariInternalModPlugin):
         [(161, 104, 35), (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))]
     ]
     }
+
+class BiggerNumbersMod(JaxAtariInternalModPlugin):    
+    """Numbers random color"""
+    
+    constants_overrides = {
+        "problemNumLen": 2
+    }
