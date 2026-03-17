@@ -35,7 +35,7 @@ def _get_default_asset_config() -> tuple:
         {
             'name': 'mad_bomber',
             'type': 'single',
-            'file': 'mad-bomber.npy',
+            'file': 'mad_bomber.npy',
         },
         {
             'name': 'bucket',
@@ -136,8 +136,8 @@ class KaboomConstants(NamedTuple):
     BUCKET_TWO_POS_Y: int = 164
     BUCKET_ONE_POS_X: int = 73
     BUCKET_ONE_POS_Y: int = 148
-    TOPLEFT_ALLOWED_POS_X: int = 18
-    TOPLEFT_ALLOWED_POS_Y: int = 128
+    BUCKET_MIN_ALLOWED_POS_X: int = 18
+    BUCKET_MAX_ALLOWED_POS_X: int = 128
 
 
 # Agent's observation
@@ -259,8 +259,8 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
             # Tentative new_x
             new_x = jnp.where(
                 buckets_were_moving_right,
-                jnp.minimum(self.consts.TOPLEFT_ALLOWED_POS_Y, buckets_pos[0, 0] + cur_speed),
-                jnp.maximum(self.consts.TOPLEFT_ALLOWED_POS_X, buckets_pos[0, 0] + cur_speed)
+                jnp.minimum(self.consts.BUCKET_MAX_ALLOWED_POS_X, buckets_pos[0, 0] + cur_speed),
+                jnp.maximum(self.consts.BUCKET_MIN_ALLOWED_POS_X, buckets_pos[0, 0] + cur_speed)
             )
 
             # Bucket jittering
@@ -297,6 +297,12 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
     @partial(jax.jit, static_argnums=(0,))
     def get_group_index(self, level):
         return jax.lax.max(1, jax.lax.min(8, level)) - 1
+
+    def bomb_move_horizontally(self, bomb_pos_x, min_allowed_pos_x, max_allowed_pos_x, subkey) -> chex.Array:
+        return bomb_pos_x
+
+    def bomb_move_vertically(self, bomb_pos_y,  subkey) -> chex.Array:
+        return bomb_pos_y
 
     @partial(jax.jit, static_argnums=(0,))
     def update_bombs_step(self,
@@ -465,9 +471,9 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
             level_success = jnp.where(trigger_explosion, False, level_success)
             return bombs, bombs_should_explode, level_finished, level_success
 
-        def advance_bomb_state(bomb):
+        def advance_bomb_state(bomb, bomb_key):
             def active_case(operand):
-                bomb_, bombs_should_explode_, level_finished_, level_success_ = operand
+                bomb_, bombs_should_explode_, level_finished_, level_success_, bomb_key_ = operand
                 x = bomb_[X]
                 y = bomb_[Y]
                 fuse = bomb_[FUSE]
@@ -484,22 +490,33 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
                 explodes_in = jnp.where(explodes_in > 0, explodes_in - 1, explodes_in)
 
                 def fall():
-                    key_, sub = jax.random.split(key)
-                    new_fuse = jax.random.randint(sub, (), 0, self.consts.BOMB_FUSE_STATES)
-                    return (
+                    fuse_key, move_key = jax.random.split(bomb_key_)
+                    new_fuse = jax.random.randint(
+                        fuse_key, shape=(), minval=0, maxval=self.consts.BOMB_FUSE_STATES, dtype=jnp.int32
+                    )
+                    new_x = self.bomb_move_horizontally(
                         x,
-                        y + self.consts.BOMB_SPEED_GROUPS[self.get_group_index(level)],
+                        self.consts.BUCKET_MIN_ALLOWED_POS_X,
+                        self.consts.BUCKET_MAX_ALLOWED_POS_X,
+                        move_key,
+                    )
+
+                    move_key, fall_key = jax.random.split(bomb_key_)
+                    new_y = self.bomb_move_vertically(y, fall_key)
+
+                    return (
+                        new_x,
+                        new_y + self.consts.BOMB_SPEED_GROUPS[self.get_group_index(level)],
                         new_fuse,
                         self.consts.DEFAULT_STATE,
                         self.consts.DEFAULT_STATE,
                         bucket_idx,
-                        key_,
                     )
 
-                x_, y_, fuse_, explode_state_, bucket_explode_state_, bucket_idx_, key_ = jax.lax.cond(
+                x_, y_, fuse_, explode_state_, bucket_explode_state_, bucket_idx_ = jax.lax.cond(
                     (~bombs_should_explode_) & (bucket_explode_state == self.consts.DEFAULT_STATE),
                     fall,
-                    lambda: (x, y, fuse, explode_state, bucket_explode_state, bucket_idx, key),
+                    lambda: (x, y, fuse, explode_state, bucket_explode_state, bucket_idx),
                 )
 
                 done = (
@@ -517,8 +534,8 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
             return jax.lax.cond(
                 bomb[ACTIVE] == 1,
                 active_case,
-                lambda x: x,
-                operand=(bomb, bombs_should_explode, level_finished, level_success),
+                lambda operand: operand[:4],
+                operand=(bomb, bombs_should_explode, level_finished, level_success, bomb_key),
             )
 
         def update_bombs_when_active(operand):
@@ -535,7 +552,11 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
                 bombs, bombs_should_explode, level_finished, level_success
             )
 
-            bombs, all_bombs_should_explode, all_level_finished, all_level_success = jax.vmap(advance_bomb_state)(bombs)
+            split_keys = jax.random.split(key, bombs.shape[0] + 1)
+            key = split_keys[0]
+            bomb_keys = split_keys[1:]
+
+            bombs, all_bombs_should_explode, all_level_finished, all_level_success = jax.vmap(advance_bomb_state)(bombs, bomb_keys)
             bombs_should_explode = bombs_should_explode | jnp.any(all_bombs_should_explode)
             level_finished = level_finished | jnp.any(all_level_finished)
             level_success = level_success | jnp.any(all_level_success)
@@ -689,13 +710,13 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
 
         # Boundary checks
         mad_bomber_going_left = jnp.where(
-            mad_bomber_pos_x >= self.consts.TOPLEFT_ALLOWED_POS_Y,
+            mad_bomber_pos_x >= self.consts.BUCKET_MAX_ALLOWED_POS_X,
             True,
             mad_bomber_going_left,
         )
 
         mad_bomber_going_left = jnp.where(
-            mad_bomber_pos_x <= self.consts.TOPLEFT_ALLOWED_POS_X,
+            mad_bomber_pos_x <= self.consts.BUCKET_MIN_ALLOWED_POS_X,
             False,
             mad_bomber_going_left,
         )
@@ -978,19 +999,16 @@ class KaboomRenderer(JAXGameRenderer):
                 x = bomb[0].astype(int)
                 y = bomb[1].astype(int)
 
-                # --- Explosion in Luft ---
                 def draw_air_explosion(r3):
                     idx = (bomb[4] > 3).astype(jnp.int32) + (bomb[4] > 7).astype(jnp.int32)
                     return self.jr.render_at(r3, x, y, self.BOMB_EXPLODE_STATES[idx])
 
-                # --- Explosion im Eimer ---
                 def draw_bucket_explosion(r3):
                     idx = (bomb[5] > 3).astype(jnp.int32) + (bomb[5] > 7).astype(jnp.int32)
                     bucket = state.buckets_pos[bomb[6]]
                     by = bucket[1] - self.BOMB_BUCKET_EXPLODE_STATES[idx].shape[0]
                     return self.jr.render_at(r3, bucket[0], by, self.BOMB_BUCKET_EXPLODE_STATES[idx])
 
-                # --- Normale Bombe ---
                 def draw_normal(r3):
                     r3 = self.jr.render_at(r3, x, y, self.BOMBS[bomb[3]])
                     fuse_x = x + 2 * ((bomb[3] + 1) % 2)
