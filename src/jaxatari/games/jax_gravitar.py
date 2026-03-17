@@ -3113,7 +3113,14 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
     effective_level = jnp.where(forced_death_reset, jnp.int32(-2), level)
 
     operands = (obs, new_env_state, reward, done, info, effective_reset, effective_level)
-    return jax.lax.cond(effective_reset, _handle_reset, _no_reset, operands)
+    #return jax.lax.cond(effective_reset, _handle_reset, _no_reset, operands)
+
+    obs, new_env_state, reward, done, info, reset, level = jax.lax.cond(effective_reset, _handle_reset, _no_reset, operands)
+
+    # Ensure API consistency
+    done = new_env_state.done
+    
+    return obs, new_env_state, reward, done, info, reset, level
 
 
 def get_action_from_key():
