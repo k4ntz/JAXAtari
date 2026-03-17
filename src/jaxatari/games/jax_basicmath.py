@@ -496,7 +496,9 @@ class BasicMathRenderer(JAXGameRenderer):
 
         sprite_color = jnp.array(self.consts.COLOR_CODES[0][1], dtype=jnp.uint8)
 
-        self.PALETTE = self.PALETTE.at[:5, :].set(sprite_color)
+        broadcasted_color = jnp.broadcast_to(sprite_color, (5, 3))
+
+        self.PALETTE = self.PALETTE.at[:5, :].set(broadcasted_color)
 
     def _stack_num_masks(self) -> jnp.ndarray:
         """Helper to get all player-related masks from the main padded group."""
