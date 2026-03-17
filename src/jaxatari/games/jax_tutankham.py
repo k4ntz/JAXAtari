@@ -72,7 +72,6 @@ def _get_default_asset_config() -> tuple:
         # Backgrounds (loaded as a group)
         # Note: The 'background' type is not used here, as the city map is the primary background.
         # We will treat 'tombs' as our base background sprites.
-        # {'name': 'tombs', 'type': 'group', 'files': tombs},
 
         # Roomparts
         {'name': 'floor', 'type': 'group', 'files': ['floor_map1.npy', 'floor_map2.npy', 'floor_map3.npy', 'floor_map4.npy']},
@@ -821,7 +820,7 @@ class JaxTutankham(JaxEnvironment):
 
     #Bullet Step
     @partial(jax.jit, static_argnums=(0,))
-    def bullet_step(self, bullet_state, player_x, player_y, amonition_timer, action):
+    def bullet_step(self, bullet_state, player_x, player_y, amonition_timer, action, level):
         
         
         def get_rotation(action):
@@ -837,7 +836,6 @@ class JaxTutankham(JaxEnvironment):
                 operand=None
             )
 
-
         space = jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE)
 
         new_bullet = bullet_state #array with (x, y, bullet_rotation, bullet_active)
@@ -852,14 +850,20 @@ class JaxTutankham(JaxEnvironment):
         )
         new_bullet = new_bullet.at[0].set(bullet_x)
         
-        # Deactivate if out of bounds
-        # TODO: Wall collision detection
+        # Deactivate if out of bounds or hits wall
+        bullet_y = bullet_state[1]
+        old_bullet_x = bullet_state[0]
+        
+        _, _, is_walkable = can_walk_to(self.consts.BULLET_SIZE, bullet_x, bullet_y, old_bullet_x, bullet_y, self.consts.VALID_POS_MAPS[level%4])        
+
+        should_deactivate = jnp.logical_not(is_walkable)
+
         new_bullet = jax.lax.cond(
-            (bullet_x < 0) | (bullet_x >= self.consts.WIDTH),
+            should_deactivate,
             lambda _: jnp.zeros((4,), dtype=new_bullet.dtype),
             lambda bullet: bullet,
             operand=new_bullet
-            )
+        )
 
 
 
@@ -868,7 +872,7 @@ class JaxTutankham(JaxEnvironment):
 
         new_bullet = jax.lax.cond(
             (space & bullet_rdy & (amonition_timer > 0)) == 1, # if firing action & bullet is inactive & amonition available
-            lambda _: jnp.array([player_x, player_y, get_rotation(action), 1], dtype=jnp.int32), # shoot bullet at player position,
+            lambda _: jnp.array([player_x+2, player_y+3, get_rotation(action), 1], dtype=jnp.int32), # shoot bullet at player face position,
             lambda bullet: bullet, # don't shoot bullet
             operand=new_bullet
         )
@@ -1240,7 +1244,7 @@ class JaxTutankham(JaxEnvironment):
         )
 
 
-        bullet_state, amonition_timer =self.bullet_step(bullet_state, player_x, player_y, amonition_timer, action)
+        bullet_state, amonition_timer =self.bullet_step(bullet_state, player_x, player_y, amonition_timer, action, level)
 
         creature_states = self.creature_step(creature_states, camera_offset, level)
 
