@@ -437,12 +437,28 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
             )
             trigger_explosion = jnp.any(hits_bottom) & (~bombs_should_explode)
 
-            bombs = bombs.at[:, EXPLODES_IN].set(
-                jnp.where(
-                    trigger_explosion & (bombs[:, ACTIVE] == 1),
-                    self.consts.EXPIRES_IN_VALUES,
-                    bombs[:, EXPLODES_IN],
+            def assign_ordered_explosion_delays(bombs_):
+                active_mask = bombs_[:, ACTIVE] == 1
+                sortable_y = jnp.where(active_mask, bombs_[:, Y], jnp.array(-1, dtype=jnp.int32))
+                sorted_indices = jnp.argsort(-sortable_y)
+                active_sorted = active_mask[sorted_indices]
+                active_ranks = jnp.cumsum(active_sorted.astype(jnp.int32)) - 1
+                sorted_delays = jnp.where(
+                    active_sorted,
+                    self.consts.EXPIRES_IN_VALUES[active_ranks],
+                    self.consts.DEFAULT_STATE,
                 )
+                delays = jnp.full((bombs_.shape[0],), self.consts.DEFAULT_STATE, dtype=jnp.int32)
+                delays = delays.at[sorted_indices].set(sorted_delays)
+                return bombs_.at[:, EXPLODES_IN].set(
+                    jnp.where(active_mask, delays, bombs_[:, EXPLODES_IN])
+                )
+
+            bombs = jax.lax.cond(
+                trigger_explosion,
+                assign_ordered_explosion_delays,
+                lambda b: b,
+                bombs,
             )
             bombs_should_explode = bombs_should_explode | trigger_explosion
             level_finished = level_finished | trigger_explosion
@@ -918,97 +934,31 @@ class KaboomRenderer(JAXGameRenderer):
         )
 
         # Score
-        score = state.score
+        score = state.score.astype(jnp.int32)
 
-        score_digit0 = self.jr.int_to_digits(score // 1000000 % 10, max_digits=1)
-        raster = jax.lax.cond(jnp.all(score_digit0 != 0),
-                              lambda _: self.jr.render_label(
-                                  raster,
-                                  self.consts.SCORE_POS[0] - 42,
-                                  self.consts.SCORE_POS[1],
-                                  score_digit0,
-                                  self.SCORES,
-                                  spacing=-7,
-                                  max_digits=1
-                              ),
-                              lambda _: raster, operand=None)
+        def draw_score_digit(i, raster_):
+            pow10 = jnp.asarray(10, dtype=jnp.int32) ** i
+            digit_value = (score // pow10) % 10
+            x_pos = self.consts.SCORE_POS[0] - 7 * i
+            should_render = (i == 0) | (score >= pow10)
+            digit = self.jr.int_to_digits(digit_value, max_digits=1)
 
-        score_digit1 = self.jr.int_to_digits(score // 100000 % 10, max_digits=1)
-        raster = jax.lax.cond(jnp.all(score_digit1 != 0) | jnp.all(score_digit0 != 0),
-                              lambda _: self.jr.render_label(
-                                  raster,
-                                  self.consts.SCORE_POS[0] - 35,
-                                  self.consts.SCORE_POS[1],
-                                  score_digit1,
-                                  self.SCORES,
-                                  spacing=-7,
-                                  max_digits=1
-                              ),
-                              lambda _: raster, operand=None)
+            return jax.lax.cond(
+                should_render,
+                lambda r: self.jr.render_label(
+                    r,
+                    x_pos,
+                    self.consts.SCORE_POS[1],
+                    digit,
+                    self.SCORES,
+                    spacing=-7,
+                    max_digits=1,
+                ),
+                lambda r: r,
+                raster_,
+            )
 
-        score_digit2 = self.jr.int_to_digits(score // 10000 % 10, max_digits=1)
-        raster = jax.lax.cond(jnp.all(score_digit2 != 0) | jnp.all(score_digit1 != 0) | jnp.all(score_digit0 != 0),
-                              lambda _: self.jr.render_label(
-                                  raster,
-                                  self.consts.SCORE_POS[0] - 28,
-                                  self.consts.SCORE_POS[1],
-                                  score_digit2,
-                                  self.SCORES,
-                                  spacing=-7,
-                                  max_digits=1
-                              ),
-                              lambda _: raster, operand=None)
-
-        score_digit3 = self.jr.int_to_digits(score // 1000 % 10, max_digits=1)
-        raster = jax.lax.cond(jnp.all(score_digit3 != 0) | jnp.all(score_digit2 != 0) | jnp.all(score_digit1 != 0) | jnp.all(score_digit0 != 0),
-                              lambda _: self.jr.render_label(
-                                  raster,
-                                  self.consts.SCORE_POS[0] - 21,
-                                  self.consts.SCORE_POS[1],
-                                  score_digit3,
-                                  self.SCORES,
-                                  spacing=-7,
-                                  max_digits=1
-                              ),
-                              lambda _: raster, operand=None)
-
-        score_digit4 = self.jr.int_to_digits(score // 100 % 10, max_digits=1)
-        raster = jax.lax.cond(jnp.all(score_digit4 != 0) | jnp.all(score_digit3 != 0) | jnp.all(score_digit2 != 0) | jnp.all(score_digit1 != 0) | jnp.all(score_digit0 != 0),
-                              lambda _: self.jr.render_label(
-                                  raster,
-                                  self.consts.SCORE_POS[0] - 14,
-                                  self.consts.SCORE_POS[1],
-                                  score_digit4,
-                                  self.SCORES,
-                                  spacing=-7,
-                                  max_digits=1
-                              ),
-                              lambda _: raster, operand=None)
-
-        score_digit5 = self.jr.int_to_digits(score // 10 % 10, max_digits=1)
-        raster = jax.lax.cond(jnp.all(score_digit5 != 0) | jnp.all(score_digit4 != 0) | jnp.all(score_digit3 != 0) | jnp.all(score_digit2 != 0) | jnp.all(score_digit1 != 0) | jnp.all(score_digit0 != 0),
-                     lambda _: self.jr.render_label(
-                        raster,
-                        self.consts.SCORE_POS[0] - 7,
-                        self.consts.SCORE_POS[1],
-                        score_digit5,
-                        self.SCORES,
-                        spacing=-7,
-                        max_digits=1
-                    ),
-                     lambda _: raster, operand=None)
-
-        score_digit6 = self.jr.int_to_digits(score % 10, max_digits=1)
-        raster = self.jr.render_label(
-                        raster,
-                        self.consts.SCORE_POS[0],
-                        self.consts.SCORE_POS[1],
-                        score_digit6,
-                        self.SCORES,
-                        spacing=-7,
-                        max_digits=1
-                    )
-
+        raster = jax.lax.fori_loop(0, 7, draw_score_digit, raster)
 
         # Mad bomber
         raster = self.jr.render_at(
