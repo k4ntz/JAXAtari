@@ -110,13 +110,13 @@ class TutankhamConstants(NamedTuple):
     HEIGHT: int = 210
 
     # Player constants
-    PLAYER_SPEED: int = 2
+    PLAYER_SPEED: float = 1.5
     PLAYER_SIZE: chex.Array = jnp.array([5, 8], dtype=jnp.int32)
     PLAYER_LIVES: int = 3
 
     # Missile constants
     BULLET_SIZE: chex.Array = jnp.array([1, 2], dtype=jnp.int32)
-    BULLET_SPEED: int = 8
+    BULLET_SPEED: float = 3.5
     AMMO_SUPPLY: int = 900000  # frames until ammo runs out
 
     MAX_LASER_FLASHES: int = 3
@@ -143,8 +143,8 @@ class TutankhamConstants(NamedTuple):
     INACTIVE: int = 0
     ACTIVE: int = 1
 
-    CREATURE_SPEED: chex.Array = jnp.array([1, 3, 7, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                                           dtype=jnp.int32)  # speed for each creature type
+    CREATURE_SPEED: chex.Array = jnp.array([1.51, 1.59, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+                                           dtype=jnp.float32)  # speed for each creature type
     CREATURE_POINTS: chex.Array = jnp.array([1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 0, 3],
                                             dtype=jnp.int32)  # points for defeating each creature type
 
@@ -341,10 +341,10 @@ class TutankhamConstants(NamedTuple):
     MAP_TELEPORTER_POSITIONS: chex.Array = jnp.array([
         # MAP 1
         [
-            [128, 153, Action.LEFT, 26, 153], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
-            [26, 153, Action.RIGHT, 128, 153],
-            [145, 604, Action.LEFT, 10, 604], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
-            [10, 604, Action.RIGHT, 145, 604]
+            [128, 153, Action.LEFT, 27, 153], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [27, 153, Action.RIGHT, 128, 153],
+            [144, 604, Action.LEFT, 11, 604], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [11, 604, Action.RIGHT, 144, 604]
         ],
         # MAP 2
         [
@@ -438,6 +438,9 @@ class TutankhamState(NamedTuple):
     player_direction: int   # Last horizontal direction: 3=RIGHT, 4=LEFT
     is_moving: bool         # True if the player moved this frame
     step_counter: int       # Increments every frame, drives animation clock
+    player_subpixel: float  # sub pixel position accumulator for smooth movement
+    creature_subpixels: chex.Array  # (MAX_CREATURES,) sub pixel position accumulators
+    bullet_subpixel: float  # sub pixel position accumulator for bullet
 
     has_key: bool  # whether the player has collected the key or not
     goal_reached: bool  # whether the player has reached the goal with the key to complete the level
@@ -713,6 +716,13 @@ class JaxTutankham(JaxEnvironment):
         amonition_timer = self.consts.AMMO_SUPPLY
         bullet_state = jnp.array([0, 0, 0, 0], dtype=jnp.int32)  # (x, y, bullet_rotation, bullet_active)
         creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
+
+        creature_states = jnp.array([
+            [30, 105, self.consts.SNAKE, 1],
+            [30, 105, self.consts.SCORPION, 1]
+            ],
+            dtype=jnp.int32)
+
         item_states = self.consts.MAP_ITEMS[level%4]  # (N, 4) array with (x, y, item_type, active)
         last_creature_spawn = 0
         laser_flash_count = self.consts.MAX_LASER_FLASHES
@@ -722,6 +732,11 @@ class JaxTutankham(JaxEnvironment):
         is_moving = False
         last_directional_action = 0
         step_counter = 0
+
+        # Sub Pixel accumulators for smooth movement
+        player_subpixel=0.0
+        creature_subpixels=jnp.zeros(self.consts.MAX_CREATURES, dtype=jnp.float32)
+        bullet_subpixel=0.0
 
         camera_offset = jnp.where(start_x < self.consts.HEIGHT // 2, 0, start_y - self.consts.HEIGHT // 2)
 
@@ -741,6 +756,9 @@ class JaxTutankham(JaxEnvironment):
                                player_direction=player_direction,
                                is_moving=is_moving,
                                step_counter=step_counter,
+                               player_subpixel=player_subpixel,
+                               creature_subpixels=creature_subpixels,
+                               bullet_subpixel=bullet_subpixel,
                                has_key=has_key,
                                last_directional_action=last_directional_action,
                                rng_key=key,
@@ -770,39 +788,59 @@ class JaxTutankham(JaxEnvironment):
         return teleporter_out_x, teleporter_out_y, should_teleport
     
 
+    # sub pixel accumulator for smooth movement
+    @partial(jax.jit, static_argnums=(0,))
+    def subpixel_accumulator(self, speed, subpixel):
+        '''
+        Adds the fractional part of the speed to the subpixel accumulator.
+        If subpixel accumulator > 1, then one extra pixel is moved this step, subpixel accumulator is reduced by 1.
+        Returns the integer speed and updated subpixel accumulator.
+        '''
+        base_speed = jnp.floor(speed).astype(jnp.int32)
+        sub_speed = speed % 1.0
+        new_subpixel = subpixel + sub_speed
+        extra = (new_subpixel >= 1.0).astype(jnp.int32)
+        new_subpixel = jnp.where(new_subpixel >= 1.0, new_subpixel - 1.0, new_subpixel)
+        actual_speed = base_speed + extra
+
+        return actual_speed, new_subpixel
+    
+
     # Player Step
     @partial(jax.jit, static_argnums=(0,))
-    def player_step(self, player_x, player_y, action, last_directional_action, player_direction, step_counter, level):
+    def player_step(self, player_x, player_y, action, last_directional_action, player_direction, step_counter, player_subpixel, level):
+        
         speed = self.consts.PLAYER_SPEED
+        actual_speed, new_subpixel = self.subpixel_accumulator(speed, player_subpixel)
 
         dx = jnp.array([
-        0,          # 0  NOOP
-        0,          # 1  FIRE
-        0,          # 2  UP
-        speed,      # 3  RIGHT
-        -speed,     # 4  LEFT
-        0,          # 5  DOWN
-        0,          # 6  UPRIGHT
-        0,          # 7  UPLEFT
-        0,          # 8  DOWNRIGHT
-        0,          # 9  DOWNLEFT
-        0,          # 10 UPFIRE
-        0,          # 11 RIGHTFIRE
-        0,          # 12 LEFTFIRE
-        0,          # 13 DOWNFIRE
-        0,          # 14 UPRIGHTFIRE
-        0,          # 15 UPLEFTFIRE
-        0,          # 16 DOWNRIGHTFIRE
-        0,          # 17 DOWNLEFTFIRE
+        0,            # 0  NOOP
+        0,            # 1  FIRE
+        0,            # 2  UP
+        actual_speed, # 3  RIGHT
+        -actual_speed,# 4  LEFT
+        0,            # 5  DOWN
+        0,            # 6  UPRIGHT
+        0,            # 7  UPLEFT
+        0,            # 8  DOWNRIGHT
+        0,            # 9  DOWNLEFT
+        0,            # 10 UPFIRE
+        0,            # 11 RIGHTFIRE
+        0,            # 12 LEFTFIRE
+        0,            # 13 DOWNFIRE
+        0,            # 14 UPRIGHTFIRE
+        0,            # 15 UPLEFTFIRE
+        0,            # 16 DOWNRIGHTFIRE
+        0,            # 17 DOWNLEFTFIRE
         ])
 
         dy = jnp.array([
-            0,          # 0  NOOP
-            0,          # 1  FIRE
-            -speed,     # 2  UP
-            0,          # 3  RIGHT
-            0,          # 4  LEFT
-            speed,      # 5  DOWN
+            0,            # 0  NOOP
+            0,            # 1  FIRE
+            -actual_speed,# 2  UP
+            0,            # 3  RIGHT
+            0,            # 4  LEFT
+            actual_speed, # 5  DOWN
             0,     # 6  UPRIGHT
             0,     # 7  UPLEFT
             0,      # 8  DOWNRIGHT
@@ -848,11 +886,11 @@ class JaxTutankham(JaxEnvironment):
         # update camera offset based on player y position
         camera_offset = jnp.where(player_y < self.consts.HEIGHT // 2, 0, player_y - self.consts.HEIGHT // 2)
 
-        return player_x, player_y, new_last_directional_action, new_direction, is_moving_now, new_step_counter, camera_offset
+        return player_x, player_y, new_last_directional_action, new_direction, is_moving_now, new_step_counter, new_subpixel, camera_offset
 
     #Bullet Step
     @partial(jax.jit, static_argnums=(0,))
-    def bullet_step(self, bullet_state, player_x, player_y, amonition_timer, action, level):
+    def bullet_step(self, bullet_state, bullet_subpixel, player_x, player_y, amonition_timer, action, level):
         
         
         def get_rotation(action):
@@ -873,10 +911,14 @@ class JaxTutankham(JaxEnvironment):
         new_bullet = bullet_state #array with (x, y, bullet_rotation, bullet_active)
 
 
-        # --- update bullet x position if active (bullet only travels horizontal so no vertical movement) ---        
+        # --- update bullet x position if active (bullet only travels horizontal so no vertical movement) ---
+        actual_speed, new_subpixel = self.subpixel_accumulator(self.consts.BULLET_SPEED, bullet_subpixel)
+        # Only advance subpixel accumulator while bullet is active
+        new_subpixel = jnp.where(bullet_state[3] == 1, new_subpixel, bullet_subpixel)
+
         bullet_x = jax.lax.cond(
             bullet_state[3] == 1,  # if bullet is active
-            lambda x: x + self.consts.BULLET_SPEED * bullet_state[2],
+            lambda x: x + actual_speed * bullet_state[2],
             lambda x: x,
             bullet_state[0],
         )
@@ -896,22 +938,27 @@ class JaxTutankham(JaxEnvironment):
             lambda bullet: bullet,
             operand=new_bullet
         )
+        # Reset subpixel accumulator if bullet is deactivated
+        new_subpixel = jnp.where(should_deactivate, jnp.float32(0), new_subpixel)
 
 
 
         # --- firing logic ---
         bullet_rdy = 1 - bullet_state[3]  # 1 if bullet inactive, 0 if active
+        fired = (space & bullet_rdy & (amonition_timer > 0)) == 1
 
         new_bullet = jax.lax.cond(
-            (space & bullet_rdy & (amonition_timer > 0)) == 1, # if firing action & bullet is inactive & amonition available
+            fired, # if firing action & bullet is inactive & amonition available
             lambda _: jnp.array([player_x+2, player_y+3, get_rotation(action), 1], dtype=jnp.int32), # shoot bullet at player face position,
             lambda bullet: bullet, # don't shoot bullet
             operand=new_bullet
         )
+        # Reset subpixel accumulator when a new bullet is fired
+        new_subpixel = jnp.where(fired, jnp.float32(0), new_subpixel)
 
         amonition_timer -= 1 # TODO: adjust amonition timer
 
-        return new_bullet, amonition_timer
+        return new_bullet, new_subpixel, amonition_timer
 
     @partial(jax.jit, static_argnums=(0,))
     def laser_flash_step(self, creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action):
@@ -939,18 +986,15 @@ class JaxTutankham(JaxEnvironment):
 
     # creature step
     @partial(jax.jit, static_argnums=(0,))
-    def creature_step(self, creature_states, camera_offset, level):
+    def creature_step(self, creature_states, creature_subpixels, camera_offset, step_counter, level):
 
-        # Update creature position if active
-        def move_creature(creature_state):
+        def move_creature(creature_state, creature_subpixel):
             creature_x, creature_y, creature_type, active = creature_state
 
             speed = self.consts.CREATURE_SPEED[creature_type.astype(int)]
+            actual_speed, new_subpixel = self.subpixel_accumulator(speed, creature_subpixel)
 
-            # TODO speed multiplier based on level difficulty
-            #speed *= self.consts.CREATURE_SPEED_MULTIPLIER[self.level]
-
-            new_x = creature_x + speed * active # TODO: If creature active, Move right for simplicity
+            new_x = creature_x + actual_speed * active
             new_y = creature_y
             creature_x, creature_y, is_walkable = can_walk_to(self.consts.CREATURE_SIZE, new_x.astype(jnp.int32), new_y.astype(jnp.int32), creature_x, creature_y, self.consts.VALID_POS_MAPS[level%4])
             # Deactivate if out of bounds
@@ -960,23 +1004,18 @@ class JaxTutankham(JaxEnvironment):
                 active
             )
 
-            # deactivate creature if it is off screen
-            # check  which spawners are on screen # TODO: height is currently hardcoded to one specific creature size
             creature_on_screen = is_onscreen(creature_y, self.consts.CREATURE_SIZE[1], camera_offset)
             active_new = jnp.where(creature_on_screen, active_new, self.consts.INACTIVE)
 
-            # If inactive, reset position to (0, 0)
             creature_x = creature_x * active_new
             creature_y = creature_y * active_new
 
-            return jnp.array([creature_x, creature_y, creature_type, active_new], dtype=jnp.int32)
+            return jnp.array([creature_x, creature_y, creature_type, active_new], dtype=jnp.int32), new_subpixel
 
-
-        # iterate over creatures and move them
         move_creature_vmapped = jax.vmap(move_creature)
-        new_creature_states = move_creature_vmapped(creature_states)
+        new_creature_states, new_creature_subpixels = move_creature_vmapped(creature_states, creature_subpixels)
 
-        return new_creature_states
+        return new_creature_states, new_creature_subpixels
 
     # creature spawner step
     @partial(jax.jit, static_argnums=(0,))
@@ -1103,7 +1142,7 @@ class JaxTutankham(JaxEnvironment):
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def resolve_player_creature_collisions(self, player_x, player_y, creature_states, bullet_state, player_lives, last_creature_spawn, level, last_directional_action):
+    def resolve_player_creature_collisions(self, player_x, player_y, creature_states, creature_subpixels, bullet_state, player_lives, last_creature_spawn, level, last_directional_action):
 
         # check player-creature collisions (vectorized over all creatures)
         def player_hits_creature(creature):
@@ -1126,12 +1165,13 @@ class JaxTutankham(JaxEnvironment):
         final_player_y = jnp.where(player_hit, respawn_y, player_y)
         final_bullet_state = jnp.where(player_hit, respawn_bullet, bullet_state)
         final_creature_states = jnp.where(player_hit, respawn_creatures, creature_states)
+        final_creature_subpixels = jnp.where(player_hit, jnp.zeros_like(creature_subpixels), creature_subpixels)
         final_player_lives = jnp.where(player_hit, respawn_lives, player_lives)
         final_last_creature_spawn = jnp.where(player_hit, respawn_spawn, last_creature_spawn)
         final_last_directional_action = jnp.where(player_hit, respawn_directional_action, last_directional_action)
 
         return (final_player_x, final_player_y,
-                final_bullet_state, final_creature_states,
+                final_bullet_state, final_creature_states, final_creature_subpixels,
                 final_player_lives, final_last_creature_spawn, final_last_directional_action)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1262,23 +1302,26 @@ class JaxTutankham(JaxEnvironment):
         last_directional_action = state.last_directional_action
         player_direction= state.player_direction
         step_counter = state.step_counter
+        player_subpixel = state.player_subpixel
+        creature_subpixels = state.creature_subpixels
+        bullet_subpixel = state.bullet_subpixel
         rng_key = state.rng_key
         camera_offset = state.camera_offset
         goal_reached = state.goal_reached
 
         # move player based on action input and check for teleporter trigger, also update camera offset
-        (player_x, player_y, 
-         last_directional_action, player_direction, 
-         is_moving, step_counter, camera_offset)= self.player_step(
-            player_x, player_y, 
-            action, last_directional_action, 
-            player_direction, step_counter, level
+        (player_x, player_y,
+         last_directional_action, player_direction,
+         is_moving, step_counter, player_subpixel, camera_offset)= self.player_step(
+            player_x, player_y,
+            action, last_directional_action,
+            player_direction, step_counter, player_subpixel, level
         )
 
 
-        bullet_state, amonition_timer =self.bullet_step(bullet_state, player_x, player_y, amonition_timer, action, level)
+        bullet_state, bullet_subpixel, amonition_timer = self.bullet_step(bullet_state, bullet_subpixel, player_x, player_y, amonition_timer, action, level)
 
-        creature_states = self.creature_step(creature_states, camera_offset, level)
+        creature_states, creature_subpixels = self.creature_step(creature_states, creature_subpixels, camera_offset, step_counter, level)
 
         creature_states, last_creature_spawn, rng_key = self.spawner_step(creature_states, last_creature_spawn, level, rng_key, camera_offset)
 
@@ -1294,12 +1337,12 @@ class JaxTutankham(JaxEnvironment):
         creature_states, bullet_state = self.resolve_bullet_collisions(creature_states, bullet_state)
 
         (player_x, player_y, 
-         bullet_state, creature_states, 
+         bullet_state, creature_states, creature_subpixels,
          player_lives, last_creature_spawn,
          last_directional_action
          ) = self.resolve_player_creature_collisions(
-             player_x, player_y, 
-             creature_states, bullet_state, 
+             player_x, player_y,
+             creature_states, creature_subpixels, bullet_state,
              player_lives, last_creature_spawn,
              level, last_directional_action
              )
@@ -1349,9 +1392,12 @@ class JaxTutankham(JaxEnvironment):
                                player_direction=player_direction,
                                is_moving=is_moving,
                                step_counter=step_counter,
+                               player_subpixel=player_subpixel,
+                               creature_subpixels=creature_subpixels,
+                               bullet_subpixel=bullet_subpixel,
                                has_key=has_key,
                                last_directional_action=last_directional_action,
-                               rng_key=rng_key, 
+                               rng_key=rng_key,
                                camera_offset=camera_offset,
                                goal_reached=goal_reached
                                )
