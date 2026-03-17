@@ -1,4 +1,4 @@
-from jaxatari.games.mods.kaboom_mod_plugins import BombsMoveHorizontally, BombsFallFaster
+from jaxatari.games.mods.kaboom_mod_plugins import BombsMoveHorizontally, BombsFallFaster, BombsRed, MadBomberGreen
 from jaxatari.modification import JaxAtariModController
 
 class KaboomEnvMod(JaxAtariModController):
@@ -10,8 +10,8 @@ class KaboomEnvMod(JaxAtariModController):
     REGISTRY = {
         "bombs_move_horizontally": BombsMoveHorizontally,
         "bombs_fall_randomlyfast": BombsFallFaster,
-        "bombs_red": None,
-        "madbomber_green": None,
+        "bombs_red": BombsRed,
+        "madbomber_green": MadBomberGreen,
     }
 
     def __init__(self,

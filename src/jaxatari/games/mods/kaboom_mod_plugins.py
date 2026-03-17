@@ -34,3 +34,25 @@ class BombsFallFaster(JaxAtariInternalModPlugin):
 
 class BombsRed(JaxAtariInternalModPlugin):
     """Bombs are red"""
+
+    asset_overrides = {
+        "bombs" : {
+            'name': 'bombs',
+            'type': 'group',
+            'files': (
+                'bomb1.npy',
+                'bomb2.npy',
+            ),
+        }
+    }
+
+class MadBomberGreen(JaxAtariInternalModPlugin):
+    """Bombs are red"""
+
+    asset_overrides = {
+        "mad_bomber" : {
+            'name': 'mad_bomber',
+            'type': 'single',
+            'file': 'mad_bomber_green.npy',
+        }
+    }
