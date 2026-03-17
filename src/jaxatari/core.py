@@ -54,6 +54,7 @@ GAME_MODULES = {
     "namethisgame": "jaxatari.games.jax_namethisgame",
     "phoenix": "jaxatari.games.jax_phoenix",
     "pong": "jaxatari.games.jax_pong",
+    "qbert": "jaxatari.games.jax_qbert",
     "riverraid": "jaxatari.games.jax_riverraid",
     "seaquest": "jaxatari.games.jax_seaquest",
     "sirlancelot": "jaxatari.games.jax_sirlancelot",
@@ -83,7 +84,8 @@ MOD_MODULES = {
     "breakout": "jaxatari.games.mods.breakout_mods.BreakoutEnvMod",
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
     "videopinball": "jaxatari.games.mods.videopinball_mods.VideoPinballEnvMod",
-    'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
+    "tennis": "jaxatari.games.mods.tennis_mods.TennisEnvMod",
+    "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
 }
 
 
