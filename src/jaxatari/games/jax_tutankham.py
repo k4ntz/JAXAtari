@@ -15,27 +15,32 @@ import numpy as np
 import jaxatari.spaces as spaces
 import time
 
-@jax.jit
-def compute_binary_matrix(data: jnp.ndarray) -> jnp.ndarray:
+@partial(jax.jit, static_argnums=(0,))
+def compute_binary_matrix(level: int, data: jnp.ndarray) -> jnp.ndarray:
     """
     Converts an image array containing white and purple
     pixels into a binary matrix (purple=1, white=0).
     """
     # Purple in the provided floor_one.npy file is represented as [80, 0, 132, 255]
     purple_color = jnp.array([80, 0, 132, 255], dtype=data.dtype)
-    
+    red_color = jnp.array([148, 0, 0, 255], dtype=data.dtype)
+    black_color = jnp.array([0, 0, 0, 255], dtype=data.dtype)
+    brown_color = jnp.array([72, 44, 0, 255], dtype=data.dtype)
+
+    map_colors = [purple_color, red_color, black_color, brown_color]
+
     # Check if we have an RGBA image (shape ends with 4)
     # This branch is evaluated at trace time based on the static shape of the input
     if data.shape[-1] == 4:
-        is_purple = jnp.all(data == purple_color, axis=-1)
+        is_map_color = jnp.all(data == map_colors[level - 1], axis=-1)
     else:
-        is_purple = jnp.all(data[..., :3] == purple_color[:3], axis=-1)
+        is_map_color = jnp.all(data[..., :3] == map_colors[level - 1][:3], axis=-1)
         
     # Convert boolean mask to binary matrix (0s and 1s)
-    return is_purple.astype(jnp.int8)
+    return is_map_color.astype(jnp.int8)
 
     
-def create_binary_matrix(npy_path: str) -> jnp.ndarray:
+def create_binary_matrix(level: int, npy_path: str) -> jnp.ndarray:
     """
     Reads a .npy image file containing white (or transparent black) and purple pixels,
     and returns a binary matrix where white/transparent pixels are 0 and purple pixels are 1.
@@ -50,7 +55,7 @@ def create_binary_matrix(npy_path: str) -> jnp.ndarray:
     data_np = np.load(npy_path)
     
     # Process the loaded array with our jitted JAX function
-    binary_matrix = compute_binary_matrix(jnp.array(data_np))
+    binary_matrix = compute_binary_matrix(level, jnp.array(data_np))
     
     return binary_matrix
 
@@ -185,7 +190,13 @@ class TutankhamConstants(NamedTuple):
     # Asset config baked into constants
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
-    VALID_POS: chex.Array = create_binary_matrix(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_map1.npy")
+    VALID_POS_MAP1: chex.Array = create_binary_matrix(1, f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_map1.npy")
+    VALID_POS_MAP2: chex.Array = create_binary_matrix(2, f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_map2.npy")
+    VALID_POS_MAP3: chex.Array = create_binary_matrix(3, f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_map3.npy")
+    VALID_POS_MAP4: chex.Array = create_binary_matrix(4, f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_map4.npy")
+
+    VALID_POS_MAPS: chex.Array = jnp.array([VALID_POS_MAP1, VALID_POS_MAP2, VALID_POS_MAP3, VALID_POS_MAP4])
+
 
 
     # Levels -----------------------------------------
@@ -262,21 +273,21 @@ class TutankhamConstants(NamedTuple):
         ],
         # MAP 2
         [
-            [0, 100, 105, 140],
+            [0, 200, 112, 140],
             [0, 100, 105, 140],
             [0, 100, 105, 140],
             [0, 100, 105, 140]
         ],
         # MAP 3
         [
-            [0, 100, 105, 140],
+            [0, 200, 105, 140],
             [0, 100, 105, 140],
             [0, 100, 105, 140],
             [0, 100, 105, 140]
         ],
         # MAP 4
         [
-            [0, 100, 105, 140],
+            [0, 200, 105, 140],
             [0, 100, 105, 140],
             [0, 100, 105, 140],
             [0, 100, 105, 140]
@@ -506,7 +517,7 @@ class TutankhamRenderer(JAXGameRenderer):
         camera_offset = jnp.where(state.player_y < self.consts.HEIGHT // 2, 0, state.player_y - self.consts.HEIGHT // 2)
         
         # Ensure the camera doesn't scroll past the bottom of the map
-        max_offset = self.consts.VALID_POS.shape[0] - self.consts.HEIGHT
+        max_offset = self.consts.VALID_POS_MAPS[level_index].shape[0] - self.consts.HEIGHT
         camera_offset = jnp.clip(camera_offset, 0, max_offset)
 
         # 1. Start with the static blue background
@@ -791,7 +802,7 @@ class JaxTutankham(JaxEnvironment):
 
         new_x = player_x + dx[effective_action]
         new_y = player_y + dy[effective_action]
-        player_x, player_y, is_walkable = can_walk_to(self.consts.PLAYER_SIZE, new_x, new_y, player_x, player_y, self.consts.VALID_POS)        
+        player_x, player_y, is_walkable = can_walk_to(self.consts.PLAYER_SIZE, new_x, new_y, player_x, player_y, self.consts.VALID_POS_MAPS[level%4])        
         # If teleporter is triggered, the player position is set to teleporter out coordinates 
         player_x = jnp.where(should_teleport, teleporter_out_x, player_x)
         player_y = jnp.where(should_teleport, teleporter_out_y, player_y)
@@ -892,7 +903,7 @@ class JaxTutankham(JaxEnvironment):
 
     # creature step
     @partial(jax.jit, static_argnums=(0,))
-    def creature_step(self, creature_states, camera_offset):
+    def creature_step(self, creature_states, camera_offset, level):
 
         # Update creature position if active
         def move_creature(creature_state):
@@ -905,7 +916,7 @@ class JaxTutankham(JaxEnvironment):
 
             new_x = creature_x + speed * active # TODO: If creature active, Move right for simplicity
             new_y = creature_y
-            creature_x, creature_y, is_walkable = can_walk_to(self.consts.CREATURE_SIZE, new_x.astype(jnp.int32), new_y.astype(jnp.int32), creature_x, creature_y, self.consts.VALID_POS)
+            creature_x, creature_y, is_walkable = can_walk_to(self.consts.CREATURE_SIZE, new_x.astype(jnp.int32), new_y.astype(jnp.int32), creature_x, creature_y, self.consts.VALID_POS_MAPS[level%4])
             # Deactivate if out of bounds
             active_new = jnp.where(
                 creature_x >= self.consts.WIDTH,
@@ -1231,7 +1242,7 @@ class JaxTutankham(JaxEnvironment):
 
         bullet_state, amonition_timer =self.bullet_step(bullet_state, player_x, player_y, amonition_timer, action)
 
-        creature_states = self.creature_step(creature_states, camera_offset)
+        creature_states = self.creature_step(creature_states, camera_offset, level)
 
         creature_states, last_creature_spawn, rng_key = self.spawner_step(creature_states, last_creature_spawn, level, rng_key, camera_offset)
 
