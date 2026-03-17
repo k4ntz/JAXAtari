@@ -354,7 +354,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         return obs, state
     
     def _active(self, state: BasicMathState, action: chex.Array, gameMode: int) -> BasicMathState:
-        act = jnp.equal(state.step_counter % 4, 0)
+        act = jnp.equal(state.step_counter % 2, 0)
         countDown = jnp.equal(state.difficultyTime, 0)
         is_fire = jnp.equal(action, Action.FIRE)
         eval_issue = jnp.logical_or(jnp.logical_and(is_fire, act), countDown)
@@ -390,7 +390,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             state.inactive,
             state.difficultyTime,
             state.key,
-            state.step_counter + 1
+            state.step_counter
         )
 
         return new_state
@@ -496,7 +496,7 @@ class BasicMathRenderer(JAXGameRenderer):
 
         sprite_color = jnp.array(self.consts.COLOR_CODES[0][1], dtype=jnp.uint8)
 
-        broadcasted_color = jnp.broadcast_to(sprite_color, (5, 3))
+        broadcasted_color = jnp.broadcast_to(sprite_color, (5, 1))
 
         self.PALETTE = self.PALETTE.at[:5, :].set(broadcasted_color)
 
