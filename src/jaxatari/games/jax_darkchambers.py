@@ -257,7 +257,7 @@ CHASE_TICKS = 90           # T_chase: how long to chase once triggered
 CONFUSE_TICKS = 30         # back-off/confuse duration
 CONFUSE_PROB_NUM = 1       # probability = CONFUSE_PROB_NUM / CONFUSE_PROB_DEN
 CONFUSE_PROB_DEN = 256
-STUCK_TICKS = 45           # if not making progress, trigger confuse
+STUCK_TICKS = 30           # if not making progress, trigger confuse (~0.5s at 60fps)
 
 
 
@@ -3444,7 +3444,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             # Detect if stuck (didn't move while trying to)
             moved = jnp.any(cand_enemy_positions != state.enemy_positions, axis=1)
             tried_to_move = jnp.any(step_vec != 0, axis=1)
-            stuck_now = tried_to_move & (~moved) & in_view
+            stuck_now = tried_to_move & (~moved)
 
             # If stuck, force direction change next tick
             idle_timer = jnp.where(stuck_now, 0, idle_timer)
