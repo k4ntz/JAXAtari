@@ -107,3 +107,13 @@ class LinearMovementMod(JaxAtariInternalModPlugin):
             acceleration_counter=jnp.array(0, dtype=jnp.int32),
             buffer=new_player_y
         )
+
+class ShiftPlayerMod(JaxAtariInternalModPlugin):
+    constants_overrides = {
+        "PLAYER_X": 136,
+    }
+
+class ShiftEnemyMod(JaxAtariInternalModPlugin):
+    constants_overrides = {
+        "ENEMY_X": 20,
+    }
