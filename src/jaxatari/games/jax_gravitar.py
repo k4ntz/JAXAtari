@@ -1790,14 +1790,14 @@ def step_core_map(state: ShipState,
     obs = GravitarObservation(vector=obs_vector)
 
     reward = 0.0
-    done = False
+    done = jnp.array(False)
     info = GravitarInfo(
         lives=jnp.int32(0),
         score=jnp.float32(0.0),
         fuel=fuel,
         mode=jnp.int32(0),
         crash_timer=jnp.int32(0),
-        done=jnp.array(False),
+        done=done,
         current_level=jnp.int32(-1),
     )
     planet_x = jnp.array([60.0, 120.0, 200.0])
@@ -3113,7 +3113,7 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
     # and should not be redirected back to the solar-system map.
     life_lost = new_env_state.lives < env_state.lives
     is_level_mode = env_state.mode == jnp.int32(1)
-    forced_death_reset = life_lost & (~reset) & (~is_level_mode)
+    forced_death_reset = life_lost & (~reset) & (~is_level_mode) & (~done)
 
     effective_reset = reset | forced_death_reset
     effective_level = jnp.where(forced_death_reset, jnp.int32(-2), level)
