@@ -854,16 +854,30 @@ class JaxTutankham(JaxEnvironment):
         return teleporter_out_x, teleporter_out_y, should_teleport
     
 
-    # Player Step
+    # sub pixel accumulator for smooth movement
     @partial(jax.jit, static_argnums=(0,))
-    def player_step(self, player_x, player_y, action, last_directional_action, player_direction, step_counter, player_subpixel, level):
-        speed = self.consts.PLAYER_SPEED
+    def subpixel_accumulator(self, speed, subpixel):
+        '''
+        Adds the fractional part of the speed to the subpixel accumulator.
+        If subpixel accumulator > 1, then one extra pixel is moved this step
+        Returns the integer speed and updated subpixel accumulator.
+        '''
         base_speed = jnp.floor(speed).astype(jnp.int32)
-        frac = speed % 1.0
-        new_subpixel = player_subpixel + frac
+        sub_speed = speed % 1.0
+        new_subpixel = subpixel + sub_speed
         extra = (new_subpixel >= 1.0).astype(jnp.int32)
         new_subpixel = jnp.where(new_subpixel >= 1.0, new_subpixel - 1.0, new_subpixel)
         actual_speed = base_speed + extra
+
+        return actual_speed, new_subpixel
+    
+
+    # Player Step
+    @partial(jax.jit, static_argnums=(0,))
+    def player_step(self, player_x, player_y, action, last_directional_action, player_direction, step_counter, player_subpixel, level):
+        
+        speed = self.consts.PLAYER_SPEED
+        actual_speed, new_subpixel = self.subpixel_accumulator(speed, player_subpixel)
 
         dx = jnp.array([
         0,            # 0  NOOP
@@ -1027,17 +1041,11 @@ class JaxTutankham(JaxEnvironment):
     @partial(jax.jit, static_argnums=(0,))
     def creature_step(self, creature_states, creature_subpixels, camera_offset, step_counter):
 
-        def move_creature(creature_state, subpixel):
+        def move_creature(creature_state, creature_subpixel):
             creature_x, creature_y, creature_type, active = creature_state
 
             speed = self.consts.CREATURE_SPEED[creature_type.astype(int)]
-
-            base_speed = jnp.floor(speed).astype(jnp.int32)
-            frac = speed % 1.0
-            new_subpixel = subpixel + frac
-            extra = (new_subpixel >= 1.0).astype(jnp.int32)
-            new_subpixel = jnp.where(new_subpixel >= 1.0, new_subpixel - 1.0, new_subpixel)
-            actual_speed = base_speed + extra
+            actual_speed, new_subpixel = self.subpixel_accumulator(speed, creature_subpixel)
 
             new_x = creature_x + actual_speed * active
             new_y = creature_y
