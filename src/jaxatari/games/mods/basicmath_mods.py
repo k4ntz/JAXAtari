@@ -6,10 +6,10 @@ from jaxatari.games.mods.basicmath_mod_plugins import (
     BiggerNumbersMod
 )
 
-class BasicMathEnvMod(JaxAtariModController):
+class BasicmathEnvMod(JaxAtariModController):
     """
-    Game-specific Mod Controller for Breakout.
-    It simply inherits all logic from JaxAtariModController and defines the BREAKOUT_MOD_REGISTRY.
+    Game-specific Mod Controller for BasicMath.
+    It simply inherits all logic from JaxAtariModController and defines the BASICMATH_MOD_REGISTRY.
     """
 
     REGISTRY = {

@@ -1,7 +1,7 @@
 import os
 import numpy as np
 from functools import partial
-from typing import Tuple
+from typing import Any, Tuple, NamedTuple
 import jax
 import jax.lax
 import jax.numpy as jnp
@@ -37,7 +37,7 @@ class BasicMathConstants(struct.PyTreeNode):
     GAMEMODE: int = 5
     DIFFICULTY: int = 0
 
-    COLOR_CODES = [
+    COLOR_CODES: Any = [
         [(18, 46, 137), (113, 115, 25)],
         [(143, 114, 41), (63, 1, 106)],
         [(110, 110, 15), (145, 120, 43)],
@@ -47,15 +47,17 @@ class BasicMathConstants(struct.PyTreeNode):
     X_OFFSET: int = 47
     Y_OFFSET: int = 35
     BAR_OFFSET: int = 31
-    num0 = (X_OFFSET + 20, Y_OFFSET + 20)
-    num1 = (num0[0], num0[1] + 40)
-    num2 = (num1[0], num1[1] + 40)
-    bar0 = (num2[0], num2[1] + 29)
-    bar1 = (X_OFFSET, num1[1] + 30)
-    symbol = (X_OFFSET + 5, num1[1])
+    num0: Any = (X_OFFSET + 20, Y_OFFSET + 20)
+    num1: Any = (num0[0], num0[1] + 40)
+    num2: Any = (num1[0], num1[1] + 40)
+    bar0: Any = (num2[0], num2[1] + 29)
+    bar1: Any = (X_OFFSET, num1[1] + 30)
+    symbol: Any = (X_OFFSET + 5, num1[1])
 
-    problemNumLen = 1
-    numArrLen = 6 + 2 * (problemNumLen - 1)
+    problemNumLen: int = 1
+    numArrLen: int = 6
+    initialArrPos: int = 2
+    spacing: int = 0
 
     DIFFICULTY_TIMES = jnp.array([-1, 180, 360, 720], dtype=jnp.int32)
 
@@ -338,7 +340,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         state = BasicMathState(
             jnp.full((self.consts.numArrLen,), -1, dtype=jnp.int32),
-            arrPos= jnp.array(2).astype(jnp.int32),
+            arrPos= jnp.array(self.consts.initialArrPos).astype(jnp.int32),
             score= jnp.array(0).astype(jnp.int32),
             numberProb= jnp.array(0).astype(jnp.int32),
             problemNum1=probNum1,
@@ -530,9 +532,28 @@ class BasicMathRenderer(JAXGameRenderer):
 
         digit0 = self.jr.int_to_digits(state.problemNum1, max_digits=self.consts.problemNumLen)
         digit1 = self.jr.int_to_digits(state.problemNum2, max_digits=self.consts.problemNumLen)
-        
-        raster = self.jr.render_label_selective(raster, *self.consts.num0, digit0, digit_masks, 0, state.problemNum1, spacing=0)
-        raster = self.jr.render_label_selective(raster, *self.consts.num1, digit1, digit_masks, 0, state.problemNum2, spacing=0)
+
+        raster = self.jr.render_label_selective(
+            raster, 
+            self.consts.num0[0],
+            self.consts.num0[1],
+            digit0, 
+            digit_masks, 
+            0, 
+            state.problemNum1, 
+            spacing=self.consts.spacing
+        )
+
+        raster = self.jr.render_label_selective(
+            raster, 
+            self.consts.num1[0], 
+            self.consts.num1[1], 
+            digit1, 
+            digit_masks, 
+            0, 
+            state.problemNum2, 
+            spacing=self.consts.spacing
+        )
 
         def render_nums(i, r):
             num = state.numArr[i]
