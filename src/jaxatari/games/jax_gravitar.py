@@ -3065,13 +3065,19 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
 
                 def _reset_to_map_after_death():
                     new_main_key, subkey_for_reset = jax.random.split(current_state.key)
-                    obs_reset, map_state = env_instance.reset_map(
-                        subkey_for_reset,
-                        lives=lives_after_death,
-                        score=current_state.score,
-                        fuel=current_state.fuel,
-                        reactor_destroyed=current_state.reactor_destroyed,
-                        planets_cleared_mask=current_state.planets_cleared_mask
+                    obs_reset, map_state = jax.lax.cond(
+                        is_game_over,
+                        # FULL RESET
+                        lambda: env_instance.reset_map(subkey_for_reset),
+                        # NORMAL DEATH RESET
+                        lambda: env_instance.reset_map(
+                            subkey_for_reset,
+                            lives=lives_after_death,
+                            score=current_state.score,
+                            fuel=current_state.fuel,
+                            reactor_destroyed=current_state.reactor_destroyed,
+                            planets_cleared_mask=current_state.planets_cleared_mask
+                        )
                     )
                     final_map_state = map_state._replace(
                         key=new_main_key,
