@@ -70,55 +70,28 @@ def _get_default_asset_config() -> tuple:
         # {'name': 'tombs', 'type': 'group', 'files': tombs},
 
         # Roomparts
-        {'name': 'floor_level_one', 'type': 'single', 'file': 'floor_level_one.npy'},
+        {'name': 'floor', 'type': 'group', 'files': ['floor_map1.npy', 'floor_map2.npy', 'floor_map3.npy', 'floor_map4.npy']},
 
         # Player (loaded as single sprites for manual padding)
-        # {'name': 'archeologist ', 'type': 'single', 'file': 'archeologist.npy'},
         {'name': 'player', 'type': 'single', 'file': 'player_idle.npy'},
         {'name': 'player_move', 'type': 'group', 'files': ['player_move_00.npy', 'player_move_01.npy']},
         {'name': 'player_death ', 'type': 'single', 'file': 'player_death.npy'},
         {'name': 'bullet', 'type': 'single', 'file': 'bullet_00.npy'},
 
         # Creatures (loaded as single sprites for manual padding)
-        {'name': 'snake', 'type': 'single', 'file': 'creature_snake_00.npy'},
-        {'name': 'scorpion', 'type': 'single', 'file': 'creature_scorpion_00.npy'},
-        {'name': 'bat', 'type': 'single', 'file': 'creature_bat_00.npy'},
-        # {'name': 'turtle', 'type': 'single', 'file': 'turtle.npy'},
-        # {'name': 'jackel', 'type': 'single', 'file': 'jackel.npy'},
-        # {'name': 'condor', 'type': 'single', 'file': 'condor.npy'},
-        # {'name': 'lion', 'type': 'single', 'file': 'lion.npy'},
-        # {'name': 'moth', 'type': 'single', 'file': 'moth.npy'},
-        # {'name': 'virus', 'type': 'single', 'file': 'virus.npy'},
-        # {'name': 'monkey', 'type': 'single', 'file': 'monkey.npy'},
-        # {'name': 'mystery', 'type': 'single', 'file': 'mystery.npy'},
-        # {'name': 'weapon', 'type': 'single', 'file': 'weapon.npy'},
+        {'name': 'creature_00', 'type': 'group', 'files': ['creature_snake_00.npy', 'creature_scorpion_00.npy', 'creature_bat_00.npy', 'creature_turtle_00.npy', 'creature_jackel_00.npy', 'creature_condor_00.npy', 'creature_lion_00.npy', 'creature_moth_00.npy', 'creature_virus_00.npy', 'creature_monkey_00.npy', 'creature_mysteryweapon_00.npy']},
+        {'name': 'creature_01', 'type': 'group', 'files': ['creature_snake_01.npy', 'creature_scorpion_01.npy', 'creature_bat_01.npy', 'creature_turtle_01.npy', 'creature_jackel_01.npy', 'creature_condor_01.npy', 'creature_lion_01.npy', 'creature_moth_01.npy', 'creature_virus_01.npy', 'creature_monkey_01.npy', 'creature_mysteryweapon_01.npy']},
 
         # Treasures
-        # {'name': 'key', 'type': 'single', 'file': 'key.npy'},
-         {'name': 'crown_02', 'type': 'single', 'file': 'treasure_crown_white.npy'},
-        # {'name': 'ring', 'type': 'single', 'file': 'ring.npy'},
-        # {'name': 'ruby', 'type': 'single', 'file': 'ruby.npy'},
-        # {'name': 'chalice', 'type': 'single', 'file': 'chalice.npy'},
-        # {'name': 'emerald', 'type': 'single', 'file': 'emerald.npy'},
-        # {'name': 'goblet', 'type': 'single', 'file': 'goblet.npy'},
-        # {'name': 'bust', 'type': 'single', 'file': 'bust.npy'},
-        # {'name': 'trident', 'type': 'single', 'file': 'trident.npy'},
-        # {'name': 'herb', 'type': 'single', 'file': 'herb.npy'},
-        # {'name': 'diamond', 'type': 'single', 'file': 'diamond.npy'},
-        # {'name': 'candelabra', 'type': 'single', 'file': 'candelabra.npy'},
-        # {'name': 'amulet', 'type': 'single', 'file': 'amulet.npy'},
-        # {'name': 'fan', 'type': 'single', 'file': 'fan.npy'},
-        # {'name': 'crystal', 'type': 'single', 'file': 'crystal.npy'},
-        # {'name': 'zircon', 'type': 'single', 'file': 'zircon.npy'},
-        # {'name': 'dagger', 'type': 'single', 'file': 'dagger.npy'},
+        {'name': 'treasure', 'type': 'group', 'files': ['map1_treasure_key.npy', 'map1_treasure_crown_01.npy', 'map1_treasure_ring.npy', 'map1_treasure_ruby.npy', 'map1_treasure_chalice.npy', 'map1_treasure_crown_02.npy', 'map2_treasure_key.npy', 'map2_treasure_ring.npy', 'map2_treasure_crown.npy', 'map2_treasure_emerald.npy', 'map2_treasure_goblet.npy', 'map2_treasure_bust.npy', 'map3_treasure_key.npy', 'map3_treasure_trident.npy', 'map3_treasure_ring.npy', 'map3_treasure_herb.npy', 'map3_treasure_diamond.npy', 'map3_treasure_candelabra.npy', 'map4_treasure_key.npy', 'map4_treasure_ring.npy', 'map4_treasure_amulet.npy', 'map4_treasure_fan.npy', 'map4_treasure_crystal.npy', 'map4_treasure_zircon.npy', 'map4_treasure_dagger.npy']},
 
         # UI
         # {'name': 'lives', 'type': 'single', 'pattern': 'lives.npy'},
         # {'name': 'flashbangs', 'type': 'single', 'pattern': 'flashbangs.npy'},
         # {'name': 'points', 'type': 'digits', 'pattern': 'lives.npy'},
         # {'name': 'time', 'type': 'single', 'pattern': 'time.npy'},
-        {'name': 'goal', 'type': 'single', 'file': 'room_exitdoor.npy'},
-        {'name': 'header_footer', 'type': 'single', 'file': 'ui_header_footer.npy'},
+        {'name': 'goal', 'type': 'group', 'files': ['map1_exitdoor.npy', 'map2_exitdoor.npy', 'map3_exitdoor.npy', 'map4_exitdoor.npy']},
+        {'name': 'ui_footer_header', 'type': 'group', 'files': ['ui_map1_footer_header.npy', 'ui_map2_footer_header.npy', 'ui_map3_footer_header.npy', 'ui_map4_footer_header.npy']},
         {'name': 'background', 'type': 'background', 'file': 'background_full.npy'},
     )
     return config
@@ -186,22 +159,22 @@ class TutankhamConstants(NamedTuple):
     KEY_MAP2: int = 6
     RING_MAP2: int = 7
     CROWN_MAP2: int = 8
-    EMEERALD_MAP2: int = 9
+    EMERALD_MAP2: int = 9
     GOBLET_MAP2: int = 10
     BUST_MAP2: int = 11
 
     KEY_MAP3: int = 12
     TRIDENT_MAP3: int = 13
     RING_MAP3: int = 14
-    GERB_MAP3: int = 15
-    DIAMIND_MAP3: int = 16
+    HERB_MAP3: int = 15
+    DIAMOND_MAP3: int = 16
     CANDELABRA_MAP3: int = 17
     
     KEY_MAP4: int = 18
     RING_MAP4: int = 19
     AMULET_MAP4: int = 20
     FAN_MAP4: int = 21
-    CRYST_MAP4: int = 22
+    CRYSTAL_MAP4: int = 22
     ZIRCON_MAP4: int = 23
     DAGGER_MAP4: int = 24
 
@@ -212,7 +185,7 @@ class TutankhamConstants(NamedTuple):
     # Asset config baked into constants
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
-    VALID_POS: chex.Array = create_binary_matrix(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_level_one.npy")
+    VALID_POS: chex.Array = create_binary_matrix(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_map1.npy")
 
 
     # Levels -----------------------------------------
@@ -487,61 +460,6 @@ def can_walk_to(entity_size: jax.Array, new_x: jax.Array, new_y: jax.Array, old_
     player_x = jnp.clip(player_x, 0, 160 - 1)
     player_y = jnp.clip(player_y, 0, valid_pos_mat.shape[0] - 1)
     return player_x, player_y, is_walkable
-
-@staticmethod
-def get_creature_name(creature_id: int) -> str:
-    """
-    Gibt den Namen der Kreatur basierend auf der ID zurück.
-    """
-    creature_names = {
-        0: "snake",
-        1: "scorpion",
-        2: "bat",
-        3: "turtle",
-        4: "jackel",
-        5: "condor",
-        6: "lion",
-        7: "moth",
-        8: "virus",
-        9: "monkey",
-        10: "mystery",
-        11: "weapon"
-    }
-    return creature_names.get(creature_id)
-
-@staticmethod
-def get_item_name(item_id: int) -> str:
-    """
-    Gibt den Namen des Items basierend auf der ID zurück.
-    """
-    item_names = {
-        0: "key_map1",
-        1: "crown_01_map1",
-        2: "ring_map1",
-        3: "ruby_map1",
-        4: "chalice_map1",
-        5: "crown_02_map1",
-        6: "key_map2",
-        7: "ring_map2",
-        8: "crown_map2",
-        9: "emerald_map2",
-        10: "goblet_map2",
-        11: "bust_map2",
-        12: "key_map3",
-        13: "trident_map3",
-        14: "ring_map3",
-        15: "gerb_map3",
-        16: "diamond_map3",
-        17: "candelabra_map3",
-        18: "key_map4",
-        19: "ring_map4",
-        20: "amulet_map4",
-        21: "fan_map4",
-        22: "crystal_map4",
-        23: "zircon_map4",
-        24: "dagger_map4"
-    }
-    return item_names.get(item_id)
    
 
 # ---------------------------------------------------------------------
@@ -582,6 +500,7 @@ class TutankhamRenderer(JAXGameRenderer):
         ZERO_FLIP = jnp.array([0, 0], dtype=jnp.int32)
         indices_to_update = 0
         new_color_ids = 0
+        level_index = (state.level%4)
 
         # Calculate camera offset to keep player roughly centered vertically
         camera_offset = jnp.where(state.player_y < self.consts.HEIGHT // 2, 0, state.player_y - self.consts.HEIGHT // 2)
@@ -596,22 +515,10 @@ class TutankhamRenderer(JAXGameRenderer):
             raster,
             0,  # x
             -camera_offset,  # y
-            self.SHAPE_MASKS["floor_level_one"],
+            self.SHAPE_MASKS["floor"][level_index],
             flip_offset=ZERO_FLIP
         )
 
-        
-
-        # raster = jax.lax.cond(
-        #    floor_checks[0] & not_vanishing,
-        #    lambda r: self.jr.render_at_clipped(
-        #        r, state.ghost[0], state.ghost[1] - camera_offset,
-        #        self.SHAPE_MASKS['ghost_group'][ghost_frame],
-        #        flip_offset=self.FLIP_OFFSETS['ghost_group']
-        #    ),
-        #    lambda r: r,
-        #    raster
-        # )
         # 2. Render Player
         ANIM_SPEED = 8
         frame_idx = (state.step_counter // ANIM_SPEED) % 2
@@ -632,50 +539,64 @@ class TutankhamRenderer(JAXGameRenderer):
         )
 
         #creatures
+        creature_one = state.creature_states[0][2].astype(jnp.int32)
+        creature_mask_one = jax.lax.cond(
+            frame_idx == 0,
+            lambda _: self.SHAPE_MASKS['creature_00'][creature_one],
+            lambda _: self.SHAPE_MASKS['creature_01'][creature_one],
+            operand=None
+        )
         raster = self.jr.render_at_clipped(
             raster,
             state.creature_states[0][0],
             state.creature_states[0][1] - camera_offset,
-            self.SHAPE_MASKS["snake"],
-            flip_offset=ZERO_FLIP
-            # self.FLIP_OFFSETS['player_group'],
+            creature_mask_one,
+            flip_offset=ZERO_FLIP,
+        )
+        creature_two = state.creature_states[1][2].astype(jnp.int32)
+        creature_mask_two = jax.lax.cond(
+            frame_idx == 0,
+            lambda _: self.SHAPE_MASKS['creature_00'][creature_two],
+            lambda _: self.SHAPE_MASKS['creature_01'][creature_two],
+            operand=None
         )
         raster = self.jr.render_at_clipped(
             raster,
             state.creature_states[1][0],
             state.creature_states[1][1] - camera_offset,
-            self.SHAPE_MASKS["bat"],
+            creature_mask_two,
             flip_offset=ZERO_FLIP
-            # self.FLIP_OFFSETS['player_group'],
         )
-        # player_frame = jnp.where(state.stun_duration > 0, state.stun_duration % 8 + 1, state.player_direction[1])
-        # player_mask = self.SHAPE_MASKS['player_group'][player_frame]
-        # raster = self.jr.render_at(
-        #    raster, state.player[0], state.player[1] - camera_offset,
-        #    player_mask, flip_offset=self.FLIP_OFFSETS['player_group']
-        # )
+    
         # 2.5 Animations
-        # 3. Render Walls
-        # 4. Render Teleporter and Spawner
         # 5. Render Treasures
-        raster = jax.lax.cond(state.item_states[0][3] == 1 & is_onscreen(state.item_states[0][1], 8, camera_offset),
-                              lambda r: self.jr.render_at_clipped(
-                                  r,
-                                  state.item_states[0][0],
-                                  state.item_states[0][1] - camera_offset,
-                                  self.SHAPE_MASKS["crown_02"],
-                                  flip_offset=ZERO_FLIP
-                                  # self.FLIP_OFFSETS['player_group'],
-                              ),
-                              lambda r: r,
-                              raster)
-                              
+        def render_all_treasures(i: int, raster: jnp.ndarray):
+            treasure_x = state.item_states[i][0]
+            treasure_y = state.item_states[i][1]
+            treasure_type = state.item_states[i][2]
+            is_active = state.item_states[i][3] == 1
+            treasure_mask = self.SHAPE_MASKS["treasure"][treasure_type.astype(jnp.int32)]
+            return jax.lax.cond(
+                is_active & is_onscreen(treasure_y, 8, camera_offset),
+                lambda r: self.jr.render_at_clipped(
+                    r,
+                    treasure_x,
+                    treasure_y - camera_offset,
+                    treasure_mask,
+                    flip_offset=ZERO_FLIP
+                ),
+                lambda r: r,
+                raster
+            )
+        raster = jax.lax.fori_loop(0, 7, render_all_treasures, raster)
+
+        # Render Goal                     
         raster = jax.lax.cond(is_onscreen(self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 1], 8, camera_offset),
                               lambda r: self.jr.render_at_clipped(
                                   raster,
                                   self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 0],
                                   self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 1] - camera_offset,
-                                  self.SHAPE_MASKS["goal"],
+                                  self.SHAPE_MASKS["goal"][level_index],
                                   flip_offset=ZERO_FLIP
                                   # self.FLIP_OFFSETS['player_group'],
                               ),
@@ -693,42 +614,6 @@ class TutankhamRenderer(JAXGameRenderer):
                               ),
                               lambda r: r,
                               raster)
-        """# 7. Render Enemies
-        creatures = jnp.stack([state.creature_states[0], state.creature_states[1]])
-        snake_mask = self.SHAPE_MASKS["snake"]
-        scorpion_mask = self.SHAPE_MASKS["scorpion"]
-        bat_mask = self.SHAPE_MASKS["bat"]
-        all_masks = (snake_mask, scorpion_mask, bat_mask)
-
-        def render_creature(i, r):
-            creature_pos = creatures[i]
-            active = creatures[i][3]
-            creature_type = creatures[i][2]
-            mask = jax.lax.switch(
-                creature_type,
-                [
-                    lambda: all_masks[0],
-                    lambda: all_masks[1],
-                    lambda: all_masks[2]
-                ]
-            )
-
-            # Use the single uniform offset for the group
-            return jax.lax.cond(
-                active == 1,
-                lambda r_in: self.jr.render_at_clipped(
-                    r_in,
-                    creature_pos[0],
-                    creature_pos[1] - camera_offset,
-                    mask,
-                    flip_offset=ZERO_FLIP  # self.ITEM_OFFSET  Use the single group offset
-                ),
-                lambda r_in: r_in,
-                r
-            )
-
-        raster = render_creature(0, raster)
-        raster = render_creature(1, raster)"""
 
 
         # 8. Render UI
@@ -736,7 +621,7 @@ class TutankhamRenderer(JAXGameRenderer):
             raster,
             0,  # x
             0,  # y
-            self.SHAPE_MASKS["header_footer"],
+            self.SHAPE_MASKS["ui_footer_header"][level_index],
             flip_offset=ZERO_FLIP
         )
         # 9. Final Palette Lookup
@@ -906,8 +791,7 @@ class JaxTutankham(JaxEnvironment):
 
         new_x = player_x + dx[effective_action]
         new_y = player_y + dy[effective_action]
-        player_x, player_y, is_walkable = can_walk_to(self.consts.PLAYER_SIZE, new_x, new_y, player_x, player_y, self.consts.VALID_POS)
-        
+        player_x, player_y, is_walkable = can_walk_to(self.consts.PLAYER_SIZE, new_x, new_y, player_x, player_y, self.consts.VALID_POS)        
         # If teleporter is triggered, the player position is set to teleporter out coordinates 
         player_x = jnp.where(should_teleport, teleporter_out_x, player_x)
         player_y = jnp.where(should_teleport, teleporter_out_y, player_y)
@@ -1429,8 +1313,8 @@ class JaxTutankham(JaxEnvironment):
         done = self._get_done(state)
         info = 0
 
-        jax.debug.print("Player position: ({}, {})", player_x, player_y)
-        jax.debug.print("Score: ({})", tutankham_score)
+        #jax.debug.print("Player position: ({}, {})", player_x, player_y)
+        #jax.debug.print("Score: ({})", tutankham_score)
         # return observation, new_state, env_reward, done, info
         return state, state, reward, done, info
 
