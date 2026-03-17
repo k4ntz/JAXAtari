@@ -3124,7 +3124,7 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
     obs, new_env_state, reward, done, info, reset, level = jax.lax.cond(effective_reset, _handle_reset, _no_reset, operands)
 
     # Ensure API consistency
-    #done = new_env_state.done
+    done = new_env_state.done
     
     return obs, new_env_state, reward, done, info, reset, level
 
