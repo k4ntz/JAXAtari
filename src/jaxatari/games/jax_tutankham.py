@@ -859,7 +859,7 @@ class JaxTutankham(JaxEnvironment):
     def subpixel_accumulator(self, speed, subpixel):
         '''
         Adds the fractional part of the speed to the subpixel accumulator.
-        If subpixel accumulator > 1, then one extra pixel is moved this step
+        If subpixel accumulator > 1, then one extra pixel is moved this step, subpixel accumulator is reduced by 1.
         Returns the integer speed and updated subpixel accumulator.
         '''
         base_speed = jnp.floor(speed).astype(jnp.int32)
