@@ -1411,10 +1411,14 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
             # keep shape stable across the codebase (1,) float32 by default
             all_rewards = jnp.zeros((1,), dtype=jnp.float32)
 
+        # Benchmarks aggregate info values with a scalar done-mask. Keep info leaves scalar.
+        dice_scalar = jnp.asarray(jnp.max(state.dice), dtype=jnp.int32)
+        rewards_scalar = jnp.asarray(jnp.sum(all_rewards), dtype=jnp.float32)
+
         return BackgammonInfo(
             player=jnp.asarray(state.current_player, dtype=jnp.int32),
-            dice=jnp.asarray(state.dice, dtype=jnp.int32),
-            all_rewards=jnp.asarray(all_rewards, dtype=jnp.float32),
+            dice=dice_scalar,
+            all_rewards=rewards_scalar,
         )
 
     @partial(jax.jit, static_argnums=(0,))
