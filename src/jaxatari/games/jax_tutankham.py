@@ -141,6 +141,20 @@ class TutankhamConstants(NamedTuple):
     MONKEY: int = 9
     MYSTERY_WEAPON: int = 10
 
+    CREATURE_SIZES: chex.Array = jnp.array([
+        [8, 8],   # SNAKE (00: [6, 8], 01: [8, 7])
+        [8, 8],   # SCORPION (00 & 01: [8, 8])
+        [8, 8],   # BAT (00: [8, 7], 01: [8, 8])
+        [8, 8],   # TURTLE (00 & 01: [8, 8])
+        [8, 8],   # JACKEL (00 & 01: [8, 8])
+        [8, 7],   # CONDOR (00 & 01: [8, 7])
+        [8, 8],   # LION (00: [8, 7], 01: [7, 8])
+        [8, 8],   # MOTH (00: [8, 7], 01: [6, 8])
+        [8, 6],   # VIRUS (00 & 01: [8, 6])
+        [8, 8],   # MONKEY (00 & 01: [8, 8])
+        [8, 8]    # MYSTERY_WEAPON (00 & 01: [8, 8])
+    ], dtype=jnp.int32)
+    
     CREATURE_SIZE: chex.Array = jnp.array([10, 10], dtype=jnp.int32)
 
     INACTIVE: int = 0
@@ -184,6 +198,34 @@ class TutankhamConstants(NamedTuple):
     CRYSTAL_MAP4: int = 22
     ZIRCON_MAP4: int = 23
     DAGGER_MAP4: int = 24
+
+    ITEM_SIZES: chex.Array = jnp.array([
+        [8, 8],   # KEY_MAP1
+        [7, 7],   # CROWN_01_MAP1
+        [6, 8],   # RING_MAP1
+        [8, 7],   # RUBY_MAP1
+        [7, 7],   # CHALICE_MAP1
+        [7, 8],   # CROWN_02_MAP1
+        [8, 8],   # KEY_MAP2
+        [6, 8],   # RING_MAP2
+        [7, 5],   # CROWN_MAP2
+        [8, 8],   # EMERALD_MAP2
+        [6, 7],   # GOBLET_MAP2
+        [7, 8],   # BUST_MAP2
+        [8, 8],   # KEY_MAP3
+        [5, 8],   # TRIDENT_MAP3
+        [6, 8],   # RING_MAP3
+        [5, 8],   # HERB_MAP3
+        [7, 7],   # DIAMOND_MAP3
+        [7, 7],   # CANDELABRA_MAP3
+        [8, 8],   # KEY_MAP4
+        [6, 8],   # RING_MAP4
+        [5, 8],   # AMULET_MAP4
+        [8, 8],   # FAN_MAP4
+        [8, 8],   # CRYSTAL_MAP4
+        [8, 7],   # ZIRCON_MAP4
+        [8, 6]    # DAGGER_MAP4
+    ], dtype=jnp.int32)
 
     ITEM_SIZE: chex.Array = jnp.array([5, 5], dtype=jnp.int32)
 
