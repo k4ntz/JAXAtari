@@ -2040,13 +2040,14 @@ def step_map(env_state: EnvState, action: int):
 
     reward_saucer = jnp.where(just_died, jnp.float32(100.0), jnp.float32(0.0))
     reward = reward_saucer
+    done = jnp.array(False)
     info = GravitarInfo(
         lives=new_env.lives,
         score=new_env.score,
         fuel=new_env.fuel,
         mode=new_env.mode,
         crash_timer=new_env.crash_timer,
-        done=new_env.done,
+        done=done,
         current_level=new_env.current_level,
         crash=start_crash,
         hit_by_bullet=hit_ship_by_bullet,
@@ -2062,7 +2063,7 @@ def step_map(env_state: EnvState, action: int):
 
     new_env = new_env._replace(score=new_env.score + reward, shield_active=is_using_shield_tractor)
 
-    return obs, new_env, reward, jnp.array(False), info, should_reset, final_level_id
+    return obs, new_env, reward, done, info, should_reset, final_level_id
 
 
 @jax.jit
@@ -2669,13 +2670,14 @@ def step_arena(env_state: EnvState, action: int):
         [ship_after_move.x, ship_after_move.y, ship_after_move.vx, ship_after_move.vy, ship_after_move.angle])
     obs = GravitarObservation(vector=obs_vector)
     reward = jnp.where(just_died, 100.0, 0.0)
+    done = jnp.array(False)  # The Arena itself never ends the episode; we return to the map instead
     info = GravitarInfo(
         lives=env_state.lives,
         score=env_state.score,
         fuel=fuel_after_actions,
         mode=env_state.mode,
         crash_timer=crash_timer_next,
-        done=env_state.done,
+        done=done,
         current_level=env_state.current_level,
         crash=start_crash,
         hit_by_bullet=hit_ship_by_bullet,
@@ -2728,7 +2730,7 @@ def step_arena(env_state: EnvState, action: int):
     final_env_state = jax.lax.cond(back_to_map_signal, _go_to_map_win, lambda e: e, final_env_state)
 
     # The final `reset` signal is either "crash finished" or "win exit"
-    return obs, final_env_state, reward, jnp.array(False), info, reset_signal | back_to_map_signal, jnp.int32(-1)
+    return obs, final_env_state, reward, done, info, reset_signal | back_to_map_signal, jnp.int32(-1)
 
 
 @jax.jit
@@ -3095,7 +3097,7 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
                     )
                     final_map_state = map_state._replace(
                         key=new_main_key,
-                        done=jnp.array(False)
+                        done=jnp.array(False, dtype=bool)
                     )
                     return obs_reset, final_map_state, reward, is_game_over, death_info, jnp.array(True), level
 
@@ -3112,12 +3114,7 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
     def _no_reset(operands):
         obs, new_env_state, reward, done, info, reset, level = operands
         no_reset_info = info.replace(level_cleared=jnp.array(False))
-        new_env_state = jax.lax.cond(
-            done,
-            lambda s: s._replace(done=jnp.array(True)),
-            lambda s: s,
-            new_env_state,
-        )
+        new_env_state = new_env_state._replace(done=jnp.array(False, dtype=bool))
         return obs, new_env_state, reward, done, no_reset_info, reset, level
 
     obs, new_env_state, reward, done, info, reset, level = step_core(env_state, action)
@@ -3129,7 +3126,7 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
     is_level_mode = env_state.mode == jnp.int32(1)
     forced_death_reset = life_lost & (~reset) & (~is_level_mode) & (~done)
 
-    effective_reset = reset | forced_death_reset
+    effective_reset = reset | forced_death_reset | done
     effective_level = jnp.where(forced_death_reset, jnp.int32(-2), level)
 
     operands = (obs, new_env_state, reward, done, info, effective_reset, effective_level)

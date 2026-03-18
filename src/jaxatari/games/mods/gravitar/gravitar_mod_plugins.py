@@ -62,3 +62,13 @@ class ValuableReactorMod(JaxAtariInternalModPlugin):
             {"type": 12, "coords": (66, 88)}, # FUEL_TANK
         ),
     }
+
+
+class AntiGravityMod(JaxAtariInternalModPlugin):
+    """Reverse gravity from sun, planets, and reactors."""
+
+    constants_overrides = {
+        "SOLAR_GRAVITY": -0.044,
+        "PLANETARY_GRAVITY": -0.0032,
+        "REACTOR_GRAVITY": -0.0001,
+    }
