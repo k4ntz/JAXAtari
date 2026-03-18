@@ -250,42 +250,43 @@ class TutankhamConstants(NamedTuple):
         # Level 1 (MAP 1)
         [
             [51, 87, KEY_MAP1, 1], # [x, y, item_type, active]
-            [99, 183, CROWN_01_MAP1, 1], 
+            [99, 183, CROWN_02_MAP1, 1], 
             [68, 262, RING_MAP1, 1], 
-            [8, 311, RUBY_MAP1, 1], 
+            [7, 311, RUBY_MAP1, 1], 
             [93, 382, CHALICE_MAP1, 1],
-            [18, 494, CROWN_02_MAP1, 1],
+            [18, 494, CROWN_01_MAP1, 1],
             [0, 0, 0, 0] # Padding for levels with fewer items -> this item is always inactive
         ],
         # Level 2 (MAP 2)
         [
-            [21, 287, KEY_MAP1, 1], # [x, y, item_type, active]
-            [44, 151, CROWN_01_MAP1, 1], 
-            [127, 98, RING_MAP1, 1], 
-            [33, 412, RUBY_MAP1, 1], 
-            [92, 382, CHALICE_MAP1, 1],
-            [23, 547, CROWN_02_MAP1, 1],
+            [21, 272, KEY_MAP2, 1], # [x, y, item_type, active]
+            [44, 155, CROWN_MAP2, 1], 
+            [128, 98, RING_MAP2, 1], 
+            [37, 406, EMERALD_MAP2, 1], 
+            [91, 482, GOBLET_MAP2, 1],
+            [23, 547, BUST_MAP2, 1],
             [0, 0, 0, 0] # Padding for levels with fewer items -> this item is always inactive
+
         ],
         # Level 3 (MAP 3)
         [
-            [22, 411, KEY_MAP1, 1], # [x, y, item_type, active]
-            [15, 173, CROWN_01_MAP1, 1], 
-            [128, 98, RING_MAP1, 1], 
-            [17, 278, RUBY_MAP1, 1], 
-            [108, 325, CHALICE_MAP1, 1],
-            [27, 656, CROWN_02_MAP1, 1],
+            [22, 411, KEY_MAP3, 1], # [x, y, item_type, active]
+            [15, 173, RING_MAP3, 1], 
+            [128, 98, TRIDENT_MAP3, 1], 
+            [17, 278, HERB_MAP3, 1], 
+            [108, 323, DIAMOND_MAP3, 1],
+            [27, 656, CANDELABRA_MAP3, 1],
             [0, 0, 0, 0] # Padding for levels with fewer items -> this item is always inactive
         ],
         # Level 4 (MAP 4)
         [
-            [144, 110, KEY_MAP1, 1], # [x, y, item_type, active]
-            [125, 221, CROWN_01_MAP1, 1], 
-            [117, 269, RING_MAP1, 1], 
-            [19, 326, RUBY_MAP1, 1], 
-            [55, 510, CHALICE_MAP1, 1],
-            [112, 401, CROWN_02_MAP1, 1],
-            [66, 607, CROWN_02_MAP1, 1] # MAP 4 has 7 items (no padding)
+            [144, 110, KEY_MAP4, 1], # [x, y, item_type, active]
+            [125, 221, RING_MAP4, 1], 
+            [117, 269, AMULET_MAP4, 1], 
+            [19, 326, FAN_MAP4, 1], 
+            [55, 510, ZIRCON_MAP4, 1],
+            [110, 401, CRYSTAL_MAP4, 1],
+            [66, 607, DAGGER_MAP4, 1] # MAP 4 has 7 items (no padding)
         ]
     ], dtype=jnp.int32) # Repeat for 16 levels (4 maps x 4 difficulty levels)
 
@@ -1000,10 +1001,10 @@ class JaxTutankham(JaxEnvironment):
         new_y = player_y + dy[effective_action]
         player_x, player_y, is_walkable = can_walk_to(self.consts.PLAYER_SIZE, new_x, new_y, player_x, player_y, self.consts.VALID_POS_MAPS[level%4])        
         
-        # is_walkable = True # TODO: only for testing---------------------------
-        # player_x = new_x
-        # player_y = new_y
-        # new_last_directional_action = 0
+        is_walkable = True # TODO: only for testing---------------------------
+        player_x = new_x
+        player_y = new_y
+        new_last_directional_action = 0
         #--------------------------------------------------------------------
 
         # If teleporter is triggered, the player position is set to teleporter out coordinates 
