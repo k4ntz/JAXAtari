@@ -79,6 +79,7 @@ def _get_default_asset_config() -> tuple:
 
         # Roomparts
         {'name': 'floor', 'type': 'group', 'files': ['floor_map1.npy', 'floor_map2.npy', 'floor_map3.npy', 'floor_map4.npy']},
+        {'name': 'flash_floor', 'type': 'group', 'files': ['flash_floor_1.npy', 'flash_floor_2.npy', 'flash_floor_3.npy', 'flash_floor_4.npy']},
 
         # Player (loaded as groups for automatic padding to largest sprite)
         {'name': 'player', 'type': 'group', 'files': ['player_idle.npy', 'player_key_idle.npy']},
@@ -504,6 +505,8 @@ class TutankhamState(NamedTuple):
     creature_subpixels: chex.Array  # (MAX_CREATURES,) sub pixel position accumulators
     bullet_subpixel: float  # sub pixel position accumulator for bullet
 
+    is_flashing: bool  # whether the map is currently flashing white
+
     has_key: bool  # whether the player has collected the key or not
     goal_reached: bool  # whether the player has reached the goal with the key to complete the level
 
@@ -593,6 +596,19 @@ class TutankhamRenderer(JAXGameRenderer):
             self.SHAPE_MASKS["floor"][level_index],
             flip_offset=ZERO_FLIP
         )
+        # Render Flash Floors
+        raster = jax.lax.cond(
+                state.is_flashing,
+                lambda _: self.jr.render_at_clipped(
+                    raster,
+                    0,
+                    - camera_offset,
+                    self.SHAPE_MASKS["flash_floor"][level_index],
+                    flip_offset=ZERO_FLIP
+                ),
+                lambda raster: raster,
+                raster
+            )
 
         # 2. Render Player
         ANIM_SPEED = 8
@@ -830,8 +846,9 @@ class JaxTutankham(JaxEnvironment):
         item_states = self.consts.MAP_ITEMS[level%4]  # (N, 4) array with (x, y, item_type, active)
         last_creature_spawn = 0
         laser_flash_count = self.consts.MAX_LASER_FLASHES
-        laser_flash_cooldown = self.consts.LASER_FLASH_COOLDOWN
+        laser_flash_cooldown = 0
         has_key = False
+        is_flashing = False
         player_direction = 3  # Start facing RIGHT
         is_moving = False
         last_directional_action = 0
@@ -871,6 +888,7 @@ class JaxTutankham(JaxEnvironment):
                                player_subpixel=player_subpixel,
                                creature_subpixels=creature_subpixels,
                                bullet_subpixel=bullet_subpixel,
+                               is_flashing=is_flashing,
                                has_key=has_key,
                                last_directional_action=last_directional_action,
                                rng_key=key,
@@ -1099,7 +1117,12 @@ class JaxTutankham(JaxEnvironment):
 
         new_creature_states = creature_states.at[:, 3].set(new_active_mask)
 
-        return new_creature_states, new_laser_flash_cooldown, new_laser_flash_count, new_last_creature_spawn
+        # Flash lasts for 50 frames
+        # Cooldown starts at 60 and ends at 0.
+        # So we stay True while cooldown > 10.
+        new_is_flashing = new_laser_flash_cooldown > 10
+
+        return new_creature_states, new_laser_flash_cooldown, new_laser_flash_count, new_last_creature_spawn, new_is_flashing
 
 
     # creature step
@@ -1456,7 +1479,7 @@ class JaxTutankham(JaxEnvironment):
         creature_states, last_creature_spawn, rng_key = self.spawner_step(creature_states, last_creature_spawn, level, rng_key, camera_offset)
 
         # laser flash step should go after creature step to immediately remove creatures
-        creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)
+        creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, is_flashing = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)
 
         # store creature_states and item_states before resolving collisions (for score update)
         prev_creature_states = creature_states.copy()
@@ -1525,6 +1548,7 @@ class JaxTutankham(JaxEnvironment):
                                player_subpixel=player_subpixel,
                                creature_subpixels=creature_subpixels,
                                bullet_subpixel=bullet_subpixel,
+                               is_flashing=is_flashing,
                                has_key=has_key,
                                last_directional_action=last_directional_action,
                                rng_key=rng_key,
