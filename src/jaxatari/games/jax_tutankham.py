@@ -317,24 +317,24 @@ class TutankhamConstants(NamedTuple):
         ],
         # MAP 2
         [
-            [0  , 198, 136, 60], #TODO One of them is wrong. Stuck in wall. I think its the second one.
-            [199, 402, 78, 199],
-            [403, 567, 12, 403],
-            [568, 800, 80, 568]
+            [0  , 258, 136, 60],
+            [259, 425, 78, 259],
+            [426, 589, 78, 426],
+            [590, 800, 89, 590]
         ],
         # MAP 3
         [
-            [0, 200, 16, 93],
-            [0, 100, 105, 140],
-            [0, 100, 105, 140],
-            [0, 800, 105, 140]
+            [0, 244, 16, 93],
+            [245, 395, 39, 248],
+            [396, 549, 78, 396],
+            [550, 800, 98, 550]
         ],
         # MAP 4
         [
-            [0, 200, 82, 95],
-            [0, 100, 105, 140],
-            [0, 100, 105, 140],
-            [0, 800, 105, 140]
+            [0, 202, 82, 95],
+            [203, 390, 30, 203],
+            [391, 530, 18, 391],
+            [531, 800, 119, 531]
         ]
     ], dtype=jnp.int32)
 
@@ -861,10 +861,10 @@ class JaxTutankham(JaxEnvironment):
 
 
         #TODO: only for testing
-        # level = 3
-        # start_x = 82
-        # start_y = 95
-        # item_states = self.consts.MAP_ITEMS[level%4]
+        level = 1
+        start_x = 136
+        start_y = 60
+        item_states = self.consts.MAP_ITEMS[level%4]
         #---------------------
 
         camera_offset = jnp.where(start_x < self.consts.HEIGHT // 2, 0, start_y - self.consts.HEIGHT // 2)
