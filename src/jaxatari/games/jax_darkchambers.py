@@ -3709,8 +3709,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 jnp.where(tier_dropped, ENEMY_HITS_PER_TIER, enemy_hitpoints_after_hit),
             ).astype(jnp.int32)
             
-            # Award points when an enemy actually drops a tier or dies instantly
-            zombies_killed = tier_dropped & (state.enemy_types == ENEMY_ZOMBIE)
+            # Zombies do not drop tier; they die at hitpoint break, so score on actual zombie death.
+            zombies_killed = enemy_killed_by_hits & (state.enemy_types == ENEMY_ZOMBIE)
             
             # Instant kills award points for all enemy types; bullet/poison only score when a tier actually breaks
             zombies_instant = instant_kills & (state.enemy_types == ENEMY_ZOMBIE)
