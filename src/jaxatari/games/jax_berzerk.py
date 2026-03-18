@@ -201,12 +201,13 @@ class OttoState:
 
 @struct.dataclass
 class BerzerkState:
+    """Game state. Exposes `lives` and `score` for AtariWrapper episodic_life and LogWrapper score logging."""
     player: PlayerState             
     enemy: EnemyState
     otto: OttoState
     rng: chex.PRNGKey                   # (1,)
-    score: chex.Array                   # (1,)
-    lives: chex.Array                   # (1,)
+    score: chex.Array                   # scalar, used for reward (score delta) and info
+    lives: chex.Array                   # scalar, used by AtariWrapper episodic_life (life loss = done)
     room_counter: chex.Array            # (1,)
     extra_life_counter: chex.Array      # (1,)
     game_over_timer: chex.Array         # (1,)
@@ -228,8 +229,10 @@ class BerzerkObservation(struct.PyTreeNode):
 
 @struct.dataclass
 class BerzerkInfo:
+    """Info dict. `score` flows to LogWrapper via env_reward (score delta sum = episode score)."""
     enemies_killed: chex.Array      # (1,)
     level_cleared: chex.Array       # (1,)
+    score: chex.Array              # scalar, current game score
 
 @struct.dataclass
 class WallGeometry:
@@ -281,6 +284,52 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             pad_rows = jnp.zeros((target_len - cur_len, 4), dtype=arr.dtype)
             return jnp.concatenate([arr, pad_rows], axis=0)
         self.mid_walls_padded = jnp.stack([_pad_to(a, max_len) for a in mid_list], axis=0)  # (4, K, 4)
+
+        # Action lookup tables avoid large select chains in jitted hot paths.
+        self.action_to_move_delta = jnp.array([
+            [0, 0],    # NOOP
+            [0, 0],    # FIRE
+            [0, -1],   # UP
+            [1, 0],    # RIGHT
+            [-1, 0],   # LEFT
+            [0, 1],    # DOWN
+            [1, -1],   # UPRIGHT
+            [-1, -1],  # UPLEFT
+            [1, 1],    # DOWNRIGHT
+            [-1, 1],   # DOWNLEFT
+            [0, 0],    # UPFIRE
+            [0, 0],    # RIGHTFIRE
+            [0, 0],    # LEFTFIRE
+            [0, 0],    # DOWNFIRE
+            [0, 0],    # UPRIGHTFIRE
+            [0, 0],    # UPLEFTFIRE
+            [0, 0],    # DOWNRIGHTFIRE
+            [0, 0],    # DOWNLEFTFIRE
+        ], dtype=jnp.int32)
+        self.action_to_direction = jnp.array([
+            [0, 0],    # NOOP
+            [0, 0],    # FIRE
+            [0, -1],   # UP
+            [1, 0],    # RIGHT
+            [-1, 0],   # LEFT
+            [0, 1],    # DOWN
+            [1, -1],   # UPRIGHT
+            [-1, -1],  # UPLEFT
+            [1, 1],    # DOWNRIGHT
+            [-1, 1],   # DOWNLEFT
+            [0, -1],   # UPFIRE
+            [1, 0],    # RIGHTFIRE
+            [-1, 0],   # LEFTFIRE
+            [0, 1],    # DOWNFIRE
+            [1, -1],   # UPRIGHTFIRE
+            [-1, -1],  # UPLEFTFIRE
+            [1, 1],    # DOWNRIGHTFIRE
+            [-1, 1],   # DOWNLEFTFIRE
+        ], dtype=jnp.int32)
+        self.action_has_direction = jnp.array([
+            False, False, True, True, True, True, True, True, True, True,
+            True, True, True, True, True, True, True, True
+        ], dtype=jnp.bool_)
 
 
     @staticmethod   # has to be static to work for renderer
@@ -401,94 +450,17 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
     def player_step(
         self, state: BerzerkState, action: chex.Array
     ) -> tuple[chex.Array, chex.Array, chex.Array]:
-        # implement all the possible movement directions for the player, the mapping is:
-        # anything with left in it, add -1 to the x position
-        # anything with right in it, add 1 to the x position
-        # anything with up in it, add -1 to the y position
-        # anything with down in it, add 1 to the y position
-        up = jnp.any(
-            jnp.array(
-                [
-                    action == Action.UP,
-                    action == Action.UPRIGHT,
-                    action == Action.UPLEFT,
-                ]
-            )
-        )
-        down = jnp.any(
-            jnp.array(
-                [
-                    action == Action.DOWN,
-                    action == Action.DOWNRIGHT,
-                    action == Action.DOWNLEFT,
-                ]
-            )
-        )
-        left = jnp.any(
-            jnp.array(
-                [
-                    action == Action.LEFT,
-                    action == Action.UPLEFT,
-                    action == Action.DOWNLEFT,
-                ]
-            )
-        )
-        right = jnp.any(
-            jnp.array(
-                [
-                    action == Action.RIGHT,
-                    action == Action.UPRIGHT,
-                    action == Action.DOWNRIGHT,
-                ]
-            )
-        )
-        
-        dx = jnp.where(right, 1, jnp.where(left, -1, 0))
-        dy = jnp.where(down, 1, jnp.where(up, -1, 0))
+        move_delta = self.action_to_move_delta[action]
+        dx = move_delta[0]
+        dy = move_delta[1]
 
         # movement scaled
         player_x = state.player.pos[0] + dx * self.consts.PLAYER_SPEED
         player_y = state.player.pos[1] + dy * self.consts.PLAYER_SPEED
 
-        player_direction = jnp.select(
-            [
-                action == Action.UPFIRE,
-                action == Action.DOWNFIRE,
-                action == Action.LEFTFIRE,
-                action == Action.RIGHTFIRE,
-                action == Action.UP,
-                action == Action.DOWN,
-                action == Action.LEFT,
-                action == Action.RIGHT,
-                action == Action.UPRIGHT,
-                action == Action.UPLEFT,
-                action == Action.DOWNRIGHT,
-                action == Action.DOWNLEFT,
-                action == Action.UPRIGHTFIRE,
-                action == Action.UPLEFTFIRE,
-                action == Action.DOWNRIGHTFIRE,
-                action == Action.DOWNLEFTFIRE,
-            ],
-            [
-                jnp.array([0, -1]),   # UPFIRE
-                jnp.array([0, 1]),    # DOWNFIRE
-                jnp.array([-1, 0]),   # LEFTFIRE
-                jnp.array([1, 0]),    # RIGHTFIRE
-                jnp.array([0, -1]),   # UP
-                jnp.array([0, 1]),    # DOWN
-                jnp.array([-1, 0]),   # LEFT
-                jnp.array([1, 0]),    # RIGHT
-                jnp.array([1, -1]),   # UPRIGHT
-                jnp.array([-1, -1]),  # UPLEFT
-                jnp.array([1, 1]),    # DOWNRIGHT
-                jnp.array([-1, 1]),   # DOWNLEFT
-                jnp.array([1, -1]),   # UPRIGHTFIRE
-                jnp.array([-1, -1]),  # UPLEFTFIRE
-                jnp.array([1, 1]),    # DOWNRIGHTFIRE
-                jnp.array([-1, 1]),   # DOWNLEFTFIRE
-            ],
-        default=state.player.last_dir
-        )
+        action_direction = self.action_to_direction[action]
+        keep_last_direction = ~self.action_has_direction[action]
+        player_direction = jnp.where(keep_last_direction, state.player.last_dir, action_direction)
 
         return player_x, player_y, player_direction
     
@@ -541,59 +513,9 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
     @partial(jax.jit, static_argnums=(0, ))
     def object_hits_wall(self, object_pos, object_size, room_counter, entry_direction, num_points_per_side=3):
-        # get current room id (0–3 → mid_walls_1 to _4)
-        room_idx = JaxBerzerk.get_room_index(room_counter)
-
-        # get respective wall mask (True = collision)
-        # Use switch since masks have different shapes
-        mid_mask = jax.lax.switch(
-            room_idx,
-            [
-                lambda: self.renderer.room_collision_masks['mid_walls_1'],
-                lambda: self.renderer.room_collision_masks['mid_walls_2'],
-                lambda: self.renderer.room_collision_masks['mid_walls_3'],
-                lambda: self.renderer.room_collision_masks['mid_walls_4'],
-            ]
-        )
-        outer_mask = self.renderer.room_collision_masks['level_outer_walls']
-
-        # get respective wall mask
-        left_mask = self.renderer.room_collision_masks['door_vertical_left']
-        right_mask = self.renderer.room_collision_masks['door_vertical_right']
-        top_mask = self.renderer.room_collision_masks['door_horizontal_up']
-        bottom_mask = self.renderer.room_collision_masks['door_horizontal_down']
-
-        # calculate which doors should be opened
-        block_left   = (entry_direction == 2) | (entry_direction == 3)
-        block_right  = (entry_direction == 2) | (entry_direction == 3)
-        block_top    = (entry_direction == 1)
-        block_bottom = (entry_direction == 0)
-
-        # get closed door masks
-        collision_mask = mid_mask | outer_mask
-        collision_mask = jax.lax.cond(block_left,   lambda: collision_mask | left_mask,   lambda: collision_mask)
-        collision_mask = jax.lax.cond(block_right,  lambda: collision_mask | right_mask,  lambda: collision_mask)
-        collision_mask = jax.lax.cond(block_top,    lambda: collision_mask | top_mask,    lambda: collision_mask)
-        collision_mask = jax.lax.cond(block_bottom, lambda: collision_mask | bottom_mask, lambda: collision_mask)
-
-        mask_height, mask_width = collision_mask.shape
-
-        # check collision at all hit detection points
-        def point_hits(px, py):
-            i = jnp.floor(py).astype(jnp.int32)
-            j = jnp.floor(px).astype(jnp.int32)
-            in_bounds = (i >= 0) & (i < mask_height) & (j >= 0) & (j < mask_width)
-            return jax.lax.select(in_bounds, collision_mask[i, j], False)
-
-        x0, y0 = object_pos
-        w, h = object_size
-        top_edge = [(x0 + dx, y0) for dx in jnp.linspace(0, w, num_points_per_side)]
-        right_edge = [(x0 + w, y0 + dy) for dy in jnp.linspace(0, h, num_points_per_side)]
-        bottom_edge = [(x0 + dx, y0 + h) for dx in jnp.linspace(w, 0, num_points_per_side)]
-        left_edge = [(x0, y0 + dy) for dy in jnp.linspace(h, 0, num_points_per_side)]
-
-        all_edge_points = top_edge + right_edge + bottom_edge + left_edge
-        return jnp.any(jnp.array([point_hits(x, y) for x, y in all_edge_points]))
+        del num_points_per_side  # Kept for API compatibility.
+        walls_to_check = self._get_current_walls(room_counter, entry_direction)
+        return self.check_object_hits_wall_list(object_pos, object_size, walls_to_check)
 
 
     @partial(jax.jit, static_argnums=(0, ))
@@ -827,29 +749,46 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                                 self.consts.PLAYER_BOUNDS[1][1] - self.consts.ENEMY_SIZE[1]])
             )
 
-        def cond_fn(carry2):
-            pos, _, attempts, placed = carry2
-            in_wall = self.object_hits_wall(pos, self.consts.ENEMY_SIZE,
-                                            state.room_counter, state.entry_direction)
-            on_player = self.rects_overlap(state.player.pos, self.consts.PLAYER_SIZE, pos, self.consts.ENEMY_SIZE)
-            overlap_enemy = jnp.any(
-                jax.vmap(lambda enemy_position: self.rects_overlap(
-                    pos, self.consts.ENEMY_SIZE, enemy_position, self.consts.ENEMY_SIZE))(placed))
-            invalid = in_wall | on_player | overlap_enemy
-            return jnp.logical_and(invalid, attempts < 2)
-
-        def body2(carry2):
-            _, rng2, attempts, placed = carry2
-            rng2, sub2 = jax.random.split(rng2)
-            return sample_pos(sub2), rng2, attempts + 1, placed
+        def is_valid_spawn(pos, placed, placed_mask):
+            in_wall = self.object_hits_wall(
+                pos,
+                self.consts.ENEMY_SIZE,
+                state.room_counter,
+                state.entry_direction,
+            )
+            on_player = self.rects_overlap(
+                state.player.pos,
+                self.consts.PLAYER_SIZE,
+                pos,
+                self.consts.ENEMY_SIZE,
+            )
+            overlap_enemy = jax.vmap(
+                lambda enemy_position: self.rects_overlap(
+                    pos, self.consts.ENEMY_SIZE, enemy_position, self.consts.ENEMY_SIZE
+                )
+            )(placed)
+            overlap_placed_enemy = jnp.any(overlap_enemy & placed_mask)
+            return ~(in_wall | on_player | overlap_placed_enemy)
 
         def body_fun(i, carry):
             placed, rng_inner = carry
             rng_inner, sub = jax.random.split(rng_inner)
-            pos0 = sample_pos(sub)
-            pos, rng_after, _, _ = jax.lax.while_loop(cond_fn, body2, (pos0, sub, jnp.int32(0), placed))
-            placed = placed.at[i].set(pos)
-            return (placed, rng_after)
+            candidate_keys = jax.random.split(sub, 3)
+            candidate_positions = jax.vmap(sample_pos)(candidate_keys)
+
+            placed_mask = jnp.arange(self.consts.MAX_NUM_ENEMIES) < i
+            candidate_valid = jax.vmap(
+                lambda p: is_valid_spawn(p, placed, placed_mask)
+            )(candidate_positions)
+
+            first_valid_idx = jnp.argmax(candidate_valid.astype(jnp.int32))
+            chosen_pos = jax.lax.cond(
+                jnp.any(candidate_valid),
+                lambda: candidate_positions[first_valid_idx],
+                lambda: candidate_positions[0],
+            )
+            placed = placed.at[i].set(chosen_pos)
+            return (placed, rng_inner)
 
         final_carry = jax.lax.fori_loop(0, num_enemies, body_fun, (placed_init, sub_spawn))
         placed_final, _ = final_carry
@@ -992,15 +931,16 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         if previous_state is None:
             enemies_killed = jnp.array(0, dtype=jnp.int32)
         else:
-            prev_alive = jnp.array(previous_state.enemy_alive, dtype=jnp.int32)
-            curr_alive = jnp.array(state.enemy_alive, dtype=jnp.int32)
+            prev_alive = jnp.array(previous_state.enemy.alive, dtype=jnp.int32)
+            curr_alive = jnp.array(state.enemy.alive, dtype=jnp.int32)
             enemies_killed = jnp.sum(prev_alive - curr_alive)
 
         level_cleared = jnp.array([state.room_counter], dtype=jnp.int32)
 
         return BerzerkInfo(
             enemies_killed=enemies_killed,
-            level_cleared=level_cleared
+            level_cleared=level_cleared,
+            score=state.score,
         )
 
 
@@ -1126,7 +1066,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                 self._get_observation(new_state),
                 new_state,
                 0.0,
-                game_over_timer == 0,
+                True,
                 self._get_info(new_state),
             )
 
@@ -1186,7 +1126,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                     next_state,
                     0.0,
                     False,
-                    self._get_info(next_state),
+                    self._get_info(next_state, previous_state=state),
                 )
 
             def in_transition():
@@ -1195,7 +1135,7 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
                     new_state,
                     0.0,
                     False,
-                    self._get_info(new_state),
+                    self._get_info(new_state, previous_state=state),
                 )
 
             return jax.lax.cond(
@@ -1533,7 +1473,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
 
             # player death
             hit_something = player_hit_by_enemy | player_hit_wall | player_hit_by_enemy_bullet | otto_hits_player
-            death_timer = jnp.where(hit_something & (state.player.death_timer == 0), self.consts.DEATH_ANIMATION_FRAMES + 2, state.player.death_timer)
+            death_started = hit_something & (state.player.death_timer == 0)
+            death_timer = jnp.where(death_started, self.consts.DEATH_ANIMATION_FRAMES + 2, state.player.death_timer)
             death_timer = jnp.maximum(death_timer - 1, 0)
 
             # enemy death
@@ -1569,8 +1510,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             enemy_clear_bonus_given = state.enemy.clear_bonus_given | give_bonus
 
             # Handle live logic
-            lives_lost_this_frame = ((death_timer == 0) & hit_something).astype(jnp.int32)
-            lives_after_death = state.lives - lives_lost_this_frame
+            # Lose a life once, when the death animation starts.
+            lives_after_death = state.lives - death_started.astype(state.lives.dtype)
             # Extra Life Check using integer division milestones
             previous_milestone = jnp.floor_divide(state.score.astype(jnp.int32), self.consts.EXTRA_LIFE_AT)
             current_milestone = jnp.floor_divide(score_after.astype(jnp.int32), self.consts.EXTRA_LIFE_AT)
@@ -1578,10 +1519,8 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             lives_after = lives_after_death + earned_extra_life
             # Keep counter as total milestones reached
             extra_life_counter_after = current_milestone.astype(jnp.int32)
-            # Reset score if game is over (lives hit -1)
-            game_should_be_over = (lives_after < 0)
-            # Ensure dtype consistency when resetting score
-            score_after = jnp.where(game_should_be_over, jnp.asarray(0, score_after.dtype), score_after)
+            # Note: do not reset score on terminal; reward is score-delta.
+            # Resetting would introduce a large negative terminal reward.
 
             # Trigger Room Transition oder Game Over automatisch
             transition_timer = jax.lax.cond(
@@ -1656,9 +1595,9 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             #######################################################
 
             observation = self._get_observation(new_state)
-            info = self._get_info(new_state)
-            reward = 0.0
-            done = jnp.equal(state.lives, -1) 
+            info = self._get_info(new_state, previous_state=state)
+            reward = self._get_reward(state, new_state)
+            done = new_state.lives < 0
 
             return observation, new_state, reward, done, info
         
