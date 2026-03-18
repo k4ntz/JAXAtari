@@ -306,7 +306,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
             last_dice=-1,
             cursor_position=initial_cursor,
             picked_checker_from=-1,
-            game_phase=jnp.int32(1),              # SELECTING_CHECKER
+            game_phase=jnp.int32(0),              # WAITING_FOR_ROLL (opening dice already precomputed)
             last_action=JAXAtariAction.NOOP,
             await_keyup=False,
             last_valid_drop=-1,
@@ -1016,11 +1016,27 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
         
         Returns: Updated state with new dice, original_dice, and game_phase.
         """
-        dice, key = self.roll_dice(state.key)
-        # Store original roll for display (ALE always shows 2 dice with original values)
-        # For doubles, both display dice show the same value
-        original_dice = jnp.array([dice[0], dice[1]], dtype=jnp.int32)
-        new_state = state.replace(dice=dice, original_dice=original_dice, key=key, game_phase=1)
+        # Opening state already precomputes the first player's dice in init_state.
+        # Consume those once without rerolling so wrapper-level first_fire does not
+        # accidentally auto-pick a checker at reset.
+        has_pending_dice = jnp.any(state.dice > 0)
+
+        def consume_existing_opening_roll(s: BackgammonState) -> BackgammonState:
+            return s.replace(game_phase=1)
+
+        def roll_new_turn(s: BackgammonState) -> BackgammonState:
+            dice, key = self.roll_dice(s.key)
+            # Store original roll for display (ALE always shows 2 dice with original values)
+            # For doubles, both display dice show the same value
+            original_dice = jnp.array([dice[0], dice[1]], dtype=jnp.int32)
+            return s.replace(dice=dice, original_dice=original_dice, key=key, game_phase=1)
+
+        new_state = jax.lax.cond(
+            has_pending_dice,
+            consume_existing_opening_roll,
+            roll_new_turn,
+            operand=state,
+        )
         # Auto-pass if no legal move with these dice
         return self._auto_pass_if_stuck(new_state)
 
