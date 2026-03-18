@@ -1160,14 +1160,14 @@ class JaxTutankham(JaxEnvironment):
 
     # creature spawner step
     @partial(jax.jit, static_argnums=(0,))
-    def spawner_step(self, creature_states, last_creature_spawn, level, rng_key, camera_offset):
+    def spawner_step(self, creature_states, last_creature_spawn, level, rng_key, camera_offset, laser_flash_cooldown):
         spawners = self.consts.MAP_SPAWNER_POSITIONS[level%4] # (n, 2) array with (x, y) positions of the n spawners for current level
         growth = self.consts.LEVEL_SPAWN_RATES[level]
         MAX_PROB = 0.8
 
-        # Only increment timer if less than MAX_CREATURES are currently active
+        # Only increment timer if less than MAX_CREATURES are currently active and laser flash cooldown is 0
         active_count = jnp.sum(creature_states[:, 3] == self.consts.ACTIVE)
-        new_last_creature_spawn = jnp.where(active_count < 2, last_creature_spawn + 1, last_creature_spawn)
+        new_last_creature_spawn = jnp.where((active_count < 2) & (laser_flash_cooldown == 0), last_creature_spawn + 1, last_creature_spawn)
 
         # deactivate spawners at at (0, 0) which are only used as padding
         valid_spawner_mask = (spawners[:, 0] != 0) | (spawners[:, 1] != 0)
@@ -1200,7 +1200,7 @@ class JaxTutankham(JaxEnvironment):
         type_idx = jax.random.randint(key_type, shape=(), minval=0, maxval=self.consts.MAP_CREATURES.shape[1])
         new_type = self.consts.MAP_CREATURES[level%4, type_idx]
 
-        do_spawn = should_spawn & has_free_slot & any_on_screen
+        do_spawn = should_spawn & has_free_slot & any_on_screen & (laser_flash_cooldown == 0)
 
         # Construct the new creature with chosen spawner coordinates
         # direction: 0 for RIGHT, 1 for LEFT
@@ -1476,7 +1476,7 @@ class JaxTutankham(JaxEnvironment):
 
         creature_states, creature_subpixels = self.creature_step(creature_states, creature_subpixels, camera_offset, step_counter, level)
 
-        creature_states, last_creature_spawn, rng_key = self.spawner_step(creature_states, last_creature_spawn, level, rng_key, camera_offset)
+        creature_states, last_creature_spawn, rng_key = self.spawner_step(creature_states, last_creature_spawn, level, rng_key, camera_offset, laser_flash_cooldown)
 
         # laser flash step should go after creature step to immediately remove creatures
         creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)
