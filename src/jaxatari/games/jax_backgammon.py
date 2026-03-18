@@ -209,6 +209,16 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
                If None, uses consts.THEME (which defaults to "classic")
     """
 
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            JAXAtariAction.NOOP,
+            JAXAtariAction.FIRE,
+            JAXAtariAction.RIGHT,
+            JAXAtariAction.LEFT,
+        ],
+        dtype=jnp.int32,
+    )
+
     def __init__(self, consts: BackgammonConstants = None, config: jr.RendererConfig = None):
         self.consts = consts or BackgammonConstants()
         super().__init__(self.consts)
@@ -227,13 +237,8 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
         self.renderer = BackgammonRenderer(self, config=config)
         self.reward_funcs = None
 
-        # Define action set for jaxatari compatibility (interactive mode)
-        self.action_set = [
-            JAXAtariAction.LEFT,  # Move cursor left
-            JAXAtariAction.RIGHT,  # Move cursor right
-            JAXAtariAction.FIRE,  # Space (select/drop/roll)
-            JAXAtariAction.NOOP  # No-op (do nothing)
-        ]
+        # Lowercase alias retained for compatibility with older helper scripts.
+        self.action_set = list(self.ACTION_SET)
 
     @partial(jax.jit, static_argnums=(0,))
     def init_state(self, key) -> BackgammonState:
@@ -1233,8 +1238,11 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
         
         FIRE triggers once per press; LEFT/RIGHT repeat when held.
         """
-        is_left = action == JAXAtariAction.LEFT
-        is_right = action == JAXAtariAction.RIGHT
+        # Translate policy action index to ALE-style action constant.
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
+        is_left = atari_action == JAXAtariAction.LEFT
+        is_right = atari_action == JAXAtariAction.RIGHT
         is_movement = is_left | is_right
         
         # Branch 1: Debounce active (FIRE held) - wait for key release, but allow movement
@@ -1242,8 +1250,8 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
             # Allow movement even when FIRE is blocked
             def do_movement(s2):
                 def process_repeat(s3):
-                    ns, _, _ = self._process_action(s3, action)
-                    return ns.replace(last_action=action, move_repeat_timer=0)
+                    ns, _, _ = self._process_action(s3, atari_action)
+                    return ns.replace(last_action=atari_action, move_repeat_timer=0)
                 return process_repeat(s2)
             
             ns = jax.lax.cond(
@@ -1259,14 +1267,14 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
             # For movement: process each LEFT/RIGHT step immediately.
             def handle_movement(s2):
                 def process_move(s3):
-                    ns, reward, done = self._process_action(s3, action)
-                    ns = ns.replace(last_action=action, move_repeat_timer=0)
+                    ns, reward, done = self._process_action(s3, atari_action)
+                    ns = ns.replace(last_action=atari_action, move_repeat_timer=0)
                     return ns, reward, done
                 return process_move(s2)
             
             def handle_other(s2):
-                ns, reward, done = self._process_action(s2, action)
-                ns = self._apply_debounce(s, action, ns)
+                ns, reward, done = self._process_action(s2, atari_action)
+                ns = self._apply_debounce(s, atari_action, ns)
                 return ns, reward, done
             
             ns, reward, done = jax.lax.cond(is_movement, handle_movement, handle_other, operand=s)
@@ -1312,8 +1320,8 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
         )
 
     def action_space(self) -> spaces.Discrete:
-        """Direct Move API (RL-optimized) — Use 677 actions"""
-        return spaces.Discrete(self.num_actions)  # = 677
+        """Interactive ALE-style action space used by wrappers and benchmark training."""
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         """Return the observation space for the environment."""
