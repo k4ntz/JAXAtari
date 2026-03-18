@@ -21,3 +21,17 @@ class DoubleEnemiesMod(JaxAtariInternalModPlugin):
         "DRAWBRIDGE_MAX_ARCHERS": 8,
         "CASTLE_HALL_MAX_ENEMIES": 4,
     }
+
+class FastCursorMod(JaxAtariInternalModPlugin):
+    """Increases the cursor speed for faster aiming."""
+    constants_overrides = {'CURSOR_SPEED': 5}
+
+
+class LargeCursorMod(JaxAtariInternalModPlugin):
+    """Increases the cursor size, making it easier to see."""
+    constants_overrides = {'CURSOR_SIZE': (8, 8)}
+
+
+class FastFriendMod(JaxAtariInternalModPlugin):
+    """Increases the speed of the friend character."""
+    constants_overrides = {'FRIEND_SPEED': 1.0}
