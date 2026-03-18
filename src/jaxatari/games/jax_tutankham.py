@@ -94,13 +94,13 @@ def _get_default_asset_config() -> tuple:
         {'name': 'treasure', 'type': 'group', 'files': ['map1_treasure_key.npy', 'map1_treasure_crown_01.npy', 'map1_treasure_ring.npy', 'map1_treasure_ruby.npy', 'map1_treasure_chalice.npy', 'map1_treasure_crown_02.npy', 'map2_treasure_key.npy', 'map2_treasure_ring.npy', 'map2_treasure_crown.npy', 'map2_treasure_emerald.npy', 'map2_treasure_goblet.npy', 'map2_treasure_bust.npy', 'map3_treasure_key.npy', 'map3_treasure_trident.npy', 'map3_treasure_ring.npy', 'map3_treasure_herb.npy', 'map3_treasure_diamond.npy', 'map3_treasure_candelabra.npy', 'map4_treasure_key.npy', 'map4_treasure_ring.npy', 'map4_treasure_amulet.npy', 'map4_treasure_fan.npy', 'map4_treasure_crystal.npy', 'map4_treasure_zircon.npy', 'map4_treasure_dagger.npy']},
 
         # UI
-        # {'name': 'lives', 'type': 'single', 'pattern': 'lives.npy'},
-        # {'name': 'flashbangs', 'type': 'single', 'pattern': 'flashbangs.npy'},
+        {'name': 'ammo_timer', 'type': 'single', 'file': 'ui_ammo_timer.npy'},
+        {'name': 'ammo_map', 'type': 'group', 'files': ['ui_map1_ammo_timer.npy', 'ui_map2_ammo_timer.npy', 'ui_map3_ammo_timer.npy', 'ui_map4_ammo_timer.npy']},
+        {'name': 'stats', 'type': 'group', 'files': ['ui_stats_1.npy', 'ui_stats_2.npy', 'ui_stats_3.npy']},
         {'name': 'digits', 'type': 'group', 'files': ['digit_0.npy', 'digit_1.npy', 'digit_2.npy', 'digit_3.npy', 'digit_4.npy', 'digit_5.npy', 'digit_6.npy', 'digit_7.npy', 'digit_8.npy', 'digit_9.npy']},
-        # {'name': 'time', 'type': 'single', 'pattern': 'time.npy'},
         {'name': 'goal', 'type': 'group', 'files': ['map1_exitdoor.npy', 'map2_exitdoor.npy', 'map3_exitdoor.npy', 'map4_exitdoor.npy']},
         {'name': 'ui_footer_header', 'type': 'group', 'files': ['ui_map1_footer_header.npy', 'ui_map2_footer_header.npy', 'ui_map3_footer_header.npy', 'ui_map4_footer_header.npy']},
-        {'name': 'background', 'type': 'background', 'file': 'background_full.npy'},
+        {'name': 'background', 'type': 'background', 'file': 'background_full.npy'}
     )
     return config
 
@@ -121,7 +121,7 @@ class TutankhamConstants(NamedTuple):
     # Missile constants
     BULLET_SIZE: chex.Array = jnp.array([1, 2], dtype=jnp.int32)
     BULLET_SPEED: float = 3.5
-    AMMO_SUPPLY: int = 900000  # frames until ammo runs out
+    AMMO_SUPPLY: int = 7500  # frames until ammo runs out
 
     MAX_LASER_FLASHES: int = 3
     LASER_FLASH_COOLDOWN: int = 60  # frames
@@ -272,7 +272,7 @@ class TutankhamConstants(NamedTuple):
         ],
         # MAP 2
         [
-            [0  , 198, 136, 60],
+            [0  , 198, 136, 60], #TODO One of them is wrong. Stuck in wall. I think its the second one.
             [199, 402, 78, 199],
             [403, 567, 12, 403],
             [568, 800, 80, 568]
@@ -450,7 +450,7 @@ class TutankhamState(NamedTuple):
     laser_flash_cooldown: int  # cooldown timer for next laser flash
     amonition_timer: int  # if timer runs out, player can not fire again
 
-    creature_states: chex.Array  # (2, 4) array with (x, y, creature_type, active) for each creature
+    creature_states: chex.Array  # (2, 5) array with (x, y, creature_type, active, direction) for each creature
     last_creature_spawn: int  # time since last creature spawn
 
     item_states: chex.Array # (N, 4) array with (x, y, item_type, active) for each item
@@ -571,8 +571,9 @@ class TutankhamRenderer(JAXGameRenderer):
             flip_horizontal=flip,
         )
 
-        #creatures
+        # creatures
         creature_one = state.creature_states[0][2].astype(jnp.int32)
+        dir_one = state.creature_states[0][4]
         creature_mask_one = jax.lax.cond(
             frame_idx == 0,
             lambda _: self.SHAPE_MASKS['creature_00'][creature_one],
@@ -585,8 +586,10 @@ class TutankhamRenderer(JAXGameRenderer):
             state.creature_states[0][1] - camera_offset,
             creature_mask_one,
             flip_offset=ZERO_FLIP,
+            flip_horizontal=(dir_one == 0)
         )
         creature_two = state.creature_states[1][2].astype(jnp.int32)
+        dir_two = state.creature_states[1][4]
         creature_mask_two = jax.lax.cond(
             frame_idx == 0,
             lambda _: self.SHAPE_MASKS['creature_00'][creature_two],
@@ -598,7 +601,8 @@ class TutankhamRenderer(JAXGameRenderer):
             state.creature_states[1][0],
             state.creature_states[1][1] - camera_offset,
             creature_mask_two,
-            flip_offset=ZERO_FLIP
+            flip_offset=ZERO_FLIP,
+            flip_horizontal=(dir_two == 0)
         )
     
         # 2.5 Animations
@@ -649,12 +653,51 @@ class TutankhamRenderer(JAXGameRenderer):
                               raster)
 
 
-        # 8. Render UI
+        # 8. Render UI Footer and Header
         raster = self.jr.render_at_clipped(
             raster,
             0,  # x
             0,  # y
             self.SHAPE_MASKS["ui_footer_header"][level_index],
+            flip_offset=ZERO_FLIP
+        )
+        # Render stats (lives)
+        raster = self.jr.render_at_clipped(
+            raster,
+            12,
+            24,
+            self.SHAPE_MASKS["stats"][state.player_lives-1],
+            flip_offset=ZERO_FLIP
+        )
+        # Render stats (flashes)
+        raster = jax.lax.cond(
+            state.laser_flash_count > 0,
+            lambda r: self.jr.render_at_clipped(
+                r,
+                108,
+                24,
+                self.SHAPE_MASKS["stats"][state.laser_flash_count-1],
+                flip_offset=ZERO_FLIP
+            ),
+            lambda r: r,
+            raster
+        )
+        raster = self.jr.render_at_clipped(
+            raster,
+            114,
+            197,
+            self.SHAPE_MASKS["ammo_timer"],
+            flip_offset=ZERO_FLIP
+        )
+        # Calculate ammo timer bar position
+        # Scales with AMMO_SUPPLY. Range is 30 pixels (from 84 to 114).
+        ammo_offset = (jnp.maximum(0, state.amonition_timer) / self.consts.AMMO_SUPPLY) * 30
+        ammo_x = 114 - ammo_offset.astype(jnp.int32)
+        raster = self.jr.render_at_clipped(
+            raster,
+            ammo_x,
+            197,
+            self.SHAPE_MASKS["ammo_map"][level_index],
             flip_offset=ZERO_FLIP
         )
         
@@ -734,7 +777,7 @@ class JaxTutankham(JaxEnvironment):
         player_lives = self.consts.PLAYER_LIVES
         amonition_timer = self.consts.AMMO_SUPPLY
         bullet_state = jnp.array([0, 0, 0, 0], dtype=jnp.int32)  # (x, y, bullet_rotation, bullet_active)
-        creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4))  # (x, y, creature_type, active)
+        creature_states = jnp.zeros((self.consts.MAX_CREATURES, 5))  # (x, y, creature_type, active, direction)
         item_states = self.consts.MAP_ITEMS[level%4]  # (N, 4) array with (x, y, item_type, active)
         last_creature_spawn = 0
         laser_flash_count = self.consts.MAX_LASER_FLASHES
@@ -1001,11 +1044,11 @@ class JaxTutankham(JaxEnvironment):
         new_last_creature_spawn = jnp.where(is_firing, 0, last_creature_spawn)
 
         # active mask contains 1 for active creatures and 0 for inactive creatures, if firing set all to 0
-        active_mask = creature_states[:, -1]
+        active_mask = creature_states[:, 3]
         # if firing, set all active_mask values to 0, otherwise keep them as they are
         new_active_mask = jnp.where(is_firing, 0, active_mask)
 
-        new_creature_states = creature_states.at[:, -1].set(new_active_mask)
+        new_creature_states = creature_states.at[:, 3].set(new_active_mask)
 
         return new_creature_states, new_laser_flash_cooldown, new_laser_flash_count, new_last_creature_spawn
 
@@ -1015,12 +1058,14 @@ class JaxTutankham(JaxEnvironment):
     def creature_step(self, creature_states, creature_subpixels, camera_offset, step_counter, level):
 
         def move_creature(creature_state, creature_subpixel):
-            creature_x, creature_y, creature_type, active = creature_state
+            creature_x, creature_y, creature_type, active, direction = creature_state
 
             speed = self.consts.CREATURE_SPEED[creature_type.astype(int)]
             actual_speed, new_subpixel = self.subpixel_accumulator(speed, creature_subpixel)
 
-            new_x = creature_x + actual_speed * active
+            # direction 0: right (+1), direction 1: left (-1)
+            # movement = actual_speed * (1 - 2 * direction)
+            new_x = creature_x + actual_speed * active * (1 - 2 * direction)
             new_y = creature_y
             creature_x, creature_y, is_walkable = can_walk_to(self.consts.CREATURE_SIZE, new_x.astype(jnp.int32), new_y.astype(jnp.int32), creature_x, creature_y, self.consts.VALID_POS_MAPS[level%4])
             # Deactivate if out of bounds
@@ -1036,7 +1081,7 @@ class JaxTutankham(JaxEnvironment):
             creature_x = creature_x * active_new
             creature_y = creature_y * active_new
 
-            return jnp.array([creature_x, creature_y, creature_type, active_new], dtype=jnp.int32), new_subpixel
+            return jnp.array([creature_x, creature_y, creature_type, active_new, direction], dtype=jnp.int32), new_subpixel
 
         move_creature_vmapped = jax.vmap(move_creature)
         new_creature_states, new_creature_subpixels = move_creature_vmapped(creature_states, creature_subpixels)
@@ -1088,11 +1133,16 @@ class JaxTutankham(JaxEnvironment):
         do_spawn = should_spawn & has_free_slot & any_on_screen
 
         # Construct the new creature with chosen spawner coordinates
+        # direction: 0 for RIGHT, 1 for LEFT
+        # Spawners on the right (x > 80) should move LEFT, spawners on the left move RIGHT
+        direction = jnp.where(chosen_pos[0] > 80, 1, 0)
+        
         new_creature = jnp.array([
             chosen_pos[0],      # X from selected spawner
             chosen_pos[1],      # Y from selected spawner
             new_type, 
-            self.consts.ACTIVE
+            self.consts.ACTIVE,
+            direction
         ], dtype=jnp.int32)
 
         # if do spawn is true, insert new creature at first free slot, otherwise keep creature states unchanged
@@ -1137,7 +1187,7 @@ class JaxTutankham(JaxEnvironment):
         respawn_y = checkpoints[checkpoint_idx, 3]
 
 
-        creature_states = jnp.zeros((self.consts.MAX_CREATURES, 4), dtype=jnp.int32)
+        creature_states = jnp.zeros((self.consts.MAX_CREATURES, 5), dtype=jnp.int32)
         bullet_state = jnp.zeros(4, dtype=jnp.int32)
         last_creature_spawn = jnp.int32(0)
 
