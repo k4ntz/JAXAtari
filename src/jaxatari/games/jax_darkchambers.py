@@ -362,7 +362,7 @@ class DarkChambersConstants(NamedTuple):
 
     # Base poison item spawn toggle (keeps poison logic intact, only disables spawning)
     ENABLE_DEFAULT_POISON_SPAWN: bool = False
-    ENABLE_DEFAULT_TRAP_SPAWN: bool = False
+    ENABLE_DEFAULT_TRAP_SPAWN: bool = True
 
     HAMMER_COLOR: Tuple[int, int, int] = (148, 0, 211)  # Brown hammer
     ENABLE_HAMMER_SPAWN: bool = False
