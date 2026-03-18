@@ -1164,16 +1164,16 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
             operand=state
         )
 
-    # Repeat delay for held LEFT/RIGHT (in frames, ~8 frames = ~133ms at 60fps)
-    MOVE_REPEAT_DELAY: int = 8
-    MOVE_INITIAL_DELAY: int = 12  # Longer delay before first repeat
+    # Movement repeat delay disabled: process held LEFT/RIGHT every step.
+    MOVE_REPEAT_DELAY: int = 0
+    MOVE_INITIAL_DELAY: int = 0
 
     @partial(jax.jit, static_argnums=(0,))
     def _apply_debounce(self, state: BackgammonState, action: jnp.ndarray, 
                         new_state: BackgammonState) -> BackgammonState:
         """
         Apply debounce logic: arm await_keyup for FIRE only.
-        LEFT/RIGHT use repeat timer for continuous movement.
+        LEFT/RIGHT update last_action and reset timer.
         
         Returns: State with debounce flags updated.
         """
@@ -1200,7 +1200,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
     def _handle_blocked_input(self, state: BackgammonState, action: jnp.ndarray) -> BackgammonState:
         """
         Handle input when awaiting key-up (debounce active for FIRE).
-        NOOP clears the debounce; LEFT/RIGHT can still move with repeat timer.
+        NOOP clears the debounce; LEFT/RIGHT can still move.
         
         Returns: State with await_keyup potentially cleared.
         """
@@ -1224,7 +1224,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
         This is the main entry point for gameplay. It follows the orchestrator pattern:
         - Delegates to helper functions for specific logic
         - Handles debounce for FIRE key-press/release behavior
-        - Allows continuous LEFT/RIGHT movement when held
+        - LEFT/RIGHT are processed each step (no repeat delay)
         - Returns (observation, new_state, reward, done, info)
         
         FIRE triggers once per press; LEFT/RIGHT repeat when held.
@@ -1233,29 +1233,14 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
         is_right = action == JAXAtariAction.RIGHT
         is_movement = is_left | is_right
         
-        # Check if this is a repeated movement (same direction held)
-        same_direction = (action == state.last_action) & is_movement
-        timer = state.move_repeat_timer + 1
-        
-        # Use longer delay for first repeat, shorter for subsequent
-        delay = jax.lax.select(
-            timer < self.MOVE_INITIAL_DELAY + self.MOVE_REPEAT_DELAY,
-            self.MOVE_INITIAL_DELAY,
-            self.MOVE_REPEAT_DELAY
-        )
-        repeat_ready = timer >= delay
-        
         # Branch 1: Debounce active (FIRE held) - wait for key release, but allow movement
         def when_blocked(s):
             # Allow movement even when FIRE is blocked
             def do_movement(s2):
-                can_repeat = same_direction & repeat_ready
                 def process_repeat(s3):
                     ns, _, _ = self._process_action(s3, action)
                     return ns.replace(last_action=action, move_repeat_timer=0)
-                def increment_timer(s3):
-                    return s3.replace(move_repeat_timer=timer)
-                return jax.lax.cond(can_repeat, process_repeat, increment_timer, operand=s2)
+                return process_repeat(s2)
             
             ns = jax.lax.cond(
                 is_movement,
@@ -1267,24 +1252,13 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
 
         # Branch 2: Ready for input - process action
         def when_free(s):
-            # For movement: check if same direction held (repeat) or new direction
+            # For movement: process each LEFT/RIGHT step immediately.
             def handle_movement(s2):
-                can_repeat = same_direction & repeat_ready
                 def process_move(s3):
                     ns, reward, done = self._process_action(s3, action)
                     ns = ns.replace(last_action=action, move_repeat_timer=0)
                     return ns, reward, done
-                def wait_for_repeat(s3):
-                    # First press or waiting for repeat delay
-                    new_dir = ~same_direction
-                    def first_press(s4):
-                        ns, reward, done = self._process_action(s4, action)
-                        ns = ns.replace(last_action=action, move_repeat_timer=0)
-                        return ns, reward, done
-                    def increment(s4):
-                        return s4.replace(move_repeat_timer=timer), 0.0, False
-                    return jax.lax.cond(new_dir, first_press, increment, operand=s3)
-                return jax.lax.cond(can_repeat, process_move, wait_for_repeat, operand=s2)
+                return process_move(s2)
             
             def handle_other(s2):
                 ns, reward, done = self._process_action(s2, action)
