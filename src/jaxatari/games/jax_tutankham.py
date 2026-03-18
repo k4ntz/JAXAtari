@@ -85,7 +85,7 @@ def _get_default_asset_config() -> tuple:
         {'name': 'player', 'type': 'group', 'files': ['player_idle.npy', 'player_key_idle.npy']},
         {'name': 'player_move', 'type': 'group', 'files': ['player_move_00.npy', 'player_move_01.npy', 'player_key_move_00.npy', 'player_key_move_01.npy']},
         {'name': 'player_death ', 'type': 'single', 'file': 'player_death.npy'},
-        {'name': 'bullet', 'type': 'single', 'file': 'bullet_00.npy'},
+        {'name': 'bullet', 'type': 'group', 'files': ['bullet_00.npy', 'bullet_01.npy', 'bullet_02.npy', 'bullet_03.npy']},
 
         # Creatures (loaded as single sprites for manual padding)
         {'name': 'creature_00', 'type': 'group', 'files': ['creature_snake_00.npy', 'creature_scorpion_00.npy', 'creature_bat_00.npy', 'creature_turtle_00.npy', 'creature_jackel_00.npy', 'creature_condor_00.npy', 'creature_lion_00.npy', 'creature_moth_00.npy', 'creature_virus_00.npy', 'creature_monkey_00.npy', 'creature_mysteryweapon_00.npy']},
@@ -122,6 +122,7 @@ class TutankhamConstants(NamedTuple):
     # Missile constants
     BULLET_SIZE: chex.Array = jnp.array([1, 2], dtype=jnp.int32)
     BULLET_SPEED: float = 3.5
+    BULLET_ANIM_SPEED: int = 4
     AMMO_SUPPLY: int = 7500  # frames until ammo runs out
 
     MAX_LASER_FLASHES: int = 3
@@ -150,7 +151,7 @@ class TutankhamConstants(NamedTuple):
         [8, 8],   # JACKEL (00 & 01: [8, 8])
         [8, 7],   # CONDOR (00 & 01: [8, 7])
         [8, 8],   # LION (00: [8, 7], 01: [7, 8])
-        [8, 8],   # MOTH (00: [8, 7], 01: [6, 8])
+        [8, 8],   # MOTH (00 & 01 padded to: [8, 8])
         [8, 6],   # VIRUS (00 & 01: [8, 6])
         [8, 8],   # MONKEY (00 & 01: [8, 8])
         [8, 8]    # MYSTERY_WEAPON (00 & 01: [8, 8])
@@ -445,11 +446,11 @@ class TutankhamConstants(NamedTuple):
         ],
         # MAP 3
         [
-            [107, 717]
+            [107, 715]
         ],
         # MAP 4
         [
-            [77, 721]
+            [77, 719]
         ]
     ], dtype=jnp.int32)
 
@@ -504,8 +505,6 @@ class TutankhamState(NamedTuple):
     player_subpixel: float  # sub pixel position accumulator for smooth movement
     creature_subpixels: chex.Array  # (MAX_CREATURES,) sub pixel position accumulators
     bullet_subpixel: float  # sub pixel position accumulator for bullet
-
-    is_flashing: bool  # whether the map is currently flashing white
 
     has_key: bool  # whether the player has collected the key or not
     goal_reached: bool  # whether the player has reached the goal with the key to complete the level
@@ -598,7 +597,7 @@ class TutankhamRenderer(JAXGameRenderer):
         )
         # Render Flash Floors
         raster = jax.lax.cond(
-                state.is_flashing,
+                state.laser_flash_cooldown > 10,
                 lambda _: self.jr.render_at_clipped(
                     raster,
                     0,
@@ -705,12 +704,13 @@ class TutankhamRenderer(JAXGameRenderer):
                               lambda r: r,
                               raster)
         # 6. Render Bullets
+        bullet_frame_idx = jnp.clip(state.bullet_state[4] // self.consts.BULLET_ANIM_SPEED, 0, 3)
         raster = jax.lax.cond(state.bullet_state[3] == 1,
                               lambda r: self.jr.render_at_clipped(
                                   r,
                                   state.bullet_state[0],
                                   state.bullet_state[1] - camera_offset,
-                                  self.SHAPE_MASKS["bullet"],
+                                  self.SHAPE_MASKS["bullet"][bullet_frame_idx.astype(jnp.int32)],
                                   flip_offset=ZERO_FLIP
                                   # self.FLIP_OFFSETS['player_group'],
                               ),
@@ -841,14 +841,13 @@ class JaxTutankham(JaxEnvironment):
         goal_reached = False
         player_lives = self.consts.PLAYER_LIVES
         amonition_timer = self.consts.AMMO_SUPPLY
-        bullet_state = jnp.array([0, 0, 0, 0], dtype=jnp.int32)  # (x, y, bullet_rotation, bullet_active)
+        bullet_state = jnp.array([0, 0, 0, 0, 0], dtype=jnp.int32)  # (x, y, bullet_rotation, bullet_active, anim_counter)
         creature_states = jnp.zeros((self.consts.MAX_CREATURES, 5))  # (x, y, creature_type, active, direction)
         item_states = self.consts.MAP_ITEMS[level%4]  # (N, 4) array with (x, y, item_type, active)
         last_creature_spawn = 0
         laser_flash_count = self.consts.MAX_LASER_FLASHES
         laser_flash_cooldown = 0
         has_key = False
-        is_flashing = False
         player_direction = 3  # Start facing RIGHT
         is_moving = False
         last_directional_action = 0
@@ -888,7 +887,6 @@ class JaxTutankham(JaxEnvironment):
                                player_subpixel=player_subpixel,
                                creature_subpixels=creature_subpixels,
                                bullet_subpixel=bullet_subpixel,
-                               is_flashing=is_flashing,
                                has_key=has_key,
                                last_directional_action=last_directional_action,
                                rng_key=key,
@@ -1044,7 +1042,11 @@ class JaxTutankham(JaxEnvironment):
 
         space = jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE)
 
-        new_bullet = bullet_state #array with (x, y, bullet_rotation, bullet_active)
+        new_bullet = bullet_state #array with (x, y, bullet_rotation, bullet_active, anim_counter)
+
+        # Update animation counter
+        anim_counter = jnp.where(bullet_state[3] == 1, bullet_state[4] + 1, 0)
+        new_bullet = new_bullet.at[4].set(anim_counter)
 
 
         # --- update bullet x position if active (bullet only travels horizontal so no vertical movement) ---
@@ -1070,7 +1072,7 @@ class JaxTutankham(JaxEnvironment):
 
         new_bullet = jax.lax.cond(
             should_deactivate,
-            lambda _: jnp.zeros((4,), dtype=new_bullet.dtype),
+            lambda _: jnp.zeros((5,), dtype=new_bullet.dtype),
             lambda bullet: bullet,
             operand=new_bullet
         )
@@ -1085,7 +1087,7 @@ class JaxTutankham(JaxEnvironment):
 
         new_bullet = jax.lax.cond(
             fired, # if firing action & bullet is inactive & amonition available
-            lambda _: jnp.array([player_x+2, player_y+3, get_rotation(action), 1], dtype=jnp.int32), # shoot bullet at player face position,
+            lambda _: jnp.array([player_x+2, player_y+3, get_rotation(action), 1, 0], dtype=jnp.int32), # shoot bullet at player face position,
             lambda bullet: bullet, # don't shoot bullet
             operand=new_bullet
         )
@@ -1117,12 +1119,7 @@ class JaxTutankham(JaxEnvironment):
 
         new_creature_states = creature_states.at[:, 3].set(new_active_mask)
 
-        # Flash lasts for 50 frames
-        # Cooldown starts at 60 and ends at 0.
-        # So we stay True while cooldown > 10.
-        new_is_flashing = new_laser_flash_cooldown > 10
-
-        return new_creature_states, new_laser_flash_cooldown, new_laser_flash_count, new_last_creature_spawn, new_is_flashing
+        return new_creature_states, new_laser_flash_cooldown, new_laser_flash_count, new_last_creature_spawn
 
 
     # creature step
@@ -1260,7 +1257,7 @@ class JaxTutankham(JaxEnvironment):
 
 
         creature_states = jnp.zeros((self.consts.MAX_CREATURES, 5), dtype=jnp.int32)
-        bullet_state = jnp.zeros(4, dtype=jnp.int32)
+        bullet_state = jnp.zeros(5, dtype=jnp.int32)
         last_creature_spawn = jnp.int32(0)
 
         #set last_directional_action to 0, to avoid player moving immediately on respawn based on previous action
@@ -1274,9 +1271,10 @@ class JaxTutankham(JaxEnvironment):
 
         # check bullet-creature collisions (vectorized over all creatures)
         def bullet_hits_creature(creature):
+            creature_type = creature[2].astype(jnp.int32)
             return self.check_entity_collision(
                 bullet_state[0], bullet_state[1], self.consts.BULLET_SIZE,
-                creature[0], creature[1], self.consts.CREATURE_SIZE,
+                creature[0], creature[1], self.consts.CREATURE_SIZES[creature_type],
             )
 
         bullet_hits = jax.vmap(bullet_hits_creature)(creature_states)
@@ -1288,7 +1286,7 @@ class JaxTutankham(JaxEnvironment):
 
         new_creature_active = jnp.where(first_bullet_hit, self.consts.INACTIVE, creature_states[:, 3])
         new_creature_states = creature_states.at[:, 3].set(new_creature_active)
-        new_bullet_state = jnp.where(any_bullet_hit, jnp.zeros(4, dtype=bullet_state.dtype), bullet_state)
+        new_bullet_state = jnp.where(any_bullet_hit, jnp.zeros(5, dtype=bullet_state.dtype), bullet_state)
 
         return new_creature_states, new_bullet_state
 
@@ -1298,9 +1296,10 @@ class JaxTutankham(JaxEnvironment):
 
         # check player-creature collisions (vectorized over all creatures)
         def player_hits_creature(creature):
+            creature_type = creature[2].astype(jnp.int32)
             return self.check_entity_collision(
                 player_x, player_y, self.consts.PLAYER_SIZE,
-                creature[0], creature[1], self.consts.CREATURE_SIZE,
+                creature[0], creature[1], self.consts.CREATURE_SIZES[creature_type],
             )
 
         player_hits = jax.vmap(player_hits_creature)(creature_states)
@@ -1391,7 +1390,7 @@ class JaxTutankham(JaxEnvironment):
         level = jnp.where(goal_reached, level + 1, level)
         player_x = jnp.where(goal_reached, self.consts.MAP_CHECKPOINTS[level%4, 0, 2], player_x) # respawn_x of first checkpoint is the start coordinates for each map
         player_y = jnp.where(goal_reached, self.consts.MAP_CHECKPOINTS[level%4, 0, 3], player_y) # respawn_y of first checkpoint is the start coordinates for each map
-        bullet_state = jnp.where(goal_reached, jnp.zeros((4,), dtype=bullet_state.dtype), bullet_state)
+        bullet_state = jnp.where(goal_reached, jnp.zeros((5,), dtype=bullet_state.dtype), bullet_state)
         creature_states = jnp.where(goal_reached, jnp.zeros_like(creature_states), creature_states)
         item_states = jnp.where(goal_reached, self.consts.MAP_ITEMS[level%4], item_states)
         last_creature_spawn = jnp.where(goal_reached, 0, last_creature_spawn)
@@ -1479,7 +1478,7 @@ class JaxTutankham(JaxEnvironment):
         creature_states, last_creature_spawn, rng_key = self.spawner_step(creature_states, last_creature_spawn, level, rng_key, camera_offset)
 
         # laser flash step should go after creature step to immediately remove creatures
-        creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, is_flashing = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)
+        creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)
 
         # store creature_states and item_states before resolving collisions (for score update)
         prev_creature_states = creature_states.copy()
@@ -1548,7 +1547,6 @@ class JaxTutankham(JaxEnvironment):
                                player_subpixel=player_subpixel,
                                creature_subpixels=creature_subpixels,
                                bullet_subpixel=bullet_subpixel,
-                               is_flashing=is_flashing,
                                has_key=has_key,
                                last_directional_action=last_directional_action,
                                rng_key=rng_key,
