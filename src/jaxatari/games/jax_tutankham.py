@@ -80,9 +80,9 @@ def _get_default_asset_config() -> tuple:
         # Roomparts
         {'name': 'floor', 'type': 'group', 'files': ['floor_map1.npy', 'floor_map2.npy', 'floor_map3.npy', 'floor_map4.npy']},
 
-        # Player (loaded as single sprites for manual padding)
-        {'name': 'player', 'type': 'single', 'file': 'player_idle.npy'},
-        {'name': 'player_move', 'type': 'group', 'files': ['player_move_00.npy', 'player_move_01.npy']},
+        # Player (loaded as groups for automatic padding to largest sprite)
+        {'name': 'player', 'type': 'group', 'files': ['player_idle.npy', 'player_key_idle.npy']},
+        {'name': 'player_move', 'type': 'group', 'files': ['player_move_00.npy', 'player_move_01.npy', 'player_key_move_00.npy', 'player_key_move_01.npy']},
         {'name': 'player_death ', 'type': 'single', 'file': 'player_death.npy'},
         {'name': 'bullet', 'type': 'single', 'file': 'bullet_00.npy'},
 
@@ -597,10 +597,17 @@ class TutankhamRenderer(JAXGameRenderer):
         # 2. Render Player
         ANIM_SPEED = 8
         frame_idx = (state.step_counter // ANIM_SPEED) % 2
+        
+        # Calculate index offset if player has a key
+        # Idle: [0] = no key, [1] = with key
+        # Move: [0,1] = no key, [2,3] = with key
+        key_offset_idle = jnp.where(state.has_key, 1, 0)
+        key_offset_move = jnp.where(state.has_key, 2, 0)
+
         player_mask = jax.lax.cond(
             state.is_moving,
-            lambda _: self.SHAPE_MASKS['player_move'][frame_idx],
-            lambda _: self.SHAPE_MASKS['player'],
+            lambda _: self.SHAPE_MASKS['player_move'][frame_idx + key_offset_move],
+            lambda _: self.SHAPE_MASKS['player'][key_offset_idle],
             operand=None
         )
         flip = jnp.where(state.player_direction == 3, True, False)
