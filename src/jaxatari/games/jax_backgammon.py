@@ -155,6 +155,10 @@ class BackgammonObservation:
     is_game_over: jnp.ndarray
     bar_counts: jnp.ndarray
     home_counts: jnp.ndarray
+    cursor_position: jnp.ndarray
+    game_phase: jnp.ndarray
+    picked_checker_from: jnp.ndarray
+    last_valid_drop: jnp.ndarray
 
 
 # ============================================================================
@@ -1282,7 +1286,11 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
             obs.current_player.flatten(),
             obs.is_game_over.flatten(),
             obs.bar_counts.flatten(),
-            obs.home_counts.flatten()
+            obs.home_counts.flatten(),
+            obs.cursor_position.flatten(),
+            obs.game_phase.flatten(),
+            obs.picked_checker_from.flatten(),
+            obs.last_valid_drop.flatten(),
         ]).astype(jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1346,6 +1354,30 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
                 shape=(2,),
                 dtype=jnp.int32
             ),
+            "cursor_position": spaces.Box(
+                low=0,
+                high=26,
+                shape=(1,),
+                dtype=jnp.int32
+            ),
+            "game_phase": spaces.Box(
+                low=0,
+                high=2,
+                shape=(1,),
+                dtype=jnp.int32
+            ),
+            "picked_checker_from": spaces.Box(
+                low=-1,
+                high=26,
+                shape=(1,),
+                dtype=jnp.int32
+            ),
+            "last_valid_drop": spaces.Box(
+                low=-1,
+                high=26,
+                shape=(1,),
+                dtype=jnp.int32
+            ),
         })
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1357,7 +1389,11 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
             current_player=jnp.array([state.current_player], dtype=jnp.int32),
             is_game_over=jnp.array([jnp.where(state.is_game_over, 1, 0)], dtype=jnp.int32),
             bar_counts=jnp.array([state.board[0, 24], state.board[1, 24]], dtype=jnp.int32),
-            home_counts=jnp.array([state.board[0, 25], state.board[1, 25]], dtype=jnp.int32)
+            home_counts=jnp.array([state.board[0, 25], state.board[1, 25]], dtype=jnp.int32),
+            cursor_position=jnp.array([state.cursor_position], dtype=jnp.int32),
+            game_phase=jnp.array([state.game_phase], dtype=jnp.int32),
+            picked_checker_from=jnp.array([state.picked_checker_from], dtype=jnp.int32),
+            last_valid_drop=jnp.array([state.last_valid_drop], dtype=jnp.int32),
         )
 
     @partial(jax.jit, static_argnums=(0,))
