@@ -6,6 +6,7 @@ from jaxatari.games.mods.darkchambers_mod_plugins import (
     GrimReaperEnemiesMod,
     WizardBulletShootingMod,
     HammerMod,
+    EasyModeMod,
 )
 
 
@@ -54,6 +55,11 @@ class DarkchambersEnvMod(JaxAtariModController):
      6. hammer
          - Enables hammer item spawning in level item pools
          - Hammer remains usable through the existing HAMMER action
+
+     7. easy_mode
+         - Rapid-fire gameplay (fire cooldown effectively removed)
+         - Gun is always active
+         - Keeps most regular item slots active for high item density
     
     Integration Details:
     --------------------
@@ -74,6 +80,7 @@ class DarkchambersEnvMod(JaxAtariModController):
     python3 scripts/play.py -g Darkchambers -m grim_reaper_enemies wizard_bullet_shooting
     python3 scripts/play.py -g Darkchambers -m hammer
     python3 scripts/play.py -g Darkchambers -m speed_potion heal_potion poison_potion hammer
+    python3 scripts/play.py -g Darkchambers -m easy_mode
     """
 
     REGISTRY = {
@@ -83,6 +90,7 @@ class DarkchambersEnvMod(JaxAtariModController):
         "grim_reaper_enemies": GrimReaperEnemiesMod,
         "wizard_bullet_shooting": WizardBulletShootingMod,
         "hammer": HammerMod,
+        "easy_mode": EasyModeMod,
     }
 
     def __init__(self,

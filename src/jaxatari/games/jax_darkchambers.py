@@ -144,7 +144,7 @@ ENEMY_WRAITH = 2
 ENEMY_ZOMBIE = 1  # Weakest
 
 # Item configuration
-NUM_ITEMS = 20  # 5 fixed (key, ladders, cage door, cage reward) + 15 random
+NUM_ITEMS = 100  # 5 fixed slots + 95 regular slots for high-density item gameplay/mod presets
 INITIAL_REGULAR_ITEM_COUNT = 8  # Fewer random items active at once to reduce clutter
 # Item type codes
 ITEM_HEART = 1          # +health, no points
@@ -362,6 +362,7 @@ class DarkChambersConstants(NamedTuple):
 
     # Base poison item spawn toggle (keeps poison logic intact, only disables spawning)
     ENABLE_DEFAULT_POISON_SPAWN: bool = False
+    ENABLE_DEFAULT_TRAP_SPAWN: bool = False
 
     HAMMER_COLOR: Tuple[int, int, int] = (148, 0, 211)  # Brown hammer
     ENABLE_HAMMER_SPAWN: bool = False
@@ -2581,7 +2582,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         spawn_probs = jnp.array([
             0.18,  # heart (reduced from 0.20)
             0.08 if self.consts.ENABLE_DEFAULT_POISON_SPAWN else 0.0,  # poison
-            0.15,  # trap (reduced from 0.18)
+            0.15 if self.consts.ENABLE_DEFAULT_TRAP_SPAWN else 0.0,  # trap
             0.12,  # amber chalice (reduced from 0.14)
             0.08,  # amulet (reduced from 0.10)
             0.07,  # shield (reduced from 0.08)
@@ -3759,7 +3760,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 drop_types = jnp.array([
                     ITEM_HEART,
                     ITEM_POISON if self.consts.ENABLE_DEFAULT_POISON_SPAWN else ITEM_HEART,
-                    ITEM_TRAP,
+                    ITEM_TRAP if self.consts.ENABLE_DEFAULT_TRAP_SPAWN else ITEM_HEART,
                     ITEM_AMBER_CHALICE, ITEM_AMULET,
                     ITEM_SHIELD, ITEM_GUN, ITEM_BOMB
                 ], dtype=jnp.int32)
@@ -4222,7 +4223,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 spawn_probs = jnp.array([
                     0.18,
                     0.08 if self.consts.ENABLE_DEFAULT_POISON_SPAWN else 0.0,
-                    0.15,
+                    0.15 if self.consts.ENABLE_DEFAULT_TRAP_SPAWN else 0.0,
                     0.12,
                     0.08,
                     0.07,

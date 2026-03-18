@@ -11,6 +11,11 @@ from jaxatari.games.jax_darkchambers import (
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
 
 
+EASY_MODE_RAPID_FIRE_DELTA = 10_000
+EASY_MODE_REGULAR_ITEM_START = 5
+EASY_MODE_KEEP_INACTIVE_SLOTS = 5
+
+
 # ============================================================================
 # MOD 1: SPEED POTION
 # ============================================================================
@@ -370,3 +375,68 @@ class HammerMod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         return obs, state
+
+
+# ============================================================================
+# MOD 7: EASY MODE (RAPID FIRE + DENSE ITEMS)
+# ============================================================================
+class EasyModeMod(JaxAtariPostStepModPlugin):
+    """
+    Easy mode preset for DarkChambers.
+
+    Effects:
+    - Rapid-fire feel: cooldown is reset each step and fire edge is re-armed.
+    - Gun is always active.
+    - Most regular item slots are kept active to maintain high item density.
+
+    Note:
+    - Item count is bounded by NUM_ITEMS (array shape in base environment).
+    """
+
+    constants_overrides = {
+        "ENABLE_SPEED_POTION_SPAWN": True,
+        "ENABLE_HEAL_POTION_SPAWN": True,
+        "ENABLE_POISON_POTION_SPAWN": True,
+        "ENABLE_HAMMER_SPAWN": True,
+    }
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: DarkChambersState, new_state: DarkChambersState) -> DarkChambersState:
+        # Keep a few inactive slots so drop-based mechanics still have room.
+        regular_slots = jnp.arange(NUM_ITEMS) >= EASY_MODE_REGULAR_ITEM_START
+        keep_active_until = NUM_ITEMS - EASY_MODE_KEEP_INACTIVE_SLOTS
+        can_force_active = jnp.arange(NUM_ITEMS) < keep_active_until
+        force_active_mask = regular_slots & can_force_active
+
+        dense_item_active = jnp.where(
+            force_active_mask,
+            jnp.ones_like(new_state.item_active),
+            new_state.item_active,
+        )
+
+        return new_state._replace(
+            gun_active=jnp.array(1, dtype=jnp.int32),
+            fire_was_pressed=jnp.array(0, dtype=jnp.int32),
+            last_shot_step=new_state.step_counter - jnp.array(EASY_MODE_RAPID_FIRE_DELTA, dtype=jnp.int32),
+            item_active=dense_item_active,
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        regular_slots = jnp.arange(NUM_ITEMS) >= EASY_MODE_REGULAR_ITEM_START
+        keep_active_until = NUM_ITEMS - EASY_MODE_KEEP_INACTIVE_SLOTS
+        can_force_active = jnp.arange(NUM_ITEMS) < keep_active_until
+        force_active_mask = regular_slots & can_force_active
+
+        dense_item_active = jnp.where(
+            force_active_mask,
+            jnp.ones_like(state.item_active),
+            state.item_active,
+        )
+
+        return obs, state._replace(
+            gun_active=jnp.array(1, dtype=jnp.int32),
+            fire_was_pressed=jnp.array(0, dtype=jnp.int32),
+            last_shot_step=state.step_counter - jnp.array(EASY_MODE_RAPID_FIRE_DELTA, dtype=jnp.int32),
+            item_active=dense_item_active,
+        )
