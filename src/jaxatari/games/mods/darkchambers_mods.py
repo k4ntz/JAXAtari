@@ -7,6 +7,7 @@ from jaxatari.games.mods.darkchambers_mod_plugins import (
     WizardBulletShootingMod,
     HammerMod,
     EasyModeMod,
+    CheckpointsMod,
 )
 
 
@@ -60,6 +61,11 @@ class DarkchambersEnvMod(JaxAtariModController):
          - Rapid-fire gameplay (fire cooldown effectively removed)
          - Gun is always active
          - Keeps most regular item slots active for high item density
+
+     8. checkpoints
+         - Enables chamber checkpoints (middle/left/right)
+         - Starts each run with 5 lives
+         - On death, respawns at the current chamber checkpoint while keeping score
     
     Integration Details:
     --------------------
@@ -81,6 +87,7 @@ class DarkchambersEnvMod(JaxAtariModController):
     python3 scripts/play.py -g Darkchambers -m hammer
     python3 scripts/play.py -g Darkchambers -m speed_potion heal_potion poison_potion hammer
     python3 scripts/play.py -g Darkchambers -m easy_mode
+    python3 scripts/play.py -g Darkchambers -m checkpoints
     """
 
     REGISTRY = {
@@ -91,6 +98,7 @@ class DarkchambersEnvMod(JaxAtariModController):
         "wizard_bullet_shooting": WizardBulletShootingMod,
         "hammer": HammerMod,
         "easy_mode": EasyModeMod,
+        "checkpoints": CheckpointsMod,
     }
 
     def __init__(self,

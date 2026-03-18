@@ -440,3 +440,32 @@ class EasyModeMod(JaxAtariPostStepModPlugin):
             last_shot_step=state.step_counter - jnp.array(EASY_MODE_RAPID_FIRE_DELTA, dtype=jnp.int32),
             item_active=dense_item_active,
         )
+
+
+# ============================================================================
+# MOD 8: CHECKPOINTS
+# ============================================================================
+class CheckpointsMod(JaxAtariPostStepModPlugin):
+    """
+    Enables chamber-based checkpoint respawn with multiple lives.
+
+    Behavior:
+    - Each chamber acts as a checkpoint (middle/left/right).
+    - On death with lives remaining, player respawns at the current chamber checkpoint.
+    - Score is preserved (base game already keeps score through death-freeze respawn).
+    - Episode starts with 5 lives.
+    """
+
+    constants_overrides = {
+        "ENABLE_CHECKPOINT_RESPAWN": True,
+        "CHECKPOINT_SPAWN_X_BY_MAP": (50, 20, 260),
+        "CHECKPOINT_SPAWN_Y_BY_MAP": (50, 70, 70),
+    }
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: DarkChambersState, new_state: DarkChambersState) -> DarkChambersState:
+        return new_state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        return obs, state._replace(lives=jnp.array(5, dtype=jnp.int32))

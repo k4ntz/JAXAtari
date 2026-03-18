@@ -371,6 +371,12 @@ class DarkChambersConstants(NamedTuple):
     ENABLE_GRIM_REAPER_ENEMIES: bool = False
     ENABLE_WIZARD_BULLETS: bool = False
 
+    # Checkpoint system (disabled by default; enabled by checkpoint mod)
+    # Map index order: 0=middle chamber, 1=left chamber, 2=right chamber.
+    ENABLE_CHECKPOINT_RESPAWN: bool = False
+    CHECKPOINT_SPAWN_X_BY_MAP: Tuple[int, int, int] = (50, 20, 260)
+    CHECKPOINT_SPAWN_Y_BY_MAP: Tuple[int, int, int] = (50, 70, 70)
+
 
 class DarkChambersState(NamedTuple):
     """Immutable snapshot of the current game state."""
@@ -2648,14 +2654,44 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         # Ensure player spawn is never inside a wall.
         spawn_x0 = jnp.array(self.consts.PLAYER_START_X, dtype=jnp.int32)
         spawn_y0 = jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32)
-        player_spawn_on_wall = check_wall_overlap(
-            spawn_x0,
-            spawn_y0,
-            self.consts.PLAYER_WIDTH,
-            self.consts.PLAYER_HEIGHT,
+
+        spawn_offsets = jnp.array([
+            [0, 0],
+            [8, 0], [-8, 0], [0, 8], [0, -8],
+            [8, 8], [8, -8], [-8, 8], [-8, -8],
+            [16, 0], [-16, 0], [0, 16], [0, -16],
+            [16, 16], [16, -16], [-16, 16], [-16, -16],
+            [24, 0], [-24, 0], [0, 24], [0, -24],
+            [50 - self.consts.PLAYER_START_X, 50 - self.consts.PLAYER_START_Y],
+            [40 - self.consts.PLAYER_START_X, 70 - self.consts.PLAYER_START_Y],
+        ], dtype=jnp.int32)
+
+        spawn_candidates = spawn_offsets + jnp.array([spawn_x0, spawn_y0], dtype=jnp.int32)
+        spawn_candidates = spawn_candidates.at[:, 0].set(
+            jnp.clip(spawn_candidates[:, 0], 0, self.consts.WORLD_WIDTH - self.consts.PLAYER_WIDTH)
         )
-        spawn_x = jnp.where(player_spawn_on_wall, jnp.array(50, dtype=jnp.int32), spawn_x0)
-        spawn_y = jnp.where(player_spawn_on_wall, jnp.array(50, dtype=jnp.int32), spawn_y0)
+        spawn_candidates = spawn_candidates.at[:, 1].set(
+            jnp.clip(spawn_candidates[:, 1], 0, self.consts.WORLD_HEIGHT - self.consts.PLAYER_HEIGHT)
+        )
+
+        spawn_valid = ~jax.vmap(
+            lambda p: check_wall_overlap(
+                p[0],
+                p[1],
+                self.consts.PLAYER_WIDTH,
+                self.consts.PLAYER_HEIGHT,
+            )
+        )(spawn_candidates)
+        has_valid_spawn = jnp.any(spawn_valid)
+        first_valid_spawn_idx = jnp.argmax(spawn_valid)
+        fallback_spawn = jnp.array([50, 50], dtype=jnp.int32)
+        safe_spawn = jnp.where(
+            has_valid_spawn,
+            spawn_candidates[first_valid_spawn_idx],
+            fallback_spawn,
+        )
+        spawn_x = safe_spawn[0]
+        spawn_y = safe_spawn[1]
 
         state = DarkChambersState(
             player_x=spawn_x,
@@ -2738,8 +2774,82 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             def respawn_now(_: None):
                 # Respawn position depends on current level
                 # Use safe positions that avoid walls in all map variants
-                respawn_x = jnp.where(state.current_level == 0, jnp.array(50, dtype=jnp.int32), jnp.array(40, dtype=jnp.int32))
-                respawn_y = jnp.where(state.current_level == 0, jnp.array(50, dtype=jnp.int32), jnp.array(70, dtype=jnp.int32))
+                default_respawn_x = jnp.where(state.current_level == 0, jnp.array(50, dtype=jnp.int32), jnp.array(40, dtype=jnp.int32))
+                default_respawn_y = jnp.where(state.current_level == 0, jnp.array(50, dtype=jnp.int32), jnp.array(70, dtype=jnp.int32))
+
+                checkpoint_x_by_map = jnp.array(self.consts.CHECKPOINT_SPAWN_X_BY_MAP, dtype=jnp.int32)
+                checkpoint_y_by_map = jnp.array(self.consts.CHECKPOINT_SPAWN_Y_BY_MAP, dtype=jnp.int32)
+                checkpoint_respawn_x = checkpoint_x_by_map[state.map_index]
+                checkpoint_respawn_y = checkpoint_y_by_map[state.map_index]
+
+                respawn_x = jnp.where(
+                    jnp.array(self.consts.ENABLE_CHECKPOINT_RESPAWN),
+                    checkpoint_respawn_x,
+                    default_respawn_x,
+                )
+                respawn_y = jnp.where(
+                    jnp.array(self.consts.ENABLE_CHECKPOINT_RESPAWN),
+                    checkpoint_respawn_y,
+                    default_respawn_y,
+                )
+
+                # Safety: if chosen respawn intersects walls, snap to nearest valid nearby point.
+                respawn_walls = jnp.concatenate(
+                    [
+                        self.renderer.LEVEL_WALLS[state.map_index, state.current_level],
+                        self.renderer.BOUNDARY_WALLS,
+                    ],
+                    axis=0,
+                )
+
+                def respawn_overlaps(px, py):
+                    wx = respawn_walls[:, 0]
+                    wy = respawn_walls[:, 1]
+                    ww = respawn_walls[:, 2]
+                    wh = respawn_walls[:, 3]
+                    overlap_x = (px <= (wx + ww - 1)) & ((px + self.consts.PLAYER_WIDTH - 1) >= wx)
+                    overlap_y = (py <= (wy + wh - 1)) & ((py + self.consts.PLAYER_HEIGHT - 1) >= wy)
+                    return jnp.any(overlap_x & overlap_y)
+
+                respawn_offsets = jnp.array([
+                    [0, 0],
+                    [8, 0], [-8, 0], [0, 8], [0, -8],
+                    [8, 8], [8, -8], [-8, 8], [-8, -8],
+                    [16, 0], [-16, 0], [0, 16], [0, -16],
+                    [16, 16], [16, -16], [-16, 16], [-16, -16],
+                    [24, 0], [-24, 0], [0, 24], [0, -24],
+                    [32, 0], [-32, 0], [0, 32], [0, -32],
+                ], dtype=jnp.int32)
+                respawn_candidates = respawn_offsets + jnp.array([respawn_x, respawn_y], dtype=jnp.int32)
+                respawn_candidates = jnp.concatenate(
+                    [
+                        respawn_candidates,
+                        jnp.array([
+                            [50, 50],
+                            [40, 70],
+                            [20, 70],
+                            [260, 70],
+                        ], dtype=jnp.int32),
+                    ],
+                    axis=0,
+                )
+                respawn_candidates = respawn_candidates.at[:, 0].set(
+                    jnp.clip(respawn_candidates[:, 0], 0, self.consts.WORLD_WIDTH - self.consts.PLAYER_WIDTH)
+                )
+                respawn_candidates = respawn_candidates.at[:, 1].set(
+                    jnp.clip(respawn_candidates[:, 1], 0, self.consts.WORLD_HEIGHT - self.consts.PLAYER_HEIGHT)
+                )
+
+                respawn_valid = ~jax.vmap(lambda p: respawn_overlaps(p[0], p[1]))(respawn_candidates)
+                has_valid_respawn = jnp.any(respawn_valid)
+                first_valid_respawn_idx = jnp.argmax(respawn_valid)
+                safe_respawn = jnp.where(
+                    has_valid_respawn,
+                    respawn_candidates[first_valid_respawn_idx],
+                    jnp.array([respawn_x, respawn_y], dtype=jnp.int32),
+                )
+                respawn_x = safe_respawn[0]
+                respawn_y = safe_respawn[1]
 
                 # KEEP EVERYTHING: score, collected items, level, powerups, etc.
                 # Only restore health and clear bullets for clean respawn
