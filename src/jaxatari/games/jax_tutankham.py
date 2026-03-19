@@ -319,8 +319,8 @@ class TutankhamConstants(NamedTuple):
         [
             [0  , 258, 136, 60],
             [259, 425, 78, 259],
-            [426, 589, 78, 426],
-            [590, 800, 89, 590]
+            [426, 571, 78, 426],
+            [572, 800, 24, 572]
         ],
         # MAP 3
         [
@@ -861,10 +861,10 @@ class JaxTutankham(JaxEnvironment):
 
 
         #TODO: only for testing
-        # level = 15
+        level = 3
         # start_x = 136
         # start_y = 60
-        # item_states = self.consts.MAP_ITEMS[level%4]
+        item_states = self.consts.MAP_ITEMS[level%4]
         #---------------------
 
         camera_offset = jnp.where(start_x < self.consts.HEIGHT // 2, 0, start_y - self.consts.HEIGHT // 2)
