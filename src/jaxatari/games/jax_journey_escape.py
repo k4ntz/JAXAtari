@@ -58,107 +58,103 @@ class JourneyEscapeConstants(NamedTuple):
     hit_cooldown_frames: int = 17
 
     # Define the Width and Height for every ID (0 to 9)
-    # 0: Fence, 1: Robot, 2: Heart, 3: Manager, 4: Light, 5: BigRobot, 6: BigHeart, 7: BigManager, 8: BigLight, 9: BigFireFace
+        #   0: Stage Barriers
+        #   1: Loyal Roadie
+        #   2: Love-Crazed Groupies
+        #   3: Shifty-Eyed Promoter
+        #   4: Sneaky Photographer
+        #   5: Big Loyal Roadie
+        #   6: Big Love-Crazed Groupies
+        #   7: Big Shifty-Eyed Promoter
+        #   8: Big Sneaky Photographer
+        #   9: Big Mighty Manager
     TYPE_WIDTHS: Tuple[int, ...] = (32, 8, 8, 8, 8, 16, 16, 16, 16, 17)
     TYPE_HEIGHTS: Tuple[int, ...] = (15, 15, 15, 15, 15, 15, 15, 15, 15, 15)
 
     MAX_OBS = 64
 
-    """
-        0: Fence
-        1: Blue Robot
-        2: Heart
-        3: Manager
-        4: Lightbulb
-        5: Big Blue Robot
-        6: Big Heart
-        7: Big Manager
-        8: Big Lightbulb
-        9: Big Fire Face
-    """
-
     # Blinking Effect
-    lightbulb_on_duration: int = 17
-    lightbulb_off_duration: int = 49
+    photographer_on_duration: int = 17
+    photographer_off_duration: int = 49
 
     # Invincible Effect
-    INV_DURATION_ROBOT: int = 6 * countdown_frame # 6 seconds @ 50fps
-    INV_DURATION_FIREFACE: int = 100000 # (longer than the max possible game time of ~60s)
+    INV_DURATION_ROADIE: int = 6 * countdown_frame # 6 seconds @ 50fps
+    INV_DURATION_MANAGER: int = 100000 # (longer than the max possible game time of ~60s)
 
     # True if the object stops movement / drags player
     IS_SOLID: chex.Array = jnp.array([
-        True,           # 0: Fence
-        False,          # 1: Blue Robot
-        True,           # 2: Heart
-        True,           # 3: Manager
-        True,           # 4: Lightbulb
-        False,          # 5: Big Blue Robot
-        True,           # 6: Big Heart
-        True,           # 7: Big Manager
-        True,           # 8: Big Lightbulb
-        False,          # 9: Big Fire Face
+        True,           # 0 barrier
+        False,          # 1 roadie
+        True,           # 2 groupies
+        True,           # 3 promoter
+        True,           # 4 photographer
+        False,          # 5 big roadie
+        True,           # 6 big groupies
+        True,           # 7 big promoter
+        True,           # 8 big photographer
+        False,          # 9 big Manager
     ])
 
     # Points deducted on contact
     SCORE_PENALTIES: chex.Array = jnp.array([
-        0,              # 0: Fence
-        0,              # 1: Blue Robot
-        -300,           # 2: Heart
-        -2000,          # 3: Manager
-        -600,           # 4: Lightbulb
-        0,              # 5: Big Blue Robot
-        -300,           # 6: Big Heart
-        -2000,          # 7: Big Manager
-        -600,           # 8: Big Lightbulb
-        9900,           # 9: Big Fire Face
+        0,              # 0 barriers
+        0,              # 1 roadie
+        -300,           # 2 groupies
+        -2000,          # 3 promoter
+        -600,           # 4 photographer
+        0,              # 5 big roadie
+        -300,           # 6 big groupies
+        -2000,          # 7 big promoter
+        -600,           # 8 big photographer
+        9900,           # 9 big manager
     ])
     # ---------------------CHANGE END-----------------------
 
     # predefined groups: [type, amount, spacing in px]
     obstacle_groups: Tuple[Tuple[int, int, int], ...] = (
-        (0, 1, 0),      # Fence
-        (1, 2, 20),     # Blue Robots
-        (5, 1, 0),      # Big Robot (1)
+        (0, 1, 0),      # barriers
+        (1, 2, 20),     # roadies
+        (5, 1, 0),      # big roadie (1)
 
-        (2, 1, 0),      # Heart (1)
-        (2, 2, 55),     # Hearts (2, Wide spacing)
-        (2, 3, 10),     # Hearts (3, Tight spacing)
-        (2, 3, 45),     # Hearts (3, Wide spacing)
-        (6, 1, 0),      # Big Heart (1)
+        (2, 1, 0),      # groupies (1)
+        (2, 2, 55),     # groupies (2, Wide spacing)
+        (2, 3, 10),     # groupies (3, Tight spacing)
+        (2, 3, 45),     # groupies (3, Wide spacing)
+        (6, 1, 0),      # big groupies (1)
 
-        (3, 1, 0),      # Manager (1)
-        (3, 3, 15),     # Manager (3, Tight spacing)
-        (3, 2, 55),     # Manager (2, Wide spacing)
-        (7, 1, 0),      # Big Manager (1)
+        (3, 1, 0),      # promoter (1)
+        (3, 3, 15),     # promoter (3, Tight spacing)
+        (3, 2, 55),     # promoter (2, Wide spacing)
+        (7, 1, 0),      # big promoter (1)
 
-        (4, 3, 20),     # Lightbulbs (3, Tight spacing)
-        (4, 2, 70),     # Lightbulbs (2, Very wide spacing)
-        (8, 1, 0),      # Big Lightbulb (1)
+        (4, 3, 20),     # photographers (3, Tight spacing)
+        (4, 2, 70),     # photographers (2, Very wide spacing)
+        (8, 1, 0),      # big photographer (1)
 
-        (9, 1, 0),      # Big Fire Face (1)
+        (9, 1, 0),      # big manager (1)
     )
     # SPAWN PROBABILITIES
     spawn_weights: chex.Array = jnp.array([
-        0.07017544,     # 0: (0, 1, 0)   Fence
-        0.0175,         # 1: (1, 2, 20) Robot
-        0.0175,         # 2: (5, 1, 0)  Big Robot
+        0.07017544,     # 0: (0, 1, 0)  barriers
+        0.0175,         # 1: (1, 2, 20) roadie
+        0.0175,         # 2: (5, 1, 0)  big roadie
 
-        0.08771930,     # 3: (2, 1, 0)   Heart (1)
-        0.22807018,     # 4: (2, 2, 55)  Hearts (2)
-        0.10526316,     # 5: (2, 3, 10)  Hearts (3,T)
-        0.10526316,     # 6: (2, 3, 45)  Hearts (3,W)
-        0.03508772,     # 7: (6, 1, 0)   Big Heart (1)
+        0.08771930,     # 3: (2, 1, 0)   groupies (1)
+        0.22807018,     # 4: (2, 2, 55)  groupies (2)
+        0.10526316,     # 5: (2, 3, 10)  groupies (3,T)
+        0.10526316,     # 6: (2, 3, 45)  groupies (3,W)
+        0.03508772,     # 7: (6, 1, 0)   big groupies (1)
 
-        0.05263158,     # 8: (3, 1, 0)   Manager (1)
-        0.08771930,     # 9: (3, 3, 15)  Manager (3,T)
-        0.08771930,     # 10: (3, 2, 55)  Manager (2,W)
-        0.05263158,     # 11: (7, 1, 0)  Big Manager
+        0.05263158,     # 8: (3, 1, 0)   promoter (1)
+        0.08771930,     # 9: (3, 3, 15)  promoter (3,T)
+        0.08771930,     # 10: (3, 2, 55) promoter (2,W)
+        0.05263158,     # 11: (7, 1, 0)  big promoter
 
-        0.05263158,     # 12: (4, 3, 20)  Lightbulbs (3)
-        0.05263158,     # 13: (4, 2, 70)  Lightbulbs (2)
-        0.05263158,     # 14: (8, 1, 0)   Big Lightbulb
+        0.05263158,     # 12: (4, 3, 20)  photographers (3)
+        0.05263158,     # 13: (4, 2, 70)  photographers (2)
+        0.05263158,     # 14: (8, 1, 0)   big photographer
 
-        0.0001,       # 15: (9, 1, 0) Big Fire Face
+        0.0001,         # 15: (9, 1, 0) big manager
     ])
 
 
@@ -421,15 +417,15 @@ class JaxJourneyEscape(
 
             is_active = b_h > 0
 
-            # Blink Logic (Ghost State for Lightbulbs)
-            # IDs: 4 = Lightbulb, 8 = Big Lightbulb
-            is_lightbulb = (b_type == 4) | (b_type == 8)
+            # Blink Logic (Ghost State for Sneaky Photographers)
+            # IDs: 4 = Sneaky Photographer, 8 = Big Sneaky Photographer
+            is_photographer = (b_type == 4) | (b_type == 8)
             # Calculate cycle position
-            cycle_len = self.consts.lightbulb_on_duration + self.consts.lightbulb_off_duration
+            cycle_len = self.consts.photographer_on_duration + self.consts.photographer_off_duration
             cycle_pos = state.time % cycle_len
 
             # It is a ghost (invisible/pass-through) if we are past the ON duration
-            is_ghost = is_lightbulb & (cycle_pos >= self.consts.lightbulb_on_duration)
+            is_ghost = is_photographer & (cycle_pos >= self.consts.photographer_on_duration)
 
             # AABB Collision
             p_x, p_y = pre_x, pre_y
@@ -477,11 +473,11 @@ class JaxJourneyEscape(
             """
             b_x, b_y, b_w, b_h, b_type = box
             is_active = b_h > 0
-            is_lightbulb = (b_type == 4) | (b_type == 8)
+            is_photographer = (b_type == 4) | (b_type == 8)
 
-            cycle_len = self.consts.lightbulb_on_duration + self.consts.lightbulb_off_duration
+            cycle_len = self.consts.photographer_on_duration + self.consts.photographer_off_duration
             cycle_pos = state.time % cycle_len
-            is_ghost = is_lightbulb & (cycle_pos >= self.consts.lightbulb_on_duration)
+            is_ghost = is_photographer & (cycle_pos >= self.consts.photographer_on_duration)
             is_solid = self.consts.IS_SOLID[b_type]
 
             overlap_x = (state.player_x < b_x + b_w) & (state.player_x + self.consts.player_width > b_x)
@@ -514,14 +510,14 @@ class JaxJourneyEscape(
         # Invincibility Logic (Variable Duration)
 
         # Identify Specific Power-up Hits
-        hit_fireface = jnp.any(consumable_collisions & (type_mask == 9))
-        hit_robot = jnp.any(consumable_collisions & ((type_mask == 1) | (type_mask == 5)))
+        hit_manager = jnp.any(consumable_collisions & (type_mask == 9))
+        hit_roadie = jnp.any(consumable_collisions & ((type_mask == 1) | (type_mask == 5)))
 
         # Determine Duration to Set
         added_duration = jnp.where(
-            hit_fireface,
-            self.consts.INV_DURATION_FIREFACE,
-            jnp.where(hit_robot, self.consts.INV_DURATION_ROBOT, 0)
+            hit_manager,
+            self.consts.INV_DURATION_MANAGER,
+            jnp.where(hit_roadie, self.consts.INV_DURATION_ROADIE, 0)
         )
 
         # Update Invincible Timer
@@ -674,15 +670,15 @@ class JaxJourneyEscape(
         # [Debugging]
         # Print when we hit specific Powerups
         jax.lax.cond(
-            hit_fireface,
-            lambda _: jax.debug.print(">> HIT FIREFACE! (Infinite Invincibility) Score: {}", consumable_score_effect),
+            hit_manager,
+            lambda _: jax.debug.print(">> HIT MIGHTY MANAGER! (Infinite Invincibility) Score: {}", consumable_score_effect),
             lambda _: None,
             operand=None
         )
 
         jax.lax.cond(
-            hit_robot,
-            lambda _: jax.debug.print(">> HIT ROBOT! (6s Invincibility)"),
+            hit_roadie,
+            lambda _: jax.debug.print(">> HIT LOYAL ROADIE! (6s Invincibility)"),
             lambda _: None,
             operand=None
         )
@@ -938,36 +934,36 @@ class JourneyEscapeRenderer(JAXGameRenderer):
                           'player_run_left_0.npy', 'player_run_left_1.npy']
             },
             {
-                'name': 'obstacle_face', 'type': 'group',
-                'files': ['3_Manager_0.npy', '3_Manager_1.npy']
+                'name': 'promoter', 'type': 'group',
+                'files': ['3_Promoter_0.npy', '3_Promoter_1.npy']
             },
             {
-                'name': 'obstacle_heart', 'type': 'group',
-                'files': ['2_Heart_0.npy', '2_Heart_1.npy']
+                'name': 'groupies', 'type': 'group',
+                'files': ['2_Groupies_0.npy', '2_Groupies_1.npy']
             },
             {
-                'name': 'obstacle_robot', 'type': 'group',
-                'files': ['1_Blue_Robot_0.npy', '1_Blue_Robot_1.npy']
+                'name': 'roadie', 'type': 'group',
+                'files': ['1_Loyal_Roadie_0.npy', '1_Loyal_Roadie_1.npy']
             },
             {
-                'name': 'obstacle_heart_big', 'type': 'group',
-                'files': ['6_Big_Heart_0.npy', '6_Big_Heart_1.npy']
+                'name': 'big_groupies', 'type': 'group',
+                'files': ['6_Big_Groupies_0.npy', '6_Big_Groupies_1.npy']
             },
             {
-                'name': 'obstacle_face_big', 'type': 'group',
-                'files': ['7_Big_Manager_0.npy', '7_Big_Manager_1.npy']
+                'name': 'big_promoter', 'type': 'group',
+                'files': ['7_Big_Promoter_0.npy', '7_Big_Promoter_1.npy']
             },
             {
-                'name': 'obstacle_robot_big', 'type': 'group',
-                'files': ['5_Big_Blue_Robot_0.npy', '5_Big_Blue_Robot_1.npy']
+                'name': 'big_roadie', 'type': 'group',
+                'files': ['5_Big_Loyal_Roadie_0.npy', '5_Big_Loyal_Roadie_1.npy']
             },
             {
-                'name': 'obstacle_fire_face_big', 'type': 'group',
-                'files': ['9_Big_Fire_Face_0.npy', '9_Big_Fire_Face_1.npy']
+                'name': 'big_manager', 'type': 'group',
+                'files': ['9_Big_Mighty_Manager_0.npy', '9_Big_Mighty_Manager_1.npy']
             },
-            {'name': 'obstacle_fence', 'type': 'single', 'file': '0_Fence.npy'},
-            {'name': 'obstacle_light', 'type': 'single', 'file': '4_Lightbulb.npy'},
-            {'name': 'obstacle_light_big', 'type': 'single', 'file': '8_Big_Lightbulb.npy'},
+            {'name': 'barrier', 'type': 'single', 'file': '0_Stage_Barrier.npy'},
+            {'name': 'photographer', 'type': 'single', 'file': '4_Photographer.npy'},
+            {'name': 'big_photographer', 'type': 'single', 'file': '8_Big_Photographer.npy'},
             {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
             {'name': 'dollar', 'type': 'single', 'file': 'dollar.npy'},
             {'name': 'timer_digits', 'type': 'digits', 'pattern': 'timer_{}.npy'},
@@ -988,44 +984,31 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         # We consider entries with h > 0 as "active".
         obs_boxes = state.obstacles  # (MAX_OBS, 5)
 
-        """
-        0: Fence
-        1: Blue Robot
-        2: Heart
-        3: Manager
-        4: Lightbulb
-        5: Big Blue Robot
-        6: Big Heart
-        7: Big Manager
-        8: Big Lightbulb
-        9: Big Fire Face
-        """
-
-        # Fence (ID 0) - Returns 32x15
-        FENCE_MASK = self.SHAPE_MASKS["obstacle_fence"] # 0
+        # barrier (ID 0) - Returns 32x15
+        BARRIER_MASK = self.SHAPE_MASKS["barrier"] # 0
 
         # Table for Small Items (IDs 1-4) - Returns 8x15
         # Note: These lambda functions expect indices 0, 1, 2, 3, so we will subtract 1 from the ID
         SMALL_TABLE = [
-            lambda frame: self.SHAPE_MASKS["obstacle_robot"][frame],  # 1 -> 0
-            lambda frame: self.SHAPE_MASKS["obstacle_heart"][frame],  # 2 -> 1
-            lambda frame: self.SHAPE_MASKS["obstacle_face"][frame],  # 3 -> 2
-            lambda frame: self.SHAPE_MASKS["obstacle_light"],  # 4 -> 3
+            lambda frame: self.SHAPE_MASKS["roadie"][frame],  # 1 -> 0
+            lambda frame: self.SHAPE_MASKS["groupies"][frame],  # 2 -> 1
+            lambda frame: self.SHAPE_MASKS["promoter"][frame],  # 3 -> 2
+            lambda frame: self.SHAPE_MASKS["photographer"],  # 4 -> 3
         ]
 
         # Table for Big Items (IDs 5-8) - Returns 16x15
         # Note: These lambda functions expect indices 0, 1, 2, so we will subtract 5 from the ID
         BIG_TABLE = [
-            lambda frame: self.SHAPE_MASKS["obstacle_robot_big"][frame],  # 5 -> 0
-            lambda frame: self.SHAPE_MASKS["obstacle_heart_big"][frame],  # 6 -> 1
-            lambda frame: self.SHAPE_MASKS["obstacle_face_big"][frame],  # 7 -> 2
-            lambda frame: self.SHAPE_MASKS["obstacle_light_big"],  # 8 -> 3
+            lambda frame: self.SHAPE_MASKS["big_roadie"][frame],  # 5 -> 0
+            lambda frame: self.SHAPE_MASKS["big_groupies"][frame],  # 6 -> 1
+            lambda frame: self.SHAPE_MASKS["big_promoter"][frame],  # 7 -> 2
+            lambda frame: self.SHAPE_MASKS["big_photographer"],  # 8 -> 3
         ]
 
-        FIRE_FACE_MASK = lambda frame: self.SHAPE_MASKS["obstacle_fire_face_big"][frame]  # 9
+        MANAGER_MASK = lambda frame: self.SHAPE_MASKS["big_manager"][frame]  # 9
 
-        def draw_fence(r, x, y):
-            mask = FENCE_MASK
+        def draw_barrier(r, x, y):
+            mask = BARRIER_MASK
             return self.jr.render_at_clipped(r, x, y, mask)
 
         def draw_small(r, x, y, type_idx, frame_idx):
@@ -1037,8 +1020,8 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             mask = jax.lax.switch(type_idx - 5, BIG_TABLE, frame_idx)
             return self.jr.render_at_clipped(r, x, y, mask)
 
-        def draw_fire_face(r, x, y, frame_idx):
-            mask = FIRE_FACE_MASK(frame_idx)
+        def draw_manager(r, x, y, frame_idx):
+            mask = MANAGER_MASK(frame_idx)
             return self.jr.render_at_clipped(r, x, y, mask)
 
         def body(i, r):
@@ -1048,12 +1031,12 @@ class JourneyEscapeRenderer(JAXGameRenderer):
 
             does_exist = box_h > 0
 
-            is_lightbulb = (obs_type == 4) | (obs_type == 8)
+            is_photographer = (obs_type == 4) | (obs_type == 8)
 
-            cycle_len = self.consts.lightbulb_on_duration + self.consts.lightbulb_off_duration
+            cycle_len = self.consts.photographer_on_duration + self.consts.photographer_off_duration
             cycle_pos = state.time % cycle_len
 
-            is_ghost = is_lightbulb & (cycle_pos >= self.consts.lightbulb_on_duration)
+            is_ghost = is_photographer & (cycle_pos >= self.consts.photographer_on_duration)
 
             # Final Decision: Draw if existing AND not a ghost
             should_draw = does_exist & jnp.logical_not(is_ghost)
@@ -1066,13 +1049,13 @@ class JourneyEscapeRenderer(JAXGameRenderer):
                     obs_type >= 5,
                     lambda _r: jax.lax.cond(
                                     obs_type == 9,
-                                    lambda _r: draw_fire_face(_r, x, y, obs_frame_idx),
+                                    lambda _r: draw_manager(_r, x, y, obs_frame_idx),
                                     lambda _r: draw_big(_r, x, y, obs_type, obs_frame_idx),
                                     _r
                                 ),
                     lambda _r: jax.lax.cond(
                                     obs_type == 0,
-                                    lambda _r: draw_fence(_r, x, y),
+                                    lambda _r: draw_barrier(_r, x, y),
                                     lambda _r: draw_small(_r, x, y, obs_type, obs_frame_idx),
                                     _r
                                 ),
