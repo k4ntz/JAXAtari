@@ -107,7 +107,12 @@ def _get_default_asset_config() -> tuple:
         ]},
 
         # Obstacles
-        {'name': 'tree', 'type': 'single', 'file': 'tree.npy'},
+        {'name': 'tree_group', 'type': 'group', 'files': [
+            'tree_0.npy',
+            'tree_1.npy',
+            'tree_2.npy',
+            'tree_3.npy'
+        ]},
         {'name': 'rock', 'type': 'single', 'file': 'stone.npy'},
         
         # UI
@@ -286,10 +291,12 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
 
         trees_x = jax.lax.fori_loop(0, c.max_num_trees, adj_tree_i, trees_x)
 
+        trees_type = jnp.arange(c.max_num_trees, dtype=jnp.float32) % 4.0
         trees = jnp.stack([
             trees_x, trees_y,
             jnp.full((c.max_num_trees,), float(c.tree_width),  dtype=jnp.float32),
-            jnp.full((c.max_num_trees,), float(c.tree_height), dtype=jnp.float32)
+            jnp.full((c.max_num_trees,), float(c.tree_height), dtype=jnp.float32),
+            trees_type
         ], axis=1)
 
 
@@ -391,6 +398,10 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             base_existing = jnp.maximum(jnp.max(new_flags[:, 1]), jnp.max(flags[:, 1]))
             y = base_existing + jnp.float32(self.consts.gate_vertical_spacing)
 
+            # Prevent spawning after the 20th gate (0 to 19).
+            # When state.gates_seen >= 18, we have already spawned up to gate 19.
+            y = jnp.where(state.gates_seen >= 18, jnp.float32(10000.0), y)
+
             row_old = flags.at[i].get()  # Shape (2,) oder (4,)
             row_new = row_old.at[0].set(x_flag).at[1].set(y)
 
@@ -435,7 +446,10 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             x_tree = _enforce_min_sep_x(x_tree, taken_from_rocks, min_sep_tree_rock, xmin_t, xmax_t, n_valid=jnp.array(taken_from_rocks.shape[0], dtype=jnp.int32))
 
             row_old = trees.at[i].get()
-            row_new = row_old.at[0].set(x_tree).at[1].set(y)
+            
+            # Generate a pseudo-random tree type based on state.gates_seen and i
+            new_type = ((state.gates_seen * 3 + i * 5) % 4).astype(jnp.float32)
+            row_new = row_old.at[0].set(x_tree).at[1].set(y).at[4].set(new_type)
 
             cond = jnp.less(trees.at[i, 1].get(), self.consts.TOP_BORDER)
             out_row = jax.lax.cond(cond, lambda _: row_new, lambda _: row_old, operand=None)
@@ -629,7 +643,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             dy = jnp.abs(jnp.round(skier_y_px) - jnp.round(y))
             return jnp.logical_and(dx < x_d, dy < y_d)
 
-        def coll_flag(flag_pos, x_d=jnp.float32(1.0), y_d=Y_HIT_DIST):
+        def coll_flag(flag_pos, x_d=jnp.float32(4.0), y_d=jnp.float32(14.0)):
             x = flag_pos[..., 0]
             y = flag_pos[..., 1]
             dx1 = jnp.abs(new_x_nom - x)
@@ -970,9 +984,22 @@ class SkiingRenderer(JAXGameRenderer):
         # 2. Start from (possibly modded) asset config provided via constants
         final_asset_config = list(self.consts.ASSET_CONFIG)
         
-        # 3. Load and recolor flags (needs sprite path, so done here)
-        flag_red_rgba = self._load_rgba_sprite("checkered_flag.npy")
-        flag_blue_rgba = self._recolor_rgba(flag_red_rgba, (0, 96, 255))
+        # 3. Load flags (needs sprite path, so done here)
+        flag_red_rgba = self._load_rgba_sprite("checkered_flag_red.npy")
+        flag_blue_rgba = self._load_rgba_sprite("checkered_flag_blue.npy")
+        
+        # Pad them so they have the same shape for jax.lax.select
+        max_h = max(flag_red_rgba.shape[0], flag_blue_rgba.shape[0])
+        max_w = max(flag_red_rgba.shape[1], flag_blue_rgba.shape[1])
+        if flag_red_rgba.shape[:2] != (max_h, max_w):
+            pad_h = max_h - flag_red_rgba.shape[0]
+            pad_w = max_w - flag_red_rgba.shape[1]
+            flag_red_rgba = np.pad(flag_red_rgba, ((0, pad_h), (0, pad_w), (0, 0)))
+        if flag_blue_rgba.shape[:2] != (max_h, max_w):
+            pad_h = max_h - flag_blue_rgba.shape[0]
+            pad_w = max_w - flag_blue_rgba.shape[1]
+            flag_blue_rgba = np.pad(flag_blue_rgba, ((0, pad_h), (0, pad_w), (0, 0)))
+
         final_asset_config.append({'name': 'flag_red', 'type': 'procedural', 'data': flag_red_rgba})
         final_asset_config.append({'name': 'flag_blue', 'type': 'procedural', 'data': flag_blue_rgba})
 
@@ -1076,10 +1103,10 @@ class SkiingRenderer(JAXGameRenderer):
         right_pos = (flags_xy + jnp.array([self.consts.flag_distance, 0.0])).astype(jnp.int32)
         
         n_flags = state.flags.shape[0]
-        dy_to_skier = jnp.abs(flags_xy[:, 1] - jnp.float32(self.consts.skier_y))
-        closest_idx = jnp.argmin(dy_to_skier)
-        is_twentieth = jnp.greater_equal(state.gates_seen, jnp.int32(19))
-        is_red_mask = jnp.zeros((n_flags,), dtype=bool).at[closest_idx].set(is_twentieth)
+        # The 20th gate is always in slot 1, and is the last one spawned.
+        # It should be red when it is spawned (gates_seen >= 18).
+        is_twentieth_visible = jnp.greater_equal(state.gates_seen, jnp.int32(18))
+        is_red_mask = jnp.zeros((n_flags,), dtype=bool).at[1].set(is_twentieth_visible)
         
         # Render flags one by one
         def draw_flag(i, r):
@@ -1103,16 +1130,18 @@ class SkiingRenderer(JAXGameRenderer):
         raster = jax.lax.fori_loop(0, self.consts.max_num_flags, draw_flag, raster)
 
         # 5. Draw Trees
-        tree_mask = self.SHAPE_MASKS['tree']
-        tree_offset = self.FLIP_OFFSETS['tree']
-        tree_h, tree_w = tree_mask.shape[0], tree_mask.shape[1]
-        
+        tree_masks = self.SHAPE_MASKS['tree_group']
+        tree_offset = self.FLIP_OFFSETS['tree_group']
+
         def draw_tree(i, r):
             cx, cy = state.trees[i, :2]
+            tree_type = state.trees[i, 4].astype(jnp.int32)
+            mask = tree_masks[tree_type]
+            tree_h, tree_w = mask.shape[0], mask.shape[1]
+
             top = (cy - (tree_h // 2)).astype(jnp.int32)
             left = (cx - (tree_w // 2)).astype(jnp.int32)
-            return self.jr.render_at_clipped(r, left, top, tree_mask, flip_offset=tree_offset)
-            
+            return self.jr.render_at_clipped(r, left, top, mask, flip_offset=tree_offset)            
         raster = jax.lax.fori_loop(0, self.consts.max_num_trees, draw_tree, raster)
 
         # 6. Draw Rocks
