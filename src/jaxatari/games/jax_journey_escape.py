@@ -26,20 +26,20 @@ class JourneyEscapeConstants(NamedTuple):
     background_frames_amount: int = 8 # defined order of 2*4 sprites
 
     player_width: int = 8
-    player_height: int = 28
-    start_player_x: int = 44  # Fixed x position
-    start_player_y: int = 160  # Fixed y position
+    player_height: int = 25
+    start_player_x: int = 93  # Fixed x position
+    start_player_y: int = 172  # Fixed y position
     player_speed: int = 1
     player_frame_switch: int = 16 # should match ALE
 
+    # top and bottom blue areas
+    top_blue_area_height: int = 27
+    bottom_blue_area_height: int = 28
     # border of the valid game space
-    top_border: int = 33
-    bottom_border: int = screen_height - player_height - 47
+    top_border: int = 3 + top_blue_area_height
+    bottom_border: int = screen_height - bottom_blue_area_height - 4
     left_border: int = 8
     right_border: int = screen_width - 8
-
-    # Line where the obstacles disappear behind
-    bottom_blue_area: int = screen_height - 24
 
     # player position rules
     min_player_position_y: int = top_border + (screen_height // 4)
@@ -294,7 +294,7 @@ class JaxJourneyEscape(
 
         # Effective player movement boundaries
         player_min_y = self.consts.min_player_position_y
-        player_max_y = self.consts.bottom_border + self.consts.player_height - 3
+        player_max_y = self.consts.bottom_border - self.consts.player_height
         player_min_x = self.consts.left_border
         player_max_x = self.consts.right_border - self.consts.player_width - 1
 
@@ -861,19 +861,17 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         )
 
         # Header
-        header_height = self.consts.top_border
         header_sprite = self._create_solid_block(
             width=self.consts.screen_width,
-            height=header_height,
+            height=self.consts.top_blue_area_height,
             color=COLOR_BLUE
         )
 
         # Footer
         # Starts at bottom_blue_area -> Ends at screen_height
-        footer_height = self.consts.screen_height - self.consts.bottom_blue_area
         footer_sprite = self._create_solid_block(
             width=self.consts.screen_width,
-            height=footer_height,
+            height=self.consts.bottom_blue_area_height,
             color=COLOR_BLUE
         )
 
@@ -935,7 +933,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             },
             {
                 'name': 'player', 'type': 'group',
-                'files': ['player_walk_front_0.npy', 'player_walk_front_1.npy',
+                'files': ['player_walk_front_1.npy', 'player_walk_front_0.npy',
                           'player_run_right_0.npy', 'player_run_right_1.npy',
                           'player_run_left_0.npy', 'player_run_left_1.npy']
             },
@@ -1095,13 +1093,13 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
 
         # Render Header (Top Blue)
+        header_pos_y = self.consts.top_border - self.consts.top_blue_area_height
         header_mask = self.SHAPE_MASKS["header"]
-        raster = self.jr.render_at(raster, 0, 0, header_mask)
+        raster = self.jr.render_at(raster, 0, header_pos_y, header_mask)
 
         # Render Footer (Bottom Blue)
-        footer_y = self.consts.bottom_blue_area
         footer_mask = self.SHAPE_MASKS["footer"]
-        raster = self.jr.render_at(raster, 0, footer_y, footer_mask)
+        raster = self.jr.render_at(raster, 0, self.consts.bottom_border, footer_mask)
 
         # Render Score (On top of Blue Header)
         score_digits = self.jr.int_to_digits(state.score, max_digits=5)
@@ -1114,9 +1112,9 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             + (state.score >= 10000).astype(jnp.int32)
         )
         start_index = 5 - num_to_render
-        render_x_pos = ((self.consts.screen_width // 2) + 20) - (num_to_render * 8)
-        raster = self.jr.render_at(raster, render_x_pos - 9, 5, self.SHAPE_MASKS["dollar"])
-        raster = self.jr.render_label_selective(raster, render_x_pos, 5,
+        render_x_pos = ((self.consts.screen_width // 2) + 19) - (num_to_render * 8)
+        raster = self.jr.render_at(raster, render_x_pos - 8, 6, self.SHAPE_MASKS["dollar"])
+        raster = self.jr.render_label_selective(raster, render_x_pos, 6,
                                                 score_digits,
                                                 score_digit_masks, start_index,num_to_render, spacing=8, 
                                                 max_digits_to_render=5)
@@ -1125,10 +1123,10 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         countdown_digits = self.jr.int_to_digits(state.countdown, max_digits=2)
         countdown_digit_masks = self.SHAPE_MASKS["timer_digits"]
         num_to_render = 2
-        render_x_pos = (self.consts.screen_width // 2) - 2
-        raster = self.jr.render_at(raster, render_x_pos - 9, 20, self.SHAPE_MASKS["timer_digits"][0]) # Renders the fixed leading 0
-        raster = self.jr.render_at(raster, render_x_pos - 3, 20, self.SHAPE_MASKS["timer_colon"]) 
-        raster = self.jr.render_label_selective(raster, render_x_pos, 20,
+        render_x_pos = (self.consts.screen_width // 2) - 3
+        raster = self.jr.render_at(raster, render_x_pos - 9, 18, self.SHAPE_MASKS["timer_digits"][0]) # Renders the fixed leading 0
+        raster = self.jr.render_at(raster, render_x_pos - 3, 18, self.SHAPE_MASKS["timer_colon"])
+        raster = self.jr.render_label_selective(raster, render_x_pos, 18,
                                                 countdown_digits, # the remaining seconds
                                                 countdown_digit_masks, 0, num_to_render, spacing=7)
 
