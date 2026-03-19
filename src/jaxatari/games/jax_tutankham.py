@@ -861,7 +861,7 @@ class JaxTutankham(JaxEnvironment):
 
 
         #TODO: only for testing
-        level = 1
+        level = 3
         start_x = 136
         start_y = 60
         item_states = self.consts.MAP_ITEMS[level%4]
@@ -1370,11 +1370,11 @@ class JaxTutankham(JaxEnvironment):
         return complete_level
     
     @partial(jax.jit, static_argnums=(0,))
-    def map_transition(self, goal_reached, level, 
-                       player_x, player_y, bullet_state, 
-                       creature_states, item_states, 
-                       last_creature_spawn, amonition_timer, 
-                       laser_flash_cooldown, has_key):
+    def map_transition(self, goal_reached, level,
+                       player_x, player_y, bullet_state,
+                       creature_states, item_states,
+                       last_creature_spawn, amonition_timer,
+                       laser_flash_cooldown, has_key, laser_flash_count):
         '''
         If goal_reached is True:
         increment level,
@@ -1388,6 +1388,13 @@ class JaxTutankham(JaxEnvironment):
         reset has_key to False
         '''
 
+        # On completing map 4, the player is awarded with an extra laser flash, up to the maximum of 3 flashes
+        laser_flash_count = jnp.where(
+            goal_reached & ((level % 4) == 3) & (laser_flash_count < 3),
+            laser_flash_count + 1,
+            laser_flash_count
+        )
+
         level = jnp.where(goal_reached, level + 1, level)
         player_x = jnp.where(goal_reached, self.consts.MAP_CHECKPOINTS[level%4, 0, 2], player_x) # respawn_x of first checkpoint is the start coordinates for each map
         player_y = jnp.where(goal_reached, self.consts.MAP_CHECKPOINTS[level%4, 0, 3], player_y) # respawn_y of first checkpoint is the start coordinates for each map
@@ -1400,7 +1407,7 @@ class JaxTutankham(JaxEnvironment):
         has_key = jnp.where(goal_reached, False, has_key)
 
         # TODO: add rendering stuff for level transition
-        return level, player_x, player_y, bullet_state, creature_states, item_states, last_creature_spawn, amonition_timer, laser_flash_cooldown, has_key
+        return level, player_x, player_y, bullet_state, creature_states, item_states, last_creature_spawn, amonition_timer, laser_flash_cooldown, has_key, laser_flash_count
 
     
     # TODO: END of GAME logic level = 16
@@ -1518,15 +1525,15 @@ class JaxTutankham(JaxEnvironment):
                                             )
         
         # Prepares state for the next level if goal is reached for current level
-        (level, player_x, player_y, 
-         bullet_state, creature_states, item_states, 
-         last_creature_spawn, amonition_timer, laser_flash_cooldown, 
-         has_key) = self.map_transition(
-             goal_reached, level, 
-             player_x, player_y, bullet_state, 
-             creature_states, item_states, 
-             last_creature_spawn, amonition_timer, 
-             laser_flash_cooldown, has_key)
+        (level, player_x, player_y,
+         bullet_state, creature_states, item_states,
+         last_creature_spawn, amonition_timer, laser_flash_cooldown,
+         has_key, laser_flash_count) = self.map_transition(
+             goal_reached, level,
+             player_x, player_y, bullet_state,
+             creature_states, item_states,
+             last_creature_spawn, amonition_timer,
+             laser_flash_cooldown, has_key, laser_flash_count)
 
 
 
