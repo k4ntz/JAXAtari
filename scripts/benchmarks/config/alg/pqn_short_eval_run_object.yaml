@@ -27,12 +27,12 @@ OBJECT_CENTRIC: True
 # Apply this mod during testing
 # Set to None for training run.
 # Activate this for the final test run (or debugging)
-MOD_NAME: [simplify]
+MOD_NAME: []
 
 # Note: This will massively increase compile and run time!
 # But is useful for debugging (watching the video).
 # Turn off for reported training run.
-TEST_DURING_TRAINING: True
+TEST_DURING_TRAINING: False
 TEST_INTERVAL: 0.1 # in terms of total updates
 TEST_NUM_ENVS: 1024 #512
 TEST_NUM_STEPS: 10000
