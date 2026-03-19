@@ -169,8 +169,8 @@ class TutankhamConstants(NamedTuple):
                                             dtype=jnp.int32)  # points for defeating each creature type
 
     MAX_CREATURES: int = 2  # max number of creatures on screen at once
-    CREATURE_DETECTION_RADIUS_X: int = 45  # horizontal detection range
-    CREATURE_DETECTION_RADIUS_Y: int = 28  # vertical detection range
+    CREATURE_DETECTION_RANGE_X: int = 45  # horizontal detection range
+    CREATURE_DETECTION_RANGE_Y: int = 28  # vertical detection range
 
     # Item constants ----------------------------------------------------
 
@@ -1204,6 +1204,7 @@ class JaxTutankham(JaxEnvironment):
             down=1, up=2, right=-1, left=-2
             """
 
+            # Natural patrol: randomly change direction --------------------------------
             change_probability = 0.08
             possible_directions = jnp.array([-1, -2, 1, 2])
 
@@ -1211,22 +1212,22 @@ class JaxTutankham(JaxEnvironment):
             random_dir = jax.random.choice(subkey_01, possible_directions)
             should_change = jax.random.bernoulli(subkey_02, p=change_probability)
 
-            # Natural patrol: randomly change direction
             new_direction = jnp.where(should_change, random_dir, direction)
             new_direction = jnp.where(direction == 0, random_dir, new_direction)
+            #--------------------------------------------------------------------------
 
 
-            # Chase player if nearby
+            # Chase player if nearby---------------------------------------------------
             dx = player_x - creature_x
             dy = player_y - creature_y
-            player_near = (jnp.abs(dx) < self.consts.CREATURE_DETECTION_RADIUS_X) & (jnp.abs(dy) < self.consts.CREATURE_DETECTION_RADIUS_Y)
-            h_dir = jnp.where(dx >= 0, jnp.int32(-1), jnp.int32(-2))
-            v_dir = jnp.where(dy >= 0, jnp.int32(1),  jnp.int32(2))
+            player_near = (jnp.abs(dx) < self.consts.CREATURE_DETECTION_RANGE_X) & (jnp.abs(dy) < self.consts.CREATURE_DETECTION_RANGE_Y)
+            horizontal_direction = jnp.where(dx >= 0, jnp.int32(-1), jnp.int32(-2))
+            vertical_direction = jnp.where(dy >= 0, jnp.int32(1),  jnp.int32(2))
 
             # Try primary direction (larger gap); fall back to other axis if wall
             prefer_h = jnp.abs(dx) >= jnp.abs(dy)
-            primary_dir   = jnp.where(prefer_h, h_dir, v_dir)
-            secondary_dir = jnp.where(prefer_h, v_dir, h_dir)
+            primary_dir   = jnp.where(prefer_h, horizontal_direction, vertical_direction)
+            secondary_dir = jnp.where(prefer_h, vertical_direction, horizontal_direction)
 
             lookup_x = jnp.array([0, 0, 0, -1, 1])
             lookup_y = jnp.array([0, 1, -1, 0, 0])
