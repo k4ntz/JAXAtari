@@ -68,7 +68,7 @@ class AntiGravityMod(JaxAtariInternalModPlugin):
     """Reverse gravity from sun, planets, and reactors."""
 
     constants_overrides = {
-        "SOLAR_GRAVITY": -0.044,
+        "SOLAR_GRAVITY": -0.005,
         "PLANETARY_GRAVITY": -0.0032,
         "REACTOR_GRAVITY": -0.0001,
     }
@@ -78,6 +78,6 @@ class HighSpeedMod(JaxAtariInternalModPlugin):
     """Make the ship faster by increasing thrust power and max speed."""
 
     constants_overrides = {
-        "THRUST_POWER": 0.07,
+        "THRUST_POWER": 0.075,
         "MAX_SPEED": 6.0,
     }
