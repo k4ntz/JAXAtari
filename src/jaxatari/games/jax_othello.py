@@ -59,7 +59,19 @@ class OthelloConstants:
         {'name': 'score_9_enemy', 'type': 'single', 'file': 'enemy_score_9.npy'},
     ])
 
-    START_BOARD: chex.Array = jnp.array([
+#    START_BOARD: chex.Array = jnp.array([
+#        [0, 0, 0, 0, 0, 0, 0, 0],
+#        [0, 0, 0, 0, 0, 0, 0, 0],
+#        [0, 0, 0, 0, 0, 0, 0, 0],
+#        [0, 0, 0, 2, 1, 0, 0, 0],
+#        [0, 0, 0, 1, 2, 0, 0, 0],
+#        [0, 0, 0, 0, 0, 0, 0, 0],
+#        [0, 0, 0, 0, 0, 0, 0, 0],
+#        [0, 0, 0, 0, 0, 0, 0, 0],
+#    ], dtype=jnp.int32)
+
+    #Python13
+    START_BOARD: jax.Array = struct.field(default_factory=lambda: jnp.array([
         [0, 0, 0, 0, 0, 0, 0, 0],
         [0, 0, 0, 0, 0, 0, 0, 0],
         [0, 0, 0, 0, 0, 0, 0, 0],
@@ -68,7 +80,7 @@ class OthelloConstants:
         [0, 0, 0, 0, 0, 0, 0, 0],
         [0, 0, 0, 0, 0, 0, 0, 0],
         [0, 0, 0, 0, 0, 0, 0, 0],
-    ], dtype=jnp.int32)
+    ], dtype=jnp.int32))
 
     BOARD_TOP_LEFT_X: int = 18
     BOARD_TOP_LEFT_Y: int = 22
@@ -81,7 +93,19 @@ class OthelloConstants:
     SCORE_P2_X: int = 112
     SCORE_P2_Y: int = 4
 
-    ENEMY_WEIGHTS: chex.Array = jnp.array([
+#    ENEMY_WEIGHTS: chex.Array = jnp.array([
+#        [64,   -25,    10,      4,      4,      10,      -25,    64],
+#        [-25,   -25,    -8,      -8,      -8,      -8,      -25,    -25],
+#        [10,    -8,      4,      0,      0,      4,      -8,      10],
+#        [4,      -8,      0,      0,      0,      0,      -8,      4],
+#        [4,      -8,      0,      0,      0,      0,      -8,      4],
+#        [10,    -8,      4,      0,      0,      4,      -8,      10],
+#        [-25,   -25,    -8,      -8,      -8,      -8,      -25,    -25],
+#        [64,   -25,    10,      4,      4,      10,      -25,    64]
+#    ], dtype=jnp.int32)
+
+    #Python13
+    ENEMY_WEIGHTS: jax.Array = struct.field(default_factory=lambda: jnp.array([
         [64,   -25,    10,      4,      4,      10,      -25,    64],
         [-25,   -25,    -8,      -8,      -8,      -8,      -25,    -25],
         [10,    -8,      4,      0,      0,      4,      -8,      10],
@@ -90,7 +114,7 @@ class OthelloConstants:
         [10,    -8,      4,      0,      0,      4,      -8,      10],
         [-25,   -25,    -8,      -8,      -8,      -8,      -25,    -25],
         [64,   -25,    10,      4,      4,      10,      -25,    64]
-    ], dtype=jnp.int32)
+    ], dtype=jnp.int32))
 
     # --- TIMING CONSTANTS ---
     FRAMES_TO_PLACE: int = 0
@@ -137,6 +161,8 @@ class OthelloState:
 @struct.dataclass 
 class OthelloObservation:
     board: jnp.ndarray
+    cursor_map: jnp.ndarray   # NEU
+    valid_moves: jnp.ndarray  # NEU
     cursor_x: jnp.ndarray
     cursor_y: jnp.ndarray
     score_player_1: jnp.ndarray
@@ -165,6 +191,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             Action.NOOP, Action.FIRE, Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT,
             Action.UPRIGHT, Action.UPLEFT, Action.DOWNRIGHT, Action.DOWNLEFT,
         ]
+
+        self.action_array = jnp.array(self.action_set, dtype=jnp.int32)
         self.obs_size = (self.consts.BOARD_SIZE * self.consts.BOARD_SIZE) + 2 + 2 + 1
 
     def _player_step(self, state: OthelloState, action: chex.Array) -> OthelloState:
@@ -187,19 +215,13 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             lambda: (state.cursor_y, state.cursor_x)
         )
 
-        def _update_timer():
-            return jax.lax.select(
-                can_move,
-                self.consts.INPUT_DELAY,
-                state.input_timer - 1
-            )
-
-        new_timer = jax.lax.cond(
-            is_moving,
-            _update_timer,
-            lambda: self.consts.INPUT_DELAY 
+        # NEUE TIMER LOGIK: Zählt immer runter, resettet nur bei erfolgreicher Bewegung
+        new_timer = jnp.maximum(0, state.input_timer - 1)
+        new_timer = jax.lax.select(
+            jnp.logical_and(is_moving, can_move),
+            self.consts.INPUT_DELAY,
+            new_timer
         )
-        new_timer = jnp.maximum(new_timer, 0)
 
         return state.replace(
             cursor_x=new_cursor_x,
@@ -216,91 +238,93 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
     @partial(jax.jit, static_argnums=(0,))
     def _is_valid_move(self, board: chex.Array, y: chex.Array, x: chex.Array, player: chex.Array) -> bool:
-        opponent = jnp.where(player == self.consts.PLAYER_1, self.consts.PLAYER_2, self.consts.PLAYER_1)
         is_empty = (board[y, x] == self.consts.EMPTY)
-        directions = jnp.array([[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]], dtype=jnp.int32)
-        init_val = False
-
-        def _check_dir_loop(i, is_valid_so_far):
-            def _check_this_dir():
-                dy, dx = directions[i]
-                dir_init_val = 0
-                def _dir_scan_loop(j, loop_state):
-                    cy = y + (j + 1) * dy
-                    cx = x + (j + 1) * dx
-                    def _check_cell():
-                        in_bounds = jnp.logical_and(
-                            jnp.logical_and(cy >= 0, cy < self.consts.BOARD_SIZE),
-                            jnp.logical_and(cx >= 0, cx < self.consts.BOARD_SIZE)
-                        )
-                        def _in_bounds_check():
-                            cell = board[cy, cx]
-                            is_opp = (cell == opponent)
-                            is_player = (cell == player)
-                            state_0_logic = jnp.where(is_opp, 1, 3)
-                            state_1_logic = jnp.where(is_opp, 1, jnp.where(is_player, 2, 3))
-                            return jax.lax.switch(loop_state, [lambda: state_0_logic, lambda: state_1_logic])
-                        return jnp.where(in_bounds, _in_bounds_check(), 3)
-                    return jnp.where(jnp.logical_or(loop_state == 2, loop_state == 3), loop_state, _check_cell())
-                final_state = jax.lax.fori_loop(0, self.consts.BOARD_SIZE, _dir_scan_loop, dir_init_val)
-                return (final_state == 2)
-            is_this_dir_valid = jax.lax.cond(is_valid_so_far, lambda: False, _check_this_dir)
-            return jnp.logical_or(is_valid_so_far, is_this_dir_valid)
-        is_any_dir_valid = jax.lax.fori_loop(0, 8, _check_dir_loop, init_val)
-        return jnp.logical_and(is_empty, is_any_dir_valid)
+        opponent = jnp.where(player == self.consts.PLAYER_1, self.consts.PLAYER_2, self.consts.PLAYER_1)
+        
+        # Vektor für die 8 Richtungen und 7 mögliche Schritte (max. Entfernung auf 8x8)
+        dy = jnp.array([-1, -1, -1,  0,  0,  1,  1,  1], dtype=jnp.int32)
+        dx = jnp.array([-1,  0,  1, -1,  1, -1,  0,  1], dtype=jnp.int32)
+        steps = jnp.arange(1, 8, dtype=jnp.int32)
+        
+        # 8 Strahlen parallel berechnen (Shape: 8x7)
+        cy = y + dy[:, None] * steps
+        cx = x + dx[:, None] * steps
+        
+        # Prüfen, ob die berechneten Koordinaten auf dem Brett liegen
+        in_bounds = (cy >= 0) & (cy < self.consts.BOARD_SIZE) & (cx >= 0) & (cx < self.consts.BOARD_SIZE)
+        
+        # Index-Sicherheit (Verhindert Out-of-Bounds Error beim Array-Slicing, Werte werden durch in_bounds gefiltert)
+        cy_safe = jnp.clip(cy, 0, self.consts.BOARD_SIZE - 1)
+        cx_safe = jnp.clip(cx, 0, self.consts.BOARD_SIZE - 1)
+        
+        # Alle 56 Felder (8 Strahlen * 7 Schritte) auf einen Schlag auslesen
+        ray_cells = board[cy_safe, cx_safe]
+        
+        is_opp = (ray_cells == opponent) & in_bounds
+        is_player = (ray_cells == player) & in_bounds
+        
+        # cumprod multipliziert Nullen und Einsen durch:
+        # Findet alle zusammenhängenden gegnerischen Steine direkt vom Startpunkt aus!
+        contig_opp = jnp.cumprod(is_opp.astype(jnp.int32), axis=1).astype(jnp.bool_)
+        
+        # Verschiebt die Maske um 1 nach rechts:
+        # Ein eigener Stein macht den Zug genau dann gültig, wenn er direkt NACH contig_opp kommt.
+        prev_contig_opp = jnp.pad(contig_opp[:, :-1], ((0, 0), (1, 0)), constant_values=False)
+        valid_bound = is_player & prev_contig_opp
+        
+        # Wenn irgendein Strahl einen gültigen Abschluss (valid_bound) hat, ist der Zug erlaubt
+        is_any_dir_valid = jnp.any(valid_bound)
+        
+        return is_empty & is_any_dir_valid
 
     @partial(jax.jit, static_argnums=(0,))
     def _has_any_valid_move(self, board: chex.Array, player: chex.Array) -> bool:
-        def _check_pos(i, found_valid):
-            return jax.lax.cond(
-                found_valid,
-                lambda: True,
-                lambda: self._is_valid_move(board, i // self.consts.BOARD_SIZE, i % self.consts.BOARD_SIZE, player)
-            )
-        return jax.lax.fori_loop(0, self.consts.BOARD_SIZE * self.consts.BOARD_SIZE, _check_pos, False)
+        # Check für ein einzelnes Feld
+        def _check_pos(idx):
+            y = idx // self.consts.BOARD_SIZE
+            x = idx % self.consts.BOARD_SIZE
+            return self._is_valid_move(board, y, x, player)
+            
+        # vmap übernimmt die Arbeit der Schleife und feuert alle 64 Checks gleichzeitig ab!
+        all_valid = jax.vmap(_check_pos)(jnp.arange(self.consts.BOARD_SIZE * self.consts.BOARD_SIZE))
+        return jnp.any(all_valid)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_flip_mask(self, board: chex.Array, y: chex.Array, x: chex.Array, player: chex.Array) -> chex.Array:
         opponent = jnp.where(player == self.consts.PLAYER_1, self.consts.PLAYER_2, self.consts.PLAYER_1)
-        directions = jnp.array([[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]], dtype=jnp.int32)
-        mask = jnp.zeros_like(board, dtype=jnp.bool_)
-        init_val = mask
-
-        def _flip_dir_loop(i, current_mask):
-            dy, dx = directions[i]
-            scan_init_val = (0, 0)
-            def _dir_scan_loop(j, val):
-                loop_state, num_flips = val
-                cy = y + (j + 1) * dy
-                cx = x + (j + 1) * dx
-                def _check_cell():
-                    in_bounds = jnp.logical_and(
-                        jnp.logical_and(cy >= 0, cy < self.consts.BOARD_SIZE),
-                        jnp.logical_and(cx >= 0, cx < self.consts.BOARD_SIZE)
-                    )
-                    def _in_bounds_check():
-                        cell = board[cy, cx]
-                        is_opp = (cell == opponent)
-                        is_player = (cell == player)
-                        state_0_logic = jax.lax.cond(is_opp, lambda: (1, 1), lambda: (3, 0))
-                        state_1_logic = jax.lax.cond(is_opp, lambda: (1, num_flips + 1),
-                                                     lambda: jax.lax.cond(is_player, lambda: (2, num_flips),
-                                                                          lambda: (3, 0)))
-                        return jax.lax.switch(loop_state, [lambda: state_0_logic, lambda: state_1_logic])
-                    return jax.lax.cond(in_bounds, _in_bounds_check, lambda: (3, 0))
-                condition = jnp.logical_or(loop_state == 2, loop_state == 3)
-                return jax.lax.cond(condition, lambda: (loop_state, num_flips), _check_cell)
-            final_state, num_to_flip = jax.lax.fori_loop(0, self.consts.BOARD_SIZE, _dir_scan_loop, scan_init_val)
-            def _mark_flips():
-                flip_init_val = current_mask
-                def _mark_loop(k, mask_to_update):
-                    fy = y + (k + 1) * dy
-                    fx = x + (k + 1) * dx
-                    return mask_to_update.at[fy, fx].set(True)
-                return jax.lax.fori_loop(0, num_to_flip, _mark_loop, flip_init_val)
-            return jax.lax.cond(final_state == 2, _mark_flips, lambda: current_mask)
-        final_mask = jax.lax.fori_loop(0, 8, _flip_dir_loop, init_val)
-        return final_mask
+        
+        # Gleiches Raycasting-Setup wie oben
+        dy = jnp.array([-1, -1, -1,  0,  0,  1,  1,  1], dtype=jnp.int32)
+        dx = jnp.array([-1,  0,  1, -1,  1, -1,  0,  1], dtype=jnp.int32)
+        steps = jnp.arange(1, 8, dtype=jnp.int32)
+        
+        cy = y + dy[:, None] * steps
+        cx = x + dx[:, None] * steps
+        
+        in_bounds = (cy >= 0) & (cy < self.consts.BOARD_SIZE) & (cx >= 0) & (cx < self.consts.BOARD_SIZE)
+        cy_safe = jnp.clip(cy, 0, self.consts.BOARD_SIZE - 1)
+        cx_safe = jnp.clip(cx, 0, self.consts.BOARD_SIZE - 1)
+        
+        ray_cells = board[cy_safe, cx_safe]
+        
+        is_opp = (ray_cells == opponent) & in_bounds
+        is_player = (ray_cells == player) & in_bounds
+        
+        contig_opp = jnp.cumprod(is_opp.astype(jnp.int32), axis=1).astype(jnp.bool_)
+        prev_contig_opp = jnp.pad(contig_opp[:, :-1], ((0, 0), (1, 0)), constant_values=False)
+        valid_bound = is_player & prev_contig_opp
+        
+        ray_valid = jnp.any(valid_bound, axis=1)
+        
+        # Die Steine, die geflippt werden, sind exakt die zusammenhängenden Gegner-Steine (contig_opp)
+        # auf den Strahlen, die am Ende durch einen eigenen Stein geschlossen wurden (ray_valid)
+        flips = contig_opp & ray_valid[:, None]
+        
+        # Die Vektor-Ergebnisse (8x7) wieder auf das 8x8 Board projizieren
+        mask = jnp.zeros_like(board, dtype=jnp.int32)
+        mask = mask.at[cy_safe, cx_safe].max(flips.astype(jnp.int32))
+        
+        return mask.astype(jnp.bool_)
 
 
     # @partial(jax.jit, static_argnums=(0,))
@@ -690,22 +714,44 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: OthelloState, action: chex.Array) -> Tuple[
         OthelloObservation, OthelloState, float, bool, OthelloInfo]:
+        
+        # WICHTIG: Hier übersetzen wir die KI-Zahl (z.B. 4) in die echte Aktion (z.B. Action.LEFT)
+        atari_action = jnp.take(self.action_array, action.astype(jnp.int32))
+        
         previous_state = state
-        state_after_cursor = self._player_step(state, action)
-        state_after_logic = self._game_logic_step(state_after_cursor, action)
+        
+        # Hier übergeben wir jetzt atari_action statt action!
+        state_after_cursor = self._player_step(state, atari_action)
+        state_after_logic = self._game_logic_step(state_after_cursor, atari_action)
+        
         state = state_after_logic
         done = self._get_done(state)
         env_reward = self._get_reward(previous_state, state)
         info = self._get_info(state)
         observation = self._get_observation(state)
+        
         return observation, state, env_reward, done, info
 
     def render(self, state: OthelloState) -> jnp.ndarray:
         return self.renderer.render(state)
 
     def _get_observation(self, state: OthelloState) -> OthelloObservation:
+        # NEU: 1. Cursor Map (8x8 Grid, 1 wo der Cursor ist, sonst 0)
+        cursor_map = jnp.zeros_like(state.board).at[state.cursor_y, state.cursor_x].set(1)
+        
+        # NEU: 2. Valid Moves Map (8x8 Grid, 1 wo ein legaler Zug ist, sonst 0)
+        def check_move(idx):
+            y = idx // self.consts.BOARD_SIZE
+            x = idx % self.consts.BOARD_SIZE
+            return self._is_valid_move(state.board, y, x, state.current_player)
+        
+        legal_moves_flat = jax.vmap(check_move)(jnp.arange(self.consts.BOARD_SIZE * self.consts.BOARD_SIZE))
+        valid_moves_map = legal_moves_flat.reshape((self.consts.BOARD_SIZE, self.consts.BOARD_SIZE)).astype(jnp.int32)
+
         return OthelloObservation(
             board=state.board,
+            cursor_map=cursor_map,            # NEU
+            valid_moves=valid_moves_map,      # NEU
             cursor_x=state.cursor_x,
             cursor_y=state.cursor_y,
             score_player_1=state.player_1_score,
@@ -719,6 +765,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
             "board": spaces.Box(low=0, high=2, shape=(self.consts.BOARD_SIZE, self.consts.BOARD_SIZE), dtype=jnp.int32),
+            "cursor_map": spaces.Box(low=0, high=1, shape=(self.consts.BOARD_SIZE, self.consts.BOARD_SIZE), dtype=jnp.int32),   # NEU
+            "valid_moves": spaces.Box(low=0, high=1, shape=(self.consts.BOARD_SIZE, self.consts.BOARD_SIZE), dtype=jnp.int32),  # NEU
             "cursor_x": spaces.Box(low=0, high=self.consts.BOARD_SIZE - 1, shape=(), dtype=jnp.int32),
             "cursor_y": spaces.Box(low=0, high=self.consts.BOARD_SIZE - 1, shape=(), dtype=jnp.int32),
             "score_player_1": spaces.Box(low=0, high=64, shape=(), dtype=jnp.int32),
@@ -747,9 +795,32 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: OthelloState, state: OthelloState) -> float:
-        reward = (state.player_1_score - state.player_2_score) - \
-                 (previous_state.player_1_score - previous_state.player_2_score)
-        return reward.astype(jnp.float32)
+        # 1. Sieg-Bedingung (Der absolute Goldstandard für Brettspiele)
+        board_full = (state.player_1_score + state.player_2_score) >= (self.consts.BOARD_SIZE * self.consts.BOARD_SIZE)
+        no_moves_left = (state.passes >= 2)
+        is_done = jnp.logical_or(board_full, no_moves_left)
+
+        p1_won = state.player_1_score > state.player_2_score
+        p2_won = state.player_2_score > state.player_1_score
+
+        # +1.0 für Sieg, -1.0 für Niederlage, 0.0 für Unentschieden
+        win_bonus = jnp.where(
+            is_done,
+            jnp.where(p1_won, 1.0, jnp.where(p2_won, -1.0, 0.0)),
+            0.0
+        ).astype(jnp.float32)
+
+        # 2. Leichte Zeitstrafe (Time Penalty) gegen Stillstand
+        # Zwingt die KI dazu, zügig zu spielen, weil langes Warten viel schlimmer ist als eine Niederlage.
+        is_p1_turn = (previous_state.current_player == self.consts.PLAYER_1)
+        time_penalty = jnp.where(
+            jnp.logical_and(is_p1_turn, previous_state.phase == self.consts.PHASE_PLAY),
+            -0.005, 
+            0.0
+        ).astype(jnp.float32)
+
+        return win_bonus + time_penalty
+    
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: OthelloState) -> bool:
