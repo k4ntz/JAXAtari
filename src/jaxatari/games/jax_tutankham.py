@@ -1038,23 +1038,23 @@ class JaxTutankham(JaxEnvironment):
             0,            # 3  RIGHT
             0,            # 4  LEFT
             actual_speed, # 5  DOWN
-            0,     # 6  UPRIGHT
-            0,     # 7  UPLEFT
-            0,      # 8  DOWNRIGHT
-            0,      # 9  DOWNLEFT
-            0,     # 10 UPFIRE
-            0,          # 11 RIGHTFIRE
-            0,          # 12 LEFTFIRE
-            0,      # 13 DOWNFIRE
-            0,     # 14 UPRIGHTFIRE
-            0,     # 15 UPLEFTFIRE
-            0,      # 16 DOWNRIGHTFIRE
-            0,      # 17 DOWNLEFTFIRE
+            0,            # 6  UPRIGHT
+            0,            # 7  UPLEFT
+            0,            # 8  DOWNRIGHT
+            0,            # 9  DOWNLEFT
+            0,            # 10 UPFIRE
+            0,            # 11 RIGHTFIRE
+            0,            # 12 LEFTFIRE
+            0,            # 13 DOWNFIRE
+            0,            # 14 UPRIGHTFIRE
+            0,            # 15 UPLEFTFIRE
+            0,            # 16 DOWNRIGHTFIRE
+            0,            # 17 DOWNLEFTFIRE
         ])
+
         # For wall collision
         w = self.consts.PLAYER_SIZE[0]
         h = self.consts.PLAYER_SIZE[1]
-
 
         # If the current action has no directional component, fall back to the last directional action
         has_movement = (dx[action] != 0) | (dy[action] != 0)
@@ -1550,8 +1550,6 @@ class JaxTutankham(JaxEnvironment):
         # TODO: add rendering stuff for level transition
         return level, player_x, player_y, bullet_state, creature_states, item_states, last_creature_spawn, amonition_timer, laser_flash_cooldown, has_key, laser_flash_count
 
-    
-    # TODO: END of GAME logic level = 16
 
 
     # score update based on creature deaths & item collections
@@ -1715,22 +1713,6 @@ class JaxTutankham(JaxEnvironment):
         #jax.debug.print("Score: ({})", tutankham_score)
         # return observation, new_state, env_reward, done, info
         return state, state, reward, done, info
-
-        # @partial(jax.jit, static_argnums=(0,))
-        # def check_wall_collision(self, pos, size):
-        # """Check collision between an entity and the wall"""####
-
-        # Because the wall sprite is not at (0,0)
-        # pos = jnp.array([pos[0], pos[1] - self.consts.WALL_Y_OFFSET])##
-
-        # collision_top_left = self.consts.WALL[pos[1]][pos[0]]
-        # collision_top_right = self.consts.WALL[pos[1]][pos[0] + size[0] - 1]
-        # collision_bottom_left = self.consts.WALL[pos[1] + size[1] - 1][pos[0]]
-        # collision_bottom_right = self.consts.WALL[pos[1] + size[1] - 1][pos[0] + size[0] - 1]
-
-        # return jnp.any(
-        #    jnp.array([collision_top_left, collision_top_right, collision_bottom_right, collision_bottom_left]))
-        # return False
 
     # -----------------------------
     # Rendering 
