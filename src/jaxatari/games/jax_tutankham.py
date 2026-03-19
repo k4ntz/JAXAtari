@@ -861,7 +861,7 @@ class JaxTutankham(JaxEnvironment):
 
 
         #TODO: only for testing
-        level = 3
+        level = 1
         start_x = 136
         start_y = 60
         item_states = self.consts.MAP_ITEMS[level%4]
@@ -1001,10 +1001,10 @@ class JaxTutankham(JaxEnvironment):
         new_y = player_y + dy[effective_action]
         player_x, player_y, is_walkable = can_walk_to(self.consts.PLAYER_SIZE, new_x, new_y, player_x, player_y, self.consts.VALID_POS_MAPS[level%4])        
         
-        is_walkable = True # TODO: only for testing---------------------------
-        player_x = new_x
-        player_y = new_y
-        new_last_directional_action = 0
+        #is_walkable = True # TODO: only for testing---------------------------
+        # player_x = new_x
+        # player_y = new_y
+        # new_last_directional_action = 0
         #--------------------------------------------------------------------
 
         # If teleporter is triggered, the player position is set to teleporter out coordinates 
@@ -1434,9 +1434,10 @@ class JaxTutankham(JaxEnvironment):
         item_points = collected_items_mask * self.consts.ITEM_POINTS[prev_item_states[:, 2]]
         total_score_for_collected_items = jnp.sum(item_points)
 
-        # if goal is reached, give a score bonus based on remaining amonition
-        #goal_bonus = jnp.where(goal_reached, amonition_timer, 0) #TODO: adjust bonus scaling
-        goal_bonus = 0 # TODO: DELETE
+        # if goal is reached, give a score bonus [0, 100] in steps of 10 based on remaining ammunition
+        ammonition_percentage = jnp.clip(amonition_timer / self.consts.AMMO_SUPPLY, 0.0, 1.0)
+        goal_bonus = jnp.where(goal_reached, (jnp.floor(ammonition_percentage * 10) * 10).astype(jnp.int32), 0)
+
 
         new_score = score + total_score_for_defeating_creatures + total_score_for_collected_items + goal_bonus
 
