@@ -1254,15 +1254,8 @@ class JaxTutankham(JaxEnvironment):
             # Only move if active and NOT dying
             is_alive = (active == self.consts.ACTIVE) & (death_timer == -1)
 
-
-        
-            
+            # calculate the next movement direction for the creature
             direction, rng_key = creature_pathing(creature_x, creature_y, direction, creature_type, player_x, player_y, key)
-            #direction = 0
-
-
-
-
 
             # Indices: 0, 1(Down), 2(Up), -1(Right), -2(Left)
             # mapping array where the index matches the direction value
