@@ -11,7 +11,6 @@ from jaxatari.games.mods.backgammon_mod_plugins import (
     # Complex mods
     NoHitsMod,
     RewardShapingMod,
-    HoldToScrollMod,
     ALEControlsMod,
     HighlightLegalMovesMod,
     SetupModeMod,
@@ -37,8 +36,6 @@ class BackgammonEnvMod(JaxAtariModController):
         "no_hits": NoHitsMod,
         "reward_shaping": RewardShapingMod,
         "reward_shaping_wrapper": RewardShapingMod,
-        "hold_to_scroll": HoldToScrollMod,
-        "human_hold_controls": HoldToScrollMod,
         "ale_controls": ALEControlsMod,
         "hold_to_scroll_release_to_drop": ALEControlsMod,
     }
