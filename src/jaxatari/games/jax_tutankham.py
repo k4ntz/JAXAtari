@@ -169,6 +169,8 @@ class TutankhamConstants(NamedTuple):
                                             dtype=jnp.int32)  # points for defeating each creature type
 
     MAX_CREATURES: int = 2  # max number of creatures on screen at once
+    CREATURE_DETECTION_RADIUS_X: int = 45  # horizontal detection range
+    CREATURE_DETECTION_RADIUS_Y: int = 28  # vertical detection range
 
     # Item constants ----------------------------------------------------
 
@@ -1066,10 +1068,10 @@ class JaxTutankham(JaxEnvironment):
         new_y = player_y + dy[effective_action]
         player_x, player_y, is_walkable = can_walk_to(self.consts.PLAYER_SIZE, new_x, new_y, player_x, player_y, self.consts.VALID_POS_MAPS[level%4])        
         
-        is_walkable = True # TODO: only for testing---------------------------
-        player_x = new_x
-        player_y = new_y
-        new_last_directional_action = 0
+        #is_walkable = True # TODO: only for testing---------------------------
+        # player_x = new_x
+        # player_y = new_y
+        # new_last_directional_action = 0
         #--------------------------------------------------------------------
 
         # If teleporter is triggered, the player position is set to teleporter out coordinates 
@@ -1192,9 +1194,53 @@ class JaxTutankham(JaxEnvironment):
 
     # creature step
     @partial(jax.jit, static_argnums=(0,))
-    def creature_step(self, creature_states, creature_subpixels, camera_offset, step_counter, level):
+    def creature_step(self, creature_states, creature_subpixels, camera_offset, step_counter, level, player_x, player_y, rng_key):
 
-        def move_creature(creature_state, creature_subpixel):
+
+        @jax.jit
+        def creature_pathing(creature_x, creature_y, direction, creature_type, player_x, player_y, rng_key):
+            """
+            Determines the next direction for a creature.
+            down=1, up=2, right=-1, left=-2
+            """
+
+            change_probability = 0.08
+            possible_directions = jnp.array([-1, -2, 1, 2])
+
+            rng_key, subkey_01, subkey_02 = jax.random.split(rng_key, 3)
+            random_dir = jax.random.choice(subkey_01, possible_directions)
+            should_change = jax.random.bernoulli(subkey_02, p=change_probability)
+
+            # Natural patrol: randomly change direction
+            new_direction = jnp.where(should_change, random_dir, direction)
+            new_direction = jnp.where(direction == 0, random_dir, new_direction)
+
+
+            # Chase player if nearby
+            dx = player_x - creature_x
+            dy = player_y - creature_y
+            player_near = (jnp.abs(dx) < self.consts.CREATURE_DETECTION_RADIUS_X) & (jnp.abs(dy) < self.consts.CREATURE_DETECTION_RADIUS_Y)
+            h_dir = jnp.where(dx >= 0, jnp.int32(-1), jnp.int32(-2))
+            v_dir = jnp.where(dy >= 0, jnp.int32(1),  jnp.int32(2))
+
+            # Try primary direction (larger gap); fall back to other axis if wall
+            prefer_h = jnp.abs(dx) >= jnp.abs(dy)
+            primary_dir   = jnp.where(prefer_h, h_dir, v_dir)
+            secondary_dir = jnp.where(prefer_h, v_dir, h_dir)
+
+            lookup_x = jnp.array([0, 0, 0, -1, 1])
+            lookup_y = jnp.array([0, 1, -1, 0, 0])
+            next_x = creature_x + lookup_x[primary_dir]
+            next_y = creature_y + lookup_y[primary_dir]
+            _, _, primary_walkable = can_walk_to(self.consts.CREATURE_SIZE, next_x, next_y, creature_x, creature_y, self.consts.VALID_POS_MAPS[level%4])
+
+            toward_player = jnp.where(primary_walkable, primary_dir, secondary_dir)
+            new_direction = jnp.where(player_near, toward_player, new_direction)
+
+            return new_direction, rng_key
+        
+        @jax.jit
+        def move_creature(creature_state, creature_subpixel, key):
             creature_x, creature_y, creature_type, active, direction, death_timer = creature_state
 
             # get creature speed apply subpixel accumulator for smooth movement
@@ -1204,22 +1250,22 @@ class JaxTutankham(JaxEnvironment):
             # Only move if active and NOT dying
             is_alive = (active == self.consts.ACTIVE) & (death_timer == -1)
 
-            # direction 0: right (+1), direction 1: left (-1)
-            
-            # def creature_pathing(creature_x, creature_ y, direction, player_x, player_y):
-            #     return direction
-            
-
-            # direction can have the following values:
-            # down = 1, up = 2
-            # right = -1, left = -2
-            # maps down -> +
-            x_direction = jnp.minimum(direction, 0)
-            y_direction = jnp.maximum(direction, 0)
-            x_direction = jnp.where(x_direction < -1, -1, 1)
-            y_direction = jnp.where(y_direction > 1, -1, 1)
 
         
+            
+            direction, rng_key = creature_pathing(creature_x, creature_y, direction, creature_type, player_x, player_y, key)
+            #direction = 0
+
+
+
+
+
+            # Indices: 0, 1(Down), 2(Up), -1(Right), -2(Left)
+            # mapping array where the index matches the direction value
+            lookup_x = jnp.array([0, 0,  0, -1, 1])
+            lookup_y = jnp.array([0, 1, -1, 0,  0])
+            x_direction = lookup_x[direction]
+            y_direction = lookup_y[direction]
 
             # move creature
             new_x = creature_x + actual_speed * x_direction * is_alive
@@ -1245,8 +1291,12 @@ class JaxTutankham(JaxEnvironment):
 
             return jnp.array([creature_x, creature_y, creature_type, active, direction, new_death_timer], dtype=jnp.int32), new_subpixel
 
+
+
+
+        creature_keys = jax.random.split(rng_key, self.consts.MAX_CREATURES)
         move_creature_vmapped = jax.vmap(move_creature)
-        new_creature_states, new_creature_subpixels = move_creature_vmapped(creature_states, creature_subpixels)
+        new_creature_states, new_creature_subpixels = move_creature_vmapped(creature_states, creature_subpixels, creature_keys)
 
         return new_creature_states, new_creature_subpixels
 
@@ -1577,7 +1627,7 @@ class JaxTutankham(JaxEnvironment):
 
         bullet_state, bullet_subpixel, amonition_timer = self.bullet_step(bullet_state, bullet_subpixel, player_x, player_y, amonition_timer, action, level)
 
-        creature_states, creature_subpixels = self.creature_step(creature_states, creature_subpixels, camera_offset, step_counter, level)
+        creature_states, creature_subpixels = self.creature_step(creature_states, creature_subpixels, camera_offset, step_counter, level, player_x, player_y, rng_key)
 
         creature_states, last_creature_spawn, rng_key = self.spawner_step(creature_states, last_creature_spawn, level, rng_key, camera_offset, laser_flash_cooldown)
 
@@ -1663,7 +1713,7 @@ class JaxTutankham(JaxEnvironment):
         info = 0
 
         #jax.debug.print("Player position: ({}, {})", player_x, player_y)
-        jax.debug.print("Player position: ({}, {})", player_x.dtype, player_y.dtype)
+        jax.debug.print("Player position: ({}, {})", player_x, player_y)
         #jax.debug.print("Score: ({})", tutankham_score)
         # return observation, new_state, env_reward, done, info
         return state, state, reward, done, info
