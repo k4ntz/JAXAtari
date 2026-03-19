@@ -20,7 +20,7 @@ class JourneyEscapeConstants(NamedTuple):
     start_countdown: int = 59  # for a 59-second countdown
 
     screen_width: int = 160
-    screen_height: int = 210
+    screen_height: int = 230
 
     background_frame_switch: int = 4 # set to 0 for static background
     background_frames_amount: int = 8 # defined order of 2*4 sprites
@@ -793,22 +793,22 @@ class JaxJourneyEscape(
         """
         return spaces.Dict({
             "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
+                "x": spaces.Box(low=0, high=self.consts.screen_width, shape=(), dtype=jnp.int32),
+                "y": spaces.Box(low=0, high=self.consts.screen_height, shape=(), dtype=jnp.int32),
+                "width": spaces.Box(low=0, high=self.consts.screen_width, shape=(), dtype=jnp.int32),
+                "height": spaces.Box(low=0, high=self.consts.screen_height, shape=(), dtype=jnp.int32),
             })
-            , "obstacles": spaces.Box(low=0, high=210, shape=(self.consts.MAX_OBS, 4), dtype=jnp.int32),
+            , "obstacles": spaces.Box(low=0, high=self.consts.screen_height, shape=(self.consts.MAX_OBS, 4), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
         """Returns the image space for JourneyEscape.
-        The image is a RGB image with shape (210, 160, 3).
+        The image is a RGB image with shape (230, 160, 3).
         """
         return spaces.Box(
             low=0,
             high=255,
-            shape=(210, 160, 3),
+            shape=(self.consts.screen_height, self.consts.screen_width, 3),
             dtype=jnp.uint8
         )
 
@@ -837,7 +837,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         super().__init__()
         self.consts = consts or JourneyEscapeConstants()
         self.config = render_utils.RendererConfig(
-            game_dimensions=(210, 160),
+            game_dimensions=(self.consts.screen_height, self.consts.screen_width),
             channels=3,
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
