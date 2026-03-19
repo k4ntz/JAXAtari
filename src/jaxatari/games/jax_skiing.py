@@ -558,12 +558,39 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         dx_target = jax.lax.select(in_recovery, jnp.array(0.0, dtype=jnp.float32), dx_target)
         dy_target = jax.lax.select(in_recovery, down_speed.at[3].get(), dy_target)
 
+        friction_x = jnp.float32(0.04)
+        friction_y = jnp.float32(0.01)
+        max_speed = jnp.float32(1.2)
+
+        # Calculate target orientation vector
+        dir_norm = jnp.sqrt(dx_target**2 + dy_target**2) + 1e-6
+        dir_x = dx_target / dir_norm
+        dir_y = dy_target / dir_norm
+
+        # Effective friction depends on current orientation
+        eff_friction = jnp.abs(dir_x) * friction_x + jnp.abs(dir_y) * friction_y
+
+        # Calculate current scalar speed
+        current_speed = jnp.sqrt(state.skier_x_speed**2 + state.skier_y_speed**2)
+
+        # Acceleration is proportional to how much the skier is facing down (dy_target)
+        # Maximal when facing down (dy_target == 1.0), zero when parallel (dy_target == 0.0)
+        accel = dy_target * jnp.float32(0.05)
+
+        # Apply friction and acceleration
+        new_speed = current_speed * (1.0 - eff_friction) + accel
+        new_speed = jnp.clip(new_speed, 0.0, max_speed)
+
+        # Distribute the new speed along the x and y axes
+        x_speed_next = new_speed * dir_x
+        y_speed_next = new_speed * dir_y
+
         new_skier_x_speed_nom = jax.lax.select(
             in_recovery,
             jnp.array(0.0, dtype=jnp.float32),
-            dx_target * jnp.array(0.3, jnp.float32),  # no acceleration; slightly slower lateral speed
+            x_speed_next
         )
-        new_skier_y_speed_nom = state.skier_y_speed + ((dy_target - state.skier_y_speed) * jnp.array(0.05, jnp.float32))
+        new_skier_y_speed_nom = y_speed_next
         # --- First-frame jitter guard: freeze world & lateral motion on time==0
         first_frame = jnp.equal(state.time, jnp.int32(0))
         eff_x_speed_nom = jax.lax.select(first_frame, jnp.array(0.0, jnp.float32), new_skier_x_speed_nom)
