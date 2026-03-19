@@ -25,4 +25,4 @@ def check_ownership():
         )
 
 # ... rest of your package imports ...
-from jaxatari.core import make, list_available_games
+from jaxatari.core import make, list_available_games, modify

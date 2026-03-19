@@ -88,6 +88,54 @@ MOD_MODULES = {
 }
 
 
+def modify(env: JaxEnvironment, 
+           game_name: str, 
+           mods: list | str, 
+           allow_conflicts: bool = False
+           ) -> JaxEnvironment:
+    """
+    Applies modifications to an existing JaxAtari environment instance.
+    Note: Constant-based modifications may not apply correctly to an already 
+    instantiated environment. For full mod support, use jaxatari.make(..., mods=[...]).
+
+    Args:
+        env: The existing JaxEnvironment instance to modify.
+        game_name: Name of the game (e.g., "pong").
+        mods: A single mod name (str) or a list of mod names.
+        allow_conflicts: Whether to allow conflicting mods (default: False).
+    Returns:
+        A wrapped environment with the requested modifications applied.
+    """
+    if isinstance(mods, str):
+        mods = [mods]
+        
+    if game_name not in MOD_MODULES:
+        raise NotImplementedError(f"No mod module defined for '{game_name}'.")
+
+    from jaxatari.modification import _load_from_string, JaxAtariModWrapper
+    
+    try:
+        ControllerClass = _load_from_string(MOD_MODULES[game_name])
+    except (ImportError, AttributeError) as e:
+        raise ImportError(f"Failed to load mod controller for '{game_name}': {e}")
+    
+    # 1. Apply Internal Mods (Patches)
+    modded_env = ControllerClass(
+        env=env,
+        mods_config=mods,
+        allow_conflicts=allow_conflicts
+    )
+
+    # 2. Apply Post-Step Mods (Wrapper)
+    final_env = JaxAtariModWrapper(
+        env=modded_env,
+        mods_config=mods,
+        allow_conflicts=allow_conflicts
+    )
+
+    return final_env
+
+
 def list_available_games() -> list[str]:
     """Lists all available, registered games."""
     return list(GAME_MODULES.keys())
