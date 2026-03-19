@@ -163,14 +163,14 @@ class TutankhamConstants(NamedTuple):
     INACTIVE: int = 0
     ACTIVE: int = 1
 
-    CREATURE_SPEED: chex.Array = jnp.array([0.85, 0.9, 1.1, 0.7, 1, 1.2, 1, 1.2, 1, 1.05, 1.3],
+    CREATURE_SPEED: chex.Array = jnp.array([0.65, 0.75, 0.95, 0.5, 0.75, 0.95, 0.85, 0.95, 0.75, 0.85, 0.95],
                                            dtype=jnp.float32)  # speed for each creature type
     CREATURE_POINTS: chex.Array = jnp.array([1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 3],
                                             dtype=jnp.int32)  # points for defeating each creature type
 
     MAX_CREATURES: int = 2  # max number of creatures on screen at once
-    CREATURE_DETECTION_RANGE_X: int = 45  # horizontal detection range
-    CREATURE_DETECTION_RANGE_Y: int = 28  # vertical detection range
+    CREATURE_DETECTION_RANGE_X: int = 35  # horizontal detection range
+    CREATURE_DETECTION_RANGE_Y: int = 25  # vertical detection range
 
     # Item constants ----------------------------------------------------
 
@@ -460,25 +460,25 @@ class TutankhamConstants(NamedTuple):
 
     # Spawn-rate per level, shape (16,)
     LEVEL_SPAWN_RATES: chex.Array = jnp.array([
-        0.0003, 0.0003, 0.0003, 0.0003,
-        0.0006, 0.0006, 0.0006, 0.0006,
-        0.0009, 0.0009, 0.0009, 0.0009,
-        0.0012, 0.0012, 0.0012, 0.0012,
+        0.00005, 0.00005, 0.00005, 0.00005,
+        0.00006, 0.00006, 0.00006, 0.00006,
+        0.00007, 0.00007, 0.00007, 0.00007,
+        0.00008, 0.00008, 0.00008, 0.00008,
     ], dtype=jnp.float32)
 
     # Speed multiplier per level, shape (16,)
     LEVEL_CREATURE_SPEED_MULTIPLIERS: chex.Array = jnp.array([
         1.0, 1.0, 1.0, 1.0,
-        1.2, 1.2, 1.2, 1.2,
-        1.4, 1.4, 1.4, 1.4,
-        1.6, 1.6, 1.6, 1.6,
+        1.04, 1.04, 1.04, 1.04,
+        1.08, 1.08, 1.08, 1.08,
+        1.1, 1.1, 1.1, 1.1,
     ], dtype=jnp.float32)
 
     LEVEL_AMMO_SUPPLY: chex.Array = jnp.array([ #TODO CHANE AMMO SUPPLY
-        7500, 7500, 7500, 7500,
-        7500, 7500, 7500, 7500,
-        7500, 7500, 7500, 7500,
-        7500, 7500, 7500, 7500
+        7500, 7350, 7100, 7000,
+        6300, 6150, 6000, 5850,
+        5150, 5000, 4850, 4700,
+        4000, 4000, 4000, 4000
     ], dtype=jnp.int32)
 
 
@@ -928,10 +928,11 @@ class JaxTutankham(JaxEnvironment):
 
 
         #TODO: only for testing
-        #level = 3
+        # level = 12
         # start_x = 136
         # start_y = 60
         # item_states = self.consts.MAP_ITEMS[level%4]
+        # amonition_timer = self.consts.LEVEL_AMMO_SUPPLY[level]
         #---------------------
 
         camera_offset = jnp.where(start_x < self.consts.HEIGHT // 2, 0, start_y - self.consts.HEIGHT // 2)
@@ -1217,7 +1218,7 @@ class JaxTutankham(JaxEnvironment):
             #--------------------------------------------------------------------------
 
 
-            # Chase player if nearby---------------------------------------------------
+            # Chase player if nearby ---------------------------------------------------
             dx = player_x - creature_x
             dy = player_y - creature_y
             player_near = (jnp.abs(dx) < self.consts.CREATURE_DETECTION_RANGE_X) & (jnp.abs(dy) < self.consts.CREATURE_DETECTION_RANGE_Y)
@@ -1228,7 +1229,9 @@ class JaxTutankham(JaxEnvironment):
             prefer_h = jnp.abs(dx) >= jnp.abs(dy)
             primary_dir   = jnp.where(prefer_h, horizontal_direction, vertical_direction)
             secondary_dir = jnp.where(prefer_h, vertical_direction, horizontal_direction)
-
+            
+            # Indices: 0, 1(Down), 2(Up), -1(Right), -2(Left)
+            # mapping array where the index matches the direction value
             lookup_x = jnp.array([0, 0, 0, -1, 1])
             lookup_y = jnp.array([0, 1, -1, 0, 0])
             next_x = creature_x + lookup_x[primary_dir]
@@ -1714,7 +1717,8 @@ class JaxTutankham(JaxEnvironment):
         info = 0
 
         #jax.debug.print("Player position: ({}, {})", player_x, player_y)
-        jax.debug.print("Player position: ({}, {})", player_x, player_y)
+        #jax.debug.print("Player position: ({}, {})", player_x, player_y)
+        #jax.debug.print("ammonition: ({})", amonition_timer)
         #jax.debug.print("Score: ({})", tutankham_score)
         # return observation, new_state, env_reward, done, info
         return state, state, reward, done, info
