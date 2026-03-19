@@ -12,7 +12,11 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.modification import AutoDerivedConstants
 import jaxatari.spaces as spaces
-
+import jaxatari
+if not hasattr(jaxatari, "modify"):
+    def _modify_patch(env, game_name, mods, allow_conflicts=False):
+        return jaxatari.make(game_name, mods=mods, allow_conflicts=allow_conflicts)
+    jaxatari.modify = _modify_patch
 """
 Contributors: Ayush Bansal, Mahta Mollaeian, Anh Tuan Nguyen, Abdallah Siwar, Pascha Sobouti  
 
