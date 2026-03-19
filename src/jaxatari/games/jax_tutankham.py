@@ -861,10 +861,10 @@ class JaxTutankham(JaxEnvironment):
 
 
         #TODO: only for testing
-        level = 1
-        start_x = 136
-        start_y = 60
-        item_states = self.consts.MAP_ITEMS[level%4]
+        # level = 15
+        # start_x = 136
+        # start_y = 60
+        # item_states = self.consts.MAP_ITEMS[level%4]
         #---------------------
 
         camera_offset = jnp.where(start_x < self.consts.HEIGHT // 2, 0, start_y - self.consts.HEIGHT // 2)
@@ -1001,10 +1001,10 @@ class JaxTutankham(JaxEnvironment):
         new_y = player_y + dy[effective_action]
         player_x, player_y, is_walkable = can_walk_to(self.consts.PLAYER_SIZE, new_x, new_y, player_x, player_y, self.consts.VALID_POS_MAPS[level%4])        
         
-        #is_walkable = True # TODO: only for testing---------------------------
-        # player_x = new_x
-        # player_y = new_y
-        # new_last_directional_action = 0
+        is_walkable = True # TODO: only for testing---------------------------
+        player_x = new_x
+        player_y = new_y
+        new_last_directional_action = 0
         #--------------------------------------------------------------------
 
         # If teleporter is triggered, the player position is set to teleporter out coordinates 
@@ -1388,13 +1388,6 @@ class JaxTutankham(JaxEnvironment):
         reset has_key to False
         '''
 
-        # On completing map 4, the player is awarded with an extra laser flash, up to the maximum of 3 flashes
-        laser_flash_count = jnp.where(
-            goal_reached & ((level % 4) == 3) & (laser_flash_count < 3),
-            laser_flash_count + 1,
-            laser_flash_count
-        )
-
         level = jnp.where(goal_reached, level + 1, level)
         player_x = jnp.where(goal_reached, self.consts.MAP_CHECKPOINTS[level%4, 0, 2], player_x) # respawn_x of first checkpoint is the start coordinates for each map
         player_y = jnp.where(goal_reached, self.consts.MAP_CHECKPOINTS[level%4, 0, 3], player_y) # respawn_y of first checkpoint is the start coordinates for each map
@@ -1405,6 +1398,13 @@ class JaxTutankham(JaxEnvironment):
         amonition_timer = jnp.where(goal_reached, self.consts.AMMO_SUPPLY, amonition_timer)
         laser_flash_cooldown = jnp.where(goal_reached, 0, laser_flash_cooldown)
         has_key = jnp.where(goal_reached, False, has_key)
+
+        # On completing map 4, the player is awarded with an extra laser flash, up to the maximum of 3 flashes
+        laser_flash_count = jnp.where(
+            goal_reached & ((level % 4) == 3) & (laser_flash_count < 3),
+            laser_flash_count + 1,
+            laser_flash_count
+        )
 
         # TODO: add rendering stuff for level transition
         return level, player_x, player_y, bullet_state, creature_states, item_states, last_creature_spawn, amonition_timer, laser_flash_cooldown, has_key, laser_flash_count
@@ -1612,5 +1612,5 @@ class JaxTutankham(JaxEnvironment):
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: TutankhamState) -> bool:
         game_over = state.player_lives <= 0
-        beat_game = False  # TODO: replace game winning condition later
+        beat_game = state.level >= 16
         return jnp.logical_or(game_over, beat_game)
