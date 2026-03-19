@@ -95,10 +95,15 @@ def _get_default_asset_config() -> tuple:
 
         # Skier Sprites (as a group for padding)
         {'name': 'skier_group', 'type': 'group', 'files': [
-            "skiier_right.npy", # 0: skier_left
-            "skiier_front.npy", # 1: skier_front
-            "skiier_left.npy",  # 2: skier_right
-            "skier_fallen.npy"  # 3: skier_fallen
+            "skiier_0.npy",
+            "skiier_1.npy",
+            "skiier_2.npy",
+            "skiier_3.npy",
+            "skiier_4.npy",
+            "skiier_5.npy",
+            "skiier_6.npy",
+            "skiier_7.npy",
+            "skier_fallen.npy"
         ]},
 
         # Obstacles
@@ -220,7 +225,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         c = self.consts
         return spaces.Box(low=0, high=255, shape=(c.screen_height, c.screen_width, 3), dtype=jnp.uint8)
 
-    def reset(self, key: jax.random.PRNGKey = jax.random.key(1701)) -> Tuple[SkiingObservation, SkiingState]:
+    def reset(self, key: Optional[jax.random.PRNGKey] = jax.random.PRNGKey(1701)) -> Tuple[SkiingObservation, SkiingState]:
         """Initialize a new game state deterministically from `key`."""
         c = self.consts
         k_flags, k_trees, k_rocks, new_key = jax.random.split(key, 4)
@@ -765,16 +770,9 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
 
         # --- Skier ---
         # Map skier_pos (0..7) to angles
-        # 0=Left (-90), 3=Straight (0), 7=Right (90) approx mapping
-        # 0->270, 1->292.5, 2->315, 3->0, 4->0, 5->45, 6->67.5, 7->90
-        # Simple mapping: (pos - 3.5) * 25.7 degrees? 
-        # Using explicit mapping for clarity based on sprite logic:
-        # 0..2=Left, 3..4=Straight, 5..7=Right
-        skier_ori = jnp.select(
-            [state.skier_pos <= 2, state.skier_pos >= 5],
-            [270.0, 90.0],
-            0.0
-        ).astype(jnp.float32)
+        # 0->270, 1->292.5, 2->315, 3->337.5, 4->22.5, 5->45, 6->67.5, 7->90
+        angles = jnp.array([270.0, 292.5, 315.0, 337.5, 22.5, 45.0, 67.5, 90.0], dtype=jnp.float32)
+        skier_ori = angles[state.skier_pos]
 
         skier = ObjectObservation.create(
             x=jnp.clip(jnp.array(state.skier_x, dtype=jnp.int32), 0, w),
@@ -1024,17 +1022,12 @@ class SkiingRenderer(JAXGameRenderer):
         skier_offset = self.FLIP_OFFSETS['skier_group']
         
         pos = jnp.clip(state.skier_pos, 0, 7)
-        # 0..2 = left (idx 0), 3..4 = front (idx 1), 5..7 = right (idx 2)
-        skier_base_idx = jax.lax.select(
-            pos <= 2, 0,
-            jax.lax.select(pos >= 5, 2, 1)
-        )
-        skier_base = skier_masks[skier_base_idx]
+        skier_base = skier_masks[pos]
 
         is_fallen = (state.skier_fell > 0) & \
                     ((state.collision_type == 1) | (state.collision_type == 2) | (state.collision_type == 3))
         
-        skier_sprite = jax.lax.select(is_fallen, skier_masks[3], skier_base)  # idx 3 is 'skier_fallen'
+        skier_sprite = jax.lax.select(is_fallen, skier_masks[8], skier_base)  # idx 8 is 'skier_fallen'
         
         # Center coordinates
         skier_cx = state.skier_x
