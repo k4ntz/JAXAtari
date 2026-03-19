@@ -820,7 +820,8 @@ class TutankhamRenderer(JAXGameRenderer):
         )
         # Calculate ammo timer bar position
         # Scales with AMMO_SUPPLY. Range is 30 pixels (from 84 to 114).
-        ammo_offset = (jnp.maximum(0, state.amonition_timer) / self.consts.LEVEL_AMMO_SUPPLY[state.level]) * 30
+        ammo_ratio = jnp.maximum(0, state.amonition_timer) / self.consts.LEVEL_AMMO_SUPPLY[state.level]
+        ammo_offset = jnp.ceil(ammo_ratio * 30)
         ammo_x = 114 - ammo_offset.astype(jnp.int32)
         raster = self.jr.render_at_clipped(
             raster,
