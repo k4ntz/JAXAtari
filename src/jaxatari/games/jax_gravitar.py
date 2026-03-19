@@ -9,6 +9,7 @@ import numpy as np
 from flax import struct
 import jaxatari.spaces as spaces
 from jaxatari.core import JaxEnvironment
+from jaxatari.environment import ObjectObservation
 from typing import Tuple, Optional
 from enum import IntEnum
 from jaxatari.renderers import JAXGameRenderer
@@ -127,6 +128,8 @@ class GravitarConstants(struct.PyTreeNode):
     SOLAR_GRAVITY: float = struct.field(pytree_node=False, default=0.044)
     PLANETARY_GRAVITY: float = struct.field(pytree_node=False, default=0.0032)
     REACTOR_GRAVITY: float = struct.field(pytree_node=False, default=0.0001)
+    THRUST_POWER: float = struct.field(pytree_node=False, default=0.035)
+    MAX_SPEED: float = struct.field(pytree_node=False, default=3.0)
     FUEL_CONSUME_THRUST: float = struct.field(pytree_node=False, default=4.0)
     FUEL_CONSUME_SHIELD_TRACTOR: float = struct.field(pytree_node=False, default=10.0)
     STARTING_FUEL: float = struct.field(pytree_node=False, default=10000.0)
@@ -203,24 +206,18 @@ STARTING_FUEL = _DEFAULT_CONSTS.STARTING_FUEL
 
 @jax.jit
 def snap_angle_to_discrete(angle: jnp.ndarray) -> jnp.ndarray:
-    """Snap a continuous angle to the nearest of 12 discrete angles.
-    
-    Args:
-        angle: Angle in radians
-    Returns:
-        Snapped angle from SHIP_ANGLES array
-    """
+    """Snap a continuous angle to the nearest of 16 discrete ship angles."""
     # Normalize angle to [-pi, pi]
     normalized = jnp.arctan2(jnp.sin(angle), jnp.cos(angle))
-    
-    # Calculate angular distance to each of the 12 discrete angles
-    # Use sin of difference for proper circular distance
-    angle_diffs = jnp.abs(jnp.arctan2(
-        jnp.sin(normalized - SHIP_ANGLES),
-        jnp.cos(normalized - SHIP_ANGLES)
-    ))
-    
-    # Find closest angle
+
+    # Calculate angular distance to each discrete angle
+    angle_diffs = jnp.abs(
+        jnp.arctan2(
+            jnp.sin(normalized - SHIP_ANGLES),
+            jnp.cos(normalized - SHIP_ANGLES),
+        )
+    )
+
     closest_idx = jnp.argmin(angle_diffs)
     return SHIP_ANGLES[closest_idx]
 
@@ -260,6 +257,8 @@ def _jax_rotate(image, angle_deg, reshape=False, order=1, mode='constant', cval=
         )
         rotated_channels.append(rotated_channel)
     return jnp.stack(rotated_channels, axis=-1).astype(image.dtype)
+
+_OBS_MAX_PLANETS = 7
 
 
 class SpriteIdx(IntEnum):
@@ -599,6 +598,8 @@ class EnvState:
     fuel_consume_thrust: jnp.ndarray  # float32
     fuel_consume_shield_tractor: jnp.ndarray  # float32
     allow_tractor_in_reactor: jnp.ndarray  # bool
+    thrust_power: jnp.ndarray  # float32 (unscaled; divided by WORLD_SCALE in physics)
+    max_speed: jnp.ndarray  # float32 (unscaled; divided by WORLD_SCALE in physics)
     prev_action: jnp.ndarray  # int32, previous action taken
 
     def _replace(self, **kwargs):
@@ -607,7 +608,299 @@ class EnvState:
 
 @struct.dataclass
 class GravitarObservation:
-    vector: jnp.ndarray
+    ship: ObjectObservation
+    enemies: ObjectObservation  # n = MAX_ENEMIES (turrets)
+    fuel_tanks: ObjectObservation  # n = MAX_ENEMIES (planet pickups)
+    saucer: ObjectObservation  # scalar
+    ufo: ObjectObservation  # scalar
+    planets: ObjectObservation  # n = _OBS_MAX_PLANETS (solar map objects)
+    projectiles: ObjectObservation  # n = MAX_ENEMIES (enemy bulletspool)
+
+
+@jax.jit
+def _clip_xy_to_screen(x: jnp.ndarray, y: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+    cx = jnp.clip(x, 0.0, float(WINDOW_WIDTH)).astype(jnp.int16)
+    cy = jnp.clip(y, 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
+    return cx, cy
+
+
+def _sprite_wh_scalar(sprite_idx: jnp.ndarray, fallback_w: int = 0, fallback_h: int = 0) -> tuple[jnp.ndarray, jnp.ndarray]:
+    idx = sprite_idx.astype(jnp.int32)
+    max_idx = _OBS_SPRITE_DIMS.shape[0] - 1
+    safe_idx = jnp.clip(idx, 0, max_idx)
+    wh = _OBS_SPRITE_DIMS[safe_idx]
+    valid = (idx >= 0) & (idx <= max_idx)
+    w = jnp.where(valid, wh[0], jnp.array(fallback_w, dtype=jnp.int16))
+    h = jnp.where(valid, wh[1], jnp.array(fallback_h, dtype=jnp.int16))
+    return w, h
+
+
+def _sprite_wh_vector(sprite_idx: jnp.ndarray, fallback_w: int = 0, fallback_h: int = 0) -> tuple[jnp.ndarray, jnp.ndarray]:
+    idx = sprite_idx.astype(jnp.int32)
+    max_idx = _OBS_SPRITE_DIMS.shape[0] - 1
+    safe_idx = jnp.clip(idx, 0, max_idx)
+    wh = _OBS_SPRITE_DIMS[safe_idx]
+    valid = (idx >= 0) & (idx <= max_idx)
+    w = jnp.where(valid, wh[:, 0], jnp.full(idx.shape, fallback_w, dtype=jnp.int16))
+    h = jnp.where(valid, wh[:, 1], jnp.full(idx.shape, fallback_h, dtype=jnp.int16))
+    return w, h
+
+
+@jax.jit
+def _get_observation_from_state(state: EnvState) -> GravitarObservation:
+    ship: ShipState = state.state
+    enemies: Enemies = state.enemies
+    fuel_tanks: FuelTanks = state.fuel_tanks
+    saucer: SaucerState = state.saucer
+    ufo: UFOState = state.ufo
+    enemy_bullets: Bullets = state.enemy_bullets
+
+    # --- Ship ---
+    sx, sy = _clip_xy_to_screen(ship.x, ship.y)
+    ship_active = jnp.array(1, dtype=jnp.int32)
+    ship_visual_id = get_ship_sprite_idx(ship.angle).astype(jnp.int16)
+    ship_orientation = ship.angle.astype(jnp.float32)
+    ship_w, ship_h = _sprite_wh_scalar(ship_visual_id, fallback_w=3, fallback_h=7)
+
+    ship_obj = ObjectObservation.create(
+        x=sx,
+        y=sy,
+        width=ship_w,
+        height=ship_h,
+        active=ship_active,
+        visual_id=ship_visual_id,
+        orientation=ship_orientation,
+        state=jnp.array(0, dtype=jnp.int32),
+    )
+
+    # --- Enemies (turrets) ---
+    enemy_present = (enemies.hp > 0) | (enemies.death_timer > 0)
+    enemy_present_i = enemy_present.astype(jnp.int32)
+    ex = jnp.clip(enemies.x, 0.0, float(WINDOW_WIDTH)).astype(jnp.int16)
+    ey = jnp.clip(enemies.y, 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
+    ew = jnp.clip(enemies.w, 0.0, float(WINDOW_WIDTH)).astype(jnp.int16)
+    eh = jnp.clip(enemies.h, 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
+    e_visual = jnp.where(enemy_present, enemies.sprite_idx, jnp.int32(0)).astype(jnp.int16)
+
+    enemies_obj = ObjectObservation.create(
+        x=ex,
+        y=ey,
+        width=ew,
+        height=eh,
+        active=enemy_present_i,
+        visual_id=e_visual,
+        orientation=jnp.zeros_like(enemies.x, dtype=jnp.float32),
+        state=jnp.zeros_like(enemies.x, dtype=jnp.int32),
+    )
+
+    # --- Fuel tanks (planet pickups) ---
+    tank_present = fuel_tanks.active
+    tx = jnp.clip(fuel_tanks.x, 0.0, float(WINDOW_WIDTH)).astype(jnp.int16)
+    ty = jnp.clip(fuel_tanks.y, 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
+    tw = jnp.clip(fuel_tanks.w, 0.0, float(WINDOW_WIDTH)).astype(jnp.int16)
+    th = jnp.clip(fuel_tanks.h, 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
+    t_visual = jnp.where(tank_present, fuel_tanks.sprite_idx, jnp.int32(0)).astype(jnp.int16)
+
+    fuel_tanks_obj = ObjectObservation.create(
+        x=tx,
+        y=ty,
+        width=tw,
+        height=th,
+        active=tank_present.astype(jnp.int32),
+        visual_id=t_visual,
+        orientation=jnp.zeros_like(fuel_tanks.x, dtype=jnp.float32),
+        state=jnp.zeros_like(fuel_tanks.x, dtype=jnp.int32),
+    )
+
+    # --- Saucer (single) ---
+    saucer_present = (saucer.alive | (saucer.death_timer > 0))
+    saucer_active_i = saucer_present.astype(jnp.int32)
+    sax, say = _clip_xy_to_screen(saucer.x, saucer.y)
+    saucer_visual_id = jnp.array(int(SpriteIdx.ENEMY_SAUCER), dtype=jnp.int16)
+    saucer_w, saucer_h = _sprite_wh_scalar(saucer_visual_id, fallback_w=8, fallback_h=7)
+    saucer_obj = ObjectObservation.create(
+        x=sax,
+        y=say,
+        width=saucer_w,
+        height=saucer_h,
+        active=saucer_active_i,
+        visual_id=saucer_visual_id,
+        orientation=jnp.array(0.0, dtype=jnp.float32),
+        state=jnp.array(0, dtype=jnp.int32),
+    )
+
+    # --- UFO (single) ---
+    ufo_present = (ufo.alive | (ufo.death_timer > 0))
+    ufo_active_i = ufo_present.astype(jnp.int32)
+    uax, uay = _clip_xy_to_screen(ufo.x, ufo.y)
+    ufo_visual_id = jnp.array(int(SpriteIdx.ENEMY_UFO), dtype=jnp.int16)
+    ufo_w, ufo_h = _sprite_wh_scalar(ufo_visual_id, fallback_w=7, fallback_h=6)
+    ufo_obj = ObjectObservation.create(
+        x=uax,
+        y=uay,
+        width=ufo_w,
+        height=ufo_h,
+        active=ufo_active_i,
+        visual_id=ufo_visual_id,
+        orientation=jnp.array(0.0, dtype=jnp.float32),
+        state=jnp.array(0, dtype=jnp.int32),
+    )
+
+    # --- Enemy bullets (pool size MAX_ENEMIES) ---
+    pb_alive = enemy_bullets.alive
+    px = jnp.clip(enemy_bullets.x, 0.0, float(WINDOW_WIDTH)).astype(jnp.int16)
+    py = jnp.clip(enemy_bullets.y, 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
+    p_visual = jnp.where(pb_alive, enemy_bullets.sprite_idx, jnp.int32(0)).astype(jnp.int16)
+    bullet_w, bullet_h = _sprite_wh_vector(p_visual, fallback_w=1, fallback_h=2)
+
+    # --- Solar system objects (planets/reactor/obstacle/spawn marker) ---
+    planets_active = (state.planets_pi >= 0).astype(jnp.int32)
+    planet_x = jnp.clip(state.planets_px, 0.0, float(WINDOW_WIDTH)).astype(jnp.int16)
+    planet_y = jnp.clip(state.planets_py, 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
+    planet_visual = jnp.where(state.planets_pi >= 0, state.planets_pi, jnp.int32(0)).astype(jnp.int16)
+    planet_w, planet_h = _sprite_wh_vector(planet_visual, fallback_w=0, fallback_h=0)
+
+    planets_obj = ObjectObservation.create(
+        x=planet_x,
+        y=planet_y,
+        width=planet_w,
+        height=planet_h,
+        active=planets_active,
+        visual_id=planet_visual,
+        orientation=jnp.zeros_like(state.planets_px, dtype=jnp.float32),
+        state=state.planets_cleared_mask.astype(jnp.int32),
+    )
+
+    projectiles_obj = ObjectObservation.create(
+        x=px,
+        y=py,
+        width=bullet_w,
+        height=bullet_h,
+        active=pb_alive.astype(jnp.int32),
+        visual_id=p_visual,
+        orientation=jnp.zeros_like(px, dtype=jnp.float32),
+        state=jnp.zeros_like(px, dtype=jnp.int32),
+    )
+
+    return GravitarObservation(
+        ship=ship_obj,
+        enemies=enemies_obj,
+        fuel_tanks=fuel_tanks_obj,
+        saucer=saucer_obj,
+        ufo=ufo_obj,
+        planets=planets_obj,
+        projectiles=projectiles_obj,
+    )
+
+
+@jax.jit
+def _get_observation_from_ship_state(ship: ShipState) -> GravitarObservation:
+    sx, sy = _clip_xy_to_screen(ship.x, ship.y)
+    ship_visual_id = get_ship_sprite_idx(ship.angle).astype(jnp.int16)
+    ship_w, ship_h = _sprite_wh_scalar(ship_visual_id, fallback_w=3, fallback_h=7)
+
+    ship_obj = ObjectObservation.create(
+        x=sx,
+        y=sy,
+        width=ship_w,
+        height=ship_h,
+        active=jnp.array(1, dtype=jnp.int32),
+        visual_id=ship_visual_id,
+        orientation=ship.angle.astype(jnp.float32),
+        state=jnp.array(0, dtype=jnp.int32),
+    )
+
+    inactive_scalar = jnp.array(0, dtype=jnp.int32)
+    inactive_scalar16 = jnp.array(0, dtype=jnp.int16)
+    inactive_pool = jnp.zeros((MAX_ENEMIES,), dtype=jnp.int32)
+    inactive_pool16 = jnp.zeros((MAX_ENEMIES,), dtype=jnp.int16)
+    zero_orientation_pool = jnp.zeros((MAX_ENEMIES,), dtype=jnp.float32)
+    inactive_planets = jnp.zeros((_OBS_MAX_PLANETS,), dtype=jnp.int32)
+    inactive_planets16 = jnp.zeros((_OBS_MAX_PLANETS,), dtype=jnp.int16)
+    zero_orientation_planets = jnp.zeros((_OBS_MAX_PLANETS,), dtype=jnp.float32)
+
+    saucer_visual_id = jnp.array(int(SpriteIdx.ENEMY_SAUCER), dtype=jnp.int16)
+    saucer_w, saucer_h = _sprite_wh_scalar(saucer_visual_id, fallback_w=8, fallback_h=7)
+    ufo_visual_id = jnp.array(int(SpriteIdx.ENEMY_UFO), dtype=jnp.int16)
+    ufo_w, ufo_h = _sprite_wh_scalar(ufo_visual_id, fallback_w=7, fallback_h=6)
+    bullet_visual_id = jnp.full((MAX_ENEMIES,), int(SpriteIdx.ENEMY_BULLET), dtype=jnp.int16)
+    bullet_w, bullet_h = _sprite_wh_vector(bullet_visual_id, fallback_w=1, fallback_h=2)
+
+    enemies_obj = ObjectObservation.create(
+        x=inactive_pool16,
+        y=inactive_pool16,
+        width=inactive_pool16,
+        height=inactive_pool16,
+        active=inactive_pool,
+        visual_id=inactive_pool16,
+        orientation=zero_orientation_pool,
+        state=inactive_pool,
+    )
+
+    fuel_tanks_obj = ObjectObservation.create(
+        x=inactive_pool16,
+        y=inactive_pool16,
+        width=inactive_pool16,
+        height=inactive_pool16,
+        active=inactive_pool,
+        visual_id=inactive_pool16,
+        orientation=zero_orientation_pool,
+        state=inactive_pool,
+    )
+
+    saucer_obj = ObjectObservation.create(
+        x=inactive_scalar16,
+        y=inactive_scalar16,
+        width=saucer_w,
+        height=saucer_h,
+        active=inactive_scalar,
+        visual_id=saucer_visual_id,
+        orientation=jnp.array(0.0, dtype=jnp.float32),
+        state=inactive_scalar,
+    )
+
+    ufo_obj = ObjectObservation.create(
+        x=inactive_scalar16,
+        y=inactive_scalar16,
+        width=ufo_w,
+        height=ufo_h,
+        active=inactive_scalar,
+        visual_id=ufo_visual_id,
+        orientation=jnp.array(0.0, dtype=jnp.float32),
+        state=inactive_scalar,
+    )
+
+    planets_obj = ObjectObservation.create(
+        x=inactive_planets16,
+        y=inactive_planets16,
+        width=inactive_planets16,
+        height=inactive_planets16,
+        active=inactive_planets,
+        visual_id=inactive_planets16,
+        orientation=zero_orientation_planets,
+        state=inactive_planets,
+    )
+
+    projectiles_obj = ObjectObservation.create(
+        x=inactive_pool16,
+        y=inactive_pool16,
+        width=bullet_w,
+        height=bullet_h,
+        active=inactive_pool,
+        visual_id=inactive_pool16,
+        orientation=zero_orientation_pool,
+        state=inactive_pool,
+    )
+
+    return GravitarObservation(
+        ship=ship_obj,
+        enemies=enemies_obj,
+        fuel_tanks=fuel_tanks_obj,
+        saucer=saucer_obj,
+        ufo=ufo_obj,
+        planets=planets_obj,
+        projectiles=projectiles_obj,
+    )
 
 
 @struct.dataclass
@@ -819,6 +1112,21 @@ def load_sprites_tuple() -> tuple:
     return tuple(sprites)
 
 
+def _build_obs_sprite_dims(sprites: tuple) -> jnp.ndarray:
+    max_sprite_id = max(int(e) for e in SpriteIdx)
+    dims = np.zeros((max_sprite_id + 1, 2), dtype=np.int16)
+    for sprite_idx in range(len(sprites)):
+        surf = sprites[sprite_idx]
+        if surf is not None:
+            dims[sprite_idx, 0] = np.int16(surf.shape[1])
+            dims[sprite_idx, 1] = np.int16(surf.shape[0])
+    return jnp.array(dims, dtype=jnp.int16)
+
+
+_OBS_SPRITES = load_sprites_tuple()
+_OBS_SPRITE_DIMS = _build_obs_sprite_dims(_OBS_SPRITES)
+
+
 # Initializes an empty bullet pool
 def create_empty_bullets_fixed(size: int) -> Bullets:
     return Bullets(
@@ -933,6 +1241,8 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
         solar_gravity=jnp.float32(_DEFAULT_CONSTS.SOLAR_GRAVITY),
         planetary_gravity=jnp.float32(_DEFAULT_CONSTS.PLANETARY_GRAVITY),
         reactor_gravity=jnp.float32(_DEFAULT_CONSTS.REACTOR_GRAVITY),
+        thrust_power=jnp.float32(_DEFAULT_CONSTS.THRUST_POWER),
+        max_speed=jnp.float32(_DEFAULT_CONSTS.MAX_SPEED),
         fuel_consume_thrust=jnp.float32(_DEFAULT_CONSTS.FUEL_CONSUME_THRUST),
         fuel_consume_shield_tractor=jnp.float32(_DEFAULT_CONSTS.FUEL_CONSUME_SHIELD_TRACTOR),
         allow_tractor_in_reactor=jnp.array(_DEFAULT_CONSTS.ALLOW_TRACTOR_IN_REACTOR),
@@ -1296,6 +1606,8 @@ def ship_step(state: ShipState,
               fuel: jnp.ndarray,
               terrain_bank_idx: jnp.ndarray = jnp.int32(0),
               allow_exit_top: jnp.ndarray = jnp.bool_(False),
+              thrust_power: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.THRUST_POWER),
+              max_speed: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.MAX_SPEED),
               solar_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.SOLAR_GRAVITY),
               planetary_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.PLANETARY_GRAVITY),
               reactor_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.REACTOR_GRAVITY)) -> ShipState:
@@ -1304,11 +1616,11 @@ def ship_step(state: ShipState,
     is_thrusting_now = jnp.isin(action, thrust_actions) & (fuel > 0.0)
     
     # --- Physics Parameters ---
-    THRUST_POWER = 0.035 / WORLD_SCALE  # Increased from 0.03 to better overcome gravity
+    THRUST_POWER = jnp.asarray(thrust_power, dtype=jnp.float32) / WORLD_SCALE
     scaled_solar_gravity = solar_gravity / WORLD_SCALE
     scaled_planetary_gravity = planetary_gravity / WORLD_SCALE
     scaled_reactor_gravity = reactor_gravity / WORLD_SCALE
-    MAX_SPEED = 3.0 / WORLD_SCALE
+    MAX_SPEED = jnp.asarray(max_speed, dtype=jnp.float32) / WORLD_SCALE
 
     # 0.0 = full stop on collision (inelastic)
     # 1.0 = perfect bounce (elastic)
@@ -1772,23 +2084,20 @@ def step_core_map(state: ShipState,
                   hud_height: int,
                   fuel: jnp.ndarray = jnp.float32(0.0),
                   terrain_bank_idx: jnp.ndarray = jnp.int32(0),
+                  thrust_power: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.THRUST_POWER),
+                  max_speed: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.MAX_SPEED),
                   solar_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.SOLAR_GRAVITY),
                   planetary_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.PLANETARY_GRAVITY),
                   reactor_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.REACTOR_GRAVITY)
                   ) -> Tuple[GravitarObservation, ShipState, float, bool, GravitarInfo, bool, int]:
     new_state = ship_step(state, action, window_size, hud_height, fuel=fuel, terrain_bank_idx=terrain_bank_idx,
+                          thrust_power=thrust_power,
+                          max_speed=max_speed,
                           solar_gravity=solar_gravity,
                           planetary_gravity=planetary_gravity,
                           reactor_gravity=reactor_gravity)
 
-    obs_vector = jnp.array([
-        new_state.x,
-        new_state.y,
-        new_state.vx,
-        new_state.vy,
-        new_state.angle
-    ])
-    obs = GravitarObservation(vector=obs_vector)
+    obs = _get_observation_from_ship_state(new_state)
 
     reward = 0.0
     done = jnp.array(False)
@@ -1856,6 +2165,8 @@ def step_map(env_state: EnvState, action: int):
 
     actual_action = jnp.where(was_crashing, NOOP, action)
     ship_after_move = ship_step(ship_state_before_move, actual_action, (WINDOW_WIDTH, WINDOW_HEIGHT), HUD_HEIGHT, env_state.fuel, env_state.terrain_bank_idx,
+                                thrust_power=env_state.thrust_power,
+                                max_speed=env_state.max_speed,
                                 solar_gravity=env_state.solar_gravity,
                                 planetary_gravity=env_state.planetary_gravity,
                                 reactor_gravity=env_state.reactor_gravity)
@@ -2035,8 +2346,7 @@ def step_map(env_state: EnvState, action: int):
     should_reset = can_enter_planet | reset_signal_from_crash
     final_level_id = jnp.where(reset_signal_from_crash, -2, level_id)
 
-    obs_vector = jnp.array([new_env.state.x, new_env.state.y, new_env.state.vx, new_env.state.vy, new_env.state.angle])
-    obs = GravitarObservation(vector=obs_vector)
+    obs = _get_observation_from_state(new_env)
 
     reward_saucer = jnp.where(just_died, jnp.float32(100.0), jnp.float32(0.0))
     reward = reward_saucer
@@ -2144,6 +2454,8 @@ def _step_level_core(env_state: EnvState, action: int):
     actual_action = jnp.where(was_crashing, NOOP, action)
 
     ship_after_move = ship_step(ship_state_before_move, actual_action, (WINDOW_WIDTH, WINDOW_HEIGHT), HUD_HEIGHT, state_after_spawn.fuel, state_after_spawn.terrain_bank_idx, allow_exit_top,
+                                thrust_power=state_after_spawn.thrust_power,
+                                max_speed=state_after_spawn.max_speed,
                                 solar_gravity=state_after_spawn.solar_gravity,
                                 planetary_gravity=state_after_spawn.planetary_gravity,
                                 reactor_gravity=state_after_spawn.reactor_gravity)
@@ -2546,8 +2858,7 @@ def _step_level_core(env_state: EnvState, action: int):
         prev_action=action,
     )
 
-    obs_vector = jnp.array([state.x, state.y, state.vx, state.vy, state.angle])
-    obs = GravitarObservation(vector=obs_vector)
+    obs = _get_observation_from_state(final_env_state)
 
     reward = score_delta
     info = GravitarInfo(
@@ -2581,6 +2892,8 @@ def step_arena(env_state: EnvState, action: int):
     # If the ship is crashing, ignore player input and force no movement
     actual_action = jnp.where(is_crashing, NOOP, action)
     ship_after_move = ship_step(ship, actual_action, (WINDOW_WIDTH, WINDOW_HEIGHT), HUD_HEIGHT, env_state.fuel, env_state.terrain_bank_idx,
+                                thrust_power=env_state.thrust_power,
+                                max_speed=env_state.max_speed,
                                 solar_gravity=env_state.solar_gravity,
                                 planetary_gravity=env_state.planetary_gravity,
                                 reactor_gravity=env_state.reactor_gravity)
@@ -2666,9 +2979,16 @@ def step_arena(env_state: EnvState, action: int):
     back_to_map_signal = (~ship_is_hit) & (~saucer_final.alive) & (saucer_final.death_timer == 0)
 
     # --- 6. Assemble and Return ---
-    obs_vector = jnp.array(
-        [ship_after_move.x, ship_after_move.y, ship_after_move.vx, ship_after_move.vy, ship_after_move.angle])
-    obs = GravitarObservation(vector=obs_vector)
+    obs = _get_observation_from_state(env_state._replace(
+        state=ship_after_move,
+        bullets=bullets,
+        cooldown=cooldown,
+        saucer=saucer_final,
+        enemy_bullets=enemy_bullets,
+        fire_cooldown=env_state.fire_cooldown,
+        fuel=fuel_after_actions,
+        crash_timer=crash_timer_next,
+    ))
     reward = jnp.where(just_died, 100.0, 0.0)
     done = jnp.array(False)  # The Arena itself never ends the episode; we return to the map instead
     info = GravitarInfo(
@@ -2904,8 +3224,7 @@ def step_core(env_state: EnvState, action: int):
         )
 
         # 2. Return a tuple with the same pytree structure as the other branch.
-        obs_vector = jnp.array([state.state.x, state.state.y, state.state.vx, state.state.vy, state.state.angle])
-        obs = GravitarObservation(vector=obs_vector)
+        obs = _get_observation_from_state(state)
 
         return obs, state, 0.0, jnp.array(True), info, jnp.array(False), jnp.int32(-1)
 
@@ -3041,9 +3360,7 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
                     )
                 
                 final_state = jax.lax.cond(is_from_arena, _arena_return_state, _level_return_state)
-                obs_out = GravitarObservation(vector=jnp.array([final_state.state.x, final_state.state.y,
-                                                                final_state.state.vx, final_state.state.vy,
-                                                                final_state.state.angle], dtype=jnp.float32))
+                obs_out = env_instance._get_observation(final_state)
                 win_info = info.replace(level_cleared=jnp.array(True))
                 return obs_out, final_state, reward, jnp.array(False), win_info, jnp.array(True), level
 
@@ -3152,7 +3469,7 @@ class JaxGravitar(JaxEnvironment):
         self.num_actions = 18
 
         # ---- Resource Loading and JAX Renderer Initialization ----
-        self.sprites = load_sprites_tuple()
+        self.sprites = _OBS_SPRITES
         self.renderer = GravitarRenderer(width=self.consts.WINDOW_WIDTH, height=self.consts.WINDOW_HEIGHT, consts=self.consts)
 
         # --- Store original sprite dimensions ---
@@ -3293,7 +3610,10 @@ class JaxGravitar(JaxEnvironment):
         """
         return state.done
 
-    def _get_observation(self, state: EnvState) -> GravitarObservation:
+    def _get_observation(
+        self,
+        state: EnvState,
+    ) -> GravitarObservation:
         """
         Extracts the structured observation from the environment state.
         Args:
@@ -3301,12 +3621,8 @@ class JaxGravitar(JaxEnvironment):
 
         Returns: A structured observation dataclass containing the vector observation.
         """
-        ship = state.state
-        obs_vector = jnp.array([
-            ship.x, ship.y, ship.vx, ship.vy, ship.angle
-        ], dtype=jnp.float32)
-
-        return GravitarObservation(vector=obs_vector)
+        return _get_observation_from_state(state)
+    
 
     def _get_info(self, state: EnvState, all_rewards: Optional[jnp.ndarray] = None) -> GravitarInfo:
         """
@@ -3343,12 +3659,18 @@ class JaxGravitar(JaxEnvironment):
         return spaces.Discrete(self.num_actions)
 
     def observation_space(self) -> spaces.Dict: 
-        low = jnp.array([0.0, 0.0, -10.0, -10.0, -jnp.pi], dtype=jnp.float32)
-        high = jnp.array([float(WINDOW_WIDTH), float(WINDOW_HEIGHT), 10.0, 10.0, jnp.pi], dtype=jnp.float32)
+        screen_size = (WINDOW_HEIGHT, WINDOW_WIDTH)
+        orientation_range = (-jnp.pi, jnp.pi)
 
-        vector_space = spaces.Box(low=low, high=high, shape=self.obs_shape, dtype=jnp.float32)
-
-        return spaces.Dict({'vector': vector_space})
+        return spaces.Dict({
+            'ship': spaces.get_object_space(n=None, screen_size=screen_size, orientation_range=orientation_range),
+            'enemies': spaces.get_object_space(n=MAX_ENEMIES, screen_size=screen_size, orientation_range=orientation_range),
+            'fuel_tanks': spaces.get_object_space(n=MAX_ENEMIES, screen_size=screen_size, orientation_range=orientation_range),
+            'saucer': spaces.get_object_space(n=None, screen_size=screen_size, orientation_range=orientation_range),
+            'ufo': spaces.get_object_space(n=None, screen_size=screen_size, orientation_range=orientation_range),
+            'planets': spaces.get_object_space(n=_OBS_MAX_PLANETS, screen_size=screen_size, orientation_range=orientation_range),
+            'projectiles': spaces.get_object_space(n=MAX_ENEMIES, screen_size=screen_size, orientation_range=orientation_range),
+        })
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(low=0, high=255, shape=(WINDOW_HEIGHT, WINDOW_WIDTH, 3), dtype=jnp.uint8)
@@ -3443,18 +3765,15 @@ class JaxGravitar(JaxEnvironment):
             solar_gravity=jnp.float32(self.consts.SOLAR_GRAVITY),
             planetary_gravity=jnp.float32(self.consts.PLANETARY_GRAVITY),
             reactor_gravity=jnp.float32(self.consts.REACTOR_GRAVITY),
+            thrust_power=jnp.float32(self.consts.THRUST_POWER),
+            max_speed=jnp.float32(self.consts.MAX_SPEED),
             fuel_consume_thrust=jnp.float32(self.consts.FUEL_CONSUME_THRUST),
             fuel_consume_shield_tractor=jnp.float32(self.consts.FUEL_CONSUME_SHIELD_TRACTOR),
             allow_tractor_in_reactor=jnp.array(self.consts.ALLOW_TRACTOR_IN_REACTOR),
             prev_action=jnp.int32(0),
         )
 
-        # Ensure obs is a JAX array
-        obs_vector = jnp.array([
-            ship_state.x, ship_state.y, ship_state.vx, ship_state.vy, ship_state.angle
-        ], dtype=jnp.float32)
-
-        return GravitarObservation(vector=obs_vector), env_state
+        return self._get_observation(env_state), env_state
 
     def reset_level(self, key: jnp.ndarray, level_id: jnp.ndarray, prev_env_state: EnvState):
         level_id = jnp.asarray(level_id, dtype=jnp.int32)
@@ -3546,12 +3865,7 @@ class JaxGravitar(JaxEnvironment):
             exit_allowed=(level_id == 4),  # Allow exit from start in reactor level
         )
 
-        # Ensure obs is a JAX array
-        obs_vector = jnp.array([
-            ship_state.x, ship_state.y, ship_state.vx, ship_state.vy, ship_state.angle
-        ], dtype=jnp.float32)
-
-        return GravitarObservation(vector=obs_vector), env_state
+        return self._get_observation(env_state), env_state
 
     # --- Helper Methods ---
     def _build_terrain_bank(self) -> jnp.ndarray:

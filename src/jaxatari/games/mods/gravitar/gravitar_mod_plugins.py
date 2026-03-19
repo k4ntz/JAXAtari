@@ -72,3 +72,12 @@ class AntiGravityMod(JaxAtariInternalModPlugin):
         "PLANETARY_GRAVITY": -0.0032,
         "REACTOR_GRAVITY": -0.0001,
     }
+
+
+class HighSpeedMod(JaxAtariInternalModPlugin):
+    """Make the ship faster by increasing thrust power and max speed."""
+
+    constants_overrides = {
+        "THRUST_POWER": 0.07,
+        "MAX_SPEED": 6.0,
+    }
