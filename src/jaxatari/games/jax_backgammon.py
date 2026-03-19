@@ -149,16 +149,16 @@ class BackgammonInfo:
 @struct.dataclass
 class BackgammonObservation:
     """Object-centric styled observation of the game."""
-    board: jnp.ndarray
-    dice: jnp.ndarray
-    current_player: jnp.ndarray
-    is_game_over: jnp.ndarray
     bar_counts: jnp.ndarray
-    home_counts: jnp.ndarray
+    board: jnp.ndarray
+    current_player: jnp.ndarray
     cursor_position: jnp.ndarray
+    dice: jnp.ndarray
     game_phase: jnp.ndarray
-    picked_checker_from: jnp.ndarray
+    home_counts: jnp.ndarray
+    is_game_over: jnp.ndarray
     last_valid_drop: jnp.ndarray
+    picked_checker_from: jnp.ndarray
 
 
 # ============================================================================
@@ -306,7 +306,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
             last_dice=-1,
             cursor_position=initial_cursor,
             picked_checker_from=-1,
-            game_phase=jnp.int32(0),              # WAITING_FOR_ROLL (opening dice already precomputed)
+            game_phase=jnp.int32(1),              # SELECTING_CHECKER
             last_action=JAXAtariAction.NOOP,
             await_keyup=False,
             last_valid_drop=-1,
@@ -1016,27 +1016,11 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
         
         Returns: Updated state with new dice, original_dice, and game_phase.
         """
-        # Opening state already precomputes the first player's dice in init_state.
-        # Consume those once without rerolling so wrapper-level first_fire does not
-        # accidentally auto-pick a checker at reset.
-        has_pending_dice = jnp.any(state.dice > 0)
-
-        def consume_existing_opening_roll(s: BackgammonState) -> BackgammonState:
-            return s.replace(game_phase=1)
-
-        def roll_new_turn(s: BackgammonState) -> BackgammonState:
-            dice, key = self.roll_dice(s.key)
-            # Store original roll for display (ALE always shows 2 dice with original values)
-            # For doubles, both display dice show the same value
-            original_dice = jnp.array([dice[0], dice[1]], dtype=jnp.int32)
-            return s.replace(dice=dice, original_dice=original_dice, key=key, game_phase=1)
-
-        new_state = jax.lax.cond(
-            has_pending_dice,
-            consume_existing_opening_roll,
-            roll_new_turn,
-            operand=state,
-        )
+        dice, key = self.roll_dice(state.key)
+        # Store original roll for display (ALE always shows 2 dice with original values)
+        # For doubles, both display dice show the same value
+        original_dice = jnp.array([dice[0], dice[1]], dtype=jnp.int32)
+        new_state = state.replace(dice=dice, original_dice=original_dice, key=key, game_phase=1)
         # Auto-pass if no legal move with these dice
         return self._auto_pass_if_stuck(new_state)
 
@@ -1244,77 +1228,45 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: BackgammonState, action: jnp.ndarray):
         """
-        Interactive step with JAX-safe debounce and continuous movement.
-        
-        This is the main entry point for gameplay. It follows the orchestrator pattern:
-        - Delegates to helper functions for specific logic
-        - Handles debounce for FIRE key-press/release behavior
-        - LEFT/RIGHT are processed each step (no repeat delay)
-        - Returns (observation, new_state, reward, done, info)
-        
-        FIRE triggers once per press; LEFT/RIGHT repeat when held.
+        Base interactive step used by benchmark training.
+
+        The base control path is intentionally RL-stable: each environment step processes
+        one translated ALE action directly, and FIRE is edge-triggered to avoid accidental
+        repeated pick/drop transitions under frame-skip.
+
+        Human hold/debounce semantics are provided by control mods (e.g. HoldToScrollMod,
+        ALEControlsMod) that patch this method.
         """
         # Translate policy action index to ALE-style action constant.
         atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
 
-        is_left = atari_action == JAXAtariAction.LEFT
-        is_right = atari_action == JAXAtariAction.RIGHT
-        is_movement = is_left | is_right
-        
-        # Branch 1: Debounce active (FIRE held) - wait for key release, but allow movement
-        def when_blocked(s):
-            # Allow movement even when FIRE is blocked
-            def do_movement(s2):
-                def process_repeat(s3):
-                    ns, _, _ = self._process_action(s3, atari_action)
-                    return ns.replace(last_action=atari_action, move_repeat_timer=0)
-                return process_repeat(s2)
-            
-            ns = jax.lax.cond(
-                is_movement,
-                do_movement,
-                lambda s2: self._handle_blocked_input(s2, action),
-                operand=s
-            )
-            return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
+        # Edge-trigger FIRE so a held FIRE key does not repeatedly pick/drop in one hold.
+        fire_held = (atari_action == JAXAtariAction.FIRE) & (state.last_action == JAXAtariAction.FIRE)
+        effective_action = jax.lax.select(fire_held, jnp.int32(JAXAtariAction.NOOP), atari_action)
 
-        # Branch 2: Ready for input - process action
-        def when_free(s):
-            # For movement: process each LEFT/RIGHT step immediately.
-            def handle_movement(s2):
-                def process_move(s3):
-                    ns, reward, done = self._process_action(s3, atari_action)
-                    ns = ns.replace(last_action=atari_action, move_repeat_timer=0)
-                    return ns, reward, done
-                return process_move(s2)
-            
-            def handle_other(s2):
-                ns, reward, done = self._process_action(s2, atari_action)
-                ns = self._apply_debounce(s, atari_action, ns)
-                return ns, reward, done
-            
-            ns, reward, done = jax.lax.cond(is_movement, handle_movement, handle_other, operand=s)
-            obs = self._get_observation(ns)
-            info = self._get_info(ns)
-            return obs, ns, reward, done, info
+        ns, reward, done = self._process_action(state, effective_action)
+        # Keep raw button state in last_action so held FIRE remains latched until release.
+        ns = ns.replace(last_action=atari_action, move_repeat_timer=0, await_keyup=False)
 
-        return jax.lax.cond(state.await_keyup, when_blocked, when_free, operand=state)
+        obs = self._get_observation(ns)
+        info = self._get_info(ns)
+        return obs, ns, reward, done, info
 
 
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: BackgammonObservation) -> jnp.ndarray:
         """Convert object-centric observation to flat array."""
         return jnp.concatenate([
-            obs.board.flatten(),
-            obs.dice.flatten(),
-            obs.current_player.flatten(),
-            obs.is_game_over.flatten(),
             obs.bar_counts.flatten(),
-            obs.home_counts.flatten(),
+            obs.board.flatten(),
+            obs.current_player.flatten(),
             obs.cursor_position.flatten(),
+            obs.dice.flatten(),
             obs.game_phase.flatten(),
-            obs.picked_checker_from.flatten(),
+            obs.home_counts.flatten(),
+            obs.is_game_over.flatten(),
             obs.last_valid_drop.flatten(),
+            obs.picked_checker_from.flatten(),
         ]).astype(jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1408,16 +1360,16 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
     def _get_observation(self, state: BackgammonState) -> BackgammonObservation:
         """Convert state to object-centric observation."""
         return BackgammonObservation(
-            board=state.board,
-            dice=state.dice,
-            current_player=jnp.array([state.current_player], dtype=jnp.int32),
-            is_game_over=jnp.array([jnp.where(state.is_game_over, 1, 0)], dtype=jnp.int32),
             bar_counts=jnp.array([state.board[0, 24], state.board[1, 24]], dtype=jnp.int32),
-            home_counts=jnp.array([state.board[0, 25], state.board[1, 25]], dtype=jnp.int32),
+            board=state.board,
+            current_player=jnp.array([state.current_player], dtype=jnp.int32),
             cursor_position=jnp.array([state.cursor_position], dtype=jnp.int32),
+            dice=state.dice,
             game_phase=jnp.array([state.game_phase], dtype=jnp.int32),
-            picked_checker_from=jnp.array([state.picked_checker_from], dtype=jnp.int32),
+            home_counts=jnp.array([state.board[0, 25], state.board[1, 25]], dtype=jnp.int32),
+            is_game_over=jnp.array([jnp.where(state.is_game_over, 1, 0)], dtype=jnp.int32),
             last_valid_drop=jnp.array([state.last_valid_drop], dtype=jnp.int32),
+            picked_checker_from=jnp.array([state.picked_checker_from], dtype=jnp.int32),
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1427,14 +1379,14 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
             # keep shape stable across the codebase (1,) float32 by default
             all_rewards = jnp.zeros((1,), dtype=jnp.float32)
 
-        # Benchmarks aggregate info values with a scalar done-mask. Keep info leaves scalar.
+        # Benchmark reducers aggregate done infos with scalar masks; keep leaves scalar.
         dice_scalar = jnp.asarray(jnp.max(state.dice), dtype=jnp.int32)
-        rewards_scalar = jnp.asarray(jnp.sum(all_rewards), dtype=jnp.float32)
+        all_rewards_scalar = jnp.asarray(jnp.sum(all_rewards), dtype=jnp.float32)
 
         return BackgammonInfo(
             player=jnp.asarray(state.current_player, dtype=jnp.int32),
             dice=dice_scalar,
-            all_rewards=rewards_scalar,
+            all_rewards=all_rewards_scalar,
         )
 
     @partial(jax.jit, static_argnums=(0,))

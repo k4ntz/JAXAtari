@@ -310,7 +310,66 @@ class SimplifyBackgammonMod(JaxAtariPostStepModPlugin):
         return new_state.replace(is_game_over=game_over)
 
 
-class ALEControlsMod(JaxAtariInternalModPlugin):
+class HoldToScrollMod(JaxAtariInternalModPlugin):
+    """
+    Adds human-oriented hold/debounce controls on top of the base Backgammon step.
+
+    Behavior:
+    - FIRE is debounced and requires NOOP (release) before another FIRE is accepted.
+    - LEFT/RIGHT can continue moving while FIRE debounce is active.
+    - Movement hold-to-repeat works by allowing LEFT/RIGHT every step.
+
+    This mod is intended for manual play ergonomics and ALE-like interaction experiments,
+    while keeping the base environment path RL-stable.
+    """
+
+    conflicts_with = ["ale_controls", "hold_to_scroll_release_to_drop"]
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state, action):
+        """Patch env.step to use FIRE debounce and hold-to-scroll behavior."""
+        # Translate policy action index to ALE-style action constant.
+        atari_action = jnp.take(self._env.ACTION_SET, action.astype(jnp.int32))
+
+        is_left = atari_action == JAXAtariAction.LEFT
+        is_right = atari_action == JAXAtariAction.RIGHT
+        is_movement = is_left | is_right
+
+        # Branch 1: Debounce active (FIRE held) - wait for key release, but allow movement
+        def when_blocked(s):
+            def do_movement(s2):
+                ns, _, _ = self._env._process_action(s2, atari_action)
+                return ns.replace(last_action=atari_action, move_repeat_timer=0)
+
+            ns = jax.lax.cond(
+                is_movement,
+                do_movement,
+                lambda s2: self._env._handle_blocked_input(s2, atari_action),
+                operand=s,
+            )
+            return self._env._get_observation(ns), ns, 0.0, False, self._env._get_info(ns)
+
+        # Branch 2: Ready for input - process action
+        def when_free(s):
+            def handle_movement(s2):
+                ns, reward, done = self._env._process_action(s2, atari_action)
+                ns = ns.replace(last_action=atari_action, move_repeat_timer=0)
+                return ns, reward, done
+
+            def handle_other(s2):
+                ns, reward, done = self._env._process_action(s2, atari_action)
+                ns = self._env._apply_debounce(s, atari_action, ns)
+                return ns, reward, done
+
+            ns, reward, done = jax.lax.cond(is_movement, handle_movement, handle_other, operand=s)
+            obs = self._env._get_observation(ns)
+            info = self._env._get_info(ns)
+            return obs, ns, reward, done, info
+
+        return jax.lax.cond(state.await_keyup, when_blocked, when_free, operand=state)
+
+
+class ALEControlsMod(HoldToScrollMod):
     """
     Implements original ALE Backgammon controls: "hold-to-scroll, release-to-drop".
     
@@ -327,20 +386,22 @@ class ALEControlsMod(JaxAtariInternalModPlugin):
     Implementation TODO: Needs to track button hold state and trigger drop on release.
     """
     
-    # Mark as conflicting with the default cursor-based controls
-    conflicts_with = ["DefaultControlsMod"]
+    # Includes HoldToScroll behavior internally; don't allow stacking both mods.
+    conflicts_with = ["hold_to_scroll"]
     
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state, action):
         """Patch env.step to auto-drop on button release (NOOP) during moving phase."""
-        obs, new_state, reward, done, info = JaxBackgammonEnv.step(self._env, state, action)
+        obs, new_state, reward, done, info = HoldToScrollMod.step(self, state, action)
+
+        atari_action = jnp.take(self._env.ACTION_SET, action.astype(jnp.int32))
 
         was_scrolling = (
             (state.last_action == JAXAtariAction.LEFT) |
             (state.last_action == JAXAtariAction.RIGHT)
         )
         release_detected = (
-            (action == JAXAtariAction.NOOP) &
+            (atari_action == JAXAtariAction.NOOP) &
             (state.game_phase == jnp.int32(2)) &
             was_scrolling &
             (new_state.picked_checker_from >= 0)
