@@ -843,7 +843,7 @@ class JaxTutankham(JaxEnvironment):
         player_lives = self.consts.PLAYER_LIVES
         amonition_timer = self.consts.AMMO_SUPPLY
         bullet_state = jnp.array([0, 0, 0, 0, 0], dtype=jnp.int32)  # (x, y, bullet_rotation, bullet_active, anim_counter)
-        creature_states = jnp.zeros((self.consts.MAX_CREATURES, 5))  # (x, y, creature_type, active, direction)
+        creature_states = jnp.zeros((self.consts.MAX_CREATURES, 5), dtype=jnp.int32)  # (x, y, creature_type, active, direction)
         item_states = self.consts.MAP_ITEMS[level%4]  # (N, 4) array with (x, y, item_type, active)
         last_creature_spawn = 0
         laser_flash_count = self.consts.MAX_LASER_FLASHES
@@ -861,10 +861,10 @@ class JaxTutankham(JaxEnvironment):
 
 
         #TODO: only for testing
-        level = 3
+        #level = 3
         # start_x = 136
         # start_y = 60
-        item_states = self.consts.MAP_ITEMS[level%4]
+        # item_states = self.consts.MAP_ITEMS[level%4]
         #---------------------
 
         camera_offset = jnp.where(start_x < self.consts.HEIGHT // 2, 0, start_y - self.consts.HEIGHT // 2)
@@ -1130,28 +1130,43 @@ class JaxTutankham(JaxEnvironment):
         def move_creature(creature_state, creature_subpixel):
             creature_x, creature_y, creature_type, active, direction = creature_state
 
-            speed = self.consts.CREATURE_SPEED[creature_type.astype(int)]
+            # get creature speed apply subpixel accumulator for smooth movement
+            speed = self.consts.CREATURE_SPEED[creature_type.astype(jnp.int32)]
             actual_speed, new_subpixel = self.subpixel_accumulator(speed, creature_subpixel)
 
+
+
             # direction 0: right (+1), direction 1: left (-1)
-            # movement = actual_speed * (1 - 2 * direction)
-            new_x = creature_x + actual_speed * active * (1 - 2 * direction)
-            new_y = creature_y
-            creature_x, creature_y, is_walkable = can_walk_to(self.consts.CREATURE_SIZE, new_x.astype(jnp.int32), new_y.astype(jnp.int32), creature_x, creature_y, self.consts.VALID_POS_MAPS[level%4])
-            # Deactivate if out of bounds
-            active_new = jnp.where(
-                creature_x >= self.consts.WIDTH,
-                self.consts.INACTIVE,
-                active
-            )
+            
+            # def creature_pathing(creature_x, creature_ y, direction, player_x, player_y):
+            #     return direction
+            
 
+            # direction can have the following values:
+            # down = 1, up = 2
+            # right = -1, left = -2
+            # maps down -> +
+            x_direction = jnp.minimum(direction, 0)
+            y_direction = jnp.maximum(direction, 0)
+            x_direction = jnp.where(x_direction < -1, -1, 1)
+            y_direction = jnp.where(y_direction > 1, -1, 1)
+
+        
+
+            # move creature
+            new_x = creature_x + actual_speed * x_direction * active
+            new_y = creature_y + actual_speed * y_direction * active           
+            creature_x, creature_y, is_walkable = can_walk_to(self.consts.CREATURE_SIZE, new_x, new_y, creature_x, creature_y, self.consts.VALID_POS_MAPS[level%4])
+            
+
+            # Deactivate creature of it is offscreen
             creature_on_screen = is_onscreen(creature_y, self.consts.CREATURE_SIZE[1], camera_offset)
-            active_new = jnp.where(creature_on_screen, active_new, self.consts.INACTIVE)
+            active = jnp.where(creature_on_screen, active, self.consts.INACTIVE)
+            # reset creature position to [0,0] if inactive
+            creature_x = creature_x * active
+            creature_y = creature_y * active
 
-            creature_x = creature_x * active_new
-            creature_y = creature_y * active_new
-
-            return jnp.array([creature_x, creature_y, creature_type, active_new, direction], dtype=jnp.int32), new_subpixel
+            return jnp.array([creature_x, creature_y, creature_type, active, direction], dtype=jnp.int32), new_subpixel
 
         move_creature_vmapped = jax.vmap(move_creature)
         new_creature_states, new_creature_subpixels = move_creature_vmapped(creature_states, creature_subpixels)
@@ -1567,7 +1582,8 @@ class JaxTutankham(JaxEnvironment):
         done = self._get_done(state)
         info = 0
 
-        jax.debug.print("Player position: ({}, {})", player_x, player_y)
+        #jax.debug.print("Player position: ({}, {})", player_x, player_y)
+        jax.debug.print("Player position: ({}, {})", player_x.dtype, player_y.dtype)
         #jax.debug.print("Score: ({})", tutankham_score)
         # return observation, new_state, env_reward, done, info
         return state, state, reward, done, info
