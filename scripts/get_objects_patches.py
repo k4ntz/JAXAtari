@@ -67,7 +67,7 @@ def save_objects_patches(objects, frame, game):
             if i == 5 and not msg_given:
                 print("Avoiding to save redundant objects > 0")
                 msg_given = True
-            if i > 5:
+            if i > 10:
                 break
         imageio.imwrite(f'patches/{game}/{object.category}_{i}.png', big_patch)
         jnp.save(f'patches/{game}/{object.category}_{i}.npy', patch)
@@ -79,14 +79,20 @@ class Renderer:
     env: gym.Env
 
     def __init__(self, env_name: str):
-        self.env = OCAtari(env_name, mode="ram", hud=True, render_mode="human",
+        self.env = OCAtari(env_name, mode="vision", hud=True, render_mode="human",
                            render_oc_overlay=True, frameskip=1)
         self.env.reset()
         self.env.render()  # initialize pygame video system
 
         self.paused = False
-        self.current_keys_down = set()
-        self.keys2actions = self.env.unwrapped.get_keys_to_action()
+        self.current_actions = set()
+        self.keys2actions = {}
+        for i, action in enumerate(self.env.get_action_meanings()):
+            if action == "RIGHT" or action == "LEFT":
+                self.keys2actions[eval(f'pygame.K_{action}')] = i
+            elif action != "NOOP":
+                print("ACTION NOT COVERED")
+                raise NotImplementedError
         self.frame = 0
         # self.env.set_ram(16, 6)
 
@@ -108,23 +114,17 @@ class Renderer:
         pygame.quit()
 
     def _get_action(self):
-        pressed_keys = list(self.current_keys_down)
-        pressed_keys.sort()
-        pressed_keys = tuple(pressed_keys)
-        if pressed_keys in self.keys2actions.keys():
-            action = self.keys2actions[pressed_keys]
-        else:
-            action = 0  # NOOP
-        # Convert to int if not already
-        try:
-            action_int = int(action)
-        except Exception:
-            action_int = 0
-        # Ensure action is within the valid range
-        if hasattr(self.env, 'action_space') and hasattr(self.env.action_space, 'n'):
-            if not (0 <= action_int < self.env.action_space.n):
-                action_int = 0  # fallback to NOOP if out of range
-        return action_int
+        for action in self.current_actions:
+            try:
+                action_int = int(action)
+            except Exception:
+                action_int = 0
+            # Ensure action is within the valid range
+            if hasattr(self.env, 'action_space') and hasattr(self.env.action_space, 'n'):
+                if not (0 <= action_int < self.env.action_space.n):
+                    action_int = 0  # fallback to NOOP if out of range
+            return action_int
+        return 0
 
     def _handle_user_input(self):
         self.current_mouse_pos = np.asarray(pygame.mouse.get_pos())
@@ -134,7 +134,7 @@ class Renderer:
             if event.type == pygame.QUIT:  # window close button clicked
                 self.running = False
 
-            elif event.type == pygame.KEYDOWN:  # keyboard key pressed
+            elif event.type == pygame.KEYDOWN:  # keyboard key pressed                
                 if event.key == pygame.K_p:  # 'P': pause/resume
                     self.paused = not self.paused
 
@@ -149,12 +149,12 @@ class Renderer:
                     save_rgb_array_as_png(
                         screen, f'patches/{self.env.game_name}_{self.frame}.png')
 
-                elif (event.key,) in self.keys2actions.keys():  # env action
-                    self.current_keys_down.add(event.key)
+                elif event.key in self.keys2actions:  # env action                    
+                    self.current_actions.add(self.keys2actions[event.key])
 
             elif event.type == pygame.KEYUP:  # keyboard key released
-                if (event.key,) in self.keys2actions.keys():
-                    self.current_keys_down.remove(event.key)
+                if event.key in self.keys2actions:
+                    self.current_actions.remove(self.keys2actions[event.key])
 
 
 if __name__ == "__main__":
