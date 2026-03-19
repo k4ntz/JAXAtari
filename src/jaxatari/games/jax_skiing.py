@@ -506,9 +506,9 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         down_speed = jnp.array([0.0, 0.5, 0.875, 1.0, 1.0, 0.875, 0.5, 0.0], jnp.float32)
 
         RECOVERY_FRAMES = jnp.int32(60)
-        TREE_X_DIST = jnp.float32(3.0)
+        TREE_X_DIST = jnp.float32(8.0)
         ROCK_X_DIST = jnp.float32(1.0)
-        Y_HIT_DIST  = jnp.float32(1.0)
+        Y_HIT_DIST  = jnp.float32(2.0)
 
         # Translate agent action (0,1,2) to ALE action
         atari_action = jnp.take(self.ACTION_SET, action)
@@ -633,7 +633,9 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             x = tree_pos[..., 0]
             y = tree_pos[..., 1]
             dx = jnp.abs(new_x_nom - x)
-            dy = jnp.abs(jnp.round(skier_y_px) - jnp.round(y))
+            # Tree height is 30, center is y. Bottom is y+15.
+            # Offset by +10 to target the trunk area.
+            dy = jnp.abs(jnp.round(skier_y_px) - jnp.round(y + 10.0))
             return jnp.logical_and(dx <= x_d, dy < y_d)
 
         def coll_rock(rock_pos, x_d=ROCK_X_DIST, y_d=Y_HIT_DIST):
@@ -643,14 +645,17 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             dy = jnp.abs(jnp.round(skier_y_px) - jnp.round(y))
             return jnp.logical_and(dx < x_d, dy < y_d)
 
-        def coll_flag(flag_pos, x_d=jnp.float32(4.0), y_d=jnp.float32(14.0)):
+        def coll_flag(flag_pos, x_d=jnp.float32(1.5)):
             x = flag_pos[..., 0]
             y = flag_pos[..., 1]
             dx1 = jnp.abs(new_x_nom - x)
             dx2 = jnp.abs(new_x_nom - (x + self.consts.flag_distance))
-            dy  = jnp.abs(jnp.round(skier_y_px) - jnp.round(y))
-            return jnp.logical_or(jnp.logical_and(dx1 <= x_d, dy < y_d),
-                                  jnp.logical_and(dx2 <= x_d, dy < y_d))
+            # The flag center is at y. Bottom of pole is y+14.
+            # We move the hit zone higher up the pole to y+6.0 (8 pixels above the bottom).
+            dy_off = skier_y_px - (y + 6.0)
+            dy_hit = (dy_off >= -1.0) & (dy_off <= 1.0)
+            return jnp.logical_or(jnp.logical_and(dx1 <= x_d, dy_hit),
+                                  jnp.logical_and(dx2 <= x_d, dy_hit))
 
         collisions_tree = jax.vmap(coll_tree)(jnp.array(new_trees_nom))
         collisions_rock = jax.vmap(coll_rock)(jnp.array(new_rocks_nom))
