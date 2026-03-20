@@ -31,39 +31,40 @@ def _get_default_asset_config() -> tuple:
     )
 
 class BasicMathConstants(struct.PyTreeNode):
-    SCREEN_WIDTH: int = 160
-    SCREEN_HEIGHT: int = 210
+    SCREEN_WIDTH: int = struct.field(pytree_node=False, default=160)
+    SCREEN_HEIGHT: int = struct.field(pytree_node=False, default=210)
 
-    GAMEMODE: int = 5
-    DIFFICULTY: int = 0
+    GAMEMODE: int = struct.field(pytree_node=False, default=5)
+    DIFFICULTY: int = struct.field(pytree_node=False, default=0)
 
-    COLOR_CODES: Any = [
+    COLOR_CODES: Tuple[Tuple[int, int, int], ...] = struct.field(pytree_node=False, default_factory=lambda: tuple([
         [(18, 46, 137), (113, 115, 25)],
         [(143, 114, 41), (63, 1, 106)],
         [(110, 110, 15), (145, 120, 43)],
         [(161, 104, 35), (65, 144, 58)]
-    ]
+    ]))
 
-    X_OFFSET: int = 47
-    Y_OFFSET: int = 35
-    BAR_OFFSET: int = 31
-    num0: Any = (X_OFFSET + 20, Y_OFFSET + 20)
-    num1: Any = (num0[0], num0[1] + 40)
-    num2: Any = (num1[0], num1[1] + 40)
-    bar0: Any = (num2[0], num2[1] + 29)
-    bar1: Any = (X_OFFSET, num1[1] + 30)
-    symbol: Any = (X_OFFSET + 5, num1[1])
+    X_OFFSET: int = struct.field(pytree_node=False, default=47)
+    Y_OFFSET: int = struct.field(pytree_node=False, default=35)
+    BAR_OFFSET: int = struct.field(pytree_node=False, default= 31)
+    num0: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: tuple((47 + 20, 35 + 20)))
+    num1: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: tuple((47 + 20, 35 + 60)))
+    num2: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: tuple((47 + 20, 35 + 100)))
+    bar0: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: tuple((47 + 20, 35 + 129)))
+    bar1: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: tuple((47, 35 + 90)))
+    symbol: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: tuple((47 + 5, 35 + 60)))
 
-    problemNumLen: int = 1
-    numArrLen: int = 6
-    initialArrPos: int = 2
-    spacing: int = 0
+    problemNumLen: int = struct.field(pytree_node=False, default=1)
+    numArrLen: int = struct.field(pytree_node=False, default=6)
+    initialArrPos: int = struct.field(pytree_node=False, default=2)
+    spacing: int = struct.field(pytree_node=False, default=0)
 
     DIFFICULTY_TIMES = jnp.array([-1, 180, 360, 720], dtype=jnp.int32)
 
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
-class BasicMathState(struct.PyTreeNode):
+@struct.dataclass
+class BasicMathState:
     numArr: chex.Array
     arrPos: chex.Array
     score: chex.Array
@@ -75,14 +76,16 @@ class BasicMathState(struct.PyTreeNode):
     key: chex.PRNGKey
     step_counter: chex.Array
 
-class BasicMathObservation(struct.PyTreeNode):
+@struct.dataclass
+class BasicMathObservation:
     x: jnp.ndarray
     y: jnp.ndarray
     problemNum1: jnp.ndarray
     problemNum2: jnp.ndarray
     numArr: jnp.ndarray
 
-class BasicMathInfo(struct.PyTreeNode):
+@struct.dataclass
+class BasicMathInfo:
     score: chex.Array
     round: chex.Array
 
@@ -495,20 +498,6 @@ class BasicMathRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
-
-        sprite_color_rgb = jnp.array(self.consts.COLOR_CODES[0][1], dtype=jnp.uint8)
-
-        palette_channels = self.PALETTE.shape[1]
-
-        if palette_channels == 1:
-            gray_val = (0.299 * sprite_color_rgb[0] + 0.587 * sprite_color_rgb[1] + 0.114 * sprite_color_rgb[2]).astype(jnp.uint8)
-            target_color = jnp.array([gray_val], dtype=jnp.uint8)
-        else:
-            target_color = sprite_color_rgb
-
-        broadcasted_color = jnp.broadcast_to(target_color, (5, palette_channels))
-
-        self.PALETTE = self.PALETTE.at[:5, :].set(broadcasted_color)
 
     def _stack_num_masks(self) -> jnp.ndarray:
         """Helper to get all player-related masks from the main padded group."""

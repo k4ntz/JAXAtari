@@ -1,5 +1,5 @@
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.basicmath_mod_plugins import (
+from jaxatari.games.mods.basicmath.basicmath_mod_plugins import (
     BackgroundBlackColorMod,
     BackgroundRandomColorMod,
     NumberRandomColorMod,
