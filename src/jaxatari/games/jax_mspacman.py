@@ -5,32 +5,19 @@ Edit: Jan Rafflewski
 
 """
 TODO
-    1)  [x] Validate ghost behaviour
-    2)  [x] Level progression
-    3)  [x] Performance improvements
-    4)  [x] JIT compatibility
-
-    Bugs:
-    1)  [x] Fix type cast warning
-    2)  [x] Fix frightened ghosts death loop (following repeating patterns)
-    3)  [X] Fix frightened ghosts being able to revert
-    4)  [x] Fix entity alignment (pacman, ghosts, fruits and pellets one pixel up)
-    5)  [x] Fix pellet in the upper left corner not being consumable
-    6)  [ ] Fix inconsistent PELLETS_TO_COLLECT behaviour
+    1)  [ ] Get original fruit sprites from OCAtari (ALE)
+    2)  [ ] Compare timings and behaviour with OCAtari (ALE)
+    3)  [ ] Fix inconsistent PELLETS_TO_COLLECT behaviour
+    4)  [ ] Reduce frightened/jail time every level
 
     Optional:
-    a)  [x] Correct speed
-    b)  [-] Pacman death animation
-    c)  [x] Bonus Life at 10000 score
-    d)  [ ] Fruit sprites
-    e)  [-] Fruit movement patterns
-    f)  [x] Ghost starting positions
-    g)  [-] Ghost behavioral quirks
-    h)  [-] Ghost enjailment
-    i)  [x] Ghost timings
-    j)  [-] Correct maze colors
-    k)  [x] Make sure data types make sense
-    l)  [ ] Reduce frightened/jail time every level
+    a)  [ ] Make sure data types make sense
+    a)  [ ] Correct maze colors
+    b)  [ ] Add level transition animation (white blinking)
+    c)  [ ] Add Pacman death animation
+    d)  [ ] Add Fruit movement patterns
+    e)  [ ] Add Ghost behavioral quirks
+    f)  [ ] Fix Ghost enjailment
 """
 
 
@@ -38,7 +25,6 @@ TODO
 from enum import IntEnum
 import os
 from functools import partial
-import time
 from typing import Any, Dict, NamedTuple, Optional, Tuple
 
 import chex
@@ -88,12 +74,12 @@ MAX_LIVE_COUNT = 4 # Maximum possible number of lives
 MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
 PELLETS_TO_COLLECT = 150 # Total pellets to collect in the maze (including power pellets)
 BONUS_LIFE_SCORE = 10000 # Score at which a bonus life is rewarded
-COLLISION_THRESHOLD = 8 # Contacts below this distance count as collision
+COLLISION_THRESHOLD = 6 # Contacts below this distance count as collision
 
 # GHOST TIMINGS
-PINKY_RELEASE_TIME = 1*TIME_SCALE
+SUE_RELEASE_TIME = 1*TIME_SCALE
 INKY_RELEASE_TIME = 4*TIME_SCALE
-SUE_RELEASE_TIME = 5*TIME_SCALE
+PINKY_RELEASE_TIME = 5*TIME_SCALE
 RESET_TIMER = 2*TIME_SCALE # Timer for resetting the game after death
 CHASE_DURATION = 20*TIME_SCALE # Approximately 20s
 SCATTER_DURATION = 7*TIME_SCALE # Approximately 7s
@@ -902,6 +888,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             ), 0
         
         def step_fruit():
+            fruit_type = get_level_fruit(state.level.id, key)
             fruit_position, fruit_action = jax.lax.cond(
                 state.step_count % 2 == 0,
                 lambda: JaxPacman.fruit_move(state, key),
@@ -915,7 +902,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             return FruitState(
                 fruit_position,
                 state.fruit.exit,
-                state.fruit.type,
+                jnp.array(fruit_type, dtype=jnp.uint8),
                 fruit_action, 
                 fruit_timer
             ), 0
@@ -1041,6 +1028,9 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             """Renders the fruit at its current position."""
             return aj.render_at(raster, fruit.position[0], fruit.position[1] - 1, fruit_sprites[fruit.type])
         
+        def render_fruit_indicator(raster, fruit_type, fruit_sprites, x_pos = 128, y_pos = 182):
+            """Renders the level fruit indicator in the UI bar."""
+            return aj.render_at(raster, x_pos, y_pos, fruit_sprites[fruit_type])
 
         # -------- Render playing field --------
         # Render background for new game or level
@@ -1079,6 +1069,9 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             lambda: MsPacmanRenderer.render_lives(background, state.lives - 1, self.SPRITES["pacman"][1][1]),
             lambda: background
         )
+        
+        # Render level fruit indicator
+        background = render_fruit_indicator(background, state.fruit.type, self.SPRITES["fruit"])
 
         return background
     
@@ -1612,7 +1605,7 @@ def reset_fruit():
     return FruitState(
         position    = jnp.zeros(2, dtype=jnp.uint8),
         exit        = jnp.zeros(2, dtype=jnp.uint8),
-        type        = jnp.array(FruitType.NONE).astype(jnp.uint8),
+        type        = jnp.array(FruitType.CHERRY).astype(jnp.uint8),
         action      = jnp.array(Action.NOOP).astype(jnp.uint8),
         timer       = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint16)
     )
