@@ -828,7 +828,7 @@ def _get_observation_from_state(state: EnvState) -> GravitarObservation:
         active=terrain_active,
         visual_id=terrain_visual,
         orientation=jnp.array(0.0, dtype=jnp.float32),
-        state=state.current_level.astype(jnp.int32),
+        state=jnp.where(in_level, state.current_level + jnp.int32(1), jnp.int32(0)).astype(jnp.int32),
     )
 
     # --- Reactor objective marker ---
@@ -849,7 +849,7 @@ def _get_observation_from_state(state: EnvState) -> GravitarObservation:
         active=objective_active,
         visual_id=objective_visual,
         orientation=jnp.array(0.0, dtype=jnp.float32),
-        state=state.reactor_timer.astype(jnp.int32),
+        state=jnp.maximum(state.reactor_timer, jnp.int32(0)).astype(jnp.int32),
     )
 
     projectiles_obj = ObjectObservation.create(
