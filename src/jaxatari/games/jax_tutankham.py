@@ -674,7 +674,7 @@ class TutankhamRenderer(JAXGameRenderer):
                     operand=None
                 ),
                 flip_offset=ZERO_FLIP,
-                flip_horizontal=(dir_one == 0)
+                flip_horizontal=(dir_one == -1)
             ),
             lambda r: r,
             raster
@@ -714,7 +714,7 @@ class TutankhamRenderer(JAXGameRenderer):
                     operand=None
                 ),
                 flip_offset=ZERO_FLIP,
-                flip_horizontal=(dir_two == 0)
+                flip_horizontal=(dir_two == -1)
             ),
             lambda r: r,
             raster
@@ -1193,6 +1193,21 @@ class JaxTutankham(JaxEnvironment):
         return new_creature_states, new_laser_flash_cooldown, new_laser_flash_count, new_last_creature_spawn
 
 
+    @partial(jax.jit, static_argnums=(0,))
+    def process_death_timer(self, active, death_timer, creature_x, creature_y):
+        # Handle death timer logic
+        # If death_timer > 0, decrement. If it reaches 0, set active=0 and death_timer=-1
+        new_death_timer = jnp.where(death_timer > 0, death_timer - 1, death_timer)
+        new_active = jnp.where((death_timer == 1) & (new_death_timer == 0), self.consts.INACTIVE, active)
+        new_death_timer = jnp.where((death_timer == 1) & (new_death_timer == 0), -1, new_death_timer)
+        
+        # If creature becomes inactive due to screen bounds or death, cancel death timer and zero position
+        new_death_timer = jnp.where(new_active == self.consts.INACTIVE, -1, new_death_timer)
+        new_creature_x = creature_x * new_active
+        new_creature_y = creature_y * new_active
+        
+        return new_active, new_death_timer, new_creature_x, new_creature_y
+
     # creature step
     @partial(jax.jit, static_argnums=(0,))
     def creature_step(self, creature_states, creature_subpixels, camera_offset, step_counter, level, player_x, player_y, rng_key):
@@ -1264,6 +1279,9 @@ class JaxTutankham(JaxEnvironment):
             x_direction = lookup_x[direction]
             y_direction = lookup_y[direction]
 
+            # x_direction = jnp.where(direction == -1, 1, jnp.where(direction == -2, -1, 0))
+            # y_direction = jnp.where(direction == 1, 1, jnp.where(direction == 2, -1, 0))
+
             # move creature
             new_x = creature_x + actual_speed * x_direction * is_alive
             new_y = creature_y + actual_speed * y_direction * is_alive           
@@ -1274,17 +1292,8 @@ class JaxTutankham(JaxEnvironment):
             creature_on_screen = is_onscreen(creature_y, self.consts.CREATURE_SIZE[1], camera_offset)
             active = jnp.where(creature_on_screen, active, self.consts.INACTIVE)
 
-            # Handle death timer logic
-            # If death_timer > 0, decrement. If it reaches 0, set active=0 and death_timer=-1
-            new_death_timer = jnp.where(death_timer > 0, death_timer - 1, death_timer)
-            active = jnp.where((death_timer == 1) & (new_death_timer == 0), self.consts.INACTIVE, active)
-            new_death_timer = jnp.where((death_timer == 1) & (new_death_timer == 0), -1, new_death_timer)
-            
-            # If creature becomes inactive due to screen bounds, cancel death timer
-            new_death_timer = jnp.where(active == self.consts.INACTIVE, -1, new_death_timer)
-
-            creature_x = creature_x * active
-            creature_y = creature_y * active
+            # Process death timer in separated function
+            active, new_death_timer, creature_x, creature_y = self.process_death_timer(active, death_timer, creature_x, creature_y)
 
             return jnp.array([creature_x, creature_y, creature_type, active, direction, new_death_timer], dtype=jnp.int32), new_subpixel
 
@@ -1342,9 +1351,9 @@ class JaxTutankham(JaxEnvironment):
         do_spawn = should_spawn & has_free_slot & any_on_screen & (laser_flash_cooldown == 0)
 
         # Construct the new creature with chosen spawner coordinates
-        # direction: 0 for RIGHT, 1 for LEFT
+        # direction: -1 for RIGHT, -2 for LEFT
         # Spawners on the right (x > 80) should move LEFT, spawners on the left move RIGHT
-        direction = jnp.where(chosen_pos[0] > 80, 1, 0)
+        direction = jnp.where(chosen_pos[0] > 80, -2, -1)
         
         new_creature = jnp.array([
             chosen_pos[0],      # X from selected spawner
