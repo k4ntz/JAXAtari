@@ -519,28 +519,18 @@ class BasicMathRenderer(JAXGameRenderer):
         digit0 = self.jr.int_to_digits(state.problemNum1, max_digits=self.consts.problemNumLen)
         digit1 = self.jr.int_to_digits(state.problemNum2, max_digits=self.consts.problemNumLen)
 
-        raster = self.jr.render_label_selective(
-            raster, 
-            self.consts.num0[0],
-            self.consts.num0[1],
-            digit0, 
-            digit_masks, 
-            0, 
-            state.problemNum1, 
-            spacing=self.consts.spacing
-        )
+        def render_problemNum1(i, r):
+            num = digit0[i]
+            digit = self.jr.int_to_digits(num, max_digits=1)
 
-        raster = self.jr.render_label_selective(
-            raster, 
-            self.consts.num1[0], 
-            self.consts.num1[1], 
-            digit1, 
-            digit_masks, 
-            0, 
-            state.problemNum2, 
-            spacing=self.consts.spacing
-        )
+            return self.jr.render_label_selective(r, self.consts.num0[0] + i * self.consts.spacing, self.consts.num0[1], digit, digit_masks, 0, 1, spacing=0)
+        
+        def render_problemNum2(i, r):
+            num = digit1[i]
+            digit = self.jr.int_to_digits(num, max_digits=1)
 
+            return self.jr.render_label_selective(r, self.consts.num1[0] + i * self.consts.spacing, self.consts.num1[1], digit, digit_masks, 0, 1, spacing=0)
+        
         def render_nums(i, r):
             num = state.numArr[i]
             digit = self.jr.int_to_digits(num, max_digits=1)
@@ -551,6 +541,9 @@ class BasicMathRenderer(JAXGameRenderer):
                                 lambda ras: self.jr.render_label_selective(ras, self.consts.Y_OFFSET + i * 15, self.consts.num2[1], digit, digit_masks, 0, 1, spacing=0),
                                 lambda ras: ras, 
                                 r)
+        
+        raster = jax.lax.fori_loop(0, self.consts.problemNumLen, render_problemNum1, raster)
+        raster = jax.lax.fori_loop(0, self.consts.problemNumLen, render_problemNum2, raster)
         raster = jax.lax.cond(
             jnp.less(state.inactive % 90, 60),
             lambda: jax.lax.fori_loop(0, self.consts.numArrLen, render_nums, raster),
