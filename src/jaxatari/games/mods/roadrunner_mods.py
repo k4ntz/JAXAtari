@@ -1,19 +1,40 @@
 import os
+import jax.numpy as jnp
 from jaxatari.modification import JaxAtariModController
+from jaxatari.games.mods.roadrunner.roadrunner_mod_plugins import (
+    InvertColorsMod,
+    HueShiftMod,
+)
+
+
+def _invert_palette(palette: jnp.ndarray) -> jnp.ndarray:
+    """Invert all colors: RGB -> (255 - RGB)."""
+    return (255 - palette).astype(palette.dtype)
+
+
+def _hue_shift_palette(palette: jnp.ndarray) -> jnp.ndarray:
+    """Rotate RGB channels: R->G, G->B, B->R (120 degree hue shift)."""
+    # Roll channels: axis -1 shifts (R,G,B) -> (B,R,G) which is a 120° hue rotation
+    return jnp.roll(palette, shift=1, axis=-1)
+
+
+# Map mod classes to their palette transform functions
+_PALETTE_TRANSFORMS = {
+    InvertColorsMod: _invert_palette,
+    HueShiftMod: _hue_shift_palette,
+}
 
 
 class RoadRunnerEnvMod(JaxAtariModController):
     """
     Game-specific Mod Controller for RoadRunner.
     Inherits all logic from JaxAtariModController and defines the mod registry.
+    After standard patching, applies palette transforms for color mods.
     """
 
     REGISTRY = {
-        # Add mods here, e.g.:
-        # "slow_player": SlowPlayerMod,
-        # "no_enemies": NoEnemiesMod,
-        # Modpacks (bundled mods) use lists:
-        # "easy_mode": ["slow_enemies", "extra_lives"],
+        "invert_colors": InvertColorsMod,
+        "hue_shift": HueShiftMod,
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "roadrunner", "sprites")
@@ -30,3 +51,10 @@ class RoadRunnerEnvMod(JaxAtariModController):
             allow_conflicts=allow_conflicts,
             registry=self.REGISTRY
         )
+
+        # Apply palette transforms for any active color mods
+        for mod_key in mods_config:
+            plugin_class = self.REGISTRY.get(mod_key)
+            if plugin_class in _PALETTE_TRANSFORMS:
+                transform = _PALETTE_TRANSFORMS[plugin_class]
+                self._env.renderer.PALETTE = transform(self._env.renderer.PALETTE)
