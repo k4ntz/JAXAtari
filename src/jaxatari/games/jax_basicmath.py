@@ -499,8 +499,10 @@ class BasicMathRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
-        for i in range(1, len(self.PALETTE)):
-            self.PALETTE = self.PALETTE.at[i].set(jnp.array(self.consts.COLOR_CODES[0][1], dtype=jnp.uint8))
+
+        if self.PALETTE.shape[1] != 1:
+            for i in range(1, len(self.PALETTE)):
+                self.PALETTE = self.PALETTE.at[i].set(jnp.array(self.consts.COLOR_CODES[0][1], dtype=jnp.uint8))
 
     def _stack_num_masks(self) -> jnp.ndarray:
         """Helper to get all player-related masks from the main padded group."""
