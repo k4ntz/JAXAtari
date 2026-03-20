@@ -1,0 +1,31 @@
+[2026-03-20 03:48:01,035][jax._src.debugging][ERROR] - jax.debug.callback failed
+Traceback (most recent call last):
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/jax/_src/debugging.py", line 102, in debug_callback_impl
+    callback(*args)
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/jax/_src/debugging.py", line 304, in _flat_callback
+    callback(*args, **kwargs)
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/jax/_src/debugging.py", line 511, in _format_print_callback
+    sys.stdout.write(msg + "\n")
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/wandb/sdk/lib/console_capture.py", line 192, in write_with_callbacks
+    cb(s, n)
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/wandb/sdk/lib/redirect.py", line 660, in _on_write
+    cb(written_data)
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/wandb/sdk/wandb_run.py", line 2446, in <lambda>
+    lambda data: self._console_raw_callback("stdout", data),
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/wandb/sdk/wandb_run.py", line 399, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/wandb/sdk/wandb_run.py", line 457, in wrapper_fn
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/wandb/sdk/wandb_run.py", line 1608, in _console_raw_callback
+    self._backend.interface.publish_output_raw(name, data, nowait=True)
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/wandb/sdk/interface/interface.py", line 790, in publish_output_raw
+    o.timestamp.GetCurrentTime()
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/google/protobuf/internal/well_known_types.py", line 184, in GetCurrentTime
+    self.FromDatetime(datetime.datetime.now(tz=datetime.timezone.utc))
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/google/protobuf/internal/well_known_types.py", line 283, in FromDatetime
+    seconds = calendar.timegm(dt.utctimetuple())
+                              ^^^^^^^^^^^^^^^^^
+KeyboardInterrupt

@@ -1191,12 +1191,12 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         
         # 5. Print if changed
         # We use jax.lax.cond to ensure we only print when an action actually occurred
-        jax.lax.cond(
-            offense_increment > 0,
-            lambda x: jax.debug.print("Play Step: {}", x),
-            lambda x: None,
-            new_offensive_strategy_step
-        )
+        # jax.lax.cond(
+        #     offense_increment > 0,
+        #     lambda x: jax.debug.print("Play Step: {}", x),
+        #     lambda x: None,
+        #     new_offensive_strategy_step
+        # )
 
         return state.replace(strategy=state.strategy.replace(offense_step=new_offensive_strategy_step)), key
 
