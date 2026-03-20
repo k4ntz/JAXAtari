@@ -1,6 +1,6 @@
 import os
 #from pty import spawn
-from typing import NamedTuple, Tuple
+from typing import Tuple
 import jax.numpy as jnp
 import chex
 import pygame
@@ -9,11 +9,11 @@ from jax import lax
 import jax.lax
 import jax
 from flax import struct
-from sympy import false
+# from sympy import false
 
 import jaxatari.spaces as spaces
 
-from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action, ObjectObservation
+from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.modification import AutoDerivedConstants
