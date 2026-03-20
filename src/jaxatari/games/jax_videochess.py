@@ -979,11 +979,14 @@ class JaxVideoChess(
             r = jnp.clip(to_flat[:, 0], 0, c.NUM_RANKS - 1)
             cc = jnp.clip(to_flat[:, 1], 0, c.NUM_FILES - 1)
             target_piece = s.board[r, cc]
+            attacker_piece = s.board[from_rep[:, 0], from_rep[:, 1]]
 
-            # Only count captures of opponent pieces
+            # Only prefer captures where we gain at least as much as we risk
             is_cap = BoardHandler.is_opponent(target_piece, s.to_move)
             cap_val = piece_vals[target_piece]
-            cap_score = jnp.where(is_cap, cap_val, jnp.int32(0))
+            att_val = piece_vals[attacker_piece]
+            is_profitable = is_cap & (cap_val >= att_val)
+            cap_score = jnp.where(is_profitable, cap_val, jnp.int32(0))
 
             # Mask invalid moves
             cap_score = jnp.where(valid_flat, cap_score, jnp.int32(-1))
@@ -1111,10 +1114,18 @@ class JaxVideoChess(
 
             def apply_one(fs_ts):
                 fs, ts = fs_ts
-                return BoardHandler.apply_move(s.board, fs, ts)
+                return BoardHandler.apply_move(s.board, fs, ts, s.en_passant_sq)
 
             boards_after = jax.vmap(apply_one)(jnp.stack([from_rep, to_flat], axis=1))  # (3584,8,8)
             eval_after = jax.vmap(self._evaluate_board_black)(boards_after)
+
+            # EP squares after each of black's candidate moves (for white's reply)
+            def compute_ep(fs_ts):
+                fs, ts = fs_ts
+                piece = s.board[fs[0], fs[1]]
+                new_ep, _ = BoardHandler.move_state_updates(piece, fs, ts, s.castling_rights)
+                return new_ep
+            eps_after = jax.vmap(compute_ep)(jnp.stack([from_rep, to_flat], axis=1))  # (3584,2)
 
             prune_score = cap_score + eval_after
             top_self = self._topk_indices(prune_score, valid_flat, TOPK_SELF, k_self)
@@ -1122,11 +1133,13 @@ class JaxVideoChess(
             fs_self = from_rep[top_self].astype(jnp.int32)
             ts_self = to_flat[top_self].astype(jnp.int32)
             boards_self = boards_after[top_self]
+            eps_self = eps_after[top_self]  # EP squares for the top-k positions
 
             # opponent colour
             opp_colour = jnp.int32(1) - jnp.int32(s.to_move)
 
-            def worst_reply_value(board_after_self: jnp.ndarray, subkey: chex.PRNGKey) -> jnp.ndarray:
+            def worst_reply_value(carry, subkey: chex.PRNGKey) -> jnp.ndarray:
+                board_after_self, ep_after_self = carry
                 fr_opp, to_opp, v_opp = self._enumerate_all_legal_moves_for(board_after_self, opp_colour)
                 total_opp = jnp.sum(v_opp.astype(jnp.int32))
 
@@ -1137,7 +1150,7 @@ class JaxVideoChess(
                 def with_reply():
                     def apply_opp(fs_ts):
                         fs, ts = fs_ts
-                        return BoardHandler.apply_move(board_after_self, fs, ts)
+                        return BoardHandler.apply_move(board_after_self, fs, ts, ep_after_self)
 
                     boards_opp = jax.vmap(apply_opp)(jnp.stack([fr_opp, to_opp], axis=1))
                     vals_opp = jax.vmap(self._evaluate_board_black)(boards_opp)
@@ -1149,7 +1162,7 @@ class JaxVideoChess(
                 return jax.lax.cond(total_opp <= 0, no_reply, with_reply)
 
             keys_opp = jax.random.split(k_opp, TOPK_SELF)
-            worst_vals = jax.vmap(worst_reply_value)(boards_self, keys_opp)
+            worst_vals = jax.vmap(worst_reply_value)((boards_self, eps_self), keys_opp)
 
             best_i = jnp.argmax(worst_vals)
             fs = fs_self[best_i]
