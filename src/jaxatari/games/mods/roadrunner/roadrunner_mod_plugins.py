@@ -1,9 +1,12 @@
-import jax
-import jax.numpy as jnp
-from functools import partial
-from jaxatari.games.jax_roadrunner import RoadRunnerState
-from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
+"""
+Example Road Runner mod plugin templates.
 
+This module currently only contains commented-out examples for internal and
+post-step JAX Atari mod plugins. The imports required for these examples
+have been intentionally omitted to avoid unnecessary import overhead and
+unused-import issues. Uncomment and add the appropriate imports when you
+are ready to implement real plugins.
+"""
 
 # --- Internal Mod Plugins (patch methods / override constants) ---
 
