@@ -104,7 +104,7 @@ class RoadRunnerConstants(NamedTuple):
     PUDDLE_VALUE: int = 1000
     QUAD_SEED_VALUE: int = 1000
     PLAYER_PICKUP_OFFSET: int = PLAYER_SIZE[1] * 3 // 4  # Bottom 25% of player height
-    PLAYER_ROAD_TOP_OFFSET: int = 15
+    PLAYER_ROAD_TOP_OFFSET: int = 16
     ROAD_HEIGHT: int = 70
     ROAD_TOP_Y: int = 110
     ROAD_DASH_LENGTH: int = 5
@@ -1313,7 +1313,7 @@ class JaxRoadRunner(
         self, x_pos: chex.Array, y_pos: chex.Array,
         road_top: chex.Array, road_bottom: chex.Array,
     ) -> tuple[chex.Array, chex.Array]:
-        min_y = road_top - (self.consts.PLAYER_SIZE[1] // 3)
+        min_y = road_top - (self.consts.PLAYER_SIZE[1] - self.consts.PLAYER_ROAD_TOP_OFFSET)
         max_y = road_bottom - self.consts.PLAYER_SIZE[1]
         checked_y = jnp.clip(y_pos, min_y, max_y)
 
@@ -1776,7 +1776,8 @@ class JaxRoadRunner(
         # left and new seeds spawned at x=0 would land outside it on the median/background.
         offramp_active, _, merge_x_spawn, offramp_top_y, offramp_bottom_y = self._get_offramp_info(state)
         use_offramp = offramp_active & (merge_x_spawn <= 0) & (jax.random.uniform(rng_road) > 0.5)
-        spawn_min_y = jnp.where(use_offramp, offramp_top_y.astype(jnp.int32), road_top)
+        main_road_seed_min_y = road_top + consts.PLAYER_ROAD_TOP_OFFSET
+        spawn_min_y = jnp.where(use_offramp, offramp_top_y.astype(jnp.int32), main_road_seed_min_y)
         spawn_max_y = jnp.where(
             use_offramp,
             (offramp_bottom_y - consts.SEED_SIZE[1]).astype(jnp.int32),
