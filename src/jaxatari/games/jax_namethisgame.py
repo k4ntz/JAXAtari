@@ -46,13 +46,35 @@ from jaxatari.modification import AutoDerivedConstants
 # ------------------------------------------------------------
 
 
+def _create_static_procedural_sprites(screen_height: int, screen_width: int) -> dict:
+    """Creates procedural sprites with the original Atari 3-band color scheme."""
+    background = jnp.zeros((screen_height, screen_width, 4), dtype=jnp.uint8)
+    
+    # Colors to match the original game
+    SKY_COLOR = (236, 212, 108, 255)     # Light yellow sky
+    WATER_COLOR = (24, 26, 167, 255)     # Dark blue water
+    SEABED_COLOR = (100, 184, 220, 255)  # Light blue seabed (HUD background)
+
+    # 1. Sky band: Y=0 to Y=24 (Boat rests perfectly on this line)
+    background = background.at[:24, :, :].set(jnp.array(SKY_COLOR, dtype=jnp.uint8))
+    
+    # 2. Water band: Y=24 to Y=176 (Ends exactly where your green HUD bar starts)
+    background = background.at[24:176, :, :].set(jnp.array(WATER_COLOR, dtype=jnp.uint8))
+    
+    # 3. Seabed band: Y=176 to Y=210 (Wraps around your orange and green bars)
+    background = background.at[176:, :, :].set(jnp.array(SEABED_COLOR, dtype=jnp.uint8))
+    
+    return {
+        'background': background,
+    }
+
 def _get_default_asset_config() -> tuple:
     """
     Declarative asset manifest for NameThisGame.
     Returned as an immutable tuple for safe use in defaults.
     """
     return (
-        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        # Background is now procedural, not loaded from file
         {'name': 'diver', 'type': 'single', 'file': 'diver.npy'},
         {'name': 'shark', 'type': 'single', 'file': 'shark.npy'},
         {'name': 'tentacle', 'type': 'single', 'file': 'tentacle.npy'},
@@ -81,41 +103,42 @@ class NameThisGameConstants(AutoDerivedConstants):
     """
     # Screen & scaling
     screen_width: int = struct.field(pytree_node=False, default=160)
-    screen_height: int = struct.field(pytree_node=False, default=250)
-    scaling_factor: int = struct.field(pytree_node=False, default=3)
+    screen_height: int = struct.field(pytree_node=False, default=210)
 
     # HUD bars (both centered at bottom)
     hud_bar_initial_px: int = struct.field(pytree_node=False, default=128)            # initial width in pixels
-    hud_bar_step_frames: int = struct.field(pytree_node=False, default=250)           # shrink cadence (frames per step)
+    hud_bar_step_frames: int = struct.field(pytree_node=False, default=500)           # shrink cadence (frames per step) - doubled from 250 for 30fps (was 60fps)
     hud_bar_shrink_px_per_step_total: int = struct.field(pytree_node=False, default=8)  # px removed per tick (4 each side visually)
     bar_green_height: int = struct.field(pytree_node=False, default=4)
     bar_orange_height: int = struct.field(pytree_node=False, default=12)
     bars_gap_px: int = struct.field(pytree_node=False, default=0)
-    bars_bottom_margin_px: int = struct.field(pytree_node=False, default=25)
+    bars_bottom_margin_px: int = struct.field(pytree_node=False, default=18)  # adjusted: 25 - 7px = 18 (moves bars down by 7px)
 
     # Kraken sprite (background deco)
     kraken_x: int = struct.field(pytree_node=False, default=20)
-    kraken_y: int = struct.field(pytree_node=False, default=63)
+    kraken_y: int = struct.field(pytree_node=False, default=30)  # adjusted: 23 + 7px down = 30
 
     # Boat (surface)
     boat_width: int = struct.field(pytree_node=False, default=16)
+    boat_height: int = struct.field(pytree_node=False, default=16)
+    boat_y: int = struct.field(pytree_node=False, default=None) # will be set to cfg.oxygen_y - cfg.boat_height
     boat_speed_px: int = struct.field(pytree_node=False, default=1)
     boat_move_every_n_frames: int = struct.field(pytree_node=False, default=4)  # motion cadence
 
     # Diver (player)
     diver_width: int = struct.field(pytree_node=False, default=16)
     diver_height: int = struct.field(pytree_node=False, default=13)
-    diver_y_floor: int = struct.field(pytree_node=False, default=173)
+    diver_y_floor: int = struct.field(pytree_node=False, default=140)  # adjusted: 133 + 7px down = 140
     diver_speed_px: int = struct.field(pytree_node=False, default=1)
 
     # Spear
     spear_width: int = struct.field(pytree_node=False, default=1)
     spear_height: int = struct.field(pytree_node=False, default=1)
     spear_dy: int = struct.field(pytree_node=False, default=-3)
-    spear_ceiling_y: int = struct.field(pytree_node=False, default=63)
+    spear_ceiling_y: int = struct.field(pytree_node=False, default=30)  # adjusted: 23 + 7px down = 30
 
     # Shark
-    shark_lanes_y: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([69, 83, 97, 111, 123, 137, 151], dtype=jnp.int32))
+    shark_lanes_y: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([36, 50, 64, 78, 90, 104, 118], dtype=jnp.int32))  # adjusted: +7px down for alignment
 
     shark_base_speed: int = struct.field(pytree_node=False, default=1)
     shark_width: int = struct.field(pytree_node=False, default=15)
@@ -125,7 +148,7 @@ class NameThisGameConstants(AutoDerivedConstants):
     # Tentacles (octopus arms)
     max_tentacles: int = struct.field(pytree_node=False, default=8)
     tentacle_base_x: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([16, 32, 48, 64, 80, 96, 112, 128], dtype=jnp.int32))
-    tentacle_ys: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([97, 104, 111, 118, 125, 132, 139, 146, 153, 160], dtype=jnp.int32))
+    tentacle_ys: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([64, 71, 78, 85, 92, 99, 106, 113, 120, 127], dtype=jnp.int32))  # adjusted: +7px down for alignment
     tentacle_num_cols: int = struct.field(pytree_node=False, default=4)
     tentacle_col_width: int = struct.field(pytree_node=False, default=4)
     tentacle_square_w: int = struct.field(pytree_node=False, default=4)
@@ -139,27 +162,33 @@ class NameThisGameConstants(AutoDerivedConstants):
     # Oxygen line (drops from boat)
     oxygen_full: int = struct.field(pytree_node=False, default=1200)                     # kept for obs-space high
     oxygen_pickup_radius: int = struct.field(pytree_node=False, default=4)               # half-width tolerance
-    oxygen_drop_min_interval: int = struct.field(pytree_node=False, default=240)
-    oxygen_drop_max_interval: int = struct.field(pytree_node=False, default=480)
+    oxygen_drop_min_interval: int = struct.field(pytree_node=False, default=480)
+    oxygen_drop_max_interval: int = struct.field(pytree_node=False, default=960)
     oxygen_line_width: int = struct.field(pytree_node=False, default=1)
-    oxygen_y: int = struct.field(pytree_node=False, default=57)
-    oxygen_line_ttl_frames: int = struct.field(pytree_node=False, default=100)
-    oxygen_contact_every_n_frames: int = struct.field(pytree_node=False, default=8)
+    oxygen_y: int = struct.field(pytree_node=False, default=24)  # adjusted: 17 + 7px down = 24
+    oxygen_line_ttl_frames: int = struct.field(pytree_node=False, default=200)
+    oxygen_contact_every_n_frames: int = struct.field(pytree_node=False, default=16)
     oxygen_contact_points: int = struct.field(pytree_node=False, default=10)
+    oxy_drop_speedup_per_round: int = struct.field(pytree_node=False, default=60)
+    oxy_drop_min_possible: int = struct.field(pytree_node=False, default=120)
 
     # Round progression & difficulty
     speed_progression_start_lane_for_2: int = struct.field(pytree_node=False, default=4)
     round_clear_shark_resets: int = struct.field(pytree_node=False, default=3)
-    oxy_frames_speedup_per_round: int = struct.field(pytree_node=False, default=30)
-    oxy_min_shrink_interval: int = struct.field(pytree_node=False, default=20)
+    oxy_frames_speedup_per_round: int = struct.field(pytree_node=False, default=60)
+    oxy_min_shrink_interval: int = struct.field(pytree_node=False, default=40)
     tentacle_growth_round_coeff: float = struct.field(pytree_node=False, default=0.0005)
 
     # Lives & score UI
     lives_max: int = struct.field(pytree_node=False, default=3)
     treasure_ui_x: int = struct.field(pytree_node=False, default=72)
-    treasure_ui_y: int = struct.field(pytree_node=False, default=197)
+    treasure_ui_y: int = struct.field(pytree_node=False, default=164)  # adjusted: 157 + 7px down = 164
     max_digits_for_score: int = struct.field(pytree_node=False, default=9)
 
+    def compute_derived(self):
+        return {
+            "boat_y": self.oxygen_y - self.boat_height
+        }
 
 # ------------------------------------------------------------
 # Small utility types
@@ -262,6 +291,7 @@ class NameThisGameObservation:
     spear: ObjectObservation
     tentacles: ObjectObservation
     oxygen_line: ObjectObservation
+    boat: ObjectObservation
     score: jnp.ndarray
     oxygen_frames_remaining: jnp.ndarray
     round_idx: jnp.ndarray
@@ -332,6 +362,7 @@ class JaxNameThisGame(
             "spear": single_obj,
             "tentacles": spaces.get_object_space(n=self.consts.max_tentacles, screen_size=screen_size),
             "oxygen_line": single_obj,
+            "boat": single_obj,
             "score": spaces.Box(low=0, high=(10 ** self.consts.max_digits_for_score) - 1, shape=(), dtype=jnp.int32),
             "oxygen_frames_remaining": spaces.Box(low=0, high=int(self.consts.oxygen_full), shape=(), dtype=jnp.int32),
             "round_idx": spaces.Box(low=0, high=100, shape=(), dtype=jnp.int32),
@@ -385,9 +416,19 @@ class JaxNameThisGame(
 
         # Oxygen (start REST with full bars in *pixels*)
         init_oxygen_bar = jnp.array(cfg.hud_bar_initial_px, jnp.int32)
-        min_int = int(cfg.oxygen_drop_min_interval)
-        max_int = int(cfg.oxygen_drop_max_interval)
-        init_drop_timer = jax.random.randint(rng_oxy, (), min_int, max_int + 1, dtype=jnp.int32)
+        # Dynamic drop interval by round (round 0 at reset)
+        round_val = jnp.array(0, jnp.int32)
+        r_eff = jnp.maximum(round_val, jnp.array(1, jnp.int32))
+        speedup = jnp.array(cfg.oxy_drop_speedup_per_round, jnp.int32) * (r_eff - 1)
+        min_interval = jnp.maximum(
+            jnp.array(cfg.oxygen_drop_min_interval, jnp.int32) - speedup,
+            jnp.array(cfg.oxy_drop_min_possible, jnp.int32),
+        )
+        max_interval = jnp.maximum(
+            jnp.array(cfg.oxygen_drop_max_interval, jnp.int32) - speedup,
+            min_interval + 120,
+        )
+        init_drop_timer = jax.random.randint(rng_oxy, (), min_interval, max_interval + 1, dtype=jnp.int32)
 
         state = NameThisGameState(
             score=jnp.array(0, jnp.int32),
@@ -493,6 +534,18 @@ class JaxNameThisGame(
             orientation=jnp.array(0.0, jnp.float32)
         )
 
+        boat_orientation = jnp.where(state.boat_dx > 0, 90.0, 270.0).astype(jnp.float32)
+
+        # --- Boat ---
+        boat = ObjectObservation.create(
+            x=jnp.clip(state.boat_x, 0, w),
+            y=jnp.clip(cfg.boat_y, 0, h),
+            width=jnp.array(cfg.boat_width, jnp.int32),
+            height=jnp.array(cfg.boat_height, jnp.int32),
+            active=jnp.array(1, jnp.int32),
+            orientation=boat_orientation
+        )
+
         # --- Tentacles ---
         # Logic adapted from original _get_observation to calculate bounding boxes
         T = cfg.max_tentacles
@@ -540,6 +593,7 @@ class JaxNameThisGame(
             spear=spear,
             tentacles=tentacles,
             oxygen_line=oxygen_line,
+            boat=boat,
             score=state.score,
             oxygen_frames_remaining=state.oxygen_frames_remaining,
             round_idx=state.round,
@@ -941,7 +995,7 @@ class JaxNameThisGame(
                 shark_lane=reset_lane,
                 shark_alive=jnp.array(True, jnp.bool_),
                 shark_resets_this_round=s.shark_resets_this_round + 1,
-                spear_alive=jnp.array(True, jnp.bool_),
+                spear_alive=jnp.array(False, jnp.bool_),  # consume spear so player can shoot again
                 rng=rng_after,
             )
 
@@ -1067,8 +1121,19 @@ class JaxNameThisGame(
                 new_ttl = jnp.maximum(st.oxygen_line_ttl - 1, 0)
 
                 def _expire(ss: NameThisGameState) -> NameThisGameState:
+                    # Scale down the wait time by the round so later rounds get more frequent drops
+                    r_eff = jnp.maximum(ss.round, jnp.array(1, jnp.int32))
+                    speedup = jnp.array(cfg.oxy_drop_speedup_per_round, jnp.int32) * (r_eff - 1)
+                    min_interval = jnp.maximum(
+                        jnp.array(cfg.oxygen_drop_min_interval, jnp.int32) - speedup,
+                        jnp.array(cfg.oxy_drop_min_possible, jnp.int32),
+                    )
+                    max_interval = jnp.maximum(
+                        jnp.array(cfg.oxygen_drop_max_interval, jnp.int32) - speedup,
+                        min_interval + 120,
+                    )
                     next_timer = jax.random.randint(
-                        rng_interval, (), cfg.oxygen_drop_min_interval, cfg.oxygen_drop_max_interval + 1, dtype=jnp.int32
+                        rng_interval, (), min_interval, max_interval + 1, dtype=jnp.int32
                     )
                     return ss.replace(
                         oxygen_line_active=jnp.array(False, jnp.bool_),
@@ -1108,8 +1173,9 @@ class JaxNameThisGame(
             line_center = s.oxygen_line_x + (cfg.oxygen_line_width // 2)
             under_line = s.oxygen_line_active & (jnp.abs(diver_center - line_center) <= cfg.oxygen_pickup_radius)
 
-            cnt_next = jnp.where(under_line, s.oxygen_contact_counter + 1, jnp.array(0, jnp.int32))
-            # Only count contact every K frames to create a steady refill/drip cadence.
+            # Hold the counter value if the agent steps out, instead of resetting to 0
+            cnt_next = s.oxygen_contact_counter + under_line.astype(jnp.int32)
+
             k = jnp.array(cfg.oxygen_contact_every_n_frames, jnp.int32)
             tick = under_line & (cnt_next % k == 0) & (cnt_next > 0)
 
@@ -1119,14 +1185,11 @@ class JaxNameThisGame(
             inc_bar = jnp.where(tick & (~full_before), jnp.array(cfg.hud_bar_shrink_px_per_step_total, jnp.int32), 0)
             new_bar = jnp.minimum(s.oxy_bar_px + inc_bar, max_px)
 
-            add_points = jnp.where(tick & full_before, jnp.array(cfg.oxygen_contact_points, jnp.int32), 0)
-            new_score = s.score + add_points
-
             return s.replace(
                 oxy_bar_px=new_bar,
                 oxygen_contact_counter=cnt_next,
                 oxygen_frames_remaining=new_bar,
-                score=new_score,
+                score=s.score,
             )
 
         return jax.lax.cond(state.resting, _rest, _active, state)
@@ -1135,8 +1198,19 @@ class JaxNameThisGame(
     def _life_loss_reset(self, state: NameThisGameState) -> NameThisGameState:
         cfg = self.consts
         rng1, rng2 = jax.random.split(state.rng)
+        # Dynamic drop interval by round (round does not change on life loss)
+        r_eff = jnp.maximum(state.round, jnp.array(1, jnp.int32))
+        speedup = jnp.array(cfg.oxy_drop_speedup_per_round, jnp.int32) * (r_eff - 1)
+        min_interval = jnp.maximum(
+            jnp.array(cfg.oxygen_drop_min_interval, jnp.int32) - speedup,
+            jnp.array(cfg.oxy_drop_min_possible, jnp.int32),
+        )
+        max_interval = jnp.maximum(
+            jnp.array(cfg.oxygen_drop_max_interval, jnp.int32) - speedup,
+            min_interval + 120,
+        )
         next_timer = jax.random.randint(
-            rng2, (), cfg.oxygen_drop_min_interval, cfg.oxygen_drop_max_interval + 1, dtype=jnp.int32
+            rng2, (), min_interval, max_interval + 1, dtype=jnp.int32
         )
         zeros_T = jnp.zeros_like(state.tentacle_len)
 
@@ -1251,7 +1325,10 @@ class JaxNameThisGame(
         )
 
         mult = jnp.array(1, jnp.int32) + is_ge2 + extra
-        return (mult * jnp.array(cfg.shark_base_speed, jnp.int32)).astype(jnp.int32)
+        base_speed = (mult * jnp.array(cfg.shark_base_speed, jnp.int32)).astype(jnp.int32)
+        # Round-based minimum so lane 0 also speeds up; otherwise we hit frame limit before high rounds.
+        min_speed_for_round = jnp.array(1, jnp.int32) + jnp.floor_divide(round_idx, jnp.array(2, jnp.int32))
+        return jnp.maximum(base_speed, min_speed_for_round)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: NameThisGameState) -> jnp.bool_:
@@ -1388,14 +1465,24 @@ class Renderer_NameThisGame(JAXGameRenderer):
         if config is None:
             self.config = render_utils.RendererConfig(
                 game_dimensions=(self.consts.screen_height, self.consts.screen_width),
-                channels=3,
-                downscale=None
+                channels=1,
+                downscale=(84, 84)
             )
         else:
             self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
-        # Build asset config: copy defaults and add swatch for palette colors we need (orange, green, white, black)
+        
+        # Create procedural background
+        frame_h, frame_w = self.config.game_dimensions
+        procedural_sprites = _create_static_procedural_sprites(frame_h, frame_w)
+        background_rgba = procedural_sprites['background']
+        
+        # Build asset config: copy defaults, replace background with procedural version, and add swatch
         final_asset_config = list(self.consts.ASSET_CONFIG)
+        # Replace background entry with procedural version
+        final_asset_config = [a for a in final_asset_config if a.get('name') != 'background']
+        final_asset_config.append({'name': 'background', 'type': 'background', 'data': background_rgba})
+        
         swatch_rgba = jnp.array([
             [195, 102,  52, 255],  # orange bar
             [ 27, 121,  38, 255],  # green bar
@@ -1546,7 +1633,8 @@ class Renderer_NameThisGame(JAXGameRenderer):
             spacing = digit_w  # use tight spacing
             total_w = digit_w * num_digits
             score_x = (cfg.screen_width - total_w) // 2
-            score_y = jnp.array(215, jnp.int32)
+            # Score Y is offset to sit directly inside the orange HUD bar
+            score_y = jnp.array(182, jnp.int32)
             raster = self.jr.render_label_selective(
                 raster,
                 score_x,

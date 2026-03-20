@@ -102,11 +102,22 @@ class FireBallsMod(JaxAtariInternalModPlugin):
     based on difficulty level due to the game's rendering logic.
     """
 
-    asset_overrides = {
-        "enemy_torp": {
-            'name': 'enemy_torp',
-            'type': 'single',
-            'file': 'mods/fireball.npy'
-        }
-    }
+class UnlimitedOxygenMod(JaxAtariPostStepModPlugin):
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: SeaquestState, new_state: SeaquestState) -> SeaquestState:
+        return new_state.replace(oxygen=jnp.array(64, dtype=jnp.int32))
+
+class GravityMod(JaxAtariPostStepModPlugin):
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: SeaquestState, new_state: SeaquestState) -> SeaquestState:
+        new_player_y = jnp.where(
+            new_state.step_counter % 4 == 0,
+            jnp.minimum(new_state.player_y + 1, self._env.consts.PLAYER_BOUNDS[1, 1]),
+            new_state.player_y
+        )
+        return new_state.replace(player_y=new_player_y)
+
+class RandomColorEnemiesMod(JaxAtariInternalModPlugin):
+    pass
+
 
