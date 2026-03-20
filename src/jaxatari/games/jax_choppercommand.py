@@ -3,19 +3,19 @@
 Lukas Bergholz, Linus Orlob, Vincent Jahn
 
 """
-#TODO: replace fori_loops with vmap where possible
-
 import os
 from functools import partial
-from typing import Tuple, NamedTuple, Callable
+from typing import Tuple, NamedTuple, Callable, Optional
 import jax
 import jax.numpy as jnp
 import chex
+from flax import struct
 import jaxatari.rendering.jax_rendering_utils as render_utils
 import numpy as np
 import jaxatari.spaces as spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvState
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvState, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
+from jaxatari.modification import AutoDerivedConstants
 import time
 
 def _create_static_procedural_sprites() -> dict:
@@ -71,107 +71,107 @@ def _get_default_asset_config() -> tuple:
         {'name': 'minimap_logo', 'type': 'single', 'file': 'minimap/activision_logo.npy'},
     )
 
-class ChopperCommandConstants:
+class ChopperCommandConstants(AutoDerivedConstants):
     # Game Constants
-    WINDOW_WIDTH = 160 * 3
-    WINDOW_HEIGHT = 210 * 3
-    DEATH_PAUSE_FRAMES = 60
+    WINDOW_WIDTH: int = struct.field(pytree_node=False, default=160 * 3)
+    WINDOW_HEIGHT: int = struct.field(pytree_node=False, default=210 * 3)
+    DEATH_PAUSE_FRAMES: int = struct.field(pytree_node=False, default=60)
 
-    WIDTH = 160
-    HEIGHT = 210
-    HEIGHT_ONLY_PLAYING_FIELD = 192
-    SCALING_FACTOR = 4
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    HEIGHT_ONLY_PLAYING_FIELD: int = struct.field(pytree_node=False, default=192)
+    SCALING_FACTOR: int = struct.field(pytree_node=False, default=4)
 
     # difficulty
-    GAME_DIFFICULTY = 2
+    GAME_DIFFICULTY: int = struct.field(pytree_node=False, default=2)
 
     # Chopper Constants TODO: Tweak these to match feeling of real game
-    ACCEL = 0.03  # DEFAULT: 0.05 | how fast the chopper accelerates
-    FRICTION = 0.02  # DEFAULT: 0.02 | how fast the chopper decelerates
-    MAX_VELOCITY = 3.0  # DEFAULT: 3.0 | maximum speed
-    DISTANCE_WHEN_FLYING = 10 # DEFAULT: 10 | How far the chopper moves towards the middle when flying for a longer amount of time
-    LOCAL_PLAYER_OFFSET_SPEED = 1 # DEFAULT: 1 | How fast the chopper changes the on-screen position when changing its facing direction
-    ALLOW_MOVE_OFFSET = 13 # DEFAULT: 13 | While in the no_move_pause, this is the offset measured from the left screen border where moving the chopper (exiting the pause) is allowed again
-    PLAYER_ROTOR_SPEED = 3 # DEFAULT: 3 | The smaller this value, the faster the rotor blades of the player chopper spin
+    ACCEL: float = struct.field(pytree_node=False, default=0.03)  # DEFAULT: 0.05 | how fast the chopper accelerates
+    FRICTION: float = struct.field(pytree_node=False, default=0.02)  # DEFAULT: 0.02 | how fast the chopper decelerates
+    MAX_VELOCITY: float = struct.field(pytree_node=False, default=3.0)  # DEFAULT: 3.0 | maximum speed
+    DISTANCE_WHEN_FLYING: int = struct.field(pytree_node=False, default=10) # DEFAULT: 10 | How far the chopper moves towards the middle when flying for a longer amount of time
+    LOCAL_PLAYER_OFFSET_SPEED: int = struct.field(pytree_node=False, default=1) # DEFAULT: 1 | How fast the chopper changes the on-screen position when changing its facing direction
+    ALLOW_MOVE_OFFSET: int = struct.field(pytree_node=False, default=13) # DEFAULT: 13 | While in the no_move_pause, this is the offset measured from the left screen border where moving the chopper (exiting the pause) is allowed again
+    PLAYER_ROTOR_SPEED: int = struct.field(pytree_node=False, default=3) # DEFAULT: 3 | The smaller this value, the faster the rotor blades of the player chopper spin
 
     # Score
-    SCORE_PER_JET_KILL = 200
-    SCORE_PER_CHOPPER_KILL = 100
-    SCORE_PER_TRUCK_ALIVE = 100
+    SCORE_PER_JET_KILL: int = struct.field(pytree_node=False, default=200)
+    SCORE_PER_CHOPPER_KILL: int = struct.field(pytree_node=False, default=100)
+    SCORE_PER_TRUCK_ALIVE: int = struct.field(pytree_node=False, default=100)
 
     # Player Missile Constants
-    PLAYER_MISSILE_WIDTH = 80 # Sprite size_x
-    MISSILE_COOLDOWN_FRAMES = 8  # DEFAULT: 8 | How fast Chopper can shoot (higher is slower) TODO: Das müssen wir ändern und höher machen bei dem schweren Schwierigkeitsgrad
-    MISSILE_SPEED = 10 # DEFAULT: 10 | Missile speed (higher is faster) TODO: tweak MISSILE_SPEED and MISSILE_COOLDOWN_FRAMES to match real game (already almost perfect)
-    MISSILE_ANIMATION_SPEED = 6 # DEFAULT: 6 | Rate at which missile changes sprite textures (based on traveled distance of missile)
+    PLAYER_MISSILE_WIDTH: int = struct.field(pytree_node=False, default=80) # Sprite size_x
+    MISSILE_COOLDOWN_FRAMES: int = struct.field(pytree_node=False, default=8)  # DEFAULT: 8 | How fast Chopper can shoot (higher is slower) TODO: Das müssen wir ändern und höher machen bei dem schweren Schwierigkeitsgrad
+    MISSILE_SPEED: int = struct.field(pytree_node=False, default=10) # DEFAULT: 10 | Missile speed (higher is faster) TODO: tweak MISSILE_SPEED and MISSILE_COOLDOWN_FRAMES to match real game (already almost perfect)
+    MISSILE_ANIMATION_SPEED: int = struct.field(pytree_node=False, default=6) # DEFAULT: 6 | Rate at which missile changes sprite textures (based on traveled distance of missile)
 
     # Enemy Missile Constants
-    ENEMY_MISSILE_SPAWN_PROBABILITY = 0.01 # The probability that an enemy missiles spawns at one of the living enemies in each frame, if the missile of the giving enemy is not "alive". (Meaning that for 0.01 for example, an enemy shoots a missile on average 100 frames after its previous missile died).
-    ENEMY_MISSILE_SPLIT_PROBABILITY = 0.05 # The probability that an enemy missiles splits in a frame
-    ENEMY_MISSILE_MAXIMUM_Y_SPEED_BEFORE_SPLIT = 0.75 # Maximum speed (+ and -) of a missile before split. This means that for 2 for example, the missiles will have speeds between -2 and 2 (chosen randomly).
-    ENEMY_MISSILE_Y_SPEED_AFTER_SPLIT = 2.5 # TODO: Make match real game
+    ENEMY_MISSILE_SPAWN_PROBABILITY: float = struct.field(pytree_node=False, default=0.01) # The probability that an enemy missiles spawns at one of the living enemies in each frame, if the missile of the giving enemy is not "alive". (Meaning that for 0.01 for example, an enemy shoots a missile on average 100 frames after its previous missile died).
+    ENEMY_MISSILE_SPLIT_PROBABILITY: float = struct.field(pytree_node=False, default=0.05) # The probability that an enemy missiles splits in a frame
+    ENEMY_MISSILE_MAXIMUM_Y_SPEED_BEFORE_SPLIT: float = struct.field(pytree_node=False, default=0.75) # Maximum speed (+ and -) of a missile before split. This means that for 2 for example, the missiles will have speeds between -2 and 2 (chosen randomly).
+    ENEMY_MISSILE_Y_SPEED_AFTER_SPLIT: float = struct.field(pytree_node=False, default=2.5) # TODO: Make match real game
 
     # Colors
-    BACKGROUND_COLOR = (0, 0, 139)  # Dark blue for sky
-    PLAYER_COLOR = (187, 187, 53)  # Yellow for player helicopter
-    ENEMY_COLOR = (170, 170, 170)  # Gray for enemy helicopters
-    MISSILE_COLOR = (255, 255, 255)  # White for missiles
-    SCORE_COLOR = (210, 210, 64)  # Score color
+    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (0, 0, 139))  # Dark blue for sky
+    PLAYER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (187, 187, 53))  # Yellow for player helicopter
+    ENEMY_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (170, 170, 170))  # Gray for enemy helicopters
+    MISSILE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (255, 255, 255))  # White for missiles
+    SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (210, 210, 64))  # Score color
 
     # Object sizes and initial positions
-    PLAYER_SIZE = (16, 9)  # Width, Height
-    TRUCK_SIZE = (8, 7)
-    JET_SIZE = (8, 6)
-    CHOPPER_SIZE = (8, 9)
-    PLAYER_MISSILE_SIZE = (80, 1) #Default (80, 1)
-    ENEMY_MISSILE_SIZE = (2, 1)
+    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (16, 9))  # Width, Height
+    TRUCK_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 7))
+    JET_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 6))
+    CHOPPER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 9))
+    PLAYER_MISSILE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (80, 1)) #Default (80, 1)
+    ENEMY_MISSILE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (2, 1))
 
-    PLAYER_START_X = 0
-    PLAYER_START_Y = 100
+    PLAYER_START_X: int = struct.field(pytree_node=False, default=0)
+    PLAYER_START_Y: int = struct.field(pytree_node=False, default=100)
 
-    X_BORDERS = (0, 160)
-    PLAYER_BOUNDS = (0, 160), (52, 150)
+    X_BORDERS: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (0, 160))
+    PLAYER_BOUNDS: Tuple[Tuple[int, int], Tuple[int, int]] = struct.field(pytree_node=False, default_factory=lambda: ((0, 160), (52, 150)))
 
     # Maximum number of objects
-    MAX_TRUCKS = 12 # DEFAULT: 12 | How much trucks are spawned
-    MAX_JETS = 12 # DEFAULT: 12 | the maximum amount of jets that can be spawned
-    MAX_CHOPPERS = 12 # DEFAULT: 12 | the maximum amount of choppers that can be spawned
-    MAX_ENEMIES = 12 # DEFAULT: 12 | the amount of enemies that are spawned
-    MAX_PLAYER_MISSILES = 1 # DEFAULT: 1 | the original game allows only one missile per screen. The player_missile_step logic is adjusted automatically, if this is changed to more than 1.
-    MAX_ENEMY_MISSILES = MAX_ENEMIES * 2 * 2 # Two missiles for every enemy (jets and choppers) (this does not mean, that there are always this many missiles on the screen/in the game)
-    ENEMY_LANE_SWITCH_PROBABILITY = 0.05 # DEFAULT: 7 | how likely is it that en enemy switches a lane
+    MAX_TRUCKS: int = struct.field(pytree_node=False, default=12) # DEFAULT: 12 | How much trucks are spawned
+    MAX_JETS: int = struct.field(pytree_node=False, default=12) # DEFAULT: 12 | the maximum amount of jets that can be spawned
+    MAX_CHOPPERS: int = struct.field(pytree_node=False, default=12) # DEFAULT: 12 | the maximum amount of choppers that can be spawned
+    MAX_ENEMIES: int = struct.field(pytree_node=False, default=12) # DEFAULT: 12 | the amount of enemies that are spawned
+    MAX_PLAYER_MISSILES: int = struct.field(pytree_node=False, default=1) # DEFAULT: 1 | the original game allows only one missile per screen. The player_missile_step logic is adjusted automatically, if this is changed to more than 1.
+    
+    MAX_ENEMY_MISSILES: Optional[int] = struct.field(pytree_node=False, default=None)  # Two missiles for every enemy (jets and choppers)
+    
+    ENEMY_LANE_SWITCH_PROBABILITY: float = struct.field(pytree_node=False, default=0.05) # DEFAULT: 7 | how likely is it that en enemy switches a lane
 
     # Enemy movement
-    JET_VELOCITY_LEFT = 1.5 # DEFAULT: 1.5 | How fast jets fly to the left
-    JET_VELOCITY_RIGHT = 1 # DEFAULT: 1 | How fast jets fly to the right
-    CHOPPER_VELOCITY_LEFT = 0.75 # DEFAULT: 0.75 | How fast choppers fly to the right
-    CHOPPER_VELOCITY_RIGHT = 0.5 # DEFAULT: 0.5 | How fast choppers fly to the right
-    ENEMY_OUT_OF_CYCLE_RIGHT = 64 # DEFAULT: 64 | How far enemies can fly around the truck fleet to the right
-    ENEMY_OUT_OF_CYCLE_LEFT = 64 # DEFAULT: 64 | How far enemies cam fly around the truck fleet to the left
-    ENEMY_MAXIMUM_SPAWN_OFFSET = 64 # DEFAULT: 64 | How far to the left and right of the middle truck enemies can spawn
+    JET_VELOCITY_LEFT: float = struct.field(pytree_node=False, default=1.5) # DEFAULT: 1.5 | How fast jets fly to the left
+    JET_VELOCITY_RIGHT: float = struct.field(pytree_node=False, default=1) # DEFAULT: 1 | How fast jets fly to the right
+    CHOPPER_VELOCITY_LEFT: float = struct.field(pytree_node=False, default=0.75) # DEFAULT: 0.75 | How fast choppers fly to the right
+    CHOPPER_VELOCITY_RIGHT: float = struct.field(pytree_node=False, default=0.5) # DEFAULT: 0.5 | How fast choppers fly to the right
+    ENEMY_OUT_OF_CYCLE_RIGHT: int = struct.field(pytree_node=False, default=64) # DEFAULT: 64 | How far enemies can fly around the truck fleet to the right
+    ENEMY_OUT_OF_CYCLE_LEFT: int = struct.field(pytree_node=False, default=64) # DEFAULT: 64 | How far enemies cam fly around the truck fleet to the left
+    ENEMY_MAXIMUM_SPAWN_OFFSET: int = struct.field(pytree_node=False, default=64) # DEFAULT: 64 | How far to the left and right of the middle truck enemies can spawn
 
     # Enemy Lanes
 
-    ENEMY_LANE_OFFSET = 7 # DEFAULT: 7 | How much apart bottom and top lanes are from the middle lane
+    ENEMY_LANE_OFFSET: int = struct.field(pytree_node=False, default=7) # DEFAULT: 7 | How much apart bottom and top lanes are from the middle lane
 
-    ENEMY_LANE_7 = 66
-    ENEMY_LANE_8 = ENEMY_LANE_7 - ENEMY_LANE_OFFSET
-    ENEMY_LANE_6 = ENEMY_LANE_7 + ENEMY_LANE_OFFSET
+    ENEMY_LANE_7: int = struct.field(pytree_node=False, default=66)
+    ENEMY_LANE_8: Optional[int] = struct.field(pytree_node=False, default=None)
+    ENEMY_LANE_6: Optional[int] = struct.field(pytree_node=False, default=None)
 
-    ENEMY_LANE_4 = 96
-    ENEMY_LANE_5 = ENEMY_LANE_4 - ENEMY_LANE_OFFSET
-    ENEMY_LANE_3 = ENEMY_LANE_4 + ENEMY_LANE_OFFSET
+    ENEMY_LANE_4: int = struct.field(pytree_node=False, default=96)
+    ENEMY_LANE_5: Optional[int] = struct.field(pytree_node=False, default=None)
+    ENEMY_LANE_3: Optional[int] = struct.field(pytree_node=False, default=None)
 
-    ENEMY_LANE_1 = 126
-    ENEMY_LANE_2 = ENEMY_LANE_1 - ENEMY_LANE_OFFSET
-    ENEMY_LANE_0 = ENEMY_LANE_1 + ENEMY_LANE_OFFSET
-
-    BOTTOM_LANES = jnp.array([ENEMY_LANE_0, ENEMY_LANE_1, ENEMY_LANE_2])
-    MIDDLE_LANES = jnp.array([ENEMY_LANE_3, ENEMY_LANE_4, ENEMY_LANE_5])
-    TOP_LANES = jnp.array([ENEMY_LANE_6, ENEMY_LANE_7, ENEMY_LANE_8])
-
-    ALL_LANES = jnp.array([ENEMY_LANE_0, ENEMY_LANE_1, ENEMY_LANE_2, ENEMY_LANE_3, ENEMY_LANE_4, ENEMY_LANE_5, ENEMY_LANE_6, ENEMY_LANE_7, ENEMY_LANE_8])
-
+    ENEMY_LANE_1: int = struct.field(pytree_node=False, default=126)
+    ENEMY_LANE_2: Optional[int] = struct.field(pytree_node=False, default=None)
+    ENEMY_LANE_0: Optional[int] = struct.field(pytree_node=False, default=None)
+    
+    BOTTOM_LANES: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
+    MIDDLE_LANES: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
+    TOP_LANES: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
+    ALL_LANES: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
     """
     Correct arrangement of lanes by height is:
     
@@ -190,44 +190,72 @@ class ChopperCommandConstants:
     """
 
     # Minimap
-    MINIMAP_WIDTH = 48
-    MINIMAP_HEIGHT = 16
+    MINIMAP_WIDTH: int = struct.field(pytree_node=False, default=48)
+    MINIMAP_HEIGHT: int = struct.field(pytree_node=False, default=16)
 
-    MINIMAP_POSITION_X = (WIDTH // 2) - (MINIMAP_WIDTH // 2) # TODO: Im echten Game wird die Minimap nicht mittig, sondern weiter links gerendert. Wir müssen besprechen ob wir das auch machen, dann müsste man nur diese Zahl hier ändern (finde es aber so schöner)
-    MINIMAP_POSITION_Y = 165
+    MINIMAP_POSITION_X: Optional[int] = struct.field(pytree_node=False, default=None)
+    
+    MINIMAP_POSITION_Y: int = struct.field(pytree_node=False, default=165)
 
-    MINIMAP_RENDER_TRUCK_REFRESH_RATE = 8 # Higher is slower (Does not fully work yet)
+    MINIMAP_RENDER_TRUCK_REFRESH_RATE: int = struct.field(pytree_node=False, default=8) # Higher is slower (Does not fully work yet)
 
-    DOWNSCALING_FACTOR_WIDTH = WIDTH // MINIMAP_WIDTH
-    DOWNSCALING_FACTOR_HEIGHT = HEIGHT_ONLY_PLAYING_FIELD // MINIMAP_HEIGHT
+    DOWNSCALING_FACTOR_WIDTH: Optional[int] = struct.field(pytree_node=False, default=None)
+    DOWNSCALING_FACTOR_HEIGHT: Optional[int] = struct.field(pytree_node=False, default=None)
 
     #Object rendering
-    TRUCK_SPAWN_DISTANCE = 248 # distance 240px + truck width
+    TRUCK_SPAWN_DISTANCE: int = struct.field(pytree_node=False, default=248) # distance 240px + truck width
 
-    FRAMES_DEATH_ANIMATION_ENEMY = 16
-    FRAMES_DEATH_ANIMATION_TRUCK = 32 # TODO: Make match real game
-    TRUCK_FLICKER_RATE = 3 # TODO: Make match real game
+    FRAMES_DEATH_ANIMATION_ENEMY: int = struct.field(pytree_node=False, default=16)
+    FRAMES_DEATH_ANIMATION_TRUCK: int = struct.field(pytree_node=False, default=32) # TODO: Make match real game
+    TRUCK_FLICKER_RATE: int = struct.field(pytree_node=False, default=3) # TODO: Make match real game
 
-    PLAYER_FADE_OUT_START_THRESHOLD_0 = 0.25
-    PLAYER_FADE_OUT_START_THRESHOLD_1 = 0.125
+    PLAYER_FADE_OUT_START_THRESHOLD_0: float = struct.field(pytree_node=False, default=0.25)
+    PLAYER_FADE_OUT_START_THRESHOLD_1: float = struct.field(pytree_node=False, default=0.125)
 
     # define object orientations
-    FACE_LEFT = -1
-    FACE_RIGHT = 1
+    FACE_LEFT: int = struct.field(pytree_node=False, default=-1)
+    FACE_RIGHT: int = struct.field(pytree_node=False, default=1)
 
-    SPAWN_POSITIONS_Y = jnp.array([60, 90, 120])
-    TRUCK_SPAWN_POSITIONS = 156
+    SPAWN_POSITIONS_Y: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([60, 90, 120]))
+    TRUCK_SPAWN_POSITIONS: int = struct.field(pytree_node=False, default=156)
 
     # Debugging
 
-    ENABLE_PLAYER_COLLISION = True
-    ENABLE_ENEMY_MISSILE_TRUCK_COLLISION = True
+    ENABLE_PLAYER_COLLISION: bool = struct.field(pytree_node=False, default=True)
+    ENABLE_ENEMY_MISSILE_TRUCK_COLLISION: bool = struct.field(pytree_node=False, default=True)
 
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=lambda: _get_default_asset_config())
+    
+    def compute_derived(self):
+        """Compute derived constants based on static fields."""
+        # Compute lane positions
+        enemy_lane_8 = self.ENEMY_LANE_7 - self.ENEMY_LANE_OFFSET
+        enemy_lane_6 = self.ENEMY_LANE_7 + self.ENEMY_LANE_OFFSET
+        enemy_lane_5 = self.ENEMY_LANE_4 - self.ENEMY_LANE_OFFSET
+        enemy_lane_3 = self.ENEMY_LANE_4 + self.ENEMY_LANE_OFFSET
+        enemy_lane_2 = self.ENEMY_LANE_1 - self.ENEMY_LANE_OFFSET
+        enemy_lane_0 = self.ENEMY_LANE_1 + self.ENEMY_LANE_OFFSET
+        
+        return {
+            'MAX_ENEMY_MISSILES': self.MAX_ENEMIES * 2 * 2,
+            'ENEMY_LANE_8': enemy_lane_8,
+            'ENEMY_LANE_6': enemy_lane_6,
+            'ENEMY_LANE_5': enemy_lane_5,
+            'ENEMY_LANE_3': enemy_lane_3,
+            'ENEMY_LANE_2': enemy_lane_2,
+            'ENEMY_LANE_0': enemy_lane_0,
+            'BOTTOM_LANES': jnp.array([enemy_lane_0, self.ENEMY_LANE_1, enemy_lane_2]),
+            'MIDDLE_LANES': jnp.array([enemy_lane_3, self.ENEMY_LANE_4, enemy_lane_5]),
+            'TOP_LANES': jnp.array([enemy_lane_6, self.ENEMY_LANE_7, enemy_lane_8]),
+            'ALL_LANES': jnp.array([enemy_lane_0, self.ENEMY_LANE_1, enemy_lane_2, enemy_lane_3, self.ENEMY_LANE_4, enemy_lane_5, enemy_lane_6, self.ENEMY_LANE_7, enemy_lane_8]),
+            'MINIMAP_POSITION_X': (self.WIDTH // 2) - (self.MINIMAP_WIDTH // 2),
+            'DOWNSCALING_FACTOR_WIDTH': self.WIDTH // self.MINIMAP_WIDTH,
+            'DOWNSCALING_FACTOR_HEIGHT': self.HEIGHT_ONLY_PLAYING_FIELD // self.MINIMAP_HEIGHT,
+        }
 
-
-class ChopperCommandState(NamedTuple):
+@struct.dataclass
+class ChopperCommandState:
     player_x: chex.Array                    # x-coordinate of the player’s chopper in world space
     player_y: chex.Array                    # y-coordinate of the player’s chopper in world space
     player_velocity_x: chex.Array           # horizontal velocity (momentum) of the player’s chopper; positive = moving right, negative = moving left
@@ -249,40 +277,26 @@ class ChopperCommandState(NamedTuple):
     difficulty: chex.Array                  # states the difficulty which can be either 1 or 2
     enemy_speed: chex.Array                 # states the speed of the enemies e.g. all enemies are killed
 
-class PlayerEntity(NamedTuple):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    o: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    active: jnp.ndarray
-
-class EntityPosition(NamedTuple):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    active: jnp.ndarray
-
-class ChopperCommandObservation(NamedTuple):
-    player: PlayerEntity
-    trucks: jnp.ndarray # Shape (MAX_TRUCKS, 5) - MAX_TRUCKS enemies, each with x,y,w,h,active
-    jets: jnp.ndarray  # Shape (MAX_JETS, 5) - MAX_JETS enemies, each with x,y,w,h,active
-    choppers: jnp.ndarray # Shape (MAX_CHOPPERS, 5) - MAX_CHOPPERS enemies, each with x,y,w,h,active
-    enemy_missiles: jnp.ndarray  # Shape (MAX_MISSILES, 5)
-    player_missile: EntityPosition
-    player_score: jnp.ndarray
+@struct.dataclass
+class ChopperCommandObservation:
+    player: ObjectObservation
+    trucks: ObjectObservation
+    jets: ObjectObservation # Shape inside ObjectObservation: (5,) - MAX_JETS enemies, each with x,y,w,h,active
+    choppers: ObjectObservation # Shape inside ObjectObservation: (5,) - MAX_CHOPPERS enemies, each with x,y,w,h,active
+    enemy_missiles: ObjectObservation # Shape inside ObjectObservation: (5,) - MAX_MISSILES enemies, each with x,y,w,h,active
+    player_missiles: ObjectObservation # Shape inside ObjectObservation: (5,) - MAX_MISSILES player, each with x,y,w,h,active
     lives: jnp.ndarray
+    score: jnp.ndarray
 
-class ChopperCommandInfo(NamedTuple):
+@struct.dataclass
+class ChopperCommandInfo:
     step_counter: jnp.ndarray  # Current step count
 
 
 class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObservation, ChopperCommandInfo, ChopperCommandConstants]):
-    def __init__(self, consts: ChopperCommandConstants = None):
-        consts = consts or ChopperCommandConstants()
-        super().__init__(consts)
-        self.action_set = [
+    # Minimal ALE action set (from scripts/action_space_helper.py)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.NOOP,
             Action.FIRE,
             Action.UP,
@@ -300,8 +314,14 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             Action.UPRIGHTFIRE,
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE
-        ]
+            Action.DOWNLEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: ChopperCommandConstants = None):
+        consts = consts or ChopperCommandConstants()
+        super().__init__(consts)
 
         self.obs_size = (
             6  # player: x,y,o,width,height,active
@@ -322,72 +342,44 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         """Render the game state to a raster image."""
         return self.renderer.render(state)
 
-    def flatten_entity_position(self, entity: EntityPosition) -> jnp.ndarray:
-        return jnp.array(
-            [entity.x, entity.y, entity.width, entity.height, entity.active],
-            dtype=jnp.float32
-        )
-
-    def flatten_player_entity(self, entity: PlayerEntity) -> jnp.ndarray:
-        return jnp.array(
-            [entity.x, entity.y, entity.o, entity.width, entity.height, entity.active],
-            dtype=jnp.float32
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: ChopperCommandObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            self.flatten_player_entity(obs.player),  # 6
-            obs.trucks.flatten().astype(jnp.float32),  # 12*5
-            obs.jets.flatten().astype(jnp.float32),  # 12*5
-            obs.choppers.flatten().astype(jnp.float32),  # 12*5
-            obs.enemy_missiles.flatten().astype(jnp.float32),  # 48*5  (alle Missiles)
-            self.flatten_entity_position(obs.player_missile),  # 5
-            jnp.array([obs.player_score], dtype=jnp.float32),  # 1
-            jnp.array([obs.lives], dtype=jnp.float32),  # 1
-        ])
-
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
-        f32 = jnp.float32
-        SAFE_X_LOW = -60000.0
-        SAFE_X_HIGH = 60000.0
+        """
+        Returns the observation space for Chopper Command.
+        All coordinates are converted to screen space (0-160, 0-210).
+        """
+        # We override the default object space to allow "radar-style" X coordinates for enemies,
+        # which can be negative (off-screen left) or greater than WIDTH (off-screen right).
+        # Y, width and height remain bounded by the visible screen.
+        h, w = self.consts.HEIGHT, self.consts.WIDTH
+        radar_low_x = -2000
+        radar_high_x = 2000
 
-        tw, th = self.consts.TRUCK_SIZE
-        jw, jh = self.consts.JET_SIZE
-        cw, ch = self.consts.CHOPPER_SIZE
-        mw, mh = self.consts.ENEMY_MISSILE_SIZE
-
-        def make_array_box(n, w, h):
-            low = jnp.tile(jnp.array([SAFE_X_LOW, 0.0, 0.0, 0.0, 0.0], dtype=f32), (n, 1))
-            high = jnp.tile(jnp.array([SAFE_X_HIGH, 210.0, float(w), float(h), 1.0], dtype=f32), (n, 1))
-            return spaces.Box(low=low, high=high, dtype=f32)
+        def _radar_object_space(n: Optional[int]) -> spaces.Dict:
+            shape = () if n is None else (n,)
+            return spaces.Dict({
+                "x": spaces.Box(low=radar_low_x, high=radar_high_x, shape=shape, dtype=jnp.int16),
+                "y": spaces.Box(low=0, high=h, shape=shape, dtype=jnp.int16),
+                "width": spaces.Box(low=0, high=w, shape=shape, dtype=jnp.int16),
+                "height": spaces.Box(low=0, high=h, shape=shape, dtype=jnp.int16),
+                "active": spaces.Box(low=0, high=1, shape=shape, dtype=jnp.int8),
+                "visual_id": spaces.Box(low=0, high=255, shape=shape, dtype=jnp.int16),
+                "state": spaces.Box(low=0, high=255, shape=shape, dtype=jnp.int16),
+                "orientation": spaces.Box(low=0.0, high=360.0, shape=shape, dtype=jnp.float32),
+            })
 
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=SAFE_X_LOW, high=SAFE_X_HIGH, shape=(), dtype=f32),
-                "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=f32),
-                "o": spaces.Box(low=-1.0, high=1.0, shape=(), dtype=f32),
-                "width": spaces.Box(low=0.0, high=160.0, shape=(), dtype=f32),
-                "height": spaces.Box(low=0.0, high=210.0, shape=(), dtype=f32),
-                "active": spaces.Box(low=0.0, high=1.0, shape=(), dtype=f32),
-            }),
-            "trucks": make_array_box(self.consts.MAX_TRUCKS, tw, th),
-            "jets": make_array_box(self.consts.MAX_JETS, jw, jh),
-            "choppers": make_array_box(self.consts.MAX_CHOPPERS, cw, ch),
-            "enemy_missiles": make_array_box(self.consts.MAX_ENEMY_MISSILES, mw, mh),
-
-            "player_missile": spaces.Dict({
-                "x": spaces.Box(low=SAFE_X_LOW, high=SAFE_X_HIGH, shape=(), dtype=f32),
-                "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=f32),
-                "width": spaces.Box(low=0.0, high=160.0, shape=(), dtype=f32),
-                "height": spaces.Box(low=0.0, high=210.0, shape=(), dtype=f32),
-                "active": spaces.Box(low=0.0, high=1.0, shape=(), dtype=f32),
-            }),
-            "player_score": spaces.Box(low=0.0, high=999999.0, shape=(), dtype=f32),
-            "lives": spaces.Box(low=0.0, high=3.0, shape=(), dtype=f32),
+            # Player stays on-screen, but we can safely share the same radar bounds.
+            "player": _radar_object_space(n=None),
+            "trucks": _radar_object_space(n=self.consts.MAX_TRUCKS),
+            "jets": _radar_object_space(n=self.consts.MAX_JETS),
+            "choppers": _radar_object_space(n=self.consts.MAX_CHOPPERS),
+            "enemy_missiles": _radar_object_space(n=self.consts.MAX_ENEMY_MISSILES),
+            "player_missiles": _radar_object_space(n=self.consts.MAX_PLAYER_MISSILES),
+            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.uint32),
+            "lives": spaces.Box(low=0, high=99, shape=(), dtype=jnp.uint8),
         })
 
     def image_space(self) -> spaces.Box:
@@ -403,54 +395,118 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: ChopperCommandState) -> ChopperCommandObservation:
-        f32 = jnp.float32
-
-        player = PlayerEntity(
-            x=jnp.asarray(state.player_x, dtype=f32),
-            y=jnp.asarray(state.player_y, dtype=f32),
-            o=jnp.asarray(state.player_facing_direction, dtype=f32),
-            width=jnp.asarray(self.consts.PLAYER_SIZE[0], dtype=f32),
-            height=jnp.asarray(self.consts.PLAYER_SIZE[1], dtype=f32),
-            active=jnp.asarray(1.0, dtype=f32),
+        # --- Helper for Screen Coordinates ---
+        # Calculate where the player is drawn on screen (center x)
+        screen_center = self.consts.WIDTH // 2
+        player_screen_x_center = screen_center + state.local_player_offset + (state.player_velocity_x * self.consts.DISTANCE_WHEN_FLYING)
+        
+        # --- Player ---
+        player_x = player_screen_x_center - (self.consts.PLAYER_SIZE[0] // 2)
+        # Orientation: 1 -> 90 (Right), -1 -> 270 (Left)
+        player_orientation = jnp.where(state.player_facing_direction == 1, 90.0, 270.0)
+        
+        player = ObjectObservation.create(
+            x=jnp.clip(player_x.astype(jnp.int32), 0, self.consts.WIDTH),
+            y=jnp.clip(state.player_y.astype(jnp.int32), 0, self.consts.HEIGHT),
+            width=jnp.array(self.consts.PLAYER_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.PLAYER_SIZE[1], dtype=jnp.int32),
+            orientation=player_orientation.astype(jnp.float32),
+            active=jnp.array(1, dtype=jnp.int32)
         )
 
-        def convert_to_entity(pos, size_wh):
-            # aktiv: dir != 0 und death_timer == 0 (oder >FRAMES… – je nach deiner Logik)
-            active = jnp.where((pos[2] != 0) & (pos[3] == 0), 1.0, 0.0).astype(f32)
-            return jnp.array([pos[0], pos[1], size_wh[0], size_wh[1], active], dtype=f32)
+        # --- Enemies Helper ---
+        # Converts global world coordinates to relative screen coordinates matching the renderer logic.
+        # X is left unclipped to act as a "radar" distance signal, while Y is safely clipped to screen bounds.
+        def convert_enemies(positions, size, death_threshold):
+            # positions: [x, y, dir, death_timer]
+            # Logic: screen_x = enemy_world_x - player_world_x + (screen_center + local_offset - size//2)
+            static_center_x = screen_center + state.local_player_offset - (size[0] // 2)
+            
+            # 1. Unclipped relative X coordinate (radar-style distance to screen)
+            screen_x = positions[:, 0] - state.player_x + static_center_x
+            screen_y = positions[:, 1]
+            direction = positions[:, 2]
+            timer = positions[:, 3]
+            
+            # 2. Active if direction is set and not fully dead
+            active = (direction != 0) & (timer > death_threshold)
+            orientation = jnp.where(direction == 1, 90.0, jnp.where(direction == -1, 270.0, 0.0))
+            
+            # 3. Optional radar-style state flag:
+            #    0 = On-Screen, 1 = Off-Screen Left, 2 = Off-Screen Right
+            is_off_left = (screen_x + size[0]) <= 0
+            is_off_right = screen_x >= self.consts.WIDTH
+            obj_state = jnp.where(is_off_left, 1, jnp.where(is_off_right, 2, 0))
 
-        def convert_missile(pos, size_wh):
-            active = jnp.where(pos[2] != 0, 1.0, 0.0).astype(f32)
-            return jnp.array([pos[0], pos[1], size_wh[0], size_wh[1], active], dtype=f32)
+            return ObjectObservation.create(
+                x=screen_x.astype(jnp.int32),  # DO NOT CLIP X (radar distance)
+                y=jnp.clip(screen_y.astype(jnp.int32), 0, self.consts.HEIGHT),  # Safe to clip Y
+                width=jnp.full(screen_x.shape, size[0], dtype=jnp.int32),
+                height=jnp.full(screen_x.shape, size[1], dtype=jnp.int32),
+                orientation=orientation.astype(jnp.float32),
+                active=active.astype(jnp.int32),
+                state=obj_state.astype(jnp.int32),
+            )
 
-        trucks = jax.vmap(lambda p: convert_to_entity(p, self.consts.TRUCK_SIZE))(state.truck_positions.astype(f32))
-        jets = jax.vmap(lambda p: convert_to_entity(p, self.consts.JET_SIZE))(state.jet_positions.astype(f32))
-        choppers = jax.vmap(lambda p: convert_to_entity(p, self.consts.CHOPPER_SIZE))(
-            state.chopper_positions.astype(f32))
-        enemy_missiles = jax.vmap(lambda p: convert_missile(p, self.consts.ENEMY_MISSILE_SIZE))(
-            state.enemy_missile_positions.astype(f32))
+        trucks = convert_enemies(state.truck_positions, self.consts.TRUCK_SIZE, self.consts.FRAMES_DEATH_ANIMATION_TRUCK)
+        jets = convert_enemies(state.jet_positions, self.consts.JET_SIZE, self.consts.FRAMES_DEATH_ANIMATION_ENEMY)
+        choppers = convert_enemies(state.chopper_positions, self.consts.CHOPPER_SIZE, self.consts.FRAMES_DEATH_ANIMATION_ENEMY)
 
-        missile_pos = state.player_missile_positions[0].astype(f32)
-        player_missile = EntityPosition(
-            x=missile_pos[0],
-            y=missile_pos[1],
-            width=jnp.asarray(self.consts.PLAYER_MISSILE_SIZE[0], dtype=f32),
-            height=jnp.asarray(self.consts.PLAYER_MISSILE_SIZE[1], dtype=f32),
-            active=jnp.where(missile_pos[2] != 0, 1.0, 0.0).astype(f32),
+        # --- Enemy Missiles ---
+        # Renderer aligns missiles with the chopper size center
+        static_center_x_missile = screen_center + state.local_player_offset - (self.consts.CHOPPER_SIZE[0] // 2)
+        raw_em_x = state.enemy_missile_positions[:, 0] - state.player_x + static_center_x_missile
+        em_y = state.enemy_missile_positions[:, 1]
+        em_active = em_y > 2  # Active check from renderer
+
+        # State: 0 = On-screen, 1 = Off-left, 2 = Off-right
+        is_em_off_left = (raw_em_x + self.consts.ENEMY_MISSILE_SIZE[0]) <= 0
+        is_em_off_right = raw_em_x >= self.consts.WIDTH
+        em_state = jnp.where(is_em_off_left, 1, jnp.where(is_em_off_right, 2, 0))
+
+        enemy_missiles = ObjectObservation.create(
+            x=raw_em_x.astype(jnp.int32),  # DO NOT CLIP X
+            y=jnp.clip(em_y.astype(jnp.int32), 0, self.consts.HEIGHT),
+            width=jnp.full(raw_em_x.shape, self.consts.ENEMY_MISSILE_SIZE[0], dtype=jnp.int32),
+            height=jnp.full(raw_em_x.shape, self.consts.ENEMY_MISSILE_SIZE[1], dtype=jnp.int32),
+            active=em_active.astype(jnp.int32),
+            state=em_state.astype(jnp.int32),
         )
 
-        player_score = jnp.asarray(state.score, dtype=f32)
-        lives = jnp.asarray(state.lives, dtype=f32)
+        # --- Player Missiles ---
+        # Renderer logic: screen_x = missile_x - player_x + chopper_position_top_left
+        chopper_pos_tl = player_screen_x_center - (self.consts.PLAYER_SIZE[0] // 2)
+
+        raw_pm_x = state.player_missile_positions[:, 0] - state.player_x + chopper_pos_tl
+        pm_y = state.player_missile_positions[:, 1]
+        pm_dir = state.player_missile_positions[:, 2]
+        pm_active = pm_dir != 0
+        pm_orientation = jnp.where(pm_dir == 1, 90.0, jnp.where(pm_dir == -1, 270.0, 0.0))
+
+        # State: 0 = On-screen, 1 = Off-left, 2 = Off-right
+        is_pm_off_left = (raw_pm_x + self.consts.PLAYER_MISSILE_SIZE[0]) <= 0
+        is_pm_off_right = raw_pm_x >= self.consts.WIDTH
+        pm_state = jnp.where(is_pm_off_left, 1, jnp.where(is_pm_off_right, 2, 0))
+
+        player_missiles = ObjectObservation.create(
+            x=raw_pm_x.astype(jnp.int32),  # DO NOT CLIP X
+            y=jnp.clip(pm_y.astype(jnp.int32), 0, self.consts.HEIGHT),
+            width=jnp.full(raw_pm_x.shape, self.consts.PLAYER_MISSILE_SIZE[0], dtype=jnp.int32),
+            height=jnp.full(raw_pm_x.shape, self.consts.PLAYER_MISSILE_SIZE[1], dtype=jnp.int32),
+            orientation=pm_orientation.astype(jnp.float32),
+            active=pm_active.astype(jnp.int32),
+            state=pm_state.astype(jnp.int32),
+        )
 
         return ChopperCommandObservation(
             player=player,
             trucks=trucks,
             jets=jets,
             choppers=choppers,
-            enemy_missiles=enemy_missiles,  # (MAX_ENEMY_MISSILES,5)
-            player_missile=player_missile,
-            player_score=player_score,
-            lives=lives,
+            enemy_missiles=enemy_missiles,
+            player_missiles=player_missiles,
+            score=state.score.astype(jnp.int32),
+            lives=state.lives.astype(jnp.int32)
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -496,40 +552,6 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         )
 
         return jnp.logical_and(horizontal_overlap, vertical_overlap)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def check_collision_batch(
-            self, pos1, size1, pos2_array, size2
-    ):
-        """Check collision between one entity and an array of entities"""
-        # Calculate edges for rectangle 1
-        rect1_left = pos1[0]
-        rect1_right = pos1[0] + size1[0]
-        rect1_top = pos1[1]
-        rect1_bottom = pos1[1] + size1[1]
-
-        # Calculate edges for all rectangles in pos2_array
-        rect2_left = pos2_array[:, 0]
-        rect2_right = pos2_array[:, 0] + size2[0]
-        rect2_top = pos2_array[:, 1]
-        rect2_bottom = pos2_array[:, 1] + size2[1]
-
-        # Check overlap for all entities
-        horizontal_overlaps = jnp.logical_and(
-            rect1_left < rect2_right,
-            rect1_right > rect2_left
-        )
-
-        vertical_overlaps = jnp.logical_and(
-            rect1_top < rect2_bottom,
-            rect1_bottom > rect2_top
-        )
-
-        # Combine checks for each entity
-        collisions = jnp.logical_and(horizontal_overlaps, vertical_overlaps)
-
-        # Return true if any collision detected
-        return jnp.any(collisions)
 
     def kill_entity(
             self,
@@ -676,62 +698,50 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             truck_size: Tuple[int, int],  # (width, height)
             missile_size: Tuple[int, int],  # (width, height)
     ) -> Tuple[chex.Array, chex.Array]:
+        # Extract components
+        mx, my = missile_positions[:, 0], missile_positions[:, 1]
+        tx, ty = truck_positions[:, 0], truck_positions[:, 1]
 
-        def check_single_missile(missile, trucks):
-            mx, my, _, _ = missile
-            missile_active = my > 2
+        # Add a dimension to broadcast: Missiles (M, 1) vs Trucks (1, T)
+        overlap_h = jnp.logical_and(
+            mx[:, None] < (tx[None, :] + truck_size[0]),
+            (mx[:, None] + missile_size[0]) > tx[None, :]
+        )
+        overlap_v = jnp.logical_and(
+            my[:, None] < (ty[None, :] + truck_size[1]),
+            (my[:, None] + missile_size[1]) > ty[None, :]
+        )
 
-            def check_single_truck(truck):
-                tx, ty, tdir, tdeath = truck
-                truck_active = jnp.logical_and(tdir != 0, tdeath > 0)
+        # State active checks
+        missile_active = (my > 2)[:, None]
+        truck_active = (jnp.logical_and(truck_positions[:, 2] != 0, truck_positions[:, 3] > 0))[None, :]
 
-                collision = (
-                        missile_active & truck_active &
-                        self.check_collision_single(
-                            jnp.array([mx, my]), missile_size,
-                            jnp.array([tx, ty]), truck_size
-                        )
-                )
+        # Collision Matrix shape: (M, T)
+        collisions = overlap_h & overlap_v & missile_active & truck_active
 
-                updated_truck = jnp.where(
-                    collision,
-                    jnp.array([tx, ty, tdir, self.consts.FRAMES_DEATH_ANIMATION_TRUCK], dtype=truck.dtype),
-                    truck
-                )
+        # Which trucks were hit by ANY missile? Shape: (T,)
+        trucks_hit = jnp.any(collisions, axis=0)
+        # Which missiles hit ANY truck? Shape: (M,)
+        missiles_hit = jnp.any(collisions, axis=1)
 
-                return collision, updated_truck
+        # Update Trucks
+        updated_trucks = jnp.where(
+            trucks_hit[:, None],
+            jnp.stack([
+                tx, ty,
+                truck_positions[:, 2],
+                jnp.full_like(tx, self.consts.FRAMES_DEATH_ANIMATION_TRUCK, dtype=truck_positions.dtype)
+            ], axis=-1),
+            truck_positions
+        )
 
-            # Check all trucks against this missile
-            collision_flags, updated_trucks = jax.vmap(check_single_truck)(trucks)
-
-            # If any collision occurred, mark missile as dead
-            collided = jnp.any(collision_flags)
-            updated_missile = jnp.where(
-                collided,
-                jnp.array([0.0, 0.0, 0.0, 187.0], dtype=missile.dtype),
-                missile
-            )
-
-            return updated_missile, updated_trucks, collision_flags
-
-        # Apply to all missiles
-        updated_results = jax.vmap(
-            lambda m: check_single_missile(m, truck_positions)
-        )(missile_positions)
-
-        updated_missiles = updated_results[0]  # shape: (MAX_MISSILES, 4)
-        updated_truck_list = updated_results[1]  # shape: (MAX_MISSILES, MAX_TRUCKS, 4)
-        collision_flags_all = updated_results[2]  # shape: (MAX_MISSILES, MAX_TRUCKS)
-
-        # Combine all truck updates from each missile pass
-        def reduce_trucks(i, carry):
-            combined = carry
-            flags = collision_flags_all[i]
-            trucks = updated_truck_list[i]
-            return jnp.where(flags[:, None], trucks, combined)
-
-        initial_trucks = truck_positions
-        updated_trucks = jax.lax.fori_loop(0, missile_positions.shape[0], reduce_trucks, initial_trucks)
+        # Update Missiles
+        dead_missile = jnp.array([0.0, 0.0, 0.0, 187.0], dtype=missile_positions.dtype)
+        updated_missiles = jnp.where(
+            missiles_hit[:, None],
+            dead_missile,
+            missile_positions
+        )
 
         return updated_trucks, updated_missiles
 
@@ -742,97 +752,57 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         This prevents origin-spawn artifacts during the no-move pause and keeps
         the minimap consistent immediately after respawn.
         """
-        jet_positions = jnp.zeros((self.consts.MAX_ENEMIES, 4), dtype=jnp.float32)
-        chopper_positions = jnp.zeros((self.consts.MAX_ENEMIES, 4), dtype=jnp.float32)
+        total_enemies = 12
+        fleet_idx = jnp.arange(total_enemies) // 3
+        unit_idx = jnp.arange(total_enemies) % 3
 
-        # Wrap helper: put x within +-624 of ref
-        def wrap_near_ref(x, ref):
-            period = jnp.asarray(1248.0, dtype=x.dtype)  # 2 * 624
-            half = jnp.asarray(624.0, dtype=x.dtype)
-            return ref + jnp.mod(x - ref + half, period) - half
+        # Base math for anchor positions
+        base_anchors = -780.0 + 312.0 * fleet_idx.astype(jnp.float32)
 
+        # Wrap helper inline: put x within +-624 of ref
+        period = jnp.asarray(1248.0, dtype=jnp.float32)
+        half = jnp.asarray(624.0, dtype=jnp.float32)
         ref_x = jnp.asarray(ref_x, dtype=jnp.float32)
+        anchor_x = ref_x + jnp.mod(base_anchors - ref_x + half, period) - half
 
-        # Fleet layout
-        fleet_start_x = jnp.asarray(-780.0, dtype=jnp.float32)
-        fleet_spacing_x = jnp.asarray(312.0, dtype=jnp.float32)
-        fleet_count = 4
-        units_per_fleet = 3
+        # RNG Splits
+        key_dir, key_chop, key_off = jax.random.split(init_rng, 3)
+
+        directions = jax.random.choice(
+            key_dir,
+            jnp.array([-1.0, 1.0], dtype=jnp.float32),
+            shape=(total_enemies,),
+            replace=True
+        )
+        x_offsets = jax.random.randint(
+            key_off,
+            (total_enemies,),
+            -self.consts.ENEMY_MAXIMUM_SPAWN_OFFSET + 5,
+            self.consts.ENEMY_MAXIMUM_SPAWN_OFFSET - 5
+        ).astype(jnp.float32)
+
+        # Generate chopper counts per fleet (shape: 4) and expand to (12)
+        chopper_counts = jax.random.randint(key_chop, (4,), 0, 4)
+        is_chopper = unit_idx < chopper_counts[fleet_idx]
+
+        # Assemble final positions
         vertical_spacing = 30
+        units_per_fleet = 3
         y_start = self.consts.HEIGHT_ONLY_PLAYING_FIELD // 2 - (units_per_fleet // 2) * vertical_spacing
+        y_positions = jnp.full(total_enemies, y_start, dtype=jnp.float32) + unit_idx.astype(jnp.float32) * vertical_spacing
 
-        # RNG
-        key0, key1, key2 = jax.random.split(init_rng, 3)
-        keys_for_direction = jax.random.split(key0, fleet_count)
-        keys_for_chopper_amount = jax.random.split(key1, fleet_count)
-        keys_for_offsets = jax.random.split(key2, fleet_count * units_per_fleet)
+        positions = jnp.stack([
+            anchor_x + x_offsets,
+            y_positions,
+            directions,
+            jnp.full(total_enemies, self.consts.FRAMES_DEATH_ANIMATION_ENEMY + 5.0, dtype=jnp.float32)
+        ], axis=1)
 
-        carry = (jet_positions, chopper_positions, 0)
+        # Distribute into jets vs choppers (jets at slots where ~is_chopper, choppers where is_chopper)
+        zeros = jnp.zeros_like(positions)
+        chopper_positions = jnp.where(is_chopper[:, None], positions, zeros)
+        jet_positions = jnp.where(~is_chopper[:, None], positions, zeros)
 
-        def spawn_fleet(fleet_idx, carry):
-            jet_positions, chopper_positions, global_idx = carry
-
-            # Base anchor and wrap it near ref_x
-            base_anchor = fleet_start_x + fleet_spacing_x * jnp.asarray(fleet_idx, dtype=jnp.float32)
-            anchor_x = wrap_near_ref(base_anchor, ref_x)
-
-            # Random directions per unit
-            directions = jax.random.choice(
-                keys_for_direction[fleet_idx],
-                jnp.array([-1.0, 1.0], dtype=jnp.float32),
-                shape=(units_per_fleet,),
-                replace=True
-            )
-
-            # Random number of choppers in this fleet
-            chopper_count = jax.random.randint(keys_for_chopper_amount[fleet_idx], (), 0, units_per_fleet + 1)
-
-            # X offsets per unit
-            x_offset_array = jnp.array([
-                jax.random.randint(keys_for_offsets[fleet_idx * units_per_fleet + 0], (),
-                                   -self.consts.ENEMY_MAXIMUM_SPAWN_OFFSET + 5,
-                                   self.consts.ENEMY_MAXIMUM_SPAWN_OFFSET - 5),
-                jax.random.randint(keys_for_offsets[fleet_idx * units_per_fleet + 1], (),
-                                   -self.consts.ENEMY_MAXIMUM_SPAWN_OFFSET + 5,
-                                   self.consts.ENEMY_MAXIMUM_SPAWN_OFFSET - 5),
-                jax.random.randint(keys_for_offsets[fleet_idx * units_per_fleet + 2], (),
-                                   -self.consts.ENEMY_MAXIMUM_SPAWN_OFFSET + 5,
-                                   self.consts.ENEMY_MAXIMUM_SPAWN_OFFSET - 5),
-            ], dtype=jnp.float32)
-
-            def place_unit(i, unit_carry):
-                jet_positions, chopper_positions, jet_idx, chopper_idx = unit_carry
-                y = jnp.asarray(y_start + i * vertical_spacing, dtype=jnp.float32)
-                offset_x = x_offset_array[i]
-                direction = directions[i]
-                pos = jnp.array([anchor_x + offset_x, y, direction, self.consts.FRAMES_DEATH_ANIMATION_ENEMY + 5.0], dtype=jnp.float32)
-
-                is_chopper = i < chopper_count
-                chopper_positions = jax.lax.cond(
-                    is_chopper,
-                    lambda cp: cp.at[chopper_idx].set(pos),
-                    lambda cp: cp,
-                    chopper_positions
-                )
-                jet_positions = jax.lax.cond(
-                    is_chopper,
-                    lambda jp: jp,
-                    lambda jp: jp.at[jet_idx].set(pos),
-                    jet_positions
-                )
-
-                jet_idx = jet_idx + jnp.where(is_chopper, 0, 1)
-                chopper_idx = chopper_idx + jnp.where(is_chopper, 1, 0)
-                return jet_positions, chopper_positions, jet_idx, chopper_idx
-
-            jet_positions, chopper_positions, jet_idx, chopper_idx = jax.lax.fori_loop(
-                0, units_per_fleet, place_unit, (jet_positions, chopper_positions, global_idx, global_idx)
-            )
-
-            new_global_idx = global_idx + units_per_fleet
-            return (jet_positions, chopper_positions, new_global_idx)
-
-        jet_positions, chopper_positions, _ = jax.lax.fori_loop(0, fleet_count, spawn_fleet, carry)
         return jet_positions, chopper_positions
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1118,23 +1088,20 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def initialize_truck_positions(self) -> chex.Array:     # TODO: change to vmap (via positioning array) if possible
-        initial_truck_positions = jnp.zeros((self.consts.MAX_TRUCKS, 4))
-        anchor = -748
-        carry = (initial_truck_positions, anchor)
+    def initialize_truck_positions(self) -> chex.Array:
+        # Gaps: 248 if i%3 == 0 else 32
+        indices = jnp.arange(self.consts.MAX_TRUCKS)
+        gaps = jnp.where(indices % 3 == 0, 248.0, 32.0)
 
-        def spawn_trucks(i, carry):
-            truck_positions, anchor = carry
+        # Cumulative sum starting at -748 (first truck at -748 + 248 = -500, etc.)
+        x_positions = -748.0 + jnp.cumsum(gaps)
 
-            anchor = jnp.where(
-                i % 3 == 0,
-                anchor + 248,
-                anchor + 32,
-            )
-            truck_positions = truck_positions.at[i].set(jnp.array([anchor, 156, -1, self.consts.FRAMES_DEATH_ANIMATION_TRUCK + 1]))
-            return truck_positions, anchor
-
-        return jax.lax.fori_loop(0, 12, spawn_trucks, carry)[0]
+        return jnp.stack([
+            x_positions,
+            jnp.full(self.consts.MAX_TRUCKS, 156.0),
+            jnp.full(self.consts.MAX_TRUCKS, -1.0),
+            jnp.full(self.consts.MAX_TRUCKS, self.consts.FRAMES_DEATH_ANIMATION_TRUCK + 1.0)
+        ], axis=1)
 
     @partial(jax.jit, static_argnums=(0,))
     def step_truck_movement(
@@ -1162,56 +1129,45 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def enemy_missiles_step(        # TODO: vmap
+    def enemy_missiles_step(
             self,
             jet_positions: chex.Array,  # (MAX_ENEMIES, 4)
             chopper_positions: chex.Array,  # (MAX_ENEMIES, 4)
             missile_states: chex.Array,  # (MAX_ENEMY_MISSILES, 4): [x, y, y_dir, did_split]
             rng: chex.PRNGKey,
     ) -> chex.Array:
-
         enemies = jnp.concatenate([jet_positions, chopper_positions], axis=0)
 
-        def step_both_missiles(i, carry):
-            missiles, key, eni = carry
-            # Split key into spawn, split, speed, and next key
-            key, key_spawn, key_split, key_speed = jax.random.split(key, 4)
+        # Reshape missiles to pair them with enemies: (24, 2, 4)
+        paired_missiles = missile_states.reshape(enemies.shape[0], 2, 4)
+        keys = jax.random.split(rng, enemies.shape[0])
 
-            # Get current enemy
-            current_enemy = enemies[eni]
+        def process_missile_pair(current_enemy, m_pair, key):
+            missile_upper = m_pair[0]
+            missile_lower = m_pair[1]
 
-            # Upper and lower missile
-            missile_upper = missiles[i]
-            missile_lower = missiles[i + 1]
+            key_spawn, key_split, key_speed = jax.random.split(key, 3)
 
             def maybe_spawn():
                 def do_spawn():
-                    # Coordinates of upper missile part
                     x_upper_spawn = current_enemy[0]
                     y_upper_spawn = current_enemy[1]
-
-                    # Coordinates of lower missile part
                     x_lower_spawn = current_enemy[0]
                     y_lower_spawn = current_enemy[1] + 1
-
-                    # Random Y Velocity
                     y_speed_spawn = jax.random.uniform(
                         key_speed,
                         (),
                         minval=-self.consts.ENEMY_MISSILE_MAXIMUM_Y_SPEED_BEFORE_SPLIT,
                         maxval=self.consts.ENEMY_MISSILE_MAXIMUM_Y_SPEED_BEFORE_SPLIT
                     )
-
-                    # We also set the did_split flag to false
-                    spawned_upper_missile = jnp.array([x_upper_spawn, y_upper_spawn, y_speed_spawn, 187.0], dtype=jnp.float32)
-                    spawned_lower_missile = jnp.array([x_lower_spawn, y_lower_spawn, y_speed_spawn, 187.0], dtype=jnp.float32)
-
-                    return spawned_upper_missile, spawned_lower_missile
+                    spawned_upper = jnp.array([x_upper_spawn, y_upper_spawn, y_speed_spawn, 187.0], dtype=jnp.float32)
+                    spawned_lower = jnp.array([x_lower_spawn, y_lower_spawn, y_speed_spawn, 187.0], dtype=jnp.float32)
+                    return spawned_upper, spawned_lower
 
                 return jax.lax.cond(
                     jax.random.bernoulli(key_spawn, p=self.consts.ENEMY_MISSILE_SPAWN_PROBABILITY),
-                    lambda _: do_spawn(), # Actually spawn
-                    lambda _: (           # Leave dead
+                    lambda _: do_spawn(),
+                    lambda _: (
                         jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32),
                         jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32)
                     ),
@@ -1223,12 +1179,10 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 x_lower_step, y_lower_step, y_lower_speed, did_split_lower_step = missile_lower
 
                 def dont_split():
-                    y_upper_step_inner = y_upper_step + y_upper_speed
-                    y_lower_step_inner = y_lower_step + y_lower_speed
                     return (
-                        y_upper_step_inner.astype(jnp.float32),
+                        (y_upper_step + y_upper_speed).astype(jnp.float32),
                         y_upper_speed.astype(jnp.float32),
-                        y_lower_step_inner.astype(jnp.float32),
+                        (y_lower_step + y_lower_speed).astype(jnp.float32),
                         y_lower_speed.astype(jnp.float32),
                         187.0
                     )
@@ -1236,12 +1190,10 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 def do_split():
                     y_upper_speed_inner = jnp.array(self.consts.ENEMY_MISSILE_Y_SPEED_AFTER_SPLIT, dtype=jnp.float32)
                     y_lower_speed_inner = jnp.array(-self.consts.ENEMY_MISSILE_Y_SPEED_AFTER_SPLIT, dtype=jnp.float32)
-                    y_upper_step_inner = y_upper_step + y_upper_speed_inner
-                    y_lower_step_inner = y_lower_step + y_lower_speed_inner
                     return (
-                        y_upper_step_inner.astype(jnp.float32),
+                        (y_upper_step + y_upper_speed_inner).astype(jnp.float32),
                         y_upper_speed_inner,
-                        y_lower_step_inner.astype(jnp.float32),
+                        (y_lower_step + y_lower_speed_inner).astype(jnp.float32),
                         y_lower_speed_inner,
                         42.0
                     )
@@ -1258,50 +1210,36 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                     operand=None
                 )
 
-                stepped_upper_missile = jnp.array([x_upper_step, y_upper_changed, y_upper_speed_changed, flag], dtype=jnp.float32)
-                stepped_lower_missile = jnp.array([x_lower_step, y_lower_changed, y_lower_speed_changed, flag], dtype=jnp.float32)
+                stepped_upper = jnp.array([x_upper_step, y_upper_changed, y_upper_speed_changed, flag], dtype=jnp.float32)
+                stepped_lower = jnp.array([x_lower_step, y_lower_changed, y_lower_speed_changed, flag], dtype=jnp.float32)
 
-                # Kill upper if out of bounds
-                stepped_upper_missile = jnp.where(
+                dead_missile = jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32)
+                stepped_upper = jnp.where(
                     jnp.logical_or(y_upper_changed < 44.0, y_upper_changed > 163.0),
-                    jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32),
-                    stepped_upper_missile,
+                    dead_missile,
+                    stepped_upper,
                 )
-
-                # Kill lower if out of bounds
-                stepped_lower_missile = jnp.where(
+                stepped_lower = jnp.where(
                     jnp.logical_or(y_lower_changed < 44.0, y_lower_changed > 163.0),
-                    jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32),
-                    stepped_lower_missile
+                    dead_missile,
+                    stepped_lower
                 )
+                return stepped_upper, stepped_lower
 
-                return stepped_upper_missile, stepped_lower_missile
-
-            # Check if missile is "alive"
             upper_dead = jnp.all(missile_upper == jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32))
             lower_dead = jnp.all(missile_lower == jnp.array([0.0, 0.0, 0.0, 187.0], dtype=jnp.float32))
 
-            updated_missile_upper, updated_missile_lower = jax.lax.cond(
+            updated_upper, updated_lower = jax.lax.cond(
                 jnp.logical_and(upper_dead, lower_dead),
                 lambda _: maybe_spawn(),
                 lambda _: do_step(),
                 operand=None
             )
 
-            missiles = missiles.at[i].set(updated_missile_upper)
-            missiles = missiles.at[i + 1].set(updated_missile_lower)
+            return jnp.stack([updated_upper, updated_lower], axis=0)
 
-            return missiles, key
-
-        def step_even(i, carry):
-            a, b = carry
-            carry = a, b, i
-            return step_both_missiles(i * 2, carry)
-
-        updated, _ = jax.lax.fori_loop(
-            0, enemies.shape[0], step_even, (missile_states, rng)
-        )
-        return updated
+        updated_paired_missiles = jax.vmap(process_missile_pair)(enemies, paired_missiles, keys)
+        return updated_paired_missiles.reshape(-1, 4)
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1329,33 +1267,31 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         missile_y = curr_player_y + 6
         cooldown = jnp.maximum(state.player_missile_cooldown - 1, 0)
 
-        def try_spawn(missiles): # TODO: rewrite
-            def body(i, carry):
-                missiles, did_spawn = carry
-                missile = missiles[i]
-                free = missile[2] == 0  # direction == 0 -> inactive
-                should_spawn = jnp.where(self.consts.MAX_PLAYER_MISSILES > 1,
-                                         jnp.logical_and(free, jnp.logical_not(did_spawn)),
-                                         jnp.array(True))
+        def try_spawn(missiles):
+            spawn_x = jnp.where(
+                state.player_facing_direction == -1,
+                curr_player_x - self.consts.PLAYER_MISSILE_WIDTH,
+                curr_player_x + self.consts.PLAYER_SIZE[0],
+            )
+            new_missile = jnp.array([
+                spawn_x,
+                missile_y,
+                state.player_facing_direction,
+                spawn_x
+            ], dtype=jnp.int32)
 
-                spawn_x = jnp.where(
-                    state.player_facing_direction == -1,
-                    curr_player_x - self.consts.PLAYER_MISSILE_WIDTH,
-                    curr_player_x + self.consts.PLAYER_SIZE[0],
-                )
+            # Find first free slot (direction == 0 means inactive)
+            free = missiles[:, 2] == 0
+            first_free_mask = (jnp.cumsum(free.astype(jnp.int32)) == 1) & free
 
-                new_missile = jnp.array([
-                    spawn_x, # x
-                    missile_y, # y
-                    state.player_facing_direction, # dir
-                    spawn_x # x_spawn
-                ], dtype=jnp.int32)
-
-                updated_missile = jnp.where(should_spawn, new_missile, missile)
-                missiles = missiles.at[i].set(updated_missile)
-                return missiles, jnp.logical_or(did_spawn, should_spawn)
-
-            return jax.lax.fori_loop(0, missiles.shape[0], body, (missiles, False))
+            # Spawn in first free slot; when MAX_PLAYER_MISSILES==1 this is just slot 0
+            updated = jnp.where(
+                first_free_mask[:, None],
+                jnp.broadcast_to(new_missile, missiles.shape),
+                missiles
+            )
+            did_spawn = jnp.any(first_free_mask)
+            return updated, did_spawn
 
         def spawn_if_possible(missiles):
             def do_spawn(_):
@@ -1519,6 +1455,9 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: ChopperCommandState, action: chex.Array):
+        # Translate compact agent action index to ALE console action
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
         prev = state  # for reward/info
 
         def _match_state_dtypes(out_state, ref_state):
@@ -1600,7 +1539,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             new_player_mis = new_player_mis.astype(state.player_missile_positions.dtype)
             new_loc_off = new_loc_off.astype(state.local_player_offset.dtype)
 
-            out = state._replace(
+            out = state.replace(
                 player_x=new_px,
                 player_y=new_py,
                 player_velocity_x=new_vx,
@@ -1686,7 +1625,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             fill_vec = jnp.asarray([0, 0, 0, 187], dtype=em_dtype)
             new_enemy_mis = jnp.full((self.consts.MAX_ENEMY_MISSILES, 4), fill_vec, dtype=em_dtype)
 
-            out = state._replace(
+            out = state.replace(
                 score=new_score,
                 truck_positions=new_trucks,
                 jet_positions=new_jet,
@@ -1713,7 +1652,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             keep_no_move = jnp.asarray(self.consts.DEATH_PAUSE_FRAMES + 1, dtype=pt_dtype)
             new_pause = jnp.where(jnp.logical_and(chopper_at_point, jnp.logical_not(no_input)), keep_no_move, state.pause_timer)
 
-            out = state._replace(local_player_offset=new_lpo, pause_timer=new_pause)
+            out = state.replace(local_player_offset=new_lpo, pause_timer=new_pause)
             return _match_state_dtypes(out, state)
 
         def do_respawn(_):
@@ -1782,7 +1721,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 center_left = nearest_left_fleet_center_x(soft.truck_positions, soft.player_x)
                 spawn_x = (center_left - jnp.asarray(156.0, dtype=soft.player_x.dtype)).astype(soft.player_x.dtype)
 
-                out = soft._replace(**_player_reset_fields(soft, spawn_x))
+                out = soft.replace(**_player_reset_fields(soft, spawn_x))
                 return _match_state_dtypes(out, state)
 
             def respawn_new_fleets():
@@ -1797,7 +1736,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
                 # spawn enemies already wrapped near spawn_x
                 new_jets, new_choppers = self.initialize_enemy_positions(rng_init, spawn_x)
 
-                out = soft._replace(
+                out = soft.replace(
                     **_player_reset_fields(soft, spawn_x),
                     jet_positions=new_jets.astype(soft.jet_positions.dtype),
                     chopper_positions=new_choppers.astype(soft.chopper_positions.dtype),
@@ -1819,7 +1758,7 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
         all_dead  = jnp.all(step_state.jet_positions == 0) & jnp.all(step_state.chopper_positions == 0)
         just_died = step_state.player_collision & (step_state.pause_timer > self.consts.DEATH_PAUSE_FRAMES)
         init_pause = all_dead & (step_state.pause_timer > self.consts.DEATH_PAUSE_FRAMES)
-        step_state = step_state._replace(
+        step_state = step_state.replace(
             pause_timer=jnp.where(just_died | init_pause,
                                   jnp.asarray(self.consts.DEATH_PAUSE_FRAMES, dtype=step_state.pause_timer.dtype),
                                   step_state.pause_timer)
@@ -1837,19 +1776,22 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
 
 class ChopperCommandRenderer(JAXGameRenderer):
-    def __init__(self, consts: ChopperCommandConstants = None):
-        super().__init__()
+    def __init__(self, consts: ChopperCommandConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or ChopperCommandConstants()
+        super().__init__(self.consts)
         # Use a consistent sprite path based on the old load_sprites function
         MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-        self.sprite_path = os.path.join(MODULE_DIR, "sprites/choppercommand")
+        self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "choppercommand")
         
-        # 1. Configure the rendering utility
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-            #downscale=(84,84)
-        )
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
         # 2. Start from (possibly modded) asset config provided via constants
