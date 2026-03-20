@@ -1,7 +1,8 @@
-from typing import NamedTuple, Tuple
+from typing import Tuple
 import jax
 import jax.numpy as jnp
 import numpy as np
+from flax import struct
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.spaces import Discrete, Box
 from jaxatari.renderers import JAXGameRenderer
@@ -110,41 +111,41 @@ def _get_default_asset_config() -> tuple:
 # ---------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------
-class TutankhamConstants(NamedTuple):
+class TutankhamConstants(struct.PyTreeNode):
     # Game Window
-    WIDTH: int = 160
-    HEIGHT: int = 210
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
 
     # Player constants
-    PLAYER_SPEED: float = 1
-    PLAYER_SIZE: chex.Array = jnp.array([5, 8], dtype=jnp.int32)
-    PLAYER_LIVES: int = 3
+    PLAYER_SPEED: float = struct.field(pytree_node=False, default=1)
+    PLAYER_SIZE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([5, 8], dtype=jnp.int32))
+    PLAYER_LIVES: int = struct.field(pytree_node=False, default=3)
 
     # Missile constants
-    BULLET_SIZE: chex.Array = jnp.array([1, 2], dtype=jnp.int32)
-    BULLET_SPEED: float = 3.5
-    BULLET_ANIM_SPEED: int = 4
+    BULLET_SIZE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([1, 2], dtype=jnp.int32))
+    BULLET_SPEED: float = struct.field(pytree_node=False, default=3.5)
+    BULLET_ANIM_SPEED: int = struct.field(pytree_node=False, default=4)
     #AMMO_SUPPLY: int = 7500  # frames until ammo runs out
 
-    MAX_LASER_FLASHES: int = 3
-    LASER_FLASH_COOLDOWN: int = 60  # frames
+    MAX_LASER_FLASHES: int = struct.field(pytree_node=False, default=3)
+    LASER_FLASH_COOLDOWN: int = struct.field(pytree_node=False, default=60)  # frames
 
     # Creature constants -------------------------------------
 
     # Creature Types
-    SNAKE: int = 0
-    SCORPION: int = 1
-    BAT: int = 2
-    TURTLE: int = 3
-    JACKEL: int = 4
-    CONDOR: int = 5
-    LION: int = 6
-    MOTH: int = 7
-    VIRUS: int = 8
-    MONKEY: int = 9
-    MYSTERY_WEAPON: int = 10
+    SNAKE: int = struct.field(pytree_node=False, default=0)
+    SCORPION: int = struct.field(pytree_node=False, default=1)
+    BAT: int = struct.field(pytree_node=False, default=2)
+    TURTLE: int = struct.field(pytree_node=False, default=3)
+    JACKEL: int = struct.field(pytree_node=False, default=4)
+    CONDOR: int = struct.field(pytree_node=False, default=5)
+    LION: int = struct.field(pytree_node=False, default=6)
+    MOTH: int = struct.field(pytree_node=False, default=7)
+    VIRUS: int = struct.field(pytree_node=False, default=8)
+    MONKEY: int = struct.field(pytree_node=False, default=9)
+    MYSTERY_WEAPON: int = struct.field(pytree_node=False, default=10)
 
-    CREATURE_SIZES: chex.Array = jnp.array([
+    CREATURE_SIZES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         [8, 8],   # SNAKE (00: [6, 8], 01: [8, 7])
         [8, 8],   # SCORPION (00 & 01: [8, 8])
         [8, 8],   # BAT (00: [8, 7], 01: [8, 8])
@@ -156,55 +157,57 @@ class TutankhamConstants(NamedTuple):
         [8, 6],   # VIRUS (00 & 01: [8, 6])
         [8, 8],   # MONKEY (00 & 01: [8, 8])
         [8, 8]    # MYSTERY_WEAPON (00 & 01: [8, 8])
-    ], dtype=jnp.int32)
-    
-    CREATURE_SIZE: chex.Array = jnp.array([10, 10], dtype=jnp.int32)
+    ], dtype=jnp.int32))
 
-    INACTIVE: int = 0
-    ACTIVE: int = 1
+    CREATURE_SIZE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([10, 10], dtype=jnp.int32))
 
-    CREATURE_SPEED: chex.Array = jnp.array([0.65, 0.75, 0.95, 0.5, 0.75, 0.95, 0.85, 0.95, 0.75, 0.85, 0.95],
-                                           dtype=jnp.float32)  # speed for each creature type
-    CREATURE_POINTS: chex.Array = jnp.array([1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 3],
-                                            dtype=jnp.int32)  # points for defeating each creature type
+    INACTIVE: int = struct.field(pytree_node=False, default=0)
+    ACTIVE: int = struct.field(pytree_node=False, default=1)
 
-    MAX_CREATURES: int = 2  # max number of creatures on screen at once
-    CREATURE_DETECTION_RANGE_X: int = 35  # horizontal detection range
-    CREATURE_DETECTION_RANGE_Y: int = 25  # vertical detection range
+    CREATURE_SPEED: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(
+        [0.65, 0.75, 0.95, 0.5, 0.75, 0.95, 0.85, 0.95, 0.75, 0.85, 0.95],
+        dtype=jnp.float32))  # speed for each creature type
+    CREATURE_POINTS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(
+        [1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 3],
+        dtype=jnp.int32))  # points for defeating each creature type
+
+    MAX_CREATURES: int = struct.field(pytree_node=False, default=2)  # max number of creatures on screen at once
+    CREATURE_DETECTION_RANGE_X: int = struct.field(pytree_node=False, default=35)  # horizontal detection range
+    CREATURE_DETECTION_RANGE_Y: int = struct.field(pytree_node=False, default=25)  # vertical detection range
 
     # Item constants ----------------------------------------------------
 
     # Item Types
-    KEY_MAP1: int = 0
-    CROWN_01_MAP1: int = 1
-    RING_MAP1: int = 2
-    RUBY_MAP1: int = 3
-    CHALICE_MAP1: int = 4
-    CROWN_02_MAP1: int = 5
+    KEY_MAP1: int = struct.field(pytree_node=False, default=0)
+    CROWN_01_MAP1: int = struct.field(pytree_node=False, default=1)
+    RING_MAP1: int = struct.field(pytree_node=False, default=2)
+    RUBY_MAP1: int = struct.field(pytree_node=False, default=3)
+    CHALICE_MAP1: int = struct.field(pytree_node=False, default=4)
+    CROWN_02_MAP1: int = struct.field(pytree_node=False, default=5)
 
-    KEY_MAP2: int = 6
-    RING_MAP2: int = 7
-    CROWN_MAP2: int = 8
-    EMERALD_MAP2: int = 9
-    GOBLET_MAP2: int = 10
-    BUST_MAP2: int = 11
+    KEY_MAP2: int = struct.field(pytree_node=False, default=6)
+    RING_MAP2: int = struct.field(pytree_node=False, default=7)
+    CROWN_MAP2: int = struct.field(pytree_node=False, default=8)
+    EMERALD_MAP2: int = struct.field(pytree_node=False, default=9)
+    GOBLET_MAP2: int = struct.field(pytree_node=False, default=10)
+    BUST_MAP2: int = struct.field(pytree_node=False, default=11)
 
-    KEY_MAP3: int = 12
-    TRIDENT_MAP3: int = 13
-    RING_MAP3: int = 14
-    HERB_MAP3: int = 15
-    DIAMOND_MAP3: int = 16
-    CANDELABRA_MAP3: int = 17
-    
-    KEY_MAP4: int = 18
-    RING_MAP4: int = 19
-    AMULET_MAP4: int = 20
-    FAN_MAP4: int = 21
-    CRYSTAL_MAP4: int = 22
-    ZIRCON_MAP4: int = 23
-    DAGGER_MAP4: int = 24
+    KEY_MAP3: int = struct.field(pytree_node=False, default=12)
+    TRIDENT_MAP3: int = struct.field(pytree_node=False, default=13)
+    RING_MAP3: int = struct.field(pytree_node=False, default=14)
+    HERB_MAP3: int = struct.field(pytree_node=False, default=15)
+    DIAMOND_MAP3: int = struct.field(pytree_node=False, default=16)
+    CANDELABRA_MAP3: int = struct.field(pytree_node=False, default=17)
 
-    ITEM_SIZES: chex.Array = jnp.array([
+    KEY_MAP4: int = struct.field(pytree_node=False, default=18)
+    RING_MAP4: int = struct.field(pytree_node=False, default=19)
+    AMULET_MAP4: int = struct.field(pytree_node=False, default=20)
+    FAN_MAP4: int = struct.field(pytree_node=False, default=21)
+    CRYSTAL_MAP4: int = struct.field(pytree_node=False, default=22)
+    ZIRCON_MAP4: int = struct.field(pytree_node=False, default=23)
+    DAGGER_MAP4: int = struct.field(pytree_node=False, default=24)
+
+    ITEM_SIZES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         [8, 8],   # KEY_MAP1
         [7, 7],   # CROWN_01_MAP1
         [6, 8],   # RING_MAP1
@@ -230,87 +233,83 @@ class TutankhamConstants(NamedTuple):
         [8, 8],   # CRYSTAL_MAP4
         [8, 7],   # ZIRCON_MAP4
         [8, 6]    # DAGGER_MAP4
-    ], dtype=jnp.int32)
+    ], dtype=jnp.int32))
 
-    ITEM_SIZE: chex.Array = jnp.array([5, 5], dtype=jnp.int32)
+    ITEM_SIZE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([5, 5], dtype=jnp.int32))
 
-    ITEM_POINTS: chex.Array = jnp.array([20, 15, 25, 25, 20, 45, 40, 30, 25, 40, 20, 20, 60, 35, 30, 25, 30, 5, 55, 40, 25, 80, 20, 40, 35], dtype=jnp.int32)  # points for collecting each item type
+    ITEM_POINTS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(
+        [20, 15, 25, 25, 20, 45, 40, 30, 25, 40, 20, 20, 60, 35, 30, 25, 30, 5, 55, 40, 25, 80, 20, 40, 35],
+        dtype=jnp.int32))  # points for collecting each item type
 
     # Asset config baked into constants
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
-    VALID_POS_MAP1: chex.Array = create_binary_matrix(1, f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_map1.npy")
-    VALID_POS_MAP2: chex.Array = create_binary_matrix(2, f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_map2.npy")
-    VALID_POS_MAP3: chex.Array = create_binary_matrix(3, f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_map3.npy")
-    VALID_POS_MAP4: chex.Array = create_binary_matrix(4, f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_map4.npy")
-
-    VALID_POS_MAPS: chex.Array = jnp.array([VALID_POS_MAP1, VALID_POS_MAP2, VALID_POS_MAP3, VALID_POS_MAP4])
-
-
+    VALID_POS_MAPS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
+        create_binary_matrix(1, f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_map1.npy"),
+        create_binary_matrix(2, f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_map2.npy"),
+        create_binary_matrix(3, f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_map3.npy"),
+        create_binary_matrix(4, f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_map4.npy"),
+    ]))
 
     # Levels -----------------------------------------
-    MAP_ITEMS: chex.Array = jnp.array([
+    MAP_ITEMS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         # Level 1 (MAP 1)
         [
-            [51, 87, KEY_MAP1, 1], # [x, y, item_type, active]
-            [99, 183, CROWN_02_MAP1, 1], 
-            [68, 262, RING_MAP1, 1], 
-            [7, 311, RUBY_MAP1, 1], 
-            [93, 382, CHALICE_MAP1, 1],
-            [18, 494, CROWN_01_MAP1, 1],
-            [0, 0, 0, 0] # Padding for levels with fewer items -> this item is always inactive
+            [51, 87, 0, 1],   # KEY_MAP1=0       [x, y, item_type, active]
+            [99, 183, 5, 1],  # CROWN_02_MAP1=5
+            [68, 262, 2, 1],  # RING_MAP1=2
+            [7, 311, 3, 1],   # RUBY_MAP1=3
+            [93, 382, 4, 1],  # CHALICE_MAP1=4
+            [18, 494, 1, 1],  # CROWN_01_MAP1=1
+            [0, 0, 0, 0]      # Padding for levels with fewer items -> this item is always inactive
         ],
         # Level 2 (MAP 2)
         [
-            [21, 272, KEY_MAP2, 1], # [x, y, item_type, active]
-            [44, 155, CROWN_MAP2, 1], 
-            [128, 98, RING_MAP2, 1], 
-            [37, 406, EMERALD_MAP2, 1], 
-            [91, 482, GOBLET_MAP2, 1],
-            [23, 547, BUST_MAP2, 1],
-            [0, 0, 0, 0] # Padding for levels with fewer items -> this item is always inactive
-
+            [21, 272, 6, 1],  # KEY_MAP2=6       [x, y, item_type, active]
+            [44, 155, 8, 1],  # CROWN_MAP2=8
+            [128, 98, 7, 1],  # RING_MAP2=7
+            [37, 406, 9, 1],  # EMERALD_MAP2=9
+            [91, 482, 10, 1], # GOBLET_MAP2=10
+            [23, 547, 11, 1], # BUST_MAP2=11
+            [0, 0, 0, 0]      # Padding for levels with fewer items -> this item is always inactive
         ],
         # Level 3 (MAP 3)
         [
-            [22, 411, KEY_MAP3, 1], # [x, y, item_type, active]
-            [15, 173, RING_MAP3, 1], 
-            [128, 98, TRIDENT_MAP3, 1], 
-            [17, 278, HERB_MAP3, 1], 
-            [108, 323, DIAMOND_MAP3, 1],
-            [27, 656, CANDELABRA_MAP3, 1],
-            [0, 0, 0, 0] # Padding for levels with fewer items -> this item is always inactive
+            [22, 411, 12, 1], # KEY_MAP3=12      [x, y, item_type, active]
+            [15, 173, 14, 1], # RING_MAP3=14
+            [128, 98, 13, 1], # TRIDENT_MAP3=13
+            [17, 278, 15, 1], # HERB_MAP3=15
+            [108, 323, 16, 1],# DIAMOND_MAP3=16
+            [27, 656, 17, 1], # CANDELABRA_MAP3=17
+            [0, 0, 0, 0]      # Padding for levels with fewer items -> this item is always inactive
         ],
         # Level 4 (MAP 4)
         [
-            [144, 110, KEY_MAP4, 1], # [x, y, item_type, active]
-            [125, 221, RING_MAP4, 1], 
-            [117, 269, AMULET_MAP4, 1], 
-            [19, 326, FAN_MAP4, 1], 
-            [55, 510, ZIRCON_MAP4, 1],
-            [110, 401, CRYSTAL_MAP4, 1],
-            [66, 607, DAGGER_MAP4, 1] # MAP 4 has 7 items (no padding)
+            [144, 110, 18, 1], # KEY_MAP4=18     [x, y, item_type, active]
+            [125, 221, 19, 1], # RING_MAP4=19
+            [117, 269, 20, 1], # AMULET_MAP4=20
+            [19, 326, 21, 1],  # FAN_MAP4=21
+            [55, 510, 23, 1],  # ZIRCON_MAP4=23
+            [110, 401, 22, 1], # CRYSTAL_MAP4=22
+            [66, 607, 24, 1]   # DAGGER_MAP4=24  MAP 4 has 7 items (no padding)
         ]
-    ], dtype=jnp.int32) # Repeat for 16 levels (4 maps x 4 difficulty levels)
-
+    ], dtype=jnp.int32))  # Repeat for 16 levels (4 maps x 4 difficulty levels)
 
     # Number of valid item types per level (non-padded entries), shape (16,)
-    MAP_N_ITEMS: chex.Array = jnp.array(
+    MAP_N_ITEMS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(
         [6, 6, 6, 7], dtype=jnp.int32
-    )
+    ))
 
     # creature types per level, shape (16, 3)
-    MAP_CREATURES: chex.Array = jnp.array([
-        [SNAKE, SCORPION, BAT],          # MAP 1
-        [TURTLE, JACKEL, CONDOR],        # MAP 2
-        [SNAKE, LION, MOTH],             # MAP 3
-        [VIRUS, MONKEY, MYSTERY_WEAPON]  # MAP 4
-    ], dtype=jnp.int32)
-
-    
+    MAP_CREATURES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
+        [0, 1, 2],  # MAP 1: SNAKE=0, SCORPION=1, BAT=2
+        [3, 4, 5],  # MAP 2: TURTLE=3, JACKEL=4, CONDOR=5
+        [0, 6, 7],  # MAP 3: SNAKE=0, LION=6, MOTH=7
+        [8, 9, 10]  # MAP 4: VIRUS=8, MONKEY=9, MYSTERY_WEAPON=10
+    ], dtype=jnp.int32))
 
     # Level checkpoints
-    MAP_CHECKPOINTS: chex.Array = jnp.array([
+    MAP_CHECKPOINTS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         # MAP 1
         [
             [0  , 198, 134, 61], # [checkpoint zone top y, checkpoint zone bottom y, checkpoint_x, checkpoint_y]
@@ -339,11 +338,10 @@ class TutankhamConstants(NamedTuple):
             [391, 530, 18, 391],
             [531, 800, 119, 531]
         ]
-    ], dtype=jnp.int32)
-
+    ], dtype=jnp.int32))
 
     # Positions of creature spawners on the map, shape (N_SPAWNERS, 2)
-    MAP_SPAWNER_POSITIONS: chex.Array = jnp.array([
+    MAP_SPAWNER_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         # MAP 1
         [
             [77  ,107],
@@ -404,9 +402,9 @@ class TutankhamConstants(NamedTuple):
             [0, 0], # Padding for maps with fewer spawners
             [0, 0]
         ]
-    ], dtype=jnp.int32)
+    ], dtype=jnp.int32))
 
-    MAP_TELEPORTER_POSITIONS: chex.Array = jnp.array([
+    MAP_TELEPORTER_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         # MAP 1
         [
             [128, 152, Action.LEFT, 27, 152], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
@@ -435,58 +433,46 @@ class TutankhamConstants(NamedTuple):
             [132, 372, Action.LEFT, 23, 372], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
             [23, 372, Action.RIGHT, 132, 372]
         ]
-    ], dtype=jnp.int32)
+    ], dtype=jnp.int32))
 
     # define goal zones for each map
-    GOAL_SIZE: chex.Array = jnp.array([5, 5], dtype=jnp.int32) #TODO: adjust based on actual goal sprite size
-    MAP_GOAL_POSITIONS: chex.Array = jnp.array([
-        # MAP 1
-        [
-            [18, 684]
-        ],
-        # MAP 2
-        [
-            [19, 634]
-        ],
-        # MAP 3
-        [
-            [107, 715]
-        ],
-        # MAP 4
-        [
-            [77, 719]
-        ]
-    ], dtype=jnp.int32)
+    GOAL_SIZE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([5, 5], dtype=jnp.int32))  #TODO: adjust based on actual goal sprite size
+    MAP_GOAL_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
+        [[18, 684]],  # MAP 1
+        [[19, 634]],  # MAP 2
+        [[107, 715]], # MAP 3
+        [[77, 719]]   # MAP 4
+    ], dtype=jnp.int32))
 
     # Spawn-rate per level, shape (16,)
-    LEVEL_SPAWN_RATES: chex.Array = jnp.array([
+    LEVEL_SPAWN_RATES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         0.00005, 0.00005, 0.00005, 0.00005,
         0.00006, 0.00006, 0.00006, 0.00006,
         0.00007, 0.00007, 0.00007, 0.00007,
         0.00008, 0.00008, 0.00008, 0.00008,
-    ], dtype=jnp.float32)
+    ], dtype=jnp.float32))
 
     # Speed multiplier per level, shape (16,)
-    LEVEL_CREATURE_SPEED_MULTIPLIERS: chex.Array = jnp.array([
+    LEVEL_CREATURE_SPEED_MULTIPLIERS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         1.0, 1.0, 1.0, 1.0,
         1.04, 1.04, 1.04, 1.04,
         1.08, 1.08, 1.08, 1.08,
         1.1, 1.1, 1.1, 1.1,
-    ], dtype=jnp.float32)
+    ], dtype=jnp.float32))
 
-    LEVEL_AMMO_SUPPLY: chex.Array = jnp.array([ #TODO CHANE AMMO SUPPLY
+    LEVEL_AMMO_SUPPLY: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([  #TODO CHANE AMMO SUPPLY
         7500, 7350, 7100, 7000,
         6300, 6150, 6000, 5850,
         5150, 5000, 4850, 4700,
         4000, 4000, 4000, 4000
-    ], dtype=jnp.int32)
+    ], dtype=jnp.int32))
 
 
 
 # ---------------------------------------------------------------------
 # Game State
 # ---------------------------------------------------------------------
-class TutankhamState(NamedTuple):
+class TutankhamState(struct.PyTreeNode):
     # key state for creature spawn randomness
     rng_key: int
 
