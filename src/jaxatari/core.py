@@ -26,6 +26,7 @@ def _warn_deprecated_obs_to_flat_array(env: JaxEnvironment) -> None:
 
 # Map of game names to their module paths
 GAME_MODULES = {
+    "amidar": "jaxatari.games.jax_amidar",
     "airraid": "jaxatari.games.jax_airraid",
     "alien": "jaxatari.games.jax_alien",
     "asterix": "jaxatari.games.jax_asterix",
@@ -54,6 +55,7 @@ GAME_MODULES = {
     "namethisgame": "jaxatari.games.jax_namethisgame",
     "phoenix": "jaxatari.games.jax_phoenix",
     "pong": "jaxatari.games.jax_pong",
+    "qbert": "jaxatari.games.jax_qbert",
     "riverraid": "jaxatari.games.jax_riverraid",
     "seaquest": "jaxatari.games.jax_seaquest",
     "sirlancelot": "jaxatari.games.jax_sirlancelot",
@@ -84,7 +86,10 @@ MOD_MODULES = {
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
     "videopinball": "jaxatari.games.mods.videopinball_mods.VideoPinballEnvMod",
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
-    "backgammon": "jaxatari.games.mods.backgammon_mods.BackgammonEnvMod"
+    "backgammon": "jaxatari.games.mods.backgammon_mods.BackgammonEnvMod",
+    "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
+    "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
+    "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
 }
 
 

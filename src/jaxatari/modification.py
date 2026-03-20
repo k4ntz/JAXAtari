@@ -26,33 +26,41 @@ def apply_native_downscaling(
     """
     Safely enables native downscaling on an environment by swapping its renderer.
     """
-    # 1. Create new config
+    # 1. Find the *core* game env that actually owns the renderer used by render()
+    #    (unwrap potential controller/wrapper layers via generic `_env` attribute).
+    core_env = base_env
+    while hasattr(core_env, "_env"):
+        core_env = core_env._env
+
+    # 2. Create new config
     new_config = RendererConfig(
-        game_dimensions=base_env.renderer.config.game_dimensions,
+        game_dimensions=core_env.renderer.config.game_dimensions,
         channels=1 if grayscale else 3,
         downscale=pixel_resize_shape
     )
 
-    # 2. Capture old renderer
-    old_renderer = base_env.renderer
+    # 3. Capture old renderer (from the core env which implements render())
+    old_renderer = core_env.renderer
 
-    # 3. Instantiate new renderer (Reloads assets at new scale)
+    # 4. Instantiate new renderer (Reloads assets at new scale)
     new_renderer = type(old_renderer)(
-        consts=base_env.consts,
+        consts=core_env.consts,
         config=new_config
     )
 
-    # 4. Reapply patches explicitly using the tracked list
-    if hasattr(base_env, "_patched_renderer_methods"):
-        for fn_name in base_env._patched_renderer_methods:
+    # 5. Reapply patches explicitly using the tracked list
+    #    (this list lives on the core env where mods were applied).
+    if hasattr(core_env, "_patched_renderer_methods"):
+        for fn_name in core_env._patched_renderer_methods:
             if hasattr(old_renderer, fn_name):
                 patched_method = getattr(old_renderer, fn_name)
                 setattr(new_renderer, fn_name, patched_method)
 
-    # 5. Swap the renderer
-    base_env.renderer = new_renderer
+    # 6. Swap the renderer on the *core* env used by render()
+    core_env.renderer = new_renderer
 
-    # 6. Patch image_space()
+    # 7. Patch image_space() on the externally visible env (base_env)
+    #    so wrappers query the correct downscaled shape.
     def _native_image_space(self_env) -> spaces.Box:
         return spaces.Box(
             low=0,

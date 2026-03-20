@@ -146,7 +146,7 @@ class AsteroidsConstants(AutoDerivedConstants):
     MIN_ENTITY_X: int = struct.field(pytree_node=False, default=0)
 
     # Player constants
-    MAX_PLAYER_SPEED: int = struct.field(pytree_node=False, default=64 * 256 - 1)
+    MAX_PLAYER_SPEED: int = struct.field(pytree_node=False, default=60 * 256 - 1)
     MIN_PLAYER_X: int = struct.field(pytree_node=False, default=0)
 
     # --- DERIVED CONSTANTS (Converted to Optional Fields) ---
@@ -165,22 +165,22 @@ class AsteroidsConstants(AutoDerivedConstants):
     RESPAWN_DELAY: int = struct.field(pytree_node=False, default=136)
     H_SPACE_DELAY: int = struct.field(pytree_node=False, default=62)
     ACCEL_PER_ROTATION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
-        (0, -127),
-        (-49, -117),
-        (-90, -90),
-        (-117, -49),
-        (-127, 0),
-        (-117, 49),
-        (-90, 90),
-        (-49, 117),
-        (0, 127),
-        (49, 117),
-        (90, 90),
-        (117, 49),
-        (127, 0),
-        (117, -49),
-        (90, -90),
-        (49, -117)
+        (0, -64),
+        (-25, -59),
+        (-45, -45),
+        (-59, -25),
+        (-64, 0),
+        (-59, 25),
+        (-45, 45),
+        (-25, 59),
+        (0, 64),
+        (25, 59),
+        (45, 45),
+        (59, 25),
+        (64, 0),
+        (59, -25),
+        (45, -45),
+        (25, -59)
     ]))
 
     # Missile constants
@@ -253,8 +253,8 @@ class AsteroidsConstants(AutoDerivedConstants):
 
         return {
             # Standard independent calculations
-            'INITIAL_PLAYER_X': int(256/4 * (self.WIDTH - self.PLAYER_SIZE[0])),
-            'INITIAL_PLAYER_Y': int(256/4 * (self.HEIGHT - self.PLAYER_SIZE[1])),
+            'INITIAL_PLAYER_X': 10240,
+            'INITIAL_PLAYER_Y': 12800,
             
             # Return the resolved Level 1 value
             'MAX_ENTITY_X': int(_max_entity_x),
@@ -338,9 +338,8 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
     def decel_func(self, speed):
         """
         Calculates the resistance applied to the player when not using thrusters
-        based on the current speed
         """
-        return -(2*(jnp.sign(speed)*(jnp.abs(speed)//256)) + jnp.sign(speed))
+        return -(2*(jnp.sign(speed)*(jnp.abs(speed)//256)) + 2 * jnp.sign(speed))
 
     @partial(jax.jit, static_argnums=(0,))
     def speed_func(self, speed):
@@ -962,7 +961,7 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
         )
         # player rotation is updated in every fourth step only
         player_rotation = jax.lax.cond(
-            (state.step_counter + 2) % 4 == 0,
+            (state.step_counter % 4 == 1),
             lambda: player_rotation,
             lambda: state.player_rotation
         )
@@ -1360,7 +1359,7 @@ class AsteroidsRenderer(JAXGameRenderer):
         num_score_digits = _get_number_of_digits(state.score)
         raster = self.jr.render_label_selective(raster, 68 - 16 * (num_score_digits - 1), 5,
                                                 score_digits_arr, self.SHAPE_MASKS['digits'], 
-                                                5 - num_score_digits, num_score_digits, spacing=16)
+                                                5 - num_score_digits, num_score_digits, spacing=16, max_digits_to_render=5)
         lives_digits_arr = self.jr.int_to_digits(state.lives, max_digits=1)
         raster = self.jr.render_label(raster, 132, 5, lives_digits_arr, self.SHAPE_MASKS['digits'], spacing=16, max_digits=1)
 

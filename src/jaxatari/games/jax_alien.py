@@ -188,7 +188,7 @@ class AlienObservation(struct.PyTreeNode):
     enemies_killable: jnp.ndarray
     kill_item_position: jnp.ndarray
     score_item_position: jnp.ndarray
-    collision_map: jnp.ndarray
+    #collision_map: jnp.ndarray
 
 #Defines the Info of Alien, which is score, step counter and all rewards
 class AlienInfo(struct.PyTreeNode):
@@ -469,9 +469,9 @@ def load_collision_map(file_path: str, transpose: bool = True, invert: bool = Fa
 
     # 0 = no collision, >0 = solid (match original boolean_frame logic)
     if invert:
-        out = (data == 0).astype(jnp.int32)
+        out = data == 0
     else:
-        out = (data > 0).astype(jnp.int32)
+        out = data > 0
     return out
 
 
@@ -512,9 +512,8 @@ def check_for_wall_collision(moving_object: jnp.ndarray, background: jnp.ndarray
     new_position_bg: jnp.ndarray = jax.lax.dynamic_slice(operand=background,
                           start_indices=new_position, slice_sizes=moving_object.shape)
     collisions: jnp.ndarray = jnp.logical_and(moving_object, new_position_bg)
-    # Use max to check whether moving_object collision map overlaps with background collision map
-    has_collision = jnp.max(a=collisions, axis=None, keepdims=False)
-    ret_v = jnp.multiply(has_collision, old_position) + jnp.multiply(1- has_collision, new_position)
+    has_collision = jnp.any(collisions)
+    ret_v = jnp.where(has_collision, old_position, new_position)
     return ret_v
 
 def check_collision_between_two_sprites(sprite1, pos1_x, pos1_y, sprite2, pos2_x, pos2_y):
@@ -641,9 +640,12 @@ def teleport_object(position: jnp.ndarray, orientation: JAXAtariAction, action: 
     cond_1 = jnp.logical_or(jnp.logical_and(x >= 127, orientation == ac_right),jnp.logical_and(action == ac_right, x >= 127)) #right teleport
     cond_2 = jnp.logical_or(jnp.logical_and(x <= 7,orientation == ac_left),jnp.logical_and(action == ac_left, x <= 7)) #left teleport
 
-    new_val_code = cond_1 + jnp.multiply(2 ,cond_2) # 0 = no teleport, 1 = right teleport, 2 = left teleport
-
-    new_position0 = jnp.multiply(x ,(new_val_code == 0)) + jnp.multiply(7 , (new_val_code == 1)) + jnp.multiply(127 ,(new_val_code == 2))
+    new_val_code = cond_1 + 2 * cond_2  # 0 = no teleport, 1 = right teleport, 2 = left teleport
+    new_position0 = jnp.select(
+        [new_val_code == 0, new_val_code == 1, new_val_code == 2],
+        [x, 7, 127],
+        default=x,
+    )
     return position.at[0].set(new_position0)
 
 # Main Environment Class
@@ -865,8 +867,8 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             score=state.level.score + 1,
             lifes=state.level.lifes,
             bonus_flag=jnp.array(1).astype(jnp.int32),
-            # FIX: Use int32 to match the rest of the game logic
-            collision_map=jnp.zeros(new_state.level.collision_map.shape, dtype=jnp.int32),
+            # Bonus stage has no walls; keep a boolean collision map.
+            collision_map=jnp.zeros(new_state.level.collision_map.shape, dtype=jnp.bool_),
             difficulty_stage=state.level.difficulty_stage
         )
         
@@ -921,12 +923,13 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
 
         # lose a life if collision with enemy and not already in death animation
         condition_new_life = jnp.logical_and(check_for_player_enemy_collision(state, [new_player_state.x, new_player_state.y]),jnp.equal(state.level.death_frame_counter, 0))
-        new_life = jnp.multiply(condition_new_life, jnp.add(state.level.lifes, -1)) + jnp.multiply(1 - condition_new_life, state.level.lifes)
+        new_life = jnp.where(condition_new_life, state.level.lifes - 1, state.level.lifes)
 
         # start death animation if life lost and checks if game over or soft reset depending on if lives are left
         condition1 = jnp.logical_and(condition_new_life, jnp.less(new_life, 0))
         condition2 = jnp.logical_and(condition_new_life, jnp.greater_equal(new_life,0))
-        new_death_frame_counter = state.level.death_frame_counter + jnp.multiply(condition1, -40) + jnp.multiply(condition2, 40)
+        death_delta = jnp.where(condition1, -40, jnp.where(condition2, 40, 0))
+        new_death_frame_counter = state.level.death_frame_counter + death_delta
 
         # update items
         new_items, new_score, new_current_active_item_index, new_evil_item_frame_counter, new_spawn_score_item_flag_1, new_spawn_score_item_flag_2, new_score_item_counter = self.item_step(
@@ -1149,12 +1152,13 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
 
         # lose a life if collision with enemy and not already in death animation
         condition_new_life = jnp.logical_and(check_for_player_enemy_collision(state, [new_player_state.x, new_player_state.y]),jnp.equal(state.level.death_frame_counter, 0))
-        new_life = jnp.multiply(condition_new_life, state.level.lifes-1) + jnp.multiply(1 - condition_new_life, state.level.lifes)
+        new_life = jnp.where(condition_new_life, state.level.lifes - 1, state.level.lifes)
 
         # start death animation if life lost and checks if game over or soft reset depending on if lives are left
         condition1 = jnp.logical_and(condition_new_life, jnp.less(new_life, 0))
         condition2 = jnp.logical_and(condition_new_life, jnp.greater_equal(new_life,0))
-        new_death_frame_counter = state.level.death_frame_counter + jnp.multiply(condition1, -40) + jnp.multiply(condition2, 40)
+        death_delta = jnp.where(condition1, -40, jnp.where(condition2, 40, 0))
+        new_death_frame_counter = state.level.death_frame_counter + death_delta
 
         # is to signalise that an enemy was killed to raise score during this kill item period
         new_kill_score_flag = jnp.where(state.enemies.multiple_enemies.enemy_death_frame > 0, 0, state.enemies.multiple_enemies.kill_score_flag)
@@ -1253,8 +1257,10 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                                     self.game_over], 
                                    freeze_state)
         # Now Handling the game freeze for when enemies dies
-        needs_to_enter_kill_state: jArray = jnp.multiply(jnp.equal(new_death_frame_counter, 0),
-                                                         jnp.equal(jnp.sum(state.enemies.multiple_enemies.enemy_death_frame), 0)) 
+        needs_to_enter_kill_state: jArray = jnp.logical_and(
+            jnp.equal(new_death_frame_counter, 0),
+            jnp.equal(jnp.sum(state.enemies.multiple_enemies.enemy_death_frame), 0)
+        )
         new_state = jax.lax.cond(needs_to_enter_kill_state, lambda x, y : y, lambda x, y: x, new_state, kill_state)
         
         return new_state
@@ -1271,7 +1277,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         """
 
         # defines which action is taken based on inputs which is breaken down into up and down
-        moving_action = jnp.multiply(jnp.greater(action,9), jnp.mod(action,10)+2) + jnp.multiply(jnp.less_equal(action,9), action)
+        moving_action = jnp.where(action > 9, jnp.mod(action, 10) + 2, action)
         position = jnp.array([state.player.x, state.player.y])
 
         #limits velocity to move 1 position per frame at max but decides rather how frequent it moves 1 position so either +1/-1 or 0 frequency
@@ -1279,10 +1285,15 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         velocity_vertical = jax.lax.min(jnp.round((((117*2)/249))*(state.level.frame_count)).astype(jnp.int32) - jnp.round(((117*2/249))*(state.level.frame_count - 1)).astype(jnp.int32),1)
 
         # gives back the new vertical position
-        new_y_position: jArray = jnp.multiply(jnp.equal(moving_action, JAXAtariAction.UP), position[1]-velocity_vertical) + jnp.multiply(
-            jnp.equal(moving_action, JAXAtariAction.DOWN), position[1] + velocity_vertical
-        ) + jnp.multiply((1 - jnp.logical_or(jnp.equal(moving_action, JAXAtariAction.UP), jnp.equal(moving_action, JAXAtariAction.DOWN))), 
-                         position[1])
+        new_y_position: jArray = jnp.where(
+            jnp.equal(moving_action, JAXAtariAction.UP),
+            position[1] - velocity_vertical,
+            jnp.where(
+                jnp.equal(moving_action, JAXAtariAction.DOWN),
+                position[1] + velocity_vertical,
+                position[1]
+            )
+        )
         new_position = position.at[1].set(new_y_position)
 
         # upper limit on vertical position
@@ -1467,8 +1478,8 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                 spaces.Box(low=0, high=self.consts.HEIGHT, shape=(2,), dtype=jnp.int32),
             "score_item_position":
                 spaces.Box(low=0, high=self.consts.HEIGHT, shape=(2,), dtype=jnp.int32),
-            "collision_map":
-                spaces.Box(low=0, high=1, shape=(152, 188), dtype=jnp.int32),
+            #"collision_map":
+            #    spaces.Box(low=0, high=1, shape=(152, 188), dtype=jnp.bool_),
         })
 
     def _get_observation(self, state: AlienState) -> AlienObservation:
@@ -1512,7 +1523,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             enemies_killable=state.enemies.multiple_enemies.killable,
             kill_item_position=new_kill_item_position,
             score_item_position=jnp.array([68, 56], dtype=jnp.int32), # Hardcoded position of the score item
-            collision_map=jnp.astype(BACKGROUND_COLLISION_MAP, jnp.int32),
+            #collision_map=BACKGROUND_COLLISION_MAP,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1599,77 +1610,40 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         y_lower: jnp.ndarray = player_y
         y_higher: jnp.ndarray = jnp.add(player_y, self.consts.PLAYER_HEIGHT)
 
-        def check_egg_player_collision(i, l_r):
-            """Function that fills out the current egg_collision_map
-                for an index i, checks whether the i-th egg currently collides with the player and sets
-                the i-th index in the collision map to one
-
-            Args:
-                i (_type_): index
-                l_r (_type_): indicates the side of the array (left or right)
-                egg_col_map (_type_): array of all eggs on this side
-
-            Returns:
-                _type_: augmented egg array based on collision
-            """
-             
-            has_collision = jnp.logical_and(egg_state[l_r, i, 0]>= x_lower,
-                                           jnp.logical_and(egg_state[l_r, i, 0] < x_higher,
-                                           jnp.logical_and(egg_state[l_r, i, 1] >= y_lower,
-                                                           egg_state[l_r, i, 1] < y_higher)))
-            return has_collision.astype(jnp.int32)
-        
-        # Generate full collision map for all eggs
-        egg_collision_map_left = jax.vmap(lambda i: check_egg_player_collision(i, 0))(jnp.arange(egg_state.shape[1]))
-        egg_collision_map_right = jax.vmap(lambda i: check_egg_player_collision(i, 1))(jnp.arange(egg_state.shape[1]))
+        # Broadcast collision checks over all eggs directly (no index-vmap).
+        left_x = egg_state[0, :, 0]
+        left_y = egg_state[0, :, 1]
+        right_x = egg_state[1, :, 0]
+        right_y = egg_state[1, :, 1]
+        egg_collision_map_left = (
+            (left_x >= x_lower)
+            & (left_x < x_higher)
+            & (left_y >= y_lower)
+            & (left_y < y_higher)
+        )
+        egg_collision_map_right = (
+            (right_x >= x_lower)
+            & (right_x < x_higher)
+            & (right_y >= y_lower)
+            & (right_y < y_higher)
+        )
         # Multiply with current active egg-state to prevent the same egg from being collected twice
-        score_increas_left: jnp.ndarray = jnp.sum(jnp.multiply(egg_collision_map_left, egg_state[0,:, 2]))
-        score_increas_right: jnp.ndarray = jnp.sum(jnp.multiply(egg_collision_map_right, egg_state[1,:, 2]))
+        score_increas_left: jnp.ndarray = jnp.sum(jnp.where(egg_collision_map_left, egg_state[0, :, 2], 0))
+        score_increas_right: jnp.ndarray = jnp.sum(jnp.where(egg_collision_map_right, egg_state[1, :, 2], 0))
         # Multiply collision map onto egg-state to set visible attribute to the appropriate value
-        egg_collision_map_left = jnp.subtract(1, egg_collision_map_left)
-        egg_collision_map_right = jnp.subtract(1, egg_collision_map_right)
+        egg_collision_map_left = jnp.logical_not(egg_collision_map_left)
+        egg_collision_map_right = jnp.logical_not(egg_collision_map_right)
         # Update egg presence maps based on collisions and current visibility
-        new_egg_presence_map_left: jnp.ndarray = jnp.multiply(egg_collision_map_left, egg_state[0,:, 2]).astype(jnp.int32)
-        new_egg_presence_map_right: jnp.ndarray = jnp.multiply(egg_collision_map_right, egg_state[1,:, 2]).astype(jnp.int32)
+        new_egg_presence_map_left: jnp.ndarray = jnp.where(egg_collision_map_left, egg_state[0, :, 2], 0).astype(jnp.int32)
+        new_egg_presence_map_right: jnp.ndarray = jnp.where(egg_collision_map_right, egg_state[1, :, 2], 0).astype(jnp.int32)
         # Update the egg_state array to reflect collected eggs (0 = collected, 1 = still present)
         egg_state = egg_state.at[0,:, 2].set(new_egg_presence_map_left)
         egg_state = egg_state.at[1,:, 2].set(new_egg_presence_map_right)
         # Calculate new score by adding points for eggs collected on both sides
-        new_score: jnp.ndarray = jnp.add(score, jnp.add(jnp.multiply(score_increas_left, egg_score_multiplyer),jnp.multiply(score_increas_right, egg_score_multiplyer)))
+        new_score: jnp.ndarray = score + ((score_increas_left + score_increas_right) * egg_score_multiplyer)
         new_score = new_score.astype(jnp.uint16)
 
         return egg_state, new_score
-    @partial(jax.jit, static_argnums=(0, ))
-    def check_item_player_collision(self, i, batched_val: Tuple[Any]):
-        """checks for collision between an item and the player
-        Args:
-            i (_type_): index
-            single_item_col_map (_type_): collision map for a single item
-        Returns:
-            _type_: augmented collision map for a single item
-        """
-        # Unpack batched values for this step
-        state, player_x, player_y = batched_val
-
-        # Define the rectangular bounding box of the player
-        x_lower: jnp.ndarray = player_x
-        x_higher: jnp.ndarray = jnp.add(player_x, self.consts.PLAYER_WIDTH)
-        y_lower: jnp.ndarray = player_y
-        y_higher: jnp.ndarray = jnp.add(player_y, self.consts.PLAYER_HEIGHT)
-
-        # Check if the current item overlaps with the player's bounding box
-        has_collision = jnp.logical_and(state.items[i, 0]>= x_lower,
-                                        jnp.logical_and(state.items[i, 0] < x_higher,
-                                                        jnp.logical_and(state.items[i, 1] >= y_lower,
-                                                                        state.items[i, 1] < y_higher)))
-
-        # Only consider collision if the item is active (state.items[i, 2] == 1)
-        has_collision = jnp.logical_and(has_collision, state.items[i, 2] == 1)
-
-        # Disable collision for "evil" items when the player's flamethrower is active
-        has_collision = jnp.logical_and(has_collision, 1 - jnp.logical_and(state.items[i, 3] == 0 ,state.player.flame.flame_flag))
-
-        return has_collision.astype(jnp.int32)
 
     def spawn_score_item(self, items, state: AlienState):
         """Spawns a score item on the field.
@@ -1709,39 +1683,61 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         """
 
         # Initialize collision map for all items (0 = no collision, 1 = collision)
-        item_collision_map: jnp.ndarray = jnp.zeros((state.items.shape[0]))
+        item_collision_map: jnp.ndarray = jnp.zeros((state.items.shape[0],), dtype=jnp.bool_)
         # Determine coord range occupied by the player
         curr_active_item_idx = state.level.current_active_item_index
 
 
-        # Check collisions between player and each item using a JAX vmap
-        item_collision_map = jax.vmap(lambda i: self.check_item_player_collision(i, (state, player_x, player_y)))(jnp.arange(state.items.shape[0]))
+        # Check item collisions using direct array broadcasting (no index-vmap).
+        x_lower: jnp.ndarray = player_x
+        x_higher: jnp.ndarray = jnp.add(player_x, self.consts.PLAYER_WIDTH)
+        y_lower: jnp.ndarray = player_y
+        y_higher: jnp.ndarray = jnp.add(player_y, self.consts.PLAYER_HEIGHT)
+        item_x = state.items[:, 0]
+        item_y = state.items[:, 1]
+        item_active = state.items[:, 2] == 1
+        blocked_by_flame = jnp.logical_and(state.items[:, 3] == 0, state.player.flame.flame_flag.astype(jnp.bool_))
+        item_collision_map = (
+            (item_x >= x_lower)
+            & (item_x < x_higher)
+            & (item_y >= y_lower)
+            & (item_y < y_higher)
+            & item_active
+            & (~blocked_by_flame)
+        )
         
         # Calculate score increases for items that collided with the player
         # Multiply by:
         #   - item_collision_map -> whether player collided with the item
         #   - state.items[:, 2] -> whether the item is active
         #   - ITEM_SCORE_MULTIPLIERS -> multiplier for the item type
-        score_increases = jnp.multiply(
+        score_increases = jnp.where(
             item_collision_map,
-            jnp.multiply(
-                state.items[:, 2],
-                self.consts.ITEM_SCORE_MULTIPLIERS[state.items[:, 3]]
-            )
+            state.items[:, 2] * self.consts.ITEM_SCORE_MULTIPLIERS[state.items[:, 3]],
+            0
         )
 
         # Determine if a new evil item should appear
-        new_evil_item_cond = jnp.logical_and(jnp.equal(item_collision_map[curr_active_item_idx], 1), jnp.less(curr_active_item_idx,3))
-        new_evil_item_frame_counter = jnp.multiply(new_evil_item_cond, jnp.array(state.level.evil_item_duration).astype(jnp.int32)) + jnp.multiply(1 - new_evil_item_cond, state.level.evil_item_frame_counter)
+        new_evil_item_cond = jnp.logical_and(item_collision_map[curr_active_item_idx], jnp.less(curr_active_item_idx, 3))
+        new_evil_item_frame_counter = jnp.where(
+            new_evil_item_cond,
+            jnp.array(state.level.evil_item_duration).astype(jnp.int32),
+            state.level.evil_item_frame_counter
+        )
 
         # Determine if new regular items should appear
-        new_items_cond = jnp.logical_and(jnp.equal(item_collision_map[curr_active_item_idx], 1), jnp.less(curr_active_item_idx, 2))
-        new_items = jnp.multiply(new_items_cond,state.items.at[curr_active_item_idx+1, 2].set(1)) + jnp.multiply(1 - new_items_cond, state.items)
+        new_items_cond = jnp.logical_and(item_collision_map[curr_active_item_idx], jnp.less(curr_active_item_idx, 2))
+        candidate_new_items = state.items.at[curr_active_item_idx + 1, 2].set(1)
+        new_items = jnp.where(new_items_cond, candidate_new_items, state.items)
 
 
         # Update the index of the currently active item if needed
-        new_current_active_item_index_cond = jnp.equal(jnp.equal(item_collision_map[curr_active_item_idx], 1),jnp.less(curr_active_item_idx, 3))
-        new_current_active_item_index = jnp.multiply(new_current_active_item_index_cond, curr_active_item_idx +1) + jnp.multiply(1 - new_current_active_item_index_cond, curr_active_item_idx)
+        new_current_active_item_index_cond = jnp.equal(item_collision_map[curr_active_item_idx], jnp.less(curr_active_item_idx, 3))
+        new_current_active_item_index = jnp.where(
+            new_current_active_item_index_cond,
+            curr_active_item_idx + 1,
+            curr_active_item_idx
+        )
 
         new_score_item_counter = state.level.score_item_counter + 1
 
@@ -1768,11 +1764,12 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         )
 
         # Disable special score item after counter reaches 600
-        new_items = jnp.multiply(new_score_item_counter == 600, new_items.at[3, 2].set(0)) + jnp.multiply(1 - (new_score_item_counter == 600), new_items)
+        score_item_timeout = new_score_item_counter == 600
+        new_items = jnp.where(score_item_timeout, new_items.at[3, 2].set(0), new_items)
 
         # Update presence map for items based on collision and active status
-        item_collision_map = jnp.subtract(1, item_collision_map)
-        new_item_presence_map: jnp.ndarray = jnp.multiply(item_collision_map, new_items[:, 2]).astype(jnp.int32)
+        item_collision_map = jnp.logical_not(item_collision_map)
+        new_item_presence_map: jnp.ndarray = jnp.where(item_collision_map, new_items[:, 2], 0).astype(jnp.int32)
         new_items = new_items.at[:, 2].set(new_item_presence_map)
 
         # Update total score by summing individual item score increases
@@ -1830,7 +1827,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         velocity_vertical = jax.lax.min(jnp.round((((117*(2))/249) + state.level.difficulty_stage.astype(jnp.int32)/10)*(state.level.frame_count)).astype(jnp.int32) - jnp.round(((117*(2)/249) + state.level.difficulty_stage.astype(jnp.int32)/10)*(state.level.frame_count - 1)).astype(jnp.int32),1)
 
         # maps the action onto the relevant movement-actions
-        moving_action = jnp.multiply(jnp.greater(action,9), jnp.mod(action,10)+2) + jnp.multiply(jnp.less_equal(action,9), action)
+        moving_action = jnp.where(action > 9, jnp.mod(action, 10) + 2, action)
 
         # Functions for setting orientation based on collision and movement
         def set_orientation(self, x, dx, dy, new_orientation):
@@ -1847,7 +1844,8 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                     int: updated orientation (either new_orientation or current)
                 """
 
-            return jnp.multiply(self.other_slightly_weirder_check_for_player_collision(x, dx, dy),new_orientation) + jnp.multiply(1-self.other_slightly_weirder_check_for_player_collision(x, dx, dy),x.player.orientation)
+            can_move = self.other_slightly_weirder_check_for_player_collision(x, dx, dy)
+            return jnp.where(can_move, new_orientation, x.player.orientation)
 
         def set_diagonal(self, x, dx1, dy1, first_orientation, second_orientation, dx2, dy2):
             """
@@ -1875,10 +1873,10 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             # - cond1 is True → take first_orientation
             # - cond1 is False & cond2 is True → take second_orientation
             # - cond1 is False & cond2 is False → keep current orientation
-            return (
-                    jnp.multiply(cond1, first_orientation)
-                    + jnp.multiply((1 - cond1) * cond2, second_orientation)
-                    + jnp.multiply((1 - cond1) * (1 - cond2), x.player.orientation)
+            return jnp.where(
+                cond1,
+                first_orientation,
+                jnp.where(cond2, second_orientation, x.player.orientation)
             )
 
         # Update player orientation based on movement action
@@ -1907,7 +1905,11 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
 
         #Determine last horizontal orientation, this is necessary for correctly displaying the player sprite
         last_horizontal_orientation_cond = jnp.logical_or(state_player_orientation == JAXAtariAction.LEFT, state_player_orientation == JAXAtariAction.RIGHT)
-        last_horizontal_orientation = jnp.multiply(last_horizontal_orientation_cond, state_player_orientation) + jnp.multiply(1 - last_horizontal_orientation_cond, state.player.last_horizontal_orientation)
+        last_horizontal_orientation = jnp.where(
+            last_horizontal_orientation_cond,
+            state_player_orientation,
+            state.player.last_horizontal_orientation
+        )
 
         # Handle movement at this point:
         # Choose movement function according to index of proposed action.
@@ -1954,7 +1956,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         # - If last horizontal orientation was LEFT, flame appears slightly to the left of player (-6 pixels)
         # - Otherwise, flame appears slightly to the right of player (+10 pixels)
         new_flame_x_cond = jnp.equal(state.player.last_horizontal_orientation,JAXAtariAction.LEFT)
-        new_flame_x = jnp.multiply(new_flame_x_cond,new_position[0] - 6) + jnp.multiply(1 - new_flame_x_cond,new_position[0] + 10)
+        new_flame_x = jnp.where(new_flame_x_cond, new_position[0] - 6, new_position[0] + 10)
 
         # Update the flamethrower state for the player
         # - x, y: position of the flame visual
@@ -2102,7 +2104,7 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
                 random_value = jax.random.uniform(enemy.key, shape=(), minval=0, maxval=1)
                 fun_cond = jnp.less(random_value, enemy.mode_constants.mode_change_probability)
                 mode = (1 - fun_cond).astype(jnp.int32)
-                duration = jnp.multiply(fun_cond, enemy.mode_constants.chase_duration) + jnp.multiply(1 - fun_cond, enemy.mode_constants.scatter_duration)
+                duration = jnp.where(fun_cond, enemy.mode_constants.chase_duration, enemy.mode_constants.scatter_duration)
                 return mode, duration
     
             def check_wall_collision(new_pos):
@@ -2142,7 +2144,7 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
             # Prevent reversing direction unless in chase mode at start of chase
             allowed_directions_no_opp = allowed_directions.at[opposite_table[jnp.subtract(enemy.orientation, 2)]].set(0)
             allowed_directions_cond = jnp.logical_and(jnp.equal(enemy.mode_type, 0), jnp.equal(enemy.mode_duration, enemy.mode_constants.chase_duration))
-            allowed_directions_no_opp = jnp.multiply(allowed_directions_cond, allowed_directions) + jnp.multiply(1 - allowed_directions_cond, allowed_directions_no_opp)
+            allowed_directions_no_opp = jnp.where(allowed_directions_cond, allowed_directions, allowed_directions_no_opp)
 
             # Mode update: chase, scatter, frightened, flame frightened
             cond = jnp.equal(enemy.mode_duration, 0).astype(jnp.int32)
@@ -2164,8 +2166,8 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
                         jnp.equal(enemy.orientation, JAXAtariAction.RIGHT),
                         jnp.equal(enemy.orientation, JAXAtariAction.LEFT))),
                 jnp.less(enemy.mode_type, 3))
-            new_mode_type = jnp.multiply(flame_mode_cond, 3)  + jnp.multiply(1 - flame_mode_cond, new_mode_type)
-            new_mode_duration = jnp.multiply(flame_mode_cond, cnsts.FLAME_FRIGHTENED_DURATION) + jnp.multiply(1 - flame_mode_cond, new_mode_duration)
+            new_mode_type = jnp.where(flame_mode_cond, 3, new_mode_type)
+            new_mode_duration = jnp.where(flame_mode_cond, cnsts.FLAME_FRIGHTENED_DURATION, new_mode_duration)
 
             # Determine movement direction based on mode
             new_direction = jax.lax.switch(new_mode_type,[
@@ -2177,17 +2179,12 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
 
             # if velocity = 1 new_direction=new_direction
             # if velocity = 0 new_direction=current_orientation
-            new_direction = (
-                jnp.add(
-                    jnp.multiply(new_direction, state.enemies.velocity),
-                    jnp.multiply(enemy.orientation, jnp.bitwise_xor(state.enemies.velocity, 1))
-                )
-            )
+            new_direction = jnp.where(state.enemies.velocity == 1, new_direction, enemy.orientation)
 
 
             # Determine last horizontal orientation for correct sprite display
             nlh_cond = jnp.logical_or(enemy.orientation == JAXAtariAction.LEFT, enemy.orientation == JAXAtariAction.RIGHT)
-            new_last_horizontal_orientation = jnp.multiply(nlh_cond, enemy.orientation) + jnp.multiply(1 - nlh_cond, enemy.last_horizontal_orientation)
+            new_last_horizontal_orientation = jnp.where(nlh_cond, enemy.orientation, enemy.last_horizontal_orientation)
 
             #Teleport according to position and orientation (see teleport_object)
             position = teleport_object(position, enemy.orientation, new_direction)
@@ -2232,7 +2229,7 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
             # Determine enemy existence after spawn, by checking if on screen
             ex_cond1 = jnp.logical_and(jnp.less_equal(enemy.enemy_spawn_frame, 9), jnp.equal(state.level.evil_item_frame_counter, state.level.evil_item_duration-1))
             ex_cond2 = jnp.equal(state.level.evil_item_frame_counter,1)
-            new_enemy_existence = ex_cond1 + jnp.multiply((1 - ex_cond1) ,jnp.multiply((1 - ex_cond2),enemy.existence))
+            new_enemy_existence = jnp.where(ex_cond1, 1, jnp.where(ex_cond2, 0, enemy.existence))
 
             # Determine if enemy becomes killable
             new_enemy_killable = jnp.logical_and(jnp.logical_and(jnp.logical_not(enemy.has_been_killed), jnp.greater(state.level.evil_item_frame_counter, 0)), new_enemy_existence).astype(jnp.int32)
@@ -2246,11 +2243,11 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
                 jnp.equal(enemy.enemy_death_frame, 0)
             )
             # Start death frame countdown if collision occurs, otherwise keep current death frame
-            new_enemy_death_frame0 = jnp.multiply(df_cond1, 60) + jnp.multiply(1- df_cond1, enemy.enemy_death_frame)
+            new_enemy_death_frame0 = jnp.where(df_cond1, 60, enemy.enemy_death_frame)
 
             # Reduce death frame by 1 each game frame if active, to progress death animation
             df_cond2 = jnp.greater(new_enemy_death_frame0,0)
-            new_enemy_death_frame = jnp.multiply(df_cond2, new_enemy_death_frame0- 1) + jnp.multiply(1-df_cond2, new_enemy_death_frame0)
+            new_enemy_death_frame = jnp.where(df_cond2, new_enemy_death_frame0 - 1, new_enemy_death_frame0)
 
             # Count total spawn frame offsets for all enemies
             spawn_offset_counter = jnp.sum(state.enemies.multiple_enemies.enemy_spawn_frame)
@@ -2269,32 +2266,26 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
             killed_else = enemy.has_been_killed
 
             # here is decision for spawn frame based on its masks
-            new_enemy_spawn_frame = (
-                    jnp.multiply(mask_death1, spawn_frame_if_death1)
-                    + jnp.multiply(1-mask_death1, jnp.multiply(mask_evil_end, spawn_frame) + jnp.multiply(1-mask_evil_end, spawn_frame))
-            )
+            new_enemy_spawn_frame = jnp.where(mask_death1, spawn_frame_if_death1, spawn_frame)
             # here is decision for has_been_killed based on its masks
-            new_enemy_has_been_killed = (
-                    jnp.multiply(mask_death1, killed_if_death1)
-                    + jnp.multiply(1-mask_death1, jnp.multiply(mask_evil_end, killed_if_evil_end) + jnp.multiply(1-mask_evil_end, killed_else))
-            )
+            new_enemy_has_been_killed = jnp.where(mask_death1, killed_if_death1, jnp.where(mask_evil_end, killed_if_evil_end, killed_else))
 
 
             # Reset orientation and horizontal orientation for newly spawned enemies
             mask_spawn = jnp.greater_equal(new_enemy_spawn_frame, 11)
             direction_if_spawn = JAXAtariAction.RIGHT
             last_orientation_if_spawn = JAXAtariAction.RIGHT
-            new_direction = jnp.multiply(mask_spawn, direction_if_spawn) + jnp.multiply(1 - mask_spawn, new_direction)
-            new_last_horizontal_orientation = jnp.multiply(mask_spawn, last_orientation_if_spawn) + jnp.multiply(1 - mask_spawn, new_last_horizontal_orientation)
+            new_direction = jnp.where(mask_spawn, direction_if_spawn, new_direction)
+            new_last_horizontal_orientation = jnp.where(mask_spawn, last_orientation_if_spawn, new_last_horizontal_orientation)
 
             # Reset enemy position for newly spawned enemies
-            new_x = jnp.multiply(mask_spawn, cnsts.ENEMY_SPAWN_X) + jnp.multiply(1 - mask_spawn, new_position[0])
-            new_y = jnp.multiply(mask_spawn, cnsts.ENEMY_SPAWN_Y) + jnp.multiply(1 - mask_spawn, new_position[1])
+            new_x = jnp.where(mask_spawn, cnsts.ENEMY_SPAWN_X, new_position[0])
+            new_y = jnp.where(mask_spawn, cnsts.ENEMY_SPAWN_Y, new_position[1])
 
             # Store position at death for use in freezing during death animations
             position_at_death_cond = jnp.logical_or(jnp.equal(jnp.sum(state.enemies.multiple_enemies.enemy_death_frame), 59),jnp.equal(jnp.abs(state.level.death_frame_counter),39))
-            new_position_at_death_x = jnp.multiply(position_at_death_cond, enemy.x) + jnp.multiply(1 - position_at_death_cond, enemy.position_at_death_x)
-            new_position_at_death_y = jnp.multiply(position_at_death_cond, enemy.y) + jnp.multiply(1 - position_at_death_cond, enemy.position_at_death_y)
+            new_position_at_death_x = jnp.where(position_at_death_cond, enemy.x, enemy.position_at_death_x)
+            new_position_at_death_y = jnp.where(position_at_death_cond, enemy.y, enemy.position_at_death_y)
             # Create updated enemy state with all new values
             new_enemy0 = enemy.replace(
                 x=new_x,
@@ -2358,13 +2349,9 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
 
             # Masks for enemy orientation (left vs. right)
             mask_right = jnp.equal(enemy.orientation, JAXAtariAction.RIGHT)
-            mask_left  = 1 - mask_right
-
             # Masks for vertical bounds
             mask_bound_down = jnp.less_equal(enemy.y, bound)
-            mask_bound_down_neg = 1 - mask_bound_down
             mask_bound_up = jnp.greater(enemy.y, cnsts.ENEMY_SPAWN_Y)
-            mask_bound_up_neg = 1 - mask_bound_up
 
             # Compute possible new Y, orientation, and spawn frame for each case
 
@@ -2377,29 +2364,29 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
             y_left_down, orientation_left_down, spawn_left_down = add_velocity(enemy.y, enemy.orientation, velocity_vertical, enemy.enemy_spawn_frame)
 
             # Apply masks to select correct movement for right/left orientation
-            y_right = jnp.multiply(mask_bound_down, y_right_down) + jnp.multiply(mask_bound_down_neg, y_right_up)
-            orientation_right = jnp.multiply(mask_bound_down, orientation_right_down) + jnp.multiply(mask_bound_down_neg, orientation_right_up)
-            spawn_right = jnp.multiply(mask_bound_down, spawn_right_down) + jnp.multiply(mask_bound_down_neg, spawn_right_up)
+            y_right = jnp.where(mask_bound_down, y_right_down, y_right_up)
+            orientation_right = jnp.where(mask_bound_down, orientation_right_down, orientation_right_up)
+            spawn_right = jnp.where(mask_bound_down, spawn_right_down, spawn_right_up)
 
-            y_left = jnp.multiply(mask_bound_up, y_left_up) + jnp.multiply(mask_bound_up_neg, y_left_down)
-            orientation_left = jnp.multiply(mask_bound_up, orientation_left_up) + jnp.multiply(mask_bound_up_neg, orientation_left_down)
-            spawn_left = jnp.multiply(mask_bound_up, spawn_left_up) + jnp.multiply(mask_bound_up_neg, spawn_left_down)
+            y_left = jnp.where(mask_bound_up, y_left_up, y_left_down)
+            orientation_left = jnp.where(mask_bound_up, orientation_left_up, orientation_left_down)
+            spawn_left = jnp.where(mask_bound_up, spawn_left_up, spawn_left_down)
 
             # Combine left/right results based on orientation
-            new_y = jnp.multiply(mask_right, y_right) + jnp.multiply(mask_left, y_left)
-            new_orientation = jnp.multiply(mask_right, orientation_right) + jnp.multiply(mask_left, orientation_left)
-            new_spawn_frame = jnp.multiply(mask_right, spawn_right) + jnp.multiply(mask_left, spawn_left)
+            new_y = jnp.where(mask_right, y_right, y_left)
+            new_orientation = jnp.where(mask_right, orientation_right, orientation_left)
+            new_spawn_frame = jnp.where(mask_right, spawn_right, spawn_left)
 
             # Update enemy  has been killed status based on evil item
             mask_hbk = jnp.equal(state.level.evil_item_frame_counter, state.level.evil_item_duration - 1)
-            new_enemy_has_been_killed = jnp.multiply(mask_hbk, jnp.array(0)) + jnp.multiply(1 - mask_hbk, enemy.has_been_killed)
+            new_enemy_has_been_killed = jnp.where(mask_hbk, 0, enemy.has_been_killed)
 
             # Update enemy existence flag during spawn, meaning if it was on screen when evil item was picked up
             mask_exc = jnp.logical_and(
                 jnp.less_equal(new_spawn_frame, 9),
                 jnp.equal(state.level.evil_item_frame_counter, state.level.evil_item_duration - 1)
             )
-            new_enemy_existence = jnp.multiply(mask_exc, jnp.array(1)) + jnp.multiply(1 - mask_exc, enemy.existence)
+            new_enemy_existence = jnp.where(mask_exc, 1, enemy.existence)
 
 
             # Determine if enemy is currently killable
@@ -2407,16 +2394,16 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
 
             # Decrease enemy death frame if needed to 0
             mask_death = jnp.equal(enemy.enemy_death_frame, 1)
-            new_enemy_death_frame = jnp.multiply(mask_death, jnp.array(0)) + jnp.multiply(1 - mask_death, enemy.enemy_death_frame)
+            new_enemy_death_frame = jnp.where(mask_death, 0, enemy.enemy_death_frame)
 
             # Update positions at death for animation
             mask_death_pos = jnp.logical_or(jnp.equal(jnp.sum(state.enemies.multiple_enemies.enemy_death_frame), 59), jnp.equal(jnp.abs(state.level.death_frame_counter), 39))
-            new_position_at_death_x = jnp.multiply(mask_death_pos, enemy.x) + jnp.multiply(1 - mask_death_pos, enemy.position_at_death_x)
-            new_position_at_death_y = jnp.multiply(mask_death_pos, enemy.y) + jnp.multiply(1 - mask_death_pos, enemy.position_at_death_y)
+            new_position_at_death_x = jnp.where(mask_death_pos, enemy.x, enemy.position_at_death_x)
+            new_position_at_death_y = jnp.where(mask_death_pos, enemy.y, enemy.position_at_death_y)
 
             # Final Y position considering death animation for freeze during death animation
             mask_y = jnp.logical_or(jnp.not_equal(jnp.sum(state.enemies.multiple_enemies.enemy_death_frame), 0), jnp.not_equal(state.level.death_frame_counter, 0))
-            y = jnp.multiply(mask_y, new_position_at_death_y) + jnp.multiply(1 - mask_y, new_y)
+            y = jnp.where(mask_y, new_position_at_death_y, new_y)
 
             # Return updated enemy state
             return enemy.replace(
@@ -2473,7 +2460,7 @@ def enemy_step_bonus(enemy: SingleEnemyState, state: AlienState, cnsts: AlienCon
     collides_2 = bonus_check_collision_between_two_sprites(sprite1=state.enemies.bonus_collision_map, pos1_x=shadow_position[0], pos1_y=shadow_position[1],
                                             sprite2=state.player.bonus_collision_map, pos2_x=player_positon[0], pos2_y=player_positon[1])
     mask_collision = jnp.logical_or(collides_1, collides_2)
-    new_enemy_death_frame = jnp.multiply(mask_collision, jnp.array(1)) + jnp.multiply(1 - mask_collision, enemy.enemy_death_frame)
+    new_enemy_death_frame = jnp.where(mask_collision, 1, enemy.enemy_death_frame)
 
 
     new_enemy = enemy.replace(
@@ -2704,7 +2691,9 @@ class AlienRenderer(JAXGameRenderer):
                 r
             )
 
-        return jax.lax.fori_loop(0, self.consts.ENEMY_AMOUNT_PRIMARY_STAGE, render_enemy, raster)
+        for i in range(self.consts.ENEMY_AMOUNT_PRIMARY_STAGE):
+            raster = render_enemy(i, raster)
+        return raster
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_enemies_bonus(self, state: AlienState, raster):
@@ -2765,7 +2754,9 @@ class AlienRenderer(JAXGameRenderer):
             )
             return r
 
-        return jax.lax.fori_loop(0, self.consts.ENEMY_AMOUNT_BONUS_STAGE, render_bonus_enemy, raster)
+        for i in range(self.consts.ENEMY_AMOUNT_BONUS_STAGE):
+            raster = render_bonus_enemy(i, raster)
+        return raster
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_player(self, state: AlienState, raster):
