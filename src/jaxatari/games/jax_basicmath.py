@@ -11,7 +11,7 @@ from flax import struct
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 
 def _create_background_sprite(consts: "BasicMathConstants", dim: Tuple, gameMode: int) -> jnp.ndarray:
     bg_color_rgba = (*consts.COLOR_CODES[gameMode][0], 255)
@@ -77,12 +77,11 @@ class BasicMathState:
     step_counter: chex.Array
 
 @struct.dataclass
-class BasicMathObservation:
-    x: jnp.ndarray
-    y: jnp.ndarray
-    problemNum1: jnp.ndarray
-    problemNum2: jnp.ndarray
-    numArr: jnp.ndarray
+class BasicMathObservation(struct.PyTreeNode):
+    underscore: ObjectObservation
+    problem_num1: jnp.ndarray
+    problem_num2: jnp.ndarray
+    digits: jnp.ndarray
 
 @struct.dataclass
 class BasicMathInfo:
@@ -114,30 +113,17 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         )
     
     def observation_space(self) -> spaces:
+        object_space = spaces.get_object_space(
+            n=None,
+            screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)
+        )
+
         return spaces.Dict({
-                    "x": spaces.Box(low=0.0, high=160.0, shape=(1,), dtype=jnp.float32),
-                    "y": spaces.Box(low=0.0, high=210.0, shape=(1,), dtype=jnp.float32),
-                    "problemNum1": spaces.Box(low=0.0, high=10.0, shape=(1,), dtype=jnp.float32),
-                    "problemNum2": spaces.Box(low=0.0, high=10.0, shape=(1,), dtype=jnp.float32),
-                    "numArr": spaces.Box(
-                        low=-1.0,
-                        high=10.0,
-                        shape=(6,),
-                        dtype=jnp.float32
-                    )
-                })
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: BasicMathObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            jnp.array([
-                obs.x.flatten().astype(jnp.float32),
-                obs.y.flatten().astype(jnp.float32),
-                obs.problemNum1.flatten().astype(jnp.float32),
-                obs.problemNum2.flatten().astype(jnp.float32),
-            ]),
-            obs.numArr.flatten().astype(jnp.float32)
-        ])
+            "underscore": object_space,
+            "problem_num1": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
+            "problem_num2": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
+            "digits": spaces.Box(low=-1, high=9, shape=(self.consts.numArrLen,), dtype=jnp.int32),
+        })
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: BasicMathState, ) -> BasicMathInfo:
@@ -150,12 +136,18 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         )
     
     def _get_observation(self, state: BasicMathState):
+        underscore = ObjectObservation.create(
+            x=jnp.array(35 + state.arrPos * 15),
+            y=jnp.array(self.consts.bar0[1]),
+            width=jnp.array(20),
+            height=jnp.array(2),
+        )
+
         return BasicMathObservation(
-            x=jnp.array([35.0 + state.arrPos * 15.0], dtype=jnp.float32),
-            y=jnp.array([float(self.consts.bar0[1])], dtype=jnp.float32),
-            problemNum1=jnp.array([state.problemNum1], dtype=jnp.float32).reshape((1,)), 
-            problemNum2=jnp.array([state.problemNum2], dtype=jnp.float32).reshape((1,)),
-            numArr=state.numArr.astype(jnp.float32)
+            underscore=underscore,
+            problem_num1=state.problemNum1,
+            problem_num2=state.problemNum2,
+            digits=state.numArr,
         )
 
     @partial(jax.jit, static_argnums=(0,))
