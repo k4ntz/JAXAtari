@@ -535,14 +535,25 @@ def is_onscreen(y: jax.Array, height: jax.Array, camera_offset: jax.Array) -> jn
 def can_walk_to(entity_size: jax.Array, new_x: jax.Array, new_y: jax.Array, old_x: jax.Array, old_y: jax.Array, valid_pos_mat: jax.Array) -> jnp.ndarray:
     entity_width = entity_size[0]
     entity_height = entity_size[1]
+    
+    mid_width = entity_width // 2
+    mid_height = entity_height // 2
+    end_width = entity_width - 1
+    end_height = entity_height - 1
 
-    # Check all 4 corners of the hitbox at the new position
-    tl_walkable = valid_pos_mat[new_y, new_x]
-    tr_walkable = valid_pos_mat[new_y, new_x + entity_width - 1]
-    bl_walkable = valid_pos_mat[new_y + entity_height - 1, new_x]
-    br_walkable = valid_pos_mat[new_y + entity_height - 1, new_x + entity_width - 1]
-    # The move is valid only if all four corners of the hitbox are on valid floor
-    is_walkable = tl_walkable & tr_walkable & bl_walkable & br_walkable
+    # Check 9 anchor points of the hitbox (Corners, Edge midpoints, Center)
+    p1 = valid_pos_mat[new_y, new_x]                 # Top-Left
+    p2 = valid_pos_mat[new_y, new_x + mid_width]     # Top-Mid
+    p3 = valid_pos_mat[new_y, new_x + end_width]     # Top-Right
+    p4 = valid_pos_mat[new_y + mid_height, new_x]    # Mid-Left
+    p5 = valid_pos_mat[new_y + mid_height, new_x + mid_width] # Center
+    p6 = valid_pos_mat[new_y + mid_height, new_x + end_width] # Mid-Right
+    p7 = valid_pos_mat[new_y + end_height, new_x]    # Bottom-Left
+    p8 = valid_pos_mat[new_y + end_height, new_x + mid_width] # Bottom-Mid
+    p9 = valid_pos_mat[new_y + end_height, new_x + end_width] # Bottom-Right
+
+    is_walkable = p1 & p2 & p3 & p4 & p5 & p6 & p7 & p8 & p9
+    
     player_x = jnp.where(is_walkable, new_x, old_x)
     player_y = jnp.where(is_walkable, new_y, old_y)
     player_x = jnp.clip(player_x, 0, 160 - 1)
