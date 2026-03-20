@@ -5,6 +5,7 @@ from jaxatari.games.mods.roadrunner.roadrunner_mod_plugins import (
     InvertColorsMod,
     HueShiftMod,
     InvisibleEnemyMod,
+    HarmlessRavinesMod,
 )
 
 
@@ -37,6 +38,7 @@ class RoadRunnerEnvMod(JaxAtariModController):
         "invert_colors": InvertColorsMod,
         "hue_shift": HueShiftMod,
         "invisible_enemy": InvisibleEnemyMod,
+        "harmless_ravines": HarmlessRavinesMod,
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "roadrunner", "sprites")

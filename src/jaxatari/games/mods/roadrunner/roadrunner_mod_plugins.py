@@ -23,3 +23,13 @@ class InvisibleEnemyMod(JaxAtariInternalModPlugin):
     """Makes the enemy invisible by replacing all enemy sprites with transparent masks.
     The enemy still exists and can catch the player — it's just not rendered."""
     pass
+
+# --- Ravine Mod ---
+class HarmlessRavinesMod(JaxAtariInternalModPlugin):
+    """Deactivates ravines by disabling collision detection.
+    Ravines will still spawn and scroll on the screen, but the player will 
+    simply walk over them without triggering the falling animation.
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def _check_ravine_collisions(self, state: RoadRunnerState) -> RoadRunnerState:
+        return state
