@@ -10,4 +10,4 @@ results/
 docs/build/
 .python-version
 wandb/
-oututs/
+outputs/
