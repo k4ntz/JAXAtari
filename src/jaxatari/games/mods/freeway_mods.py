@@ -1,77 +1,35 @@
-import functools
-from typing import Any, Dict, Tuple, Union
+import os
+from jaxatari.modification import JaxAtariModController
+from jaxatari.games.mods.freeway.freeway_mod_plugins import StopAllCarsMod, StaticCarsMod, SlowCarsMod, BlackCarsMod, CenterCarsOnResetMod, InvertSpeed, HallOfFameMod
 
+class FreewayEnvMod(JaxAtariModController):
+    """
+    Game-specific Mod Controller for Freeway.
+    It simply inherits all logic from JaxAtariModController and defines the REGISTRY.
+    """
 
-import chex
-import jax
-import jax.numpy as jnp
-from jaxatari.games.jax_freeway import FreewayState
+    REGISTRY = {
+        "stop_all_cars": StopAllCarsMod,
+        "static_cars": StaticCarsMod,
+        "slow_cars": SlowCarsMod,
+        "invert_speed": InvertSpeed,
+        "black_cars": BlackCarsMod,
+        "center_cars_on_reset": CenterCarsOnResetMod,
+        "hall_of_fame": ["_hall_of_fame_start", "static_cars"],
+        "_hall_of_fame_start": HallOfFameMod,
+    }
 
-from jaxatari.wrappers import JaxatariWrapper
+    _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "freeway", "sprites")
 
-class StopAllCars(JaxatariWrapper):
-    """Stops all cars randomly with probability 0.4"""
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def stop_cars(self, prev_state: FreewayState, state: FreewayState) -> FreewayState:
-        key = jax.random.PRNGKey(state.time)
-        chance = 0.4
-        random_bool = jax.random.bernoulli(key, chance)
-        
-        new_cars = jax.lax.cond(
-            random_bool,
-            lambda x: prev_state.cars,  # Keep the previous cars' x positions if the random condition is met
-            lambda x: state.cars,  # Otherwise, use the current cars' x positions
-            operand=None
+    def __init__(self,
+                 env,
+                 mods_config: list = [],
+                 allow_conflicts: bool = False
+                 ):
+
+        super().__init__(
+            env=env,
+            mods_config=mods_config,
+            allow_conflicts=allow_conflicts,
+            registry=self.REGISTRY
         )
-
-        new_state = state._replace(
-            cars=new_cars
-        )
-
-        return new_state
-
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def step(self, state: FreewayState, action: Union[int, float]) -> Tuple[chex.Array, FreewayState, float, bool, Dict[Any, Any]]:
-        new_obs, new_state, reward, done, info = self._env.step(state, action)
-        new_state = self.stop_cars(state, new_state)
-
-        return new_obs, new_state, reward, done, info
-
-class AlwaysStopAllCars(JaxatariWrapper):
-    """Stops all cars after spawning"""
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def stop_cars(self, prev_state: FreewayState, state: FreewayState) -> FreewayState:
-        new_state = state._replace(
-            cars=prev_state.cars  # Always keep the previous cars' x positions
-        )
-
-        return new_state
-
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def step(self, state: FreewayState, action: Union[int, float]) -> Tuple[chex.Array, FreewayState, float, bool, Dict[Any, Any]]:
-        new_obs, new_state, reward, done, info = self._env.step(state, action)
-        new_state = self.stop_cars(state, new_state)
-
-        return new_obs, new_state, reward, done, info
-
-class SpeedMode(JaxatariWrapper):
-    """Increase speed of all cars by a factor of 2"""
-
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def speed_up(self, prev_state: FreewayState, state: FreewayState) -> FreewayState:
-        # look one step in the future 
-        _, future_state, _, _, _ = self._env.step(state, 0)
-
-        new_state = state._replace(
-            cars=future_state.cars  # Update the cars' x positions to be twice as fast
-        )
-
-        return new_state
-
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def step(self, state: FreewayState, action: Union[int, float]) -> Tuple[chex.Array, FreewayState, float, bool, Dict[Any, Any]]:
-        new_obs, new_state, reward, done, info = self._env.step(state, action)
-        new_state = self.speed_up(state, new_state)
-        return new_obs, new_state, reward, done, info
-
-        

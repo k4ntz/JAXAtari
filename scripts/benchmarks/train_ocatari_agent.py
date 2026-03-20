@@ -9,7 +9,7 @@ from collections import deque
 import pygame
 from tqdm import tqdm
 from ocatari.core import OCAtari
-from ppo_agent import ActorCritic, create_ppo_train_state, ppo_loss_fn, ppo_update_minibatch
+from scripts.benchmarks.ppo_agent_old import ActorCritic, create_ppo_train_state, ppo_loss_fn, ppo_update_minibatch
 
 # --- Observation Normalization (From previous versions) ---
 def normalize_observation_ocatari(obs: np.ndarray) -> np.ndarray:

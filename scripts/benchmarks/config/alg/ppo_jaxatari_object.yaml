@@ -1,0 +1,29 @@
+# This is adapted from Atari configuration 
+NAME_INITIALS: "RE"
+ALG_NAME: "ppo"
+TOTAL_TIMESTEPS: 5e7 # 1e8 == 100M, but times 4 (frame-skipping) -> pqn paper: enough to outperform Rainbow
+TOTAL_TIMESTEPS_DECAY: 5e7 # will be used for decay functions, in case you want to test for less timesteps and keep decays same
+NUM_ENVS: 1024 #512 # parallel environments
+NUM_STEPS: 128 # steps per environment in each update
+UPDATE_EPOCHS: 4
+NUM_MINIBATCHES: 128 # minibatches per epoch
+LR: 2.5e-4
+MAX_GRAD_NORM: 0.5
+ANNEAL_LR: True 
+GAMMA: 0.99
+GAE_LAMBDA: 0.95
+CLIP_EPS: 0.2
+ENT_COEF: 0.01
+VF_COEF: 0.5
+ACTIVATION: "tanh"
+
+# env specific
+ENV_NAME: "Pong"
+ENV_KWARGS: {}
+OBJECT_CENTRIC: True
+MOD_NAME: LazyEnemyWrapper
+
+# Testing
+TEST_NUM_ENVS: 1024
+TEST_NUM_STEPS: 10000
+RECORD_VIDEO: True 
