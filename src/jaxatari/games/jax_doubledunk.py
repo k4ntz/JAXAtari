@@ -1651,8 +1651,9 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _get_reward(self, previous_state: DunkGameState, state: DunkGameState) -> float:
         """Calculates the reward from the environment state."""
-        # Placeholder: return 0 reward for now
-        return 0.0
+        return (state.scores.player - state.scores.enemy) - (
+            previous_state.scores.player - previous_state.scores.enemy
+        )
 
     def _get_done(self, state: DunkGameState) -> bool:
         """Determines if the environment state is a terminal state"""

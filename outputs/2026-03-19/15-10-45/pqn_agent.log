@@ -1,0 +1,14 @@
+[2026-03-19 15:14:16,261][jax._src.debugging][ERROR] - jax.debug.callback failed
+Traceback (most recent call last):
+  File "/mnt/c/Users/Achraf/Studium/PKI/PKI-local/JAXAtari/wsl_env/lib/python3.12/site-packages/jax/_src/debugging.py", line 102, in debug_callback_impl
+    callback(*args)
+  File "/mnt/c/Users/Achraf/Studium/PKI/PKI-local/JAXAtari/wsl_env/lib/python3.12/site-packages/jax/_src/debugging.py", line 304, in _flat_callback
+    callback(*args, **kwargs)
+  File "/mnt/c/Users/Achraf/Studium/PKI/PKI-local/JAXAtari/wsl_env/lib/python3.12/site-packages/jax/_src/debugging.py", line 511, in _format_print_callback
+    sys.stdout.write(msg + "\n")
+  File "/mnt/c/Users/Achraf/Studium/PKI/PKI-local/JAXAtari/wsl_env/lib/python3.12/site-packages/wandb/sdk/lib/console_capture.py", line 184, in write_with_callbacks
+    n = orig_write(s)
+        ^^^^^^^^^^^^^
+KeyboardInterrupt
+[2026-03-19 15:14:48,527][asyncio][WARNING] - socket.send() raised exception.
+[2026-03-19 15:14:48,527][asyncio][WARNING] - socket.send() raised exception.
