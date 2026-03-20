@@ -37,7 +37,7 @@ TEST_INTERVAL: 0.1 # in terms of total updates
 TEST_NUM_ENVS: 1024 #512
 TEST_NUM_STEPS: 10000
 EPS_TEST: 0.0 # 0 for greedy policy
-RECORD_VIDEO: True
+RECORD_VIDEO: False
 
 # Generate a final video at the end of training
 RECORD_FINAL_VIDEO: True

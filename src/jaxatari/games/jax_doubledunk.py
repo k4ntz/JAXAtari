@@ -1907,10 +1907,11 @@ class DunkRenderer(JAXGameRenderer):
                 text_y = 185
 
                 # Get the slice from the image
+                channels = image.shape[-1] 
                 image_slice = jax.lax.dynamic_slice(
                     image,
                     (text_y, text_x, 0),
-                    (mask.shape[0], mask.shape[1], 3)
+                    (mask.shape[0], mask.shape[1], channels)
                 )
 
                 # Blend the text onto the slice
