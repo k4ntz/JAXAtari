@@ -4,58 +4,62 @@ import chex
 import jax
 import jax.numpy as jnp
 from typing import Tuple, NamedTuple, List, Dict, Optional, Any
+from flax import struct
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
+from jaxatari.modification import AutoDerivedConstants
 
+class JourneyEscapeConstants(AutoDerivedConstants):
 
-class JourneyEscapeConstants(NamedTuple):
-
-    starting_score: int = 50000
+    starting_score: int = struct.field(pytree_node=False, default=50000)
 
     # frame countdown for timer
-    countdown_frame: int = 50  # countdown decreases by one second every 50 frames
-    start_countdown: int = 59  # for a 59-second countdown
+    countdown_frame: int = struct.field(pytree_node=False, default=50)  # countdown decreases by one second every 50 frames
+    start_countdown: int = struct.field(pytree_node=False, default=59)  # for a 59-second countdown
 
-    screen_width: int = 160
-    screen_height: int = 230
+    screen_width: int = struct.field(pytree_node=False, default=160)
+    screen_height: int = struct.field(pytree_node=False, default=230)
 
-    background_frame_switch: int = 4 # set to 0 for static background
-    background_frames_amount: int = 8 # defined order of 2*4 sprites
+    background_frame_switch: int = struct.field(pytree_node=False, default=4) # set to 0 for static background
+    background_frames_amount: int = struct.field(pytree_node=False, default=8) # defined order of 2*4 sprites
 
-    player_width: int = 8
-    player_height: int = 25
-    start_player_x: int = 93  # Fixed x position
-    start_player_y: int = 172  # Fixed y position
-    player_speed: int = 1
-    player_frame_switch: int = 16 # should match ALE
+    player_width: int = struct.field(pytree_node=False, default=8)
+    player_height: int = struct.field(pytree_node=False, default=25)
+    start_player_x: int = struct.field(pytree_node=False, default=93)  # Fixed x position
+    start_player_y: int = struct.field(pytree_node=False, default=172)  # Fixed y position
+    player_speed: int = struct.field(pytree_node=False, default=1)
+    player_frame_switch: int = struct.field(pytree_node=False, default=16) # should match ALE
 
     # top and bottom blue areas
-    top_blue_area_height: int = 27
-    bottom_blue_area_height: int = 28
+    top_blue_area_height: int = struct.field(pytree_node=False, default=27)
+    bottom_blue_area_height: int = struct.field(pytree_node=False, default=28)
+    # paddings
+    top_padding: int = struct.field(pytree_node=False, default=3)
+    bottom_padding: int = struct.field(pytree_node=False, default=4)
     # border of the valid game space
-    top_border: int = 3 + top_blue_area_height
-    bottom_border: int = screen_height - bottom_blue_area_height - 4
-    left_border: int = 8
-    right_border: int = screen_width - 8
+    top_border: int = struct.field(pytree_node=False, default=3 + 27) # top_padding + top_blue_area_height
+    bottom_border: int = struct.field(pytree_node=False, default=230 - 28 - 4) # screen_height - bottom_blue_area_height - bottom_padding
+    left_border: int = struct.field(pytree_node=False, default=8)
+    right_border: int = struct.field(pytree_node=False, default=160 - 8) # screen_width - left_border
 
     # player position rules
-    min_player_position_y: int = top_border + (screen_height // 4)
+    min_player_position_y: int = struct.field(pytree_node=False, default=30 + (230 // 4)) # top_border + (screen_height // 4)
 
     # Standard sizes
-    obstacle_width: int = 8
-    obstacle_height: int = 10
+    obstacle_width: int = struct.field(pytree_node=False, default=8)
+    obstacle_height: int = struct.field(pytree_node=False, default=10)
 
     # Big sizes (2x)
-    big_obstacle_width: int = 16
-    big_obstacle_height: int = 20
+    big_obstacle_width: int = struct.field(pytree_node=False, default=16)
+    big_obstacle_height: int = struct.field(pytree_node=False, default=20)
 
-    obstacle_frame_switch: int = 17  # should match ALE
-    obstacle_speed_px_per_frame: int = 1
-    row_spawn_period_frames: int = 50  # spawn every N frames # ToDo: calibrate
-    hit_cooldown_frames: int = 17
+    obstacle_frame_switch: int = struct.field(pytree_node=False, default=17)  # should match ALE
+    obstacle_speed_px_per_frame: int = struct.field(pytree_node=False, default=1)
+    row_spawn_period_frames: int = struct.field(pytree_node=False, default=50)  # spawn every N frames # ToDo: calibrate
+    hit_cooldown_frames: int = struct.field(pytree_node=False, default=17)
 
     # Define the Width and Height for every ID (0 to 9)
         #   0: Stage Barriers
@@ -68,21 +72,21 @@ class JourneyEscapeConstants(NamedTuple):
         #   7: Big Shifty-Eyed Promoter
         #   8: Big Sneaky Photographer
         #   9: Big Mighty Manager
-    TYPE_WIDTHS: Tuple[int, ...] = (32, 8, 8, 8, 8, 16, 16, 16, 16, 17)
-    TYPE_HEIGHTS: Tuple[int, ...] = (15, 15, 15, 15, 15, 15, 15, 15, 15, 15)
+    TYPE_WIDTHS: Tuple[int, ...] = struct.field(pytree_node=False, default_factory=lambda: (32, 8, 8, 8, 8, 16, 16, 16, 16, 17))
+    TYPE_HEIGHTS: Tuple[int, ...] = struct.field(pytree_node=False, default_factory=lambda: (15, 15, 15, 15, 15, 15, 15, 15, 15, 15))
 
-    MAX_OBS = 64
+    MAX_OBS: int = struct.field(pytree_node=False, default=64)
 
     # Blinking Effect
-    photographer_on_duration: int = 17
-    photographer_off_duration: int = 49
+    photographer_on_duration: int = struct.field(pytree_node=False, default=17)
+    photographer_off_duration: int = struct.field(pytree_node=False, default=49)
 
     # Invincible Effect
-    INV_DURATION_ROADIE: int = 6 * countdown_frame # 6 seconds @ 50fps
-    INV_DURATION_MANAGER: int = 100000 # (longer than the max possible game time of ~60s)
+    INV_DURATION_ROADIE: int = struct.field(pytree_node=False, default=6 * 50) # 6 seconds @ 50fps
+    INV_DURATION_MANAGER: int = struct.field(pytree_node=False, default=100000) # (longer than the max possible game time of ~60s)
 
     # True if the object stops movement / drags player
-    IS_SOLID: chex.Array = jnp.array([
+    IS_SOLID: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         True,           # 0 barrier
         False,          # 1 roadie
         True,           # 2 groupies
@@ -93,10 +97,10 @@ class JourneyEscapeConstants(NamedTuple):
         True,           # 7 big promoter
         True,           # 8 big photographer
         False,          # 9 big Manager
-    ])
+    ]))
 
     # Points deducted on contact
-    SCORE_PENALTIES: chex.Array = jnp.array([
+    SCORE_PENALTIES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         0,              # 0 barriers
         0,              # 1 roadie
         -300,           # 2 groupies
@@ -107,11 +111,11 @@ class JourneyEscapeConstants(NamedTuple):
         -2000,          # 7 big promoter
         -600,           # 8 big photographer
         9900,           # 9 big manager
-    ])
+    ]))
     # ---------------------CHANGE END-----------------------
 
     # predefined groups: [type, amount, spacing in px]
-    obstacle_groups: Tuple[Tuple[int, int, int], ...] = (
+    obstacle_groups: Tuple[Tuple[int, int, int], ...] = struct.field(pytree_node=False, default_factory=lambda: (
         (0, 1, 0),      # barriers
         (1, 2, 20),     # roadies
         (5, 1, 0),      # big roadie (1)
@@ -132,9 +136,9 @@ class JourneyEscapeConstants(NamedTuple):
         (8, 1, 0),      # big photographer (1)
 
         (9, 1, 0),      # big manager (1)
-    )
+    ))
     # SPAWN PROBABILITIES
-    spawn_weights: chex.Array = jnp.array([
+    spawn_weights: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         0.07017544,     # 0: (0, 1, 0)  barriers
         0.0175,         # 1: (1, 2, 20) roadie
         0.0175,         # 2: (5, 1, 0)  big roadie
@@ -155,7 +159,7 @@ class JourneyEscapeConstants(NamedTuple):
         0.05263158,     # 14: (8, 1, 0)   big photographer
 
         0.0001,         # 15: (9, 1, 0) big manager
-    ])
+    ]))
 
 
 class JourneyEscapeState(NamedTuple):
