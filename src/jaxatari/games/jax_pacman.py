@@ -273,7 +273,12 @@ class PacmanInfo(NamedTuple):
 
 
 class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, PacmanConstants]):
-    def __init__(self, consts: PacmanConstants = None):
+    def __init__(
+        self,
+        consts: PacmanConstants = None,
+        maze_file_path: str = None,
+        maze_file_pellet_path: str = None,
+    ):
         consts = consts or PacmanConstants()
         super().__init__(consts)
         self.action_set = [
@@ -740,7 +745,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
                        jnp.where(state.player_direction == Action.UP, -1, 0))
         
         # 2. Check if we are moving AWAY from the target (Dot Product < 0)
-        #    This happens when target is wrapped around (e.g. Left -> Right)
+        #    This happens when target is wrapped (e.g. Left<->Right or Top<->Bottom)
         dot_prod = move_dx * dx_to_target + move_dy * dy_to_target
         
         # 3. Check if nodes are far apart (Portal)
@@ -757,13 +762,14 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         normal_overshot = vec_to_self_sq >= vec_to_target_sq
         
         # Portal overshot: use direction-dependent threshold to fix asymmetric delay.
-        # - Left portal, moving LEFT: we go off-screen (negative x), so 2-pixel threshold
+        # Works for both left-right and up-down portals.
+        # - Moving LEFT or UP (negative): we often go off-screen, so 2-pixel threshold
         #   gives 2 frames of "tunnel" that are not visible → feels quick.
-        # - Right portal, moving RIGHT: we stay on-screen (217, 218...) so the same
+        # - Moving RIGHT or DOWN (positive): we may stay on-screen, so the same
         #   threshold would show Pacman for 2 extra frames → feels like more delay.
         # Use threshold 0 when moving in positive direction (RIGHT/DOWN) so we wrap
         # after 1 pixel; use 1 for negative direction (LEFT/UP). Both directions
-        # then feel like a quick wrap.
+        # then feel like a quick wrap (horizontal and vertical).
         moving_positive = jnp.logical_or(
             state.player_direction == Action.RIGHT,
             state.player_direction == Action.DOWN
