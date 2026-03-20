@@ -161,8 +161,8 @@ class JourneyEscapeConstants(AutoDerivedConstants):
         0.0001,         # 15: (9, 1, 0) big manager
     ]))
 
-
-class JourneyEscapeState(NamedTuple):
+@struct.dataclass
+class JourneyEscapeState:
     """Represents the current state of the game"""
 
     player_y: chex.Array
@@ -186,19 +186,20 @@ class JourneyEscapeState(NamedTuple):
 
     bg_frames: chex.Array
 
-class EntityPosition(NamedTuple):
+@struct.dataclass
+class EntityPosition:
     x: jnp.ndarray
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
 
-
-class JourneyEscapeObservation(NamedTuple):
+@struct.dataclass
+class JourneyEscapeObservation:
     player: EntityPosition
     obstacles: chex.Array
 
-
-class JourneyEscapeInfo(NamedTuple):
+@struct.dataclass
+class JourneyEscapeInfo:
     time: jnp.ndarray
 
 
