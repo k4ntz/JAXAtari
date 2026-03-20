@@ -40,7 +40,6 @@ class BackgammonEnvMod(JaxAtariModController):
         "hold_to_scroll_release_to_drop": ALEControlsMod,
     }
 
-    # Modded sprite fallback directory (used when plugins provide asset_overrides).
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "backgammon", "sprites")
 
     def __init__(
