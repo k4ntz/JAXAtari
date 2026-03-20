@@ -532,13 +532,12 @@ def can_walk_to(entity_size: jax.Array, new_x: jax.Array, new_y: jax.Array, old_
     p2 = valid_pos_mat[new_y, new_x + mid_width]     # Top-Mid
     p3 = valid_pos_mat[new_y, new_x + end_width]     # Top-Right
     p4 = valid_pos_mat[new_y + mid_height, new_x]    # Mid-Left
-    p5 = valid_pos_mat[new_y + mid_height, new_x + mid_width] # Center
-    p6 = valid_pos_mat[new_y + mid_height, new_x + end_width] # Mid-Right
-    p7 = valid_pos_mat[new_y + end_height, new_x]    # Bottom-Left
-    p8 = valid_pos_mat[new_y + end_height, new_x + mid_width] # Bottom-Mid
-    p9 = valid_pos_mat[new_y + end_height, new_x + end_width] # Bottom-Right
+    p5 = valid_pos_mat[new_y + mid_height, new_x + end_width] # Mid-Right
+    p6 = valid_pos_mat[new_y + end_height, new_x]    # Bottom-Left
+    p7 = valid_pos_mat[new_y + end_height, new_x + mid_width] # Bottom-Mid
+    p8 = valid_pos_mat[new_y + end_height, new_x + end_width] # Bottom-Right
 
-    is_walkable = p1 & p2 & p3 & p4 & p5 & p6 & p7 & p8 & p9
+    is_walkable = p1 & p2 & p3 & p4 & p5 & p6 & p7 & p8
     
     player_x = jnp.where(is_walkable, new_x, old_x)
     player_y = jnp.where(is_walkable, new_y, old_y)
@@ -653,7 +652,7 @@ class TutankhamRenderer(JAXGameRenderer):
 
         # creatures
         creature_one_state = state.creature_states[0]
-        creature_one = creature_one_state[2].astype(jnp.int32)
+        creature_one = creature_one_state[2]
         dir_one = creature_one_state[4]
         death_timer_one = creature_one_state[5]
         
@@ -693,7 +692,7 @@ class TutankhamRenderer(JAXGameRenderer):
         )
         
         creature_two_state = state.creature_states[1]
-        creature_two = creature_two_state[2].astype(jnp.int32)
+        creature_two = creature_two_state[2]
         dir_two = creature_two_state[4]
         death_timer_two = creature_two_state[5]
         
@@ -739,7 +738,7 @@ class TutankhamRenderer(JAXGameRenderer):
             treasure_y = state.item_states[i][1]
             treasure_type = state.item_states[i][2]
             is_active = state.item_states[i][3] == 1
-            treasure_mask = self.SHAPE_MASKS["treasure"][treasure_type.astype(jnp.int32)]
+            treasure_mask = self.SHAPE_MASKS["treasure"][treasure_type]
             return jax.lax.cond(
                 is_active & is_onscreen(treasure_y, 8, camera_offset),
                 lambda r: self.jr.render_at_clipped(
@@ -1419,7 +1418,7 @@ class JaxTutankham(JaxEnvironment):
 
         # check bullet-creature collisions (vectorized over all creatures)
         def bullet_hits_creature(creature):
-            creature_type = creature[2].astype(jnp.int32)
+            creature_type = creature[2]
             return self.check_entity_collision(
                 bullet_state[0], bullet_state[1], self.consts.BULLET_SIZE,
                 creature[0], creature[1], self.consts.CREATURE_SIZES[creature_type],
@@ -1444,7 +1443,7 @@ class JaxTutankham(JaxEnvironment):
 
         # check player-creature collisions (vectorized over all creatures)
         def player_hits_creature(creature):
-            creature_type = creature[2].astype(jnp.int32)
+            creature_type = creature[2]
             return self.check_entity_collision(
                 player_x, player_y, self.consts.PLAYER_SIZE,
                 creature[0], creature[1], self.consts.CREATURE_SIZES[creature_type],
