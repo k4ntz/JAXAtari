@@ -6,12 +6,17 @@ This module provides mods using the JaxAtari plugin system:
 - JaxAtariPostStepModPlugin: For modifying state after each step
 
 Available Mods:
-1. SimplifyBackgammonMod - reduced checker count (complex mod)
-2. RewardShapingMod - intermediate rewards (complex mod)
-3. NoHitsMod - no hitting variant (complex mod)
-4. ShortGameMod - endgame starting position (complex mod)
-5. ThemeMod - visual theme selection (simple mod)
-6. ALEControlsMod - original ALE hold-to-scroll release-to-drop controls (complex mod)
+1. Theme Mods (simple mods) - change visual theme:
+    - BrownThemeMod
+    - BlueThemeMod
+    - ClassicThemeMod (default)
+2. NoHitsMod (complex mod) - disables hitting for simpler learning
+3. RewardShapingMod (complex mod) - adds intermediate rewards for better RL training
+4. ShortGameMod (simple mod) - starts from endgame position for rapid iteration
+5. SimplifyBackgammonMod (simple mod) - fewer checkers for faster episodes
+6. ALEControlsMod (complex mod) - implements original ALE controls (hold-to-scroll, release-to-drop)
+7. HighlightLegalMovesMod (simple mod) - highlights legal drop targets when picking a checker
+8. SetupModeMod (simple mod) - starts from custom board setups for curriculum learning
 """
 
 from functools import partial
@@ -55,7 +60,6 @@ def _count_safe_points_for_player(board: jnp.ndarray, player_idx: int) -> jax.Ar
 class BrownThemeMod(JaxAtariInternalModPlugin):
     """
     Changes the visual theme to 'brown' color scheme.
-    Simple mod - overrides the THEME constant in BackgammonConstants.
     """
     constants_overrides = {
         "THEME": "brown"
@@ -65,7 +69,6 @@ class BrownThemeMod(JaxAtariInternalModPlugin):
 class BlueThemeMod(JaxAtariInternalModPlugin):
     """
     Changes the visual theme to 'blue' color scheme.
-    Simple mod - overrides the THEME constant in BackgammonConstants.
     """
     constants_overrides = {
         "THEME": "blue"
@@ -75,7 +78,6 @@ class BlueThemeMod(JaxAtariInternalModPlugin):
 class ClassicThemeMod(JaxAtariInternalModPlugin):
     """
     Changes the visual theme to 'classic' color scheme (default).
-    Simple mod - overrides the THEME constant in BackgammonConstants.
     """
     constants_overrides = {
         "THEME": "classic"
@@ -93,8 +95,6 @@ class NoHitsMod(JaxAtariPostStepModPlugin):
     (but still can't land on blocked points with 2+ opponent checkers).
     
     Useful for initial RL training before introducing full complexity.
-    
-    Complex mod - modifies game state after each step.
     """
     
     @partial(jax.jit, static_argnums=(0,))
@@ -153,8 +153,6 @@ class RewardShapingMod(JaxAtariInternalModPlugin):
     4. Safety bonus: Reward for making points (2+ checkers)
     
     This helps RL agents learn faster by providing denser reward signals.
-    
-    Complex mod - modifies reward calculation by patching step().
     """
     
     # Reward shaping weights (can be overridden via constants_overrides)
@@ -212,8 +210,6 @@ class ShortGameMod(JaxAtariPostStepModPlugin):
     Games typically last only a few moves.
     
     Useful for testing bearing-off logic and end-game scenarios.
-    
-    Complex mod - modifies initial state on reset.
     """
     
     @partial(jax.jit, static_argnums=(0,))
@@ -256,9 +252,7 @@ class SimplifyBackgammonMod(JaxAtariPostStepModPlugin):
     - Fewer checkers per player (default: 5 instead of 15)
     - Modified starting positions for shorter games
     - Same rules, just faster episodes
-    
-    Complex mod - modifies initial state and win detection.
-    
+        
     Note: num_checkers can be configured via constants_overrides.
     Default is 5 checkers per player.
     """
@@ -320,11 +314,6 @@ class ALEControlsMod(JaxAtariInternalModPlugin):
     - No FIRE confirmation needed for placement
     
     This is harder to control but matches the original ALE behavior.
-    
-    Complex mod - provides backward compatibility with original ALE interface.
-    
-    Note: This is a complex mod that requires integration with step() logic.
-    Implementation TODO: Needs to track button hold state and trigger drop on release.
     """
     
     # Mark as conflicting with the default cursor-based controls
@@ -339,23 +328,50 @@ class ALEControlsMod(JaxAtariInternalModPlugin):
             (state.last_action == JAXAtariAction.LEFT) |
             (state.last_action == JAXAtariAction.RIGHT)
         )
-        release_detected = (
-            (action == JAXAtariAction.NOOP) &
-            (state.game_phase == jnp.int32(2)) &
-            was_scrolling &
-            (new_state.picked_checker_from >= 0)
-        )
+        is_release = (action == JAXAtariAction.NOOP) & was_scrolling
 
-        def do_release_drop(_):
+        # During phase 2: releasing the joystick drops the checker
+        can_drop = is_release & (state.game_phase == jnp.int32(2)) & (new_state.picked_checker_from >= 0)
+
+        def do_drop(_):
             dropped_state, drop_reward, drop_done = self._env._handle_drop_checker(new_state)
             drop_obs = self._env._get_observation(dropped_state)
             drop_info = self._env._get_info(dropped_state)
             return drop_obs, dropped_state, drop_reward, drop_done, drop_info
 
-        def keep_original(_):
+        def skip_drop(_):
             return obs, new_state, reward, done, info
 
-        return jax.lax.cond(release_detected, do_release_drop, keep_original, operand=None)
+        obs_after_drop, state_after_drop, reward_after_drop, done_after_drop, info_after_drop = jax.lax.cond(
+            can_drop, do_drop, skip_drop, operand=None
+        )
+
+        # During phase 1: releasing the joystick picks up the checker
+        # Using original state.game_phase ensures we don't pick up in the exact frame we just dropped
+        can_pick = is_release & (state.game_phase == jnp.int32(1))
+
+        def do_pick(_):
+            picked_state = self._env._handle_pick_checker(state_after_drop)
+            pick_obs = self._env._get_observation(picked_state)
+            pick_info = self._env._get_info(picked_state)
+            return pick_obs, picked_state, reward_after_drop, done_after_drop, pick_info
+
+        def skip_pick(_):
+            return obs_after_drop, state_after_drop, reward_after_drop, done_after_drop, info_after_drop
+
+        final_obs, final_state, final_reward, final_done, final_info = jax.lax.cond(
+            can_pick, do_pick, skip_pick, operand=None
+        )
+
+        # Clear last_action so that holding a NOOP doesn't trigger releases infinitely
+        final_state = jax.lax.cond(
+            is_release,
+            lambda s: s.replace(last_action=JAXAtariAction.NOOP),
+            lambda s: s,
+            operand=final_state
+        )
+
+        return final_obs, final_state, final_reward, final_done, final_info
 
 
 class HighlightLegalMovesMod(JaxAtariInternalModPlugin):
