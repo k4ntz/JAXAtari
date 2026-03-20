@@ -4,6 +4,7 @@ from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.roadrunner.roadrunner_mod_plugins import (
     InvertColorsMod,
     HueShiftMod,
+    InvisibleEnemyMod,
 )
 
 
@@ -35,6 +36,7 @@ class RoadRunnerEnvMod(JaxAtariModController):
     REGISTRY = {
         "invert_colors": InvertColorsMod,
         "hue_shift": HueShiftMod,
+        "invisible_enemy": InvisibleEnemyMod,
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "roadrunner", "sprites")
@@ -58,3 +60,17 @@ class RoadRunnerEnvMod(JaxAtariModController):
             if plugin_class in _PALETTE_TRANSFORMS:
                 transform = _PALETTE_TRANSFORMS[plugin_class]
                 self._env.renderer.PALETTE = transform(self._env.renderer.PALETTE)
+
+        # Replace enemy sprites with transparent masks
+        if InvisibleEnemyMod in [self.REGISTRY.get(k) for k in mods_config]:
+            renderer = self._env.renderer
+            transparent_id = renderer.jr.TRANSPARENT_ID
+            enemy_sprite_keys = [
+                "enemy", "enemy_run1", "enemy_run2",
+                "enemy_burnt", "enemy_run_over",
+                "enemy_rocket", "enemy_hoverboard1",
+            ]
+            for key in enemy_sprite_keys:
+                if key in renderer.SHAPE_MASKS:
+                    shape = renderer.SHAPE_MASKS[key].shape
+                    renderer.SHAPE_MASKS[key] = jnp.full(shape, transparent_id, dtype=renderer.SHAPE_MASKS[key].dtype)
