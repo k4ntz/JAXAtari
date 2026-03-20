@@ -238,7 +238,18 @@ class NodeGroup(NamedTuple):
 
     @staticmethod
     def connect_portals(data, nodes_lut, position_to_index, tile_size, xoffset=0, yoffset=0):
-        """Connect portal nodes ('P') across the map. Supports left-right and up-down pairs."""
+        """
+        Connect portal nodes ('P') across the map. Supports left-right and up-down pairs.
+
+        Pairing rules (same as 2-portal case, extended to many portals):
+        - Two portals on the same row (same y) -> horizontal pair (LEFT <-> RIGHT).
+        - Two portals on the same column (same x) -> vertical pair (UP <-> DOWN).
+
+        Works for 2, 4, 6, ... portals as long as each pair aligns on a row or column.
+        If there are 6 portals (e.g. 1 horizontal row + 2 vertical columns), all three
+        pairs are connected. Previously only len==2 or len==4 was handled, so 6 portals
+        skipped all connections and deadends broke.
+        """
         # Find all 'P' nodes
         portal_keys = []
         for row in range(data.shape[0]):
@@ -247,42 +258,45 @@ class NodeGroup(NamedTuple):
                     x, y = NodeGroup.construct_key(col + xoffset, row + yoffset, tile_size)
                     portal_keys.append((x, y))
 
-        if len(portal_keys) == 2:
-            # Single pair: determine horizontal (same y) vs vertical (same x)
-            (x0, y0), (x1, y1) = portal_keys[0], portal_keys[1]
-            if y0 == y1:
-                # Same row -> horizontal (left-right)
-                portal_keys.sort(key=lambda k: k[0])
+        if not portal_keys:
+            return
+        if len(portal_keys) % 2 != 0:
+            print(
+                f"Warning: odd number of portal nodes ({len(portal_keys)}), "
+                "skipping portal connections"
+            )
+            return
+
+        # Group by same y (horizontal pairs) and same x (vertical pairs).
+        # This subsumes the old len==2 and len==4 branches.
+        by_x = {}
+        by_y = {}
+        for key in portal_keys:
+            x, y = key
+            by_x.setdefault(x, []).append(key)
+            by_y.setdefault(y, []).append(key)
+        for y, keys in by_y.items():
+            if len(keys) == 2:
+                keys_sorted = sorted(keys, key=lambda k: k[0])
                 NodeGroup._connect_portal_pair_horizontal(
-                    nodes_lut, position_to_index, portal_keys[0], portal_keys[1]
+                    nodes_lut, position_to_index, keys_sorted[0], keys_sorted[1]
                 )
-            elif x0 == x1:
-                # Same column -> vertical (up-down)
-                portal_keys.sort(key=lambda k: k[1])  # top first (smaller y), then bottom
+            elif len(keys) > 2:
+                print(
+                    f"Warning: {len(keys)} portals on same row y={y}; "
+                    "expected exactly 2 per row for horizontal pairing"
+                )
+        for x, keys in by_x.items():
+            if len(keys) == 2:
+                keys_sorted = sorted(keys, key=lambda k: k[1])
                 NodeGroup._connect_portal_pair_vertical(
-                    nodes_lut, position_to_index, portal_keys[0], portal_keys[1]
+                    nodes_lut, position_to_index, keys_sorted[0], keys_sorted[1]
                 )
-            # else: diagonal pair, skip (or could extend later)
-        elif len(portal_keys) == 4:
-            # Two pairs: group by same y (horizontal pairs) and same x (vertical pairs)
-            by_x = {}  # x -> list of (x,y) keys
-            by_y = {}  # y -> list of (x,y) keys
-            for key in portal_keys:
-                x, y = key
-                by_x.setdefault(x, []).append(key)
-                by_y.setdefault(y, []).append(key)
-            for y, keys in by_y.items():
-                if len(keys) == 2:
-                    keys_sorted = sorted(keys, key=lambda k: k[0])
-                    NodeGroup._connect_portal_pair_horizontal(
-                        nodes_lut, position_to_index, keys_sorted[0], keys_sorted[1]
-                    )
-            for x, keys in by_x.items():
-                if len(keys) == 2:
-                    keys_sorted = sorted(keys, key=lambda k: k[1])
-                    NodeGroup._connect_portal_pair_vertical(
-                        nodes_lut, position_to_index, keys_sorted[0], keys_sorted[1]
-                    )
+            elif len(keys) > 2:
+                print(
+                    f"Warning: {len(keys)} portals on same column x={x}; "
+                    "expected exactly 2 per column for vertical pairing"
+                )
     
     def print_connections(self):
         """Print all node connections for debugging."""
