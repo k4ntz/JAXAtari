@@ -154,7 +154,8 @@ class SkiingConstants(AutoDerivedConstants):
     max_num_trees: int = struct.field(pytree_node=False, default=4)
     max_num_moguls: int = struct.field(pytree_node=False, default=2)
     moguls_collidable: bool = struct.field(pytree_node=False, default=False)
-    allow_jump: bool = struct.field(pytree_node=False, default=False)
+    allow_jump: bool = struct.field(pytree_node=False, default=True)
+    jump_stops_skier: bool = struct.field(pytree_node=False, default=False)
     speed: float = struct.field(pytree_node=False, default=1.0)
 
     # Asset config baked into constants (immutable default) for asset overrides
@@ -642,12 +643,18 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         x_speed_next = x_speed_next * scale
         y_speed_next = y_speed_next * scale
 
+        should_stop_from_jump = jnp.logical_and(new_is_jumping, self.consts.jump_stops_skier)
+
         new_skier_x_speed_nom = jax.lax.select(
-            in_recovery,
+            jnp.logical_or(in_recovery, should_stop_from_jump),
             jnp.array(0.0, dtype=jnp.float32),
             x_speed_next
         )
-        new_skier_y_speed_nom = y_speed_next
+        new_skier_y_speed_nom = jax.lax.select(
+            should_stop_from_jump,
+            jnp.array(0.0, dtype=jnp.float32),
+            y_speed_next
+        )
         # --- First-frame jitter guard: freeze world & lateral motion on step_count==0
         first_frame = jnp.equal(state.step_count, jnp.int32(0))
         eff_x_speed_nom = jax.lax.select(first_frame, jnp.array(0.0, jnp.float32), new_skier_x_speed_nom)

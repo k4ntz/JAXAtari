@@ -24,10 +24,12 @@ class DangerousMogulsMod(JaxAtariInternalModPlugin):
         "moguls_collidable": True,
     }
 
-class JumpMod(JaxAtariInternalModPlugin):
+class JumpToBreakMod(JaxAtariInternalModPlugin):
     """
     Allows the skier to jump over moguls using the FIRE action.
+    This mod specifically causes the skier to stop moving while jumping.
     """
     constants_overrides = {
         "allow_jump": True,
+        "jump_stops_skier": True,
     }
