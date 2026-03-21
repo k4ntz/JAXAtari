@@ -14,7 +14,7 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.spaces as spaces
 from jaxatari.modification import AutoDerivedConstants
 
-ORIGINAL_SCORES = jnp.array([1, 2, 2])
+ORIGINAL_SCORES = jnp.array([-1, -2, -2])
 USE_ORIGINAL_ALE_REWARD = True
 
 def _create_static_procedural_sprites() -> dict:
@@ -138,7 +138,7 @@ class SkiingConstants(AutoDerivedConstants):
     skier_y: int = struct.field(pytree_node=False, default=40)
     flag_width: int = struct.field(pytree_node=False, default=10)
     flag_height: int = struct.field(pytree_node=False, default=28)
-    flag_distance: int = struct.field(pytree_node=False, default=20)
+    flag_distance: int = struct.field(pytree_node=False, default=32)
     gate_vertical_spacing: int = struct.field(pytree_node=False, default=90)
     tree_width: int = struct.field(pytree_node=False, default=16)
     tree_height: int = struct.field(pytree_node=False, default=30)
@@ -171,7 +171,7 @@ class SkiingState:
     flags: chex.Array
     trees: chex.Array
     rocks: chex.Array
-    score: chex.Array
+    successful_gates: chex.Array
     step_count: chex.Array
     direction_change_counter: chex.Array
     game_over: chex.Array
@@ -187,7 +187,7 @@ class SkiingObservation:
     flags: ObjectObservation # n=2
     trees: ObjectObservation # n=4
     rocks: ObjectObservation # n=3
-    score: jnp.ndarray
+    successful_gates: jnp.ndarray
 
 
 @struct.dataclass
@@ -226,7 +226,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             "flags": spaces.get_object_space(n=self.consts.max_num_flags, screen_size=screen_size),
             "trees": spaces.get_object_space(n=self.consts.max_num_trees, screen_size=screen_size),
             "rocks": spaces.get_object_space(n=self.consts.max_num_rocks, screen_size=screen_size),
-            "score": spaces.Box(low=0.0, high=1_000_000.0, shape=(), dtype=jnp.float32),
+            "successful_gates": spaces.Box(low=0.0, high=1_000_000.0, shape=(), dtype=jnp.float32),
         })
 
     def image_space(self):
@@ -358,7 +358,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             flags=flags,
             trees=trees,
             rocks=rocks,
-            score=jnp.array(20, dtype=jnp.int32),
+            successful_gates=jnp.array(20, dtype=jnp.int32),
             step_count=jnp.array(0, dtype=jnp.int32),
             direction_change_counter=jnp.array(0, dtype=jnp.int32),
             game_over=jnp.array(False),
@@ -782,7 +782,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
 
         # Update score/step_count (only gates count)
         gates_scored = jnp.sum(gate_pass)
-        new_score = state.score - gates_scored
+        new_score = state.successful_gates - gates_scored
         game_over = jnp.greater_equal(new_gates_seen, 20)
         new_step_count = jax.lax.cond(
             jnp.greater(state.step_count, 9223372036854775807 / 2),
@@ -801,7 +801,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             flags=jnp.array(new_flags),
             trees=jnp.array(new_trees),
             rocks=jnp.array(new_rocks),
-            score=new_score,
+            successful_gates=new_score,
             step_count=new_step_count,
             direction_change_counter=direction_change_counter,
             game_over=game_over,
@@ -882,7 +882,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             flags=flags,
             trees=trees,
             rocks=rocks,
-            score=jnp.array(state.score, dtype=jnp.float32)
+            successful_gates=jnp.array(state.successful_gates, dtype=jnp.float32)
         )
 
 
@@ -895,8 +895,17 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: SkiingState, state: SkiingState):
         if USE_ORIGINAL_ALE_REWARD:
-            return ORIGINAL_SCORES[state.step_count%3]
-        return previous_state.score - state.score
+            done = self._get_done(state)
+            # In ALE, the final reward incorporates a massive penalty for missed gates.
+            # state.successful_gates tracks (20 - successfully_passed_gates), which represents the missed gates.
+            missed_gates = 20 - state.successful_gates
+            end_penalty = - missed_gates * 500
+            
+            step_reward = ORIGINAL_SCORES[state.step_count % 3]
+            
+            return jnp.where(done, end_penalty, step_reward).astype(jnp.float32)
+            
+        return (previous_state.successful_gates - state.successful_gates).astype(jnp.float32)
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1089,7 +1098,20 @@ class SkiingRenderer(JAXGameRenderer):
         # 1. Start with the white background
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        # 2. Get skier sprite
+        # 2. Draw Rocks (Moguls) first so they are behind the skier
+        rock_mask = self.SHAPE_MASKS['rock']
+        rock_offset = self.FLIP_OFFSETS['rock']
+        rock_h, rock_w = rock_mask.shape[0], rock_mask.shape[1]
+
+        def draw_rock(i, r):
+            cx, cy = state.rocks[i, :2]
+            top = (cy - (rock_h // 2)).astype(jnp.int32)
+            left = (cx - (rock_w // 2)).astype(jnp.int32)
+            return self.jr.render_at_clipped(r, left, top, rock_mask, flip_offset=rock_offset)
+            
+        raster = jax.lax.fori_loop(0, self.consts.max_num_rocks, draw_rock, raster)
+
+        # 3. Get and Draw Skier
         skier_masks = self.SHAPE_MASKS['skier_group']
         skier_offset = self.FLIP_OFFSETS['skier_group']
         
@@ -1109,13 +1131,12 @@ class SkiingRenderer(JAXGameRenderer):
         skier_top = (skier_cy - (skier_sprite.shape[0] // 2)).astype(jnp.int32)
         skier_left = (skier_cx - (skier_sprite.shape[1] // 2)).astype(jnp.int32)
 
-        # 3. Draw Skier
         raster = self.jr.render_at(
             raster, skier_left, skier_top, 
             skier_sprite, flip_offset=skier_offset
         )
 
-        # 4. Draw Flags
+        # 4. Draw Flags (in front of skier)
         flags_xy = state.flags[..., :2]
         left_pos = flags_xy.astype(jnp.int32)
         right_pos = (flags_xy + jnp.array([self.consts.flag_distance, 0.0])).astype(jnp.int32)
@@ -1147,7 +1168,7 @@ class SkiingRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, self.consts.max_num_flags, draw_flag, raster)
 
-        # 5. Draw Trees
+        # 5. Draw Trees (in front of skier)
         tree_masks = self.SHAPE_MASKS['tree_group']
         tree_offset = self.FLIP_OFFSETS['tree_group']
 
@@ -1162,21 +1183,8 @@ class SkiingRenderer(JAXGameRenderer):
             return self.jr.render_at_clipped(r, left, top, mask, flip_offset=tree_offset)            
         raster = jax.lax.fori_loop(0, self.consts.max_num_trees, draw_tree, raster)
 
-        # 6. Draw Rocks
-        rock_mask = self.SHAPE_MASKS['rock']
-        rock_offset = self.FLIP_OFFSETS['rock']
-        rock_h, rock_w = rock_mask.shape[0], rock_mask.shape[1]
-
-        def draw_rock(i, r):
-            cx, cy = state.rocks[i, :2]
-            top = (cy - (rock_h // 2)).astype(jnp.int32)
-            left = (cx - (rock_w // 2)).astype(jnp.int32)
-            return self.jr.render_at_clipped(r, left, top, rock_mask, flip_offset=rock_offset)
-            
-        raster = jax.lax.fori_loop(0, self.consts.max_num_rocks, draw_rock, raster)
-
         # 7. Draw UI
-        score_digits = self._format_score_digits(state.score)
+        score_digits = self._format_score_digits(state.successful_gates)
         step_count_digits  = self._format_step_count_digits(state.step_count)
         
         # Center score
