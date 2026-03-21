@@ -1,6 +1,6 @@
 import os
 from functools import partial
-from typing import NamedTuple, Tuple
+from typing import Tuple
 import jax
 import jax.numpy as jnp
 import chex
@@ -107,8 +107,8 @@ class KaboomConstants(AutoDerivedConstants):
         pytree_node=False,
         default_factory=get_default_asset_config
     )
-    WIDTH: int = struct.field(pytree_node=False, default=160)
-    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    SCREEN_WIDTH: int = struct.field(pytree_node=False, default=160)
+    SCREEN_HEIGHT: int = struct.field(pytree_node=False, default=210)
     BUCKET_SPEED_X: int = struct.field(pytree_node=False, default=5)  # in px
     BUCKET_X_OFFSET: int = struct.field(pytree_node=False, default=40)  # in px
     BOMB_FUSE_STATES: int = struct.field(pytree_node=False, default=3)  # bomb fuse animations count
@@ -125,7 +125,7 @@ class KaboomConstants(AutoDerivedConstants):
     )  # bombs count
     MAD_BOMBER_SPEED_GROUPS: chex.Array = struct.field(
         pytree_node=False,
-        default_factory=lambda: jnp.array([1, 2, 2, 3, 3, 4, 4, 4])
+        default_factory=lambda: jnp.array([1, 2, 2, 3, 3, 3, 4, 4])
     )  # in px
     MAD_BOMBER_RANDOMNESS_NUMBERS: chex.Array = struct.field(
         pytree_node=False,
@@ -167,8 +167,6 @@ class KaboomObservation:
     mad_bomber_pos: ObjectObservation  # tuple[int, int]
     buckets_pos: ObjectObservation
     bombs: ObjectObservation
-    score: ObjectObservation
-    lives: ObjectObservation
 
 
 @struct.dataclass
@@ -203,15 +201,21 @@ class KaboomInfo:
 
 
 class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, KaboomConstants]):
+    # Minimal ALE set: 0=NOOP, 1=FIRE, 2=RIGHT, 3=LEFT (agent index -> jnp.take below).
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.RIGHT,
+            Action.LEFT,
+        ],
+        dtype=jnp.int32,
+    )
+
     def __init__(self, consts: KaboomConstants = None):
         super().__init__(consts)
         self.consts = consts or KaboomConstants()
         self.renderer = KaboomRenderer(self.consts)
-        self.action_set = [
-            Action.RIGHT,
-            Action.LEFT,
-            Action.FIRE,
-        ]
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[KaboomObservation, KaboomState]:
@@ -247,12 +251,31 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: KaboomState):
+        mad_bomber_pos = ObjectObservation.create(
+            x=jnp.clip(state.mad_bomber_pos_x.astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(state.mad_bomber_pos_y.astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.array(self.consts.MAD_BOMBER_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.MAD_BOMBER_SIZE[1], dtype=jnp.int32)
+        )
+
+        buckets_pos = ObjectObservation.create(
+            x=jnp.clip(state.mad_bomber_pos_x.astype(jnp.int32), self.consts.BUCKET_MIN_ALLOWED_POS_X, self.consts.BUCKET_MAX_ALLOWED_POS_X),
+            y=jnp.clip(state.mad_bomber_pos_y.astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.full((3,), self.consts.BUCKET_SIZE[0], dtype=jnp.int32),
+            height=jnp.full((3,), self.consts.BUCKET_SIZE[1], dtype=jnp.int32)
+        )
+
+        bombs = ObjectObservation.create(
+            x=jnp.clip(state.bombs_states[0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(state.bombs_states[1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.full((3,), self.consts.BOMB_SIZE[0], dtype=jnp.int32),
+            height=jnp.full((3,), self.consts.BOMB_SIZE[1], dtype=jnp.int32)
+        )
+
         obs = KaboomObservation(
-            mad_bomber_pos=jnp.array((state.mad_bomber_pos_x, state.mad_bomber_pos_y), dtype=jnp.int32),
-            score=state.score,
-            lives=state.lives,
-            buckets_pos=state.buckets_pos,
-            bombs=state.bombs_states,
+            mad_bomber_pos=mad_bomber_pos,
+            buckets_pos=buckets_pos,
+            bombs=bombs
         )
         return obs
 
@@ -767,7 +790,8 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: KaboomState, action: chex.Array) -> Tuple[
         KaboomObservation, KaboomState, float, bool, KaboomInfo]:
-        restart_pressed = state.waiting_for_restart & (action == self.action_set[2])
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+        restart_pressed = state.waiting_for_restart & (atari_action == Action.FIRE)
 
         def restart_after_failure():
             return KaboomState(
@@ -800,7 +824,7 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
 
         def normal_step():
             buckets_pos, buckets_moving_state, buckets_were_moving_right, buckets_jitter_state, frames_counter, key \
-                = self.update_bucket_step(state, action, state.buckets_pos, state.buckets_moving_state,
+                = self.update_bucket_step(state, atari_action, state.buckets_pos, state.buckets_moving_state,
                                           state.buckets_were_moving_right, state.buckets_jitter_state, state.frames_counter,
                                           state.key)
 
@@ -862,7 +886,7 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         return self.renderer.render(state)
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict(
@@ -908,17 +932,6 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
     def _get_done(self, state: KaboomState) -> bool:
         return state.lives <= 0
 
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: KaboomObservation) -> jnp.ndarray:
-        """Converts the observation to a flat array."""
-        return jnp.concatenate([
-            obs.mad_bomber_pos.flatten(),
-            obs.buckets_pos.flatten(),
-            obs.bombs.flatten(),
-            obs.score.flatten(),
-            obs.lives.flatten()
-        ])
-
 
 class KaboomRenderer(JAXGameRenderer):
     def __init__(self, consts: KaboomConstants = None, config: render_utils.RendererConfig = None):
@@ -928,7 +941,7 @@ class KaboomRenderer(JAXGameRenderer):
         # Use injected config if provided, else default
         if config is None:
             self.config = render_utils.RendererConfig(
-                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
                 channels=3
             )
         else:

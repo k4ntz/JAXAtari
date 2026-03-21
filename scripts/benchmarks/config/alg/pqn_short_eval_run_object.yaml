@@ -21,14 +21,14 @@ GAMMA: 0.99
 LAMBDA: 0.65
 
 # env specific
-ENV_NAME: "Pong"
+ENV_NAME: "Kaboom"
 ENV_KWARGS: {}
 OBJECT_CENTRIC: True
 # Mods used during training and evaluation
 # TRAIN_MODS: mods applied during training (set to null for base env training)
 # EVAL_MODS: mods evaluated separately after training
 TRAIN_MODS: null
-EVAL_MODS: ['lazy_enemy', 'random_enemy', 'linear_movement']
+EVAL_MODS: ['bombs_move_horizontally', 'bombs_fall_randomlyfast', 'bombs_red', 'madbomber_green']
 
 # Note: This will massively increase compile and run time!
 # But is useful for debugging (watching the video).

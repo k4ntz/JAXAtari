@@ -7,7 +7,7 @@ NUM_ENVS: 128 # parallel environments
 NUM_STEPS: 16 # steps per environment in each update
 # NUM_ENVS / NUM_STEPS should be 8 for original PQN (they did 128/32) -> increasing number of updates here by decreasing NUM_STEPS
 EPS_START: 1.0
-EPS_FINISH: 0.001
+EPS_FINISH: 0.01
 EPS_DECAY: 0.1
 NUM_EPOCHS: 2 
 NUM_MINIBATCHES: 32 # minibatches per epoch
