@@ -12,6 +12,67 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.modification import AutoDerivedConstants
 
+def get_default_asset_config() -> tuple:
+    """Returns the declarative manifest of all assets for the game."""
+
+    return [
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {
+            'name': 'backgrounds', 'type': 'group',
+            'files': [
+                'background_0.npy',
+                'background_1.npy',
+                'background_2.npy',
+                'background_1.npy',
+                'background_2.npy',
+                'background_3.npy',
+                'background_2.npy',
+                'background_1.npy',
+            ]
+        },
+        {
+            'name': 'player', 'type': 'group',
+            'files': ['player_walk_front_1.npy', 'player_walk_front_0.npy',
+                        'player_run_right_0.npy', 'player_run_right_1.npy',
+                        'player_run_left_0.npy', 'player_run_left_1.npy']
+        },
+        {
+            'name': 'promoter', 'type': 'group',
+            'files': ['3_Promoter_0.npy', '3_Promoter_1.npy']
+        },
+        {
+            'name': 'groupies', 'type': 'group',
+            'files': ['2_Groupies_0.npy', '2_Groupies_1.npy']
+        },
+        {
+            'name': 'roadie', 'type': 'group',
+            'files': ['1_Loyal_Roadie_0.npy', '1_Loyal_Roadie_1.npy']
+        },
+        {
+            'name': 'big_groupies', 'type': 'group',
+            'files': ['6_Big_Groupies_0.npy', '6_Big_Groupies_1.npy']
+        },
+        {
+            'name': 'big_promoter', 'type': 'group',
+            'files': ['7_Big_Promoter_0.npy', '7_Big_Promoter_1.npy']
+        },
+        {
+            'name': 'big_roadie', 'type': 'group',
+            'files': ['5_Big_Loyal_Roadie_0.npy', '5_Big_Loyal_Roadie_1.npy']
+        },
+        {
+            'name': 'big_manager', 'type': 'group',
+            'files': ['9_Big_Mighty_Manager_0.npy', '9_Big_Mighty_Manager_1.npy']
+        },
+        {'name': 'barrier', 'type': 'single', 'file': '0_Stage_Barrier.npy'},
+        {'name': 'photographer', 'type': 'single', 'file': '4_Photographer.npy'},
+        {'name': 'big_photographer', 'type': 'single', 'file': '8_Big_Photographer.npy'},
+        {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
+        {'name': 'dollar', 'type': 'single', 'file': 'dollar.npy'},
+        {'name': 'timer_digits', 'type': 'digits', 'pattern': 'timer_{}.npy'},
+        {'name': 'timer_colon', 'type': 'single', 'file': 'timer_colon.npy'},
+    ]
+
 class JourneyEscapeConstants(AutoDerivedConstants):
 
     starting_score: int = struct.field(pytree_node=False, default=50000)
@@ -160,6 +221,7 @@ class JourneyEscapeConstants(AutoDerivedConstants):
 
         0.0001,         # 15: (9, 1, 0) big manager
     ]))
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=get_default_asset_config)
 
 @struct.dataclass
 class JourneyEscapeState:
@@ -213,7 +275,7 @@ class JaxJourneyEscape(
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
         self.state = self.reset()
-        self.renderer = JourneyEscapeRenderer()
+        self.renderer = JourneyEscapeRenderer(self.consts)
 
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[JourneyEscapeObservation, JourneyEscapeState]:
         """Initialize a new game state"""
@@ -844,7 +906,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # Load and setup assets
-        asset_config = self._get_asset_config()
+        asset_config = list(self.consts.ASSET_CONFIG) # self._get_asset_config()
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/journey_escape"
 
         # --- ASSET GENERATION ---
@@ -913,67 +975,6 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         # Set Alpha to 255 (Opaque)
         block = block.at[:, :, 3].set(255)
         return block
-
-    def _get_asset_config(self) -> list:
-        """Returns the declarative manifest of all assets for the game."""
-
-        return [
-            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            {
-                'name': 'backgrounds', 'type': 'group',
-                'files': [
-                    'background_0.npy',
-                    'background_1.npy',
-                    'background_2.npy',
-                    'background_1.npy',
-                    'background_2.npy',
-                    'background_3.npy',
-                    'background_2.npy',
-                    'background_1.npy',
-                ]
-            },
-            {
-                'name': 'player', 'type': 'group',
-                'files': ['player_walk_front_1.npy', 'player_walk_front_0.npy',
-                          'player_run_right_0.npy', 'player_run_right_1.npy',
-                          'player_run_left_0.npy', 'player_run_left_1.npy']
-            },
-            {
-                'name': 'promoter', 'type': 'group',
-                'files': ['3_Promoter_0.npy', '3_Promoter_1.npy']
-            },
-            {
-                'name': 'groupies', 'type': 'group',
-                'files': ['2_Groupies_0.npy', '2_Groupies_1.npy']
-            },
-            {
-                'name': 'roadie', 'type': 'group',
-                'files': ['1_Loyal_Roadie_0.npy', '1_Loyal_Roadie_1.npy']
-            },
-            {
-                'name': 'big_groupies', 'type': 'group',
-                'files': ['6_Big_Groupies_0.npy', '6_Big_Groupies_1.npy']
-            },
-            {
-                'name': 'big_promoter', 'type': 'group',
-                'files': ['7_Big_Promoter_0.npy', '7_Big_Promoter_1.npy']
-            },
-            {
-                'name': 'big_roadie', 'type': 'group',
-                'files': ['5_Big_Loyal_Roadie_0.npy', '5_Big_Loyal_Roadie_1.npy']
-            },
-            {
-                'name': 'big_manager', 'type': 'group',
-                'files': ['9_Big_Mighty_Manager_0.npy', '9_Big_Mighty_Manager_1.npy']
-            },
-            {'name': 'barrier', 'type': 'single', 'file': '0_Stage_Barrier.npy'},
-            {'name': 'photographer', 'type': 'single', 'file': '4_Photographer.npy'},
-            {'name': 'big_photographer', 'type': 'single', 'file': '8_Big_Photographer.npy'},
-            {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
-            {'name': 'dollar', 'type': 'single', 'file': 'dollar.npy'},
-            {'name': 'timer_digits', 'type': 'digits', 'pattern': 'timer_{}.npy'},
-            {'name': 'timer_colon', 'type': 'single', 'file': 'timer_colon.npy'},
-        ]
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):

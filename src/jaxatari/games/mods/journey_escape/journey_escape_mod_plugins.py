@@ -37,7 +37,22 @@ class SpeedUpObstaclesMod(JaxAtariInternalModPlugin):
 
 class ReducePlayerSizeMod(JaxAtariInternalModPlugin):
     """Reduced the size of the player sprite."""
-    # TODO: implement
+    
+    # Player size reduced by 40%. New size: (5x15)
+    asset_overrides = {
+        "player": {
+            'name': 'player',
+            'type': 'group',
+            'files': ['smaller_player_walk_front_1.npy', 'smaller_player_walk_front_0.npy',
+                      'smaller_player_run_right_0.npy', 'smaller_player_run_right_1.npy',
+                      'smaller_player_run_left_0.npy', 'smaller_player_run_left_1.npy']
+        }
+    }
+
+    constants_overrides = {
+        "player_width": 5,
+        "player_height": 15
+    }
 
 
 class RestrictPlayerMovementMod(JaxAtariPostStepModPlugin):
