@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from flax import struct
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.spaces import Discrete, Box
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
@@ -468,10 +468,6 @@ class TutankhamConstants(struct.PyTreeNode):
     ], dtype=jnp.int32))
 
 
-
-# ---------------------------------------------------------------------
-# Game State
-# ---------------------------------------------------------------------
 class TutankhamState(struct.PyTreeNode):
     # key state for creature spawn randomness
     rng_key: int
@@ -507,6 +503,30 @@ class TutankhamState(struct.PyTreeNode):
     goal_reached: bool  # whether the player has reached the goal with the key to complete the level
 
     last_directional_action: int  # last action that had a directional component
+
+
+
+class TutankhamObservation(struct.PyTreeNode):
+    player: ObjectObservation      # single player object
+    creatures: ObjectObservation   # (MAX_CREATURES=2,) creatures
+    items: ObjectObservation       # (7,) collectible items
+    bullet: ObjectObservation      # single bullet
+    lives: jnp.ndarray
+    score: jnp.ndarray
+    level: jnp.ndarray
+    laser_flash_count: jnp.ndarray
+    ammo: jnp.ndarray              # remaining ammunition timer
+    has_key: jnp.ndarray
+
+
+
+class TutankhamInfo(struct.PyTreeNode):
+    step: jnp.ndarray
+    score: jnp.ndarray
+
+
+
+
 @jax.jit
 def is_onscreen(y: jax.Array, height: jax.Array, camera_offset: jax.Array) -> jnp.ndarray:
     """
@@ -549,7 +569,6 @@ def can_walk_to(entity_size: jax.Array, new_x: jax.Array, new_y: jax.Array, old_
 # ---------------------------------------------------------------------
 # Renderer (No JAX)
 # ---------------------------------------------------------------------
-
 class TutankhamRenderer(JAXGameRenderer):
     def __init__(self, consts: TutankhamConstants = None):
         super().__init__()
@@ -868,10 +887,9 @@ class TutankhamRenderer(JAXGameRenderer):
         )
 
 
-# ---------------------------------------------------------------------
-# Environment (No JAX)
-# ---------------------------------------------------------------------
-class JaxTutankham(JaxEnvironment):
+
+# Environment
+class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, TutankhamInfo, TutankhamConstants]):
     def __init__(self):
         consts = TutankhamConstants()
         super().__init__(consts)
@@ -958,7 +976,9 @@ class JaxTutankham(JaxEnvironment):
                                camera_offset=camera_offset,
                                goal_reached=goal_reached
                                )
-        return state, state #TODO: (EnvObs, EnvState)
+        
+        obs = self._get_observation(state)
+        return obs, state
 
     
     @partial(jax.jit, static_argnums=(0,))
@@ -1683,48 +1703,40 @@ class JaxTutankham(JaxEnvironment):
 
 
 
-        state = TutankhamState(level=level,
-                               player_x=player_x,
-                               player_y=player_y,
-                               tutankham_score=tutankham_score,
-                               player_lives=player_lives,
-                               bullet_state=bullet_state,
-                               amonition_timer=amonition_timer,
-                               creature_states=creature_states,
-                               item_states=item_states,
-                               last_creature_spawn=last_creature_spawn,
-                               laser_flash_count=laser_flash_count,
-                               laser_flash_cooldown=laser_flash_cooldown,
-                               player_direction=player_direction,
-                               is_moving=is_moving,
-                               step_counter=step_counter,
-                               player_subpixel=player_subpixel,
-                               creature_subpixels=creature_subpixels,
-                               bullet_subpixel=bullet_subpixel,
-                               has_key=has_key,
-                               last_directional_action=last_directional_action,
-                               rng_key=rng_key,
-                               camera_offset=camera_offset,
-                               goal_reached=goal_reached
-                               )
+        new_state = TutankhamState(level=level,
+                                player_x=player_x,
+                                player_y=player_y,
+                                tutankham_score=tutankham_score,
+                                player_lives=player_lives,
+                                bullet_state=bullet_state,
+                                amonition_timer=amonition_timer,
+                                creature_states=creature_states,
+                                item_states=item_states,
+                                last_creature_spawn=last_creature_spawn,
+                                laser_flash_count=laser_flash_count,
+                                laser_flash_cooldown=laser_flash_cooldown,
+                                player_direction=player_direction,
+                                is_moving=is_moving,
+                                step_counter=step_counter,
+                                player_subpixel=player_subpixel,
+                                creature_subpixels=creature_subpixels,
+                                bullet_subpixel=bullet_subpixel,
+                                has_key=has_key,
+                                last_directional_action=last_directional_action,
+                                rng_key=rng_key,
+                                camera_offset=camera_offset,
+                                goal_reached=goal_reached
+                                )
 
-        reward = 0.0
-        done = self._get_done(state)
-        info = 0
+        obs = self._get_observation(new_state)
+        reward = self._get_reward(state, new_state)
+        done = self._get_done(new_state)
+        info = self._get_info(new_state)
 
-        #jax.debug.print("Player position: ({}, {})", player_x, player_y)
-        #jax.debug.print("Player position: ({}, {})", player_x, player_y)
-        #jax.debug.print("ammonition: ({})", amonition_timer)
-        #jax.debug.print("Score: ({})", tutankham_score)
         # return observation, new_state, env_reward, done, info
-        return state, state, reward, done, info
+        return obs, new_state, reward, done, info
 
-    # -----------------------------
-    # Rendering 
-    # -----------------------------
-    @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: TutankhamState) -> jnp.ndarray:
-        return self.renderer.render(state)
+
 
     # -----------------------------
     # Action & Observation Space
@@ -1732,13 +1744,108 @@ class JaxTutankham(JaxEnvironment):
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
 
-    def observation_space(self):
-        return Box(
+
+    def observation_space(self) -> spaces.Dict:
+        # Y positions are in scrolling map space (up to ~800px tall); X is screen-width.
+        map_screen = (800, self.consts.WIDTH)
+        screen = (self.consts.HEIGHT, self.consts.WIDTH)
+        n_creatures = self.consts.MAX_CREATURES
+        n_items = int(jnp.max(self.consts.MAP_N_ITEMS))  # max items across all maps (7)
+        return spaces.Dict({
+            "player": spaces.get_object_space(n=None, screen_size=map_screen),
+            "creatures":spaces.get_object_space(n=n_creatures, screen_size=map_screen),
+            "items": spaces.get_object_space(n=n_items, screen_size=map_screen),
+            "bullet": spaces.get_object_space(n=None, screen_size=screen),
+            "lives": spaces.Box(low=0, high=self.consts.PLAYER_LIVES, shape=(), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+            "level": spaces.Box(low=0, high=15, shape=(), dtype=jnp.int32),
+            "laser_flash_count": spaces.Box(low=0, high=self.consts.MAX_LASER_FLASHES, shape=(), dtype=jnp.int32),
+            "ammo": spaces.Box(low=0, high=int(jnp.max(self.consts.LEVEL_AMMO_SUPPLY)), shape=(), dtype=jnp.int32),
+            "has_key": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+        })
+    
+
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(
             low=0,
-            high=max(self.consts.WIDTH, self.consts.HEIGHT),
-            shape=(2,),
-            dtype=np.int32,
+            high=255,
+            shape=(self.consts.HEIGHT, self.consts.WIDTH, 3),
+            dtype=jnp.uint8
         )
+    
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_observation(self, state: TutankhamState) -> TutankhamObservation:
+        player = ObjectObservation.create(
+            x=jnp.array(state.player_x, dtype=jnp.int32),
+            y=jnp.array(state.player_y, dtype=jnp.int32),
+            width=self.consts.PLAYER_SIZE[0],
+            height=self.consts.PLAYER_SIZE[1],
+            state=jnp.array(state.has_key, dtype=jnp.int32),        # 1 if player holds key
+            orientation=jnp.array(state.player_direction, dtype=jnp.int32),
+        )
+
+        # creature_states: (MAX_CREATURES, 6) — (x, y, creature_type, active, direction, death_timer)
+        creatures = ObjectObservation.create(
+            x=state.creature_states[:, 0],
+            y=state.creature_states[:, 1],
+            width=jnp.full((self.consts.MAX_CREATURES,), self.consts.CREATURE_SIZE[0], dtype=jnp.int32),
+            height=jnp.full((self.consts.MAX_CREATURES,), self.consts.CREATURE_SIZE[1], dtype=jnp.int32),
+            active=state.creature_states[:, 3],
+            visual_id=state.creature_states[:, 2], # creature type (SNAKE, BAT, …)
+            state=state.creature_states[:, 5], # death_timer
+            orientation=state.creature_states[:, 4], # movement direction
+        )
+
+        # item_states: (N_ITEMS, 4) — (x, y, item_type, active)
+        n_items = state.item_states.shape[0]
+        items = ObjectObservation.create(
+            x=state.item_states[:, 0],
+            y=state.item_states[:, 1],
+            width=jnp.full((n_items,), self.consts.ITEM_SIZE[0], dtype=jnp.int32),
+            height=jnp.full((n_items,), self.consts.ITEM_SIZE[1], dtype=jnp.int32),
+            active=state.item_states[:, 3],
+            visual_id=state.item_states[:, 2],                       # item type
+        )
+
+        # bullet_state: (5,) — (x, y, bullet_rotation, bullet_active, anim_counter)
+        bullet = ObjectObservation.create(
+            x=jnp.array(state.bullet_state[0], dtype=jnp.int32),
+            y=jnp.array(state.bullet_state[1], dtype=jnp.int32),
+            width=self.consts.BULLET_SIZE[0],
+            height=self.consts.BULLET_SIZE[1],
+            active=jnp.array(state.bullet_state[3], dtype=jnp.int32),
+            orientation=jnp.array(state.bullet_state[2], dtype=jnp.int32),  # bullet rotation
+        )
+
+        return TutankhamObservation(
+            player=player,
+            creatures=creatures,
+            items=items,
+            bullet=bullet,
+            lives=jnp.array(state.player_lives, dtype=jnp.int32),
+            score=jnp.array(state.tutankham_score, dtype=jnp.int32),
+            level=jnp.array(state.level, dtype=jnp.int32),
+            laser_flash_count=jnp.array(state.laser_flash_count, dtype=jnp.int32),
+            ammo=jnp.array(state.amonition_timer, dtype=jnp.int32),
+            has_key=jnp.array(state.has_key, dtype=jnp.int32),
+        )
+    
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: TutankhamState) -> jnp.ndarray:
+        return self.renderer.render(state)
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: TutankhamState) -> TutankhamInfo:
+        return TutankhamInfo(step=state.step_counter, score=state.tutankham_score)
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: TutankhamState, current_state: TutankhamState):
+        return current_state.tutankham_score - previous_state.tutankham_score
+    
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: TutankhamState) -> bool:
