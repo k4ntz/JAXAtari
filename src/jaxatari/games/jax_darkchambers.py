@@ -124,7 +124,7 @@ GAME_H = 210  # Standard Atari height
 GAME_W = 160  # Standard Atari width
 UI_BAR_HEIGHT = 50  # Height of bottom UI bar (5% bigger than 48)
 GAMEPLAY_H = GAME_H - UI_BAR_HEIGHT  # Viewport height for gameplay (160)
-WORLD_W = GAME_W * 2  # World is 2x viewport size
+WORLD_W = GAME_W  # World width equals viewport width (no horizontal camera panning)
 WORLD_H = 600  # Significantly taller world
 
 # --- Nav grid for enemy pathfinding ---
@@ -374,7 +374,7 @@ class DarkChambersConstants(NamedTuple):
     # Checkpoint system (disabled by default; enabled by checkpoint mod)
     # Map index order: 0=middle chamber, 1=left chamber, 2=right chamber.
     ENABLE_CHECKPOINT_RESPAWN: bool = False
-    CHECKPOINT_SPAWN_X_BY_MAP: Tuple[int, int, int] = (50, 20, 260)
+    CHECKPOINT_SPAWN_X_BY_MAP: Tuple[int, int, int] = (50, 20, 130)
     CHECKPOINT_SPAWN_Y_BY_MAP: Tuple[int, int, int] = (50, 70, 70)
 
 
@@ -908,7 +908,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         #Origin (0, 0): Top-left corner of the world
         #X-axis: → (increases rightward)
         #Y-axis: ↓ (increases downward)
-        #World size: 320 × 600 pixels
+        #World size: 160 × 600 pixels
 
         #[x, y, width, height]
         #↓  ↓    ↓      ↓
@@ -921,145 +921,86 @@ class DarkChambersRenderer(JAXGameRenderer):
         maze = [
 
             # ───────── TOP STRUCTURE ─────────
-            [0, 0, 320, 6],
+            [0, 0, 160, 6],
 
-            [80, 0, 6, 160],
 
-            # upper pockets (right)
-            [200, 40, 120, 6],
-            [200, 80, 120, 6],
 
-            # small vertical separators top
-            [120, 0, 6, 120],
-            [194, 0, 6, 120],
+            #chamber enclosing
 
-            # central vertical shaft
-            [157, 0, 6, 260],
+            [120, 0, 6, 180],
 
-            # small horizontal bar under shaft
-            [120, 240, 80, 6],
+            [48, 0, 6, 168],
+
+            [0, 160, 60, 6],
 
 
             # ───────── LEFT STRUCTURE ─────────
 
-            [0, 160, 80, 6],
-            [0, 200, 120, 6],
-
-            # left pocket wall
-            [80, 200, 6, 80],
-
+            #[0, 160, 40, 6],
+            #[0, 200, 60, 6],
 
             # ───────── RIGHT STRUCTURE (SYMMETRIC) ─────────
 
-            [240, 160, 80, 6],
-            [200, 200, 120, 6],
-
-            # right pocket wall (mirrored)
-            [234, 200, 6, 80],
-
+            #[92, 160, 68, 6],
+            #[100, 200, 60, 6],
 
             # ───────── LOWER CHANNELS ─────────
-
-            [110, 360, 6, 180],
-            [204, 360, 6, 180],
 
 
             # ───────── SIDE STRUCTURES LOWER ─────────
 
-            [0, 360, 80, 6],
-            [0, 520, 80, 6],
-
-            [240, 360, 80, 6],
-            [240, 520, 80, 6],
+            #[0, 360, 40, 6],
+            #[120, 360, 40, 6],
 
 
             # ───────── BOTTOM FLOOR ─────────
 
-            [0, 594, 320, 6]
+            [0, 594, 160, 6]
         ]
         middle_level_0_walls = jnp.array(maze, dtype=jnp.int32)
 
         right_maze = [
 
             # top cap
-            [0, 0, 320, 6],
-
-            # vertical corridor to portal
-            [214, 0, 6, 140+20],
+            [0, 0, 160, 6],
 
             # portal access corridor
-            [220, 140+20, 100, 6],
-
-            # central divider
-            [157, 0, 6, 260],
-
-            # horizontal junction
-            [120, 240, 80, 6],
+            [110, 140+20, 50, 6],
 
             # left blocks
-            [0, 200, 120, 6],
-            [80, 200, 6, 80],
-
+            [0, 200, 60, 6],
             # right blocks
-            [200, 200, 120, 6],
-            [234, 200, 6, 80],
-
-            # lower channels
-            [110, 360, 6, 180],
-            [204, 360, 6, 180],
+            [100, 200, 60, 6],
 
             # lower side pockets
-            [0, 360, 80, 6],
-            [0, 520, 80, 6],
-
-            [240, 360, 80, 6],
-            [240, 520, 80, 6],
+            [0, 360, 40, 6],
+            [120, 360, 40, 6],
 
             # bottom
-            [0, 594, 320, 6]
+            [0, 594, 160, 6]
         ]
 
 
         left_maze = [
 
             # top cap
-            [0, 0, 320, 6],
-
-            # vertical corridor up to portal
-            [100, 0, 6, 140+20],
+            [0, 0, 160, 6],
 
             # portal access corridor
-            [0, 140+20, 100, 6],
-
-            # central divider
-            [157, 0, 6, 260],
-
-            # horizontal junction
-            [120, 240, 80, 6],
+            [0, 140+20, 50, 6],
 
             # left side blocks
-            [0, 200, 120, 6],
-            [80, 200, 6, 80],
-
-            [234, 0, 6, 160],
+            [0, 200, 60, 6],
 
             # right side mirrored blocks
-            [200, 200, 120, 6],
-            [234, 200, 6, 80],
-
-            # lower channels
-            [110, 360, 6, 180],
-            [204, 360, 6, 180],
+            [100, 200, 60, 6],
 
             # lower side pockets
-            [0, 360, 80, 6],
-            [0, 520, 80, 6],
-
-            [240, 360, 80, 6],
-            [240, 520, 80, 6],
+            [0, 360, 40, 6],
+            [120, 360, 40, 6],
 
             # bottom
-            [0, 594, 320, 6]
+            [0, 594, 160, 6]
         ]
 
         left_level_0_walls = jnp.array(left_maze, dtype=jnp.int32)
@@ -1103,8 +1044,8 @@ class DarkChambersRenderer(JAXGameRenderer):
         #    [170, 420, 90, 6],
         #], dtype=jnp.int32)
 
-        # --- Hard-coded 4×4 cages (interior in nav cells) ---
-        self.CAGE_INTERIOR_CELLS = 4
+        # --- Hard-coded cage (slightly smaller than before) ---
+        self.CAGE_INTERIOR_CELLS = 3
         self.CAGE_WALL_THICKNESS = 4
         self.CAGE_DOOR_GAP = 16  # wider opening for smooth in/out
         self.CAGE_DOOR_SIZE = LADDER_WIDTH  # reuse ladder sizing for the door box
@@ -1183,10 +1124,19 @@ class DarkChambersRenderer(JAXGameRenderer):
             """Generate 1000+ candidate positions covering the playable area.
             Prioritizes upper regions but covers entire space."""
             candidates = []
+            top_side_candidates = []
             # Grid spacing for systematic coverage
             x_step = 8
             y_step = 8
             margin = 20  # Stay away from edges
+
+            # Strongly prioritize top side-channel placement first.
+            side_margin = 12
+            left_x = side_margin
+            right_x = self.consts.WORLD_WIDTH - cage_outer_size - side_margin
+            for y in [24, 40, 56, 72, 88, 104, 120, 136]:
+                top_side_candidates.append(jnp.array([left_x, y], dtype=jnp.int32))
+                top_side_candidates.append(jnp.array([right_x, y], dtype=jnp.int32))
             
             # Cover entire playable area with grid
             for y in range(margin, self.consts.WORLD_HEIGHT - cage_outer_size - margin, y_step):
@@ -1200,8 +1150,8 @@ class DarkChambersRenderer(JAXGameRenderer):
                 for x in range(margin, self.consts.WORLD_WIDTH - cage_outer_size - margin, x_step):
                     upper_candidates.append(jnp.array([x, y], dtype=jnp.int32))
             
-            # Return upper candidates first, then all others
-            return upper_candidates + [c for c in candidates if c[1] >= upper_y_limit]
+            # Return top side candidates first, then upper region, then remaining map.
+            return top_side_candidates + upper_candidates + [c for c in candidates if c[1] >= upper_y_limit]
 
         def add_cage(level_walls, candidate_origins):
             """Try multiple positions until one works. candidate_origins: list of [x,y] positions."""
