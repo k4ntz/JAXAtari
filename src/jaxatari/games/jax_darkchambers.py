@@ -3046,6 +3046,26 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 safe_x = jnp.where(in_portal_lane, safe_x, pos[0])
                 return jnp.array([safe_x, pos[1]], dtype=jnp.int32)
 
+            def enemy_in_keepout_zone(pos):
+                """Return True if pos is inside the portal keepout band (in a portal lane and too close to left/right edge)."""
+                portal_hole_height = 40
+                portal_gap = (self.consts.WORLD_HEIGHT - 3 * portal_hole_height) // 4
+                portal_y_starts = jnp.array([
+                    portal_gap,
+                    portal_gap * 2 + portal_hole_height,
+                    portal_gap * 3 + portal_hole_height * 2,
+                ], dtype=jnp.int32)
+                portal_y_ends = portal_y_starts + portal_hole_height
+                in_portal_lane = jnp.any(
+                    (pos[1] >= (portal_y_starts - self.consts.ENEMY_HEIGHT))
+                    & (pos[1] <= portal_y_ends)
+                )
+                min_x = self.consts.WALL_THICKNESS + ENEMY_PORTAL_KEEP_OUT_X
+                max_x = (self.consts.WORLD_WIDTH - self.consts.ENEMY_WIDTH
+                         - self.consts.WALL_THICKNESS - ENEMY_PORTAL_KEEP_OUT_X)
+                outside_x = (pos[0] < min_x) | (pos[0] > max_x)
+                return in_portal_lane & outside_x
+
             def move_enemy(enemy_pos, step_vec):
                 """Apply step with wall sliding (full, else x-only, else y-only) + clipping + portal wrap."""
                 cur = enemy_pos
@@ -3058,9 +3078,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 pos_x    = clip_and_portal_wrap_enemy(cur + step_x)
                 pos_y    = clip_and_portal_wrap_enemy(cur + step_y)
 
-                col_full = check_enemy_collision(pos_full)
-                col_x    = check_enemy_collision(pos_x)
-                col_y    = check_enemy_collision(pos_y)
+                col_full = check_enemy_collision(pos_full) | enemy_in_keepout_zone(pos_full)
+                col_x    = check_enemy_collision(pos_x)    | enemy_in_keepout_zone(pos_x)
+                col_y    = check_enemy_collision(pos_y)    | enemy_in_keepout_zone(pos_y)
 
                 use_full = ~col_full
                 use_x    = col_full & ~col_x
@@ -3070,7 +3090,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                     use_full, pos_full,
                     jnp.where(use_x, pos_x, jnp.where(use_y, pos_y, cur)),
                 )
-                return apply_enemy_portal_keepout(moved)
+                return moved
 
             def collides(px, py):
                 wx = WALLS[:, 0]
