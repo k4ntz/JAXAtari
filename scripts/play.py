@@ -249,6 +249,7 @@ def main():
                 print(f"Action: {ACTION_NAMES[int(action)]} ({int(action)})")
 
             obs, state, reward, done, info = jitted_step(state, action)
+            print(reward)
             if not execute_without_rendering:
                 image = jitted_render(state)
                 update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
@@ -314,6 +315,7 @@ def main():
 
         if not frame_by_frame or next_frame_asked:
             obs, state, reward, done, info = jitted_step(state, action)
+            print(reward)
             total_return += reward
             if next_frame_asked:
                 next_frame_asked = False

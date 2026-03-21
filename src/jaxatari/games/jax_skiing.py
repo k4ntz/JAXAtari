@@ -14,6 +14,9 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.spaces as spaces
 from jaxatari.modification import AutoDerivedConstants
 
+ORIGINAL_SCORES = jnp.array([1, 2, 2])
+USE_ORIGINAL_ALE_REWARD = True
+
 def _create_static_procedural_sprites() -> dict:
     """Creates procedural sprites that don't depend on dynamic values."""
     # Procedural white background
@@ -169,14 +172,14 @@ class SkiingState:
     trees: chex.Array
     rocks: chex.Array
     score: chex.Array
-    time: chex.Array
+    step_count: chex.Array
     direction_change_counter: chex.Array
     game_over: chex.Array
     key: chex.Array
-    collision_type: chex.Array  # 0 = keine, 1 = Baum, 2 = Stein, 3 = Flagge
+    collision_type: chex.Array  # 0 = none, 1 = tree, 2 = rock, 3 = flag
     flags_passed: chex.Array
-    collision_cooldown: chex.Array  # Frames, in denen Kollisionen ignoriert werden (Debounce nach Recovery)
-    gates_seen: chex.Array  # Anzahl der bereits verarbeiteten Gates (despawned)
+    collision_cooldown: chex.Array  # Frames where collisions are ignored (Debounce after recovery)
+    gates_seen: chex.Array  # Number of already processed gates (despawned)
 
 @struct.dataclass
 class SkiingObservation:
@@ -189,7 +192,7 @@ class SkiingObservation:
 
 @struct.dataclass
 class SkiingInfo:
-    time: jnp.ndarray
+    step_count: jnp.ndarray
 
 
 class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, SkiingConstants]):
@@ -235,7 +238,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         c = self.consts
         k_flags, k_trees, k_rocks, new_key = jax.random.split(key, 4)
 
-        # Flags: y gleichmäßig verteilt, x zufällig
+        # Flags: evenly distributed y
         y_spacing = float(c.gate_vertical_spacing)
         i = jnp.arange(c.max_num_flags, dtype=jnp.float32)
         flags_y = (i + 1.0) * y_spacing + float(c.flag_height)
@@ -244,9 +247,9 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         # [deterministic]             minval=int(c.flag_width),
         # [deterministic]             maxval=int(c.screen_width - c.flag_width - c.flag_distance) + 1
         # [deterministic]         ).astype(jnp.float32)
-        # Deterministic left-flag x-position: scan across lane with fixed step
-        min_fx = jnp.int32(self.consts.flag_width)
-        max_fx = jnp.int32(self.consts.screen_width - self.consts.flag_width - self.consts.flag_distance)
+        # Deterministic left-flag x-position: between 50 and 110
+        min_fx = jnp.int32(50)
+        max_fx = jnp.int32(110)
         span_fx = max_fx - min_fx + 1
         # simple sawtooth pattern using step 13
         flags_x = (min_fx + ((jnp.arange(c.max_num_flags, dtype=jnp.int32) * 13) % span_fx)).astype(jnp.float32)
@@ -264,11 +267,10 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         # [deterministic]             minval=int(c.tree_width),
         # [deterministic]             maxval=int(c.screen_width - c.tree_width) + 1
         # [deterministic]         ).astype(jnp.float32)
-        # Deterministic tree x-position: stride 17 across lane
-        min_tx = jnp.int32(self.consts.tree_width)
-        max_tx = jnp.int32(self.consts.screen_width - self.consts.tree_width)
-        span_tx = max_tx - min_tx + 1
-        trees_x = (min_tx + ((jnp.arange(c.max_num_trees, dtype=jnp.int32) * 17) % span_tx)).astype(jnp.float32)
+        # Deterministic tree x-position: either [-6, 60] or [100, 170]
+        # Use a large prime step (101) so they scatter across both sides
+        tree_val = (jnp.arange(c.max_num_trees, dtype=jnp.int32) * 101) % 138
+        trees_x = jnp.where(tree_val <= 66, -6.0 + tree_val, 100.0 + (tree_val - 67)).astype(jnp.float32)
         # [deterministic]         trees_y = jax.random.randint(
         # [deterministic]             k_trees, (c.max_num_trees,),
         # [deterministic]             minval=int(c.tree_height),
@@ -281,12 +283,14 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         trees_y = jnp.round(trees_y).astype(jnp.float32)
 
         min_sep_tree = 0.5*(jnp.float32(c.tree_width)+jnp.float32(c.tree_width)) + jnp.float32(c.sep_margin_tree_tree)
-        xmin = jnp.float32(c.tree_width)
-        xmax = jnp.float32(c.screen_width - c.tree_width)
+        xmin = jnp.float32(-6.0)
+        xmax = jnp.float32(170.0)
 
         def adj_tree_i(i, tx):
             x0 = tx[i]
             x_adj = _enforce_min_sep_x(x0, tx, min_sep_tree, xmin, xmax, n_valid=jnp.array(i, dtype=jnp.int32))
+            # Strictly enforce the forbidden gap (60, 100)
+            x_adj = jnp.where((x_adj > 60.0) & (x_adj < 100.0), jnp.where(x_adj < 80.0, 60.0, 100.0), x_adj)
             return tx.at[i].set(x_adj)
 
         trees_x = jax.lax.fori_loop(0, c.max_num_trees, adj_tree_i, trees_x)
@@ -357,7 +361,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             trees=trees,
             rocks=rocks,
             score=jnp.array(20, dtype=jnp.int32),
-            time=jnp.array(0, dtype=jnp.int32),
+            step_count=jnp.array(0, dtype=jnp.int32),
             direction_change_counter=jnp.array(0, dtype=jnp.int32),
             game_over=jnp.array(False),
             key=new_key,
@@ -371,7 +375,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         return obs, state
     
     def render(self, state: SkiingState) -> jnp.ndarray:
-        """Delegiert an den SkiingRenderer, sodass play.py ein RGB-Frame bekommt."""
+        """Delegates to SkiingRenderer so play.py receives an RGB frame."""
         return self.renderer.render(state)
 
     def _create_new_objs(self, state, new_flags, new_trees, new_rocks):
@@ -380,21 +384,21 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         k = state.key
 
         def check_flags(i, flags):
-            # neue x-Position innerhalb des gültigen Bereichs
+            # new x-position within the valid range
             # [deterministic]             x_flag = jax.random.randint(
             # [deterministic]                 k1.at[i].get(), [],
             # [deterministic]                 self.config.flag_width,
             # [deterministic]                 self.config.screen_width - self.config.flag_width - self.config.flag_distance
             # [deterministic]             ).astype(jnp.float32)
             # Deterministic left-flag x based on gates_seen and loop index
-            min_fx = jnp.int32(self.consts.flag_width)
-            max_fx = jnp.int32(self.consts.screen_width - self.consts.flag_width - self.consts.flag_distance)
+            min_fx = jnp.int32(50)
+            max_fx = jnp.int32(110)
             span_fx = max_fx - min_fx + 1
             step_fx = 13
             x_flag = (min_fx + (((state.gates_seen + i) * step_fx) % span_fx)).astype(jnp.float32)
 
-            # Konstanter Vertikalabstand: immer hinter die aktuell tiefste Flagge spawnen
-            # Berücksichtigt sowohl bereits neu gesetzte Flags (new_flags) als auch bestehende (flags)
+            # Constant vertical distance: always spawn behind the currently lowest flag
+            # Considers both newly placed flags (new_flags) and existing ones (flags)
             base_existing = jnp.maximum(jnp.max(new_flags[:, 1]), jnp.max(flags[:, 1]))
             y = base_existing + jnp.float32(self.consts.gate_vertical_spacing)
 
@@ -402,10 +406,10 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             # When state.gates_seen >= 18, we have already spawned up to gate 19.
             y = jnp.where(state.gates_seen >= 18, jnp.float32(10000.0), y)
 
-            row_old = flags.at[i].get()  # Shape (2,) oder (4,)
+            row_old = flags.at[i].get()  # Shape (2,) or (4,)
             row_new = row_old.at[0].set(x_flag).at[1].set(y)
 
-            # Nur respawnen, wenn Flagge oberhalb TOP_BORDER despawned ist
+            # Only respawn if the flag despawned above TOP_BORDER
             cond = jnp.less(flags.at[i, 1].get(), self.consts.TOP_BORDER)
             out_row = jax.lax.cond(cond, lambda _: row_new, lambda _: row_old, operand=None)
             return flags.at[i].set(out_row)
@@ -422,28 +426,27 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             # [deterministic]                 self.config.tree_width,
             # [deterministic]                 self.config.screen_width - self.config.tree_width
             # [deterministic]             ).astype(jnp.float32)
-            # Deterministic tree x based on gates_seen and index i, different step to avoid overlap
-            min_tx = jnp.int32(self.consts.tree_width)
-            max_tx = jnp.int32(self.consts.screen_width - self.consts.tree_width)
-            span_tx = max_tx - min_tx + 1
-            step_tx = 17
-            x_tree = (min_tx + (((state.gates_seen + i) * step_tx) % span_tx)).astype(jnp.float32)
+            # Deterministic tree x based on gates_seen and index i, either [-6, 60] or [100, 170]
+            step_tx = 101
+            tree_val = ((state.gates_seen * 13 + i * 23) * step_tx) % 138
+            x_tree = jnp.where(tree_val <= 66, -6.0 + tree_val, 100.0 + (tree_val - 67)).astype(jnp.float32)
 
-            base_y = (jnp.max(new_flags[:, 1]) 
-                      + jnp.float32(self.consts.gate_vertical_spacing) / 2.0 
-                      + jnp.float32(self.consts.min_y_offset_tree_vs_rock))
-            delta_y = jnp.float32(15.0)  # small vertical stagger (pixels), deterministic
-            y = base_y + (jnp.array(i, dtype=jnp.float32) * delta_y)
+            base_existing = jnp.maximum(jnp.max(new_trees[:, 1]), jnp.max(trees[:, 1]))
+            step_ty = jnp.float32(self.consts.gate_vertical_spacing) / jnp.float32(max(1, self.consts.max_num_trees))
+            y = base_existing + step_ty
+            y = jnp.where(state.gates_seen >= 18, jnp.float32(10000.0), y)
 
             # Enforce min separation from existing trees and rocks on respawn (X only)
             min_sep_tree_tree = (jnp.float32(self.consts.tree_width) + jnp.float32(self.consts.tree_width)) * 0.5 + jnp.float32(8.0)
             min_sep_tree_rock = (jnp.float32(self.consts.tree_width) + jnp.float32(self.consts.rock_width)) * 0.5 + jnp.float32(8.0)
-            xmin_t = jnp.float32(self.consts.tree_width)
-            xmax_t = jnp.float32(self.consts.screen_width - self.consts.tree_width)
+            xmin_t = jnp.float32(-6.0)
+            xmax_t = jnp.float32(170.0)
             taken_from_trees = trees[:, 0]
             taken_from_rocks = new_rocks[:, 0]
             x_tree = _enforce_min_sep_x(x_tree, taken_from_trees, min_sep_tree_tree, xmin_t, xmax_t, n_valid=jnp.array(i, dtype=jnp.int32))
             x_tree = _enforce_min_sep_x(x_tree, taken_from_rocks, min_sep_tree_rock, xmin_t, xmax_t, n_valid=jnp.array(taken_from_rocks.shape[0], dtype=jnp.int32))
+            # Strictly enforce the forbidden gap (60, 100)
+            x_tree = jnp.where((x_tree > 60.0) & (x_tree < 100.0), jnp.where(x_tree < 80.0, 60.0, 100.0), x_tree)
 
             row_old = trees.at[i].get()
             
@@ -473,7 +476,10 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             span_rx = max_rx - min_rx + 1
             step_rx = 19
             x_rock = (min_rx + (((state.gates_seen + i) * step_rx) % span_rx)).astype(jnp.float32)
-            y = (jnp.max(new_flags[:, 1]) + jnp.float32(self.consts.gate_vertical_spacing) / 2.0 + jnp.float32(self.consts.min_y_offset_tree_vs_rock))
+            base_existing = jnp.maximum(jnp.max(new_rocks[:, 1]), jnp.max(rocks[:, 1]))
+            step_ry = jnp.float32(self.consts.gate_vertical_spacing) / jnp.float32(max(1, self.consts.max_num_rocks))
+            y = base_existing + step_ry
+            y = jnp.where(state.gates_seen >= 18, jnp.float32(10000.0), y)
 
             # Enforce separation from existing rocks and trees on respawn
             min_sep_rock_rock = 0.5*(jnp.float32(self.consts.rock_width)+jnp.float32(self.consts.rock_width)) + jnp.float32(self.consts.sep_margin_rock_rock)
@@ -561,13 +567,13 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         )
         skier_pos = new_skier_pos
 
-        # 2) Basisgeschwindigkeiten
+        # 2) Base speeds
         dx_target = side_speed.at[skier_pos].get()
         dy_target = down_speed.at[skier_pos].get()
 
         in_recovery = jnp.greater(state.skier_fell, 0)
 
-        # Recovery: Front, x=0, y wie front
+        # Recovery: Face front, 0 horizontal speed, y speed same as front
         skier_pos = jax.lax.select(in_recovery, jnp.array(3), skier_pos)
         dx_target = jax.lax.select(in_recovery, jnp.array(0.0, dtype=jnp.float32), dx_target)
         dy_target = jax.lax.select(in_recovery, down_speed.at[3].get(), dy_target)
@@ -605,8 +611,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             x_speed_next
         )
         new_skier_y_speed_nom = y_speed_next
-        # --- First-frame jitter guard: freeze world & lateral motion on time==0
-        first_frame = jnp.equal(state.time, jnp.int32(0))
+        # --- First-frame jitter guard: freeze world & lateral motion on step_count==0
+        first_frame = jnp.equal(state.step_count, jnp.int32(0))
         eff_x_speed_nom = jax.lax.select(first_frame, jnp.array(0.0, jnp.float32), new_skier_x_speed_nom)
         eff_y_speed_nom = jax.lax.select(first_frame, jnp.array(0.0, jnp.float32), new_skier_y_speed_nom)
 
@@ -614,11 +620,11 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         max_x = self.consts.screen_width - self.consts.skier_width / 2
         new_x_nom = jnp.clip(state.skier_x + eff_x_speed_nom, min_x, max_x)
 
-        # 3) Welt – zunächst "nominal" bewegen (für Kollisionsprüfung),
-        #    Freeze wird nach Kollisionsentscheidung angewandt.
+        # 3) World - move "nominally" first (for collision detection),
+        #    Freeze is applied after collision decision.
         # Tree-specific first-frames guard to avoid residual jitter
 
-        first_two_frames = jnp.less_equal(state.time, jnp.int32(1))
+        first_two_frames = jnp.less_equal(state.step_count, jnp.int32(1))
 
         eff_y_speed_trees = jax.lax.select(first_two_frames, jnp.array(0.0, jnp.float32), eff_y_speed_nom)
 
@@ -626,7 +632,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         new_rocks_nom = state.rocks.at[:, 1].add(-eff_y_speed_nom)
         new_flags_nom = state.flags.at[:, 1].add(-eff_y_speed_nom)
 
-        # 5) Kollisionen (seitliche Annäherung abfangen)
+        # 5) Collisions (intercept lateral approach)
         skier_y_px = jnp.round(self.consts.skier_y)
 
         def coll_tree(tree_pos, x_d=TREE_X_DIST, y_d=Y_HIT_DIST):
@@ -664,7 +670,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         # We keep spawning/rendering rocks, but they never register a hit.
         collisions_rock = jnp.zeros_like(collisions_rock, dtype=collisions_rock.dtype)
         
-        # Während Recovery ODER Cooldown keine neuen Kollisionen auslösen
+        # Do not trigger new collisions during recovery OR cooldown
         ignore_collisions = jnp.logical_or(in_recovery, jnp.greater(state.collision_cooldown, 0))
         collisions_tree = jnp.where(ignore_collisions, jnp.zeros_like(collisions_tree), collisions_tree)
         collisions_rock = jnp.where(ignore_collisions, jnp.zeros_like(collisions_rock), collisions_rock)
@@ -674,20 +680,20 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         collided_rock = jnp.sum(collisions_rock) > 0
         collided_flag = jnp.sum(collisions_flag) > 0
 
-        # Recovery bei *jeder* Hinderniskollision (Baum/Stein/Flagge)
+        # Recovery on *any* obstacle collision (tree/rock/flag)
         start_recovery = jnp.logical_and(
             jnp.logical_not(in_recovery),
             jnp.logical_or(jnp.logical_or(collided_tree, collided_rock), collided_flag),
         )
         freeze = jnp.logical_or(in_recovery, start_recovery)
 
-        # Zusätzlich: Im Startframe der Recovery Kollisionen ignorieren,
-        # um Doppel-Treffer ohne visuelle Separation zu vermeiden.
+        # Additionally: Ignore collisions in the recovery start frame,
+        # to avoid double hits without visual separation.
         mask_now = jnp.logical_or(ignore_collisions, start_recovery)
         collisions_tree = jnp.where(mask_now, jnp.zeros_like(collisions_tree), collisions_tree)
         collisions_rock = jnp.where(mask_now, jnp.zeros_like(collisions_rock), collisions_rock)
         collisions_flag = jnp.where(mask_now, jnp.zeros_like(collisions_flag), collisions_flag)
-        # Freeze ohne Repositionierung: Hindernisse bleiben an Ort und Stelle
+        # Freeze without repositioning: Obstacles stay in place
         freeze_flags = state.flags
         freeze_trees = state.trees
         freeze_rocks = state.rocks
@@ -705,13 +711,13 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
                                    operand=None),
             operand=None,
         )
-        # Kollisions-Entprellung: Nach Recovery-Ende noch kurz Kollisionen ignorieren
+        # Collision debounce: Briefly ignore collisions after recovery ends
         COOLDOWN_FRAMES = jnp.int32(10)
         new_collision_cooldown = jax.lax.cond(
-            # Wenn gerade Recovery endet (vorher >0, jetzt ==0) → Cooldown setzen
+            # If recovery just ended (was >0, now ==0) -> set cooldown
             jnp.logical_and(in_recovery, jnp.equal(new_skier_fell, 0)),
             lambda _: COOLDOWN_FRAMES,
-            # sonst Count-down laufen lassen (nicht negativ)
+            # else countdown (not negative)
             lambda _: jnp.maximum(state.collision_cooldown - 1, 0),
             operand=None
         )
@@ -741,7 +747,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
 
 
         
-        # 8) Gate-Scoring & Missed-Penalty (erst JETZT, nach finalen Flag-Positionen)
+        # 8) Gate scoring (happens NOW, after final flag positions)
         left_x  = state.flags[:, 0]
         right_x = left_x + self.consts.flag_distance
 
@@ -751,7 +757,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         gate_pass = jnp.logical_and(eligible, jnp.logical_and(crossed, jnp.logical_not(state.flags_passed)))
         flags_passed = jnp.logical_or(state.flags_passed, gate_pass)
 
-        # Despawn/Strafe nur anhand der "gefreezten" (finalen) Flags berechnen
+        # Calculate despawn based only on the "frozen" (final) flags
         despawn_mask = new_flags[:, 1] < self.consts.TOP_BORDER
         # missed_penalty_mask = jnp.logical_and(despawn_mask, jnp.logical_not(flags_passed))
         # missed_penalty_count = jnp.sum(missed_penalty_mask)
@@ -759,10 +765,10 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         flags_passed = jnp.where(despawn_mask, False, flags_passed)
 
 
-        # Gates-Zähler inkrementieren: jedes despawnte Gate zählt als gesehen
+        # Increment gate counter: every despawned gate counts as seen
         gates_increment = jnp.sum(despawn_mask).astype(jnp.int32)
         new_gates_seen = state.gates_seen + gates_increment
-        # Respawns/Despawns nur, wenn NICHT gefreezt
+        # Respawns/Despawns only when NOT frozen
         new_flags, new_trees, new_rocks, new_key = jax.lax.cond(
             freeze,
             lambda _: (new_flags, new_trees, new_rocks, state.key),
@@ -770,15 +776,15 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             operand=None
         )
 
-        # Score/Time aktualisieren (nur Gates zählen)
+        # Update score/step_count (only gates count)
         gates_scored = jnp.sum(gate_pass)
         new_score = state.score - gates_scored
         game_over = jnp.greater_equal(new_gates_seen, 20)
-        new_time = jax.lax.cond(
-            jnp.greater(state.time, 9223372036854775807 / 2),
+        new_step_count = jax.lax.cond(
+            jnp.greater(state.step_count, 9223372036854775807 / 2),
             lambda _: jnp.array(0, dtype=jnp.int32),
-            # lambda _: state.time + 1 + missed_penalty,
-            lambda _: state.time + 1,
+            # lambda _: state.step_count + 1 + missed_penalty,
+            lambda _: state.step_count + 1,
             operand=None,
         )
 
@@ -792,7 +798,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             trees=jnp.array(new_trees),
             rocks=jnp.array(new_rocks),
             score=new_score,
-            time=new_time,
+            step_count=new_step_count,
             direction_change_counter=direction_change_counter,
             game_over=game_over,
             key=new_key,
@@ -879,12 +885,15 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: SkiingState) -> SkiingInfo:
         return SkiingInfo(
-            time=state.time,
+            step_count=state.step_count,
         )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: SkiingState, state: SkiingState):
+        if USE_ORIGINAL_ALE_REWARD:
+            return ORIGINAL_SCORES[state.step_count%3]
         return previous_state.score - state.score
+
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: SkiingState) -> bool:
@@ -921,8 +930,8 @@ class RenderConfig:
     rock_color: Tuple[int, int, int] = (128, 128, 128)
     game_over_color: Tuple[int, int, int] = (255, 0, 0)
     
-    # Text-Overlay-Option: True = UI-Text via Pygame auf fertiges JAX-Frame
-    # False = JAX-Bitmap-Font
+    # Text overlay option: True = UI text via Pygame on finished JAX frame
+    # False = JAX bitmap font
     use_pygame_text: bool = False
 
 # Hard-coded bitmap font for procedural digit generation
@@ -1053,7 +1062,7 @@ class SkiingRenderer(JAXGameRenderer):
         return jnp.stack([tens, ones], axis=0)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _format_time_digits(self, t: jnp.ndarray) -> jnp.ndarray:
+    def _format_step_count_digits(self, t: jnp.ndarray) -> jnp.ndarray:
         t = jnp.maximum(t.astype(jnp.float32), 0.0)
         FPS = jnp.float32(60.0)
         seconds_total = t / FPS
@@ -1164,7 +1173,7 @@ class SkiingRenderer(JAXGameRenderer):
 
         # 7. Draw UI
         score_digits = self._format_score_digits(state.score)
-        time_digits  = self._format_time_digits(state.time)
+        step_count_digits  = self._format_step_count_digits(state.step_count)
         
         # Center score
         num_glyphs_score = score_digits.shape[0]
@@ -1178,16 +1187,16 @@ class SkiingRenderer(JAXGameRenderer):
             max_digits=num_glyphs_score
         )
         
-        # Center time
-        num_glyphs_time = time_digits.shape[0]
-        total_w_time = num_glyphs_time * self.glyph_width + (num_glyphs_time - 1) * self.glyph_spacing
-        left_time = (self.consts.screen_width - total_w_time) // 2
+        # Center step_count
+        num_glyphs_step_count = step_count_digits.shape[0]
+        total_w_step_count = num_glyphs_step_count * self.glyph_width + (num_glyphs_step_count - 1) * self.glyph_spacing
+        left_step_count = (self.consts.screen_width - total_w_step_count) // 2
         
         raster = self.jr.render_label(
-            raster, left_time, 2 + self.glyph_height + 2, time_digits,
+            raster, left_step_count, 2 + self.glyph_height + 2, step_count_digits,
             self.SHAPE_MASKS['digits'], 
             spacing=self.glyph_width + self.glyph_spacing,
-            max_digits=num_glyphs_time
+            max_digits=num_glyphs_step_count
         )
         
         # 8. Final conversion
