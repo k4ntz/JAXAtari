@@ -4,11 +4,11 @@ import chex
 import jax
 import jax.numpy as jnp
 import numpy as np
+from flax import struct
 from jax import lax
-from dataclasses import dataclass
-from typing import Tuple, NamedTuple, List, Dict, Optional, Any
+from typing import Tuple, List, Dict, Optional, Any
 
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
@@ -345,7 +345,8 @@ def step_lfsr(b: jnp.ndarray, fn, n_steps: jnp.ndarray) -> jnp.ndarray:
 
     return lax.fori_loop(0, n_steps.astype(jnp.int32), body, b)
 
-class PitfallState(NamedTuple):
+@struct.dataclass
+class PitfallState:
     screen_id: chex.Array
     room_byte: chex.Array
 
@@ -377,8 +378,7 @@ class PitfallState(NamedTuple):
     respawn_target_y: chex.Array
     respawn_target_ground_y: chex.Array
 
-
-class PitfallConstants(NamedTuple):
+class PitfallConstants(struct.PyTreeNode):
     screen_width: int = 160     # Atari 2600 horizontal resolution
     screen_height: int = 210   # Atari vertical resolution used in ALE
     ground_y: int = 130         # approximate ground line in pixels
@@ -460,7 +460,8 @@ class PitfallConstants(NamedTuple):
 
 
 
-class PitfallObservation(NamedTuple):
+@struct.dataclass
+class PitfallObservation:
     player_x: chex.Array
     player_y: chex.Array
     time_left: chex.Array
@@ -468,11 +469,13 @@ class PitfallObservation(NamedTuple):
     score: chex.Array
     timer_started: chex.Array
 
-class PitfallInfo(NamedTuple):
+@struct.dataclass
+class PitfallInfo:
     time_left: chex.Array
     lives_left: chex.Array
 
-class ScreenLayout(NamedTuple):
+@struct.dataclass
+class ScreenLayout:
     has_ladder: chex.Array
     ladder_x: chex.Array
     has_wall: chex.Array
@@ -1366,7 +1369,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             transition_state,
         )
         final_done = (final_state.time_left <= 0) | ((final_state.lives_left <= 0) & (final_state.respawn_phase == jnp.int32(0)))
-        final_state = final_state._replace(done=final_done)
+        final_state = final_state.replace(done=final_done)
 
         obs = self._get_observation(final_state)
         reward = self._get_reward(state, final_state)
@@ -1411,9 +1414,6 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
     def render(self, state: PitfallState) -> jnp.ndarray:
         return self.renderer.render(state)
-
-    def obs_to_flat_array(self, obs: PitfallObservation) -> jnp.ndarray:
-        raise NotImplementedError
 
     def _init_state(self) -> PitfallState:
         consts = self.consts
