@@ -507,16 +507,8 @@ class TutankhamState(struct.PyTreeNode):
 
 
 class TutankhamObservation(struct.PyTreeNode):
-    player: ObjectObservation      # single player object
-    creatures: ObjectObservation   # (MAX_CREATURES=2,) creatures
-    items: ObjectObservation       # (7,) collectible items
-    bullet: ObjectObservation      # single bullet
-    lives: jnp.ndarray
-    score: jnp.ndarray
-    level: jnp.ndarray
-    laser_flash_count: jnp.ndarray
-    ammo: jnp.ndarray              # remaining ammunition timer
-    has_key: jnp.ndarray
+    # Dummy observation — pixel training uses render() via PixelObsWrapper instead.
+    dummy: jnp.ndarray
 
 
 
@@ -1745,24 +1737,10 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         return spaces.Discrete(len(self.action_set))
 
 
-    def observation_space(self) -> spaces.Dict:
-        # Y positions are in scrolling map space (up to ~800px tall); X is screen-width.
-        map_screen = (800, self.consts.WIDTH)
-        screen = (self.consts.HEIGHT, self.consts.WIDTH)
-        n_creatures = self.consts.MAX_CREATURES
-        n_items = int(jnp.max(self.consts.MAP_N_ITEMS))  # max items across all maps (7)
-        return spaces.Dict({
-            "player": spaces.get_object_space(n=None, screen_size=map_screen),
-            "creatures":spaces.get_object_space(n=n_creatures, screen_size=map_screen),
-            "items": spaces.get_object_space(n=n_items, screen_size=map_screen),
-            "bullet": spaces.get_object_space(n=None, screen_size=screen),
-            "lives": spaces.Box(low=0, high=self.consts.PLAYER_LIVES, shape=(), dtype=jnp.int32),
-            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
-            "level": spaces.Box(low=0, high=15, shape=(), dtype=jnp.int32),
-            "laser_flash_count": spaces.Box(low=0, high=self.consts.MAX_LASER_FLASHES, shape=(), dtype=jnp.int32),
-            "ammo": spaces.Box(low=0, high=int(jnp.max(self.consts.LEVEL_AMMO_SUPPLY)), shape=(), dtype=jnp.int32),
-            "has_key": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-        })
+    def observation_space(self) -> spaces.Box:
+        # Pixel-only training: PixelObsWrapper ignores this and builds its own
+        # space from image_space(). This dummy satisfies AtariWrapper.__init__.
+        return spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32)
     
 
     def image_space(self) -> spaces.Box:
@@ -1776,60 +1754,8 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: TutankhamState) -> TutankhamObservation:
-        player = ObjectObservation.create(
-            x=jnp.array(state.player_x, dtype=jnp.int32),
-            y=jnp.array(state.player_y, dtype=jnp.int32),
-            width=self.consts.PLAYER_SIZE[0],
-            height=self.consts.PLAYER_SIZE[1],
-            state=jnp.array(state.has_key, dtype=jnp.int32),        # 1 if player holds key
-            orientation=jnp.array(state.player_direction, dtype=jnp.int32),
-        )
-
-        # creature_states: (MAX_CREATURES, 6) — (x, y, creature_type, active, direction, death_timer)
-        creatures = ObjectObservation.create(
-            x=state.creature_states[:, 0],
-            y=state.creature_states[:, 1],
-            width=jnp.full((self.consts.MAX_CREATURES,), self.consts.CREATURE_SIZE[0], dtype=jnp.int32),
-            height=jnp.full((self.consts.MAX_CREATURES,), self.consts.CREATURE_SIZE[1], dtype=jnp.int32),
-            active=state.creature_states[:, 3],
-            visual_id=state.creature_states[:, 2], # creature type (SNAKE, BAT, …)
-            state=state.creature_states[:, 5], # death_timer
-            orientation=state.creature_states[:, 4], # movement direction
-        )
-
-        # item_states: (N_ITEMS, 4) — (x, y, item_type, active)
-        n_items = state.item_states.shape[0]
-        items = ObjectObservation.create(
-            x=state.item_states[:, 0],
-            y=state.item_states[:, 1],
-            width=jnp.full((n_items,), self.consts.ITEM_SIZE[0], dtype=jnp.int32),
-            height=jnp.full((n_items,), self.consts.ITEM_SIZE[1], dtype=jnp.int32),
-            active=state.item_states[:, 3],
-            visual_id=state.item_states[:, 2],                       # item type
-        )
-
-        # bullet_state: (5,) — (x, y, bullet_rotation, bullet_active, anim_counter)
-        bullet = ObjectObservation.create(
-            x=jnp.array(state.bullet_state[0], dtype=jnp.int32),
-            y=jnp.array(state.bullet_state[1], dtype=jnp.int32),
-            width=self.consts.BULLET_SIZE[0],
-            height=self.consts.BULLET_SIZE[1],
-            active=jnp.array(state.bullet_state[3], dtype=jnp.int32),
-            orientation=jnp.array(state.bullet_state[2], dtype=jnp.int32),  # bullet rotation
-        )
-
-        return TutankhamObservation(
-            player=player,
-            creatures=creatures,
-            items=items,
-            bullet=bullet,
-            lives=jnp.array(state.player_lives, dtype=jnp.int32),
-            score=jnp.array(state.tutankham_score, dtype=jnp.int32),
-            level=jnp.array(state.level, dtype=jnp.int32),
-            laser_flash_count=jnp.array(state.laser_flash_count, dtype=jnp.int32),
-            ammo=jnp.array(state.amonition_timer, dtype=jnp.int32),
-            has_key=jnp.array(state.has_key, dtype=jnp.int32),
-        )
+        # Pixel-only training: this obs is discarded by PixelObsWrapper.
+        return TutankhamObservation(dummy=jnp.array(0.0))
     
     
     @partial(jax.jit, static_argnums=(0,))
