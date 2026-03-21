@@ -171,8 +171,8 @@ ITEM_HAMMER = 18        # Kills all enemies within radius; limited uses per epis
 # Level configuration
 MAX_LEVELS = 7          # Total number of levels (0..6)
 LADDER_INTERACTION_TIME = 60  # Steps player must stand on ladder to change level
-LADDER_WIDTH = 12       # Larger than regular items
-LADDER_HEIGHT = 12
+LADDER_WIDTH = 8        # Matches stairs.npy natural width
+LADDER_HEIGHT = 28      # Matches stairs.npy natural height
 
 # Bomb configuration
 MAX_BOMBS = 15          # Maximum bombs player can carry
@@ -754,8 +754,6 @@ class DarkChambersRenderer(JAXGameRenderer):
             "pot": "pot",          # ITEM_SHIELD (shield icon)
             "skull": "skull",      # ITEM_POISON
             "trapdoor": "trapdoor", # ITEM_TRAP
-            "stairs": "stairs",    # ITEM_LADDER_UP
-            "stairs_down": "stairs", # ITEM_LADDER_DOWN (use same stairs sprite)
             "apple": "apple",      # ITEM_HEART
             "barrel": "barrel",    # ITEM_BOMB
             "candle": "candle",    # ITEM_AMBER_CHALICE
@@ -770,6 +768,15 @@ class DarkChambersRenderer(JAXGameRenderer):
                 print(f"Scaled {sprite_name} to {target_item_h}×{target_item_w}")
             else:
                 self.ITEM_SCALED_MASKS[item_key] = None
+
+        # Stairs sprite uses natural dimensions (LADDER_HEIGHT tall × LADDER_WIDTH wide)
+        stairs_mask = self.SHAPE_MASKS.get("stairs")
+        if stairs_mask is not None:
+            self.ITEM_SCALED_MASKS["stairs"] = _scale_mask(stairs_mask, LADDER_HEIGHT, LADDER_WIDTH)
+            self.ITEM_SCALED_MASKS["stairs_down"] = _scale_mask(stairs_mask, LADDER_HEIGHT, LADDER_WIDTH)
+        else:
+            self.ITEM_SCALED_MASKS["stairs"] = None
+            self.ITEM_SCALED_MASKS["stairs_down"] = None
 
         # --- Spawner as skull: scale skull sprite to 14x28 for spawner (2:1 aspect, original width) ---
         skull_mask = self.SHAPE_MASKS.get("skull")
@@ -1100,7 +1107,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         self.CAGE_INTERIOR_CELLS = 3
         self.CAGE_WALL_THICKNESS = 4
         self.CAGE_DOOR_GAP = 16  # wider opening for smooth in/out
-        self.CAGE_DOOR_SIZE = LADDER_WIDTH  # reuse ladder sizing for the door box
+        self.CAGE_DOOR_SIZE = 12  # independent of ladder sprite size
         cage_interior_size = self.CAGE_INTERIOR_CELLS * CELL_SIZE
         cage_outer_size = cage_interior_size + 2 * self.CAGE_WALL_THICKNESS
         self.CAGE_OUTER_SIZE = cage_outer_size
@@ -1478,7 +1485,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             [6, 6],                 # 11 KEY (small key)
             [LADDER_WIDTH, LADDER_HEIGHT],  # 12 LADDER_UP (larger)
             [LADDER_WIDTH, LADDER_HEIGHT],  # 13 LADDER_DOWN (larger)
-            [LADDER_WIDTH, LADDER_HEIGHT],  # 14 CAGE_DOOR (box-sized door)
+            [12, 12],                       # 14 CAGE_DOOR (box-sized door)
             [8, 8],                 # 15 SPEED_POTION (medium)
             [8, 8],                 # 16 HEAL_POTION (medium)
             [8, 8],                 # 17 POISON_POTION (medium)
@@ -3637,7 +3644,15 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             
             item_collisions = jax.vmap(check_item_collision)(state.item_positions)
             item_collisions = item_collisions & (state.item_active == 1)
-            
+
+            def check_ladder_collision(item_pos):
+                overlap_x = (new_x <= (item_pos[0] + LADDER_WIDTH - 1)) & ((new_x + self.consts.PLAYER_WIDTH - 1) >= item_pos[0])
+                overlap_y = (new_y <= (item_pos[1] + LADDER_HEIGHT - 1)) & ((new_y + self.consts.PLAYER_HEIGHT - 1) >= item_pos[1])
+                return overlap_x & overlap_y
+
+            ladder_collisions = jax.vmap(check_ladder_collision)(state.item_positions)
+            ladder_collisions = ladder_collisions & (state.item_active == 1)
+
             # Apply item effects
             collected_hearts = jnp.sum(item_collisions & (state.item_types == ITEM_HEART))
             collected_poison = jnp.sum(item_collisions & (state.item_types == ITEM_POISON))
@@ -3696,8 +3711,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             new_hammer_count = jnp.clip(state.hammer_count + collected_hammers, 0, MAX_HAMMERS)
 
             # Ladder interaction: check if player is standing on a ladder
-            on_ladder_up = jnp.any(item_collisions & (state.item_types == ITEM_LADDER_UP))
-            on_ladder_down = jnp.any(item_collisions & (state.item_types == ITEM_LADDER_DOWN))
+            on_ladder_up = jnp.any(ladder_collisions & (state.item_types == ITEM_LADDER_UP))
+            on_ladder_down = jnp.any(ladder_collisions & (state.item_types == ITEM_LADDER_DOWN))
             on_any_ladder = on_ladder_up | on_ladder_down
             
             # Update ladder timer: increment if on ladder, reset if not
