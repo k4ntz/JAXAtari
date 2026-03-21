@@ -152,7 +152,7 @@ class SkiingConstants(AutoDerivedConstants):
     min_y_offset_tree_vs_rock: float = struct.field(pytree_node=False, default=8.0)
     max_num_flags: int = struct.field(pytree_node=False, default=2)
     max_num_trees: int = struct.field(pytree_node=False, default=4)
-    max_num_rocks: int = struct.field(pytree_node=False, default=3)
+    max_num_rocks: int = struct.field(pytree_node=False, default=2)
     speed: float = struct.field(pytree_node=False, default=1.0)
 
     # Asset config baked into constants (immutable default) for asset overrides
@@ -238,10 +238,12 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         c = self.consts
         k_flags, k_trees, k_rocks, new_key = jax.random.split(key, 4)
 
-        # Flags: evenly distributed y
-        y_spacing = float(c.gate_vertical_spacing)
-        i = jnp.arange(c.max_num_flags, dtype=jnp.float32)
-        flags_y = (i + 1.0) * y_spacing + float(c.flag_height)
+        row_spacing = jnp.float32(31.0)
+        base_y = jnp.float32(60.0)
+
+        # Flags: r = 3, 7 in the repeating sequence
+        r_flags = jnp.array([3, 7], dtype=jnp.float32)
+        flags_y = base_y + r_flags * row_spacing
         # [deterministic]         flags_x = jax.random.randint(
         # [deterministic]             k_flags, (c.max_num_flags,),
         # [deterministic]             minval=int(c.flag_width),
@@ -276,11 +278,9 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         # [deterministic]             minval=int(c.tree_height),
         # [deterministic]             maxval=int(c.screen_height - c.tree_height) + 1
         # [deterministic]         ).astype(jnp.float32)
-        # Deterministic tree y-position: evenly spaced between gates (already unique)
-        base_ty = flags_y[0] - jnp.float32(self.consts.gate_vertical_spacing) * 0.5
-        step_ty = jnp.float32(self.consts.gate_vertical_spacing) / jnp.float32(max(1, c.max_num_trees))
-        trees_y = (base_ty + jnp.arange(c.max_num_trees, dtype=jnp.float32) * step_ty).astype(jnp.float32)
-        trees_y = jnp.round(trees_y).astype(jnp.float32)
+        # Deterministic tree y-position: r = 0, 1, 4, 5
+        r_trees = jnp.array([0, 1, 4, 5], dtype=jnp.float32)
+        trees_y = base_y + r_trees * row_spacing
 
         min_sep_tree = 0.5*(jnp.float32(c.tree_width)+jnp.float32(c.tree_width)) + jnp.float32(c.sep_margin_tree_tree)
         xmin = jnp.float32(-6.0)
@@ -321,11 +321,9 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         # [deterministic]             minval=int(c.rock_height),
         # [deterministic]             maxval=int(c.screen_height - c.rock_height) + 1
         # [deterministic]         ).astype(jnp.float32)
-        # Deterministic rock y-position: offset from trees_y for alternation
-        base_ry = flags_y[0] - jnp.float32(self.consts.gate_vertical_spacing) * 0.25
-        step_ry = jnp.float32(self.consts.gate_vertical_spacing) / jnp.float32(max(1, c.max_num_rocks))
-        rocks_y = (base_ry + jnp.arange(c.max_num_rocks, dtype=jnp.float32) * step_ry).astype(jnp.float32)
-        rocks_y = jnp.round(rocks_y).astype(jnp.float32)
+        # Deterministic rock y-position: r = 2, 6
+        r_rocks = jnp.array([2, 6], dtype=jnp.float32)
+        rocks_y = base_y + r_rocks * row_spacing
         # Enforce separation from trees and already placed rocks
         min_sep_rock_tree = 0.5*(jnp.float32(self.consts.rock_width)+jnp.float32(self.consts.tree_width)) + jnp.float32(self.consts.sep_margin_tree_rock)
         min_sep_rock_rock = 0.5*(jnp.float32(self.consts.rock_width)+jnp.float32(self.consts.rock_width)) + jnp.float32(self.consts.sep_margin_rock_rock)
@@ -397,10 +395,12 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             step_fx = 13
             x_flag = (min_fx + (((state.gates_seen + i) * step_fx) % span_fx)).astype(jnp.float32)
 
-            # Constant vertical distance: always spawn behind the currently lowest flag
-            # Considers both newly placed flags (new_flags) and existing ones (flags)
-            base_existing = jnp.maximum(jnp.max(new_flags[:, 1]), jnp.max(flags[:, 1]))
-            y = base_existing + jnp.float32(self.consts.gate_vertical_spacing)
+            # Constant vertical distance: always spawn behind the highest object in the scene
+            max_f = jnp.max(flags[:, 1])
+            max_t = jnp.max(new_trees[:, 1])
+            max_r = jnp.max(new_rocks[:, 1])
+            global_max_y = jnp.maximum(jnp.maximum(max_f, max_t), max_r)
+            y = global_max_y + jnp.float32(31.0)
 
             # Prevent spawning after the 20th gate (0 to 19).
             # When state.gates_seen >= 18, we have already spawned up to gate 19.
@@ -431,9 +431,11 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             tree_val = ((state.gates_seen * 13 + i * 23) * step_tx) % 138
             x_tree = jnp.where(tree_val <= 66, -6.0 + tree_val, 100.0 + (tree_val - 67)).astype(jnp.float32)
 
-            base_existing = jnp.maximum(jnp.max(new_trees[:, 1]), jnp.max(trees[:, 1]))
-            step_ty = jnp.float32(self.consts.gate_vertical_spacing) / jnp.float32(max(1, self.consts.max_num_trees))
-            y = base_existing + step_ty
+            max_f = jnp.max(flags[:, 1])
+            max_t = jnp.max(trees[:, 1])
+            max_r = jnp.max(new_rocks[:, 1])
+            global_max_y = jnp.maximum(jnp.maximum(max_f, max_t), max_r)
+            y = global_max_y + jnp.float32(31.0)
             y = jnp.where(state.gates_seen >= 18, jnp.float32(10000.0), y)
 
             # Enforce min separation from existing trees and rocks on respawn (X only)
@@ -476,9 +478,11 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             span_rx = max_rx - min_rx + 1
             step_rx = 19
             x_rock = (min_rx + (((state.gates_seen + i) * step_rx) % span_rx)).astype(jnp.float32)
-            base_existing = jnp.maximum(jnp.max(new_rocks[:, 1]), jnp.max(rocks[:, 1]))
-            step_ry = jnp.float32(self.consts.gate_vertical_spacing) / jnp.float32(max(1, self.consts.max_num_rocks))
-            y = base_existing + step_ry
+            max_f = jnp.max(flags[:, 1])
+            max_t = jnp.max(trees[:, 1])
+            max_r = jnp.max(rocks[:, 1])
+            global_max_y = jnp.maximum(jnp.maximum(max_f, max_t), max_r)
+            y = global_max_y + jnp.float32(31.0)
             y = jnp.where(state.gates_seen >= 18, jnp.float32(10000.0), y)
 
             # Enforce separation from existing rocks and trees on respawn
