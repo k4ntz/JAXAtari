@@ -1027,7 +1027,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
         down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
         jump = jnp.logical_or(action == Action.FIRE, jnp.logical_or(action == Action.UPFIRE, action == Action.DOWNFIRE))
-        player_speed = state.player_car.speed.astype(jnp.int32)
+        player_speed = state.player_car.speed
 
         player_speed = jax.lax.cond(
             jnp.logical_and(state.player_car.speed < self.consts.MAX_SPEED, up),
@@ -1071,7 +1071,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         
         player_speed = jnp.where(
             jnp.logical_and(
-                jnp.logical_and(up,True), 
+                jnp.logical_and(should_change_speed, is_accelerating), 
                 jnp.logical_and(player_speed < self.consts.MAX_SPEED, can_accelerate)
             ),
             player_speed + 1,
@@ -1628,7 +1628,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
                 width=self.consts.PLAYER_SIZE[0],
                 height=self.consts.PLAYER_SIZE[1],
             ),
-            speed=jnp.array(0, dtype=jnp.int32),
+            speed=jnp.array(0.0, dtype=jnp.float32),
             direction_x=jnp.array(0, dtype=jnp.int32),
             current_road=respawn_road,
             road_index_A=start_segment,
