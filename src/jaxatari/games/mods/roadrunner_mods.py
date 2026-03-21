@@ -7,6 +7,7 @@ from jaxatari.games.mods.roadrunner.roadrunner_mod_plugins import (
     InvisibleEnemyMod,
     HarmlessRavinesMod,
     NoRoadStripesMod,
+    InvisibleTrucksMod,
 )
 
 
@@ -41,6 +42,7 @@ class RoadRunnerEnvMod(JaxAtariModController):
         "invisible_enemy": InvisibleEnemyMod,
         "harmless_ravines": HarmlessRavinesMod,
         "no_road_stripes": NoRoadStripesMod,
+        "invisible_trucks": InvisibleTrucksMod,
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "roadrunner", "sprites")
@@ -78,3 +80,14 @@ class RoadRunnerEnvMod(JaxAtariModController):
                 if key in renderer.SHAPE_MASKS:
                     shape = renderer.SHAPE_MASKS[key].shape
                     renderer.SHAPE_MASKS[key] = jnp.full(shape, transparent_id, dtype=renderer.SHAPE_MASKS[key].dtype)
+
+        # Replace truck sprites with transparent masks
+        if InvisibleTrucksMod in [self.REGISTRY.get(k) for k in mods_config]:
+            renderer = self._env.renderer
+            transparent_id = renderer.jr.TRANSPARENT_ID
+            enemy_sprite_keys = ["truck"]
+            for key in enemy_sprite_keys:
+                if key in renderer.SHAPE_MASKS:
+                    shape = renderer.SHAPE_MASKS[key].shape
+                    renderer.SHAPE_MASKS[key] = jnp.full(shape, transparent_id, dtype=renderer.SHAPE_MASKS[key].dtype)
+ 
