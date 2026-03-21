@@ -50,11 +50,7 @@ class UpNDownConstants(NamedTuple):
     LANDING_COLLISION_DISTANCE: float = 12.0  # Larger collision distance when landing (increased for easier enemy kills)
     GROUND_COLLISION_DISTANCE: float = 3.0  # Tight collision distance for ground collisions
     LATE_JUMP_ENEMY_SCORE: int = 400
-    STEEP_ROAD_SPEED_REDUCTION_INTERVAL: int = 12  # Frames between each speed reduction on steep roads
-    STEEP_ROAD_MIN_SPEED: float = -2.0  # Minimum speed on steep roads
-    STEEP_ROAD_JUMP_BOOST: float = 1.5  # Multiplier for jump height on steep roads
-    STEEP_ROAD_RECOVERY_BOOST: float = 0.8  # Speed boost after leaving steep road
-    STEEP_ROAD_COOLDOWN: int = 5 
+    STEEP_ROAD_SPEED_REDUCTION_INTERVAL: int = 8  # Frames between each speed reduction on steep roads
     PASSIVE_SCORE_INTERVAL: int = 60  # Steps between passive score awards
     PASSIVE_SCORE_AMOUNT: int = 10  # Points awarded for passive scoring
     COLLISION_THRESHOLD: float = 5.0  # Distance threshold for flag/collectible collision
@@ -256,8 +252,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         Returns:
             Tuple of (move_y, move_x, step_size, speed_sign)
         """
-        abs_speed = jnp.abs(speed).astype(jnp.int32)
-        speed_index = jnp.minimum(abs_speed, self._speed_dividers.shape[0] - 1).astype(jnp.int32)
+        abs_speed = jnp.abs(speed)
+        speed_index = jnp.minimum(abs_speed, jnp.int32(self._speed_dividers.shape[0] - 1))
         speed_divider = self._speed_dividers[speed_index]
         effective_divider = jnp.maximum(1, speed_divider)
         period = jnp.maximum(1, 16 // effective_divider)
@@ -269,69 +265,6 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         step_size = jnp.where(speed_index >= 6, 1.5 + (speed_index - 6) * 0.2, 1.0)
         
         return move_y, move_x, step_size, speed_sign
-    def _apply_steep_road_penalty(
-        self,
-        speed: chex.Array,
-        is_on_steep_road: chex.Array,
-        steep_road_timer: chex.Array,
-        is_jumping: chex.Array,
-        jump_cooldown: chex.Array,
-    ) -> Tuple[chex.Array, chex.Array, chex.Array]:
-        """
-        Apply enhanced steep road penalty with perfect balance and edge case handling.
-        
-        - Dynamically reduces speed on steep roads when going upward.
-        - Provides jump boost and recovery for better flow.
-        - Includes cooldown to prevent rapid reductions.
-        
-        Returns: (new_speed, new_timer, jump_boost_multiplier)
-        """
-        going_up = speed > 0
-        on_steep_going_up = jnp.logical_and(is_on_steep_road, going_up)
-        in_cooldown = steep_road_timer < 0  # Negative timer indicates cooldown
-        
-        # Increment timer only if not in cooldown and on steep road going up
-        timer_increment = jax.lax.cond(
-            jnp.logical_and(on_steep_going_up, jnp.logical_not(in_cooldown)),
-            lambda _: 1,
-            lambda _: 0,
-            operand=None,
-        )
-        new_timer = steep_road_timer + timer_increment
-        
-        # Apply reduction when timer reaches interval and not in cooldown
-        should_reduce = jnp.logical_and(
-            on_steep_going_up,
-            jnp.logical_and(new_timer >= self.consts.STEEP_ROAD_SPEED_REDUCTION_INTERVAL, jnp.logical_not(in_cooldown))
-        )
-        
-        # Proportional reduction: stronger for higher speeds, with minimum cap
-        reduction_factor = jnp.maximum(0.05, speed * 0.15)  # 5-15% of speed
-        reduced_speed = jnp.maximum(speed - reduction_factor, self.consts.STEEP_ROAD_MIN_SPEED)
-        
-        # Set cooldown after reduction (negative timer)
-        final_timer = jax.lax.cond(
-            should_reduce,
-            lambda _: -self.consts.STEEP_ROAD_COOLDOWN,
-            lambda _: new_timer,
-            operand=None,
-        )
-        
-        # Recovery boost after leaving steep road (not jumping)
-        just_left_steep = jnp.logical_and(jnp.logical_not(on_steep_going_up), jnp.logical_not(is_jumping))
-        recovery_boost = jax.lax.cond(just_left_steep, lambda _: self.consts.STEEP_ROAD_RECOVERY_BOOST, lambda _: 0.0, operand=None)
-        
-        # Jump boost if jumping on steep road
-        jump_boost = jax.lax.cond(
-            jnp.logical_and(on_steep_going_up, jump_cooldown > 0),
-            lambda _: self.consts.STEEP_ROAD_JUMP_BOOST,
-            lambda _: 1.0,
-            operand=None,
-        )
-        
-        final_speed = jax.lax.cond(should_reduce, lambda _: reduced_speed + recovery_boost, lambda _: speed + recovery_boost, operand=None)
-        
-        return final_speed, final_timer, jump_boost
 
     @partial(jax.jit, static_argnums=(0,))
     def _sample_enemy_spawn_road(self, rng_key: chex.PRNGKey) -> chex.Array:
@@ -1026,26 +959,18 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     def _player_step(self, state: UpNDownState, action: chex.Array) -> UpNDownState:
         up = jnp.logical_or(action == Action.UP, action == Action.UPFIRE)
         down = jnp.logical_or(action == Action.DOWN, action == Action.DOWNFIRE)
-        jump = jnp.logical_or(action == Action.FIRE, jnp.logical_or(action == Action.UPFIRE, action == Action.DOWNFIRE))
-        player_speed = state.player_car.speed.astype(jnp.int32)
-
-        player_speed = jax.lax.cond(
-            jnp.logical_and(state.player_car.speed < self.consts.MAX_SPEED, up),
-            lambda s: s + 1,
-            lambda s: s,
-            operand=player_speed,
-        )
-
-        player_speed = jax.lax.cond(
-            jnp.logical_and(state.player_car.speed > -self.consts.MAX_SPEED, down),
-            lambda s: s - 1,
-            lambda s: s,
-            operand=player_speed,
-        )
-
-        # Check if on a steep road section (no X direction change) and apply speed reduction
-        # This simulates steep road sections that require a jump to pass when going upward
+        jump_pressed = jnp.logical_or(action == Action.FIRE, jnp.logical_or(action == Action.UPFIRE, action == Action.DOWNFIRE))
+        
+        # Check if on a steep road section FIRST (before applying speed changes)
         is_on_steep_road = self._is_steep_road_segment(
+            state.player_car.current_road,
+            state.player_car.road_index_A,
+            state.player_car.road_index_B,
+        )
+        
+        # Calculate progress through steep segment (0.0 = bottom, 1.0 = top)
+        steep_progress = self._get_steep_segment_progress(
+            state.player_car.position.y,
             state.player_car.current_road,
             state.player_car.road_index_A,
             state.player_car.road_index_B,
@@ -1071,7 +996,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         
         player_speed = jnp.where(
             jnp.logical_and(
-                jnp.logical_and(up,True), 
+                jnp.logical_and(should_change_speed, is_accelerating), 
                 jnp.logical_and(player_speed < self.consts.MAX_SPEED, can_accelerate)
             ),
             player_speed + 1,
@@ -2160,19 +2085,6 @@ class UpNDownRenderer(JAXGameRenderer):
             channels=3,
             #downscale=(84, 84)
         )
-        def _createBackgroundSprite(self, dimensions: Tuple[int, int]) -> jnp.ndarray:
-
-            height, width = dimensions
-        # Create a vertical gradient: blue at top, lighter blue at bottom
-            top_color = jnp.array([135, 206, 235, 255], dtype=jnp.uint8)  # Sky blue
-            bottom_color = jnp.array([173, 216, 230, 255], dtype=jnp.uint8)  # Lighter sky blue
-        
-        # Linear interpolation for gradient
-            y_coords = jnp.arange(height, dtype=jnp.float32) / (height - 1)
-            gradient = jnp.outer(y_coords, bottom_color - top_color) + top_color
-            gradient = jnp.clip(gradient, 0, 255).astype(jnp.uint8)
-        
-            return gradient
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         background = self._createBackgroundSprite(self.config.game_dimensions)
