@@ -89,20 +89,23 @@ class BasicMathInfo:
     round: chex.Array
 
 class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMathInfo, BasicMathConstants]):
-    def __init__(self, consts: BasicMathConstants = None):
-        consts = consts or BasicMathConstants()
-        super().__init__(consts)
-        self.renderer = BasicMathRenderer(consts)
-        self.action_set = [
+    ACTION_SET: jnp.ndarray = jnp.array(
+       [Action.NOOP,
             Action.FIRE,
             Action.RIGHT,
             Action.LEFT,
             Action.UP,
-            Action.DOWN,
-        ]
+            Action.DOWN],
+       dtype=jnp.int32,
+   )
+
+    def __init__(self, consts: BasicMathConstants = None):
+        consts = consts or BasicMathConstants()
+        super().__init__(consts)
+        self.renderer = BasicMathRenderer(consts)
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(5)
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(
@@ -152,7 +155,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: BasicMathState) -> bool:
-        return jnp.greater_equal(state.numberProb, 10)
+        return state.numberProb >= 10
 
 
     def _int_to_fixed_digits(self, x, length=3):
