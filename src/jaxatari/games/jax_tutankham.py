@@ -108,6 +108,47 @@ def _get_default_asset_config() -> tuple:
     return config
 
 
+@jax.jit
+def is_onscreen(y: jax.Array, height: jax.Array, camera_offset: jax.Array) -> jnp.ndarray:
+    """
+    Returns True if a sprite's top edge is above the bottom footer (y=175) and its bottom edge is below the top header (y=35).
+    """
+    sprite_top_edge = y - camera_offset
+    sprite_bottom_edge = sprite_top_edge + height    
+    return jnp.logical_and(sprite_bottom_edge > 35, sprite_top_edge < 175)
+
+
+@jax.jit
+def can_walk_to(entity_size: jax.Array, new_x: jax.Array, new_y: jax.Array, old_x: jax.Array, old_y: jax.Array, valid_pos_mat: jax.Array) -> jnp.ndarray:
+    entity_width = entity_size[0]
+    entity_height = entity_size[1]
+    
+    mid_width = entity_width // 2
+    mid_height = entity_height // 2
+    end_width = entity_width - 1
+    end_height = entity_height - 1
+
+    # Check 9 anchor points of the hitbox (Corners, Edge midpoints, Center)
+    p1 = valid_pos_mat[new_y, new_x]                 # Top-Left
+    p2 = valid_pos_mat[new_y, new_x + mid_width]     # Top-Mid
+    p3 = valid_pos_mat[new_y, new_x + end_width]     # Top-Right
+    p4 = valid_pos_mat[new_y + mid_height, new_x]    # Mid-Left
+    p5 = valid_pos_mat[new_y + mid_height, new_x + end_width] # Mid-Right
+    p6 = valid_pos_mat[new_y + end_height, new_x]    # Bottom-Left
+    p7 = valid_pos_mat[new_y + end_height, new_x + mid_width] # Bottom-Mid
+    p8 = valid_pos_mat[new_y + end_height, new_x + end_width] # Bottom-Right
+
+    is_walkable = p1 & p2 & p3 & p4 & p5 & p6 & p7 & p8
+    
+    player_x = jnp.where(is_walkable, new_x, old_x)
+    player_y = jnp.where(is_walkable, new_y, old_y)
+    player_x = jnp.clip(player_x, 0, 160 - 1)
+    player_y = jnp.clip(player_y, 0, valid_pos_mat.shape[0] - 1)
+    return player_x, player_y, is_walkable
+
+
+
+
 # ---------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------
@@ -515,371 +556,10 @@ class TutankhamObservation(struct.PyTreeNode):
 class TutankhamInfo(struct.PyTreeNode):
     step: jnp.ndarray
     score: jnp.ndarray
-
-
-
-
-@jax.jit
-def is_onscreen(y: jax.Array, height: jax.Array, camera_offset: jax.Array) -> jnp.ndarray:
-    """
-    Returns True if a sprite's top edge is above the bottom footer (y=175) and its bottom edge is below the top header (y=35).
-    """
-    sprite_top_edge = y - camera_offset
-    sprite_bottom_edge = sprite_top_edge + height    
-    return jnp.logical_and(sprite_bottom_edge > 35, sprite_top_edge < 175)
-
-
-@jax.jit
-def can_walk_to(entity_size: jax.Array, new_x: jax.Array, new_y: jax.Array, old_x: jax.Array, old_y: jax.Array, valid_pos_mat: jax.Array) -> jnp.ndarray:
-    entity_width = entity_size[0]
-    entity_height = entity_size[1]
-    
-    mid_width = entity_width // 2
-    mid_height = entity_height // 2
-    end_width = entity_width - 1
-    end_height = entity_height - 1
-
-    # Check 9 anchor points of the hitbox (Corners, Edge midpoints, Center)
-    p1 = valid_pos_mat[new_y, new_x]                 # Top-Left
-    p2 = valid_pos_mat[new_y, new_x + mid_width]     # Top-Mid
-    p3 = valid_pos_mat[new_y, new_x + end_width]     # Top-Right
-    p4 = valid_pos_mat[new_y + mid_height, new_x]    # Mid-Left
-    p5 = valid_pos_mat[new_y + mid_height, new_x + end_width] # Mid-Right
-    p6 = valid_pos_mat[new_y + end_height, new_x]    # Bottom-Left
-    p7 = valid_pos_mat[new_y + end_height, new_x + mid_width] # Bottom-Mid
-    p8 = valid_pos_mat[new_y + end_height, new_x + end_width] # Bottom-Right
-
-    is_walkable = p1 & p2 & p3 & p4 & p5 & p6 & p7 & p8
-    
-    player_x = jnp.where(is_walkable, new_x, old_x)
-    player_y = jnp.where(is_walkable, new_y, old_y)
-    player_x = jnp.clip(player_x, 0, 160 - 1)
-    player_y = jnp.clip(player_y, 0, valid_pos_mat.shape[0] - 1)
-    return player_x, player_y, is_walkable
    
 
-# ---------------------------------------------------------------------
-# Renderer (No JAX)
-# ---------------------------------------------------------------------
-class TutankhamRenderer(JAXGameRenderer):
-    def __init__(self, consts: TutankhamConstants = None, config: render_utils.RendererConfig = None):
-        self.consts = consts or TutankhamConstants()
-        super().__init__(self.consts)
-        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham"
-
-        # 1. Configure the rendering utility
-        if config is None:
-            self.config = render_utils.RendererConfig(
-                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-                channels=3,
-            )
-        else:
-            self.config = config
-        self.jr = render_utils.JaxRenderingUtils(self.config)
-
-        # 2. Start from (possibly modded) asset config provided via constants
-        final_asset_config = list(self.consts.ASSET_CONFIG)
-
-        # 3. Make one call to load and process all assets
-        (
-            self.PALETTE,
-            self.SHAPE_MASKS,
-            self.BACKGROUND,
-            self.COLOR_TO_ID,
-            self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
-
-    # ---------------------------------------------------------
-    # Main render() method
-    # ---------------------------------------------------------
-
-    @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: TutankhamState):
-        ZERO_FLIP = jnp.array([0, 0], dtype=jnp.int32)
-        indices_to_update = 0
-        new_color_ids = 0
-        level_index = (state.level%4)
-
-        # Calculate camera offset to keep player roughly centered vertically
-        camera_offset = jnp.where(state.player_y < self.consts.HEIGHT // 2, 0, state.player_y - self.consts.HEIGHT // 2)
-        
-        # Ensure the camera doesn't scroll past the bottom of the map
-        max_offset = self.consts.VALID_POS_MAPS[level_index].shape[0] - self.consts.HEIGHT
-        camera_offset = jnp.clip(camera_offset, 0, max_offset)
-
-        # 1. Start with the static blue background
-        raster = self.jr.create_object_raster(self.BACKGROUND)
-        raster = self.jr.render_at_clipped(
-            raster,
-            0,  # x
-            -camera_offset,  # y
-            self.SHAPE_MASKS["floor"][level_index],
-            flip_offset=ZERO_FLIP
-        )
-        # Render Flash Floors
-        raster = jax.lax.cond(
-                state.laser_flash_cooldown > 0,
-                lambda _: self.jr.render_at_clipped(
-                    raster,
-                    0,
-                    - camera_offset,
-                    self.SHAPE_MASKS["flash_floor"][level_index],
-                    flip_offset=ZERO_FLIP
-                ),
-                lambda raster: raster,
-                raster
-            )
-
-        # 2. Render Player
-        ANIM_SPEED = 8
-        frame_idx = (state.step_counter // ANIM_SPEED) % 2
-        
-        # Calculate index offset if player has a key
-        # Idle: [0] = no key, [1] = with key
-        # Move: [0,1] = no key, [2,3] = with key
-        key_offset_idle = jnp.where(state.has_key, 1, 0)
-        key_offset_move = jnp.where(state.has_key, 2, 0)
-
-        player_mask = jax.lax.cond(
-            state.is_moving,
-            lambda _: self.SHAPE_MASKS['player_move'][frame_idx + key_offset_move],
-            lambda _: self.SHAPE_MASKS['player'][key_offset_idle],
-            operand=None
-        )
-        
-        player_flip_offset = jax.lax.cond(
-            state.is_moving,
-            lambda _: self.FLIP_OFFSETS['player_move'],
-            lambda _: self.FLIP_OFFSETS['player'],
-            operand=None
-        )
-        
-        flip = jnp.where(state.player_direction == 3, True, False)
-        raster = self.jr.render_at_clipped(
-            raster,
-            state.player_x,
-            state.player_y - camera_offset,
-            player_mask,
-            flip_offset=player_flip_offset,
-            flip_horizontal=flip,
-        )
-
-        # creatures
-        creature_one_state = state.creature_states[0]
-        creature_one = creature_one_state[2]
-        dir_one = creature_one_state[4]
-        death_timer_one = creature_one_state[5]
-        
-        # Render normal creature
-        raster = jax.lax.cond(
-            death_timer_one == -1,
-            lambda r: self.jr.render_at_clipped(
-                r,
-                creature_one_state[0],
-                creature_one_state[1] - camera_offset,
-                jax.lax.cond(
-                    frame_idx == 0,
-                    lambda _: self.SHAPE_MASKS['creature_00'][creature_one],
-                    lambda _: self.SHAPE_MASKS['creature_01'][creature_one],
-                    operand=None
-                ),
-                flip_offset=ZERO_FLIP,
-                flip_horizontal=(dir_one == -1)
-            ),
-            lambda r: r,
-            raster
-        )
-        
-        # Render kill sprite
-        raster = jax.lax.cond(
-            death_timer_one > 0,
-            lambda r: self.jr.render_at_clipped(
-                r,
-                creature_one_state[0],
-                creature_one_state[1] - camera_offset,
-                self.SHAPE_MASKS['kill_sprites'][creature_one],
-                flip_offset=ZERO_FLIP,
-                flip_horizontal=False
-            ),
-            lambda r: r,
-            raster
-        )
-        
-        creature_two_state = state.creature_states[1]
-        creature_two = creature_two_state[2]
-        dir_two = creature_two_state[4]
-        death_timer_two = creature_two_state[5]
-        
-        # Render normal creature
-        raster = jax.lax.cond(
-            death_timer_two == -1,
-            lambda r: self.jr.render_at_clipped(
-                r,
-                creature_two_state[0],
-                creature_two_state[1] - camera_offset,
-                jax.lax.cond(
-                    frame_idx == 0,
-                    lambda _: self.SHAPE_MASKS['creature_00'][creature_two],
-                    lambda _: self.SHAPE_MASKS['creature_01'][creature_two],
-                    operand=None
-                ),
-                flip_offset=ZERO_FLIP,
-                flip_horizontal=(dir_two == -1)
-            ),
-            lambda r: r,
-            raster
-        )
-        
-        # Render kill sprite
-        raster = jax.lax.cond(
-            death_timer_two > 0,
-            lambda r: self.jr.render_at_clipped(
-                r,
-                creature_two_state[0],
-                creature_two_state[1] - camera_offset,
-                self.SHAPE_MASKS['kill_sprites'][creature_two],
-                flip_offset=ZERO_FLIP,
-                flip_horizontal=False
-            ),
-            lambda r: r,
-            raster
-        )
-    
-        # 2.5 Animations
-        # 5. Render Treasures
-        def render_all_treasures(i: int, raster: jnp.ndarray):
-            treasure_x = state.item_states[i][0]
-            treasure_y = state.item_states[i][1]
-            treasure_type = state.item_states[i][2]
-            is_active = state.item_states[i][3] == 1
-            treasure_mask = self.SHAPE_MASKS["treasure"][treasure_type]
-            return jax.lax.cond(
-                is_active & is_onscreen(treasure_y, 8, camera_offset),
-                lambda r: self.jr.render_at_clipped(
-                    r,
-                    treasure_x,
-                    treasure_y - camera_offset,
-                    treasure_mask,
-                    flip_offset=ZERO_FLIP
-                ),
-                lambda r: r,
-                raster
-            )
-        raster = jax.lax.fori_loop(0, 7, render_all_treasures, raster)
-
-        # Render Goal                     
-        raster = jax.lax.cond(is_onscreen(self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 1], 8, camera_offset),
-                              lambda r: self.jr.render_at_clipped(
-                                  raster,
-                                  self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 0],
-                                  self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 1] - camera_offset,
-                                  self.SHAPE_MASKS["goal"][level_index],
-                                  flip_offset=ZERO_FLIP
-                                  # self.FLIP_OFFSETS['player_group'],
-                              ),
-                              lambda r: r,
-                              raster)
-        # 6. Render Bullets
-        bullet_frame_idx = jnp.clip(state.bullet_state[4] // self.consts.BULLET_ANIM_SPEED, 0, 3)
-        raster = jax.lax.cond(state.bullet_state[3] == 1,
-                              lambda r: self.jr.render_at_clipped(
-                                  r,
-                                  state.bullet_state[0],
-                                  state.bullet_state[1] - camera_offset,
-                                  self.SHAPE_MASKS["bullet"][bullet_frame_idx.astype(jnp.int32)],
-                                  flip_offset=ZERO_FLIP
-                                  # self.FLIP_OFFSETS['player_group'],
-                              ),
-                              lambda r: r,
-                              raster)
 
 
-        # 8. Render UI Footer and Header
-        raster = self.jr.render_at_clipped(
-            raster,
-            0,  # x
-            0,  # y
-            self.SHAPE_MASKS["ui_footer_header"][level_index],
-            flip_offset=ZERO_FLIP
-        )
-        # Render stats (lives)
-        raster = self.jr.render_at_clipped(
-            raster,
-            12,
-            24,
-            self.SHAPE_MASKS["stats"][state.player_lives-1],
-            flip_offset=ZERO_FLIP
-        )
-        # Render stats (flashes)
-        raster = jax.lax.cond(
-            state.laser_flash_count > 0,
-            lambda r: self.jr.render_at_clipped(
-                r,
-                108,
-                24,
-                self.SHAPE_MASKS["stats"][state.laser_flash_count-1],
-                flip_offset=ZERO_FLIP
-            ),
-            lambda r: r,
-            raster
-        )
-        raster = self.jr.render_at_clipped(
-            raster,
-            114,
-            197,
-            self.SHAPE_MASKS["ammo_timer"],
-            flip_offset=ZERO_FLIP
-        )
-        # Calculate ammo timer bar position
-        # Scales with AMMO_SUPPLY. Range is 30 pixels (from 84 to 114).
-        ammo_ratio = jnp.maximum(0, state.amonition_timer) / self.consts.LEVEL_AMMO_SUPPLY[state.level]
-        ammo_offset = jnp.ceil(ammo_ratio * 30)
-        ammo_x = 114 - ammo_offset.astype(jnp.int32)
-        raster = self.jr.render_at_clipped(
-            raster,
-            ammo_x,
-            197,
-            self.SHAPE_MASKS["ammo_map"][level_index],
-            flip_offset=ZERO_FLIP
-        )
-        
-        # Render Score
-        def render_score_digit(i: int, raster: jnp.ndarray):
-            # calculate value of 10^(5-i)
-            # score is maximum 999999 so 6 digits
-            # extract digit i (where i=0 is most significant digit, i=5 is least)
-            divisor = 10 ** (5 - i)
-            digit_val = (state.tutankham_score // divisor) % 10
-            digit_mask = self.SHAPE_MASKS["digits"][digit_val]
-            # score is located at bottom left, approximately at x=24, y=190
-            # each digit is 6 wide, with 2 pixel spacing
-            digit_x = 24 + (i * 8)
-            digit_y = 190
-            
-            # Only draw if it's the last digit (index 5) or if the score is large enough
-            should_draw = (i == 5) | (state.tutankham_score >= divisor)
-            
-            return jax.lax.cond(
-                should_draw,
-                lambda r: self.jr.render_at_clipped(
-                    raster,
-                    digit_x,
-                    digit_y,
-                    digit_mask,
-                    flip_offset=ZERO_FLIP
-                ),
-                lambda r: raster,
-                operand=raster
-            )
-            
-        raster = jax.lax.fori_loop(0, 6, render_score_digit, raster)
-        # 9. Final Palette Lookup
-        return self.jr.render_from_palette(
-            raster,
-            self.PALETTE,
-            indices_to_update=indices_to_update,
-            new_color_ids=new_color_ids
-        )
 
 
 
@@ -1740,10 +1420,11 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         return spaces.Discrete(len(self.action_set))
 
 
-    def observation_space(self) -> spaces.Box:
-        # Pixel-only training: PixelObsWrapper ignores this and builds its own
-        # space from image_space(). This dummy satisfies AtariWrapper.__init__.
-        return spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32)
+    def observation_space(self) -> spaces.Dict:
+        # Pixel-only training: PixelObsWrapper uses image_space() instead.
+        # The Dict structure must mirror TutankhamObservation fields so that
+        # FlattenObservationWrapper and spaces.Dict.contains() work correctly.
+        return spaces.Dict({'dummy': spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32)})
     
 
     def image_space(self) -> spaces.Box:
@@ -1781,3 +1462,339 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         game_over = state.player_lives <= 0
         beat_game = state.level >= 16
         return jnp.logical_or(game_over, beat_game)
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class TutankhamRenderer(JAXGameRenderer):
+    def __init__(self, consts: TutankhamConstants = None, config: render_utils.RendererConfig = None):
+        self.consts = consts or TutankhamConstants()
+        super().__init__(self.consts)
+        self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham"
+
+        # 1. Configure the rendering utility
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+            )
+        else:
+            self.config = config
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        # 2. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+
+        # 3. Make one call to load and process all assets
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
+
+    # ---------------------------------------------------------
+    # Main render() method
+    # ---------------------------------------------------------
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: TutankhamState):
+        ZERO_FLIP = jnp.array([0, 0], dtype=jnp.int32)
+        indices_to_update = 0
+        new_color_ids = 0
+        level_index = (state.level%4)
+
+        # Calculate camera offset to keep player roughly centered vertically
+        camera_offset = jnp.where(state.player_y < self.consts.HEIGHT // 2, 0, state.player_y - self.consts.HEIGHT // 2)
+        
+        # Ensure the camera doesn't scroll past the bottom of the map
+        max_offset = self.consts.VALID_POS_MAPS[level_index].shape[0] - self.consts.HEIGHT
+        camera_offset = jnp.clip(camera_offset, 0, max_offset)
+
+        # 1. Start with the static blue background
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+        raster = self.jr.render_at_clipped(
+            raster,
+            0,  # x
+            -camera_offset,  # y
+            self.SHAPE_MASKS["floor"][level_index],
+            flip_offset=ZERO_FLIP
+        )
+        # Render Flash Floors
+        raster = jax.lax.cond(
+                state.laser_flash_cooldown > 0,
+                lambda _: self.jr.render_at_clipped(
+                    raster,
+                    0,
+                    - camera_offset,
+                    self.SHAPE_MASKS["flash_floor"][level_index],
+                    flip_offset=ZERO_FLIP
+                ),
+                lambda raster: raster,
+                raster
+            )
+
+        # 2. Render Player
+        ANIM_SPEED = 8
+        frame_idx = (state.step_counter // ANIM_SPEED) % 2
+        
+        # Calculate index offset if player has a key
+        # Idle: [0] = no key, [1] = with key
+        # Move: [0,1] = no key, [2,3] = with key
+        key_offset_idle = jnp.where(state.has_key, 1, 0)
+        key_offset_move = jnp.where(state.has_key, 2, 0)
+
+        player_mask = jax.lax.cond(
+            state.is_moving,
+            lambda _: self.SHAPE_MASKS['player_move'][frame_idx + key_offset_move],
+            lambda _: self.SHAPE_MASKS['player'][key_offset_idle],
+            operand=None
+        )
+        
+        player_flip_offset = jax.lax.cond(
+            state.is_moving,
+            lambda _: self.FLIP_OFFSETS['player_move'],
+            lambda _: self.FLIP_OFFSETS['player'],
+            operand=None
+        )
+        
+        flip = jnp.where(state.player_direction == 3, True, False)
+        raster = self.jr.render_at_clipped(
+            raster,
+            state.player_x,
+            state.player_y - camera_offset,
+            player_mask,
+            flip_offset=player_flip_offset,
+            flip_horizontal=flip,
+        )
+
+        # creatures
+        creature_one_state = state.creature_states[0]
+        creature_one = creature_one_state[2]
+        dir_one = creature_one_state[4]
+        death_timer_one = creature_one_state[5]
+        
+        # Render normal creature
+        raster = jax.lax.cond(
+            death_timer_one == -1,
+            lambda r: self.jr.render_at_clipped(
+                r,
+                creature_one_state[0],
+                creature_one_state[1] - camera_offset,
+                jax.lax.cond(
+                    frame_idx == 0,
+                    lambda _: self.SHAPE_MASKS['creature_00'][creature_one],
+                    lambda _: self.SHAPE_MASKS['creature_01'][creature_one],
+                    operand=None
+                ),
+                flip_offset=ZERO_FLIP,
+                flip_horizontal=(dir_one == -1)
+            ),
+            lambda r: r,
+            raster
+        )
+        
+        # Render kill sprite
+        raster = jax.lax.cond(
+            death_timer_one > 0,
+            lambda r: self.jr.render_at_clipped(
+                r,
+                creature_one_state[0],
+                creature_one_state[1] - camera_offset,
+                self.SHAPE_MASKS['kill_sprites'][creature_one],
+                flip_offset=ZERO_FLIP,
+                flip_horizontal=False
+            ),
+            lambda r: r,
+            raster
+        )
+        
+        creature_two_state = state.creature_states[1]
+        creature_two = creature_two_state[2]
+        dir_two = creature_two_state[4]
+        death_timer_two = creature_two_state[5]
+        
+        # Render normal creature
+        raster = jax.lax.cond(
+            death_timer_two == -1,
+            lambda r: self.jr.render_at_clipped(
+                r,
+                creature_two_state[0],
+                creature_two_state[1] - camera_offset,
+                jax.lax.cond(
+                    frame_idx == 0,
+                    lambda _: self.SHAPE_MASKS['creature_00'][creature_two],
+                    lambda _: self.SHAPE_MASKS['creature_01'][creature_two],
+                    operand=None
+                ),
+                flip_offset=ZERO_FLIP,
+                flip_horizontal=(dir_two == -1)
+            ),
+            lambda r: r,
+            raster
+        )
+        
+        # Render kill sprite
+        raster = jax.lax.cond(
+            death_timer_two > 0,
+            lambda r: self.jr.render_at_clipped(
+                r,
+                creature_two_state[0],
+                creature_two_state[1] - camera_offset,
+                self.SHAPE_MASKS['kill_sprites'][creature_two],
+                flip_offset=ZERO_FLIP,
+                flip_horizontal=False
+            ),
+            lambda r: r,
+            raster
+        )
+    
+        # 2.5 Animations
+        # 5. Render Treasures
+        def render_all_treasures(i: int, raster: jnp.ndarray):
+            treasure_x = state.item_states[i][0]
+            treasure_y = state.item_states[i][1]
+            treasure_type = state.item_states[i][2]
+            is_active = state.item_states[i][3] == 1
+            treasure_mask = self.SHAPE_MASKS["treasure"][treasure_type]
+            return jax.lax.cond(
+                is_active & is_onscreen(treasure_y, 8, camera_offset),
+                lambda r: self.jr.render_at_clipped(
+                    r,
+                    treasure_x,
+                    treasure_y - camera_offset,
+                    treasure_mask,
+                    flip_offset=ZERO_FLIP
+                ),
+                lambda r: r,
+                raster
+            )
+        raster = jax.lax.fori_loop(0, 7, render_all_treasures, raster)
+
+        # Render Goal                     
+        raster = jax.lax.cond(is_onscreen(self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 1], 8, camera_offset),
+                              lambda r: self.jr.render_at_clipped(
+                                  raster,
+                                  self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 0],
+                                  self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 1] - camera_offset,
+                                  self.SHAPE_MASKS["goal"][level_index],
+                                  flip_offset=ZERO_FLIP
+                                  # self.FLIP_OFFSETS['player_group'],
+                              ),
+                              lambda r: r,
+                              raster)
+        # 6. Render Bullets
+        bullet_frame_idx = jnp.clip(state.bullet_state[4] // self.consts.BULLET_ANIM_SPEED, 0, 3)
+        raster = jax.lax.cond(state.bullet_state[3] == 1,
+                              lambda r: self.jr.render_at_clipped(
+                                  r,
+                                  state.bullet_state[0],
+                                  state.bullet_state[1] - camera_offset,
+                                  self.SHAPE_MASKS["bullet"][bullet_frame_idx.astype(jnp.int32)],
+                                  flip_offset=ZERO_FLIP
+                                  # self.FLIP_OFFSETS['player_group'],
+                              ),
+                              lambda r: r,
+                              raster)
+
+
+        # 8. Render UI Footer and Header
+        raster = self.jr.render_at_clipped(
+            raster,
+            0,  # x
+            0,  # y
+            self.SHAPE_MASKS["ui_footer_header"][level_index],
+            flip_offset=ZERO_FLIP
+        )
+        # Render stats (lives)
+        raster = self.jr.render_at_clipped(
+            raster,
+            12,
+            24,
+            self.SHAPE_MASKS["stats"][state.player_lives-1],
+            flip_offset=ZERO_FLIP
+        )
+        # Render stats (flashes)
+        raster = jax.lax.cond(
+            state.laser_flash_count > 0,
+            lambda r: self.jr.render_at_clipped(
+                r,
+                108,
+                24,
+                self.SHAPE_MASKS["stats"][state.laser_flash_count-1],
+                flip_offset=ZERO_FLIP
+            ),
+            lambda r: r,
+            raster
+        )
+        raster = self.jr.render_at_clipped(
+            raster,
+            114,
+            197,
+            self.SHAPE_MASKS["ammo_timer"],
+            flip_offset=ZERO_FLIP
+        )
+        # Calculate ammo timer bar position
+        # Scales with AMMO_SUPPLY. Range is 30 pixels (from 84 to 114).
+        ammo_ratio = jnp.maximum(0, state.amonition_timer) / self.consts.LEVEL_AMMO_SUPPLY[state.level]
+        ammo_offset = jnp.ceil(ammo_ratio * 30)
+        ammo_x = 114 - ammo_offset.astype(jnp.int32)
+        raster = self.jr.render_at_clipped(
+            raster,
+            ammo_x,
+            197,
+            self.SHAPE_MASKS["ammo_map"][level_index],
+            flip_offset=ZERO_FLIP
+        )
+        
+        # Render Score
+        def render_score_digit(i: int, raster: jnp.ndarray):
+            # calculate value of 10^(5-i)
+            # score is maximum 999999 so 6 digits
+            # extract digit i (where i=0 is most significant digit, i=5 is least)
+            divisor = 10 ** (5 - i)
+            digit_val = (state.tutankham_score // divisor) % 10
+            digit_mask = self.SHAPE_MASKS["digits"][digit_val]
+            # score is located at bottom left, approximately at x=24, y=190
+            # each digit is 6 wide, with 2 pixel spacing
+            digit_x = 24 + (i * 8)
+            digit_y = 190
+            
+            # Only draw if it's the last digit (index 5) or if the score is large enough
+            should_draw = (i == 5) | (state.tutankham_score >= divisor)
+            
+            return jax.lax.cond(
+                should_draw,
+                lambda r: self.jr.render_at_clipped(
+                    raster,
+                    digit_x,
+                    digit_y,
+                    digit_mask,
+                    flip_offset=ZERO_FLIP
+                ),
+                lambda r: raster,
+                operand=raster
+            )
+            
+        raster = jax.lax.fori_loop(0, 6, render_score_digit, raster)
+        # 9. Final Palette Lookup
+        return self.jr.render_from_palette(
+            raster,
+            self.PALETTE,
+            indices_to_update=indices_to_update,
+            new_color_ids=new_color_ids
+        )
+    
