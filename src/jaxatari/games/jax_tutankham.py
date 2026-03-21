@@ -562,16 +562,19 @@ def can_walk_to(entity_size: jax.Array, new_x: jax.Array, new_y: jax.Array, old_
 # Renderer (No JAX)
 # ---------------------------------------------------------------------
 class TutankhamRenderer(JAXGameRenderer):
-    def __init__(self, consts: TutankhamConstants = None):
-        super().__init__()
+    def __init__(self, consts: TutankhamConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or TutankhamConstants()
+        super().__init__(self.consts)
         self.sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham"
 
         # 1. Configure the rendering utility
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-        )
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Start from (possibly modded) asset config provided via constants
