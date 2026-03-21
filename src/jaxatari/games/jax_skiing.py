@@ -278,9 +278,17 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         # [deterministic]             minval=int(c.tree_height),
         # [deterministic]             maxval=int(c.screen_height - c.tree_height) + 1
         # [deterministic]         ).astype(jnp.float32)
-        # Deterministic tree y-position: r = 0, 1, 4, 5
-        r_trees = jnp.array([0, 1, 4, 5], dtype=jnp.float32)
+        # Deterministic tree y-position: pattern [0, 1, 4, 5] repeating every 8 rows
+        trees_per_row = jnp.maximum(1, c.max_num_trees // 4)
+        i_t = jnp.arange(c.max_num_trees, dtype=jnp.int32)
+        row_idx_t = i_t // trees_per_row
+        base_offsets_t = jnp.array([0, 1, 4, 5], dtype=jnp.float32)
+        r_trees = (row_idx_t // 4) * 8.0 + jnp.take(base_offsets_t, row_idx_t % 4)
         trees_y = base_y + r_trees * row_spacing
+        
+        # Add a deterministic stagger (-7 to +7 pixels) so they are not perfectly aligned
+        stagger_t = ((i_t * 7) % 15).astype(jnp.float32) - 7.0
+        trees_y = trees_y + stagger_t
 
         min_sep_tree = 0.5*(jnp.float32(c.tree_width)+jnp.float32(c.tree_width)) + jnp.float32(c.sep_margin_tree_tree)
         xmin = jnp.float32(-6.0)
@@ -321,9 +329,17 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         # [deterministic]             minval=int(c.rock_height),
         # [deterministic]             maxval=int(c.screen_height - c.rock_height) + 1
         # [deterministic]         ).astype(jnp.float32)
-        # Deterministic rock y-position: r = 2, 6
-        r_rocks = jnp.array([2, 6], dtype=jnp.float32)
+        # Deterministic rock y-position: pattern [2, 6] repeating every 8 rows
+        rocks_per_row = jnp.maximum(1, c.max_num_rocks // 2)
+        i_r = jnp.arange(c.max_num_rocks, dtype=jnp.int32)
+        row_idx_r = i_r // rocks_per_row
+        base_offsets_r = jnp.array([2, 6], dtype=jnp.float32)
+        r_rocks = (row_idx_r // 2) * 8.0 + jnp.take(base_offsets_r, row_idx_r % 2)
         rocks_y = base_y + r_rocks * row_spacing
+        
+        # Add a deterministic stagger (-7 to +7 pixels) so they are not perfectly aligned
+        stagger_r = ((i_r * 11) % 15).astype(jnp.float32) - 7.0
+        rocks_y = rocks_y + stagger_r
         # Enforce separation from trees and already placed rocks
         min_sep_rock_tree = 0.5*(jnp.float32(self.consts.rock_width)+jnp.float32(self.consts.tree_width)) + jnp.float32(self.consts.sep_margin_tree_rock)
         min_sep_rock_rock = 0.5*(jnp.float32(self.consts.rock_width)+jnp.float32(self.consts.rock_width)) + jnp.float32(self.consts.sep_margin_rock_rock)
@@ -395,18 +411,16 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             step_fx = 13
             x_flag = (min_fx + (((state.gates_seen + i) * step_fx) % span_fx)).astype(jnp.float32)
 
-            # Constant vertical distance: always spawn behind the highest object in the scene
-            max_f = jnp.max(flags[:, 1])
-            max_t = jnp.max(new_trees[:, 1])
-            max_r = jnp.max(new_rocks[:, 1])
-            global_max_y = jnp.maximum(jnp.maximum(max_f, max_t), max_r)
-            y = global_max_y + jnp.float32(31.0)
+            row_old = flags.at[i].get()  # Shape (2,) or (4,)
+
+            # Constant vertical distance: always spawn exactly 8 rows (248.0 pixels) behind its current position
+            # This perfectly preserves the sequence density even with multiple objects per row
+            y = row_old.at[1].get() + jnp.float32(248.0)
 
             # Prevent spawning after the 20th gate (0 to 19).
             # When state.gates_seen >= 18, we have already spawned up to gate 19.
             y = jnp.where(state.gates_seen >= 18, jnp.float32(10000.0), y)
 
-            row_old = flags.at[i].get()  # Shape (2,) or (4,)
             row_new = row_old.at[0].set(x_flag).at[1].set(y)
 
             # Only respawn if the flag despawned above TOP_BORDER
@@ -431,13 +445,6 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             tree_val = ((state.gates_seen * 13 + i * 23) * step_tx) % 138
             x_tree = jnp.where(tree_val <= 66, -6.0 + tree_val, 100.0 + (tree_val - 67)).astype(jnp.float32)
 
-            max_f = jnp.max(flags[:, 1])
-            max_t = jnp.max(trees[:, 1])
-            max_r = jnp.max(new_rocks[:, 1])
-            global_max_y = jnp.maximum(jnp.maximum(max_f, max_t), max_r)
-            y = global_max_y + jnp.float32(31.0)
-            y = jnp.where(state.gates_seen >= 18, jnp.float32(10000.0), y)
-
             # Enforce min separation from existing trees and rocks on respawn (X only)
             min_sep_tree_tree = (jnp.float32(self.consts.tree_width) + jnp.float32(self.consts.tree_width)) * 0.5 + jnp.float32(8.0)
             min_sep_tree_rock = (jnp.float32(self.consts.tree_width) + jnp.float32(self.consts.rock_width)) * 0.5 + jnp.float32(8.0)
@@ -451,6 +458,10 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             x_tree = jnp.where((x_tree > 60.0) & (x_tree < 100.0), jnp.where(x_tree < 80.0, 60.0, 100.0), x_tree)
 
             row_old = trees.at[i].get()
+
+            # Spawn exactly 8 rows behind current position to maintain sequence
+            y = row_old.at[1].get() + jnp.float32(248.0)
+            y = jnp.where(state.gates_seen >= 18, jnp.float32(10000.0), y)
             
             # Generate a pseudo-random tree type based on state.gates_seen and i
             new_type = ((state.gates_seen * 3 + i * 5) % 4).astype(jnp.float32)
@@ -478,13 +489,6 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             span_rx = max_rx - min_rx + 1
             step_rx = 19
             x_rock = (min_rx + (((state.gates_seen + i) * step_rx) % span_rx)).astype(jnp.float32)
-            max_f = jnp.max(flags[:, 1])
-            max_t = jnp.max(trees[:, 1])
-            max_r = jnp.max(rocks[:, 1])
-            global_max_y = jnp.maximum(jnp.maximum(max_f, max_t), max_r)
-            y = global_max_y + jnp.float32(31.0)
-            y = jnp.where(state.gates_seen >= 18, jnp.float32(10000.0), y)
-
             # Enforce separation from existing rocks and trees on respawn
             min_sep_rock_rock = 0.5*(jnp.float32(self.consts.rock_width)+jnp.float32(self.consts.rock_width)) + jnp.float32(self.consts.sep_margin_rock_rock)
             min_sep_rock_tree = 0.5*(jnp.float32(self.consts.rock_width)+jnp.float32(self.consts.tree_width)) + jnp.float32(self.consts.sep_margin_tree_rock)
@@ -496,6 +500,10 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             x_rock = _enforce_min_sep_x(x_rock, taken_from_trees, min_sep_rock_tree, xmin_r, xmax_r, n_valid=jnp.array(taken_from_trees.shape[0], dtype=jnp.int32))
 
             row_old = rocks.at[i].get()
+
+            # Spawn exactly 8 rows behind current position to maintain sequence
+            y = row_old.at[1].get() + jnp.float32(248.0)
+            y = jnp.where(state.gates_seen >= 18, jnp.float32(10000.0), y)
             row_new = row_old.at[0].set(x_rock).at[1].set(y)
 
             cond = jnp.less(rocks.at[i, 1].get(), self.consts.TOP_BORDER)
