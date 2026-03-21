@@ -821,28 +821,57 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
 #        return win_bonus + time_penalty
     
-    #Greedy Reward + Win/Loss Bonus
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(self, previous_state: OthelloState, state: OthelloState) -> float:
-        # 1. Veränderung berechnen
-        score_delta = state.player_1_score - previous_state.player_1_score
+#    #Greedy Reward + Win/Loss Bonus
+#    @partial(jax.jit, static_argnums=(0,))
+#    def _get_reward(self, previous_state: OthelloState, state: OthelloState) -> float:
+#        # 1. Veränderung berechnen
+#        score_delta = state.player_1_score - previous_state.player_1_score
         
-        # 2. Greedy Reward SKALIERT
-        # Multipliziert mit 0.1, damit die Zahlen klein und stabil bleiben
-        greedy_reward = jnp.maximum(0.0, score_delta.astype(jnp.float32)) * 0.1
+#        # 2. Greedy Reward SKALIERT
+#        # Multipliziert mit 0.1, damit die Zahlen klein und stabil bleiben
+#        greedy_reward = jnp.maximum(0.0, score_delta.astype(jnp.float32)) * 0.1
 
         # 3. Spielende
+#        board_full = (state.player_1_score + state.player_2_score) >= (self.consts.BOARD_SIZE * self.consts.BOARD_SIZE)
+#        no_moves_left = (state.passes >= 2)
+#        is_done = jnp.logical_or(board_full, no_moves_left)
+#
+#        p1_won = state.player_1_score > state.player_2_score
+#        p2_won = state.player_2_score > state.player_1_score
+
+        # Moderater Win-Bonus: +5.0 für Sieg, -5.0 für Niederlage
+#        win_bonus = jnp.where(
+#            is_done,
+#            jnp.where(p1_won, 5.0, jnp.where(p2_won, -5.0, 0.0)),
+#            0.0
+#        ).astype(jnp.float32)
+
+#        return greedy_reward + win_bonus
+
+    #Greedy Reward + Win Bonus (ohne Loss strafe)
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: OthelloState, state: OthelloState) -> float:
+        # 1. Veränderung des eigenen Scores berechnen
+        score_delta = state.player_1_score - previous_state.player_1_score
+        
+        # 2. Greedy Reward (nur eigener Zug)
+        # jnp.maximum(0.0, ...) ignoriert die Minuspunkte, wenn der Gegner Steine frisst.
+        # Faktor 0.1 sorgt dafür, dass die Zahlen für das PQN-Netzwerk stabil bleiben.
+        greedy_reward = jnp.maximum(0.0, score_delta.astype(jnp.float32)) * 0.1
+
+        # 3. Spielende prüfen
         board_full = (state.player_1_score + state.player_2_score) >= (self.consts.BOARD_SIZE * self.consts.BOARD_SIZE)
         no_moves_left = (state.passes >= 2)
         is_done = jnp.logical_or(board_full, no_moves_left)
 
         p1_won = state.player_1_score > state.player_2_score
-        p2_won = state.player_2_score > state.player_1_score
 
-        # Moderater Win-Bonus: +5.0 für Sieg, -5.0 für Niederlage
+        # 4. Dicke Belohnung für den Sieg!
+        # +10.0 ist massiv im Vergleich zum Greedy-Reward (1 Stein = 0.1).
+        # Niederlage bleibt bei 0.0, damit die KI sich traut zu spielen.
         win_bonus = jnp.where(
-            is_done,
-            jnp.where(p1_won, 5.0, jnp.where(p2_won, -5.0, 0.0)),
+            jnp.logical_and(is_done, p1_won),
+            10.0,
             0.0
         ).astype(jnp.float32)
 
