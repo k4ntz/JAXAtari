@@ -18,6 +18,7 @@
 import collections
 from collections.abc import Sequence
 from typing import Optional, Tuple, Union, Any
+from dataclasses import is_dataclass, asdict
 
 import jax
 from jax.tree_util import register_pytree_node
@@ -119,19 +120,10 @@ class Box(Space):
             self.shape = low_arr.shape
 
         # Broadcast low and high to the correct shape
+        # JAX will raise an error here if broadcasting fails
         self.low = jnp.broadcast_to(jnp.asarray(low, dtype=dtype), self.shape)
         self.high = jnp.broadcast_to(jnp.asarray(high, dtype=dtype), self.shape)
         self.dtype = dtype
-        
-        # Broadcasting checks to ensure compatibility
-        try:
-            np.broadcast_to(self.low, self.shape)
-            np.broadcast_to(self.high, self.shape)
-        except ValueError:
-            raise ValueError(
-                f"low and high bounds must be broadcastable to shape {self.shape}. "
-                f"Got low.shape={self.low.shape}, high.shape={self.high.shape}"
-            )
 
 
     def sample(self, key: jax.Array) -> jax.Array:
@@ -191,9 +183,13 @@ class Box(Space):
 
 
 class Dict(Space):
-    """A jittable dictionary of simpler jittable spaces (Pytree container)."""
+    """
+    A jittable dictionary of simpler jittable spaces.
+    CRITICAL: Respects insertion order to align with Dataclass flattening.
+    """
 
     def __init__(self, spaces: dict):
+        # DO NOT SORT. Use OrderedDict to preserve insertion order passed by the user.
         self.spaces = collections.OrderedDict(spaces)
         self.num_spaces = len(self.spaces)
 
@@ -204,36 +200,30 @@ class Dict(Space):
         )
 
     def contains(self, x: dict) -> jax.Array:
-        """Check whether the given Pytree is contained in the space."""
-        # Handle named tuples by converting to dict
-        if hasattr(x, '_asdict'):
-            x = x._asdict()
+        # Handle conversions for namedtuples/dataclasses
+        if hasattr(x, '_asdict'): x = x._asdict()
+        elif is_dataclass(x): x = asdict(x)
         
         if not isinstance(x, dict) or self.spaces.keys() != x.keys():
             return jnp.asarray(False)
 
-        # Use explicit iteration
-        bools = [
+        return jnp.all(jnp.asarray([
             self.spaces[k].contains(x[k]) for k in self.spaces.keys()
-        ]
-        return jnp.all(jnp.asarray(bools))
+        ]))
     
     def __repr__(self) -> str:
         return "Dict(" + ", ".join([f"{k}: {s}" for k, s in self.spaces.items()]) + ")"
 
     def __iter__(self):
-        """Iterate over the keys of the contained spaces."""
         yield from self.spaces
 
     def __eq__(self, other):
         return super().__eq__(other) and self.spaces == other.spaces
 
     def __hash__(self):
-        """Returns the hash of the dict space."""
-        # Hash a tuple of items since dicts are not hashable
         return hash(tuple(self.spaces.items()))
 
-# Register Dict as a Pytree node for JAX utilities
+# Register Dict to flatten values in INSERTION order (values(), keys())
 register_pytree_node(
     Dict,
     lambda s: (list(s.spaces.values()), list(s.spaces.keys())),
@@ -257,10 +247,13 @@ class Tuple(Space):
         """
         Check whether the given Pytree is contained in the space.
         """
-        # Handle named tuples by converting to tuple
+        # Handle named tuples and dataclasses by converting to tuple
         if hasattr(x, '_asdict'):
             # Convert named tuple to regular tuple
             x = tuple(x._asdict().values())
+        elif is_dataclass(x):
+            # Convert dataclass to regular tuple
+            x = tuple(asdict(x).values())
         
         # 1. Initial validation: check if x is a tuple of the correct length.
         if not isinstance(x, (tuple, list)) or len(x) != len(self.spaces):
@@ -342,3 +335,26 @@ def stack_space(space: Space, stack_size: int) -> Space:
     return jax.tree.map(
         _stack_leaf, space, is_leaf=lambda n: isinstance(n, (Box, Discrete))
     )
+
+
+def get_object_space(n: int = None, screen_size=(210, 160), orientation_range=(0.0, 360.0)) -> Dict:
+    """
+    Generates the standard space for an ObjectObservation.
+    Args:
+        n: Number of objects. None (or 1) for scalars, >1 for arrays.
+        screen_size: Tuple (height, width) for bounds (uses HWC for consistency).
+        orientation_range: Tuple (min_orientation, max_orientation) for orientation bounds.
+    """
+    shape = () if n is None else (n,)
+    h, w = screen_size
+    
+    return Dict({
+        "x": Box(low=0, high=w, shape=shape, dtype=jnp.int16),
+        "y": Box(low=0, high=h, shape=shape, dtype=jnp.int16),
+        "width": Box(low=0, high=w, shape=shape, dtype=jnp.int16),
+        "height": Box(low=0, high=h, shape=shape, dtype=jnp.int16),
+        "active": Box(low=0, high=1, shape=shape, dtype=jnp.int8), # or Discrete(2)
+        "visual_id": Box(low=0, high=255, shape=shape, dtype=jnp.int16),
+        "state": Box(low=0, high=255, shape=shape, dtype=jnp.int16), # generic "state" attribute for game-specific use (e.g. vulnerable vs non-vulnerable mushroom in centipede)
+        "orientation": Box(low=orientation_range[0], high=orientation_range[1], shape=shape, dtype=jnp.float32), # uses float32 for orientation to support both continuous and discrete-normalized
+    })
