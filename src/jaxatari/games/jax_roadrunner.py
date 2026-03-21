@@ -3436,6 +3436,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "landmine", "type": "single", "file": "landmine.npy"},
             {"name": "player_burnt", "type": "single", "file": "roadrunner_burnt.npy"},
             {"name": "end_of_level_1", "type": "single", "file": "end_of_level_1.npy"},
+            {"name": "end_of_level_2", "type": "single", "file": "end_of_level_2.npy"},
+            {"name": "end_of_level_3", "type": "single", "file": "end_of_level_3.npy"},
             {"name": "cactus", "type": "single", "file": "cactus.npy"},
             {"name": "tumbleweed", "type": "single", "file": "tumbleweed.npy"},
             {"name": "sign_this_way", "type": "single", "file": "sign_this_way.npy"},
@@ -4093,13 +4095,17 @@ class RoadRunnerRenderer(JAXGameRenderer):
         def _render_transition(_):
             t_canvas = self.jr.create_object_raster(self.BACKGROUND)
 
-            t_canvas = self.jr.render_at(
-                t_canvas,
-                0,
-                0,
-                self.SHAPE_MASKS["end_of_level_1"]
+            level_idx = jnp.clip(state.current_level - 1, 0, 2).astype(jnp.int32)
+            sprite = jax.lax.switch(
+                level_idx,
+                [
+                    lambda: self.SHAPE_MASKS["end_of_level_1"],
+                    lambda: self.SHAPE_MASKS["end_of_level_2"],
+                    lambda: self.SHAPE_MASKS["end_of_level_3"],
+                ],
             )
 
+            t_canvas = self.jr.render_at(t_canvas, 0, 0, sprite)
             return self.jr.render_from_palette(t_canvas, self.PALETTE)
 
         # Render Truck
