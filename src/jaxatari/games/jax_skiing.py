@@ -129,13 +129,13 @@ class SkiingConstants(AutoDerivedConstants):
     RIGHT: int = struct.field(pytree_node=False, default=2)
     FIRE: int = struct.field(pytree_node=False, default=3)
     BOTTOM_BORDER: int = struct.field(pytree_node=False, default=176)
-    TOP_BORDER: int = struct.field(pytree_node=False, default=23)
+    TOP_BORDER: int = struct.field(pytree_node=False, default=-15)
     """Game configuration parameters"""
     screen_width: int = struct.field(pytree_node=False, default=160)
     screen_height: int = struct.field(pytree_node=False, default=210)
     skier_width: int = struct.field(pytree_node=False, default=10)
     skier_height: int = struct.field(pytree_node=False, default=18)
-    skier_y: int = struct.field(pytree_node=False, default=40)
+    skier_y: int = struct.field(pytree_node=False, default=46)
     flag_width: int = struct.field(pytree_node=False, default=10)
     flag_height: int = struct.field(pytree_node=False, default=28)
     flag_distance: int = struct.field(pytree_node=False, default=32)
@@ -311,9 +311,9 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         # [deterministic]             minval=int(c.rock_width),
         # [deterministic]             maxval=int(c.screen_width - c.rock_width) + 1
         # [deterministic]         ).astype(jnp.float32)
-        # Deterministic rock x-position: stride 19 across lane
-        min_rx = jnp.int32(self.consts.rock_width)
-        max_rx = jnp.int32(self.consts.screen_width - self.consts.rock_width)
+        # Deterministic rock x-position: between 50 and 110
+        min_rx = jnp.int32(50)
+        max_rx = jnp.int32(110)
         span_rx = max_rx - min_rx + 1
         rocks_x = (min_rx + ((jnp.arange(c.max_num_rocks, dtype=jnp.int32) * 19) % span_rx)).astype(jnp.float32)
         # [deterministic]         rocks_y = jax.random.randint(
@@ -327,8 +327,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         # Enforce separation from trees and already placed rocks
         min_sep_rock_tree = 0.5*(jnp.float32(self.consts.rock_width)+jnp.float32(self.consts.tree_width)) + jnp.float32(self.consts.sep_margin_tree_rock)
         min_sep_rock_rock = 0.5*(jnp.float32(self.consts.rock_width)+jnp.float32(self.consts.rock_width)) + jnp.float32(self.consts.sep_margin_rock_rock)
-        xmin_r = jnp.float32(c.rock_width)
-        xmax_r = jnp.float32(c.screen_width - c.rock_width)
+        xmin_r = jnp.float32(50.0)
+        xmax_r = jnp.float32(110.0)
 
         tree_xs_fixed = trees[:, 0]
 
@@ -472,9 +472,9 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             # [deterministic]                 self.config.rock_width,
             # [deterministic]                 self.config.screen_width - self.config.rock_width
             # [deterministic]             ).astype(jnp.float32)
-            # Deterministic rock x based on gates_seen and index i, different step
-            min_rx = jnp.int32(self.consts.rock_width)
-            max_rx = jnp.int32(self.consts.screen_width - self.consts.rock_width)
+            # Deterministic rock x based on gates_seen and index i, between 50 and 110
+            min_rx = jnp.int32(50)
+            max_rx = jnp.int32(110)
             span_rx = max_rx - min_rx + 1
             step_rx = 19
             x_rock = (min_rx + (((state.gates_seen + i) * step_rx) % span_rx)).astype(jnp.float32)
@@ -488,8 +488,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             # Enforce separation from existing rocks and trees on respawn
             min_sep_rock_rock = 0.5*(jnp.float32(self.consts.rock_width)+jnp.float32(self.consts.rock_width)) + jnp.float32(self.consts.sep_margin_rock_rock)
             min_sep_rock_tree = 0.5*(jnp.float32(self.consts.rock_width)+jnp.float32(self.consts.tree_width)) + jnp.float32(self.consts.sep_margin_tree_rock)
-            xmin_r = jnp.float32(self.consts.rock_width)
-            xmax_r = jnp.float32(self.consts.screen_width - self.consts.rock_width)
+            xmin_r = jnp.float32(50.0)
+            xmax_r = jnp.float32(110.0)
             taken_from_rocks = rocks[:, 0]
             taken_from_trees = new_trees[:, 0]
             x_rock = _enforce_min_sep_x(x_rock, taken_from_rocks, min_sep_rock_rock, xmin_r, xmax_r, n_valid=jnp.array(taken_from_rocks.shape[0], dtype=jnp.int32))
@@ -596,7 +596,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         accel_mag = dy_target * jnp.float32(0.05)
 
         # Distribute acceleration along the x and y axes
-        accel_x = accel_mag * dir_x
+        # We boost the horizontal acceleration component by 2x so the skier accelerates more laterally when turning
+        accel_x = accel_mag * dir_x * jnp.float32(2.0)
         accel_y = accel_mag * dir_y
         
         # Apply independent friction and acceleration to preserve momentum
@@ -1096,7 +1097,8 @@ class SkiingRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: SkiingState) -> jnp.ndarray:
         # 1. Start with the white background
-        raster = self.jr.create_object_raster(self.BACKGROUND)
+        bg_raster = self.jr.create_object_raster(self.BACKGROUND)
+        raster = bg_raster
 
         # 2. Draw Rocks (Moguls) first so they are behind the skier
         rock_mask = self.SHAPE_MASKS['rock']
@@ -1182,6 +1184,10 @@ class SkiingRenderer(JAXGameRenderer):
             left = (cx - (tree_w // 2)).astype(jnp.int32)
             return self.jr.render_at_clipped(r, left, top, mask, flip_offset=tree_offset)            
         raster = jax.lax.fori_loop(0, self.consts.max_num_trees, draw_tree, raster)
+
+        # 6.5 Apply 32px top and bottom white bands to hide scrolled objects
+        raster = raster.at[:32, :].set(bg_raster[:32, :])
+        raster = raster.at[-32:, :].set(bg_raster[-32:, :])
 
         # 7. Draw UI
         score_digits = self._format_score_digits(state.successful_gates)
