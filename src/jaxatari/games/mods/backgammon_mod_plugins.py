@@ -191,11 +191,23 @@ class RewardShapingMod(JaxAtariInternalModPlugin):
         curr_safe = _count_safe_points_for_player(new_state.board, player_idx)
         new_safe = curr_safe - prev_safe
 
+        # Did the agent successfully pick up a checker? (Phase 1 -> Phase 2)
+        picked_up = (state.game_phase == 1) & (new_state.game_phase == 2)
+        pick_bonus = jnp.where(picked_up, 0.01, 0.0)
+
+        # Did the agent successfully drop a checker on a valid point? 
+        # (Phase 2 -> Phase 1 or Phase 0)
+        valid_drop = (state.game_phase == 2) & ((new_state.game_phase == 1) | (new_state.game_phase == 0))
+        drop_bonus = jnp.where(valid_drop, 0.05, 0.0)
+
+        # Calculate final bonus including UI interactions
         bonus = (
             self.pip_weight * pip_improvement +
             self.bear_off_bonus * new_borne +
             self.hit_bonus * jnp.maximum(0, hits) +
-            self.safety_weight * new_safe
+            self.safety_weight * new_safe +
+            pick_bonus + 
+            drop_bonus
         ).astype(jnp.float32)
 
         shaped_reward = jnp.asarray(reward, dtype=jnp.float32) + bonus
