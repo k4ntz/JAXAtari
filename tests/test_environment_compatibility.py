@@ -702,17 +702,19 @@ class TestAdvancedWrapperFeatures:
         total_reward = 0.0
         steps = 0
         done = False
+        logged_done = False
         
         while not done and steps < 100:
             obs, state, reward, done, info = env.step(state, 0)
             total_reward += reward
             steps += 1
+            logged_done = bool(info.get("returned_episode", False))
             
             # Check running totals
-            assert state.episode_returns == total_reward * (1 - done), "Episode returns should match accumulated reward"
-            assert state.episode_lengths == steps * (1 - done), "Episode lengths should match step count"
+            assert state.episode_returns == total_reward * (1 - logged_done), "Episode returns should match accumulated reward"
+            assert state.episode_lengths == steps * (1 - logged_done), "Episode lengths should match step count"
             
-            if done:
+            if logged_done:
                 # Check final episode statistics
                 assert state.returned_episode_returns == total_reward, "Returned episode returns should match total reward"
                 assert state.returned_episode_lengths == steps, "Returned episode lengths should match step count"
