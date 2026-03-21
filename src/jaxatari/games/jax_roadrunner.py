@@ -1617,7 +1617,7 @@ class JaxRoadRunner(
         # Use switch: 0=normal, 1=flattened, 2=game_over, 3=burnt, 4=rocket
         level_idx = self._get_level_index(state)
         rocket_enabled = self._level_enemy_rocket[level_idx]
-        # Scroll cycle triggers rocket activation; once active it stays until 2 full passes
+        # Scroll cycle triggers rocket activation; once active it stays for 1 full side-to-side pass (2 bounces)
         cycle_pos = state.scrolling_step_counter % self.consts.ROCKET_CYCLE_LENGTH
         should_activate = rocket_enabled & ~state.enemy_rocket_active & (cycle_pos < self.consts.ROCKET_ACTIVE_DURATION)
         # Activate: set flag and reset bounce counter
