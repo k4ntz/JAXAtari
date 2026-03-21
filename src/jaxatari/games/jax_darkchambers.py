@@ -3065,34 +3065,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 )
                 return apply_enemy_portal_keepout(moved)
 
-            def resolve_enemy_overlaps(cand_positions, prev_positions, active):
-                w = self.consts.ENEMY_WIDTH
-                h = self.consts.ENEMY_HEIGHT
-
-                ex = cand_positions[:, 0]
-                ey = cand_positions[:, 1]
-
-                ex_i = ex[:, None]
-                ex_j = ex[None, :]
-                ey_i = ey[:, None]
-                ey_j = ey[None, :]
-
-                overlap_x = (ex_i <= ex_j + w - 1) & (ex_i + w - 1 >= ex_j)
-                overlap_y = (ey_i <= ey_j + h - 1) & (ey_i + h - 1 >= ey_j)
-                overlap = overlap_x & overlap_y
-
-                a_i = active[:, None].astype(bool)
-                a_j = active[None, :].astype(bool)
-                overlap = overlap & a_i & a_j
-
-                idx = jnp.arange(NUM_ENEMIES)
-                earlier = idx[:, None] < idx[None, :]
-                loser_matrix = overlap & earlier
-                loser_flags = jnp.any(loser_matrix, axis=0)
-
-                return jnp.where(loser_flags[:, None], prev_positions, cand_positions)
-
-            
             def collides(px, py):
                 wx = WALLS[:, 0]
                 wy = WALLS[:, 1]
@@ -3587,7 +3559,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
             # Apply movement
             cand_enemy_positions = jax.vmap(move_enemy)(state.enemy_positions, step_vec)
-            cand_enemy_positions = resolve_enemy_overlaps(cand_enemy_positions, state.enemy_positions, state.enemy_active)
 
             # Detect if stuck (didn't move while trying to)
             moved = jnp.any(cand_enemy_positions != state.enemy_positions, axis=1)
@@ -3620,11 +3591,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
             new_enemy_positions = jax.vmap(move_enemy)(state.enemy_positions, desired_step)
 
-            new_enemy_positions = resolve_enemy_overlaps(
-                new_enemy_positions,
-                state.enemy_positions,
-                state.enemy_active,
-            )
 
             # --- Derive animation direction from actual movement ---
             # This ensures up/down sprites play when chasing north/south, not just during patrol
