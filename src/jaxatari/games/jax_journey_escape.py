@@ -166,9 +166,14 @@ class JourneyEscapeConstants(AutoDerivedConstants):
         0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
     ))
-    # Horizontal move period for diagonal obstacles (move 1px every N frames).
-    # 2 = 0.5 px/frame effective, 1 = 1 px/frame. Future mods can decrease for steeper angles.
+    # Horizontal move period for diagonal obstacles (move 1px every N frames)
     obstacle_horizontal_move_period: int = struct.field(pytree_node=False, default=2)
+    # When True, horizontal move period alternates between 2 and 1 on each wall bounce
+    diagonal_speed_alternates: bool = struct.field(pytree_node=False, default=False)
+    # Per-frame probability of spontaneous direction flip (0.0 = never, checked every frame)
+    diagonal_random_switch_prob: float = struct.field(pytree_node=False, default=0.0)
+    # Cooldown frames after a random switch before another can happen
+    diagonal_random_switch_cooldown: int = struct.field(pytree_node=False, default=100)
 
 @struct.dataclass
 class JourneyEscapeState:
@@ -183,7 +188,7 @@ class JourneyEscapeState:
     game_over: chex.Array
 
     row_timer: chex.Array  # int32
-    obstacles: chex.Array  # (MAX_OBS, 6) -> x, y, w, h, type_idx, dx | [pool]
+    obstacles: chex.Array  # (MAX_OBS, 8) -> x, y, w, h, type_idx, dx, move_period, switch_cd | [pool]
     obstacle_frames: chex.Array
     invincibility_timer: chex.Array
     spawn_count: chex.Array
@@ -230,7 +235,7 @@ class JaxJourneyEscape(
         player_y = self.consts.start_player_y
         player_x = self.consts.start_player_x
 
-        empty_boxes = jnp.zeros((self.consts.MAX_OBS, 6), dtype=jnp.int32)
+        empty_boxes = jnp.zeros((self.consts.MAX_OBS, 8), dtype=jnp.int32)
         rng_key = jax.random.PRNGKey(0)
 
         state = JourneyEscapeState(
@@ -329,9 +334,12 @@ class JaxJourneyEscape(
 
         # --- Diagonal Movement (horizontal velocity from dx column) ---
         obs_dx = boxes[:, 5]  # per-obstacle horizontal velocity (-1, 0, or +1)
-        # Move 1px every N frames (period-based sub-pixel movement)
-        should_move_h = (state.time % self.consts.obstacle_horizontal_move_period) == 0
-        effective_dx_obs = jnp.where(active & should_move_h, obs_dx, 0)
+        obs_move_period = boxes[:, 6]  # per-obstacle move period
+        # Use per-obstacle period: move 1px when frame aligns with this obstacle's period
+        # For inactive obstacles or period=0 (straight movers), never move horizontally
+        safe_period = jnp.where(obs_move_period > 0, obs_move_period, 1)
+        should_move_h = active & (obs_move_period > 0) & ((state.time % safe_period) == 0)
+        effective_dx_obs = jnp.where(should_move_h, obs_dx, 0)
         new_obs_x = boxes[:, 0] + effective_dx_obs
 
         # Wall-bounce: flip dx for entire groups when any member hits a wall.
@@ -360,6 +368,33 @@ class JaxJourneyEscape(
         boxes = boxes.at[:, 0].set(jnp.where(active, final_obs_x, boxes[:, 0]))
         boxes = boxes.at[:, 5].set(flipped_dx)
 
+        # Alternate speed on bounce: toggle move_period between 2 (slow) and 1 (fast)
+        new_move_period = jnp.where(
+            should_flip & self.consts.diagonal_speed_alternates,
+            jnp.where(obs_move_period == 2, 1, 2),
+            obs_move_period
+        )
+        boxes = boxes.at[:, 6].set(new_move_period)
+
+        # --- Random direction switch (Level 5) with cooldown ---
+        # Decrement cooldown for all active obstacles
+        switch_cd = boxes[:, 7]
+        switch_cd = jnp.where(active, jnp.maximum(switch_cd - 1, 0), switch_cd)
+
+        rng_for_switch, new_rng_after_switch = jax.random.split(state.rng_key)
+        switch_rolls = jax.random.uniform(rng_for_switch, (self.consts.MAX_OBS,))
+        is_diagonal_obs = boxes[:, 5] != 0  # only for obstacles actually moving diagonally
+        cd_ready = switch_cd == 0  # only check when cooldown expired
+        individual_switch = active & is_diagonal_obs & cd_ready & (switch_rolls < self.consts.diagonal_random_switch_prob)
+        # Propagate to group: if ANY member (same y) switched, the whole group switches
+        switch_match_matrix = (obs_y_vals[:, None] == obs_y_vals[None, :]) & individual_switch[None, :]
+        group_should_switch = jnp.any(switch_match_matrix, axis=1) & active & is_diagonal_obs
+        current_dx = boxes[:, 5]
+        boxes = boxes.at[:, 5].set(jnp.where(group_should_switch, -current_dx, current_dx))
+        # Reset cooldown for obstacles that switched
+        switch_cd = jnp.where(group_should_switch, self.consts.diagonal_random_switch_cooldown, switch_cd)
+        boxes = boxes.at[:, 7].set(switch_cd)
+
         # Cull: deactivate obstacles 30px before the bottom of the screen
         cull_y = self.consts.screen_height - 30
         offscreen = boxes[:, 1] >= cull_y
@@ -368,7 +403,7 @@ class JaxJourneyEscape(
 
         # carry-through for new fields (no behavior change yet)
         new_row_timer = (state.row_timer + 1) % self.consts.row_spawn_period_frames
-        new_rng = state.rng_key  # unchanged key
+        new_rng = new_rng_after_switch  # key consumed by random direction switch
 
         # Trigger: every row_spawn_period_frames frames
         spawn_now = (new_row_timer == 0)
@@ -432,6 +467,7 @@ class JaxJourneyEscape(
                 hs = jnp.full((MAX_GROUP,), this_h, dtype=jnp.int32)
                 ts = jnp.full((MAX_GROUP,), type_idx, dtype=jnp.int32)
                 dxs = jnp.full((MAX_GROUP,), spawn_dx, dtype=jnp.int32)
+                mps = jnp.full((MAX_GROUP,), self.consts.obstacle_horizontal_move_period, dtype=jnp.int32)
 
                 ys = jnp.full((MAX_GROUP,), self.consts.top_border, dtype=jnp.int32) - hs
 
@@ -439,7 +475,7 @@ class JaxJourneyEscape(
                 def body(t, b):
                     def place_one(bb):
                         i = free_idx[t]
-                        return bb.at[i].set(jnp.array([xs[t], ys[t], ws[t], hs[t], ts[t], dxs[t]], dtype=jnp.int32))
+                        return bb.at[i].set(jnp.array([xs[t], ys[t], ws[t], hs[t], ts[t], dxs[t], mps[t], 0], dtype=jnp.int32))
 
                     return jax.lax.cond(t < amount, place_one, lambda bb: bb, b)
 
@@ -466,10 +502,10 @@ class JaxJourneyEscape(
         # --- COLLISIONS---
 
         # We treat any obstacle with h > 0 as active.
-        # boxes has shape (MAX_OBS, 6): [x, y, w, h, type_idx, dx]
+        # boxes has shape (MAX_OBS, 8): [x, y, w, h, type_idx, dx, move_period, switch_cd]
 
         def get_collision_data(box):
-            b_x, b_y, b_w, b_h, b_type, _b_dx = box
+            b_x, b_y, b_w, b_h, b_type, _b_dx, _b_mp, _b_cd = box
 
             is_active = b_h > 0
 
@@ -527,7 +563,7 @@ class JaxJourneyEscape(
             This function ensures that if the player's CURRENT coordinates overlap,
             the drag physics remain active.
             """
-            b_x, b_y, b_w, b_h, b_type, _b_dx = box
+            b_x, b_y, b_w, b_h, b_type, _b_dx, _b_mp, _b_cd = box
             is_active = b_h > 0
             is_photographer = (b_type == 4) | (b_type == 8)
 
@@ -674,7 +710,7 @@ class JaxJourneyEscape(
             This check catches cases where an obstacle has already moved into the player,
             so we don't incorrectly release drag or allow sideways escape.
             """
-            b_x, b_y, b_w, b_h, b_type, _b_dx = box
+            b_x, b_y, b_w, b_h, b_type, _b_dx, _b_mp, _b_cd = box
 
             p_x, p_y = state.player_x, state.player_y
             p_w, p_h = self.consts.player_width, self.consts.player_height
