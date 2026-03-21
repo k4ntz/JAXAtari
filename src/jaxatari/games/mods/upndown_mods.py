@@ -1,5 +1,5 @@
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.upndown_mod_plugins import (
+from jaxatari.games.mods.upndown.upndown_mod_plugins import (
     AllowJumpBackwardsMod,
     RemoveStepRoadsMod,
     HigherPlayerSpeedMod,
