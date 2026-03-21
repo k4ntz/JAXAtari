@@ -591,23 +591,23 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         dir_x = dx_target / dir_norm
         dir_y = dy_target / dir_norm
 
-        # Effective friction depends on current orientation
-        eff_friction = jnp.abs(dir_x) * friction_x + jnp.abs(dir_y) * friction_y
-
-        # Calculate current scalar speed
-        current_speed = jnp.sqrt(state.skier_x_speed**2 + state.skier_y_speed**2)
-
         # Acceleration is proportional to how much the skier is facing down (dy_target)
         # Maximal when facing down (dy_target == 1.0), zero when parallel (dy_target == 0.0)
-        accel = dy_target * jnp.float32(0.05)
+        accel_mag = dy_target * jnp.float32(0.05)
 
-        # Apply friction and acceleration
-        new_speed = current_speed * (1.0 - eff_friction) + accel
-        new_speed = jnp.clip(new_speed, 0.0, max_speed)
+        # Distribute acceleration along the x and y axes
+        accel_x = accel_mag * dir_x
+        accel_y = accel_mag * dir_y
+        
+        # Apply independent friction and acceleration to preserve momentum
+        x_speed_next = state.skier_x_speed * (1.0 - friction_x) + accel_x
+        y_speed_next = state.skier_y_speed * (1.0 - friction_y) + accel_y
 
-        # Distribute the new speed along the x and y axes
-        x_speed_next = new_speed * dir_x
-        y_speed_next = new_speed * dir_y
+        # Clip total speed vector to max_speed
+        current_speed_next = jnp.sqrt(x_speed_next**2 + y_speed_next**2) + 1e-6
+        scale = jnp.minimum(1.0, max_speed / current_speed_next)
+        x_speed_next = x_speed_next * scale
+        y_speed_next = y_speed_next * scale
 
         new_skier_x_speed_nom = jax.lax.select(
             in_recovery,
