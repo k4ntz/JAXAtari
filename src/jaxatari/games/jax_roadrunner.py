@@ -444,9 +444,9 @@ RoadRunner_Level_4 = LevelConfig(
 )
 
 DEFAULT_LEVELS: Tuple[LevelConfig, ...] = (
-    RoadRunner_Level_1,
-    RoadRunner_Level_2,
-    RoadRunner_Level_3,
+        #RoadRunner_Level_1,
+        #RoadRunner_Level_2,
+        #RoadRunner_Level_3,
     RoadRunner_Level_4,
 )
 
@@ -1614,12 +1614,38 @@ class JaxRoadRunner(
         return jax.lax.switch(branch_idx, [normal_logic, flattened_logic, game_over_logic, burnt_logic, rocket_patrol_logic], state)
 
     def _check_game_over(self, state: RoadRunnerState) -> RoadRunnerState:
+        # In rocket mode, only the bottom 1/4 of each sprite's visual height collides.
+        level_idx = self._get_level_index(state)
+        is_rocket = self._level_enemy_rocket[level_idx]
+
+        # Normal collision boxes
+        p_y_normal = state.player_y
+        p_h_normal = self.consts.PLAYER_SIZE[1]
+        e_y_normal = state.enemy_y
+        e_h_normal = self.consts.ENEMY_SIZE[1]
+
+        # Rocket collision boxes: bottom 1/4 of player, bottom 1/2 of enemy.
+        # Use the visual sprite dimensions (ENEMY_SPRITE_HEIGHT/WIDTH) rather than
+        # the small ENEMY_SIZE hitbox so the fractions are meaningful.
+        player_quarter = self.consts.PLAYER_SIZE[1] // 4
+        enemy_half = ENEMY_SPRITE_HEIGHT // 2
+        # Shift y down so only the bottom portion remains
+        p_y_rocket = state.player_y + self.consts.PLAYER_SIZE[1] - player_quarter
+        p_h_rocket = player_quarter
+        e_y_rocket = state.enemy_y + ENEMY_SPRITE_HEIGHT - enemy_half
+        e_h_rocket = enemy_half
+
+        p_y = jnp.where(is_rocket, p_y_rocket, p_y_normal)
+        p_h = jnp.where(is_rocket, p_h_rocket, p_h_normal)
+        e_y = jnp.where(is_rocket, e_y_rocket, e_y_normal)
+        e_h = jnp.where(is_rocket, e_h_rocket, e_h_normal)
+
         # Check if the enemy and the player overlap
         collision = _check_aabb_collision(
-            state.player_x, state.player_y,
-            self.consts.PLAYER_SIZE[0], self.consts.PLAYER_SIZE[1],
-            state.enemy_x, state.enemy_y,
-            self.consts.ENEMY_SIZE[0], self.consts.ENEMY_SIZE[1],
+            state.player_x, p_y,
+            self.consts.PLAYER_SIZE[0], p_h,
+            state.enemy_x, e_y,
+            self.consts.ENEMY_SIZE[0], e_h,
         )
 
         # Don't trigger game over if enemy is flattened or burnt
