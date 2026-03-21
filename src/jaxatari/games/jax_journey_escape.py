@@ -173,7 +173,6 @@ class JourneyEscapeConstants(AutoDerivedConstants):
         -600,           # 8 big photographer
         9900,           # 9 big manager
     ]))
-    # ---------------------CHANGE END-----------------------
 
     # predefined groups: [type, amount, spacing in px]
     obstacle_groups: Tuple[Tuple[int, int, int], ...] = struct.field(pytree_node=False, default_factory=lambda: (
@@ -896,13 +895,20 @@ class JaxJourneyEscape(
 
 
 class JourneyEscapeRenderer(JAXGameRenderer):
-    def __init__(self, consts: JourneyEscapeConstants = None):
-        super().__init__()
+    def __init__(self, consts: JourneyEscapeConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or JourneyEscapeConstants()
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.screen_height, self.consts.screen_width),
-            channels=3,
-        )
+        if config is None:
+            config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.screen_height, self.consts.screen_width),
+                channels=3,
+            )
+        else:
+            # Ensure game_dimensions is always set from consts
+            config = config.replace(
+                game_dimensions=(self.consts.screen_height, self.consts.screen_width),
+            )
+        self.config = config
+        super().__init__(consts=self.consts, config=self.config)
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # Load and setup assets
