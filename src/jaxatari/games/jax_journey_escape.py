@@ -166,8 +166,9 @@ class JourneyEscapeConstants(AutoDerivedConstants):
         0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
     ))
-    # Horizontal speed for diagonal obstacles (px/frame). Future mods can increase for steeper angles.
-    obstacle_horizontal_speed: int = struct.field(pytree_node=False, default=1)
+    # Horizontal move period for diagonal obstacles (move 1px every N frames).
+    # 2 = 0.5 px/frame effective, 1 = 1 px/frame. Future mods can decrease for steeper angles.
+    obstacle_horizontal_move_period: int = struct.field(pytree_node=False, default=2)
 
 @struct.dataclass
 class JourneyEscapeState:
@@ -328,7 +329,9 @@ class JaxJourneyEscape(
 
         # --- Diagonal Movement (horizontal velocity from dx column) ---
         obs_dx = boxes[:, 5]  # per-obstacle horizontal velocity (-1, 0, or +1)
-        effective_dx_obs = jnp.where(active, obs_dx * self.consts.obstacle_horizontal_speed, 0)
+        # Move 1px every N frames (period-based sub-pixel movement)
+        should_move_h = (state.time % self.consts.obstacle_horizontal_move_period) == 0
+        effective_dx_obs = jnp.where(active & should_move_h, obs_dx, 0)
         new_obs_x = boxes[:, 0] + effective_dx_obs
 
         # Wall-bounce: flip dx for entire groups when any member hits a wall.
@@ -357,8 +360,8 @@ class JaxJourneyEscape(
         boxes = boxes.at[:, 0].set(jnp.where(active, final_obs_x, boxes[:, 0]))
         boxes = boxes.at[:, 5].set(flipped_dx)
 
-        # Cull: if baseline y >= screen_height, deactivate by zeroing height
-        cull_y = self.consts.screen_height + 20
+        # Cull: deactivate obstacles 30px before the bottom of the screen
+        cull_y = self.consts.screen_height - 30
         offscreen = boxes[:, 1] >= cull_y
         new_heights = jnp.where(offscreen, 0, boxes[:, 3])  # int32[N]
         boxes = boxes.at[:, 3].set(new_heights)
@@ -1037,7 +1040,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         # Render Background
         frame_idx = state.bg_frames // self.consts.background_frame_switch
         bg_mask = self.SHAPE_MASKS["backgrounds"][frame_idx]
-        raster = self.jr.render_at(raster, 0, 20, bg_mask)
+        raster = self.jr.render_at(raster, 0, 10, bg_mask)
 
         # Render obstacles
         # state.obstacles has shape (MAX_OBS, 5): [x, y, w, h, type_idx]
