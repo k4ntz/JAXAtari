@@ -94,7 +94,7 @@ class NodeGroup(NamedTuple):
     def read_maze_file(textfile):
         """Read maze file (translated from readMazeFile)."""
         with open(textfile, 'r') as f:
-            lines = [list(line.strip()) for line in f.readlines()]
+            lines = [list(line.strip().replace(' ', '')) for line in f.readlines()]
         return np.array(lines, dtype='<U1')
     
     @staticmethod
@@ -103,17 +103,18 @@ class NodeGroup(NamedTuple):
         return col * tile_size, row * tile_size
     
     @staticmethod
-    def create_node_table(data, nodes_lut, tile_size, xoffset=0, yoffset=0):
+    def create_node_table(data, nodes_lut, tile_size, xoffset=0, yoffset=32):
         """Create node table from maze data (translated from createNodeTable)."""
         node_symbols = ['+', 'H', 'o', 'D', 'P']
         for row in range(data.shape[0]):
             for col in range(data.shape[1]):
                 if data[row][col] in node_symbols:
-                    x, y = NodeGroup.construct_key(col + xoffset, row + yoffset, tile_size)
+                    x, y = NodeGroup.construct_key(col + xoffset, row, tile_size)
+                    y += yoffset
                     nodes_lut[(x, y)] = Node.create(x, y)
     
     @staticmethod
-    def connect_horizontally(data, nodes_lut, position_to_index, tile_size, xoffset=0, yoffset=0):
+    def connect_horizontally(data, nodes_lut, position_to_index, tile_size, xoffset=0, yoffset=32):
         """Connect nodes horizontally (translated from connectHorizontally)."""
         node_symbols = ['+', 'H', 'o', 'D', 'P']
         path_symbols = ['.', 'H', 'o', 'D', 'P']
@@ -122,7 +123,8 @@ class NodeGroup(NamedTuple):
             key = None
             for col in range(data.shape[1]):
                 if data[row][col] in node_symbols:
-                    x, y = NodeGroup.construct_key(col + xoffset, row + yoffset, tile_size)
+                    x, y = NodeGroup.construct_key(col + xoffset, row, tile_size)
+                    y += yoffset
                     if key is None:
                         key = (x, y)
                     else:
@@ -158,7 +160,7 @@ class NodeGroup(NamedTuple):
                     key = None
     
     @staticmethod
-    def connect_vertically(data, nodes_lut, position_to_index, tile_size, xoffset=0, yoffset=0):
+    def connect_vertically(data, nodes_lut, position_to_index, tile_size, xoffset=0, yoffset=32):
         """Connect nodes vertically (translated from connectVertically)."""
         node_symbols = ['+', 'H', 'o', 'D', 'P']
         path_symbols = ['.', 'H', 'o', 'D', 'P']
@@ -168,7 +170,8 @@ class NodeGroup(NamedTuple):
             key = None
             for row in range(dataT.shape[1]):
                 if dataT[col][row] in node_symbols:
-                    x, y = NodeGroup.construct_key(col + xoffset, row + yoffset, tile_size)
+                    x, y = NodeGroup.construct_key(col + xoffset, row, tile_size)
+                    y += yoffset
                     if key is None:
                         key = (x, y)
                     else:
