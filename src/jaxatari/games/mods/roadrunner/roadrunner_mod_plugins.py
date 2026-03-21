@@ -39,6 +39,11 @@ class NoRoadStripesMod(JaxAtariInternalModPlugin):
         "levels": NO_STRIPES_LEVELS
     }
 
+class InvisibleTrucksMod(JaxAtariInternalModPlugin):
+    """Makes trucks invisible by replacing all trucj sprites with transparent masks.
+    The trucks still exist and can hit the player and enemy — they're just not rendered."""
+    pass
+
 # --- Ravine Mod ---
 
 class HarmlessRavinesMod(JaxAtariInternalModPlugin):
