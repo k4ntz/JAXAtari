@@ -464,10 +464,31 @@ class PitfallConstants(struct.PyTreeNode):
 class PitfallObservation:
     player_x: chex.Array
     player_y: chex.Array
+    screen_id: chex.Array
+    room_byte: chex.Array
+    current_ground_y: chex.Array
+    on_ground: chex.Array
+    on_ladder: chex.Array
+    facing_left: chex.Array
+
+    scorpion_x: chex.Array
+    has_scorpion: chex.Array
+    has_fire: chex.Array
+    has_snake: chex.Array
+    has_logs: chex.Array
+    log_count: chex.Array
+    log_xs: chex.Array
+    logs_are_rolling: chex.Array
+
+    has_ladder: chex.Array
+    ladder_x: chex.Array
+    has_wall: chex.Array
+    wall_x: chex.Array
+    wall_side: chex.Array
+
     time_left: chex.Array
     lives_left: chex.Array
     score: chex.Array
-    timer_started: chex.Array
 
 @struct.dataclass
 class PitfallInfo:
@@ -506,10 +527,10 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         self.ladder_x_px = jnp.array(ladder_x_px, dtype=jnp.int32)
 
         self.renderer = PitfallRenderer(
-            self.consts,
-            self.ladder_x_px,
-            self.left_wall_x_px,
-            self.right_wall_x_px,
+            consts=self.consts,
+            ladder_x_px=self.ladder_x_px,
+            left_wall_x_px=self.left_wall_x_px,
+            right_wall_x_px=self.right_wall_x_px,
         )
         self.wall_block_player_width_px = jnp.array(
             max(
@@ -1379,13 +1400,34 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: PitfallState) -> PitfallObservation:
+        has_logs, logs_are_rolling, log_count, log_xs, has_fire, has_snake = room_hazards_from_room_byte(state.room_byte)
+        has_scorpion = has_scorpion_from_room_byte(state.room_byte)
+        layout = self._screen_layout(state.room_byte)
         return PitfallObservation(
             player_x=state.player_x,
             player_y=state.player_y,
+            screen_id=state.screen_id,
+            room_byte=state.room_byte,
+            current_ground_y=state.current_ground_y,
+            on_ground=state.on_ground,
+            on_ladder=state.on_ladder,
+            facing_left=state.facing_left,
+            scorpion_x=state.scorpion_x,
+            has_scorpion=has_scorpion,
+            has_fire=has_fire,
+            has_snake=has_snake,
+            has_logs=has_logs,
+            log_count=log_count,
+            log_xs=log_xs,
+            logs_are_rolling=logs_are_rolling,
+            has_ladder=layout.has_ladder,
+            ladder_x=layout.ladder_x,
+            has_wall=layout.has_wall,
+            wall_x=layout.wall_x,
+            wall_side=layout.wall_side,
             time_left=state.time_left,
             lives_left=state.lives_left,
             score=state.score,
-            timer_started=state.timer_started,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1407,10 +1449,51 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         return spaces.Discrete(18)
 
     def observation_space(self) -> spaces.Dict:
-        raise NotImplementedError
+        return spaces.Dict(
+            {
+                "player_x": spaces.Box(low=0.0, high=float(self.consts.screen_width - 1), shape=(), dtype=jnp.float32),
+                "player_y": spaces.Box(low=0.0, high=float(self.consts.screen_height - 1), shape=(), dtype=jnp.float32),
+                "screen_id": spaces.Box(low=0, high=254, shape=(), dtype=jnp.int32),
+                "room_byte": spaces.Box(low=0, high=255, shape=(), dtype=jnp.uint8),
+                "current_ground_y": spaces.Box(low=0.0, high=float(self.consts.screen_height - 1), shape=(), dtype=jnp.float32),
+                "on_ground": spaces.Discrete(2),
+                "on_ladder": spaces.Discrete(2),
+                "facing_left": spaces.Discrete(2),
+                "scorpion_x": spaces.Box(low=0.0, high=float(self.consts.screen_width - 1), shape=(), dtype=jnp.float32),
+                "has_scorpion": spaces.Discrete(2),
+                "has_fire": spaces.Discrete(2),
+                "has_snake": spaces.Discrete(2),
+                "has_logs": spaces.Discrete(2),
+                "log_count": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
+                "log_xs": spaces.Box(low=0, high=int(self.consts.screen_width - 1), shape=(3,), dtype=jnp.int32),
+                "logs_are_rolling": spaces.Discrete(2),
+                "has_ladder": spaces.Discrete(2),
+                "ladder_x": spaces.Box(low=0, high=int(self.consts.screen_width - 1), shape=(), dtype=jnp.int32),
+                "has_wall": spaces.Discrete(2),
+                "wall_x": spaces.Box(low=0, high=int(self.consts.screen_width - 1), shape=(), dtype=jnp.int32),
+                "wall_side": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
+                "time_left": spaces.Box(
+                    low=0,
+                    high=int(self.consts.initial_time_seconds * self.consts.fps),
+                    shape=(),
+                    dtype=jnp.int32,
+                ),
+                "lives_left": spaces.Box(low=0, high=int(self.consts.max_lives), shape=(), dtype=jnp.int32),
+                "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+            }
+        )
 
     def image_space(self) -> spaces.Box:
-        raise NotImplementedError
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(
+                int(self.consts.screen_height),
+                int(self.consts.screen_width),
+                3,
+            ),
+            dtype=jnp.uint8,
+        )
 
     def render(self, state: PitfallState) -> jnp.ndarray:
         return self.renderer.render(state)
@@ -1455,6 +1538,7 @@ class PitfallRenderer(JAXGameRenderer):
     def __init__(
         self,
         consts: PitfallConstants | None = None,
+        config: render_utils.RendererConfig | None = None,
         ladder_x_px: chex.Array | None = None,
         left_wall_x_px: chex.Array | None = None,
         right_wall_x_px: chex.Array | None = None,
@@ -1489,7 +1573,7 @@ class PitfallRenderer(JAXGameRenderer):
         self.left_wall_x_px = left_wall_x_px
         self.right_wall_x_px = right_wall_x_px
 
-        self.config = render_utils.RendererConfig(
+        self.config = config or render_utils.RendererConfig(
             game_dimensions=(self.consts.screen_height, self.consts.screen_width),
             channels=3,
         )
@@ -2209,15 +2293,21 @@ class PitfallRenderer(JAXGameRenderer):
             top_i32 = jnp.int32(top)
             left0_i32 = jnp.int32(left)
             spacing_i32 = jnp.int32(spacing)
+            channels = f.shape[2]
 
             color_u8 = color.astype(jnp.uint8)
+            if channels == 1:
+                gray = jnp.mean(color_u8.astype(jnp.float32)).astype(jnp.uint8)
+                draw_color = jnp.array([gray], dtype=jnp.uint8)
+            else:
+                draw_color = color_u8
 
             def body(i, frame_in):
                 d = digits[i].astype(jnp.int32)
                 glyph = font[d].astype(jnp.bool_)
                 start = (top_i32, left0_i32 + jnp.int32(i) * spacing_i32, jnp.int32(0))
-                region = lax.dynamic_slice(frame_in, start, (5, 3, 3))
-                new_region = jnp.where(glyph[:, :, None], color_u8[None, None, :], region)
+                region = lax.dynamic_slice(frame_in, start, (5, 3, channels))
+                new_region = jnp.where(glyph[:, :, None], draw_color[None, None, :], region)
                 return lax.dynamic_update_slice(frame_in, new_region, start)
 
             return lax.fori_loop(0, digits.shape[0], body, f)
@@ -2266,9 +2356,13 @@ class PitfallRenderer(JAXGameRenderer):
         frame = _draw_digits(frame, lives_digits, timer_row, 4, digit_spacing, lives_color)
 
         frame = _draw_digits(frame, mm_digits, timer_row, timer_x, digit_spacing, time_color)
+        if frame.shape[2] == 1:
+            time_dot_color = jnp.array([jnp.mean(time_color.astype(jnp.float32)).astype(jnp.uint8)], dtype=jnp.uint8)
+        else:
+            time_dot_color = time_color
         colon_x = timer_x + 2 * digit_spacing - 1
-        frame = frame.at[timer_row + 1, colon_x, :].set(time_color)
-        frame = frame.at[timer_row + 3, colon_x, :].set(time_color)
+        frame = frame.at[timer_row + 1, colon_x, :].set(time_dot_color)
+        frame = frame.at[timer_row + 3, colon_x, :].set(time_dot_color)
         frame = _draw_digits(frame, ss_digits, timer_row, timer_x + 2 * digit_spacing + 2, digit_spacing, time_color)
 
         frame = _draw_digits(frame, screen_digits, score_row, 120, digit_spacing, debug_color)
