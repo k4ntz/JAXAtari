@@ -958,11 +958,15 @@ class DarkChambersRenderer(JAXGameRenderer):
             [48, 0, 6, 162],
 
             [0, 160, 54, 6],
+            #ornament
+            [6, 166, 12, 6],
             
             #chamber enclosing (mirror symmetric to left)
             [106, 0, 6, 162],
             
             [106, 160, 54, 6],
+            #ornament (mirror)
+            [142, 166, 12, 6],
 
             
             # ───────── MIDDLE DIVIDER (FLIPPED T) ─────────
@@ -983,11 +987,13 @@ class DarkChambersRenderer(JAXGameRenderer):
             [48, 0, 6, 162],
 
             [0, 160, 54, 6],
+            [6, 166, 6, 6],
             
             #chamber enclosing (mirror symmetric to left)
             [106, 0, 6, 162],
             
             [106, 160, 54, 6],
+            [148, 166, 6, 6],
 
             # long vertical maze pillars (v2)
             [30, 190, 6, 404],
@@ -1054,6 +1060,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             #chamber enclosing
             [48, 0, 6, 162],
             [0, 160, 54, 6],
+            [6, 166, 12, 6],
 
             # upper split ledge (open center lane)
             [0, 208, 56, 6],
@@ -1078,6 +1085,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             [48, 0, 6, 162],
 
             [0, 160, 54, 6],
+            [6, 166, 6, 6],
 
             # long vertical maze pillars (v2)
             [34, 210, 6, 384],
