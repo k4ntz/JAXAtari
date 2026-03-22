@@ -28,6 +28,7 @@ import jaxatari
 import wandb
 
 from train_utils import video_callback, save_params
+from benchmark_utils import get_eval_mods, get_train_mods
 
 class CNN(nn.Module):
 
@@ -144,11 +145,11 @@ def make_train(config):
     ] == 0, "NUM_MINIBATCHES must divide NUM_STEPS*NUM_ENVS"
 
     env_name = config["ENV_NAME"].lower()
-    env = jaxatari.make(env_name)
-    mod_env = env
-    mod_name = config.get("MOD_NAME", None)
-    if mod_name is not None:
-        mod_env = jaxatari.make(env_name, mods_config=[mod_name.lower()])
+    train_mods = get_train_mods(config)
+    eval_mods = get_eval_mods(config)
+    env = jaxatari.make(env_name, mods_config=train_mods) if train_mods else jaxatari.make(env_name)
+    mod_env = jaxatari.make(env_name, mods_config=eval_mods) if eval_mods else env
+    has_mod_env = bool(eval_mods)
     renderer = jaxatari.make_renderer(config["ENV_NAME"].lower())
 
     def apply_wrappers(env):
@@ -403,7 +404,7 @@ def make_train(config):
                 )
                 metrics.update({f"test/{k}": v for k, v in test_metrics.items()})
 
-                if config.get("MOD_NAME", None) is not None:
+                if has_mod_env:
                     rng, _rng = jax.random.split(rng)
                     mod_metrics = jax.lax.cond(
                         train_state.n_updates
@@ -499,7 +500,7 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         test_metrics = get_test_metrics(train_state, False, _rng)
 
-        mod_metrics = get_test_metrics(train_state, True, _rng) if config.get("MOD_NAME", None) is not None else {}
+        mod_metrics = get_test_metrics(train_state, True, _rng) if has_mod_env else {}
 
         rng, _rng = jax.random.split(rng)
         # expl_state = vmap_reset(config["NUM_ENVS"])(_rng)
