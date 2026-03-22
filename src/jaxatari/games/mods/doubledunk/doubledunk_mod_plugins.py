@@ -563,3 +563,36 @@ class CollisionMod(JaxAtariPostStepModPlugin):
         should_apply = jnp.logical_and(is_offensive_foul, new_state.game_mode == 1)
 
         return jax.lax.cond(should_apply, apply_turnover, lambda s: s, new_state)
+
+class PenaltyMod(JaxAtariPostStepModPlugin):
+    """
+    Hardcore Mod: Awards 2 points to the enemy team instantly 
+    whenever the player triggers a turnover penalty (Travel, Out of Bounds, Clearance).
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state, new_state):
+        # Check if the game was just in standard play on the last frame
+        was_in_play = (prev_state.game_mode == 1) # GameMode.IN_PLAY
+        
+        # Check if the game has transitioned into any penalty freeze mode this frame
+        is_now_penalty = jnp.logical_or(
+            new_state.game_mode == 2, # TRAVEL_PENALTY
+            jnp.logical_or(
+                new_state.game_mode == 3, # OUT_OF_BOUNDS_PENALTY
+                new_state.game_mode == 4  # CLEARANCE_PENALTY
+            )
+        )
+        
+        # Trigger is true ONLY on the exact frame the penalty is called
+        just_penalized = jnp.logical_and(was_in_play, is_now_penalty)
+        
+        # Award a standard 2-point goal to the enemy
+        new_enemy_score = jax.lax.select(
+            just_penalized,
+            new_state.scores.enemy + 1, 
+            new_state.scores.enemy
+        )
+        
+        # Update the state with the new score
+        new_scores = new_state.scores.replace(enemy=new_enemy_score)
+        return new_state.replace(scores=new_scores)

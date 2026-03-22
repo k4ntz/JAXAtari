@@ -1,6 +1,7 @@
 import os
 from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.doubledunk.doubledunk_mod_plugins import (
+    PenaltyMod,
     TimerMod,
     SuperDunkMod,
     TenSecondViolationInternalMod,
@@ -9,7 +10,8 @@ from jaxatari.games.mods.doubledunk.doubledunk_mod_plugins import (
     OneVsOneInternalMod,
     OneVsOnePostMod,
     HalfCourtMod,
-    CollisionMod
+    CollisionMod,
+    PenaltyMod
 )
 
 class DoubleDunkEnvMod(JaxAtariModController):
@@ -29,6 +31,7 @@ class DoubleDunkEnvMod(JaxAtariModController):
         "1v1_mode": ["1v1_internal", "1v1_post"],
         "half_court": HalfCourtMod,
         "collision_mod": CollisionMod,
+        "penalty_mod": PenaltyMod,
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "doubledunk", "sprites")
