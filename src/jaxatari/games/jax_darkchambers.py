@@ -339,7 +339,7 @@ class DarkChambersConstants(NamedTuple):
     PLAYER_SPEED: int = 1
     WALL_THICKNESS: int = 8
     
-    PLAYER_START_X: int = 130  # Safe default spawn (avoids center shaft in custom mazes)
+    PLAYER_START_X: int = 18  # Mirrored from x=130 across map midline (WORLD_W=160, PLAYER_WIDTH=12)
     PLAYER_START_Y: int = 210
     
     # Health mechanics (scaled to classic 31 strength units)
