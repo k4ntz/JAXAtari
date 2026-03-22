@@ -89,6 +89,13 @@ def _get_default_asset_config():
         {"name": "skel_u0", "type": "single", "file": "skel_up_left.npy"},
         {"name": "skel_u1", "type": "single", "file": "skel_up_mid.npy"},
         {"name": "skel_u2", "type": "single", "file": "skel_up_right.npy"},
+        # Direct-number aliases for down/up 4-frame cycles
+        {"name": "skel_7",  "type": "single", "file": "skel_7.npy"},
+        {"name": "skel_8",  "type": "single", "file": "skel_8.npy"},
+        {"name": "skel_9",  "type": "single", "file": "skel_9.npy"},
+        {"name": "skel_10", "type": "single", "file": "skel_10.npy"},
+        {"name": "skel_11", "type": "single", "file": "skel_11.npy"},
+        {"name": "skel_12", "type": "single", "file": "skel_12.npy"},
         # Wizard animation frames per direction                            # ENEMY_WIZARD = 4
         # right(×3): wizard_1-3  |  down(×5): wizard_4-8  |  up(×5): wizard_9-13  |  left(×3): wizard_14-16
         {"name": "wizard_r0", "type": "single", "file": "wizard_1.npy"},
@@ -256,7 +263,7 @@ GHOST_NUM_FRAMES = jnp.array([2, 3, 2, 3], dtype=jnp.int32)
 # Number of animation frames per wizard direction (0=right, 1=down, 2=left, 3=up)
 WIZARD_NUM_FRAMES = jnp.array([3, 5, 3, 5], dtype=jnp.int32)
 # Number of animation frames per skeleton direction (0=right, 1=down, 2=left, 3=up)
-SKELETON_NUM_FRAMES = jnp.array([3, 3, 3, 3], dtype=jnp.int32)
+SKELETON_NUM_FRAMES = jnp.array([3, 4, 3, 4], dtype=jnp.int32)
 # Number of animation frames per zombie direction (0=right, 1=down, 2=left, 3=up)
 ZOMBIE_NUM_FRAMES = jnp.array([3, 8, 3, 8], dtype=jnp.int32)
 
@@ -717,13 +724,13 @@ class DarkChambersRenderer(JAXGameRenderer):
         self.ENEMY_DIRECTIONAL_MASKS["wizard"] = None
         self.ENEMY_SCALED_MASKS["wizard"] = None
 
-        # Skeleton directional animation: (4, 3, H, W) — 3 frames per direction, no padding needed
+        # Skeleton directional animation: (4, 4, H, W) — right/left=3 frames padded to 4, down/up=4 frames
         # Direction order: 0=right, 1=down, 2=left, 3=up
         skel_dir_frame_names = [
-            ["skel_r0", "skel_r1", "skel_r2"],  # right
-            ["skel_d0", "skel_d1", "skel_d2"],  # down
-            ["skel_l2", "skel_l0", "skel_l1"],  # left: mirrors right order (4→5→7 px wide)
-            ["skel_u0", "skel_u1", "skel_u2"],  # up
+            ["skel_r0", "skel_r1", "skel_r2", "skel_r2"],          # right: 3 frames, pad to 4
+            ["skel_7",  "skel_8",  "skel_9",  "skel_8"],           # down:  4-frame cycle
+            ["skel_l2", "skel_l0", "skel_l1", "skel_l1"],          # left:  3 frames, pad to 4
+            ["skel_10", "skel_12", "skel_11", "skel_12"],           # up:    4-frame cycle
         ]
         skel_dirs = []
         for d_idx, dir_names in enumerate(skel_dir_frame_names):
@@ -732,8 +739,8 @@ class DarkChambersRenderer(JAXGameRenderer):
                 if self.SHAPE_MASKS.get(n) is not None else _zero_frame
                 for n in dir_names
             ]
-            skel_dirs.append(jnp.stack(dir_frames))  # (3, H, W)
-        self.SKELETON_ANIM_FRAMES = jnp.stack(skel_dirs)  # (4, 3, H, W)
+            skel_dirs.append(jnp.stack(dir_frames))  # (4, H, W)
+        self.SKELETON_ANIM_FRAMES = jnp.stack(skel_dirs)  # (4, 4, H, W)
         print(f"Built skeleton animation frames: {self.SKELETON_ANIM_FRAMES.shape}")
 
         # Skeleton does not use the generic directional mask path
