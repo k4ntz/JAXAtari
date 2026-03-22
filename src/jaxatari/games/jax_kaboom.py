@@ -252,24 +252,25 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: KaboomState):
         mad_bomber_pos = ObjectObservation.create(
-            x=jnp.clip(state.mad_bomber_pos_x.astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
-            y=jnp.clip(state.mad_bomber_pos_y.astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
-            width=jnp.array(self.consts.MAD_BOMBER_SIZE[0], dtype=jnp.int32),
-            height=jnp.array(self.consts.MAD_BOMBER_SIZE[1], dtype=jnp.int32)
+            x=jnp.array([jnp.clip(state.mad_bomber_pos_x.astype(jnp.int32), 0, self.consts.SCREEN_WIDTH)]),
+            y=jnp.array([jnp.clip(state.mad_bomber_pos_y.astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT)]),
+            width=jnp.array([self.consts.MAD_BOMBER_SIZE[0]], dtype=jnp.int32),
+            height=jnp.array([self.consts.MAD_BOMBER_SIZE[1]], dtype=jnp.int32)
         )
 
         buckets_pos = ObjectObservation.create(
-            x=jnp.clip(state.mad_bomber_pos_x.astype(jnp.int32), self.consts.BUCKET_MIN_ALLOWED_POS_X, self.consts.BUCKET_MAX_ALLOWED_POS_X),
-            y=jnp.clip(state.mad_bomber_pos_y.astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            x=jnp.clip(state.buckets_pos[:, 0].astype(jnp.int32), self.consts.BUCKET_MIN_ALLOWED_POS_X, self.consts.BUCKET_MAX_ALLOWED_POS_X),
+            y=jnp.clip(state.buckets_pos[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
             width=jnp.full((3,), self.consts.BUCKET_SIZE[0], dtype=jnp.int32),
             height=jnp.full((3,), self.consts.BUCKET_SIZE[1], dtype=jnp.int32)
         )
 
+        num_bombs = state.bombs_states.shape[0]
         bombs = ObjectObservation.create(
-            x=jnp.clip(state.bombs_states[0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
-            y=jnp.clip(state.bombs_states[1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
-            width=jnp.full((3,), self.consts.BOMB_SIZE[0], dtype=jnp.int32),
-            height=jnp.full((3,), self.consts.BOMB_SIZE[1], dtype=jnp.int32)
+            x=jnp.clip(state.bombs_states[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
+            y=jnp.clip(state.bombs_states[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
+            width=jnp.full((num_bombs,), self.consts.BOMB_SIZE[0], dtype=jnp.int32),
+            height=jnp.full((num_bombs,), self.consts.BOMB_SIZE[1], dtype=jnp.int32)
         )
 
         obs = KaboomObservation(
@@ -889,28 +890,20 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
-        return spaces.Dict(
-            {
-                "mad_bomber_pos": spaces.Box(
-                    low=0, high=160, shape=(2,), dtype=jnp.int32
-                ),
-                "buckets_pos": spaces.Box(
-                    low=-1, high=210, shape=(3, 3), dtype=jnp.int32
-                ),
-                "bombs": spaces.Box(
-                    low=-1,
-                    high=210,
-                    shape=(15, 9),
-                    dtype=jnp.int32,
-                ),
-                "score": spaces.Box(
-                    low=0, high=1_000_000, shape=(), dtype=jnp.int32
-                ),
-                "lives": spaces.Box(
-                    low=0, high=3, shape=(), dtype=jnp.int32
-                ),
-            }
-        )
+        return spaces.Dict({
+            "mad_bomber_pos": spaces.get_object_space(
+                n=None,
+                screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+            ),
+            "buckets_pos": spaces.get_object_space(
+                n=3,
+                screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+            ),
+            "bombs": spaces.get_object_space(
+                n=15,
+                screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+            ),
+        })
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(
