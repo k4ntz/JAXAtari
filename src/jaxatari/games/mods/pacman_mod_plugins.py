@@ -4,9 +4,8 @@ from functools import partial
 from jaxatari.games.jax_pacman import PacmanState
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
 
-# -------------------------------------------------------------
+
 # Part 1: Simple Modifications
-# -------------------------------------------------------------
 
 class FasterPacmanMod(JaxAtariInternalModPlugin):
     """
@@ -129,9 +128,79 @@ class RandomStartMod(JaxAtariPostStepModPlugin):
         
         return obs, new_state
 
-# -------------------------------------------------------------
+
+class LimitedVisionMod(JaxAtariInternalModPlugin):
+    """
+    Limited Vision / Fog of War:
+    - Render applies a fog mask outside a radius around Pac-Man.
+    - Ghost entries outside that radius are hidden in object observations.
+    """
+    VISION_RADIUS_PX = 36  # half of previous 72
+    FOG_COLOR = (40, 40, 40)  # use (35, 35, 35) for dark gray instead of pure black
+    FOG_ALPHA = 255  # 255 = fully opaque fog outside radius
+
+    @partial(jax.jit, static_argnums=(0,))
+    def reset(self, key: jax.Array):
+        renderer = self._env.renderer
+
+        if not getattr(renderer, "_limited_vision_fog_installed", False):
+            base_render = renderer.render
+            radius_px = self.VISION_RADIUS_PX
+            fog_color_rgb = self.FOG_COLOR
+            fog_alpha_value = self.FOG_ALPHA
+
+            def fog_render(state: PacmanState):
+                frame = base_render(state)
+
+                h, w, _ = frame.shape
+                yy = jnp.arange(h, dtype=jnp.int32)[:, None]
+                xx = jnp.arange(w, dtype=jnp.int32)[None, :]
+
+                # Only apply fog to the maze band; keep HUD rows readable.
+                maze_y_min = self._env.consts.TILE_SIZE * 4
+                maze_y_max = maze_y_min + (self._env.consts.MAZE_HEIGHT * self._env.consts.TILE_SIZE)
+                in_maze_band = jnp.logical_and(yy >= maze_y_min, yy < maze_y_max)
+                in_maze_band = in_maze_band[..., None]
+
+                center_x = state.player_x - 4
+                center_y = state.player_y
+
+                dx = xx - center_x
+                dy = yy - center_y
+                radius_sq = jnp.array(radius_px * radius_px, dtype=jnp.int32)
+                visible = (dx * dx + dy * dy) <= radius_sq
+                visible = visible[..., None]
+
+                base = frame.astype(jnp.uint16)
+                fog_color = jnp.array(fog_color_rgb, dtype=jnp.uint16)
+                fog_alpha = jnp.array(fog_alpha_value, dtype=jnp.uint16)
+                fogged = ((base * (255 - fog_alpha) + fog_color * fog_alpha) // 255).astype(jnp.uint8)
+                apply_fog = jnp.logical_and(in_maze_band, jnp.logical_not(visible))
+                return jnp.where(apply_fog, fogged, frame)
+
+            renderer.render = fog_render
+            renderer._limited_vision_fog_installed = True
+
+        return type(self._env).reset(self._env, key)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_observation(self, state: PacmanState):
+        obs = type(self._env)._get_observation(self._env, state)
+
+        ghosts = obs.ghosts
+        dx = ghosts[:, 0] - state.player_x
+        dy = ghosts[:, 1] - state.player_y
+        dist_sq = dx * dx + dy * dy
+        max_dist_sq = jnp.array(self.VISION_RADIUS_PX * self.VISION_RADIUS_PX, dtype=jnp.int32)
+        visible = dist_sq <= max_dist_sq
+
+        hidden_row = jnp.zeros((1, ghosts.shape[1]), dtype=ghosts.dtype)
+        hidden_ghosts = jnp.repeat(hidden_row, ghosts.shape[0], axis=0)
+        masked_ghosts = jnp.where(visible[:, None], ghosts, hidden_ghosts)
+
+        return obs._replace(ghosts=masked_ghosts)
+
 # Part 2: Difficult Modifications (Requires Base Upgrades)
-# -------------------------------------------------------------
 class CoopMultiplayerMod(JaxAtariPostStepModPlugin):
     """
     Cooperative-style mode.

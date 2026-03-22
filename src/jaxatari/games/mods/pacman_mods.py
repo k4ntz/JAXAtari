@@ -1,7 +1,7 @@
 from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.pacman_mod_plugins import (
     FasterPacmanMod, SlowerGhostsMod, NoFrightMod,
-    HalfDotsMod, RandomStartMod, CoopMultiplayerMod
+    HalfDotsMod, RandomStartMod, LimitedVisionMod, CoopMultiplayerMod
 )
 
 class PacmanEnvMod(JaxAtariModController):
@@ -16,6 +16,7 @@ class PacmanEnvMod(JaxAtariModController):
         "no_fright": NoFrightMod,
         "half_dots": HalfDotsMod,
         "random_start": RandomStartMod,
+        "limited_vision": LimitedVisionMod,
         "coop_multiplayer": CoopMultiplayerMod,
     }
 
