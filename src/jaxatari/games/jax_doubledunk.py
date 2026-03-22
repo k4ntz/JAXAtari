@@ -201,8 +201,10 @@ class EntityPosition(struct.PyTreeNode):
     height: jnp.ndarray
 
 class DunkObservation(struct.PyTreeNode):
-    player: EntityPosition
-    enemy: EntityPosition
+    player_inside: EntityPosition
+    player_outside: EntityPosition
+    enemy_inside: EntityPosition
+    enemy_outside: EntityPosition
     ball: EntityPosition
     score_player: jnp.ndarray
     score_enemy: jnp.ndarray
@@ -237,15 +239,27 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
     def _get_observation(self, state: DunkGameState) -> DunkObservation:
         """Converts the environment state to an observation."""
-        player = EntityPosition(
+        player_in = EntityPosition(
             x=jnp.array(state.player1_inside.x, dtype=jnp.int32),
             y=jnp.array(state.player1_inside.y, dtype=jnp.int32),
             width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),  
             height=jnp.array(self.consts.PLAYER_HEIGHT, dtype=jnp.int32), 
         )
-        enemy = EntityPosition(
+        player_out = EntityPosition(
+            x=jnp.array(state.player1_outside.x, dtype=jnp.int32),
+            y=jnp.array(state.player1_outside.y, dtype=jnp.int32),
+            width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),  
+            height=jnp.array(self.consts.PLAYER_HEIGHT, dtype=jnp.int32), 
+        )
+        enemy_in = EntityPosition(
             x=jnp.array(state.player2_inside.x, dtype=jnp.int32),
             y=jnp.array(state.player2_inside.y, dtype=jnp.int32),
+            width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),  
+            height=jnp.array(self.consts.PLAYER_HEIGHT, dtype=jnp.int32), 
+        )
+        enemy_out = EntityPosition(
+            x=jnp.array(state.player2_outside.x, dtype=jnp.int32),
+            y=jnp.array(state.player2_outside.y, dtype=jnp.int32),
             width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),  
             height=jnp.array(self.consts.PLAYER_HEIGHT, dtype=jnp.int32), 
         )
@@ -256,8 +270,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             height=jnp.array(self.consts.BALL_SIZE[1], dtype=jnp.int32),
         )
         return DunkObservation(
-            player=player,
-            enemy=enemy,
+            player_inside=player_in,
+            player_outside=player_out,
+            enemy_inside=enemy_in,
+            enemy_outside=enemy_out,
             ball=ball,
             score_player=state.scores.player.astype(jnp.int32),
             score_enemy=state.scores.enemy.astype(jnp.int32),
@@ -277,8 +293,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             })
             
         return spaces.Dict({
-            "player": field,
-            "enemy": field,
+            "player_inside": field,
+            "player_outside": field,
+            "enemy_inside": field,
+            "enemy_outside": field,
             "ball": field,
             "score_player": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
             "score_enemy": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
@@ -291,14 +309,22 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
     def obs_to_flat_array(self, obs: DunkObservation) -> jnp.ndarray:
         """Converts the observation to a flat array."""
         return jnp.concatenate([
-            obs.player.x.reshape(-1),
-            obs.player.y.reshape(-1),
-            obs.player.width.reshape(-1),
-            obs.player.height.reshape(-1),
-            obs.enemy.x.reshape(-1),
-            obs.enemy.y.reshape(-1),
-            obs.enemy.width.reshape(-1),
-            obs.enemy.height.reshape(-1),
+            obs.player_inside.x.reshape(-1),
+            obs.player_inside.y.reshape(-1),
+            obs.player_inside.width.reshape(-1),
+            obs.player_inside.height.reshape(-1),
+            obs.player_outside.x.reshape(-1),
+            obs.player_outside.y.reshape(-1),
+            obs.player_outside.width.reshape(-1),
+            obs.player_outside.height.reshape(-1),
+            obs.enemy_inside.x.reshape(-1),
+            obs.enemy_inside.y.reshape(-1),
+            obs.enemy_inside.width.reshape(-1),
+            obs.enemy_inside.height.reshape(-1),
+            obs.enemy_outside.x.reshape(-1),
+            obs.enemy_outside.y.reshape(-1),
+            obs.enemy_outside.width.reshape(-1),
+            obs.enemy_outside.height.reshape(-1),
             obs.ball.x.reshape(-1),
             obs.ball.y.reshape(-1),
             obs.ball.width.reshape(-1),
