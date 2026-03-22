@@ -904,9 +904,15 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         # Count valid directions
         valid_count = jnp.sum(valid_directions >= 0)
         
-        # If no valid directions, continue in current direction (or stay put)
+        # If no valid directions, it means we are in a dead end. Reverse direction.
         def no_valid_directions():
-            return current_direction
+            return jax.lax.switch(current_direction, [
+                lambda: self.consts.DIR_UP,    # If going DOWN, reverse is UP
+                lambda: self.consts.DIR_DOWN,  # If going UP, reverse is DOWN  
+                lambda: self.consts.DIR_LEFT,  # If going RIGHT, reverse is LEFT
+                lambda: self.consts.DIR_RIGHT, # If going LEFT, reverse is RIGHT
+                lambda: current_direction,     # Default fallback
+            ])
         
         # If only one valid direction, take it
         def one_valid_direction():
