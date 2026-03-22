@@ -1223,7 +1223,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: BattlezoneState, state: BattlezoneState):
-        return (state.score - previous_state.score + jnp.log(state.step_counter)) * state.life  # TODO: temporary intuition change later
+        return (state.score+jnp.log(state.step_counter)) * state.life  # TODO: temporary intuition change later
 
 
     @partial(jax.jit, static_argnums=(0,))
