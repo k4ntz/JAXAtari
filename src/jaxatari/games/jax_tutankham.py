@@ -579,7 +579,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         self.renderer = TutankhamRenderer(consts=consts)
         self.consts = consts
 
-        self.action_set = [
+        self.ACTION_SET = jnp.array([
             Action.NOOP,
             Action.UP,
             Action.DOWN,
@@ -588,7 +588,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
             Action.RIGHTFIRE,
             Action.LEFTFIRE,
             Action.UPFIRE
-        ]
+        ])
 
     # -----------------------------
     # Reset
@@ -1294,6 +1294,9 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
     # Step logic
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: TutankhamState, action: int):
+        # Map the network's discrete index (0-7) back to the ALE Action constant (0-17)
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+        
         level=state.level
         player_x = state.player_x
         player_y = state.player_y
@@ -1424,7 +1427,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
     # Action & Observation Space
     # -----------------------------
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
 
     def observation_space(self) -> spaces.Dict:
@@ -1518,7 +1521,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(self, previous_state: TutankhamState, current_state: TutankhamState):
+    def _get_reward(self, previous_state: TutankhamState, current_state: TutankhamState):        
         return current_state.tutankham_score - previous_state.tutankham_score
     
 
