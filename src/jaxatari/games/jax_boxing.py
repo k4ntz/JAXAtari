@@ -110,6 +110,13 @@ class BoxingConstants(struct.PyTreeNode):
     HIT_DISTANCE_HORIZONTAL: int = 29  # (8 * 3) + 5 pixels
     HIT_DISTANCE_VERTICAL: int = 48    # H_BOXER
     STUN_DURATION: int = 15            # Frames boxer is stunned after hit
+
+    # Precise vertical hit geometry (sprite-local rows).
+    # Hits count when the opponent nose row falls within the top or bottom fist band.
+    TOP_FIST_ROW_OFFSET: int = 11
+    BOTTOM_FIST_ROW_OFFSET: int = 29
+    FIST_ROW_HALF_HEIGHT: int = 2
+    NOSE_ROW_OFFSET: int = SPRITE_HEIGHT // 2
     
     # Punch animation settings (matching original assembly)
     # Animation values range 0-72, increment by 8 for extension, -2 for retraction
@@ -548,7 +555,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         - Hit only triggers ONCE when punch FIRST reaches max extension
         - Horizontal distance <= (8*3)+5 = 29 pixels
         - Vertical distance < H_BOXER (48 pixels)
-        - Fine vertical alignment: (verticalDistance - 11) < 18
+        - Vertical alignment requires top or bottom fist band to overlap nose row
         - Opponent must not already be stunned
         - Punch must not have already landed this cycle (debounce)
         
@@ -564,9 +571,20 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         # Check vertical range: must be less than H_BOXER (48 pixels)
         in_vert_range = vert_dist < self.consts.HIT_DISTANCE_VERTICAL
         
-        # Fine vertical alignment check per spec: (verticalDistance - 11) < 18
-        vert_offset = vert_dist - 11
-        fine_vert_aligned = vert_offset < 18
+        # Vertical alignment check: hit only when opponent nose row overlaps
+        # the top or bottom fist vertical band.
+        player_top_fist_y = state.left_boxer_y + self.consts.TOP_FIST_ROW_OFFSET
+        player_bottom_fist_y = state.left_boxer_y + self.consts.BOTTOM_FIST_ROW_OFFSET
+        opponent_nose_y = state.right_boxer_y + self.consts.NOSE_ROW_OFFSET
+        top_fist_hits_nose = jnp.logical_and(
+            opponent_nose_y >= (player_top_fist_y - self.consts.FIST_ROW_HALF_HEIGHT),
+            opponent_nose_y <= (player_top_fist_y + self.consts.FIST_ROW_HALF_HEIGHT),
+        )
+        bottom_fist_hits_nose = jnp.logical_and(
+            opponent_nose_y >= (player_bottom_fist_y - self.consts.FIST_ROW_HALF_HEIGHT),
+            opponent_nose_y <= (player_bottom_fist_y + self.consts.FIST_ROW_HALF_HEIGHT),
+        )
+        fist_hits_nose = jnp.logical_or(top_fist_hits_nose, bottom_fist_hits_nose)
         
         # Hit only triggers on the frame when punch FIRST reaches max extension
         # extended_arm_maximum[0] is set to 1 by _punch_step when this happens
@@ -581,13 +599,13 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         # 1. Punch active and just reached max extension
         # 2. Horizontal distance <= 29 (in punching range)
         # 3. Vertical distance < 48 (H_BOXER)
-        # 4. Fine vertical alignment: (vert_dist - 11) < 18 (head level)
+        # 4. Either top or bottom fist band overlaps opponent nose row
         # 5. Haven't already scored on this punch
         hit_landed = jnp.logical_and(
             jnp.logical_and(punch_active, just_reached_max),
             jnp.logical_and(
                 jnp.logical_and(in_horiz_range, in_vert_range),
-                jnp.logical_and(fine_vert_aligned, punch_not_landed_yet)
+                jnp.logical_and(fist_hits_nose, punch_not_landed_yet)
             )
         )
         
@@ -1025,7 +1043,7 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         - Hit only triggers ONCE when punch FIRST reaches max extension
         - Horizontal distance <= (8*3)+5 = 29 pixels
         - Vertical distance < H_BOXER (48 pixels)
-        - Fine vertical alignment: (verticalDistance - 11) < 18
+        - Vertical alignment requires top or bottom fist band to overlap nose row
         - Opponent must not already be stunned
         """
         # Calculate distances
@@ -1038,9 +1056,20 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         # Check vertical range
         in_vert_range = vert_dist < self.consts.HIT_DISTANCE_VERTICAL
         
-        # Fine vertical alignment check per spec
-        vert_offset = vert_dist - 11
-        fine_vert_aligned = vert_offset < 18
+        # Vertical alignment check: hit only when opponent nose row overlaps
+        # the top or bottom fist vertical band.
+        cpu_top_fist_y = state.right_boxer_y + self.consts.TOP_FIST_ROW_OFFSET
+        cpu_bottom_fist_y = state.right_boxer_y + self.consts.BOTTOM_FIST_ROW_OFFSET
+        player_nose_y = state.left_boxer_y + self.consts.NOSE_ROW_OFFSET
+        top_fist_hits_nose = jnp.logical_and(
+            player_nose_y >= (cpu_top_fist_y - self.consts.FIST_ROW_HALF_HEIGHT),
+            player_nose_y <= (cpu_top_fist_y + self.consts.FIST_ROW_HALF_HEIGHT),
+        )
+        bottom_fist_hits_nose = jnp.logical_and(
+            player_nose_y >= (cpu_bottom_fist_y - self.consts.FIST_ROW_HALF_HEIGHT),
+            player_nose_y <= (cpu_bottom_fist_y + self.consts.FIST_ROW_HALF_HEIGHT),
+        )
+        fist_hits_nose = jnp.logical_or(top_fist_hits_nose, bottom_fist_hits_nose)
         
         # Hit only triggers on the frame when punch FIRST reaches max extension
         just_reached_max = state.extended_arm_maximum[1] == 1
@@ -1052,13 +1081,13 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         # 1. Punch active and just reached max extension
         # 2. Horizontal distance <= 29 (in punching range)
         # 3. Vertical distance < 48 (H_BOXER)
-        # 4. Fine vertical alignment: (vert_dist - 11) < 18 (head level)
+        # 4. Either top or bottom fist band overlaps opponent nose row
         # 5. Haven't already scored on this punch
         hit_landed = jnp.logical_and(
             jnp.logical_and(punch_active, just_reached_max),
             jnp.logical_and(
                 jnp.logical_and(in_horiz_range, in_vert_range),
-                jnp.logical_and(fine_vert_aligned, punch_not_landed_yet)
+                jnp.logical_and(fist_hits_nose, punch_not_landed_yet)
             )
         )
         
