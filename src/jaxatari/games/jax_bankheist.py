@@ -246,7 +246,7 @@ class BankHeistState(struct.PyTreeNode):
     pending_police_bank_indices: chex.Array  # Bank indices where police should spawn
     game_paused: chex.Array  # Game paused state Is set at beginning and after life was lost
     bank_heists: chex.Array  # number of bank heists completed in the current level
-    pending_police_bank_indices: chex.Array  # Bank indices where police should spawn
+    explosion_timer: chex.Array  # Timer for the screen flash effect when dynamite explodes
     random_key: chex.PRNGKey  # Persistent random key that advances each step
     time: chex.Array
 
@@ -366,6 +366,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             pending_police_bank_indices=jnp.array([-1, -1, -1]).astype(jnp.int32),  # Bank indices for pending spawns
             game_paused=jnp.array(False).astype(jnp.bool_),
             bank_heists=jnp.array(0).astype(jnp.int32),
+            explosion_timer=jnp.array(0).astype(jnp.int32),
             random_key=key,  # Use the provided random key
             time=jnp.array(0, dtype=jnp.int32),
         )
@@ -760,9 +761,13 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         new_dynamite_position = jnp.array([-1, -1]).astype(jnp.int32)
         new_dynamite_timer = jnp.array([-1]).astype(jnp.int32)
         
+        # Start the explosion flash effect for 60 frames (approx 1 second)
+        new_explosion_timer = jnp.array(60).astype(jnp.int32)
+        
         return updated_state.replace(
             dynamite_position=new_dynamite_position,
-            dynamite_timer=new_dynamite_timer
+            dynamite_timer=new_dynamite_timer,
+            explosion_timer=new_explosion_timer
         )
     
     @partial(jax.jit, static_argnums=(0,))
@@ -1255,7 +1260,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         new_bank_spawn_timers = jnp.where(state.bank_spawn_timers >= 0, state.bank_spawn_timers - 1, state.bank_spawn_timers)
         new_police_spawn_timers = jnp.where(state.police_spawn_timers >= 0, state.police_spawn_timers - 1, state.police_spawn_timers)
         new_dynamite_timer = jnp.where(state.dynamite_timer >= 0, state.dynamite_timer - 1, state.dynamite_timer)
-        
+        new_explosion_timer = jnp.where(state.explosion_timer > 0, state.explosion_timer - 1, state.explosion_timer)
+
         # Handle pending police spawns
         new_pending_police_spawns = jnp.where(state.pending_police_spawns >= 0, state.pending_police_spawns - 1, state.pending_police_spawns)
 
@@ -1263,9 +1269,9 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             bank_spawn_timers=new_bank_spawn_timers,
             police_spawn_timers=new_police_spawn_timers,
             dynamite_timer=new_dynamite_timer,
+            explosion_timer=new_explosion_timer,
             pending_police_spawns=new_pending_police_spawns
-        )
-        
+        )        
         # Spawn banks when their timers reach 0
         spawn_bank_condition = jnp.any(new_bank_spawn_timers == 0)
         new_state = jax.lax.cond(spawn_bank_condition, lambda: spawn_bank(new_state), lambda: new_state)
@@ -1415,6 +1421,7 @@ class BankHeistRenderer(JAXGameRenderer):
         
         # --- 5. Store procedural color ID ---
         self.fuel_color_id = self.COLOR_TO_ID[(167, 26, 26)]
+        self.black_color_id = self.COLOR_TO_ID.get((0, 0, 0), 0)
     @partial(jax.jit, static_argnums=(0,))
     def _render_fuel_tank(self, raster, state):
         """
@@ -1563,7 +1570,9 @@ class BankHeistRenderer(JAXGameRenderer):
             return self.jr.render_at(raster_input, state.dynamite_position[0], state.dynamite_position[1], dynamite_mask, flip_offset=self.FLIP_OFFSETS['dynamite'])
         
         dynamite_active = ~jnp.all(state.dynamite_position == jnp.array([-1, -1]))
-        raster = jax.lax.cond(dynamite_active, render_dynamite, lambda r: r, raster)
+        # Make the dynamite blink by toggling visibility based on its timer
+        dynamite_visible = dynamite_active & ((state.dynamite_timer[0] % 8) < 4)
+        raster = jax.lax.cond(dynamite_visible, render_dynamite, lambda r: r, raster)
         ### Render Score
         score_digits_arr = self.jr.int_to_digits(state.money, max_digits=4)
         raster = self.jr.render_label_selective(
@@ -1575,5 +1584,22 @@ class BankHeistRenderer(JAXGameRenderer):
             spacing=12,
             max_digits_to_render=4
         )
+        def apply_flash(palette):
+            flash_idx = state.explosion_timer % 15
+            is_light_grey = (flash_idx >= 5) & (flash_idx < 10)
+            flash_color = jnp.where(
+                is_light_grey,
+                jnp.array([170, 170, 170], dtype=jnp.uint8),
+                jnp.array([100, 100, 100], dtype=jnp.uint8)
+            )
+            return palette.at[self.black_color_id].set(flash_color)
+
+        final_palette = jax.lax.cond(
+            state.explosion_timer > 0,
+            apply_flash,
+            lambda p: p,
+            self.PALETTE
+        )
+
         # Final conversion from ID raster to RGB
-        return self.jr.render_from_palette(raster, self.PALETTE)
+        return self.jr.render_from_palette(raster, final_palette)
