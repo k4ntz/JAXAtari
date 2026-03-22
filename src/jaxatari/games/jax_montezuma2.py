@@ -57,6 +57,8 @@ class Montezuma2State:
     enemies_y: jnp.ndarray
     enemies_active: jnp.ndarray
     enemies_direction: jnp.ndarray
+    enemies_min_x: jnp.ndarray
+    enemies_max_x: jnp.ndarray
     
     ladders_x: jnp.ndarray
     ladders_top: jnp.ndarray
@@ -81,6 +83,7 @@ class Montezuma2State:
     conveyors_active: jnp.ndarray
     conveyors_direction: jnp.ndarray
     
+    inventory: jnp.ndarray
     key: jrandom.PRNGKey
 
 @struct.dataclass
@@ -269,6 +272,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         enemies_y = jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
         enemies_active = jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
         enemies_direction = jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
+        enemies_min_x = jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
+        enemies_max_x = jnp.full(self.consts.MAX_ENEMIES_PER_ROOM, self.consts.WIDTH - 8, dtype=jnp.int32)
         
         ladders_x = jnp.zeros(self.consts.MAX_LADDERS_PER_ROOM, dtype=jnp.int32)
         ladders_top = jnp.zeros(self.consts.MAX_LADDERS_PER_ROOM, dtype=jnp.int32)
@@ -298,6 +303,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         enemies_y = enemies_y.at[0].set(119)
         enemies_active = enemies_active.at[0].set(1)
         enemies_direction = enemies_direction.at[0].set(1) # 1 for right, -1 for left
+        enemies_min_x = enemies_min_x.at[0].set(45)
+        enemies_max_x = enemies_max_x.at[0].set(110)
         
         ladders_x = ladders_x.at[0].set(72)
         ladders_top = ladders_top.at[0].set(49)
@@ -336,6 +343,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         doors_y = doors_y.at[1].set(7)
         doors_active = doors_active.at[1].set(1)
 
+        inventory = jnp.zeros(1, dtype=jnp.int32)
+
         state = Montezuma2State(
             room_id=jnp.array(0, dtype=jnp.int32),
             lives=jnp.array(5, dtype=jnp.int32),
@@ -354,6 +363,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             enemies_y=enemies_y,
             enemies_active=enemies_active,
             enemies_direction=enemies_direction,
+            enemies_min_x=enemies_min_x,
+            enemies_max_x=enemies_max_x,
             ladders_x=ladders_x,
             ladders_top=ladders_top,
             ladders_bottom=ladders_bottom,
@@ -372,6 +383,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             conveyors_y=conveyors_y,
             conveyors_active=conveyors_active,
             conveyors_direction=conveyors_direction,
+            inventory=inventory,
             key=key
         )
         
@@ -592,19 +604,54 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             )
         )
         
-        def check_door(i, hit):
+        # 5.5 Item Collection
+        def collect_item(i, carry):
+            keys_collected, items_active = carry
+            i_x = state.items_x[i]
+            i_y = state.items_y[i]
+            i_active = items_active[i] == 1
+            
+            overlap_x = jnp.logical_and(new_left_x < i_x + 6, new_right_x >= i_x)
+            overlap_y = jnp.logical_and(check_y_top < i_y + 8, check_y_bot >= i_y)
+            overlap = jnp.logical_and(overlap_x, overlap_y)
+            
+            collect = jnp.logical_and(i_active, overlap)
+            
+            new_keys = jnp.where(collect, keys_collected + 1, keys_collected)
+            new_items_active = jnp.where(collect, items_active.at[i].set(0), items_active)
+            
+            return new_keys, new_items_active
+
+        current_keys, new_items_active = jax.lax.fori_loop(
+            0, self.consts.MAX_ITEMS_PER_ROOM, collect_item,
+            (state.inventory[0], state.items_active)
+        )
+
+        def check_door(i, carry):
+            hit, keys_left, doors_active = carry
             d_x = state.doors_x[i]
             d_y = state.doors_y[i]
-            d_active = state.doors_active[i] == 1
+            d_active = doors_active[i] == 1
             in_x = jnp.logical_and(front_x >= d_x, front_x < d_x + 4)
             in_y_top = jnp.logical_and(check_y_top >= d_y, check_y_top < d_y + 38)
             in_y_mid = jnp.logical_and(check_y_mid >= d_y, check_y_mid < d_y + 38)
             in_y_bot = jnp.logical_and(check_y_bot >= d_y, check_y_bot < d_y + 38)
             in_y = jnp.logical_or(in_y_top, jnp.logical_or(in_y_mid, in_y_bot))
+            
             hit_this_door = jnp.logical_and(d_active, jnp.logical_and(in_x, in_y))
-            return jnp.logical_or(hit, hit_this_door)
+            open_it = jnp.logical_and(hit_this_door, keys_left > 0)
+            hit_as_wall = jnp.logical_and(hit_this_door, jnp.logical_not(open_it))
+            
+            new_hit = jnp.logical_or(hit, hit_as_wall)
+            new_keys = jnp.where(open_it, keys_left - 1, keys_left)
+            new_doors_active = jnp.where(open_it, doors_active.at[i].set(0), doors_active)
+            
+            return new_hit, new_keys, new_doors_active
         
-        hit_wall = jax.lax.fori_loop(0, self.consts.MAX_DOORS_PER_ROOM, check_door, hit_wall)
+        hit_wall, current_keys, new_doors_active = jax.lax.fori_loop(
+            0, self.consts.MAX_DOORS_PER_ROOM, check_door, 
+            (hit_wall, current_keys, state.doors_active)
+        )
 
         new_x = jnp.where(jnp.logical_or(hit_wall, is_climbing == 1), current_x, new_x)
         
@@ -641,9 +688,9 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             hit_wall_left = jnp.logical_and(current_dir < 0, self.ROOM_COLLISION_MAP[e_y + 8, jnp.clip(new_x, 0, self.consts.WIDTH - 1)] == 1)
             hit_wall_right = jnp.logical_and(current_dir > 0, self.ROOM_COLLISION_MAP[e_y + 8, jnp.clip(new_x + 8, 0, self.consts.WIDTH - 1)] == 1)
             
-            # Or edges
-            hit_left = new_x <= 0
-            hit_right = new_x >= self.consts.WIDTH - 8
+            # Or boundaries
+            hit_left = new_x <= state.enemies_min_x[i]
+            hit_right = new_x >= state.enemies_max_x[i]
             
             bounce = jnp.logical_or(hit_left, jnp.logical_or(hit_right, jnp.logical_or(hit_wall_left, hit_wall_right)))
             
@@ -666,7 +713,10 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             is_falling=new_is_falling,
             frame_count=state.frame_count + 1,
             enemies_x=new_enemies_x,
-            enemies_direction=new_enemies_dir
+            enemies_direction=new_enemies_dir,
+            inventory=jnp.array([current_keys], dtype=jnp.int32),
+            items_active=new_items_active,
+            doors_active=new_doors_active
         )
         
         obs = self._get_observation(state)
