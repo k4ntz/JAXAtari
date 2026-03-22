@@ -86,6 +86,7 @@ MOD_MODULES = {
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
     "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
     "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
+    "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
 }
 
 
