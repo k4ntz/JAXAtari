@@ -56,6 +56,7 @@ class Montezuma2State:
     enemies_x: jnp.ndarray
     enemies_y: jnp.ndarray
     enemies_active: jnp.ndarray
+    enemies_direction: jnp.ndarray
     
     ladders_x: jnp.ndarray
     ladders_top: jnp.ndarray
@@ -121,7 +122,7 @@ class Montezuma2Renderer(JAXGameRenderer):
             {'name': 'bg', 'type': 'background', 'data': bg_data},
             {'name': 'room_bg', 'type': 'single', 'file': 'backgrounds/mid_room_level_0.npy', 'transpose': False},
             {'name': 'player', 'type': 'single', 'file': 'player/player_sprite.npy', 'transpose': False},
-            {'name': 'enemy', 'type': 'single', 'file': 'enemies/bounce_skull.npy', 'transpose': False},
+            {'name': 'enemy', 'type': 'single', 'file': 'enemies/skull_cycle/skull_1.npy', 'transpose': False},
             {'name': 'item', 'type': 'single', 'file': 'items/key.npy', 'transpose': False},
             {'name': 'door', 'type': 'single', 'file': 'door.npy', 'transpose': False},
             {'name': 'conveyor', 'type': 'single', 'file': 'conveyor_belt.npy', 'transpose': False},
@@ -267,6 +268,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         enemies_x = jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
         enemies_y = jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
         enemies_active = jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
+        enemies_direction = jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
         
         ladders_x = jnp.zeros(self.consts.MAX_LADDERS_PER_ROOM, dtype=jnp.int32)
         ladders_top = jnp.zeros(self.consts.MAX_LADDERS_PER_ROOM, dtype=jnp.int32)
@@ -295,6 +297,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         enemies_x = enemies_x.at[0].set(93)
         enemies_y = enemies_y.at[0].set(119)
         enemies_active = enemies_active.at[0].set(1)
+        enemies_direction = enemies_direction.at[0].set(1) # 1 for right, -1 for left
         
         ladders_x = ladders_x.at[0].set(72)
         ladders_top = ladders_top.at[0].set(49)
@@ -350,6 +353,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             enemies_x=enemies_x,
             enemies_y=enemies_y,
             enemies_active=enemies_active,
+            enemies_direction=enemies_direction,
             ladders_x=ladders_x,
             ladders_top=ladders_top,
             ladders_bottom=ladders_bottom,
@@ -622,6 +626,34 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         current_vx = jnp.where(jnp.logical_or(hit_wall, hit_floor), 0, current_vx)
         
+        # 6. Enemy Movement
+        def move_enemy(i, carry):
+            e_x, e_dir = carry
+            current_x = e_x[i]
+            current_dir = e_dir[i]
+            
+            # Move 1 pixel every 2 frames
+            speed = jnp.where(jnp.mod(state.frame_count, 2) == 0, 1, 0)
+            new_x = current_x + current_dir * speed
+            
+            # Bounce off walls
+            e_y = state.enemies_y[i]
+            hit_wall_left = jnp.logical_and(current_dir < 0, self.ROOM_COLLISION_MAP[e_y + 8, jnp.clip(new_x, 0, self.consts.WIDTH - 1)] == 1)
+            hit_wall_right = jnp.logical_and(current_dir > 0, self.ROOM_COLLISION_MAP[e_y + 8, jnp.clip(new_x + 8, 0, self.consts.WIDTH - 1)] == 1)
+            
+            # Or edges
+            hit_left = new_x <= 0
+            hit_right = new_x >= self.consts.WIDTH - 8
+            
+            bounce = jnp.logical_or(hit_left, jnp.logical_or(hit_right, jnp.logical_or(hit_wall_left, hit_wall_right)))
+            
+            final_dir = jnp.where(bounce, -current_dir, current_dir)
+            final_x = jnp.where(bounce, current_x, new_x)
+            
+            return e_x.at[i].set(final_x), e_dir.at[i].set(final_dir)
+            
+        new_enemies_x, new_enemies_dir = jax.lax.fori_loop(0, self.consts.MAX_ENEMIES_PER_ROOM, move_enemy, (state.enemies_x, state.enemies_direction))
+        
         state = state.replace(
             player_x=new_x,
             player_y=new_y,
@@ -632,7 +664,9 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             is_climbing=is_climbing,
             last_rope=new_last_rope,
             is_falling=new_is_falling,
-            frame_count=state.frame_count + 1
+            frame_count=state.frame_count + 1,
+            enemies_x=new_enemies_x,
+            enemies_direction=new_enemies_dir
         )
         
         obs = self._get_observation(state)
