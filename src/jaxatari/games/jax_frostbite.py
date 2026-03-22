@@ -1400,6 +1400,38 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         new_number_of_fish_eaten = jnp.where(level_reset_complete, jnp.int32(0), state.number_of_fish_eaten)
         new_fish_alive_mask = jnp.where(level_reset_complete, jnp.zeros(4, dtype=jnp.int32), state.fish_alive_mask)
 
+        # Reset bear to initial position on level completion
+        new_polar_grizzly_x = jnp.where(
+            level_reset_complete,
+            self.consts.INIT_POLAR_GRIZZLY_HORIZ_POS,
+            state.polar_grizzly_x
+        )
+        new_polar_grizzly_frac = jnp.where(
+            level_reset_complete,
+            0,
+            state.polar_grizzly_frac_accumulator
+        )
+        new_polar_grizzly_direction = jnp.where(
+            level_reset_complete,
+            1,
+            state.polar_grizzly_direction
+        )
+        new_polar_grizzly_animation_idx = jnp.where(
+            level_reset_complete,
+            7,
+            state.polar_grizzly_animation_idx
+        )
+        new_bailey_grizzly_collision_timer = jnp.where(
+            level_reset_complete,
+            0,
+            state.bailey_grizzly_collision_timer
+        )
+        new_bailey_grizzly_collision_value = jnp.where(
+            level_reset_complete,
+            0,
+            state.bailey_grizzly_collision_value
+        )
+
         next_state = state.replace(
             frame_delay=new_delay,
             building_igloo_idx=new_building_idx,
@@ -1434,7 +1466,13 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             obstacle_speed_whole=new_obstacle_speed_whole,
             obstacle_speed_frac=new_obstacle_speed_frac,
             number_of_fish_eaten=new_number_of_fish_eaten,
-            fish_alive_mask=new_fish_alive_mask
+            fish_alive_mask=new_fish_alive_mask,
+            polar_grizzly_x=new_polar_grizzly_x,
+            polar_grizzly_frac_accumulator=new_polar_grizzly_frac,
+            polar_grizzly_direction=new_polar_grizzly_direction,
+            polar_grizzly_animation_idx=new_polar_grizzly_animation_idx,
+            bailey_grizzly_collision_timer=new_bailey_grizzly_collision_timer,
+            bailey_grizzly_collision_value=new_bailey_grizzly_collision_value
         )
 
         # Spawn 4 new obstacles when level resets
@@ -2243,6 +2281,16 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             0,
             state.polar_grizzly_frac_accumulator
         )
+        new_polar_grizzly_direction = jnp.where(
+            should_respawn,
+            1,
+            state.polar_grizzly_direction
+        )
+        new_polar_grizzly_animation_idx = jnp.where(
+            should_respawn,
+            7,
+            state.polar_grizzly_animation_idx
+        )
         # Clear bear collision state on respawn
         new_bailey_grizzly_collision_timer = jnp.where(
             should_respawn,
@@ -2360,6 +2408,8 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             obstacle_active=new_obstacle_active,
             polar_grizzly_x=new_polar_grizzly_x,
             polar_grizzly_frac_accumulator=new_polar_grizzly_frac,
+            polar_grizzly_direction=new_polar_grizzly_direction,
+            polar_grizzly_animation_idx=new_polar_grizzly_animation_idx,
             bailey_grizzly_collision_timer=new_bailey_grizzly_collision_timer,
             bailey_grizzly_collision_value=new_bailey_grizzly_collision_value
         )
