@@ -152,8 +152,8 @@ GRID_W = WORLD_W // CELL_SIZE
 GRID_H = WORLD_H // CELL_SIZE
 BIG_DIST = 10_000                  # "infinity" for distance field
 
-NUM_ENEMIES = 10  # Increased to allow more spawned enemies
-NUM_SPAWNERS = 3  # Spawner entities
+NUM_ENEMIES = 4  # Increased to allow more spawned enemies
+NUM_SPAWNERS = 1  # Spawner entities
 
 # Enemy types (5 = strongest, 1 = weakest)
 ENEMY_GRIM_REAPER = 5  # Strongest
@@ -163,8 +163,8 @@ ENEMY_WRAITH = 2
 ENEMY_ZOMBIE = 1  # Weakest
 
 # Item configuration
-NUM_ITEMS = 100  # 5 fixed slots + 95 regular slots for high-density item gameplay/mod presets
-INITIAL_REGULAR_ITEM_COUNT = 8  # Fewer random items active at once to reduce clutter
+NUM_ITEMS = 8  # 5 fixed slots + 95 regular slots for high-density item gameplay/mod presets
+INITIAL_REGULAR_ITEM_COUNT = 5  # Fewer random items active at once to reduce clutter
 # Item type codes
 ITEM_HEART = 1          # +health, no points
 ITEM_POISON = 2         # -4 health, no points
@@ -2628,8 +2628,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             0.12,  # amber chalice (reduced from 0.14)
             0.08,  # amulet (reduced from 0.10)
             0.07,  # shield (reduced from 0.08)
-            0.05,  # gun (reduced from 0.06)
-            0.12,  # bomb (reduced from 0.14)
+            0.03,  # gun (further reduced)
+            0.07,  # bomb (further reduced)
             0.08 if self.consts.ENABLE_SPEED_POTION_SPAWN else 0.0,   # speed potion
             0.08 if self.consts.ENABLE_HEAL_POTION_SPAWN else 0.0,     # heal potion
             0.07 if self.consts.ENABLE_POISON_POTION_SPAWN else 0.0,   # poison potion
@@ -4463,8 +4463,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                     0.12,
                     0.08,
                     0.07,
-                    0.05,
-                    0.12,
+                    0.03,
+                    0.07,
                     0.08 if self.consts.ENABLE_SPEED_POTION_SPAWN else 0.0,
                     0.08 if self.consts.ENABLE_HEAL_POTION_SPAWN else 0.0,
                     0.07 if self.consts.ENABLE_POISON_POTION_SPAWN else 0.0,
