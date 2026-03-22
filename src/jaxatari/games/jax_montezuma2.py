@@ -437,7 +437,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             get_on_top = jnp.logical_and(is_aligned, jnp.logical_and(is_down, jnp.abs(player_feet_y - r_top) <= 5))
             get_on_bottom = jnp.logical_and(is_aligned, jnp.logical_and(is_up, jnp.abs(player_feet_y - r_bottom) <= 5))
             
-            in_rope_zone = jnp.logical_and(is_aligned, jnp.logical_and(player_feet_y >= r_top - 3, player_feet_y <= r_bottom - 2))
+            in_rope_zone = jnp.logical_and(is_aligned, jnp.logical_and(player_feet_y >= r_top, player_feet_y <= r_bottom + 10))
             
             on_this_rope = jnp.where(state.is_climbing == 1, in_rope_zone, jnp.logical_or(catch_rope, jnp.logical_or(get_on_top, get_on_bottom)))
             
@@ -503,11 +503,25 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         def get_fall_dy():
             pixel_1_below = self.ROOM_COLLISION_MAP[safe_y, safe_x] == 1
             pixel_2_below = self.ROOM_COLLISION_MAP[jnp.clip(player_feet_y + 2, 0, 148), safe_x] == 1
+            
+            def check_c_pixel2(i, p2b):
+                c_x = state.conveyors_x[i]
+                c_y = state.conveyors_y[i] - 1
+                is_on = jnp.logical_and(
+                    state.conveyors_active[i] == 1,
+                    jnp.logical_and(player_feet_y + 1 == c_y, jnp.logical_and(safe_x >= c_x, safe_x < c_x + 40))
+                )
+                return jnp.logical_or(p2b, is_on)
+            pixel_2_below = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, check_c_pixel2, pixel_2_below)
+
             fall_dist = jnp.where(on_ground, 0, jnp.where(pixel_2_below, 1, self.consts.GRAVITY))
             return fall_dist, 0, 0
             
         def get_climb_dy():
             climb_dist = jnp.where(is_down, self.consts.PLAYER_SPEED, jnp.where(is_up, -self.consts.PLAYER_SPEED, 0))
+            # Zero out vertical speed on the frame we catch the rope
+            just_caught_rope = jnp.logical_and(state.is_climbing == 0, rope_idx != -1)
+            climb_dist = jnp.where(just_caught_rope, 0, climb_dist)
             return climb_dist, 0, 0
 
         dy, new_jump_counter, new_is_jumping = jax.lax.cond(
@@ -524,6 +538,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         # 4. Resolve Vertical Collision
         new_y = state.player_y + dy
+        new_y = jnp.where(jnp.logical_and(is_climbing == 1, rope_idx != -1), jnp.maximum(new_y, state.ropes_top[rope_idx]), new_y)
         new_feet_y = new_y + self.consts.PLAYER_HEIGHT - 1
         
         new_top_y = jnp.clip(new_y, 0, 148)
@@ -531,8 +546,22 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         new_y = jnp.where(hit_ceiling, state.player_y, new_y)
         new_is_jumping = jnp.where(hit_ceiling, 0, new_is_jumping)
         
-        hit_floor = jnp.logical_and(dy > 0, jnp.logical_and(is_climbing == 0, self.ROOM_COLLISION_MAP[jnp.clip(new_feet_y, 0, 148), safe_x] == 1))
-        snapped_y = jnp.clip(new_feet_y, 0, 148) - self.consts.PLAYER_HEIGHT
+        hit_floor_rm = jnp.logical_and(dy > 0, jnp.logical_and(is_climbing == 0, self.ROOM_COLLISION_MAP[jnp.clip(new_feet_y, 0, 148), safe_x] == 1))
+        snapped_y_rm = jnp.clip(new_feet_y, 0, 148) - self.consts.PLAYER_HEIGHT
+        
+        def check_c_hit_floor(i, carry):
+            h_f, s_y = carry
+            c_x = state.conveyors_x[i]
+            c_y = state.conveyors_y[i] - 1
+            crossed = jnp.logical_and(player_feet_y < c_y, new_feet_y >= c_y)
+            is_hit = jnp.logical_and(
+                state.conveyors_active[i] == 1,
+                jnp.logical_and(dy > 0, jnp.logical_and(is_climbing == 0, jnp.logical_and(crossed, jnp.logical_and(safe_x >= c_x, safe_x < c_x + 40))))
+            )
+            return jnp.logical_or(h_f, is_hit), jnp.where(is_hit, c_y - self.consts.PLAYER_HEIGHT + 1, s_y)
+            
+        hit_floor, snapped_y = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, check_c_hit_floor, (hit_floor_rm, snapped_y_rm))
+        
         new_y = jnp.where(hit_floor, snapped_y, new_y)
         
         # Set is_falling state
@@ -597,6 +626,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             player_x=new_x,
             player_y=new_y,
             player_vx=current_vx,
+            player_vy=dy,
             is_jumping=new_is_jumping,
             jump_counter=new_jump_counter,
             is_climbing=is_climbing,
