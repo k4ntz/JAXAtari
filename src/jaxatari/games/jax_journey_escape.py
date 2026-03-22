@@ -335,40 +335,54 @@ class JaxJourneyEscape(
         new_bg_frames = (state.bg_frames + 1) % cycle_length
 
         # ---RAW PLAYER INPUT---
+        up_normal = (action == Action.UP) | (action == Action.UPLEFT) | (action == Action.UPRIGHT)
+        up_fire_moves = (action == Action.UPLEFTFIRE) | (action == Action.UPRIGHTFIRE)
+        going_up = up_normal | up_fire_moves
+
+        down_normal = (action == Action.DOWN) | (action == Action.DOWNLEFT) | (action == Action.DOWNRIGHT)
+        down_fire = (action == Action.DOWNFIRE) | (action == Action.DOWNLEFTFIRE) | (action == Action.DOWNRIGHTFIRE)
+
+        left_normal = (action == Action.LEFT) | (action == Action.UPLEFT) | (action == Action.DOWNLEFT)
+        left_fire = (action == Action.LEFTFIRE) | (action == Action.UPLEFTFIRE) | (action == Action.DOWNLEFTFIRE)
+
+        right_normal = (action == Action.RIGHT) | (action == Action.UPRIGHT) | (action == Action.DOWNRIGHT)
+        right_fire = (action == Action.RIGHTFIRE) | (action == Action.UPRIGHTFIRE) | (action == Action.DOWNRIGHTFIRE)
+
         # Compute vertical movement
         dy_int = jnp.where(
-            (action == Action.UP) | (action == Action.UPLEFT) | (action == Action.UPRIGHT),
+            going_up,
             -self.consts.player_speed,
             jnp.where(
-                (action == Action.DOWN) | (action == Action.DOWNLEFT) | (action == Action.DOWNRIGHT),
+                down_normal,
                 self.consts.player_speed,
-                0
+                jnp.where(
+                    down_fire,
+                    2 * self.consts.player_speed,
+                    0
+                )
             ),
         )
 
         # Compute horizontal movement
         dx_int = jnp.where(
-            (action == Action.LEFT) | (action == Action.UPLEFT) | (action == Action.DOWNLEFT),
+            left_normal,
             -self.consts.player_speed,
             jnp.where(
-                (action == Action.RIGHT) | (action == Action.UPRIGHT) | (action == Action.DOWNRIGHT),
-                self.consts.player_speed,
-                0
+                left_fire,
+                -2 * self.consts.player_speed,
+                jnp.where(
+                    right_normal,
+                    self.consts.player_speed,
+                    jnp.where(
+                        right_fire,
+                        2 * self.consts.player_speed,
+                        0
+                    )
+                )
             ),
         )
 
-        # determine walking direction of player
-        player_move_right = (action == Action.RIGHT) | (action == Action.UPRIGHT) | (action == Action.DOWNRIGHT)
-        player_move_left = (action == Action.LEFT) | (action == Action.UPLEFT) | (action == Action.DOWNLEFT)
-        vertical = jnp.logical_not(player_move_right) & jnp.logical_not(player_move_left)
 
-        new_walking_direction = jnp.where(
-            vertical,
-            0,  # up/down
-            jnp.where(player_move_right,
-                      1,  # right
-                      2)  # left
-        )
 
         # advance walking animation every frame, independent of input
         new_walking_frames = (state.walking_frames + 1) % self.consts.player_frame_switch
@@ -865,6 +879,26 @@ class JaxJourneyEscape(
         dx_applied = jnp.where(should_eject, force_push_val, final_dx)
 
         new_x = jnp.clip(state.player_x + dx_applied, player_min_x, player_max_x).astype(jnp.int32)
+
+        # Actual horizontal movement applied (after clipping / obstacle blocking)
+        actual_dx = new_x - state.player_x
+
+        # determine walking direction of player based on actual movement capability
+        is_moving_up = up_normal | (action == Action.UPFIRE) | up_fire_moves
+        is_actually_moving_right = actual_dx > 0
+        is_actually_moving_left = actual_dx < 0
+
+        # Up overrides side sprites. If only Side or Down+Side, it uses Side.
+        new_walking_direction = jnp.where(
+            is_moving_up,
+            0,  # up sprite dominant (front)
+            jnp.where(is_actually_moving_right,
+                      1,  # right
+                      jnp.where(is_actually_moving_left,
+                                2,  # left
+                                0)  # fallback to walk-front (0) when blocked or solo down
+                      )
+        )
 
         # Update time
         new_time = (state.time + 1).astype(jnp.int32)
