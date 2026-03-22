@@ -13,7 +13,7 @@ from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepMod
 
 EASY_MODE_RAPID_FIRE_DELTA = 10_000
 EASY_MODE_REGULAR_ITEM_START = 5
-EASY_MODE_KEEP_INACTIVE_SLOTS = 5
+EASY_MODE_EXTRA_REGULAR_SLOTS = 16
 
 
 # ============================================================================
@@ -393,40 +393,28 @@ class EasyModeMod(JaxAtariPostStepModPlugin):
     - Item count is bounded by NUM_ITEMS (array shape in base environment).
     """
 
+    # Easy mode should not implicitly enable special item families.
+    # Those are controlled by their dedicated mods only.
+    # Only boost baseline movement speed for a more forgiving run.
     constants_overrides = {
-        "ENABLE_SPEED_POTION_SPAWN": True,
-        "ENABLE_HEAL_POTION_SPAWN": True,
-        "ENABLE_POISON_POTION_SPAWN": True,
-        "ENABLE_HAMMER_SPAWN": True,
+        "PLAYER_SPEED": 2,
     }
 
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state: DarkChambersState, new_state: DarkChambersState) -> DarkChambersState:
-        # Keep a few inactive slots so drop-based mechanics still have room.
-        regular_slots = jnp.arange(NUM_ITEMS) >= EASY_MODE_REGULAR_ITEM_START
-        keep_active_until = NUM_ITEMS - EASY_MODE_KEEP_INACTIVE_SLOTS
-        can_force_active = jnp.arange(NUM_ITEMS) < keep_active_until
-        force_active_mask = regular_slots & can_force_active
-
-        dense_item_active = jnp.where(
-            force_active_mask,
-            jnp.ones_like(new_state.item_active),
-            new_state.item_active,
-        )
-
+        # Do not force item_active every step; base game must control pickup/removal.
         return new_state._replace(
             gun_active=jnp.array(1, dtype=jnp.int32),
             fire_was_pressed=jnp.array(0, dtype=jnp.int32),
             last_shot_step=new_state.step_counter - jnp.array(EASY_MODE_RAPID_FIRE_DELTA, dtype=jnp.int32),
-            item_active=dense_item_active,
         )
 
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
-        regular_slots = jnp.arange(NUM_ITEMS) >= EASY_MODE_REGULAR_ITEM_START
-        keep_active_until = NUM_ITEMS - EASY_MODE_KEEP_INACTIVE_SLOTS
-        can_force_active = jnp.arange(NUM_ITEMS) < keep_active_until
-        force_active_mask = regular_slots & can_force_active
+        # One-time density boost at reset only (keeps pickups working during play).
+        idx = jnp.arange(NUM_ITEMS)
+        regular_slots = idx >= EASY_MODE_REGULAR_ITEM_START
+        force_active_mask = regular_slots & (idx < (EASY_MODE_REGULAR_ITEM_START + EASY_MODE_EXTRA_REGULAR_SLOTS))
 
         dense_item_active = jnp.where(
             force_active_mask,
