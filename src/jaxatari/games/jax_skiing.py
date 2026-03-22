@@ -625,7 +625,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         friction_y = jnp.float32(0.01)
         
         is_down_action = jnp.logical_and(jnp.equal(norm_action, self.consts.DOWN), self.consts.allow_down_acceleration)
-        max_speed = jax.lax.select(is_down_action, jnp.float32(1.8), jnp.float32(1.2))
+        max_speed = jax.lax.select(is_down_action, jnp.float32(2.2), jnp.float32(1.2))
 
         # Calculate target orientation vector
         dir_norm = jnp.sqrt(dx_target**2 + dy_target**2) + 1e-6
@@ -634,7 +634,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
 
         # Acceleration is proportional to how much the skier is facing down (dy_target)
         # Maximal when facing down (dy_target == 1.0), zero when parallel (dy_target == 0.0)
-        base_accel = jax.lax.select(is_down_action, jnp.float32(0.15), jnp.float32(0.05))
+        base_accel = jax.lax.select(is_down_action, jnp.float32(0.25), jnp.float32(0.05))
         accel_mag = dy_target * base_accel
 
         # Distribute acceleration along the x and y axes
