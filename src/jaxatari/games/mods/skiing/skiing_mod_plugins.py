@@ -33,3 +33,11 @@ class JumpToBreakMod(JaxAtariInternalModPlugin):
         "allow_jump": True,
         "jump_stops_skier": True,
     }
+
+class SpeedBurstMod(JaxAtariInternalModPlugin):
+    """
+    Allows the skier to accelerate beyond the default maximum speed using the DOWN action.
+    """
+    constants_overrides = {
+        "allow_down_acceleration": True,
+    }

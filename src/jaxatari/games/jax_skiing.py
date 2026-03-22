@@ -128,6 +128,7 @@ class SkiingConstants(AutoDerivedConstants):
     LEFT: int = struct.field(pytree_node=False, default=1)
     RIGHT: int = struct.field(pytree_node=False, default=2)
     FIRE: int = struct.field(pytree_node=False, default=3)
+    DOWN: int = struct.field(pytree_node=False, default=4)
     BOTTOM_BORDER: int = struct.field(pytree_node=False, default=176)
     TOP_BORDER: int = struct.field(pytree_node=False, default=-15)
     """Game configuration parameters"""
@@ -156,6 +157,7 @@ class SkiingConstants(AutoDerivedConstants):
     moguls_collidable: bool = struct.field(pytree_node=False, default=False)
     allow_jump: bool = struct.field(pytree_node=False, default=True)
     jump_stops_skier: bool = struct.field(pytree_node=False, default=False)
+    allow_down_acceleration: bool = struct.field(pytree_node=False, default=False)
     speed: float = struct.field(pytree_node=False, default=1.0)
 
     # Asset config baked into constants (immutable default) for asset overrides
@@ -202,12 +204,13 @@ class SkiingInfo:
 
 
 class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, SkiingConstants]):
-    # ALE minimal action set: [NOOP, RIGHT, LEFT, FIRE]
+    # ALE minimal action set: [NOOP, RIGHT, LEFT, FIRE, DOWN]
     ACTION_SET: jnp.ndarray = jnp.array([
         Action.NOOP,
         Action.RIGHT,
         Action.LEFT,
-        Action.FIRE
+        Action.FIRE,
+        Action.DOWN
     ], dtype=jnp.int32)
 
     def __init__(self, consts: SkiingConstants | None = None):
@@ -549,7 +552,10 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
                     atari_action == Action.LEFT, self.consts.LEFT,
                     jnp.where(
                         atari_action == Action.FIRE, self.consts.FIRE,
-                        self.consts.NOOP  # fallback to NOOP
+                        jnp.where(
+                            atari_action == Action.DOWN, self.consts.DOWN,
+                            self.consts.NOOP  # fallback to NOOP
+                        )
                     )
                 )
             )
@@ -617,7 +623,9 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
 
         friction_x = jnp.float32(0.04)
         friction_y = jnp.float32(0.01)
-        max_speed = jnp.float32(1.2)
+        
+        is_down_action = jnp.logical_and(jnp.equal(norm_action, self.consts.DOWN), self.consts.allow_down_acceleration)
+        max_speed = jax.lax.select(is_down_action, jnp.float32(1.8), jnp.float32(1.2))
 
         # Calculate target orientation vector
         dir_norm = jnp.sqrt(dx_target**2 + dy_target**2) + 1e-6
@@ -626,7 +634,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
 
         # Acceleration is proportional to how much the skier is facing down (dy_target)
         # Maximal when facing down (dy_target == 1.0), zero when parallel (dy_target == 0.0)
-        accel_mag = dy_target * jnp.float32(0.05)
+        base_accel = jax.lax.select(is_down_action, jnp.float32(0.15), jnp.float32(0.05))
+        accel_mag = dy_target * base_accel
 
         # Distribute acceleration along the x and y axes
         # We boost the horizontal acceleration component by 2x so the skier accelerates more laterally when turning

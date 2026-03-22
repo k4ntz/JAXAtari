@@ -1,6 +1,6 @@
 import os
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.skiing.skiing_mod_plugins import MoreTreesMod, MoreMogulsMod, DangerousMogulsMod, JumpToBreakMod
+from jaxatari.games.mods.skiing.skiing_mod_plugins import MoreTreesMod, MoreMogulsMod, DangerousMogulsMod, JumpToBreakMod, SpeedBurstMod
 
 class SkiingEnvMod(JaxAtariModController):
     """
@@ -13,6 +13,7 @@ class SkiingEnvMod(JaxAtariModController):
         "_more_moguls": MoreMogulsMod,
         "_dangerous_moguls": DangerousMogulsMod,
         "jump_to_break": JumpToBreakMod,
+        "speed_burst": SpeedBurstMod,
         "off_piste": ["_more_trees", "_more_moguls", "_dangerous_moguls"],
     }
 
