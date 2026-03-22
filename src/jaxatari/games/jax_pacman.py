@@ -1,4 +1,5 @@
 import os
+import sys
 from functools import partial
 from typing import NamedTuple, Tuple
 import jax
@@ -272,7 +273,12 @@ class PacmanInfo(NamedTuple):
 
 
 class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, PacmanConstants]):
-    def __init__(self, consts: PacmanConstants = None):
+    def __init__(
+        self,
+        consts: PacmanConstants = None,
+        maze_file_path: str = None,
+        maze_file_pellet_path: str = None,
+    ):
         consts = consts or PacmanConstants()
         super().__init__(consts)
         self.action_set = [
@@ -283,32 +289,36 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             Action.RIGHT,
         ]
         
-        # Determine maze file path once (single source of truth)
-        from jaxatari.games.pacmanMaps.nodes import NodeGroup
-        maze_file_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "pacmanMaps", "maze1.txt"
-        )
+        # Determine paths relative to this file
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        if current_dir not in sys.path:
+            sys.path.insert(0, current_dir)
+            
+        pacman_maps_dir = os.path.join(current_dir, "pacmanMaps")
+        maze_file_path = os.path.join(pacman_maps_dir, "maze1.txt")
+        maze_file_pellet_path = os.path.join(pacman_maps_dir, "maze1_pellet.txt")
         
-        maze_file_pellet_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "pacmanMaps", "maze1_pellet.txt"
-        )
-        
-        # Check if maze file exists, raise error if not found
-        if not os.path.exists(maze_file_path):
-            raise FileNotFoundError(f"Maze file not found: {maze_file_path}")
+        import pacmanMaps.nodes as nodes_mod
+        NodeGroup = nodes_mod.NodeGroup
         
         # Initialize maze layout if not provided (load from file)
         if consts.MAZE_LAYOUT is None:
-            self.consts = consts._replace(MAZE_LAYOUT=self._load_maze_from_file(maze_file_pellet_path))
+            loaded_maze = self._load_maze_from_file(maze_file_pellet_path)
+            if loaded_maze is None:
+                raise ValueError("Failed to load maze layout.")
+            self.consts = consts._replace(MAZE_LAYOUT=loaded_maze)
         else:
             self.consts = consts
         
         # Create renderer after maze layout is loaded (so it can create maze_background correctly)
+        # Check to ensure layout is valid for renderer
+        if self.consts.MAZE_LAYOUT is None:
+             raise ValueError("MAZE_LAYOUT is None before initializing renderer!")
+             
         self.renderer = PacmanRenderer(self.consts)
         
         # Load NodeGroup using the same maze file path
+        # NodeGroup.from_maze_file handles scaling by tile_size
         self.node_group = NodeGroup.from_maze_file(maze_file_path, tile_size=self.consts.TILE_SIZE)
         
         # Pre-compute node positions for JIT-compatible movement
@@ -726,7 +736,48 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         
         # Calculate distance from current node to current position
         vec_to_self_sq = (state.player_x - current_node_x) * (state.player_x - current_node_x) + (state.player_y - current_node_y) * (state.player_y - current_node_y)
-        overshot = vec_to_self_sq >= vec_to_target_sq
+        
+        # Portal Detection Logic
+        # 1. Get movement vector from current direction
+        move_dx = jnp.where(state.player_direction == Action.RIGHT, 1, 
+                       jnp.where(state.player_direction == Action.LEFT, -1, 0))
+        move_dy = jnp.where(state.player_direction == Action.DOWN, 1,
+                       jnp.where(state.player_direction == Action.UP, -1, 0))
+        
+        # 2. Check if we are moving AWAY from the target (Dot Product < 0)
+        #    This happens when target is wrapped (e.g. Left<->Right or Top<->Bottom)
+        dot_prod = move_dx * dx_to_target + move_dy * dy_to_target
+        
+        # 3. Check if nodes are far apart (Portal)
+        #    is_portal = (dist > 2*TILE_SIZE) AND (moving away from target)
+        nodes_dist_sq = vec_to_target_sq
+        is_portal = jnp.logical_and(
+            nodes_dist_sq > (self.consts.TILE_SIZE * 2)**2,
+            dot_prod < 0
+        )
+        
+        # 4. Define overshot condition
+        #    Normal: reached target (dist_to_self >= dist_between_nodes)
+        #    Portal: travel a short distance from current node before wrap (spatial delay)
+        normal_overshot = vec_to_self_sq >= vec_to_target_sq
+        
+        # Portal overshot: use direction-dependent threshold to fix asymmetric delay.
+        # Works for both left-right and up-down portals.
+        # - Moving LEFT or UP (negative): we often go off-screen, so 2-pixel threshold
+        #   gives 2 frames of "tunnel" that are not visible → feels quick.
+        # - Moving RIGHT or DOWN (positive): we may stay on-screen, so the same
+        #   threshold would show Pacman for 2 extra frames → feels like more delay.
+        # Use threshold 0 when moving in positive direction (RIGHT/DOWN) so we wrap
+        # after 1 pixel; use 1 for negative direction (LEFT/UP). Both directions
+        # then feel like a quick wrap (horizontal and vertical).
+        moving_positive = jnp.logical_or(
+            state.player_direction == Action.RIGHT,
+            state.player_direction == Action.DOWN
+        )
+        portal_threshold_sq = jnp.where(moving_positive, 0, 1)
+        portal_overshot = vec_to_self_sq > portal_threshold_sq
+        
+        overshot = jnp.where(is_portal, portal_overshot, normal_overshot)
         
         # If overshot target (reached/passed the target node)
         # Update current node to target, then get new target
@@ -1475,10 +1526,14 @@ class PacmanRenderer(JAXGameRenderer):
         self.white_id = jnp.array(self.COLOR_TO_ID[(255, 255, 255)], dtype=jnp.uint8)
 
         # Pre-render static maze background (walls and ghost house)
-        self.maze_background = self._create_maze_background()
-
-        # NEW: precompute per-tile wall connectivity mask indices (0–15)
-        self.wall_mask_indices = self._compute_wall_masks()
+        if self.consts.MAZE_LAYOUT is not None:
+            print("Pre-rendering maze background...")
+            self.maze_background = self._create_maze_background()
+            # NEW: precompute per-tile wall connectivity mask indices (0–15)
+            self.wall_mask_indices = self._compute_wall_masks()
+        else:
+             self.maze_background = None
+             self.wall_mask_indices = None
     
     def _compute_wall_masks(self) -> jnp.ndarray:
         """Precompute 4-way connectivity mask for wall-like tiles.
