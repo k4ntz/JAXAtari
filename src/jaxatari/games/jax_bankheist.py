@@ -115,6 +115,9 @@ def _get_default_asset_config() -> tuple:
         # UI
         {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
         
+        # Bank Scores
+        {'name': 'bank_scores', 'type': 'group', 'files': [f"{i}0.npy" for i in range(1, 10)]},
+        
         # Procedural
         {'name': 'fuel_color', 'type': 'procedural', 'data': fuel_color_rgba},
     )
@@ -244,6 +247,8 @@ class BankHeistState(struct.PyTreeNode):
     dynamite_timer: chex.Array
     pending_police_spawns: chex.Array  # Timer for delayed police spawning
     pending_police_bank_indices: chex.Array  # Bank indices where police should spawn
+    pending_police_scores: chex.Array  # Bank robbery score for the pending spawn
+    killed_police_scores: chex.Array  # Score when police is killed, displayed while bank_spawn_timers is high
     game_paused: chex.Array  # Game paused state Is set at beginning and after life was lost
     bank_heists: chex.Array  # number of bank heists completed in the current level
     explosion_timer: chex.Array  # Timer for the screen flash effect when dynamite explodes
@@ -366,6 +371,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             dynamite_timer=jnp.array([-1]).astype(jnp.int32),
             pending_police_spawns=jnp.array([-1, -1, -1]).astype(jnp.int32),  # -1 means no pending spawn
             pending_police_bank_indices=jnp.array([-1, -1, -1]).astype(jnp.int32),  # Bank indices for pending spawns
+            pending_police_scores=jnp.array([-1, -1, -1]).astype(jnp.int32),  # Score for the pending spawn
+            killed_police_scores=jnp.array([-1, -1, -1]).astype(jnp.int32),  # Score when police is killed
             game_paused=jnp.array(False).astype(jnp.bool_),
             bank_heists=jnp.array(0).astype(jnp.int32),
             explosion_timer=jnp.array(0).astype(jnp.int32),
@@ -517,6 +524,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         new_bank_heists = state.bank_heists + 1
 
         money_bonus = jnp.minimum(new_bank_heists, 9)
+        new_pending_scores = state.pending_police_scores.at[first_available_slot].set(money_bonus)
+        
         # Increase score by bank robbery reward
         new_money = state.money + (self.consts.BASE_BANK_ROBBERY_REWARD * money_bonus)
 
@@ -524,6 +533,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             bank_positions=new_banks,
             pending_police_spawns=new_pending_spawns,
             pending_police_bank_indices=new_pending_bank_indices,
+            pending_police_scores=new_pending_scores,
             bank_heists=new_bank_heists,
             money=new_money
         )
@@ -603,9 +613,11 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
                 # Clear the pending spawn
                 new_pending_spawns = spawned_state.pending_police_spawns.at[i].set(-1)
                 new_pending_indices = spawned_state.pending_police_bank_indices.at[i].set(-1)
+                new_pending_scores = spawned_state.pending_police_scores.at[i].set(-1)
                 return spawned_state.replace(
                     pending_police_spawns=new_pending_spawns,
-                    pending_police_bank_indices=new_pending_indices
+                    pending_police_bank_indices=new_pending_indices,
+                    pending_police_scores=new_pending_scores
                 )
             
             ready_to_spawn = current_state.pending_police_spawns[i] == 0
@@ -701,7 +713,17 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             )
 
             new_police = current_state.enemy_positions.replace(visibility=new_visibility)
-            updated_state = current_state.replace(enemy_positions=new_police, bank_spawn_timers=new_respawn_timer)
+            
+            # Store the score to be displayed (divided by 10 to match the 1-9 index)
+            new_killed_score = current_state.killed_police_scores.at[i].set(
+                jnp.where(should_kill, kill_reward // 10, current_state.killed_police_scores[i])
+            )
+            
+            updated_state = current_state.replace(
+                enemy_positions=new_police,
+                bank_spawn_timers=new_respawn_timer,
+                killed_police_scores=new_killed_score
+            )
             
             # Increment killed count and add score if a police car was killed
             new_killed_count = killed_count + jnp.where(should_kill, 1, 0)
@@ -1577,6 +1599,43 @@ class BankHeistRenderer(JAXGameRenderer):
                 r
             )
         raster = jax.lax.fori_loop(0, state.bank_positions.position.shape[0], render_bank, raster)
+        ### Render Pending Bank Scores
+        def render_bank_score(i, r):
+            score_index = state.pending_police_scores[i] - 1
+            # Prevent out-of-bounds indexing in case pending_police_scores is -1
+            safe_score_index = jnp.clip(score_index, 0, 8)
+            score_mask = self.SHAPE_MASKS['bank_scores'][safe_score_index]
+            score_flip_offset = self.FLIP_OFFSETS['bank_scores']
+            
+            bank_index = state.pending_police_bank_indices[i]
+            # Prevent out-of-bounds indexing for bank_index
+            safe_bank_index = jnp.clip(bank_index, 0, 2)
+            
+            return jax.lax.cond(
+                state.pending_police_spawns[i] > 0,
+                lambda r_in: self.jr.render_at(r_in, state.bank_positions.position[safe_bank_index, 0], state.bank_positions.position[safe_bank_index, 1], score_mask, flip_offset=score_flip_offset),
+                lambda r_in: r_in,
+                r
+            )
+        raster = jax.lax.fori_loop(0, state.pending_police_spawns.shape[0], render_bank_score, raster)
+        ### Render Killed Police Scores
+        def render_killed_police_score(i, r):
+            score_index = state.killed_police_scores[i] - 1
+            # Prevent out-of-bounds indexing in case killed_police_scores is -1
+            safe_score_index = jnp.clip(score_index, 0, 8)
+            score_mask = self.SHAPE_MASKS['bank_scores'][safe_score_index]
+            score_flip_offset = self.FLIP_OFFSETS['bank_scores']
+            
+            # Display score while bank spawn timer is high (within 120 frames of being killed)
+            display_condition = state.bank_spawn_timers[i] > (self.consts.BANK_RESPAWN_TIME - 120)
+            
+            return jax.lax.cond(
+                display_condition,
+                lambda r_in: self.jr.render_at(r_in, state.enemy_positions.position[i, 0], state.enemy_positions.position[i, 1], score_mask, flip_offset=score_flip_offset),
+                lambda r_in: r_in,
+                r
+            )
+        raster = jax.lax.fori_loop(0, state.bank_spawn_timers.shape[0], render_killed_police_score, raster)
         ### Render Police Cars
         police_branches = [
             lambda: self.POLICE_MASKS[1],  # DOWN (Front)
