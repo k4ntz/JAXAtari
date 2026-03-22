@@ -491,7 +491,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         state = Montezuma2State(
             room_id=jnp.array(0, dtype=jnp.int32),
             lives=jnp.array(5, dtype=jnp.int32),
-            score=jnp.array(0, dtype=jnp.int32),
+            score=jnp.array([0], dtype=jnp.int32),
             frame_count=jnp.array(0, dtype=jnp.int32),
             player_x=jnp.array(self.consts.INITIAL_PLAYER_X, dtype=jnp.int32),
             player_y=jnp.array(self.consts.INITIAL_PLAYER_Y, dtype=jnp.int32),
@@ -535,6 +535,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         return self._get_observation(state), state
 
     def step(self, state: Montezuma2State, action: int) -> Tuple[Montezuma2Observation, Montezuma2State, float, bool, Montezuma2Info]:
+        previous_score = state.score
         is_up = jnp.logical_or(action == Action.UP, jnp.logical_or(action == Action.UPRIGHT, action == Action.UPLEFT))
         is_up = jnp.logical_or(is_up, jnp.logical_or(action == Action.UPFIRE, jnp.logical_or(action == Action.UPRIGHTFIRE, action == Action.UPLEFTFIRE)))
         is_down = jnp.logical_or(action == Action.DOWN, jnp.logical_or(action == Action.DOWNRIGHT, action == Action.DOWNLEFT))
@@ -777,7 +778,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         # 5.5 Item Collection
         def collect_item(i, carry):
-            keys_collected, items_active = carry
+            keys_collected, items_active, current_score = carry
             i_x = state.items_x[i]
             i_y = state.items_y[i]
             i_active = items_active[i] == 1
@@ -790,12 +791,13 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             
             new_keys = jnp.where(collect, keys_collected + 1, keys_collected)
             new_items_active = jnp.where(collect, items_active.at[i].set(0), items_active)
+            new_score = jnp.where(collect, current_score + 100, current_score)
             
-            return new_keys, new_items_active
+            return new_keys, new_items_active, new_score
 
-        current_keys, new_items_active = jax.lax.fori_loop(
+        current_keys, new_items_active, new_score = jax.lax.fori_loop(
             0, self.consts.MAX_ITEMS_PER_ROOM, collect_item,
-            (state.inventory[0], state.items_active)
+            (state.inventory[0], state.items_active, state.score)
         )
 
         def check_door(i, carry):
@@ -926,6 +928,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         state = state.replace(
             lives=new_lives,
+            score=new_score,
             player_x=final_x,
             player_y=final_y,
             player_vx=final_vx,
@@ -947,7 +950,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         )
         
         obs = self._get_observation(state)
-        reward = self._get_reward(state, state)
+        reward = self._get_reward(previous_score, state.score)
         done = self._get_done(state)
         info = self._get_info(state)
         
@@ -1015,11 +1018,11 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         )
 
         return Montezuma2Observation(player=player_obs, enemies=enemies_obs, items=items_obs, conveyors=conveyors_obs, doors=doors_obs, ropes=ropes_obs)
-    def _get_info(self, state: Montezuma2State, all_rewards: jnp.ndarray = None) -> Montezuma2Info:
+    def _get_info(self, state: Montezuma2State) -> Montezuma2Info:
         return Montezuma2Info(lives=state.lives, room_id=state.room_id)
 
-    def _get_reward(self, previous_state: Montezuma2State, state: Montezuma2State) -> float:
-        return 0.0
+    def _get_reward(self, previous_score: jnp.ndarray, score: jnp.ndarray) -> float:
+        return jnp.sum(score - previous_score).astype(jnp.float32)
 
     def _get_done(self, state: Montezuma2State) -> bool:
         return state.lives < 0
