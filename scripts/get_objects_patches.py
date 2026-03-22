@@ -88,11 +88,14 @@ class Renderer:
         self.current_actions = set()
         self.keys2actions = {}
         for i, action in enumerate(self.env.get_action_meanings()):
-            if action == "RIGHT" or action == "LEFT":
+            if action in ["RIGHT", "LEFT", "UP", "DOWN"]:
                 self.keys2actions[eval(f'pygame.K_{action}')] = i
-            elif action != "NOOP":
-                print("ACTION NOT COVERED")
-                raise NotImplementedError
+            elif action == "FIRE":
+                self.keys2actions[eval(f'pygame.K_SPACE')] = i
+            # elif action != "NOOP":
+            #     import ipdb; ipdb.set_trace()
+            #     print("ACTION NOT COVERED")
+            #     raise NotImplementedError
         self.frame = 0
         # self.env.set_ram(16, 6)
 

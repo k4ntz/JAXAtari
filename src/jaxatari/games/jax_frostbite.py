@@ -1209,6 +1209,11 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         return obs, state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
+    def _check_jump_intent(self, state: FrostbiteState, action: jnp.ndarray, moving_up: jnp.ndarray, moving_down: jnp.ndarray):
+        """Check if the user intends to jump. Continuous jumping is allowed."""
+        return moving_up, moving_down
+
+    @partial(jax.jit, static_argnums=(0,))
     def step(self, state: FrostbiteState, action: int):
         # Translate agent action index to ALE console action
         atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
@@ -1609,16 +1614,15 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         at_igloo_x = jnp.abs(state.bailey_x - 123) <= 1
         should_jump_for_igloo = is_entering_igloo & at_igloo_x
 
-        # Edge detection for jump inputs (prevent holding)
-        was_not_pressing_up = (state.last_action != Action.UP) & (state.last_action != Action.UPLEFT) & (state.last_action != Action.UPRIGHT)
-        was_not_pressing_down = (state.last_action != Action.DOWN) & (state.last_action != Action.DOWNLEFT) & (state.last_action != Action.DOWNRIGHT)
+        # Determine jump intent using the refactored method
+        intent_jump_up, intent_jump_down = self._check_jump_intent(state, action, moving_up, moving_down)
 
         # Determine if Bailey can initiate a jump
         # Up jump: allowed from ice (not shore) or for igloo entry
         # Bear chase disables all jumping
-        can_jump_up = (((moving_up & was_not_pressing_up) | (should_jump_for_igloo & (state.bailey_y > 6))) &
+        can_jump_up = ((intent_jump_up | (should_jump_for_igloo & (state.bailey_y > 6))) &
                        can_start_jump & ((state.bailey_y > self.consts.YMIN_BAILEY) | should_jump_for_igloo)) & ~being_chased_by_bear
-        can_jump_down = (moving_down & was_not_pressing_down) & can_start_jump & \
+        can_jump_down = intent_jump_down & can_start_jump & \
                         (state.bailey_y < self.consts.YMAX_BAILEY) & ~is_entering_igloo & ~being_chased_by_bear
 
         # Set jump index: 31 for up jump, 15 for down jump
