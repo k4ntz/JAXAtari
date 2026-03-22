@@ -1,6 +1,6 @@
 import os
 from functools import partial
-from typing import Tuple, NamedTuple
+from typing import Tuple, NamedTuple, Optional
 import chex
 import jax
 from jax import tree_util
@@ -92,9 +92,13 @@ class FrostbiteConstants(struct.PyTreeNode):
     # Colors
     COLOR_ICE_WHITE: int = struct.field(pytree_node=False, default=0x0E)
     COLOR_ICE_BLUE: int = struct.field(pytree_node=False, default=0x98)
-    
-    # Igloo constants
-    IGLOO_X: int = struct.field(pytree_node=False, default=154)  # X position of igloo (far right side of screen)
+
+    # RGB Overrides for mods (if set, overrides the actual rendered color of the ice blocks)
+    RGB_ICE_WHITE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_ICE_BLUE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+
+    # Igloo constants    IGLOO_X: int = struct.field(pytree_node=False, default=154)  # X position of igloo (far right side of screen)
+    IGLOO_X: int = struct.field(pytree_node=False, default=154)
     IGLOO_Y: int = struct.field(pytree_node=False, default=44)   # Y position at top of Bailey's head when on shore
     
     # Game Constants
@@ -3061,6 +3065,53 @@ class FrostbiteRenderer(JAXGameRenderer):
         # Ice (Blue)
         ice_wide_blue = self._apply_ice_color(ice_wide_white, is_blue=True)
         ice_narrow_blue = self._apply_ice_color(ice_narrow_white, is_blue=True)
+
+        # Apply custom RGB colors if set by mods
+        if self.consts.RGB_ICE_WHITE is not None:
+            r, g, b = self.consts.RGB_ICE_WHITE
+            ice_wide_white = jnp.where(
+                ice_wide_white[..., 3:4] > 0,
+                jnp.concatenate([
+                    jnp.full_like(ice_wide_white[..., 0:1], r),
+                    jnp.full_like(ice_wide_white[..., 1:2], g),
+                    jnp.full_like(ice_wide_white[..., 2:3], b),
+                    ice_wide_white[..., 3:4]
+                ], axis=-1),
+                ice_wide_white
+            ).astype(ice_wide_white.dtype)
+            ice_narrow_white = jnp.where(
+                ice_narrow_white[..., 3:4] > 0,
+                jnp.concatenate([
+                    jnp.full_like(ice_narrow_white[..., 0:1], r),
+                    jnp.full_like(ice_narrow_white[..., 1:2], g),
+                    jnp.full_like(ice_narrow_white[..., 2:3], b),
+                    ice_narrow_white[..., 3:4]
+                ], axis=-1),
+                ice_narrow_white
+            ).astype(ice_narrow_white.dtype)
+
+        if self.consts.RGB_ICE_BLUE is not None:
+            r, g, b = self.consts.RGB_ICE_BLUE
+            ice_wide_blue = jnp.where(
+                ice_wide_blue[..., 3:4] > 0,
+                jnp.concatenate([
+                    jnp.full_like(ice_wide_blue[..., 0:1], r),
+                    jnp.full_like(ice_wide_blue[..., 1:2], g),
+                    jnp.full_like(ice_wide_blue[..., 2:3], b),
+                    ice_wide_blue[..., 3:4]
+                ], axis=-1),
+                ice_wide_blue
+            ).astype(ice_wide_blue.dtype)
+            ice_narrow_blue = jnp.where(
+                ice_narrow_blue[..., 3:4] > 0,
+                jnp.concatenate([
+                    jnp.full_like(ice_narrow_blue[..., 0:1], r),
+                    jnp.full_like(ice_narrow_blue[..., 1:2], g),
+                    jnp.full_like(ice_narrow_blue[..., 2:3], b),
+                    ice_narrow_blue[..., 3:4]
+                ], axis=-1),
+                ice_narrow_blue
+            ).astype(ice_narrow_blue.dtype)
         
         # Bear (Lightened for Night)
         bear_0_light = self._lighten_bear(bear_0)

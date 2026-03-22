@@ -1,12 +1,18 @@
 import os
 from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.frostbite.frostbite_mod_plugins import (
-    NoEnemiesMod
+    NoEnemiesMod, RedIceMod, _StaticIceMod, _MisalignedIceMod, _AlignedIceMod
 )
 
 # --- The Registry ---
 FROSTBITE_MOD_REGISTRY = {
     "no_enemies": NoEnemiesMod,
+    "red_ice": RedIceMod,
+    "_static_ice": _StaticIceMod,
+    "_misaligned_ice": _MisalignedIceMod,
+    "_aligned_ice": _AlignedIceMod,
+    "static_aligned_ice": ["_static_ice", "_aligned_ice"],
+    "static_misaligned_ice": ["_static_ice", "_misaligned_ice"],
 }
 
 class FrostbiteEnvMod(JaxAtariModController):
