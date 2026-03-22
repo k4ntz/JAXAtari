@@ -380,7 +380,7 @@ class JaxJourneyEscape(
         boxes = boxes.at[:, 1].set(boxes[:, 1] + dy_obs)
 
         # Cull: if baseline y >= screen_height, deactivate by zeroing height
-        cull_y = self.consts.screen_height + 20
+        cull_y = self.consts.screen_height - 30
         offscreen = boxes[:, 1] >= cull_y
         new_heights = jnp.where(offscreen, 0, boxes[:, 3])  # int32[N]
         boxes = boxes.at[:, 3].set(new_heights)
@@ -989,7 +989,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         # Render Background
         frame_idx = state.bg_frames // self.consts.background_frame_switch
         bg_mask = self.SHAPE_MASKS["backgrounds"][frame_idx]
-        raster = self.jr.render_at(raster, 0, 20, bg_mask)
+        raster = self.jr.render_at(raster, 0, 10, bg_mask)
 
         # Render obstacles
         # state.obstacles has shape (MAX_OBS, 5): [x, y, w, h, type_idx]
