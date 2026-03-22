@@ -164,8 +164,6 @@ class SkiingConstants(AutoDerivedConstants):
     jump_speed_multiplier: float = struct.field(pytree_node=False, default=1.0)
     jump_duration: int = struct.field(pytree_node=False, default=35)
     jump_cooldown: int = struct.field(pytree_node=False, default=36)
-    trees_everywhere: bool = struct.field(pytree_node=False, default=False)
-    hall_of_fame: bool = struct.field(pytree_node=False, default=False)
     speed: float = struct.field(pytree_node=False, default=1.0)
 
     # Asset config baked into constants (immutable default) for asset overrides
@@ -251,6 +249,49 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         c = self.consts
         return spaces.Box(low=0, high=255, shape=(c.screen_height, c.screen_width, 3), dtype=jnp.uint8)
 
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_initial_flags_x(self) -> chex.Array:
+        c = self.consts
+        min_fx = jnp.int32(50)
+        max_fx = jnp.int32(110)
+        span_fx = max_fx - min_fx + 1
+        return (min_fx + ((jnp.arange(c.max_num_flags, dtype=jnp.int32) * 13) % span_fx)).astype(jnp.float32)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_initial_trees_x(self) -> chex.Array:
+        c = self.consts
+        tree_val_gap = (jnp.arange(c.max_num_trees, dtype=jnp.int32) * 101) % 138
+        return jnp.where(tree_val_gap <= 66, -6.0 + tree_val_gap, 100.0 + (tree_val_gap - 67)).astype(jnp.float32)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _enforce_tree_gap(self, x_tree: chex.Array) -> chex.Array:
+        return jnp.where((x_tree > 60.0) & (x_tree < 100.0), jnp.where(x_tree < 80.0, 60.0, 100.0), x_tree)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _apply_tree_separation_initial(self, i: chex.Array, x0: chex.Array, tx: chex.Array, min_sep_tree: chex.Array, xmin: chex.Array, xmax: chex.Array) -> chex.Array:
+        x_adj = _enforce_min_sep_x(x0, tx, min_sep_tree, xmin, xmax, n_valid=jnp.array(i, dtype=jnp.int32))
+        return self._enforce_tree_gap(x_adj)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_new_flag_x(self, state: SkiingState, i: chex.Array) -> chex.Array:
+        min_fx = jnp.int32(50)
+        max_fx = jnp.int32(110)
+        span_fx = max_fx - min_fx + 1
+        step_fx = 13
+        return (min_fx + (((state.gates_seen + i) * step_fx) % span_fx)).astype(jnp.float32)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_new_tree_x(self, state: SkiingState, i: chex.Array) -> chex.Array:
+        step_tx = 101
+        tree_val_gap = ((state.gates_seen * 13 + i * 23) * step_tx) % 138
+        return jnp.where(tree_val_gap <= 66, -6.0 + tree_val_gap, 100.0 + (tree_val_gap - 67)).astype(jnp.float32)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _apply_tree_separation_respawn(self, i: chex.Array, x_tree: chex.Array, taken_from_trees: chex.Array, taken_from_moguls: chex.Array, min_sep_tree_tree: chex.Array, min_sep_tree_mogul: chex.Array, xmin_t: chex.Array, xmax_t: chex.Array) -> chex.Array:
+        x_tree = _enforce_min_sep_x(x_tree, taken_from_trees, min_sep_tree_tree, xmin_t, xmax_t, n_valid=jnp.array(i, dtype=jnp.int32))
+        x_tree = _enforce_min_sep_x(x_tree, taken_from_moguls, min_sep_tree_mogul, xmin_t, xmax_t, n_valid=jnp.array(taken_from_moguls.shape[0], dtype=jnp.int32))
+        return self._enforce_tree_gap(x_tree)
+
     def reset(self, key: Optional[jax.random.PRNGKey] = jax.random.PRNGKey(1701)) -> Tuple[SkiingObservation, SkiingState]:
         """Initialize a new game state deterministically from `key`."""
         c = self.consts
@@ -262,18 +303,9 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         # Flags: r = 3, 7 in the repeating sequence
         r_flags = jnp.array([3, 7], dtype=jnp.float32)
         flags_y = base_y + r_flags * row_spacing
-        # [deterministic]         flags_x = jax.random.randint(
-        # [deterministic]             k_flags, (c.max_num_flags,),
-        # [deterministic]             minval=int(c.flag_width),
-        # [deterministic]             maxval=int(c.screen_width - c.flag_width - c.flag_distance) + 1
-        # [deterministic]         ).astype(jnp.float32)
-        # Deterministic left-flag x-position: between 50 and 110
-        min_fx = jnp.int32(50)
-        max_fx = jnp.int32(110)
-        span_fx = max_fx - min_fx + 1
-        # simple sawtooth pattern using step 13
-        flags_x_normal = (min_fx + ((jnp.arange(c.max_num_flags, dtype=jnp.int32) * 13) % span_fx)).astype(jnp.float32)
-        flags_x = jnp.where(c.hall_of_fame, jnp.float32(64.0), flags_x_normal)
+        
+        flags_x = self._get_initial_flags_x()
+        
         flags = jnp.stack([
             flags_x, flags_y,
             jnp.full((c.max_num_flags,), float(c.flag_width),  dtype=jnp.float32),
@@ -283,28 +315,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         
         # Trees
         # Enforce min horizontal separation and no overlap among trees on spawn
-        # [deterministic]         trees_x = jax.random.randint(
-        # [deterministic]             k_trees, (c.max_num_trees,),
-        # [deterministic]             minval=int(c.tree_width),
-        # [deterministic]             maxval=int(c.screen_width - c.tree_width) + 1
-        # [deterministic]         ).astype(jnp.float32)
-        # Deterministic tree x-position: either [-6, 60] or [100, 170], OR everywhere if trees_everywhere is True
-        # Use a large prime step (101) so they scatter
-        tree_val_gap = (jnp.arange(c.max_num_trees, dtype=jnp.int32) * 101) % 138
-        trees_x_gap = jnp.where(tree_val_gap <= 66, -6.0 + tree_val_gap, 100.0 + (tree_val_gap - 67)).astype(jnp.float32)
+        trees_x = self._get_initial_trees_x()
         
-        tree_val_everywhere = (jnp.arange(c.max_num_trees, dtype=jnp.int32) * 101) % 176
-        trees_x_everywhere = -6.0 + tree_val_everywhere.astype(jnp.float32)
-        
-        trees_x_hof = jnp.where(jnp.arange(c.max_num_trees, dtype=jnp.int32) % 2 == 0, 48.0, 106.0)
-        
-        trees_x = jnp.where(c.trees_everywhere, trees_x_everywhere, trees_x_gap)
-        trees_x = jnp.where(c.hall_of_fame, trees_x_hof, trees_x)
-        # [deterministic]         trees_y = jax.random.randint(
-        # [deterministic]             k_trees, (c.max_num_trees,),
-        # [deterministic]             minval=int(c.tree_height),
-        # [deterministic]             maxval=int(c.screen_height - c.tree_height) + 1
-        # [deterministic]         ).astype(jnp.float32)
         # Deterministic tree y-position: pattern [0, 1, 4, 5] repeating every 8 rows
         trees_per_row = jnp.maximum(1, c.max_num_trees // 4)
         i_t = jnp.arange(c.max_num_trees, dtype=jnp.int32)
@@ -323,10 +335,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
 
         def adj_tree_i(i, tx):
             x0 = tx[i]
-            x_adj = _enforce_min_sep_x(x0, tx, min_sep_tree, xmin, xmax, n_valid=jnp.array(i, dtype=jnp.int32))
-            x_adj_gap = jnp.where((x_adj > 60.0) & (x_adj < 100.0), jnp.where(x_adj < 80.0, 60.0, 100.0), x_adj)
-            x_adj = jnp.where(c.trees_everywhere, x_adj, x_adj_gap)
-            x_adj = jnp.where(c.hall_of_fame, x0, x_adj)  # Disable pushback in hall_of_fame
+            x_adj = self._apply_tree_separation_initial(i, x0, tx, min_sep_tree, xmin, xmax)
             return tx.at[i].set(x_adj)
 
         trees_x = jax.lax.fori_loop(0, c.max_num_trees, adj_tree_i, trees_x)
@@ -428,19 +437,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         k = state.key
 
         def check_flags(i, flags):
-            # new x-position within the valid range
-            # [deterministic]             x_flag = jax.random.randint(
-            # [deterministic]                 k1.at[i].get(), [],
-            # [deterministic]                 self.config.flag_width,
-            # [deterministic]                 self.config.screen_width - self.config.flag_width - self.config.flag_distance
-            # [deterministic]             ).astype(jnp.float32)
-            # Deterministic left-flag x based on gates_seen and loop index
-            min_fx = jnp.int32(50)
-            max_fx = jnp.int32(110)
-            span_fx = max_fx - min_fx + 1
-            step_fx = 13
-            x_flag_normal = (min_fx + (((state.gates_seen + i) * step_fx) % span_fx)).astype(jnp.float32)
-            x_flag = jnp.where(self.consts.hall_of_fame, jnp.float32(64.0), x_flag_normal)
+            x_flag = self._get_new_flag_x(state, jnp.array(i, dtype=jnp.int32))
 
             row_old = flags.at[i].get()  # Shape (2,) or (4,)
 
@@ -466,24 +463,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         # [deterministic]         k1 = jnp.array([k1, k2, k3, k4, k5, k6, k7, k8])
 
         def check_trees(i, trees):
-            # [deterministic]             x_tree = jax.random.randint(
-            # [deterministic]                 k1.at[i].get(), [], 
-            # [deterministic]                 self.config.tree_width,
-            # [deterministic]                 self.config.screen_width - self.config.tree_width
-            # [deterministic]             ).astype(jnp.float32)
-            # Deterministic tree x based on gates_seen and index i, either [-6, 60] or [100, 170] OR everywhere
-            step_tx = 101
-            
-            tree_val_gap = ((state.gates_seen * 13 + i * 23) * step_tx) % 138
-            x_tree_gap = jnp.where(tree_val_gap <= 66, -6.0 + tree_val_gap, 100.0 + (tree_val_gap - 67)).astype(jnp.float32)
-            
-            tree_val_everywhere = ((state.gates_seen * 13 + i * 23) * step_tx) % 176
-            x_tree_everywhere = -6.0 + tree_val_everywhere.astype(jnp.float32)
-            
-            x_tree_hof = jnp.where(i % 2 == 0, 48.0, 106.0)
-            
-            x_tree = jnp.where(self.consts.trees_everywhere, x_tree_everywhere, x_tree_gap)
-            x_tree = jnp.where(self.consts.hall_of_fame, x_tree_hof, x_tree)
+            x_tree = self._get_new_tree_x(state, jnp.array(i, dtype=jnp.int32))
 
             # Enforce min separation from existing trees and moguls on respawn (X only)
             min_sep_tree_tree = (jnp.float32(self.consts.tree_width) + jnp.float32(self.consts.tree_width)) * 0.5 + jnp.float32(8.0)
@@ -492,11 +472,10 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             xmax_t = jnp.float32(170.0)
             taken_from_trees = trees[:, 0]
             taken_from_moguls = new_moguls[:, 0]
-            x_tree = _enforce_min_sep_x(x_tree, taken_from_trees, min_sep_tree_tree, xmin_t, xmax_t, n_valid=jnp.array(i, dtype=jnp.int32))
-            x_tree = _enforce_min_sep_x(x_tree, taken_from_moguls, min_sep_tree_mogul, xmin_t, xmax_t, n_valid=jnp.array(taken_from_moguls.shape[0], dtype=jnp.int32))
-            x_tree_gap = jnp.where((x_tree > 60.0) & (x_tree < 100.0), jnp.where(x_tree < 80.0, 60.0, 100.0), x_tree)
-            x_tree = jnp.where(self.consts.trees_everywhere, x_tree, x_tree_gap)
-            x_tree = jnp.where(self.consts.hall_of_fame, x_tree_hof, x_tree)
+            x_tree = self._apply_tree_separation_respawn(
+                jnp.array(i, dtype=jnp.int32), x_tree, taken_from_trees, taken_from_moguls,
+                min_sep_tree_tree, min_sep_tree_mogul, xmin_t, xmax_t
+            )
 
             row_old = trees.at[i].get()
 
