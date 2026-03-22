@@ -496,3 +496,70 @@ class HalfCourtMod(JaxAtariInternalModPlugin):
     asset_overrides = {
         'background': {'name': 'background', 'type': 'background', 'file': 'background_mod.npy'}
     }
+
+class CollisionMod(JaxAtariPostStepModPlugin):
+    """
+    Offensive foul mod: If the user (player) has the ball and collides with a CPU player,
+    it results in an immediate turnover.
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state, new_state):
+        from jaxatari.games.jax_doubledunk import PlayerID
+
+        # Collision distance threshold (squared). 
+        # 100 = 10 pixels of distance. You can increase this to make collisions larger.
+        COLLISION_DIST_SQ = 100 
+        
+        p1_in = new_state.player1_inside
+        p1_out = new_state.player1_outside
+        p2_in = new_state.player2_inside
+        p2_out = new_state.player2_outside
+
+        # Helper to calculate squared distance
+        def get_dist_sq(pA, pB):
+            return (pA.x - pB.x)**2 + (pA.y - pB.y)**2
+
+        # Check if P1 Inside holds the ball and is colliding with P2
+        p1_in_holding = (new_state.ball.holder == PlayerID.PLAYER1_INSIDE)
+        p1_in_collided = jnp.logical_and(
+            p1_in_holding,
+            jnp.logical_or(
+                get_dist_sq(p1_in, p2_in) < COLLISION_DIST_SQ,
+                get_dist_sq(p1_in, p2_out) < COLLISION_DIST_SQ
+            )
+        )
+
+        # Check if P1 Outside holds the ball and is colliding with P2
+        p1_out_holding = (new_state.ball.holder == PlayerID.PLAYER1_OUTSIDE)
+        p1_out_collided = jnp.logical_and(
+            p1_out_holding,
+            jnp.logical_or(
+                get_dist_sq(p1_out, p2_in) < COLLISION_DIST_SQ,
+                get_dist_sq(p1_out, p2_out) < COLLISION_DIST_SQ
+            )
+        )
+
+        is_offensive_foul = jnp.logical_or(p1_in_collided, p1_out_collided)
+
+        def apply_turnover(s):
+            # Repurpose the TRAVEL_PENALTY (GameMode 2) to freeze the game
+            # and automatically switch possession to the CPU
+            s = s.replace(
+                game_mode=2,
+                timers=s.timers.replace(travel=60)
+            )
+            
+            # Flag the specific player so the reset logic switches possession properly
+            new_p1_in = s.player1_inside.replace(
+                triggered_travel=jax.lax.select(p1_in_collided, True, s.player1_inside.triggered_travel)
+            )
+            new_p1_out = s.player1_outside.replace(
+                triggered_travel=jax.lax.select(p1_out_collided, True, s.player1_outside.triggered_travel)
+            )
+            
+            return s.replace(player1_inside=new_p1_in, player1_outside=new_p1_out)
+
+        # Only apply the penalty if the game is currently IN_PLAY (GameMode 1)
+        should_apply = jnp.logical_and(is_offensive_foul, new_state.game_mode == 1)
+
+        return jax.lax.cond(should_apply, apply_turnover, lambda s: s, new_state)
