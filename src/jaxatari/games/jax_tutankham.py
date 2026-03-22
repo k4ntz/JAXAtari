@@ -572,10 +572,11 @@ class TutankhamInfo(struct.PyTreeNode):
 
 # Environment
 class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, TutankhamInfo, TutankhamConstants]):
-    def __init__(self):
-        consts = TutankhamConstants()
+    def __init__(self, consts: TutankhamConstants = None):
+        if consts is None:
+            consts = TutankhamConstants()
         super().__init__(consts)
-        self.renderer = TutankhamRenderer()
+        self.renderer = TutankhamRenderer(consts=consts)
         self.consts = consts
 
         self.action_set = [
@@ -586,8 +587,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
             Action.RIGHT,
             Action.RIGHTFIRE,
             Action.LEFTFIRE,
-            Action.UPLEFTFIRE,
-            Action.UPRIGHTFIRE
+            Action.UPFIRE
         ]
 
     # -----------------------------
