@@ -138,7 +138,10 @@ class Montezuma2Renderer(JAXGameRenderer):
             {'name': 'bg', 'type': 'background', 'data': bg_data},
             {'name': 'room_bg', 'type': 'single', 'file': 'backgrounds/mid_room_level_0.npy', 'transpose': False},
             {'name': 'player', 'type': 'single', 'file': 'player/player_sprite.npy', 'transpose': False},
-            {'name': 'enemy', 'type': 'single', 'file': 'enemies/skull_cycle/skull_1.npy', 'transpose': False},
+            {
+                'name': 'skull', 'type': 'group',
+                'files': [f'enemies/skull_cycle/skull_{i}.npy' for i in range(1, 17)]
+            },
             {'name': 'item', 'type': 'single', 'file': 'items/key.npy', 'transpose': False},
             {'name': 'door', 'type': 'single', 'file': 'door.npy', 'transpose': False},
             {'name': 'conveyor', 'type': 'single', 'file': 'conveyor_belt.npy', 'transpose': False},
@@ -271,7 +274,8 @@ class Montezuma2Renderer(JAXGameRenderer):
         
         # Draw Enemies
         def render_enemy(i, raster):
-            mask = self.SHAPE_MASKS["enemy"]
+            anim_idx = jnp.mod(state.enemies_x[i], 16)
+            mask = self.SHAPE_MASKS["skull"][anim_idx]
             return jax.lax.cond(
                 state.enemies_active[i] == 1,
                 lambda r: self.jr.render_at(r, state.enemies_x[i], state.enemies_y[i] + 47, mask),
