@@ -36,6 +36,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     SCORE_X: int = struct.field(pytree_node=False, default=56)
     SCORE_Y: int = struct.field(pytree_node=False, default=6)
     LIFES_STARTING_Y: int = struct.field(pytree_node=False, default=15)
+    ITEMBAR_STARTING_Y: int = struct.field(pytree_node=False, default=28)
     ITEMBAR_LIFES_STARTING_X: int = struct.field(pytree_node=False, default=56)
     DIGIT_WIDTH: int = struct.field(pytree_node=False, default=7)
     DIGIT_OFFSET: int = struct.field(pytree_node=False, default=1)
@@ -335,6 +336,15 @@ class Montezuma2Renderer(JAXGameRenderer):
             return self.jr.render_at(raster, x, y, mask)
 
         raster = jax.lax.fori_loop(0, state.lives, render_life, raster)
+
+        # Render Inventory (Keys)
+        def render_inventory(i, raster):
+            mask = self.SHAPE_MASKS["item"]
+            x = self.consts.ITEMBAR_LIFES_STARTING_X + i * 8
+            y = self.consts.ITEMBAR_STARTING_Y
+            return self.jr.render_at(raster, x, y, mask)
+            
+        raster = jax.lax.fori_loop(0, state.inventory[0], render_inventory, raster)
 
         return self.PALETTE[raster]
 class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Montezuma2Info, Montezuma2Constants]):
