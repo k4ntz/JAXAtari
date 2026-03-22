@@ -309,6 +309,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         is_right = jnp.logical_or(is_right, jnp.logical_or(action == Action.RIGHTFIRE, jnp.logical_or(action == Action.UPRIGHTFIRE, action == Action.DOWNRIGHTFIRE)))
         is_left = jnp.logical_or(action == Action.LEFT, jnp.logical_or(action == Action.UPLEFT, action == Action.DOWNLEFT))
         is_left = jnp.logical_or(is_left, jnp.logical_or(action == Action.LEFTFIRE, jnp.logical_or(action == Action.UPLEFTFIRE, action == Action.DOWNLEFTFIRE)))
+        is_fire = jnp.logical_or(action == Action.FIRE, jnp.logical_or(action == Action.UPFIRE, jnp.logical_or(action == Action.DOWNFIRE, jnp.logical_or(action == Action.RIGHTFIRE, action == Action.LEFTFIRE))))
+        is_fire = jnp.logical_or(is_fire, jnp.logical_or(action == Action.UPRIGHTFIRE, jnp.logical_or(action == Action.UPLEFTFIRE, jnp.logical_or(action == Action.DOWNRIGHTFIRE, action == Action.DOWNLEFTFIRE))))
         
         # Player Velocity is locked during jump and falls
         is_in_air = jnp.logical_or(state.is_jumping == 1, state.is_falling == 1)
@@ -335,7 +337,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             get_on_bottom = jnp.logical_and(is_aligned, jnp.logical_and(is_up, jnp.abs(player_feet_y - l_bottom) <= 5))
             
             # To stay ON: must be within the vertical bounds
-            in_ladder_zone = jnp.logical_and(is_aligned, jnp.logical_and(player_feet_y >= l_top - 5, player_feet_y <= l_bottom + 5))
+            in_ladder_zone = jnp.logical_and(is_aligned, jnp.logical_and(player_feet_y >= l_top - 3, player_feet_y <= l_bottom - 2))
             
             # We are on THIS ladder if we either just initiated a climb onto it, OR if we were ALREADY climbing and are still in its zone
             on_this_ladder = jnp.where(state.is_climbing == 1, in_ladder_zone, jnp.logical_or(get_on_top, get_on_bottom))
@@ -369,7 +371,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         on_ground = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, check_conveyor, on_ground)
 
         # 2. Process Jump Initiation
-        start_jump = jnp.logical_and(is_up, jnp.logical_and(on_ground, jnp.logical_and(state.is_jumping == 0, is_climbing == 0)))
+        start_jump = jnp.logical_and(is_fire, jnp.logical_and(on_ground, jnp.logical_and(state.is_jumping == 0, is_climbing == 0)))
         is_jumping = jnp.where(start_jump, 1, state.is_jumping)
         is_jumping = jnp.where(is_climbing == 1, 0, is_jumping) # cancel jump
         jump_counter = jnp.where(start_jump, 0, state.jump_counter)
