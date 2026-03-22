@@ -1613,12 +1613,10 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             s, key = self._handle_interactions(s, actions, key)
             
             # Check for Clearance Penalty Trigger (after jump)
-            p1_clearance = jnp.logical_or(s.player1_inside.triggered_clearance, s.player1_outside.triggered_clearance)
-            p2_clearance = jnp.logical_or(s.player2_inside.triggered_clearance, s.player2_outside.triggered_clearance)
-            clearance_triggered = jnp.logical_or(p1_clearance, p2_clearance)
+            p_clearance = jnp.logical_or(s.player1_inside.triggered_clearance, s.player1_outside.triggered_clearance)
             
             s = jax.lax.cond(
-                clearance_triggered,
+                p_clearance,
                 lambda s_: s_.replace(
                     game_mode=GameMode.CLEARANCE_PENALTY,
                     timers=s_.timers.replace(clearance=60)
