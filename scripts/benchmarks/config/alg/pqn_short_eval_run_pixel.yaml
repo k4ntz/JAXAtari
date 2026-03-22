@@ -25,7 +25,7 @@ OBJECT_CENTRIC: False
 PIXEL_GRAYSCALE: True
 PIXEL_RESIZE: True
 PIXEL_RESIZE_SHAPE: [84, 84]
-USE_NATIVE_DOWNSCALING: True
+USE_NATIVE_DOWNSCALING: False
 # Apply this mod during testing
 # Activate this only for the test run (or debugging)
 # Set to None for final training run.

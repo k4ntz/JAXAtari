@@ -844,6 +844,27 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             jax.lax.select(p1_has_ball, p2_out_def_action, p2_out_final_off)
         )
 
+        # 1. Check if a P1 player holds the ball and is dribbling (grounded, z == 0)
+        p1_in_has_ball = (state.ball.holder == PlayerID.PLAYER1_INSIDE)
+        p1_out_has_ball = (state.ball.holder == PlayerID.PLAYER1_OUTSIDE)
+        
+        p1_holder_z = jax.lax.select(
+            p1_in_has_ball, state.player1_inside.z, 
+            jax.lax.select(p1_out_has_ball, state.player1_outside.z, 1) # Default to 1 (in air) if neither
+        )
+        is_p1_dribbling = jnp.logical_and(p1_has_ball, (p1_holder_z == 0))
+
+        # 2. Check if P2 players are within the 25.0 squared distance threshold
+        dist_sq_p2_in = (state.player2_inside.x - state.ball.x)**2 + (state.player2_inside.y - state.ball.y)**2
+        p2_in_can_steal = jnp.logical_and(is_p1_dribbling, (dist_sq_p2_in < 25.0))
+
+        dist_sq_p2_out = (state.player2_outside.x - state.ball.x)**2 + (state.player2_outside.y - state.ball.y)**2
+        p2_out_can_steal = jnp.logical_and(is_p1_dribbling, (dist_sq_p2_out < 25.0))
+
+        # 3. Override standard defensive movement with Action.FIRE to trigger a steal attempt
+        p2_inside_action = jax.lax.select(p2_in_can_steal, Action.FIRE, p2_inside_action)
+        p2_outside_action = jax.lax.select(p2_out_can_steal, Action.FIRE, p2_outside_action)
+        
         # --- Enemy Reaction Time Logic ---
         use_last_action = state.timers.enemy_reaction > 0
         

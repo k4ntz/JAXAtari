@@ -27,7 +27,7 @@ OBJECT_CENTRIC: True
 # Apply this mod during testing
 # Set to None for training run.
 # Activate this for the final test run (or debugging)
-MOD_NAME: ["timer_mod", "super_dunk", "ten_second_violation", "single_mode", "1v1_mode", "half_court"]
+MOD_NAME: ["half_court"]
 
 # Note: This will massively increase compile and run time!
 # But is useful for debugging (watching the video).
