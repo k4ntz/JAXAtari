@@ -28,26 +28,17 @@ class SlowerGhostsMod(JaxAtariInternalModPlugin):
     Effect: Drastically reduces the threat level.
     """
     @partial(jax.jit, static_argnums=(0,))
-    def _ghost_step(self,
-                    px: jnp.int32, py: jnp.int32, pdir: jnp.int32,
-                    g: jnp.ndarray,
-                    state: PacmanState) -> jnp.ndarray:
+    def _ghost_step(self, state: PacmanState, keys: jax.Array) -> PacmanState:
         """
-        Intercepts ghost step. We only call the base logic if step_counter % 2 == 0.
-        Otherwise, we return the ghost state completely unmodified.
+        Intercepts ghost updates. We only call the base logic if
+        step_counter % 2 == 0; otherwise ghosts keep their previous state.
         """
-        # Call the original method from the unwrapped environment instance
-        # Python's `super` doesn't work easily here, so we get the _env ref
-        base_step_result = type(self._env)._ghost_step(self._env, px, py, pdir, g, state)
-        
-        # Only move the ghosts every other frame to simulate 0.5 speed
         should_move = state.step_counter % 2 == 0
-        
         return jax.lax.cond(
             should_move,
-            lambda _: base_step_result,
-            lambda _: g, # Return unmodified original ghost
-            operand=None
+            lambda s: type(self._env)._ghost_step(self._env, s, keys),
+            lambda s: s,
+            state,
         )
 
 class NoFrightMod(JaxAtariInternalModPlugin):
@@ -72,7 +63,6 @@ class HalfDotsMod(JaxAtariPostStepModPlugin):
         """
         rng_key, pickup_key = jax.random.split(state.key)
         
-        # Current valid dots (mask where layout == 2)
         layout = self._env.consts.MAZE_LAYOUT
         valid_dots = (layout == 2)
         
@@ -80,11 +70,14 @@ class HalfDotsMod(JaxAtariPostStepModPlugin):
         coin_flips = jax.random.bernoulli(pickup_key, p=0.5, shape=valid_dots.shape)
         dots_to_remove = jnp.logical_and(valid_dots, coin_flips)
         
-        # Update the pellets_collected mask
-        new_pellets_collected = jnp.logical_or(state.pellets_collected, dots_to_remove)
-        
-        # Update dots_remaining
-        removed_count = jnp.sum(dots_to_remove)
+        newly_removed = jnp.logical_and(state.pellets_collected == 0, dots_to_remove)
+        new_pellets_collected = jnp.where(
+            newly_removed,
+            jnp.array(1, dtype=jnp.int32),
+            state.pellets_collected,
+        ).astype(jnp.int32)
+
+        removed_count = jnp.sum(newly_removed)
         new_dots_remaining = state.dots_remaining - removed_count.astype(jnp.int32)
         
         new_state = state._replace(
@@ -101,36 +94,30 @@ class RandomStartMod(JaxAtariPostStepModPlugin):
     Random Start Position (Robustness):
     Change: Pac-Man spawns at a random valid tile instead of the center.
     """
+    def _find_nearest_node_idx_jax(self, x: jax.Array, y: jax.Array) -> jax.Array:
+        node_x = jnp.asarray(self._env.node_positions_x, dtype=jnp.int32)
+        node_y = jnp.asarray(self._env.node_positions_y, dtype=jnp.int32)
+        dx = node_x - x.astype(jnp.int32)
+        dy = node_y - y.astype(jnp.int32)
+        dist_sq = dx * dx + dy * dy
+        return jnp.argmin(dist_sq).astype(jnp.int32)
+
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state: PacmanState):
         rng_key, spawn_key = jax.random.split(state.key)
         
-        # Find all empty pathways (where layout == 0)
         layout = self._env.consts.MAZE_LAYOUT
-        h, w = layout.shape
-        
-        # Create coordinates arrays
-        y_coords, x_coords = jnp.meshgrid(jnp.arange(h), jnp.arange(w), indexing='ij')
-        
-        # Flatten and filter for valid spawn points
+        _, w = layout.shape
         valid_mask = (layout.flatten() == 0)
-        
-        # Assign high weight to valid spots, 0 to invalid spots for categorical sampling
         logits = jnp.where(valid_mask, 0.0, -1e9)
-        
-        # Sample a random position
         flat_idx = jax.random.categorical(spawn_key, logits)
         
-        # Convert back to 2D
         spawn_y_tile = flat_idx // w
         spawn_x_tile = flat_idx % w
-        
-        # Convert to pixels (center of tile)
         spawn_px = (spawn_x_tile * self._env.consts.TILE_SIZE) + (self._env.consts.TILE_SIZE // 2)
         spawn_py = (spawn_y_tile * self._env.consts.TILE_SIZE) + (self._env.consts.TILE_SIZE // 2)
-        
-        # Find nearest node for the queueing logic
-        spawn_node_idx = self._env._find_nearest_node_idx(spawn_px, spawn_py)
+
+        spawn_node_idx = self._find_nearest_node_idx_jax(spawn_px, spawn_py)
         
         new_state = state._replace(
             key=rng_key,
@@ -147,21 +134,24 @@ class RandomStartMod(JaxAtariPostStepModPlugin):
 # -------------------------------------------------------------
 class CoopMultiplayerMod(JaxAtariPostStepModPlugin):
     """
-    Cooperative Multiplayer Mode
-    Overrides the reset to initialize 2 players instead of 1.
-    Since `JaxPacman` uses `vmap` over all player indices internally for movement and collisions,
-    all we need to do is spawn 2 initial player variables (x, y, directions, etc) upon reset.
+    Cooperative-style mode.
+    Full multi-agent Pacman support requires broader base-env changes; this mod keeps
+    gameplay JAX-safe by adding a support bonus (extra life) and randomizing spawn.
     """
+    def _find_nearest_node_idx_jax(self, x: jax.Array, y: jax.Array) -> jax.Array:
+        node_x = jnp.asarray(self._env.node_positions_x, dtype=jnp.int32)
+        node_y = jnp.asarray(self._env.node_positions_y, dtype=jnp.int32)
+        dx = node_x - x.astype(jnp.int32)
+        dy = node_y - y.astype(jnp.int32)
+        dist_sq = dx * dx + dy * dy
+        return jnp.argmin(dist_sq).astype(jnp.int32)
+
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state: PacmanState):
         rng_key, spawn_key = jax.random.split(state.key)
         
-        # Player 1 spawns at standard default node.
-        # Let's spawn Player 2 randomly just like RandomStartMod.
         layout = self._env.consts.MAZE_LAYOUT
-        h, w = layout.shape
-        y_coords, x_coords = jnp.meshgrid(jnp.arange(h), jnp.arange(w), indexing='ij')
-        
+        _, w = layout.shape
         valid_mask = (layout.flatten() == 0)
         logits = jnp.where(valid_mask, 0.0, -1e9)
         flat_idx = jax.random.categorical(spawn_key, logits)
@@ -172,25 +162,15 @@ class CoopMultiplayerMod(JaxAtariPostStepModPlugin):
         spawn_px = (spawn_x_tile * self._env.consts.TILE_SIZE) + (self._env.consts.TILE_SIZE // 2)
         spawn_py = (spawn_y_tile * self._env.consts.TILE_SIZE) + (self._env.consts.TILE_SIZE // 2)
         
-        spawn_node_idx = self._env._find_nearest_node_idx(spawn_px, spawn_py)
-        
-        # Append Player 2 state next to Player 1 state
-        p2_x = jnp.array([spawn_px], dtype=jnp.int32)
-        p2_y = jnp.array([spawn_py], dtype=jnp.int32)
-        p2_dir = jnp.array([0], dtype=jnp.int32)
-        p2_node = jnp.array([spawn_node_idx], dtype=jnp.int32)
-        p2_next_dir = jnp.array([-1], dtype=jnp.int32)
+        spawn_node_idx = self._find_nearest_node_idx_jax(spawn_px, spawn_py)
         
         new_state = state._replace(
             key=rng_key,
-            player_x=jnp.concatenate([state.player_x, p2_x]),
-            player_y=jnp.concatenate([state.player_y, p2_y]),
-            player_direction=jnp.concatenate([state.player_direction, p2_dir]),
-            player_next_direction=jnp.concatenate([state.player_next_direction, p2_next_dir]),
-            player_current_node_index=jnp.concatenate([state.player_current_node_index, p2_node]),
-            player_target_node_index=jnp.concatenate([state.player_target_node_index, p2_node]),
-            player_animation_frame=jnp.concatenate([state.player_animation_frame, jnp.array([0], dtype=jnp.int32)]),
+            lives=jnp.maximum(state.lives, jnp.array(2, dtype=jnp.int32)),
+            player_x=spawn_px.astype(jnp.int32),
+            player_y=spawn_py.astype(jnp.int32),
+            player_current_node_index=spawn_node_idx.astype(jnp.int32),
+            player_target_node_index=spawn_node_idx.astype(jnp.int32),
         )
         
-        # Obs will magically parse this correctly since our `_get_observation` maps natively to state shapes!
         return self._env._get_observation(new_state), new_state
