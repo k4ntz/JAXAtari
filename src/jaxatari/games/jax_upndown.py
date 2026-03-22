@@ -6,15 +6,16 @@ import jax
 import jax.lax
 import jax.numpy as jnp
 import chex
+from flax import struct
 
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
-class UpNDownConstants(NamedTuple):
+class UpNDownConstants(struct.PyTreeNode):
     FRAME_SKIP: int = 4
-    DIFFICULTIES: chex.Array = jnp.array([0, 1, 2, 3, 4, 5])
+    DIFFICULTIES: chex.Array = struct.field(default_factory=lambda: jnp.array([0, 1, 2, 3, 4, 5]))
     MAX_SPEED: int = 7
     INITIAL_LIVES: int = 5
     JUMP_ARC_HEIGHT: float = 22.0
@@ -57,15 +58,15 @@ class UpNDownConstants(NamedTuple):
     ACCELERATION_INTERVAL: int = 6  # Frames between speed changes when holding up/down
     EXTRA_LIFE_THRESHOLD: int = 10000  # Score threshold for extra life
     TRACK_LENGTH: int = 1036
-    FIRST_TRACK_CORNERS_X: chex.Array = jnp.array([30, 75, 128, 75, 21, 75, 131, 111, 150, 95, 150, 115, 150, 108, 150, 115, 115, 75, 18, 38, 67, 38, 38, 20, 64, 30])
-    TRACK_CORNERS_Y: chex.Array = jnp.array([0, -40, -98, -155, -203, -268, -327, -347, -382, -467, -525, -565, -597, -625, -670, -705, -738, -788, -838, -862, -898, -925, -950, -972, -1000, -1035])
-    SECOND_TRACK_CORNERS_X: chex.Array = jnp.array([115, 75, 20, 75, 133, 75, 22, 37, 63, 27, 66, 30, 63, 24, 60, 38, 38, 75, 131, 111, 150, 118, 118, 98, 150, 115])
+    FIRST_TRACK_CORNERS_X: chex.Array = struct.field(default_factory=lambda: jnp.array([30, 75, 128, 75, 21, 75, 131, 111, 150, 95, 150, 115, 150, 108, 150, 115, 115, 75, 18, 38, 67, 38, 38, 20, 64, 30]))
+    TRACK_CORNERS_Y: chex.Array = struct.field(default_factory=lambda: jnp.array([0, -40, -98, -155, -203, -268, -327, -347, -382, -467, -525, -565, -597, -625, -670, -705, -738, -788, -838, -862, -898, -925, -950, -972, -1000, -1035]))
+    SECOND_TRACK_CORNERS_X: chex.Array = struct.field(default_factory=lambda: jnp.array([115, 75, 20, 75, 133, 75, 22, 37, 63, 27, 66, 30, 63, 24, 60, 38, 38, 75, 131, 111, 150, 118, 118, 98, 150, 115]))
     PLAYER_SIZE: Tuple[int, int] = (4, 16)
     INITIAL_ROAD_POS_Y: int = 25
     # Flag constants - 8 flags with different colors matching the top row
     NUM_FLAGS: int = 8
     # Flag colors as RGBA values (matching the top row from left to right)
-    FLAG_COLORS: chex.Array = jnp.array([
+    FLAG_COLORS: chex.Array = struct.field(default_factory=lambda: jnp.array([
         [184, 50, 50, 255],    # Red
         [181, 83, 40, 255],    # Orange
         [162, 98, 33, 255],    # Dark orange
@@ -74,14 +75,14 @@ class UpNDownConstants(NamedTuple):
         [168, 48, 143, 255],   # Magenta
         [125, 48, 173, 255],   # Purple
         [78, 50, 181, 255],    # Blue
-    ])
+    ]))
     # Top display positions for each flag (x coordinates where blackout squares appear)
-    FLAG_TOP_X_POSITIONS: chex.Array = jnp.array([13, 30, 47, 64, 82, 98, 118, 134])
+    FLAG_TOP_X_POSITIONS: chex.Array = struct.field(default_factory=lambda: jnp.array([13, 30, 47, 64, 82, 98, 118, 134]))
     FLAG_TOP_Y: int = 20
     FLAG_BLACKOUT_SIZE: Tuple[int, int] = (14, 14)  # Size of blackout square
     FLAG_COLLECTION_SCORE: int = 75  # Points awarded for collecting a flag
     # Life display constants - positions of life cars at the bottom
-    LIFE_BOTTOM_X_POSITIONS: chex.Array = jnp.array([13, 18, 25, 33, 33])  # X positions for 5 life cars
+    LIFE_BOTTOM_X_POSITIONS: chex.Array = struct.field(default_factory=lambda: jnp.array([13, 18, 25, 33, 33]))  # X positions for 5 life cars
     LIFE_BOTTOM_Y: int = 195
     # Collectible constants - unified dynamic spawning
     MAX_COLLECTIBLES: int = 1  # Maximum collectibles that can exist at once (pool of mixed types)
@@ -93,11 +94,23 @@ class UpNDownConstants(NamedTuple):
     COLLECTIBLE_TYPE_LOLLYPOP: int = 2
     COLLECTIBLE_TYPE_ICE_CREAM: int = 3
     # Collectible type spawn probabilities (cumulative thresholds for random sampling)
-    COLLECTIBLE_SPAWN_PROBABILITIES: chex.Array = jnp.array([35, 65, 90, 100], dtype=jnp.int32)  # Cherry: 35%, Balloon: 30%, Lollypop: 25%, IceCream: 10%
+    COLLECTIBLE_SPAWN_PROBABILITIES: chex.Array = struct.field(default_factory=lambda: jnp.array([35, 65, 90, 100], dtype=jnp.int32))  # Cherry: 35%, Balloon: 30%, Lollypop: 25%, IceCream: 10%
     # Collectible type scores
-    COLLECTIBLE_SCORES: chex.Array = jnp.array([50, 65, 70, 75], dtype=jnp.int32)  # [cherry, balloon, lollypop, ice_cream]
+    COLLECTIBLE_SCORES: chex.Array = struct.field(default_factory=lambda: jnp.array([50, 65, 70, 75], dtype=jnp.int32))  # [cherry, balloon, lollypop, ice_cream]
     # Shared collectible colors
-    COLLECTIBLE_COLORS: chex.Array = FLAG_COLORS
+    COLLECTIBLE_COLORS: chex.Array = struct.field(default_factory=lambda: jnp.array([
+        [184, 50, 50, 255],
+        [181, 83, 40, 255],
+        [162, 98, 33, 255],
+        [134, 134, 29, 255],
+        [200, 72, 72, 255],
+        [168, 48, 143, 255],
+        [125, 48, 173, 255],
+        [78, 50, 181, 255],
+    ]))
+
+    def _replace(self, **kwargs):
+        return self.replace(**kwargs)
 
 
 
@@ -151,7 +164,8 @@ class EnemyCars(NamedTuple):
     active: chex.Array
     age: chex.Array
 
-class UpNDownState(NamedTuple):
+@struct.dataclass
+class UpNDownState:
     score: chex.Array
     difficulty: chex.Array
     jump_cooldown: chex.Array
@@ -187,9 +201,13 @@ class UpNDownState(NamedTuple):
     last_extra_life_score: chex.Array  # Score at which last extra life was awarded
     jump_total_duration: chex.Array  # Total duration of the current/last jump for rendering arc
 
+    def _replace(self, **kwargs):
+        return self.replace(**kwargs)
 
 
-class UpNDownObservation(NamedTuple):
+
+@struct.dataclass
+class UpNDownObservation:
     player_car: Car
     enemy_cars: EnemyCars
     flags: Flag
@@ -202,14 +220,23 @@ class UpNDownObservation(NamedTuple):
     is_on_steep_road: chex.Array
     round_started: chex.Array
 
+    def _replace(self, **kwargs):
+        return self.replace(**kwargs)
 
-class UpNDownInfo(NamedTuple):
+
+@struct.dataclass
+class UpNDownInfo:
     """Additional info for debugging and analysis."""
     step_counter: jnp.ndarray  # Total steps taken
     difficulty: jnp.ndarray  # Current difficulty level
     movement_steps: jnp.ndarray  # Steps since round started
     jump_slope: jnp.ndarray  # Current jump trajectory slope
     player_road_segment: jnp.ndarray  # Current road segment index
+
+    def _replace(self, **kwargs):
+        return self.replace(**kwargs)
+
+
 class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, UpNDownConstants]):
     def __init__(self, consts: UpNDownConstants = None, reward_funcs: list[callable]=None):
         consts = consts or UpNDownConstants()
@@ -2077,10 +2104,10 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         return state.lives <= 0
 
 class UpNDownRenderer(JAXGameRenderer):
-    def __init__(self, consts: UpNDownConstants = None):
+    def __init__(self, consts: UpNDownConstants = None, config: render_utils.RendererConfig | None = None):
         super().__init__()
         self.consts = consts or UpNDownConstants()
-        self.config = render_utils.RendererConfig(
+        self.config = config or render_utils.RendererConfig(
             game_dimensions=(210, 160),
             channels=3,
             #downscale=(84, 84)
