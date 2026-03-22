@@ -8,6 +8,15 @@ class MoreTreesMod(JaxAtariInternalModPlugin):
         "max_num_trees": 12,
     }
 
+class TreesEverywhereMod(JaxAtariInternalModPlugin):
+    """
+    Allows trees to spawn anywhere across the entire horizontal axis,
+    instead of forcing a central gap.
+    """
+    constants_overrides = {
+        "trees_everywhere": True,
+    }
+
 class MoreMogulsMod(JaxAtariInternalModPlugin):
     """
     Spawns more moguls (rocks) during the race.
@@ -30,8 +39,7 @@ class JumpToBreakMod(JaxAtariInternalModPlugin):
     This mod specifically causes the skier to stop moving while jumping.
     """
     constants_overrides = {
-        "allow_jump": True,
-        "jump_stops_skier": True,
+        "jump_speed_multiplier": 0.0,
     }
 
 class SpeedBurstMod(JaxAtariInternalModPlugin):
@@ -39,5 +47,14 @@ class SpeedBurstMod(JaxAtariInternalModPlugin):
     Allows the skier to accelerate beyond the default maximum speed using the DOWN action.
     """
     constants_overrides = {
-        "allow_down_acceleration": True,
+        "down_max_speed": 1.8,
+        "down_accel": 0.15,
+    }
+
+class HallOfFameMod(JaxAtariInternalModPlugin):
+    """
+    Places the gates dead center and creates a corridor of trees.
+    """
+    constants_overrides = {
+        "hall_of_fame": True,
     }

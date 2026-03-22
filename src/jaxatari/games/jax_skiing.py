@@ -155,9 +155,17 @@ class SkiingConstants(AutoDerivedConstants):
     max_num_trees: int = struct.field(pytree_node=False, default=4)
     max_num_moguls: int = struct.field(pytree_node=False, default=2)
     moguls_collidable: bool = struct.field(pytree_node=False, default=False)
-    allow_jump: bool = struct.field(pytree_node=False, default=True)
-    jump_stops_skier: bool = struct.field(pytree_node=False, default=False)
-    allow_down_acceleration: bool = struct.field(pytree_node=False, default=False)
+    
+    # Mechanics constants
+    max_speed: float = struct.field(pytree_node=False, default=1.2)
+    down_max_speed: float = struct.field(pytree_node=False, default=1.2)
+    base_accel: float = struct.field(pytree_node=False, default=0.05)
+    down_accel: float = struct.field(pytree_node=False, default=0.05)
+    jump_speed_multiplier: float = struct.field(pytree_node=False, default=1.0)
+    jump_duration: int = struct.field(pytree_node=False, default=35)
+    jump_cooldown: int = struct.field(pytree_node=False, default=36)
+    trees_everywhere: bool = struct.field(pytree_node=False, default=False)
+    hall_of_fame: bool = struct.field(pytree_node=False, default=False)
     speed: float = struct.field(pytree_node=False, default=1.0)
 
     # Asset config baked into constants (immutable default) for asset overrides
@@ -264,7 +272,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         max_fx = jnp.int32(110)
         span_fx = max_fx - min_fx + 1
         # simple sawtooth pattern using step 13
-        flags_x = (min_fx + ((jnp.arange(c.max_num_flags, dtype=jnp.int32) * 13) % span_fx)).astype(jnp.float32)
+        flags_x_normal = (min_fx + ((jnp.arange(c.max_num_flags, dtype=jnp.int32) * 13) % span_fx)).astype(jnp.float32)
+        flags_x = jnp.where(c.hall_of_fame, jnp.float32(64.0), flags_x_normal)
         flags = jnp.stack([
             flags_x, flags_y,
             jnp.full((c.max_num_flags,), float(c.flag_width),  dtype=jnp.float32),
@@ -279,10 +288,18 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         # [deterministic]             minval=int(c.tree_width),
         # [deterministic]             maxval=int(c.screen_width - c.tree_width) + 1
         # [deterministic]         ).astype(jnp.float32)
-        # Deterministic tree x-position: either [-6, 60] or [100, 170]
-        # Use a large prime step (101) so they scatter across both sides
-        tree_val = (jnp.arange(c.max_num_trees, dtype=jnp.int32) * 101) % 138
-        trees_x = jnp.where(tree_val <= 66, -6.0 + tree_val, 100.0 + (tree_val - 67)).astype(jnp.float32)
+        # Deterministic tree x-position: either [-6, 60] or [100, 170], OR everywhere if trees_everywhere is True
+        # Use a large prime step (101) so they scatter
+        tree_val_gap = (jnp.arange(c.max_num_trees, dtype=jnp.int32) * 101) % 138
+        trees_x_gap = jnp.where(tree_val_gap <= 66, -6.0 + tree_val_gap, 100.0 + (tree_val_gap - 67)).astype(jnp.float32)
+        
+        tree_val_everywhere = (jnp.arange(c.max_num_trees, dtype=jnp.int32) * 101) % 176
+        trees_x_everywhere = -6.0 + tree_val_everywhere.astype(jnp.float32)
+        
+        trees_x_hof = jnp.where(jnp.arange(c.max_num_trees, dtype=jnp.int32) % 2 == 0, 48.0, 106.0)
+        
+        trees_x = jnp.where(c.trees_everywhere, trees_x_everywhere, trees_x_gap)
+        trees_x = jnp.where(c.hall_of_fame, trees_x_hof, trees_x)
         # [deterministic]         trees_y = jax.random.randint(
         # [deterministic]             k_trees, (c.max_num_trees,),
         # [deterministic]             minval=int(c.tree_height),
@@ -307,8 +324,9 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         def adj_tree_i(i, tx):
             x0 = tx[i]
             x_adj = _enforce_min_sep_x(x0, tx, min_sep_tree, xmin, xmax, n_valid=jnp.array(i, dtype=jnp.int32))
-            # Strictly enforce the forbidden gap (60, 100)
-            x_adj = jnp.where((x_adj > 60.0) & (x_adj < 100.0), jnp.where(x_adj < 80.0, 60.0, 100.0), x_adj)
+            x_adj_gap = jnp.where((x_adj > 60.0) & (x_adj < 100.0), jnp.where(x_adj < 80.0, 60.0, 100.0), x_adj)
+            x_adj = jnp.where(c.trees_everywhere, x_adj, x_adj_gap)
+            x_adj = jnp.where(c.hall_of_fame, x0, x_adj)  # Disable pushback in hall_of_fame
             return tx.at[i].set(x_adj)
 
         trees_x = jax.lax.fori_loop(0, c.max_num_trees, adj_tree_i, trees_x)
@@ -421,7 +439,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             max_fx = jnp.int32(110)
             span_fx = max_fx - min_fx + 1
             step_fx = 13
-            x_flag = (min_fx + (((state.gates_seen + i) * step_fx) % span_fx)).astype(jnp.float32)
+            x_flag_normal = (min_fx + (((state.gates_seen + i) * step_fx) % span_fx)).astype(jnp.float32)
+            x_flag = jnp.where(self.consts.hall_of_fame, jnp.float32(64.0), x_flag_normal)
 
             row_old = flags.at[i].get()  # Shape (2,) or (4,)
 
@@ -452,10 +471,19 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             # [deterministic]                 self.config.tree_width,
             # [deterministic]                 self.config.screen_width - self.config.tree_width
             # [deterministic]             ).astype(jnp.float32)
-            # Deterministic tree x based on gates_seen and index i, either [-6, 60] or [100, 170]
+            # Deterministic tree x based on gates_seen and index i, either [-6, 60] or [100, 170] OR everywhere
             step_tx = 101
-            tree_val = ((state.gates_seen * 13 + i * 23) * step_tx) % 138
-            x_tree = jnp.where(tree_val <= 66, -6.0 + tree_val, 100.0 + (tree_val - 67)).astype(jnp.float32)
+            
+            tree_val_gap = ((state.gates_seen * 13 + i * 23) * step_tx) % 138
+            x_tree_gap = jnp.where(tree_val_gap <= 66, -6.0 + tree_val_gap, 100.0 + (tree_val_gap - 67)).astype(jnp.float32)
+            
+            tree_val_everywhere = ((state.gates_seen * 13 + i * 23) * step_tx) % 176
+            x_tree_everywhere = -6.0 + tree_val_everywhere.astype(jnp.float32)
+            
+            x_tree_hof = jnp.where(i % 2 == 0, 48.0, 106.0)
+            
+            x_tree = jnp.where(self.consts.trees_everywhere, x_tree_everywhere, x_tree_gap)
+            x_tree = jnp.where(self.consts.hall_of_fame, x_tree_hof, x_tree)
 
             # Enforce min separation from existing trees and moguls on respawn (X only)
             min_sep_tree_tree = (jnp.float32(self.consts.tree_width) + jnp.float32(self.consts.tree_width)) * 0.5 + jnp.float32(8.0)
@@ -466,8 +494,9 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             taken_from_moguls = new_moguls[:, 0]
             x_tree = _enforce_min_sep_x(x_tree, taken_from_trees, min_sep_tree_tree, xmin_t, xmax_t, n_valid=jnp.array(i, dtype=jnp.int32))
             x_tree = _enforce_min_sep_x(x_tree, taken_from_moguls, min_sep_tree_mogul, xmin_t, xmax_t, n_valid=jnp.array(taken_from_moguls.shape[0], dtype=jnp.int32))
-            # Strictly enforce the forbidden gap (60, 100)
-            x_tree = jnp.where((x_tree > 60.0) & (x_tree < 100.0), jnp.where(x_tree < 80.0, 60.0, 100.0), x_tree)
+            x_tree_gap = jnp.where((x_tree > 60.0) & (x_tree < 100.0), jnp.where(x_tree < 80.0, 60.0, 100.0), x_tree)
+            x_tree = jnp.where(self.consts.trees_everywhere, x_tree, x_tree_gap)
+            x_tree = jnp.where(self.consts.hall_of_fame, x_tree_hof, x_tree)
 
             row_old = trees.at[i].get()
 
@@ -596,19 +625,21 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         )
         skier_pos = new_skier_pos
 
-        # Jumping logic: A jump lasts for 35 frames, followed by a 36-frame cooldown. Total = 71.
-        want_jump = jnp.logical_and(jnp.equal(norm_action, self.consts.FIRE), self.consts.allow_jump)
+        # Jumping logic: configurable duration and cooldown
+        want_jump = jnp.equal(norm_action, self.consts.FIRE)
         can_jump = jnp.equal(state.jump_timer, 0)
+        
+        total_jump_frames = jnp.int32(self.consts.jump_duration + self.consts.jump_cooldown)
         
         # Start a new jump if requested and cooldown is over. Otherwise just decrement the timer.
         new_jump_timer = jax.lax.select(
             jnp.logical_and(want_jump, can_jump),
-            jnp.int32(71),
+            total_jump_frames,
             jnp.maximum(state.jump_timer - 1, 0)
         )
         
-        # The skier is "jumping" (immune to moguls) for the first 35 frames of the 71-frame timer.
-        new_is_jumping = jnp.greater(new_jump_timer, 36)
+        # The skier is "jumping" (immune to moguls) for the first frames of the total timer.
+        new_is_jumping = jnp.greater(new_jump_timer, self.consts.jump_cooldown)
 
         # 2) Base speeds
         dx_target = side_speed.at[skier_pos].get()
@@ -624,8 +655,14 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         friction_x = jnp.float32(0.04)
         friction_y = jnp.float32(0.01)
         
-        is_down_action = jnp.logical_and(jnp.equal(norm_action, self.consts.DOWN), self.consts.allow_down_acceleration)
-        max_speed = jax.lax.select(is_down_action, jnp.float32(2.2), jnp.float32(1.2))
+        is_down_action = jnp.equal(norm_action, self.consts.DOWN)
+        
+        # Compute maximum speed limit based on action
+        max_speed = jax.lax.select(
+            is_down_action, 
+            jnp.float32(self.consts.down_max_speed), 
+            jnp.float32(self.consts.max_speed)
+        )
 
         # Calculate target orientation vector
         dir_norm = jnp.sqrt(dx_target**2 + dy_target**2) + 1e-6
@@ -634,7 +671,11 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
 
         # Acceleration is proportional to how much the skier is facing down (dy_target)
         # Maximal when facing down (dy_target == 1.0), zero when parallel (dy_target == 0.0)
-        base_accel = jax.lax.select(is_down_action, jnp.float32(0.25), jnp.float32(0.05))
+        base_accel = jax.lax.select(
+            is_down_action, 
+            jnp.float32(self.consts.down_accel), 
+            jnp.float32(self.consts.base_accel)
+        )
         accel_mag = dy_target * base_accel
 
         # Distribute acceleration along the x and y axes
@@ -652,15 +693,23 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         x_speed_next = x_speed_next * scale
         y_speed_next = y_speed_next * scale
 
-        should_stop_from_jump = jnp.logical_and(new_is_jumping, self.consts.jump_stops_skier)
+        # Reduce speed by jump_speed_multiplier if jumping
+        jump_speed_scale = jax.lax.select(
+            new_is_jumping,
+            jnp.float32(self.consts.jump_speed_multiplier),
+            jnp.float32(1.0)
+        )
+        
+        x_speed_next = x_speed_next * jump_speed_scale
+        y_speed_next = y_speed_next * jump_speed_scale
 
         new_skier_x_speed_nom = jax.lax.select(
-            jnp.logical_or(in_recovery, should_stop_from_jump),
+            in_recovery,
             jnp.array(0.0, dtype=jnp.float32),
             x_speed_next
         )
         new_skier_y_speed_nom = jax.lax.select(
-            should_stop_from_jump,
+            in_recovery,
             jnp.array(0.0, dtype=jnp.float32),
             y_speed_next
         )
