@@ -1,1 +1,0 @@
-timestamp,game_name,rendering_enabled,jax_backend,cpu_name,gpu_name,total_vram_mb,spawned_instances,total_steps,total_runtime_secs,compilation_time_secs,steps_per_second,cpu_percent_avg,ram_percent_avg,gpu_percent_avg,gpu_vram_mb_avg
