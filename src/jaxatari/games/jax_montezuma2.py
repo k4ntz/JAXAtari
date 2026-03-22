@@ -32,6 +32,18 @@ class Montezuma2Constants(struct.PyTreeNode):
     GRAVITY: int = struct.field(pytree_node=False, default=2)
     MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+    # HUD Constants
+    SCORE_X: int = struct.field(pytree_node=False, default=56)
+    SCORE_Y: int = struct.field(pytree_node=False, default=6)
+    LIFES_STARTING_Y: int = struct.field(pytree_node=False, default=15)
+    ITEMBAR_LIFES_STARTING_X: int = struct.field(pytree_node=False, default=56)
+    DIGIT_WIDTH: int = struct.field(pytree_node=False, default=7)
+    DIGIT_OFFSET: int = struct.field(pytree_node=False, default=1)
+    DIGIT_HEIGHT: int = struct.field(pytree_node=False, default=8)
+    
+    # Gameplay Rules
+    MAX_FALL_DISTANCE: int = struct.field(pytree_node=False, default=33) # ladder_height (39) - 6
+
 @struct.dataclass
 class Montezuma2State:
     # Game State
@@ -48,6 +60,7 @@ class Montezuma2State:
     
     is_jumping: jnp.ndarray
     is_falling: jnp.ndarray
+    fall_start_y: jnp.ndarray
     jump_counter: jnp.ndarray
     is_climbing: jnp.ndarray
     last_rope: jnp.ndarray
@@ -129,6 +142,18 @@ class Montezuma2Renderer(JAXGameRenderer):
             {'name': 'item', 'type': 'single', 'file': 'items/key.npy', 'transpose': False},
             {'name': 'door', 'type': 'single', 'file': 'door.npy', 'transpose': False},
             {'name': 'conveyor', 'type': 'single', 'file': 'conveyor_belt.npy', 'transpose': False},
+            {'name': 'life', 'type': 'single', 'file': 'life_sprite.npy', 'transpose': False},
+            {'name': 'digit_0', 'type': 'single', 'file': 'digits/digit_0.npy', 'transpose': False},
+            {'name': 'digit_1', 'type': 'single', 'file': 'digits/digit_1.npy', 'transpose': False},
+            {'name': 'digit_2', 'type': 'single', 'file': 'digits/digit_2.npy', 'transpose': False},
+            {'name': 'digit_3', 'type': 'single', 'file': 'digits/digit_3.npy', 'transpose': False},
+            {'name': 'digit_4', 'type': 'single', 'file': 'digits/digit_4.npy', 'transpose': False},
+            {'name': 'digit_5', 'type': 'single', 'file': 'digits/digit_5.npy', 'transpose': False},
+            {'name': 'digit_6', 'type': 'single', 'file': 'digits/digit_6.npy', 'transpose': False},
+            {'name': 'digit_7', 'type': 'single', 'file': 'digits/digit_7.npy', 'transpose': False},
+            {'name': 'digit_8', 'type': 'single', 'file': 'digits/digit_8.npy', 'transpose': False},
+            {'name': 'digit_9', 'type': 'single', 'file': 'digits/digit_9.npy', 'transpose': False},
+            {'name': 'digit_none', 'type': 'single', 'file': 'digits/digit_none.npy', 'transpose': False},
         ]
         
         (
@@ -150,6 +175,21 @@ class Montezuma2Renderer(JAXGameRenderer):
         self.DOOR_ID = self.PALETTE.shape[0] - 1
         door_mask = self.SHAPE_MASKS["door"]
         self.SHAPE_MASKS["door"] = jnp.where(door_mask != self.jr.TRANSPARENT_ID, self.DOOR_ID, self.jr.TRANSPARENT_ID)
+
+        self.digit_masks = jnp.stack([
+            self.SHAPE_MASKS["digit_none"],
+            self.SHAPE_MASKS["digit_0"],
+            self.SHAPE_MASKS["digit_1"],
+            self.SHAPE_MASKS["digit_2"],
+            self.SHAPE_MASKS["digit_3"],
+            self.SHAPE_MASKS["digit_4"],
+            self.SHAPE_MASKS["digit_5"],
+            self.SHAPE_MASKS["digit_6"],
+            self.SHAPE_MASKS["digit_7"],
+            self.SHAPE_MASKS["digit_8"],
+            self.SHAPE_MASKS["digit_9"],
+        ])
+
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: Montezuma2State) -> jnp.ndarray:
         # Start with solid black background
@@ -242,9 +282,57 @@ class Montezuma2Renderer(JAXGameRenderer):
         
         # Draw Player
         raster = self.jr.render_at(raster, state.player_x, state.player_y + 47, self.SHAPE_MASKS["player"])
-        
-        return self.PALETTE[raster]
 
+        # Render Score
+        score = state.score
+
+        k_100_sprite_index = jnp.mod(jnp.floor_divide(score, jnp.array([100000])), 10) + 1
+        k_10_sprite_index = jnp.mod(jnp.floor_divide(score, jnp.array([10000])), 10) + 1
+        thousands_sprite_index = jnp.mod(jnp.floor_divide(score, jnp.array([1000])), 10) + 1
+        hundreds_sprite_index = jnp.mod(jnp.floor_divide(score, jnp.array([100])), 10) + 1
+        tens_sprite_index = jnp.mod(jnp.floor_divide(score, jnp.array([10])), 10) + 1
+        ones_sprite_index = jnp.add(jnp.mod(score, jnp.array([10])), 1)
+
+        # Remove leading zeroes
+        leading_zeros = jnp.array([
+            k_100_sprite_index == 1,
+            k_10_sprite_index == 1,
+            thousands_sprite_index == 1,
+            hundreds_sprite_index == 1,
+            tens_sprite_index == 1
+        ])
+        mask = jnp.cumprod(leading_zeros)
+
+        k_100_sprite_index = jnp.where(mask[0], 0, k_100_sprite_index)[0]
+        k_10_sprite_index = jnp.where(mask[1], 0, k_10_sprite_index)[0]
+        thousands_sprite_index = jnp.where(mask[2], 0, thousands_sprite_index)[0]
+        hundreds_sprite_index = jnp.where(mask[3], 0, hundreds_sprite_index)[0]
+        tens_sprite_index = jnp.where(mask[4], 0, tens_sprite_index)[0]
+        ones_sprite_index = ones_sprite_index[0]
+
+        def render_digit(raster, index, digit_idx):
+            mask = self.digit_masks[digit_idx]
+            x = self.consts.SCORE_X + index * (self.consts.DIGIT_WIDTH + self.consts.DIGIT_OFFSET)
+            y = self.consts.SCORE_Y
+            return self.jr.render_at(raster, x, y, mask)
+
+        raster = render_digit(raster, 0, k_100_sprite_index)
+        raster = render_digit(raster, 1, k_10_sprite_index)
+        raster = render_digit(raster, 2, thousands_sprite_index)
+        raster = render_digit(raster, 3, hundreds_sprite_index)
+        raster = render_digit(raster, 4, tens_sprite_index)
+        raster = render_digit(raster, 5, ones_sprite_index)
+
+        # Render Lives
+        def render_life(i, raster):
+            mask = self.SHAPE_MASKS["life"]
+            x = self.consts.ITEMBAR_LIFES_STARTING_X + i * (mask.shape[1] + 1)
+            y = self.consts.LIFES_STARTING_Y
+            return self.jr.render_at(raster, x, y, mask)
+
+        raster = jax.lax.fori_loop(0, state.lives, render_life, raster)
+
+        return self.PALETTE[raster]
 class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Montezuma2Info, Montezuma2Constants]):
     ACTION_SET: jnp.ndarray = jnp.array([
         Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN,
@@ -356,6 +444,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             player_vy=jnp.array(0, dtype=jnp.int32),
             is_jumping=jnp.array(0, dtype=jnp.int32),
             is_falling=jnp.array(0, dtype=jnp.int32),
+            fall_start_y=jnp.array(self.consts.INITIAL_PLAYER_Y, dtype=jnp.int32),
             jump_counter=jnp.array(0, dtype=jnp.int32),
             is_climbing=jnp.array(0, dtype=jnp.int32),
             last_rope=jnp.array(-1, dtype=jnp.int32),
@@ -464,7 +553,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         can_ladder, ladder_idx = jax.lax.fori_loop(0, self.consts.MAX_LADDERS_PER_ROOM, check_ladder, (False, -1))
         can_rope, rope_idx = jax.lax.fori_loop(0, self.consts.MAX_ROPES_PER_ROOM, check_rope, (False, -1))
         
-        abort_ladder = jnp.logical_or(is_left, is_right)
+        abort_ladder = False
         is_jumping_off_rope = jnp.logical_and(can_rope, jnp.logical_and(state.is_climbing == 1, jnp.logical_and(is_fire, jnp.logical_or(is_left, is_right))))
         abort_rope = is_jumping_off_rope
         
@@ -479,17 +568,28 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         current_x = jnp.where(is_climbing == 1, target_climb_x, state.player_x)
         
+        def check_platform(y, x):
+            x_left = jnp.clip(x - 1, 0, self.consts.WIDTH - 1)
+            x_right = jnp.clip(x + 1, 0, self.consts.WIDTH - 1)
+            return jnp.logical_or(
+                self.ROOM_COLLISION_MAP[y, x] == 1,
+                jnp.logical_or(
+                    self.ROOM_COLLISION_MAP[y, x_left] == 1,
+                    self.ROOM_COLLISION_MAP[y, x_right] == 1
+                )
+            )
+        
         # 1. Check if strictly on ground
         safe_x = jnp.clip(current_x + self.consts.PLAYER_WIDTH // 2, 0, self.consts.WIDTH - 1)
         safe_y = jnp.clip(player_feet_y + 1, 0, 148)
-        on_ground = self.ROOM_COLLISION_MAP[safe_y, safe_x] == 1
+        on_ground = check_platform(safe_y, safe_x)
         
         def check_conveyor(i, on_grnd):
             c_x = state.conveyors_x[i]
             c_y = state.conveyors_y[i] - 1
             is_on_conveyor = jnp.logical_and(
                 state.conveyors_active[i] == 1,
-                jnp.logical_and(player_feet_y == c_y, jnp.logical_and(player_mid_x >= c_x, player_mid_x < c_x + 40))
+                jnp.logical_and(player_feet_y == c_y, jnp.logical_and(player_mid_x >= c_x - 1, player_mid_x < c_x + 41))
             )
             return jnp.logical_or(on_grnd, is_on_conveyor)
         
@@ -517,15 +617,15 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             return dy_jump, jump_counter + 1, 1
             
         def get_fall_dy():
-            pixel_1_below = self.ROOM_COLLISION_MAP[safe_y, safe_x] == 1
-            pixel_2_below = self.ROOM_COLLISION_MAP[jnp.clip(player_feet_y + 2, 0, 148), safe_x] == 1
+            pixel_1_below = check_platform(safe_y, safe_x)
+            pixel_2_below = check_platform(jnp.clip(player_feet_y + 2, 0, 148), safe_x)
             
             def check_c_pixel2(i, p2b):
                 c_x = state.conveyors_x[i]
                 c_y = state.conveyors_y[i] - 1
                 is_on = jnp.logical_and(
                     state.conveyors_active[i] == 1,
-                    jnp.logical_and(player_feet_y + 1 == c_y, jnp.logical_and(safe_x >= c_x, safe_x < c_x + 40))
+                    jnp.logical_and(player_feet_y + 1 == c_y, jnp.logical_and(safe_x >= c_x - 1, safe_x < c_x + 41))
                 )
                 return jnp.logical_or(p2b, is_on)
             pixel_2_below = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, check_c_pixel2, pixel_2_below)
@@ -558,11 +658,11 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         new_feet_y = new_y + self.consts.PLAYER_HEIGHT - 1
         
         new_top_y = jnp.clip(new_y, 0, 148)
-        hit_ceiling = jnp.logical_and(dy < 0, jnp.logical_and(self.ROOM_COLLISION_MAP[new_top_y, safe_x] == 1, is_climbing == 0))
+        hit_ceiling = jnp.logical_and(dy < 0, jnp.logical_and(check_platform(new_top_y, safe_x), is_climbing == 0))
         new_y = jnp.where(hit_ceiling, state.player_y, new_y)
         new_is_jumping = jnp.where(hit_ceiling, 0, new_is_jumping)
         
-        hit_floor_rm = jnp.logical_and(dy > 0, jnp.logical_and(is_climbing == 0, self.ROOM_COLLISION_MAP[jnp.clip(new_feet_y, 0, 148), safe_x] == 1))
+        hit_floor_rm = jnp.logical_and(dy > 0, jnp.logical_and(is_climbing == 0, check_platform(jnp.clip(new_feet_y, 0, 148), safe_x)))
         snapped_y_rm = jnp.clip(new_feet_y, 0, 148) - self.consts.PLAYER_HEIGHT
         
         def check_c_hit_floor(i, carry):
@@ -572,7 +672,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             crossed = jnp.logical_and(player_feet_y < c_y, new_feet_y >= c_y)
             is_hit = jnp.logical_and(
                 state.conveyors_active[i] == 1,
-                jnp.logical_and(dy > 0, jnp.logical_and(is_climbing == 0, jnp.logical_and(crossed, jnp.logical_and(safe_x >= c_x, safe_x < c_x + 40))))
+                jnp.logical_and(dy > 0, jnp.logical_and(is_climbing == 0, jnp.logical_and(crossed, jnp.logical_and(safe_x >= c_x - 1, safe_x < c_x + 41))))
             )
             return jnp.logical_or(h_f, is_hit), jnp.where(is_hit, c_y - self.consts.PLAYER_HEIGHT + 1, s_y)
             
@@ -663,7 +763,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             c_y = state.conveyors_y[i] - 1
             is_on_conveyor = jnp.logical_and(
                 state.conveyors_active[i] == 1,
-                jnp.logical_and(new_feet_y_after == c_y, jnp.logical_and(new_mid_x >= c_x, new_mid_x < c_x + 40))
+                jnp.logical_and(new_feet_y_after == c_y, jnp.logical_and(new_mid_x >= c_x - 1, new_mid_x < c_x + 41))
             )
             conveyor_velocity = jnp.mod(state.frame_count, 2) * state.conveyors_direction[i]
             return jax.lax.select(jnp.logical_and(is_on_conveyor, is_climbing == 0), p_x + conveyor_velocity, p_x)
@@ -701,18 +801,72 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             
         new_enemies_x, new_enemies_dir = jax.lax.fori_loop(0, self.consts.MAX_ENEMIES_PER_ROOM, move_enemy, (state.enemies_x, state.enemies_direction))
         
+        # 7. Dying Mechanism (Fall Damage & Enemy Collision)
+        new_fall_start_y = jnp.where(
+            jnp.logical_and(state.is_falling == 0, new_is_falling == 1),
+            state.player_y,
+            state.fall_start_y
+        )
+        fall_stopped = jnp.logical_and(state.is_falling == 1, new_is_falling == 0)
+        fall_distance = new_y - state.fall_start_y
+        died_from_fall = jnp.logical_and(fall_stopped, fall_distance > self.consts.MAX_FALL_DISTANCE)
+        
+        # Reset fall_start_y when not falling and not just stopped falling
+        new_fall_start_y = jnp.where(
+            jnp.logical_and(new_is_falling == 0, fall_stopped == 0),
+            new_y,
+            new_fall_start_y
+        )
+        
+        def check_enemy_collision(i, carry):
+            hit, enemies_active = carry
+            e_x = new_enemies_x[i]
+            e_y = state.enemies_y[i]
+            e_active = enemies_active[i] == 1
+            
+            overlap_x = jnp.logical_and(new_left_x < e_x + 8, new_right_x >= e_x)
+            overlap_y = jnp.logical_and(check_y_top < e_y + 16, check_y_bot >= e_y)
+            overlap = jnp.logical_and(overlap_x, overlap_y)
+            
+            this_hit = jnp.logical_and(e_active, overlap)
+            new_hit = jnp.logical_or(hit, this_hit)
+            new_enemies_active = jnp.where(this_hit, enemies_active.at[i].set(0), enemies_active)
+            
+            return new_hit, new_enemies_active
+            
+        died_from_enemy, new_enemies_active = jax.lax.fori_loop(
+            0, self.consts.MAX_ENEMIES_PER_ROOM, check_enemy_collision, 
+            (False, state.enemies_active)
+        )
+        
+        player_died = jnp.logical_or(died_from_fall, died_from_enemy)
+        
+        new_lives = jnp.where(player_died, state.lives - 1, state.lives)
+        final_x = jnp.where(player_died, self.consts.INITIAL_PLAYER_X, new_x)
+        final_y = jnp.where(player_died, self.consts.INITIAL_PLAYER_Y, new_y)
+        final_vx = jnp.where(player_died, 0, current_vx)
+        final_vy = jnp.where(player_died, 0, dy)
+        final_is_jumping = jnp.where(player_died, 0, new_is_jumping)
+        final_is_falling = jnp.where(player_died, 0, new_is_falling)
+        final_is_climbing = jnp.where(player_died, 0, is_climbing)
+        final_jump_counter = jnp.where(player_died, 0, new_jump_counter)
+        final_fall_start_y = jnp.where(player_died, self.consts.INITIAL_PLAYER_Y, new_fall_start_y)
+        
         state = state.replace(
-            player_x=new_x,
-            player_y=new_y,
-            player_vx=current_vx,
-            player_vy=dy,
-            is_jumping=new_is_jumping,
-            jump_counter=new_jump_counter,
-            is_climbing=is_climbing,
+            lives=new_lives,
+            player_x=final_x,
+            player_y=final_y,
+            player_vx=final_vx,
+            player_vy=final_vy,
+            is_jumping=final_is_jumping,
+            jump_counter=final_jump_counter,
+            is_climbing=final_is_climbing,
             last_rope=new_last_rope,
-            is_falling=new_is_falling,
+            is_falling=final_is_falling,
+            fall_start_y=final_fall_start_y,
             frame_count=state.frame_count + 1,
             enemies_x=new_enemies_x,
+            enemies_active=new_enemies_active,
             enemies_direction=new_enemies_dir,
             inventory=jnp.array([current_keys], dtype=jnp.int32),
             items_active=new_items_active,
