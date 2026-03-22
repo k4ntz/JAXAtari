@@ -569,13 +569,29 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         current_x = jnp.where(is_climbing == 1, target_climb_x, state.player_x)
         
         def check_platform(y, x):
-            x_left = jnp.clip(x - 1, 0, self.consts.WIDTH - 1)
-            x_right = jnp.clip(x + 1, 0, self.consts.WIDTH - 1)
+            x_m3 = jnp.clip(x - 3, 0, self.consts.WIDTH - 1)
+            x_m2 = jnp.clip(x - 2, 0, self.consts.WIDTH - 1)
+            x_m1 = jnp.clip(x - 1, 0, self.consts.WIDTH - 1)
+            x_p1 = jnp.clip(x + 1, 0, self.consts.WIDTH - 1)
+            x_p2 = jnp.clip(x + 2, 0, self.consts.WIDTH - 1)
+            x_p3 = jnp.clip(x + 3, 0, self.consts.WIDTH - 1)
             return jnp.logical_or(
-                self.ROOM_COLLISION_MAP[y, x] == 1,
+                self.ROOM_COLLISION_MAP[y, x_m3] == 1,
                 jnp.logical_or(
-                    self.ROOM_COLLISION_MAP[y, x_left] == 1,
-                    self.ROOM_COLLISION_MAP[y, x_right] == 1
+                    self.ROOM_COLLISION_MAP[y, x_m2] == 1,
+                    jnp.logical_or(
+                        self.ROOM_COLLISION_MAP[y, x_m1] == 1,
+                        jnp.logical_or(
+                            self.ROOM_COLLISION_MAP[y, x] == 1,
+                            jnp.logical_or(
+                                self.ROOM_COLLISION_MAP[y, x_p1] == 1,
+                                jnp.logical_or(
+                                    self.ROOM_COLLISION_MAP[y, x_p2] == 1,
+                                    self.ROOM_COLLISION_MAP[y, x_p3] == 1
+                                )
+                            )
+                        )
+                    )
                 )
             )
         
@@ -589,7 +605,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             c_y = state.conveyors_y[i] - 1
             is_on_conveyor = jnp.logical_and(
                 state.conveyors_active[i] == 1,
-                jnp.logical_and(player_feet_y == c_y, jnp.logical_and(player_mid_x >= c_x - 1, player_mid_x < c_x + 41))
+                jnp.logical_and(player_feet_y == c_y, jnp.logical_and(player_mid_x >= c_x - 3, player_mid_x < c_x + 43))
             )
             return jnp.logical_or(on_grnd, is_on_conveyor)
         
@@ -625,7 +641,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
                 c_y = state.conveyors_y[i] - 1
                 is_on = jnp.logical_and(
                     state.conveyors_active[i] == 1,
-                    jnp.logical_and(player_feet_y + 1 == c_y, jnp.logical_and(safe_x >= c_x - 1, safe_x < c_x + 41))
+                    jnp.logical_and(player_feet_y + 1 == c_y, jnp.logical_and(safe_x >= c_x - 3, safe_x < c_x + 43))
                 )
                 return jnp.logical_or(p2b, is_on)
             pixel_2_below = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, check_c_pixel2, pixel_2_below)
@@ -672,7 +688,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             crossed = jnp.logical_and(player_feet_y < c_y, new_feet_y >= c_y)
             is_hit = jnp.logical_and(
                 state.conveyors_active[i] == 1,
-                jnp.logical_and(dy > 0, jnp.logical_and(is_climbing == 0, jnp.logical_and(crossed, jnp.logical_and(safe_x >= c_x - 1, safe_x < c_x + 41))))
+                jnp.logical_and(dy > 0, jnp.logical_and(is_climbing == 0, jnp.logical_and(crossed, jnp.logical_and(safe_x >= c_x - 3, safe_x < c_x + 43))))
             )
             return jnp.logical_or(h_f, is_hit), jnp.where(is_hit, c_y - self.consts.PLAYER_HEIGHT + 1, s_y)
             
@@ -763,7 +779,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             c_y = state.conveyors_y[i] - 1
             is_on_conveyor = jnp.logical_and(
                 state.conveyors_active[i] == 1,
-                jnp.logical_and(new_feet_y_after == c_y, jnp.logical_and(new_mid_x >= c_x - 1, new_mid_x < c_x + 41))
+                jnp.logical_and(new_feet_y_after == c_y, jnp.logical_and(new_mid_x >= c_x - 3, new_mid_x < c_x + 43))
             )
             conveyor_velocity = jnp.mod(state.frame_count, 2) * state.conveyors_direction[i]
             return jax.lax.select(jnp.logical_and(is_on_conveyor, is_climbing == 0), p_x + conveyor_velocity, p_x)
