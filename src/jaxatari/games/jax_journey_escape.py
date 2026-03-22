@@ -172,8 +172,12 @@ class JourneyEscapeConstants(AutoDerivedConstants):
     diagonal_speed_alternates: bool = struct.field(pytree_node=False, default=False)
     # Per-frame probability of spontaneous direction flip (0.0 = never, checked every frame)
     diagonal_random_switch_prob: float = struct.field(pytree_node=False, default=0.0)
-    # Cooldown frames after a random switch before another can happen
-    diagonal_random_switch_cooldown: int = struct.field(pytree_node=False, default=100)
+    # Cooldown frames after a random/wall-bounce switch before another can happen
+    diagonal_random_switch_cooldown: int = struct.field(pytree_node=False, default=20)
+    # Random range added to cooldown (actual cooldown = base + random(0..range))
+    diagonal_random_switch_cooldown_range: int = struct.field(pytree_node=False, default=40)
+    # When True, random direction switches are per-obstacle instead of per-group (obstacles can split)
+    diagonal_switch_per_obstacle: bool = struct.field(pytree_node=False, default=False)
 
 @struct.dataclass
 class JourneyEscapeState:
@@ -376,23 +380,67 @@ class JaxJourneyEscape(
         )
         boxes = boxes.at[:, 6].set(new_move_period)
 
-        # --- Random direction switch (Level 5) with cooldown ---
+        # --- Group representative index (used for wall-bounce cd + random switch) ---
+        # All per-group decisions use the representative (lowest active index with same y)
+        idx_arr = jnp.arange(self.consts.MAX_OBS)
+        same_y_matrix = (obs_y_vals[:, None] == obs_y_vals[None, :]) & active[None, :]
+        group_rep_idx = jnp.where(same_y_matrix, idx_arr[None, :], self.consts.MAX_OBS).min(axis=1)
+        group_rep_idx = jnp.clip(group_rep_idx, 0, self.consts.MAX_OBS - 1)
+
+        # Also apply switch cooldown after wall bounce to prevent immediate random re-flip
+        rng_wall_cd, rng_after_wall_cd = jax.random.split(state.rng_key)
+        wall_cd_rand_per_obs = self.consts.diagonal_random_switch_cooldown + jax.random.randint(
+            rng_wall_cd, (self.consts.MAX_OBS,), 0, jnp.maximum(self.consts.diagonal_random_switch_cooldown_range, 1)
+        )
+        # chaos mode: each obstacle gets its own cooldown; group mode: use representative's
+        wall_cd_rand = jnp.where(
+            self.consts.diagonal_switch_per_obstacle,
+            wall_cd_rand_per_obs,
+            wall_cd_rand_per_obs[group_rep_idx]
+        )
+        wall_bounce_cd = jnp.where(
+            should_flip & (self.consts.diagonal_random_switch_prob > 0.0),
+            wall_cd_rand,
+            boxes[:, 7]
+        )
+        boxes = boxes.at[:, 7].set(wall_bounce_cd)
+
+        # --- Random direction switch with cooldown ---
         # Decrement cooldown for all active obstacles
         switch_cd = boxes[:, 7]
         switch_cd = jnp.where(active, jnp.maximum(switch_cd - 1, 0), switch_cd)
 
-        rng_for_switch, new_rng_after_switch = jax.random.split(state.rng_key)
+        rng_for_switch, rng_for_cd, new_rng_after_switch = jax.random.split(rng_after_wall_cd, 3)
         switch_rolls = jax.random.uniform(rng_for_switch, (self.consts.MAX_OBS,))
         is_diagonal_obs = boxes[:, 5] != 0  # only for obstacles actually moving diagonally
-        cd_ready = switch_cd == 0  # only check when cooldown expired
-        individual_switch = active & is_diagonal_obs & cd_ready & (switch_rolls < self.consts.diagonal_random_switch_prob)
-        # Propagate to group: if ANY member (same y) switched, the whole group switches
-        switch_match_matrix = (obs_y_vals[:, None] == obs_y_vals[None, :]) & individual_switch[None, :]
-        group_should_switch = jnp.any(switch_match_matrix, axis=1) & active & is_diagonal_obs
+
+        # Per-obstacle mode: each obstacle rolls independently
+        # Group mode: use the representative's roll AND cd_ready so group stays in lockstep
+        effective_roll = jnp.where(
+            self.consts.diagonal_switch_per_obstacle,
+            switch_rolls,
+            switch_rolls[group_rep_idx]
+        )
+        effective_cd_ready = jnp.where(
+            self.consts.diagonal_switch_per_obstacle,
+            switch_cd == 0,
+            switch_cd[group_rep_idx] == 0
+        )
+
+        obs_should_switch = active & is_diagonal_obs & effective_cd_ready & (effective_roll < self.consts.diagonal_random_switch_prob)
+
         current_dx = boxes[:, 5]
-        boxes = boxes.at[:, 5].set(jnp.where(group_should_switch, -current_dx, current_dx))
-        # Reset cooldown for obstacles that switched
-        switch_cd = jnp.where(group_should_switch, self.consts.diagonal_random_switch_cooldown, switch_cd)
+        boxes = boxes.at[:, 5].set(jnp.where(obs_should_switch, -current_dx, current_dx))
+        # Randomized cooldown: base + random(0..range)
+        random_cd_per_obs = self.consts.diagonal_random_switch_cooldown + jax.random.randint(
+            rng_for_cd, (self.consts.MAX_OBS,), 0, jnp.maximum(self.consts.diagonal_random_switch_cooldown_range, 1)
+        )
+        effective_cd = jnp.where(
+            self.consts.diagonal_switch_per_obstacle,
+            random_cd_per_obs,
+            random_cd_per_obs[group_rep_idx]
+        )
+        switch_cd = jnp.where(obs_should_switch, effective_cd, switch_cd)
         boxes = boxes.at[:, 7].set(switch_cd)
 
         # Cull: deactivate obstacles 30px before the bottom of the screen
