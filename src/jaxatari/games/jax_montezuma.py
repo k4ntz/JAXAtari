@@ -24,7 +24,7 @@ from jaxatari.renderers import JAXGameRenderer
 
 from jaxatari import spaces
 
-from jaxatari.rendering import  jax_rendering_utils as jr
+from jaxatari.rendering import  jax_rendering_utils_legacy as jr
 from jaxatari.environment import JaxEnvironment
 from jaxatari.environment import JAXAtariAction
 
@@ -5142,102 +5142,3 @@ class MontezumaRenderer(JAXGameRenderer):
         canvas = self.render_player(canvas, state)
         
         return canvas[..., 0:3]
-        
-
-if __name__ == "__main__":
-    # Initialize Pygamepython
-    
-    game = JaxMontezuma()	
-    renderer = MontezumaRenderer()
-    
-    ob, state = game.reset()
-    ob: MontezumaObservation = ob
-    ob_0 = jnp.min(ob.annotated_collision_map)
-    ob_1 = jnp.max(ob.annotated_collision_map)
-    arr = jnp.array([ob.has_dropout_floors, ob.is_falling, ob.is_jumping], jnp.int32)
-    state: MontezumaState = state
-    obs: MontezumaObservation = state.observation
-    flops = game.obs_to_flat_array(obs)
-    
-    pygame.init()
-    pygame.display.set_caption(f"JAXAtari Game MontezumaRevenge")
-    env_render_shape = game.render(state).shape[:2]
-    consts = MontezumaConstants()
-    window = pygame.display.set_mode((consts.WIDTH * consts.RENDER_SCALE_FACTOR, consts.HEIGHT * consts.RENDER_SCALE_FACTOR))
-    clock = pygame.time.Clock()
-     
-    
-    
-    action_space = game.action_space()
-
-    save_keys = {}
-    running = True
-    pause = False
-    frame_by_frame = False
-    frame_rate = 30
-    next_frame_asked = False
-    total_return = 0
-
-    
-     
-    # display the first frame (reset frame) -> purely for aesthetics
-    image = game.render(state)
-    update_pygame(window, image, consts.RENDER_SCALE_FACTOR, 160, 210)
-    clock.tick(frame_rate) 
-
-
-    # Game loop
-    while running:
-        # check for external actions
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-                continue
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_p:  # pause
-                    pause = not pause
-                elif event.key == pygame.K_r:  # reset
-                    obs, state = game.reset()
-                elif event.key == pygame.K_f:
-                    frame_by_frame = not frame_by_frame
-                elif event.key == pygame.K_n:
-                    next_frame_asked = True
-                elif event.key == pygame.K_o:
-                    fname: str = "room_" + str(state.room_state.ROOM_ID[0]) + ".pkl"
-                    fldr = os.path.join("/home/ahfrfed_hrubters/workspace/Uni/master_3/reinforcement_learning_internship/alien_jax/the_alien/states_folder", fname)
-                    with open(fldr, 'wb') as f:
-                        pickle.dump(state, f)
-                    
-                    
-        if pause or (frame_by_frame and not next_frame_asked):
-            image = game.render(state)
-            update_pygame(window, image, consts.RENDER_SCALE_FACTOR, 160, 210)
-            clock.tick(frame_rate)
-            continue
-        
-        action = get_human_action()
-
-        if not frame_by_frame or next_frame_asked:
-            action = get_human_action()
-            obs, state, reward, done, info = game.step(state, action)
-            
-            total_return += reward
-            if next_frame_asked:
-                next_frame_asked = False
-
-        if done:
-            print(f"Done. Total return {total_return}")
-            total_return = 0
-            obs, state = game.reset()
-
-        # Render the environment
-        
-        image = game.render(state)
-
-        update_pygame(window, image, consts.RENDER_SCALE_FACTOR, 160, 210)
-
-        clock.tick(frame_rate)
-
-    pygame.quit()
-
-# All tests pass now :)

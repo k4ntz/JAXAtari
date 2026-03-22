@@ -1,5 +1,12 @@
-import argparse
+import os
 import sys
+
+# Force JAX on CPU before importing jax (must run before `import jax`).
+if "--cpu" in sys.argv:
+    os.environ.setdefault("JAX_PLATFORMS", "cpu")
+    os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+
+import argparse
 import pygame
 
 import jax
@@ -11,6 +18,41 @@ from utils import get_human_action, update_pygame, load_game_environment, load_g
 from jaxatari.core import make as jaxatari_make
 
 UPSCALE_FACTOR = 4
+
+
+def _process_rss_bytes() -> int:
+    """Resident set size (RSS) of this process in bytes. Linux: /proc/self/status."""
+    try:
+        with open("/proc/self/status", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    kb = int(line.split()[1])
+                    return kb * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        import resource
+
+        maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # Linux: kilobytes; macOS: bytes
+        if sys.platform == "darwin":
+            return maxrss
+        return maxrss * 1024
+    except Exception:
+        return -1
+
+
+def _print_post_init_memory(use_cpu: bool) -> None:
+    rss = _process_rss_bytes()
+    if rss >= 0:
+        mib = rss / (1024 * 1024)
+        print(
+            f"RAM (process RSS after env init / first jitted reset): {mib:.2f} MiB ({rss:,} bytes)"
+        )
+    else:
+        print("RAM (process RSS): could not be determined on this platform.")
+    if use_cpu:
+        print(f"JAX devices (--cpu): {jax.devices()}")
 
 
 def _normalize_mods(mods):
@@ -112,6 +154,11 @@ def main():
         action="store_true",
         help="Verbose mode.",
     )
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Run JAX on CPU (sets JAX_PLATFORMS=cpu before backend init).",
+    )
 
     args = parser.parse_args()
 
@@ -178,7 +225,9 @@ def main():
     reset_key = jrandom.fold_in(master_key, reset_counter)
     obs, state = jitted_reset(reset_key)
     reset_counter += 1
-    
+    if not args.replay:
+        _print_post_init_memory(args.cpu)
+
     # For random actions, we need a separate key stream
     action_key = jrandom.fold_in(master_key, 1000000)  # Use a large offset to avoid collision
 
@@ -240,6 +289,7 @@ def main():
             master_key = jrandom.PRNGKey(seed)
             reset_key = jrandom.fold_in(master_key, 0)  # Use first reset key
             obs, state = jitted_reset(reset_key)
+            _print_post_init_memory(args.cpu)
 
         # loop over all the actions and play the game
         for action in actions_array:
