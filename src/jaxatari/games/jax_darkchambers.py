@@ -111,6 +111,7 @@ def _get_default_asset_config():
         {"name": "chain", "type": "single", "file": "chain.npy"},
         {"name": "door", "type": "single", "file": "door.npy"},
         {"name": "key", "type": "single", "file": "key.npy"},
+        {"name": "bullet", "type": "single", "file": "bullet.npy"},
 
         # Digits for UI - commented out, using hardcoded digit patterns instead
         # {"name": "digits", "type": "digits", "pattern": "digits/{}.npy"},
@@ -807,6 +808,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         self.UI_ID = self.COLOR_TO_ID[self.consts.UI_COLOR]
         self.HUD_ID = self.COLOR_TO_ID[self.consts.HUD_COLOR]
         self.BULLET_ID = self.COLOR_TO_ID[self.consts.BULLET_COLOR]
+        self.BULLET_SPRITE = self.SHAPE_MASKS.get("bullet")
         self.ZOMBIE_ID = self.COLOR_TO_ID[self.consts.ZOMBIE_COLOR]
         self.WRAITH_ID = self.COLOR_TO_ID[self.consts.WRAITH_COLOR]
         self.SKELETON_ID = self.COLOR_TO_ID[self.consts.SKELETON_COLOR]
@@ -2069,16 +2071,16 @@ class DarkChambersRenderer(JAXGameRenderer):
             bullet_screen_pos,
             off_screen
         )
-        bullet_sizes = jnp.tile(
-            jnp.array([BULLET_WIDTH, BULLET_HEIGHT], dtype=jnp.int32)[None, :],
-            (MAX_BULLETS, 1)
-        )
-        object_raster = self.jr.draw_rects(
-            object_raster,
-            positions=masked_bullet_pos,
-            sizes=bullet_sizes,
-            color_id=self.BULLET_ID
-        )
+        bullet_sprite = self.BULLET_SPRITE
+        def render_one_bullet(i, raster):
+            pos = masked_bullet_pos[i]
+            return jax.lax.cond(
+                bullet_mask[i],
+                lambda r: self.jr.render_at_clipped(r, pos[0], pos[1], bullet_sprite),
+                lambda r: r,
+                raster,
+            )
+        object_raster = jax.lax.fori_loop(0, MAX_BULLETS, render_one_bullet, object_raster)
         # Enemy bullets
         ebullet_world_pos = state.enemy_bullet_positions[:, :2].astype(jnp.int32)
         ebullet_screen_pos = (ebullet_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
