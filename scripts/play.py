@@ -173,7 +173,7 @@ def main():
         metavar="FILE",
         help=(
             "On each reset (and at startup), merge leaves from this JSON into the state "
-            "from reset() (written with F5 or save_env_state_json). Unknown JSON keys warn; "
+            "from reset() (written with S or save_env_state_json). Unknown JSON keys warn; "
             "missing leaves keep reset values."
         ),
     )
@@ -181,7 +181,7 @@ def main():
         "--save-state-path",
         type=str,
         default="jaxatari_play_state.json",
-        help="Path written when pressing F5 during play (default: jaxatari_play_state.json).",
+        help="Path written when pressing S during play (default: jaxatari_play_state.json).",
     )
 
     args = parser.parse_args()
