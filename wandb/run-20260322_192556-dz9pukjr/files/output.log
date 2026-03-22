@@ -1,8 +1,0 @@
-Compile time: 48.05447196960449 seconds.
-Run time: 187.30573868751526 seconds.
-Total: 235.36073446273804 seconds.
-Model saved to ./models/doubledunk
-Generating final video for seed 0...
-Final video: 408 frames, total reward: 20.0
-m[2K[1mwandb[0m: [38;5;178m⣽[0m Encoding video...
-Video logged to wandb.
