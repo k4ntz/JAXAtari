@@ -247,6 +247,8 @@ class BankHeistState(struct.PyTreeNode):
     game_paused: chex.Array  # Game paused state Is set at beginning and after life was lost
     bank_heists: chex.Array  # number of bank heists completed in the current level
     explosion_timer: chex.Array  # Timer for the screen flash effect when dynamite explodes
+    last_raw_action: chex.Array
+    current_diagonal_priority: chex.Array
     random_key: chex.PRNGKey  # Persistent random key that advances each step
     time: chex.Array
 
@@ -367,6 +369,8 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             game_paused=jnp.array(False).astype(jnp.bool_),
             bank_heists=jnp.array(0).astype(jnp.int32),
             explosion_timer=jnp.array(0).astype(jnp.int32),
+            last_raw_action=jnp.array(Action.NOOP).astype(jnp.int32),
+            current_diagonal_priority=jnp.array(self.consts.DIR_UP).astype(jnp.int32),
             random_key=key,  # Use the provided random key
             time=jnp.array(0, dtype=jnp.int32),
         )
@@ -801,10 +805,10 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
                       jnp.where(city_reward_index == 2, self.consts.CITY_REWARD[2], self.consts.CITY_REWARD[3])))
         city_reward_bonus = jax.lax.cond(
             state.bank_heists >= 9,
-            lambda: city_reward,
+            lambda: city_reward + (state.difficulty_level * self.consts.BONUS_REWARD),
             lambda: 0
         )
-        new_money = state.money + city_reward_bonus + (state.difficulty_level * self.consts.BONUS_REWARD)
+        new_money = state.money + city_reward_bonus
         
         return state.replace(
             level=new_level,
@@ -1049,8 +1053,43 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
 
         # Get random key for this step and advance state's random key
         step_random_key, new_state = self.advance_random_key(state)
+        
+        # Determine the new priority if the action changed to a diagonal
+        action_changed = atari_action != state.last_raw_action
+        new_priority = jnp.where(
+            action_changed,
+            jnp.select(
+                condlist=[
+                    atari_action == Action.UPRIGHT,
+                    atari_action == Action.UPLEFT,
+                    atari_action == Action.DOWNRIGHT,
+                    atari_action == Action.DOWNLEFT,
+                    atari_action == Action.UPRIGHTFIRE,
+                    atari_action == Action.UPLEFTFIRE,
+                    atari_action == Action.DOWNRIGHTFIRE,
+                    atari_action == Action.DOWNLEFTFIRE,
+                ],
+                choicelist=[
+                    jnp.where(state.last_raw_action == Action.UP, self.consts.DIR_RIGHT, self.consts.DIR_UP),
+                    jnp.where(state.last_raw_action == Action.UP, self.consts.DIR_LEFT, self.consts.DIR_UP),
+                    jnp.where(state.last_raw_action == Action.DOWN, self.consts.DIR_RIGHT, self.consts.DIR_DOWN),
+                    jnp.where(state.last_raw_action == Action.DOWN, self.consts.DIR_LEFT, self.consts.DIR_DOWN),
+                    jnp.where(jnp.logical_or(state.last_raw_action == Action.UP, state.last_raw_action == Action.UPFIRE), self.consts.DIR_RIGHT, self.consts.DIR_UP),
+                    jnp.where(jnp.logical_or(state.last_raw_action == Action.UP, state.last_raw_action == Action.UPFIRE), self.consts.DIR_LEFT, self.consts.DIR_UP),
+                    jnp.where(jnp.logical_or(state.last_raw_action == Action.DOWN, state.last_raw_action == Action.DOWNFIRE), self.consts.DIR_RIGHT, self.consts.DIR_DOWN),
+                    jnp.where(jnp.logical_or(state.last_raw_action == Action.DOWN, state.last_raw_action == Action.DOWNFIRE), self.consts.DIR_LEFT, self.consts.DIR_DOWN),
+                ],
+                default=state.current_diagonal_priority
+            ),
+            state.current_diagonal_priority
+        )
+        
         full_speed = new_state.speed + new_state.reserve_speed
-        new_state = new_state.replace(reserve_speed=jnp.mod(full_speed, 1.0))
+        new_state = new_state.replace(
+            reserve_speed=jnp.mod(full_speed, 1.0),
+            last_raw_action=atari_action,
+            current_diagonal_priority=new_priority
+        )
         full_speed = full_speed.astype(jnp.int32)
         # Player step. Must be run first as this step unpauses the game if it is paused!
         new_state = jax.lax.fori_loop(0, full_speed, lambda i, s: self.player_step(s, atari_action), new_state)
@@ -1145,18 +1184,18 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
                 self.consts.DIR_DOWN,    # DOWNFIRE -> DOWN
                 self.consts.DIR_LEFT,    # LEFTFIRE -> LEFT
                 self.consts.DIR_RIGHT,   # RIGHTFIRE -> RIGHT
-                self.consts.DIR_UP,      # UPRIGHTFIRE -> UP (primary vertical)
-                self.consts.DIR_UP,      # UPLEFTFIRE -> UP (primary vertical)
-                self.consts.DIR_DOWN,    # DOWNRIGHTFIRE -> DOWN (primary vertical)
-                self.consts.DIR_DOWN,    # DOWNLEFTFIRE -> DOWN (primary vertical)
+                state.current_diagonal_priority,      # UPRIGHTFIRE -> priority
+                state.current_diagonal_priority,      # UPLEFTFIRE -> priority
+                state.current_diagonal_priority,    # DOWNRIGHTFIRE -> priority
+                state.current_diagonal_priority,    # DOWNLEFTFIRE -> priority
                 self.consts.DIR_UP,      # UP -> UP
                 self.consts.DIR_DOWN,    # DOWN -> DOWN
                 self.consts.DIR_LEFT,    # LEFT -> LEFT
                 self.consts.DIR_RIGHT,   # RIGHT -> RIGHT
-                self.consts.DIR_UP,      # UPRIGHT -> UP (primary vertical)
-                self.consts.DIR_UP,      # UPLEFT -> UP (primary vertical)
-                self.consts.DIR_DOWN,    # DOWNRIGHT -> DOWN (primary vertical)
-                self.consts.DIR_DOWN,    # DOWNLEFT -> DOWN (primary vertical)
+                state.current_diagonal_priority,      # UPRIGHT -> priority
+                state.current_diagonal_priority,      # UPLEFT -> priority
+                state.current_diagonal_priority,    # DOWNRIGHT -> priority
+                state.current_diagonal_priority,    # DOWNLEFT -> priority
             ],
             default=self.consts.DIR_NOOP,  # NOOP, FIRE, or unknown -> NOOP
         )
