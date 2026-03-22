@@ -242,7 +242,7 @@ class NodeGroup(NamedTuple):
         print(f"Connected Portal (vertical): Node {top_idx} (Top) <-> Node {bottom_idx} (Bottom)")
 
     @staticmethod
-    def connect_portals(data, nodes_lut, position_to_index, tile_size, xoffset=0, yoffset=0):
+    def connect_portals(data, nodes_lut, position_to_index, tile_size, xoffset=0, yoffset=32):
         """
         Connect portal nodes ('P') across the map. Supports left-right and up-down pairs.
 
@@ -251,16 +251,19 @@ class NodeGroup(NamedTuple):
         - Two portals on the same column (same x) -> vertical pair (UP <-> DOWN).
 
         Works for 2, 4, 6, ... portals as long as each pair aligns on a row or column.
-        If there are 6 portals (e.g. 1 horizontal row + 2 vertical columns), all three
-        pairs are connected. Previously only len==2 or len==4 was handled, so 6 portals
-        skipped all connections and deadends broke.
+
+        IMPORTANT: Node keys MUST match create_node_table / connect_horizontally /
+        connect_vertically: same (col,row) -> construct_key then y += yoffset.
+        Using construct_key(..., row+yoffset, ...) or yoffset=0 breaks lookup and
+        portals never connect (deadends fail).
         """
-        # Find all 'P' nodes
+        # Find all 'P' nodes (pixel coords must match nodes_lut keys exactly)
         portal_keys = []
         for row in range(data.shape[0]):
             for col in range(data.shape[1]):
                 if data[row][col] == 'P':
-                    x, y = NodeGroup.construct_key(col + xoffset, row + yoffset, tile_size)
+                    x, y = NodeGroup.construct_key(col + xoffset, row, tile_size)
+                    y += yoffset
                     portal_keys.append((x, y))
 
         if not portal_keys:
