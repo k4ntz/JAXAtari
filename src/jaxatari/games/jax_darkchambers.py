@@ -36,7 +36,7 @@ def _get_default_asset_config():
         {"name": "player_d4", "type": "single", "file": "p16.npy"},
 
         # Zombie animation frames per direction                             # ENEMY_ZOMBIE = 1
-        # right(×3): green_1-3  |  down(×5): green_4-8  |  up(×3): green_9-11  |  left(×3): green_12-14
+        # right(×3): green_1-3  |  down(×8): custom cycle  |  up(×8): custom cycle  |  left(×3): green_12-14
         {"name": "green_r0", "type": "single", "file": "green_1.npy"},
         {"name": "green_r1", "type": "single", "file": "green_2.npy"},
         {"name": "green_r2", "type": "single", "file": "green_3.npy"},
@@ -51,6 +51,17 @@ def _get_default_asset_config():
         {"name": "green_l0", "type": "single", "file": "green_12.npy"},
         {"name": "green_l1", "type": "single", "file": "green_13.npy"},
         {"name": "green_l2", "type": "single", "file": "green_14.npy"},
+        # Direct-name aliases for down/up 8-frame cycles
+        {"name": "green_6",   "type": "single", "file": "green_6.npy"},
+        {"name": "green_7",   "type": "single", "file": "green_7.npy"},
+        {"name": "green_8",   "type": "single", "file": "green_8.npy"},
+        {"name": "green_9",   "type": "single", "file": "green_9.npy"},
+        {"name": "green_10",  "type": "single", "file": "green_10.npy"},
+        {"name": "green_d_d", "type": "single", "file": "green_d_d.npy"},   # neutral down stance
+        {"name": "green_dn_l","type": "single", "file": "green_dn_l.npy"},  # down left-lean step (screenshots/green_l1)
+        {"name": "green_u_d", "type": "single", "file": "green_u_d.npy"},   # neutral up stance
+        {"name": "green_u_r1","type": "single", "file": "green_u_r1.npy"},  # up right step 1
+        {"name": "green_u_r2","type": "single", "file": "green_u_r2.npy"},  # up right step 2
         # Ghost (wraith) animation frames per direction   # ENEMY_WRAITH = 2
         # right(×2): ghost_1,ghost_2  |  left(×2): ghost_4,ghost_5
         # down(×3):  ghost_6-8        |  up(×3):   ghost_9-11
@@ -247,7 +258,7 @@ WIZARD_NUM_FRAMES = jnp.array([3, 5, 3, 5], dtype=jnp.int32)
 # Number of animation frames per skeleton direction (0=right, 1=down, 2=left, 3=up)
 SKELETON_NUM_FRAMES = jnp.array([3, 3, 3, 3], dtype=jnp.int32)
 # Number of animation frames per zombie direction (0=right, 1=down, 2=left, 3=up)
-ZOMBIE_NUM_FRAMES = jnp.array([3, 5, 3, 3], dtype=jnp.int32)
+ZOMBIE_NUM_FRAMES = jnp.array([3, 8, 3, 8], dtype=jnp.int32)
 
 CHASE_RADIUS = 80          # pixels
 IDLE_SPEED = 1              # pixels per step (keep <= 1 for fewer collision issues)
@@ -664,7 +675,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         # Frame counts:    right=2, down=3, left=2, up=3  (padded to max 3 with last frame)
         _zero_frame = jnp.zeros((target_enemy_h, target_enemy_w), dtype=jnp.int32)
         ghost_dir_frame_names = [
-            ["ghost_r0", "ghost_r1", "ghost_r1"],  # right: 2 frames, pad 3rd
+            ["ghost_r1", "ghost_r0", "ghost_r0"],  # right: reversed (cx 3.31→3.71), pad 3rd
             ["ghost_d0", "ghost_d1", "ghost_d2"],  # down:  3 frames
             ["ghost_l0", "ghost_l1", "ghost_l1"],  # left:  2 frames, pad 3rd
             ["ghost_u0", "ghost_u1", "ghost_u2"],  # up:    3 frames
@@ -687,7 +698,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         # Wizard directional animation: (4, 5, H, W) — max 5 frames, pad shorter directions
         # Direction order: 0=right, 1=down, 2=left, 3=up
         wizard_dir_frame_names = [
-            ["wizard_r0", "wizard_r1", "wizard_r2", "wizard_r2", "wizard_r2"],  # right: 3 frames, pad to 5
+            ["wizard_r1", "wizard_r2", "wizard_r0", "wizard_r0", "wizard_r0"],  # right: wizard_2→3→1 (cx 2.92→3.65→3.98), pad to 5
             ["wizard_d0", "wizard_d1", "wizard_d2", "wizard_d3", "wizard_d4"],  # down:  5 frames
             ["wizard_l0", "wizard_l1", "wizard_l2", "wizard_l2", "wizard_l2"],  # left:  3 frames, pad to 5
             ["wizard_u0", "wizard_u1", "wizard_u2", "wizard_u3", "wizard_u4"],  # up:    5 frames
@@ -711,7 +722,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         skel_dir_frame_names = [
             ["skel_r0", "skel_r1", "skel_r2"],  # right
             ["skel_d0", "skel_d1", "skel_d2"],  # down
-            ["skel_l0", "skel_l1", "skel_l2"],  # left
+            ["skel_l2", "skel_l0", "skel_l1"],  # left: mirrors right order (4→5→7 px wide)
             ["skel_u0", "skel_u1", "skel_u2"],  # up
         ]
         skel_dirs = []
@@ -729,13 +740,13 @@ class DarkChambersRenderer(JAXGameRenderer):
         self.ENEMY_DIRECTIONAL_MASKS["skeleton"] = None
         self.ENEMY_SCALED_MASKS["skeleton"] = None
 
-        # Zombie directional animation: (4, 5, H, W) — max 5 frames, pad shorter directions
+        # Zombie directional animation: (4, 8, H, W) — max 8 frames, pad shorter directions
         # Direction order: 0=right, 1=down, 2=left, 3=up
         zombie_dir_frame_names = [
-            ["green_r0", "green_r1", "green_r2", "green_r2", "green_r2"],  # right: 3 frames, pad to 5
-            ["green_d0", "green_d1", "green_d2", "green_d3", "green_d4"],  # down:  5 frames
-            ["green_l0", "green_l1", "green_l2", "green_l2", "green_l2"],  # left:  3 frames, pad to 5
-            ["green_u0", "green_u1", "green_u2", "green_u2", "green_u2"],  # up:    3 frames, pad to 5
+            ["green_r2", "green_r1", "green_r0", "green_r0", "green_r0", "green_r0", "green_r0", "green_r0"],  # right: reversed (cx↑), pad to 8
+            ["green_6",  "green_7",   "green_6",  "green_d_d", "green_dn_l", "green_8",  "green_dn_l", "green_d_d"],  # down:  8-frame cycle
+            ["green_l2", "green_l0",  "green_l1", "green_l1",  "green_l1",   "green_l1", "green_l1",   "green_l1"],  # left:  cx↓ order, pad to 8
+            ["green_10", "green_9",   "green_10", "green_u_d", "green_u_r1", "green_u_r2","green_u_r1", "green_u_d"], # up:    8-frame cycle
         ]
         zombie_dirs = []
         for d_idx, dir_names in enumerate(zombie_dir_frame_names):
@@ -745,7 +756,7 @@ class DarkChambersRenderer(JAXGameRenderer):
                 for n in dir_names
             ]
             zombie_dirs.append(jnp.stack(dir_frames))  # (5, H, W)
-        self.ZOMBIE_ANIM_FRAMES = jnp.stack(zombie_dirs)  # (4, 5, H, W)
+        self.ZOMBIE_ANIM_FRAMES = jnp.stack(zombie_dirs)  # (4, 8, H, W)
         print(f"Built zombie animation frames: {self.ZOMBIE_ANIM_FRAMES.shape}")
 
         # Zombie does not use the generic directional mask path
