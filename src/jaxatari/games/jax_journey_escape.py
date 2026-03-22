@@ -1010,12 +1010,9 @@ class JaxJourneyEscape(
 
     def action_space(self) -> spaces.Discrete:
         """Returns the action space for JourneyEscape.
-        Actions are:
-        0: NOOP
-        1: UP
-        2: DOWN
+        The action space includes all 18 standard Atari actions.
         """
-        return spaces.Discrete(3)
+        return spaces.Discrete(18)
 
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space for JourneyEscape.
