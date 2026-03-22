@@ -969,7 +969,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             # Vertical wall down the middle
             [77, 0, 6, 300],
             # Single centered horizontal bar; leaves walkable gaps on both sides
-            [40, 300, 80, 6],
+            [40, 300, 80, 12],
 
             # ───────── BOTTOM LONG VERTICALS (SYMMETRIC) ─────────
             [48, 360, 6, 234],
