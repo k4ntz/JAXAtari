@@ -35,7 +35,6 @@ GAME_MODULES = {
     "bankheist": "jaxatari.games.jax_bankheist",
     "berzerk": "jaxatari.games.jax_berzerk",
     "blackjack": "jaxatari.games.jax_blackjack",
-    "boxing": "jaxatari.games.jax_boxing",
     "breakout": "jaxatari.games.jax_breakout",
     "centipede": "jaxatari.games.jax_centipede",
     "choppercommand": "jaxatari.games.jax_choppercommand",
@@ -83,9 +82,13 @@ MOD_MODULES = {
     "freeway": "jaxatari.games.mods.freeway_mods.FreewayEnvMod",
     "breakout": "jaxatari.games.mods.breakout_mods.BreakoutEnvMod",
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
+    "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod",
     "videopinball": "jaxatari.games.mods.videopinball_mods.VideoPinballEnvMod",
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
-    "boxing": "jaxatari.games.mods.boxing_mods.BoxingEnvMod",
+    "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
+    "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
+    "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
+    "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
 }
 
 
