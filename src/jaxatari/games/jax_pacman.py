@@ -24,46 +24,20 @@ def _get_default_asset_config() -> tuple:
         {'name': 'player', 'type': 'group', 'files': [
             'player/player_right_0.npy', 'player/player_right_1.npy', 'player/player_right_2.npy',
             'player/player_left_0.npy', 'player/player_left_1.npy', 'player/player_left_2.npy',
-            'player/player_up_0.npy', 'player/player_up_1.npy', 'player/player_up_2.npy',
-            'player/player_down_0.npy', 'player/player_down_1.npy', 'player/player_down_2.npy',
         ]},
         {'name': 'player_death', 'type': 'group', 'files': [
             'player/death_0.npy', 'player/death_1.npy', 'player/death_2.npy', 'player/death_3.npy',
             'player/death_4.npy', 'player/death_5.npy', 'player/death_6.npy', 'player/death_7.npy',
             'player/death_8.npy', 'player/death_9.npy', 'player/death_10.npy', 'player/death_11.npy',
         ]},
-        {'name': 'ghost_blinky', 'type': 'group', 'files': [
-            'ghost_blinky/ghost_right_1.npy', 'ghost_blinky/ghost_right_2.npy',
-            'ghost_blinky/ghost_left_1.npy', 'ghost_blinky/ghost_left_2.npy',
-            'ghost_blinky/ghost_up_1.npy', 'ghost_blinky/ghost_up_2.npy',
-            'ghost_blinky/ghost_down_1.npy', 'ghost_blinky/ghost_down_2.npy',
-        ]},
-        {'name': 'ghost_pinky', 'type': 'group', 'files': [
-            'ghost_pinky/ghost_right_1.npy', 'ghost_pinky/ghost_right_2.npy',
-            'ghost_pinky/ghost_left_1.npy', 'ghost_pinky/ghost_left_2.npy',
-            'ghost_pinky/ghost_up_1.npy', 'ghost_pinky/ghost_up_2.npy',
-            'ghost_pinky/ghost_down_1.npy', 'ghost_pinky/ghost_down_2.npy',
-        ]},
-        {'name': 'ghost_inky', 'type': 'group', 'files': [
-            'ghost_inky/ghost_right_1.npy', 'ghost_inky/ghost_right_2.npy',
-            'ghost_inky/ghost_left_1.npy', 'ghost_inky/ghost_left_2.npy',
-            'ghost_inky/ghost_up_1.npy', 'ghost_inky/ghost_up_2.npy',
-            'ghost_inky/ghost_down_1.npy', 'ghost_inky/ghost_down_2.npy',
-        ]},
-        {'name': 'ghost_clyde', 'type': 'group', 'files': [
-            'ghost_clyde/ghost_right_1.npy', 'ghost_clyde/ghost_right_2.npy',
-            'ghost_clyde/ghost_left_1.npy', 'ghost_clyde/ghost_left_2.npy',
-            'ghost_clyde/ghost_up_1.npy', 'ghost_clyde/ghost_up_2.npy',
-            'ghost_clyde/ghost_down_1.npy', 'ghost_clyde/ghost_down_2.npy',
+        {'name': 'ghost_normal', 'type': 'group', 'files': [
+            'ghost_normal/ghost_1.npy', 'ghost_normal/ghost_2.npy',
         ]},
         {'name': 'ghost_frightened', 'type': 'group', 'files': [
             'ghost_frightened/ghost_frightened_1.npy', 'ghost_frightened/ghost_frightened_2.npy',
-            'ghost_frightened/ghost_frightened_white_1.npy', 'ghost_frightened/ghost_frightened_white_2.npy',
         ]},
-        {'name': 'ghost_eyes', 'type': 'group', 'files': [
-            'ghost_eyes/eyes_right.npy', 'ghost_eyes/eyes_left.npy',
-            'ghost_eyes/eyes_up.npy', 'ghost_eyes/eyes_down.npy',
-        ]},
+        {'name': 'ghost_eyes', 'type': 'single', 'file': 'ghost_eyes/eyes.npy'},
+        {'name': 'ghost_eyes_pink', 'type': 'single', 'file': 'ghost_eyes/eyes_pink.npy'},
         {'name': 'pellet_dot', 'type': 'single', 'file': 'pellet_dot.npy'},
         {'name': 'pellet_power', 'type': 'group', 'files': [
             'pellet_power/pellet_power_on.npy',
@@ -73,7 +47,6 @@ def _get_default_asset_config() -> tuple:
             'pellet_power/pellet_power_frightened_on.npy',
             'pellet_power/pellet_power_frightened_off.npy'
         ]},
-        {'name': 'ghost_door', 'type': 'single', 'file': 'ghost_door.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'digits/digit_{}.npy'},
     )
 
@@ -93,23 +66,13 @@ def _get_sprite_lookup() -> chex.Array:
     lookup[:] = SPRITE_RIGHT
     
     # Map Actions to Sprites
-    # User Request: "Pacman does not change sprite when going up or down. He only has left or right."
-    # We map UP and DOWN to RIGHT (or LEFT?) as a default. 
-    # Since we can't track "last horizontal" easily without state change, we default to RIGHT.
+    # Pacman does not change sprite when going up or down, only left or right
     lookup[Action.UP] = SPRITE_RIGHT
     lookup[Action.DOWN] = SPRITE_RIGHT
     lookup[Action.LEFT] = SPRITE_LEFT
     lookup[Action.RIGHT] = SPRITE_RIGHT
     
-    # Ghost direction mapping (Action -> Sprite Offset)
-    # Ghosts still use 2 frames per direction, so offsets are 0, 2, 4, 6
-    ghost_lookup = np.zeros(18, dtype=np.int32)
-    ghost_lookup[:] = 0 # Default to Right
-    ghost_lookup[Action.RIGHT] = 0
-    ghost_lookup[Action.LEFT] = 2
-    ghost_lookup[Action.UP] = 4
-    ghost_lookup[Action.DOWN] = 6
-    return jnp.array(lookup, dtype=jnp.int32), jnp.array(ghost_lookup, dtype=jnp.int32)
+    return jnp.array(lookup, dtype=jnp.int32)
 
 
 class PacmanConstants(NamedTuple):
@@ -139,13 +102,10 @@ class PacmanConstants(NamedTuple):
     
     # Ghost starting positions (Ghost House Center)
     GHOST_START_X: int = 80   # Col 10 * 8 (Center of 'HHHH')
-    GHOST_START_Y: int = 88   # Row 7 * 8 (Where 'H' is in maze_atari.txt) + 32 offset
+    GHOST_START_Y: int = 88   # Row 7 * 8 + 32 offset
     
-    # Ghost colors (User Request: Pink Regular, Blue Frightened)
-    GHOST_BLINKY_COLOR: Tuple[int, int, int] = (252, 144, 200)
-    GHOST_PINKY_COLOR: Tuple[int, int, int] = (252, 144, 200)
-    GHOST_INKY_COLOR: Tuple[int, int, int] = (252, 144, 200)
-    GHOST_CLYDE_COLOR: Tuple[int, int, int] = (252, 144, 200)
+    # Ghost colors
+    GHOST_COLOR: Tuple[int, int, int] = (252, 144, 200)
     GHOST_FRIGHTENED_COLOR: Tuple[int, int, int] = (144, 144, 252)
     
     # Pellet constants
@@ -180,7 +140,7 @@ class PacmanConstants(NamedTuple):
     
     # Asset config
     ASSET_CONFIG: tuple = _get_default_asset_config()
-    SPRITE_LOOKUP: Tuple[chex.Array, chex.Array] = _get_sprite_lookup()
+    SPRITE_LOOKUP: chex.Array = _get_sprite_lookup()
 
 
 # Ghost states: 0=normal, 1=frightened, 2=eaten
@@ -324,7 +284,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         # Find ghost house node (look for tile value 4)
         # Default to center if not found
         center_x = (self.consts.MAZE_WIDTH * self.consts.TILE_SIZE) // 2
-        center_y = ((self.consts.MAZE_HEIGHT * self.consts.TILE_SIZE) // 2) + 16
+        center_y = ((self.consts.MAZE_HEIGHT * self.consts.TILE_SIZE) // 2) + 20
         self.ghost_house_node_idx = self._find_nearest_node_idx(center_x, center_y)
         
         # Try to find a node that is actually inside the ghost house (tile 4)
@@ -363,22 +323,22 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
                     continue
                 tile_nb = node_tile_types[nb]
 
-                # Option 1: treat any edge that touches a door node or house node as a "door edge" for Pac-Man
-                if tile_n == 5 or tile_nb == 5 or tile_n == 4 or tile_nb == 4:
+                # Option 1: treat any edge that touches a house node as a "door edge" for Pac-Man
+                if tile_n == 4 or tile_nb == 4:
                     door_edge_mask[n, a] = True
                 
-                # Option 2: Ghost entry mask (Block entry to Door/House from Outside)
-                is_house_complex_n = (tile_n == 4 or tile_n == 5)
-                is_house_complex_nb = (tile_nb == 4 or tile_nb == 5)
-                
-                if is_house_complex_nb and not is_house_complex_n:
-                     # Attempting to enter House/Door from Outside -> BLOCK for non-eaten ghosts
-                     ghost_entry_mask[n, a] = True
+                # Option 2: Ghost entry mask (Block entry to House from non-right side)
+                if tile_nb == 4 and tile_n != 4:
+                     # Only allow entering H via LEFT action (approaching from the right)
+                     if a != Action.LEFT:
+                          ghost_entry_mask[n, a] = True
                      
                 # Option 3: Ghost House Structural Wall constraints
-                # For ghosts, House (4) is blocked from left, right, and bottom. 
-                # Meaning they can only enter/exit H if communicating directly with D (5).
-                if (tile_n == 4 and tile_nb != 5) or (tile_nb == 4 and tile_n != 5):
+                # From inside H, ghosts can only leave by moving RIGHT
+                if tile_n == 4 and a != Action.RIGHT:
+                     ghost_wall_mask[n, a] = True
+                # From outside, approaching H from non-right side is blocked
+                if tile_nb == 4 and a != Action.LEFT:
                      ghost_wall_mask[n, a] = True
 
         # Store mask as JAX array; used only for Pacman
@@ -1046,18 +1006,47 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             # Eaten state handling
             is_eaten = gstate == 2
             ghost_house_node = self.ghost_house_node_idx
-            at_house = jnp.logical_and(
-                is_eaten,
-                jnp.logical_and(
-                    jnp.abs(gx - self.node_positions_x[ghost_house_node]) < 4,
-                    jnp.abs(gy - self.node_positions_y[ghost_house_node]) < 4
-                )
+            house_x = self.node_positions_x[ghost_house_node]
+            house_y = self.node_positions_y[ghost_house_node]
+            near_house = jnp.logical_and(
+                jnp.abs(gx - house_x) < 8,
+                jnp.abs(gy - house_y) < 8
             )
-            respawned_state = jnp.where(at_house, 0, gstate)
+            at_house = jnp.logical_and(is_eaten, near_house)
+            # Only respawn if frightened timer has expired
+            fright_expired = state.frightened_timer <= 0
+            can_respawn = jnp.logical_and(at_house, fright_expired)
+            respawned_state = jnp.where(can_respawn, 0, gstate)
+            # Waiting at house: eaten, at house, but fright still active
+            waiting_at_house = jnp.logical_and(at_house, jnp.logical_not(fright_expired))
             
             # Target computation
-            target_for_eaten = pick_closest_neighbor_to_coord(self.node_positions_x[ghost_house_node], self.node_positions_y[ghost_house_node])
-            target_for_normal = pick_closest_neighbor_to_coord(state.player_x, state.player_y)
+            target_for_eaten = pick_closest_neighbor_to_coord(house_x, house_y)
+            
+            # Apply dynamic travel-vector flanking to ensure aggressive distinct intersection branches
+            dir_dx = jnp.array([0, 0, 0, 1, -1, 0], dtype=jnp.int32)
+            dir_dy = jnp.array([0, 0, -1, 0, 0, 1], dtype=jnp.int32)
+            p_dir = state.player_direction.astype(jnp.int32)
+            
+            px_val = dir_dx[p_dir] * 32
+            py_val = dir_dy[p_dir] * 32
+            ortho_x = dir_dy[p_dir] * 32
+            ortho_y = dir_dx[p_dir] * 32
+            
+            offset_x = jax.lax.switch(idx, [
+                lambda: 0,         # Ghost 0: Exact Player position
+                lambda: px_val,    # Ghost 1: 4 Tiles Ahead
+                lambda: -px_val,   # Ghost 2: 4 Tiles Behind
+                lambda: ortho_x    # Ghost 3: 4 Tiles Orthogonal
+            ])
+            offset_y = jax.lax.switch(idx, [
+                lambda: 0,
+                lambda: py_val,
+                lambda: -py_val,
+                lambda: ortho_y
+            ])
+            
+            target_for_normal = pick_closest_neighbor_to_coord(state.player_x + offset_x, state.player_y + offset_y)
             target_for_frightened = new_target_from_random
             
             new_target_from_logic = jnp.where(
@@ -1092,6 +1081,15 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             
             new_x = jnp.where(new_direction != Action.NOOP, snapped_x + move_dx, snapped_x)
             new_y = jnp.where(new_direction != Action.NOOP, snapped_y + move_dy, snapped_y)
+            
+            # Freeze ghost at house if waiting for fright to expire
+            new_x = jnp.where(waiting_at_house, house_x, new_x)
+            new_y = jnp.where(waiting_at_house, house_y, new_y)
+            new_direction = jnp.where(waiting_at_house, Action.NOOP, new_direction)
+            new_current = jnp.where(waiting_at_house, ghost_house_node, new_current)
+            new_target = jnp.where(waiting_at_house, ghost_house_node, new_target)
+            target_x_pos = jnp.where(waiting_at_house, house_x, target_x_pos)
+            target_y_pos = jnp.where(waiting_at_house, house_y, target_y_pos)
             
             return jnp.array([new_x, new_y, new_direction, respawned_state, target_x_pos, target_y_pos, new_current, new_target], dtype=jnp.int32)
         
@@ -1543,20 +1541,22 @@ class PacmanRenderer(JAXGameRenderer):
                     # Draw a solid block
                     canvas[y:y+TILE, x_start:x_end] = wall_color
                     
-                elif tile_val == 4 and x_start < x_end: # Ghost House
-                    # Draw a yellow U-shape around the 8x8 cell
+                elif tile_val == 4 and x_start < x_end: # Ghost House Box
+                    # Draw a perfectly symmetrical enclosing box framing the 8x8 cell
+                    # Outer bounds: 10px width, 14px height. Inner housing: 8x8.
                     house_color = np.array([252, 224, 144], dtype=np.uint8)
-                    # Left Wall
+                    # Left Wall (1px outer)
                     if x_start - 1 >= 0:
-                         canvas[y-1:y+9, x_start-1:x_start] = house_color
-                    # Right Wall
+                         canvas[max(0, y-3):min(H, y+11), x_start-1:x_start] = house_color
+                    # Right Wall (1px outer)
                     if x_end + 1 <= W:
-                         canvas[y-1:y+9, x_end:x_end+1] = house_color
-                    # Bottom Wall
-                    canvas[y+8:y+9, max(0, x_start-1):min(W, x_end+1)] = house_color
-                        
-                elif tile_val == 5 and x_start < x_end: # Door
-                    canvas[y+7:y+9, x_start:x_end] = door_color
+                         canvas[max(0, y-3):min(H, y+11), x_end:x_end+1] = house_color
+                    # Top Wall (3px outer)
+                    if y - 3 >= 0:
+                         canvas[max(0, y-3):y, max(0, x_start-1):min(W, x_end+1)] = house_color
+                    # Bottom Wall (3px outer)
+                    if y + 11 <= H:
+                         canvas[y+8:min(H, y+11), max(0, x_start-1):min(W, x_end+1)] = house_color
                     
         # Draw HUD (Green Bar)
         hud_start = 172
@@ -1626,7 +1626,7 @@ class PacmanRenderer(JAXGameRenderer):
             sprite_dir_action = jnp.where(is_vertical, state.player_last_horizontal_dir, player_dir_idx)
             anim_step = (state.step_counter // self.consts.ANIMATION_SPEED) % 4
             player_frame = 2 - jnp.abs(anim_step - 2)
-            base_sprite_idx = self.consts.SPRITE_LOOKUP[0][sprite_dir_action]
+            base_sprite_idx = self.consts.SPRITE_LOOKUP[sprite_dir_action]
             player_sprite_idx = base_sprite_idx + player_frame
             player_mask = self.SHAPE_MASKS["player"][player_sprite_idx]
             return self.jr.render_at(r, state.player_x - 4, state.player_y, player_mask)
@@ -1646,17 +1646,19 @@ class PacmanRenderer(JAXGameRenderer):
                 g_dir = state.ghosts[i, 2]
                 g_state = state.ghosts[i, 3] # 0=Normal, 1=Frightened, 2=Eaten
                 anim_frame = (state.step_counter // 10) % 2
-                lookup_offset = self.consts.SPRITE_LOOKUP[1][g_dir.astype(jnp.int32)]
-                g_sprite_idx = lookup_offset + anim_frame
-                is_flashing = jnp.logical_and(state.frightened_timer < 60, (state.step_counter // 8) % 2 == 0)
-                frightened_idx = jnp.where(is_flashing, 2 + anim_frame, anim_frame)
                 
                 # Ghost Masks logic
-                # Normal mode: No direction switching, just use the first 2 animation frames of pinky/blinky
-                # Eaten mode eyes still rely on lookup_offset to look up/down/left/right!
-                mask_normal = self.SHAPE_MASKS["ghost_blinky"][anim_frame]
-                mask_fright = self.SHAPE_MASKS["ghost_frightened"][frightened_idx]
-                mask_dead = self.SHAPE_MASKS["ghost_eyes"][lookup_offset // 2]
+                mask_normal = self.SHAPE_MASKS["ghost_normal"][anim_frame]
+                mask_fright = self.SHAPE_MASKS["ghost_frightened"][anim_frame]
+                mask_dead_eyes = self.SHAPE_MASKS["ghost_eyes"]
+                mask_dead_eyes_pink = self.SHAPE_MASKS["ghost_eyes_pink"]
+                # Pink eyes when eaten and fright expired (travelling home post-fright)
+                fright_active = state.frightened_timer > 0
+                mask_dead = jax.lax.cond(
+                    fright_active,
+                    lambda: mask_dead_eyes,
+                    lambda: mask_dead_eyes_pink
+                )
                 final_mask = jax.lax.switch(
                     g_state.astype(jnp.int32),
                      [lambda: mask_normal, lambda: mask_fright, lambda: mask_dead]
