@@ -218,7 +218,7 @@ class JourneyEscapeConstants(AutoDerivedConstants):
         0.05263158,     # 13: (4, 2, 70)  photographers (2)
         0.05263158,     # 14: (8, 1, 0)   big photographer
 
-        0.0001,         # 15: (9, 1, 0) big manager
+        0.0085,         # 15: (9, 1, 0) big manager
     ]))
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=get_default_asset_config)
 
