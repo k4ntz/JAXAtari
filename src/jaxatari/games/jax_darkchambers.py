@@ -959,14 +959,14 @@ class DarkChambersRenderer(JAXGameRenderer):
 
             [0, 160, 54, 6],
             #ornament
-            [6, 166, 12, 6],
+            [8, 166, 8, 8],
             
             #chamber enclosing (mirror symmetric to left)
             [106, 0, 6, 162],
             
             [106, 160, 54, 6],
             #ornament (mirror)
-            [142, 166, 12, 6],
+            [144, 166, 8, 8],
 
             
             # ───────── MIDDLE DIVIDER (FLIPPED T) ─────────
