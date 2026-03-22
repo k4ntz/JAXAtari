@@ -252,8 +252,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             Action.LEFT,
             Action.RIGHT,
         ]
-        # Ensure vitamin coordinates always exist, including modded env construction
-        # paths where MAZE_LAYOUT is pre-populated and _load_maze_from_file is skipped.
+        # Default vitamin tile; overwritten if '*' exists in maze map.
         self.vitamin_tile_row = 9
         self.vitamin_tile_col = 10
         
