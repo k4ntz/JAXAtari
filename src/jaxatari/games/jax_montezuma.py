@@ -328,7 +328,7 @@ class MontezumaConstants(NamedTuple):
                                  ], jnp.int32)
     
     LASER_BARRIER_COLOR = jnp.array([101, 111, 228, 255], dtype=jnp.int16)
-    LAYOUT = Layouts.test_layout.value
+    LAYOUT = Layouts.difficulty_1.value
     RENDERLESS = False
     LOAD_STATE = None
     INIT_LIVES = 5
@@ -3819,6 +3819,8 @@ class JaxMontezuma(JaxEnvironment[MontezumaState, MontezumaObservation, Montezum
             # Or the respective room ID if it is connected
             offset_room_id = room_id + 1
             def stay_in_room(state: MontezumaState, _room_id: jArray, room_entrance_direction: jArray):
+                # Trigger done if the room is exited/completed (i.e., hitting an unconnected boundary)
+                state = SANTAH.attribute_setters[MontezumaState][MontezumaStateFields.lifes.value](state, jnp.array([-1], jnp.int32))
                 return state
             def switch_rooms(state: MontezumaState, _room_id: jArray, room_entrance_direction: jArray):
                 #
