@@ -1,0 +1,20 @@
+Error executing job with overrides: ['+alg=pqn_short_eval_run_pixel']
+Traceback (most recent call last):
+  File "/home/achraf/JAXAtari/scripts/benchmarks/pqn_agent.py", line 736, in main
+    single_run(config)
+  File "/home/achraf/JAXAtari/scripts/benchmarks/pqn_agent.py", line 642, in single_run
+    train_vjit = jax.jit(jax.vmap(make_train(config)))
+                                  ^^^^^^^^^^^^^^^^^^
+  File "/home/achraf/JAXAtari/scripts/benchmarks/pqn_agent.py", line 152, in make_train
+    env = jaxatari.make(config["ENV_NAME"].lower(), mods=mods_config)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/achraf/JAXAtari/src/jaxatari/core.py", line 157, in make
+    env = apply_modifications(
+          ^^^^^^^^^^^^^^^^^^^^
+  File "/home/achraf/JAXAtari/src/jaxatari/modification.py", line 826, in apply_modifications
+    expand_mods(mods_config)
+  File "/home/achraf/JAXAtari/src/jaxatari/modification.py", line 815, in expand_mods
+    raise ValueError(
+ValueError: Mod 'timer_mode' not recognized. Available mods: ['timer_mod', 'super_dunk', 'ten_second_violation_internal', 'ten_second_violation_post', 'ten_second_violation', 'single_mode', '1v1_internal', '1v1_post', '1v1_mode', 'half_court']
+
+Set the environment variable HYDRA_FULL_ERROR=1 for a complete stack trace.

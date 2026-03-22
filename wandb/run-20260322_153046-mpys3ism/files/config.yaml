@@ -1,0 +1,179 @@
+_wandb:
+    value:
+        cli_version: 0.25.1
+        e:
+            c4h52scz0em0bzvgleff39t401086baq:
+                args:
+                    - +alg=pqn_short_eval_run_pixel
+                codePath: scripts/benchmarks/pqn_agent.py
+                codePathLocal: scripts/benchmarks/pqn_agent.py
+                cpu_count: 8
+                cpu_count_logical: 16
+                cudaVersion: "13.2"
+                disk:
+                    /:
+                        total: "1081101176832"
+                        used: "12793929728"
+                email: achraf.hafsaoui@gmail.com
+                executable: /home/achraf/JAXAtari/.venv/bin/python
+                git:
+                    commit: f34eecd8fdadcd0fd0d1273e093c7909162e3292
+                    remote: https://github.com/AchrafHafsaoui/JAXAtari
+                gpu: NVIDIA GeForce RTX 4070 Laptop GPU
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ada
+                      memoryTotal: "8585740288"
+                      name: NVIDIA GeForce RTX 4070 Laptop GPU
+                      uuid: GPU-b8860936-18d3-08c4-0d47-6ea15af6c272
+                host: LAPTOP-HJ7273J6
+                memory:
+                    total: "8130879488"
+                os: Linux-6.6.87.1-microsoft-standard-WSL2-x86_64-with-glibc2.39
+                program: /home/achraf/JAXAtari/scripts/benchmarks/pqn_agent.py
+                python: CPython 3.12.3
+                root: /home/achraf/JAXAtari
+                startedAt: "2026-03-22T14:30:46.357235Z"
+                writerId: c4h52scz0em0bzvgleff39t401086baq
+        m: []
+        python_version: 3.12.3
+        t:
+            "1":
+                - 12
+                - 45
+                - 50
+            "2":
+                - 12
+                - 45
+                - 50
+            "3":
+                - 2
+                - 13
+                - 15
+                - 16
+                - 61
+            "4": 3.12.3
+            "5": 0.25.1
+            "12": 0.25.1
+            "13": linux-x86_64
+ALG_NAME:
+    value: pqn
+ENTITY:
+    value: ""
+ENV_NAME:
+    value: doubledunk
+EPS_DECAY:
+    value: 0.1
+EPS_FINISH:
+    value: 0.001
+EPS_START:
+    value: 1
+EPS_TEST:
+    value: 0
+GAMMA:
+    value: 0.99
+HYP_TUNE:
+    value: false
+LAMBDA:
+    value: 0.65
+LR:
+    value: 0.001
+LR_LINEAR_DECAY:
+    value: false
+MAX_GRAD_NORM:
+    value: 10
+MOD_NAME:
+    value:
+        - ten_second_violation
+NAME_INITIALS:
+    value: RE
+NORM_TYPE:
+    value: layer_norm
+NUM_ENVS:
+    value: 1024
+NUM_EPOCHS:
+    value: 1
+NUM_MINIBATCHES:
+    value: 8
+NUM_SEEDS:
+    value: 1
+NUM_STEPS:
+    value: 4
+OBJECT_CENTRIC:
+    value: false
+PIXEL_GRAYSCALE:
+    value: true
+PIXEL_RESIZE:
+    value: true
+PIXEL_RESIZE_SHAPE:
+    value:
+        - 84
+        - 84
+PROJECT:
+    value: ""
+RECORD_FINAL_VIDEO:
+    value: true
+RECORD_VIDEO:
+    value: false
+SAVE_PATH:
+    value: ./models
+SEED:
+    value: 0
+TEST_DURING_TRAINING:
+    value: false
+TEST_INTERVAL:
+    value: 0.01
+TEST_NUM_ENVS:
+    value: 128
+TEST_NUM_STEPS:
+    value: 10000
+TOTAL_TIMESTEPS:
+    value: 1e+08
+TOTAL_TIMESTEPS_DECAY:
+    value: 5e+07
+USE_NATIVE_DOWNSCALING:
+    value: false
+VIDEO_MAX_STEPS:
+    value: 1000
+WANDB_LOG_ALL_SEEDS:
+    value: false
+WANDB_MODE:
+    value: online
+alg:
+    value:
+        ALG_NAME: pqn
+        ENV_NAME: doubledunk
+        EPS_DECAY: 0.1
+        EPS_FINISH: 0.001
+        EPS_START: 1
+        EPS_TEST: 0
+        GAMMA: 0.99
+        LAMBDA: 0.65
+        LR: 0.001
+        LR_LINEAR_DECAY: false
+        MAX_GRAD_NORM: 10
+        MOD_NAME:
+            - ten_second_violation
+        NAME_INITIALS: RE
+        NORM_TYPE: layer_norm
+        NUM_ENVS: 1024
+        NUM_EPOCHS: 1
+        NUM_MINIBATCHES: 8
+        NUM_STEPS: 4
+        OBJECT_CENTRIC: false
+        PIXEL_GRAYSCALE: true
+        PIXEL_RESIZE: true
+        PIXEL_RESIZE_SHAPE:
+            - 84
+            - 84
+        RECORD_FINAL_VIDEO: true
+        RECORD_VIDEO: false
+        TEST_DURING_TRAINING: false
+        TEST_INTERVAL: 0.01
+        TEST_NUM_ENVS: 128
+        TEST_NUM_STEPS: 10000
+        TOTAL_TIMESTEPS: 1e+08
+        TOTAL_TIMESTEPS_DECAY: 5e+07
+        USE_NATIVE_DOWNSCALING: false
+        VIDEO_MAX_STEPS: 1000
+        WANDB_LOG_ALL_SEEDS: false

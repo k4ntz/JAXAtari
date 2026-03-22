@@ -1,0 +1,31 @@
+Compile time: 63.6315541267395 seconds.
+Error executing job with overrides: ['+alg=pqn_short_eval_run_pixel']
+Traceback (most recent call last):
+  File "/home/achraf/JAXAtari/scripts/benchmarks/pqn_agent.py", line 736, in main
+    single_run(config)
+  File "/home/achraf/JAXAtari/scripts/benchmarks/pqn_agent.py", line 646, in single_run
+    outs = jax.block_until_ready(train_vjit(rngs))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/jax/_src/api.py", line 3135, in block_until_ready
+    xc.batched_block_until_ready(arrays)
+jax.errors.JaxRuntimeError: INTERNAL: CpuCallback error calling callback: Traceback (most recent call last):
+  File "/home/achraf/JAXAtari/scripts/benchmarks/pqn_agent.py", line 740, in <module>
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/hydra/main.py", line 94, in decorated_main
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/hydra/_internal/utils.py", line 394, in _run_hydra
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/hydra/_internal/utils.py", line 457, in _run_app
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/hydra/_internal/utils.py", line 220, in run_and_report
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/hydra/_internal/utils.py", line 458, in <lambda>
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/hydra/_internal/hydra.py", line 119, in run
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/hydra/core/utils.py", line 186, in run_job
+  File "/home/achraf/JAXAtari/scripts/benchmarks/pqn_agent.py", line 736, in main
+  File "/home/achraf/JAXAtari/scripts/benchmarks/pqn_agent.py", line 646, in single_run
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/jax/_src/traceback_util.py", line 196, in reraise_with_filtered_traceback
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/jax/_src/pjit.py", line 256, in cache_miss
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/jax/_src/pjit.py", line 141, in _run_python_pjit
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/jax/_src/pjit.py", line 1182, in _pjit_call_impl_python
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/jax/_src/profiler.py", line 384, in wrapper
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/jax/_src/interpreters/pxla.py", line 1354, in __call__
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/jax/_src/callback.py", line 816, in _wrapped_callback
+KeyboardInterrupt:
+
+Set the environment variable HYDRA_FULL_ERROR=1 for a complete stack trace.

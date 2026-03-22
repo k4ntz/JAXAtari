@@ -1,0 +1,1 @@
+{"qvals":2.491443634033203,"_step":28672,"update_steps":7,"env_done":0,"returned_episode_returns":0,"_wandb":{"runtime":65},"grad_steps":56,"returned_episode":0,"_timestamp":1.77413266641253e+09,"td_loss":0.003932262305170298,"_runtime":65.190203912,"returned_episode_lengths":0,"env_step":28672,"time":122.0400390625,"env_reward":-0.004638671875}

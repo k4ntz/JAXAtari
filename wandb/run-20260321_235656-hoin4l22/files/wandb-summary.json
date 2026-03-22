@@ -1,0 +1,1 @@
+{"grad_steps":6152,"time":9433.703125,"returned_episode_returns":6.9130859375,"env_reward":0.000732421875,"env_done":0,"_wandb":{"runtime":340},"_step":3149824,"td_loss":0.00841788575053215,"env_step":3149824,"_runtime":340.602590118,"_timestamp":1.774134157647082e+09,"returned_episode":0,"qvals":9.924161911010742,"returned_episode_lengths":720.025390625,"update_steps":769}

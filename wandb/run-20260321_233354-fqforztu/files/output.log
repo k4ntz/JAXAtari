@@ -1,0 +1,39 @@
+Error executing job with overrides: ['+alg=pqn_short_eval_run_pixel']
+Traceback (most recent call last):
+  File "/home/achraf/JAXAtari/scripts/benchmarks/pqn_agent.py", line 736, in main
+    single_run(config)
+  File "/home/achraf/JAXAtari/scripts/benchmarks/pqn_agent.py", line 643, in single_run
+    train_vjit.lower(rngs).compile()
+    ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/achraf/JAXAtari/scripts/benchmarks/pqn_agent.py", line 513, in train
+    expl_state = jax.vmap(env.reset)(jax.random.split(_rng, config["NUM_ENVS"]))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/achraf/JAXAtari/src/jaxatari/wrappers.py", line 843, in reset
+    obs, atari_state = self._env.reset(key)
+                       ^^^^^^^^^^^^^^^^^^^^
+  File "/home/achraf/JAXAtari/src/jaxatari/wrappers.py", line 811, in reset
+    normalized_obs = self._normalize_obs(obs)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/achraf/JAXAtari/src/jaxatari/wrappers.py", line 800, in _normalize_obs
+    normalized_leaves = [
+                        ^
+  File "/home/achraf/JAXAtari/src/jaxatari/wrappers.py", line 774, in _normalize_leaf
+    normalized_0_1 = (obs_leaf - low_leaf.astype(self._dtype)) * scale
+                      ~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/jax/_src/numpy/array_methods.py", line 1404, in op
+    return getattr(self.aval, f"_{name}")(self, *args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/jax/_src/numpy/array_methods.py", line 688, in _operator_sub
+    return ufuncs.subtract(self, cast(ArrayLike, other))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/jax/_src/numpy/ufunc_api.py", line 182, in __call__
+    return call(*args)
+           ^^^^^^^^^^^
+  File "/home/achraf/JAXAtari/.venv/lib/python3.12/site-packages/jax/_src/numpy/ufuncs.py", line 1569, in subtract
+    out = lax.sub(*promote_args("subtract", x, y))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: sub got incompatible shapes for broadcasting: (4, 210, 160, 3), (4, 84, 84, 1).
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+
+Set the environment variable HYDRA_FULL_ERROR=1 for a complete stack trace.
