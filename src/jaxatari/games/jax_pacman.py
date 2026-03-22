@@ -124,7 +124,7 @@ class PacmanConstants(NamedTuple):
     
     # Vitamin constants
     VITAMIN_SCORE: int = 100
-    VITAMIN_TRIGGER_PELLETS: int = 10  # Appears after this many pellets eaten
+    VITAMIN_TRIGGER_PELLETS: int = 170  # Appears after this many pellets eaten
     VITAMIN_DURATION: int = 600  # ~10 seconds at 60fps
     FREEZE_DURATION: int = 15
     DEATH_DURATION: int = 60
