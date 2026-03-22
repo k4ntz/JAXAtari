@@ -844,8 +844,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             e_y = state.enemies_y[i]
             e_active = enemies_active[i] == 1
             
-            overlap_x = jnp.logical_and(new_left_x < e_x + 8, new_right_x >= e_x)
-            overlap_y = jnp.logical_and(check_y_top < e_y + 16, check_y_bot >= e_y)
+            overlap_x = jnp.logical_and(new_left_x < e_x + 7, new_right_x >= e_x + 1)
+            overlap_y = jnp.logical_and(check_y_top < e_y + 15, check_y_bot >= e_y + 1)
             overlap = jnp.logical_and(overlap_x, overlap_y)
             
             this_hit = jnp.logical_and(e_active, overlap)
@@ -922,10 +922,10 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         )
         
         enemies_obs = ObjectObservation.create(
-            x=state.enemies_x,
-            y=state.enemies_y,
-            width=jnp.full(self.consts.MAX_ENEMIES_PER_ROOM, 8),
-            height=jnp.full(self.consts.MAX_ENEMIES_PER_ROOM, 16),
+            x=state.enemies_x + 1,
+            y=state.enemies_y + 1,
+            width=jnp.full(self.consts.MAX_ENEMIES_PER_ROOM, 6),
+            height=jnp.full(self.consts.MAX_ENEMIES_PER_ROOM, 14),
             active=state.enemies_active
         )
         
