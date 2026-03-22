@@ -58,6 +58,7 @@ class Montezuma2State:
     player_y: jnp.ndarray
     player_vx: jnp.ndarray
     player_vy: jnp.ndarray
+    player_dir: jnp.ndarray
     
     is_jumping: jnp.ndarray
     is_falling: jnp.ndarray
@@ -138,7 +139,19 @@ class Montezuma2Renderer(JAXGameRenderer):
         final_asset_config = [
             {'name': 'bg', 'type': 'background', 'data': bg_data},
             {'name': 'room_bg', 'type': 'single', 'file': 'backgrounds/mid_room_level_0.npy', 'transpose': False},
-            {'name': 'player', 'type': 'single', 'file': 'player/player_sprite.npy', 'transpose': False},
+            {
+                'name': 'player', 'type': 'group',
+                'files': [
+                    'player/player_sprite.npy',
+                    'player/walking_0.npy',
+                    'player/walking_1.npy',
+                    'player/ladder_climb1.npy',
+                    'player/ladder_climb2.npy',
+                    'player/rope_climb_0.npy',
+                    'player/rope_climb_1.npy',
+                    'player/player_jump.npy'
+                ]
+            },
             {
                 'name': 'skull', 'type': 'group',
                 'files': [f'enemies/skull_cycle/skull_{i}.npy' for i in range(1, 17)]
@@ -245,7 +258,7 @@ class Montezuma2Renderer(JAXGameRenderer):
             mask = self.SHAPE_MASKS["conveyor"]
             return jax.lax.cond(
                 state.conveyors_active[i] == 1,
-                lambda r: self.jr.render_at(r, state.conveyors_x[i], state.conveyors_y[i] + 47, mask, flip_horizontal=anim_idx),
+                lambda r: self.jr.render_at(r, state.conveyors_x[i], state.conveyors_y[i] + 47, mask, flip_vertical=anim_idx),
                 lambda r: r,
                 raster
             )
@@ -286,7 +299,35 @@ class Montezuma2Renderer(JAXGameRenderer):
         raster = jax.lax.fori_loop(0, self.consts.MAX_ENEMIES_PER_ROOM, render_enemy, raster)
         
         # Draw Player
-        raster = self.jr.render_at(raster, state.player_x, state.player_y + 47, self.SHAPE_MASKS["player"])
+        is_walking = jnp.logical_and(state.player_vx != 0, jnp.logical_and(state.is_climbing == 0, jnp.logical_and(state.is_jumping == 0, state.is_falling == 0)))
+        is_laddering = jnp.logical_and(state.is_climbing == 1, state.last_rope == -1)
+        is_roping = jnp.logical_and(state.is_climbing == 1, state.last_rope != -1)
+        is_in_air = jnp.logical_or(state.is_jumping == 1, state.is_falling == 1)
+
+        walk_anim = jnp.mod(jnp.floor_divide(state.frame_count, 4), 2)
+        ladder_anim = jnp.mod(jnp.floor_divide(state.player_y, 4), 2)
+        rope_anim = jnp.mod(jnp.floor_divide(state.player_y, 4), 2)
+
+        player_sprite_idx = jnp.array(0)
+        player_sprite_idx = jnp.where(is_walking, 1 + walk_anim, player_sprite_idx)
+        player_sprite_idx = jnp.where(is_laddering, 3 + ladder_anim, player_sprite_idx)
+        player_sprite_idx = jnp.where(is_roping, 5 + rope_anim, player_sprite_idx)
+        player_sprite_idx = jnp.where(is_in_air, 7, player_sprite_idx)
+        
+        # Standing sprite (0) faces right, flip if facing left.
+        # Walking (1, 2) and jumping (7) sprites face left natively, flip if facing right.
+        flip_player = jax.lax.select(
+            jnp.logical_or(jnp.logical_or(player_sprite_idx == 1, player_sprite_idx == 2), player_sprite_idx == 7),
+            state.player_dir == 1,
+            jax.lax.select(
+                player_sprite_idx == 0,
+                state.player_dir == -1,
+                False
+            )
+        )
+        
+        player_mask = self.SHAPE_MASKS["player"][player_sprite_idx]
+        raster = self.jr.render_at(raster, state.player_x, state.player_y + 47, player_mask, flip_horizontal=flip_player)
 
         # Render Score
         score = state.score
@@ -456,6 +497,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             player_y=jnp.array(self.consts.INITIAL_PLAYER_Y, dtype=jnp.int32),
             player_vx=jnp.array(0, dtype=jnp.int32),
             player_vy=jnp.array(0, dtype=jnp.int32),
+            player_dir=jnp.array(1, dtype=jnp.int32),
             is_jumping=jnp.array(0, dtype=jnp.int32),
             is_falling=jnp.array(0, dtype=jnp.int32),
             fall_start_y=jnp.array(self.consts.INITIAL_PLAYER_Y, dtype=jnp.int32),
@@ -509,7 +551,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         new_vx = jax.lax.select(is_right, self.consts.PLAYER_SPEED, 0)
         new_vx = jax.lax.select(is_left, -self.consts.PLAYER_SPEED, new_vx)
         dx = jnp.where(is_in_air, state.player_vx, new_vx)
-        
+        new_player_dir = jnp.where(is_right, 1, jnp.where(is_left, -1, state.player_dir))
+
         player_mid_x = state.player_x + self.consts.PLAYER_WIDTH // 2
         player_feet_y = state.player_y + self.consts.PLAYER_HEIGHT - 1
         
@@ -876,6 +919,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         final_y = jnp.where(player_died, self.consts.INITIAL_PLAYER_Y, new_y)
         final_vx = jnp.where(player_died, 0, current_vx)
         final_vy = jnp.where(player_died, 0, dy)
+        final_player_dir = jnp.where(player_died, 1, new_player_dir)
         final_is_jumping = jnp.where(player_died, 0, new_is_jumping)
         final_is_falling = jnp.where(player_died, 0, new_is_falling)
         final_is_climbing = jnp.where(player_died, 0, is_climbing)
@@ -888,6 +932,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             player_y=final_y,
             player_vx=final_vx,
             player_vy=final_vy,
+            player_dir=final_player_dir,
             is_jumping=final_is_jumping,
             jump_counter=final_jump_counter,
             is_climbing=final_is_climbing,
