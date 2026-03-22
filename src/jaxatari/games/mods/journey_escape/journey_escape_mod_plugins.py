@@ -6,9 +6,17 @@ from jaxatari.modification import JaxAtariPostStepModPlugin, JaxAtariInternalMod
 from jaxatari.games.jax_journey_escape import JourneyEscapeState
 
 
-class BackgroundStaticMod(JaxAtariInternalModPlugin):
+class BackgroundStaticMod(JaxAtariPostStepModPlugin):
     """Makes the background static (disables background animation)"""
-    # TODO: implement
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: JourneyEscapeState, new_state: JourneyEscapeState) -> JourneyEscapeState:
+        """
+        This function is called by the wrapper *after*
+        the main step is complete.
+        Access the environment via self._env (set by JaxAtariModWrapper).
+        """
+        return new_state.replace(bg_frames=prev_state.bg_frames)
 
 
 class SpeedUpPlayerMod(JaxAtariInternalModPlugin):
@@ -29,12 +37,42 @@ class SpeedUpObstaclesMod(JaxAtariInternalModPlugin):
 
 class ReducePlayerSizeMod(JaxAtariInternalModPlugin):
     """Reduced the size of the player sprite."""
-    # TODO: implement
+    
+    # Player size reduced by 40%. New size: (5x15)
+    asset_overrides = {
+        "player": {
+            'name': 'player',
+            'type': 'group',
+            'files': ['smaller_player_walk_front_1.npy', 'smaller_player_walk_front_0.npy',
+                      'smaller_player_run_right_0.npy', 'smaller_player_run_right_1.npy',
+                      'smaller_player_run_left_0.npy', 'smaller_player_run_left_1.npy']
+        }
+    }
+
+    constants_overrides = {
+        "player_width": 5,
+        "player_height": 15
+    }
 
 
 class RestrictPlayerMovementMod(JaxAtariPostStepModPlugin):
     """Restricts players movement to four directions (up, down, left or right), disabling diagonal movement"""
-   # TODO: implement
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: JourneyEscapeState, new_state: JourneyEscapeState) -> JourneyEscapeState:
+        """
+        This function is called by the wrapper *after*
+        the main step is complete.
+        Access the environment via self._env (set by JaxAtariModWrapper).
+        """
+        diagonal_movement = (prev_state.player_y != new_state.player_y) & (prev_state.player_x != new_state.player_x)
+
+        new_player_y = jnp.where(
+            diagonal_movement,
+            prev_state.player_y,    # if user tries to move diagonal, then only update movement in x-direction
+            new_state.player_y
+        ).astype(jnp.int32)
+        return new_state.replace(player_y=new_player_y)
 
 
 class ObstacleDiagonalMovementMod(JaxAtariInternalModPlugin):
