@@ -47,6 +47,7 @@ def _get_default_asset_config() -> tuple:
             'pellet_power/pellet_power_frightened_on.npy',
             'pellet_power/pellet_power_frightened_off.npy'
         ]},
+        {'name': 'vitamin', 'type': 'single', 'file': 'vitamin.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'digits/digit_{}.npy'},
     )
 
@@ -98,7 +99,7 @@ class PacmanConstants(NamedTuple):
     GHOST_SIZE: Tuple[int, int] = (8, 8)
     GHOST_SPEED_NORMAL: int = 1
     GHOST_SPEED_FRIGHTENED: int = 1
-    GHOST_SPEED_EATEN: int = 2
+    GHOST_SPEED_EATEN: int = 1
     
     # Ghost starting positions (Ghost House Center)
     GHOST_START_X: int = 80   # Col 10 * 8 (Center of 'HHHH')
@@ -120,14 +121,19 @@ class PacmanConstants(NamedTuple):
     SCATTER_DURATION: int = 7000
     CHASE_DURATION: int = 20000
     LEVEL_TRANSITION_DURATION: int = 60
+    
+    # Vitamin constants
+    VITAMIN_SCORE: int = 100
+    VITAMIN_TRIGGER_PELLETS: int = 10  # Appears after this many pellets eaten
+    VITAMIN_DURATION: int = 600  # ~10 seconds at 60fps
     FREEZE_DURATION: int = 15
     DEATH_DURATION: int = 60
     
     # Colors (User Update: Wall Yellow, BG Blue for Atari Look)
     # Using Atari Palette approximations
     BACKGROUND_COLOR: Tuple[int, int, int] = (50, 50, 176) # Blue
-    WALL_COLOR: Tuple[int, int, int] = (252, 224, 144)   # Yellow/Orange/Gold
-    PELLET_COLOR: Tuple[int, int, int] = (252, 224, 144)
+    WALL_COLOR: Tuple[int, int, int] = (223, 192, 111)   # Yellow/Orange/Gold
+    PELLET_COLOR: Tuple[int, int, int] = (223, 192, 111)
     SCORE_COLOR: Tuple[int, int, int] = (255, 255, 0)
     
     # Maze layout grid where each cell represents a tile type.
@@ -194,6 +200,14 @@ class PacmanState(NamedTuple):
     # Step counter and RNG
     step_counter: chex.Array
     key: chex.PRNGKey
+    
+    # Vitamin bonus item
+    vitamin_active: chex.Array  # 0=inactive, 1=active
+    vitamin_timer: chex.Array   # Countdown timer for vitamin visibility
+    vitamin_collected: chex.Array  # 1=already collected this level
+    vitamin_x: chex.Array  # Pixel x position
+    vitamin_y: chex.Array  # Pixel y position
+    total_pellets_eaten: chex.Array  # Tracks total pellets eaten for vitamin trigger
 
 
 class EntityPosition(NamedTuple):
@@ -385,8 +399,16 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
                         maze[row, col] = 4
                     elif char == 'D':
                         maze[row, col] = 5
+                    elif char == '*':
+                        maze[row, col] = 2  # Treat as regular pellet
+                        self.vitamin_tile_row = row
+                        self.vitamin_tile_col = col
                     else:
                         maze[row, col] = 0
+        # Default vitamin position if not found in map
+        if not hasattr(self, 'vitamin_tile_row'):
+            self.vitamin_tile_row = 9
+            self.vitamin_tile_col = 10
         return jnp.array(maze, dtype=jnp.int32)
 
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[PacmanObservation, PacmanState]:
@@ -428,7 +450,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         level = jnp.array(1, dtype=jnp.int32)
         pellets_collected = jnp.zeros((self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=jnp.int32)
         
-        dots_remaining = jnp.array(240, dtype=jnp.int32)  # Approximate
+        dots_remaining = jnp.array(195, dtype=jnp.int32)  # 191 regular + 4 power pellets
         frightened_timer = jnp.array(0, dtype=jnp.int32)
         scatter_chase_timer = jnp.array(0, dtype=jnp.int32)
         is_scatter_mode = jnp.array(True)  # Start in scatter mode
@@ -464,6 +486,12 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             player_state=player_state,
             step_counter=jnp.array(0, dtype=jnp.int32),
             key=state_key,
+            vitamin_active=jnp.array(0, dtype=jnp.int32),
+            vitamin_timer=jnp.array(0, dtype=jnp.int32),
+            vitamin_collected=jnp.array(0, dtype=jnp.int32),
+            vitamin_x=jnp.array(self.vitamin_tile_col * self.consts.TILE_SIZE - 4, dtype=jnp.int32),
+            vitamin_y=jnp.array(self.vitamin_tile_row * self.consts.TILE_SIZE + 32, dtype=jnp.int32),
+            total_pellets_eaten=jnp.array(0, dtype=jnp.int32),
         )
         
         initial_obs = self._get_observation(state)
@@ -653,10 +681,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
 
         # Reset pellets
         pellets_collected = jnp.zeros((self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=jnp.int32)
-        dots_remaining = jnp.array(240, dtype=jnp.int32) # Reset count
+        dots_remaining = jnp.array(195, dtype=jnp.int32) # 191 regular + 4 power pellets
 
         return state._replace(
             level=new_level,
+            lives=jnp.array(3, dtype=jnp.int32),
             player_x=player_x,
             player_y=player_y,
             player_direction=jnp.array(0, dtype=jnp.int32),
@@ -673,7 +702,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             is_scatter_mode=jnp.array(True),
             freeze_timer=jnp.array(0, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
-            player_state=jnp.array(0, dtype=jnp.int32)
+            player_state=jnp.array(0, dtype=jnp.int32),
+            vitamin_active=jnp.array(0, dtype=jnp.int32),
+            vitamin_timer=jnp.array(0, dtype=jnp.int32),
+            vitamin_collected=jnp.array(0, dtype=jnp.int32),
+            total_pellets_eaten=jnp.array(0, dtype=jnp.int32),
         )
 
     def _player_step(self, state: PacmanState, action: chex.Array) -> PacmanState:
@@ -1205,11 +1238,14 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         pellet_score = jnp.where(power_pellet_collected, self.consts.PELLET_POWER_SCORE, pellet_score)
         new_score = new_score + pellet_score
         
-        # Update dots remaining
-        new_dots_remaining = jnp.where(dot_collected, state.dots_remaining - 1, state.dots_remaining)
-        
         # Mark pellet as collected
         pellet_collected = jnp.logical_or(dot_collected, power_pellet_collected)
+        
+        # Update dots remaining (both regular and power pellets count)
+        new_dots_remaining = jnp.where(
+            pellet_collected, state.dots_remaining - 1, state.dots_remaining
+        )
+        
         new_pellets_collected = jnp.where(
             pellet_collected,
             state.pellets_collected.at[player_tile_y, player_tile_x].set(1),
@@ -1248,10 +1284,35 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             state.level_transition_timer
         )
 
+        # Track total pellets eaten for vitamin trigger
+        new_total_pellets_eaten = jnp.where(
+            pellet_collected,
+            state.total_pellets_eaten + 1,
+            state.total_pellets_eaten
+        )
+        
+        # Vitamin spawn logic: triggers after eating VITAMIN_TRIGGER_PELLETS pellets
+        should_spawn_vitamin = jnp.logical_and(
+            new_total_pellets_eaten >= self.consts.VITAMIN_TRIGGER_PELLETS,
+            jnp.logical_and(state.vitamin_collected == 0, state.vitamin_active == 0)
+        )
+        new_vitamin_active = jnp.where(should_spawn_vitamin, 1, state.vitamin_active)
+        new_vitamin_timer = jnp.where(should_spawn_vitamin, self.consts.VITAMIN_DURATION, state.vitamin_timer)
+        
+        # Vitamin collection: check if player overlaps vitamin position
+        vitamin_dx = jnp.abs(state.player_x - state.vitamin_x)
+        vitamin_dy = jnp.abs(state.player_y - state.vitamin_y)
+        touching_vitamin = jnp.logical_and(vitamin_dx < 6, vitamin_dy < 6)
+        vitamin_eaten = jnp.logical_and(new_vitamin_active == 1, touching_vitamin)
+        
+        new_score = jnp.where(vitamin_eaten, new_score + self.consts.VITAMIN_SCORE, new_score)
+        new_vitamin_active = jnp.where(vitamin_eaten, 0, new_vitamin_active)
+        new_vitamin_collected = jnp.where(vitamin_eaten, 1, state.vitamin_collected)
+
         return state._replace(
             ghosts=new_ghosts_final,
             score=new_score,
-            lives=state.lives, # Lives updated after death animation
+            lives=state.lives,
             frightened_timer=new_frightened_timer,
             ghosts_eaten_count=final_ghosts_eaten_count,
             dots_remaining=new_dots_remaining,
@@ -1259,7 +1320,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             level_transition_timer=new_transition_timer,
             player_state=new_player_state,
             death_timer=new_death_timer,
-            freeze_timer=new_freeze_timer
+            freeze_timer=new_freeze_timer,
+            total_pellets_eaten=new_total_pellets_eaten,
+            vitamin_active=new_vitamin_active,
+            vitamin_timer=new_vitamin_timer,
+            vitamin_collected=new_vitamin_collected,
         )
 
     def _update_timers(self, state: PacmanState) -> PacmanState:
@@ -1300,6 +1365,15 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         
         # Update level transition timer
         new_transition = jnp.maximum(state.level_transition_timer - 1, 0)
+        
+        # Update vitamin timer
+        new_vitamin_timer = jnp.maximum(state.vitamin_timer - 1, 0)
+        # Deactivate vitamin when timer expires
+        new_vitamin_active = jnp.where(
+            jnp.logical_and(state.vitamin_active == 1, new_vitamin_timer == 0),
+            0,
+            state.vitamin_active
+        )
 
         return state._replace(
             ghosts=new_ghosts,
@@ -1307,7 +1381,9 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             ghosts_eaten_count=final_ghosts_eaten_count,
             scatter_chase_timer=new_scatter_chase,
             is_scatter_mode=new_is_scatter,
-            level_transition_timer=new_transition
+            level_transition_timer=new_transition,
+            vitamin_timer=new_vitamin_timer,
+            vitamin_active=new_vitamin_active,
         )
 
     def _get_observation(self, state: PacmanState) -> PacmanObservation:
@@ -1495,7 +1571,6 @@ class PacmanRenderer(JAXGameRenderer):
         # Colors
         bg_color = np.array(self.consts.BACKGROUND_COLOR, dtype=np.uint8)
         wall_color = np.array(self.consts.WALL_COLOR, dtype=np.uint8) # Atari Blue
-        door_color = np.array([252, 181, 255], dtype=np.uint8) # Pink
         hud_color = np.array([72, 176, 110], dtype=np.uint8) # Green
         
         # Initialize canvas with black background
@@ -1544,19 +1619,18 @@ class PacmanRenderer(JAXGameRenderer):
                 elif tile_val == 4 and x_start < x_end: # Ghost House Box
                     # Draw a perfectly symmetrical enclosing box framing the 8x8 cell
                     # Outer bounds: 10px width, 14px height. Inner housing: 8x8.
-                    house_color = np.array([252, 224, 144], dtype=np.uint8)
                     # Left Wall (1px outer)
                     if x_start - 1 >= 0:
-                         canvas[max(0, y-3):min(H, y+11), x_start-1:x_start] = house_color
+                         canvas[max(0, y-3):min(H, y+11), x_start-1:x_start] = wall_color
                     # Right Wall (1px outer)
                     if x_end + 1 <= W:
-                         canvas[max(0, y-3):min(H, y+11), x_end:x_end+1] = house_color
+                         canvas[max(0, y-3):min(H, y+11), x_end:x_end+1] = wall_color
                     # Top Wall (3px outer)
                     if y - 3 >= 0:
-                         canvas[max(0, y-3):y, max(0, x_start-1):min(W, x_end+1)] = house_color
+                         canvas[max(0, y-3):y, max(0, x_start-1):min(W, x_end+1)] = wall_color
                     # Bottom Wall (3px outer)
                     if y + 11 <= H:
-                         canvas[y+8:min(H, y+11), max(0, x_start-1):min(W, x_end+1)] = house_color
+                         canvas[y+8:min(H, y+11), max(0, x_start-1):min(W, x_end+1)] = wall_color
                     
         # Draw HUD (Green Bar)
         hud_start = 172
@@ -1647,6 +1721,10 @@ class PacmanRenderer(JAXGameRenderer):
                 g_state = state.ghosts[i, 3] # 0=Normal, 1=Frightened, 2=Eaten
                 anim_frame = (state.step_counter // 10) % 2
                 
+                # Desynchronized flashing: each ghost has a different phase offset
+                flash_phase = (state.step_counter + i) % 2
+                is_visible = flash_phase == 0  # Visible every other frame
+                
                 # Ghost Masks logic
                 mask_normal = self.SHAPE_MASKS["ghost_normal"][anim_frame]
                 mask_fright = self.SHAPE_MASKS["ghost_frightened"][anim_frame]
@@ -1663,10 +1741,17 @@ class PacmanRenderer(JAXGameRenderer):
                     g_state.astype(jnp.int32),
                      [lambda: mask_normal, lambda: mask_fright, lambda: mask_dead]
                 )
-                return self.jr.render_at(rr, g_x, g_y, final_mask)
+                # Apply flashing - only render if visible this frame
+                return jax.lax.cond(is_visible, lambda r: self.jr.render_at(r, g_x, g_y, final_mask), lambda r: r, rr)
             return jax.lax.fori_loop(0, 4, render_single_ghost, r)
             
         raster = render_ghosts(raster)
+        
+        # Render vitamin bonus item
+        def render_vitamin(r):
+            vitamin_mask = self.SHAPE_MASKS["vitamin"]
+            return self.jr.render_at(r, state.vitamin_x, state.vitamin_y, vitamin_mask)
+        raster = jax.lax.cond(state.vitamin_active == 1, render_vitamin, lambda r: r, raster)
         
         # Convert to RGB (Background with Walls/HUD is already baked in)
         output = self.jr.render_from_palette(object_raster=raster, base_palette=self.PALETTE)
