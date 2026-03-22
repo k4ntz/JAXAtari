@@ -584,7 +584,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         
         # Helper to scale palette-index masks to a target size (centered pad/crop)
         # Use transparent ID for padding so sprite bounding boxes never erase walls/background.
-        def _scale_mask(mask: jnp.ndarray, target_h: int, target_w: int) -> jnp.ndarray:
+        def _scale_mask(mask: jnp.ndarray, target_h: int, target_w: int, align: str = 'center') -> jnp.ndarray:
             if mask is None:
                 return None
             if mask.ndim == 2:
@@ -597,8 +597,13 @@ class DarkChambersRenderer(JAXGameRenderer):
                 pad_w = max(0, target_w - sw)
                 pad_top = pad_h // 2
                 pad_bottom = pad_h - pad_top
-                pad_left = pad_w // 2
-                pad_right = pad_w - pad_left
+                if align == 'right':
+                    pad_left, pad_right = pad_w, 0
+                elif align == 'left':
+                    pad_left, pad_right = 0, pad_w
+                else:  # 'center'
+                    pad_left = pad_w // 2
+                    pad_right = pad_w - pad_left
                 # Transparent padding prevents sprite rectangles from overwriting walls
                 pad_value = self.jr.TRANSPARENT_ID
                 scaled_padded = jnp.pad(scaled, ((pad_top, pad_bottom), (pad_left, pad_right)), mode="constant", constant_values=pad_value)
@@ -613,7 +618,7 @@ class DarkChambersRenderer(JAXGameRenderer):
                 # Assume (N, H, W) stack
                 N = int(mask.shape[0])
                 def _scale_one(m):
-                    return _scale_mask(m, target_h, target_w)
+                    return _scale_mask(m, target_h, target_w, align)
                 return jax.vmap(_scale_one, in_axes=0, out_axes=0)(mask)
             else:
                 return mask
@@ -664,12 +669,13 @@ class DarkChambersRenderer(JAXGameRenderer):
             ["ghost_l0", "ghost_l1", "ghost_l1"],  # left:  2 frames, pad 3rd
             ["ghost_u0", "ghost_u1", "ghost_u2"],  # up:    3 frames
         ]
+        _DIR_ALIGN = ['right', 'center', 'left', 'center']
         ghost_dirs = []
-        for dir_names in ghost_dir_frame_names:
+        for d_idx, dir_names in enumerate(ghost_dir_frame_names):
             dir_frames = []
             for name in dir_names:
                 m = self.SHAPE_MASKS.get(name)
-                dir_frames.append(_scale_mask(m, target_enemy_h, target_enemy_w) if m is not None else _zero_frame)
+                dir_frames.append(_scale_mask(m, target_enemy_h, target_enemy_w, _DIR_ALIGN[d_idx]) if m is not None else _zero_frame)
             ghost_dirs.append(jnp.stack(dir_frames))  # (3, H, W)
         self.GHOST_ANIM_FRAMES = jnp.stack(ghost_dirs)  # (4, 3, H, W)
         print(f"Built ghost animation frames: {self.GHOST_ANIM_FRAMES.shape}")
@@ -687,11 +693,11 @@ class DarkChambersRenderer(JAXGameRenderer):
             ["wizard_u0", "wizard_u1", "wizard_u2", "wizard_u3", "wizard_u4"],  # up:    5 frames
         ]
         wizard_dirs = []
-        for dir_names in wizard_dir_frame_names:
+        for d_idx, dir_names in enumerate(wizard_dir_frame_names):
             dir_frames = []
             for name in dir_names:
                 m = self.SHAPE_MASKS.get(name)
-                dir_frames.append(_scale_mask(m, target_enemy_h, target_enemy_w) if m is not None else _zero_frame)
+                dir_frames.append(_scale_mask(m, target_enemy_h, target_enemy_w, _DIR_ALIGN[d_idx]) if m is not None else _zero_frame)
             wizard_dirs.append(jnp.stack(dir_frames))  # (5, H, W)
         self.WIZARD_ANIM_FRAMES = jnp.stack(wizard_dirs)  # (4, 5, H, W)
         print(f"Built wizard animation frames: {self.WIZARD_ANIM_FRAMES.shape}")
@@ -709,9 +715,9 @@ class DarkChambersRenderer(JAXGameRenderer):
             ["skel_u0", "skel_u1", "skel_u2"],  # up
         ]
         skel_dirs = []
-        for dir_names in skel_dir_frame_names:
+        for d_idx, dir_names in enumerate(skel_dir_frame_names):
             dir_frames = [
-                _scale_mask(self.SHAPE_MASKS[n], target_enemy_h, target_enemy_w)
+                _scale_mask(self.SHAPE_MASKS[n], target_enemy_h, target_enemy_w, _DIR_ALIGN[d_idx])
                 if self.SHAPE_MASKS.get(n) is not None else _zero_frame
                 for n in dir_names
             ]
@@ -732,9 +738,9 @@ class DarkChambersRenderer(JAXGameRenderer):
             ["green_u0", "green_u1", "green_u2", "green_u2", "green_u2"],  # up:    3 frames, pad to 5
         ]
         zombie_dirs = []
-        for dir_names in zombie_dir_frame_names:
+        for d_idx, dir_names in enumerate(zombie_dir_frame_names):
             dir_frames = [
-                _scale_mask(self.SHAPE_MASKS[n], target_enemy_h, target_enemy_w)
+                _scale_mask(self.SHAPE_MASKS[n], target_enemy_h, target_enemy_w, _DIR_ALIGN[d_idx])
                 if self.SHAPE_MASKS.get(n) is not None else _zero_frame
                 for n in dir_names
             ]
