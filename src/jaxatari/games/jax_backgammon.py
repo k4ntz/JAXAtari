@@ -1,13 +1,11 @@
+import os
 import chex
 import jax
 import jax.numpy as jnp
 from functools import partial
 from typing import Tuple, List, Optional, Any
-import os
 from flax import struct
-
-# Project imports
-from jaxatari.environment import JaxEnvironment, JAXAtariAction, ObjectObservation
+from jaxatari.environment import JaxEnvironment, JAXAtariAction
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.modification import AutoDerivedConstants
@@ -21,7 +19,6 @@ Game: JAX Backgammon
 This module defines a JAX-accelerated backgammon environment for reinforcement learning and simulation.
 It includes the environment class, state structures, move validation and execution logic, rendering, and user interaction.
 """
-
 
 def _get_asset_config() -> tuple:
     """Returns the declarative manifest of all assets for backgammon."""
@@ -47,7 +44,6 @@ def _get_asset_config() -> tuple:
         {'name': 'pip_black', 'type': 'single', 'file': 'pip_black.npy'},
         {'name': 'pip_white', 'type': 'single', 'file': 'pip_white.npy'},
     )
-
 
 _RIGHT_BAR_INDEX = 26
 
@@ -810,56 +806,6 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
         done = self._get_done(new_state)
         info = self._get_info(new_state, all_rewards)
         return obs, new_state, reward, done, info, new_key
-
-    # ============================================================================
-    # DIRECT MOVE API (For RL Training - bypasses cursor-based interaction)
-    # ============================================================================
-
-    @partial(jax.jit, static_argnums=(0,))
-    def step_move(self, state: BackgammonState, move_idx: int) -> Tuple[BackgammonObservation, BackgammonState, float, bool, BackgammonInfo, jax.Array]:
-        """
-        Direct move API for RL agents - bypasses cursor-based interaction.
-        
-        Args:
-            state: Current game state
-            move_idx: Index into _action_pairs (0-675) for moves, or 676 for roll/pass
-        
-        Returns:
-            Tuple of (observation, new_state, reward, done, info, new_key)
-        
-        Usage for RL:
-            valid_mask = env.get_valid_action_mask(state)  # shape (677,)
-            action = agent.select_action(obs, valid_mask)   # masked policy
-            obs, state, reward, done, info, key = env.step_move(state, action)
-        
-        Move indexing:
-            - move_idx 0-675: (from_point, to_point) pairs where from/to ∈ [0, 25]
-            - move_idx 676: Roll dice (if in phase 0) or pass/confirm
-        """
-        is_roll_action = (move_idx == self._roll_action_index)
-        
-        def do_roll(_):
-            # Roll dice and switch to selecting phase
-            new_dice, new_key = self.roll_dice(state.key)
-            new_state = state.replace(
-                dice=new_dice,
-                key=new_key,
-                game_phase=jnp.int32(1),  # SELECTING_CHECKER
-            )
-            new_state = self._auto_pass_if_stuck(new_state)
-            obs = self._get_observation(new_state)
-            reward = self._get_reward(state, new_state)
-            all_rewards = self._get_all_reward(state, new_state)
-            done = self._get_done(new_state)
-            info = self._get_info(new_state, all_rewards)
-            return obs, new_state, reward, done, info, new_key
-        
-        def do_move(_):
-            # Execute the move directly via step_impl
-            move = self._action_pairs[move_idx]
-            return self.step_impl(state, (move[0], move[1]), state.key)
-        
-        return jax.lax.cond(is_roll_action, do_roll, do_move, operand=None)
 
     @partial(jax.jit, static_argnums=(0,))
     def get_valid_action_mask(self, state: BackgammonState) -> jnp.ndarray:
@@ -2012,3 +1958,4 @@ class BackgammonRenderer(JAXGameRenderer):
             return jnp.where(val > 0, r_with_pips, r)
         
         return jax.lax.fori_loop(0, 2, draw_single_die, raster)
+    
