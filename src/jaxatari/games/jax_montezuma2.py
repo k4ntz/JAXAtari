@@ -678,12 +678,10 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         is_jumping = jnp.where(start_jump, 1, state.is_jumping)
         is_jumping = jnp.where(is_climbing == 1, 0, is_jumping) # cancel jump
         jump_counter = jnp.where(start_jump, 0, state.jump_counter)
-        
-        # Lock in horizontal velocity at the start of jump or fall
-        current_vx = jnp.where(jnp.logical_or(start_jump, jnp.logical_and(jnp.logical_not(on_ground), state.is_falling == 0)), dx, state.player_vx)
-        # Update dx with the locked velocity
-        dx = jnp.where(jnp.logical_or(is_jumping == 1, jnp.logical_not(on_ground)), current_vx, dx)
-        
+
+        # Horizontal velocity to carry over (used for momentum and animation tracking)
+        current_vx = dx
+
         # 3. Calculate DY
         def get_jump_dy():
             dy_jump = -self.consts.JUMP_Y_OFFSETS[jump_counter]
