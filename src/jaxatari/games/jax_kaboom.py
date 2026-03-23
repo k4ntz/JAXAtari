@@ -262,7 +262,8 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
             x=jnp.clip(state.buckets_pos[:, 0].astype(jnp.int32), self.consts.BUCKET_MIN_ALLOWED_POS_X, self.consts.BUCKET_MAX_ALLOWED_POS_X),
             y=jnp.clip(state.buckets_pos[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
             width=jnp.full((3,), self.consts.BUCKET_SIZE[0], dtype=jnp.int32),
-            height=jnp.full((3,), self.consts.BUCKET_SIZE[1], dtype=jnp.int32)
+            height=jnp.full((3,), self.consts.BUCKET_SIZE[1], dtype=jnp.int32),
+            active=state.buckets_pos[:, 2]
         )
 
         num_bombs = state.bombs_states.shape[0]
@@ -270,7 +271,8 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
             x=jnp.clip(state.bombs_states[:, 0].astype(jnp.int32), 0, self.consts.SCREEN_WIDTH),
             y=jnp.clip(state.bombs_states[:, 1].astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT),
             width=jnp.full((num_bombs,), self.consts.BOMB_SIZE[0], dtype=jnp.int32),
-            height=jnp.full((num_bombs,), self.consts.BOMB_SIZE[1], dtype=jnp.int32)
+            height=jnp.full((num_bombs,), self.consts.BOMB_SIZE[1], dtype=jnp.int32),
+            active=state.bombs_states[:, 7]
         )
 
         obs = KaboomObservation(
@@ -998,33 +1000,31 @@ class KaboomRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: KaboomState) -> chex.Array:
-        # Background_border
+        int32 = jnp.int32
+        default_state = self.consts.DEFAULT_STATE
+
+        # Background
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
-        top_flicker_idx = jnp.mod(state.background_state, self.consts.BACKGROUND_STATES)
-        bottom_flicker_idx = jnp.mod(state.background_state, self.consts.BACKGROUND_STATES)
-        background_top = jax.lax.cond(
+        bg_idx = jnp.mod(state.background_state, self.consts.BACKGROUND_STATES)
+
+        background_top = jax.lax.select(
             state.background_flickering,
-            lambda _: self.BACKGROUND_TOP_VARIANTS[top_flicker_idx],
-            lambda _: self.BACKGROUNDS[0],
-            operand=None,
+            self.BACKGROUND_TOP_VARIANTS[bg_idx],
+            self.BACKGROUNDS[0],
         )
-        background_bottom = jax.lax.cond(
+        background_bottom = jax.lax.select(
             state.background_flickering,
-            lambda _: self.BACKGROUND_BOTTOM_VARIANTS[bottom_flicker_idx],
-            lambda _: self.BACKGROUNDS[1],
-            operand=None,
+            self.BACKGROUND_BOTTOM_VARIANTS[bg_idx],
+            self.BACKGROUNDS[1],
         )
 
-        # Background_top
         raster = self.jr.render_at(
             raster,
             x=self.consts.BACKGROUND_TOP_POS[0],
             y=self.consts.BACKGROUND_TOP_POS[1],
             sprite_mask=background_top,
         )
-
-        # Background_bottom
         raster = self.jr.render_at(
             raster,
             x=self.consts.BACKGROUND_BOTTOM_POS[0],
@@ -1033,28 +1033,33 @@ class KaboomRenderer(JAXGameRenderer):
         )
 
         # Score
-        score = state.score.astype(jnp.int32)
+        score = state.score.astype(int32)
+        score_y = self.consts.SCORE_POS[1]
+        score_x0 = self.consts.SCORE_POS[0]
 
-        def draw_score_digit(i, raster_):
-            pow10 = jnp.asarray(10, dtype=jnp.int32) ** i
+        # static-size constants are nice to precompute once in __init__,
+        # but keeping them here is also fine
+        score_pow10 = jnp.array([1, 10, 100, 1000, 10000, 100000, 1000000], dtype=int32)
+        score_xpos = score_x0 - 7 * jnp.arange(7, dtype=int32)
+
+        def draw_score_digit(i, r):
+            pow10 = score_pow10[i]
             digit_value = (score // pow10) % 10
-            x_pos = self.consts.SCORE_POS[0] - 7 * i
             should_render = (i == 0) | (score >= pow10)
-            digit = self.jr.int_to_digits(digit_value, max_digits=1)
 
             return jax.lax.cond(
                 should_render,
-                lambda r: self.jr.render_label(
-                    r,
-                    x_pos,
-                    self.consts.SCORE_POS[1],
-                    digit,
+                lambda rr: self.jr.render_label(
+                    rr,
+                    score_xpos[i],
+                    score_y,
+                    self.jr.int_to_digits(digit_value, max_digits=1),
                     self.SCORES,
                     spacing=-7,
                     max_digits=1,
                 ),
-                lambda r: r,
-                raster_,
+                lambda rr: rr,
+                r,
             )
 
         raster = jax.lax.fori_loop(0, 7, draw_score_digit, raster)
@@ -1062,75 +1067,79 @@ class KaboomRenderer(JAXGameRenderer):
         # Mad bomber
         raster = self.jr.render_at(
             raster,
-            state.mad_bomber_pos_x.astype(int),
-            state.mad_bomber_pos_y.astype(int),
+            state.mad_bomber_pos_x.astype(int32),
+            state.mad_bomber_pos_y.astype(int32),
             self.SHAPE_MASKS["mad_bomber"],
         )
-
 
         # Bombs
         def draw_bomb(i, r):
             bomb = state.bombs_states[i]
+
+            x = bomb[0].astype(int32)
+            y = bomb[1].astype(int32)
+            fuse_state = bomb[2].astype(int32)
+            bomb_sprite = bomb[3].astype(int32)
+            air_explode = bomb[4]
+            bucket_explode = bomb[5]
+            bucket_idx = bomb[6].astype(int32)
             is_active = bomb[7] != 0
 
             def draw_active(r2):
-                x = bomb[0].astype(int)
-                y = bomb[1].astype(int)
-
                 def draw_air_explosion(r3):
-                    idx = (bomb[4] > 3).astype(jnp.int32) + (bomb[4] > 7).astype(jnp.int32)
+                    idx = ((air_explode > 3).astype(int32) +
+                           (air_explode > 7).astype(int32))
                     return self.jr.render_at(r3, x, y, self.BOMB_EXPLODE_STATES[idx])
 
                 def draw_bucket_explosion(r3):
-                    idx = (bomb[5] > 3).astype(jnp.int32) + (bomb[5] > 7).astype(jnp.int32)
-                    bucket = state.buckets_pos[bomb[6]]
-                    by = bucket[1] - self.BOMB_BUCKET_EXPLODE_STATES[idx].shape[0]
-                    return self.jr.render_at(r3, bucket[0], by, self.BOMB_BUCKET_EXPLODE_STATES[idx])
+                    idx = ((bucket_explode > 3).astype(int32) +
+                           (bucket_explode > 7).astype(int32))
+                    bucket = state.buckets_pos[bucket_idx]
+                    bx = bucket[0].astype(int32)
+                    by = bucket[1].astype(int32) - self.BOMB_BUCKET_EXPLODE_STATES[idx].shape[0]
+                    return self.jr.render_at(r3, bx, by, self.BOMB_BUCKET_EXPLODE_STATES[idx])
 
                 def draw_normal(r3):
-                    r3 = self.jr.render_at(r3, x, y, self.BOMBS[bomb[3]])
-                    fuse_x = x + 2 * ((bomb[3] + 1) % 2)
-                    fuse_y = y - self.BOMB_FUSE_STATES[bomb[3]].shape[0]
-                    fuse_x = jnp.where(bomb[2] == 1, fuse_x + 1, fuse_x)
-                    fuse_y = jnp.where(bomb[2] == 1, fuse_y + 2, fuse_y)
-                    return self.jr.render_at(r3, fuse_x, fuse_y, self.BOMB_FUSE_STATES[bomb[2]])
+                    r3 = self.jr.render_at(r3, x, y, self.BOMBS[bomb_sprite])
+
+                    fuse_sprite = self.BOMB_FUSE_STATES[fuse_state]
+                    fuse_x = x + 2 * ((bomb_sprite + 1) % 2) + (fuse_state == 1).astype(int32)
+                    fuse_y = y - fuse_sprite.shape[0] + 2 * (fuse_state == 1).astype(int32)
+
+                    return self.jr.render_at(r3, fuse_x, fuse_y, fuse_sprite)
 
                 return jax.lax.cond(
-                    bomb[4] != self.consts.DEFAULT_STATE,
+                    air_explode != default_state,
                     draw_air_explosion,
-                    lambda r4: jax.lax.cond(
-                        bomb[5] != self.consts.DEFAULT_STATE,
+                    lambda r3: jax.lax.cond(
+                        bucket_explode != default_state,
                         draw_bucket_explosion,
                         draw_normal,
-                        r4,
+                        r3,
                     ),
                     r2,
                 )
 
             return jax.lax.cond(is_active, draw_active, lambda r2: r2, r)
 
-        raster = jax.lax.fori_loop(
-            0,
-            state.bombs_states.shape[0],
-            draw_bomb,
-            raster,
-        )
+        raster = jax.lax.fori_loop(0, state.bombs_states.shape[0], draw_bomb, raster)
 
         # Buckets
+        bucket_sprite = self.SHAPE_MASKS["bucket"]
+
         def draw_bucket(i, r):
             bucket = state.buckets_pos[i]
+            x = bucket[0].astype(int32)
+            y = bucket[1].astype(int32)
+            is_active = bucket[2] != 0
+
             return jax.lax.cond(
-                bucket[2] != 0,
-                lambda r2: self.jr.render_at(r2, bucket[0], bucket[1], self.SHAPE_MASKS["bucket"]),
-                lambda r2: r2,
+                is_active,
+                lambda rr: self.jr.render_at(rr, x, y, bucket_sprite),
+                lambda rr: rr,
                 r,
             )
 
-        raster = jax.lax.fori_loop(
-            0,
-            state.buckets_pos.shape[0],
-            draw_bucket,
-            raster,
-        )
+        raster = jax.lax.fori_loop(0, state.buckets_pos.shape[0], draw_bucket, raster)
 
         return self.jr.render_from_palette(raster, self.PALETTE)

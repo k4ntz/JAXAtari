@@ -23,7 +23,6 @@ def _warn_deprecated_obs_to_flat_array(env: JaxEnvironment) -> None:
         )
 
 
-
 # Map of game names to their module paths
 GAME_MODULES = {
     "amidar": "jaxatari.games.jax_amidar",
@@ -48,7 +47,6 @@ GAME_MODULES = {
     "hauntedhouse": "jaxatari.games.jax_hauntedhouse",
     "humancannonball": "jaxatari.games.jax_humancannonball",
     "kangaroo": "jaxatari.games.jax_kangaroo",
-    "kaboom": "jaxatari.games.jax_kaboom",
     "kingkong": "jaxatari.games.jax_kingkong",
     "klax": "jaxatari.games.jax_klax",
     "lasergates": "jaxatari.games.jax_lasergates",
@@ -80,14 +78,16 @@ GAME_MODULES = {
 MOD_MODULES = {
     "pong": "jaxatari.games.mods.pong_mods.PongEnvMod",
     "kangaroo": "jaxatari.games.mods.kangaroo_mods.KangarooEnvMod",
-    "kaboom": "jaxatari.games.mods.kaboom_mods.KaboomEnvMod",
     "freeway": "jaxatari.games.mods.freeway_mods.FreewayEnvMod",
     "breakout": "jaxatari.games.mods.breakout_mods.BreakoutEnvMod",
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
+    "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod",
     "videopinball": "jaxatari.games.mods.videopinball_mods.VideoPinballEnvMod",
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
     "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
     "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
+    "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
+    "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
 }
 
 
@@ -96,10 +96,10 @@ def list_available_games() -> list[str]:
     return list(GAME_MODULES.keys())
 
 
-def make(game_name: str, 
-         mode: int = 0, 
+def make(game_name: str,
+         mode: int = 0,
          difficulty: int = 0,
-         mods_config: list = None, # deprecated, output warning if its used
+         mods_config: list = None,  # deprecated, output warning if its used
          mods: list = None,
          allow_conflicts: bool = False
          ) -> JaxEnvironment:
@@ -141,7 +141,7 @@ def make(game_name: str,
         raise NotImplementedError(
             f"The game '{game_name}' does not exist. Available games: {list_available_games()}"
         )
-    
+
     try:
         # 1. Load the base environment class
         module = importlib.import_module(GAME_MODULES[game_name])
