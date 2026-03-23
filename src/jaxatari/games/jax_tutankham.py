@@ -598,8 +598,8 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         seed = int(time.time())
         key = jax.random.PRNGKey(seed)
         level = 0
-        start_x = 134
-        start_y = 61
+        start_x = self.consts.MAP_CHECKPOINTS[level%4, 0, 2]
+        start_y = self.consts.MAP_CHECKPOINTS[level%4, 0, 3]
         tutankham_score = 0
         goal_reached = False
         player_lives = self.consts.PLAYER_LIVES
