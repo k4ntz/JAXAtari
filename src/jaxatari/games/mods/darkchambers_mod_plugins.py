@@ -81,7 +81,7 @@ class SpeedPotionMod(JaxAtariPostStepModPlugin):
             # If collision and not already set, activate timer (item already removed by base game)
             new_state_after = jax.lax.cond(
                 collision & (~timer_set),
-                lambda s: s._replace(
+                lambda s: s.replace(
                     speed_boost_timer=jnp.array(self._env.consts.SPEED_POTION_DURATION, dtype=jnp.int32)
                 ),
                 lambda s: s,
@@ -104,13 +104,13 @@ class SpeedPotionMod(JaxAtariPostStepModPlugin):
             updated_state.speed_boost_timer - 1
         )
         
-        final_state = updated_state._replace(speed_boost_timer=new_timer)
+        final_state = updated_state.replace(speed_boost_timer=new_timer)
         return final_state
     
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         """Initialize effect timers to 0 on reset."""
-        return obs, state._replace(speed_boost_timer=jnp.array(0, dtype=jnp.int32))
+        return obs, state.replace(speed_boost_timer=jnp.array(0, dtype=jnp.int32))
 
 
 # ============================================================================
@@ -178,7 +178,7 @@ class HealPotionMod(JaxAtariPostStepModPlugin):
             
             def apply_heal(s):
                 new_health = jnp.clip(s.health + health_gain, 0, self._env.consts.MAX_HEALTH)
-                return s._replace(health=new_health)
+                return s.replace(health=new_health)
             
             new_state_after = jax.lax.cond(
                 collision & (~healed),
@@ -269,7 +269,7 @@ class PoisonPotionMod(JaxAtariPostStepModPlugin):
             # Activate poison cloud at player position (item already removed by base game)
             new_state_after = jax.lax.cond(
                 collision & (~timer_set),
-                lambda s: s._replace(
+                lambda s: s.replace(
                     poison_cloud_x=s.player_x,
                     poison_cloud_y=s.player_y,
                     poison_cloud_timer=jnp.array(self._env.consts.POISON_DURATION, dtype=jnp.int32)
@@ -294,13 +294,13 @@ class PoisonPotionMod(JaxAtariPostStepModPlugin):
             state_after_pickup.poison_cloud_timer - 1
         )
         
-        final_state = state_after_pickup._replace(poison_cloud_timer=new_poison_timer)
+        final_state = state_after_pickup.replace(poison_cloud_timer=new_poison_timer)
         return final_state
     
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         """Initialize poison cloud state on reset."""
-        return obs, state._replace(
+        return obs, state.replace(
             poison_cloud_x=jnp.array(0, dtype=jnp.int32),
             poison_cloud_y=jnp.array(0, dtype=jnp.int32),
             poison_cloud_timer=jnp.array(0, dtype=jnp.int32)
@@ -403,7 +403,7 @@ class EasyModeMod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state: DarkChambersState, new_state: DarkChambersState) -> DarkChambersState:
         # Do not force item_active every step; base game must control pickup/removal.
-        return new_state._replace(
+        return new_state.replace(
             gun_active=jnp.array(1, dtype=jnp.int32),
             fire_was_pressed=jnp.array(0, dtype=jnp.int32),
             last_shot_step=new_state.step_counter - jnp.array(EASY_MODE_RAPID_FIRE_DELTA, dtype=jnp.int32),
@@ -422,7 +422,7 @@ class EasyModeMod(JaxAtariPostStepModPlugin):
             state.item_active,
         )
 
-        return obs, state._replace(
+        return obs, state.replace(
             gun_active=jnp.array(1, dtype=jnp.int32),
             fire_was_pressed=jnp.array(0, dtype=jnp.int32),
             last_shot_step=state.step_counter - jnp.array(EASY_MODE_RAPID_FIRE_DELTA, dtype=jnp.int32),
@@ -456,4 +456,4 @@ class CheckpointsMod(JaxAtariPostStepModPlugin):
 
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
-        return obs, state._replace(lives=jnp.array(5, dtype=jnp.int32))
+        return obs, state.replace(lives=jnp.array(5, dtype=jnp.int32))
