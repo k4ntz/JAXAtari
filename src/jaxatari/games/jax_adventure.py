@@ -1076,6 +1076,34 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
              lambda:state.chalice[2]
              ]
         )
+
+        #enter yellow castle
+        new_player_y, new_player_tile, new_item_tile, new_item_y = jax.lax.cond(
+            jnp.logical_and(new_player_tile == 0, jnp.logical_and(new_player_y <145,jnp.logical_and(new_player_x<110, new_player_x>50))),
+            lambda: (212, 1, 1,new_item_y+(212-new_player_y)),
+            lambda: (new_player_y, new_player_tile, new_item_tile, new_item_y)
+        )
+
+        #leave yellow castle
+        new_player_x, new_player_y, new_player_tile, new_item_tile, new_item_y, new_item_x = jax.lax.cond(
+            jnp.logical_and(new_player_tile == 1, new_player_y >212),
+            lambda: (77, 145, 0, 0, new_item_y-(new_player_y-145),new_item_x+(77-new_player_x)),
+            lambda: (new_player_x, new_player_y, new_player_tile, new_item_tile, new_item_y, new_item_x)
+        )
+
+        #enter black castle
+        new_player_y, new_player_tile, new_item_tile, new_item_y = jax.lax.cond(
+            jnp.logical_and(new_player_tile == 11, jnp.logical_and(new_player_y <145,jnp.logical_and(new_player_x<110, new_player_x>50))),
+            lambda: (212, 12, 12,new_item_y+(212-new_player_y)),
+            lambda: (new_player_y, new_player_tile, new_item_tile, new_item_y)
+        )
+
+        #leave black castle
+        new_player_x, new_player_y, new_player_tile, new_item_tile, new_item_y, new_item_x = jax.lax.cond(
+            jnp.logical_and(new_player_tile == 12, new_player_y >212),
+            lambda: (77, 145, 11, 11, new_item_y-(new_player_y-145),new_item_x+(77-new_player_x)),
+            lambda: (new_player_x, new_player_y, new_player_tile, new_item_tile, new_item_y, new_item_x)
+        )
         
         #change of rooms
         new_player_y, new_player_tile, new_item_tile, new_item_y = jax.lax.cond(
