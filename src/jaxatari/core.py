@@ -72,6 +72,7 @@ GAME_MODULES = {
     "videocube": "jaxatari.games.jax_videocube",
     "videopinball": "jaxatari.games.jax_videopinball",
     "wordzapper": "jaxatari.games.jax_wordzapper",
+    "tutankham": "jaxatari.games.jax_tutankham",
     # Add new games here
 }
 
@@ -86,6 +87,7 @@ MOD_MODULES = {
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
     "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
     "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
+    "tutankham": "jaxatari.games.mods.tutankham_mods.TutankhamEnvMod",
 }
 
 
