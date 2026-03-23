@@ -128,6 +128,51 @@ def get_human_action() -> jax.numpy.ndarray: # Or chex.Array if you use chex
     return jax.numpy.array(action_to_take, dtype=jax.numpy.int32)
 
 
+def _resolve_cardinal_action(up: bool, down: bool, left: bool, right: bool) -> int:
+    """Resolve a single cardinal/noop action from directional booleans."""
+    if up and not down:
+        return Action.UP
+    if down and not up:
+        return Action.DOWN
+    if left and not right:
+        return Action.LEFT
+    if right and not left:
+        return Action.RIGHT
+    return Action.NOOP
+
+
+def get_human_action_coop_pacman() -> jax.numpy.ndarray:
+    """
+    Cooperative Pacman controls:
+    - Player 1: W/A/S/D
+    - Player 2: Arrow keys
+
+    Returns a JAX int32 array [player1_action, player2_action].
+    """
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            pygame.quit()
+            raise SystemExit("Pygame window closed by user.")
+
+    keys = pygame.key.get_pressed()
+
+    p1_action = _resolve_cardinal_action(
+        up=bool(keys[pygame.K_w]),
+        down=bool(keys[pygame.K_s]),
+        left=bool(keys[pygame.K_a]),
+        right=bool(keys[pygame.K_d]),
+    )
+
+    p2_action = _resolve_cardinal_action(
+        up=bool(keys[pygame.K_UP]),
+        down=bool(keys[pygame.K_DOWN]),
+        left=bool(keys[pygame.K_LEFT]),
+        right=bool(keys[pygame.K_RIGHT]),
+    )
+
+    return jax.numpy.array([p1_action, p2_action], dtype=jax.numpy.int32)
+
+
 
 def load_game_environment(game: str) -> Tuple[JaxEnvironment, JAXGameRenderer]:
     """

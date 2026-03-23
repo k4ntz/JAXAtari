@@ -3,11 +3,18 @@ import sys
 import pygame
 
 import jax
+import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
 
 from jaxatari.environment import JAXAtariAction
-from utils import get_human_action, update_pygame, load_game_environment, load_game_mods
+from utils import (
+    get_human_action,
+    get_human_action_coop_pacman,
+    update_pygame,
+    load_game_environment,
+    load_game_mods,
+)
 from jaxatari.core import make as jaxatari_make
 
 UPSCALE_FACTOR = 4
@@ -134,6 +141,14 @@ def main():
         execute_without_rendering = True
         print("No renderer found, running without rendering.")
 
+    coop_pacman_controls = (
+        args.game.lower() == "pacman"
+        and args.mods is not None
+        and "coop_multiplayer" in args.mods
+    )
+    if coop_pacman_controls:
+        print("Coop controls active: Player1=WASD, Player2=Arrow keys")
+
     # Initialize the environment
     master_key = jrandom.PRNGKey(args.seed)
     reset_counter = 0
@@ -188,9 +203,13 @@ def main():
         # loop over all the actions and play the game
         for action in actions_array:
             # Convert numpy action to JAX array
-            action = jax.numpy.array(action, dtype=jax.numpy.int32)
+            action = jnp.array(action, dtype=jnp.int32)
             if args.verbose:
-                print(f"Action: {ACTION_NAMES[int(action)]} ({int(action)})")
+                if action.ndim == 0:
+                    action_int = int(action)
+                    print(f"Action: {ACTION_NAMES.get(action_int, str(action_int))} ({action_int})")
+                else:
+                    print(f"Action vector: {np.array(action).tolist()}")
 
             obs, state, reward, done, info = jitted_step(state, action)
             if not execute_without_rendering:
@@ -245,11 +264,20 @@ def main():
         
         if args.random:
             # sample an action from the action space array
-            action = action_space.sample(action_key)
-            action_key, _ = jax.random.split(action_key)
+            if coop_pacman_controls:
+                action_key, key1, key2 = jax.random.split(action_key, 3)
+                action1 = action_space.sample(key1)
+                action2 = action_space.sample(key2)
+                action = jnp.array([action1, action2], dtype=jnp.int32)
+            else:
+                action = action_space.sample(action_key)
+                action_key, _ = jax.random.split(action_key)
         else:
             # get the pressed keys
-            action = get_human_action()
+            if coop_pacman_controls:
+                action = get_human_action_coop_pacman()
+            else:
+                action = get_human_action()
             # Save the action to the save_keys dictionary
             if args.record:
                 # Save the action to the save_keys dictionary
@@ -262,7 +290,10 @@ def main():
                 next_frame_asked = False
         else:
             # Need to get action to update event queue even if paused
-            action = get_human_action()
+            if coop_pacman_controls:
+                action = get_human_action_coop_pacman()
+            else:
+                action = get_human_action()
 
         if done:
             print(f"Done. Total return {total_return}")

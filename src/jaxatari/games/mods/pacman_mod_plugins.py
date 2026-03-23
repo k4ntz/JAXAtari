@@ -164,11 +164,20 @@ class LimitedVisionMod(JaxAtariInternalModPlugin):
 
                 center_x = state.player_x - 4
                 center_y = state.player_y
+                center2_x = state.player2_x - 4
+                center2_y = state.player2_y
 
                 dx = xx - center_x
                 dy = yy - center_y
+                dx2 = xx - center2_x
+                dy2 = yy - center2_y
                 radius_sq = jnp.array(radius_px * radius_px, dtype=jnp.int32)
-                visible = (dx * dx + dy * dy) <= radius_sq
+                visible_p1 = (dx * dx + dy * dy) <= radius_sq
+                visible_p2 = (dx2 * dx2 + dy2 * dy2) <= radius_sq
+                visible = jnp.logical_or(
+                    visible_p1,
+                    jnp.logical_and(state.multiplayer_active == 1, visible_p2),
+                )
                 visible = visible[..., None]
 
                 base = frame.astype(jnp.uint16)
@@ -188,11 +197,20 @@ class LimitedVisionMod(JaxAtariInternalModPlugin):
         obs = type(self._env)._get_observation(self._env, state)
 
         ghosts = obs.ghosts
-        dx = ghosts[:, 0] - state.player_x
-        dy = ghosts[:, 1] - state.player_y
-        dist_sq = dx * dx + dy * dy
+        dx1 = ghosts[:, 0] - state.player_x
+        dy1 = ghosts[:, 1] - state.player_y
+        dist_sq_p1 = dx1 * dx1 + dy1 * dy1
+
+        dx2 = ghosts[:, 0] - state.player2_x
+        dy2 = ghosts[:, 1] - state.player2_y
+        dist_sq_p2 = dx2 * dx2 + dy2 * dy2
+
         max_dist_sq = jnp.array(self.VISION_RADIUS_PX * self.VISION_RADIUS_PX, dtype=jnp.int32)
-        visible = dist_sq <= max_dist_sq
+        visible = dist_sq_p1 <= max_dist_sq
+        visible = jnp.logical_or(
+            visible,
+            jnp.logical_and(state.multiplayer_active == 1, dist_sq_p2 <= max_dist_sq),
+        )
 
         hidden_row = jnp.zeros((1, ghosts.shape[1]), dtype=ghosts.dtype)
         hidden_ghosts = jnp.repeat(hidden_row, ghosts.shape[0], axis=0)
@@ -204,8 +222,8 @@ class LimitedVisionMod(JaxAtariInternalModPlugin):
 class CoopMultiplayerMod(JaxAtariPostStepModPlugin):
     """
     Cooperative-style mode.
-    Full multi-agent Pacman support requires broader base-env changes; this mod keeps
-    gameplay JAX-safe by adding a support bonus (extra life) and randomizing spawn.
+    Enables player2 support in the base Pacman state and places both players on
+    valid nodes after reset.
     """
     def _find_nearest_node_idx_jax(self, x: jax.Array, y: jax.Array) -> jax.Array:
         node_x = jnp.asarray(self._env.node_positions_x, dtype=jnp.int32)
@@ -232,14 +250,32 @@ class CoopMultiplayerMod(JaxAtariPostStepModPlugin):
         spawn_py = (spawn_y_tile * self._env.consts.TILE_SIZE) + (self._env.consts.TILE_SIZE // 2)
         
         spawn_node_idx = self._find_nearest_node_idx_jax(spawn_px, spawn_py)
+        spawn_node_x = jnp.asarray(self._env.node_positions_x, dtype=jnp.int32)[spawn_node_idx]
+        spawn_node_y = jnp.asarray(self._env.node_positions_y, dtype=jnp.int32)[spawn_node_idx]
+
+        # Keep player2 close but not identical to player1.
+        spawn2_x_tile = jnp.clip(spawn_x_tile + 2, 0, w - 1)
+        spawn2_y_tile = spawn_y_tile
+        spawn2_px = (spawn2_x_tile * self._env.consts.TILE_SIZE) + (self._env.consts.TILE_SIZE // 2)
+        spawn2_py = (spawn2_y_tile * self._env.consts.TILE_SIZE) + (self._env.consts.TILE_SIZE // 2)
+        spawn2_node_idx = self._find_nearest_node_idx_jax(spawn2_px, spawn2_py)
+        spawn2_node_x = jnp.asarray(self._env.node_positions_x, dtype=jnp.int32)[spawn2_node_idx]
+        spawn2_node_y = jnp.asarray(self._env.node_positions_y, dtype=jnp.int32)[spawn2_node_idx]
         
         new_state = state._replace(
             key=rng_key,
+            multiplayer_active=jnp.array(1, dtype=jnp.int32),
             lives=jnp.maximum(state.lives, jnp.array(2, dtype=jnp.int32)),
-            player_x=spawn_px.astype(jnp.int32),
-            player_y=spawn_py.astype(jnp.int32),
+            player_x=spawn_node_x,
+            player_y=spawn_node_y,
             player_current_node_index=spawn_node_idx.astype(jnp.int32),
             player_target_node_index=spawn_node_idx.astype(jnp.int32),
+            player2_x=spawn2_node_x,
+            player2_y=spawn2_node_y,
+            player2_direction=jnp.array(0, dtype=jnp.int32),
+            player2_last_horizontal_dir=jnp.array(0, dtype=jnp.int32),
+            player2_current_node_index=spawn2_node_idx.astype(jnp.int32),
+            player2_target_node_index=spawn2_node_idx.astype(jnp.int32),
         )
         
         return self._env._get_observation(new_state), new_state

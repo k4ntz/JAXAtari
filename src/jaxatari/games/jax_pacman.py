@@ -169,6 +169,15 @@ class PacmanState(NamedTuple):
     player_animation_frame: chex.Array  # 0 or 1 for mouth open/close
     player_current_node_index: chex.Array  # Current node index for node-based movement
     player_target_node_index: chex.Array  # Target node index for node-based movement
+
+    # Optional co-op support (kept inactive for default gameplay)
+    multiplayer_active: chex.Array  # 0=disabled, 1=enabled by coop mod
+    player2_x: chex.Array
+    player2_y: chex.Array
+    player2_direction: chex.Array
+    player2_last_horizontal_dir: chex.Array
+    player2_current_node_index: chex.Array
+    player2_target_node_index: chex.Array
     
     # Ghost states (4 ghosts)
     ghosts: chex.Array  # Shape: (4, 8) - [x, y, direction, state, target_x, target_y, current_node, target_node]
@@ -429,6 +438,14 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         player_animation_frame = jnp.array(0, dtype=jnp.int32)
         player_current_node_index = jnp.array(player_start_node_idx, dtype=jnp.int32)
         player_target_node_index = jnp.array(player_start_node_idx, dtype=jnp.int32)
+
+        # Secondary player spawn (used only when multiplayer_active=1)
+        player2_start_node_idx = self._find_nearest_node_idx(
+            self.consts.PLAYER_START_X + (self.consts.TILE_SIZE * 2),
+            self.consts.PLAYER_START_Y
+        )
+        player2_x = jnp.array(self.node_positions_x[player2_start_node_idx], dtype=jnp.int32)
+        player2_y = jnp.array(self.node_positions_y[player2_start_node_idx], dtype=jnp.int32)
         
         # Initialize ghosts (4 ghosts at starting positions)
         ghosts = jnp.zeros((4, 8), dtype=jnp.int32)
@@ -472,6 +489,13 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             player_animation_frame=player_animation_frame,
             player_current_node_index=player_current_node_index,
             player_target_node_index=player_target_node_index,
+            multiplayer_active=jnp.array(0, dtype=jnp.int32),
+            player2_x=player2_x,
+            player2_y=player2_y,
+            player2_direction=jnp.array(0, dtype=jnp.int32),
+            player2_last_horizontal_dir=jnp.array(0, dtype=jnp.int32),
+            player2_current_node_index=jnp.array(player2_start_node_idx, dtype=jnp.int32),
+            player2_target_node_index=jnp.array(player2_start_node_idx, dtype=jnp.int32),
             ghosts=ghosts,
             dots_remaining=dots_remaining,
             power_pellets_active=jnp.array(15, dtype=jnp.int32),
@@ -504,6 +528,16 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
     def step(self, state: PacmanState, action: chex.Array) -> Tuple[PacmanObservation, PacmanState, float, bool, PacmanInfo]:
         new_state_key, step_key = jax.random.split(state.key)
         previous_state = state
+
+        # Backward compatible input handling:
+        # - scalar action: player2 uses mirrored fallback
+        # - vector action [a1, a2]: explicit independent controls
+        action_vec = jnp.atleast_1d(action).astype(jnp.int32)
+        player1_action = action_vec[0]
+        if action_vec.shape[0] >= 2:
+            player2_action = action_vec[1]
+        else:
+            player2_action = self._map_player2_action(player1_action)
         
         # Check if we are in level transition
         is_transitioning = state.level_transition_timer > 0
@@ -561,7 +595,15 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             state = state._replace(key=step_key)
             
             # Update player movement
-            state = self._player_step(state, action)
+            state = self._player_step(state, player1_action)
+
+            # Optional co-op helper player movement (kept disabled by default).
+            state = jax.lax.cond(
+                state.multiplayer_active == 1,
+                lambda s: self._player2_step(s, player2_action),
+                lambda s: s,
+                state
+            )
             
             # Split key for ghost updates
             key, ghost_key = jax.random.split(state.key)
@@ -621,6 +663,13 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         )
         player_x = jnp.array(self.node_positions_x[player_start_node_idx], dtype=jnp.int32)
         player_y = jnp.array(self.node_positions_y[player_start_node_idx], dtype=jnp.int32)
+
+        player2_start_node_idx = self._find_nearest_node_idx(
+            self.consts.PLAYER_START_X + (self.consts.TILE_SIZE * 2),
+            self.consts.PLAYER_START_Y
+        )
+        player2_x = jnp.array(self.node_positions_x[player2_start_node_idx], dtype=jnp.int32)
+        player2_y = jnp.array(self.node_positions_y[player2_start_node_idx], dtype=jnp.int32)
         
         ghosts = jnp.zeros((4, 8), dtype=jnp.int32)
         for i in range(4):
@@ -645,6 +694,12 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             player_last_horizontal_dir=jnp.array(0, dtype=jnp.int32),
             player_current_node_index=jnp.array(player_start_node_idx, dtype=jnp.int32),
             player_target_node_index=jnp.array(player_start_node_idx, dtype=jnp.int32),
+            player2_x=player2_x,
+            player2_y=player2_y,
+            player2_direction=jnp.array(0, dtype=jnp.int32),
+            player2_last_horizontal_dir=jnp.array(0, dtype=jnp.int32),
+            player2_current_node_index=jnp.array(player2_start_node_idx, dtype=jnp.int32),
+            player2_target_node_index=jnp.array(player2_start_node_idx, dtype=jnp.int32),
             ghosts=ghosts,
             frightened_timer=jnp.array(0, dtype=jnp.int32),
             ghosts_eaten_count=jnp.array(0, dtype=jnp.int32),
@@ -666,6 +721,13 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         )
         player_x = jnp.array(self.node_positions_x[player_start_node_idx], dtype=jnp.int32)
         player_y = jnp.array(self.node_positions_y[player_start_node_idx], dtype=jnp.int32)
+
+        player2_start_node_idx = self._find_nearest_node_idx(
+            self.consts.PLAYER_START_X + (self.consts.TILE_SIZE * 2),
+            self.consts.PLAYER_START_Y
+        )
+        player2_x = jnp.array(self.node_positions_x[player2_start_node_idx], dtype=jnp.int32)
+        player2_y = jnp.array(self.node_positions_y[player2_start_node_idx], dtype=jnp.int32)
         
         # Reset ghosts
         ghosts = jnp.zeros((4, 8), dtype=jnp.int32)
@@ -696,6 +758,12 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             player_last_horizontal_dir=jnp.array(0, dtype=jnp.int32),
             player_current_node_index=jnp.array(player_start_node_idx, dtype=jnp.int32),
             player_target_node_index=jnp.array(player_start_node_idx, dtype=jnp.int32),
+            player2_x=player2_x,
+            player2_y=player2_y,
+            player2_direction=jnp.array(0, dtype=jnp.int32),
+            player2_last_horizontal_dir=jnp.array(0, dtype=jnp.int32),
+            player2_current_node_index=jnp.array(player2_start_node_idx, dtype=jnp.int32),
+            player2_target_node_index=jnp.array(player2_start_node_idx, dtype=jnp.int32),
             ghosts=ghosts,
             pellets_collected=pellets_collected,
             dots_remaining=dots_remaining,
@@ -887,6 +955,46 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             player_last_horizontal_dir=new_last_h,
             player_current_node_index=final_current_idx,
             player_target_node_index=final_target_idx,
+        )
+
+    def _map_player2_action(self, action: chex.Array) -> chex.Array:
+        """
+        Maps the primary action to the helper player's action.
+        LEFT/RIGHT are mirrored so both players split routes more often.
+        """
+        return jnp.where(
+            action == Action.LEFT,
+            jnp.array(Action.RIGHT, dtype=jnp.int32),
+            jnp.where(
+                action == Action.RIGHT,
+                jnp.array(Action.LEFT, dtype=jnp.int32),
+                action.astype(jnp.int32)
+            )
+        )
+
+    def _player2_step(self, state: PacmanState, action: chex.Array) -> PacmanState:
+        """
+        Reuses the main player movement routine for player2 by temporarily
+        projecting player2 fields into player1 slots.
+        """
+        projected_state = state._replace(
+            player_x=state.player2_x,
+            player_y=state.player2_y,
+            player_direction=state.player2_direction,
+            player_last_horizontal_dir=state.player2_last_horizontal_dir,
+            player_current_node_index=state.player2_current_node_index,
+            player_target_node_index=state.player2_target_node_index,
+        )
+
+        moved_state = self._player_step(projected_state, action)
+
+        return state._replace(
+            player2_x=moved_state.player_x,
+            player2_y=moved_state.player_y,
+            player2_direction=moved_state.player_direction,
+            player2_last_horizontal_dir=moved_state.player_last_horizontal_dir,
+            player2_current_node_index=moved_state.player_current_node_index,
+            player2_target_node_index=moved_state.player_target_node_index,
         )
     
     def _find_nearest_node_idx(self, x: int, y: int) -> int:
@@ -1140,174 +1248,190 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         return state._replace(ghosts=new_ghosts, key=new_key)
 
     def _check_collisions(self, state: PacmanState) -> PacmanState:
-        """Check player-ghost and player-pellet collisions."""
-        # Check ghost collisions
-        player_left = state.player_x
-        player_right = state.player_x + self.consts.PLAYER_SIZE[0]
-        player_top = state.player_y
-        player_bottom = state.player_y + self.consts.PLAYER_SIZE[1]
-        
-        def check_ghost_collision(ghost_data):
-            gx, gy, _, gstate, _, _, gcurrent, gtarget = ghost_data
-            ghost_left = gx
-            ghost_right = gx + self.consts.GHOST_SIZE[0]
-            ghost_top = gy
-            ghost_bottom = gy + self.consts.GHOST_SIZE[1]
-            
-            # AABB collision
-            collision = jnp.logical_and(
-                jnp.logical_and(player_left < ghost_right, player_right > ghost_left),
-                jnp.logical_and(player_top < ghost_bottom, player_bottom > ghost_top)
-            )
-            
-            return collision
-        
-        collisions = jax.vmap(check_ghost_collision)(state.ghosts)
-        
-        # Process collisions for all ghosts
-        def process_collision(ghost_idx, ghost_data, collided):
-            gx, gy, gdir, gstate, gtx, gty, gcurrent, gtarget = ghost_data
-            
-            # If frightened and collided, ghost is eaten
+        """Check ghost, pellet, and vitamin collisions for one or two players."""
+        multiplayer_enabled = state.multiplayer_active == 1
+
+        def ghost_collisions_for_player(player_x: chex.Array, player_y: chex.Array) -> chex.Array:
+            player_left = player_x
+            player_right = player_x + self.consts.PLAYER_SIZE[0]
+            player_top = player_y
+            player_bottom = player_y + self.consts.PLAYER_SIZE[1]
+
+            def check_ghost_collision(ghost_data):
+                gx, gy, _, _, _, _, _, _ = ghost_data
+                ghost_left = gx
+                ghost_right = gx + self.consts.GHOST_SIZE[0]
+                ghost_top = gy
+                ghost_bottom = gy + self.consts.GHOST_SIZE[1]
+                return jnp.logical_and(
+                    jnp.logical_and(player_left < ghost_right, player_right > ghost_left),
+                    jnp.logical_and(player_top < ghost_bottom, player_bottom > ghost_top),
+                )
+
+            return jax.vmap(check_ghost_collision)(state.ghosts)
+
+        player1_collisions = ghost_collisions_for_player(state.player_x, state.player_y)
+
+        player2_collisions = jax.lax.cond(
+            multiplayer_enabled,
+            lambda _: ghost_collisions_for_player(state.player2_x, state.player2_y),
+            lambda _: jnp.zeros_like(player1_collisions),
+            operand=None,
+        )
+
+        collisions = jnp.logical_or(player1_collisions, player2_collisions)
+
+        def process_collision(ghost_data, collided):
+            _, _, _, gstate, _, _, _, _ = ghost_data
+
             new_state = jnp.where(
                 jnp.logical_and(collided, gstate == 1),
-                2,  # eaten
-                gstate
+                2,
+                gstate,
             )
-            
-            # If normal and collided, player loses life
+
             life_lost = jnp.logical_and(collided, gstate == 0)
-            
-            # Calculate score for eating ghost using progressive scoring
-            # First ghost: 200, second: 400, third: 800, fourth: 1600
+
             ghost_eaten = jnp.logical_and(collided, gstate == 1)
             ghost_score = jnp.where(
                 ghost_eaten,
                 self.consts.GHOST_SCORE_BASE * (2 ** state.ghosts_eaten_count),
-                0
+                0,
             )
-            
+
             return new_state, life_lost, ghost_score, ghost_eaten
-        
-        results = jax.vmap(process_collision)(jnp.arange(4), state.ghosts, collisions)
+
+        results = jax.vmap(process_collision)(state.ghosts, collisions)
         new_ghost_states = results[0]
         any_life_lost = jnp.any(results[1])
         ghost_scores = jnp.sum(results[2])
         any_ghost_eaten = jnp.any(results[3])
-        
-        # Update ghosts eaten counter
+
         new_ghosts_eaten_count = jnp.where(
             any_ghost_eaten,
             state.ghosts_eaten_count + 1,
-            state.ghosts_eaten_count
+            state.ghosts_eaten_count,
         )
-        
-        # Update ghost states
+
         new_ghosts = state.ghosts.at[:, 3].set(new_ghost_states)
-        
 
-
-        # Update score
         new_score = state.score + ghost_scores
-        
-        # Handle Death: If life lost, set player state to dying and start death timer
+
         new_player_state = jnp.where(any_life_lost, 1, state.player_state)
         new_death_timer = jnp.where(any_life_lost, self.consts.DEATH_DURATION, state.death_timer)
-        
-        # Handle Freeze: If ghost eaten, start freeze timer
         new_freeze_timer = jnp.where(any_ghost_eaten, self.consts.FREEZE_DURATION, state.freeze_timer)
-        
-        # Check pellet collisions based on player's tile position
-        # Convert player position to tile coordinates (simple division with 32 pixel offset)
-        player_tile_x = state.player_x // self.consts.TILE_SIZE
-        player_tile_y = (state.player_y - 32) // self.consts.TILE_SIZE
-        
-        # Clamp to maze bounds
-        player_tile_x = jnp.clip(player_tile_x, 0, self.consts.MAZE_WIDTH - 1)
-        player_tile_y = jnp.clip(player_tile_y, 0, self.consts.MAZE_HEIGHT - 1)
-        
-        # Get tile value at player position
-        tile_val = self.consts.MAZE_LAYOUT[player_tile_y, player_tile_x]
-        
-        # Check if pellet was already collected
-        already_collected = state.pellets_collected[player_tile_y, player_tile_x] == 1
-        
-        # Check if dot pellet (2) or power pellet (3) is at this position AND not yet collected
-        dot_collected = jnp.logical_and(tile_val == 2, jnp.logical_not(already_collected))
-        power_pellet_collected = jnp.logical_and(tile_val == 3, jnp.logical_not(already_collected))
-        
-        # Add scores for collected pellets
-        pellet_score = jnp.where(dot_collected, self.consts.PELLET_DOT_SCORE, 0)
-        pellet_score = jnp.where(power_pellet_collected, self.consts.PELLET_POWER_SCORE, pellet_score)
-        new_score = new_score + pellet_score
-        
-        # Mark pellet as collected
-        pellet_collected = jnp.logical_or(dot_collected, power_pellet_collected)
-        
-        # Update dots remaining (both regular and power pellets count)
-        new_dots_remaining = jnp.where(
-            pellet_collected, state.dots_remaining - 1, state.dots_remaining
+
+        def tile_coords(player_x: chex.Array, player_y: chex.Array) -> Tuple[chex.Array, chex.Array]:
+            tile_x = player_x // self.consts.TILE_SIZE
+            tile_y = (player_y - 32) // self.consts.TILE_SIZE
+            tile_x = jnp.clip(tile_x, 0, self.consts.MAZE_WIDTH - 1)
+            tile_y = jnp.clip(tile_y, 0, self.consts.MAZE_HEIGHT - 1)
+            return tile_x, tile_y
+
+        def collect_tile(
+            pellets_collected: chex.Array,
+            tile_x: chex.Array,
+            tile_y: chex.Array,
+        ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
+            tile_val = self.consts.MAZE_LAYOUT[tile_y, tile_x]
+            already_collected = pellets_collected[tile_y, tile_x] == 1
+            dot_collected = jnp.logical_and(tile_val == 2, jnp.logical_not(already_collected))
+            power_pellet_collected = jnp.logical_and(tile_val == 3, jnp.logical_not(already_collected))
+            pellet_collected = jnp.logical_or(dot_collected, power_pellet_collected)
+
+            pellet_score = jnp.where(dot_collected, self.consts.PELLET_DOT_SCORE, 0)
+            pellet_score = jnp.where(power_pellet_collected, self.consts.PELLET_POWER_SCORE, pellet_score)
+
+            new_pellets_collected = jax.lax.cond(
+                pellet_collected,
+                lambda p: p.at[tile_y, tile_x].set(1),
+                lambda p: p,
+                pellets_collected,
+            )
+
+            return new_pellets_collected, pellet_collected, power_pellet_collected, pellet_score
+
+        player1_tile_x, player1_tile_y = tile_coords(state.player_x, state.player_y)
+        player2_tile_x, player2_tile_y = tile_coords(state.player2_x, state.player2_y)
+
+        pellets_after_player1, p1_pellet_collected, p1_power_collected, p1_pellet_score = collect_tile(
+            state.pellets_collected,
+            player1_tile_x,
+            player1_tile_y,
         )
-        
-        new_pellets_collected = jnp.where(
-            pellet_collected,
-            state.pellets_collected.at[player_tile_y, player_tile_x].set(1),
-            state.pellets_collected
+
+        pellets_after_player2, p2_pellet_collected, p2_power_collected, p2_pellet_score = jax.lax.cond(
+            multiplayer_enabled,
+            lambda pellets: collect_tile(pellets, player2_tile_x, player2_tile_y),
+            lambda pellets: (
+                pellets,
+                jnp.array(False),
+                jnp.array(False),
+                jnp.array(0, dtype=jnp.int32),
+            ),
+            pellets_after_player1,
         )
-        
-        # Activate frightened mode if power pellet eaten
-        power_pellet_eaten = power_pellet_collected
+
+        pellets_collected_count = (
+            p1_pellet_collected.astype(jnp.int32) + p2_pellet_collected.astype(jnp.int32)
+        )
+        power_pellet_eaten = jnp.logical_or(p1_power_collected, p2_power_collected)
+        pellet_score_total = p1_pellet_score + p2_pellet_score
+
+        new_score = new_score + pellet_score_total
+        new_dots_remaining = state.dots_remaining - pellets_collected_count
+
         new_frightened_timer = jnp.where(
             power_pellet_eaten,
             self.consts.FRIGHTENED_DURATION,
-            state.frightened_timer
+            state.frightened_timer,
         )
-        
-        # Set all ghosts to frightened if power pellet eaten
+
         new_ghost_states_final = jnp.where(
             power_pellet_eaten,
-            jnp.where(new_ghost_states == 2, 2, 1),  # Keep eaten ghosts as eaten, others to frightened
-            new_ghost_states
+            jnp.where(new_ghost_states == 2, 2, 1),
+            new_ghost_states,
         )
         new_ghosts_final = new_ghosts.at[:, 3].set(new_ghost_states_final)
-        
-        # Reset ghosts_eaten_count when new power pellet is eaten
+
         final_ghosts_eaten_count = jnp.where(
             power_pellet_eaten,
-            0,  # Reset counter on new power pellet
-            new_ghosts_eaten_count
+            0,
+            new_ghosts_eaten_count,
         )
-        
-        # Check level completion
+
         level_complete = jnp.logical_and(new_dots_remaining <= 0, state.level_transition_timer == 0)
-        
+
         new_transition_timer = jnp.where(
             level_complete,
             self.consts.LEVEL_TRANSITION_DURATION,
-            state.level_transition_timer
+            state.level_transition_timer,
         )
 
-        # Track total pellets eaten for vitamin trigger
-        new_total_pellets_eaten = jnp.where(
-            pellet_collected,
-            state.total_pellets_eaten + 1,
-            state.total_pellets_eaten
-        )
-        
-        # Vitamin spawn logic: triggers after eating VITAMIN_TRIGGER_PELLETS pellets
+        new_total_pellets_eaten = state.total_pellets_eaten + pellets_collected_count
+
         should_spawn_vitamin = jnp.logical_and(
             new_total_pellets_eaten >= self.consts.VITAMIN_TRIGGER_PELLETS,
-            jnp.logical_and(state.vitamin_collected == 0, state.vitamin_active == 0)
+            jnp.logical_and(state.vitamin_collected == 0, state.vitamin_active == 0),
         )
         new_vitamin_active = jnp.where(should_spawn_vitamin, 1, state.vitamin_active)
         new_vitamin_timer = jnp.where(should_spawn_vitamin, self.consts.VITAMIN_DURATION, state.vitamin_timer)
-        
-        # Vitamin collection: check if player overlaps vitamin position
-        vitamin_dx = jnp.abs(state.player_x - state.vitamin_x)
-        vitamin_dy = jnp.abs(state.player_y - state.vitamin_y)
-        touching_vitamin = jnp.logical_and(vitamin_dx < 6, vitamin_dy < 6)
+
+        vitamin_dx_p1 = jnp.abs(state.player_x - state.vitamin_x)
+        vitamin_dy_p1 = jnp.abs(state.player_y - state.vitamin_y)
+        touching_vitamin_p1 = jnp.logical_and(vitamin_dx_p1 < 6, vitamin_dy_p1 < 6)
+
+        vitamin_dx_p2 = jnp.abs(state.player2_x - state.vitamin_x)
+        vitamin_dy_p2 = jnp.abs(state.player2_y - state.vitamin_y)
+        touching_vitamin_p2 = jnp.logical_and(vitamin_dx_p2 < 6, vitamin_dy_p2 < 6)
+
+        touching_vitamin = jnp.logical_or(
+            touching_vitamin_p1,
+            jnp.logical_and(multiplayer_enabled, touching_vitamin_p2),
+        )
+
         vitamin_eaten = jnp.logical_and(new_vitamin_active == 1, touching_vitamin)
-        
+
         new_score = jnp.where(vitamin_eaten, new_score + self.consts.VITAMIN_SCORE, new_score)
         new_vitamin_active = jnp.where(vitamin_eaten, 0, new_vitamin_active)
         new_vitamin_collected = jnp.where(vitamin_eaten, 1, state.vitamin_collected)
@@ -1319,7 +1443,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             frightened_timer=new_frightened_timer,
             ghosts_eaten_count=final_ghosts_eaten_count,
             dots_remaining=new_dots_remaining,
-            pellets_collected=new_pellets_collected,
+            pellets_collected=pellets_after_player2,
             level_transition_timer=new_transition_timer,
             player_state=new_player_state,
             death_timer=new_death_timer,
@@ -1716,7 +1840,25 @@ class PacmanRenderer(JAXGameRenderer):
             return self.jr.render_at(r, state.player_x - 4, state.player_y, death_mask)
 
         raster = jax.lax.cond(state.player_state == 1, render_dying, render_alive, raster)
-        
+
+        def render_player2(r):
+            player_dir_idx = state.player2_direction
+            is_vertical = jnp.logical_or(player_dir_idx == Action.UP, player_dir_idx == Action.DOWN)
+            sprite_dir_action = jnp.where(is_vertical, state.player2_last_horizontal_dir, player_dir_idx)
+            anim_step = (state.step_counter // self.consts.ANIMATION_SPEED) % 4
+            player_frame = 2 - jnp.abs(anim_step - 2)
+            base_sprite_idx = self.consts.SPRITE_LOOKUP[sprite_dir_action]
+            player_sprite_idx = base_sprite_idx + player_frame
+            player_mask = self.SHAPE_MASKS["player"][player_sprite_idx]
+            return self.jr.render_at(r, state.player2_x - 4, state.player2_y, player_mask)
+
+        raster = jax.lax.cond(
+            jnp.logical_and(state.multiplayer_active == 1, state.player_state == 0),
+            render_player2,
+            lambda r: r,
+            raster,
+        )
+
         def render_ghosts(r):
             def render_single_ghost(i, rr):
                 g_x, g_y = state.ghosts[i, 0] - 4, state.ghosts[i, 1]
