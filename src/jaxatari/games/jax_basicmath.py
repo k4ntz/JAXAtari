@@ -93,9 +93,9 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
     ACTION_SET: jnp.ndarray = jnp.array(
        [Action.NOOP,
             Action.FIRE,
+            Action.UP,
             Action.RIGHT,
             Action.LEFT,
-            Action.UP,
             Action.DOWN],
        dtype=jnp.int32,
    )
@@ -136,9 +136,20 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         )
     
     def _get_observation(self, state: BasicMathState):
-        padded_digits = jnp.pad(
-                state.numArr, 
-                (0, self.consts.PAD_OBS), 
+        midNumArr = self.consts.numArrLen // 2
+        halfPadObs = self.consts.PAD_OBS // 2
+        a, b = state.numArr[:midNumArr], state.numArr[midNumArr:]
+
+        padded_digits_a = jnp.pad(
+                a, 
+                (halfPadObs, 0), 
+                mode='constant', 
+                constant_values=-1
+            )
+        
+        padded_digits_b = jnp.pad(
+                b, 
+                (halfPadObs, 0), 
                 mode='constant', 
                 constant_values=-1
             )
@@ -146,7 +157,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         return BasicMathObservation(
             problem_num1=state.problemNum1,
             problem_num2=state.problemNum2,
-            digits=padded_digits,
+            digits=jnp.concatenate([padded_digits_a, padded_digits_b]),
             arrPos=state.arrPos,
         )
 
