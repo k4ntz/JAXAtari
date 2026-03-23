@@ -1,3 +1,4 @@
+import os
 from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.tutankham.tutankham_mod_plugins import (
     NightModeMod,
