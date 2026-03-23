@@ -103,6 +103,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         consts = consts or BasicMathConstants()
         super().__init__(consts)
         self.renderer = BasicMathRenderer(consts)
+        self.INITARR = jnp.full((self.consts.numArrLen,), -1, dtype=jnp.int32)
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
@@ -117,10 +118,10 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
-            "problem_num1": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
-            "problem_num2": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
-            "digits": spaces.Box(low=-1, high=9, shape=(self.consts.numArrLen,), dtype=jnp.int32),
-            "arrPos": spaces.Box(low=0, high=self.consts.numArrLen, shape=(), dtype=jnp.int32),
+            "problem_num1": spaces.Box(low=0, high=1000, shape=(), dtype=jnp.int32),
+            "problem_num2": spaces.Box(low=0, high=1000, shape=(), dtype=jnp.int32),
+            "digits": spaces.Box(low=-1, high=9, shape=self.INITARR.shape, dtype=jnp.int32),
+            "arrPos": spaces.Box(low=0, high=self.INITARR.shape[0], shape=(), dtype=jnp.int32),
         })
 
     @partial(jax.jit, static_argnums=(0,))
@@ -325,7 +326,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         probNum1, probNum2, key = self._generate_problem(key, (self.consts.GAMEMODE - 1) % 4)
 
         state = BasicMathState(
-            jnp.full((self.consts.numArrLen,), -1, dtype=jnp.int32),
+            self.INITARR,
             arrPos= jnp.array(self.consts.initialArrPos).astype(jnp.int32),
             score= jnp.array(0).astype(jnp.int32),
             numberProb= jnp.array(0).astype(jnp.int32),
@@ -415,7 +416,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         arr = jax.lax.cond(
             reset, 
-            lambda: jnp.full((self.consts.numArrLen,), -1, dtype=jnp.int32), 
+            lambda: self.INITARR, 
             lambda: state.numArr
         )
 
