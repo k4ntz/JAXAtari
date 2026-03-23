@@ -114,9 +114,8 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             shape=(210, 160, 3),
             dtype=jnp.uint8
         )
-    
-    def observation_space(self) -> spaces:
 
+    def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
             "problem_num1": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
             "problem_num2": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
