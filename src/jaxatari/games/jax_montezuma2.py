@@ -1102,8 +1102,9 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
         def transition_fn(state_in):
             st = self._load_room(new_room_id, state_in)
-            new_px = jnp.where(transition_left, self.consts.WIDTH - self.consts.PLAYER_WIDTH, 0)
-            return st.replace(player_x=new_px)
+            new_px = jnp.where(transition_left, 148, 4)
+            new_py = jnp.where(transition_left, 27, 26)
+            return st.replace(player_x=new_px, player_y=new_py, fall_start_y=new_py)
 
         state = jax.lax.cond(transition_any, transition_fn, lambda x: x, state)
 
