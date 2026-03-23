@@ -35,3 +35,20 @@ class LargeCursorMod(JaxAtariInternalModPlugin):
 class FastFriendMod(JaxAtariInternalModPlugin):
     """Increases the speed of the friend character."""
     constants_overrides = {'FRIEND_SPEED': 1.0}
+    
+    
+class FastEnemyAttackMod(JaxAtariInternalModPlugin):
+    """Enemies kill the friend faster by reducing the dying duration."""
+    constants_overrides = {
+        'DYING_DURATION': 20,  # default is 45, lower = friend dies faster
+    }
+    
+class SlowEnemyAttackMod(JaxAtariInternalModPlugin):
+    """Enemies kill the friend slower by increasing the dying duration."""
+    constants_overrides = {
+        'DYING_DURATION': 90,  # default is 45, higher = friend survives longer when attacked
+        
+    }    
+        
+    
+    
