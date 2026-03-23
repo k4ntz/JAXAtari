@@ -4,7 +4,7 @@ from jaxatari.games.mods.tutankham.tutankham_mod_plugins import (
     NightModeMod,
     MimicModeMod,
     UpsideDownMod,
-    WhipMod,
+    MovingItemsMod,
 )
 
 class TutankhamEnvMod(JaxAtariModController):
@@ -17,7 +17,7 @@ class TutankhamEnvMod(JaxAtariModController):
         "night_mode": NightModeMod,
         "mimics": MimicModeMod,
         "upsidedown": UpsideDownMod,
-        "whip": WhipMod,
+        "moving_items": MovingItemsMod,
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "tutankham", "sprites")

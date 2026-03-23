@@ -1294,6 +1294,15 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         new_score = score + total_score_for_defeating_creatures + total_score_for_collected_items + goal_bonus
 
         return new_score
+    
+
+
+    # mod hooks --------------
+    @partial(jax.jit, static_argnums=(0,))
+    def item_step(self, item_states, level, rng_key):
+        """Hook for mods to move items. Does nothing in the base game."""
+        return item_states, rng_key
+
 
 
     # Step logic
@@ -1363,6 +1372,9 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
              level, last_directional_action
              )
         
+        # hook for the item movement mod (does nothing in the base game)
+        item_states, rng_key = self.item_step(item_states, level, rng_key)
+
         # resolve player-item collisions
         item_states = self.resolve_player_item_collisions(player_x, player_y, item_states)
 
