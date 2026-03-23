@@ -60,6 +60,7 @@ class BasicMathConstants(struct.PyTreeNode):
     spacing: int = struct.field(pytree_node=False, default=0)
 
     DIFFICULTY_TIMES = jnp.array([-1, 180, 360, 720], dtype=jnp.int32)
+    PAD_OBS: int = struct.field(pytree_node=False, default=2)
 
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
@@ -135,10 +136,17 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         )
     
     def _get_observation(self, state: BasicMathState):
+        padded_digits = jnp.pad(
+                state.numArr, 
+                (0, self.consts.PAD_OBS), 
+                mode='constant', 
+                constant_values=-1
+            )
+
         return BasicMathObservation(
             problem_num1=state.problemNum1,
             problem_num2=state.problemNum2,
-            digits=state.numArr,
+            digits=padded_digits,
             arrPos=state.arrPos,
         )
 

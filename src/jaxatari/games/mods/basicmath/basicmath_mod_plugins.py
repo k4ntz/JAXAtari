@@ -54,4 +54,5 @@ class BiggerNumbersMod(JaxAtariInternalModPlugin):
         "symbol": (37, 100),
         "num0": (52, 55),
         "num1": (52, 95),
+        "PAD_OBS": 0,
     }
