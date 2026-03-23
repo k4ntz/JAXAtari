@@ -2382,7 +2382,10 @@ class YarsRevengeRenderer(JAXGameRenderer):
                 self.consts.RENDERER_QOTILE_COLOR_HUE_VALUES[used_hue_index], brightness
             )
 
-        modified_palette = modified_palette.at[1].set(color)
+        modified_palette = jax.lax.cond(state.game_state != YarsRevengeGameState.SCOREBOARD,
+            lambda: modified_palette.at[1].set(color),
+            lambda: modified_palette,
+        )
 
         # Convert the raster from indices to RGB values
         return self.jr.render_from_palette(raster, modified_palette)
