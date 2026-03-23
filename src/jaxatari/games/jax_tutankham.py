@@ -284,6 +284,9 @@ class TutankhamConstants(struct.PyTreeNode):
 
     # Asset config baked into constants
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
+    ZERO_FLIP: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 0], dtype=jnp.int32))
+    ANIMATION_SPEED: int = struct.field(pytree_node=False, default=8)
+
 
     VALID_POS_MAPS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         create_binary_matrix(1, f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_map1.npy"),
@@ -519,7 +522,7 @@ class TutankhamState(struct.PyTreeNode):
 
     player_x: chex.Array
     player_y: chex.Array
-    player_lives: int
+    lives: int
     tutankham_score: int  # current score
 
 
@@ -552,7 +555,9 @@ class TutankhamObservation(struct.PyTreeNode):
     creatures: ObjectObservation         # n=MAX_CREATURES (2), map-space coords
     bullet: ObjectObservation            # single bullet
     items: ObjectObservation             # n=7 (max items per map), map-space coords
-    player_lives: jnp.ndarray
+    goal: ObjectObservation              # the exit door
+    teleporters: ObjectObservation       # n=4 teleporters
+    lives: jnp.ndarray
     score: jnp.ndarray
     laser_flash_count: jnp.ndarray
     ammo: jnp.ndarray
@@ -602,7 +607,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         start_y = self.consts.MAP_CHECKPOINTS[level%4, 0, 3]
         tutankham_score = 0
         goal_reached = False
-        player_lives = self.consts.PLAYER_LIVES
+        lives = self.consts.PLAYER_LIVES
         amonition_timer = self.consts.LEVEL_AMMO_SUPPLY[level]
         bullet_state = jnp.array([0, 0, 0, 0, 0], dtype=jnp.int32)  # (x, y, bullet_rotation, bullet_active, anim_counter)
         creature_states = jnp.zeros((self.consts.MAX_CREATURES, 6), dtype=jnp.int32)  # (x, y, creature_type, active, direction, death_timer)
@@ -638,7 +643,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
                                player_x=start_x,
                                player_y=start_y,
                                tutankham_score=tutankham_score,
-                               player_lives=player_lives,
+                               lives=lives,
                                bullet_state=bullet_state,
                                amonition_timer=amonition_timer,
                                creature_states=creature_states,
@@ -1082,7 +1087,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def respawn_player(self, player_x, player_y, player_lives, level, last_directional_action):
+    def respawn_player(self, player_x, player_y, lives, level, last_directional_action):
         '''
         Resets player position to last checkpoint for each checkpoint zone and decreases lives by 1
         Sets bullet state and creature states to default values
@@ -1110,7 +1115,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         last_creature_spawn = jnp.int32(0)
 
         #set last_directional_action to 0, to avoid player moving immediately on respawn based on previous action
-        return respawn_x, respawn_y, bullet_state, creature_states, player_lives - 1, last_creature_spawn, 0 
+        return respawn_x, respawn_y, bullet_state, creature_states, lives - 1, last_creature_spawn, 0 
 
 
 
@@ -1141,7 +1146,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def resolve_player_creature_collisions(self, player_x, player_y, creature_states, creature_subpixels, bullet_state, player_lives, last_creature_spawn, level, last_directional_action):
+    def resolve_player_creature_collisions(self, player_x, player_y, creature_states, creature_subpixels, bullet_state, lives, last_creature_spawn, level, last_directional_action):
 
         # check player-creature collisions (vectorized over all creatures)
         def player_hits_creature(creature):
@@ -1159,20 +1164,20 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         # Compute respawn state unconditionally, then select with jnp.where
         (respawn_x, respawn_y,
          respawn_bullet, respawn_creatures,
-         respawn_lives, respawn_spawn, respawn_directional_action) = self.respawn_player(player_x, player_y, player_lives, level, last_directional_action)
+         respawn_lives, respawn_spawn, respawn_directional_action) = self.respawn_player(player_x, player_y, lives, level, last_directional_action)
 
         final_player_x = jnp.where(player_hit, respawn_x, player_x)
         final_player_y = jnp.where(player_hit, respawn_y, player_y)
         final_bullet_state = jnp.where(player_hit, respawn_bullet, bullet_state)
         final_creature_states = jnp.where(player_hit, respawn_creatures, creature_states)
         final_creature_subpixels = jnp.where(player_hit, jnp.zeros_like(creature_subpixels), creature_subpixels)
-        final_player_lives = jnp.where(player_hit, respawn_lives, player_lives)
+        final_lives = jnp.where(player_hit, respawn_lives, lives)
         final_last_creature_spawn = jnp.where(player_hit, respawn_spawn, last_creature_spawn)
         final_last_directional_action = jnp.where(player_hit, respawn_directional_action, last_directional_action)
 
         return (final_player_x, final_player_y,
                 final_bullet_state, final_creature_states, final_creature_subpixels,
-                final_player_lives, final_last_creature_spawn, final_last_directional_action)
+                final_lives, final_last_creature_spawn, final_last_directional_action)
 
     @partial(jax.jit, static_argnums=(0,))
     def resolve_player_item_collisions(self, player_x, player_y, item_states):
@@ -1308,7 +1313,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         last_creature_spawn = state.last_creature_spawn
         laser_flash_cooldown = state.laser_flash_cooldown
         amonition_timer = state.amonition_timer
-        player_lives = state.player_lives
+        lives = state.lives
         has_key = state.has_key
         last_directional_action = state.last_directional_action
         player_direction= state.player_direction
@@ -1342,19 +1347,19 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         # store creature_states and item_states before resolving collisions (for score update)
         prev_creature_states = creature_states.copy()
         prev_item_states = item_states.copy()
-        prev_lives = player_lives
+        prev_lives = lives
 
         # resolve bullet-creature collisions
         creature_states, bullet_state = self.resolve_bullet_collisions(creature_states, bullet_state)
 
         (player_x, player_y, 
          bullet_state, creature_states, creature_subpixels,
-         player_lives, last_creature_spawn,
+         lives, last_creature_spawn,
          last_directional_action
          ) = self.resolve_player_creature_collisions(
              player_x, player_y,
              creature_states, creature_subpixels, bullet_state,
-             player_lives, last_creature_spawn,
+             lives, last_creature_spawn,
              level, last_directional_action
              )
         
@@ -1371,7 +1376,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         tutankham_score = self.update_score(tutankham_score, 
                                             prev_creature_states, creature_states, 
                                             prev_item_states, item_states,
-                                            prev_lives, player_lives,
+                                            prev_lives, lives,
                                             goal_reached, amonition_timer, level
                                             )
         
@@ -1392,7 +1397,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
                                 player_x=player_x,
                                 player_y=player_y,
                                 tutankham_score=tutankham_score,
-                                player_lives=player_lives,
+                                lives=lives,
                                 bullet_state=bullet_state,
                                 amonition_timer=amonition_timer,
                                 creature_states=creature_states,
@@ -1438,12 +1443,15 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         single = spaces.get_object_space(n=None, screen_size=(MAP_HEIGHT, self.consts.WIDTH))
         n_crea = spaces.get_object_space(n=self.consts.MAX_CREATURES, screen_size=(MAP_HEIGHT, self.consts.WIDTH))
         n_items = spaces.get_object_space(n=7, screen_size=(MAP_HEIGHT, self.consts.WIDTH))
+        n_teleporters = spaces.get_object_space(n=4, screen_size=(MAP_HEIGHT, self.consts.WIDTH))
         return spaces.Dict({
             'player': single,
             'creatures': n_crea,
             'bullet': single,
             'items': n_items,
-            'player_lives': spaces.Box(low=0, high=self.consts.PLAYER_LIVES, shape=(), dtype=jnp.int32),
+            'goal': single,
+            'teleporters': n_teleporters,
+            'lives': spaces.Box(low=0, high=self.consts.PLAYER_LIVES, shape=(), dtype=jnp.int32),
             'score': spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
             'laser_flash_count': spaces.Box(low=0, high=self.consts.MAX_LASER_FLASHES, shape=(), dtype=jnp.int32),
             'ammo': spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
@@ -1499,12 +1507,33 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
             visual_id=state.item_states[:, 2].astype(jnp.int32),  # item type
         )
 
+        goal_pos = self.consts.MAP_GOAL_POSITIONS[state.level % 4, 0]
+        goal = ObjectObservation.create(
+            x=jnp.clip(goal_pos[0], 0, self.consts.WIDTH - 1),
+            y=jnp.clip(goal_pos[1], 0, MAP_HEIGHT - 1),
+            width=jnp.array(self.consts.GOAL_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.GOAL_SIZE[1], dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32),
+        )
+
+        teleport_data = self.consts.MAP_TELEPORTER_POSITIONS[state.level % 4]
+        teleporters_active = ((teleport_data[:, 0] != 0) | (teleport_data[:, 1] != 0)).astype(jnp.int32)
+        teleporters = ObjectObservation.create(
+            x=jnp.clip(teleport_data[:, 0], 0, self.consts.WIDTH - 1),
+            y=jnp.clip(teleport_data[:, 1], 0, MAP_HEIGHT - 1),
+            width=jnp.full(4, 5, dtype=jnp.int32),
+            height=jnp.full(4, 4, dtype=jnp.int32),
+            active=teleporters_active,
+        )
+
         return TutankhamObservation(
             player=player,
             creatures=creatures,
             bullet=bullet,
             items=items,
-            player_lives=jnp.asarray(state.player_lives, dtype=jnp.int32),
+            goal=goal,
+            teleporters=teleporters,
+            lives=jnp.asarray(state.lives, dtype=jnp.int32),
             score=jnp.asarray(state.tutankham_score, dtype=jnp.int32),
             laser_flash_count=jnp.asarray(state.laser_flash_count, dtype=jnp.int32),
             ammo=jnp.asarray(state.amonition_timer, dtype=jnp.int32),
@@ -1523,13 +1552,13 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(self, previous_state: TutankhamState, current_state: TutankhamState):        
+    def _get_reward(self, previous_state: TutankhamState, current_state: TutankhamState):  
         return current_state.tutankham_score - previous_state.tutankham_score
     
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: TutankhamState) -> bool:
-        game_over = state.player_lives <= 0
+        game_over = state.lives <= 0
         beat_game = state.level >= 16
         return jnp.logical_or(game_over, beat_game)
     
@@ -1579,47 +1608,77 @@ class TutankhamRenderer(JAXGameRenderer):
     # ---------------------------------------------------------
     # Main render() method
     # ---------------------------------------------------------
-
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: TutankhamState):
-        ZERO_FLIP = jnp.array([0, 0], dtype=jnp.int32)
         indices_to_update = 0
         new_color_ids = 0
-        level_index = (state.level%4)
 
-        # Calculate camera offset to keep player roughly centered vertically
-        camera_offset = jnp.where(state.player_y < self.consts.HEIGHT // 2, 0, state.player_y - self.consts.HEIGHT // 2)
-        
+        camera_offset = self._get_camera_offset(state)
+        # Render all sprites
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+        raster = self._render_floor(raster, state, camera_offset)
+        raster = self._render_flash_floor(raster, state, camera_offset)
+        raster = self._render_player(raster, state, camera_offset)
+        raster = self._render_creatures(raster, state, camera_offset)
+        raster = self._render_items(raster, state, camera_offset)
+        raster = self._render_bullet(raster, state, camera_offset)                
+        raster = self._render_goal(raster, state, camera_offset)
+        raster = self._render_ui(raster, state, camera_offset)
+
+        return self.jr.render_from_palette(
+            raster,
+            self.PALETTE,
+            indices_to_update=indices_to_update,
+            new_color_ids=new_color_ids
+        )
+    # ---------------------------------------------------------
+    # Helper methods
+    # ---------------------------------------------------------
+    def _get_camera_offset(self, state):
+        level_index = (state.level%4)
+        # Calculate camera offset to keep player roughly centered vertically        
         # Ensure the camera doesn't scroll past the bottom of the map
         max_offset = self.consts.VALID_POS_MAPS[level_index].shape[0] - self.consts.HEIGHT
-        camera_offset = jnp.clip(camera_offset, 0, max_offset)
-
-        # 1. Start with the static blue background
-        raster = self.jr.create_object_raster(self.BACKGROUND)
-        raster = self.jr.render_at_clipped(
+        camera_offset = jnp.clip(state.camera_offset, 0, max_offset)
+        return camera_offset
+    # ---------------------------------------------------------
+    # Rendering functions
+    # ---------------------------------------------------------
+    def _render_hook_post_floor(self, raster, state, camera_offset):
+        """
+        No-op hook between the floor/map layer and the player layer.
+        Override via an InternalModPlugin to inject a mid-layer
+        (e.g. NightModeMod renders night_cover.npy here).
+        """
+        return raster
+    
+    def _render_floor(self, raster, state, camera_offset):
+        level_index = (state.level%4)
+        return self.jr.render_at_clipped(
             raster,
             0,  # x
             -camera_offset,  # y
             self.SHAPE_MASKS["floor"][level_index],
-            flip_offset=ZERO_FLIP
+            flip_offset=self.consts.ZERO_FLIP
         )
-        # Render Flash Floors
-        raster = jax.lax.cond(
+    
+    def _render_flash_floor(self, raster, state, camera_offset):
+        level_index = (state.level%4)
+        return jax.lax.cond(
                 state.laser_flash_cooldown > 0,
                 lambda _: self.jr.render_at_clipped(
                     raster,
                     0,
                     - camera_offset,
                     self.SHAPE_MASKS["flash_floor"][level_index],
-                    flip_offset=ZERO_FLIP
+                    flip_offset=self.consts.ZERO_FLIP
                 ),
                 lambda raster: raster,
                 raster
             )
-
-        # 2. Render Player
-        ANIM_SPEED = 8
-        frame_idx = (state.step_counter // ANIM_SPEED) % 2
+    
+    def _render_player(self, raster, state, camera_offset):
+        frame_idx = (state.step_counter // self.consts.ANIMATION_SPEED) % 2
         
         # Calculate index offset if player has a key
         # Idle: [0] = no key, [1] = with key
@@ -1642,7 +1701,7 @@ class TutankhamRenderer(JAXGameRenderer):
         )
         
         flip = jnp.where(state.player_direction == 3, True, False)
-        raster = self.jr.render_at_clipped(
+        return self.jr.render_at_clipped(
             raster,
             state.player_x,
             state.player_y - camera_offset,
@@ -1650,8 +1709,9 @@ class TutankhamRenderer(JAXGameRenderer):
             flip_offset=player_flip_offset,
             flip_horizontal=flip,
         )
-
-        # creatures
+    
+    def _render_creatures(self, raster, state, camera_offset):
+        frame_idx = (state.step_counter // self.consts.ANIMATION_SPEED) % 2
         creature_one_state = state.creature_states[0]
         creature_one = creature_one_state[2]
         dir_one = creature_one_state[4]
@@ -1670,7 +1730,7 @@ class TutankhamRenderer(JAXGameRenderer):
                     lambda _: self.SHAPE_MASKS['creature_01'][creature_one],
                     operand=None
                 ),
-                flip_offset=ZERO_FLIP,
+                flip_offset=self.consts.ZERO_FLIP,
                 flip_horizontal=(dir_one == -1)
             ),
             lambda r: r,
@@ -1685,7 +1745,7 @@ class TutankhamRenderer(JAXGameRenderer):
                 creature_one_state[0],
                 creature_one_state[1] - camera_offset,
                 self.SHAPE_MASKS['kill_sprites'][creature_one],
-                flip_offset=ZERO_FLIP,
+                flip_offset=self.consts.ZERO_FLIP,
                 flip_horizontal=False
             ),
             lambda r: r,
@@ -1710,7 +1770,7 @@ class TutankhamRenderer(JAXGameRenderer):
                     lambda _: self.SHAPE_MASKS['creature_01'][creature_two],
                     operand=None
                 ),
-                flip_offset=ZERO_FLIP,
+                flip_offset=self.consts.ZERO_FLIP,
                 flip_horizontal=(dir_two == -1)
             ),
             lambda r: r,
@@ -1725,15 +1785,15 @@ class TutankhamRenderer(JAXGameRenderer):
                 creature_two_state[0],
                 creature_two_state[1] - camera_offset,
                 self.SHAPE_MASKS['kill_sprites'][creature_two],
-                flip_offset=ZERO_FLIP,
+                flip_offset=self.consts.ZERO_FLIP,
                 flip_horizontal=False
             ),
             lambda r: r,
             raster
         )
+        return raster
     
-        # 2.5 Animations
-        # 5. Render Treasures
+    def _render_items(self, raster, state, camera_offset):
         def render_all_treasures(i: int, raster: jnp.ndarray):
             treasure_x = state.item_states[i][0]
             treasure_y = state.item_states[i][1]
@@ -1747,55 +1807,58 @@ class TutankhamRenderer(JAXGameRenderer):
                     treasure_x,
                     treasure_y - camera_offset,
                     treasure_mask,
-                    flip_offset=ZERO_FLIP
+                    flip_offset=self.consts.ZERO_FLIP
                 ),
                 lambda r: r,
                 raster
             )
         raster = jax.lax.fori_loop(0, 7, render_all_treasures, raster)
-
-        # Render Goal                     
-        raster = jax.lax.cond(is_onscreen(self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 1], 8, camera_offset),
-                              lambda r: self.jr.render_at_clipped(
-                                  raster,
-                                  self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 0],
-                                  self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 1] - camera_offset,
-                                  self.SHAPE_MASKS["goal"][level_index],
-                                  flip_offset=ZERO_FLIP
-                                  # self.FLIP_OFFSETS['player_group'],
-                              ),
-                              lambda r: r,
-                              raster)
-        # 6. Render Bullets
+        return raster
+    
+    def _render_bullet(self, raster, state, camera_offset):
         bullet_frame_idx = jnp.clip(state.bullet_state[4] // self.consts.BULLET_ANIM_SPEED, 0, 3)
-        raster = jax.lax.cond(state.bullet_state[3] == 1,
+        return jax.lax.cond(state.bullet_state[3] == 1,
                               lambda r: self.jr.render_at_clipped(
                                   r,
                                   state.bullet_state[0],
                                   state.bullet_state[1] - camera_offset,
                                   self.SHAPE_MASKS["bullet"][bullet_frame_idx.astype(jnp.int32)],
-                                  flip_offset=ZERO_FLIP
+                                  flip_offset=self.consts.ZERO_FLIP
                                   # self.FLIP_OFFSETS['player_group'],
                               ),
                               lambda r: r,
                               raster)
-
-
-        # 8. Render UI Footer and Header
+    
+    def _render_goal(self, raster, state, camera_offset):
+        level_index = (state.level%4)
+        return jax.lax.cond(is_onscreen(self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 1], 8, camera_offset),
+                              lambda r: self.jr.render_at_clipped(
+                                  r,
+                                  self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 0],
+                                  self.consts.MAP_GOAL_POSITIONS[state.level%4, 0, 1] - camera_offset,
+                                  self.SHAPE_MASKS["goal"][level_index],
+                                  flip_offset=self.consts.ZERO_FLIP
+                              ),
+                              lambda r: r,
+                              raster)
+    
+    def _render_ui(self, raster, state, camera_offset):
+        level_index = (state.level%4)
+        
         raster = self.jr.render_at_clipped(
             raster,
             0,  # x
             0,  # y
             self.SHAPE_MASKS["ui_footer_header"][level_index],
-            flip_offset=ZERO_FLIP
+            flip_offset=self.consts.ZERO_FLIP
         )
         # Render stats (lives)
         raster = self.jr.render_at_clipped(
             raster,
             12,
             24,
-            self.SHAPE_MASKS["stats"][state.player_lives-1],
-            flip_offset=ZERO_FLIP
+            self.SHAPE_MASKS["stats"][state.lives-1],
+            flip_offset=self.consts.ZERO_FLIP
         )
         # Render stats (flashes)
         raster = jax.lax.cond(
@@ -1805,7 +1868,7 @@ class TutankhamRenderer(JAXGameRenderer):
                 108,
                 24,
                 self.SHAPE_MASKS["stats"][state.laser_flash_count-1],
-                flip_offset=ZERO_FLIP
+                flip_offset=self.consts.ZERO_FLIP
             ),
             lambda r: r,
             raster
@@ -1815,7 +1878,7 @@ class TutankhamRenderer(JAXGameRenderer):
             114,
             197,
             self.SHAPE_MASKS["ammo_timer"],
-            flip_offset=ZERO_FLIP
+            flip_offset=self.consts.ZERO_FLIP
         )
         # Calculate ammo timer bar position
         # Scales with AMMO_SUPPLY. Range is 30 pixels (from 84 to 114).
@@ -1827,7 +1890,7 @@ class TutankhamRenderer(JAXGameRenderer):
             ammo_x,
             197,
             self.SHAPE_MASKS["ammo_map"][level_index],
-            flip_offset=ZERO_FLIP
+            flip_offset=self.consts.ZERO_FLIP
         )
         
         # Render Score
@@ -1848,23 +1911,16 @@ class TutankhamRenderer(JAXGameRenderer):
             
             return jax.lax.cond(
                 should_draw,
-                lambda r: self.jr.render_at_clipped(
+                lambda raster: self.jr.render_at_clipped(
                     raster,
                     digit_x,
                     digit_y,
                     digit_mask,
-                    flip_offset=ZERO_FLIP
+                    flip_offset=self.consts.ZERO_FLIP
                 ),
-                lambda r: raster,
+                lambda raster: raster,
                 operand=raster
             )
             
         raster = jax.lax.fori_loop(0, 6, render_score_digit, raster)
-        # 9. Final Palette Lookup
-        return self.jr.render_from_palette(
-            raster,
-            self.PALETTE,
-            indices_to_update=indices_to_update,
-            new_color_ids=new_color_ids
-        )
-    
+        return raster
