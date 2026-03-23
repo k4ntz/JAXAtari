@@ -19,6 +19,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     MAX_DOORS_PER_ROOM: int = struct.field(pytree_node=False, default=2)
     MAX_ITEMS_PER_ROOM: int = struct.field(pytree_node=False, default=2)
     MAX_CONVEYORS_PER_ROOM: int = struct.field(pytree_node=False, default=2)
+    MAX_LASERS_PER_ROOM: int = struct.field(pytree_node=False, default=6)
     
     # Gameplay Constants
     WIDTH: int = struct.field(pytree_node=False, default=160)
@@ -97,6 +98,10 @@ class Montezuma2State:
     conveyors_y: jnp.ndarray
     conveyors_active: jnp.ndarray
     conveyors_direction: jnp.ndarray
+    
+    lasers_x: jnp.ndarray
+    lasers_active: jnp.ndarray
+    laser_cycle: jnp.ndarray
     
     inventory: jnp.ndarray
     key: jrandom.PRNGKey
@@ -191,6 +196,12 @@ class Montezuma2Renderer(JAXGameRenderer):
         self.DOOR_COLOR = jnp.array([232, 204, 99], dtype=jnp.uint8)
         self.PALETTE = jnp.concatenate([self.PALETTE, self.DOOR_COLOR[None, :]], axis=0)
         self.DOOR_ID = self.PALETTE.shape[0] - 1
+        
+        # Laser color
+        self.LASER_COLOR = jnp.array([101, 111, 228], dtype=jnp.uint8)
+        self.PALETTE = jnp.concatenate([self.PALETTE, self.LASER_COLOR[None, :]], axis=0)
+        self.LASER_ID = self.PALETTE.shape[0] - 1
+        
         door_mask = self.SHAPE_MASKS["door"]
         self.SHAPE_MASKS["door"] = jnp.where(door_mask != self.jr.TRANSPARENT_ID, self.DOOR_ID, self.jr.TRANSPARENT_ID)
 
@@ -255,6 +266,34 @@ class Montezuma2Renderer(JAXGameRenderer):
             return jax.lax.cond(active == 1, _draw, lambda r_in: r_in, r)
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_ROPES_PER_ROOM, draw_rope, raster)
+        
+        # Draw Lasers
+        laser_active_now = jnp.logical_and(jnp.greater_equal(state.laser_cycle, 0), jnp.less(state.laser_cycle, 92))
+        laser_offset = jnp.mod(state.laser_cycle, 4)
+        def draw_laser(i, r):
+            x = state.lasers_x[i]
+            active = jnp.logical_and(state.lasers_active[i] == 1, laser_active_now)
+            
+            def _draw(raster_in):
+                # 40 pixels high. We batch 10 stripes max (since distance=4).
+                start_j = jnp.mod(laser_offset, 4)
+                k_idx = jnp.arange(10)
+                j_vals = start_j + k_idx * 4
+                
+                valid = j_vals < 40
+                pos_x = jnp.full((10,), x, dtype=jnp.int32)
+                pos_y = 54 + j_vals
+                
+                sizes = jnp.where(valid, 4, 0)
+                
+                pos = jnp.stack([pos_x, pos_y], axis=-1)
+                size = jnp.stack([sizes, jnp.ones_like(sizes)], axis=-1)
+                
+                return self.jr.draw_rects(raster_in, pos, size, self.LASER_ID)
+                
+            return jax.lax.cond(active, _draw, lambda r_in: r_in, r)
+
+        raster = jax.lax.fori_loop(0, self.consts.MAX_LASERS_PER_ROOM, draw_laser, raster)
         
         # Draw Conveyors
         anim_idx = jnp.less(jnp.mod(state.frame_count, 16), 8)
@@ -447,9 +486,12 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         conveyors_y = jnp.zeros(self.consts.MAX_CONVEYORS_PER_ROOM, dtype=jnp.int32)
         conveyors_active = jnp.zeros(self.consts.MAX_CONVEYORS_PER_ROOM, dtype=jnp.int32)
         conveyors_direction = jnp.zeros(self.consts.MAX_CONVEYORS_PER_ROOM, dtype=jnp.int32)
+        
+        lasers_x = jnp.zeros(self.consts.MAX_LASERS_PER_ROOM, dtype=jnp.int32)
+        lasers_active = jnp.zeros(self.consts.MAX_LASERS_PER_ROOM, dtype=jnp.int32)
 
         def load_room_0(args):
-            lx, lt, lb, la, ix, iy, ia = args
+            lx, lt, lb, la, ix, iy, ia, lax, laa = args
             lx = lx.at[0].set(72)
             lt = lt.at[0].set(48)
             lb = lb.at[0].set(149)
@@ -459,15 +501,24 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             iy = iy.at[0].set(7)
             ia = ia.at[0].set(1)
             
+            lax = lax.at[0].set(16)
+            lax = lax.at[1].set(36)
+            lax = lax.at[2].set(44)
+            lax = lax.at[3].set(112)
+            lax = lax.at[4].set(120)
+            lax = lax.at[5].set(140)
+            laa = laa.at[0:6].set(1)
+            
             return (enemies_x, enemies_y, enemies_active, enemies_direction, enemies_min_x, enemies_max_x,
                     lx, lt, lb, la,
                     ropes_x, ropes_top, ropes_bottom, ropes_active,
                     ix, iy, ia,
                     doors_x, doors_y, doors_active,
-                    conveyors_x, conveyors_y, conveyors_active, conveyors_direction)
+                    conveyors_x, conveyors_y, conveyors_active, conveyors_direction,
+                    lax, laa)
 
         def load_room_1(args):
-            lx, lt, lb, la, ix, iy, ia = args
+            lx, lt, lb, la, ix, iy, ia, lax, laa = args
             ex = enemies_x.at[0].set(93)
             ey = enemies_y.at[0].set(119)
             ea = enemies_active.at[0].set(1)
@@ -514,10 +565,11 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
                     rx, rt, rb, ra,
                     ix, iy, ia,
                     dx, dy, da,
-                    cx, cy, ca, cd)
+                    cx, cy, ca, cd,
+                    lasers_x, lasers_active)
 
-        args = (ladders_x, ladders_top, ladders_bottom, ladders_active, items_x, items_y, items_active)
-        ex, ey, ea, ed, eminx, emaxx, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd = jax.lax.switch(room_id, [load_room_0, load_room_1], args)
+        args = (ladders_x, ladders_top, ladders_bottom, ladders_active, items_x, items_y, items_active, lasers_x, lasers_active)
+        ex, ey, ea, ed, eminx, emaxx, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd, lax, laa = jax.lax.switch(room_id, [load_room_0, load_room_1], args)
 
         return state.replace(
             room_id=room_id,
@@ -526,7 +578,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             ropes_x=rx, ropes_top=rt, ropes_bottom=rb, ropes_active=ra,
             items_x=ix, items_y=iy, items_active=ia,
             doors_x=dx, doors_y=dy, doors_active=da,
-            conveyors_x=cx, conveyors_y=cy, conveyors_active=ca, conveyors_direction=cd
+            conveyors_x=cx, conveyors_y=cy, conveyors_active=ca, conveyors_direction=cd,
+            lasers_x=lax, lasers_active=laa
         )
 
     def reset(self, key: jrandom.PRNGKey) -> Tuple[Montezuma2Observation, Montezuma2State]:
@@ -570,6 +623,9 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             conveyors_y=jnp.zeros(self.consts.MAX_CONVEYORS_PER_ROOM, dtype=jnp.int32),
             conveyors_active=jnp.zeros(self.consts.MAX_CONVEYORS_PER_ROOM, dtype=jnp.int32),
             conveyors_direction=jnp.zeros(self.consts.MAX_CONVEYORS_PER_ROOM, dtype=jnp.int32),
+            lasers_x=jnp.zeros(self.consts.MAX_LASERS_PER_ROOM, dtype=jnp.int32),
+            lasers_active=jnp.zeros(self.consts.MAX_LASERS_PER_ROOM, dtype=jnp.int32),
+            laser_cycle=jnp.array(0, dtype=jnp.int32),
             inventory=jnp.zeros(1, dtype=jnp.int32),
             key=key
         )
@@ -958,7 +1014,23 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             (False, state.enemies_active)
         )
         
-        player_died = jnp.logical_or(died_from_fall, died_from_enemy)
+        # Laser Collision
+        new_laser_cycle = jnp.mod(state.laser_cycle + 1, 128)
+        laser_active_now = jnp.logical_and(jnp.greater_equal(state.laser_cycle, 0), jnp.less(state.laser_cycle, 92))
+        
+        def check_laser_collision(i, hit):
+            l_x = state.lasers_x[i]
+            l_active = jnp.logical_and(state.lasers_active[i] == 1, laser_active_now)
+            
+            overlap_x = jnp.logical_and(new_left_x < l_x + 4, new_right_x >= l_x)
+            overlap_y = jnp.logical_and(check_y_top < 93, check_y_bot >= 54) # offset 47 + 7 to 47 + 46
+            overlap = jnp.logical_and(overlap_x, overlap_y)
+            
+            return jnp.logical_or(hit, jnp.logical_and(l_active, overlap))
+            
+        died_from_laser = jax.lax.fori_loop(0, self.consts.MAX_LASERS_PER_ROOM, check_laser_collision, False)
+        
+        player_died = jnp.logical_or(died_from_fall, jnp.logical_or(died_from_enemy, died_from_laser))
         
         new_lives = jnp.where(player_died, state.lives - 1, state.lives)
         final_x = jnp.where(player_died, self.consts.INITIAL_PLAYER_X, new_x)
@@ -992,7 +1064,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             enemies_direction=new_enemies_dir,
             inventory=jnp.array([current_keys], dtype=jnp.int32),
             items_active=new_items_active,
-            doors_active=new_doors_active
+            doors_active=new_doors_active,
+            laser_cycle=new_laser_cycle
         )
 
         transition_any = jnp.logical_or(transition_left, transition_right)
