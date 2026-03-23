@@ -3,7 +3,6 @@ import os
 from functools import partial
 from typing import NamedTuple, Tuple
 import jax
-import jax.lax
 import jax.numpy as jnp
 import chex
 
@@ -106,9 +105,9 @@ class AdventureConstants(NamedTuple):
     BRIDGE_ID: int = 4
     MAGNET_ID: int = 5
     CHALICE_ID: int = 6
-    #dragons (X,Y, Room, state, counter, eat)
-    DRAGON_YELLOW_SPAWN: Tuple[int, int, int] = (80, 170, 5, 0, 0, 0)
-    DRAGON_GREEN_SPAWN: Tuple[int, int, int] = (80, 130, 4, 0, 0, 0)
+    #dragons (X,Y, Room, state, counter, eat, activate)
+    DRAGON_YELLOW_SPAWN: Tuple[int, int, int, int ,int, int, int] = (80, 170, 5, 0, 0, 0, 0)
+    DRAGON_GREEN_SPAWN: Tuple[int, int, int, int, int, int, int] = (80, 130, 4, 0, 0, 0, 0)
     #Spawn Locations of all Entities: (X, Y, Room/Tile)
     YELLOW_GATE_POS: Tuple[int, int, int] = (76, 140, 0)
     BLACK_GATE_POS: Tuple[int, int, int] = (76, 140, 11)
@@ -153,7 +152,7 @@ class AdventureState(NamedTuple):
     step_counter: chex.Array
     #position player: x ,y ,tile, inventory
     player: chex.Array
-    #positions dragons: x, y ,tile ,state, counter
+    #positions dragons: x, y ,tile ,state, counter, eat, activate
     dragon_yellow: chex.Array
     dragon_green: chex.Array
     #positions keys: x, y, tile
@@ -170,6 +169,8 @@ class AdventureState(NamedTuple):
     magnet: chex.Array
     #position chalice: x, y, tile, color
     chalice: chex.Array
+    #random key
+    rndKey: chex.PRNGKey
 
 
 class EntityPosition(NamedTuple):
@@ -278,7 +279,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         ## Rooms:
         room_1_clear = jnp.logical_or(
-                jnp.logical_not(room == 0), #either it is not room 1 or
+                jnp.logical_not(room == 0), #either it is not room 0 or
                 jnp.logical_and(            #walls of the room are not being crossed
                     jnp.logical_and(
                     collision_left_wall,        
@@ -306,7 +307,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
 
         room_3_clear = jnp.logical_or(
-                jnp.logical_not(room == 2), #either it is not room 1 or
+                jnp.logical_not(room == 2), #either it is not room 2 or
                 jnp.logical_and(            #walls of the room are not being crossed
                     jnp.logical_and(
                     collision_left_wall_path,        
@@ -320,7 +321,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
 
         room_4_clear = jnp.logical_or(
-                jnp.logical_not(room == 3), #either it is not room 1 or
+                jnp.logical_not(room == 3), #either it is not room 3 or
                 jnp.logical_and(            #walls of the room are not being crossed
                     jnp.logical_and(
                     collision_left_wall_path,        
@@ -334,7 +335,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
 
         room_5_clear = jnp.logical_or(
-                jnp.logical_not(room == 4), #either it is not room 1 or
+                jnp.logical_not(room == 4), #either it is not room 4 or
                 jnp.logical_and(            #walls of the room are not being crossed
                     jnp.logical_and(
                     collision_left_wall,        
@@ -348,7 +349,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
 
         room_6_clear = jnp.logical_or(
-                jnp.logical_not(room == 5), #either it is not room 1 or
+                jnp.logical_not(room == 5), #either it is not room 5 or
                 jnp.logical_and(            #walls of the room are not being crossed
                     jnp.logical_and(
                     collision_left_special,        
@@ -864,7 +865,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
 
         room_12_clear = jnp.logical_or(
-                jnp.logical_not(room == 11), #either it is not room 1 or
+                jnp.logical_not(room == 11), #either it is not room 12 or
                 jnp.logical_and(            #walls of the room are not being crossed
                     jnp.logical_and(
                     collision_left_wall,        
@@ -878,7 +879,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
 
         room_13_clear = jnp.logical_or(
-                jnp.logical_not(room == 12), #either it is not room 1 or
+                jnp.logical_not(room == 12), #either it is not room 13 or
                 jnp.logical_and(            #walls of the room are not being crossed
                     jnp.logical_and(
                     collision_left_wall,        
@@ -892,7 +893,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
 
         room_14_clear = jnp.logical_or(
-                jnp.logical_not(room == 13), #either it is not room 1 or
+                jnp.logical_not(room == 13), #either it is not room 14 or
                 jnp.logical_and(            #walls of the room are not being crossed
                     jnp.logical_and(
                     collision_left_wall,        
@@ -927,12 +928,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         ##logic implementation gate border
 
-        gate_yellow_x = self.consts.YELLOW_GATE_POS[0]
-        gate_yellow_y = self.consts.YELLOW_GATE_POS[1]
         gate_yellow_open = state.gate_yellow[0]
 
-        gate_black_x = self.consts.BLACK_GATE_POS[0]
-        gate_black_y = self.consts.BLACK_GATE_POS[1]
         gate_black_open = state.gate_black[0]
 
         gate_yellow_not_block = jnp.logical_or(
@@ -1178,7 +1175,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                   lambda op: jnp.array([op[0],op[1],op[2],op[3]]).astype(jnp.int32),
                                   lambda op: op[4],
                                   operand=(new_item_x,new_item_y,new_item_tile,state.chalice[3],state.chalice)
-                                  )
+                                  ),
+            rndKey = state.rndKey
         )
     
     def _gate_interaction(self, state: AdventureState) -> AdventureState:
@@ -1306,7 +1304,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             sword=state.sword,
             bridge=state.bridge,
             magnet=state.magnet,
-            chalice=state.chalice
+            chalice=state.chalice,
+            rndKey=state.rndKey
         )
     
     def _item_pickup(self, state: AdventureState, action: chex.Array) -> AdventureState:
@@ -1499,7 +1498,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             sword=state.sword,
             bridge=state.bridge,
             magnet=state.magnet,
-            chalice=state.chalice
+            chalice=state.chalice,
+            rndKey=state.rndKey
         )
     
     def _item_drop(self, state: AdventureState, action: chex.Array) -> AdventureState:
@@ -1524,7 +1524,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             sword=state.sword,
             bridge=state.bridge,
             magnet=state.magnet,
-            chalice=state.chalice
+            chalice=state.chalice,
+            rndKey=state.rndKey
         )
         
 
@@ -1539,8 +1540,11 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         direction_y = jnp.sign(state.player[1]- state.dragon_yellow[1])
         dragon_yellow_x = state.dragon_yellow[0]
         dragon_yellow_y = state.dragon_yellow[1]
+        dragon_yellow_tile = state.dragon_yellow[2]
         dragon_yellow_animation = state.dragon_yellow[3]
         dragon_yellow_counter = state.dragon_yellow[4]
+        dragon_yellow_activate = state.dragon_yellow[6]
+
         # wait after attack
         dragon_yellow_counter = jax.lax.cond(
             dragon_yellow_animation == 1,
@@ -1549,15 +1553,28 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             operand = dragon_yellow_counter
         )
         dragon_yellow_freeze = dragon_yellow_counter % 15 != 0
+    
+        #dragon starts looking for plyer room after first encounter
+        dragon_yellow_activate = jax.lax.cond(state.player[2] == dragon_yellow_tile, lambda:1, lambda: dragon_yellow_activate)
+        rndKey, subkey = jax.random.split(state.rndKey)
+        dragon_yellow_x, dragon_yellow_y, dragon_yellow_tile = jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(dragon_yellow_tile != state.player[2], jnp.logical_not(dragon_yellow_freeze)),dragon_yellow_activate==1),
+            lambda: (jax.lax.cond(dragon_yellow_x>156, lambda:4, lambda:dragon_yellow_x +2), 
+                     jax.lax.cond(dragon_yellow_y>208, lambda:4, lambda:dragon_yellow_y+2), 
+                     jax.lax.cond(jnp.logical_or(dragon_yellow_x>156,dragon_yellow_y>208), lambda:jax.random.randint(subkey, (), 0, 13) , lambda:dragon_yellow_tile)),
+            lambda:(dragon_yellow_x, dragon_yellow_y, dragon_yellow_tile)
+        )
+
         #dragon eats player
         dragon_yellow_eat = jax.lax.cond(
             jnp.logical_and(jnp.logical_and((state.player[0]-dragon_yellow_x)*direction_x<4,(state.player[1]-dragon_yellow_y)*direction_y<4),jnp.logical_and(dragon_yellow_animation==1,jnp.logical_not(dragon_yellow_freeze))),
             lambda:1,
             lambda:0
         )
+
         #move towards player and attack
         dragon_yellow_x, dragon_yellow_y, dragon_yellow_animation, dragon_yellow_counter= jax.lax.cond(
-            jnp.logical_and(state.player[2]==state.dragon_yellow[2],jnp.logical_not(dragon_yellow_freeze)),
+            jnp.logical_and(state.player[2]==dragon_yellow_tile,jnp.logical_not(dragon_yellow_freeze)),
             lambda _: (dragon_yellow_x + direction_x*2, dragon_yellow_y + direction_y*2, jax.lax.cond(
                 jnp.logical_and((state.player[0]-dragon_yellow_x)*direction_x<4,(state.player[1]-dragon_yellow_y)*direction_y<4),
                 lambda _:jax.lax.cond(dragon_yellow_animation==2, lambda _:2, lambda _:1, operand = None),
@@ -1567,15 +1584,17 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             lambda _: (dragon_yellow_x, dragon_yellow_y, jax.lax.cond(jnp.logical_not(dragon_yellow_freeze), lambda _: jax.lax.cond(dragon_yellow_animation==2, lambda _:2, lambda _:0, operand = None), lambda _: jax.lax.cond(dragon_yellow_animation==2, lambda _:2, lambda _:1, operand = None), operand = None), dragon_yellow_counter),
             operand  = None
         )
+
         #kill dragon
         direction_x = jnp.sign(sword_x - state.dragon_yellow[0])
         direction_y = jnp.sign(sword_y- state.dragon_yellow[1])
         dragon_yellow_animation = jax.lax.cond(
-            jnp.logical_and(state.dragon_yellow[2]==sword_room, jnp.logical_and((sword_x-dragon_yellow_x)*direction_x<4, (sword_y-dragon_yellow_y)*direction_y<22)),
+            jnp.logical_and(dragon_yellow_tile==sword_room, jnp.logical_and((sword_x-dragon_yellow_x)*direction_x<4, (sword_y-dragon_yellow_y)*direction_y<22)),
             lambda _:2,
             lambda a:a,
             operand= dragon_yellow_animation
         )
+
         # dont ever move again when dead
         dragon_yellow_counter = jax.lax.cond(
             dragon_yellow_animation == 2,
@@ -1590,8 +1609,11 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         direction_y = jnp.sign(state.player[1]- state.dragon_green[1])
         dragon_green_x = state.dragon_green[0]
         dragon_green_y = state.dragon_green[1]
+        dragon_green_tile = state.dragon_green[2]
         dragon_green_animation = state.dragon_green[3]
         dragon_green_counter = state.dragon_green[4]
+        dragon_green_activate = state.dragon_green[6]
+
         # wait after attack
         dragon_green_counter = jax.lax.cond(
             dragon_green_animation == 1,
@@ -1600,15 +1622,28 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             operand = dragon_green_counter
         )
         dragon_green_freeze = dragon_green_counter % 15 != 0
+
+        #dragon starts looking for plyer room after first encounter
+        dragon_green_activate = jax.lax.cond(state.player[2] == dragon_green_tile, lambda:1, lambda: dragon_green_activate)
+        rndKey, subkey = jax.random.split(rndKey)
+        dragon_green_x, dragon_green_y, dragon_green_tile = jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(dragon_green_tile != state.player[2], jnp.logical_not(dragon_green_freeze)),dragon_green_activate==1),
+            lambda: (jax.lax.cond(dragon_green_x>156, lambda:4, lambda:dragon_green_x +2), 
+                     jax.lax.cond(dragon_green_y>208, lambda:4, lambda:dragon_green_y+2), 
+                     jax.lax.cond(jnp.logical_or(dragon_green_x>156,dragon_green_y>208), lambda:jax.random.randint(subkey, (), 0, 13) , lambda:dragon_green_tile)),
+            lambda:(dragon_green_x, dragon_green_y, dragon_green_tile)
+        )
+
         #dragon eats player
         dragon_green_eat = jax.lax.cond(
             jnp.logical_and(jnp.logical_and((state.player[0]-dragon_green_x)*direction_x<4,(state.player[1]-dragon_green_y)*direction_y<4),jnp.logical_and(dragon_green_animation==1,jnp.logical_not(dragon_green_freeze))),
             lambda:1,
             lambda:0
         )
+
         #move towards player and attack
         dragon_green_x, dragon_green_y, dragon_green_animation, dragon_green_counter= jax.lax.cond(
-            jnp.logical_and(state.player[2]==state.dragon_green[2],jnp.logical_not(dragon_green_freeze)),
+            jnp.logical_and(state.player[2]==dragon_green_tile,jnp.logical_not(dragon_green_freeze)),
             lambda _: (dragon_green_x + direction_x*2, dragon_green_y + direction_y*2, jax.lax.cond(
                 jnp.logical_and(jnp.logical_and((state.player[0]-dragon_green_x)*direction_x<4,(state.player[1]-dragon_green_y)*direction_y<4),dragon_green_animation!=2),
                 lambda _: jax.lax.cond(dragon_green_animation==2, lambda _:2, lambda _:1, operand = None),
@@ -1618,15 +1653,17 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             lambda _: (dragon_green_x, dragon_green_y, jax.lax.cond(jnp.logical_not(dragon_green_freeze), lambda _: jax.lax.cond(dragon_green_animation==2, lambda _:2, lambda _:0, operand = None), lambda _: jax.lax.cond(dragon_green_animation==2, lambda _:2, lambda _:1, operand = None), operand = None), dragon_green_counter),
             operand  = None
         )
+
         #kill dragon
         direction_x = jnp.sign(sword_x - state.dragon_green[0])
         direction_y = jnp.sign(sword_y- state.dragon_green[1])
         dragon_green_animation = jax.lax.cond(
-            jnp.logical_and(state.dragon_green[2]==sword_room, jnp.logical_and((sword_x-dragon_green_x)*direction_x<4, (sword_y-dragon_green_y)*direction_y<22)),
+            jnp.logical_and(dragon_green_tile==sword_room, jnp.logical_and((sword_x-dragon_green_x)*direction_x<4, (sword_y-dragon_green_y)*direction_y<22)),
             lambda _:2,
             lambda a:a,
             operand = dragon_green_animation
         )
+
         # dont ever move again when dead
         dragon_green_counter = jax.lax.cond(
             dragon_green_animation == 2,
@@ -1639,8 +1676,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         return AdventureState(
             step_counter = state.step_counter,
             player = state.player,
-            dragon_yellow = jnp.array([dragon_yellow_x,dragon_yellow_y,state.dragon_yellow[2],dragon_yellow_animation,dragon_yellow_counter,dragon_yellow_eat]).astype(jnp.int32),
-            dragon_green = jnp.array([dragon_green_x,dragon_green_y,state.dragon_green[2],dragon_green_animation,dragon_green_counter,dragon_green_eat]).astype(jnp.int32),
+            dragon_yellow = jnp.array([dragon_yellow_x,dragon_yellow_y,dragon_yellow_tile,dragon_yellow_animation,dragon_yellow_counter,dragon_yellow_eat, dragon_yellow_activate]).astype(jnp.int32),
+            dragon_green = jnp.array([dragon_green_x,dragon_green_y,dragon_green_tile,dragon_green_animation,dragon_green_counter,dragon_green_eat, dragon_green_activate]).astype(jnp.int32),
             key_yellow=state.key_yellow,
             key_black=state.key_black,
             gate_yellow=state.gate_yellow,
@@ -1648,7 +1685,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             sword=state.sword,
             bridge=state.bridge,
             magnet=state.magnet,
-            chalice=state.chalice
+            chalice=state.chalice,
+            rndKey=rndKey
         )
 
     def _magnet_step(self, state: AdventureState) -> AdventureState:
@@ -1728,6 +1766,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             bridge=jnp.array([bridge_x,bridge_y,state.bridge[2]]).astype(jnp.int32),
             magnet=state.magnet,
             chalice=jnp.array([chalice_x,chalice_y,state.chalice[2],state.chalice[3]]).astype(jnp.int32),
+            rndKey=state.rndKey
         )
     
     """This function solely exists for maing the chalice change colors"""
@@ -1749,12 +1788,13 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             bridge=state.bridge,
             magnet=state.magnet,
             chalice=jnp.array([state.chalice[0],state.chalice[1],state.chalice[2],chalice_color]).astype(jnp.int32),
+            rndKey=state.rndKey
         )
     
     """This function is called when the game starts and when it is reseted
     It initializes the Adventure state, for the most part these Values are pulled from the consts"""
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[AdventureObservation, AdventureState]:
-
+        state_key, _step_key = jax.random.split(key)
         state = AdventureState(
             step_counter = jnp.array(0).astype(jnp.int32),
             #Player Spawn: x, y, tile, inventory
@@ -1797,6 +1837,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             chalice = jnp.array([self.consts.CHALICE_SPAWN[0],
                                  self.consts.CHALICE_SPAWN[1],
                                  self.consts.CHALICE_SPAWN[2],7]).astype(jnp.int32), #ToDo
+            #random key
+            rndKey = state_key
         )
         initial_obs = self._get_observation(state)
 
@@ -1820,7 +1862,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             sword=state.sword,
             bridge=state.bridge,
             magnet=state.magnet,
-            chalice=state.chalice
+            chalice=state.chalice,
+            rndKey=state.rndKey
         )
         state = self._player_step(state, action)
         state = self._item_pickup(state, action)
@@ -1994,10 +2037,10 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: AdventureState, state: AdventureState):
         reward = jax.lax.cond(
-            jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1),
+            jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1), #lose when eaten by dragon
             lambda :-1,
             lambda : jax.lax.cond(
-                state.chalice[2]==1,
+                state.chalice[2]==1, #win when chalice in yellow castle
                 lambda :state.step_counter,
                 lambda :0 #this should happen on reset?
             )
