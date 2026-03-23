@@ -1,6 +1,7 @@
 import os
 from functools import partial
-from typing import NamedTuple, Tuple
+from typing import Tuple
+from flax import struct
 import jax
 import jax.lax
 import jax.numpy as jnp
@@ -223,6 +224,13 @@ ENEMY_BULLET_SPEED = 2
 WIZARD_SHOOT_INTERVAL = 20  # base steps between shots for each wizard
 WIZARD_SHOOT_OFFSET_MAX = 20  # random offset added to shooting interval (0-20)
 
+# Object-centric observation caps to reduce dimensionality/noise for MLP agents.
+OBS_MAX_PLAYER_BULLETS = 12
+OBS_MAX_ENEMY_BULLETS = 12
+OBS_MAX_WALLS = 24
+OBS_SCORE_CLIP = 50_000
+OBS_STEP_CLIP = 20_000
+
 # Lives configuration
 MAX_LIVES = 1  # Number of lives player starts with
 
@@ -294,74 +302,74 @@ ORBIT_DIRS = jnp.array([
 
 
 
-class DarkChambersConstants(NamedTuple):
+class DarkChambersConstants(struct.PyTreeNode):
     """Constants that define gameplay, visuals, and world layout."""
     # Dimensions
-    WIDTH: int = GAME_W
-    HEIGHT: int = GAME_H
-    WORLD_WIDTH: int = WORLD_W
-    WORLD_HEIGHT: int = WORLD_H
+    WIDTH: int = struct.field(pytree_node=False, default=GAME_W)
+    HEIGHT: int = struct.field(pytree_node=False, default=GAME_H)
+    WORLD_WIDTH: int = struct.field(pytree_node=False, default=WORLD_W)
+    WORLD_HEIGHT: int = struct.field(pytree_node=False, default=WORLD_H)
     
     # Color scheme
-    BACKGROUND_COLOR: Tuple[int, int, int] = (74, 74, 74)  # Dark gray floor from screenshot
-    PLAYER_COLOR: Tuple[int, int, int] = (200, 80, 60)
+    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(74, 74, 74))  # Dark gray floor from screenshot
+    PLAYER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(200, 80, 60))
     # Enemy colors by type (from weakest to strongest)
-    ZOMBIE_COLOR: Tuple[int, int, int] = (100, 100, 100)  # Gray
-    WRAITH_COLOR: Tuple[int, int, int] = (180, 180, 220)  # Light purple
-    SKELETON_COLOR: Tuple[int, int, int] = (220, 220, 200)  # Bone white
-    WIZARD_COLOR: Tuple[int, int, int] = (150, 80, 200)  # Purple
-    GRIM_REAPER_COLOR: Tuple[int, int, int] = (50, 50, 50)  # Dark gray/black
-    WALL_COLOR: Tuple[int, int, int] = (213, 117, 114)  # Salmon/coral pink walls from screenshot
-    HEART_COLOR: Tuple[int, int, int] = (220, 30, 30)
-    POISON_COLOR: Tuple[int, int, int] = (50, 200, 50)  # Green poison
-    TRAP_COLOR: Tuple[int, int, int] = (120, 70, 20)     # Brown trap
-    TREASURE_COLOR: Tuple[int, int, int] = (255, 220, 0) # Yellow for all treasures
-    SPAWNER_COLOR: Tuple[int, int, int] = (180, 50, 180) # Magenta/purple spawner
-    SHIELD_COLOR: Tuple[int, int, int] = (80, 120, 255) # Blue shield
-    GUN_COLOR: Tuple[int, int, int] = (40, 40, 40) # Black gun
-    BOMB_COLOR: Tuple[int, int, int] = (240, 240, 240) # White bomb
-    KEY_COLOR: Tuple[int, int, int] = (0, 255, 255) # Cyan key (easy to distinguish from gold)
-    LADDER_UP_COLOR: Tuple[int, int, int] = (140, 90, 40) # Brownish exit door
-    LADDER_DOWN_COLOR: Tuple[int, int, int] = (100, 60, 20) # Darker brown ladder down
-    UI_COLOR: Tuple[int, int, int] = (236, 236, 236)
-    HUD_COLOR: Tuple[int, int, int] = (199, 108, 58)  # HUD health/score color
-    BULLET_COLOR: Tuple[int, int, int] = (255, 200, 0)
-    SPEED_POTION_COLOR: Tuple[int, int, int] = (255, 100, 0)   # Orange
-    HEAL_POTION_COLOR: Tuple[int, int, int] = (255, 0, 255)    # Magenta
-    POISON_POTION_COLOR: Tuple[int, int, int] = (0, 255, 0)    # Green
+    ZOMBIE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(100, 100, 100))  # Gray
+    WRAITH_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(180, 180, 220))  # Light purple
+    SKELETON_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(220, 220, 200))  # Bone white
+    WIZARD_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(150, 80, 200))  # Purple
+    GRIM_REAPER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(50, 50, 50))  # Dark gray/black
+    WALL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(213, 117, 114))  # Salmon/coral pink walls from screenshot
+    HEART_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(220, 30, 30))
+    POISON_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(50, 200, 50))  # Green poison
+    TRAP_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(120, 70, 20))     # Brown trap
+    TREASURE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(255, 220, 0)) # Yellow for all treasures
+    SPAWNER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(180, 50, 180)) # Magenta/purple spawner
+    SHIELD_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(80, 120, 255)) # Blue shield
+    GUN_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(40, 40, 40)) # Black gun
+    BOMB_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(240, 240, 240)) # White bomb
+    KEY_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 255, 255)) # Cyan key (easy to distinguish from gold)
+    LADDER_UP_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(140, 90, 40)) # Brownish exit door
+    LADDER_DOWN_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(100, 60, 20)) # Darker brown ladder down
+    UI_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
+    HUD_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(199, 108, 58))  # HUD health/score color
+    BULLET_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(255, 200, 0))
+    SPEED_POTION_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(255, 100, 0))   # Orange
+    HEAL_POTION_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(255, 0, 255))    # Magenta
+    POISON_POTION_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 255, 0))    # Green
     
     # Sizes
-    PLAYER_WIDTH: int = 12
-    PLAYER_HEIGHT: int = 28
-    ENEMY_WIDTH: int = 10
-    ENEMY_HEIGHT: int = 28
+    PLAYER_WIDTH: int = struct.field(pytree_node=False, default=12)
+    PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=28)
+    ENEMY_WIDTH: int = struct.field(pytree_node=False, default=10)
+    ENEMY_HEIGHT: int = struct.field(pytree_node=False, default=28)
     
-    PLAYER_SPEED: int = 1
-    WALL_THICKNESS: int = 8
+    PLAYER_SPEED: int = struct.field(pytree_node=False, default=1)
+    WALL_THICKNESS: int = struct.field(pytree_node=False, default=8)
     
-    PLAYER_START_X: int = 18  # Mirrored from x=130 across map midline (WORLD_W=160, PLAYER_WIDTH=12)
-    PLAYER_START_Y: int = 210
+    PLAYER_START_X: int = struct.field(pytree_node=False, default=18)  # Mirrored from x=130 across map midline (WORLD_W=160, PLAYER_WIDTH=12)
+    PLAYER_START_Y: int = struct.field(pytree_node=False, default=210)
     
     # Health mechanics (scaled to classic 31 strength units)
-    MAX_HEALTH: int = 31
-    STARTING_HEALTH: int = 31
-    HEALTH_GAIN: int = 10  # Heart potion gain
-    POISON_DAMAGE: int = 4   # Light damage
-    TRAP_DAMAGE: int = 6     # Heavier damage
+    MAX_HEALTH: int = struct.field(pytree_node=False, default=31)
+    STARTING_HEALTH: int = struct.field(pytree_node=False, default=31)
+    HEALTH_GAIN: int = struct.field(pytree_node=False, default=10)  # Heart potion gain
+    POISON_DAMAGE: int = struct.field(pytree_node=False, default=4)   # Light damage
+    TRAP_DAMAGE: int = struct.field(pytree_node=False, default=6)     # Heavier damage
     
     # Enemy damage by type (contact damage per step)
-    ZOMBIE_DAMAGE: int = 1  # Weakest
-    WRAITH_DAMAGE: int = 1
-    SKELETON_DAMAGE: int = 3
-    WIZARD_DAMAGE: int = 4
-    GRIM_REAPER_DAMAGE: int = 5  # Strongest
+    ZOMBIE_DAMAGE: int = struct.field(pytree_node=False, default=1)  # Weakest
+    WRAITH_DAMAGE: int = struct.field(pytree_node=False, default=1)
+    SKELETON_DAMAGE: int = struct.field(pytree_node=False, default=3)
+    WIZARD_DAMAGE: int = struct.field(pytree_node=False, default=4)
+    GRIM_REAPER_DAMAGE: int = struct.field(pytree_node=False, default=5)  # Strongest
     
     # Enemy scoring (points awarded when killed)
-    ZOMBIE_POINTS: int = 10  # Weakest - explodes when killed
-    WRAITH_POINTS: int = 20
-    SKELETON_POINTS: int = 30
-    WIZARD_POINTS: int = 50
-    GRIM_REAPER_POINTS: int = 100  # Strongest
+    ZOMBIE_POINTS: int = struct.field(pytree_node=False, default=10)  # Weakest - explodes when killed
+    WRAITH_POINTS: int = struct.field(pytree_node=False, default=20)
+    SKELETON_POINTS: int = struct.field(pytree_node=False, default=30)
+    WIZARD_POINTS: int = struct.field(pytree_node=False, default=50)
+    GRIM_REAPER_POINTS: int = struct.field(pytree_node=False, default=100)  # Strongest
     
     # Potion effect durations and parameters
     # MOD SYSTEM: These constants control the behavior of potion items added via mods
@@ -369,36 +377,37 @@ class DarkChambersConstants(NamedTuple):
     #   - Speed Potion (ITEM_SPEED_POTION=15): Orange (255, 100, 0) - 8×8 pixel square
     #   - Heal Potion (ITEM_HEAL_POTION=16): Magenta (255, 0, 255) - 8×8 pixel square  
     #   - Poison Potion (ITEM_POISON_POTION=17): Bright Green (0, 255, 0) - 8×8 pixel square
-    SPEED_POTION_DURATION: int = 120  # 120 steps (~4 seconds at 30 FPS)
-    SPEED_POTION_MULTIPLIER: int = 2  # 2x movement speed
-    POISON_DURATION: int = 360        # 360 steps (~12 seconds at 30 FPS) - increased from 180 for longer effect
-    POISON_RADIUS: int = 60           # Damage radius in pixels - reduced from 80 for more targeted effect
-    POISON_DAMAGE_INTERVAL: int = 30  # Apply damage every 30 steps (once per second) - prevents instant kills
+    SPEED_POTION_DURATION: int = struct.field(pytree_node=False, default=120)  # 120 steps (~4 seconds at 30 FPS)
+    SPEED_POTION_MULTIPLIER: int = struct.field(pytree_node=False, default=2)  # 2x movement speed
+    POISON_DURATION: int = struct.field(pytree_node=False, default=360)        # 360 steps (~12 seconds at 30 FPS) - increased from 180 for longer effect
+    POISON_RADIUS: int = struct.field(pytree_node=False, default=60)           # Damage radius in pixels - reduced from 80 for more targeted effect
+    POISON_DAMAGE_INTERVAL: int = struct.field(pytree_node=False, default=30)  # Apply damage every 30 steps (once per second) - prevents instant kills
 
     # Potion item spawn toggles (disabled by default; enabled by mods via constants_overrides)
-    ENABLE_SPEED_POTION_SPAWN: bool = False
-    ENABLE_HEAL_POTION_SPAWN: bool = False
-    ENABLE_POISON_POTION_SPAWN: bool = False
+    ENABLE_SPEED_POTION_SPAWN: bool = struct.field(pytree_node=False, default=False)
+    ENABLE_HEAL_POTION_SPAWN: bool = struct.field(pytree_node=False, default=False)
+    ENABLE_POISON_POTION_SPAWN: bool = struct.field(pytree_node=False, default=False)
 
     # Base poison item spawn toggle (keeps poison logic intact, only disables spawning)
-    ENABLE_DEFAULT_POISON_SPAWN: bool = False
-    ENABLE_DEFAULT_TRAP_SPAWN: bool = True
+    ENABLE_DEFAULT_POISON_SPAWN: bool = struct.field(pytree_node=False, default=False)
+    ENABLE_DEFAULT_TRAP_SPAWN: bool = struct.field(pytree_node=False, default=True)
 
-    HAMMER_COLOR: Tuple[int, int, int] = (148, 0, 211)  # Brown hammer
-    ENABLE_HAMMER_SPAWN: bool = False
+    HAMMER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(148, 0, 211))  # Brown hammer
+    ENABLE_HAMMER_SPAWN: bool = struct.field(pytree_node=False, default=False)
 
     # Advanced enemy features (disabled by default; enabled by mods)
-    ENABLE_GRIM_REAPER_ENEMIES: bool = False
-    ENABLE_WIZARD_BULLETS: bool = False
+    ENABLE_GRIM_REAPER_ENEMIES: bool = struct.field(pytree_node=False, default=False)
+    ENABLE_WIZARD_BULLETS: bool = struct.field(pytree_node=False, default=False)
 
     # Checkpoint system (disabled by default; enabled by checkpoint mod)
     # Map index order: 0=middle chamber, 1=left chamber, 2=right chamber.
-    ENABLE_CHECKPOINT_RESPAWN: bool = False
-    CHECKPOINT_SPAWN_X_BY_MAP: Tuple[int, int, int] = (50, 20, 130)
-    CHECKPOINT_SPAWN_Y_BY_MAP: Tuple[int, int, int] = (50, 70, 70)
+    ENABLE_CHECKPOINT_RESPAWN: bool = struct.field(pytree_node=False, default=False)
+    CHECKPOINT_SPAWN_X_BY_MAP: Tuple[int, int, int] = struct.field(pytree_node=False, default=(50, 20, 130))
+    CHECKPOINT_SPAWN_Y_BY_MAP: Tuple[int, int, int] = struct.field(pytree_node=False, default=(50, 70, 70))
 
 
-class DarkChambersState(NamedTuple):
+@struct.dataclass
+class DarkChambersState:
     """Immutable snapshot of the current game state."""
     player_x: chex.Array
     player_y: chex.Array
@@ -468,7 +477,8 @@ class DarkChambersState(NamedTuple):
 
 
 
-class EntityPosition(NamedTuple):
+@struct.dataclass
+class EntityPosition:
     """Axis-aligned rectangle: top-left position and size."""
     x: jnp.ndarray
     y: jnp.ndarray
@@ -476,7 +486,8 @@ class EntityPosition(NamedTuple):
     height: jnp.ndarray
 
 
-class DarkChambersObservation(NamedTuple):
+@struct.dataclass
+class DarkChambersObservation:
     """Compact observation used by agents and the UI."""
     player: EntityPosition
     enemies: jnp.ndarray  # (NUM_ENEMIES, 6): screen_x, screen_y, width, height, type, in_view
@@ -492,7 +503,8 @@ class DarkChambersObservation(NamedTuple):
     step: jnp.ndarray
 
 
-class DarkChambersInfo(NamedTuple):
+@struct.dataclass
+class DarkChambersInfo:
     """Auxiliary info not intended for learning signals."""
     time: jnp.ndarray
 
@@ -1008,7 +1020,6 @@ class DarkChambersRenderer(JAXGameRenderer):
         middle_level_1_walls = jnp.array(maze_2, dtype=jnp.int32)
 
         right_maze = [
-
             # top and bottom caps
             [0, 0, 160, 6],
             [0, 594, 160, 6],
@@ -1066,9 +1077,20 @@ class DarkChambersRenderer(JAXGameRenderer):
             [0, 208, 56, 6],
             [104, 208, 56, 6],
 
+
+
+
+
             # middle-left portal enclosure (above/below portal opening, no direct block)
             [0, 274, 50, 6],
-            [0, 320, 50, 6],
+
+
+            # seperator
+            [0, 320, 300, 6],
+            
+            # vertical seperator
+            [77, 0, 6, 350],
+
 
             # bottom-left portal enclosure (above/below portal opening, no direct block)
             [0, 434, 50, 6],
@@ -2804,7 +2826,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         def handle_freeze(_: None):
             # When counter > 1: just decrement and freeze everything else
             def dec_only(_: None):
-                frozen_state = state._replace(
+                frozen_state = state.replace(
                     death_counter=state.death_counter - 1,
                     step_counter=state.step_counter + 1,
                 )
@@ -2897,7 +2919,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
                 # KEEP EVERYTHING: score, collected items, level, powerups, etc.
                 # Only restore health and clear bullets for clean respawn
-                respawned_state = state._replace(
+                respawned_state = state.replace(
                     player_x=respawn_x,
                     player_y=respawn_y,
                     health=jnp.array(self.consts.STARTING_HEALTH, dtype=jnp.int32),
@@ -4219,10 +4241,11 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 
                 spawner_pos = state.spawner_positions[spawner_idx]
                 
-                # Get current level walls + boundary walls for collision checking (must match reset placement logic)
+                # Use destination world walls so a portal/map change in this same step
+                # cannot place a newly spawned enemy into walls of the new map.
                 WALLS_SPAWNER = jnp.concatenate(
                     [
-                        self.renderer.LEVEL_WALLS[state.map_index, state.current_level],
+                        self.renderer.LEVEL_WALLS[new_map_index, new_level],
                         self.renderer.BOUNDARY_WALLS,
                     ],
                     axis=0,
@@ -4740,9 +4763,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             def no_wall_safety():
                 return final_enemy_active_after_level, use_sp_active, transition_item_active
             
-            # Only suppress wall-overlapping entities when changing levels
+            # Only suppress wall-overlapping entities when the world changes (level or map)
             safe_enemy_active, safe_spawner_active, safe_item_active = jax.lax.cond(
-                level_changed,
+                world_changed,
                 lambda _: apply_wall_safety(),
                 lambda _: no_wall_safety(),
                 operand=None
@@ -4870,13 +4893,13 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             "player_bullets": spaces.Box(
                 low=-1,
                 high=max(GAME_W, GAMEPLAY_H),
-                shape=(MAX_BULLETS, 5),
+                shape=(OBS_MAX_PLAYER_BULLETS, 5),
                 dtype=jnp.int32,
             ),
             "enemy_bullets": spaces.Box(
                 low=-1,
                 high=max(GAME_W, GAMEPLAY_H),
-                shape=(ENEMY_MAX_BULLETS, 5),
+                shape=(OBS_MAX_ENEMY_BULLETS, 5),
                 dtype=jnp.int32,
             ),
             "portals": spaces.Box(
@@ -4888,7 +4911,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             "walls": spaces.Box(
                 low=-1,
                 high=max(GAME_W, GAMEPLAY_H),
-                shape=(wall_segment_count, 5),
+                shape=(OBS_MAX_WALLS, 5),
                 dtype=jnp.int32,
             ),
             "border_distances": spaces.Box(
@@ -4898,8 +4921,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 dtype=jnp.int32,
             ),
             "health": spaces.Box(low=0, high=self.consts.MAX_HEALTH, shape=(), dtype=jnp.int32),
-            "score": spaces.Box(low=0, high=1_000_000_000, shape=(), dtype=jnp.int32),
-            "step": spaces.Box(low=0, high=1_000_000_000, shape=(), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=OBS_SCORE_CLIP, shape=(), dtype=jnp.int32),
+            "step": spaces.Box(low=0, high=OBS_STEP_CLIP, shape=(), dtype=jnp.int32),
         })
     
     def image_space(self) -> spaces.Box:
@@ -4924,6 +4947,33 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
         player_screen_x = (state.player_x - cam_x).astype(jnp.int32)
         player_screen_y = (state.player_y - cam_y).astype(jnp.int32)
+
+        def _select_nearest_visible(
+            x_raw: jnp.ndarray,
+            y_raw: jnp.ndarray,
+            widths: jnp.ndarray,
+            heights: jnp.ndarray,
+            in_view_mask: jnp.ndarray,
+            k: int,
+        ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+            cx = x_raw + widths // 2
+            cy = y_raw + heights // 2
+            dx = cx - player_screen_x
+            dy = cy - player_screen_y
+            dist2 = dx * dx + dy * dy
+            big = jnp.array(1_000_000_000, dtype=jnp.int32)
+            masked_dist2 = jnp.where(in_view_mask == 1, dist2, big)
+            sorted_idx = jnp.argsort(masked_dist2)
+            sel_idx = sorted_idx[:k]
+
+            sel_x_raw = x_raw[sel_idx]
+            sel_y_raw = y_raw[sel_idx]
+            sel_w = widths[sel_idx]
+            sel_h = heights[sel_idx]
+            sel_in_view = in_view_mask[sel_idx].astype(jnp.int32)
+            sel_x = jnp.where(sel_in_view == 1, jnp.clip(sel_x_raw, 0, GAME_W - 1), -1).astype(jnp.int32)
+            sel_y = jnp.where(sel_in_view == 1, jnp.clip(sel_y_raw, 0, GAMEPLAY_H - 1), -1).astype(jnp.int32)
+            return sel_x, sel_y, sel_w.astype(jnp.int32), sel_h.astype(jnp.int32), sel_in_view
         player = EntityPosition(
             x=jnp.asarray(player_screen_x, dtype=jnp.int32),
             y=jnp.asarray(player_screen_y, dtype=jnp.int32),
@@ -5016,8 +5066,14 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             & (bullet_y_raw + bullet_h > 0)
             & (bullet_y_raw < GAMEPLAY_H)
         ).astype(jnp.int32)
-        bullet_x = jnp.where(bullet_in_view == 1, jnp.clip(bullet_x_raw, 0, GAME_W - 1), -1).astype(jnp.int32)
-        bullet_y = jnp.where(bullet_in_view == 1, jnp.clip(bullet_y_raw, 0, GAMEPLAY_H - 1), -1).astype(jnp.int32)
+        bullet_x, bullet_y, bullet_w, bullet_h, bullet_in_view = _select_nearest_visible(
+            bullet_x_raw,
+            bullet_y_raw,
+            bullet_w,
+            bullet_h,
+            bullet_in_view,
+            OBS_MAX_PLAYER_BULLETS,
+        )
         player_bullets_array = jnp.stack([
             bullet_x,
             bullet_y,
@@ -5038,8 +5094,14 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             & (enemy_bullet_y_raw + enemy_bullet_h > 0)
             & (enemy_bullet_y_raw < GAMEPLAY_H)
         ).astype(jnp.int32)
-        enemy_bullet_x = jnp.where(enemy_bullet_in_view == 1, jnp.clip(enemy_bullet_x_raw, 0, GAME_W - 1), -1).astype(jnp.int32)
-        enemy_bullet_y = jnp.where(enemy_bullet_in_view == 1, jnp.clip(enemy_bullet_y_raw, 0, GAMEPLAY_H - 1), -1).astype(jnp.int32)
+        enemy_bullet_x, enemy_bullet_y, enemy_bullet_w, enemy_bullet_h, enemy_bullet_in_view = _select_nearest_visible(
+            enemy_bullet_x_raw,
+            enemy_bullet_y_raw,
+            enemy_bullet_w,
+            enemy_bullet_h,
+            enemy_bullet_in_view,
+            OBS_MAX_ENEMY_BULLETS,
+        )
         enemy_bullets_array = jnp.stack([
             enemy_bullet_x,
             enemy_bullet_y,
@@ -5094,8 +5156,14 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         wall_clip_h = jnp.maximum(0, wall_clip_y1 - wall_clip_y0).astype(jnp.int32)
         wall_in_view = ((wall_clip_w > 0) & (wall_clip_h > 0)).astype(jnp.int32)
 
-        wall_x = jnp.where(wall_in_view == 1, wall_clip_x0, -1).astype(jnp.int32)
-        wall_y = jnp.where(wall_in_view == 1, wall_clip_y0, -1).astype(jnp.int32)
+        wall_x, wall_y, wall_clip_w, wall_clip_h, wall_in_view = _select_nearest_visible(
+            wall_clip_x0.astype(jnp.int32),
+            wall_clip_y0.astype(jnp.int32),
+            wall_clip_w,
+            wall_clip_h,
+            wall_in_view,
+            OBS_MAX_WALLS,
+        )
         walls_array = jnp.stack([
             wall_x,
             wall_y,
@@ -5123,8 +5191,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             walls=walls_array,
             border_distances=border_distances,
             health=state.health.astype(jnp.int32),
-            score=state.score.astype(jnp.int32),
-            step=state.step_counter.astype(jnp.int32)
+            score=jnp.clip(state.score, 0, OBS_SCORE_CLIP).astype(jnp.int32),
+            step=jnp.clip(state.step_counter, 0, OBS_STEP_CLIP).astype(jnp.int32)
         )
     
     @partial(jax.jit, static_argnums=(0,))
