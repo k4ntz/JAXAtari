@@ -91,12 +91,14 @@ class Montezuma2State:
     items_x: jnp.ndarray
     items_y: jnp.ndarray
     items_active: jnp.ndarray
+    items_type: jnp.ndarray
     
     doors_x: jnp.ndarray
     doors_y: jnp.ndarray
     doors_active: jnp.ndarray
     global_doors_active: jnp.ndarray
     global_items_active: jnp.ndarray
+    global_items_type: jnp.ndarray
     global_enemies_active: jnp.ndarray
     
     conveyors_x: jnp.ndarray
@@ -174,7 +176,13 @@ class Montezuma2Renderer(JAXGameRenderer):
                 'name': 'skull', 'type': 'group',
                 'files': [f'enemies/skull_cycle/skull_{i}.npy' for i in range(1, 17)]
             },
-            {'name': 'item', 'type': 'single', 'file': 'items/key.npy', 'transpose': False},
+                        {
+                'name': 'item', 'type': 'group',
+                'files': [
+                    'items/key.npy',
+                    'items/gem.npy'
+                ]
+            },
             {'name': 'door', 'type': 'single', 'file': 'door.npy', 'transpose': False},
             {'name': 'conveyor', 'type': 'single', 'file': 'conveyor_belt.npy', 'transpose': False},
             {'name': 'life', 'type': 'single', 'file': 'life_sprite.npy', 'transpose': False},
@@ -321,7 +329,7 @@ class Montezuma2Renderer(JAXGameRenderer):
         
         # Draw Items
         def render_item(i, raster):
-            mask = self.SHAPE_MASKS["item"]
+            mask = self.SHAPE_MASKS["item"][state.items_type[i]]
             return jax.lax.cond(
                 state.items_active[i] == 1,
                 lambda r: self.jr.render_at(r, state.items_x[i], state.items_y[i] + 47, mask),
@@ -440,7 +448,7 @@ class Montezuma2Renderer(JAXGameRenderer):
 
         # Render Inventory (Keys)
         def render_inventory(i, raster):
-            mask = self.SHAPE_MASKS["item"]
+            mask = self.SHAPE_MASKS["item"][0]
             x = self.consts.ITEMBAR_LIFES_STARTING_X + i * 8
             y = self.consts.ITEMBAR_STARTING_Y
             return self.jr.render_at(raster, x, y, mask)
@@ -599,6 +607,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             lasers_x=lax, lasers_active=laa,
             enemies_active=state.global_enemies_active[room_id],
             items_active=state.global_items_active[room_id],
+            items_type=state.global_items_type[room_id],
             doors_active=state.global_doors_active[room_id]
         )
 
@@ -636,6 +645,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             items_x=jnp.zeros(self.consts.MAX_ITEMS_PER_ROOM, dtype=jnp.int32),
             items_y=jnp.zeros(self.consts.MAX_ITEMS_PER_ROOM, dtype=jnp.int32),
             items_active=jnp.zeros(self.consts.MAX_ITEMS_PER_ROOM, dtype=jnp.int32),
+            items_type=jnp.zeros(self.consts.MAX_ITEMS_PER_ROOM, dtype=jnp.int32),
             doors_x=jnp.zeros(self.consts.MAX_DOORS_PER_ROOM, dtype=jnp.int32),
             doors_y=jnp.zeros(self.consts.MAX_DOORS_PER_ROOM, dtype=jnp.int32),
             doors_active=jnp.zeros(self.consts.MAX_DOORS_PER_ROOM, dtype=jnp.int32),
@@ -651,6 +661,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             inventory=jnp.zeros(1, dtype=jnp.int32),
             global_enemies_active=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ENEMIES_PER_ROOM), dtype=jnp.int32),
             global_items_active=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ITEMS_PER_ROOM), dtype=jnp.int32),
+            global_items_type=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ITEMS_PER_ROOM), dtype=jnp.int32),
             global_doors_active=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_DOORS_PER_ROOM), dtype=jnp.int32),
             key=key
         )
@@ -666,7 +677,9 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         gea = state.global_enemies_active
         gea = gea.at[1, 0].set(1)
         
-        state = state.replace(global_items_active=gia, global_doors_active=gda, global_enemies_active=gea)
+        giy = state.global_items_type
+        giy = giy.at[0, 0].set(1) # Gem in room 0
+        state = state.replace(global_items_active=gia, global_doors_active=gda, global_enemies_active=gea, global_items_type=giy)
         
         state = self._load_room(jnp.array(1, dtype=jnp.int32), state)
         obs = self._get_observation(state)
@@ -930,9 +943,11 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             
             collect = jnp.logical_and(i_active, overlap)
             
-            new_keys = jnp.where(collect, keys_collected + 1, keys_collected)
+            is_key = state.items_type[i] == 0
+            new_keys = jnp.where(jnp.logical_and(collect, is_key), keys_collected + 1, keys_collected)
             new_items_active = jnp.where(collect, items_active.at[i].set(0), items_active)
-            new_score = jnp.where(collect, current_score + 100, current_score)
+            item_score = jnp.where(is_key, 100, 1000)
+            new_score = jnp.where(collect, current_score + item_score, current_score)
             
             return new_keys, new_items_active, new_score
 
