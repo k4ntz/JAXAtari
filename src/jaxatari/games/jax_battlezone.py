@@ -21,7 +21,7 @@ class EnemyType(IntEnum):
     TANK = 0
     SAUCER = 1
     FIGHTER_JET = 2
-    # SUPER_TANK = 3
+    SUPERTANK = 3
 
 
 class BattlezoneConstants(struct.PyTreeNode):
@@ -77,17 +77,18 @@ class BattlezoneConstants(struct.PyTreeNode):
     HITBOX_SIZE: float = struct.field(default=6.0, pytree_node=False)
     ENEMY_HITBOX_SIZE: float = struct.field(default=4.5, pytree_node=False)
     ENEMY_SPAWN_PROBS: chex.Array = struct.field(default_factory=lambda: jnp.array([
-        # T    S    F
-        [1.0, 0.0, 0.0],
-        [0.8, 0.2, 0.0],
-        [0.6, 0.3, 0.1],
-        [0.5, 0.3, 0.2]
+        # T    S    F   ST
+        [1.0, 0.0, 0.0, 0.0],
+        [0.8, 0.2, 0.0, 0.0],
+        [0.6, 0.3, 0.1, 0.0],
+        [0.5, 0.2, 0.2, 0.1]
     ]))
     RADAR_MAX_SCAN_RADIUS: int = struct.field(default=110, pytree_node=False)
     FIGHTER_AREA_X: Tuple[float, float] = struct.field(default=(-12.5, 12.5), pytree_node=False)
     FIGHTER_AREA_Z: Tuple[float, float] = struct.field(default=(75.0, 126.0), pytree_node=False)
     FIGHTER_SLOW_DOWN_DISTANCE: float = struct.field(default=48.0, pytree_node=False)
     FIGHTER_SHOOTING_DISTANCE: float = struct.field(default=30.0, pytree_node=False)
+    TANKS_SHOOTING_DISTANCE: float = struct.field(default=31.0, pytree_node=False)
     FIGHTER_DESPAWN_FRAMES: int = struct.field(default=12, pytree_node=False)
 
     # --- timing ---
@@ -996,12 +997,33 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             # for all phases >=2, pX is chosen
             return jax.lax.switch(fighter.phase, (p0, p1, pX), fighter)
 
+        def supertank_movement(supertank: Enemy) -> Enemy:  # ToDo: Unique movement
+            def player_spotted(supertank):
+                def too_close(tank):
+                    return move_to_player(supertank, 1)  # Enemy keeps 30 units distance to player
+
+                def too_far(supertank):
+                    return move_to_player(supertank, -1)
+
+                return jax.lax.cond(supertank.distance <= 30.0, too_close, too_far, supertank)
+
+            def player_not_spotted(supertank):
+                return enemy_turn(supertank)
+
+            return jax.lax.cond(jnp.abs(angle_diff) <= rot_speed,
+                                player_spotted, player_not_spotted, supertank)
+
         shoot_cond = (jnp.all(jnp.array([enemy.enemy_type == EnemyType.TANK,
                                         enemy.shoot_cd <= 0,
                                         jnp.abs(angle_diff) <= rot_speed,
-                                        enemy.distance <= 31.0, # TODO extract to consts
+                                        enemy.distance <= self.consts.TANKS_SHOOTING_DISTANCE,
                                         enemy.active]))
-
+                    | jnp.all(jnp.array([enemy.enemy_type == EnemyType.SUPERTANK,
+                                        enemy.shoot_cd <= 0,
+                                        jnp.abs(angle_diff) <= rot_speed,
+                                        enemy.distance <= self.consts.TANKS_SHOOTING_DISTANCE,
+                                        enemy.phase == 4,
+                                        enemy.active]))
                     | jnp.all(jnp.array([enemy.enemy_type == EnemyType.FIGHTER_JET,
                                          enemy.shoot_cd <= 0,
                                          enemy.distance <= self.consts.FIGHTER_SHOOTING_DISTANCE,
@@ -1010,7 +1032,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         
         new_enemy, new_projectile = jax.lax.cond(shoot_cond, shoot_projectile, lambda x: x,
                                                  (enemy, projectile))
-        return (jax.lax.switch(enemy.enemy_type, (tank_movement, saucer_movement, fighter_movement), new_enemy),
+        return (jax.lax.switch(enemy.enemy_type, (tank_movement, saucer_movement, fighter_movement, supertank_movement), new_enemy),
                 new_projectile)
 
     # ---------------------------------------------
@@ -1283,15 +1305,22 @@ class BattlezoneRenderer(JAXGameRenderer):
              self.pad_to_shape(self.SHAPE_MASKS["saucer_right"], pad, pad),
              self.pad_to_shape(self.SHAPE_MASKS["saucer_right"], pad, pad)
              ],
-            [
-                self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
-                self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
-                self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
-                self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
-                self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
-                self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
-                self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
-            ]
+            [self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
+             self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
+             self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
+             self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
+             self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
+             self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
+             self.pad_to_shape(self.SHAPE_MASKS["fighter_jet"], pad, pad),
+            ],
+            [self.pad_to_shape(self.SHAPE_MASKS["supertank_enemy_01"], pad, pad),
+             self.pad_to_shape(self.SHAPE_MASKS["supertank_enemy_02"], pad, pad),
+             self.pad_to_shape(self.SHAPE_MASKS["supertank_enemy_03"], pad, pad),
+             self.pad_to_shape(self.SHAPE_MASKS["supertank_enemy_04"], pad, pad),
+             self.pad_to_shape(jnp.flip(self.SHAPE_MASKS["supertank_enemy_03"], axis=1), pad, pad),
+             self.pad_to_shape(jnp.flip(self.SHAPE_MASKS["supertank_enemy_02"], axis=1), pad, pad),
+             self.pad_to_shape(jnp.flip(self.SHAPE_MASKS["supertank_enemy_01"], axis=1), pad, pad),
+            ],
              ])
         self.enemy_explosion_mask = jnp.array([self.pad_to_shape(self.SHAPE_MASKS["enemy_explosion_1"], pad, pad),
                                 self.pad_to_shape(self.SHAPE_MASKS["enemy_explosion_2"], pad, pad),
@@ -1336,6 +1365,10 @@ class BattlezoneRenderer(JAXGameRenderer):
             {'name': 'tank_enemy_02', 'type': 'single', 'file': 'tank_enemy_02.npy'},   # summarize them like digits
             {'name': 'tank_enemy_03', 'type': 'single', 'file': 'tank_enemy_03.npy'},
             {'name': 'tank_enemy_04', 'type': 'single', 'file': 'tank_enemy_04.npy'},
+            {'name': 'supertank_enemy_01', 'type': 'single', 'file': 'supertank_enemy_01.npy'},
+            {'name': 'supertank_enemy_02', 'type': 'single', 'file': 'supertank_enemy_02.npy'},
+            {'name': 'supertank_enemy_03', 'type': 'single', 'file': 'supertank_enemy_03.npy'},
+            {'name': 'supertank_enemy_04', 'type': 'single', 'file': 'supertank_enemy_04.npy'},
             {'name': 'saucer_left', 'type': 'single', 'file': 'saucer_left.npy'},
             {'name': 'saucer_right', 'type': 'single', 'file': 'saucer_right.npy'},
             {'name': 'fighter_jet', 'type': 'single', 'file': 'fighter.npy'},
