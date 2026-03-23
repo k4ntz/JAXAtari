@@ -272,6 +272,7 @@ class EntityPosition:
     y: jnp.ndarray
     width: jnp.ndarray
     height: jnp.ndarray
+    invincibility_timer: jnp.ndarray
 
 @struct.dataclass
 class JourneyEscapeObservation:
@@ -775,15 +776,6 @@ class JaxJourneyEscape(
             jnp.maximum(state.hit_cooldown - 1, 0)
         )
 
-        # [Debugging]
-
-        jax.lax.cond(
-            apply_damage,
-            lambda _: jax.debug.print("Hit! Effect: {}, New Score: {}", total_delta, new_score),
-            lambda _: None,
-            operand=None
-        )
-
         # --- Movement Physics ("Sticky" Logic) ---
 
         # Reduce left and right movement speed on collision
@@ -903,37 +895,13 @@ class JaxJourneyEscape(
         # Update time
         new_time = (state.time + 1).astype(jnp.int32)
 
-        # [Debugging]
-        # Print when we hit specific Powerups
-        jax.lax.cond(
-            hit_manager,
-            lambda _: jax.debug.print(">> HIT MIGHTY MANAGER! (Infinite Invincibility) Score: {}", consumable_score_effect),
-            lambda _: None,
-            operand=None
-        )
-
-        jax.lax.cond(
-            hit_roadie,
-            lambda _: jax.debug.print(">> HIT LOYAL ROADIE! (6s Invincibility)"),
-            lambda _: None,
-            operand=None
-        )
-
-        # Print Timer status periodically (e.g., every 60 frames) if active
-        jax.lax.cond(
-            (new_inv_timer > 0) & (new_time % 60 == 0),
-            lambda _: jax.debug.print("... Invincibility Active. Timer: {}", new_inv_timer),
-            lambda _: None,
-            operand=None
-        )
-
         # Update countdown
         update_countdown = (new_time % self.consts.countdown_frame == 0)
         new_countdown = jnp.where(update_countdown, state.countdown - 1, state.countdown)
 
         # Check game over
         game_over = jnp.where(
-            new_countdown <= 0,
+            (new_countdown <= 0) | (new_score <= 0),
             jnp.array(True),
             state.game_over,
         )
@@ -977,23 +945,11 @@ class JaxJourneyEscape(
             y=state.player_y,
             width=jnp.array(self.consts.player_width, dtype=jnp.int32),
             height=jnp.array(self.consts.player_height, dtype=jnp.int32),
+            invincibility_timer=state.invincibility_timer,
         )
 
         # create obstacle
-        obstacles = jnp.zeros((self.consts.MAX_OBS, 4), dtype=jnp.int32)
-        for i in range(self.consts.MAX_OBS):
-            ob = state.obstacles.at[i].get()
-            obstacles = obstacles.at[i].set(
-                jnp.array(
-                    [
-                        ob.at[0].get(),
-                        ob.at[1].get(),
-                        self.consts.obstacle_width,
-                        self.consts.obstacle_height
-                    ],
-                    dtype=jnp.int32
-                )
-            )
+        obstacles = state.obstacles[:, :5]
         return JourneyEscapeObservation(player=player, obstacles=obstacles)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1017,8 +973,8 @@ class JaxJourneyEscape(
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space for JourneyEscape.
         The observation contains:
-        - player: EntityPosition (x, y, width, height)
-        - obstacles: array of shape (10, 4) with x,y,width,height for each obstacle
+        - player: EntityPosition (x, y, width, height, invincibility_timer)
+        - obstacles: array of shape (10, 5) with x,y,width,height,type_idx for each obstacle
         """
         return spaces.Dict({
             "player": spaces.Dict({
@@ -1026,8 +982,9 @@ class JaxJourneyEscape(
                 "y": spaces.Box(low=0, high=self.consts.screen_height, shape=(), dtype=jnp.int32),
                 "width": spaces.Box(low=0, high=self.consts.screen_width, shape=(), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=self.consts.screen_height, shape=(), dtype=jnp.int32),
+                "invincibility_timer": spaces.Box(low=0, high=100000, shape=(), dtype=jnp.int32),
             })
-            , "obstacles": spaces.Box(low=0, high=self.consts.screen_height, shape=(self.consts.MAX_OBS, 4), dtype=jnp.int32),
+            , "obstacles": spaces.Box(low=0, high=self.consts.screen_height, shape=(self.consts.MAX_OBS, 5), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
@@ -1052,7 +1009,8 @@ class JaxJourneyEscape(
             obs.player.x.reshape(-1),
             obs.player.y.reshape(-1),
             obs.player.width.reshape(-1),
-            obs.player.height.reshape(-1)
+            obs.player.height.reshape(-1),
+            obs.player.invincibility_timer.reshape(-1)
         ])
 
         obstacles_flat = obs.obstacles.reshape(-1)
