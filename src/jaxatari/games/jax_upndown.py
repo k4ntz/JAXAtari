@@ -1,10 +1,12 @@
 import os
 from functools import partial
+import re
 from typing import NamedTuple, Tuple
 
 import jax
 import jax.lax
 import jax.numpy as jnp
+import numpy as np
 import chex
 from flax import struct
 
@@ -57,10 +59,27 @@ class UpNDownConstants(struct.PyTreeNode):
     COLLISION_THRESHOLD: float = 5.0  # Distance threshold for flag/collectible collision
     ACCELERATION_INTERVAL: int = 6  # Frames between speed changes when holding up/down
     EXTRA_LIFE_THRESHOLD: int = 10000  # Score threshold for extra life
+    LEVEL_COUNT: int = 3
     TRACK_LENGTH: int = 1036
-    FIRST_TRACK_CORNERS_X: chex.Array = struct.field(default_factory=lambda: jnp.array([30, 75, 128, 75, 21, 75, 131, 111, 150, 95, 150, 115, 150, 108, 150, 115, 115, 75, 18, 38, 67, 38, 38, 20, 64, 30]))
-    TRACK_CORNERS_Y: chex.Array = struct.field(default_factory=lambda: jnp.array([0, -40, -98, -155, -203, -268, -327, -347, -382, -467, -525, -565, -597, -625, -670, -705, -738, -788, -838, -862, -898, -925, -950, -972, -1000, -1035]))
-    SECOND_TRACK_CORNERS_X: chex.Array = struct.field(default_factory=lambda: jnp.array([115, 75, 20, 75, 133, 75, 22, 37, 63, 27, 66, 30, 63, 24, 60, 38, 38, 75, 131, 111, 150, 118, 118, 98, 150, 115]))
+    HAZARD_LEVEL_INDEX: int = 2  # Third level (0-based index)
+    HAZARD_ZONE_1_MIN_Y: float = 557.0
+    HAZARD_ZONE_1_MAX_Y: float = 587.0
+    HAZARD_ZONE_2_MIN_Y: float = 830.0
+    HAZARD_ZONE_2_MAX_Y: float = 860.0
+    FIRST_TRACK_CORNERS_X: chex.Array = struct.field(default_factory=lambda: jnp.array([
+        [30, 75, 128, 75, 21, 75, 131, 111, 150, 95, 150, 115, 150, 108, 150, 115, 115, 115, 75, 18, 38, 67, 38, 38, 20, 64, 30],
+        [40, 38, 17, 17, 17, 40, 66, 22, 33, 66, 38, 72, 130, 118, 118, 145, 120, 72, 30, 22, 37, 22, 30, 73, 60, 50, 45],
+        [16, 35, 16, 28, 16, 71, 130, 95, 145, 100, 145, 100, 115, 75, 75, 102, 102, 75, 22, 22, 40, 22, 34, 65, 65, 35, 16],
+    ]))
+    TRACK_CORNERS_Y: chex.Array = struct.field(default_factory=lambda: jnp.array
+        ([[0, -40, -98, -155, -203, -268, -327, -347, -382, -467, -525, -565, -597, -625, -670, -705, -709, -738, -788, -838, -862, -898, -925, -950, -972, -1000, -1035], 
+        [0, -5, -53, -57, -101, -179, -220, -246, -296, -330, -353, -377, -440, -457, -540, -580, -620, -684, -750, -770, -800, -880, -926, -1000, -1015, -1020, -1026],
+        [0, -26, -54, -72, -96, -150, -190, -210, -245, -278, -308, -335, -347, -390, -434, -454, -617, -635, -683, -714, -720, -735, -796, -824, -850, -951, -1028]]))
+    SECOND_TRACK_CORNERS_X: chex.Array = struct.field(default_factory=lambda: jnp.array([
+        [115, 75, 20, 75, 133, 75, 22, 37, 63, 27, 66, 30, 63, 24, 60, 38, 38, 38, 75, 131, 111, 150, 118, 118, 98, 150, 115],
+        [105, 107, 130, 130, 130, 115, 145, 100, 112, 145, 110, 72, 22, 33, 33, 60, 34, 72, 120, 110, 125, 100, 115, 73, 80, 85, 90],
+        [128, 115, 128, 118, 130, 71, 22, 30, 65, 22, 65, 22, 30, 75, 75, 46, 46, 75, 130, 130, 110, 95, 110, 145, 145, 110, 130],
+    ]))
     PLAYER_SIZE: Tuple[int, int] = (4, 16)
     INITIAL_ROAD_POS_Y: int = 25
     # Flag constants - 8 flags with different colors matching the top row
@@ -179,6 +198,7 @@ class UpNDownState:
     step_counter: chex.Array
     rng_key: chex.PRNGKey
     round_started: chex.Array
+    level: chex.Array  # Current level index (0, 1, 2)
     movement_steps: chex.Array
     steep_road_timer: chex.Array  # Timer for steep road speed reduction
     jump_slope: chex.Array  # X movement per Y step, locked at jump start (float)
@@ -310,12 +330,90 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         return self.consts.COLLECTIBLE_SCORES[collectible_type_ids]
 
     @partial(jax.jit, static_argnums=(0,))
-    def _on_level_completed(self, state: UpNDownState) -> UpNDownState:
-        """Optional callback invoked only when all flags are collected.
+    def _get_spawn_segment_for_level(self, level: chex.Array, road: chex.Array) -> chex.Array:
+        """Pick the first non-steep segment for the requested level/road."""
+        corners_a, corners_b = self._get_track_corners_for_level(level)
+        dx = jnp.where(
+            road == 0,
+            corners_a[1:] - corners_a[:-1],
+            corners_b[1:] - corners_b[:-1],
+        )
+        valid = jnp.abs(dx) >= 1
+        first_valid = jnp.argmax(valid.astype(jnp.int32))
+        return jnp.where(jnp.any(valid), first_valid.astype(jnp.int32), jnp.int32(0))
 
-        Default is a no-op and preserves existing game behavior.
-        """
-        return state
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_spawn_position_for_level(self, level: chex.Array, road: chex.Array) -> Tuple[chex.Array, chex.Array, chex.Array]:
+        """Return (segment, y, x) spawn tuple aligned to level geometry."""
+        segment = self._get_spawn_segment_for_level(level, road)
+        corners_y = self._get_track_corners_y_for_level(level)
+        spawn_y = corners_y[segment].astype(jnp.float32)
+        corners_a, corners_b = self._get_track_corners_for_level(level)
+        spawn_x = jnp.where(
+            road == 0,
+            self._get_x_on_road(spawn_y, segment, corners_a, corners_y),
+            self._get_x_on_road(spawn_y, segment, corners_b, corners_y),
+        )
+        return segment, spawn_y, spawn_x
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _on_level_completed(self, state: UpNDownState) -> UpNDownState:
+        """Advance to next level and freeze until release+press input starts it."""
+        rng_key, enemy_key = jax.random.split(state.rng_key)
+        next_level = (state.level + jnp.int32(1)) % jnp.int32(self.consts.LEVEL_COUNT)
+        start_road = jnp.int32(0)
+        start_segment, player_start_y, start_x = self._get_spawn_position_for_level(next_level, start_road)
+
+        enemy_cars = self._initialize_enemies(enemy_key, player_start_y, next_level)
+        collectibles = self._initialize_collectibles()
+
+        player_car = state.player_car._replace(
+            position=EntityPosition(
+                x=jnp.asarray(start_x, dtype=jnp.float32),
+                y=jnp.asarray(player_start_y, dtype=jnp.float32),
+                width=state.player_car.position.width,
+                height=state.player_car.position.height,
+            ),
+            speed=jnp.array(0, dtype=jnp.int32),
+            direction_x=jnp.array(0, dtype=jnp.int32),
+            current_road=start_road,
+            road_index_A=start_segment,
+            road_index_B=start_segment,
+        )
+
+        return state._replace(
+            level=next_level,
+            is_dead=jnp.array(False),
+            jump_cooldown=jnp.array(0, dtype=jnp.int32),
+            post_jump_cooldown=jnp.array(0, dtype=jnp.int32),
+            is_jumping=jnp.array(False),
+            is_on_road=jnp.array(True),
+            player_car=player_car,
+            round_started=jnp.array(False),
+            movement_steps=jnp.array(0),
+            steep_road_timer=jnp.array(0, dtype=jnp.int32),
+            jump_slope=jnp.array(0.0, dtype=jnp.float32),
+            collectibles=collectibles,
+            collectible_spawn_timer=jnp.array(0, dtype=jnp.int32),
+            enemy_cars=enemy_cars,
+            enemy_spawn_timer=jnp.array(self.consts.ENEMY_SPAWN_INTERVAL_BASE, dtype=jnp.int32),
+            awaiting_respawn=jnp.array(False),
+            awaiting_round_start=jnp.array(True),
+            input_released=jnp.array(False),
+            jump_key_released=jnp.array(True),
+            jump_total_duration=jnp.array(self.consts.JUMP_FRAMES, dtype=jnp.int32),
+            rng_key=rng_key,
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_track_corners_for_level(self, level: chex.Array) -> Tuple[chex.Array, chex.Array]:
+        """Return road A/B track corners for the requested level index."""
+        return self.consts.FIRST_TRACK_CORNERS_X[level], self.consts.SECOND_TRACK_CORNERS_X[level]
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_track_corners_y_for_level(self, level: chex.Array) -> chex.Array:
+        """Return track Y corners for the requested level index."""
+        return self.consts.TRACK_CORNERS_Y[level]
 
     @partial(jax.jit, static_argnums=(0,))
     def _jump_speed_allows_start(self, player_speed: chex.Array) -> chex.Array:
@@ -334,17 +432,19 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         return spawn_timer
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_slope_and_intercept_from_indices(self, current_road: chex.Array, road_index_A: chex.Array, road_index_B: chex.Array) -> Tuple[chex.Array, chex.Array]:
+    def _get_slope_and_intercept_from_indices(self, current_road: chex.Array, road_index_A: chex.Array, road_index_B: chex.Array, level: chex.Array) -> Tuple[chex.Array, chex.Array]:
         """Calculate slope and intercept for the current road segment."""
+        corners_a, corners_b = self._get_track_corners_for_level(level)
+        corners_y = self._get_track_corners_y_for_level(level)
         road_index = jnp.where(current_road == 0, road_index_A, road_index_B)
         x1 = jnp.where(current_road == 0, 
-                       self.consts.FIRST_TRACK_CORNERS_X[road_index], 
-                       self.consts.SECOND_TRACK_CORNERS_X[road_index])
+                       corners_a[road_index], 
+                       corners_b[road_index])
         x2 = jnp.where(current_road == 0, 
-                       self.consts.FIRST_TRACK_CORNERS_X[road_index + 1], 
-                       self.consts.SECOND_TRACK_CORNERS_X[road_index + 1])
-        y1 = self.consts.TRACK_CORNERS_Y[road_index]
-        y2 = self.consts.TRACK_CORNERS_Y[road_index + 1]
+                       corners_a[road_index + 1], 
+                       corners_b[road_index + 1])
+        y1 = corners_y[road_index]
+        y2 = corners_y[road_index + 1]
         
         dx = x2 - x1
         dy = y2 - y1
@@ -363,10 +463,10 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         )
     
     @partial(jax.jit, static_argnums=(0,))
-    def _get_x_on_road(self, y: chex.Array, road_segment: chex.Array, track_corners_x: chex.Array) -> chex.Array:
+    def _get_x_on_road(self, y: chex.Array, road_segment: chex.Array, track_corners_x: chex.Array, track_corners_y: chex.Array) -> chex.Array:
         """Calculate the X position on a road given a Y coordinate and road segment."""
-        y1 = self.consts.TRACK_CORNERS_Y[road_segment]
-        y2 = self.consts.TRACK_CORNERS_Y[road_segment + 1]
+        y1 = track_corners_y[road_segment]
+        y2 = track_corners_y[road_segment + 1]
         x1 = track_corners_x[road_segment]
         x2 = track_corners_x[road_segment + 1]
         
@@ -375,46 +475,75 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         return x1 + t * (x2 - x1)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_x_for_road_index(self, y: chex.Array, road_segment: chex.Array, road_index: chex.Array) -> chex.Array:
+    def _get_x_for_road_index(self, y: chex.Array, road_segment: chex.Array, road_index: chex.Array, level: chex.Array) -> chex.Array:
         """Get X position on road A (index 0) or road B (index 1) for given Y and segment."""
+        corners_a, corners_b = self._get_track_corners_for_level(level)
+        corners_y = self._get_track_corners_y_for_level(level)
         track_corners = jnp.where(
             road_index == 0,
-            self.consts.FIRST_TRACK_CORNERS_X[road_segment],
-            self.consts.SECOND_TRACK_CORNERS_X[road_segment],
+            corners_a[road_segment],
+            corners_b[road_segment],
         )
         track_corners_next = jnp.where(
             road_index == 0,
-            self.consts.FIRST_TRACK_CORNERS_X[road_segment + 1],
-            self.consts.SECOND_TRACK_CORNERS_X[road_segment + 1],
+            corners_a[road_segment + 1],
+            corners_b[road_segment + 1],
         )
-        y1 = self.consts.TRACK_CORNERS_Y[road_segment]
-        y2 = self.consts.TRACK_CORNERS_Y[road_segment + 1]
+        y1 = corners_y[road_segment]
+        y2 = corners_y[road_segment + 1]
         t = jnp.where(y2 != y1, (y - y1) / (y2 - y1), 0.0)
         return track_corners + t * (track_corners_next - track_corners)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_road_segment(self, y: chex.Array) -> chex.Array:
+    def _get_road_segment(self, y: chex.Array, level: chex.Array) -> chex.Array:
         """Return the road segment index for a given y position."""
-        segments = jnp.sum(self.consts.TRACK_CORNERS_Y > y, dtype=jnp.int32)
-        max_idx = jnp.int32(len(self.consts.TRACK_CORNERS_Y) - 1)
+        corners_y = self._get_track_corners_y_for_level(level)
+        segments = jnp.sum(corners_y > y, dtype=jnp.int32)
+        max_idx = jnp.int32(corners_y.shape[0] - 1)
         return jnp.clip(segments - 1, 0, max_idx)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _compute_direction_x(self, current_road: chex.Array, road_index_A: chex.Array, road_index_B: chex.Array) -> chex.Array:
+    def _to_track_distance_y(self, world_y: chex.Array) -> chex.Array:
+        """Convert wrapped world Y (negative-forward) to track-distance coordinates."""
+        return jnp.mod(-world_y, self.consts.TRACK_LENGTH)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _is_level_hazard_position(self, level: chex.Array, world_y: chex.Array) -> chex.Array:
+        """Return whether the position is inside configured level hazard zones.
+
+        Supports scalar or vector Y inputs.
+        """
+        track_y = self._to_track_distance_y(world_y)
+        in_first_hazard = jnp.logical_and(
+            track_y >= self.consts.HAZARD_ZONE_1_MIN_Y,
+            track_y <= self.consts.HAZARD_ZONE_1_MAX_Y,
+        )
+        in_second_hazard = jnp.logical_and(
+            track_y >= self.consts.HAZARD_ZONE_2_MIN_Y,
+            track_y <= self.consts.HAZARD_ZONE_2_MAX_Y,
+        )
+        return jnp.logical_and(
+            level == self.consts.HAZARD_LEVEL_INDEX,
+            jnp.logical_or(in_first_hazard, in_second_hazard),
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _compute_direction_x(self, current_road: chex.Array, road_index_A: chex.Array, road_index_B: chex.Array, level: chex.Array) -> chex.Array:
         """Calculate the X direction for movement on the current road segment.
         
         Returns:
             Direction as int32: -1 for left, 1 for right (defaults to -1 for vertical segments)
         """
+        corners_a, corners_b = self._get_track_corners_for_level(level)
         # Select the road index based on which road we're on
         road_index = jnp.where(current_road == 0, road_index_A, road_index_B)
         # Select corners for the current road
         x_curr = jnp.where(current_road == 0, 
-                           self.consts.FIRST_TRACK_CORNERS_X[road_index], 
-                           self.consts.SECOND_TRACK_CORNERS_X[road_index])
+                   corners_a[road_index], 
+                   corners_b[road_index])
         x_next = jnp.where(current_road == 0, 
-                           self.consts.FIRST_TRACK_CORNERS_X[road_index + 1], 
-                           self.consts.SECOND_TRACK_CORNERS_X[road_index + 1])
+                   corners_a[road_index + 1], 
+                   corners_b[road_index + 1])
         direction_raw = x_next - x_curr
         return jnp.where(direction_raw == 0, -1, jnp.sign(direction_raw)).astype(jnp.int32)
 
@@ -450,7 +579,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         return new_x, new_y
 
     @partial(jax.jit, static_argnums=(0,))
-    def _is_steep_road_segment(self, current_road: chex.Array, road_index_A: chex.Array, road_index_B: chex.Array) -> chex.Array:
+    def _is_steep_road_segment(self, current_road: chex.Array, road_index_A: chex.Array, road_index_B: chex.Array, level: chex.Array) -> chex.Array:
         """Check if the current road segment is steep (no X direction change).
         
         A steep segment is one where the X coordinates of consecutive corners are the same,
@@ -458,21 +587,23 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         
         Returns True if the segment is steep (requires jump to pass when going up).
         """
+        corners_a, corners_b = self._get_track_corners_for_level(level)
         # Get the X difference for the current road segment
         road_index = jnp.where(current_road == 0, road_index_A, road_index_B)
         x_curr = jnp.where(current_road == 0, 
-                           self.consts.FIRST_TRACK_CORNERS_X[road_index], 
-                           self.consts.SECOND_TRACK_CORNERS_X[road_index])
+                   corners_a[road_index], 
+                   corners_b[road_index])
         x_next = jnp.where(current_road == 0, 
-                           self.consts.FIRST_TRACK_CORNERS_X[road_index + 1], 
-                           self.consts.SECOND_TRACK_CORNERS_X[road_index + 1])
+                   corners_a[road_index + 1], 
+                   corners_b[road_index + 1])
         x_diff = jnp.abs(x_next - x_curr)
         # A segment is steep if there's no X change (or very small change)
         return x_diff < 1.0
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_steep_segment_progress(self, position_y: chex.Array, current_road: chex.Array, 
-                                     road_index_A: chex.Array, road_index_B: chex.Array) -> chex.Array:
+    def _get_steep_segment_progress(self, position_y: chex.Array, current_road: chex.Array,
+                                     road_index_A: chex.Array, road_index_B: chex.Array,
+                                     level: chex.Array) -> chex.Array:
         """Calculate progress (0.0 to 1.0) through the current steep road segment.
         
         0.0 = at the bottom (start) of the steep segment
@@ -482,9 +613,10 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         but Y decreases as we go forward on the track).
         """
         road_index = jnp.where(current_road == 0, road_index_A, road_index_B)
+        corners_y = self._get_track_corners_y_for_level(level)
         # Y coordinates of segment boundaries
-        y_start = self.consts.TRACK_CORNERS_Y[road_index]      # Start of segment (lower Y = further ahead)
-        y_end = self.consts.TRACK_CORNERS_Y[road_index + 1]    # End of segment (higher Y in absolute terms)
+        y_start = corners_y[road_index]      # Start of segment (lower Y = further ahead)
+        y_end = corners_y[road_index + 1]    # End of segment (higher Y in absolute terms)
         
         # Calculate progress: how far through the segment are we?
         # Since Y decreases as we go forward, we need to invert
@@ -498,6 +630,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     @partial(jax.jit, static_argnums=(0,))
     def _check_landing_position(
         self,
+        level: chex.Array,
         road_index_A: chex.Array,
         road_index_B: chex.Array,
         new_position_x: chex.Array,
@@ -508,21 +641,23 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         Returns:
             Tuple of (landing_in_water, between_roads, road_A_x, road_B_x)
         """
+        corners_a, corners_b = self._get_track_corners_for_level(level)
+        corners_y = self._get_track_corners_y_for_level(level)
         # Calculate X position on road A at the given Y
-        y_ratio_A = (new_position_y - self.consts.TRACK_CORNERS_Y[road_index_A]) / (
-            self.consts.TRACK_CORNERS_Y[road_index_A + 1] - self.consts.TRACK_CORNERS_Y[road_index_A]
+        y_ratio_A = (new_position_y - corners_y[road_index_A]) / (
+            corners_y[road_index_A + 1] - corners_y[road_index_A]
         )
         road_A_x = y_ratio_A * (
-            self.consts.FIRST_TRACK_CORNERS_X[road_index_A + 1] - self.consts.FIRST_TRACK_CORNERS_X[road_index_A]
-        ) + self.consts.FIRST_TRACK_CORNERS_X[road_index_A]
+            corners_a[road_index_A + 1] - corners_a[road_index_A]
+        ) + corners_a[road_index_A]
         
         # Calculate X position on road B at the given Y
-        y_ratio_B = (new_position_y - self.consts.TRACK_CORNERS_Y[road_index_B]) / (
-            self.consts.TRACK_CORNERS_Y[road_index_B + 1] - self.consts.TRACK_CORNERS_Y[road_index_B]
+        y_ratio_B = (new_position_y - corners_y[road_index_B]) / (
+            corners_y[road_index_B + 1] - corners_y[road_index_B]
         )
         road_B_x = y_ratio_B * (
-            self.consts.SECOND_TRACK_CORNERS_X[road_index_B + 1] - self.consts.SECOND_TRACK_CORNERS_X[road_index_B]
-        ) + self.consts.SECOND_TRACK_CORNERS_X[road_index_B]
+            corners_b[road_index_B + 1] - corners_b[road_index_B]
+        ) + corners_b[road_index_B]
         
         distance_to_road_A = jnp.abs(new_position_x - road_A_x)
         distance_to_road_B = jnp.abs(new_position_x - road_B_x)
@@ -539,6 +674,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     @partial(jax.jit, static_argnums=(0,))
     def _advance_player_car(
         self,
+        level: chex.Array,
         position_x: chex.Array,
         position_y: chex.Array,
         road_index_A: chex.Array,
@@ -568,10 +704,13 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         move_y, move_x, step_size, speed_sign = self._compute_movement_timing(speed, step_counter)
 
         # Get slope and intercept for current road
-        slope, b = self._get_slope_and_intercept_from_indices(current_road, road_index_A, road_index_B)
+        slope, b = self._get_slope_and_intercept_from_indices(current_road, road_index_A, road_index_B, level)
 
         # Determine X direction based on current road segment (for normal movement)
-        car_direction_x = self._compute_direction_x(current_road, road_index_A, road_index_B)
+        car_direction_x = self._compute_direction_x(current_road, road_index_A, road_index_B, level)
+
+        corners_a, corners_b = self._get_track_corners_for_level(level)
+        corners_y = self._get_track_corners_y_for_level(level)
 
         position = EntityPosition(x=position_x, y=position_y, width=width, height=height)
 
@@ -603,9 +742,9 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         
         # === AIR STEERING / MAGNETISM ===
         # Gradually steer towards the nearest road while in the air to prevent "teleporting" on landing
-        segment_curr = self._get_road_segment(new_player_y)
-        road_A_x_curr = self._get_x_on_road(new_player_y, segment_curr, self.consts.FIRST_TRACK_CORNERS_X)
-        road_B_x_curr = self._get_x_on_road(new_player_y, segment_curr, self.consts.SECOND_TRACK_CORNERS_X)
+        segment_curr = self._get_road_segment(new_player_y, level)
+        road_A_x_curr = self._get_x_on_road(new_player_y, segment_curr, corners_a, corners_y)
+        road_B_x_curr = self._get_x_on_road(new_player_y, segment_curr, corners_b, corners_y)
         
         dist_A = jnp.abs(raw_jump_x - road_A_x_curr)
         dist_B = jnp.abs(raw_jump_x - road_B_x_curr)
@@ -637,11 +776,11 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
 
         # === LANDING LOGIC ===
         # Get the current road segment based on new Y position
-        segment = self._get_road_segment(new_player_y)
+        segment = self._get_road_segment(new_player_y, level)
         
         # Calculate X positions of both roads at the new Y position
-        road_A_x = self._get_x_on_road(new_player_y, segment, self.consts.FIRST_TRACK_CORNERS_X)
-        road_B_x = self._get_x_on_road(new_player_y, segment, self.consts.SECOND_TRACK_CORNERS_X)
+        road_A_x = self._get_x_on_road(new_player_y, segment, corners_a, corners_y)
+        road_B_x = self._get_x_on_road(new_player_y, segment, corners_b, corners_y)
         
         # Calculate distances to each road
         dist_to_road_A = jnp.abs(new_player_x - road_A_x)
@@ -740,6 +879,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     @partial(jax.jit, static_argnums=(0,))
     def _advance_car_core(
         self,
+        level: chex.Array,
         position_x: chex.Array,
         position_y: chex.Array,
         road_index_A: chex.Array,
@@ -754,8 +894,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         """Simplified car advancement for enemy cars (no jumping/landing logic)."""
         # Calculate movement timing using helper
         move_y, move_x, step_size, speed_sign = self._compute_movement_timing(speed, step_counter)
-        slope, b = self._get_slope_and_intercept_from_indices(current_road, road_index_A, road_index_B)
-        car_direction_x = self._compute_direction_x(current_road, road_index_A, road_index_B)
+        slope, b = self._get_slope_and_intercept_from_indices(current_road, road_index_A, road_index_B, level)
+        car_direction_x = self._compute_direction_x(current_road, road_index_A, road_index_B, level)
         
         position = EntityPosition(x=position_x, y=position_y, width=width, height=height)
         
@@ -767,7 +907,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         wrapped_y = -((new_y * -1) % self.consts.TRACK_LENGTH)
         
         # Update road segment indices based on new position
-        segment_from_y = self._get_road_segment(new_y)
+        segment_from_y = self._get_road_segment(new_y, level)
         
         # Update road indices to track the current segment (use jnp.where for branchless execution)
         next_road_index_A = jnp.where(current_road == 0, segment_from_y, road_index_A)
@@ -791,10 +931,12 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     @partial(jax.jit, static_argnums=(0,))
     def _flag_step(self, state: UpNDownState, new_player_y: chex.Array, player_x: chex.Array, current_road: chex.Array) -> Tuple[Flag, chex.Array, chex.Array]:
         """Update flag collection state and score (vectorized)."""
+        corners_a, corners_b = self._get_track_corners_for_level(state.level)
+        corners_y = self._get_track_corners_y_for_level(state.level)
         # Calculate flag X positions on both roads
         # _get_x_on_road supports array inputs via advanced indexing
-        x_road_0 = self._get_x_on_road(state.flags.y, state.flags.road_segment, self.consts.FIRST_TRACK_CORNERS_X)
-        x_road_1 = self._get_x_on_road(state.flags.y, state.flags.road_segment, self.consts.SECOND_TRACK_CORNERS_X)
+        x_road_0 = self._get_x_on_road(state.flags.y, state.flags.road_segment, corners_a, corners_y)
+        x_road_1 = self._get_x_on_road(state.flags.y, state.flags.road_segment, corners_b, corners_y)
         
         flag_x = jnp.where(state.flags.road == 0, x_road_0, x_road_1)
         
@@ -873,11 +1015,13 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         type_id_spawn = jnp.clip(type_id_spawn, 0, 3).astype(jnp.int32)
         
         # Calculate X position on road (use jnp.where for branchless)
-        segment_spawn = self._get_road_segment(y_spawn)
+        segment_spawn = self._get_road_segment(y_spawn, state.level)
+        corners_a, corners_b = self._get_track_corners_for_level(state.level)
+        corners_y = self._get_track_corners_y_for_level(state.level)
         x_spawn = jnp.where(
             road_spawn == 0,
-            self._get_x_on_road(y_spawn, segment_spawn, self.consts.FIRST_TRACK_CORNERS_X),
-            self._get_x_on_road(y_spawn, segment_spawn, self.consts.SECOND_TRACK_CORNERS_X),
+            self._get_x_on_road(y_spawn, segment_spawn, corners_a, corners_y),
+            self._get_x_on_road(y_spawn, segment_spawn, corners_b, corners_y),
         )
         
         # Create mask for which collectibles to update
@@ -993,6 +1137,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             state.player_car.current_road,
             state.player_car.road_index_A,
             state.player_car.road_index_B,
+            state.level,
         )
         
         # Calculate progress through steep segment (0.0 = bottom, 1.0 = top)
@@ -1001,10 +1146,15 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             state.player_car.current_road,
             state.player_car.road_index_A,
             state.player_car.road_index_B,
+            state.level,
         )
         
         # Determine if player is on steep road going up (not jumping)
-        on_steep_not_jumping = jnp.logical_and(is_on_steep_road, jnp.logical_not(state.is_jumping))
+        use_steep_mechanics = state.level == 0
+        on_steep_not_jumping = jnp.logical_and(
+            use_steep_mechanics,
+            jnp.logical_and(is_on_steep_road, jnp.logical_not(state.is_jumping)),
+        )
         
         # Start with current speed
         player_speed = state.player_car.speed
@@ -1121,26 +1271,28 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             state.player_car.road_index_A,
             state.player_car.road_index_B,
         )
+        corners_a, corners_b = self._get_track_corners_for_level(state.level)
         
         # Get corner coordinates for the current segment
         # Segment goes from corner[road_index] to corner[road_index+1]
         # Use jnp.where for branchless execution
         start_x = jnp.where(
             state.player_car.current_road == 0,
-            self.consts.FIRST_TRACK_CORNERS_X[road_index],
-            self.consts.SECOND_TRACK_CORNERS_X[road_index],
+            corners_a[road_index],
+            corners_b[road_index],
         )
         end_x = jnp.where(
             state.player_car.current_road == 0,
-            self.consts.FIRST_TRACK_CORNERS_X[road_index + 1],
-            self.consts.SECOND_TRACK_CORNERS_X[road_index + 1],
+            corners_a[road_index + 1],
+            corners_b[road_index + 1],
         )
-        start_y = self.consts.TRACK_CORNERS_Y[road_index]
+        corners_y = self._get_track_corners_y_for_level(state.level)
+        start_y = corners_y[road_index]
 
         end_y = jnp.where(
-            jnp.equal(self.consts.FIRST_TRACK_CORNERS_X[road_index + 1], self.consts.FIRST_TRACK_CORNERS_X[road_index + 2]),
-            self.consts.TRACK_CORNERS_Y[road_index + 2],
-            self.consts.TRACK_CORNERS_Y[road_index + 1],
+            jnp.equal(corners_a[road_index + 1], corners_a[road_index + 2]),
+            corners_y[road_index + 2],
+            corners_y[road_index + 1],
         )
         
         # Calculate slope: how much X changes per unit Y change
@@ -1188,6 +1340,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         jump_progress = jnp.clip(jump_progress, 0.0, 1.0)
 
         updated_player_car = self._advance_player_car(
+            level=state.level,
             position_x=state.player_car.position.x,
             position_y=state.player_car.position.y,
             road_index_A=state.player_car.road_index_A,
@@ -1269,6 +1422,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     @partial(jax.jit, static_argnums=(0,))
     def _level_progression_step(self, state: UpNDownState) -> UpNDownState:
         """Handle level completion: award bonus and reset flags."""
+        # Temporary test shortcut: progress after collecting any single flag.
         all_flags_collected = jnp.all(state.flags_collected_mask)
         
         bonus = jnp.where(all_flags_collected, self.consts.ALL_FLAGS_BONUS, 0)
@@ -1334,9 +1488,11 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _initialize_enemies(self, key: chex.Array, player_start_y: chex.Array) -> EnemyCars:
+    def _initialize_enemies(self, key: chex.Array, player_start_y: chex.Array, level: chex.Array) -> EnemyCars:
         """Seed the initial set of visible enemies around the player."""
         key_init, key_type, key_road, key_speed, key_sign = jax.random.split(key, 5)
+        corners_a, corners_b = self._get_track_corners_for_level(level)
+        corners_y = self._get_track_corners_y_for_level(level)
 
         offsets = self.consts.INITIAL_ENEMY_BASE_OFFSET + self.consts.INITIAL_ENEMY_GAP * jnp.arange(self.consts.INITIAL_ENEMY_COUNT)
         spawn_signs = jax.random.choice(key_sign, jnp.array([-1.0, 1.0]), shape=(self.consts.INITIAL_ENEMY_COUNT,))
@@ -1344,12 +1500,12 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         init_y = -(((raw_spawn_y) * -1) % self.consts.TRACK_LENGTH)
         init_road = jax.random.randint(key_road, shape=(self.consts.INITIAL_ENEMY_COUNT,), minval=0, maxval=2)
 
-        init_segments = jax.vmap(self._get_road_segment)(init_y)
+        init_segments = jax.vmap(lambda y: self._get_road_segment(y, level))(init_y)
 
         init_x = jax.vmap(lambda y, seg, road: jax.lax.cond(
             road == 0,
-            lambda _: self._get_x_on_road(y, seg, self.consts.FIRST_TRACK_CORNERS_X),
-            lambda _: self._get_x_on_road(y, seg, self.consts.SECOND_TRACK_CORNERS_X),
+            lambda _: self._get_x_on_road(y, seg, corners_a, corners_y),
+            lambda _: self._get_x_on_road(y, seg, corners_b, corners_y),
             operand=None,
         ))(init_y, init_segments, init_road)
 
@@ -1361,8 +1517,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         def init_direction(seg, road):
             raw = jax.lax.cond(
                 road == 0,
-                lambda _: self.consts.FIRST_TRACK_CORNERS_X[seg+1] - self.consts.FIRST_TRACK_CORNERS_X[seg],
-                lambda _: self.consts.SECOND_TRACK_CORNERS_X[seg+1] - self.consts.SECOND_TRACK_CORNERS_X[seg],
+                lambda _: corners_a[seg + 1] - corners_a[seg],
+                lambda _: corners_b[seg + 1] - corners_b[seg],
                 operand=None,
             )
             return jax.lax.cond(raw > 0, lambda _: 1, lambda _: -1, operand=None)
@@ -1453,11 +1609,13 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         spawn_y = -(((raw_spawn_y) * -1) % self.consts.TRACK_LENGTH)
         spawn_road = self._sample_enemy_spawn_road(key_spawn_direction)
 
-        segment_spawn = self._get_road_segment(spawn_y)
+        segment_spawn = self._get_road_segment(spawn_y, state.level)
+        corners_a, corners_b = self._get_track_corners_for_level(state.level)
+        corners_y = self._get_track_corners_y_for_level(state.level)
         spawn_x = jnp.where(
             spawn_road == 0,
-            self._get_x_on_road(spawn_y, segment_spawn, self.consts.FIRST_TRACK_CORNERS_X),
-            self._get_x_on_road(spawn_y, segment_spawn, self.consts.SECOND_TRACK_CORNERS_X),
+            self._get_x_on_road(spawn_y, segment_spawn, corners_a, corners_y),
+            self._get_x_on_road(spawn_y, segment_spawn, corners_b, corners_y),
         )
 
         spawn_speed_mag = jax.random.randint(key_spawn_speed, shape=(), minval=self.consts.ENEMY_SPEED_MIN, maxval=self.consts.ENEMY_SPEED_MAX + 1)
@@ -1467,8 +1625,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
 
         direction_raw = jnp.where(
             spawn_road == 0,
-            self.consts.FIRST_TRACK_CORNERS_X[segment_spawn+1] - self.consts.FIRST_TRACK_CORNERS_X[segment_spawn],
-            self.consts.SECOND_TRACK_CORNERS_X[segment_spawn+1] - self.consts.SECOND_TRACK_CORNERS_X[segment_spawn],
+            self.consts.FIRST_TRACK_CORNERS_X[state.level, segment_spawn + 1] - self.consts.FIRST_TRACK_CORNERS_X[state.level, segment_spawn],
+            self.consts.SECOND_TRACK_CORNERS_X[state.level, segment_spawn + 1] - self.consts.SECOND_TRACK_CORNERS_X[state.level, segment_spawn],
         )
         spawn_direction_x = jnp.where(direction_raw > 0, 1, -1)
 
@@ -1490,6 +1648,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         enemy_speed = jnp.where(jnp.logical_and(enemy_active, flip_mask), -enemy_speed, enemy_speed)
 
         move_fn = lambda px, py, ra, rb, cr, sp, tp: self._advance_car_core(
+            level=state.level,
             position_x=px,
             position_y=py,
             road_index_A=ra,
@@ -1525,9 +1684,12 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         wrapped_dist = jnp.minimum(jnp.abs(delta_y), self.consts.TRACK_LENGTH - jnp.abs(delta_y))
         far_mask = wrapped_dist > self.consts.ENEMY_DESPAWN_DISTANCE
         age_mask = enemy_age > self.consts.ENEMY_MAX_AGE
+        hazard_mask = self._is_level_hazard_position(state.level, moved_position_y)
         despawn_mask = jnp.logical_and(enemy_active, jnp.logical_or(far_mask, age_mask))
-        final_active = jnp.logical_and(enemy_active, jnp.logical_not(despawn_mask))
-        enemy_age = jnp.where(despawn_mask, jnp.zeros_like(enemy_age), enemy_age)
+        hazard_despawn_mask = jnp.logical_and(enemy_active, hazard_mask)
+        total_despawn_mask = jnp.logical_or(despawn_mask, hazard_despawn_mask)
+        final_active = jnp.logical_and(enemy_active, jnp.logical_not(total_despawn_mask))
+        enemy_age = jnp.where(total_despawn_mask, jnp.zeros_like(enemy_age), enemy_age)
 
         next_enemy_cars = EnemyCars(
             position=EntityPosition(
@@ -1559,18 +1721,10 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         """Respawn the player on a random road while preserving score and flags."""
         rng_key, road_key, enemy_key = jax.random.split(state.rng_key, 3)
 
-        player_start_y = jnp.array(0.0)
-        start_segment = jnp.array(0, dtype=jnp.int32)
         respawn_road = jax.random.randint(road_key, shape=(), minval=0, maxval=2)
+        start_segment, player_start_y, start_x = self._get_spawn_position_for_level(state.level, respawn_road)
 
-        start_x = jax.lax.cond(
-            respawn_road == 0,
-            lambda _: self._get_x_on_road(player_start_y, start_segment, self.consts.FIRST_TRACK_CORNERS_X),
-            lambda _: self._get_x_on_road(player_start_y, start_segment, self.consts.SECOND_TRACK_CORNERS_X),
-            operand=None,
-        )
-
-        enemy_cars = self._initialize_enemies(enemy_key, player_start_y)
+        enemy_cars = self._initialize_enemies(enemy_key, player_start_y, state.level)
         collectibles = self._initialize_collectibles()
 
         player_car = Car(
@@ -1601,6 +1755,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             player_car=player_car,
             step_counter=state.step_counter,
             round_started=jnp.array(False),
+            level=state.level,
             movement_steps=jnp.array(0),
             steep_road_timer=jnp.array(0, dtype=jnp.int32),
             jump_slope=jnp.array(0.0, dtype=jnp.float32),
@@ -1629,6 +1784,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
           without clearing score or collected flags.
         - Landing collisions use a larger distance and are road-independent (for crossings).
         """
+
         player_x = state.player_car.position.x
         player_y = state.player_car.position.y
 
@@ -1666,6 +1822,11 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             jnp.logical_and(jnp.logical_not(state.is_jumping), jnp.logical_not(is_invincible))
         )
 
+        level_three_grounded_hazard = jnp.logical_and(
+            jnp.logical_not(state.is_jumping),
+            self._is_level_hazard_position(state.level, player_y),
+        )
+
         def handle_late_jump():
             hits = collision_mask.astype(jnp.int32)
             bonus = jnp.sum(hits) * self.consts.LATE_JUMP_ENEMY_SCORE
@@ -1697,8 +1858,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
                 player_car=dead_car,
             )
 
-        # Ground collision causes death (landing is now protected by invincibility)
-        any_fatal_collision = grounded_collision
+        # Ground collision or level-specific grounded hazard causes death.
+        any_fatal_collision = jnp.logical_or(grounded_collision, level_three_grounded_hazard)
 
         return jax.lax.cond(
             late_jump_collision,
@@ -1726,6 +1887,9 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     @partial(jax.jit, static_argnums=(0,))
     def _reset_jit(self, key: chex.PRNGKey) -> Tuple[UpNDownObservation, UpNDownState]:
         rng_key, flag_key, enemy_key = jax.random.split(key, 3)
+        initial_level = jnp.int32(0)
+        start_road = jnp.int32(jax.random.randint(rng_key, shape=(), minval=0, maxval=2))
+        start_segment, player_start_y, player_start_x = self._get_spawn_position_for_level(initial_level, start_road)
 
         # Evenly spread flags along the track with small jitter
         base_y = jnp.linspace(-900.0, -100.0, self.consts.NUM_FLAGS)
@@ -1736,7 +1900,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         flag_roads = jnp.arange(self.consts.NUM_FLAGS) % 2
 
         # Calculate which road segment each flag is on based on Y position
-        flag_segments = jax.vmap(self._get_road_segment)(flag_y_offsets)
+        flag_segments = jax.vmap(lambda y: self._get_road_segment(y, initial_level))(flag_y_offsets)
 
         # Each flag color index corresponds to its position (0-7)
         flag_color_indices = jnp.arange(self.consts.NUM_FLAGS)
@@ -1753,8 +1917,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         collectibles = self._initialize_collectibles()
 
         # Seed initial visible enemies spaced around the player
-        player_start_y = jnp.array(0.0)
-        enemy_cars = self._initialize_enemies(enemy_key, player_start_y)
+        enemy_cars = self._initialize_enemies(enemy_key, player_start_y, initial_level)
 
         state = UpNDownState(
             score=0,
@@ -1768,21 +1931,22 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             is_on_road=True,
             player_car=Car(
                 position=EntityPosition(
-                    x=jnp.asarray(30, dtype=jnp.float32),
-                    y=jnp.asarray(0, dtype=jnp.float32),
+                    x=jnp.asarray(player_start_x, dtype=jnp.float32),
+                    y=jnp.asarray(player_start_y, dtype=jnp.float32),
                     width=self.consts.PLAYER_SIZE[0],
                     height=self.consts.PLAYER_SIZE[1],
                 ),
                 speed=0,
                 direction_x=0,
-                current_road=0,
-                road_index_A=0,
-                road_index_B=0,
+                current_road=start_road,
+                road_index_A=start_segment,
+                road_index_B=start_segment,
                 type=0,
             ),
             step_counter=jnp.array(0),
             rng_key=rng_key,
             round_started=jnp.array(False),
+            level=initial_level,
             movement_steps=jnp.array(0),
             steep_road_timer=jnp.array(0, dtype=jnp.int32),
             jump_slope=jnp.array(0.0, dtype=jnp.float32),
@@ -1892,6 +2056,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             state.player_car.current_road,
             state.player_car.road_index_A,
             state.player_car.road_index_B,
+            state.level,
         )
         
         return UpNDownObservation(
@@ -2121,7 +2286,7 @@ class UpNDownRenderer(JAXGameRenderer):
         blackout_square = self._createBackgroundSprite(self.consts.FLAG_BLACKOUT_SIZE)
         
         # Build asset config locally (matches other games' pattern)
-        asset_config, road_files = self._get_asset_config(background, top_block, bottom_block, temp_pointer, blackout_square)
+        asset_config, level_background_files = self._get_asset_config(background, top_block, bottom_block, temp_pointer, blackout_square)
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/"
 
         (
@@ -2131,13 +2296,91 @@ class UpNDownRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
-        self.road_sizes, self.complete_road_size = self._get_road_sprite_sizes(road_files)
         self.view_height = self.config.game_dimensions[0]
-        # Precompute offsets so repeated road tiles can wrap seamlessly without gaps.
-        road_cycle = max(1, self.complete_road_size)
-        repeats = max(1, int(-(-self.view_height // road_cycle)) + 2)  # Ceiling division trick
-        self._road_tile_offsets = jnp.arange(-repeats, repeats + 1, dtype=jnp.int32) * jnp.int32(self.complete_road_size)
-        self._num_road_tiles = int(self._road_tile_offsets.shape[0])
+
+        level_masks_raw = [
+            self.SHAPE_MASKS["background_level_1"],
+            self.SHAPE_MASKS["background_level_2"],
+            self.SHAPE_MASKS["background_level_3"],
+        ]
+        level_sizes = []
+        level_cycles = []
+        for files in level_background_files:
+            sizes, cycle = self._get_group_sprite_sizes(files)
+            level_sizes.append(sizes)
+            level_cycles.append(cycle)
+
+        self._max_background_segments = max(mask.shape[0] for mask in level_masks_raw)
+        self._max_background_h = max(mask.shape[1] for mask in level_masks_raw)
+        self._max_background_w = max(mask.shape[2] for mask in level_masks_raw)
+
+        padded_masks = []
+        padded_sizes = []
+        padded_content_heights = []
+        padded_top_trims = []
+        padded_anchor_offsets = []
+        level_counts = []
+        level_content_cycles = []
+        for idx in range(self.consts.LEVEL_COUNT):
+            mask = level_masks_raw[idx]
+            count = int(mask.shape[0])
+            pad_n = self._max_background_segments - count
+            pad_h = self._max_background_h - mask.shape[1]
+            pad_w = self._max_background_w - mask.shape[2]
+            padded_mask = jnp.pad(mask, ((0, pad_n), (0, pad_h), (0, pad_w)), constant_values=self.jr.TRANSPARENT_ID)
+            padded_masks.append(padded_mask)
+
+            sizes = level_sizes[idx]
+            padded_sizes.append(sizes + [0] * (self._max_background_segments - len(sizes)))
+
+            # Use per-sprite opaque bounds to stack sections robustly when dimensions differ across levels.
+            mask_np = np.asarray(mask)
+            content_heights: list[int] = []
+            top_trims: list[int] = []
+            for seg_idx in range(count):
+                seg = mask_np[seg_idx]
+                opaque_rows = np.any(seg != self.jr.TRANSPARENT_ID, axis=1)
+                if np.any(opaque_rows):
+                    first_row = int(np.argmax(opaque_rows))
+                    last_row = int(len(opaque_rows) - 1 - np.argmax(opaque_rows[::-1]))
+                    top_trims.append(first_row)
+                    content_heights.append(last_row - first_row + 1)
+                else:
+                    top_trims.append(0)
+                    content_heights.append(0)
+
+            padded_content_heights.append(content_heights + [0] * (self._max_background_segments - len(content_heights)))
+            padded_top_trims.append(top_trims + [0] * (self._max_background_segments - len(top_trims)))
+
+            # Anchor sections so each next section sits directly above the previous one.
+            # This matches the map moving downward on screen.
+            anchor_offsets: list[int] = [0]
+            for seg_idx in range(1, count):
+                anchor_offsets.append(anchor_offsets[-1] - content_heights[seg_idx])
+            padded_anchor_offsets.append(anchor_offsets + [0] * (self._max_background_segments - len(anchor_offsets)))
+
+            level_content_cycles.append(int(sum(content_heights)))
+            level_counts.append(count)
+
+        self.level_background_masks = jnp.stack(padded_masks, axis=0)
+        self.level_background_sizes = jnp.array(padded_sizes, dtype=jnp.int32)
+        self.level_background_content_heights = jnp.array(padded_content_heights, dtype=jnp.int32)
+        self.level_background_top_trims = jnp.array(padded_top_trims, dtype=jnp.int32)
+        self.level_background_anchor_offsets = jnp.array(padded_anchor_offsets, dtype=jnp.int32)
+        self.level_background_counts = jnp.array(level_counts, dtype=jnp.int32)
+        self.level_background_cycle_sizes = jnp.array(level_content_cycles, dtype=jnp.int32)
+        max_background_cycle = max(1, int(max(level_content_cycles)))
+        bg_repeats = max(1, int(-(-self.view_height // max_background_cycle)) + 2)
+        self._background_tile_indices = jnp.arange(-bg_repeats, bg_repeats + 1, dtype=jnp.int32)
+        self._num_background_tiles = int(self._background_tile_indices.shape[0])
+        self._background_segment_indices = jnp.tile(
+            jnp.arange(self._max_background_segments, dtype=jnp.int32),
+            self._num_background_tiles,
+        )
+        self._background_draw_order_indices = jnp.arange(
+            self._num_background_tiles * self._max_background_segments,
+            dtype=jnp.int32,
+        )
 
         self.enemy_sprite_names = {
             self.consts.ENEMY_TYPE_CAMERO: "camero_left",
@@ -2202,27 +2445,52 @@ class UpNDownRenderer(JAXGameRenderer):
         sprite = jnp.tile(jnp.array(color, dtype=jnp.uint8), (*shape[:2], 1))
         return sprite
     
-    def _get_road_sprite_sizes(self, road_files: list[str]) -> list:
-        """Returns the sizes of the road sprites limited to the configured files."""
-        road_dir = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/roads"
+    def _extract_numeric_suffix(self, filename: str, prefix: str) -> int:
+        stem = os.path.splitext(filename)[0]
+        match = re.search(rf"^{re.escape(prefix)}(\d+)$", stem)
+        return int(match.group(1)) if match else 10**9
+
+    def _sorted_background_files(self, background_dir: str, prefix: str) -> list[str]:
+        files = [file for file in os.listdir(background_dir) if file.endswith(".npy") and file.startswith(prefix)]
+        return sorted(files, key=lambda file: self._extract_numeric_suffix(file, prefix))
+
+    def _get_group_sprite_sizes(self, relative_files: list[str]) -> Tuple[list[int], int]:
+        """Returns sprite heights and total height for a configured file group."""
+        sprite_root = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down"
         sizes = []
-        for file in road_files:
-            sprite_name = os.path.basename(file)
-            sprite = jnp.load(f"{road_dir}/{sprite_name}")
+        for relative_file in relative_files:
+            sprite = jnp.load(f"{sprite_root}/{relative_file}")
             sizes.append(sprite.shape[0])
         complete_size = int(sum(sizes))
         return sizes, complete_size
 
-    def _get_asset_config(self, backgroundSprite: jnp.ndarray, topBlockSprite: jnp.ndarray, bottomBlockSprite: jnp.ndarray, tempPointer: jnp.ndarray, blackoutSquare: jnp.ndarray) -> tuple[list, list[str]]:
+    def _get_asset_config(self, backgroundSprite: jnp.ndarray, topBlockSprite: jnp.ndarray, bottomBlockSprite: jnp.ndarray, tempPointer: jnp.ndarray, blackoutSquare: jnp.ndarray) -> tuple[list, list[list[str]]]:
         """Return asset manifest and ordered road files (renderer-local like other games)."""
         road_dir = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/roads"
+        background_dir = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/background"
         road_files = sorted(
             file for file in os.listdir(road_dir)
             if file.endswith(".npy")
         )
         roads = [f"roads/{file}" for file in road_files]
+
+        # Keep level 1 on the original road sections to preserve legacy alignment.
+        level_1_background = roads
+        level_2_background = [f"background/{file}" for file in self._sorted_background_files(background_dir, "backround_lvl2_")]
+        level_3_background = [f"background/{file}" for file in self._sorted_background_files(background_dir, "backround_lvl3_")]
+
+        if not level_1_background:
+            raise ValueError("Missing level 1 background sprite files")
+        if not level_2_background:
+            level_2_background = level_1_background
+        if not level_3_background:
+            level_3_background = level_1_background
+
         return [
             {'name': 'background', 'type': 'background', 'data': backgroundSprite},
+            {'name': 'background_level_1', 'type': 'group', 'files': level_1_background},
+            {'name': 'background_level_2', 'type': 'group', 'files': level_2_background},
+            {'name': 'background_level_3', 'type': 'group', 'files': level_3_background},
             {'name': 'road', 'type': 'group', 'files': roads},
             {'name': 'player', 'type': 'single', 'file': 'player_car.npy'},
             {'name': 'camero_left', 'type': 'single', 'file': 'enemy_cars/camero_left.npy'},
@@ -2242,12 +2510,13 @@ class UpNDownRenderer(JAXGameRenderer):
             {'name': 'ice_cream', 'type': 'single', 'file': 'ice_cream_cone.npy'},
             {'name': 'tempPointer', 'type': 'procedural', 'data': tempPointer},
             {'name': 'blackout_square', 'type': 'procedural', 'data': blackoutSquare},
-        ], roads
+        ], [level_1_background, level_2_background, level_3_background]
     
-    def _get_x_on_road(self, y: chex.Array, road_segment: chex.Array, track_corners_x: chex.Array) -> chex.Array:
+    def _get_x_on_road(self, y: chex.Array, road_segment: chex.Array, track_corners_x: chex.Array, level: chex.Array) -> chex.Array:
         """Calculate the X position on a road given a Y coordinate and road segment."""
-        y1 = self.consts.TRACK_CORNERS_Y[road_segment]
-        y2 = self.consts.TRACK_CORNERS_Y[road_segment + 1]
+        corners_y = self.consts.TRACK_CORNERS_Y[level]
+        y1 = corners_y[road_segment]
+        y2 = corners_y[road_segment + 1]
         x1 = track_corners_x[road_segment]
         x2 = track_corners_x[road_segment + 1]
         t = jnp.where(y2 != y1, (y - y1) / (y2 - y1), 0.0)
@@ -2278,36 +2547,63 @@ class UpNDownRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         raster = self.jr.create_object_raster(self.BACKGROUND)
-        road_diff = (-state.player_car.position.y) % self.complete_road_size
+        level_index = jnp.asarray(state.level, dtype=jnp.int32)
 
-        # Vectorized road rendering: compute all Y offsets, stamp via vmap, fold overlays.
-        road_masks = self.SHAPE_MASKS["road"]  # shape: (N, H, W)
-        num_segments = road_masks.shape[0]
+        background_masks = self.level_background_masks[level_index]
+        background_sizes = self.level_background_sizes[level_index]
+        background_content_heights = self.level_background_content_heights[level_index]
+        background_top_trims = self.level_background_top_trims[level_index]
+        background_anchor_offsets = self.level_background_anchor_offsets[level_index]
+        background_count = self.level_background_counts[level_index]
 
-        sizes = jnp.array(self.road_sizes, dtype=jnp.int32)
-        # Offsets: [0, cumsum(sizes[1:])]
-        offsets = jnp.concatenate([
+        # Keep legacy level-1 alignment behavior; level 2/3 use robust multi-level mapping.
+        level1_cycle = jnp.maximum(jnp.sum(background_sizes), 1)
+        level1_diff = ((-state.player_car.position.y) % level1_cycle).astype(jnp.int32)
+        level1_offsets = jnp.concatenate([
             jnp.array([0], dtype=jnp.int32),
-            jnp.cumsum(sizes[1:], axis=0)
+            jnp.cumsum(background_sizes[1:], axis=0),
         ], axis=0)
 
+        background_cycle = jnp.maximum(self.level_background_cycle_sizes[level_index], 1)
+        track_progress = (-state.player_car.position.y) % jnp.asarray(self.consts.TRACK_LENGTH, dtype=jnp.float32)
+        background_diff = jnp.floor(
+            track_progress * background_cycle.astype(jnp.float32) / jnp.asarray(self.consts.TRACK_LENGTH, dtype=jnp.float32)
+        ).astype(jnp.int32)
+
         base_y = jnp.asarray(self.consts.INITIAL_ROAD_POS_Y, dtype=jnp.int32)
-        y_positions = base_y + (road_diff.astype(jnp.int32)) - offsets
+        level1_y_positions = base_y + level1_diff - level1_offsets
+        # Align based on opaque bounds and precomputed anchor ordering.
+        levelN_y_positions = base_y + background_diff + background_anchor_offsets - background_top_trims
+        is_level1 = level_index == jnp.int32(0)
+        background_y_positions = jnp.where(is_level1, level1_y_positions, levelN_y_positions)
 
-        tile_offsets = self._road_tile_offsets
-        tile_count = self._num_road_tiles
-        tiled_y = (y_positions[None, :] + tile_offsets[:, None]).reshape(-1)
-        tiled_masks = jnp.tile(road_masks, (tile_count, 1, 1))
-        tiled_sizes = jnp.tile(sizes, tile_count)
+        draw_sizes = jnp.where(is_level1, background_sizes, background_content_heights)
+        draw_cycle = jnp.where(is_level1, level1_cycle.astype(jnp.int32), background_cycle.astype(jnp.int32))
 
-        visible = jnp.logical_and(
-            tiled_y < self.view_height,
-            (tiled_y + tiled_sizes) > 0
+        background_tile_offsets = self._background_tile_indices * draw_cycle
+        background_tile_count = self._num_background_tiles
+
+        tiled_background_y = (background_y_positions[None, :] + background_tile_offsets[:, None]).reshape(-1)
+        tiled_background_masks = jnp.tile(background_masks, (background_tile_count, 1, 1))
+        tiled_background_sizes = jnp.tile(draw_sizes, background_tile_count)
+        tiled_background_indices = self._background_segment_indices
+
+        total_background_segments = background_tile_count * self._max_background_segments
+        draw_keys = tiled_background_y.astype(jnp.int32) * jnp.int32(total_background_segments + 1) + self._background_draw_order_indices
+        draw_order = jnp.argsort(draw_keys)
+        sorted_background_y = tiled_background_y[draw_order]
+        sorted_background_masks = tiled_background_masks[draw_order]
+        sorted_background_sizes = tiled_background_sizes[draw_order]
+        sorted_background_indices = tiled_background_indices[draw_order]
+
+        background_visible = jnp.logical_and(
+            sorted_background_indices < background_count,
+            jnp.logical_and(sorted_background_y < self.view_height, (sorted_background_y + sorted_background_sizes) > 0),
         )
 
         empty_raster = jnp.full_like(self.BACKGROUND, self.jr.TRANSPARENT_ID)
 
-        def stamp(y, mask, is_visible):
+        def stamp_background(y, mask, is_visible):
             return jax.lax.cond(
                 is_visible,
                 lambda _: self.jr.render_at_clipped(empty_raster, 10, y, mask),
@@ -2315,15 +2611,21 @@ class UpNDownRenderer(JAXGameRenderer):
                 operand=None,
             )
 
-        overlays = jax.vmap(stamp)(tiled_y, tiled_masks, visible)
+        background_overlays = jax.vmap(stamp_background)(sorted_background_y, sorted_background_masks, background_visible)
 
-        total_segments = tile_count * num_segments
-
-        def combine(i, acc):
-            over = overlays[i]
+        def combine_background(i, acc):
+            over = background_overlays[i]
             return jnp.where(over != self.jr.TRANSPARENT_ID, over, acc)
 
-        raster = jax.lax.fori_loop(0, total_segments, combine, raster)
+        raster = jax.lax.fori_loop(0, total_background_segments, combine_background, raster)
+
+        # The level-specific map sprites are the visible track layer.
+        # Do not overdraw them with the static road set.
+
+        should_hide_dynamic = jnp.logical_or(state.awaiting_round_start, state.awaiting_respawn)
+        player_y = state.player_car.position.y
+        corners_a = self.consts.FIRST_TRACK_CORNERS_X[level_index]
+        corners_b = self.consts.SECOND_TRACK_CORNERS_X[level_index]
 
         def select_enemy_mask(enemy_type: chex.Array, going_left: chex.Array):
             """Select enemy mask: left masks are base, right masks are horizontally flipped."""
@@ -2345,12 +2647,10 @@ class UpNDownRenderer(JAXGameRenderer):
             enemy_y = enemy_y_arr[enemy_idx]
             enemy_type = enemy_type_arr[enemy_idx]
             direction_x = enemy_direction_x_arr[enemy_idx]
-            screen_y = 105 + (enemy_y - state.player_car.position.y)
-            # Hide enemies when awaiting round start or awaiting respawn
-            should_hide = jnp.logical_or(state.awaiting_round_start, state.awaiting_respawn)
+            screen_y = 105 + (enemy_y - player_y)
             is_visible = jnp.logical_and(
                 jnp.logical_and(enemy_active, jnp.logical_and(screen_y > 25, screen_y < 195)),
-                ~should_hide
+                ~should_hide_dynamic
             )
             enemy_mask = select_enemy_mask(enemy_type, direction_x < 0)
 
@@ -2373,10 +2673,8 @@ class UpNDownRenderer(JAXGameRenderer):
 
         player_screen_y = jnp.int32(105 - jump_offset)
         player_mask = self.SHAPE_MASKS["player"]
-        # Skip rendering player when awaiting respawn OR awaiting round start
-        should_hide_player = jnp.logical_or(state.awaiting_respawn, state.awaiting_round_start)
         raster_player = jax.lax.cond(
-            should_hide_player,
+            should_hide_dynamic,
             lambda _: raster_enemies,  # Don't render player
             lambda _: self.jr.render_at_clipped(raster_enemies, state.player_car.position.x, player_screen_y, player_mask),
             operand=None,
@@ -2427,16 +2725,14 @@ class UpNDownRenderer(JAXGameRenderer):
             
             flag_x = jax.lax.cond(
                 flag_road == 0,
-                lambda _: self._get_x_on_road(flag_y, flag_segment, self.consts.FIRST_TRACK_CORNERS_X),
-                lambda _: self._get_x_on_road(flag_y, flag_segment, self.consts.SECOND_TRACK_CORNERS_X),
+                lambda _: self._get_x_on_road(flag_y, flag_segment, corners_a, level_index),
+                lambda _: self._get_x_on_road(flag_y, flag_segment, corners_b, level_index),
                 operand=None,
             )
-            screen_y = 105 + (flag_y - state.player_car.position.y)
-            # Hide flags when awaiting round start or awaiting respawn
-            should_hide = jnp.logical_or(state.awaiting_round_start, state.awaiting_respawn)
+            screen_y = 105 + (flag_y - player_y)
             is_visible = jnp.logical_and(
                 jnp.logical_and(screen_y > 25, screen_y < 195),
-                jnp.logical_and(~flag_collected, ~should_hide)
+                jnp.logical_and(~flag_collected, ~should_hide_dynamic)
             )
             color_id = self.flag_palette_ids[flag_color_idx]
             colored_flag_mask = jnp.where(
@@ -2481,12 +2777,10 @@ class UpNDownRenderer(JAXGameRenderer):
             collectible_active = state.collectibles.active[collectible_idx]
             collectible_color_idx = state.collectibles.color_idx[collectible_idx]
             collectible_type_id = state.collectibles.type_id[collectible_idx]
-            screen_y = 105 + (collectible_y - state.player_car.position.y)
-            # Hide collectibles when awaiting round start or awaiting respawn
-            should_hide = jnp.logical_or(state.awaiting_round_start, state.awaiting_respawn)
+            screen_y = 105 + (collectible_y - player_y)
             is_visible = jnp.logical_and(
                 jnp.logical_and(screen_y > 25, screen_y < 195),
-                jnp.logical_and(collectible_active, ~should_hide)
+                jnp.logical_and(collectible_active, ~should_hide_dynamic)
             )
 
             def get_sprite_and_mask(type_id):

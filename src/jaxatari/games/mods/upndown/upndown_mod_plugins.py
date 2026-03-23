@@ -9,7 +9,13 @@ from jaxatari.modification import JaxAtariInternalModPlugin
 
 class RemoveStepRoadsMod(JaxAtariInternalModPlugin):
     @partial(jax.jit, static_argnums=(0,))
-    def _is_steep_road_segment(self, current_road: chex.Array, road_index_A: chex.Array, road_index_B: chex.Array) -> chex.Array:
+    def _is_steep_road_segment(
+        self,
+        current_road: chex.Array,
+        road_index_A: chex.Array,
+        road_index_B: chex.Array,
+        level: chex.Array,
+    ) -> chex.Array:
         return jnp.array(False)
 
 
@@ -62,19 +68,8 @@ class ProgressiveCarSpawnRateMod(JaxAtariInternalModPlugin):
         target_interval = jnp.maximum(min_interval, decayed_interval)
         return jnp.minimum(spawn_timer, target_interval)
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _on_level_completed(self, state: UpNDownState) -> UpNDownState:
-        return state._replace(
-            movement_steps=jnp.array(0, dtype=jnp.int32),
-            enemy_spawn_timer=jnp.array(self._env.consts.ENEMY_SPAWN_INTERVAL_BASE, dtype=jnp.int32),
-        )
-
 
 class TimeDecayCollectibleValueMod(JaxAtariInternalModPlugin):
-    @partial(jax.jit, static_argnums=(0,))
-    def _on_level_completed(self, state: UpNDownState) -> UpNDownState:
-        return state._replace(movement_steps=jnp.array(0, dtype=jnp.int32))
-
     @partial(jax.jit, static_argnums=(0,))
     def _collectible_score_values(self, state: UpNDownState, collectible_type_ids: chex.Array) -> chex.Array:
         base_scores = self._env.consts.COLLECTIBLE_SCORES[collectible_type_ids]
