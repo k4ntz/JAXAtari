@@ -138,7 +138,8 @@ class Montezuma2Renderer(JAXGameRenderer):
         
         final_asset_config = [
             {'name': 'bg', 'type': 'background', 'data': bg_data},
-            {'name': 'room_bg', 'type': 'single', 'file': 'backgrounds/mid_room_level_0.npy', 'transpose': False},
+            {'name': 'room_bg_0', 'type': 'single', 'file': 'backgrounds/base_sprite_level_0.npy', 'transpose': False},
+            {'name': 'room_bg_1', 'type': 'single', 'file': 'backgrounds/mid_room_level_0.npy', 'transpose': False},
             {
                 'name': 'player', 'type': 'group',
                 'files': [
@@ -213,7 +214,10 @@ class Montezuma2Renderer(JAXGameRenderer):
         raster = self.jr.create_object_raster(self.BACKGROUND)
         
         # Draw Room Background
-        raster = self.jr.render_at(raster, 0, 47, self.SHAPE_MASKS["room_bg"])
+        mask_0 = self.SHAPE_MASKS["room_bg_0"][:149, :]
+        mask_1 = self.SHAPE_MASKS["room_bg_1"][:149, :]
+        room_bg_mask = jnp.where(state.room_id == 0, mask_0, mask_1)
+        raster = self.jr.render_at(raster, 0, 47, room_bg_mask)
         
         # Draw Ladders (Vertical Rails + Horizontal Rungs)
         def draw_ladder_accurate(i, r):
@@ -401,16 +405,19 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         super().__init__(consts)
         self.renderer = Montezuma2Renderer(self.consts)
         
-        sprite_path = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "mid_room_collision_level_0.npy")
-        col_map = jnp.load(sprite_path)[:, :, 0] # (149, 160)
-        room_col = jnp.where(col_map > 0, 1, 0).astype(jnp.int32)
-        
-        # Add 4-pixel side walls from y=6 downwards
-        room_col = room_col.at[6:, 0:4].set(1)
-        room_col = room_col.at[6:, self.consts.WIDTH-4:].set(1)
-        self.ROOM_COLLISION_MAP = room_col
+        sprite_path_0 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "base_collision_map.npy")
+        col_map_0 = jnp.load(sprite_path_0)[:149, :, 0]
+        room_col_0 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
+        room_col_0 = room_col_0.at[6:, 0:4].set(1) # Left wall only for room_0_0
 
-    def reset(self, key: jrandom.PRNGKey) -> Tuple[Montezuma2Observation, Montezuma2State]:
+        sprite_path_1 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "mid_room_collision_level_0.npy")
+        col_map_1 = jnp.load(sprite_path_1)[:149, :, 0] # (149, 160)
+        room_col_1 = jnp.where(col_map_1 > 0, 1, 0).astype(jnp.int32)
+        # No side walls for room_0_1 as it's connected on both sides
+        
+        self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0, room_col_1])
+
+    def _load_room(self, room_id: jnp.ndarray, state: Montezuma2State) -> Montezuma2State:
         enemies_x = jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
         enemies_y = jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
         enemies_active = jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
@@ -441,55 +448,90 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         conveyors_active = jnp.zeros(self.consts.MAX_CONVEYORS_PER_ROOM, dtype=jnp.int32)
         conveyors_direction = jnp.zeros(self.consts.MAX_CONVEYORS_PER_ROOM, dtype=jnp.int32)
 
-        # LOAD ROOM 1 DATA
-        enemies_x = enemies_x.at[0].set(93)
-        enemies_y = enemies_y.at[0].set(119)
-        enemies_active = enemies_active.at[0].set(1)
-        enemies_direction = enemies_direction.at[0].set(1) # 1 for right, -1 for left
-        enemies_min_x = enemies_min_x.at[0].set(45)
-        enemies_max_x = enemies_max_x.at[0].set(110)
-        
-        ladders_x = ladders_x.at[0].set(72)
-        ladders_top = ladders_top.at[0].set(49)
-        ladders_bottom = ladders_bottom.at[0].set(88)
-        ladders_active = ladders_active.at[0].set(1)
-        
-        ladders_x = ladders_x.at[1].set(128)
-        ladders_top = ladders_top.at[1].set(92)
-        ladders_bottom = ladders_bottom.at[1].set(133)
-        ladders_active = ladders_active.at[1].set(1)
-        
-        ladders_x = ladders_x.at[2].set(16)
-        ladders_top = ladders_top.at[2].set(92)
-        ladders_bottom = ladders_bottom.at[2].set(133)
-        ladders_active = ladders_active.at[2].set(1)
+        def load_room_0(args):
+            lx, lt, lb, la, ix, iy, ia = args
+            lx = lx.at[0].set(72)
+            lt = lt.at[0].set(48)
+            lb = lb.at[0].set(149)
+            la = la.at[0].set(1)
+            
+            ix = ix.at[0].set(24)
+            iy = iy.at[0].set(7)
+            ia = ia.at[0].set(1)
+            
+            return (enemies_x, enemies_y, enemies_active, enemies_direction, enemies_min_x, enemies_max_x,
+                    lx, lt, lb, la,
+                    ropes_x, ropes_top, ropes_bottom, ropes_active,
+                    ix, iy, ia,
+                    doors_x, doors_y, doors_active,
+                    conveyors_x, conveyors_y, conveyors_active, conveyors_direction)
 
-        ropes_x = ropes_x.at[0].set(111)
-        ropes_top = ropes_top.at[0].set(49)
-        ropes_bottom = ropes_bottom.at[0].set(88)
-        ropes_active = ropes_active.at[0].set(1)
+        def load_room_1(args):
+            lx, lt, lb, la, ix, iy, ia = args
+            ex = enemies_x.at[0].set(93)
+            ey = enemies_y.at[0].set(119)
+            ea = enemies_active.at[0].set(1)
+            ed = enemies_direction.at[0].set(1)
+            eminx = enemies_min_x.at[0].set(45)
+            emaxx = enemies_max_x.at[0].set(110)
+            
+            lx = lx.at[0].set(72)
+            lt = lt.at[0].set(49)
+            lb = lb.at[0].set(88)
+            la = la.at[0].set(1)
+            lx = lx.at[1].set(128)
+            lt = lt.at[1].set(92)
+            lb = lb.at[1].set(133)
+            la = la.at[1].set(1)
+            lx = lx.at[2].set(16)
+            lt = lt.at[2].set(92)
+            lb = lb.at[2].set(133)
+            la = la.at[2].set(1)
 
-        items_x = items_x.at[0].set(13)
-        items_y = items_y.at[0].set(52)
-        items_active = items_active.at[0].set(1)
+            rx = ropes_x.at[0].set(111)
+            rt = ropes_top.at[0].set(49)
+            rb = ropes_bottom.at[0].set(88)
+            ra = ropes_active.at[0].set(1)
 
-        # Add a Conveyor Belt at the center to test it (floating so it's clearly visible)
-        conveyors_x = conveyors_x.at[0].set(60)
-        conveyors_y = conveyors_y.at[0].set(88)
-        conveyors_active = conveyors_active.at[0].set(1)
-        conveyors_direction = conveyors_direction.at[0].set(1) # 1 for right, -1 for left
-        
-        doors_x = doors_x.at[0].set(16)
-        doors_y = doors_y.at[0].set(7)
-        doors_active = doors_active.at[0].set(1)
-        doors_x = doors_x.at[1].set(140)
-        doors_y = doors_y.at[1].set(7)
-        doors_active = doors_active.at[1].set(1)
+            ix = ix.at[0].set(13)
+            iy = iy.at[0].set(52)
+            ia = ia.at[0].set(1)
 
-        inventory = jnp.zeros(1, dtype=jnp.int32)
+            cx = conveyors_x.at[0].set(60)
+            cy = conveyors_y.at[0].set(88)
+            ca = conveyors_active.at[0].set(1)
+            cd = conveyors_direction.at[0].set(1)
+            
+            dx = doors_x.at[0].set(16)
+            dy = doors_y.at[0].set(7)
+            da = doors_active.at[0].set(1)
+            dx = dx.at[1].set(140)
+            dy = dy.at[1].set(7)
+            da = da.at[1].set(1)
 
+            return (ex, ey, ea, ed, eminx, emaxx,
+                    lx, lt, lb, la,
+                    rx, rt, rb, ra,
+                    ix, iy, ia,
+                    dx, dy, da,
+                    cx, cy, ca, cd)
+
+        args = (ladders_x, ladders_top, ladders_bottom, ladders_active, items_x, items_y, items_active)
+        ex, ey, ea, ed, eminx, emaxx, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd = jax.lax.switch(room_id, [load_room_0, load_room_1], args)
+
+        return state.replace(
+            room_id=room_id,
+            enemies_x=ex, enemies_y=ey, enemies_active=ea, enemies_direction=ed, enemies_min_x=eminx, enemies_max_x=emaxx,
+            ladders_x=lx, ladders_top=lt, ladders_bottom=lb, ladders_active=la,
+            ropes_x=rx, ropes_top=rt, ropes_bottom=rb, ropes_active=ra,
+            items_x=ix, items_y=iy, items_active=ia,
+            doors_x=dx, doors_y=dy, doors_active=da,
+            conveyors_x=cx, conveyors_y=cy, conveyors_active=ca, conveyors_direction=cd
+        )
+
+    def reset(self, key: jrandom.PRNGKey) -> Tuple[Montezuma2Observation, Montezuma2State]:
         state = Montezuma2State(
-            room_id=jnp.array(0, dtype=jnp.int32),
+            room_id=jnp.array(1, dtype=jnp.int32),
             lives=jnp.array(5, dtype=jnp.int32),
             score=jnp.array([0], dtype=jnp.int32),
             frame_count=jnp.array(0, dtype=jnp.int32),
@@ -504,37 +546,38 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             jump_counter=jnp.array(0, dtype=jnp.int32),
             is_climbing=jnp.array(0, dtype=jnp.int32),
             last_rope=jnp.array(-1, dtype=jnp.int32),
-            enemies_x=enemies_x,
-            enemies_y=enemies_y,
-            enemies_active=enemies_active,
-            enemies_direction=enemies_direction,
-            enemies_min_x=enemies_min_x,
-            enemies_max_x=enemies_max_x,
-            ladders_x=ladders_x,
-            ladders_top=ladders_top,
-            ladders_bottom=ladders_bottom,
-            ladders_active=ladders_active,
-            ropes_x=ropes_x,
-            ropes_top=ropes_top,
-            ropes_bottom=ropes_bottom,
-            ropes_active=ropes_active,
-            items_x=items_x,
-            items_y=items_y,
-            items_active=items_active,
-            doors_x=doors_x,
-            doors_y=doors_y,
-            doors_active=doors_active,
-            conveyors_x=conveyors_x,
-            conveyors_y=conveyors_y,
-            conveyors_active=conveyors_active,
-            conveyors_direction=conveyors_direction,
-            inventory=inventory,
+            enemies_x=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
+            enemies_y=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
+            enemies_active=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
+            enemies_direction=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
+            enemies_min_x=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
+            enemies_max_x=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
+            ladders_x=jnp.zeros(self.consts.MAX_LADDERS_PER_ROOM, dtype=jnp.int32),
+            ladders_top=jnp.zeros(self.consts.MAX_LADDERS_PER_ROOM, dtype=jnp.int32),
+            ladders_bottom=jnp.zeros(self.consts.MAX_LADDERS_PER_ROOM, dtype=jnp.int32),
+            ladders_active=jnp.zeros(self.consts.MAX_LADDERS_PER_ROOM, dtype=jnp.int32),
+            ropes_x=jnp.zeros(self.consts.MAX_ROPES_PER_ROOM, dtype=jnp.int32),
+            ropes_top=jnp.zeros(self.consts.MAX_ROPES_PER_ROOM, dtype=jnp.int32),
+            ropes_bottom=jnp.zeros(self.consts.MAX_ROPES_PER_ROOM, dtype=jnp.int32),
+            ropes_active=jnp.zeros(self.consts.MAX_ROPES_PER_ROOM, dtype=jnp.int32),
+            items_x=jnp.zeros(self.consts.MAX_ITEMS_PER_ROOM, dtype=jnp.int32),
+            items_y=jnp.zeros(self.consts.MAX_ITEMS_PER_ROOM, dtype=jnp.int32),
+            items_active=jnp.zeros(self.consts.MAX_ITEMS_PER_ROOM, dtype=jnp.int32),
+            doors_x=jnp.zeros(self.consts.MAX_DOORS_PER_ROOM, dtype=jnp.int32),
+            doors_y=jnp.zeros(self.consts.MAX_DOORS_PER_ROOM, dtype=jnp.int32),
+            doors_active=jnp.zeros(self.consts.MAX_DOORS_PER_ROOM, dtype=jnp.int32),
+            conveyors_x=jnp.zeros(self.consts.MAX_CONVEYORS_PER_ROOM, dtype=jnp.int32),
+            conveyors_y=jnp.zeros(self.consts.MAX_CONVEYORS_PER_ROOM, dtype=jnp.int32),
+            conveyors_active=jnp.zeros(self.consts.MAX_CONVEYORS_PER_ROOM, dtype=jnp.int32),
+            conveyors_direction=jnp.zeros(self.consts.MAX_CONVEYORS_PER_ROOM, dtype=jnp.int32),
+            inventory=jnp.zeros(1, dtype=jnp.int32),
             key=key
         )
-        
-        return self._get_observation(state), state
-
+        state = self._load_room(jnp.array(1, dtype=jnp.int32), state)
+        obs = self._get_observation(state)
+        return obs, state
     def step(self, state: Montezuma2State, action: int) -> Tuple[Montezuma2Observation, Montezuma2State, float, bool, Montezuma2Info]:
+        room_col_map = self.ROOM_COLLISION_MAPS[state.room_id]
         previous_score = state.score
         is_up = jnp.logical_or(action == Action.UP, jnp.logical_or(action == Action.UPRIGHT, action == Action.UPLEFT))
         is_up = jnp.logical_or(is_up, jnp.logical_or(action == Action.UPFIRE, jnp.logical_or(action == Action.UPRIGHTFIRE, action == Action.UPLEFTFIRE)))
@@ -634,18 +677,18 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             x_p2 = jnp.clip(x + 2, 0, self.consts.WIDTH - 1)
             x_p3 = jnp.clip(x + 3, 0, self.consts.WIDTH - 1)
             return jnp.logical_or(
-                self.ROOM_COLLISION_MAP[y, x_m3] == 1,
+                room_col_map[y, x_m3] == 1,
                 jnp.logical_or(
-                    self.ROOM_COLLISION_MAP[y, x_m2] == 1,
+                    room_col_map[y, x_m2] == 1,
                     jnp.logical_or(
-                        self.ROOM_COLLISION_MAP[y, x_m1] == 1,
+                        room_col_map[y, x_m1] == 1,
                         jnp.logical_or(
-                            self.ROOM_COLLISION_MAP[y, x] == 1,
+                            room_col_map[y, x] == 1,
                             jnp.logical_or(
-                                self.ROOM_COLLISION_MAP[y, x_p1] == 1,
+                                room_col_map[y, x_p1] == 1,
                                 jnp.logical_or(
-                                    self.ROOM_COLLISION_MAP[y, x_p2] == 1,
-                                    self.ROOM_COLLISION_MAP[y, x_p3] == 1
+                                    room_col_map[y, x_p2] == 1,
+                                    room_col_map[y, x_p3] == 1
                                 )
                             )
                         )
@@ -757,8 +800,11 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         new_is_falling = jnp.where(is_climbing == 1, 0, new_is_falling)
         
         # 5. Resolve Horizontal with Wall Collision
-        new_x = jnp.clip(current_x + dx, 0, self.consts.WIDTH - self.consts.PLAYER_WIDTH)
-        
+        raw_new_x = current_x + dx
+        transition_left = jnp.logical_and(raw_new_x < 0, state.room_id == 1)
+        transition_right = jnp.logical_and(raw_new_x + self.consts.PLAYER_WIDTH > self.consts.WIDTH, state.room_id == 0)
+
+        new_x = jnp.clip(raw_new_x, 0, self.consts.WIDTH - self.consts.PLAYER_WIDTH)
         new_left_x = jnp.clip(new_x, 0, self.consts.WIDTH - 1)
         new_right_x = jnp.clip(new_x + self.consts.PLAYER_WIDTH - 1, 0, self.consts.WIDTH - 1)
         
@@ -769,10 +815,10 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         check_y_bot = jnp.clip(new_y + self.consts.PLAYER_HEIGHT - 1, 0, 148)
         
         hit_wall = jnp.logical_or(
-            self.ROOM_COLLISION_MAP[check_y_top, front_x] == 1,
+            room_col_map[check_y_top, front_x] == 1,
             jnp.logical_or(
-                self.ROOM_COLLISION_MAP[check_y_mid, front_x] == 1,
-                self.ROOM_COLLISION_MAP[check_y_bot, front_x] == 1
+                room_col_map[check_y_mid, front_x] == 1,
+                room_col_map[check_y_bot, front_x] == 1
             )
         )
         
@@ -858,8 +904,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             
             # Bounce off walls
             e_y = state.enemies_y[i]
-            hit_wall_left = jnp.logical_and(current_dir < 0, self.ROOM_COLLISION_MAP[e_y + 8, jnp.clip(new_x, 0, self.consts.WIDTH - 1)] == 1)
-            hit_wall_right = jnp.logical_and(current_dir > 0, self.ROOM_COLLISION_MAP[e_y + 8, jnp.clip(new_x + 8, 0, self.consts.WIDTH - 1)] == 1)
+            hit_wall_left = jnp.logical_and(current_dir < 0, room_col_map[e_y + 8, jnp.clip(new_x, 0, self.consts.WIDTH - 1)] == 1)
+            hit_wall_right = jnp.logical_and(current_dir > 0, room_col_map[e_y + 8, jnp.clip(new_x + 8, 0, self.consts.WIDTH - 1)] == 1)
             
             # Or boundaries
             hit_left = new_x <= state.enemies_min_x[i]
@@ -948,14 +994,23 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             items_active=new_items_active,
             doors_active=new_doors_active
         )
-        
+
+        transition_any = jnp.logical_or(transition_left, transition_right)
+        new_room_id = jnp.where(transition_left, 0, jnp.where(transition_right, 1, state.room_id))
+
+        def transition_fn(state_in):
+            st = self._load_room(new_room_id, state_in)
+            new_px = jnp.where(transition_left, self.consts.WIDTH - self.consts.PLAYER_WIDTH, 0)
+            return st.replace(player_x=new_px)
+
+        state = jax.lax.cond(transition_any, transition_fn, lambda x: x, state)
+
         obs = self._get_observation(state)
         reward = self._get_reward(previous_score, state.score)
         done = self._get_done(state)
         info = self._get_info(state)
-        
-        return obs, state, reward, done, info
 
+        return obs, state, reward, done, info
     def action_space(self) -> Discrete:
         return Discrete(len(self.ACTION_SET))
 
