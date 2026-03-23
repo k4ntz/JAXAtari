@@ -594,9 +594,9 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
     # Reset
     # -----------------------------
     def reset(self, key=None):
-        # Generate random seed based on current time for creature spawn randomness
-        seed = int(time.time())
-        key = jax.random.PRNGKey(seed)
+        if key is None:
+            key = jax.random.PRNGKey(int(time.time()))
+
         level = 0
         start_x = self.consts.MAP_CHECKPOINTS[level%4, 0, 2]
         start_y = self.consts.MAP_CHECKPOINTS[level%4, 0, 3]
@@ -1417,6 +1417,8 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         reward = self._get_reward(state, new_state)
         done = self._get_done(new_state)
         info = self._get_info(new_state)
+
+        #jax.debug.print("x: {x}, y:{y}", x=player_x, y=player_y)
 
         # return observation, new_state, env_reward, done, info
         return obs, new_state, reward, done, info
