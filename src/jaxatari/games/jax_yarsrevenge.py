@@ -701,9 +701,8 @@ class JaxYarsRevenge(
         active_hits = collision_mask & shield_state
         return active_hits
 
-    @staticmethod
-    @jax.jit
-    def _snake_shift(shield: jnp.ndarray) -> jnp.ndarray:
+    @partial(jax.jit, static_argnums=(0,))
+    def _snake_shift(self, shield: jnp.ndarray) -> jnp.ndarray:
         """
         Shift the shield cells in a snake-like pattern used in stage 1.
         The algorithm creates an index mapping that flips every other row and then rolls by 1.
@@ -731,6 +730,7 @@ class JaxYarsRevenge(
             bool | jnp.ndarray,  # left flag
             bool | jnp.ndarray,  # right flag
         ],
+        fire: bool,
     ):
         """
         Handle the player movement and all related effects:
@@ -746,30 +746,9 @@ class JaxYarsRevenge(
           - Boolean flag if Yar entered the neutral zone (life lost)
           - Boolean flag indicating whether devouring was reset
         """
-        direction = Direction.from_flags(direction_flags)  # current desired direction
-        yar_moving = direction != Direction._CENTER
-        new_yar_direction = jax.lax.select(yar_moving, direction, state.yar.direction)
-        new_yar_state = jax.lax.select(yar_moving, YarState.MOVING, YarState.STEADY)
-
-        # Diagonal speed handling
-        yar_diagonal = (direction_flags[0] | direction_flags[1]) & (
-            direction_flags[2] | direction_flags[3]
-        )
-        yar_speed = jax.lax.select(
-            yar_diagonal, self.consts.YAR_DIAGONAL_SPEED, self.consts.YAR_SPEED
-        )
-        delta_yar_x, delta_yar_y = Direction.to_delta(direction_flags, yar_speed)
-
-        # New position - note wrap on y axis for the player
-        new_yar_x, new_yar_y = self._move_entity(
-            state.yar,
-            delta_yar_x,
-            delta_yar_y,
-            wrap_y=True,
-        )
-
-        new_yar_entity = state.yar.replace(
-            x=new_yar_x, y=new_yar_y, direction=new_yar_direction
+        yar_moving = Direction.from_flags(direction_flags) != Direction._CENTER
+        new_yar_state, new_yar_entity = self._process_yar_movement(
+            state, direction_flags, fire
         )
 
         # Shield collision - shift left if a cell is hit
@@ -781,8 +760,8 @@ class JaxYarsRevenge(
         # Shift Yar left by one cell width if it hits the shield
         new_yar_x = jnp.where(
             yar_hit_shield,
-            new_yar_x - self.consts.ENERGY_CELL_WIDTH,
-            new_yar_x,
+            new_yar_entity.x - self.consts.ENERGY_CELL_WIDTH,
+            new_yar_entity.x,
         )
         new_yar_entity = new_yar_entity.replace(x=new_yar_x)
 
@@ -843,6 +822,46 @@ class JaxYarsRevenge(
         )
 
     @partial(jax.jit, static_argnums=(0,))
+    def _process_yar_movement(
+        self,
+        state: YarsRevengeState,
+        direction_flags: tuple[
+            bool | jnp.ndarray,  # up flag
+            bool | jnp.ndarray,  # down flag
+            bool | jnp.ndarray,  # left flag
+            bool | jnp.ndarray,  # right flag
+        ],
+        fire: bool,  # Needed for FireSpeedMod
+    ):
+        direction = Direction.from_flags(direction_flags)
+        yar_moving = direction != Direction._CENTER
+        new_yar_direction = jax.lax.select(yar_moving, direction, state.yar.direction)
+        new_yar_state = jax.lax.select(yar_moving, YarState.MOVING, YarState.STEADY)
+
+        # Diagonal speed handling
+        yar_diagonal = (direction_flags[0] | direction_flags[1]) & (
+            direction_flags[2] | direction_flags[3]
+        )
+        yar_speed = jax.lax.select(
+            yar_diagonal, self.consts.YAR_DIAGONAL_SPEED, self.consts.YAR_SPEED
+        )
+        delta_yar_x, delta_yar_y = Direction.to_delta(direction_flags, yar_speed)
+
+        # New position
+        new_yar_x, new_yar_y = self._move_entity(
+            state.yar,
+            delta_yar_x,
+            delta_yar_y,
+            wrap_y=True,
+        )
+
+        new_yar_entity = state.yar.replace(
+            x=new_yar_x, y=new_yar_y, direction=new_yar_direction
+        )
+
+        return new_yar_state, new_yar_entity
+
+    @partial(jax.jit, static_argnums=(0,))
     def _qotile_step(self, state: YarsRevengeState):
         """
         Move the qotile back and forth between QOTILE_MIN_Y and
@@ -882,9 +901,7 @@ class JaxYarsRevenge(
         )
 
         return dict(
-            qotile=state.qotile.replace(
-                y=new_qotile_y, direction=new_qotile_direction
-            ),
+            qotile=state.qotile.replace(y=new_qotile_y, direction=new_qotile_direction),
             energy_shield=state.energy_shield.replace(y=new_energy_shield_y),
         )
 
@@ -1333,7 +1350,7 @@ class JaxYarsRevenge(
 
         # Player
         yar_updates, yar_neutral, devour_reset, yar_score = self._yar_step(
-            state, direction_flags
+            state, direction_flags, fire
         )
         new_state = new_state.replace(**yar_updates)
 
@@ -1426,7 +1443,9 @@ class JaxYarsRevenge(
             lambda: new_state.replace(
                 **{
                     k: v
-                    for k, v in self._yar_step(new_state, direction_flags)[0].items()
+                    for k, v in self._yar_step(new_state, direction_flags, fire)[
+                        0
+                    ].items()
                     if k != "energy_shield_state"
                 },
                 **{
@@ -1752,7 +1771,11 @@ class YarsRevengeRenderer(JAXGameRenderer):
     visualisation can be reused in other contexts.
     """
 
-    def __init__(self, consts: Optional[YarsRevengeConstants] = None, config: Optional[render_utils.RendererConfig] = None):
+    def __init__(
+        self,
+        consts: Optional[YarsRevengeConstants] = None,
+        config: Optional[render_utils.RendererConfig] = None,
+    ):
         super().__init__(consts)
         self.consts = consts or YarsRevengeConstants()
         self.config = config or render_utils.RendererConfig(
@@ -1905,12 +1928,16 @@ class YarsRevengeRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _calculate_neutral_zone_slice(self, state):
-        interval = self.consts.NEUTRAL_ZONE_DATA_SIZE - round(self.consts.NEUTRAL_ZONE_SIZE[1] * self.config.height_scaling)
+        interval = self.consts.NEUTRAL_ZONE_DATA_SIZE - round(
+            self.consts.NEUTRAL_ZONE_SIZE[1] * self.config.height_scaling
+        )
         begin = state.step_counter % (interval * 2)
         begin = jnp.where(begin <= interval, begin, (interval * 2) - begin)
 
         start_indices = jnp.array([begin])
-        slice_sizes = (round(self.consts.NEUTRAL_ZONE_SIZE[1] * self.config.height_scaling),)
+        slice_sizes = (
+            round(self.consts.NEUTRAL_ZONE_SIZE[1] * self.config.height_scaling),
+        )
         return jax.lax.dynamic_slice(self.neutral_zone_data, start_indices, slice_sizes)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1971,7 +1998,10 @@ class YarsRevengeRenderer(JAXGameRenderer):
         state, raster = info
 
         destroyer_mask = jnp.ones(
-            (round(self.consts.DESTROYER_SIZE[1] * self.config.height_scaling), round(self.consts.DESTROYER_SIZE[0] * self.config.width_scaling))
+            (
+                round(self.consts.DESTROYER_SIZE[1] * self.config.height_scaling),
+                round(self.consts.DESTROYER_SIZE[0] * self.config.width_scaling),
+            )
         )
         raster = self.jr.render_at(
             raster, state.destroyer.x, state.destroyer.y, destroyer_mask
@@ -1984,7 +2014,10 @@ class YarsRevengeRenderer(JAXGameRenderer):
         state, raster = info
 
         energy_missile_mask = jnp.ones(
-            (round(self.consts.ENERGY_MISSILE_SIZE[1] * self.config.height_scaling), round(self.consts.ENERGY_MISSILE_SIZE[0] * self.config.width_scaling))
+            (
+                round(self.consts.ENERGY_MISSILE_SIZE[1] * self.config.height_scaling),
+                round(self.consts.ENERGY_MISSILE_SIZE[0] * self.config.width_scaling),
+            )
         )
         raster = jnp.where(
             state.energy_missile_exist,
@@ -2009,7 +2042,9 @@ class YarsRevengeRenderer(JAXGameRenderer):
             (round(self.consts.CANNON_SIZE[1] * self.config.height_scaling),),
         )
         cannon_half_mask = jnp.repeat(
-            cannon_color_map_slice[:, None], (round(self.consts.CANNON_SIZE[1] * self.config.height_scaling) // 2), axis=1
+            cannon_color_map_slice[:, None],
+            (round(self.consts.CANNON_SIZE[1] * self.config.height_scaling) // 2),
+            axis=1,
         )
 
         cannon_mask = jnp.where(
@@ -2227,7 +2262,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
         )
         neutral_zone_mask = jnp.tile(
             neutral_zone_mask, self.scaled_width // neutral_zone_mask.shape[1] + 1
-        )[:, :self.scaled_width]
+        )[:, : self.scaled_width]
         raster = self.jr.render_at(
             raster,
             0,
@@ -2292,8 +2327,6 @@ class YarsRevengeRenderer(JAXGameRenderer):
             hue_angle_degree = (hue_bits.astype(jnp.float32) * 360.0) / 15.0
 
             return self._hb_to_rgb(hue_angle_degree, brightness_factor)
-        
-        
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: YarsRevengeState):

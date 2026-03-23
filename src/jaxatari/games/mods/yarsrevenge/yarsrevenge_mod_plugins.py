@@ -1,8 +1,10 @@
 from functools import partial
+from typing import Tuple
 import jax
 import jax.numpy as jnp
 from jaxatari.games.jax_yarsrevenge import (
     Direction,
+    YarState,
     YarsRevengeGameState,
     YarsRevengeState,
 )
@@ -92,3 +94,154 @@ class OneShieldShapeMod(JaxAtariInternalModPlugin):
             [jnp.ones((16, 8), dtype=jnp.int32), jnp.ones((16, 8), dtype=jnp.int32)]
         )
     }
+
+
+class ReversedSnakeMod(JaxAtariInternalModPlugin):
+    """
+    Attaches post step logic to skip any animation-related game stage.
+    """
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _snake_shift(self, shield: jnp.ndarray) -> jnp.ndarray:
+        """
+        Shift the shield cells in a snake-like pattern used in stage 1.
+        The algorithm creates an index mapping that flips every other row and then rolls by 1.
+        It is implemented purely with JAX operations so it can be compiled.
+        """
+        n_rows, n_cols = shield.shape
+        r = jnp.arange(n_rows).reshape(-1, 1)
+        c = jnp.arange(n_cols).reshape(1, -1)
+        idx_normal = r * n_cols + c
+        idx_reversed = r * n_cols + (n_cols - 1 - c)
+        snake_idx = jnp.where(r % 2 == 0, idx_normal, idx_reversed)
+
+        s_flat_snake = shield.reshape(-1)[snake_idx.ravel()]
+        shifted = jnp.roll(s_flat_snake, -1)
+        new_snake = shifted.reshape(n_rows, n_cols)
+        return jnp.where(r % 2 == 0, new_snake, new_snake[:, ::-1])
+
+
+class VisualNoiseMod(JaxAtariInternalModPlugin):
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_game_elements(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
+        """
+        Draws the game elements into the raster while playing the game.
+        Takes the state and a raster as tuple for input argument.
+        """
+
+        state, raster = info
+
+        rendering_switch = state.step_counter % 2
+
+        def _render_neutral_zone_part(raster):
+            # Neutral zone overlay
+            raster = self._env.renderer._render_neutral_zone((state, raster))
+
+            # Destroyer sprite
+            raster = self._env.renderer._render_destroyer((state, raster))
+
+            # Energy missile, only when it exists
+            raster = self._env.renderer._render_energy_missile((state, raster))
+
+            # Cannon alternates between full and half sprite every frame
+            raster = self._env.renderer._render_cannon((state, raster))
+
+            return raster.astype(jnp.uint8)
+
+        def _render_energy_shield_part(raster):
+            # Energy shield
+            raster = self._env.renderer._render_energy_shield((state, raster))
+
+            return raster.astype(jnp.uint8)
+
+        # Yar sprite, choose animation frame based on movement speed to render
+        raster = self._env.renderer._render_yar((state, raster))
+
+        # Qotile and swirl, one sprite each (swirl has its own animation)
+        raster = self._env.renderer._render_qotile_and_swirl((state, raster))
+
+        raster = jax.lax.cond(
+            rendering_switch,
+            _render_neutral_zone_part,
+            _render_energy_shield_part,
+            raster,
+        )
+
+        return raster.astype(jnp.uint8)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_yar_death(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
+        """
+        Draws the relevant items into the raster on Yar's death.
+        Takes the state and a raster as tuple for input argument.
+        """
+
+        state, raster = info
+
+        rendering_switch = state.step_counter % 2
+
+        raster = jax.lax.cond(
+            rendering_switch,
+            lambda: self._env.renderer._render_energy_shield(info).astype(jnp.uint8),
+            lambda: self._env.renderer._render_neutral_zone(info).astype(jnp.uint8),
+        )
+
+        # Yar sprite, choose animation frame based on movement speed to render
+        raster = jax.lax.cond(
+            state.game_state_timer < self._env.consts.YAR_DEATH_EXPLOSION_CUTOFFS[0],
+            lambda: self._env.renderer._render_yar((state, raster), alive=False),
+            lambda: self._env.renderer._render_yar_explosion((state, raster)),
+        )
+
+        # Qotile and swirl, one sprite each (swirl has its own animation)
+        raster = self._env.renderer._render_qotile_and_swirl((state, raster))
+
+        return raster.astype(jnp.uint8)
+
+
+class FireSpeedMod(JaxAtariInternalModPlugin):
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _process_yar_movement(
+        self,
+        state: YarsRevengeState,
+        direction_flags: Tuple[
+            bool | jnp.ndarray,  # up flag
+            bool | jnp.ndarray,  # down flag
+            bool | jnp.ndarray,  # left flag
+            bool | jnp.ndarray,  # right flag
+        ],
+        fire: bool,  # Needed for FireSpeedMod
+    ):
+        direction = Direction.from_flags(direction_flags)
+        yar_moving = direction != Direction._CENTER
+        new_yar_direction = jax.lax.select(yar_moving, direction, state.yar.direction)
+        new_yar_state = jax.lax.select(yar_moving, YarState.MOVING, YarState.STEADY)
+
+        # Diagonal speed handling
+        yar_diagonal = (direction_flags[0] | direction_flags[1]) & (
+            direction_flags[2] | direction_flags[3]
+        )
+        yar_speed = jax.lax.select(
+            yar_diagonal,
+            self._env.consts.YAR_DIAGONAL_SPEED,
+            self._env.consts.YAR_SPEED,
+        )
+        yar_speed += fire.astype(int) * yar_speed
+
+        delta_yar_x, delta_yar_y = Direction.to_delta(direction_flags, yar_speed)
+
+        # New position
+        new_yar_x, new_yar_y = self._env._move_entity(
+            state.yar,
+            delta_yar_x,
+            delta_yar_y,
+            wrap_y=True,
+        )
+
+        new_yar_entity = state.yar.replace(
+            x=new_yar_x, y=new_yar_y, direction=new_yar_direction
+        )
+
+        return new_yar_state, new_yar_entity

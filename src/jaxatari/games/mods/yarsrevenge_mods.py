@@ -1,5 +1,15 @@
-from jaxatari.games.mods.yarsrevenge.yarsrevenge_mod_plugins import MoreSwirlsMod, NoAnimationsMod, OneShieldShapeMod, SpeedUpMod, StaticEnergyShieldMod
+from jaxatari.games.mods.yarsrevenge.yarsrevenge_mod_plugins import (
+    FireSpeedMod,
+    MoreSwirlsMod,
+    NoAnimationsMod,
+    OneShieldShapeMod,
+    ReversedSnakeMod,
+    SpeedUpMod,
+    StaticEnergyShieldMod,
+    VisualNoiseMod,
+)
 from jaxatari.modification import JaxAtariModController
+
 
 class YarsRevengeEnvMod(JaxAtariModController):
     """
@@ -13,18 +23,17 @@ class YarsRevengeEnvMod(JaxAtariModController):
         "speed_up": SpeedUpMod,
         "more_swirls": MoreSwirlsMod,
         "static_energy_shield": StaticEnergyShieldMod,
-        "one_shield_shape": OneShieldShapeMod
+        "one_shield_shape": OneShieldShapeMod,
+        "reversed_snake": ReversedSnakeMod,
+        "visual_noise": VisualNoiseMod,
+        "fire_speed": FireSpeedMod,
     }
 
-    def __init__(self,
-                 env,
-                 mods_config: list = [],
-                 allow_conflicts: bool = False
-                 ):
+    def __init__(self, env, mods_config: list = [], allow_conflicts: bool = False):
 
         super().__init__(
             env=env,
             mods_config=mods_config,
             allow_conflicts=allow_conflicts,
-            registry=self.REGISTRY
+            registry=self.REGISTRY,
         )
