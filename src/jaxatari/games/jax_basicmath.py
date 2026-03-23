@@ -11,7 +11,7 @@ from flax import struct
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 def _create_background_sprite(consts: "BasicMathConstants", dim: Tuple, gameMode: int) -> jnp.ndarray:
     bg_color_rgba = (*consts.COLOR_CODES[gameMode][0], 255)
@@ -78,10 +78,10 @@ class BasicMathState:
 
 @struct.dataclass
 class BasicMathObservation(struct.PyTreeNode):
-    underscore: ObjectObservation
     problem_num1: jnp.ndarray
     problem_num2: jnp.ndarray
     digits: jnp.ndarray
+    arrPos: jnp.ndarray
 
 @struct.dataclass
 class BasicMathInfo:
@@ -116,16 +116,12 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         )
     
     def observation_space(self) -> spaces:
-        object_space = spaces.get_object_space(
-            n=None,
-            screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)
-        )
 
         return spaces.Dict({
-            "underscore": object_space,
             "problem_num1": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
             "problem_num2": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
             "digits": spaces.Box(low=-1, high=9, shape=(self.consts.numArrLen,), dtype=jnp.int32),
+            "arrPos": spaces.Box(low=0, high=self.consts.numArrLen, shape=(), dtype=jnp.int32),
         })
 
     @partial(jax.jit, static_argnums=(0,))
@@ -139,18 +135,11 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         )
     
     def _get_observation(self, state: BasicMathState):
-        underscore = ObjectObservation.create(
-            x=jnp.array(35 + state.arrPos * 15),
-            y=jnp.array(self.consts.bar0[1]),
-            width=jnp.array(20),
-            height=jnp.array(2),
-        )
-
         return BasicMathObservation(
-            underscore=underscore,
             problem_num1=state.problemNum1,
             problem_num2=state.problemNum2,
             digits=state.numArr,
+            arrPos=state.arrPos,
         )
 
     @partial(jax.jit, static_argnums=(0,))
