@@ -493,14 +493,21 @@ class DarkChambersObservation:
     enemies: jnp.ndarray  # (NUM_ENEMIES, 6): screen_x, screen_y, width, height, type, in_view
     items: jnp.ndarray    # (NUM_ITEMS, 6): screen_x, screen_y, width, height, type, in_view
     spawners: jnp.ndarray  # (NUM_SPAWNERS, 5): screen_x, screen_y, width, height, in_view
-    player_bullets: jnp.ndarray  # (MAX_BULLETS, 5): screen_x, screen_y, width, height, in_view
-    enemy_bullets: jnp.ndarray  # (ENEMY_MAX_BULLETS, 5): screen_x, screen_y, width, height, in_view
+    player_bullets: jnp.ndarray  # (OBS_MAX_PLAYER_BULLETS, 5): screen_x, screen_y, width, height, in_view
+    enemy_bullets: jnp.ndarray  # (OBS_MAX_ENEMY_BULLETS, 5): screen_x, screen_y, width, height, in_view
     portals: jnp.ndarray  # (6, 3): screen_x, screen_y, in_view
-    walls: jnp.ndarray    # (num_wall_segments, 5): screen_x, screen_y, width, height, in_view
+    walls: jnp.ndarray    # (OBS_MAX_WALLS, 5): screen_x, screen_y, width, height, in_view
     border_distances: jnp.ndarray  # (4,): left, right, top, bottom (player->camera viewport border)
     health: jnp.ndarray
     score: jnp.ndarray
     step: jnp.ndarray
+    # Player equipment state (invisible to pixel agent only via HUD rendering)
+    has_key: jnp.ndarray        # 1=has key, 0=no key
+    shield_active: jnp.ndarray  # 1=shield active, 0=none
+    gun_active: jnp.ndarray     # 1=gun active, 0=none
+    bomb_count: jnp.ndarray     # 0..MAX_BOMBS
+    hammer_count: jnp.ndarray   # 0..MAX_HAMMERS
+    speed_boost_active: jnp.ndarray  # 1=speed boost active, 0=none
 
 
 @struct.dataclass
@@ -511,13 +518,16 @@ class DarkChambersInfo:
 class DarkChambersRenderer(JAXGameRenderer):
     """Software renderer for Dark Chambers."""
     
-    def __init__(self, consts: DarkChambersConstants = None):
+    def __init__(self, consts: DarkChambersConstants = None, config: render_utils.RendererConfig = None):
         super().__init__(consts)
         self.consts = consts or DarkChambersConstants()
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(GAME_H, GAME_W),  # (height, width)
-            channels=3
-        )
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(GAME_H, GAME_W),  # (height, width)
+                channels=3
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
         # Load sprites using the asset system
@@ -574,7 +584,9 @@ class DarkChambersRenderer(JAXGameRenderer):
         # Override background with solid color based on BACKGROUND_COLOR constant
         bg_color_id = self.COLOR_TO_ID.get(self.consts.BACKGROUND_COLOR)
         if bg_color_id is not None:
-            self.BACKGROUND = jnp.full((GAME_H, GAME_W), bg_color_id, dtype=jnp.uint8)
+            target_h = self.config.downscale[0] if self.config.downscale else GAME_H
+            target_w = self.config.downscale[1] if self.config.downscale else GAME_W
+            self.BACKGROUND = jnp.full((target_h, target_w), bg_color_id, dtype=jnp.uint8)
         
         # Print sprite sizes for debugging
         print("\n=== SPRITE SIZES ===")
@@ -4864,7 +4876,28 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         return spaces.Discrete(19)
     
     def observation_space(self) -> spaces.Dict:
-        wall_segment_count = int(self.renderer.LEVEL_WALLS.shape[2] + self.renderer.BOUNDARY_WALLS.shape[0])
+        import numpy as np
+        _W = max(GAME_W, GAMEPLAY_H)
+        # Per-column bounds for entity arrays so that type and in_view features
+        # are properly scaled to [0,1] instead of being squashed to ~0.006–0.037.
+        # Columns: [x, y, w, h, type, in_view]
+        enemy_low  = np.tile(np.array([[-1, -1, 0, 0, 0, 0]], dtype=np.int32), (NUM_ENEMIES, 1))
+        enemy_high = np.tile(np.array([[_W, _W, _W, _W, ENEMY_GRIM_REAPER, 1]], dtype=np.int32), (NUM_ENEMIES, 1))
+        # item type max = ITEM_HAMMER = 18
+        item_low  = np.tile(np.array([[-1, -1, 0, 0, 0, 0]], dtype=np.int32), (NUM_ITEMS, 1))
+        item_high = np.tile(np.array([[_W, _W, _W, _W, ITEM_HAMMER, 1]], dtype=np.int32), (NUM_ITEMS, 1))
+        # Columns without type: [x, y, w, h, in_view]
+        spawner_low  = np.tile(np.array([[-1, -1, 0, 0, 0]], dtype=np.int32), (NUM_SPAWNERS, 1))
+        spawner_high = np.tile(np.array([[_W, _W, _W, _W, 1]], dtype=np.int32), (NUM_SPAWNERS, 1))
+        pbullet_low  = np.tile(np.array([[-1, -1, 0, 0, 0]], dtype=np.int32), (OBS_MAX_PLAYER_BULLETS, 1))
+        pbullet_high = np.tile(np.array([[_W, _W, _W, _W, 1]], dtype=np.int32), (OBS_MAX_PLAYER_BULLETS, 1))
+        ebullet_low  = np.tile(np.array([[-1, -1, 0, 0, 0]], dtype=np.int32), (OBS_MAX_ENEMY_BULLETS, 1))
+        ebullet_high = np.tile(np.array([[_W, _W, _W, _W, 1]], dtype=np.int32), (OBS_MAX_ENEMY_BULLETS, 1))
+        # Portals: [x, y, in_view]
+        portal_low  = np.tile(np.array([[-1, -1, 0]], dtype=np.int32), (6, 1))
+        portal_high = np.tile(np.array([[_W, _W, 1]], dtype=np.int32), (6, 1))
+        wall_low  = np.tile(np.array([[-1, -1, 0, 0, 0]], dtype=np.int32), (OBS_MAX_WALLS, 1))
+        wall_high = np.tile(np.array([[_W, _W, _W, _W, 1]], dtype=np.int32), (OBS_MAX_WALLS, 1))
         return spaces.Dict({
             "player": spaces.Dict({
                 "x": spaces.Box(low=0, high=GAME_W - 1, shape=(), dtype=jnp.int32),
@@ -4872,48 +4905,13 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 "width": spaces.Box(low=0, high=GAME_W, shape=(), dtype=jnp.int32),
                 "height": spaces.Box(low=0, high=GAMEPLAY_H, shape=(), dtype=jnp.int32),
             }),
-            "enemies": spaces.Box(
-                low=-1,
-                high=max(GAME_W, GAMEPLAY_H),
-                shape=(NUM_ENEMIES, 6),
-                dtype=jnp.int32,
-            ),
-            "items": spaces.Box(
-                low=-1,
-                high=max(GAME_W, GAMEPLAY_H),
-                shape=(NUM_ITEMS, 6),
-                dtype=jnp.int32,
-            ),
-            "spawners": spaces.Box(
-                low=-1,
-                high=max(GAME_W, GAMEPLAY_H),
-                shape=(NUM_SPAWNERS, 5),
-                dtype=jnp.int32,
-            ),
-            "player_bullets": spaces.Box(
-                low=-1,
-                high=max(GAME_W, GAMEPLAY_H),
-                shape=(OBS_MAX_PLAYER_BULLETS, 5),
-                dtype=jnp.int32,
-            ),
-            "enemy_bullets": spaces.Box(
-                low=-1,
-                high=max(GAME_W, GAMEPLAY_H),
-                shape=(OBS_MAX_ENEMY_BULLETS, 5),
-                dtype=jnp.int32,
-            ),
-            "portals": spaces.Box(
-                low=-1,
-                high=max(GAME_W, GAMEPLAY_H),
-                shape=(6, 3),
-                dtype=jnp.int32,
-            ),
-            "walls": spaces.Box(
-                low=-1,
-                high=max(GAME_W, GAMEPLAY_H),
-                shape=(OBS_MAX_WALLS, 5),
-                dtype=jnp.int32,
-            ),
+            "enemies": spaces.Box(low=enemy_low, high=enemy_high, dtype=jnp.int32),
+            "items": spaces.Box(low=item_low, high=item_high, dtype=jnp.int32),
+            "spawners": spaces.Box(low=spawner_low, high=spawner_high, dtype=jnp.int32),
+            "player_bullets": spaces.Box(low=pbullet_low, high=pbullet_high, dtype=jnp.int32),
+            "enemy_bullets": spaces.Box(low=ebullet_low, high=ebullet_high, dtype=jnp.int32),
+            "portals": spaces.Box(low=portal_low, high=portal_high, dtype=jnp.int32),
+            "walls": spaces.Box(low=wall_low, high=wall_high, dtype=jnp.int32),
             "border_distances": spaces.Box(
                 low=0,
                 high=max(GAME_W, GAMEPLAY_H),
@@ -4923,6 +4921,12 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             "health": spaces.Box(low=0, high=self.consts.MAX_HEALTH, shape=(), dtype=jnp.int32),
             "score": spaces.Box(low=0, high=OBS_SCORE_CLIP, shape=(), dtype=jnp.int32),
             "step": spaces.Box(low=0, high=OBS_STEP_CLIP, shape=(), dtype=jnp.int32),
+            "has_key": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            "shield_active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            "gun_active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            "bomb_count": spaces.Box(low=0, high=MAX_BOMBS, shape=(), dtype=jnp.int32),
+            "hammer_count": spaces.Box(low=0, high=MAX_HAMMERS, shape=(), dtype=jnp.int32),
+            "speed_boost_active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
         })
     
     def image_space(self) -> spaces.Box:
@@ -4973,7 +4977,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             sel_in_view = in_view_mask[sel_idx].astype(jnp.int32)
             sel_x = jnp.where(sel_in_view == 1, jnp.clip(sel_x_raw, 0, GAME_W - 1), -1).astype(jnp.int32)
             sel_y = jnp.where(sel_in_view == 1, jnp.clip(sel_y_raw, 0, GAMEPLAY_H - 1), -1).astype(jnp.int32)
-            return sel_x, sel_y, sel_w.astype(jnp.int32), sel_h.astype(jnp.int32), sel_in_view
+            sel_w = jnp.where(sel_in_view == 1, sel_w, 0).astype(jnp.int32)
+            sel_h = jnp.where(sel_in_view == 1, sel_h, 0).astype(jnp.int32)
+            return sel_x, sel_y, sel_w, sel_h, sel_in_view
         player = EntityPosition(
             x=jnp.asarray(player_screen_x, dtype=jnp.int32),
             y=jnp.asarray(player_screen_y, dtype=jnp.int32),
@@ -4996,6 +5002,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         ).astype(jnp.int32)
         enemy_x = jnp.where(enemy_in_view, jnp.clip(enemy_x_raw, 0, GAME_W - 1), -1).astype(jnp.int32)
         enemy_y = jnp.where(enemy_in_view, jnp.clip(enemy_y_raw, 0, GAMEPLAY_H - 1), -1).astype(jnp.int32)
+        enemy_widths  = jnp.where(enemy_in_view, enemy_widths, 0)
+        enemy_heights = jnp.where(enemy_in_view, enemy_heights, 0)
 
         enemies_array = jnp.stack([
             enemy_x,
@@ -5023,6 +5031,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         item_x = jnp.where(item_in_view == 1, jnp.clip(item_x_raw, 0, GAME_W - 1), -1).astype(jnp.int32)
         item_y = jnp.where(item_in_view == 1, jnp.clip(item_y_raw, 0, GAMEPLAY_H - 1), -1).astype(jnp.int32)
         item_type_visible = jnp.where(item_in_view == 1, state.item_types.astype(jnp.int32), 0).astype(jnp.int32)
+        item_w = jnp.where(item_in_view == 1, item_w, 0)
+        item_h = jnp.where(item_in_view == 1, item_h, 0)
         items_array = jnp.stack([
             item_x,
             item_y,
@@ -5192,7 +5202,13 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             border_distances=border_distances,
             health=state.health.astype(jnp.int32),
             score=jnp.clip(state.score, 0, OBS_SCORE_CLIP).astype(jnp.int32),
-            step=jnp.clip(state.step_counter, 0, OBS_STEP_CLIP).astype(jnp.int32)
+            step=jnp.clip(state.step_counter, 0, OBS_STEP_CLIP).astype(jnp.int32),
+            has_key=state.has_key.astype(jnp.int32),
+            shield_active=state.shield_active.astype(jnp.int32),
+            gun_active=state.gun_active.astype(jnp.int32),
+            bomb_count=jnp.clip(state.bomb_count, 0, MAX_BOMBS).astype(jnp.int32),
+            hammer_count=jnp.clip(state.hammer_count, 0, MAX_HAMMERS).astype(jnp.int32),
+            speed_boost_active=(state.speed_boost_timer > 0).astype(jnp.int32),
         )
     
     @partial(jax.jit, static_argnums=(0,))
@@ -5226,4 +5242,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             obs.health.flatten(),
             obs.score.flatten(),
             obs.step.flatten(),
+            obs.has_key.flatten(),
+            obs.shield_active.flatten(),
+            obs.gun_active.flatten(),
+            obs.bomb_count.flatten(),
+            obs.hammer_count.flatten(),
+            obs.speed_boost_active.flatten(),
         ])
