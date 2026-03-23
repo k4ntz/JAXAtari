@@ -4,6 +4,8 @@ It uses by default the FlattenObservationWrapper, meaning that the observations 
 """
 
 import copy
+import csv
+import json
 import os
 from struct import unpack
 import threading
@@ -29,6 +31,188 @@ import wandb
 
 from train_utils import video_callback, save_params
 from benchmark_utils import get_eval_mods, get_train_mods
+
+try:
+    import matplotlib.pyplot as plt
+except Exception:
+    plt = None
+
+
+def _flatten_metric_tree(tree: Any, prefix: str = "") -> dict[str, np.ndarray]:
+    """Flatten nested metric dicts into {metric_name: np.ndarray}."""
+    if isinstance(tree, dict):
+        flat: dict[str, np.ndarray] = {}
+        for key, value in tree.items():
+            child_prefix = f"{prefix}{key}/" if prefix else f"{key}/"
+            flat.update(_flatten_metric_tree(value, child_prefix))
+        return flat
+    key = prefix[:-1] if prefix.endswith("/") else prefix
+    key = key if key else "metric"
+    return {key: np.asarray(tree)}
+
+
+def _to_series(arr: np.ndarray) -> np.ndarray:
+    """Convert a metric tensor to a 1D curve by averaging non-step dims."""
+    arr = np.asarray(arr)
+    if arr.ndim == 0:
+        return arr.reshape(1).astype(np.float64)
+    if arr.ndim == 1:
+        return arr.astype(np.float64)
+    # Heuristic: longest axis is usually the training-step axis.
+    step_axis = int(np.argmax(arr.shape))
+    if step_axis != arr.ndim - 1:
+        arr = np.moveaxis(arr, step_axis, -1)
+    reduce_axes = tuple(range(arr.ndim - 1))
+    return np.nanmean(arr.astype(np.float64), axis=reduce_axes)
+
+
+def _sanitize_metric_name(name: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in name).strip("_")
+
+
+def _pick_first(keys: set[str], candidates: list[str]) -> str | None:
+    for candidate in candidates:
+        if candidate in keys:
+            return candidate
+    return None
+
+
+def _plot_series(
+    x: np.ndarray,
+    y: np.ndarray,
+    xlabel: str,
+    ylabel: str,
+    title: str,
+    output_path: str,
+) -> None:
+    if plt is None:
+        return
+    plt.figure(figsize=(8, 4.5))
+    plt.plot(x, y, linewidth=1.8)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=140)
+    plt.close()
+
+
+def _export_report_artifacts(
+    outs: dict[str, Any],
+    config: dict[str, Any],
+    alg_name: str,
+    env_name: str,
+    oc: str,
+) -> None:
+    if not config.get("EXPORT_METRICS", False):
+        return
+
+    metrics = outs.get("metrics", None)
+    if metrics is None:
+        return
+
+    report_root = config.get("REPORT_OUTPUT_DIR", "./report_outputs")
+    metrics_dir = os.path.join(report_root, "metrics")
+    graphs_dir = os.path.join(report_root, "graphs")
+    os.makedirs(metrics_dir, exist_ok=True)
+    os.makedirs(graphs_dir, exist_ok=True)
+
+    run_prefix = f"{alg_name}_{env_name}_{oc}_seed{config['SEED']}"
+
+    flat_metrics = _flatten_metric_tree(metrics)
+    series_metrics: dict[str, np.ndarray] = {}
+    for name, values in flat_metrics.items():
+        curve = _to_series(values)
+        if curve.size > 0:
+            series_metrics[name] = curve
+
+    if not series_metrics:
+        return
+
+    # Save compact npz with a key map.
+    key_map: dict[str, str] = {}
+    packed: dict[str, np.ndarray] = {}
+    for original_name, curve in series_metrics.items():
+        safe_name = _sanitize_metric_name(original_name) or "metric"
+        base_name = safe_name
+        suffix = 1
+        while safe_name in packed:
+            suffix += 1
+            safe_name = f"{base_name}_{suffix}"
+        packed[safe_name] = curve
+        key_map[safe_name] = original_name
+
+    npz_path = os.path.join(metrics_dir, f"{run_prefix}_metrics.npz")
+    np.savez(npz_path, **packed)
+    with open(os.path.join(metrics_dir, f"{run_prefix}_metrics_keymap.json"), "w", encoding="utf-8") as f:
+        json.dump(key_map, f, indent=2)
+
+    # Save CSV for easy manual plotting in report tools.
+    max_len = max(len(v) for v in series_metrics.values())
+    env_step = series_metrics.get("env_step", None)
+    if env_step is not None and len(env_step) == max_len:
+        x_axis = env_step
+        x_label = "env_step"
+    else:
+        x_axis = np.arange(max_len, dtype=np.float64)
+        x_label = "update"
+
+    csv_path = os.path.join(metrics_dir, f"{run_prefix}_metrics.csv")
+    ordered_keys = sorted(series_metrics.keys())
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([x_label] + ordered_keys)
+        for idx in range(max_len):
+            row = [float(x_axis[idx]) if idx < len(x_axis) else float("nan")]
+            for key in ordered_keys:
+                curve = series_metrics[key]
+                row.append(float(curve[idx]) if idx < len(curve) else float("nan"))
+            writer.writerow(row)
+
+    # Standard report plots.
+    keys = set(series_metrics.keys())
+    reward_key = _pick_first(
+        keys,
+        [
+            "returned_episode_returns",
+            "test/returned_episode_returns",
+            "mod/returned_episode_returns",
+        ],
+    )
+    loss_key = _pick_first(
+        keys,
+        [
+            "td_loss",
+            "loss",
+            "policy_loss",
+            "value_loss",
+        ],
+    )
+
+    if reward_key is not None:
+        reward_curve = series_metrics[reward_key]
+        n = min(len(x_axis), len(reward_curve))
+        _plot_series(
+            x_axis[:n],
+            reward_curve[:n],
+            xlabel=x_label,
+            ylabel="Episode Reward",
+            title=f"{run_prefix} - Reward ({reward_key})",
+            output_path=os.path.join(graphs_dir, f"{run_prefix}_reward.png"),
+        )
+
+    if loss_key is not None:
+        loss_curve = series_metrics[loss_key]
+        n = min(len(x_axis), len(loss_curve))
+        _plot_series(
+            x_axis[:n],
+            loss_curve[:n],
+            xlabel=x_label,
+            ylabel="Loss",
+            title=f"{run_prefix} - Loss ({loss_key})",
+            output_path=os.path.join(graphs_dir, f"{run_prefix}_loss.png"),
+        )
 
 class CNN(nn.Module):
 
@@ -574,6 +758,8 @@ def single_run(config):
             )
             save_params(params, save_path)
             save_params(batch_stats, save_path.replace(".safetensors", "_bs.safetensors"))
+
+    _export_report_artifacts(outs, config, alg_name, env_name, oc)
 
 
 def tune(default_config):

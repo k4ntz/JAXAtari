@@ -14,3 +14,7 @@ alg:
 
 # where to save the params (if None, will not save)
 SAVE_PATH: "./models"
+
+# report artifact exports
+EXPORT_METRICS: False
+REPORT_OUTPUT_DIR: "./report_outputs"
