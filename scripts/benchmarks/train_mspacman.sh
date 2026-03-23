@@ -34,9 +34,9 @@ mkdir -p logs
 
 # ─── Environment setup ──────────────────────────────────────────────
 # Load modules — adjust these to match your cluster
-module purge 2>/dev/null || true
-module load Python/3.11 2>/dev/null || module load python/3.11 2>/dev/null || true
-module load CUDA 2>/dev/null || module load cuda 2>/dev/null || true
+module purge
+module load python/3.10
+module load cuda/11.8
 
 # Create venv if it doesn't exist
 if [ ! -d "$VENV_DIR" ]; then
@@ -53,7 +53,7 @@ if ! python -c "import jaxatari" 2>/dev/null; then
     pip install -e "$PROJECT_ROOT"
     pip install hydra-core omegaconf optax distrax "wandb[media]>=0.24.0" safetensors
     # Install JAX with CUDA support — adjust cuda version as needed
-    pip install "jax[cuda12]"
+    pip install "jax[cuda11]"
     install-sprites
 fi
 
