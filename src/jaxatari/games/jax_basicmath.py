@@ -121,8 +121,8 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         return spaces.Dict({
             "problem_num1": spaces.Box(low=0, high=1000, shape=(), dtype=jnp.int32),
             "problem_num2": spaces.Box(low=0, high=1000, shape=(), dtype=jnp.int32),
-            "digits": spaces.Box(low=-1, high=9, shape=self.INITARR.shape, dtype=jnp.int32),
-            "arrPos": spaces.Box(low=0, high=self.INITARR.shape[0], shape=(), dtype=jnp.int32),
+            "digits": spaces.Box(low=-1, high=9, shape=(8,), dtype=jnp.int32),
+            "arrPos": spaces.Box(low=0, high=8, shape=(), dtype=jnp.int32),
         })
 
     @partial(jax.jit, static_argnums=(0,))
