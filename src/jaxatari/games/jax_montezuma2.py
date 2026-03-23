@@ -45,6 +45,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     
     # Gameplay Rules
     MAX_FALL_DISTANCE: int = struct.field(pytree_node=False, default=33) # ladder_height (39) - 6
+    DEATH_TIMER_FRAMES: int = struct.field(pytree_node=False, default=70)
 
 @struct.dataclass
 class Montezuma2State:
@@ -103,6 +104,9 @@ class Montezuma2State:
     lasers_active: jnp.ndarray
     laser_cycle: jnp.ndarray
     
+    death_timer: jnp.ndarray
+    death_type: jnp.ndarray
+    
     inventory: jnp.ndarray
     key: jrandom.PRNGKey
 
@@ -155,7 +159,11 @@ class Montezuma2Renderer(JAXGameRenderer):
                     'player/ladder_climb2.npy',
                     'player/rope_climb_0.npy',
                     'player/rope_climb_1.npy',
-                    'player/player_jump.npy'
+                    'player/player_jump.npy',
+                    'player/player_splosh_0.npy',
+                    'player/player_splosh_1.npy',
+                    'player/splutter_0.npy',
+                    'player/splutter_1.npy'
                 ]
             },
             {
@@ -275,16 +283,16 @@ class Montezuma2Renderer(JAXGameRenderer):
             active = jnp.logical_and(state.lasers_active[i] == 1, laser_active_now)
             
             def _draw(raster_in):
-                # 40 pixels high. We batch 10 stripes max (since distance=4).
-                start_j = jnp.mod(laser_offset, 4)
-                k_idx = jnp.arange(10)
+                # 40 pixels high. We batch 11 stripes max to handle offset properly.
+                start_j = jnp.mod(4 - laser_offset, 4) - 4
+                k_idx = jnp.arange(11)
                 j_vals = start_j + k_idx * 4
                 
-                valid = j_vals < 40
-                pos_x = jnp.full((10,), x, dtype=jnp.int32)
-                pos_y = 54 + j_vals
+                valid = jnp.logical_and(j_vals >= 0, j_vals < 40)
+                pos_x = jnp.where(valid, x, -1)
+                pos_y = jnp.where(valid, 54 + j_vals, -1)
                 
-                sizes = jnp.where(valid, 4, 0)
+                sizes = jnp.where(valid, 4, 1)
                 
                 pos = jnp.stack([pos_x, pos_y], axis=-1)
                 size = jnp.stack([sizes, jnp.ones_like(sizes)], axis=-1)
@@ -356,6 +364,11 @@ class Montezuma2Renderer(JAXGameRenderer):
         player_sprite_idx = jnp.where(is_laddering, 3 + ladder_anim, player_sprite_idx)
         player_sprite_idx = jnp.where(is_roping, 5 + rope_anim, player_sprite_idx)
         player_sprite_idx = jnp.where(is_in_air, 7, player_sprite_idx)
+        
+        is_dying = state.death_timer > 0
+        death_anim_frame = jnp.mod(jnp.floor_divide(state.death_timer, 8), 2)
+        death_base_idx = jnp.where(state.death_type == 1, 8, 10)
+        player_sprite_idx = jnp.where(is_dying, death_base_idx + death_anim_frame, player_sprite_idx)
         
         # Standing sprite (0) faces right, flip if facing left.
         # Walking (1, 2) and jumping (7) sprites face left natively, flip if facing right.
@@ -626,6 +639,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             lasers_x=jnp.zeros(self.consts.MAX_LASERS_PER_ROOM, dtype=jnp.int32),
             lasers_active=jnp.zeros(self.consts.MAX_LASERS_PER_ROOM, dtype=jnp.int32),
             laser_cycle=jnp.array(0, dtype=jnp.int32),
+            death_timer=jnp.array(0, dtype=jnp.int32),
+            death_type=jnp.array(0, dtype=jnp.int32),
             inventory=jnp.zeros(1, dtype=jnp.int32),
             key=key
         )
@@ -1023,7 +1038,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             l_active = jnp.logical_and(state.lasers_active[i] == 1, laser_active_now)
             
             overlap_x = jnp.logical_and(new_left_x < l_x + 4, new_right_x >= l_x)
-            overlap_y = jnp.logical_and(check_y_top < 93, check_y_bot >= 54) # offset 47 + 7 to 47 + 46
+            overlap_y = jnp.logical_and(check_y_top < 46, check_y_bot >= 7)
             overlap = jnp.logical_and(overlap_x, overlap_y)
             
             return jnp.logical_or(hit, jnp.logical_and(l_active, overlap))
@@ -1032,17 +1047,29 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         player_died = jnp.logical_or(died_from_fall, jnp.logical_or(died_from_enemy, died_from_laser))
         
-        new_lives = jnp.where(player_died, state.lives - 1, state.lives)
-        final_x = jnp.where(player_died, self.consts.INITIAL_PLAYER_X, new_x)
-        final_y = jnp.where(player_died, self.consts.INITIAL_PLAYER_Y, new_y)
-        final_vx = jnp.where(player_died, 0, current_vx)
-        final_vy = jnp.where(player_died, 0, dy)
-        final_player_dir = jnp.where(player_died, 1, new_player_dir)
-        final_is_jumping = jnp.where(player_died, 0, new_is_jumping)
-        final_is_falling = jnp.where(player_died, 0, new_is_falling)
-        final_is_climbing = jnp.where(player_died, 0, is_climbing)
-        final_jump_counter = jnp.where(player_died, 0, new_jump_counter)
-        final_fall_start_y = jnp.where(player_died, self.consts.INITIAL_PLAYER_Y, new_fall_start_y)
+        start_death = jnp.logical_and(state.death_timer == 0, player_died)
+        new_death_timer = jnp.where(start_death, self.consts.DEATH_TIMER_FRAMES, 
+                                    jnp.where(state.death_timer > 0, state.death_timer - 1, 0))
+        
+        death_type = jnp.where(died_from_fall, 1, jnp.where(died_from_enemy, 2, jnp.where(died_from_laser, 3, 0)))
+        new_death_type = jnp.where(start_death, death_type, jnp.where(new_death_timer == 0, 0, state.death_type))
+
+        respawn_now = jnp.logical_and(state.death_timer == 1, new_death_timer == 0)
+        
+        spawn_x = jnp.where(state.room_id == 0, 146, self.consts.INITIAL_PLAYER_X)
+        spawn_y = jnp.where(state.room_id == 0, 27, self.consts.INITIAL_PLAYER_Y)
+        
+        new_lives = jnp.where(start_death, state.lives - 1, state.lives)
+        final_x = jnp.where(respawn_now, spawn_x, jnp.where(new_death_timer > 0, state.player_x, new_x))
+        final_y = jnp.where(respawn_now, spawn_y, jnp.where(new_death_timer > 0, state.player_y, new_y))
+        final_vx = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, current_vx)
+        final_vy = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, dy)
+        final_player_dir = jnp.where(respawn_now, 1, jnp.where(new_death_timer > 0, state.player_dir, new_player_dir))
+        final_is_jumping = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, new_is_jumping)
+        final_is_falling = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, new_is_falling)
+        final_is_climbing = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, is_climbing)
+        final_jump_counter = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, new_jump_counter)
+        final_fall_start_y = jnp.where(respawn_now, spawn_y, jnp.where(new_death_timer > 0, state.fall_start_y, new_fall_start_y))
         
         state = state.replace(
             lives=new_lives,
@@ -1065,7 +1092,9 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             inventory=jnp.array([current_keys], dtype=jnp.int32),
             items_active=new_items_active,
             doors_active=new_doors_active,
-            laser_cycle=new_laser_cycle
+            laser_cycle=new_laser_cycle,
+            death_timer=new_death_timer,
+            death_type=new_death_type
         )
 
         transition_any = jnp.logical_or(transition_left, transition_right)
