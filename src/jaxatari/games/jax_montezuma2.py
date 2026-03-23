@@ -20,6 +20,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     MAX_ITEMS_PER_ROOM: int = struct.field(pytree_node=False, default=2)
     MAX_CONVEYORS_PER_ROOM: int = struct.field(pytree_node=False, default=2)
     MAX_LASERS_PER_ROOM: int = struct.field(pytree_node=False, default=6)
+    MAX_ROOMS: int = struct.field(pytree_node=False, default=24)
     
     # Gameplay Constants
     WIDTH: int = struct.field(pytree_node=False, default=160)
@@ -94,6 +95,9 @@ class Montezuma2State:
     doors_x: jnp.ndarray
     doors_y: jnp.ndarray
     doors_active: jnp.ndarray
+    global_doors_active: jnp.ndarray
+    global_items_active: jnp.ndarray
+    global_enemies_active: jnp.ndarray
     
     conveyors_x: jnp.ndarray
     conveyors_y: jnp.ndarray
@@ -586,13 +590,16 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
         return state.replace(
             room_id=room_id,
-            enemies_x=ex, enemies_y=ey, enemies_active=ea, enemies_direction=ed, enemies_min_x=eminx, enemies_max_x=emaxx,
+            enemies_x=ex, enemies_y=ey, enemies_direction=ed, enemies_min_x=eminx, enemies_max_x=emaxx,
             ladders_x=lx, ladders_top=lt, ladders_bottom=lb, ladders_active=la,
             ropes_x=rx, ropes_top=rt, ropes_bottom=rb, ropes_active=ra,
-            items_x=ix, items_y=iy, items_active=ia,
-            doors_x=dx, doors_y=dy, doors_active=da,
+            items_x=ix, items_y=iy,
+            doors_x=dx, doors_y=dy,
             conveyors_x=cx, conveyors_y=cy, conveyors_active=ca, conveyors_direction=cd,
-            lasers_x=lax, lasers_active=laa
+            lasers_x=lax, lasers_active=laa,
+            enemies_active=state.global_enemies_active[room_id],
+            items_active=state.global_items_active[room_id],
+            doors_active=state.global_doors_active[room_id]
         )
 
     def reset(self, key: jrandom.PRNGKey) -> Tuple[Montezuma2Observation, Montezuma2State]:
@@ -642,8 +649,25 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             death_timer=jnp.array(0, dtype=jnp.int32),
             death_type=jnp.array(0, dtype=jnp.int32),
             inventory=jnp.zeros(1, dtype=jnp.int32),
+            global_enemies_active=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ENEMIES_PER_ROOM), dtype=jnp.int32),
+            global_items_active=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ITEMS_PER_ROOM), dtype=jnp.int32),
+            global_doors_active=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_DOORS_PER_ROOM), dtype=jnp.int32),
             key=key
         )
+        
+        gia = state.global_items_active
+        gia = gia.at[0, 0].set(1)
+        gia = gia.at[1, 0].set(1)
+        
+        gda = state.global_doors_active
+        gda = gda.at[1, 0].set(1)
+        gda = gda.at[1, 1].set(1)
+        
+        gea = state.global_enemies_active
+        gea = gea.at[1, 0].set(1)
+        
+        state = state.replace(global_items_active=gia, global_doors_active=gda, global_enemies_active=gea)
+        
         state = self._load_room(jnp.array(1, dtype=jnp.int32), state)
         obs = self._get_observation(state)
         return obs, state
@@ -1101,7 +1125,12 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         new_room_id = jnp.where(transition_left, 0, jnp.where(transition_right, 1, state.room_id))
 
         def transition_fn(state_in):
-            st = self._load_room(new_room_id, state_in)
+            st = state_in.replace(
+                global_doors_active=state_in.global_doors_active.at[state_in.room_id].set(state_in.doors_active),
+                global_items_active=state_in.global_items_active.at[state_in.room_id].set(state_in.items_active),
+                global_enemies_active=state_in.global_enemies_active.at[state_in.room_id].set(state_in.enemies_active)
+            )
+            st = self._load_room(new_room_id, st)
             new_px = jnp.where(transition_left, 148, 4)
             new_py = jnp.where(transition_left, 27, 26)
             return st.replace(player_x=new_px, player_y=new_py, fall_start_y=new_py)
