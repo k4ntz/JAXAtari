@@ -73,9 +73,8 @@ class LostLuggageConstants(struct.PyTreeNode):
     PLAYER_START_X:  int = struct.field(pytree_node=False, default=72)
     PLAYER_Y:        int = struct.field(pytree_node=False, default=153)
     PLAYER_SPEED:    int = struct.field(pytree_node=False, default=3) # changed from 2 to 3
-    PLAYER_VERT_SPEED: int = struct.field(pytree_node=False, default=1.5) # changed from 1 to 1.5
-    # How many frames to hold the passenger in a standing pose
-    PASS_POSE_HOLD_FRAMES: int = struct.field(pytree_node=False, default=8)
+    PLAYER_VERT_SPEED: int = struct.field(pytree_node=False, default=2) # changed from 1 to 2
+
     
     # Plane sprite behaviour
     PLANE_START_X: int = struct.field(pytree_node=False, default=0)
@@ -422,6 +421,7 @@ class JaxLostLuggage(JaxEnvironment[LostLuggageState, LostLuggageObservation,
         # Vertical movement
         dy = jnp.where(is_up, -self.consts.PLAYER_VERT_SPEED,
              jnp.where(is_down, self.consts.PLAYER_VERT_SPEED, 0))
+        dy = dy.astype(jnp.int32)  
         max_py = jnp.int32(self.consts.PLAYER_Y_BOT - self.consts.PASS_H)
         new_py = jnp.clip(state.player_y + dy,
                         jnp.int32(self.consts.PLAYER_Y_TOP),
@@ -591,7 +591,7 @@ class JaxLostLuggage(JaxEnvironment[LostLuggageState, LostLuggageObservation,
         new_score  = prev_score + score_inc
 
         # Extra life logic
-        thresholds = jnp.array([400, 800], dtype=jnp.int32)
+        thresholds = self.consts.EXTRA_LIFE_THRESHOLDS
         band_before = prev_score // 1000
         band_after  = new_score // 1000
 
@@ -706,7 +706,7 @@ class JaxLostLuggage(JaxEnvironment[LostLuggageState, LostLuggageObservation,
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(self, state: LostLuggageState) -> float:
+    def _get_reward(self, state: LostLuggageState, action) -> float:  
         return jnp.float32(state.score)
 
     @partial(jax.jit, static_argnums=(0,))
