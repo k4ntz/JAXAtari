@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 from functools import partial
 from typing import NamedTuple, Tuple
@@ -27,14 +27,15 @@ def _get_default_asset_config() -> tuple:
         ]},
         {'name': 'player_death', 'type': 'group', 'files': [
             'player/death_0.npy', 'player/death_1.npy', 'player/death_2.npy', 'player/death_3.npy',
-            'player/death_4.npy', 'player/death_5.npy', 'player/death_6.npy', 'player/death_7.npy',
-            'player/death_8.npy', 'player/death_9.npy', 'player/death_10.npy', 'player/death_11.npy',
+            'player/death_4.npy', 'player/death_5.npy', 'player/death_6.npy',
         ]},
         {'name': 'ghost_normal', 'type': 'group', 'files': [
             'ghost_normal/ghost_1.npy', 'ghost_normal/ghost_2.npy',
+            'ghost_normal/ghost_3.npy', 'ghost_normal/ghost_4.npy',
         ]},
         {'name': 'ghost_frightened', 'type': 'group', 'files': [
             'ghost_frightened/ghost_frightened_1.npy', 'ghost_frightened/ghost_frightened_2.npy',
+            'ghost_frightened/ghost_frightened_3.npy', 'ghost_frightened/ghost_frightened_4.npy',
         ]},
         {'name': 'ghost_eyes', 'type': 'single', 'file': 'ghost_eyes/eyes.npy'},
         {'name': 'ghost_eyes_pink', 'type': 'single', 'file': 'ghost_eyes/eyes_pink.npy'},
@@ -1710,8 +1711,8 @@ class PacmanRenderer(JAXGameRenderer):
 
         def render_dying(r):
             progress = (self.consts.DEATH_DURATION - state.death_timer) / self.consts.DEATH_DURATION
-            frame = (progress * 12).astype(jnp.int32)
-            frame = jnp.clip(frame, 0, 11)
+            frame = (progress * 7).astype(jnp.int32)
+            frame = jnp.clip(frame, 0, 6)
             death_mask = self.SHAPE_MASKS["player_death"][frame]
             return self.jr.render_at(r, state.player_x - 4, state.player_y, death_mask)
 
@@ -1722,7 +1723,7 @@ class PacmanRenderer(JAXGameRenderer):
                 g_x, g_y = state.ghosts[i, 0] - 4, state.ghosts[i, 1]
                 g_dir = state.ghosts[i, 2]
                 g_state = state.ghosts[i, 3] # 0=Normal, 1=Frightened, 2=Eaten
-                anim_frame = (state.step_counter // 10) % 2
+                anim_frame = (state.step_counter // 8) % 4  # 4-frame clockwise eye rotation
                 
                 # Desynchronized flashing: each ghost has a different phase offset
                 flash_phase = (state.step_counter + i) % 2
