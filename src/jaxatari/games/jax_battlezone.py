@@ -70,7 +70,7 @@ class BattlezoneConstants(struct.PyTreeNode):
     PLAYER_SPEED: float = struct.field(default=0.5, pytree_node=False)
     PLAYER_SPEED_DRIVETURN: float = struct.field(default=0.115348, pytree_node=False)
     PROJECTILE_SPEED: float = struct.field(default=1, pytree_node=False)
-    ENEMY_SPEED: chex.Array = struct.field(default_factory=lambda: jnp.array([0.5, 0.5, 2.0, 2.0]))
+    ENEMY_SPEED: chex.Array = struct.field(default_factory=lambda: jnp.array([0.5, 0.5, 2.0, 0.5]))
     ENEMY_ROT_SPEED: chex.Array = struct.field(default_factory=lambda: jnp.array([jnp.pi/512, 0.02, 0.02, 0.02]))
 
     # --- game mechanics ---
@@ -81,7 +81,7 @@ class BattlezoneConstants(struct.PyTreeNode):
         [1.0, 0.0, 0.0, 0.0],
         [0.8, 0.2, 0.0, 0.0],
         [0.6, 0.3, 0.1, 0.0],
-        [0.5, 0.2, 0.2, 0.1]
+        [0.4, 0.2, 0.2, 0.2]
     ]))
     RADAR_MAX_SCAN_RADIUS: int = struct.field(default=110, pytree_node=False)
     FIGHTER_AREA_X: Tuple[float, float] = struct.field(default=(-12.5, 12.5), pytree_node=False)
@@ -998,20 +998,66 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             return jax.lax.switch(fighter.phase, (p0, p1, pX), fighter)
 
         def supertank_movement(supertank: Enemy) -> Enemy:  # ToDo: Unique movement
-            def player_spotted(supertank):
-                def too_close(tank):
-                    return move_to_player(supertank, 1)  # Enemy keeps 30 units distance to player
+            def p0(supertank):
+                """Closing in on player"""
+                def too_close(supertank):
+                    return move_to_player(supertank, 1)
 
                 def too_far(supertank):
                     return move_to_player(supertank, -1)
 
-                return jax.lax.cond(supertank.distance <= 30.0, too_close, too_far, supertank)
+                supertank = jax.lax.cond(supertank.distance <= 30.0, too_close, too_far, supertank)
+                supertank = jax.lax.cond(jnp.abs(supertank.distance - 30.0) < 2.5,
+                                         lambda supertank: supertank.replace(phase=1, dist_moved_temp=0.0),
+                                         lambda supertank: supertank,
+                                         supertank)
+                return supertank
 
-            def player_not_spotted(supertank):
-                return enemy_turn(supertank)
+            def p1(supertank):
+                """90° counter clockwise""" # ToDo: If player moves away circle expads
+                dtheta = -speed / supertank.distance
+                cos_dtheta = jnp.cos(dtheta)
+                sin_dtheta = jnp.sin(dtheta)
+                # Update saucer
+                scale = self.consts.TANKS_SHOOTING_DISTANCE / supertank.distance   # Reduce circle the further to player
+                new_x = (cos_dtheta * supertank.x - sin_dtheta * supertank.z) * scale
+                new_z = (sin_dtheta * supertank.x + cos_dtheta * supertank.z) * scale
+                supertank = supertank.replace(x=new_x, z=new_z, dist_moved_temp=supertank.dist_moved_temp+jnp.abs(dtheta))
+                supertank = self._wrap_coords_and_stored_points(supertank)
+                supertank = jax.lax.cond(
+                    supertank.dist_moved_temp >= (jnp.pi / 2),
+                    lambda supertank: supertank.replace(phase=2, dist_moved_temp=0.0),
+                    lambda supertank: supertank,
+                    supertank
+                )
+                return supertank
 
-            return jax.lax.cond(jnp.abs(angle_diff) <= rot_speed,
-                                player_spotted, player_not_spotted, supertank)
+            def p2(supertank):
+                """180° clockwise""" # ToDo: If player moves away circle expads
+                dtheta = speed / supertank.distance
+                cos_dtheta = jnp.cos(dtheta)
+                sin_dtheta = jnp.sin(dtheta)
+                # Update saucer
+                scale = self.consts.TANKS_SHOOTING_DISTANCE / supertank.distance   # Reduce circle the further to player
+                new_x = (cos_dtheta * supertank.x - sin_dtheta * supertank.z) * scale
+                new_z = (sin_dtheta * supertank.x + cos_dtheta * supertank.z) * scale
+                supertank = supertank.replace(x=new_x, z=new_z, dist_moved_temp=supertank.dist_moved_temp+jnp.abs(dtheta))
+                supertank = self._wrap_coords_and_stored_points(supertank)
+                supertank = jax.lax.cond(
+                    supertank.dist_moved_temp >= (jnp.pi),
+                    lambda supertank: supertank.replace(phase=3, dist_moved_temp=0.0),
+                    lambda supertank: supertank,
+                    supertank
+                )
+                return supertank
+
+            def p3(supertank):
+                """Taking a shot"""
+                supertank = supertank.replace(phase=0)
+
+                return supertank
+
+            return jax.lax.switch(supertank.phase, (p0, p1, p2, p3), supertank)
 
         shoot_cond = (jnp.all(jnp.array([enemy.enemy_type == EnemyType.TANK,
                                         enemy.shoot_cd <= 0,
@@ -1020,9 +1066,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                                         enemy.active]))
                     | jnp.all(jnp.array([enemy.enemy_type == EnemyType.SUPERTANK,
                                         enemy.shoot_cd <= 0,
-                                        jnp.abs(angle_diff) <= rot_speed,
-                                        enemy.distance <= self.consts.TANKS_SHOOTING_DISTANCE,
-                                        enemy.phase == 4,
+                                        #jnp.abs(angle_diff) <= rot_speed,
+                                        enemy.phase == 3,
                                         enemy.active]))
                     | jnp.all(jnp.array([enemy.enemy_type == EnemyType.FIGHTER_JET,
                                          enemy.shoot_cd <= 0,
