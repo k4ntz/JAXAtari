@@ -5,7 +5,7 @@ Edit: Jan Rafflewski
 
 """
 TODO
-    1)  [ ] Get original fruit sprites from OCAtari (ALE)
+    1)  [x] Get original fruit sprites from OCAtari (ALE)
     2)  [ ] Compare timings and behaviour with OCAtari (ALE)
     3)  [ ] Fix inconsistent PELLETS_TO_COLLECT behaviour
     4)  [ ] Reduce frightened/jail time every level
@@ -17,7 +17,7 @@ TODO
     c)  [ ] Add Pacman death animation
     d)  [ ] Add Fruit movement patterns
     e)  [ ] Add Ghost behavioral quirks
-    f)  [ ] Fix Ghost enjailment
+    f)  [ ] Add original Ghost enjailment mechanic
 """
 
 
@@ -47,7 +47,6 @@ class FruitType(IntEnum):
     APPLE = 4
     PEAR = 5
     BANANA = 6
-    NONE = 7
 
 class GhostType(IntEnum):
     BLINKY = 0
@@ -72,26 +71,26 @@ TIME_SCALE = 56 # Approximate number of timesteps in a second
 INITIAL_LIVES = 3 # Number of starting bonus lives
 MAX_LIVE_COUNT = 4 # Maximum possible number of lives
 MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
-PELLETS_TO_COLLECT = 150 # Total pellets to collect in the maze (including power pellets)
+PELLETS_TO_COLLECT = 154 # Total pellets to collect in the maze (including power pellets)
 BONUS_LIFE_SCORE = 10000 # Score at which a bonus life is rewarded
 COLLISION_THRESHOLD = 6 # Contacts below this distance count as collision
 
 # GHOST TIMINGS
-SUE_RELEASE_TIME = 1*TIME_SCALE
-INKY_RELEASE_TIME = 4*TIME_SCALE
-PINKY_RELEASE_TIME = 5*TIME_SCALE
+SUE_RELEASE_TIME = 0.5*TIME_SCALE
+INKY_RELEASE_TIME = 3*TIME_SCALE
+PINKY_RELEASE_TIME = 4*TIME_SCALE
 RESET_TIMER = 2*TIME_SCALE # Timer for resetting the game after death
 CHASE_DURATION = 20*TIME_SCALE # Approximately 20s
 SCATTER_DURATION = 7*TIME_SCALE # Approximately 7s
-FRIGHTENED_DURATION = 4*TIME_SCALE # Approximately 4s
-BLINKING_DURATION = 3*TIME_SCALE # Approximately 3s
-ENJAILED_DURATION = 5*TIME_SCALE # Approximately 5s
+FRIGHTENED_DURATION = 4*TIME_SCALE # Approximately 5s
+BLINKING_DURATION = 1*TIME_SCALE # Approximately 2s
+ENJAILED_DURATION = 4*TIME_SCALE # Approximately 5s
 RETURN_DURATION = TIME_SCALE/2 # Should be as long as it takes the ghost to return from jail to the path
 MAX_CHASE_OFFSET = CHASE_DURATION/10 # Maximum value that can be added to the chase duration
 MAX_SCATTER_OFFSET = SCATTER_DURATION/10 # Maximum value that can be added to the scatter duration
 
 # FRUITS
-FRUIT_SPAWN_THRESHOLDS = jnp.array([50, 100]) # The original was more like ~70, ~170 but this version has a reduced number of pellets
+FRUIT_SPAWN_THRESHOLDS = jnp.array([50, 100])
 FRUIT_WANDER_DURATION = jnp.array(25*TIME_SCALE, dtype=jnp.uint16) # Approximately 25s
 
 # POSITIONS
@@ -164,6 +163,8 @@ class FruitState(NamedTuple):
     exit: chex.Array                # Tuple - (x, y) Position of the tunnel through which it will exit
     type: chex.Array                # Enum - 0: CHERRY, 1: STRAWBERRY, 2: ORANGE, 3: PRETZEL, 4: APPLE, 5: PEAR, 6: BANANA, 7: NONE
     action: chex.Array              # Enum - 0: NOOP, 1: FIRE, 2: UP, 3: RIGHT, 4: LEFT, 5: DOWN
+    spawn: chex.Array               # Bool - Indicates wether a fruit should spawn into the maze as soon as possible
+    spawned: chex.Array             # Bool - Indicates wether a fruit is currently present within the maze
     timer: chex.Array               # Int - Time until leaving through the exit tunnel, decrements every step
 
 class PacmanState(NamedTuple):
@@ -234,7 +235,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         """
         Resets the game to its initial state.
         """
-        return None, reset_game(RESET_LEVEL, INITIAL_LIVES, 0)
+        return None, reset_game(RESET_LEVEL, INITIAL_LIVES, 0, key)
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: PacmanState, action: chex.Array, key: chex.PRNGKey) -> tuple[
@@ -246,7 +247,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             new_state,
             frozen,
             done
-        ) = self.death_step(state)
+        ) = self.death_step(state, key)
         
         ( # 2) Pacman handling
             player_position,
@@ -292,7 +293,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             lambda: new_state,
             lambda: jax.lax.cond(
                 level_id != state.level.id,
-                lambda: reset_game(level_id, state.lives, new_score),
+                lambda: reset_game(level_id, state.lives, new_score, key),
                 lambda: PacmanState(
                     level = LevelState(
                         id=level_id,
@@ -366,7 +367,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         )
     
     @staticmethod
-    def death_step(state: PacmanState):
+    def death_step(state: PacmanState, key: chex.PRNGKey):
         """
         Updates the game state when a deadly collision occured.
         """
@@ -382,7 +383,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 lambda: jax.lax.cond(
                     state.lives == 0,
                     lambda: (decrement_timer(state), True, True), # Game Over,
-                    lambda: (reset_entities(decrement_timer(state)), True, False) # Level Reset
+                    lambda: (reset_entities(decrement_timer(state), key), True, False) # Level Reset
                 )
             )
         )
@@ -463,7 +464,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             )
         
         # 1) Check if a regular pellet was eaten
-        pellets, has_pellet = jax.lax.cond(
+        pellets, ate_pellet = jax.lax.cond(
             check_pellet(new_pacman_pos),
             lambda: eat_pellet(new_pacman_pos, state.level.pellets),
             lambda: (state.level.pellets, False)
@@ -481,15 +482,15 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         )
         # 3) Process regular pellet reward
         collected_pellets, reward = jax.lax.cond(
-            has_pellet,
+            ate_pellet,
             lambda: (state.level.collected_pellets + 1, PELLET_POINTS),
             lambda: (state.level.collected_pellets, 0)
         )
         # 4) Process power pellet reward
-        reward = jax.lax.cond(
+        collected_pellets, reward = jax.lax.cond(
             ate_power_pellet,
-            lambda: reward + POWER_PELLET_POINTS,
-            lambda: reward
+            lambda: (collected_pellets + 1, reward + POWER_PELLET_POINTS),
+            lambda: (collected_pellets, reward)
         )
         # 5) Check win condition
         level_id, reward = jax.lax.cond(
@@ -498,9 +499,12 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             lambda: (state.level.id, reward)
         )
         # 6) Update pellet state
+
+        print(collected_pellets) # TODO: The win condition (154 pellets eaten) is reached with 2 pellets still in the maze. Find out why and fix it!
+
         return (
             pellets,
-            has_pellet,
+            ate_pellet | ate_power_pellet,
             collected_pellets,
             power_pellets,
             ate_power_pellet,
@@ -854,40 +858,53 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         """
         Updates the fruit state if a fruit spawns, moves or is consumed.
         """
-        def spawn_fruit():
-            fruit_type = get_level_fruit(state.level.id, key)
+        def spawn_fruit(fruit_spawn: bool):
             fruit_position, fruit_action = get_random_tunnel(state.level.id, key)
             fruit_exit, _ = get_random_tunnel(state.level.id, key)
             return FruitState(
                 jnp.array(fruit_position, dtype=jnp.uint8),
                 jnp.array(fruit_exit, dtype=jnp.uint8),
-                jnp.array(fruit_type, dtype=jnp.uint8),
+                state.fruit.type,
                 jnp.array(fruit_action, dtype=jnp.uint8),
+                jnp.array(False, dtype=jnp.bool),
+                jnp.array(True, dtype=jnp.bool),
                 FRUIT_WANDER_DURATION
             ), 0
         
-        def do_nothing():
-            return state.fruit, 0
+        def do_nothing(fruit_spawn: bool):
+            return FruitState(
+                state.fruit.position,
+                state.fruit.exit,
+                state.fruit.type,
+                state.fruit.action,
+                state.fruit.spawn | fruit_spawn,
+                state.fruit.spawned,
+                state.fruit.timer
+            ), 0
         
-        def consume_fruit():
+        def consume_fruit(fruit_spawn: bool):
             return FruitState(
                 jnp.zeros(2, dtype=jnp.uint8),
                 jnp.zeros(2, dtype=jnp.uint8),
-                jnp.array(FruitType.NONE, dtype=jnp.uint8),
+                state.fruit.type,
                 jnp.array(Action.NOOP, dtype=jnp.uint8),
+                state.fruit.spawn | fruit_spawn,
+                jnp.array(False, dtype=jnp.bool),
                 FRUIT_WANDER_DURATION
             ), FRUIT_REWARDS[state.fruit.type]
         
-        def remove_fruit():
+        def remove_fruit(fruit_spawn: bool):
             return FruitState(
                 jnp.zeros(2, dtype=jnp.uint8),
                 jnp.zeros(2, dtype=jnp.uint8),
-                jnp.array(FruitType.NONE, dtype=jnp.uint8),
+                state.fruit.type,
                 jnp.array(Action.NOOP, dtype=jnp.uint8),
+                state.fruit.spawn | fruit_spawn,
+                jnp.array(False, dtype=jnp.bool),
                 FRUIT_WANDER_DURATION
             ), 0
         
-        def step_fruit():
+        def step_fruit(fruit_spawn: bool):
             fruit_type = get_level_fruit(state.level.id, key)
             fruit_position, fruit_action = jax.lax.cond(
                 state.step_count % 2 == 0,
@@ -903,27 +920,30 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 fruit_position,
                 state.fruit.exit,
                 jnp.array(fruit_type, dtype=jnp.uint8),
-                fruit_action, 
+                fruit_action,
+                state.fruit.spawn | fruit_spawn,
+                state.fruit.spawned,
                 fruit_timer
             ), 0
         
+        fruit_spawn = jnp.any(FRUIT_SPAWN_THRESHOLDS == collected_pellets) & state.player.has_pellet
         new_fruit_state, reward = jax.lax.cond(
-            state.fruit.type == FruitType.NONE,
+            state.fruit.spawned,
             lambda: jax.lax.cond(
-                jnp.any(FRUIT_SPAWN_THRESHOLDS == collected_pellets),
-                spawn_fruit,
-                do_nothing
-            ),
-            lambda: jax.lax.cond(
-                detect_collision(new_pacman_pos, state.fruit.position), 
-                consume_fruit,
+                detect_collision(new_pacman_pos, state.fruit.position),
+                lambda: consume_fruit(fruit_spawn),
                 lambda: jax.lax.cond(
                     (state.fruit.timer == 0) & (jnp.all(jnp.array(state.fruit.position) == jnp.array(state.fruit.exit))),
-                    remove_fruit,
-                    step_fruit
-                )    
+                    lambda: remove_fruit(fruit_spawn),
+                    lambda: step_fruit(fruit_spawn)
+                )   
+            ),
+            lambda: jax.lax.cond(
+                state.fruit.spawn,
+                lambda: spawn_fruit(fruit_spawn),
+                lambda: do_nothing(fruit_spawn)
             )
-        )
+        ) 
         return new_fruit_state, reward
 
     @staticmethod
@@ -1050,7 +1070,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
 
         # Render fruit if present
         background = jax.lax.cond(
-            state.fruit.type != FruitType.NONE,
+            state.fruit.spawned,
             lambda: render_fruit(background, state.fruit, self.SPRITES["fruit"]),
             lambda: background
         )
@@ -1069,7 +1089,7 @@ class MsPacmanRenderer(AtraJaxisRenderer):
             lambda: MsPacmanRenderer.render_lives(background, state.lives - 1, self.SPRITES["pacman"][1][1]),
             lambda: background
         )
-        
+
         # Render level fruit indicator
         background = render_fruit_indicator(background, state.fruit.type, self.SPRITES["fruit"])
 
@@ -1577,7 +1597,7 @@ def detect_collision(position_1: chex.Array, position_2: chex.Array):
 def reset_level(level: chex.Array):
     return LevelState(
         id                  = jnp.array(level, dtype=jnp.uint8),
-        collected_pellets   = jnp.array(0).astype(jnp.uint8),
+        collected_pellets   = jnp.array(0, dtype=jnp.uint8),
         dofmaze             = MsPacmanMaze.precompute_dof(get_level_maze(level)),  # Precompute degree of freedom maze layout
         pellets             = jnp.copy(MsPacmanMaze.BASE_PELLETS),
         power_pellets       = jnp.ones(4, dtype=jnp.bool_),
@@ -1589,7 +1609,7 @@ def reset_player():
         position            = INITIAL_PACMAN_POSITION,
         action              = INITIAL_ACTION,
         has_pellet          = jnp.array(False),
-        eaten_ghosts        = jnp.array(0).astype(jnp.uint8)  # number of eaten ghost since power pellet consumed
+        eaten_ghosts        = jnp.array(0, dtype=jnp.uint8) # number of eaten ghost since power pellet consumed
     )
 
 def reset_ghosts():
@@ -1601,21 +1621,23 @@ def reset_ghosts():
         timers      = jnp.array([SCATTER_DURATION, PINKY_RELEASE_TIME, INKY_RELEASE_TIME, SUE_RELEASE_TIME], dtype=jnp.uint16),
     )
 
-def reset_fruit():
+def reset_fruit(level: chex.Array, key: chex.PRNGKey):
     return FruitState(
         position    = jnp.zeros(2, dtype=jnp.uint8),
         exit        = jnp.zeros(2, dtype=jnp.uint8),
-        type        = jnp.array(FruitType.CHERRY).astype(jnp.uint8),
-        action      = jnp.array(Action.NOOP).astype(jnp.uint8),
-        timer       = jnp.array(FRUIT_WANDER_DURATION).astype(jnp.uint16)
+        type        = jnp.array(get_level_fruit(level, key), dtype=jnp.uint8),
+        action      = jnp.array(Action.NOOP, dtype=jnp.uint8),
+        spawn       = jnp.array(False, dtype=jnp.bool),
+        spawned     = jnp.array(False, dtype=jnp.bool),
+        timer       = jnp.array(FRUIT_WANDER_DURATION, dtype=jnp.uint16)
     )
 
-def reset_game(level: chex.Array, lives: chex.Array, score: chex.Array):
+def reset_game(level: chex.Array, lives: chex.Array, score: chex.Array, key: chex.PRNGKey):
     return PacmanState(
         level           = reset_level(level),
         player          = reset_player(),
         ghosts          = reset_ghosts(),
-        fruit           = reset_fruit(),
+        fruit           = reset_fruit(level, key),
         lives           = jnp.array(lives, dtype=jnp.int8),
         score           = jnp.array(score, dtype=jnp.uint32),
         score_changed   = jnp.arange(MAX_SCORE_DIGITS) >= (MAX_SCORE_DIGITS - get_digit_count(score)),
@@ -1623,7 +1645,7 @@ def reset_game(level: chex.Array, lives: chex.Array, score: chex.Array):
         step_count      = jnp.array(0, dtype=jnp.uint32),
     )
 
-def reset_entities(state: PacmanState):
+def reset_entities(state: PacmanState, key: chex.PRNGKey):
     return PacmanState(
         level = LevelState(
             id = state.level.id,
@@ -1635,7 +1657,7 @@ def reset_entities(state: PacmanState):
         ),
         player          = reset_player(),
         ghosts          = reset_ghosts(),
-        fruit           = reset_fruit(),
+        fruit           = reset_fruit(state.level.id, key),
         lives           = state.lives,
         score           = state.score,
         score_changed   = state.score_changed,
