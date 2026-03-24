@@ -921,7 +921,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 return saucer.replace(active=False)
             
             # movement behaviour
-            saucer = jax.lax.cond(saucer.distance < min_dist, near_player, far_player, saucer)
+            saucer = jax.lax.cond(saucer.distance < self.consts.SAUCER_MIN_DIST, near_player, far_player, saucer)
 
             # despawn if too far away
             saucer = jax.lax.cond(
