@@ -84,6 +84,7 @@ class BattlezoneConstants(struct.PyTreeNode):
         [0.4, 0.2, 0.2, 0.2]
     ]))
     RADAR_MAX_SCAN_RADIUS: int = struct.field(default=110, pytree_node=False)
+    SAUCER_MIN_DIST: float = struct.field(default=27.0, pytree_node=False)
     FIGHTER_AREA_X: Tuple[float, float] = struct.field(default=(-12.5, 12.5), pytree_node=False)
     FIGHTER_AREA_Z: Tuple[float, float] = struct.field(default=(75.0, 126.0), pytree_node=False)
     FIGHTER_SLOW_DOWN_DISTANCE: float = struct.field(default=48.0, pytree_node=False)
@@ -788,7 +789,6 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
 
         def saucer_movement(saucer: Enemy) -> Enemy:
-            min_dist = 27.0  # TODO: move to constants
             # TODO: try reflecting roattion center when going from + to - x etc or add a separate strafing mechanism that resets phases
 
             def near_player(saucer):
@@ -917,7 +917,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
                 return jax.lax.switch(saucer.phase, (p0, p1, p2), saucer)
 
-            return jax.lax.cond(saucer.distance < min_dist, near_player, far_player, saucer)
+            return jax.lax.cond(saucer.distance < self.consts.SAUCER_MIN_DIST, near_player, far_player, saucer)
 
 
         def fighter_movement(fighter: Enemy) -> Enemy:
