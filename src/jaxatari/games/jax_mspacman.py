@@ -7,7 +7,7 @@ Edit: Jan Rafflewski
 TODO
     1)  [x] Get original fruit sprites from OCAtari (ALE)
     2)  [ ] Compare timings and behaviour with OCAtari (ALE)
-    3)  [ ] Fix inconsistent PELLETS_TO_COLLECT behaviour
+    3)  [x] Fix inconsistent PELLETS_TO_COLLECT behaviour
     4)  [ ] Reduce frightened/jail time every level
 
     Optional:
@@ -456,10 +456,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             return (pos[0] % 8 == x_offset) & (pos[1] % 12 == 6)
             
         def eat_pellet(pos: chex.Array, pellets: chex.Array):
-            tile = (pos[0] - 2) // 8, (pos[1] + 4) // 12
+            tile_x, tile_y = (pos[0] - 2) // 8, (pos[1] + 4) // 12
+            in_bounds = (tile_x >= 0) & (tile_x < pellets.shape[0]) & (tile_y >= 0) & (tile_y < pellets.shape[1])
             return jax.lax.cond(
-                pellets[tile],
-                lambda: (pellets.at[tile].set(False), True),
+                pellets[tile_x, tile_y] & in_bounds,
+                lambda: (pellets.at[tile_x, tile_y].set(False), True),
                 lambda: (pellets, False)
             )
         
@@ -480,17 +481,22 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             lambda: (eat_power_pellet(power_pellet_hit, state.level.power_pellets), True),
             lambda: (state.level.power_pellets, False)
         )
-        # 3) Process regular pellet reward
-        collected_pellets, reward = jax.lax.cond(
-            ate_pellet,
-            lambda: (state.level.collected_pellets + 1, PELLET_POINTS),
-            lambda: (state.level.collected_pellets, 0)
-        )
-        # 4) Process power pellet reward
-        collected_pellets, reward = jax.lax.cond(
+        # 3) Process pellet reward
+        reward = jax.lax.cond(
             ate_power_pellet,
-            lambda: (collected_pellets + 1, reward + POWER_PELLET_POINTS),
-            lambda: (collected_pellets, reward)
+            lambda: POWER_PELLET_POINTS,
+            lambda: jax.lax.cond(
+                ate_pellet,
+                lambda: PELLET_POINTS,
+                lambda: 0
+            )
+        )
+        # 4) Update collected pellets
+        has_pellet = ate_power_pellet | ate_pellet
+        collected_pellets = jax.lax.cond(
+            has_pellet,
+            lambda: state.level.collected_pellets + 1,
+            lambda: state.level.collected_pellets
         )
         # 5) Check win condition
         level_id, reward = jax.lax.cond(
@@ -498,13 +504,13 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             lambda: (state.level.id + 1, reward + LEVEL_COMPLETED_POINTS),
             lambda: (state.level.id, reward)
         )
+
+        print(collected_pellets)
+
         # 6) Update pellet state
-
-        print(collected_pellets) # TODO: The win condition (154 pellets eaten) is reached with 2 pellets still in the maze. Find out why and fix it!
-
         return (
             pellets,
-            ate_pellet | ate_power_pellet,
+            has_pellet,
             collected_pellets,
             power_pellets,
             ate_power_pellet,
