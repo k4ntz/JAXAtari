@@ -618,37 +618,49 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
     
     @partial(jax.jit, static_argnums=(0,))
     def teleporter_check(self, player_x, player_y, action, level):
-        # Check if player is on a teleporter and has the correct action input to trigger it
-        teleporters = self.consts.MAP_TELEPORTER_POSITIONS[level%4]  # (N, 5) N teleporters for current map with (x_in, y_in, trigger_action, x_out, y_out)
-        teleport_trigger_action = (teleporters[:, 2] == action) # check if trigger action matches the current action input
-        player_on_teleporter_x = (teleporters[:, 0] == player_x)
-        player_on_teleporter_y_range = (player_y >= teleporters[:, 1]) & (player_y < teleporters[:, 1] + self.consts.TELEPORTER_HEIGHT)
+        '''
+        Checks whether the player is standing on a teleporter and pressing the correct trigger action.
+        Teleporters are defined as (x_in, y_in, trigger_action, x_out, y_out).
+        At most one teleporter can be active at a time, so summing the masked output coordinates
+        selects the single active destination (all others contribute 0).
+        Returns the destination coordinates and a flag indicating whether teleportation should occur.
+        '''
+        # (N, 5): all teleporters for the current map
+        teleporters = self.consts.MAP_TELEPORTER_POSITIONS[level%4]
 
+        # each condition is a boolean mask over all N teleporters
+        teleporter_action_check = (teleporters[:, 2] == action)
+        on_teleporter_x = (teleporters[:, 0] == player_x)
+        on_teleporter_y = (player_y >= teleporters[:, 1]) & (player_y < teleporters[:, 1] + self.consts.TELEPORTER_HEIGHT)
 
-        teleporter_active_mask = player_on_teleporter_x & player_on_teleporter_y_range & teleport_trigger_action
+        teleporter_active_mask = on_teleporter_x & on_teleporter_y & teleporter_action_check
         should_teleport = jnp.any(teleporter_active_mask)
 
+        # sum picks the one active destination; all inactive entries contribute 0
         teleporter_out_x = jnp.sum(teleporters[:, 3] * teleporter_active_mask)
         teleporter_out_y = jnp.sum(teleporters[:, 4] * teleporter_active_mask)
 
         return teleporter_out_x, teleporter_out_y, should_teleport
     
 
-    # sub pixel accumulator for smooth movement
     @partial(jax.jit, static_argnums=(0,))
     def subpixel_accumulator(self, speed, subpixel):
         '''
-        Adds the fractional part of the speed to the subpixel accumulator.
-        If subpixel accumulator > 1, then one extra pixel is moved this step, subpixel accumulator is reduced by 1.
+        Sub-pixel accumulator for smooth fractional movement.
+        Speeds below 1.0 px/frame are represented by accumulating the fractional
+        part across frames. If subpixel accumulator > 1, then one extra pixel 
+        is moved this step, subpixel accumulator is reduced by 1.
         Returns the integer speed and updated subpixel accumulator.
         '''
-        base_speed = jnp.floor(speed).astype(jnp.int32)
-        sub_speed = speed % 1.0
-        new_subpixel = subpixel + sub_speed
+        base_speed = jnp.floor(speed).astype(jnp.int32)  # whole pixel for this step
+        frac_speed = speed % 1.0                         # fractional pixel to accumulate
+        new_subpixel = subpixel + frac_speed
+
+        # move one extra pixel when the accumulator crosses 1.0
         extra = (new_subpixel >= 1.0).astype(jnp.int32)
         new_subpixel = jnp.where(new_subpixel >= 1.0, new_subpixel - 1.0, new_subpixel)
-        actual_speed = base_speed + extra
 
+        actual_speed = base_speed + extra
         return actual_speed, new_subpixel
     
 
