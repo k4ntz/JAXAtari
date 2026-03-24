@@ -188,8 +188,16 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         self.reward_funcs = reward_funcs
 
         self.action_set = [
-            Action.NOOP, Action.FIRE, Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT,
-            Action.UPRIGHT, Action.UPLEFT, Action.DOWNRIGHT, Action.DOWNLEFT,
+            Action.NOOP,
+            Action.FIRE,
+            Action.UP,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.UPRIGHT,
+            Action.UPLEFT,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
         ]
 
         self.action_array = jnp.array(self.action_set, dtype=jnp.int32)
