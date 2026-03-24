@@ -70,6 +70,12 @@ jobs:
           pip install -e ".[gh_ci]"
         shell: bash
 
+      - name: Install sprites (CI ownership pre-confirmed)
+        run: |
+          . .venv/bin/activate
+          JAXATARI_CONFIRM_OWNERSHIP=1 install-sprites
+        shell: bash
+
       - name: Run tests
         if: always()
         id: run_tests

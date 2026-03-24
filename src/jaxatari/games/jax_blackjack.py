@@ -18,6 +18,7 @@ from typing import NamedTuple, Tuple
 import chex
 import jax
 import jax.numpy as jnp
+from flax import struct
 
 from jaxatari.environment import JAXAtariAction as Action
 from jaxatari.environment import JaxEnvironment
@@ -56,17 +57,17 @@ def _get_default_asset_config() -> tuple:
     return config
 
 
-class BlackjackConstants(NamedTuple):
+class BlackjackConstants(struct.PyTreeNode):
     WIDTH: int = 160
     HEIGHT: int = 210
-    INITIAL_PLAYER_SCORE = jnp.array(200).astype(jnp.int32)
-    INITIAL_PLAYER_BET = jnp.array(1).astype(jnp.int32)
-    CARD_VALUES = jnp.array([2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 0])
-    SKIP_FRAMES = 0
+    INITIAL_PLAYER_SCORE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(200).astype(jnp.int32))
+    INITIAL_PLAYER_BET: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1).astype(jnp.int32))
+    CARD_VALUES: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 0]))
+    SKIP_FRAMES: int = struct.field(pytree_node=False, default=0)
     """ Determines whether frames are skipped: 0 = no, 1 = yes """
-    CARD_SHUFFLING_RULE = 0
+    CARD_SHUFFLING_RULE: int = struct.field(pytree_node=False, default=0)
     """ Determines when the cards are being shuffled: 0 = after every round, 1 = after drawing 34 cards """
-    PLAYING_RULE = 0
+    PLAYING_RULE: int = struct.field(pytree_node=False, default=0)
     """ Determines the playing rules, 0 = Casino Rules, 1 = Private Rules 
     
     CASINO BLACK JACK RULES:
@@ -83,11 +84,11 @@ class BlackjackConstants(NamedTuple):
     - A player wins the game when he hits four times without busting.
     """
     # Asset config baked into constants
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: Tuple[dict, ...] = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
 
 
-class BlackjackState(NamedTuple):
+class BlackjackState(struct.PyTreeNode):
     # Format: [n, n, 0, 0, 0, 0] (Array has a size of 6)
     # 0 -> no card currently
     # n Values: 01 -> B2            14 -> B2            27 -> R2            40 -> R2
@@ -131,7 +132,7 @@ class BlackjackState(NamedTuple):
     """ Contains a target tick count. The game will not continue until the tick count is reached """
 
 
-class BlackjackObservation(NamedTuple):
+class BlackjackObservation(struct.PyTreeNode):
     player_score: jnp.ndarray
     """ The player score """
     player_bet: jnp.ndarray
@@ -146,7 +147,7 @@ class BlackjackObservation(NamedTuple):
     """
 
 
-class BlackjackInfo(NamedTuple):
+class BlackjackInfo(struct.PyTreeNode):
     time: jnp.ndarray
 
 
@@ -784,15 +785,6 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
             "label": Box(0, 8, (), jnp.int32)
         })
 
-    def obs_to_flat_array(self, obs: BlackjackObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            obs.player_score.flatten(),
-            obs.player_bet.flatten(),
-            obs.player_current_card_sum.flatten(),
-            obs.dealer_current_card_sum.flatten(),
-            obs.label.flatten()
-        ])
-
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: BlackjackState) -> jnp.ndarray:
         return self.renderer.render(state)
@@ -846,18 +838,21 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
 
 
 class BlackjackRenderer(JAXGameRenderer):
-    def __init__(self, consts: BlackjackConstants = None):
-        super().__init__()
+    def __init__(self, consts: BlackjackConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or BlackjackConstants()
-        # 1. Configure the renderer
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        super().__init__(self.consts)
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         # 2. Define asset path
-        sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites/blackjack")
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "blackjack")
         # 3. Load all assets using the manifest from constants
         final_asset_config = list(self.consts.ASSET_CONFIG)
         
