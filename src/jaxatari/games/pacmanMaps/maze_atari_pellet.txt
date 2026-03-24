@@ -3,7 +3,7 @@ X . . . . . . . X . . . X . . . . . . . X
 X + X . X . X . X . X . X . X . X . X + X
 X . . . X . . . . . . . . . . . X . . . X
 X X . X X . X X X . X . X X X . X X . X X
-X . . . . . . . X . . . X . . . . . . . X
+X . . . . + . . X . . . X . . . . . . . X
 X . X . X . X . X . D . X . X . X . X . X
 X . . . X . . . . . H . . . . . X . . . X
 X X . X X . X X X . D . X X X . X X . X X
@@ -11,7 +11,7 @@ X . . . . . . . X . * . X . . . . . . . X
 X . X . X . X . X . X . X . X . X . X . X
 X . . . X . . . . . . . . . . . X . . . X
 X X . X X . X X X . X . X X X . X X . X X
-X . . . . . . . X . . . X . . . . . . . X
+X . . . . . . . X . . . X + . . . . . . X
 X + X . X . X . X . X . X . X . X . X + X
 X . . . X . . . . . . . . . . . X . . . X
 X X X X X X X X X X . X X X X X X X X X X
