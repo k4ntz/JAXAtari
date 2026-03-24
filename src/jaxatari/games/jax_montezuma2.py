@@ -356,7 +356,7 @@ class Montezuma2Renderer(JAXGameRenderer):
         def render_enemy(i, raster):
             anim_idx = jax.lax.select(state.enemies_bouncing[i] == 1, 0, jnp.mod(state.enemies_x[i], 16))
             mask = self.SHAPE_MASKS["skull"][anim_idx]
-            bounce_offset = jax.lax.select(state.enemies_bouncing[i] == 1, self.consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 2, 22)], 0)
+            bounce_offset = jax.lax.select(state.enemies_bouncing[i] == 1, self.consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 4, 22)], 0)
             return jax.lax.cond(
                 state.enemies_active[i] == 1,
                 lambda r: self.jr.render_at(r, state.enemies_x[i], state.enemies_y[i] + 47 - bounce_offset, mask),
@@ -606,7 +606,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         def load_room_2(args):
             lx, lt, lb, la, ix, iy, ia, lax, laa = args
             
-            ex = enemies_x.at[0].set(101)
+            ex = enemies_x.at[0].set(112)
             ey = enemies_y.at[0].set(33)
             ea = enemies_active.at[0].set(1)
             ed = enemies_direction.at[0].set(-1)
@@ -1017,7 +1017,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         )
 
         def check_door(i, carry):
-            hit, keys_left, doors_active = carry
+            hit, keys_left, doors_active, current_score = carry
             d_x = state.doors_x[i]
             d_y = state.doors_y[i]
             d_active = doors_active[i] == 1
@@ -1026,22 +1026,22 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             in_y_mid = jnp.logical_and(check_y_mid >= d_y, check_y_mid < d_y + 38)
             in_y_bot = jnp.logical_and(check_y_bot >= d_y, check_y_bot < d_y + 38)
             in_y = jnp.logical_or(in_y_top, jnp.logical_or(in_y_mid, in_y_bot))
-            
+
             hit_this_door = jnp.logical_and(d_active, jnp.logical_and(in_x, in_y))
             open_it = jnp.logical_and(hit_this_door, keys_left > 0)
             hit_as_wall = jnp.logical_and(hit_this_door, jnp.logical_not(open_it))
-            
+
             new_hit = jnp.logical_or(hit, hit_as_wall)
             new_keys = jnp.where(open_it, keys_left - 1, keys_left)
             new_doors_active = jnp.where(open_it, doors_active.at[i].set(0), doors_active)
-            
-            return new_hit, new_keys, new_doors_active
-        
-        hit_wall, current_keys, new_doors_active = jax.lax.fori_loop(
-            0, self.consts.MAX_DOORS_PER_ROOM, check_door, 
-            (hit_wall, current_keys, state.doors_active)
-        )
+            new_score = jnp.where(open_it, current_score + 300, current_score)
 
+            return new_hit, new_keys, new_doors_active, new_score
+
+        hit_wall, current_keys, new_doors_active, new_score = jax.lax.fori_loop(
+            0, self.consts.MAX_DOORS_PER_ROOM, check_door,
+            (hit_wall, current_keys, state.doors_active, new_score)
+        )
         new_x = jnp.where(jnp.logical_or(hit_wall, is_climbing == 1), current_x, new_x)
         
         new_mid_x = new_x + self.consts.PLAYER_WIDTH // 2
@@ -1110,7 +1110,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         def check_enemy_collision(i, carry):
             hit, enemies_active = carry
             e_x = new_enemies_x[i]
-            bounce_offset = jax.lax.select(state.enemies_bouncing[i] == 1, self.consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 2, 22)], 0)
+            bounce_offset = jax.lax.select(state.enemies_bouncing[i] == 1, self.consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 4, 22)], 0)
             e_y = state.enemies_y[i] - bounce_offset
             e_active = enemies_active[i] == 1
             
@@ -1242,7 +1242,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         enemies_obs = ObjectObservation.create(
             x=state.enemies_x + 1,
-            y=state.enemies_y + 1 - jnp.where(state.enemies_bouncing == 1, self.consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 2, 22)], 0),
+            y=state.enemies_y + 1 - jnp.where(state.enemies_bouncing == 1, self.consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 4, 22)], 0),
             width=jnp.full(self.consts.MAX_ENEMIES_PER_ROOM, 6),
             height=jnp.full(self.consts.MAX_ENEMIES_PER_ROOM, 14),
             active=state.enemies_active
