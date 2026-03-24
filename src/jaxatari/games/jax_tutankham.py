@@ -737,7 +737,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         player_y = jnp.where(should_teleport, teleporter_out_y, player_y)
 
         # --- Player Animation & Camera ---
-        is_moving_now = is_walkable & ((dx[effective_action] != 0) | (dy[effective_action] != 0))
+        is_moving_now = jnp.logical_and(is_walkable, jnp.logical_or(dx[effective_action] != 0, dy[effective_action] != 0))
         # direction only updates on horizontal movement (3=RIGHT, 4=LEFT); vertical movement keeps last direction
         new_direction = jnp.where(dx[effective_action] > 0, 3,
                         jnp.where(dx[effective_action] < 0, 4, player_direction))
