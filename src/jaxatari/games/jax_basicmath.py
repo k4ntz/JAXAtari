@@ -125,8 +125,8 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
             "problem_num2": spaces.Box(low=0, high=1000, shape=(), dtype=jnp.int32),
             "digitsResult": spaces.Box(low=-1, high=9, shape=(4,), dtype=jnp.int32),
             "digitsRemainder": spaces.Box(low=-1, high=9, shape=(4,), dtype=jnp.int32),
-            "posResult": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
-            "posRemainder": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
+            "posResult": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),
+            "posRemainder": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),
         })
 
     @partial(jax.jit, static_argnums=(0,))
