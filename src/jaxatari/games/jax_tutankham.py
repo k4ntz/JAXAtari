@@ -213,6 +213,10 @@ class TutankhamConstants(struct.PyTreeNode):
     CREATURE_DETECTION_RANGE_X: int = struct.field(pytree_node=False, default=35)  # horizontal detection range
     CREATURE_DETECTION_RANGE_Y: int = struct.field(pytree_node=False, default=25)  # vertical detection range
 
+    # Direction lookup tables: index = direction value (0=none, 1=down, 2=up, -1=right, -2=left)
+    DIR_LOOKUP_X: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 0,  0, -1, 1], dtype=jnp.int32))
+    DIR_LOOKUP_Y: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 1, -1,  0, 0], dtype=jnp.int32))
+
     # Item constants ----------------------------------------------------
 
     # Item Types
@@ -916,104 +920,71 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         new_creature_y = creature_y * new_active
         
         return new_active, new_death_timer, new_creature_x, new_creature_y
+    
+
+    @partial(jax.jit, static_argnums=(0,))
+    def move_creature(self, creature, creature_subpixel, rng_key, camera_offset, level, player_x, player_y):
+        creature_x, creature_y, creature_type, active, direction, death_timer = creature
+
+        lookup_x = self.consts.DIR_LOOKUP_X
+        lookup_y = self.consts.DIR_LOOKUP_Y
+
+        # creature state is active and creature is not in it's death animation
+        is_alive = (active == self.consts.ACTIVE) & (death_timer == -1)
+
+        # --- pathing ---
+        # Natural patrol: randomly change direction
+        rng_key, subkey_01, subkey_02 = jax.random.split(rng_key, 3)
+        random_dir = jax.random.choice(subkey_01, jnp.array([-1, -2, 1, 2]))
+        should_change = jax.random.bernoulli(subkey_02, p=0.08)
+        new_direction = jnp.where(should_change, random_dir, direction)
+        new_direction = jnp.where(direction == 0, random_dir, new_direction)
+
+        # Chase player if nearby
+        dx = player_x - creature_x
+        dy = player_y - creature_y
+        player_near = (jnp.abs(dx) < self.consts.CREATURE_DETECTION_RANGE_X) & (jnp.abs(dy) < self.consts.CREATURE_DETECTION_RANGE_Y)
+        horizontal_direction = jnp.where(dx >= 0, jnp.int32(-1), jnp.int32(-2))
+        vertical_direction   = jnp.where(dy >= 0, jnp.int32(1),  jnp.int32(2))
+        prefer_h      = jnp.abs(dx) >= jnp.abs(dy)
+        primary_dir   = jnp.where(prefer_h, horizontal_direction, vertical_direction)
+        secondary_dir = jnp.where(prefer_h, vertical_direction, horizontal_direction)
+        next_x = creature_x + lookup_x[primary_dir]
+        next_y = creature_y + lookup_y[primary_dir]
+        _, _, primary_walkable = can_walk_to(self.consts.CREATURE_SIZES[creature_type], next_x, next_y, creature_x, creature_y, self.consts.VALID_POS_MAPS[level%4])
+        toward_player = jnp.where(primary_walkable, primary_dir, secondary_dir)
+        new_direction = jnp.where(player_near, toward_player, new_direction)
+
+        # only update direction for alive creatures
+        new_direction = jnp.where(is_alive, new_direction, direction)
+
+        # --- movement ---
+        speed = self.consts.CREATURE_SPEED[creature_type.astype(jnp.int32)]
+        actual_speed, new_subpixel = self.subpixel_accumulator(speed, creature_subpixel)
+        new_x = creature_x + actual_speed * lookup_x[new_direction] * is_alive
+        new_y = creature_y + actual_speed * lookup_y[new_direction] * is_alive
+        creature_x, creature_y, _ = can_walk_to(self.consts.CREATURE_SIZES[creature_type], new_x, new_y, creature_x, creature_y, self.consts.VALID_POS_MAPS[level%4])
+
+        # Deactivate creature if offscreen
+        creature_on_screen = is_onscreen(creature_y, self.consts.CREATURE_SIZES[creature_type][1], camera_offset)
+        active = jnp.where(creature_on_screen, active, self.consts.INACTIVE)
+
+        active, new_death_timer, creature_x, creature_y = self.process_death_timer(active, death_timer, creature_x, creature_y)
+
+        return jnp.array([creature_x, creature_y, creature_type, active, new_direction, new_death_timer], dtype=jnp.int32), new_subpixel
+
 
     # creature step
     @partial(jax.jit, static_argnums=(0,))
-    def creature_step(self, creature_states, creature_subpixels, camera_offset, step_counter, level, player_x, player_y, rng_key):
+    def creature_step(self, creature_states, creature_subpixels, rng_key, player_x, player_y ,camera_offset, level):
 
+        # apply move_creature to all creatures
+        keys = jax.random.split(rng_key, self.consts.MAX_CREATURES + 1)
+        rng_key, creature_keys = keys[0], keys[1:]
+        move_creature_vmapped = jax.vmap(self.move_creature, in_axes=(0, 0, 0, None, None, None, None))
+        new_creature_states, new_creature_subpixels = move_creature_vmapped(creature_states, creature_subpixels, creature_keys, camera_offset, level, player_x, player_y)
 
-        @jax.jit
-        def creature_pathing(creature_x, creature_y, direction, creature_type, player_x, player_y, rng_key):
-            """
-            Determines the next direction for a creature.
-            down=1, up=2, right=-1, left=-2
-            """
-
-            # Natural patrol: randomly change direction --------------------------------
-            change_probability = 0.08
-            possible_directions = jnp.array([-1, -2, 1, 2])
-
-            rng_key, subkey_01, subkey_02 = jax.random.split(rng_key, 3)
-            random_dir = jax.random.choice(subkey_01, possible_directions)
-            should_change = jax.random.bernoulli(subkey_02, p=change_probability)
-
-            new_direction = jnp.where(should_change, random_dir, direction)
-            new_direction = jnp.where(direction == 0, random_dir, new_direction)
-            #--------------------------------------------------------------------------
-
-
-            # Chase player if nearby ---------------------------------------------------
-            dx = player_x - creature_x
-            dy = player_y - creature_y
-            player_near = (jnp.abs(dx) < self.consts.CREATURE_DETECTION_RANGE_X) & (jnp.abs(dy) < self.consts.CREATURE_DETECTION_RANGE_Y)
-            horizontal_direction = jnp.where(dx >= 0, jnp.int32(-1), jnp.int32(-2))
-            vertical_direction = jnp.where(dy >= 0, jnp.int32(1),  jnp.int32(2))
-
-            # Try primary direction (larger gap); fall back to other axis if wall
-            prefer_h = jnp.abs(dx) >= jnp.abs(dy)
-            primary_dir   = jnp.where(prefer_h, horizontal_direction, vertical_direction)
-            secondary_dir = jnp.where(prefer_h, vertical_direction, horizontal_direction)
-            
-            # Indices: 0, 1(Down), 2(Up), -1(Right), -2(Left)
-            # mapping array where the index matches the direction value
-            lookup_x = jnp.array([0, 0, 0, -1, 1])
-            lookup_y = jnp.array([0, 1, -1, 0, 0])
-            next_x = creature_x + lookup_x[primary_dir]
-            next_y = creature_y + lookup_y[primary_dir]
-            _, _, primary_walkable = can_walk_to(self.consts.CREATURE_SIZES[creature_type], next_x, next_y, creature_x, creature_y, self.consts.VALID_POS_MAPS[level%4])
-
-            toward_player = jnp.where(primary_walkable, primary_dir, secondary_dir)
-            new_direction = jnp.where(player_near, toward_player, new_direction)
-
-            return new_direction, rng_key
-        
-        @jax.jit
-        def move_creature(creature_state, creature_subpixel, key):
-            creature_x, creature_y, creature_type, active, direction, death_timer = creature_state
-
-            # get creature speed apply subpixel accumulator for smooth movement
-            speed = self.consts.CREATURE_SPEED[creature_type.astype(jnp.int32)]
-            actual_speed, new_subpixel = self.subpixel_accumulator(speed, creature_subpixel)
-
-            # Only move if active and NOT dying
-            is_alive = (active == self.consts.ACTIVE) & (death_timer == -1)
-
-            # calculate the next movement direction for the creature
-            direction, rng_key = creature_pathing(creature_x, creature_y, direction, creature_type, player_x, player_y, key)
-
-            # Indices: 0, 1(Down), 2(Up), -1(Right), -2(Left)
-            # mapping array where the index matches the direction value
-            lookup_x = jnp.array([0, 0,  0, -1, 1])
-            lookup_y = jnp.array([0, 1, -1, 0,  0])
-            x_direction = lookup_x[direction]
-            y_direction = lookup_y[direction]
-
-            # x_direction = jnp.where(direction == -1, 1, jnp.where(direction == -2, -1, 0))
-            # y_direction = jnp.where(direction == 1, 1, jnp.where(direction == 2, -1, 0))
-
-            # move creature
-            new_x = creature_x + actual_speed * x_direction * is_alive
-            new_y = creature_y + actual_speed * y_direction * is_alive           
-            creature_x, creature_y, is_walkable = can_walk_to(self.consts.CREATURE_SIZES[creature_type], new_x, new_y, creature_x, creature_y, self.consts.VALID_POS_MAPS[level%4])
-            
-
-            # Deactivate creature if it is offscreen
-            creature_on_screen = is_onscreen(creature_y, self.consts.CREATURE_SIZES[creature_type][1], camera_offset)
-            active = jnp.where(creature_on_screen, active, self.consts.INACTIVE)
-
-            # Process death timer in separated function
-            active, new_death_timer, creature_x, creature_y = self.process_death_timer(active, death_timer, creature_x, creature_y)
-
-            return jnp.array([creature_x, creature_y, creature_type, active, direction, new_death_timer], dtype=jnp.int32), new_subpixel
-
-
-
-
-        creature_keys = jax.random.split(rng_key, self.consts.MAX_CREATURES)
-        move_creature_vmapped = jax.vmap(move_creature)
-        new_creature_states, new_creature_subpixels = move_creature_vmapped(creature_states, creature_subpixels, creature_keys)
-
-        return new_creature_states, new_creature_subpixels
+        return new_creature_states, new_creature_subpixels, rng_key
 
     # creature spawner step
     @partial(jax.jit, static_argnums=(0,))
@@ -1354,7 +1325,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
         bullet_state, bullet_subpixel, amonition_timer = self.bullet_step(bullet_state, bullet_subpixel, player_x, player_y, amonition_timer, action, level)
 
-        creature_states, creature_subpixels = self.creature_step(creature_states, creature_subpixels, camera_offset, step_counter, level, player_x, player_y, rng_key)
+        creature_states, creature_subpixels, rng_key = self.creature_step(creature_states, creature_subpixels, rng_key, player_x, player_y, camera_offset, level)
 
         creature_states, last_creature_spawn, rng_key = self.spawner_step(creature_states, last_creature_spawn, level, rng_key, camera_offset, laser_flash_cooldown)
 
