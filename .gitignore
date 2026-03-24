@@ -12,8 +12,3 @@ docs/build/
 
 .dev
 *_log*.txt
-
-screenshot*
-battlezone_state.pkl
-battlezone_state_fighter.pkl
-convert_png_npy.py
