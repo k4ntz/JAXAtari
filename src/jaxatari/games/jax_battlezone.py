@@ -997,7 +997,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             # for all phases >=2, pX is chosen
             return jax.lax.switch(fighter.phase, (p0, p1, pX), fighter)
 
-        def supertank_movement(supertank: Enemy) -> Enemy:  # ToDo: Unique movement
+        def supertank_movement(supertank: Enemy) -> Enemy:
             def p0(supertank):
                 """Closing in on player"""
                 def too_close(supertank):
@@ -1014,7 +1014,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 return supertank
 
             def p1(supertank):
-                """90° counter clockwise""" # ToDo: If player moves away circle expads
+                """90° clockwise"""
                 dtheta = -speed / supertank.distance
                 cos_dtheta = jnp.cos(dtheta)
                 sin_dtheta = jnp.sin(dtheta)
@@ -1033,7 +1033,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 return supertank
 
             def p2(supertank):
-                """180° clockwise""" # ToDo: If player moves away circle expads
+                """180° counterclockwise"""
                 dtheta = speed / supertank.distance
                 cos_dtheta = jnp.cos(dtheta)
                 sin_dtheta = jnp.sin(dtheta)
