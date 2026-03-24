@@ -1224,90 +1224,94 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         # Map the network's discrete index (0-7) back to the ALE Action constant (0-17)
         action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         
-        level=state.level
-        player_x = state.player_x
-        player_y = state.player_y
-        tutankham_score = state.tutankham_score
-        bullet_state = state.bullet_state
-        creature_states = state.creature_states
-        item_states = state.item_states
-        laser_flash_count = state.laser_flash_count
-        last_creature_spawn = state.last_creature_spawn
-        laser_flash_cooldown = state.laser_flash_cooldown
-        ammunition_timer = state.ammunition_timer
-        lives = state.lives
-        has_key = state.has_key
-        last_movement_action = state.last_movement_action
-        player_direction= state.player_direction
+        # Unpack state into local variables for mutation throughout the step
+        # --- Game Progression ---
+        level = state.level
         step_counter = state.step_counter
-        player_subpixel = state.player_subpixel
-        creature_subpixels = state.creature_subpixels
-        bullet_subpixel = state.bullet_subpixel
-        rng_key = state.rng_key
         camera_offset = state.camera_offset
         goal_reached = state.goal_reached
+        rng_key = state.rng_key
+        tutankham_score = state.tutankham_score
+        # --- Player ---
+        player_x = state.player_x
+        player_y = state.player_y
+        player_direction = state.player_direction
+        player_subpixel = state.player_subpixel
+        last_movement_action = state.last_movement_action
+        lives = state.lives
+        # --- Bullet & Ammo ---
+        bullet_state = state.bullet_state
+        bullet_subpixel = state.bullet_subpixel
+        ammunition_timer = state.ammunition_timer
+        laser_flash_count = state.laser_flash_count
+        laser_flash_cooldown = state.laser_flash_cooldown
+        # --- Creatures ---
+        creature_states = state.creature_states
+        creature_subpixels = state.creature_subpixels
+        last_creature_spawn = state.last_creature_spawn
+        # --- Items ---
+        item_states = state.item_states
+        has_key = state.has_key
+        # --- Mod States ---
         night_timer = state.night_timer
         mimic_state = state.mimic_state
 
-        # move player based on action input and check for teleporter trigger, also update camera offset
+        # --- Player ---
         (player_x, player_y,
          last_movement_action, player_direction,
-         is_moving, step_counter, player_subpixel, camera_offset)= self.player_step(
+         is_moving, step_counter, player_subpixel, camera_offset) = self.player_step(
             player_x, player_y,
             action, last_movement_action,
             player_direction, step_counter, player_subpixel, level
         )
 
+        # --- Bullet & Ammo ---
+        bullet_state, bullet_subpixel, ammunition_timer = self.bullet_step(
+            bullet_state, bullet_subpixel, player_x, player_y, ammunition_timer, action, level)
 
-        bullet_state, bullet_subpixel, ammunition_timer = self.bullet_step(bullet_state, bullet_subpixel, player_x, player_y, ammunition_timer, action, level)
+        # --- Creatures ---
+        creature_states, creature_subpixels, rng_key = self.creature_step(
+            creature_states, creature_subpixels, rng_key, player_x, player_y, camera_offset, level)
 
-        creature_states, creature_subpixels, rng_key = self.creature_step(creature_states, creature_subpixels, rng_key, player_x, player_y, camera_offset, level)
+        creature_states, last_creature_spawn, rng_key = self.spawner_step(
+            creature_states, last_creature_spawn, level, rng_key, camera_offset, laser_flash_cooldown)
 
-        creature_states, last_creature_spawn, rng_key = self.spawner_step(creature_states, last_creature_spawn, level, rng_key, camera_offset, laser_flash_cooldown)
+        # laser flash step goes after creature_step to immediately remove creatures
+        creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn = self.laser_flash_step(
+            creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)
 
-        # laser flash step should go after creature step to immediately remove creatures
-        creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn = self.laser_flash_step(creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action)
-
-        # store creature_states and item_states before resolving collisions (for score update)
+        # --- Collisions ---
+        # snapshot pre-collision states for score calculation
         prev_creature_states = creature_states.copy()
-        prev_item_states = item_states.copy()
-        prev_lives = lives
+        prev_item_states     = item_states.copy()
+        prev_lives           = lives
 
-        # resolve bullet-creature collisions
         creature_states, bullet_state = self.resolve_bullet_collisions(creature_states, bullet_state)
 
-        (player_x, player_y, 
+        (player_x, player_y,
          bullet_state, creature_states, creature_subpixels,
          lives, last_creature_spawn,
-         last_movement_action
-         ) = self.resolve_player_creature_collisions(
+         last_movement_action) = self.resolve_player_creature_collisions(
              player_x, player_y,
              creature_states, creature_subpixels, bullet_state,
              lives, last_creature_spawn,
-             level, last_movement_action
-             )
-        
-        # hook for the item movement mod (does nothing in the base game)
-        item_states, rng_key = self.item_step(item_states, level, rng_key)
+             level, last_movement_action)
 
-        # resolve player-item collisions
+        # --- Items ---
+        item_states, rng_key = self.item_step(item_states, level, rng_key)  # mod hook (no-op in base game)
         item_states = self.resolve_player_item_collisions(player_x, player_y, item_states)
+        has_key     = self.check_key(item_states, has_key)
 
-        # check if player has collected the key
-        has_key = self.check_key(item_states, has_key)
+        # --- Goal & Score ---
+        goal_reached    = self.check_goal(player_x, player_y, has_key, level)
+        tutankham_score = self.update_score(
+            tutankham_score,
+            prev_creature_states, creature_states,
+            prev_item_states, item_states,
+            prev_lives, lives,
+            goal_reached, ammunition_timer, level)
 
-        # check if player has reached the goal with the key to complete the level
-        goal_reached = self.check_goal(player_x, player_y, has_key, level)
-
-        # Update score based on creature deaths & items collected
-        tutankham_score = self.update_score(tutankham_score, 
-                                            prev_creature_states, creature_states, 
-                                            prev_item_states, item_states,
-                                            prev_lives, lives,
-                                            goal_reached, ammunition_timer, level
-                                            )
-        
-        # Prepares state for the next level if goal is reached for current level
+        # --- Level Transition ---
         (level, player_x, player_y,
          bullet_state, creature_states, item_states,
          last_creature_spawn, ammunition_timer, laser_flash_cooldown,
@@ -1320,41 +1324,45 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
 
 
-        new_state = TutankhamState(level=level,
-                                player_x=player_x,
-                                player_y=player_y,
-                                tutankham_score=tutankham_score,
-                                lives=lives,
-                                bullet_state=bullet_state,
-                                ammunition_timer=ammunition_timer,
-                                creature_states=creature_states,
-                                item_states=item_states,
-                                last_creature_spawn=last_creature_spawn,
-                                laser_flash_count=laser_flash_count,
-                                laser_flash_cooldown=laser_flash_cooldown,
-                                player_direction=player_direction,
-                                is_moving=is_moving,
-                                step_counter=step_counter,
-                                player_subpixel=player_subpixel,
-                                creature_subpixels=creature_subpixels,
-                                bullet_subpixel=bullet_subpixel,
-                                has_key=has_key,
-                                last_movement_action=last_movement_action,
-                                rng_key=rng_key,
-                                camera_offset=camera_offset,
-                                goal_reached=goal_reached,
-                                night_timer=night_timer,
-                                mimic_state=mimic_state
-                                )
+        new_state = TutankhamState(
+            # --- Game Progression ---
+            rng_key=rng_key,
+            level=level,
+            step_counter=step_counter,
+            camera_offset=camera_offset,
+            goal_reached=goal_reached,
+            # --- Player ---
+            player_x=player_x,
+            player_y=player_y,
+            player_direction=player_direction,
+            is_moving=is_moving,
+            player_subpixel=player_subpixel,
+            last_movement_action=last_movement_action,
+            lives=lives,
+            has_key=has_key,
+            tutankham_score=tutankham_score,
+            # --- Bullet & Ammo ---
+            bullet_state=bullet_state,
+            bullet_subpixel=bullet_subpixel,
+            ammunition_timer=ammunition_timer,
+            laser_flash_count=laser_flash_count,
+            laser_flash_cooldown=laser_flash_cooldown,
+            # --- Creatures ---
+            creature_states=creature_states,
+            creature_subpixels=creature_subpixels,
+            last_creature_spawn=last_creature_spawn,
+            # --- Items ---
+            item_states=item_states,
+            # --- Mod States ---
+            night_timer=night_timer,
+            mimic_state=mimic_state,
+        )
 
         obs = self._get_observation(new_state)
         reward = self._get_reward(state, new_state)
         done = self._get_done(new_state)
         info = self._get_info(new_state)
 
-        #jax.debug.print("x: {x}, y:{y}", x=player_x, y=player_y)
-
-        # return observation, new_state, env_reward, done, info
         return obs, new_state, reward, done, info
 
 
