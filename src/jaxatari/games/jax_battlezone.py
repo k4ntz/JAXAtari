@@ -796,9 +796,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 saucer = saucer.replace(phase=0)
 
                 # strafe speed is maximal when player points at middle of hitbox, minimal at edges, quadratic relation
-                # 3 and 1 match my playtesting at 60fps, we scale with 4*speed (=1 in my test case) so changes to the speed are reflected here
-                max_strafe_speed = 2.0 * speed * 4
-                min_strafe_speed = 1.0 * speed * 4
+                max_strafe_speed = 2.0 * speed * 2
+                min_strafe_speed = 1.0 * speed * 2
                 strafe_speed = (
                     (min_strafe_speed - max_strafe_speed) / (self.consts.ENEMY_HITBOX_SIZE ** 2)
                 ) * (saucer.x ** 2) + max_strafe_speed
