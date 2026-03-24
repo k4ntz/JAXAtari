@@ -521,8 +521,8 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         """Wraps a coordinate around the world edges."""
         return jax.lax.cond(
             coord < -world_size / 2.0, 
-            lambda: coord + world_size, lambda: 
-            jax.lax.cond(
+            lambda: coord + world_size,
+            lambda: jax.lax.cond(
                 coord > world_size / 2.0, 
                 lambda: coord - world_size, 
                 lambda: coord
@@ -917,7 +917,21 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
                 return jax.lax.switch(saucer.phase, (p0, p1, p2), saucer)
 
-            return jax.lax.cond(saucer.distance < self.consts.SAUCER_MIN_DIST, near_player, far_player, saucer)
+            def despawn(saucer):
+                return saucer.replace(active=False)
+            
+            # movement behaviour
+            saucer = jax.lax.cond(saucer.distance < min_dist, near_player, far_player, saucer)
+
+            # despawn if too far away
+            saucer = jax.lax.cond(
+                saucer.distance > jnp.sqrt((self.consts.WORLD_SIZE_X / 2)**2 + (self.consts.WORLD_SIZE_Z / 2)**2) * 0.88, 
+                despawn, 
+                lambda x: x, 
+                saucer
+            )
+
+            return saucer
 
 
         def fighter_movement(fighter: Enemy) -> Enemy:
