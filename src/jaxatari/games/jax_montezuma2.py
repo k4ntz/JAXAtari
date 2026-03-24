@@ -605,7 +605,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         def load_room_2(args):
             lx, lt, lb, la, ix, iy, ia, lax, laa = args
             
-            ex = enemies_x.at[0].set(115)
+            ex = enemies_x.at[0].set(101)
             ey = enemies_y.at[0].set(33)
             ea = enemies_active.at[0].set(1)
             ed = enemies_direction.at[0].set(-1)
@@ -1207,7 +1207,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             )
             st = self._load_room(new_room_id, st)
             new_px = jnp.where(transition_left, 148, 4)
-            new_py = jnp.where(transition_left, 27, 26)
+            new_py = jnp.where(new_room_id == 0, 27, 26)
             return st.replace(player_x=new_px, player_y=new_py, fall_start_y=new_py)
 
         state = jax.lax.cond(transition_any, transition_fn, lambda x: x, state)
