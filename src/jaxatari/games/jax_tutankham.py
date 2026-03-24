@@ -166,7 +166,6 @@ class TutankhamConstants(struct.PyTreeNode):
     BULLET_SIZE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([1, 2], dtype=jnp.int32))
     BULLET_SPEED: float = struct.field(pytree_node=False, default=3.5)
     BULLET_ANIM_SPEED: int = struct.field(pytree_node=False, default=4)
-    #AMMO_SUPPLY: int = 7500  # frames until ammo runs out
 
     MAX_LASER_FLASHES: int = struct.field(pytree_node=False, default=3)
     LASER_FLASH_COOLDOWN: int = struct.field(pytree_node=False, default=60)  # frames
@@ -199,8 +198,6 @@ class TutankhamConstants(struct.PyTreeNode):
         [8, 8],   # MONKEY (00 & 01: [8, 8])
         [8, 8]    # MYSTERY_WEAPON (00 & 01: [8, 8])
     ], dtype=jnp.int32))
-
-    CREATURE_SIZE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([10, 10], dtype=jnp.int32))
 
     INACTIVE: int = struct.field(pytree_node=False, default=0)
     ACTIVE: int = struct.field(pytree_node=False, default=1)
@@ -963,7 +960,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
             lookup_y = jnp.array([0, 1, -1, 0, 0])
             next_x = creature_x + lookup_x[primary_dir]
             next_y = creature_y + lookup_y[primary_dir]
-            _, _, primary_walkable = can_walk_to(self.consts.CREATURE_SIZE, next_x, next_y, creature_x, creature_y, self.consts.VALID_POS_MAPS[level%4])
+            _, _, primary_walkable = can_walk_to(self.consts.CREATURE_SIZES[creature_type], next_x, next_y, creature_x, creature_y, self.consts.VALID_POS_MAPS[level%4])
 
             toward_player = jnp.where(primary_walkable, primary_dir, secondary_dir)
             new_direction = jnp.where(player_near, toward_player, new_direction)
@@ -997,11 +994,11 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
             # move creature
             new_x = creature_x + actual_speed * x_direction * is_alive
             new_y = creature_y + actual_speed * y_direction * is_alive           
-            creature_x, creature_y, is_walkable = can_walk_to(self.consts.CREATURE_SIZE, new_x, new_y, creature_x, creature_y, self.consts.VALID_POS_MAPS[level%4])
+            creature_x, creature_y, is_walkable = can_walk_to(self.consts.CREATURE_SIZES[creature_type], new_x, new_y, creature_x, creature_y, self.consts.VALID_POS_MAPS[level%4])
             
 
-            # Deactivate creature of it is offscreen
-            creature_on_screen = is_onscreen(creature_y, self.consts.CREATURE_SIZE[1], camera_offset)
+            # Deactivate creature if it is offscreen
+            creature_on_screen = is_onscreen(creature_y, self.consts.CREATURE_SIZES[creature_type][1], camera_offset)
             active = jnp.where(creature_on_screen, active, self.consts.INACTIVE)
 
             # Process death timer in separated function
@@ -1509,8 +1506,8 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         creatures = ObjectObservation.create(
             x=jnp.clip(state.creature_states[:, 0], 0, self.consts.WIDTH - 1),
             y=jnp.clip(state.creature_states[:, 1], 0, MAP_HEIGHT - 1),
-            width=jnp.full(self.consts.MAX_CREATURES, self.consts.CREATURE_SIZE[0], dtype=jnp.int32),
-            height=jnp.full(self.consts.MAX_CREATURES, self.consts.CREATURE_SIZE[1], dtype=jnp.int32),
+            width=self.consts.CREATURE_SIZES[state.creature_states[:, 2], 0],
+            height=self.consts.CREATURE_SIZES[state.creature_states[:, 2], 1],
             active=state.creature_states[:, 3].astype(jnp.int32),
             visual_id=state.creature_states[:, 2].astype(jnp.int32),  # creature type
         )
