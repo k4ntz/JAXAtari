@@ -3,23 +3,6 @@ Group: Sooraj Rathore, Kadir Özen
 Edit: Jan Rafflewski
 """
 
-"""
-TODO
-    1)  [x] Get original fruit sprites from OCAtari (ALE)
-    2)  [ ] Compare timings and behaviour with OCAtari (ALE)
-    3)  [x] Fix inconsistent PELLETS_TO_COLLECT behaviour
-    4)  [ ] Reduce frightened/jail time every level
-
-    Optional:
-    a)  [ ] Make sure data types make sense
-    a)  [ ] Correct maze colors
-    b)  [ ] Add level transition animation (white blinking)
-    c)  [ ] Add Pacman death animation
-    d)  [ ] Add Fruit movement patterns
-    e)  [ ] Add Ghost behavioral quirks
-    f)  [ ] Add original Ghost enjailment mechanic
-"""
-
 
 # -------- Imports --------
 from enum import IntEnum
@@ -82,9 +65,10 @@ PINKY_RELEASE_TIME = 4*TIME_SCALE
 RESET_TIMER = 2*TIME_SCALE # Timer for resetting the game after death
 CHASE_DURATION = 20*TIME_SCALE # Approximately 20s
 SCATTER_DURATION = 7*TIME_SCALE # Approximately 7s
-FRIGHTENED_DURATION = 4*TIME_SCALE # Approximately 5s
-BLINKING_DURATION = 1*TIME_SCALE # Approximately 2s
-ENJAILED_DURATION = 4*TIME_SCALE # Approximately 5s
+FRIGHTENED_DURATION = 6*TIME_SCALE # Approximately 6s
+BLINKING_DURATION = 2*TIME_SCALE # Approximately 2s
+ENJAILED_DURATION = 5*TIME_SCALE # Approximately 5s
+FRIGHTENED_REDUCTION = 0.9 # This factor times the level number is applied to the frightened and blinking duration
 RETURN_DURATION = TIME_SCALE/2 # Should be as long as it takes the ghost to return from jail to the path
 MAX_CHASE_OFFSET = CHASE_DURATION/10 # Maximum value that can be added to the chase duration
 MAX_SCATTER_OFFSET = SCATTER_DURATION/10 # Maximum value that can be added to the scatter duration
@@ -504,9 +488,6 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             lambda: (state.level.id + 1, reward + LEVEL_COMPLETED_POINTS),
             lambda: (state.level.id, reward)
         )
-
-        print(collected_pellets)
-
         # 6) Update pellet state
         return (
             pellets,
@@ -563,12 +544,17 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                 lambda: jnp.array(timer - 1, dtype=jnp.uint16),
                 lambda: jnp.array(timer, dtype=jnp.uint16)
             )
+            timing_factor = jax.lax.cond(
+                state.level.id == 1,
+                lambda: 1.0,
+                lambda: FRIGHTENED_REDUCTION * (state.level.id - 1)
+            )
             return jax.lax.cond(
                 ate_power_pellet & (mode != GhostMode.ENJAILED) & (mode != GhostMode.RETURNING),
                 lambda: (
                     jnp.array(GhostMode.FRIGHTENED, dtype=jnp.uint8),
                     jnp.array(reverse_action(action), dtype=jnp.uint8),
-                    jnp.array(FRIGHTENED_DURATION, dtype=jnp.uint16),
+                    jnp.array(FRIGHTENED_DURATION * timing_factor, dtype=jnp.uint16),
                     True
                 ),
                 lambda: jax.lax.cond(
@@ -663,10 +649,15 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             )
         
         def start_blinking(action, step_count): # succeeds frightened mode
+            timing_factor = jax.lax.cond(
+                state.level.id == 1,
+                lambda: 1.0,
+                lambda: FRIGHTENED_REDUCTION * (state.level.id - 1)
+            )
             return (
                 jnp.array(GhostMode.BLINKING, dtype=jnp.uint8),
                 jnp.array(action, dtype=jnp.uint8),
-                jnp.array(BLINKING_DURATION, dtype=jnp.uint16),
+                jnp.array(jnp.round(BLINKING_DURATION * timing_factor), dtype=jnp.uint16),
                 False
             )
         
@@ -686,7 +677,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         modes       = jnp.zeros(ghost_count, dtype=jnp.uint8)
         actions     = jnp.zeros(ghost_count, dtype=jnp.uint8)
         positions   = jnp.zeros((ghost_count, 2), dtype=jnp.int32)
-        timers      = jnp.zeros(ghost_count, dtype=jnp.uint16)
+        timers      = jnp.zeros(ghost_count, dtype=jnp.float16)
         ghost_keys  = jax.random.split(common_key, 4)
 
         ( # Iterate over all ghosts and update their mode, action, position and timer
@@ -1624,7 +1615,7 @@ def reset_ghosts():
         types       = jnp.array([GhostType.BLINKY, GhostType.PINKY, GhostType.INKY, GhostType.SUE], dtype=jnp.uint8),
         actions     = jnp.array([Action.LEFT, Action.NOOP, Action.NOOP, Action.NOOP], dtype=jnp.uint8),
         modes       = jnp.array([GhostMode.RANDOM, GhostMode.ENJAILED, GhostMode.ENJAILED, GhostMode.ENJAILED], dtype=jnp.uint8),
-        timers      = jnp.array([SCATTER_DURATION, PINKY_RELEASE_TIME, INKY_RELEASE_TIME, SUE_RELEASE_TIME], dtype=jnp.uint16),
+        timers      = jnp.array([SCATTER_DURATION, PINKY_RELEASE_TIME, INKY_RELEASE_TIME, SUE_RELEASE_TIME], dtype=jnp.float16),
     )
 
 def reset_fruit(level: chex.Array, key: chex.PRNGKey):
