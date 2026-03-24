@@ -792,83 +792,90 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             time=state.step_counter, 
             legal_moves=legal_moves_2d.astype(jnp.int32)
         )
-    #Zeitstrafe + Win/Loss Bonus
- #   @partial(jax.jit, static_argnums=(0,))
- #   def _get_reward(self, previous_state: OthelloState, state: OthelloState) -> float:
- #       # 1. Sieg-Bedingung (Der absolute Goldstandard für Brettspiele)
- #       board_full = (state.player_1_score + state.player_2_score) >= (self.consts.BOARD_SIZE * self.consts.BOARD_SIZE)
- #       no_moves_left = (state.passes >= 2)
- #       is_done = jnp.logical_or(board_full, no_moves_left)#
-#
-#        p1_won = state.player_1_score > state.player_2_score
-#        p2_won = state.player_2_score > state.player_1_score#
-#
-#        # +1.0 für Sieg, -1.0 für Niederlage, 0.0 für Unentschieden
-#        win_bonus = jnp.where(
-#            is_done,
-#            jnp.where(p1_won, 1.0, jnp.where(p2_won, -1.0, 0.0)),
-#            0.0
-#        ).astype(jnp.float32)#
 
-        # 2. Leichte Zeitstrafe (Time Penalty) gegen Stillstand
-        # Zwingt die KI dazu, zügig zu spielen, weil langes Warten viel schlimmer ist als eine Niederlage.
-#        is_p1_turn = (previous_state.current_player == self.consts.PLAYER_1)
-#        time_penalty = jnp.where(
-#            jnp.logical_and(is_p1_turn, previous_state.phase == self.consts.PHASE_PLAY),
-#            -0.005, 
-#            0.0
-#        ).astype(jnp.float32)#
-
-#        return win_bonus + time_penalty
     
-#    #Greedy Reward + Win/Loss Bonus
-#    @partial(jax.jit, static_argnums=(0,))
-#    def _get_reward(self, previous_state: OthelloState, state: OthelloState) -> float:
-#        # 1. Veränderung berechnen
-#        score_delta = state.player_1_score - previous_state.player_1_score
-        
-#        # 2. Greedy Reward SKALIERT
-#        # Multipliziert mit 0.1, damit die Zahlen klein und stabil bleiben
-#        greedy_reward = jnp.maximum(0.0, score_delta.astype(jnp.float32)) * 0.1
-
-        # 3. Spielende
-#        board_full = (state.player_1_score + state.player_2_score) >= (self.consts.BOARD_SIZE * self.consts.BOARD_SIZE)
-#        no_moves_left = (state.passes >= 2)
-#        is_done = jnp.logical_or(board_full, no_moves_left)
-#
-#        p1_won = state.player_1_score > state.player_2_score
-#        p2_won = state.player_2_score > state.player_1_score
-
-        # Moderater Win-Bonus: +5.0 für Sieg, -5.0 für Niederlage
-#        win_bonus = jnp.where(
-#            is_done,
-#            jnp.where(p1_won, 5.0, jnp.where(p2_won, -5.0, 0.0)),
-#            0.0
-#        ).astype(jnp.float32)
-
-#        return greedy_reward + win_bonus
-
-    #Greedy Reward + Win Bonus (ohne Loss strafe)
+    # simple win/loss reward
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: OthelloState, state: OthelloState) -> float:
-        # 1. Veränderung des eigenen Scores berechnen
-        score_delta = state.player_1_score - previous_state.player_1_score
-        
-        # 2. Greedy Reward (nur eigener Zug)
-        # jnp.maximum(0.0, ...) ignoriert die Minuspunkte, wenn der Gegner Steine frisst.
-        # Faktor 0.1 sorgt dafür, dass die Zahlen für das PQN-Netzwerk stabil bleiben.
-        greedy_reward = jnp.maximum(0.0, score_delta.astype(jnp.float32)) * 0.1
+        board_full = (state.player_1_score + state.player_2_score) >= (self.consts.BOARD_SIZE * self.consts.BOARD_SIZE)
+        no_moves_left = (state.passes >= 2)
+        is_done = jnp.logical_or(board_full, no_moves_left)
 
-        # 3. Spielende prüfen
+        p1_won = state.player_1_score > state.player_2_score
+        p2_won = state.player_2_score > state.player_1_score
+
+        reward = jnp.where(
+            is_done,
+            jnp.where(p1_won, 1.0, jnp.where(p2_won, -1.0, 0.0)),
+            0.0
+        ).astype(jnp.float32)
+
+        return reward
+
+    """
+    # time penalty + win/loss bonus
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: OthelloState, state: OthelloState) -> float:
+        board_full = (state.player_1_score + state.player_2_score) >= (self.consts.BOARD_SIZE * self.consts.BOARD_SIZE)
+        no_moves_left = (state.passes >= 2)
+        is_done = jnp.logical_or(board_full, no_moves_left)#
+
+        p1_won = state.player_1_score > state.player_2_score
+        p2_won = state.player_2_score > state.player_1_score#
+
+        win_bonus = jnp.where(
+            is_done,
+            jnp.where(p1_won, 1.0, jnp.where(p2_won, -1.0, 0.0)),
+            0.0
+        ).astype(jnp.float32)#
+
+        is_p1_turn = (previous_state.current_player == self.consts.PLAYER_1)
+        time_penalty = jnp.where(
+            jnp.logical_and(is_p1_turn, previous_state.phase == self.consts.PHASE_PLAY),
+            -0.005, 
+            0.0
+        ).astype(jnp.float32)#
+
+        return win_bonus + time_penalty
+    """
+
+    """
+    # correct placement reward + win/loss bonus
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: OthelloState, state: OthelloState) -> float:
+        placed_stone = state.player_1_score > previous_state.player_1_score
+        
+        placement_reward = jnp.where(placed_stone, 0.1, 0.0).astype(jnp.float32)
+
         board_full = (state.player_1_score + state.player_2_score) >= (self.consts.BOARD_SIZE * self.consts.BOARD_SIZE)
         no_moves_left = (state.passes >= 2)
         is_done = jnp.logical_or(board_full, no_moves_left)
 
         p1_won = state.player_1_score > state.player_2_score
 
-        # 4. Dicke Belohnung für den Sieg!
-        # +10.0 ist massiv im Vergleich zum Greedy-Reward (1 Stein = 0.1).
-        # Niederlage bleibt bei 0.0, damit die KI sich traut zu spielen.
+        win_bonus = jnp.where(
+            jnp.logical_and(is_done, p1_won),
+            5.0, 
+            0.0
+        ).astype(jnp.float32)
+
+        return placement_reward + win_bonus
+    """
+
+    """
+    # greedy reward + win bonus (ohne loss strafe)
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: OthelloState, state: OthelloState) -> float:
+        score_delta = state.player_1_score - previous_state.player_1_score
+        
+        greedy_reward = jnp.maximum(0.0, score_delta.astype(jnp.float32)) * 0.1
+
+        board_full = (state.player_1_score + state.player_2_score) >= (self.consts.BOARD_SIZE * self.consts.BOARD_SIZE)
+        no_moves_left = (state.passes >= 2)
+        is_done = jnp.logical_or(board_full, no_moves_left)
+
+        p1_won = state.player_1_score > state.player_2_score
+
         win_bonus = jnp.where(
             jnp.logical_and(is_done, p1_won),
             10.0,
@@ -876,8 +883,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         ).astype(jnp.float32)
 
         return greedy_reward + win_bonus
-
-
+    """
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: OthelloState) -> bool:
