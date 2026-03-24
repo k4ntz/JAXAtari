@@ -548,6 +548,10 @@ class TutankhamState(struct.PyTreeNode):
 
     last_directional_action: int  # last action that had a directional component
 
+    # Mod states
+    night_timer: int  # countdown timer for night mode overlay; 0 = no night cover
+    mimic_state: chex.Array  # (1, 5) array with (x, y, active, direction, death_timer)
+
 
 
 class TutankhamObservation(struct.PyTreeNode):
@@ -627,7 +631,6 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         creature_subpixels=jnp.zeros(self.consts.MAX_CREATURES, dtype=jnp.float32)
         bullet_subpixel=0.0
 
-
         #TODO: only for testing
         # level = 12
         # start_x = 136
@@ -637,6 +640,10 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         #---------------------
 
         camera_offset = jnp.where(start_x < self.consts.HEIGHT // 2, 0, start_y - self.consts.HEIGHT // 2)
+
+        # Mod States
+        night_timer = 3500
+        mimic_state = jnp.array([0, 0, 0, 0, 0], dtype=jnp.int32)
 
 
         state = TutankhamState(level=level,
@@ -661,7 +668,9 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
                                last_directional_action=last_directional_action,
                                rng_key=key,
                                camera_offset=camera_offset,
-                               goal_reached=goal_reached
+                               goal_reached=goal_reached,
+                               night_timer=night_timer,
+                               mimic_state=mimic_state
                                )
         
         obs = self._get_observation(state)
@@ -1333,6 +1342,8 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         rng_key = state.rng_key
         camera_offset = state.camera_offset
         goal_reached = state.goal_reached
+        night_timer = state.night_timer
+        mimic_state = state.mimic_state
 
         # move player based on action input and check for teleporter trigger, also update camera offset
         (player_x, player_y,
@@ -1427,7 +1438,9 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
                                 last_directional_action=last_directional_action,
                                 rng_key=rng_key,
                                 camera_offset=camera_offset,
-                                goal_reached=goal_reached
+                                goal_reached=goal_reached,
+                                night_timer=night_timer,
+                                mimic_state=mimic_state
                                 )
 
         obs = self._get_observation(new_state)
@@ -1622,27 +1635,22 @@ class TutankhamRenderer(JAXGameRenderer):
     # ---------------------------------------------------------
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: TutankhamState):
-        indices_to_update = 0
-        new_color_ids = 0
-
         camera_offset = self._get_camera_offset(state)
         # Render all sprites
         raster = self.jr.create_object_raster(self.BACKGROUND)
         raster = self._render_floor(raster, state, camera_offset)
+        raster = self._render_hook_night_mode(raster, state, camera_offset)
         raster = self._render_flash_floor(raster, state, camera_offset)
         raster = self._render_player(raster, state, camera_offset)
         raster = self._render_creatures(raster, state, camera_offset)
+        raster = self._render_hook_ghost(raster, state, camera_offset)
+        raster = self._render_hook_mimic(raster, state, camera_offset)
         raster = self._render_items(raster, state, camera_offset)
-        raster = self._render_bullet(raster, state, camera_offset)                
+        raster = self._render_bullet(raster, state, camera_offset)
         raster = self._render_goal(raster, state, camera_offset)
         raster = self._render_ui(raster, state, camera_offset)
 
-        return self.jr.render_from_palette(
-            raster,
-            self.PALETTE,
-            indices_to_update=indices_to_update,
-            new_color_ids=new_color_ids
-        )
+        return self.jr.render_from_palette(raster, self.PALETTE)
     # ---------------------------------------------------------
     # Helper methods
     # ---------------------------------------------------------
@@ -1654,16 +1662,17 @@ class TutankhamRenderer(JAXGameRenderer):
         camera_offset = jnp.clip(state.camera_offset, 0, max_offset)
         return camera_offset
     # ---------------------------------------------------------
-    # Rendering functions
+    # Rendering Hook functions
     # ---------------------------------------------------------
-    def _render_hook_post_floor(self, raster, state, camera_offset):
-        """
-        No-op hook between the floor/map layer and the player layer.
-        Override via an InternalModPlugin to inject a mid-layer
-        (e.g. NightModeMod renders night_cover.npy here).
-        """
+    def _render_hook_night_mode(self, raster, state, camera_offset):
         return raster
-    
+    def _render_hook_ghost(self, raster, state, camera_offset):
+        return raster
+    def _render_hook_mimic(self, raster, state, camera_offset):
+        return raster
+    # ---------------------------------------------------------
+    # Rendering functions
+    # ---------------------------------------------------------    
     def _render_floor(self, raster, state, camera_offset):
         level_index = (state.level%4)
         return self.jr.render_at_clipped(

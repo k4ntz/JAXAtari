@@ -1,3 +1,5 @@
+import os
+import time
 import jax
 import jax.numpy as jnp
 from functools import partial
@@ -7,13 +9,206 @@ from jaxatari.games.jax_tutankham import TutankhamState
 from jaxatari.games.jax_tutankham import can_walk_to
 
 
+# Shared by render + step mods (must stay in sync).
+_TIME_CYCLE = 4000
+_NIGHT_FRAMES = 250 # Duration of the night phase. Cant be greater than 499 because the first initialization of the night_timer with 3500 
 
-class NightModeMod(JaxAtariPostStepModPlugin):
-    pass
+class NightModeMod(JaxAtariInternalModPlugin):
+    """
+    Draws the night_cover while the night_timer is in the active phase, which means it is currently night time.
+    """
+    asset_overrides = {
+        "night_cover": {
+            "name": "night_cover",
+            "type": "single",
+            "file": "night_cover.npy",
+        }
+    }
+
+    def _render_hook_night_mode(self, raster, state, camera_offset):
+        jr = self._env.renderer.jr
+        night_cover_mask = self._env.renderer.SHAPE_MASKS["night_cover"]
+        day_time = _TIME_CYCLE - _NIGHT_FRAMES
+        night = state.night_timer > day_time # True for the first _NIGHT_FRAMES frames of the cycle
+
+        def _draw_night(r):
+            return jr.render_at_clipped(
+                r,
+                0,
+                36,
+                night_cover_mask,
+                flip_offset=self._env.consts.ZERO_FLIP,
+            )
+
+        return jax.lax.cond(night, _draw_night, lambda r: r, raster)
 
 
-class MimicModeMod(JaxAtariPostStepModPlugin):
-    pass
+class NightModeStepMod(JaxAtariPostStepModPlugin):
+    """
+    Update step for the day/night cycle.
+    Based on the trigger probability, which is increased by the day_time, duration. 
+    """
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state, new_state):
+        night_time_left = new_state.night_timer - 1
+
+        day_time = _TIME_CYCLE - _NIGHT_FRAMES
+
+        trigger_prob = jnp.clip((day_time - night_time_left) / jnp.float32(day_time), 0.0, 1.0)
+        jax.debug.print("trigger_prob={}", trigger_prob)
+
+        _, subkey = jax.random.split(jax.random.PRNGKey(int(time.time())))
+        triggered = jax.random.bernoulli(subkey, p=trigger_prob) # Probability of triggering is higher the longer the day phase is.
+
+        in_off_phase = night_time_left < day_time
+        new_timer = jnp.where(
+            (night_time_left <= 0) | (in_off_phase & triggered),
+            jnp.int32(_TIME_CYCLE),
+            night_time_left,
+        )
+
+        # Force night off on death or map transition.
+        should_turn_off = (new_state.lives < prev_state.lives) | (new_state.level != prev_state.level)
+        new_timer = jnp.where(should_turn_off, day_time, new_timer)
+
+        return new_state.replace(night_timer=new_timer)
+
+
+class MimicMod(JaxAtariInternalModPlugin):
+    asset_overrides = {
+        "mimic": {
+            "name": "mimic",
+            "type": "group",
+            "files": ["mimic_01.npy", "mimic_00.npy"],
+        }
+    }
+    def _render_hook_mimic(self, raster, state, camera_offset):
+        jr = self._env.renderer.jr
+        mimic_mask = self._env.renderer.SHAPE_MASKS["mimic"]
+        frame_idx = (state.step_counter // self._env.consts.ANIMATION_SPEED) % 2
+        mimic_x = state.mimic_state[0]
+        mimic_y = state.mimic_state[1]
+        mimic_active = state.mimic_state[2]
+        mimic_direction = state.mimic_state[3]
+
+        def _draw_mimic(r):
+            return jr.render_at_clipped(
+                r,
+                mimic_x,
+                mimic_y - camera_offset + frame_idx,
+                mimic_mask[frame_idx],
+                flip_offset=self._env.consts.ZERO_FLIP,
+                flip_horizontal=(mimic_direction == 1)
+            )
+
+        return jax.lax.cond(mimic_active == 1, _draw_mimic, lambda r: r, raster)
+
+
+class MimicStepMod(JaxAtariPostStepModPlugin):
+    # Player has to get this close to the selected item.
+    TRIGGER_RANGE_X: int = 30
+    TRIGGER_RANGE_Y: int = 30
+    INVALID_TARGET_IDX: int = -1
+    MIMIC_SIZE: jnp.ndarray = jnp.array([8, 8], dtype=jnp.int32)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _pick_target_idx(self, item_states, key):
+        # Never allow the key (index 0) to be selected as mimic.
+        active_mask = item_states[:, 3] == self._env.consts.ACTIVE
+        candidate_mask = active_mask & (jnp.arange(item_states.shape[0]) != 0)
+        has_active_items = jnp.any(candidate_mask)
+        weights = candidate_mask.astype(jnp.float32)
+        idx = jax.random.choice(key, item_states.shape[0], shape=(), p=weights)
+        return jnp.where(has_active_items, idx.astype(jnp.int32), jnp.int32(self.INVALID_TARGET_IDX))
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        # Choose exactly one candidate item at level start.
+        rng, subkey = jax.random.split(state.rng_key)
+        target_idx = self._pick_target_idx(state.item_states, subkey)
+        mimic_state = jnp.array([0, 0, 0, 0, target_idx], dtype=jnp.int32)
+        return obs, state.replace(mimic_state=mimic_state, rng_key=rng)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: TutankhamState, new_state: TutankhamState) -> TutankhamState:
+        rng, subkey = jax.random.split(new_state.rng_key)
+
+        mimic_state = new_state.mimic_state
+        mimic_x = mimic_state[0]
+        mimic_y = mimic_state[1]
+        mimic_active = mimic_state[2]
+        mimic_direction = mimic_state[3]
+        mimic_target_idx = mimic_state[4]
+
+        level_changed = new_state.level != prev_state.level
+        life_lost = new_state.lives < prev_state.lives
+
+        # One random target per level: only re-pick on level transition.
+        repicked_target_idx = self._pick_target_idx(new_state.item_states, subkey)
+        target_idx = jnp.where(level_changed, repicked_target_idx, mimic_target_idx)
+
+        # If player "dies", deactivate mimics visual but keep target fixed for this level.
+        mimic_active = jnp.where(life_lost | level_changed, 0, mimic_active)
+        mimic_x = jnp.where(level_changed, 0, mimic_x)
+        mimic_y = jnp.where(level_changed, 0, mimic_y)
+        mimic_direction = jnp.where(level_changed, 0, mimic_direction)
+
+        target_item = new_state.item_states[target_idx]
+        target_x = target_item[0]
+        target_y = target_item[1]
+        target_is_active = (target_item[3] == self._env.consts.ACTIVE)
+
+        in_range = (
+            (jnp.abs(new_state.player_x - target_x) <= self.TRIGGER_RANGE_X) &
+            (jnp.abs(new_state.player_y - target_y) <= self.TRIGGER_RANGE_Y)
+        )
+        trigger_now = (mimic_active == 0) & target_is_active & in_range
+
+        new_item_states = jax.lax.cond(
+            trigger_now,
+            lambda items: items.at[target_idx, 3].set(self._env.consts.INACTIVE),
+            lambda items: items,
+            new_state.item_states,
+        )
+
+        mimic_state = jnp.array(
+            [
+                jnp.where(trigger_now, target_x, mimic_x),
+                jnp.where(trigger_now, target_y, mimic_y),
+                jnp.where(trigger_now, 1, mimic_active),
+                mimic_direction,
+                target_idx,
+            ],
+            dtype=jnp.int32,
+        )
+
+        return new_state.replace(item_states=new_item_states, mimic_state=mimic_state)
+
+class GhostMod(JaxAtariInternalModPlugin):    
+    asset_overrides = {
+        "ghost": {
+            "name": "ghost",
+            "type": "group",
+            "files": ["ghost_00.npy", "ghost_01.npy"],
+        }
+    }
+    def _render_hook_ghost(self, raster, state, camera_offset):
+        jr = self._env.renderer.jr
+        ghost_mask = self._env.renderer.SHAPE_MASKS["ghost"]
+        frame_idx = (state.step_counter // self._env.consts.ANIMATION_SPEED) % 2
+
+        def _draw_ghost():
+            return jr.render_at_clipped(
+                raster,
+                100, #TODO SET X
+                100 - camera_offset, #TODO SET Y
+                ghost_mask[frame_idx],
+                flip_offset=self._env.consts.ZERO_FLIP,
+                flip_horizontal= False # TODO Direction Flip
+            )
+
+        return _draw_ghost()
 
 
 class UpsideDownMod(JaxAtariInternalModPlugin):
