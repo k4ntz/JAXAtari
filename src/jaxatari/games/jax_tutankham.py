@@ -887,8 +887,8 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         player_near = (jnp.abs(dx) < self.consts.CREATURE_DETECTION_RANGE_X) & (jnp.abs(dy) < self.consts.CREATURE_DETECTION_RANGE_Y)
         horizontal_direction = jnp.where(dx >= 0, jnp.int32(-1), jnp.int32(-2))
         vertical_direction   = jnp.where(dy >= 0, jnp.int32(1),  jnp.int32(2))
-        prefer_h      = jnp.abs(dx) >= jnp.abs(dy)
-        primary_dir   = jnp.where(prefer_h, horizontal_direction, vertical_direction)
+        prefer_h = jnp.abs(dx) >= jnp.abs(dy)
+        primary_dir = jnp.where(prefer_h, horizontal_direction, vertical_direction)
         secondary_dir = jnp.where(prefer_h, vertical_direction, horizontal_direction)
         next_x = creature_x + lookup_x[primary_dir]
         next_y = creature_y + lookup_y[primary_dir]
@@ -1177,7 +1177,6 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
             laser_flash_count
         )
 
-        # TODO: add rendering stuff for level transition
         return level, player_x, player_y, bullet_state, creature_states, item_states, last_creature_spawn, ammunition_timer, laser_flash_cooldown, has_key, laser_flash_count
 
 
@@ -1196,6 +1195,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         # Kills happen exactly when death_timer goes from -1 to 15
         killed_creatures_mask = (prev_creature_states[:, 5] == -1) & (new_creature_states[:, 5] == 15)
         creature_points = killed_creatures_mask * self.consts.CREATURE_POINTS[prev_creature_states[:, 2]]
+        
         # if player has died, don't give points for defeated creatures in this step, otherwise sum up points for defeated creatures
         total_score_for_defeating_creatures = jnp.where(has_died, 0, jnp.sum(creature_points))
         
