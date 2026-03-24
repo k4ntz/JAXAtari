@@ -153,142 +153,98 @@ def can_walk_to(entity_size: jax.Array, new_x: jax.Array, new_y: jax.Array, old_
 # Constants
 # ---------------------------------------------------------------------
 class TutankhamConstants(struct.PyTreeNode):
-    # Game Window
-    WIDTH: int = struct.field(pytree_node=False, default=160)
-    HEIGHT: int = struct.field(pytree_node=False, default=210)
 
-    # Player constants
-    PLAYER_SPEED: float = struct.field(pytree_node=False, default=1)
-    PLAYER_SIZE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([5, 8], dtype=jnp.int32))
-    PLAYER_LIVES: int = struct.field(pytree_node=False, default=3)
-
-    # Missile constants
-    BULLET_SIZE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([1, 2], dtype=jnp.int32))
-    BULLET_SPEED: float = struct.field(pytree_node=False, default=3.5)
-    BULLET_ANIM_SPEED: int = struct.field(pytree_node=False, default=4)
-
-    MAX_LASER_FLASHES: int = struct.field(pytree_node=False, default=3)
-    LASER_FLASH_COOLDOWN: int = struct.field(pytree_node=False, default=60)  # frames
-
-    # Creature constants -------------------------------------
-
-    # Creature Types
-    SNAKE: int = struct.field(pytree_node=False, default=0)
-    SCORPION: int = struct.field(pytree_node=False, default=1)
-    BAT: int = struct.field(pytree_node=False, default=2)
-    TURTLE: int = struct.field(pytree_node=False, default=3)
-    JACKEL: int = struct.field(pytree_node=False, default=4)
-    CONDOR: int = struct.field(pytree_node=False, default=5)
-    LION: int = struct.field(pytree_node=False, default=6)
-    MOTH: int = struct.field(pytree_node=False, default=7)
-    VIRUS: int = struct.field(pytree_node=False, default=8)
-    MONKEY: int = struct.field(pytree_node=False, default=9)
-    MYSTERY_WEAPON: int = struct.field(pytree_node=False, default=10)
-
-    CREATURE_SIZES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
-        [8, 8],   # SNAKE (00: [6, 8], 01: [8, 7])
-        [8, 8],   # SCORPION (00 & 01: [8, 8])
-        [8, 8],   # BAT (00: [8, 7], 01: [8, 8])
-        [8, 8],   # TURTLE (00 & 01: [8, 8])
-        [8, 8],   # JACKEL (00 & 01: [8, 8])
-        [8, 7],   # CONDOR (00 & 01: [8, 7])
-        [8, 8],   # LION (00: [8, 7], 01: [7, 8])
-        [8, 8],   # MOTH (00 & 01 padded to: [8, 8])
-        [8, 6],   # VIRUS (00 & 01: [8, 6])
-        [8, 8],   # MONKEY (00 & 01: [8, 8])
-        [8, 8]    # MYSTERY_WEAPON (00 & 01: [8, 8])
-    ], dtype=jnp.int32))
-
+    # --- Shared ---
     INACTIVE: int = struct.field(pytree_node=False, default=0)
     ACTIVE: int = struct.field(pytree_node=False, default=1)
-
-    CREATURE_SPEED: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(
-        [0.65, 0.75, 0.95, 0.5, 0.75, 0.95, 0.85, 0.95, 0.75, 0.85, 0.95],
-        dtype=jnp.float32))  # speed for each creature type
-    CREATURE_POINTS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(
-        [1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 3],
-        dtype=jnp.int32))  # points for defeating each creature type
-
-    MAX_CREATURES: int = struct.field(pytree_node=False, default=2)  # max number of creatures on screen at once
-    CREATURE_DETECTION_RANGE_X: int = struct.field(pytree_node=False, default=35)  # horizontal detection range
-    CREATURE_DETECTION_RANGE_Y: int = struct.field(pytree_node=False, default=25)  # vertical detection range
 
     # Direction lookup tables: index = direction value (0=none, 1=down, 2=up, -1=right, -2=left)
     DIR_LOOKUP_X: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 0,  0, -1, 1], dtype=jnp.int32))
     DIR_LOOKUP_Y: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 1, -1,  0, 0], dtype=jnp.int32))
 
-    # Item constants ----------------------------------------------------
+    # --- Game Window ---
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
 
-    # Item Types
-    KEY_MAP1: int = struct.field(pytree_node=False, default=0)
-    CROWN_01_MAP1: int = struct.field(pytree_node=False, default=1)
-    RING_MAP1: int = struct.field(pytree_node=False, default=2)
-    RUBY_MAP1: int = struct.field(pytree_node=False, default=3)
-    CHALICE_MAP1: int = struct.field(pytree_node=False, default=4)
-    CROWN_02_MAP1: int = struct.field(pytree_node=False, default=5)
+    # --- Player ---
+    PLAYER_SPEED: float = struct.field(pytree_node=False, default=1)
+    PLAYER_SIZE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([5, 8], dtype=jnp.int32))
+    PLAYER_LIVES: int = struct.field(pytree_node=False, default=3)
 
-    KEY_MAP2: int = struct.field(pytree_node=False, default=6)
-    RING_MAP2: int = struct.field(pytree_node=False, default=7)
-    CROWN_MAP2: int = struct.field(pytree_node=False, default=8)
-    EMERALD_MAP2: int = struct.field(pytree_node=False, default=9)
-    GOBLET_MAP2: int = struct.field(pytree_node=False, default=10)
-    BUST_MAP2: int = struct.field(pytree_node=False, default=11)
+    # --- Bullet ---
+    BULLET_SIZE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([1, 2], dtype=jnp.int32))
+    BULLET_SPEED: float = struct.field(pytree_node=False, default=3.5)
+    BULLET_ANIM_SPEED: int = struct.field(pytree_node=False, default=4)
+    MAX_LASER_FLASHES: int = struct.field(pytree_node=False, default=3)
+    LASER_FLASH_COOLDOWN: int = struct.field(pytree_node=False, default=60)  # frames
 
-    KEY_MAP3: int = struct.field(pytree_node=False, default=12)
-    TRIDENT_MAP3: int = struct.field(pytree_node=False, default=13)
-    RING_MAP3: int = struct.field(pytree_node=False, default=14)
-    HERB_MAP3: int = struct.field(pytree_node=False, default=15)
-    DIAMOND_MAP3: int = struct.field(pytree_node=False, default=16)
-    CANDELABRA_MAP3: int = struct.field(pytree_node=False, default=17)
+    # --- Creatures ---
 
-    KEY_MAP4: int = struct.field(pytree_node=False, default=18)
-    RING_MAP4: int = struct.field(pytree_node=False, default=19)
-    AMULET_MAP4: int = struct.field(pytree_node=False, default=20)
-    FAN_MAP4: int = struct.field(pytree_node=False, default=21)
-    CRYSTAL_MAP4: int = struct.field(pytree_node=False, default=22)
-    ZIRCON_MAP4: int = struct.field(pytree_node=False, default=23)
-    DAGGER_MAP4: int = struct.field(pytree_node=False, default=24)
-
-    ITEM_SIZES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
-        [8, 8],   # KEY_MAP1
-        [7, 7],   # CROWN_01_MAP1
-        [6, 8],   # RING_MAP1
-        [8, 7],   # RUBY_MAP1
-        [7, 7],   # CHALICE_MAP1
-        [7, 8],   # CROWN_02_MAP1
-        [8, 8],   # KEY_MAP2
-        [6, 8],   # RING_MAP2
-        [7, 5],   # CROWN_MAP2
-        [8, 8],   # EMERALD_MAP2
-        [6, 7],   # GOBLET_MAP2
-        [7, 8],   # BUST_MAP2
-        [8, 8],   # KEY_MAP3
-        [5, 8],   # TRIDENT_MAP3
-        [6, 8],   # RING_MAP3
-        [5, 8],   # HERB_MAP3
-        [7, 7],   # DIAMOND_MAP3
-        [7, 7],   # CANDELABRA_MAP3
-        [8, 8],   # KEY_MAP4
-        [6, 8],   # RING_MAP4
-        [5, 8],   # AMULET_MAP4
-        [8, 8],   # FAN_MAP4
-        [8, 8],   # CRYSTAL_MAP4
-        [8, 7],   # ZIRCON_MAP4
-        [8, 6]    # DAGGER_MAP4
+    # indexed by creature type 
+    # (0=SNAKE, 1=SCORPION, 2=BAT, 3=TURTLE, 4=JACKEL,
+    #  5=CONDOR, 6=LION, 7=MOTH, 8=VIRUS, 9=MONKEY, 10=MYSTERY_WEAPON)
+    CREATURE_SIZES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
+        [8, 8],   # 0  SNAKE
+        [8, 8],   # 1  SCORPION
+        [8, 8],   # 2  BAT
+        [8, 8],   # 3  TURTLE
+        [8, 8],   # 4  JACKEL
+        [8, 7],   # 5  CONDOR
+        [8, 8],   # 6  LION
+        [8, 8],   # 7  MOTH
+        [8, 6],   # 8  VIRUS
+        [8, 8],   # 9  MONKEY
+        [8, 8],   # 10 MYSTERY_WEAPON
     ], dtype=jnp.int32))
+    CREATURE_SPEED: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(
+        [0.65, 0.75, 0.95, 0.5, 0.75, 0.95, 0.85, 0.95, 0.75, 0.85, 0.95],
+        dtype=jnp.float32))
+    CREATURE_POINTS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(
+        [1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 3],
+        dtype=jnp.int32))
+    MAX_CREATURES: int = struct.field(pytree_node=False, default=2)
+    CREATURE_DETECTION_RANGE_X: int = struct.field(pytree_node=False, default=35)
+    CREATURE_DETECTION_RANGE_Y: int = struct.field(pytree_node=False, default=25)
 
-    ITEM_SIZE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([5, 5], dtype=jnp.int32))
-
+    # --- Items ---
+    # indexed by item type (0-5: MAP1, 6-11: MAP2, 12-17: MAP3, 18-24: MAP4)
+    ITEM_SIZES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
+        [8, 8],   # 0  KEY_MAP1
+        [7, 7],   # 1  CROWN_01_MAP1
+        [6, 8],   # 2  RING_MAP1
+        [8, 7],   # 3  RUBY_MAP1
+        [7, 7],   # 4  CHALICE_MAP1
+        [7, 8],   # 5  CROWN_02_MAP1
+        [8, 8],   # 6  KEY_MAP2
+        [6, 8],   # 7  RING_MAP2
+        [7, 5],   # 8  CROWN_MAP2
+        [8, 8],   # 9  EMERALD_MAP2
+        [6, 7],   # 10 GOBLET_MAP2
+        [7, 8],   # 11 BUST_MAP2
+        [8, 8],   # 12 KEY_MAP3
+        [5, 8],   # 13 TRIDENT_MAP3
+        [6, 8],   # 14 RING_MAP3
+        [5, 8],   # 15 HERB_MAP3
+        [7, 7],   # 16 DIAMOND_MAP3
+        [7, 7],   # 17 CANDELABRA_MAP3
+        [8, 8],   # 18 KEY_MAP4
+        [6, 8],   # 19 RING_MAP4
+        [5, 8],   # 20 AMULET_MAP4
+        [8, 8],   # 21 FAN_MAP4
+        [8, 8],   # 22 CRYSTAL_MAP4
+        [8, 7],   # 23 ZIRCON_MAP4
+        [8, 6],   # 24 DAGGER_MAP4
+    ], dtype=jnp.int32))
     ITEM_POINTS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(
         [20, 15, 25, 25, 20, 45, 40, 30, 25, 40, 20, 20, 60, 35, 30, 25, 30, 5, 55, 40, 25, 80, 20, 40, 35],
-        dtype=jnp.int32))  # points for collecting each item type
+        dtype=jnp.int32))
 
-    # Asset config baked into constants
+    # --- Rendering ---
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
     ZERO_FLIP: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 0], dtype=jnp.int32))
     ANIMATION_SPEED: int = struct.field(pytree_node=False, default=8)
 
-
+    # --- Map Data ---
     VALID_POS_MAPS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         create_binary_matrix(1, f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_map1.npy"),
         create_binary_matrix(2, f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tutankham/floor_map2.npy"),
@@ -297,10 +253,11 @@ class TutankhamConstants(struct.PyTreeNode):
     ]))
 
     # Levels -----------------------------------------
+    # shape (4, 7, 4): 4 Maps, 7 Items per Map, Item state [x, y, item_type, active]
     MAP_ITEMS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         # Level 1 (MAP 1)
         [
-            [51, 87, 0, 1],   # KEY_MAP1=0       [x, y, item_type, active]
+            [51, 87, 0, 1],   # KEY_MAP1=0
             [99, 183, 5, 1],  # CROWN_02_MAP1=5
             [68, 262, 2, 1],  # RING_MAP1=2
             [7, 311, 3, 1],   # RUBY_MAP1=3
@@ -310,7 +267,7 @@ class TutankhamConstants(struct.PyTreeNode):
         ],
         # Level 2 (MAP 2)
         [
-            [21, 272, 6, 1],  # KEY_MAP2=6       [x, y, item_type, active]
+            [21, 272, 6, 1],  # KEY_MAP2=6
             [44, 155, 8, 1],  # CROWN_MAP2=8
             [128, 98, 7, 1],  # RING_MAP2=7
             [37, 406, 9, 1],  # EMERALD_MAP2=9
@@ -320,7 +277,7 @@ class TutankhamConstants(struct.PyTreeNode):
         ],
         # Level 3 (MAP 3)
         [
-            [22, 411, 12, 1], # KEY_MAP3=12      [x, y, item_type, active]
+            [22, 411, 12, 1], # KEY_MAP3=12
             [15, 173, 14, 1], # RING_MAP3=14
             [128, 98, 13, 1], # TRIDENT_MAP3=13
             [17, 278, 15, 1], # HERB_MAP3=15
@@ -330,7 +287,7 @@ class TutankhamConstants(struct.PyTreeNode):
         ],
         # Level 4 (MAP 4)
         [
-            [144, 110, 18, 1], # KEY_MAP4=18     [x, y, item_type, active]
+            [144, 110, 18, 1], # KEY_MAP4=18
             [125, 221, 19, 1], # RING_MAP4=19
             [117, 269, 20, 1], # AMULET_MAP4=20
             [19, 326, 21, 1],  # FAN_MAP4=21
@@ -338,14 +295,14 @@ class TutankhamConstants(struct.PyTreeNode):
             [110, 401, 22, 1], # CRYSTAL_MAP4=22
             [66, 607, 24, 1]   # DAGGER_MAP4=24  MAP 4 has 7 items (no padding)
         ]
-    ], dtype=jnp.int32))  # Repeat for 16 levels (4 maps x 4 difficulty levels)
+    ], dtype=jnp.int32))
 
-    # Number of valid item types per level (non-padded entries), shape (16,)
+    # Number of valid item types per level (non-padded entries), shape (, 4)
     MAP_N_ITEMS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(
         [6, 6, 6, 7], dtype=jnp.int32
     ))
 
-    # creature types per level, shape (16, 3)
+    # creature types per map, shape (4, 3)
     MAP_CREATURES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         [0, 1, 2],  # MAP 1: SNAKE=0, SCORPION=1, BAT=2
         [3, 4, 5],  # MAP 2: TURTLE=3, JACKEL=4, CONDOR=5
@@ -353,11 +310,12 @@ class TutankhamConstants(struct.PyTreeNode):
         [8, 9, 10]  # MAP 4: VIRUS=8, MONKEY=9, MYSTERY_WEAPON=10
     ], dtype=jnp.int32))
 
-    # Level checkpoints
+    # Level checkpoints, shape (4, 4, 4)
+    # 4 Maps, 4 Checkpoints in each Map
     MAP_CHECKPOINTS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         # MAP 1
         [
-            [0  , 198, 134, 61], # [checkpoint zone top y, checkpoint zone bottom y, checkpoint_x, checkpoint_y]
+            [0  , 198, 134, 61], # [checkpoint_zone top y, checkpoint_zone bottom y, checkpoint_x, checkpoint_y]
             [199, 402, 78, 199],
             [403, 567, 12, 403],
             [568, 800, 80, 568]
@@ -385,11 +343,12 @@ class TutankhamConstants(struct.PyTreeNode):
         ]
     ], dtype=jnp.int32))
 
-    # Positions of creature spawners on the map, shape (N_SPAWNERS, 2)
+    # Positions of creature spawners on the map, shape (4, N_SPAWNERS, 2)
+    # 4 Maps, 12 possible spawners (used padding for maps with fewer spawners)
     MAP_SPAWNER_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         # MAP 1
         [
-            [77  ,107],
+            [77  ,107], # spawner_x, spawner_y
             [28, 235],
             [107, 235],
             [39, 345],
@@ -449,33 +408,36 @@ class TutankhamConstants(struct.PyTreeNode):
         ]
     ], dtype=jnp.int32))
 
+    TELEPORTER_HEIGHT: int = struct.field(pytree_node=False, default=4)  # vertical hitbox height for teleporter triggers
+
+    # Positions of teleporters on the map, shape (4, 4, 5) — 4 maps, up to 4 teleporters, (x_in, y_in, action, x_out, y_out)
     MAP_TELEPORTER_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         # MAP 1
         [
             [128, 152, Action.LEFT, 27, 152], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
             [27, 152, Action.RIGHT, 128, 152],
-            [144, 604, Action.LEFT, 11, 604], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [144, 604, Action.LEFT, 11, 604],
             [11, 604, Action.RIGHT, 144, 604]
         ],
         # MAP 2
         [
-            [59, 340, Action.RIGHT, 96, 340], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [59, 340, Action.RIGHT, 96, 340],
             [96, 340, Action.LEFT, 59, 340],
             [0, 0, 0, 0, 0], # Padding for maps with fewer teleporters
             [0, 0, 0, 0, 0]
         ],
         # MAP 3
         [
-            [136, 292, Action.LEFT, 19, 292], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [136, 292, Action.LEFT, 19, 292],
             [19, 292, Action.RIGHT, 136, 292],
             [0, 0, 0, 0, 0], # Padding for maps with fewer teleporters
             [0, 0, 0, 0, 0]
         ],
         # MAP 4
         [
-            [55, 148, Action.RIGHT, 100, 148], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [55, 148, Action.RIGHT, 100, 148],
             [100, 148, Action.LEFT, 55, 148],
-            [132, 372, Action.LEFT, 23, 372], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [132, 372, Action.LEFT, 23, 372],
             [23, 372, Action.RIGHT, 132, 372]
         ]
     ], dtype=jnp.int32))
@@ -505,7 +467,9 @@ class TutankhamConstants(struct.PyTreeNode):
         1.1, 1.1, 1.1, 1.1,
     ], dtype=jnp.float32))
 
-    LEVEL_AMMO_SUPPLY: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([  #TODO CHANE AMMO SUPPLY
+    # Ammonition Timer per level, shape (16,)
+    # ammonition is decreased by one each game step
+    LEVEL_AMMO_SUPPLY: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         7500, 7350, 7100, 7000,
         6300, 6150, 6000, 5850,
         5150, 5000, 4850, 4700,
@@ -682,11 +646,9 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
     def teleporter_check(self, player_x, player_y, action, level):
         # Check if player is on a teleporter and has the correct action input to trigger it
         teleporters = self.consts.MAP_TELEPORTER_POSITIONS[level%4]  # (N, 5) N teleporters for current map with (x_in, y_in, trigger_action, x_out, y_out)
-        teleporter_height = 4 # Define a vertical hitbox for the teleporter
-
         teleport_trigger_action = (teleporters[:, 2] == action) # check if trigger action matches the current action input
         player_on_teleporter_x = (teleporters[:, 0] == player_x)
-        player_on_teleporter_y_range = (player_y >= teleporters[:, 1]) & (player_y < teleporters[:, 1] + teleporter_height)
+        player_on_teleporter_y_range = (player_y >= teleporters[:, 1]) & (player_y < teleporters[:, 1] + self.consts.TELEPORTER_HEIGHT)
 
 
         teleporter_active_mask = player_on_teleporter_x & player_on_teleporter_y_range & teleport_trigger_action
@@ -1166,7 +1128,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
             '''
             return self.check_entity_collision(
                 player_x, player_y, self.consts.PLAYER_SIZE,
-                item[0], item[1], self.consts.ITEM_SIZE,
+                item[0], item[1], self.consts.ITEM_SIZES[item[2]],
             )
         
         item_collected = jax.vmap(player_collects_item)(item_states)
@@ -1494,8 +1456,8 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         items = ObjectObservation.create(
             x=jnp.clip(state.item_states[:, 0], 0, self.consts.WIDTH - 1),
             y=jnp.clip(state.item_states[:, 1], 0, MAP_HEIGHT - 1),
-            width=jnp.full(7, self.consts.ITEM_SIZE[0], dtype=jnp.int32),
-            height=jnp.full(7, self.consts.ITEM_SIZE[1], dtype=jnp.int32),
+            width=self.consts.ITEM_SIZES[state.item_states[:, 2], 0],
+            height=self.consts.ITEM_SIZES[state.item_states[:, 2], 1],
             active=state.item_states[:, 3].astype(jnp.int32),
             visual_id=state.item_states[:, 2].astype(jnp.int32),  # item type
         )
@@ -1515,7 +1477,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
             x=jnp.clip(teleport_data[:, 0], 0, self.consts.WIDTH - 1),
             y=jnp.clip(teleport_data[:, 1], 0, MAP_HEIGHT - 1),
             width=jnp.full(4, 5, dtype=jnp.int32),
-            height=jnp.full(4, 4, dtype=jnp.int32),
+            height=jnp.full(4, self.consts.TELEPORTER_HEIGHT, dtype=jnp.int32),
             active=teleporters_active,
         )
 
