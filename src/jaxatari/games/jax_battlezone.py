@@ -331,7 +331,6 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
 
     def _player_projectile_collision_step(self, state: BattlezoneState):
-
         hit_arr = (jax.vmap(self._player_projectile_collision_check, in_axes=(0, None))
                    (state.enemies, state.player_projectile))
         
@@ -356,6 +355,36 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
                 active=new_player_projectile_active
             )
         )
+
+    def _enemy_friendly_fire_step(self, state: BattlezoneState):
+        hit_matrix = jax.vmap(
+            lambda enemy: jax.vmap(
+                self._player_projectile_collision_check,
+                in_axes=(None, 0)
+            )(enemy, state.enemy_projectiles)
+        )(state.enemies)
+        hit_arr = jnp.any(hit_matrix, axis=1)
+        new_enemies_active = jnp.logical_and(state.enemies.active, jnp.invert(hit_arr))
+        new_enemies_death_anim_counter = jnp.where(
+            hit_arr,
+            self.consts.ENEMY_DEATH_ANIM_LENGTH,
+            state.enemies.death_anim_counter
+        )
+        projectile_hit_any_enemy = jnp.any(hit_matrix, axis=0)
+        new_enemy_projectiles_active = jnp.logical_and(
+            state.enemy_projectiles.active,
+            jnp.invert(projectile_hit_any_enemy)
+        )
+        return state.replace(
+            enemies=state.enemies.replace(
+                active=new_enemies_active,
+                death_anim_counter=new_enemies_death_anim_counter
+            ),
+            enemy_projectiles=state.enemy_projectiles.replace(
+                active=new_enemy_projectiles_active
+            )
+        )
+
 
 
     def reset(self, key=None) -> Tuple[BattlezoneObservation, BattlezoneState]:
@@ -435,6 +464,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
             new_state = new_state.replace(player_projectile=new_player_projectile)
             # check whether player projectile hit an enemy
             new_state = self._player_projectile_collision_step(new_state)
+            new_state = self._enemy_friendly_fire_step(new_state)
 
             new_enemy_projectiles = jax.vmap(self._single_projectile_step, 0)(state.enemy_projectiles)
             new_state = new_state.replace(enemy_projectiles=new_enemy_projectiles)
@@ -607,13 +637,13 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
         return obj.replace(orientation_angle=(obj.orientation_angle - angle) % (2*jnp.pi))
 
 
-    def _player_projectile_collision_check(self, enemies: Enemy, player_projectiles: Projectile) -> bool:
+    def _player_projectile_collision_check(self, enemies: Enemy, player_projectile: Projectile) -> bool:
         """checks whether a player projectile hit an enemy. player_projectiles contains arrays of size 1. uses square hitbox"""
         s = self.consts.ENEMY_HITBOX_SIZE
-        distx = jnp.abs(enemies.x - player_projectiles.x) <= s
-        distz = jnp.abs(enemies.z - player_projectiles.z) <= s
+        distx = jnp.abs(enemies.x - player_projectile.x) <= s
+        distz = jnp.abs(enemies.z - player_projectile.z) <= s
 
-        return jnp.all(jnp.stack([distx, distz, enemies.active, player_projectiles.active]))
+        return jnp.all(jnp.stack([distx, distz, enemies.active, player_projectile.active]))
 
 
     def _enemy_projectile_collision_check(self, obj: Projectile):
@@ -758,11 +788,13 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
             enemy, projectile = args
             new_enemy = enemy.replace(shoot_cd=self.consts.ENEMY_SHOOT_CDS[enemy.enemy_type])
-
-            return new_enemy, projectile.replace(  # TODO: check whether we have enemy friendly fire enabled. it should be. potentially, we need to displace the spawn position of the projectile to avoid it shooting itself
+            dist = jnp.sqrt(jnp.square(enemy.x)+ jnp.square(enemy.z))
+            dir_x = enemy.x/dist
+            dir_z = enemy.z / dist
+            return new_enemy, projectile.replace(
                 orientation_angle=perfect_angle,
-                x = enemy.x,
-                z = enemy.z,
+                x = enemy.x - dir_x*(self.consts.ENEMY_HITBOX_SIZE+1),
+                z = enemy.z - dir_z*(self.consts.ENEMY_HITBOX_SIZE+1),
                 active=True,
                 time_to_live=jnp.array(self.consts.PROJECTILE_TTL, dtype=jnp.int32)
             )
@@ -1303,7 +1335,7 @@ class JaxBattlezone(JaxEnvironment[BattlezoneState, BattlezoneObservation, Battl
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: BattlezoneState, state: BattlezoneState):
-        return (state.score+jnp.log(state.step_counter)) * state.life  # TODO: temporary intuition change later
+        return (state.score+jnp.log(state.step_counter)) * state.life
 
 
     @partial(jax.jit, static_argnums=(0,))
