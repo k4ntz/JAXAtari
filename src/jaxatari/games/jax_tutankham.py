@@ -1611,7 +1611,6 @@ class TutankhamRenderer(JAXGameRenderer):
         raster = self._render_flash_floor(raster, state, camera_offset)
         raster = self._render_player(raster, state, camera_offset)
         raster = self._render_creatures(raster, state, camera_offset)
-        raster = self._render_hook_ghost(raster, state, camera_offset)
         raster = self._render_hook_mimic(raster, state, camera_offset)
         raster = self._render_items(raster, state, camera_offset)
         raster = self._render_bullet(raster, state, camera_offset)
@@ -1633,8 +1632,6 @@ class TutankhamRenderer(JAXGameRenderer):
     # Rendering Hook functions
     # ---------------------------------------------------------
     def _render_hook_night_mode(self, raster, state, camera_offset):
-        return raster
-    def _render_hook_ghost(self, raster, state, camera_offset):
         return raster
     def _render_hook_mimic(self, raster, state, camera_offset):
         return raster

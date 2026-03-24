@@ -6,7 +6,7 @@ from functools import partial
 
 from jaxatari.modification import JaxAtariPostStepModPlugin, JaxAtariInternalModPlugin
 from jaxatari.games.jax_tutankham import TutankhamState
-from jaxatari.games.jax_tutankham import can_walk_to
+from jaxatari.games.jax_tutankham import can_walk_to, is_onscreen
 
 
 # Shared by render + step mods (must stay in sync).
@@ -187,28 +187,108 @@ class MimicStepMod(JaxAtariPostStepModPlugin):
 
 class GhostMod(JaxAtariInternalModPlugin):    
     asset_overrides = {
-        "ghost": {
-            "name": "ghost",
-            "type": "group",
-            "files": ["ghost_00.npy", "ghost_01.npy"],
-        }
+        "creature_00": {"name": "creature_00", "type": "group", "files": ["creature_snake_00.npy", "creature_scorpion_00.npy", "creature_bat_00.npy", "creature_turtle_00.npy", "creature_jackel_00.npy", "creature_condor_00.npy", "creature_lion_00.npy", "creature_moth_00.npy", "creature_virus_00.npy", "creature_monkey_00.npy", "creature_mysteryweapon_00.npy", "ghost_00.npy"]},
+        "creature_01": {"name": "creature_01", "type": "group", "files": ["creature_snake_01.npy", "creature_scorpion_01.npy", "creature_bat_01.npy", "creature_turtle_01.npy", "creature_jackel_01.npy", "creature_condor_01.npy", "creature_lion_01.npy", "creature_moth_01.npy", "creature_virus_01.npy", "creature_monkey_01.npy", "creature_mysteryweapon_01.npy", "ghost_01.npy"]},
+        "kill_sprites": {"name": "kill_sprites", "type": "group", "files": ["kill_snake_00.npy", "kill_scorpion_00.npy", "kill_bat_00.npy", "kill_turtle_00.npy", "kill_jackel_00.npy", "kill_condor_00.npy", "kill_lion_00.npy", "kill_moth_00.npy", "kill_virus_00.npy", "kill_monkey_00.npy", "kill_mysteryweapon_00.npy", "kill_ghost.npy"]},
     }
-    def _render_hook_ghost(self, raster, state, camera_offset):
-        jr = self._env.renderer.jr
-        ghost_mask = self._env.renderer.SHAPE_MASKS["ghost"]
-        frame_idx = (state.step_counter // self._env.consts.ANIMATION_SPEED) % 2
 
-        def _draw_ghost():
-            return jr.render_at_clipped(
-                raster,
-                100, #TODO SET X
-                100 - camera_offset, #TODO SET Y
-                ghost_mask[frame_idx],
-                flip_offset=self._env.consts.ZERO_FLIP,
-                flip_horizontal= False # TODO Direction Flip
-            )
+    constants_overrides = {
 
-        return _draw_ghost()
+    "CREATURE_SIZES": jnp.array([
+        [8, 8],   # SNAKE (00: [6, 8], 01: [8, 7])
+        [8, 8],   # SCORPION (00 & 01: [8, 8])
+        [8, 8],   # BAT (00: [8, 7], 01: [8, 8])
+        [8, 8],   # TURTLE (00 & 01: [8, 8])
+        [8, 8],   # JACKEL (00 & 01: [8, 8])
+        [8, 7],   # CONDOR (00 & 01: [8, 7])
+        [8, 8],   # LION (00: [8, 7], 01: [7, 8])
+        [8, 8],   # MOTH (00 & 01 padded to: [8, 8])
+        [8, 6],   # VIRUS (00 & 01: [8, 6])
+        [8, 8],   # MONKEY (00 & 01: [8, 8])
+        [8, 8],   # MYSTERY_WEAPON (00 & 01: [8, 8])
+        [8, 8]    # GHOST (MOD)
+    ], dtype=jnp.int32),
+
+    "CREATURE_SPEED": jnp.array(
+        [0.65, 0.75, 0.95, 0.5, 0.75, 0.95, 0.85, 0.95, 0.75, 0.85, 0.95, 0.4], #ghost has slowy speed of 0.4
+        dtype=jnp.float32),
+
+    "CREATURE_POINTS": jnp.array(
+        [1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 3, 0], #ghost gives zero points
+        dtype=jnp.int32),
+
+    "MAP_CREATURES": jnp.array([
+        [0, 1, 2,  11],  # MAP 1: SNAKE=0, SCORPION=1, BAT=2, GHOST=11
+        [3, 4, 5,  11],  # MAP 2: TURTLE=3, JACKEL=4, CONDOR=5, GHOST=11
+        [0, 6, 7,  11],  # MAP 3: SNAKE=0, LION=6, MOTH=7, GHOST=11
+        [8, 9, 10, 11]  # MAP 4: VIRUS=8, MONKEY=9, MYSTERY_WEAPON=10, GHOST=11
+    ], dtype=jnp.int32)
+    }
+
+    @partial(jax.jit, static_argnums=(0,))
+    def move_creature(self, creature, creature_subpixel, rng_key, camera_offset, level, player_x, player_y):
+        creature_x, creature_y, creature_type, active, direction, death_timer = creature
+
+        lookup_x = self._env.consts.DIR_LOOKUP_X
+        lookup_y = self._env.consts.DIR_LOOKUP_Y
+
+        # creature state is active and creature is not in it's death animation
+        is_alive = (active == self._env.consts.ACTIVE) & (death_timer == -1)
+
+        # --- pathing ---
+        # Natural patrol: randomly change direction
+        rng_key, subkey_01, subkey_02 = jax.random.split(rng_key, 3)
+        random_dir = jax.random.choice(subkey_01, jnp.array([-1, -2, 1, 2]))
+        should_change = jax.random.bernoulli(subkey_02, p=0.08)
+        new_direction = jnp.where(should_change, random_dir, direction)
+        new_direction = jnp.where(direction == 0, random_dir, new_direction)
+
+        is_ghost = (creature_type == 11) # int 11 for ghost creature
+
+        # Chase player if nearby (ghost always chases, others only within detection range)
+        dx = player_x - creature_x
+        dy = player_y - creature_y
+        player_near = is_ghost | (
+            (jnp.abs(dx) < self._env.consts.CREATURE_DETECTION_RANGE_X) &
+            (jnp.abs(dy) < self._env.consts.CREATURE_DETECTION_RANGE_Y)
+        )
+        horizontal_direction = jnp.where(dx >= 0, jnp.int32(-1), jnp.int32(-2))
+        vertical_direction   = jnp.where(dy >= 0, jnp.int32(1),  jnp.int32(2))
+        prefer_h      = jnp.abs(dx) >= jnp.abs(dy)
+        primary_dir   = jnp.where(prefer_h, horizontal_direction, vertical_direction)
+        secondary_dir = jnp.where(prefer_h, vertical_direction, horizontal_direction)
+        next_x = creature_x + lookup_x[primary_dir]
+        next_y = creature_y + lookup_y[primary_dir]
+        _, _, primary_walkable = can_walk_to(self._env.consts.CREATURE_SIZES[creature_type], next_x, next_y, creature_x, creature_y, self._env.consts.VALID_POS_MAPS[level%4])
+        # ghost ignores wall collisions: always takes primary direction
+        toward_player = jnp.where(is_ghost | primary_walkable, primary_dir, secondary_dir)
+        new_direction = jnp.where(player_near, toward_player, new_direction)
+
+        # only update direction for alive creatures
+        new_direction = jnp.where(is_alive, new_direction, direction)
+
+        # --- movement ---
+        speed = self._env.consts.CREATURE_SPEED[creature_type.astype(jnp.int32)]
+        actual_speed, new_subpixel = self._env.subpixel_accumulator(speed, creature_subpixel)
+        new_x = creature_x + actual_speed * lookup_x[new_direction] * is_alive
+        new_y = creature_y + actual_speed * lookup_y[new_direction] * is_alive
+        # ghost ignores wall collisions: always moves to new position
+        ghost_x = new_x.astype(jnp.int32)
+        ghost_y = new_y.astype(jnp.int32)
+        walked_x, walked_y, _ = can_walk_to(self._env.consts.CREATURE_SIZES[creature_type], new_x, new_y, creature_x, creature_y, self._env.consts.VALID_POS_MAPS[level%4])
+        creature_x = jnp.where(is_ghost, ghost_x, walked_x)
+        creature_y = jnp.where(is_ghost, ghost_y, walked_y)
+
+        # Deactivate creature if offscreen
+        creature_on_screen = is_onscreen(creature_y, self._env.consts.CREATURE_SIZES[creature_type][1], camera_offset)
+        active = jnp.where(creature_on_screen, active, self._env.consts.INACTIVE)
+
+        active, new_death_timer, creature_x, creature_y = self._env.process_death_timer(active, death_timer, creature_x, creature_y)
+
+        return jnp.array([creature_x, creature_y, creature_type, active, new_direction, new_death_timer], dtype=jnp.int32), new_subpixel
+
+
+
 
 
 class UpsideDownMod(JaxAtariInternalModPlugin):
