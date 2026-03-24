@@ -573,70 +573,45 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         level = 0
         start_x = self.consts.MAP_CHECKPOINTS[level%4, 0, 2]
         start_y = self.consts.MAP_CHECKPOINTS[level%4, 0, 3]
-        tutankham_score = 0
-        goal_reached = False
-        lives = self.consts.PLAYER_LIVES
-        ammunition_timer = self.consts.LEVEL_AMMO_SUPPLY[level]
-        bullet_state = jnp.array([0, 0, 0, 0, 0], dtype=jnp.int32)  # (x, y, bullet_rotation, bullet_active, anim_counter)
-        creature_states = jnp.zeros((self.consts.MAX_CREATURES, 6), dtype=jnp.int32)  # (x, y, creature_type, active, direction, death_timer)
-        creature_states = creature_states.at[:, 5].set(-1)
-        item_states = self.consts.MAP_ITEMS[level%4]  # (N, 4) array with (x, y, item_type, active)
-        last_creature_spawn = 0
-        laser_flash_count = self.consts.MAX_LASER_FLASHES
-        laser_flash_cooldown = 0
-        has_key = False
-        player_direction = 3  # Start facing RIGHT
-        is_moving = False
-        last_movement_action = 0
-        step_counter = 0
+        camera_offset = jnp.where(start_y < self.consts.HEIGHT // 2, 0, start_y - self.consts.HEIGHT // 2)
 
-        # Sub Pixel accumulators for smooth movement
-        player_subpixel=0.0
-        creature_subpixels=jnp.zeros(self.consts.MAX_CREATURES, dtype=jnp.float32)
-        bullet_subpixel=0.0
+        creature_states = jnp.zeros((self.consts.MAX_CREATURES, 6), dtype=jnp.int32)
+        creature_states = creature_states.at[:, 5].set(-1) # death_timer initialised to -1 (inactive)
 
-        #TODO: only for testing
-        # level = 12
-        # start_x = 136
-        # start_y = 60
-        # item_states = self.consts.MAP_ITEMS[level%4]
-        # ammunition_timer = self.consts.LEVEL_AMMO_SUPPLY[level]
-        #---------------------
+        state = TutankhamState(
+            # --- Game Progression ---
+            rng_key=key,
+            level=level,
+            step_counter=0,
+            camera_offset=camera_offset,
+            goal_reached=False,
+            # --- Player ---
+            player_x=start_x,
+            player_y=start_y,
+            player_direction=3,  # facing RIGHT
+            is_moving=False,
+            player_subpixel=0.0,
+            last_movement_action=0,
+            lives=self.consts.PLAYER_LIVES,
+            has_key=False,
+            tutankham_score=0,
+            # --- Bullet & Ammo ---
+            bullet_state=jnp.array([0, 0, 0, 0, 0], dtype=jnp.int32),
+            bullet_subpixel=0.0,
+            ammunition_timer=self.consts.LEVEL_AMMO_SUPPLY[level],
+            laser_flash_count=self.consts.MAX_LASER_FLASHES,
+            laser_flash_cooldown=0,
+            # --- Creatures ---
+            creature_states=creature_states,
+            creature_subpixels=jnp.zeros(self.consts.MAX_CREATURES, dtype=jnp.float32),
+            last_creature_spawn=0,
+            # --- Items ---
+            item_states=self.consts.MAP_ITEMS[level%4],
+            # --- Mod States ---
+            night_timer=3500,
+            mimic_state=jnp.array([0, 0, 0, 0, 0], dtype=jnp.int32),
+        )
 
-        camera_offset = jnp.where(start_x < self.consts.HEIGHT // 2, 0, start_y - self.consts.HEIGHT // 2)
-
-        # Mod States
-        night_timer = 3500
-        mimic_state = jnp.array([0, 0, 0, 0, 0], dtype=jnp.int32)
-
-
-        state = TutankhamState(level=level,
-                               player_x=start_x,
-                               player_y=start_y,
-                               tutankham_score=tutankham_score,
-                               lives=lives,
-                               bullet_state=bullet_state,
-                               ammunition_timer=ammunition_timer,
-                               creature_states=creature_states,
-                               item_states=item_states,
-                               last_creature_spawn=last_creature_spawn,
-                               laser_flash_count=laser_flash_count,
-                               laser_flash_cooldown=laser_flash_cooldown,
-                               player_direction=player_direction,
-                               is_moving=is_moving,
-                               step_counter=step_counter,
-                               player_subpixel=player_subpixel,
-                               creature_subpixels=creature_subpixels,
-                               bullet_subpixel=bullet_subpixel,
-                               has_key=has_key,
-                               last_movement_action=last_movement_action,
-                               rng_key=key,
-                               camera_offset=camera_offset,
-                               goal_reached=goal_reached,
-                               night_timer=night_timer,
-                               mimic_state=mimic_state
-                               )
-        
         obs = self._get_observation(state)
         return obs, state
 
