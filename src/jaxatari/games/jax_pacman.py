@@ -263,9 +263,9 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             sys.path.insert(0, current_dir)
             
         pacman_maps_dir = os.path.join(current_dir, "pacmanMaps")
-        maze_file_path = os.path.join(pacman_maps_dir, "maze_atari.txt")
+        maze_file_path = os.path.join(pacman_maps_dir, "maze3.txt")
         # Use separate pellet map if it exists, otherwise fallback to the base layout
-        maze_file_pellet_path = os.path.join(pacman_maps_dir, "maze_atari_pellet.txt")
+        maze_file_pellet_path = os.path.join(pacman_maps_dir, "maze3_pellet.txt")
         if not os.path.exists(maze_file_pellet_path):
             maze_file_pellet_path = maze_file_path
         import pacmanMaps.nodes as nodes_mod
@@ -363,36 +363,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
                 if tile_nb == 4 and a != Action.LEFT:
                      ghost_wall_mask[n, a] = True
                      
-                # Option 4: Detect portal edge and block ghost entrance 1 tile before it
-                n_x, n_y = int(self.node_positions_x[n]), int(self.node_positions_y[n])
-                nb_x, nb_y = int(self.node_positions_x[nb]), int(self.node_positions_y[nb])
-
-                dist_sq = (n_x - nb_x)**2 + (n_y - nb_y)**2
-                if dist_sq > (self.consts.TILE_SIZE * 2)**2:
-                    tile = self.consts.TILE_SIZE
-                    if a == Action.LEFT:
-                        approach_pos = (n_x + tile, n_y)   # one tile right of n
-                        blocked_action = Action.LEFT
-                    elif a == Action.RIGHT:
-                        approach_pos = (n_x - tile, n_y)   # one tile left of n
-                        blocked_action = Action.RIGHT
-                    elif a == Action.UP:
-                        approach_pos = (n_x, n_y + tile)   # one tile below n
-                        blocked_action = Action.UP
-                    elif a == Action.DOWN:
-                        approach_pos = (n_x, n_y - tile)   # one tile above n
-                        blocked_action = Action.DOWN
-                    else:
-                        approach_pos = None
-                        blocked_action = None
-
-                    if approach_pos is not None:
-                        approach_node = self.position_to_node.get(approach_pos, None)
-                        if approach_node is not None:
-                            # Only block the move from the approach node into portal node n
-                            nb2 = int(self.neighbor_lookup[approach_node, blocked_action])
-                            if nb2 == n:
-                                ghost_wall_mask[approach_node, blocked_action] = True
+                if tile_nb == 6:
+                     ghost_wall_mask[n, a] = True
 
         # Store mask as JAX array; used only for Pacman
         self.player_door_edge_mask = jnp.array(door_edge_mask, dtype=jnp.bool_)
@@ -438,6 +410,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
                         maze[row, col] = 4
                     elif char == 'D':
                         maze[row, col] = 5
+                    elif char == 'P':
+                        maze[row, col] = 6
                     elif char == '*':
                         maze[row, col] = 2  # Treat as regular pellet
                         self.vitamin_tile_row = row
