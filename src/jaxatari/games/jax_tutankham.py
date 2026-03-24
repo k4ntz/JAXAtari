@@ -664,93 +664,86 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         return actual_speed, new_subpixel
     
 
-    # Player Step
     @partial(jax.jit, static_argnums=(0,))
-    def player_step(self, player_x, player_y, action, last_movement_action, player_direction, step_counter, player_subpixel, level):
-        
-        speed = self.consts.PLAYER_SPEED
-        actual_speed, new_subpixel = self.subpixel_accumulator(speed, player_subpixel)
+    def player_step(self, player_x, player_y, action, last_movement_action, player_direction, player_subpixel, level):
+        '''
+        Advances the player by one frame:
+        - resolves sub-pixel movement and wall collisions
+        - triggers teleporters when the player stands on one with the correct action
+        - updates orientation and camera offset
+        '''
+        # --- Movement ---
+        actual_speed, new_subpixel = self.subpixel_accumulator(self.consts.PLAYER_SPEED, player_subpixel)
 
+        # horizontal and vertical deltas per ALE action index (only LEFT/RIGHT/UP/DOWN move the player)
         dx = jnp.array([
-        0,            # 0  NOOP
-        0,            # 1  FIRE
-        0,            # 2  UP
-        actual_speed, # 3  RIGHT
-        -actual_speed,# 4  LEFT
-        0,            # 5  DOWN
-        0,            # 6  UPRIGHT
-        0,            # 7  UPLEFT
-        0,            # 8  DOWNRIGHT
-        0,            # 9  DOWNLEFT
-        0,            # 10 UPFIRE
-        0,            # 11 RIGHTFIRE
-        0,            # 12 LEFTFIRE
-        0,            # 13 DOWNFIRE
-        0,            # 14 UPRIGHTFIRE
-        0,            # 15 UPLEFTFIRE
-        0,            # 16 DOWNRIGHTFIRE
-        0,            # 17 DOWNLEFTFIRE
+            0,             # 0  NOOP
+            0,             # 1  FIRE
+            0,             # 2  UP
+            actual_speed,  # 3  RIGHT
+            -actual_speed, # 4  LEFT
+            0,             # 5  DOWN
+            0,             # 6  UPRIGHT
+            0,             # 7  UPLEFT
+            0,             # 8  DOWNRIGHT
+            0,             # 9  DOWNLEFT
+            0,             # 10 UPFIRE
+            0,             # 11 RIGHTFIRE
+            0,             # 12 LEFTFIRE
+            0,             # 13 DOWNFIRE
+            0,             # 14 UPRIGHTFIRE
+            0,             # 15 UPLEFTFIRE
+            0,             # 16 DOWNRIGHTFIRE
+            0,             # 17 DOWNLEFTFIRE
         ])
-
         dy = jnp.array([
-            0,            # 0  NOOP
-            0,            # 1  FIRE
-            -actual_speed,# 2  UP
-            0,            # 3  RIGHT
-            0,            # 4  LEFT
-            actual_speed, # 5  DOWN
-            0,            # 6  UPRIGHT
-            0,            # 7  UPLEFT
-            0,            # 8  DOWNRIGHT
-            0,            # 9  DOWNLEFT
-            0,            # 10 UPFIRE
-            0,            # 11 RIGHTFIRE
-            0,            # 12 LEFTFIRE
-            0,            # 13 DOWNFIRE
-            0,            # 14 UPRIGHTFIRE
-            0,            # 15 UPLEFTFIRE
-            0,            # 16 DOWNRIGHTFIRE
-            0,            # 17 DOWNLEFTFIRE
+            0,             # 0  NOOP
+            0,             # 1  FIRE
+            -actual_speed, # 2  UP
+            0,             # 3  RIGHT
+            0,             # 4  LEFT
+            actual_speed,  # 5  DOWN
+            0,             # 6  UPRIGHT
+            0,             # 7  UPLEFT
+            0,             # 8  DOWNRIGHT
+            0,             # 9  DOWNLEFT
+            0,             # 10 UPFIRE
+            0,             # 11 RIGHTFIRE
+            0,             # 12 LEFTFIRE
+            0,             # 13 DOWNFIRE
+            0,             # 14 UPRIGHTFIRE
+            0,             # 15 UPLEFTFIRE
+            0,             # 16 DOWNRIGHTFIRE
+            0,             # 17 DOWNLEFTFIRE
         ])
 
-        # For wall collision
-        w = self.consts.PLAYER_SIZE[0]
-        h = self.consts.PLAYER_SIZE[1]
-
-        # If the current action has no directional component, fall back to the last directional action
-        has_movement = (dx[action] != 0) | (dy[action] != 0)
+        # fall back to the last movement action for non-directional actions (for example FIRE)
+        # so the player keeps moving in the last direction and teleporters stay triggerable
+        has_movement     = (dx[action] != 0) | (dy[action] != 0)
         effective_action = jnp.where(has_movement, action, last_movement_action)
-        new_last_movement_action = jnp.where(has_movement, action, last_movement_action)
+        new_last_movement_action = effective_action
 
-        # If player hits teleporter and right action input is triggered then teleport player to teleporter out coordinates
-        # Is always computed, but only effects player poisition if should_teleport is True
-        teleporter_out_x, teleporter_out_y, should_teleport = self.teleporter_check(player_x, player_y, effective_action, level)
-
+        # --- Wall Collision ---
         new_x = player_x + dx[effective_action]
         new_y = player_y + dy[effective_action]
-        player_x, player_y, is_walkable = can_walk_to(self.consts.PLAYER_SIZE, new_x, new_y, player_x, player_y, self.consts.VALID_POS_MAPS[level%4])        
-        
-        #is_walkable = True # TODO: only for testing---------------------------
-        # player_x = new_x
-        # player_y = new_y
-        # new_last_movement_action = 0
-        #--------------------------------------------------------------------
+        player_x, player_y, is_walkable = can_walk_to(
+            self.consts.PLAYER_SIZE, new_x, new_y, player_x, player_y, self.consts.VALID_POS_MAPS[level%4])
 
-        # If teleporter is triggered, the player position is set to teleporter out coordinates 
+        # --- Teleporter ---
+        # is always computed but only applied when should_teleport is True
+        teleporter_out_x, teleporter_out_y, should_teleport = self.teleporter_check(
+            player_x, player_y, effective_action, level)
         player_x = jnp.where(should_teleport, teleporter_out_x, player_x)
         player_y = jnp.where(should_teleport, teleporter_out_y, player_y)
 
-        # Animation / orientation state
-        is_moving_now = jnp.logical_and(is_walkable, jnp.logical_or(dx[effective_action] != 0, dy[effective_action] != 0))
+        # --- Player Animation & Camera ---
+        is_moving_now = is_walkable & ((dx[effective_action] != 0) | (dy[effective_action] != 0))
+        # direction only updates on horizontal movement (3=RIGHT, 4=LEFT); vertical movement keeps last direction
         new_direction = jnp.where(dx[effective_action] > 0, 3,
                         jnp.where(dx[effective_action] < 0, 4, player_direction))
-        new_step_counter = step_counter + 1
-
-
-        # update camera offset based on player y position
         camera_offset = jnp.where(player_y < self.consts.HEIGHT // 2, 0, player_y - self.consts.HEIGHT // 2)
 
-        return player_x, player_y, new_last_movement_action, new_direction, is_moving_now, new_step_counter, new_subpixel, camera_offset
+        return player_x, player_y, new_last_movement_action, new_direction, is_moving_now, new_subpixel, camera_offset
 
     #Bullet Step
     @partial(jax.jit, static_argnums=(0,))
@@ -1268,13 +1261,20 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         night_timer = state.night_timer
         mimic_state = state.mimic_state
 
+        # ----------------------------------------------------------------------
+        # Main Game Logic ------------------------------------------------------
+        # ----------------------------------------------------------------------
+
+        # Global Step Counter (increment each step)
+        step_counter = step_counter + 1
+
         # --- Player ---
         (player_x, player_y,
          last_movement_action, player_direction,
-         is_moving, step_counter, player_subpixel, camera_offset) = self.player_step(
+         is_moving, player_subpixel, camera_offset) = self.player_step(
             player_x, player_y,
             action, last_movement_action,
-            player_direction, step_counter, player_subpixel, level
+            player_direction, player_subpixel, level
         )
 
         # --- Bullet & Ammo ---
