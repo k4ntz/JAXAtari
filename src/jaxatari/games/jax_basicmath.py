@@ -81,8 +81,10 @@ class BasicMathState:
 class BasicMathObservation(struct.PyTreeNode):
     problem_num1: jnp.ndarray
     problem_num2: jnp.ndarray
-    digits: jnp.ndarray
-    arrPos: jnp.ndarray
+    digitsResult: jnp.ndarray
+    digitsRemainder: jnp.ndarray
+    posResult: jnp.ndarray
+    posRemainder: jnp.ndarray
 
 @struct.dataclass
 class BasicMathInfo:
@@ -121,8 +123,10 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         return spaces.Dict({
             "problem_num1": spaces.Box(low=0, high=1000, shape=(), dtype=jnp.int32),
             "problem_num2": spaces.Box(low=0, high=1000, shape=(), dtype=jnp.int32),
-            "digits": spaces.Box(low=-1, high=9, shape=(8,), dtype=jnp.int32),
-            "arrPos": spaces.Box(low=0, high=8, shape=(), dtype=jnp.int32),
+            "digitsResult": spaces.Box(low=-1, high=9, shape=(4,), dtype=jnp.int32),
+            "digitsRemainder": spaces.Box(low=-1, high=9, shape=(4,), dtype=jnp.int32),
+            "posResult": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
+            "posRemainder": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
         })
 
     @partial(jax.jit, static_argnums=(0,))
@@ -131,24 +135,35 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: BasicMathState, state: BasicMathState):
-        return (state.score) - (
-            previous_state.score
-        )
+        return state.score - previous_state.score
+        
     
     def _get_observation(self, state: BasicMathState):
-        midNumArr = self.consts.numArrLen // 2
         halfPadObs = self.consts.PAD_OBS // 2
-        a, b = state.numArr[:midNumArr], state.numArr[midNumArr:]
+        midNumArr = self.consts.numArrLen // 2
+        overMid = jnp.greater_equal(state.arrPos, midNumArr)
+        result, remainder = state.numArr[:midNumArr], state.numArr[midNumArr:]
 
-        padded_digits_a = jnp.pad(
-                a, 
+        posResult = jax.lax.cond(
+            overMid, 
+            lambda: -1, 
+            lambda: halfPadObs + (state.arrPos % midNumArr), 
+        )
+        posRemainder = jax.lax.cond(
+            overMid, 
+            lambda: halfPadObs + (state.arrPos % midNumArr), 
+            lambda: -1, 
+        )
+
+        padded_digits_result = jnp.pad(
+                result, 
                 (halfPadObs, 0), 
                 mode='constant', 
                 constant_values=-1
             )
         
-        padded_digits_b = jnp.pad(
-                b, 
+        padded_digits_remainder = jnp.pad(
+                remainder, 
                 (halfPadObs, 0), 
                 mode='constant', 
                 constant_values=-1
@@ -157,8 +172,10 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
         return BasicMathObservation(
             problem_num1=state.problemNum1,
             problem_num2=state.problemNum2,
-            digits=jnp.concatenate([padded_digits_a, padded_digits_b]),
-            arrPos=state.arrPos,
+            digitsResult=padded_digits_result,
+            digitsRemainder=padded_digits_remainder,
+            posResult=posResult,
+            posRemainder=posRemainder,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -206,6 +223,7 @@ class JaxBasicMath(JaxEnvironment[BasicMathState, BasicMathObservation, BasicMat
 
         a, b = state.numArr[:midNumArr], state.numArr[midNumArr:]
         res_a, res_b = self._int_to_fixed_digits(result[0], midNumArr), self._int_to_fixed_digits(result[1], midNumArr)
+
         is_correct = jax.lax.cond(
             gameMode == 3,
             lambda: jnp.logical_and(
