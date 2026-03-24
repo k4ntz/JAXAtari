@@ -157,12 +157,12 @@ class OthelloState:
     hide_cursor: chex.Array
 
 
-# --- Othello Beobachtung ---
+# --- Othello Observation ---
 @struct.dataclass 
 class OthelloObservation:
     board: jnp.ndarray
-    cursor_map: jnp.ndarray   # NEU
-    valid_moves: jnp.ndarray  # NEU
+    cursor_map: jnp.ndarray
+    valid_moves: jnp.ndarray
     cursor_x: jnp.ndarray
     cursor_y: jnp.ndarray
     score_player_1: jnp.ndarray
@@ -223,7 +223,6 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             lambda: (state.cursor_y, state.cursor_x)
         )
 
-        # NEUE TIMER LOGIK: Zählt immer runter, resettet nur bei erfolgreicher Bewegung
         new_timer = jnp.maximum(0, state.input_timer - 1)
         new_timer = jax.lax.select(
             jnp.logical_and(is_moving, can_move),
@@ -249,51 +248,38 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         is_empty = (board[y, x] == self.consts.EMPTY)
         opponent = jnp.where(player == self.consts.PLAYER_1, self.consts.PLAYER_2, self.consts.PLAYER_1)
         
-        # Vektor für die 8 Richtungen und 7 mögliche Schritte (max. Entfernung auf 8x8)
         dy = jnp.array([-1, -1, -1,  0,  0,  1,  1,  1], dtype=jnp.int32)
         dx = jnp.array([-1,  0,  1, -1,  1, -1,  0,  1], dtype=jnp.int32)
         steps = jnp.arange(1, 8, dtype=jnp.int32)
         
-        # 8 Strahlen parallel berechnen (Shape: 8x7)
         cy = y + dy[:, None] * steps
         cx = x + dx[:, None] * steps
         
-        # Prüfen, ob die berechneten Koordinaten auf dem Brett liegen
         in_bounds = (cy >= 0) & (cy < self.consts.BOARD_SIZE) & (cx >= 0) & (cx < self.consts.BOARD_SIZE)
-        
-        # Index-Sicherheit (Verhindert Out-of-Bounds Error beim Array-Slicing, Werte werden durch in_bounds gefiltert)
         cy_safe = jnp.clip(cy, 0, self.consts.BOARD_SIZE - 1)
         cx_safe = jnp.clip(cx, 0, self.consts.BOARD_SIZE - 1)
         
-        # Alle 56 Felder (8 Strahlen * 7 Schritte) auf einen Schlag auslesen
         ray_cells = board[cy_safe, cx_safe]
         
         is_opp = (ray_cells == opponent) & in_bounds
         is_player = (ray_cells == player) & in_bounds
         
-        # cumprod multipliziert Nullen und Einsen durch:
-        # Findet alle zusammenhängenden gegnerischen Steine direkt vom Startpunkt aus!
         contig_opp = jnp.cumprod(is_opp.astype(jnp.int32), axis=1).astype(jnp.bool_)
         
-        # Verschiebt die Maske um 1 nach rechts:
-        # Ein eigener Stein macht den Zug genau dann gültig, wenn er direkt NACH contig_opp kommt.
         prev_contig_opp = jnp.pad(contig_opp[:, :-1], ((0, 0), (1, 0)), constant_values=False)
         valid_bound = is_player & prev_contig_opp
         
-        # Wenn irgendein Strahl einen gültigen Abschluss (valid_bound) hat, ist der Zug erlaubt
         is_any_dir_valid = jnp.any(valid_bound)
         
         return is_empty & is_any_dir_valid
 
     @partial(jax.jit, static_argnums=(0,))
     def _has_any_valid_move(self, board: chex.Array, player: chex.Array) -> bool:
-        # Check für ein einzelnes Feld
         def _check_pos(idx):
             y = idx // self.consts.BOARD_SIZE
             x = idx % self.consts.BOARD_SIZE
             return self._is_valid_move(board, y, x, player)
             
-        # vmap übernimmt die Arbeit der Schleife und feuert alle 64 Checks gleichzeitig ab!
         all_valid = jax.vmap(_check_pos)(jnp.arange(self.consts.BOARD_SIZE * self.consts.BOARD_SIZE))
         return jnp.any(all_valid)
 
@@ -301,7 +287,6 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
     def _get_flip_mask(self, board: chex.Array, y: chex.Array, x: chex.Array, player: chex.Array) -> chex.Array:
         opponent = jnp.where(player == self.consts.PLAYER_1, self.consts.PLAYER_2, self.consts.PLAYER_1)
         
-        # Gleiches Raycasting-Setup wie oben
         dy = jnp.array([-1, -1, -1,  0,  0,  1,  1,  1], dtype=jnp.int32)
         dx = jnp.array([-1,  0,  1, -1,  1, -1,  0,  1], dtype=jnp.int32)
         steps = jnp.arange(1, 8, dtype=jnp.int32)
@@ -324,92 +309,18 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         
         ray_valid = jnp.any(valid_bound, axis=1)
         
-        # Die Steine, die geflippt werden, sind exakt die zusammenhängenden Gegner-Steine (contig_opp)
-        # auf den Strahlen, die am Ende durch einen eigenen Stein geschlossen wurden (ray_valid)
         flips = contig_opp & ray_valid[:, None]
         
-        # Die Vektor-Ergebnisse (8x7) wieder auf das 8x8 Board projizieren
         mask = jnp.zeros_like(board, dtype=jnp.int32)
         mask = mask.at[cy_safe, cx_safe].max(flips.astype(jnp.int32))
         
         return mask.astype(jnp.bool_)
 
-
-    # @partial(jax.jit, static_argnums=(0,))
-    # def _ai_turn(self, state: OthelloState) -> OthelloState:
-    #     player = self.consts.PLAYER_2
-    #     init_val = (-9999, -1, state.lfsr_state)
-    #
-    #     def _scan_loop(i, carry):
-    #         best_s, best_idx, curr_lfsr = carry
-    #         idx = 63 - i
-    #         y = idx // self.consts.BOARD_SIZE
-    #         x = idx % self.consts.BOARD_SIZE
-    #         is_valid = self._is_valid_move(state.board, y, x, player)
-    #
-    #         def _eval_move(lfsr):
-    #             mask = self._get_flip_mask(state.board, y, x, player)
-    #             flips = jnp.sum(mask).astype(jnp.int32)
-    #             total_pieces = state.player_1_score + state.player_2_score
-    #             score_flips = jax.lax.select(
-    #                 (total_pieces > 19) & (total_pieces < 66),
-    #                 -flips,
-    #                 flips
-    #             )
-    #             score_pos = self._get_dynamic_position_score(state.board, y, x)
-    #             final_score = score_pos + score_flips
-    #             is_better = (final_score > best_s)
-    #             is_equal = (final_score == best_s)
-    #             next_lfsr = self._atari_lfsr_step(lfsr)
-    #             should_swap = is_better | (is_equal & ((next_lfsr & 3) == 0))
-    #             new_best_s = jax.lax.select(should_swap, final_score, best_s)
-    #             new_best_idx = jax.lax.select(should_swap, idx, best_idx)
-    #             return new_best_s, new_best_idx, next_lfsr
-    #
-    #         next_lfsr_dummy = self._atari_lfsr_step(curr_lfsr)
-    #         return jax.lax.cond(
-    #             is_valid,
-    #             lambda: _eval_move(curr_lfsr),
-    #             lambda: (best_s, best_idx, next_lfsr_dummy)
-    #         )
-    #
-    #     best_score_final, best_idx_final, final_lfsr = jax.lax.fori_loop(0, 64, _scan_loop, init_val)
-    #
-    #     def _execute_move():
-    #         y = best_idx_final // self.consts.BOARD_SIZE
-    #         x = best_idx_final % self.consts.BOARD_SIZE
-    #         flip_mask = self._get_flip_mask(state.board, y, x, player)
-    #
-    #         return state.replace(
-    #             cursor_y=jnp.array(y, dtype=jnp.int32),
-    #             phase=jnp.array(self.consts.PHASE_ANIMATION, dtype=jnp.int32),
-    #             animation_sub_phase=jnp.array(self.consts.SUBPHASE_INITIAL_PLACE, dtype=jnp.int32),
-    #             pieces_to_flip=flip_mask,
-    #             target_player=jnp.array(player, dtype=jnp.int32),
-    #             target_x=jnp.array(x, dtype=jnp.int32),
-    #             target_y=jnp.array(y, dtype=jnp.int32),
-    #             animation_timer=jnp.array(self.consts.FRAMES_TO_PLACE, dtype=jnp.int32),
-    #             passes=jnp.array(0, dtype=jnp.int32),
-    #             lfsr_state=final_lfsr
-    #         )
-    #
-    #     def _pass_turn():
-    #         return state._replace(
-    #             current_player=jnp.array(self.consts.PLAYER_1, dtype=jnp.int32),
-    #             passes=state.passes + 1,
-    #             lfsr_state=final_lfsr,
-    #             turn_start_frame=state.step_counter + 1
-    #         )
-    #
-    #     return jax.lax.cond(best_idx_final != -1, _execute_move, _pass_turn)
-
     @partial(jax.jit, static_argnums=(0,))
     def _ai_turn(self, state: OthelloState) -> OthelloState:
-        # HIER WAREN DIE FEHLER: Einfach 'self.consts' statt 'self._env.consts'
         AI_PLAYER = self.consts.PLAYER_2
         OPPONENT = self.consts.PLAYER_1
 
-        # --- 1. BEWERTUNG ---
         def _evaluate_move(board, y, x, player):
             flip_mask = self._get_flip_mask(board, y, x, player)
             board_next = board.at[y, x].set(player)
@@ -418,16 +329,12 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
             p2_count = jnp.sum(new_board == AI_PLAYER)
             p1_count = jnp.sum(new_board == OPPONENT)
             
-            # HIER WAR EIN WEITERER FEHLER: Das muss 'self._get_dynamic_position_score' sein (ohne _env)
-            # ABER da ich nicht sicher bin, ob du diese Funktion hast, nehmen wir einen simplen Fallback:
-            # Ecken (0,0), (0,7), (7,0), (7,7) sind super (+10), Ränder sind gut (+2)
             is_corner = ((y == 0) | (y == 7)) & ((x == 0) | (x == 7))
             is_edge = (y == 0) | (y == 7) | (x == 0) | (x == 7)
             pos_score = jnp.where(is_corner, 10, jnp.where(is_edge, 2, 0))
             
             return (p2_count - p1_count + pos_score).astype(jnp.float32)
 
-        # --- 2. BESTEN ZUG FINDEN ---
         def _score_root_move(idx):
             y, x = idx // self.consts.BOARD_SIZE, idx % self.consts.BOARD_SIZE
             is_valid = self._is_valid_move(state.board, y, x, AI_PLAYER)
@@ -448,10 +355,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         best_idx = jnp.argmax(scores_with_noise)
         best_score = jnp.max(all_scores)
         
-        # JAXAtari nutzt lfsr für Zufall, wir steppen es einfach weiter
         next_lfsr = self._atari_lfsr_step(state.lfsr_state)
 
-        # --- 3. AUSFÜHREN ODER PASSEN ---
         def _execute_move():
             y = best_idx // self.consts.BOARD_SIZE
             x = best_idx % self.consts.BOARD_SIZE
@@ -531,7 +436,7 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
     def _game_logic_step(self, state: OthelloState, action: chex.Array) -> OthelloState:
         state = state.replace(lfsr_state=self._atari_lfsr_step(state.lfsr_state))
         
-        # --- PHASE 1: SPIELZUG LOGIK ---
+        # --- PHASE 1: PLAY ---
         def _play_phase(s):
             is_ai = (s.current_player == self.consts.PLAYER_2)
 
@@ -575,7 +480,6 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         def _animation_phase(s):
             timer_done = (s.animation_timer <= 0)
             
-            # --- SUBPHASE 1: INITIAL PLACE ---
             def _initial_place_logic(current_s):
                 def _do_place_and_score():
                     new_board = current_s.board.at[current_s.target_y, current_s.target_x].set(current_s.target_player)
@@ -597,7 +501,6 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                     
                 return jax.lax.cond(timer_done, _do_place_and_score, _wait)
 
-            # --- SUBPHASE 2: FLIPPING ---
             def _flipping_logic(current_s):
                 def _process_flip():
                     flat_mask = current_s.pieces_to_flip.flatten()
@@ -619,11 +522,11 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                         # Mask Update
                         new_mask = current_s.pieces_to_flip.at[y, x].set(False)
                         
-                        # Prüfen, ob dies der letzte Flip war
+                        # check if last flip
                         is_last_flip = ~jnp.any(new_mask)
                         
                         def _prepare_buffer():
-                            # Wenn es der letzte Flip war: SOFORT Spieler wechseln
+                            # If last flip, switch player immediately
                             next_player = jnp.where(current_s.target_player == self.consts.PLAYER_1, 
                                                     self.consts.PLAYER_2, self.consts.PLAYER_1)
                             
@@ -634,9 +537,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
                                 pieces_to_flip=new_mask,
                                 current_player=next_player, 
                                 animation_sub_phase=jnp.array(self.consts.SUBPHASE_END_BUFFER, dtype=jnp.int32),
-                                # Timer für den Puffer setzen
+                                # Timer for the buffer
                                 animation_timer=jnp.array(self.consts.FRAMES_BETWEEN_FLIPS + self.consts.FRAMES_AFTER_FLIP, dtype=jnp.int32),
-                                # CHANGE: Reset blink rhythm hier, damit er genau bei Frame 0 des Zyklus beginnt!
                                 turn_start_frame=current_s.step_counter + 1
                             )
                         
@@ -665,7 +567,6 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
                 return jax.lax.cond(timer_done, _process_flip, _wait)
             
-            # --- SUBPHASE 3: END BUFFER ---
             def _end_buffer_logic(current_s):
                 def _finish_buffer():
                      return current_s.replace(
@@ -692,7 +593,6 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         
         return new_state.replace(step_counter=state.step_counter + 1)
 
-    # ... [Reset / Step / Obs wie gehabt] ...
     def reset(self, key=None) -> Tuple[OthelloObservation, OthelloState]:
         lfsr_seed = jax.random.randint(key, (), 0, 65535).astype(jnp.int32)
         state = OthelloState(
@@ -723,12 +623,10 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
     def step(self, state: OthelloState, action: chex.Array) -> Tuple[
         OthelloObservation, OthelloState, float, bool, OthelloInfo]:
         
-        # WICHTIG: Hier übersetzen wir die KI-Zahl (z.B. 4) in die echte Aktion (z.B. Action.LEFT)
         atari_action = jnp.take(self.action_array, action.astype(jnp.int32))
         
         previous_state = state
         
-        # Hier übergeben wir jetzt atari_action statt action!
         state_after_cursor = self._player_step(state, atari_action)
         state_after_logic = self._game_logic_step(state_after_cursor, atari_action)
         
@@ -744,10 +642,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
         return self.renderer.render(state)
 
     def _get_observation(self, state: OthelloState) -> OthelloObservation:
-        # NEU: 1. Cursor Map (8x8 Grid, 1 wo der Cursor ist, sonst 0)
         cursor_map = jnp.zeros_like(state.board).at[state.cursor_y, state.cursor_x].set(1)
         
-        # NEU: 2. Valid Moves Map (8x8 Grid, 1 wo ein legaler Zug ist, sonst 0)
         def check_move(idx):
             y = idx // self.consts.BOARD_SIZE
             x = idx % self.consts.BOARD_SIZE
@@ -758,8 +654,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
 
         return OthelloObservation(
             board=state.board,
-            cursor_map=cursor_map,            # NEU
-            valid_moves=valid_moves_map,      # NEU
+            cursor_map=cursor_map,           # NEW
+            valid_moves=valid_moves_map,     # NEW
             cursor_x=state.cursor_x,
             cursor_y=state.cursor_y,
             score_player_1=state.player_1_score,
@@ -773,8 +669,8 @@ class JaxOthello(JaxEnvironment[OthelloState, OthelloObservation, OthelloInfo, O
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
             "board": spaces.Box(low=0, high=2, shape=(self.consts.BOARD_SIZE, self.consts.BOARD_SIZE), dtype=jnp.int32),
-            "cursor_map": spaces.Box(low=0, high=1, shape=(self.consts.BOARD_SIZE, self.consts.BOARD_SIZE), dtype=jnp.int32),   # NEU
-            "valid_moves": spaces.Box(low=0, high=1, shape=(self.consts.BOARD_SIZE, self.consts.BOARD_SIZE), dtype=jnp.int32),  # NEU
+            "cursor_map": spaces.Box(low=0, high=1, shape=(self.consts.BOARD_SIZE, self.consts.BOARD_SIZE), dtype=jnp.int32),   # NEW
+            "valid_moves": spaces.Box(low=0, high=1, shape=(self.consts.BOARD_SIZE, self.consts.BOARD_SIZE), dtype=jnp.int32),  # NEW
             "cursor_x": spaces.Box(low=0, high=self.consts.BOARD_SIZE - 1, shape=(), dtype=jnp.int32),
             "cursor_y": spaces.Box(low=0, high=self.consts.BOARD_SIZE - 1, shape=(), dtype=jnp.int32),
             "score_player_1": spaces.Box(low=0, high=64, shape=(), dtype=jnp.int32),
@@ -998,27 +894,27 @@ class OthelloRenderer(JAXGameRenderer):
             default_normal = (blink_cycle == 0)
             default_empty = False
             
-            # P1 (Weiß/Spieler) Logic
-            # Wenn auf Gegner-Feld (Switch Moment): default_normal greift (1x an, 3x aus)
+            # P1 (White/Player) Logic
+            # If on opponent field (Switch Moment): default_normal disabled (1x an, 3x aus)
             def _p1_logic():
                 is_own = (cell_under_cursor == self.consts.PLAYER_1)
                 p1_normal = jax.lax.cond(is_own, lambda: blink_cycle != 1, lambda: default_normal)
                 p1_empty = jax.lax.cond(is_own, lambda: blink_cycle == 1, lambda: default_empty)
                 return p1_normal, p1_empty
 
-            # P2 (Schwarz/Enemy) Logic
+            # P2 (Black/Enemy) Logic
             def _p2_logic():
                 is_white = (cell_under_cursor == self.consts.PLAYER_1) 
                 is_black = (cell_under_cursor == self.consts.PLAYER_2)
                 
-                # P2 auf Weiß: 1x Schwarz (Frame 0), 3x Weiß (Frame 1-3)
+                # P2 auf White: 1x Black (Frame 0), 3x White (Frame 1-3)
                 case_white_normal = (blink_cycle == 0) 
                 case_white_empty = False
                 
-                # P2 auf Schwarz (der gerade gesetzte Stein): 
-                # Soll: 3x Schwarz, 1x Grün
-                # Frames 0, 1, 2 -> Zeige Schwarz (normal)
-                # Frame 3 -> Zeige Leer (empty/grün)
+                # P2 auf Black (the just placed stone): 
+                # Should: 3x Black, 1x Green
+                # Frames 0, 1, 2 -> shows Black (normal)
+                # Frame 3 -> shows Empty (empty/green)
                 case_black_normal = (blink_cycle != 3) 
                 case_black_empty = (blink_cycle == 3)
                 
