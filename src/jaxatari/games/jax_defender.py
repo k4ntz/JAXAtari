@@ -1964,6 +1964,9 @@ class JaxDefender(
             idx = jnp.arange(self.consts.ENEMY_MAX_IN_GAME)
             new_enemy_state = states.enemy_states[idx, idx]
             new_human_state = states.human_states[idx, idx]
+            new_score = state.score + (
+                sum(states.score[idx]) - self.consts.ENEMY_MAX_IN_GAME * state.score
+            )
             new_killed = (
                 sum(states.enemy_killed[idx]) - state.enemy_killed * self.consts.ENEMY_MAX_IN_GAME
             )
