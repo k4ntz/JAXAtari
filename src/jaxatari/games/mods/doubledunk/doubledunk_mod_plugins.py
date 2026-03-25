@@ -264,8 +264,8 @@ class CollisionMod(JaxAtariPostStepModPlugin):
         from jaxatari.games.jax_doubledunk import PlayerID
 
         # Collision distance threshold (squared). 
-        # 100 = 10 pixels of distance. You can increase this to make collisions larger.
-        COLLISION_DIST_SQ = 100 
+        # 16 = 4 pixels of distance. 
+        COLLISION_DIST_SQ = 16
         
         p1_in = new_state.player1_inside
         p1_out = new_state.player1_outside
