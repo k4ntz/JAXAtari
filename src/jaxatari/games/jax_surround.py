@@ -4,11 +4,13 @@ import jax.numpy as jnp
 import numpy as np
 from functools import partial
 from typing import NamedTuple, Tuple, Optional, Callable, Sequence
+from flax import struct
 
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 import jaxatari.spaces as spaces
+from jaxatari.modification import AutoDerivedConstants
 
 def _get_default_asset_config() -> tuple:
     """
@@ -18,63 +20,63 @@ def _get_default_asset_config() -> tuple:
     """
     return ()
 
-class SurroundConstants(NamedTuple):
+class SurroundConstants(AutoDerivedConstants):
     """Parameters defining the Surround grid and visuals."""
 
     # Playfield layout
-    GRID_WIDTH: int = 40
-    GRID_HEIGHT: int = 24
+    GRID_WIDTH: int = struct.field(pytree_node=False, default=40)
+    GRID_HEIGHT: int = struct.field(pytree_node=False, default=24)
 
     # Mapping from grid cells to screen pixels
-    CELL_SIZE: Tuple[int, int] = (4, 8)  # (width, height)
+    CELL_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 8))  # (width, height)
 
     # Atari-typische Bildschirmgröße (W,H)
-    SCREEN_SIZE: Tuple[int, int] = (160, 210)
+    SCREEN_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (160, 210))
 
     # Colors
-    P1_TRAIL_COLOR: Tuple[int, int, int] = (255, 102, 204)  # Border color
-    P2_TRAIL_COLOR: Tuple[int, int, int] = (255, 102, 204)  # Border color
-    BACKGROUND_COLOR: Tuple[int, int, int] = (153, 153, 255)  # Blau-Lila Hintergrund
+    P1_TRAIL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (255, 102, 204))  # Border color
+    P2_TRAIL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (255, 102, 204))  # Border color
+    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (153, 153, 255))  # Blau-Lila Hintergrund
     # Head colors (small square on top of the trail)
-    P1_HEAD_COLOR: Tuple[int, int, int] = (221, 51, 136)    # yellow (score color)
-    P2_HEAD_COLOR: Tuple[int, int, int] = (255, 221, 51)    # magenta (score color)
-    HEAD_SCALE: float = 0.5  # fraction of the cell size (0< scale ≤1)
+    P1_HEAD_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (221, 51, 136))    # yellow (score color)
+    P2_HEAD_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (255, 221, 51))    # magenta (score color)
+    HEAD_SCALE: float = struct.field(pytree_node=False, default=0.5)  # fraction of the cell size (0< scale ≤1)
 
     # Border 
-    BORDER_CELLS_X: int = 2    # linke/rechte Dicke in Zellen
-    BORDER_CELLS_Y: int = 1    # obere/untere Dicke in Zellen
-    BORDER_COLOR: Tuple[int, int, int] = (255, 102, 204)
+    BORDER_CELLS_X: int = struct.field(pytree_node=False, default=2)    # linke/rechte Dicke in Zellen
+    BORDER_CELLS_Y: int = struct.field(pytree_node=False, default=1)    # obere/untere Dicke in Zellen
+    BORDER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (255, 102, 204))
 
     # Divider stripes (thin red lines across the middle of each occupied cell)
-    DIVIDER_COLOR: Tuple[int, int, int] = (153, 153, 255)   # Match playfield background color
-    DIVIDER_THICKNESS: int = 1  # pixels (in screen space)
+    DIVIDER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (153, 153, 255))   # Match playfield background color
+    DIVIDER_THICKNESS: int = struct.field(pytree_node=False, default=1)  # pixels (in screen space)
 
     # Starting positions (x, y) - snapped to nearest rectangle (cell) on the field
     # These should be integers and not between cells. Adjusted to be inside the playfield, not on borders.
     # Middle of the playfield, within a rectangle (cell)
     # Set to the exact center row of the grid
-    P1_START_POS: Tuple[int, int] = (4, 10)  # left side, vertical center
-    P2_START_POS: Tuple[int, int] = (35, 10) # right side, vertical center
+    P1_START_POS: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 10))  # left side, vertical center
+    P2_START_POS: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (35, 10)) # right side, vertical center
 
     # Starting directions
-    P1_START_DIR: int = Action.RIGHT
-    P2_START_DIR: int = Action.LEFT
+    P1_START_DIR: int = struct.field(pytree_node=False, default=Action.RIGHT)
+    P2_START_DIR: int = struct.field(pytree_node=False, default=Action.LEFT)
 
     # Rules
-    ALLOW_REVERSE: bool = False
+    ALLOW_REVERSE: bool = struct.field(pytree_node=False, default=False)
 
     # Maximum number of environment steps before truncation
-    MAX_STEPS: int = 1000
+    MAX_STEPS: int = struct.field(pytree_node=False, default=1000)
 
     # Game rules
-    WIN_SCORE: int = 10
+    WIN_SCORE: int = struct.field(pytree_node=False, default=10)
 
     # Rough logic rate control when caller steps at ~60 FPS
     # Move only every N calls to step (e.g., 60/4 = 15 for ~4 Hz)
-    MOVE_EVERY_N_STEPS: int = 15
+    MOVE_EVERY_N_STEPS: int = struct.field(pytree_node=False, default=15)
 
     # Asset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default=_get_default_asset_config())
     # --- Speed-up schedule (game accelerates over time) ---
     # Every SPEEDUP_STEPS logic ticks, reduce the effective MOVE_EVERY by SPEEDUP_DELTA, but not below MIN_MOVE_EVERY.
     # SPEEDUP_STEPS: int = 200          # how many logic ticks until next speed bump
@@ -82,7 +84,8 @@ class SurroundConstants(NamedTuple):
     # MIN_MOVE_EVERY_N_STEPS: int = 4   # lower bound (higher speed)
 
 
-class SurroundState(NamedTuple):
+@struct.dataclass
+class SurroundState:
     """Immutable game state container."""
 
     pos0: jnp.ndarray  # (x, y)
@@ -100,16 +103,16 @@ class SurroundState(NamedTuple):
     substep: jnp.ndarray  # () int32, frame-skip counter
 
 
-class SurroundObservation(NamedTuple):
-    """Observation returned to the agent."""
-
+@struct.dataclass
+class SurroundObservation:
     grid: jnp.ndarray  # (GRID_WIDTH, GRID_HEIGHT) int32
-    pos0: jnp.ndarray  # (2,) int32
-    pos1: jnp.ndarray  # (2,) int32
+    player1: ObjectObservation
+    player2: ObjectObservation
     agent_id: jnp.ndarray  # () int32
 
 
-class SurroundInfo(NamedTuple):
+@struct.dataclass
+class SurroundInfo:
     """Additional environment information."""
 
     step_counter: jnp.ndarray
@@ -341,7 +344,7 @@ class JaxSurround(
                 jnp.clip(self.consts.P2_START_POS[1], self.consts.BORDER_CELLS_Y, self.consts.GRID_HEIGHT - self.consts.BORDER_CELLS_Y - 1),
             ), dtype=jnp.int32)
             grid = jnp.zeros((self.consts.GRID_WIDTH, self.consts.GRID_HEIGHT), dtype=jnp.int32)
-            return state._replace(
+            return state.replace(
                 pos0=p0_start,
                 pos1=p1_start,
                 dir0=jnp.array(self.consts.P1_START_DIR, dtype=jnp.int32),
@@ -416,7 +419,7 @@ class JaxSurround(
         new_dir0 = update_dir(state.dir0, joint_action[0])
         new_dir1 = update_dir(state.dir1, joint_action[1])
 
-        state_no_move = state._replace(dir0=new_dir0, dir1=new_dir1, substep=substep)
+        state_no_move = state.replace(dir0=new_dir0, dir1=new_dir1, substep=substep)
 
         def _skip_move(_):
             # Kein Logik-Tick: nur Blickrichtung aktualisiert zurückgeben
@@ -429,20 +432,10 @@ class JaxSurround(
 
         def _logic_move(_):
             # --- ab hier deine bisherige "Logik-Tick"-Berechnung ---
-            offsets = jnp.array(
-                [
-                    [0, 0],   # NOOP
-                    [0, -1],  # UP
-                    [1, 0],   # RIGHT
-                    [-1, 0],  # LEFT
-                    [0, 1],   # DOWN
-                ],
-                dtype=jnp.int32,
-            )
-
+            # Use _dir_offset which correctly maps Action constants to offsets
             # neue Positionen
-            offset_p0 = offsets[new_dir0]
-            offset_p1 = offsets[new_dir1]
+            offset_p0 = self._dir_offset(new_dir0)
+            offset_p1 = self._dir_offset(new_dir1)
             new_p0 = state.pos0 + offset_p0
             new_p1 = state.pos1 + offset_p1
 
@@ -499,7 +492,7 @@ class JaxSurround(
             time_exceeded = (state.time + 1) >= self.consts.MAX_STEPS
             round_over = jnp.logical_or(hit_p0, hit_p1)
 
-            next_state = state._replace(
+            next_state = state.replace(
                 pos0=new_p0,
                 pos1=new_p1,
                 dir0=new_dir0,
@@ -515,7 +508,7 @@ class JaxSurround(
 
             reward = self._get_reward(state, next_state)
             done = jnp.logical_or(game_over, time_exceeded)
-            next_state = next_state._replace(terminated=jnp.array(done, dtype=jnp.bool_))
+            next_state = next_state.replace(terminated=jnp.array(done, dtype=jnp.bool_))
 
             obs = self._get_observation(next_state)
             info = self._get_info(next_state)
@@ -528,16 +521,51 @@ class JaxSurround(
         return obs, next_state, reward, done, info
 
 
-
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: SurroundState) -> SurroundObservation:
+        c = self.consts
+        w, h = int(c.GRID_WIDTH), int(c.GRID_HEIGHT)
+        
         grid = state.trail
         grid = grid.at[tuple(state.pos0)].set(1)
         grid = grid.at[tuple(state.pos1)].set(2)
+
+        # Helper to map direction index (0..5) to orientation (degrees)
+        # NOOP=0, FIRE=1, UP=2, RIGHT=3, LEFT=4, DOWN=5 (Surround mapping is weird in _dir_offset logic)
+        # Looking at _dir_offset:
+        # 0: (0,0), 1: (0,0), 2: (0,-1) UP, 3: (1,0) RIGHT, 4: (-1,0) LEFT, 5: (0,1) DOWN
+        # So: 2->0.0, 3->90.0, 4->270.0, 5->180.0
+        def get_ori(d):
+            return jnp.select(
+                [d == 2, d == 3, d == 4, d == 5],
+                [0.0, 90.0, 270.0, 180.0],
+                0.0 # Default/NOOP
+            ).astype(jnp.float32)
+
+        p1 = ObjectObservation.create(
+            x=jnp.clip(state.pos0[0], 0, w),
+            y=jnp.clip(state.pos0[1], 0, h),
+            width=jnp.array(1, dtype=jnp.int32), # 1 cell
+            height=jnp.array(1, dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32),
+            visual_id=jnp.array(1, dtype=jnp.int32),
+            orientation=get_ori(state.dir0)
+        )
+        
+        p2 = ObjectObservation.create(
+            x=jnp.clip(state.pos1[0], 0, w),
+            y=jnp.clip(state.pos1[1], 0, h),
+            width=jnp.array(1, dtype=jnp.int32),
+            height=jnp.array(1, dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32),
+            visual_id=jnp.array(2, dtype=jnp.int32),
+            orientation=get_ori(state.dir1)
+        )
+
         return SurroundObservation(
             grid=grid,
-            pos0=state.pos0.astype(jnp.int32),
-            pos1=state.pos1.astype(jnp.int32),
+            player1=p1,
+            player2=p2,
             agent_id=jnp.array(0, dtype=jnp.int32),
         )
 
@@ -566,25 +594,22 @@ class JaxSurround(
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
-        # Prefer per-dimension bounds; fall back to scalar bounds if unsupported by spaces.Box
-        try:
-            pos_low = jnp.array([0, 0], dtype=jnp.int32)
-            pos_high = jnp.array([self.consts.GRID_WIDTH - 1, self.consts.GRID_HEIGHT - 1], dtype=jnp.int32)
-            pos_box0 = spaces.Box(low=pos_low, high=pos_high, shape=(2,), dtype=jnp.int32)
-            pos_box1 = spaces.Box(low=pos_low, high=pos_high, shape=(2,), dtype=jnp.int32)
-        except Exception:
-            pos_box0 = spaces.Box(0, self.consts.GRID_WIDTH, shape=(2,), dtype=jnp.int32)
-            pos_box1 = spaces.Box(0, self.consts.GRID_WIDTH, shape=(2,), dtype=jnp.int32)
-
+        c = self.consts
+        h = int(c.GRID_HEIGHT)
+        w = int(c.GRID_WIDTH)
+        screen_size = (h, w) # Logical grid size, not pixel size
+        
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        
         return spaces.Dict({
             "grid": spaces.Box(
                 low=0,
                 high=2,
-                shape=(self.consts.GRID_WIDTH, self.consts.GRID_HEIGHT),
+                shape=(w, h),
                 dtype=jnp.int32,
             ),
-            "pos0": pos_box0,
-            "pos1": pos_box1,
+            "player1": single_obj,
+            "player2": single_obj,
             "agent_id": spaces.Box(0, 1, shape=(), dtype=jnp.int32),
         })
 
@@ -599,19 +624,21 @@ class JaxSurround(
     def render(self, state: SurroundState) -> jnp.ndarray:
         return self.renderer.render(state)
 
-    def obs_to_flat_array(self, obs: SurroundObservation) -> jnp.ndarray:
-        flat = [obs.grid.reshape(-1), obs.pos0.reshape(-1), obs.pos1.reshape(-1), jnp.array([obs.agent_id], dtype=jnp.int32)]
-        return jnp.concatenate(flat).astype(jnp.int32)
-
 
 class SurroundRenderer(JAXGameRenderer):
-    def __init__(self, consts: Optional[SurroundConstants] = None):
-        super().__init__()
+    def __init__(self, consts: Optional[SurroundConstants] = None, config: render_utils.RendererConfig = None):
         self.consts = consts or SurroundConstants()
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.SCREEN_SIZE[1], self.consts.SCREEN_SIZE[0]),
-            channels=3,
-        )
+        super().__init__(self.consts)
+        
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.SCREEN_SIZE[1], self.consts.SCREEN_SIZE[0]),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         self.P1_HEAD_COLOR_TUPLE = (214, 214, 42)    # Yellow
@@ -634,13 +661,15 @@ class SurroundRenderer(JAXGameRenderer):
             'playfield': jnp.array(list(self.PLAYFIELD_COLOR_TUPLE) + [255], dtype=jnp.uint8).reshape(1, 1, 4),
         }
 
-        final_asset_config.append({'name': 'background', 'type': 'background', 'data': jnp.array([0, 0, 0, 255], dtype=jnp.uint8).reshape(1, 1, 4)})
+        # Create full-screen background using BACKGROUND_COLOR from constants
+        bg_color = jnp.array(list(self.consts.BACKGROUND_COLOR) + [255], dtype=jnp.uint8)
+        background_rgba = jnp.tile(bg_color.reshape(1, 1, 4), (self.consts.SCREEN_SIZE[1], self.consts.SCREEN_SIZE[0], 1))
+        final_asset_config.append({'name': 'background', 'type': 'background', 'data': background_rgba})
 
         for name, data in procedural_sprites.items():
             final_asset_config.append({'name': name, 'type': 'procedural', 'data': data})
 
-        module_dir = os.path.dirname(os.path.abspath(__file__))
-        digit_path = os.path.join(module_dir, "sprites/seaquest/digits/{}" + ".npy")
+        digit_path = os.path.join(render_utils.get_base_sprite_dir(), "seaquest/digits/{}" + ".npy")
         base_digits = self.jr.load_and_pad_digits(digit_path)
         scale = 2
         scaled_digits_list = [jnp.kron(d, jnp.ones((scale, scale, 1), dtype=jnp.uint8)) for d in base_digits]
