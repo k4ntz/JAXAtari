@@ -199,14 +199,44 @@ class EntityPosition(struct.PyTreeNode):
     width: jnp.ndarray
     height: jnp.ndarray
 
+class PlayerObs(struct.PyTreeNode):
+    x: jnp.ndarray
+    y: jnp.ndarray
+    z: jnp.ndarray
+    vel_x: jnp.ndarray
+    vel_y: jnp.ndarray
+    vel_z: jnp.ndarray
+
+class BallObs(struct.PyTreeNode):
+    x: jnp.ndarray
+    y: jnp.ndarray
+    vel_x: jnp.ndarray
+    vel_y: jnp.ndarray
+    target_x: jnp.ndarray
+    target_y: jnp.ndarray
+    landing_y: jnp.ndarray
+
 class DunkObservation(struct.PyTreeNode):
-    player_inside: EntityPosition
-    player_outside: EntityPosition
-    enemy_inside: EntityPosition
-    enemy_outside: EntityPosition
-    ball: EntityPosition
+    # Entities
+    player_inside: PlayerObs
+    player_outside: PlayerObs
+    enemy_inside: PlayerObs
+    enemy_outside: PlayerObs
+    ball: BallObs
+    
+    # Global Game State
     score_player: jnp.ndarray
     score_enemy: jnp.ndarray
+    game_mode: jnp.ndarray
+    chosen_offense: jnp.ndarray # 0-4
+    chosen_defense: jnp.ndarray # 0-4
+    controlled_player_id: jnp.ndarray
+    ball_holder: jnp.ndarray
+    
+    # Rule Flags & Timers
+    p1_inside_clearance: jnp.ndarray
+    p1_outside_clearance: jnp.ndarray
+    offense_cooldown: jnp.ndarray
 
 class DunkInfo(struct.PyTreeNode):
     time: jnp.ndarray
@@ -237,47 +267,44 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         return obs, state
 
     def _get_observation(self, state: DunkGameState) -> DunkObservation:
-        """Converts the environment state to an observation."""
-        player_in = EntityPosition(
-            x=jnp.array(state.player1_inside.x, dtype=jnp.int32),
-            y=jnp.array(state.player1_inside.y, dtype=jnp.int32),
-            width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),  
-            height=jnp.array(self.consts.PLAYER_HEIGHT, dtype=jnp.int32), 
-        )
-        player_out = EntityPosition(
-            x=jnp.array(state.player1_outside.x, dtype=jnp.int32),
-            y=jnp.array(state.player1_outside.y, dtype=jnp.int32),
-            width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),  
-            height=jnp.array(self.consts.PLAYER_HEIGHT, dtype=jnp.int32), 
-        )
-        enemy_in = EntityPosition(
-            x=jnp.array(state.player2_inside.x, dtype=jnp.int32),
-            y=jnp.array(state.player2_inside.y, dtype=jnp.int32),
-            width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),  
-            height=jnp.array(self.consts.PLAYER_HEIGHT, dtype=jnp.int32), 
-        )
-        enemy_out = EntityPosition(
-            x=jnp.array(state.player2_outside.x, dtype=jnp.int32),
-            y=jnp.array(state.player2_outside.y, dtype=jnp.int32),
-            width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),  
-            height=jnp.array(self.consts.PLAYER_HEIGHT, dtype=jnp.int32), 
-        )
-        ball = EntityPosition(
-            x=jnp.array(state.ball.x, dtype=jnp.int32),
-            y=jnp.array(state.ball.y, dtype=jnp.int32),
-            width=jnp.array(self.consts.BALL_SIZE[0], dtype=jnp.int32),
-            height=jnp.array(self.consts.BALL_SIZE[1], dtype=jnp.int32),
-        )
-        return DunkObservation(
-            player_inside=player_in,
-            player_outside=player_out,
-            enemy_inside=enemy_in,
-            enemy_outside=enemy_out,
-            ball=ball,
-            score_player=state.scores.player.astype(jnp.int32),
-            score_enemy=state.scores.enemy.astype(jnp.int32),
+        def make_player_obs(p):
+            return PlayerObs(
+                x=jnp.array(p.x, dtype=jnp.float32),
+                y=jnp.array(p.y, dtype=jnp.float32),
+                z=jnp.array(p.z, dtype=jnp.float32),
+                vel_x=jnp.array(p.vel_x, dtype=jnp.float32),
+                vel_y=jnp.array(p.vel_y, dtype=jnp.float32),
+                vel_z=jnp.array(p.vel_z, dtype=jnp.float32),
+            )
+
+        ball_obs = BallObs(
+            x=jnp.array(state.ball.x, dtype=jnp.float32),
+            y=jnp.array(state.ball.y, dtype=jnp.float32),
+            vel_x=jnp.array(state.ball.vel_x, dtype=jnp.float32),
+            vel_y=jnp.array(state.ball.vel_y, dtype=jnp.float32),
+            target_x=jnp.array(state.ball.target_x, dtype=jnp.float32),
+            target_y=jnp.array(state.ball.target_y, dtype=jnp.float32),
+            landing_y=jnp.array(state.ball.landing_y, dtype=jnp.float32),
         )
 
+        return DunkObservation(
+            player_inside=make_player_obs(state.player1_inside),
+            player_outside=make_player_obs(state.player1_outside),
+            enemy_inside=make_player_obs(state.player2_inside),
+            enemy_outside=make_player_obs(state.player2_outside),
+            ball=ball_obs,
+            score_player=jnp.array(state.scores.player, dtype=jnp.float32),
+            score_enemy=jnp.array(state.scores.enemy, dtype=jnp.float32),
+            game_mode=jnp.array(state.game_mode, dtype=jnp.int32),
+            chosen_offense=jnp.array(state.strategy.offense_step, dtype=jnp.float32),
+            chosen_defense=jnp.array(state.strategy.defense_pattern, dtype=jnp.float32),
+            controlled_player_id=jnp.array(state.controlled_player_id, dtype=jnp.int32),
+            ball_holder=jnp.array(state.ball.holder, dtype=jnp.int32),
+            p1_inside_clearance=jnp.array(state.player1_inside.clearance_needed, dtype=jnp.int32),
+            p1_outside_clearance=jnp.array(state.player1_outside.clearance_needed, dtype=jnp.int32),
+            offense_cooldown=jnp.array(state.timers.offense_cooldown, dtype=jnp.float32)
+        )
+    
     def action_space(self):
         """Returns the action space of the environment."""
         return spaces.Discrete(18)
