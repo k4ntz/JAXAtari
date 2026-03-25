@@ -406,13 +406,13 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         # Clearance Check: Check if player is "inside". If not, they have cleared the ball.
         # Inside Zone definition based on scoring logic:
-        # 1. Rectangular Zone: x=[25, 135], y <= 90
-        in_rect_zone = jnp.logical_and(jnp.logical_and((new_x >= 25), (new_x <= 135)), (new_y <= 90))
-        # 2. Elliptical Zone: Center(80, 80), Rx=55, Ry=45
+        # 1. Rectangular Zone: x=[25, 135], y <= 100
+        in_rect_zone = jnp.logical_and(jnp.logical_and((new_x >= 25), (new_x <= 135)), (new_y <= 100))
+        # 2. Elliptical Zone: Center(80, 100), Rx=55, Ry=42
         dx = new_x - 80.0
-        dy = new_y - 80.0
-        ellipse_val = (dx**2 / (55.0**2)) + (dy**2 / (45.0**2))
-        in_ellipse_zone = jnp.logical_and((ellipse_val <= 1.0), (new_y >= 80))
+        dy = new_y - 100.0
+        ellipse_val = (dx**2 / (55.0**2)) + (dy**2 / (42.0**2))
+        in_ellipse_zone = jnp.logical_and((ellipse_val <= 1.0), (new_y >= 100))
         
         is_inside = jnp.logical_or(in_rect_zone, in_ellipse_zone)
         is_outside = jnp.logical_not(is_inside)
@@ -1260,27 +1260,27 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
             # --- 2 vs 3 Point Logic ---
             # Based on the background generation script geometry:
-            # 1. Rectangular Zone: x=[25, 135], y <= 90
-            # 2. Elliptical Zone: Center(80, 80), Rx=55, Ry=45 (approx due to perspective)
+            # 1. Rectangular Zone: x=[25, 135], y <= 100
+            # 2. Elliptical Zone: Center(80, 100), Rx=55, Ry=42 (approx due to perspective)
             
             sx = s.ball.shooter_pos_x
             sy = s.ball.shooter_pos_y
 
             # Check 1: Rectangular Key Area
-            # The script draws vertical lines at x=25 and x=135 down to y=90
-            in_rect_zone = jnp.logical_and(jnp.logical_and((sx >= 25), (sx <= 135)), (sy <= 90))
+            # The script draws vertical lines at x=25 and x=135 down to y=100
+            in_rect_zone = jnp.logical_and(jnp.logical_and((sx >= 25), (sx <= 135)), (sy <= 100))
 
             # Check 2: Elliptical Top of Key
             # Equation: ((x-h)/rx)^2 + ((y-k)/ry)^2 <= 1
-            # Center (h,k) = (80, 80)
+            # Center (h,k) = (80, 100)
             dx = sx - 80.0
-            dy = sy - 80.0
+            dy = sy - 100.0
             
             # We use float division for the ellipse calculation
-            ellipse_val = (dx**2 / (55.0**2)) + (dy**2 / (45.0**2))
+            ellipse_val = (dx**2 / (55.0**2)) + (dy**2 / (42.0**2))
             
-            # We only care about the ellipse part that extends below the center (y >= 80)
-            in_ellipse_zone = jnp.logical_and((ellipse_val <= 1.0), (sy >= 80))
+            # We only care about the ellipse part that extends below the center (y >= 100)
+            in_ellipse_zone = jnp.logical_and((ellipse_val <= 1.0), (sy >= 100))
 
             # A shot is 2 points if it is in EITHER zone. Otherwise, it's a 3-pointer.
             is_2_point = jnp.logical_or(in_rect_zone, in_ellipse_zone)
