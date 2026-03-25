@@ -333,31 +333,14 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         return spaces.Box(low=0, high=255, shape=(self.consts.WINDOW_HEIGHT, self.consts.WINDOW_WIDTH, 3), dtype=jnp.uint8)
 
     def obs_to_flat_array(self, obs: DunkObservation) -> jnp.ndarray:
-        """Converts the observation to a flat array."""
         return jnp.concatenate([
-            obs.player_inside.x.reshape(-1),
-            obs.player_inside.y.reshape(-1),
-            obs.player_inside.width.reshape(-1),
-            obs.player_inside.height.reshape(-1),
-            obs.player_outside.x.reshape(-1),
-            obs.player_outside.y.reshape(-1),
-            obs.player_outside.width.reshape(-1),
-            obs.player_outside.height.reshape(-1),
-            obs.enemy_inside.x.reshape(-1),
-            obs.enemy_inside.y.reshape(-1),
-            obs.enemy_inside.width.reshape(-1),
-            obs.enemy_inside.height.reshape(-1),
-            obs.enemy_outside.x.reshape(-1),
-            obs.enemy_outside.y.reshape(-1),
-            obs.enemy_outside.width.reshape(-1),
-            obs.enemy_outside.height.reshape(-1),
-            obs.ball.x.reshape(-1),
-            obs.ball.y.reshape(-1),
-            obs.ball.width.reshape(-1),
-            obs.ball.height.reshape(-1),
-            obs.score_player.reshape(-1),
-            obs.score_enemy.reshape(-1),
-        ])
+                    jnp.array([obs.player_inside.x, obs.player_inside.y, obs.player_inside.z, obs.player_inside.vel_x, obs.player_inside.vel_y, obs.player_inside.vel_z]),
+                    jnp.array([obs.player_outside.x, obs.player_outside.y, obs.player_outside.z, obs.player_outside.vel_x, obs.player_outside.vel_y, obs.player_outside.vel_z]),
+                    jnp.array([obs.enemy_inside.x, obs.enemy_inside.y, obs.enemy_inside.z, obs.enemy_inside.vel_x, obs.enemy_inside.vel_y, obs.enemy_inside.vel_z]),
+                    jnp.array([obs.enemy_outside.x, obs.enemy_outside.y, obs.enemy_outside.z, obs.enemy_outside.vel_x, obs.enemy_outside.vel_y, obs.enemy_outside.vel_z]),
+                    jnp.array([obs.ball.x, obs.ball.y, obs.ball.vel_x, obs.ball.vel_y, obs.ball.target_x, obs.ball.target_y, obs.ball.landing_y]),
+                    jnp.array([obs.score_player, obs.score_enemy, obs.game_mode, obs.controlled_player_id, obs.ball_holder, obs.chosen_offense, obs.chosen_defense, obs.active_clearance, obs.offense_cooldown])
+                ]).astype(jnp.float32)
 
     def _init_state(self, key, holder=PlayerID.PLAYER1_OUTSIDE) -> DunkGameState:
         """Creates the very first state of the game."""
