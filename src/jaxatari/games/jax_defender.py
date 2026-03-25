@@ -1715,40 +1715,39 @@ class JaxDefender(
         return enemy_states_updated
 
     def _human_step(self, state: DefenderState) -> DefenderState:
-        # check if human is being carried by lander and update position accordingly
-        def update_human_position(human: chex.Array) -> chex.Array:
-            human_x = human[0]
-            human_y = human[1]
-            human_state = human[2]
+        # check if enemy lander is ascending with human, if so move human up with lander
+        def move_human_with_lift(state: DefenderState, human_state: chex.Array) -> chex.Array:
+            human_x = human_state[0]
+            human_y = human_state[1]
+            human_status = human_state[2]
 
-            def being_carried():
-                # Get lander that is carrying the human
-                def check_lander_carrying(h):
-                    return jnp.logical_and(
-                        h[3] == self.consts.LANDER_STATE_PICKUP,
-                        h[4] == human_state,  # lander counter is stored in arg2
-                    )
+            def check_lift(enemy_state: chex.Array) -> chex.Array:
+                enemy_x = enemy_state[0]
+                enemy_y = enemy_state[1]
+                enemy_type = enemy_state[2]
+                enemy_state_arg1 = enemy_state[3]
+                is_lifting = jnp.logical_and(
+                    jnp.logical_and(
+                        enemy_type == self.consts.LANDER,
+                        enemy_state_arg1 == self.consts.LANDER_STATE_ASCEND,
+                    ),
+                    jnp.abs(enemy_x - human_x) <=self.consts.LANDER_PICKUP_X_THRESHOLD * 3,
+                )
+                return is_lifting
 
-                lander_index = jnp.argmax(jax.vmap(check_lander_carrying)(state.enemy_states))
-                lander = state.enemy_states[lander_index]
-                lander_x = lander[0]
-                lander_y = lander[1]
+            lifting_checks = jax.vmap(check_lift)(state.enemy_states)
+            is_being_lifted = jnp.any(lifting_checks)
 
-                new_human_x = lander_x + 5
-                new_human_y = lander_y + 10
-
-                return jnp.array([new_human_x, new_human_y, human_state])
-
-            def not_being_carried():
-                return human
-
-            new_human = jax.lax.cond(
-                human_state >= 0, being_carried, not_being_carried
+            # If being lifted, move up with lander
+            human_y = jax.lax.cond(
+                is_being_lifted,
+                lambda: human_y - self.consts.LANDER_Y_SPEED * 5,
+                lambda: human_y,
             )
-            return new_human
-    
-        human_states_updated = jax.vmap(update_human_position)(state.human_states)
-        return human_states_updated
+
+            return jnp.array([human_x, human_y, human_status])
+        human_states_updated = jax.vmap(lambda human_state: move_human_with_lift(state, human_state))(state.human_states)
+        return human_states_updated            
 
     @partial(jax.jit, static_argnums=(0,))
     def step(
@@ -1780,7 +1779,7 @@ class JaxDefender(
 
             
 
-            # human_states = self._human_step(state)
+            human_states = self._human_step(state)
 
             state = self._camera_step(state)
             # state = self._enemy_step(state)
@@ -1809,8 +1808,8 @@ class JaxDefender(
                 shooting_cooldown=shooting_cooldown,
                 enemy_states=enemy_states,
                 score=score,
-                # human_states=human_states
-                        )
+                human_states=human_states
+            )
             
             return state
 
