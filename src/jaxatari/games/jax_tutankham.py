@@ -146,6 +146,16 @@ def can_walk_to(entity_size: jax.Array, new_x: jax.Array, new_y: jax.Array, old_
     player_y = jnp.clip(player_y, 0, valid_pos_mat.shape[0] - 1)
     return player_x, player_y, is_walkable
 
+def get_rotation(action):
+            """
+            Depending on FIRE Action direction returns:
+             1 for RIGHTFIRE
+            -1 for LEFTFIRE
+             0 default
+            """
+            return jnp.where(action == Action.RIGHTFIRE, 1,
+                jnp.where(action == Action.LEFTFIRE, -1, 0))
+
 
 
 
@@ -748,78 +758,35 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
     #Bullet Step
     @partial(jax.jit, static_argnums=(0,))
     def bullet_step(self, bullet_state, bullet_subpixel, player_x, player_y, ammunition_timer, action, level):
-        
-        
-        def get_rotation(action):
-            return jax.lax.cond(
-                action == Action.RIGHTFIRE,
-                lambda _: 1, # bullet travels right
-                lambda _: jax.lax.cond(
-                    action == Action.LEFTFIRE,
-                    lambda _: -1, # bullet travels left
-                    lambda _: 0, # default if firing up/down/etc
-                    operand=None
-                ),
-                operand=None
-            )
-
-        space = jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE)
-
-        new_bullet = bullet_state #array with (x, y, bullet_rotation, bullet_active, anim_counter)
+        # array with (x, y, bullet_rotation, bullet_active, anim_counter)
+        new_bullet = bullet_state
 
         # Update animation counter
         anim_counter = jnp.where(bullet_state[3] == 1, bullet_state[4] + 1, 0)
         new_bullet = new_bullet.at[4].set(anim_counter)
 
-
-        # --- update bullet x position if active (bullet only travels horizontal so no vertical movement) ---
+        # update bullet x position if active (bullet only travels horizontal so no vertical movement)
         actual_speed, new_subpixel = self.subpixel_accumulator(self.consts.BULLET_SPEED, bullet_subpixel)
-        # Only advance subpixel accumulator while bullet is active
-        new_subpixel = jnp.where(bullet_state[3] == 1, new_subpixel, bullet_subpixel)
-
-        bullet_x = jax.lax.cond(
-            bullet_state[3] == 1,  # if bullet is active
-            lambda x: x + actual_speed * bullet_state[2],
-            lambda x: x,
-            bullet_state[0],
-        )
+        new_subpixel = jnp.where(bullet_state[3] == 1, new_subpixel, bullet_subpixel) # Only advance subpixel accumulator while bullet is active
+        bullet_x = jnp.where(bullet_state[3] == 1, bullet_state[0] + actual_speed * bullet_state[2], bullet_state[0])
         new_bullet = new_bullet.at[0].set(bullet_x)
         
         # Deactivate if out of bounds or hits wall
-        bullet_y = bullet_state[1]
-        old_bullet_x = bullet_state[0]
-        
-        _, _, is_walkable = can_walk_to(self.consts.BULLET_SIZE, bullet_x, bullet_y, old_bullet_x, bullet_y, self.consts.VALID_POS_MAPS[level%4])        
-
+        _, _, is_walkable = can_walk_to(self.consts.BULLET_SIZE, bullet_x, bullet_state[1], bullet_state[0], bullet_state[1], self.consts.VALID_POS_MAPS[level%4])
         should_deactivate = jnp.logical_not(is_walkable)
+        new_bullet = jnp.where(should_deactivate, jnp.zeros((5,), dtype=new_bullet.dtype), new_bullet)
+        new_subpixel = jnp.where(should_deactivate, jnp.float32(0), new_subpixel) # Reset subpixel accumulator if bullet is deactivated
+ 
+        # check if all firing conditions are satisfied
+        valid_fire_action = jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE)
+        bullet_inactive = bullet_state[3] == 0
+        fired = valid_fire_action & bullet_inactive & (ammunition_timer > 0)
 
-        new_bullet = jax.lax.cond(
-            should_deactivate,
-            lambda _: jnp.zeros((5,), dtype=new_bullet.dtype),
-            lambda bullet: bullet,
-            operand=new_bullet
-        )
-        # Reset subpixel accumulator if bullet is deactivated
-        new_subpixel = jnp.where(should_deactivate, jnp.float32(0), new_subpixel)
+        # shoot bullet at player face position if fired, otherwise keep current state
+        new_bullet = jnp.where(fired, jnp.array([player_x+2, player_y+3, get_rotation(action), 1, 0], dtype=jnp.int32), new_bullet)
+        new_subpixel = jnp.where(fired, jnp.float32(0), new_subpixel) # Reset subpixel accumulator when a new bullet is fired
 
-
-
-        # --- firing logic ---
-        bullet_rdy = 1 - bullet_state[3]  # 1 if bullet inactive, 0 if active
-        fired = (space & bullet_rdy & (ammunition_timer > 0)) == 1
-
-        new_bullet = jax.lax.cond(
-            fired, # if firing action & bullet is inactive & ammunition available
-            lambda _: jnp.array([player_x+2, player_y+3, get_rotation(action), 1, 0], dtype=jnp.int32), # shoot bullet at player face position,
-            lambda bullet: bullet, # don't shoot bullet
-            operand=new_bullet
-        )
-        # Reset subpixel accumulator when a new bullet is fired
-        new_subpixel = jnp.where(fired, jnp.float32(0), new_subpixel)
-
-        ammunition_timer -= 1
-
-        return new_bullet, new_subpixel, ammunition_timer
+        return new_bullet, new_subpixel
 
     @partial(jax.jit, static_argnums=(0,))
     def laser_flash_step(self, creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action):
@@ -837,12 +804,9 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
         # active mask contains 1 for active creatures and 0 for inactive creatures, if firing set all to 0
         active_mask = creature_states[:, 3]
-        # if firing, set all active_mask values to 0, otherwise keep them as they are
-        new_active_mask = jnp.where(is_firing, 0, active_mask)
-        new_death_timer = jnp.where(is_firing, -1, creature_states[:, 5])
+        new_active_mask = jnp.where(is_firing, jnp.zeros_like(active_mask), active_mask)
 
         new_creature_states = creature_states.at[:, 3].set(new_active_mask)
-        new_creature_states = new_creature_states.at[:, 5].set(new_death_timer)
 
         return new_creature_states, new_laser_flash_cooldown, new_laser_flash_count, new_last_creature_spawn
 
@@ -1267,6 +1231,8 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
         # Global Step Counter (increment each step)
         step_counter = step_counter + 1
+        ammunition_timer = ammunition_timer - 1
+        
 
         # --- Player ---
         (player_x, player_y,
@@ -1278,7 +1244,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         )
 
         # --- Bullet & Ammo ---
-        bullet_state, bullet_subpixel, ammunition_timer = self.bullet_step(
+        bullet_state, bullet_subpixel = self.bullet_step(
             bullet_state, bullet_subpixel, player_x, player_y, ammunition_timer, action, level)
 
         # --- Creatures ---
