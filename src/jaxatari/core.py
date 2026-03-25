@@ -23,6 +23,7 @@ def _warn_deprecated_obs_to_flat_array(env: JaxEnvironment) -> None:
         )
 
 
+
 # Map of game names to their module paths
 GAME_MODULES = {
     "amidar": "jaxatari.games.jax_amidar",
@@ -96,10 +97,10 @@ def list_available_games() -> list[str]:
     return list(GAME_MODULES.keys())
 
 
-def make(game_name: str,
-         mode: int = 0,
+def make(game_name: str, 
+         mode: int = 0, 
          difficulty: int = 0,
-         mods_config: list = None,  # deprecated, output warning if its used
+         mods_config: list = None, # deprecated, output warning if its used
          mods: list = None,
          allow_conflicts: bool = False
          ) -> JaxEnvironment:
@@ -141,7 +142,7 @@ def make(game_name: str,
         raise NotImplementedError(
             f"The game '{game_name}' does not exist. Available games: {list_available_games()}"
         )
-
+    
     try:
         # 1. Load the base environment class
         module = importlib.import_module(GAME_MODULES[game_name])
