@@ -21,7 +21,7 @@ class HigherPlayerSpeedMod(JaxAtariInternalModPlugin):
 
 class MoreCollectiblesMod(JaxAtariInternalModPlugin):
     constants_overrides = {
-        "MAX_COLLECTIBLES": 4,
+        "MAX_ACTIVE_COLLECTIBLES": 4,
         "COLLECTIBLE_SPAWN_INTERVAL": 120,
     }
 

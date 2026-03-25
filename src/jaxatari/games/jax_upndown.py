@@ -104,7 +104,8 @@ class UpNDownConstants(struct.PyTreeNode):
     LIFE_BOTTOM_X_POSITIONS: chex.Array = struct.field(default_factory=lambda: jnp.array([13, 18, 25, 33, 33]))  # X positions for 5 life cars
     LIFE_BOTTOM_Y: int = 195
     # Collectible constants - unified dynamic spawning
-    MAX_COLLECTIBLES: int = 1  # Maximum collectibles that can exist at once (pool of mixed types)
+    MAX_COLLECTIBLES: int = 4  # Fixed collectible pool size used for observation/state schema stability
+    MAX_ACTIVE_COLLECTIBLES: int = 1  # Runtime cap of simultaneously active collectibles
     COLLECTIBLE_SPAWN_INTERVAL: int = 200  # Steps between spawn attempts
     COLLECTIBLE_DESPAWN_DISTANCE: int = 500  # Distance beyond which collectibles despawn
     # Collectible types (indices for type field)
@@ -239,6 +240,7 @@ class UpNDownObservation:
     jump_cooldown: chex.Array
     is_on_steep_road: chex.Array
     round_started: chex.Array
+    level: chex.Array
 
     def _replace(self, **kwargs):
         return self.replace(**kwargs)
@@ -277,17 +279,17 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         # Player car: 10 values (x, y, w, h, speed, type, road, road_index_A, road_index_B, direction_x)
         # Enemy cars: MAX_ENEMY_CARS * 12 = 8 * 12 = 96 (x, y, w, h, speed, type, road, road_index_A, road_index_B, direction_x, active, age)
         # Flags: NUM_FLAGS * 5 = 8 * 5 = 40 (y, road, segment, color, collected per flag)
-        # Collectibles: MAX_COLLECTIBLES * 6 = 1 * 6 = 6 (y, x, road, color_idx, type, active per collectible)
+        # Collectibles: MAX_COLLECTIBLES * 6 = 4 * 6 = 24 (y, x, road, color_idx, type, active per collectible)
         # Flags collected mask: NUM_FLAGS = 8
-        # Score, lives, is_jumping, jump_cooldown, is_on_steep_road, round_started: 6
-        # Total: 10 + 96 + 40 + 6 + 8 + 6 = 166
+        # Score, lives, is_jumping, jump_cooldown, is_on_steep_road, round_started, level: 7
+        # Total: 10 + 96 + 40 + 6 + 8 + 7 = 167
         self.obs_size = (
             10 +  # player car
             self.consts.MAX_ENEMY_CARS * 12 +  # enemy cars (all fields)
             self.consts.NUM_FLAGS * 5 +  # flags
             self.consts.MAX_COLLECTIBLES * 6 +  # collectibles (all fields)
             self.consts.NUM_FLAGS +  # flags_collected_mask
-            6  # score, lives, is_jumping, jump_cooldown, is_on_steep_road, round_started
+            7  # score, lives, is_jumping, jump_cooldown, is_on_steep_road, round_started, level
         )
         # Speed dividers for movement timing (indexed by speed level)
         self._speed_dividers = jnp.array([0, 1, 2, 4, 8, 16, 16, 16, 16])
@@ -993,8 +995,10 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             state.collectible_spawn_timer - 1,
         )
         
-        # Attempt to spawn when timer hits 0
+        # Attempt to spawn when timer hits 0 and active collectible cap allows it
         should_spawn = state.collectible_spawn_timer <= 0
+        active_collectible_count = jnp.sum(state.collectibles.active.astype(jnp.int32))
+        can_spawn_under_cap = active_collectible_count < self.consts.MAX_ACTIVE_COLLECTIBLES
         
         inactive_mask = ~state.collectibles.active
         first_inactive = jnp.argmax(inactive_mask.astype(jnp.int32))
@@ -1025,7 +1029,12 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         )
         
         # Create mask for which collectibles to update
-        update_mask = (jnp.arange(self.consts.MAX_COLLECTIBLES) == spawn_idx) & should_spawn & has_inactive_slot
+        update_mask = (
+            (jnp.arange(self.consts.MAX_COLLECTIBLES) == spawn_idx)
+            & should_spawn
+            & has_inactive_slot
+            & can_spawn_under_cap
+        )
         
         # Update collectibles with proper masking - spawn new items
         spawned_y = jnp.where(update_mask, y_spawn, state.collectibles.y)
@@ -2071,6 +2080,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             jump_cooldown=jnp.int32(state.jump_cooldown),
             is_on_steep_road=jnp.int32(is_on_steep_road),
             round_started=jnp.int32(state.round_started),
+            level=jnp.int32(state.level),
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -2140,7 +2150,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         - Flags: NUM_FLAGS * 5 values (y, road, segment, color, collected per flag)
         - Collectibles: MAX_COLLECTIBLES * 6 values (y, x, road, color_idx, type, active per collectible)
         - Flags collected mask: NUM_FLAGS values
-        - Score, lives, is_jumping, jump_cooldown, is_on_steep_road, round_started: 6 values
+        - Score, lives, is_jumping, jump_cooldown, is_on_steep_road, round_started, level: 7 values
         """
         return jnp.concatenate([
             self.flatten_car(obs.player_car),
@@ -2154,6 +2164,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             jnp.array([obs.jump_cooldown], dtype=jnp.int32),
             jnp.array([obs.is_on_steep_road], dtype=jnp.int32),
             jnp.array([obs.round_started], dtype=jnp.int32),
+            jnp.array([obs.level], dtype=jnp.int32),
         ])
 
     def action_space(self) -> spaces.Discrete:
@@ -2174,6 +2185,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         - jump_cooldown: int (0-48)
         - is_on_steep_road: int (0 or 1)
         - round_started: int (0 or 1)
+        - level: int (0-2)
         """
         return spaces.Dict({
             "player_car": spaces.Dict({
@@ -2228,6 +2240,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             "jump_cooldown": spaces.Box(low=0, high=48, shape=(), dtype=jnp.int32),
             "is_on_steep_road": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             "round_started": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            "level": spaces.Box(low=0, high=self.consts.LEVEL_COUNT - 1, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
