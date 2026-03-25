@@ -417,14 +417,13 @@ class SingleMode(JaxAtariPostStepModPlugin):
 
 class OneVsOneInternalMod(JaxAtariInternalModPlugin):
     """
-    Internal mod for 1v1 mode. Overrides passing logic to skip pass steps in strategies.
+    Internal mod for 1v1 mode. Overrides passing logic and fixes AI defense calculations.
     """
     
     @partial(jax.jit, static_argnums=(0,))
     def _handle_passing(self, state, actions):
         from jaxatari.games.jax_doubledunk import OffensiveAction
         
-        # Determine if the current step requires a pass
         current_step = state.strategy.offense_step
         pattern = state.strategy.offense_pattern
         is_pass_step = jnp.logical_and(
@@ -432,51 +431,70 @@ class OneVsOneInternalMod(JaxAtariInternalModPlugin):
             pattern[current_step] == OffensiveAction.PASS
         )
         
-        # In 1v1 mode, we completely disable actual passing because the teammate is missing.
-        # But if the strategy demands a pass, we just skip it (increment step).
-        step_increment = jax.lax.select(
-            is_pass_step, 
-            1, # Force increment to skip
-            0
+        # Skip the pass step
+        step_increment = jax.lax.select(is_pass_step, 1, 0)
+        return state.ball, step_increment, False
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _handle_player_actions(self, state, action, key):
+        from jaxatari.games.jax_doubledunk import PlayerID, DoubleDunk
+        from jaxatari.environment import JAXAtariAction as Action
+        
+        # 1. TRICK THE AI: Make the INSIDE ghosts mirror the OUTSIDE active players
+        fake_p1_in = state.player1_outside.replace(id=jnp.array(PlayerID.PLAYER1_INSIDE, dtype=jnp.int32))
+        fake_p2_in = state.player2_outside.replace(id=jnp.array(PlayerID.PLAYER2_INSIDE, dtype=jnp.int32))
+        
+        fake_state = state.replace(
+            player1_inside=fake_p1_in,
+            player2_inside=fake_p2_in
         )
         
-        # We return the unmodified ball state and say we did not pass
-        return state.ball, step_increment, False
+        # 2. Run the ORIGINAL AI logic from the base class, bypassing the mod completely
+        actions, new_key, new_timer, new_last_actions = DoubleDunk._handle_player_actions(self._env, fake_state, action, key)
+        
+        # 3. Extract the chosen actions
+        p1_in_act, p1_out_act, p2_in_act, p2_out_act = actions
+        
+        # 4. Force the INSIDE ghost players to NOOP and let the OUTSIDE active players move
+        final_actions = (Action.NOOP, p1_out_act, Action.NOOP, p2_out_act)
+        
+        return final_actions, new_key, new_timer, new_last_actions
 
 class OneVsOnePostMod(JaxAtariPostStepModPlugin):
     """
-    Post step mod for 1v1 mode. Keeps outside players off-screen and forces ball turnover if they somehow catch it.
+    Post step mod for 1v1 mode. Keeps INSIDE players off-screen.
+    Uses the shorter OUTSIDE Guards to fix the 5-pixel sprite rendering offset.
     """
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state, new_state):
         from jaxatari.games.jax_doubledunk import PlayerID
         
-        # Move outside players off-screen
-        p1_out = new_state.player1_outside.replace(x=-50, y=0, vel_x=0, vel_y=0, z=0, is_out_of_bounds=True)
-        p2_out = new_state.player2_outside.replace(x=-50, y=0, vel_x=0, vel_y=0, z=0, is_out_of_bounds=True)
+        # Move INSIDE players permanently off-screen
+        p1_in_ghost = new_state.player1_inside.replace(x=-50, y=0, vel_x=0, vel_y=0, z=0, is_out_of_bounds=True)
+        p2_in_ghost = new_state.player2_inside.replace(x=-50, y=0, vel_x=0, vel_y=0, z=0, is_out_of_bounds=True)
         
-        # Turn over the ball if an outside player somehow gets it
+        # Turn over the ball if an inside ghost somehow gets it (Safety check)
         holder = new_state.ball.holder
-        is_out_holding = jnp.logical_or(holder == PlayerID.PLAYER1_OUTSIDE, holder == PlayerID.PLAYER2_OUTSIDE)
+        is_in_holding = jnp.logical_or(holder == PlayerID.PLAYER1_INSIDE, holder == PlayerID.PLAYER2_INSIDE)
         
         new_ball = jax.lax.cond(
-            is_out_holding,
+            is_in_holding,
             lambda b: b.replace(holder=PlayerID.NONE, x=80.0, y=100.0, vel_x=0.0, vel_y=0.0),
             lambda b: b,
             new_state.ball
         )
         
-        # Ensure controlled player is always INSIDE
+        # Ensure human is always controlling the OUTSIDE player
         ctrl_id = new_state.controlled_player_id
         new_ctrl_id = jax.lax.select(
-            ctrl_id == PlayerID.PLAYER1_OUTSIDE,
-            PlayerID.PLAYER1_INSIDE,
+            ctrl_id == PlayerID.PLAYER1_INSIDE,
+            jnp.array(PlayerID.PLAYER1_OUTSIDE, dtype=jnp.int32),
             ctrl_id
         )
         
         return new_state.replace(
-            player1_outside=p1_out,
-            player2_outside=p2_out,
+            player1_inside=p1_in_ghost,
+            player2_inside=p2_in_ghost,
             ball=new_ball,
             controlled_player_id=new_ctrl_id
         )
