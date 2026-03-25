@@ -391,17 +391,20 @@ class SingleMode(JaxAtariPostStepModPlugin):
     """
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state, new_state):
-        # Move CPU opponents off-screen (well outside visible area 0-160, 0-210)
-        p2_in = new_state.player2_inside.replace(x=-50, y=-0, vel_x=0, vel_y=0, z=0, is_out_of_bounds=True)
+        from jaxatari.games.jax_doubledunk import PlayerID
+
+        # Move CPU opponents off-screen
+        p2_in = new_state.player2_inside.replace(x=-50, y=0, vel_x=0, vel_y=0, z=0, is_out_of_bounds=True)
         p2_out = new_state.player2_outside.replace(x=-50, y=0, vel_x=0, vel_y=0, z=0, is_out_of_bounds=True)
         
-        # Turn over the ball if an opponent somehow gets it
         holder = new_state.ball.holder
         is_p2_holding = jnp.logical_or(holder == PlayerID.PLAYER2_INSIDE, holder == PlayerID.PLAYER2_OUTSIDE)
         
+        # If the game tries to give the ball to P2 (e.g. after P1 scores), 
+        # instantly give it back to P1 Outside.
         new_ball = jax.lax.cond(
             is_p2_holding,
-            lambda b: b.replace(holder=PlayerID.NONE, x=80.0, y=100.0, vel_x=0.0, vel_y=0.0),
+            lambda b: b.replace(holder=PlayerID.PLAYER1_OUTSIDE),
             lambda b: b,
             new_state.ball
         )
