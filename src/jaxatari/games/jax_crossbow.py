@@ -41,7 +41,7 @@ def _get_default_asset_config() -> tuple:
         {'name': 'resting_rock', 'type': 'single', 'file': 'falling_rock.npy'},  # Use falling rock as the bridge,
         {'name': 'monkey', 'type': 'single', 'file': 'monkey.npy'},
         {'name': 'coconut', 'type': 'single', 'file': 'coconut.npy'},
-        {'name': 'voracious_plant', 'type': 'single', 'file': 'voracious_plant.npy'},
+        
         {'name': 'snake', 'type': 'group', 'files': [
             'snake_1.npy', 'snake_2.npy', 'snake_3.npy', 'snake_4.npy', 'snake_5.npy'
         ]},
@@ -72,6 +72,13 @@ def _get_default_asset_config() -> tuple:
         {'name': 'enemy', 'type': 'single', 'file': 'enemy.npy'},
         {'name': 'shot', 'type': 'single', 'file': 'shot.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'digits/digit_{}.npy'},
+        
+        {
+            'name':  'voracious_plant', 'type': 'group', 'files': [
+                'flower_1.npy', 'flower_2.npy', 'flower_3.npy', 'flower_4.npy',
+                'flower_5.npy', 'flower_6.npy', 'flower_7.npy', 'flower_8.npy'
+            ]   
+        },
     )
 
 
@@ -1153,6 +1160,8 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
     def _jungle_map_logic(self, state: CrossbowState) -> Tuple[CrossbowState, bool]:
         rng, spawn_key, scatter_key, eye_key, coconut_key, k_type, k_x, k_coconut_dx = jax.random.split(state.key, 8)
         HIT_TOLERANCE = 8
+        PLANT_LIFESPAN = 150
+        ROPE_X_POSITIONS = jnp.array([50.0, 90.0, 120.0])
 
         cx, cy = state.cursor_x, state.cursor_y
         ex, ey = state.enemies_x, state.enemies_y
@@ -1173,19 +1182,17 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         is_monkey = state.enemies_type == EnemyType.MONKEY
         is_plant = state.enemies_type == EnemyType.VORACIOUS_PLANT
         
-        is_static = state.enemies_type == EnemyType.EYE
+        is_static = jnp.logical_or( is_plant,state.enemies_type == EnemyType.EYE )
         
-        
-        
-
         # Coconuts fall with gravity
         gravity = 0.10
-        new_dy = jnp.where(is_coconut, state.enemies_dy + gravity,jnp.where(is_plant, -0.3,state.enemies_dy))
+        new_dy = jnp.where(is_coconut, state.enemies_dy + gravity, state.enemies_dy)
+        
 
         # Monkeys bounce horizontally
         monkey_dy = jnp.where(
-            state.enemies_y < 30, jnp.abs(state.enemies_dy),
-            jnp.where(state.enemies_y > 80, -jnp.abs(state.enemies_dy),
+            state.enemies_y < 30, jnp.abs(state.enemies_dy)  ,
+            jnp.where(state.enemies_y > 80, -jnp.abs(state.enemies_dy)  ,
             state.enemies_dy)
         )
         new_dy = jnp.where(is_monkey, monkey_dy, new_dy)
@@ -1193,8 +1200,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         new_dx = jnp.where(is_monkey, 0.0, state.enemies_dx)
         
         new_x = jnp.where(is_static, state.enemies_x, state.enemies_x + new_dx)
-        new_y = jnp.where(is_static, state.enemies_y, state.enemies_y + new_dy)
-        
+        new_y = jnp.where(is_static, state.enemies_y, state.enemies_y + new_dy)        
 
         # --- Monkey throws coconut ---
         throw_rolls = jax.random.uniform(coconut_key, (self.consts.MAX_ENEMIES,))
@@ -1235,19 +1241,19 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
                            jnp.logical_and(spawn_chance, allowed_spawns))
         should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(eye_spawn_mask))
         should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(coconut_spawn_mask))
-
-        # Use separate keys for type and position
+        
         type_roll = jax.random.uniform(k_type, (self.consts.MAX_ENEMIES,))
         spawn_type_generic = jnp.where(type_roll < 0.5, EnemyType.MONKEY, EnemyType.VORACIOUS_PLANT)
+        
+        # Moneky spawn at rope positon 
+        rope_choice = jax.random.randint(k_x , (self.consts.MAX_ENEMIES,), 0, 3)
+        spawn_x_monkey = ROPE_X_POSITIONS[rope_choice]
+        
+        # Plants spawn at random x positions at ground level
+        spawn_x_plant = jax.random.randint(  k_x, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH - 20 ).astype(jnp.float32)
 
-        spawn_x_generic = jax.random.randint(
-            k_x, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH - 20
-        ).astype(jnp.float32)
-        spawn_y_generic = jnp.where(
-            spawn_type_generic == EnemyType.MONKEY,
-            60.0,
-            float(self.consts.GROUND_Y_MIN)
-        )
+        spawn_x_generic = jnp.where(spawn_type_generic == EnemyType.MONKEY, spawn_x_monkey,spawn_x_plant )
+        spawn_y_generic = jnp.where(spawn_type_generic == EnemyType.MONKEY,60.0,float(self.consts.GROUND_Y_MIN))
 
         # Monkeys start with horizontal velocity, plants stay static
         spawn_dy_generic = jnp.where(
@@ -1305,9 +1311,9 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         )
         
         #Cull plants that rise too high
-        plant_exited = jnp.logical_and(final_type == EnemyType.VORACIOUS_PLANT, final_y < 10)
+        plant_expired = jnp.logical_and( final_type == EnemyType.VORACIOUS_PLANT, jnp.where(should_spawn_final, 0, state.enemies_age + 1) >= PLANT_LIFESPAN )
         
-        final_active = jnp.logical_and(jnp.logical_or(surviving_enemies, should_spawn_final),jnp.logical_and(jnp.logical_not(coconut_exited),jnp.logical_not(plant_exited)))
+        final_active = jnp.logical_and(jnp.logical_or(surviving_enemies, should_spawn_final),jnp.logical_and(jnp.logical_not(coconut_exited),jnp.logical_not(plant_expired)))
         
 
         new_age = jnp.where(should_spawn_final, 0, state.enemies_age + 1)
@@ -1531,7 +1537,7 @@ class CrossbowRenderer(JAXGameRenderer):
             pad_to_target(self.SHAPE_MASKS["resting_rock"]),    # 7: RESTING_ROCK
             pad_to_target(self.SHAPE_MASKS["monkey"]),          # 8: MONKEY
             pad_to_target(self.SHAPE_MASKS["coconut"]),         # 9: COCONUT
-            pad_to_target(self.SHAPE_MASKS["voracious_plant"]), # 10: VORACIOUS_PLANT
+            pad_to_target(self.SHAPE_MASKS["voracious_plant"][0]), # 10: VORACIOUS_PLANT
             pad_to_target(self.SHAPE_MASKS["archer"]),          # 11: ARCHER
             pad_to_target(self.SHAPE_MASKS["arrow"]),           # 12: ARROW (fallback)
             pad_to_target(self.SHAPE_MASKS["castle_arrow"]),    # 13: CASTLE_ARROW
@@ -1556,6 +1562,7 @@ class CrossbowRenderer(JAXGameRenderer):
 
         self.bat_anim_masks = jnp.stack([pad_to_target(self.SHAPE_MASKS["bat"][j]) for j in range(5)])
         self.stalactite_masks = jnp.stack([pad_to_target(self.SHAPE_MASKS["stalactite"][j]) for j in range(2)])
+        self.plant_anim_masks = jnp.stack([pad_to_target(self.SHAPE_MASKS["voracious_plant"][j]) for j in range(8)]) 
 
         ink_color = jnp.min(self.SHAPE_MASKS["arrow"])
         base_right = jnp.full((target_h, target_w), 255, dtype=jnp.uint8)
@@ -1654,6 +1661,10 @@ class CrossbowRenderer(JAXGameRenderer):
             bat_mask = self.bat_anim_masks[bat_idx]
             stal_mask = self.stalactite_masks[stal_idx]
             arrow_mask = self.arrow_sprites[final_arrow_idx]
+            
+            plant_frame_idx = jnp.minimum(age // 10, 7) # 8 frames of growth every 10 seconds
+            plant_mask = self.plant_anim_masks[plant_frame_idx]
+            
 
             # Pick the mask
             m = jax.lax.switch(enemy_type, [
@@ -1667,7 +1678,7 @@ class CrossbowRenderer(JAXGameRenderer):
                 lambda: self.harmonized_enemy_masks[7],  # 7: RESTING_ROCK
                 lambda: self.harmonized_enemy_masks[8],  # 8: MONKEY
                 lambda: self.harmonized_enemy_masks[9],  # 9: COCONUT
-                lambda: self.harmonized_enemy_masks[10], # 10: VORACIOUS_PLANT
+                lambda: plant_mask, # 10: VORACIOUS_PLANT
                 lambda: snake_mask,                      # 11: SNAKE (animated)
                 lambda: self.harmonized_enemy_masks[11], # 12: ARCHER
                 lambda: arrow_mask,                      # 13: ARROW
