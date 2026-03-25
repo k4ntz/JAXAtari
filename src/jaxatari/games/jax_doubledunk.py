@@ -310,23 +310,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         return spaces.Discrete(18)
     
     def observation_space(self):
-        """Returns the observation space of the environment."""
-        field=spaces.Dict({
-                "x": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=200, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=240, shape=(), dtype=jnp.int32),
-            })
-            
-        return spaces.Dict({
-            "player_inside": field,
-            "player_outside": field,
-            "enemy_inside": field,
-            "enemy_outside": field,
-            "ball": field,
-            "score_player": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
-            "score_enemy": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
-        })
+            return spaces.Box(low=-255.0, high=255.0, shape=(41,), dtype=jnp.float32)
     
     def image_space(self) -> spaces.Box:
         """Returns the image space of the environment."""
@@ -339,7 +323,13 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
                     jnp.array([obs.enemy_inside.x, obs.enemy_inside.y, obs.enemy_inside.z, obs.enemy_inside.vel_x, obs.enemy_inside.vel_y, obs.enemy_inside.vel_z]),
                     jnp.array([obs.enemy_outside.x, obs.enemy_outside.y, obs.enemy_outside.z, obs.enemy_outside.vel_x, obs.enemy_outside.vel_y, obs.enemy_outside.vel_z]),
                     jnp.array([obs.ball.x, obs.ball.y, obs.ball.vel_x, obs.ball.vel_y, obs.ball.target_x, obs.ball.target_y, obs.ball.landing_y]),
-                    jnp.array([obs.score_player, obs.score_enemy, obs.game_mode, obs.controlled_player_id, obs.ball_holder, obs.chosen_offense, obs.chosen_defense, obs.active_clearance, obs.offense_cooldown])
+                    jnp.array([
+                        obs.score_player, obs.score_enemy, obs.game_mode, 
+                        obs.chosen_offense, obs.chosen_defense,
+                        obs.controlled_player_id, obs.ball_holder, 
+                        obs.p1_inside_clearance, obs.p1_outside_clearance, # Both flags are now properly included
+                        obs.offense_cooldown
+                    ])
                 ]).astype(jnp.float32)
 
     def _init_state(self, key, holder=PlayerID.PLAYER1_OUTSIDE) -> DunkGameState:
