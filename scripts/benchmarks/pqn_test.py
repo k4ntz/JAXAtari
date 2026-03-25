@@ -140,7 +140,9 @@ def make_test(config, save_params, batch_stats):
     env = jaxatari.make(config["ENV_NAME"].lower())
     mod_env = env
     if config.get("MOD_NAME", None) is not None:
-        mod_env = jaxatari.modify(env, config.get("ENV_NAME", None).lower(), config.get("MOD_NAME", None).lower())
+        mods = config["MOD_NAME"]
+        mods_config = mods if isinstance(mods, list) else [mods]
+        mod_env = jaxatari.make(config["ENV_NAME"].lower(), mods_config=mods_config)
     renderer = jaxatari.make_renderer(config["ENV_NAME"].lower())
 
     def apply_wrappers(env):
