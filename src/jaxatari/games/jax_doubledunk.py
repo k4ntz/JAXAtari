@@ -237,6 +237,7 @@ class DunkObservation(struct.PyTreeNode):
     p1_inside_clearance: jnp.ndarray
     p1_outside_clearance: jnp.ndarray
     offense_cooldown: jnp.ndarray
+    dummy_padding: jnp.ndarray
 
 class DunkInfo(struct.PyTreeNode):
     time: jnp.ndarray
@@ -302,7 +303,8 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             ball_holder=jnp.array(state.ball.holder, dtype=jnp.int32),
             p1_inside_clearance=jnp.array(state.player1_inside.clearance_needed, dtype=jnp.int32),
             p1_outside_clearance=jnp.array(state.player1_outside.clearance_needed, dtype=jnp.int32),
-            offense_cooldown=jnp.array(state.timers.offense_cooldown, dtype=jnp.float32)
+            offense_cooldown=jnp.array(state.timers.offense_cooldown, dtype=jnp.float32),
+	    dummy_padding=jnp.zeros(7, dtype=jnp.float32)
         )
     
     def action_space(self):
@@ -310,14 +312,34 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         return spaces.Discrete(18)
     
     def observation_space(self):
-            return spaces.Box(low=-255.0, high=255.0, shape=(41,), dtype=jnp.float32)
+	    # Player bounds: [x, y, z, vel_x, vel_y, vel_z]
+        p_low = [-50.0, -50.0, 0.0, -10.0, -10.0, -10.0]
+        p_high = [255.0, 255.0, 50.0, 10.0, 10.0, 10.0]
+        
+        # Ball bounds: [x, y, vel_x, vel_y, target_x, target_y, landing_y]
+        b_low = [-50.0, -50.0, -20.0, -20.0, -50.0, -50.0, -50.0]
+        b_high = [255.0, 255.0, 20.0, 20.0, 255.0, 255.0, 255.0]
+        
+        # Global bounds: [score_p, score_e, mode, off, def, ctrl, holder, clr_in, clr_out, cooldown]
+        g_low = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        g_high = [99.0, 99.0, 5.0, 5.0, 5.0, 5.0, 5.0, 1.0, 1.0, 60.0]
+        
+        # Padding bounds (7 dummy zeros)
+        pad_low = [0.0] * 7
+        pad_high = [1.0] * 7
+        
+        # Assemble the full 48-length arrays
+        low = jnp.array(p_low * 4 + b_low + g_low + pad_low, dtype=jnp.float32)
+        high = jnp.array(p_high * 4 + b_high + g_high + pad_high, dtype=jnp.float32)
+        
+        return spaces.Box(low=low, high=high, shape=(48,), dtype=jnp.float32)
     
     def image_space(self) -> spaces.Box:
         """Returns the image space of the environment."""
         return spaces.Box(low=0, high=255, shape=(self.consts.WINDOW_HEIGHT, self.consts.WINDOW_WIDTH, 3), dtype=jnp.uint8)
 
     def obs_to_flat_array(self, obs: DunkObservation) -> jnp.ndarray:
-        return jnp.concatenate([
+        actual_features = jnp.concatenate([
                     jnp.array([obs.player_inside.x, obs.player_inside.y, obs.player_inside.z, obs.player_inside.vel_x, obs.player_inside.vel_y, obs.player_inside.vel_z]),
                     jnp.array([obs.player_outside.x, obs.player_outside.y, obs.player_outside.z, obs.player_outside.vel_x, obs.player_outside.vel_y, obs.player_outside.vel_z]),
                     jnp.array([obs.enemy_inside.x, obs.enemy_inside.y, obs.enemy_inside.z, obs.enemy_inside.vel_x, obs.enemy_inside.vel_y, obs.enemy_inside.vel_z]),
@@ -331,6 +353,11 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
                         obs.offense_cooldown
                     ])
                 ]).astype(jnp.float32)
+	
+	    # Pad with 7 zeros to reach exactly 48 features
+        padding = jnp.zeros(7, dtype=jnp.float32)
+        
+        return jnp.concatenate([actual_features, padding]).astype(jnp.float32)
 
     def _init_state(self, key, holder=PlayerID.PLAYER1_OUTSIDE) -> DunkGameState:
         """Creates the very first state of the game."""
