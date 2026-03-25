@@ -10,11 +10,10 @@ from typing import Tuple
 
 class TimerMod(JaxAtariInternalModPlugin):
     """
-    Ends the game after 1 minute (3600 frames at 60fps)
+    Ends the game after 3600 frames
     instead of the default score limit (24).
     """
     def _get_done(self, state: DunkGameState) -> bool:
-        # 1 minute = 60 seconds * 60 frames = 3600 frames
         return state.step_counter >= 3600
 
 class SuperDunkMod(JaxAtariPostStepModPlugin):

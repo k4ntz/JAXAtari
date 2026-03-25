@@ -2,7 +2,6 @@ from jax import numpy as jnp
 import jax
 from typing import Tuple, NamedTuple
 import jax.lax
-import jax.debug
 import jax.random as random
 import chex
 from jaxatari.renderers import JAXGameRenderer
@@ -574,7 +573,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
     def _handle_player_actions(self, state: DunkGameState, action: int, key: chex.PRNGKey) -> Tuple[Tuple[int, ...], chex.PRNGKey, chex.Array, chex.Array]:
         """Determines the action for each player based on control state and AI."""
         
-        def get_move_to_target(current_x, current_y, target_x, target_y, threshold=10):
+        def get_move_to_target(current_x, current_y, target_x, target_y, threshold=5):
             dx = target_x - current_x
             dy = target_y - current_y
             
