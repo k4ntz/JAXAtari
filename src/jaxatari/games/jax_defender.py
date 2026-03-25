@@ -1716,37 +1716,32 @@ class JaxDefender(
 
     def _human_step(self, state: DefenderState) -> DefenderState:
         # check if enemy lander is ascending with human, if so move human up with lander
-        def move_human_with_lift(state: DefenderState, human_state: chex.Array) -> chex.Array:
+        def move_human_with_lift(human_index: chex.Array, human_state: chex.Array) -> chex.Array:
             human_x = human_state[0]
             human_y = human_state[1]
             human_status = human_state[2]
 
-            def check_lift(enemy_state: chex.Array) -> chex.Array:
-                enemy_x = enemy_state[0]
-                enemy_y = enemy_state[1]
-                enemy_type = enemy_state[2]
-                enemy_state_arg1 = enemy_state[3]
-                is_lifting = jnp.logical_and(
-                    jnp.logical_and(
-                        enemy_type == self.consts.LANDER,
-                        enemy_state_arg1 == self.consts.LANDER_STATE_ASCEND,
-                    ),
-                    jnp.abs(enemy_x - human_x) <=self.consts.LANDER_PICKUP_X_THRESHOLD * 3,
-                )
-                return is_lifting
+            enemy_y = state.enemy_states[:, 1]
+            enemy_type = state.enemy_states[:, 2]
+            enemy_state_arg1 = state.enemy_states[:, 3]
+            enemy_state_arg2 = state.enemy_states[:, 4]
 
-            lifting_checks = jax.vmap(check_lift)(state.enemy_states)
-            is_being_lifted = jnp.any(lifting_checks)
-
-            # If being lifted, move up with lander
-            human_y = jax.lax.cond(
-                is_being_lifted,
-                lambda: human_y - self.consts.LANDER_Y_SPEED * 5,
-                lambda: human_y,
+            is_lifting = jnp.logical_and(
+                jnp.logical_and(
+                    enemy_type == self.consts.LANDER,
+                    enemy_state_arg1 == self.consts.LANDER_STATE_ASCEND,
+                ),
+                enemy_state_arg2 == human_index,
             )
 
+            lift_idx = jnp.argmax(is_lifting.astype(jnp.int32))
+            lifted_y = enemy_y[lift_idx]
+            human_y = jnp.where(jnp.any(is_lifting), lifted_y + 5, human_y)
+
             return jnp.array([human_x, human_y, human_status])
-        human_states_updated = jax.vmap(lambda human_state: move_human_with_lift(state, human_state))(state.human_states)
+        human_states_updated = jax.vmap(move_human_with_lift)(
+            jnp.arange(self.consts.HUMAN_MAX_AMOUNT), state.human_states
+        )
         return human_states_updated            
 
     @partial(jax.jit, static_argnums=(0,))
