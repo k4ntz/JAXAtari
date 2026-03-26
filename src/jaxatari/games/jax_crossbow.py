@@ -16,69 +16,80 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 # --- ASSETS ---
 def _get_default_asset_config() -> tuple:
     return (
+        # GENERIC ASSETS
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-        {'name': 'backgrounds', 'type': 'group',
-         'files': [
-             'backgrounds/start_screen.npy',
-             'backgrounds/get_ready.npy',
-             'backgrounds/desert_map.npy',
-             'backgrounds/cave_map.npy',
-             'backgrounds/forest_map.npy',
-             'backgrounds/map_4.npy',
-             'backgrounds/castle_hall_map.npy',
-             'backgrounds/map_6.npy'
-         ]},
-        {'name': 'friend', 'type': 'group',
-         'files': ['friend/friend_walking_1.npy',
-                   'friend/friend_walking_2.npy',
-                   'friend/friend_walking_3.npy']},
-        {'name': 'scorpion', 'type': 'single', 'file': 'scorpion.npy'},
-        {'name': 'ant', 'type': 'single', 'file': 'ant.npy'},
-        {'name': 'vulture', 'type': 'single', 'file': 'vulture.npy'},
-        {'name': 'spawn', 'type': 'single', 'file': 'spawn.npy'},
-        {'name': 'lava_rock', 'type': 'single', 'file': 'lava_rock.npy'},
-        {'name': 'falling_rock', 'type': 'single', 'file': 'falling_rock.npy'},
-        {'name': 'resting_rock', 'type': 'single', 'file': 'falling_rock.npy'},  # Use falling rock as the bridge,
-        {'name': 'monkey', 'type': 'single', 'file': 'monkey.npy'},
-        {'name': 'coconut', 'type': 'single', 'file': 'coconut.npy'},
-        
-        {'name': 'snake', 'type': 'group', 'files': [
-            'snake_1.npy', 'snake_2.npy', 'snake_3.npy', 'snake_4.npy', 'snake_5.npy'
+        {'name': 'backgrounds', 'type': 'group', 'files': [
+            'backgrounds/start_screen.npy',
+            'backgrounds/get_ready.npy',
+            'backgrounds/desert_map.npy',
+            'backgrounds/cave_map.npy',
+            'backgrounds/forest_map.npy',
+            'backgrounds/map_4.npy',
+            'backgrounds/castle_hall_map.npy',
+            'backgrounds/map_6.npy'
         ]},
-        {'name': 'eye', 'type': 'group', 'files': [
-            'eye_1.npy', 'eye_2.npy', 'eye_3.npy', 'eye_4.npy', 'eye_5.npy'
+        {'name': 'friend', 'type': 'group', 'files': [
+            'friend/friend_walking_1.npy', 'friend/friend_walking_2.npy', 'friend/friend_walking_3.npy'
         ]},
-        {
-            'name': 'bat', 'type': 'group',
-            'files': [
-                'enemies/cavern/bat/bat_spawning_1.npy',
-                'enemies/cavern/bat/bat_spawning_2.npy',
-                'enemies/cavern/bat/bat_spawning_3.npy',
-                'enemies/cavern/bat/bat_flying_1.npy',
-                'enemies/cavern/bat/bat_flying_2.npy'
-            ]
-        },
-        {
-            'name': 'stalactite', 'type': 'group',
-            'files': [
-                'enemies/cavern/stalactite/stalactite_falling.npy',
-                'enemies/cavern/stalactite/stalactite_hanging.npy'
-            ]
-        },
-        {'name': 'castle_arrow', 'type': 'single', 'file': 'enemies/castle_hall/arrow.npy'},
-        {'name': 'archer', 'type': 'single', 'file': 'archer.npy'},
-        {'name': 'arrow', 'type': 'single', 'file': 'arrow.npy'},
         {'name': 'cursor', 'type': 'single', 'file': 'cursor.npy'},
         {'name': 'enemy', 'type': 'single', 'file': 'enemy.npy'},
         {'name': 'shot', 'type': 'single', 'file': 'shot.npy'},
+        {'name': 'spawn', 'type': 'single', 'file': 'spawn.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'digits/digit_{}.npy'},
+        {'name': 'eye', 'type': 'group', 'files': [
+            'eye/eye_1.npy', 'eye/eye_2.npy', 'eye/eye_3.npy', 'eye/eye_4.npy', 'eye/eye_5.npy'
+        ]},
+
+        # DESERT MAP ASSETS
+        {'name': 'snake', 'type': 'group', 'files': [
+            'enemies/desert/snake/snake_1.npy',
+            'enemies/desert/snake/snake_2.npy',
+            'enemies/desert/snake/snake_3.npy',
+            'enemies/desert/snake/snake_4.npy',
+            'enemies/desert/snake/snake_5.npy'
+        ]},
+        {'name': 'vulture', 'type': 'single', 'file': 'enemies/desert/vulture.npy'},
+        {'name': 'scorpion', 'type': 'single', 'file': 'enemies/desert/scorpion.npy'},
+        {'name': 'ant', 'type': 'single', 'file': 'enemies/desert/ant.npy'},
+
+        # CAVERN MAP ASSETS
+        {'name': 'bat', 'type': 'group', 'files': [
+            'enemies/cavern/bat/bat_spawning_1.npy',
+            'enemies/cavern/bat/bat_spawning_2.npy',
+            'enemies/cavern/bat/bat_spawning_3.npy',
+            'enemies/cavern/bat/bat_flying_1.npy',
+            'enemies/cavern/bat/bat_flying_2.npy'
+        ]},
+        {'name': 'stalactite', 'type': 'group', 'files': [
+            'enemies/cavern/stalactite/stalactite_falling.npy',
+            'enemies/cavern/stalactite/stalactite_hanging.npy'
+        ]},
+
+        # VOLCANO MAP ASSETS
+        {'name': 'lava_rock', 'type': 'single', 'file': 'enemies/volcano/lava_rock.npy'},
+        {'name': 'falling_rock', 'type': 'single', 'file': 'enemies/volcano/falling_rock.npy'},
+        {'name': 'resting_rock', 'type': 'single', 'file': 'enemies/volcano/falling_rock.npy'},  # Use falling rock as the bridge
         
-        {
-            'name':  'voracious_plant', 'type': 'group', 'files': [
-                'flower_1.npy', 'flower_2.npy', 'flower_3.npy', 'flower_4.npy',
-                'flower_5.npy', 'flower_6.npy', 'flower_7.npy', 'flower_8.npy'
-            ]   
-        },
+        # JUNGLE MAP ASSETS
+        {'name': 'monkey', 'type': 'single', 'file': 'enemies/jungle/monkey.npy'},
+        {'name': 'coconut', 'type': 'single', 'file': 'enemies/jungle/coconut.npy'},
+        {'name': 'voracious_plant', 'type': 'group', 'files': [
+            'enemies/jungle/flower/flower_1.npy',
+            'enemies/jungle/flower/flower_2.npy',
+            'enemies/jungle/flower/flower_3.npy',
+            'enemies/jungle/flower/flower_4.npy',
+            'enemies/jungle/flower/flower_5.npy',
+            'enemies/jungle/flower/flower_6.npy',
+            'enemies/jungle/flower/flower_7.npy',
+            'enemies/jungle/flower/flower_8.npy'
+        ]},
+
+        # DRAWBRIDGE ASSETS
+        {'name': 'archer', 'type': 'single', 'file': 'enemies/drawbridge/archer.npy'},
+        {'name': 'arrow', 'type': 'single', 'file': 'enemies/drawbridge/arrow.npy'},
+
+        # CASTLE HALL ASSETS
+        {'name': 'castle_arrow', 'type': 'single', 'file': 'enemies/castle_hall/arrow.npy'}
     )
 
 
