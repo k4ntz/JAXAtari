@@ -1716,7 +1716,11 @@ class JaxDefender(
                 self.consts.BOMBER_LEVEL_AMOUNT[state.level],
             ]
         )
-        jax.debug.print("Enemy killed: {enemy_killed}, Needed kills: {needed_kills}", enemy_killed=enemy_killed, needed_kills=needed_kills)
+        jax.debug.print(
+            "Enemy killed: {enemy_killed}, Needed kills: {needed_kills}",
+            enemy_killed=enemy_killed,
+            needed_kills=needed_kills,
+        )
         is_done = jnp.array_equal(enemy_killed, needed_kills)
         state = jax.lax.cond(is_done, lambda: self._end_level(state), lambda: state)
         return state
@@ -1742,10 +1746,12 @@ class JaxDefender(
 
         enemy_diff = jnp.clip(enemy_diff, 0, None)
 
-        enemy_killed = jnp.array([enemy_diff[1], enemy_diff[2], enemy_diff[3]])  # Only count lander, pod and bomber kills for level completion
+        enemy_killed = jnp.array(
+            [enemy_diff[1], enemy_diff[2], enemy_diff[3]]
+        )  # Only count lander, pod and bomber kills for level completion
 
         score = jnp.sum(enemy_diff * score_multiplier)
-        
+
         return score, enemy_killed
 
     def _get_enemy(self, state: DefenderState, index):
@@ -1890,7 +1896,8 @@ class JaxDefender(
             num_landers_alive = jnp.sum(state.enemy_states[:, 2] == self.consts.LANDER)
 
             lander_enemy = jax.lax.cond(
-                state.enemy_killed[0] + num_landers_alive < self.consts.LANDER_LEVEL_AMOUNT[state.level] ,
+                state.enemy_killed[0] + num_landers_alive
+                < self.consts.LANDER_LEVEL_AMOUNT[state.level],
                 lambda: lander_enemy,
                 lambda: jnp.array([0.0, 0.0, self.consts.INACTIVE, 0.0, 0.0]),
             )
@@ -2488,6 +2495,10 @@ class JaxDefender(
                 game_over, self.consts.GAME_STATE_GAMEOVER, self.consts.GAME_STATE_PLAYING
             )
 
+            space_ship_lives = jnp.where(
+                game_over, state.space_ship_lives - 1, state.space_ship_lives
+            )
+
             state = self._camera_step(state)
 
             state = state._replace(
@@ -2495,6 +2506,7 @@ class JaxDefender(
                 space_ship_x=space_ship_x,
                 space_ship_y=space_ship_y,
                 space_ship_speed=space_ship_speed,
+                space_ship_lives=space_ship_lives,
                 space_ship_facing_right=space_ship_facing_right,
                 shooting_cooldown=shooting_cooldown,
                 enemy_states=enemy_states,
@@ -2511,7 +2523,7 @@ class JaxDefender(
                 bullet_dir_y=bullet_dir_y,
                 bullet_ttl=bullet_ttl,
                 bullet_active=bullet_active,
-                enemy_killed=jnp.add(state.enemy_killed, enemy_killed)
+                enemy_killed=jnp.add(state.enemy_killed, enemy_killed),
             )
 
             return state
@@ -2629,7 +2641,9 @@ class JaxDefender(
             human_states,
         )
 
-        return state._replace(human_states=human_states, enemy_killed=jnp.zeros(3).astype(jnp.int32))
+        return state._replace(
+            human_states=human_states, enemy_killed=jnp.zeros(3).astype(jnp.int32)
+        )
 
     def reset(self, key=None) -> Tuple[DefenderObservation, DefenderState]:
         key = jax.lax.cond(key == None, lambda: jax.random.PRNGKey(0), lambda: key)
