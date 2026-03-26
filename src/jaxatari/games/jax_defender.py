@@ -1493,10 +1493,15 @@ class JaxDefender(
         return state
 
     def _calculate_score(self, state: DefenderState, enemy_state: chex.Array):
-        old_enemy_counts = jnp.bincount(state.enemy_states[:, 3].astype(jnp.int32), length=8)
-        new_enemy_counts = jnp.bincount(enemy_state[:, 3].astype(jnp.int32), length=8)
+        old_enemy_counts = jnp.bincount(state.enemy_states[:, 2].astype(jnp.int32), length=8)
+        new_enemy_counts = jnp.bincount(enemy_state[:, 2].astype(jnp.int32), length=8)
 
         enemy_diff = old_enemy_counts - new_enemy_counts
+
+        jax.debug.print("Enemy diff: {}", enemy_diff)
+        jax.debug.print("Old enemy counts: {}", old_enemy_counts)
+        jax.debug.print("New enemy counts: {}", new_enemy_counts)
+        jax.debug.print("Enemy states: {}", enemy_state[:, 2])
         score_multiplier = jnp.array(
             [
                 0,
@@ -1510,7 +1515,9 @@ class JaxDefender(
             ]
         )
 
-        score = sum(enemy_diff * score_multiplier)
+        enemy_diff = jnp.clip(enemy_diff, 0, None)
+
+        score = jnp.sum(enemy_diff * score_multiplier)
         return score
 
     def _get_enemy(self, state: DefenderState, index):
@@ -2087,23 +2094,18 @@ class JaxDefender(
                     lambda: jnp.array([human_x, human_y, self.consts.HUMAN_STATE_FALLING, lander_idx]),
                 )
             
-            def is_lander_still_lifting(enemy_type):
+            def is_lander_still_lifting(enemy_type, enemy_state):
                 return jax.lax.cond(
                     enemy_type == self.consts.LANDER,
-                    lambda: jnp.array([human_x, enemy_y + 5, self.consts.HUMAN_STATE_ABDUCTED, lander_idx]),
+                    lambda: jax.lax.cond(
+                        enemy_state == self.consts.LANDER_STATE_ASCEND,
+                        lambda: jnp.array([human_x, enemy_y + 5, self.consts.HUMAN_STATE_ABDUCTED, lander_idx]),
+                        lambda: jnp.array([human_x, human_y, self.consts.INACTIVE, 0]),
+                    ),
                     lambda: _get_falling(human_y),
                 )
-            
-            new_human_state = is_lander_still_lifting(enemy_type)
-
-            return jax.lax.cond(
-                jnp.logical_and(
-                    enemy_type == self.consts.LANDER,
-                    state.enemy_states[lander_idx, 3] == self.consts.LANDER_STATE_ASCEND
-                ),
-                lambda: new_human_state,
-                lambda: jnp.array([human_x, human_y, self.consts.INACTIVE, 0]),
-            )
+            enemy_state = state.enemy_states[lander_idx, 3]
+            return is_lander_still_lifting(enemy_type, enemy_state)
 
 
         def _human_step_falling(human_state: chex.Array) -> chex.Array:
@@ -2231,7 +2233,7 @@ class JaxDefender(
                 ),
                 lambda: state,
             )
-
+            jax.debug.print("score: {score}", score=score)
             state = state._replace(
                 space_ship_x=space_ship_x,
                 space_ship_y=space_ship_y,
@@ -2239,7 +2241,7 @@ class JaxDefender(
                 space_ship_facing_right=space_ship_facing_right,
                 shooting_cooldown=shooting_cooldown,
                 enemy_states=enemy_states,
-                score=score,
+                score=state.score + score,
                 human_states=human_states,
             )
 
