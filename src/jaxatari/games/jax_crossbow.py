@@ -1229,9 +1229,9 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
 
     def _jungle_map_logic(self, state: CrossbowState) -> Tuple[CrossbowState, bool]:
-        rng, spawn_key, scatter_key, eye_key, coconut_key, k_type, k_x, k_coconut_dx = jax.random.split(state.key, 8)
+        rng, spawn_key, scatter_key, eye_key, coconut_key, k_type, k_x, k_coconut_dx, k_plant_retry = jax.random.split(state.key, 9)
         HIT_TOLERANCE = 8
-        PLANT_LIFESPAN = 150
+        PLANT_LIFESPAN = 250
         ROPE_X_POSITIONS = jnp.array([50.0, 90.0, 120.0])
 
         cx, cy = state.cursor_x, state.cursor_y
@@ -1245,7 +1245,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
         surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
 
-        point_values = jnp.array([0, 0, 0, 0, 0, 0, 0, 0, 100, 50, 200, 0, 0, 0, 0, 0, 0, 0, 0, 1000])
+        point_values = jnp.array([0, 0, 0, 0, 0, 0, 0, 0, 100, 100, 50, 0, 0, 0, 0, 0, 0, 0, 0, 1000])
         reward = jnp.sum(jnp.where(valid_kill, point_values[state.enemies_type], 0))
 
         # --- Movement ---
@@ -1320,8 +1320,18 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         rope_choice = jax.random.randint(k_x , (self.consts.MAX_ENEMIES,), 0, 3)
         spawn_x_monkey = ROPE_X_POSITIONS[rope_choice]
         
-        # Plants spawn at random x positions at ground level
+        # Plants spawn at random x positions at ground level (with safe distance from friend)
+        PLANT_SAFE_DISTANCE = 30
         spawn_x_plant = jax.random.randint(  k_x, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH - 20 ).astype(jnp.float32)
+        plant_too_close = jnp.abs(spawn_x_plant - state.friend_x) < PLANT_SAFE_DISTANCE
+        # Retry with a second random guess
+        spawn_x_plant_retry = jax.random.randint(k_plant_retry, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH - 20).astype(jnp.float32)
+        spawn_x_plant = jnp.where(plant_too_close, spawn_x_plant_retry, spawn_x_plant)
+        # If still too close, use deterministic safe position
+        still_too_close = jnp.abs(spawn_x_plant - state.friend_x) < PLANT_SAFE_DISTANCE
+        safe_x = state.friend_x + PLANT_SAFE_DISTANCE
+        spawn_x_plant = jnp.where(still_too_close, safe_x, spawn_x_plant)
+        spawn_x_plant = jnp.clip(spawn_x_plant, 20, self.consts.WIDTH - 20)
 
         spawn_x_generic = jnp.where(spawn_type_generic == EnemyType.MONKEY, spawn_x_monkey,spawn_x_plant )
         spawn_y_generic = jnp.where(spawn_type_generic == EnemyType.MONKEY,60.0,float(self.consts.GROUND_Y_MIN))
