@@ -181,6 +181,8 @@ class CrossbowConstants(NamedTuple):
     # --- Level-specific Tuning ---
     # Desert
     DESERT_SPAWN_PROB: float = 0.03
+    DESERT_MAX_ENEMIES: int = 4
+    DESERT_KILLING_FRAMES: int = 75
     # Cavern
     CAVERN_MAX_BATS: int = 1
     CAVERN_MAX_STALACTITES: int = 2
@@ -440,10 +442,11 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
     def _friend_step(self, state: CrossbowState) -> CrossbowState:
         is_dying = state.dying_timer > 0
+        fx, fy = state.friend_x, state.friend_y
 
+        # --- Cavern: bat freeze check ---
         is_bat = state.enemies_type == EnemyType.BAT
         is_bat_attacking = jnp.logical_and(is_bat, jnp.logical_or(state.enemies_dx != 0, state.enemies_dy != 0))
-        fx, fy = state.friend_x, state.friend_y
         bat_on_x = jnp.logical_and(
             state.enemies_x < fx + self.consts.FRIEND_SIZE[0],
             state.enemies_x + self.consts.BAT_DIMENSIONS[0] > fx
@@ -457,7 +460,32 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             jnp.logical_and(is_bat_attacking, state.enemies_active)
         ))
 
-        should_move = jnp.logical_and(state.step_counter % 8 == 0, jnp.logical_not(bat_on_friend))
+        # --- Desert: non-snake enemy freeze check ---
+        is_desert_enemy = jnp.logical_or(
+            state.enemies_type == EnemyType.SCORPION,
+            jnp.logical_or(state.enemies_type == EnemyType.ANT,
+                           state.enemies_type == EnemyType.VULTURE)
+        )
+        desert_on_x = jnp.logical_and(
+            state.enemies_x < fx + self.consts.FRIEND_SIZE[0],
+            state.enemies_x + self.consts.ENEMY_SIZE[0] > fx
+        )
+        desert_on_y = jnp.logical_and(
+            state.enemies_y < fy + self.consts.FRIEND_SIZE[1] + 10,
+            state.enemies_y + self.consts.ENEMY_SIZE[1] > fy - 5
+        )
+        desert_enemy_on_friend = jnp.any(jnp.logical_and(
+            jnp.logical_and(desert_on_x, desert_on_y),
+            jnp.logical_and(is_desert_enemy, state.enemies_active)
+        ))
+        # Only apply desert freeze when on desert map
+        desert_freeze = jnp.logical_and(
+            state.game_phase == GamePhase.DESERT_MAP,
+            desert_enemy_on_friend
+        )
+
+        should_freeze = jnp.logical_or(bat_on_friend, desert_freeze)
+        should_move = jnp.logical_and(state.step_counter % 8 == 0, jnp.logical_not(should_freeze))
         new_x = state.friend_x + jnp.where(should_move & state.friend_active, 1, 0)
         reached_goal = new_x > self.consts.WIDTH
         final_x = jnp.where(is_dying, state.friend_x, jnp.where(reached_goal, 0, new_x))
@@ -754,27 +782,61 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         valid_kill = jnp.logical_and(state.is_firing, jnp.logical_and(state.enemies_active, is_hit))
         surviving_enemies = jnp.logical_and(state.enemies_active, jnp.logical_not(valid_kill))
 
-        point_values = jnp.array([0, 50, 50, 100, 200, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 1000])
+        point_values = jnp.array([0, 50, 50, 100, 200, 0, 0, 0, 0, 0, 0, 200, 0, 0, 0, 0, 0, 0, 0, 1000])
         reward = jnp.sum(jnp.where(valid_kill, point_values[state.enemies_type], 0))
 
         move_freq = jnp.select([state.enemies_type == EnemyType.ANT], [2], default=3)
         should_move = (state.step_counter % move_freq) == 0
+        is_dying = state.dying_timer > 0
 
         is_snake = state.enemies_type == EnemyType.SNAKE
         is_vulture = state.enemies_type == EnemyType.VULTURE
         is_eye = state.enemies_type == EnemyType.EYE
+
+        # --- Freeze-on-friend detection for non-snake enemies ---
+        is_non_snake_ground = jnp.logical_or(
+            state.enemies_type == EnemyType.SCORPION,
+            jnp.logical_or(state.enemies_type == EnemyType.ANT,
+                           state.enemies_type == EnemyType.VULTURE)
+        )
+        fx, fy = state.friend_x, state.friend_y
+        enemy_on_x = jnp.logical_and(
+            state.enemies_x < fx + self.consts.FRIEND_SIZE[0],
+            state.enemies_x + self.consts.ENEMY_SIZE[0] > fx
+        )
+        enemy_on_y = jnp.logical_and(
+            state.enemies_y < fy + self.consts.FRIEND_SIZE[1] + 10,
+            state.enemies_y + self.consts.ENEMY_SIZE[1] > fy - 5
+        )
+        enemy_on_friend = jnp.logical_and(
+            jnp.logical_and(enemy_on_x, enemy_on_y),
+            jnp.logical_and(is_non_snake_ground, state.enemies_active)
+        )
+
+        # Freeze movement for enemies that are on the friend
         move_x = jnp.where(jnp.logical_or(is_snake, is_eye), 0.0, jnp.where(should_move, -1.0, 0.0))
+        move_x = jnp.where(enemy_on_friend, 0.0, move_x)
         move_y = jnp.where(jnp.logical_and(is_vulture, should_move), 1.0, 0.0)
+        move_y = jnp.where(enemy_on_friend, 0.0, move_y)
 
         new_x = state.enemies_x + move_x
         new_y = state.enemies_y + move_y
 
+        # --- Increment timer for enemies on friend, reset for others ---
+        new_timer = jnp.where(enemy_on_friend, state.enemies_timer + 1, state.enemies_timer)
+        new_timer = jnp.where(jnp.logical_not(state.enemies_active), 0, new_timer)
+
+        # --- Spawning with max 4 enemy cap ---
         available_slots = jnp.logical_not(surviving_enemies)
         should_spawn_eye, eye_x, eye_y = self._compute_eye_spawn(state, eye_key, (20.0, 140.0), (20.0, 70.0))
         eye_spawn_mask = self._get_eye_spawn_mask(available_slots, should_spawn_eye)
         has_eye_spawn = jnp.any(eye_spawn_mask)
+
+        current_enemy_count = jnp.sum(surviving_enemies)
         spawn_chance = jax.random.uniform(spawn_key, shape=(self.consts.MAX_ENEMIES,)) < self.consts.DESERT_SPAWN_PROB
-        should_spawn_generic = jnp.logical_and(available_slots, spawn_chance)
+        spawn_count = jnp.cumsum(spawn_chance & available_slots)
+        allowed_spawns = spawn_count <= (self.consts.DESERT_MAX_ENEMIES - current_enemy_count)
+        should_spawn_generic = jnp.logical_and(available_slots, jnp.logical_and(spawn_chance, allowed_spawns))
         should_spawn_generic = jnp.logical_and(should_spawn_generic, jnp.logical_not(eye_spawn_mask))
 
         should_spawn_final = jnp.logical_or(should_spawn_generic, eye_spawn_mask)
@@ -803,6 +865,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
         final_x = jnp.where(should_spawn_final, spawn_x_final, new_x)
         final_y = jnp.where(should_spawn_final, spawn_y_final, new_y)
+        final_timer = jnp.where(should_spawn_final, 0, new_timer)
 
         new_age = jnp.where(should_spawn_final, 0, state.enemies_age + 1)
 
@@ -815,11 +878,29 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         final_active = jnp.logical_and(is_active_candidate, jnp.logical_and(not_off_screen, jnp.logical_not(snake_expired)))
         final_active = self._cull_expired_eyes(final_types, new_age, final_active)
 
-        fx, fy = state.friend_x, state.friend_y
+        # --- Collision: snake = instant kill, others = freeze-then-kill ---
         danger_x = jnp.logical_and(final_x < fx + self.consts.FRIEND_SIZE[0], final_x + self.consts.ENEMY_SIZE[0] > fx)
         danger_y = jnp.logical_and(final_y < fy + self.consts.FRIEND_SIZE[1] + 10, final_y + self.consts.ENEMY_SIZE[1] > fy - 5)
-        friend_hit = jnp.any(jnp.logical_and(jnp.logical_and(danger_x, danger_y), final_active))
-        any_friend_hit = jnp.logical_and(friend_hit, state.dying_timer == 0)
+        enemy_touching = jnp.logical_and(jnp.logical_and(danger_x, danger_y), final_active)
+
+        # Snake: instant kill on contact
+        snake_hit = jnp.any(jnp.logical_and(enemy_touching, is_snake))
+
+        # Non-snake: kill only after timer expires
+        is_non_snake_final = jnp.logical_or(
+            final_types == EnemyType.SCORPION,
+            jnp.logical_or(final_types == EnemyType.ANT,
+                           final_types == EnemyType.VULTURE)
+        )
+        non_snake_kills = jnp.any(jnp.logical_and(
+            jnp.logical_and(enemy_touching, is_non_snake_final),
+            final_timer >= self.consts.DESERT_KILLING_FRAMES
+        ))
+
+        any_friend_hit = jnp.logical_and(
+            jnp.logical_or(snake_hit, non_snake_kills),
+            jnp.logical_not(is_dying)
+        )
 
         intermediate_state = state._replace(
             score=(state.score + reward).astype(jnp.int32),
@@ -827,6 +908,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             enemies_x=final_x.astype(jnp.float32),
             enemies_y=final_y.astype(jnp.float32),
             enemies_type=final_types.astype(jnp.int32),
+            enemies_timer=final_timer.astype(jnp.int32),
             enemies_age=new_age.astype(jnp.int32),
             key=rng,
             eye_appeared=jnp.logical_or(state.eye_appeared, has_eye_spawn)
