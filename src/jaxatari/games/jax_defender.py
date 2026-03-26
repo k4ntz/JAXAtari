@@ -2229,7 +2229,6 @@ class JaxDefender(
                 ),
                 lambda: state,
             )
-            jax.debug.print("score: {score}", score=score)
             state = state._replace(
                 space_ship_x=space_ship_x,
                 space_ship_y=space_ship_y,
