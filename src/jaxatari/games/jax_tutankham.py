@@ -469,6 +469,9 @@ class TutankhamConstants(struct.PyTreeNode):
         0.00008, 0.00008, 0.00008, 0.00008,
     ], dtype=jnp.float32))
 
+    # Maximum creature spawing chance
+    MAX_SPAWN_CHANCE: float = struct.field(pytree_node=False, default=0.8)
+
     # Speed multiplier per level, shape (16,)
     LEVEL_CREATURE_SPEED_MULTIPLIERS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         1.0, 1.0, 1.0, 1.0,
@@ -758,6 +761,11 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
     #Bullet Step
     @partial(jax.jit, static_argnums=(0,))
     def bullet_step(self, bullet_state, bullet_subpixel, player_x, player_y, ammunition_timer, action, level):
+        """
+        On LEFTFIRE/RIGHTFIRE: fires new bullet, if no active bullet and ammunition_timer > 0
+        Moves the active bullet
+        Deactivates it on wall collision
+        """
         # array with (x, y, bullet_rotation, bullet_active, anim_counter)
         new_bullet = bullet_state
 
@@ -790,6 +798,12 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
     @partial(jax.jit, static_argnums=(0,))
     def laser_flash_step(self, creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action):
+        """On UPFIRE: 
+        deactivates all creatures, 
+        decrements flash count, 
+        resets the cooldown 
+        resets creature spawn timer
+        """
 
         # decrease cooldown timer in every step
         laser_flash_cooldown = jnp.maximum(laser_flash_cooldown - 1, 0)
@@ -829,8 +843,15 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
     @partial(jax.jit, static_argnums=(0,))
     def move_creature(self, creature, creature_subpixel, rng_key, camera_offset, level, player_x, player_y):
+        """
+        Moves creature if active.
+        Generates random movement for a creature
+        If player is nearby, the creature begins to chase the player
+        Deactivates a creature if offscreen.
+        """
         creature_x, creature_y, creature_type, active, direction, death_timer = creature
 
+        #index = direction value (0=none, 1=down, 2=up, -1=right, -2=left)
         lookup_x = self.consts.DIR_LOOKUP_X
         lookup_y = self.consts.DIR_LOOKUP_Y
 
@@ -882,7 +903,9 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
     # creature step
     @partial(jax.jit, static_argnums=(0,))
     def creature_step(self, creature_states, creature_subpixels, rng_key, player_x, player_y ,camera_offset, level):
-
+        """
+        Applies creature movement with vmap to all creatures.
+        """
         # apply move_creature to all creatures
         keys = jax.random.split(rng_key, self.consts.MAX_CREATURES + 1)
         rng_key, creature_keys = keys[0], keys[1:]
@@ -894,52 +917,53 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
     # creature spawner step
     @partial(jax.jit, static_argnums=(0,))
     def spawner_step(self, creature_states, last_creature_spawn, level, rng_key, camera_offset, laser_flash_cooldown):
-        spawners = self.consts.MAP_SPAWNER_POSITIONS[level%4] # (n, 2) array with (x, y) positions of the n spawners for current level
-        growth = self.consts.LEVEL_SPAWN_RATES[level]
-        MAX_PROB = 0.8
+        """
+        Determines if a new creature should spawn.
+        Spawn chance increases over time. Creatures cannot spawn during laser_flash.
+        Creatures can only spawn on onscreen spawners.
+        Randomly chooses between the three possible creature types for each map.
+        """
+        # (n, 2) array with (x, y) positions of the n spawners for current level
+        spawners = self.consts.MAP_SPAWNER_POSITIONS[level%4]
+        # Split key: one for the spawning probability roll, one for the creature type roll
+        rng_key, key_roll, key_type, key_spawner = jax.random.split(rng_key, 4)
 
-        # Only increment timer if less than MAX_CREATURES are currently active and laser flash cooldown is 0
-        active_count = jnp.sum(creature_states[:, 3] == self.consts.ACTIVE)
-        new_last_creature_spawn = jnp.where((active_count < 2) & (laser_flash_cooldown == 0), last_creature_spawn + 1, last_creature_spawn)
-
-        # deactivate spawners at at (0, 0) which are only used as padding
+        # Only onscreen spawners are active 
+        # Spawners at (0, 0) are used as padding for maps with fewer spawners and are always deactivated
         valid_spawner_mask = (spawners[:, 0] != 0) | (spawners[:, 1] != 0)
-        # check which spawners are on screen
         on_screen_mask = jax.vmap(is_onscreen, in_axes=(0, None, None))(spawners[:, 1], 1, camera_offset)
-
-        # combine masks to get active spawners
         active_spawner_mask = on_screen_mask & valid_spawner_mask
         any_on_screen = jnp.any(active_spawner_mask)
 
+        # Only increment timer if less than MAX_CREATURES are currently active and laser flash cooldown is 0
         # Spawn chance grows linearly with time, capped at MAX_PROB
-        spawn_chance = jnp.clip(new_last_creature_spawn * growth, 0.0, MAX_PROB)
-
-        # Split key: one for the probability roll, one for the creature type
-        rng_key, key_roll, key_type, key_spawner = jax.random.split(rng_key, 4)
+        active_count = jnp.sum(creature_states[:, 3] == self.consts.ACTIVE)
+        new_last_creature_spawn = jnp.where((active_count < self.consts.MAX_CREATURES) & (laser_flash_cooldown == 0), last_creature_spawn + 1, last_creature_spawn)
+        spawn_chance = jnp.clip(new_last_creature_spawn * self.consts.LEVEL_SPAWN_RATES[level], 0.0, self.consts.MAX_SPAWN_CHANCE)
         roll = jax.random.uniform(key_roll)
         should_spawn = roll < spawn_chance
-
-        p_weights = active_spawner_mask.astype(jnp.float32)
-        selected_spawner_idx = jax.random.choice(key_spawner, spawners.shape[0], p=p_weights)
-        chosen_pos = spawners[selected_spawner_idx]
-
 
         # Only spawn if there is a free slot in creature_states
         inactive_mask = creature_states[:, 3] == self.consts.INACTIVE
         has_free_slot = jnp.any(inactive_mask)
         first_free_slot = jnp.argmax(inactive_mask)  # index of first inactive creature
 
+        # Determine if all spawn conditions are met
+        do_spawn = should_spawn & has_free_slot & any_on_screen & (laser_flash_cooldown == 0)
+
+        # If multiple spawners active, choose randomly where to spawn creature
+        p_weights = active_spawner_mask.astype(jnp.float32)
+        selected_spawner_idx = jax.random.choice(key_spawner, spawners.shape[0], p=p_weights)
+        chosen_pos = spawners[selected_spawner_idx]
+
         # Select creature type based on current map
         type_idx = jax.random.randint(key_type, shape=(), minval=0, maxval=self.consts.MAP_CREATURES.shape[1])
         new_type = self.consts.MAP_CREATURES[level%4, type_idx]
 
-        do_spawn = should_spawn & has_free_slot & any_on_screen & (laser_flash_cooldown == 0)
-
-        # Construct the new creature with chosen spawner coordinates
-        # direction: -1 for RIGHT, -2 for LEFT
-        # Spawners on the right (x > 80) should move LEFT, spawners on the left move RIGHT
-        direction = jnp.where(chosen_pos[0] > 80, -2, -1)
+        # Spawned creatures on the right (x > 80) should move LEFT, creatures on the left move RIGHT
+        direction = jnp.where(chosen_pos[0] > 80, -2, -1) # direction: -1 for RIGHT, -2 for LEFT
         
+        # Construct the new creature with chosen spawner coordinates, type and direction
         new_creature = jnp.array([
             chosen_pos[0],      # X from selected spawner
             chosen_pos[1],      # Y from selected spawner
@@ -949,11 +973,11 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
             -1                  # death_timer initialized to -1
         ], dtype=jnp.int32)
 
-        # if do spawn is true, insert new creature at first free slot, otherwise keep creature states unchanged
+        # If do_spawn is true, insert new creature at first free slot, otherwise keep creature states unchanged
         new_row = jnp.where(do_spawn, new_creature, creature_states[first_free_slot])
         new_creature_states = creature_states.at[first_free_slot].set(new_row)
 
-        # Reset timer on spawn
+        # Reset timer on spawn to lower spawning rate after a fresh spawn
         final_last_creature_spawn = jnp.where(do_spawn, jnp.int32(0), new_last_creature_spawn)
 
         return new_creature_states, final_last_creature_spawn, rng_key
