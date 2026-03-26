@@ -53,7 +53,10 @@ class Montezuma2Renderer(JAXGameRenderer):
                 'name': 'skull', 'type': 'group',
                 'files': [f'enemies/skull_cycle/skull_{i}.npy' for i in range(1, 17)]
             },
-                        {
+            {
+                'name': 'spider', 'type': 'single', 'file': 'enemies/spidder.npy', 'transpose': False
+            },
+            {
                 'name': 'item', 'type': 'group',
                 'files': [
                     'items/key.npy',
@@ -230,11 +233,19 @@ class Montezuma2Renderer(JAXGameRenderer):
         # Draw Enemies
         def render_enemy(i, raster):
             anim_idx = jax.lax.select(state.enemies_bouncing[i] == 1, 0, jnp.mod(state.enemies_x[i], 16))
-            mask = self.SHAPE_MASKS["skull"][anim_idx]
             bounce_offset = jax.lax.select(state.enemies_bouncing[i] == 1, self.consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 4, 22)], 0)
+            
+            def _render_active(r):
+                return jax.lax.cond(
+                    state.enemies_type[i] == 3,
+                    lambda r_in: self.jr.render_at(r_in, state.enemies_x[i], state.enemies_y[i] + 47 - bounce_offset, self.SHAPE_MASKS["spider"]),
+                    lambda r_in: self.jr.render_at(r_in, state.enemies_x[i], state.enemies_y[i] + 47 - bounce_offset, self.SHAPE_MASKS["skull"][anim_idx]),
+                    r
+                )
+
             return jax.lax.cond(
                 state.enemies_active[i] == 1,
-                lambda r: self.jr.render_at(r, state.enemies_x[i], state.enemies_y[i] + 47 - bounce_offset, mask),
+                _render_active,
                 lambda r: r,
                 raster
             )

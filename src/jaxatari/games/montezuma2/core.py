@@ -39,6 +39,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     DIGIT_HEIGHT: int = struct.field(pytree_node=False, default=8)
     
     # Gameplay Rules
+    OUT_OF_LADDER_DELAY: int = struct.field(pytree_node=False, default=15)
     MAX_FALL_DISTANCE: int = struct.field(pytree_node=False, default=33) # ladder_height (39) - 6
     BOUNCE_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 27, 27, 27, 24, 21, 18, 15, 12, 9, 6, 3, 0], dtype=jnp.int32))
     DEATH_TIMER_FRAMES: int = struct.field(pytree_node=False, default=70)
@@ -63,13 +64,16 @@ class Montezuma2State:
     fall_start_y: jnp.ndarray
     jump_counter: jnp.ndarray
     is_climbing: jnp.ndarray
+    out_of_ladder_delay: jnp.ndarray
     last_rope: jnp.ndarray
+    last_ladder: jnp.ndarray
     
     # Homogeneous Entities for the CURRENT room
     enemies_x: jnp.ndarray
     enemies_y: jnp.ndarray
     enemies_active: jnp.ndarray
     enemies_direction: jnp.ndarray
+    enemies_type: jnp.ndarray
     enemies_min_x: jnp.ndarray
     enemies_max_x: jnp.ndarray
     enemies_bouncing: jnp.ndarray
@@ -96,6 +100,7 @@ class Montezuma2State:
     global_items_active: jnp.ndarray
     global_items_type: jnp.ndarray
     global_enemies_active: jnp.ndarray
+    global_enemies_type: jnp.ndarray
     
     conveyors_x: jnp.ndarray
     conveyors_y: jnp.ndarray

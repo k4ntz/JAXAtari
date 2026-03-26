@@ -57,14 +57,17 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             player_dir=jnp.array(1, dtype=jnp.int32),
             is_jumping=jnp.array(0, dtype=jnp.int32),
             is_falling=jnp.array(0, dtype=jnp.int32),
-            fall_start_y=jnp.array(self.consts.INITIAL_PLAYER_Y, dtype=jnp.int32),
+            fall_start_y=jnp.array(0, dtype=jnp.int32),
             jump_counter=jnp.array(0, dtype=jnp.int32),
             is_climbing=jnp.array(0, dtype=jnp.int32),
+            out_of_ladder_delay=jnp.array(0, dtype=jnp.int32),
             last_rope=jnp.array(-1, dtype=jnp.int32),
+            last_ladder=jnp.array(-1, dtype=jnp.int32),
             enemies_x=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
             enemies_y=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
             enemies_active=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
             enemies_direction=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
+            enemies_type=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
             enemies_min_x=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
             enemies_max_x=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
             enemies_bouncing=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
@@ -94,6 +97,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             death_type=jnp.array(0, dtype=jnp.int32),
             inventory=jnp.zeros(1, dtype=jnp.int32),
             global_enemies_active=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ENEMIES_PER_ROOM), dtype=jnp.int32),
+            global_enemies_type=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ENEMIES_PER_ROOM), dtype=jnp.int32),
             global_items_active=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ITEMS_PER_ROOM), dtype=jnp.int32),
             global_items_type=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ITEMS_PER_ROOM), dtype=jnp.int32),
             global_doors_active=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_DOORS_PER_ROOM), dtype=jnp.int32),
@@ -112,10 +116,18 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         gea = gea.at[1, 0].set(1)
         gea = gea.at[2, 0].set(1)
         gea = gea.at[2, 1].set(1)
+        gea = gea.at[3, 0].set(1)
+
+        gety = state.global_enemies_type
+        # ROLL_SKULL = 1, BOUNCE_SKULL = 2, SPIDER = 3
+        gety = gety.at[1, 0].set(1)
+        gety = gety.at[2, 0].set(1)
+        gety = gety.at[2, 1].set(1)
+        gety = gety.at[3, 0].set(3)
 
         giy = state.global_items_type
         giy = giy.at[0, 0].set(1) # Gem in room 0
-        state = state.replace(global_items_active=gia, global_doors_active=gda, global_enemies_active=gea, global_items_type=giy)
+        state = state.replace(global_items_active=gia, global_doors_active=gda, global_enemies_active=gea, global_enemies_type=gety, global_items_type=giy)
         
         state = load_room(jnp.array(1, dtype=jnp.int32), state, self.consts)
         obs = self._get_observation(state)
@@ -145,29 +157,33 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         player_feet_y = state.player_y + self.consts.PLAYER_HEIGHT - 1
         
         # 0. Ladder and Rope Climbing Logic
+        new_out_of_ladder_delay = jnp.where(state.out_of_ladder_delay > 0, state.out_of_ladder_delay - 1, 0)
+
         def check_ladder(i, carry):
             c_on_ladder, c_ladder_idx = carry
             l_x = state.ladders_x[i]
             ladder_mid_x = l_x + 8
             l_top = state.ladders_top[i]
             l_bottom = state.ladders_bottom[i]
-            
+
             is_aligned = jnp.logical_and(state.ladders_active[i] == 1, jnp.abs(player_mid_x - ladder_mid_x) <= 4)
-            
+            is_aligned = jnp.logical_and(is_aligned, new_out_of_ladder_delay == 0)
+
             # To get ON from top: must press DOWN near top
             get_on_top = jnp.logical_and(is_aligned, jnp.logical_and(is_down, jnp.abs(player_feet_y - l_top) <= 5))
             # To get ON from bottom: must press UP near bottom
             get_on_bottom = jnp.logical_and(is_aligned, jnp.logical_and(is_up, jnp.abs(player_feet_y - l_bottom) <= 5))
-            
+
             # To stay ON: must be within the vertical bounds
-            in_ladder_zone = jnp.logical_and(is_aligned, jnp.logical_and(player_feet_y >= l_top - 3, player_feet_y <= l_bottom - 2))
-            
-            on_this_ladder = jnp.where(state.is_climbing == 1, in_ladder_zone, jnp.logical_or(get_on_top, get_on_bottom))
-            
+            ladder_bottom_bound = jnp.where(l_bottom >= 148, 170, l_bottom + 1)
+            ladder_top_bound = jnp.where(l_top <= 6, 0, l_top - 4)
+            in_ladder_zone = jnp.logical_and(is_aligned, jnp.logical_and(player_feet_y >= ladder_top_bound, player_feet_y <= ladder_bottom_bound))
+
+            on_this_ladder = jnp.where(state.is_climbing == 1, jnp.logical_and(in_ladder_zone, state.last_ladder == i), jnp.logical_or(get_on_top, get_on_bottom))
+
             new_on_ladder = jnp.logical_or(c_on_ladder, on_this_ladder)
             new_ladder_idx = jnp.where(on_this_ladder, i, c_ladder_idx)
             return new_on_ladder, new_ladder_idx
-
         def check_rope(i, carry):
             c_on_rope, c_rope_idx = carry
             r_x = state.ropes_x[i]
@@ -197,16 +213,24 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
         can_ladder, ladder_idx = jax.lax.fori_loop(0, self.consts.MAX_LADDERS_PER_ROOM, check_ladder, (False, -1))
         can_rope, rope_idx = jax.lax.fori_loop(0, self.consts.MAX_ROPES_PER_ROOM, check_rope, (False, -1))
-        
-        abort_ladder = False
+
+        is_jumping_off_ladder = jnp.logical_and(can_ladder, jnp.logical_and(state.is_climbing == 1, jnp.logical_and(is_fire, jnp.logical_or(is_left, is_right))))
+        is_moving_off_ladder = jnp.logical_and(can_ladder, jnp.logical_and(state.is_climbing == 1, jnp.logical_or(is_left, is_right)))
+        abort_ladder = jnp.logical_or(is_jumping_off_ladder, is_moving_off_ladder)
+
         is_jumping_off_rope = jnp.logical_and(can_rope, jnp.logical_and(state.is_climbing == 1, jnp.logical_and(is_fire, jnp.logical_or(is_left, is_right))))
         abort_rope = is_jumping_off_rope
-        
+
         is_climbing_ladder = jnp.logical_and(can_ladder, jnp.logical_not(abort_ladder))
         is_climbing_rope = jnp.logical_and(can_rope, jnp.logical_not(abort_rope))
-        
+
         is_climbing = jnp.where(jnp.logical_or(is_climbing_ladder, is_climbing_rope), 1, 0)
-        
+
+        # If we are aborting the ladder, or simply falling off, start the delay
+        # But only if we were previously climbing!
+        started_delay = jnp.logical_and(state.is_climbing == 1, is_climbing == 0)
+        new_out_of_ladder_delay = jnp.where(started_delay, self.consts.OUT_OF_LADDER_DELAY, new_out_of_ladder_delay)
+
         target_climb_x = state.player_x
         target_climb_x = jnp.where(ladder_idx != -1, state.ladders_x[ladder_idx] + 8 - self.consts.PLAYER_WIDTH // 2, target_climb_x)
         target_climb_x = jnp.where(rope_idx != -1, state.ropes_x[rope_idx] - self.consts.PLAYER_WIDTH // 2, target_climb_x)
@@ -256,9 +280,12 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         on_ground = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, check_conveyor, on_ground)
 
-        # Update last_rope
+        # Update last_rope and last_ladder
         new_last_rope = jnp.where(on_ground, -1, state.last_rope)
         new_last_rope = jnp.where(is_jumping_off_rope, rope_idx, new_last_rope)
+
+        new_last_ladder = jnp.where(on_ground, -1, state.last_ladder)
+        new_last_ladder = jnp.where(is_climbing == 1, ladder_idx, new_last_ladder)
 
         # 2. Process Jump Initiation
         start_jump_normal = jnp.logical_and(is_fire, jnp.logical_and(on_ground, jnp.logical_and(state.is_jumping == 0, is_climbing == 0)))
@@ -347,7 +374,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         raw_new_x = current_x + dx
         transition_left = jnp.logical_and(raw_new_x < 0, jnp.logical_or(state.room_id == 1, state.room_id == 2))
         transition_right = jnp.logical_and(raw_new_x + self.consts.PLAYER_WIDTH > self.consts.WIDTH, jnp.logical_or(state.room_id == 0, state.room_id == 1))
-        transition_down = jnp.logical_and(new_y > 129, state.room_id == 0)
+        transition_down = jnp.logical_and(new_y >= 148, state.room_id == 0)
         transition_up = jnp.logical_and(new_y <= 2, state.room_id == 3)
 
         new_x = jnp.clip(raw_new_x, 0, self.consts.WIDTH - self.consts.PLAYER_WIDTH)
@@ -560,7 +587,9 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             is_jumping=final_is_jumping,
             jump_counter=final_jump_counter,
             is_climbing=final_is_climbing,
+            out_of_ladder_delay=jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, new_out_of_ladder_delay),
             last_rope=new_last_rope,
+            last_ladder=new_last_ladder,
             is_falling=final_is_falling,
             fall_start_y=final_fall_start_y,
             frame_count=state.frame_count + 1,

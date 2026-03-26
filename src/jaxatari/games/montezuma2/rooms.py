@@ -7,6 +7,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
     enemies_y = jnp.zeros(consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
     enemies_active = jnp.zeros(consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
     enemies_direction = jnp.zeros(consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
+    enemies_type = jnp.zeros(consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
     enemies_min_x = jnp.zeros(consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
     enemies_max_x = jnp.full(consts.MAX_ENEMIES_PER_ROOM, consts.WIDTH - 8, dtype=jnp.int32)
     enemies_bouncing = jnp.zeros(consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
@@ -170,7 +171,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         lx, lt, lb, la, ix, iy, ia, lax, laa = args
         
         ex = enemies_x.at[0].set(92)
-        ey = enemies_y.at[0].set(119)
+        ey = enemies_y.at[0].set(36)
         ea = enemies_active.at[0].set(1)
         ed = enemies_direction.at[0].set(-1)
         eminx = enemies_min_x.at[0].set(4)
@@ -225,6 +226,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         conveyors_x=cx, conveyors_y=cy, conveyors_active=ca, conveyors_direction=cd,
         lasers_x=lax, lasers_active=laa,
         enemies_active=state.global_enemies_active[room_id],
+        enemies_type=state.global_enemies_type[room_id],
         items_active=state.global_items_active[room_id],
         items_type=state.global_items_type[room_id],
         doors_active=state.global_doors_active[room_id]
