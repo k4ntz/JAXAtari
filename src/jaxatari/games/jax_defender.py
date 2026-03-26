@@ -1498,10 +1498,6 @@ class JaxDefender(
 
         enemy_diff = old_enemy_counts - new_enemy_counts
 
-        jax.debug.print("Enemy diff: {}", enemy_diff)
-        jax.debug.print("Old enemy counts: {}", old_enemy_counts)
-        jax.debug.print("New enemy counts: {}", new_enemy_counts)
-        jax.debug.print("Enemy states: {}", enemy_state[:, 2])
         score_multiplier = jnp.array(
             [
                 0,
