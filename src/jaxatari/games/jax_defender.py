@@ -1748,11 +1748,6 @@ class JaxDefender(
         # Returns the enemy list at index
         return state.enemy_states[index]
 
-    def _death_step(self, state: DefenderState):
-        # Handles dead enemies to respawn new ones
-
-        return
-
     def _is_colliding(
         self, e1_x, e1_y, e1_width, e1_height, e2_x, e2_y, e2_width, e2_height
     ) -> chex.Array:
@@ -1773,7 +1768,7 @@ class JaxDefender(
         return jnp.logical_and(check_x, check_y)
 
     def _space_ship_collision_step(self, state: DefenderState) -> bool:
-        is_colliding = self._is_colliding(
+        is_bullet = self._is_colliding(
             state.space_ship_x,
             state.space_ship_y,
             self.consts.SPACE_SHIP_WIDTH,
@@ -1783,6 +1778,22 @@ class JaxDefender(
             self.consts.BULLET_WIDTH,
             self.consts.BULLET_HEIGHT,
         )
+
+        def check_enemy_collision(enemy: chex.Array):
+            return self._is_colliding(
+                state.space_ship_x,
+                state.space_ship_y,
+                self.consts.SPACE_SHIP_WIDTH,
+                self.consts.SPACE_SHIP_HEIGHT,
+                enemy[0],
+                enemy[1],
+                self.consts.ENEMY_WIDTH,
+                self.consts.ENEMY_HEIGHT,
+            )
+
+        is_enemy = jnp.any(jax.vmap(check_enemy_collision, in_axes=(0))(state.enemy_states))
+
+        is_colliding = jnp.logical_or(is_bullet, is_enemy)
 
         # Check space ship with each enemy
         return jnp.where(state.bullet_active, is_colliding, False)
@@ -2458,9 +2469,16 @@ class JaxDefender(
 
             human_states = self._human_step(state)
 
+            game_over = self._space_ship_collision_step(state)
+
+            game_state = jnp.where(
+                game_over, self.consts.GAME_STATE_GAMEOVER, self.consts.GAME_STATE_PLAYING
+            )
+
             state = self._camera_step(state)
 
             state = state._replace(
+                game_state=game_state,
                 space_ship_x=space_ship_x,
                 space_ship_y=space_ship_y,
                 space_ship_speed=space_ship_speed,
