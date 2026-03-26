@@ -174,7 +174,7 @@ class DefenderConstants(struct.PyTreeNode):
     SWARM_SPAWN_MIN: int = 1
     SWARM_SPAWN_MAX: int = 2
     SWARMERS_DEATH_SCORE: int = 500
-    SWARMERS_MAX_SPEED: float = 2.0
+    SWARMERS_MAX_SPEED: float = 0.6
     SWARMERS_Y_SPEED: float = 0.8
 
     # Mutant
@@ -2174,13 +2174,10 @@ class JaxDefender(
     ) -> chex.Array:
         x_pos = swarmer[0]
         y_pos = swarmer[1]
-        speed = swarmer[4]
         swarmer_direction = swarmer[3]
-        speed = speed + 0.05  # acceleration over time
-        # max speed
-        speed = jnp.clip(
-            speed, a_min=-self.consts.SWARMERS_MAX_SPEED, a_max=self.consts.SWARMERS_MAX_SPEED
-        )
+        speed = self.consts.SWARMERS_MAX_SPEED
+
+
         speed_x = speed
         # acceleration in x direction
         speed_x = jax.lax.cond(
