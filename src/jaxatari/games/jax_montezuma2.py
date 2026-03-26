@@ -477,6 +477,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         col_map_0 = jnp.load(sprite_path_0)[:149, :, 0]
         room_col_0 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
         room_col_0 = room_col_0.at[6:, 0:4].set(1) # Left wall only for room_0_0
+        room_col_0 = room_col_0.at[147:149, 72:88].set(0) # Hole for ladder down to ROOM_1_1
 
         sprite_path_1 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "mid_room_collision_level_0.npy")
         col_map_1 = jnp.load(sprite_path_1)[:149, :, 0] # (149, 160)
@@ -486,7 +487,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         room_col_2 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
         room_col_2 = room_col_2.at[6:, 156:160].set(1) # Right wall only for room_0_2
         
-        self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0, room_col_1, room_col_2])
+        room_col_3 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
+        self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0, room_col_1, room_col_2, room_col_3])
 
     def _load_room(self, room_id: jnp.ndarray, state: Montezuma2State) -> Montezuma2State:
         enemies_x = jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
@@ -651,7 +653,55 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
                     lasers_x, lasers_active)
 
         args = (ladders_x, ladders_top, ladders_bottom, ladders_active, items_x, items_y, items_active, lasers_x, lasers_active)
-        ex, ey, ea, ed, eminx, emaxx, eb, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd, lax, laa = jax.lax.switch(room_id, [load_room_0, load_room_1, load_room_2], args)
+        
+        def load_room_3(args):
+            lx, lt, lb, la, ix, iy, ia, lax, laa = args
+            
+            ex = enemies_x.at[0].set(92)
+            ey = enemies_y.at[0].set(119)
+            ea = enemies_active.at[0].set(1)
+            ed = enemies_direction.at[0].set(-1)
+            eminx = enemies_min_x.at[0].set(4)
+            emaxx = enemies_max_x.at[0].set(156)
+            
+            lx = lx.at[0].set(72)
+            lt = lt.at[0].set(48)
+            lb = lb.at[0].set(149)
+            la = la.at[0].set(1)
+            lx = lx.at[1].set(72)
+            lt = lt.at[1].set(6)
+            lb = lb.at[1].set(44)
+            la = la.at[1].set(1)
+
+            rx = ropes_x
+            rt = ropes_top
+            rb = ropes_bottom
+            ra = ropes_active
+            
+            ix = items_x
+            iy = items_y
+            ia = items_active
+            
+            cx = conveyors_x
+            cy = conveyors_y
+            ca = conveyors_active
+            cd = conveyors_direction
+            
+            dx = doors_x
+            dy = doors_y
+            da = doors_active
+            
+            eb = enemies_bouncing
+
+            return (ex, ey, ea, ed, eminx, emaxx, eb,
+                    lx, lt, lb, la,
+                    rx, rt, rb, ra,
+                    ix, iy, ia,
+                    dx, dy, da,
+                    cx, cy, ca, cd,
+                    lasers_x, lasers_active)
+
+        ex, ey, ea, ed, eminx, emaxx, eb, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd, lax, laa = jax.lax.switch(room_id, [load_room_0, load_room_1, load_room_2, load_room_3], args)
 
         return state.replace(
             room_id=room_id,
@@ -971,6 +1021,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         raw_new_x = current_x + dx
         transition_left = jnp.logical_and(raw_new_x < 0, jnp.logical_or(state.room_id == 1, state.room_id == 2))
         transition_right = jnp.logical_and(raw_new_x + self.consts.PLAYER_WIDTH > self.consts.WIDTH, jnp.logical_or(state.room_id == 0, state.room_id == 1))
+        transition_down = jnp.logical_and(new_y > 129, state.room_id == 0)
+        transition_up = jnp.logical_and(new_y <= 2, state.room_id == 3)
 
         new_x = jnp.clip(raw_new_x, 0, self.consts.WIDTH - self.consts.PLAYER_WIDTH)
         new_left_x = jnp.clip(new_x, 0, self.consts.WIDTH - 1)
@@ -1197,8 +1249,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             death_type=new_death_type
         )
 
-        transition_any = jnp.logical_or(transition_left, transition_right)
-        new_room_id = jnp.where(transition_left, state.room_id - 1, jnp.where(transition_right, state.room_id + 1, state.room_id))
+        transition_any = jnp.logical_or(jnp.logical_or(transition_left, transition_right), jnp.logical_or(transition_down, transition_up))
+        new_room_id = jnp.where(transition_left, state.room_id - 1, jnp.where(transition_right, state.room_id + 1, jnp.where(transition_down, 3, jnp.where(transition_up, 0, state.room_id))))
 
         def transition_fn(state_in):
             st = state_in.replace(
@@ -1207,8 +1259,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
                 global_enemies_active=state_in.global_enemies_active.at[state_in.room_id].set(state_in.enemies_active)
             )
             st = self._load_room(new_room_id, st)
-            new_px = jnp.where(transition_left, 148, 4)
-            new_py = jnp.where(new_room_id == 0, 27, 26)
+            new_px = jnp.where(transition_left, 148, jnp.where(transition_right, 4, current_x))
+            new_py = jnp.where(transition_down, 6, jnp.where(transition_up, 140, jnp.where(new_room_id == 0, 27, 26)))
             return st.replace(player_x=new_px, player_y=new_py, fall_start_y=new_py)
 
         state = jax.lax.cond(transition_any, transition_fn, lambda x: x, state)

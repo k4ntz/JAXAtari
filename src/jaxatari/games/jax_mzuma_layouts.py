@@ -587,121 +587,121 @@ def make_difficulty_1(LAYOUT: PyramidLayout, consts, last_room: uRoom = None, se
         #                  named_tuple_type=Enemy)
         
         
-        # ROOM_1_1 = LAYOUT.create_new_room(tags=tuple([RoomTags.LADDERS, RoomTags.ENEMIES]))
-        # ROOM_1_1.set_field(field_name=VanillaRoomFields.sprite.value, 
-        #                  field_type=NamedTupleFieldType.OTHER_ARRAY, 
-        #                  content=loadFrameAddAlpha(fileName=os.path.join(SPRITE_PATH_BACKGROUND, "base_sprite_level_1.npy"), transpose=True), 
-        #                  requires_serialisation=False)
+        ROOM_1_1 = LAYOUT.create_new_room(tags=tuple([RoomTags.LADDERS, RoomTags.ENEMIES]))
+        ROOM_1_1.set_field(field_name=VanillaRoomFields.sprite.value, 
+                         field_type=NamedTupleFieldType.OTHER_ARRAY, 
+                         content=loadFrameAddAlpha(fileName=os.path.join(SPRITE_PATH_BACKGROUND, "base_sprite_level_1.npy"), transpose=True), 
+                         requires_serialisation=False)
         
-        # ROOM_1_1.set_field(field_name=VanillaRoomFields.room_collision_map.value, 
-        #                  field_type=NamedTupleFieldType.OTHER_ARRAY, 
-        #                  content=load_collision_map(fileName=os.path.join(SPRITE_PATH_BACKGROUND, "base_collision_map.npy"), as_bool=False, transpose=True), 
-        #                  requires_serialisation=False)
+        ROOM_1_1.set_field(field_name=VanillaRoomFields.room_collision_map.value, 
+                         field_type=NamedTupleFieldType.OTHER_ARRAY, 
+                         content=load_collision_map(fileName=os.path.join(SPRITE_PATH_BACKGROUND, "base_collision_map.npy"), as_bool=False, transpose=True), 
+                         requires_serialisation=False)
         
-        # ROOM_1_1.set_field(field_name=VanillaRoomFields.height.value, 
-        #                  field_type=NamedTupleFieldType.INTEGER_SCALAR, 
-        #                  content=jnp.array([149], jnp.int32))
+        ROOM_1_1.set_field(field_name=VanillaRoomFields.height.value, 
+                         field_type=NamedTupleFieldType.INTEGER_SCALAR, 
+                         content=jnp.array([149], jnp.int32))
         
-        # ROOM_1_1.set_field(field_name=VanillaRoomFields.vertical_offset.value, 
-        #                  field_type=NamedTupleFieldType.INTEGER_SCALAR, 
-        #                  content=jnp.array([47], jnp.int32))
+        ROOM_1_1.set_field(field_name=VanillaRoomFields.vertical_offset.value, 
+                         field_type=NamedTupleFieldType.INTEGER_SCALAR, 
+                         content=jnp.array([47], jnp.int32))
         
-        # ROOM_1_1.set_field(field_name=ConstantShapeRoomFields.left_start_position.value, 
-        #                  field_type=NamedTupleFieldType.OTHER_ARRAY, 
-        #                  content=jnp.array([4, 27], dtype=jnp.uint16))
+        ROOM_1_1.set_field(field_name=ConstantShapeRoomFields.left_start_position.value, 
+                         field_type=NamedTupleFieldType.OTHER_ARRAY, 
+                         content=jnp.array([4, 27], dtype=jnp.uint16))
 
-        # ROOM_1_1.set_field(field_name=ConstantShapeRoomFields.right_start_position.value, 
-        #                  field_type=NamedTupleFieldType.OTHER_ARRAY, 
-        #                  content=jnp.array([148, 27], dtype=jnp.uint16))
+        ROOM_1_1.set_field(field_name=ConstantShapeRoomFields.right_start_position.value, 
+                         field_type=NamedTupleFieldType.OTHER_ARRAY, 
+                         content=jnp.array([148, 27], dtype=jnp.uint16))
 
-        # ROOM_1_1.set_field(field_name=ConstantShapeRoomFields.top_start_position.value, 
-        #                  field_type=NamedTupleFieldType.OTHER_ARRAY, 
-        #                  content=jnp.array([76, 4], dtype=jnp.uint16))
+        ROOM_1_1.set_field(field_name=ConstantShapeRoomFields.top_start_position.value, 
+                         field_type=NamedTupleFieldType.OTHER_ARRAY, 
+                         content=jnp.array([76, 4], dtype=jnp.uint16))
 
-        # ROOM_1_1.set_field(field_name=ConstantShapeRoomFields.bottom_start_position.value, 
-        #                  field_type=NamedTupleFieldType.OTHER_ARRAY, 
-        #                  content=jnp.array([76, 125], dtype=jnp.uint16))
+        ROOM_1_1.set_field(field_name=ConstantShapeRoomFields.bottom_start_position.value, 
+                         field_type=NamedTupleFieldType.OTHER_ARRAY, 
+                         content=jnp.array([76, 125], dtype=jnp.uint16))
         
-        # ladder_to_bottom = Ladder(
-        #     left_upper_x=jnp.array([72], jnp.int32), 
-        #     left_upper_y=jnp.array([48], jnp.int32), 
-        #     right_lower_x=jnp.array([88], jnp.int32), 
-        #     right_lower_y=jnp.array([149], jnp.int32), 
-        #     has_background=jnp.array([1], jnp.int32), 
-        #     rope_seeking_at_bottom=jnp.array([1], jnp.int32),
-        #     rope_seeking_at_top=jnp.array([0], jnp.int32), 
-        #     foreground_color=jnp.array([ObstacleColors.DIF_1_LAYER_2_SECONDARY.value], jnp.int32),
-        #     background_color=jnp.array([ObstacleColors.DIF_1_LAYER_2_PRIMARY.value], jnp.int32), 
-        #     transparent_background=jnp.array([0], jnp.int32), 
-        #     transparent_foreground=jnp.array([0], jnp.int32)
-        # )
+        ladder_to_bottom = Ladder(
+            left_upper_x=jnp.array([72], jnp.int32), 
+            left_upper_y=jnp.array([48], jnp.int32), 
+            right_lower_x=jnp.array([88], jnp.int32), 
+            right_lower_y=jnp.array([149], jnp.int32), 
+            has_background=jnp.array([1], jnp.int32), 
+            rope_seeking_at_bottom=jnp.array([1], jnp.int32),
+            rope_seeking_at_top=jnp.array([0], jnp.int32), 
+            foreground_color=jnp.array([ObstacleColors.DIF_1_LAYER_2_SECONDARY.value], jnp.int32),
+            background_color=jnp.array([ObstacleColors.DIF_1_LAYER_2_PRIMARY.value], jnp.int32), 
+            transparent_background=jnp.array([0], jnp.int32), 
+            transparent_foreground=jnp.array([0], jnp.int32)
+        )
         
-        # ladder_to_top = Ladder(
-        #     left_upper_x=jnp.array([72], jnp.int32), 
-        #     left_upper_y=jnp.array([6], jnp.int32), 
-        #     right_lower_x=jnp.array([88], jnp.int32), 
-        #     right_lower_y=jnp.array([44], jnp.int32), 
-        #     has_background=jnp.array([1], jnp.int32), 
-        #     rope_seeking_at_bottom=jnp.array([0], jnp.int32),
-        #     rope_seeking_at_top=jnp.array([1], jnp.int32),
-        #     foreground_color=jnp.array([ObstacleColors.DIF_1_LAYER_2_SECONDARY.value], jnp.int32),
-        #     background_color=jnp.array([ObstacleColors.BLACK.value], jnp.int32),  
-        #     transparent_background=jnp.array([0], jnp.int32), 
-        #     transparent_foreground=jnp.array([0], jnp.int32)
-        # )
+        ladder_to_top = Ladder(
+            left_upper_x=jnp.array([72], jnp.int32), 
+            left_upper_y=jnp.array([6], jnp.int32), 
+            right_lower_x=jnp.array([88], jnp.int32), 
+            right_lower_y=jnp.array([44], jnp.int32), 
+            has_background=jnp.array([1], jnp.int32), 
+            rope_seeking_at_bottom=jnp.array([0], jnp.int32),
+            rope_seeking_at_top=jnp.array([1], jnp.int32),
+            foreground_color=jnp.array([ObstacleColors.DIF_1_LAYER_2_SECONDARY.value], jnp.int32),
+            background_color=jnp.array([ObstacleColors.BLACK.value], jnp.int32),  
+            transparent_background=jnp.array([0], jnp.int32), 
+            transparent_foreground=jnp.array([0], jnp.int32)
+        )
         
-        # ROOM_1_1.set_field(field_name=RoomTagsNames.LADDERS.value.ladders.value, 
-        #                  field_type=NamedTupleFieldType.NAMED_TUPLE_STACK, 
-        #                  content=[ladder_to_bottom, ladder_to_top], 
-        #                  requires_serialisation=False, 
-        #                  named_tuple_type=Ladder)
+        ROOM_1_1.set_field(field_name=RoomTagsNames.LADDERS.value.ladders.value, 
+                         field_type=NamedTupleFieldType.NAMED_TUPLE_STACK, 
+                         content=[ladder_to_bottom, ladder_to_top], 
+                         requires_serialisation=False, 
+                         named_tuple_type=Ladder)
         
-        # ROOM_1_1.set_field(field_name=RoomTagsNames.LADDERS.value.ladder_index.value, 
-        #                  field_type=NamedTupleFieldType.INTEGER_SCALAR, 
-        #                  content=jnp.array([-1], dtype=jnp.int32), 
-        #                  requires_serialisation=True)
+        ROOM_1_1.set_field(field_name=RoomTagsNames.LADDERS.value.ladder_index.value, 
+                         field_type=NamedTupleFieldType.INTEGER_SCALAR, 
+                         content=jnp.array([-1], dtype=jnp.int32), 
+                         requires_serialisation=True)
 
-        # ROOM_1_1.set_field(field_name=RoomTagsNames.LADDERS.value.ladder_tops.value, 
-        #                  field_type=NamedTupleFieldType.OTHER_ARRAY, 
-        #                  content=jnp.array([0], dtype=jnp.int32), 
-        #                  requires_serialisation=False)
+        ROOM_1_1.set_field(field_name=RoomTagsNames.LADDERS.value.ladder_tops.value, 
+                         field_type=NamedTupleFieldType.OTHER_ARRAY, 
+                         content=jnp.array([0], dtype=jnp.int32), 
+                         requires_serialisation=False)
 
-        # ROOM_1_1.set_field(field_name=RoomTagsNames.LADDERS.value.ladder_bottoms.value, 
-        #                  field_type=NamedTupleFieldType.OTHER_ARRAY, 
-        #                  content=jnp.array([0], dtype=jnp.int32), 
-        #                  requires_serialisation=False)
+        ROOM_1_1.set_field(field_name=RoomTagsNames.LADDERS.value.ladder_bottoms.value, 
+                         field_type=NamedTupleFieldType.OTHER_ARRAY, 
+                         content=jnp.array([0], dtype=jnp.int32), 
+                         requires_serialisation=False)
 
-        # ROOM_1_1.set_field(field_name=RoomTagsNames.LADDERS.value.ladders_sprite.value, 
-        #                  field_type=NamedTupleFieldType.OTHER_ARRAY, 
-        #                  content=jnp.array([0], dtype=jnp.int32), 
-        #                  requires_serialisation=False)
+        ROOM_1_1.set_field(field_name=RoomTagsNames.LADDERS.value.ladders_sprite.value, 
+                         field_type=NamedTupleFieldType.OTHER_ARRAY, 
+                         content=jnp.array([0], dtype=jnp.int32), 
+                         requires_serialisation=False)
         
-        # enemy = Enemy(
-        #     bbox_left_upper_x=jnp.array([4], jnp.int32), 
-        #     bbox_left_upper_y=jnp.array([36], jnp.int32), 
-        #     bbox_right_lower_x=jnp.array([156], jnp.int32), 
-        #     bbox_right_lower_y=jnp.array([47], jnp.int32), 
-        #     enemy_type=jnp.array([EnemyType.SPIDER.value], jnp.int32), 
-        #     alive=jnp.array([1], jnp.int32), 
-        #     pos_x=jnp.array([92], jnp.int32), 
-        #     pos_y=jnp.array([36], jnp.int32), 
-        #     horizontal_direction=jnp.array([Horizontal_Direction.LEFT.value], jnp.int32), 
-        #     last_movement=jnp.array([0], jnp.int32), 
-        #     sprite_index=jnp.array([0], jnp.int32), 
-        #     render_in_reverse=jnp.array([0], jnp.int32), 
-        #     initial_horizontal_direction=jnp.array([Horizontal_Direction.LEFT.value], jnp.int32), 
-        #     initial_render_in_reverse=jnp.array([0], jnp.int32), 
-        #     optional_movement_counter=jnp.array([0], jnp.int32), 
-        #     initial_x_pos=jnp.array([92], jnp.int32), 
-        #     initial_y_pos=jnp.array([36], jnp.int32),
-        #     last_animation=jnp.array([0], jnp.int32), 
-        #     optional_utility_field=jnp.array([0], jnp.int32)
-        # )
+        enemy = Enemy(
+            bbox_left_upper_x=jnp.array([4], jnp.int32), 
+            bbox_left_upper_y=jnp.array([36], jnp.int32), 
+            bbox_right_lower_x=jnp.array([156], jnp.int32), 
+            bbox_right_lower_y=jnp.array([47], jnp.int32), 
+            enemy_type=jnp.array([EnemyType.SPIDER.value], jnp.int32), 
+            alive=jnp.array([1], jnp.int32), 
+            pos_x=jnp.array([92], jnp.int32), 
+            pos_y=jnp.array([36], jnp.int32), 
+            horizontal_direction=jnp.array([Horizontal_Direction.LEFT.value], jnp.int32), 
+            last_movement=jnp.array([0], jnp.int32), 
+            sprite_index=jnp.array([0], jnp.int32), 
+            render_in_reverse=jnp.array([0], jnp.int32), 
+            initial_horizontal_direction=jnp.array([Horizontal_Direction.LEFT.value], jnp.int32), 
+            initial_render_in_reverse=jnp.array([0], jnp.int32), 
+            optional_movement_counter=jnp.array([0], jnp.int32), 
+            initial_x_pos=jnp.array([92], jnp.int32), 
+            initial_y_pos=jnp.array([36], jnp.int32),
+            last_animation=jnp.array([0], jnp.int32), 
+            optional_utility_field=jnp.array([0], jnp.int32)
+        )
         
-        # ROOM_1_1.set_field(field_name=RoomTagsNames.ENEMIES.value.enemies.value, 
-        #                  field_type=NamedTupleFieldType.NAMED_TUPLE_STACK, 
-        #                  content=[enemy], requires_serialisation=True, 
-        #                  named_tuple_type=Enemy)
+        ROOM_1_1.set_field(field_name=RoomTagsNames.ENEMIES.value.enemies.value, 
+                         field_type=NamedTupleFieldType.NAMED_TUPLE_STACK, 
+                         content=[enemy], requires_serialisation=True, 
+                         named_tuple_type=Enemy)
         
         
         
@@ -2803,8 +2803,8 @@ def make_difficulty_1(LAYOUT: PyramidLayout, consts, last_room: uRoom = None, se
                           other_room=ROOM_0_2, other_location=RoomConnectionDirections.LEFT)
         
         # # connection between layer 1 and layer 2 rooms
-        # ROOM_0_0.connect_to(my_location=RoomConnectionDirections.DOWN, 
-        #                   other_room=ROOM_1_1, other_location=RoomConnectionDirections.UP)
+        ROOM_0_0.connect_to(my_location=RoomConnectionDirections.DOWN, 
+                          other_room=ROOM_1_1, other_location=RoomConnectionDirections.UP)
         # ROOM_0_2.connect_to(my_location=RoomConnectionDirections.DOWN, 
         #                   other_room=ROOM_1_3, other_location=RoomConnectionDirections.UP)
 
