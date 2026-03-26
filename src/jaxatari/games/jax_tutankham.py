@@ -527,7 +527,9 @@ class TutankhamState(struct.PyTreeNode):
 
     # --- Mod States ---
     night_timer: int         # countdown for day/night cycle
-    mimic_state: chex.Array  # (5,): (x, y, active, direction, target_idx)
+    mimic_state: chex.Array  # (6,): (x, y, active, direction, target_idx, death_timer)
+    mimic_subpixel: float    # sub-pixel accumulator for mimic
+    whip_timer: int          # countdown for whip animation lock
 
 
 
@@ -549,12 +551,6 @@ class TutankhamObservation(struct.PyTreeNode):
 class TutankhamInfo(struct.PyTreeNode):
     step: jnp.ndarray
     score: jnp.ndarray
-   
-
-
-
-
-
 
 # Environment
 class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, TutankhamInfo, TutankhamConstants]):
@@ -621,8 +617,10 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
             # --- Items ---
             item_states=self.consts.MAP_ITEMS[level%4],
             # --- Mod States ---
-            night_timer=3500,
-            mimic_state=jnp.array([0, 0, 0, 0, 0], dtype=jnp.int32),
+            night_timer = 700, # beginning of day
+            mimic_state = jnp.array([0, 0, 0, 0, 0, -1], dtype=jnp.int32),  # [x, y, active, direction, target_idx, death_timer]
+            mimic_subpixel = 0.0,
+            whip_timer = 0,
         )
 
         obs = self._get_observation(state)
@@ -643,7 +641,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
         # each condition is a boolean mask over all N teleporters
         teleporter_action_check = (teleporters[:, 2] == action)
-        on_teleporter_x = (teleporters[:, 0] == player_x)
+        on_teleporter_x = (player_x <= teleporters[:, 0]) & (player_x + self.consts.PLAYER_SIZE[0] > teleporters[:, 0])
         on_teleporter_y = (player_y >= teleporters[:, 1]) & (player_y < teleporters[:, 1] + self.consts.TELEPORTER_HEIGHT)
 
         teleporter_active_mask = on_teleporter_x & on_teleporter_y & teleporter_action_check
@@ -752,8 +750,8 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         # --- Player Animation & Camera ---
         is_moving_now = jnp.logical_and(is_walkable, jnp.logical_or(dx[effective_action] != 0, dy[effective_action] != 0))
         # direction only updates on horizontal movement (3=RIGHT, 4=LEFT); vertical movement keeps last direction
-        new_direction = jnp.where(dx[effective_action] > 0, 3,
-                        jnp.where(dx[effective_action] < 0, 4, player_direction))
+        new_direction = jnp.where(dx[effective_action] > 0, 4,
+                        jnp.where(dx[effective_action] < 0, 3, player_direction))
         camera_offset = jnp.where(player_y < self.consts.HEIGHT // 2, 0, player_y - self.consts.HEIGHT // 2)
 
         return player_x, player_y, new_last_movement_action, new_direction, is_moving_now, new_subpixel, camera_offset
@@ -1147,7 +1145,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
                        player_x, player_y, bullet_state,
                        creature_states, item_states,
                        last_creature_spawn, ammunition_timer,
-                       laser_flash_cooldown, has_key, laser_flash_count):
+                       laser_flash_cooldown, has_key, laser_flash_count, whip_timer):
         '''
         If goal_reached is True:
         - Increment level
@@ -1170,15 +1168,15 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         ammunition_timer = jnp.where(goal_reached, self.consts.LEVEL_AMMO_SUPPLY[level], ammunition_timer)
         laser_flash_cooldown = jnp.where(goal_reached, 0, laser_flash_cooldown)
         has_key = jnp.where(goal_reached, False, has_key)
-
-        # On completing map 4, the player is awarded with an extra laser flash, up to a maximum of 3 flashes
+        whip_timer = jnp.where(goal_reached, 0, whip_timer)
+        # On completing map 4, the player is awarded with an extra laser flash, up to the maximum of 3 flashes
         laser_flash_count = jnp.where(
             goal_reached & ((level % 4) == 3) & (laser_flash_count < 3),
             laser_flash_count + 1,
             laser_flash_count
         )
 
-        return level, player_x, player_y, bullet_state, creature_states, item_states, last_creature_spawn, ammunition_timer, laser_flash_cooldown, has_key, laser_flash_count
+        return level, player_x, player_y, bullet_state, creature_states, item_states, last_creature_spawn, ammunition_timer, laser_flash_cooldown, has_key, laser_flash_count, whip_timer
 
 
 
@@ -1224,6 +1222,12 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         """Hook for mods to move items. Does nothing in the base game."""
         return item_states, rng_key
 
+    @partial(jax.jit, static_argnums=(0,))
+    def whip_step(self, whip_timer, creature_states, player_x, player_y, ammunition_timer, action, tutankham_score):
+        """Hook for whip mod. Does nothing in the base game."""
+        return whip_timer, creature_states, ammunition_timer, tutankham_score
+
+
 
     # Step logic
     @partial(jax.jit, static_argnums=(0,))
@@ -1262,6 +1266,8 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         # --- Mod States ---
         night_timer = state.night_timer
         mimic_state = state.mimic_state
+        mimic_subpixel = state.mimic_subpixel
+        whip_timer = state.whip_timer
 
         # ----------------------------------------------------------------------
         # Main Game Logic ------------------------------------------------------
@@ -1269,6 +1275,11 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
         # Global Step Counter (increment each step)
         step_counter = step_counter + 1
+
+        # --- Whip ---
+        whip_timer, creature_states, ammunition_timer, tutankham_score = self.whip_step(
+            whip_timer, creature_states, player_x, player_y, ammunition_timer, action, tutankham_score
+        )
         ammunition_timer = ammunition_timer - 1
         
 
@@ -1302,8 +1313,9 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         prev_item_states     = item_states.copy()
         prev_lives           = lives
 
-        creature_states, bullet_state = self.resolve_bullet_collisions(creature_states, bullet_state)
+        creature_states, bullet_state = self.resolve_bullet_collisions(creature_states, bullet_state, level)
 
+        # --- Player ---
         (player_x, player_y,
          bullet_state, creature_states, creature_subpixels,
          lives, last_creature_spawn,
@@ -1331,12 +1343,12 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         (level, player_x, player_y,
          bullet_state, creature_states, item_states,
          last_creature_spawn, ammunition_timer, laser_flash_cooldown,
-         has_key, laser_flash_count) = self.map_transition(
+         has_key, laser_flash_count, whip_timer) = self.map_transition(
              goal_reached, level,
              player_x, player_y, bullet_state,
              creature_states, item_states,
              last_creature_spawn, ammunition_timer,
-             laser_flash_cooldown, has_key, laser_flash_count)
+             laser_flash_cooldown, has_key, laser_flash_count, whip_timer)
 
 
 
@@ -1372,6 +1384,8 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
             # --- Mod States ---
             night_timer=night_timer,
             mimic_state=mimic_state,
+            mimic_subpixel=mimic_subpixel,
+            whip_timer=whip_timer,
         )
 
         obs = self._get_observation(new_state)
@@ -1569,13 +1583,15 @@ class TutankhamRenderer(JAXGameRenderer):
         raster = self._render_floor(raster, state, camera_offset)
         raster = self._render_hook_night_mode(raster, state, camera_offset)
         raster = self._render_flash_floor(raster, state, camera_offset)
-        raster = self._render_player(raster, state, camera_offset)
         raster = self._render_creatures(raster, state, camera_offset)
         raster = self._render_hook_mimic(raster, state, camera_offset)
         raster = self._render_items(raster, state, camera_offset)
         raster = self._render_bullet(raster, state, camera_offset)
         raster = self._render_goal(raster, state, camera_offset)
         raster = self._render_ui(raster, state, camera_offset)
+        raster = self._render_hook_whip(raster, state, camera_offset)
+        raster = self._render_player(raster, state, camera_offset)
+
 
         return self.jr.render_from_palette(raster, self.PALETTE)
     # ---------------------------------------------------------
@@ -1594,6 +1610,8 @@ class TutankhamRenderer(JAXGameRenderer):
     def _render_hook_night_mode(self, raster, state, camera_offset):
         return raster
     def _render_hook_mimic(self, raster, state, camera_offset):
+        return raster
+    def _render_hook_whip(self, raster, state, camera_offset):
         return raster
     # ---------------------------------------------------------
     # Rendering functions

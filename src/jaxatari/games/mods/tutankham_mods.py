@@ -8,6 +8,9 @@ from jaxatari.games.mods.tutankham.tutankham_mod_plugins import (
     UpsideDownMod,
     MovingItemsMod,
     GhostMod,
+    ShrinkPlayerMod,
+    KnockbackMod,
+    WhipMod
 )
 
 class TutankhamEnvMod(JaxAtariModController):
@@ -26,6 +29,9 @@ class TutankhamEnvMod(JaxAtariModController):
         "upsidedown": UpsideDownMod,
         "moving_items": MovingItemsMod,
         "ghost": GhostMod,
+        "shrink": ShrinkPlayerMod,
+        "knockback": KnockbackMod,
+        "whip": WhipMod,
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "tutankham", "sprites")
