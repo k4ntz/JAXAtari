@@ -34,12 +34,12 @@ EVAL_MODS: ['lazy_enemy', 'random_enemy', 'linear_movement']
 # But is useful for debugging (watching the video).
 # Turn off for reported training run.
 TEST_DURING_TRAINING: False
-TEST_INTERVAL: 0.1 # in terms of total updates
-TEST_NUM_ENVS: 1024 #512
+TEST_INTERVAL: 1.0 # in terms of total updates (1.0 means a single test at the end)
+TEST_NUM_ENVS: 128 #512
 TEST_NUM_STEPS: 10000
 EPS_TEST: 0.0 # 0 for greedy policy
 RECORD_VIDEO: False
 
-# Generate a final video at the end of training
+# Generate a final video at the end of training (includes the mod eval videos)
 RECORD_FINAL_VIDEO: True
-VIDEO_MAX_STEPS: 1000
+VIDEO_MAX_STEPS: 3000
