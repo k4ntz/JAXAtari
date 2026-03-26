@@ -2436,20 +2436,6 @@ class JaxDefender(
 
             state = self._camera_step(state)
 
-            state = jax.lax.cond(
-                shoot_laser,
-                lambda: state._replace(
-                    laser_active=True,
-                    laser_x=space_ship_x
-                    + jnp.where(
-                        space_ship_facing_right,
-                        self.consts.SPACE_SHIP_WIDTH,
-                        -self.consts.LASER_WIDTH,
-                    ),
-                    laser_y=space_ship_y + self.consts.SPACE_SHIP_HEIGHT / 2,
-                ),
-                lambda: state,
-            )
             state = state._replace(
                 space_ship_x=space_ship_x,
                 space_ship_y=space_ship_y,
