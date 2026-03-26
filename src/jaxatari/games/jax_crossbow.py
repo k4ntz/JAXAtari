@@ -24,7 +24,7 @@ def _get_default_asset_config() -> tuple:
             'backgrounds/desert_map.npy',
             'backgrounds/cave_map.npy',
             'backgrounds/forest_map.npy',
-            'backgrounds/map_4.npy',
+            'backgrounds/volcano.npy',
             'backgrounds/castle_hall_map.npy',
             'backgrounds/map_6.npy'
         ]},
@@ -68,7 +68,7 @@ def _get_default_asset_config() -> tuple:
         # VOLCANO MAP ASSETS
         {'name': 'lava_rock', 'type': 'single', 'file': 'enemies/volcano/lava_rock.npy'},
         {'name': 'falling_rock', 'type': 'single', 'file': 'enemies/volcano/falling_rock.npy'},
-        {'name': 'resting_rock', 'type': 'single', 'file': 'enemies/volcano/falling_rock.npy'},  # Use falling rock as the bridge
+        {'name': 'resting_rock', 'type': 'single', 'file': 'enemies/volcano/resting_rock.npy'},
         
         # JUNGLE MAP ASSETS
         {'name': 'monkey', 'type': 'single', 'file': 'enemies/jungle/monkey.npy'},
@@ -111,8 +111,8 @@ class GamePhase:
     GET_READY = 1
     DESERT_MAP = 2
     CAVE_MAP = 3
-    VOLCANO_MAP = 4
-    JUNGLE_MAP = 5
+    JUNGLE_MAP = 4
+    VOLCANO_MAP = 5
     DRAWBRIDGE = 6
     CASTLE_HALL = 7
 
@@ -490,9 +490,14 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         reached_goal = new_x > self.consts.WIDTH
         final_x = jnp.where(is_dying, state.friend_x, jnp.where(reached_goal, 0, new_x))
 
+        new_friend_y = jnp.select(
+            [state.game_phase == GamePhase.CAVE_MAP, state.game_phase == GamePhase.VOLCANO_MAP],
+            [100, 152],
+            default=128
+        )
         return state._replace(
             friend_x=final_x.astype(jnp.int32),
-            friend_y=jnp.where(state.game_phase == GamePhase.CAVE_MAP, 100, 128).astype(jnp.int32)
+            friend_y=new_friend_y.astype(jnp.int32)
         )
 
     def _get_enemy_shape(self, enemies_type: chex.Array) -> Tuple[chex.Array, chex.Array]:
@@ -1088,8 +1093,8 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         rng, spawn_key, physics_key, scatter_key, eye_key = jax.random.split(state.key, 5)
 
         # === BRIDGE MECHANIC ===
-        GAP_START_X = 70
-        GAP_END_X = 90
+        GAP_X = 50
+        GAP_Y = 172
         BRIDGE_Y = float(self.consts.GROUND_Y_MIN)
 
         cx, cy = state.cursor_x, state.cursor_y
@@ -1129,7 +1134,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         reward = jnp.sum(jnp.where(valid_kill, point_values[state.enemies_type], 0))
 
         # === FRIEND CONSTRAINT ===
-        friend_x_constrained = jnp.where( jnp.logical_and(jnp.logical_not(bridge_is_open), state.friend_x >= GAP_START_X - 10),  jnp.minimum(state.friend_x, GAP_START_X - 10),state.friend_x )
+        friend_x_constrained = jnp.where( jnp.logical_and(jnp.logical_not(bridge_is_open), state.friend_x >= GAP_X - 10),  jnp.minimum(state.friend_x, GAP_X - 10),state.friend_x )
 
         # === BONUS LIFE ON FIRST COMPLETION ===
         friend_completed = jnp.logical_and(bridge_is_open, friend_x_constrained >= self.consts.WIDTH - 10 )
@@ -1140,11 +1145,10 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
         # === MOVEMENT ===
         GRAVITY = 0.12
-        is_falling_rock = state.enemies_type == EnemyType.FALLING_ROCK
-        is_lava = state.enemies_type == EnemyType.BURNING_LAVA
+        is_falling = jnp.logical_or(state.enemies_type == EnemyType.FALLING_ROCK, state.enemies_type == EnemyType.BURNING_LAVA)
         is_static = jnp.logical_or(is_resting, state.enemies_type == EnemyType.EYE)
 
-        new_dy = jnp.where(is_falling_rock, state.enemies_dy + GRAVITY,   jnp.where(is_lava, state.enemies_dy + GRAVITY,  state.enemies_dy))
+        new_dy = jnp.where(is_falling, state.enemies_dy + GRAVITY, state.enemies_dy)
 
         new_x = jnp.where(is_static, state.enemies_x, state.enemies_x + state.enemies_dx)
         new_y = jnp.where(is_static, state.enemies_y, state.enemies_y + new_dy)
@@ -1175,55 +1179,29 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         type_roll = jax.random.uniform(physics_key, (self.consts.MAX_ENEMIES,))
         spawn_type_generic = jnp.where(type_roll < 0.7, EnemyType.FALLING_ROCK, EnemyType.BURNING_LAVA)
 
-        # === POSITIONS ===
-        VOLCANO_VENT_X = jnp.array([35.0, 75.0, 115.0])
-        vent_choice = jax.random.randint(physics_key, (self.consts.MAX_ENEMIES,), 0, 3)
-        spawn_x_lava_base = VOLCANO_VENT_X[vent_choice]
-        spawn_x_lava_offset = jax.random.uniform( physics_key, (self.consts.MAX_ENEMIES,), minval=-5.0, maxval=5.0)
-        spawn_x_lava = spawn_x_lava_base + spawn_x_lava_offset
-
-        spawn_x_falling = jax.random.randint( physics_key, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH - 20  ).astype(jnp.float32)
-
-        SAFE_DISTANCE = 30
-        too_close = jnp.abs(spawn_x_falling - friend_x_constrained) < SAFE_DISTANCE
-        spawn_x_falling = jnp.where( too_close, jnp.where(spawn_x_falling < friend_x_constrained,spawn_x_falling - SAFE_DISTANCE, spawn_x_falling + SAFE_DISTANCE),spawn_x_falling  )
-        spawn_x_falling = jnp.clip(spawn_x_falling, 20, self.consts.WIDTH - 20)
-
-        spawn_x_generic = jnp.where( spawn_type_generic == EnemyType.BURNING_LAVA, spawn_x_lava, spawn_x_falling)
-
-        spawn_y_falling = jax.random.randint( physics_key, (self.consts.MAX_ENEMIES,), 18, 35 ).astype(jnp.float32)
-        spawn_y_lava = float(self.consts.GROUND_Y_MIN)
-        spawn_y_generic = jnp.where(spawn_type_generic == EnemyType.FALLING_ROCK, spawn_y_falling, spawn_y_lava  )
-
-        spawn_dy_lava = jax.random.uniform( physics_key, (self.consts.MAX_ENEMIES,), minval=-3.5, maxval=-2.0  )
-        spawn_dx_lava = jax.random.uniform( physics_key, (self.consts.MAX_ENEMIES,), minval=-0.8, maxval=0.8)
-
-        bridge_x = float(GAP_START_X + (GAP_END_X - GAP_START_X) // 2)
-        bridge_y = BRIDGE_Y
+        # === POSITIONS (both rock and lava fall from top) ===
+        spawn_x_generic = jax.random.randint( physics_key, (self.consts.MAX_ENEMIES,), 20, self.consts.WIDTH - 20  ).astype(jnp.float32)
+        spawn_x_generic = jnp.clip(spawn_x_generic, 20, self.consts.WIDTH - 20)
+        spawn_y_generic = jax.random.randint( physics_key, (self.consts.MAX_ENEMIES,), 18, 35 ).astype(jnp.float32)
 
         # === COMBINE SPAWNS ===
         should_spawn_final = jnp.logical_or( should_spawn_generic,  jnp.logical_or(eye_spawn_mask, bridge_spawn_mask) )
 
-        spawn_x = jnp.select( [bridge_spawn_mask, eye_spawn_mask, should_spawn_generic],[bridge_x, eye_x, spawn_x_generic],  default=0.0   )
-        spawn_y = jnp.select( [bridge_spawn_mask, eye_spawn_mask, should_spawn_generic], [bridge_y, eye_y, spawn_y_generic],  default=0.0  )
+        spawn_x = jnp.select( [bridge_spawn_mask, eye_spawn_mask, should_spawn_generic],[GAP_X, eye_x, spawn_x_generic],  default=0.0   )
+        spawn_y = jnp.select( [bridge_spawn_mask, eye_spawn_mask, should_spawn_generic], [GAP_Y, eye_y, spawn_y_generic],  default=0.0  )
         final_type = jnp.select( [bridge_spawn_mask, eye_spawn_mask, should_spawn_generic],  [EnemyType.RESTING_ROCK, EnemyType.EYE, spawn_type_generic], default=state.enemies_type  )
 
-        # Velocities - lava gets arc physics, everything else starts at 0
-        final_dx = jnp.where(  jnp.logical_and(should_spawn_generic, spawn_type_generic == EnemyType.BURNING_LAVA),  spawn_dx_lava, jnp.where(should_spawn_final, 0.0, state.enemies_dx))
-        final_dy = jnp.where( jnp.logical_and(should_spawn_generic, spawn_type_generic == EnemyType.BURNING_LAVA),  spawn_dy_lava,  jnp.where(should_spawn_final, 0.0, new_dy) )
+        # Velocities - all spawns start at 0 (gravity handles falling)
+        final_dx = jnp.where(should_spawn_final, 0.0, state.enemies_dx)
+        final_dy = jnp.where(should_spawn_final, 0.0, new_dy)
 
         final_x = jnp.where(should_spawn_final, spawn_x, new_x)
         final_y = jnp.where(should_spawn_final, spawn_y, new_y)
 
         # === CULLING ===
-        lava_returned_to_ground = jnp.logical_and(
-            final_type == EnemyType.BURNING_LAVA,
-            final_y >= float(self.consts.GROUND_Y_MIN)
-        )
         is_on_screen = jnp.logical_and(
             jnp.logical_and(final_x > -10, final_x < self.consts.WIDTH + 10),
             jnp.logical_and(final_y > -10, final_y < self.consts.PLAY_AREA_HEIGHT - 20) )
-        is_on_screen= jnp.logical_and(is_on_screen, jnp.logical_not(lava_returned_to_ground))
         # Resting rock is never culled by screen bounds (it sits at ground level)
         is_resting_final = final_type == EnemyType.RESTING_ROCK
         is_on_screen = jnp.logical_or(is_on_screen, is_resting_final)
@@ -1517,8 +1495,8 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         sel = [
             jnp.logical_and(jnp.logical_and(cx >= 47, cx <= 64), jnp.logical_and(cy >= 27, cy <= 51)),
             jnp.logical_and(jnp.logical_and(cx >= 113, cx <= 128), jnp.logical_and(cy >= 38, cy <= 52)),
-            jnp.logical_and(jnp.logical_and(cx >= 117, cx <= 132), jnp.logical_and(cy >= 101, cy <= 118)),
             jnp.logical_and(jnp.logical_and(cx >= 53, cx <= 68), jnp.logical_and(cy >= 96, cy <= 118)),
+            jnp.logical_and(jnp.logical_and(cx >= 117, cx <= 132), jnp.logical_and(cy >= 101, cy <= 118)),
             jnp.logical_and(jnp.logical_and(cx >= 97, cx <= 112), jnp.logical_and(cy >= 130, cy <= 151)),
             jnp.logical_and(jnp.logical_and(cx >= 33, cx <= 48), jnp.logical_and(cy >= 125, cy <= 151)),
         ]
@@ -1612,7 +1590,7 @@ class CrossbowRenderer(JAXGameRenderer):
         )
         self.pixel_masks = {c: jnp.array([[c]], dtype=jnp.uint8) for c in range(1, 9)}
 
-        target_h, target_w = 24, 16
+        target_h, target_w = 24, 20
         def pad_to_target(mask):
             h, w = mask.shape
             pad_h = max(0, target_h - h)
@@ -1707,13 +1685,6 @@ class CrossbowRenderer(JAXGameRenderer):
             pixel_mask = jax.lax.switch(state.scatter_px_color_idx[i] - 1, [lambda: self.pixel_masks[c] for c in range(1, 9)])
             return jax.lax.cond(state.scatter_px_active[i], lambda _r: self.jr.render_at(_r, state.scatter_px_x[i].astype(jnp.int32), state.scatter_px_y[i].astype(jnp.int32), pixel_mask), lambda _r: _r, r)
         raster = jax.lax.cond(is_dying, lambda r: jax.lax.fori_loop(0, 100, _draw_px, r), lambda r: r, raster)
-
-        # Enemies
-
-        masks = [self.SHAPE_MASKS["enemy"], self.SHAPE_MASKS["scorpion"], self.SHAPE_MASKS["ant"], self.SHAPE_MASKS["vulture"], self.SHAPE_MASKS["spawn"], self.SHAPE_MASKS["lava_rock"],self.SHAPE_MASKS["falling_rock"],
-                 self.SHAPE_MASKS["resting_rock"],self.SHAPE_MASKS["monkey"],self.SHAPE_MASKS["coconut"],
-                 self.SHAPE_MASKS["voracious_plant"]
-                 ]
 
 
 
