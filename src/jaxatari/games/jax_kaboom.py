@@ -252,10 +252,10 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: KaboomState):
         mad_bomber_pos = ObjectObservation.create(
-            x=jnp.array([jnp.clip(state.mad_bomber_pos_x.astype(jnp.int32), 0, self.consts.SCREEN_WIDTH)]),
-            y=jnp.array([jnp.clip(state.mad_bomber_pos_y.astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT)]),
-            width=jnp.array([self.consts.MAD_BOMBER_SIZE[0]], dtype=jnp.int32),
-            height=jnp.array([self.consts.MAD_BOMBER_SIZE[1]], dtype=jnp.int32)
+            x=jnp.array(jnp.clip(state.mad_bomber_pos_x.astype(jnp.int32), 0, self.consts.SCREEN_WIDTH)),
+            y=jnp.array(jnp.clip(state.mad_bomber_pos_y.astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT)),
+            width=jnp.array(self.consts.MAD_BOMBER_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.MAD_BOMBER_SIZE[1], dtype=jnp.int32)
         )
 
         buckets_pos = ObjectObservation.create(
