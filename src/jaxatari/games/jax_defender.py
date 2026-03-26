@@ -2096,7 +2096,15 @@ class JaxDefender(
             
             new_human_state = is_lander_still_lifting(enemy_type)
 
-            return new_human_state
+            return jax.lax.cond(
+                jnp.logical_and(
+                    enemy_type == self.consts.LANDER,
+                    state.enemy_states[lander_idx, 3] == self.consts.LANDER_STATE_ASCEND
+                ),
+                lambda: new_human_state,
+                lambda: jnp.array([human_x, human_y, self.consts.INACTIVE, 0]),
+            )
+
 
         def _human_step_falling(human_state: chex.Array) -> chex.Array:
             human_x = human_state[0]
@@ -2122,21 +2130,38 @@ class JaxDefender(
                 lambda: jnp.array([human_x, new_human_y, human_state[2], human_state[3]]),
             )
         
-        def _human_step_caughed(human_state: chex.Array) -> chex.Array:
+        def _human_step_caughed(human_state: chex.Array, human_index: int, state: DefenderState) -> chex.Array:
             human_x = human_state[0]
             human_y = human_state[1]
 
-            return jnp.array([human_x, human_y, human_state[2], human_state[3]])
+            new_human_x = state.space_ship_x + self.consts.SPACE_SHIP_WIDTH / 2 - self.consts.HUMAN_WIDTH / 2
+            new_human_y = state.space_ship_y + self.consts.SPACE_SHIP_HEIGHT / 2
+
+
+            # if human brought back to city set init
+            new_human = jax.lax.cond(
+                new_human_y <= self.consts.WORLD_HEIGHT - self.consts.CITY_HEIGHT,
+                lambda: jnp.array([new_human_x, new_human_y, human_state[2], human_state[3]]),
+                lambda: jnp.array([
+                    10 + human_index * (self.consts.WORLD_WIDTH / self.consts.HUMAN_LEVEL_AMOUNT[state.level]),
+                    self.consts.HUMAN_INIT_GAME_Y,
+                    self.consts.HUMAN_STATE_IDLE,
+                    0,
+                ]),
+            )
+
+
+            return jnp.array(new_human)
         
 
 
 
-        def human_movement_switch(human_state: chex.Array, human_index: chex.Array) -> chex.Array:
+        def human_movement_switch(human_state: chex.Array, human_index: chex.Array, state: DefenderState) -> chex.Array:
             new_human_state_idle = _human_step_idle(human_index, human_state)
             new_human_state_abducted = _human_step_abducted(state, human_state)
             new_human_state_falling = _human_step_falling(human_state)
             new_human_state_falling_deadly = _human_step_falling_deadly(human_state)
-            new_human_state_caught = _human_step_caughed(human_state)
+            new_human_state_caught = _human_step_caughed(human_state, human_index, state)
 
 
 
@@ -2152,7 +2177,7 @@ class JaxDefender(
                 ],
             )
 
-        human_states_updated = jax.vmap(human_movement_switch, in_axes=(0, 0))(state.human_states, jnp.arange(state.human_states.shape[0]))
+        human_states_updated = jax.vmap(human_movement_switch, in_axes=(0, 0, None))(state.human_states, jnp.arange(state.human_states.shape[0]), state)
 
         return human_states_updated
 
