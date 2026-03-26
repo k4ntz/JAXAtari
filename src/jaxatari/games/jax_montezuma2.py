@@ -358,14 +358,17 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             crossed = jnp.logical_and(player_feet_y < c_y, new_feet_y >= c_y)
             is_hit = jnp.logical_and(
                 state.conveyors_active[i] == 1,
-                jnp.logical_and(dy > 0, jnp.logical_and(is_climbing == 0, jnp.logical_and(crossed, jnp.logical_and(safe_x >= c_x - 3, safe_x < c_x + 43))))
+                jnp.logical_and(dy > 0, jnp.logical_and(crossed, jnp.logical_and(safe_x >= c_x - 3, safe_x < c_x + 43)))
             )
             return jnp.logical_or(h_f, is_hit), jnp.where(is_hit, c_y - self.consts.PLAYER_HEIGHT + 1, s_y)
-            
+
         hit_floor, snapped_y = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, check_c_hit_floor, (hit_floor_rm, snapped_y_rm))
-        
+
         new_y = jnp.where(hit_floor, snapped_y, new_y)
-        
+
+        # Stop climbing if we hit a floor (e.g. landing on a conveyor belt)
+        is_climbing = jnp.where(hit_floor, 0, is_climbing)
+
         # Set is_falling state
         new_is_falling = jnp.where(jnp.logical_and(new_is_jumping == 0, hit_floor == False), jnp.where(dy > 0, 1, 0), 0)
         new_is_falling = jnp.where(is_climbing == 1, 0, new_is_falling)

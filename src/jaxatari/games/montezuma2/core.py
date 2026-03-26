@@ -39,7 +39,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     DIGIT_HEIGHT: int = struct.field(pytree_node=False, default=8)
     
     # Gameplay Rules
-    OUT_OF_LADDER_DELAY: int = struct.field(pytree_node=False, default=15)
+    OUT_OF_LADDER_DELAY: int = struct.field(pytree_node=False, default=5)
     MAX_FALL_DISTANCE: int = struct.field(pytree_node=False, default=33) # ladder_height (39) - 6
     BOUNCE_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 27, 27, 27, 24, 21, 18, 15, 12, 9, 6, 3, 0], dtype=jnp.int32))
     DEATH_TIMER_FRAMES: int = struct.field(pytree_node=False, default=70)
