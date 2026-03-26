@@ -144,7 +144,7 @@ class JourneyEscapeConstants(AutoDerivedConstants):
 
     # Invincible Effect
     INV_DURATION_ROADIE: int = struct.field(pytree_node=False, default=6 * 50) # 6 seconds @ 50fps
-    INV_DURATION_MANAGER: int = struct.field(pytree_node=False, default=100000) # (longer than the max possible game time of ~60s)
+    INV_DURATION_MANAGER: int = struct.field(pytree_node=False, default=100000) # longer than the max possible game time of ~60s
 
     # True if the object stops movement / drags player
     IS_SOLID: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
@@ -234,11 +234,11 @@ class JourneyEscapeConstants(AutoDerivedConstants):
     diagonal_speed_alternates: bool = struct.field(pytree_node=False, default=False)
     # Per-frame probability of spontaneous direction flip (0.0 = never, checked every frame)
     diagonal_random_switch_prob: float = struct.field(pytree_node=False, default=0.0)
-    # Cooldown frames after a random/wall-bounce switch before another can happen
+    # Cooldown frames after a direction switch before another can happen
     diagonal_random_switch_cooldown: int = struct.field(pytree_node=False, default=20)
-    # Random range added to cooldown (actual cooldown = base + random(0..range))
+    # For randomized cooldown = base + random(0..range)
     diagonal_random_switch_cooldown_range: int = struct.field(pytree_node=False, default=40)
-    # When True, random direction switches are per-obstacle instead of per-group (obstacles can split)
+    # When True, random direction switches are per-obstacle instead of per-group
     diagonal_switch_per_obstacle: bool = struct.field(pytree_node=False, default=False)
 
 @struct.dataclass
@@ -469,7 +469,7 @@ class JaxJourneyEscape(
         wall_cd_rand_per_obs = self.consts.diagonal_random_switch_cooldown + jax.random.randint(
             rng_wall_cd, (self.consts.MAX_OBS,), 0, jnp.maximum(self.consts.diagonal_random_switch_cooldown_range, 1)
         )
-        # chaos mode: each obstacle gets its own cooldown; group mode: use representative's
+        # Chaos mode: each obstacle gets its own cooldown; group mode: use representative's
         wall_cd_rand = jnp.where(
             self.consts.diagonal_switch_per_obstacle,
             wall_cd_rand_per_obs,
@@ -550,7 +550,6 @@ class JaxJourneyEscape(
             spacing = group_data[2]
 
             # Lookup dimensions based on type_idx
-            # We convert the tuples to JAX arrays for lookup
             width_table = jnp.array(self.consts.TYPE_WIDTHS, dtype=jnp.int32)
             height_table = jnp.array(self.consts.TYPE_HEIGHTS, dtype=jnp.int32)
 
@@ -706,7 +705,7 @@ class JaxJourneyEscape(
 
         # Handle Consumables (whole row disapears)
 
-        # Identify the Y-coordinates of consumed items
+        # Y-coordinates of consumed items
         hit_y_values = jnp.where(consumable_collisions, boxes[:, 1], -999)
 
         # Does box[i].y match ANY of the hit_y_values?
@@ -845,21 +844,18 @@ class JaxJourneyEscape(
 
         # Determine Push Direction with Bias (25% Left / 75% Right) (as it is in ALE)
 
-        # Get the width of the obstacle we are currently crushed by
-        # boxes[:, 2] is width. We sum the widths of colliding boxes (usually just 1).
+        # Total width of obstacles, the player is currently crushed by
         crushed_width = jnp.sum(jnp.where(static_collisions, boxes[:, 2], 0))
 
         # Calculate the split threshold
-        # Normal center split is at 0.
-        # Since 0 is 50%, 25% corresponds to -Width/4 relative to center.
+        # Normal center split is at 0. Since 0 is 50%, 25% corresponds to -Width/4 relative to center.
         split_threshold = -(crushed_width // 4).astype(jnp.int32)
 
         # Get relative position
         crushed_rel_x = jnp.sum(jnp.where(static_collisions, relative_x, 0))
 
         # Determine Direction
-        # If we are to the right of the 25% mark -> Push Right (+1)
-        # Otherwise -> Push Left (-1)
+        # If past split_threshold -> Push Right (+1), otherwise -> Push Left (-1)
         push_dir = jnp.where(crushed_rel_x >= split_threshold, 1, -1)
 
         # Trigger Force Push ONLY if we are physically inside AND at the bottom
@@ -1054,15 +1050,14 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             color=COLOR_BLACK
         )
 
-        # Header
+        # Header (top blue area)
         header_sprite = self._create_solid_block(
             width=self.consts.screen_width,
             height=self.consts.top_blue_area_height,
             color=COLOR_BLUE
         )
 
-        # Footer
-        # Starts at bottom_blue_area -> Ends at screen_height
+        # Footer (bottom blue area)
         footer_sprite = self._create_solid_block(
             width=self.consts.screen_width,
             height=self.consts.bottom_blue_area_height,
@@ -1117,38 +1112,37 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         raster = self.jr.render_at(raster, 0, 10, bg_mask)
 
         # Render obstacles
-        # state.obstacles has shape (MAX_OBS, 5): [x, y, w, h, type_idx]
-        # We consider entries with h > 0 as "active".
-        obs_boxes = state.obstacles  # (MAX_OBS, 5)
+        # state.obstacles has shape (MAX_OBS, 8), "active" if h > 0
+        obs_boxes = state.obstacles
 
         # barrier (ID 0) - Returns 32x15
         BARRIER_MASK = self.SHAPE_MASKS["barrier"] # 0
 
         # Table for Small Items (IDs 1-4) - Returns 8x15
-        # Note: These lambda functions expect indices 0, 1, 2, 3, so we will subtract 1 from the ID
         SMALL_TABLE = [
-            lambda frame: self.SHAPE_MASKS["roadie"][frame],  # 1 -> 0
-            lambda frame: self.SHAPE_MASKS["groupies"][frame],  # 2 -> 1
-            lambda frame: self.SHAPE_MASKS["promoter"][frame],  # 3 -> 2
-            lambda frame: self.SHAPE_MASKS["photographer"],  # 4 -> 3
+            lambda frame: self.SHAPE_MASKS["roadie"][frame],
+            lambda frame: self.SHAPE_MASKS["groupies"][frame],
+            lambda frame: self.SHAPE_MASKS["promoter"][frame], 
+            lambda frame: self.SHAPE_MASKS["photographer"],
         ]
 
         # Table for Big Items (IDs 5-8) - Returns 16x15
-        # Note: These lambda functions expect indices 0, 1, 2, so we will subtract 5 from the ID
         BIG_TABLE = [
-            lambda frame: self.SHAPE_MASKS["big_roadie"][frame],  # 5 -> 0
-            lambda frame: self.SHAPE_MASKS["big_groupies"][frame],  # 6 -> 1
-            lambda frame: self.SHAPE_MASKS["big_promoter"][frame],  # 7 -> 2
-            lambda frame: self.SHAPE_MASKS["big_photographer"],  # 8 -> 3
+            lambda frame: self.SHAPE_MASKS["big_roadie"][frame], 
+            lambda frame: self.SHAPE_MASKS["big_groupies"][frame], 
+            lambda frame: self.SHAPE_MASKS["big_promoter"][frame],
+            lambda frame: self.SHAPE_MASKS["big_photographer"],
         ]
-
-        MANAGER_MASK = lambda frame: self.SHAPE_MASKS["big_manager"][frame]  # 9
+        
+        # For Mighty Manager (ID 9) - Returns 17x15
+        MANAGER_MASK = lambda frame: self.SHAPE_MASKS["big_manager"][frame]
 
         def draw_barrier(r, x, y):
             mask = BARRIER_MASK
             return self.jr.render_at_clipped(r, x, y, mask)
 
         def draw_small(r, x, y, type_idx, frame_idx):
+            # Map global ID (1,2,3,4) to local table index (0,1,2,3)
             mask = jax.lax.switch(type_idx - 1, SMALL_TABLE, frame_idx)
             return self.jr.render_at_clipped(r, x, y, mask)
 
