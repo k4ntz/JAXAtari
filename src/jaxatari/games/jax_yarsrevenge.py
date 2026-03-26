@@ -335,6 +335,8 @@ class YarsRevengeConstants(PyTreeNode):
     RENDERER_QOTILE_BRIGHTNESS_STEP_END: float = 0.8
     RENDERER_QOTILE_STEP_MOD: int = 100
 
+    RENDERER_VISUAL_NOISE: bool = False
+
 
 @dataclass
 class YarsRevengeState:
@@ -1991,7 +1993,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
             ),
         )
 
-        return raster
+        return raster.astype(jnp.uint8)
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_destroyer(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
@@ -2030,7 +2032,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
             raster,
         )
 
-        return raster
+        return raster.astype(jnp.uint8)
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_cannon(self, info: Tuple[YarsRevengeState, jnp.ndarray]):
@@ -2138,26 +2140,54 @@ class YarsRevengeRenderer(JAXGameRenderer):
 
         state, raster = info
 
+        no_shield_rendering = jnp.logical_and(
+            state.step_counter % 2 == 1, self.consts.RENDERER_VISUAL_NOISE
+        )
+
+        no_neutral_zone_rendering = jnp.logical_and(
+            state.step_counter % 2 == 0, self.consts.RENDERER_VISUAL_NOISE
+        )
+
         # Energy shield
-        raster = self._render_energy_shield((state, raster))
+        raster = jax.lax.cond(
+            no_shield_rendering,
+            lambda: raster,
+            lambda: self._render_energy_shield((state, raster)),
+        )
 
         # Yar sprite, choose animation frame based on movement speed to render
         raster = self._render_yar((state, raster))
 
         # Destroyer sprite
-        raster = self._render_destroyer((state, raster))
+        raster = jax.lax.cond(
+            no_neutral_zone_rendering,
+            lambda: raster,
+            lambda: self._render_destroyer((state, raster)),
+        )
 
         # Energy missile, only when it exists
-        raster = self._render_energy_missile((state, raster))
+        raster = jax.lax.cond(
+            no_neutral_zone_rendering,
+            lambda: raster,
+            lambda: self._render_energy_missile((state, raster)),
+        )
 
         # Cannon alternates between full and half sprite every frame
-        raster = self._render_cannon((state, raster))
+        raster = jax.lax.cond(
+            no_neutral_zone_rendering,
+            lambda: raster,
+            lambda: self._render_cannon((state, raster)),
+        )
 
         # Qotile and swirl, one sprite each (swirl has its own animation)
         raster = self._render_qotile_and_swirl((state, raster))
 
         # Neutral zone overlay
-        raster = self._render_neutral_zone((state, raster))
+        raster = jax.lax.cond(
+            no_neutral_zone_rendering,
+            lambda: raster,
+            lambda: self._render_neutral_zone((state, raster)),
+        )
 
         return raster.astype(jnp.uint8)
 
@@ -2199,8 +2229,19 @@ class YarsRevengeRenderer(JAXGameRenderer):
 
         state, raster = info
 
+        no_shield_rendering = jnp.logical_and(
+            state.step_counter % 2 == 1, self.consts.RENDERER_VISUAL_NOISE
+        )
+        no_neutral_zone_rendering = jnp.logical_and(
+            state.step_counter % 2 == 0, self.consts.RENDERER_VISUAL_NOISE
+        )
+
         # Energy shield
-        raster = self._render_energy_shield((state, raster))
+        raster = jax.lax.cond(
+            no_shield_rendering,
+            lambda: raster,
+            lambda: self._render_energy_shield((state, raster)),
+        )
 
         # Yar sprite, choose animation frame based on movement speed to render
         raster = jax.lax.cond(
@@ -2213,7 +2254,11 @@ class YarsRevengeRenderer(JAXGameRenderer):
         raster = self._render_qotile_and_swirl((state, raster))
 
         # Neutral zone overlay
-        raster = self._render_neutral_zone((state, raster))
+        raster = jax.lax.cond(
+            no_neutral_zone_rendering,
+            lambda: raster,
+            lambda: self._render_neutral_zone((state, raster)),
+        )
 
         return raster.astype(jnp.uint8)
 
@@ -2382,7 +2427,8 @@ class YarsRevengeRenderer(JAXGameRenderer):
                 self.consts.RENDERER_QOTILE_COLOR_HUE_VALUES[used_hue_index], brightness
             )
 
-        modified_palette = jax.lax.cond(state.game_state != YarsRevengeGameState.SCOREBOARD,
+        modified_palette = jax.lax.cond(
+            state.game_state != YarsRevengeGameState.SCOREBOARD,
             lambda: modified_palette.at[1].set(color),
             lambda: modified_palette,
         )
