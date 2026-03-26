@@ -2,6 +2,7 @@ from jax import random as jrandom
 import os
 from functools import partial
 from typing import NamedTuple, Tuple
+from flax import struct
 import jax.lax
 import jax.numpy as jnp
 import chex
@@ -17,7 +18,7 @@ from jaxatari.spaces import Space
 from typing import Tuple
 
 
-class DefenderConstants(NamedTuple):
+class DefenderConstants(struct.PyTreeNode):
     ## Game settings
     # Screen settings
     SCREEN_WIDTH: int = 160
@@ -142,13 +143,19 @@ class DefenderConstants(NamedTuple):
 
     LANDER_DEATH_SCORE: int = 150
     LANDER_MAX_AMOUNT: int = 5
-    LANDER_LEVEL_AMOUNT: chex.Array = jnp.array([16, 18, 19, 20, 20])
+    LANDER_LEVEL_AMOUNT: chex.Array = struct.field(
+        pytree_node=True,
+        default_factory=lambda: jnp.array([16, 18, 19, 20, 20]),
+    )
 
     # Pod
     POD_Y_SPEED: float = 0.08
     POD_DEATH_SCORE: int = 1000
     POD_MAX_AMOUNT: int = 3
-    POD_LEVEL_AMOUNT: chex.Array = jnp.array([2, 2, 3, 3, 3])
+    POD_LEVEL_AMOUNT: chex.Array = struct.field(
+        pytree_node=True,
+        default_factory=lambda: jnp.array([2, 2, 3, 3, 3]),
+    )
     ENEMY_SPAWN_AROUND_MIN_RADIUS: float = 5.0
     ENEMY_SPAWN_AROUND_MAX_RADIUS: float = 25.0
 
@@ -157,7 +164,10 @@ class DefenderConstants(NamedTuple):
     BOMB_TTL_FRAMES: int = 30
     BOMBER_DEATH_SCORE: int = 250
     BOMBER_MAX_AMOUNT: int = 1
-    BOMBER_LEVEL_AMOUNT: chex.Array = jnp.array([1, 2, 2, 2, 2])
+    BOMBER_LEVEL_AMOUNT: chex.Array = struct.field(
+        pytree_node=True,
+        default_factory=lambda: jnp.array([1, 2, 2, 2, 2]),
+    )
 
     # Swarmers
     SWARM_SPAWN_MIN: int = 1
@@ -202,7 +212,10 @@ class DefenderConstants(NamedTuple):
     HUMAN_CAUGHT_AND_RETURNED_SCORE: int = 1000
 
     HUMAN_MAX_AMOUNT: int = 6
-    HUMAN_LEVEL_AMOUNT: chex.Array = jnp.array([5, 5, 6, 6, 6])
+    HUMAN_LEVEL_AMOUNT: chex.Array = struct.field(
+        pytree_node=True,
+        default_factory=lambda: jnp.array([5, 5, 6, 6, 6]),
+    )
 
     ## BULLET AND LASER
 
