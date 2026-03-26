@@ -3,6 +3,7 @@ import os
 from functools import partial
 from typing import NamedTuple, Tuple
 from flax import struct
+from jax._src.lax.lax import select
 import jax.lax
 import jax.numpy as jnp
 import chex
@@ -1467,8 +1468,12 @@ class JaxDefender(
         # Find first enemy that is inactive
         mask = jnp.array(state.enemy_states[:, 2] == self.consts.INACTIVE)
         match = mask.argmax()
+
         # If no open slot availabe, dismiss new enemy
         open_slot_available = jnp.logical_or(match != 0, mask[0])
+
+        # Hard force if it is a mutant
+        open_slot_available = jnp.logical_or(open_slot_available, e_type == self.consts.MUTANT)
 
         index = match
         enemy = jnp.array([game_x, game_y, e_type, arg1, arg2])
@@ -1716,7 +1721,6 @@ class JaxDefender(
                 self.consts.BOMBER_LEVEL_AMOUNT[state.level],
             ]
         )
-
         is_done = jnp.array_equal(enemy_killed, needed_kills)
         state = jax.lax.cond(is_done, lambda: self._end_level(state), lambda: state)
         return state
@@ -1953,6 +1957,29 @@ class JaxDefender(
             shooting_cooldown=0,
         )
         return state
+
+    def _generate_mutant(
+        self, human_states: chex.Array, enemy_states: chex.Array, state: DefenderState
+    ) -> chex.Array:
+        # Look if there is a difference in human counts
+        mask = jnp.sum(state.human_states[:, 2] == self.consts.HUMAN_STATE_ABDUCTED)
+        new_mask = jnp.sum(human_states[:, 2] == self.consts.HUMAN_STATE_ABDUCTED)
+
+        inactive_mask = jnp.sum(state.human_states[:, 2] == self.consts.INACTIVE)
+        inactive_new_mask = jnp.sum(human_states[:, 2] == self.consts.INACTIVE)
+
+        abducted = mask > new_mask
+        inactive = inactive_mask < inactive_new_mask
+
+        mutant_spawn = jnp.logical_and(abducted, inactive)
+
+        index, mutant = self._spawn_enemy_random_pos(state, self.consts.MUTANT, state.key)
+
+        enemy_states = enemy_states.at[self.consts.ENEMY_MAX_IN_GAME - 1].set(
+            jnp.where(mutant_spawn, mutant, enemy_states[self.consts.ENEMY_MAX_IN_GAME - 1])
+        )
+
+        return enemy_states
 
     def _lander_movement(
         self,
@@ -2480,6 +2507,8 @@ class JaxDefender(
             score, enemy_killed = self._calculate_score(state, enemy_states)
 
             human_states = self._human_step(state)
+
+            enemy_states = self._generate_mutant(human_states, enemy_states, state)
 
             game_over = self._space_ship_collision_step(state)
 
