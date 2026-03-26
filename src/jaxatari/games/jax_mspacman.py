@@ -50,25 +50,25 @@ class GhostMode(IntEnum):
 # -------- Constants --------
 # GENERAL
 RESET_LEVEL = 1 # The starting level, loaded when reset is called
-TIME_SCALE = 56 # Approximate number of timesteps in a second
+TIME_SCALE = 20 # Approximate number of timesteps in a second scaled to the original game speed (on my hardware: ~56 steps/s, ~2.8x faster than the ALE version -> 56 / 2.8 = 16)
 INITIAL_LIVES = 3 # Number of starting bonus lives
 MAX_LIVE_COUNT = 4 # Maximum possible number of lives
 MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
-PELLETS_TO_COLLECT = 154 # Total pellets to collect in the maze (including power pellets)
 BONUS_LIFE_SCORE = 10000 # Score at which a bonus life is rewarded
 COLLISION_THRESHOLD = 6 # Contacts below this distance count as collision
+PELLETS_TO_COLLECT = jnp.array([154, 150, 158, 154]) # Total pellets to collect in each maze (including power pellets)
 
 # GHOST TIMINGS
-SUE_RELEASE_TIME = 0.5*TIME_SCALE
-INKY_RELEASE_TIME = 3*TIME_SCALE
-PINKY_RELEASE_TIME = 4*TIME_SCALE
-RESET_TIMER = 2*TIME_SCALE # Timer for resetting the game after death
+SUE_RELEASE_TIME = 1*TIME_SCALE
+INKY_RELEASE_TIME = 5*TIME_SCALE
+PINKY_RELEASE_TIME = 7*TIME_SCALE
+RESET_TIMER = 4*TIME_SCALE # Timer for resetting the game after death
 CHASE_DURATION = 20*TIME_SCALE # Approximately 20s
 SCATTER_DURATION = 7*TIME_SCALE # Approximately 7s
-FRIGHTENED_DURATION = 6*TIME_SCALE # Approximately 6s
-BLINKING_DURATION = 2*TIME_SCALE # Approximately 2s
-ENJAILED_DURATION = 5*TIME_SCALE # Approximately 5s
-FRIGHTENED_REDUCTION = 0.9 # This factor times the level number is applied to the frightened and blinking duration
+FRIGHTENED_DURATION = 13*TIME_SCALE # Approximately 13s
+BLINKING_DURATION = 4*TIME_SCALE # Approximately 4s
+ENJAILED_DURATION = 10*TIME_SCALE # Approximately 10s
+FRIGHTENED_REDUCTION = 0.85 # This factor times the level number is applied to the frightened and blinking duration
 RETURN_DURATION = TIME_SCALE/2 # Should be as long as it takes the ghost to return from jail to the path
 MAX_CHASE_OFFSET = CHASE_DURATION/10 # Maximum value that can be added to the chase duration
 MAX_SCATTER_OFFSET = SCATTER_DURATION/10 # Maximum value that can be added to the scatter duration
@@ -484,7 +484,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         )
         # 5) Check win condition
         level_id, reward = jax.lax.cond(
-            collected_pellets >= PELLETS_TO_COLLECT,
+            collected_pellets >= PELLETS_TO_COLLECT[get_level_maze(state.level.id)],
             lambda: (state.level.id + 1, reward + LEVEL_COMPLETED_POINTS),
             lambda: (state.level.id, reward)
         )
@@ -541,24 +541,24 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         def update_ghost_mode(mode, action, timer, step_count, ate_power_pellet):
             new_timer = jax.lax.cond(
                 timer > 0,
-                lambda: jnp.array(timer - 1, dtype=jnp.uint16),
-                lambda: jnp.array(timer, dtype=jnp.uint16)
+                lambda: jnp.array(timer - 1.0, dtype=jnp.float16),
+                lambda: jnp.array(timer, dtype=jnp.float16)
             )
             timing_factor = jax.lax.cond(
                 state.level.id == 1,
                 lambda: 1.0,
-                lambda: FRIGHTENED_REDUCTION * (state.level.id - 1)
+                lambda: FRIGHTENED_REDUCTION ** (state.level.id - 1)
             )
             return jax.lax.cond(
                 ate_power_pellet & (mode != GhostMode.ENJAILED) & (mode != GhostMode.RETURNING),
                 lambda: (
                     jnp.array(GhostMode.FRIGHTENED, dtype=jnp.uint8),
                     jnp.array(reverse_action(action), dtype=jnp.uint8),
-                    jnp.array(FRIGHTENED_DURATION * timing_factor, dtype=jnp.uint16),
+                    jnp.array(FRIGHTENED_DURATION * timing_factor, dtype=jnp.float16),
                     True
                 ),
                 lambda: jax.lax.cond(
-                    (timer > 0) & (new_timer == 0),
+                    (timer > 0) & (new_timer <= 0),
                     lambda: jax.lax.switch(
                         mode,
                         (
@@ -617,18 +617,22 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             return pathfind(position, action, chase_target, allowed, key)
 
         def start_scatter(action, step_count): # succeeds chase mode
+            OFFSET_SCALE = 10.0
+            scaled_offset = jnp.round(MAX_SCATTER_OFFSET * OFFSET_SCALE)
             return (
                 jnp.array(GhostMode.SCATTER, dtype=jnp.uint8),
                 jnp.array(reverse_action(action), dtype=jnp.uint8),
-                jnp.array(SCATTER_DURATION + jax.random.randint(common_key, (), 0, MAX_SCATTER_OFFSET), dtype=jnp.uint16),
+                jnp.array(SCATTER_DURATION + (jax.random.randint(common_key, (), -scaled_offset, scaled_offset) / OFFSET_SCALE), dtype=jnp.float16),
                 True
             )
         
         def start_chase_reverse(action, step_count): # succeeds scatter mode
+            OFFSET_SCALE = 10.0
+            scaled_offset = jnp.round(MAX_CHASE_OFFSET * OFFSET_SCALE)
             return (
                 jnp.array(GhostMode.CHASE, dtype=jnp.uint8),
                 jnp.array(reverse_action(action), dtype=jnp.uint8),
-                jnp.array(CHASE_DURATION + jax.random.randint(common_key, (), 0, MAX_CHASE_OFFSET), dtype=jnp.uint16),
+                jnp.array(CHASE_DURATION + (jax.random.randint(common_key, (), -scaled_offset, scaled_offset) / OFFSET_SCALE), dtype=jnp.float16),
                 True
             )
         
@@ -636,7 +640,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             return (
                 jnp.array(GhostMode.CHASE, dtype=jnp.uint8),
                 jnp.array(action, dtype=jnp.uint8),
-                jnp.array(CHASE_DURATION, dtype=jnp.uint16),
+                jnp.array(CHASE_DURATION, dtype=jnp.float16),
                 False
             )
         
@@ -644,7 +648,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             return (
                 jnp.array(GhostMode.RETURNING, dtype=jnp.uint8),
                 jnp.array(Action.UP, dtype=jnp.uint8),
-                jnp.array(RETURN_DURATION, dtype=jnp.uint16),
+                jnp.array(RETURN_DURATION, dtype=jnp.float16),
                 True
             )
         
@@ -652,23 +656,23 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             timing_factor = jax.lax.cond(
                 state.level.id == 1,
                 lambda: 1.0,
-                lambda: FRIGHTENED_REDUCTION * (state.level.id - 1)
+                lambda: FRIGHTENED_REDUCTION ** (state.level.id - 1)
             )
             return (
                 jnp.array(GhostMode.BLINKING, dtype=jnp.uint8),
                 jnp.array(action, dtype=jnp.uint8),
-                jnp.array(jnp.round(BLINKING_DURATION * timing_factor), dtype=jnp.uint16),
+                jnp.array(jnp.round(BLINKING_DURATION * timing_factor), dtype=jnp.float16),
                 False
             )
         
         def start_returned(action, step_count): # returning
             return jax.lax.cond(
-                step_count > SCATTER_DURATION,
+                step_count > (SCATTER_DURATION + 1) * TIME_SCALE,
                 lambda: start_chase_no_reverse(action, step_count),
                 lambda: (
                     jnp.array(GhostMode.RANDOM, dtype=jnp.uint8),
                     jnp.array(action, dtype=jnp.uint8),
-                    jnp.array(SCATTER_DURATION, dtype=jnp.uint16),
+                    jnp.array(SCATTER_DURATION, dtype=jnp.float16),
                     False
                 )
             )
@@ -1512,13 +1516,13 @@ def get_new_position(position: chex.Array, action: chex.Array):
 def get_level_maze(level: chex.Array):
     """Returns the maze id that correpsonds to the current level."""
     return jax.lax.switch(  # Invalid levels (<0) are not handled explicitly and just get assigned to level 0
-        jnp.digitize(level, jnp.array([3, 6, 10, 14])).astype(jnp.int32),
+        jnp.digitize(level, jnp.array([2, 4, 6, 8]), right=True).astype(jnp.int32),
         (
-            lambda lvl: jnp.array(0, dtype=jnp.int32),  # Levels 1-3
-            lambda lvl: jnp.array(1, dtype=jnp.int32),  # Levels 4-6
-            lambda lvl: jnp.array(2, dtype=jnp.int32),  # Levels 7-10
-            lambda lvl: jnp.array(3, dtype=jnp.int32),  # Levels 11-14
-            lambda lvl: jax.lax.cond(                   # Levels 15+
+            lambda lvl: jnp.array(0, dtype=jnp.int32),  # Levels 1-2
+            lambda lvl: jnp.array(1, dtype=jnp.int32),  # Levels 3-4
+            lambda lvl: jnp.array(2, dtype=jnp.int32),  # Levels 5-6
+            lambda lvl: jnp.array(3, dtype=jnp.int32),  # Levels 7-8
+            lambda lvl: jax.lax.cond(                   # Levels 9+
                 (lvl % 4 == 0) | (lvl % 4 == 1),
                 lambda: jnp.array(2, dtype=jnp.int32),
                 lambda: jnp.array(3, dtype=jnp.int32)
@@ -1532,7 +1536,7 @@ def get_level_fruit(level: chex, key: chex.Array):
     """Returns the fruit that corresponds to the current level."""
     return jax.lax.cond(
         level > 7,
-        lambda: jax.random.randint(key, (), 1, 8),
+        lambda: jax.random.randint(key, (), 0, 6),
         lambda: jax.lax.switch(
             level,
             (
