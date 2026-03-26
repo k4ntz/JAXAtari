@@ -528,7 +528,16 @@ def make_train(config):
 
     return train
 
-def _generate_single_final_video(config, params, batch_stats, seed_idx, mods_config, video_label, video_index=0):
+def _generate_single_final_video(
+    config,
+    params,
+    batch_stats,
+    seed_idx,
+    mods_config,
+    video_label,
+    video_index=0,
+    env_step=None,
+):
     """Generate a single video for the given mod configuration and log it to wandb."""
     env = jaxatari.make(config["ENV_NAME"].lower(), mods=mods_config)
     renderer = env.renderer
@@ -612,16 +621,21 @@ def _generate_single_final_video(config, params, batch_stats, seed_idx, mods_con
         frames = np.transpose(frames, (0, 3, 1, 2))
 
         video = wandb.Video(frames, fps=30, format="mp4")
-        wandb.log({
+        log_payload = {
             f"final_video_seed{seed_idx}_{video_label}": video,
             f"final_return_seed{seed_idx}_{video_label}": total_reward,
-        })
+        }
+        if env_step is not None:
+            log_payload["env_step"] = int(env_step)
+            wandb.log(log_payload, step=int(env_step))
+        else:
+            wandb.log(log_payload)
         print(f"Video '{video_label}' logged to wandb.")
 
     return total_reward
 
 
-def generate_final_video(config, params, batch_stats, seed_idx=0):
+def generate_final_video(config, params, batch_stats, seed_idx=0, env_step=None):
     """Generate videos of the trained agent: one for train env, one per mod in MOD_NAME list."""
     print(f"Generating final videos for seed {seed_idx}...")
 
@@ -642,7 +656,16 @@ def generate_final_video(config, params, batch_stats, seed_idx=0):
             video_configs.append((mods_config, mod_label))
 
     for video_index, (mods_config, video_label) in enumerate(video_configs):
-        _generate_single_final_video(config, params, batch_stats, seed_idx, mods_config, video_label, video_index)
+        _generate_single_final_video(
+            config,
+            params,
+            batch_stats,
+            seed_idx,
+            mods_config,
+            video_label,
+            video_index,
+            env_step=env_step,
+        )
 
 
 #TODO: 
@@ -707,7 +730,14 @@ def single_run(config):
         model_state = outs["runner_state"][0]
         params = jax.tree_util.tree_map(lambda x: x[0], model_state.params)
         batch_stats = jax.tree_util.tree_map(lambda x: x[0], model_state.batch_stats)
-        generate_final_video(config, params, batch_stats, seed_idx=0)
+        final_env_step = int(jax.device_get(model_state.timesteps[0]))
+        generate_final_video(
+            config,
+            params,
+            batch_stats,
+            seed_idx=0,
+            env_step=final_env_step,
+        )
 
     wandb.finish()
 
