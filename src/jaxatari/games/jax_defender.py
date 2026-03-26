@@ -1841,6 +1841,149 @@ class JaxDefender(
         )
         return jnp.stack(new_lander)
 
+
+    def _pod_movement(self, pod: chex.Array, state: DefenderState) -> chex.Array:
+        pod_x = pod[0]
+        pod_y = pod[1]
+
+        speed_x, speed_y = jax.lax.cond(
+            state.space_ship_speed > 0,
+            lambda: (-self.consts.ENEMY_SPEED, self.consts.POD_Y_SPEED),
+            lambda: (self.consts.ENEMY_SPEED, self.consts.POD_Y_SPEED),
+        )
+
+        x, y = self._move_and_wrap(
+            pod_x,
+            pod_y,
+            speed_x + state.space_ship_speed * self.consts.SHIP_SPEED_INFLUENCE_ON_SPEED,
+            speed_y,
+        )
+        new_pod = [x, y, pod[2], pod[3], pod[4]]
+        return jnp.stack(new_pod)
+
+    def _mutant_movement(self, mutant: chex.Array, state: DefenderState) -> chex.Array:
+        mutant_x = mutant[0]
+        mutant_y = mutant[1]
+
+        speed_x, speed_y = jax.lax.cond(
+            state.space_ship_speed > 0,
+            lambda: (-self.consts.ENEMY_SPEED, self.consts.POD_Y_SPEED),
+            lambda: (self.consts.ENEMY_SPEED, self.consts.POD_Y_SPEED),
+        )
+
+        x, y = self._move_and_wrap(
+            mutant_x,
+            mutant_y,
+            speed_x + state.space_ship_speed * self.consts.SHIP_SPEED_INFLUENCE_ON_SPEED,
+            speed_y,
+        )
+        new_mutant = [x, y, mutant[2], mutant[3], mutant[4]]
+        return jnp.stack(new_mutant)
+
+    def _bomber_movement(
+        self,
+        bomber: chex.Array,
+        state: DefenderState,
+    ) -> chex.Array:
+
+        x_pos = bomber[0]
+        y_pos = bomber[1]
+        direction_right = bomber[4]
+        speed_x = self.consts.ENEMY_SPEED
+        # acceleration in x direction
+        speed_x = jax.lax.cond(direction_right, lambda s: s, lambda s: -s, operand=speed_x)
+
+        # change direction if spaceship is crossed and passed by 30
+        direction_right = jax.lax.cond(
+            jnp.logical_and(direction_right, x_pos > state.space_ship_x + 30),
+            lambda _: 0.0,
+            lambda _: jax.lax.cond(
+                jnp.logical_and(jnp.logical_not(direction_right), x_pos < state.space_ship_x - 30),
+                lambda _: 1.0,
+                lambda _: direction_right,
+                operand=None,
+            ),
+            operand=None,
+        )
+        x_pos, y_pos = self._move_and_wrap(
+            x_pos,
+            y_pos,
+            speed_x + state.space_ship_speed * self.consts.SHIP_SPEED_INFLUENCE_ON_SPEED,
+            self.consts.BOMBER_Y_SPEED,
+        )
+        new_bomber = [x_pos, y_pos, bomber[2], bomber[3], direction_right]
+        return jnp.stack(new_bomber)
+
+    def _swarmers_movement(
+        self,
+        swarmer: chex.Array,
+        state: DefenderState,
+    ) -> chex.Array:
+        x_pos = swarmer[0]
+        y_pos = swarmer[1]
+        speed = swarmer[4]
+        swarmer_direction = swarmer[3]
+        speed = speed + 0.05  # acceleration over time
+        # max speed
+        speed = jnp.clip(speed, a_min=-self.consts.SWARMERS_MAX_SPEED, a_max=self.consts.SWARMERS_MAX_SPEED)
+        speed_x = speed
+        # acceleration in x direction
+        speed_x = jax.lax.cond(
+            swarmer_direction == 1,
+            lambda s: s,
+            lambda s: -s,
+            operand=speed_x,
+        )
+        swarmer_direction = jax.lax.cond(
+            swarmer_direction == 0,
+            lambda _: jax.lax.cond(
+                x_pos < state.space_ship_x,
+                lambda _: 1.0,
+                lambda _: -1.0,
+                operand=None,
+            ),
+            lambda _: jax.lax.cond(
+                swarmer_direction == 3,
+                lambda _: jax.lax.cond(
+                    x_pos > state.space_ship_x + 100,
+                    lambda _: -1.0,
+                    lambda _: jax.lax.cond(
+                        x_pos < state.space_ship_x - 100,
+                        lambda _: 1.0,
+                        lambda _: swarmer_direction,
+                        operand=None,
+                    ),
+                    operand=None,
+                ),
+                lambda _: jax.lax.cond(
+                    jnp.logical_and(x_pos < state.space_ship_x + 5, x_pos > state.space_ship_x - 5),
+                    lambda _: 0.0,
+                    lambda _: swarmer_direction,
+                    operand=None,
+                ),
+                operand=None,
+            ),
+            operand=None,
+        )
+
+        speed_x, speed_y = jax.lax.cond(
+            jnp.logical_or(swarmer_direction == 3, swarmer_direction == 0),
+            lambda: (0.0, self.consts.SWARMERS_Y_SPEED),
+            lambda: (speed_x, 0.0),
+        )
+
+        speed = jnp.where(swarmer_direction == 0, 0.0, speed)
+
+        x_pos, y_pos = self._move_and_wrap(
+            x_pos,
+            y_pos,
+            speed_x + state.space_ship_speed * self.consts.SHIP_SPEED_INFLUENCE_ON_SPEED,
+            speed_y,
+        )
+
+        new_swarmer = [x_pos, y_pos, swarmer[2], swarmer_direction, speed]
+        return jnp.stack(new_swarmer)
+
     def _enemy_step(self, state: DefenderState) -> DefenderState:
         def _enemy_move_switch(enemy: chex.Array, state: DefenderState) -> DefenderState:
             enemy_type = enemy[2]
@@ -1852,10 +1995,10 @@ class JaxDefender(
             # mutant_state = self._mutant_movement(enemy, state)
             baiter_state = enemy
 
-            pod_state = enemy
-            bomber_state = enemy
-            swarmers_state = enemy
-            mutant_state = enemy
+            pod_state = self._pod_movement(enemy, state)
+            bomber_state = self._bomber_movement(enemy, state)
+            swarmers_state = self._swarmers_movement(enemy, state)
+            mutant_state = self._mutant_movement(enemy, state)
             delete_state = enemy
 
             enemy_state = jax.lax.switch(
