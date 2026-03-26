@@ -5,6 +5,7 @@
 from typing import NamedTuple, Tuple
 import os
 from functools import partial
+from flax.nnx import state
 import jax
 import jax.numpy as jnp
 import chex
@@ -94,13 +95,14 @@ class TicTacToe3DConstants(NamedTuple):
     PLAYER_O: int = 2
     FIRST_PLAYER: int = 1
     WIN_MASKS: chex.Array = WIN_MASKS_ARRAY
-    HEIGHT: int = 207
-    WIDTH: int = 156
+    HEIGHT: int = 210
+    WIDTH: int = 160
     NUM_ACTIONS: int = 8
-    BLINK_PERIOD: int = 15
+    BLINK_PERIOD: int = 8
     MOVE_COOLDOWN: int = 6
     CELL_CENTER_X: int = 0
     CELL_CENTER_Y: int = 0
+    BLACKOUT_FRAMES: int = 50
     PIXEL_COORDS: chex.Array = PIXEL_COORDS_GENERATED
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
@@ -113,6 +115,15 @@ class TicTacToe3DState(NamedTuple):
     cursor_x: jnp.ndarray
     cursor_y: jnp.ndarray
     cursor_z: jnp.ndarray
+    last_cpu_x: jnp.ndarray
+    last_cpu_y: jnp.ndarray
+    last_cpu_z: jnp.ndarray
+    blackout_active: jnp.ndarray
+    blackout_timer: jnp.ndarray
+    pending_cpu_x: jnp.ndarray
+    pending_cpu_y: jnp.ndarray
+    pending_cpu_z: jnp.ndarray
+    pending_cpu_valid: jnp.ndarray
     frame: jnp.ndarray
     key: chex.PRNGKey           
 
@@ -177,6 +188,15 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
             cursor_x=jnp.int32(0),
             cursor_y=jnp.int32(0),
             cursor_z=jnp.int32(0),
+            last_cpu_x=jnp.int32(-1),
+            last_cpu_y=jnp.int32(-1),
+            last_cpu_z=jnp.int32(-1),
+            blackout_active=jnp.bool_(False),
+            blackout_timer=jnp.int32(0),
+            pending_cpu_x=jnp.int32(-1),
+            pending_cpu_y=jnp.int32(-1),
+            pending_cpu_z=jnp.int32(-1),
+            pending_cpu_valid=jnp.bool_(False),
             frame=jnp.int32(0),
             key=subkey
         )
@@ -185,51 +205,180 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: TicTacToe3DState, action: jnp.ndarray):
-        # --- 1. USER TURN ---
-        cursor_array = jnp.array([state.cursor_x, state.cursor_y, state.cursor_z])
-        new_cursor = self._move_cursor(cursor_array, action, state.frame)
-        cx, cy, cz = new_cursor[0], new_cursor[1], new_cursor[2]
-        board = state.board
-        player = state.current_player
-        
-        is_place = action == Action.FIRE
-        is_empty = board[cz, cy, cx] == self.consts.EMPTY
-        can_place = jnp.logical_and(is_place, is_empty)
-        can_place = jnp.logical_and(can_place, jnp.logical_not(state.game_over))
-        
-        def place_mark_user(b): return b.at[cz, cy, cx].set(player.astype(b.dtype))
-        new_board_after_user = jax.lax.cond(can_place, place_mark_user, lambda b: b, board)
-        
-        winner_after_user = self._check_winner(new_board_after_user)
-        game_over_user = jnp.logical_or(winner_after_user != self.consts.EMPTY, state.move_count >= 63)
-        
-        # --- 2. CPU TURN ---
-        cpu_should_play = jnp.logical_and(can_place, jnp.logical_not(game_over_user))
+        ale_action = self.ACTION_MAP[action]
         key, subkey = jax.random.split(state.key)
-        
-        def play_cpu_turn(current_board):
-            best_move_flat = self._compute_cpu_move(current_board, subkey)
-            bz, by, bx = best_move_flat // 16, (best_move_flat % 16) // 4, best_move_flat % 4
-            return current_board.at[bz, by, bx].set(self.consts.PLAYER_O)
 
-        final_board = jax.lax.cond(cpu_should_play, play_cpu_turn, lambda b: b, new_board_after_user)
-        final_winner = self._check_winner(final_board)
-        
-        moves_added = jax.lax.cond(cpu_should_play, lambda: 2, lambda: jax.lax.cond(can_place, lambda: 1, lambda: 0))
-        new_move_count = state.move_count + moves_added
-        final_game_over = jnp.logical_or(final_winner != self.consts.EMPTY, new_move_count >= 64)
+        # ---------------------------------------------------------
+        # 0. Handle blackout first
+        # ---------------------------------------------------------
+        def handle_blackout(s):
+            new_timer = s.blackout_timer - 1
+            blackout_finished = new_timer <= 0
 
-        new_state = state._replace(
-            board=final_board, current_player=self.consts.PLAYER_X, move_count=new_move_count,
-            cursor_x=cx, cursor_y=cy, cursor_z=cz, frame=state.frame + 1,
-            winner=final_winner, game_over=final_game_over, key=key
+            def apply_pending_cpu(ss):
+                new_board = ss.board.at[ss.pending_cpu_z, ss.pending_cpu_y, ss.pending_cpu_x].set(self.consts.PLAYER_O)
+                new_winner = self._check_winner(new_board)
+                new_move_count = ss.move_count + jnp.where(ss.pending_cpu_valid, 1, 0)
+                new_game_over = jnp.logical_or(new_winner != self.consts.EMPTY, new_move_count >= 64)
+
+                new_state = ss._replace(
+                    board=new_board,
+                    move_count=new_move_count,
+                    winner=new_winner,
+                    game_over=new_game_over,
+                    last_cpu_x=ss.pending_cpu_x,
+                    last_cpu_y=ss.pending_cpu_y,
+                    last_cpu_z=ss.pending_cpu_z,
+                    blackout_active=jnp.bool_(False),
+                    blackout_timer=jnp.int32(0),
+                    pending_cpu_x=jnp.int32(-1),
+                    pending_cpu_y=jnp.int32(-1),
+                    pending_cpu_z=jnp.int32(-1),
+                    pending_cpu_valid=jnp.bool_(False),
+                    frame=ss.frame + 1,
+                    key=key
+                )
+                obs = self._get_observation(new_state)
+                reward = self._get_reward(s, new_state)
+                done = self._get_done(new_state)
+                info = self._get_info(new_state, ale_action)
+                return obs, new_state, reward, done, info
+
+            def continue_blackout(ss):
+                new_state = ss._replace(
+                    blackout_active=jnp.bool_(True),
+                    blackout_timer=new_timer,
+                    frame=ss.frame + 1,
+                    key=key
+                )
+                obs = self._get_observation(new_state)
+                reward = self._get_reward(s, new_state)
+                done = self._get_done(new_state)
+                info = self._get_info(new_state, ale_action)
+                return obs, new_state, reward, done, info
+
+            return jax.lax.cond(
+                jnp.logical_and(blackout_finished, s.pending_cpu_valid),
+                apply_pending_cpu,
+                continue_blackout,
+                s
+            )
+
+        def handle_normal_play(s):
+            board = s.board
+            is_first_turn = jnp.logical_and(s.move_count == 0, jnp.logical_not(s.game_over))
+
+            # ---------------------------------------------------------
+            # 1. CPU fixed opening move first (ALE-like opening)
+            # layer 3, row 2, col 2 -> zero-based (2, 1, 1)
+            # ---------------------------------------------------------
+            opening_z = jnp.int32(2)
+            opening_y = jnp.int32(1)
+            opening_x = jnp.int32(1)
+
+            def cpu_opening_move(current_board):
+                return current_board.at[opening_z, opening_y, opening_x].set(self.consts.PLAYER_O)
+
+            board_after_opening = jax.lax.cond(
+                is_first_turn,
+                cpu_opening_move,
+                lambda b: b,
+                board
+            )
+
+            move_count_after_opening = s.move_count + jnp.where(is_first_turn, 1, 0)
+            winner_after_opening = self._check_winner(board_after_opening)
+            game_over_after_opening = jnp.logical_or(
+                winner_after_opening != self.consts.EMPTY,
+                move_count_after_opening >= 64
+            )
+
+            last_cpu_x_after_opening = jnp.where(is_first_turn, opening_x, s.last_cpu_x)
+            last_cpu_y_after_opening = jnp.where(is_first_turn, opening_y, s.last_cpu_y)
+            last_cpu_z_after_opening = jnp.where(is_first_turn, opening_z, s.last_cpu_z)
+
+            # ---------------------------------------------------------
+            # 2. USER TURN
+            # ---------------------------------------------------------
+            cursor_array = jnp.array([s.cursor_x, s.cursor_y, s.cursor_z], dtype=jnp.int32)
+            new_cursor = self._move_cursor(cursor_array, ale_action, s.frame)
+            cx, cy, cz = new_cursor[0], new_cursor[1], new_cursor[2]
+
+            is_place = ale_action == int(Action.FIRE)
+            is_empty = board_after_opening[cz, cy, cx] == self.consts.EMPTY
+            can_place = jnp.logical_and(is_place, is_empty)
+            can_place = jnp.logical_and(can_place, jnp.logical_not(game_over_after_opening))
+
+            def place_mark_user(b):
+                return b.at[cz, cy, cx].set(self.consts.PLAYER_X)
+
+            board_after_user = jax.lax.cond(
+                can_place,
+                place_mark_user,
+                lambda b: b,
+                board_after_opening
+            )
+
+            winner_after_user = self._check_winner(board_after_user)
+            move_count_after_user = move_count_after_opening + jnp.where(can_place, 1, 0)
+            game_over_after_user = jnp.logical_or(
+                winner_after_user != self.consts.EMPTY,
+                move_count_after_user >= 64
+            )
+
+            # ---------------------------------------------------------
+            # 3. CPU RESPONSE PREPARATION
+            # Skip response on very first step, because CPU already opened
+            # After user move, blackout starts, CPU move is delayed
+            # ---------------------------------------------------------
+            cpu_should_prepare = jnp.logical_and(
+                can_place,
+                jnp.logical_not(game_over_after_user)
+            )
+            cpu_should_prepare = jnp.logical_and(
+                cpu_should_prepare,
+                jnp.logical_not(is_first_turn)
+            )
+
+            best_move_flat = self._compute_cpu_move(board_after_user, subkey)
+            cpu_bz = (best_move_flat // 16).astype(jnp.int32)
+            cpu_by = ((best_move_flat % 16) // 4).astype(jnp.int32)
+            cpu_bx = (best_move_flat % 4).astype(jnp.int32)
+
+            new_state = s._replace(
+                board=board_after_user,
+                current_player=jnp.int32(self.consts.PLAYER_X),
+                move_count=move_count_after_user,
+                cursor_x=cx,
+                cursor_y=cy,
+                cursor_z=cz,
+                last_cpu_x=last_cpu_x_after_opening,
+                last_cpu_y=last_cpu_y_after_opening,
+                last_cpu_z=last_cpu_z_after_opening,
+                blackout_active=cpu_should_prepare,
+                blackout_timer=jnp.where(cpu_should_prepare, jnp.int32(self.consts.BLACKOUT_FRAMES), jnp.int32(0)),
+                pending_cpu_x=jnp.where(cpu_should_prepare, cpu_bx, jnp.int32(-1)),
+                pending_cpu_y=jnp.where(cpu_should_prepare, cpu_by, jnp.int32(-1)),
+                pending_cpu_z=jnp.where(cpu_should_prepare, cpu_bz, jnp.int32(-1)),
+                pending_cpu_valid=cpu_should_prepare,
+                frame=s.frame + 1,
+                winner=winner_after_user,
+                game_over=game_over_after_user,
+                key=key
+            )
+
+            obs = self._get_observation(new_state)
+            reward = self._get_reward(s, new_state)
+            done = self._get_done(new_state)
+            info = self._get_info(new_state, ale_action)
+            return obs, new_state, reward, done, info
+
+        return jax.lax.cond(
+            state.blackout_active,
+            handle_blackout,
+            handle_normal_play,
+            state
         )
-        
-        observation = self._get_observation(new_state)
-        reward = self._get_reward(state, new_state)
-        done = self._get_done(new_state)
-        info = self._get_info(new_state, action)
-        return observation, new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: TicTacToe3DState) -> spaces.Dict:
@@ -298,24 +447,47 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
         x, y, z = cursor[0], cursor[1], cursor[2]
         can_move = (step_count % self.consts.MOVE_COOLDOWN) == 0
 
-        dx = jnp.where(ale_action == int(Action.LEFT), -1, jnp.where(ale_action == int(Action.RIGHT), 1, 0))
-        new_x = jnp.where(can_move, jnp.clip(x + dx, 0, 3), x)
+        # ---------------------------------------------------------
+        # X movement (wraparound)
+        # ---------------------------------------------------------
+        dx = jnp.where(
+            ale_action == int(Action.LEFT), -1,
+            jnp.where(ale_action == int(Action.RIGHT), 1, 0)
+        )
+        new_x = jnp.where(can_move, (x + dx) % 4, x)
 
-        dy = jnp.where(ale_action == int(Action.UP), -1, jnp.where(ale_action == int(Action.DOWN), 1, 0))
+        # ---------------------------------------------------------
+        # Y movement (wraparound WITH layer transitions)
+        # ---------------------------------------------------------
+        dy = jnp.where(
+            ale_action == int(Action.UP), -1,
+            jnp.where(ale_action == int(Action.DOWN), 1, 0)
+        )
+
         raw_y = y + dy
-        move_down_layer = jnp.logical_and(dy == 1, raw_y > 3)
-        move_up_layer = jnp.logical_and(dy == -1, raw_y < 0)
-        
-        z_down = jnp.clip(z + 1, 0, 3)
-        z_up = jnp.clip(z - 1, 0, 3)
-        new_z = jnp.where(move_down_layer, z_down, jnp.where(move_up_layer, z_up, z))
-        z_changed = new_z != z
-        
-        new_y = jnp.where(jnp.logical_and(move_down_layer, z_changed), 0,
-                jnp.where(jnp.logical_and(move_up_layer, z_changed), 3, jnp.clip(raw_y, 0, 3)))
 
-        return jnp.array([new_x, jnp.where(can_move, new_y, y), jnp.where(can_move, new_z, z)], dtype=jnp.int32)
+        # Wrap y between 0..3
+        wrapped_y = raw_y % 4
 
+        # Detect wrap events
+        moved_down_layer = raw_y > 3   # from 3 → 4
+        moved_up_layer = raw_y < 0     # from 0 → -1
+
+        # Z wraparound
+        new_z = jnp.where(
+            moved_down_layer,
+            (z + 1) % 4,
+            jnp.where(
+                moved_up_layer,
+                (z - 1) % 4,
+                z
+            )
+        )
+
+        new_y = jnp.where(can_move, wrapped_y, y)
+        new_z = jnp.where(can_move, new_z, z)
+
+        return jnp.array([new_x, new_y, new_z], dtype=jnp.int32)
     @partial(jax.jit, static_argnums=(0,))
     def _check_winner(self, board: jnp.ndarray) -> jnp.ndarray:
         is_x = (board == self.consts.PLAYER_X).astype(jnp.int32)
@@ -325,7 +497,7 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
         x_wins = jnp.any(scores_x == 4)
         o_wins = jnp.any(scores_o == 4)
         return jnp.where(x_wins, self.consts.PLAYER_X, jnp.where(o_wins, self.consts.PLAYER_O, self.consts.EMPTY))
-    
+        
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state, state):
         player_won = state.winner == self.consts.PLAYER_X
@@ -370,6 +542,7 @@ class TicTacToe3DRenderer(JAXGameRenderer):
         self.x_mask = self.SHAPE_MASKS["x"]
         self.o_mask = self.SHAPE_MASKS["o"]
         self.cursor_mask = self.SHAPE_MASKS["cursor"]
+        
 
     def cell_to_pixel(self, x, y, z):
         px = self.consts.PIXEL_COORDS[z, y, x, 0]
@@ -383,17 +556,63 @@ class TicTacToe3DRenderer(JAXGameRenderer):
         return cpx, cpy
 
     def render(self, state):
-        raster = self.jr.create_object_raster(self.BACKGROUND)
-        board = state.board
-        for idx in range(64):
-            z = idx // 16
-            y = (idx % 16) // 4
-            x = idx % 4
-            cell_val = board[z, y, x]
-            px, py = self.cell_to_pixel(x, y, z)
-            raster = jax.lax.cond(cell_val == self.consts.PLAYER_X, lambda r: self.jr.render_at(r, px, py, self.x_mask), lambda r: r, raster)
-            raster = jax.lax.cond(cell_val == self.consts.PLAYER_O, lambda r: self.jr.render_at(r, px, py, self.o_mask), lambda r: r, raster)
-        cpx, cpy = self.cell_center_to_pixel(state.cursor_x, state.cursor_y, state.cursor_z)
-        blink_on = (state.frame // 15) % 2 == 0
-        raster = jax.lax.cond(blink_on, lambda r: self.jr.render_at(r, cpx, cpy, self.cursor_mask), lambda r: r, raster)
-        return self.jr.render_from_palette(raster, self.PALETTE)
+        def render_black(_):
+            return jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
+
+        def render_normal(_):
+            raster = self.jr.create_object_raster(self.BACKGROUND)
+            board = state.board
+            blink_on = (state.frame // self.consts.BLINK_PERIOD) % 2 == 0
+
+            last_cpu_x = state.last_cpu_x
+            last_cpu_y = state.last_cpu_y
+            last_cpu_z = state.last_cpu_z
+
+            for idx in range(64):
+                z = idx // 16
+                y = (idx % 16) // 4
+                x = idx % 4
+                cell_val = board[z, y, x]
+                px, py = self.cell_to_pixel(x, y, z)
+
+                is_latest_cpu_move = (
+                    (x == last_cpu_x) &
+                    (y == last_cpu_y) &
+                    (z == last_cpu_z)
+                )
+
+                should_draw_o = jnp.logical_or(
+                    jnp.logical_not(is_latest_cpu_move),
+                    blink_on
+                )
+
+                raster = jax.lax.cond(
+                    cell_val == self.consts.PLAYER_X,
+                    lambda r: self.jr.render_at(r, px, py, self.x_mask),
+                    lambda r: r,
+                    raster
+                )
+
+                raster = jax.lax.cond(
+                    jnp.logical_and(cell_val == self.consts.PLAYER_O, should_draw_o),
+                    lambda r: self.jr.render_at(r, px, py, self.o_mask),
+                    lambda r: r,
+                    raster
+                )
+
+            cpx, cpy = self.cell_center_to_pixel(state.cursor_x, state.cursor_y, state.cursor_z)
+            raster = jax.lax.cond(
+                blink_on,
+                lambda r: self.jr.render_at(r, cpx, cpy, self.cursor_mask),
+                lambda r: r,
+                raster
+            )
+
+            return self.jr.render_from_palette(raster, self.PALETTE)
+
+        return jax.lax.cond(
+            state.blackout_active,
+            render_black,
+            render_normal,
+            operand=None
+        )
