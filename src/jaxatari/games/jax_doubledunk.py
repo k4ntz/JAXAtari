@@ -48,8 +48,7 @@ PICK_PLAY = jnp.array([OffensiveAction.MOVE_TO_POST, OffensiveAction.JUMPSHOOT, 
 MR_INSIDE_SHOOTS = jnp.array([OffensiveAction.PASS, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT])
 MR_OUTSIDE_SHOOTS = jnp.array([OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT, OffensiveAction.JUMPSHOOT])
 
-@chex.dataclass(frozen=True)
-class DunkConstants:
+class DunkConstants(struct.PyTreeNode):
     """Holds all static values for the game like screen dimensions, player speeds, colors, etc."""
     WINDOW_WIDTH: int = 160
     WINDOW_HEIGHT: int = 210
@@ -312,27 +311,44 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         return spaces.Discrete(18)
     
     def observation_space(self):
-	    # Player bounds: [x, y, z, vel_x, vel_y, vel_z]
-        p_low = [-50.0, -50.0, 0.0, -10.0, -10.0, -10.0]
-        p_high = [255.0, 255.0, 50.0, 10.0, 10.0, 10.0]
+        """Returns the observation space of the environment."""
+        player_space = spaces.Dict({
+            "x": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
+            "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+            "z": spaces.Box(low=0.0, high=50.0, shape=(), dtype=jnp.float32),
+            "vel_x": spaces.Box(low=-10.0, high=10.0, shape=(), dtype=jnp.float32),
+            "vel_y": spaces.Box(low=-10.0, high=10.0, shape=(), dtype=jnp.float32),
+            "vel_z": spaces.Box(low=-10.0, high=10.0, shape=(), dtype=jnp.float32),
+        })
         
-        # Ball bounds: [x, y, vel_x, vel_y, target_x, target_y, landing_y]
-        b_low = [-50.0, -50.0, -20.0, -20.0, -50.0, -50.0, -50.0]
-        b_high = [255.0, 255.0, 20.0, 20.0, 255.0, 255.0, 255.0]
-        
-        # Global bounds: [score_p, score_e, mode, off, def, ctrl, holder, clr_in, clr_out, cooldown]
-        g_low = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        g_high = [99.0, 99.0, 5.0, 5.0, 5.0, 5.0, 5.0, 1.0, 1.0, 60.0]
-        
-        # Padding bounds (7 dummy zeros)
-        pad_low = [0.0] * 7
-        pad_high = [1.0] * 7
-        
-        # Assemble the full 48-length arrays
-        low = jnp.array(p_low * 4 + b_low + g_low + pad_low, dtype=jnp.float32)
-        high = jnp.array(p_high * 4 + b_high + g_high + pad_high, dtype=jnp.float32)
-        
-        return spaces.Box(low=low, high=high, shape=(48,), dtype=jnp.float32)
+        ball_space = spaces.Dict({
+            "x": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
+            "y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+            "vel_x": spaces.Box(low=-20.0, high=20.0, shape=(), dtype=jnp.float32),
+            "vel_y": spaces.Box(low=-20.0, high=20.0, shape=(), dtype=jnp.float32),
+            "target_x": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
+            "target_y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+            "landing_y": spaces.Box(low=0.0, high=210.0, shape=(), dtype=jnp.float32),
+        })
+            
+        return spaces.Dict({
+            "player_inside": player_space,
+            "player_outside": player_space,
+            "enemy_inside": player_space,
+            "enemy_outside": player_space,
+            "ball": ball_space,
+            "score_player": spaces.Box(low=0.0, high=24.0, shape=(), dtype=jnp.float32),
+            "score_enemy": spaces.Box(low=0.0, high=24.0, shape=(), dtype=jnp.float32),
+            "game_mode": spaces.Box(low=0.0, high=4.0, shape=(), dtype=jnp.float32),
+            "chosen_offense": spaces.Box(low=0.0, high=4.0, shape=(), dtype=jnp.float32),
+            "chosen_defense": spaces.Box(low=0.0, high=4.0, shape=(), dtype=jnp.float32),
+            "controlled_player_id": spaces.Box(low=0.0, high=4.0, shape=(), dtype=jnp.float32),
+            "ball_holder": spaces.Box(low=0.0, high=4.0, shape=(), dtype=jnp.float32),
+            "p1_inside_clearance": spaces.Box(low=0.0, high=1.0, shape=(), dtype=jnp.float32),
+            "p1_outside_clearance": spaces.Box(low=0.0, high=1.0, shape=(), dtype=jnp.float32),
+            "offense_cooldown": spaces.Box(low=0.0, high=60.0, shape=(), dtype=jnp.float32),
+            "dummy_padding": spaces.Box(low=0.0, high=1.0, shape=(7,), dtype=jnp.float32)
+        })
     
     def image_space(self) -> spaces.Box:
         """Returns the image space of the environment."""
