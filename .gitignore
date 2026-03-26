@@ -2,8 +2,6 @@ env
 *__pycache__*
 
 .venv
-venv_pixel
-venv_report_test
 .vscode
 .idea
 *.bc
@@ -11,6 +9,4 @@ results/
 .DS_Store
 docs/build/
 .python-version
-models/
-outputs/
-wandb/
+
