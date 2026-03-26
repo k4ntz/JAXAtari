@@ -164,7 +164,7 @@ class DefenderConstants(struct.PyTreeNode):
     BOMBER_Y_SPEED: float = -0.2
     BOMB_TTL_FRAMES: int = 30
     BOMBER_DEATH_SCORE: int = 250
-    BOMBER_MAX_AMOUNT: int = 1
+    BOMBER_MAX_AMOUNT: int = 2
     BOMBER_LEVEL_AMOUNT: chex.Array = struct.field(
         pytree_node=True,
         default_factory=lambda: jnp.array([1, 2, 2, 2, 2]),
@@ -1716,6 +1716,7 @@ class JaxDefender(
                 self.consts.BOMBER_LEVEL_AMOUNT[state.level],
             ]
         )
+        jax.debug.print("Enemy killed: {enemy_killed}, Needed kills: {needed_kills}", enemy_killed=enemy_killed, needed_kills=needed_kills)
         is_done = jnp.array_equal(enemy_killed, needed_kills)
         state = jax.lax.cond(is_done, lambda: self._end_level(state), lambda: state)
         return state
@@ -1741,8 +1742,11 @@ class JaxDefender(
 
         enemy_diff = jnp.clip(enemy_diff, 0, None)
 
+        enemy_killed = jnp.array([enemy_diff[1], enemy_diff[2], enemy_diff[3]])  # Only count lander, pod and bomber kills for level completion
+
         score = jnp.sum(enemy_diff * score_multiplier)
-        return score
+        
+        return score, enemy_killed
 
     def _get_enemy(self, state: DefenderState, index):
         # Returns the enemy list at index
@@ -1870,6 +1874,14 @@ class JaxDefender(
 
             index_l, lander_enemy = self._spawn_enemy_random_pos(
                 state, self.consts.LANDER, state.key
+            )
+
+            num_landers_alive = jnp.sum(state.enemy_states[:, 2] == self.consts.LANDER)
+
+            lander_enemy = jax.lax.cond(
+                state.enemy_killed[0] + num_landers_alive < self.consts.LANDER_LEVEL_AMOUNT[state.level] ,
+                lambda: lander_enemy,
+                lambda: jnp.array([0.0, 0.0, self.consts.INACTIVE, 0.0, 0.0]),
             )
 
             # Generate dead enemy
@@ -2430,7 +2442,7 @@ class JaxDefender(
 
             enemy_states = self._enemy_step(state)
 
-            score = self._calculate_score(state, enemy_states)
+            score, enemy_killed = self._calculate_score(state, enemy_states)
 
             human_states = self._human_step(state)
 
@@ -2456,6 +2468,7 @@ class JaxDefender(
                 bullet_dir_y=bullet_dir_y,
                 bullet_ttl=bullet_ttl,
                 bullet_active=bullet_active,
+                enemy_killed=jnp.add(state.enemy_killed, enemy_killed)
             )
 
             return state
@@ -2528,7 +2541,7 @@ class JaxDefender(
         lander_keys = jrandom.split(lkey, self.consts.LANDER_MAX_AMOUNT)
         state = jax.lax.fori_loop(
             0,
-            self.consts.LANDER_MAX_AMOUNT,
+            self.consts.LANDER_LEVEL_AMOUNT[level],
             lambda index, state: _spawn_enemy(lander_keys[index], state, self.consts.LANDER),
             state,
         )
@@ -2538,7 +2551,7 @@ class JaxDefender(
         bomber_keys = jrandom.split(bkey, self.consts.BOMBER_MAX_AMOUNT)
         state = jax.lax.fori_loop(
             0,
-            self.consts.BOMBER_MAX_AMOUNT,
+            self.consts.BOMBER_LEVEL_AMOUNT[level],
             lambda index, state: _spawn_enemy(bomber_keys[index], state, self.consts.BOMBER),
             state,
         )
@@ -2551,7 +2564,7 @@ class JaxDefender(
         )
         state = jax.lax.fori_loop(
             0,
-            self.consts.POD_MAX_AMOUNT,
+            self.consts.POD_LEVEL_AMOUNT[level],
             lambda index, state: _spawn_enemy(pod_keys[index], state, self.consts.POD),
             state,
         )
@@ -2573,7 +2586,7 @@ class JaxDefender(
             human_states,
         )
 
-        return state._replace(human_states=human_states)
+        return state._replace(human_states=human_states, enemy_killed=jnp.zeros(3).astype(jnp.int32))
 
     def reset(self, key=None) -> Tuple[DefenderObservation, DefenderState]:
         key = jax.lax.cond(key == None, lambda: jax.random.PRNGKey(0), lambda: key)
