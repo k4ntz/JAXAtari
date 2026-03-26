@@ -9,7 +9,7 @@ from platformdirs import user_data_dir
 
 # 1. Configuration
 ASSET_URL = "https://github.com/k4ntz/JAXAtari/releases/download/v0.1/sprites.zip"
-STORAGE_DIR = Path(user_data_dir("jaxatari"))
+STORAGE_DIR = Path(usher_data_dir("jaxatari"))
 LICENSE_TEXT = """
 OWNERSHIP CONFIRMATION
 ------------------------------------------
