@@ -1817,10 +1817,10 @@ class JaxDefender(
             )
 
             caught_human = human
-            caught_human[2] = self.consts.HUMAN_STATE_CAUGHT
-            return jnp.where(is_colliding and is_falling, caught_human, human)
+            caught_human = caught_human.at[2].set(self.consts.HUMAN_STATE_CAUGHT)
+            return jnp.where(jnp.logical_and(is_colliding, is_falling), caught_human, human)
 
-        human_states = jax.vmap(check_human_collision, in_axes=(0, None))(state.human_states)
+        human_states = jax.vmap(check_human_collision, in_axes=(0))(state.human_states)
 
         return human_states
 
@@ -2415,8 +2415,9 @@ class JaxDefender(
                 ],
             )
 
+        human_states_updated = self._space_ship_catching_humans(state)
         human_states_updated = jax.vmap(human_movement_switch, in_axes=(0, 0, None))(
-            state.human_states, jnp.arange(state.human_states.shape[0]), state
+            human_states_updated, jnp.arange(state.human_states.shape[0]), state
         )
 
         return human_states_updated
