@@ -24,9 +24,9 @@ def _get_default_asset_config() -> tuple:
             'backgrounds/desert_map.npy',
             'backgrounds/cave_map.npy',
             'backgrounds/forest_map.npy',
-            'backgrounds/volcano.npy',
+            'backgrounds/volcano_map.npy',
             'backgrounds/castle_hall_map.npy',
-            'backgrounds/map_6.npy'
+            'backgrounds/drawbridge_map.npy'
         ]},
         {'name': 'friend', 'type': 'group', 'files': [
             'friend/friend_walking_1.npy', 'friend/friend_walking_2.npy', 'friend/friend_walking_3.npy'
@@ -87,6 +87,7 @@ def _get_default_asset_config() -> tuple:
         # DRAWBRIDGE ASSETS
         {'name': 'archer', 'type': 'single', 'file': 'enemies/drawbridge/archer.npy'},
         {'name': 'arrow', 'type': 'single', 'file': 'enemies/drawbridge/arrow.npy'},
+        {'name': 'rope', 'type': 'single', 'file': 'enemies/drawbridge/rope.npy'},
 
         # CASTLE HALL ASSETS
         {'name': 'castle_arrow', 'type': 'single', 'file': 'enemies/castle_hall/arrow.npy'}
@@ -113,8 +114,8 @@ class GamePhase:
     CAVE_MAP = 3
     JUNGLE_MAP = 4
     VOLCANO_MAP = 5
-    DRAWBRIDGE = 6
-    CASTLE_HALL = 7
+    CASTLE_HALL = 6
+    DRAWBRIDGE = 7
 
 
 # --- ENEMIES ---
@@ -215,8 +216,8 @@ class CrossbowConstants(NamedTuple):
     BAT_DIMENSIONS: Tuple[int, int] = (8, 9)
     STALACTITE_DIMENSIONS: Tuple[int, int] = (8, 16)
     ASSET_CONFIG: tuple = _get_default_asset_config()
-    ROPE_1_POS: Tuple[int, int] = (110, 60)
-    ROPE_2_POS: Tuple[int, int] = (110, 100)
+    ROPE_1_POS: Tuple[int, int] = (138, 126)
+    ROPE_2_POS: Tuple[int, int] = (154, 126)
 
 
 # --- STATE ---
@@ -491,8 +492,8 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         final_x = jnp.where(is_dying, state.friend_x, jnp.where(reached_goal, 0, new_x))
 
         new_friend_y = jnp.select(
-            [state.game_phase == GamePhase.CAVE_MAP, state.game_phase == GamePhase.VOLCANO_MAP],
-            [100, 152],
+            [state.game_phase == GamePhase.CAVE_MAP, state.game_phase == GamePhase.VOLCANO_MAP, state.game_phase == GamePhase.DRAWBRIDGE],
+            [100, 152, 152],
             default=128
         )
         return state._replace(
@@ -533,7 +534,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         new_rope_2 = jnp.logical_or(state.rope_2_broken, rope_2_hit)
         bridge_open = jnp.logical_and(new_rope_1, new_rope_2)
         finished_map = jnp.logical_and(bridge_open, state.friend_x >= self.consts.WIDTH - 10)
-        MOAT_EDGE_X = 40
+        MOAT_EDGE_X = 130
         friend_x_constrained = jnp.where(jnp.logical_not(bridge_open), jnp.minimum(state.friend_x, MOAT_EDGE_X), state.friend_x)
 
         ex, ey = state.enemies_x, state.enemies_y
@@ -1507,8 +1508,8 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             jnp.logical_and(jnp.logical_and(cx >= 113, cx <= 128), jnp.logical_and(cy >= 38, cy <= 52)),
             jnp.logical_and(jnp.logical_and(cx >= 53, cx <= 68), jnp.logical_and(cy >= 96, cy <= 118)),
             jnp.logical_and(jnp.logical_and(cx >= 117, cx <= 132), jnp.logical_and(cy >= 101, cy <= 118)),
-            jnp.logical_and(jnp.logical_and(cx >= 97, cx <= 112), jnp.logical_and(cy >= 130, cy <= 151)),
             jnp.logical_and(jnp.logical_and(cx >= 33, cx <= 48), jnp.logical_and(cy >= 125, cy <= 151)),
+            jnp.logical_and(jnp.logical_and(cx >= 97, cx <= 112), jnp.logical_and(cy >= 130, cy <= 151))
         ]
         trigger = jnp.logical_and(on_start, state.is_firing)
 
@@ -1678,7 +1679,7 @@ class CrossbowRenderer(JAXGameRenderer):
 
         # Ropes
         def _draw_ropes(r):
-            rope_sprite = jnp.full((20, 4), 6, dtype=jnp.uint8)
+            rope_sprite = self.SHAPE_MASKS["rope"]
             r = jax.lax.cond(jnp.logical_not(state.rope_1_broken),
                              lambda _r: self.jr.render_at(_r, self.consts.ROPE_1_POS[0], self.consts.ROPE_1_POS[1], rope_sprite),
                              lambda _r: _r, r)
@@ -1686,7 +1687,7 @@ class CrossbowRenderer(JAXGameRenderer):
                              lambda _r: self.jr.render_at(_r, self.consts.ROPE_2_POS[0], self.consts.ROPE_2_POS[1], rope_sprite),
                              lambda _r: _r, r)
             return r
-        raster = jax.lax.cond(state.game_phase == GamePhase.CASTLE_HALL, _draw_ropes, lambda r: r, raster)
+        raster = jax.lax.cond(state.game_phase == GamePhase.DRAWBRIDGE, _draw_ropes, lambda r: r, raster)
 
 
 
