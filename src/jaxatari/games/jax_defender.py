@@ -1582,59 +1582,62 @@ class JaxDefender(
 
         return human_states
 
-    def _enemy_check_collision(self, enemy) -> chex.Array:
-        # First check laser
-        is_colliding_laser = self._is_colliding(
-            enemy[0],
-            enemy[1],
-            self.consts.ENEMY_WIDTH,
-            self.consts.ENEMY_HEIGHT,
-            state.laser_x,
-            state.laser_y,
-            self.consts.LASER_FINAL_WIDTH,
-            self.consts.LASER_FINAL_HEIGHT,
-        )
+    # Include this in enemy_step, after pre_enemy_step
+    def _enemy_collision(self, enemy_states: chex.Array, state: DefenderState) -> chex.Array:
 
-        # Check space ship
-        is_colliding_space_ship = self._is_colliding(
-            enemy[0],
-            enemy[1],
-            self.consts.ENEMY_WIDTH,
-            self.consts.ENEMY_HEIGHT,
-            state.space_ship_x,
-            state.space_ship_y,
-            self.consts.SPACE_SHIP_WIDTH,
-            self.consts.SPACE_SHIP_HEIGHT,
-        )
+        def enemy_check_collision(enemy: chex.Array, state: DefenderState) -> chex.Array:
+            # First check laser
+            is_colliding_laser = self._is_colliding(
+                enemy[0],
+                enemy[1],
+                self.consts.ENEMY_WIDTH,
+                self.consts.ENEMY_HEIGHT,
+                state.laser_x,
+                state.laser_y,
+                self.consts.LASER_FINAL_WIDTH,
+                self.consts.LASER_FINAL_HEIGHT,
+            )
 
-        # Prepare new dead enemy
-        dead_enemy = enemy
-        dead_enemy[2] = self.consts.DEAD
-        dead_enemy[3] = jax.lax.switch(
-            enemy[2],
-            [
-                lambda: self.consts.DEAD_YELLOW,
-                lambda: self.consts.DEAD_YELLOW,
-                lambda: self.consts.DEAD_YELLOW,
-                lambda: self.consts.DEAD_BLUE,
-                lambda: self.consts.DEAD_YELLOW,
-                lambda: self.consts.DEAD_RED,
-                lambda: self.consts.DEAD_BLUE,
-                lambda: self.consts.DEAD_RED,
-            ],
-        )
-        dead_enemy[4] = enemy[2]
+            # Check space ship
+            is_colliding_space_ship = self._is_colliding(
+                enemy[0],
+                enemy[1],
+                self.consts.ENEMY_WIDTH,
+                self.consts.ENEMY_HEIGHT,
+                state.space_ship_x,
+                state.space_ship_y,
+                self.consts.SPACE_SHIP_WIDTH,
+                self.consts.SPACE_SHIP_HEIGHT,
+            )
 
-        # Check if enemy should be swapped for dead copy or keep alive
-        is_colliding = jnp.logical_or(is_colliding_laser, is_colliding_space_ship)
-        is_active = enemy[2] != self.consts.INACTIVE
-        is_dead = jnp.logical_and(is_colliding, is_active)
+            # Prepare new dead enemy
+            dead_enemy = enemy
+            dead_enemy = dead_enemy.at[2].set(self.consts.DEAD)
+            dead_enemy = dead_enemy.at[3].set(
+                jax.lax.switch(
+                    enemy[2].astype(jnp.int32),
+                    [
+                        lambda: self.consts.DEAD_YELLOW,
+                        lambda: self.consts.DEAD_YELLOW,
+                        lambda: self.consts.DEAD_YELLOW,
+                        lambda: self.consts.DEAD_BLUE,
+                        lambda: self.consts.DEAD_YELLOW,
+                        lambda: self.consts.DEAD_RED,
+                        lambda: self.consts.DEAD_BLUE,
+                        lambda: self.consts.DEAD_RED,
+                    ],
+                )
+            )
+            dead_enemy = dead_enemy.at[4].set(enemy[2])
 
-        return jnp.where(is_dead, dead_enemy, enemy)
+            # Check if enemy should be swapped for dead copy or keep alive
+            is_colliding = jnp.logical_or(is_colliding_laser, is_colliding_space_ship)
+            is_active = enemy[2] != self.consts.INACTIVE
+            is_dead = jnp.logical_and(is_colliding, is_active)
 
-    # Include this in enemy_step
-    def _enemy_collision(self, state: DefenderState) -> chex.Array:
-        enemy_state = jax.vmap(self.enemy_check_collision, in_axes=(0, None))(state.enemy_states)
+            return jnp.where(is_dead, dead_enemy, enemy)
+
+        enemy_state = jax.vmap(enemy_check_collision, in_axes=(0, None))(enemy_states, state)
         return enemy_state
 
     def _pre_enemy_step_cleanup(self, state: DefenderState) -> chex.Array:
@@ -1683,20 +1686,20 @@ class JaxDefender(
             state, parent_swarmer[0], parent_swarmer[1], self.consts.SWARMERS
         )
 
+        # If a swarmer exists that spawns another
         enemy_states = enemy_states.at[index].set(
             jnp.where(spawn_swarm, new_swarmer, enemy_states[index])
         )
 
+        # If the swarmer spawned, clear the one out of swarmer slot 4
+        enemy_states = enemy_states.at[idx].set(
+            jnp.where(spawn_swarm, parent_swarmer.at[4].set(0), enemy_states[idx])
+        )
+
+        # Check collision here
+        enemy_states = self._enemy_collision(enemy_states, state)
+
         return enemy_states
-
-    def _enemy_inactive_to_spawn(self, enemy: chex.Array) -> chex.Array:
-        # Go into this function while knowing that the enemy is inactive
-        return
-
-    def _enemy_final_death(self, enemy: chex.Array, state: DefenderState) -> chex.Array:
-        # Go into this function while knowing that the enemy is dead
-
-        return
 
     def _reset_player(self, state: DefenderState) -> DefenderState:
         state = state._replace(
