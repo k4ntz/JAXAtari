@@ -2180,7 +2180,6 @@ class JaxDefender(
         swarmer_direction = swarmer[3]
         speed = self.consts.SWARMERS_MAX_SPEED
 
-
         speed_x = speed
         # acceleration in x direction
         speed_x = jax.lax.cond(
@@ -2586,33 +2585,33 @@ class JaxDefender(
 
         # Lander spawn
         key, lkey = jrandom.split(key)
-        lander_keys = jrandom.split(lkey, self.consts.LANDER_MAX_AMOUNT)
+        lander_keys = jrandom.split(lkey, 20)
         state = jax.lax.fori_loop(
             0,
-            self.consts.LANDER_LEVEL_AMOUNT[level],
+            jnp.minimum(self.consts.LANDER_LEVEL_AMOUNT[level], self.consts.LANDER_MAX_AMOUNT),
             lambda index, state: _spawn_enemy(lander_keys[index], state, self.consts.LANDER),
             state,
         )
 
         # Bomber spawn
         key, bkey = jrandom.split(key)
-        bomber_keys = jrandom.split(bkey, self.consts.BOMBER_MAX_AMOUNT)
+        bomber_keys = jrandom.split(bkey, 20)
         state = jax.lax.fori_loop(
             0,
-            self.consts.BOMBER_LEVEL_AMOUNT[level],
+            jnp.minimum(self.consts.BOMBER_LEVEL_AMOUNT[level], self.consts.BOMBER_MAX_AMOUNT),
             lambda index, state: _spawn_enemy(bomber_keys[index], state, self.consts.BOMBER),
             state,
         )
 
         # Pod spawn
         key, pkey = jrandom.split(key)
-        pod_keys = jrandom.split(pkey, self.consts.POD_MAX_AMOUNT)
+        pod_keys = jrandom.split(pkey, 20)
         pod_states = jax.vmap(_spawn_enemy, in_axes=(0, None, None))(
             pod_keys, state, self.consts.POD
         )
         state = jax.lax.fori_loop(
             0,
-            self.consts.POD_LEVEL_AMOUNT[level],
+            jnp.minimum(self.consts.POD_LEVEL_AMOUNT[level], self.consts.POD_MAX_AMOUNT),
             lambda index, state: _spawn_enemy(pod_keys[index], state, self.consts.POD),
             state,
         )
