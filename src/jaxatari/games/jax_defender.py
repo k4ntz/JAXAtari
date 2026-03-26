@@ -1716,11 +1716,7 @@ class JaxDefender(
                 self.consts.BOMBER_LEVEL_AMOUNT[state.level],
             ]
         )
-        jax.debug.print(
-            "Enemy killed: {enemy_killed}, Needed kills: {needed_kills}",
-            enemy_killed=enemy_killed,
-            needed_kills=needed_kills,
-        )
+
         is_done = jnp.array_equal(enemy_killed, needed_kills)
         state = jax.lax.cond(is_done, lambda: self._end_level(state), lambda: state)
         return state
