@@ -758,6 +758,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
         return player_x, player_y, new_last_movement_action, new_direction, is_moving_now, new_subpixel, camera_offset
 
+
     #Bullet Step
     @partial(jax.jit, static_argnums=(0,))
     def bullet_step(self, bullet_state, bullet_subpixel, player_x, player_y, ammunition_timer, action, level):
@@ -795,6 +796,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         new_subpixel = jnp.where(fired, jnp.float32(0), new_subpixel) # Reset subpixel accumulator when a new bullet is fired
 
         return new_bullet, new_subpixel
+
 
     @partial(jax.jit, static_argnums=(0,))
     def laser_flash_step(self, creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action):
@@ -848,6 +850,10 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         Generates random movement for a creature
         If player is nearby, the creature begins to chase the player
         Deactivates a creature if offscreen.
+        Handles death animation timer for the creature. If a creature is hit by a bullet it enters it's death animation.
+        A counter is set to 15 and decremented each step. The death animation ends if the counter hits 0.
+        During the death animation the creature stops moving and will have no hitbox.
+        After that the creature state will be set to inactive and the creature will no longer be visible.
         """
         creature_x, creature_y, creature_type, active, direction, death_timer = creature
 
@@ -913,6 +919,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         new_creature_states, new_creature_subpixels = move_creature_vmapped(creature_states, creature_subpixels, creature_keys, camera_offset, level, player_x, player_y)
 
         return new_creature_states, new_creature_subpixels, rng_key
+
 
     # creature spawner step
     @partial(jax.jit, static_argnums=(0,))
@@ -985,7 +992,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
     @partial(jax.jit, static_argnums=(0,))
     def check_entity_collision(self, x1, y1, size1, x2, y2, size2):
-        '''Check AABB collision between two entities.'''
+        '''Check AABB (Axis-Aligned Bounding Box) collision between two entities.'''
         return (
             (x1 < x2 + size2[0]) & (x1 + size1[0] > x2) &
             (y1 < y2 + size2[1]) & (y1 + size1[1] > y2)
@@ -993,57 +1000,63 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def respawn_player(self, player_x, player_y, lives, level, last_movement_action):
+    def respawn_player(self, player_y, lives, level):
         '''
         Resets player position to last checkpoint for each checkpoint zone and decreases lives by 1
         Sets bullet state and creature states to default values
-        Resets creature spawn timer to 0
+        Resets creature creature spawn timer to 0
         '''
+        # Shape (4, 5, 4): 4Maps with 5 checkpoints with (y_min, y_max, respawn_x, respawn_y)
+        checkpoints = self.consts.MAP_CHECKPOINTS[level%4]
         
-        
-        checkpoints = self.consts.MAP_CHECKPOINTS[level%4] # (5, 4) array with (y_min, y_max, respawn_x, respawn_y) for each checkpoint zone in current map
-        
-        # player_y is between y_min (col 0) and y_max (col 1)
+        # Player_y is between y_min (col 0) and y_max (col 1)
         is_in_zone = (player_y >= checkpoints[:, 0]) & (player_y <= checkpoints[:, 1])
 
-        # extract the respawn coordinates from the checkpoints
-        # if multiple zones overlap, this takes the first one found
-        checkpoint_idx = jnp.argmax(is_in_zone)
+        # Extract the respawn coordinates from the checkpoints
+        checkpoint_idx = jnp.argmax(is_in_zone) # if multiple zones overlap, this takes the first one found
         
-        # get respawn_x and respawn_y from the checkpoint
+        # Get respawn_x and respawn_y from the checkpoint
         respawn_x = checkpoints[checkpoint_idx, 2]
         respawn_y = checkpoints[checkpoint_idx, 3]
 
-
+        # Deactivate creature_states, bullet_state and reset last_creature_spawn timer
         creature_states = jnp.zeros((self.consts.MAX_CREATURES, 6), dtype=jnp.int32)
         creature_states = creature_states.at[:, 5].set(-1)
         bullet_state = jnp.zeros(5, dtype=jnp.int32)
         last_creature_spawn = jnp.int32(0)
 
-        #set last_movement_action to 0, to avoid player moving immediately on respawn based on previous action
-        return respawn_x, respawn_y, bullet_state, creature_states, lives - 1, last_creature_spawn, 0 
+        # Set last_movement_action to 0, to avoid player moving immediately on respawn based on previous action
+        last_movement_action = jnp.int32(0)
 
+        return respawn_x, respawn_y, bullet_state, creature_states, lives - 1, last_creature_spawn, last_movement_action
 
 
     @partial(jax.jit, static_argnums=(0,))
     def resolve_bullet_collisions(self, creature_states, bullet_state):
-        active_mask = (creature_states[:, 3] == self.consts.ACTIVE) & (creature_states[:, 5] == -1)
-
-        # check bullet-creature collisions (vectorized over all creatures)
+        """
+        Checks if any creature hitbox collides with the bullet.
+        If a creature is hit by a bullet the death animation is triggered (set to 15 steps)
+        and the bullet is set to inactive.
+        """
+        # check bullet-creature collision
         def bullet_hits_creature(creature):
+            """Returns True if bullet collides with an active creature"""
             creature_type = creature[2]
             return self.check_entity_collision(
                 bullet_state[0], bullet_state[1], self.consts.BULLET_SIZE,
-                creature[0], creature[1], self.consts.CREATURE_SIZES[creature_type],
+                creature[0], creature[1], self.consts.CREATURE_SIZES[creature_type]
             )
 
+        # check bullet-creature collisions over all active creatures
+        active_mask = (creature_states[:, 3] == self.consts.ACTIVE) & (creature_states[:, 5] == -1)
         bullet_hits = jax.vmap(bullet_hits_creature)(creature_states)
         bullet_hits = bullet_hits & active_mask & (bullet_state[3] == 1)
-
         any_bullet_hit = jnp.any(bullet_hits)
+
         # Deactivate only the first hit creature (if multiple collisions happen in the same step, only the first one counts)
         first_bullet_hit = (jnp.cumsum(bullet_hits) == 1) & bullet_hits
 
+        # If creature is hit, set it's death timer to 15 steps & set bullet_state to inactive
         new_death_timer = jnp.where(first_bullet_hit, 15, creature_states[:, 5])
         new_creature_states = creature_states.at[:, 5].set(new_death_timer)
         new_bullet_state = jnp.where(any_bullet_hit, jnp.zeros(5, dtype=bullet_state.dtype), bullet_state)
@@ -1053,24 +1066,28 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
     @partial(jax.jit, static_argnums=(0,))
     def resolve_player_creature_collisions(self, player_x, player_y, creature_states, creature_subpixels, bullet_state, lives, last_creature_spawn, level, last_movement_action):
-
-        # check player-creature collisions (vectorized over all creatures)
+        """
+        Checks if player hitbox collides with a creature hitbox.
+        If player is hit, trigger respawn_player.
+        """
+        # check player-creature collisions
         def player_hits_creature(creature):
+            """Returns True if player collides with an active creature"""
             creature_type = creature[2]
             return self.check_entity_collision(
                 player_x, player_y, self.consts.PLAYER_SIZE,
-                creature[0], creature[1], self.consts.CREATURE_SIZES[creature_type],
+                creature[0], creature[1], self.consts.CREATURE_SIZES[creature_type]
             )
 
+        # Check player-creature collision over all creatures
         player_hits = jax.vmap(player_hits_creature)(creature_states)
         player_hits = player_hits & (creature_states[:, 3] == self.consts.ACTIVE) & (creature_states[:, 5] == -1)
-
         player_hit = jnp.any(player_hits) # is true if player collides with any active creature
 
         # Compute respawn state unconditionally, then select with jnp.where
         (respawn_x, respawn_y,
          respawn_bullet, respawn_creatures,
-         respawn_lives, respawn_spawn, respawn_directional_action) = self.respawn_player(player_x, player_y, lives, level, last_movement_action)
+         respawn_lives, respawn_spawn, respawn_directional_action) = self.respawn_player(player_y, lives, level)
 
         final_player_x = jnp.where(player_hit, respawn_x, player_x)
         final_player_y = jnp.where(player_hit, respawn_y, player_y)
@@ -1087,21 +1104,20 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
     @partial(jax.jit, static_argnums=(0,))
     def resolve_player_item_collisions(self, player_x, player_y, item_states):
-
+        """Sets item state to inactive if player hitbox collides with item hitbox"""
         # check player-item collisions (vectorized over all items)
         def player_collects_item(item):
-            '''
-                Returns True if player collides with item
-            '''
+            """Returns True if player collides with item"""
             return self.check_entity_collision(
                 player_x, player_y, self.consts.PLAYER_SIZE,
-                item[0], item[1], self.consts.ITEM_SIZES[item[2]],
+                item[0], item[1], self.consts.ITEM_SIZES[item[2]]
             )
         
+        # Check player-item collision over all items
         item_collected = jax.vmap(player_collects_item)(item_states)
         item_collected = item_collected & (item_states[:, 3] == self.consts.ACTIVE)
 
-        # deactivate collected item
+        # Deactivate collected item
         new_item_active = jnp.where(item_collected, self.consts.INACTIVE, item_states[:, 3])
         new_item_states = item_states.at[:, 3].set(new_item_active)
 
@@ -1110,22 +1126,20 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
     @partial(jax.jit, static_argnums=(0,))
     def check_key(self, item_states, has_key):
-        # check if player has collected the key item
+        """Returns True if player has collected the key. Items (and the key) stay collected even after a player respawn."""
         has_collected_key = item_states[0, 3] == self.consts.INACTIVE # key item is always at index 0 in item_states
         new_has_key = has_key | has_collected_key
-
         return new_has_key
     
     @partial(jax.jit, static_argnums=(0,))
     def check_goal(self, player_x, player_y, has_key, level):
-        # check if collides with goal and has the key to complete the level
+        """Returns True if player hitbox collides with goal hitbox and player has the key."""
         goal_position = self.consts.MAP_GOAL_POSITIONS[level%4, 0] # (x, y) coordinates of the goal tile for current level
         on_goal = self.check_entity_collision(
             player_x, player_y, self.consts.PLAYER_SIZE,
             goal_position[0], goal_position[1], self.consts.GOAL_SIZE
         )
         complete_level = on_goal & has_key
-
         return complete_level
     
     @partial(jax.jit, static_argnums=(0,))
@@ -1136,17 +1150,16 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
                        laser_flash_cooldown, has_key, laser_flash_count):
         '''
         If goal_reached is True:
-        increment level,
-        reset player position to start coordinates of the next level, 
-        reset bullet state, 
-        reset creature states, 
-        initialize item states for the new level, 
-        reset last creature spawn timer to zero, 
-        reset ammunition timer, 
-        set laser flash cooldown to zero, 
-        reset has_key to False
+        - Increment level
+        - Reset player position to start coordinates of the next level
+        - Reset bullet state
+        - Reset creature states
+        - Initialize item states for the new level
+        - Reset last creature spawn timer to zero
+        - Reset ammunition timer
+        - Set laser flash cooldown to zero
+        - Reset has_key to False
         '''
-
         level = jnp.where(goal_reached, level + 1, level)
         player_x = jnp.where(goal_reached, self.consts.MAP_CHECKPOINTS[level%4, 0, 2], player_x) # respawn_x of first checkpoint is the start coordinates for each map
         player_y = jnp.where(goal_reached, self.consts.MAP_CHECKPOINTS[level%4, 0, 3], player_y) # respawn_y of first checkpoint is the start coordinates for each map
@@ -1158,7 +1171,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         laser_flash_cooldown = jnp.where(goal_reached, 0, laser_flash_cooldown)
         has_key = jnp.where(goal_reached, False, has_key)
 
-        # On completing map 4, the player is awarded with an extra laser flash, up to the maximum of 3 flashes
+        # On completing map 4, the player is awarded with an extra laser flash, up to a maximum of 3 flashes
         laser_flash_count = jnp.where(
             goal_reached & ((level % 4) == 3) & (laser_flash_count < 3),
             laser_flash_count + 1,
@@ -1175,40 +1188,41 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
                      prev_item_states, new_item_states, 
                      prev_lives, new_lives,
                      goal_reached, ammunition_timer, level):
-        
-        # check if player has died
-        has_died = (prev_lives > new_lives)
-
-        # compare previous and new death_timer to detect kills
-        # Kills happen exactly when death_timer goes from -1 to 15
+        """
+        Based on previous creature states and current creature states:
+        - Detect if a creature has died and reward with points
+        - Detect if an item has been collected and reward with points
+        - Upon reaching the goal, reward player with bonus points [0, 10, 20, ... 90, 100] depending on ammunition left.
+        """
+        # Compare previous death_timer and new death_timer to detect kills
+        # Kills happen exactly when death_timer goes from -1 to 15 (creature enters death animation)
         killed_creatures_mask = (prev_creature_states[:, 5] == -1) & (new_creature_states[:, 5] == 15)
         creature_points = killed_creatures_mask * self.consts.CREATURE_POINTS[prev_creature_states[:, 2]]
         
-        # if player has died, don't give points for defeated creatures in this step, otherwise sum up points for defeated creatures
+        # If player has died, don't give points for defeated creatures in this step, otherwise sum up points for defeated creatures
+        has_died = (prev_lives > new_lives)
         total_score_for_defeating_creatures = jnp.where(has_died, 0, jnp.sum(creature_points))
         
-        # compare previous and new item_states to detect collections
+        # Compare previous and new item_states to detect collections
         collected_items_mask = (prev_item_states[:, 3] == self.consts.ACTIVE) & (new_item_states[:, 3] == self.consts.INACTIVE)
         item_points = collected_items_mask * self.consts.ITEM_POINTS[prev_item_states[:, 2]]
         total_score_for_collected_items = jnp.sum(item_points)
 
-        # if goal is reached, give a score bonus [0, 100] in steps of 10 based on remaining ammunition
+        # Ff goal is reached, give a score bonus [0, 100] in steps of 10 based on remaining ammunition
         ammonition_percentage = jnp.clip(ammunition_timer / self.consts.LEVEL_AMMO_SUPPLY[level], 0.0, 1.0)
         goal_bonus = jnp.where(goal_reached, (jnp.floor(ammonition_percentage * 10) * 10).astype(jnp.int32), 0)
 
-
+        # Calculate total score for the current frame
         new_score = score + total_score_for_defeating_creatures + total_score_for_collected_items + goal_bonus
 
         return new_score
     
-
 
     # mod hooks --------------
     @partial(jax.jit, static_argnums=(0,))
     def item_step(self, item_states, level, rng_key):
         """Hook for mods to move items. Does nothing in the base game."""
         return item_states, rng_key
-
 
 
     # Step logic
