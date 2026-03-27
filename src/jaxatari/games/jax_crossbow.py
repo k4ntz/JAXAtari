@@ -25,8 +25,8 @@ def _get_default_asset_config() -> tuple:
             'backgrounds/cave_map.npy',
             'backgrounds/forest_map.npy',
             'backgrounds/volcano_map.npy',
-            'backgrounds/castle_hall_map.npy',
-            'backgrounds/drawbridge_map.npy'
+            'backgrounds/drawbridge_map.npy',
+            'backgrounds/castle_hall_map.npy'
         ]},
         {'name': 'friend', 'type': 'group', 'files': [
             'friend/friend_walking_1.npy', 'friend/friend_walking_2.npy', 'friend/friend_walking_3.npy'
@@ -114,8 +114,8 @@ class GamePhase:
     CAVE_MAP = 3
     JUNGLE_MAP = 4
     VOLCANO_MAP = 5
-    CASTLE_HALL = 6
-    DRAWBRIDGE = 7
+    DRAWBRIDGE = 6
+    CASTLE_HALL = 7
 
 
 # --- ENEMIES ---
@@ -172,12 +172,14 @@ class CrossbowConstants(NamedTuple):
     MAX_ENEMIES: int = 6
 
     # --- Game Flow ---
-    MAX_LIVES: int = 3
+    MAX_LIVES: int = 4
+    STARTING_LIVES: int = 2
     DYING_DURATION: int = 45
     GET_READY_DURATION: int = 180
     FADE_OUT_DURATION: int = 45
     FADE_IN_DURATION: int = 30
     MAX_SCATTER_PIXELS: int = 100
+    FRIEND_SAFE_ZONE_X: int = 140
 
     # --- Level-specific Tuning ---
     # Desert
@@ -256,6 +258,8 @@ class CrossbowState(NamedTuple):
     rope_2_broken: chex.Array
     eye_appeared: chex.Array
     fire_cooldown: chex.Array
+    maps_completed: chex.Array
+    friends_to_cross: chex.Array
 
 
 # --- OBSERVATION & INFO ---
@@ -290,7 +294,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
 
     @property
     def max_episode_steps(self) -> int:
-        return 4000
+        return 100000
 
     def get_legal_actions(self, state: CrossbowState) -> chex.Array:
         return jnp.ones((self.num_actions,), dtype=bool)
@@ -407,7 +411,9 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         return state._replace(scatter_px_x=new_x, scatter_px_y=new_y, scatter_px_dy=new_dy, scatter_px_active=is_active)
 
     def _handle_common_death_logic(self, state: CrossbowState, any_friend_hit: chex.Array, scatter_key: chex.PRNGKey) -> Tuple[CrossbowState, bool]:
+        any_friend_hit = jnp.logical_and(any_friend_hit, state.friend_x < self.consts.FRIEND_SAFE_ZONE_X)
         is_dying = state.dying_timer > 0
+        any_friend_hit = jnp.logical_and(any_friend_hit, jnp.logical_not(is_dying))
         state = jax.lax.cond(any_friend_hit, lambda s: self._init_scatter_pixels(s, scatter_key), lambda s: s, state)
         state = jax.lax.cond(is_dying, lambda s: self._update_scatter_pixels(s), lambda s: s, state)
         new_timer = jnp.where(any_friend_hit, self.consts.DYING_DURATION, jnp.maximum(0, state.dying_timer - 1))
@@ -416,10 +422,12 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         friend_x_next = jnp.where(timer_finished, 20, state.friend_x).astype(jnp.int32)
         scatter_active_next = jnp.where(timer_finished, jnp.zeros_like(state.scatter_px_active), state.scatter_px_active)
         new_lives = jnp.maximum(0, state.lives - jnp.where(any_friend_hit, 1, 0))
+        new_ftc = jnp.maximum(0, state.friends_to_cross - jnp.where(any_friend_hit, 1, 0))
         is_game_over = jnp.logical_and(any_friend_hit, state.lives == 0)
         new_state = state._replace(
             lives=new_lives.astype(jnp.int32), dying_timer=new_timer.astype(jnp.int32),
-            friend_x=friend_x_next, enemies_active=enemies_active_next, scatter_px_active=scatter_active_next
+            friend_x=friend_x_next, enemies_active=enemies_active_next, scatter_px_active=scatter_active_next,
+            friends_to_cross=new_ftc.astype(jnp.int32)
         )
         return new_state, is_game_over
 
@@ -485,11 +493,13 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             desert_enemy_on_friend
         )
 
-        should_freeze = jnp.logical_or(bat_on_friend, desert_freeze)
-        should_move = jnp.logical_and(state.step_counter % 8 == 0, jnp.logical_not(should_freeze))
+        should_freeze = jnp.logical_and(
+            jnp.logical_or(bat_on_friend, desert_freeze), 
+            jnp.logical_not(fx >= self.consts.FRIEND_SAFE_ZONE_X)
+        )
+        should_move = jnp.logical_and(state.step_counter % 1 == 0, jnp.logical_not(should_freeze))
         new_x = state.friend_x + jnp.where(should_move & state.friend_active, 1, 0)
-        reached_goal = new_x > self.consts.WIDTH
-        final_x = jnp.where(is_dying, state.friend_x, jnp.where(reached_goal, 0, new_x))
+        final_x = jnp.where(is_dying, state.friend_x, new_x)
 
         new_friend_y = jnp.select(
             [state.game_phase == GamePhase.CAVE_MAP, state.game_phase == GamePhase.VOLCANO_MAP, state.game_phase == GamePhase.DRAWBRIDGE],
@@ -533,7 +543,6 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         new_rope_1 = jnp.logical_or(state.rope_1_broken, rope_1_hit)
         new_rope_2 = jnp.logical_or(state.rope_2_broken, rope_2_hit)
         bridge_open = jnp.logical_and(new_rope_1, new_rope_2)
-        finished_map = jnp.logical_and(bridge_open, state.friend_x >= self.consts.WIDTH - 10)
         MOAT_EDGE_X = 130
         friend_x_constrained = jnp.where(jnp.logical_not(bridge_open), jnp.minimum(state.friend_x, MOAT_EDGE_X), state.friend_x)
 
@@ -674,7 +683,6 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             rope_1_broken=new_rope_1,
             rope_2_broken=new_rope_2,
             friend_x=friend_x_constrained.astype(jnp.int32),
-            game_phase=jnp.where(finished_map, GamePhase.CASTLE_HALL, state.game_phase),
             eye_appeared=jnp.logical_or(state.eye_appeared, has_eye_spawn)
         )
         return self._handle_common_death_logic(intermediate_state, any_friend_hit, key_scatter)
@@ -814,12 +822,13 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             state.enemies_y < fy + self.consts.FRIEND_SIZE[1] + 10,
             state.enemies_y + self.consts.ENEMY_SIZE[1] > fy - 5
         )
+        friend_in_safe_zone = fx >= self.consts.FRIEND_SAFE_ZONE_X
         enemy_on_friend = jnp.logical_and(
             jnp.logical_and(enemy_on_x, enemy_on_y),
-            jnp.logical_and(is_non_snake_ground, state.enemies_active)
+            jnp.logical_and(jnp.logical_and(is_non_snake_ground, state.enemies_active),
+                            jnp.logical_not(friend_in_safe_zone))
         )
 
-        # Freeze movement for enemies that are on the friend
         move_x = jnp.where(jnp.logical_or(is_snake, is_eye), 0.0, jnp.where(should_move, -1.0, 0.0))
         move_x = jnp.where(enemy_on_friend, 0.0, move_x)
         move_y = jnp.where(jnp.logical_and(is_vulture, should_move), 1.0, 0.0)
@@ -828,7 +837,6 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         new_x = state.enemies_x + move_x
         new_y = state.enemies_y + move_y
 
-        # --- Increment timer for enemies on friend, reset for others ---
         new_timer = jnp.where(enemy_on_friend, state.enemies_timer + 1, state.enemies_timer)
         new_timer = jnp.where(jnp.logical_not(state.enemies_active), 0, new_timer)
 
@@ -967,11 +975,13 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         new_dy = jnp.where(start_attacking, attack_dy, state.enemies_dy)
 
         fx, fy = state.friend_x, state.friend_y
+        friend_in_safe_zone = fx >= self.consts.FRIEND_SAFE_ZONE_X
         bat_on_x = jnp.logical_and(ex < fx + self.consts.FRIEND_SIZE[0], ex + self.consts.BAT_DIMENSIONS[0] > fx)
         bat_on_y = jnp.logical_and(ey < fy + 10, ey + self.consts.BAT_DIMENSIONS[1] > fy - 5)
         bat_on_friend = jnp.logical_and(
             jnp.logical_and(bat_on_x, bat_on_y),
-            jnp.logical_and(is_bat_attacking, surviving_enemies)
+            jnp.logical_and(jnp.logical_and(is_bat_attacking, surviving_enemies),
+                            jnp.logical_not(friend_in_safe_zone))
         )
 
         bat_spawn_move = jnp.logical_and(is_bat_spawning, state.step_counter % 4 == 0)
@@ -1137,13 +1147,6 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         # === FRIEND CONSTRAINT ===
         friend_x_constrained = jnp.where( jnp.logical_and(jnp.logical_not(bridge_is_open), state.friend_x >= GAP_X - 10),  jnp.minimum(state.friend_x, GAP_X - 10),state.friend_x )
 
-        # === BONUS LIFE ON FIRST COMPLETION ===
-        friend_completed = jnp.logical_and(bridge_is_open, friend_x_constrained >= self.consts.WIDTH - 10 )
-        is_first_completion = jnp.logical_and(friend_completed, jnp.logical_not(state.rope_2_broken))
-        bonus_life = jnp.where(is_first_completion, 1, 0)
-        new_lives = jnp.minimum(state.lives + bonus_life, 4)
-        new_rope_2_broken = jnp.logical_or(state.rope_2_broken, friend_completed)
-
         # === MOVEMENT ===
         GRAVITY = 0.12
         is_falling = jnp.logical_or(state.enemies_type == EnemyType.FALLING_ROCK, state.enemies_type == EnemyType.BURNING_LAVA)
@@ -1225,7 +1228,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         friend_hit = jnp.any(jnp.logical_and( jnp.logical_and(danger_x, danger_y),  jnp.logical_and(final_active, is_not_resting)))
         any_friend_hit = jnp.logical_and(friend_hit, state.dying_timer == 0)
 
-        intermediate_state = state._replace(score=(state.score + reward).astype(jnp.int32),  enemies_active=final_active, enemies_x=final_x.astype(jnp.float32),   enemies_y=final_y.astype(jnp.float32), enemies_dx=final_dx.astype(jnp.float32),  enemies_dy=final_dy.astype(jnp.float32),  enemies_type=final_type.astype(jnp.int32),  enemies_age=new_age.astype(jnp.int32),  key=rng,friend_x=friend_x_constrained.astype(jnp.int32),  lives=new_lives, rope_1_broken=new_rope_1_broken, rope_2_broken=new_rope_2_broken, eye_appeared=jnp.logical_or(state.eye_appeared, has_eye_spawn) )
+        intermediate_state = state._replace(score=(state.score + reward).astype(jnp.int32),  enemies_active=final_active, enemies_x=final_x.astype(jnp.float32),   enemies_y=final_y.astype(jnp.float32), enemies_dx=final_dx.astype(jnp.float32),  enemies_dy=final_dy.astype(jnp.float32),  enemies_type=final_type.astype(jnp.int32),  enemies_age=new_age.astype(jnp.int32),  key=rng, friend_x=friend_x_constrained.astype(jnp.int32),  rope_1_broken=new_rope_1_broken, eye_appeared=jnp.logical_or(state.eye_appeared, has_eye_spawn) )
 
         return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
 
@@ -1413,13 +1416,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         )
         
         
-        # active enemies including plants can kill the friend now
         any_friend_hit = jnp.any(jnp.logical_and( jnp.logical_and(danger_x, danger_y), final_active))
-        # Bonus life on first jungle completion
-        friend_completed = state.friend_x >= self.consts.WIDTH - 10
-        is_first_completion = jnp.logical_and(friend_completed, jnp.logical_not(state.rope_2_broken))
-        new_lives = jnp.minimum(state.lives + jnp.where(is_first_completion, 1, 0), 4)
-        new_rope_2_broken = jnp.logical_or(state.rope_2_broken, friend_completed)
 
         intermediate_state = state._replace(
             score=(state.score + reward).astype(jnp.int32),
@@ -1431,8 +1428,6 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             enemies_type=final_type,
             enemies_age=new_age.astype(jnp.int32),
             key=rng,
-            lives=new_lives,
-            rope_2_broken=new_rope_2_broken,
             eye_appeared=jnp.logical_or(state.eye_appeared, has_eye_spawn)
         )
 
@@ -1501,31 +1496,96 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         return self._handle_common_death_logic(intermediate_state, any_friend_hit, scatter_key)
 
     def _update_game_phase(self, state: CrossbowState, action: chex.Array) -> CrossbowState:
-        on_start, on_ready = state.game_phase == GamePhase.START_SCREEN, state.game_phase == GamePhase.GET_READY
-        cx, cy = state.cursor_x, state.cursor_y
-        sel = [
-            jnp.logical_and(jnp.logical_and(cx >= 47, cx <= 64), jnp.logical_and(cy >= 27, cy <= 51)),
-            jnp.logical_and(jnp.logical_and(cx >= 113, cx <= 128), jnp.logical_and(cy >= 38, cy <= 52)),
-            jnp.logical_and(jnp.logical_and(cx >= 53, cx <= 68), jnp.logical_and(cy >= 96, cy <= 118)),
-            jnp.logical_and(jnp.logical_and(cx >= 117, cx <= 132), jnp.logical_and(cy >= 101, cy <= 118)),
-            jnp.logical_and(jnp.logical_and(cx >= 33, cx <= 48), jnp.logical_and(cy >= 125, cy <= 151)),
-            jnp.logical_and(jnp.logical_and(cx >= 97, cx <= 112), jnp.logical_and(cy >= 130, cy <= 151))
-        ]
+        on_start = state.game_phase == GamePhase.START_SCREEN
+        on_ready = state.game_phase == GamePhase.GET_READY
         trigger = jnp.logical_and(on_start, state.is_firing)
 
-        target = jnp.select(sel, [GamePhase.DESERT_MAP, GamePhase.CAVE_MAP, GamePhase.VOLCANO_MAP, GamePhase.JUNGLE_MAP, GamePhase.DRAWBRIDGE, GamePhase.CASTLE_HALL], default=GamePhase.START_SCREEN)
-
         ready_done = jnp.logical_and(on_ready, state.get_ready_timer == 0)
-
-        reset_eye = ready_done
-        next_eye_appeared = jnp.where(reset_eye, False, state.eye_appeared)
+        next_eye_appeared = jnp.where(ready_done, False, state.eye_appeared)
 
         return state._replace(
-            game_phase=jnp.where(jnp.logical_and(trigger, target != GamePhase.START_SCREEN), GamePhase.GET_READY, jnp.where(ready_done, state.selected_target_map, state.game_phase)).astype(jnp.int32),
-            selected_target_map=jnp.where(trigger, target, state.selected_target_map).astype(jnp.int32),
-            get_ready_timer=jnp.where(trigger, self.consts.GET_READY_DURATION, jnp.where(on_ready, jnp.maximum(0, state.get_ready_timer - 1), 0)).astype(jnp.int32),
+            game_phase=jnp.where(trigger, GamePhase.GET_READY,
+                        jnp.where(ready_done, state.selected_target_map, state.game_phase)).astype(jnp.int32),
+            selected_target_map=jnp.where(trigger, GamePhase.DESERT_MAP, state.selected_target_map).astype(jnp.int32),
+            get_ready_timer=jnp.where(trigger, self.consts.GET_READY_DURATION,
+                            jnp.where(on_ready, jnp.maximum(0, state.get_ready_timer - 1), 0)).astype(jnp.int32),
             fade_in_timer=jnp.where(ready_done, self.consts.FADE_IN_DURATION, jnp.maximum(0, state.fade_in_timer - 1)).astype(jnp.int32),
-            eye_appeared=next_eye_appeared
+            eye_appeared=next_eye_appeared,
+            friends_to_cross=jnp.where(ready_done, state.lives, state.friends_to_cross).astype(jnp.int32)
+        )
+
+    def _handle_map_completion(self, state: CrossbowState) -> CrossbowState:
+        is_active_map = state.game_phase >= GamePhase.DESERT_MAP
+        friend_crossed = jnp.logical_and(is_active_map, state.friend_x >= self.consts.WIDTH)
+
+        new_ftc = jnp.where(friend_crossed,
+                            jnp.maximum(0, state.friends_to_cross - 1),
+                            state.friends_to_cross)
+
+        # Map is done when the last friend crosses
+        all_crossed = jnp.logical_and(friend_crossed, new_ftc <= 0)
+        # Map is also done when friends_to_cross hit 0 from deaths (after dying
+        # animation finishes) and at least one friend made it (lives > 0)
+        death_completed = jnp.logical_and(
+            is_active_map,
+            jnp.logical_and(
+                state.friends_to_cross <= 0,
+                jnp.logical_and(
+                    state.dying_timer == 0,
+                    jnp.logical_and(state.lives > 0, jnp.logical_not(friend_crossed))
+                )
+            )
+        )
+        map_done = jnp.logical_or(all_crossed, death_completed)
+
+        map_idx = (state.game_phase - GamePhase.DESERT_MAP).astype(jnp.int32)
+        map_bit = jnp.left_shift(jnp.array(1, dtype=jnp.int32), map_idx)
+        is_first = jnp.logical_not(jnp.bitwise_and(state.maps_completed, map_bit).astype(bool))
+
+        # +1 life on first completion of Desert(0), Cave(1), Jungle(2), Volcano(3)
+        outdoor_bonus = jnp.logical_and(jnp.logical_and(map_done, is_first), map_idx <= 3)
+        # +10,000 points and +1 life on completing Castle Hall (idx=4)
+        castle_bonus = jnp.logical_and(map_done, state.game_phase == GamePhase.CASTLE_HALL)
+        gains_life = jnp.logical_or(outdoor_bonus, castle_bonus)
+        new_lives = jnp.where(
+            jnp.logical_and(map_done, gains_life),
+            jnp.minimum(state.lives + 1, self.consts.MAX_LIVES),
+            state.lives
+        )
+        bonus_score = jnp.where(castle_bonus, 10000, 0)
+
+        is_last_map = state.game_phase == GamePhase.CASTLE_HALL
+        next_phase = jnp.where(is_last_map, GamePhase.START_SCREEN, GamePhase.GET_READY).astype(jnp.int32)
+        next_target = jnp.where(is_last_map, GamePhase.DESERT_MAP, state.game_phase + 1).astype(jnp.int32)
+
+        new_maps_completed = jnp.where(map_done,
+            jnp.bitwise_or(state.maps_completed, map_bit),
+            state.maps_completed
+        )
+
+        return state._replace(
+            game_phase=jnp.where(map_done, next_phase, state.game_phase).astype(jnp.int32),
+            selected_target_map=jnp.where(map_done, next_target, state.selected_target_map).astype(jnp.int32),
+            get_ready_timer=jnp.where(
+                jnp.logical_and(map_done, jnp.logical_not(is_last_map)),
+                self.consts.GET_READY_DURATION,
+                state.get_ready_timer
+            ).astype(jnp.int32),
+            friend_x=jnp.where(friend_crossed, jnp.array(20, dtype=jnp.int32), state.friend_x),
+            enemies_active=jnp.where(friend_crossed, jnp.zeros_like(state.enemies_active), state.enemies_active),
+            enemies_dx=jnp.where(friend_crossed, jnp.zeros_like(state.enemies_dx), state.enemies_dx),
+            enemies_dy=jnp.where(friend_crossed, jnp.zeros_like(state.enemies_dy), state.enemies_dy),
+            enemies_timer=jnp.where(friend_crossed, jnp.zeros_like(state.enemies_timer), state.enemies_timer),
+            enemies_age=jnp.where(friend_crossed, jnp.zeros_like(state.enemies_age), state.enemies_age),
+            dying_timer=jnp.where(friend_crossed, jnp.array(0, dtype=jnp.int32), state.dying_timer),
+            scatter_px_active=jnp.where(friend_crossed, jnp.zeros_like(state.scatter_px_active), state.scatter_px_active),
+            lives=new_lives.astype(jnp.int32),
+            score=(state.score + jnp.where(map_done, bonus_score, 0)).astype(jnp.int32),
+            maps_completed=new_maps_completed.astype(jnp.int32),
+            rope_1_broken=jnp.where(map_done, jnp.array(False), state.rope_1_broken),
+            rope_2_broken=jnp.where(map_done, jnp.array(False), state.rope_2_broken),
+            eye_appeared=jnp.where(friend_crossed, jnp.array(False), state.eye_appeared),
+            friends_to_cross=new_ftc.astype(jnp.int32),
         )
 
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[CrossbowObservation, CrossbowState]:
@@ -1545,11 +1605,12 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             enemies_active=jnp.zeros(self.consts.MAX_ENEMIES, dtype=bool), enemies_type=jnp.zeros(self.consts.MAX_ENEMIES, dtype=jnp.int32),
             enemies_age=jnp.zeros(self.consts.MAX_ENEMIES, dtype=jnp.int32),
             game_phase=jnp.array(GamePhase.START_SCREEN, dtype=jnp.int32), score=jnp.array(0, dtype=jnp.int32),
-            lives=jnp.array(self.consts.MAX_LIVES, dtype=jnp.int32), step_counter=jnp.array(0, dtype=jnp.int32), key=state_key,
+            lives=jnp.array(self.consts.STARTING_LIVES, dtype=jnp.int32), step_counter=jnp.array(0, dtype=jnp.int32), key=state_key,
             rope_1_broken=jnp.array(False), rope_2_broken=jnp.array(False),
-           
             eye_appeared=jnp.array(False),
-            fire_cooldown=jnp.array(0, dtype=jnp.int32)
+            fire_cooldown=jnp.array(0, dtype=jnp.int32),
+            maps_completed=jnp.array(0, dtype=jnp.int32),
+            friends_to_cross=jnp.array(self.consts.STARTING_LIVES, dtype=jnp.int32)
         )
         return self.get_obs(state), state
 
@@ -1569,13 +1630,14 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
                     lambda _s: self._cavern_map_logic(_s),      # CAVE_MAP
                     lambda _s: self._jungle_map_logic(_s),      # game_phase 4 - forest_map.npy (jungle)
                     lambda _s: self._volcano_map_logic(_s),     # game_phase 5 - map_4.npy (volcano)
-                    lambda _s: self._castle_hall_map_logic(_s),  # DRAWBRIDGE (6)
-                    lambda _s: self._drawbridge_map_logic(_s), # CASTLE_HALL (7) - final demon map
+                    lambda _s: self._drawbridge_map_logic(_s),    # DRAWBRIDGE (6)
+                    lambda _s: self._castle_hall_map_logic(_s), # CASTLE_HALL (7) - final map
                 ],
                 s
             )
 
         state, game_over = jax.lax.cond(jnp.logical_and(is_gameplay, state.friend_active), _combat_router, lambda s: (s, False), state)
+        state = self._handle_map_completion(state)
         state = state._replace(step_counter=state.step_counter + 1, key=new_key)
 
         reward = self._get_env_reward(prev_state, state)
@@ -1672,10 +1734,10 @@ class CrossbowRenderer(JAXGameRenderer):
         raster = self.jr.render_at(self.BACKGROUND, -16, 0, self.SHAPE_MASKS["backgrounds"][state.game_phase])
         is_gameplay, is_dying = state.game_phase >= GamePhase.DESERT_MAP, state.dying_timer > 0
 
-        # Friend
+        # Friend (use clipped rendering so the sprite gradually walks off screen)
         f_mask = self.SHAPE_MASKS["friend"][(state.step_counter // 8) % len(self.SHAPE_MASKS["friend"])]
         raster = jax.lax.cond(jnp.logical_and(state.friend_active, jnp.logical_and(is_gameplay, jnp.logical_not(is_dying))),
-                              lambda r: self.jr.render_at(r, state.friend_x, state.friend_y, f_mask), lambda r: r, raster)
+                              lambda r: self.jr.render_at_clipped(r, state.friend_x, state.friend_y, f_mask), lambda r: r, raster)
 
         # Ropes
         def _draw_ropes(r):
