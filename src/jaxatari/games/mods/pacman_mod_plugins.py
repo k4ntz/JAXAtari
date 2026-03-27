@@ -1,8 +1,77 @@
+import os
+from typing import List, Tuple
+
 import jax
 import jax.numpy as jnp
+import numpy as np
 from functools import partial
+
 from jaxatari.games.jax_pacman import PacmanState
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
+
+
+# Level order when using multi_maze_campaign (geometry: {name}.txt, pellets: {name}_pellet.txt if present).
+DEFAULT_PACMAN_MAZE_LEVEL_BASENAMES: Tuple[str, ...] = (
+    "maze_atari",
+    "maze1",
+    "maze2",
+    "maze3",
+    "maze4",
+)
+
+
+def resolve_pacman_maze_level_specs(
+    pacman_maps_dir: str,
+    basenames: Tuple[str, ...] = DEFAULT_PACMAN_MAZE_LEVEL_BASENAMES,
+) -> List[Tuple[str, str]]:
+    """Build (geometry_path, pellet_layout_path) for each existing maze file."""
+    specs: List[Tuple[str, str]] = []
+    for base in basenames:
+        geom = os.path.join(pacman_maps_dir, f"{base}.txt")
+        if not os.path.isfile(geom):
+            continue
+        pellet = os.path.join(pacman_maps_dir, f"{base}_pellet.txt")
+        if not os.path.isfile(pellet):
+            pellet = geom
+        specs.append((geom, pellet))
+    return specs
+
+
+class MultiMazeCampaignMod(JaxAtariInternalModPlugin):
+    """
+    Multi-map campaign: clearing all pellets advances to the next preloaded maze (wrapped).
+    After the last maze, the run wraps to the first map, level resets to 1, and score resets to 0.
+
+    Requires at least two maze files for DEFAULT_PACMAN_MAZE_LEVEL_BASENAMES under pacmanMaps/;
+    otherwise attach_to_env is a no-op (base env stays single-maze).
+    """
+
+    @staticmethod
+    def attach_to_env(env) -> None:
+        from jaxatari.games import jax_pacman as jpm
+
+        if not isinstance(env, jpm.JaxPacman):
+            return
+        pacman_maps_dir = os.path.join(os.path.dirname(jpm.__file__), "pacmanMaps")
+        level_specs = resolve_pacman_maze_level_specs(pacman_maps_dir)
+        if len(level_specs) <= 1:
+            return
+
+        layouts = []
+        vitamin_tiles: List[Tuple[int, int]] = []
+        exp_h, exp_w = env.consts.MAZE_HEIGHT, env.consts.MAZE_WIDTH
+        for _geom_path, pellet_path in level_specs:
+            layout, vr, vc = env._parse_maze_layout_from_file(pellet_path)
+            arr = np.asarray(layout)
+            if arr.shape != (exp_h, exp_w):
+                raise ValueError(
+                    f"Maze layout shape {arr.shape} from {pellet_path} "
+                    f"does not match ({exp_h}, {exp_w})"
+                )
+            layouts.append(layout)
+            vitamin_tiles.append((vr, vc))
+
+        env.reload_maze_campaign(level_specs, layouts, vitamin_tiles)
 
 
 # Part 1: Simple Modifications

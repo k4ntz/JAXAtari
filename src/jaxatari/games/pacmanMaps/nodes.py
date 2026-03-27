@@ -86,7 +86,7 @@ class NodeGroup(NamedTuple):
         node_group = cls(nodeList=node_list)
         
         # Print node connections for debugging
-        node_group.print_connections()
+        # node_group.print_connections()
         
         return node_group
     
