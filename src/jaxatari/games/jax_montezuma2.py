@@ -29,20 +29,20 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         sprite_path_0 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "base_collision_map.npy")
         col_map_0 = jnp.load(sprite_path_0)[:149, :, 0]
-        room_col_0 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
-        room_col_0 = room_col_0.at[6:, 0:4].set(1) # Left wall only for room_0_0
-        room_col_0 = room_col_0.at[147:149, 72:88].set(0) # Hole for ladder down to ROOM_1_1
+        room_col_0_4 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
+        room_col_0_4 = room_col_0_4.at[6:, 0:4].set(1) # Left wall only for room_0_4
+        room_col_0_4 = room_col_0_4.at[147:149, 72:88].set(0) # Hole for ladder down to room_1_4
 
         sprite_path_1 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "mid_room_collision_level_0.npy")
         col_map_1 = jnp.load(sprite_path_1)[:149, :, 0] # (149, 160)
-        room_col_1 = jnp.where(col_map_1 > 0, 1, 0).astype(jnp.int32)
-        # No side walls for room_0_1 as it's connected on both sides
+        room_col_0_5 = jnp.where(col_map_1 > 0, 1, 0).astype(jnp.int32)
+        # No side walls for room_0_5 as it's connected on both sides
 
-        room_col_2 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
-        room_col_2 = room_col_2.at[6:, 156:160].set(1) # Right wall only for room_0_2
+        room_col_0_3 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
+        room_col_0_3 = room_col_0_3.at[6:, 156:160].set(1) # Right wall only for room_0_3
         
-        room_col_3 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
-        self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0, room_col_1, room_col_2, room_col_3])
+        room_col_1_3 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
+        self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0_4, room_col_0_5, room_col_0_3, room_col_1_3])
 
     def reset(self, key: jrandom.PRNGKey) -> Tuple[Montezuma2Observation, Montezuma2State]:
         state = Montezuma2State(
