@@ -214,7 +214,12 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 cx, cy, ca, cd,
                 lasers_x, lasers_active)
 
-    ex, ey, ea, ed, eminx, emaxx, eb, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd, lax, laa = jax.lax.switch(room_id, [load_room_0, load_room_1, load_room_2, load_room_3], args)
+    ex, ey, ea, ed, eminx, emaxx, eb, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd, lax, laa = jax.lax.switch(
+        jnp.where(room_id == 4, 0,
+        jnp.where(room_id == 5, 1,
+        jnp.where(room_id == 3, 2,
+        jnp.where(room_id == 11, 3, 0)))),
+        [load_room_0, load_room_1, load_room_2, load_room_3], args)
 
     return state.replace(
         room_id=room_id,

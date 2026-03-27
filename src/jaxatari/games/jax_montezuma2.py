@@ -46,7 +46,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
     def reset(self, key: jrandom.PRNGKey) -> Tuple[Montezuma2Observation, Montezuma2State]:
         state = Montezuma2State(
-            room_id=jnp.array(1, dtype=jnp.int32),
+            room_id=jnp.array(5, dtype=jnp.int32),
             lives=jnp.array(5, dtype=jnp.int32),
             score=jnp.array([0], dtype=jnp.int32),
             frame_count=jnp.array(0, dtype=jnp.int32),
@@ -105,35 +105,39 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         )
         
         gia = state.global_items_active
-        gia = gia.at[0, 0].set(1)
-        gia = gia.at[1, 0].set(1)
+        gia = gia.at[4, 0].set(1)
+        gia = gia.at[5, 0].set(1)
         
         gda = state.global_doors_active
-        gda = gda.at[1, 0].set(1)
-        gda = gda.at[1, 1].set(1)
+        gda = gda.at[5, 0].set(1)
+        gda = gda.at[5, 1].set(1)
         
         gea = state.global_enemies_active
-        gea = gea.at[1, 0].set(1)
-        gea = gea.at[2, 0].set(1)
-        gea = gea.at[2, 1].set(1)
+        gea = gea.at[5, 0].set(1)
         gea = gea.at[3, 0].set(1)
+        gea = gea.at[3, 1].set(1)
+        gea = gea.at[11, 0].set(1)
 
         gety = state.global_enemies_type
         # ROLL_SKULL = 1, BOUNCE_SKULL = 2, SPIDER = 3
-        gety = gety.at[1, 0].set(1)
-        gety = gety.at[2, 0].set(1)
-        gety = gety.at[2, 1].set(1)
-        gety = gety.at[3, 0].set(3)
+        gety = gety.at[5, 0].set(1)
+        gety = gety.at[3, 0].set(1)
+        gety = gety.at[3, 1].set(1)
+        gety = gety.at[11, 0].set(3)
 
         giy = state.global_items_type
-        giy = giy.at[0, 0].set(1) # Gem in room 0
+        giy = giy.at[4, 0].set(1) # Gem in room 4
         state = state.replace(global_items_active=gia, global_doors_active=gda, global_enemies_active=gea, global_enemies_type=gety, global_items_type=giy)
         
-        state = load_room(jnp.array(1, dtype=jnp.int32), state, self.consts)
+        state = load_room(jnp.array(5, dtype=jnp.int32), state, self.consts)
         obs = self._get_observation(state)
         return obs, state
     def step(self, state: Montezuma2State, action: int) -> Tuple[Montezuma2Observation, Montezuma2State, float, bool, Montezuma2Info]:
-        room_col_map = self.ROOM_COLLISION_MAPS[state.room_id]
+        room_idx = jnp.where(state.room_id == 4, 0,
+                   jnp.where(state.room_id == 5, 1,
+                   jnp.where(state.room_id == 3, 2,
+                   jnp.where(state.room_id == 11, 3, 0))))
+        room_col_map = self.ROOM_COLLISION_MAPS[room_idx]
         previous_score = state.score
         is_up = jnp.logical_or(action == Action.UP, jnp.logical_or(action == Action.UPRIGHT, action == Action.UPLEFT))
         is_up = jnp.logical_or(is_up, jnp.logical_or(action == Action.UPFIRE, jnp.logical_or(action == Action.UPRIGHTFIRE, action == Action.UPLEFTFIRE)))
@@ -375,10 +379,10 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         # 5. Resolve Horizontal with Wall Collision
         raw_new_x = current_x + dx
-        transition_left = jnp.logical_and(raw_new_x < 0, jnp.logical_or(state.room_id == 1, state.room_id == 2))
-        transition_right = jnp.logical_and(raw_new_x + self.consts.PLAYER_WIDTH > self.consts.WIDTH, jnp.logical_or(state.room_id == 0, state.room_id == 1))
-        transition_down = jnp.logical_and(new_y >= 148, state.room_id == 0)
-        transition_up = jnp.logical_and(new_y <= 2, state.room_id == 3)
+        transition_left = jnp.logical_and(raw_new_x < 0, jnp.logical_or(state.room_id == 5, state.room_id == 3))
+        transition_right = jnp.logical_and(raw_new_x + self.consts.PLAYER_WIDTH > self.consts.WIDTH, jnp.logical_or(state.room_id == 4, state.room_id == 5))
+        transition_down = jnp.logical_and(new_y >= 148, state.room_id == 4)
+        transition_up = jnp.logical_and(new_y <= 2, state.room_id == 11)
 
         new_x = jnp.clip(raw_new_x, 0, self.consts.WIDTH - self.consts.PLAYER_WIDTH)
         new_left_x = jnp.clip(new_x, 0, self.consts.WIDTH - 1)
@@ -564,8 +568,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
         respawn_now = jnp.logical_and(state.death_timer == 1, new_death_timer == 0)
         
-        spawn_x = jnp.where(state.room_id == 0, 146, self.consts.INITIAL_PLAYER_X)
-        spawn_y = jnp.where(state.room_id == 0, 27, self.consts.INITIAL_PLAYER_Y)
+        spawn_x = jnp.where(state.room_id == 4, 146, self.consts.INITIAL_PLAYER_X)
+        spawn_y = jnp.where(state.room_id == 4, 27, self.consts.INITIAL_PLAYER_Y)
         
         new_lives = jnp.where(start_death, state.lives - 1, state.lives)
         final_x = jnp.where(respawn_now, spawn_x, jnp.where(new_death_timer > 0, state.player_x, new_x))
@@ -608,7 +612,10 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         )
 
         transition_any = jnp.logical_or(jnp.logical_or(transition_left, transition_right), jnp.logical_or(transition_down, transition_up))
-        new_room_id = jnp.where(transition_left, state.room_id - 1, jnp.where(transition_right, state.room_id + 1, jnp.where(transition_down, 3, jnp.where(transition_up, 0, state.room_id))))
+        new_room_id = jnp.where(transition_left, jnp.where(state.room_id == 5, 4, 5), 
+                      jnp.where(transition_right, jnp.where(state.room_id == 4, 5, 3), 
+                      jnp.where(transition_down, 11, 
+                      jnp.where(transition_up, 4, state.room_id))))
 
         def transition_fn(state_in):
             st = state_in.replace(
@@ -618,7 +625,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             )
             st = load_room(new_room_id, st, self.consts)
             new_px = jnp.where(transition_left, 148, jnp.where(transition_right, 4, current_x))
-            new_py = jnp.where(transition_down, 6, jnp.where(transition_up, 140, jnp.where(new_room_id == 0, 27, 26)))
+            new_py = jnp.where(transition_down, 6, jnp.where(transition_up, 140, jnp.where(new_room_id == 4, 27, 26)))
             return st.replace(
                 player_x=new_px,
                 player_y=new_py,

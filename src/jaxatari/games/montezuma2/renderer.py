@@ -127,8 +127,8 @@ class Montezuma2Renderer(JAXGameRenderer):
         # Draw Room Background
         mask_0 = self.SHAPE_MASKS["room_bg_0"][:149, :]
         mask_1 = self.SHAPE_MASKS["room_bg_1"][:149, :]
-        room_bg_mask = jnp.where(state.room_id == 1, mask_1, mask_0)
-        room_bg_mask = jnp.where(state.room_id == 2, room_bg_mask.at[6:149, 156:160].set(1), room_bg_mask)
+        room_bg_mask = jnp.where(state.room_id == 5, mask_1, mask_0)
+        room_bg_mask = jnp.where(state.room_id == 3, room_bg_mask.at[6:149, 156:160].set(1), room_bg_mask)
         raster = self.jr.render_at(raster, 0, 47, room_bg_mask)
         
         # Draw Ladders (Vertical Rails + Horizontal Rungs)
