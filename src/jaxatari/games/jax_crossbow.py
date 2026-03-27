@@ -497,7 +497,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             jnp.logical_or(bat_on_friend, desert_freeze), 
             jnp.logical_not(fx >= self.consts.FRIEND_SAFE_ZONE_X)
         )
-        should_move = jnp.logical_and(state.step_counter % 1 == 0, jnp.logical_not(should_freeze))
+        should_move = jnp.logical_and(state.step_counter % 8 == 0, jnp.logical_not(should_freeze))
         new_x = state.friend_x + jnp.where(should_move & state.friend_active, 1, 0)
         final_x = jnp.where(is_dying, state.friend_x, new_x)
 
