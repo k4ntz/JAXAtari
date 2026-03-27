@@ -4116,6 +4116,32 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             # Deactivate bullets that hit anything
             bullet_hit_spawner = jnp.any(spawner_collisions, axis=1)
             final_bullet_active2 = final_bullet_active & (~(bullet_hit_enemy | bullet_hit_spawner)).astype(jnp.int32)
+
+            # Bullets must never persist across chamber/level transitions.
+            level_changed_early = new_level != state.current_level
+            map_changed_early = new_map_index != state.map_index
+            world_changed_early = level_changed_early | map_changed_early
+
+            transition_bullet_positions = jnp.where(
+                world_changed_early,
+                jnp.zeros((MAX_BULLETS, 4), dtype=jnp.int32),
+                final_bullet_positions,
+            )
+            transition_bullet_active = jnp.where(
+                world_changed_early,
+                jnp.zeros((MAX_BULLETS,), dtype=jnp.int32),
+                final_bullet_active2,
+            )
+            transition_enemy_bullet_positions = jnp.where(
+                world_changed_early,
+                jnp.zeros((ENEMY_MAX_BULLETS, 4), dtype=jnp.int32),
+                final_enemy_bullet_positions,
+            )
+            transition_enemy_bullet_active = jnp.where(
+                world_changed_early,
+                jnp.zeros((ENEMY_MAX_BULLETS,), dtype=jnp.int32),
+                final_enemy_bullet_active,
+            )
             
             # Add enemy kill score to total
             final_score = new_score + enemy_kill_score
@@ -4199,7 +4225,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 overlap_x = (bx <= (new_x + self.consts.PLAYER_WIDTH - 1)) & ((bx + ENEMY_BULLET_WIDTH - 1) >= new_x)
                 overlap_y = (by <= (new_y + self.consts.PLAYER_HEIGHT - 1)) & ((by + ENEMY_BULLET_HEIGHT - 1) >= new_y)
                 return overlap_x & overlap_y
-            enemy_bullet_hits = jax.vmap(enemy_bullet_hits_player)(final_enemy_bullet_positions[:, :2]) & (final_enemy_bullet_active == 1)
+            enemy_bullet_hits = jax.vmap(enemy_bullet_hits_player)(transition_enemy_bullet_positions[:, :2]) & (transition_enemy_bullet_active == 1)
             enemy_bullet_damage = enemy_bullet_hits.astype(jnp.int32).any().astype(jnp.int32)
             applied_bullet_damage = jnp.where(can_take_damage, enemy_bullet_damage, 0)
 
@@ -4214,11 +4240,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             )
 
 
-            final_enemy_bullet_active3 = final_enemy_bullet_active & (~enemy_bullet_hits).astype(jnp.int32)
+            final_enemy_bullet_active3 = transition_enemy_bullet_active & (~enemy_bullet_hits).astype(jnp.int32)
             
             # Enemy spawning when crossing portals or changing levels
-            # Calculate level_changed early for enemy spawning trigger
-            level_changed_early = new_level != state.current_level
             
             # Spawner logic: spawn enemies only from active spawners
             new_spawner_timers = state.spawner_timers - 1
@@ -4818,9 +4842,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 spawner_health=use_sp_health,
                 spawner_active=safe_spawner_active,
                 spawner_timers=use_sp_timers,
-                bullet_positions=final_bullet_positions,
-                bullet_active=final_bullet_active2,
-                enemy_bullet_positions=final_enemy_bullet_positions,
+                bullet_positions=transition_bullet_positions,
+                bullet_active=transition_bullet_active,
+                enemy_bullet_positions=transition_enemy_bullet_positions,
                 enemy_bullet_active=final_enemy_bullet_active3,
                 health=final_health_after,
                 damage_cooldown=cooldown2,

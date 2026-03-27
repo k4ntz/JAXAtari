@@ -211,12 +211,19 @@ def main():
         env = ObjectCentricWrapper(env)
         env = FlattenObservationWrapper(env)
     else:
+        do_resize = config.get("PIXEL_RESIZE", True) if config else True
         grayscale = config.get("PIXEL_GRAYSCALE", True) if config else True
         resize_shape = config.get("PIXEL_RESIZE_SHAPE", [84, 84]) if config else [84, 84]
         use_native = config.get("USE_NATIVE_DOWNSCALING", False) if config else False
+        if use_native:
+            print(
+                "Warning: native downscaling is disabled for visualization to avoid "
+                "pixel-shape mismatches. Using wrapper resize/grayscale instead."
+            )
+            use_native = False
         env = PixelObsWrapper(
             env, 
-            do_pixel_resize=True, 
+            do_pixel_resize=do_resize,
             pixel_resize_shape=resize_shape, 
             grayscale=grayscale, 
             use_native_downscaling=use_native
