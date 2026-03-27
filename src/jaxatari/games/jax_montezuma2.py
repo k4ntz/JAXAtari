@@ -218,11 +218,30 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         can_ladder, ladder_idx = jax.lax.fori_loop(0, self.consts.MAX_LADDERS_PER_ROOM, check_ladder, (False, -1))
         can_rope, rope_idx = jax.lax.fori_loop(0, self.consts.MAX_ROPES_PER_ROOM, check_rope, (False, -1))
 
-        is_jumping_off_ladder = jnp.logical_and(can_ladder, jnp.logical_and(state.is_climbing == 1, jnp.logical_and(is_fire, jnp.logical_or(is_left, is_right))))
-        is_moving_off_ladder = jnp.logical_and(can_ladder, jnp.logical_and(state.is_climbing == 1, jnp.logical_or(is_left, is_right)))
+        raw_new_x_check = state.player_x + dx
+        new_left_x_check = jnp.clip(raw_new_x_check, 0, self.consts.WIDTH - 1)
+        new_right_x_check = jnp.clip(raw_new_x_check + self.consts.PLAYER_WIDTH - 1, 0, self.consts.WIDTH - 1)
+        front_x_check = jnp.where(dx > 0, new_right_x_check, new_left_x_check)
+        
+        check_y_top_check = jnp.clip(state.player_y, 0, 148)
+        check_y_mid_check = jnp.clip(state.player_y + self.consts.PLAYER_HEIGHT // 2, 0, 148)
+        check_y_bot_check = jnp.clip(player_feet_y, 0, 148)
+        
+        hit_wall_check = jnp.logical_or(
+            room_col_map[check_y_top_check, front_x_check] == 1,
+            jnp.logical_or(
+                room_col_map[check_y_mid_check, front_x_check] == 1,
+                room_col_map[check_y_bot_check, front_x_check] == 1
+            )
+        )
+
+        can_move_off = jnp.logical_and(jnp.logical_or(is_left, is_right), jnp.logical_not(hit_wall_check))
+
+        is_jumping_off_ladder = jnp.logical_and(can_ladder, jnp.logical_and(state.is_climbing == 1, jnp.logical_and(is_fire, can_move_off)))
+        is_moving_off_ladder = jnp.logical_and(can_ladder, jnp.logical_and(state.is_climbing == 1, can_move_off))
         abort_ladder = jnp.logical_or(is_jumping_off_ladder, is_moving_off_ladder)
 
-        is_jumping_off_rope = jnp.logical_and(can_rope, jnp.logical_and(state.is_climbing == 1, jnp.logical_and(is_fire, jnp.logical_or(is_left, is_right))))
+        is_jumping_off_rope = jnp.logical_and(can_rope, jnp.logical_and(state.is_climbing == 1, jnp.logical_and(is_fire, can_move_off)))
         abort_rope = is_jumping_off_rope
 
         is_climbing_ladder = jnp.logical_and(can_ladder, jnp.logical_not(abort_ladder))
