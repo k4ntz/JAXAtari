@@ -535,14 +535,14 @@ class TutankhamObservation(struct.PyTreeNode):
     creatures: ObjectObservation         # n=MAX_CREATURES (2), map-space coords
     bullet: ObjectObservation            # single bullet
     items: ObjectObservation             # n=7 (max items per map), map-space coords
-    goal: ObjectObservation              # the exit door
+    goal: ObjectObservation              # single exit door per level
     teleporters: ObjectObservation       # n=4 teleporters
     lives: jnp.ndarray
     score: jnp.ndarray
     laser_flash_count: jnp.ndarray
     ammo: jnp.ndarray
     has_key: jnp.ndarray
-    mod_mimic: ObjectObservation
+    mod_mimic: ObjectObservation         # single mimic per level
     mod_whip_ready: jnp.ndarray
 
 # ---------------------------------------------------------------------
@@ -1518,7 +1518,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
             y=jnp.clip(teleport_data[:, 1], 0, MAP_HEIGHT - 1),
             width=jnp.full(4, 5, dtype=jnp.int32),
             height=jnp.full(4, self.consts.TELEPORTER_HEIGHT, dtype=jnp.int32),
-            active=jnp.array(1, dtype=jnp.int32),
+            active=jnp.ones(4, dtype=jnp.int32),
         )
 
         return TutankhamObservation(
