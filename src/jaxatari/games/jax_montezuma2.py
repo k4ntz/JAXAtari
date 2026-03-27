@@ -179,7 +179,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             ladder_top_bound = jnp.where(l_top <= 6, 0, l_top - 4)
             in_ladder_zone = jnp.logical_and(is_aligned, jnp.logical_and(player_feet_y >= ladder_top_bound, player_feet_y <= ladder_bottom_bound))
 
-            on_this_ladder = jnp.where(state.is_climbing == 1, jnp.logical_and(in_ladder_zone, state.last_ladder == i), jnp.logical_or(get_on_top, get_on_bottom))
+            on_this_ladder = jnp.where(state.is_climbing == 1, jnp.logical_and(in_ladder_zone, jnp.logical_or(state.last_ladder == i, state.last_ladder == -1)), jnp.logical_or(get_on_top, get_on_bottom))
 
             new_on_ladder = jnp.logical_or(c_on_ladder, on_this_ladder)
             new_ladder_idx = jnp.where(on_this_ladder, i, c_ladder_idx)
@@ -199,14 +199,14 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
                 state.is_climbing == 0,
                 jnp.logical_and(is_aligned, jnp.logical_and(intersect_y, state.last_rope != i))
             )
-            
+
             get_on_top = jnp.logical_and(is_aligned, jnp.logical_and(is_down, jnp.abs(player_feet_y - r_top) <= 5))
             get_on_bottom = jnp.logical_and(is_aligned, jnp.logical_and(is_up, jnp.abs(player_feet_y - r_bottom) <= 5))
-            
+
             in_rope_zone = jnp.logical_and(is_aligned, jnp.logical_and(player_feet_y >= r_top, player_feet_y <= r_bottom + 10))
-            
-            on_this_rope = jnp.where(state.is_climbing == 1, in_rope_zone, jnp.logical_or(catch_rope, jnp.logical_or(get_on_top, get_on_bottom)))
-            
+
+            on_this_rope = jnp.where(state.is_climbing == 1, jnp.logical_and(in_rope_zone, jnp.logical_or(state.last_rope == i, state.last_rope == -1)), jnp.logical_or(catch_rope, jnp.logical_or(get_on_top, get_on_bottom)))
+
             new_on_rope = jnp.logical_or(c_on_rope, on_this_rope)
             new_rope_idx = jnp.where(on_this_rope, i, c_rope_idx)
             return new_on_rope, new_rope_idx
@@ -619,7 +619,13 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             st = load_room(new_room_id, st, self.consts)
             new_px = jnp.where(transition_left, 148, jnp.where(transition_right, 4, current_x))
             new_py = jnp.where(transition_down, 6, jnp.where(transition_up, 140, jnp.where(new_room_id == 0, 27, 26)))
-            return st.replace(player_x=new_px, player_y=new_py, fall_start_y=new_py)
+            return st.replace(
+                player_x=new_px,
+                player_y=new_py,
+                fall_start_y=new_py,
+                last_ladder=jnp.array(-1, dtype=jnp.int32),
+                last_rope=jnp.array(-1, dtype=jnp.int32)
+            )
 
         state = jax.lax.cond(transition_any, transition_fn, lambda x: x, state)
 
