@@ -1569,16 +1569,31 @@ class JaxVideoChess(
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, prev_state: VideoChessState, state: VideoChessState) -> float:
         c = self.consts
+        # Piece values indexed by piece code (0=empty, 1-6=white, 7-12=black)
+        # Pawn=1, Knight/Bishop=3, Rook=5, Queen=9, King=0
+        piece_vals = jnp.array([0, 1, 3, 3, 5, 9, 0, 1, 3, 3, 5, 9, 0], dtype=jnp.float32)
+
+        def material_score(board):
+            flat = board.flatten()
+            vals = piece_vals[flat]
+            is_white = (flat >= c.W_PAWN) & (flat <= c.W_KING)
+            is_black = (flat >= c.B_PAWN) & (flat <= c.B_KING)
+            return jnp.sum(jnp.where(is_white, vals, 0.0)) - jnp.sum(jnp.where(is_black, vals, 0.0))
+
+        # Reward for material gained/lost this step, normalised by max material per side (39)
+        capture_reward = (material_score(state.board) - material_score(prev_state.board)) / 39.0
+
         just_ended = (state.game_phase == c.PHASE_GAME_OVER) & (prev_state.game_phase != c.PHASE_GAME_OVER)
         white_won = state.winner == c.COLOUR_WHITE
         black_won = state.winner == c.COLOUR_BLACK
-        return jax.lax.cond(
+        terminal_reward = jax.lax.cond(
             just_ended,
             lambda: jax.lax.cond(white_won, lambda: jnp.float32(1.0),
                    lambda: jax.lax.cond(black_won, lambda: jnp.float32(-1.0),
-                          lambda: jnp.float32(0.0))),  # stalemate = 0
+                          lambda: jnp.float32(0.0))),
             lambda: jnp.float32(0.0),
         )
+        return capture_reward + terminal_reward
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: VideoChessState) -> bool:
