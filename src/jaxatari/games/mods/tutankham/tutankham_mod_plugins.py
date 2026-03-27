@@ -1,5 +1,3 @@
-import os
-import time
 import jax
 import jax.numpy as jnp
 from functools import partial
@@ -8,20 +6,158 @@ from jaxatari.modification import JaxAtariPostStepModPlugin, JaxAtariInternalMod
 from jaxatari.games.jax_tutankham import TutankhamState
 from jaxatari.games.jax_tutankham import can_walk_to, is_onscreen
 from jaxatari.environment import JAXAtariAction as Action
+from jaxatari.environment import ObjectObservation
+
+# ---------------------------------------------------------------------
+# Simple Mods
+# 1. KnockbackMod
+# 2. MovingItemsMod
+# 3. NightModeMod + NightModeStepMod
+# 4. ShrinkPlayerMod
+# 5. UpsideDownMod
+# ---------------------------------------------------------------------
+
+class KnockbackMod(JaxAtariInternalModPlugin):
+    """
+    Knocks back creatures when hit by bullets instead of killing it.
+    """
+
+    @partial(jax.jit, static_argnums=(0,))
+    def resolve_bullet_collisions(self, creature_states, bullet_state, level):
+        """
+        Checks if any creature hitbox collides with the bullet.
+        If a creature is hit by a bullet the creature is knocked back by knockback_distance in the direction of the bullet
+        and the bullet is set to inactive.
+        """
+        # Check if creature is active and not in death animation
+        active_mask = (creature_states[:, 3] == self._env.consts.ACTIVE) & (creature_states[:, 5] == -1)
+
+        # Set knockback distance
+        knockback_distance = 20
+
+        def bullet_hits_creature(creature):
+            """
+            Returns True if bullet collides with an active creature
+            """
+            creature_type = creature[2]
+            return self._env.check_entity_collision(
+                bullet_state[0], bullet_state[1], self._env.consts.BULLET_SIZE,
+                creature[0], creature[1], self._env.consts.CREATURE_SIZES[creature_type],
+            )
+
+        # check bullet-creature collisions over all active creatures and determine which creature was hit
+        bullet_hits = jax.vmap(bullet_hits_creature)(creature_states)
+        bullet_hits = bullet_hits & active_mask & (bullet_state[3] == 1)
+        any_bullet_hit = jnp.any(bullet_hits)
+        first_bullet_hit = (jnp.cumsum(bullet_hits) == 1) & bullet_hits
+        hit_creature_idx = jnp.argmax(first_bullet_hit)
+
+        # check for new_x wall collision and set new x coordinate
+        knockbacked_x, _, knockbackable = can_walk_to(self._env.consts.CREATURE_SIZES[creature_states[hit_creature_idx, 2]], creature_states[hit_creature_idx, 0] + knockback_distance * bullet_state[2], creature_states[hit_creature_idx, 1], creature_states[hit_creature_idx, 0], creature_states[hit_creature_idx, 1], self._env.consts.VALID_POS_MAPS[level%4])
+        new_creature_x = jnp.where(any_bullet_hit & knockbackable, knockbacked_x, creature_states[hit_creature_idx, 0])
+        new_creature_states = creature_states.at[hit_creature_idx, 0].set(new_creature_x)
+        new_bullet_state = jnp.where(any_bullet_hit, jnp.zeros(5, dtype=bullet_state.dtype), bullet_state)
+
+        return new_creature_states, new_bullet_state
 
 
+class MovingItemsMod(JaxAtariInternalModPlugin):
+    """
+    Makes the items roam around the map.
+    """
+    
+    # Add item direction to the initial item states (to calculate movement) [x, y, item_type, active, direction]
+    constants_overrides = {
+        "MAP_ITEMS": jnp.array([
+            # MAP 1
+            [
+                [51, 87, 0, 1, 0],   # KEY_MAP1=0       
+                [99, 183, 5, 1, 0],  # CROWN_02_MAP1=5
+                [68, 262, 2, 1, 0],  # RING_MAP1=2
+                [7, 311, 3, 1, 0],   # RUBY_MAP1=3
+                [93, 382, 4, 1, 0],  # CHALICE_MAP1=4
+                [18, 494, 1, 1, 0],  # CROWN_01_MAP1=1
+                [0, 0, 0, 0, 0],     # Padding
+            ],
+            # MAP 2
+            [
+                [21, 272, 6, 1, 0],  # KEY_MAP2=6
+                [44, 155, 8, 1, 0],  # CROWN_MAP2=8
+                [128, 98, 7, 1, 0],  # RING_MAP2=7
+                [37, 406, 9, 1, 0],  # EMERALD_MAP2=9
+                [91, 482, 10, 1, 0], # GOBLET_MAP2=10
+                [23, 547, 11, 1, 0], # BUST_MAP2=11
+                [0, 0, 0, 0, 0],     # Padding
+            ],
+            # MAP 3
+            [
+                [22, 411, 12, 1, 0], # KEY_MAP3=12
+                [15, 173, 14, 1, 0], # RING_MAP3=14
+                [128, 98, 13, 1, 0], # TRIDENT_MAP3=13
+                [17, 278, 15, 1, 0], # HERB_MAP3=15
+                [108, 323, 16, 1, 0],# DIAMOND_MAP3=16
+                [27, 656, 17, 1, 0], # CANDELABRA_MAP3=17
+                [0, 0, 0, 0, 0],     # Padding
+            ],
+            # MAP 4
+            [
+                [144, 110, 18, 1, 0], # KEY_MAP4=18
+                [125, 221, 19, 1, 0], # RING_MAP4=19
+                [117, 269, 20, 1, 0], # AMULET_MAP4=20
+                [19, 326, 21, 1, 0],  # FAN_MAP4=21
+                [55, 510, 23, 1, 0],  # ZIRCON_MAP4=23
+                [110, 401, 22, 1, 0], # CRYSTAL_MAP4=22
+                [66, 607, 24, 1, 0],  # DAGGER_MAP4=24
+            ],
+        ], dtype=jnp.int32),
+    }
 
-# SIMPLE MODS
-# 1. NightModeMod + NightModeStepMod
-# 2. UpsideDownMod
-# 3. ShrinkPlayerMod
-# 4. MovingItemsMod
-# 5. KnockbackMod
+    @partial(jax.jit, static_argnums=(0,))
+    def item_step(self, item_states, level, rng_key):
+        """
+        Moves active items using random-walk pathing.
+        """
 
-# HARD MODS
-# 1. MimicMod + MimicStepMod
-# 2. GhostMod
-# 3. WhipMod
+        def move_item(item, rng_key):
+            """
+            Moves a single active item using random-walk pathing
+            """
+            item_x, item_y, item_type, active, direction = item
+            
+            # Natural patrol: randomly change direction
+            change_probability = 0.08 # 8% chance to change direction, to prvent jiggeling, more natural movement.
+            possible_directions = jnp.array([-1, -2, 1, 2]) # right, left, down, up
+
+            # Setup random direction calculation
+            rng_key, subkey_01, subkey_02 = jax.random.split(rng_key, 3)
+            random_dir = jax.random.choice(subkey_01, possible_directions)
+            should_change = jax.random.bernoulli(subkey_02, p=change_probability)
+
+            # Set new direction if should change.
+            new_direction = jnp.where(should_change, random_dir, direction)
+            new_direction = jnp.where(direction == 0, random_dir, new_direction)
+
+            # index = direction value (0=none, 1=down, 2=up, -1=right, -2=left)
+            lookup_x = self._env.consts.DIR_LOOKUP_X
+            lookup_y = self._env.consts.DIR_LOOKUP_Y
+            x_direction = lookup_x[new_direction]
+            y_direction = lookup_y[new_direction]
+
+            # Move item in new direction
+            new_x = item_x +  x_direction * active
+            new_y = item_y +  y_direction * active
+
+            # Check if the new position is walkable
+            item_x, item_y, is_walkable = can_walk_to(self._env.consts.ITEM_SIZES[item_type], new_x, new_y, item_x, item_y, self._env.consts.VALID_POS_MAPS[level%4])
+
+            return jnp.array([item_x, item_y, item_type, active, new_direction], dtype=jnp.int32), rng_key
+
+        # Apply movement to all items
+        keys = jax.random.split(rng_key, len(item_states) + 1)
+        rng_key = keys[0]
+        new_item_states, _ = jax.vmap(move_item)(item_states, keys[1:])
+
+        return new_item_states, rng_key
 
 
 class NightModeMod(JaxAtariInternalModPlugin):
@@ -80,13 +216,209 @@ class NightModeStepMod(JaxAtariPostStepModPlugin):
         #Count down and reset wehen the nighttimer hits 0.
         night_time_left = new_state.night_timer - 1
         day_time = self._TIME_CYCLE - self._NIGHT_FRAMES
-        new_timer = jnp.where(night_time_left <= 0, jnp.int32(_TIME_CYCLE), night_time_left)
+        new_timer = jnp.where(night_time_left <= 0, jnp.int32(self._TIME_CYCLE), night_time_left)
 
         # Resets the night timer to day time on player death or map transition.
         should_reset_to_day = (new_state.lives < prev_state.lives) | (new_state.level != prev_state.level)
         new_timer = jnp.where(should_reset_to_day, day_time, new_timer)
 
         return new_state.replace(night_timer=new_timer)
+
+
+class ShrinkPlayerMod(JaxAtariInternalModPlugin):
+    """
+    Shrinks the player's hitbox and sprite.
+    """
+    constants_overrides = {
+        "PLAYER_SIZE": jnp.array([3, 5], dtype=jnp.int32),
+        "PLAYER_SPEED": 2, # Zoom zoom :3
+        "TELEPORTER_HEIGHT": 8,
+    }
+    asset_overrides = {
+        "player": {
+            "name": "player",
+            "type": "group",
+            "files": ["shrink_player_idle.npy", "shrink_player_key_idle.npy"],
+        },
+        "player_move": {
+            "name": "player_move",
+            "type": "group",
+            "files": ["shrink_player_move_00.npy", "shrink_player_move_01.npy","shrink_player_key_move_00.npy", "shrink_player_key_move_01.npy"],
+        }
+    }
+
+
+class UpsideDownMod(JaxAtariInternalModPlugin):
+    """
+    Flips the map upside down, and switches the player's start poins goal positions and flips the checkpoints.
+    """
+    constants_overrides = {
+        "MAP_CHECKPOINTS": jnp.array([
+            # MAP 1 
+            [
+                [588, 800, 18, 684],
+                [405, 587, 80, 586],
+                [201, 404, 12, 403],
+                [0,   200, 78, 199],
+            ],
+            # MAP 2 
+            [
+                [573, 800, 19, 634],
+                [425, 572, 24, 572],
+                [261, 426, 78, 426],
+                [0,   260, 78, 259],
+            ],
+            # MAP 3 
+            [
+                [553, 800,  107, 715],
+                [401, 552,  98,  550],
+                [269, 400,  78,  396],
+                [0,   268,  39,  248],
+            ],
+            # MAP 4 
+            [
+                [531, 800, 77,  719],
+                [391, 532, 119, 531],
+                [204, 392, 18,  391],
+                [0 ,  203, 30,  203],
+            ],
+        ], dtype=jnp.int32),
+
+        "MAP_GOAL_POSITIONS": jnp.array([
+            [[134, 61]],  # MAP 1
+            [[136, 60]],  # MAP 2
+            [[16,  93]],  # MAP 3
+            [[82,  95]]   # MAP 4
+        ], dtype=jnp.int32)
+    }
+
+# ---------------------------------------------------------------------
+# Hard Mods
+# 1. GhostMod
+# 2. MimicMod + MimicStepMod
+# 3. WhipMod
+# ---------------------------------------------------------------------
+class GhostMod(JaxAtariInternalModPlugin):
+    """
+    Adds ghosts to the game as a new spawnable creature that can move through walls and tracks the player down permanently.
+    """    
+    asset_overrides = {
+        "creature_00": {"name": "creature_00", "type": "group", "files": ["creature_snake_00.npy", "creature_scorpion_00.npy", "creature_bat_00.npy", "creature_turtle_00.npy", "creature_jackel_00.npy", "creature_condor_00.npy", "creature_lion_00.npy", "creature_moth_00.npy", "creature_virus_00.npy", "creature_monkey_00.npy", "creature_mysteryweapon_00.npy", "ghost_00.npy"]},
+        "creature_01": {"name": "creature_01", "type": "group", "files": ["creature_snake_01.npy", "creature_scorpion_01.npy", "creature_bat_01.npy", "creature_turtle_01.npy", "creature_jackel_01.npy", "creature_condor_01.npy", "creature_lion_01.npy", "creature_moth_01.npy", "creature_virus_01.npy", "creature_monkey_01.npy", "creature_mysteryweapon_01.npy", "ghost_01.npy"]},
+        "kill_sprites": {"name": "kill_sprites", "type": "group", "files": ["kill_snake_00.npy", "kill_scorpion_00.npy", "kill_bat_00.npy", "kill_turtle_00.npy", "kill_jackel_00.npy", "kill_condor_00.npy", "kill_lion_00.npy", "kill_moth_00.npy", "kill_virus_00.npy", "kill_monkey_00.npy", "kill_mysteryweapon_00.npy", "kill_ghost.npy"]},
+    }
+
+    constants_overrides = {
+
+    "CREATURE_SIZES": jnp.array([
+        [8, 8],   # SNAKE
+        [8, 8],   # SCORPION
+        [8, 8],   # BAT
+        [8, 8],   # TURTLE
+        [8, 8],   # JACKEL  
+        [8, 7],   # CONDOR
+        [8, 8],   # LION
+        [8, 8],   # MOTH
+        [8, 6],   # VIRUS
+        [8, 8],   # MONKEY
+        [8, 8],   # MYSTERY_WEAPON
+        [8, 8]    # GHOST (MOD)
+    ], dtype=jnp.int32),
+
+    "CREATURE_SPEED": jnp.array(
+        [0.65, 0.75, 0.95, 0.5, 0.75, 0.95, 0.85, 0.95, 0.75, 0.85, 0.95, 0.4], # Ghost has slow speed of 0.4
+        dtype=jnp.float32),
+
+    "CREATURE_POINTS": jnp.array(
+        [1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 3, 0], # Ghost gives zero points
+        dtype=jnp.int32),
+
+    "MAP_CREATURES": jnp.array([ # Ghost can spawn on any map
+        [0, 1, 2, 11], 
+        [3, 4, 5, 11],
+        [0, 6, 7, 11],
+        [8, 9, 10, 11]  
+    ], dtype=jnp.int32)
+    }
+
+    @partial(jax.jit, static_argnums=(0,))
+    def move_creature(self, creature, creature_subpixel, rng_key, camera_offset, level, player_x, player_y):
+        """
+        Moves creature if active.
+        Generates random movement for a creature
+        If player is nearby, the creature begins to chase the player
+        Deactivates a creature if offscreen.
+        Handles death animation timer for the creature. If a creature is hit by a bullet it enters it's death animation.
+        A counter is set to 15 and decremented each step. The death animation ends if the counter hits 0.
+        During the death animation the creature stops moving and will have no hitbox.
+        After that the creature state will be set to inactive and the creature will no longer be visible.
+
+        Now also handles the ghost creature which can move through walls and always chases the player.
+        """
+        creature_x, creature_y, creature_type, active, direction, death_timer = creature
+
+        # index = direction value (0=none, 1=down, 2=up, -1=right, -2=left)
+        lookup_x = self._env.consts.DIR_LOOKUP_X
+        lookup_y = self._env.consts.DIR_LOOKUP_Y
+
+        # The creature state is active and creature is not in it's death animation
+        is_alive = (active == self._env.consts.ACTIVE) & (death_timer == -1)
+
+        # --- pathing ---
+        # Natural patrol: randomly change direction
+        rng_key, subkey_01, subkey_02 = jax.random.split(rng_key, 3)
+        random_dir = jax.random.choice(subkey_01, jnp.array([-1, -2, 1, 2]))
+        should_change = jax.random.bernoulli(subkey_02, p=0.08)
+        new_direction = jnp.where(should_change, random_dir, direction)
+        new_direction = jnp.where(direction == 0, random_dir, new_direction)
+
+        # Check if creature is a ghost
+        is_ghost = (creature_type == 11) # int 11 for ghost creature
+
+        # Chase player if nearby (ghost always chases, others only within detection range)
+        dx = player_x - creature_x
+        dy = player_y - creature_y
+        player_near = is_ghost | (
+            (jnp.abs(dx) < self._env.consts.CREATURE_DETECTION_RANGE_X) &
+            (jnp.abs(dy) < self._env.consts.CREATURE_DETECTION_RANGE_Y)
+        )
+        horizontal_direction = jnp.where(dx >= 0, jnp.int32(-1), jnp.int32(-2))
+        vertical_direction   = jnp.where(dy >= 0, jnp.int32(1),  jnp.int32(2))
+        prefer_h      = jnp.abs(dx) >= jnp.abs(dy)
+        primary_dir   = jnp.where(prefer_h, horizontal_direction, vertical_direction)
+        secondary_dir = jnp.where(prefer_h, vertical_direction, horizontal_direction)
+        next_x = creature_x + lookup_x[primary_dir]
+        next_y = creature_y + lookup_y[primary_dir]
+        _, _, primary_walkable = can_walk_to(self._env.consts.CREATURE_SIZES[creature_type], next_x, next_y, creature_x, creature_y, self._env.consts.VALID_POS_MAPS[level%4])
+        
+        # Ghost ignores wall collisions: always takes primary direction
+        toward_player = jnp.where(is_ghost | primary_walkable, primary_dir, secondary_dir)
+        new_direction = jnp.where(player_near, toward_player, new_direction)
+
+        # Only update direction for alive creatures
+        new_direction = jnp.where(is_alive, new_direction, direction)
+
+        # --- movement ---
+        speed = self._env.consts.CREATURE_SPEED[creature_type.astype(jnp.int32)]
+        actual_speed, new_subpixel = self._env.subpixel_accumulator(speed, creature_subpixel)
+        new_x = creature_x + actual_speed * lookup_x[new_direction] * is_alive
+        new_y = creature_y + actual_speed * lookup_y[new_direction] * is_alive
+
+        # Ghost ignores wall collisions: always moves to new position
+        ghost_x = new_x.astype(jnp.int32)
+        ghost_y = new_y.astype(jnp.int32)
+        walked_x, walked_y, _ = can_walk_to(self._env.consts.CREATURE_SIZES[creature_type], new_x, new_y, creature_x, creature_y, self._env.consts.VALID_POS_MAPS[level%4])
+        creature_x = jnp.where(is_ghost, ghost_x, walked_x)
+        creature_y = jnp.where(is_ghost, ghost_y, walked_y)
+
+        # Deactivate creature if offscreen
+        creature_on_screen = is_onscreen(creature_y, self._env.consts.CREATURE_SIZES[creature_type][1], camera_offset)
+        active = jnp.where(creature_on_screen, active, self._env.consts.INACTIVE)
+
+        # Process death timer
+        active, new_death_timer, creature_x, creature_y = self._env.process_death_timer(active, death_timer, creature_x, creature_y)
+
+        return jnp.array([creature_x, creature_y, creature_type, active, new_direction, new_death_timer], dtype=jnp.int32), new_subpixel
 
 
 class MimicMod(JaxAtariInternalModPlugin):
@@ -149,6 +481,17 @@ class MimicMod(JaxAtariInternalModPlugin):
             raster
         )
         return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_mimic_observation(self, state):
+        return ObjectObservation.create(
+            x=state.mimic_state[0],
+            y=state.mimic_state[1],
+            width=jnp.array(8, dtype=jnp.int32),
+            height=jnp.array(8, dtype=jnp.int32),
+            active=state.mimic_state[2],
+            orientation=state.mimic_state[3], # Provide direction
+        )
 
 
 class MimicStepMod(JaxAtariPostStepModPlugin):
@@ -271,7 +614,20 @@ class MimicStepMod(JaxAtariPostStepModPlugin):
         )
         # Resolve mimic collision with player and bullets
         new_state = self._resolve_mimic_collisions(new_state)
-        return new_state
+        
+        # Resolve mimic collision with Whip (whip activated exactly this frame)
+        whip_activated = (new_state.whip_timer == 200) & (prev_state.whip_timer == 0)
+        
+        mimic_state = new_state.mimic_state
+        mimic_dist_sq = (mimic_state[0] - new_state.player_x)**2 + (mimic_state[1] - new_state.player_y)**2
+        mimic_whipped = whip_activated & (mimic_dist_sq <= 45**2) & (mimic_state[2] == 1) & (mimic_state[5] == -1)
+        
+        # Apply death and points
+        new_mimic_state = jnp.where(mimic_whipped, mimic_state.at[5].set(15), mimic_state)
+        mimic_score = self._env.consts.ITEM_POINTS[new_state.item_states[mimic_state[4], 2]]
+        new_score = new_state.tutankham_score + jnp.where(mimic_whipped, mimic_score, 0)
+        
+        return new_state.replace(mimic_state=new_mimic_state, tutankham_score=new_score)
 
     @partial(jax.jit, static_argnums=(0,))
     def _mimic_movement(self, state: TutankhamState, mimic, mimic_subpixel, rng_key, camera_offset, level, player_x, player_y):
@@ -279,12 +635,15 @@ class MimicStepMod(JaxAtariPostStepModPlugin):
         Handles the movement of the mimic. (Like the creatures in the base game)
         """
         mimic_x, mimic_y, mimic_active, mimic_direction, mimic_target_idx, mimic_death_timer = mimic
-        
+
+        #index = direction value (0=none, 1=down, 2=up, -1=right, -2=left)
         lookup_x = self._env.consts.DIR_LOOKUP_X
         lookup_y = self._env.consts.DIR_LOOKUP_Y
 
+        # mimic state is active and mimic is not in it's death animation
         is_alive = (mimic_active == 1) & (mimic_death_timer == -1)
 
+        # --- pathing ---
         # Natural patrol: randomly change direction
         rng_key, subkey_01, subkey_02 = jax.random.split(rng_key, 3)
         random_dir = jax.random.choice(subkey_01, jnp.array([-1, -2, 1, 2]))
@@ -328,14 +687,15 @@ class MimicStepMod(JaxAtariPostStepModPlugin):
 
     @partial(jax.jit, static_argnums=(0,))
     def _resolve_mimic_collisions(self, state: TutankhamState) -> TutankhamState:
-        """Unified AABB collision handler for the mimic.
-        Triggers death animation (death_timer=15) if either the player or a bullet hits.
+        """
+        Hitbox collision handler for the mimic.
         On player hit: respawns player (lives-1).
-        On bullet hit: deactivates the bullet."""
-        mimmic_state = state.mimic_state
-        mimic_x = mimmic_state[0]
-        mimic_y = mimmic_state[1]
-        mimic_alive = (mimmic_state[2] == 1) & (mimmic_state[5] == -1)
+        On bullet hit: deactivates the bullet.
+        """
+        mimic_state = state.mimic_state
+        mimic_x = mimic_state[0]
+        mimic_y = mimic_state[1]
+        mimic_alive = (mimic_state[2] == 1) & (mimic_state[5] == -1)
 
         bullet_state = state.bullet_state
         bull_active = bullet_state[3]
@@ -352,29 +712,29 @@ class MimicStepMod(JaxAtariPostStepModPlugin):
         ) & mimic_alive & (bull_active == 1)
 
         # 2. Compute Respawn (for player hit)
-        (resp_x, resp_y, resp_bull, resp_creat, resp_lives, resp_spwn, resp_dir) = self._env.respawn_player(
-            state.player_y, state.lives, state.level)
+        (respawn_x, respawn_y, respawn_bullet, respawn_creatures, 
+         respawn_lives, respawn_spawn, respawn_directional_action) = self._env.respawn_player(state.player_y, state.lives, state.level)
 
         # 3. Apply Consequences
         # Player hit takes precedence for state reset, bullet hit just zeros the bullet
-        new_player_x                = jnp.where(player_hit, resp_x, state.player_x)
-        new_player_y                = jnp.where(player_hit, resp_y, state.player_y)
-        new_lives                   = jnp.where(player_hit, resp_lives, state.lives)
-        new_creature_states         = jnp.where(player_hit, resp_creat, state.creature_states)
-        new_creature_subpixels      = jnp.where(player_hit, jnp.zeros_like(state.creature_subpixels), state.creature_subpixels)
-        new_last_creature_spawn     = jnp.where(player_hit, resp_spwn, state.last_creature_spawn)
-        new_last_movement_action = jnp.where(player_hit, resp_dir, state.last_movement_action)
+        new_player_x = jnp.where(player_hit, respawn_x, state.player_x)
+        new_player_y = jnp.where(player_hit, respawn_y, state.player_y)
+        new_lives = jnp.where(player_hit, respawn_lives, state.lives)
+        new_creature_states = jnp.where(player_hit, respawn_creatures, state.creature_states)
+        new_creature_subpixels = jnp.where(player_hit, jnp.zeros_like(state.creature_subpixels), state.creature_subpixels)
+        new_last_creature_spawn = jnp.where(player_hit, respawn_spawn, state.last_creature_spawn)
+        new_last_movement_action = jnp.where(player_hit, respawn_directional_action, state.last_movement_action)
 
         # Bullet state: reset if player hit (unconditional respawn rules) OR if bullet specifically hit the mimic
-        new_bullet_state = jnp.where(player_hit, resp_bull,
+        new_bullet_state = jnp.where(player_hit, respawn_bullet,
                                     jnp.where(bullet_hit, jnp.zeros(5, dtype=jnp.int32), bullet_state))
 
         # Mimic state: trigger death if either hit
-        new_mimic_state = jnp.where(player_hit, mimmic_state.at[5].set(0), mimmic_state)
-        new_mimic_state = jnp.where(bullet_hit, mimmic_state.at[5].set(15), mimmic_state)
+        new_mimic_state = jnp.where(player_hit, mimic_state.at[5].set(0), mimic_state)
+        new_mimic_state = jnp.where(bullet_hit, mimic_state.at[5].set(15), mimic_state)
 
         # 4. Update Score (Mimic destroyed by bullet awards points from its mimicked item)
-        target_idx = mimmic_state[4]
+        target_idx = mimic_state[4]
         mimicked_item_type = state.item_states[target_idx, 2]
         mimic_points = self._env.consts.ITEM_POINTS[mimicked_item_type]
         new_score = state.tutankham_score + jnp.where(bullet_hit, mimic_points, 0)
@@ -391,29 +751,6 @@ class MimicStepMod(JaxAtariPostStepModPlugin):
             mimic_state=new_mimic_state,
             tutankham_score=new_score
         )
-
-
-class ShrinkPlayerMod(JaxAtariInternalModPlugin):
-    """
-    Shrinks the player's hitbox and sprite.
-    """
-    constants_overrides = {
-        "PLAYER_SIZE": jnp.array([3, 5], dtype=jnp.int32),
-        "PLAYER_SPEED": 2, # Zoom zoom :3
-        "TELEPORTER_HEIGHT": 8,
-    }
-    asset_overrides = {
-        "player": {
-            "name": "player",
-            "type": "group",
-            "files": ["shrink_player_idle.npy", "shrink_player_key_idle.npy"],
-        },
-        "player_move": {
-            "name": "player_move",
-            "type": "group",
-            "files": ["shrink_player_move_00.npy", "shrink_player_move_01.npy","shrink_player_key_move_00.npy", "shrink_player_key_move_01.npy"],
-        }
-    }
 
 
 class WhipMod(JaxAtariInternalModPlugin):
@@ -521,288 +858,10 @@ class WhipMod(JaxAtariInternalModPlugin):
         
         return new_whip_timer, new_creatures, new_ammo, new_tutankham_score
 
-
-class KnockbackMod(JaxAtariInternalModPlugin):
-    """
-    Knocks back creatures when hit by bullets instead of killing it.
-    """
-
     @partial(jax.jit, static_argnums=(0,))
-    def resolve_bullet_collisions(self, creature_states, bullet_state, level):
-        """
-        Resolves bullet collisions with creatures.
-        """
-        active_mask = (creature_states[:, 3] == self._env.consts.ACTIVE) & (creature_states[:, 5] == -1)
-
-        def bullet_hits_creature(creature):
-            """
-            Checks if a creature is in range of the bullet.
-            """
-            creature_type = creature[2]
-            return self._env.check_entity_collision(
-                bullet_state[0], bullet_state[1], self._env.consts.BULLET_SIZE,
-                creature[0], creature[1], self._env.consts.CREATURE_SIZES[creature_type],
-            )
-
-        # check bullet-creature collisions and determine which creature was hit
-        bullet_hits = jax.vmap(bullet_hits_creature)(creature_states)
-        bullet_hits = bullet_hits & active_mask & (bullet_state[3] == 1)
-        any_bullet_hit = jnp.any(bullet_hits)
-        first_bullet_hit = (jnp.cumsum(bullet_hits) == 1) & bullet_hits
-        hit_creature_idx = jnp.argmax(first_bullet_hit)
-
-        # check for new_x wall collision and set new x coordinate
-        knockbacked_x, _, knockbackable = can_walk_to(self._env.consts.CREATURE_SIZES[creature_states[hit_creature_idx, 2]], creature_states[hit_creature_idx, 0] + 15 * bullet_state[2], creature_states[hit_creature_idx, 1], creature_states[hit_creature_idx, 0], creature_states[hit_creature_idx, 1], self._env.consts.VALID_POS_MAPS[level%4])
-        new_creature_x = jnp.where(any_bullet_hit & knockbackable, knockbacked_x, creature_states[hit_creature_idx, 0])
-        new_creature_states = creature_states.at[hit_creature_idx, 0].set(new_creature_x)
-        new_bullet_state = jnp.where(any_bullet_hit, jnp.zeros(5, dtype=bullet_state.dtype), bullet_state)
-
-        return new_creature_states, new_bullet_state
-
-
-class GhostMod(JaxAtariInternalModPlugin):
-    """
-    Adds ghosts to the game as a new spawnable creature that can move through walls and tracks the player down permanently.
-    """    
-    asset_overrides = {
-        "creature_00": {"name": "creature_00", "type": "group", "files": ["creature_snake_00.npy", "creature_scorpion_00.npy", "creature_bat_00.npy", "creature_turtle_00.npy", "creature_jackel_00.npy", "creature_condor_00.npy", "creature_lion_00.npy", "creature_moth_00.npy", "creature_virus_00.npy", "creature_monkey_00.npy", "creature_mysteryweapon_00.npy", "ghost_00.npy"]},
-        "creature_01": {"name": "creature_01", "type": "group", "files": ["creature_snake_01.npy", "creature_scorpion_01.npy", "creature_bat_01.npy", "creature_turtle_01.npy", "creature_jackel_01.npy", "creature_condor_01.npy", "creature_lion_01.npy", "creature_moth_01.npy", "creature_virus_01.npy", "creature_monkey_01.npy", "creature_mysteryweapon_01.npy", "ghost_01.npy"]},
-        "kill_sprites": {"name": "kill_sprites", "type": "group", "files": ["kill_snake_00.npy", "kill_scorpion_00.npy", "kill_bat_00.npy", "kill_turtle_00.npy", "kill_jackel_00.npy", "kill_condor_00.npy", "kill_lion_00.npy", "kill_moth_00.npy", "kill_virus_00.npy", "kill_monkey_00.npy", "kill_mysteryweapon_00.npy", "kill_ghost.npy"]},
-    }
-
-    constants_overrides = {
-
-    "CREATURE_SIZES": jnp.array([
-        [8, 8],   # SNAKE
-        [8, 8],   # SCORPION
-        [8, 8],   # BAT
-        [8, 8],   # TURTLE
-        [8, 8],   # JACKEL  
-        [8, 7],   # CONDOR
-        [8, 8],   # LION
-        [8, 8],   # MOTH
-        [8, 6],   # VIRUS
-        [8, 8],   # MONKEY
-        [8, 8],   # MYSTERY_WEAPON
-        [8, 8]    # GHOST (MOD)
-    ], dtype=jnp.int32),
-
-    "CREATURE_SPEED": jnp.array(
-        [0.65, 0.75, 0.95, 0.5, 0.75, 0.95, 0.85, 0.95, 0.75, 0.85, 0.95, 0.4], # Ghost has slow speed of 0.4
-        dtype=jnp.float32),
-
-    "CREATURE_POINTS": jnp.array(
-        [1, 2, 3, 1, 2, 3, 2, 3, 1, 2, 3, 0], # Ghost gives zero points
-        dtype=jnp.int32),
-
-    "MAP_CREATURES": jnp.array([ # Ghost can spawn on any map
-        [0, 1, 2, 11], 
-        [3, 4, 5, 11],
-        [0, 6, 7, 11],
-        [8, 9, 10, 11]  
-    ], dtype=jnp.int32)
-    }
-
-    @partial(jax.jit, static_argnums=(0,))
-    def move_creature(self, creature, creature_subpixel, rng_key, camera_offset, level, player_x, player_y):
-        creature_x, creature_y, creature_type, active, direction, death_timer = creature
-
-        lookup_x = self._env.consts.DIR_LOOKUP_X
-        lookup_y = self._env.consts.DIR_LOOKUP_Y
-
-        # creature state is active and creature is not in it's death animation
-        is_alive = (active == self._env.consts.ACTIVE) & (death_timer == -1)
-
-        # --- pathing ---
-        # Natural patrol: randomly change direction
-        rng_key, subkey_01, subkey_02 = jax.random.split(rng_key, 3)
-        random_dir = jax.random.choice(subkey_01, jnp.array([-1, -2, 1, 2]))
-        should_change = jax.random.bernoulli(subkey_02, p=0.08)
-        new_direction = jnp.where(should_change, random_dir, direction)
-        new_direction = jnp.where(direction == 0, random_dir, new_direction)
-
-        is_ghost = (creature_type == 11) # int 11 for ghost creature
-
-        # Chase player if nearby (ghost always chases, others only within detection range)
-        dx = player_x - creature_x
-        dy = player_y - creature_y
-        player_near = is_ghost | (
-            (jnp.abs(dx) < self._env.consts.CREATURE_DETECTION_RANGE_X) &
-            (jnp.abs(dy) < self._env.consts.CREATURE_DETECTION_RANGE_Y)
-        )
-        horizontal_direction = jnp.where(dx >= 0, jnp.int32(-1), jnp.int32(-2))
-        vertical_direction   = jnp.where(dy >= 0, jnp.int32(1),  jnp.int32(2))
-        prefer_h      = jnp.abs(dx) >= jnp.abs(dy)
-        primary_dir   = jnp.where(prefer_h, horizontal_direction, vertical_direction)
-        secondary_dir = jnp.where(prefer_h, vertical_direction, horizontal_direction)
-        next_x = creature_x + lookup_x[primary_dir]
-        next_y = creature_y + lookup_y[primary_dir]
-        _, _, primary_walkable = can_walk_to(self._env.consts.CREATURE_SIZES[creature_type], next_x, next_y, creature_x, creature_y, self._env.consts.VALID_POS_MAPS[level%4])
-        # ghost ignores wall collisions: always takes primary direction
-        toward_player = jnp.where(is_ghost | primary_walkable, primary_dir, secondary_dir)
-        new_direction = jnp.where(player_near, toward_player, new_direction)
-
-        # only update direction for alive creatures
-        new_direction = jnp.where(is_alive, new_direction, direction)
-
-        # --- movement ---
-        speed = self._env.consts.CREATURE_SPEED[creature_type.astype(jnp.int32)]
-        actual_speed, new_subpixel = self._env.subpixel_accumulator(speed, creature_subpixel)
-        new_x = creature_x + actual_speed * lookup_x[new_direction] * is_alive
-        new_y = creature_y + actual_speed * lookup_y[new_direction] * is_alive
-        # ghost ignores wall collisions: always moves to new position
-        ghost_x = new_x.astype(jnp.int32)
-        ghost_y = new_y.astype(jnp.int32)
-        walked_x, walked_y, _ = can_walk_to(self._env.consts.CREATURE_SIZES[creature_type], new_x, new_y, creature_x, creature_y, self._env.consts.VALID_POS_MAPS[level%4])
-        creature_x = jnp.where(is_ghost, ghost_x, walked_x)
-        creature_y = jnp.where(is_ghost, ghost_y, walked_y)
-
-        # Deactivate creature if offscreen
-        creature_on_screen = is_onscreen(creature_y, self._env.consts.CREATURE_SIZES[creature_type][1], camera_offset)
-        active = jnp.where(creature_on_screen, active, self._env.consts.INACTIVE)
-
-        active, new_death_timer, creature_x, creature_y = self._env.process_death_timer(active, death_timer, creature_x, creature_y)
-
-        return jnp.array([creature_x, creature_y, creature_type, active, new_direction, new_death_timer], dtype=jnp.int32), new_subpixel
-
-
-class UpsideDownMod(JaxAtariInternalModPlugin):
-    """
-    Flips the map upside down, and switches the player's start poins goal positions and flips the checkpoints.
-    """
-    constants_overrides = {
-        "MAP_CHECKPOINTS": jnp.array([
-            # MAP 1 
-            [
-                [588, 800, 18, 684],
-                [405, 587, 80, 586],
-                [201, 404, 12, 403],
-                [0,   200, 78, 199],
-            ],
-            # MAP 2 
-            [
-                [573, 800, 19, 634],
-                [425, 572, 24, 572],
-                [261, 426, 78, 426],
-                [0,   260, 78, 259],
-            ],
-            # MAP 3 
-            [
-                [553, 800,  107, 715],
-                [401, 552,  98,  550],
-                [269, 400,  78,  396],
-                [0,   268,  39,  248],
-            ],
-            # MAP 4 
-            [
-                [531, 800, 77,  719],
-                [391, 532, 119, 531],
-                [204, 392, 18,  391],
-                [0 ,  203, 30,  203],
-            ],
-        ], dtype=jnp.int32),
-
-        "MAP_GOAL_POSITIONS": jnp.array([
-            [[134, 61]],  # MAP 1
-            [[136, 60]],  # MAP 2
-            [[16,  93]],  # MAP 3
-            [[82,  95]]   # MAP 4
-        ], dtype=jnp.int32)
-    }
-
-
-class MovingItemsMod(JaxAtariInternalModPlugin):
-    """
-    Makes the items roam around the map.
-    """
-    
-    # Add item direction to the initial item states (to calculate movement) [x, y, item_type, active, direction]
-    constants_overrides = {
-        "MAP_ITEMS": jnp.array([
-            # MAP 1
-            [
-                [51, 87, 0, 1, 0],   # KEY_MAP1=0       
-                [99, 183, 5, 1, 0],  # CROWN_02_MAP1=5
-                [68, 262, 2, 1, 0],  # RING_MAP1=2
-                [7, 311, 3, 1, 0],   # RUBY_MAP1=3
-                [93, 382, 4, 1, 0],  # CHALICE_MAP1=4
-                [18, 494, 1, 1, 0],  # CROWN_01_MAP1=1
-                [0, 0, 0, 0, 0],     # Padding
-            ],
-            # MAP 2
-            [
-                [21, 272, 6, 1, 0],  # KEY_MAP2=6
-                [44, 155, 8, 1, 0],  # CROWN_MAP2=8
-                [128, 98, 7, 1, 0],  # RING_MAP2=7
-                [37, 406, 9, 1, 0],  # EMERALD_MAP2=9
-                [91, 482, 10, 1, 0], # GOBLET_MAP2=10
-                [23, 547, 11, 1, 0], # BUST_MAP2=11
-                [0, 0, 0, 0, 0],     # Padding
-            ],
-            # MAP 3
-            [
-                [22, 411, 12, 1, 0], # KEY_MAP3=12
-                [15, 173, 14, 1, 0], # RING_MAP3=14
-                [128, 98, 13, 1, 0], # TRIDENT_MAP3=13
-                [17, 278, 15, 1, 0], # HERB_MAP3=15
-                [108, 323, 16, 1, 0],# DIAMOND_MAP3=16
-                [27, 656, 17, 1, 0], # CANDELABRA_MAP3=17
-                [0, 0, 0, 0, 0],     # Padding
-            ],
-            # MAP 4
-            [
-                [144, 110, 18, 1, 0], # KEY_MAP4=18
-                [125, 221, 19, 1, 0], # RING_MAP4=19
-                [117, 269, 20, 1, 0], # AMULET_MAP4=20
-                [19, 326, 21, 1, 0],  # FAN_MAP4=21
-                [55, 510, 23, 1, 0],  # ZIRCON_MAP4=23
-                [110, 401, 22, 1, 0], # CRYSTAL_MAP4=22
-                [66, 607, 24, 1, 0],  # DAGGER_MAP4=24
-            ],
-        ], dtype=jnp.int32),
-    }
-
-    @partial(jax.jit, static_argnums=(0,))
-    def item_step(self, item_states, level, rng_key):
-        """
-        Moves active items using random-walk pathing
-        """
-
-        def move_item(item, rng_key):
-            """
-            Moves a single active item using random-walk pathing
-            """
-            item_x, item_y, item_type, active, direction = item
-            
-            # Natural patrol: randomly change direction
-            change_probability = 0.08
-            possible_directions = jnp.array([-1, -2, 1, 2]) # right, left, down, up
-
-            rng_key, subkey_01, subkey_02 = jax.random.split(rng_key, 3)
-            random_dir = jax.random.choice(subkey_01, possible_directions)
-            should_change = jax.random.bernoulli(subkey_02, p=change_probability)
-
-            new_direction = jnp.where(should_change, random_dir, direction)
-            new_direction = jnp.where(direction == 0, random_dir, new_direction)
-
-            # Mapping array where the index matches the direction value
-            lookup_x = jnp.array([0, 0,  0, -1, 1])
-            lookup_y = jnp.array([0, 1, -1, 0,  0])
-            x_direction = lookup_x[new_direction]
-            y_direction = lookup_y[new_direction]
-
-            # Move item in new direction
-            new_x = item_x +  x_direction * active
-            new_y = item_y +  y_direction * active           
-            item_x, item_y, is_walkable = can_walk_to(self._env.consts.ITEM_SIZES[item_type], new_x, new_y, item_x, item_y, self._env.consts.VALID_POS_MAPS[level%4])
-
-            return jnp.array([item_x, item_y, item_type, active, new_direction], dtype=jnp.int32), rng_key
-
-        # Apply movement to all items
-        keys = jax.random.split(rng_key, len(item_states) + 1)
-        rng_key = keys[0]
-        new_item_states, _ = jax.vmap(move_item)(item_states, keys[1:])
-
-        return new_item_states, rng_key
+    def _get_whip_observation(self, state):
+        # 1 if ready, 0 if not
+        is_ready = (state.whip_timer == 0) & (state.ammunition_timer > 0)
+        return is_ready.astype(jnp.int32)
 
     

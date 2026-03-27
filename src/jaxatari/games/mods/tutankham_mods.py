@@ -20,18 +20,21 @@ class TutankhamEnvMod(JaxAtariModController):
     """
 
     REGISTRY = {
+        # SIMPLE MODS
+        "knockback": KnockbackMod,
+        "moving_items": MovingItemsMod,
         "night_mode": ["night_mode_render", "night_mode_step"],  # night modpack
         "night_mode_render": NightModeMod,
         "night_mode_step":   NightModeStepMod,
+        "shrink": ShrinkPlayerMod,
+        "upsidedown": UpsideDownMod,
+        
+        # HARD MODS
+        "ghost": GhostMod,
         "mimic": ["mimic_render", "mimic_step"],  # mimic modpack
         "mimic_render": MimicMod,
         "mimic_step": MimicStepMod,
-        "upsidedown": UpsideDownMod,
-        "moving_items": MovingItemsMod,
-        "ghost": GhostMod,
-        "shrink": ShrinkPlayerMod,
-        "knockback": KnockbackMod,
-        "whip": WhipMod,
+        "whip": WhipMod,  
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "tutankham", "sprites")
