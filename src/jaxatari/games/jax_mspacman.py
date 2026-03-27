@@ -332,7 +332,6 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             player_action=state.player.action,
             ghost_positions=state.ghosts.positions,
             ghost_actions=state.ghosts.actions,
-            ghost_modes=state.ghosts.modes,
             ghosts_eaten=state.player.eaten_ghosts,
             fruit_position=state.fruit.position,
             fruit_action=state.fruit.position,
