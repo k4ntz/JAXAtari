@@ -86,6 +86,7 @@ def _get_default_asset_config() -> tuple:
         {'name': 'x', 'type': 'single', 'file': 'X.npy'},
         {'name': 'o', 'type': 'single', 'file': 'O.npy'},
         {'name': 'cursor', 'type': 'single', 'file': 'cursor.npy'},
+        {'name': 'blocker', 'type': 'single', 'file': 'blocker.npy'},
     )
     
 class TicTacToe3DConstants(NamedTuple):
@@ -93,6 +94,7 @@ class TicTacToe3DConstants(NamedTuple):
     EMPTY: int = 0
     PLAYER_X: int = 1
     PLAYER_O: int = 2
+    BLOCKER: int = 3
     FIRST_PLAYER: int = 1
     WIN_MASKS: chex.Array = WIN_MASKS_ARRAY
     HEIGHT: int = 210
@@ -172,7 +174,7 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
         Order: b, c, g, v, w.
         """
         return spaces.Dict({
-            "board": spaces.Box(0, 2, shape=(4, 4, 4), dtype=jnp.int32),
+            "board": spaces.Box(0, 3, shape=(4, 4, 4), dtype=jnp.int32),
             "current_player": spaces.Discrete(3),  
             "game_over": spaces.Box(0, 1, shape=(), dtype=jnp.int32),
             "valid_moves": spaces.Box(0, 1, shape=(64,), dtype=jnp.int32),
@@ -289,12 +291,20 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
             is_first_turn = jnp.logical_and(s.move_count == 0, jnp.logical_not(s.game_over))
 
             opening_z, opening_y, opening_x = jnp.int32(2), jnp.int32(1), jnp.int32(1)
-            board_after_opening = jax.lax.cond(is_first_turn, lambda b: b.at[opening_z, opening_y, opening_x].set(self.consts.PLAYER_O), lambda b: b, board)
-            move_count_after_opening = s.move_count + jnp.where(is_first_turn, 1, 0)
-            last_cpu_x_after_opening = jnp.where(is_first_turn, opening_x, s.last_cpu_x)
-            last_cpu_y_after_opening = jnp.where(is_first_turn, opening_y, s.last_cpu_y)
-            last_cpu_z_after_opening = jnp.where(is_first_turn, opening_z, s.last_cpu_z)
+            opening_is_empty = board[opening_z, opening_y, opening_x] == self.consts.EMPTY
+            do_opening_move = jnp.logical_and(is_first_turn, opening_is_empty)
 
+            board_after_opening = jax.lax.cond(
+                    do_opening_move,
+                    lambda b: b.at[opening_z, opening_y, opening_x].set(self.consts.PLAYER_O),
+                    lambda b: b,
+                    board
+                )
+
+            move_count_after_opening = s.move_count + jnp.where(do_opening_move, 1, 0)
+            last_cpu_x_after_opening = jnp.where(do_opening_move, opening_x, s.last_cpu_x)
+            last_cpu_y_after_opening = jnp.where(do_opening_move, opening_y, s.last_cpu_y)
+            last_cpu_z_after_opening = jnp.where(do_opening_move, opening_z, s.last_cpu_z)
             cursor_array = jnp.array([s.cursor_x, s.cursor_y, s.cursor_z], dtype=jnp.int32)
             new_cursor = self._move_cursor(cursor_array, ale_action, s.frame)
             cx, cy, cz = new_cursor[0], new_cursor[1], new_cursor[2]
@@ -504,6 +514,7 @@ class TicTacToe3DRenderer(JAXGameRenderer):
         self.x_mask = self.SHAPE_MASKS["x"]
         self.o_mask = self.SHAPE_MASKS["o"]
         self.cursor_mask = self.SHAPE_MASKS["cursor"]
+        self.blocker_mask = self.SHAPE_MASKS["blocker"]
         
 
     def cell_to_pixel(self, x, y, z):
@@ -553,6 +564,12 @@ class TicTacToe3DRenderer(JAXGameRenderer):
                 raster = jax.lax.cond(
                     jnp.logical_and(cell_val == self.consts.PLAYER_O, draw_o),
                     lambda r: self.jr.render_at(r, px, py, self.o_mask),
+                    lambda r: r,
+                    raster
+                )
+                raster = jax.lax.cond(
+                    cell_val == self.consts.BLOCKER,
+                    lambda r: self.jr.render_at(r, px, py, self.blocker_mask),
                     lambda r: r,
                     raster
                 )

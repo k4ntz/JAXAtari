@@ -41,6 +41,7 @@ GAME_MODULES = {
     "spaceinvaders": "jaxatari.games.jax_spaceinvaders",
     "spacewar": "jaxatari.games.jax_spacewar",
     "surround": "jaxatari.games.jax_surround",
+    "tictactoe3d":"jaxatari.games.jax_tictactoe3d",
     "tennis": "jaxatari.games.jax_tennis",
     "tetris": "jaxatari.games.jax_tetris",
     "timepilot": "jaxatari.games.jax_timepilot",
@@ -60,6 +61,7 @@ MOD_MODULES = {
     "freeway": "jaxatari.games.mods.freeway_mods.FreewayEnvMod",
     "breakout": "jaxatari.games.mods.breakout_mods.BreakoutEnvMod",
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
+    "tictactoe3d": "jaxatari.games.mods.tictactoe3d_mods.TicTacToe3DMod"
 }
 
 
