@@ -69,6 +69,7 @@ GAME_MODULES = {
     "turmoil": "jaxatari.games.jax_turmoil",
     "venture": "jaxatari.games.jax_venture",
     "videocheckers": "jaxatari.games.jax_videocheckers",
+    "videochess": "jaxatari.games.jax_videochess",
     "videocube": "jaxatari.games.jax_videocube",
     "videopinball": "jaxatari.games.jax_videopinball",
     "wordzapper": "jaxatari.games.jax_wordzapper",
@@ -86,6 +87,7 @@ MOD_MODULES = {
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
     "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
     "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
+    "videochess": "jaxatari.games.mods.videochess_mods.VideoChessEnvMod",
 }
 
 
