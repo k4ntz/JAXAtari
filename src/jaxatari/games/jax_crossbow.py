@@ -160,7 +160,7 @@ class CrossbowConstants(NamedTuple):
 
     # --- Player / Cursor ---
     CURSOR_SPEED: int = 2
-    CURSOR_SIZE: Tuple[int, int] = (2, 2)
+    CURSOR_SIZE: Tuple[int, int] = (4, 4)
     FIRE_COOLDOWN_DURATION: int = 10
     CURSOR_VISIBLE_ON_FIRE_ONLY: bool = False
 
@@ -185,12 +185,10 @@ class CrossbowConstants(NamedTuple):
     # Desert
     DESERT_SPAWN_PROB: float = 0.03
     DESERT_MAX_ENEMIES: int = 4
-    DESERT_KILLING_FRAMES: int = 75
     # Cavern
     CAVERN_MAX_BATS: int = 1
     CAVERN_MAX_STALACTITES: int = 2
     CAVERN_BAT_ATTACK_PROB: float = 0.02
-    CAVERN_BAT_KILLING_FRAMES: int = 45
     CAVERN_SPAWN_PROB: float = 0.10
     # Volcano
     VOLCANO_MAX_ENEMIES: int = 2
@@ -275,8 +273,12 @@ class CrossbowObservation(NamedTuple):
 class CrossbowInfo(NamedTuple):
     time: jnp.ndarray
     game_phase: jnp.ndarray
+    score: jnp.ndarray
+    lives: jnp.ndarray
     num_enemies: jnp.ndarray
     is_dying: jnp.ndarray
+    friend_progress: jnp.ndarray
+    maps_completed: jnp.ndarray
     rope_1_broken: jnp.ndarray
     rope_2_broken: jnp.ndarray
 
@@ -321,8 +323,12 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         return CrossbowInfo(
             time=state.step_counter,
             game_phase=state.game_phase,
+            score=state.score,
+            lives=state.lives,
             num_enemies=jnp.sum(state.enemies_active),
             is_dying=state.dying_timer > 0,
+            friend_progress=state.friend_x / self.consts.WIDTH,
+            maps_completed=state.maps_completed,
             rope_1_broken=state.rope_1_broken,
             rope_2_broken=state.rope_2_broken,
         )
@@ -497,7 +503,8 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
             jnp.logical_or(bat_on_friend, desert_freeze), 
             jnp.logical_not(fx >= self.consts.FRIEND_SAFE_ZONE_X)
         )
-        should_move = jnp.logical_and(state.step_counter % 8 == 0, jnp.logical_not(should_freeze))
+        friend_move_interval = int(4 / self.consts.FRIEND_SPEED)
+        should_move = jnp.logical_and(state.step_counter % friend_move_interval == 0, jnp.logical_not(should_freeze))
         new_x = state.friend_x + jnp.where(should_move & state.friend_active, 1, 0)
         final_x = jnp.where(is_dying, state.friend_x, new_x)
 
@@ -908,7 +915,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         )
         non_snake_kills = jnp.any(jnp.logical_and(
             jnp.logical_and(enemy_touching, is_non_snake_final),
-            final_timer >= self.consts.DESERT_KILLING_FRAMES
+            final_timer >= (self.consts.DYING_DURATION * 1.75)
         ))
 
         any_friend_hit = jnp.logical_and(
@@ -1002,7 +1009,7 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         new_timer = jnp.where(bat_on_friend, state.enemies_timer + 1, state.enemies_timer)
         new_timer = jnp.where(jnp.logical_not(surviving_enemies), 0, new_timer)
 
-        bat_kills_friend = jnp.any(jnp.logical_and(bat_on_friend, new_timer >= self.consts.CAVERN_BAT_KILLING_FRAMES))
+        bat_kills_friend = jnp.any(jnp.logical_and(bat_on_friend, new_timer >= self.consts.DYING_DURATION))
 
         DEPTH_TOLERANCE = 10
         danger_x = jnp.logical_and(final_x < fx + self.consts.FRIEND_SIZE[0], final_x + ew > fx)
@@ -1663,6 +1670,13 @@ class CrossbowRenderer(JAXGameRenderer):
         )
         self.pixel_masks = {c: jnp.array([[c]], dtype=jnp.uint8) for c in range(1, 9)}
 
+        cursor_color = self.SHAPE_MASKS["cursor"].min()
+        cw, ch = self.consts.CURSOR_SIZE
+        self.cursor_mask = jnp.full((ch, cw), cursor_color, dtype=jnp.uint8)
+
+        shot_color = self.SHAPE_MASKS["shot"].min()
+        self.shot_mask = jnp.full((ch, cw), shot_color, dtype=jnp.uint8)
+
         target_h, target_w = 24, 20
         def pad_to_target(mask):
             h, w = mask.shape
@@ -1835,12 +1849,12 @@ class CrossbowRenderer(JAXGameRenderer):
 
         raster = jax.lax.cond(
             jnp.logical_or(jnp.logical_not(self.consts.CURSOR_VISIBLE_ON_FIRE_ONLY), state.is_firing),
-            lambda r: self.jr.render_at(r, state.cursor_x, state.cursor_y, self.SHAPE_MASKS["cursor"]),
+            lambda r: self.jr.render_at(r, state.cursor_x, state.cursor_y, self.cursor_mask),
             lambda r: r,
             raster
         )
         show_shot = jnp.logical_or(state.is_firing, state.fire_cooldown > 0)
-        raster = jax.lax.cond(show_shot, lambda r: self.jr.render_at(r, state.cursor_x, state.cursor_y, self.SHAPE_MASKS["shot"]), lambda r: r, raster)
+        raster = jax.lax.cond(show_shot, lambda r: self.jr.render_at(r, state.cursor_x, state.cursor_y, self.shot_mask), lambda r: r, raster)
         score_digits = self.jr.int_to_digits(state.score, max_digits=6)
         num_digits = jnp.select([state.score < 10, state.score < 100, state.score < 1000, state.score < 10000, state.score < 100000], [1, 2, 3, 4, 5], 6)
         raster = self.jr.render_label_selective(raster, 98 - 8 * (num_digits - 1), 186, score_digits, self.SHAPE_MASKS["digits"], 6 - num_digits, num_digits, spacing=8, max_digits_to_render=6)

@@ -14,6 +14,7 @@ class DoubleEnemiesMod(JaxAtariInternalModPlugin):
 
     constants_overrides = {
         "MAX_ENEMIES": 12,
+        "DESERT_MAX_ENEMIES": 8,
         "CAVERN_MAX_BATS": 2,
         "CAVERN_MAX_STALACTITES": 4,
         "VOLCANO_MAX_ENEMIES": 4,
@@ -24,7 +25,7 @@ class DoubleEnemiesMod(JaxAtariInternalModPlugin):
 
 class FastCursorMod(JaxAtariInternalModPlugin):
     """Increases the cursor speed for faster aiming."""
-    constants_overrides = {'CURSOR_SPEED': 5}
+    constants_overrides = {'CURSOR_SPEED': 4}
 
 
 class LargeCursorMod(JaxAtariInternalModPlugin):
