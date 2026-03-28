@@ -2,7 +2,7 @@ from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.tictactoe3d_mod_plugins import (RandomStaticBlockersMod, RandomTurnOrderMod)
 
 
-class TicTacToe3DMod(JaxAtariModController):
+class Tictactoe3dEnvMod(JaxAtariModController):
     """
     Mod controller for TicTacToe3D.
     """

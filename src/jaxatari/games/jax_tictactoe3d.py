@@ -3,6 +3,7 @@
 """
 
 from typing import NamedTuple, Tuple
+from flax import struct
 import os
 from functools import partial
 from flax.nnx import state
@@ -88,28 +89,35 @@ def _get_default_asset_config() -> tuple:
         {'name': 'cursor', 'type': 'single', 'file': 'cursor.npy'},
         {'name': 'blocker', 'type': 'single', 'file': 'blocker.npy'},
     )
-    
-class TicTacToe3DConstants(NamedTuple):
+
+@struct.dataclass
+class TicTacToe3DConstants:
     BOARD_SIZE: int = 4
     EMPTY: int = 0
     PLAYER_X: int = 1
     PLAYER_O: int = 2
     BLOCKER: int = 3
     FIRST_PLAYER: int = 1
-    WIN_MASKS: chex.Array = WIN_MASKS_ARRAY
+
+    WIN_MASKS: chex.Array = struct.field(default_factory=lambda: WIN_MASKS_ARRAY)
+
     HEIGHT: int = 210
     WIDTH: int = 160
     NUM_ACTIONS: int = 8
     BLINK_PERIOD: int = 8
     MOVE_COOLDOWN: int = 6
+
     CELL_CENTER_X: int = 0
     CELL_CENTER_Y: int = 0
-    BLACKOUT_FRAMES: int = 50
-    WIN_PHASE_2_FRAMES: int = 120  # for blinking win reveal
-    PIXEL_COORDS: chex.Array = PIXEL_COORDS_GENERATED
-    ASSET_CONFIG: tuple = _get_default_asset_config()
 
-class TicTacToe3DState(NamedTuple):
+    BLACKOUT_FRAMES: int = 50
+    WIN_PHASE_2_FRAMES: int = 120
+
+    PIXEL_COORDS: chex.Array = struct.field(default_factory=lambda: PIXEL_COORDS_GENERATED)
+
+    ASSET_CONFIG: tuple = struct.field(default_factory=_get_default_asset_config)
+@struct.dataclass
+class TicTacToe3DState:
     board: jnp.ndarray          
     current_player: jnp.ndarray 
     game_over: jnp.ndarray      
@@ -138,14 +146,16 @@ class TicTacToe3DState(NamedTuple):
     last_move_z: jnp.ndarray
        
 
-class TicTacToe3DObservation(NamedTuple):
+@struct.dataclass
+class TicTacToe3DObservation:
     board: jnp.ndarray          
     current_player: jnp.ndarray 
     valid_moves: jnp.ndarray    
     game_over: jnp.ndarray      
     winner: jnp.ndarray         
 
-class TicTacToe3DInfo(NamedTuple):
+@struct.dataclass
+class TicTacToe3DInfo:
     move_count: jnp.ndarray
     game_phase: jnp.ndarray     
     last_move_player: jnp.ndarray  
@@ -243,7 +253,7 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
             new_game_over = new_phase > 3
             final_phase = jnp.where(new_game_over, jnp.int32(0), new_phase)
             
-            new_state = s._replace(
+            new_state = s.replace(
                 win_phase=final_phase,
                 win_timer=final_timer,
                 game_over=new_game_over,
@@ -267,7 +277,7 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
                 new_win_phase = jnp.where(is_win_or_draw, jnp.int32(1), jnp.int32(0))
                 new_win_timer = jnp.where(is_win_or_draw, jnp.int32(self.consts.BLACKOUT_FRAMES), jnp.int32(0))
 
-                new_state = ss._replace(
+                new_state = ss.replace(
                     board=new_board, move_count=new_move_count, winner=new_winner,
                     last_cpu_x=ss.pending_cpu_x, last_cpu_y=ss.pending_cpu_y, last_cpu_z=ss.pending_cpu_z,
                     last_move_x=jnp.where(ss.pending_cpu_valid, ss.pending_cpu_x, ss.last_move_x),
@@ -282,7 +292,7 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
                 return self._get_observation(new_state), new_state, self._get_reward(s, new_state), self._get_done(new_state), self._get_info(new_state, ale_action)
 
             def continue_blackout(ss):
-                new_state = ss._replace(blackout_active=jnp.bool_(True), blackout_timer=new_timer, frame=ss.frame + 1, key=key)
+                new_state = ss.replace(blackout_active=jnp.bool_(True), blackout_timer=new_timer, frame=ss.frame + 1, key=key)
                 return self._get_observation(new_state), new_state, self._get_reward(s, new_state), self._get_done(new_state), self._get_info(new_state, ale_action)
 
             return jax.lax.cond(jnp.logical_and(blackout_finished, s.pending_cpu_valid), apply_pending_cpu, continue_blackout, s)
@@ -331,10 +341,11 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
             new_win_phase = jnp.where(is_win_or_draw, jnp.int32(1), jnp.int32(0))
             new_win_timer = jnp.where(is_win_or_draw, jnp.int32(self.consts.BLACKOUT_FRAMES), jnp.int32(0))
 
-            new_state = s._replace(
+            new_state = s.replace(
                 board=board_after_user, current_player=jnp.int32(self.consts.PLAYER_X),
                 move_count=move_count_after_user,
-                cpu_opening_pending=jnp.bool_(False),
+                 cpu_opening_pending=jnp.bool_(False),
+                
                 cursor_x=cx, cursor_y=cy, cursor_z=cz,
                 last_cpu_x=last_cpu_x_after_opening, last_cpu_y=last_cpu_y_after_opening, last_cpu_z=last_cpu_z_after_opening,
                 last_move_x=jnp.where(can_place, cx, s.last_move_x),
@@ -493,12 +504,13 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
             jnp.where(state.winner == self.consts.PLAYER_O, 2, 
             jnp.where(state.move_count >= 64, 3, 0))
         )
-        return TicTacToe3DInfo(
-            move_count=state.move_count, 
-            game_phase=jnp.int32(game_phase),
-            last_move_player=state.current_player,
-            last_move_action=act
-        )
+        return {
+            "move_count": state.move_count,
+            "game_phase": jnp.int32(game_phase),
+            "last_move_player": state.current_player,
+            "last_move_action": act,
+        }
+        
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state):
@@ -506,18 +518,31 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
 
 
 class TicTacToe3DRenderer(JAXGameRenderer):
-    def __init__(self, consts: TicTacToe3DConstants | None = None):
+    def __init__(self, consts: TicTacToe3DConstants | None = None, config=None, **kwargs):
         self.consts = consts or TicTacToe3DConstants()
-        super().__init__(self.consts)
-        self.config = render_utils.RendererConfig(
+
+        config = config or render_utils.RendererConfig(
             game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
             channels=3,
         )
+
+        super().__init__(config=config, **kwargs)
+
+        self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
+
         final_asset_config = list(self.consts.ASSET_CONFIG)
+
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tictactoe3d"
-        (self.PALETTE, self.SHAPE_MASKS, self.BACKGROUND, self.COLOR_TO_ID, self.FLIP_OFFSETS) = \
-            self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS,
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+
         self.x_mask = self.SHAPE_MASKS["x"]
         self.o_mask = self.SHAPE_MASKS["o"]
         self.cursor_mask = self.SHAPE_MASKS["cursor"]

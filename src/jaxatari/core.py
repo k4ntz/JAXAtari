@@ -61,8 +61,9 @@ MOD_MODULES = {
     "freeway": "jaxatari.games.mods.freeway_mods.FreewayEnvMod",
     "breakout": "jaxatari.games.mods.breakout_mods.BreakoutEnvMod",
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
-    "tictactoe3d": "jaxatari.games.mods.tictactoe3d_mods.TicTacToe3DMod"
+    "tictactoe3d": "jaxatari.games.mods.tictactoe3d_mods.Tictactoe3DEnvMod"
 }
+
 
 
 def list_available_games() -> list[str]:

@@ -49,7 +49,7 @@ class RandomStaticBlockersMod(JaxAtariPostStepModPlugin):
         new_board = flat_board.reshape((4, 4, 4))
 
         # update state
-        modified_state = state._replace(
+        modified_state = state.replace(
             board=new_board,
             key=next_key
         )
@@ -72,7 +72,7 @@ class RandomTurnOrderMod(JaxAtariPostStepModPlugin):
         # True -> agent starts first
         agent_starts = jax.random.bernoulli(coin_key, 0.5)
 
-        modified_state = state._replace(
+        modified_state = state.replace(
             cpu_opening_pending=jnp.logical_not(agent_starts),
             key=next_key
         )
