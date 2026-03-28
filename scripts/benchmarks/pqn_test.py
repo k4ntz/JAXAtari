@@ -123,7 +123,7 @@ class CustomTrainState(TrainState):
     grad_steps: int = 0
 
 
-def make_test(config):
+def make_test(config, save_params, batch_stats):
 
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
@@ -138,31 +138,13 @@ def make_test(config):
     ] == 0, "NUM_MINIBATCHES must divide NUM_STEPS*NUM_ENVS"
 
     env = jaxatari.make(config["ENV_NAME"].lower())
-    base_renderer = env.renderer
-
-    raw_eval_mods = config.get("EVAL_MODS", config.get("MOD_NAME", None))
-    if raw_eval_mods is None:
-        eval_mods = []
-    elif isinstance(raw_eval_mods, str):
-        eval_mods = [raw_eval_mods]
-    else:
-        eval_mods = list(raw_eval_mods)
+    mod_env = env
+    if config.get("MOD_NAME", None) is not None:
+        mod_env = jaxatari.modify(env, config.get("ENV_NAME", None).lower(), config.get("MOD_NAME", None).lower())
+    renderer = mod_env.renderer
 
     def apply_wrappers(env):
-        # During testing we prefer real returns (no reward clipping), but allow override.
-        clip_reward = config.get("TEST_CLIP_REWARD", False)
-        max_episode_length = config.get("MAX_EPISODE_LENGTH", 18000)
-        env = AtariWrapper(
-            env,
-            episodic_life=True,
-            frame_skip=4,
-            frame_stack_size=4,
-            sticky_actions=True,
-            max_pooling=True,
-            clip_reward=clip_reward,
-            noop_reset=30,
-            max_episode_length=max_episode_length,
-        )
+        env = AtariWrapper(env, episodic_life=True, frame_skip=4, frame_stack_size=4, sticky_actions=True, max_pooling=True, clip_reward=True, noop_reset=30)
         if config.get("OBJECT_CENTRIC", False):
             env = ObjectCentricWrapper(env)
             env = FlattenObservationWrapper(env)
@@ -177,18 +159,7 @@ def make_test(config):
         return env
 
     env = apply_wrappers(env)
-
-    # Build one wrapped env per requested eval mod.
-    mod_env_entries = []
-    for mod_name in eval_mods:
-        mod_name_str = str(mod_name)
-        raw_mod_env = jaxatari.make(
-            config["ENV_NAME"].lower(),
-            mods=[mod_name_str.lower()],
-        )
-        mod_renderer = raw_mod_env.renderer
-        wrapped_mod_env = apply_wrappers(raw_mod_env)
-        mod_env_entries.append((mod_name_str, wrapped_mod_env, mod_renderer))
+    mod_env = apply_wrappers(mod_env)
 
     # epsilon-greedy exploration
     def eps_greedy_exploration(rng, q_vals, eps):
@@ -206,7 +177,7 @@ def make_test(config):
         )
         return chosed_actions
 
-    def test(rng, save_params, batch_stats):
+    def test(rng):
 
         original_rng = rng[0]
 
@@ -243,9 +214,9 @@ def make_test(config):
                 optax.radam(learning_rate=lr),
             )
             params = network_variables["params"] if save_params is None else save_params
-            batch_sts = (
-                network_variables["batch_stats"] if batch_stats is None else batch_stats
-            )
+            batch_sts = network_variables["batch_stats"] if batch_stats is None else batch_stats
+            batch_sts = jax.tree.map(lambda x: x.squeeze(), batch_sts)  # remove vmap dim
+            params = jax.tree.map(lambda x: x.squeeze(), params)  # remove vmap dim
             train_state = CustomTrainState.create(
                 apply_fn=network.apply,
                 params=params,
@@ -257,89 +228,64 @@ def make_test(config):
         rng, _rng = jax.random.split(rng)
         train_state = create_agent(rng)
         
-        def _build_get_test_metrics(eval_env, renderer, is_mod=False, mod_name=None):
-            @jax.jit
-            def _get_test_metrics(train_state, rng):
+        @partial(jax.jit, static_argnums=(1,))
+        def get_test_metrics(train_state, mod, rng):
 
-                def _env_step(carry, _):
-                    env_state, last_obs, rng = carry
-                    rng, _rng = jax.random.split(rng)
-                    q_vals = network.apply(
-                        {
-                            "params": train_state.params,
-                            "batch_stats": train_state.batch_stats,
-                        },
-                        last_obs,
-                        train=False,
-                    )
-                    eps = jnp.full(config["TEST_NUM_ENVS"], config["EPS_TEST"])
-                    action = jax.vmap(eps_greedy_exploration)(
-                        jax.random.split(_rng, config["TEST_NUM_ENVS"]), q_vals, eps
-                    )
-                    new_obs, new_env_state, reward, done, info = jax.vmap(eval_env.step)(
-                        env_state, action
-                    )
-                    env_state_vid = jax.tree.map(lambda x: x[0], new_env_state)
-                    dones_vid = jax.tree.map(lambda x: x[0], done)
-                    return (new_env_state, new_obs, rng), (info, env_state_vid, dones_vid)
-
+            def _env_step(carry, _):
+                env_state, last_obs, rng = carry
                 rng, _rng = jax.random.split(rng)
-                reset_keys = jax.random.split(_rng, config["TEST_NUM_ENVS"])
-                init_obs, env_state = jax.vmap(eval_env.reset)(reset_keys)
-
-                _, output = jax.lax.scan(
-                    _env_step, (env_state, init_obs, _rng), None, config["TEST_NUM_STEPS"]
+                q_vals = network.apply(
+                    {
+                        "params": train_state.params,
+                        "batch_stats": train_state.batch_stats,
+                    },
+                    last_obs,
+                    train=False,
                 )
-                infos, env_states, dones = output[0], output[1], output[2]
+                eps = jnp.full(config["TEST_NUM_ENVS"], config["EPS_TEST"])
+                action = jax.vmap(eps_greedy_exploration)(
+                    jax.random.split(_rng, config["TEST_NUM_ENVS"]), q_vals, eps
+                )
+                if mod:
+                    new_obs, new_env_state, reward, done, info = jax.vmap(mod_env.step)(env_state, action)
+                else:
+                    new_obs, new_env_state, reward, done, info = jax.vmap(env.step)(env_state, action)
+                env_state_vid = jax.tree.map(lambda x: x[0], new_env_state)
+                dones_vid = jax.tree.map(lambda x: x[0], done)
+                return (new_env_state, new_obs, rng), (info, env_state_vid, dones_vid)
 
-                if config.get("RECORD_VIDEO", False):
-                    jax.debug.callback(
-                        video_callback,
-                        env_states,
-                        dones,
-                        0,
-                        renderer,
-                        mod=is_mod,
-                        mod_name=mod_name,
-                    )
-
-                # Robust aggregation: if no episode terminates within TEST_NUM_STEPS,
-                # return 0.0 instead of NaN for numeric fields.
-                returned = infos["returned_episode"]
-                returned_f = returned.astype(jnp.float32)
-                denom = jnp.maximum(jnp.sum(returned_f), 1.0)
-
-                def _masked_mean(x):
-                    x = x.squeeze()
-                    # Keep bools as floats when averaging.
-                    if x.dtype == jnp.bool_:
-                        x = x.astype(jnp.float32)
-                    # Broadcast mask to match x shape (typically (T, N) after squeeze).
-                    mask = jnp.broadcast_to(returned, x.shape)
-                    x = jnp.where(mask, x, 0.0)
-                    return jnp.sum(x) / denom
-
-                done_infos = jax.tree_util.tree_map(_masked_mean, infos)
-                return done_infos
-
-            return _get_test_metrics
-
-        get_base_metrics = _build_get_test_metrics(
-            eval_env=env, renderer=base_renderer, is_mod=False, mod_name=None
-        )
-        rng, _rng = jax.random.split(rng)
-        test_metrics = get_base_metrics(train_state, _rng)
-
-        mod_metrics = {}
-        for mod_name, mod_env, mod_renderer in mod_env_entries:
-            get_mod_metrics = _build_get_test_metrics(
-                eval_env=mod_env,
-                renderer=mod_renderer,
-                is_mod=True,
-                mod_name=mod_name,
-            )
             rng, _rng = jax.random.split(rng)
-            mod_metrics[mod_name] = get_mod_metrics(train_state, _rng)
+            reset_keys = jax.random.split(_rng, config["TEST_NUM_ENVS"])
+            if mod:
+                init_obs, env_state = jax.vmap(mod_env.reset)(reset_keys)
+            else:
+                init_obs, env_state = jax.vmap(env.reset)(reset_keys)
+
+            _, output = jax.lax.scan(
+                _env_step, (env_state, init_obs, _rng), None, config["TEST_NUM_STEPS"]
+            )
+            infos, env_states, dones = output[0], output[1], output[2]
+
+            if config.get("RECORD_VIDEO", False):
+                jax.debug.callback(video_callback, env_states, dones, 0, renderer, mod=mod),
+
+            # return mean of done infos
+            done_infos = jax.tree_util.tree_map(
+                lambda x: jnp.nanmean(
+                    jnp.where(
+                        infos["returned_episode"],
+                        x.squeeze(),
+                        jnp.nan,
+                    )
+                ),
+                infos,
+            )
+            return done_infos
+
+        rng, _rng = jax.random.split(rng)
+        test_metrics = get_test_metrics(train_state, False, _rng)
+
+        mod_metrics = get_test_metrics(train_state, True, _rng) if config.get("MOD_NAME", None) is not None else {}
 
         return {"test_metrics": test_metrics, "mod_metrics": mod_metrics}
 
@@ -394,52 +340,20 @@ def single_run(config):
 
     t0 = time.time()
 
-    test_fn = make_test(config)
-    test_vjit = jax.jit(jax.vmap(test_fn, in_axes=(0, 0, 0)))
-    test_vjit.lower(rngs, train_state_params, batch_stats).compile()
+    train_vjit = jax.jit(jax.vmap(make_test(config, train_state_params, batch_stats)))
+    train_vjit.lower(rngs).compile()
     compile_time = time.time()
     print(f"Compile time: {compile_time - t0} seconds.")
-    outs = jax.block_until_ready(test_vjit(rngs, train_state_params, batch_stats))
+    outs = jax.block_until_ready(train_vjit(rngs))
     print(f"Run time: {time.time() - compile_time} seconds.")
     print(f"Total: {time.time()-t0} seconds.")
     avg_return = outs["test_metrics"]["returned_episode_returns"]
+    avg_return_mod = outs["mod_metrics"]["returned_episode_returns"]
     avg_len = outs["test_metrics"]["returned_episode_lengths"]
+    avg_len_mod = outs["mod_metrics"]["returned_episode_lengths"]
     print(f"Average return of default env: {avg_return}, length: {avg_len}.")
-    log_payload = {
-        "test/returned_episode_returns": float(jnp.mean(avg_return)),
-        "test/returned_episode_lengths": float(jnp.mean(avg_len)),
-        "test/returned_episode_returns_per_seed": jnp.asarray(avg_return).tolist(),
-        "test/returned_episode_lengths_per_seed": jnp.asarray(avg_len).tolist(),
-        "timing/compile_time_sec": float(compile_time - t0),
-        "timing/run_time_sec": float(time.time() - compile_time),
-        "timing/total_time_sec": float(time.time() - t0),
-    }
-    for mod_name, mod_out in outs["mod_metrics"].items():
-        avg_return_mod = mod_out["returned_episode_returns"]
-        avg_len_mod = mod_out["returned_episode_lengths"]
-        print(
-            f"Average return of modified env ({mod_name}): {avg_return_mod}, length: {avg_len_mod}."
-        )
-        safe_mod_name = str(mod_name).replace("/", "_")
-        log_payload.update(
-            {
-                f"mod/{safe_mod_name}/returned_episode_returns": float(
-                    jnp.mean(avg_return_mod)
-                ),
-                f"mod/{safe_mod_name}/returned_episode_lengths": float(
-                    jnp.mean(avg_len_mod)
-                ),
-                f"mod/{safe_mod_name}/returned_episode_returns_per_seed": jnp.asarray(
-                    avg_return_mod
-                ).tolist(),
-                f"mod/{safe_mod_name}/returned_episode_lengths_per_seed": jnp.asarray(
-                    avg_len_mod
-                ).tolist(),
-            }
-        )
-
-    wandb.log(log_payload)
-    wandb.finish()
+    if config.get("MOD_NAME", None) is not None:
+        print(f"Average return of modified env ({config['MOD_NAME']}): {avg_return_mod}, length: {avg_len_mod}.")
 
     
 
