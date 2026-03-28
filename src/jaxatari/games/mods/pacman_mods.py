@@ -20,7 +20,6 @@ class PacmanEnvMod(JaxAtariModController):
         "limited_vision": LimitedVisionMod,
         "coop_multiplayer": CoopMultiplayerMod,
         "multi_maze_campaign": MultiMazeCampaignMod,
-        "mods_levelup": MultiMazeCampaignMod,
     }
 
     def __init__(self,
