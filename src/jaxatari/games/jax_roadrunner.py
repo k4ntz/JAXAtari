@@ -2581,10 +2581,13 @@ class JaxRoadRunner(
             st = self._check_bullet_collisions(st)
             st = self._check_level_completion(st)
 
-            score_reward = (st.score - state.score).astype(jnp.float32)
+            score_reward = (st.score - state.score).astype(jnp.float32) / 1000.0
+            pickup_delta = jnp.maximum(st.seed_pickup_streak - state.seed_pickup_streak, 0)
+            pickup_bonus = pickup_delta.astype(jnp.float32) * 0.5
             scroll_delta = jnp.maximum(st.scrolling_step_counter - state.scrolling_step_counter, 0)
             scroll_bonus = scroll_delta.astype(jnp.float32) * 0.05
-            reward = score_reward + scroll_bonus
+            death_penalty = st.instant_death.astype(jnp.float32) * (-1.0)
+            reward = score_reward + pickup_bonus + scroll_bonus + death_penalty
 
             player_at_end = st.player_x >= self.consts.WIDTH - self.consts.PLAYER_SIZE[0]
             should_reset = st.instant_death | (st.is_round_over & player_at_end)
@@ -2652,10 +2655,13 @@ class JaxRoadRunner(
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: RoadRunnerState, state: RoadRunnerState) -> float:
         score_diff = state.score - previous_state.score
-        score_reward = jax.lax.select(score_diff < 0, 0.0, score_diff.astype(jnp.float32))
+        score_reward = jax.lax.select(score_diff < 0, 0.0, score_diff.astype(jnp.float32)) / 1000.0
+        pickup_delta = jnp.maximum(state.seed_pickup_streak - previous_state.seed_pickup_streak, 0)
+        pickup_bonus = pickup_delta.astype(jnp.float32) * 0.5
         scroll_delta = jnp.maximum(state.scrolling_step_counter - previous_state.scrolling_step_counter, 0)
         scroll_bonus = scroll_delta.astype(jnp.float32) * 0.05
-        return score_reward + scroll_bonus
+        death_penalty = state.instant_death.astype(jnp.float32) * (-1.0)
+        return score_reward + pickup_bonus + scroll_bonus + death_penalty
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: RoadRunnerState) -> bool:
