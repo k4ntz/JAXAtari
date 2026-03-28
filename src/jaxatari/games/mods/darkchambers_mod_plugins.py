@@ -6,6 +6,7 @@ from jaxatari.games.jax_darkchambers import (
     ITEM_SPEED_POTION,
     ITEM_HEAL_POTION,
     ITEM_POISON_POTION,
+    ITEM_HAMMER,
     NUM_ITEMS,
 )
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
@@ -26,7 +27,7 @@ def _spawn_potion_cluster_near_player(env, state: DarkChambersState, potion_item
     grid_x = ((idx - POTION_CLUSTER_START_SLOT) % 4) * 10
     grid_y = ((idx - POTION_CLUSTER_START_SLOT) // 4) * 10
     base_x = state.player_x + jnp.array(env.consts.PLAYER_WIDTH // 2 - 12, dtype=jnp.int32)
-    base_y = state.player_y + jnp.array(env.consts.PLAYER_HEIGHT // 2 - 12, dtype=jnp.int32)
+    base_y = state.player_y + jnp.array(env.consts.PLAYER_HEIGHT // 2 + 58, dtype=jnp.int32)
 
     potion_x = jnp.clip(base_x + grid_x, 0, env.consts.WORLD_WIDTH - 8)
     potion_y = jnp.clip(base_y + grid_y, 0, env.consts.WORLD_HEIGHT - 8)
@@ -410,7 +411,9 @@ class HammerMod(JaxAtariPostStepModPlugin):
 
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
-        return obs, state
+        """Spawn many hammers near player in chamber 0-0 at the same cluster position."""
+        seeded_state = _spawn_potion_cluster_near_player(self._env, state, ITEM_HAMMER)
+        return obs, seeded_state
 
 
 # ============================================================================
