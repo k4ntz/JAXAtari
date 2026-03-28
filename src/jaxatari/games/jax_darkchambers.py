@@ -214,8 +214,8 @@ ITEM_HEIGHT = 6
 MAX_BULLETS = 64             # Drastically higher simultaneous bullets
 BULLET_WIDTH = 4
 BULLET_HEIGHT = 4
-BULLET_SPEED = 2             # Same as player speed
-BULLET_SPEED_WITH_GUN = 4    # Faster when gun is active
+BULLET_SPEED = 3             # Same as player speed
+BULLET_SPEED_WITH_GUN = 5    # Faster when gun is active
 
 # Wizard projectile configuration
 ENEMY_MAX_BULLETS = 100
@@ -2859,6 +2859,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         regular_item_mask = (jnp.arange(NUM_ITEMS) < (5 + INITIAL_REGULAR_ITEM_COUNT)).astype(jnp.int32)
         item_active = jnp.where(jnp.arange(NUM_ITEMS) < 5, 1, regular_item_mask)
         item_active = item_active.at[5].set(jnp.array(1, dtype=jnp.int32))
+        # Suppress all spawned items (6+) in the main chamber, keep only gun in the upper-right corner
+        item_active = jnp.where(jnp.arange(NUM_ITEMS) > 5, 0, item_active)
 
         # Safety pass: suppress entities that still overlap walls after spawn attempts.
         def rect_overlaps_walls(pos: chex.Array, width: chex.Array, height: chex.Array) -> chex.Array:
