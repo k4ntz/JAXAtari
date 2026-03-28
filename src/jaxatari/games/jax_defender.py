@@ -210,7 +210,6 @@ class DefenderConstants(struct.PyTreeNode):
     HUMAN_SCANNER_WIDTH: int = 1
 
     HUMAN_LIVING_FALL_SCORE: int = 250
-    HUMAN_CAUGHT_BUT_FORGOTTEN_SCORE: int = 500
     HUMAN_CAUGHT_AND_RETURNED_SCORE: int = 1000
 
     HUMAN_MAX_AMOUNT: int = 6
@@ -600,7 +599,8 @@ class DefenderRenderer(JAXGameRenderer):
             enemy_type = enemy[2].astype(int)
             enemy_arg1 = enemy[3]
 
-            color_id = self.ENEMY_COLOR_IDS[jnp.array(enemy_type, int)]
+            # Render all in yellow
+            color_id = self.ENEMY_COLOR_IDS[1]
 
             onscreen = self.dh._is_onscreen_from_screen(
                 screen_x, screen_y, self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT
@@ -1443,11 +1443,15 @@ class JaxDefender(
             is_onscreen = self.dh._is_onscreen_from_game(
                 state, enemy[0], enemy[1], self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT
             )
+            is_alive = enemy[2] != self.consts.INACTIVE
 
-            enemy = jnp.where(is_onscreen, dead_enemy, enemy)
+            should_delete = jnp.logical_and(is_onscreen, is_alive)
+
+            enemy = jnp.where(should_delete, dead_enemy, enemy)
             return enemy
 
         enemy_states = jax.vmap(remove_from_screen, in_axes=(0))(enemy_states)
+
         return enemy_states
 
     def _camera_step(self, state: DefenderState) -> DefenderState:
@@ -1747,6 +1751,34 @@ class JaxDefender(
         score = jnp.sum(enemy_diff * score_multiplier)
 
         return score, enemy_killed
+
+    def _calculate_score_events(self, state, human_states):
+        # Calculate human falls and lands in city
+        falling_mask = jnp.sum(state.human_states[:, 2] == self.consts.HUMAN_STATE_FALLING)
+        falling_new_mask = jnp.sum(human_states[:, 2] == self.consts.HUMAN_STATE_FALLING)
+
+        idle_mask = jnp.sum(state.human_states[:, 2] == self.consts.HUMAN_STATE_IDLE)
+        idle_new_mask = jnp.sum(human_states[:, 2] == self.consts.HUMAN_STATE_IDLE)
+
+        falling = falling_mask > falling_new_mask
+        idle = idle_mask < idle_new_mask
+
+        fall_and_living = jnp.logical_and(falling, idle)
+
+        # Calculate human was caught and brought back
+        caught_mask = jnp.sum(state.human_states[:, 2] == self.consts.HUMAN_STATE_CAUGHT)
+        caught_new_mask = jnp.sum(human_states[:, 2] == self.consts.HUMAN_STATE_CAUGHT)
+
+        caught = caught_mask > caught_new_mask
+
+        caught_and_returned = jnp.logical_and(caught, idle)
+
+        score_add = 0
+
+        score_add += jnp.where(fall_and_living, self.consts.HUMAN_LIVING_FALL_SCORE, 0)
+        score_add += jnp.where(caught_and_returned, self.consts.HUMAN_CAUGHT_AND_RETURNED_SCORE, 0)
+
+        return score_add
 
     def _get_enemy(self, state: DefenderState, index):
         # Returns the enemy list at index
@@ -2454,8 +2486,6 @@ class JaxDefender(
 
         return human_states_updated
 
-    # --SSTEP
-
     @partial(jax.jit, static_argnums=(0,))
     def step(
         self, state: DefenderState, action: chex.Array
@@ -2503,6 +2533,8 @@ class JaxDefender(
             human_states = self._human_step(state)
 
             enemy_states = self._generate_mutant(human_states, enemy_states, state)
+
+            score += self._calculate_score_events(state, human_states)
 
             game_over = self._space_ship_collision_step(state)
 
