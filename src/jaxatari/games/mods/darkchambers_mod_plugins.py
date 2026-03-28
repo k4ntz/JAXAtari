@@ -14,6 +14,39 @@ from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepMod
 EASY_MODE_RAPID_FIRE_DELTA = 10_000
 EASY_MODE_REGULAR_ITEM_START = 5
 EASY_MODE_EXTRA_REGULAR_SLOTS = 16
+POTION_CLUSTER_START_SLOT = 6
+
+
+def _spawn_potion_cluster_near_player(env, state: DarkChambersState, potion_item_type: int) -> DarkChambersState:
+    """Fill regular item slots with one potion type near player spawn in the first chamber."""
+    idx = jnp.arange(NUM_ITEMS, dtype=jnp.int32)
+    cluster_mask = idx >= POTION_CLUSTER_START_SLOT
+
+    # Build a repeatable local pattern around the player for dense pickup access.
+    grid_x = ((idx - POTION_CLUSTER_START_SLOT) % 4) * 10
+    grid_y = ((idx - POTION_CLUSTER_START_SLOT) // 4) * 10
+    base_x = state.player_x + jnp.array(env.consts.PLAYER_WIDTH // 2 - 12, dtype=jnp.int32)
+    base_y = state.player_y + jnp.array(env.consts.PLAYER_HEIGHT // 2 - 12, dtype=jnp.int32)
+
+    potion_x = jnp.clip(base_x + grid_x, 0, env.consts.WORLD_WIDTH - 8)
+    potion_y = jnp.clip(base_y + grid_y, 0, env.consts.WORLD_HEIGHT - 8)
+    potion_positions = jnp.stack([potion_x, potion_y], axis=1).astype(jnp.int32)
+
+    clustered_positions = jnp.where(cluster_mask[:, None], potion_positions, state.item_positions)
+    clustered_types = jnp.where(cluster_mask, jnp.array(potion_item_type, dtype=jnp.int32), state.item_types)
+    clustered_active = jnp.where(cluster_mask, jnp.array(1, dtype=jnp.int32), state.item_active)
+
+    is_first_chamber = (state.map_index == 0) & (state.current_level == 0)
+    return jax.lax.cond(
+        is_first_chamber,
+        lambda _: state.replace(
+            item_positions=clustered_positions,
+            item_types=clustered_types,
+            item_active=clustered_active,
+        ),
+        lambda _: state,
+        operand=None,
+    )
 
 
 # ============================================================================
@@ -109,8 +142,9 @@ class SpeedPotionMod(JaxAtariPostStepModPlugin):
     
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
-        """Initialize effect timers to 0 on reset."""
-        return obs, state.replace(speed_boost_timer=jnp.array(0, dtype=jnp.int32))
+        """Initialize timer and spawn many speed potions near player in chamber 0-0."""
+        seeded_state = _spawn_potion_cluster_near_player(self._env, state, ITEM_SPEED_POTION)
+        return obs, seeded_state.replace(speed_boost_timer=jnp.array(0, dtype=jnp.int32))
 
 
 # ============================================================================
@@ -201,8 +235,9 @@ class HealPotionMod(JaxAtariPostStepModPlugin):
     
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
-        """No special reset needed for heal potion."""
-        return obs, state
+        """Spawn many heal potions near player in chamber 0-0."""
+        seeded_state = _spawn_potion_cluster_near_player(self._env, state, ITEM_HEAL_POTION)
+        return obs, seeded_state
 
 
 # ============================================================================
@@ -299,8 +334,9 @@ class PoisonPotionMod(JaxAtariPostStepModPlugin):
     
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
-        """Initialize poison cloud state on reset."""
-        return obs, state.replace(
+        """Initialize poison cloud state and spawn many poison potions near player in chamber 0-0."""
+        seeded_state = _spawn_potion_cluster_near_player(self._env, state, ITEM_POISON_POTION)
+        return obs, seeded_state.replace(
             poison_cloud_x=jnp.array(0, dtype=jnp.int32),
             poison_cloud_y=jnp.array(0, dtype=jnp.int32),
             poison_cloud_timer=jnp.array(0, dtype=jnp.int32)
