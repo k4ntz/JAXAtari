@@ -193,6 +193,7 @@ MAX_LEVELS = 7          # Total number of levels (0..6)
 LADDER_INTERACTION_TIME = 60  # Steps player must stand on ladder to change level
 LADDER_WIDTH = 8        # Matches stairs.npy natural width
 LADDER_HEIGHT = 28      # Matches stairs.npy natural height
+LADDER_LEVEL_CHANGE_BLOCK_TICKS = 120  # Block immediate ladder re-trigger after a level change
 
 # Bomb configuration
 MAX_BOMBS = 15          # Maximum bombs player can carry
@@ -236,6 +237,105 @@ MAX_LIVES = 1  # Number of lives player starts with
 
 # Death freeze configuration (ticks to freeze before respawn)
 DEATH_FREEZE_TICKS = 60
+
+# Chamber transition freeze configuration
+CHAMBER_TRANSITION_STEPS = 3
+CHAMBER_TRANSITION_TICKS_PER_STEP = 20
+CHAMBER_TRANSITION_TICKS = CHAMBER_TRANSITION_STEPS * CHAMBER_TRANSITION_TICKS_PER_STEP
+LEVEL_CHANGE_FREEZE_TICKS = 60
+
+LEVEL_CHANGE_FONT_5X7 = {
+    " ": (
+        "00000",
+        "00000",
+        "00000",
+        "00000",
+        "00000",
+        "00000",
+        "00000",
+    ),
+    "A": (
+        "01110",
+        "10001",
+        "10001",
+        "11111",
+        "10001",
+        "10001",
+        "10001",
+    ),
+    "C": (
+        "01111",
+        "10000",
+        "10000",
+        "10000",
+        "10000",
+        "10000",
+        "01111",
+    ),
+    "D": (
+        "11110",
+        "10001",
+        "10001",
+        "10001",
+        "10001",
+        "10001",
+        "11110",
+    ),
+    "E": (
+        "11111",
+        "10000",
+        "10000",
+        "11110",
+        "10000",
+        "10000",
+        "11111",
+    ),
+    "G": (
+        "01111",
+        "10000",
+        "10000",
+        "10111",
+        "10001",
+        "10001",
+        "01110",
+    ),
+    "H": (
+        "10001",
+        "10001",
+        "10001",
+        "11111",
+        "10001",
+        "10001",
+        "10001",
+    ),
+    "L": (
+        "10000",
+        "10000",
+        "10000",
+        "10000",
+        "10000",
+        "10000",
+        "11111",
+    ),
+    "N": (
+        "10001",
+        "11001",
+        "10101",
+        "10011",
+        "10001",
+        "10001",
+        "10001",
+    ),
+    "V": (
+        "10001",
+        "10001",
+        "10001",
+        "10001",
+        "10001",
+        "01010",
+        "00100",
+    ),
+}
 
 # Spawner configuration
 SPAWNER_WIDTH = 14
@@ -449,10 +549,17 @@ class DarkChambersState:
     current_level: chex.Array   # current level index (0 to MAX_LEVELS-1)
     map_index: chex.Array       # current map variant (0=middle, 1=left, 2=right)
     ladder_timer: chex.Array    # time standing on ladder (0 to LADDER_INTERACTION_TIME)
+    ladder_transition_cooldown: chex.Array  # blocks ladder transitions right after level travel
     lives: chex.Array           # remaining lives (0 to MAX_LIVES)
     
     step_counter: chex.Array
     death_counter: chex.Array    # >0 means freeze frames remaining before respawn
+    chamber_transition_ticks: chex.Array  # >0 means side-chamber transition freeze with darkening
+    chamber_transition_pending: chex.Array  # 1 while waiting to apply delayed side-chamber switch
+    chamber_target_map_index: chex.Array  # target map index for delayed side-chamber switch
+    chamber_target_x: chex.Array  # target player x after delayed side-chamber switch
+    chamber_target_y: chex.Array  # target player y after delayed side-chamber switch
+    level_transition_ticks: chex.Array  # >0 means level-change black screen freeze
     key: chex.PRNGKey
 
     damage_cooldown: chex.Array
@@ -1697,7 +1804,12 @@ class DarkChambersRenderer(JAXGameRenderer):
             num_frames = PLAYER_NUM_FRAMES[sprite_idx]
             anim_frame = jnp.where(state.player_moving, anim_tick % num_frames, idle_frame)
             player_sprite = self.PLAYER_ANIM_FRAMES[sprite_idx, anim_frame]
-            object_raster = self.jr.render_at_clipped(object_raster, player_screen_x, player_screen_y, player_sprite)
+            object_raster = jax.lax.cond(
+                state.chamber_transition_ticks > 0,
+                lambda r: r,
+                lambda r: self.jr.render_at_clipped(r, player_screen_x, player_screen_y, player_sprite),
+                object_raster,
+            )
         
         # Enemies - use sprites for types 1-4, colored box for Grim Reaper (type 5)
         enemy_world_pos = state.enemy_positions.astype(jnp.int32)
@@ -2291,6 +2403,54 @@ class DarkChambersRenderer(JAXGameRenderer):
 
         # Convert to RGB
         img = self.jr.render_from_palette(object_raster, self.PALETTE)
+
+        # Side-chamber transition darkening: 3-step fade while gameplay is frozen.
+        elapsed = (CHAMBER_TRANSITION_TICKS - state.chamber_transition_ticks).astype(jnp.int32)
+        phase = (elapsed // CHAMBER_TRANSITION_TICKS_PER_STEP) + 1
+        phase = jnp.clip(phase, 0, CHAMBER_TRANSITION_STEPS)
+        fade_factors = jnp.array([1.0, 0.9, 0.8, 0.7], dtype=jnp.float32)
+        fade_factor = jnp.where(
+            state.chamber_transition_ticks > 0,
+            fade_factors[phase],
+            jnp.array(1.0, dtype=jnp.float32),
+        )
+        img = jnp.clip(img.astype(jnp.float32) * fade_factor, 0, 255).astype(jnp.uint8)
+
+        def render_level_changed_screen(_: None) -> jnp.ndarray:
+            screen = jnp.zeros((GAME_H, GAME_W, 3), dtype=jnp.uint8)
+            message = "LEVEL CHANGED"
+            scale = 2
+            glyph_w = 5
+            glyph_h = 7
+            spacing = 1
+
+            char_w = glyph_w * scale
+            char_h = glyph_h * scale
+            total_w = len(message) * char_w + (len(message) - 1) * spacing
+            start_x = (GAME_W - total_w) // 2
+            start_y = (GAME_H - char_h) // 2
+
+            mask = jnp.zeros((GAME_H, GAME_W), dtype=bool)
+            cursor_x = start_x
+            for ch in message:
+                glyph = LEVEL_CHANGE_FONT_5X7[ch]
+                for gy, row in enumerate(glyph):
+                    for gx, px in enumerate(row):
+                        if px == "1":
+                            y0 = start_y + gy * scale
+                            x0 = cursor_x + gx * scale
+                            mask = mask.at[y0:y0 + scale, x0:x0 + scale].set(True)
+                cursor_x += char_w + spacing
+
+            white = jnp.array([255, 255, 255], dtype=jnp.uint8)
+            return jnp.where(mask[..., None], white, screen)
+
+        img = jax.lax.cond(
+            state.level_transition_ticks > 0,
+            render_level_changed_screen,
+            lambda _: img,
+            operand=None,
+        )
         return img
 
 
@@ -2632,9 +2792,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
         init_key_pos = jnp.array([100, 100], dtype=jnp.int32)
         key_pos, key, _ = jax.lax.fori_loop(0, 20, try_spawn_key, (init_key_pos, key, False))
-        # Hardcoded ladder-up position (must stay inside 160x600 world)
-        exit_pos = jnp.array([74, 548], dtype=jnp.int32)
+        # Main chamber level-0 ladder-up is in the upper-left corner.
+        exit_pos = jnp.array([12, 105], dtype=jnp.int32)
         ladder_down_pos = jnp.array([40, 70], dtype=jnp.int32)
+        main_map_corner_gun_pos = jnp.array([140, 20], dtype=jnp.int32)
         cage_door_pos = self.renderer.CAGE_DOOR_POSITIONS[0, 0]  # Middle map, level 0
         cage_reward_pos = self.renderer.CAGE_REWARD_POSITIONS[0, 0]  # Middle map, level 0
         
@@ -2685,6 +2846,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             jnp.array([ITEM_KEY, ITEM_LADDER_UP, ITEM_LADDER_DOWN, ITEM_CAGE_DOOR, self.renderer.CAGE_REWARD_TYPE], dtype=jnp.int32),
             regular_items
         ])
+        # Main map (spawn map): hardcoded upper-right gun.
+        item_positions = item_positions.at[5].set(main_map_corner_gun_pos)
+        item_types = item_types.at[5].set(jnp.array(ITEM_GUN, dtype=jnp.int32))
         disallowed_potions = (
             ((item_types == ITEM_SPEED_POTION) & (~jnp.array(self.consts.ENABLE_SPEED_POTION_SPAWN)))
             | ((item_types == ITEM_HEAL_POTION) & (~jnp.array(self.consts.ENABLE_HEAL_POTION_SPAWN)))
@@ -2694,6 +2858,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         item_types = jnp.where(disallowed_potions, ITEM_HEART, item_types)
         regular_item_mask = (jnp.arange(NUM_ITEMS) < (5 + INITIAL_REGULAR_ITEM_COUNT)).astype(jnp.int32)
         item_active = jnp.where(jnp.arange(NUM_ITEMS) < 5, 1, regular_item_mask)
+        item_active = item_active.at[5].set(jnp.array(1, dtype=jnp.int32))
 
         # Safety pass: suppress entities that still overlap walls after spawn attempts.
         def rect_overlaps_walls(pos: chex.Array, width: chex.Array, height: chex.Array) -> chex.Array:
@@ -2806,9 +2971,16 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             current_level=jnp.array(0, dtype=jnp.int32),  # Start at level 0
             map_index=jnp.array(0, dtype=jnp.int32),  # Start at middle map
             ladder_timer=jnp.array(0, dtype=jnp.int32),   # Not on ladder initially
+            ladder_transition_cooldown=jnp.array(0, dtype=jnp.int32),
             lives=jnp.array(MAX_LIVES, dtype=jnp.int32),  # Start with MAX_LIVES
             step_counter=jnp.array(0, dtype=jnp.int32),
             death_counter=jnp.array(0, dtype=jnp.int32),
+            chamber_transition_ticks=jnp.array(0, dtype=jnp.int32),
+            chamber_transition_pending=jnp.array(0, dtype=jnp.int32),
+            chamber_target_map_index=jnp.array(0, dtype=jnp.int32),
+            chamber_target_x=spawn_x,
+            chamber_target_y=spawn_y,
+            level_transition_ticks=jnp.array(0, dtype=jnp.int32),
             key=key,
             enemy_dir=enemy_dir,
             enemy_chase_timer=enemy_chase_timer,
@@ -2832,7 +3004,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: DarkChambersState, action: int) -> Tuple[DarkChambersObservation, DarkChambersState, float, bool, DarkChambersInfo]:
         """Apply an action and return (obs, state, reward, done, info)."""
-        a = jnp.asarray(action)
+        is_pending_transition = state.chamber_transition_pending == 1
+        a_raw = jnp.asarray(action, dtype=jnp.int32)
+        a = jnp.where(is_pending_transition, jnp.array(Action.NOOP, dtype=jnp.int32), a_raw)
 
         # If we're in a death freeze, either decrement or respawn now
         def handle_freeze(_: None):
@@ -2942,6 +3116,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                     enemy_bullet_positions=jnp.zeros((ENEMY_MAX_BULLETS, 4), dtype=jnp.int32),
                     enemy_bullet_active=jnp.zeros((ENEMY_MAX_BULLETS,), dtype=jnp.int32),
                     death_counter=jnp.array(0, dtype=jnp.int32),
+                    level_transition_ticks=jnp.array(0, dtype=jnp.int32),
+                    ladder_transition_cooldown=jnp.array(0, dtype=jnp.int32),
                     step_counter=state.step_counter + 1,
                 )
                 obs = self._get_observation(respawned_state)
@@ -2951,6 +3127,29 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 return obs, respawned_state, reward, done, info
 
             return jax.lax.cond(state.death_counter > 1, dec_only, respawn_now, operand=None)
+
+        # Side-chamber transition freeze: hold gameplay for a few frames.
+        def handle_chamber_transition(_: None):
+            frozen_state = state.replace(
+                chamber_transition_ticks=jnp.maximum(state.chamber_transition_ticks - 1, 0),
+                step_counter=state.step_counter + 1,
+            )
+            obs = self._get_observation(frozen_state)
+            reward = self._get_reward(state, frozen_state)
+            done = self._get_done(frozen_state)
+            info = self._get_info(frozen_state)
+            return obs, frozen_state, reward, done, info
+
+        def handle_level_transition(_: None):
+            frozen_state = state.replace(
+                level_transition_ticks=jnp.maximum(state.level_transition_ticks - 1, 0),
+                step_counter=state.step_counter + 1,
+            )
+            obs = self._get_observation(frozen_state)
+            reward = self._get_reward(state, frozen_state)
+            done = self._get_done(frozen_state)
+            info = self._get_info(frozen_state)
+            return obs, frozen_state, reward, done, info
 
         def handle_normal(_: None):
             # Normal logic continues below (existing code)
@@ -3013,6 +3212,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             
             # Track if player crossed portal (for zombie spawning)
             crossed_portal = should_wrap_right | should_wrap_left
+            start_chamber_transition = crossed_portal & (~is_pending_transition)
             
             # Update map_index based on which direction player exits.
             # Right-edge cycle: middle(0) -> right(2) -> left(1) -> middle(0)
@@ -3027,15 +3227,27 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 2,
                 jnp.where(state.map_index == 2, 1, 0),
             )
-            new_map_index = jnp.where(
+            pending_target_map_index = jnp.where(
                 should_wrap_right,
                 map_after_left_exit,
                 jnp.where(should_wrap_left, map_after_right_exit, state.map_index),
             )
+            new_map_index = jnp.where(
+                is_pending_transition,
+                state.chamber_target_map_index,
+                jnp.where(start_chamber_transition, state.map_index, pending_target_map_index),
+            )
             
             # Teleport to opposite edge when crossing portal
-            prop_x = jnp.where(should_wrap_right, self.consts.WORLD_WIDTH - self.consts.PLAYER_WIDTH - 2, prop_x)
-            prop_x = jnp.where(should_wrap_left, 2, prop_x)
+            pending_target_x = jnp.where(should_wrap_right, self.consts.WORLD_WIDTH - self.consts.PLAYER_WIDTH - 2, prop_x)
+            pending_target_x = jnp.where(should_wrap_left, 2, pending_target_x)
+            pending_target_y = prop_y
+            prop_x = jnp.where(
+                is_pending_transition,
+                state.chamber_target_x,
+                jnp.where(start_chamber_transition, prop_x, pending_target_x),
+            )
+            prop_y = jnp.where(is_pending_transition, state.chamber_target_y, prop_y)
             
             # Wall collision check - include boundary walls (with portal gaps)
             WALLS = jnp.concatenate(
@@ -3802,10 +4014,12 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             on_ladder_up = jnp.any(ladder_collisions & (state.item_types == ITEM_LADDER_UP))
             on_ladder_down = jnp.any(ladder_collisions & (state.item_types == ITEM_LADDER_DOWN))
             on_any_ladder = on_ladder_up | on_ladder_down
+            ladder_transition_blocked = state.ladder_transition_cooldown > 0
+            on_any_ladder_effective = on_any_ladder & (~ladder_transition_blocked)
             
             # Update ladder timer: increment if on ladder, reset if not
             new_ladder_timer = jnp.where(
-                on_any_ladder,
+                on_any_ladder_effective,
                 state.ladder_timer + 1,
                 jnp.array(0, dtype=jnp.int32)
             )
@@ -4348,10 +4562,11 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             world_changed = level_changed | map_changed
             
             # Reset player position on level/map change
-            spawn_x_up = jnp.array(40, dtype=jnp.int32)  # At down ladder after going up
+            # Keep level-transition respawn near top-middle to avoid upper-left placement.
+            spawn_x_up = jnp.array((self.consts.WORLD_WIDTH - self.consts.PLAYER_WIDTH) // 2, dtype=jnp.int32)
             spawn_y_up = jnp.array(70, dtype=jnp.int32)
-            spawn_x_down = jnp.array(74, dtype=jnp.int32)   # At up ladder after going down
-            spawn_y_down = jnp.array(548, dtype=jnp.int32)
+            spawn_x_down = jnp.array((self.consts.WORLD_WIDTH - self.consts.PLAYER_WIDTH) // 2, dtype=jnp.int32)
+            spawn_y_down = jnp.array(70, dtype=jnp.int32)
 
             WALLS_SPAWN = jnp.concatenate(
                 [
@@ -4477,6 +4692,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 init_ladder = jnp.array([40, 70], dtype=jnp.int32)
                 ladder_down_temp, key_sk, _ = jax.lax.fori_loop(0, 20, try_spawn_ladder_down, (init_ladder, key_sk, False))
                 ladder_down_pos = jnp.where(new_level == 0, jnp.array([-1000, -1000], dtype=jnp.int32), ladder_down_temp)
+                main_map_corner_gun_pos = jnp.array([140, 20], dtype=jnp.int32)
                 cage_door_pos = self.renderer.CAGE_DOOR_POSITIONS[new_map_index, new_level]
                 cage_reward_pos = self.renderer.CAGE_REWARD_POSITIONS[new_map_index, new_level]
                 
@@ -4546,6 +4762,23 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 regular_item_mask = (jnp.arange(NUM_ITEMS) < (5 + INITIAL_REGULAR_ITEM_COUNT)).astype(jnp.int32)
                 new_active = jnp.where(jnp.arange(NUM_ITEMS) < 5, 1, regular_item_mask)
 
+                is_main_spawn_map = (new_map_index == 0) & (new_level == 0)
+                new_positions = jnp.where(
+                    is_main_spawn_map,
+                    new_positions.at[5].set(main_map_corner_gun_pos),
+                    new_positions,
+                )
+                new_types = jnp.where(
+                    is_main_spawn_map,
+                    new_types.at[5].set(jnp.array(ITEM_GUN, dtype=jnp.int32)),
+                    new_types,
+                )
+                new_active = jnp.where(
+                    is_main_spawn_map,
+                    new_active.at[5].set(jnp.array(1, dtype=jnp.int32)),
+                    new_active,
+                )
+
                 cage_valid_here = self.renderer.CAGE_VALID[new_map_index, new_level]
                 new_active = new_active.at[3].set(cage_valid_here)
                 new_active = new_active.at[4].set(cage_valid_here)
@@ -4558,8 +4791,15 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             transition_item_types = jnp.where(world_changed, respawned_types, final_item_types)
             transition_item_active = jnp.where(world_changed, respawned_active, final_item_active)
 
-            # Keep ladder-up hardcoded and always active so level progression is always visible.
-            transition_item_positions = transition_item_positions.at[1].set(jnp.array([74, 548], dtype=jnp.int32))
+            # Keep ladder-up hardcoded and always active; main chamber level-0 uses upper-left placement.
+            ladder_up_default_pos = jnp.array([74, 548], dtype=jnp.int32)
+            ladder_up_main_spawn_pos = jnp.array([12, 105], dtype=jnp.int32)
+            ladder_up_target_pos = jnp.where(
+                (new_map_index == 0) & (new_level == 0),
+                ladder_up_main_spawn_pos,
+                ladder_up_default_pos,
+            )
+            transition_item_positions = transition_item_positions.at[1].set(ladder_up_target_pos)
             transition_item_types = transition_item_types.at[1].set(jnp.array(ITEM_LADDER_UP, dtype=jnp.int32))
             transition_item_active = transition_item_active.at[1].set(jnp.array(1, dtype=jnp.int32))
 
@@ -4828,6 +5068,65 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             final_y = transition_y
             final_health_after = jnp.where(player_died, jnp.array(0, dtype=jnp.int32), final_health)
             death_counter_after = jnp.where(player_died & (new_lives > 0), jnp.array(DEATH_FREEZE_TICKS, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32))
+            chamber_transition_ticks_after = jnp.where(
+                start_chamber_transition,
+                jnp.array(CHAMBER_TRANSITION_TICKS, dtype=jnp.int32),
+                jnp.array(0, dtype=jnp.int32),
+            )
+            chamber_transition_pending_after = jnp.where(
+                player_died,
+                jnp.array(0, dtype=jnp.int32),
+                jnp.where(
+                    start_chamber_transition,
+                    jnp.array(1, dtype=jnp.int32),
+                    jnp.where(
+                        is_pending_transition,
+                        jnp.array(0, dtype=jnp.int32),
+                        state.chamber_transition_pending,
+                    ),
+                ),
+            )
+            chamber_target_map_index_after = jnp.where(
+                start_chamber_transition,
+                pending_target_map_index,
+                state.chamber_target_map_index,
+            )
+            chamber_target_x_after = jnp.where(
+                start_chamber_transition,
+                pending_target_x,
+                state.chamber_target_x,
+            )
+            chamber_target_y_after = jnp.where(
+                start_chamber_transition,
+                pending_target_y,
+                state.chamber_target_y,
+            )
+            chamber_transition_ticks_after = jnp.where(
+                player_died,
+                jnp.array(0, dtype=jnp.int32),
+                chamber_transition_ticks_after,
+            )
+            ladder_transition_cooldown_after = jnp.maximum(state.ladder_transition_cooldown - 1, 0)
+            ladder_transition_cooldown_after = jnp.where(
+                level_changed,
+                jnp.array(LADDER_LEVEL_CHANGE_BLOCK_TICKS, dtype=jnp.int32),
+                ladder_transition_cooldown_after,
+            )
+            ladder_transition_cooldown_after = jnp.where(
+                player_died,
+                jnp.array(0, dtype=jnp.int32),
+                ladder_transition_cooldown_after,
+            )
+            level_transition_ticks_after = jnp.where(
+                level_changed,
+                jnp.array(LEVEL_CHANGE_FREEZE_TICKS, dtype=jnp.int32),
+                jnp.array(0, dtype=jnp.int32),
+            )
+            level_transition_ticks_after = jnp.where(
+                player_died,
+                jnp.array(0, dtype=jnp.int32),
+                level_transition_ticks_after,
+            )
             
             new_state = DarkChambersState(
                 player_x=final_x,
@@ -4863,9 +5162,16 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 current_level=new_level,
                 map_index=new_map_index,
                 ladder_timer=new_ladder_timer,
+                ladder_transition_cooldown=ladder_transition_cooldown_after,
                 lives=new_lives,
                 step_counter=state.step_counter + 1,
                 death_counter=death_counter_after,
+                chamber_transition_ticks=chamber_transition_ticks_after,
+                chamber_transition_pending=chamber_transition_pending_after,
+                chamber_target_map_index=chamber_target_map_index_after,
+                chamber_target_x=chamber_target_x_after,
+                chamber_target_y=chamber_target_y_after,
+                level_transition_ticks=level_transition_ticks_after,
                 key=rng,
                 enemy_positions=final_enemy_positions_state,
                 enemy_dir=new_enemy_dir,
@@ -4890,8 +5196,23 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             return obs, new_state, reward, done, info
 
 
-        # Top-level choose freeze vs normal
-        return jax.lax.cond(state.death_counter > 0, handle_freeze, handle_normal, operand=None)
+        # Top-level choose death freeze, chamber transition freeze, or normal update.
+        return jax.lax.cond(
+            state.death_counter > 0,
+            handle_freeze,
+            lambda _: jax.lax.cond(
+                state.chamber_transition_ticks > 0,
+                handle_chamber_transition,
+                lambda __: jax.lax.cond(
+                    state.level_transition_ticks > 0,
+                    handle_level_transition,
+                    handle_normal,
+                    operand=None,
+                ),
+                operand=None,
+            ),
+            operand=None,
+        )
     
     def render(self, state: DarkChambersState) -> jnp.ndarray:
         return self.renderer.render(state)
