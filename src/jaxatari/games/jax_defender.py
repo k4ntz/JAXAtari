@@ -1670,7 +1670,7 @@ class JaxDefender(
     def _add_items_for_score(self, state: DefenderState, score):
         old_score = jnp.floor_divide(state.score, self.consts.SCORE_BONUS_THRESHOLD)
 
-        new_score = jnp.floor_divide(score, self.consts.SCORE_BONUS_THRESHOLD)
+        new_score = jnp.floor_divide(state.score + score, self.consts.SCORE_BONUS_THRESHOLD)
         gain_items = new_score > old_score
 
         return jnp.where(gain_items, 1, 0)
