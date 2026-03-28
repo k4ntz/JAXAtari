@@ -60,7 +60,10 @@ class ProgressiveCarSpawnRateMod(JaxAtariInternalModPlugin):
         min_interval = jnp.int32(8)
         horizon = jnp.float32(1800.0)
 
-        progress = jnp.clip(state.movement_steps.astype(jnp.float32) / horizon, 0.0, 1.0)
+        in_reset_phase = jnp.logical_or(state.awaiting_round_start, state.awaiting_respawn)
+        effective_steps = jnp.where(in_reset_phase, jnp.int32(0), state.movement_steps)
+
+        progress = jnp.clip(effective_steps.astype(jnp.float32) / horizon, 0.0, 1.0)
         decayed_interval = jnp.round(
             start_interval.astype(jnp.float32) - progress * (start_interval.astype(jnp.float32) - min_interval.astype(jnp.float32))
         ).astype(jnp.int32)
@@ -73,6 +76,8 @@ class TimeDecayCollectibleValueMod(JaxAtariInternalModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def _collectible_score_values(self, state: UpNDownState, collectible_type_ids: chex.Array) -> chex.Array:
         base_scores = self._env.consts.COLLECTIBLE_SCORES[collectible_type_ids]
-        elapsed_decay = jnp.floor(state.movement_steps.astype(jnp.float32) / 200.0).astype(jnp.int32)
+        in_reset_phase = jnp.logical_or(state.awaiting_round_start, state.awaiting_respawn)
+        effective_steps = jnp.where(in_reset_phase, jnp.int32(0), state.movement_steps)
+        elapsed_decay = jnp.floor(effective_steps.astype(jnp.float32) / 200.0).astype(jnp.int32)
         min_scores = jnp.maximum(jnp.int32(10), base_scores // 3)
         return jnp.maximum(base_scores - elapsed_decay, min_scores)

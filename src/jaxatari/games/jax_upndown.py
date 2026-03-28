@@ -54,7 +54,7 @@ class UpNDownConstants(struct.PyTreeNode):
     GROUND_COLLISION_DISTANCE: float = 3.0  # Tight collision distance for ground collisions
     LATE_JUMP_ENEMY_SCORE: int = 400
     STEEP_ROAD_SPEED_REDUCTION_INTERVAL: int = 8  # Frames between each speed reduction on steep roads
-    PASSIVE_SCORE_INTERVAL: int = 60  # Steps between passive score awards
+    PASSIVE_SCORE_INTERVAL: int = 45  # Steps between passive score awards
     PASSIVE_SCORE_AMOUNT: int = 10  # Points awarded for passive scoring
     COLLISION_THRESHOLD: float = 5.0  # Distance threshold for flag/collectible collision
     ACCELERATION_INTERVAL: int = 6  # Frames between speed changes when holding up/down
@@ -105,8 +105,8 @@ class UpNDownConstants(struct.PyTreeNode):
     LIFE_BOTTOM_Y: int = 195
     # Collectible constants - unified dynamic spawning
     MAX_COLLECTIBLES: int = 4  # Fixed collectible pool size used for observation/state schema stability
-    MAX_ACTIVE_COLLECTIBLES: int = 1  # Runtime cap of simultaneously active collectibles
-    COLLECTIBLE_SPAWN_INTERVAL: int = 200  # Steps between spawn attempts
+    MAX_ACTIVE_COLLECTIBLES: int = 2  # Runtime cap of simultaneously active collectibles
+    COLLECTIBLE_SPAWN_INTERVAL: int = 160  # Steps between spawn attempts
     COLLECTIBLE_DESPAWN_DISTANCE: int = 500  # Distance beyond which collectibles despawn
     # Collectible types (indices for type field)
     COLLECTIBLE_TYPE_CHERRY: int = 0
@@ -221,6 +221,7 @@ class UpNDownState:
     jump_key_released: chex.Array  # True if jump button was NOT pressed in previous step
     last_extra_life_score: chex.Array  # Score at which last extra life was awarded
     jump_total_duration: chex.Array  # Total duration of the current/last jump for rendering arc
+    level_cycle_counter: chex.Array  # Increments on each level transition to diversify RNG
 
     def _replace(self, **kwargs):
         return self.replace(**kwargs)
@@ -239,6 +240,10 @@ class UpNDownObservation:
     is_jumping: chex.Array
     jump_cooldown: chex.Array
     is_on_steep_road: chex.Array
+    road_section_start_x: chex.Array
+    road_section_start_y: chex.Array
+    road_section_end_x: chex.Array
+    road_section_end_y: chex.Array
     round_started: chex.Array
     level: chex.Array
 
@@ -254,6 +259,10 @@ class UpNDownInfo:
     movement_steps: jnp.ndarray  # Steps since round started
     jump_slope: jnp.ndarray  # Current jump trajectory slope
     player_road_segment: jnp.ndarray  # Current road segment index
+    road_section_start_x: jnp.ndarray
+    road_section_start_y: jnp.ndarray
+    road_section_end_x: jnp.ndarray
+    road_section_end_y: jnp.ndarray
 
     def _replace(self, **kwargs):
         return self.replace(**kwargs)
@@ -281,15 +290,18 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         # Flags: NUM_FLAGS * 5 = 8 * 5 = 40 (y, road, segment, color, collected per flag)
         # Collectibles: MAX_COLLECTIBLES * 6 = 4 * 6 = 24 (y, x, road, color_idx, type, active per collectible)
         # Flags collected mask: NUM_FLAGS = 8
-        # Score, lives, is_jumping, jump_cooldown, is_on_steep_road, round_started, level: 7
-        # Total: 10 + 96 + 40 + 6 + 8 + 7 = 167
+        # Score/lives/jump state and geometry context: 11 scalar values
+        # (score, lives, is_jumping, jump_cooldown, is_on_steep_road,
+        # road_section_start_x, road_section_start_y, road_section_end_x, road_section_end_y,
+        # round_started, level)
+        # Total: 10 + 96 + 40 + 24 + 8 + 11 = 189
         self.obs_size = (
             10 +  # player car
             self.consts.MAX_ENEMY_CARS * 12 +  # enemy cars (all fields)
             self.consts.NUM_FLAGS * 5 +  # flags
             self.consts.MAX_COLLECTIBLES * 6 +  # collectibles (all fields)
             self.consts.NUM_FLAGS +  # flags_collected_mask
-            7  # score, lives, is_jumping, jump_cooldown, is_on_steep_road, round_started, level
+            11  # score/lives/jump state, road section start/end, round_started, level
         )
         # Speed dividers for movement timing (indexed by speed level)
         self._speed_dividers = jnp.array([0, 1, 2, 4, 8, 16, 16, 16, 16])
@@ -361,12 +373,14 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
     @partial(jax.jit, static_argnums=(0,))
     def _on_level_completed(self, state: UpNDownState) -> UpNDownState:
         """Advance to next level and freeze until release+press input starts it."""
-        rng_key, enemy_key = jax.random.split(state.rng_key)
+        rng_key, enemy_key, flag_key = jax.random.split(state.rng_key, 3)
         next_level = (state.level + jnp.int32(1)) % jnp.int32(self.consts.LEVEL_COUNT)
+        next_cycle_counter = state.level_cycle_counter + jnp.int32(1)
         start_road = jnp.int32(0)
         start_segment, player_start_y, start_x = self._get_spawn_position_for_level(next_level, start_road)
 
         enemy_cars = self._initialize_enemies(enemy_key, player_start_y, next_level)
+        flags = self._initialize_flags(flag_key, next_level)
         collectibles = self._initialize_collectibles()
 
         player_car = state.player_car._replace(
@@ -395,15 +409,18 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             movement_steps=jnp.array(0),
             steep_road_timer=jnp.array(0, dtype=jnp.int32),
             jump_slope=jnp.array(0.0, dtype=jnp.float32),
+            flags=flags,
+            flags_collected_mask=jnp.zeros(self.consts.NUM_FLAGS, dtype=jnp.bool_),
             collectibles=collectibles,
             collectible_spawn_timer=jnp.array(0, dtype=jnp.int32),
             enemy_cars=enemy_cars,
             enemy_spawn_timer=jnp.array(self.consts.ENEMY_SPAWN_INTERVAL_BASE, dtype=jnp.int32),
             awaiting_respawn=jnp.array(False),
             awaiting_round_start=jnp.array(True),
-            input_released=jnp.array(False),
+            input_released=jnp.array(True),
             jump_key_released=jnp.array(True),
             jump_total_duration=jnp.array(self.consts.JUMP_FRAMES, dtype=jnp.int32),
+            level_cycle_counter=next_cycle_counter,
             rng_key=rng_key,
         )
 
@@ -987,6 +1004,12 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             Tuple of (updated_collectibles, score_delta, new_spawn_timer, new_rng_key)
         """
         rng_key, key1, key2, key3, key4 = jax.random.split(rng_key, 5)
+        # Salt collectible randomness with level transition count so revisiting a level
+        # does not reproduce the same collectible placement pattern.
+        key1 = jax.random.fold_in(key1, state.level_cycle_counter)
+        key2 = jax.random.fold_in(key2, state.level_cycle_counter)
+        key3 = jax.random.fold_in(key3, state.level_cycle_counter)
+        key4 = jax.random.fold_in(key4, state.level_cycle_counter)
 
         # Collectible spawning logic - decrement timer and spawn when ready (use jnp.where for branchless)
         new_collectible_timer = jnp.where(
@@ -1043,6 +1066,14 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         spawned_color_idx = jnp.where(update_mask, color_spawn, state.collectibles.color_idx)
         spawned_type_id = jnp.where(update_mask, type_id_spawn, state.collectibles.type_id)
         spawned_active = jnp.where(update_mask, True, state.collectibles.active)
+
+        # Keep collectible X aligned to the active level geometry.
+        # This prevents stale positions when switching levels with existing collectible state.
+        spawned_segments = jax.vmap(lambda y: self._get_road_segment(y, state.level))(spawned_y)
+        projected_x_road_0 = self._get_x_on_road(spawned_y, spawned_segments, corners_a, corners_y)
+        projected_x_road_1 = self._get_x_on_road(spawned_y, spawned_segments, corners_b, corners_y)
+        aligned_spawned_x = jnp.where(spawned_road == 0, projected_x_road_0, projected_x_road_1)
+        spawned_x = jnp.where(spawned_active, aligned_spawned_x, spawned_x)
         
         # Despawn logic - remove collectibles too far from player
         def check_despawn(idx):
@@ -1131,6 +1162,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             lives=lives,
             is_dead=is_dead,
             awaiting_respawn=awaiting_respawn,
+            input_released=jnp.where(died, jnp.array(False), state.input_released),
             player_car=player_car,
         )
     
@@ -1401,6 +1433,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
                 lives=s.lives - 1,
                 is_dead=jnp.array(True),
                 awaiting_respawn=jnp.array(True),
+                input_released=jnp.array(False),
                 player_car=dead_car,
             )
 
@@ -1494,6 +1527,27 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             color_idx=jnp.zeros(self.consts.MAX_COLLECTIBLES, dtype=jnp.int32),
             type_id=jnp.zeros(self.consts.MAX_COLLECTIBLES, dtype=jnp.int32),
             active=jnp.zeros(self.consts.MAX_COLLECTIBLES, dtype=jnp.bool_),
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _initialize_flags(self, key: chex.Array, level: chex.Array) -> Flag:
+        """Initialize flags so they align with the requested level geometry."""
+        # Evenly spread flags along the track with small jitter.
+        base_y = jnp.linspace(-900.0, -100.0, self.consts.NUM_FLAGS)
+        jitter = jax.random.uniform(key, shape=(self.consts.NUM_FLAGS,), minval=-40.0, maxval=40.0)
+        flag_y_offsets = base_y + jitter
+
+        # Alternate roads 0/1 for variety.
+        flag_roads = jnp.arange(self.consts.NUM_FLAGS) % 2
+        flag_segments = jax.vmap(lambda y: self._get_road_segment(y, level))(flag_y_offsets)
+        flag_color_indices = jnp.arange(self.consts.NUM_FLAGS)
+
+        return Flag(
+            y=flag_y_offsets,
+            road=flag_roads,
+            road_segment=flag_segments,
+            color_idx=flag_color_indices,
+            collected=jnp.zeros(self.consts.NUM_FLAGS, dtype=jnp.bool_),
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1727,7 +1781,10 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
 
     @partial(jax.jit, static_argnums=(0,))
     def _respawn_after_collision(self, state: UpNDownState, new_lives: chex.Array) -> UpNDownState:
-        """Respawn the player on a random road while preserving score and flags."""
+        """Respawn the player on a random road while preserving score and flags.
+
+        The caller is expected to gate this on a release-then-press input edge.
+        """
         rng_key, road_key, enemy_key = jax.random.split(state.rng_key, 3)
 
         respawn_road = jax.random.randint(road_key, shape=(), minval=0, maxval=2)
@@ -1776,10 +1833,11 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             enemy_spawn_timer=jnp.array(self.consts.ENEMY_SPAWN_INTERVAL_BASE, dtype=jnp.int32),
             awaiting_respawn=jnp.array(False),
             awaiting_round_start=jnp.array(True),  # Wait for input to start round after respawn
-            input_released=jnp.array(False),  # Require button release before round can start
+            input_released=jnp.array(True),  # Allow same press to clear awaiting_round_start
             jump_key_released=jnp.array(True),
             last_extra_life_score=state.last_extra_life_score,
             jump_total_duration=jnp.array(self.consts.JUMP_FRAMES, dtype=jnp.int32),
+            level_cycle_counter=state.level_cycle_counter,
             rng_key=rng_key,
         )
 
@@ -1864,6 +1922,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
                 lives=state.lives - 1,
                 is_dead=jnp.array(True),
                 awaiting_respawn=jnp.array(True),
+                input_released=jnp.array(False),
                 player_car=dead_car,
             )
 
@@ -1899,28 +1958,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         initial_level = jnp.int32(0)
         start_road = jnp.int32(jax.random.randint(rng_key, shape=(), minval=0, maxval=2))
         start_segment, player_start_y, player_start_x = self._get_spawn_position_for_level(initial_level, start_road)
-
-        # Evenly spread flags along the track with small jitter
-        base_y = jnp.linspace(-900.0, -100.0, self.consts.NUM_FLAGS)
-        jitter = jax.random.uniform(flag_key, shape=(self.consts.NUM_FLAGS,), minval=-40.0, maxval=40.0)
-        flag_y_offsets = base_y + jitter
-
-        # Alternate roads 0/1 for variety
-        flag_roads = jnp.arange(self.consts.NUM_FLAGS) % 2
-
-        # Calculate which road segment each flag is on based on Y position
-        flag_segments = jax.vmap(lambda y: self._get_road_segment(y, initial_level))(flag_y_offsets)
-
-        # Each flag color index corresponds to its position (0-7)
-        flag_color_indices = jnp.arange(self.consts.NUM_FLAGS)
-
-        flags = Flag(
-            y=flag_y_offsets,
-            road=flag_roads,
-            road_segment=flag_segments,
-            color_idx=flag_color_indices,
-            collected=jnp.zeros(self.consts.NUM_FLAGS, dtype=jnp.bool_),
-        )
+        flags = self._initialize_flags(flag_key, initial_level)
 
         # Initialize collectibles as all inactive (will spawn dynamically with mixed types)
         collectibles = self._initialize_collectibles()
@@ -1971,6 +2009,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             jump_key_released=jnp.array(True),
             last_extra_life_score=jnp.array(0, dtype=jnp.int32),
             jump_total_duration=jnp.array(self.consts.JUMP_FRAMES, dtype=jnp.int32),
+            level_cycle_counter=jnp.array(0, dtype=jnp.int32),
         )
         initial_obs = self._get_observation(state)
         return initial_obs, state
@@ -1992,7 +2031,10 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         state = state._replace(input_released=input_released)
         
         # Check if we're awaiting respawn - if so, check for input to trigger respawn
-        should_respawn = jnp.logical_and(state.awaiting_respawn, any_action)
+        should_respawn = jnp.logical_and(
+            jnp.logical_and(state.awaiting_respawn, any_action),
+            state.input_released,
+        )
         
         # Respawn if player pressed any key while awaiting
         state = jax.lax.cond(
@@ -2067,6 +2109,26 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             state.player_car.road_index_B,
             state.level,
         )
+
+        road_segment = jnp.where(
+            state.player_car.current_road == 0,
+            state.player_car.road_index_A,
+            state.player_car.road_index_B,
+        )
+        corners_a, corners_b = self._get_track_corners_for_level(state.level)
+        corners_y = self._get_track_corners_y_for_level(state.level)
+        section_start_x = jnp.where(
+            state.player_car.current_road == 0,
+            corners_a[road_segment],
+            corners_b[road_segment],
+        )
+        section_end_x = jnp.where(
+            state.player_car.current_road == 0,
+            corners_a[road_segment + 1],
+            corners_b[road_segment + 1],
+        )
+        section_start_y = corners_y[road_segment]
+        section_end_y = corners_y[road_segment + 1]
         
         return UpNDownObservation(
             player_car=state.player_car,
@@ -2079,6 +2141,10 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             is_jumping=jnp.int32(state.is_jumping),
             jump_cooldown=jnp.int32(state.jump_cooldown),
             is_on_steep_road=jnp.int32(is_on_steep_road),
+            road_section_start_x=jnp.int32(section_start_x),
+            road_section_start_y=jnp.int32(section_start_y),
+            road_section_end_x=jnp.int32(section_end_x),
+            road_section_end_y=jnp.int32(section_end_y),
             round_started=jnp.int32(state.round_started),
             level=jnp.int32(state.level),
         )
@@ -2150,7 +2216,7 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         - Flags: NUM_FLAGS * 5 values (y, road, segment, color, collected per flag)
         - Collectibles: MAX_COLLECTIBLES * 6 values (y, x, road, color_idx, type, active per collectible)
         - Flags collected mask: NUM_FLAGS values
-        - Score, lives, is_jumping, jump_cooldown, is_on_steep_road, round_started, level: 7 values
+        - Score/lives/jump state and geometry context: 11 values
         """
         return jnp.concatenate([
             self.flatten_car(obs.player_car),
@@ -2163,6 +2229,10 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             jnp.array([obs.is_jumping], dtype=jnp.int32),
             jnp.array([obs.jump_cooldown], dtype=jnp.int32),
             jnp.array([obs.is_on_steep_road], dtype=jnp.int32),
+            jnp.array([obs.road_section_start_x], dtype=jnp.int32),
+            jnp.array([obs.road_section_start_y], dtype=jnp.int32),
+            jnp.array([obs.road_section_end_x], dtype=jnp.int32),
+            jnp.array([obs.road_section_end_y], dtype=jnp.int32),
             jnp.array([obs.round_started], dtype=jnp.int32),
             jnp.array([obs.level], dtype=jnp.int32),
         ])
@@ -2184,6 +2254,8 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
         - is_jumping: int (0 or 1)
         - jump_cooldown: int (0-48)
         - is_on_steep_road: int (0 or 1)
+        - road_section_start_x/y: current road section start point
+        - road_section_end_x/y: current road section end point
         - round_started: int (0 or 1)
         - level: int (0-2)
         """
@@ -2239,6 +2311,10 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             "is_jumping": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             "jump_cooldown": spaces.Box(low=0, high=48, shape=(), dtype=jnp.int32),
             "is_on_steep_road": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            "road_section_start_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+            "road_section_start_y": spaces.Box(low=-2000, high=0, shape=(), dtype=jnp.int32),
+            "road_section_end_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
+            "road_section_end_y": spaces.Box(low=-2000, high=0, shape=(), dtype=jnp.int32),
             "round_started": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             "level": spaces.Box(low=0, high=self.consts.LEVEL_COUNT - 1, shape=(), dtype=jnp.int32),
         })
@@ -2260,6 +2336,20 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             state.player_car.road_index_A,
             state.player_car.road_index_B,
         )
+        corners_a, corners_b = self._get_track_corners_for_level(state.level)
+        corners_y = self._get_track_corners_y_for_level(state.level)
+        section_start_x = jnp.where(
+            state.player_car.current_road == 0,
+            corners_a[road_index],
+            corners_b[road_index],
+        )
+        section_end_x = jnp.where(
+            state.player_car.current_road == 0,
+            corners_a[road_index + 1],
+            corners_b[road_index + 1],
+        )
+        section_start_y = corners_y[road_index]
+        section_end_y = corners_y[road_index + 1]
         
         return UpNDownInfo(
             step_counter=jnp.int32(state.step_counter),
@@ -2267,6 +2357,10 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             movement_steps=jnp.int32(state.movement_steps),
             jump_slope=jnp.float32(state.jump_slope),
             player_road_segment=jnp.int32(road_index),
+            road_section_start_x=jnp.int32(section_start_x),
+            road_section_start_y=jnp.int32(section_start_y),
+            road_section_end_x=jnp.int32(section_end_x),
+            road_section_end_y=jnp.int32(section_end_y),
         )
 
     @partial(jax.jit, static_argnums=(0,))
