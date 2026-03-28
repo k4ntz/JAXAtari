@@ -1443,11 +1443,15 @@ class JaxDefender(
             is_onscreen = self.dh._is_onscreen_from_game(
                 state, enemy[0], enemy[1], self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT
             )
+            is_alive = enemy[2] != self.consts.INACTIVE
 
-            enemy = jnp.where(is_onscreen, dead_enemy, enemy)
+            should_delete = jnp.logical_and(is_onscreen, is_alive)
+
+            enemy = jnp.where(should_delete, dead_enemy, enemy)
             return enemy
 
         enemy_states = jax.vmap(remove_from_screen, in_axes=(0))(enemy_states)
+
         return enemy_states
 
     def _camera_step(self, state: DefenderState) -> DefenderState:
