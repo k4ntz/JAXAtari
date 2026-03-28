@@ -3180,12 +3180,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             dx_raw = dx
             dy_raw = dy
 
-            # --- SLOW DOWN PLAYER MOVEMENT ---
-            PLAYER_MOVE_EVERY = 2  # 1=normal, 2=half speed, 3=1/3 speed, etc.
-            player_move_tick = (state.step_counter % PLAYER_MOVE_EVERY) == 0
-
-            dx = jnp.where(player_move_tick, dx, 0)
-            dy = jnp.where(player_move_tick, dy, 0)
+            PLAYER_MOVE_EVERY_X = 3  # slightly faster (was 4)
+            dy = jnp.where((state.step_counter % 3) != 2, dy, 0)
+            dx = jnp.where((state.step_counter % PLAYER_MOVE_EVERY_X) == 0, dx, 0)
 
             prop_x = state.player_x + dx
             prop_y = state.player_y + dy
