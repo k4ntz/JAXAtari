@@ -649,7 +649,29 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             )
             st = load_room(new_room_id, st, self.consts)
             new_px = jnp.where(transition_left, 148, jnp.where(transition_right, 4, current_x))
-            new_py = jnp.where(transition_down, 6, jnp.where(transition_up, 140, jnp.where(new_room_id == 4, 27, 26)))
+            temp_py = jnp.where(transition_down, 6, jnp.where(transition_up, 140, new_y))
+
+            # Prevent landing below floor: 
+            # If feet are currently inside a floor, push up until they are just above it.
+            new_room_idx = jnp.where(new_room_id == 4, 0,
+                           jnp.where(new_room_id == 5, 1,
+                           jnp.where(new_room_id == 3, 2,
+                           jnp.where(new_room_id == 11, 3,
+                           jnp.where(new_room_id == 10, 4, 0)))))
+            new_room_col_map = self.ROOM_COLLISION_MAPS[new_room_idx]
+            safe_px_trans = jnp.clip(new_px + self.consts.PLAYER_WIDTH // 2, 0, self.consts.WIDTH - 1)
+
+            def is_inside(py):
+                fy = jnp.clip(py + self.consts.PLAYER_HEIGHT - 1, 0, 148)
+                return new_room_col_map[fy, safe_px_trans] == 1
+
+            new_py = temp_py
+            new_py = jnp.where(is_inside(new_py), new_py - 1, new_py)
+            new_py = jnp.where(is_inside(new_py), new_py - 1, new_py)
+            new_py = jnp.where(is_inside(new_py), new_py - 1, new_py)
+            new_py = jnp.where(is_inside(new_py), new_py - 1, new_py)
+            new_py = jnp.where(is_inside(new_py), new_py - 1, new_py)
+
             return st.replace(
                 player_x=new_px,
                 player_y=new_py,
