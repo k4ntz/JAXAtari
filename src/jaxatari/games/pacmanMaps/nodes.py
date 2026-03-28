@@ -86,14 +86,16 @@ class NodeGroup(NamedTuple):
         node_group = cls(nodeList=node_list)
         
         # Print node connections for debugging
-        node_group.print_connections()
+        # node_group.print_connections()
         
         return node_group
     
     @staticmethod
     def read_maze_file(textfile):
         """Read maze file (translated from readMazeFile)."""
-        return np.loadtxt(textfile, dtype='<U1')
+        with open(textfile, 'r') as f:
+            lines = [list(line.strip().replace(' ', '')) for line in f.readlines()]
+        return np.array(lines, dtype='<U1')
     
     @staticmethod
     def construct_key(col, row, tile_size):
@@ -101,17 +103,18 @@ class NodeGroup(NamedTuple):
         return col * tile_size, row * tile_size
     
     @staticmethod
-    def create_node_table(data, nodes_lut, tile_size, xoffset=0, yoffset=0):
+    def create_node_table(data, nodes_lut, tile_size, xoffset=0, yoffset=32):
         """Create node table from maze data (translated from createNodeTable)."""
         node_symbols = ['+', 'H', 'o', 'D', 'P']
         for row in range(data.shape[0]):
             for col in range(data.shape[1]):
                 if data[row][col] in node_symbols:
-                    x, y = NodeGroup.construct_key(col + xoffset, row + yoffset, tile_size)
+                    x, y = NodeGroup.construct_key(col + xoffset, row, tile_size)
+                    y += yoffset
                     nodes_lut[(x, y)] = Node.create(x, y)
     
     @staticmethod
-    def connect_horizontally(data, nodes_lut, position_to_index, tile_size, xoffset=0, yoffset=0):
+    def connect_horizontally(data, nodes_lut, position_to_index, tile_size, xoffset=0, yoffset=32):
         """Connect nodes horizontally (translated from connectHorizontally)."""
         node_symbols = ['+', 'H', 'o', 'D', 'P']
         path_symbols = ['.', 'H', 'o', 'D', 'P']
@@ -120,7 +123,8 @@ class NodeGroup(NamedTuple):
             key = None
             for col in range(data.shape[1]):
                 if data[row][col] in node_symbols:
-                    x, y = NodeGroup.construct_key(col + xoffset, row + yoffset, tile_size)
+                    x, y = NodeGroup.construct_key(col + xoffset, row, tile_size)
+                    y += yoffset
                     if key is None:
                         key = (x, y)
                     else:
@@ -156,7 +160,7 @@ class NodeGroup(NamedTuple):
                     key = None
     
     @staticmethod
-    def connect_vertically(data, nodes_lut, position_to_index, tile_size, xoffset=0, yoffset=0):
+    def connect_vertically(data, nodes_lut, position_to_index, tile_size, xoffset=0, yoffset=32):
         """Connect nodes vertically (translated from connectVertically)."""
         node_symbols = ['+', 'H', 'o', 'D', 'P']
         path_symbols = ['.', 'H', 'o', 'D', 'P']
@@ -166,7 +170,8 @@ class NodeGroup(NamedTuple):
             key = None
             for row in range(dataT.shape[1]):
                 if dataT[col][row] in node_symbols:
-                    x, y = NodeGroup.construct_key(col + xoffset, row + yoffset, tile_size)
+                    x, y = NodeGroup.construct_key(col + xoffset, row, tile_size)
+                    y += yoffset
                     if key is None:
                         key = (x, y)
                     else:
@@ -237,7 +242,7 @@ class NodeGroup(NamedTuple):
         print(f"Connected Portal (vertical): Node {top_idx} (Top) <-> Node {bottom_idx} (Bottom)")
 
     @staticmethod
-    def connect_portals(data, nodes_lut, position_to_index, tile_size, xoffset=0, yoffset=0):
+    def connect_portals(data, nodes_lut, position_to_index, tile_size, xoffset=0, yoffset=32):
         """
         Connect portal nodes ('P') across the map. Supports left-right and up-down pairs.
 
@@ -246,16 +251,19 @@ class NodeGroup(NamedTuple):
         - Two portals on the same column (same x) -> vertical pair (UP <-> DOWN).
 
         Works for 2, 4, 6, ... portals as long as each pair aligns on a row or column.
-        If there are 6 portals (e.g. 1 horizontal row + 2 vertical columns), all three
-        pairs are connected. Previously only len==2 or len==4 was handled, so 6 portals
-        skipped all connections and deadends broke.
+
+        IMPORTANT: Node keys MUST match create_node_table / connect_horizontally /
+        connect_vertically: same (col,row) -> construct_key then y += yoffset.
+        Using construct_key(..., row+yoffset, ...) or yoffset=0 breaks lookup and
+        portals never connect (deadends fail).
         """
-        # Find all 'P' nodes
+        # Find all 'P' nodes (pixel coords must match nodes_lut keys exactly)
         portal_keys = []
         for row in range(data.shape[0]):
             for col in range(data.shape[1]):
                 if data[row][col] == 'P':
-                    x, y = NodeGroup.construct_key(col + xoffset, row + yoffset, tile_size)
+                    x, y = NodeGroup.construct_key(col + xoffset, row, tile_size)
+                    y += yoffset
                     portal_keys.append((x, y))
 
         if not portal_keys:
