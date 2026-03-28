@@ -1,8 +1,77 @@
+import os
+from typing import List, Tuple
+
 import jax
 import jax.numpy as jnp
+import numpy as np
 from functools import partial
+
 from jaxatari.games.jax_pacman import PacmanState
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
+
+
+# Level order when using multi_maze_campaign (geometry: {name}.txt, pellets: {name}_pellet.txt if present).
+DEFAULT_PACMAN_MAZE_LEVEL_BASENAMES: Tuple[str, ...] = (
+    "maze_atari",
+    "maze1",
+    "maze2",
+    "maze3",
+    "maze4",
+)
+
+
+def resolve_pacman_maze_level_specs(
+    pacman_maps_dir: str,
+    basenames: Tuple[str, ...] = DEFAULT_PACMAN_MAZE_LEVEL_BASENAMES,
+) -> List[Tuple[str, str]]:
+    """Build (geometry_path, pellet_layout_path) for each existing maze file."""
+    specs: List[Tuple[str, str]] = []
+    for base in basenames:
+        geom = os.path.join(pacman_maps_dir, f"{base}.txt")
+        if not os.path.isfile(geom):
+            continue
+        pellet = os.path.join(pacman_maps_dir, f"{base}_pellet.txt")
+        if not os.path.isfile(pellet):
+            pellet = geom
+        specs.append((geom, pellet))
+    return specs
+
+
+class MultiMazeCampaignMod(JaxAtariInternalModPlugin):
+    """
+    Multi-map campaign: clearing all pellets advances to the next preloaded maze (wrapped).
+    After the last maze, the run wraps to the first map, level resets to 1, and score resets to 0.
+
+    Requires at least two maze files for DEFAULT_PACMAN_MAZE_LEVEL_BASENAMES under pacmanMaps/;
+    otherwise attach_to_env is a no-op (base env stays single-maze).
+    """
+
+    @staticmethod
+    def attach_to_env(env) -> None:
+        from jaxatari.games import jax_pacman as jpm
+
+        if not isinstance(env, jpm.JaxPacman):
+            return
+        pacman_maps_dir = os.path.join(os.path.dirname(jpm.__file__), "pacmanMaps")
+        level_specs = resolve_pacman_maze_level_specs(pacman_maps_dir)
+        if len(level_specs) <= 1:
+            return
+
+        layouts = []
+        vitamin_tiles: List[Tuple[int, int]] = []
+        exp_h, exp_w = env.consts.MAZE_HEIGHT, env.consts.MAZE_WIDTH
+        for _geom_path, pellet_path in level_specs:
+            layout, vr, vc = env._parse_maze_layout_from_file(pellet_path)
+            arr = np.asarray(layout)
+            if arr.shape != (exp_h, exp_w):
+                raise ValueError(
+                    f"Maze layout shape {arr.shape} from {pellet_path} "
+                    f"does not match ({exp_h}, {exp_w})"
+                )
+            layouts.append(layout)
+            vitamin_tiles.append((vr, vc))
+
+        env.reload_maze_campaign(level_specs, layouts, vitamin_tiles)
 
 
 # Part 1: Simple Modifications
@@ -164,20 +233,11 @@ class LimitedVisionMod(JaxAtariInternalModPlugin):
 
                 center_x = state.player_x - 4
                 center_y = state.player_y
-                center2_x = state.player2_x - 4
-                center2_y = state.player2_y
 
                 dx = xx - center_x
                 dy = yy - center_y
-                dx2 = xx - center2_x
-                dy2 = yy - center2_y
                 radius_sq = jnp.array(radius_px * radius_px, dtype=jnp.int32)
-                visible_p1 = (dx * dx + dy * dy) <= radius_sq
-                visible_p2 = (dx2 * dx2 + dy2 * dy2) <= radius_sq
-                visible = jnp.logical_or(
-                    visible_p1,
-                    jnp.logical_and(state.multiplayer_active == 1, visible_p2),
-                )
+                visible = (dx * dx + dy * dy) <= radius_sq
                 visible = visible[..., None]
 
                 base = frame.astype(jnp.uint16)
@@ -197,20 +257,11 @@ class LimitedVisionMod(JaxAtariInternalModPlugin):
         obs = type(self._env)._get_observation(self._env, state)
 
         ghosts = obs.ghosts
-        dx1 = ghosts[:, 0] - state.player_x
-        dy1 = ghosts[:, 1] - state.player_y
-        dist_sq_p1 = dx1 * dx1 + dy1 * dy1
-
-        dx2 = ghosts[:, 0] - state.player2_x
-        dy2 = ghosts[:, 1] - state.player2_y
-        dist_sq_p2 = dx2 * dx2 + dy2 * dy2
-
+        dx = ghosts[:, 0] - state.player_x
+        dy = ghosts[:, 1] - state.player_y
+        dist_sq = dx * dx + dy * dy
         max_dist_sq = jnp.array(self.VISION_RADIUS_PX * self.VISION_RADIUS_PX, dtype=jnp.int32)
-        visible = dist_sq_p1 <= max_dist_sq
-        visible = jnp.logical_or(
-            visible,
-            jnp.logical_and(state.multiplayer_active == 1, dist_sq_p2 <= max_dist_sq),
-        )
+        visible = dist_sq <= max_dist_sq
 
         hidden_row = jnp.zeros((1, ghosts.shape[1]), dtype=ghosts.dtype)
         hidden_ghosts = jnp.repeat(hidden_row, ghosts.shape[0], axis=0)
@@ -222,8 +273,8 @@ class LimitedVisionMod(JaxAtariInternalModPlugin):
 class CoopMultiplayerMod(JaxAtariPostStepModPlugin):
     """
     Cooperative-style mode.
-    Enables player2 support in the base Pacman state and places both players on
-    valid nodes after reset.
+    Full multi-agent Pacman support requires broader base-env changes; this mod keeps
+    gameplay JAX-safe by adding a support bonus (extra life) and randomizing spawn.
     """
     def _find_nearest_node_idx_jax(self, x: jax.Array, y: jax.Array) -> jax.Array:
         node_x = jnp.asarray(self._env.node_positions_x, dtype=jnp.int32)
@@ -250,32 +301,14 @@ class CoopMultiplayerMod(JaxAtariPostStepModPlugin):
         spawn_py = (spawn_y_tile * self._env.consts.TILE_SIZE) + (self._env.consts.TILE_SIZE // 2)
         
         spawn_node_idx = self._find_nearest_node_idx_jax(spawn_px, spawn_py)
-        spawn_node_x = jnp.asarray(self._env.node_positions_x, dtype=jnp.int32)[spawn_node_idx]
-        spawn_node_y = jnp.asarray(self._env.node_positions_y, dtype=jnp.int32)[spawn_node_idx]
-
-        # Keep player2 close but not identical to player1.
-        spawn2_x_tile = jnp.clip(spawn_x_tile + 2, 0, w - 1)
-        spawn2_y_tile = spawn_y_tile
-        spawn2_px = (spawn2_x_tile * self._env.consts.TILE_SIZE) + (self._env.consts.TILE_SIZE // 2)
-        spawn2_py = (spawn2_y_tile * self._env.consts.TILE_SIZE) + (self._env.consts.TILE_SIZE // 2)
-        spawn2_node_idx = self._find_nearest_node_idx_jax(spawn2_px, spawn2_py)
-        spawn2_node_x = jnp.asarray(self._env.node_positions_x, dtype=jnp.int32)[spawn2_node_idx]
-        spawn2_node_y = jnp.asarray(self._env.node_positions_y, dtype=jnp.int32)[spawn2_node_idx]
         
         new_state = state._replace(
             key=rng_key,
-            multiplayer_active=jnp.array(1, dtype=jnp.int32),
             lives=jnp.maximum(state.lives, jnp.array(2, dtype=jnp.int32)),
-            player_x=spawn_node_x,
-            player_y=spawn_node_y,
+            player_x=spawn_px.astype(jnp.int32),
+            player_y=spawn_py.astype(jnp.int32),
             player_current_node_index=spawn_node_idx.astype(jnp.int32),
             player_target_node_index=spawn_node_idx.astype(jnp.int32),
-            player2_x=spawn2_node_x,
-            player2_y=spawn2_node_y,
-            player2_direction=jnp.array(0, dtype=jnp.int32),
-            player2_last_horizontal_dir=jnp.array(0, dtype=jnp.int32),
-            player2_current_node_index=spawn2_node_idx.astype(jnp.int32),
-            player2_target_node_index=spawn2_node_idx.astype(jnp.int32),
         )
         
         return self._env._get_observation(new_state), new_state
