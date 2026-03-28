@@ -333,8 +333,8 @@ class TutankhamConstants(struct.PyTreeNode):
         ],
         # MAP 3
         [
-            [0, 244, 16, 93],
-            [245, 395, 39, 248],
+            [0, 239, 16, 93],
+            [240, 395, 39, 248],
             [396, 549, 78, 396],
             [550, 800, 98, 550]
         ],
@@ -418,31 +418,31 @@ class TutankhamConstants(struct.PyTreeNode):
     MAP_TELEPORTER_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         # MAP 1
         [
-            [128, 152, Action.LEFT, 27, 152], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
-            [27, 152, Action.RIGHT, 128, 152],
-            [144, 604, Action.LEFT, 11, 604],
-            [11, 604, Action.RIGHT, 144, 604]
+            [128, 152, Action.LEFT, 28, 152], #[x_in, y_in, trigger_on (left or right action input), x_out, y_out]
+            [28, 152, Action.RIGHT, 128, 152],
+            [144, 604, Action.LEFT, 12, 604],
+            [12, 604, Action.RIGHT, 144, 604]
         ],
         # MAP 2
         [
-            [59, 340, Action.RIGHT, 96, 340],
-            [96, 340, Action.LEFT, 59, 340],
+            [60, 340, Action.RIGHT, 96, 340],
+            [96, 340, Action.LEFT, 60, 340],
             [0, 0, 0, 0, 0], # Padding for maps with fewer teleporters
             [0, 0, 0, 0, 0]
         ],
         # MAP 3
         [
-            [136, 292, Action.LEFT, 19, 292],
-            [19, 292, Action.RIGHT, 136, 292],
+            [137, 292, Action.LEFT, 20, 292],
+            [20, 292, Action.RIGHT, 137, 292],
             [0, 0, 0, 0, 0], # Padding for maps with fewer teleporters
             [0, 0, 0, 0, 0]
         ],
         # MAP 4
         [
-            [55, 148, Action.RIGHT, 100, 148],
-            [100, 148, Action.LEFT, 55, 148],
-            [132, 372, Action.LEFT, 23, 372],
-            [23, 372, Action.RIGHT, 132, 372]
+            [56, 148, Action.RIGHT, 100, 148],
+            [100, 148, Action.LEFT, 56, 148],
+            [132, 372, Action.LEFT, 24, 372],
+            [24, 372, Action.RIGHT, 132, 372]
         ]
     ], dtype=jnp.int32))
 
