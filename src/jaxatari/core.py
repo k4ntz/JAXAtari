@@ -29,6 +29,7 @@ GAME_MODULES = {
     "klax": "jaxatari.games.jax_klax",
     "lasergates": "jaxatari.games.jax_lasergates",
     "namethisgame": "jaxatari.games.jax_namethisgame",
+    "pacman": "jaxatari.games.jax_pacman",
     "phoenix": "jaxatari.games.jax_phoenix",
     "pong": "jaxatari.games.jax_pong",
     "riverraid": "jaxatari.games.jax_riverraid",
@@ -48,6 +49,7 @@ GAME_MODULES = {
     "videocube": "jaxatari.games.jax_videocube",
     "videopinball": "jaxatari.games.jax_videopinball",
     "wordzapper": "jaxatari.games.jax_wordzapper",
+    "pacman": "jaxatari.games.jax_pacman",
     # Add new games here
 }
 
@@ -58,6 +60,7 @@ MOD_MODULES = {
     "freeway": "jaxatari.games.mods.freeway_mods.FreewayEnvMod",
     "breakout": "jaxatari.games.mods.breakout_mods.BreakoutEnvMod",
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
+    "pacman": "jaxatari.games.mods.pacman_mods.PacmanEnvMod",
 }
 
 
