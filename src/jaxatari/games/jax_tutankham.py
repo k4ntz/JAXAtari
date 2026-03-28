@@ -447,7 +447,7 @@ class TutankhamConstants(struct.PyTreeNode):
     ], dtype=jnp.int32))
 
     # define goal zones for each map
-    GOAL_SIZE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([5, 5], dtype=jnp.int32))  #TODO: adjust based on actual goal sprite size
+    GOAL_SIZE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([7, 12], dtype=jnp.int32))
     MAP_GOAL_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         [[18, 684]],  # MAP 1
         [[19, 634]],  # MAP 2
