@@ -41,6 +41,12 @@ pip install -U "jax[cuda12]"
 
 For other accelerator types, please follow the instructions [here](https://docs.jax.dev/en/latest/installation.html).
 
+**Note**: Next, you need to download the original Atari 2600 sprites. Before downloading, you will be asked to confirm ownership of the original ROMs.
+
+```bash
+.venv/bin/install_sprites
+```
+
 ## Usage
 
 ### Basic Environment Creation
@@ -207,6 +213,19 @@ Contributions are welcome!
 4. Push to the branch: `git push origin feature/my-feature`  
 5. Open a pull request  
 
+---
+## Cite us
+
+```bibtex
+@misc{jaxatari2026,
+  author = {Delfosse, Quentin and Emunds, Raban and Seitz, Paul and Wette, Sebastian and Bl{\"u}ml, Jannis and Kersting, Kristian},
+  title = {JAXAtari: A High-Performance Framework for Reasoning agents},
+  year = {2026},
+  publisher = {GitHub},
+  journal = {GitHub repository},
+  howpublished = {https://github.com/k4ntz/JAXAtari/},
+}
+```
 ---
 
 ## License

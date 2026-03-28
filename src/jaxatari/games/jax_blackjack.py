@@ -18,6 +18,7 @@ from typing import NamedTuple, Tuple
 import chex
 import jax
 import jax.numpy as jnp
+from flax import struct
 
 from jaxatari.environment import JAXAtariAction as Action
 from jaxatari.environment import JaxEnvironment
@@ -56,17 +57,17 @@ def _get_default_asset_config() -> tuple:
     return config
 
 
-class BlackjackConstants(NamedTuple):
+class BlackjackConstants(struct.PyTreeNode):
     WIDTH: int = 160
     HEIGHT: int = 210
-    INITIAL_PLAYER_SCORE = jnp.array(200).astype(jnp.int32)
-    INITIAL_PLAYER_BET = jnp.array(1).astype(jnp.int32)
-    CARD_VALUES = jnp.array([2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 0])
-    SKIP_FRAMES = 0
+    INITIAL_PLAYER_SCORE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(200).astype(jnp.int32))
+    INITIAL_PLAYER_BET: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1).astype(jnp.int32))
+    CARD_VALUES: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 0]))
+    SKIP_FRAMES: int = struct.field(pytree_node=False, default=0)
     """ Determines whether frames are skipped: 0 = no, 1 = yes """
-    CARD_SHUFFLING_RULE = 0
+    CARD_SHUFFLING_RULE: int = struct.field(pytree_node=False, default=0)
     """ Determines when the cards are being shuffled: 0 = after every round, 1 = after drawing 34 cards """
-    PLAYING_RULE = 0
+    PLAYING_RULE: int = struct.field(pytree_node=False, default=0)
     """ Determines the playing rules, 0 = Casino Rules, 1 = Private Rules 
     
     CASINO BLACK JACK RULES:
@@ -83,11 +84,11 @@ class BlackjackConstants(NamedTuple):
     - A player wins the game when he hits four times without busting.
     """
     # Asset config baked into constants
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: Tuple[dict, ...] = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
 
 
-class BlackjackState(NamedTuple):
+class BlackjackState(struct.PyTreeNode):
     # Format: [n, n, 0, 0, 0, 0] (Array has a size of 6)
     # 0 -> no card currently
     # n Values: 01 -> B2            14 -> B2            27 -> R2            40 -> R2
@@ -131,7 +132,7 @@ class BlackjackState(NamedTuple):
     """ Contains a target tick count. The game will not continue until the tick count is reached """
 
 
-class BlackjackObservation(NamedTuple):
+class BlackjackObservation(struct.PyTreeNode):
     player_score: jnp.ndarray
     """ The player score """
     player_bet: jnp.ndarray
@@ -146,21 +147,21 @@ class BlackjackObservation(NamedTuple):
     """
 
 
-class BlackjackInfo(NamedTuple):
+class BlackjackInfo(struct.PyTreeNode):
     time: jnp.ndarray
 
 
 class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, BlackjackInfo, BlackjackConstants]):
+    # Minimal action set for Blackjack: 0=NOOP, 1=FIRE, 2=UP, 3=DOWN
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.FIRE, Action.UP, Action.DOWN],
+        dtype=jnp.int32,
+    )
+    
     def __init__(self, consts: BlackjackConstants = None):
         super().__init__()
         self.consts = consts or BlackjackConstants()
         self.renderer = BlackjackRenderer(self.consts)
-        self.action_set = [
-            Action.NOOP,
-            Action.FIRE,
-            Action.UP,
-            Action.DOWN
-        ]
         self.obs_size = 5
 
     @partial(jax.jit, static_argnums=(0,))
@@ -209,17 +210,17 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
         return jnp.array(card_sum).astype(jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _select_bet_value(self, state: BlackjackState, action: chex.Array) -> BlackjackState:
+    def _select_bet_value(self, state: BlackjackState, atari_action: chex.Array) -> BlackjackState:
         """ Step 1: Select bet value with Up/Down and confirm with Fire (and reset displayed cards) """
         # Check if the action is Up, Down or Fire
-        up = action == Action.UP
-        down = action == Action.DOWN
-        fire = action == Action.FIRE
+        up = atari_action == Action.UP
+        down = atari_action == Action.DOWN
+        fire = atari_action == Action.FIRE
 
         new_player_bet = jnp.select(
             condlist=[
-                jnp.logical_and(action == Action.UP, state.player_bet < state.player_score),
-                action == Action.DOWN
+                jnp.logical_and(atari_action == Action.UP, state.player_bet < state.player_score),
+                atari_action == Action.DOWN
             ],
             choicelist=[
                 # If Up is pressed, increase bet by 1
@@ -239,7 +240,7 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
             operand=(state.state_counter, state.cards_player, state.cards_player_counter, state.cards_dealer, state.cards_dealer_counter)
         )
 
-        new_skip_state = jnp.where(action != Action.NOOP, state.step_counter + 6, state.step_counter + 1)
+        new_skip_state = jnp.where(atari_action != Action.NOOP, state.step_counter + 6, state.step_counter + 1)
 
         new_state = BlackjackState(
             player_score=state.player_score,
@@ -261,7 +262,7 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
 
         return jax.lax.cond(
             pred=new_state.state_counter == 2,
-            true_fun=lambda s: self._draw_initial_cards(s, action),
+            true_fun=lambda s: self._draw_initial_cards(s, atari_action),
             false_fun=lambda s: s,
             operand=new_state
         )
@@ -325,7 +326,7 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _select_next_action(self, state: BlackjackState, action: chex.Array) -> BlackjackState:
+    def _select_next_action(self, state: BlackjackState, atari_action: chex.Array) -> BlackjackState:
         """ Step 3: Select hit, stay or double with Up/Down and confirm with Fire """
         player_cards_sum = self._calculate_card_value_sum(state.cards_player)
 
@@ -341,7 +342,7 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
 
         # player action to select: 0 = stay, 1 = double, 2 = hit
         new_player_action = jax.lax.cond(
-            pred=jnp.logical_or(jnp.logical_and(action == Action.UP, state.player_action == 2), jnp.logical_and(action == Action.DOWN, state.player_action == 0)),
+            pred=jnp.logical_or(jnp.logical_and(atari_action == Action.UP, state.player_action == 2), jnp.logical_and(atari_action == Action.DOWN, state.player_action == 0)),
             true_fun=lambda op: op[0],
             false_fun=lambda op: jax.lax.cond(
                 pred=jnp.logical_and(op[0] == (op[1] == Action.DOWN) * 2, op[2]),
@@ -349,15 +350,15 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
                 false_fun=lambda o: o[0] + 1 * (o[1] == Action.UP) - 1 * (o[1] == Action.DOWN),
                 operand=(op[0], op[1], op[2])
             ),
-            operand=(state.player_action, action, block_double)
+            operand=(state.player_action, atari_action, block_double)
         )
 
         new_state_counter = jnp.select(
             condlist=[
                 state.cards_player_counter >= 6,
-                jnp.logical_and(action == Action.FIRE, state.player_action == 0),
-                jnp.logical_and(action == Action.FIRE, state.player_action == 1),
-                jnp.logical_and(action == Action.FIRE, state.player_action == 2)
+                jnp.logical_and(atari_action == Action.FIRE, state.player_action == 0),
+                jnp.logical_and(atari_action == Action.FIRE, state.player_action == 1),
+                jnp.logical_and(atari_action == Action.FIRE, state.player_action == 2)
             ],
             choicelist=[
                 jnp.array(10).astype(jnp.int32),
@@ -368,7 +369,7 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
             default=state.state_counter
         )
 
-        new_skip_step = jnp.where(action != Action.NOOP, state.step_counter + 11, state.step_counter + 1)
+        new_skip_step = jnp.where(atari_action != Action.NOOP, state.step_counter + 11, state.step_counter + 1)
 
         new_state = BlackjackState(
             player_score=state.player_score,
@@ -394,19 +395,19 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
                 # Step 3
                 lambda s: s,
                 # Step 4
-                lambda s: self._execute_hit(s, action),
+                lambda s: self._execute_hit(s, atari_action),
                 # Step 5
-                lambda s: self._execute_stay(s, action),
+                lambda s: self._execute_stay(s, atari_action),
                 # Step 6
-                lambda s: self._execute_double(s, action),
+                lambda s: self._execute_double(s, atari_action),
                 # Step 10
-                lambda s: self._check_winner(s, action)
+                lambda s: self._check_winner(s, atari_action)
             ],
             operand=new_state
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _execute_hit(self, state: BlackjackState, action: chex.Array) -> BlackjackState:
+    def _execute_hit(self, state: BlackjackState, atari_action: chex.Array) -> BlackjackState:
         """ Step 4: Execute hit """
         # Sample a new card from the permutation array
         card = state.cards_permutation[state.card_permutation_counter]
@@ -439,17 +440,17 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
             skip_step=new_skip_step
         )
 
-        return self._check_player_bust(new_state, action)
+        return self._check_player_bust(new_state, atari_action)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _execute_stay(self, state: BlackjackState, action: chex.Array) -> BlackjackState:
+    def _execute_stay(self, state: BlackjackState, atari_action: chex.Array) -> BlackjackState:
         """ Step 5: Execute stay """
         # change the next step to state 8
         new_state_counter = jnp.array(8).astype(jnp.int32)
-        return self._check_dealer_draw(state, action)
+        return self._check_dealer_draw(state, atari_action)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _execute_double(self, state: BlackjackState, action: chex.Array) -> BlackjackState:
+    def _execute_double(self, state: BlackjackState, atari_action: chex.Array) -> BlackjackState:
         """ Step 6: Execute double """
         # Double the bet
         new_player_bet = jnp.array(state.player_bet * 2).astype(jnp.int32)
@@ -489,13 +490,13 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
 
         return jax.lax.cond(
             pred=new_state.state_counter == 8,
-            true_fun=lambda s: self._check_dealer_draw(s, action),
-            false_fun=lambda s: self._check_winner(s, action),
+            true_fun=lambda s: self._check_dealer_draw(s, atari_action),
+            false_fun=lambda s: self._check_winner(s, atari_action),
             operand=new_state,
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _check_player_bust(self, state: BlackjackState, action: chex.Array) -> BlackjackState:
+    def _check_player_bust(self, state: BlackjackState, atari_action: chex.Array) -> BlackjackState:
         """ Step 7: Check if player has 21 or more """
         player_cards_sum = self._calculate_card_value_sum(state.cards_player)
 
@@ -536,9 +537,9 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
             index=new_state_counter - 8 + 8 * (new_state_counter == 3) - 1 * (new_state_counter == 10),
             branches=[
                 # Step 8
-                lambda s: self._check_dealer_draw(s, action),
+                lambda s: self._check_dealer_draw(s, atari_action),
                 # Step 10
-                lambda s: self._check_winner(s, action),
+                lambda s: self._check_winner(s, atari_action),
                 # Step 3
                 lambda s: s
             ],
@@ -546,7 +547,7 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _check_dealer_draw(self, state: BlackjackState, action: chex.Array) -> BlackjackState:
+    def _check_dealer_draw(self, state: BlackjackState, atari_action: chex.Array) -> BlackjackState:
         """ Step 8: Check if dealer should take a card """
         card_sum = self._calculate_card_value_sum(state.cards_dealer)
         condition = jnp.array([
@@ -562,13 +563,13 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
 
         return jax.lax.cond(
             pred=new_state_counter == 10,
-            true_fun=lambda s: self._check_winner(s, action),
-            false_fun=lambda s: self._execute_dealer_draw(s, action),
+            true_fun=lambda s: self._check_winner(s, atari_action),
+            false_fun=lambda s: self._execute_dealer_draw(s, atari_action),
             operand=state
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _execute_dealer_draw(self, state: BlackjackState, action: chex.Array) -> BlackjackState:
+    def _execute_dealer_draw(self, state: BlackjackState, atari_action: chex.Array) -> BlackjackState:
         """ Step 9: Give dealer a card """
         # Sample a new card from the permutation array
         card = state.cards_permutation[state.card_permutation_counter]
@@ -604,7 +605,7 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
         return new_state
 
     @partial(jax.jit, static_argnums=(0,))
-    def _check_winner(self, state: BlackjackState, action: chex.Array) -> BlackjackState:
+    def _check_winner(self, state: BlackjackState, atari_action: chex.Array) -> BlackjackState:
         """ Step 10: Check winner """
         hand_player = self._calculate_card_value_sum(state.cards_player)
         hand_dealer = self._calculate_card_value_sum(state.cards_dealer)
@@ -718,6 +719,8 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: BlackjackState, action: chex.Array) -> Tuple[BlackjackObservation, BlackjackState, float, bool, BlackjackInfo]:
+        # Translate agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         new_state = jax.lax.cond(
             pred=jnp.logical_or(self.consts.SKIP_FRAMES == 1, state.step_counter >= state.skip_step),
             true_fun= lambda s: jax.lax.switch(
@@ -734,7 +737,7 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
                     lambda op: self._execute_dealer_draw(op[0], op[1]),
                     lambda op: self._check_winner(op[0], op[1])
                 ],
-                (s, action)
+                (s, atari_action)
             ),
             false_fun= lambda s: BlackjackState(
                 player_score=s.player_score,
@@ -768,7 +771,7 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
         return state.player_score - previous_state.player_score
 
     def action_space(self) -> Discrete:
-        return Discrete(len(self.action_set))
+        return Discrete(len(self.ACTION_SET))
 
     def image_space(self) -> Box:
         return Box(0, 255, shape=(self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
@@ -781,15 +784,6 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
             "dealer_current_card_sum": Box(0, 30, (), jnp.int32),
             "label": Box(0, 8, (), jnp.int32)
         })
-
-    def obs_to_flat_array(self, obs: BlackjackObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            obs.player_score.flatten(),
-            obs.player_bet.flatten(),
-            obs.player_current_card_sum.flatten(),
-            obs.dealer_current_card_sum.flatten(),
-            obs.label.flatten()
-        ])
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: BlackjackState) -> jnp.ndarray:
@@ -844,18 +838,21 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
 
 
 class BlackjackRenderer(JAXGameRenderer):
-    def __init__(self, consts: BlackjackConstants = None):
-        super().__init__()
+    def __init__(self, consts: BlackjackConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or BlackjackConstants()
-        # 1. Configure the renderer
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-            #downscale=(84, 84)
-        )
+        super().__init__(self.consts)
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         # 2. Define asset path
-        sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites/blackjack")
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "blackjack")
         # 3. Load all assets using the manifest from constants
         final_asset_config = list(self.consts.ASSET_CONFIG)
         

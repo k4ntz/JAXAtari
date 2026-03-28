@@ -518,17 +518,25 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
 
 
 class TicTacToe3DRenderer(JAXGameRenderer):
-    def __init__(self, consts: TicTacToe3DConstants | None = None, config=None, **kwargs):
+    def __init__(
+            self,
+            consts: TicTacToe3DConstants = None,
+            config: render_utils.RendererConfig = None
+        ):
+        super().__init__(consts)
+
         self.consts = consts or TicTacToe3DConstants()
 
-        config = config or render_utils.RendererConfig(
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
             game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
             channels=3,
-        )
+            downscale=None
+            )
+        else:
+            self.config = config
 
-        super().__init__(config=config, **kwargs)
-
-        self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         final_asset_config = list(self.consts.ASSET_CONFIG)
@@ -536,18 +544,18 @@ class TicTacToe3DRenderer(JAXGameRenderer):
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tictactoe3d"
 
         (
-            self.PALETTE,
-            self.SHAPE_MASKS,
-            self.BACKGROUND,
-            self.COLOR_TO_ID,
-            self.FLIP_OFFSETS,
-        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+                self.PALETTE,
+                self.SHAPE_MASKS,
+                self.BACKGROUND,
+                self.COLOR_TO_ID,
+                self.FLIP_OFFSETS,
+            ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
         self.x_mask = self.SHAPE_MASKS["x"]
         self.o_mask = self.SHAPE_MASKS["o"]
         self.cursor_mask = self.SHAPE_MASKS["cursor"]
         self.blocker_mask = self.SHAPE_MASKS["blocker"]
-        
+                
 
     def cell_to_pixel(self, x, y, z):
         px = self.consts.PIXEL_COORDS[z, y, x, 0]
@@ -562,7 +570,7 @@ class TicTacToe3DRenderer(JAXGameRenderer):
 
     def render(self, state):
         def render_black(_):
-            return jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
+            raster = self.jr.create_object_raster(self.BACKGROUND)
 
         def render_normal(_):
             raster = self.jr.create_object_raster(self.BACKGROUND)
