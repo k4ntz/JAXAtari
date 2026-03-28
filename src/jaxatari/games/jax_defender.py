@@ -83,7 +83,7 @@ class DefenderConstants(struct.PyTreeNode):
     ## ENTITY
 
     # Space Ship
-    SPACE_SHIP_WIDTH: int = 13
+    SPACE_SHIP_WIDTH: int = 7
     SPACE_SHIP_HEIGHT: int = 5
     SPACE_SHIP_INIT_GAME_X: float = 200
     SPACE_SHIP_INIT_GAME_Y: float = 80
@@ -1957,6 +1957,32 @@ class JaxDefender(
         return enemy_states
 
     def _reset_player(self, state: DefenderState) -> DefenderState:
+        # Check for enemy on init spot and place it somewhere else
+        enemy_replace_x = 80.0
+        enemy_replace_y = 50.0
+
+        def enemy_replace(enemy: chex.Array):
+            is_on_spot = self._is_colliding(
+                enemy[0],
+                enemy[1],
+                self.consts.ENEMY_WIDTH,
+                self.consts.ENEMY_HEIGHT,
+                self.consts.SPACE_SHIP_INIT_GAME_X - enemy_replace_x / 2,
+                self.consts.SPACE_SHIP_INIT_GAME_Y - enemy_replace_y / 2,
+                enemy_replace_x,
+                enemy_replace_y,
+            )
+            is_alive = jnp.logical_or(
+                enemy[2] != self.consts.INACTIVE, enemy[2] != self.consts.DEAD
+            )
+            should_replace = jnp.logical_and(is_on_spot, is_alive)
+            new_x = self.consts.SPACE_SHIP_INIT_GAME_X / 4
+            new_y = self.consts.SPACE_SHIP_INIT_GAME_Y / 4
+            enemy = enemy.at[0].set(jnp.where(should_replace, new_x, enemy[0]))
+            enemy = enemy.at[1].set(jnp.where(should_replace, new_y, enemy[1]))
+            return enemy
+
+        enemy_states = jax.vmap(enemy_replace, in_axes=(0))(state.enemy_states)
         state = state._replace(
             game_state=self.consts.GAME_STATE_PLAYING,
             camera_offset=self.consts.CAMERA_INIT_OFFSET,
@@ -1965,6 +1991,9 @@ class JaxDefender(
             space_ship_y=jnp.array(self.consts.SPACE_SHIP_INIT_GAME_Y).astype(jnp.float32),
             space_ship_facing_right=self.consts.SPACE_SHIP_INIT_FACE_RIGHT,
             shooting_cooldown=0,
+            bullet_active=False,
+            laser_active=False,
+            enemy_states=enemy_states,
         )
         return state
 
