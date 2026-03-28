@@ -1713,16 +1713,10 @@ class JaxDefender(
         return state
 
     def _check_level_done(self, state: DefenderState) -> DefenderState:
-        enemy_killed = state.enemy_killed
-        needed_kills = jnp.asarray(
-            [
-                self.consts.LANDER_LEVEL_AMOUNT[state.level],
-                self.consts.POD_LEVEL_AMOUNT[state.level],
-                self.consts.BOMBER_LEVEL_AMOUNT[state.level],
-            ]
-        )
-        is_done = jnp.array_equal(enemy_killed, needed_kills)
-        state = jax.lax.cond(is_done, lambda: self._end_level(state), lambda: state)
+        enemy_types = state.enemy_states[:, 2].astype(jnp.int32)
+        enemy_counts = jnp.bincount(enemy_types, length=8)
+        all_enemies_killed = jnp.all(enemy_counts[1:6] == 0)  # Check if all landers, pods and bombers are killed
+        state = jax.lax.cond(all_enemies_killed, lambda: self._end_level(state), lambda: state)
         return state
 
     def _calculate_score(self, state: DefenderState, enemy_state: chex.Array):
