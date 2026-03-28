@@ -114,7 +114,8 @@ class TicTacToe3DState(NamedTuple):
     current_player: jnp.ndarray 
     game_over: jnp.ndarray      
     winner: jnp.ndarray         
-    move_count: jnp.ndarray     
+    move_count: jnp.ndarray  
+    cpu_opening_pending: jnp.ndarray   
     cursor_x: jnp.ndarray
     cursor_y: jnp.ndarray
     cursor_z: jnp.ndarray
@@ -195,6 +196,7 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
             game_over=jnp.bool_(False),
             winner=jnp.int32(0),
             move_count=jnp.int32(0),
+            cpu_opening_pending=jnp.bool_(True),
             cursor_x=jnp.int32(0),
             cursor_y=jnp.int32(0),
             cursor_z=jnp.int32(0),
@@ -288,7 +290,10 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
         # --- Normal User Play Logic ---
         def handle_normal_play(s):
             board = s.board
-            is_first_turn = jnp.logical_and(s.move_count == 0, jnp.logical_not(s.game_over))
+            is_first_turn = jnp.logical_and(
+                s.cpu_opening_pending,
+                jnp.logical_not(s.game_over)
+            )
 
             opening_z, opening_y, opening_x = jnp.int32(2), jnp.int32(1), jnp.int32(1)
             opening_is_empty = board[opening_z, opening_y, opening_x] == self.consts.EMPTY
@@ -328,7 +333,9 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
 
             new_state = s._replace(
                 board=board_after_user, current_player=jnp.int32(self.consts.PLAYER_X),
-                move_count=move_count_after_user, cursor_x=cx, cursor_y=cy, cursor_z=cz,
+                move_count=move_count_after_user,
+                cpu_opening_pending=jnp.bool_(False),
+                cursor_x=cx, cursor_y=cy, cursor_z=cz,
                 last_cpu_x=last_cpu_x_after_opening, last_cpu_y=last_cpu_y_after_opening, last_cpu_z=last_cpu_z_after_opening,
                 last_move_x=jnp.where(can_place, cx, s.last_move_x),
                 last_move_y=jnp.where(can_place, cy, s.last_move_y),

@@ -58,3 +58,24 @@ class RandomStaticBlockersMod(JaxAtariPostStepModPlugin):
         modified_obs = self._env._get_observation(modified_state)
 
         return modified_obs, modified_state
+
+
+class RandomTurnOrderMod(JaxAtariPostStepModPlugin):
+    """
+    Randomly assigns whether the agent starts first or the CPU starts first.
+    """
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        key, coin_key, next_key = jax.random.split(state.key, 3)
+
+        # True -> agent starts first
+        agent_starts = jax.random.bernoulli(coin_key, 0.5)
+
+        modified_state = state._replace(
+            cpu_opening_pending=jnp.logical_not(agent_starts),
+            key=next_key
+        )
+
+        modified_obs = self._env._get_observation(modified_state)
+        return modified_obs, modified_state
