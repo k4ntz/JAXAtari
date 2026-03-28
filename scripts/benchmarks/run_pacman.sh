@@ -17,15 +17,22 @@ JAX_PIP_SPEC="${JAX_PIP_SPEC:-${DEFAULT_JAX_PIP_SPEC}}"
 WANDB_MODE="${WANDB_MODE:-offline}"
 ENTITY="${ENTITY:-}"
 PROJECT="${PROJECT:-jaxatari-pacman-report}"
-SAVE_PATH="${SAVE_PATH:-${REPO_ROOT}/models}"
+SAVE_PATH="${SAVE_PATH:-}"
 SEED="${SEED:-0}"
 NUM_SEEDS="${NUM_SEEDS:-1}"
-VIDEO_STEPS="${VIDEO_STEPS:-1200}"
+VIDEO_STEPS="${VIDEO_STEPS:-}"
+RECORD_FINAL_VIDEO="${RECORD_FINAL_VIDEO:-1}"
+VIDEO_MAX_STEPS_OBJECT="${VIDEO_MAX_STEPS_OBJECT:-3000}"
+VIDEO_MAX_STEPS_PIXEL="${VIDEO_MAX_STEPS_PIXEL:-1000}"
 PACMAN_MODS="${PACMAN_MODS:-}"
 OUT_DIR="${OUT_DIR:-${REPO_ROOT}/report_outputs/pacman_report_$(date +%Y%m%d_%H%M%S)}"
 
 WITH_PPO=0
-QUICK=1
+# QUICK mode selection:
+#   1  -> quick profile
+#   0  -> full profile
+#  -1  -> use config values as-is (default)
+QUICK=-1
 SKIP_PREFLIGHT=0
 SKIP_TRAIN=0
 SKIP_VIDEO=0
@@ -39,18 +46,20 @@ PPO_TOTAL_TIMESTEPS_OVERRIDE=""
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/benchmarks/run_report_pacman_full.sh [options]
+  scripts/benchmarks/run_pacman.sh [options]
 
 Options:
-  --quick                 Fast demo run (default).
-  --full                  Larger run for final report.
+  --quick                 Fast demo profile (overrides core train hyperparameters).
+  --full                  Larger report profile (overrides core train hyperparameters).
+                          If neither is set, config values are used as-is (default).
   --with-ppo              Also run PPO training (optional section in report).
   --video-model MODE      MODE in {pixel,object,both}. Default: pixel.
-  --ppo-num-envs N        Override PPO NUM_ENVS for both object/pixel runs.
-  --ppo-num-steps N       Override PPO NUM_STEPS for both object/pixel runs.
-  --ppo-total-steps N     Override PPO TOTAL_TIMESTEPS for both object/pixel runs.
+  --ppo-num-envs N        Override PPO NUM_ENVS for object run.
+  --ppo-num-steps N       Override PPO NUM_STEPS for object run.
+  --ppo-total-steps N     Override PPO TOTAL_TIMESTEPS for object run.
   --mods a,b,c            Override mod list used for per-mod evaluation videos.
-  --video-steps N         Steps per evaluation video run. Default: 1200.
+  --video-steps N         Override both object/pixel video steps with N.
+  --no-final-video        Disable final video recording/evaluation stage.
   --output-dir PATH       Report artifact root directory.
   --skip-preflight        Skip dependency checks.
   --skip-train            Skip training and only run video/eval collection.
@@ -61,6 +70,7 @@ Options:
 
 Environment overrides:
   PYTHON_BIN, WANDB_MODE, ENTITY, PROJECT, SAVE_PATH, SEED, NUM_SEEDS, OUT_DIR, JAX_PIP_SPEC
+  Note: if SAVE_PATH is not set, checkpoints are written to <OUT_DIR>/models.
 EOF
 }
 
@@ -102,6 +112,10 @@ while [[ $# -gt 0 ]]; do
       VIDEO_STEPS="$2"
       shift 2
       ;;
+    --no-final-video)
+      RECORD_FINAL_VIDEO=0
+      shift
+      ;;
     --output-dir)
       OUT_DIR="$2"
       shift 2
@@ -138,6 +152,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -n "${VIDEO_STEPS}" ]]; then
+  VIDEO_MAX_STEPS_OBJECT="${VIDEO_STEPS}"
+  VIDEO_MAX_STEPS_PIXEL="${VIDEO_STEPS}"
+fi
+
 case "${VIDEO_MODEL}" in
   pixel|object|both) ;;
   *)
@@ -147,8 +166,24 @@ case "${VIDEO_MODEL}" in
 esac
 
 mkdir -p "${OUT_DIR}"/{logs,metrics,graphs,videos,meta}
+if [[ -z "${SAVE_PATH}" ]]; then
+  SAVE_PATH="${OUT_DIR}/models"
+fi
+mkdir -p "${SAVE_PATH}"
+
+OC_TOTAL_TIMESTEPS="${OC_TOTAL_TIMESTEPS:-}"
+PIX_TOTAL_TIMESTEPS="${PIX_TOTAL_TIMESTEPS:-}"
+PPO_TOTAL_TIMESTEPS="${PPO_TOTAL_TIMESTEPS:-}"
+OC_NUM_ENVS="${OC_NUM_ENVS:-}"
+PIX_NUM_ENVS="${PIX_NUM_ENVS:-}"
+PPO_NUM_ENVS="${PPO_NUM_ENVS:-}"
+OC_NUM_STEPS="${OC_NUM_STEPS:-}"
+PIX_NUM_STEPS="${PIX_NUM_STEPS:-}"
+PPO_NUM_STEPS="${PPO_NUM_STEPS:-}"
+PROFILE_MODE="config"
 
 if (( QUICK == 1 )); then
+  PROFILE_MODE="quick"
   OC_TOTAL_TIMESTEPS="${OC_TOTAL_TIMESTEPS:-100000}"
   PIX_TOTAL_TIMESTEPS="${PIX_TOTAL_TIMESTEPS:-100000}"
   PPO_TOTAL_TIMESTEPS="${PPO_TOTAL_TIMESTEPS:-100000}"
@@ -158,7 +193,8 @@ if (( QUICK == 1 )); then
   OC_NUM_STEPS="${OC_NUM_STEPS:-32}"
   PIX_NUM_STEPS="${PIX_NUM_STEPS:-16}"
   PPO_NUM_STEPS="${PPO_NUM_STEPS:-16}"
-else
+elif (( QUICK == 0 )); then
+  PROFILE_MODE="full"
   # Override via env for your actual hardware budget.
   OC_TOTAL_TIMESTEPS="${OC_TOTAL_TIMESTEPS:-200000000}"
   PIX_TOTAL_TIMESTEPS="${PIX_TOTAL_TIMESTEPS:-100000000}"
@@ -181,9 +217,9 @@ if [[ -n "${PPO_TOTAL_TIMESTEPS_OVERRIDE}" ]]; then
   PPO_TOTAL_TIMESTEPS="${PPO_TOTAL_TIMESTEPS_OVERRIDE}"
 fi
 
-WANDROOT_PARENT="${WANDB_DIR:-${REPO_ROOT}}"
-WANDB_ROOT="${WANDROOT_PARENT}/wandb"
+WANDB_ROOT="${WANDB_DIR:-${OUT_DIR}/wandb}"
 mkdir -p "${WANDB_ROOT}"
+export WANDB_DIR="${WANDB_ROOT}"
 
 log_note() {
   printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*"
@@ -309,7 +345,7 @@ if (( SHOW_SYSTEM_INFO == 1 )); then
 fi
 
 if (( SKIP_PREFLIGHT == 0 )); then
-  check_modules "jax:${JAX_PIP_SPEC},numpy:numpy,hydra:hydra-core,omegaconf:omegaconf,wandb:wandb,safetensors:safetensors,matplotlib:matplotlib,chex:chex,flax:flax,optax:optax,tqdm:tqdm"
+  check_modules "jax:${JAX_PIP_SPEC},numpy:numpy,absl:absl-py,ale_py:ale-py,gymnasium:gymnasium,gymnax:gymnax,ml_dtypes:ml-dtypes,scipy:scipy,toolz:toolz,chex:chex,flax:flax,optax:optax,distrax:distrax,hydra:hydra-core,omegaconf:omegaconf,wandb:wandb,safetensors:safetensors,matplotlib:matplotlib,pandas:pandas,tqdm:tqdm,pygame:pygame,cv2:opencv-python-headless,psutil:psutil,ocatari:ocatari,imageio:imageio,PIL:pillow,jinja2:jinja2"
 fi
 
 if (( SKIP_VIDEO == 0 )); then
@@ -346,21 +382,19 @@ run_pqn_train() {
     "NUM_SEEDS=${NUM_SEEDS}"
     "EXPORT_METRICS=True"
     "REPORT_OUTPUT_DIR=${OUT_DIR}"
-    "alg.ENV_NAME=Pacman"
-    "alg.TRAIN_MODS=null"
-    "alg.MOD_NAME=null"
-    "alg.TOTAL_TIMESTEPS=${total_timesteps}"
-    "alg.TOTAL_TIMESTEPS_DECAY=${total_timesteps}"
-    "alg.NUM_ENVS=${num_envs}"
-    "alg.NUM_STEPS=${num_steps}"
-    "alg.RECORD_VIDEO=False"
-    "alg.TEST_DURING_TRAINING=False"
-    "alg.TEST_NUM_ENVS=4"
-    "alg.TEST_NUM_STEPS=1000"
     "NAME=${label}"
     "REPORT_TAG=${label}"
-    "alg.EVAL_MODS=[]"
   )
+  if [[ -n "${total_timesteps}" ]]; then
+    cmd+=("alg.TOTAL_TIMESTEPS=${total_timesteps}")
+    cmd+=("alg.TOTAL_TIMESTEPS_DECAY=${total_timesteps}")
+  fi
+  if [[ -n "${num_envs}" ]]; then
+    cmd+=("alg.NUM_ENVS=${num_envs}")
+  fi
+  if [[ -n "${num_steps}" ]]; then
+    cmd+=("alg.NUM_STEPS=${num_steps}")
+  fi
   if [[ -n "${ENTITY}" ]]; then
     cmd+=("ENTITY=${ENTITY}")
   fi
@@ -382,17 +416,20 @@ run_ppo_train() {
     "SAVE_PATH=${SAVE_PATH}"
     "SEED=${SEED}"
     "NUM_SEEDS=${NUM_SEEDS}"
-    "alg.ENV_NAME=Pacman"
-    "alg.TRAIN_MODS=null"
-    "alg.MOD_NAME=null"
-    "alg.TOTAL_TIMESTEPS=${total_timesteps}"
-    "alg.TOTAL_TIMESTEPS_DECAY=${total_timesteps}"
-    "alg.NUM_ENVS=${num_envs}"
-    "alg.NUM_STEPS=${num_steps}"
-    "alg.RECORD_VIDEO=False"
+    "EXPORT_METRICS=True"
+    "REPORT_OUTPUT_DIR=${OUT_DIR}"
     "NAME=${label}"
-    "alg.EVAL_MODS=[]"
   )
+  if [[ -n "${total_timesteps}" ]]; then
+    cmd+=("alg.TOTAL_TIMESTEPS=${total_timesteps}")
+    cmd+=("alg.TOTAL_TIMESTEPS_DECAY=${total_timesteps}")
+  fi
+  if [[ -n "${num_envs}" ]]; then
+    cmd+=("alg.NUM_ENVS=${num_envs}")
+  fi
+  if [[ -n "${num_steps}" ]]; then
+    cmd+=("alg.NUM_STEPS=${num_steps}")
+  fi
   if [[ -n "${ENTITY}" ]]; then
     cmd+=("ENTITY=${ENTITY}")
   fi
@@ -410,11 +447,42 @@ collect_new_videos() {
   done < <(find "${WANDB_ROOT}" -type f -path "*/media/videos/*.mp4" -newer "${marker}" -print0 2>/dev/null)
 }
 
+snapshot_configs() {
+  local cfg_dir="${OUT_DIR}/meta/config_snapshots"
+  mkdir -p "${cfg_dir}/alg"
+  cp -f "scripts/benchmarks/config/config.yaml" "${cfg_dir}/config.yaml"
+  cp -f "scripts/benchmarks/config/alg/pqn_pacman_object.yaml" "${cfg_dir}/alg/pqn_pacman_object.yaml"
+  cp -f "scripts/benchmarks/config/alg/pqn_pacman_pixel.yaml" "${cfg_dir}/alg/pqn_pacman_pixel.yaml"
+  cp -f "scripts/benchmarks/config/alg/ppo_pacman_object.yaml" "${cfg_dir}/alg/ppo_pacman_object.yaml"
+}
+
+generate_report_markdown() {
+  local md_script="scripts/benchmarks/report_sum.py"
+  if [[ ! -f "${md_script}" ]]; then
+    log_note "Markdown generator script not found: ${md_script}"
+    return
+  fi
+  "${PYTHON_BIN}" "${md_script}" \
+    --out-dir "${OUT_DIR}" \
+    --mods "${PACMAN_MODS}" \
+    --with-ppo "${WITH_PPO}" \
+    --video-model "${VIDEO_MODEL}" \
+    --quick "${QUICK}" \
+    > "${OUT_DIR}/logs/generate_report_markdown.log" 2>&1 || {
+      log_note "Failed to generate markdown draft. Check logs/generate_report_markdown.log"
+      return
+    }
+}
+
 run_pqn_video_eval_once() {
   local model_cfg="$1"      # pqn_pacman_pixel | pqn_pacman_object
   local model_label="$2"    # pixel | object
   local mod_label="$3"      # base or mod key
-  local mod_override="$4"   # hydra list syntax, e.g. [] or [limited_vision]
+  local video_steps="$4"
+  local eval_mods_override="[]"
+  if [[ "${mod_label}" != "base" ]]; then
+    eval_mods_override="[${mod_label}]"
+  fi
 
   local marker="${OUT_DIR}/meta/.video_marker_pqn_${model_label}_${mod_label}_$$"
   touch "${marker}"
@@ -429,12 +497,12 @@ run_pqn_video_eval_once() {
     "NUM_SEEDS=${NUM_SEEDS}"
     "alg.ENV_NAME=Pacman"
     "alg.TRAIN_MODS=null"
+    "alg.EVAL_MODS=${eval_mods_override}"
     "alg.MOD_NAME=null"
     "alg.TEST_NUM_ENVS=1"
-    "alg.TEST_NUM_STEPS=${VIDEO_STEPS}"
+    "alg.TEST_NUM_STEPS=${video_steps}"
     "alg.RECORD_VIDEO=True"
     "NAME=video_pqn_${model_label}_${mod_label}"
-    "alg.EVAL_MODS=${mod_override}"
   )
   if [[ -n "${ENTITY}" ]]; then
     cmd+=("ENTITY=${ENTITY}")
@@ -446,10 +514,14 @@ run_pqn_video_eval_once() {
 }
 
 run_ppo_video_eval_once() {
-  local model_cfg="$1"      # ppo_pacman_pixel | ppo_pacman_object
-  local model_label="$2"    # pixel | object
+  local model_cfg="$1"      # ppo_pacman_object
+  local model_label="$2"    # object
   local mod_label="$3"      # base or mod key
-  local mod_override="$4"   # hydra list syntax, e.g. [] or [limited_vision]
+  local video_steps="$4"
+  local eval_mods_override="[]"
+  if [[ "${mod_label}" != "base" ]]; then
+    eval_mods_override="[${mod_label}]"
+  fi
 
   local marker="${OUT_DIR}/meta/.video_marker_ppo_${model_label}_${mod_label}_$$"
   touch "${marker}"
@@ -464,12 +536,12 @@ run_ppo_video_eval_once() {
     "NUM_SEEDS=${NUM_SEEDS}"
     "alg.ENV_NAME=Pacman"
     "alg.TRAIN_MODS=null"
+    "alg.EVAL_MODS=${eval_mods_override}"
     "alg.MOD_NAME=null"
     "alg.TEST_NUM_ENVS=1"
-    "alg.TEST_NUM_STEPS=${VIDEO_STEPS}"
+    "alg.TEST_NUM_STEPS=${video_steps}"
     "alg.RECORD_VIDEO=True"
     "NAME=video_ppo_${model_label}_${mod_label}"
-    "alg.EVAL_MODS=${mod_override}"
   )
   if [[ -n "${ENTITY}" ]]; then
     cmd+=("ENTITY=${ENTITY}")
@@ -490,59 +562,59 @@ if (( SKIP_TRAIN == 0 )); then
   if (( WITH_PPO == 1 )); then
     log_note "Training PPO object-centric (optional)..."
     run_ppo_train "ppo_object_report" "ppo_pacman_object" "${PPO_TOTAL_TIMESTEPS}" "${PPO_NUM_ENVS}" "${PPO_NUM_STEPS}"
-
-    log_note "Training PPO pixel (optional)..."
-    run_ppo_train "ppo_pixel_report" "ppo_pacman_pixel" "${PPO_TOTAL_TIMESTEPS}" "${PPO_NUM_ENVS}" "${PPO_NUM_STEPS}"
   fi
 fi
 
-if (( SKIP_VIDEO == 0 )); then
+if (( SKIP_VIDEO == 0 )) && (( RECORD_FINAL_VIDEO == 1 )); then
   run_video_block_pqn() {
     local model_cfg="$1"
     local model_label="$2"
+    local video_steps="$3"
     log_note "Generating PQN base video for ${model_label} model..."
-    run_pqn_video_eval_once "${model_cfg}" "${model_label}" "base" "[]"
+    run_pqn_video_eval_once "${model_cfg}" "${model_label}" "base" "${video_steps}"
     for mod in "${MOD_LIST[@]}"; do
       [[ -z "${mod}" ]] && continue
       log_note "Generating PQN ${model_label} video for mod: ${mod}"
-      run_pqn_video_eval_once "${model_cfg}" "${model_label}" "${mod}" "[${mod}]"
+      run_pqn_video_eval_once "${model_cfg}" "${model_label}" "${mod}" "${video_steps}"
     done
   }
 
   run_video_block_ppo() {
     local model_cfg="$1"
     local model_label="$2"
+    local video_steps="$3"
     log_note "Generating PPO base video for ${model_label} model..."
-    run_ppo_video_eval_once "${model_cfg}" "${model_label}" "base" "[]"
+    run_ppo_video_eval_once "${model_cfg}" "${model_label}" "base" "${video_steps}"
     for mod in "${MOD_LIST[@]}"; do
       [[ -z "${mod}" ]] && continue
       log_note "Generating PPO ${model_label} video for mod: ${mod}"
-      run_ppo_video_eval_once "${model_cfg}" "${model_label}" "${mod}" "[${mod}]"
+      run_ppo_video_eval_once "${model_cfg}" "${model_label}" "${mod}" "${video_steps}"
     done
   }
 
   case "${VIDEO_MODEL}" in
     pixel)
-      run_video_block_pqn "pqn_pacman_pixel" "pixel"
+      run_video_block_pqn "pqn_pacman_pixel" "pixel" "${VIDEO_MAX_STEPS_PIXEL}"
       if (( WITH_PPO == 1 )); then
-        run_video_block_ppo "ppo_pacman_pixel" "pixel"
+        log_note "Skipping PPO pixel videos: PPO runs object-centric only."
       fi
       ;;
     object)
-      run_video_block_pqn "pqn_pacman_object" "object"
+      run_video_block_pqn "pqn_pacman_object" "object" "${VIDEO_MAX_STEPS_OBJECT}"
       if (( WITH_PPO == 1 )); then
-        run_video_block_ppo "ppo_pacman_object" "object"
+        run_video_block_ppo "ppo_pacman_object" "object" "${VIDEO_MAX_STEPS_OBJECT}"
       fi
       ;;
     both)
-      run_video_block_pqn "pqn_pacman_pixel" "pixel"
-      run_video_block_pqn "pqn_pacman_object" "object"
+      run_video_block_pqn "pqn_pacman_pixel" "pixel" "${VIDEO_MAX_STEPS_PIXEL}"
+      run_video_block_pqn "pqn_pacman_object" "object" "${VIDEO_MAX_STEPS_OBJECT}"
       if (( WITH_PPO == 1 )); then
-        run_video_block_ppo "ppo_pacman_pixel" "pixel"
-        run_video_block_ppo "ppo_pacman_object" "object"
+        run_video_block_ppo "ppo_pacman_object" "object" "${VIDEO_MAX_STEPS_OBJECT}"
       fi
       ;;
   esac
+elif (( SKIP_VIDEO == 0 )); then
+  log_note "Skipping final video generation because RECORD_FINAL_VIDEO=0."
 fi
 
 {
@@ -553,12 +625,30 @@ fi
   echo "NUM_SEEDS: ${NUM_SEEDS}"
   echo "Mods evaluated: ${PACMAN_MODS}"
   echo "Video model mode: ${VIDEO_MODEL}"
-  echo "Quick mode: ${QUICK}"
+  echo "RECORD_FINAL_VIDEO: ${RECORD_FINAL_VIDEO}"
+  echo "VIDEO_MAX_STEPS_OBJECT: ${VIDEO_MAX_STEPS_OBJECT}"
+  echo "VIDEO_MAX_STEPS_PIXEL: ${VIDEO_MAX_STEPS_PIXEL}"
+  echo "Run profile: ${PROFILE_MODE}"
   echo "With PPO: ${WITH_PPO}"
+  echo "PPO mode: object_only"
   echo "JAX auto-install package: ${JAX_PIP_SPEC}"
+  echo "WANDB_DIR: ${WANDB_ROOT}"
+  echo "OC_TOTAL_TIMESTEPS: ${OC_TOTAL_TIMESTEPS}"
+  echo "PIX_TOTAL_TIMESTEPS: ${PIX_TOTAL_TIMESTEPS}"
+  echo "PPO_TOTAL_TIMESTEPS: ${PPO_TOTAL_TIMESTEPS}"
+  echo "OC_NUM_ENVS: ${OC_NUM_ENVS}"
+  echo "PIX_NUM_ENVS: ${PIX_NUM_ENVS}"
+  echo "PPO_NUM_ENVS: ${PPO_NUM_ENVS}"
+  echo "OC_NUM_STEPS: ${OC_NUM_STEPS}"
+  echo "PIX_NUM_STEPS: ${PIX_NUM_STEPS}"
+  echo "PPO_NUM_STEPS: ${PPO_NUM_STEPS}"
 } > "${OUT_DIR}/meta/run_summary.txt"
+
+snapshot_configs
+generate_report_markdown
 
 log_note "Done. Artifacts generated under: ${OUT_DIR}"
 log_note "Graphs: ${OUT_DIR}/graphs"
 log_note "Metrics CSV/NPZ: ${OUT_DIR}/metrics"
 log_note "Videos: ${OUT_DIR}/videos"
+log_note "Report draft: ${OUT_DIR}/PACMAN_REPORT_DRAFT.md"
