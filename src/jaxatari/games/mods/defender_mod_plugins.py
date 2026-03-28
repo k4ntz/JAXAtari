@@ -5,6 +5,7 @@ import chex
 from jaxatari.games.jax_defender import DefenderState
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
 from jaxatari.environment import JAXAtariAction as Action
+from flax import struct
 
 # --- Simple Mods ---
 
@@ -15,7 +16,7 @@ class SmartBombsUnlimitedMod(JaxAtariPostStepModPlugin):
     """
 
     constants_overrides = {
-        "SPACE_SHIP_INIT_BOMBS": 9999,  # Set initial bombs to
+        "SPACE_SHIP_INIT_BOMBS": 99,  # Set initial bombs to
     }
 
 
@@ -45,39 +46,7 @@ class EnemyEmpMod(JaxAtariInternalModPlugin):
     Enemies do not move.
     """
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _enemy_step(self, state: DefenderState) -> DefenderState:
-        def _enemy_move_switch(
-            enemy: chex.Array, state: DefenderState
-        ) -> DefenderState:
-            enemy_type = enemy[2]
-
-            # Use original delete logic
-            delete_state, score = self._env._delete_enemy(enemy)
-
-            return jax.lax.switch(
-                jnp.array(enemy_type, int),
-                [
-                    lambda: enemy,
-                    lambda: enemy, 
-                    lambda: enemy,
-                    lambda: enemy,
-                    lambda: enemy,
-                    lambda: enemy,
-                    lambda: enemy, 
-                    lambda: delete_state, 
-                ],
-            )
-
-        def _enemy_move_switch_wrapped(enemy: chex.Array) -> chex.Array:
-            return _enemy_move_switch(enemy, state)
-
-        enemy_states_updated = jax.vmap(_enemy_move_switch_wrapped, in_axes=(0,))(
-            state.enemy_states
-        )
-        state = state._replace(enemy_states=enemy_states_updated)
-
-        return state
+    constants_overrides = {"SHIP_SPEED_INFLUENCE_ON_SPEED": 0, "ENEMY_SPEED": 0}
 
 
 class NoBackupMod(JaxAtariInternalModPlugin):
@@ -85,29 +54,15 @@ class NoBackupMod(JaxAtariInternalModPlugin):
     Reduces the number of enemies required to clear a level.
     """
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _check_level_done(self, state: DefenderState) -> DefenderState:
-        enemy_killed = state.enemy_killed
-        needed_kills = jnp.asarray(
-            [
-                self._env.consts.LANDER_LEVEL_AMOUNT[state.level],
-                self._env.consts.POD_LEVEL_AMOUNT[state.level],
-                self._env.consts.BOMBER_LEVEL_AMOUNT[state.level],
-            ]
+    constants_overrides = {
+        "LANDER_LEVEL_AMOUNT": struct.field(
+            pytree_node=True, default_factory=lambda: jnp.array([8, 9, 10, 10, 10])
         )
-
-        # Reduced requirement: Max 1 kill needed per type (if amount > 0)
-        reduced_goals = jnp.minimum(needed_kills, 5)
-
-        is_done = jnp.all(enemy_killed >= reduced_goals)
-
-        state = jax.lax.cond(
-            is_done, lambda: self._env._end_level(state), lambda: state
-        )
-        return state
+    }
 
 
 # --- Difficult Mods ---
+
 
 class MissingFundingMod(JaxAtariInternalModPlugin):
     """
@@ -116,7 +71,7 @@ class MissingFundingMod(JaxAtariInternalModPlugin):
 
     constants_overrides = {
         "SPACE_SHIP_INIT_LIVES": 1,
-        "SPACE_SHIP_INIT_BOMBS": 0,
+        "SPACE_SHIP_INIT_BOMBS": 1,
     }
 
 
@@ -134,3 +89,4 @@ class NoBreaksInSpaceMod(JaxAtariInternalModPlugin):
     """
 
     constants_overrides = {"SPACE_SHIP_BREAK": 0.0}
+
