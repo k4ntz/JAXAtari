@@ -9,11 +9,15 @@ import jax.lax
 import jax.numpy as jnp
 
 import jaxatari.spaces as spaces
-from jaxatari._dtypes import counter_array
 
 from jaxatari.environment import JAXAtariAction as Action, JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
+
+
+def _counter_array(value):
+    counter_dtype = jnp.int64 if jax.config.jax_enable_x64 else jnp.int32
+    return jnp.asarray(value, dtype=counter_dtype)
 
 
 def _build_blue_line_table(rows, indices):
@@ -885,7 +889,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             level_finished=jnp.array(0),
             reset_coords=jnp.array(False),
             lives=jnp.array(self.consts.STARTING_LIVES, dtype=jnp.int32),
-            steps=counter_array(0),
+            steps=_counter_array(0),
             ufo_killed=jnp.array(False),
             rng=key,
         )
