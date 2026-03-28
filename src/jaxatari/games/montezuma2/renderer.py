@@ -32,6 +32,7 @@ class Montezuma2Renderer(JAXGameRenderer):
             {'name': 'bg', 'type': 'background', 'data': bg_data},
             {'name': 'room_bg_0', 'type': 'single', 'file': 'backgrounds/base_sprite_level_0.npy', 'transpose': False},
             {'name': 'room_bg_1', 'type': 'single', 'file': 'backgrounds/mid_room_level_0.npy', 'transpose': False},
+            {'name': 'room_bg_2', 'type': 'single', 'file': 'backgrounds/base_sprite_level_1.npy', 'transpose': False},
             {
                 'name': 'player', 'type': 'group',
                 'files': [
@@ -92,6 +93,11 @@ class Montezuma2Renderer(JAXGameRenderer):
         self.PALETTE = jnp.concatenate([self.PALETTE, self.LADDER_COLOR[None, :]], axis=0)
         self.LADDER_ID = self.PALETTE.shape[0] - 1
 
+        # Accurate ladder color for Difficulty 1, Layer 2 (purple)
+        self.LADDER_COLOR_L2 = jnp.array([104, 25, 157], dtype=jnp.uint8)
+        self.PALETTE = jnp.concatenate([self.PALETTE, self.LADDER_COLOR_L2[None, :]], axis=0)
+        self.LADDER_ID_L2 = self.PALETTE.shape[0] - 1
+
         # Accurate door color
         self.DOOR_COLOR = jnp.array([232, 204, 99], dtype=jnp.uint8)
         self.PALETTE = jnp.concatenate([self.PALETTE, self.DOOR_COLOR[None, :]], axis=0)
@@ -127,7 +133,11 @@ class Montezuma2Renderer(JAXGameRenderer):
         # Draw Room Background
         mask_0 = self.SHAPE_MASKS["room_bg_0"][:149, :]
         mask_1 = self.SHAPE_MASKS["room_bg_1"][:149, :]
+        mask_2 = self.SHAPE_MASKS["room_bg_2"][:149, :]
+        
         room_bg_mask = jnp.where(state.room_id == 5, mask_1, mask_0)
+        mask_2_modified = mask_2.at[48:149, 72:88].set(0)
+        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 11, state.room_id == 10), mask_2_modified, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 3, room_bg_mask.at[6:149, 156:160].set(1), room_bg_mask)
         raster = self.jr.render_at(raster, 0, 47, room_bg_mask)
         
@@ -135,23 +145,30 @@ class Montezuma2Renderer(JAXGameRenderer):
         def draw_ladder_accurate(i, r):
             x, top, bottom = state.ladders_x[i], state.ladders_top[i] + 47, state.ladders_bottom[i] + 47
             active = state.ladders_active[i]
-            
+
             def _draw(raster_in):
                 ladder_width = 16
                 # Vertical Rails (4 pixels wide)
                 rail_pos = jnp.array([[x, top], [x + ladder_width - 4, top]])
                 rail_size = jnp.array([[4, bottom - top], [4, bottom - top]])
-                raster_in = self.jr.draw_rects(raster_in, rail_pos, rail_size, self.LADDER_ID)
-                
+
                 # Horizontal Rungs (2 pixels high, 5 pixels gap)
                 # First rung starts at top + 4
                 rung_pos = jnp.array([[x, top + 4]])
                 rung_size = jnp.array([[ladder_width, bottom - top - 4]])
-                raster_in = self.jr.draw_ladders(raster_in, rung_pos, rung_size, 2, 5, self.LADDER_ID)
-                return raster_in
+                
+                def draw_l1(r_in):
+                    r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.LADDER_ID)
+                    return self.jr.draw_ladders(r_in, rung_pos, rung_size, 2, 5, self.LADDER_ID)
+
+                def draw_l2(r_in):
+                    r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.LADDER_ID_L2)
+                    return self.jr.draw_ladders(r_in, rung_pos, rung_size, 2, 5, self.LADDER_ID_L2)
+
+                is_layer_2 = jnp.logical_or(state.room_id == 11, state.room_id == 10)
+                return jax.lax.cond(is_layer_2, draw_l2, draw_l1, raster_in)
 
             return jax.lax.cond(active == 1, _draw, lambda r_in: r_in, r)
-
         raster = jax.lax.fori_loop(0, self.consts.MAX_LADDERS_PER_ROOM, draw_ladder_accurate, raster)
 
         # Draw Ropes
@@ -234,15 +251,22 @@ class Montezuma2Renderer(JAXGameRenderer):
         def render_enemy(i, raster):
             anim_idx = jax.lax.select(state.enemies_bouncing[i] == 1, 0, jnp.mod(state.enemies_x[i], 16))
             bounce_offset = jax.lax.select(state.enemies_bouncing[i] == 1, self.consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 4, 22)], 0)
-            
+
+            spider_anim = jnp.mod(jnp.floor_divide(state.frame_count, 7), 2)
+            spider_mask = jax.lax.cond(
+                spider_anim == 1,
+                lambda _: jnp.flip(self.SHAPE_MASKS["spider"], axis=1),
+                lambda _: self.SHAPE_MASKS["spider"],
+                None
+            )
+
             def _render_active(r):
                 return jax.lax.cond(
                     state.enemies_type[i] == 3,
-                    lambda r_in: self.jr.render_at(r_in, state.enemies_x[i], state.enemies_y[i] + 47 - bounce_offset, self.SHAPE_MASKS["spider"]),
+                    lambda r_in: self.jr.render_at(r_in, state.enemies_x[i], state.enemies_y[i] + 47 - bounce_offset, spider_mask),
                     lambda r_in: self.jr.render_at(r_in, state.enemies_x[i], state.enemies_y[i] + 47 - bounce_offset, self.SHAPE_MASKS["skull"][anim_idx]),
                     r
                 )
-
             return jax.lax.cond(
                 state.enemies_active[i] == 1,
                 _render_active,

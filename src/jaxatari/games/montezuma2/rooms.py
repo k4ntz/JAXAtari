@@ -214,12 +214,56 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 cx, cy, ca, cd,
                 lasers_x, lasers_active)
 
+    def load_room_1_2(args):
+        lx, lt, lb, la, ix, iy, ia, lax, laa = args
+        
+        ex = enemies_x.at[0].set(60)
+        ey = enemies_y.at[0].set(33)
+        ea = enemies_active.at[0].set(1)
+        ed = enemies_direction.at[0].set(1)
+        eminx = enemies_min_x.at[0].set(8)
+        emaxx = enemies_max_x.at[0].set(155)
+        
+        lx = lx.at[0].set(72)
+        lt = lt.at[0].set(48)
+        lb = lb.at[0].set(149)
+        la = la.at[0].set(1)
+
+        rx = ropes_x
+        rt = ropes_top
+        rb = ropes_bottom
+        ra = ropes_active
+        
+        ix = items_x
+        iy = items_y
+        ia = items_active
+        
+        cx = conveyors_x
+        cy = conveyors_y
+        ca = conveyors_active
+        cd = conveyors_direction
+        
+        dx = doors_x
+        dy = doors_y
+        da = doors_active
+        
+        eb = enemies_bouncing.at[0].set(1)
+
+        return (ex, ey, ea, ed, eminx, emaxx, eb,
+                lx, lt, lb, la,
+                rx, rt, rb, ra,
+                ix, iy, ia,
+                dx, dy, da,
+                cx, cy, ca, cd,
+                lasers_x, lasers_active)
+
     ex, ey, ea, ed, eminx, emaxx, eb, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd, lax, laa = jax.lax.switch(
         jnp.where(room_id == 4, 0,
         jnp.where(room_id == 5, 1,
         jnp.where(room_id == 3, 2,
-        jnp.where(room_id == 11, 3, 0)))),
-        [load_room_0_4, load_room_0_5, load_room_0_3, load_room_1_3], args)
+        jnp.where(room_id == 11, 3,
+        jnp.where(room_id == 10, 4, 0))))),
+        [load_room_0_4, load_room_0_5, load_room_0_3, load_room_1_3, load_room_1_2], args)
 
     return state.replace(
         room_id=room_id,
