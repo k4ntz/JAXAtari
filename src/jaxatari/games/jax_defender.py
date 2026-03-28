@@ -1958,7 +1958,7 @@ class JaxDefender(
 
     def _reset_player(self, state: DefenderState) -> DefenderState:
         # Check for enemy on init spot and place it somewhere else
-        enemy_replace_x = 80.0
+        enemy_replace_x = 100.0
         enemy_replace_y = 50.0
 
         def enemy_replace(enemy: chex.Array):
