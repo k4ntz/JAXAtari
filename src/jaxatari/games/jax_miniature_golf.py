@@ -988,13 +988,19 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         return jnp.equal(state.level, self.consts.NUM_LEVELS)
 
 class MiniatureGolfRenderer(JAXGameRenderer):
-    def __init__(self, consts: MiniatureGolfConstants = None):
+    def __init__(self, consts: MiniatureGolfConstants = None, config: render_utils.RendererConfig = None):
         super().__init__()
         self.consts = consts or MiniatureGolfConstants()
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-        )
+
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None,
+            )
+        else:
+            self.config = config
+
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Update asset config to include both walls
