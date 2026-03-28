@@ -81,7 +81,6 @@ MOD_MODULES = {
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
     "videopinball": "jaxatari.games.mods.videopinball_mods.VideoPinballEnvMod",
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
-    'roadrunner': "jaxatari.games.mods.roadrunner_mods.RoadRunnerEnvMod",
 }
 
 
