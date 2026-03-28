@@ -1667,37 +1667,18 @@ class JaxDefender(
         new_game_x, new_game_y = self._move(game_x, game_y, speed_x, speed_y)
         return new_game_x, new_game_y
 
-    def _add_score(self, state: DefenderState, score) -> DefenderState:
+    def _add_items_for_score(self, state: DefenderState, score):
         old_score = jnp.floor_divide(state.score, self.consts.SCORE_BONUS_THRESHOLD)
 
-        score += state.score
-
         new_score = jnp.floor_divide(score, self.consts.SCORE_BONUS_THRESHOLD)
-
-        # Check for item threshold
         gain_items = new_score > old_score
 
-        score = jnp.clip(score, 0, self.consts.SCORE_MAX)
-
-        space_ship_lives = state.space_ship_lives + 1
-        smart_bombs = state.smart_bomb_amount + 1
-        state = jax.lax.cond(
-            gain_items,
-            lambda: state._replace(
-                space_ship_lives=space_ship_lives, smart_bomb_amount=smart_bombs
-            ),
-            lambda: state,
-        )
-        return state._replace(score=score)
+        return jnp.where(gain_items, 1, 0)
 
     def _end_level(self, state: DefenderState) -> DefenderState:
-        # Add score for every human alive
-        def alive_human_bonus(index, state):
-            is_alive = state.human_states[index][2] == self.consts.HUMAN_STATE_IDLE
-            state = jax.lax.cond(is_alive, lambda: self._add_score(state, 100), lambda: state)
-            return state
-
-        state = jax.lax.fori_loop(0, self.consts.HUMAN_MAX_AMOUNT, alive_human_bonus, state)
+        human_mask = jnp.sum(state.human_states[:, 2] != self.consts.INACTIVE)
+        score = state.score
+        score += human_mask * 100
 
         # End level
         state = state._replace(
@@ -1707,6 +1688,7 @@ class JaxDefender(
             space_ship_x=jnp.asarray(self.consts.SPACE_SHIP_INIT_GAME_X).astype(jnp.float32),
             space_ship_y=jnp.asarray(self.consts.SPACE_SHIP_INIT_GAME_Y).astype(jnp.float32),
             space_ship_facing_right=self.consts.SPACE_SHIP_INIT_FACE_RIGHT,
+            score=score,
             laser_active=False,
             bullet_active=False,
             enemy_states=jnp.zeros((self.consts.ENEMY_MAX_IN_GAME, 5)),
@@ -1719,7 +1701,9 @@ class JaxDefender(
     def _check_level_done(self, state: DefenderState) -> DefenderState:
         enemy_types = state.enemy_states[:, 2].astype(jnp.int32)
         enemy_counts = jnp.bincount(enemy_types, length=8)
-        all_enemies_killed = jnp.all(enemy_counts[1:6] == 0)  # Check if all landers, pods and bombers are killed
+        all_enemies_killed = jnp.all(
+            enemy_counts[1:6] == 0
+        )  # Check if all landers, pods and bombers are killed
         state = jax.lax.cond(all_enemies_killed, lambda: self._end_level(state), lambda: state)
         return state
 
@@ -2545,6 +2529,10 @@ class JaxDefender(
             space_ship_lives = jnp.where(
                 game_over, state.space_ship_lives - 1, state.space_ship_lives
             )
+
+            additional_items = self._add_items_for_score(state, score)
+            smart_bomb_amount += additional_items
+            space_ship_lives += additional_items
 
             state = self._camera_step(state)
 
