@@ -15,7 +15,7 @@ class SmartBombsUnlimitedMod(JaxAtariPostStepModPlugin):
     """
 
     constants_overrides = {
-        "SPACE_SHIP_INIT_BOMBS": 99,  # Set initial bombs to
+        "SPACE_SHIP_INIT_BOMBS": 9999,  # Set initial bombs to
     }
 
 
