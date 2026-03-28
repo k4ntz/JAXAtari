@@ -21,9 +21,11 @@ ACTIVATION: "tanh"
 ENV_NAME: "Pong"
 ENV_KWARGS: {}
 OBJECT_CENTRIC: True
-MOD_NAME: LazyEnemyWrapper
+TRAIN_MODS: null
+EVAL_MODS: [lazy_enemy]
+MOD_NAME: lazy_enemy # legacy fallback
 
 # Testing
 TEST_NUM_ENVS: 1024
 TEST_NUM_STEPS: 10000
-RECORD_VIDEO: True 
+RECORD_VIDEO: True

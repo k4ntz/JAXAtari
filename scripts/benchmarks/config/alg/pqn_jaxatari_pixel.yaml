@@ -22,10 +22,11 @@ LAMBDA: 0.65
 ENV_NAME: "Pong"
 ENV_KWARGS: {}
 OBJECT_CENTRIC: False
-# Apply this mod during testing
-# Activate this only for the test run (or debugging)
-# Set to None for final training run.
-MOD_NAME: LazyEnemyWrapper
+# Optional: apply mods during training
+TRAIN_MODS: null
+# Apply these mods during evaluation/testing
+EVAL_MODS: [lazy_enemy]
+MOD_NAME: lazy_enemy # legacy fallback
 
 # Note: This will massively increase compile and run time!
 # Turn off for final reported training run.
