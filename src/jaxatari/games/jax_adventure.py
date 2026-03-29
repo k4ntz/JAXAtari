@@ -205,6 +205,10 @@ class AdventureInfo(struct.PyTreeNode):
     time: jnp.ndarray
 
 
+def _load_background_map(path: str) -> jnp.ndarray:
+    background_map = jnp.load(path)
+    return background_map
+
 class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, AdventureInfo, AdventureConstants]):
     def __init__(self, consts: AdventureConstants = None):
         consts = consts or AdventureConstants()
@@ -218,6 +222,28 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             Action.UP,
             Action.DOWN,
         ]
+
+        #jax.debug.print("base dir:{a}", a=render_utils.get_base_sprite_dir())
+        #jax.debug.print("path:{a}", a=os.path.join(render_utils.get_base_sprite_dir(), "adventure", "Room_2.npy"))
+        #jax.debug.print("sprite path: {a}", a=f"{os.path.dirname(os.path.abspath(__file__))}/sprites/adventure")
+        #background_assets_names = _get_default_asset_config()[0]["files"]
+        
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/adventure"
+
+        self.BackgroundRoom1 = _load_background_map(os.path.join(sprite_path, "Room_1.npy"))
+        self.BackgroundRoom2 = _load_background_map(os.path.join(sprite_path, "Room_2.npy"))
+        self.BackgroundRoom3 = _load_background_map(os.path.join(sprite_path, "Room_3.npy"))
+        self.BackgroundRoom4 = _load_background_map(os.path.join(sprite_path, "Room_4.npy"))
+        self.BackgroundRoom5 = _load_background_map(os.path.join(sprite_path, "Room_5.npy"))
+        self.BackgroundRoom6 = _load_background_map(os.path.join(sprite_path, "Room_6.npy"))
+        self.BackgroundRoom7 = _load_background_map(os.path.join(sprite_path, "Room_7.npy"))
+        self.BackgroundRoom8 = _load_background_map(os.path.join(sprite_path, "Room_8.npy"))
+        self.BackgroundRoom9 = _load_background_map(os.path.join(sprite_path, "Room_9.npy"))
+        self.BackgroundRoom10 = _load_background_map(os.path.join(sprite_path, "Room_10.npy"))
+        self.BackgroundRoom11 = _load_background_map(os.path.join(sprite_path, "Room_11.npy"))
+        self.BackgroundRoom12 = _load_background_map(os.path.join(sprite_path, "Room_12.npy"))
+        self.BackgroundRoom13 = _load_background_map(os.path.join(sprite_path, "Room_13.npy"))
+        self.BackgroundRoom14 = _load_background_map(os.path.join(sprite_path, "Room_14.npy"))
 
     def _check_for_wall(self, state: AdventureState, direction: int) -> bool:
         room = state.player[2]
@@ -250,6 +276,55 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             lambda y: y,
             operand = player_y,
         )
+
+        #jax.debug.print("step")
+        #test load background of Rooms
+        def is_tile_walkable(tileset: jnp.ndarray, Pos_x: int, Pos_y: int) -> bool:
+            #determin if we should be allowed to walk, based on the background only
+            #tileset data at a given x and y position is [r, g, b, 255] 
+            #[151, 151, 151, 255] = Grey (allowed player movement) 
+            #anything else are walls (inversed in certain maze tileset) or top or bottom border.
+            is_walkable_1 = (tileset[Pos_y+2,Pos_x][0] == jnp.uint8(151))
+            is_walkable_2 = (tileset[Pos_y+2,Pos_x][1] == jnp.uint8(151))
+            is_walkable_3 = (tileset[Pos_y+2,Pos_x][2] == jnp.uint8(151))
+            is_walkable = jnp.logical_and(is_walkable_1, jnp.logical_and(is_walkable_2,is_walkable_3))
+            #jax.debug.print("Tile: {a} is walkable {b}",a=tileset[Pos_y,Pos_x][0:3], b=is_walkable)
+            return is_walkable            
+        
+        #jax.debug.print("Room: {a} is equal to 0 {b}, is walkable {c}",a=room, b=(room == 0),c=is_tile_walkable(self.BackgroundRoom1, player_x, player_y))
+        in_Room_1_and_walkable = jnp.logical_and(jnp.equal(room, 0), is_tile_walkable(self.BackgroundRoom1, player_x, player_y))
+        in_Room_2_and_walkable = jnp.logical_and(jnp.equal(room, 1), is_tile_walkable(self.BackgroundRoom2, player_x, player_y))
+        in_Room_3_and_walkable = jnp.logical_and(jnp.equal(room, 2), is_tile_walkable(self.BackgroundRoom3, player_x, player_y))
+        in_Room_4_and_walkable = jnp.logical_and(jnp.equal(room, 3), is_tile_walkable(self.BackgroundRoom4, player_x, player_y))
+        in_Room_5_and_walkable = jnp.logical_and(jnp.equal(room, 4), is_tile_walkable(self.BackgroundRoom5, player_x, player_y))
+        in_Room_6_and_walkable = jnp.logical_and(jnp.equal(room, 5), is_tile_walkable(self.BackgroundRoom6, player_x, player_y))
+        in_Room_7_and_walkable = jnp.logical_and(jnp.equal(room, 6), is_tile_walkable(self.BackgroundRoom7, player_x, player_y))
+        in_Room_8_and_walkable = jnp.logical_and(jnp.equal(room, 7), is_tile_walkable(self.BackgroundRoom8, player_x, player_y))
+        in_Room_9_and_walkable = jnp.logical_and(jnp.equal(room, 8), is_tile_walkable(self.BackgroundRoom9, player_x, player_y))
+        in_Room_10_and_walkable = jnp.logical_and(jnp.equal(room, 9), is_tile_walkable(self.BackgroundRoom10, player_x, player_y))
+        in_Room_11_and_walkable = jnp.logical_and(jnp.equal(room, 10), is_tile_walkable(self.BackgroundRoom11, player_x, player_y))
+        in_Room_12_and_walkable = jnp.logical_and(jnp.equal(room, 11), is_tile_walkable(self.BackgroundRoom12, player_x, player_y))
+        in_Room_13_and_walkable = jnp.logical_and(jnp.equal(room, 12), is_tile_walkable(self.BackgroundRoom13, player_x, player_y))
+        in_Room_14_and_walkable = jnp.logical_and(jnp.equal(room, 13), is_tile_walkable(self.BackgroundRoom14, player_x, player_y))
+
+        Room_1_or_2_and_walkable = jnp.logical_or(in_Room_1_and_walkable, in_Room_2_and_walkable)
+        Room_3_or_4_and_walkable = jnp.logical_or(in_Room_3_and_walkable, in_Room_4_and_walkable)
+        Room_5_or_6_and_walkable = jnp.logical_or(in_Room_5_and_walkable, in_Room_6_and_walkable)
+        Room_7_or_8_and_walkable = jnp.logical_or(in_Room_7_and_walkable, in_Room_8_and_walkable)
+        Room_9_or_10_and_walkable = jnp.logical_or(in_Room_9_and_walkable, in_Room_10_and_walkable)
+        Room_11_or_12_and_walkable = jnp.logical_or(in_Room_11_and_walkable, in_Room_12_and_walkable)
+        Room_13_or_14_and_walkable = jnp.logical_or(in_Room_13_and_walkable, in_Room_14_and_walkable)
+
+        Room_1_or_2_or_3_or_4_and_walkable = jnp.logical_or(Room_1_or_2_and_walkable, Room_3_or_4_and_walkable)
+        Room_5_or_6_or_7_or_8_and_walkable = jnp.logical_or(Room_5_or_6_and_walkable, Room_7_or_8_and_walkable)
+        Room_9_or_10_or_11_or_12_and_walkable = jnp.logical_or(Room_9_or_10_and_walkable, Room_11_or_12_and_walkable)
+
+        Room_1_or_2_or_3_or_4_or_5_or_6_or_7_or_8_and_walkable = jnp.logical_or(Room_1_or_2_or_3_or_4_and_walkable, Room_5_or_6_or_7_or_8_and_walkable)
+        Room_9_or_10_or_11_or_12_or_13_or_14_and_walkable = jnp.logical_or(Room_9_or_10_or_11_or_12_and_walkable, Room_13_or_14_and_walkable)
+
+        current_Room_is_walkable = jnp.logical_or(Room_1_or_2_or_3_or_4_or_5_or_6_or_7_or_8_and_walkable,Room_9_or_10_or_11_or_12_or_13_or_14_and_walkable)
+        #jax.debug.print("is walkable {a}", a= current_Room_is_walkable)
+        #return current_Room_is_walkable        
 
         ### Left Wall with and without Path
         left_wall = self.consts.LEFT_WALL_X
@@ -981,7 +1056,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         base_rooms = jnp.logical_and(room_1_to_8, room_9_to_14)
 
-        walls_detected = jnp.logical_and(base_rooms, castle_collision )
+        #walls_detected = jnp.logical_and(base_rooms, castle_collision )
+        walls_detected = jnp.logical_and(current_Room_is_walkable, castle_collision )
 
         #Check for Bridge negating wall
         
