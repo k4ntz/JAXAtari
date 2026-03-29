@@ -11,15 +11,9 @@ dependencies = [
     "flax>=0.10.2,<0.11.0",
     "gymnasium>=1.2.0",
     "gymnax>=0.0.8",
-<<<<<<< HEAD
-    "jax==0.4.38.0",
-    "ml-dtypes>=0.4.0,<0.5.0",
-    "numpy>=1.26.0,<2.0.0",
-=======
     "jax",
     "ml-dtypes",
     "numpy",
->>>>>>> origin/master
     "opt-einsum>=3.4.0",
     "platformdirs>=4.5.1",
     "requests>=2.32.5",

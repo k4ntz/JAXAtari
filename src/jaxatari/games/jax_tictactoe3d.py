@@ -103,7 +103,7 @@ class TicTacToe3DConstants:
 
     HEIGHT: int = 210
     WIDTH: int = 160
-    NUM_ACTIONS: int = 8
+    NUM_ACTIONS: int = 6
     BLINK_PERIOD: int = 8
     MOVE_COOLDOWN: int = 6
 
@@ -193,8 +193,8 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
         })
     
     def image_space(self) -> spaces.Space:
-        return spaces.Box(low=0, high=255, shape=(self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
-
+        return self._image_space
+    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: TicTacToe3DState) -> jnp.ndarray:
         return self.renderer.render(state)
 
@@ -523,9 +523,12 @@ class TicTacToe3DRenderer(JAXGameRenderer):
             consts: TicTacToe3DConstants = None,
             config: render_utils.RendererConfig = None
         ):
-        super().__init__(consts)
-
         self.consts = consts or TicTacToe3DConstants()
+        super().__init__(self.consts)
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tictactoe3d"
+
+
+       
 
         # Use injected config if provided, else default
         if config is None:
@@ -541,8 +544,7 @@ class TicTacToe3DRenderer(JAXGameRenderer):
 
         final_asset_config = list(self.consts.ASSET_CONFIG)
 
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/tictactoe3d"
-
+        
         (
                 self.PALETTE,
                 self.SHAPE_MASKS,
@@ -568,9 +570,12 @@ class TicTacToe3DRenderer(JAXGameRenderer):
         cpy = py + self.consts.CELL_CENTER_Y
         return cpx, cpy
 
+    @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         def render_black(_):
             raster = self.jr.create_object_raster(self.BACKGROUND)
+            raster = jnp.zeros_like(raster)
+            return self.jr.render_from_palette(raster, self.PALETTE)
 
         def render_normal(_):
             raster = self.jr.create_object_raster(self.BACKGROUND)
@@ -578,20 +583,39 @@ class TicTacToe3DRenderer(JAXGameRenderer):
             blink_on = (state.frame // self.consts.BLINK_PERIOD) % 2 == 0
             is_win_reveal = state.win_phase == 2
 
-            for idx in range(64):
+            def body_fn(idx, raster):
                 z = idx // 16
                 y = (idx % 16) // 4
                 x = idx % 4
+
                 cell_val = board[z, y, x]
                 px, py = self.cell_to_pixel(x, y, z)
 
-                is_latest_cpu_move = (x == state.last_cpu_x) & (y == state.last_cpu_y) & (z == state.last_cpu_z)
-                is_last_move = (x == state.last_move_x) & (y == state.last_move_y) & (z == state.last_move_z)
+                is_latest_cpu_move = (
+                    (x == state.last_cpu_x) &
+                    (y == state.last_cpu_y) &
+                    (z == state.last_cpu_z)
+                )
+                is_last_move = (
+                    (x == state.last_move_x) &
+                    (y == state.last_move_y) &
+                    (z == state.last_move_z)
+                )
 
-                draw_x = jnp.where(is_win_reveal & is_last_move, blink_on, True)
+                draw_x = jnp.where(
+                    is_win_reveal & is_last_move,
+                    blink_on,
+                    True
+                )
+
                 draw_o = jnp.where(
-                    is_win_reveal & is_last_move, blink_on,
-                    jnp.where(~is_win_reveal & is_latest_cpu_move, blink_on, True)
+                    is_win_reveal & is_last_move,
+                    blink_on,
+                    jnp.where(
+                        ~is_win_reveal & is_latest_cpu_move,
+                        blink_on,
+                        True
+                    )
                 )
 
                 raster = jax.lax.cond(
@@ -607,6 +631,7 @@ class TicTacToe3DRenderer(JAXGameRenderer):
                     lambda r: r,
                     raster
                 )
+
                 raster = jax.lax.cond(
                     cell_val == self.consts.BLOCKER,
                     lambda r: self.jr.render_at(r, px, py, self.blocker_mask),
@@ -614,9 +639,15 @@ class TicTacToe3DRenderer(JAXGameRenderer):
                     raster
                 )
 
-            # Hide cursor entirely during the win reveal phase
+                return raster
+
+            raster = jax.lax.fori_loop(0, 64, body_fn, raster)
+
             show_cursor = jnp.logical_and(blink_on, jnp.logical_not(is_win_reveal))
-            cpx, cpy = self.cell_center_to_pixel(state.cursor_x, state.cursor_y, state.cursor_z)
+            cpx, cpy = self.cell_center_to_pixel(
+                state.cursor_x, state.cursor_y, state.cursor_z
+            )
+
             raster = jax.lax.cond(
                 show_cursor,
                 lambda r: self.jr.render_at(r, cpx, cpy, self.cursor_mask),
@@ -626,7 +657,6 @@ class TicTacToe3DRenderer(JAXGameRenderer):
 
             return self.jr.render_from_palette(raster, self.PALETTE)
 
-        # Trigger black screen for normal CPU blackouts OR cinematic phases 1 & 3
         is_blackout = jnp.logical_or(
             state.blackout_active,
             jnp.logical_or(state.win_phase == 1, state.win_phase == 3)
@@ -636,5 +666,5 @@ class TicTacToe3DRenderer(JAXGameRenderer):
             is_blackout,
             render_black,
             render_normal,
-            operand=None
+            operand=0
         )
