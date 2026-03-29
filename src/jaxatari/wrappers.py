@@ -26,60 +26,6 @@ class JaxatariWrapper(object):
     # provide proxy access to regular attributes of wrapped object
     def __getattr__(self, name):
         return getattr(self._env, name)
-
-
-def _apply_native_downscaling_hotswap(
-    base_env,
-    pixel_resize_shape: tuple[int, int],
-    grayscale: bool
-) -> tuple[bool, bool]:
-    """
-    Helper function to hot-swap the renderer and image_space method on a base environment
-    to enable native downscaling.
-    
-    This function performs two "hot-swaps":
-    1. Replaces the renderer instance with a new one configured for downscaling
-    2. Replaces the image_space method on the instance to return the correct shape
-    
-    Args:
-        base_env: The base environment instance (not wrapped)
-        pixel_resize_shape: Target (height, width) for downscaling
-        grayscale: Whether to use grayscale (1 channel) or RGB (3 channels)
-    
-    Returns:
-        Tuple of (do_pixel_resize, grayscale) flags indicating whether wrapper-side
-        processing should be disabled (both False if native downscaling was applied).
-    """
-    # Create new config with downscaling
-    new_config = RendererConfig(
-        game_dimensions=base_env.renderer.config.game_dimensions,
-        channels=1 if grayscale else 3,
-        downscale=pixel_resize_shape
-    )
-    
-    # Hot-swap 1: Re-initialize the renderer with the new config
-    # This triggers the asset loading with the correct downscaling
-    # Reruns the __init__, but there was no better way since this is set in a wrapper and wrappers run after the env is first initialized
-    new_renderer = type(base_env.renderer)(
-        consts=base_env.consts,
-        config=new_config
-    )
-    base_env.renderer = new_renderer
-    
-    # Hot-swap 2: Replace the image_space method on the instance
-    def _native_image_space(self_env) -> spaces.Box:
-        return spaces.Box(
-            low=0,
-            high=255,
-            shape=(pixel_resize_shape[0], pixel_resize_shape[1], new_config.channels),
-            dtype=jnp.uint8
-        )
-    
-    # Bind this function to the instance, overshadowing the class method
-    base_env.image_space = types.MethodType(_native_image_space, base_env)
-    
-    # Return flags indicating wrapper-side processing should be disabled
-    return False, False
     
 class MultiRewardWrapper(JaxatariWrapper):
     """
@@ -905,28 +851,25 @@ class LogWrapper(JaxatariWrapper):
         action: Union[int, float],
     ) -> Tuple[chex.Array, LogState, float, bool, Dict[Any, Any]]:
         obs, atari_state, reward, done, info = self._env.step(state.atari_state, action)
-        actual_done = done
-        # use env_reward (unclipped/unchanged) for logging when available
+        # use env_reward (unclipped) for logging when available
         new_episode_return = state.episode_returns + info.get("env_reward", reward)
         new_episode_length = state.episode_lengths + 1
-        # use env_done for logging when available (e.g. to ignore episodic_life)
-        done = info.get("env_done", jnp.bool_(done))
+        done_ = jnp.bool_(done)
         state = LogState(
             atari_state=atari_state,
-            episode_returns=jnp.where(done, jnp.float32(0), jnp.float32(new_episode_return)),
-            episode_lengths=jnp.where(done, jnp.int32(0), jnp.int32(new_episode_length)),
+            episode_returns=jnp.where(done_, jnp.float32(0), jnp.float32(new_episode_return)),
+            episode_lengths=jnp.where(done_, jnp.int32(0), jnp.int32(new_episode_length)),
             returned_episode_returns=jnp.where(
-                done, jnp.float32(new_episode_return), jnp.float32(state.returned_episode_returns)
+                done_, jnp.float32(new_episode_return), jnp.float32(state.returned_episode_returns)
             ),
             returned_episode_lengths=jnp.where(
-                done, jnp.int32(new_episode_length), jnp.int32(state.returned_episode_lengths)
+                done_, jnp.int32(new_episode_length), jnp.int32(state.returned_episode_lengths)
             ),
         )
         info["returned_episode_returns"] = state.returned_episode_returns
         info["returned_episode_lengths"] = state.returned_episode_lengths
         info["returned_episode"] = done
-        # Still need to return the actual/wrapped done signal (e.g. affected by episodic life)
-        return obs, state, reward, actual_done, info
+        return obs, state, reward, done, info
 
 @struct.dataclass
 class MultiRewardLogState:
@@ -987,5 +930,5 @@ class MultiRewardLogWrapper(JaxatariWrapper):
         for i, r in enumerate(new_episode_return):
             info[f"returned_episode_returns_{i}"] = state.returned_episode_returns[i]
         info["returned_episode_lengths"] = state.returned_episode_lengths
-        info["returned_episode"] = env_done
+        info["returned_episode"] = done
         return obs, state, reward, done, info
