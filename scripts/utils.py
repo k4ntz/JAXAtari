@@ -124,9 +124,6 @@ def get_human_action() -> jax.numpy.ndarray: # Or chex.Array if you use chex
     # Fire alone (1 key)
     elif fire:
         action_to_take = Action.FIRE
-    # Hammer (H key)
-    elif hammer:
-        action_to_take = Action.HAMMER
     # No relevant keys pressed
     else:
         action_to_take = Action.NOOP

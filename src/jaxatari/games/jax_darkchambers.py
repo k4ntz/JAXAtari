@@ -3415,9 +3415,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             steps_since_last_fire = state.step_counter - state.last_fire_step
             is_double_tap = fire_just_pressed & (steps_since_last_fire <= DOUBLE_TAP_WINDOW) & (steps_since_last_fire > 0)
             has_bombs = state.bomb_count > 0
-            has_hammer = state.hammer_count > 0
-            # Hammer: activated by dedicated H key (Action.HAMMER)
-            should_use_hammer = (a == Action.HAMMER) & has_hammer
             should_detonate_bomb = is_double_tap & has_bombs
             
             # Update last_fire_step when fire is first pressed
