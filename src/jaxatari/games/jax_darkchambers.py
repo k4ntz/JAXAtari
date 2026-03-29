@@ -2416,8 +2416,14 @@ class DarkChambersRenderer(JAXGameRenderer):
         )
         img = jnp.clip(img.astype(jnp.float32) * fade_factor, 0, 255).astype(jnp.uint8)
 
-        def render_level_changed_screen(_: None) -> jnp.ndarray:
-            screen = jnp.zeros((GAME_H, GAME_W, 3), dtype=jnp.uint8)
+        def render_level_changed_screen(base_img: jnp.ndarray) -> jnp.ndarray:
+            screen = jnp.zeros_like(base_img)
+
+            # In downscaled/grayscale render modes, keep a plain black screen
+            # but preserve the current tensor shape for JAX type consistency.
+            if screen.shape != (GAME_H, GAME_W, 3):
+                return screen
+
             message = "LEVEL CHANGED"
             scale = 2
             glyph_w = 5
@@ -2442,14 +2448,14 @@ class DarkChambersRenderer(JAXGameRenderer):
                             mask = mask.at[y0:y0 + scale, x0:x0 + scale].set(True)
                 cursor_x += char_w + spacing
 
-            white = jnp.array([255, 255, 255], dtype=jnp.uint8)
+            white = jnp.array([255, 255, 255], dtype=screen.dtype)
             return jnp.where(mask[..., None], white, screen)
 
         img = jax.lax.cond(
             state.level_transition_ticks > 0,
             render_level_changed_screen,
-            lambda _: img,
-            operand=None,
+            lambda x: x,
+            operand=img,
         )
         return img
 
