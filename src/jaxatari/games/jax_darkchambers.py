@@ -3415,7 +3415,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             steps_since_last_fire = state.step_counter - state.last_fire_step
             is_double_tap = fire_just_pressed & (steps_since_last_fire <= DOUBLE_TAP_WINDOW) & (steps_since_last_fire > 0)
             has_bombs = state.bomb_count > 0
+            has_hammers = state.hammer_count > 0
             should_detonate_bomb = is_double_tap & has_bombs
+            should_use_hammer = is_double_tap & has_hammers & (~has_bombs)  # Use hammer if no bombs
             
             # Update last_fire_step when fire is first pressed
             new_last_fire_step = jnp.where(fire_just_pressed, state.step_counter, state.last_fire_step)
