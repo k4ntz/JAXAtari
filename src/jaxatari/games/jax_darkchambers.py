@@ -2416,14 +2416,9 @@ class DarkChambersRenderer(JAXGameRenderer):
         )
         img = jnp.clip(img.astype(jnp.float32) * fade_factor, 0, 255).astype(jnp.uint8)
 
-        def render_level_changed_screen(base_img: jnp.ndarray) -> jnp.ndarray:
-            screen = jnp.zeros_like(base_img)
-
-            # In downscaled/grayscale render modes, keep a plain black screen
-            # but preserve the current tensor shape for JAX type consistency.
-            if screen.shape != (GAME_H, GAME_W, 3):
-                return screen
-
+        def render_level_changed_screen(_: None) -> jnp.ndarray:
+            h, w, c = img.shape
+            screen = jnp.zeros((h, w, c), dtype=jnp.uint8)
             message = "LEVEL CHANGED"
             scale = 2
             glyph_w = 5
@@ -2433,10 +2428,10 @@ class DarkChambersRenderer(JAXGameRenderer):
             char_w = glyph_w * scale
             char_h = glyph_h * scale
             total_w = len(message) * char_w + (len(message) - 1) * spacing
-            start_x = (GAME_W - total_w) // 2
-            start_y = (GAME_H - char_h) // 2
+            start_x = (w - total_w) // 2
+            start_y = (h - char_h) // 2
 
-            mask = jnp.zeros((GAME_H, GAME_W), dtype=bool)
+            mask = jnp.zeros((h, w), dtype=bool)
             cursor_x = start_x
             for ch in message:
                 glyph = LEVEL_CHANGE_FONT_5X7[ch]
@@ -2448,16 +2443,16 @@ class DarkChambersRenderer(JAXGameRenderer):
                             mask = mask.at[y0:y0 + scale, x0:x0 + scale].set(True)
                 cursor_x += char_w + spacing
 
-            white = jnp.array([255, 255, 255], dtype=screen.dtype)
+            white = jnp.full((c,), 255, dtype=jnp.uint8)
             return jnp.where(mask[..., None], white, screen)
 
-        img = jax.lax.cond(
+        raw_level_screen = jax.lax.cond(
             state.level_transition_ticks > 0,
             render_level_changed_screen,
             lambda x: x,
             operand=img,
         )
-        return img
+        return raw_level_screen
 
 
 class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation, DarkChambersInfo, DarkChambersConstants]):
@@ -3186,12 +3181,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             dx_raw = dx
             dy_raw = dy
 
-            # --- SLOW DOWN PLAYER MOVEMENT ---
-            PLAYER_MOVE_EVERY = 2  # 1=normal, 2=half speed, 3=1/3 speed, etc.
-            player_move_tick = (state.step_counter % PLAYER_MOVE_EVERY) == 0
-
-            dx = jnp.where(player_move_tick, dx, 0)
-            dy = jnp.where(player_move_tick, dy, 0)
+            PLAYER_MOVE_EVERY_X = 3  # slightly faster (was 4)
+            dy = jnp.where((state.step_counter % 3) != 2, dy, 0)
+            dx = jnp.where((state.step_counter % PLAYER_MOVE_EVERY_X) == 0, dx, 0)
 
             prop_x = state.player_x + dx
             prop_y = state.player_y + dy
