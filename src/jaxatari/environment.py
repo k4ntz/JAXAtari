@@ -38,9 +38,7 @@ class JAXAtariAction:
 
     @classmethod
     def get_all_values(cls) -> jnp.ndarray:
-        # Keep the default Atari action set at 18 actions.
-        # Game-specific extensions (e.g., HAMMER in Dark Chambers) should
-        # be handled by that game's own action_space rather than globally.
+        # For fixed action sets, explicit listing is safest and clearest.
         return jnp.array([
             cls.NOOP, cls.FIRE, cls.UP, cls.RIGHT, cls.LEFT, cls.DOWN,
             cls.UPRIGHT, cls.UPLEFT, cls.DOWNRIGHT, cls.DOWNLEFT,
