@@ -34,7 +34,6 @@ class JAXAtariAction:
     UPLEFTFIRE: int = 15
     DOWNRIGHTFIRE: int = 16
     DOWNLEFTFIRE: int = 17
-    HAMMER: int = 18
 
     @classmethod
     def get_all_values(cls) -> jnp.ndarray:
