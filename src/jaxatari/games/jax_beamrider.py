@@ -141,11 +141,11 @@ BULLET_THRESHOLDS = jnp.array([56, 79])
 
 PROJECTILE_STEP_FRAMES = 2
 PROJECTILE_Y_TABLE_LASER = jnp.array(
-    [155, 141, 129, 118, 109, 102, 95, 89, 84, 79, 75, 71, 67, 64, 800],
+    [155, 141, 129, 118, 109, 102, 95, 89, 84, 79, 75, 71, 67, 64],
     dtype=jnp.float32,
 )
 PROJECTILE_Y_TABLE_TORPEDO = jnp.array(
-    [155, 141, 129, 118, 109, 102, 95, 89, 84, 79, 75, 71, 67, 64, 61, 58, 56, 53, 800, 49, 800],
+    [155, 141, 129, 118, 109, 102, 95, 89, 84, 79, 75, 71, 67, 64, 61, 58, 56, 53, 51, 49],
     dtype=jnp.float32,
 )
 LASER_PROJECTILE_FRAMES = PROJECTILE_Y_TABLE_LASER.shape[0] * PROJECTILE_STEP_FRAMES
@@ -214,9 +214,9 @@ class BeamriderConstants(NamedTuple):
 
     PLAYER_POS_Y: int = 164
     PLAYER_SPEED: float = 2.5
-    # ALE uses projectile existence as the main limiter.
-    # We use a shared recovery window after hit/destruction (measured ~8 frames in ALE).
-    PLAYER_SHOT_RECOVERY: int = 6
+    # ALE immediately re-arms after a clean despawn at the horizon.
+    # Impacts add an 8-frame recovery window before a new launch can be queued.
+    PLAYER_SHOT_RECOVERY: int = 8
     # After gameplay starts, ALE spawns the projectile on the next frame.
     PLAYER_SHOT_LAUNCH_DELAY: int = 1
 
@@ -1359,11 +1359,13 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         player_shot_pos = jnp.where(hit_exists_shot, self.bullet_offscreen, player_shot_pos)
 
         # Projectile resolution
-        projectile_at_horizon = self._projectile_resolved(state)
         bullet_hit_any = hit_exists_ufo | bouncer_hit | hit_exists_meteoroid | hit_exists_rock | hit_exists_lane_blocker | rejuv_hit | hit_mothership | hit_exists_shot | hit_exists_coin
-        projectile_resolved_now = projectile_at_horizon | bullet_hit_any
-        player_shot_frame = jnp.where(projectile_resolved_now, jnp.array(-1, dtype=player_shot_frame.dtype), player_shot_frame)
-        shooting_cooldown = jnp.where(projectile_resolved_now, self.consts.PLAYER_SHOT_RECOVERY, shooting_cooldown)
+        player_shot_frame, shooting_cooldown = self._resolve_player_projectile(
+            state,
+            player_shot_frame,
+            shooting_cooldown,
+            bullet_hit_any,
+        )
 
         any_explosion_triggered = (
             jnp.any(hit_mask_ufo)
@@ -3652,6 +3654,28 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         is_laser = bullet_type == self.consts.LASER_ID
         max_frames = jnp.where(is_laser, LASER_PROJECTILE_FRAMES, TORPEDO_PROJECTILE_FRAMES)
         return (shot_frame >= 0) & (shot_frame >= (max_frames - 1))
+
+    def _resolve_player_projectile(
+        self,
+        state: BeamriderState,
+        player_shot_frame: chex.Array,
+        shooting_cooldown: chex.Array,
+        bullet_hit_any: chex.Array,
+    ) -> Tuple[chex.Array, chex.Array]:
+        """Apply ALE projectile teardown rules after movement/collision handling."""
+        projectile_at_horizon = self._projectile_resolved(state)
+        projectile_resolved_now = projectile_at_horizon | bullet_hit_any
+        player_shot_frame = jnp.where(
+            projectile_resolved_now,
+            jnp.array(-1, dtype=player_shot_frame.dtype),
+            player_shot_frame,
+        )
+        shooting_cooldown = jnp.where(
+            bullet_hit_any,
+            self.consts.PLAYER_SHOT_RECOVERY,
+            shooting_cooldown,
+        )
+        return player_shot_frame, shooting_cooldown
 
     def _bouncer_dedicated_step(self, state: BeamriderState, key: chex.Array):
         level = state.level

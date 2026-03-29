@@ -1018,7 +1018,6 @@ class DoubleEnemySpeedMod(JaxAtariInternalModPlugin):
         enemy_shot_timer = jnp.where(hit_mask_shot, 0, enemy_shot_timer)
         player_shot_pos = jnp.where(hit_exists_shot, env.bullet_offscreen, player_shot_pos)
 
-        projectile_at_horizon = env._projectile_resolved(state)
         bullet_hit_any = (
             hit_exists_ufo
             | bouncer_hit
@@ -1030,9 +1029,12 @@ class DoubleEnemySpeedMod(JaxAtariInternalModPlugin):
             | hit_exists_shot
             | hit_exists_coin
         )
-        projectile_resolved_now = projectile_at_horizon | bullet_hit_any
-        player_shot_frame = jnp.where(projectile_resolved_now, jnp.array(-1, dtype=player_shot_frame.dtype), player_shot_frame)
-        shooting_cooldown = jnp.where(projectile_resolved_now, env.consts.PLAYER_SHOT_RECOVERY, shooting_cooldown)
+        player_shot_frame, shooting_cooldown = env._resolve_player_projectile(
+            state,
+            player_shot_frame,
+            shooting_cooldown,
+            bullet_hit_any,
+        )
 
         any_explosion_triggered = (
             jnp.any(hit_mask_ufo)
