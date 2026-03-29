@@ -5,6 +5,7 @@ from typing import NamedTuple, Tuple
 import jax
 import jax.numpy as jnp
 import chex
+from flax import struct
 
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
@@ -84,7 +85,7 @@ def _get_default_asset_config() -> tuple:
     )
 
 
-class AdventureConstants(NamedTuple):
+class AdventureConstants(struct.PyTreeNode):
     #Map Size,  coordinates are (x,y) and the upper left corner is (0,0)
     WIDTH: int = 160
     HEIGHT: int = 250
@@ -145,9 +146,13 @@ class AdventureConstants(NamedTuple):
     # sset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
+    #Dragon constants
+    DRAGON_SPEED: int = 2
+    DRAGON_BITE_TIMER: int = 15
+
 
 # immutable state container
-class AdventureState(NamedTuple):
+class AdventureState(struct.PyTreeNode):
     #step conter for performance indicator?
     step_counter: chex.Array
     #position player: x ,y ,tile, inventory
@@ -173,7 +178,7 @@ class AdventureState(NamedTuple):
     rndKey: chex.PRNGKey
 
 
-class EntityPosition(NamedTuple):
+class EntityPosition(struct.PyTreeNode):
     x: jnp.ndarray
     y: jnp.ndarray
     tile: jnp.ndarray
@@ -182,7 +187,7 @@ class EntityPosition(NamedTuple):
     state: jnp.ndarray
 
 
-class AdventureObservation(NamedTuple):
+class AdventureObservation(struct.PyTreeNode):
     player: EntityPosition
     dragon_yellow: EntityPosition
     dragon_green: EntityPosition
@@ -196,7 +201,7 @@ class AdventureObservation(NamedTuple):
     chalice: EntityPosition
 
 
-class AdventureInfo(NamedTuple):
+class AdventureInfo(struct.PyTreeNode):
     time: jnp.ndarray
 
 
@@ -1076,7 +1081,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
              lambda:state.chalice[2]
              ]
         )
-
+        
         #enter yellow castle
         new_player_y, new_player_tile, new_item_tile, new_item_y = jax.lax.cond(
             jnp.logical_and(new_player_tile == 0, jnp.logical_and(new_player_y <145,jnp.logical_and(new_player_x<110, new_player_x>50))),
@@ -1104,7 +1109,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             lambda: (77, 145, 11, 11, new_item_y-(new_player_y-145),new_item_x+(77-new_player_x)),
             lambda: (new_player_x, new_player_y, new_player_tile, new_item_tile, new_item_y, new_item_x)
         )
-        
+
         #change of rooms
         new_player_y, new_player_tile, new_item_tile, new_item_y = jax.lax.cond(
             new_player_y > 212,
@@ -1167,11 +1172,9 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             operand = None,
         )
 
-        return AdventureState(
+        return state.replace(
             step_counter = jnp.array(new_step_counter).astype(jnp.int32),
             player = jnp.array([new_player_x,new_player_y,new_player_tile,state.player[3]]).astype(jnp.int32), #SEEMS NOT GOOD
-            dragon_yellow = state.dragon_yellow,
-            dragon_green = state.dragon_green,
             key_yellow = jax.lax.cond(state.player[3]==self.consts.KEY_YELLOW_ID,
                                       lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
                                       lambda op: op[3],
@@ -1182,8 +1185,6 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                     lambda op: op[3],
                                     operand=(new_item_x,new_item_y,new_item_tile,state.key_black)
                                     ),
-            gate_yellow=state.gate_yellow,
-            gate_black=state.gate_black,
             sword= jax.lax.cond(state.player[3]==self.consts.SWORD_ID,
                                 lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
                                 lambda op: op[3],
@@ -1203,8 +1204,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                   lambda op: jnp.array([op[0],op[1],op[2],op[3]]).astype(jnp.int32),
                                   lambda op: op[4],
                                   operand=(new_item_x,new_item_y,new_item_tile,state.chalice[3],state.chalice)
-                                  ),
-            rndKey = state.rndKey
+                                  )
         )
     
     def _gate_interaction(self, state: AdventureState) -> AdventureState:
@@ -1320,24 +1320,13 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         new_gate_yellow = [gate_yellow_state, gate_yellow_counter]
         new_gate_black = [gate_black_state, gate_black_counter]
 
-        return AdventureState(
-            step_counter=state.step_counter,
-            player = state.player,
-            dragon_yellow=state.dragon_yellow,
-            dragon_green=state.dragon_green,
-            key_yellow=state.key_yellow,
-            key_black=state.key_black,
+        return state.replace(
             gate_yellow=new_gate_yellow,
-            gate_black=new_gate_black,
-            sword=state.sword,
-            bridge=state.bridge,
-            magnet=state.magnet,
-            chalice=state.chalice,
-            rndKey=state.rndKey
+            gate_black=new_gate_black
         )
     
     def _item_pickup(self, state: AdventureState, action: chex.Array) -> AdventureState:
-        
+
         #helper function that chhecks if an item is near the player
         #same tile, in range of 4 pixels
         #it used the corners of the player and calculates if they are in x and y range to the item corners
@@ -1358,9 +1347,9 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             
             on_same_tile = (tile==state.player[2])
             player_hitbox_nw = (state.player[0],state.player[1])
-            player_hitbox_ne = (state.player[0]+self.consts.PLAYER_SIZE[0]-1,state.player[1])
-            player_hitbox_se = (state.player[0]+self.consts.PLAYER_SIZE[0]-1,state.player[1]+self.consts.PLAYER_SIZE[1]-1)
-            player_hitbox_sw = (state.player[0],state.player[1]+self.consts.PLAYER_SIZE[1]-1)
+            player_hitbox_ne = (state.player[0]+self.consts.PLAYER_SIZE[0],state.player[1])
+            player_hitbox_se = (state.player[0]+self.consts.PLAYER_SIZE[0],state.player[1]+self.consts.PLAYER_SIZE[1])
+            player_hitbox_sw = (state.player[0],state.player[1]+self.consts.PLAYER_SIZE[1])
 
             #jax.debug.print("Hitbox values Player:{a},{b}|{c},{d}|{e},{f}|{g},{h}",
             #                a=player_hitbox_nw[0],b=player_hitbox_nw[1],
@@ -1514,20 +1503,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
         
 
-        return AdventureState(
-            step_counter=state.step_counter,
-            player = jnp.array([state.player[0],state.player[1],state.player[2],new_player_inventory]).astype(jnp.int32),
-            dragon_yellow=state.dragon_yellow,
-            dragon_green=state.dragon_green,
-            key_yellow=state.key_yellow,
-            key_black=state.key_black,
-            gate_yellow=state.gate_yellow,
-            gate_black=state.gate_black,
-            sword=state.sword,
-            bridge=state.bridge,
-            magnet=state.magnet,
-            chalice=state.chalice,
-            rndKey=state.rndKey
+        return state.replace(
+            player = jnp.array([state.player[0],state.player[1],state.player[2],new_player_inventory]).astype(jnp.int32)
         )
     
     def _item_drop(self, state: AdventureState, action: chex.Array) -> AdventureState:
@@ -1540,24 +1517,14 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             operand=state.player[3]
         )
 
-        return AdventureState(
-            step_counter=state.step_counter,
-            player = jnp.array([state.player[0],state.player[1],state.player[2],new_player_inventory]).astype(jnp.int32),
-            dragon_yellow=state.dragon_yellow,
-            dragon_green=state.dragon_green,
-            key_yellow=state.key_yellow,
-            key_black=state.key_black,
-            gate_yellow=state.gate_yellow,
-            gate_black=state.gate_black,
-            sword=state.sword,
-            bridge=state.bridge,
-            magnet=state.magnet,
-            chalice=state.chalice,
-            rndKey=state.rndKey
+        return state.replace(
+            player = jnp.array([state.player[0],state.player[1],state.player[2],new_player_inventory]).astype(jnp.int32)
         )
         
 
     def _dragon_step(self, state: AdventureState) -> AdventureState:
+        speed = self.consts.DRAGON_SPEED
+
         #get sword position to kill dragons
         sword_x = state.sword[0]
         sword_y = state.sword[1]
@@ -1580,7 +1547,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             lambda f:f,
             operand = dragon_yellow_counter
         )
-        dragon_yellow_freeze = dragon_yellow_counter % 15 != 0
+        dragon_yellow_freeze = dragon_yellow_counter % self.consts.DRAGON_BITE_TIMER != 0
     
         #dragon starts looking for plyer room after first encounter
         dragon_yellow_activate = jax.lax.cond(state.player[2] == dragon_yellow_tile, lambda:1, lambda: dragon_yellow_activate)
@@ -1603,7 +1570,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         #move towards player and attack
         dragon_yellow_x, dragon_yellow_y, dragon_yellow_animation, dragon_yellow_counter= jax.lax.cond(
             jnp.logical_and(state.player[2]==dragon_yellow_tile,jnp.logical_not(dragon_yellow_freeze)),
-            lambda _: (dragon_yellow_x + direction_x*2, dragon_yellow_y + direction_y*2, jax.lax.cond(
+            lambda _: (dragon_yellow_x + direction_x*speed, dragon_yellow_y + direction_y*speed, jax.lax.cond(
                 jnp.logical_and((state.player[0]-dragon_yellow_x)*direction_x<4,(state.player[1]-dragon_yellow_y)*direction_y<4),
                 lambda _:jax.lax.cond(dragon_yellow_animation==2, lambda _:2, lambda _:1, operand = None),
                 lambda _:jax.lax.cond(dragon_yellow_animation==2, lambda _:2, lambda _:0, operand = None),
@@ -1649,7 +1616,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             lambda f:f,
             operand = dragon_green_counter
         )
-        dragon_green_freeze = dragon_green_counter % 15 != 0
+        dragon_green_freeze = dragon_green_counter % self.consts.DRAGON_BITE_TIMER != 0
 
         #dragon starts looking for plyer room after first encounter
         dragon_green_activate = jax.lax.cond(state.player[2] == dragon_green_tile, lambda:1, lambda: dragon_green_activate)
@@ -1672,7 +1639,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         #move towards player and attack
         dragon_green_x, dragon_green_y, dragon_green_animation, dragon_green_counter= jax.lax.cond(
             jnp.logical_and(state.player[2]==dragon_green_tile,jnp.logical_not(dragon_green_freeze)),
-            lambda _: (dragon_green_x + direction_x*2, dragon_green_y + direction_y*2, jax.lax.cond(
+            lambda _: (dragon_green_x + direction_x*speed, dragon_green_y + direction_y*speed, jax.lax.cond(
                 jnp.logical_and(jnp.logical_and((state.player[0]-dragon_green_x)*direction_x<4,(state.player[1]-dragon_green_y)*direction_y<4),dragon_green_animation!=2),
                 lambda _: jax.lax.cond(dragon_green_animation==2, lambda _:2, lambda _:1, operand = None),
                 lambda _: jax.lax.cond(dragon_green_animation==2, lambda _:2, lambda _:0, operand = None),
@@ -1701,19 +1668,9 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
 
 
-        return AdventureState(
-            step_counter = state.step_counter,
-            player = state.player,
+        return state.replace(
             dragon_yellow = jnp.array([dragon_yellow_x,dragon_yellow_y,dragon_yellow_tile,dragon_yellow_animation,dragon_yellow_counter,dragon_yellow_eat, dragon_yellow_activate]).astype(jnp.int32),
             dragon_green = jnp.array([dragon_green_x,dragon_green_y,dragon_green_tile,dragon_green_animation,dragon_green_counter,dragon_green_eat, dragon_green_activate]).astype(jnp.int32),
-            key_yellow=state.key_yellow,
-            key_black=state.key_black,
-            gate_yellow=state.gate_yellow,
-            gate_black=state.gate_black,
-            sword=state.sword,
-            bridge=state.bridge,
-            magnet=state.magnet,
-            chalice=state.chalice,
             rndKey=rndKey
         )
 
@@ -1781,20 +1738,12 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             operand = None
         )
 
-        return AdventureState(
-            step_counter = state.step_counter,
-            player = state.player,
-            dragon_yellow = state.dragon_yellow,
-            dragon_green = state.dragon_green,
+        return state.replace(
             key_yellow=jnp.array([key_yellow_x,key_yellow_y,state.key_yellow[2]]).astype(jnp.int32),
             key_black=jnp.array([key_black_x,key_black_y,state.key_black[2]]).astype(jnp.int32),
-            gate_yellow=state.gate_yellow,
-            gate_black=state.gate_black,
             sword=jnp.array([sword_x,sword_y,state.sword[2]]).astype(jnp.int32),
             bridge=jnp.array([bridge_x,bridge_y,state.bridge[2]]).astype(jnp.int32),
-            magnet=state.magnet,
-            chalice=jnp.array([chalice_x,chalice_y,state.chalice[2],state.chalice[3]]).astype(jnp.int32),
-            rndKey=state.rndKey
+            chalice=jnp.array([chalice_x,chalice_y,state.chalice[2],state.chalice[3]]).astype(jnp.int32)
         )
     
     """This function solely exists for maing the chalice change colors"""
@@ -1803,20 +1752,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         chalice_color=state.chalice[3]
         chalice_color = (chalice_color +1) % 10
 
-        return AdventureState(
-            step_counter=state.step_counter,
-            player = state.player,
-            dragon_yellow=state.dragon_yellow,
-            dragon_green=state.dragon_green,
-            key_yellow=state.key_yellow,
-            key_black=state.key_black,
-            gate_yellow=state.gate_yellow,
-            gate_black=state.gate_black,
-            sword=state.sword,
-            bridge=state.bridge,
-            magnet=state.magnet,
-            chalice=jnp.array([state.chalice[0],state.chalice[1],state.chalice[2],chalice_color]).astype(jnp.int32),
-            rndKey=state.rndKey
+        return state.replace(
+            chalice=jnp.array([state.chalice[0],state.chalice[1],state.chalice[2],chalice_color]).astype(jnp.int32)
         )
     
     """This function is called when the game starts and when it is reseted
