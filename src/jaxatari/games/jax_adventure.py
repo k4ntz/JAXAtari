@@ -205,6 +205,10 @@ class AdventureInfo(struct.PyTreeNode):
     time: jnp.ndarray
 
 
+def _load_background_map(path: str) -> jnp.ndarray:
+    background_map = jnp.load(path)
+    return background_map
+
 class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, AdventureInfo, AdventureConstants]):
     def __init__(self, consts: AdventureConstants = None):
         consts = consts or AdventureConstants()
@@ -218,6 +222,28 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             Action.UP,
             Action.DOWN,
         ]
+
+        #jax.debug.print("base dir:{a}", a=render_utils.get_base_sprite_dir())
+        #jax.debug.print("path:{a}", a=os.path.join(render_utils.get_base_sprite_dir(), "adventure", "Room_2.npy"))
+        #jax.debug.print("sprite path: {a}", a=f"{os.path.dirname(os.path.abspath(__file__))}/sprites/adventure")
+        #background_assets_names = _get_default_asset_config()[0]["files"]
+        
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/adventure"
+
+        self.BackgroundRoom1 = _load_background_map(os.path.join(sprite_path, "Room_1.npy"))
+        self.BackgroundRoom2 = _load_background_map(os.path.join(sprite_path, "Room_2.npy"))
+        self.BackgroundRoom3 = _load_background_map(os.path.join(sprite_path, "Room_3.npy"))
+        self.BackgroundRoom4 = _load_background_map(os.path.join(sprite_path, "Room_4.npy"))
+        self.BackgroundRoom5 = _load_background_map(os.path.join(sprite_path, "Room_5.npy"))
+        self.BackgroundRoom6 = _load_background_map(os.path.join(sprite_path, "Room_6.npy"))
+        self.BackgroundRoom7 = _load_background_map(os.path.join(sprite_path, "Room_7.npy"))
+        self.BackgroundRoom8 = _load_background_map(os.path.join(sprite_path, "Room_8.npy"))
+        self.BackgroundRoom9 = _load_background_map(os.path.join(sprite_path, "Room_9.npy"))
+        self.BackgroundRoom10 = _load_background_map(os.path.join(sprite_path, "Room_10.npy"))
+        self.BackgroundRoom11 = _load_background_map(os.path.join(sprite_path, "Room_11.npy"))
+        self.BackgroundRoom12 = _load_background_map(os.path.join(sprite_path, "Room_12.npy"))
+        self.BackgroundRoom13 = _load_background_map(os.path.join(sprite_path, "Room_13.npy"))
+        self.BackgroundRoom14 = _load_background_map(os.path.join(sprite_path, "Room_14.npy"))
 
     def _check_for_wall(self, state: AdventureState, direction: int) -> bool:
         room = state.player[2]
@@ -251,665 +277,65 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             operand = player_y,
         )
 
-        ### Left Wall with and without Path
-        left_wall = self.consts.LEFT_WALL_X
-        upper_edge = self.consts.PATH_HORIZONTAL_UP
-        lower_edge = self.consts.PATH_HORIZONTAL_DOWN
-        collision_left_wall = player_x >= left_wall
-        collision_left_wall_path = jnp.logical_or(collision_left_wall, jnp.logical_and(player_y>=upper_edge, player_y<=lower_edge))
-        collision_left_special = player_x >= self.consts.SPECIAL_WALL_LEFT
+        #jax.debug.print("step")
+        #test load background of Rooms
+        def is_tile_walkable(tileset: jnp.ndarray, Pos_x: int, Pos_y: int) -> bool:
+            #determin if we should be allowed to walk, based on the background only
+            #tileset data at a given x and y position is [r, g, b, 255] 
+            #[151, 151, 151, 255] = Grey (allowed player movement) 
+            #[0, 0, 0, 255] are top or bottom border allow movement for tilechange
+            #anything else are walls (inversed in certain maze tileset) .
+            is_walkable_1 = (tileset[Pos_y+2,Pos_x][0] == jnp.uint8(151))
+            is_walkable_2 = (tileset[Pos_y+2,Pos_x][1] == jnp.uint8(151))
+            is_walkable_3 = (tileset[Pos_y+2,Pos_x][2] == jnp.uint8(151))
+            is_walkable = jnp.logical_and(is_walkable_1, jnp.logical_and(is_walkable_2,is_walkable_3))
+            is_border_1 = (tileset[Pos_y+2,Pos_x][0] == jnp.uint8(0))
+            is_border_2 = (tileset[Pos_y+2,Pos_x][1] == jnp.uint8(0))
+            is_border_3 = (tileset[Pos_y+2,Pos_x][2] == jnp.uint8(0))
+            is_border = jnp.logical_and(is_border_1, jnp.logical_and(is_border_2,is_border_3))
+            #jax.debug.print("Tile: {a} is walkable {b}",a=tileset[Pos_y,Pos_x][0:3], b=is_walkable)
+            return jnp.logical_or(is_walkable,is_border)            
+        
+        #jax.debug.print("Room: {a} is equal to 0 {b}, is walkable {c}",a=room, b=(room == 0),c=is_tile_walkable(self.BackgroundRoom1, player_x, player_y))
+        in_Room_1_and_walkable = jnp.logical_and(jnp.equal(room, 0), is_tile_walkable(self.BackgroundRoom1, player_x, player_y))
+        in_Room_2_and_walkable = jnp.logical_and(jnp.equal(room, 1), is_tile_walkable(self.BackgroundRoom2, player_x, player_y))
+        in_Room_3_and_walkable = jnp.logical_and(jnp.equal(room, 2), is_tile_walkable(self.BackgroundRoom3, player_x, player_y))
+        in_Room_4_and_walkable = jnp.logical_and(jnp.equal(room, 3), is_tile_walkable(self.BackgroundRoom4, player_x, player_y))
+        in_Room_5_and_walkable = jnp.logical_and(jnp.equal(room, 4), is_tile_walkable(self.BackgroundRoom5, player_x, player_y))
+        in_Room_6_and_walkable = jnp.logical_and(jnp.equal(room, 5), is_tile_walkable(self.BackgroundRoom6, player_x, player_y))
+        in_Room_7_and_walkable = jnp.logical_and(jnp.equal(room, 6), is_tile_walkable(self.BackgroundRoom7, player_x, player_y))
+        in_Room_8_and_walkable = jnp.logical_and(jnp.equal(room, 7), is_tile_walkable(self.BackgroundRoom8, player_x, player_y))
+        in_Room_9_and_walkable = jnp.logical_and(jnp.equal(room, 8), is_tile_walkable(self.BackgroundRoom9, player_x, player_y))
+        in_Room_10_and_walkable = jnp.logical_and(jnp.equal(room, 9), is_tile_walkable(self.BackgroundRoom10, player_x, player_y))
+        in_Room_11_and_walkable = jnp.logical_and(jnp.equal(room, 10), is_tile_walkable(self.BackgroundRoom11, player_x, player_y))
+        in_Room_12_and_walkable = jnp.logical_and(jnp.equal(room, 11), is_tile_walkable(self.BackgroundRoom12, player_x, player_y))
+        in_Room_13_and_walkable = jnp.logical_and(jnp.equal(room, 12), is_tile_walkable(self.BackgroundRoom13, player_x, player_y))
+        in_Room_14_and_walkable = jnp.logical_and(jnp.equal(room, 13), is_tile_walkable(self.BackgroundRoom14, player_x, player_y))
 
-        ### Right Wall with and without Path
-        right_wall = self.consts.RIGHT_WALL_X
-        upper_edge = self.consts.PATH_HORIZONTAL_UP
-        lower_edge = self.consts.PATH_HORIZONTAL_DOWN
-        collision_right_wall = player_x <= right_wall
-        collision_right_wall_path = jnp.logical_or(collision_right_wall, jnp.logical_and(player_y>=upper_edge, player_y<=lower_edge))
-        collision_right_special = player_x <= self.consts.SPECIAL_WALL_RIGHT
+        Room_1_or_2_and_walkable = jnp.logical_or(in_Room_1_and_walkable, in_Room_2_and_walkable)
+        Room_3_or_4_and_walkable = jnp.logical_or(in_Room_3_and_walkable, in_Room_4_and_walkable)
+        Room_5_or_6_and_walkable = jnp.logical_or(in_Room_5_and_walkable, in_Room_6_and_walkable)
+        Room_7_or_8_and_walkable = jnp.logical_or(in_Room_7_and_walkable, in_Room_8_and_walkable)
+        Room_9_or_10_and_walkable = jnp.logical_or(in_Room_9_and_walkable, in_Room_10_and_walkable)
+        Room_11_or_12_and_walkable = jnp.logical_or(in_Room_11_and_walkable, in_Room_12_and_walkable)
+        Room_13_or_14_and_walkable = jnp.logical_or(in_Room_13_and_walkable, in_Room_14_and_walkable)
 
-        ### Upper Wall with and without Path
-        upper_wall = self.consts.UPPER_WALL_Y
+        Room_1_or_2_or_3_or_4_and_walkable = jnp.logical_or(Room_1_or_2_and_walkable, Room_3_or_4_and_walkable)
+        Room_5_or_6_or_7_or_8_and_walkable = jnp.logical_or(Room_5_or_6_and_walkable, Room_7_or_8_and_walkable)
+        Room_9_or_10_or_11_or_12_and_walkable = jnp.logical_or(Room_9_or_10_and_walkable, Room_11_or_12_and_walkable)
+
+        Room_1_or_2_or_3_or_4_or_5_or_6_or_7_or_8_and_walkable = jnp.logical_or(Room_1_or_2_or_3_or_4_and_walkable, Room_5_or_6_or_7_or_8_and_walkable)
+        Room_9_or_10_or_11_or_12_or_13_or_14_and_walkable = jnp.logical_or(Room_9_or_10_or_11_or_12_and_walkable, Room_13_or_14_and_walkable)
+
+        current_Room_is_walkable = jnp.logical_or(Room_1_or_2_or_3_or_4_or_5_or_6_or_7_or_8_and_walkable,Room_9_or_10_or_11_or_12_or_13_or_14_and_walkable)
+        #jax.debug.print("is walkable {a}", a= current_Room_is_walkable)
+
+
         edge_left = self.consts.PATH_VERTICAL_LEFT
         edge_right = self.consts.PATH_VERTICAL_RIGHT
-        collision_upper_wall = player_y >= upper_wall
-        collision_upper_wall_path = jnp.logical_or(collision_upper_wall, jnp.logical_and(player_x>=edge_left, player_x<=edge_right))
 
-        ### Lower Wall with and without Path
-        lower_wall = self.consts.LOWER_WALL_Y
         edge_left = self.consts.PATH_VERTICAL_LEFT
         edge_right = self.consts.PATH_VERTICAL_RIGHT
-        collision_lower_wall = player_y <= lower_wall
-        collision_lower_wall_path = jnp.logical_or(collision_lower_wall, jnp.logical_and(player_x>=edge_left, player_x<=edge_right))
-
-
-        ## Rooms:
-        room_1_clear = jnp.logical_or(
-                jnp.logical_not(room == 0), #either it is not room 0 or
-                jnp.logical_and(            #walls of the room are not being crossed
-                    jnp.logical_and(
-                    collision_left_wall,        
-                    collision_right_wall        
-                    ),
-                    jnp.logical_and(
-                    collision_upper_wall_path,  
-                    collision_lower_wall_path   
-                    )
-                )
-        )
-
-        room_2_clear = jnp.logical_or(
-                jnp.logical_not(room == 1), #either it is not room 1 or
-                jnp.logical_and(            #walls of the room are not being crossed
-                    jnp.logical_and(
-                    collision_left_wall,        
-                    collision_right_wall        
-                    ),
-                    jnp.logical_and(
-                    collision_upper_wall,  
-                    collision_lower_wall_path   
-                    )
-                )
-        )
-
-        room_3_clear = jnp.logical_or(
-                jnp.logical_not(room == 2), #either it is not room 2 or
-                jnp.logical_and(            #walls of the room are not being crossed
-                    jnp.logical_and(
-                    collision_left_wall_path,        
-                    collision_right_wall_path        
-                    ),
-                    jnp.logical_and(
-                    collision_upper_wall_path,  
-                    collision_lower_wall   
-                    )
-                )
-        )
-
-        room_4_clear = jnp.logical_or(
-                jnp.logical_not(room == 3), #either it is not room 3 or
-                jnp.logical_and(            #walls of the room are not being crossed
-                    jnp.logical_and(
-                    collision_left_wall_path,        
-                    collision_right_special        
-                    ),
-                    jnp.logical_and(
-                    collision_upper_wall,  
-                    collision_lower_wall_path   
-                    )
-                )
-        )
-
-        room_5_clear = jnp.logical_or(
-                jnp.logical_not(room == 4), #either it is not room 4 or
-                jnp.logical_and(            #walls of the room are not being crossed
-                    jnp.logical_and(
-                    collision_left_wall,        
-                    collision_right_wall        
-                    ),
-                    jnp.logical_and(
-                    collision_upper_wall_path,  
-                    collision_lower_wall   
-                    )
-                )
-        )
-
-        room_6_clear = jnp.logical_or(
-                jnp.logical_not(room == 5), #either it is not room 5 or
-                jnp.logical_and(            #walls of the room are not being crossed
-                    jnp.logical_and(
-                    collision_left_special,        
-                    collision_right_wall_path        
-                    ),
-                    jnp.logical_and(
-                    collision_upper_wall_path,  
-                    collision_lower_wall  
-                    )
-                )
-        )
-
-        ### extra maze walls
-
-        room_7_walls = jnp.logical_or(
-            player_y >= 170,        # either below lowest thick wall or
-            jnp.logical_or(
-                jnp.logical_or(     # the two corridors up
-                    jnp.logical_and(player_x>=30, player_x <= 38),  #left corridor
-                    jnp.logical_and(player_x>=120, player_x <= 126) #right corridor
-                ),
-                jnp.logical_or(
-                    jnp.logical_or(
-                        jnp.logical_and(
-                            jnp.logical_and(player_y <= 135, player_y >= 105),
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x >=45, player_x <= 110),
-                                    player_x <= 20
-                                ),
-                                player_x >=135
-                            )
-                        ),
-                        jnp.logical_and(
-                            jnp.logical_and(player_y <= 105, player_y >= 75),
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x >= 45, player_x <=53),
-                                    jnp.logical_and(player_x >= 15, player_x <= 20)
-                                ),
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x >= 102, player_x <= 110),
-                                    jnp.logical_and(player_x >= 135, player_x <= 143)
-                                )
-                            )
-                        )
-                    ),
-                    jnp.logical_or(
-                        jnp.logical_and(
-                            jnp.logical_and(player_y <= 70, player_y >= 40),
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x >= 62, player_x <= 94),
-                                    jnp.logical_or(player_x <= 20, player_x >=135)
-                                ),
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x >= 102, player_x <= 110),
-                                    jnp.logical_and(player_x >= 45, player_x <= 53)
-                                )
-                            )
-                        ),
-                        jnp.logical_and(
-                            player_y <= 40,
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x >= 62, player_x <= 70), 
-                                    jnp.logical_and(player_x >= 86, player_x <= 94) 
-                                ),
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x >= 102, player_x <= 110), 
-                                    jnp.logical_and(player_x >= 45, player_x <= 53) 
-                                )
-                            )
-                        )
-                    )
-                )
-            )
-        )
-
-        room_8_walls = jnp.logical_or(
-            jnp.logical_or(
-                jnp.logical_or(
-                    jnp.logical_and(
-                        player_y >= 199,
-                        jnp.logical_or(
-                            jnp.logical_or(
-                                jnp.logical_and(player_x >= 30, player_x <= 38), 
-                                jnp.logical_and(player_x >= 120, player_x <= 126)  
-                            ),
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x >= 102, player_x <= 110), 
-                                    jnp.logical_and(player_x >= 45, player_x <= 53) 
-                                ),
-                                jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
-                            )
-                        )
-                    ),
-                    jnp.logical_and(
-                        jnp.logical_and(player_y >= 170, player_y <= 199),
-                        jnp.logical_or(
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x >= 30, player_x <= 38), 
-                                    jnp.logical_and(player_x >= 120, player_x <= 126)  
-                                ),
-                                jnp.logical_or(
-                                    jnp.logical_or(
-                                        jnp.logical_and(player_x >= 102, player_x <= 110), 
-                                        jnp.logical_and(player_x >= 45, player_x <= 53) 
-                                    ),
-                                    jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
-                                )
-                                ),
-                                jnp.logical_or(
-                                    player_x <= 20,
-                                    player_x >= 135
-                                )
-                            )
-                        )
-                    ),
-                
-                    jnp.logical_or(
-                        jnp.logical_and(
-                        jnp.logical_and(player_y >= 135, player_y <= 170),
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_or(
-                                        jnp.logical_and(player_x >= 30, player_x <= 38), 
-                                        jnp.logical_and(player_x >= 120, player_x <= 126)  
-                                    ),
-                                    jnp.logical_or(
-                                        jnp.logical_or(
-                                            jnp.logical_and(player_x >= 102, player_x <= 110), 
-                                            jnp.logical_and(player_x >= 45, player_x <= 53) 
-                                        ),
-                                        jnp.logical_and(player_x>=72, player_x<=84)
-                                    )
-                                    ),
-                                    jnp.logical_or(
-                                        jnp.logical_and(player_x <= 20, player_x >= 14),
-                                        jnp.logical_and(player_x >= 135, player_x <= 142)
-                                    )
-                                )
-                        ),
-                        jnp.logical_and(
-                        jnp.logical_and(player_y >= 105, player_y <= 135),
-                        jnp.logical_or(
-                                jnp.logical_or(
-                                    player_x <= 38, 
-                                    player_x >= 120
-                                ),
-                                jnp.logical_or(
-                                    jnp.logical_or(
-                                        jnp.logical_and(player_x >= 102, player_x <= 110), 
-                                        jnp.logical_and(player_x >= 45, player_x <= 53) 
-                                    ),
-                                    jnp.logical_and(player_x>=72, player_x<=84)
-                                )
-                            )
-                        )
-                    ),
-                ),
-                jnp.logical_or(
-                    jnp.logical_or(
-                        jnp.logical_and(
-                        jnp.logical_and(player_y >= 75, player_y <= 105),
-                        jnp.logical_or(
-                            jnp.logical_or(
-                                jnp.logical_and(player_x >= 102, player_x <= 110), 
-                                jnp.logical_and(player_x >= 45, player_x <= 53) 
-                            ),
-                            jnp.logical_and(player_x>=72, player_x<=84)
-                        ),
-                        ),
-                        jnp.logical_and(
-                        jnp.logical_and(player_y >= 40, player_y <= 70),
-                         jnp.logical_or(
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x >= 30, player_x <= 53), 
-                                    jnp.logical_and(player_x >= 102, player_x <= 126)  
-                                ),
-                                jnp.logical_and(player_x>=72, player_x<=84)
-                                ),
-                                jnp.logical_or(
-                                    player_x <= 20,
-                                    player_x >= 135
-                                )
-                            )
-                        )
-                    ),
-                    jnp.logical_and(
-                        player_y <= 40,
-                        jnp.logical_or(
-                            jnp.logical_or(
-                                jnp.logical_and(player_x >= 30, player_x <= 38), 
-                                jnp.logical_and(player_x >= 120, player_x <= 126)  
-                            ),
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x <= 20, player_x >= 14),
-                                    jnp.logical_and(player_x >= 135, player_x <= 142)
-                                ),
-                                jnp.logical_and(player_x>=72, player_x<=84)
-                            )
-                        )
-                    )                    
-                )
-            )
-        
-        room_9_walls = jnp.logical_or(
-            jnp.logical_or(
-                jnp.logical_or(
-                    jnp.logical_and(
-                        player_y >= 199,
-                        False
-                    ),
-                    jnp.logical_and(
-                        jnp.logical_and(player_y >= 170, player_y <= 199),
-                        jnp.logical_or(
-                            
-                                jnp.logical_and(
-                                    player_x >= 30,
-                                    player_x <= 126
-                                ),
-                                
-                                jnp.logical_or(
-                                    player_x <= 20,
-                                    player_x >= 135
-                                )
-                            )
-                        )
-                    ),
-                
-                    jnp.logical_or(
-                        jnp.logical_and(
-                        jnp.logical_and(player_y >= 135, player_y <= 170),
-                        jnp.logical_and(
-                                player_x >= 30,
-                                player_x <= 126
-                            )
-                        ),
-                        jnp.logical_and(
-                        jnp.logical_and(player_y >= 105, player_y <= 135),
-                        jnp.logical_and(
-                            player_x >= 14,
-                            player_x <= 142
-                        )
-                        )
-                    ),
-                ),
-                jnp.logical_or(
-                    jnp.logical_or(
-                        jnp.logical_and(
-                        jnp.logical_and(player_y >= 75, player_y <= 105),
-                        jnp.logical_or(
-                            jnp.logical_or(
-                                jnp.logical_and(player_x <= 20, player_x >= 14),
-                                jnp.logical_and(player_x >= 135, player_x <= 142)
-                            ),
-                            jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
-                        ),
-                        ),
-                        jnp.logical_and(
-                        jnp.logical_and(player_y >= 40, player_y <= 70),
-                         jnp.logical_or(
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x >= 30, player_x <= 53), 
-                                    jnp.logical_and(player_x >= 102, player_x <= 126)  
-                                ),
-                                jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
-                                ),
-                                jnp.logical_or(
-                                    player_x <= 20,
-                                    player_x >= 135
-                                )
-                            )
-                        )
-                    ),
-                    jnp.logical_and(
-                        player_y <= 40,
-                        jnp.logical_or(
-                            jnp.logical_or(
-                                jnp.logical_and(player_x >= 30, player_x <= 38), 
-                                jnp.logical_and(player_x >= 120, player_x <= 126)  
-                            ),
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x >= 102, player_x <= 110), 
-                                        jnp.logical_and(player_x >= 45, player_x <= 53) 
-                                ),
-                                jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
-                            )
-                        )
-                    )                    
-                )
-            )
-        
-        room_10_walls = jnp.logical_or(
-            jnp.logical_or(
-                jnp.logical_or(
-                    jnp.logical_and(
-                        player_y >= 199,
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_or(
-                                        jnp.logical_and(player_x >= 62, player_x <= 70), 
-                                        jnp.logical_and(player_x >= 86, player_x <= 94) 
-                                    ),
-                                    jnp.logical_or(
-                                        jnp.logical_and(player_x >= 102, player_x <= 110), 
-                                        jnp.logical_and(player_x >= 45, player_x <= 53) 
-                                    )
-                                ),
-                                jnp.logical_or(     # the two corridors up
-                                    jnp.logical_and(player_x>=30, player_x <= 38),  #left corridor
-                                    jnp.logical_and(player_x>=120, player_x <= 126) #right corridor
-                                )
-                            )
-                    ),
-                    jnp.logical_and(
-                        jnp.logical_and(player_y >= 170, player_y <= 199),
-                        jnp.logical_or(
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x >= 30, player_x <= 53), 
-                                    jnp.logical_and(player_x >= 102, player_x <= 126)  
-                                ),
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x >= 62, player_x <= 70), 
-                                    jnp.logical_and(player_x >= 86, player_x <= 94) 
-                                )
-                                ),
-                                jnp.logical_or(
-                                    player_x <= 20,
-                                    player_x >= 135
-                                )
-                            )
-                        )
-                    ),
-                
-                    jnp.logical_or(
-                        jnp.logical_and(
-                            jnp.logical_and(player_y >= 135, player_y <= 170), 
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x >= 62, player_x <= 70), 
-                                    jnp.logical_and(player_x >= 86, player_x <= 94)  
-                                ),
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x <= 20, player_x >= 14),
-                                    jnp.logical_and(player_x >= 135, player_x <= 142)
-                                )
-                            )
-                        ),
-                        jnp.logical_and(
-                        jnp.logical_and(player_y >= 105, player_y <= 135),
-                        jnp.logical_or(
-                                jnp.logical_and(player_x >=14, player_x <= 70),
-                                jnp.logical_and(player_x >= 86, player_x <= 142)
-                            )
-                        )
-                    ),
-                ),
-                jnp.logical_or(
-                    jnp.logical_or(
-                        jnp.logical_and(
-                        jnp.logical_and(player_y >= 75, player_y <= 105),
-                        jnp.logical_or(
-                            jnp.logical_and(player_x >= 38, player_x <= 44),
-                            jnp.logical_and(player_x >= 112, player_x <= 118)
-                        ),
-                        ),
-                        jnp.logical_and(
-                            player_y >= 40,
-                            player_y <= 70
-                        )
-                    ),
-                    jnp.logical_and(
-                        player_y <= 40,
-                        False
-                    )                    
-                )
-            )
-        
-        room_11_walls = jnp.logical_or(
-            jnp.logical_or(
-                jnp.logical_or(
-                    jnp.logical_and(
-                        player_y >= 199,
-                        jnp.logical_or(
-                            jnp.logical_or(
-                                jnp.logical_and(player_x >= 30, player_x <= 38), 
-                                jnp.logical_and(player_x >= 120, player_x <= 126)  
-                            ),
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x <= 20, player_x >= 14),
-                                    jnp.logical_and(player_x >= 135, player_x <= 142)
-                                ),
-                                jnp.logical_and(player_x>=72, player_x<=84)
-                            )
-                        )
-                    ),
-                    jnp.logical_and(
-                        jnp.logical_and(player_y >= 170, player_y <= 199),
-                        jnp.logical_or(
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x >= 30, player_x <= 60), 
-                                    jnp.logical_and(player_x >= edge_right, player_x <= 126)  
-                                ),
-                                jnp.logical_and(player_x>=72, player_x<=84)
-                                ),
-                                jnp.logical_or(
-                                    player_x <= 20,
-                                    player_x >= 135
-                                )
-                            )
-                        )
-                    ),
-                
-                    jnp.logical_or(
-                        jnp.logical_and(
-                            jnp.logical_and(player_y >= 135, player_y <= 170),
-                            jnp.logical_and(player_x>=72, player_x<=84)
-                        ),
-                        jnp.logical_and(
-                        jnp.logical_and(player_y >= 105, player_y <= 135),
-                        jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_and(player_x>=16, player_x<=30),
-                                    jnp.logical_and(player_x>=126, player_x<=140)
-                                ),
-                               jnp.logical_and(player_x>=38, player_x<=118)
-                            )
-                        )
-                    ),
-                ),
-                jnp.logical_or(
-                    jnp.logical_or(
-                        jnp.logical_and(
-                        jnp.logical_and(player_y >= 75, player_y <= 105),
-                            jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_or(
-                                        jnp.logical_and(player_x>=16, player_x<=30),
-                                        jnp.logical_and(player_x>=104, player_x<=118)
-                                    ),
-                                jnp.logical_or(
-                                        jnp.logical_and(player_x>=38, player_x<=53),
-                                        jnp.logical_and(player_x>=126, player_x<=140)
-                                    ),
-                                ),
-                            jnp.logical_and(player_x>=72, player_x<=84)
-                            )
-                        ),
-                        jnp.logical_and(
-                        jnp.logical_and(player_y >= 40, player_y <= 70),
-                        jnp.logical_or(
-                                jnp.logical_or(
-                                    jnp.logical_or(
-                                        player_x<=30,
-                                        player_x>=126
-                                    ),
-                                jnp.logical_or(
-                                        jnp.logical_and(player_x>=38, player_x<=53),
-                                        jnp.logical_and(player_x>=104, player_x<=118)
-                                    ),
-                                ),
-                            jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
-                            )
-                        )
-                    ),
-                    jnp.logical_and(
-                        player_y <= 40,
-                        jnp.logical_and(player_x>=edge_left, player_x<=edge_right)
-                    )                   
-                )
-            )
-
-
-        ### end extra maze walls
-
-        room_7_clear = jnp.logical_or(
-            jnp.logical_not(room == 6),
-            jnp.logical_and(
-                collision_lower_wall_path,
-                room_7_walls
-            )
-        )
-
-        room_8_clear = jnp.logical_or(
-            jnp.logical_not(room == 7),
-            room_8_walls
-            )
-
-        room_9_clear = jnp.logical_or(
-            jnp.logical_not(room == 8),
-            room_9_walls
-            )
-        
-        room_10_clear = jnp.logical_or(
-            jnp.logical_not(room == 9),
-            room_10_walls
-        )
-
-        room_11_clear = jnp.logical_or(
-            jnp.logical_not(room == 10),
-            room_11_walls
-        )
-
-        room_12_clear = jnp.logical_or(
-                jnp.logical_not(room == 11), #either it is not room 12 or
-                jnp.logical_and(            #walls of the room are not being crossed
-                    jnp.logical_and(
-                    collision_left_wall,        
-                    collision_right_wall        
-                    ),
-                    jnp.logical_and(
-                    collision_upper_wall_path,  
-                    collision_lower_wall_path 
-                    )
-                )
-        )
-
-        room_13_clear = jnp.logical_or(
-                jnp.logical_not(room == 12), #either it is not room 13 or
-                jnp.logical_and(            #walls of the room are not being crossed
-                    jnp.logical_and(
-                    collision_left_wall,        
-                    collision_right_wall        
-                    ),
-                    jnp.logical_and(
-                    collision_upper_wall_path,  
-                    collision_lower_wall_path  
-                    )
-                )
-        )
-
-        room_14_clear = jnp.logical_or(
-                jnp.logical_not(room == 13), #either it is not room 14 or
-                jnp.logical_and(            #walls of the room are not being crossed
-                    jnp.logical_and(
-                    collision_left_wall,        
-                    collision_right_wall        
-                    ),
-                    jnp.logical_and(
-                    collision_upper_wall,  
-                    collision_lower_wall_path  
-                    )
-                )
-        )
 
         #Castle Collisions
         castle_tower_left = self.consts.CASTLE_TOWER_LEFT_X
@@ -965,23 +391,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             jnp.logical_and(castle_walls, castle_gate)
         )
 
-        room_1_and_2 = jnp.logical_and(room_1_clear, room_2_clear)
-        room_3_and_4 = jnp.logical_and(room_3_clear, room_4_clear)
-        room_1_to_4 = jnp.logical_and(room_1_and_2, room_3_and_4)
-        room_5_and_6 = jnp.logical_and(room_5_clear, room_6_clear)
-        room_7_and_8 = jnp.logical_and(room_7_clear, room_8_clear)
-        room_5_to_8 = jnp.logical_and(room_5_and_6, room_7_and_8)
-        room_9_and_10 = jnp.logical_and(room_9_clear, room_10_clear)
-        room_11_and_12= jnp.logical_and(room_11_clear, room_12_clear)
-        room_9_to_12 = jnp.logical_and(room_9_and_10, room_11_and_12)
-        room_13_and_14 = jnp.logical_and(room_13_clear, room_14_clear)
 
-        room_1_to_8 = jnp.logical_and(room_1_to_4,room_5_to_8)
-        room_9_to_14 = jnp.logical_and(room_9_to_12, room_13_and_14)
-
-        base_rooms = jnp.logical_and(room_1_to_8, room_9_to_14)
-
-        walls_detected = jnp.logical_and(base_rooms, castle_collision )
+        walls_detected = jnp.logical_and(current_Room_is_walkable, castle_collision )
 
         #Check for Bridge negating wall
         
