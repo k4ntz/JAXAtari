@@ -283,13 +283,18 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             #determin if we should be allowed to walk, based on the background only
             #tileset data at a given x and y position is [r, g, b, 255] 
             #[151, 151, 151, 255] = Grey (allowed player movement) 
-            #anything else are walls (inversed in certain maze tileset) or top or bottom border.
+            #[0, 0, 0, 255] are top or bottom border allow movement for tilechange
+            #anything else are walls (inversed in certain maze tileset) .
             is_walkable_1 = (tileset[Pos_y+2,Pos_x][0] == jnp.uint8(151))
             is_walkable_2 = (tileset[Pos_y+2,Pos_x][1] == jnp.uint8(151))
             is_walkable_3 = (tileset[Pos_y+2,Pos_x][2] == jnp.uint8(151))
             is_walkable = jnp.logical_and(is_walkable_1, jnp.logical_and(is_walkable_2,is_walkable_3))
+            is_border_1 = (tileset[Pos_y+2,Pos_x][0] == jnp.uint8(0))
+            is_border_2 = (tileset[Pos_y+2,Pos_x][1] == jnp.uint8(0))
+            is_border_3 = (tileset[Pos_y+2,Pos_x][2] == jnp.uint8(0))
+            is_border = jnp.logical_and(is_border_1, jnp.logical_and(is_border_2,is_border_3))
             #jax.debug.print("Tile: {a} is walkable {b}",a=tileset[Pos_y,Pos_x][0:3], b=is_walkable)
-            return is_walkable            
+            return jnp.logical_or(is_walkable,is_border)            
         
         #jax.debug.print("Room: {a} is equal to 0 {b}, is walkable {c}",a=room, b=(room == 0),c=is_tile_walkable(self.BackgroundRoom1, player_x, player_y))
         in_Room_1_and_walkable = jnp.logical_and(jnp.equal(room, 0), is_tile_walkable(self.BackgroundRoom1, player_x, player_y))
