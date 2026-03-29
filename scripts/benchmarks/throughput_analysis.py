@@ -5,19 +5,14 @@ import importlib
 import signal
 from contextlib import contextmanager
 from itertools import combinations
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import hydra
-import jax
-import jax.numpy as jnp
 import numpy as np
 import gymnasium as gym
 import ale_py
 from omegaconf import DictConfig, OmegaConf
 import wandb
-
-# import jaxatari
-# from jaxatari.wrappers import AtariWrapper, ObjectCentricWrapper, FlattenObservationWrapper, PixelObsWrapper
 
 
 #### NOTE
@@ -26,7 +21,9 @@ import wandb
 # uv pip install wandb "jax[cuda12]" hydra-core "gxm[envpool]" 
 
 # For XLA envpool to work, we need to use envpool==0.6.6, but jax==0.3.13 and jaxlib==0.3.10 (directly from jax server) and numpy==1.24.4 and scipy==1.8.1
+# also needed for async(?), otherwise I get segfaults/double free etc
 # uv pip install jax==0.3.13 jaxlib==0.3.10+cuda11.cudnn82 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+# uv pip install numpy==1.24.4 scipy==1.8.1 
 # Since envpool async is faster than scanned xla (which is also async??), we can just keep using the higher jax versions
 
 # performance of scanned XLA (8 envs, 10000 steps): 40k throughput (7.97s)
@@ -37,11 +34,10 @@ import wandb
 # performance of async envpool (256 envs, 10000 steps): 640k throughput (24.3s) [batch_size=128]
 # performance of async envpool (256 envs, 10000 steps): ~800k throughput (24.3s) NUMA, [batch_size=128]
 # GXM
-# performance of gxm envpool (256 envs, 10000 steps): 193k throughput (52.3s) -> is it synchronous?, nope.. even worse :(
+# performance of gxm envpool (256 envs, 10000 steps): 193k throughput (52.3s) -> is it synchronous? yes, and weirdly implemented
 # Synced envpool
 # performance of sync envpool (256 envs, 10000 steps): 398k throughput (24.7s)
 # performance of sync envpool (512 envs, 10000 steps): 490k throughput (41s)
-# With NUMA synced envpool (256 envs): 101k throughput (100s) -> lol
 
 JAXATARI_BACKEND = "jaxatari"
 ALE_BACKEND = "ale"
@@ -57,9 +53,79 @@ PIXEL_OPT_NATIVE = "native"
 CPU_PLATFORM = "cpu"
 GPU_PLATFORM = "gpu"
 
+RESULT_COLUMNS = [
+    "backend",
+    "env_name",
+    "jaxatari_mode",
+    "pixel_options",
+    "atari_frame_skip",
+    "jax_platform",
+    "num_envs",
+    "num_steps",
+    "total_env_steps",
+    "compile_s",
+    "runtime_s",
+    "throughput_env_steps_per_sec",
+    "status",
+    "error",
+]
+
 
 class BenchmarkTimeoutError(RuntimeError):
     pass
+
+
+_JAX_MODULE = None
+_JNP_MODULE = None
+_JAXATARI_MODULE = None
+_ATARI_WRAPPER = None
+_OBJECT_CENTRIC_WRAPPER = None
+_FLATTEN_OBSERVATION_WRAPPER = None
+_PIXEL_OBS_WRAPPER = None
+
+
+def _get_jax_modules():
+    global _JAX_MODULE, _JNP_MODULE
+    if _JAX_MODULE is None or _JNP_MODULE is None:
+        import jax
+        import jax.numpy as jnp
+
+        _JAX_MODULE = jax
+        _JNP_MODULE = jnp
+    return _JAX_MODULE, _JNP_MODULE
+
+
+def _get_jaxatari_modules():
+    global _JAXATARI_MODULE
+    global _ATARI_WRAPPER, _OBJECT_CENTRIC_WRAPPER, _FLATTEN_OBSERVATION_WRAPPER, _PIXEL_OBS_WRAPPER
+    if (
+        _JAXATARI_MODULE is None
+        or _ATARI_WRAPPER is None
+        or _OBJECT_CENTRIC_WRAPPER is None
+        or _FLATTEN_OBSERVATION_WRAPPER is None
+        or _PIXEL_OBS_WRAPPER is None
+    ):
+        import jaxatari
+        from jaxatari.wrappers import (
+            AtariWrapper,
+            FlattenObservationWrapper,
+            ObjectCentricWrapper,
+            PixelObsWrapper,
+        )
+
+        _JAXATARI_MODULE = jaxatari
+        _ATARI_WRAPPER = AtariWrapper
+        _OBJECT_CENTRIC_WRAPPER = ObjectCentricWrapper
+        _FLATTEN_OBSERVATION_WRAPPER = FlattenObservationWrapper
+        _PIXEL_OBS_WRAPPER = PixelObsWrapper
+
+    return (
+        _JAXATARI_MODULE,
+        _ATARI_WRAPPER,
+        _OBJECT_CENTRIC_WRAPPER,
+        _FLATTEN_OBSERVATION_WRAPPER,
+        _PIXEL_OBS_WRAPPER,
+    )
 
 
 @contextmanager
@@ -87,6 +153,7 @@ def _run_with_timeout(function, timeout_seconds: int, context: str, **kwargs):
 
 
 def _compile_and_time_rollout(rollout_fn, *args):
+    jax, _ = _get_jax_modules()
     compile_start = time.perf_counter()
     compiled = rollout_fn.lower(*args).compile()
     compile_s = time.perf_counter() - compile_start
@@ -107,6 +174,7 @@ def _build_given_action_scanned_rollout(
     given_action: int,
     jax_platform: str,
 ):
+    jax, jnp = _get_jax_modules()
     vmapped_step = jax.vmap(env.step)
     action_batch = jnp.full((num_envs,), given_action, dtype=jnp.int32)
 
@@ -172,6 +240,15 @@ def _prepare_jaxatari_states(
     atari_frame_skip: int,
     pixel_resize_shape: Tuple[int, int],
 ):
+    jax, _ = _get_jax_modules()
+    (
+        jaxatari,
+        AtariWrapper,
+        ObjectCentricWrapper,
+        FlattenObservationWrapper,
+        PixelObsWrapper,
+    ) = _get_jaxatari_modules()
+
     env = jaxatari.make(game_name)
     env = AtariWrapper(env, frame_skip=atari_frame_skip)
 
@@ -215,27 +292,42 @@ def _default_envpool_env_id(game_name: str) -> str:
 
 
 def _run_ale_benchmark(
-    ale_env_id: str,
+    env_name: str,
     num_envs: int,
     num_steps: int,
     atari_frame_skip: int,
     seed: int,
     given_action: int,
 ) -> Dict[str, Any]:
-    env_fns = [lambda: gym.make(ale_env_id) for _ in range(num_envs)]
-    vector_env = gym.vector.AsyncVectorEnv(env_fns, context="spawn")
-    vector_env.reset(seed=seed)
+    from ale_py.vector_env import AtariVectorEnv
 
-    actions = np.full((num_envs,), given_action, dtype=np.int32)
-    # Equivalent to nested stepping for this benchmark because action is fixed.
-    effective_num_steps = num_steps * atari_frame_skip
-    start = time.perf_counter()
-    for _ in range(effective_num_steps):
-        _, _, _, _, _ = vector_env.step(actions)
-    runtime_s = time.perf_counter() - start
-    vector_env.close()
+    b_size = num_envs
+    envs = AtariVectorEnv(
+        game=env_name,
+        num_envs=num_envs,
+        batch_size=b_size,
+        frameskip=atari_frame_skip,
+        stack_num=4,
+        grayscale=True,
+        img_height=84,
+        img_width=84,
+    )
+    try:
+        envs.reset(seed=seed)
 
-    total_env_steps = num_envs * effective_num_steps
+        actions = np.full((b_size,), given_action, dtype=np.int32)
+        # Equivalent to nested stepping for this benchmark because action is fixed.
+        actual_size = 0
+        start = time.perf_counter()
+        while actual_size < num_envs * num_steps:
+            envs.send(actions)
+            _, _, _, _, _ = envs.recv()
+            actual_size += b_size
+        runtime_s = time.perf_counter() - start
+    finally:
+        envs.close()
+
+    total_env_steps = num_envs * num_steps * atari_frame_skip
     throughput = total_env_steps / runtime_s
     return {
         "compile_s": 0.0,
@@ -249,7 +341,7 @@ def _create_envpool_env(
     envpool_env_id: str,
     num_envs: int,
     atari_frame_skip: int,
-    batch_size: int = None,
+    batch_size: Optional[int] = None,
 ):
     try:
         envpool_module = importlib.import_module("envpool")
@@ -275,6 +367,7 @@ def _run_envpool_xla_benchmark(
     seed: int,
     given_action: int,
 ) -> Dict[str, Any]:
+    jax, jnp = _get_jax_modules()
     env, envpool_impl = _create_envpool_env(
         envpool_env_id=envpool_env_id,
         num_envs=num_envs,
@@ -319,18 +412,20 @@ def _run_envpool_async_benchmark(
     seed: int,
     given_action: int,
 ) -> Dict[str, Any]:
+    batch_size = max(1, (2 * num_envs) // 3)
+    print("Using batch size:", batch_size)
     env, envpool_impl = _create_envpool_env(
         envpool_env_id=envpool_env_id,
         num_envs=num_envs,
         atari_frame_skip=atari_frame_skip,
-        batch_size=128
+        # batch_size=batch_size,
+        batch_size=num_envs,
     )
 
+    # env.action_space.seed(seed)
+    # action_batch = np.full((batch_size,), given_action, dtype=np.int32)
+    action_batch = np.full((num_envs,), given_action, dtype=np.int32)
     env.async_reset()
-    env.action_space.seed(seed)
-    # action_batch = np.full((num_envs,), given_action, dtype=np.int32)
-    action_batch = np.full((128,), given_action, dtype=np.int32)
-
     try:
         actual_size = 0
         start = time.perf_counter()
@@ -438,6 +533,7 @@ def _run_gxm_benchmark(
     given_action: int,
     gxm_platform: str,
 ) -> Dict[str, Any]:
+    jax, jnp = _get_jax_modules()
     env, gxm_impl = _create_gxm_env(
         gxm_env_id=gxm_env_id,
         atari_frame_skip=atari_frame_skip,
@@ -484,18 +580,54 @@ def _run_gxm_benchmark(
     }
 
 
-def _save_results_csv(results: List[Dict[str, Any]], csv_path: str) -> str:
-    if not results:
-        return ""
-
+def _open_results_csv_writer(csv_path: str, fieldnames: List[str]):
     abs_path = os.path.abspath(csv_path)
     os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
-    fieldnames = list(results[0].keys())
-    with open(abs_path, "w", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(results)
-    return abs_path
+    csv_file = open(abs_path, "w", newline="")
+    writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+    writer.writeheader()
+    csv_file.flush()
+    return abs_path, csv_file, writer
+
+
+def _write_results_csv_row(csv_file, csv_writer, row: Dict[str, Any]):
+    csv_writer.writerow(row)
+    csv_file.flush()
+
+
+def _build_result_row(
+    backend: str,
+    env_name: str,
+    atari_frame_skip: int,
+    num_envs: int,
+    num_steps: int,
+    *,
+    jaxatari_mode: str = "",
+    pixel_options: str = "",
+    jax_platform: str = "",
+    compile_s: float = float("nan"),
+    runtime_s: float = float("nan"),
+    total_env_steps: float = float("nan"),
+    throughput_env_steps_per_sec: float = float("nan"),
+    status: str = "ok",
+    error: str = "",
+) -> Dict[str, Any]:
+    return {
+        "backend": backend,
+        "env_name": env_name,
+        "jaxatari_mode": jaxatari_mode,
+        "pixel_options": pixel_options,
+        "atari_frame_skip": atari_frame_skip,
+        "jax_platform": jax_platform,
+        "num_envs": num_envs,
+        "num_steps": num_steps,
+        "total_env_steps": total_env_steps,
+        "compile_s": compile_s,
+        "runtime_s": runtime_s,
+        "throughput_env_steps_per_sec": throughput_env_steps_per_sec,
+        "status": status,
+        "error": error,
+    }
 
 
 def _normalize_frame_skip_values(frame_skip_config: Any) -> List[int]:
@@ -509,20 +641,90 @@ def _normalize_frame_skip_values(frame_skip_config: Any) -> List[int]:
     return frame_skips
 
 
+def _to_str_list(config_value: Any) -> List[str]:
+    if config_value is None:
+        return []
+    if isinstance(config_value, (list, tuple)):
+        return [str(value) for value in config_value]
+    return [str(config_value)]
+
+
+def _broadcast_values(values: List[str], target_count: int, field_name: str) -> List[str]:
+    if not values:
+        return []
+    if len(values) == target_count:
+        return values
+    if len(values) == 1:
+        return values * target_count
+    raise ValueError(
+        f"{field_name} must either contain 1 value or match the number of environment names "
+        f"({target_count}), got {len(values)}"
+    )
+
+
+def _resolve_benchmark_targets(config: Dict[str, Any]) -> List[Dict[str, str]]:
+    game_names = _to_str_list(
+        config.get("GAME_NAMES")
+        or config.get("ENV_NAMES")
+        or config.get("GAME_NAME")
+        or config.get("ENV_NAME")
+    )
+    if not game_names:
+        raise ValueError("Provide at least one env name via GAME_NAME/GAME_NAMES (or ENV_NAME/ENV_NAMES)")
+
+    normalized_game_names = [name.lower() for name in game_names]
+    target_count = len(normalized_game_names)
+
+    ale_env_ids = _broadcast_values(
+        _to_str_list(config.get("ALE_ENV_IDS") or config.get("ALE_ENV_ID")),
+        target_count,
+        "ALE_ENV_ID/ALE_ENV_IDS",
+    )
+    if not ale_env_ids:
+        ale_env_ids = [_default_ale_env_id(game_name) for game_name in normalized_game_names]
+
+    gxm_env_ids = _broadcast_values(
+        _to_str_list(config.get("GXM_ENV_IDS") or config.get("GXM_ENV_ID")),
+        target_count,
+        "GXM_ENV_ID/GXM_ENV_IDS",
+    )
+    if not gxm_env_ids:
+        gxm_env_ids = [_default_gxm_env_id(game_name) for game_name in normalized_game_names]
+
+    envpool_env_ids = _broadcast_values(
+        _to_str_list(config.get("ENVPOOL_ENV_IDS") or config.get("ENVPOOL_ENV_ID")),
+        target_count,
+        "ENVPOOL_ENV_ID/ENVPOOL_ENV_IDS",
+    )
+    if not envpool_env_ids:
+        envpool_env_ids = [_default_envpool_env_id(game_name) for game_name in normalized_game_names]
+
+    return [
+        {
+            "game_name": game_name,
+            "ale_env_id": ale_env_id,
+            "gxm_env_id": gxm_env_id,
+            "envpool_env_id": envpool_env_id,
+        }
+        for game_name, ale_env_id, gxm_env_id, envpool_env_id in zip(
+            normalized_game_names,
+            ale_env_ids,
+            gxm_env_ids,
+            envpool_env_ids,
+        )
+    ]
+
+
 def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     env_counts = [int(x) for x in config["ENV_COUNTS"]]
     num_steps = int(config["NUM_STEPS"])
-    game_name = str(config["GAME_NAME"]).lower()
+    benchmark_targets = _resolve_benchmark_targets(config)
     backends = [str(x).lower() for x in config.get("BENCHMARK_BACKENDS", [JAXATARI_BACKEND])]
     jaxatari_modes = [str(x).lower() for x in config.get("JAXATARI_MODES", [JAX_MODE_OC, JAX_MODE_PIXEL])]
     jaxatari_platforms = [str(x).lower() for x in config.get("JAXATARI_PLATFORMS", [GPU_PLATFORM])]
     atari_frame_skips = _normalize_frame_skip_values(config.get("ATARI_FRAME_SKIP", 4))
     pixel_resize_shape = tuple(config.get("PIXEL_RESIZE_SHAPE", [84, 84]))
     pixel_option_combinations = _expand_pixel_option_combinations(config)
-    ale_env_id = str(config.get("ALE_ENV_ID") or _default_ale_env_id(game_name))
-    gxm_env_id = str(config.get("GXM_ENV_ID") or _default_gxm_env_id(game_name))
-    envpool_env_id = str(config.get("ENVPOOL_ENV_ID") or _default_envpool_env_id(game_name))
-    gxm_env_type = str(config.get("GXM_ENV_TYPE", "envpool"))
     gxm_platforms = [str(x).lower() for x in config.get("GXM_PLATFORMS", [GPU_PLATFORM])]
     base_seed = int(config["SEED"])
     given_action = int(config["GIVEN_ACTION"])
@@ -533,7 +735,9 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     envpool_timeout_s = int(config.get("ENVPOOL_TIMEOUT_S", 3600))
 
     if JAXATARI_BACKEND in backends or GXM_BACKEND in backends:
-        available_platforms = {device.platform for device in jax.devices()}
+        jax, _ = _get_jax_modules()
+        device_list = jax.devices() + jax.devices(backend="cpu")
+        available_platforms = {device.platform for device in device_list}
 
     if JAXATARI_BACKEND in backends:
         for platform in jaxatari_platforms:
@@ -567,429 +771,300 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     results: List[Dict[str, Any]] = []
     run_step = 0
+    csv_output_path = ""
+    csv_file = None
+    csv_writer = None
+    if save_results_csv:
+        print("Writing results to CSV at:", results_csv_path)
+        csv_output_path, csv_file, csv_writer = _open_results_csv_writer(results_csv_path, RESULT_COLUMNS)
 
-    for atari_frame_skip in atari_frame_skips:
-        for backend in backends:
-            if backend not in (
-                JAXATARI_BACKEND,
-                ALE_BACKEND,
-                GXM_BACKEND,
-                ENVPOOL_XLA_BACKEND,
-                ENVPOOL_ASYNC_BACKEND,
-                ENVPOOL_SYNC_BACKEND,
-            ):
-                raise ValueError(
-                    "Unknown backend "
-                    f"'{backend}'. Expected one of: [{JAXATARI_BACKEND}, {ALE_BACKEND}, {GXM_BACKEND}, "
-                    f"{ENVPOOL_XLA_BACKEND}, {ENVPOOL_ASYNC_BACKEND}, {ENVPOOL_SYNC_BACKEND}]"
-                )
+    def _record_result_row(row: Dict[str, Any]):
+        nonlocal run_step
+        results.append(row)
+        if csv_file is not None and csv_writer is not None:
+            _write_results_csv_row(csv_file, csv_writer, row)
 
-            for num_envs in env_counts:
-                if backend == JAXATARI_BACKEND:
-                    for jax_mode in jaxatari_modes:
-                        mode_pixel_combos = pixel_option_combinations if jax_mode == JAX_MODE_PIXEL else [tuple()]
+        if run is not None:
+            wandb_payload = {f"benchmark/{column}": row[column] for column in RESULT_COLUMNS}
+            wandb.log(wandb_payload, step=run_step)
 
-                        for pixel_options in mode_pixel_combos:
-                            pixel_options_str = "+".join(pixel_options)
+        status = str(row.get("status", "ok"))
+        details = []
+        if row.get("jaxatari_mode"):
+            details.append(f"mode={row['jaxatari_mode']}")
+        if row.get("pixel_options"):
+            details.append(f"pixel={row['pixel_options']}")
+        if row.get("jax_platform"):
+            details.append(f"platform={row['jax_platform']}")
 
-                            for jax_platform in jaxatari_platforms:
-                                env_seed = base_seed + run_step
-                                env, states = _prepare_jaxatari_states(
-                                    game_name=game_name,
-                                    num_envs=num_envs,
-                                    seed=env_seed,
-                                    mode=jax_mode,
-                                    pixel_options=pixel_options,
-                                    atari_frame_skip=atari_frame_skip,
-                                    pixel_resize_shape=pixel_resize_shape,
-                                )
-                                rollout = _build_given_action_scanned_rollout(
-                                    env=env,
-                                    num_envs=num_envs,
-                                    num_steps=num_steps,
-                                    given_action=given_action,
-                                    jax_platform=jax_platform,
-                                )
-                                compile_s, runtime_s = _compile_and_time_rollout(rollout, states)
-                                total_env_steps = num_envs * num_steps * atari_frame_skip
-                                throughput = total_env_steps / runtime_s
+        prefix = (
+            f"backend={row['backend']:8s} | env={row['env_name']:10s} | "
+            f"fs={int(row['atari_frame_skip']):2d} | envs={int(row['num_envs']):4d} | steps={int(row['num_steps'])}"
+        )
+        details_part = f" | {' | '.join(details)}" if details else ""
+        if status == "ok":
+            print(
+                f"{prefix}{details_part} | compile={float(row['compile_s']):.3f}s | "
+                f"run={float(row['runtime_s']):.3f}s | throughput={float(row['throughput_env_steps_per_sec']):,.2f} env-steps/s"
+            )
+        else:
+            print(f"{prefix}{details_part} | status={status} | ERROR={row.get('error', '')}")
 
-                                row = {
-                                    "backend": backend,
-                                    "game_name": game_name,
-                                    "ale_env_id": "",
-                                    "gxm_env_id": "",
-                                    "gxm_env_type": "",
-                                    "gxm_impl": "",
-                                    "jaxatari_mode": jax_mode,
-                                    "pixel_options": pixel_options_str,
-                                    "atari_frame_skip": atari_frame_skip,
-                                    "jax_platform": jax_platform,
-                                    "num_envs": num_envs,
-                                    "num_steps": num_steps,
-                                    "total_env_steps": total_env_steps,
-                                    "given_action": given_action,
-                                    "compile_s": compile_s,
-                                    "runtime_s": runtime_s,
-                                    "throughput_env_steps_per_sec": throughput,
-                                }
-                                results.append(row)
+        run_step += 1
 
-                                wandb.log(
-                                    {
-                                        "benchmark/backend": backend,
-                                        "benchmark/game_name": game_name,
-                                        "benchmark/ale_env_id": "",
-                                        "benchmark/gxm_env_id": "",
-                                        "benchmark/gxm_env_type": "",
-                                        "benchmark/gxm_impl": "",
-                                        "benchmark/jaxatari_mode": jax_mode,
-                                        "benchmark/pixel_options": pixel_options_str,
-                                        "benchmark/atari_frame_skip": atari_frame_skip,
-                                        "benchmark/jax_platform": jax_platform,
-                                        "benchmark/num_envs": num_envs,
-                                        "benchmark/num_steps": num_steps,
-                                        "benchmark/total_env_steps": total_env_steps,
-                                        "benchmark/given_action": given_action,
-                                        "benchmark/compile_s": compile_s,
-                                        "benchmark/runtime_s": runtime_s,
-                                        "benchmark/throughput_env_steps_per_sec": throughput,
-                                    },
-                                    step=run_step,
-                                )
+    for target in benchmark_targets:
+        game_name = target["game_name"]
+        ale_env_id = target["ale_env_id"]
+        gxm_env_id = target["gxm_env_id"]
+        envpool_env_id = target["envpool_env_id"]
 
-                                print(
-                                    f"backend={backend:8s} | fs={atari_frame_skip:2d} | mode={jax_mode:5s} | "
-                                    f"pixel={pixel_options_str or '-':15s} | platform={jax_platform:3s} | "
-                                    f"envs={num_envs:4d} | steps={num_steps} | "
-                                    f"compile={compile_s:.3f}s | run={runtime_s:.3f}s | "
-                                    f"throughput={throughput:,.2f} env-steps/s"
-                                )
-
-                                run_step += 1
-                    continue
-                elif backend == ALE_BACKEND:
-                    env_seed = base_seed + run_step
-                    try:
-                        ale_metrics = _run_with_timeout(
-                            _run_ale_benchmark,
-                            timeout_seconds=ale_timeout_s,
-                            context=f"ALE benchmark (envs={num_envs}, frame_skip={atari_frame_skip})",
-                            ale_env_id=ale_env_id,
-                            num_envs=num_envs,
-                            num_steps=num_steps,
-                            atari_frame_skip=atari_frame_skip,
-                            seed=env_seed,
-                            given_action=given_action,
-                        )
-                    except Exception as error:
-                        print(
-                            f"backend={backend:8s} | fs={atari_frame_skip:2d} | env_id={ale_env_id:16s} | "
-                            f"envs={num_envs:4d} | steps={num_steps} | ERROR={type(error).__name__}: {error}"
-                        )
-                        run_step += 1
-                        continue
-                    compile_s = ale_metrics["compile_s"]
-                    runtime_s = ale_metrics["runtime_s"]
-                    total_env_steps = ale_metrics["total_env_steps"]
-                    throughput = ale_metrics["throughput_env_steps_per_sec"]
-                    gxm_impl = ""
-                    row = {
-                        "backend": backend,
-                        "game_name": game_name,
-                        "ale_env_id": ale_env_id,
-                        "gxm_env_id": "",
-                        "gxm_env_type": "",
-                        "gxm_impl": gxm_impl,
-                        "jaxatari_mode": "",
-                        "pixel_options": "",
-                        "atari_frame_skip": atari_frame_skip,
-                        "jax_platform": "",
-                        "num_envs": num_envs,
-                        "num_steps": num_steps,
-                        "total_env_steps": total_env_steps,
-                        "given_action": given_action,
-                        "compile_s": compile_s,
-                        "runtime_s": runtime_s,
-                        "throughput_env_steps_per_sec": throughput,
-                    }
-                    results.append(row)
-
-                    wandb.log(
-                        {
-                            "benchmark/backend": backend,
-                            "benchmark/game_name": game_name,
-                            "benchmark/ale_env_id": ale_env_id,
-                            "benchmark/gxm_env_id": "",
-                            "benchmark/gxm_env_type": "",
-                            "benchmark/gxm_impl": gxm_impl,
-                            "benchmark/jaxatari_mode": "",
-                            "benchmark/pixel_options": "",
-                            "benchmark/atari_frame_skip": atari_frame_skip,
-                            "benchmark/jax_platform": "",
-                            "benchmark/num_envs": num_envs,
-                            "benchmark/num_steps": num_steps,
-                            "benchmark/total_env_steps": total_env_steps,
-                            "benchmark/given_action": given_action,
-                            "benchmark/compile_s": compile_s,
-                            "benchmark/runtime_s": runtime_s,
-                            "benchmark/throughput_env_steps_per_sec": throughput,
-                        },
-                        step=run_step,
+        for atari_frame_skip in atari_frame_skips:
+            for backend in backends:
+                if backend not in (
+                    JAXATARI_BACKEND,
+                    ALE_BACKEND,
+                    GXM_BACKEND,
+                    ENVPOOL_XLA_BACKEND,
+                    ENVPOOL_ASYNC_BACKEND,
+                    ENVPOOL_SYNC_BACKEND,
+                ):
+                    raise ValueError(
+                        "Unknown backend "
+                        f"'{backend}'. Expected one of: [{JAXATARI_BACKEND}, {ALE_BACKEND}, {GXM_BACKEND}, "
+                        f"{ENVPOOL_XLA_BACKEND}, {ENVPOOL_ASYNC_BACKEND}, {ENVPOOL_SYNC_BACKEND}]"
                     )
 
-                    print(
-                        f"backend={backend:8s} | fs={atari_frame_skip:2d} | env_id={ale_env_id:16s} | "
-                        f"envs={num_envs:4d} | steps={num_steps} | run={runtime_s:.3f}s | "
-                        f"throughput={throughput:,.2f} env-steps/s"
-                    )
+                for num_envs in env_counts:
+                    if backend == JAXATARI_BACKEND:
+                        for jax_mode in jaxatari_modes:
+                            mode_pixel_combos = pixel_option_combinations if jax_mode == JAX_MODE_PIXEL else [tuple()]
 
-                    run_step += 1
-                    continue
-                elif backend == ENVPOOL_XLA_BACKEND:
-                    env_seed = base_seed + run_step
-                    try:
-                        envpool_metrics = _run_with_timeout(
-                            _run_envpool_xla_benchmark,
-                            timeout_seconds=envpool_timeout_s,
-                            context=(
-                                f"EnvPool XLA benchmark (envs={num_envs}, frame_skip={atari_frame_skip})"
-                            ),
-                            envpool_env_id=envpool_env_id,
-                            num_envs=num_envs,
-                            num_steps=num_steps,
-                            atari_frame_skip=atari_frame_skip,
-                            seed=env_seed,
-                            given_action=given_action,
-                        )
-                    except Exception as error:
-                        print(
-                            f"backend={backend:8s} | fs={atari_frame_skip:2d} | env_id={envpool_env_id:16s} | "
-                            f"envs={num_envs:4d} | steps={num_steps} | ERROR={type(error).__name__}: {error}"
-                        )
-                        run_step += 1
+                            for pixel_options in mode_pixel_combos:
+                                pixel_options_str = "+".join(pixel_options)
+
+                                for jax_platform in jaxatari_platforms:
+                                    env_seed = base_seed + run_step
+                                    try:
+                                        env, states = _prepare_jaxatari_states(
+                                            game_name=game_name,
+                                            num_envs=num_envs,
+                                            seed=env_seed,
+                                            mode=jax_mode,
+                                            pixel_options=pixel_options,
+                                            atari_frame_skip=atari_frame_skip,
+                                            pixel_resize_shape=pixel_resize_shape,
+                                        )
+                                        rollout = _build_given_action_scanned_rollout(
+                                            env=env,
+                                            num_envs=num_envs,
+                                            num_steps=num_steps,
+                                            given_action=given_action,
+                                            jax_platform=jax_platform,
+                                        )
+                                        compile_s, runtime_s = _compile_and_time_rollout(rollout, states)
+                                        total_env_steps = num_envs * num_steps * atari_frame_skip
+                                        throughput = total_env_steps / runtime_s
+                                        row = _build_result_row(
+                                            backend=backend,
+                                            env_name=game_name,
+                                            atari_frame_skip=atari_frame_skip,
+                                            num_envs=num_envs,
+                                            num_steps=num_steps,
+                                            jaxatari_mode=jax_mode,
+                                            pixel_options=pixel_options_str,
+                                            jax_platform=jax_platform,
+                                            compile_s=compile_s,
+                                            runtime_s=runtime_s,
+                                            total_env_steps=total_env_steps,
+                                            throughput_env_steps_per_sec=throughput,
+                                        )
+                                    except Exception as error:
+                                        row = _build_result_row(
+                                            backend=backend,
+                                            env_name=game_name,
+                                            atari_frame_skip=atari_frame_skip,
+                                            num_envs=num_envs,
+                                            num_steps=num_steps,
+                                            jaxatari_mode=jax_mode,
+                                            pixel_options=pixel_options_str,
+                                            jax_platform=jax_platform,
+                                            status="error",
+                                            error=f"{type(error).__name__}: {error}",
+                                        )
+                                    _record_result_row(row)
                         continue
 
-                    compile_s = envpool_metrics["compile_s"]
-                    runtime_s = envpool_metrics["runtime_s"]
-                    total_env_steps = envpool_metrics["total_env_steps"]
-                    throughput = envpool_metrics["throughput_env_steps_per_sec"]
-                    envpool_impl = envpool_metrics["envpool_impl"]
-                    row = {
-                        "backend": backend,
-                        "game_name": game_name,
-                        "ale_env_id": "",
-                        "gxm_env_id": envpool_env_id,
-                        "gxm_env_type": "envpool-standard",
-                        "gxm_impl": envpool_impl,
-                        "jaxatari_mode": "",
-                        "pixel_options": "",
-                        "atari_frame_skip": atari_frame_skip,
-                        "jax_platform": "",
-                        "num_envs": num_envs,
-                        "num_steps": num_steps,
-                        "total_env_steps": total_env_steps,
-                        "given_action": given_action,
-                        "compile_s": compile_s,
-                        "runtime_s": runtime_s,
-                        "throughput_env_steps_per_sec": throughput,
-                    }
-                    results.append(row)
-
-                    wandb.log(
-                        {
-                            "benchmark/backend": backend,
-                            "benchmark/game_name": game_name,
-                            "benchmark/ale_env_id": "",
-                            "benchmark/gxm_env_id": envpool_env_id,
-                            "benchmark/gxm_env_type": "envpool-standard",
-                            "benchmark/gxm_impl": envpool_impl,
-                            "benchmark/jaxatari_mode": "",
-                            "benchmark/pixel_options": "",
-                            "benchmark/atari_frame_skip": atari_frame_skip,
-                            "benchmark/jax_platform": "",
-                            "benchmark/num_envs": num_envs,
-                            "benchmark/num_steps": num_steps,
-                            "benchmark/total_env_steps": total_env_steps,
-                            "benchmark/given_action": given_action,
-                            "benchmark/compile_s": compile_s,
-                            "benchmark/runtime_s": runtime_s,
-                            "benchmark/throughput_env_steps_per_sec": throughput,
-                        },
-                        step=run_step,
-                    )
-
-                    print(
-                        f"backend={backend:8s} | fs={atari_frame_skip:2d} | impl={envpool_impl:16s} | "
-                        f"envs={num_envs:4d} | steps={num_steps} | run={runtime_s:.3f}s | "
-                        f"throughput={throughput:,.2f} env-steps/s"
-                    )
-
-                    run_step += 1
-                    continue
-                elif backend == ENVPOOL_ASYNC_BACKEND:
-                    env_seed = base_seed + run_step
-                    try:
-                        envpool_metrics = _run_with_timeout(
-                            _run_envpool_async_benchmark,
-                            timeout_seconds=envpool_timeout_s,
-                            context=(
-                                f"EnvPool async benchmark (envs={num_envs}, frame_skip={atari_frame_skip})"
-                            ),
-                            envpool_env_id=envpool_env_id,
-                            num_envs=num_envs,
-                            num_steps=num_steps,
-                            atari_frame_skip=atari_frame_skip,
-                            seed=env_seed,
-                            given_action=given_action,
-                        )
-                    except Exception as error:
-                        print(
-                            f"backend={backend:8s} | fs={atari_frame_skip:2d} | env_id={envpool_env_id:16s} | "
-                            f"envs={num_envs:4d} | steps={num_steps} | ERROR={type(error).__name__}: {error}"
-                        )
-                        run_step += 1
+                    if backend == ALE_BACKEND:
+                        env_seed = base_seed + run_step
+                        try:
+                            ale_metrics = _run_with_timeout(
+                                _run_ale_benchmark,
+                                timeout_seconds=ale_timeout_s,
+                                context=f"ALE benchmark (envs={num_envs}, frame_skip={atari_frame_skip})",
+                                env_name=game_name,
+                                num_envs=num_envs,
+                                num_steps=num_steps,
+                                atari_frame_skip=atari_frame_skip,
+                                seed=env_seed,
+                                given_action=given_action,
+                            )
+                            compile_s = ale_metrics["compile_s"]
+                            runtime_s = ale_metrics["runtime_s"]
+                            total_env_steps = ale_metrics["total_env_steps"]
+                            throughput = ale_metrics["throughput_env_steps_per_sec"]
+                            row = _build_result_row(
+                                backend=backend,
+                                env_name=game_name,
+                                atari_frame_skip=atari_frame_skip,
+                                num_envs=num_envs,
+                                num_steps=num_steps,
+                                compile_s=compile_s,
+                                runtime_s=runtime_s,
+                                total_env_steps=total_env_steps,
+                                throughput_env_steps_per_sec=throughput,
+                            )
+                        except Exception as error:
+                            row = _build_result_row(
+                                backend=backend,
+                                env_name=game_name,
+                                atari_frame_skip=atari_frame_skip,
+                                num_envs=num_envs,
+                                num_steps=num_steps,
+                                status="error",
+                                error=f"{type(error).__name__}: {error}",
+                            )
+                        _record_result_row(row)
                         continue
 
-                    compile_s = envpool_metrics["compile_s"]
-                    runtime_s = envpool_metrics["runtime_s"]
-                    total_env_steps = envpool_metrics["total_env_steps"]
-                    throughput = envpool_metrics["throughput_env_steps_per_sec"]
-                    envpool_impl = envpool_metrics["envpool_impl"]
-                    row = {
-                        "backend": backend,
-                        "game_name": game_name,
-                        "ale_env_id": "",
-                        "gxm_env_id": envpool_env_id,
-                        "gxm_env_type": "envpool-standard",
-                        "gxm_impl": envpool_impl,
-                        "jaxatari_mode": "",
-                        "pixel_options": "",
-                        "atari_frame_skip": atari_frame_skip,
-                        "jax_platform": "",
-                        "num_envs": num_envs,
-                        "num_steps": num_steps,
-                        "total_env_steps": total_env_steps,
-                        "given_action": given_action,
-                        "compile_s": compile_s,
-                        "runtime_s": runtime_s,
-                        "throughput_env_steps_per_sec": throughput,
-                    }
-                    results.append(row)
-
-                    wandb.log(
-                        {
-                            "benchmark/backend": backend,
-                            "benchmark/game_name": game_name,
-                            "benchmark/ale_env_id": "",
-                            "benchmark/gxm_env_id": envpool_env_id,
-                            "benchmark/gxm_env_type": "envpool-standard",
-                            "benchmark/gxm_impl": envpool_impl,
-                            "benchmark/jaxatari_mode": "",
-                            "benchmark/pixel_options": "",
-                            "benchmark/atari_frame_skip": atari_frame_skip,
-                            "benchmark/jax_platform": "",
-                            "benchmark/num_envs": num_envs,
-                            "benchmark/num_steps": num_steps,
-                            "benchmark/total_env_steps": total_env_steps,
-                            "benchmark/given_action": given_action,
-                            "benchmark/compile_s": compile_s,
-                            "benchmark/runtime_s": runtime_s,
-                            "benchmark/throughput_env_steps_per_sec": throughput,
-                        },
-                        step=run_step,
-                    )
-
-                    print(
-                        f"backend={backend:8s} | fs={atari_frame_skip:2d} | impl={envpool_impl:16s} | "
-                        f"envs={num_envs:4d} | steps={num_steps} | run={runtime_s:.3f}s | "
-                        f"throughput={throughput:,.2f} env-steps/s"
-                    )
-
-                    run_step += 1
-                    continue
-                elif backend == ENVPOOL_SYNC_BACKEND:
-                    env_seed = base_seed + run_step
-                    try:
-                        envpool_metrics = _run_with_timeout(
-                            _run_envpool_sync_benchmark,
-                            timeout_seconds=envpool_timeout_s,
-                            context=(
-                                f"EnvPool sync benchmark (envs={num_envs}, frame_skip={atari_frame_skip})"
-                            ),
-                            envpool_env_id=envpool_env_id,
-                            num_envs=num_envs,
-                            num_steps=num_steps,
-                            atari_frame_skip=atari_frame_skip,
-                            seed=env_seed,
-                            given_action=given_action,
-                        )
-                    except Exception as error:
-                        print(
-                            f"backend={backend:8s} | fs={atari_frame_skip:2d} | env_id={envpool_env_id:16s} | "
-                            f"envs={num_envs:4d} | steps={num_steps} | ERROR={type(error).__name__}: {error}"
-                        )
-                        run_step += 1
+                    if backend == ENVPOOL_XLA_BACKEND:
+                        env_seed = base_seed + run_step
+                        try:
+                            envpool_metrics = _run_with_timeout(
+                                _run_envpool_xla_benchmark,
+                                timeout_seconds=envpool_timeout_s,
+                                context=f"EnvPool XLA benchmark (envs={num_envs}, frame_skip={atari_frame_skip})",
+                                envpool_env_id=envpool_env_id,
+                                num_envs=num_envs,
+                                num_steps=num_steps,
+                                atari_frame_skip=atari_frame_skip,
+                                seed=env_seed,
+                                given_action=given_action,
+                            )
+                            compile_s = envpool_metrics["compile_s"]
+                            runtime_s = envpool_metrics["runtime_s"]
+                            total_env_steps = envpool_metrics["total_env_steps"]
+                            throughput = envpool_metrics["throughput_env_steps_per_sec"]
+                            envpool_impl = envpool_metrics["envpool_impl"]
+                            row = _build_result_row(
+                                backend=backend,
+                                env_name=game_name,
+                                atari_frame_skip=atari_frame_skip,
+                                num_envs=num_envs,
+                                num_steps=num_steps,
+                                compile_s=compile_s,
+                                runtime_s=runtime_s,
+                                total_env_steps=total_env_steps,
+                                throughput_env_steps_per_sec=throughput,
+                            )
+                        except Exception as error:
+                            row = _build_result_row(
+                                backend=backend,
+                                env_name=game_name,
+                                atari_frame_skip=atari_frame_skip,
+                                num_envs=num_envs,
+                                num_steps=num_steps,
+                                status="error",
+                                error=f"{type(error).__name__}: {error}",
+                            )
+                        _record_result_row(row)
                         continue
 
-                    compile_s = envpool_metrics["compile_s"]
-                    runtime_s = envpool_metrics["runtime_s"]
-                    total_env_steps = envpool_metrics["total_env_steps"]
-                    throughput = envpool_metrics["throughput_env_steps_per_sec"]
-                    envpool_impl = envpool_metrics["envpool_impl"]
-                    row = {
-                        "backend": backend,
-                        "game_name": game_name,
-                        "ale_env_id": "",
-                        "gxm_env_id": envpool_env_id,
-                        "gxm_env_type": "envpool-standard",
-                        "gxm_impl": envpool_impl,
-                        "jaxatari_mode": "",
-                        "pixel_options": "",
-                        "atari_frame_skip": atari_frame_skip,
-                        "jax_platform": "",
-                        "num_envs": num_envs,
-                        "num_steps": num_steps,
-                        "total_env_steps": total_env_steps,
-                        "given_action": given_action,
-                        "compile_s": compile_s,
-                        "runtime_s": runtime_s,
-                        "throughput_env_steps_per_sec": throughput,
-                    }
-                    results.append(row)
+                    if backend == ENVPOOL_ASYNC_BACKEND:
+                        env_seed = base_seed + run_step
+                        try:
+                            envpool_metrics = _run_with_timeout(
+                                _run_envpool_async_benchmark,
+                                timeout_seconds=envpool_timeout_s,
+                                context=f"EnvPool async benchmark (envs={num_envs}, frame_skip={atari_frame_skip})",
+                                envpool_env_id=envpool_env_id,
+                                num_envs=num_envs,
+                                num_steps=num_steps,
+                                atari_frame_skip=atari_frame_skip,
+                                seed=env_seed,
+                                given_action=given_action,
+                            )
+                            compile_s = envpool_metrics["compile_s"]
+                            runtime_s = envpool_metrics["runtime_s"]
+                            total_env_steps = envpool_metrics["total_env_steps"]
+                            throughput = envpool_metrics["throughput_env_steps_per_sec"]
+                            envpool_impl = envpool_metrics["envpool_impl"]
+                            row = _build_result_row(
+                                backend=backend,
+                                env_name=game_name,
+                                atari_frame_skip=atari_frame_skip,
+                                num_envs=num_envs,
+                                num_steps=num_steps,
+                                compile_s=compile_s,
+                                runtime_s=runtime_s,
+                                total_env_steps=total_env_steps,
+                                throughput_env_steps_per_sec=throughput,
+                            )
+                        except Exception as error:
+                            row = _build_result_row(
+                                backend=backend,
+                                env_name=game_name,
+                                atari_frame_skip=atari_frame_skip,
+                                num_envs=num_envs,
+                                num_steps=num_steps,
+                                status="error",
+                                error=f"{type(error).__name__}: {error}",
+                            )
+                        _record_result_row(row)
+                        continue
 
-                    wandb.log(
-                        {
-                            "benchmark/backend": backend,
-                            "benchmark/game_name": game_name,
-                            "benchmark/ale_env_id": "",
-                            "benchmark/gxm_env_id": envpool_env_id,
-                            "benchmark/gxm_env_type": "envpool-standard",
-                            "benchmark/gxm_impl": envpool_impl,
-                            "benchmark/jaxatari_mode": "",
-                            "benchmark/pixel_options": "",
-                            "benchmark/atari_frame_skip": atari_frame_skip,
-                            "benchmark/jax_platform": "",
-                            "benchmark/num_envs": num_envs,
-                            "benchmark/num_steps": num_steps,
-                            "benchmark/total_env_steps": total_env_steps,
-                            "benchmark/given_action": given_action,
-                            "benchmark/compile_s": compile_s,
-                            "benchmark/runtime_s": runtime_s,
-                            "benchmark/throughput_env_steps_per_sec": throughput,
-                        },
-                        step=run_step,
-                    )
+                    if backend == ENVPOOL_SYNC_BACKEND:
+                        env_seed = base_seed + run_step
+                        try:
+                            envpool_metrics = _run_with_timeout(
+                                _run_envpool_sync_benchmark,
+                                timeout_seconds=envpool_timeout_s,
+                                context=f"EnvPool sync benchmark (envs={num_envs}, frame_skip={atari_frame_skip})",
+                                envpool_env_id=envpool_env_id,
+                                num_envs=num_envs,
+                                num_steps=num_steps,
+                                atari_frame_skip=atari_frame_skip,
+                                seed=env_seed,
+                                given_action=given_action,
+                            )
+                            compile_s = envpool_metrics["compile_s"]
+                            runtime_s = envpool_metrics["runtime_s"]
+                            total_env_steps = envpool_metrics["total_env_steps"]
+                            throughput = envpool_metrics["throughput_env_steps_per_sec"]
+                            envpool_impl = envpool_metrics["envpool_impl"]
+                            row = _build_result_row(
+                                backend=backend,
+                                env_name=game_name,
+                                atari_frame_skip=atari_frame_skip,
+                                num_envs=num_envs,
+                                num_steps=num_steps,
+                                compile_s=compile_s,
+                                runtime_s=runtime_s,
+                                total_env_steps=total_env_steps,
+                                throughput_env_steps_per_sec=throughput,
+                            )
+                        except Exception as error:
+                            row = _build_result_row(
+                                backend=backend,
+                                env_name=game_name,
+                                atari_frame_skip=atari_frame_skip,
+                                num_envs=num_envs,
+                                num_steps=num_steps,
+                                status="error",
+                                error=f"{type(error).__name__}: {error}",
+                            )
+                        _record_result_row(row)
+                        continue
 
-                    print(
-                        f"backend={backend:8s} | fs={atari_frame_skip:2d} | impl={envpool_impl:16s} | "
-                        f"envs={num_envs:4d} | steps={num_steps} | run={runtime_s:.3f}s | "
-                        f"throughput={throughput:,.2f} env-steps/s"
-                    )
-
-                    run_step += 1
-                    continue
-                else:
                     for gxm_platform in gxm_platforms:
                         env_seed = base_seed + run_step
                         try:
@@ -1008,103 +1083,44 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
                                 given_action=given_action,
                                 gxm_platform=gxm_platform,
                             )
-                        except Exception as error:
-                            print(
-                                f"backend={backend:8s} | fs={atari_frame_skip:2d} | platform={gxm_platform:3s} | "
-                                f"envs={num_envs:4d} | steps={num_steps} | ERROR={type(error).__name__}: {error}"
+                            compile_s = gxm_metrics["compile_s"]
+                            runtime_s = gxm_metrics["runtime_s"]
+                            total_env_steps = gxm_metrics["total_env_steps"]
+                            throughput = gxm_metrics["throughput_env_steps_per_sec"]
+                            gxm_impl = gxm_metrics["gxm_impl"]
+                            row = _build_result_row(
+                                backend=backend,
+                                env_name=game_name,
+                                atari_frame_skip=atari_frame_skip,
+                                num_envs=num_envs,
+                                num_steps=num_steps,
+                                jax_platform=gxm_platform,
+                                compile_s=compile_s,
+                                runtime_s=runtime_s,
+                                total_env_steps=total_env_steps,
+                                throughput_env_steps_per_sec=throughput,
                             )
-                            run_step += 1
-                            continue
-                        compile_s = gxm_metrics["compile_s"]
-                        runtime_s = gxm_metrics["runtime_s"]
-                        total_env_steps = gxm_metrics["total_env_steps"]
-                        throughput = gxm_metrics["throughput_env_steps_per_sec"]
-                        gxm_impl = gxm_metrics["gxm_impl"]
-
-                        row = {
-                            "backend": backend,
-                            "game_name": game_name,
-                            "ale_env_id": "",
-                            "gxm_env_id": gxm_env_id,
-                            "gxm_env_type": gxm_env_type,
-                            "gxm_impl": gxm_impl,
-                            "jaxatari_mode": "",
-                            "pixel_options": "",
-                            "atari_frame_skip": atari_frame_skip,
-                            "jax_platform": gxm_platform,
-                            "num_envs": num_envs,
-                            "num_steps": num_steps,
-                            "total_env_steps": total_env_steps,
-                            "given_action": given_action,
-                            "compile_s": compile_s,
-                            "runtime_s": runtime_s,
-                            "throughput_env_steps_per_sec": throughput,
-                        }
-                        results.append(row)
-
-                        wandb.log(
-                            {
-                                "benchmark/backend": backend,
-                                "benchmark/game_name": game_name,
-                                "benchmark/ale_env_id": "",
-                                "benchmark/gxm_env_id": gxm_env_id,
-                                "benchmark/gxm_env_type": gxm_env_type,
-                                "benchmark/gxm_impl": gxm_impl,
-                                "benchmark/jaxatari_mode": "",
-                                "benchmark/pixel_options": "",
-                                "benchmark/atari_frame_skip": atari_frame_skip,
-                                "benchmark/jax_platform": gxm_platform,
-                                "benchmark/num_envs": num_envs,
-                                "benchmark/num_steps": num_steps,
-                                "benchmark/total_env_steps": total_env_steps,
-                                "benchmark/given_action": given_action,
-                                "benchmark/compile_s": compile_s,
-                                "benchmark/runtime_s": runtime_s,
-                                "benchmark/throughput_env_steps_per_sec": throughput,
-                            },
-                            step=run_step,
-                        )
-
-                        print(
-                            f"backend={backend:8s} | fs={atari_frame_skip:2d} | impl={gxm_impl:16s} | "
-                            f"platform={gxm_platform:3s} | envs={num_envs:4d} | steps={num_steps} | "
-                            f"compile={compile_s:.3f}s | run={runtime_s:.3f}s | "
-                            f"throughput={throughput:,.2f} env-steps/s"
-                        )
-
-                        run_step += 1
-                    continue
+                        except Exception as error:
+                            row = _build_result_row(
+                                backend=backend,
+                                env_name=game_name,
+                                atari_frame_skip=atari_frame_skip,
+                                num_envs=num_envs,
+                                num_steps=num_steps,
+                                jax_platform=gxm_platform,
+                                status="error",
+                                error=f"{type(error).__name__}: {error}",
+                            )
+                        _record_result_row(row)
 
     if run is not None:
         table = wandb.Table(
-            columns=[
-                "backend",
-                "game_name",
-                "ale_env_id",
-                "gxm_env_id",
-                "gxm_env_type",
-                "gxm_impl",
-                "jaxatari_mode",
-                "pixel_options",
-                "atari_frame_skip",
-                "jax_platform",
-                "num_envs",
-                "num_steps",
-                "total_env_steps",
-                "given_action",
-                "compile_s",
-                "runtime_s",
-                "throughput_env_steps_per_sec",
-            ]
+            columns=RESULT_COLUMNS
         )
         for row in results:
             table.add_data(
                 row["backend"],
-                row["game_name"],
-                row["ale_env_id"],
-                row["gxm_env_id"],
-                row["gxm_env_type"],
-                row["gxm_impl"],
+                row["env_name"],
                 row["jaxatari_mode"],
                 row["pixel_options"],
                 row["atari_frame_skip"],
@@ -1112,18 +1128,21 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
                 row["num_envs"],
                 row["num_steps"],
                 row["total_env_steps"],
-                row["given_action"],
                 row["compile_s"],
                 row["runtime_s"],
                 row["throughput_env_steps_per_sec"],
+                row["status"],
+                row["error"],
             )
         wandb.log({"benchmark/results_table": table})
 
         if save_results_csv:
-            csv_output_path = _save_results_csv(results, results_csv_path)
             print(f"Saved results CSV: {csv_output_path}")
 
         run.finish()
+
+    if csv_file is not None:
+        csv_file.close()
 
     return results
 
@@ -1131,7 +1150,7 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
 @hydra.main(version_base=None, config_path="./config", config_name="throughput_analysis")
 def main(cfg: DictConfig):
     print("Config:\n", OmegaConf.to_yaml(cfg))
-    config = OmegaConf.to_container(cfg, resolve=True)
+    config = cast(Dict[str, Any], OmegaConf.to_container(cfg, resolve=True))
     run_throughput_benchmark(config)
 
 

@@ -1,10 +1,11 @@
+import os
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.videopinball_mod_plugins import NeverActivateTiltMode, NoScoringCooldown, LowTiltEffect, ConstantBallDynamics
+from jaxatari.games.mods.videopinball.videopinball_mod_plugins import NeverActivateTiltMode, NoScoringCooldown, LowTiltEffect, ConstantBallDynamics
 
 class VideoPinballEnvMod(JaxAtariModController):
     """
-    Game-specific Mod Controller for Seaquest.
-    It simply inherits all logic from JaxAtariModController and defines the SEAQUEST_MOD_REGISTRY.
+    Game-specific Mod Controller for Video Pinball.
+    It simply inherits all logic from JaxAtariModController and defines the REGISTRY.
     """
 
     REGISTRY = {
@@ -13,6 +14,8 @@ class VideoPinballEnvMod(JaxAtariModController):
         "low_tilt_effect": LowTiltEffect,
         "constant_ball_dynamics": ConstantBallDynamics,
     }
+
+    _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "videopinball", "sprites")
 
     def __init__(self,
                  env,

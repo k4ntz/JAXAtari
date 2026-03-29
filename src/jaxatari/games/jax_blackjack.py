@@ -785,15 +785,6 @@ class JaxBlackjack(JaxEnvironment[BlackjackState, BlackjackObservation, Blackjac
             "label": Box(0, 8, (), jnp.int32)
         })
 
-    def obs_to_flat_array(self, obs: BlackjackObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            obs.player_score.flatten(),
-            obs.player_bet.flatten(),
-            obs.player_current_card_sum.flatten(),
-            obs.dealer_current_card_sum.flatten(),
-            obs.label.flatten()
-        ])
-
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: BlackjackState) -> jnp.ndarray:
         return self.renderer.render(state)
@@ -861,7 +852,7 @@ class BlackjackRenderer(JAXGameRenderer):
             self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         # 2. Define asset path
-        sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites/blackjack")
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "blackjack")
         # 3. Load all assets using the manifest from constants
         final_asset_config = list(self.consts.ASSET_CONFIG)
         

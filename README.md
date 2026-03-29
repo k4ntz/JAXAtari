@@ -41,6 +41,12 @@ pip install -U "jax[cuda12]"
 
 For other accelerator types, please follow the instructions [here](https://docs.jax.dev/en/latest/installation.html).
 
+**Note**: Next, you need to download the original Atari 2600 sprites. Before downloading, you will be asked to confirm ownership of the original ROMs.
+
+```bash
+.venv/bin/install_sprites
+```
+
 ## Usage
 
 ### Basic Environment Creation

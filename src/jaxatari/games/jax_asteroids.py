@@ -13,7 +13,7 @@ import jaxatari.spaces as spaces
 
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.modification import AutoDerivedConstants
 
 def _create_static_procedural_sprites() -> dict:
@@ -146,7 +146,7 @@ class AsteroidsConstants(AutoDerivedConstants):
     MIN_ENTITY_X: int = struct.field(pytree_node=False, default=0)
 
     # Player constants
-    MAX_PLAYER_SPEED: int = struct.field(pytree_node=False, default=64 * 256 - 1)
+    MAX_PLAYER_SPEED: int = struct.field(pytree_node=False, default=60 * 256 - 1)
     MIN_PLAYER_X: int = struct.field(pytree_node=False, default=0)
 
     # --- DERIVED CONSTANTS (Converted to Optional Fields) ---
@@ -165,22 +165,22 @@ class AsteroidsConstants(AutoDerivedConstants):
     RESPAWN_DELAY: int = struct.field(pytree_node=False, default=136)
     H_SPACE_DELAY: int = struct.field(pytree_node=False, default=62)
     ACCEL_PER_ROTATION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
-        (0, -127),
-        (-49, -117),
-        (-90, -90),
-        (-117, -49),
-        (-127, 0),
-        (-117, 49),
-        (-90, 90),
-        (-49, 117),
-        (0, 127),
-        (49, 117),
-        (90, 90),
-        (117, 49),
-        (127, 0),
-        (117, -49),
-        (90, -90),
-        (49, -117)
+        (0, -64),
+        (-25, -59),
+        (-45, -45),
+        (-59, -25),
+        (-64, 0),
+        (-59, 25),
+        (-45, 45),
+        (-25, 59),
+        (0, 64),
+        (25, 59),
+        (45, 45),
+        (59, 25),
+        (64, 0),
+        (59, -25),
+        (45, -45),
+        (25, -59)
     ]))
 
     # Missile constants
@@ -253,8 +253,8 @@ class AsteroidsConstants(AutoDerivedConstants):
 
         return {
             # Standard independent calculations
-            'INITIAL_PLAYER_X': int(256/4 * (self.WIDTH - self.PLAYER_SIZE[0])),
-            'INITIAL_PLAYER_Y': int(256/4 * (self.HEIGHT - self.PLAYER_SIZE[1])),
+            'INITIAL_PLAYER_X': 10240,
+            'INITIAL_PLAYER_Y': 12800,
             
             # Return the resolved Level 1 value
             'MAX_ENTITY_X': int(_max_entity_x),
@@ -294,18 +294,10 @@ class AsteroidsState(struct.PyTreeNode):
     step_counter: chex.Array
     rng_key: chex.PRNGKey
 
-class EntityPosition(struct.PyTreeNode):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    rotation: jnp.ndarray
-    active: jnp.ndarray
-
 class AsteroidsObservation(struct.PyTreeNode):
-    player: EntityPosition # (x, y, width, height, rotation, active)
-    missiles: jnp.ndarray  # shape (2, 6) - 2 missiles, each with (x, y, width, height, rotation, active)
-    asteroids: jnp.ndarray # shape (17, 6) - 17 asteroids, each with (x, y, width, height, rotation, active)
+    player: ObjectObservation # (x, y, width, height, active, visual_id, orientation)
+    missiles: ObjectObservation  # shape (2, 6) - 2 missiles, each with (x, y, width, height, rotation, active)
+    asteroids: ObjectObservation # shape (17, 6) - 17 asteroids, each with (x, y, width, height, rotation, active)
 
     score: jnp.ndarray
     lives: jnp.ndarray
@@ -346,9 +338,8 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
     def decel_func(self, speed):
         """
         Calculates the resistance applied to the player when not using thrusters
-        based on the current speed
         """
-        return -(2*(jnp.sign(speed)*(jnp.abs(speed)//256)) + jnp.sign(speed))
+        return -(2*(jnp.sign(speed)*(jnp.abs(speed)//256)) + 2 * jnp.sign(speed))
 
     @partial(jax.jit, static_argnums=(0,))
     def speed_func(self, speed):
@@ -970,7 +961,7 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
         )
         # player rotation is updated in every fourth step only
         player_rotation = jax.lax.cond(
-            (state.step_counter + 2) % 4 == 0,
+            (state.step_counter % 4 == 1),
             lambda: player_rotation,
             lambda: state.player_rotation
         )
@@ -1132,107 +1123,77 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: AsteroidsState):
         # player
-        player = EntityPosition(
-            x=state.player_x,
-            y=state.player_y,
+        player = ObjectObservation.create(
+            x=self.to_screen_pos(state.player_x),
+            y=self.to_screen_pos(state.player_y),
             width=jnp.array(self.consts.PLAYER_SIZE[0]),
             height=jnp.array(self.consts.PLAYER_SIZE[1]),
-            rotation=state.player_rotation,
+            orientation=state.player_rotation,
             active=state.respawn_timer <= 0
         )
 
         # missiles
-        def convert_missile_states_to_entity(missile_states):
-            return jnp.array([
-                missile_states[0],  # x position
-                missile_states[1],  # y position
-                self.consts.MISSILE_SIZE[0],  # width
-                self.consts.MISSILE_SIZE[1],  # height
-                missile_states[4],  # rotation
-                missile_states[5] > 0  # active flag
-            ])
-
-        missiles = jax.vmap(convert_missile_states_to_entity)(
-            state.missile_states
+        missiles = ObjectObservation.create(
+            x=state.missile_states[:, 0],
+            y=state.missile_states[:, 1],
+            width=jnp.full_like(state.missile_states[:, 0], self.consts.MISSILE_SIZE[0]),
+            height=jnp.full_like(state.missile_states[:, 1], self.consts.MISSILE_SIZE[1]),
+            orientation=state.missile_states[:, 4],
+            active=state.missile_states[:, 5] > 0
         )
 
-        # asteroids
-        def convert_asteroid_states_to_entity(asteroid_states):
-            width, height = jax.lax.switch(
-                asteroid_states[3],
+        asteroids = ObjectObservation.create(
+            x=state.asteroid_states[:, 0],
+            y=state.asteroid_states[:, 1],
+            width=jax.vmap(lambda size: jax.lax.switch(
+                size,
                 [
-                    lambda: (0, 0),
-                    lambda: (self.consts.ASTEROID_SIZE_L[0], self.consts.ASTEROID_SIZE_L[1]),
-                    lambda: (self.consts.ASTEROID_SIZE_L[0], self.consts.ASTEROID_SIZE_L[1]),
-                    lambda: (self.consts.ASTEROID_SIZE_M[0], self.consts.ASTEROID_SIZE_M[1]),
-                    lambda: (self.consts.ASTEROID_SIZE_S[0], self.consts.ASTEROID_SIZE_S[1])
+                    lambda: 0,
+                    lambda: self.consts.ASTEROID_SIZE_L[0],
+                    lambda: self.consts.ASTEROID_SIZE_L[0],
+                    lambda: self.consts.ASTEROID_SIZE_M[0],
+                    lambda: self.consts.ASTEROID_SIZE_S[0]
                 ]
-            )
-            return jnp.array([
-                asteroid_states[0],  # x position
-                asteroid_states[1],  # y position
-                width,  # width
-                height,  # height
-                asteroid_states[2], # rotation
-                asteroid_states[3] != self.consts.INACTIVE  # active flag
-            ])
-
-        asteroids = jax.vmap(convert_asteroid_states_to_entity)(
-            state.asteroid_states
+            ))(state.asteroid_states[:, 3]),
+            height=jax.vmap(lambda size: jax.lax.switch(
+                size,
+                [
+                    lambda: 0,
+                    lambda: self.consts.ASTEROID_SIZE_L[1],
+                    lambda: self.consts.ASTEROID_SIZE_L[1],
+                    lambda: self.consts.ASTEROID_SIZE_M[1],
+                    lambda: self.consts.ASTEROID_SIZE_S[1]
+                ]
+            ))(state.asteroid_states[:, 3]),
+            orientation=state.asteroid_states[:, 2],
+            active=state.asteroid_states[:, 3] != self.consts.INACTIVE
         )
 
         return AsteroidsObservation(
             player=player,
             missiles=missiles,
             asteroids=asteroids,
-
             score=state.score,
             lives=state.lives
         )
 
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: AsteroidsObservation) -> jnp.ndarray:
-        """Converts the observation to a flat array."""
-        return jnp.concatenate([
-            jnp.concatenate([
-                jnp.atleast_1d(obs.player.x),
-                jnp.atleast_1d(obs.player.y),
-                jnp.atleast_1d(obs.player.width),
-                jnp.atleast_1d(obs.player.height),
-                jnp.atleast_1d(obs.player.rotation),
-                jnp.atleast_1d(obs.player.active)
-            ]),
-            obs.missiles.flatten(),
-            obs.asteroids.flatten(),
-
-            obs.score.flatten(),
-            obs.lives.flatten()
-        ]
-        )
-
+    
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
 
-    def observation_space(self) -> spaces.Box:
+    def observation_space(self) -> spaces.Dict:
         """Returns the observation space for Asteroids.
         The observation contains:
-        - player: EntityPosition (x, y, width, height, rotation, active)
+        - player: ObjectObservation (x, y, width, height, active, visual_id, orientation)
         - missiles: array of shape (2, 6) with (x, y, width, height, rotation, active)
         - asteroids: array of shape (17, 6) with (x, y, width, height, rotation, active)
         - score: int (0-100000)
         - lives: int (0-9)
         """
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=160*256, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=210*256, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32),
-                "rotation": spaces.Box(low=0, high=16, shape=(), dtype=jnp.int32),
-                "active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
-            }),
-            "missiles": spaces.Box(low=0, high=160, shape=(2, 6), dtype=jnp.int32),
-            "asteroids": spaces.Box(low=0, high=160, shape=(self.consts.MAX_NUMBER_OF_ASTEROIDS, 6), dtype=jnp.int32),
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "missiles": spaces.get_object_space(n=2, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "asteroids": spaces.get_object_space(n=self.consts.MAX_NUMBER_OF_ASTEROIDS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
             "score": spaces.Box(low=0, high=self.consts.MAX_SCORE, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=self.consts.MAX_LIVES, shape=(), dtype=jnp.int32)
         })
@@ -1282,7 +1243,7 @@ class AsteroidsRenderer(JAXGameRenderer):
         # 1. Start from (possibly modded) asset config provided via constants
         final_asset_config = list(self.consts.ASSET_CONFIG)
         
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/asteroids"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "asteroids")
         
         # 2. Load all assets, create palette, and generate ID masks
         (
@@ -1398,7 +1359,7 @@ class AsteroidsRenderer(JAXGameRenderer):
         num_score_digits = _get_number_of_digits(state.score)
         raster = self.jr.render_label_selective(raster, 68 - 16 * (num_score_digits - 1), 5,
                                                 score_digits_arr, self.SHAPE_MASKS['digits'], 
-                                                5 - num_score_digits, num_score_digits, spacing=16)
+                                                5 - num_score_digits, num_score_digits, spacing=16, max_digits_to_render=5)
         lives_digits_arr = self.jr.int_to_digits(state.lives, max_digits=1)
         raster = self.jr.render_label(raster, 132, 5, lives_digits_arr, self.SHAPE_MASKS['digits'], spacing=16, max_digits=1)
 

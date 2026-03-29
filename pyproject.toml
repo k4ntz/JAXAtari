@@ -11,10 +11,12 @@ dependencies = [
     "flax>=0.10.6",
     "gymnasium>=1.2.0",
     "gymnax>=0.0.8",
-    "jax[cuda12]",
+    "jax",
     "ml-dtypes",
     "numpy",
     "opt-einsum>=3.4.0",
+    "platformdirs>=4.5.1",
+    "requests>=2.32.5",
     "scipy>=1.15.3",
     "toolz>=1.0.0",
     "typing-extensions>=4.14.0",
@@ -23,6 +25,9 @@ dependencies = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[project.scripts]
+install-sprites = "jaxatari.install_sprites:download_and_extract"
 
 [project.optional-dependencies]
 dev = [

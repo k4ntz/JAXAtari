@@ -1,10 +1,8 @@
-GAME_NAME: "pong"
-ALE_ENV_ID: "ALE/Pong-v5"
-GXM_ENV_ID: "Pong-v5"
-ENVPOOL_ENV_ID: "Pong-v5"
-GXM_ENV_TYPE: "envpool"
+GAME_NAMES: ["pong", "kangaroo", "seaquest"]
+# For multi-env benchmarking, use only names and keep env IDs unset.
+# GAME_NAMES: ["pong", "breakout", "freeway"]
 GXM_PLATFORMS: ["gpu"]
-BENCHMARK_BACKENDS: ["jaxatari"] #["jaxatari", "ale", "gxm", "envpool_xla", "envpool_async", "envpool_sync"]
+BENCHMARK_BACKENDS: ["jaxatari", "ale", "envpool_sync"]
 ALE_TIMEOUT_S: 3600
 GXM_TIMEOUT_S: 3600
 ENVPOOL_TIMEOUT_S: 3600
@@ -13,18 +11,21 @@ JAXATARI_MODES: ["oc", "pixel"]
 JAXATARI_PIXEL_OPTIONS: ["resized", "grayscale", "native"]
 JAXATARI_PIXEL_TRY_ALL_COMBINATIONS: false
 JAXATARI_PIXEL_OPTION_COMBINATIONS:
-  - ["resized", "grayscale", "native"]
+  # - [] # just default
+  # - ["resized"]
+  # - ["resized", "native"]
+  - ["resized", "native", "grayscale"]
 JAXATARI_PLATFORMS: ["gpu", "cpu"]
-ATARI_FRAME_SKIP: 4
+ATARI_FRAME_SKIP: [4] #[1, 4]
 PIXEL_RESIZE_SHAPE: [84, 84]
 
 SAVE_RESULTS_CSV: true
-RESULTS_CSV_PATH: "./scripts/benchmarks/outputs/throughput_results.csv"
+RESULTS_CSV_PATH: "./outputs/throughput_results.csv"
 
 SEED: 0
 
-ENV_COUNTS: [1, 4, 8, 16, 32, 64, 128, 512, 1024, 2048]
-NUM_STEPS: 100000
+ENV_COUNTS: [1, 4, 16, 32, 64, 128, 256, 512, 1024, 2048]
+NUM_STEPS: 10000 # n_steps per env
 
 GIVEN_ACTION: 0
 

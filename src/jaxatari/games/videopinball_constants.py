@@ -3,6 +3,8 @@ import chex
 
 from typing import NamedTuple
 from flax import struct
+from jaxatari.environment import ObjectObservation
+from jaxatari.environment import ObjectObservation
 from jaxatari.modification import AutoDerivedConstants
 
 @struct.dataclass
@@ -105,24 +107,16 @@ class VideoPinballState:
 
 
 @struct.dataclass
-class EntityState:
-    x: chex.Array  # x position of the entity (upper left)
-    y: chex.Array  # y position of the entity (upper left)
-    w: chex.Array  # width of the entity
-    h: chex.Array  # height of the entity
-    active: chex.Array  # whether this entity is currently active
-
-
-@struct.dataclass
 class VideoPinballObservation:
-    ball: jnp.ndarray
-    spinners: jnp.ndarray
-    flippers: jnp.ndarray
-    plunger: jnp.ndarray
-    targets: jnp.ndarray
-    bumpers: jnp.ndarray
-    rollovers: jnp.ndarray
-    tilt_mode_hole_plugs: jnp.ndarray
+    ball: ObjectObservation
+    flippers: ObjectObservation # n=2
+    spinners: ObjectObservation # n=2
+    plunger: ObjectObservation
+    targets: ObjectObservation # n=4
+    bumpers: ObjectObservation # n=3
+    rollovers: ObjectObservation # n=2
+    hole_plugs: ObjectObservation # n=2
+    
     score: jnp.ndarray
     lives_lost: jnp.ndarray
     atari_symbols: jnp.ndarray

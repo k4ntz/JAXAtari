@@ -5,14 +5,14 @@ NAME_INITIALS: "RE"
 ALG_NAME: "pqn"
 TOTAL_TIMESTEPS: 2e8 # 1e8 == 100M, but times 4 (frame-skipping) -> pqn paper: enough to outperform Rainbow
 TOTAL_TIMESTEPS_DECAY: 2e8 # will be used for decay functions, in case you want to test for less timesteps and keep decays same
-NUM_ENVS: 8192 #512 # parallel environments
-NUM_STEPS: 32 # steps per environment in each update
+NUM_ENVS: 1024 #512 # parallel environments
+NUM_STEPS: 128 # steps per environment in each update
 # NUM_ENVS / NUM_STEPS should be 8 for original PQN (they did 128/32)
 EPS_START: 1.0
 EPS_FINISH: 0.001
 EPS_DECAY: 0.1
 NUM_EPOCHS: 3 #2 -> adapted UtD ratio
-NUM_MINIBATCHES: 128 # minibatches per epoch
+NUM_MINIBATCHES: 64 # minibatches per epoch
 NORM_TYPE: "layer_norm" # layer_norm or batch_norm
 LR: 1e-3
 MAX_GRAD_NORM: 10
@@ -21,24 +21,25 @@ GAMMA: 0.99
 LAMBDA: 0.65
 
 # env specific
-ENV_NAME: "Freeway"
+ENV_NAME: "Pong"
 ENV_KWARGS: {}
 OBJECT_CENTRIC: True
-# Apply this mod during testing
-# Set to None for training run.
-# Activate this for the final test run (or debugging)
-MOD_NAME: []
+# Mods used during training and evaluation
+# TRAIN_MODS: mods applied during training (set to null for base env training)
+# EVAL_MODS: mods evaluated separately after training
+TRAIN_MODS: null
+EVAL_MODS: ['lazy_enemy', 'random_enemy', 'linear_movement']
 
 # Note: This will massively increase compile and run time!
 # But is useful for debugging (watching the video).
 # Turn off for reported training run.
 TEST_DURING_TRAINING: False
-TEST_INTERVAL: 0.1 # in terms of total updates
-TEST_NUM_ENVS: 1024 #512
+TEST_INTERVAL: 1.0 # in terms of total updates (1.0 means a single test at the end)
+TEST_NUM_ENVS: 128 #512
 TEST_NUM_STEPS: 10000
 EPS_TEST: 0.0 # 0 for greedy policy
-RECORD_VIDEO: True
+RECORD_VIDEO: False
 
-# Generate a final video at the end of training
+# Generate a final video at the end of training (includes the mod eval videos)
 RECORD_FINAL_VIDEO: True
-VIDEO_MAX_STEPS: 1000
+VIDEO_MAX_STEPS: 3000

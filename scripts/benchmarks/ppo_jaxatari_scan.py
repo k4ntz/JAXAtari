@@ -50,7 +50,7 @@ class Args:
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "cleanRL"
     """the wandb's project name"""
-    wandb_entity: str = None
+    wandb_entity: str = ""
     """the entity (team) of wandb's project"""
     capture_video: bool = True
     """whether to capture videos of the agent performances (check out `videos` folder)"""
@@ -68,9 +68,12 @@ class Args:
     """the user or org name of the model repository from the Hugging Face Hub"""
 
     # Algorithm specific arguments
-    env_id: str = "seaquest"
+    env_id: str = "pong"
     """the id of the environment"""
-    mods: tuple[str] = () 
+    mods: tuple[str] = ('lazy_enemy', 'random_enemy')
+    """modifications applied during training"""
+    eval_mods: tuple[str] = ()
+    """modifications to use for evaluation (if empty, fall back to `mods`)"""
     total_timesteps: int = 10_000_000 # so with frameskip=4 -> 40M frames (?)
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
@@ -115,7 +118,21 @@ class Args:
 
 def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, eval=False):
     def thunk():
-        env = jaxatari.make(env_id, mods_config=mods)
+        # For training (eval=False), avoid applying multiple potentially conflicting
+        # mods at once. In that case, fall back to the base environment.
+        # For evaluation (eval=True), we trust the caller to pass either a single
+        # mod or an explicit list; this is used in the per-mod video generation.
+        active_mods = mods
+        if not eval and isinstance(active_mods, (list, tuple)) and len(active_mods) > 1:
+            active_mods = []
+
+        # Normalize to None or list for jaxatari.make
+        if isinstance(active_mods, (list, tuple)) and len(active_mods) == 0:
+            mods_arg = None
+        else:
+            mods_arg = active_mods
+
+        env = jaxatari.make(env_id, mods=mods_arg)
         env = AtariWrapper(
                 env,
                 episodic_life=not eval, # only active during training 
@@ -486,10 +503,16 @@ if __name__ == "__main__":
             )
         print(f"model saved to {model_path}")
 
-        #TODO: fix non-pixel based model loading in evaluate
+        # Run base-environment evaluation; per-mod videos are handled separately
+        # in generate_final_video(), where mods are applied one at a time.
         episodic_returns, env_states = evaluate(
             model_path,
-            partial(make_env, mods=list(args.mods), pixel_based=args.pixel_based, eval=True),
+            partial(
+                make_env,
+                mods=[],
+                pixel_based=args.pixel_based,
+                eval=True,
+            ),
             args.env_id,
             eval_episodes=10,
             run_name=f"{run_name}-eval",
@@ -498,12 +521,138 @@ if __name__ == "__main__":
         writer.add_scalar("eval/episodic_return", np.mean(jax.device_get(episodic_returns)), global_step) 
 
         if args.capture_video and renderer is not None: 
+            # Mirror the pqn_agent final video behavior: log a video for the
+            # current eval environment under a consistent wandb key.
             frames = jax.vmap(renderer.render)(env_states)
-            # currently (N, W, H, C), need (N, C, H, W)
-            frames = jnp.transpose(frames, (0, 3, 1, 2)) 
-            # writer.add_video("video", np.array(frames)[None, ...], global_step=global_step, fps=60)
-            wandb.log({"eval/video": wandb.Video(np.array(frames), fps=60, format="mp4")}, step=global_step)
-            print(f"New video of length {frames.shape[0]} at step {global_step} recorded.")
+            frames = jnp.transpose(frames, (0, 3, 1, 2))
+            video = wandb.Video(np.array(frames), fps=30, format="mp4")
+            wandb.log(
+                {
+                    f"final_video_seed{args.seed}_eval": video,
+                    f"final_return_seed{args.seed}_eval": np.mean(jax.device_get(episodic_returns)),
+                },
+                step=global_step,
+            )
+            print(f"Video (eval) logged to wandb with {frames.shape[0]} frames.")
+
+    def _generate_single_final_video(mods_config, video_label, video_index=0):
+        """Generate a single video for the given mod configuration and log it to wandb.
+
+        This mirrors pqn_agent._generate_single_final_video so that rendered videos
+        use the original color, full-resolution frames from the base environment.
+        """
+        if not args.capture_video:
+            return None
+
+        # Base env with mods (no training wrappers yet).
+        env = jaxatari.make(args.env_id.lower(), mods=mods_config)
+        renderer_local = env.renderer
+
+        # Apply wrappers just for the agent's observations, like in pqn_agent.
+        env = AtariWrapper(
+            env,
+            episodic_life=True,
+            frame_skip=4,
+            frame_stack_size=4,
+            sticky_actions=True,
+            max_pooling=True,
+            clip_reward=False,
+            noop_reset=30,
+            max_episode_length=18000,
+        )
+        if not args.pixel_based:
+            env = ObjectCentricWrapper(env)
+            env = FlattenObservationWrapper(env)
+        else:
+            env = PixelObsWrapper(
+                env,
+                do_pixel_resize=True,
+                pixel_resize_shape=(84, 84),
+                grayscale=True,
+                use_native_downscaling=True,
+            )
+        env = NormalizeObservationWrapper(env)
+        env = LogWrapper(env)
+
+        # Reset environment
+        rng = jax.random.PRNGKey(args.seed + video_index * 10000)
+        rng, reset_rng = jax.random.split(rng)
+        obs, env_state = env.reset(reset_rng)
+        obs = obs.squeeze()  # (F, H, W)
+
+        frames = []
+        total_reward = 0.0
+        max_steps = 5000
+
+        for step in range(max_steps):
+            # PPO network expects (B, F, H, W)
+            policy_obs = obs[None, ...]
+
+            hidden = network.apply(agent_state.params.network_params, policy_obs)
+            logits = actor.apply(agent_state.params.actor_params, hidden)
+            action = jnp.argmax(logits, axis=-1)[0]
+
+            rng, step_rng = jax.random.split(rng)
+            obs, env_state, reward, done, info = env.step(env_state, action)
+            obs = obs.squeeze()
+            total_reward += float(reward)
+
+            # Render frame from the underlying base Atari state, using the original renderer.
+            state_for_render = env_state
+            while hasattr(state_for_render, "atari_state"):
+                state_for_render = state_for_render.atari_state
+            if hasattr(state_for_render, "env_state"):
+                state_for_render = state_for_render.env_state
+
+            frame = renderer_local.render(state_for_render)
+            frames.append(np.array(frame, dtype=np.uint8))
+
+            if bool(done):
+                break
+
+        print(f"Final video ({video_label}): {len(frames)} frames, total reward: {total_reward:.1f}")
+
+        if len(frames) > 0:
+            frames = np.stack(frames, axis=0)
+            # (N, H, W, 3) -> (N, 3, H, W) for wandb
+            frames = np.transpose(frames, (0, 3, 1, 2))
+            video = wandb.Video(frames, fps=30, format="mp4")
+            wandb.log(
+                {
+                    f"final_video_seed{args.seed}_{video_label}": video,
+                    f"final_return_seed{args.seed}_{video_label}": total_reward,
+                }
+            )
+            print(f"Video '{video_label}' logged to wandb.")
+
+        return total_reward
+
+    def generate_final_video():
+        """Generate videos of the trained agent: one for train env, one per eval mod.
+
+        This mirrors pqn_agent.generate_final_video: first a video on the
+        training environment (no mods), then one per entry in eval_mods (or mods).
+        """
+        if not args.capture_video:
+            return
+
+        print(f"Generating final videos for seed {args.seed}...")
+
+        video_configs = []
+        # Always add train env (no mods)
+        video_configs.append(([], "train"))
+
+        # Prefer eval_mods, fall back to mods
+        eval_mods = args.eval_mods if len(args.eval_mods) > 0 else args.mods
+        if len(eval_mods) > 0:
+            mods_list = list(eval_mods)
+            for mod in mods_list:
+                mods_config = [mod] if not isinstance(mod, (list, tuple)) else list(mod)
+                mod_label = mod if isinstance(mod, str) else "_".join(str(m) for m in mods_config)
+                video_configs.append((mods_config, mod_label))
+
+        for video_index, (mods_config, video_label) in enumerate(video_configs):
+            _generate_single_final_video(mods_config, video_label, video_index)
 
     # TRY NOT TO MODIFY: start the game
     key, reset_key = jax.random.split(key)
@@ -541,6 +690,7 @@ if __name__ == "__main__":
     rtpt = RTPT(name_initials='RE', experiment_name='PPO_JAXAtari', max_iterations=args.num_iterations)
     rtpt.start()
     start_time = time.time()
+    compile_time = None
     for iteration in range(1, args.num_iterations + 1):
         rtpt.step()
         if args.eval_during_train and iteration > 0 and iteration % args.eval_every == 0:
@@ -557,6 +707,9 @@ if __name__ == "__main__":
             storage,
             key,
         )
+        if compile_time is None:
+            compile_time = time.time()
+            print(f"Compile + first iteration time: {compile_time - start_time:.2f} seconds.")
         avg_episodic_return = np.mean(jax.device_get(env_state.returned_episode_returns))
         # print(f"global_step={global_step}, avg_episodic_return={avg_episodic_return}")
 
@@ -581,10 +734,13 @@ if __name__ == "__main__":
         )
     end_time = time.time()
     print("Training done.")
+    if compile_time is not None:
+        print(f"Run time after first iteration: {end_time - compile_time:.2f} seconds.")
     print(f"Total train time: {end_time - start_time:.2f} seconds / {(end_time - start_time)/60:.2f} minutes.")
 
     if args.save_model:
         eval_and_vid(iteration, global_step)
+        generate_final_video()
 
         # if args.upload_model:
         #     from cleanrl_utils.huggingface import push_to_hub

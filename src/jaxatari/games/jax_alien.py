@@ -17,7 +17,6 @@ import chex
 from jaxatari.renderers import JAXGameRenderer
 from gymnax.environments import spaces
 import jaxatari.spaces as spaces
-from jaxatari.rendering import jax_rendering_utils_legacy as jr
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction
 import jax
@@ -25,16 +24,171 @@ import numpy as np
 from jax import Array as jArray
 from flax import struct
 
+from jaxatari.environment import ObjectObservation
+
+# Palette Constants (RGB Tuples)
+COLORS = {
+    'BASIC_BLUE': (132, 144, 252),  # Player, Blue Egg, UI
+    'ORANGE':     (252, 144, 144),  # Flame, Evil Item, Orange Egg
+    'PINK':       (236, 140, 224),  # Pink Enemy
+    'GREEN':      (132, 252, 212),  # Green Enemy
+    'YELLOW':     (252, 252, 84),   # Yellow Enemy, Items
+    'FRIGHTENED': (101, 111, 228),  # "Other Blue" / Killable Enemy
+}
+
+def get_alien_asset_config():
+    return [
+        # --- Backgrounds ---
+        {'name': 'map_primary', 'type': 'background', 'file': 'bg/map_sprite.npy'},
+        {'name': 'map_bonus',   'type': 'single',     'file': 'bg/bonus_map_sprite.npy'},
+
+        # --- Player ---
+        {
+            'name': 'player_walk',
+            'type': 'group',
+            'files': ['player_animation/player1.npy', 
+                      'player_animation/player2.npy', 
+                      'player_animation/player3.npy',
+                      'player_animation/player2.npy'], # Added 4th frame (ping-pong) to match teleport shape
+            'recolorings': {
+                'normal': COLORS['BASIC_BLUE'],
+                'flame':  COLORS['ORANGE']
+            }
+        },
+        {
+            'name': 'player_death',
+            'type': 'group',
+            'files': ['player_death_animation/player_death_1_sprite.npy',
+                      'player_death_animation/player_death_2_sprite.npy',
+                      'player_death_animation/player_death_3_sprite.npy',
+                      'player_death_animation/player_death_4_sprite.npy'],
+            'recolorings': {'normal': COLORS['BASIC_BLUE']}
+        },
+        {
+            'name': 'player_teleport',
+            'type': 'group',
+            'files': ['player_teleport_animation/teleport1.npy',
+                      'player_teleport_animation/teleport2.npy',
+                      'player_teleport_animation/teleport3.npy',
+                      'player_teleport_animation/teleport4.npy'],
+            'recolorings': {'normal': COLORS['BASIC_BLUE']}
+        },
+
+        # --- Flame ---
+        {
+            'name': 'flame',
+            'type': 'single',
+            'file': 'flame/flame_sprite.npy',
+            'recolorings': {'normal': COLORS['ORANGE']}
+        },
+
+        # --- Enemies ---
+        {
+            'name': 'enemy_walk',
+            'type': 'group',
+            'files': ['enemy_animation/enemy_walk1.npy',
+                      'enemy_animation/enemy_walk2.npy',
+                      'enemy_animation/enemy_walk3.npy',
+                      'enemy_animation/enemy_walk2.npy'], # Added 4th frame (ping-pong) to match teleport shape
+            'recolorings': {
+                'pink':       COLORS['PINK'],
+                'yellow':     COLORS['YELLOW'],
+                'green':      COLORS['GREEN'],
+                'frightened': COLORS['FRIGHTENED']
+            }
+        },
+        {
+            'name': 'enemy_teleport',
+            'type': 'group',
+            'files': ['enemy_teleport_animation/1.npy',
+                      'enemy_teleport_animation/2.npy',
+                      'enemy_teleport_animation/3.npy',
+                      'enemy_teleport_animation/4.npy'],
+            'recolorings': {
+                'pink':       COLORS['PINK'],
+                'yellow':     COLORS['YELLOW'],
+                'green':      COLORS['GREEN'],
+                'frightened': COLORS['FRIGHTENED']
+            }
+        },
+        {
+            'name': 'enemy_death',
+            'type': 'group',
+            'files': ['alien_death_animation/alien_death1.npy',
+                      'alien_death_animation/alien_death2.npy',
+                      'alien_death_animation/alien_death3.npy',
+                      'alien_death_animation/alien_death4.npy'],
+            'recolorings': {'normal': COLORS['FRIGHTENED']}
+        },
+
+        # --- Items ---
+        {
+            'name': 'evil_item',
+            'type': 'group',
+            'files': ['items/evil_item_1.npy', 'items/evil_item_2.npy'],
+            'recolorings': {
+                'normal': COLORS['ORANGE'],
+                'bonus_green': COLORS['GREEN'] 
+            }
+        },
+        {
+            'name': 'score_items', 
+            'type': 'group',
+            'files': ['items/pulsar.npy', 'items/rocket.npy', 
+                      'items/saturn.npy', 'items/starship.npy', 
+                      'items/orb.npy',    'items/pi.npy'], 
+            'recolorings': {'normal': COLORS['YELLOW']}
+        },
+
+        # --- Eggs ---
+        {
+            'name': 'egg',
+            'type': 'single',
+            'file': 'egg/egg.npy',
+            'recolorings': {
+                'yellow': COLORS['YELLOW'],
+                'orange': COLORS['ORANGE'],
+                'blue':   COLORS['BASIC_BLUE'],
+                'pink':   COLORS['PINK'],
+                'green':  COLORS['GREEN']
+            }
+        },
+        {
+            'name': 'egg_half',
+            'type': 'single',
+            'file': 'egg/half_egg.npy',
+            'recolorings': {
+                'yellow': COLORS['YELLOW'],
+                'orange': COLORS['ORANGE'],
+                'blue':   COLORS['BASIC_BLUE'],
+                'pink':   COLORS['PINK'],
+                'green':  COLORS['GREEN']
+            }
+        },
+
+        # --- UI / HUD ---
+        {
+            'name': 'digits',
+            'type': 'digits',
+            'pattern': 'digits/{}.npy',
+            'recolorings': {'normal': COLORS['BASIC_BLUE']}
+        },
+        {
+            'name': 'life',
+            'type': 'single',
+            'file': 'life/life_sprite.npy',
+            'recolorings': {'normal': COLORS['BASIC_BLUE']}
+        }
+    ]
+
 #Defines Observation of Alien, where we also need to know if a enemy is killable and where the current items are
 class AlienObservation(struct.PyTreeNode):
-    player_x:jnp.ndarray
-    player_y:jnp.ndarray
-    player_o:jnp.ndarray
-    enemies_position:jnp.ndarray
+    player: ObjectObservation
+    enemies: ObjectObservation
     enemies_killable: jnp.ndarray
     kill_item_position: jnp.ndarray
     score_item_position: jnp.ndarray
-    collision_map: jnp.ndarray
+    #collision_map: jnp.ndarray
 
 #Defines the Info of Alien, which is score, step counter and all rewards
 class AlienInfo(struct.PyTreeNode):
@@ -181,7 +335,11 @@ class AlienConstants(struct.PyTreeNode):
                        [89,160,1,4],  [97,162,1,4],  [110,158,1,0], [118,160,1,0], [126,162,1,0]
     ]], dtype=jnp.int32))
     EGG_SCORE_MULTIPLYER: int = struct.field(pytree_node=False, default=10)
+
+    # assets
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=get_alien_asset_config)
     
+
 #Defines params of FlameThrower
 class FlameState(struct.PyTreeNode):
     x: jnp.ndarray # x position of the flame
@@ -292,66 +450,49 @@ s_fs = set(SingleEnemyState.__dataclass_fields__.keys())
 if not (m_fs.issubset(s_fs) and s_fs.issubset(m_fs)):
     raise Exception("Mismatch between fields in SingleEnemyState and MultipleEnemiesState")
 
-def load_collision_map(fileName, transpose=True):
-    """converts an npy file to a collision map of shape (height, width)
 
-    Args:
-        fileName (os.path): file path plus name
-        transpose (bool, optional):  Defaults to True.
-
-    Returns:
-        jnp.ndarry: a collison map
+def load_collision_map(file_path: str, transpose: bool = True, invert: bool = False) -> jnp.ndarray:
     """
-    # Returns a boolean array representing the collision map
-    # Load frame (np array) from a .npy file and convert to jnp array
-    
-    frame = jnp.load(fileName)
-    frame = frame[..., 0].squeeze()
-    boolean_frame = jnp.zeros(shape=frame.shape, dtype=jnp.bool)
-    boolean_frame = boolean_frame.at[frame==0].set(False)
-    boolean_frame = boolean_frame.at[frame > 0].set(True)
-    frame = boolean_frame
-    return jnp.transpose(frame, (1, 0)) if transpose else frame
+    Load collision maps; matches pre-refactor behavior.
+    For 3D arrays uses the first channel only (original used frame[..., 0].squeeze()).
+    Result is (W, H) when transpose=True for check_for_wall_collision.
+    """
+    data = jnp.load(file_path)
+
+    # Match original: use first channel only for 3D (not max over channels)
+    if data.ndim == 3:
+        data = data[..., 0].squeeze()
+
+    # Transpose if requested (needed for coordinate consistency: first axis = x, second = y)
+    if transpose:
+        data = jnp.transpose(data, (1, 0))
+
+    # 0 = no collision, >0 = solid (match original boolean_frame logic)
+    if invert:
+        out = data == 0
+    else:
+        out = data > 0
+    return out
+
+
+def _load_collision_map() -> jnp.ndarray:
+    """Loads the player-enemy collision sprite for primary-stage collision checks."""
+    base_dir = render_utils.get_base_sprite_dir()
+    path = os.path.join(base_dir, "alien", "player_enemy_collision_sprite.npy")
+    return load_collision_map(path, transpose=True)
+
+
+def _load_background_collision_map() -> jnp.ndarray:
+    """Loads the level/wall collision map (for observations and wall logic)."""
+    base_dir = render_utils.get_base_sprite_dir()
+    path = os.path.join(base_dir, "alien", "bg", "map_sprite_collision_map.npy")
+    return load_collision_map(path, transpose=True)
+
 
 # collision maps for enemy collision check with player for primary stage
-PLAYER_COLLISION_MAP_FOR_ENEMY_COLLISION_CHECK: jnp.ndarray = load_collision_map(os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites", "alien", "player_enemy_collision_sprite.npy"), transpose=True)
-# collision map for wall collision check
-BACKGROUND_COLLISION_MAP: jnp.ndarray = load_collision_map(os.path.join(os.path.dirname(os.path.abspath(__file__)),"sprites", "alien","bg", "map_sprite_collision_map.npy"), transpose=True)
-
-def loadFramAddAlpha(fileName, transpose=True, add_alpha: bool = False, add_black_as_transparent: bool = False):
-    """Custom loading function which turns black background transparent.
-        This is simply to make editing sprites a bit more convenient.
-
-    Args:
-        fileName (os.path): file path plus name
-        transpose (bool, optional):  Defaults to True.
-        add_alpha (bool, optional): Defaults to False.
-        add_black_as_transparent (bool, optional):  Defaults to False.
-
-    Raises:
-        ValueError: when the jnp.ndarry is not of shape (height, width, 4)
-
-    Returns:
-        jnp.ndarry: finished sprite frame
-    """
-    frame = jnp.load(fileName)
-    if frame.shape[-1] != 4 and add_alpha:
-        alphas = jnp.ones((*frame.shape[:-1], 1))
-        alphas = alphas*255
-        frame = jnp.concatenate([frame, alphas], axis=-1)
-        if add_black_as_transparent:
-            arr_black = jnp.sum(frame[..., :-1], axis=-1)
-            alpha_channel = frame[..., -1]
-            alpha_channel = alpha_channel.at[arr_black == 0].set(0)
-            frame = frame.at[..., -1].set(alpha_channel)
-    # Check if the frame's shape is [[[r, g, b, a], ...], ...]
-    if frame.ndim != 3:
-        raise ValueError(
-            "Invalid frame format. The frame must have a shape of (height, width, 4)."
-        )
-        
-    frame = frame.astype(jnp.uint8)
-    return jnp.transpose(frame, (1, 0, 2)) if transpose else frame
+PLAYER_COLLISION_MAP_FOR_ENEMY_COLLISION_CHECK: jnp.ndarray = _load_collision_map()
+# collision map for wall (level) - used in observation; game logic uses env's level_collision_map
+BACKGROUND_COLLISION_MAP: jnp.ndarray = _load_background_collision_map()
 
 
 @jax.jit
@@ -371,9 +512,8 @@ def check_for_wall_collision(moving_object: jnp.ndarray, background: jnp.ndarray
     new_position_bg: jnp.ndarray = jax.lax.dynamic_slice(operand=background,
                           start_indices=new_position, slice_sizes=moving_object.shape)
     collisions: jnp.ndarray = jnp.logical_and(moving_object, new_position_bg)
-    # Use max to check whether moving_object collision map overlaps with background collision map
-    has_collision = jnp.max(a=collisions, axis=None, keepdims=False)
-    ret_v = jnp.multiply(has_collision, old_position) + jnp.multiply(1- has_collision, new_position)
+    has_collision = jnp.any(collisions)
+    ret_v = jnp.where(has_collision, old_position, new_position)
     return ret_v
 
 def check_collision_between_two_sprites(sprite1, pos1_x, pos1_y, sprite2, pos2_x, pos2_y):
@@ -500,11 +640,13 @@ def teleport_object(position: jnp.ndarray, orientation: JAXAtariAction, action: 
     cond_1 = jnp.logical_or(jnp.logical_and(x >= 127, orientation == ac_right),jnp.logical_and(action == ac_right, x >= 127)) #right teleport
     cond_2 = jnp.logical_or(jnp.logical_and(x <= 7,orientation == ac_left),jnp.logical_and(action == ac_left, x <= 7)) #left teleport
 
-    new_val_code = cond_1 + jnp.multiply(2 ,cond_2) # 0 = no teleport, 1 = right teleport, 2 = left teleport
-
-    new_position0 = jnp.multiply(x ,(new_val_code == 0)) + jnp.multiply(7 , (new_val_code == 1)) + jnp.multiply(127 ,(new_val_code == 2))
+    new_val_code = cond_1 + 2 * cond_2  # 0 = no teleport, 1 = right teleport, 2 = left teleport
+    new_position0 = jnp.select(
+        [new_val_code == 0, new_val_code == 1, new_val_code == 2],
+        [x, 7, 127],
+        default=x,
+    )
     return position.at[0].set(new_position0)
-
 
 # Main Environment Class
 class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienConstants]):
@@ -536,22 +678,43 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
     def __init__(self, consts: AlienConstants = None):
         consts = consts or AlienConstants()
         super().__init__(consts)
-        self.renderer = AlienRenderer(consts=self.consts) # renderer for the game
+        
+        # 1. Initialize Renderer
+        self.renderer = AlienRenderer(consts=self.consts)
 
-        traverse_enemy_step = traverse_multiple_enemy_(partial(enemy_step, cnsts=consts), 1) # vectorized enemy step function
-        self.enemy_step = jax.jit(traverse_enemy_step) # jit compiled enemy step function
+        # 2. Initialize Logic Steps
+        traverse_enemy_step = traverse_multiple_enemy_(partial(enemy_step, cnsts=consts), 1)
+        self.enemy_step = jax.jit(traverse_enemy_step)
         
         traverse_enemy_step_bonus =  traverse_multiple_enemy_(partial(enemy_step_bonus, cnsts=consts), 1)
-        self.enemy_step_bonus = jax.jit(traverse_enemy_step_bonus) # jit compiled enemy step function for bonus stage
+        self.enemy_step_bonus = jax.jit(traverse_enemy_step_bonus)
         
-        self.sprite_path: str = os.path.join(self.consts.MODULE_DIR, "sprites", "alien") # path to the sprite folder
+        # 3. Setup Sprite Paths (Using new utils)
+        # This ensures we look in ~/.local/share/jaxatari/sprites/alien/
+        self.sprite_path: str = os.path.join(render_utils.get_base_sprite_dir(), "alien")
 
-        # Load collision maps
-        self.player_collision_map: jnp.ndarray = load_collision_map(os.path.join(self.sprite_path, "player_animation" ,"player_sprite_collision_map.npy"), transpose=True)
-        self.player_bonus_collision_map: jnp.ndarray = load_collision_map(os.path.join(self.sprite_path, "player_animation", "player_sprite_bonus_collision_map.npy"), transpose=True)
-        self.level_collision_map: jnp.ndarray = load_collision_map(os.path.join(self.sprite_path,  "bg", "map_sprite_collision_map.npy"), transpose=True)
-        self.enemy_collision_map: jnp.ndarray = load_collision_map(os.path.join(self.sprite_path,  "player_animation","player_sprite_collision_map.npy"), transpose=True)
-        self.enemy_bonus_collision_map: jnp.ndarray = load_collision_map(os.path.join(self.sprite_path, "enemy_animation", "enemy_sprite_bonus_collision_map.npy"), transpose=True)
+        # 4. Load Collision Maps
+        # We use the generic helper we defined above
+        self.player_collision_map: jnp.ndarray = load_collision_map(
+            os.path.join(self.sprite_path, "player_animation", "player_sprite_collision_map.npy"), 
+            transpose=True
+        )
+        self.player_bonus_collision_map: jnp.ndarray = load_collision_map(
+            os.path.join(self.sprite_path, "player_animation", "player_sprite_bonus_collision_map.npy"), 
+            transpose=True
+        )
+        self.level_collision_map: jnp.ndarray = load_collision_map(
+            os.path.join(self.sprite_path, "bg", "map_sprite_collision_map.npy"),
+            transpose=True
+        )
+        self.enemy_collision_map: jnp.ndarray = load_collision_map(
+            os.path.join(self.sprite_path, "player_animation", "player_sprite_collision_map.npy"), 
+            transpose=True
+        )
+        self.enemy_bonus_collision_map: jnp.ndarray = load_collision_map(
+            os.path.join(self.sprite_path, "enemy_animation", "enemy_sprite_bonus_collision_map.npy"), 
+            transpose=True
+        )
     
     def render(self, state: AlienState) -> jnp.ndarray:
         return self.renderer.render(state)
@@ -665,12 +828,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
     
     @partial(jax.jit, static_argnums=(0))
     def start_bonus_stage(self, state: AlienState) -> AlienState:
-        """initiates the bonus stage
-        Args:
-            state (AlienState): Current state of the game
-        Returns:
-            AlienState: the next game frame
-        """
+        """initiates the bonus stage"""
         _, new_state = self.reset(state.enemies.rng_key)
         
         # init new start player position with other collision map for bonus stage
@@ -686,7 +844,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         random_value = jax.random.randint(sub_key, shape=(), minval=0, maxval=3)
         presets = jnp.array([[70, 20, 80], [10, 80, 140], [40, 100, 110]])
         
-        # Position 6 enemies in a diagonal line across the map based on the random chosen preset
+        # Position 6 enemies in a diagonal line
         diagonal_spacing = 20
         start_y = 30
         enemy_x_positions = jnp.array([presets[random_value][0], presets[random_value][0]+30+5, presets[random_value][1], presets[random_value][2], presets[random_value][2]-30-5, presets[random_value][1]+30-5], dtype=jnp.int32)
@@ -704,13 +862,16 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             collision_map=self.enemy_bonus_collision_map,
             rng_key=main_key
         )
+        
         new_level_state = new_state.level.replace(
             score=state.level.score + 1,
             lifes=state.level.lifes,
             bonus_flag=jnp.array(1).astype(jnp.int32),
+            # Bonus stage has no walls; keep a boolean collision map.
             collision_map=jnp.zeros(new_state.level.collision_map.shape, dtype=jnp.bool_),
             difficulty_stage=state.level.difficulty_stage
         )
+        
         new_state = new_state.replace(
             player=new_player_state,
             enemies=new_enemies_state,
@@ -762,12 +923,13 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
 
         # lose a life if collision with enemy and not already in death animation
         condition_new_life = jnp.logical_and(check_for_player_enemy_collision(state, [new_player_state.x, new_player_state.y]),jnp.equal(state.level.death_frame_counter, 0))
-        new_life = jnp.multiply(condition_new_life, jnp.add(state.level.lifes, -1)) + jnp.multiply(1 - condition_new_life, state.level.lifes)
+        new_life = jnp.where(condition_new_life, state.level.lifes - 1, state.level.lifes)
 
         # start death animation if life lost and checks if game over or soft reset depending on if lives are left
         condition1 = jnp.logical_and(condition_new_life, jnp.less(new_life, 0))
         condition2 = jnp.logical_and(condition_new_life, jnp.greater_equal(new_life,0))
-        new_death_frame_counter = state.level.death_frame_counter + jnp.multiply(condition1, -40) + jnp.multiply(condition2, 40)
+        death_delta = jnp.where(condition1, -40, jnp.where(condition2, 40, 0))
+        new_death_frame_counter = state.level.death_frame_counter + death_delta
 
         # update items
         new_items, new_score, new_current_active_item_index, new_evil_item_frame_counter, new_spawn_score_item_flag_1, new_spawn_score_item_flag_2, new_score_item_counter = self.item_step(
@@ -990,12 +1152,13 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
 
         # lose a life if collision with enemy and not already in death animation
         condition_new_life = jnp.logical_and(check_for_player_enemy_collision(state, [new_player_state.x, new_player_state.y]),jnp.equal(state.level.death_frame_counter, 0))
-        new_life = jnp.multiply(condition_new_life, state.level.lifes-1) + jnp.multiply(1 - condition_new_life, state.level.lifes)
+        new_life = jnp.where(condition_new_life, state.level.lifes - 1, state.level.lifes)
 
         # start death animation if life lost and checks if game over or soft reset depending on if lives are left
         condition1 = jnp.logical_and(condition_new_life, jnp.less(new_life, 0))
         condition2 = jnp.logical_and(condition_new_life, jnp.greater_equal(new_life,0))
-        new_death_frame_counter = state.level.death_frame_counter + jnp.multiply(condition1, -40) + jnp.multiply(condition2, 40)
+        death_delta = jnp.where(condition1, -40, jnp.where(condition2, 40, 0))
+        new_death_frame_counter = state.level.death_frame_counter + death_delta
 
         # is to signalise that an enemy was killed to raise score during this kill item period
         new_kill_score_flag = jnp.where(state.enemies.multiple_enemies.enemy_death_frame > 0, 0, state.enemies.multiple_enemies.kill_score_flag)
@@ -1094,8 +1257,10 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                                     self.game_over], 
                                    freeze_state)
         # Now Handling the game freeze for when enemies dies
-        needs_to_enter_kill_state: jArray = jnp.multiply(jnp.equal(new_death_frame_counter, 0),
-                                                         jnp.equal(jnp.sum(state.enemies.multiple_enemies.enemy_death_frame), 0)) 
+        needs_to_enter_kill_state: jArray = jnp.logical_and(
+            jnp.equal(new_death_frame_counter, 0),
+            jnp.equal(jnp.sum(state.enemies.multiple_enemies.enemy_death_frame), 0)
+        )
         new_state = jax.lax.cond(needs_to_enter_kill_state, lambda x, y : y, lambda x, y: x, new_state, kill_state)
         
         return new_state
@@ -1112,7 +1277,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         """
 
         # defines which action is taken based on inputs which is breaken down into up and down
-        moving_action = jnp.multiply(jnp.greater(action,9), jnp.mod(action,10)+2) + jnp.multiply(jnp.less_equal(action,9), action)
+        moving_action = jnp.where(action > 9, jnp.mod(action, 10) + 2, action)
         position = jnp.array([state.player.x, state.player.y])
 
         #limits velocity to move 1 position per frame at max but decides rather how frequent it moves 1 position so either +1/-1 or 0 frequency
@@ -1120,10 +1285,15 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         velocity_vertical = jax.lax.min(jnp.round((((117*2)/249))*(state.level.frame_count)).astype(jnp.int32) - jnp.round(((117*2/249))*(state.level.frame_count - 1)).astype(jnp.int32),1)
 
         # gives back the new vertical position
-        new_y_position: jArray = jnp.multiply(jnp.equal(moving_action, JAXAtariAction.UP), position[1]-velocity_vertical) + jnp.multiply(
-            jnp.equal(moving_action, JAXAtariAction.DOWN), position[1] + velocity_vertical
-        ) + jnp.multiply((1 - jnp.logical_or(jnp.equal(moving_action, JAXAtariAction.UP), jnp.equal(moving_action, JAXAtariAction.DOWN))), 
-                         position[1])
+        new_y_position: jArray = jnp.where(
+            jnp.equal(moving_action, JAXAtariAction.UP),
+            position[1] - velocity_vertical,
+            jnp.where(
+                jnp.equal(moving_action, JAXAtariAction.DOWN),
+                position[1] + velocity_vertical,
+                position[1]
+            )
+        )
         new_position = position.at[1].set(new_y_position)
 
         # upper limit on vertical position
@@ -1297,22 +1467,20 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
 
     def observation_space(self) -> spaces.Dict:
         # Define the observation space as a dictionary of multiple components
+        # Use object-centric spaces for player and enemies while keeping boolean fields separate
+        enemy_count = int(self.consts.ENEMY_AMOUNT_BONUS_STAGE)
         return spaces.Dict({
-            "player_x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),  # Player X position (0–160)
-            "player_y": spaces.Box(low=0, high=210, shape=(), dtype=jnp.int32), # Player Y position (0–210)
-            "player_o": spaces.Box(low=0, high=17, shape=(), dtype=jnp.int32),   # Player orientation/state (0–17)
-            "enemies_position":
-                spaces.Box(low=0, high= 210, shape=(2, 6), dtype=jnp.int32), # Enemy positions: 2D coords for 6 enemies
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH), orientation_range=(0.0, 17.0)),
+            "enemies": spaces.get_object_space(n=enemy_count, screen_size=(self.consts.HEIGHT, self.consts.WIDTH), orientation_range=(0.0, 17.0)),
             "enemies_killable":
-                spaces.Box(low=0, high=1, shape=(6, ), dtype=jnp.int32),  # Boolean (0/1) for whether each enemy is killable
+                spaces.Box(low=0, high=1, shape=(enemy_count,), dtype=jnp.int32),
             "kill_item_position":
-                spaces.Box(low=0, high=210, shape=(2, ), dtype=jnp.int32), # Position (x, y) of the kill item
+                spaces.Box(low=0, high=self.consts.HEIGHT, shape=(2,), dtype=jnp.int32),
             "score_item_position":
-                spaces.Box(low=0, high=210, shape=(2, ), dtype=jnp.int32), # Position (x, y) of the score item
-            "collision_map":
-                spaces.Box(low=0, high=1, shape=(152, 188), dtype=jnp.int32), # Binary grid: collision map of the environment
-        }
-        )
+                spaces.Box(low=0, high=self.consts.HEIGHT, shape=(2,), dtype=jnp.int32),
+            #"collision_map":
+            #    spaces.Box(low=0, high=1, shape=(152, 188), dtype=jnp.bool_),
+        })
 
     def _get_observation(self, state: AlienState) -> AlienObservation:
         """returns the observation to a given state
@@ -1326,15 +1494,36 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         # Get the position of the currently active "kill item" (first 2 coordinates: x, y)
         new_kill_item_position = jnp.take(self.consts.ITEM_ARRAY, state.level.current_active_item_index, axis=0)[:2]
 
+        # Build object-centric observations
+        enemy_count = int(self.consts.ENEMY_AMOUNT_BONUS_STAGE)
+
+        player_obj = ObjectObservation.create(
+            x=jnp.array(state.player.x, dtype=jnp.int32),
+            y=jnp.array(state.player.y, dtype=jnp.int32),
+            width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.PLAYER_HEIGHT, dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32),
+            visual_id=jnp.array(0, dtype=jnp.int32),
+            orientation=jnp.array(state.player.orientation, dtype=jnp.int32),
+        )
+
+        enemies_obj = ObjectObservation.create(
+            x=state.enemies.multiple_enemies.x,
+            y=state.enemies.multiple_enemies.y,
+            width=jnp.full((enemy_count,), self.consts.PLAYER_WIDTH, dtype=jnp.int32),
+            height=jnp.full((enemy_count,), self.consts.PLAYER_HEIGHT, dtype=jnp.int32),
+            active=state.enemies.multiple_enemies.active_enemy,
+            visual_id=jnp.zeros((enemy_count,), dtype=jnp.int32),
+            orientation=state.enemies.multiple_enemies.orientation,
+        )
+
         return AlienObservation(
-            player_x= state.player.x,
-            player_y= state.player.y,
-            player_o= jnp.array(state.player.orientation, jnp.int32),
-            enemies_position= jnp.array([state.enemies.multiple_enemies.x,state.enemies.multiple_enemies.y]),
-            enemies_killable= state.enemies.multiple_enemies.killable,
-            kill_item_position= new_kill_item_position,
-            score_item_position= jnp.array([68 ,  56]), # Hardcoded position of the score item
-            collision_map = jnp.astype(BACKGROUND_COLLISION_MAP, jnp.int32)
+            player=player_obj,
+            enemies=enemies_obj,
+            enemies_killable=state.enemies.multiple_enemies.killable,
+            kill_item_position=new_kill_item_position,
+            score_item_position=jnp.array([68, 56], dtype=jnp.int32), # Hardcoded position of the score item
+            #collision_map=BACKGROUND_COLLISION_MAP,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1387,24 +1576,6 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: AlienObservation) -> jnp.ndarray:
-        """Converts the observation to a flat array."""
-        ret = jnp.concatenate(
-            [
-                obs.player_x.flatten(),
-                obs.player_y.flatten(),
-                obs.player_o.flatten(),
-                obs.enemies_position.flatten(),
-                obs.enemies_killable.flatten(),
-                obs.kill_item_position.flatten(),
-                obs.score_item_position.flatten(),
-                obs.collision_map.flatten(),
-            ]
-        )
-        # Remove any unnecessary dimensions (e.g. from concatenation)
-        return jnp.squeeze(ret)
-
-    @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AlienState) -> bool:
         """indicates game over
 
@@ -1439,77 +1610,40 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         y_lower: jnp.ndarray = player_y
         y_higher: jnp.ndarray = jnp.add(player_y, self.consts.PLAYER_HEIGHT)
 
-        def check_egg_player_collision(i, l_r):
-            """Function that fills out the current egg_collision_map
-                for an index i, checks whether the i-th egg currently collides with the player and sets
-                the i-th index in the collision map to one
-
-            Args:
-                i (_type_): index
-                l_r (_type_): indicates the side of the array (left or right)
-                egg_col_map (_type_): array of all eggs on this side
-
-            Returns:
-                _type_: augmented egg array based on collision
-            """
-             
-            has_collision = jnp.logical_and(egg_state[l_r, i, 0]>= x_lower,
-                                           jnp.logical_and(egg_state[l_r, i, 0] < x_higher,
-                                           jnp.logical_and(egg_state[l_r, i, 1] >= y_lower,
-                                                           egg_state[l_r, i, 1] < y_higher)))
-            return has_collision.astype(jnp.int32)
-        
-        # Generate full collision map for all eggs
-        egg_collision_map_left = jax.vmap(lambda i: check_egg_player_collision(i, 0))(jnp.arange(egg_state.shape[1]))
-        egg_collision_map_right = jax.vmap(lambda i: check_egg_player_collision(i, 1))(jnp.arange(egg_state.shape[1]))
+        # Broadcast collision checks over all eggs directly (no index-vmap).
+        left_x = egg_state[0, :, 0]
+        left_y = egg_state[0, :, 1]
+        right_x = egg_state[1, :, 0]
+        right_y = egg_state[1, :, 1]
+        egg_collision_map_left = (
+            (left_x >= x_lower)
+            & (left_x < x_higher)
+            & (left_y >= y_lower)
+            & (left_y < y_higher)
+        )
+        egg_collision_map_right = (
+            (right_x >= x_lower)
+            & (right_x < x_higher)
+            & (right_y >= y_lower)
+            & (right_y < y_higher)
+        )
         # Multiply with current active egg-state to prevent the same egg from being collected twice
-        score_increas_left: jnp.ndarray = jnp.sum(jnp.multiply(egg_collision_map_left, egg_state[0,:, 2]))
-        score_increas_right: jnp.ndarray = jnp.sum(jnp.multiply(egg_collision_map_right, egg_state[1,:, 2]))
+        score_increas_left: jnp.ndarray = jnp.sum(jnp.where(egg_collision_map_left, egg_state[0, :, 2], 0))
+        score_increas_right: jnp.ndarray = jnp.sum(jnp.where(egg_collision_map_right, egg_state[1, :, 2], 0))
         # Multiply collision map onto egg-state to set visible attribute to the appropriate value
-        egg_collision_map_left = jnp.subtract(1, egg_collision_map_left)
-        egg_collision_map_right = jnp.subtract(1, egg_collision_map_right)
+        egg_collision_map_left = jnp.logical_not(egg_collision_map_left)
+        egg_collision_map_right = jnp.logical_not(egg_collision_map_right)
         # Update egg presence maps based on collisions and current visibility
-        new_egg_presence_map_left: jnp.ndarray = jnp.multiply(egg_collision_map_left, egg_state[0,:, 2]).astype(jnp.int32)
-        new_egg_presence_map_right: jnp.ndarray = jnp.multiply(egg_collision_map_right, egg_state[1,:, 2]).astype(jnp.int32)
+        new_egg_presence_map_left: jnp.ndarray = jnp.where(egg_collision_map_left, egg_state[0, :, 2], 0).astype(jnp.int32)
+        new_egg_presence_map_right: jnp.ndarray = jnp.where(egg_collision_map_right, egg_state[1, :, 2], 0).astype(jnp.int32)
         # Update the egg_state array to reflect collected eggs (0 = collected, 1 = still present)
         egg_state = egg_state.at[0,:, 2].set(new_egg_presence_map_left)
         egg_state = egg_state.at[1,:, 2].set(new_egg_presence_map_right)
         # Calculate new score by adding points for eggs collected on both sides
-        new_score: jnp.ndarray = jnp.add(score, jnp.add(jnp.multiply(score_increas_left, egg_score_multiplyer),jnp.multiply(score_increas_right, egg_score_multiplyer)))
+        new_score: jnp.ndarray = score + ((score_increas_left + score_increas_right) * egg_score_multiplyer)
         new_score = new_score.astype(jnp.uint16)
 
         return egg_state, new_score
-    @partial(jax.jit, static_argnums=(0, ))
-    def check_item_player_collision(self, i, batched_val: Tuple[Any]):
-        """checks for collision between an item and the player
-        Args:
-            i (_type_): index
-            single_item_col_map (_type_): collision map for a single item
-        Returns:
-            _type_: augmented collision map for a single item
-        """
-        # Unpack batched values for this step
-        state, player_x, player_y = batched_val
-
-        # Define the rectangular bounding box of the player
-        x_lower: jnp.ndarray = player_x
-        x_higher: jnp.ndarray = jnp.add(player_x, self.consts.PLAYER_WIDTH)
-        y_lower: jnp.ndarray = player_y
-        y_higher: jnp.ndarray = jnp.add(player_y, self.consts.PLAYER_HEIGHT)
-
-        # Check if the current item overlaps with the player's bounding box
-        has_collision = jnp.logical_and(state.items[i, 0]>= x_lower,
-                                        jnp.logical_and(state.items[i, 0] < x_higher,
-                                                        jnp.logical_and(state.items[i, 1] >= y_lower,
-                                                                        state.items[i, 1] < y_higher)))
-
-        # Only consider collision if the item is active (state.items[i, 2] == 1)
-        has_collision = jnp.logical_and(has_collision, state.items[i, 2] == 1)
-
-        # Disable collision for "evil" items when the player's flamethrower is active
-        has_collision = jnp.logical_and(has_collision, 1 - jnp.logical_and(state.items[i, 3] == 0 ,state.player.flame.flame_flag))
-
-        return has_collision.astype(jnp.int32)
 
     def spawn_score_item(self, items, state: AlienState):
         """Spawns a score item on the field.
@@ -1549,39 +1683,61 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         """
 
         # Initialize collision map for all items (0 = no collision, 1 = collision)
-        item_collision_map: jnp.ndarray = jnp.zeros((state.items.shape[0]))
+        item_collision_map: jnp.ndarray = jnp.zeros((state.items.shape[0],), dtype=jnp.bool_)
         # Determine coord range occupied by the player
         curr_active_item_idx = state.level.current_active_item_index
 
 
-        # Check collisions between player and each item using a JAX vmap
-        item_collision_map = jax.vmap(lambda i: self.check_item_player_collision(i, (state, player_x, player_y)))(jnp.arange(state.items.shape[0]))
+        # Check item collisions using direct array broadcasting (no index-vmap).
+        x_lower: jnp.ndarray = player_x
+        x_higher: jnp.ndarray = jnp.add(player_x, self.consts.PLAYER_WIDTH)
+        y_lower: jnp.ndarray = player_y
+        y_higher: jnp.ndarray = jnp.add(player_y, self.consts.PLAYER_HEIGHT)
+        item_x = state.items[:, 0]
+        item_y = state.items[:, 1]
+        item_active = state.items[:, 2] == 1
+        blocked_by_flame = jnp.logical_and(state.items[:, 3] == 0, state.player.flame.flame_flag.astype(jnp.bool_))
+        item_collision_map = (
+            (item_x >= x_lower)
+            & (item_x < x_higher)
+            & (item_y >= y_lower)
+            & (item_y < y_higher)
+            & item_active
+            & (~blocked_by_flame)
+        )
         
         # Calculate score increases for items that collided with the player
         # Multiply by:
         #   - item_collision_map -> whether player collided with the item
         #   - state.items[:, 2] -> whether the item is active
         #   - ITEM_SCORE_MULTIPLIERS -> multiplier for the item type
-        score_increases = jnp.multiply(
+        score_increases = jnp.where(
             item_collision_map,
-            jnp.multiply(
-                state.items[:, 2],
-                self.consts.ITEM_SCORE_MULTIPLIERS[state.items[:, 3]]
-            )
+            state.items[:, 2] * self.consts.ITEM_SCORE_MULTIPLIERS[state.items[:, 3]],
+            0
         )
 
         # Determine if a new evil item should appear
-        new_evil_item_cond = jnp.logical_and(jnp.equal(item_collision_map[curr_active_item_idx], 1), jnp.less(curr_active_item_idx,3))
-        new_evil_item_frame_counter = jnp.multiply(new_evil_item_cond, jnp.array(state.level.evil_item_duration).astype(jnp.int32)) + jnp.multiply(1 - new_evil_item_cond, state.level.evil_item_frame_counter)
+        new_evil_item_cond = jnp.logical_and(item_collision_map[curr_active_item_idx], jnp.less(curr_active_item_idx, 3))
+        new_evil_item_frame_counter = jnp.where(
+            new_evil_item_cond,
+            jnp.array(state.level.evil_item_duration).astype(jnp.int32),
+            state.level.evil_item_frame_counter
+        )
 
         # Determine if new regular items should appear
-        new_items_cond = jnp.logical_and(jnp.equal(item_collision_map[curr_active_item_idx], 1), jnp.less(curr_active_item_idx, 2))
-        new_items = jnp.multiply(new_items_cond,state.items.at[curr_active_item_idx+1, 2].set(1)) + jnp.multiply(1 - new_items_cond, state.items)
+        new_items_cond = jnp.logical_and(item_collision_map[curr_active_item_idx], jnp.less(curr_active_item_idx, 2))
+        candidate_new_items = state.items.at[curr_active_item_idx + 1, 2].set(1)
+        new_items = jnp.where(new_items_cond, candidate_new_items, state.items)
 
 
         # Update the index of the currently active item if needed
-        new_current_active_item_index_cond = jnp.equal(jnp.equal(item_collision_map[curr_active_item_idx], 1),jnp.less(curr_active_item_idx, 3))
-        new_current_active_item_index = jnp.multiply(new_current_active_item_index_cond, curr_active_item_idx +1) + jnp.multiply(1 - new_current_active_item_index_cond, curr_active_item_idx)
+        new_current_active_item_index_cond = jnp.equal(item_collision_map[curr_active_item_idx], jnp.less(curr_active_item_idx, 3))
+        new_current_active_item_index = jnp.where(
+            new_current_active_item_index_cond,
+            curr_active_item_idx + 1,
+            curr_active_item_idx
+        )
 
         new_score_item_counter = state.level.score_item_counter + 1
 
@@ -1608,11 +1764,12 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         )
 
         # Disable special score item after counter reaches 600
-        new_items = jnp.multiply(new_score_item_counter == 600, new_items.at[3, 2].set(0)) + jnp.multiply(1 - (new_score_item_counter == 600), new_items)
+        score_item_timeout = new_score_item_counter == 600
+        new_items = jnp.where(score_item_timeout, new_items.at[3, 2].set(0), new_items)
 
         # Update presence map for items based on collision and active status
-        item_collision_map = jnp.subtract(1, item_collision_map)
-        new_item_presence_map: jnp.ndarray = jnp.multiply(item_collision_map, new_items[:, 2]).astype(jnp.int32)
+        item_collision_map = jnp.logical_not(item_collision_map)
+        new_item_presence_map: jnp.ndarray = jnp.where(item_collision_map, new_items[:, 2], 0).astype(jnp.int32)
         new_items = new_items.at[:, 2].set(new_item_presence_map)
 
         # Update total score by summing individual item score increases
@@ -1670,7 +1827,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         velocity_vertical = jax.lax.min(jnp.round((((117*(2))/249) + state.level.difficulty_stage.astype(jnp.int32)/10)*(state.level.frame_count)).astype(jnp.int32) - jnp.round(((117*(2)/249) + state.level.difficulty_stage.astype(jnp.int32)/10)*(state.level.frame_count - 1)).astype(jnp.int32),1)
 
         # maps the action onto the relevant movement-actions
-        moving_action = jnp.multiply(jnp.greater(action,9), jnp.mod(action,10)+2) + jnp.multiply(jnp.less_equal(action,9), action)
+        moving_action = jnp.where(action > 9, jnp.mod(action, 10) + 2, action)
 
         # Functions for setting orientation based on collision and movement
         def set_orientation(self, x, dx, dy, new_orientation):
@@ -1687,7 +1844,8 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
                     int: updated orientation (either new_orientation or current)
                 """
 
-            return jnp.multiply(self.other_slightly_weirder_check_for_player_collision(x, dx, dy),new_orientation) + jnp.multiply(1-self.other_slightly_weirder_check_for_player_collision(x, dx, dy),x.player.orientation)
+            can_move = self.other_slightly_weirder_check_for_player_collision(x, dx, dy)
+            return jnp.where(can_move, new_orientation, x.player.orientation)
 
         def set_diagonal(self, x, dx1, dy1, first_orientation, second_orientation, dx2, dy2):
             """
@@ -1715,10 +1873,10 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             # - cond1 is True → take first_orientation
             # - cond1 is False & cond2 is True → take second_orientation
             # - cond1 is False & cond2 is False → keep current orientation
-            return (
-                    jnp.multiply(cond1, first_orientation)
-                    + jnp.multiply((1 - cond1) * cond2, second_orientation)
-                    + jnp.multiply((1 - cond1) * (1 - cond2), x.player.orientation)
+            return jnp.where(
+                cond1,
+                first_orientation,
+                jnp.where(cond2, second_orientation, x.player.orientation)
             )
 
         # Update player orientation based on movement action
@@ -1747,7 +1905,11 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
 
         #Determine last horizontal orientation, this is necessary for correctly displaying the player sprite
         last_horizontal_orientation_cond = jnp.logical_or(state_player_orientation == JAXAtariAction.LEFT, state_player_orientation == JAXAtariAction.RIGHT)
-        last_horizontal_orientation = jnp.multiply(last_horizontal_orientation_cond, state_player_orientation) + jnp.multiply(1 - last_horizontal_orientation_cond, state.player.last_horizontal_orientation)
+        last_horizontal_orientation = jnp.where(
+            last_horizontal_orientation_cond,
+            state_player_orientation,
+            state.player.last_horizontal_orientation
+        )
 
         # Handle movement at this point:
         # Choose movement function according to index of proposed action.
@@ -1794,7 +1956,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         # - If last horizontal orientation was LEFT, flame appears slightly to the left of player (-6 pixels)
         # - Otherwise, flame appears slightly to the right of player (+10 pixels)
         new_flame_x_cond = jnp.equal(state.player.last_horizontal_orientation,JAXAtariAction.LEFT)
-        new_flame_x = jnp.multiply(new_flame_x_cond,new_position[0] - 6) + jnp.multiply(1 - new_flame_x_cond,new_position[0] + 10)
+        new_flame_x = jnp.where(new_flame_x_cond, new_position[0] - 6, new_position[0] + 10)
 
         # Update the flamethrower state for the player
         # - x, y: position of the flame visual
@@ -1942,7 +2104,7 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
                 random_value = jax.random.uniform(enemy.key, shape=(), minval=0, maxval=1)
                 fun_cond = jnp.less(random_value, enemy.mode_constants.mode_change_probability)
                 mode = (1 - fun_cond).astype(jnp.int32)
-                duration = jnp.multiply(fun_cond, enemy.mode_constants.chase_duration) + jnp.multiply(1 - fun_cond, enemy.mode_constants.scatter_duration)
+                duration = jnp.where(fun_cond, enemy.mode_constants.chase_duration, enemy.mode_constants.scatter_duration)
                 return mode, duration
     
             def check_wall_collision(new_pos):
@@ -1982,7 +2144,7 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
             # Prevent reversing direction unless in chase mode at start of chase
             allowed_directions_no_opp = allowed_directions.at[opposite_table[jnp.subtract(enemy.orientation, 2)]].set(0)
             allowed_directions_cond = jnp.logical_and(jnp.equal(enemy.mode_type, 0), jnp.equal(enemy.mode_duration, enemy.mode_constants.chase_duration))
-            allowed_directions_no_opp = jnp.multiply(allowed_directions_cond, allowed_directions) + jnp.multiply(1 - allowed_directions_cond, allowed_directions_no_opp)
+            allowed_directions_no_opp = jnp.where(allowed_directions_cond, allowed_directions, allowed_directions_no_opp)
 
             # Mode update: chase, scatter, frightened, flame frightened
             cond = jnp.equal(enemy.mode_duration, 0).astype(jnp.int32)
@@ -2004,8 +2166,8 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
                         jnp.equal(enemy.orientation, JAXAtariAction.RIGHT),
                         jnp.equal(enemy.orientation, JAXAtariAction.LEFT))),
                 jnp.less(enemy.mode_type, 3))
-            new_mode_type = jnp.multiply(flame_mode_cond, 3)  + jnp.multiply(1 - flame_mode_cond, new_mode_type)
-            new_mode_duration = jnp.multiply(flame_mode_cond, cnsts.FLAME_FRIGHTENED_DURATION) + jnp.multiply(1 - flame_mode_cond, new_mode_duration)
+            new_mode_type = jnp.where(flame_mode_cond, 3, new_mode_type)
+            new_mode_duration = jnp.where(flame_mode_cond, cnsts.FLAME_FRIGHTENED_DURATION, new_mode_duration)
 
             # Determine movement direction based on mode
             new_direction = jax.lax.switch(new_mode_type,[
@@ -2017,17 +2179,12 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
 
             # if velocity = 1 new_direction=new_direction
             # if velocity = 0 new_direction=current_orientation
-            new_direction = (
-                jnp.add(
-                    jnp.multiply(new_direction, state.enemies.velocity),
-                    jnp.multiply(enemy.orientation, jnp.bitwise_xor(state.enemies.velocity, 1))
-                )
-            )
+            new_direction = jnp.where(state.enemies.velocity == 1, new_direction, enemy.orientation)
 
 
             # Determine last horizontal orientation for correct sprite display
             nlh_cond = jnp.logical_or(enemy.orientation == JAXAtariAction.LEFT, enemy.orientation == JAXAtariAction.RIGHT)
-            new_last_horizontal_orientation = jnp.multiply(nlh_cond, enemy.orientation) + jnp.multiply(1 - nlh_cond, enemy.last_horizontal_orientation)
+            new_last_horizontal_orientation = jnp.where(nlh_cond, enemy.orientation, enemy.last_horizontal_orientation)
 
             #Teleport according to position and orientation (see teleport_object)
             position = teleport_object(position, enemy.orientation, new_direction)
@@ -2072,7 +2229,7 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
             # Determine enemy existence after spawn, by checking if on screen
             ex_cond1 = jnp.logical_and(jnp.less_equal(enemy.enemy_spawn_frame, 9), jnp.equal(state.level.evil_item_frame_counter, state.level.evil_item_duration-1))
             ex_cond2 = jnp.equal(state.level.evil_item_frame_counter,1)
-            new_enemy_existence = ex_cond1 + jnp.multiply((1 - ex_cond1) ,jnp.multiply((1 - ex_cond2),enemy.existence))
+            new_enemy_existence = jnp.where(ex_cond1, 1, jnp.where(ex_cond2, 0, enemy.existence))
 
             # Determine if enemy becomes killable
             new_enemy_killable = jnp.logical_and(jnp.logical_and(jnp.logical_not(enemy.has_been_killed), jnp.greater(state.level.evil_item_frame_counter, 0)), new_enemy_existence).astype(jnp.int32)
@@ -2086,11 +2243,11 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
                 jnp.equal(enemy.enemy_death_frame, 0)
             )
             # Start death frame countdown if collision occurs, otherwise keep current death frame
-            new_enemy_death_frame0 = jnp.multiply(df_cond1, 60) + jnp.multiply(1- df_cond1, enemy.enemy_death_frame)
+            new_enemy_death_frame0 = jnp.where(df_cond1, 60, enemy.enemy_death_frame)
 
             # Reduce death frame by 1 each game frame if active, to progress death animation
             df_cond2 = jnp.greater(new_enemy_death_frame0,0)
-            new_enemy_death_frame = jnp.multiply(df_cond2, new_enemy_death_frame0- 1) + jnp.multiply(1-df_cond2, new_enemy_death_frame0)
+            new_enemy_death_frame = jnp.where(df_cond2, new_enemy_death_frame0 - 1, new_enemy_death_frame0)
 
             # Count total spawn frame offsets for all enemies
             spawn_offset_counter = jnp.sum(state.enemies.multiple_enemies.enemy_spawn_frame)
@@ -2109,32 +2266,26 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
             killed_else = enemy.has_been_killed
 
             # here is decision for spawn frame based on its masks
-            new_enemy_spawn_frame = (
-                    jnp.multiply(mask_death1, spawn_frame_if_death1)
-                    + jnp.multiply(1-mask_death1, jnp.multiply(mask_evil_end, spawn_frame) + jnp.multiply(1-mask_evil_end, spawn_frame))
-            )
+            new_enemy_spawn_frame = jnp.where(mask_death1, spawn_frame_if_death1, spawn_frame)
             # here is decision for has_been_killed based on its masks
-            new_enemy_has_been_killed = (
-                    jnp.multiply(mask_death1, killed_if_death1)
-                    + jnp.multiply(1-mask_death1, jnp.multiply(mask_evil_end, killed_if_evil_end) + jnp.multiply(1-mask_evil_end, killed_else))
-            )
+            new_enemy_has_been_killed = jnp.where(mask_death1, killed_if_death1, jnp.where(mask_evil_end, killed_if_evil_end, killed_else))
 
 
             # Reset orientation and horizontal orientation for newly spawned enemies
             mask_spawn = jnp.greater_equal(new_enemy_spawn_frame, 11)
             direction_if_spawn = JAXAtariAction.RIGHT
             last_orientation_if_spawn = JAXAtariAction.RIGHT
-            new_direction = jnp.multiply(mask_spawn, direction_if_spawn) + jnp.multiply(1 - mask_spawn, new_direction)
-            new_last_horizontal_orientation = jnp.multiply(mask_spawn, last_orientation_if_spawn) + jnp.multiply(1 - mask_spawn, new_last_horizontal_orientation)
+            new_direction = jnp.where(mask_spawn, direction_if_spawn, new_direction)
+            new_last_horizontal_orientation = jnp.where(mask_spawn, last_orientation_if_spawn, new_last_horizontal_orientation)
 
             # Reset enemy position for newly spawned enemies
-            new_x = jnp.multiply(mask_spawn, cnsts.ENEMY_SPAWN_X) + jnp.multiply(1 - mask_spawn, new_position[0])
-            new_y = jnp.multiply(mask_spawn, cnsts.ENEMY_SPAWN_Y) + jnp.multiply(1 - mask_spawn, new_position[1])
+            new_x = jnp.where(mask_spawn, cnsts.ENEMY_SPAWN_X, new_position[0])
+            new_y = jnp.where(mask_spawn, cnsts.ENEMY_SPAWN_Y, new_position[1])
 
             # Store position at death for use in freezing during death animations
             position_at_death_cond = jnp.logical_or(jnp.equal(jnp.sum(state.enemies.multiple_enemies.enemy_death_frame), 59),jnp.equal(jnp.abs(state.level.death_frame_counter),39))
-            new_position_at_death_x = jnp.multiply(position_at_death_cond, enemy.x) + jnp.multiply(1 - position_at_death_cond, enemy.position_at_death_x)
-            new_position_at_death_y = jnp.multiply(position_at_death_cond, enemy.y) + jnp.multiply(1 - position_at_death_cond, enemy.position_at_death_y)
+            new_position_at_death_x = jnp.where(position_at_death_cond, enemy.x, enemy.position_at_death_x)
+            new_position_at_death_y = jnp.where(position_at_death_cond, enemy.y, enemy.position_at_death_y)
             # Create updated enemy state with all new values
             new_enemy0 = enemy.replace(
                 x=new_x,
@@ -2198,13 +2349,9 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
 
             # Masks for enemy orientation (left vs. right)
             mask_right = jnp.equal(enemy.orientation, JAXAtariAction.RIGHT)
-            mask_left  = 1 - mask_right
-
             # Masks for vertical bounds
             mask_bound_down = jnp.less_equal(enemy.y, bound)
-            mask_bound_down_neg = 1 - mask_bound_down
             mask_bound_up = jnp.greater(enemy.y, cnsts.ENEMY_SPAWN_Y)
-            mask_bound_up_neg = 1 - mask_bound_up
 
             # Compute possible new Y, orientation, and spawn frame for each case
 
@@ -2217,29 +2364,29 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
             y_left_down, orientation_left_down, spawn_left_down = add_velocity(enemy.y, enemy.orientation, velocity_vertical, enemy.enemy_spawn_frame)
 
             # Apply masks to select correct movement for right/left orientation
-            y_right = jnp.multiply(mask_bound_down, y_right_down) + jnp.multiply(mask_bound_down_neg, y_right_up)
-            orientation_right = jnp.multiply(mask_bound_down, orientation_right_down) + jnp.multiply(mask_bound_down_neg, orientation_right_up)
-            spawn_right = jnp.multiply(mask_bound_down, spawn_right_down) + jnp.multiply(mask_bound_down_neg, spawn_right_up)
+            y_right = jnp.where(mask_bound_down, y_right_down, y_right_up)
+            orientation_right = jnp.where(mask_bound_down, orientation_right_down, orientation_right_up)
+            spawn_right = jnp.where(mask_bound_down, spawn_right_down, spawn_right_up)
 
-            y_left = jnp.multiply(mask_bound_up, y_left_up) + jnp.multiply(mask_bound_up_neg, y_left_down)
-            orientation_left = jnp.multiply(mask_bound_up, orientation_left_up) + jnp.multiply(mask_bound_up_neg, orientation_left_down)
-            spawn_left = jnp.multiply(mask_bound_up, spawn_left_up) + jnp.multiply(mask_bound_up_neg, spawn_left_down)
+            y_left = jnp.where(mask_bound_up, y_left_up, y_left_down)
+            orientation_left = jnp.where(mask_bound_up, orientation_left_up, orientation_left_down)
+            spawn_left = jnp.where(mask_bound_up, spawn_left_up, spawn_left_down)
 
             # Combine left/right results based on orientation
-            new_y = jnp.multiply(mask_right, y_right) + jnp.multiply(mask_left, y_left)
-            new_orientation = jnp.multiply(mask_right, orientation_right) + jnp.multiply(mask_left, orientation_left)
-            new_spawn_frame = jnp.multiply(mask_right, spawn_right) + jnp.multiply(mask_left, spawn_left)
+            new_y = jnp.where(mask_right, y_right, y_left)
+            new_orientation = jnp.where(mask_right, orientation_right, orientation_left)
+            new_spawn_frame = jnp.where(mask_right, spawn_right, spawn_left)
 
             # Update enemy  has been killed status based on evil item
             mask_hbk = jnp.equal(state.level.evil_item_frame_counter, state.level.evil_item_duration - 1)
-            new_enemy_has_been_killed = jnp.multiply(mask_hbk, jnp.array(0)) + jnp.multiply(1 - mask_hbk, enemy.has_been_killed)
+            new_enemy_has_been_killed = jnp.where(mask_hbk, 0, enemy.has_been_killed)
 
             # Update enemy existence flag during spawn, meaning if it was on screen when evil item was picked up
             mask_exc = jnp.logical_and(
                 jnp.less_equal(new_spawn_frame, 9),
                 jnp.equal(state.level.evil_item_frame_counter, state.level.evil_item_duration - 1)
             )
-            new_enemy_existence = jnp.multiply(mask_exc, jnp.array(1)) + jnp.multiply(1 - mask_exc, enemy.existence)
+            new_enemy_existence = jnp.where(mask_exc, 1, enemy.existence)
 
 
             # Determine if enemy is currently killable
@@ -2247,16 +2394,16 @@ def enemy_step(enemy: SingleEnemyState, state: AlienState, cnsts: AlienConstants
 
             # Decrease enemy death frame if needed to 0
             mask_death = jnp.equal(enemy.enemy_death_frame, 1)
-            new_enemy_death_frame = jnp.multiply(mask_death, jnp.array(0)) + jnp.multiply(1 - mask_death, enemy.enemy_death_frame)
+            new_enemy_death_frame = jnp.where(mask_death, 0, enemy.enemy_death_frame)
 
             # Update positions at death for animation
             mask_death_pos = jnp.logical_or(jnp.equal(jnp.sum(state.enemies.multiple_enemies.enemy_death_frame), 59), jnp.equal(jnp.abs(state.level.death_frame_counter), 39))
-            new_position_at_death_x = jnp.multiply(mask_death_pos, enemy.x) + jnp.multiply(1 - mask_death_pos, enemy.position_at_death_x)
-            new_position_at_death_y = jnp.multiply(mask_death_pos, enemy.y) + jnp.multiply(1 - mask_death_pos, enemy.position_at_death_y)
+            new_position_at_death_x = jnp.where(mask_death_pos, enemy.x, enemy.position_at_death_x)
+            new_position_at_death_y = jnp.where(mask_death_pos, enemy.y, enemy.position_at_death_y)
 
             # Final Y position considering death animation for freeze during death animation
             mask_y = jnp.logical_or(jnp.not_equal(jnp.sum(state.enemies.multiple_enemies.enemy_death_frame), 0), jnp.not_equal(state.level.death_frame_counter, 0))
-            y = jnp.multiply(mask_y, new_position_at_death_y) + jnp.multiply(1 - mask_y, new_y)
+            y = jnp.where(mask_y, new_position_at_death_y, new_y)
 
             # Return updated enemy state
             return enemy.replace(
@@ -2313,7 +2460,7 @@ def enemy_step_bonus(enemy: SingleEnemyState, state: AlienState, cnsts: AlienCon
     collides_2 = bonus_check_collision_between_two_sprites(sprite1=state.enemies.bonus_collision_map, pos1_x=shadow_position[0], pos1_y=shadow_position[1],
                                             sprite2=state.player.bonus_collision_map, pos2_x=player_positon[0], pos2_y=player_positon[1])
     mask_collision = jnp.logical_or(collides_1, collides_2)
-    new_enemy_death_frame = jnp.multiply(mask_collision, jnp.array(1)) + jnp.multiply(1 - mask_collision, enemy.enemy_death_frame)
+    new_enemy_death_frame = jnp.where(mask_collision, 1, enemy.enemy_death_frame)
 
 
     new_enemy = enemy.replace(
@@ -2343,8 +2490,6 @@ class AlienRenderer(JAXGameRenderer):
         self.consts = consts or AlienConstants()
         super().__init__(self.consts)
         
-        # Use injected config if provided, else default
-        # Note: Alien uses legacy rendering utils, but we store config for API consistency
         if config is None:
             self.config = render_utils.RendererConfig(
                 game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
@@ -2354,776 +2499,503 @@ class AlienRenderer(JAXGameRenderer):
         else:
             self.config = config
 
-        (self.map_sprite, 
-        self.player_sprite, 
-        self.player_death_sprites, 
-        self.teleport_sprites, 
-        self.flame_sprite, 
-        self.enemy_sprites, 
-        self.enemy_tp_sprites,
-        self.enemy_death_sprites, 
-        self.evil_item_sprites, 
-        self.items, 
-        self.egg_sprite, 
-        self.egg_sprite_half, 
-        self.life_sprite, 
-        self.digit_sprite
-        ) = self.load_sprites()
+        self.jr = render_utils.JaxRenderingUtils(self.config)
         
-    def load_sprites(self):
-        """loads all sprites and returns them
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "alien")
+        
+        # Pre-load background
+        preprocessed_assets = self._load_and_preprocess_assets(sprite_path)
+        
+        raw_config = get_alien_asset_config()
+        asset_config = []
+        
+        for asset in raw_config:
+            if asset['name'] == 'map_primary':
+                asset_copy = asset.copy()
+                del asset_copy['file']
+                asset_copy['data'] = preprocessed_assets['map_primary']
+                asset_config.append(asset_copy)
+            else:
+                asset_config.append(asset)
 
-        Returns:
-            _type_: sprites
-        """
-        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-        #background sprites
-        bg = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/bg/map_sprite.npy")), (1, 0, 2))
-        bg_bs = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/bg/bonus_map_sprite.npy")), (1, 0, 2))
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
         
-        #player sprites
-        pl_f1 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_animation/player1.npy")), (1, 0, 2))
-        pl_f2 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_animation/player2.npy")), (1, 0, 2))
-        pl_f3 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_animation/player3.npy")), (1, 0, 2))
-        
-        #player death sprites
-        pl_d1 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_death_animation/player_death_1_sprite.npy")), (1, 0, 2))
-        pl_d2 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_death_animation/player_death_2_sprite.npy")), (1, 0, 2))
-        pl_d3 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_death_animation/player_death_3_sprite.npy")), (1, 0, 2))
-        pl_d4 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_death_animation/player_death_4_sprite.npy")), (1, 0, 2))
-        
-        #player teleport sprites
-        pl_t1 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_teleport_animation/teleport1.npy")), (1, 0, 2))
-        pl_t2 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_teleport_animation/teleport2.npy")), (1, 0, 2))
-        pl_t3 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_teleport_animation/teleport3.npy")), (1, 0, 2))
-        pl_t4 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/player_teleport_animation/teleport4.npy")), (1, 0, 2))
-        
-        #items
-        ei_f1 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/items/evil_item_1.npy")), (1, 0, 2))
-        ei_f2 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/items/evil_item_2.npy")), (1, 0, 2))
-        pulsar = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/items/pulsar.npy")), (1, 0, 2))
-        rocket = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/items/rocket.npy")), (1, 0, 2))
-        saturn = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/items/saturn.npy")), (1, 0, 2))
-        starship = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/items/starship.npy")), (1, 0, 2))
-        pi = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/items/pi.npy")), (1, 0, 2))
-        orb = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/items/orb.npy")), (1, 0, 2))
-        
-        #enemy sprite
-        e_f1 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/enemy_animation/enemy_walk1.npy")), (1, 0, 2))
-        e_f2 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/enemy_animation/enemy_walk2.npy")), (1, 0, 2))
-        e_f3 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/enemy_animation/enemy_walk3.npy")), (1, 0, 2))
-        
-        #enemy death sprites
-        e_d1 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/alien_death_animation/alien_death1.npy")), (1, 0, 2))
-        e_d2 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/alien_death_animation/alien_death2.npy")), (1, 0, 2))
-        e_d3 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/alien_death_animation/alien_death3.npy")), (1, 0, 2))
-        e_d4 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/alien_death_animation/alien_death4.npy")), (1, 0, 2))
+        self._cache_sprite_stacks()
 
-        #enemy teleport sprites
-        e_t1 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/enemy_teleport_animation/1.npy")), (1, 0, 2))
-        e_t2 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/enemy_teleport_animation/2.npy")), (1, 0, 2))
-        e_t3 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/enemy_teleport_animation/3.npy")), (1, 0, 2))
-        e_t4 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/enemy_teleport_animation/4.npy")), (1, 0, 2))
+    def _load_and_preprocess_assets(self, sprite_path: str) -> dict:
+        target_shape = (self.consts.HEIGHT, self.consts.WIDTH, 4)
         
-        digit_none = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/none.npy")), (1, 0, 2))
-        digit_0 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/0.npy")), (1, 0, 2))
-        digit_1 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/1.npy")), (1, 0, 2))
-        digit_2 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/2.npy")), (1, 0, 2))
-        digit_3 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/3.npy")), (1, 0, 2))
-        digit_4 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/4.npy")), (1, 0, 2))
-        digit_5 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/5.npy")), (1, 0, 2))
-        digit_6 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/6.npy")), (1, 0, 2))
-        digit_7 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/7.npy")), (1, 0, 2))
-        digit_8 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/8.npy")), (1, 0, 2))
-        digit_9 = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/digits/9.npy")), (1, 0, 2))
+        full_bg = jnp.zeros(target_shape, dtype=jnp.uint8)
+        full_bg = full_bg.at[:, :, 3].set(255)
         
+        map_path = os.path.join(sprite_path, "bg/map_sprite.npy")
+        map_raw = self.jr.loadFrame(map_path) 
         
-        #egg sprites
-        egg = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/egg/egg.npy")), (1, 0, 2))
-        egg_h = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/egg/half_egg.npy")), (1, 0, 2))
+        # Placement:
+        # Offsets are (Y=5, X=8)
+        # We write map_raw into full_bg at [5:..., 8:...]
+        off_y = self.consts.RENDER_OFFSET_Y
+        off_x = self.consts.RENDER_OFFSET_X
+        
+        h, w, _ = map_raw.shape
+        map_primary_full = full_bg.at[off_y:off_y+h, off_x:off_x+w, :].set(map_raw)
 
+        return {
+            'map_primary': map_primary_full
+        }
 
-        # Pad sprite arrays to have matching shapes
-        bg_sprites, _ = jr.pad_to_match([bg,bg_bs])
-        pl_sprites, _ = jr.pad_to_match([pl_f1, pl_f2, pl_f3])
-        pl_d_sprites, _ = jr.pad_to_match([pl_d1, pl_d2, pl_d3, pl_d4])
-        pl_t_sprites, _ = jr.pad_to_match([pl_t1, pl_t2, pl_t3, pl_t4])
-        ei_sprites, _ = jr.pad_to_match([ei_f1, ei_f2])
-        i_sprites, _ = jr.pad_to_match([pulsar, rocket, saturn, starship, orb, pi])
-        e_sprites, _ = jr.pad_to_match([e_f1, e_f2, e_f3])
-        e_t_sprites, _ = jr.pad_to_match([e_t1, e_t2, e_t3, e_t4])
+    def _cache_sprite_stacks(self):
+        self.BONUS_MAP = self.SHAPE_MASKS['map_bonus']
+        self.PLAYER_WALK_NORMAL = self.SHAPE_MASKS['player_walk_normal']
+        self.PLAYER_WALK_FLAME  = self.SHAPE_MASKS['player_walk_flame']
+        self.PLAYER_OFFSETS     = self.FLIP_OFFSETS['player_walk_normal']
+        self.PLAYER_DEATH    = self.SHAPE_MASKS['player_death_normal']
+        self.PLAYER_TELEPORT = self.SHAPE_MASKS['player_teleport_normal']
+        
+        self.ENEMY_WALK_STACKS = jnp.stack([
+            self.SHAPE_MASKS['enemy_walk_pink'],
+            self.SHAPE_MASKS['enemy_walk_yellow'],
+            self.SHAPE_MASKS['enemy_walk_green']
+        ])
+        self.ENEMY_FRIGHTENED = self.SHAPE_MASKS['enemy_walk_frightened']
+        self.ENEMY_TP_STACKS = jnp.stack([
+            self.SHAPE_MASKS['enemy_teleport_pink'],
+            self.SHAPE_MASKS['enemy_teleport_yellow'],
+            self.SHAPE_MASKS['enemy_teleport_green']
+        ])
+        self.ENEMY_DEATH = self.SHAPE_MASKS['enemy_death_normal']
+        self.ENEMY_OFFSETS = self.FLIP_OFFSETS['enemy_walk_pink']
 
+        self.EVIL_ITEM_STACKS = jnp.stack([
+            self.SHAPE_MASKS['evil_item_normal'],
+            self.SHAPE_MASKS['evil_item_bonus_green']
+        ])
+        self.SCORE_ITEMS = self.SHAPE_MASKS['score_items_normal']
+        
+        self.EGG_STACK = jnp.stack([
+            self.SHAPE_MASKS['egg_yellow'],
+            self.SHAPE_MASKS['egg_orange'],
+            self.SHAPE_MASKS['egg_blue'],
+            self.SHAPE_MASKS['egg_pink'],
+            self.SHAPE_MASKS['egg_green'],
+            self.SHAPE_MASKS['egg_orange'] 
+        ])
+        self.EGG_HALF_STACK = jnp.stack([
+            self.SHAPE_MASKS['egg_half_yellow'],
+            self.SHAPE_MASKS['egg_half_orange'],
+            self.SHAPE_MASKS['egg_half_blue'],
+            self.SHAPE_MASKS['egg_half_pink'],
+            self.SHAPE_MASKS['egg_half_green'],
+            self.SHAPE_MASKS['egg_half_orange']
+        ])
 
-        # Background sprites
-        SPRITE_BG = jnp.concatenate(
-            [
-                jnp.repeat(bg_sprites[0][None], 1, axis=0),
-                jnp.repeat(bg_sprites[1][None], 1, axis=0),
-            ]        
+        digits_raw = self.SHAPE_MASKS['digits_normal']
+        if digits_raw.ndim == 4:
+             self.DIGITS = digits_raw.squeeze(-1)
+        else:
+             self.DIGITS = digits_raw
+             
+        self.LIFE   = self.SHAPE_MASKS['life_normal']
+        self.FLAME  = self.SHAPE_MASKS['flame_normal']
+        
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_enemies_primary(self, state: AlienState, raster):
+        def render_enemy(i, r):
+            enemy = state.enemies.multiple_enemies
+            x = enemy.x[i].astype(jnp.int32)
+            y = enemy.y[i].astype(jnp.int32)
+            killable = enemy.killable[i]
+            active = enemy.active_enemy[i]
+            last_orient = enemy.last_horizontal_orientation[i]
+            death_frame = enemy.enemy_death_frame[i]
+            spawn_frame = enemy.enemy_spawn_frame[i]
+            blink = enemy.blink[i]
+
+            # Animation Cycles
+            cycle_1 = jnp.array([3, 3, 2, 1, 0])
+            cycle_2 = jnp.array([0, 1, 2, 3, 3])
+            
+            is_teleport_left = (x >= 7) & (x <= 14) & (y == 80)
+            is_teleport_right = (x >= 120) & (x <= 127) & (y == 80)
+            in_teleport = is_teleport_left | is_teleport_right
+            
+            sprite_idx = jax.lax.cond(
+                is_teleport_left,
+                lambda: cycle_1[(x - 7) % 5],
+                lambda: jax.lax.cond(
+                    is_teleport_right,
+                    lambda: cycle_2[(x - 120) % 5],
+                    lambda: (state.level.frame_count // 8) % 4 
+                )
+            )
+
+            color_idx = i % 3
+            
+            # --- FIX: Pure JAX Stack Selection ---
+            # We select the correct stack first.
+            # All stacks (Walk, TP, Frightened) MUST be shape (4, H, W).
+            current_stack = jax.lax.cond(
+                killable,
+                lambda: self.ENEMY_FRIGHTENED,
+                lambda: jax.lax.cond(
+                    in_teleport,
+                    lambda: self.ENEMY_TP_STACKS[color_idx],
+                    lambda: self.ENEMY_WALK_STACKS[color_idx]
+                )
+            )
+            
+            normal_sprite = current_stack[sprite_idx]
+
+            # Death Logic
+            is_dying = death_frame > 0
+            death_idx = jax.lax.select(
+                (death_frame >= 47) & (death_frame <= 59), 0,
+                jax.lax.select(
+                    (death_frame >= 31) & (death_frame <= 46), 1,
+                    jax.lax.select(
+                        (death_frame >= 15) & (death_frame <= 30), 2,
+                        3
+                    )
+                )
+            )
+            
+            final_sprite = jax.lax.cond(
+                is_dying,
+                lambda: self.ENEMY_DEATH[death_idx],
+                lambda: normal_sprite
+            )
+            
+            flip = last_orient == 2 # RIGHT
+            should_blink = (i == 2) & blink & ((state.level.frame_count % 2) == 1)
+            # Draw during spawn descent (spawn_frame > 9) OR when unleashed in maze (spawn_frame == 0)
+            visible = active & ((spawn_frame > 9) | (spawn_frame == 0)) & (~should_blink)
+            
+            return jax.lax.cond(
+                visible,
+                lambda r: self.jr.render_at(
+                    r, 
+                    x + self.consts.RENDER_OFFSET_X, 
+                    y + self.consts.RENDER_OFFSET_Y, 
+                    final_sprite, 
+                    flip_horizontal=flip,
+                    flip_offset=self.ENEMY_OFFSETS
+                ),
+                lambda r: r,
+                r
+            )
+
+        for i in range(self.consts.ENEMY_AMOUNT_PRIMARY_STAGE):
+            raster = render_enemy(i, raster)
+        return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_enemies_bonus(self, state: AlienState, raster):
+        def render_bonus_enemy(i, r):
+            enemy = state.enemies.multiple_enemies
+            x = enemy.x[i].astype(jnp.int32)
+            y = enemy.y[i].astype(jnp.int32)
+            last_orient = enemy.last_horizontal_orientation[i]
+            
+            cycle_1 = jnp.array([3, 3, 2, 1, 0])
+            cycle_2 = jnp.array([0, 1, 2, 3, 3])
+            
+            is_teleport_left = (x >= 7) & (x <= 14) & (y == 80)
+            is_teleport_right = (x >= 120) & (x <= 127) & (y == 80)
+            in_teleport = is_teleport_left | is_teleport_right
+            
+            sprite_idx = jax.lax.cond(
+                is_teleport_left,
+                lambda: cycle_1[(x - 7) % 8],
+                lambda: jax.lax.cond(
+                    is_teleport_right,
+                    lambda: cycle_2[(x - 120) % 8],
+                    lambda: (state.level.frame_count // 8) % 4
+                )
+            )
+            
+            color_idx = i % 3
+            
+            # Select Stack (Pure JAX)
+            current_stack = jax.lax.cond(
+                in_teleport,
+                lambda: self.ENEMY_TP_STACKS[color_idx],
+                lambda: self.ENEMY_WALK_STACKS[color_idx]
+            )
+            
+            sprite = current_stack[sprite_idx]
+            flip = last_orient == 2 
+            
+            r = self.jr.render_at(
+                r, 
+                x + self.consts.RENDER_OFFSET_X, 
+                y + self.consts.RENDER_OFFSET_Y, 
+                sprite, 
+                flip_horizontal=flip,
+                flip_offset=self.ENEMY_OFFSETS
+            )
+            
+            offset_dir = 2 * (last_orient % 2) - 1
+            shadow_x = x - 35 * offset_dir
+            
+            r = self.jr.render_at(
+                r, 
+                shadow_x + self.consts.RENDER_OFFSET_X, 
+                y + self.consts.RENDER_OFFSET_Y, 
+                sprite, 
+                flip_horizontal=flip,
+                flip_offset=self.ENEMY_OFFSETS
+            )
+            return r
+
+        for i in range(self.consts.ENEMY_AMOUNT_BONUS_STAGE):
+            raster = render_bonus_enemy(i, raster)
+        return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_player(self, state: AlienState, raster):
+        x = state.player.x.astype(jnp.int32)
+        y = state.player.y.astype(jnp.int32)
+        orient = state.player.orientation
+        last_orient = state.player.last_horizontal_orientation
+        death_frame = state.level.death_frame_counter
+        flame_active = state.player.flame.flame_flag
+        
+        cycle_1 = jnp.array([3, 3, 2, 1, 0])
+        cycle_2 = jnp.array([0, 1, 2, 3, 3])
+        
+        is_teleport_left = (x >= 7) & (x <= 11) & (y == 80)
+        is_teleport_right = (x >= 123) & (x <= 127) & (y == 80)
+        
+        sprite_idx = jax.lax.cond(
+            is_teleport_left,
+            lambda: cycle_1[(x - 7) % 5],
+            lambda: jax.lax.cond(
+                is_teleport_right,
+                lambda: cycle_2[(x - 123) % 5],
+                lambda: (state.level.frame_count // 4) % 4
+            )
         )
         
-        # Player sprites for walking
-        SPRITE_PL = jnp.concatenate(
-            [
-                jnp.repeat(pl_sprites[0][None], 1, axis=0),
-                jnp.repeat(pl_sprites[1][None], 1, axis=0),
-                jnp.repeat(pl_sprites[2][None], 1, axis=0),
-                jnp.repeat(pl_sprites[1][None], 1, axis=0),
-            ]
+        sprite = jax.lax.cond(
+            death_frame > 0,
+            lambda: self.PLAYER_DEATH[(state.level.frame_count // 4) % 4], 
+            lambda: jax.lax.cond(
+                (is_teleport_left | is_teleport_right),
+                lambda: self.PLAYER_TELEPORT[sprite_idx],
+                lambda: jax.lax.cond(
+                    flame_active,
+                    lambda: self.PLAYER_WALK_FLAME[sprite_idx],
+                    lambda: self.PLAYER_WALK_NORMAL[sprite_idx]
+                )
+            )
         )
 
-        # Player death sprites
-        SPRITE_PL_DT = jnp.concatenate(
-            [
-                jnp.repeat(pl_d_sprites[3][None], 1, axis=0),
-                jnp.repeat(pl_d_sprites[2][None], 1, axis=0),
-                jnp.repeat(pl_d_sprites[1][None], 1, axis=0),
-                jnp.repeat(pl_d_sprites[0][None], 1, axis=0),
-            ]
-        )
-
-        # Player teleportation sprites
-        SPRITE_PL_TLP = jnp.concatenate(
-            [
-                jnp.repeat(pl_t_sprites[0][None], 1, axis=0),
-                jnp.repeat(pl_t_sprites[1][None], 1, axis=0),
-                jnp.repeat(pl_t_sprites[2][None], 1, axis=0),
-                jnp.repeat(pl_t_sprites[3][None], 1, axis=0),
-                jnp.repeat(pl_t_sprites[3][None], 1, axis=0),
-            ]
-        )
-
-        # Evil Item sprites
-        SPRITE_EVL_ITM = jnp.concatenate(
-            [
-                jnp.repeat(ei_sprites[0][None], 1, axis=0),
-                jnp.repeat(ei_sprites[1][None], 1, axis=0),
-            ]
-        )
-
-        # Score Item sprites
-        SPRITE_ITM = jnp.concatenate(
-            [
-                jnp.repeat(i_sprites[0][None], 1, axis=0),
-                jnp.repeat(i_sprites[1][None], 1, axis=0),
-                jnp.repeat(i_sprites[2][None], 1, axis=0),
-                jnp.repeat(i_sprites[3][None], 1, axis=0),
-                jnp.repeat(i_sprites[4][None], 1, axis=0),
-                jnp.repeat(i_sprites[5][None], 1, axis=0),
-            ]
-        )
-
-        # Enemy sprites for walking
-        SPRITE_ENMY = jnp.concatenate(
-            [
-                jnp.repeat(e_sprites[0][None], 1, axis=0),
-                jnp.repeat(e_sprites[1][None], 1, axis=0),
-                jnp.repeat(e_sprites[2][None], 1, axis=0),
-                jnp.repeat(e_sprites[1][None], 1, axis=0),
-            ]
-        )
-
-        # Enemy teleportation sprites
-        SPRITE_ENMY_TLP = jnp.concatenate(
-            [
-                jnp.repeat(e_t_sprites[0][None], 1, axis=0),
-                jnp.repeat(e_t_sprites[1][None], 1, axis=0),
-                jnp.repeat(e_t_sprites[2][None], 1, axis=0),
-                jnp.repeat(e_t_sprites[3][None], 1, axis=0),
-            ]
-        )
-
-        # Enemy death sprites
-        SPRITE_ENMY_DT = jnp.concatenate(
-            [
-                jnp.repeat(e_d1[None], 1, axis=0),
-                jnp.repeat(e_d2[None], 1, axis=0),
-                jnp.repeat(e_d3[None], 1, axis=0),
-                jnp.repeat(e_d4[None], 1, axis=0),
-            ]
-        )
-        #flame sprite
-        FLAME_SPRITE = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/flame/flame_sprite.npy")), (1, 0, 2))
+        flip = (last_orient == 2) | (orient == 2)
+        blink = (flame_active | state.player.blink) & ((state.level.frame_count % 2) == 0)
+        visible = ~blink
         
-        #life sprite
-        LIFES = jnp.transpose(jr.loadFrame(os.path.join(MODULE_DIR, "sprites/alien/life/life_sprite.npy")), (1, 0, 2))
-        
-        #digit sprites
-        DIGITS = jnp.stack([digit_none, digit_0, digit_1, digit_2, digit_3, digit_4, digit_5, digit_6, digit_7, digit_8, digit_9])
-    
-        
-        
-        return (
-            SPRITE_BG,
-            SPRITE_PL,
-            SPRITE_PL_DT,
-            SPRITE_PL_TLP,
-            FLAME_SPRITE,
-            SPRITE_ENMY,
-            SPRITE_ENMY_TLP,
-            SPRITE_ENMY_DT,
-            SPRITE_EVL_ITM,
-            SPRITE_ITM,
-            egg,
-            egg_h,
-            LIFES,
-            DIGITS
+        raster = jax.lax.cond(
+            visible,
+            lambda r: self.jr.render_at(
+                r, 
+                x + self.consts.RENDER_OFFSET_X, # FIX: X first
+                y + self.consts.RENDER_OFFSET_Y, # FIX: Y second
+                sprite,
+                flip_horizontal=flip,
+                flip_offset=self.PLAYER_OFFSETS
+            ),
+            lambda r: r,
+            raster
         )
         
-    @partial(jax.jit, static_argnums=(0))# This is ok in this context, as digits never changes throughout the game...
-    def get_score_sprite(self, score: jnp.ndarray) -> jnp.ndarray:
-        """Takes numerical representation of the current score and composes a score sprite from individual digit sprites
+        def render_flame(r):
+            flame_x = state.player.flame.x.astype(jnp.int32)
+            flame_y = state.player.flame.y.astype(jnp.int32)
+            flame_blink = (state.level.frame_count % 2) == 1
+            
+            return jax.lax.cond(
+                flame_blink,
+                lambda _r: self.jr.render_at(
+                    _r,
+                    flame_x + self.consts.RENDER_OFFSET_X, # FIX: X first
+                    flame_y + self.consts.RENDER_OFFSET_Y, # FIX: Y second
+                    self.FLAME,
+                    flip_horizontal=flip,
+                    flip_offset=self.PLAYER_OFFSETS
+                ),
+                lambda _r: _r,
+                r
+            )
 
-        Args:
-            score (jnp.ndarray): current score
+        return jax.lax.cond(flame_active, render_flame, lambda r: r, raster)
 
-        Returns:
-            jnp.ndarray: full score sprite matching the score
-        """
-        # Set dimensions of final sprite
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_items(self, state: AlienState, raster):
+        def render_item(i, r):
+            x = state.items[i, 0].astype(jnp.int32)
+            y = state.items[i, 1].astype(jnp.int32)
+            active = state.items[i, 2]
+            type_id = state.items[i, 3] # 0=Evil, 1-6=Score
+            
+            is_evil = type_id == 0
+            
+            sprite = jax.lax.cond(
+                is_evil,
+                lambda: self.EVIL_ITEM_STACKS[0][0], 
+                lambda: self.SCORE_ITEMS[type_id - 1]
+            )
+            
+            blink_evil = state.level.blink_evil_item
+            blink_active = state.level.blink_current_active_item
+            should_blink = (state.level.frame_count % 2) == 0
+            
+            visible = active & ~(
+                (is_evil & blink_evil & should_blink) | 
+                (~is_evil & blink_active & should_blink) |
+                (is_evil & state.player.flame.flame_flag)
+            )
+            
+            return jax.lax.cond(
+                visible,
+                lambda _r: self.jr.render_at(
+                    _r,
+                    x + self.consts.RENDER_OFFSET_X, # FIX: X first
+                    y + self.consts.RENDER_OFFSET_Y, # FIX: Y second
+                    sprite
+                ),
+                lambda _r: _r,
+                r
+            )
+            
+        return jax.lax.fori_loop(0, state.items.shape[0], render_item, raster)
 
-        final_sprite: jnp.ndarray = jnp.zeros((5*self.consts.DIGIT_WIDTH + 4*self.consts.DIGIT_OFFSET, self.consts.DIGIT_HEIGHT, 4), np.uint8)
-        k_10_sprite_index: jnp.ndarray = jnp.mod(jnp.floor_divide(score, jnp.array([10000])), 10) + 1
-        thousands_sprite_index: jnp.ndarray = jnp.mod(jnp.floor_divide(score, jnp.array([1000])), 10) + 1
-        hundreds_sprite_index: jnp.ndarray = jnp.mod(jnp.floor_divide(score, jnp.array([100])), 10) + 1
-        tens_sprite_index: jnp.ndarray = jnp.mod(jnp.floor_divide(score, jnp.array([10])), 10) + 1
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_eggs(self, state: AlienState, raster):
+        def render_egg_row(i, l_r, r):
+            x = state.eggs[l_r, i, 0].astype(jnp.int32)
+            y = state.eggs[l_r, i, 1].astype(jnp.int32)
+            active = state.eggs[l_r, i, 2]
+            color_id = state.eggs[l_r, i, 3].astype(jnp.int32)
+            
+            def draw_egg(_r):
+                # Draw Main Egg
+                _r = self.jr.render_at(
+                    _r,
+                    x + self.consts.RENDER_OFFSET_X, # FIX: X first
+                    y + self.consts.RENDER_OFFSET_Y, # FIX: Y second
+                    self.EGG_STACK[color_id]
+                )
+                # Draw Half Egg (offset by 1)
+                _r = self.jr.render_at(
+                    _r,
+                    x + self.consts.RENDER_OFFSET_X, # FIX: X first
+                    y + self.consts.RENDER_OFFSET_Y + 1, # FIX: Y second + 1
+                    self.EGG_HALF_STACK[color_id]
+                )
+                return _r
+
+            return jax.lax.cond(active, draw_egg, lambda _r: _r, r)
+
+        row_idx = (state.level.frame_count % 2)
+        render_body = lambda i, r: render_egg_row(i, row_idx, r)
+        return jax.lax.fori_loop(0, state.eggs.shape[1], render_body, raster)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_hud(self, state: AlienState, raster):
+        # 1. Score: right-aligned — starts as 1 digit on the right, expands left as score grows
+        score_val = state.level.score.astype(jnp.int32)
+        score_digits = self.jr.int_to_digits(score_val, max_digits=6)
+        score_flat = score_digits.flatten()
+        n = jnp.maximum(score_val, 0)
+        num_digits = jnp.where(
+            n > 0,
+            jnp.ceil(jnp.log10(n.astype(jnp.float32) + 1.0)).astype(jnp.int32),
+            jnp.array(1, dtype=jnp.int32)
+        )
+        num_digits = jnp.squeeze(jnp.minimum(num_digits, 6))
+        start_index = 6 - num_digits
+        # Right edge of score area (x of rightmost digit when 6 digits); expand left
+        score_spacing = 8
+        score_right_x = self.consts.SCORE_X + self.consts.RENDER_OFFSET_X + (6 - 1) * score_spacing
+        score_x = score_right_x - (num_digits - 1) * score_spacing
+        raster = self.jr.render_label_selective(
+            raster,
+            score_x,
+            self.consts.SCORE_Y + self.consts.RENDER_OFFSET_Y,
+            score_flat,
+            self.DIGITS,
+            start_index,
+            num_digits,
+            spacing=score_spacing,
+            max_digits_to_render=6
+        )
         
-        # Ones sprite is always displayed
-        ones_sprite_index: jnp.ndarray = jnp.add(jnp.mod(score, jnp.array([10])), 1)
-        # Now remove leading zeros:
-        k_10_sprite_index = jnp.multiply(k_10_sprite_index, jnp.astype(jnp.greater_equal(score, 10000), jnp.int32))
-        thousands_sprite_index = jnp.multiply(thousands_sprite_index, jnp.astype(jnp.greater_equal(score, 1000), jnp.int32))
-        hundreds_sprite_index = jnp.multiply(hundreds_sprite_index, jnp.astype(jnp.greater_equal(score, 100), jnp.int32))
-        tens_sprite_index = jnp.multiply(tens_sprite_index, jnp.astype(jnp.greater_equal(score, 10), jnp.int32))
-
-        # Compose the final sprite by placing each digit sprite in its position
-        final_sprite = final_sprite.at[0:self.consts.DIGIT_WIDTH, ...].set(jnp.squeeze(self.digit_sprite[k_10_sprite_index, ...]))
-        final_sprite = final_sprite.at[self.consts.DIGIT_WIDTH + self.consts.DIGIT_OFFSET:2*self.consts.DIGIT_WIDTH + self.consts.DIGIT_OFFSET,...].set(jnp.squeeze(self.digit_sprite[thousands_sprite_index, ...]))
-        final_sprite = final_sprite.at[self.consts.DIGIT_WIDTH*2 + self.consts.DIGIT_OFFSET*2:self.consts.DIGIT_WIDTH*3 + self.consts.DIGIT_OFFSET*2,...].set(jnp.squeeze(self.digit_sprite[hundreds_sprite_index, ...]))
-        final_sprite = final_sprite.at[self.consts.DIGIT_WIDTH*3 + self.consts.DIGIT_OFFSET*3:self.consts.DIGIT_WIDTH*4 + self.consts.DIGIT_OFFSET*3,...].set(jnp.squeeze(self.digit_sprite[tens_sprite_index, ...]))
-        final_sprite = final_sprite.at[self.consts.DIGIT_WIDTH*4 + self.consts.DIGIT_OFFSET*4:self.consts.DIGIT_WIDTH*5 + self.consts.DIGIT_OFFSET*4,...].set(jnp.squeeze(self.digit_sprite[ones_sprite_index, ...]))
+        # 2. Lives (shifted up)
+        raster = self.jr.render_indicator(
+            raster,
+            self.consts.LIFE_X + self.consts.RENDER_OFFSET_X, # X
+            self.consts.LIFE_Y + self.consts.RENDER_OFFSET_Y - 8, # Y, shifted up
+            jnp.squeeze(state.level.lifes),
+            self.LIFE,
+            spacing=self.consts.LIFE_WIDTH + self.consts.LIFE_OFFSET_X,
+            max_value=3
+        )
         
-        return final_sprite
-    
+        return raster
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: AlienState):
-        """Jitted rendering function. receives the alien state, and returns a rendered frame
+        """Main rendering function."""
+        
+        is_bonus = state.level.bonus_flag
+        
+        def get_bonus_raster():
+            black = jnp.zeros_like(self.BACKGROUND) 
+            return self.jr.render_at(black, 0, 0, self.BONUS_MAP)
 
-        Args:
-            state (AlienState): state of the game
-
-        Returns:
-            jnp.ndarray: Returns only the RGB channels, no alpha
-        """
-
-        # These arrays define which frame to show based on enemy x-position
-        sprite_cycle_1 = jnp.array([3, 3, 2, 1, 0])  # Für Positionen 7-11
-        sprite_cycle_2 = jnp.array([0, 1, 2, 3, 3])
-        sprite_cycle_3 = jnp.array([0,0,1,1,2,2,3,3])
-        sprite_cycle_4 = jnp.array([3,3,2,2,1,1,0,0])
-
-        # Colorize sprite helper
-        def colorize_sprite(sprite: jnp.ndarray, color: jnp.ndarray) -> jnp.ndarray:
-            """
-            Sets all non-black (RGB != [0,0,0]) pixels of the sprite to the given color, preserving alpha.
-            sprite: (H, W, 4) jnp.ndarray
-            color: (3,) jnp.ndarray, values in 0-255
-            Returns: (H, W, 4) jnp.ndarray
-            """
-            rgb = sprite[..., :3]
-            alpha = sprite[..., 3:]
-            # Mask for non-black pixels (any channel > 0)
-            nonblack = jnp.any(rgb != 0, axis=-1, keepdims=True) # Is this still needed?
-            # Broadcast color to sprite shape
-            color_broadcast = jnp.broadcast_to(color, rgb.shape)
-            # Where nonblack, set to color; else keep original
-            new_rgb = jnp.where(nonblack, color_broadcast, rgb)
+        raster = jax.lax.cond(
+            is_bonus,
+            get_bonus_raster,
+            lambda: self.BACKGROUND
+        )
+        
+        def render_primary(r):
+            r = self._render_eggs(state, r)
+            r = self._render_items(state, r)
+            r = self._render_enemies_primary(state, r)
+            r = self._render_player(state, r)
+            return r
             
-            return jnp.concatenate([new_rgb, alpha], axis=-1).astype(jnp.uint8)
-    
-        # Alien rendering done with for_i loop, allows for dynamic # of aliens.
-        def render_loop_alien(i, canvas):
-            """render loop for all enemies
-
-            Args:
-                i (_type_): index
-                canvas (_type_): canvas that is displayed
-
-            Returns:
-                _type_: augmented canvas
-            """
-
-            # Extract enemy state for current index
-            last_horizontal_orientations = state.enemies.multiple_enemies.last_horizontal_orientation
-            killable = state.enemies.multiple_enemies.killable.at[i].get()
-            enemy_death_frame = state.enemies.multiple_enemies.enemy_death_frame.at[i].get()
-            x_positions =state.enemies.multiple_enemies.x
-            y_positions = state.enemies.multiple_enemies.y
-            x = x_positions[i]
-            y = y_positions[i]
-            last_horizontal_orientations = last_horizontal_orientations[i]
-
-            # Determine enemy color
-            color = jax.lax.cond(killable, 
-                                 lambda _: self.consts.OTHER_BLUE,
-                                 
-                                 lambda _: self.consts.ENEMY_COLORS[i],
-                                 operand=None)
-
-            # Determine sprite index based on position and animation cycle for teleportation and walking
-            sprite_index = jax.lax.cond(
-                jnp.logical_and(jnp.logical_and(x >= 7, x <= 14), y == 80),
-                lambda _: sprite_cycle_1[(x - 7) % len(sprite_cycle_3)],
-                lambda _: jax.lax.cond(
-                    jnp.logical_and(jnp.logical_and(x >= 120, x <= 127), y == 80),
-                    lambda _: sprite_cycle_2[(x- 120) % len(sprite_cycle_4)],
-                    lambda _: (state.level.frame_count // 8) % 4,  # Standardanimation
-                    operand=None
+        def render_bonus(r):
+            show_bonus_item = state.level.evil_item_frame_counter <= 0
+            bonus_sprite = self.EVIL_ITEM_STACKS[1][0]
+            
+            r = jax.lax.cond(
+                show_bonus_item,
+                lambda _r: self.jr.render_at(
+                    _r,
+                    self.consts.ENEMY_SPAWN_X + self.consts.RENDER_OFFSET_X, # X
+                    10 + self.consts.RENDER_OFFSET_Y, # Y
+                    bonus_sprite
                 ),
-                operand=None
-            )
-
-
-            # Check for collision with player
-            x_higher_player = jnp.add(state.player.x, self.consts.PLAYER_WIDTH)
-            x_lower_player = jnp.add(state.player.x, 0)
-            y_higher_player = jnp.add(state.player.y, self.consts.PLAYER_HEIGHT)
-            y_lower_player = jnp.add(state.player.y, 0)
-
-            # Check if player sprite crosses a certain point in enemy sprite
-            has_collision_enemy = jnp.logical_and(x >= x_lower_player,
-                                                   jnp.logical_and(x < x_higher_player,
-                                                                   jnp.logical_and(jnp.add(y, self.consts.ENEMY_PLAYER_COLLISION_OFFSET_Y_LOW) >= y_lower_player,
-                                                                     jnp.add(y, self.consts.ENEMY_PLAYER_COLLISION_OFFSET_Y_HIGH) < y_higher_player)))
-            # Choose the correct sprite based on death frame, teleport, or standard animation
-            enemy_sprite0 = jax.lax.cond(
-                jnp.logical_and(jnp.not_equal(state.level.death_frame_counter, 0), has_collision_enemy),
-                lambda _: jnp.zeros(self.enemy_sprites[sprite_index].shape).astype(jnp.uint8),
-                lambda _: jax.lax.cond(
-                            jnp.logical_or(
-                            jnp.logical_and(jnp.logical_and(x >= 7, x <= 14), y == 80),
-                            jnp.logical_and(jnp.logical_and(x >= 120, x <= 127), y == 80)
-                            ),
-                            lambda _: self.enemy_tp_sprites[sprite_index],
-                            lambda _: self.enemy_sprites[sprite_index],
-                            operand=None
-                            ),
-                                operand=None
-                                )
-            # Apply color to the sprite
-            enemy_sprite0 = colorize_sprite(enemy_sprite0, color)
-
-            # Handle enemy death animation
-            enemy_sprite = jax.lax.cond(jnp.greater(enemy_death_frame,0),
-                                               lambda _:jax.lax.switch(
-                                                   # Konvertiere die Bereiche in einzelne Fälle
-                                                   jax.lax.cond(
-                                                       jnp.logical_and(enemy_death_frame >= 47, enemy_death_frame <= 59),
-                                                       lambda _: 0,  # Fall für alien_death1
-                                                       lambda _: jax.lax.cond(
-                                                           jnp.logical_and(enemy_death_frame >= 31, enemy_death_frame <= 46),
-                                                           lambda _: 1,  # Fall für alien_death2
-                                                           lambda _: jax.lax.cond(
-                                                               jnp.logical_and(enemy_death_frame >= 15, enemy_death_frame <= 30),
-                                                               lambda _: 2,  # Fall für alien_death3
-                                                               lambda _: jax.lax.cond(
-                                                                   jnp.logical_and(enemy_death_frame >= 2, enemy_death_frame <= 14),
-                                                                   lambda _: 3,  # Fall für alien_death4
-                                                                   lambda _: 4,  # Fall für player_zeroed bei death_frame == 1
-                                                                   operand=None
-                                                               ),
-                                                               operand=None
-                                                           ),
-                                                           operand=None
-                                                       ),
-                                                       operand=None
-                                                   ),
-                                                   [
-                                                       lambda _: jnp.flip(colorize_sprite(self.enemy_death_sprites[0].astype(jnp.uint8),self.consts.OTHER_BLUE),axis=0),  # alien_death1
-                                                       lambda _: jnp.flip(colorize_sprite(self.enemy_death_sprites[1].astype(jnp.uint8),self.consts.OTHER_BLUE),axis=0),  # alien_death2
-                                                       lambda _: jnp.flip(colorize_sprite(self.enemy_death_sprites[2].astype(jnp.uint8),self.consts.OTHER_BLUE),axis=0),# alien_death3
-                                                       lambda _: jnp.flip(colorize_sprite(self.enemy_death_sprites[3].astype(jnp.uint8),self.consts.OTHER_BLUE),axis=0),# alien_death4
-                                                       lambda _: jnp.zeros_like(enemy_sprite0,jnp.uint8)  # player_zeroed
-                                                   ],
-                                                   operand=None
-                                               ),
-                                               lambda _ : enemy_sprite0,
-                                               operand=None)
-
-            # Flip sprite horizontally if enemy last moved right
-            flipped_enemy_sprite = jax.lax.cond(
-                    last_horizontal_orientations == JAXAtariAction.RIGHT,
-                    lambda s: jnp.flip(s, axis=0),
-                    lambda s: s,
-                    enemy_sprite
-                )
-            
-            # Handles blinking of the enemy sprite            
-            blinking_enemy_sprite = jax.lax.cond( i == 2,
-                                                 lambda _: jax.lax.cond(jnp.logical_and(jnp.mod(state.level.frame_count,2) ==1,state.enemies.multiple_enemies.blink[i]),
-                                                                        lambda _: jnp.zeros(flipped_enemy_sprite.shape, jnp.uint8),
-                                                                        lambda _: flipped_enemy_sprite,
-                                                                        operand=None),
-                                                 lambda _: jax.lax.cond(jnp.logical_and(jnp.mod(state.level.frame_count,2) ==0,state.enemies.multiple_enemies.blink[i]),
-                                                                        lambda _: jnp.zeros(flipped_enemy_sprite.shape, jnp.uint8),
-                                                                        lambda _: flipped_enemy_sprite,
-                                                                        operand=None),
-                                                 operand=None)
-
-            # Multiply by active flag to hide inactive enemies
-            blinking_enemy_sprite = blinking_enemy_sprite * state.enemies.multiple_enemies.active_enemy[i].astype(jnp.uint8)
-            
-            # Ensure collision_map is 3D (H, W, C) before rendering
-            collision_map = PLAYER_COLLISION_MAP_FOR_ENEMY_COLLISION_CHECK
-            h, w = collision_map.shape[0], collision_map.shape[1]
-            # Make RGB: 0 stays black, 1 (or nonzero) becomes white
-            mask = (collision_map > 0).astype(jnp.uint8)
-            rgb = jnp.stack([mask * 255, mask * 255, mask * 255], axis=-1)
-            alpha = jnp.full((h, w, 1), 128, dtype=jnp.uint8)  # semi-transparent
-            collision_map = jnp.concatenate([rgb, alpha], axis=-1)
-            # Render the enemy sprite on the canvas at the correct position
-            res = jr.render_at(canvas, y + self.consts.RENDER_OFFSET_Y, x + self.consts.RENDER_OFFSET_X, blinking_enemy_sprite)
-            # Only render if enemy has fully spawned
-            return jax.lax.cond(state.enemies.multiple_enemies.enemy_spawn_frame[i] > 9, lambda x: canvas,lambda x: res, 0)
-        
-        def render_loop_alien_bonus(i, canvas):
-            """render loop for all aliens in the bonus stage
-
-            Args:
-                i (_type_): index
-                canvas (_type_): canvas that is displayed
-
-            Returns:
-                _type_: augmented canvas
-            """
-
-            # Extract enemy state
-            x_positions = state.enemies.multiple_enemies.x
-            y_positions = state.enemies.multiple_enemies.y
-            last_horizontal_orientations = state.enemies.multiple_enemies.last_horizontal_orientation
-            x = x_positions[i]
-            y = y_positions[i]
-            last_horizontal_orientations = last_horizontal_orientations[i]
-
-            # Assign enemy color (cycling through 3 colors)
-            color = self.consts.ENEMY_COLORS[jnp.mod(i, 3)]
-
-            # Determine sprite index based on position and animation cycles
-            sprite_index = jax.lax.cond(
-                jnp.logical_and(jnp.logical_and(x >= 7, x <= 14), y == 80),
-                lambda _: sprite_cycle_1[(x - 7) % len(sprite_cycle_3)],
-                lambda _: jax.lax.cond(
-                    jnp.logical_and(jnp.logical_and(x >= 120, x <= 127), y == 80),
-                    lambda _: sprite_cycle_2[(x- 120) % len(sprite_cycle_4)],
-                    lambda _: (state.level.frame_count // 8) % 4,  # Standardanimation
-                    operand=None
-                ),
-                operand=None
-            )
-
-            # Player collision check
-            x_higher_player = jnp.add(state.player.x, self.consts.PLAYER_WIDTH)
-            x_lower_player = jnp.add(state.player.x, 0)
-            y_higher_player = jnp.add(state.player.y, self.consts.PLAYER_HEIGHT)
-            y_lower_player = jnp.add(state.player.y, 0)
-
-            # Check if player sprite crosses a certain point in enemy sprite
-            has_collision_enemy = jnp.logical_and(x >= x_lower_player,
-                                                   jnp.logical_and(x < x_higher_player,
-                                                                   jnp.logical_and(jnp.add(y, self.consts.ENEMY_PLAYER_COLLISION_OFFSET_Y_LOW) >= y_lower_player,
-                                                                                   jnp.add(y, self.consts.ENEMY_PLAYER_COLLISION_OFFSET_Y_HIGH) < y_higher_player)))
-            # Select sprite based on collision & teleport positions
-            enemy_sprite0 = jax.lax.cond(
-                jnp.logical_and(jnp.not_equal(state.level.death_frame_counter, 0), has_collision_enemy),
-                lambda _: jnp.zeros(self.enemy_sprites[sprite_index].shape).astype(jnp.uint8),
-                lambda _: jax.lax.cond(
-                            jnp.logical_or(
-                            jnp.logical_and(jnp.logical_and(x >= 7, x <= 14), y == 80),
-                            jnp.logical_and(jnp.logical_and(x >= 120, x <= 127), y == 80)
-                            ),
-                            lambda _: self.enemy_tp_sprites[sprite_index],
-                            lambda _: self.enemy_sprites[sprite_index],
-                            operand=None
-                            ),
-                                operand=None
-                                )
-            # Apply enemy color
-            enemy_sprite0 = colorize_sprite(enemy_sprite0, color)
-            # Flip sprite horizontally if enemy last moved right
-            flipped_enemy_sprite = jax.lax.cond(
-                    last_horizontal_orientations == JAXAtariAction.RIGHT,
-                    lambda s: jnp.flip(s, axis=0),
-                    lambda s: s,
-                    enemy_sprite0
-                )
-            # Render enemy sprite onto canvas
-            res = jr.render_at(canvas, y + self.consts.RENDER_OFFSET_Y, x + self.consts.RENDER_OFFSET_X, flipped_enemy_sprite)
-            res = jr.render_at(res, y + self.consts.RENDER_OFFSET_Y, x + self.consts.RENDER_OFFSET_X - 35*(2 * (last_horizontal_orientations % 2) - 1), flipped_enemy_sprite)
-
-            
-            return res
-            
-        # Render loop for eggs, handles color & hiding of already collected eggs
-        def render_loop_eggs(i, l_r, canvas):
-            """
-               Render loop for individual eggs in the game.
-
-               Args:
-                   i: Index of the egg in the row (left/right)
-                   l_r: Left (0) or Right (1) row of eggs
-                   canvas: Current canvas/frame to render on
-
-               Returns:
-                   Updated canvas with the egg rendered
-               """
-            # Extract egg position
-            x = state.eggs[l_r, i , 0]
-            y = state.eggs[l_r, i , 1]
-
-            # Extract egg position
-            egg_sprite = colorize_sprite(self.egg_sprite, self.consts.EGG_COLORS[state.eggs[l_r, i , 3],0])
-            # Half-egg sprite for partial display
-            egg_sprite_half = colorize_sprite(self.egg_sprite_half, self.consts.EGG_COLORS[state.eggs[l_r, i , 3],1])
-            # Define rendering functions
-            render_egg = lambda canv : jr.render_at(jr.render_at(canv, y  + self.consts.RENDER_OFFSET_Y, x + self.consts.RENDER_OFFSET_X, egg_sprite),
-                                                    y  + self.consts.RENDER_OFFSET_Y+1, x + self.consts.RENDER_OFFSET_X , egg_sprite_half)
-            # Render "no egg" (blank space if egg is inactive)
-            render_no_egg = lambda canv : jr.render_at(canv, y  + self.consts.RENDER_OFFSET_Y, x + self.consts.RENDER_OFFSET_X, jnp.zeros(egg_sprite.shape, jnp.uint8))
-            # Conditional rendering based on egg state
-            rendered_c = jax.lax.cond(state.eggs[l_r, i, 2], render_egg, render_no_egg, canvas)
-            return rendered_c
-        
-        def render_loop_items(i, canvas):
-            """render loop for the items
-
-            Args:
-                i (_type_): index
-                canvas (_type_): canvas that is displayed
-
-            Returns:
-                _type_: augmented canvas
-            """
-
-            # Extract item position and typ
-            x = state.items[i , 0]
-            y = state.items[i , 1]
-            item_sprite_identifier =  state.items[i , 3]
-            # Frame-based sprite animation (4-frame cycle)
-            sprite_index =  (state.level.frame_count // 8) % 4
-            # Select sprite based on item type
-            item_sprite = jax.lax.cond(
-                item_sprite_identifier == 0,
-                lambda x: jax.lax.cond(state.player.flame.flame_flag,
-                                       lambda _: jnp.zeros(self.evil_item_sprites[x[1]].shape, jnp.uint8),
-                                       lambda _: self.evil_item_sprites[x[1]],
-                                       operand=None),
-                lambda x: self.items[x[0] - 1],
-                operand= (item_sprite_identifier, sprite_index)
-            )
-
-            colorized_item = jax.lax.cond(
-                item_sprite_identifier == 0,
-                lambda x: colorize_sprite(x,self.consts.ORANGE),
-                lambda x: colorize_sprite(x,self.consts.YELLOW),
-                item_sprite
+                lambda _r: _r,
+                r
             )
             
-            # Handles blinking of items
-            blinking_item_sprite = jax.lax.cond(item_sprite_identifier == 0,
-                                                lambda _: jax.lax.cond(jnp.logical_and(jnp.mod(state.level.frame_count,2) == 0,state.level.blink_evil_item),
-                                                                       lambda _: jnp.zeros(colorized_item.shape, jnp.uint8),
-                                                                       lambda _: colorized_item,
-                                                                       operand=None),
-                                                lambda _: jax.lax.cond(jnp.logical_and(jnp.mod(state.level.frame_count,2) == 0,state.level.blink_current_active_item),
-                                                                       lambda _: jnp.zeros(colorized_item.shape, jnp.uint8),
-                                                                       lambda _: colorized_item,
-                                                                       operand=None),
-                                                operand=None)
-            
-            render_item = lambda canv : jr.render_at(canv, y + self.consts.RENDER_OFFSET_Y, x + self.consts.RENDER_OFFSET_X, blinking_item_sprite)
-            render_no_item = lambda canv : jr.render_at(canv, y + self.consts.RENDER_OFFSET_Y, x + self.consts.RENDER_OFFSET_X, jnp.zeros(blinking_item_sprite.shape, jnp.uint8))
+            r = self._render_enemies_bonus(state, r)
+            r = self._render_player(state, r)
+            return r
 
-            rendered_c = jax.lax.cond(state.items[i, 2], render_item, render_no_item, canvas)
-            return rendered_c
+        raster = jax.lax.cond(is_bonus, render_bonus, render_primary, raster)
+        raster = self._render_hud(state, raster)
 
-        # Render loop for lives, allwos for dynamic # of lives
-        def render_loop_lifes(i, canvas):
-            """render loop for the lifes
-
-            Args:
-                i (_type_): index
-                canvas (_type_): canvas that is displayed
-
-            Returns:
-                _type_: augmented canvas
-            """
-            x = self.consts.LIFE_X + i * (self.consts.LIFE_WIDTH + self.consts.LIFE_OFFSET_X)
-            y = self.consts.LIFE_Y
-            colorized_life_sprite = colorize_sprite(self.life_sprite,self.consts.BASIC_BLUE)
-            return jr.render_at(canvas, y , x + self.consts.RENDER_OFFSET_X , colorized_life_sprite)
-        
-
-        def player_death_animation(state: AlienState) -> jnp.ndarray:
-            """returns
-
-            Args:
-                state (AlienState): the state of the game
-
-            Returns:
-                jnp.ndarray: the death player sprite
-            """
-            sprite_index = (jnp.abs(state.level.death_frame_counter) // 4) % 10
-            return self.player_death_sprites[sprite_index]
-        
-        sprite_index = jax.lax.cond(
-            jnp.logical_and(jnp.logical_and(state.player.x >= 7, state.player.x <= 11), state.player.y == 80),
-            lambda _: sprite_cycle_1[(state.player.x - 7) % len(sprite_cycle_1)],
-            lambda _: jax.lax.cond(
-                jnp.logical_and(jnp.logical_and(state.player.x >= 123, state.player.x <= 127), state.player.y == 80),
-                lambda _: sprite_cycle_2[(state.player.x - 123) % len(sprite_cycle_2)],
-                lambda _: (state.level.frame_count // 4) % 4,  # Standardanimation
-                operand=None
-            ),
-            operand=None
-        )
-        
-        # Handles player walk or player death animation.
-        player_sprite_frame0 = jax.lax.cond(jnp.not_equal(state.level.death_frame_counter, 0), lambda x: colorize_sprite(player_death_animation(x),self.consts.BASIC_BLUE), lambda x:jax.lax.cond(
-                jnp.logical_or(
-                    jnp.logical_and(jnp.logical_and(state.player.x >= 7, state.player.x <= 11), state.player.y == 80),
-                    jnp.logical_and(jnp.logical_and(state.player.x >= 123, state.player.x <= 127), state.player.y == 80)
-                ),
-                lambda _: colorize_sprite(self.teleport_sprites[sprite_index],self.consts.BASIC_BLUE),
-                lambda _: colorize_sprite(self.player_sprite[(state.level.frame_count // 4) % 4], jax.lax.cond(state.player.flame.flame_flag,
-                                                                                                               lambda _: self.consts.ORANGE,
-                                                                                                               lambda _: self.consts.BASIC_BLUE,
-                                                                                                               operand=None)),
-                operand=None
-            ), state)
-
-        enemy_death_frame = jnp.sum(state.enemies.multiple_enemies.enemy_death_frame) * (1 - state.level.bonus_flag).astype(jnp.uint8)
-        player_sprite_frame = jax.lax.cond(
-            jnp.not_equal(enemy_death_frame, 0),
-                            lambda x: jnp.zeros(player_sprite_frame0.shape, jnp.uint8),
-                            lambda x: player_sprite_frame0,
-                            operand=None
-        )
-        # Handles horizontal flipping of the player sprite depending on the last horizontal direction (preserve sprite orientation during vertical movement)
-        flipped_player_sprite = jax.lax.cond(
-            jnp.logical_or(state.player.last_horizontal_orientation == JAXAtariAction.RIGHT, state.player.orientation == JAXAtariAction.RIGHT),
-            lambda s: jnp.flip(s, axis=0),
-            lambda s: s,
-            player_sprite_frame
-        )
-    
-        # Handles blinking of player sprite
-        blinking_player_sprite = jax.lax.cond(jnp.logical_or(state.player.flame.flame_flag,state.player.blink),
-                                           lambda _: jax.lax.cond(jnp.mod(state.level.frame_count,2) == 0,
-                                                                  lambda _ :flipped_player_sprite,
-                                                                  lambda _ : jnp.zeros(flipped_player_sprite.shape, jnp.uint8),
-                                                                  operand=None),
-                                           lambda _: flipped_player_sprite,
-                                           operand=None)
-        
-        digit_sprite:jnp.ndarray = self.get_score_sprite(score=state.level.score)
-        digit_sprite = colorize_sprite(digit_sprite,self.consts.BASIC_BLUE)
-
-        def render_canvas_primary_stage(self, stage: AlienState):
-            """renders the primary stage 
-
-            Args:
-                stage (AlienState): state of the game
-
-            Returns:
-                _type_: augmented canvas
-            """
-            canvas = jr.create_initial_frame(width=210, height=160)
-
-            # render background
-            map = jr.get_sprite_frame(self.map_sprite, 0)
-            canvas = jr.render_at(canvas, self.consts.RENDER_OFFSET_Y, self.consts.RENDER_OFFSET_X, map)
-            # eggs alternate half rendering
-            canvas = jax.lax.cond(jnp.mod(state.level.frame_count,2) ==1,
-                                  lambda _: jax.lax.fori_loop(0, state.eggs.shape[1], lambda cnt, rnr, cnst=0 : render_loop_eggs(i=cnt, canvas=rnr, l_r=cnst), canvas),
-                                  lambda _: jax.lax.fori_loop(0, state.eggs.shape[1], lambda cnt, rnr, cnst=1 : render_loop_eggs(i=cnt, canvas=rnr, l_r=cnst), canvas),
-                                  operand=None)
-            # item rendering
-            canvas = jax.lax.fori_loop(0, state.items.shape[0], render_loop_items, canvas)
-            # alien rendering
-            canvas = jax.lax.cond(state.level.frame_count < 100, lambda x: x, lambda x: jax.lax.fori_loop(0, self.consts.ENEMY_AMOUNT_BONUS_STAGE, render_loop_alien, x), canvas)
-            # life rendering
-            canvas = jax.lax.fori_loop(0, state.level.lifes, render_loop_lifes, canvas)
-        
-            # rendering of player sprite
-            collision_map = state.player.collision_map
-            # Make RGB: 0 stays black, 1 (or nonzero) becomes white
-            canvas = jr.render_at(canvas, state.player.y  + self.consts.RENDER_OFFSET_Y, state.player.x  + self.consts.RENDER_OFFSET_X, blinking_player_sprite)
-
-            # Handles orientation of the flame sprite
-            flipped_flame_sprite = jax.lax.cond(
-                jnp.logical_or(state.player.last_horizontal_orientation == JAXAtariAction.RIGHT, state.player.orientation == JAXAtariAction.RIGHT),
-                lambda s: jnp.flip(s, axis=0),
-                lambda s: s,
-                self.flame_sprite
-            )
-        
-            colorized_flame_sprite = colorize_sprite(flipped_flame_sprite,self.consts.ORANGE) 
-
-            # Handles blinking of flame sprite
-            blinking_flame_sprite = jax.lax.cond(jnp.logical_and(state.player.flame.flame_flag,jnp.mod(state.level.frame_count,2) == 1),
-                                                 lambda _: colorized_flame_sprite,
-                                                 lambda _: jnp.zeros(colorized_flame_sprite.shape, jnp.uint8),
-                                                 operand=None)
-
-
-            # rendering of the flamethrower
-            canvas = jr.render_at(canvas, state.player.flame.y + self.consts.RENDER_OFFSET_Y ,state.player.flame.x + self.consts.RENDER_OFFSET_X ,blinking_flame_sprite)
-
-            canvas = jr.render_at(canvas, self.consts.SCORE_Y + self.consts.RENDER_OFFSET_Y, self.consts.SCORE_X + self.consts.RENDER_OFFSET_X, digit_sprite)
-
-            canvas = jnp.transpose(canvas, (1, 0, 2))
-            return canvas[..., 0:3]
-        
-        def render_canvas_bonus_stage(self, state: AlienState):
-            """
-                Renders the bonus stage frame by frame.
-
-                Args:
-                    state (AlienState): Current game state
-
-                Returns:
-                    jnp.ndarray: RGB canvas of the bonus stage
-                """
-            canvas = jr.create_initial_frame(width=210, height=160)
-
-            # render background
-            map = jr.get_sprite_frame(self.map_sprite, 1)
-            canvas = jr.render_at(canvas, 0, 0, map)
-            # Render score digits
-            canvas = jr.render_at(canvas, self.consts.SCORE_Y + self.consts.RENDER_OFFSET_Y, self.consts.SCORE_X + self.consts.RENDER_OFFSET_X, digit_sprite)
-            # Render remaining lives
-            canvas = jax.lax.fori_loop(0, state.level.lifes, render_loop_lifes, canvas)
-            # Bonus item disappears when evil item is active (frame_counter > 0)
-            bonus_item_sprite = colorize_sprite(self.items[0], self.consts.GREEN) * (1 - jnp.clip(state.level.evil_item_frame_counter, 0, 1))
-            # Bonus item disappears when evil item is active (frame_counter > 0)
-            canvas = jr.render_at(canvas, 10 + self.consts.RENDER_OFFSET_Y, self.consts.ENEMY_SPAWN_X + self.consts.RENDER_OFFSET_X, bonus_item_sprite)
-            # Render player sprite
-            canvas = jax.lax.fori_loop(0, self.consts.ENEMY_AMOUNT_BONUS_STAGE, render_loop_alien_bonus, canvas)
-
-            canvas = jr.render_at(canvas, state.player.y  + self.consts.RENDER_OFFSET_Y, state.player.x  + self.consts.RENDER_OFFSET_X, flipped_player_sprite)
-            # Final adjustments
-            canvas = jnp.transpose(canvas, (1, 0, 2))
-            # Return only RGB channels (ignore alpha)
-            return canvas[..., 0:3]
-            
-        return jax.lax.cond(
-            state.level.bonus_flag,
-            lambda _: render_canvas_bonus_stage(self, state),
-            lambda _: render_canvas_primary_stage(self, state),
-            operand=None
-        )
-
+        return self.jr.render_from_palette(raster, self.PALETTE)
 
 def traverse_multiple_enemy_(fun: Callable[[SingleEnemyState], Any], number_of_non_traversed_args: int = 0):
     """the broken hopes and dreams of a dynamic enemy count

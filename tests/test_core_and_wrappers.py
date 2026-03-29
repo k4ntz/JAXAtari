@@ -27,19 +27,6 @@ def get_object_centric_obs_size(space: spaces.Dict) -> int:
         size += np.prod(leaf.shape)
     return size
 
-def test_obs_to_flat_array_with_stacked_observations(raw_env):
-    """Test that obs_to_flat_array works correctly with stacked observations."""
-    key = jax.random.PRNGKey(0)
-    base_env = raw_env
-    atari_env = AtariWrapper(base_env, frame_stack_size=4)
-    env = ObjectCentricWrapper(atari_env)
-
-    obs, state = env.reset(key)
-
-    # The observation should maintain the stacked structure
-    single_frame_size = get_object_centric_obs_size(atari_env._env.observation_space())
-    assert obs.shape == (4, single_frame_size), f"Expected shape (4, {single_frame_size}), got {obs.shape}"
-
 def test_pixel_obs_wrapper_with_stacked_frames(raw_env):
     """Test that PixelObsWrapper correctly handles stacked frames."""
     key = jax.random.PRNGKey(0)
@@ -171,9 +158,15 @@ def test_log_wrapper(raw_env):
     total_reward = 0.0
     steps = 0
     done = False
-    
+
+    # `done` is the env's returned termination signal (may be influenced by
+    # `episodic_life`). `LogWrapper` logs based on the "real" episode end flag
+    # exposed via `info["returned_episode"]`.
+    logged_done = False
+
     while not done and steps < 100:  # Limit steps to avoid infinite loops
         obs, state, reward, done, info = env.step(state, 0)  # Use NOOP action
+        logged_done = bool(info.get("returned_episode", False))
         total_reward += reward
         steps += 1
         
@@ -182,10 +175,10 @@ def test_log_wrapper(raw_env):
         assert jnp.all(obs >= 0) and jnp.all(obs <= 255), "Pixel values should be in range [0, 255]"
         
         # Verify running totals
-        assert state.episode_returns == total_reward * (1 - done)
-        assert state.episode_lengths == steps * (1 - done)
+        assert state.episode_returns == total_reward * (1 - logged_done)
+        assert state.episode_lengths == steps * (1 - logged_done)
         
-        if done:
+        if logged_done:
             # Verify final episode statistics
             assert state.returned_episode_returns == total_reward
             assert state.returned_episode_lengths == steps
@@ -402,7 +395,7 @@ def test_flatten_observation_wrapper_space_structure(raw_env):
 
     def deep_asdict(obj: any) -> any:
         """
-        Recursively converts a Pytree of namedtuples or dataclasses into a Pytree of standard dicts.
+        Recursively converts a Pytree of namedtuples or dataclasses into a Pytree of OrderedDicts.
         This is needed because obs might be a namedtuple or dataclass but the space is a Dict.
         """
         if hasattr(obj, '_asdict'): # It's a namedtuple
@@ -410,9 +403,10 @@ def test_flatten_observation_wrapper_space_structure(raw_env):
                 (key, deep_asdict(value)) for key, value in obj._asdict().items()
             )
         elif is_dataclass(obj): # It's a dataclass
-            from dataclasses import asdict
+            from dataclasses import fields
+            # Use fields() to preserve field definition order, NOT asdict() which returns plain dict
             return collections.OrderedDict(
-                (key, deep_asdict(value)) for key, value in asdict(obj).items()
+                (field.name, deep_asdict(getattr(obj, field.name))) for field in fields(obj)
             )
         elif isinstance(obj, (list, tuple)):
             return type(obj)(deep_asdict(item) for item in obj)

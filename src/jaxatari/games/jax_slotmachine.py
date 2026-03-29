@@ -75,7 +75,6 @@ from flax import struct
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.rendering import jax_rendering_utils_legacy as aj
 import jaxatari.spaces as spaces
 from jaxatari.modification import AutoDerivedConstants
 
@@ -268,7 +267,7 @@ class SlotMachineRenderer(JAXGameRenderer):
     def __init__(self, consts: SlotMachineConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or SlotMachineConstants()
         super().__init__(self.consts)
-        self.sprite_dir = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/slotmachine"
+        self.sprite_dir = os.path.join(render_utils.get_base_sprite_dir(), "slotmachine")
         # Use injected config if provided, else default
         if config is None:
             self.config = render_utils.RendererConfig(
@@ -1447,26 +1446,6 @@ class JaxSlotMachine(JaxEnvironment[SlotMachineState, SlotMachineObservation, Sl
             shape=(cfg.screen_height, cfg.screen_width, 3),
             dtype=jnp.uint8,
         )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: SlotMachineObservation) -> jnp.ndarray:
-        """Flatten the structured observation into a 1-D array."""
-        components = [
-            jnp.atleast_1d(obs.player1_credits).astype(jnp.float32),
-            jnp.atleast_1d(obs.player1_wager).astype(jnp.float32),
-            jnp.atleast_1d(obs.player2_credits).astype(jnp.float32),
-            jnp.atleast_1d(obs.player2_wager).astype(jnp.float32),
-            obs.reel_symbols.astype(jnp.float32).ravel(),
-            jnp.atleast_1d(obs.is_spinning).astype(jnp.float32),
-            jnp.atleast_1d(obs.last_payout_p1).astype(jnp.float32),
-            jnp.atleast_1d(obs.last_payout_p2).astype(jnp.float32),
-            jnp.atleast_1d(obs.last_reward_p1).astype(jnp.float32),
-            jnp.atleast_1d(obs.last_reward_p2).astype(jnp.float32),
-            jnp.atleast_1d(obs.jackpot_mode).astype(jnp.float32),
-            jnp.atleast_1d(obs.game_over).astype(jnp.float32),
-            jnp.atleast_1d(obs.winner).astype(jnp.float32),
-        ]
-        return jnp.concatenate(components, axis=0)
 
     def _get_info(
         self,

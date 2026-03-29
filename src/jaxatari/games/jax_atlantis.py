@@ -18,6 +18,7 @@ from jaxatari.environment import (
     JaxEnvironment,
     JAXAtariAction as Action,
     EnvObs,
+    ObjectObservation,
 )
 import jaxatari.spaces as spaces
 
@@ -65,12 +66,7 @@ def _get_default_asset_config() -> tuple:
 
 # Each value of this class is a list.
 # e.g. if i have 3 entities, then each of these lists would have a length of 3
-class EntityPosition(struct.PyTreeNode):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    alive: jnp.ndarray
+    
 
 
 class AtlantisState(struct.PyTreeNode):
@@ -107,11 +103,13 @@ class AtlantisState(struct.PyTreeNode):
 
 
 class AtlantisObservation(struct.PyTreeNode):
+    enemy: ObjectObservation
+    bullet: ObjectObservation
+    plasma: ObjectObservation
     score: jnp.ndarray
-    enemy: EntityPosition
-    bullet: EntityPosition
     installations_alive: jnp.ndarray
     command_post_alive: jnp.ndarray
+    fire_cooldown: jnp.ndarray
 
 
 class AtlantisInfo(struct.PyTreeNode):
@@ -913,6 +911,14 @@ class JaxAtlantis(
             # Compute how many enemies next wave should have
             next_count = cfg.wave_start_enemy_count + new_wave * 2
 
+            # Wipe out remaining entities to clean the screen in case the wave
+            # was aborted early due to all defenses being down.
+            empty_enemies = jnp.zeros_like(s.enemies)
+            empty_bullets = jnp.zeros_like(s.bullets)
+            empty_bullets_alive = jnp.zeros_like(s.bullets_alive)
+            empty_lanes = jnp.ones_like(s.lanes_free)
+            full_plasma = jnp.ones_like(s.plasma_active)
+
             return s.replace(
                 wave=new_wave,
                 wave_end_cooldown_remaining=jnp.array(
@@ -923,16 +929,33 @@ class JaxAtlantis(
                 score_spent=new_score_spent,  # Track spent revival credits
                 command_post_alive=new_command_post_alive,  # Apply command post revival
                 installations=final_installations,  # Apply installation revivals
+                enemies=empty_enemies,
+                bullets=empty_bullets,
+                bullets_alive=empty_bullets_alive,
+                lanes_free=empty_lanes,
+                plasma_active=full_plasma,
             )
 
         def _same_wave(s: AtlantisState) -> AtlantisState:
             """Continue current wave without changes."""
             return s
 
-        # Start new wave if no enemies remaining and screen is empty
-        wave_complete = (state.number_enemies_wave_remaining == 0) & (
+        # Start new wave if no enemies remaining and screen is empty,
+        # or if all defenses are down but we have credits to revive.
+        standard_wave_complete = (state.number_enemies_wave_remaining == 0) & (
             ~jnp.any(state.enemies[:, 5] == 1)
         )
+
+        # Early skip logic: if all defenses are down but we still have credits,
+        # immediately end the wave so revival happens at wave end (matching manual).
+        total_revival_credits = state.score // 10000
+        used_credits = state.score_spent // 10000
+        available_credits = total_revival_credits - used_credits
+        can_revive = available_credits > 0
+
+        defenses_down = (~state.command_post_alive) & (~jnp.any(state.installations))
+
+        wave_complete = standard_wave_complete | (defenses_down & can_revive)
 
         return jax.lax.cond(
             wave_complete,
@@ -1165,106 +1188,142 @@ class JaxAtlantis(
     def _get_observation(self, state: AtlantisState) -> AtlantisObservation:
         cfg = self.consts
 
-        # get types of enemies
+        # --- ENEMIES ---
         type_ids = state.enemies[:, 3].astype(jnp.int32)
+        enemy_alive = (state.enemies[:, 5] == 1).astype(jnp.int32)
 
-        # Get the positions and dimensions of the enemies
-        # set inactive enemies to -1 or 0
-        enemy_alive = state.enemies[:, 5] == 1
-        enemy_x = jnp.where(
-            enemy_alive, state.enemies[:, 0].astype(jnp.int32), -1
-        )
-        enemy_y = jnp.where(
-            enemy_alive, state.enemies[:, 1].astype(jnp.int32), -1
-        )
-        enemy_w = jnp.where(
-            enemy_alive, cfg.enemy_width[type_ids].astype(jnp.int32), 0
-        )
-        enemy_h = jnp.where(
-            enemy_alive, cfg.enemy_height[type_ids].astype(jnp.int32), 0
-        )
-        enemy_pos = EntityPosition(
-            enemy_x, enemy_y, enemy_w, enemy_h, enemy_alive
+        # Map dx (index 2) to angle
+        enemy_dx = state.enemies[:, 2]
+        enemy_angle = jnp.where(enemy_dx < 0, 180.0, 0.0).astype(jnp.float32)
+
+        # FIX: Use 0 instead of -1 for inactive objects to satisfy Box(low=0)
+        enemy_x = jnp.where(enemy_alive == 1, state.enemies[:, 0].astype(jnp.int32), 0)
+        enemy_y = jnp.where(enemy_alive == 1, state.enemies[:, 1].astype(jnp.int32), 0)
+        
+        enemy_w = jnp.where(enemy_alive == 1, cfg.enemy_width[type_ids].astype(jnp.int32), 0)
+        enemy_h = jnp.where(enemy_alive == 1, cfg.enemy_height[type_ids].astype(jnp.int32), 0)
+        
+        enemy_pos = ObjectObservation.create(
+            x=enemy_x, 
+            y=enemy_y, 
+            width=enemy_w, 
+            height=enemy_h, 
+            active=enemy_alive, 
+            visual_id=type_ids, 
+            orientation=enemy_angle
         )
 
-        # Get the positions and dimensions of the bullets
-        # set inactive bullets to -1 or 0
-        bullet_alive = state.bullets_alive
-        bullet_x = jnp.where(
-            bullet_alive, state.bullets[:, 0].astype(jnp.int32), -1
+        # --- BULLETS ---
+        bullet_alive = state.bullets_alive.astype(jnp.int32)
+        
+        # FIX: Use 0 instead of -1 for inactive objects
+        bullet_x = jnp.where(bullet_alive == 1, state.bullets[:, 0].astype(jnp.int32), 0)
+        bullet_y = jnp.where(bullet_alive == 1, state.bullets[:, 1].astype(jnp.int32), 0)
+        
+        bullet_w = jnp.where(bullet_alive == 1, jnp.full((cfg.max_bullets,), cfg.bullet_width, dtype=jnp.int32), 0)
+        bullet_h = jnp.where(bullet_alive == 1, jnp.full((cfg.max_bullets,), cfg.bullet_height, dtype=jnp.int32), 0)
+
+        # Calculate angle from velocity
+        b_dx = state.bullets[:, 2].astype(jnp.float32)
+        b_dy = state.bullets[:, 3].astype(jnp.float32)
+        bullet_angle_rad = jnp.arctan2(b_dy, b_dx)
+        bullet_angle_deg = jnp.degrees(bullet_angle_rad)
+        bullet_angle = jnp.where(bullet_angle_deg < 0, bullet_angle_deg + 360.0, bullet_angle_deg).astype(jnp.float32)
+
+        bullet_pos = ObjectObservation.create(
+            x=bullet_x, 
+            y=bullet_y, 
+            width=bullet_w, 
+            height=bullet_h, 
+            active=bullet_alive, 
+            visual_id=jnp.zeros_like(bullet_x),
+            orientation=bullet_angle
         )
-        bullet_y = jnp.where(
-            bullet_alive, state.bullets[:, 1].astype(jnp.int32), -1
-        )
-        bullet_w = jnp.where(
-            bullet_alive,
-            jnp.full((cfg.max_bullets,), cfg.bullet_width, dtype=jnp.int32),
+
+        # --- PLASMA BEAMS (DEATHRAYS) ---
+        # Enemies in 4th lane (index 3) with active plasma fire a vertical beam.
+        is_lane4 = (state.enemies[:, 4] == 3) & (state.enemies[:, 5] == 1)
+        plasma_firing = is_lane4 & state.plasma_active
+        plasma_alive = plasma_firing.astype(jnp.int32)
+
+        # Compute beam X position from enemy center, matching plasma collision logic
+        dx_i = state.enemies[:, 2]
+        x_i = state.enemies[:, 0].astype(jnp.int32)
+        half_w = cfg.enemy_width[type_ids] // 2
+        centers = jnp.where(
+            dx_i < 0, x_i + half_w, x_i + cfg.enemy_width[type_ids] - half_w
+        ).astype(jnp.int32)
+
+        plasma_x = jnp.where(plasma_alive == 1, centers, 0)
+        plasma_y_val = jnp.array(cfg.start_beam, dtype=jnp.int32)
+        plasma_y = jnp.where(
+            plasma_alive == 1,
+            jnp.full_like(centers, plasma_y_val, dtype=jnp.int32),
             0,
         )
-        bullet_h = jnp.where(
-            bullet_alive,
-            jnp.full((cfg.max_bullets,), cfg.bullet_height, dtype=jnp.int32),
+
+        # Use a narrow vertical beam; height from start_beam to bottom of screen
+        plasma_w_val = jnp.array(3, dtype=jnp.int32)
+        plasma_h_val = jnp.array(cfg.screen_height - cfg.start_beam, dtype=jnp.int32)
+        plasma_w = jnp.where(
+            plasma_alive == 1,
+            jnp.full_like(centers, plasma_w_val, dtype=jnp.int32),
             0,
         )
-        bullet_pos = EntityPosition(
-            bullet_x, bullet_y, bullet_w, bullet_h, bullet_alive
+        plasma_h = jnp.where(
+            plasma_alive == 1,
+            jnp.full_like(centers, plasma_h_val, dtype=jnp.int32),
+            0,
+        )
+
+        # Fixed vertical orientation (downwards)
+        plasma_orientation = jnp.where(
+            plasma_alive == 1,
+            jnp.full_like(centers, 270.0, dtype=jnp.float32),
+            jnp.zeros_like(centers, dtype=jnp.float32),
+        )
+
+        plasma_visual_id = jnp.zeros_like(centers, dtype=jnp.int32)
+
+        plasma_pos = ObjectObservation.create(
+            x=plasma_x,
+            y=plasma_y,
+            width=plasma_w,
+            height=plasma_h,
+            active=plasma_alive,
+            visual_id=plasma_visual_id,
+            orientation=plasma_orientation,
+        )
+
+        # --- FIRE COOLDOWN (NORMALIZED) ---
+        fire_cd_max = jnp.array(cfg.fire_cooldown_frames, dtype=jnp.float32)
+        fire_cooldown_norm = state.fire_cooldown.astype(jnp.float32) / jnp.maximum(
+            fire_cd_max, jnp.array(1.0, dtype=jnp.float32)
         )
 
         return AtlantisObservation(
-            score=state.score,
             enemy=enemy_pos,
             bullet=bullet_pos,
-            installations_alive=state.installations,
-            command_post_alive=state.command_post_alive,
+            plasma=plasma_pos,
+            score=state.score,
+            installations_alive=state.installations.astype(jnp.int32),
+            command_post_alive=state.command_post_alive.astype(jnp.int32),
+            fire_cooldown=fire_cooldown_norm,
         )
-
+    
     def observation_space(self) -> spaces.Dict:
-        cfg = self.consts
-
-        def entity_space(n: int, w_max: int, h_max: int) -> spaces.Dict:
-            return spaces.Dict(
-                {
-                    "x": spaces.Box(
-                        low=-w_max,
-                        high=cfg.screen_width,
-                        shape=(n,),
-                        dtype=jnp.int32,
-                    ),
-                    "y": spaces.Box(
-                        low=-h_max,
-                        high=cfg.screen_height,
-                        shape=(n,),
-                        dtype=jnp.int32,
-                    ),
-                    "width": spaces.Box(
-                        low=0, high=w_max, shape=(n,), dtype=jnp.int32
-                    ),
-                    "height": spaces.Box(
-                        low=0, high=h_max, shape=(n,), dtype=jnp.int32
-                    ),
-                    "alive": spaces.Box(
-                        low=0, high=1, shape=(n,), dtype=jnp.int32
-                    ),
-                }
-            )
+        cfg = self.consts    
 
         return spaces.Dict(
             {
+                "enemy": spaces.get_object_space(n=cfg.max_enemies, screen_size=(cfg.screen_height, cfg.screen_width), orientation_range=(0.0, 180.0)),
+                "bullet": spaces.get_object_space(n=cfg.max_bullets, screen_size=(cfg.screen_height, cfg.screen_width), orientation_range=(0.0, 360.0)),
+                "plasma": spaces.get_object_space(n=cfg.max_enemies, screen_size=(cfg.screen_height, cfg.screen_width), orientation_range=(0.0, 360.0)),
                 "score": spaces.Box(
                     low=0,
                     high=(10**cfg.max_digits_for_score) - 1,
                     shape=(),
                     dtype=jnp.int32,
-                ),
-                "enemy": entity_space(
-                    n=cfg.max_enemies,
-                    w_max=int(jnp.max(cfg.enemy_width).item()),
-                    h_max=int(jnp.max(cfg.enemy_height).item()),
-                ),
-                "bullet": entity_space(
-                    n=cfg.max_bullets,
-                    w_max=int(cfg.bullet_width),
-                    h_max=int(cfg.bullet_height),
                 ),
                 "installations_alive": spaces.Box(
                     low=0,
@@ -1278,32 +1337,13 @@ class JaxAtlantis(
                     shape=(),
                     dtype=jnp.int32,
                 ),
+                "fire_cooldown": spaces.Box(
+                    low=0.0,
+                    high=1.0,
+                    shape=(),
+                    dtype=jnp.float32,
+                ),
             }
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: EnvObs) -> jnp.ndarray:
-        def _flat(ep: EntityPosition) -> jnp.ndarray:
-            return jnp.concatenate(
-                [
-                    jnp.ravel(ep.x).astype(jnp.int32),
-                    jnp.ravel(ep.y).astype(jnp.int32),
-                    jnp.ravel(ep.width).astype(jnp.int32),
-                    jnp.ravel(ep.height).astype(jnp.int32),
-                    jnp.ravel(ep.alive).astype(jnp.int32),  # booleans -> 0,1
-                ],
-                axis=0,
-            )
-
-        return jnp.concatenate(
-            [
-                jnp.atleast_1d(obs.score).astype(jnp.int32),
-                _flat(obs.enemy),
-                _flat(obs.bullet),
-                obs.installations_alive.astype(jnp.int32),
-                jnp.atleast_1d(obs.command_post_alive.astype(jnp.int32)),
-            ],
-            axis=0,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1334,23 +1374,30 @@ class JaxAtlantis(
         """
         Game is done when:
           1) Score has reached the maximum representable (i.e. max_digits_for_score), OR
-          2) The central command post is destroyed and all installations are destroyed.
+          2) The central command post is destroyed and all installations are destroyed,
+             and there are no reserve credits left to revive a base.
         """
         # 1) Max‐score condition
         max_score = 10**self.consts.max_digits_for_score
         reached_max = state.score >= max_score  # bool scalar
 
-        # 2) All defenses down?
+        # 2) Calculate available reserve credits
+        total_revival_credits = state.score // 10000
+        used_credits = state.score_spent // 10000
+        available_credits = total_revival_credits - used_credits
+
+        # 3) Are all physical defenses currently down?
         cmd_alive = state.command_post_alive  # bool scalar
         any_install_alive = jnp.any(
             state.installations
         )  # True if at least one installation remains
         defenses_down = (~cmd_alive) & (~any_install_alive)
 
-        # 3) Final done flag
-        done = reached_max | defenses_down
+        # 4) Are we completely out of extra lives?
+        out_of_reserves = available_credits <= 0
 
-        # jax.debug.print("[_get_done] score={}|{}  cmd_alive={}  any_inst_alive={}  → done={}", state.score, max_score, cmd_alive, any_install_alive, done)
+        # 5) Game only ends if defenses are down AND we have no credits left
+        done = reached_max | (defenses_down & out_of_reserves)
 
         return done
 
@@ -1395,12 +1442,8 @@ class AtlantisRenderer(JAXGameRenderer):
         
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # Create a dummy constants object to access ASSET_CONFIG
-        # Since Atlantis uses GameConfig instead of Constants, we'll use the default
-        dummy_consts = AtlantisConstants()
-        
         # 1. Start from (possibly modded) asset config provided via constants
-        final_asset_config = list(dummy_consts.ASSET_CONFIG)
+        final_asset_config = list(self.consts.ASSET_CONFIG)
         
         # 2. Create procedural assets that depend on dynamic values (config)
         def _solid_sprite_data(width: int, height: int, rgb: tuple[int, int, int]) -> jnp.ndarray:
@@ -1413,7 +1456,7 @@ class AtlantisRenderer(JAXGameRenderer):
         for asset in dynamic_procedural_assets:
             final_asset_config.append({'name': asset['name'], 'type': 'procedural', 'data': asset['data']})
         
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/atlantis"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "atlantis")
         
         # 3. Load all assets, create palette, and generate ID masks
         (
