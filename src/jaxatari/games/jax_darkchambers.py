@@ -2417,7 +2417,8 @@ class DarkChambersRenderer(JAXGameRenderer):
         img = jnp.clip(img.astype(jnp.float32) * fade_factor, 0, 255).astype(jnp.uint8)
 
         def render_level_changed_screen(_: None) -> jnp.ndarray:
-            screen = jnp.zeros((GAME_H, GAME_W, 3), dtype=jnp.uint8)
+            h, w, c = img.shape
+            screen = jnp.zeros((h, w, c), dtype=jnp.uint8)
             message = "LEVEL CHANGED"
             scale = 2
             glyph_w = 5
@@ -2427,10 +2428,10 @@ class DarkChambersRenderer(JAXGameRenderer):
             char_w = glyph_w * scale
             char_h = glyph_h * scale
             total_w = len(message) * char_w + (len(message) - 1) * spacing
-            start_x = (GAME_W - total_w) // 2
-            start_y = (GAME_H - char_h) // 2
+            start_x = (w - total_w) // 2
+            start_y = (h - char_h) // 2
 
-            mask = jnp.zeros((GAME_H, GAME_W), dtype=bool)
+            mask = jnp.zeros((h, w), dtype=bool)
             cursor_x = start_x
             for ch in message:
                 glyph = LEVEL_CHANGE_FONT_5X7[ch]
@@ -2442,16 +2443,16 @@ class DarkChambersRenderer(JAXGameRenderer):
                             mask = mask.at[y0:y0 + scale, x0:x0 + scale].set(True)
                 cursor_x += char_w + spacing
 
-            white = jnp.array([255, 255, 255], dtype=jnp.uint8)
+            white = jnp.full((c,), 255, dtype=jnp.uint8)
             return jnp.where(mask[..., None], white, screen)
 
-        img = jax.lax.cond(
+        raw_level_screen = jax.lax.cond(
             state.level_transition_ticks > 0,
             render_level_changed_screen,
             lambda _: img,
             operand=None,
         )
-        return img
+        return raw_level_screen
 
 
 class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation, DarkChambersInfo, DarkChambersConstants]):
