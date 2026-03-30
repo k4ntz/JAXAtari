@@ -43,7 +43,13 @@ def compute_binary_matrix(level: int, data: jnp.ndarray) -> jnp.ndarray:
     binary_matrix = is_map_color.astype(jnp.int8)
     # Ensure sides are not walkable (0) fixing the bug of the player walking through walls at the sides.
     binary_matrix = binary_matrix.at[:, 0].set(0)
+    binary_matrix = binary_matrix.at[:, 1].set(0)
+    binary_matrix = binary_matrix.at[:, 2].set(0)
+    binary_matrix = binary_matrix.at[:, 3].set(0)
     binary_matrix = binary_matrix.at[:, -1].set(0)
+    binary_matrix = binary_matrix.at[:, -2].set(0)
+    binary_matrix = binary_matrix.at[:, -3].set(0)
+    binary_matrix = binary_matrix.at[:, -4].set(0)
 
     return binary_matrix
 
