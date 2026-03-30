@@ -24,7 +24,7 @@ class DefenderEnvMod(JaxAtariModController):
         "no_backup": NoBackupMod,
         "missing_funding": MissingFundingMod,
         "enemies_on_speed": EnemiesOnSpeedMod,
-        "no_brakes_in_space": NoBreaksInSpaceMod,
+        "no_breakes_in_space": NoBreaksInSpaceMod,
     }
 
     def __init__(self, env, mods_config: list = [], allow_conflicts: bool = False):
