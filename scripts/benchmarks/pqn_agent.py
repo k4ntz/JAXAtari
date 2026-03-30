@@ -334,7 +334,8 @@ def make_train(config):
     env = jaxatari.make(env_name, mods_config=train_mods) if train_mods else jaxatari.make(env_name)
     mod_env = jaxatari.make(env_name, mods_config=eval_mods) if eval_mods else env
     has_mod_env = bool(eval_mods)
-    renderer = jaxatari.make_renderer(config["ENV_NAME"].lower())
+    base_renderer = env.renderer
+    mod_renderer = mod_env.renderer
 
     def apply_wrappers(env):
         env = AtariWrapper(env, episodic_life=True, frame_skip=4, frame_stack_size=4, sticky_actions=True, max_pooling=True, clip_reward=True, noop_reset=30)
@@ -661,9 +662,10 @@ def make_train(config):
             infos, env_states, dones = output[0], output[1], output[2]
 
             if config.get("RECORD_VIDEO", False):
+                selected_renderer = mod_renderer if mod else base_renderer
                 jax.lax.cond(
                     train_state.n_updates > 0,
-                    lambda _: jax.debug.callback(video_callback, env_states, dones, train_state.n_updates, renderer, mod=mod),
+                    lambda _: jax.debug.callback(video_callback, env_states, dones, train_state.n_updates, selected_renderer, mod=mod),
                     lambda _: None,
                     operand=None,
                 )

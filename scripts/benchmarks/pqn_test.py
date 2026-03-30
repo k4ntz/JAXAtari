@@ -143,7 +143,8 @@ def make_test(config, save_params, batch_stats):
     eval_mods = get_eval_mods(config)
     mod_env = jaxatari.make(env_name, mods_config=eval_mods) if eval_mods else env
     has_mod_env = bool(eval_mods)
-    renderer = jaxatari.make_renderer(config["ENV_NAME"].lower())
+    base_renderer = env.renderer
+    mod_renderer = mod_env.renderer
 
     def apply_wrappers(env):
         env = AtariWrapper(env, episodic_life=True, frame_skip=4, frame_stack_size=4, sticky_actions=True, max_pooling=True, clip_reward=True, noop_reset=30)
@@ -265,7 +266,8 @@ def make_test(config, save_params, batch_stats):
             infos, env_states, dones = output[0], output[1], output[2]
 
             if config.get("RECORD_VIDEO", False):
-                jax.debug.callback(video_callback, env_states, dones, 0, renderer, mod=mod),
+                selected_renderer = mod_renderer if mod else base_renderer
+                jax.debug.callback(video_callback, env_states, dones, 0, selected_renderer, mod=mod),
 
             # return mean of done infos
             done_infos = jax.tree_util.tree_map(
