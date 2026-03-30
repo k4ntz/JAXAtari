@@ -10,11 +10,9 @@ from jaxatari.spaces import Discrete
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
-from .montezuma2.core import Montezuma2Constants, Montezuma2State, Montezuma2Observation, Montezuma2Info
+from .montezuma2.core import Montezuma2Constants, Montezuma2State, Montezuma2Observation, Montezuma2Info, get_room_idx, check_platform
 from .montezuma2.renderer import Montezuma2Renderer
 from .montezuma2.rooms import load_room
-
-print("There is a bug when jumping in a new room, arriving bellow the floor")
 
 
 class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Montezuma2Info, Montezuma2Constants]):
@@ -157,12 +155,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         obs = self._get_observation(state)
         return obs, state
     def step(self, state: Montezuma2State, action: int) -> Tuple[Montezuma2Observation, Montezuma2State, float, bool, Montezuma2Info]:
-        room_idx = jnp.where(state.room_id == 4, 0,
-                   jnp.where(state.room_id == 5, 1,
-                   jnp.where(state.room_id == 3, 2,
-                   jnp.where(state.room_id == 11, 3,
-                   jnp.where(state.room_id == 10, 4,
-                   jnp.where(state.room_id == 9, 5, 0))))))
+        room_idx = get_room_idx(state.room_id)
         room_col_map = self.ROOM_COLLISION_MAPS[room_idx]
         previous_score = state.score
         is_up = jnp.logical_or(action == Action.UP, jnp.logical_or(action == Action.UPRIGHT, action == Action.UPLEFT))
@@ -286,37 +279,13 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         current_x = jnp.where(is_climbing == 1, target_climb_x, state.player_x)
         
-        def check_platform(y, x):
-            x_m3 = jnp.clip(x - 3, 0, self.consts.WIDTH - 1)
-            x_m2 = jnp.clip(x - 2, 0, self.consts.WIDTH - 1)
-            x_m1 = jnp.clip(x - 1, 0, self.consts.WIDTH - 1)
-            x_p1 = jnp.clip(x + 1, 0, self.consts.WIDTH - 1)
-            x_p2 = jnp.clip(x + 2, 0, self.consts.WIDTH - 1)
-            x_p3 = jnp.clip(x + 3, 0, self.consts.WIDTH - 1)
-            return jnp.logical_or(
-                room_col_map[y, x_m3] == 1,
-                jnp.logical_or(
-                    room_col_map[y, x_m2] == 1,
-                    jnp.logical_or(
-                        room_col_map[y, x_m1] == 1,
-                        jnp.logical_or(
-                            room_col_map[y, x] == 1,
-                            jnp.logical_or(
-                                room_col_map[y, x_p1] == 1,
-                                jnp.logical_or(
-                                    room_col_map[y, x_p2] == 1,
-                                    room_col_map[y, x_p3] == 1
-                                )
-                            )
-                        )
-                    )
-                )
-            )
+        def check_platform_local(y, x):
+            return check_platform(room_col_map, y, x, self.consts.WIDTH)
         
         # 1. Check if strictly on ground
         safe_x = jnp.clip(current_x + self.consts.PLAYER_WIDTH // 2, 0, self.consts.WIDTH - 1)
         safe_y = jnp.clip(player_feet_y + 1, 0, 148)
-        on_ground = check_platform(safe_y, safe_x)
+        on_ground = check_platform_local(safe_y, safe_x)
         
         def check_conveyor(i, on_grnd):
             c_x = state.conveyors_x[i]
@@ -352,8 +321,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             return dy_jump, jump_counter + 1, 1
             
         def get_fall_dy():
-            pixel_1_below = check_platform(safe_y, safe_x)
-            pixel_2_below = check_platform(jnp.clip(player_feet_y + 2, 0, 148), safe_x)
+            pixel_1_below = check_platform_local(safe_y, safe_x)
+            pixel_2_below = check_platform_local(jnp.clip(player_feet_y + 2, 0, 148), safe_x)
             
             def check_c_pixel2(i, p2b):
                 c_x = state.conveyors_x[i]
@@ -393,11 +362,11 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         new_feet_y = new_y + self.consts.PLAYER_HEIGHT - 1
         
         new_top_y = jnp.clip(new_y, 0, 148)
-        hit_ceiling = jnp.logical_and(dy < 0, jnp.logical_and(check_platform(new_top_y, safe_x), is_climbing == 0))
+        hit_ceiling = jnp.logical_and(dy < 0, jnp.logical_and(check_platform_local(new_top_y, safe_x), is_climbing == 0))
         new_y = jnp.where(hit_ceiling, state.player_y, new_y)
         new_is_jumping = jnp.where(hit_ceiling, 0, new_is_jumping)
         
-        hit_floor_rm = jnp.logical_and(dy > 0, jnp.logical_and(is_climbing == 0, check_platform(jnp.clip(new_feet_y, 0, 148), safe_x)))
+        hit_floor_rm = jnp.logical_and(dy > 0, jnp.logical_and(is_climbing == 0, check_platform_local(jnp.clip(new_feet_y, 0, 148), safe_x)))
         snapped_y_rm = jnp.clip(new_feet_y, 0, 148) - self.consts.PLAYER_HEIGHT
         
         def check_c_hit_floor(i, carry):
@@ -668,29 +637,23 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
                 global_enemies_active=state_in.global_enemies_active.at[state_in.room_id].set(state_in.enemies_active)
             )
             st = load_room(new_room_id, st, self.consts)
-            new_px = jnp.where(transition_left, 148, jnp.where(transition_right, 4, current_x))
+            new_px = jnp.where(transition_left, 148, jnp.where(transition_right, 4, new_x))
             temp_py = jnp.where(transition_down, 6, jnp.where(transition_up, 140, new_y))
 
             # Prevent landing below floor: 
             # If feet are currently inside a floor, push up until they are just above it.
-            new_room_idx = jnp.where(new_room_id == 4, 0,
-                           jnp.where(new_room_id == 5, 1,
-                           jnp.where(new_room_id == 3, 2,
-                           jnp.where(new_room_id == 11, 3,
-                           jnp.where(new_room_id == 10, 4, 0)))))
+            new_room_idx = get_room_idx(new_room_id)
             new_room_col_map = self.ROOM_COLLISION_MAPS[new_room_idx]
             safe_px_trans = jnp.clip(new_px + self.consts.PLAYER_WIDTH // 2, 0, self.consts.WIDTH - 1)
 
             def is_inside(py):
                 fy = jnp.clip(py + self.consts.PLAYER_HEIGHT - 1, 0, 148)
-                return new_room_col_map[fy, safe_px_trans] == 1
+                return check_platform(new_room_col_map, fy, safe_px_trans, self.consts.WIDTH)
 
             new_py = temp_py
-            new_py = jnp.where(is_inside(new_py), new_py - 1, new_py)
-            new_py = jnp.where(is_inside(new_py), new_py - 1, new_py)
-            new_py = jnp.where(is_inside(new_py), new_py - 1, new_py)
-            new_py = jnp.where(is_inside(new_py), new_py - 1, new_py)
-            new_py = jnp.where(is_inside(new_py), new_py - 1, new_py)
+            def push_up_fn(i, py):
+                return jnp.where(is_inside(py), py - 1, py)
+            new_py = jax.lax.fori_loop(0, 40, push_up_fn, new_py)
 
             return st.replace(
                 player_x=new_px,

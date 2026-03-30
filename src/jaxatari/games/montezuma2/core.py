@@ -130,3 +130,38 @@ class Montezuma2Observation:
 class Montezuma2Info:
     lives: jnp.ndarray
     room_id: jnp.ndarray
+
+def get_room_idx(room_id):
+    return jnp.where(room_id == 4, 0,
+           jnp.where(room_id == 5, 1,
+           jnp.where(room_id == 3, 2,
+           jnp.where(room_id == 11, 3,
+           jnp.where(room_id == 10, 4,
+           jnp.where(room_id == 9, 5, 0))))))
+
+def check_platform(col_map, y, x, width):
+    x_m3 = jnp.clip(x - 3, 0, width - 1)
+    x_m2 = jnp.clip(x - 2, 0, width - 1)
+    x_m1 = jnp.clip(x - 1, 0, width - 1)
+    x_p1 = jnp.clip(x + 1, 0, width - 1)
+    x_p2 = jnp.clip(x + 2, 0, width - 1)
+    x_p3 = jnp.clip(x + 3, 0, width - 1)
+    return jnp.logical_or(
+        col_map[y, x_m3] == 1,
+        jnp.logical_or(
+            col_map[y, x_m2] == 1,
+            jnp.logical_or(
+                col_map[y, x_m1] == 1,
+                jnp.logical_or(
+                    col_map[y, x, ...] == 1,
+                    jnp.logical_or(
+                        col_map[y, x_p1] == 1,
+                        jnp.logical_or(
+                            col_map[y, x_p2] == 1,
+                            col_map[y, x_p3] == 1
+                        )
+                    )
+                )
+            )
+        )
+    )

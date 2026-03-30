@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from .core import Montezuma2Constants, Montezuma2State
+from .core import Montezuma2Constants, Montezuma2State, get_room_idx
 
 def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Constants) -> Montezuma2State:
     enemies_x = jnp.zeros(consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)
@@ -321,12 +321,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 lax, laa)
 
     ex, ey, ea, ed, eminx, emaxx, eb, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd, lax, laa = jax.lax.switch(
-        jnp.where(room_id == 4, 0,
-        jnp.where(room_id == 5, 1,
-        jnp.where(room_id == 3, 2,
-        jnp.where(room_id == 11, 3,
-        jnp.where(room_id == 10, 4, 
-        jnp.where(room_id == 9, 5, 0)))))),
+        get_room_idx(room_id),
         [load_room_0_4, load_room_0_5, load_room_0_3, load_room_1_3, load_room_1_2, load_room_1_4], args)
 
     return state.replace(
