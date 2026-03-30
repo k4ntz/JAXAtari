@@ -309,8 +309,6 @@ class BeamriderConstants(NamedTuple):
     REJUVENATOR_STAGE_3_Y: float = 93.0
     REJUVENATOR_STAGE_4_Y: float = 112.0
     DEATH_DURATION: int = 120
-    DEATH_PENALTY: float = 1500.0
-    EXTRA_LIFE_REWARD: float = 250.0
 
     # Falling Rock constants
     FALLING_ROCK_MAX: int = 3
@@ -3845,31 +3843,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
     def _get_reward(
         self, previous_state: BeamriderState, state: BeamriderState
     ) -> float:
-        score_delta = (state.score - previous_state.score).astype(jnp.float32)
-        life_delta = (state.lives - previous_state.lives).astype(jnp.float32)
-
-        death_started = jnp.logical_and(
-            previous_state.level.death_timer == 0,
-            state.level.death_timer > 0,
-        )
-        direct_life_loss = jnp.logical_and(
-            life_delta < 0,
-            jnp.logical_and(
-                previous_state.level.death_timer == 0,
-                state.level.death_timer == 0,
-            ),
-        )
-
-        death_events = jnp.where(
-            death_started,
-            jnp.array(1.0, dtype=jnp.float32),
-            jnp.where(direct_life_loss, -life_delta, jnp.array(0.0, dtype=jnp.float32)),
-        )
-        extra_lives = jnp.maximum(life_delta, 0.0)
-
-        death_penalty = death_events * jnp.array(self.consts.DEATH_PENALTY, dtype=jnp.float32)
-        extra_life_bonus = extra_lives * jnp.array(self.consts.EXTRA_LIFE_REWARD, dtype=jnp.float32)
-        return score_delta + extra_life_bonus - death_penalty
+        return (state.score - previous_state.score).astype(jnp.float32)
 
     def _get_done(self, state: BeamriderState) -> bool:
         return jnp.logical_or(state.lives <= 0, state.sector > 14)
