@@ -325,34 +325,24 @@ class PixelObsWrapper(JaxatariWrapper):
     Apply this wrapper after the AtariWrapper!
     """
 
-    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False, use_native_downscaling: bool = False):
+    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False):
         super().__init__(env)
         assert isinstance(env, AtariWrapper), "PixelObsWrapper has to be applied after AtariWrapper"
 
-        # Access the Base Environment
-        base_env = self._env._env if isinstance(self._env, AtariWrapper) else self._env
-
-        if do_pixel_resize and use_native_downscaling:
-            from jaxatari.modification import apply_native_downscaling
-            self.do_pixel_resize, self.grayscale = apply_native_downscaling(
-                base_env, pixel_resize_shape, grayscale
-            )
-            self.pixel_resize_shape = pixel_resize_shape
-        else:
-            self.do_pixel_resize = do_pixel_resize
-            self.pixel_resize_shape = pixel_resize_shape
-            self.grayscale = grayscale
+        self.do_pixel_resize = do_pixel_resize
+        self.pixel_resize_shape = pixel_resize_shape
+        self.grayscale = grayscale
 
         # Dynamically calculate the final observation space shape
-        # If we hot-swapped, image_space() will now return the correct small size automatically
-        final_shape = self._env.image_space().shape
+        base_shape = self._env.image_space().shape
+        height, width, channels = base_shape
 
-        # If we are doing wrapper-side resizing (legacy), we still calculate manually
         if self.do_pixel_resize:
             height, width = self.pixel_resize_shape
-            channels = 1 if self.grayscale else final_shape[2]
-            final_shape = (height, width, channels)
-
+        if self.grayscale:
+            channels = 1
+        
+        final_shape = (height, width, channels)
         # Create the space for a single preprocessed frame
         image_space = spaces.Box(low=0, high=255, shape=final_shape, dtype=jnp.uint8)
         # Stack the single-frame space
