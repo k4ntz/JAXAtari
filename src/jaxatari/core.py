@@ -26,7 +26,6 @@ def _warn_deprecated_obs_to_flat_array(env: JaxEnvironment) -> None:
 
 # Map of game names to their module paths
 GAME_MODULES = {
-    "adventure": "jaxatari.games.jax_adventure",
     "amidar": "jaxatari.games.jax_amidar",
     "airraid": "jaxatari.games.jax_airraid",
     "alien": "jaxatari.games.jax_alien",
@@ -78,7 +77,6 @@ GAME_MODULES = {
 
 # Mod modules registry: for each game, provide the Controller class path
 MOD_MODULES = {
-    "adventure": "jaxatari.games.mods.adventure_mods.AdventureEnvMod",
     "pong": "jaxatari.games.mods.pong_mods.PongEnvMod",
     "kangaroo": "jaxatari.games.mods.kangaroo_mods.KangarooEnvMod",
     "freeway": "jaxatari.games.mods.freeway_mods.FreewayEnvMod",
