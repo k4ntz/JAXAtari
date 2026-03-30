@@ -41,7 +41,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
         room_col_0_3 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
         room_col_0_3 = room_col_0_3.at[6:, 156:160].set(1) # Right wall only for room_0_3
-        room_col_0_3 = room_col_0_3.at[147:149, 72:88].set(0) # Hole for ladder down to room_1_4
+        # No hole for ladder down to room_1_4
         
         room_col_1_3 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
         room_col_1_2 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
@@ -395,8 +395,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         raw_new_x = current_x + dx
         transition_left = jnp.logical_and(raw_new_x < 0, jnp.logical_or(state.room_id == 5, jnp.logical_or(state.room_id == 3, jnp.logical_or(state.room_id == 11, state.room_id == 9))))
         transition_right = jnp.logical_and(raw_new_x + self.consts.PLAYER_WIDTH > self.consts.WIDTH, jnp.logical_or(state.room_id == 4, jnp.logical_or(state.room_id == 5, jnp.logical_or(state.room_id == 10, state.room_id == 11))))
-        transition_down = jnp.logical_and(new_y >= 148, jnp.logical_or(state.room_id == 4, state.room_id == 3))
-        transition_up = jnp.logical_and(new_y <= 2, jnp.logical_or(state.room_id == 11, state.room_id == 9))
+        transition_down = jnp.logical_and(new_y >= 148, state.room_id == 4)
+        transition_up = jnp.logical_and(new_y <= 2, state.room_id == 11)
 
         new_x = jnp.clip(raw_new_x, 0, self.consts.WIDTH - self.consts.PLAYER_WIDTH)
         new_left_x = jnp.clip(new_x, 0, self.consts.WIDTH - 1)
@@ -628,8 +628,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         transition_any = jnp.logical_or(jnp.logical_or(transition_left, transition_right), jnp.logical_or(transition_down, transition_up))
         new_room_id = jnp.where(transition_left, jnp.where(state.room_id == 5, 4, jnp.where(state.room_id == 11, 10, jnp.where(state.room_id == 9, 11, 5))),
                       jnp.where(transition_right, jnp.where(state.room_id == 4, 5, jnp.where(state.room_id == 10, 11, jnp.where(state.room_id == 11, 9, 3))),
-                      jnp.where(transition_down, jnp.where(state.room_id == 4, 11, jnp.where(state.room_id == 3, 9, 11)),
-                      jnp.where(transition_up, jnp.where(state.room_id == 11, 4, jnp.where(state.room_id == 9, 3, 4)), state.room_id))))
+                      jnp.where(transition_down, jnp.where(state.room_id == 4, 11, 11),
+                      jnp.where(transition_up, jnp.where(state.room_id == 11, 4, 4), state.room_id))))
         def transition_fn(state_in):
             st = state_in.replace(
                 global_doors_active=state_in.global_doors_active.at[state_in.room_id].set(state_in.doors_active),
