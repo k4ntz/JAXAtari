@@ -131,6 +131,7 @@ def _get_default_asset_config():
         {"name": "door", "type": "single", "file": "door.npy"},
         {"name": "key", "type": "single", "file": "key.npy"},
         {"name": "bullet", "type": "single", "file": "bullet.npy"},
+        {"name": "pistol", "type": "single", "file": "pistol.npy"},
 
         # Digits for UI - commented out, using hardcoded digit patterns instead
         # {"name": "digits", "type": "digits", "pattern": "digits/{}.npy"},
@@ -164,7 +165,8 @@ ENEMY_WRAITH = 2
 ENEMY_ZOMBIE = 1  # Weakest
 
 # Item configuration
-NUM_ITEMS = 8  # 5 fixed slots + 95 regular slots for high-density item gameplay/mod presets
+NUM_CHECKPOINTS = 16
+NUM_ITEMS = 24  # 5 fixed + 3 regular + 16 checkpoint slots
 INITIAL_REGULAR_ITEM_COUNT = 5  # Fewer random items active at once to reduce clutter
 # Item type codes
 ITEM_HEART = 1          # +health, no points
@@ -187,6 +189,7 @@ ITEM_SPEED_POTION = 15  # Temporarily increases player movement speed (2x for 12
 ITEM_HEAL_POTION = 16   # Fully restores player health to MAX_HEALTH on pickup
 ITEM_POISON_POTION = 17 # Creates poison cloud that damages enemies in radius over time
 ITEM_HAMMER = 18        # Kills all enemies within radius; limited uses per episode
+ITEM_CHECKPOINT = 19    # Intra-level checkpoint; activates on touch, never collected
 
 # Level configuration
 MAX_LEVELS = 7          # Total number of levels (0..6)
@@ -505,6 +508,10 @@ class DarkChambersConstants(struct.PyTreeNode):
     CHECKPOINT_SPAWN_X_BY_MAP: Tuple[int, int, int] = struct.field(pytree_node=False, default=(50, 20, 130))
     CHECKPOINT_SPAWN_Y_BY_MAP: Tuple[int, int, int] = struct.field(pytree_node=False, default=(50, 70, 70))
 
+    # Intra-level checkpoint objects (disabled by default; enabled by checkpoint mod)
+    ENABLE_INTRA_LEVEL_CHECKPOINTS: bool = struct.field(pytree_node=False, default=False)
+    CHECKPOINT_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(255, 220, 50))   # gold flag
+
 
 @struct.dataclass
 class DarkChambersState:
@@ -582,6 +589,10 @@ class DarkChambersState:
     enemy_contact_cooldown: chex.Array  # shape: (NUM_ENEMIES,) - frames until next contact damage tick
     enemy_moving: chex.Array            # shape: (NUM_ENEMIES,) - 1 if enemy moved this step, else 0
 
+    checkpoint_idx: chex.Array    # index into item_positions of last activated intra-level checkpoint (-1 = none)
+    checkpoint_map: chex.Array    # map_index of the room where checkpoint was activated
+    checkpoint_level: chex.Array  # current_level of the room where checkpoint was activated
+
 
 
 @struct.dataclass
@@ -615,6 +626,11 @@ class DarkChambersObservation:
     bomb_count: jnp.ndarray     # 0..MAX_BOMBS
     hammer_count: jnp.ndarray   # 0..MAX_HAMMERS
     speed_boost_active: jnp.ndarray  # 1=speed boost active, 0=none
+    lives: jnp.ndarray               # remaining lives (0 if not using CheckpointsMod)
+    poison_cloud_x: jnp.ndarray      # x position of active poison cloud
+    poison_cloud_y: jnp.ndarray      # y position of active poison cloud
+    poison_cloud_active: jnp.ndarray # 1=poison cloud active, 0=none
+    damage_cooldown: jnp.ndarray     # frames of invulnerability remaining
 
 
 @struct.dataclass
@@ -673,6 +689,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             'heal_potion_color': create_color_sprite(self.consts.HEAL_POTION_COLOR),
             'poison_potion_color': create_color_sprite(self.consts.POISON_POTION_COLOR),
             'hammer_color': create_color_sprite(self.consts.HAMMER_COLOR),
+            'checkpoint_color': create_color_sprite(self.consts.CHECKPOINT_COLOR),
         }
         
         # Append procedural color sprites to asset config
@@ -940,6 +957,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             "chain": "chain",      # ITEM_AMULET
             "key": "key",         # ITEM_KEY
             "door": "door",       # ITEM_CAGE_DOOR
+            "pistol": "pistol",   # ITEM_GUN
         }
         for item_key, sprite_name in item_sprites.items():
             item_mask = self.SHAPE_MASKS.get(sprite_name)
@@ -957,6 +975,13 @@ class DarkChambersRenderer(JAXGameRenderer):
         else:
             self.ITEM_SCALED_MASKS["stairs"] = None
             self.ITEM_SCALED_MASKS["stairs_down"] = None
+
+        # Pistol sprite pre-scaled for HUD indicator (ITEM_WIDTH × ITEM_HEIGHT)
+        pistol_mask = self.SHAPE_MASKS.get("pistol")
+        if pistol_mask is not None:
+            self.GUN_HUD_SPRITE = _scale_mask(pistol_mask, ITEM_HEIGHT, ITEM_WIDTH)
+        else:
+            self.GUN_HUD_SPRITE = None
 
         # --- Spawner as skull: scale skull sprite to 14x28 for spawner (2:1 aspect, original width) ---
         skull_mask = self.SHAPE_MASKS.get("skull")
@@ -994,6 +1019,27 @@ class DarkChambersRenderer(JAXGameRenderer):
         self.WIZARD_ID = self.COLOR_TO_ID[self.consts.WIZARD_COLOR]
         self.GRIM_REAPER_ID = self.COLOR_TO_ID[self.consts.GRIM_REAPER_COLOR]
         self.HAMMER_ID = self.COLOR_TO_ID[self.consts.HAMMER_COLOR]
+        self.CHECKPOINT_ID = self.COLOR_TO_ID[self.consts.CHECKPOINT_COLOR]
+        self.CHECKPOINT_ACTIVATED_ID = self.SHIELD_ID  # bright blue when activated
+
+        # Flag-on-a-pole sprite for checkpoints (6 wide x 12 tall)
+        import numpy as _np
+        _flag = _np.array([
+            [1, 1, 1, 1, 0, 0],
+            [1, 1, 1, 1, 1, 0],
+            [1, 1, 1, 1, 0, 0],
+            [0, 1, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0],
+        ], dtype=_np.int32)
+        self.CHECKPOINT_SPRITE = jnp.where(_flag, self.CHECKPOINT_ID, self.jr.TRANSPARENT_ID)
+        self.CHECKPOINT_SPRITE_ACTIVATED = jnp.where(_flag, self.CHECKPOINT_ACTIVATED_ID, self.jr.TRANSPARENT_ID)
 
         # Digit patterns (0-9) 3x5 bitmap (rows top->bottom, cols left->right)
         # 1 = pixel on, 0 = off
@@ -1689,6 +1735,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             [8, 8],                 # 16 HEAL_POTION (medium)
             [8, 8],                 # 17 POISON_POTION (medium)
             [8, 8],                 # 18 HAMMER
+            [6, 12],               # 19 CHECKPOINT (flag on pole)
         ], dtype=jnp.int32)
 
         # Color id mapping per item type (aligning with palette above)
@@ -1733,6 +1780,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             self.COLOR_TO_ID[self.consts.HEAL_POTION_COLOR],    # 16: ITEM_HEAL_POTION
             self.COLOR_TO_ID[self.consts.POISON_POTION_COLOR],  # 17: ITEM_POISON_POTION
             self.COLOR_TO_ID[self.consts.HAMMER_COLOR],         # 18: ITEM_HAMMER
+            self.CHECKPOINT_ID,                                  # 19: ITEM_CHECKPOINT
         ]
     
     def render(self, state: DarkChambersState) -> jnp.ndarray:
@@ -2097,7 +2145,29 @@ class DarkChambersRenderer(JAXGameRenderer):
                     lambda r: r,
                     raster
                 )
-            
+
+            # ITEM_GUN = 9 -> pistol sprite (faster shooting)
+            pistol_sprite = self.ITEM_SCALED_MASKS.get("pistol")
+            if pistol_sprite is not None:
+                is_gun = (item_type == ITEM_GUN) & is_active
+                raster = jax.lax.cond(
+                    is_gun,
+                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, pistol_sprite),
+                    lambda r: r,
+                    raster
+                )
+
+            # ITEM_CHECKPOINT = 19 -> flag sprite (gold = inactive, blue = activated)
+            is_chk = (item_type == ITEM_CHECKPOINT) & is_active
+            is_activated = (state.checkpoint_idx == i) & (state.checkpoint_map == state.map_index) & (state.checkpoint_level == state.current_level)
+            chk_sprite = jnp.where(is_activated, self.CHECKPOINT_SPRITE_ACTIVATED, self.CHECKPOINT_SPRITE)
+            raster = jax.lax.cond(
+                is_chk,
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, chk_sprite),
+                lambda r: r,
+                raster
+            )
+
             return raster
         
         # First render sprite-based items using fori_loop
@@ -2105,7 +2175,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         
         # Then render remaining items (treasures, powerups, etc.) as colored boxes
         # Skip types that now use sprites: HEART(1), POISON(2), TRAP(3), AMBER_CHALICE(5), AMULET(6), SHIELD(8), BOMB(10), KEY(11), LADDER_UP(12), LADDER_DOWN(13), CAGE_DOOR(14)
-        for t in [4, 7, 9, 15, 16, 17, 18]:  # STRONGBOX(4), HOURGLASS(7), TORCH(9), SPEED_POTION(15), HEAL_POTION(16), POISON_POTION(17), HAMMER(18)
+        for t in [4, 7, 15, 16, 17, 18]:  # STRONGBOX(4), HOURGLASS(7), SPEED_POTION(15), HEAL_POTION(16), POISON_POTION(17), HAMMER(18)
             object_raster = draw_item_type(object_raster, t, masked_item_pos)
         
         # Spawners: render as large skulls (24x24)
@@ -2317,18 +2387,26 @@ class DarkChambersRenderer(JAXGameRenderer):
         # Gun indicator next to shield
         gun_indicator_active = state.gun_active == 1
         gun_x = shield_x + ITEM_WIDTH + 3
-        gun_pos = jnp.where(
-            gun_indicator_active,
-            jnp.array([[gun_x, indicator_y]], dtype=jnp.int32),
-            jnp.array([[-100, -100]], dtype=jnp.int32)
-        )
-        gun_size = jnp.array([[ITEM_WIDTH, ITEM_HEIGHT]], dtype=jnp.int32)
-        object_raster = self.jr.draw_rects(
-            object_raster,
-            positions=gun_pos,
-            sizes=gun_size,
-            color_id=self.GUN_ID
-        )
+        if self.GUN_HUD_SPRITE is not None:
+            object_raster = jax.lax.cond(
+                gun_indicator_active,
+                lambda r: self.jr.render_at_clipped(r, gun_x, indicator_y, self.GUN_HUD_SPRITE),
+                lambda r: r,
+                object_raster
+            )
+        else:
+            gun_pos = jnp.where(
+                gun_indicator_active,
+                jnp.array([[gun_x, indicator_y]], dtype=jnp.int32),
+                jnp.array([[-100, -100]], dtype=jnp.int32)
+            )
+            gun_size = jnp.array([[ITEM_WIDTH, ITEM_HEIGHT]], dtype=jnp.int32)
+            object_raster = self.jr.draw_rects(
+                object_raster,
+                positions=gun_pos,
+                sizes=gun_size,
+                color_id=self.GUN_ID
+            )
         
         # Bomb indicator next to gun
         bomb_has_any = state.bomb_count > 0
@@ -2861,11 +2939,12 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         ], dtype=jnp.float32)
         spawn_probs = spawn_probs / jnp.sum(spawn_probs)
         # Spawn regular items (leave first 5 for key, ladders, cage contents)
-        regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 5,), p=spawn_probs)
-        # Add key, ladders, cage door and reward at beginning
+        regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 5 - NUM_CHECKPOINTS,), p=spawn_probs)
+        # Add key, ladders, cage door and reward at beginning; checkpoints appended at end
         item_types = jnp.concatenate([
             jnp.array([ITEM_KEY, ITEM_LADDER_UP, ITEM_LADDER_DOWN, ITEM_CAGE_DOOR, self.renderer.CAGE_REWARD_TYPE], dtype=jnp.int32),
-            regular_items
+            regular_items,
+            jnp.full((NUM_CHECKPOINTS,), ITEM_CHECKPOINT, dtype=jnp.int32),
         ])
         # Main map (spawn map): hardcoded upper-right gun.
         item_positions = item_positions.at[5].set(main_map_corner_gun_pos)
@@ -2882,6 +2961,39 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         item_active = item_active.at[5].set(jnp.array(1, dtype=jnp.int32))
         # Suppress all spawned items (6+) in the main chamber, keep only gun in the upper-right corner
         item_active = jnp.where(jnp.arange(NUM_ITEMS) > 5, 0, item_active)
+
+        # Dynamically spawn intra-level checkpoints spread across vertical zones, avoiding walls
+        def spawn_one_checkpoint_reset(carry, zone_idx):
+            positions_arr, key_in = carry
+            y_lo = zone_idx * self.consts.WORLD_HEIGHT // NUM_CHECKPOINTS
+            y_hi = (zone_idx + 1) * self.consts.WORLD_HEIGHT // NUM_CHECKPOINTS
+
+            def try_once_chk(_, inner):
+                pos, key_loc, found = inner
+                key_loc, sk = jax.random.split(key_loc)
+                x = jax.random.randint(sk, (), 16, self.consts.WORLD_WIDTH - 16, dtype=jnp.int32)
+                key_loc, sk = jax.random.split(key_loc)
+                y_min = jnp.maximum(y_lo, 8)
+                y_max = jnp.maximum(y_hi - 8, y_lo + 1)
+                y = jax.random.randint(sk, (), y_min, y_max, dtype=jnp.int32)
+                on_wall = check_wall_overlap(x, y, 6, 12)
+                new_pos = jnp.where((~on_wall) & (~found), jnp.array([x, y]), pos)
+                return (new_pos, key_loc, found | (~on_wall))
+
+            fallback = jnp.array([75, (y_lo + y_hi) // 2], dtype=jnp.int32)
+            final_pos, key_out, _ = jax.lax.fori_loop(0, 20, try_once_chk, (fallback, key_in, False))
+            positions_arr = positions_arr.at[zone_idx].set(final_pos)
+            return (positions_arr, key_out), None
+
+        key, sk = jax.random.split(key)
+        chk_init = jnp.zeros((NUM_CHECKPOINTS, 2), dtype=jnp.int32)
+        (chk_positions_reset, key), _ = jax.lax.scan(
+            spawn_one_checkpoint_reset, (chk_init, sk), jnp.arange(NUM_CHECKPOINTS)
+        )
+        item_positions = item_positions.at[NUM_ITEMS - NUM_CHECKPOINTS:].set(chk_positions_reset)
+        item_active = item_active.at[NUM_ITEMS - NUM_CHECKPOINTS:].set(
+            jnp.array(self.consts.ENABLE_INTRA_LEVEL_CHECKPOINTS, dtype=jnp.int32)
+        )
 
         # Safety pass: suppress entities that still overlap walls after spawn attempts.
         def rect_overlaps_walls(pos: chex.Array, width: chex.Array, height: chex.Array) -> chex.Array:
@@ -3018,6 +3130,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             poison_cloud_timer=jnp.array(0, dtype=jnp.int32),
             enemy_contact_cooldown=jnp.zeros(NUM_ENEMIES, dtype=jnp.int32),
             enemy_moving=jnp.ones(NUM_ENEMIES, dtype=jnp.int32),
+            checkpoint_idx=jnp.array(-1, dtype=jnp.int32),
+            checkpoint_map=jnp.array(0, dtype=jnp.int32),
+            checkpoint_level=jnp.array(0, dtype=jnp.int32),
         )
 
         obs = self._get_observation(state)
@@ -3057,15 +3172,18 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 checkpoint_respawn_x = checkpoint_x_by_map[state.map_index]
                 checkpoint_respawn_y = checkpoint_y_by_map[state.map_index]
 
+                has_intra_checkpoint = state.checkpoint_idx >= 0
+                _safe_idx = jnp.maximum(state.checkpoint_idx, 0)
+                _chk_respawn_pos = state.item_positions[_safe_idx]
                 respawn_x = jnp.where(
-                    jnp.array(self.consts.ENABLE_CHECKPOINT_RESPAWN),
-                    checkpoint_respawn_x,
-                    default_respawn_x,
+                    has_intra_checkpoint,
+                    _chk_respawn_pos[0],
+                    jnp.where(jnp.array(self.consts.ENABLE_CHECKPOINT_RESPAWN), checkpoint_respawn_x, default_respawn_x),
                 )
                 respawn_y = jnp.where(
-                    jnp.array(self.consts.ENABLE_CHECKPOINT_RESPAWN),
-                    checkpoint_respawn_y,
-                    default_respawn_y,
+                    has_intra_checkpoint,
+                    _chk_respawn_pos[1],
+                    jnp.where(jnp.array(self.consts.ENABLE_CHECKPOINT_RESPAWN), checkpoint_respawn_y, default_respawn_y),
                 )
 
                 # Safety: if chosen respawn intersects walls, snap to nearest valid nearby point.
@@ -3972,6 +4090,14 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             ladder_collisions = jax.vmap(check_ladder_collision)(state.item_positions)
             ladder_collisions = ladder_collisions & (state.item_active == 1)
 
+            # Checkpoint activation: touch updates respawn position, item is never removed
+            hit_checkpoint_mask = item_collisions & (state.item_types == ITEM_CHECKPOINT)
+            hit_checkpoint = jnp.any(hit_checkpoint_mask)
+            hit_checkpoint_idx = jnp.argmax(hit_checkpoint_mask)
+            new_checkpoint_idx = jnp.where(hit_checkpoint, hit_checkpoint_idx, state.checkpoint_idx)
+            new_checkpoint_map = jnp.where(hit_checkpoint, state.map_index, state.checkpoint_map)
+            new_checkpoint_level = jnp.where(hit_checkpoint, state.current_level, state.checkpoint_level)
+
             # Apply item effects
             collected_hearts = jnp.sum(item_collisions & (state.item_types == ITEM_HEART))
             collected_poison = jnp.sum(item_collisions & (state.item_types == ITEM_POISON))
@@ -4078,16 +4204,18 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 0,                    # 16 HEAL_POTION
                 0,                    # 17 POISON_POTION
                 0,                    # 18 HAMMER
+                0,                    # 19 CHECKPOINT
             ], dtype=jnp.int32)
             item_points = points_by_type[state.item_types]
             gained_points = jnp.sum(item_points * item_collisions.astype(jnp.int32))
             new_score = state.score + gained_points
             
-            # Remove collected items; ladders persist; cage door disappears after valid entry with key
+            # Remove collected items; ladders, cage door (conditional), and checkpoints persist
             is_ladder = (state.item_types == ITEM_LADDER_UP) | (state.item_types == ITEM_LADDER_DOWN)
             is_cage_door = (state.item_types == ITEM_CAGE_DOOR)
+            is_checkpoint = (state.item_types == ITEM_CHECKPOINT)
             should_remove_cage = is_cage_door & can_enter_cage
-            should_remove = (item_collisions & (~is_ladder) & (~is_cage_door)) | should_remove_cage
+            should_remove = (item_collisions & (~is_ladder) & (~is_cage_door) & (~is_checkpoint)) | should_remove_cage
             new_item_active = jnp.where(should_remove, 0, state.item_active)
             
             # Initialize positions/types for potential updates from drops
@@ -4716,9 +4844,10 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 cage_reward_pos = self.renderer.CAGE_REWARD_POSITIONS[new_map_index, new_level]
                 
                 # Generate random positions for regular items with retries to avoid walls
+                NUM_REGULAR = NUM_ITEMS - 5 - NUM_CHECKPOINTS
                 def spawn_regular_item(carry, idx):
                     positions_arr, key_in = carry
-                    
+
                     def try_once(_, inner):
                         pos, key_loc, found = inner
                         key_loc, sk = jax.random.split(key_loc)
@@ -4729,26 +4858,56 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                         new_pos = jnp.where((~on_wall) & (~found), jnp.array([x, y]), pos)
                         new_found = found | (~on_wall)
                         return (new_pos, key_loc, new_found)
-                    
+
                     init = (jnp.array([30, 30], dtype=jnp.int32), key_in, False)
                     final_pos, key_out, _ = jax.lax.fori_loop(0, 20, try_once, init)
                     positions_arr = positions_arr.at[idx].set(final_pos)
                     return (positions_arr, key_out), None
-                
+
                 key, sk = jax.random.split(key)
-                init_positions = jnp.zeros((NUM_ITEMS - 5, 2), dtype=jnp.int32)  # -5 for key, ladders, cage props
-                (regular_positions, key), _ = jax.lax.scan(spawn_regular_item, (init_positions, sk), jnp.arange(NUM_ITEMS - 5))
-                
-                # Combine: first 5 are key, ladders, cage door and reward, rest are regular items
+                init_positions = jnp.zeros((NUM_REGULAR, 2), dtype=jnp.int32)
+                (regular_positions, key), _ = jax.lax.scan(spawn_regular_item, (init_positions, sk), jnp.arange(NUM_REGULAR))
+
+                # Dynamically spawn checkpoints spread across vertical zones, avoiding walls
+                def spawn_one_checkpoint_level(carry, zone_idx):
+                    positions_arr, key_in = carry
+                    y_lo = zone_idx * self.consts.WORLD_HEIGHT // NUM_CHECKPOINTS
+                    y_hi = (zone_idx + 1) * self.consts.WORLD_HEIGHT // NUM_CHECKPOINTS
+
+                    def try_once_chk(_, inner):
+                        pos, key_loc, found = inner
+                        key_loc, sk = jax.random.split(key_loc)
+                        x = jax.random.randint(sk, (), 16, self.consts.WORLD_WIDTH - 16, dtype=jnp.int32)
+                        key_loc, sk = jax.random.split(key_loc)
+                        y_min = jnp.maximum(y_lo, 8)
+                        y_max = jnp.maximum(y_hi - 8, y_lo + 1)
+                        y = jax.random.randint(sk, (), y_min, y_max, dtype=jnp.int32)
+                        on_wall = check_wall_overlap_item(x, y)
+                        new_pos = jnp.where((~on_wall) & (~found), jnp.array([x, y]), pos)
+                        return (new_pos, key_loc, found | (~on_wall))
+
+                    fallback = jnp.array([75, (y_lo + y_hi) // 2], dtype=jnp.int32)
+                    final_pos, key_out, _ = jax.lax.fori_loop(0, 20, try_once_chk, (fallback, key_in, False))
+                    positions_arr = positions_arr.at[zone_idx].set(final_pos)
+                    return (positions_arr, key_out), None
+
+                key, sk = jax.random.split(key)
+                chk_init = jnp.zeros((NUM_CHECKPOINTS, 2), dtype=jnp.int32)
+                (chk_positions, key), _ = jax.lax.scan(
+                    spawn_one_checkpoint_level, (chk_init, sk), jnp.arange(NUM_CHECKPOINTS)
+                )
+
+                # Combine: first 5 are key, ladders, cage door and reward, then regular items, then checkpoints
                 new_positions = jnp.concatenate([
                     key_pos[None, :],
                     exit_pos[None, :],
                     ladder_down_pos[None, :],
                     cage_door_pos[None, :],
                     cage_reward_pos[None, :],
-                    regular_positions
+                    regular_positions,
+                    chk_positions,
                 ], axis=0)
-                
+
                 # Generate new item types - only items with sprites (exclude STRONGBOX, GOLD_CHALICE)
                 key, subkey = jax.random.split(key)
                 all_item_types = jnp.array([
@@ -4773,13 +4932,17 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                     0.06 if self.consts.ENABLE_HAMMER_SPAWN else 0.0,
                 ], dtype=jnp.float32)
                 spawn_probs = spawn_probs / jnp.sum(spawn_probs)
-                regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_ITEMS - 5,), p=spawn_probs)
+                regular_items = jax.random.choice(subkey, all_item_types, shape=(NUM_REGULAR,), p=spawn_probs)
                 new_types = jnp.concatenate([
                     jnp.array([ITEM_KEY, ITEM_LADDER_UP, ITEM_LADDER_DOWN, ITEM_CAGE_DOOR, self.renderer.CAGE_REWARD_TYPE]),
-                    regular_items
+                    regular_items,
+                    jnp.full((NUM_CHECKPOINTS,), ITEM_CHECKPOINT, dtype=jnp.int32),
                 ])
                 regular_item_mask = (jnp.arange(NUM_ITEMS) < (5 + INITIAL_REGULAR_ITEM_COUNT)).astype(jnp.int32)
                 new_active = jnp.where(jnp.arange(NUM_ITEMS) < 5, 1, regular_item_mask)
+                new_active = new_active.at[NUM_ITEMS - NUM_CHECKPOINTS:].set(
+                    jnp.array(self.consts.ENABLE_INTRA_LEVEL_CHECKPOINTS, dtype=jnp.int32)
+                )
 
                 is_main_spawn_map = (new_map_index == 0) & (new_level == 0)
                 new_positions = jnp.where(
@@ -4821,6 +4984,18 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             transition_item_positions = transition_item_positions.at[1].set(ladder_up_target_pos)
             transition_item_types = transition_item_types.at[1].set(jnp.array(ITEM_LADDER_UP, dtype=jnp.int32))
             transition_item_active = transition_item_active.at[1].set(jnp.array(1, dtype=jnp.int32))
+
+            # Intra-level checkpoints persist across room changes (positions and collected state preserved)
+            _chk_start = NUM_ITEMS - NUM_CHECKPOINTS
+            transition_item_positions = transition_item_positions.at[_chk_start:].set(
+                final_item_positions[_chk_start:]
+            )
+            transition_item_types = transition_item_types.at[_chk_start:].set(
+                final_item_types[_chk_start:]
+            )
+            transition_item_active = transition_item_active.at[_chk_start:].set(
+                final_item_active[_chk_start:]
+            )
 
             disallowed_potions = (
                 ((transition_item_types == ITEM_SPEED_POTION) & (~jnp.array(self.consts.ENABLE_SPEED_POTION_SPAWN)))
@@ -5206,6 +5381,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 poison_cloud_timer=state.poison_cloud_timer,
                 enemy_contact_cooldown=new_enemy_contact_cooldown,
                 enemy_moving=enemy_moving_arr,
+                checkpoint_idx=jnp.where(level_changed, jnp.array(-1, dtype=jnp.int32), new_checkpoint_idx),
+                checkpoint_map=jnp.where(level_changed, jnp.array(0, dtype=jnp.int32), new_checkpoint_map),
+                checkpoint_level=jnp.where(level_changed, jnp.array(0, dtype=jnp.int32), new_checkpoint_level),
             )
             
             obs = self._get_observation(new_state)
@@ -5573,6 +5751,11 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             bomb_count=jnp.clip(state.bomb_count, 0, MAX_BOMBS).astype(jnp.int32),
             hammer_count=jnp.clip(state.hammer_count, 0, MAX_HAMMERS).astype(jnp.int32),
             speed_boost_active=(state.speed_boost_timer > 0).astype(jnp.int32),
+            lives=state.lives.astype(jnp.int32),
+            poison_cloud_x=state.poison_cloud_x.astype(jnp.int32),
+            poison_cloud_y=state.poison_cloud_y.astype(jnp.int32),
+            poison_cloud_active=(state.poison_cloud_timer > 0).astype(jnp.int32),
+            damage_cooldown=state.damage_cooldown.astype(jnp.int32),
         )
     
     @partial(jax.jit, static_argnums=(0,))

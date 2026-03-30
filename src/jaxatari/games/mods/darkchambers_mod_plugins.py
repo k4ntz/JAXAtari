@@ -485,6 +485,7 @@ class CheckpointsMod(JaxAtariPostStepModPlugin):
 
     constants_overrides = {
         "ENABLE_CHECKPOINT_RESPAWN": True,
+        "ENABLE_INTRA_LEVEL_CHECKPOINTS": True,
         "CHECKPOINT_SPAWN_X_BY_MAP": (50, 20, 260),
         "CHECKPOINT_SPAWN_Y_BY_MAP": (50, 70, 70),
     }
