@@ -33,6 +33,7 @@ class Montezuma2Renderer(JAXGameRenderer):
             {'name': 'room_bg_0', 'type': 'single', 'file': 'backgrounds/base_sprite_level_0.npy', 'transpose': False},
             {'name': 'room_bg_1', 'type': 'single', 'file': 'backgrounds/mid_room_level_0.npy', 'transpose': False},
             {'name': 'room_bg_2', 'type': 'single', 'file': 'backgrounds/base_sprite_level_1.npy', 'transpose': False},
+            {'name': 'room_bg_3', 'type': 'single', 'file': 'backgrounds/mid_room_level_1.npy', 'transpose': False},
             {
                 'name': 'player', 'type': 'group',
                 'files': [
@@ -61,7 +62,10 @@ class Montezuma2Renderer(JAXGameRenderer):
                 'name': 'item', 'type': 'group',
                 'files': [
                     'items/key.npy',
-                    'items/gem.npy'
+                    'items/gem.npy',
+                    'items/hammer.npy',
+                    'items/sword.npy',
+                    'items/torch_1.npy'
                 ]
             },
             {'name': 'door', 'type': 'single', 'file': 'door.npy', 'transpose': False},
@@ -134,8 +138,11 @@ class Montezuma2Renderer(JAXGameRenderer):
         mask_0 = self.SHAPE_MASKS["room_bg_0"][:149, :]
         mask_1 = self.SHAPE_MASKS["room_bg_1"][:149, :]
         mask_2 = self.SHAPE_MASKS["room_bg_2"][:149, :]
+        mask_3 = self.SHAPE_MASKS["room_bg_3"][:149, :]
         
         room_bg_mask = jnp.where(state.room_id == 5, mask_1, mask_0)
+        mask_3_modified = mask_3.at[147:149, 72:88].set(0)
+        room_bg_mask = jnp.where(state.room_id == 9, mask_3_modified, room_bg_mask)
         mask_2_modified = mask_2.at[48:149, 72:88].set(0)
         room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 11, state.room_id == 10), mask_2_modified, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 3, room_bg_mask.at[6:149, 156:160].set(1), room_bg_mask)
@@ -165,7 +172,7 @@ class Montezuma2Renderer(JAXGameRenderer):
                     r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.LADDER_ID_L2)
                     return self.jr.draw_ladders(r_in, rung_pos, rung_size, 2, 5, self.LADDER_ID_L2)
 
-                is_layer_2 = jnp.logical_or(state.room_id == 11, state.room_id == 10)
+                is_layer_2 = jnp.logical_or(state.room_id == 11, jnp.logical_or(state.room_id == 10, state.room_id == 9))
                 return jax.lax.cond(is_layer_2, draw_l2, draw_l1, raster_in)
 
             return jax.lax.cond(active == 1, _draw, lambda r_in: r_in, r)

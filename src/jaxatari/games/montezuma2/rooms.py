@@ -267,17 +267,57 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
 
     def load_room_1_4(args):
         lx, lt, lb, la, ix, iy, ia, lax, laa = args
+        
+        ex = enemies_x.at[0].set(93)
+        ey = enemies_y.at[0].set(119)
+        ea = enemies_active.at[0].set(1)
+        ed = enemies_direction.at[0].set(-1)
+        eminx = enemies_min_x.at[0].set(56)
+        emaxx = enemies_max_x.at[0].set(112)
+        
         lx = lx.at[0].set(72)
-        lt = lt.at[0].set(48)
-        lb = lb.at[0].set(149)
+        lt = lt.at[0].set(126)
+        lb = lb.at[0].set(150)
         la = la.at[0].set(1)
         
-        return (enemies_x, enemies_y, enemies_active, enemies_direction, enemies_min_x, enemies_max_x, enemies_bouncing,
+        rx = ropes_x.at[0].set(41)
+        rt = ropes_top.at[0].set(50)
+        rb = ropes_bottom.at[0].set(75)
+        ra = ropes_active.at[0].set(1)
+        
+        rx = rx.at[1].set(125)
+        rt = rt.at[1].set(49)
+        rb = rb.at[1].set(100)
+        ra = ra.at[1].set(1)
+        
+        # item: torch
+        ix = ix.at[0].set(77)
+        iy = iy.at[0].set(7)
+        ia = ia.at[0].set(1)
+        
+        # doors
+        dx = doors_x.at[0].set(56)
+        dy = doors_y.at[0].set(86)
+        da = doors_active.at[0].set(1)
+        
+        dx = dx.at[1].set(100)
+        dy = dy.at[1].set(86)
+        da = da.at[1].set(1)
+        
+        # conveyor
+        cx = conveyors_x.at[0].set(60)
+        cy = conveyors_y.at[0].set(46)
+        ca = conveyors_active.at[0].set(1)
+        cd = conveyors_direction.at[0].set(-1)
+        
+        eb = enemies_bouncing
+        
+        return (ex, ey, ea, ed, eminx, emaxx, eb,
                 lx, lt, lb, la,
-                ropes_x, ropes_top, ropes_bottom, ropes_active,
+                rx, rt, rb, ra,
                 ix, iy, ia,
-                doors_x, doors_y, doors_active,
-                conveyors_x, conveyors_y, conveyors_active, conveyors_direction,
+                dx, dy, da,
+                cx, cy, ca, cd,
                 lax, laa)
 
     ex, ey, ea, ed, eminx, emaxx, eb, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd, lax, laa = jax.lax.switch(
