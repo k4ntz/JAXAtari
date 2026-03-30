@@ -372,7 +372,7 @@ ANIM_EVERY = 10
 # Number of animation frames per ghost direction (sprite index order: 0=right, 1=down, 2=left, 3=up)
 GHOST_NUM_FRAMES = jnp.array([2, 3, 2, 3], dtype=jnp.int32)
 # Number of animation frames per wizard direction (0=right, 1=down, 2=left, 3=up)
-WIZARD_NUM_FRAMES = jnp.array([3, 5, 3, 5], dtype=jnp.int32)
+WIZARD_NUM_FRAMES = jnp.array([8, 8, 7, 8], dtype=jnp.int32)
 # Number of animation frames per skeleton direction (0=right, 1=down, 2=left, 3=up)
 SKELETON_NUM_FRAMES = jnp.array([3, 4, 3, 4], dtype=jnp.int32)
 # Number of animation frames per zombie direction (0=right, 1=down, 2=left, 3=up)
@@ -853,10 +853,10 @@ class DarkChambersRenderer(JAXGameRenderer):
         # Wizard directional animation: (4, 5, H, W) — max 5 frames, pad shorter directions
         # Direction order: 0=right, 1=down, 2=left, 3=up
         wizard_dir_frame_names = [
-            ["wizard_r1", "wizard_r2", "wizard_r0", "wizard_r0", "wizard_r0"],  # right: wizard_2→3→1 (cx 2.92→3.65→3.98), pad to 5
-            ["wizard_d0", "wizard_d1", "wizard_d2", "wizard_d3", "wizard_d4"],  # down:  5 frames
-            ["wizard_l0", "wizard_l1", "wizard_l2", "wizard_l2", "wizard_l2"],  # left:  3 frames, pad to 5
-            ["wizard_u0", "wizard_u1", "wizard_u2", "wizard_u3", "wizard_u4"],  # up:    5 frames
+            ["wizard_r1", "wizard_r0", "wizard_r1", "wizard_r2", "wizard_r0", "wizard_r1", "wizard_r0", "wizard_r1"],  # right: 2,1,2,3,1,2,1,2
+            ["wizard_d1", "wizard_d0", "wizard_d3", "wizard_d0", "wizard_d1", "wizard_d2", "wizard_d4", "wizard_d2"],  # down:  5,4,7,4,5,6,8,6
+            ["wizard_l0", "wizard_l1", "wizard_l0", "wizard_l2", "wizard_l0", "wizard_l1", "wizard_l0", "wizard_l0"],  # left:  14,15,14,16,14,15,14 (7 frames, pad to 8)
+            ["wizard_u0", "wizard_u1", "wizard_u2", "wizard_u1", "wizard_u0", "wizard_u3", "wizard_u4", "wizard_u3"],  # up:    9,10,11,10,9,12,13,12
         ]
         wizard_dirs = []
         for d_idx, dir_names in enumerate(wizard_dir_frame_names):
@@ -864,8 +864,8 @@ class DarkChambersRenderer(JAXGameRenderer):
             for name in dir_names:
                 m = self.SHAPE_MASKS.get(name)
                 dir_frames.append(_scale_mask(m, target_enemy_h, target_enemy_w, _DIR_ALIGN[d_idx]) if m is not None else _zero_frame)
-            wizard_dirs.append(jnp.stack(dir_frames))  # (5, H, W)
-        self.WIZARD_ANIM_FRAMES = jnp.stack(wizard_dirs)  # (4, 5, H, W)
+            wizard_dirs.append(jnp.stack(dir_frames))  # (8, H, W)
+        self.WIZARD_ANIM_FRAMES = jnp.stack(wizard_dirs)  # (4, 8, H, W)
         print(f"Built wizard animation frames: {self.WIZARD_ANIM_FRAMES.shape}")
 
         # Wizard does not use the generic directional mask path
