@@ -1,5 +1,5 @@
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.defender_mod_plugins import (
+from jaxatari.games.mods.defender.defender_mod_plugins import (
     SmartBombsUnlimitedMod,
     BulletTimewarpMod,
     ParachutesEquippedMod,
