@@ -265,13 +265,29 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 cx, cy, ca, cd,
                 lasers_x, lasers_active)
 
+    def load_room_1_4(args):
+        lx, lt, lb, la, ix, iy, ia, lax, laa = args
+        lx = lx.at[0].set(72)
+        lt = lt.at[0].set(48)
+        lb = lb.at[0].set(149)
+        la = la.at[0].set(1)
+        
+        return (enemies_x, enemies_y, enemies_active, enemies_direction, enemies_min_x, enemies_max_x, enemies_bouncing,
+                lx, lt, lb, la,
+                ropes_x, ropes_top, ropes_bottom, ropes_active,
+                ix, iy, ia,
+                doors_x, doors_y, doors_active,
+                conveyors_x, conveyors_y, conveyors_active, conveyors_direction,
+                lax, laa)
+
     ex, ey, ea, ed, eminx, emaxx, eb, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd, lax, laa = jax.lax.switch(
         jnp.where(room_id == 4, 0,
         jnp.where(room_id == 5, 1,
         jnp.where(room_id == 3, 2,
         jnp.where(room_id == 11, 3,
-        jnp.where(room_id == 10, 4, 0))))),
-        [load_room_0_4, load_room_0_5, load_room_0_3, load_room_1_3, load_room_1_2], args)
+        jnp.where(room_id == 10, 4, 
+        jnp.where(room_id == 9, 5, 0)))))),
+        [load_room_0_4, load_room_0_5, load_room_0_3, load_room_1_3, load_room_1_2, load_room_1_4], args)
 
     return state.replace(
         room_id=room_id,

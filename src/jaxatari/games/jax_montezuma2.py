@@ -47,7 +47,9 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         room_col_1_3 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
         room_col_1_2 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
         room_col_1_2 = room_col_1_2.at[6:, 0:4].set(1)
-        self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0_4, room_col_0_5, room_col_0_3, room_col_1_3, room_col_1_2])
+        room_col_1_4 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
+        room_col_1_4 = room_col_1_4.at[6:, 156:160].set(1)
+        self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0_4, room_col_0_5, room_col_0_3, room_col_1_3, room_col_1_2, room_col_1_4])
 
     def reset(self, key: jrandom.PRNGKey) -> Tuple[Montezuma2Observation, Montezuma2State]:
         state = Montezuma2State(
@@ -146,7 +148,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
                    jnp.where(state.room_id == 5, 1,
                    jnp.where(state.room_id == 3, 2,
                    jnp.where(state.room_id == 11, 3,
-                   jnp.where(state.room_id == 10, 4, 0)))))
+                   jnp.where(state.room_id == 10, 4,
+                   jnp.where(state.room_id == 9, 5, 0))))))
         room_col_map = self.ROOM_COLLISION_MAPS[room_idx]
         previous_score = state.score
         is_up = jnp.logical_or(action == Action.UP, jnp.logical_or(action == Action.UPRIGHT, action == Action.UPLEFT))
@@ -408,8 +411,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         # 5. Resolve Horizontal with Wall Collision
         raw_new_x = current_x + dx
-        transition_left = jnp.logical_and(raw_new_x < 0, jnp.logical_or(state.room_id == 5, jnp.logical_or(state.room_id == 3, state.room_id == 11)))
-        transition_right = jnp.logical_and(raw_new_x + self.consts.PLAYER_WIDTH > self.consts.WIDTH, jnp.logical_or(state.room_id == 4, jnp.logical_or(state.room_id == 5, state.room_id == 10)))
+        transition_left = jnp.logical_and(raw_new_x < 0, jnp.logical_or(state.room_id == 5, jnp.logical_or(state.room_id == 3, jnp.logical_or(state.room_id == 11, state.room_id == 9))))
+        transition_right = jnp.logical_and(raw_new_x + self.consts.PLAYER_WIDTH > self.consts.WIDTH, jnp.logical_or(state.room_id == 4, jnp.logical_or(state.room_id == 5, jnp.logical_or(state.room_id == 10, state.room_id == 11))))
         transition_down = jnp.logical_and(new_y >= 148, state.room_id == 4)
         transition_up = jnp.logical_and(new_y <= 2, state.room_id == 11)
 
@@ -641,8 +644,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         )
 
         transition_any = jnp.logical_or(jnp.logical_or(transition_left, transition_right), jnp.logical_or(transition_down, transition_up))
-        new_room_id = jnp.where(transition_left, jnp.where(state.room_id == 5, 4, jnp.where(state.room_id == 11, 10, 5)),
-                      jnp.where(transition_right, jnp.where(state.room_id == 4, 5, jnp.where(state.room_id == 10, 11, 3)),
+        new_room_id = jnp.where(transition_left, jnp.where(state.room_id == 5, 4, jnp.where(state.room_id == 11, 10, jnp.where(state.room_id == 9, 11, 5))),
+                      jnp.where(transition_right, jnp.where(state.room_id == 4, 5, jnp.where(state.room_id == 10, 11, jnp.where(state.room_id == 11, 9, 3))),
                       jnp.where(transition_down, 11,
                       jnp.where(transition_up, 4, state.room_id))))
         def transition_fn(state_in):
