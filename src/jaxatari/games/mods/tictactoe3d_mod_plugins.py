@@ -5,59 +5,13 @@ from functools import partial
 from jaxatari.modification import JaxAtariPostStepModPlugin, JaxAtariInternalModPlugin
 
 
-class RandomStaticBlockersMod(JaxAtariPostStepModPlugin):
-    """
-    Places 1 or 2 neutral blocker voxels on random board cells after reset.
-    """
 
-    @partial(jax.jit, static_argnums=(0,))
-    def after_reset(self, obs, state):
-        # Split RNG from state
-        key, count_key, pos_key, next_key = jax.random.split(state.key, 4)
 
-        # choose 1 or 2 blockers
-        num_blockers = jax.random.randint(
-            count_key,
-            shape=(),
-            minval=1,
-            maxval=3
-        ).astype(jnp.int32)
+#########################################################################################################################################################################################
+################################################################# SIMPLE MODIFICATION #################################################################################################
+#########################################################################################################################################################################################
 
-        # choose 2 unique positions from 64 cells
-        flat_positions = jax.random.choice(
-            pos_key,
-            a=64,
-            shape=(2,),
-            replace=False
-        )
 
-        flat_board = state.board.reshape(-1)
-
-        # place first blocker
-        flat_board = flat_board.at[flat_positions[0]].set(
-            self._env.consts.BLOCKER
-        )
-
-        # optionally place second blocker
-        flat_board = jax.lax.cond(
-            num_blockers == 2,
-            lambda b: b.at[flat_positions[1]].set(self._env.consts.BLOCKER),
-            lambda b: b,
-            flat_board
-        )
-
-        new_board = flat_board.reshape((4, 4, 4))
-
-        # update state
-        modified_state = state.replace(
-            board=new_board,
-            key=next_key
-        )
-
-        # IMPORTANT: regenerate observation properly
-        modified_obs = self._env._get_observation(modified_state)
-
-        return modified_obs, modified_state
 
 
 class RandomTurnOrderMod(JaxAtariPostStepModPlugin):
@@ -173,8 +127,8 @@ class SuddenDeathMod(JaxAtariPostStepModPlugin):
         
         return modified_obs, modified_state, new_reward, done, info
     
-  
-    
+
+
 class TemporalPenaltyMod(JaxAtariPostStepModPlugin):
     """
     'Hurry Up' Mode: Applies a small negative reward at every single 
@@ -199,10 +153,61 @@ class TemporalPenaltyMod(JaxAtariPostStepModPlugin):
         # Return the unmodified observation, state, done flag, and info dictionary,
         # but pass along the newly shaped reward for the PPO/PQN agent to learn from.
         return obs, state, new_reward, done, info
+
+class MisereMod(JaxAtariPostStepModPlugin):
+    """
+    Misère (anti-win) mode:
+    - If X completes 4-in-a-row, that becomes a LOSS for the agent.
+    - If O completes 4-in-a-row, that becomes a WIN for the agent.
+    - Non-terminal rewards remain unchanged.
+
+    This version does not modify the base environment.
+    It only rewrites reward / winner interpretation after the step.
+    """
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_step(self, obs, state, reward, done, info):
+        
+        jax.debug.print("base_reward={} base_winner={} -> new_reward={} new_winner={}",reward, state.winner, new_reward, new_winner
+)
+        x_won = state.winner == self._env.consts.PLAYER_X
+        o_won = state.winner == self._env.consts.PLAYER_O
+
+        # Flip terminal reward semantics
+        new_reward = jnp.where(
+            x_won,
+            jnp.float32(-1.0),
+            jnp.where(
+                o_won,
+                jnp.float32(+1.0),
+                reward
+            )
+        )
+
+        # Swap displayed winner so logs / terminal observation match misère semantics
+        new_winner = jnp.where(
+            x_won,
+            jnp.int32(self._env.consts.PLAYER_O),
+            jnp.where(
+                o_won,
+                jnp.int32(self._env.consts.PLAYER_X),
+                state.winner
+            )
+        )
+
+        modified_state = state.replace(winner=new_winner)
+        modified_obs = self._env._get_observation(modified_state)
+
+        # Recompute info from the modified public state so winner/game phase stay consistent
+        modified_info = self._env._get_info(modified_state, info["last_move_action"])
+
+        return modified_obs, modified_state, new_reward, done, modified_info
+
     
+#########################################################################################################################################################################################
+################################################################# COMPLEX MODIFICATION #################################################################################################
+#########################################################################################################################################################################################
 
-
-#################### COMPLEX MODIFICATION #############################################
 
 class VariableIntelligenceMod(JaxAtariInternalModPlugin):
     """
@@ -271,3 +276,60 @@ class VariableIntelligenceMod(JaxAtariInternalModPlugin):
         
         # Return the flat index as expected by the base environment
         return best_flat_idx
+    
+
+
+
+class RandomStaticBlockersMod(JaxAtariPostStepModPlugin):
+    """
+    Places 1 or 2 neutral blocker voxels on random board cells after reset.
+    """
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        # Split RNG from state
+        key, count_key, pos_key, next_key = jax.random.split(state.key, 4)
+
+        # choose 1 or 2 blockers
+        num_blockers = jax.random.randint(
+            count_key,
+            shape=(),
+            minval=1,
+            maxval=3
+        ).astype(jnp.int32)
+
+        # choose 2 unique positions from 64 cells
+        flat_positions = jax.random.choice(
+            pos_key,
+            a=64,
+            shape=(2,),
+            replace=False
+        )
+
+        flat_board = state.board.reshape(-1)
+
+        # place first blocker
+        flat_board = flat_board.at[flat_positions[0]].set(
+            self._env.consts.BLOCKER
+        )
+
+        # optionally place second blocker
+        flat_board = jax.lax.cond(
+            num_blockers == 2,
+            lambda b: b.at[flat_positions[1]].set(self._env.consts.BLOCKER),
+            lambda b: b,
+            flat_board
+        )
+
+        new_board = flat_board.reshape((4, 4, 4))
+
+        # update state
+        modified_state = state.replace(
+            board=new_board,
+            key=next_key
+        )
+
+        # IMPORTANT: regenerate observation properly
+        modified_obs = self._env._get_observation(modified_state)
+
+        return modified_obs, modified_state    
