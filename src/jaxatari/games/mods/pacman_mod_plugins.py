@@ -308,20 +308,29 @@ class CoopMultiplayerMod(JaxAtariPostStepModPlugin):
 
         spawn1_node_idx = self._find_nearest_node_idx_jax(state, spawn1_px, spawn1_py)
         spawn2_node_idx = self._find_nearest_node_idx_jax(state, spawn2_px, spawn2_py)
+        lvl = state.maze_level_index
+
+        # Spawn exactly on graph nodes to avoid first-step "snap" drift that looks like shared control.
+        spawn1_px_node = self._env._node_positions_x_stack[lvl, spawn1_node_idx]
+        spawn1_py_node = self._env._node_positions_y_stack[lvl, spawn1_node_idx]
+        spawn2_px_node = self._env._node_positions_x_stack[lvl, spawn2_node_idx]
+        spawn2_py_node = self._env._node_positions_y_stack[lvl, spawn2_node_idx]
+
         
         new_state = state._replace(
             key=rng_key,
             lives=jnp.maximum(state.lives, jnp.array(2, dtype=jnp.int32)),
-            player_x=spawn1_px,
-            player_y=spawn1_py,
-            player_direction=jnp.array(Action.RIGHT, dtype=jnp.int32),
+            player_x=spawn1_px_node,
+            player_y=spawn1_py_node,
+            # Start stationary in coop so each player moves only when their own keys are pressed.
+            player_direction=jnp.array(Action.NOOP, dtype=jnp.int32),
             player_next_direction=jnp.array(Action.NOOP, dtype=jnp.int32),
             player_last_horizontal_dir=jnp.array(Action.RIGHT, dtype=jnp.int32),
             player_current_node_index=spawn1_node_idx.astype(jnp.int32),
             player_target_node_index=spawn1_node_idx.astype(jnp.int32),
-            player2_x=spawn2_px,
-            player2_y=spawn2_py,
-            player2_direction=jnp.array(Action.LEFT, dtype=jnp.int32),
+            player2_x=spawn2_px_node,
+            player2_y=spawn2_py_node,
+            player2_direction=jnp.array(Action.NOOP, dtype=jnp.int32),
             player2_next_direction=jnp.array(Action.NOOP, dtype=jnp.int32),
             player2_last_horizontal_dir=jnp.array(Action.LEFT, dtype=jnp.int32),
             player2_current_node_index=spawn2_node_idx.astype(jnp.int32),

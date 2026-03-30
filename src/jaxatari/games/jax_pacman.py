@@ -930,14 +930,14 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             player_last_horizontal_dir=jnp.array(0, dtype=jnp.int32),
             player_current_node_index=psn,
             player_target_node_index=psn,
-            player2_x=player_x,
-            player2_y=player_y,
+            player2_x=player2_x,
+            player2_y=player2_y,
             player2_direction=jnp.array(0, dtype=jnp.int32),
             player2_next_direction=jnp.array(-1, dtype=jnp.int32),
             player2_last_horizontal_dir=jnp.array(0, dtype=jnp.int32),
             player2_animation_frame=jnp.array(0, dtype=jnp.int32),
-            player2_current_node_index=psn,
-            player2_target_node_index=psn,
+            player2_current_node_index=p2sn,
+            player2_target_node_index=p2sn,
             player2_active=state.player2_active,
             ghosts=ghosts,
             pellets_collected=pellets_collected,
@@ -964,8 +964,28 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         new_lives = jnp.maximum(new_lives, 0)
         lvl = state.maze_level_index
         player_start_node_idx = self._player_start_node_per_level[lvl]
+        spawn_actions = jnp.array(
+            [Action.LEFT, Action.RIGHT, Action.UP, Action.DOWN], dtype=jnp.int32
+        )
+        nbrs = self._neighbor_lookup_stack[lvl, player_start_node_idx, :]
+        blocked = self._player_door_edge_mask_stack[lvl, player_start_node_idx, :]
+        valid = jnp.logical_and(nbrs >= 0, jnp.logical_not(blocked))
+        candidate_nbrs = nbrs[spawn_actions]
+        candidate_valid = valid[spawn_actions]
+        first_valid_pos = jnp.argmax(candidate_valid.astype(jnp.int32))
+        first_valid_nbr = candidate_nbrs[first_valid_pos]
+        player2_start_node_idx_alt = jnp.where(
+            jnp.any(candidate_valid), first_valid_nbr, player_start_node_idx
+        )
+        player2_start_node_idx = jnp.where(
+            state.player2_active == 1, player2_start_node_idx_alt, player_start_node_idx
+        )
+
         player_x = self._node_positions_x_stack[lvl, player_start_node_idx]
         player_y = self._node_positions_y_stack[lvl, player_start_node_idx]
+        player2_x = self._node_positions_x_stack[lvl, player2_start_node_idx]
+        player2_y = self._node_positions_y_stack[lvl, player2_start_node_idx]
+
         ghost_node_idx = self._ghost_spawn_node_per_level[lvl]
         gpx = self._node_positions_x_stack[lvl, ghost_node_idx]
         gpy = self._node_positions_y_stack[lvl, ghost_node_idx]
@@ -990,14 +1010,14 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             player_last_horizontal_dir=jnp.array(0, dtype=jnp.int32),
             player_current_node_index=jnp.array(player_start_node_idx, dtype=jnp.int32),
             player_target_node_index=jnp.array(player_start_node_idx, dtype=jnp.int32),
-            player2_x=player_x,
-            player2_y=player_y,
+            player2_x=player2_x,
+            player2_y=player2_y,
             player2_direction=jnp.array(0, dtype=jnp.int32),
             player2_next_direction=jnp.array(-1, dtype=jnp.int32),
             player2_last_horizontal_dir=jnp.array(0, dtype=jnp.int32),
             player2_animation_frame=jnp.array(0, dtype=jnp.int32),
-            player2_current_node_index=jnp.array(player_start_node_idx, dtype=jnp.int32),
-            player2_target_node_index=jnp.array(player_start_node_idx, dtype=jnp.int32),
+            player2_current_node_index=jnp.array(player2_start_node_idx, dtype=jnp.int32),
+            player2_target_node_index=jnp.array(player2_start_node_idx, dtype=jnp.int32),
             ghosts=ghosts,
             frightened_timer=jnp.array(0, dtype=jnp.int32),
             ghosts_eaten_count=jnp.array(0, dtype=jnp.int32),
