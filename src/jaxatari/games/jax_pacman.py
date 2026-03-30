@@ -1718,21 +1718,25 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
 
 
 class PacmanRenderer(JAXGameRenderer):
-    def __init__(self, consts: PacmanConstants = None):
+    def __init__(self, consts: PacmanConstants = None, config: render_utils.RendererConfig = None):
         super().__init__(consts)
         self.consts = consts or PacmanConstants()
         
         # Maze layout will be set by JaxPacman after initialization
         # Fix: Updated dimensions to 250x160 (H, W)
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-            channels=3,
-        )
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
         # Pre-render static maze background (walls / HUD / etc)
         # We do this BEFORE loading assets so we can inject it
         if self.consts.MAZE_LAYOUT is not None:
+            
             print("Pre-rendering maze background...")
             self.maze_background = self._create_maze_background()
         else:
