@@ -1,5 +1,5 @@
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.tictactoe3d_mod_plugins import (RandomStaticBlockersMod, RandomTurnOrderMod)
+from jaxatari.games.mods.tictactoe3d_mod_plugins import (RandomStaticBlockersMod, RandomTurnOrderMod, StrictIllegalMoveMod)
 
 
 class Tictactoe3dEnvMod(JaxAtariModController):
@@ -10,6 +10,7 @@ class Tictactoe3dEnvMod(JaxAtariModController):
     REGISTRY = {
         "random_static_blockers": RandomStaticBlockersMod,
         "random_turn_order": RandomTurnOrderMod,
+        "strict_illegal_move": StrictIllegalMoveMod, 
     }
 
     def __init__(

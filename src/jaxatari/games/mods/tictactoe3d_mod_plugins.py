@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 
-from jaxatari.modification import JaxAtariPostStepModPlugin
+from jaxatari.modification import JaxAtariPostStepModPlugin, JaxAtariInternalModPlugin
 
 
 class RandomStaticBlockersMod(JaxAtariPostStepModPlugin):
@@ -79,3 +79,10 @@ class RandomTurnOrderMod(JaxAtariPostStepModPlugin):
 
         modified_obs = self._env._get_observation(modified_state)
         return modified_obs, modified_state
+    
+    
+class StrictIllegalMoveMod(JaxAtariInternalModPlugin):
+    """Ends episode immediately with -1 reward on illegal FIRE (occupied cell)."""
+    constants_overrides = {
+        "STRICT_ILLEGAL_MOVES": True
+    }
