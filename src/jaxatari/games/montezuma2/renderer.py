@@ -145,6 +145,7 @@ class Montezuma2Renderer(JAXGameRenderer):
         room_bg_mask = jnp.where(state.room_id == 9, mask_3_modified, room_bg_mask)
         mask_2_modified = mask_2.at[48:149, 72:88].set(0)
         room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 11, state.room_id == 10), mask_2_modified, room_bg_mask)
+        room_bg_mask = jnp.where(state.room_id == 13, mask_2, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 3, room_bg_mask.at[6:149, 156:160].set(1), room_bg_mask)
         raster = self.jr.render_at(raster, 0, 47, room_bg_mask)
         

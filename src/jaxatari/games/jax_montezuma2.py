@@ -52,7 +52,9 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         room_col_1_4 = jnp.where(col_map_2 > 0, 1, 0).astype(jnp.int32)
         room_col_1_4 = room_col_1_4.at[147:149, 72:88].set(0) # Hole for ladder
         
-        self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0_4, room_col_0_5, room_col_0_3, room_col_1_3, room_col_1_2, room_col_1_4])
+        room_col_1_5 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
+        
+        self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0_4, room_col_0_5, room_col_0_3, room_col_1_3, room_col_1_2, room_col_1_4, room_col_1_5])
 
     def reset(self, key: jrandom.PRNGKey) -> Tuple[Montezuma2Observation, Montezuma2State]:
         state = Montezuma2State(
@@ -118,6 +120,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         gia = gia.at[4, 0].set(1)
         gia = gia.at[5, 0].set(1)
         gia = gia.at[9, 0].set(1)
+        gia = gia.at[13, 0].set(1)
         
         gda = state.global_doors_active
         gda = gda.at[5, 0].set(1)
@@ -148,6 +151,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         giy = giy.at[4, 0].set(1) # Gem in room 4
         # Torch in room 9
         giy = giy.at[9, 0].set(4)
+        # Sword in room 13
+        giy = giy.at[13, 0].set(3)
         
         state = state.replace(global_items_active=gia, global_doors_active=gda, global_enemies_active=gea, global_enemies_type=gety, global_items_type=giy)
         
