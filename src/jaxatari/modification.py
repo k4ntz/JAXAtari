@@ -1,12 +1,69 @@
 import inspect
 import importlib
+import types
 import jax
+import jax.numpy as jnp
 import chex
 from functools import partial
 from collections import defaultdict
 from abc import ABC, abstractmethod
 from jaxatari.wrappers import JaxatariWrapper
 from jaxatari.environment import JaxEnvironment
+from jaxatari.rendering.jax_rendering_utils import RendererConfig
+from jaxatari import spaces
+
+
+def apply_native_downscaling(
+    base_env,
+    pixel_resize_shape: tuple[int, int],
+    grayscale: bool
+) -> tuple[bool, bool]:
+    """
+    Safely enables native downscaling on an environment by swapping its renderer.
+    """
+    # 1. Find the *core* game env that actually owns the renderer used by render()
+    core_env = base_env
+    while hasattr(core_env, "_env"):
+        core_env = core_env._env
+
+    # 2. Create new config
+    new_config = RendererConfig(
+        game_dimensions=core_env.renderer.config.game_dimensions,
+        channels=1 if grayscale else 3,
+        downscale=pixel_resize_shape
+    )
+
+    # 3. Capture old renderer
+    old_renderer = core_env.renderer
+
+    # 4. Instantiate new renderer (Reloads assets at new scale)
+    new_renderer = type(old_renderer)(
+        consts=core_env.consts,
+        config=new_config
+    )
+
+    # 5. Reapply patches explicitly using the tracked list
+    if hasattr(core_env, "_patched_renderer_methods"):
+        for fn_name in core_env._patched_renderer_methods:
+            if hasattr(old_renderer, fn_name):
+                patched_method = getattr(old_renderer, fn_name)
+                setattr(new_renderer, fn_name, patched_method)
+
+    # 6. Swap the renderer on the *core* env
+    core_env.renderer = new_renderer
+
+    # 7. Patch image_space() on the externally visible env
+    def _native_image_space(self_env) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(pixel_resize_shape[0], pixel_resize_shape[1], new_config.channels),
+            dtype=jnp.uint8
+        )
+
+    base_env.image_space = types.MethodType(_native_image_space, base_env)
+
+    return False, False
 
 
 def _load_from_string(path: str):
