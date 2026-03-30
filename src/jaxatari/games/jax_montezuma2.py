@@ -122,6 +122,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         gea = gea.at[3, 0].set(1)
         gea = gea.at[3, 1].set(1)
         gea = gea.at[11, 0].set(1)
+        gea = gea.at[10, 0].set(1)
+        gea = gea.at[10, 1].set(1)
 
         gety = state.global_enemies_type
         # ROLL_SKULL = 1, BOUNCE_SKULL = 2, SPIDER = 3
@@ -129,6 +131,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         gety = gety.at[3, 0].set(1)
         gety = gety.at[3, 1].set(1)
         gety = gety.at[11, 0].set(3)
+        gety = gety.at[10, 0].set(1)
+        gety = gety.at[10, 1].set(1)
 
         giy = state.global_items_type
         giy = giy.at[4, 0].set(1) # Gem in room 4

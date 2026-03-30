@@ -217,12 +217,19 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
     def load_room_1_2(args):
         lx, lt, lb, la, ix, iy, ia, lax, laa = args
         
-        ex = enemies_x.at[0].set(60)
+        ex = enemies_x.at[0].set(30)
         ey = enemies_y.at[0].set(33)
         ea = enemies_active.at[0].set(1)
         ed = enemies_direction.at[0].set(1)
         eminx = enemies_min_x.at[0].set(8)
         emaxx = enemies_max_x.at[0].set(155)
+        
+        ex = ex.at[1].set(47)
+        ey = ey.at[1].set(33)
+        ea = ea.at[1].set(1)
+        ed = ed.at[1].set(1)
+        eminx = eminx.at[1].set(8)
+        emaxx = emaxx.at[1].set(155)
         
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(48)
@@ -248,6 +255,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         da = doors_active
         
         eb = enemies_bouncing.at[0].set(1)
+        eb = eb.at[1].set(1)
 
         return (ex, ey, ea, ed, eminx, emaxx, eb,
                 lx, lt, lb, la,
