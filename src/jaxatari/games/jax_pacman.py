@@ -2070,4 +2070,15 @@ class PacmanRenderer(JAXGameRenderer):
 
         output = jax.lax.fori_loop(0, 3, draw_life_rect, output)
 
+        # Apply native downscaling if requested
+        downscale = getattr(self.config, "downscale", None)
+        if downscale is not None:
+            target_h, target_w = downscale
+            if output.shape[0] != target_h or output.shape[1] != target_w:
+                output = jax.image.resize(
+                    output.astype(jnp.float32),
+                    (target_h, target_w, output.shape[-1]),
+                    method="bilinear",
+                ).astype(jnp.uint8)
+                
         return output
