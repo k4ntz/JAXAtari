@@ -7,6 +7,7 @@ import time
 import jax
 import jax.numpy as jnp
 import numpy as np
+import distrax
 from functools import partial
 from typing import Any, Sequence, NamedTuple
 import os
@@ -25,7 +26,6 @@ import jaxatari
 import wandb
 
 from train_utils import video_callback, load_params
-from benchmark_utils import get_eval_mods
 
 
 class ActorCritic(nn.Module):
@@ -49,6 +49,8 @@ class ActorCritic(nn.Module):
         actor_mean = nn.Dense(
             self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
         )(actor_mean)
+        pi = distrax.Categorical(logits=actor_mean)
+
         critic = nn.Dense(
             64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(x)
@@ -61,17 +63,13 @@ class ActorCritic(nn.Module):
             critic
         )
 
-        return actor_mean, jnp.squeeze(critic, axis=-1)
+        return pi, jnp.squeeze(critic, axis=-1)
 
 class CustomTrainState(TrainState):
     batch_stats: Any
     timesteps: int = 0
     n_updates: int = 0
     grad_steps: int = 0
-
-
-def _sample_action(logits, rng):
-    return jax.random.categorical(rng, logits, axis=-1)
 
 
 def make_test(config, save_params):
@@ -88,17 +86,11 @@ def make_test(config, save_params):
         "NUM_MINIBATCHES"
     ] == 0, "NUM_MINIBATCHES must divide NUM_STEPS*NUM_ENVS"
 
-    env_name = config["ENV_NAME"].lower()
-    env = jaxatari.make(env_name)
-    eval_mods = get_eval_mods(config)
-    if len(eval_mods) > 1:
-        print(
-            f"[ppo_test] Multiple eval mods configured ({eval_mods}); "
-            f"using combined modded env in a single run."
-        )
-    mod_env = jaxatari.make(env_name, mods_config=eval_mods) if eval_mods else env
-    has_mod_env = bool(eval_mods)
-    renderer = jaxatari.make_renderer(config["ENV_NAME"].lower())
+    env = jaxatari.make(config["ENV_NAME"].lower())
+    mod_env = env
+    if config.get("MOD_NAME", None) is not None:
+        mod_env = jaxatari.modify(env, config.get("ENV_NAME", None).lower(), config.get("MOD_NAME", None).lower())
+    renderer = mod_env.renderer
 
     def apply_wrappers(env):
         env = AtariWrapper(env, episodic_life=True, frame_skip=4, frame_stack_size=4, sticky_actions=True, max_pooling=True, clip_reward=True, noop_reset=30)
@@ -106,7 +98,11 @@ def make_test(config, save_params):
             env = ObjectCentricWrapper(env)
             env = FlattenObservationWrapper(env)
         else:
-            env = PixelObsWrapper(env)
+            grayscale = config.get("PIXEL_GRAYSCALE", False)
+            do_resize = config.get("PIXEL_RESIZE", True)
+            resize_shape = config.get("PIXEL_RESIZE_SHAPE", [84, 84])
+            use_native_downscaling = config.get("USE_NATIVE_DOWNSCALING", False)
+            env = PixelObsWrapper(env, do_pixel_resize=do_resize, pixel_resize_shape=resize_shape, grayscale=grayscale, use_native_downscaling=use_native_downscaling)
         env = NormalizeObservationWrapper(env)
         env = LogWrapper(env)
         return env
@@ -130,9 +126,11 @@ def make_test(config, save_params):
         original_rng = rng
         rng, _rng = jax.random.split(rng)
         init_x = jnp.zeros(env.observation_space().shape)
-        network_params = save_params
-        if config["NUM_SEEDS"] == 1:
-            network_params = jax.tree.map(lambda x: x[0], network_params)
+        network_params = jax.tree.map(lambda x: x.squeeze(), save_params)
+        # Not sure why this is necessary...
+        for param in network_params:
+            network_params[param]["Dense_5"]["kernel"] = jnp.expand_dims(network_params[param]["Dense_5"]["kernel"], axis=-1)
+            network_params[param]["Dense_5"]["bias"] = jnp.expand_dims(network_params[param]["Dense_5"]["bias"], axis=-1)
         if config["ANNEAL_LR"]:
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
@@ -157,8 +155,8 @@ def make_test(config, save_params):
 
                 # SELECT ACTION
                 rng, _rng = jax.random.split(rng)
-                logits, _ = network.apply(train_state.params, last_obs)
-                action = _sample_action(logits, _rng)
+                pi, value = network.apply(train_state.params, last_obs)
+                action = pi.sample(seed=_rng)
 
                 # STEP ENV
                 rng, _rng = jax.random.split(rng)
@@ -203,7 +201,7 @@ def make_test(config, save_params):
         rng, _rng = jax.random.split(rng)
         test_metrics = get_test_metrics(train_state, False, _rng)
 
-        mod_metrics = get_test_metrics(train_state, True, _rng) if has_mod_env else {}
+        mod_metrics = get_test_metrics(train_state, True, _rng) if config.get("MOD_NAME", None) is not None else {}
 
         return {"test_metrics": test_metrics, "mod_metrics": mod_metrics}
 
@@ -261,13 +259,12 @@ def single_run(config):
     print(f"Run time: {time.time() - compile_time} seconds.")
     print(f"Total: {time.time()-t0} seconds.")
     avg_return = outs["test_metrics"]["returned_episode_returns"]
+    avg_return_mod = outs["mod_metrics"]["returned_episode_returns"]
     avg_len = outs["test_metrics"]["returned_episode_lengths"]
+    avg_len_mod = outs["mod_metrics"]["returned_episode_lengths"]
     print(f"Average return of default env: {avg_return}, length: {avg_len}.")
-    if outs["mod_metrics"]:
-        avg_return_mod = outs["mod_metrics"]["returned_episode_returns"]
-        avg_len_mod = outs["mod_metrics"]["returned_episode_lengths"]
-        mod_label = config.get("EVAL_MODS", config.get("MOD_NAME", "modded_env"))
-        print(f"Average return of modified env ({mod_label}): {avg_return_mod}, length: {avg_len_mod}.")
+    if config.get("MOD_NAME", None) is not None:
+        print(f"Average return of modified env ({config['MOD_NAME']}): {avg_return_mod}, length: {avg_len_mod}.")
 
     
 
