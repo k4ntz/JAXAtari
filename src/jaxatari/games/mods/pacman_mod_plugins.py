@@ -8,7 +8,9 @@ import numpy as np
 from functools import partial
 
 from jaxatari.games.jax_pacman import PacmanState
+from jaxatari.environment import JAXAtariAction as Action
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
+
 
 # Level order when using multi_maze_campaign (geometry: {name}.txt, pellets: {name}_pellet.txt if present).
 DEFAULT_PACMAN_MAZE_LEVEL_BASENAMES: Tuple[str, ...] = (
@@ -18,73 +20,6 @@ DEFAULT_PACMAN_MAZE_LEVEL_BASENAMES: Tuple[str, ...] = (
     "maze3",
     "maze4",
 )
-
-
-def resolve_pacman_maze_level_specs(
-    pacman_maps_dir: str,
-    basenames: Tuple[str, ...] = DEFAULT_PACMAN_MAZE_LEVEL_BASENAMES,
-) -> List[Tuple[str, str]]:
-    """Build (geometry_path, pellet_layout_path) for each existing maze file."""
-    specs: List[Tuple[str, str]] = []
-    for base in basenames:
-        geom = os.path.join(pacman_maps_dir, f"{base}.txt")
-        if not os.path.isfile(geom):
-            continue
-        pellet = os.path.join(pacman_maps_dir, f"{base}_pellet.txt")
-        if not os.path.isfile(pellet):
-            pellet = geom
-        specs.append((geom, pellet))
-    return specs
-
-
-class MultiMazeCampaignMod(JaxAtariInternalModPlugin):
-    """
-    Multi-map campaign: clearing all pellets advances to the next preloaded maze (wrapped).
-    After the last maze, the run wraps to the first map, level resets to 1, and score resets to 0.
-
-    Requires at least two maze files for DEFAULT_PACMAN_MAZE_LEVEL_BASENAMES under pacmanMaps/;
-    otherwise attach_to_env is a no-op (base env stays single-maze).
-    """
-
-    @staticmethod
-    def attach_to_env(env) -> None:
-        # Dynamic loaders (e.g. play.py) use importlib FileLoader — that produces a *different*
-        # JaxPacman class object than ``import jaxatari.games.jax_pacman``, so ``isinstance`` fails
-        # even when type(env).__name__ == "JaxPacman". Duck-type the Pac-Man env API instead.
-        if not (
-            hasattr(env, "reload_maze_campaign")
-            and callable(getattr(env, "reload_maze_campaign"))
-            and hasattr(env, "_parse_maze_layout_from_file")
-            and hasattr(env, "consts")
-        ):
-            return
-        try:
-            game_py = inspect.getfile(type(env))
-            pacman_maps_dir = os.path.join(os.path.dirname(os.path.abspath(game_py)), "pacmanMaps")
-        except (TypeError, OSError):
-            import jaxatari.games.jax_pacman as jpm
-
-            pacman_maps_dir = os.path.join(os.path.dirname(jpm.__file__), "pacmanMaps")
-        level_specs = resolve_pacman_maze_level_specs(pacman_maps_dir)
-        if len(level_specs) <= 1:
-            return
-
-        layouts = []
-        vitamin_tiles: List[Tuple[int, int]] = []
-        exp_h, exp_w = env.consts.MAZE_HEIGHT, env.consts.MAZE_WIDTH
-        for _geom_path, pellet_path in level_specs:
-            layout, vr, vc = env._parse_maze_layout_from_file(pellet_path)
-            arr = np.asarray(layout)
-            if arr.shape != (exp_h, exp_w):
-                raise ValueError(
-                    f"Maze layout shape {arr.shape} from {pellet_path} "
-                    f"does not match ({exp_h}, {exp_w})"
-                )
-            layouts.append(layout)
-            vitamin_tiles.append((vr, vc))
-
-        env.reload_maze_campaign(level_specs, layouts, vitamin_tiles)
-
 
 # Part 1: Simple Modifications
 
@@ -188,7 +123,8 @@ class RandomStartMod(JaxAtariPostStepModPlugin):
         
         layout = self._env.consts.MAZE_LAYOUT
         _, w = layout.shape
-        valid_mask = (layout.flatten() == 0)
+        traversable = jnp.logical_and(layout.flatten() != 1, layout.flatten() != 4)
+        valid_mask = traversable
         logits = jnp.where(valid_mask, 0.0, -1e9)
         flat_idx = jax.random.categorical(spawn_key, logits)
         
@@ -284,43 +220,185 @@ class LimitedVisionMod(JaxAtariInternalModPlugin):
 # Part 2: Difficult Modifications (Requires Base Upgrades)
 class CoopMultiplayerMod(JaxAtariPostStepModPlugin):
     """
-    Cooperative-style mode.
-    Full multi-agent Pacman support requires broader base-env changes; this mod keeps
-    gameplay JAX-safe by adding a support bonus (extra life) and randomizing spawn.
+    Two-Pacman cooperative mode.
+    - Human play: two independent players (P1 + P2).
+    - RL play: scalar action is applied to both players.
+    This implementation uses the player2_* state slots added to PacmanState.
     """
-    def _find_nearest_node_idx_jax(self, x: jax.Array, y: jax.Array) -> jax.Array:
-        node_x = jnp.asarray(self._env.node_positions_x, dtype=jnp.int32)
-        node_y = jnp.asarray(self._env.node_positions_y, dtype=jnp.int32)
+    def _find_nearest_node_idx_jax(self, state: PacmanState, x: jax.Array, y: jax.Array) -> jax.Array:
+        lvl = state.maze_level_index
+        node_x = self._env._node_positions_x_stack[lvl]
+        node_y = self._env._node_positions_y_stack[lvl]
         dx = node_x - x.astype(jnp.int32)
         dy = node_y - y.astype(jnp.int32)
         dist_sq = dx * dx + dy * dy
         return jnp.argmin(dist_sq).astype(jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
+    def _decode_spawn(self, flat_idx: jax.Array, width: int) -> Tuple[jax.Array, jax.Array]:
+        spawn_y_tile = flat_idx // width
+        spawn_x_tile = flat_idx % width
+        spawn_px = (spawn_x_tile * self._env.consts.TILE_SIZE) + (self._env.consts.TILE_SIZE // 2)
+        maze_y_offset = self._env.consts.TILE_SIZE * 4
+        spawn_py = (spawn_y_tile * self._env.consts.TILE_SIZE) + (self._env.consts.TILE_SIZE // 2) + maze_y_offset
+        return spawn_px.astype(jnp.int32), spawn_py.astype(jnp.int32)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _is_opposite_direction(self, a: jax.Array, b: jax.Array) -> jax.Array:
+        return jnp.logical_or(
+            jnp.logical_or(
+                jnp.logical_and(a == Action.UP, b == Action.DOWN),
+                jnp.logical_and(a == Action.DOWN, b == Action.UP),
+            ),
+            jnp.logical_or(
+                jnp.logical_and(a == Action.LEFT, b == Action.RIGHT),
+                jnp.logical_and(a == Action.RIGHT, b == Action.LEFT),
+            ),
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _select_player2_action(self, state: PacmanState) -> jax.Array:
+        actions = jnp.array([Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT], dtype=jnp.int32)
+        current_idx = state.player2_current_node_index
+
+        nbrs = jax.vmap(lambda a: self._env._nbr(state, current_idx, a))(actions)
+        blocked = jax.vmap(lambda a: self._env._door_block(state, current_idx, a))(actions)
+        valid = jnp.logical_and(nbrs >= 0, jnp.logical_not(blocked))
+
+        reverse = jax.vmap(lambda a: self._is_opposite_direction(a, state.player2_direction))(actions)
+        non_reverse = jnp.logical_and(valid, jnp.logical_not(reverse))
+        use_non_reverse = jnp.any(non_reverse)
+        usable = jnp.where(use_non_reverse, non_reverse, valid)
+
+        nbr_x = jax.vmap(
+            lambda n: jnp.where(n >= 0, self._env._nx(state, n), state.player2_x)
+        )(nbrs)
+        nbr_y = jax.vmap(
+            lambda n: jnp.where(n >= 0, self._env._ny(state, n), state.player2_y)
+        )(nbrs)
+        dist_to_player1 = jnp.abs(nbr_x - state.player_x) + jnp.abs(nbr_y - state.player_y)
+        best_dist = jnp.where(usable, dist_to_player1, jnp.array(1_000_000, dtype=jnp.int32))
+        best_idx = jnp.argmin(best_dist)
+
+        has_move = jnp.any(valid)
+        return jnp.where(has_move, actions[best_idx], jnp.array(Action.NOOP, dtype=jnp.int32))
+
+    @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state: PacmanState):
-        rng_key, spawn_key = jax.random.split(state.key)
+        rng_key, spawn1_key, spawn2_key = jax.random.split(state.key, 3)
         
         layout = self._env.consts.MAZE_LAYOUT
         _, w = layout.shape
-        valid_mask = (layout.flatten() == 0)
+        valid_mask = jnp.logical_and(layout.flatten() != 1, layout.flatten() != 4)
         logits = jnp.where(valid_mask, 0.0, -1e9)
-        flat_idx = jax.random.categorical(spawn_key, logits)
-        
-        spawn_y_tile = flat_idx // w
-        spawn_x_tile = flat_idx % w
-        
-        spawn_px = (spawn_x_tile * self._env.consts.TILE_SIZE) + (self._env.consts.TILE_SIZE // 2)
-        spawn_py = (spawn_y_tile * self._env.consts.TILE_SIZE) + (self._env.consts.TILE_SIZE // 2)
-        
-        spawn_node_idx = self._find_nearest_node_idx_jax(spawn_px, spawn_py)
+        flat_idx_1 = jax.random.categorical(spawn1_key, logits)
+
+        all_indices = jnp.arange(valid_mask.shape[0], dtype=jnp.int32)
+        other_valid = jnp.logical_and(valid_mask, all_indices != flat_idx_1)
+        logits_2 = jnp.where(other_valid, 0.0, -1e9)
+        flat_idx_2 = jax.lax.cond(
+            jnp.any(other_valid),
+            lambda _: jax.random.categorical(spawn2_key, logits_2),
+            lambda _: flat_idx_1,
+            operand=None,
+        )
+
+        spawn1_px, spawn1_py = self._decode_spawn(flat_idx_1, w)
+        spawn2_px, spawn2_py = self._decode_spawn(flat_idx_2, w)
+
+        spawn1_node_idx = self._find_nearest_node_idx_jax(state, spawn1_px, spawn1_py)
+        spawn2_node_idx = self._find_nearest_node_idx_jax(state, spawn2_px, spawn2_py)
         
         new_state = state._replace(
             key=rng_key,
             lives=jnp.maximum(state.lives, jnp.array(2, dtype=jnp.int32)),
-            player_x=spawn_px.astype(jnp.int32),
-            player_y=spawn_py.astype(jnp.int32),
-            player_current_node_index=spawn_node_idx.astype(jnp.int32),
-            player_target_node_index=spawn_node_idx.astype(jnp.int32),
+            player_x=spawn1_px,
+            player_y=spawn1_py,
+            player_direction=jnp.array(Action.RIGHT, dtype=jnp.int32),
+            player_next_direction=jnp.array(Action.NOOP, dtype=jnp.int32),
+            player_last_horizontal_dir=jnp.array(Action.RIGHT, dtype=jnp.int32),
+            player_current_node_index=spawn1_node_idx.astype(jnp.int32),
+            player_target_node_index=spawn1_node_idx.astype(jnp.int32),
+            player2_x=spawn2_px,
+            player2_y=spawn2_py,
+            player2_direction=jnp.array(Action.LEFT, dtype=jnp.int32),
+            player2_next_direction=jnp.array(Action.NOOP, dtype=jnp.int32),
+            player2_last_horizontal_dir=jnp.array(Action.LEFT, dtype=jnp.int32),
+            player2_current_node_index=spawn2_node_idx.astype(jnp.int32),
+            player2_target_node_index=spawn2_node_idx.astype(jnp.int32),
+            player2_active=jnp.array(1, dtype=jnp.int32),
         )
         
         return self._env._get_observation(new_state), new_state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state, new_state: PacmanState):
+        # Player2 movement is now handled directly in base env.step with provided action(s).
+        return new_state
+
+
+
+def resolve_pacman_maze_level_specs(
+    pacman_maps_dir: str,
+    basenames: Tuple[str, ...] = DEFAULT_PACMAN_MAZE_LEVEL_BASENAMES,
+) -> List[Tuple[str, str]]:
+    """Build (geometry_path, pellet_layout_path) for each existing maze file."""
+    specs: List[Tuple[str, str]] = []
+    for base in basenames:
+        geom = os.path.join(pacman_maps_dir, f"{base}.txt")
+        if not os.path.isfile(geom):
+            continue
+        pellet = os.path.join(pacman_maps_dir, f"{base}_pellet.txt")
+        if not os.path.isfile(pellet):
+            pellet = geom
+        specs.append((geom, pellet))
+    return specs
+
+
+class MultiMazeCampaignMod(JaxAtariInternalModPlugin):
+    """
+    Multi-map campaign: clearing all pellets advances to the next preloaded maze (wrapped).
+    After the last maze, the run wraps to the first map, level resets to 1, and score resets to 0.
+
+    Requires at least two maze files for DEFAULT_PACMAN_MAZE_LEVEL_BASENAMES under pacmanMaps/;
+    otherwise attach_to_env is a no-op (base env stays single-maze).
+    """
+
+    @staticmethod
+    def attach_to_env(env) -> None:
+        # Dynamic loaders (e.g. play.py) may produce a different JaxPacman class
+        # object than the imported package symbol. Use duck-typing here to avoid
+        # false negatives from strict isinstance checks.
+        if not (
+            hasattr(env, "reload_maze_campaign")
+            and callable(getattr(env, "reload_maze_campaign"))
+            and hasattr(env, "_parse_maze_layout_from_file")
+            and hasattr(env, "consts")
+        ):
+            return
+        try:
+            game_py = inspect.getfile(type(env))
+            pacman_maps_dir = os.path.join(os.path.dirname(os.path.abspath(game_py)), "pacmanMaps")
+        except (TypeError, OSError):
+            from jaxatari.games import jax_pacman as jpm
+
+            pacman_maps_dir = os.path.join(os.path.dirname(jpm.__file__), "pacmanMaps")
+        level_specs = resolve_pacman_maze_level_specs(pacman_maps_dir)
+        if len(level_specs) <= 1:
+            return
+
+        layouts = []
+        vitamin_tiles: List[Tuple[int, int]] = []
+        exp_h, exp_w = env.consts.MAZE_HEIGHT, env.consts.MAZE_WIDTH
+        for _geom_path, pellet_path in level_specs:
+            layout, vr, vc = env._parse_maze_layout_from_file(pellet_path)
+            arr = np.asarray(layout)
+            if arr.shape != (exp_h, exp_w):
+                raise ValueError(
+                    f"Maze layout shape {arr.shape} from {pellet_path} "
+                    f"does not match ({exp_h}, {exp_w})"
+                )
+            layouts.append(layout)
+            vitamin_tiles.append((vr, vc))
+
+        env.reload_maze_campaign(level_specs, layouts, vitamin_tiles)

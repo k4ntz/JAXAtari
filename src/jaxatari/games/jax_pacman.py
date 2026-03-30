@@ -176,6 +176,16 @@ class PacmanState(NamedTuple):
     player_animation_frame: chex.Array  # 0 or 1 for mouth open/close
     player_current_node_index: chex.Array  # Current node index for node-based movement
     player_target_node_index: chex.Array  # Target node index for node-based movement
+    # Optional second-player slot used by coop_multiplayer mod
+    player2_x: chex.Array
+    player2_y: chex.Array
+    player2_direction: chex.Array
+    player2_next_direction: chex.Array
+    player2_last_horizontal_dir: chex.Array
+    player2_animation_frame: chex.Array
+    player2_current_node_index: chex.Array
+    player2_target_node_index: chex.Array
+    player2_active: chex.Array
     
     # Ghost states (4 ghosts)
     ghosts: chex.Array  # Shape: (4, 8) - [x, y, direction, state, target_x, target_y, current_node, target_node]
@@ -672,6 +682,14 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         player_animation_frame = jnp.array(0, dtype=jnp.int32)
         player_current_node_index = psn
         player_target_node_index = psn
+        player2_x = player_x
+        player2_y = player_y
+        player2_direction = jnp.array(0, dtype=jnp.int32)
+        player2_next_direction = jnp.array(-1, dtype=jnp.int32)
+        player2_animation_frame = jnp.array(0, dtype=jnp.int32)
+        player2_current_node_index = psn
+        player2_target_node_index = psn
+        player2_active = jnp.array(0, dtype=jnp.int32)
 
         ghosts = jnp.zeros((4, 8), dtype=jnp.int32)
         for i in range(4):
@@ -709,6 +727,15 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             player_animation_frame=player_animation_frame,
             player_current_node_index=player_current_node_index,
             player_target_node_index=player_target_node_index,
+            player2_x=player2_x,
+            player2_y=player2_y,
+            player2_direction=player2_direction,
+            player2_next_direction=player2_next_direction,
+            player2_last_horizontal_dir=jnp.array(0, dtype=jnp.int32),
+            player2_animation_frame=player2_animation_frame,
+            player2_current_node_index=player2_current_node_index,
+            player2_target_node_index=player2_target_node_index,
+            player2_active=player2_active,
             ghosts=ghosts,
             dots_remaining=dots_remaining,
             power_pellets_active=jnp.array(15, dtype=jnp.int32),
@@ -739,6 +766,20 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         return initial_obs, state
 
     def step(self, state: PacmanState, action: chex.Array) -> Tuple[PacmanObservation, PacmanState, float, bool, PacmanInfo]:
+        # In coop mode we accept either:
+        # - scalar action: applied to both players (RL-compatible path)
+        # - vector action [p1, p2]: independent manual controls
+        action = jnp.asarray(action, dtype=jnp.int32)
+        if action.ndim == 0:
+            action_p1 = action
+            action_p2 = action
+        elif action.shape[0] >= 2:
+            action_p1 = action[0]
+            action_p2 = action[1]
+        else:
+            action_p1 = action[0]
+            action_p2 = action[0]
+
         new_state_key, step_key = jax.random.split(state.key)
         previous_state = state
         
@@ -782,7 +823,13 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             state = state._replace(key=step_key)
             
             # Update player movement
-            state = self._player_step(state, action)
+            state = self._player_step(state, action_p1)
+            state = jax.lax.cond(
+                state.player2_active == 1,
+                lambda s: self._player2_step(s, action_p2),
+                lambda s: s,
+                state,
+            )
             
             # Split key for ghost updates
             key, ghost_key = jax.random.split(state.key)
@@ -793,13 +840,21 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             
             # Check collisions
             state = self._check_collisions(state)
+            state = jax.lax.cond(
+                state.player2_active == 1,
+                self._apply_player2_collisions,
+                lambda s: s,
+                state,
+            )
             
             # Update timers
             state = self._update_timers(state)
             
             # Update animation frames
+            animation_frame = (state.step_counter // self.consts.ANIMATION_SPEED) % 2
             state = state._replace(
-                player_animation_frame=(state.step_counter // self.consts.ANIMATION_SPEED) % 2,
+                player_animation_frame=animation_frame,
+                player2_animation_frame=animation_frame,
                 step_counter=state.step_counter + 1,
                 key=new_state_key,
             )
@@ -875,6 +930,15 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             player_last_horizontal_dir=jnp.array(0, dtype=jnp.int32),
             player_current_node_index=psn,
             player_target_node_index=psn,
+            player2_x=player_x,
+            player2_y=player_y,
+            player2_direction=jnp.array(0, dtype=jnp.int32),
+            player2_next_direction=jnp.array(-1, dtype=jnp.int32),
+            player2_last_horizontal_dir=jnp.array(0, dtype=jnp.int32),
+            player2_animation_frame=jnp.array(0, dtype=jnp.int32),
+            player2_current_node_index=psn,
+            player2_target_node_index=psn,
+            player2_active=state.player2_active,
             ghosts=ghosts,
             pellets_collected=pellets_collected,
             dots_remaining=dots_remaining,
@@ -926,6 +990,14 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             player_last_horizontal_dir=jnp.array(0, dtype=jnp.int32),
             player_current_node_index=jnp.array(player_start_node_idx, dtype=jnp.int32),
             player_target_node_index=jnp.array(player_start_node_idx, dtype=jnp.int32),
+            player2_x=player_x,
+            player2_y=player_y,
+            player2_direction=jnp.array(0, dtype=jnp.int32),
+            player2_next_direction=jnp.array(-1, dtype=jnp.int32),
+            player2_last_horizontal_dir=jnp.array(0, dtype=jnp.int32),
+            player2_animation_frame=jnp.array(0, dtype=jnp.int32),
+            player2_current_node_index=jnp.array(player_start_node_idx, dtype=jnp.int32),
+            player2_target_node_index=jnp.array(player_start_node_idx, dtype=jnp.int32),
             ghosts=ghosts,
             frightened_timer=jnp.array(0, dtype=jnp.int32),
             ghosts_eaten_count=jnp.array(0, dtype=jnp.int32),
@@ -1110,6 +1182,65 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             player_last_horizontal_dir=new_last_h,
             player_current_node_index=final_current_idx,
             player_target_node_index=final_target_idx,
+        )
+
+    def _player2_step(self, state: PacmanState, action: chex.Array) -> PacmanState:
+        """Move player2 by reusing the same node-based player step logic."""
+        proxy_state = state._replace(
+            player_x=state.player2_x,
+            player_y=state.player2_y,
+            player_direction=state.player2_direction,
+            player_next_direction=state.player2_next_direction,
+            player_last_horizontal_dir=state.player2_last_horizontal_dir,
+            player_animation_frame=state.player2_animation_frame,
+            player_current_node_index=state.player2_current_node_index,
+            player_target_node_index=state.player2_target_node_index,
+        )
+        proxy_state = self._player_step(proxy_state, action)
+        return state._replace(
+            player2_x=proxy_state.player_x,
+            player2_y=proxy_state.player_y,
+            player2_direction=proxy_state.player_direction,
+            player2_next_direction=proxy_state.player_next_direction,
+            player2_last_horizontal_dir=proxy_state.player_last_horizontal_dir,
+            player2_animation_frame=proxy_state.player_animation_frame,
+            player2_current_node_index=proxy_state.player_current_node_index,
+            player2_target_node_index=proxy_state.player_target_node_index,
+        )
+
+    def _apply_player2_collisions(self, state: PacmanState) -> PacmanState:
+        """
+        Apply the same collision/scoring pipeline for player2.
+        This enables pellets, power pellets, vitamin, ghost interactions, and lives
+        to be affected by both players in coop mode.
+        """
+        proxy_state = state._replace(
+            player_x=state.player2_x,
+            player_y=state.player2_y,
+            player_direction=state.player2_direction,
+            player_next_direction=state.player2_next_direction,
+            player_last_horizontal_dir=state.player2_last_horizontal_dir,
+            player_animation_frame=state.player2_animation_frame,
+            player_current_node_index=state.player2_current_node_index,
+            player_target_node_index=state.player2_target_node_index,
+        )
+        proxy_state = self._check_collisions(proxy_state)
+        return state._replace(
+            ghosts=proxy_state.ghosts,
+            score=proxy_state.score,
+            lives=proxy_state.lives,
+            frightened_timer=proxy_state.frightened_timer,
+            ghosts_eaten_count=proxy_state.ghosts_eaten_count,
+            dots_remaining=proxy_state.dots_remaining,
+            pellets_collected=proxy_state.pellets_collected,
+            level_transition_timer=proxy_state.level_transition_timer,
+            player_state=proxy_state.player_state,
+            death_timer=proxy_state.death_timer,
+            freeze_timer=proxy_state.freeze_timer,
+            total_pellets_eaten=proxy_state.total_pellets_eaten,
+            vitamin_active=proxy_state.vitamin_active,
+            vitamin_timer=proxy_state.vitamin_timer,
+            vitamin_collected=proxy_state.vitamin_collected,
         )
     
     def _find_nearest_node_idx(self, x: int, y: int, node_group=None) -> int:
@@ -1900,7 +2031,23 @@ class PacmanRenderer(JAXGameRenderer):
             base_sprite_idx = self.consts.SPRITE_LOOKUP[sprite_dir_action]
             player_sprite_idx = base_sprite_idx + player_frame
             player_mask = self.SHAPE_MASKS["player"][player_sprite_idx]
-            return self.jr.render_at(r, state.player_x - 4, state.player_y, player_mask)
+            r = self.jr.render_at(r, state.player_x - 4, state.player_y, player_mask)
+
+            def render_player2(rr):
+                p2_dir_idx = state.player2_direction
+                p2_is_vertical = jnp.logical_or(p2_dir_idx == Action.UP, p2_dir_idx == Action.DOWN)
+                p2_sprite_dir_action = jnp.where(p2_is_vertical, state.player2_last_horizontal_dir, p2_dir_idx)
+                p2_base_sprite_idx = self.consts.SPRITE_LOOKUP[p2_sprite_dir_action]
+                p2_player_sprite_idx = p2_base_sprite_idx + player_frame
+                p2_player_mask = self.SHAPE_MASKS["player"][p2_player_sprite_idx]
+                return self.jr.render_at(rr, state.player2_x - 4, state.player2_y, p2_player_mask)
+
+            return jax.lax.cond(
+                state.player2_active == 1,
+                render_player2,
+                lambda rr: rr,
+                r,
+            )
 
         def render_dying(r):
             progress = (self.consts.DEATH_DURATION - state.death_timer) / self.consts.DEATH_DURATION
