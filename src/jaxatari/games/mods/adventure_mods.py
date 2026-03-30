@@ -1,6 +1,6 @@
 import os
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.adventure.adventure_mod_plugins import FasterDragonsMod, FasterBiteMod, FleaingDragonMod, DragonReviveMod, RandomPlayerSpawnMod
+from jaxatari.games.mods.adventure.adventure_mod_plugins import FasterDragonsMod, FasterBiteMod, FleaingDragonMod, DragonReviveMod, RandomPlayerSpawnMod, LevelTwoMod, LevelThreeMod, EasterEggMod
 class AdventureEnvMod(JaxAtariModController):    
     """
     Game-specific Mod Controller for Adventure.
@@ -12,7 +12,10 @@ class AdventureEnvMod(JaxAtariModController):
         "faster_bite": FasterBiteMod,
         "fleaing_dragon": FleaingDragonMod,
         "dragon_revive": DragonReviveMod,
-        "random_player_spawn": RandomPlayerSpawnMod
+        "random_player_spawn": RandomPlayerSpawnMod,
+        "level_two": LevelTwoMod,
+        "level_three": LevelThreeMod,
+        "easter_egg": EasterEggMod
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "adventure", "sprites")
