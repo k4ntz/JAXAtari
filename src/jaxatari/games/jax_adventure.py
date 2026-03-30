@@ -1788,7 +1788,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                 "height": spaces.Box(low=0, high=0, shape=(), dtype=jnp.int32),
                 "state": spaces.Box(low=0, high=0, shape=(), dtype=jnp.int32),
             }),
-            "key_yellow": spaces.Dict({
+            "dot": spaces.Dict({
                 "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
                 "y": spaces.Box(low=0, high=250, shape=(), dtype=jnp.int32),
                 "tile": spaces.Box(low=0, high=30, shape=(), dtype=jnp.int32),
