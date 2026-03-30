@@ -7,7 +7,7 @@ import jax.lax
 import jax.numpy as jnp
 import numpy as np
 import chex
-
+from flax import struct
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
@@ -82,8 +82,8 @@ def _count_edible_pellets_in_layout(layout) -> int:
     a = np.asarray(layout)
     return int(np.sum((a == 2) | (a == 3)))
 
-
-class PacmanConstants(NamedTuple):
+@struct.dataclass
+class PacmanConstants:
     # Screen dimensions (Atari 2600 Pacman native resolution)
     WIDTH: int = 160
     HEIGHT: int = 250  # 200 for Maze + 50 for UI
@@ -152,8 +152,8 @@ class PacmanConstants(NamedTuple):
     MAZE_LAYOUT: chex.Array = None
     
     # Asset config
-    ASSET_CONFIG: tuple = _get_default_asset_config()
-    SPRITE_LOOKUP: chex.Array = _get_sprite_lookup()
+    ASSET_CONFIG: tuple = struct.field(default_factory=_get_default_asset_config)
+    SPRITE_LOOKUP: chex.Array = struct.field(default_factory=_get_sprite_lookup)
 
 
 # Ghost states: 0=normal, 1=frightened, 2=eaten
@@ -321,7 +321,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
                 self.vitamin_tile_row, self.vitamin_tile_col = vr, vc
                 layouts = [layout]
                 vitamin_tiles = [(vr, vc)]
-                self.consts = consts._replace(MAZE_LAYOUT=layout)
+                self.consts = consts.replace(MAZE_LAYOUT=layout)
         else:
             maze_file_path = os.path.join(pacman_maps_dir, "maze_atari.txt")
             pellet_path = _resolve_pellet_path(maze_file_path, None)
@@ -336,7 +336,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             level_specs = [(maze_file_path, pellet_path)]
             layouts = [layout]
             vitamin_tiles = [(vr, vc)]
-            self.consts = consts._replace(MAZE_LAYOUT=layout)
+            self.consts = consts.replace(MAZE_LAYOUT=layout)
 
         self._install_maze_campaign(level_specs, layouts, vitamin_tiles)
 
@@ -354,7 +354,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         self.maze_level_layouts = maze_level_layouts
         self.maze_level_vitamin_tiles = maze_level_vitamin_tiles
         self.vitamin_tile_row, self.vitamin_tile_col = maze_level_vitamin_tiles[0]
-        self.consts = self.consts._replace(MAZE_LAYOUT=maze_level_layouts[0])
+        self.consts = self.consts.replace(MAZE_LAYOUT=maze_level_layouts[0])
         self._build_maze_stacks_and_renderer()
 
     def reload_maze_campaign(
@@ -452,7 +452,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
                     bids.append(self.renderer.BACKGROUND)
                 else:
                     rgba = PacmanRenderer.procedural_maze_background_rgba(
-                        self.consts._replace(MAZE_LAYOUT=self.maze_level_layouts[ell])
+                        self.consts.replace(MAZE_LAYOUT=self.maze_level_layouts[ell])
                     )
                     bid = self.renderer.jr._create_background_raster(
                         rgba, self.renderer.COLOR_TO_ID
@@ -584,7 +584,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         if level_index < 0 or level_index >= self.num_maze_levels:
             raise ValueError(f"maze level_index {level_index} out of range")
         self.current_maze_level_index = level_index
-        self.consts = self.consts._replace(MAZE_LAYOUT=self.maze_level_layouts[level_index])
+        self.consts = self.consts.replace(MAZE_LAYOUT=self.maze_level_layouts[level_index])
         self.vitamin_tile_row, self.vitamin_tile_col = self.maze_level_vitamin_tiles[level_index]
         self._rebuild_navigation_graph(self.maze_level_geometry_paths[level_index])
         self.renderer = PacmanRenderer(self.consts)
@@ -1719,8 +1719,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
 
 class PacmanRenderer(JAXGameRenderer):
     def __init__(self, consts: PacmanConstants = None, config: render_utils.RendererConfig = None):
-        super().__init__(consts)
         self.consts = consts or PacmanConstants()
+        super().__init__(self.consts)
         
         # Maze layout will be set by JaxPacman after initialization
         # Fix: Updated dimensions to 250x160 (H, W)
@@ -1736,7 +1736,7 @@ class PacmanRenderer(JAXGameRenderer):
         # Pre-render static maze background (walls / HUD / etc)
         # We do this BEFORE loading assets so we can inject it
         if self.consts.MAZE_LAYOUT is not None:
-            
+
             print("Pre-rendering maze background...")
             self.maze_background = self._create_maze_background()
         else:
@@ -1787,6 +1787,17 @@ class PacmanRenderer(JAXGameRenderer):
         bg_rgb = tuple(self.consts.BACKGROUND_COLOR)
         self.bg_id = jnp.array(self.COLOR_TO_ID.get(bg_rgb, 0), dtype=jnp.uint8)
         self.white_id = jnp.array(self.COLOR_TO_ID.get((255, 255, 255), 0), dtype=jnp.uint8)
+        
+        if self.consts.MAZE_LAYOUT is not None:
+            self._maze_layout_stack = jnp.expand_dims(
+                jnp.asarray(self.consts.MAZE_LAYOUT, dtype=jnp.int32), axis=0
+            )
+        else:
+            self._maze_layout_stack = jnp.zeros(
+                (1, self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=jnp.int32
+            )
+
+        self._maze_background_stack = jnp.expand_dims(self.BACKGROUND, axis=0)
 
     @staticmethod
     def procedural_maze_background_rgba(consts: PacmanConstants) -> jnp.ndarray:
@@ -1955,74 +1966,119 @@ class PacmanRenderer(JAXGameRenderer):
         # Convert to RGB (Background with Walls/HUD is already baked in)
         output = self.jr.render_from_palette(object_raster=raster, base_palette=self.PALETTE)
 
-        # Draw Score RGB Overlay (Beige)
-        # (This remains as overlay since we don't have this color in the palette typically, 
-        # unless we add it to the background dummy pixels)
-        
-        # 4. SCORE (RGB Overlay)
+        # Convert to RGB/gray
+        output = self.jr.render_from_palette(object_raster=raster, base_palette=self.PALETTE)
+
+        # --------------------------------------------------
+        # HUD overlays: channel-safe + native-downscale-safe
+        # --------------------------------------------------
+        out_h, out_w, out_c = output.shape
+
+        # Scale HUD anchor positions from native frame space -> current output space
+        out_h, out_w, out_c = output.shape
+
+        # Python/static scale factors for slice sizes
+        scale_x_f = out_w / float(self.consts.WIDTH)
+        scale_y_f = out_h / float(self.consts.HEIGHT)
+
+        # JAX scale factors for traced coordinates
+        scale_x = jnp.float32(scale_x_f)
+        scale_y = jnp.float32(scale_y_f)
+
+        def _scale_x(x):
+            x = jnp.asarray(x, dtype=jnp.float32)
+            return jnp.clip(jnp.round(x * scale_x).astype(jnp.int32), 0, out_w - 1)
+
+        def _scale_y(y):
+            y = jnp.asarray(y, dtype=jnp.float32)
+            return jnp.clip(jnp.round(y * scale_y).astype(jnp.int32), 0, out_h - 1)
+
+        # -----------------
+        # SCORE OVERLAY
+        # -----------------
         score = state.score
-        score_x = 60
-        score_y = 173
+        score_x = _scale_x(60)
+        score_y = _scale_y(173)
         digit_masks = self.SHAPE_MASKS["digits"]
-        
-        def draw_score_digit_rgb(i, out_img):
+
+        # Digit masks may be downscaled natively, so do NOT assume 8x8
+        digit_h = int(digit_masks.shape[-2])
+        digit_w = int(digit_masks.shape[-1])
+        def _gray_from_rgb(rgb):
+            r, g, b = rgb
+            return jnp.uint8(0.299 * r + 0.587 * g + 0.114 * b)
+
+        def _solid_color(rgb_triplet):
+            if out_c == 1:
+                return jnp.array([_gray_from_rgb(rgb_triplet)], dtype=jnp.uint8)
+            return jnp.array(rgb_triplet, dtype=jnp.uint8)
+
+        # Black text
+        text_color = _solid_color((0, 0, 0))
+
+        def draw_score_digit(i, out_img):
             divisor = jnp.power(10, i)
             digit = (score // divisor) % 10
             should_draw = jnp.logical_or(score >= divisor, i == 0)
-            
-            # Digit mask is 8x8 (0 or 1). We need a color.
-            # Colored black as per standard Atari HUD style.
-            text_color = jnp.array([0, 0, 0], dtype=jnp.uint8) # Black
-            
-            # Get the mask for this digit
-            mask = digit_masks[digit] # (8, 8) or similar.
-            # Extract only the exact drawn digit using the white_id
-            mask_bool = (mask == self.white_id)[..., None] # (8, 8, 1)
-            
-            dx = score_x + (5 - i) * 8
-            dy = score_y
-            
-            # Extract slice
-            region = jax.lax.dynamic_slice(out_img, (dy, dx, 0), (8, 8, 3))
-            
-            # Draw text color where mask is true
-            region = jnp.where(mask_bool, text_color, region)
-            
-            # Put back
-            return jax.lax.cond(
-                should_draw,
-                lambda: jax.lax.dynamic_update_slice(out_img, region, (dy, dx, 0)),
-                lambda: out_img
-            )
 
-        output = jax.lax.fori_loop(0, 6, draw_score_digit_rgb, output)
-        
-        # 4.5. LIVES INDICATOR
-        life_color = jnp.array([72, 176, 110], dtype=jnp.uint8)
-        
+            mask = digit_masks[digit]  # shape: (digit_h, digit_w)
+            mask_bool = (mask == self.white_id)[..., None]  # (h, w, 1)
+
+            dx = score_x + (5 - i) * digit_w
+            dy = score_y
+
+            # Clamp start so the full slice stays in-bounds
+            dx = jnp.clip(dx, 0, max(out_w - digit_w, 0))
+            dy = jnp.clip(dy, 0, max(out_h - digit_h, 0))
+
+            region = jax.lax.dynamic_slice(out_img, (dy, dx, 0), (digit_h, digit_w, out_c))
+            region = jnp.where(mask_bool, text_color, region)
+
+            updated = jax.lax.dynamic_update_slice(out_img, region, (dy, dx, 0))
+            return jax.lax.cond(should_draw, lambda: updated, lambda: out_img)
+
+        output = jax.lax.fori_loop(0, 6, draw_score_digit, output)
+
+        # -----------------
+        # LIVES INDICATOR
+        # -----------------
+        life_color = _solid_color((72, 176, 110))
+
+        # Scale rectangle size too
+        life_h = max(1, round(6 * scale_y_f))
+        life_w = max(1, round(4 * scale_x_f))
+
         def draw_life_rect(i, out_img):
-            # User wants them to disappear left to right
-            # If 3 lives: draw i=0, 1, 2
-            # If 2 lives: draw i=1, 2 (i=0 drops off)
-            # If 1 life: draw i=2 (i=0, 1 drop off)
+            # If 3 lives: draw 0,1,2
+            # If 2 lives: draw 1,2
+            # If 1 life: draw 2
             should_draw = (3 - state.lives) <= i
-            
-            life_x = 12 + i * 8
-            life_y = 182         # Below green bar
-            
-            # Green vertical rectangle: 8 tall, 4 wide
-            region = jnp.full((6, 4, 3), life_color, dtype=jnp.uint8)
-            
-            # Bounds check just in case
-            return jax.lax.cond(
-                should_draw,
-                lambda: jax.lax.dynamic_update_slice(out_img, region, (life_y, life_x, 0)),
-                lambda: out_img
-            )
+
+            life_x = _scale_x(12 + i * 8)
+            life_y = _scale_y(182)
+
+            life_x = jnp.clip(life_x, 0, max(out_w - life_w, 0))
+            life_y = jnp.clip(life_y, 0, max(out_h - life_h, 0))
+
+            region = jnp.broadcast_to(
+                life_color,
+                (life_h, life_w, out_c)
+            ).astype(jnp.uint8)
+
+            updated = jax.lax.dynamic_update_slice(out_img, region, (life_y, life_x, 0))
+            return jax.lax.cond(should_draw, lambda: updated, lambda: out_img)
 
         output = jax.lax.fori_loop(0, 3, draw_life_rect, output)
-        
-        # 5. STRICT CROP (160x250)
-        output = output[:250, :160, :]
-        
+
+        # Apply native downscaling if requested
+        downscale = getattr(self.config, "downscale", None)
+        if downscale is not None:
+            target_h, target_w = downscale
+            if output.shape[0] != target_h or output.shape[1] != target_w:
+                output = jax.image.resize(
+                    output.astype(jnp.float32),
+                    (target_h, target_w, output.shape[-1]),
+                    method="bilinear",
+                ).astype(jnp.uint8)
+                
         return output
