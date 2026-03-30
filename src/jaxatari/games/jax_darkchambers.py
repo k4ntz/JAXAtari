@@ -474,12 +474,7 @@ class DarkChambersConstants(struct.PyTreeNode):
     WIZARD_POINTS: int = struct.field(pytree_node=False, default=50)
     GRIM_REAPER_POINTS: int = struct.field(pytree_node=False, default=100)  # Strongest
     
-    # Potion effect durations and parameters
-    # MOD SYSTEM: These constants control the behavior of potion items added via mods
-    # Color assignments for visual identification:
-    #   - Speed Potion (ITEM_SPEED_POTION=15): Orange (255, 100, 0) - 8×8 pixel square
-    #   - Heal Potion (ITEM_HEAL_POTION=16): Magenta (255, 0, 255) - 8×8 pixel square  
-    #   - Poison Potion (ITEM_POISON_POTION=17): Bright Green (0, 255, 0) - 8×8 pixel square
+    # Potion effect tuning
     SPEED_POTION_DURATION: int = struct.field(pytree_node=False, default=120)  # 120 steps (~4 seconds at 30 FPS)
     SPEED_POTION_MULTIPLIER: int = struct.field(pytree_node=False, default=2)  # 2x movement speed
     POISON_DURATION: int = struct.field(pytree_node=False, default=360)        # 360 steps (~12 seconds at 30 FPS) - increased from 180 for longer effect
