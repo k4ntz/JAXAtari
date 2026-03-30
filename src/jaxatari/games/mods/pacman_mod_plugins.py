@@ -36,44 +36,6 @@ def resolve_pacman_maze_level_specs(
         specs.append((geom, pellet))
     return specs
 
-
-class MultiMazeCampaignMod(JaxAtariInternalModPlugin):
-    """
-    Multi-map campaign: clearing all pellets advances to the next preloaded maze (wrapped).
-    After the last maze, the run wraps to the first map, level resets to 1, and score resets to 0.
-
-    Requires at least two maze files for DEFAULT_PACMAN_MAZE_LEVEL_BASENAMES under pacmanMaps/;
-    otherwise attach_to_env is a no-op (base env stays single-maze).
-    """
-
-    @staticmethod
-    def attach_to_env(env) -> None:
-        from jaxatari.games import jax_pacman as jpm
-
-        if not isinstance(env, jpm.JaxPacman):
-            return
-        pacman_maps_dir = os.path.join(os.path.dirname(jpm.__file__), "pacmanMaps")
-        level_specs = resolve_pacman_maze_level_specs(pacman_maps_dir)
-        if len(level_specs) <= 1:
-            return
-
-        layouts = []
-        vitamin_tiles: List[Tuple[int, int]] = []
-        exp_h, exp_w = env.consts.MAZE_HEIGHT, env.consts.MAZE_WIDTH
-        for _geom_path, pellet_path in level_specs:
-            layout, vr, vc = env._parse_maze_layout_from_file(pellet_path)
-            arr = np.asarray(layout)
-            if arr.shape != (exp_h, exp_w):
-                raise ValueError(
-                    f"Maze layout shape {arr.shape} from {pellet_path} "
-                    f"does not match ({exp_h}, {exp_w})"
-                )
-            layouts.append(layout)
-            vitamin_tiles.append((vr, vc))
-
-        env.reload_maze_campaign(level_specs, layouts, vitamin_tiles)
-
-
 # Part 1: Simple Modifications
 
 class FasterPacmanMod(JaxAtariInternalModPlugin):
@@ -312,3 +274,39 @@ class CoopMultiplayerMod(JaxAtariPostStepModPlugin):
         )
         
         return self._env._get_observation(new_state), new_state
+
+class MultiMazeCampaignMod(JaxAtariInternalModPlugin):
+    """
+    Multi-map campaign: clearing all pellets advances to the next preloaded maze (wrapped).
+    After the last maze, the run wraps to the first map, level resets to 1, and score resets to 0.
+
+    Requires at least two maze files for DEFAULT_PACMAN_MAZE_LEVEL_BASENAMES under pacmanMaps/;
+    otherwise attach_to_env is a no-op (base env stays single-maze).
+    """
+
+    @staticmethod
+    def attach_to_env(env) -> None:
+        from jaxatari.games import jax_pacman as jpm
+
+        if not isinstance(env, jpm.JaxPacman):
+            return
+        pacman_maps_dir = os.path.join(os.path.dirname(jpm.__file__), "pacmanMaps")
+        level_specs = resolve_pacman_maze_level_specs(pacman_maps_dir)
+        if len(level_specs) <= 1:
+            return
+
+        layouts = []
+        vitamin_tiles: List[Tuple[int, int]] = []
+        exp_h, exp_w = env.consts.MAZE_HEIGHT, env.consts.MAZE_WIDTH
+        for _geom_path, pellet_path in level_specs:
+            layout, vr, vc = env._parse_maze_layout_from_file(pellet_path)
+            arr = np.asarray(layout)
+            if arr.shape != (exp_h, exp_w):
+                raise ValueError(
+                    f"Maze layout shape {arr.shape} from {pellet_path} "
+                    f"does not match ({exp_h}, {exp_w})"
+                )
+            layouts.append(layout)
+            vitamin_tiles.append((vr, vc))
+
+        env.reload_maze_campaign(level_specs, layouts, vitamin_tiles)
