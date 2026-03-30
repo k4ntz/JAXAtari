@@ -91,39 +91,50 @@ class SuddenDeathMod(JaxAtariPostStepModPlugin):
     """
     Hard cap on the episode length (e.g., 16 moves). 
     If no 4-in-a-row is achieved by the limit, a custom tie-breaker logic triggers, 
-    awarding the win to the player with the most '3-in-a-row' potential lines.
+    awarding the win to the player with the most unblocked '3-in-a-row' potential lines.
     """
     
+    # JIT compile the hook to run efficiently on the GPU/TPU.
+    # static_argnums=(0,) tells JAX to treat the 'self' instance as static,
+    # which is required when JIT-compiling class methods.
     @partial(jax.jit, static_argnums=(0,))
     def after_step(self, obs, state, reward, done, info):
         
         # --- 1. Define the Tie-Breaker Logic ---
+        # We define this as an inner pure function to use within jax.lax.cond
         def tie_breaker(board):
+            # Create binary masks for each player's pieces
             is_x = (board == self._env.consts.PLAYER_X).astype(jnp.int32)
             is_o = (board == self._env.consts.PLAYER_O).astype(jnp.int32)
 
-            # Use the environment's pre-calculated masks to count pieces in winning lines
+            # Use JAX's highly optimized tensordot to compute how many pieces each player
+            # has in every possible winning line simultaneously. 
+            # WIN_MASKS contains the 76 intersecting lines of the 3D grid.
             x_counts = jnp.tensordot(self._env.consts.WIN_MASKS, is_x, axes=((1, 2, 3), (0, 1, 2)))
             o_counts = jnp.tensordot(self._env.consts.WIN_MASKS, is_o, axes=((1, 2, 3), (0, 1, 2)))
 
-            # A "potential line" has 3 pieces of one player and 0 of the other
+            # Define a "potential line": 3 pieces of one player and exactly 0 of the opponent.
+            # If the opponent has a piece in that line (blocked), it does not count.
             x_potentials = jnp.sum(jnp.logical_and(x_counts == 3, o_counts == 0))
             o_potentials = jnp.sum(jnp.logical_and(o_counts == 3, x_counts == 0))
 
-            # Return the ID of whoever has more potentials, or EMPTY for a tie
+            # Return the ID of whoever has more potentials. 
+            # If it's a tie, return EMPTY (0).
             return jnp.where(
                 x_potentials > o_potentials, self._env.consts.PLAYER_X,
                 jnp.where(o_potentials > x_potentials, self._env.consts.PLAYER_O, self._env.consts.EMPTY)
             )
 
         # --- 2. Check the Sudden Death Condition ---
-        # Trigger ONLY if we hit 16 moves AND no one has won naturally yet
+        # We must use jnp.logical_and instead of Python's 'and' for JIT compatibility.
+        # Trigger ONLY if the game has reached 16 moves AND no one has won naturally yet.
         trigger_sd = jnp.logical_and(
             state.move_count >= 16, 
             state.winner == self._env.consts.EMPTY
         )
 
-        # Calculate the new winner (fallback to the current winner if SD isn't triggered)
+        # We cannot use standard 'if/else' statements inside JIT.
+        # jax.lax.cond ensures only the correct branch is executed based on trigger_sd.
         new_winner = jax.lax.cond(
             trigger_sd,
             lambda _: tie_breaker(state.board),
@@ -133,10 +144,13 @@ class SuddenDeathMod(JaxAtariPostStepModPlugin):
 
         # --- 3. Hijack the Win Animation & Reward ---
         # If sudden death triggers, we manually force the game into Phase 1 of the win sequence
+        # (the blackout phase) to give visual feedback that the game ended.
         new_win_phase = jnp.where(trigger_sd, jnp.int32(1), state.win_phase)
         new_win_timer = jnp.where(trigger_sd, jnp.int32(self._env.consts.BLACKOUT_FRAMES), state.win_timer)
 
-        # Assign reward immediately so the RL agent learns from the tie-breaker
+        # Assign the reward immediately. This is crucial for RL agents (PPO/PQN).
+        # By providing the +/- 1.0 reward based on the tie-breaker logic, the agent
+        # learns to prioritize building 3-in-a-rows even if it can't finish the 4th.
         new_reward = jnp.where(
             trigger_sd,
             jnp.where(new_winner == self._env.consts.PLAYER_X, 1.0,
@@ -144,14 +158,44 @@ class SuddenDeathMod(JaxAtariPostStepModPlugin):
             reward
         )
 
-        # Update the state
+        # --- 4. Update the State and Observation ---
+        # In functional programming, we don't mutate variables in place.
+        # We create a new state object replacing only the modified fields.
         modified_state = state.replace(
             winner=new_winner,
             win_phase=new_win_phase,
             win_timer=new_win_timer
         )
 
-        # Regenerate observation to match the updated state
+        # Regenerate the observation dictionary so the CNN receives the updated
+        # game_over and winner status correctly.
         modified_obs = self._env._get_observation(modified_state)
         
         return modified_obs, modified_state, new_reward, done, info
+    
+    
+    
+class TemporalPenaltyMod(JaxAtariPostStepModPlugin):
+    """
+    'Hurry Up' Mode: Applies a small negative reward at every single 
+    timestep during the environment's step function to incentivize the RL agent 
+    to find the shortest path to victory.
+    """
+    
+    # JIT compile the after_step hook for maximum performance on GPU/TPU.
+    # static_argnums=(0,) ensures the 'self' argument is treated as static during compilation,
+    # which is required by JAX for class methods.
+    @partial(jax.jit, static_argnums=(0,))
+    def after_step(self, obs, state, reward, done, info):
+        
+        # Apply a tiny penalty of -0.002 per frame/step.
+        # REASONING: This specific value is chosen to prevent the "Suicide Agent" problem. 
+        # For example, an average 400-frame game results in a total time penalty of -0.8.
+        # Since this is strictly less than the -1.0 loss penalty or the +1.0 win reward, 
+        # it ensures that the agent still prioritizes winning over simply ending the game fast.
+        # We explicitly cast to jnp.float32 to maintain strict JAX type consistency.
+        new_reward = reward - jnp.float32(0.002)
+        
+        # Return the unmodified observation, state, done flag, and info dictionary,
+        # but pass along the newly shaped reward for the PPO/PQN agent to learn from.
+        return obs, state, new_reward, done, info
