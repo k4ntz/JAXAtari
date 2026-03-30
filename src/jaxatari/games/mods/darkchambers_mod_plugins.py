@@ -16,18 +16,21 @@ EASY_MODE_RAPID_FIRE_DELTA = 10_000
 EASY_MODE_REGULAR_ITEM_START = 5
 EASY_MODE_EXTRA_REGULAR_SLOTS = 16
 POTION_CLUSTER_START_SLOT = 6
+POTION_CLUSTER_COUNT = 3
 
 
 def _spawn_potion_cluster_near_player(env, state: DarkChambersState, potion_item_type: int) -> DarkChambersState:
     """Fill regular item slots with one potion type near player spawn in the first chamber."""
     idx = jnp.arange(NUM_ITEMS, dtype=jnp.int32)
-    cluster_mask = idx >= POTION_CLUSTER_START_SLOT
+    cluster_mask = (idx >= POTION_CLUSTER_START_SLOT) & (
+        idx < (POTION_CLUSTER_START_SLOT + POTION_CLUSTER_COUNT)
+    )
 
-    # Build a repeatable local pattern around the player for dense pickup access.
-    grid_x = ((idx - POTION_CLUSTER_START_SLOT) % 4) * 10
-    grid_y = ((idx - POTION_CLUSTER_START_SLOT) // 4) * 10
+    # Place a small starter cluster directly below the spawn point.
+    grid_x = ((idx - POTION_CLUSTER_START_SLOT) % 4) * 8
+    grid_y = ((idx - POTION_CLUSTER_START_SLOT) // 4) * 8
     base_x = state.player_x + jnp.array(env.consts.PLAYER_WIDTH // 2 - 12, dtype=jnp.int32)
-    base_y = state.player_y + jnp.array(env.consts.PLAYER_HEIGHT // 2 + 58, dtype=jnp.int32)
+    base_y = state.player_y + jnp.array(env.consts.PLAYER_HEIGHT + 4, dtype=jnp.int32)
 
     potion_x = jnp.clip(base_x + grid_x, 0, env.consts.WORLD_WIDTH - 8)
     potion_y = jnp.clip(base_y + grid_y, 0, env.consts.WORLD_HEIGHT - 8)
@@ -478,17 +481,13 @@ class HardModeMod(JaxAtariPostStepModPlugin):
 
     Effects:
     - Lower survivability (reduced starting health and heals).
-    - Slower shooting cadence.
-    - Enemies hit harder and spawn more frequently.
+    - Enemies hit harder.
     - Does not auto-enable other gameplay mods.
     """
 
     constants_overrides = {
         "STARTING_HEALTH": 24,
         "HEALTH_GAIN": 8,
-        "FIRE_RATE_LIMIT": 45,
-        "FIRE_RATE_LIMIT_WITH_GUN": 24,
-        "SPAWNER_SPAWN_INTERVAL": 220,
         "ZOMBIE_DAMAGE": 2,
         "WRAITH_DAMAGE": 2,
         "SKELETON_DAMAGE": 4,
@@ -514,17 +513,13 @@ class VeryHardModeMod(JaxAtariPostStepModPlugin):
 
     Effects:
     - Strong survivability penalty.
-    - Significantly slower shooting cadence.
-    - Faster enemy pressure (damage + spawn cadence).
+    - Heavier enemy contact damage.
     - Does not auto-enable other gameplay mods.
     """
 
     constants_overrides = {
         "STARTING_HEALTH": 18,
         "HEALTH_GAIN": 6,
-        "FIRE_RATE_LIMIT": 55,
-        "FIRE_RATE_LIMIT_WITH_GUN": 30,
-        "SPAWNER_SPAWN_INTERVAL": 160,
         "ZOMBIE_DAMAGE": 2,
         "WRAITH_DAMAGE": 3,
         "SKELETON_DAMAGE": 5,
