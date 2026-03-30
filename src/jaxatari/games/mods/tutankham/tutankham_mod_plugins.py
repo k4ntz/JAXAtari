@@ -755,15 +755,8 @@ class MimicStepMod(JaxAtariPostStepModPlugin):
 
 class WhipMod(JaxAtariInternalModPlugin):
     """
-    Adds the Whip, a medium-range weapon that kills enemies in a certain area around the player, hard reduction of the ammotimer and usage cooldown.
+    Replaces the Laser Gun with the Whip at Action.UPFIRE, a medium-range weapon that kills enemies in a certain area around the player, hard reduction of the ammotimer and usage cooldown.
     """
-    attribute_overrides = {
-        "ACTION_SET": jnp.array([
-            Action.NOOP, Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT,
-            Action.RIGHTFIRE, Action.LEFTFIRE, Action.UPFIRE, Action.DOWNFIRE
-        ])
-    }
-
     asset_overrides = {
         "ui_whip": {
             "name": "ui_whip",
@@ -776,6 +769,104 @@ class WhipMod(JaxAtariInternalModPlugin):
             "files": ["whip_horizontal_left.npy", "whip_bl.npy", "whip_vertical_bottom.npy", "whip_br.npy", "whip_horizontal_right.npy", "whip_tr.npy", "whip_vertical_top.npy", "whip_tl.npy"],
         }
     }
+
+    def reset(self, key=None):
+        """
+        Resets the game without flashes for the Whip mod.
+        """
+        if key is None:
+            key = jax.random.PRNGKey(int(time.time()))
+
+        level = 0
+        start_x = self._env.consts.MAP_CHECKPOINTS[level%4, 0, 2]
+        start_y = self._env.consts.MAP_CHECKPOINTS[level%4, 0, 3]
+        camera_offset = jnp.where(start_y < self._env.consts.HEIGHT // 2, 0, start_y - self._env.consts.HEIGHT // 2)
+
+        creature_states = jnp.zeros((self._env.consts.MAX_CREATURES, 6), dtype=jnp.int32)
+        creature_states = creature_states.at[:, 5].set(-1) # death_timer initialised to -1 (inactive)
+
+        state = TutankhamState(
+            # --- Game Progression ---
+            rng_key=key,
+            level=level,
+            step_counter=0,
+            camera_offset=camera_offset,
+            goal_reached=False,
+            # --- Player ---
+            player_x=start_x,
+            player_y=start_y,
+            player_direction=3,  # facing RIGHT
+            is_moving=False,
+            player_subpixel=0.0,
+            last_movement_action=0,
+            lives=self._env.consts.PLAYER_LIVES,
+            has_key=False,
+            tutankham_score=0,
+            # --- Bullet & Ammo ---
+            bullet_state=jnp.array([0, 0, 0, 0, 0], dtype=jnp.int32),
+            bullet_subpixel=0.0,
+            ammunition_timer=self._env.consts.LEVEL_AMMO_SUPPLY[level],
+            laser_flash_count=0,
+            laser_flash_cooldown=0,
+            # --- Creatures ---
+            creature_states=creature_states,
+            creature_subpixels=jnp.zeros(self._env.consts.MAX_CREATURES, dtype=jnp.float32),
+            last_creature_spawn=0,
+            # --- Items ---
+            item_states=self._env.consts.MAP_ITEMS[level%4],
+            # --- Mod States ---
+            night_timer = 700, # beginning of day
+            mimic_state = jnp.array([0, 0, 0, 0, 0, -1], dtype=jnp.int32),  # [x, y, active, direction, target_idx, death_timer]
+            mimic_subpixel = 0.0,
+            whip_timer = 0,
+        )
+
+        obs = self._env._get_observation(state)
+        return obs, state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def map_transition(self, goal_reached, level,
+                       player_x, player_y, bullet_state,
+                       creature_states, item_states,
+                       last_creature_spawn, ammunition_timer,
+                       laser_flash_cooldown, has_key, laser_flash_count, whip_timer):
+        '''
+        If goal_reached is True:
+        - Increment level
+        - Reset player position to start coordinates of the next level
+        - Reset bullet state
+        - Reset creature states
+        - Initialize item states for the new level
+        - Reset last creature spawn timer to zero
+        - Reset ammunition timer
+        - Set laser flash cooldown to zero
+        - Reset has_key to False
+        '''
+        level = jnp.where(goal_reached, level + 1, level)
+        player_x = jnp.where(goal_reached, self._env.consts.MAP_CHECKPOINTS[level%4, 0, 2], player_x) # respawn_x of first checkpoint is the start coordinates for each map
+        player_y = jnp.where(goal_reached, self._env.consts.MAP_CHECKPOINTS[level%4, 0, 3], player_y) # respawn_y of first checkpoint is the start coordinates for each map
+        bullet_state = jnp.where(goal_reached, jnp.zeros((5,), dtype=bullet_state.dtype), bullet_state)
+        creature_states = jnp.where(goal_reached, jnp.zeros_like(creature_states).at[:, 5].set(-1), creature_states)
+        item_states = jnp.where(goal_reached, self._env.consts.MAP_ITEMS[level%4], item_states)
+        last_creature_spawn = jnp.where(goal_reached, 0, last_creature_spawn)
+        ammunition_timer = jnp.where(goal_reached, self._env.consts.LEVEL_AMMO_SUPPLY[level], ammunition_timer)
+        laser_flash_cooldown = jnp.where(goal_reached, 0, laser_flash_cooldown)
+        has_key = jnp.where(goal_reached, False, has_key)
+        whip_timer = jnp.where(goal_reached, 0, whip_timer)        
+
+        return level, player_x, player_y, bullet_state, creature_states, item_states, last_creature_spawn, ammunition_timer, laser_flash_cooldown, has_key, laser_flash_count, whip_timer
+
+
+    def laser_flash_step(self, creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn, action):
+        """
+        Deactivate Laser flash
+        """
+        return creature_states, laser_flash_cooldown, laser_flash_count, last_creature_spawn
+    def _render_flash_floor(self, raster, state, camera_offset):
+        """
+        Deactivate flash floor
+        """
+        return raster
 
     def _render_hook_whip(self, raster, state, camera_offset):
         """
@@ -830,7 +921,7 @@ class WhipMod(JaxAtariInternalModPlugin):
         new_whip_timer = jnp.where(whip_timer > 0, whip_timer - 1, 0)
         
         # Start whipping if DOWNFIRE pressed.
-        start_whip = (action == Action.DOWNFIRE) & (whip_timer == 0) & (ammunition_timer > 0)
+        start_whip = (action == Action.UPFIRE) & (whip_timer == 0) & (ammunition_timer > 0)
         
         # set new whip timer
         new_whip_timer = jnp.where(start_whip, 200, new_whip_timer)

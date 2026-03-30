@@ -1047,7 +1047,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def resolve_bullet_collisions(self, creature_states, bullet_state):
+    def resolve_bullet_collisions(self, creature_states, bullet_state, level):
         """
         Checks if any creature hitbox collides with the bullet.
         If a creature is hit by a bullet the death animation is triggered (set to 15 steps)
@@ -1330,7 +1330,7 @@ class JaxTutankham(JaxEnvironment[TutankhamState, TutankhamObservation, Tutankha
         prev_item_states     = item_states.copy()
         prev_lives           = lives
 
-        creature_states, bullet_state = self.resolve_bullet_collisions(creature_states, bullet_state)
+        creature_states, bullet_state = self.resolve_bullet_collisions(creature_states, bullet_state, level)
 
         # --- Player ---
         (player_x, player_y,
