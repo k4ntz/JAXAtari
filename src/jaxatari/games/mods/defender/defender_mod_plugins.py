@@ -54,11 +54,7 @@ class NoBackupMod(JaxAtariInternalModPlugin):
     Reduces the number of enemies required to clear a level.
     """
 
-    constants_overrides = {
-        "LANDER_LEVEL_AMOUNT": struct.field(
-            pytree_node=True, default_factory=lambda: jnp.array([8, 9, 10, 10, 10])
-        )
-    }
+    constants_overrides = {"LANDER_LEVEL_AMOUNT": jnp.array([8, 9, 10, 10, 10])}
 
 
 # --- Difficult Mods ---
@@ -89,4 +85,3 @@ class NoBreaksInSpaceMod(JaxAtariInternalModPlugin):
     """
 
     constants_overrides = {"SPACE_SHIP_BREAK": 0.0}
-
