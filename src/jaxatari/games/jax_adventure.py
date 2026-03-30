@@ -1666,7 +1666,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         return spaces.Discrete(6)
 
     #ToDo, used for the RL?
-    def observation_space(self) -> spaces:
+    def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
             "player": spaces.Dict({
                 "x": spaces.Box(low=0, high=160, shape=(), dtype=jnp.int32),
