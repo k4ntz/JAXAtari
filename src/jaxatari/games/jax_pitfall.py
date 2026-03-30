@@ -367,6 +367,9 @@ class PitfallState:
     on_ladder: chex.Array
     current_ground_y: chex.Array 
     scorpion_x: chex.Array
+    scorpion_anim_idx: chex.Array
+    scorpion_anim_timer: chex.Array
+    scorpion_facing_right: chex.Array
     touching_wood: chex.Array
     climb_active: chex.Array
     ladder_step_idx: chex.Array
@@ -438,9 +441,13 @@ class PitfallConstants(struct.PyTreeNode):
     scorpion_w: int = 12
     scorpion_h: int = 6
     scorpion_y_offset: int = 0
-    scorpion_speed: float = 0.45
-    scorpion_anim_period: int = 10
+    scorpion_speed: float = 0.6
+    scorpion_anim_period: int = 6
     scorpion_hurt_cooldown_frames: int = 30
+    # Additional hitbox shrink (pixels) applied to the tight visible-pixel bbox.
+    # Increasing these values makes scorpion deaths require more explicit contact.
+    scorpion_hit_inset_x: int = 2
+    scorpion_hit_inset_y: int = 2
 
     # Log pushback when climbing a ladder
     log_push_amount: float = 6.0    # total px to push Harry down on log hit
@@ -537,6 +544,45 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             left_wall_x_px=self.left_wall_x_px,
             right_wall_x_px=self.right_wall_x_px,
         )
+
+        # Scorpion sprite size used for collision/clip. This is derived from the final
+        # padded scorpion masks to keep render and gameplay boxes consistent.
+        self.scorpion_w_px = jnp.array(int(self.renderer.SCORPION_RIGHT_MASKS.shape[2]), dtype=jnp.int32)
+        self.scorpion_h_px = jnp.array(int(self.renderer.SCORPION_RIGHT_MASKS.shape[1]), dtype=jnp.int32)
+
+        # Scorpion hitbox: use a tight bbox of non-transparent pixels (union across
+        # both directions + both animation frames). This avoids collisions being
+        # driven by the padded render canvas.
+        _tid = int(self.renderer.jr.TRANSPARENT_ID)
+        _sc_l = np.array(self.renderer.SCORPION_LEFT_MASKS)
+        _sc_r = np.array(self.renderer.SCORPION_RIGHT_MASKS)
+        _sc_combined = np.concatenate([_sc_l, _sc_r], axis=0)
+        _occupied = np.any(_sc_combined != _tid, axis=0)
+        _ys, _xs = np.where(_occupied)
+        if _ys.size == 0 or _xs.size == 0:
+            _hit_y0 = 0
+            _hit_x0 = 0
+            _hit_h = int(self.scorpion_h_px)
+            _hit_w = int(self.scorpion_w_px)
+        else:
+            _hit_y0 = int(_ys.min())
+            _hit_x0 = int(_xs.min())
+            _hit_h = int(_ys.max()) - _hit_y0 + 1
+            _hit_w = int(_xs.max()) - _hit_x0 + 1
+
+        _inset_x = max(0, int(self.consts.scorpion_hit_inset_x))
+        _inset_y = max(0, int(self.consts.scorpion_hit_inset_y))
+        if _hit_w > 1 and _inset_x > 0:
+            _hit_x0 = min(_hit_x0 + _inset_x, int(self.scorpion_w_px) - 1)
+            _hit_w = max(1, _hit_w - 2 * _inset_x)
+        if _hit_h > 1 and _inset_y > 0:
+            _hit_y0 = min(_hit_y0 + _inset_y, int(self.scorpion_h_px) - 1)
+            _hit_h = max(1, _hit_h - 2 * _inset_y)
+
+        self.scorpion_hit_x0_px = jnp.array(_hit_x0, dtype=jnp.int32)
+        self.scorpion_hit_y0_px = jnp.array(_hit_y0, dtype=jnp.int32)
+        self.scorpion_hit_w_px = jnp.array(_hit_w, dtype=jnp.int32)
+        self.scorpion_hit_h_px = jnp.array(_hit_h, dtype=jnp.int32)
         self.wall_block_player_width_px = jnp.array(
             max(
                 int(self.renderer.HARRY_IDLE_MASKS.shape[2]),
@@ -835,7 +881,9 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         time_left = state.time_left
         lives_left = state.lives_left
         hurt_cooldown = state.hurt_cooldown
-        scorpion_x = state.scorpion_x
+        scorpion_x_prev = state.scorpion_x
+        scorpion_x = scorpion_x_prev
+        scorpion_facing_right = state.scorpion_facing_right
 
         down_action = (
             (action == Action.DOWN) |
@@ -1123,10 +1171,41 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             scorpion_x,
         )
         scorpion_max_x = jnp.asarray(
-            max(0, consts.screen_width - consts.scorpion_w),
+            max(0, consts.screen_width - int(self.scorpion_w_px)),
             dtype=jnp.float32,
         )
         scorpion_x = jnp.clip(scorpion_x, 0.0, scorpion_max_x)
+
+        # Persist scorpion facing direction from its own last nonzero movement.
+        # Must not depend on Harry's position; stopping preserves direction.
+        scorpion_dx = scorpion_x - scorpion_x_prev
+        scorpion_facing_right = jnp.where(
+            scorpion_dx > jnp.asarray(0.0, dtype=jnp.float32),
+            jnp.array(True, dtype=jnp.bool_),
+            jnp.where(
+                scorpion_dx < jnp.asarray(0.0, dtype=jnp.float32),
+                jnp.array(False, dtype=jnp.bool_),
+                scorpion_facing_right,
+            ),
+        )
+
+        # Scorpion animation: advance only while the scorpion is actually moving.
+        scorpion_anim_period = jnp.int32(max(1, int(consts.scorpion_anim_period)))
+        scorpion_moved = (scorpion_x != scorpion_x_prev) & has_scorpion & gameplay_active
+        scorpion_anim_timer = jnp.where(
+            scorpion_moved,
+            state.scorpion_anim_timer.astype(jnp.int32) + jnp.int32(1),
+            jnp.int32(0),
+        )
+        scorpion_advance = scorpion_moved & (scorpion_anim_timer >= scorpion_anim_period)
+        scorpion_anim_idx = jnp.where(
+            scorpion_advance,
+            jnp.int32(1) - state.scorpion_anim_idx.astype(jnp.int32),
+            state.scorpion_anim_idx.astype(jnp.int32),
+        )
+        scorpion_anim_timer = jnp.where(scorpion_advance, jnp.int32(0), scorpion_anim_timer)
+        scorpion_anim_idx = jnp.where(has_scorpion, scorpion_anim_idx, jnp.int32(0))
+        scorpion_anim_timer = jnp.where(has_scorpion, scorpion_anim_timer, jnp.int32(0))
 
         total_frames = jnp.int32(self.consts.initial_time_seconds * self.consts.fps)
         frames_elapsed = jnp.maximum(total_frames - time_left, jnp.int32(0))
@@ -1268,15 +1347,21 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         overlap_snake = (x1 > snake_left) & (x0 < snake_right) & (y1 > snake_y0) & (y0 < snake_y1)
         hit_snake = has_snake & (snake_count > jnp.int32(0)) & overlap_snake & can_hurt
 
-        scorpion_w = jnp.int32(consts.scorpion_w)
-        scorpion_h = jnp.int32(consts.scorpion_h)
-        scorpion_top = jnp.int32(consts.underground_y - consts.scorpion_h + consts.scorpion_y_offset)
-        scorpion_y0 = scorpion_top
-        scorpion_y1 = scorpion_top + scorpion_h
+        scorpion_w = self.scorpion_w_px.astype(jnp.int32)
+        scorpion_h = self.scorpion_h_px.astype(jnp.int32)
+        scorpion_top_render = jnp.int32(consts.underground_y) - scorpion_h + jnp.int32(1) + jnp.int32(consts.scorpion_y_offset)
 
-        max_scorpion_start = jnp.maximum(screen_w_i - scorpion_w, jnp.int32(0))
-        scorpion_left = jnp.clip(scorpion_x.astype(jnp.int32), jnp.int32(0), max_scorpion_start)
-        scorpion_right = scorpion_left + scorpion_w
+        hit_x0 = self.scorpion_hit_x0_px.astype(jnp.int32)
+        hit_y0 = self.scorpion_hit_y0_px.astype(jnp.int32)
+        hit_w = self.scorpion_hit_w_px.astype(jnp.int32)
+        hit_h = self.scorpion_hit_h_px.astype(jnp.int32)
+
+        scorpion_y0 = scorpion_top_render + hit_y0
+        scorpion_y1 = scorpion_y0 + hit_h
+
+        max_scorpion_start = jnp.maximum(screen_w_i - hit_w, jnp.int32(0))
+        scorpion_left = jnp.clip(scorpion_x.astype(jnp.int32) + hit_x0, jnp.int32(0), max_scorpion_start)
+        scorpion_right = scorpion_left + hit_w
 
         overlap_scorpion = (x1 > scorpion_left) & (x0 < scorpion_right) & (y1 > scorpion_y0) & (y0 < scorpion_y1)
         hit_scorpion = has_scorpion & player_is_underground & overlap_scorpion & can_hurt
@@ -1382,6 +1467,9 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             on_ladder=on_ladder,
             current_ground_y=current_ground_y,
             scorpion_x=scorpion_x,
+            scorpion_anim_idx=scorpion_anim_idx,
+            scorpion_anim_timer=scorpion_anim_timer,
+            scorpion_facing_right=scorpion_facing_right,
             touching_wood=touching_wood,
             climb_active=climb_active,
             ladder_step_idx=ladder_step_idx,
@@ -1464,6 +1552,9 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
                 scorpion_spawn_x,
                 state.scorpion_x,
             ),
+            scorpion_anim_idx=jnp.int32(0),
+            scorpion_anim_timer=jnp.int32(0),
+            scorpion_facing_right=state.scorpion_facing_right,
             touching_wood=jnp.array(False, dtype=jnp.bool_),
             climb_active=jnp.array(False, dtype=jnp.bool_),
             ladder_step_idx=jnp.int32(0),
@@ -1619,6 +1710,9 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             on_ladder=jnp.array(False, dtype=jnp.bool_),
             current_ground_y=jnp.array(consts.ground_y, dtype=jnp.float32),
             scorpion_x=jnp.array(consts.scorpion_spawn_x, dtype=jnp.float32),
+            scorpion_anim_idx=jnp.int32(0),
+            scorpion_anim_timer=jnp.int32(0),
+            scorpion_facing_right=jnp.array(True, dtype=jnp.bool_),
             touching_wood=jnp.array(False, dtype=jnp.bool_),
             climb_active=jnp.array(False, dtype=jnp.bool_),
             ladder_step_idx=jnp.int32(0),
@@ -1716,18 +1810,9 @@ class PitfallRenderer(JAXGameRenderer):
                 x0, x1 = int(xs.min()), int(xs.max())
                 return jnp.asarray(frame_np[y0:y1 + 1, x0:x1 + 1, :], dtype=jnp.uint8)
 
-            def _downscale_rgba(frame_rgba: jnp.ndarray, scale: float = 0.78) -> jnp.ndarray:
-                frame_np = np.array(frame_rgba)
-                h_frame, w_frame = frame_np.shape[:2]
-                new_h = max(1, int(round(h_frame * scale)))
-                new_w = max(1, int(round(w_frame * scale)))
-
-                y_idx = np.clip(np.round(np.arange(new_h) / scale).astype(np.int32), 0, h_frame - 1)
-                x_idx = np.clip(np.round(np.arange(new_w) / scale).astype(np.int32), 0, w_frame - 1)
-                resized = frame_np[y_idx][:, x_idx]
-                return jnp.asarray(resized, dtype=jnp.uint8)
-
             frames = []
+            max_h = 1
+            max_w = 1
             for file_name in file_names:
                 file_path = os.path.join(sprite_path, file_name)
                 frame_np = np.load(file_path)
@@ -1756,9 +1841,29 @@ class PitfallRenderer(JAXGameRenderer):
                     raise ValueError(f"Unsupported scorpion frame format for {file_name}: shape={frame.shape}")
 
                 frame_rgba = _trim_rgba(frame_rgba)
-                frame_rgba = _downscale_rgba(frame_rgba, scale=0.78)
+                # IMPORTANT: do not downscale here.
+                # Scorpion masks are downscaled later alongside other sprites; doing it here as
+                # well effectively double-downscales and can delete thin features (tail tip).
                 frames.append(frame_rgba)
-            return frames
+
+                max_h = max(max_h, int(frame_rgba.shape[0]))
+                max_w = max(max_w, int(frame_rgba.shape[1]))
+
+            # Pad to a common size so asset loading can stack frames.
+            # Padding is transparent (alpha=0), so it never crops visible pixels.
+            padded_frames = []
+            for fr in frames:
+                pad_h = max_h - int(fr.shape[0])
+                pad_w = max_w - int(fr.shape[1])
+                padded_frames.append(
+                    jnp.pad(
+                        fr,
+                        ((0, pad_h), (0, pad_w), (0, 0)),
+                        mode='constant',
+                        constant_values=jnp.uint8(0),
+                    )
+                )
+            return padded_frames
 
         def _normalize_to_rgba_u8(image: np.ndarray, asset_name: str) -> np.ndarray:
             if image.ndim == 2:
@@ -1979,7 +2084,103 @@ class PitfallRenderer(JAXGameRenderer):
                 return mask_stack
             return mask_stack[:, border:-border, border:-border]
 
+        def _trim_transparent_border_stack(mask_stack: jnp.ndarray) -> jnp.ndarray:
+            """Trim only fully-transparent borders per frame (safe, non-destructive).
+
+            This avoids cropping real scorpion pixels (which the fixed 1px shrink can do)
+            while still normalizing padding so frames/directions align.
+            """
+            masks_np = np.array(_ensure_3d(mask_stack))
+            tid = int(self.jr.TRANSPARENT_ID)
+            trimmed = []
+            max_h = 1
+            max_w = 1
+            for frame in masks_np:
+                ys, xs = np.where(frame != tid)
+                if ys.size == 0:
+                    cropped = frame
+                else:
+                    y0, y1 = int(ys.min()), int(ys.max()) + 1
+                    x0, x1 = int(xs.min()), int(xs.max()) + 1
+                    cropped = frame[y0:y1, x0:x1]
+                cropped = cropped.astype(np.uint8)
+                trimmed.append(cropped)
+                max_h = max(max_h, int(cropped.shape[0]))
+                max_w = max(max_w, int(cropped.shape[1]))
+
+            padded = []
+            for cropped in trimmed:
+                pad_h = max_h - int(cropped.shape[0])
+                pad_w = max_w - int(cropped.shape[1])
+                padded.append(
+                    np.pad(
+                        cropped,
+                        ((0, pad_h), (0, pad_w)),
+                        mode='constant',
+                        constant_values=tid,
+                    )
+                )
+            return jnp.asarray(np.stack(padded, axis=0), dtype=jnp.uint8)
+
         sprite_scale = 0.80
+        scorpion_scale = 0.60
+
+        def _crop_and_pad_scorpion_stacks(
+            left_stack: jnp.ndarray,
+            right_stack: jnp.ndarray,
+            margin: int = 1,
+        ) -> tuple[jnp.ndarray, jnp.ndarray]:
+            """Crop both scorpion directions to the same union bbox (plus margin), then pad.
+
+            This keeps left/right + both animation frames anchored identically and avoids
+            tail loss from over-trimming.
+            """
+            left_np = np.array(_ensure_3d(left_stack))
+            right_np = np.array(_ensure_3d(right_stack))
+            tid = int(self.jr.TRANSPARENT_ID)
+
+            # Ensure both stacks have identical spatial dimensions before union bbox.
+            max_h = max(int(left_np.shape[1]), int(right_np.shape[1]))
+            max_w = max(int(left_np.shape[2]), int(right_np.shape[2]))
+            if int(left_np.shape[1]) != max_h or int(left_np.shape[2]) != max_w:
+                left_np = np.pad(
+                    left_np,
+                    ((0, 0), (0, max_h - int(left_np.shape[1])), (0, max_w - int(left_np.shape[2]))),
+                    mode='constant',
+                    constant_values=tid,
+                )
+            if int(right_np.shape[1]) != max_h or int(right_np.shape[2]) != max_w:
+                right_np = np.pad(
+                    right_np,
+                    ((0, 0), (0, max_h - int(right_np.shape[1])), (0, max_w - int(right_np.shape[2]))),
+                    mode='constant',
+                    constant_values=tid,
+                )
+            combined = np.concatenate([left_np, right_np], axis=0)
+            occupied = np.any(combined != tid, axis=0)
+            ys, xs = np.where(occupied)
+
+            if ys.size == 0 or xs.size == 0:
+                left_out = jnp.asarray(left_np.astype(np.uint8), dtype=jnp.uint8)
+                right_out = jnp.asarray(right_np.astype(np.uint8), dtype=jnp.uint8)
+                h = max(int(left_out.shape[1]), int(right_out.shape[1]))
+                w = max(int(left_out.shape[2]), int(right_out.shape[2]))
+                return _pad_to(left_out, h, w), _pad_to(right_out, h, w)
+
+            h_full = int(combined.shape[1])
+            w_full = int(combined.shape[2])
+            y0 = max(int(ys.min()) - margin, 0)
+            y1 = min(int(ys.max()) + margin + 1, h_full)
+            x0 = max(int(xs.min()) - margin, 0)
+            x1 = min(int(xs.max()) + margin + 1, w_full)
+
+            left_crop = left_np[:, y0:y1, x0:x1].astype(np.uint8)
+            right_crop = right_np[:, y0:y1, x0:x1].astype(np.uint8)
+            left_out = jnp.asarray(left_crop, dtype=jnp.uint8)
+            right_out = jnp.asarray(right_crop, dtype=jnp.uint8)
+            h = max(int(left_out.shape[1]), int(right_out.shape[1]))
+            w = max(int(left_out.shape[2]), int(right_out.shape[2]))
+            return _pad_to(left_out, h, w), _pad_to(right_out, h, w)
 
         harry_idle = _downscale_mask_stack(self.SHAPE_MASKS['harry_idle'], sprite_scale)
         harry_run = _downscale_mask_stack(self.SHAPE_MASKS['harry_run'], sprite_scale)
@@ -2001,10 +2202,9 @@ class PitfallRenderer(JAXGameRenderer):
         self.HARRY_RUN_MASKS, self.HARRY_RUN_FLIP_OFFSET = _pad_and_offset('harry_run', harry_run)
         self.HARRY_CLIMB_MASKS, self.HARRY_CLIMB_FLIP_OFFSET = _pad_and_offset('harry_climb', harry_climb)
         self.HARRY_JUMP_MASKS, self.HARRY_JUMP_FLIP_OFFSET = _pad_and_offset('harry_jump', harry_jump)
-        scorpion_left = _downscale_mask_stack(self.SHAPE_MASKS['scorpion_left'], sprite_scale)
-        scorpion_right = _downscale_mask_stack(self.SHAPE_MASKS['scorpion_right'], sprite_scale)
-        scorpion_left = _shrink_mask_stack(scorpion_left, border=1)
-        scorpion_right = _shrink_mask_stack(scorpion_right, border=1)
+        scorpion_left = _downscale_mask_stack(self.SHAPE_MASKS['scorpion_left'], scorpion_scale)
+        scorpion_right = _downscale_mask_stack(self.SHAPE_MASKS['scorpion_right'], scorpion_scale)
+        scorpion_left, scorpion_right = _crop_and_pad_scorpion_stacks(scorpion_left, scorpion_right, margin=1)
         scorpion_h = max(int(scorpion_left.shape[1]), int(scorpion_right.shape[1]))
         scorpion_w = max(int(scorpion_left.shape[2]), int(scorpion_right.shape[2]))
         self.SCORPION_LEFT_MASKS = _pad_to(scorpion_left, scorpion_h, scorpion_w)
@@ -2215,9 +2415,8 @@ class PitfallRenderer(JAXGameRenderer):
         snake_size = jnp.array([snake_w, snake_h], dtype=jnp.int32)
         raster = self.jr.draw_rects(raster, snake_pos[None, :], snake_size[None, :], int(self.SNAKE_ID))
 
-        scorpion_period = jnp.int32(max(1, int(self.consts.scorpion_anim_period)))
-        scorpion_anim_idx = jnp.mod(frames_elapsed // scorpion_period, jnp.int32(2)).astype(jnp.int32)
-        scorpion_facing_right = (state.player_x - state.scorpion_x) >= jnp.asarray(0.0, dtype=jnp.float32)
+        scorpion_anim_idx = jnp.mod(state.scorpion_anim_idx.astype(jnp.int32), jnp.int32(2)).astype(jnp.int32)
+        scorpion_facing_right = state.scorpion_facing_right.astype(jnp.bool_)
         scorpion_mask = jnp.where(
             scorpion_facing_right,
             self.SCORPION_RIGHT_MASKS[scorpion_anim_idx],
