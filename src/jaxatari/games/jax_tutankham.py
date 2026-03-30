@@ -340,7 +340,7 @@ class TutankhamConstants(struct.PyTreeNode):
         # MAP 3
         [
             [0, 239, 16, 93],
-            [240, 395, 39, 248],
+            [240, 395, 40, 248],
             [396, 549, 78, 396],
             [550, 800, 98, 550]
         ],
@@ -349,7 +349,7 @@ class TutankhamConstants(struct.PyTreeNode):
             [0, 202, 82, 95],
             [203, 390, 30, 203],
             [391, 530, 18, 391],
-            [531, 800, 119, 531]
+            [531, 800, 120, 531]
         ]
     ], dtype=jnp.int32))
 
@@ -438,8 +438,8 @@ class TutankhamConstants(struct.PyTreeNode):
         ],
         # MAP 3
         [
-            [137, 292, Action.LEFT, 20, 292],
-            [20, 292, Action.RIGHT, 137, 292],
+            [136, 292, Action.LEFT, 20, 292],
+            [20, 292, Action.RIGHT, 136, 292],
             [0, 0, 0, 0, 0], # Padding for maps with fewer teleporters
             [0, 0, 0, 0, 0]
         ],

@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 from functools import partial
+import time
 
 from jaxatari.modification import JaxAtariPostStepModPlugin, JaxAtariInternalModPlugin
 from jaxatari.games.jax_tutankham import TutankhamState
@@ -263,22 +264,22 @@ class UpsideDownMod(JaxAtariInternalModPlugin):
             ],
             # MAP 2 
             [
-                [573, 800, 19, 634],
+                [573, 800, 20, 634],
                 [425, 572, 24, 572],
                 [261, 426, 78, 426],
                 [0,   260, 78, 259],
             ],
             # MAP 3 
             [
-                [553, 800,  107, 715],
+                [553, 800,  108, 715],
                 [401, 552,  98,  550],
                 [269, 400,  78,  396],
-                [0,   268,  39,  248],
+                [0,   268,  40,  248],
             ],
             # MAP 4 
             [
-                [531, 800, 77,  719],
-                [391, 532, 119, 531],
+                [531, 800, 78,  719],
+                [391, 532, 120, 531],
                 [204, 392, 18,  391],
                 [0 ,  203, 30,  203],
             ],
