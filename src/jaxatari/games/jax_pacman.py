@@ -1736,7 +1736,7 @@ class PacmanRenderer(JAXGameRenderer):
         # Pre-render static maze background (walls / HUD / etc)
         # We do this BEFORE loading assets so we can inject it
         if self.consts.MAZE_LAYOUT is not None:
-            
+
             print("Pre-rendering maze background...")
             self.maze_background = self._create_maze_background()
         else:
@@ -1787,6 +1787,17 @@ class PacmanRenderer(JAXGameRenderer):
         bg_rgb = tuple(self.consts.BACKGROUND_COLOR)
         self.bg_id = jnp.array(self.COLOR_TO_ID.get(bg_rgb, 0), dtype=jnp.uint8)
         self.white_id = jnp.array(self.COLOR_TO_ID.get((255, 255, 255), 0), dtype=jnp.uint8)
+        
+        if self.consts.MAZE_LAYOUT is not None:
+            self._maze_layout_stack = jnp.expand_dims(
+                jnp.asarray(self.consts.MAZE_LAYOUT, dtype=jnp.int32), axis=0
+            )
+        else:
+            self._maze_layout_stack = jnp.zeros(
+                (1, self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=jnp.int32
+            )
+
+        self._maze_background_stack = jnp.expand_dims(self.BACKGROUND, axis=0)
 
     @staticmethod
     def procedural_maze_background_rgba(consts: PacmanConstants) -> jnp.ndarray:
