@@ -158,11 +158,11 @@ def make(game_name: str,
         base_consts = env_class().consts
 
         # 3. Handle mods if requested
-        if mods_config:
+        if mods:
             try:
                 return apply_modifications(
                     game_name=game_name,
-                    mods_config=mods_config,
+                    mods_config=mods,
                     allow_conflicts=allow_conflicts,
                     base_consts=base_consts,
                     env_class=env_class,
