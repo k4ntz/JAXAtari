@@ -88,7 +88,6 @@ def get_human_action() -> jax.numpy.ndarray: # Or chex.Array if you use chex
     left = keys[pygame.K_LEFT] or keys[pygame.K_a]
     right = keys[pygame.K_RIGHT] or keys[pygame.K_d]
     fire = keys[pygame.K_SPACE]
-    hammer = keys[pygame.K_h]
 
     action_to_take: int # Explicitly declare the type for clarity
 

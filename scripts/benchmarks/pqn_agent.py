@@ -598,6 +598,7 @@ def _generate_single_final_video(
         rng, step_rng = jax.random.split(rng)
         obs, env_state, reward, done, info = env.step(env_state, action)
         total_reward += float(reward)
+
         # Render frame (get state for rendering)
         state_for_render = env_state
         while hasattr(state_for_render, 'atari_state'):

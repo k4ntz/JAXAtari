@@ -10,7 +10,7 @@ from jaxatari.environment import JAXAtariAction
 from utils import get_human_action, update_pygame, load_game_environment, load_game_mods, print_observation_tree
 from jaxatari.core import make as jaxatari_make
 
-UPSCALE_FACTOR = 3 #5
+UPSCALE_FACTOR = 4
 
 
 def _normalize_mods(mods):
