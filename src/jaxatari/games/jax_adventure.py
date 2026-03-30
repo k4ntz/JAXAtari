@@ -1305,17 +1305,23 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                        self.consts.DRAGON_YELLOW_SPAWN[1],
                                        self.consts.DRAGON_YELLOW_SPAWN[2],
                                        self.consts.DRAGON_YELLOW_SPAWN[3],
-                                       self.consts.DRAGON_YELLOW_SPAWN[4]]).astype(jnp.int32), #ToDo
+                                       self.consts.DRAGON_YELLOW_SPAWN[4],
+                                       self.consts.DRAGON_YELLOW_SPAWN[5],
+                                       self.consts.DRAGON_YELLOW_SPAWN[6]]).astype(jnp.int32), #ToDo
             dragon_green = jnp.array([self.consts.DRAGON_GREEN_SPAWN[0],
                                       self.consts.DRAGON_GREEN_SPAWN[1],
                                       self.consts.DRAGON_GREEN_SPAWN[2],
                                       self.consts.DRAGON_GREEN_SPAWN[3],
-                                      self.consts.DRAGON_GREEN_SPAWN[4]]).astype(jnp.int32),
+                                      self.consts.DRAGON_GREEN_SPAWN[4],
+                                      self.consts.DRAGON_GREEN_SPAWN[5],
+                                      self.consts.DRAGON_GREEN_SPAWN[6]]).astype(jnp.int32),
             dragon_red = jnp.array([self.consts.DRAGON_RED_SPAWN[0],
                                       self.consts.DRAGON_RED_SPAWN[1],
                                       self.consts.DRAGON_RED_SPAWN[2],
                                       self.consts.DRAGON_RED_SPAWN[3],
-                                      self.consts.DRAGON_RED_SPAWN[4]]).astype(jnp.int32), #ToDo
+                                      self.consts.DRAGON_RED_SPAWN[4],
+                                      self.consts.DRAGON_RED_SPAWN[5],
+                                      self.consts.DRAGON_RED_SPAWN[6]]).astype(jnp.int32),
             #Keys: x ,y, tile
             key_yellow = jnp.array([self.consts.KEY_YELLOW_SPAWN[0],
                                     self.consts.KEY_YELLOW_SPAWN[1],
