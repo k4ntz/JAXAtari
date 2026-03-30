@@ -55,10 +55,14 @@ def _get_default_asset_config() -> tuple:
                                                              'Dragon_yellow_dead.npy']},
         {'name': 'dragon_green', 'type': 'group', 'files': ['Dragon_green_neutral.npy',
                                                              'Dragon_green_attack.npy',
+                                                             'Dragon_green_dead.npy']},
+        {'name': 'dragon_red', 'type': 'group', 'files': ['Dragon_green_neutral.npy',
+                                                             'Dragon_green_attack.npy',
                                                              'Dragon_green_dead.npy']},                                                     
         #Keys
         {'name': 'key_yellow', 'type': 'single', 'file': 'Key_yellow.npy'},
         {'name': 'key_black', 'type': 'single', 'file': 'Key_black.npy'},
+        {'name': 'key_white', 'type': 'single', 'file': 'Key_black.npy'},
         #Gate and its animation
         {'name': 'gate_state', 'type': 'group', 'files': ['Gate_closed.npy',
                                                           'Gate_opening_0.npy',
@@ -82,6 +86,9 @@ def _get_default_asset_config() -> tuple:
                                                        'Chalice_Red.npy',
                                                        'Chalice_Turquoise.npy',
                                                        'Chalice_Yellow.npy']},
+        {'name': 'bat', 'type': 'group', 'files': ['Dragon_green_neutral.npy',
+                                                             'Dragon_green_attack.npy']},
+        {'name': 'dot', 'type': 'single', 'file': 'Key_black.npy'}
     )
 
 
@@ -98,6 +105,7 @@ class AdventureConstants(struct.PyTreeNode):
     BRIDGE_SIZE: Tuple[int, int] = (4, 48)
     MAGNET_SIZE: Tuple[int, int] = (8, 16)
     CHALICE_SIZE: Tuple[int, int] = (8, 18)
+    DOT_SIZE: Tuple[int, int] = (1,1)
     #Inventory IDs
     EMPTY_HAND_ID: int = 0
     KEY_YELLOW_ID: int = 1
@@ -106,19 +114,26 @@ class AdventureConstants(struct.PyTreeNode):
     BRIDGE_ID: int = 4
     MAGNET_ID: int = 5
     CHALICE_ID: int = 6
+    KEY_WHITE_ID: int = 7
+    DOT_ID: int = 8
     #dragons (X,Y, Room, state, counter, eat, activate)
     DRAGON_YELLOW_SPAWN: Tuple[int, int, int, int ,int, int, int] = (80, 170, 5, 0, 0, 0, 0)
     DRAGON_GREEN_SPAWN: Tuple[int, int, int, int, int, int, int] = (80, 130, 4, 0, 0, 0, 0)
+    DRAGON_RED_SPAWN: Tuple[int, int, int, int, int, int, int] = (80, 130, 19, 0, 0, 0, 0)
     #Spawn Locations of all Entities: (X, Y, Room/Tile)
     YELLOW_GATE_POS: Tuple[int, int, int] = (76, 140, 0)
     BLACK_GATE_POS: Tuple[int, int, int] = (76, 140, 11)
+    WHITE_GATE_POS: Tuple[int, int, int] = (76, 140, 24)
     PLAYER_SPAWN: Tuple[int, int, int] = (78, 174, 0) #Changed from (78, 174, 0)
     KEY_YELLOW_SPAWN: Tuple[int, int, int] = (31, 110, 0) #Changed from (31, 110, 0) for Testing
     KEY_BLACK_SPAWN: Tuple[int, int, int] = (31, 100, 4)
+    KEY_WHITE_SPAWN: Tuple[int, int, int] = (31, 110, 19)
     SWORD_SPAWN: Tuple[int, int, int] = (31,180,1)
     BRIDGE_SPAWN: Tuple[int, int, int] = (40,130,10)
     MAGNET_SPAWN: Tuple[int, int, int] = (120,180,12)
     CHALICE_SPAWN: Tuple[int, int, int] = (35,180,13)
+    BAT_SPAWN: Tuple[int, int, int, int] = (76, 140, 19, 0)
+    DOT_SPAWN: Tuple[int, int, int] = (76, 140, 29)
     
     #Constants that are used for restricting player movement, for easy of fine tuning
     # Wall coordinates the player cannot pass through
@@ -160,12 +175,15 @@ class AdventureState(struct.PyTreeNode):
     #positions dragons: x, y ,tile ,state, counter, eat, activate
     dragon_yellow: chex.Array
     dragon_green: chex.Array
+    dragon_red: chex.Array
     #positions keys: x, y, tile
     key_yellow: chex.Array
     key_black: chex.Array
+    key_white: chex.Array
     #gates: state, counter
     gate_yellow: chex.Array
     gate_black: chex.Array
+    gate_white: chex.Array
     #position sword: x, y, tile
     sword: chex.Array
     #position bridge: x, y, tile
@@ -176,6 +194,10 @@ class AdventureState(struct.PyTreeNode):
     chalice: chex.Array
     #random key
     rndKey: chex.PRNGKey
+    #bat: x, y, tile, state
+    bat: chex.Array
+    #dot: x, y, tile
+    dot: chex.Array
 
 
 class EntityPosition(struct.PyTreeNode):
@@ -229,7 +251,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         #background_assets_names = _get_default_asset_config()[0]["files"]
         
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/adventure"
-
+#
         self.BackgroundRoom1 = _load_background_map(os.path.join(sprite_path, "Room_1.npy"))
         self.BackgroundRoom2 = _load_background_map(os.path.join(sprite_path, "Room_2.npy"))
         self.BackgroundRoom3 = _load_background_map(os.path.join(sprite_path, "Room_3.npy"))
@@ -361,6 +383,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         gate_yellow_open = state.gate_yellow[0]
 
+        gate_white_open = state.gate_white[0]
+
         gate_black_open = state.gate_black[0]
 
         gate_yellow_not_block = jnp.logical_or(
@@ -368,12 +392,17 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             gate_yellow_open > 4
         )
 
+        gate_white_not_block = jnp.logical_or(
+            jnp.logical_not(room == 24),
+            gate_white_open > 4
+        )
+
         gate_black_not_block = jnp.logical_or(
             jnp.logical_not(room == 11),
             gate_black_open > 4
         )
 
-        gates_not_blocking = jnp.logical_and(gate_yellow_not_block, gate_black_not_block)
+        gates_not_blocking = jnp.logical_and(jnp.logical_and(gate_yellow_not_block, gate_black_not_block),gate_white_not_block)
 
         castle_gate = jnp.logical_or(
             gates_not_blocking,
@@ -387,7 +416,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
         
         castle_collision = jnp.logical_or(
-            jnp.logical_not(jnp.logical_or(room==0, room==11)), #either it is not a castle tile, or
+            jnp.logical_not(jnp.logical_or(jnp.logical_or(room==0, room==11),room==24)), #either it is not a castle tile, or
             jnp.logical_and(castle_walls, castle_gate)
         )
 
@@ -436,7 +465,9 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
              lambda:state.sword[0],
              lambda:state.bridge[0],
              lambda:state.magnet[0],
-             lambda:state.chalice[0]
+             lambda:state.chalice[0],
+             lambda:state.key_white[0],
+             lambda:state.dot[0]
              ]
         )
 
@@ -463,7 +494,9 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
              lambda:state.sword[1],
              lambda:state.bridge[1],
              lambda:state.magnet[1],
-             lambda:state.chalice[1]
+             lambda:state.chalice[1],
+             lambda:state.key_white[1],
+             lambda:state.dot[1]
              ]
         )
 
@@ -489,13 +522,15 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
              lambda:state.sword[2],
              lambda:state.bridge[2],
              lambda:state.magnet[2],
-             lambda:state.chalice[2]
+             lambda:state.chalice[2],
+             lambda:state.key_white[2],
+             lambda:state.dot[2]
              ]
         )
         
         #enter yellow castle
         new_player_y, new_player_tile, new_item_tile, new_item_y = jax.lax.cond(
-            jnp.logical_and(new_player_tile == 0, jnp.logical_and(new_player_y <145,jnp.logical_and(new_player_x<110, new_player_x>50))),
+            jnp.logical_and(new_player_tile == 0, jnp.logical_and(new_player_y <148,jnp.logical_and(new_player_x<110, new_player_x>50))),
             lambda: (212, 1, 1,new_item_y+(212-new_player_y)),
             lambda: (new_player_y, new_player_tile, new_item_tile, new_item_y)
         )
@@ -503,13 +538,13 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         #leave yellow castle
         new_player_x, new_player_y, new_player_tile, new_item_tile, new_item_y, new_item_x = jax.lax.cond(
             jnp.logical_and(new_player_tile == 1, new_player_y >212),
-            lambda: (77, 145, 0, 0, new_item_y-(new_player_y-145),new_item_x+(77-new_player_x)),
+            lambda: (77, 148, 0, 0, new_item_y-(new_player_y-148),new_item_x+(77-new_player_x)),
             lambda: (new_player_x, new_player_y, new_player_tile, new_item_tile, new_item_y, new_item_x)
         )
 
         #enter black castle
         new_player_y, new_player_tile, new_item_tile, new_item_y = jax.lax.cond(
-            jnp.logical_and(new_player_tile == 11, jnp.logical_and(new_player_y <145,jnp.logical_and(new_player_x<110, new_player_x>50))),
+            jnp.logical_and(new_player_tile == 11, jnp.logical_and(new_player_y <148,jnp.logical_and(new_player_x<110, new_player_x>50))),
             lambda: (212, 12, 12,new_item_y+(212-new_player_y)),
             lambda: (new_player_y, new_player_tile, new_item_tile, new_item_y)
         )
@@ -517,7 +552,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         #leave black castle
         new_player_x, new_player_y, new_player_tile, new_item_tile, new_item_y, new_item_x = jax.lax.cond(
             jnp.logical_and(new_player_tile == 12, new_player_y >212),
-            lambda: (77, 145, 11, 11, new_item_y-(new_player_y-145),new_item_x+(77-new_player_x)),
+            lambda: (77, 148, 11, 11, new_item_y-(new_player_y-148),new_item_x+(77-new_player_x)),
             lambda: (new_player_x, new_player_y, new_player_tile, new_item_tile, new_item_y, new_item_x)
         )
 
@@ -596,13 +631,18 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                     lambda op: op[3],
                                     operand=(new_item_x,new_item_y,new_item_tile,state.key_black)
                                     ),
+            key_white= jax.lax.cond(state.player[3]==self.consts.KEY_WHITE_ID,
+                                    lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
+                                    lambda op: op[3],
+                                    operand=(new_item_x,new_item_y,new_item_tile,state.key_white)
+                                    ),
             sword= jax.lax.cond(state.player[3]==self.consts.SWORD_ID,
                                 lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
                                 lambda op: op[3],
                                 operand=(new_item_x,new_item_y,new_item_tile,state.sword)
                                 ),
             bridge= jax.lax.cond(state.player[3]==self.consts.BRIDGE_ID,
-                                 lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
+                                lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
                                 lambda op: op[3],
                                 operand=(new_item_x,new_item_y,new_item_tile,state.bridge)
                                 ),
@@ -615,15 +655,23 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                   lambda op: jnp.array([op[0],op[1],op[2],op[3]]).astype(jnp.int32),
                                   lambda op: op[4],
                                   operand=(new_item_x,new_item_y,new_item_tile,state.chalice[3],state.chalice)
-                                  )
+                                  ),
+            dot= jax.lax.cond(state.player[3]==self.consts.DOT_ID,
+                                    lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
+                                    lambda op: op[3],
+                                    operand=(new_item_x,new_item_y,new_item_tile,state.dot)
+                                    ),
         )
     
     def _gate_interaction(self, state: AdventureState) -> AdventureState:
         gate_yellow_state = state.gate_yellow[0]
         gate_yellow_close = False
+        gate_white_state = state.gate_white[0]
+        gate_white_close = False
         gate_black_state = state.gate_black[0]
         gate_black_close = False
         gate_yellow_counter = state.gate_yellow[1]
+        gate_white_counter = state.gate_white[1]
         gate_black_counter = state.gate_black[1]
 
         room = state.player[2]
@@ -632,6 +680,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         yellow_key_in_inventory = (state.player[3] == 1)
         black_key_in_inventory = (state.player[3] == 2)
+        white_key_in_inventory = (state.player[3] == 7)
 
         player_infront_yellow_gate = jnp.logical_and(
             room == 0,
@@ -659,18 +708,35 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             )
         )
 
+        player_infront_white_gate = jnp.logical_and(
+            room == 24,
+            jnp.logical_and(
+                jnp.logical_and(
+                    player_x >= self.consts.PATH_VERTICAL_LEFT,
+                    player_x <= self.consts.PATH_VERTICAL_RIGHT
+                ),jnp.logical_and(
+                    player_y >= self.consts.CASTLE_BASE_CORNER_Y,
+                    player_y <= self.consts.CASTLE_BASE_CORNER_Y + 8
+                )
+            )
+        )
+
 
         yellow_key_in_range = jnp.logical_and(yellow_key_in_inventory, player_infront_yellow_gate)
         black_key_in_range = jnp.logical_and(black_key_in_inventory, player_infront_black_gate)
+        white_key_in_range = jnp.logical_and(white_key_in_inventory, player_infront_white_gate)
         
         gate_opening_yellow = jnp.logical_and(jnp.logical_and(jnp.logical_and(gate_yellow_state>=0, gate_yellow_state<6), yellow_key_in_range), gate_yellow_counter == 0)
         gate_opening_black = jnp.logical_and(jnp.logical_and(jnp.logical_and(gate_black_state>=0, gate_black_state<6), black_key_in_range), gate_black_counter == 0)
+        gate_opening_white = jnp.logical_and(jnp.logical_and(jnp.logical_and(gate_white_state>=0, gate_white_state<6), white_key_in_range), gate_white_counter == 0)
     
         gate_yellow_close =jnp.logical_and(jnp.logical_and(gate_yellow_state>0, gate_yellow_counter > 20), yellow_key_in_range)
         gate_black_close = jnp.logical_and(jnp.logical_and(gate_black_state>0, gate_black_counter > 20), black_key_in_range)
+        gate_white_close =jnp.logical_and(jnp.logical_and(gate_white_state>0, gate_white_counter > 20), white_key_in_range)
 
         gate_opening_yellow = jnp.logical_and(gate_opening_yellow, jnp.logical_not(gate_yellow_close))
         gate_opening_black = jnp.logical_and(gate_opening_black, jnp.logical_not(gate_black_close))
+        gate_opening_white = jnp.logical_and(gate_opening_white, jnp.logical_not(gate_white_close))
         
         gate_yellow_state = jax.lax.cond(
             gate_opening_yellow,
@@ -698,6 +764,20 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             lambda op: op - 1,
             lambda op:op,
             operand = gate_black_state
+        )
+
+        gate_white_state = jax.lax.cond(
+            gate_opening_white,
+            lambda op: op + 1,
+            lambda op: op,
+            operand = gate_white_state
+        )
+
+        gate_white_state = jax.lax.cond(
+            gate_white_close,
+            lambda op: op - 1,
+            lambda op:op,
+            operand = gate_white_state
         )
 
         gate_yellow_counter = jax.lax.cond(
@@ -728,12 +808,28 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             operand = gate_black_counter
         )
 
+        gate_white_counter = jax.lax.cond(
+            jnp.logical_or(gate_white_state == 6, jnp.logical_and(gate_white_state==0, gate_white_counter<30)),
+            lambda op:op + 1,
+            lambda op:op,
+            operand = gate_white_counter
+        )
+
+        gate_white_counter = jax.lax.cond(
+            jnp.logical_and(gate_white_state == 0, gate_white_counter>=30),
+            lambda _: 0,
+            lambda op:op,
+            operand = gate_white_counter
+        )
+
         new_gate_yellow = [gate_yellow_state, gate_yellow_counter]
         new_gate_black = [gate_black_state, gate_black_counter]
+        new_gate_white = [gate_white_state, gate_white_counter]
 
         return state.replace(
             gate_yellow=new_gate_yellow,
-            gate_black=new_gate_black
+            gate_black=new_gate_black,
+            gate_white=new_gate_white,
         )
     
     def _item_pickup(self, state: AdventureState, action: chex.Array) -> AdventureState:
@@ -752,7 +848,9 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                 lambda:(state.sword[0],state.sword[1],state.sword[2],self.consts.SWORD_SIZE[0],self.consts.SWORD_SIZE[1]),
                 lambda:(state.bridge[0],state.bridge[1],state.bridge[2],self.consts.BRIDGE_SIZE[0],self.consts.BRIDGE_SIZE[1]),
                 lambda:(state.magnet[0],state.magnet[1],state.magnet[2],self.consts.MAGNET_SIZE[0],self.consts.MAGNET_SIZE[1]),
-                lambda:(state.chalice[0],state.chalice[1],state.chalice[2],self.consts.CHALICE_SIZE[0],self.consts.CHALICE_SIZE[1])
+                lambda:(state.chalice[0],state.chalice[1],state.chalice[2],self.consts.CHALICE_SIZE[0],self.consts.CHALICE_SIZE[1]),
+                lambda:(state.key_white[0],state.key_white[1],state.key_white[2],self.consts.KEY_SIZE[0],self.consts.KEY_SIZE[1]),
+                lambda:(state.dot[0],state.dot[1],state.dot[2],self.consts.DOT_SIZE[0],self.consts.DOT_SIZE[1])
                 ])
             #jax.debug.print("Hitbox values item:{a},{b},{c},{d},{e}",a=item_x,b=item_y,c=tile,d=item_width,e=item_height)
             
@@ -897,7 +995,17 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                 lambda _: jax.lax.cond(
                                     check_for_item(self=self, state=state, item_ID=self.consts.CHALICE_ID),
                                     lambda _: self.consts.CHALICE_ID, 
-                                    lambda op: op,
+                                    lambda _: jax.lax.cond(
+                                        check_for_item(self=self, state=state, item_ID=self.consts.KEY_WHITE_ID),
+                                        lambda _: self.consts.KEY_WHITE_ID, 
+                                        lambda _: jax.lax.cond(
+                                            check_for_item(self=self, state=state, item_ID=self.consts.DOT_ID),
+                                            lambda _: self.consts.DOT_ID, 
+                                            lambda op: op,
+                                            operand=state.player[3]
+                                        ),
+                                        operand=state.player[3]
+                                    ),
                                     operand=state.player[3]
                                 ),
                                 operand=state.player[3]
@@ -1125,6 +1233,18 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             operand = None
         )
 
+        #try to pull white key
+        key_white_x = state.key_white[0]
+        key_white_y = state.key_white[1]
+        direction_x = jnp.sign(magnet_x - key_white_x)
+        direction_y = jnp.sign(magnet_y - key_white_y)
+        key_white_x, key_white_y = jax.lax.cond(
+            jnp.logical_and(state.key_white[2]==state.magnet[2], state.player[3]!=7),
+            lambda _: (key_white_x+direction_x,key_white_y+direction_y),
+            lambda _: (key_white_x,key_white_y), 
+            operand = None
+        )
+
         #try to pull bridge
         bridge_x = state.bridge[0]
         bridge_y = state.bridge[1]
@@ -1152,6 +1272,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         return state.replace(
             key_yellow=jnp.array([key_yellow_x,key_yellow_y,state.key_yellow[2]]).astype(jnp.int32),
             key_black=jnp.array([key_black_x,key_black_y,state.key_black[2]]).astype(jnp.int32),
+            key_white=jnp.array([key_white_x,key_white_y,state.key_white[2]]).astype(jnp.int32),
             sword=jnp.array([sword_x,sword_y,state.sword[2]]).astype(jnp.int32),
             bridge=jnp.array([bridge_x,bridge_y,state.bridge[2]]).astype(jnp.int32),
             chalice=jnp.array([chalice_x,chalice_y,state.chalice[2],state.chalice[3]]).astype(jnp.int32)
@@ -1188,7 +1309,12 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                       self.consts.DRAGON_GREEN_SPAWN[1],
                                       self.consts.DRAGON_GREEN_SPAWN[2],
                                       self.consts.DRAGON_GREEN_SPAWN[3],
-                                      self.consts.DRAGON_GREEN_SPAWN[4]]).astype(jnp.int32), #ToDo
+                                      self.consts.DRAGON_GREEN_SPAWN[4]]).astype(jnp.int32),
+            dragon_red = jnp.array([self.consts.DRAGON_RED_SPAWN[0],
+                                      self.consts.DRAGON_RED_SPAWN[1],
+                                      self.consts.DRAGON_RED_SPAWN[2],
+                                      self.consts.DRAGON_RED_SPAWN[3],
+                                      self.consts.DRAGON_RED_SPAWN[4]]).astype(jnp.int32), #ToDo
             #Keys: x ,y, tile
             key_yellow = jnp.array([self.consts.KEY_YELLOW_SPAWN[0],
                                     self.consts.KEY_YELLOW_SPAWN[1],
@@ -1196,9 +1322,13 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             key_black = jnp.array([self.consts.KEY_BLACK_SPAWN[0],
                                     self.consts.KEY_BLACK_SPAWN[1],
                                     self.consts.KEY_BLACK_SPAWN[2]]).astype(jnp.int32),
+            key_white = jnp.array([self.consts.KEY_WHITE_SPAWN[0],
+                                    self.consts.KEY_WHITE_SPAWN[1],
+                                    self.consts.KEY_WHITE_SPAWN[2]]).astype(jnp.int32),
             #Gate: state, counter (ToDo for animation?)
             gate_yellow=jnp.array([0,0]).astype(jnp.int32),
             gate_black=jnp.array([0,0]).astype(jnp.int32),
+            gate_white=jnp.array([0,0]).astype(jnp.int32),
             #Items: x, y, tile
             sword = jnp.array([self.consts.SWORD_SPAWN[0],
                                self.consts.SWORD_SPAWN[1],
@@ -1214,7 +1344,14 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                  self.consts.CHALICE_SPAWN[1],
                                  self.consts.CHALICE_SPAWN[2],7]).astype(jnp.int32), #ToDo
             #random key
-            rndKey = state_key
+            rndKey = state_key,
+            bat = jnp.array([self.consts.BAT_SPAWN[0],
+                                      self.consts.BAT_SPAWN[1],
+                                      self.consts.BAT_SPAWN[2],
+                                      self.consts.BAT_SPAWN[3]]).astype(jnp.int32),
+            dot = jnp.array([self.consts.DOT_SPAWN[0],
+                                    self.consts.DOT_SPAWN[1],
+                                    self.consts.DOT_SPAWN[2]]).astype(jnp.int32)
         )
         initial_obs = self._get_observation(state)
 
@@ -1231,15 +1368,20 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             player=state.player,
             dragon_yellow=state.dragon_yellow,
             dragon_green=state.dragon_green,
+            dragon_red=state.dragon_red,
             key_yellow=state.key_yellow,
             key_black=state.key_black,
+            key_white=state.key_white,
             gate_yellow=state.gate_yellow,
             gate_black=state.gate_black,
+            gate_white=state.gate_white,
             sword=state.sword,
             bridge=state.bridge,
             magnet=state.magnet,
             chalice=state.chalice,
-            rndKey=state.rndKey
+            rndKey=state.rndKey,
+            bat=state.bat,
+            dot=state.dot
         )
         state = self._player_step(state, action)
         state = self._item_pickup(state, action)
@@ -1413,7 +1555,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: AdventureState, state: AdventureState):
         reward = jax.lax.cond(
-            jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1), #lose when eaten by dragon
+            jnp.logical_or(jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1),state.dragon_red[5]==1), #lose when eaten by dragon
             lambda :-1,
             lambda : jax.lax.cond(
                 state.chalice[2]==1, #win when chalice in yellow castle
@@ -1430,7 +1572,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AdventureState) -> bool:
-        return jnp.logical_or(jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1), state.chalice[2]==1)
+        return jnp.logical_or(jnp.logical_or(jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1),state.dragon_red[5]==1), state.chalice[2]==1)
 
 
 class AdventureRenderer(JAXGameRenderer):
@@ -1489,6 +1631,13 @@ class AdventureRenderer(JAXGameRenderer):
             lambda r : r,
             operand = raster,
         )
+        dragon_red_mask = self.SHAPE_MASKS["dragon_red"][state.dragon_green[3]]
+        raster = jax.lax.cond(
+            state.dragon_red[2]==state.player[2],
+            lambda r : self.jr.render_at(raster, state.dragon_red[0], state.dragon_red[1], dragon_red_mask),
+            lambda r : r,
+            operand = raster,
+        )
         
         #keys
         key_yellow_mask = self.SHAPE_MASKS["key_yellow"]
@@ -1502,6 +1651,13 @@ class AdventureRenderer(JAXGameRenderer):
         raster = jax.lax.cond(
             state.key_black[2]==state.player[2],
             lambda r : self.jr.render_at(raster, state.key_black[0], state.key_black[1], key_black_mask),
+            lambda r : r,
+            operand = raster,
+        )
+        key_white_mask = self.SHAPE_MASKS["key_white"]
+        raster = jax.lax.cond(
+            state.key_white[2]==state.player[2],
+            lambda r : self.jr.render_at(raster, state.key_white[0], state.key_white[1], key_white_mask),
             lambda r : r,
             operand = raster,
         )
@@ -1519,6 +1675,13 @@ class AdventureRenderer(JAXGameRenderer):
         raster = jax.lax.cond(
             self.consts.BLACK_GATE_POS[2]==state.player[2],
             lambda r : self.jr.render_at(raster, self.consts.BLACK_GATE_POS[0], self.consts.BLACK_GATE_POS[1], gate_black_mask),#ToDO
+            lambda r : r,
+            operand = raster,
+        )
+        gate_white_mask = self.SHAPE_MASKS["gate_state"][state.gate_white[0]]
+        raster = jax.lax.cond(
+            self.consts.WHITE_GATE_POS[2]==state.player[2],
+            lambda r : self.jr.render_at(raster, self.consts.WHITE_GATE_POS[0], self.consts.WHITE_GATE_POS[1], gate_white_mask),#ToDO
             lambda r : r,
             operand = raster,
         )
@@ -1552,6 +1715,21 @@ class AdventureRenderer(JAXGameRenderer):
         raster = jax.lax.cond(
             state.chalice[2]==state.player[2],
             lambda r : self.jr.render_at(raster, state.chalice[0], state.chalice[1], chalice_mask),
+            lambda r : r,
+            operand = raster,
+        )
+
+        bat_mask = self.SHAPE_MASKS["bat"][state.bat[3]]
+        raster = jax.lax.cond(
+            state.bat[2]==state.player[2],
+            lambda r : self.jr.render_at(raster, self.consts.BAT_SPAWN[0], self.consts.BAT_SPAWN[1], bat_mask),#ToDO
+            lambda r : r,
+            operand = raster,
+        )
+        dot_mask = self.SHAPE_MASKS["dot"]
+        raster = jax.lax.cond(
+            state.dot[2]==state.player[2],
+            lambda r : self.jr.render_at(raster, state.dot[0], state.dot[1], dot_mask),
             lambda r : r,
             operand = raster,
         )
