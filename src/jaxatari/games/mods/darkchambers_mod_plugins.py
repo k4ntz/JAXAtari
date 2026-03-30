@@ -470,7 +470,79 @@ class EasyModeMod(JaxAtariPostStepModPlugin):
 
 
 # ============================================================================
-# MOD 8: CHECKPOINTS
+# MOD 8: HARD MODE
+# ============================================================================
+class HardModeMod(JaxAtariPostStepModPlugin):
+    """
+    Hard mode preset for DarkChambers.
+
+    Effects:
+    - Lower survivability (reduced starting health and heals).
+    - Slower shooting cadence.
+    - Enemies hit harder and spawn more frequently.
+    - Does not auto-enable other gameplay mods.
+    """
+
+    constants_overrides = {
+        "STARTING_HEALTH": 24,
+        "HEALTH_GAIN": 8,
+        "FIRE_RATE_LIMIT": 45,
+        "FIRE_RATE_LIMIT_WITH_GUN": 24,
+        "SPAWNER_SPAWN_INTERVAL": 220,
+        "ZOMBIE_DAMAGE": 2,
+        "WRAITH_DAMAGE": 2,
+        "SKELETON_DAMAGE": 4,
+        "WIZARD_DAMAGE": 5,
+        "GRIM_REAPER_DAMAGE": 6,
+    }
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: DarkChambersState, new_state: DarkChambersState) -> DarkChambersState:
+        return new_state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        return obs, state
+
+
+# ============================================================================
+# MOD 9: VERY HARD MODE
+# ============================================================================
+class VeryHardModeMod(JaxAtariPostStepModPlugin):
+    """
+    Very hard mode preset for DarkChambers.
+
+    Effects:
+    - Strong survivability penalty.
+    - Significantly slower shooting cadence.
+    - Faster enemy pressure (damage + spawn cadence).
+    - Does not auto-enable other gameplay mods.
+    """
+
+    constants_overrides = {
+        "STARTING_HEALTH": 18,
+        "HEALTH_GAIN": 6,
+        "FIRE_RATE_LIMIT": 55,
+        "FIRE_RATE_LIMIT_WITH_GUN": 30,
+        "SPAWNER_SPAWN_INTERVAL": 160,
+        "ZOMBIE_DAMAGE": 2,
+        "WRAITH_DAMAGE": 3,
+        "SKELETON_DAMAGE": 5,
+        "WIZARD_DAMAGE": 6,
+        "GRIM_REAPER_DAMAGE": 8,
+    }
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: DarkChambersState, new_state: DarkChambersState) -> DarkChambersState:
+        return new_state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        return obs, state
+
+
+# ============================================================================
+# MOD 10: CHECKPOINTS
 # ============================================================================
 class CheckpointsMod(JaxAtariPostStepModPlugin):
     """

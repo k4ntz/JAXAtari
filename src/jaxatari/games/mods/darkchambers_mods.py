@@ -7,6 +7,8 @@ from jaxatari.games.mods.darkchambers_mod_plugins import (
     WizardBulletShootingMod,
     HammerMod,
     EasyModeMod,
+    HardModeMod,
+    VeryHardModeMod,
     CheckpointsMod,
 )
 
@@ -62,7 +64,17 @@ class DarkchambersEnvMod(JaxAtariModController):
          - Gun is always active
          - Keeps most regular item slots active for high item density
 
-     8. checkpoints
+     8. hard
+         - Hard preset with lower survivability and slower shooting
+         - Enemies hit harder and spawn pressure increases
+         - Does not auto-enable other mods (no wizard bullets, no grim reaper toggle)
+
+     9. very_hard
+         - Very hard preset with stronger survivability penalties
+         - Heavier enemy pressure than hard
+         - Does not auto-enable other mods (no wizard bullets, no grim reaper toggle, no poison toggle)
+
+     10. checkpoints
          - Enables chamber checkpoints (middle/left/right)
          - Starts each run with 5 lives
          - On death, respawns at the current chamber checkpoint while keeping score
@@ -87,6 +99,8 @@ class DarkchambersEnvMod(JaxAtariModController):
     python3 scripts/play.py -g Darkchambers -m hammer
     python3 scripts/play.py -g Darkchambers -m speed_potion heal_potion poison_potion hammer
     python3 scripts/play.py -g Darkchambers -m easy_mode
+    python3 scripts/play.py -g Darkchambers -m hard
+    python3 scripts/play.py -g Darkchambers -m very_hard
     python3 scripts/play.py -g Darkchambers -m checkpoints
     """
 
@@ -98,6 +112,8 @@ class DarkchambersEnvMod(JaxAtariModController):
         "wizard_bullet_shooting": WizardBulletShootingMod,
         "hammer": HammerMod,
         "easy_mode": EasyModeMod,
+        "hard": HardModeMod,
+        "very_hard": VeryHardModeMod,
         "checkpoints": CheckpointsMod,
     }
 

@@ -5436,9 +5436,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         # Columns: [x, y, w, h, type, in_view]
         enemy_low  = np.tile(np.array([[-1, -1, 0, 0, 0, 0]], dtype=np.int32), (NUM_ENEMIES, 1))
         enemy_high = np.tile(np.array([[_W, _W, _W, _W, ENEMY_GRIM_REAPER, 1]], dtype=np.int32), (NUM_ENEMIES, 1))
-        # item type max = ITEM_HAMMER = 18
+        # item type max includes checkpoint entries.
         item_low  = np.tile(np.array([[-1, -1, 0, 0, 0, 0]], dtype=np.int32), (NUM_ITEMS, 1))
-        item_high = np.tile(np.array([[_W, _W, _W, _W, ITEM_HAMMER, 1]], dtype=np.int32), (NUM_ITEMS, 1))
+        item_high = np.tile(np.array([[_W, _W, _W, _W, ITEM_CHECKPOINT, 1]], dtype=np.int32), (NUM_ITEMS, 1))
         # Columns without type: [x, y, w, h, in_view]
         spawner_low  = np.tile(np.array([[-1, -1, 0, 0, 0]], dtype=np.int32), (NUM_SPAWNERS, 1))
         spawner_high = np.tile(np.array([[_W, _W, _W, _W, 1]], dtype=np.int32), (NUM_SPAWNERS, 1))
@@ -5480,6 +5480,11 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             "bomb_count": spaces.Box(low=0, high=MAX_BOMBS, shape=(), dtype=jnp.int32),
             "hammer_count": spaces.Box(low=0, high=MAX_HAMMERS, shape=(), dtype=jnp.int32),
             "speed_boost_active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=5, shape=(), dtype=jnp.int32),
+            "poison_cloud_x": spaces.Box(low=0, high=self.consts.WORLD_WIDTH, shape=(), dtype=jnp.int32),
+            "poison_cloud_y": spaces.Box(low=0, high=self.consts.WORLD_HEIGHT, shape=(), dtype=jnp.int32),
+            "poison_cloud_active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+            "damage_cooldown": spaces.Box(low=0, high=120, shape=(), dtype=jnp.int32),
         })
     
     def image_space(self) -> spaces.Box:
@@ -5806,4 +5811,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             obs.bomb_count.flatten(),
             obs.hammer_count.flatten(),
             obs.speed_boost_active.flatten(),
+            obs.lives.flatten(),
+            obs.poison_cloud_x.flatten(),
+            obs.poison_cloud_y.flatten(),
+            obs.poison_cloud_active.flatten(),
+            obs.damage_cooldown.flatten(),
         ])
