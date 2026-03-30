@@ -173,7 +173,7 @@ class SuddenDeathMod(JaxAtariPostStepModPlugin):
         
         return modified_obs, modified_state, new_reward, done, info
     
-
+  
     
 class TemporalPenaltyMod(JaxAtariPostStepModPlugin):
     """
