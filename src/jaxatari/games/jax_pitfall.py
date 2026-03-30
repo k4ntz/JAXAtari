@@ -447,7 +447,11 @@ class PitfallConstants(struct.PyTreeNode):
     # Additional hitbox shrink (pixels) applied to the tight visible-pixel bbox.
     # Increasing these values makes scorpion deaths require more explicit contact.
     scorpion_hit_inset_x: int = 2
-    scorpion_hit_inset_y: int = 2
+    # Vertical inset is applied from the top only by default, so the hitbox sits
+    # lower while keeping the bottom edge unchanged.
+    scorpion_hit_inset_top: int = 2
+    scorpion_hit_inset_bottom: int = 0
+    scorpion_hit_inset_y: int = 2  # backwards compat (unused by default)
 
     # Log pushback when climbing a ladder
     log_push_amount: float = 6.0    # total px to push Harry down on log hit
@@ -572,13 +576,15 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             _hit_w = int(_xs.max()) - _hit_x0 + 1
 
         _inset_x = max(0, int(self.consts.scorpion_hit_inset_x))
-        _inset_y = max(0, int(self.consts.scorpion_hit_inset_y))
+        _inset_top = max(0, int(getattr(self.consts, "scorpion_hit_inset_top", self.consts.scorpion_hit_inset_y)))
+        _inset_bottom = max(0, int(getattr(self.consts, "scorpion_hit_inset_bottom", self.consts.scorpion_hit_inset_y)))
         if _hit_w > 1 and _inset_x > 0:
             _hit_x0 = min(_hit_x0 + _inset_x, int(self.scorpion_w_px) - 1)
             _hit_w = max(1, _hit_w - 2 * _inset_x)
-        if _hit_h > 1 and _inset_y > 0:
-            _hit_y0 = min(_hit_y0 + _inset_y, int(self.scorpion_h_px) - 1)
-            _hit_h = max(1, _hit_h - 2 * _inset_y)
+        _inset_y_total = _inset_top + _inset_bottom
+        if _hit_h > 1 and _inset_y_total > 0:
+            _hit_y0 = min(_hit_y0 + _inset_top, int(self.scorpion_h_px) - 1)
+            _hit_h = max(1, _hit_h - _inset_y_total)
 
         self.scorpion_hit_x0_px = jnp.array(_hit_x0, dtype=jnp.int32)
         self.scorpion_hit_y0_px = jnp.array(_hit_y0, dtype=jnp.int32)
@@ -2616,9 +2622,12 @@ class PitfallRenderer(JAXGameRenderer):
 
         font = HUD_FONT_16
 
+        roman_i = jnp.ones((5, 1), dtype=jnp.bool_)
+
         def _draw_digits(
             f: jnp.ndarray,
             digits: jnp.ndarray,
+            draw_mask: jnp.ndarray,
             top: int,
             left: int,
             spacing: int,
@@ -2638,7 +2647,7 @@ class PitfallRenderer(JAXGameRenderer):
 
             def body(i, frame_in):
                 d = digits[i].astype(jnp.int32)
-                glyph = font[d].astype(jnp.bool_)
+                glyph = font[d].astype(jnp.bool_) & draw_mask[i]
                 start = (top_i32, left0_i32 + jnp.int32(i) * spacing_i32, jnp.int32(0))
                 region = lax.dynamic_slice(frame_in, start, (5, 3, channels))
                 new_region = jnp.where(glyph[:, :, None], draw_color[None, None, :], region)
@@ -2646,20 +2655,49 @@ class PitfallRenderer(JAXGameRenderer):
 
             return lax.fori_loop(0, digits.shape[0], body, f)
 
-        digit_spacing = 4
+        def _draw_mask(
+            f: jnp.ndarray,
+            mask: jnp.ndarray,
+            top: int,
+            left: int,
+            color: jnp.ndarray,
+        ) -> jnp.ndarray:
+            top_i32 = jnp.int32(top)
+            left_i32 = jnp.int32(left)
+            channels = f.shape[2]
 
-        score_color = jnp.array([40, 220, 40], dtype=jnp.uint8)
-        lives_color = jnp.array([240, 200, 40], dtype=jnp.uint8)
-        time_color = jnp.array([40, 200, 240], dtype=jnp.uint8)
-        debug_color = jnp.array([180, 180, 180], dtype=jnp.uint8)
+            color_u8 = color.astype(jnp.uint8)
+            if channels == 1:
+                gray = jnp.mean(color_u8.astype(jnp.float32)).astype(jnp.uint8)
+                draw_color = jnp.array([gray], dtype=jnp.uint8)
+            else:
+                draw_color = color_u8
+
+            # `lax.dynamic_slice` requires slice sizes to be static (Python ints)
+            # when used under `jit`.
+            h = int(mask.shape[0])
+            w = int(mask.shape[1])
+            start = (top_i32, left_i32, jnp.int32(0))
+            region = lax.dynamic_slice(f, start, (h, w, channels))
+            new_region = jnp.where(mask[:, :, None], draw_color[None, None, :], region)
+            return lax.dynamic_update_slice(f, new_region, start)
+
+        digit_spacing = 4
+        hud_white = jnp.array([255, 255, 255], dtype=jnp.uint8)
 
         score_row = 2
-        timer_row = 9
-        timer_x = 20
+        hud_row = 12
+        hud_left = 8
+        score_x = hud_left
+        lives_x = hud_left
+        time_x = hud_left + 10
+
+        lives_i_spacing = 2
 
         score_digits = self.jr.int_to_digits(state.score.astype(jnp.int32), max_digits=4)
-        lives_digits = self.jr.int_to_digits(state.lives_left.astype(jnp.int32), max_digits=1)
-        screen_digits = self.jr.int_to_digits(state.screen_id.astype(jnp.int32), max_digits=3)
+        score_has_nonzero = score_digits != jnp.int32(0)
+        score_seen = jnp.cumsum(score_has_nonzero.astype(jnp.int32))
+        score_draw_mask = (score_seen > jnp.int32(0)) | (jnp.arange(score_digits.shape[0]) == (score_digits.shape[0] - 1))
 
         time_seconds = state.time_left.astype(jnp.int32) // jnp.int32(self.consts.fps)
         minutes = time_seconds // jnp.int32(60)
@@ -2667,44 +2705,25 @@ class PitfallRenderer(JAXGameRenderer):
         mm_digits = self.jr.int_to_digits(minutes, max_digits=2)
         ss_digits = self.jr.int_to_digits(seconds, max_digits=2)
 
-        rb_u8 = state.room_byte.astype(jnp.uint8)
-        rb_hi = ((rb_u8 >> jnp.uint8(4)) & jnp.uint8(0xF)).astype(jnp.int32)
-        rb_lo = (rb_u8 & jnp.uint8(0xF)).astype(jnp.int32)
-        rb_hex = jnp.stack([rb_hi, rb_lo]).astype(jnp.int32)
+        time_draw_mask = jnp.ones_like(mm_digits, dtype=jnp.bool_)
 
-        pit_d = pit_code_u8(rb_u8).astype(jnp.int32)
-        obj_d = obj_code_u8(rb_u8).astype(jnp.int32)
-        wall_d = wall_side_u8(rb_u8).astype(jnp.int32)
-        tree_d = tree_variant_u8(rb_u8).astype(jnp.int32)
-        pit_digits = self.jr.int_to_digits(pit_d, max_digits=1)
-        obj_digits = self.jr.int_to_digits(obj_d, max_digits=1)
-        wall_digits = self.jr.int_to_digits(wall_d, max_digits=1)
-        tree_digits = self.jr.int_to_digits(tree_d, max_digits=1)
+        frame = _draw_digits(frame, score_digits, score_draw_mask, score_row, score_x, digit_spacing, hud_white)
 
-        # Old layout:
-        # score at (2, 20); lives at (9, 4); time at (9, 20)
-        # screen_id at (2, 120); room_byte hex at (2, 90)
-        # pit/obj/wall/tree at (9, 90/98/106/114)
-
-        frame = _draw_digits(frame, score_digits, score_row, timer_x, digit_spacing, score_color)
-        frame = _draw_digits(frame, lives_digits, timer_row, 4, digit_spacing, lives_color)
-
-        frame = _draw_digits(frame, mm_digits, timer_row, timer_x, digit_spacing, time_color)
+        frame = _draw_digits(frame, mm_digits, time_draw_mask, hud_row, time_x, digit_spacing, hud_white)
         if frame.shape[2] == 1:
-            time_dot_color = jnp.array([jnp.mean(time_color.astype(jnp.float32)).astype(jnp.uint8)], dtype=jnp.uint8)
+            dot_color = jnp.array([jnp.uint8(255)], dtype=jnp.uint8)
         else:
-            time_dot_color = time_color
-        colon_x = timer_x + 2 * digit_spacing - 1
-        frame = frame.at[timer_row + 1, colon_x, :].set(time_dot_color)
-        frame = frame.at[timer_row + 3, colon_x, :].set(time_dot_color)
-        frame = _draw_digits(frame, ss_digits, timer_row, timer_x + 2 * digit_spacing + 2, digit_spacing, time_color)
+            dot_color = hud_white
+        colon_x = time_x + 2 * digit_spacing - 1
+        frame = frame.at[hud_row + 1, colon_x, :].set(dot_color)
+        frame = frame.at[hud_row + 3, colon_x, :].set(dot_color)
+        frame = _draw_digits(frame, ss_digits, time_draw_mask, hud_row, time_x + 2 * digit_spacing + 2, digit_spacing, hud_white)
 
-        frame = _draw_digits(frame, screen_digits, score_row, 120, digit_spacing, debug_color)
-        frame = _draw_digits(frame, rb_hex, score_row, 90, digit_spacing, debug_color)
+        lives_n = jnp.clip(state.lives_left.astype(jnp.int32), jnp.int32(0), jnp.int32(3))
+        def _draw_one_i(i, fr):
+            left = lives_x + i * lives_i_spacing
+            return _draw_mask(fr, roman_i, hud_row, left, hud_white)
 
-        frame = _draw_digits(frame, pit_digits, timer_row, 90, digit_spacing, debug_color)
-        frame = _draw_digits(frame, obj_digits, timer_row, 98, digit_spacing, debug_color)
-        frame = _draw_digits(frame, wall_digits, timer_row, 106, digit_spacing, debug_color)
-        frame = _draw_digits(frame, tree_digits, timer_row, 114, digit_spacing, debug_color)
+        frame = lax.fori_loop(0, lives_n, _draw_one_i, frame)
 
         return frame
