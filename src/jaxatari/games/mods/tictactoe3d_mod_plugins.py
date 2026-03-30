@@ -173,7 +173,7 @@ class SuddenDeathMod(JaxAtariPostStepModPlugin):
         
         return modified_obs, modified_state, new_reward, done, info
     
-    
+
     
 class TemporalPenaltyMod(JaxAtariPostStepModPlugin):
     """
@@ -199,3 +199,75 @@ class TemporalPenaltyMod(JaxAtariPostStepModPlugin):
         # Return the unmodified observation, state, done flag, and info dictionary,
         # but pass along the newly shaped reward for the PPO/PQN agent to learn from.
         return obs, state, new_reward, done, info
+    
+
+
+#################### COMPLEX MODIFICATION #############################################
+
+class VariableIntelligenceMod(JaxAtariInternalModPlugin):
+    """
+    Overrides the CPU AI to use a vectorized Minimax-lite (Depth-2 Lookahead).
+    Evaluates all 64 possible CPU moves, and simulates all 64 possible 
+    Agent responses using jax.vmap, completely bypassing JAX's recursion limits.
+    """
+
+    # Updated signature to match the base environment: (self, board, key)
+    @partial(jax.jit, static_argnums=(0,))
+    def _compute_cpu_move(self, board, key):
+        # 1. Create an array of all 64 possible board indices
+        all_moves = jnp.arange(64)
+        
+        # --- DEPTH 1: Evaluate CPU Moves ---
+        def evaluate_cpu_move(move_idx):
+            # Is this move even legal? Use the passed 'board' array directly.
+            is_valid = (board.flatten()[move_idx] == self._env.consts.EMPTY)
+            
+            # Simulate the board state if the CPU played here
+            sim_board = board.flatten().at[move_idx].set(self._env.consts.PLAYER_O).reshape((4, 4, 4))
+            
+            # Did this move win the game instantly?
+            is_o = (sim_board == self._env.consts.PLAYER_O).astype(jnp.int32)
+            o_counts = jnp.tensordot(self._env.consts.WIN_MASKS, is_o, axes=((1, 2, 3), (0, 1, 2)))
+            cpu_won = jnp.any(o_counts == 4)
+            
+            # --- DEPTH 2: Evaluate Agent's Best Response ---
+            def evaluate_agent_response(resp_idx):
+                resp_valid = (sim_board.flatten()[resp_idx] == self._env.consts.EMPTY)
+                resp_board = sim_board.flatten().at[resp_idx].set(self._env.consts.PLAYER_X).reshape((4, 4, 4))
+                
+                is_x = (resp_board == self._env.consts.PLAYER_X).astype(jnp.int32)
+                x_counts = jnp.tensordot(self._env.consts.WIN_MASKS, is_x, axes=((1, 2, 3), (0, 1, 2)))
+                agent_won = jnp.any(x_counts == 4)
+                
+                # Return 1 if the agent can legally win here, else 0
+                return jnp.where(jnp.logical_and(resp_valid, agent_won), 1, 0)
+            
+            # Vectorize the Agent's response over all 64 possible squares on the simulated board
+            agent_wins = jax.vmap(evaluate_agent_response)(all_moves)
+            # If any of the 64 responses result in an Agent win, this CPU move is highly dangerous!
+            gives_agent_win = jnp.any(agent_wins == 1)
+            
+            # Heuristic fallback: Count how many 3-in-a-rows the CPU builds with this move
+            cpu_3_in_a_row = jnp.sum(o_counts == 3)
+            
+            # --- Scoring System ---
+            score = jnp.where(
+                jnp.logical_not(is_valid), -9999,
+                jnp.where(
+                    cpu_won, 1000,
+                    jnp.where(
+                        gives_agent_win, -500,
+                        cpu_3_in_a_row
+                    )
+                )
+            )
+            return score
+        
+        # 2. Vectorize the CPU evaluation over all 64 possible moves!
+        move_scores = jax.vmap(evaluate_cpu_move)(all_moves)
+        
+        # 3. Pick the move with the absolute highest score
+        best_flat_idx = jnp.argmax(move_scores)
+        
+        # Return the flat index as expected by the base environment
+        return best_flat_idx

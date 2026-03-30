@@ -1,5 +1,5 @@
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.tictactoe3d_mod_plugins import (RandomStaticBlockersMod, RandomTurnOrderMod, StrictIllegalMoveMod,SuddenDeathMod,TemporalPenaltyMod)
+from jaxatari.games.mods.tictactoe3d_mod_plugins import (RandomStaticBlockersMod, RandomTurnOrderMod, StrictIllegalMoveMod,SuddenDeathMod,TemporalPenaltyMod, VariableIntelligenceMod)
 
 
 class Tictactoe3dEnvMod(JaxAtariModController):
@@ -13,7 +13,7 @@ class Tictactoe3dEnvMod(JaxAtariModController):
         "strict_illegal_move": StrictIllegalMoveMod, 
         "sudden_death":SuddenDeathMod,
         "temporal_penalty" :TemporalPenaltyMod,
-        
+         "variable_intelligence":VariableIntelligenceMod,
     }
 
     def __init__(
