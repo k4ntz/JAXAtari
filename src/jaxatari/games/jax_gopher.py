@@ -422,10 +422,10 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         """ 
         Detects if Player hit Gopher.
         """
-        # Check Player Attack Window 
+        # Check player attack window 
         is_attacking = (state.bonk_timer >= 3)
         
-        # Check Horizontal Alignment
+        # Check horizontal alignment
         p_center = state.player_x + (self.consts.PLAYER_SIZE[0] / 2.0)
         g_center = state.gopher_position[0] + (self.consts.GOPHER_SIZE[0] / 2.0)
         dist = jnp.abs(p_center - g_center)
@@ -794,7 +794,7 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
     
     def _gopher_step(self, state: GopherState, fire_pressed: bool) -> Tuple[GopherState, bool]:
         '''
-        Handle main Gopher move
+        Handle main Gopher move logic
         '''
         loc = self._locate_gopher(state)
         key, k1, k2, k3 = jax.random.split(state.key, 4)
@@ -1210,7 +1210,7 @@ class GopherRenderer(JAXGameRenderer):
                         jax.lax.select(t == 1, 1,
                         jax.lax.select(t == 2, 2, 
                         1)))
-        # base_idx = jax.lax.select(state.bonk_timer < 2, 0, jax.lax.select(state.bonk_timer < 4, 1, jax.lax.select(state.bonk_timer < 8, 2, 0)))
+        
         final_player_idx = jax.lax.select(state.player_has_seed == 1, 
                                           sprite_select + self.consts.SPRITE_OFFSET_PLAYER_SEED, 
                                           sprite_select)
@@ -1312,3 +1312,5 @@ class GopherRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, num_digits, draw_digit, raster)
         return self.jr.render_from_palette(raster, self.PALETTE)
+    
+

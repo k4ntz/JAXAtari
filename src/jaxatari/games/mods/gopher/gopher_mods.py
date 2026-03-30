@@ -3,9 +3,12 @@ from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.gopher.gopher_mod_plugins import (
     GreedyGopherMod,
     MirrorButtonMod,
-    PinkGopherMod,
+    EnergyDrainMod,
     HeavyShovelMod,
-    FastSeedMod
+    FastSeedMod,
+    InvisibleGopherMod,
+    WindGopherMod,
+    DizzyFarmerMod
 
 )
 
@@ -18,9 +21,12 @@ class GopherEnvMod(JaxAtariModController):
         
         "greedy_gopher": GreedyGopherMod,
         "mirror_button": MirrorButtonMod,
-        "pink_gopher": PinkGopherMod,
+        "energy_drain": EnergyDrainMod,
         "heavy_shovel": HeavyShovelMod,
         "fast_seed": FastSeedMod,
+        "invisible_gopher": InvisibleGopherMod,
+        "wind_gopher": WindGopherMod,
+        "dizzy_farmer": DizzyFarmerMod
     }
 
     
