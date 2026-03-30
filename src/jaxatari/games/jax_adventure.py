@@ -827,9 +827,9 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             operand = gate_white_counter
         )
 
-        new_gate_yellow = [gate_yellow_state, gate_yellow_counter]
-        new_gate_black = [gate_black_state, gate_black_counter]
-        new_gate_white = [gate_white_state, gate_white_counter]
+        new_gate_yellow = (gate_yellow_state, gate_yellow_counter)
+        new_gate_black = (gate_black_state, gate_black_counter)
+        new_gate_white = (gate_white_state, gate_white_counter)
 
         return state.replace(
             gate_yellow=new_gate_yellow,
