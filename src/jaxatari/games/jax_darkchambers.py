@@ -878,6 +878,30 @@ class DarkChambersRenderer(JAXGameRenderer):
         self.ENEMY_DIRECTIONAL_MASKS["skeleton"] = None
         self.ENEMY_SCALED_MASKS["skeleton"] = None
 
+        # Grim Reaper: skeleton frames, head removed, recolored blue
+        _HEAD_ROWS = 11  # top 11 of 28 px = head
+        _blue_id = self.COLOR_TO_ID[self.consts.SHIELD_COLOR]
+        grim_dir_frame_names = [
+            ["skel_r0", "skel_r1", "skel_r2", "skel_r2"],
+            ["skel_7",  "skel_8",  "skel_9",  "skel_8"],
+            ["skel_l2", "skel_l0", "skel_l1", "skel_l1"],
+            ["skel_10", "skel_12", "skel_11", "skel_12"],
+        ]
+        grim_dirs = []
+        for d_idx, dir_names in enumerate(grim_dir_frame_names):
+            dir_frames = []
+            for n in dir_names:
+                if self.SHAPE_MASKS.get(n) is not None:
+                    frame = _scale_mask(self.SHAPE_MASKS[n], target_enemy_h, target_enemy_w, _DIR_ALIGN[d_idx])
+                    frame = frame.at[:_HEAD_ROWS, :].set(self.jr.TRANSPARENT_ID)  # remove head
+                    frame = jnp.where(frame != self.jr.TRANSPARENT_ID, _blue_id, frame)  # recolor blue
+                else:
+                    frame = _zero_frame
+                dir_frames.append(frame)
+            grim_dirs.append(jnp.stack(dir_frames))  # (4, H, W)
+        self.GRIM_REAPER_ANIM_FRAMES = jnp.stack(grim_dirs)  # (4, 4, H, W)
+        print(f"Built grim reaper animation frames: {self.GRIM_REAPER_ANIM_FRAMES.shape}")
+
         # Zombie directional animation: (4, 8, H, W) — max 8 frames, pad shorter directions
         # Direction order: 0=right, 1=down, 2=left, 3=up
         zombie_dir_frame_names = [
@@ -1826,10 +1850,11 @@ class DarkChambersRenderer(JAXGameRenderer):
         )
         
         # Pre-fetch directional sprite stacks for each enemy type (static at trace time)
-        zombie_anim_frames   = self.ZOMBIE_ANIM_FRAMES    # (4, 5, H, W)
-        ghost_anim_frames    = self.GHOST_ANIM_FRAMES     # (4, 3, H, W)
-        skeleton_anim_frames = self.SKELETON_ANIM_FRAMES  # (4, 3, H, W)
-        wizard_anim_frames   = self.WIZARD_ANIM_FRAMES    # (4, 5, H, W)
+        zombie_anim_frames        = self.ZOMBIE_ANIM_FRAMES        # (4, 5, H, W)
+        ghost_anim_frames         = self.GHOST_ANIM_FRAMES         # (4, 3, H, W)
+        skeleton_anim_frames      = self.SKELETON_ANIM_FRAMES      # (4, 3, H, W)
+        wizard_anim_frames        = self.WIZARD_ANIM_FRAMES        # (4, 5, H, W)
+        grim_reaper_anim_frames   = self.GRIM_REAPER_ANIM_FRAMES   # (4, 5, H, W)
 
         # Render each enemy type using directional sprites (types 1-4)
         def render_one_enemy(i, raster):
@@ -1896,28 +1921,23 @@ class DarkChambersRenderer(JAXGameRenderer):
                     raster
                 )
 
+            # Type 5: Grim Reaper — headless blue skeleton sprite
+            is_grim_reaper = (enemy_type == 5) & is_active
+            if grim_reaper_anim_frames is not None:
+                num_frames = SKELETON_NUM_FRAMES[dir_idx]  # [3, 4, 3, 4]
+                anim_frame = jnp.where(is_enemy_moving, anim_tick % num_frames, jnp.array(0, dtype=jnp.int32))
+                grim_sprite = grim_reaper_anim_frames[dir_idx, anim_frame]
+                raster = jax.lax.cond(
+                    is_grim_reaper,
+                    lambda r: self.jr.render_at_clipped(r, ex, ey, grim_sprite),
+                    lambda r: r,
+                    raster
+                )
+
             return raster
-        
+
         # Render all enemies with sprites
         object_raster = jax.lax.fori_loop(0, NUM_ENEMIES, render_one_enemy, object_raster)
-        
-        # Type 5: Grim Reaper (use colored box - no sprite yet)
-        grim_reaper_mask = (state.enemy_types == 5) & enemy_active_mask
-        grim_reaper_positions = jnp.where(
-            grim_reaper_mask[:, None],
-            masked_enemy_pos,
-            _off
-        )
-        enemy_sizes = jnp.tile(
-            jnp.array([self.consts.ENEMY_WIDTH, self.consts.ENEMY_HEIGHT], dtype=jnp.int32)[None, :],
-            (num_enemies, 1)
-        )
-        object_raster = self.jr.draw_rects(
-            object_raster,
-            positions=grim_reaper_positions,
-            sizes=enemy_sizes,
-            color_id=self.GRIM_REAPER_ID
-        )
         
         # Items - mask inactive ones by moving off-screen
         items_world_pos = state.item_positions.astype(jnp.int32)
