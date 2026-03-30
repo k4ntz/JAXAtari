@@ -8,7 +8,7 @@ HYP_TUNE: False
 # wandb params
 WANDB_MODE: "online"  # set to online to activate wandb
 ENTITY: ""
-PROJECT: ""
+PROJECT: "debug"
 alg:
   WANDB_LOG_ALL_SEEDS: False # will log all the vmapped seeds separetely
 

@@ -10,6 +10,7 @@ import optax
 from flax.linen.initializers import constant, orthogonal
 from typing import Sequence, NamedTuple, Any
 from flax.training.train_state import TrainState
+import distrax
 import time
 import os
 
@@ -42,6 +43,8 @@ class ActorCritic(nn.Module):
         actor_mean = nn.Dense(
             self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
         )(actor_mean)
+        pi = distrax.Categorical(logits=actor_mean)
+
         critic = nn.Dense(
             64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(x)
@@ -54,7 +57,7 @@ class ActorCritic(nn.Module):
             critic
         )
 
-        return actor_mean, jnp.squeeze(critic, axis=-1)
+        return pi, jnp.squeeze(critic, axis=-1)
 
 
 class Transition(NamedTuple):
@@ -67,28 +70,6 @@ class Transition(NamedTuple):
     info: jnp.ndarray
 
 
-def _sample_action_and_log_prob(logits, rng):
-    action = jax.random.categorical(rng, logits, axis=-1)
-    log_probs = jax.nn.log_softmax(logits, axis=-1)
-    action_log_prob = jnp.take_along_axis(
-        log_probs, jnp.expand_dims(action, axis=-1), axis=-1
-    ).squeeze(-1)
-    return action, action_log_prob
-
-
-def _log_prob_of_action(logits, action):
-    log_probs = jax.nn.log_softmax(logits, axis=-1)
-    return jnp.take_along_axis(
-        log_probs, jnp.expand_dims(action, axis=-1), axis=-1
-    ).squeeze(-1)
-
-
-def _categorical_entropy(logits):
-    probs = jax.nn.softmax(logits, axis=-1)
-    log_probs = jax.nn.log_softmax(logits, axis=-1)
-    return -jnp.sum(probs * log_probs, axis=-1)
-
-
 def make_train(config):
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
@@ -96,8 +77,11 @@ def make_train(config):
     config["MINIBATCH_SIZE"] = (
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
-    env_name = config["ENV_NAME"].lower()
-    env = jaxatari.make(env_name)
+    env = jaxatari.make(config["ENV_NAME"].lower())
+    mod_env = env
+    if config.get("MOD_NAME", None) is not None:
+        mod_env = jaxatari.modify(env, config.get("ENV_NAME", None).lower(), config.get("MOD_NAME", None).lower())
+    renderer = mod_env.renderer
 
     def apply_wrappers(env):
         env = AtariWrapper(env, episodic_life=True, frame_skip=4, frame_stack_size=4, sticky_actions=True, max_pooling=True, clip_reward=True, noop_reset=30)
@@ -105,12 +89,17 @@ def make_train(config):
             env = ObjectCentricWrapper(env)
             env = FlattenObservationWrapper(env)
         else:
-            env = PixelObsWrapper(env)
+            grayscale = config.get("PIXEL_GRAYSCALE", False)
+            do_resize = config.get("PIXEL_RESIZE", True)
+            resize_shape = config.get("PIXEL_RESIZE_SHAPE", [84, 84])
+            use_native_downscaling = config.get("USE_NATIVE_DOWNSCALING", False)
+            env = PixelObsWrapper(env, do_pixel_resize=do_resize, pixel_resize_shape=resize_shape, grayscale=grayscale, use_native_downscaling=use_native_downscaling)
         env = NormalizeObservationWrapper(env)
         env = LogWrapper(env)
         return env
 
     env = apply_wrappers(env)
+    mod_env = apply_wrappers(mod_env)
 
     def linear_schedule(count):
         frac = (
@@ -158,8 +147,9 @@ def make_train(config):
 
                 # SELECT ACTION
                 rng, _rng = jax.random.split(rng)
-                logits, value = network.apply(train_state.params, last_obs)
-                action, log_prob = _sample_action_and_log_prob(logits, _rng)
+                pi, value = network.apply(train_state.params, last_obs)
+                action = pi.sample(seed=_rng)
+                log_prob = pi.log_prob(action)
 
                 # STEP ENV
                 rng, _rng = jax.random.split(rng)
@@ -213,8 +203,8 @@ def make_train(config):
 
                     def _loss_fn(params, traj_batch, gae, targets):
                         # RERUN NETWORK
-                        logits, value = network.apply(params, traj_batch.obs)
-                        log_prob = _log_prob_of_action(logits, traj_batch.action)
+                        pi, value = network.apply(params, traj_batch.obs)
+                        log_prob = pi.log_prob(traj_batch.action)
 
                         # CALCULATE VALUE LOSS
                         value_pred_clipped = traj_batch.value + (
@@ -240,7 +230,7 @@ def make_train(config):
                         )
                         loss_actor = -jnp.minimum(loss_actor1, loss_actor2)
                         loss_actor = loss_actor.mean()
-                        entropy = _categorical_entropy(logits).mean()
+                        entropy = pi.entropy().mean()
 
                         total_loss = (
                             loss_actor
