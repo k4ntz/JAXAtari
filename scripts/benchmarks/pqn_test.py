@@ -22,7 +22,6 @@ import jaxatari
 import wandb
 
 from train_utils import video_callback, load_params
-from benchmark_utils import get_eval_mods
 
 class CNN(nn.Module):
 
@@ -138,11 +137,10 @@ def make_test(config, save_params, batch_stats):
         "NUM_MINIBATCHES"
     ] == 0, "NUM_MINIBATCHES must divide NUM_STEPS*NUM_ENVS"
 
-    env_name = config["ENV_NAME"].lower()
-    env = jaxatari.make(env_name)
-    eval_mods = get_eval_mods(config)
-    mod_env = jaxatari.make(env_name, mods_config=eval_mods) if eval_mods else env
-    has_mod_env = bool(eval_mods)
+    env = jaxatari.make(config["ENV_NAME"].lower())
+    mod_env = env
+    if config.get("MOD_NAME", None) is not None:
+        mod_env = jaxatari.modify(env, config.get("ENV_NAME", None).lower(), config.get("MOD_NAME", None).lower())
     renderer = jaxatari.make_renderer(config["ENV_NAME"].lower())
 
     def apply_wrappers(env):
@@ -283,7 +281,7 @@ def make_test(config, save_params, batch_stats):
         rng, _rng = jax.random.split(rng)
         test_metrics = get_test_metrics(train_state, False, _rng)
 
-        mod_metrics = get_test_metrics(train_state, True, _rng) if has_mod_env else {}
+        mod_metrics = get_test_metrics(train_state, True, _rng) if config.get("MOD_NAME", None) is not None else {}
 
         return {"test_metrics": test_metrics, "mod_metrics": mod_metrics}
 
@@ -346,13 +344,12 @@ def single_run(config):
     print(f"Run time: {time.time() - compile_time} seconds.")
     print(f"Total: {time.time()-t0} seconds.")
     avg_return = outs["test_metrics"]["returned_episode_returns"]
+    avg_return_mod = outs["mod_metrics"]["returned_episode_returns"]
     avg_len = outs["test_metrics"]["returned_episode_lengths"]
+    avg_len_mod = outs["mod_metrics"]["returned_episode_lengths"]
     print(f"Average return of default env: {avg_return}, length: {avg_len}.")
-    if outs["mod_metrics"]:
-        avg_return_mod = outs["mod_metrics"]["returned_episode_returns"]
-        avg_len_mod = outs["mod_metrics"]["returned_episode_lengths"]
-        mod_label = config.get("EVAL_MODS", config.get("MOD_NAME", "modded_env"))
-        print(f"Average return of modified env ({mod_label}): {avg_return_mod}, length: {avg_len_mod}.")
+    if config.get("MOD_NAME", None) is not None:
+        print(f"Average return of modified env ({config['MOD_NAME']}): {avg_return_mod}, length: {avg_len_mod}.")
 
     
 
