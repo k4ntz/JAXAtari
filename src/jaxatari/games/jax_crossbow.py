@@ -265,9 +265,22 @@ class CrossbowObservation(NamedTuple):
     cursor_x: jnp.ndarray
     cursor_y: jnp.ndarray
     friend_x: jnp.ndarray
+    friend_y: jnp.ndarray
     game_phase: jnp.ndarray
     lives: jnp.ndarray
     score: jnp.ndarray
+    is_firing: jnp.ndarray
+    fire_cooldown: jnp.ndarray
+    dying_timer: jnp.ndarray
+    rope_1_broken: jnp.ndarray
+    rope_2_broken: jnp.ndarray
+    friends_to_cross: jnp.ndarray
+    enemies_x: jnp.ndarray
+    enemies_y: jnp.ndarray
+    enemies_active: jnp.ndarray
+    enemies_type: jnp.ndarray
+    enemies_dx: jnp.ndarray
+    enemies_dy: jnp.ndarray
 
 
 class CrossbowInfo(NamedTuple):
@@ -317,7 +330,27 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         return jnp.logical_or(state.lives <= 0, state.step_counter > self.max_episode_steps)
 
     def _get_observation(self, state):
-        return CrossbowObservation(state.cursor_x, state.cursor_y, state.friend_x, state.game_phase, state.lives, state.score)
+        return CrossbowObservation(
+            cursor_x=state.cursor_x,
+            cursor_y=state.cursor_y,
+            friend_x=state.friend_x,
+            friend_y=state.friend_y,
+            game_phase=state.game_phase,
+            lives=state.lives,
+            score=state.score,
+            is_firing=state.is_firing,
+            fire_cooldown=state.fire_cooldown,
+            dying_timer=state.dying_timer,
+            rope_1_broken=state.rope_1_broken,
+            rope_2_broken=state.rope_2_broken,
+            friends_to_cross=state.friends_to_cross,
+            enemies_x=state.enemies_x,
+            enemies_y=state.enemies_y,
+            enemies_active=state.enemies_active,
+            enemies_type=state.enemies_type,
+            enemies_dx=state.enemies_dx,
+            enemies_dy=state.enemies_dy,
+        )
 
     def _get_info(self, state):
         return CrossbowInfo(
@@ -334,26 +367,53 @@ class JaxCrossbow(JaxEnvironment[CrossbowState, CrossbowObservation, CrossbowInf
         )
 
     def obs_to_flat_array(self, obs: CrossbowObservation) -> jnp.ndarray:
-        return jnp.stack([
-            obs.cursor_x,
-            obs.cursor_y,
-            obs.friend_x,
-            obs.game_phase,
-            obs.lives,
-            obs.score
-        ], axis=-1).astype(jnp.int32)
+        return jnp.concatenate([
+            jnp.atleast_1d(obs.cursor_x).astype(jnp.int32),
+            jnp.atleast_1d(obs.cursor_y).astype(jnp.int32),
+            jnp.atleast_1d(obs.friend_x).astype(jnp.int32),
+            jnp.atleast_1d(obs.friend_y).astype(jnp.int32),
+            jnp.atleast_1d(obs.game_phase).astype(jnp.int32),
+            jnp.atleast_1d(obs.lives).astype(jnp.int32),
+            jnp.atleast_1d(obs.score).astype(jnp.int32),
+            jnp.atleast_1d(obs.is_firing.astype(jnp.int32)),
+            jnp.atleast_1d(obs.fire_cooldown).astype(jnp.int32),
+            jnp.atleast_1d(obs.dying_timer).astype(jnp.int32),
+            jnp.atleast_1d(obs.rope_1_broken.astype(jnp.int32)),
+            jnp.atleast_1d(obs.rope_2_broken.astype(jnp.int32)),
+            jnp.atleast_1d(obs.friends_to_cross).astype(jnp.int32),
+            obs.enemies_x.flatten().astype(jnp.int32),
+            obs.enemies_y.flatten().astype(jnp.int32),
+            obs.enemies_active.flatten().astype(jnp.int32),
+            obs.enemies_type.flatten().astype(jnp.int32),
+            obs.enemies_dx.flatten().astype(jnp.int32),
+            obs.enemies_dy.flatten().astype(jnp.int32),
+        ])
 
     def action_space(self):
         return spaces.Discrete(18)
 
     def observation_space(self):
+        ME = self.consts.MAX_ENEMIES
         return spaces.Dict({
             "cursor_x": spaces.Box(0, self.consts.WIDTH, (), jnp.int32),
             "cursor_y": spaces.Box(0, self.consts.HEIGHT, (), jnp.int32),
             "friend_x": spaces.Box(0, self.consts.WIDTH, (), jnp.int32),
+            "friend_y": spaces.Box(0, self.consts.HEIGHT, (), jnp.int32),
             "game_phase": spaces.Discrete(8),
             "lives": spaces.Box(0, self.consts.MAX_LIVES, (), jnp.int32),
             "score": spaces.Box(0, 9999999, (), jnp.int32),
+            "is_firing": spaces.Box(0, 1, (), jnp.int32),
+            "fire_cooldown": spaces.Box(0, self.consts.FIRE_COOLDOWN_DURATION, (), jnp.int32),
+            "dying_timer": spaces.Box(0, self.consts.DYING_DURATION, (), jnp.int32),
+            "rope_1_broken": spaces.Box(0, 1, (), jnp.int32),
+            "rope_2_broken": spaces.Box(0, 1, (), jnp.int32),
+            "friends_to_cross": spaces.Box(0, self.consts.MAX_LIVES, (), jnp.int32),
+            "enemies_x": spaces.Box(-20, self.consts.WIDTH + 20, (ME,), jnp.int32),
+            "enemies_y": spaces.Box(-20, self.consts.HEIGHT + 20, (ME,), jnp.int32),
+            "enemies_active": spaces.Box(0, 1, (ME,), jnp.int32),
+            "enemies_type": spaces.Box(0, 19, (ME,), jnp.int32),
+            "enemies_dx": spaces.Box(-5, 5, (ME,), jnp.int32),
+            "enemies_dy": spaces.Box(-5, 5, (ME,), jnp.int32),
         })
 
     def image_space(self):
