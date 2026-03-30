@@ -460,7 +460,8 @@ class PitfallConstants(struct.PyTreeNode):
     respawn_drop_speed: float = 1.0  # gentle deterministic fall during respawn animation
     respawn_drop_spawn_y_offset: int = 20  # spawn this far above the upper ground line before drop-in
     underground_respawn_x: int = 20  # left opening area for underground re-entry
-    underground_respawn_spawn_above_reveal: int = 4  # start feet a few px above reveal line
+    underground_respawn_spawn_above_reveal: int = 0  # start at reveal edge (avoid visible drop-in)
+    underground_respawn_reveal_from_ground: int = 17  # reveal boundary is this many px below ground
     underground_respawn_reveal_y_offset: int = 1  # clip reveal just below the upper ledge
     underground_respawn_wall_clearance: int = 2  # start just below the wall top rather than high above ground
 
@@ -1501,10 +1502,17 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             consts.underground_y - self.wall_render_height_px.astype(jnp.int32) + consts.underground_respawn_wall_clearance,
             dtype=jnp.float32,
         )
+        # Render uses a fixed reveal boundary at ground_y (+ offset). Anchor the underground
+        # respawn spawn position to this same boundary so Harry emerges from the tunnel edge
+        # rather than dropping in from above it.
+        underground_reveal_y = jnp.asarray(
+            consts.ground_y + consts.underground_respawn_reveal_from_ground + consts.underground_respawn_reveal_y_offset,
+            dtype=jnp.float32,
+        )
         respawn_spawn_y = jnp.where(
             underground_respawn,
             jnp.asarray(
-                wall_top_y + consts.underground_respawn_spawn_above_reveal,
+                underground_reveal_y - consts.underground_respawn_spawn_above_reveal,
                 dtype=jnp.float32,
             ),
             jnp.asarray(
@@ -2528,7 +2536,13 @@ class PitfallRenderer(JAXGameRenderer):
             (state.respawn_phase == jnp.int32(2))
             & (state.respawn_target_ground_y == jnp.asarray(self.consts.underground_y, dtype=jnp.float32))
         )
-        reveal_y = jnp.int32(int(self.consts.ground_y + self.consts.underground_respawn_reveal_y_offset))
+        reveal_y = jnp.int32(
+            int(
+                self.consts.ground_y
+                + self.consts.underground_respawn_reveal_from_ground
+                + self.consts.underground_respawn_reveal_y_offset
+            )
+        )
 
         def _clip_underground_respawn(r: jnp.ndarray) -> jnp.ndarray:
             H, W = r.shape
