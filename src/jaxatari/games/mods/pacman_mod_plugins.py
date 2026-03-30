@@ -1,3 +1,4 @@
+import inspect
 import os
 from typing import List, Tuple
 
@@ -8,7 +9,6 @@ from functools import partial
 
 from jaxatari.games.jax_pacman import PacmanState
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
-
 
 # Level order when using multi_maze_campaign (geometry: {name}.txt, pellets: {name}_pellet.txt if present).
 DEFAULT_PACMAN_MAZE_LEVEL_BASENAMES: Tuple[str, ...] = (
@@ -48,11 +48,23 @@ class MultiMazeCampaignMod(JaxAtariInternalModPlugin):
 
     @staticmethod
     def attach_to_env(env) -> None:
-        from jaxatari.games import jax_pacman as jpm
-
-        if not isinstance(env, jpm.JaxPacman):
+        # Dynamic loaders (e.g. play.py) use importlib FileLoader — that produces a *different*
+        # JaxPacman class object than ``import jaxatari.games.jax_pacman``, so ``isinstance`` fails
+        # even when type(env).__name__ == "JaxPacman". Duck-type the Pac-Man env API instead.
+        if not (
+            hasattr(env, "reload_maze_campaign")
+            and callable(getattr(env, "reload_maze_campaign"))
+            and hasattr(env, "_parse_maze_layout_from_file")
+            and hasattr(env, "consts")
+        ):
             return
-        pacman_maps_dir = os.path.join(os.path.dirname(jpm.__file__), "pacmanMaps")
+        try:
+            game_py = inspect.getfile(type(env))
+            pacman_maps_dir = os.path.join(os.path.dirname(os.path.abspath(game_py)), "pacmanMaps")
+        except (TypeError, OSError):
+            import jaxatari.games.jax_pacman as jpm
+
+            pacman_maps_dir = os.path.join(os.path.dirname(jpm.__file__), "pacmanMaps")
         level_specs = resolve_pacman_maze_level_specs(pacman_maps_dir)
         if len(level_specs) <= 1:
             return

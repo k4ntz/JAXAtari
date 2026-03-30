@@ -242,6 +242,7 @@ class PacmanObservation(NamedTuple):
 class PacmanInfo(NamedTuple):
     step_counter: jnp.ndarray
     level: jnp.ndarray
+    maze_level_index: jnp.ndarray  # which map in a multi-maze campaign (0 .. num_maze_levels-1)
 
 
 class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, PacmanConstants]):
@@ -1703,6 +1704,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         return PacmanInfo(
             step_counter=state.step_counter,
             level=state.level,
+            maze_level_index=state.maze_level_index,
         )
 
     @partial(jax.jit, static_argnums=(0,))
