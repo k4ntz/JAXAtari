@@ -40,7 +40,7 @@ def _get_default_asset_config() -> tuple:
                                                              "Player_Green.npy",
                                                              "Player_Purple.npy",
                                                              "Player_Pink.npy",
-                                                             "Player_Green_yellow.npy",
+                                                             "Player_Green_Yellow.npy",
                                                              "Player_Blue.npy",
                                                              "Player_Blue.npy",
                                                              "Player_Blue.npy",
@@ -221,6 +221,11 @@ class AdventureObservation(struct.PyTreeNode):
     bridge: EntityPosition
     magnet: EntityPosition
     chalice: EntityPosition
+    dragon_red: EntityPosition
+    key_white: EntityPosition
+    gate_white: EntityPosition
+    bat: EntityPosition
+    dot: EntityPosition
 
 
 class AdventureInfo(struct.PyTreeNode):
@@ -1492,6 +1497,46 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             height=self.consts.CHALICE_SIZE[1],
             state=0 #Chalice has no relevant state
         )
+        dragon_red = EntityPosition(
+            x=state.dragon_red[0],
+            y=state.dragon_red[1],
+            tile=state.dragon_red[2],
+            width=self.consts.DRAGON_SIZE[0], 
+            height=self.consts.DRAGON_SIZE[1], 
+            state=state.dragon_red[3]
+        )
+        key_white = EntityPosition(
+            x=state.key_white[0],
+            y=state.key_white[1],
+            tile=state.key_white[2],
+            width=self.consts.KEY_SIZE[0], 
+            height=self.consts.KEY_SIZE[1],
+            state=0 #Key has no relevant state
+        )
+        gate_white = EntityPosition(
+            x=self.consts.WHITE_GATE_POS[0],
+            y=self.consts.WHITE_GATE_POS[1],
+            tile=self.consts.WHITE_GATE_POS[2],
+            width=self.consts.GATE_SIZE[0], 
+            height=self.consts.GATE_SIZE[1], 
+            state=state.gate_white[0]
+        )
+        bat = EntityPosition(
+            x=state.bat[0],
+            y=state.bat[1],
+            tile=state.bat[2],
+            width=0, #bat has no hitbox
+            height=0, 
+            state=0 #bat has no relevant state
+        )
+        dot = EntityPosition(
+            x=state.dot[0],
+            y=state.dot[1],
+            tile=state.dot[2],
+            width=self.consts.DOT_SIZE[0], 
+            height=self.consts.DOT_SIZE[1],
+            state=0 #Dot has no relevant state
+        )
 
         return AdventureObservation(
             player=player,
@@ -1504,7 +1549,12 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             sword=sword,
             bridge=bridge,
             magnet=magnet,
-            chalice=chalice
+            chalice=chalice,
+            dragon_red=dragon_red,
+            key_white=key_white,
+            gate_white=gate_white,
+            bat=bat,
+            dot=dot
         )
 
     #ToDo, no clue what this is used for
@@ -1513,8 +1563,100 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
            return jnp.concatenate([
                obs.player.x.flatten(),
                obs.player.y.flatten(),
+               obs.player.tile.flatten(),
                obs.player.height.flatten(),
-               obs.player.width.flatten()
+               obs.player.width.flatten(),
+               obs.player.state.flatten(),
+               obs.dragon_yellow.x.flatten(),
+               obs.dragon_yellow.y.flatten(),
+               obs.dragon_yellow.tile.flatten(),
+               obs.dragon_yellow.height.flatten(),
+               obs.dragon_yellow.width.flatten(),
+               obs.dragon_yellow.state.flatten(),
+               obs.dragon_green.x.flatten(),
+               obs.dragon_green.y.flatten(),
+               obs.dragon_green.tile.flatten(),
+               obs.dragon_green.height.flatten(),
+               obs.dragon_green.width.flatten(),
+               obs.dragon_green.state.flatten(),
+               obs.key_yellow.x.flatten(),
+               obs.key_yellow.y.flatten(),
+               obs.key_yellow.tile.flatten(),
+               obs.key_yellow.height.flatten(),
+               obs.key_yellow.width.flatten(),
+               obs.key_yellow.state.flatten(),
+               obs.key_black.x.flatten(),
+               obs.key_black.y.flatten(),
+               obs.key_black.tile.flatten(),
+               obs.key_black.height.flatten(),
+               obs.key_black.width.flatten(),
+               obs.key_black.state.flatten(),
+               obs.gate_yellow.x.flatten(),
+               obs.gate_yellow.y.flatten(),
+               obs.gate_yellow.tile.flatten(),
+               obs.gate_yellow.height.flatten(),
+               obs.gate_yellow.width.flatten(),
+               obs.gate_yellow.state.flatten(),
+               obs.gate_black.x.flatten(),
+               obs.gate_black.y.flatten(),
+               obs.gate_black.tile.flatten(),
+               obs.gate_black.height.flatten(),
+               obs.gate_black.width.flatten(),
+               obs.gate_black.state.flatten(),
+               obs.sword.x.flatten(),
+               obs.sword.y.flatten(),
+               obs.sword.tile.flatten(),
+               obs.sword.height.flatten(),
+               obs.sword.width.flatten(),
+               obs.sword.state.flatten(),
+               obs.bridge.x.flatten(),
+               obs.bridge.y.flatten(),
+               obs.bridge.tile.flatten(),
+               obs.bridge.height.flatten(),
+               obs.bridge.width.flatten(),
+               obs.bridge.state.flatten(),
+               obs.magnet.x.flatten(),
+               obs.magnet.y.flatten(),
+               obs.magnet.tile.flatten(),
+               obs.magnet.height.flatten(),
+               obs.magnet.width.flatten(),
+               obs.magnet.state.flatten(),
+               obs.chalice.x.flatten(),
+               obs.chalice.y.flatten(),
+               obs.chalice.tile.flatten(),
+               obs.chalice.height.flatten(),
+               obs.chalice.width.flatten(),
+               obs.chalice.state.flatten(),
+               obs.dragon_red.x.flatten(),
+               obs.dragon_red.y.flatten(),
+               obs.dragon_red.tile.flatten(),
+               obs.dragon_red.height.flatten(),
+               obs.dragon_red.width.flatten(),
+               obs.dragon_red.state.flatten(),
+               obs.key_white.x.flatten(),
+               obs.key_white.y.flatten(),
+               obs.key_white.tile.flatten(),
+               obs.key_white.height.flatten(),
+               obs.key_white.width.flatten(),
+               obs.key_white.state.flatten(),
+               obs.gate_white.x.flatten(),
+               obs.gate_white.y.flatten(),
+               obs.gate_white.tile.flatten(),
+               obs.gate_white.height.flatten(),
+               obs.gate_white.width.flatten(),
+               obs.gate_white.state.flatten(),
+               obs.bat.x.flatten(),
+               obs.bat.y.flatten(),
+               obs.bat.tile.flatten(),
+               obs.bat.height.flatten(),
+               obs.bat.width.flatten(),
+               obs.bat.state.flatten(),
+               obs.dot.x.flatten(),
+               obs.dot.y.flatten(),
+               obs.dot.tile.flatten(),
+               obs.dot.height.flatten(),
+               obs.dot.width.flatten(),
+               obs.dot.state.flatten(),
             ]
            )
 
