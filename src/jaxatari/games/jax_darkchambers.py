@@ -2147,12 +2147,23 @@ class DarkChambersRenderer(JAXGameRenderer):
                 )
 
             # ITEM_GUN = 9 -> pistol sprite (faster shooting)
+            is_gun = (item_type == ITEM_GUN) & is_active
             pistol_sprite = self.ITEM_SCALED_MASKS.get("pistol")
             if pistol_sprite is not None:
-                is_gun = (item_type == ITEM_GUN) & is_active
                 raster = jax.lax.cond(
                     is_gun,
                     lambda r: self.jr.render_at_clipped(r, item_x, item_y, pistol_sprite),
+                    lambda r: r,
+                    raster
+                )
+            else:
+                gun_size = self.ITEM_TYPE_SIZES[ITEM_GUN]
+                gun_sizes = jnp.array([gun_size], dtype=jnp.int32)
+                gun_pos = jnp.array([[item_x, item_y]], dtype=jnp.int32)
+                gun_color = self.ITEM_TYPE_COLOR_IDS_PY[ITEM_GUN - 1]
+                raster = jax.lax.cond(
+                    is_gun,
+                    lambda r: self.jr.draw_rects(r, positions=gun_pos, sizes=gun_sizes, color_id=gun_color),
                     lambda r: r,
                     raster
                 )
