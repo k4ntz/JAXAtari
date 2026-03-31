@@ -897,8 +897,33 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
 
         psn = self._player_start_node_per_level[next_idx]
         gn = self._ghost_spawn_node_per_level[next_idx]
+
+        # Player 1 spawn
         player_x = self._node_positions_x_stack[next_idx, psn]
         player_y = self._node_positions_y_stack[next_idx, psn]
+
+        # Player 2 spawn: same logic as _reset_after_death
+        spawn_actions = jnp.array(
+            [Action.LEFT, Action.RIGHT, Action.UP, Action.DOWN], dtype=jnp.int32
+        )
+        nbrs = self._neighbor_lookup_stack[next_idx, psn, :]
+        blocked = self._player_door_edge_mask_stack[next_idx, psn, :]
+        valid = jnp.logical_and(nbrs >= 0, jnp.logical_not(blocked))
+
+        candidate_nbrs = nbrs[spawn_actions]
+        candidate_valid = valid[spawn_actions]
+        first_valid_pos = jnp.argmax(candidate_valid.astype(jnp.int32))
+        first_valid_nbr = candidate_nbrs[first_valid_pos]
+
+        p2sn_alt = jnp.where(
+            jnp.any(candidate_valid), first_valid_nbr, psn
+        )
+        p2sn = jnp.where(state.player2_active == 1, p2sn_alt, psn)
+
+        player2_x = self._node_positions_x_stack[next_idx, p2sn]
+        player2_y = self._node_positions_y_stack[next_idx, p2sn]
+
+        # Ghost spawn
         gx = self._node_positions_x_stack[next_idx, gn]
         gy = self._node_positions_y_stack[next_idx, gn]
 
@@ -913,21 +938,26 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             ghosts = ghosts.at[i, 6].set(gn)
             ghosts = ghosts.at[i, 7].set(gn)
 
-        pellets_collected = jnp.zeros((self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=jnp.int32)
+        pellets_collected = jnp.zeros(
+            (self.consts.MAZE_HEIGHT, self.consts.MAZE_WIDTH), dtype=jnp.int32
+        )
         dots_remaining = self._dots_count_stack[next_idx]
         vx = self._vitamin_pixel_x_stack[next_idx]
         vy = self._vitamin_pixel_y_stack[next_idx]
+
+        new_lives = jnp.where(wrapped, jnp.int32(3), state.lives)
 
         return state._replace(
             maze_level_index=next_idx,
             level=new_level,
             score=new_score,
-            lives=jnp.array(3, dtype=jnp.int32),
+            lives=new_lives,
             player_x=player_x,
             player_y=player_y,
             player_direction=jnp.array(0, dtype=jnp.int32),
             player_next_direction=jnp.array(-1, dtype=jnp.int32),
             player_last_horizontal_dir=jnp.array(0, dtype=jnp.int32),
+            player_animation_frame=jnp.array(0, dtype=jnp.int32),
             player_current_node_index=psn,
             player_target_node_index=psn,
             player2_x=player2_x,
@@ -944,6 +974,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             dots_remaining=dots_remaining,
             power_pellets_active=jnp.array(15, dtype=jnp.int32),
             frightened_timer=jnp.array(0, dtype=jnp.int32),
+            ghosts_eaten_count=jnp.array(0, dtype=jnp.int32),
             level_transition_timer=jnp.array(0, dtype=jnp.int32),
             scatter_chase_timer=jnp.array(0, dtype=jnp.int32),
             is_scatter_mode=jnp.array(True),
