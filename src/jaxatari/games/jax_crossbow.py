@@ -169,7 +169,7 @@ class CrossbowConstants(NamedTuple):
 
     # --- Global Enemy Settings ---
     ENEMY_SPEED: float = 0.5
-    MAX_ENEMIES: int = 6
+    MAX_ENEMIES: int = 12
 
     # --- Game Flow ---
     MAX_LIVES: int = 4

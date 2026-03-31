@@ -13,7 +13,6 @@ class DoubleEnemiesMod(JaxAtariInternalModPlugin):
     """Doubles the maximum number of enemies across all maps."""
 
     constants_overrides = {
-        "MAX_ENEMIES": 12,
         "DESERT_MAX_ENEMIES": 8,
         "CAVERN_MAX_BATS": 2,
         "CAVERN_MAX_STALACTITES": 4,
