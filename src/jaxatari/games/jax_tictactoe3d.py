@@ -114,13 +114,17 @@ class TicTacToe3DConstants:
     WIN_PHASE_2_FRAMES: int = 120
     
     STRICT_ILLEGAL_MOVES: bool = False
+    STEP_PENALTY: float = 0.0
+    
+    
 
     PIXEL_COORDS: chex.Array = struct.field(default_factory=lambda: PIXEL_COORDS_GENERATED)
 
     ASSET_CONFIG: tuple = struct.field(default_factory=_get_default_asset_config)
 @struct.dataclass
 class TicTacToe3DState:
-    board: jnp.ndarray          
+    board: jnp.ndarray 
+    piece_timers: jnp.ndarray         
     current_player: jnp.ndarray 
     game_over: jnp.ndarray      
     winner: jnp.ndarray         
@@ -140,6 +144,7 @@ class TicTacToe3DState:
     pending_cpu_valid: jnp.ndarray
     frame: jnp.ndarray
     key: chex.PRNGKey
+    
 
     win_phase: jnp.ndarray
     win_timer: jnp.ndarray
@@ -204,6 +209,7 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
         key, subkey = jax.random.split(key)
         state = TicTacToe3DState(
             board=jnp.zeros((4, 4, 4), dtype=jnp.uint8),
+            piece_timers=jnp.zeros((4, 4, 4), dtype=jnp.int32),
             current_player=jnp.int32(self.consts.FIRST_PLAYER),
             game_over=jnp.bool_(False),
             winner=jnp.int32(0),
@@ -271,7 +277,19 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
             blackout_finished = new_timer <= 0
 
             def apply_pending_cpu(ss):
-                new_board = ss.board.at[ss.pending_cpu_z, ss.pending_cpu_y, ss.pending_cpu_x].set(self.consts.PLAYER_O)
+                raw_new_board = ss.board.at[ss.pending_cpu_z, ss.pending_cpu_y, ss.pending_cpu_x].set(self.consts.PLAYER_O)
+
+                new_board, new_piece_timers = jax.lax.cond(
+                    ss.pending_cpu_valid,
+                    lambda _: self._update_piece_timers_after_placement(
+                        ss.board,
+                        ss.piece_timers,
+                        raw_new_board
+                    ),
+                    lambda _: (ss.board, ss.piece_timers),
+                    operand=None
+                )
+
                 new_winner = self._check_winner(new_board)
                 new_move_count = ss.move_count + jnp.where(ss.pending_cpu_valid, 1, 0)
                 
@@ -280,7 +298,7 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
                 new_win_timer = jnp.where(is_win_or_draw, jnp.int32(self.consts.BLACKOUT_FRAMES), jnp.int32(0))
 
                 new_state = ss.replace(
-                    board=new_board, move_count=new_move_count, winner=new_winner,
+                    board=new_board, piece_timers=new_piece_timers, move_count=new_move_count, winner=new_winner,
                     last_cpu_x=ss.pending_cpu_x, last_cpu_y=ss.pending_cpu_y, last_cpu_z=ss.pending_cpu_z,
                     last_move_x=jnp.where(ss.pending_cpu_valid, ss.pending_cpu_x, ss.last_move_x),
                     last_move_y=jnp.where(ss.pending_cpu_valid, ss.pending_cpu_y, ss.last_move_y),
@@ -311,11 +329,22 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
             opening_is_empty = board[opening_z, opening_y, opening_x] == self.consts.EMPTY
             do_opening_move = jnp.logical_and(is_first_turn, opening_is_empty)
 
-            board_after_opening = jax.lax.cond(
+            raw_board_after_opening = jax.lax.cond(
                 do_opening_move,
                 lambda b: b.at[opening_z, opening_y, opening_x].set(self.consts.PLAYER_O),
                 lambda b: b,
                 board
+            )
+
+            board_after_opening, piece_timers_after_opening = jax.lax.cond(
+                do_opening_move,
+                lambda _: self._update_piece_timers_after_placement(
+                    board,
+                    s.piece_timers,
+                    raw_board_after_opening
+                ),
+                lambda _: (board, s.piece_timers),
+                operand=None
             )
 
             move_count_after_opening = s.move_count + jnp.where(do_opening_move, 1, 0)
@@ -347,7 +376,26 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
                     lambda b: b,
                     board_after_opening
                 )
+                raw_board_after_user = jax.lax.cond(
+                    can_place,
+                    lambda b: b.at[cz, cy, cx].set(self.consts.PLAYER_X),
+                    lambda b: b,
+                    board_after_opening
+                )
 
+                board_after_user, piece_timers_after_user = jax.lax.cond(
+                    can_place,
+                    lambda _: self._update_piece_timers_after_placement(
+                        board_after_opening,
+                        piece_timers_after_opening,
+                        raw_board_after_user
+                    ),
+                    lambda _: (board_after_opening, piece_timers_after_opening),
+                    operand=None
+                )
+
+                winner_after_user = self._check_winner(board_after_user)
+                move_count_after_user = move_count_after_opening + jnp.where(can_place, 1, 0)
                 winner_after_user = self._check_winner(board_after_user)
                 move_count_after_user = move_count_after_opening + jnp.where(can_place, 1, 0)
 
@@ -379,9 +427,11 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
 
                 new_state = s.replace(
                     board=board_after_user,
+                    piece_timers=piece_timers_after_user,
                     current_player=jnp.int32(self.consts.PLAYER_X),
                     move_count=move_count_after_user,
                     cpu_opening_pending=jnp.bool_(False),
+                    
 
                     cursor_x=cx,
                     cursor_y=cy,
@@ -587,6 +637,20 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
         )
         
     @partial(jax.jit, static_argnums=(0,))
+    def _update_piece_timers_after_placement(
+        self,
+        prev_board: jnp.ndarray,
+        prev_piece_timers: jnp.ndarray,
+        new_board: jnp.ndarray,
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        """
+        Default no-op timer update.
+        Base env keeps timers unchanged.
+        Mods can patch this method.
+        """
+        return new_board, prev_piece_timers
+        
+    @partial(jax.jit, static_argnums=(0,))
     def _check_winner(self, board: jnp.ndarray) -> jnp.ndarray:
         is_x = (board == self.consts.PLAYER_X).astype(jnp.int32)
         is_o = (board == self.consts.PLAYER_O).astype(jnp.int32)
@@ -598,10 +662,35 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
         
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state, state):
-        just_won = jnp.logical_and(previous_state.winner == self.consts.EMPTY, state.winner == self.consts.PLAYER_X)
-        just_lost = jnp.logical_and(previous_state.winner == self.consts.EMPTY, state.winner == self.consts.PLAYER_O)
-        return jnp.where(just_won, 1.0, jnp.where(just_lost, -1.0, 0.0))
-    
+
+        just_won = jnp.logical_and(
+            previous_state.winner == self.consts.EMPTY,
+            state.winner == self.consts.PLAYER_X
+        )
+
+        just_lost = jnp.logical_and(
+            previous_state.winner == self.consts.EMPTY,
+            state.winner == self.consts.PLAYER_O
+        )
+
+        base_reward = jnp.where(
+            just_won,
+            1.0,
+            jnp.where(just_lost, -1.0, 0.0)
+        )
+
+        is_terminal = jnp.logical_or(just_won, just_lost)
+
+        # only penalize real moves
+        is_real_move = state.move_count > previous_state.move_count
+
+        step_penalty = jnp.where(
+            jnp.logical_or(is_terminal, jnp.logical_not(is_real_move)),
+            0.0,
+            jnp.float32(self.consts.STEP_PENALTY)
+        )
+
+        return base_reward + step_penalty
     # Make action optional to prevent wrappers from crashing
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: TicTacToe3DState, action: jnp.ndarray = None) -> TicTacToe3DInfo:
@@ -623,6 +712,9 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state):
         return state.game_over
+    
+    
+    
 
 
 class TicTacToe3DRenderer(JAXGameRenderer):

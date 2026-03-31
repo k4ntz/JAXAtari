@@ -64,6 +64,7 @@ GAME_MODULES = {
     # "surround": "jaxatari.games.jax_surround", currently not in a state that can be used
     "tennis": "jaxatari.games.jax_tennis",
     "tetris": "jaxatari.games.jax_tetris",
+    "tictactoe3d": "jaxatari.games.jax_tictactoe3d",
     "timepilot": "jaxatari.games.jax_timepilot",
     "tron": "jaxatari.games.jax_tron",
     "turmoil": "jaxatari.games.jax_turmoil",
@@ -89,6 +90,8 @@ MOD_MODULES = {
     "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
     "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
     "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
+    "tictactoe3d": "jaxatari.games.mods.tictactoe3d_mods.Tictactoe3dEnvMod",
+    
 }
 
 

@@ -129,30 +129,10 @@ class SuddenDeathMod(JaxAtariPostStepModPlugin):
     
 
 
-class TemporalPenaltyMod(JaxAtariPostStepModPlugin):
-    """
-    'Hurry Up' Mode: Applies a small negative reward at every single 
-    timestep during the environment's step function to incentivize the RL agent 
-    to find the shortest path to victory.
-    """
-    
-    # JIT compile the after_step hook for maximum performance on GPU/TPU.
-    # static_argnums=(0,) ensures the 'self' argument is treated as static during compilation,
-    # which is required by JAX for class methods.
-    @partial(jax.jit, static_argnums=(0,))
-    def after_step(self, obs, state, reward, done, info):
-        
-        # Apply a tiny penalty of -0.002 per frame/step.
-        # REASONING: This specific value is chosen to prevent the "Suicide Agent" problem. 
-        # For example, an average 400-frame game results in a total time penalty of -0.8.
-        # Since this is strictly less than the -1.0 loss penalty or the +1.0 win reward, 
-        # it ensures that the agent still prioritizes winning over simply ending the game fast.
-        # We explicitly cast to jnp.float32 to maintain strict JAX type consistency.
-        new_reward = reward - jnp.float32(0.002)
-        
-        # Return the unmodified observation, state, done flag, and info dictionary,
-        # but pass along the newly shaped reward for the PPO/PQN agent to learn from.
-        return obs, state, new_reward, done, info
+class TemporalPenaltyMod(JaxAtariInternalModPlugin):
+    constants_overrides = {
+        "STEP_PENALTY": -0.0003
+    }
 
 class MisereMod(JaxAtariPostStepModPlugin):
     """
@@ -332,4 +312,85 @@ class RandomStaticBlockersMod(JaxAtariPostStepModPlugin):
         # IMPORTANT: regenerate observation properly
         modified_obs = self._env._get_observation(modified_state)
 
-        return modified_obs, modified_state    
+        return modified_obs, modified_state   
+    
+class VanishingPiecesMod(JaxAtariInternalModPlugin):
+    """
+    Pieces disappear after N full rounds.
+    Decay happens only when the CPU (O) places a piece, to avoid penalizing the agent's strategic planning on its turn.
+    """
+
+    PIECE_LIFETIME = 10
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _update_piece_timers_after_placement(self, prev_board, prev_piece_timers, new_board):
+        empty = jnp.int32(self._env.consts.EMPTY)
+        player_x = jnp.int32(self._env.consts.PLAYER_X)
+        player_o = jnp.int32(self._env.consts.PLAYER_O)
+
+        # Detect a newly placed X or O piece
+        new_piece_mask = jnp.logical_and(
+            prev_board == empty,
+            jnp.logical_or(
+                new_board == player_x,
+                new_board == player_o,
+            )
+        )
+
+        did_place = jnp.any(new_piece_mask)
+
+        # Which piece was newly placed?
+        placed_x = jnp.any(jnp.logical_and(new_piece_mask, new_board == player_x))
+        placed_o = jnp.any(jnp.logical_and(new_piece_mask, new_board == player_o))
+
+        def handle_placement(_):
+            def decay_and_refresh(_):
+                # 1. Decay all existing timers once per full round (on O move only)
+                decayed_timers = jnp.maximum(prev_piece_timers - 1, 0)
+
+                # 2. Remove expired X/O pieces from previous board
+                board_after_decay = jnp.where(
+                    decayed_timers > 0,
+                    prev_board,
+                    jnp.where(
+                        jnp.logical_or(
+                            prev_board == player_x,
+                            prev_board == player_o
+                        ),
+                        jnp.uint8(empty),
+                        prev_board
+                    )
+                )
+
+                # 3. Apply the newly placed piece onto the decayed board
+                refreshed_board = jnp.where(new_piece_mask, new_board, board_after_decay)
+
+                # 4. Reset timer for the newly placed piece
+                refreshed_timers = jnp.where(
+                    new_piece_mask,
+                    jnp.int32(self.PIECE_LIFETIME),
+                    decayed_timers
+                )
+
+                return refreshed_board, refreshed_timers
+
+            def refresh_without_decay(_):
+                # X move: just place the piece and give it fresh lifetime
+                refreshed_timers = jnp.where(
+                    new_piece_mask,
+                    jnp.int32(self.PIECE_LIFETIME),
+                    prev_piece_timers
+                )
+                return new_board, refreshed_timers
+
+            return jax.lax.cond(
+                placed_o,
+                decay_and_refresh,
+                refresh_without_decay,
+                operand=None
+            )
+
+        def no_change(_):
+            return new_board, prev_piece_timers
+
+        return jax.lax.cond(did_place, handle_placement, no_change, operand=None)
