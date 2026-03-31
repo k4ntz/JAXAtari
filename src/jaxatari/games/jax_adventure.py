@@ -1694,7 +1694,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             lambda :-1000,
             lambda : jax.lax.cond(
                 state.chalice[2]==1, #win when chalice in yellow castle
-                lambda :1000,
+                lambda :100000,
                 lambda :0
             )
         )
@@ -1702,7 +1702,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         #reward for goto black key
         reward = reward + jax.lax.cond(
             jnp.logical_and(jnp.logical_and(previous_state.player[2]==0, state.player[2]==2),state.player[3]==0),
-            lambda :1,
+            lambda :100,
             lambda :0
         )
         reward = reward + jax.lax.cond(
@@ -1712,44 +1712,210 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
         reward = reward + jax.lax.cond(
             jnp.logical_and(jnp.logical_and(previous_state.player[2]==2, state.player[2]==3),state.player[3]==0),
-            lambda :1,
+            lambda :100,
             lambda :0
         )
         reward = reward + jax.lax.cond(
             jnp.logical_and(jnp.logical_and(previous_state.player[2]==3, state.player[2]==2),state.player[3]==0),
-            lambda :-1,
+            lambda :-100,
             lambda :0
         )
         reward = reward + jax.lax.cond(
             jnp.logical_and(jnp.logical_and(previous_state.player[2]==3, state.player[2]==4),state.player[3]==0),
-            lambda :1,
+            lambda :100,
             lambda :0
         )
         reward = reward + jax.lax.cond(
             jnp.logical_and(jnp.logical_and(previous_state.player[2]==4, state.player[2]==3),state.player[3]==0),
-            lambda :-1,
+            lambda :-100,
             lambda :0
         )
         
 
         #reward for pickup black key
         reward = reward + jax.lax.cond(
-            jnp.logical_and(previous_state.player[3]==0, state.player[3]==2),
-            lambda :1,
+            jnp.logical_and(jnp.logical_and(previous_state.player[3]==0, state.player[3]==2),state.player[2]==4),
+            lambda :100,
             lambda :0
         )
         reward = reward + jax.lax.cond(
-            jnp.logical_and(previous_state.player[3]==2, state.player[3]==0),
-            lambda :-1,
+            jnp.logical_and(jnp.logical_and(previous_state.player[3]==2, state.player[3]==0),state.player[2]==4),
+            lambda :-100,
             lambda :0
         )
+
+        #reward for go to b castle with b key
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==4, state.player[2]==3),state.player[3]==2),
+            lambda :100,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==3, state.player[2]==4),state.player[3]==2),
+            lambda :-100,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==3, state.player[2]==2),state.player[3]==2),
+            lambda :100,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==2, state.player[2]==3),state.player[3]==2),
+            lambda :-100,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==2, state.player[2]==5),state.player[3]==2),
+            lambda :100,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==5, state.player[2]==2),state.player[3]==2),
+            lambda :-100,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==5, state.player[2]==6),state.player[3]==2),
+            lambda :100,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==6, state.player[2]==5),state.player[3]==2),
+            lambda :-100,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==6, state.player[2]==7),state.player[3]==2),
+            lambda :100,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==7, state.player[2]==6),state.player[3]==2),
+            lambda :-100,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==7, state.player[2]==10),state.player[3]==2),
+            lambda :100,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==10, state.player[2]==7),state.player[3]==2),
+            lambda :-100,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==10, state.player[2]==11),state.player[3]==2),
+            lambda :100,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==11, state.player[2]==10),state.player[3]==2),
+            lambda :-100,
+            lambda :0
+        )
+
+        #reward for opening black gate and drop key afterwards
+        reward = reward + jax.lax.cond(
+            previous_state.gate_black[0] < state.gate_black[0],
+            lambda :100,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            previous_state.gate_black[0] > state.gate_black[0],
+            lambda :-100,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[3]==2,  state.gate_black[0]==6), state.player[3]==0),
+            lambda :100,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[3]==0,  state.gate_black[0]==6), state.player[3]==2),
+            lambda :-100,
+            lambda :0
+        )
+
+        #step rewards down
+        reward = reward +jax.lax.cond(
+            jnp.logical_and(
+                jnp.logical_and(jnp.logical_or(state.player[2]==0,state.player[2]==3),state.player[3]==0),#down empty
+                state.player[1]>previous_state.player[1]
+            ),
+            lambda: 1,
+            lambda: 0
+        )
+        reward = reward +jax.lax.cond(
+            jnp.logical_and(
+                jnp.logical_and(jnp.logical_or(state.player[2]==0,state.player[2]==3),state.player[3]==0),#down empty
+                state.player[1]<previous_state.player[1]
+            ),
+            lambda: -1,
+            lambda: 0
+        )
+        #step rewards up
+        reward = reward +jax.lax.cond(
+            jnp.logical_and(
+                jnp.logical_and(jnp.logical_or(state.player[2]==4,jnp.logical_or(state.player[2]==5,jnp.logical_or(state.player[2]==7,state.player[2]==10))),state.player[3]==2),#up with black key empty
+                state.player[1]<previous_state.player[1]
+            ),
+            lambda: 1,
+            lambda: 0
+        )
+        reward = reward +jax.lax.cond(
+            jnp.logical_and(
+                jnp.logical_and(jnp.logical_or(state.player[2]==4,jnp.logical_or(state.player[2]==5,jnp.logical_or(state.player[2]==7,state.player[2]==10))),state.player[3]==2),#up with black key empty
+                state.player[1]>previous_state.player[1]
+            ),
+            lambda: -1,
+            lambda: 0
+        )
+        #step rewards right
+        reward = reward +jax.lax.cond(
+            jnp.logical_and(
+                jnp.logical_or(jnp.logical_and(state.player[2]==2,state.player[3]==0),#right with empty hand
+                               jnp.logical_and(state.player[2]==6,state.player[3]==2)),#right with black key
+                state.player[0]>previous_state.player[0]
+            ),
+            lambda: 1,
+            lambda: 0
+        )
+        reward = reward +jax.lax.cond(
+            jnp.logical_and(
+                jnp.logical_or(jnp.logical_and(state.player[2]==2,state.player[3]==0),#right with empty hand
+                               jnp.logical_and(state.player[2]==6,state.player[3]==2)),#right with black key
+                state.player[0]<previous_state.player[0]
+            ),
+            lambda: -1,
+            lambda: 0
+        )
+        #step rewards left
+        reward = reward +jax.lax.cond(
+            jnp.logical_and(
+                jnp.logical_and(jnp.logical_or(state.player[2]==2,state.player[2]==3),state.player[3]==2),#left with black key
+                state.player[0]<previous_state.player[0]
+            ),
+            lambda: 1,
+            lambda: 0
+        )
+        reward = reward +jax.lax.cond(
+            jnp.logical_and(
+                jnp.logical_and(jnp.logical_or(state.player[2]==2,state.player[2]==3),state.player[3]==2),#left with black key
+                state.player[0]>previous_state.player[0]
+            ),
+            lambda: -1,
+            lambda: 0
+        )
+
         #jax.debug.print("reward {a}", a = reward)
 
         return reward
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AdventureState) -> bool:
-        return state.player[3]==2#jnp.logical_or(jnp.logical_or(jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1),state.dragon_red[5]==1), state.chalice[2]==1)
+        return jnp.logical_or(state.gate_black[0]==6,jnp.logical_or(jnp.logical_or(jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1),state.dragon_red[5]==1), state.chalice[2]==1))
 
 
 class AdventureRenderer(JAXGameRenderer):
