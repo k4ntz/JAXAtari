@@ -924,6 +924,17 @@ class DarkChambersRenderer(JAXGameRenderer):
             else:
                 self.ITEM_SCALED_MASKS[item_key] = None
 
+        # Door sprite must fill the full 16px-wide cage gap — stretch each axis independently
+        # (aspect-ratio-preserving _scale_mask would leave transparent gaps on the sides)
+        door_mask = self.SHAPE_MASKS.get("door")
+        if door_mask is not None:
+            import numpy as _np
+            dm = _np.array(door_mask)
+            h, w = dm.shape
+            row_idx = (_np.arange(20) * h / 20).astype(int)
+            col_idx = (_np.arange(16) * w / 16).astype(int)
+            self.ITEM_SCALED_MASKS["door"] = jnp.array(dm[_np.ix_(row_idx, col_idx)])
+
         # Stairs sprite uses natural dimensions (LADDER_HEIGHT tall × LADDER_WIDTH wide)
         stairs_mask = self.SHAPE_MASKS.get("stairs")
         if stairs_mask is not None:
@@ -1359,7 +1370,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         self.CAGE_INTERIOR_CELLS = 3
         self.CAGE_WALL_THICKNESS = 4
         self.CAGE_DOOR_GAP = 16  # wider opening for smooth in/out
-        self.CAGE_DOOR_SIZE = 12  # independent of ladder sprite size
+        self.CAGE_DOOR_SIZE = 12  # controls vertical extent; width is set by CAGE_DOOR_GAP
         cage_interior_size = self.CAGE_INTERIOR_CELLS * CELL_SIZE
         cage_outer_size = cage_interior_size + 2 * self.CAGE_WALL_THICKNESS
         self.CAGE_OUTER_SIZE = cage_outer_size
@@ -1407,8 +1418,8 @@ class DarkChambersRenderer(JAXGameRenderer):
             right = jnp.array([cx + cage_outer_size - self.CAGE_WALL_THICKNESS, cy, self.CAGE_WALL_THICKNESS, cage_outer_size], dtype=jnp.int32)
             cage_walls = jnp.stack([top, bottom_left, bottom_right, left, right], axis=0)
 
-            # Door is centered at the bottom opening
-            door_x = cx + gap_side + (self.CAGE_DOOR_GAP - self.CAGE_DOOR_SIZE) // 2
+            # Door fills the full bottom opening (CAGE_DOOR_SIZE == CAGE_DOOR_GAP)
+            door_x = cx + gap_side
             door_y = cy + cage_outer_size - self.CAGE_DOOR_SIZE
             door_pos = jnp.array([door_x, door_y], dtype=jnp.int32)
 
@@ -1737,7 +1748,7 @@ class DarkChambersRenderer(JAXGameRenderer):
             [6, 6],                 # 11 KEY (small key)
             [LADDER_WIDTH, LADDER_HEIGHT],  # 12 LADDER_UP (larger)
             [LADDER_WIDTH, LADDER_HEIGHT],  # 13 LADDER_DOWN (larger)
-            [12, 12],                       # 14 CAGE_DOOR (box-sized door)
+            [16, 20],                       # 14 CAGE_DOOR (16px wide, 20px tall)
             [8, 8],                 # 15 SPEED_POTION (medium)
             [8, 8],                 # 16 HEAL_POTION (medium)
             [8, 8],                 # 17 POISON_POTION (medium)
@@ -1956,16 +1967,6 @@ class DarkChambersRenderer(JAXGameRenderer):
                 raster
             )
 
-            # ITEM_CAGE_DOOR = 14 -> door sprite scaled to box
-            is_cage_door = (item_type == ITEM_CAGE_DOOR) & is_active
-            door_sprite = self.ITEM_SCALED_MASKS.get("door")
-            raster = jax.lax.cond(
-                is_cage_door & (door_sprite is not None),
-                lambda r: self.jr.render_at_clipped(r, item_x, item_y, door_sprite),
-                lambda r: r,
-                raster
-            )
-
             # ITEM_LADDER_DOWN = 13 -> stairs sprite (same as ladder_up)
             is_ladder_down = (item_type == ITEM_LADDER_DOWN) & is_active
             stairs_down_sprite = self.ITEM_SCALED_MASKS.get("stairs_down")
@@ -2105,6 +2106,20 @@ class DarkChambersRenderer(JAXGameRenderer):
         # Skip types that now use sprites: HEART(1), POISON(2), TRAP(3), AMBER_CHALICE(5), AMULET(6), SHIELD(8), BOMB(10), KEY(11), LADDER_UP(12), LADDER_DOWN(13), CAGE_DOOR(14)
         for t in [4, 7]:  # STRONGBOX(4), HOURGLASS(7) — potions and hammer now use sprites
             object_raster = draw_item_type(object_raster, t, masked_item_pos)
+
+        # Cage doors rendered last among items so they appear above the chain reward inside
+        def render_cage_door(i, raster):
+            item_type = state.item_types[i]
+            is_active = state.item_active[i] == 1
+            is_cage_door = (item_type == ITEM_CAGE_DOOR) & is_active
+            door_sprite = self.ITEM_SCALED_MASKS.get("door")
+            return jax.lax.cond(
+                is_cage_door & (door_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, masked_item_pos[i, 0], masked_item_pos[i, 1], door_sprite),
+                lambda r: r,
+                raster,
+            )
+        object_raster = jax.lax.fori_loop(0, NUM_ITEMS, render_cage_door, object_raster)
 
         # Spawners: render as large skulls (24x24)
         spawner_world_pos = state.spawner_positions.astype(jnp.int32)
