@@ -2287,6 +2287,34 @@ class PitfallRenderer(JAXGameRenderer):
         self.HARRY_RUN_MASKS, self.HARRY_RUN_FLIP_OFFSET = _pad_and_offset('harry_run', harry_run)
         self.HARRY_CLIMB_MASKS, self.HARRY_CLIMB_FLIP_OFFSET = _pad_and_offset('harry_climb', harry_climb)
         self.HARRY_JUMP_MASKS, self.HARRY_JUMP_FLIP_OFFSET = _pad_and_offset('harry_jump', harry_jump)
+
+        # Run-sprite horizontal alignment (render-only): the raw run frames have
+        # slightly different pixel anchors (especially around the head/upper body),
+        # which can look like the head moves backward between frames.
+        #
+        # Compute a per-frame x offset so the "upper body" x-center stays
+        # constant across all run frames. When rendering flipped, we mirror the
+        # offset so right->left also stays stable.
+        tid = jnp.uint8(int(self.jr.TRANSPARENT_ID))
+        run_masks = self.HARRY_RUN_MASKS
+        run_h = int(run_masks.shape[1])
+        run_w = int(run_masks.shape[2])
+        top_cut = int((run_h * 2) // 5)  # top ~40% rows
+
+        def _anchor_x(mask2d: jnp.ndarray) -> jnp.int32:
+            occ = mask2d != tid
+            occ_top = occ & (jnp.arange(run_h, dtype=jnp.int32)[:, None] < jnp.int32(top_cut))
+            use_top = jnp.any(occ_top)
+            occ_use = jnp.where(use_top, occ_top, occ)
+            weights = occ_use.astype(jnp.int32)
+            total = jnp.sum(weights)
+            xs = jnp.arange(run_w, dtype=jnp.int32)[None, :]
+            sum_x = jnp.sum(weights * xs)
+            return jnp.where(total > jnp.int32(0), sum_x // total, jnp.int32(run_w // 2)).astype(jnp.int32)
+
+        anchors = jax.vmap(_anchor_x)(run_masks)
+        ref = ((jnp.min(anchors) + jnp.max(anchors)) // jnp.int32(2)).astype(jnp.int32)
+        self.HARRY_RUN_ALIGN_X = (ref - anchors).astype(jnp.int32)
         scorpion_left = _downscale_mask_stack(self.SHAPE_MASKS['scorpion_left'], scorpion_scale)
         scorpion_right = _downscale_mask_stack(self.SHAPE_MASKS['scorpion_right'], scorpion_scale)
         scorpion_left, scorpion_right = _crop_and_pad_scorpion_stacks(scorpion_left, scorpion_right, margin=1)
@@ -2588,6 +2616,25 @@ class PitfallRenderer(JAXGameRenderer):
 
         harry_mask, flip_offset = lax.cond(state.on_ladder, _use_climb, _non_ladder, None)
 
+        # Render-only x alignment for run frames.
+        x_extra_run = self.HARRY_RUN_ALIGN_X[run_idx]
+        x_extra_run1 = self.HARRY_RUN_ALIGN_X[jnp.int32(0)]
+
+        def _non_ladder_x_extra(_):
+            return lax.cond(
+                ~state.on_ground,
+                lambda __: x_extra_run1,
+                lambda __: lax.cond(
+                    touching_wood_render,
+                    lambda ___: jnp.int32(0),
+                    lambda ___: lax.cond(moving, lambda ____: x_extra_run, lambda ____: jnp.int32(0), None),
+                    None,
+                ),
+                None,
+            )
+
+        x_extra = lax.cond(state.on_ladder, lambda _: jnp.int32(0), _non_ladder_x_extra, None).astype(jnp.int32)
+
         harry_h = jnp.int32(harry_mask.shape[0])
         y_top = state.player_y.astype(jnp.int32) - harry_h + jnp.int32(1)
         underground_tune = jnp.where(
@@ -2598,7 +2645,12 @@ class PitfallRenderer(JAXGameRenderer):
         y_top = y_top + jnp.int32(int(self.consts.harry_y_tune)) + underground_tune
 
         def _draw_harry(r: jnp.ndarray) -> jnp.ndarray:
-            x_draw = state.player_x.astype(jnp.int32) + jnp.where(state.on_ladder, jnp.int32(1), jnp.int32(0))
+            x_extra_draw = lax.select(flip, -x_extra, x_extra)
+            x_draw = (
+                state.player_x.astype(jnp.int32)
+                + jnp.where(state.on_ladder, jnp.int32(1), jnp.int32(0))
+                + x_extra_draw
+            )
             return self.jr.render_at_clipped(
                 r,
                 x_draw,
@@ -2636,7 +2688,12 @@ class PitfallRenderer(JAXGameRenderer):
             yy = jnp.arange(H, dtype=jnp.int32)[:, None]
             xx = jnp.arange(W, dtype=jnp.int32)[None, :]
             harry_w = jnp.int32(harry_mask.shape[1])
-            harry_x0 = state.player_x.astype(jnp.int32)
+            x_extra_draw = lax.select(flip, -x_extra, x_extra)
+            harry_x0 = (
+                state.player_x.astype(jnp.int32)
+                + jnp.where(state.on_ladder, jnp.int32(1), jnp.int32(0))
+                + x_extra_draw
+            )
             harry_x1 = harry_x0 + harry_w
             hidden_mask = (
                 (xx >= harry_x0)
