@@ -94,76 +94,76 @@ def _get_default_asset_config() -> tuple:
 
 class AdventureConstants(struct.PyTreeNode):
     #Map Size,  coordinates are (x,y) and the upper left corner is (0,0)
-    WIDTH: int = 160
-    HEIGHT: int = 250
+    WIDTH: int = struct.field(pytree_node=False, default = 160)
+    HEIGHT: int = struct.field(pytree_node=False, default= 250)
     #Entity Sizes
-    PLAYER_SIZE: Tuple[int, int] = (4, 8)
-    KEY_SIZE: Tuple[int, int] = (8, 6)
-    DRAGON_SIZE: Tuple[int, int] = (8, 44)
-    GATE_SIZE: Tuple[int, int] = (7, 32)
-    SWORD_SIZE: Tuple[int, int] = (8, 10)
-    BRIDGE_SIZE: Tuple[int, int] = (4, 48)
-    MAGNET_SIZE: Tuple[int, int] = (8, 16)
-    CHALICE_SIZE: Tuple[int, int] = (8, 18)
-    DOT_SIZE: Tuple[int, int] = (1,1)
+    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (4, 8))
+    KEY_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (8, 6))
+    DRAGON_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (8, 44))
+    GATE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (7, 32))
+    SWORD_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (8, 10))
+    BRIDGE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (4, 48))
+    MAGNET_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (8, 16))
+    CHALICE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (8, 18))
+    DOT_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (1,1))
     #Inventory IDs
-    EMPTY_HAND_ID: int = 0
-    KEY_YELLOW_ID: int = 1
-    KEY_BLACK_ID: int = 2
-    SWORD_ID: int = 3
-    BRIDGE_ID: int = 4
-    MAGNET_ID: int = 5
-    CHALICE_ID: int = 6
-    KEY_WHITE_ID: int = 7
-    DOT_ID: int = 8
+    EMPTY_HAND_ID: int = struct.field(pytree_node=False, default= 0)
+    KEY_YELLOW_ID: int = struct.field(pytree_node=False, default= 1)
+    KEY_BLACK_ID: int = struct.field(pytree_node=False, default= 2)
+    SWORD_ID: int = struct.field(pytree_node=False, default= 3)
+    BRIDGE_ID: int = struct.field(pytree_node=False, default= 4)
+    MAGNET_ID: int = struct.field(pytree_node=False, default= 5)
+    CHALICE_ID: int = struct.field(pytree_node=False, default= 6)
+    KEY_WHITE_ID: int = struct.field(pytree_node=False, default= 7)
+    DOT_ID: int = struct.field(pytree_node=False, default= 8)
     #dragons (X,Y, Room, state, counter, eat, activate)
-    DRAGON_YELLOW_SPAWN: Tuple[int, int, int, int ,int, int, int] = (80, 170, 5, 0, 0, 0, 0)
-    DRAGON_GREEN_SPAWN: Tuple[int, int, int, int, int, int, int] = (80, 130, 4, 0, 0, 0, 0)
-    DRAGON_RED_SPAWN: Tuple[int, int, int, int, int, int, int] = (80, 130, 19, 0, 0, 0, 0)
+    DRAGON_YELLOW_SPAWN: Tuple[int, int, int, int ,int, int, int] = struct.field(pytree_node=False, default= (80, 170, 5, 0, 0, 0, 0))
+    DRAGON_GREEN_SPAWN: Tuple[int, int, int, int, int, int, int] = struct.field(pytree_node=False, default= (80, 130, 4, 0, 0, 0, 0))
+    DRAGON_RED_SPAWN: Tuple[int, int, int, int, int, int, int] = struct.field(pytree_node=False, default= (80, 130, 19, 0, 0, 0, 0))
     #Spawn Locations of all Entities: (X, Y, Room/Tile)
-    YELLOW_GATE_POS: Tuple[int, int, int] = (76, 140, 0)
-    BLACK_GATE_POS: Tuple[int, int, int] = (76, 140, 11)
-    WHITE_GATE_POS: Tuple[int, int, int] = (76, 140, 24)
-    PLAYER_SPAWN: Tuple[int, int, int] = (78, 174, 0) #Changed from (78, 174, 0)
-    KEY_YELLOW_SPAWN: Tuple[int, int, int] = (31, 110, 0) #Changed from (31, 110, 0) for Testing
-    KEY_BLACK_SPAWN: Tuple[int, int, int] = (31, 100, 4)
-    KEY_WHITE_SPAWN: Tuple[int, int, int] = (31, 110, 19)
-    SWORD_SPAWN: Tuple[int, int, int] = (31,180,1)
-    BRIDGE_SPAWN: Tuple[int, int, int] = (40,130,10)
-    MAGNET_SPAWN: Tuple[int, int, int] = (120,180,12)
-    CHALICE_SPAWN: Tuple[int, int, int] = (35,180,13)
-    BAT_SPAWN: Tuple[int, int, int, int] = (76, 140, 19, 0)
-    DOT_SPAWN: Tuple[int, int, int] = (76, 140, 29)
+    YELLOW_GATE_POS: Tuple[int, int, int] = struct.field(pytree_node=False, default= (76, 140, 0))
+    BLACK_GATE_POS: Tuple[int, int, int] = struct.field(pytree_node=False, default= (76, 140, 11))
+    WHITE_GATE_POS: Tuple[int, int, int] = struct.field(pytree_node=False, default= (76, 140, 24))
+    PLAYER_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (78, 174, 0)) #Changed from (78, 174, 0)
+    KEY_YELLOW_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (31, 110, 0)) #Changed from (31, 110, 0) for Testing
+    KEY_BLACK_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (31, 100, 4))
+    KEY_WHITE_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (31, 110, 19))
+    SWORD_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (31,180,1))
+    BRIDGE_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (40,130,10))
+    MAGNET_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (120,180,12))
+    CHALICE_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (35,180,13))
+    BAT_SPAWN: Tuple[int, int, int, int] = struct.field(pytree_node=False, default= (76, 140, 19, 0))
+    DOT_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (76, 140, 29))
     
     #Constants that are used for restricting player movement, for easy of fine tuning
     # Wall coordinates the player cannot pass through
-    LEFT_WALL_X: int = 8
-    RIGHT_WALL_X: int = 148
-    UPPER_WALL_Y: int = 43
-    LOWER_WALL_Y: int = 199
+    LEFT_WALL_X: int = struct.field(pytree_node=False, default= 8)
+    RIGHT_WALL_X: int = struct.field(pytree_node=False, default= 148)
+    UPPER_WALL_Y: int = struct.field(pytree_node=False, default= 43)
+    LOWER_WALL_Y: int = struct.field(pytree_node=False, default= 199)
     #special black borders to the left and right
-    SPECIAL_WALL_LEFT: int = 12
-    SPECIAL_WALL_RIGHT: int = 145
+    SPECIAL_WALL_LEFT: int = struct.field(pytree_node=False, default= 12)
+    SPECIAL_WALL_RIGHT: int = struct.field(pytree_node=False, default= 145)
     # Path South and North to another Room, X-Coordinates that offer hole in the wall
-    PATH_VERTICAL_LEFT: int = 64
-    PATH_VERTICAL_RIGHT: int = 95
+    PATH_VERTICAL_LEFT: int = struct.field(pytree_node=False, default= 64)
+    PATH_VERTICAL_RIGHT: int = struct.field(pytree_node=False, default= 95)
     # Path East and West, Y-Coordinates that offer hole in the wall
-    PATH_HORIZONTAL_UP: int = 40
-    PATH_HORIZONTAL_DOWN: int = 200
+    PATH_HORIZONTAL_UP: int = struct.field(pytree_node=False, default= 40)
+    PATH_HORIZONTAL_DOWN: int = struct.field(pytree_node=False, default= 200)
     # Castle Edges
-    CASTLE_TOWER_LEFT_X: int = 35
-    CASTLE_TOWER_RIGHT_X: int = 120
-    CASTLE_BASE_LEFT_X: int = 45
-    CASTLE_BASE_RIGHT_X: int = 113
-    CASTLE_TOWER_CORNER_Y: int = 105
-    CASTLE_BASE_CORNER_Y: int = 170
+    CASTLE_TOWER_LEFT_X: int = struct.field(pytree_node=False, default= 35)
+    CASTLE_TOWER_RIGHT_X: int = struct.field(pytree_node=False, default= 120)
+    CASTLE_BASE_LEFT_X: int = struct.field(pytree_node=False, default= 45)
+    CASTLE_BASE_RIGHT_X: int = struct.field(pytree_node=False, default= 113)
+    CASTLE_TOWER_CORNER_Y: int = struct.field(pytree_node=False, default= 105)
+    CASTLE_BASE_CORNER_Y: int = struct.field(pytree_node=False, default= 170)
 
     # sset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
     #Dragon constants
-    DRAGON_SPEED: int = 2
-    DRAGON_BITE_TIMER: int = 15
+    DRAGON_SPEED: int = struct.field(pytree_node=False, default= 2)
+    DRAGON_BITE_TIMER: int = struct.field(pytree_node=False, default= 15)
 
 
 # immutable state container
