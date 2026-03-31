@@ -408,6 +408,11 @@ class PitfallState:
     respawn_target_y: chex.Array
     respawn_target_ground_y: chex.Array
 
+    # Jump-only state: used for edge-triggered input and fixed airborne carry.
+    jump_pressed_prev: chex.Array
+    jump_lock_active: chex.Array
+    jump_lock_vx: chex.Array
+
 class PitfallConstants(struct.PyTreeNode):
     screen_width: int = 160     # Atari 2600 horizontal resolution
     screen_height: int = 210   # Atari vertical resolution used in ALE
@@ -419,9 +424,14 @@ class PitfallConstants(struct.PyTreeNode):
     # Max horizontal run speed. Tuned to match the rolling-log scroll speed
     # implied by rolling_log_extra_step_period (1 px/frame + 1 px every N frames).
     player_speed: float = 1.25  # pixels per frame horizontally
-    jump_velocity: float = -4.0  # softer launch for floatier arcs
-    gravity: float = 0.55       # symmetric gravity for longer hang-time
+    jump_velocity: float = -4.0  # (used by ladder-exit jump; keep stable)
+    gravity: float = 0.55       # (global gravity for falls/ladder-exit; keep stable)
     fall_speed: float = 3.0    # terminal velocity cap on descent
+
+    # Ground-jump tuning (jump-only): longer airtime with similar peak height.
+    ground_jump_velocity: float = -3.62
+    ground_jump_gravity: float = 0.45
+    ground_jump_distance_px: float = 31.0
 
     fps: int = 30
     initial_time_seconds: int = 1200  # 20 minutes
@@ -480,9 +490,16 @@ class PitfallConstants(struct.PyTreeNode):
     scorpion_hit_inset_x: int = 2
     # Vertical inset is applied from the top only by default, so the hitbox sits
     # lower while keeping the bottom edge unchanged.
-    scorpion_hit_inset_top: int = 2
+    scorpion_hit_inset_top: int = 4.5
     scorpion_hit_inset_bottom: int = 0
     scorpion_hit_inset_y: int = 2  # backwards compat (unused by default)
+
+    # Scorpion collision (jump-only work is elsewhere; this affects scorpion deaths only)
+    # Use circle-vs-circle collision to avoid corner-overlap deaths from AABBs.
+    # - `player_collision_radius_px` is Harry's collision circle radius
+    # - `scorpion_collision_radius_scale` scales scorpion radius from its hitbox size
+    player_collision_radius_px: float = 2.5
+    scorpion_collision_radius_scale: float = 0.7
 
     # Log pushback when climbing a ladder
     log_push_amount: float = 6.0    # total px to push Harry down on log hit
@@ -503,6 +520,7 @@ class PitfallConstants(struct.PyTreeNode):
     # Rendering tune: negative moves sprite up (player_y is treated as bottom/feet).
     harry_y_tune: int = -2
     underground_harry_y_tune: int = 2  # push Harry slightly down only on lower ground
+    debug_render_hitboxes: bool = False  # render scorpion + feet debug overlays when True
 
     ASSET_CONFIG: tuple = _get_default_pitfall_asset_config()
 
@@ -1020,8 +1038,23 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         falling_through_hole = over_any_hole & on_upper_level & (~on_ground) & (~state.on_ladder) & (vy >= 0)
 
+        # --- Ground jump ----------------------------------------------------
+        # Edge-triggered jump: prevents repeated hops when holding UP.
+        jump_pressed = move_jump
+        jump_rise = jump_pressed & (~state.jump_pressed_prev)
+
         speed = jnp.asarray(consts.player_speed, dtype=jnp.float32)
-        jump_horiz_speed = speed * jnp.asarray(consts.normal_jump_horizontal_scale, dtype=jnp.float32)
+
+        # Fixed travel distance independent of run speed.
+        gj_v0 = jnp.asarray(consts.ground_jump_velocity, dtype=jnp.float32)
+        gj_g = jnp.asarray(consts.ground_jump_gravity, dtype=jnp.float32)
+        # This env applies gravity starting the frame *after* takeoff (since the
+        # takeoff frame begins grounded). Add 1 frame to match that cadence.
+        jump_air_frames = jnp.int32(1) + jnp.ceil(
+            (jnp.abs(gj_v0) * jnp.asarray(2.0, dtype=jnp.float32)) / jnp.maximum(gj_g, 1e-6)
+        ).astype(jnp.int32)
+        jump_horiz_speed = jnp.asarray(consts.ground_jump_distance_px, dtype=jnp.float32) / jump_air_frames.astype(jnp.float32)
+
         vx = jnp.where(move_left, -speed, jnp.where(move_right, speed, 0.0))
         # When airborne, preserve launch momentum (no mid-air steering) so
         # regular jumps still have enough carry while being shorter than full-speed runs.
@@ -1031,22 +1064,33 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             -jnp.minimum(jnp.abs(state.player_vx), jump_horiz_speed),
             jnp.where(state.player_vx > 0, jnp.minimum(jnp.abs(state.player_vx), jump_horiz_speed), 0.0),
         )
+        # If a ground jump is locked, force constant horizontal carry while airborne.
+        air_vx = jnp.where(state.jump_lock_active, state.jump_lock_vx, air_vx)
         vx = jnp.where(airborne, air_vx, vx)
         vx = jnp.where(airborne & ladder_exit_active, state.player_vx, vx)
         vx = jnp.where(state.on_ladder, 0.0, vx)
         vx = jnp.where(falling_through_hole & (~ladder_exit_active), 0.0, vx)
 
         trying_to_enter_ladder = near_ladder & on_lower_level & move_jump
-        jump_mask = on_ground & move_jump & (~state.on_ladder) & (~trying_to_enter_ladder) & (~ladder_exit_active)
+        jump_mask = on_ground & jump_rise & (~state.on_ladder) & (~trying_to_enter_ladder) & (~ladder_exit_active)
         jump_launch_vx = jnp.where(move_left, -jump_horiz_speed, jnp.where(move_right, jump_horiz_speed, 0.0))
         vx = jnp.where(jump_mask, jump_launch_vx, vx)
         vy = jnp.where(
             jump_mask,
-            jnp.asarray(consts.jump_velocity, dtype=jnp.float32),
+            gj_v0,
             vy,
         )
 
-        gravity = jnp.asarray(consts.gravity, dtype=jnp.float32)
+        jump_lock_active = jnp.where(jump_mask, jnp.array(True, dtype=jnp.bool_), state.jump_lock_active)
+        jump_lock_vx = jnp.where(jump_mask, jump_launch_vx, state.jump_lock_vx)
+
+        # Use jump-specific gravity only for ground jumps (so ladder exit and
+        # general falling behavior remain unchanged).
+        gravity = jnp.where(
+            jump_lock_active,
+            gj_g,
+            jnp.asarray(consts.gravity, dtype=jnp.float32),
+        )
         fall_speed = jnp.asarray(consts.fall_speed, dtype=jnp.float32)
         apply_gravity = (~on_ground) & (~state.on_ladder)
         # Symmetric gravity on both ascent and descent (capped at fall_speed)
@@ -1193,6 +1237,9 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             ladder_exit_frames,
         )
         ladder_exit_frames = jnp.where(on_ladder, jnp.int32(0), ladder_exit_frames)
+
+        # Clear jump lock once grounded (or while on ladder).
+        jump_lock_active = jump_lock_active & (~on_ground) & (~on_ladder)
 
         has_logs, logs_are_rolling, log_count, log_xs, has_fireplace, has_snake = room_hazards_from_room_byte(new_room_byte)
 
@@ -1435,7 +1482,50 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         scorpion_left = jnp.clip(scorpion_x.astype(jnp.int32) + hit_x0, jnp.int32(0), max_scorpion_start)
         scorpion_right = scorpion_left + hit_w
 
-        overlap_scorpion = (x1 > scorpion_left) & (x0 < scorpion_right) & (y1 > scorpion_y0) & (y0 < scorpion_y1)
+        # Scorpion collision: use an "oval" (ellipse) around Harry's feet.
+        # This stays visually centered (same center convention as ladder/hole logic)
+        # and avoids boxy-looking debug overlays.
+        harry_w = self.wall_block_player_width_px.astype(jnp.int32)
+        x_int = x.astype(jnp.int32)
+        idle_shift = jnp.where(move_left | move_right, jnp.int32(0), jnp.int32(-1))
+        facing_left_now = jnp.where(move_left | move_right, move_left, state.facing_left)
+        # The raw (unflipped) Harry sprite is a bit front-heavy; shift the feet
+        # oval slightly backward when facing right so it looks centered.
+        facing_shift_x = jnp.where(facing_left_now, jnp.int32(0), jnp.int32(-2))
+        center_x_i = (
+            x_int
+            + (harry_w // jnp.int32(2))
+            + idle_shift
+            + jnp.where(on_ladder, jnp.int32(1), jnp.int32(0))
+            + facing_shift_x
+        )
+
+        # Ellipse radii: match the previous feet-box dimensions.
+        player_vis_w = jnp.maximum(jnp.int32(1), harry_w - jnp.int32(4))
+        # Narrow by 1px on each side vs the previous oval.
+        rx = jnp.maximum(
+            jnp.asarray(1.0, dtype=jnp.float32),
+            (player_vis_w.astype(jnp.float32) * jnp.asarray(0.5, dtype=jnp.float32)) - jnp.asarray(1.0, dtype=jnp.float32),
+        )
+        ry = jnp.asarray(1.0, dtype=jnp.float32)  # smaller feet region height
+
+        cx = center_x_i.astype(jnp.float32)
+        # Center the oval on the bottom few pixels of Harry.
+        cy = y.astype(jnp.float32) - jnp.asarray(1.5, dtype=jnp.float32)
+
+        # Test ellipse-vs-rect intersection by checking the closest point on the
+        # scorpion hitbox rect to the ellipse center, in normalized space.
+        rect_x0 = scorpion_left.astype(jnp.float32)
+        rect_x1 = scorpion_right.astype(jnp.float32)
+        rect_y0 = scorpion_y0.astype(jnp.float32)
+        rect_y1 = scorpion_y1.astype(jnp.float32)
+
+        px = jnp.clip(cx, rect_x0, rect_x1)
+        py = jnp.clip(cy, rect_y0, rect_y1)
+        dxn = (px - cx) / rx
+        dyn = (py - cy) / ry
+        overlap_scorpion = (dxn * dxn + dyn * dyn) <= jnp.asarray(1.0, dtype=jnp.float32)
+
         hit_scorpion = has_scorpion & player_is_underground & overlap_scorpion & can_hurt
         scorpion_x_before_reset = scorpion_x
 
@@ -1562,6 +1652,10 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             respawn_target_x=stored_respawn_target_x,
             respawn_target_y=stored_respawn_target_y,
             respawn_target_ground_y=stored_respawn_target_ground_y,
+
+            jump_pressed_prev=jump_pressed,
+            jump_lock_active=jump_lock_active,
+            jump_lock_vx=jump_lock_vx,
             screen_id=new_screen_id,
             room_byte=new_room_byte,
         )
@@ -1657,6 +1751,10 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             respawn_target_x=state.respawn_target_x,
             respawn_target_y=state.respawn_target_y,
             respawn_target_ground_y=state.respawn_target_ground_y,
+
+            jump_pressed_prev=state.jump_pressed_prev,
+            jump_lock_active=jnp.array(False, dtype=jnp.bool_),
+            jump_lock_vx=jnp.array(0.0, dtype=jnp.float32),
             screen_id=state.screen_id,
             room_byte=state.room_byte,
         )
@@ -1813,6 +1911,9 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             respawn_target_x=jnp.array(consts.player_start_x, dtype=jnp.float32),
             respawn_target_y=jnp.array(consts.ground_y, dtype=jnp.float32),
             respawn_target_ground_y=jnp.array(consts.ground_y, dtype=jnp.float32),
+            jump_pressed_prev=jnp.array(False, dtype=jnp.bool_),
+            jump_lock_active=jnp.array(False, dtype=jnp.bool_),
+            jump_lock_vx=jnp.array(0.0, dtype=jnp.float32),
             screen_id=jnp.array(0, dtype=jnp.int32),
             room_byte=jnp.array(SEED, dtype=jnp.uint8),
         )
@@ -1865,6 +1966,9 @@ class PitfallRenderer(JAXGameRenderer):
             channels=3,
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        # Debug (render-only): scorpion collision overlay toggle.
+        self.DEBUG_SCORPION_HITBOX = jnp.array(bool(self.consts.debug_render_hitboxes), dtype=jnp.bool_)
 
         sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sprites', 'pitfall')
         asset_config = list(self.consts.ASSET_CONFIG)
@@ -2122,6 +2226,9 @@ class PitfallRenderer(JAXGameRenderer):
             )
         )
 
+        # Reuse an already-present palette ID for debug overlays.
+        self.DEBUG_HITBOX_ID = wall_red_id.astype(self.BACKGROUND.dtype)
+
         # Log / ladder sprite masks (trimmed from full-screen captures)
         _log_left = self.SHAPE_MASKS.get('log_left_sprite', transparent_pixel)
         self.LOG_LEFT_MASK = _log_left[0] if _log_left.ndim == 3 else _log_left
@@ -2322,6 +2429,41 @@ class PitfallRenderer(JAXGameRenderer):
         scorpion_w = max(int(scorpion_left.shape[2]), int(scorpion_right.shape[2]))
         self.SCORPION_LEFT_MASKS = _pad_to(scorpion_left, scorpion_h, scorpion_w)
         self.SCORPION_RIGHT_MASKS = _pad_to(scorpion_right, scorpion_h, scorpion_w)
+
+        # Scorpion collision hitbox (matches gameplay): tight bbox of non-transparent
+        # pixels unioned across both facings/frames + configurable insets.
+        tid_i = int(self.jr.TRANSPARENT_ID)
+        _sc_l = np.array(self.SCORPION_LEFT_MASKS)
+        _sc_r = np.array(self.SCORPION_RIGHT_MASKS)
+        _sc_combined = np.concatenate([_sc_l, _sc_r], axis=0)
+        _occupied = np.any(_sc_combined != tid_i, axis=0)
+        _ys, _xs = np.where(_occupied)
+        if _ys.size == 0 or _xs.size == 0:
+            _hit_y0 = 0
+            _hit_x0 = 0
+            _hit_h = int(_sc_combined.shape[1])
+            _hit_w = int(_sc_combined.shape[2])
+        else:
+            _hit_y0 = int(_ys.min())
+            _hit_x0 = int(_xs.min())
+            _hit_h = int(_ys.max()) - _hit_y0 + 1
+            _hit_w = int(_xs.max()) - _hit_x0 + 1
+
+        _inset_x = max(0, int(self.consts.scorpion_hit_inset_x))
+        _inset_top = max(0, int(getattr(self.consts, 'scorpion_hit_inset_top', self.consts.scorpion_hit_inset_y)))
+        _inset_bottom = max(0, int(getattr(self.consts, 'scorpion_hit_inset_bottom', self.consts.scorpion_hit_inset_y)))
+        if _hit_w > 1 and _inset_x > 0:
+            _hit_x0 = min(_hit_x0 + _inset_x, int(_sc_combined.shape[2]) - 1)
+            _hit_w = max(1, _hit_w - 2 * _inset_x)
+        _inset_y_total = _inset_top + _inset_bottom
+        if _hit_h > 1 and _inset_y_total > 0:
+            _hit_y0 = min(_hit_y0 + _inset_top, int(_sc_combined.shape[1]) - 1)
+            _hit_h = max(1, _hit_h - _inset_y_total)
+
+        self.SCORPION_HIT_X0 = jnp.array(_hit_x0, dtype=jnp.int32)
+        self.SCORPION_HIT_Y0 = jnp.array(_hit_y0, dtype=jnp.int32)
+        self.SCORPION_HIT_W = jnp.array(_hit_w, dtype=jnp.int32)
+        self.SCORPION_HIT_H = jnp.array(_hit_h, dtype=jnp.int32)
         self.TREE_VARIANT_TO_ASSET_IDX = jnp.array([0, 1, 2, 3], dtype=jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -2557,6 +2699,66 @@ class PitfallRenderer(JAXGameRenderer):
                 flip_horizontal=jnp.array(False, dtype=jnp.bool_),
                 flip_offset=jnp.array([0, 0], dtype=jnp.int32),
             ),
+            lambda r: r,
+            raster,
+        )
+
+        # Debug overlay: scorpion collision hitbox rectangle + Harry feet oval (outline).
+        def _draw_scorpion_hitbox(r: jnp.ndarray) -> jnp.ndarray:
+            x0 = state.scorpion_x.astype(jnp.int32) + self.SCORPION_HIT_X0
+            y0 = scorpion_top + self.SCORPION_HIT_Y0
+            w_box = self.SCORPION_HIT_W
+            h_box = self.SCORPION_HIT_H
+
+            top_pos = jnp.array([x0, y0], dtype=jnp.int32)
+            bot_pos = jnp.array([x0, y0 + h_box - jnp.int32(1)], dtype=jnp.int32)
+            left_pos = jnp.array([x0, y0], dtype=jnp.int32)
+            right_pos = jnp.array([x0 + w_box - jnp.int32(1), y0], dtype=jnp.int32)
+            positions = jnp.stack([top_pos, bot_pos, left_pos, right_pos], axis=0)
+
+            top_size = jnp.array([w_box, jnp.int32(1)], dtype=jnp.int32)
+            bot_size = jnp.array([w_box, jnp.int32(1)], dtype=jnp.int32)
+            left_size = jnp.array([jnp.int32(1), h_box], dtype=jnp.int32)
+            right_size = jnp.array([jnp.int32(1), h_box], dtype=jnp.int32)
+            sizes = jnp.stack([top_size, bot_size, left_size, right_size], axis=0)
+
+            rr = self.jr.draw_rects(r, positions, sizes, int(self.DEBUG_HITBOX_ID))
+
+            harry_w_full = jnp.int32(
+                max(
+                    int(self.HARRY_IDLE_MASKS.shape[2]),
+                    int(self.HARRY_RUN_MASKS.shape[2]),
+                    int(self.HARRY_CLIMB_MASKS.shape[2]),
+                    int(self.HARRY_JUMP_MASKS.shape[2]),
+                )
+            )
+            moving_now = jnp.abs(state.player_vx) > jnp.asarray(0.0, dtype=jnp.float32)
+            flip_now = jnp.where(moving_now, state.player_vx < jnp.asarray(0.0, dtype=jnp.float32), state.facing_left)
+            idle_shift = jnp.where(moving_now, jnp.int32(0), jnp.int32(-1))
+            facing_shift_x = jnp.where(flip_now, jnp.int32(0), jnp.int32(-2))
+            cx_i = (
+                state.player_x.astype(jnp.int32)
+                + (harry_w_full // jnp.int32(2))
+                + idle_shift
+                + jnp.where(state.on_ladder, jnp.int32(1), jnp.int32(0))
+                + facing_shift_x
+            )
+            vis_w = jnp.maximum(jnp.int32(1), harry_w_full - jnp.int32(4))
+            rx = jnp.maximum(jnp.int32(1), (vis_w // jnp.int32(2)) - jnp.int32(1))
+            ry = jnp.asarray(1.0, dtype=jnp.float32)
+            cy_i = state.player_y.astype(jnp.int32) - jnp.int32(2)
+
+            two_pi = jnp.asarray(6.283185307179586, dtype=jnp.float32)
+            angles = (jnp.arange(16, dtype=jnp.float32) * (two_pi / jnp.asarray(16.0, dtype=jnp.float32)))
+            xs = jnp.round(cx_i.astype(jnp.float32) + jnp.cos(angles) * rx.astype(jnp.float32)).astype(jnp.int32)
+            ys = jnp.round(cy_i.astype(jnp.float32) + jnp.sin(angles) * ry).astype(jnp.int32)
+            pts = jnp.stack([xs, ys], axis=1)
+            ones = jnp.ones((pts.shape[0], 2), dtype=jnp.int32)
+            return self.jr.draw_rects(rr, pts, ones, int(self.DEBUG_HITBOX_ID))
+
+        raster = lax.cond(
+            self.DEBUG_SCORPION_HITBOX & has_scorpion,
+            _draw_scorpion_hitbox,
             lambda r: r,
             raster,
         )
