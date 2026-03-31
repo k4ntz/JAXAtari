@@ -10,3 +10,5 @@ results/
 docs/build/
 .python-version
 
+scripts/benchmarks/pqn_agent_visualisation_2.py
+src/jaxatari/core.py

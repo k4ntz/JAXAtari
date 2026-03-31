@@ -91,7 +91,6 @@ MOD_MODULES = {
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
 }
 
-
 def list_available_games() -> list[str]:
     """Lists all available, registered games."""
     return list(GAME_MODULES.keys())
