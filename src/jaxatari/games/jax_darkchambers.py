@@ -3164,6 +3164,12 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         spawn_x = safe_spawn[0]
         spawn_y = safe_spawn[1]
 
+        # For the starting chamber (map_index=0, level=0), move spawners to the lower half
+        # This moves the spawner from the right side down to the lower portion of the map
+        adjusted_spawner_positions = spawner_positions.at[:, 1].set(
+            jnp.maximum(spawner_positions[:, 1], 550)
+        )
+
         state = DarkChambersState(
             player_x=spawn_x,
             player_y=spawn_y,
@@ -3174,7 +3180,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             enemy_active=enemy_active,
             enemy_hitpoints=enemy_hitpoints,
             wizard_shoot_timers=wizard_shoot_timers,
-            spawner_positions=spawner_positions,
+            spawner_positions=adjusted_spawner_positions,
             spawner_health=spawner_health,
             spawner_active=spawner_active,
             spawner_timers=spawner_timers,
@@ -5282,8 +5288,19 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 return new_sp_positions, new_sp_health, new_sp_active, new_sp_timers, key
             
             (transition_sp_positions, transition_sp_health, transition_sp_active, transition_sp_timers, rng) = respawn_spawners_for_level(rng)
+            
+            # For the starting chamber (map_index=0, level=0), move spawners to the lower half
+            is_starting_chamber = (new_map_index == 0) & (new_level == 0)
+            adjusted_transition_sp_positions = jnp.where(
+                is_starting_chamber,
+                transition_sp_positions.at[:, 1].set(
+                    jnp.maximum(transition_sp_positions[:, 1], 550)
+                ),
+                transition_sp_positions
+            )
+            
             # When level changes, use freshly respawned spawners; otherwise use the updated values
-            use_sp_positions = jnp.where(level_changed[..., None], transition_sp_positions, state.spawner_positions)
+            use_sp_positions = jnp.where(level_changed[..., None], adjusted_transition_sp_positions, state.spawner_positions)
             use_sp_health = jnp.where(level_changed, transition_sp_health, new_spawner_health)
             use_sp_active = jnp.where(level_changed, transition_sp_active, new_spawner_active)
             use_sp_timers = jnp.where(level_changed, transition_sp_timers, final_spawner_timers)
