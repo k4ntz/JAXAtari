@@ -276,20 +276,17 @@ def room_hazards_from_room_byte(room_byte: jnp.ndarray) -> tuple[
     is_treasure_tar = pit == jnp.uint8(0b101)
     suppress = is_croc_room | is_treasure_tar
 
+    # Object code selects one of a few fixed templates.
     log_count_u8 = jnp.where(
-        obj == jnp.uint8(0),
+        (obj == jnp.uint8(0)) | (obj == jnp.uint8(4)),
         jnp.uint8(1),
         jnp.where(
             (obj == jnp.uint8(1)) | (obj == jnp.uint8(2)),
             jnp.uint8(2),
             jnp.where(
-                obj == jnp.uint8(3),
+                (obj == jnp.uint8(3)) | (obj == jnp.uint8(5)),
                 jnp.uint8(3),
-                jnp.where(
-                    obj == jnp.uint8(4),
-                    jnp.uint8(1),
-                    jnp.where(obj == jnp.uint8(5), jnp.uint8(3), jnp.uint8(0)),
-                ),
+                jnp.uint8(0),
             ),
         ),
     )
@@ -298,15 +295,38 @@ def room_hazards_from_room_byte(room_byte: jnp.ndarray) -> tuple[
     logs_are_rolling = (obj <= jnp.uint8(3)) & has_logs
     log_count = has_logs.astype(jnp.int32) * log_count_u8.astype(jnp.int32)
 
-    log_xs_1 = jnp.array([130, 0, 0], dtype=jnp.int32)
-    log_xs_2 = jnp.array([40, 120, 0], dtype=jnp.int32)
-    log_xs_3 = jnp.array([16, 90, 130], dtype=jnp.int32)
+    # Rolling log templates (tighter two-log spacing).
+    roll_1 = jnp.array([128, 0, 0], dtype=jnp.int32)
+    roll_2_close = jnp.array([52, 75, 0], dtype=jnp.int32)
+    roll_2_wide = jnp.array([38, 122, 0], dtype=jnp.int32)
+    roll_3 = jnp.array([22, 78, 134], dtype=jnp.int32)
 
-    log_xs = jnp.where(
-        log_count == jnp.int32(1),
-        log_xs_1,
-        jnp.where(log_count == jnp.int32(2), log_xs_2, jnp.where(log_count == jnp.int32(3), log_xs_3, jnp.zeros((3,), dtype=jnp.int32))),
+    # Stationary log templates (keep unchanged).
+    stat_1 = jnp.array([130, 0, 0], dtype=jnp.int32)
+    stat_3 = jnp.array([16, 90, 130], dtype=jnp.int32)
+
+    log_xs_by_obj = jnp.where(
+        obj == jnp.uint8(0),
+        roll_1,
+        jnp.where(
+            obj == jnp.uint8(1),
+            roll_2_close,
+            jnp.where(
+                obj == jnp.uint8(2),
+                roll_2_wide,
+                jnp.where(
+                    obj == jnp.uint8(3),
+                    roll_3,
+                    jnp.where(
+                        obj == jnp.uint8(4),
+                        stat_1,
+                        jnp.where(obj == jnp.uint8(5), stat_3, jnp.zeros((3,), dtype=jnp.int32)),
+                    ),
+                ),
+            ),
+        ),
     )
+    log_xs = jnp.where(has_logs, log_xs_by_obj, jnp.zeros((3,), dtype=jnp.int32))
 
     has_fire = (obj == jnp.uint8(0b110)) & (~suppress)
     has_snake = (obj == jnp.uint8(0b111)) & (~suppress)
@@ -371,6 +391,8 @@ class PitfallState:
     scorpion_anim_timer: chex.Array
     scorpion_facing_right: chex.Array
     touching_wood: chex.Array
+    touching_rolling_wood: chex.Array
+    rolling_wood_contact_x: chex.Array
     climb_active: chex.Array
     ladder_step_idx: chex.Array
     ladder_step_timer: chex.Array
@@ -423,6 +445,7 @@ class PitfallConstants(struct.PyTreeNode):
     wood_y_offset: int = 0         # fine-tune vertical placement relative to ground
     wood_visual_contact_pad_x: int = 3  # start log interaction pose slightly before full overlap
     wood_visual_contact_shift_x: int = -3  # shift visual slide trigger slightly left
+    rolling_log_extra_step_period: int = 4  # add 1px every N frames (e.g., N=4 => 1.25 px/frame)
 
     # Fireplace hazard (upper ground)
     fire_w: int = 7
@@ -1221,7 +1244,10 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         screen_w_i = jnp.int32(consts.screen_width)
         speed = jnp.int32(1)
         direction = jnp.int32(-1)
-        dx = jnp.mod(frames_elapsed * speed * direction, screen_w_i)
+        extra_period = jnp.int32(max(1, int(consts.rolling_log_extra_step_period)))
+        base = frames_elapsed * speed
+        extra = frames_elapsed // extra_period
+        dx = jnp.mod((base + extra) * direction, screen_w_i)
         moving_centers = jnp.mod(log_xs + dx, screen_w_i)
         log_centers = jnp.where(logs_are_rolling, moving_centers, log_xs)
 
@@ -1259,6 +1285,23 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         overlap_seg2 = wraps & (x1 > seg2_x0) & (x0 < seg2_x1)
         overlap_x = overlap_seg1 | overlap_seg2
 
+        # Rolling logs: block Harry without dragging him. If a rolling log
+        # would overlap this frame, freeze X at the contact point.
+        rolling_active = has_logs & logs_are_rolling & gameplay_active & on_upper_level & on_ground & (~on_ladder)
+        rolling_would_overlap = rolling_active & jnp.any(active & overlap_x & overlap_y)
+        started_rolling_contact = rolling_would_overlap & (~state.touching_rolling_wood)
+        rolling_contact_x = jnp.where(
+            started_rolling_contact,
+            state.player_x,
+            jnp.where(rolling_would_overlap, state.rolling_wood_contact_x, jnp.asarray(0.0, dtype=jnp.float32)),
+        )
+        x = jnp.where(rolling_would_overlap, rolling_contact_x, x)
+        vx = jnp.where(rolling_would_overlap, jnp.asarray(0.0, dtype=jnp.float32), vx)
+
+        # Update player bbox after rolling-log contact resolution.
+        x0 = x.astype(jnp.int32)
+        x1 = x0 + player_w_i
+
         wood_visual_pad_x = jnp.int32(consts.wood_visual_contact_pad_x)
         wood_visual_shift_x = jnp.int32(consts.wood_visual_contact_shift_x)
         visual_seg1_x0 = seg1_x0 + wood_visual_shift_x
@@ -1271,6 +1314,8 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         touching_any = jnp.any(active & overlap_x & overlap_y)
         touching_wood = has_logs & jnp.any(active & visual_overlap_x & overlap_y)
+        # Moving logs (rolling): visual slide/contact matches the blocked state.
+        touching_rolling_wood = rolling_would_overlap
         scoring_touching_wood = has_logs & touching_any & gameplay_active
 
         drain = jnp.int32(consts.wood_drain_per_frame)
@@ -1478,6 +1523,8 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             scorpion_anim_timer=scorpion_anim_timer,
             scorpion_facing_right=scorpion_facing_right,
             touching_wood=touching_wood,
+            touching_rolling_wood=touching_rolling_wood,
+            rolling_wood_contact_x=rolling_contact_x,
             climb_active=climb_active,
             ladder_step_idx=ladder_step_idx,
             ladder_step_timer=ladder_step_timer,
@@ -1570,6 +1617,8 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             scorpion_anim_timer=jnp.int32(0),
             scorpion_facing_right=state.scorpion_facing_right,
             touching_wood=jnp.array(False, dtype=jnp.bool_),
+            touching_rolling_wood=jnp.array(False, dtype=jnp.bool_),
+            rolling_wood_contact_x=jnp.array(0.0, dtype=jnp.float32),
             climb_active=jnp.array(False, dtype=jnp.bool_),
             ladder_step_idx=jnp.int32(0),
             ladder_step_timer=jnp.int32(0),
@@ -1728,6 +1777,8 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             scorpion_anim_timer=jnp.int32(0),
             scorpion_facing_right=jnp.array(True, dtype=jnp.bool_),
             touching_wood=jnp.array(False, dtype=jnp.bool_),
+            touching_rolling_wood=jnp.array(False, dtype=jnp.bool_),
+            rolling_wood_contact_x=jnp.array(0.0, dtype=jnp.float32),
             climb_active=jnp.array(False, dtype=jnp.bool_),
             ladder_step_idx=jnp.int32(0),
             ladder_step_timer=jnp.int32(0),
@@ -2371,6 +2422,12 @@ class PitfallRenderer(JAXGameRenderer):
 
         has_logs, logs_are_rolling, log_count, log_xs, has_fireplace, has_snake = room_hazards_from_room_byte(rb)
 
+        touching_wood_render = jnp.where(
+            logs_are_rolling,
+            state.touching_rolling_wood,
+            state.touching_wood,
+        )
+
         total_frames = jnp.int32(self.consts.initial_time_seconds * self.consts.fps)
         frames_elapsed = jnp.maximum(total_frames - state.time_left.astype(jnp.int32), jnp.int32(0))
         frames_elapsed = frames_elapsed * state.timer_started.astype(jnp.int32)
@@ -2378,7 +2435,10 @@ class PitfallRenderer(JAXGameRenderer):
         W = jnp.int32(self.consts.screen_width)
         speed = jnp.int32(1)
         direction = jnp.int32(-1)
-        dx = jnp.mod(frames_elapsed * speed * direction, W)
+        extra_period = jnp.int32(max(1, int(self.consts.rolling_log_extra_step_period)))
+        base = frames_elapsed * speed
+        extra = frames_elapsed // extra_period
+        dx = jnp.mod((base + extra) * direction, W)
         moving_centers = jnp.mod(log_xs + dx, W)
         log_centers = jnp.where(logs_are_rolling, moving_centers, log_xs)
 
@@ -2498,7 +2558,7 @@ class PitfallRenderer(JAXGameRenderer):
                 ~state.on_ground,
                 _use_run1,
                 lambda __: lax.cond(
-                    state.touching_wood,
+                    touching_wood_render,
                     _use_fall,
                     lambda ___: lax.cond(moving, _use_run, _use_idle, None),
                     None,
@@ -2518,9 +2578,10 @@ class PitfallRenderer(JAXGameRenderer):
         y_top = y_top + jnp.int32(int(self.consts.harry_y_tune)) + underground_tune
 
         def _draw_harry(r: jnp.ndarray) -> jnp.ndarray:
+            x_draw = state.player_x.astype(jnp.int32) + jnp.where(state.on_ladder, jnp.int32(1), jnp.int32(0))
             return self.jr.render_at_clipped(
                 r,
-                state.player_x.astype(jnp.int32),
+                x_draw,
                 y_top,
                 harry_mask,
                 flip_horizontal=flip,
@@ -2532,7 +2593,7 @@ class PitfallRenderer(JAXGameRenderer):
         raster_base = raster
 
         raster = lax.cond(
-            state.touching_wood,
+            touching_wood_render,
             lambda r: _draw_harry(lax.cond(has_logs, _draw_logs, lambda rr: rr, r)),
             lambda r: lax.cond(has_logs, _draw_logs, lambda rr: rr, _draw_harry(r)),
             raster,
