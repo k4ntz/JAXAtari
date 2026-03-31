@@ -211,6 +211,13 @@ LEVEL_CLEAR_SCORE = _DEFAULT_CONSTS.LEVEL_CLEAR_SCORE
 UFO_KILL_SCORE = _DEFAULT_CONSTS.UFO_KILL_SCORE
 SAUCER_KILL_SCORE = _DEFAULT_CONSTS.SAUCER_KILL_SCORE
 
+# Precomputed neighborhood grid for terrain_hit_mask hot path.
+_TERRAIN_MASK_R_MAX = 8
+_TERRAIN_MASK_DX_FULL = jnp.arange(-_TERRAIN_MASK_R_MAX, _TERRAIN_MASK_R_MAX + 1, dtype=jnp.int32)
+_TERRAIN_MASK_DY_FULL = jnp.arange(-_TERRAIN_MASK_R_MAX, _TERRAIN_MASK_R_MAX + 1, dtype=jnp.int32)
+_TERRAIN_MASK_DX, _TERRAIN_MASK_DY = jnp.meshgrid(_TERRAIN_MASK_DX_FULL, _TERRAIN_MASK_DY_FULL, indexing='xy')
+_TERRAIN_MASK_DIST2 = _TERRAIN_MASK_DX * _TERRAIN_MASK_DX + _TERRAIN_MASK_DY * _TERRAIN_MASK_DY
+
 
 @jax.jit
 def snap_angle_to_discrete(angle: jnp.ndarray) -> jnp.ndarray:
@@ -2223,20 +2230,15 @@ def step_core_map(state: ShipState,
 @jax.jit
 def terrain_hit_mask(mask: jnp.ndarray, x: jnp.ndarray, y: jnp.ndarray, radius: float = 2) -> jnp.ndarray:
     H, W = mask.shape
-    R_MAX = 8
-    r = jnp.int32(jnp.clip(radius, 1.0, float(R_MAX)))
+    r = jnp.int32(jnp.clip(radius, 1.0, float(_TERRAIN_MASK_R_MAX)))
 
-    dx_full = jnp.arange(-R_MAX, R_MAX + 1, dtype=jnp.int32)
-    dy_full = jnp.arange(-R_MAX, R_MAX + 1, dtype=jnp.int32)
-
-    DX, DY = jnp.meshgrid(dx_full, dy_full, indexing='xy')
-    valid = (jnp.abs(DX) <= r) & (jnp.abs(DY) <= r) & ((DX * DX + DY * DY) <= (r * r))
+    valid = (_TERRAIN_MASK_DIST2 <= (r * r))
 
     mx = jnp.floor(x).astype(jnp.int32)
     my = jnp.floor(y).astype(jnp.int32)
 
-    sx = jnp.clip(mx + DX, 0, W - 1)
-    sy = jnp.clip(my + DY, 0, H - 1)
+    sx = jnp.clip(mx + _TERRAIN_MASK_DX, 0, W - 1)
+    sy = jnp.clip(my + _TERRAIN_MASK_DY, 0, H - 1)
 
     samples = mask[sy, sx].astype(jnp.uint8)
     samples = jnp.where(valid, samples, 0)
