@@ -7,7 +7,6 @@ from jax._src.lax.lax import select
 import jax.lax
 import jax.numpy as jnp
 import chex
-from numpy import linalg, logical_and
 
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
