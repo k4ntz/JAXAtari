@@ -132,7 +132,7 @@ class AdventureConstants(AutoDerivedConstants):
     SWORD_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (31,180,1))
     BRIDGE_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (40,130,10))
     MAGNET_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (120,180,12))
-    CHALICE_SPAWN: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (35,180,13, 7))
+    CHALICE_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (35,180,13))
     BAT_SPAWN: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (76, 140, 19, 0))
     DOT_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (76, 140, 29))
     GATE_SPAWN: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (0, 0))
@@ -1347,7 +1347,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             chalice = jnp.array([self.consts.CHALICE_SPAWN[0],
                                  self.consts.CHALICE_SPAWN[1],
                                  self.consts.CHALICE_SPAWN[2],
-                                 self.consts.CHALICE_SPAWN[3]]), #ToDo
+                                 7]), #ToDo
             #random key
             rndKey = state_key,
             bat = jnp.array([self.consts.BAT_SPAWN[0],
@@ -1915,7 +1915,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AdventureState) -> bool:
-        return jnp.logical_or(state.gate_black[0]==6,jnp.logical_or(jnp.logical_or(jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1),state.dragon_red[5]==1), state.chalice[2]==1))
+        return jnp.logical_or(jnp.logical_or(jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1),state.dragon_red[5]==1), state.chalice[2]==1)
 
 
 class AdventureRenderer(JAXGameRenderer):
