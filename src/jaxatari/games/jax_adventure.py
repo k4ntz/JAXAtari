@@ -1720,16 +1720,27 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             lambda :-1,
             lambda :0
         )
-
-        #reward for pickup black key
         reward = reward + jax.lax.cond(
-            jnp.logical_and(previous_state.player[3]==0, state.player[2]==2),
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==3, state.player[2]==4),state.player[3]==0),
             lambda :1,
             lambda :0
         )
         reward = reward + jax.lax.cond(
-            jnp.logical_and(previous_state.player[3]==2, state.player[2]==0),
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==4, state.player[2]==3),state.player[3]==0),
+            lambda :-1,
+            lambda :0
+        )
+        
+
+        #reward for pickup black key
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(previous_state.player[3]==0, state.player[3]==2),
             lambda :1,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(previous_state.player[3]==2, state.player[3]==0),
+            lambda :-1,
             lambda :0
         )
         #jax.debug.print("reward {a}", a = reward)
@@ -1738,7 +1749,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AdventureState) -> bool:
-        return jnp.logical_or(jnp.logical_or(jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1),state.dragon_red[5]==1), state.chalice[2]==1)
+        return state.player[3]==2#jnp.logical_or(jnp.logical_or(jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1),state.dragon_red[5]==1), state.chalice[2]==1)
 
 
 class AdventureRenderer(JAXGameRenderer):
