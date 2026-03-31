@@ -110,8 +110,8 @@ class DefenderConstants(struct.PyTreeNode):
     SPACE_SHIP_SCANNER_HEIGHT: int = 2
 
     # Enemy
-    ENEMY_WIDTH: int = 13
-    ENEMY_HEIGHT: int = 7
+    ENEMY_WIDTH: int = 7
+    ENEMY_HEIGHT: int = 8
     ENEMY_SPEED: float = 0.12
     SHIP_SPEED_INFLUENCE_ON_SPEED: float = 0.4
 
@@ -159,7 +159,7 @@ class DefenderConstants(struct.PyTreeNode):
         default_factory=lambda: jnp.array([2, 2, 3, 3, 3]),
     )
     ENEMY_SPAWN_AROUND_MIN_RADIUS: float = 5.0
-    ENEMY_SPAWN_AROUND_MAX_RADIUS: float = 25.0
+    ENEMY_SPAWN_AROUND_MAX_RADIUS: float = 60.0
 
     # Bomber
     BOMBER_Y_SPEED: float = -0.2
@@ -172,8 +172,6 @@ class DefenderConstants(struct.PyTreeNode):
     )
 
     # Swarmers
-    SWARM_SPAWN_MIN: int = 1
-    SWARM_SPAWN_MAX: int = 2
     SWARMERS_DEATH_SCORE: int = 500
     SWARMERS_MAX_SPEED: float = 0.6
     SWARMERS_Y_SPEED: float = 0.8
