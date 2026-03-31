@@ -158,9 +158,15 @@ def test_log_wrapper(raw_env):
     total_reward = 0.0
     steps = 0
     done = False
-    
+
+    # `done` is the env's returned termination signal (may be influenced by
+    # `episodic_life`). `LogWrapper` logs based on the "real" episode end flag
+    # exposed via `info["returned_episode"]`.
+    logged_done = False
+
     while not done and steps < 100:  # Limit steps to avoid infinite loops
         obs, state, reward, done, info = env.step(state, 0)  # Use NOOP action
+        logged_done = bool(info.get("returned_episode", False))
         total_reward += reward
         steps += 1
         
@@ -169,10 +175,10 @@ def test_log_wrapper(raw_env):
         assert jnp.all(obs >= 0) and jnp.all(obs <= 255), "Pixel values should be in range [0, 255]"
         
         # Verify running totals
-        assert state.episode_returns == total_reward * (1 - done)
-        assert state.episode_lengths == steps * (1 - done)
+        assert state.episode_returns == total_reward * (1 - logged_done)
+        assert state.episode_lengths == steps * (1 - logged_done)
         
-        if done:
+        if logged_done:
             # Verify final episode statistics
             assert state.returned_episode_returns == total_reward
             assert state.returned_episode_lengths == steps

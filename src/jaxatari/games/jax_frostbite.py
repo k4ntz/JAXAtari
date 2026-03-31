@@ -347,6 +347,11 @@ class FrostbiteState:
     # Temperature and lives
     temperature: chex.Array  # Current temperature in BCD (0x45 = 45°)
     remaining_lives: chex.Array  # Remaining reserve lives
+
+    @property
+    def lives(self):
+        """Alias used by wrappers (e.g., episodic_life) to track life loss."""
+        return self.remaining_lives
     
     # Level completion handling
     frame_delay: chex.Array  # Delay counter for level complete animations
