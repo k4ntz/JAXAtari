@@ -14,11 +14,8 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 def _get_default_asset_config():
     return (
-        # Background (could be procedural or a single tile)
         {"name": "background", "type": "background", "file": "background.npy"},
 
-        # Player animation frames per direction
-        # right(×3): p1-3  |  left(×3): p4-6  |  up(×5): p7-11  |  down(×5): p12-16
         {"name": "player_r0", "type": "single", "file": "p1.npy"},
         {"name": "player_r1", "type": "single", "file": "p2.npy"},
         {"name": "player_r2", "type": "single", "file": "p3.npy"},
@@ -36,8 +33,6 @@ def _get_default_asset_config():
         {"name": "player_d3", "type": "single", "file": "p15.npy"},
         {"name": "player_d4", "type": "single", "file": "p16.npy"},
 
-        # Zombie animation frames per direction                             # ENEMY_ZOMBIE = 1
-        # right(×3): green_1-3  |  down(×8): custom cycle  |  up(×8): custom cycle  |  left(×3): green_12-14
         {"name": "green_r0", "type": "single", "file": "green_1.npy"},
         {"name": "green_r1", "type": "single", "file": "green_2.npy"},
         {"name": "green_r2", "type": "single", "file": "green_3.npy"},
@@ -52,20 +47,19 @@ def _get_default_asset_config():
         {"name": "green_l0", "type": "single", "file": "green_12.npy"},
         {"name": "green_l1", "type": "single", "file": "green_13.npy"},
         {"name": "green_l2", "type": "single", "file": "green_14.npy"},
-        # Direct-name aliases for down/up 8-frame cycles
+
         {"name": "green_6",   "type": "single", "file": "green_6.npy"},
         {"name": "green_7",   "type": "single", "file": "green_7.npy"},
         {"name": "green_8",   "type": "single", "file": "green_8.npy"},
         {"name": "green_9",   "type": "single", "file": "green_9.npy"},
         {"name": "green_10",  "type": "single", "file": "green_10.npy"},
-        {"name": "green_d_d", "type": "single", "file": "green_d_d.npy"},   # neutral down stance
-        {"name": "green_dn_l","type": "single", "file": "green_dn_l.npy"},  # down left-lean step (screenshots/green_l1)
-        {"name": "green_u_d", "type": "single", "file": "green_u_d.npy"},   # neutral up stance
-        {"name": "green_u_r1","type": "single", "file": "green_u_r1.npy"},  # up right step 1
-        {"name": "green_u_r2","type": "single", "file": "green_u_r2.npy"},  # up right step 2
-        # Ghost (wraith) animation frames per direction   # ENEMY_WRAITH = 2
-        # right(×2): ghost_1,ghost_2  |  left(×2): ghost_4,ghost_5
-        # down(×3):  ghost_6-8        |  up(×3):   ghost_9-11
+        {"name": "green_d_d", "type": "single", "file": "green_d_d.npy"},
+        {"name": "green_dn_l","type": "single", "file": "green_dn_l.npy"},
+        {"name": "green_u_d", "type": "single", "file": "green_u_d.npy"},
+        {"name": "green_u_r1","type": "single", "file": "green_u_r1.npy"},
+        {"name": "green_u_r2","type": "single", "file": "green_u_r2.npy"},
+        
+        # Ghost (wraith) animation frames per direction 
         {"name": "ghost_r0", "type": "single", "file": "ghost_1.npy"},
         {"name": "ghost_r1", "type": "single", "file": "ghost_2.npy"},
         {"name": "ghost_l0", "type": "single", "file": "ghost_4.npy"},
@@ -76,8 +70,8 @@ def _get_default_asset_config():
         {"name": "ghost_u0", "type": "single", "file": "ghost_9.npy"},
         {"name": "ghost_u1", "type": "single", "file": "ghost_10.npy"},
         {"name": "ghost_u2", "type": "single", "file": "ghost_11.npy"},
-        # Skeleton animation frames per direction                          # ENEMY_SKELETON = 3
-        # right(×3): skel_4-6  |  down(×3): skel_left/mid/right  |  left(×3): skel_1-3  |  up(×3): skel_up_left/mid/right
+        
+        # Skeleton animation frames per direction
         {"name": "skel_r0", "type": "single", "file": "skel_4.npy"},
         {"name": "skel_r1", "type": "single", "file": "skel_5.npy"},
         {"name": "skel_r2", "type": "single", "file": "skel_6.npy"},
@@ -97,8 +91,7 @@ def _get_default_asset_config():
         {"name": "skel_10", "type": "single", "file": "skel_10.npy"},
         {"name": "skel_11", "type": "single", "file": "skel_11.npy"},
         {"name": "skel_12", "type": "single", "file": "skel_12.npy"},
-        # Wizard animation frames per direction                            # ENEMY_WIZARD = 4
-        # right(×3): wizard_1-3  |  down(×5): wizard_4-8  |  up(×5): wizard_9-13  |  left(×3): wizard_14-16
+        # Wizard animation frames per direction
         {"name": "wizard_r0", "type": "single", "file": "wizard_1.npy"},
         {"name": "wizard_r1", "type": "single", "file": "wizard_2.npy"},
         {"name": "wizard_r2", "type": "single", "file": "wizard_3.npy"},
@@ -115,15 +108,13 @@ def _get_default_asset_config():
         {"name": "wizard_l0", "type": "single", "file": "wizard_14.npy"},
         {"name": "wizard_l1", "type": "single", "file": "wizard_15.npy"},
         {"name": "wizard_l2", "type": "single", "file": "wizard_16.npy"},
-        # Note: No sprite for ENEMY_GRIM_REAPER = 5 yet, will use colored box
 
         # Item sprites
-        {"name": "pot", "type": "single", "file": "pot.npy"},             # Shield icon (was pot)
-        {"name": "skull", "type": "single", "file": "skull.npy"},         # Poison/Trap (danger items)
-        {"name": "stairs", "type": "single", "file": "stairs.npy"},       # Ladder up (exit door)
-        {"name": "trapdoor", "type": "single", "file": "trapdoor.npy"},   # Ladder down (descent)
+        {"name": "pot", "type": "single", "file": "pot.npy"},
+        {"name": "skull", "type": "single", "file": "skull.npy"},
+        {"name": "stairs", "type": "single", "file": "stairs.npy"},
+        {"name": "trapdoor", "type": "single", "file": "trapdoor.npy"},
 
-        # New props / tiles
         {"name": "apple", "type": "single", "file": "apple.npy"},
         {"name": "barrel", "type": "single", "file": "barrel.npy"},
         {"name": "candle", "type": "single", "file": "candle.npy"},
@@ -132,9 +123,6 @@ def _get_default_asset_config():
         {"name": "key", "type": "single", "file": "key.npy"},
         {"name": "bullet", "type": "single", "file": "bullet.npy"},
         {"name": "pistol", "type": "single", "file": "pistol.npy"},
-
-        # Digits for UI - commented out, using hardcoded digit patterns instead
-        # {"name": "digits", "type": "digits", "pattern": "digits/{}.npy"},
     )
 
 
@@ -143,10 +131,10 @@ def _get_default_asset_config():
 
 GAME_H = 210  # Standard Atari height
 GAME_W = 160  # Standard Atari width
-UI_BAR_HEIGHT = 50  # Height of bottom UI bar (5% bigger than 48)
-GAMEPLAY_H = GAME_H - UI_BAR_HEIGHT  # Viewport height for gameplay (160)
-WORLD_W = GAME_W  # World width equals viewport width (no horizontal camera panning)
-WORLD_H = 600  # Significantly taller world
+UI_BAR_HEIGHT = 50  # Height of bottom UI bar
+GAMEPLAY_H = GAME_H - UI_BAR_HEIGHT  # Viewport height for gameplay
+WORLD_W = GAME_W  # World width equals viewport width
+WORLD_H = 600
 
 # --- Nav grid for enemy pathfinding ---
 CELL_SIZE = 8                      # size of one nav cell in pixels
@@ -154,15 +142,15 @@ GRID_W = WORLD_W // CELL_SIZE
 GRID_H = WORLD_H // CELL_SIZE
 BIG_DIST = 10_000                  # "infinity" for distance field
 
-NUM_ENEMIES = 4  # Increased to allow more spawned enemies
-NUM_SPAWNERS = 1  # Spawner entities
+NUM_ENEMIES = 4
+NUM_SPAWNERS = 1
 
 # Enemy types (5 = strongest, 1 = weakest)
-ENEMY_GRIM_REAPER = 5  # Strongest
+ENEMY_GRIM_REAPER = 5
 ENEMY_WIZARD = 4
 ENEMY_SKELETON = 3
 ENEMY_WRAITH = 2
-ENEMY_ZOMBIE = 1  # Weakest
+ENEMY_ZOMBIE = 1
 
 # Item configuration
 NUM_CHECKPOINTS = 16
@@ -208,13 +196,13 @@ MAX_HAMMERS = 3         # Maximum hammers player can carry
 HAMMER_RADIUS = 100     # Kill radius for hammer in pixels
 ENEMY_HITS_PER_TIER = 2 # Bullet/poison hits needed before an enemy drops one tier
 
-# Default base size (unused now, kept for reference)
+# Default base size
 ITEM_WIDTH = 6
 ITEM_HEIGHT = 6
 
 # Bullet configuration
 # Player bullet configuration
-MAX_BULLETS = 64             # Drastically higher simultaneous bullets
+MAX_BULLETS = 64
 BULLET_WIDTH = 4
 BULLET_HEIGHT = 4
 BULLET_SPEED = 3             # Same as player speed
@@ -342,44 +330,31 @@ LEVEL_CHANGE_FONT_5X7 = {
 
 # Spawner configuration
 SPAWNER_WIDTH = 14
-SPAWNER_HEIGHT = 28  # 2:1 aspect ratio (height = 2 * width, original width)
+SPAWNER_HEIGHT = 28
 SPAWNER_HEALTH = 3  # Takes 3 hits to destroy
-SPAWNER_SPAWN_INTERVAL = 320  # Spawn enemies significantly less often
+SPAWNER_SPAWN_INTERVAL = 320
 
 ENEMY_COLLISION_MARGIN = 1
-ENEMY_MOVE_EVERY = 4  # Enemies move every N game steps (used for movement throttle and animation timing)
+ENEMY_MOVE_EVERY = 4
 ENEMY_PORTAL_KEEP_OUT_X = 18  # Keep enemies away from left/right portal entrances
 
 # Directional sprite index lookup tables.
-# Sprite order stored in PLAYER_DIRECTIONAL_MASKS / ENEMY_DIRECTIONAL_MASKS:
-#   index 0 = right (_1), 1 = down (_2), 2 = left (_3), 3 = up (_4)
-#
-# player_direction: 0=right, 1=left, 2=up, 3=down  →  sprite index
+
 PLAYER_DIR_TO_SPRITE = jnp.array([0, 2, 3, 1], dtype=jnp.int32)
-# Number of animation frames per player direction (sprite index order: 0=right, 1=down, 2=left, 3=up)
 PLAYER_NUM_FRAMES = jnp.array([3, 5, 3, 5], dtype=jnp.int32)
-# Default (idle) frame index per player sprite direction (0=right, 1=down, 2=left, 3=up)
-# right-idle=p1(idx 0), down-idle=p12(idx 0), left-idle=p6(idx 2), up-idle=p9(idx 2)
 PLAYER_IDLE_FRAME = jnp.array([0, 0, 2, 2], dtype=jnp.int32)
-#
-# enemy_dir is an index into DIR8 (0=E, 1=NE, 2=N, 3=NW, 4=W, 5=SW, 6=S, 7=SE)
-# Diagonals snap to the dominant axis (horizontal wins).
 DIR8_TO_SPRITE = jnp.array([0, 0, 3, 2, 2, 2, 1, 0], dtype=jnp.int32)
 
 # How many game steps between animation frame advances for all entities (higher = slower)
 ANIM_EVERY = 10
 
-# Number of animation frames per ghost direction (sprite index order: 0=right, 1=down, 2=left, 3=up)
 GHOST_NUM_FRAMES = jnp.array([2, 3, 2, 3], dtype=jnp.int32)
-# Number of animation frames per wizard direction (0=right, 1=down, 2=left, 3=up)
 WIZARD_NUM_FRAMES = jnp.array([8, 8, 7, 8], dtype=jnp.int32)
-# Number of animation frames per skeleton direction (0=right, 1=down, 2=left, 3=up)
 SKELETON_NUM_FRAMES = jnp.array([3, 4, 3, 4], dtype=jnp.int32)
-# Number of animation frames per zombie direction (0=right, 1=down, 2=left, 3=up)
 ZOMBIE_NUM_FRAMES = jnp.array([3, 8, 3, 8], dtype=jnp.int32)
 
 CHASE_RADIUS = 80          # pixels
-IDLE_SPEED = 1              # pixels per step (keep <= 1 for fewer collision issues)
+IDLE_SPEED = 1              # pixels per step
 
 # --- Enemy patrol/aggro state machine params ---
 AGGRO_EVAL_EVERY = 12      # every N ticks, decide whether to aggro
@@ -388,7 +363,7 @@ CHASE_TICKS = 90           # T_chase: how long to chase once triggered
 CONFUSE_TICKS = 30         # back-off/confuse duration
 CONFUSE_PROB_NUM = 1       # probability = CONFUSE_PROB_NUM / CONFUSE_PROB_DEN
 CONFUSE_PROB_DEN = 256
-STUCK_TICKS = 30           # if not making progress, trigger confuse (~0.5s at 60fps)
+STUCK_TICKS = 30           # if not making progress, trigger confuse
 
 
 
@@ -414,7 +389,7 @@ class DarkChambersConstants(struct.PyTreeNode):
     WORLD_HEIGHT: int = struct.field(pytree_node=False, default=WORLD_H)
     
     # Color scheme
-    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(74, 74, 74))  # Dark gray floor from screenshot
+    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(74, 74, 74))  # Dark gray floor
     PLAYER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(200, 80, 60))
     # Enemy colors by type (from weakest to strongest)
     ZOMBIE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(100, 100, 100))  # Gray
@@ -422,7 +397,7 @@ class DarkChambersConstants(struct.PyTreeNode):
     SKELETON_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(220, 220, 200))  # Bone white
     WIZARD_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(150, 80, 200))  # Purple
     GRIM_REAPER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(50, 50, 50))  # Dark gray/black
-    WALL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(213, 117, 114))  # Salmon/coral pink walls from screenshot
+    WALL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(213, 117, 114))  # Salmon/coral pink walls
     HEART_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(220, 30, 30))
     POISON_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(50, 200, 50))  # Green poison
     TRAP_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(120, 70, 20))     # Brown trap
@@ -450,17 +425,17 @@ class DarkChambersConstants(struct.PyTreeNode):
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=1)
     WALL_THICKNESS: int = struct.field(pytree_node=False, default=8)
     
-    PLAYER_START_X: int = struct.field(pytree_node=False, default=18)  # Mirrored from x=130 across map midline (WORLD_W=160, PLAYER_WIDTH=12)
+    PLAYER_START_X: int = struct.field(pytree_node=False, default=18)
     PLAYER_START_Y: int = struct.field(pytree_node=False, default=210)
     
-    # Health mechanics (scaled to classic 31 strength units)
+    # Health mechanics
     MAX_HEALTH: int = struct.field(pytree_node=False, default=31)
     STARTING_HEALTH: int = struct.field(pytree_node=False, default=31)
     HEALTH_GAIN: int = struct.field(pytree_node=False, default=10)  # Heart potion gain
     POISON_DAMAGE: int = struct.field(pytree_node=False, default=4)   # Light damage
     TRAP_DAMAGE: int = struct.field(pytree_node=False, default=6)     # Heavier damage
     
-    # Enemy damage by type (contact damage per step)
+    # Enemy damage by type
     ZOMBIE_DAMAGE: int = struct.field(pytree_node=False, default=1)  # Weakest
     WRAITH_DAMAGE: int = struct.field(pytree_node=False, default=1)
     SKELETON_DAMAGE: int = struct.field(pytree_node=False, default=3)
@@ -477,20 +452,20 @@ class DarkChambersConstants(struct.PyTreeNode):
     # Potion effect tuning
     SPEED_POTION_DURATION: int = struct.field(pytree_node=False, default=120)  # 120 steps (~4 seconds at 30 FPS)
     SPEED_POTION_MULTIPLIER: int = struct.field(pytree_node=False, default=2)  # 2x movement speed
-    POISON_DURATION: int = struct.field(pytree_node=False, default=360)        # 360 steps (~12 seconds at 30 FPS) - increased from 180 for longer effect
-    POISON_RADIUS: int = struct.field(pytree_node=False, default=60)           # Damage radius in pixels - reduced from 80 for more targeted effect
+    POISON_DURATION: int = struct.field(pytree_node=False, default=360)        # 360 steps (~12 seconds at 30 FPS)
+    POISON_RADIUS: int = struct.field(pytree_node=False, default=60)           # Damage radius in pixels
     POISON_DAMAGE_INTERVAL: int = struct.field(pytree_node=False, default=30)  # Apply damage every 30 steps (once per second) - prevents instant kills
 
-    # Potion item spawn toggles (disabled by default; enabled by mods via constants_overrides)
+    # Potion item spawn toggles
     ENABLE_SPEED_POTION_SPAWN: bool = struct.field(pytree_node=False, default=False)
     ENABLE_HEAL_POTION_SPAWN: bool = struct.field(pytree_node=False, default=False)
     ENABLE_POISON_POTION_SPAWN: bool = struct.field(pytree_node=False, default=False)
 
-    # Base poison item spawn toggle (keeps poison logic intact, only disables spawning)
+    # Base poison item spawn toggle
     ENABLE_DEFAULT_POISON_SPAWN: bool = struct.field(pytree_node=False, default=False)
     ENABLE_DEFAULT_TRAP_SPAWN: bool = struct.field(pytree_node=False, default=False)
 
-    HAMMER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(148, 0, 211))  # Brown hammer
+    HAMMER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(148, 0, 211))
     ENABLE_HAMMER_SPAWN: bool = struct.field(pytree_node=False, default=False)
 
     # Advanced enemy features (disabled by default; enabled by mods)
@@ -498,7 +473,6 @@ class DarkChambersConstants(struct.PyTreeNode):
     ENABLE_WIZARD_BULLETS: bool = struct.field(pytree_node=False, default=False)
 
     # Checkpoint system (disabled by default; enabled by checkpoint mod)
-    # Map index order: 0=middle chamber, 1=left chamber, 2=right chamber.
     ENABLE_CHECKPOINT_RESPAWN: bool = struct.field(pytree_node=False, default=False)
     CHECKPOINT_SPAWN_X_BY_MAP: Tuple[int, int, int] = struct.field(pytree_node=False, default=(50, 20, 130))
     CHECKPOINT_SPAWN_Y_BY_MAP: Tuple[int, int, int] = struct.field(pytree_node=False, default=(50, 70, 70))
@@ -641,23 +615,20 @@ class DarkChambersRenderer(JAXGameRenderer):
         self.consts = consts or DarkChambersConstants()
         if config is None:
             self.config = render_utils.RendererConfig(
-                game_dimensions=(GAME_H, GAME_W),  # (height, width)
+                game_dimensions=(GAME_H, GAME_W),
                 channels=3
             )
         else:
             self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
-        # Load sprites using the asset system
         final_asset_config = list(_get_default_asset_config())
         
-        # Create procedural sprites for colors not in the main sprites (enemies, items, UI, etc.)
         def create_color_sprite(color):
             """Make a 1×1 sprite for the given color (ensures it’s in the palette)."""
             rgba = (*color, 255)
             return jnp.array([[rgba]], dtype=jnp.uint8)
         
-        # Add all game colors as procedural sprites to ensure they're in the palette
         color_sprites = {
             'background_color': create_color_sprite(self.consts.BACKGROUND_COLOR),
             'zombie_color': create_color_sprite(self.consts.ZOMBIE_COLOR),
@@ -692,7 +663,6 @@ class DarkChambersRenderer(JAXGameRenderer):
             'checkpoint_star_color': create_color_sprite((255, 255, 255)),
         }
         
-        # Append procedural color sprites to asset config
         for name, sprite_data in color_sprites.items():
             final_asset_config.append({'name': name, 'type': 'procedural', 'data': sprite_data})
         
@@ -705,7 +675,6 @@ class DarkChambersRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
         
-        # Override background with solid color based on BACKGROUND_COLOR constant
         bg_color_id = self.COLOR_TO_ID.get(self.consts.BACKGROUND_COLOR)
         if bg_color_id is not None:
             target_h = self.config.downscale[0] if self.config.downscale else GAME_H
@@ -719,7 +688,6 @@ class DarkChambersRenderer(JAXGameRenderer):
                 return None
             if mask.ndim == 2:
                 h, w = int(mask.shape[0]), int(mask.shape[1])
-                # Use uniform scale factor to preserve aspect ratio (prevents distortion)
                 scale = max(1, min(target_w // w, target_h // h))
                 scaled = jnp.repeat(jnp.repeat(mask, scale, axis=0), scale, axis=1)
                 sh, sw = int(scaled.shape[0]), int(scaled.shape[1])
@@ -745,7 +713,6 @@ class DarkChambersRenderer(JAXGameRenderer):
                 cr = cl + target_w
                 return scaled_padded[ct:cb, cl:cr]
             elif mask.ndim == 3:
-                # Assume (N, H, W) stack
                 N = int(mask.shape[0])
                 def _scale_one(m):
                     return _scale_mask(m, target_h, target_w, align)
@@ -753,16 +720,14 @@ class DarkChambersRenderer(JAXGameRenderer):
             else:
                 return mask
 
-        # Player directional animation: (4, 5, H, W) — max 5 frames, pad shorter directions
-        # Sprite index order: 0=right, 1=down, 2=left, 3=up
         target_w = int(self.consts.PLAYER_WIDTH)
         target_h = int(self.consts.PLAYER_HEIGHT)
         _zero_player = jnp.zeros((target_h, target_w), dtype=jnp.int32)
         player_dir_frame_names = [
-            ["player_r0", "player_r1", "player_r2", "player_r2", "player_r2"],  # right: 3 frames, pad to 5
-            ["player_d0", "player_d1", "player_d2", "player_d3", "player_d4"],  # down:  5 frames
-            ["player_l0", "player_l1", "player_l2", "player_l2", "player_l2"],  # left:  3 frames, pad to 5
-            ["player_u0", "player_u1", "player_u2", "player_u3", "player_u4"],  # up:    5 frames
+            ["player_r0", "player_r1", "player_r2", "player_r2", "player_r2"],
+            ["player_d0", "player_d1", "player_d2", "player_d3", "player_d4"],
+            ["player_l0", "player_l1", "player_l2", "player_l2", "player_l2"],
+            ["player_u0", "player_u1", "player_u2", "player_u3", "player_u4"],
         ]
         player_dirs = []
         for dir_names in player_dir_frame_names:
@@ -771,32 +736,24 @@ class DarkChambersRenderer(JAXGameRenderer):
                 if self.SHAPE_MASKS.get(n) is not None else _zero_player
                 for n in dir_names
             ]
-            player_dirs.append(jnp.stack(dir_frames))  # (5, H, W)
-        self.PLAYER_ANIM_FRAMES = jnp.stack(player_dirs)  # (4, 5, H, W)
+            player_dirs.append(jnp.stack(dir_frames))
+        self.PLAYER_ANIM_FRAMES = jnp.stack(player_dirs)
         # Legacy aliases
         self.PLAYER_DIRECTIONAL_MASKS = None
         self.PLAYER_SCALED_MASK = player_dirs[0][0]
 
-        # Scale enemy sprites to match gameplay size (10×20) and stack 4 directional frames.
-        # Sprite order per enemy: 0=right, 1=down, 2=left, 3=up
         target_enemy_w = int(self.consts.ENEMY_WIDTH)
         target_enemy_h = int(self.consts.ENEMY_HEIGHT)
 
-        self.ENEMY_SCALED_MASKS = {}        # legacy single-sprite dict (frame 0)
-        self.ENEMY_DIRECTIONAL_MASKS = {}   # (4, H, W) stacked dict; None for enemies with custom animation
+        self.ENEMY_SCALED_MASKS = {}
+        self.ENEMY_DIRECTIONAL_MASKS = {}
 
-        # All enemy types use custom multi-frame animation — no generic 4-dir path needed
-
-        # Ghost (wraith) has custom multi-frame animation per direction.
-        # Build GHOST_ANIM_FRAMES: shape (4, 3, H, W)
-        # Direction order: 0=right, 1=down, 2=left, 3=up
-        # Frame counts:    right=2, down=3, left=2, up=3  (padded to max 3 with last frame)
         _zero_frame = jnp.zeros((target_enemy_h, target_enemy_w), dtype=jnp.int32)
         ghost_dir_frame_names = [
-            ["ghost_r1", "ghost_r0", "ghost_r0"],  # right: reversed (cx 3.31→3.71), pad 3rd
-            ["ghost_d0", "ghost_d1", "ghost_d2"],  # down:  3 frames
-            ["ghost_l0", "ghost_l1", "ghost_l1"],  # left:  2 frames, pad 3rd
-            ["ghost_u0", "ghost_u1", "ghost_u2"],  # up:    3 frames
+            ["ghost_r1", "ghost_r0", "ghost_r0"],
+            ["ghost_d0", "ghost_d1", "ghost_d2"],
+            ["ghost_l0", "ghost_l1", "ghost_l1"],
+            ["ghost_u0", "ghost_u1", "ghost_u2"],
         ]
         _DIR_ALIGN = ['right', 'center', 'left', 'center']
         ghost_dirs = []
@@ -805,20 +762,18 @@ class DarkChambersRenderer(JAXGameRenderer):
             for name in dir_names:
                 m = self.SHAPE_MASKS.get(name)
                 dir_frames.append(_scale_mask(m, target_enemy_h, target_enemy_w, _DIR_ALIGN[d_idx]) if m is not None else _zero_frame)
-            ghost_dirs.append(jnp.stack(dir_frames))  # (3, H, W)
-        self.GHOST_ANIM_FRAMES = jnp.stack(ghost_dirs)  # (4, 3, H, W)
+            ghost_dirs.append(jnp.stack(dir_frames))
+        self.GHOST_ANIM_FRAMES = jnp.stack(ghost_dirs)
 
         # Ghost does not use the generic directional mask path
         self.ENEMY_DIRECTIONAL_MASKS["wraith"] = None
         self.ENEMY_SCALED_MASKS["wraith"] = None
 
-        # Wizard directional animation: (4, 5, H, W) — max 5 frames, pad shorter directions
-        # Direction order: 0=right, 1=down, 2=left, 3=up
         wizard_dir_frame_names = [
-            ["wizard_r1", "wizard_r0", "wizard_r1", "wizard_r2", "wizard_r0", "wizard_r1", "wizard_r0", "wizard_r1"],  # right: 2,1,2,3,1,2,1,2
-            ["wizard_d1", "wizard_d0", "wizard_d3", "wizard_d0", "wizard_d1", "wizard_d2", "wizard_d4", "wizard_d2"],  # down:  5,4,7,4,5,6,8,6
-            ["wizard_l0", "wizard_l1", "wizard_l0", "wizard_l2", "wizard_l0", "wizard_l1", "wizard_l0", "wizard_l0"],  # left:  14,15,14,16,14,15,14 (7 frames, pad to 8)
-            ["wizard_u0", "wizard_u1", "wizard_u2", "wizard_u1", "wizard_u0", "wizard_u3", "wizard_u4", "wizard_u3"],  # up:    9,10,11,10,9,12,13,12
+            ["wizard_r1", "wizard_r0", "wizard_r1", "wizard_r2", "wizard_r0", "wizard_r1", "wizard_r0", "wizard_r1"],
+            ["wizard_d1", "wizard_d0", "wizard_d3", "wizard_d0", "wizard_d1", "wizard_d2", "wizard_d4", "wizard_d2"],
+            ["wizard_l0", "wizard_l1", "wizard_l0", "wizard_l2", "wizard_l0", "wizard_l1", "wizard_l0", "wizard_l0"],
+            ["wizard_u0", "wizard_u1", "wizard_u2", "wizard_u1", "wizard_u0", "wizard_u3", "wizard_u4", "wizard_u3"],
         ]
         wizard_dirs = []
         for d_idx, dir_names in enumerate(wizard_dir_frame_names):
@@ -826,20 +781,17 @@ class DarkChambersRenderer(JAXGameRenderer):
             for name in dir_names:
                 m = self.SHAPE_MASKS.get(name)
                 dir_frames.append(_scale_mask(m, target_enemy_h, target_enemy_w, _DIR_ALIGN[d_idx]) if m is not None else _zero_frame)
-            wizard_dirs.append(jnp.stack(dir_frames))  # (8, H, W)
-        self.WIZARD_ANIM_FRAMES = jnp.stack(wizard_dirs)  # (4, 8, H, W)
+            wizard_dirs.append(jnp.stack(dir_frames))
+        self.WIZARD_ANIM_FRAMES = jnp.stack(wizard_dirs)
 
-        # Wizard does not use the generic directional mask path
         self.ENEMY_DIRECTIONAL_MASKS["wizard"] = None
         self.ENEMY_SCALED_MASKS["wizard"] = None
 
-        # Skeleton directional animation: (4, 4, H, W) — right/left=3 frames padded to 4, down/up=4 frames
-        # Direction order: 0=right, 1=down, 2=left, 3=up
         skel_dir_frame_names = [
-            ["skel_r0", "skel_r1", "skel_r2", "skel_r2"],          # right: 3 frames, pad to 4
-            ["skel_7",  "skel_8",  "skel_9",  "skel_8"],           # down:  4-frame cycle
-            ["skel_l2", "skel_l0", "skel_l1", "skel_l1"],          # left:  3 frames, pad to 4
-            ["skel_10", "skel_12", "skel_11", "skel_12"],           # up:    4-frame cycle
+            ["skel_r0", "skel_r1", "skel_r2", "skel_r2"],
+            ["skel_7",  "skel_8",  "skel_9",  "skel_8"],
+            ["skel_l2", "skel_l0", "skel_l1", "skel_l1"],
+            ["skel_10", "skel_12", "skel_11", "skel_12"],
         ]
         skel_dirs = []
         for d_idx, dir_names in enumerate(skel_dir_frame_names):
@@ -848,15 +800,14 @@ class DarkChambersRenderer(JAXGameRenderer):
                 if self.SHAPE_MASKS.get(n) is not None else _zero_frame
                 for n in dir_names
             ]
-            skel_dirs.append(jnp.stack(dir_frames))  # (4, H, W)
-        self.SKELETON_ANIM_FRAMES = jnp.stack(skel_dirs)  # (4, 4, H, W)
+            skel_dirs.append(jnp.stack(dir_frames))
+        self.SKELETON_ANIM_FRAMES = jnp.stack(skel_dirs)
 
-        # Skeleton does not use the generic directional mask path
         self.ENEMY_DIRECTIONAL_MASKS["skeleton"] = None
         self.ENEMY_SCALED_MASKS["skeleton"] = None
 
         # Grim Reaper: skeleton frames, head removed, recolored blue
-        _HEAD_ROWS = 11  # top 11 of 28 px = head
+        _HEAD_ROWS = 11
         _blue_id = self.COLOR_TO_ID[self.consts.SHIELD_COLOR]
         grim_dir_frame_names = [
             ["skel_r0", "skel_r1", "skel_r2", "skel_r2"],
@@ -870,21 +821,19 @@ class DarkChambersRenderer(JAXGameRenderer):
             for n in dir_names:
                 if self.SHAPE_MASKS.get(n) is not None:
                     frame = _scale_mask(self.SHAPE_MASKS[n], target_enemy_h, target_enemy_w, _DIR_ALIGN[d_idx])
-                    frame = frame.at[:_HEAD_ROWS, :].set(self.jr.TRANSPARENT_ID)  # remove head
-                    frame = jnp.where(frame != self.jr.TRANSPARENT_ID, _blue_id, frame)  # recolor blue
+                    frame = frame.at[:_HEAD_ROWS, :].set(self.jr.TRANSPARENT_ID)
+                    frame = jnp.where(frame != self.jr.TRANSPARENT_ID, _blue_id, frame)
                 else:
                     frame = _zero_frame
                 dir_frames.append(frame)
-            grim_dirs.append(jnp.stack(dir_frames))  # (4, H, W)
-        self.GRIM_REAPER_ANIM_FRAMES = jnp.stack(grim_dirs)  # (4, 4, H, W)
+            grim_dirs.append(jnp.stack(dir_frames))
+        self.GRIM_REAPER_ANIM_FRAMES = jnp.stack(grim_dirs)
 
-        # Zombie directional animation: (4, 8, H, W) — max 8 frames, pad shorter directions
-        # Direction order: 0=right, 1=down, 2=left, 3=up
         zombie_dir_frame_names = [
-            ["green_r2", "green_r1", "green_r0", "green_r0", "green_r0", "green_r0", "green_r0", "green_r0"],  # right: reversed (cx↑), pad to 8
-            ["green_6",  "green_7",   "green_6",  "green_d_d", "green_dn_l", "green_8",  "green_dn_l", "green_d_d"],  # down:  8-frame cycle
-            ["green_l2", "green_l0",  "green_l1", "green_l1",  "green_l1",   "green_l1", "green_l1",   "green_l1"],  # left:  cx↓ order, pad to 8
-            ["green_10", "green_9",   "green_10", "green_u_d", "green_u_r1", "green_u_r2","green_u_r1", "green_u_d"], # up:    8-frame cycle
+            ["green_r2", "green_r1", "green_r0", "green_r0", "green_r0", "green_r0", "green_r0", "green_r0"],
+            ["green_6",  "green_7",   "green_6",  "green_d_d", "green_dn_l", "green_8",  "green_dn_l", "green_d_d"],
+            ["green_l2", "green_l0",  "green_l1", "green_l1",  "green_l1",   "green_l1", "green_l1",   "green_l1"],
+            ["green_10", "green_9",   "green_10", "green_u_d", "green_u_r1", "green_u_r2","green_u_r1", "green_u_d"],
         ]
         zombie_dirs = []
         for d_idx, dir_names in enumerate(zombie_dir_frame_names):
@@ -893,29 +842,27 @@ class DarkChambersRenderer(JAXGameRenderer):
                 if self.SHAPE_MASKS.get(n) is not None else _zero_frame
                 for n in dir_names
             ]
-            zombie_dirs.append(jnp.stack(dir_frames))  # (5, H, W)
-        self.ZOMBIE_ANIM_FRAMES = jnp.stack(zombie_dirs)  # (4, 8, H, W)
+            zombie_dirs.append(jnp.stack(dir_frames))
+        self.ZOMBIE_ANIM_FRAMES = jnp.stack(zombie_dirs)
 
-        # Zombie does not use the generic directional mask path
         self.ENEMY_DIRECTIONAL_MASKS["zombie"] = None
         self.ENEMY_SCALED_MASKS["zombie"] = None
 
 
-        # Scale item sprites to 12×12 boxes for consistent rendering
         target_item_w = 12
         target_item_h = 12
         self.ITEM_SCALED_MASKS = {}
         item_sprites = {
-            "pot": "pot",          # ITEM_SHIELD (shield icon)
-            "skull": "skull",      # ITEM_POISON
-            "trapdoor": "trapdoor", # ITEM_TRAP
-            "apple": "apple",      # ITEM_HEART
-            "barrel": "barrel",    # ITEM_BOMB
-            "candle": "candle",    # ITEM_AMBER_CHALICE
-            "chain": "chain",      # ITEM_AMULET
-            "key": "key",         # ITEM_KEY
-            "door": "door",       # ITEM_CAGE_DOOR
-            "pistol": "pistol",   # ITEM_GUN
+            "pot": "pot",
+            "skull": "skull",
+            "trapdoor": "trapdoor",
+            "apple": "apple",
+            "barrel": "barrel",
+            "candle": "candle",
+            "chain": "chain",
+            "key": "key",
+            "door": "door",
+            "pistol": "pistol",
         }
         for item_key, sprite_name in item_sprites.items():
             item_mask = self.SHAPE_MASKS.get(sprite_name)
@@ -924,8 +871,6 @@ class DarkChambersRenderer(JAXGameRenderer):
             else:
                 self.ITEM_SCALED_MASKS[item_key] = None
 
-        # Door sprite must fill the full 16px-wide cage gap — stretch each axis independently
-        # (aspect-ratio-preserving _scale_mask would leave transparent gaps on the sides)
         door_mask = self.SHAPE_MASKS.get("door")
         if door_mask is not None:
             import numpy as _np
@@ -935,7 +880,6 @@ class DarkChambersRenderer(JAXGameRenderer):
             col_idx = (_np.arange(16) * w / 16).astype(int)
             self.ITEM_SCALED_MASKS["door"] = jnp.array(dm[_np.ix_(row_idx, col_idx)])
 
-        # Stairs sprite uses natural dimensions (LADDER_HEIGHT tall × LADDER_WIDTH wide)
         stairs_mask = self.SHAPE_MASKS.get("stairs")
         if stairs_mask is not None:
             self.ITEM_SCALED_MASKS["stairs"] = _scale_mask(stairs_mask, LADDER_HEIGHT, LADDER_WIDTH)
@@ -944,26 +888,22 @@ class DarkChambersRenderer(JAXGameRenderer):
             self.ITEM_SCALED_MASKS["stairs"] = None
             self.ITEM_SCALED_MASKS["stairs_down"] = None
 
-        # Pistol sprite pre-scaled for HUD indicator (ITEM_WIDTH × ITEM_HEIGHT)
         pistol_mask = self.SHAPE_MASKS.get("pistol")
         if pistol_mask is not None:
             self.GUN_HUD_SPRITE = _scale_mask(pistol_mask, ITEM_HEIGHT, ITEM_WIDTH)
         else:
             self.GUN_HUD_SPRITE = None
 
-        # --- Spawner as skull: scale skull sprite to 14x28 for spawner (2:1 aspect, original width) ---
         skull_mask = self.SHAPE_MASKS.get("skull")
         if skull_mask is not None:
             self.SPAWNER_SKULL_MASK = _scale_mask(skull_mask, SPAWNER_HEIGHT, SPAWNER_WIDTH)
         else:
             self.SPAWNER_SKULL_MASK = None
 
-        # Grim Reaper has no sprite, will use colored box
         self.HEART_MASK_6 = None
         self.POISON_MASK_6 = None
         self.TREASURE_MASKS = {}
 
-        # Create color ID mapping for easy access
         self.WALL_ID = self.COLOR_TO_ID[self.consts.WALL_COLOR]
         self.HEART_ID = self.COLOR_TO_ID[self.consts.HEART_COLOR]
         self.POISON_ID = self.COLOR_TO_ID[self.consts.POISON_COLOR]
@@ -987,13 +927,13 @@ class DarkChambersRenderer(JAXGameRenderer):
         self.GRIM_REAPER_ID = self.COLOR_TO_ID[self.consts.GRIM_REAPER_COLOR]
         self.HAMMER_ID = self.COLOR_TO_ID[self.consts.HAMMER_COLOR]
         self.CHECKPOINT_ID = self.COLOR_TO_ID[self.consts.CHECKPOINT_COLOR]
-        self.CHECKPOINT_ACTIVATED_ID = self.SHIELD_ID  # bright blue when activated
+        self.CHECKPOINT_ACTIVATED_ID = self.SHIELD_ID
         self.CHECKPOINT_POLE_ID = self.COLOR_TO_ID[(100, 100, 100)]
         self.CHECKPOINT_STAR_ID = self.COLOR_TO_ID[(255, 255, 255)]
         self.POTION_CORK_ID  = self.COLOR_TO_ID[(150, 75, 0)]
         self.POTION_GLASS_ID = self.COLOR_TO_ID[(200, 200, 200)]
 
-        # Checkpoint flag sprites (10 wide × 16 tall): tapered pennant on a pole with base
+        # Checkpoint flag sprites: tapered pennant on a pole with base
         _P = int(self.CHECKPOINT_POLE_ID)
         _T = int(self.jr.TRANSPARENT_ID)
 
@@ -1018,7 +958,7 @@ class DarkChambersRenderer(JAXGameRenderer):
                 [_T, _T, _T, _T, _T, _T, _T, _T, _T, _T],
             ], dtype=jnp.int32)
 
-        # Inactive: gold flag, no star (star pixels = flag color)
+        # Inactive: gold flag
         self.CHECKPOINT_SPRITE = _make_flag(self.CHECKPOINT_ID, self.CHECKPOINT_ID)
         # Activated: blue flag, white star
         self.CHECKPOINT_SPRITE_ACTIVATED = _make_flag(self.CHECKPOINT_ACTIVATED_ID, self.CHECKPOINT_STAR_ID)
@@ -1044,8 +984,8 @@ class DarkChambersRenderer(JAXGameRenderer):
         self.POISON_POTION_SPRITE = _make_potion_sprite(self.COLOR_TO_ID[self.consts.POISON_POTION_COLOR])
 
         # Hammer sprite (8×10): full-width T-shaped head + narrow centered handle
-        _H  = int(self.HAMMER_ID)                    # head color (purple/violet)
-        _HW = int(self.COLOR_TO_ID[(180, 100, 30)])  # handle wood (brown)
+        _H  = int(self.HAMMER_ID)
+        _HW = int(self.COLOR_TO_ID[(180, 100, 30)])
         self.HAMMER_SPRITE = jnp.array([
             [_T, _H, _H, _H, _H, _H, _H, _T],
             [_H, _H, _H, _H, _H, _H, _H, _H],
@@ -1059,8 +999,6 @@ class DarkChambersRenderer(JAXGameRenderer):
             [_T, _T, _T, _T, _T, _T, _T, _T],
         ], dtype=jnp.int32)
 
-        # Digit patterns (0-9) 3x5 bitmap (rows top->bottom, cols left->right)
-        # 1 = pixel on, 0 = off
         self.DIGIT_PATTERNS = jnp.array([
             # 0
             [[1,1,1],
@@ -1124,10 +1062,6 @@ class DarkChambersRenderer(JAXGameRenderer):
              [1,1,1]],
         ], dtype=jnp.uint8)
         
-        # Walls in world coordinates - format: [x, y, width, height]
-        # Multiple levels with different layouts
-        # Shape: (MAX_LEVELS, max_walls_per_level, 4)
-        # Define 3 portal holes per side (top, middle, bottom)
         portal_hole_height = 40
         portal_gap = (self.consts.WORLD_HEIGHT - 3 * portal_hole_height) // 4
         portal_y_starts = [
@@ -1137,38 +1071,20 @@ class DarkChambersRenderer(JAXGameRenderer):
         ]
         portal_y_ends = [y + portal_hole_height for y in portal_y_starts]
         
-        # Middle map (map_index=0) - original layout, adjusted for new portals and height
-        # Borders
         border_top = [0, 0, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS]
         border_bottom = [0, self.consts.WORLD_HEIGHT - self.consts.WALL_THICKNESS, self.consts.WORLD_WIDTH, self.consts.WALL_THICKNESS]
-        # Left wall - 3 gaps for portals
         left_walls = []
         prev_end = 0
         for y_start, y_end in zip(portal_y_starts, portal_y_ends):
             left_walls.append([0, prev_end, self.consts.WALL_THICKNESS, y_start - prev_end])
             prev_end = y_end
         left_walls.append([0, prev_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - prev_end])
-        # Right wall - 3 gaps for portals
         right_walls = []
         prev_end = 0
         for y_start, y_end in zip(portal_y_starts, portal_y_ends):
             right_walls.append([self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, prev_end, self.consts.WALL_THICKNESS, y_start - prev_end])
             prev_end = y_end
         right_walls.append([self.consts.WORLD_WIDTH - self.consts.WALL_THICKNESS, prev_end, self.consts.WALL_THICKNESS, self.consts.WORLD_HEIGHT - prev_end])
-        
-        
-        #Coordinate System
-        #Origin (0, 0): Top-left corner of the world
-        #X-axis: → (increases rightward)
-        #Y-axis: ↓ (increases downward)
-        #World size: 160 × 600 pixels
-
-        #[x, y, width, height]
-        #↓  ↓    ↓      ↓
-        #│  │    │      └─ height in pixels (vertical)
-        #│  │    └──────── width in pixels (horizontal)
-        #│  └───────────── top-left Y coordinate (pixels from top)
-        #└──────────────── top-left X coordinate (pixels from left)
         
         
         maze = [
@@ -1188,18 +1104,13 @@ class DarkChambersRenderer(JAXGameRenderer):
             [144, 166, 8, 8],
 
             
-            # ───────── MIDDLE DIVIDER (FLIPPED T) ─────────
-            # Vertical wall down the middle
             [77, 0, 6, 300],
-            # Single centered horizontal bar; leaves walkable gaps on both sides
             [40, 300, 80, 12],
 
-            # ───────── BOTTOM LONG VERTICALS (SYMMETRIC) ─────────
             [48, 360, 6, 234],
             [106, 360, 6, 234]
         ]
 
-        # Secondary maze set (v2) - starts as a copy and can be edited independently later.
         maze_2 = [
 
             #chamber enclosing
@@ -1329,44 +1240,10 @@ class DarkChambersRenderer(JAXGameRenderer):
         left_level_0_walls = jnp.array(left_maze, dtype=jnp.int32)
         left_level_1_walls = jnp.array(left_maze_2, dtype=jnp.int32)
         
-        # Right map (map_index=2) - horizontal chambers, adjusted for portals/height
         right_level_0_walls = jnp.array(right_maze, dtype=jnp.int32)
         right_level_1_walls = jnp.array(right_maze_2, dtype=jnp.int32)
 
 
-
-
-    # Middle map level 1 uses v2 walls
-        
-        #jnp.array([
-        #    [50, 120, 100, 6],
-        #    [180, 220, 100, 6],
-        #    [100, 320, 120, 6],
-        #    [60, 420, 100, 6],
-        #    [81, 540, 6, 60],
-        #], dtype=jnp.int32)
-        
-        # Left map level 1 uses v2 walls
-        
-        #jnp.array([
-        #    [60, 90, 110, 6],
-        #    [70, 170, 6, 90],
-        #    [140, 250, 100, 6],
-        #    [190, 320, 6, 80],
-        #    [50, 440, 120, 6],
-        #], dtype=jnp.int32)
-        
-        # Right map level 1 uses v2 walls
-        
-        #jnp.array([
-        #    [80, 110, 120, 6],
-        #    [160, 180, 6, 90],
-        #    [40, 300, 130, 6],
-        #    [60, 370, 6, 90],
-        #    [170, 420, 90, 6],
-        #], dtype=jnp.int32)
-
-        # --- Hard-coded cage (slightly smaller than before) ---
         self.CAGE_INTERIOR_CELLS = 3
         self.CAGE_WALL_THICKNESS = 4
         self.CAGE_DOOR_GAP = 16  # wider opening for smooth in/out
@@ -1496,7 +1373,6 @@ class DarkChambersRenderer(JAXGameRenderer):
             
             return best_walls, best_door, best_reward, best_entry, jnp.array(1 if found_valid else 0, dtype=jnp.int32)
 
-        # Generate 1000+ candidate positions (systematic grid covering playable area)
         cage_candidates = generate_cage_candidates()
         
         # Add cages to all 3 map variants - each tries 1000+ positions
@@ -1704,13 +1580,11 @@ class DarkChambersRenderer(JAXGameRenderer):
 
         # --- Navigation grid: mark nav cells that are blocked by walls ---
         def make_occupancy(walls):
-            # walls: (num_walls, 4) = [x, y, w, h]
             walls = jnp.concatenate([walls, self.BOUNDARY_WALLS], axis=0)
             xs = jnp.arange(GRID_W) * CELL_SIZE
             ys = jnp.arange(GRID_H) * CELL_SIZE
             cx, cy = jnp.meshgrid(xs, ys)   # shape (GRID_H, GRID_W)
 
-            # Treat each cell as a CELL_SIZE x CELL_SIZE rect (top-left at cx,cy)
             cx = cx[..., None]
             cy = cy[..., None]
 
@@ -1724,7 +1598,6 @@ class DarkChambersRenderer(JAXGameRenderer):
             blocked = jnp.any(overlap_x & overlap_y, axis=-1)  # (GRID_H, GRID_W) bool
             return blocked
 
-        # Shape: (3 maps, MAX_LEVELS, GRID_H, GRID_W)
         self.LEVEL_WALL_GRID = jnp.stack([
             jnp.stack([make_occupancy(self.LEVEL_WALLS[map_idx, level_idx]) 
                       for level_idx in range(MAX_LEVELS)], axis=0)
@@ -1818,15 +1691,10 @@ class DarkChambersRenderer(JAXGameRenderer):
             self.consts.WORLD_HEIGHT - GAMEPLAY_H
         ).astype(jnp.int32)
         
-        # Draw walls for current level and map
-        # Note: Wall textures can't be dynamically indexed in JAX due to tracing limitations
-        # Using solid color rendering for walls
         current_level_walls = self.LEVEL_WALLS[state.map_index, state.current_level]
         wall_positions = (current_level_walls[:, 0:2] - jnp.array([cam_x, cam_y])).astype(jnp.int32)
         wall_sizes = current_level_walls[:, 2:4]
 
-        # Clip wall rects to visible gameplay viewport before drawing.
-        # This avoids x/y == -1, which the shared renderer interprets as "hidden".
         wall_x0 = wall_positions[:, 0]
         wall_y0 = wall_positions[:, 1]
         wall_x1 = wall_x0 + wall_sizes[:, 0]
@@ -1856,7 +1724,6 @@ class DarkChambersRenderer(JAXGameRenderer):
         boundary_positions = (boundary_walls[:, 0:2] - jnp.array([cam_x, cam_y])).astype(jnp.int32)
         boundary_sizes = boundary_walls[:, 2:4]
 
-        # Same clipping workaround for boundary wall rects.
         boundary_x0 = boundary_positions[:, 0]
         boundary_y0 = boundary_positions[:, 1]
         boundary_x1 = boundary_x0 + boundary_sizes[:, 0]
@@ -1881,8 +1748,6 @@ class DarkChambersRenderer(JAXGameRenderer):
             color_id=self.WALL_ID
         )
 
-        # Top UI removed - now using bottom bar like ALE reference
-
         # Items - mask inactive ones by moving off-screen
         items_world_pos = state.item_positions.astype(jnp.int32)
         items_screen_pos = (items_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
@@ -1895,7 +1760,6 @@ class DarkChambersRenderer(JAXGameRenderer):
             off_screen
         )
 
-        # Draw items by type using sprites (for heart, poison, trap, ladder_up) or rectangles (for others)
         def draw_item_type(raster, t, positions_world):
             mask = (state.item_types == t) & (state.item_active == 1)
             pos = jnp.where(mask[:, None], positions_world, off_screen)
@@ -2636,8 +2500,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         return instance
 
     def __init__(self, consts: DarkChambersConstants = None):
-        # Guard: __init__ is called on the cached instance on every DarkChambersEnv()
-        # call, so skip all initialisation after the first time.
         if getattr(self, '_dc_initialized', False):
             return
         self._dc_initialized = True
@@ -3025,16 +2887,16 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             ITEM_SHIELD,         # damage reduction -> pot sprite
             ITEM_GUN,            # faster shooting -> no sprite (colored box)
             ITEM_BOMB,           # kill all enemies -> barrel sprite
-            ITEM_SPEED_POTION,   # 2x speed for 120 steps -> orange box
-            ITEM_HEAL_POTION,    # restore to max health -> magenta box
-            ITEM_POISON_POTION,  # create poison cloud -> green box
-            ITEM_HAMMER,         # kills all in radius -> brown box
+            ITEM_SPEED_POTION,   # 2x speed for 120 steps
+            ITEM_HEAL_POTION,    # restore to max health
+            ITEM_POISON_POTION,  # create poison cloud
+            ITEM_HAMMER,         # kills all in radius
         ], dtype=jnp.int32)
         # Probabilities for regular items; potion spawns are mod-gated (default off)
         spawn_probs = jnp.array([
             0.18,  # heart (reduced from 0.20)
             0.08 if self.consts.ENABLE_DEFAULT_POISON_SPAWN else 0.0,  # poison
-            0.0,  # trap disabled
+            0.0,  # trap probability set elsewhere
             0.12,  # amber chalice (reduced from 0.14)
             0.08,  # amulet (reduced from 0.10)
             0.07,  # shield (reduced from 0.08)
@@ -3179,8 +3041,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         spawn_x = safe_spawn[0]
         spawn_y = safe_spawn[1]
 
-        # For the starting chamber (map_index=0, level=0), move spawners to the lower half
-        # This moves the spawner from the right side down to the lower portion of the map
         adjusted_spawner_positions = spawner_positions.at[:, 1].set(
             jnp.maximum(spawner_positions[:, 1], 550)
         )
@@ -3433,7 +3293,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             dx_raw = dx
             dy_raw = dy
 
-            PLAYER_MOVE_EVERY_X = 3  # slightly faster (was 4)
+            PLAYER_MOVE_EVERY_X = 3  # slightly faster
             dy = jnp.where((state.step_counter % 3) != 2, dy, 0)
             dx = jnp.where((state.step_counter % PLAYER_MOVE_EVERY_X) == 0, dx, 0)
 
@@ -3460,8 +3320,6 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 (prop_y >= (portal_y_starts - self.consts.PLAYER_HEIGHT)) & (prop_y <= portal_y_ends)
             )
             
-            # Cycle through maps: exit left → go left map, exit right → go right map
-            # Middle(0) → Left(1) → Middle(0) → Right(2) → Middle(0)
             should_wrap_right = in_portal_zone & (prop_x <= 0)
             should_wrap_left = in_portal_zone & (prop_x >= self.consts.WORLD_WIDTH - self.consts.PLAYER_WIDTH)
             
