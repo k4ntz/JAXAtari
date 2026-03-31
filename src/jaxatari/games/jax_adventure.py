@@ -11,6 +11,7 @@ import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
+from jaxatari.modification import AutoDerivedConstants
 
 def _get_default_asset_config() -> tuple:
     """
@@ -92,20 +93,20 @@ def _get_default_asset_config() -> tuple:
     )
 
 
-class AdventureConstants(struct.PyTreeNode):
+class AdventureConstants(AutoDerivedConstants):
     #Map Size,  coordinates are (x,y) and the upper left corner is (0,0)
     WIDTH: int = struct.field(pytree_node=False, default = 160)
     HEIGHT: int = struct.field(pytree_node=False, default= 250)
     #Entity Sizes
-    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (4, 8))
-    KEY_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (8, 6))
-    DRAGON_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (8, 44))
-    GATE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (7, 32))
-    SWORD_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (8, 10))
-    BRIDGE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (4, 48))
-    MAGNET_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (8, 16))
-    CHALICE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (8, 18))
-    DOT_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default= (1,1))
+    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 8))
+    KEY_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 6))
+    DRAGON_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 44))
+    GATE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (7, 32))
+    SWORD_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 10))
+    BRIDGE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 48))
+    MAGNET_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 16))
+    CHALICE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (8, 18))
+    DOT_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (1,1))
     #Inventory IDs
     EMPTY_HAND_ID: int = struct.field(pytree_node=False, default= 0)
     KEY_YELLOW_ID: int = struct.field(pytree_node=False, default= 1)
@@ -117,24 +118,24 @@ class AdventureConstants(struct.PyTreeNode):
     KEY_WHITE_ID: int = struct.field(pytree_node=False, default= 7)
     DOT_ID: int = struct.field(pytree_node=False, default= 8)
     #dragons (X,Y, Room, state, counter, eat, activate)
-    DRAGON_YELLOW_SPAWN: Tuple[int, int, int, int ,int, int, int] = struct.field(pytree_node=False, default= (80, 170, 5, 0, 0, 0, 0))
-    DRAGON_GREEN_SPAWN: Tuple[int, int, int, int, int, int, int] = struct.field(pytree_node=False, default= (80, 130, 4, 0, 0, 0, 0))
-    DRAGON_RED_SPAWN: Tuple[int, int, int, int, int, int, int] = struct.field(pytree_node=False, default= (80, 130, 19, 0, 0, 0, 0))
+    DRAGON_YELLOW_SPAWN: Tuple[int, int, int, int ,int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (80, 170, 5, 0, 0, 0, 0))
+    DRAGON_GREEN_SPAWN: Tuple[int, int, int, int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (80, 130, 4, 0, 0, 0, 0))
+    DRAGON_RED_SPAWN: Tuple[int, int, int, int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (80, 130, 19, 0, 0, 0, 0))
     #Spawn Locations of all Entities: (X, Y, Room/Tile)
-    YELLOW_GATE_POS: Tuple[int, int, int] = struct.field(pytree_node=False, default= (76, 140, 0))
-    BLACK_GATE_POS: Tuple[int, int, int] = struct.field(pytree_node=False, default= (76, 140, 11))
-    WHITE_GATE_POS: Tuple[int, int, int] = struct.field(pytree_node=False, default= (76, 140, 24))
-    PLAYER_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (78, 174, 0)) #Changed from (78, 174, 0)
-    KEY_YELLOW_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (31, 110, 0)) #Changed from (31, 110, 0) for Testing
-    KEY_BLACK_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (31, 100, 4))
-    KEY_WHITE_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (31, 110, 19))
-    SWORD_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (31,180,1))
-    BRIDGE_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (40,130,10))
-    MAGNET_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (120,180,12))
-    CHALICE_SPAWN: Tuple[int, int, int, int] = struct.field(pytree_node=False, default= (35,180,13, 7))
-    BAT_SPAWN: Tuple[int, int, int, int] = struct.field(pytree_node=False, default= (76, 140, 19, 0))
-    DOT_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (76, 140, 29))
-    GATE_SPAWN: Tuple[int, int] = struct.field(pytree_node=False, default=(0, 0))
+    YELLOW_GATE_POS: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (76, 140, 0))
+    BLACK_GATE_POS: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (76, 140, 11))
+    WHITE_GATE_POS: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (76, 140, 24))
+    PLAYER_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (78, 174, 0)) #Changed from (78, 174, 0)
+    KEY_YELLOW_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (31, 110, 0)) #Changed from (31, 110, 0) for Testing
+    KEY_BLACK_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (31, 100, 4))
+    KEY_WHITE_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (31, 110, 19))
+    SWORD_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (31,180,1))
+    BRIDGE_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (40,130,10))
+    MAGNET_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (120,180,12))
+    CHALICE_SPAWN: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (35,180,13, 7))
+    BAT_SPAWN: Tuple[int, int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (76, 140, 19, 0))
+    DOT_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (76, 140, 29))
+    GATE_SPAWN: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (0, 0))
     
     #Constants that are used for restricting player movement, for easy of fine tuning
     # Wall coordinates the player cannot pass through
@@ -1287,12 +1288,12 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         state_key, _step_key = jax.random.split(key)
         state = AdventureState(
-            step_counter = jnp.array(0).astype(jnp.int32),
+            step_counter = jnp.array(0),
             #Player Spawn: x, y, tile, inventory
             player = jnp.array([self.consts.PLAYER_SPAWN[0],
                                 self.consts.PLAYER_SPAWN[1],
                                 self.consts.PLAYER_SPAWN[2],
-                                self.consts.EMPTY_HAND_ID]).astype(jnp.int32),
+                                self.consts.EMPTY_HAND_ID]),
             #Dragons: x, y ,tile ,state(neutral,dead,atacking), counter( ToDo for?? )
             dragon_yellow = jnp.array([self.consts.DRAGON_YELLOW_SPAWN[0],
                                        self.consts.DRAGON_YELLOW_SPAWN[1],
@@ -1300,62 +1301,62 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                        self.consts.DRAGON_YELLOW_SPAWN[3],
                                        self.consts.DRAGON_YELLOW_SPAWN[4],
                                        self.consts.DRAGON_YELLOW_SPAWN[5],
-                                       self.consts.DRAGON_YELLOW_SPAWN[6]]).astype(jnp.int32), #ToDo
+                                       self.consts.DRAGON_YELLOW_SPAWN[6]]), #ToDo
             dragon_green = jnp.array([self.consts.DRAGON_GREEN_SPAWN[0],
                                       self.consts.DRAGON_GREEN_SPAWN[1],
                                       self.consts.DRAGON_GREEN_SPAWN[2],
                                       self.consts.DRAGON_GREEN_SPAWN[3],
                                       self.consts.DRAGON_GREEN_SPAWN[4],
                                       self.consts.DRAGON_GREEN_SPAWN[5],
-                                      self.consts.DRAGON_GREEN_SPAWN[6]]).astype(jnp.int32),
+                                      self.consts.DRAGON_GREEN_SPAWN[6]]),
             dragon_red = jnp.array([self.consts.DRAGON_RED_SPAWN[0],
                                       self.consts.DRAGON_RED_SPAWN[1],
                                       self.consts.DRAGON_RED_SPAWN[2],
                                       self.consts.DRAGON_RED_SPAWN[3],
                                       self.consts.DRAGON_RED_SPAWN[4],
                                       self.consts.DRAGON_RED_SPAWN[5],
-                                      self.consts.DRAGON_RED_SPAWN[6]]).astype(jnp.int32),
+                                      self.consts.DRAGON_RED_SPAWN[6]]),
             #Keys: x ,y, tile
             key_yellow = jnp.array([self.consts.KEY_YELLOW_SPAWN[0],
                                     self.consts.KEY_YELLOW_SPAWN[1],
-                                    self.consts.KEY_YELLOW_SPAWN[2]]).astype(jnp.int32),
+                                    self.consts.KEY_YELLOW_SPAWN[2]]),
             key_black = jnp.array([self.consts.KEY_BLACK_SPAWN[0],
                                     self.consts.KEY_BLACK_SPAWN[1],
-                                    self.consts.KEY_BLACK_SPAWN[2]]).astype(jnp.int32),
+                                    self.consts.KEY_BLACK_SPAWN[2]]),
             key_white = jnp.array([self.consts.KEY_WHITE_SPAWN[0],
                                     self.consts.KEY_WHITE_SPAWN[1],
-                                    self.consts.KEY_WHITE_SPAWN[2]]).astype(jnp.int32),
+                                    self.consts.KEY_WHITE_SPAWN[2]]),
             #Gate: state, counter (ToDo for animation?)
             gate_yellow=jnp.array([self.consts.GATE_SPAWN[0],
-                                  self.consts.GATE_SPAWN[1]]).astype(jnp.int32),
+                                  self.consts.GATE_SPAWN[1]]),
             gate_black=jnp.array([self.consts.GATE_SPAWN[0],
-                                  self.consts.GATE_SPAWN[1]]).astype(jnp.int32),
+                                  self.consts.GATE_SPAWN[1]]),
             gate_white=jnp.array([self.consts.GATE_SPAWN[0],
-                                  self.consts.GATE_SPAWN[1]]).astype(jnp.int32),
+                                  self.consts.GATE_SPAWN[1]]),
             #Items: x, y, tile
             sword = jnp.array([self.consts.SWORD_SPAWN[0],
                                self.consts.SWORD_SPAWN[1],
-                               self.consts.SWORD_SPAWN[2]]).astype(jnp.int32), #ToDo
+                               self.consts.SWORD_SPAWN[2]]), #ToDo
             bridge = jnp.array([self.consts.BRIDGE_SPAWN[0],
                                self.consts.BRIDGE_SPAWN[1],
-                               self.consts.BRIDGE_SPAWN[2]]).astype(jnp.int32), #ToDo
+                               self.consts.BRIDGE_SPAWN[2]]), #ToDo
             magnet= jnp.array([self.consts.MAGNET_SPAWN[0],
                                self.consts.MAGNET_SPAWN[1],
-                               self.consts.MAGNET_SPAWN[2]]).astype(jnp.int32), #ToDo
+                               self.consts.MAGNET_SPAWN[2]]), #ToDo
             #Chalice: x, y, tile, color (ToDo move color to constants)
             chalice = jnp.array([self.consts.CHALICE_SPAWN[0],
                                  self.consts.CHALICE_SPAWN[1],
                                  self.consts.CHALICE_SPAWN[2],
-                                 self.consts.CHALICE_SPAWN[3]]).astype(jnp.int32), #ToDo
+                                 self.consts.CHALICE_SPAWN[3]]), #ToDo
             #random key
             rndKey = state_key,
             bat = jnp.array([self.consts.BAT_SPAWN[0],
                                       self.consts.BAT_SPAWN[1],
                                       self.consts.BAT_SPAWN[2],
-                                      self.consts.BAT_SPAWN[3]]).astype(jnp.int32),
+                                      self.consts.BAT_SPAWN[3]]),
             dot = jnp.array([self.consts.DOT_SPAWN[0],
                                     self.consts.DOT_SPAWN[1],
-                                    self.consts.DOT_SPAWN[2]]).astype(jnp.int32)
+                                    self.consts.DOT_SPAWN[2]])
         )
         initial_obs = self._get_observation(state)
 
