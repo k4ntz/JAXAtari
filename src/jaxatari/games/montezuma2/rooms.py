@@ -367,9 +367,59 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 cx, cy, ca, cd,
                 lax, laa)
 
+    def load_room_1_6(args):
+        lx, lt, lb, la, ix, iy, ia, lax, laa = args
+        
+        lx = lx.at[0].set(72)
+        lt = lt.at[0].set(48)
+        lb = lb.at[0].set(149)
+        la = la.at[0].set(1)
+
+        ix = ix.at[0].set(136)
+        iy = iy.at[0].set(7)
+        ia = ia.at[0].set(1)
+        
+        lax = lax.at[0].set(16)
+        lax = lax.at[1].set(36)
+        lax = lax.at[2].set(44)
+        lax = lax.at[3].set(112)
+        lax = lax.at[4].set(120)
+        lax = lax.at[5].set(140)
+        laa = laa.at[0:6].set(1)
+
+        ex = enemies_x
+        ey = enemies_y
+        ea = enemies_active
+        ed = enemies_direction
+        eminx = enemies_min_x
+        emaxx = enemies_max_x
+        eb = enemies_bouncing
+
+        rx = ropes_x
+        rt = ropes_top
+        rb = ropes_bottom
+        ra = ropes_active
+        
+        dx = doors_x
+        dy = doors_y
+        da = doors_active
+        
+        cx = conveyors_x
+        cy = conveyors_y
+        ca = conveyors_active
+        cd = conveyors_direction
+        
+        return (ex, ey, ea, ed, eminx, emaxx, eb,
+                lx, lt, lb, la,
+                rx, rt, rb, ra,
+                ix, iy, ia,
+                dx, dy, da,
+                cx, cy, ca, cd,
+                lax, laa)
+
     ex, ey, ea, ed, eminx, emaxx, eb, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd, lax, laa = jax.lax.switch(
         get_room_idx(room_id),
-        [load_room_0_3, load_room_0_4, load_room_0_5, load_room_1_3, load_room_1_2, load_room_1_4, load_room_1_5], args)
+        [load_room_0_3, load_room_0_4, load_room_0_5, load_room_1_3, load_room_1_2, load_room_1_4, load_room_1_5, load_room_1_6], args)
 
     return state.replace(
         room_id=room_id,
