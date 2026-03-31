@@ -616,44 +616,44 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
         return state.replace(
             step_counter = jnp.array(new_step_counter),
-            player = jnp.array([new_player_x,new_player_y,new_player_tile,state.player[3]]).astype(jnp.int32), #SEEMS NOT GOOD
+            player = jnp.array([new_player_x,new_player_y,new_player_tile,state.player[3]]), #SEEMS NOT GOOD
             key_yellow = jax.lax.cond(state.player[3]==self.consts.KEY_YELLOW_ID,
-                                      lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
+                                      lambda op: jnp.array([op[0],op[1],op[2]]),
                                       lambda op: op[3],
                                       operand=(new_item_x,new_item_y,new_item_tile,state.key_yellow),
                                       ),
             key_black= jax.lax.cond(state.player[3]==self.consts.KEY_BLACK_ID,
-                                    lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
+                                    lambda op: jnp.array([op[0],op[1],op[2]]),
                                     lambda op: op[3],
                                     operand=(new_item_x,new_item_y,new_item_tile,state.key_black)
                                     ),
             key_white= jax.lax.cond(state.player[3]==self.consts.KEY_WHITE_ID,
-                                    lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
+                                    lambda op: jnp.array([op[0],op[1],op[2]]),
                                     lambda op: op[3],
                                     operand=(new_item_x,new_item_y,new_item_tile,state.key_white)
                                     ),
             sword= jax.lax.cond(state.player[3]==self.consts.SWORD_ID,
-                                lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
+                                lambda op: jnp.array([op[0],op[1],op[2]]),
                                 lambda op: op[3],
                                 operand=(new_item_x,new_item_y,new_item_tile,state.sword)
                                 ),
             bridge= jax.lax.cond(state.player[3]==self.consts.BRIDGE_ID,
-                                lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
+                                lambda op: jnp.array([op[0],op[1],op[2]]),
                                 lambda op: op[3],
                                 operand=(new_item_x,new_item_y,new_item_tile,state.bridge)
                                 ),
             magnet= jax.lax.cond(state.player[3]==self.consts.MAGNET_ID,
-                                lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
+                                lambda op: jnp.array([op[0],op[1],op[2]]),
                                 lambda op: op[3],
                                 operand=(new_item_x,new_item_y,new_item_tile,state.magnet)
                                 ),
             chalice= jax.lax.cond(state.player[3]==self.consts.CHALICE_ID,
-                                  lambda op: jnp.array([op[0],op[1],op[2],op[3]]).astype(jnp.int32),
+                                  lambda op: jnp.array([op[0],op[1],op[2],op[3]]),
                                   lambda op: op[4],
                                   operand=(new_item_x,new_item_y,new_item_tile,state.chalice[3],state.chalice)
                                   ),
             dot= jax.lax.cond(state.player[3]==self.consts.DOT_ID,
-                                    lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
+                                    lambda op: jnp.array([op[0],op[1],op[2]]),
                                     lambda op: op[3],
                                     operand=(new_item_x,new_item_y,new_item_tile,state.dot)
                                     ),
@@ -819,9 +819,9 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
 
         return state.replace(
-            gate_yellow=jnp.array([gate_yellow_state, gate_yellow_counter]).astype(jnp.int32),
-            gate_black=jnp.array([gate_black_state, gate_black_counter]).astype(jnp.int32),
-            gate_white=jnp.array([gate_white_state, gate_white_counter]).astype(jnp.int32),
+            gate_yellow=jnp.array([gate_yellow_state, gate_yellow_counter]),
+            gate_black=jnp.array([gate_black_state, gate_black_counter]),
+            gate_white=jnp.array([gate_white_state, gate_white_counter]),
         )
     
     def _item_pickup(self, state: AdventureState, action: chex.Array) -> AdventureState:
@@ -1015,7 +1015,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         
 
         return state.replace(
-            player = jnp.array([state.player[0],state.player[1],state.player[2],new_player_inventory]).astype(jnp.int32)
+            player = jnp.array([state.player[0],state.player[1],state.player[2],new_player_inventory])
         )
     
     def _item_drop(self, state: AdventureState, action: chex.Array) -> AdventureState:
@@ -1029,7 +1029,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
 
         return state.replace(
-            player = jnp.array([state.player[0],state.player[1],state.player[2],new_player_inventory]).astype(jnp.int32)
+            player = jnp.array([state.player[0],state.player[1],state.player[2],new_player_inventory])
         )
         
 
@@ -1180,8 +1180,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
 
         return state.replace(
-            dragon_yellow = jnp.array([dragon_yellow_x,dragon_yellow_y,dragon_yellow_tile,dragon_yellow_animation,dragon_yellow_counter,dragon_yellow_eat, dragon_yellow_activate]).astype(jnp.int32),
-            dragon_green = jnp.array([dragon_green_x,dragon_green_y,dragon_green_tile,dragon_green_animation,dragon_green_counter,dragon_green_eat, dragon_green_activate]).astype(jnp.int32),
+            dragon_yellow = jnp.array([dragon_yellow_x,dragon_yellow_y,dragon_yellow_tile,dragon_yellow_animation,dragon_yellow_counter,dragon_yellow_eat, dragon_yellow_activate]),
+            dragon_green = jnp.array([dragon_green_x,dragon_green_y,dragon_green_tile,dragon_green_animation,dragon_green_counter,dragon_green_eat, dragon_green_activate]),
             rndKey=rndKey
         )
 
@@ -1262,12 +1262,12 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
 
         return state.replace(
-            key_yellow=jnp.array([key_yellow_x,key_yellow_y,state.key_yellow[2]]).astype(jnp.int32),
-            key_black=jnp.array([key_black_x,key_black_y,state.key_black[2]]).astype(jnp.int32),
-            key_white=jnp.array([key_white_x,key_white_y,state.key_white[2]]).astype(jnp.int32),
-            sword=jnp.array([sword_x,sword_y,state.sword[2]]).astype(jnp.int32),
-            bridge=jnp.array([bridge_x,bridge_y,state.bridge[2]]).astype(jnp.int32),
-            chalice=jnp.array([chalice_x,chalice_y,state.chalice[2],state.chalice[3]]).astype(jnp.int32)
+            key_yellow=jnp.array([key_yellow_x,key_yellow_y,state.key_yellow[2]]),
+            key_black=jnp.array([key_black_x,key_black_y,state.key_black[2]]),
+            key_white=jnp.array([key_white_x,key_white_y,state.key_white[2]]),
+            sword=jnp.array([sword_x,sword_y,state.sword[2]]),
+            bridge=jnp.array([bridge_x,bridge_y,state.bridge[2]]),
+            chalice=jnp.array([chalice_x,chalice_y,state.chalice[2],state.chalice[3]])
         )
     
     
@@ -1277,7 +1277,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         chalice_color = (chalice_color +1) % 10
 
         return state.replace(
-            chalice=jnp.array([state.chalice[0],state.chalice[1],state.chalice[2],chalice_color]).astype(jnp.int32)
+            chalice=jnp.array([state.chalice[0],state.chalice[1],state.chalice[2],chalice_color])
         )
     
     """This function is called when the game starts and when it is reseted
@@ -1290,7 +1290,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             player = jnp.array([self.consts.PLAYER_SPAWN[0],
                                 self.consts.PLAYER_SPAWN[1],
                                 self.consts.PLAYER_SPAWN[2],
-                                self.consts.EMPTY_HAND_ID]).astype(jnp.int32),
+                                self.consts.EMPTY_HAND_ID]),
             #Dragons: x, y ,tile ,state(neutral,dead,atacking), counter( ToDo for?? )
             dragon_yellow = jnp.array([self.consts.DRAGON_YELLOW_SPAWN[0],
                                        self.consts.DRAGON_YELLOW_SPAWN[1],
@@ -1298,58 +1298,58 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                        self.consts.DRAGON_YELLOW_SPAWN[3],
                                        self.consts.DRAGON_YELLOW_SPAWN[4],
                                        self.consts.DRAGON_YELLOW_SPAWN[5],
-                                       self.consts.DRAGON_YELLOW_SPAWN[6]]).astype(jnp.int32), #ToDo
+                                       self.consts.DRAGON_YELLOW_SPAWN[6]]), #ToDo
             dragon_green = jnp.array([self.consts.DRAGON_GREEN_SPAWN[0],
                                       self.consts.DRAGON_GREEN_SPAWN[1],
                                       self.consts.DRAGON_GREEN_SPAWN[2],
                                       self.consts.DRAGON_GREEN_SPAWN[3],
                                       self.consts.DRAGON_GREEN_SPAWN[4],
                                       self.consts.DRAGON_GREEN_SPAWN[5],
-                                      self.consts.DRAGON_GREEN_SPAWN[6]]).astype(jnp.int32),
+                                      self.consts.DRAGON_GREEN_SPAWN[6]]),
             dragon_red = jnp.array([self.consts.DRAGON_RED_SPAWN[0],
                                       self.consts.DRAGON_RED_SPAWN[1],
                                       self.consts.DRAGON_RED_SPAWN[2],
                                       self.consts.DRAGON_RED_SPAWN[3],
                                       self.consts.DRAGON_RED_SPAWN[4],
                                       self.consts.DRAGON_RED_SPAWN[5],
-                                      self.consts.DRAGON_RED_SPAWN[6]]).astype(jnp.int32),
+                                      self.consts.DRAGON_RED_SPAWN[6]]),
             #Keys: x ,y, tile
             key_yellow = jnp.array([self.consts.KEY_YELLOW_SPAWN[0],
                                     self.consts.KEY_YELLOW_SPAWN[1],
-                                    self.consts.KEY_YELLOW_SPAWN[2]]).astype(jnp.int32),
+                                    self.consts.KEY_YELLOW_SPAWN[2]]),
             key_black = jnp.array([self.consts.KEY_BLACK_SPAWN[0],
                                     self.consts.KEY_BLACK_SPAWN[1],
-                                    self.consts.KEY_BLACK_SPAWN[2]]).astype(jnp.int32),
+                                    self.consts.KEY_BLACK_SPAWN[2]]),
             key_white = jnp.array([self.consts.KEY_WHITE_SPAWN[0],
                                     self.consts.KEY_WHITE_SPAWN[1],
-                                    self.consts.KEY_WHITE_SPAWN[2]]).astype(jnp.int32),
+                                    self.consts.KEY_WHITE_SPAWN[2]]),
             #Gate: state, counter (ToDo for animation?)
-            gate_yellow=jnp.array([0,0]).astype(jnp.int32),
-            gate_black=jnp.array([0,0]).astype(jnp.int32),
-            gate_white=jnp.array([0,0]).astype(jnp.int32),
+            gate_yellow=jnp.array([0,0]),
+            gate_black=jnp.array([0,0]),
+            gate_white=jnp.array([0,0]),
             #Items: x, y, tile
             sword = jnp.array([self.consts.SWORD_SPAWN[0],
                                self.consts.SWORD_SPAWN[1],
-                               self.consts.SWORD_SPAWN[2]]).astype(jnp.int32), #ToDo
+                               self.consts.SWORD_SPAWN[2]]), #ToDo
             bridge = jnp.array([self.consts.BRIDGE_SPAWN[0],
                                self.consts.BRIDGE_SPAWN[1],
-                               self.consts.BRIDGE_SPAWN[2]]).astype(jnp.int32), #ToDo
+                               self.consts.BRIDGE_SPAWN[2]]), #ToDo
             magnet= jnp.array([self.consts.MAGNET_SPAWN[0],
                                self.consts.MAGNET_SPAWN[1],
-                               self.consts.MAGNET_SPAWN[2]]).astype(jnp.int32), #ToDo
+                               self.consts.MAGNET_SPAWN[2]]), #ToDo
             #Chalice: x, y, tile, color (ToDo move color to constants)
             chalice = jnp.array([self.consts.CHALICE_SPAWN[0],
                                  self.consts.CHALICE_SPAWN[1],
-                                 self.consts.CHALICE_SPAWN[2],7]).astype(jnp.int32), #ToDo
+                                 self.consts.CHALICE_SPAWN[2],7]), #ToDo
             #random key
             rndKey = state_key,
             bat = jnp.array([self.consts.BAT_SPAWN[0],
                                       self.consts.BAT_SPAWN[1],
                                       self.consts.BAT_SPAWN[2],
-                                      self.consts.BAT_SPAWN[3]]).astype(jnp.int32),
+                                      self.consts.BAT_SPAWN[3]]),
             dot = jnp.array([self.consts.DOT_SPAWN[0],
                                     self.consts.DOT_SPAWN[1],
-                                    self.consts.DOT_SPAWN[2]]).astype(jnp.int32)
+                                    self.consts.DOT_SPAWN[2]])
         )
         initial_obs = self._get_observation(state)
 
