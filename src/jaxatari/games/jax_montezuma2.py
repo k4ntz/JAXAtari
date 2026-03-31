@@ -403,15 +403,12 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         # 5. Resolve Horizontal with Wall Collision
         raw_new_x = current_x + dx
-        transition_left = jnp.logical_and(raw_new_x < 0, jnp.logical_or(state.room_id == 5, jnp.logical_or(state.room_id == 4, jnp.logical_or(state.room_id == 11, state.room_id == 9))))
-        transition_right = jnp.logical_and(raw_new_x + self.consts.PLAYER_WIDTH > self.consts.WIDTH, jnp.logical_or(state.room_id == 3, jnp.logical_or(state.room_id == 4, jnp.logical_or(state.room_id == 10, state.room_id == 11))))
+        transition_left = jnp.logical_and(raw_new_x < 0, jnp.isin(state.room_id, jnp.array([4, 5, 9, 11, 13])))
+        transition_right = jnp.logical_and(raw_new_x + self.consts.PLAYER_WIDTH > self.consts.WIDTH, jnp.isin(state.room_id, jnp.array([3, 4, 9, 10, 11])))
         transition_down = jnp.logical_and(new_y >= 148, jnp.logical_or(state.room_id == 3, state.room_id == 5))
         transition_up = jnp.logical_and(new_y <= 2, jnp.logical_or(state.room_id == 11, state.room_id == 13))
 
-        new_x = jnp.where(jnp.logical_and(transition_left, state.room_id == 3), 0, raw_new_x)
-        new_x = jnp.where(jnp.logical_and(transition_right, state.room_id == 5), self.consts.WIDTH - self.consts.PLAYER_WIDTH, new_x)
-
-        new_x = jnp.clip(new_x, 0, self.consts.WIDTH - self.consts.PLAYER_WIDTH)
+        new_x = jnp.clip(raw_new_x, 0, self.consts.WIDTH - self.consts.PLAYER_WIDTH)
         new_left_x = jnp.clip(new_x, 0, self.consts.WIDTH - 1)
         new_right_x = jnp.clip(new_x + self.consts.PLAYER_WIDTH - 1, 0, self.consts.WIDTH - 1)
         
