@@ -7,7 +7,6 @@ from jax._src.lax.lax import select
 import jax.lax
 import jax.numpy as jnp
 import chex
-from numpy import linalg, logical_and
 
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
@@ -2842,3 +2841,4 @@ class JaxDefender(
             state.shooting_cooldown == self.consts.SPACE_SHIP_DEATH_ANIM_FRAME_AMOUNT,
         )
         return is_done
+
