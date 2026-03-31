@@ -34,6 +34,7 @@ class Montezuma2Renderer(JAXGameRenderer):
             {'name': 'room_bg_1', 'type': 'single', 'file': 'backgrounds/mid_room_level_0.npy', 'transpose': False},
             {'name': 'room_bg_2', 'type': 'single', 'file': 'backgrounds/base_sprite_level_1.npy', 'transpose': False},
             {'name': 'room_bg_3', 'type': 'single', 'file': 'backgrounds/mid_room_level_1.npy', 'transpose': False},
+            {'name': 'room_bg_level2_base', 'type': 'single', 'file': 'backgrounds/base_sprite_level_2.npy', 'transpose': False},
             {
                 'name': 'player', 'type': 'group',
                 'files': [
@@ -57,6 +58,10 @@ class Montezuma2Renderer(JAXGameRenderer):
             },
             {
                 'name': 'spider', 'type': 'single', 'file': 'enemies/spidder.npy', 'transpose': False
+            },
+            {
+                'name': 'snake', 'type': 'group',
+                'files': ['enemies/snake_0.npy', 'enemies/snake_1.npy']
             },
             {
                 'name': 'item', 'type': 'group',
@@ -148,10 +153,14 @@ class Montezuma2Renderer(JAXGameRenderer):
         mask_2_modified = mask_2.at[48:149, 72:88].set(0)
         room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 11, jnp.logical_or(state.room_id == 10, state.room_id == 14)), mask_2_modified, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 13, mask_2, room_bg_mask)
+
+        # Level 2 rooms
+        mask_l2 = self.SHAPE_MASKS["room_bg_level2_base"][:149, ...]
+        room_bg_mask = jnp.where(state.room_id == 18, mask_l2, room_bg_mask)
         
-        # Add walls for side rooms Level 0 and Level 1
+        # Add walls for side rooms Level 0 and Level 1 and Level 2
         room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 3, state.room_id == 10), room_bg_mask.at[6:149, 0:4].set(1), room_bg_mask)
-        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 5, state.room_id == 14), room_bg_mask.at[6:149, 156:160].set(1), room_bg_mask)
+        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 5, jnp.logical_or(state.room_id == 14, state.room_id == 18)), room_bg_mask.at[6:149, 156:160].set(1), room_bg_mask)
         
         raster = self.jr.render_at(raster, 0, 47, room_bg_mask)
         
@@ -274,11 +283,25 @@ class Montezuma2Renderer(JAXGameRenderer):
                 None
             )
 
+            snake_anim = jnp.mod(jnp.floor_divide(state.frame_count, 7), 2)
+            base_snake_mask = self.SHAPE_MASKS["snake"][snake_anim]
+            snake_mask = jax.lax.cond(
+                state.enemies_direction[i] == -1,
+                lambda _: jnp.flip(base_snake_mask, axis=1),
+                lambda _: base_snake_mask,
+                None
+            )
+
             def _render_active(r):
                 return jax.lax.cond(
                     state.enemies_type[i] == 3,
                     lambda r_in: self.jr.render_at(r_in, state.enemies_x[i], state.enemies_y[i] + 47 - bounce_offset, spider_mask),
-                    lambda r_in: self.jr.render_at(r_in, state.enemies_x[i], state.enemies_y[i] + 47 - bounce_offset, self.SHAPE_MASKS["skull"][anim_idx]),
+                    lambda r_in: jax.lax.cond(
+                        state.enemies_type[i] == 4,
+                        lambda rr: self.jr.render_at(rr, state.enemies_x[i], state.enemies_y[i] + 47 - bounce_offset, snake_mask),
+                        lambda rr: self.jr.render_at(rr, state.enemies_x[i], state.enemies_y[i] + 47 - bounce_offset, self.SHAPE_MASKS["skull"][anim_idx]),
+                        r_in
+                    ),
                     r
                 )
             return jax.lax.cond(

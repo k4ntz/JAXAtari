@@ -417,9 +417,56 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 cx, cy, ca, cd,
                 lax, laa)
 
+    def load_room_2_2(args):
+        # Corresponds to ROOM_2_1 in M1
+        lx, lt, lb, la, ix, iy, ia, lax, laa = args
+        
+        lx = lx.at[0].set(72)
+        lt = lt.at[0].set(6)
+        lb = lb.at[0].set(44)
+        la = la.at[0].set(1)
+
+        ex = enemies_x.at[0].set(18)
+        ey = enemies_y.at[0].set(35) # Floor is at 48, snake height is 13. 48-13=35
+        ea = enemies_active.at[0].set(1)
+        ed = enemies_direction.at[0].set(0) # Static snake
+        eminx = enemies_min_x.at[0].set(18)
+        emaxx = enemies_max_x.at[0].set(47)
+
+        ex = ex.at[1].set(50)
+        ey = ey.at[1].set(35)
+        ea = ea.at[1].set(1)
+        ed = ed.at[1].set(0) # Static snake
+        eminx = eminx.at[1].set(50)
+        emaxx = emaxx.at[1].set(100) # Assuming some right boundary
+
+        eb = enemies_bouncing
+
+        rx = ropes_x
+        rt = ropes_top
+        rb = ropes_bottom
+        ra = ropes_active
+        
+        dx = doors_x
+        dy = doors_y
+        da = doors_active
+        
+        cx = conveyors_x
+        cy = conveyors_y
+        ca = conveyors_active
+        cd = conveyors_direction
+        
+        return (ex, ey, ea, ed, eminx, emaxx, eb,
+                lx, lt, lb, la,
+                rx, rt, rb, ra,
+                ix, iy, ia,
+                dx, dy, da,
+                cx, cy, ca, cd,
+                lax, laa)
+
     ex, ey, ea, ed, eminx, emaxx, eb, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd, lax, laa = jax.lax.switch(
         get_room_idx(room_id),
-        [load_room_0_3, load_room_0_4, load_room_0_5, load_room_1_3, load_room_1_2, load_room_1_4, load_room_1_5, load_room_1_6], args)
+        [load_room_0_3, load_room_0_4, load_room_0_5, load_room_1_3, load_room_1_2, load_room_1_4, load_room_1_5, load_room_1_6, load_room_2_2], args)
 
     return state.replace(
         room_id=room_id,
