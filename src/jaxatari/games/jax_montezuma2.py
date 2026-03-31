@@ -58,7 +58,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
     def reset(self, key: jrandom.PRNGKey) -> Tuple[Montezuma2Observation, Montezuma2State]:
         state = Montezuma2State(
-            room_id=jnp.array(5, dtype=jnp.int32),
+            room_id=jnp.array(self.consts.INITIAL_ROOM_ID, dtype=jnp.int32),
             lives=jnp.array(5, dtype=jnp.int32),
             score=jnp.array([0], dtype=jnp.int32),
             frame_count=jnp.array(0, dtype=jnp.int32),
@@ -156,7 +156,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         state = state.replace(global_items_active=gia, global_doors_active=gda, global_enemies_active=gea, global_enemies_type=gety, global_items_type=giy)
         
-        state = load_room(jnp.array(5, dtype=jnp.int32), state, self.consts)
+        state = load_room(jnp.array(self.consts.INITIAL_ROOM_ID, dtype=jnp.int32), state, self.consts)
         obs = self._get_observation(state)
         return obs, state
     def step(self, state: Montezuma2State, action: int) -> Tuple[Montezuma2Observation, Montezuma2State, float, bool, Montezuma2Info]:
