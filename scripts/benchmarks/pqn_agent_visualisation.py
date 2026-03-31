@@ -226,7 +226,7 @@ def main():
     env = LogWrapper(env)
 
     # Get network hyperparameters from config or use defaults
-    hidden_size = config.get("HIDDEN_SIZE", 128) if config else 256
+    hidden_size = config.get("HIDDEN_SIZE", 256) if config else 256
     num_layers = config.get("NUM_LAYERS", 3) if config else 3
     norm_type = config.get("NORM_TYPE", "layer_norm") if config else "layer_norm"
     norm_input = config.get("NORM_INPUT", False) if config else False

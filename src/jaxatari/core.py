@@ -23,6 +23,7 @@ def _warn_deprecated_obs_to_flat_array(env: JaxEnvironment) -> None:
         )
 
 
+
 # Map of game names to their module paths
 GAME_MODULES = {
     "amidar": "jaxatari.games.jax_amidar",
@@ -71,7 +72,6 @@ GAME_MODULES = {
     "videocube": "jaxatari.games.jax_videocube",
     "videopinball": "jaxatari.games.jax_videopinball",
     "wordzapper": "jaxatari.games.jax_wordzapper",
-    "defender": "jaxatari.games.jax_defender",
     # Add new games here
 }
 
@@ -84,12 +84,11 @@ MOD_MODULES = {
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
     "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod",
     "videopinball": "jaxatari.games.mods.videopinball_mods.VideoPinballEnvMod",
-    "tennis": "jaxatari.games.mods.tennis_mods.TennisEnvMod",
+    'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
     "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
     "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
     "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
     "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
-    "defender": "jaxatari.games.mods.defender_mods.DefenderEnvMod",
 }
 
 
@@ -98,14 +97,13 @@ def list_available_games() -> list[str]:
     return list(GAME_MODULES.keys())
 
 
-def make(
-    game_name: str,
-    mode: int = 0,
-    difficulty: int = 0,
-    mods_config: list = None,  # deprecated, output warning if its used
-    mods: list = None,
-    allow_conflicts: bool = False,
-) -> JaxEnvironment:
+def make(game_name: str, 
+         mode: int = 0, 
+         difficulty: int = 0,
+         mods_config: list = None, # deprecated, output warning if its used
+         mods: list = None,
+         allow_conflicts: bool = False
+         ) -> JaxEnvironment:
     """
     Creates and returns a JaxAtari game environment instance.
     This is the main entry point for creating environments.
@@ -136,7 +134,7 @@ def make(
         warnings.warn(
             "'mods_config' is deprecated and will be removed in future versions. "
             "Please use 'mods' instead.",
-            DeprecationWarning,
+            DeprecationWarning
         )
         mods = mods_config
 
@@ -144,17 +142,13 @@ def make(
         raise NotImplementedError(
             f"The game '{game_name}' does not exist. Available games: {list_available_games()}"
         )
-
+    
     try:
         # 1. Load the base environment class
         module = importlib.import_module(GAME_MODULES[game_name])
         env_class = None
         for _, obj in inspect.getmembers(module):
-            if (
-                inspect.isclass(obj)
-                and issubclass(obj, JaxEnvironment)
-                and obj is not JaxEnvironment
-            ):
+            if inspect.isclass(obj) and issubclass(obj, JaxEnvironment) and obj is not JaxEnvironment:
                 env_class = obj
                 break
         if env_class is None:
@@ -172,7 +166,7 @@ def make(
                     allow_conflicts=allow_conflicts,
                     base_consts=base_consts,
                     env_class=env_class,
-                    MOD_MODULES=MOD_MODULES,
+                    MOD_MODULES=MOD_MODULES
                 )
                 _warn_deprecated_obs_to_flat_array(env)
                 return env
@@ -181,7 +175,7 @@ def make(
                 warnings.warn(
                     f"Mods requested for '{game_name}' but no mod module is available. "
                     f"Creating base environment without mods. Error: {e}",
-                    UserWarning,
+                    UserWarning
                 )
 
         # No mods: return default base env with default constants
