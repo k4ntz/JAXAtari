@@ -683,8 +683,13 @@ class DarkChambersRenderer(JAXGameRenderer):
             'speed_potion_color': create_color_sprite(self.consts.SPEED_POTION_COLOR),
             'heal_potion_color': create_color_sprite(self.consts.HEAL_POTION_COLOR),
             'poison_potion_color': create_color_sprite(self.consts.POISON_POTION_COLOR),
+            'potion_cork_color': create_color_sprite((150, 75, 0)),
+            'potion_glass_color': create_color_sprite((200, 200, 200)),
+            'hammer_handle_color': create_color_sprite((180, 100, 30)),
             'hammer_color': create_color_sprite(self.consts.HAMMER_COLOR),
             'checkpoint_color': create_color_sprite(self.consts.CHECKPOINT_COLOR),
+            'checkpoint_pole_color': create_color_sprite((100, 100, 100)),
+            'checkpoint_star_color': create_color_sprite((255, 255, 255)),
         }
         
         # Append procedural color sprites to asset config
@@ -1016,25 +1021,76 @@ class DarkChambersRenderer(JAXGameRenderer):
         self.HAMMER_ID = self.COLOR_TO_ID[self.consts.HAMMER_COLOR]
         self.CHECKPOINT_ID = self.COLOR_TO_ID[self.consts.CHECKPOINT_COLOR]
         self.CHECKPOINT_ACTIVATED_ID = self.SHIELD_ID  # bright blue when activated
+        self.CHECKPOINT_POLE_ID = self.COLOR_TO_ID[(100, 100, 100)]
+        self.CHECKPOINT_STAR_ID = self.COLOR_TO_ID[(255, 255, 255)]
+        self.POTION_CORK_ID  = self.COLOR_TO_ID[(150, 75, 0)]
+        self.POTION_GLASS_ID = self.COLOR_TO_ID[(200, 200, 200)]
 
-        # Flag-on-a-pole sprite for checkpoints (6 wide x 12 tall)
-        import numpy as _np
-        _flag = _np.array([
-            [1, 1, 1, 1, 0, 0],
-            [1, 1, 1, 1, 1, 0],
-            [1, 1, 1, 1, 0, 0],
-            [0, 1, 0, 0, 0, 0],
-            [0, 1, 0, 0, 0, 0],
-            [0, 1, 0, 0, 0, 0],
-            [0, 1, 0, 0, 0, 0],
-            [0, 1, 0, 0, 0, 0],
-            [0, 1, 0, 0, 0, 0],
-            [0, 1, 0, 0, 0, 0],
-            [0, 1, 0, 0, 0, 0],
-            [0, 1, 0, 0, 0, 0],
-        ], dtype=_np.int32)
-        self.CHECKPOINT_SPRITE = jnp.where(_flag, self.CHECKPOINT_ID, self.jr.TRANSPARENT_ID)
-        self.CHECKPOINT_SPRITE_ACTIVATED = jnp.where(_flag, self.CHECKPOINT_ACTIVATED_ID, self.jr.TRANSPARENT_ID)
+        # Checkpoint flag sprites (10 wide × 16 tall): tapered pennant on a pole with base
+        _P = int(self.CHECKPOINT_POLE_ID)
+        _T = int(self.jr.TRANSPARENT_ID)
+
+        def _make_flag(flag_id, star_id):
+            _F, _S = int(flag_id), int(star_id)
+            return jnp.array([
+                [_T, _P, _F, _F, _F, _F, _F, _F, _T, _T],
+                [_T, _P, _F, _F, _F, _F, _F, _F, _F, _T],
+                [_T, _P, _F, _F, _S, _F, _F, _F, _T, _T],
+                [_T, _P, _F, _S, _S, _S, _F, _T, _T, _T],
+                [_T, _P, _F, _F, _S, _F, _T, _T, _T, _T],
+                [_T, _P, _F, _F, _T, _T, _T, _T, _T, _T],
+                [_T, _P, _T, _T, _T, _T, _T, _T, _T, _T],
+                [_T, _P, _T, _T, _T, _T, _T, _T, _T, _T],
+                [_T, _P, _T, _T, _T, _T, _T, _T, _T, _T],
+                [_T, _P, _T, _T, _T, _T, _T, _T, _T, _T],
+                [_T, _P, _T, _T, _T, _T, _T, _T, _T, _T],
+                [_T, _P, _T, _T, _T, _T, _T, _T, _T, _T],
+                [_T, _P, _T, _T, _T, _T, _T, _T, _T, _T],
+                [_T, _P, _T, _T, _T, _T, _T, _T, _T, _T],
+                [_P, _P, _P, _T, _T, _T, _T, _T, _T, _T],
+                [_T, _T, _T, _T, _T, _T, _T, _T, _T, _T],
+            ], dtype=jnp.int32)
+
+        # Inactive: gold flag, no star (star pixels = flag color)
+        self.CHECKPOINT_SPRITE = _make_flag(self.CHECKPOINT_ID, self.CHECKPOINT_ID)
+        # Activated: blue flag, white star
+        self.CHECKPOINT_SPRITE_ACTIVATED = _make_flag(self.CHECKPOINT_ACTIVATED_ID, self.CHECKPOINT_STAR_ID)
+
+        # Potion bottle sprites (8×8): cork top, glass outline, colored liquid inside
+        _T  = int(self.jr.TRANSPARENT_ID)
+        _C  = int(self.POTION_CORK_ID)
+        _G  = int(self.POTION_GLASS_ID)
+        def _make_potion_sprite(liquid_color_id):
+            _L = int(liquid_color_id)
+            return jnp.array([
+                [_T, _T, _C, _C, _C, _T, _T, _T],
+                [_T, _T, _G, _G, _G, _T, _T, _T],
+                [_T, _G, _L, _L, _L, _G, _T, _T],
+                [_T, _G, _L, _L, _L, _G, _T, _T],
+                [_T, _G, _L, _L, _L, _G, _T, _T],
+                [_T, _G, _L, _L, _L, _G, _T, _T],
+                [_T, _G, _G, _G, _G, _G, _T, _T],
+                [_T, _T, _T, _T, _T, _T, _T, _T],
+            ], dtype=jnp.int32)
+        self.SPEED_POTION_SPRITE  = _make_potion_sprite(self.COLOR_TO_ID[self.consts.SPEED_POTION_COLOR])
+        self.HEAL_POTION_SPRITE   = _make_potion_sprite(self.COLOR_TO_ID[self.consts.HEAL_POTION_COLOR])
+        self.POISON_POTION_SPRITE = _make_potion_sprite(self.COLOR_TO_ID[self.consts.POISON_POTION_COLOR])
+
+        # Hammer sprite (8×10): full-width T-shaped head + narrow centered handle
+        _H  = int(self.HAMMER_ID)                    # head color (purple/violet)
+        _HW = int(self.COLOR_TO_ID[(180, 100, 30)])  # handle wood (brown)
+        self.HAMMER_SPRITE = jnp.array([
+            [_T, _H, _H, _H, _H, _H, _H, _T],
+            [_H, _H, _H, _H, _H, _H, _H, _H],
+            [_H, _H, _H, _H, _H, _H, _H, _H],
+            [_T, _H, _H, _H, _H, _H, _H, _T],
+            [_T, _T, _T, _HW, _HW, _T, _T, _T],
+            [_T, _T, _T, _HW, _HW, _T, _T, _T],
+            [_T, _T, _T, _HW, _HW, _T, _T, _T],
+            [_T, _T, _T, _HW, _HW, _T, _T, _T],
+            [_T, _T, _T, _HW, _HW, _T, _T, _T],
+            [_T, _T, _T, _T, _T, _T, _T, _T],
+        ], dtype=jnp.int32)
 
         # Digit patterns (0-9) 3x5 bitmap (rows top->bottom, cols left->right)
         # 1 = pixel on, 0 = off
@@ -2163,6 +2219,38 @@ class DarkChambersRenderer(JAXGameRenderer):
                     raster
                 )
 
+            # ITEM_HAMMER = 18 -> hammer sprite
+            is_hammer = (item_type == ITEM_HAMMER) & is_active
+            raster = jax.lax.cond(
+                is_hammer,
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, self.HAMMER_SPRITE),
+                lambda r: r,
+                raster
+            )
+
+            # ITEM_SPEED_POTION = 15, ITEM_HEAL_POTION = 16, ITEM_POISON_POTION = 17 -> bottle sprites
+            is_speed_potion = (item_type == ITEM_SPEED_POTION) & is_active
+            raster = jax.lax.cond(
+                is_speed_potion,
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, self.SPEED_POTION_SPRITE),
+                lambda r: r,
+                raster
+            )
+            is_heal_potion = (item_type == ITEM_HEAL_POTION) & is_active
+            raster = jax.lax.cond(
+                is_heal_potion,
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, self.HEAL_POTION_SPRITE),
+                lambda r: r,
+                raster
+            )
+            is_poison_potion = (item_type == ITEM_POISON_POTION) & is_active
+            raster = jax.lax.cond(
+                is_poison_potion,
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, self.POISON_POTION_SPRITE),
+                lambda r: r,
+                raster
+            )
+
             # ITEM_CHECKPOINT = 19 -> flag sprite (gold = inactive, blue = activated)
             is_chk = (item_type == ITEM_CHECKPOINT) & is_active
             is_activated = (state.checkpoint_idx == i) & (state.checkpoint_map == state.map_index) & (state.checkpoint_level == state.current_level)
@@ -2181,7 +2269,7 @@ class DarkChambersRenderer(JAXGameRenderer):
         
         # Then render remaining items (treasures, powerups, etc.) as colored boxes
         # Skip types that now use sprites: HEART(1), POISON(2), TRAP(3), AMBER_CHALICE(5), AMULET(6), SHIELD(8), BOMB(10), KEY(11), LADDER_UP(12), LADDER_DOWN(13), CAGE_DOOR(14)
-        for t in [4, 7, 15, 16, 17, 18]:  # STRONGBOX(4), HOURGLASS(7), SPEED_POTION(15), HEAL_POTION(16), POISON_POTION(17), HAMMER(18)
+        for t in [4, 7]:  # STRONGBOX(4), HOURGLASS(7) — potions and hammer now use sprites
             object_raster = draw_item_type(object_raster, t, masked_item_pos)
         
         # Spawners: render as large skulls (24x24)
@@ -2471,22 +2559,16 @@ class DarkChambersRenderer(JAXGameRenderer):
         # Hammer indicator in HUD (shown next to bomb count when player has hammers)
         hammer_has_any = state.hammer_count > 0
         hammer_indicator_x = bomb_count_x + 12  # Fixed offset after bomb count area
-        hammer_indicator_pos = jnp.where(
+        object_raster = jax.lax.cond(
             hammer_has_any,
-            jnp.array([[hammer_indicator_x, indicator_y]], dtype=jnp.int32),
-            jnp.array([[-100, -100]], dtype=jnp.int32)
-        )
-        hammer_indicator_size = jnp.array([[ITEM_WIDTH, ITEM_HEIGHT]], dtype=jnp.int32)
-        object_raster = self.jr.draw_rects(
+            lambda r: self.jr.render_at_clipped(r, jnp.array(hammer_indicator_x), jnp.array(indicator_y), self.HAMMER_SPRITE),
+            lambda r: r,
             object_raster,
-            positions=hammer_indicator_pos,
-            sizes=hammer_indicator_size,
-            color_id=self.HAMMER_ID
         )
 
         # Hammer count digit
         hammer_count_val_hud = jnp.clip(state.hammer_count, 0, MAX_HAMMERS).astype(jnp.int32)
-        h_digit_x = hammer_indicator_x + ITEM_WIDTH + 2
+        h_digit_x = hammer_indicator_x + ITEM_WIDTH + 5
         h_digit_y = indicator_y + 1
         h_pattern = self.DIGIT_PATTERNS[hammer_count_val_hud]
         h_xs = jnp.arange(3)
