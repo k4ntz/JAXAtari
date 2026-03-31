@@ -73,9 +73,6 @@ GAME_MODULES = {
     "videocube": "jaxatari.games.jax_videocube",
     "videopinball": "jaxatari.games.jax_videopinball",
     "wordzapper": "jaxatari.games.jax_wordzapper",
-
-    "darkchambers": "jaxatari.games.jax_darkchambers"
-
     # Add new games here
 }
 
@@ -86,10 +83,13 @@ MOD_MODULES = {
     "freeway": "jaxatari.games.mods.freeway_mods.FreewayEnvMod",
     "breakout": "jaxatari.games.mods.breakout_mods.BreakoutEnvMod",
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
-    "darkchambers": "jaxatari.games.mods.darkchambers_mods.DarkchambersEnvMod",
     "videopinball": "jaxatari.games.mods.videopinball_mods.VideoPinballEnvMod",
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
+    "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
+    "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
+    "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
 }
+
 
 def list_available_games() -> list[str]:
     """Lists all available, registered games."""
@@ -159,7 +159,7 @@ def make(game_name: str,
         # 3. Handle mods if requested
         if mods:
             try:
-                return apply_modifications(
+                env = apply_modifications(
                     game_name=game_name,
                     mods_config=mods,
                     allow_conflicts=allow_conflicts,
@@ -167,6 +167,8 @@ def make(game_name: str,
                     env_class=env_class,
                     MOD_MODULES=MOD_MODULES
                 )
+                _warn_deprecated_obs_to_flat_array(env)
+                return env
             except NotImplementedError as e:
                 # Mod module not defined for this game - fall back to base environment
                 warnings.warn(
