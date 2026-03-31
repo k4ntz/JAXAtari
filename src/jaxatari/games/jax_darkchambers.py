@@ -488,7 +488,7 @@ class DarkChambersConstants(struct.PyTreeNode):
 
     # Base poison item spawn toggle (keeps poison logic intact, only disables spawning)
     ENABLE_DEFAULT_POISON_SPAWN: bool = struct.field(pytree_node=False, default=False)
-    ENABLE_DEFAULT_TRAP_SPAWN: bool = struct.field(pytree_node=False, default=True)
+    ENABLE_DEFAULT_TRAP_SPAWN: bool = struct.field(pytree_node=False, default=False)
 
     HAMMER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(148, 0, 211))  # Brown hammer
     ENABLE_HAMMER_SPAWN: bool = struct.field(pytree_node=False, default=False)
@@ -3034,7 +3034,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         spawn_probs = jnp.array([
             0.18,  # heart (reduced from 0.20)
             0.08 if self.consts.ENABLE_DEFAULT_POISON_SPAWN else 0.0,  # poison
-            0.15 if self.consts.ENABLE_DEFAULT_TRAP_SPAWN else 0.0,  # trap
+            0.0,  # trap disabled
             0.12,  # amber chalice (reduced from 0.14)
             0.08,  # amulet (reduced from 0.10)
             0.07,  # shield (reduced from 0.08)
@@ -4473,7 +4473,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 drop_types = jnp.array([
                     ITEM_HEART,
                     ITEM_POISON if self.consts.ENABLE_DEFAULT_POISON_SPAWN else ITEM_HEART,
-                    ITEM_TRAP if self.consts.ENABLE_DEFAULT_TRAP_SPAWN else ITEM_HEART,
+                    ITEM_HEART,
                     ITEM_AMBER_CHALICE, ITEM_AMULET,
                     ITEM_SHIELD, ITEM_GUN, ITEM_BOMB
                 ], dtype=jnp.int32)
@@ -5039,7 +5039,7 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 spawn_probs = jnp.array([
                     0.18,
                     0.08 if self.consts.ENABLE_DEFAULT_POISON_SPAWN else 0.0,
-                    0.15 if self.consts.ENABLE_DEFAULT_TRAP_SPAWN else 0.0,
+                    0.0,
                     0.12,
                     0.08,
                     0.07,
