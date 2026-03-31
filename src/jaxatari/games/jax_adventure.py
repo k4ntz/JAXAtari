@@ -1704,14 +1704,17 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
 
 class AdventureRenderer(JAXGameRenderer):
-    def __init__(self, consts: AdventureConstants = None):
+    def __init__(self, consts: AdventureConstants = None, config: render_utils.RendererConfig = None):
         super().__init__(consts)
         self.consts = consts or AdventureConstants()
-        self.config = render_utils.RendererConfig(
-            game_dimensions=(250, 160),
-            channels=3,
-            #ownscale=(200, 128)
-        )
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 1. Start from (possibly modded) asset config provided via constants
