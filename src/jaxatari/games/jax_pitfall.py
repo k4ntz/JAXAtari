@@ -416,7 +416,9 @@ class PitfallConstants(struct.PyTreeNode):
     player_start_x: int = 20    # where Harry starts (left side)
     player_start_y: int = 130  # same as ground_y (standing on ground)
 
-    player_speed: float = 3.0  # pixels per frame horizontally
+    # Max horizontal run speed. Tuned to match the rolling-log scroll speed
+    # implied by rolling_log_extra_step_period (1 px/frame + 1 px every N frames).
+    player_speed: float = 1.25  # pixels per frame horizontally
     jump_velocity: float = -4.0  # softer launch for floatier arcs
     gravity: float = 0.55       # symmetric gravity for longer hang-time
     fall_speed: float = 3.0    # terminal velocity cap on descent
@@ -446,6 +448,12 @@ class PitfallConstants(struct.PyTreeNode):
     wood_visual_contact_pad_x: int = 3  # start log interaction pose slightly before full overlap
     wood_visual_contact_shift_x: int = -3  # shift visual slide trigger slightly left
     rolling_log_extra_step_period: int = 4  # add 1px every N frames (e.g., N=4 => 1.25 px/frame)
+
+    # Rolling logs only: use a slightly larger early-contact zone so Harry is
+    # forced into the stable freeze/contact pose and can't comfortably pace a
+    # moving log in near lockstep. This does not affect stationary log scoring.
+    rolling_wood_contact_pad_x: int = 6
+    rolling_wood_contact_shift_x: int = -3
 
     # Fireplace hazard (upper ground)
     fire_w: int = 7
@@ -1285,10 +1293,22 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         overlap_seg2 = wraps & (x1 > seg2_x0) & (x0 < seg2_x1)
         overlap_x = overlap_seg1 | overlap_seg2
 
+        # Rolling-log contact uses an earlier padded/shifted overlap zone.
+        # Compute it before we potentially freeze X so the grab point is stable.
+        roll_pad_x = jnp.int32(consts.rolling_wood_contact_pad_x)
+        roll_shift_x = jnp.int32(consts.rolling_wood_contact_shift_x)
+        roll_seg1_x0 = seg1_x0 + roll_shift_x
+        roll_seg1_x1 = seg1_x1 + roll_shift_x
+        roll_seg2_x0 = seg2_x0 + roll_shift_x
+        roll_seg2_x1 = seg2_x1 + roll_shift_x
+        roll_overlap_seg1 = (x1 > (roll_seg1_x0 - roll_pad_x)) & (x0 < (roll_seg1_x1 + roll_pad_x))
+        roll_overlap_seg2 = wraps & (x1 > (roll_seg2_x0 - roll_pad_x)) & (x0 < (roll_seg2_x1 + roll_pad_x))
+        roll_overlap_x = roll_overlap_seg1 | roll_overlap_seg2
+
         # Rolling logs: block Harry without dragging him. If a rolling log
         # would overlap this frame, freeze X at the contact point.
         rolling_active = has_logs & logs_are_rolling & gameplay_active & on_upper_level & on_ground & (~on_ladder)
-        rolling_would_overlap = rolling_active & jnp.any(active & overlap_x & overlap_y)
+        rolling_would_overlap = rolling_active & jnp.any(active & roll_overlap_x & overlap_y)
         started_rolling_contact = rolling_would_overlap & (~state.touching_rolling_wood)
         rolling_contact_x = jnp.where(
             started_rolling_contact,
