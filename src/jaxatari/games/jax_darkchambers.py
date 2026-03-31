@@ -1,6 +1,6 @@
 import os
 from functools import partial
-from typing import Tuple
+from typing import ClassVar, Tuple
 from flax import struct
 import jax
 import jax.lax
@@ -712,42 +712,6 @@ class DarkChambersRenderer(JAXGameRenderer):
             target_w = self.config.downscale[1] if self.config.downscale else GAME_W
             self.BACKGROUND = jnp.full((target_h, target_w), bg_color_id, dtype=jnp.uint8)
         
-        # Print sprite sizes for debugging
-        print("\n=== SPRITE SIZES ===")
-        if "player" in self.SHAPE_MASKS:
-            print(f"Player sprite shape: {self.SHAPE_MASKS['player'].shape}")
-        if "zombie" in self.SHAPE_MASKS:
-            print(f"Zombie sprite shape: {self.SHAPE_MASKS['zombie'].shape}")
-        if "wraith" in self.SHAPE_MASKS:
-            print(f"Wraith sprite shape: {self.SHAPE_MASKS['wraith'].shape}")
-        if "skeleton" in self.SHAPE_MASKS:
-            print(f"Skeleton sprite shape: {self.SHAPE_MASKS['skeleton'].shape}")
-        if "wizard" in self.SHAPE_MASKS:
-            print(f"Wizard sprite shape: {self.SHAPE_MASKS['wizard'].shape}")
-        
-        # Item sprites
-        if "pot" in self.SHAPE_MASKS:
-            print(f"Pot (shield) sprite shape: {self.SHAPE_MASKS['pot'].shape}")
-        if "skull" in self.SHAPE_MASKS:
-            print(f"Skull sprite shape: {self.SHAPE_MASKS['skull'].shape}")
-        if "stairs" in self.SHAPE_MASKS:
-            print(f"Stairs sprite shape: {self.SHAPE_MASKS['stairs'].shape}")
-        if "trapdoor" in self.SHAPE_MASKS:
-            print(f"Trapdoor sprite shape: {self.SHAPE_MASKS['trapdoor'].shape}")
-        if "apple" in self.SHAPE_MASKS:
-            print(f"Apple sprite shape: {self.SHAPE_MASKS['apple'].shape}")
-        if "barrel" in self.SHAPE_MASKS:
-            print(f"Barrel sprite shape: {self.SHAPE_MASKS['barrel'].shape}")
-        if "candle" in self.SHAPE_MASKS:
-            print(f"Candle sprite shape: {self.SHAPE_MASKS['candle'].shape}")
-        if "chain" in self.SHAPE_MASKS:
-            print(f"Chain sprite shape: {self.SHAPE_MASKS['chain'].shape}")
-        if "door" in self.SHAPE_MASKS:
-            print(f"Door sprite shape: {self.SHAPE_MASKS['door'].shape}")
-        if "key" in self.SHAPE_MASKS:
-            print(f"Key sprite shape: {self.SHAPE_MASKS['key'].shape}")
-        print("===================\n")
-        
         # Helper to scale palette-index masks to a target size (centered pad/crop)
         # Use transparent ID for padding so sprite bounding boxes never erase walls/background.
         def _scale_mask(mask: jnp.ndarray, target_h: int, target_w: int, align: str = 'center') -> jnp.ndarray:
@@ -809,7 +773,6 @@ class DarkChambersRenderer(JAXGameRenderer):
             ]
             player_dirs.append(jnp.stack(dir_frames))  # (5, H, W)
         self.PLAYER_ANIM_FRAMES = jnp.stack(player_dirs)  # (4, 5, H, W)
-        print(f"Built player animation frames: {self.PLAYER_ANIM_FRAMES.shape}")
         # Legacy aliases
         self.PLAYER_DIRECTIONAL_MASKS = None
         self.PLAYER_SCALED_MASK = player_dirs[0][0]
@@ -844,7 +807,6 @@ class DarkChambersRenderer(JAXGameRenderer):
                 dir_frames.append(_scale_mask(m, target_enemy_h, target_enemy_w, _DIR_ALIGN[d_idx]) if m is not None else _zero_frame)
             ghost_dirs.append(jnp.stack(dir_frames))  # (3, H, W)
         self.GHOST_ANIM_FRAMES = jnp.stack(ghost_dirs)  # (4, 3, H, W)
-        print(f"Built ghost animation frames: {self.GHOST_ANIM_FRAMES.shape}")
 
         # Ghost does not use the generic directional mask path
         self.ENEMY_DIRECTIONAL_MASKS["wraith"] = None
@@ -866,7 +828,6 @@ class DarkChambersRenderer(JAXGameRenderer):
                 dir_frames.append(_scale_mask(m, target_enemy_h, target_enemy_w, _DIR_ALIGN[d_idx]) if m is not None else _zero_frame)
             wizard_dirs.append(jnp.stack(dir_frames))  # (8, H, W)
         self.WIZARD_ANIM_FRAMES = jnp.stack(wizard_dirs)  # (4, 8, H, W)
-        print(f"Built wizard animation frames: {self.WIZARD_ANIM_FRAMES.shape}")
 
         # Wizard does not use the generic directional mask path
         self.ENEMY_DIRECTIONAL_MASKS["wizard"] = None
@@ -889,7 +850,6 @@ class DarkChambersRenderer(JAXGameRenderer):
             ]
             skel_dirs.append(jnp.stack(dir_frames))  # (4, H, W)
         self.SKELETON_ANIM_FRAMES = jnp.stack(skel_dirs)  # (4, 4, H, W)
-        print(f"Built skeleton animation frames: {self.SKELETON_ANIM_FRAMES.shape}")
 
         # Skeleton does not use the generic directional mask path
         self.ENEMY_DIRECTIONAL_MASKS["skeleton"] = None
@@ -917,7 +877,6 @@ class DarkChambersRenderer(JAXGameRenderer):
                 dir_frames.append(frame)
             grim_dirs.append(jnp.stack(dir_frames))  # (4, H, W)
         self.GRIM_REAPER_ANIM_FRAMES = jnp.stack(grim_dirs)  # (4, 4, H, W)
-        print(f"Built grim reaper animation frames: {self.GRIM_REAPER_ANIM_FRAMES.shape}")
 
         # Zombie directional animation: (4, 8, H, W) — max 8 frames, pad shorter directions
         # Direction order: 0=right, 1=down, 2=left, 3=up
@@ -936,7 +895,6 @@ class DarkChambersRenderer(JAXGameRenderer):
             ]
             zombie_dirs.append(jnp.stack(dir_frames))  # (5, H, W)
         self.ZOMBIE_ANIM_FRAMES = jnp.stack(zombie_dirs)  # (4, 8, H, W)
-        print(f"Built zombie animation frames: {self.ZOMBIE_ANIM_FRAMES.shape}")
 
         # Zombie does not use the generic directional mask path
         self.ENEMY_DIRECTIONAL_MASKS["zombie"] = None
@@ -963,7 +921,6 @@ class DarkChambersRenderer(JAXGameRenderer):
             item_mask = self.SHAPE_MASKS.get(sprite_name)
             if item_mask is not None:
                 self.ITEM_SCALED_MASKS[item_key] = _scale_mask(item_mask, target_item_h, target_item_w)
-                print(f"Scaled {sprite_name} to {target_item_h}×{target_item_w}")
             else:
                 self.ITEM_SCALED_MASKS[item_key] = None
 
@@ -987,7 +944,6 @@ class DarkChambersRenderer(JAXGameRenderer):
         skull_mask = self.SHAPE_MASKS.get("skull")
         if skull_mask is not None:
             self.SPAWNER_SKULL_MASK = _scale_mask(skull_mask, SPAWNER_HEIGHT, SPAWNER_WIDTH)
-            print(f"Scaled skull sprite to {SPAWNER_WIDTH}x{SPAWNER_HEIGHT} for spawner (2:1 aspect, original width)")
         else:
             self.SPAWNER_SKULL_MASK = None
 
@@ -2643,10 +2599,35 @@ class DarkChambersRenderer(JAXGameRenderer):
 
 class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation, DarkChambersInfo, DarkChambersConstants]):
     """JAX environment for the game Dark Chambers."""
-    
+
+    _renderer_cache: ClassVar[dict] = {}
+
+    def __new__(cls, consts: DarkChambersConstants = None):
+        resolved = consts or DarkChambersConstants()
+        try:
+            import dataclasses as _dc
+            _key = tuple(
+                (f.name, getattr(resolved, f.name))
+                for f in _dc.fields(resolved)
+            )
+        except Exception:
+            return super().__new__(cls)
+        import sys as _sys
+        _registry = _sys.modules.setdefault('_jaxatari_darkchambers_env_registry', {})
+        if _key in _registry:
+            return _registry[_key]
+        instance = super().__new__(cls)
+        _registry[_key] = instance
+        return instance
+
     def __init__(self, consts: DarkChambersConstants = None):
+        # Guard: __init__ is called on the cached instance on every DarkChambersEnv()
+        # call, so skip all initialisation after the first time.
+        if getattr(self, '_dc_initialized', False):
+            return
+        self._dc_initialized = True
+
         super().__init__(consts=consts or DarkChambersConstants())
-        self.renderer = DarkChambersRenderer(self.consts)
         w_eff = int(self.consts.ENEMY_WIDTH  - 2 * ENEMY_COLLISION_MARGIN)
         h_eff = int(self.consts.ENEMY_HEIGHT - 2 * ENEMY_COLLISION_MARGIN)
 
@@ -2656,20 +2637,29 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         self._wall_inflate_kh = 2 * r_y + 1
         self._wall_inflate_kw = 2 * r_x + 1
 
+        # Reuse a single shared renderer for all instances with the same config.
+        _cache_key = (type(self).__name__, self._wall_inflate_kh, self._wall_inflate_kw,
+                      hash(self.consts))
+        if _cache_key not in DarkChambersEnv._renderer_cache:
+            DarkChambersEnv._renderer_cache[_cache_key] = DarkChambersRenderer(self.consts)
+        self.renderer = DarkChambersEnv._renderer_cache[_cache_key]
+
     def __hash__(self):
-        # Allow JAX JIT to reuse compiled functions across instances with identical config.
-        # Without this, each new instance triggers a full recompilation (~30-90s for darkchambers).
         try:
-            consts_repr = repr(self.consts)
+            consts_hash = hash(self.consts)
         except Exception:
-            consts_repr = ""
-        return hash((type(self).__name__, consts_repr,
+            consts_hash = id(self.consts)
+        return hash((type(self).__name__, consts_hash,
                      self._wall_inflate_kh, self._wall_inflate_kw))
 
     def __eq__(self, other):
         if type(self) is not type(other):
             return NotImplemented
-        return (repr(self.consts) == repr(other.consts)
+        try:
+            consts_eq = (self.consts == other.consts)
+        except Exception:
+            consts_eq = (self.consts is other.consts)
+        return (consts_eq
                 and self._wall_inflate_kh == other._wall_inflate_kh
                 and self._wall_inflate_kw == other._wall_inflate_kw)
 
