@@ -1,21 +1,43 @@
 from functools import partial
 import os
-from typing import NamedTuple, Tuple
+from typing import Tuple, NamedTuple
 import jax.lax
 import jax.numpy as jnp
 import chex
 import numpy as np
 from queue import Queue
+from flax import struct
 
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 
 
-def get_default_asset_config() -> list:
+LEVEL_1: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_1.npy")
+LEVEL_2: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_2.npy")
+LEVEL_3: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_3.npy")
+LEVEL_4: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_4.npy")
+LEVEL_5: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_5.npy")
+LEVEL_6: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_6.npy")
+LEVEL_7: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_7.npy")
+LEVEL_8: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_8.npy")
+LEVEL_9: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_9.npy")
+
+WALL_LAYOUT_LEVEL_1: chex.Array = (LEVEL_1[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
+WALL_LAYOUT_LEVEL_2: chex.Array = (LEVEL_2[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
+WALL_LAYOUT_LEVEL_3: chex.Array = (LEVEL_3[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
+WALL_LAYOUT_LEVEL_4: chex.Array = (LEVEL_4[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
+WALL_LAYOUT_LEVEL_5: chex.Array = (LEVEL_5[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
+WALL_LAYOUT_LEVEL_6: chex.Array = (LEVEL_6[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
+WALL_LAYOUT_LEVEL_7: chex.Array = (LEVEL_7[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
+WALL_LAYOUT_LEVEL_8: chex.Array = (LEVEL_8[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
+WALL_LAYOUT_LEVEL_9: chex.Array = (LEVEL_9[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
+
+
+def _get_default_asset_config() -> tuple:
     """Returns the declarative manifest of all default assets for the game."""
-    return [
+    return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
         {'name': 'player', 'type': 'single', 'file': 'player.npy'},
         {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
@@ -32,17 +54,10 @@ def get_default_asset_config() -> list:
         {'name': 'level_7', 'type': 'single', 'file': 'level_7.npy'},
         {'name': 'level_8', 'type': 'single', 'file': 'level_8.npy'},
         {'name': 'level_9', 'type': 'single', 'file': 'level_9.npy'},
-    ]
+    )
 
 
-class EntityPosition(NamedTuple):
-    x: chex.Array
-    y: chex.Array
-    width: chex.Array
-    height: chex.Array
-
-
-def get_score_mask(wall_layout: chex.Array, hole: EntityPosition, ball_width: int, ball_height: int) -> chex.Array:
+def get_score_mask(wall_layout: chex.Array, hole: ObjectObservation, ball_width: int, ball_height: int) -> chex.Array:
     dist = np.zeros_like(wall_layout) + np.inf
     q: Queue[Tuple[int, int]] = Queue(maxsize=int(np.prod(wall_layout.shape)))
     for y in range(hole.y - ball_height + 1, hole.y + hole.height):
@@ -68,74 +83,86 @@ def get_score_mask(wall_layout: chex.Array, hole: EntityPosition, ball_width: in
     return 1 / (1 + jnp.array(dist))
 
 
-class MiniatureGolfConstants(NamedTuple):
-    WIDTH: int = 160
-    HEIGHT: int = 210
-    BALL_START_X: chex.Array = jnp.array([133, 78, 6, 8, 26, 8, 8, 138, 128])
-    BALL_START_Y: chex.Array = jnp.array([179, 189, 49, 147, 37, 111, 55, 49, 133])
-    HOLE_X: chex.Array = jnp.array([8, 83, 83, 82, 148, 148, 153, 29, 19])
-    HOLE_Y: chex.Array = jnp.array([190, 49, 123, 89, 189, 111, 55, 111, 46])
-    BACKGROUND_COLOR: Tuple[int, int, int] = (92, 186, 92)
-    PLAYER_COLOR: Tuple[int, int, int] = (66, 72, 200)
-    OBSTACLE_COLOR: Tuple[int, int, int] = (214, 92, 92)
-    OBSTACLE_MIN_X: chex.Array = jnp.array([1, 1, 1, 55, 69, 67, 78, 26, 1])               # special case level 8:
-    OBSTACLE_MAX_X: chex.Array = jnp.array([35, 148, 35, 103, 69, 67, 78, 26, 109])        # barrier y counts down
-    OBSTACLE_MIN_Y: chex.Array = jnp.array([121, 121, 99, 47, 87, 27, 57, 0, 121])      # from 255 to 0
-    OBSTACLE_MAX_Y: chex.Array = jnp.array([121, 121, 99, 47, 163, 185, 177, 255, 121])      # wrapping back to 255
-    HOLE_COLOR: Tuple[int, int, int] = (66, 72, 200)
-    BALL_COLOR: Tuple[int, int, int] = (210, 210, 64)
-    WALL_COLOR: Tuple[int, int, int] = (210, 210, 64)
-    SCORE_COLOR: Tuple[int, int, int] = (66, 72, 200)
-    PLAYER_START_X: chex.Array = jnp.array([133, 78, 6, 8, 26, 8, 8, 138, 128])
-    PLAYER_START_Y: chex.Array = jnp.array([175, 185, 45, 143, 33, 107, 51, 45, 129])
-    PLAYER_MIN_Y: int = 23
-    PLAYER_MAX_Y: int = 195
-    PAR_VALUES: chex.Array = jnp.array([4, 3, 4, 4, 4, 3, 7, 3, 4])
-    PLAYER_SIZE: Tuple[int, int] = (4, 8)
-    BALL_SIZE: Tuple[int, int] = (2, 4)
-    HOLE_SIZE: Tuple[int, int] = (3, 4)
-    OBSTACLE_SIZE: Tuple[int, int] = (8, 16)
-    DIGIT_SIZE: Tuple[int, int] = (12, 10)
-    SCORE_POS_TENS_DIGIT: Tuple[int, int] = (16, 9)
-    SCORE_POS_ONES_DIGIT: Tuple[int, int] = (32, 9)
-    PAR_POS: Tuple[int, int] = (112, 9)
-    NUM_LEVELS: int = 9
+HOLE_X: Tuple[int, int, int, int, int, int, int, int, int] = (8, 83, 83, 82, 148, 148, 153, 29, 19)
+HOLE_Y: Tuple[int, int, int, int, int, int, int, int, int] = (190, 49, 123, 89, 189, 111, 55, 111, 46)
+HOLE_SIZE: Tuple[int, int] = (3, 4)
+BALL_SIZE: Tuple[int, int] = (2, 4)
 
-    LEVEL_1: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_1.npy")
-    LEVEL_2: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_2.npy")
-    LEVEL_3: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_3.npy")
-    LEVEL_4: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_4.npy")
-    LEVEL_5: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_5.npy")
-    LEVEL_6: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_6.npy")
-    LEVEL_7: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_7.npy")
-    LEVEL_8: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_8.npy")
-    LEVEL_9: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_9.npy")
+SCORE_MASK_LEVEL_1: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_1, ObjectObservation.create(HOLE_X[0], HOLE_Y[0], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
+SCORE_MASK_LEVEL_2: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_2, ObjectObservation.create(HOLE_X[1], HOLE_Y[1], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
+SCORE_MASK_LEVEL_3: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_3, ObjectObservation.create(HOLE_X[2], HOLE_Y[2], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
+SCORE_MASK_LEVEL_4: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_4, ObjectObservation.create(HOLE_X[3], HOLE_Y[3], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
+SCORE_MASK_LEVEL_5: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_5, ObjectObservation.create(HOLE_X[4], HOLE_Y[4], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
+SCORE_MASK_LEVEL_6: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_6, ObjectObservation.create(HOLE_X[5], HOLE_Y[5], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
+SCORE_MASK_LEVEL_7: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_7, ObjectObservation.create(HOLE_X[6], HOLE_Y[6], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
+SCORE_MASK_LEVEL_8: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_8, ObjectObservation.create(HOLE_X[7], HOLE_Y[7], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
+SCORE_MASK_LEVEL_9: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_9, ObjectObservation.create(HOLE_X[8], HOLE_Y[8], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
 
-    WALL_LAYOUT_LEVEL_1: chex.Array = (LEVEL_1[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
-    WALL_LAYOUT_LEVEL_2: chex.Array = (LEVEL_2[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
-    WALL_LAYOUT_LEVEL_3: chex.Array = (LEVEL_3[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
-    WALL_LAYOUT_LEVEL_4: chex.Array = (LEVEL_4[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
-    WALL_LAYOUT_LEVEL_5: chex.Array = (LEVEL_5[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
-    WALL_LAYOUT_LEVEL_6: chex.Array = (LEVEL_6[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
-    WALL_LAYOUT_LEVEL_7: chex.Array = (LEVEL_7[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
-    WALL_LAYOUT_LEVEL_8: chex.Array = (LEVEL_8[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
-    WALL_LAYOUT_LEVEL_9: chex.Array = (LEVEL_9[:,:,:3] == jnp.array(WALL_COLOR))[:,:,0].astype(jnp.int32)
 
-    SCORE_MASK_LEVEL_1: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_1, EntityPosition(HOLE_X[0], HOLE_Y[0], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
-    SCORE_MASK_LEVEL_2: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_2, EntityPosition(HOLE_X[1], HOLE_Y[1], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
-    SCORE_MASK_LEVEL_3: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_3, EntityPosition(HOLE_X[2], HOLE_Y[2], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
-    SCORE_MASK_LEVEL_4: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_4, EntityPosition(HOLE_X[3], HOLE_Y[3], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
-    SCORE_MASK_LEVEL_5: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_5, EntityPosition(HOLE_X[4], HOLE_Y[4], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
-    SCORE_MASK_LEVEL_6: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_6, EntityPosition(HOLE_X[5], HOLE_Y[5], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
-    SCORE_MASK_LEVEL_7: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_7, EntityPosition(HOLE_X[6], HOLE_Y[6], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
-    SCORE_MASK_LEVEL_8: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_8, EntityPosition(HOLE_X[7], HOLE_Y[7], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
-    SCORE_MASK_LEVEL_9: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_9, EntityPosition(HOLE_X[8], HOLE_Y[8], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
+class LevelConstants(NamedTuple):
+    wall_layout: chex.Array
+    score_mask: chex.Array
 
-    ASSET_CONFIG: list = get_default_asset_config()
+
+LEVEL_1_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_1, score_mask=SCORE_MASK_LEVEL_1)
+LEVEL_2_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_2, score_mask=SCORE_MASK_LEVEL_2)
+LEVEL_3_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_3, score_mask=SCORE_MASK_LEVEL_3)
+LEVEL_4_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_4, score_mask=SCORE_MASK_LEVEL_4)
+LEVEL_5_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_5, score_mask=SCORE_MASK_LEVEL_5)
+LEVEL_6_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_6, score_mask=SCORE_MASK_LEVEL_6)
+LEVEL_7_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_7, score_mask=SCORE_MASK_LEVEL_7)
+LEVEL_8_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_8, score_mask=SCORE_MASK_LEVEL_8)
+LEVEL_9_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_9, score_mask=SCORE_MASK_LEVEL_9)
+
+
+class MiniatureGolfConstants(struct.PyTreeNode):
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    BALL_START_X: Tuple[int, int, int, int, int, int, int, int, int] = struct.field(pytree_node=False, default=(133, 78, 6, 8, 26, 8, 8, 138, 128))
+    BALL_START_Y: Tuple[int, int, int, int, int, int, int, int, int] = struct.field(pytree_node=False, default=(179, 189, 49, 147, 37, 111, 55, 49, 133))
+    HOLE_X: Tuple[int, int, int, int, int, int, int, int, int] = struct.field(pytree_node=False, default=HOLE_X)
+    HOLE_Y: Tuple[int, int, int, int, int, int, int, int, int] = struct.field(pytree_node=False, default=HOLE_Y)
+    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(92, 186, 92))
+    PLAYER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(66, 72, 200))
+    OBSTACLE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(214, 92, 92))
+    OBSTACLE_MIN_X: Tuple[int, int, int, int, int, int, int, int, int] = struct.field(pytree_node=False, default=(1, 1, 1, 55, 69, 67, 78, 26, 1))
+    OBSTACLE_MAX_X: Tuple[int, int, int, int, int, int, int, int, int] = struct.field(pytree_node=False, default=(35, 148, 35, 103, 69, 67, 78, 26, 109))
+    OBSTACLE_MIN_Y: Tuple[int, int, int, int, int, int, int, int, int] = struct.field(pytree_node=False, default=(121, 121, 99, 47, 87, 27, 57, 0, 121))
+    OBSTACLE_MAX_Y: Tuple[int, int, int, int, int, int, int, int, int] = struct.field(pytree_node=False, default=(121, 121, 99, 47, 163, 185, 177, 255, 121))
+    HOLE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(66, 72, 200))
+    BALL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(210, 210, 64))
+    WALL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(210, 210, 64))
+    SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(66, 72, 200))
+    PLAYER_START_X: Tuple[int, int, int, int, int, int, int, int, int] = struct.field(pytree_node=False, default=(133, 78, 6, 8, 26, 8, 8, 138, 128))
+    PLAYER_START_Y: Tuple[int, int, int, int, int, int, int, int, int] = struct.field(pytree_node=False, default=(175, 185, 45, 143, 33, 107, 51, 45, 129))
+    PLAYER_MIN_Y: int = struct.field(pytree_node=False, default=23)
+    PLAYER_MAX_Y: int = struct.field(pytree_node=False, default=195)
+    PAR_VALUES: Tuple[int, int, int, int, int, int, int, int, int] = struct.field(pytree_node=False, default=(4, 3, 4, 4, 4, 3, 7, 3, 4))
+    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 8))
+    BALL_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=BALL_SIZE)
+    HOLE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=HOLE_SIZE)
+    OBSTACLE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 16))
+    DIGIT_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(12, 10))
+    SCORE_POS_TENS_DIGIT: Tuple[int, int] = struct.field(pytree_node=False, default=(16, 9))
+    SCORE_POS_ONES_DIGIT: Tuple[int, int] = struct.field(pytree_node=False, default=(32, 9))
+    PAR_POS: Tuple[int, int] = struct.field(pytree_node=False, default=(112, 9))
+    NUM_LEVELS: int = struct.field(pytree_node=False, default=9)
+
+    LEVEL_1_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_1_CONSTANTS)
+    LEVEL_2_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_2_CONSTANTS)
+    LEVEL_3_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_3_CONSTANTS)
+    LEVEL_4_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_4_CONSTANTS)
+    LEVEL_5_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_5_CONSTANTS)
+    LEVEL_6_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_6_CONSTANTS)
+    LEVEL_7_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_7_CONSTANTS)
+    LEVEL_8_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_8_CONSTANTS)
+    LEVEL_9_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_9_CONSTANTS)
+
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
 
 # immutable state container
-class MiniatureGolfState(NamedTuple):
+class MiniatureGolfState(struct.PyTreeNode):
     player_x: chex.Array
     player_y: chex.Array
     ball_x: chex.Array
@@ -159,20 +186,25 @@ class MiniatureGolfState(NamedTuple):
     right_number: chex.Array
 
 
-class MiniatureGolfObservation(NamedTuple):
-    player: EntityPosition
-    hole: EntityPosition
-    ball: EntityPosition
-    obstacle: EntityPosition
+class MiniatureGolfObservation(struct.PyTreeNode):
+    player: ObjectObservation
+    hole: ObjectObservation
+    ball: ObjectObservation
+    obstacle: ObjectObservation
     shot_count: chex.Array
     wall_layout: chex.Array
 
 
-class MiniatureGolfInfo(NamedTuple):
+class MiniatureGolfInfo(struct.PyTreeNode):
     pass
 
 
 class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservation, MiniatureGolfInfo, MiniatureGolfConstants]):
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN],
+        dtype=jnp.int32,
+    )
+
     def __init__(self, consts: MiniatureGolfConstants = None, reward_funcs: list[callable]=None):
         consts = consts or MiniatureGolfConstants()
         super().__init__(consts)
@@ -180,14 +212,6 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
-        self.action_set = [
-            Action.NOOP,
-            Action.FIRE,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.UP,
-            Action.DOWN,
-        ]
 
     def _overlaps_wall(self, wall_layout: chex.Array, x: chex.Array, y: chex.Array):
         return wall_layout[y, x] == 1
@@ -596,15 +620,15 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
 
         wall_layout_new = jax.lax.select_n(
             level_new,
-            self.consts.WALL_LAYOUT_LEVEL_1,
-            self.consts.WALL_LAYOUT_LEVEL_2,
-            self.consts.WALL_LAYOUT_LEVEL_3,
-            self.consts.WALL_LAYOUT_LEVEL_4,
-            self.consts.WALL_LAYOUT_LEVEL_5,
-            self.consts.WALL_LAYOUT_LEVEL_6,
-            self.consts.WALL_LAYOUT_LEVEL_7,
-            self.consts.WALL_LAYOUT_LEVEL_8,
-            self.consts.WALL_LAYOUT_LEVEL_9,
+            self.consts.LEVEL_1_CONSTANTS.wall_layout,
+            self.consts.LEVEL_2_CONSTANTS.wall_layout,
+            self.consts.LEVEL_3_CONSTANTS.wall_layout,
+            self.consts.LEVEL_4_CONSTANTS.wall_layout,
+            self.consts.LEVEL_5_CONSTANTS.wall_layout,
+            self.consts.LEVEL_6_CONSTANTS.wall_layout,
+            self.consts.LEVEL_7_CONSTANTS.wall_layout,
+            self.consts.LEVEL_8_CONSTANTS.wall_layout,
+            self.consts.LEVEL_9_CONSTANTS.wall_layout,
         )
         wall_layout_new = jnp.where(player_goal, wall_layout_new, state.wall_layout)
 
@@ -811,27 +835,27 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
 
     def reset(self, key=None) -> Tuple[MiniatureGolfObservation, MiniatureGolfState]:
         state = MiniatureGolfState(
-            player_x=self.consts.PLAYER_START_X[0],
-            player_y=self.consts.PLAYER_START_Y[0],
-            ball_x=self.consts.BALL_START_X[0],
-            ball_y=self.consts.BALL_START_Y[0],
+            player_x=jnp.array(self.consts.PLAYER_START_X[0]).astype(jnp.int32),
+            player_y=jnp.array(self.consts.PLAYER_START_Y[0]).astype(jnp.int32),
+            ball_x=jnp.array(self.consts.BALL_START_X[0]).astype(jnp.int32),
+            ball_y=jnp.array(self.consts.BALL_START_Y[0]).astype(jnp.int32),
             ball_x_subpixel=jnp.array(0),
             ball_y_subpixel=jnp.array(0),
             ball_vel_x=jnp.array(0),
             ball_vel_y=jnp.array(0),
-            hole_x=self.consts.HOLE_X[0],
-            hole_y=self.consts.HOLE_Y[0],
-            obstacle_x=self.consts.OBSTACLE_MIN_X[0],
-            obstacle_y=self.consts.OBSTACLE_MIN_Y[0],
+            hole_x=jnp.array(self.consts.HOLE_X[0]).astype(jnp.int32),
+            hole_y=jnp.array(self.consts.HOLE_Y[0]).astype(jnp.int32),
+            obstacle_x=jnp.array(self.consts.OBSTACLE_MIN_X[0]).astype(jnp.int32),
+            obstacle_y=jnp.array(self.consts.OBSTACLE_MIN_Y[0]).astype(jnp.int32),
             obstacle_dir=jnp.array(0),
             shot_count=jnp.array(0),
             level=jnp.array(0),
-            wall_layout=self.consts.WALL_LAYOUT_LEVEL_1,
+            wall_layout=self.consts.LEVEL_1_CONSTANTS.wall_layout,
             acceleration_threshold=jnp.array(0),
             acceleration_counter=jnp.array(0),
             mod_4_counter=jnp.array(0),
             fire_prev=jnp.array(False),
-            right_number=self.consts.PAR_VALUES[0],
+            right_number=jnp.array(self.consts.PAR_VALUES[0]).astype(jnp.int32),
         )
         initial_obs = self._get_observation(state)
 
@@ -853,33 +877,32 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
 
         return observation, state, env_reward, done, info
 
-
     def render(self, state: MiniatureGolfState) -> jnp.ndarray:
         return self.renderer.render(state)
 
     def _get_observation(self, state: MiniatureGolfState):
-        player = EntityPosition(
+        player = ObjectObservation.create(
             x=state.player_x,
             y=state.player_y,
             width=jnp.array(self.consts.PLAYER_SIZE[0]),
             height=jnp.array(self.consts.PLAYER_SIZE[1]),
         )
 
-        hole = EntityPosition(
+        hole = ObjectObservation.create(
             x=state.hole_x,
             y=state.hole_y,
             width=jnp.array(self.consts.HOLE_SIZE[0]),
             height=jnp.array(self.consts.HOLE_SIZE[1]),
         )
 
-        ball = EntityPosition(
+        ball = ObjectObservation.create(
             x=state.ball_x,
             y=state.ball_y,
             width=jnp.array(self.consts.BALL_SIZE[0]),
             height=jnp.array(self.consts.BALL_SIZE[1]),
         )
 
-        obstacle = EntityPosition(
+        obstacle = ObjectObservation.create(
             x=state.obstacle_x,
             y=state.obstacle_y,
             width=jnp.array(self.consts.OBSTACLE_SIZE[0]),
@@ -895,61 +918,19 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             wall_layout=state.wall_layout,
         )
 
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: MiniatureGolfObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            obs.player.x.flatten(),
-            obs.player.y.flatten(),
-            obs.player.height.flatten(),
-            obs.player.width.flatten(),
-            obs.hole.x.flatten(),
-            obs.hole.y.flatten(),
-            obs.hole.height.flatten(),
-            obs.hole.width.flatten(),
-            obs.ball.x.flatten(),
-            obs.ball.y.flatten(),
-            obs.ball.height.flatten(),
-            obs.ball.width.flatten(),
-            obs.obstacle.x.flatten(),
-            obs.obstacle.y.flatten(),
-            obs.obstacle.height.flatten(),
-            obs.obstacle.width.flatten(),
-            obs.shot_count.flatten(),
-            obs.wall_layout.flatten()
-        ]
-        )
-
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(6)
 
     def observation_space(self) -> spaces:
+        object_space = spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
+
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
-            }),
-            "hole": spaces.Dict({
-                "x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
-            }),
-            "ball": spaces.Dict({
-                "x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
-            }),
-            "obstacle": spaces.Dict({
-                "x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.int32),
-            }),
+            "player": object_space,
+            "hole": object_space,
+            "ball": object_space,
+            "obstacle": object_space,
             "shot_count": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
-            "wall_layout": spaces.Box(low=0, high=1, shape=(self.consts.HEIGHT, self.consts.WIDTH), dtype=jnp.int4),
+            "wall_layout": spaces.Box(low=0, high=1, shape=(self.consts.HEIGHT, self.consts.WIDTH), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
@@ -963,15 +944,15 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
     @partial(jax.jit, static_argnums=(0,))
     def _reward(self, state: MiniatureGolfState):
         score_mask = jax.lax.select_n(jnp.clip(state.level, max=self.consts.NUM_LEVELS - 1),
-            self.consts.SCORE_MASK_LEVEL_1,
-            self.consts.SCORE_MASK_LEVEL_2,
-            self.consts.SCORE_MASK_LEVEL_3,
-            self.consts.SCORE_MASK_LEVEL_4,
-            self.consts.SCORE_MASK_LEVEL_5,
-            self.consts.SCORE_MASK_LEVEL_6,
-            self.consts.SCORE_MASK_LEVEL_7,
-            self.consts.SCORE_MASK_LEVEL_8,
-            self.consts.SCORE_MASK_LEVEL_9,
+            self.consts.LEVEL_1_CONSTANTS.score_mask,
+            self.consts.LEVEL_2_CONSTANTS.score_mask,
+            self.consts.LEVEL_3_CONSTANTS.score_mask,
+            self.consts.LEVEL_4_CONSTANTS.score_mask,
+            self.consts.LEVEL_5_CONSTANTS.score_mask,
+            self.consts.LEVEL_6_CONSTANTS.score_mask,
+            self.consts.LEVEL_7_CONSTANTS.score_mask,
+            self.consts.LEVEL_8_CONSTANTS.score_mask,
+            self.consts.LEVEL_9_CONSTANTS.score_mask,
         )
         return state.level * 1e4 + score_mask[state.ball_y, state.ball_x]
 

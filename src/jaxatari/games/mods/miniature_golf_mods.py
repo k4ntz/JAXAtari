@@ -1,5 +1,6 @@
+import os
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.miniature_golf_mod_plugins import (LargeHoleMod, MovingHoleMod, PermeableObstacleMod,
+from jaxatari.games.mods.miniature_golf.miniature_golf_mod_plugins import (LargeHoleMod, MovingHoleMod, PermeableObstacleMod,
                                                             PermeableWallMod, SecondHoleMod, SoftShotRequiredMod,
                                                             StationaryObstacleMod, AlwaysZeroShotsMod)
 
@@ -20,6 +21,7 @@ class MiniatureGolfEnvMod(JaxAtariModController):
         "zero_shots": AlwaysZeroShotsMod,
     }
 
+    _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "miniature_golf", "sprites")
 
     def __init__(self,
                  env,

@@ -365,7 +365,7 @@ class StationaryObstacleMod(JaxAtariPostStepModPlugin):
         the main step is complete.
         Access the environment via self._env (set by JaxAtariModWrapper).
         """
-        return new_state._replace(
+        return new_state.replace(
             obstacle_x=jnp.where(prev_state.level == new_state.level, prev_state.obstacle_x, new_state.obstacle_x),
             obstacle_y=jnp.where(prev_state.level == new_state.level, prev_state.obstacle_y, new_state.obstacle_y),
         )
@@ -379,6 +379,6 @@ class AlwaysZeroShotsMod(JaxAtariPostStepModPlugin):
         the main step is complete.
         Access the environment via self._env (set by JaxAtariModWrapper).
         """
-        return new_state._replace(
+        return new_state.replace(
             shot_count=jnp.array(0, dtype=jnp.int32),
         )
