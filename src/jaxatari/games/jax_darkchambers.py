@@ -2656,6 +2656,23 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         self._wall_inflate_kh = 2 * r_y + 1
         self._wall_inflate_kw = 2 * r_x + 1
 
+    def __hash__(self):
+        # Allow JAX JIT to reuse compiled functions across instances with identical config.
+        # Without this, each new instance triggers a full recompilation (~30-90s for darkchambers).
+        try:
+            consts_repr = repr(self.consts)
+        except Exception:
+            consts_repr = ""
+        return hash((type(self).__name__, consts_repr,
+                     self._wall_inflate_kh, self._wall_inflate_kw))
+
+    def __eq__(self, other):
+        if type(self) is not type(other):
+            return NotImplemented
+        return (repr(self.consts) == repr(other.consts)
+                and self._wall_inflate_kh == other._wall_inflate_kh
+                and self._wall_inflate_kw == other._wall_inflate_kw)
+
     def _pos_to_cell(self, x, y):
         """Convert pixel coordinates to grid-cell indices (cy, cx)."""
         cy = (y // CELL_SIZE).astype(jnp.int32)
