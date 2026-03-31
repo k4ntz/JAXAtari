@@ -57,7 +57,7 @@ def _spawn_potion_cluster_near_player(env, state: DarkChambersState, potion_item
 # MOD 1: SPEED POTION
 # ============================================================================
 class SpeedPotionMod(JaxAtariPostStepModPlugin):
-    """
+    """ 
     Speed Potion Mod - Proper Integration (Option B)
     
     Visual: Orange 8×8 pixel square (RGB: 255, 100, 0)
