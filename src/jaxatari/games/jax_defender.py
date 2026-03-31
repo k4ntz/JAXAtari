@@ -389,10 +389,14 @@ class DefenderHelper:
 
 
 class DefenderRenderer(JAXGameRenderer):
-    def __init__(self, consts: DefenderConstants = None):
-        super().__init__()
+    def __init__(
+        self,
+        consts: DefenderConstants = None,
+        config: render_utils.RendererConfig = None,
+    ):
+        super().__init__(consts=consts, config=config)
         self.consts = consts or DefenderConstants()
-        self.config = render_utils.RendererConfig(
+        self.config = config or render_utils.RendererConfig(
             game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
             channels=3,
             # downscale=(84, 84)
@@ -2755,6 +2759,30 @@ class JaxDefender(
         return observation, initial_state
 
     def observation_space(self) -> spaces.Dict:
+        enemy_low = jnp.array(
+            [0.0, 0.0, float(self.consts.INACTIVE), -1.0, -1.0], dtype=jnp.float32
+        )
+        enemy_high = jnp.array(
+            [
+                float(self.consts.WORLD_WIDTH),
+                float(self.consts.WORLD_HEIGHT),
+                float(self.consts.DEAD),
+                float(self.consts.LANDER_STATE_ASCEND),
+                float(self.consts.LANDER_PICKUP_DURATION_FRAMES),
+            ],
+            dtype=jnp.float32,
+        )
+        human_low = jnp.array([0.0, 0.0, 0.0, 0.0], dtype=jnp.float32)
+        human_high = jnp.array(
+            [
+                float(self.consts.WORLD_WIDTH),
+                float(self.consts.WORLD_HEIGHT),
+                float(self.consts.HUMAN_STATE_CAUGHT),
+                float(self.consts.ENEMY_MAX_IN_GAME),
+            ],
+            dtype=jnp.float32,
+        )
+
         return spaces.Dict(
             {
                 "score": spaces.Box(
@@ -2770,14 +2798,14 @@ class JaxDefender(
                 ),
                 "lives": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
                 "enemy_states": spaces.Box(
-                    low=0,
-                    high=255,
+                    low=enemy_low,
+                    high=enemy_high,
                     shape=(self.consts.ENEMY_MAX_IN_GAME, 5),
                     dtype=jnp.float32,
                 ),
                 "human_states": spaces.Box(
-                    low=0,
-                    high=255,
+                    low=human_low,
+                    high=human_high,
                     shape=(self.consts.HUMAN_MAX_AMOUNT, 4),
                     dtype=jnp.float32,
                 ),
