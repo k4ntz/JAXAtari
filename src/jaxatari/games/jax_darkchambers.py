@@ -1871,25 +1871,271 @@ class DarkChambersRenderer(JAXGameRenderer):
         )
 
         # Top UI removed - now using bottom bar like ALE reference
-        
-        # Player (use directional sprite based on player_direction)
-        player_screen_x = (state.player_x - cam_x).astype(jnp.int32)
-        player_screen_y = (state.player_y - cam_y).astype(jnp.int32)
 
-        if self.PLAYER_ANIM_FRAMES is not None:
-            sprite_idx = PLAYER_DIR_TO_SPRITE[state.player_direction.astype(jnp.int32)]
-            idle_frame = PLAYER_IDLE_FRAME[sprite_idx]
-            anim_tick  = (state.step_counter // ANIM_EVERY).astype(jnp.int32)
-            num_frames = PLAYER_NUM_FRAMES[sprite_idx]
-            anim_frame = jnp.where(state.player_moving, anim_tick % num_frames, idle_frame)
-            player_sprite = self.PLAYER_ANIM_FRAMES[sprite_idx, anim_frame]
-            object_raster = jax.lax.cond(
-                state.chamber_transition_ticks > 0,
-                lambda r: r,
-                lambda r: self.jr.render_at_clipped(r, player_screen_x, player_screen_y, player_sprite),
-                object_raster,
+        # Items - mask inactive ones by moving off-screen
+        items_world_pos = state.item_positions.astype(jnp.int32)
+        items_screen_pos = (items_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
+
+        # Masking for inactive items
+        off_screen = jnp.array([-100, -100], dtype=jnp.int32)
+        masked_item_pos = jnp.where(
+            state.item_active[:, None] == 1,
+            items_screen_pos,
+            off_screen
+        )
+
+        # Draw items by type using sprites (for heart, poison, trap, ladder_up) or rectangles (for others)
+        def draw_item_type(raster, t, positions_world):
+            mask = (state.item_types == t) & (state.item_active == 1)
+            pos = jnp.where(mask[:, None], positions_world, off_screen)
+            size_wh = self.ITEM_TYPE_SIZES[t]
+            sizes = jnp.tile(size_wh[None, :], (NUM_ITEMS, 1))
+            color_id_py = self.ITEM_TYPE_COLOR_IDS_PY[t-1]  # t in 1..12
+            return self.jr.draw_rects(
+                raster,
+                positions=pos,
+                sizes=sizes,
+                color_id=color_id_py
             )
-        
+
+        # Render items with sprites for specific types
+        def render_item_sprite(i, raster):
+            item_type = state.item_types[i]
+            is_active = state.item_active[i] == 1
+            item_x = masked_item_pos[i, 0]
+            item_y = masked_item_pos[i, 1]
+
+            # ITEM_SHIELD = 8 -> pot sprite (shield icon)
+            is_shield = (item_type == ITEM_SHIELD) & is_active
+            pot_sprite = self.ITEM_SCALED_MASKS.get("pot")
+            raster = jax.lax.cond(
+                is_shield & (pot_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, pot_sprite),
+                lambda r: r,
+                raster
+            )
+
+            # ITEM_POISON = 2 -> skull sprite
+            is_poison = (item_type == ITEM_POISON) & is_active
+            skull_sprite = self.ITEM_SCALED_MASKS.get("skull")
+            raster = jax.lax.cond(
+                is_poison & (skull_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, skull_sprite),
+                lambda r: r,
+                raster
+            )
+
+            # ITEM_TRAP = 3 -> trapdoor sprite
+            is_trap = (item_type == ITEM_TRAP) & is_active
+            trapdoor_sprite = self.ITEM_SCALED_MASKS.get("trapdoor")
+            # Draw a visible box under/for traps so they aren't invisible on dark backgrounds
+            trap_size = self.ITEM_TYPE_SIZES[ITEM_TRAP]
+            trap_sizes = jnp.array([trap_size], dtype=jnp.int32)
+            trap_pos = jnp.array([[item_x, item_y]], dtype=jnp.int32)
+            trap_color = self.ITEM_TYPE_COLOR_IDS_PY[ITEM_TRAP - 1]
+            raster = jax.lax.cond(
+                is_trap,
+                lambda r: self.jr.draw_rects(r, positions=trap_pos, sizes=trap_sizes, color_id=trap_color),
+                lambda r: r,
+                raster
+            )
+            raster = jax.lax.cond(
+                is_trap & (trapdoor_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, trapdoor_sprite),
+                lambda r: r,
+                raster
+            )
+
+            # ITEM_LADDER_UP = 12 -> stairs sprite
+            is_ladder_up = (item_type == ITEM_LADDER_UP) & is_active
+            stairs_sprite = self.ITEM_SCALED_MASKS.get("stairs")
+            raster = jax.lax.cond(
+                is_ladder_up & (stairs_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, stairs_sprite),
+                lambda r: r,
+                raster
+            )
+
+            # ITEM_CAGE_DOOR = 14 -> door sprite scaled to box
+            is_cage_door = (item_type == ITEM_CAGE_DOOR) & is_active
+            door_sprite = self.ITEM_SCALED_MASKS.get("door")
+            raster = jax.lax.cond(
+                is_cage_door & (door_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, door_sprite),
+                lambda r: r,
+                raster
+            )
+
+            # ITEM_LADDER_DOWN = 13 -> stairs sprite (same as ladder_up)
+            is_ladder_down = (item_type == ITEM_LADDER_DOWN) & is_active
+            stairs_down_sprite = self.ITEM_SCALED_MASKS.get("stairs_down")
+            raster = jax.lax.cond(
+                is_ladder_down & (stairs_down_sprite is not None),
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, stairs_down_sprite),
+                lambda r: r,
+                raster
+            )
+
+            # ITEM_HEART = 1 -> apple sprite
+            apple_sprite = self.ITEM_SCALED_MASKS.get("apple")
+            if apple_sprite is not None:
+                is_heart = (item_type == ITEM_HEART) & is_active
+                raster = jax.lax.cond(
+                    is_heart,
+                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, apple_sprite),
+                    lambda r: r,
+                    raster
+                )
+
+            # ITEM_BOMB = 10 -> barrel sprite
+            barrel_sprite = self.ITEM_SCALED_MASKS.get("barrel")
+            if barrel_sprite is not None:
+                is_bomb = (item_type == ITEM_BOMB) & is_active
+                raster = jax.lax.cond(
+                    is_bomb,
+                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, barrel_sprite),
+                    lambda r: r,
+                    raster
+                )
+
+            # ITEM_AMBER_CHALICE = 5 -> candle sprite (+500 points treasure)
+            candle_sprite = self.ITEM_SCALED_MASKS.get("candle")
+            if candle_sprite is not None:
+                is_amber_chalice = (item_type == ITEM_AMBER_CHALICE) & is_active
+                raster = jax.lax.cond(
+                    is_amber_chalice,
+                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, candle_sprite),
+                    lambda r: r,
+                    raster
+                )
+
+            # ITEM_AMULET = 6 -> chain sprite (+1000 points treasure)
+            chain_sprite = self.ITEM_SCALED_MASKS.get("chain")
+            if chain_sprite is not None:
+                is_amulet = (item_type == ITEM_AMULET) & is_active
+                raster = jax.lax.cond(
+                    is_amulet,
+                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, chain_sprite),
+                    lambda r: r,
+                    raster
+                )
+
+            # ITEM_KEY = 11 -> key sprite
+            key_sprite = self.ITEM_SCALED_MASKS.get("key")
+            if key_sprite is not None:
+                is_key = (item_type == ITEM_KEY) & is_active
+                raster = jax.lax.cond(
+                    is_key,
+                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, key_sprite),
+                    lambda r: r,
+                    raster
+                )
+
+            # ITEM_GUN = 9 -> pistol sprite (faster shooting)
+            is_gun = (item_type == ITEM_GUN) & is_active
+            pistol_sprite = self.ITEM_SCALED_MASKS.get("pistol")
+            if pistol_sprite is not None:
+                raster = jax.lax.cond(
+                    is_gun,
+                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, pistol_sprite),
+                    lambda r: r,
+                    raster
+                )
+            else:
+                gun_size = self.ITEM_TYPE_SIZES[ITEM_GUN]
+                gun_sizes = jnp.array([gun_size], dtype=jnp.int32)
+                gun_pos = jnp.array([[item_x, item_y]], dtype=jnp.int32)
+                gun_color = self.ITEM_TYPE_COLOR_IDS_PY[ITEM_GUN - 1]
+                raster = jax.lax.cond(
+                    is_gun,
+                    lambda r: self.jr.draw_rects(r, positions=gun_pos, sizes=gun_sizes, color_id=gun_color),
+                    lambda r: r,
+                    raster
+                )
+
+            # ITEM_HAMMER = 18 -> hammer sprite
+            is_hammer = (item_type == ITEM_HAMMER) & is_active
+            raster = jax.lax.cond(
+                is_hammer,
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, self.HAMMER_SPRITE),
+                lambda r: r,
+                raster
+            )
+
+            # ITEM_SPEED_POTION = 15, ITEM_HEAL_POTION = 16, ITEM_POISON_POTION = 17 -> bottle sprites
+            is_speed_potion = (item_type == ITEM_SPEED_POTION) & is_active
+            raster = jax.lax.cond(
+                is_speed_potion,
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, self.SPEED_POTION_SPRITE),
+                lambda r: r,
+                raster
+            )
+            is_heal_potion = (item_type == ITEM_HEAL_POTION) & is_active
+            raster = jax.lax.cond(
+                is_heal_potion,
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, self.HEAL_POTION_SPRITE),
+                lambda r: r,
+                raster
+            )
+            is_poison_potion = (item_type == ITEM_POISON_POTION) & is_active
+            raster = jax.lax.cond(
+                is_poison_potion,
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, self.POISON_POTION_SPRITE),
+                lambda r: r,
+                raster
+            )
+
+            # ITEM_CHECKPOINT = 19 -> flag sprite (gold = inactive, blue = activated)
+            is_chk = (item_type == ITEM_CHECKPOINT) & is_active
+            is_activated = (state.checkpoint_idx == i) & (state.checkpoint_map == state.map_index) & (state.checkpoint_level == state.current_level)
+            chk_sprite = jnp.where(is_activated, self.CHECKPOINT_SPRITE_ACTIVATED, self.CHECKPOINT_SPRITE)
+            raster = jax.lax.cond(
+                is_chk,
+                lambda r: self.jr.render_at_clipped(r, item_x, item_y, chk_sprite),
+                lambda r: r,
+                raster
+            )
+
+            return raster
+
+        # First render sprite-based items using fori_loop
+        object_raster = jax.lax.fori_loop(0, NUM_ITEMS, render_item_sprite, object_raster)
+
+        # Then render remaining items (treasures, powerups, etc.) as colored boxes
+        # Skip types that now use sprites: HEART(1), POISON(2), TRAP(3), AMBER_CHALICE(5), AMULET(6), SHIELD(8), BOMB(10), KEY(11), LADDER_UP(12), LADDER_DOWN(13), CAGE_DOOR(14)
+        for t in [4, 7]:  # STRONGBOX(4), HOURGLASS(7) — potions and hammer now use sprites
+            object_raster = draw_item_type(object_raster, t, masked_item_pos)
+
+        # Spawners: render as large skulls (24x24)
+        spawner_world_pos = state.spawner_positions.astype(jnp.int32)
+        spawner_screen_pos = (spawner_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
+        spawner_active_mask = state.spawner_active == 1
+        for i in range(NUM_SPAWNERS):
+            if self.SPAWNER_SKULL_MASK is not None:
+                object_raster = jax.lax.cond(
+                    spawner_active_mask[i],
+                    lambda r: self.jr.render_at_clipped(r, spawner_screen_pos[i, 0], spawner_screen_pos[i, 1], self.SPAWNER_SKULL_MASK),
+                    lambda r: r,
+                    object_raster
+                )
+        # (If no skull sprite, fallback to colored box)
+        if self.SPAWNER_SKULL_MASK is None:
+            masked_spawner_pos = jnp.where(
+                spawner_active_mask[:, None],
+                spawner_screen_pos,
+                off_screen
+            )
+            spawner_sizes = jnp.tile(
+                jnp.array([SPAWNER_WIDTH, SPAWNER_HEIGHT], dtype=jnp.int32)[None, :],
+                (NUM_SPAWNERS, 1)
+            )
+            object_raster = self.jr.draw_rects(
+                object_raster,
+                positions=masked_spawner_pos,
+                sizes=spawner_sizes,
+                color_id=self.SPAWNER_ID
+            )
+
         # Enemies - use sprites for types 1-4, colored box for Grim Reaper (type 5)
         enemy_world_pos = state.enemy_positions.astype(jnp.int32)
         enemy_screen_pos = (enemy_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
@@ -1993,271 +2239,25 @@ class DarkChambersRenderer(JAXGameRenderer):
 
         # Render all enemies with sprites
         object_raster = jax.lax.fori_loop(0, NUM_ENEMIES, render_one_enemy, object_raster)
-        
-        # Items - mask inactive ones by moving off-screen
-        items_world_pos = state.item_positions.astype(jnp.int32)
-        items_screen_pos = (items_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
-        
-        # Masking for inactive items
-        off_screen = jnp.array([-100, -100], dtype=jnp.int32)
-        masked_item_pos = jnp.where(
-            state.item_active[:, None] == 1,
-            items_screen_pos,
-            off_screen
-        )
-        
-        # Draw items by type using sprites (for heart, poison, trap, ladder_up) or rectangles (for others)
-        def draw_item_type(raster, t, positions_world):
-            mask = (state.item_types == t) & (state.item_active == 1)
-            pos = jnp.where(mask[:, None], positions_world, off_screen)
-            size_wh = self.ITEM_TYPE_SIZES[t]
-            sizes = jnp.tile(size_wh[None, :], (NUM_ITEMS, 1))
-            color_id_py = self.ITEM_TYPE_COLOR_IDS_PY[t-1]  # t in 1..12
-            return self.jr.draw_rects(
-                raster,
-                positions=pos,
-                sizes=sizes,
-                color_id=color_id_py
-            )
-        
-        # Render items with sprites for specific types
-        def render_item_sprite(i, raster):
-            item_type = state.item_types[i]
-            is_active = state.item_active[i] == 1
-            item_x = masked_item_pos[i, 0]
-            item_y = masked_item_pos[i, 1]
-            
-            # ITEM_SHIELD = 8 -> pot sprite (shield icon)
-            is_shield = (item_type == ITEM_SHIELD) & is_active
-            pot_sprite = self.ITEM_SCALED_MASKS.get("pot")
-            raster = jax.lax.cond(
-                is_shield & (pot_sprite is not None),
-                lambda r: self.jr.render_at_clipped(r, item_x, item_y, pot_sprite),
-                lambda r: r,
-                raster
-            )
-            
-            # ITEM_POISON = 2 -> skull sprite
-            is_poison = (item_type == ITEM_POISON) & is_active
-            skull_sprite = self.ITEM_SCALED_MASKS.get("skull")
-            raster = jax.lax.cond(
-                is_poison & (skull_sprite is not None),
-                lambda r: self.jr.render_at_clipped(r, item_x, item_y, skull_sprite),
-                lambda r: r,
-                raster
-            )
-            
-            # ITEM_TRAP = 3 -> trapdoor sprite
-            is_trap = (item_type == ITEM_TRAP) & is_active
-            trapdoor_sprite = self.ITEM_SCALED_MASKS.get("trapdoor")
-            # Draw a visible box under/for traps so they aren't invisible on dark backgrounds
-            trap_size = self.ITEM_TYPE_SIZES[ITEM_TRAP]
-            trap_sizes = jnp.array([trap_size], dtype=jnp.int32)
-            trap_pos = jnp.array([[item_x, item_y]], dtype=jnp.int32)
-            trap_color = self.ITEM_TYPE_COLOR_IDS_PY[ITEM_TRAP - 1]
-            raster = jax.lax.cond(
-                is_trap,
-                lambda r: self.jr.draw_rects(r, positions=trap_pos, sizes=trap_sizes, color_id=trap_color),
-                lambda r: r,
-                raster
-            )
-            raster = jax.lax.cond(
-                is_trap & (trapdoor_sprite is not None),
-                lambda r: self.jr.render_at_clipped(r, item_x, item_y, trapdoor_sprite),
-                lambda r: r,
-                raster
-            )
-            
-            # ITEM_LADDER_UP = 12 -> stairs sprite
-            is_ladder_up = (item_type == ITEM_LADDER_UP) & is_active
-            stairs_sprite = self.ITEM_SCALED_MASKS.get("stairs")
-            raster = jax.lax.cond(
-                is_ladder_up & (stairs_sprite is not None),
-                lambda r: self.jr.render_at_clipped(r, item_x, item_y, stairs_sprite),
-                lambda r: r,
-                raster
-            )
 
-            # ITEM_CAGE_DOOR = 14 -> door sprite scaled to box
-            is_cage_door = (item_type == ITEM_CAGE_DOOR) & is_active
-            door_sprite = self.ITEM_SCALED_MASKS.get("door")
-            raster = jax.lax.cond(
-                is_cage_door & (door_sprite is not None),
-                lambda r: self.jr.render_at_clipped(r, item_x, item_y, door_sprite),
-                lambda r: r,
-                raster
-            )
-            
-            # ITEM_LADDER_DOWN = 13 -> stairs sprite (same as ladder_up)
-            is_ladder_down = (item_type == ITEM_LADDER_DOWN) & is_active
-            stairs_down_sprite = self.ITEM_SCALED_MASKS.get("stairs_down")
-            raster = jax.lax.cond(
-                is_ladder_down & (stairs_down_sprite is not None),
-                lambda r: self.jr.render_at_clipped(r, item_x, item_y, stairs_down_sprite),
-                lambda r: r,
-                raster
-            )
-            
-            # ITEM_HEART = 1 -> apple sprite
-            apple_sprite = self.ITEM_SCALED_MASKS.get("apple")
-            if apple_sprite is not None:
-                is_heart = (item_type == ITEM_HEART) & is_active
-                raster = jax.lax.cond(
-                    is_heart,
-                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, apple_sprite),
-                    lambda r: r,
-                    raster
-                )
-            
-            # ITEM_BOMB = 10 -> barrel sprite
-            barrel_sprite = self.ITEM_SCALED_MASKS.get("barrel")
-            if barrel_sprite is not None:
-                is_bomb = (item_type == ITEM_BOMB) & is_active
-                raster = jax.lax.cond(
-                    is_bomb,
-                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, barrel_sprite),
-                    lambda r: r,
-                    raster
-                )
-            
-            # ITEM_AMBER_CHALICE = 5 -> candle sprite (+500 points treasure)
-            candle_sprite = self.ITEM_SCALED_MASKS.get("candle")
-            if candle_sprite is not None:
-                is_amber_chalice = (item_type == ITEM_AMBER_CHALICE) & is_active
-                raster = jax.lax.cond(
-                    is_amber_chalice,
-                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, candle_sprite),
-                    lambda r: r,
-                    raster
-                )
-            
-            # ITEM_AMULET = 6 -> chain sprite (+1000 points treasure)
-            chain_sprite = self.ITEM_SCALED_MASKS.get("chain")
-            if chain_sprite is not None:
-                is_amulet = (item_type == ITEM_AMULET) & is_active
-                raster = jax.lax.cond(
-                    is_amulet,
-                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, chain_sprite),
-                    lambda r: r,
-                    raster
-                )
-            
-            # ITEM_KEY = 11 -> key sprite
-            key_sprite = self.ITEM_SCALED_MASKS.get("key")
-            if key_sprite is not None:
-                is_key = (item_type == ITEM_KEY) & is_active
-                raster = jax.lax.cond(
-                    is_key,
-                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, key_sprite),
-                    lambda r: r,
-                    raster
-                )
+        # Player (use directional sprite based on player_direction)
+        player_screen_x = (state.player_x - cam_x).astype(jnp.int32)
+        player_screen_y = (state.player_y - cam_y).astype(jnp.int32)
 
-            # ITEM_GUN = 9 -> pistol sprite (faster shooting)
-            is_gun = (item_type == ITEM_GUN) & is_active
-            pistol_sprite = self.ITEM_SCALED_MASKS.get("pistol")
-            if pistol_sprite is not None:
-                raster = jax.lax.cond(
-                    is_gun,
-                    lambda r: self.jr.render_at_clipped(r, item_x, item_y, pistol_sprite),
-                    lambda r: r,
-                    raster
-                )
-            else:
-                gun_size = self.ITEM_TYPE_SIZES[ITEM_GUN]
-                gun_sizes = jnp.array([gun_size], dtype=jnp.int32)
-                gun_pos = jnp.array([[item_x, item_y]], dtype=jnp.int32)
-                gun_color = self.ITEM_TYPE_COLOR_IDS_PY[ITEM_GUN - 1]
-                raster = jax.lax.cond(
-                    is_gun,
-                    lambda r: self.jr.draw_rects(r, positions=gun_pos, sizes=gun_sizes, color_id=gun_color),
-                    lambda r: r,
-                    raster
-                )
-
-            # ITEM_HAMMER = 18 -> hammer sprite
-            is_hammer = (item_type == ITEM_HAMMER) & is_active
-            raster = jax.lax.cond(
-                is_hammer,
-                lambda r: self.jr.render_at_clipped(r, item_x, item_y, self.HAMMER_SPRITE),
+        if self.PLAYER_ANIM_FRAMES is not None:
+            sprite_idx = PLAYER_DIR_TO_SPRITE[state.player_direction.astype(jnp.int32)]
+            idle_frame = PLAYER_IDLE_FRAME[sprite_idx]
+            anim_tick  = (state.step_counter // ANIM_EVERY).astype(jnp.int32)
+            num_frames = PLAYER_NUM_FRAMES[sprite_idx]
+            anim_frame = jnp.where(state.player_moving, anim_tick % num_frames, idle_frame)
+            player_sprite = self.PLAYER_ANIM_FRAMES[sprite_idx, anim_frame]
+            object_raster = jax.lax.cond(
+                state.chamber_transition_ticks > 0,
                 lambda r: r,
-                raster
-            )
-
-            # ITEM_SPEED_POTION = 15, ITEM_HEAL_POTION = 16, ITEM_POISON_POTION = 17 -> bottle sprites
-            is_speed_potion = (item_type == ITEM_SPEED_POTION) & is_active
-            raster = jax.lax.cond(
-                is_speed_potion,
-                lambda r: self.jr.render_at_clipped(r, item_x, item_y, self.SPEED_POTION_SPRITE),
-                lambda r: r,
-                raster
-            )
-            is_heal_potion = (item_type == ITEM_HEAL_POTION) & is_active
-            raster = jax.lax.cond(
-                is_heal_potion,
-                lambda r: self.jr.render_at_clipped(r, item_x, item_y, self.HEAL_POTION_SPRITE),
-                lambda r: r,
-                raster
-            )
-            is_poison_potion = (item_type == ITEM_POISON_POTION) & is_active
-            raster = jax.lax.cond(
-                is_poison_potion,
-                lambda r: self.jr.render_at_clipped(r, item_x, item_y, self.POISON_POTION_SPRITE),
-                lambda r: r,
-                raster
-            )
-
-            # ITEM_CHECKPOINT = 19 -> flag sprite (gold = inactive, blue = activated)
-            is_chk = (item_type == ITEM_CHECKPOINT) & is_active
-            is_activated = (state.checkpoint_idx == i) & (state.checkpoint_map == state.map_index) & (state.checkpoint_level == state.current_level)
-            chk_sprite = jnp.where(is_activated, self.CHECKPOINT_SPRITE_ACTIVATED, self.CHECKPOINT_SPRITE)
-            raster = jax.lax.cond(
-                is_chk,
-                lambda r: self.jr.render_at_clipped(r, item_x, item_y, chk_sprite),
-                lambda r: r,
-                raster
-            )
-
-            return raster
-        
-        # First render sprite-based items using fori_loop
-        object_raster = jax.lax.fori_loop(0, NUM_ITEMS, render_item_sprite, object_raster)
-        
-        # Then render remaining items (treasures, powerups, etc.) as colored boxes
-        # Skip types that now use sprites: HEART(1), POISON(2), TRAP(3), AMBER_CHALICE(5), AMULET(6), SHIELD(8), BOMB(10), KEY(11), LADDER_UP(12), LADDER_DOWN(13), CAGE_DOOR(14)
-        for t in [4, 7]:  # STRONGBOX(4), HOURGLASS(7) — potions and hammer now use sprites
-            object_raster = draw_item_type(object_raster, t, masked_item_pos)
-        
-        # Spawners: render as large skulls (24x24)
-        spawner_world_pos = state.spawner_positions.astype(jnp.int32)
-        spawner_screen_pos = (spawner_world_pos - jnp.array([cam_x, cam_y])).astype(jnp.int32)
-        spawner_active_mask = state.spawner_active == 1
-        for i in range(NUM_SPAWNERS):
-            if self.SPAWNER_SKULL_MASK is not None:
-                object_raster = jax.lax.cond(
-                    spawner_active_mask[i],
-                    lambda r: self.jr.render_at_clipped(r, spawner_screen_pos[i, 0], spawner_screen_pos[i, 1], self.SPAWNER_SKULL_MASK),
-                    lambda r: r,
-                    object_raster
-                )
-        # (If no skull sprite, fallback to colored box)
-        if self.SPAWNER_SKULL_MASK is None:
-            masked_spawner_pos = jnp.where(
-                spawner_active_mask[:, None],
-                spawner_screen_pos,
-                off_screen
-            )
-            spawner_sizes = jnp.tile(
-                jnp.array([SPAWNER_WIDTH, SPAWNER_HEIGHT], dtype=jnp.int32)[None, :],
-                (NUM_SPAWNERS, 1)
-            )
-            object_raster = self.jr.draw_rects(
+                lambda r: self.jr.render_at_clipped(r, player_screen_x, player_screen_y, player_sprite),
                 object_raster,
-                positions=masked_spawner_pos,
-                sizes=spawner_sizes,
-                color_id=self.SPAWNER_ID
             )
-        
+
         # Bottom black UI bar (48 pixels tall - 3x original size)
         bar_y_start = GAMEPLAY_H  # Start at end of gameplay area (160)
         black_bar_pos = jnp.array([[0, bar_y_start]], dtype=jnp.int32)
