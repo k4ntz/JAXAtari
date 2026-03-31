@@ -7,41 +7,10 @@ import jax.random as jrandom
 import numpy as np
 
 from jaxatari.environment import JAXAtariAction
-from utils import get_human_action, update_pygame, load_game_environment, load_game_mods, print_observation_tree
+from utils import get_human_action, update_pygame, load_game_environment, load_game_mods
 from jaxatari.core import make as jaxatari_make
 
 UPSCALE_FACTOR = 4
-
-
-def _normalize_mods(mods):
-    """Convert common CLI mods input into a list of mod name strings.
-
-    Accepts:
-      - None -> None
-      - Space-separated (argparse nargs='+'): ['mod1', 'mod2']
-      - Comma-separated: ['mod1,mod2'] or ['mod1, mod2'] -> ['mod1', 'mod2']
-      - Single string (e.g. from config): 'mod1' or 'mod1,mod2' -> list
-      - Mixed: ['mod1', 'mod2,mod3'] -> ['mod1', 'mod2', 'mod3']
-    """
-    if mods is None:
-        return None
-    if isinstance(mods, str):
-        mods = [mods]
-    result = []
-    for item in mods:
-        if not isinstance(item, str):
-            item = str(item).strip()
-        else:
-            item = item.strip()
-        if not item:
-            continue
-        # Split by comma so "mod1, mod2" and "mod1,mod2" both work
-        for part in item.split(","):
-            part = part.strip()
-            if part:
-                result.append(part)
-    return result if result else None
-
 
 # Map action names to their integer values
 ACTION_NAMES = {
@@ -67,7 +36,7 @@ def main():
         nargs='+',
         type=str,
         required=False,
-        help="Mod name(s). Space-separated (e.g. -m ModA ModB) or comma-separated (e.g. -m ModA,ModB).",
+        help="Name of the mods class.",
     )
 
     parser.add_argument(
@@ -115,16 +84,14 @@ def main():
 
     args = parser.parse_args()
 
-    # Normalize mods so we accept space-separated, comma-separated, or mixed
-    args.mods = _normalize_mods(args.mods)
-
     execute_without_rendering = False
     
+
     try:
         # 1. Try the registered path (core.make)
         env = jaxatari_make(
             game_name=args.game,
-            mods=args.mods,
+            mods_config=args.mods,
             allow_conflicts=args.allow_conflicts
         )
         print(f"Successfully loaded registered game: '{args.game}'")
@@ -193,29 +160,6 @@ def main():
         clock = pygame.time.Clock()
 
     action_space = env.action_space()
-
-    def map_action_to_index(action_constant):
-        """Convert Action constant to the specific index within the game's ACTION_SET."""
-        if hasattr(env, 'ACTION_SET'):
-            # Convert JAX array/constant to standard Python int for comparison
-            action_set = np.array(env.ACTION_SET)
-            action_int = int(action_constant)
-            
-            # Find where this constant lives in the current game's minimal set
-            matches = np.where(action_set == action_int)[0]
-            
-            if len(matches) > 0:
-                idx = int(matches[0])
-                if args.verbose:
-                    name = ACTION_NAMES.get(action_int, "UNKNOWN")
-                    # Verification: "LEFT" (4) should map to Index 3 in Pong
-                    print(f"[Action Debug] Input: {name} | Constant: {action_int} -> Env Index: {idx}")
-                return jax.numpy.array(idx, dtype=jax.numpy.int32)
-            # Key not in this game's action set (e.g. UP in Phoenix) -> NOOP (index 0)
-            return jax.numpy.array(0, dtype=jax.numpy.int32)
-        
-        # Fallback if no ACTION_SET is defined: use constant as index
-        return jax.numpy.array(action_constant, dtype=jax.numpy.int32)
 
     save_keys = {}
     running = True
@@ -304,9 +248,8 @@ def main():
             action = action_space.sample(action_key)
             action_key, _ = jax.random.split(action_key)
         else:
-            # get the pressed keys (returns Action constant) and map to action index
-            action_constant = get_human_action()
-            action = map_action_to_index(action_constant)
+            # get the pressed keys
+            action = get_human_action()
             # Save the action to the save_keys dictionary
             if args.record:
                 # Save the action to the save_keys dictionary
@@ -314,14 +257,12 @@ def main():
 
         if not frame_by_frame or next_frame_asked:
             obs, state, reward, done, info = jitted_step(state, action)
-            # print(reward)
             total_return += reward
             if next_frame_asked:
                 next_frame_asked = False
         else:
             # Need to get action to update event queue even if paused
-            action_constant = get_human_action()
-            action = map_action_to_index(action_constant)
+            action = get_human_action()
 
         if done:
             print(f"Done. Total return {total_return}")
