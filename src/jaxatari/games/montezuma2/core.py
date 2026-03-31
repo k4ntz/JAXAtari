@@ -23,7 +23,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=20)
     INITIAL_PLAYER_X: int = struct.field(pytree_node=False, default=77)
     INITIAL_PLAYER_Y: int = struct.field(pytree_node=False, default=26)
-    INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=13)
+    INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=11)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=1)
     JUMP_Y_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([3, 3, 3, 2, 2, 2, 1, 1, 0, 0, 0, 0, -1, -1, -2, -2, -2, -3, -3, -3], dtype=jnp.int32))
     GRAVITY: int = struct.field(pytree_node=False, default=2)
@@ -138,7 +138,7 @@ def get_room_idx(room_id):
            jnp.where(room_id == 5, 2,
            jnp.where(room_id == 11, 3,
            jnp.where(room_id == 10, 4,
-           jnp.where(room_id == 9, 5,
+           jnp.where(room_id == 12, 5,
            jnp.where(room_id == 13, 6,
            jnp.where(room_id == 14, 7, 0))))))))
 

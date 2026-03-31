@@ -144,7 +144,7 @@ class Montezuma2Renderer(JAXGameRenderer):
         room_bg_mask = jnp.where(state.room_id == 4, mask_1, mask_0_modified)
         
         mask_3_modified = mask_3.at[147:149, 72:88].set(0)
-        room_bg_mask = jnp.where(state.room_id == 9, mask_3_modified, room_bg_mask)
+        room_bg_mask = jnp.where(state.room_id == 12, mask_3_modified, room_bg_mask)
         mask_2_modified = mask_2.at[48:149, 72:88].set(0)
         room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 11, jnp.logical_or(state.room_id == 10, state.room_id == 14)), mask_2_modified, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 13, mask_2, room_bg_mask)
@@ -179,7 +179,7 @@ class Montezuma2Renderer(JAXGameRenderer):
                     r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.LADDER_ID_L2)
                     return self.jr.draw_ladders(r_in, rung_pos, rung_size, 2, 5, self.LADDER_ID_L2)
 
-                is_layer_2 = jnp.logical_or(state.room_id == 11, jnp.logical_or(state.room_id == 10, jnp.logical_or(state.room_id == 9, state.room_id == 14)))
+                is_layer_2 = jnp.logical_or(state.room_id == 11, jnp.logical_or(state.room_id == 10, jnp.logical_or(state.room_id == 12, state.room_id == 14)))
                 return jax.lax.cond(is_layer_2, draw_l2, draw_l1, raster_in)
 
             return jax.lax.cond(active == 1, _draw, lambda r_in: r_in, r)
