@@ -188,7 +188,7 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
         return spaces.Discrete(len(self.action_set)) 
 
     def observation_space(self) -> spaces.Space:
-        def observation_space(self) -> spaces.Space:
+        
             """
 
             KEYS MUST BE ALPHABETICAL to match JAX sorting.
@@ -202,7 +202,7 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
             7. valid_moves
             8. winner
             """
-        return spaces.Dict({
+            return spaces.Dict({
             "board": spaces.Box(0, 3, shape=(4, 4, 4), dtype=jnp.int32),
             "current_player": spaces.Discrete(3),
             "cursor_x": spaces.Box(0, 3, shape=(), dtype=jnp.int32),
