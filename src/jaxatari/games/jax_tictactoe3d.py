@@ -155,12 +155,14 @@ class TicTacToe3DState:
 
 @struct.dataclass
 class TicTacToe3DObservation:
-    board: jnp.ndarray          
-    current_player: jnp.ndarray 
-    valid_moves: jnp.ndarray    
-    game_over: jnp.ndarray      
-    winner: jnp.ndarray         
-
+    board: jnp.ndarray
+    current_player: jnp.ndarray
+    cursor_x: jnp.ndarray
+    cursor_y: jnp.ndarray
+    cursor_z: jnp.ndarray
+    game_over: jnp.ndarray
+    valid_moves: jnp.ndarray
+    winner: jnp.ndarray
 @struct.dataclass
 class TicTacToe3DInfo:
     move_count: jnp.ndarray
@@ -186,14 +188,26 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
         return spaces.Discrete(len(self.action_set)) 
 
     def observation_space(self) -> spaces.Space:
-        """
-        Object-centric observation space. 
-        KEYS MUST BE ALPHABETICAL to match JAX sorting!
-        Order: b, c, g, v, w.
-        """
+        def observation_space(self) -> spaces.Space:
+            """
+
+            KEYS MUST BE ALPHABETICAL to match JAX sorting.
+            Order:
+            1. board
+            2. current_player
+            3. cursor_x
+            4. cursor_y
+            5. cursor_z
+            6. game_over
+            7. valid_moves
+            8. winner
+            """
         return spaces.Dict({
             "board": spaces.Box(0, 3, shape=(4, 4, 4), dtype=jnp.int32),
-            "current_player": spaces.Discrete(3),  
+            "current_player": spaces.Discrete(3),
+            "cursor_x": spaces.Box(0, 3, shape=(), dtype=jnp.int32),
+            "cursor_y": spaces.Box(0, 3, shape=(), dtype=jnp.int32),
+            "cursor_z": spaces.Box(0, 3, shape=(), dtype=jnp.int32),
             "game_over": spaces.Box(0, 1, shape=(), dtype=jnp.int32),
             "valid_moves": spaces.Box(0, 1, shape=(64,), dtype=jnp.int32),
             "winner": spaces.Box(0, 2, shape=(), dtype=jnp.int32),
@@ -370,12 +384,6 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
                     board_after_opening[cz, cy, cx] == self.consts.EMPTY
                 )
 
-                board_after_user = jax.lax.cond(
-                    can_place,
-                    lambda b: b.at[cz, cy, cx].set(self.consts.PLAYER_X),
-                    lambda b: b,
-                    board_after_opening
-                )
                 raw_board_after_user = jax.lax.cond(
                     can_place,
                     lambda b: b.at[cz, cy, cx].set(self.consts.PLAYER_X),
@@ -495,13 +503,19 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: TicTacToe3DState) -> spaces.Dict:
         """
-        Extracts observation dictionary. 
-        KEYS MUST BE ALPHABETICAL: b, c, g, v, w.
+        Extracts object-centric observation dictionary.
+
+        KEYS MUST BE ALPHABETICAL:
+        board, current_player, cursor_x, cursor_y, cursor_z, game_over, valid_moves, winner
+
         DTYPES MUST BE INT32.
         """
         return {
             "board": state.board.astype(jnp.int32),
             "current_player": state.current_player.astype(jnp.int32),
+            "cursor_x": state.cursor_x.astype(jnp.int32),
+            "cursor_y": state.cursor_y.astype(jnp.int32),
+            "cursor_z": state.cursor_z.astype(jnp.int32),
             "game_over": state.game_over.astype(jnp.int32),
             "valid_moves": (state.board == self.consts.EMPTY).reshape(64).astype(jnp.int32),
             "winner": state.winner.astype(jnp.int32),
@@ -510,26 +524,36 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs) -> jnp.ndarray:
         """
-        Flattens observation. 
+        Flattens observation.
+
         MUST RETURN INT32 to match space definition.
         ORDER MUST BE ALPHABETICAL BY KEY:
         1. board
         2. current_player
-        3. game_over
-        4. valid_moves
-        5. winner
+        3. cursor_x
+        4. cursor_y
+        5. cursor_z
+        6. game_over
+        7. valid_moves
+        8. winner
         """
         board_flat = obs["board"].reshape(-1).astype(jnp.int32)
         current_player = obs["current_player"].reshape(1).astype(jnp.int32)
+        cursor_x = obs["cursor_x"].reshape(1).astype(jnp.int32)
+        cursor_y = obs["cursor_y"].reshape(1).astype(jnp.int32)
+        cursor_z = obs["cursor_z"].reshape(1).astype(jnp.int32)
         game_over = obs["game_over"].reshape(1).astype(jnp.int32)
         valid_moves_flat = obs["valid_moves"].astype(jnp.int32)
         winner = obs["winner"].reshape(1).astype(jnp.int32)
-        
+
         return jnp.concatenate([
-            board_flat, 
-            current_player, 
+            board_flat,
+            current_player,
+            cursor_x,
+            cursor_y,
+            cursor_z,
             game_over,
-            valid_moves_flat, 
+            valid_moves_flat,
             winner
         ])
 
