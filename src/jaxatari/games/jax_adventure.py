@@ -131,9 +131,10 @@ class AdventureConstants(struct.PyTreeNode):
     SWORD_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (31,180,1))
     BRIDGE_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (40,130,10))
     MAGNET_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (120,180,12))
-    CHALICE_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (35,180,13))
+    CHALICE_SPAWN: Tuple[int, int, int, int] = struct.field(pytree_node=False, default= (35,180,13, 7))
     BAT_SPAWN: Tuple[int, int, int, int] = struct.field(pytree_node=False, default= (76, 140, 19, 0))
     DOT_SPAWN: Tuple[int, int, int] = struct.field(pytree_node=False, default= (76, 140, 29))
+    GATE_SPAWN: Tuple[int, int] = struct.field(pytree_node=False, default=(0, 0))
     
     #Constants that are used for restricting player movement, for easy of fine tuning
     # Wall coordinates the player cannot pass through
@@ -159,7 +160,7 @@ class AdventureConstants(struct.PyTreeNode):
     CASTLE_BASE_CORNER_Y: int = struct.field(pytree_node=False, default= 170)
 
     # sset config baked into constants (immutable default) for asset overrides
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory= _get_default_asset_config)
 
     #Dragon constants
     DRAGON_SPEED: int = struct.field(pytree_node=False, default= 2)
@@ -1283,6 +1284,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
     """This function is called when the game starts and when it is reseted
     It initializes the Adventure state, for the most part these Values are pulled from the consts"""
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[AdventureObservation, AdventureState]:
+
         state_key, _step_key = jax.random.split(key)
         state = AdventureState(
             step_counter = jnp.array(0).astype(jnp.int32),
@@ -1324,9 +1326,12 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
                                     self.consts.KEY_WHITE_SPAWN[1],
                                     self.consts.KEY_WHITE_SPAWN[2]]).astype(jnp.int32),
             #Gate: state, counter (ToDo for animation?)
-            gate_yellow=jnp.array([0,0]).astype(jnp.int32),
-            gate_black=jnp.array([0,0]).astype(jnp.int32),
-            gate_white=jnp.array([0,0]).astype(jnp.int32),
+            gate_yellow=jnp.array([self.consts.GATE_SPAWN[0],
+                                  self.consts.GATE_SPAWN[1]]).astype(jnp.int32),
+            gate_black=jnp.array([self.consts.GATE_SPAWN[0],
+                                  self.consts.GATE_SPAWN[1]]).astype(jnp.int32),
+            gate_white=jnp.array([self.consts.GATE_SPAWN[0],
+                                  self.consts.GATE_SPAWN[1]]).astype(jnp.int32),
             #Items: x, y, tile
             sword = jnp.array([self.consts.SWORD_SPAWN[0],
                                self.consts.SWORD_SPAWN[1],
@@ -1340,7 +1345,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             #Chalice: x, y, tile, color (ToDo move color to constants)
             chalice = jnp.array([self.consts.CHALICE_SPAWN[0],
                                  self.consts.CHALICE_SPAWN[1],
-                                 self.consts.CHALICE_SPAWN[2],7]).astype(jnp.int32), #ToDo
+                                 self.consts.CHALICE_SPAWN[2],
+                                 self.consts.CHALICE_SPAWN[3]]).astype(jnp.int32), #ToDo
             #random key
             rndKey = state_key,
             bat = jnp.array([self.consts.BAT_SPAWN[0],
