@@ -9,7 +9,7 @@ First, make sure that any custom environments and mods are registered in `src/ja
 2. Run the config via `bash python pqn_agent.py +alg=pqn_jaxatari_<mode>`
     - During training, you can monitor the training curves with WandB. 
     - The most important value is: `returned_episode_returns` under `Charts`. If this is not increasing over time, something is probably off.
-    - For debugging, enable `TEST_DURING_TRAIN` and `RECORD_VIDEO`. This will log videos under `Media` to WandB and you can watch what the agent does.
+    - For debugging, enable `TEST_DURING_TRAIN` and `RECORD_VIDEO`. This will log videos under `Media` to WandB antd you can watch what the agent does.
     - Once done training, compile time and run time will be reported.
 
 ## Evaluating a PQN agent
