@@ -3,7 +3,7 @@ SEED: 0
 HYP_TUNE: false
 WANDB_MODE: online
 ENTITY: ''
-PROJECT: ''
+PROJECT: debug
 alg:
   WANDB_LOG_ALL_SEEDS: false
   NAME_INITIALS: RE
@@ -32,7 +32,8 @@ alg:
   - 84
   - 84
   USE_NATIVE_DOWNSCALING: true
-  TRAIN_MODS: null
+  TRAIN_MODS:
+  - checkpoints
   EVAL_MODS:
   - speed_potion
   - heal_potion
@@ -78,7 +79,8 @@ PIXEL_RESIZE_SHAPE:
 - 84
 - 84
 USE_NATIVE_DOWNSCALING: true
-TRAIN_MODS: null
+TRAIN_MODS:
+- checkpoints
 EVAL_MODS:
 - speed_potion
 - heal_potion

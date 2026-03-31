@@ -3,7 +3,7 @@ SEED: 0
 HYP_TUNE: false
 WANDB_MODE: online
 ENTITY: ''
-PROJECT: ''
+PROJECT: debug
 alg:
   WANDB_LOG_ALL_SEEDS: false
   HIDDEN_SIZE: 256
@@ -28,7 +28,8 @@ alg:
   ENV_NAME: darkchambers
   ENV_KWARGS: {}
   OBJECT_CENTRIC: true
-  TRAIN_MODS: null
+  TRAIN_MODS:
+  - checkpoints
   EVAL_MODS:
   - speed_potion
   - heal_potion
@@ -70,7 +71,8 @@ LAMBDA: 0.65
 ENV_NAME: darkchambers
 ENV_KWARGS: {}
 OBJECT_CENTRIC: true
-TRAIN_MODS: null
+TRAIN_MODS:
+- checkpoints
 EVAL_MODS:
 - speed_potion
 - heal_potion
