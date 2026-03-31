@@ -37,6 +37,9 @@ class Space:
     def range(self):
         raise NotImplementedError
     
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}()"
+
     def __eq__(self, other: object) -> bool:
         """Check for equality between two Space objects."""
         return isinstance(other, self.__class__)
@@ -66,6 +69,9 @@ class Discrete(Space):
     def range(self) -> tuple[float, float]:
         return 0, self.n - 1
     
+    def __repr__(self) -> str:
+        return f"Discrete({self.n})"
+
     def __eq__(self, other):
         # Make sure this uses 'and', not 'or'
         return super().__eq__(other) and self.n == other.n
@@ -166,7 +172,17 @@ class Box(Space):
     def range(self) -> tuple[jnp.ndarray, jnp.ndarray]:
         """Returns the lower and upper bounds of the space."""
         return self.low, self.high
-    
+
+    def __repr__(self) -> str:
+        # Collapse uniform bounds to a scalar for readability (e.g. pixel spaces).
+        low = self.low.flatten()[0].item() if jnp.all(self.low == self.low.flatten()[0]) else self.low
+        high = self.high.flatten()[0].item() if jnp.all(self.high == self.high.flatten()[0]) else self.high
+        return f"Box(low={low}, high={high}, shape={self.shape}, dtype={self.dtype})"
+
+    def __len__(self) -> int:
+        """Total number of scalar elements in the space (product of shape dimensions)."""
+        return int(np.prod(self.shape)) if self.shape else 1
+
     def __eq__(self, other):
         return (
             super().__eq__(other)
@@ -213,6 +229,10 @@ class Dict(Space):
     
     def __repr__(self) -> str:
         return "Dict(" + ", ".join([f"{k}: {s}" for k, s in self.spaces.items()]) + ")"
+
+    def __len__(self) -> int:
+        """Number of subspaces in the dict."""
+        return self.num_spaces
 
     def __iter__(self):
         yield from self.spaces
