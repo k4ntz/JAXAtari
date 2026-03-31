@@ -615,7 +615,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
 
         return state.replace(
-            step_counter = jnp.array(new_step_counter).astype(jnp.int32),
+            step_counter = jnp.array(new_step_counter),
             player = jnp.array([new_player_x,new_player_y,new_player_tile,state.player[3]]).astype(jnp.int32), #SEEMS NOT GOOD
             key_yellow = jax.lax.cond(state.player[3]==self.consts.KEY_YELLOW_ID,
                                       lambda op: jnp.array([op[0],op[1],op[2]]).astype(jnp.int32),
@@ -1285,7 +1285,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[AdventureObservation, AdventureState]:
         state_key, _step_key = jax.random.split(key)
         state = AdventureState(
-            step_counter = jnp.array(0).astype(jnp.int32),
+            step_counter = jnp.array(0),
             #Player Spawn: x, y, tile, inventory
             player = jnp.array([self.consts.PLAYER_SPAWN[0],
                                 self.consts.PLAYER_SPAWN[1],
