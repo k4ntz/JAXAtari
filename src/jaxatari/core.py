@@ -64,6 +64,7 @@ GAME_MODULES = {
     # "surround": "jaxatari.games.jax_surround", currently not in a state that can be used
     "tennis": "jaxatari.games.jax_tennis",
     "tetris": "jaxatari.games.jax_tetris",
+    "tictactoe3d": "jaxatari.games.jax_tictactoe3d",
     "timepilot": "jaxatari.games.jax_timepilot",
     "tron": "jaxatari.games.jax_tron",
     "turmoil": "jaxatari.games.jax_turmoil",
@@ -85,6 +86,7 @@ MOD_MODULES = {
     "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod",
     "videopinball": "jaxatari.games.mods.videopinball_mods.VideoPinballEnvMod",
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
+    "tictactoe3d": "jaxatari.games.mods.tictactoe3d_mods.Tictactoe3dEnvMod",
     "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
     "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
     "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
