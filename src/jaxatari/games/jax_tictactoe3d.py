@@ -396,8 +396,7 @@ class JaxTicTacToe3DEnvironment(JaxEnvironment):
 
                 winner_after_user = self._check_winner(board_after_user)
                 move_count_after_user = move_count_after_opening + jnp.where(can_place, 1, 0)
-                winner_after_user = self._check_winner(board_after_user)
-                move_count_after_user = move_count_after_opening + jnp.where(can_place, 1, 0)
+                
 
                 is_win_or_draw = jnp.logical_or(
                     winner_after_user != self.consts.EMPTY,

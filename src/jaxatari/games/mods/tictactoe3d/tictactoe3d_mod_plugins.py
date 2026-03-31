@@ -41,91 +41,107 @@ class StrictIllegalMoveMod(JaxAtariInternalModPlugin):
         "STRICT_ILLEGAL_MOVES": True
     }
 
-class SuddenDeathMod(JaxAtariPostStepModPlugin):
+class SuddenDeathMod(JaxAtariInternalModPlugin):
     """
-    Hard cap on the episode length (e.g., 16 moves). 
-    If no 4-in-a-row is achieved by the limit, a custom tie-breaker logic triggers, 
-    awarding the win to the player with the most unblocked '3-in-a-row' potential lines.
+    Hard cap on episode length.
+    If the move limit is reached and nobody has won naturally,
+    decide the winner by tie-breaker:
+      - player with more unblocked 3-in-a-row potential lines wins
+      - tie => draw
+
+    This version ends the episode immediately.
     """
-    
-    # JIT compile the hook to run efficiently on the GPU/TPU.
-    # static_argnums=(0,) tells JAX to treat the 'self' instance as static,
-    # which is required when JIT-compiling class methods.
+
+    MOVE_LIMIT = 16
+
     @partial(jax.jit, static_argnums=(0,))
-    def after_step(self, obs, state, reward, done, info):
-        
-        # --- 1. Define the Tie-Breaker Logic ---
-        # We define this as an inner pure function to use within jax.lax.cond
+    def step(self, state, action):
+        # Call original environment step
+        obs, new_state, reward, done, info = type(self._env).step(self._env, state, action)
+
         def tie_breaker(board):
-            # Create binary masks for each player's pieces
             is_x = (board == self._env.consts.PLAYER_X).astype(jnp.int32)
             is_o = (board == self._env.consts.PLAYER_O).astype(jnp.int32)
 
-            # Use JAX's highly optimized tensordot to compute how many pieces each player
-            # has in every possible winning line simultaneously. 
-            # WIN_MASKS contains the 76 intersecting lines of the 3D grid.
-            x_counts = jnp.tensordot(self._env.consts.WIN_MASKS, is_x, axes=((1, 2, 3), (0, 1, 2)))
-            o_counts = jnp.tensordot(self._env.consts.WIN_MASKS, is_o, axes=((1, 2, 3), (0, 1, 2)))
+            x_counts = jnp.tensordot(
+                self._env.consts.WIN_MASKS,
+                is_x,
+                axes=((1, 2, 3), (0, 1, 2))
+            )
+            o_counts = jnp.tensordot(
+                self._env.consts.WIN_MASKS,
+                is_o,
+                axes=((1, 2, 3), (0, 1, 2))
+            )
 
-            # Define a "potential line": 3 pieces of one player and exactly 0 of the opponent.
-            # If the opponent has a piece in that line (blocked), it does not count.
             x_potentials = jnp.sum(jnp.logical_and(x_counts == 3, o_counts == 0))
             o_potentials = jnp.sum(jnp.logical_and(o_counts == 3, x_counts == 0))
 
-            # Return the ID of whoever has more potentials. 
-            # If it's a tie, return EMPTY (0).
             return jnp.where(
-                x_potentials > o_potentials, self._env.consts.PLAYER_X,
-                jnp.where(o_potentials > x_potentials, self._env.consts.PLAYER_O, self._env.consts.EMPTY)
+                x_potentials > o_potentials,
+                jnp.int32(self._env.consts.PLAYER_X),
+                jnp.where(
+                    o_potentials > x_potentials,
+                    jnp.int32(self._env.consts.PLAYER_O),
+                    jnp.int32(self._env.consts.EMPTY)
+                )
             )
 
-        # --- 2. Check the Sudden Death Condition ---
-        # We must use jnp.logical_and instead of Python's 'and' for JIT compatibility.
-        # Trigger ONLY if the game has reached 16 moves AND no one has won naturally yet.
         trigger_sd = jnp.logical_and(
-            state.move_count >= 16, 
-            state.winner == self._env.consts.EMPTY
+            new_state.move_count >= self.MOVE_LIMIT,
+            new_state.winner == self._env.consts.EMPTY
         )
 
-        # We cannot use standard 'if/else' statements inside JIT.
-        # jax.lax.cond ensures only the correct branch is executed based on trigger_sd.
-        new_winner = jax.lax.cond(
+        sd_winner = jax.lax.cond(
             trigger_sd,
-            lambda _: tie_breaker(state.board),
-            lambda _: state.winner,
+            lambda _: tie_breaker(new_state.board),
+            lambda _: new_state.winner,
             operand=None
         )
 
-        # --- 3. Hijack the Win Animation & Reward ---
-        # If sudden death triggers, we manually force the game into Phase 1 of the win sequence
-        # (the blackout phase) to give visual feedback that the game ended.
-        new_win_phase = jnp.where(trigger_sd, jnp.int32(1), state.win_phase)
-        new_win_timer = jnp.where(trigger_sd, jnp.int32(self._env.consts.BLACKOUT_FRAMES), state.win_timer)
-
-        # Assign the reward immediately. This is crucial for RL agents (PPO/PQN).
-        # By providing the +/- 1.0 reward based on the tie-breaker logic, the agent
-        # learns to prioritize building 3-in-a-rows even if it can't finish the 4th.
-        new_reward = jnp.where(
+        modified_state = jax.lax.cond(
             trigger_sd,
-            jnp.where(new_winner == self._env.consts.PLAYER_X, 1.0,
-            jnp.where(new_winner == self._env.consts.PLAYER_O, -1.0, 0.0)),
+            lambda s: s.replace(
+                winner=sd_winner,
+                game_over=jnp.bool_(True),
+                win_phase=jnp.int32(0),
+                win_timer=jnp.int32(0)
+            ),
+            lambda s: s,
+            new_state
+        )
+
+        modified_obs = jax.lax.cond(
+            trigger_sd,
+            lambda s: self._env._get_observation(s),
+            lambda _: obs,
+            modified_state
+        )
+
+        modified_reward = jnp.where(
+            trigger_sd,
+            jnp.where(
+                sd_winner == self._env.consts.PLAYER_X,
+                jnp.float32(1.0),
+                jnp.where(
+                    sd_winner == self._env.consts.PLAYER_O,
+                    jnp.float32(-1.0),
+                    jnp.float32(0.0)
+                )
+            ),
             reward
         )
 
-        # --- 4. Update the State and Observation ---
-        # In functional programming, we don't mutate variables in place.
-        # We create a new state object replacing only the modified fields.
-        modified_state = state.replace(
-            winner=new_winner,
-            win_phase=new_win_phase,
-            win_timer=new_win_timer
+        modified_done = jnp.where(trigger_sd, jnp.bool_(True), done)
+
+        modified_info = jax.lax.cond(
+            trigger_sd,
+            lambda s: self._env._get_info(s, self._env.ACTION_MAP[action]),
+            lambda _: info,
+            modified_state
         )
 
-        # Regenerate the observation dictionary so the CNN receives the updated
-        # game_over and winner status correctly.
-        modified_obs = self._env._get_observation(modified_state)
-        
-        return modified_obs, modified_state, new_reward, done, info
+        return modified_obs, modified_state, modified_reward, modified_done, modified_info
     
 
 
@@ -134,38 +150,55 @@ class TemporalPenaltyMod(JaxAtariInternalModPlugin):
         "STEP_PENALTY": -0.0003
     }
 
-class MisereMod(JaxAtariPostStepModPlugin):
+class MisereMod(JaxAtariInternalModPlugin):
     """
     Misère (anti-win) mode:
-    - If X completes 4-in-a-row, that becomes a LOSS for the agent.
-    - If O completes 4-in-a-row, that becomes a WIN for the agent.
-    - Non-terminal rewards remain unchanged.
+    - If X completes 4-in-a-row, that counts as a LOSS for the agent.
+    - If O completes 4-in-a-row, that counts as a WIN for the agent.
+    - Draws and non-terminal states are unchanged.
 
-    This version does not modify the base environment.
-    It only rewrites reward / winner interpretation after the step.
+    Implemented as an internal mod by patching reward / observation / info helpers.
     """
 
     @partial(jax.jit, static_argnums=(0,))
-    def after_step(self, obs, state, reward, done, info):
-        
-        jax.debug.print("base_reward={} base_winner={} -> new_reward={} new_winner={}",reward, state.winner, new_reward, new_winner
-)
-        x_won = state.winner == self._env.consts.PLAYER_X
-        o_won = state.winner == self._env.consts.PLAYER_O
+    def _get_reward(self, previous_state, state):
+        x_just_won = jnp.logical_and(
+            previous_state.winner == self._env.consts.EMPTY,
+            state.winner == self._env.consts.PLAYER_X
+        )
 
-        # Flip terminal reward semantics
-        new_reward = jnp.where(
-            x_won,
+        o_just_won = jnp.logical_and(
+            previous_state.winner == self._env.consts.EMPTY,
+            state.winner == self._env.consts.PLAYER_O
+        )
+
+        base_reward = jnp.where(
+            x_just_won,
             jnp.float32(-1.0),
             jnp.where(
-                o_won,
-                jnp.float32(+1.0),
-                reward
+                o_just_won,
+                jnp.float32(1.0),
+                jnp.float32(0.0)
             )
         )
 
-        # Swap displayed winner so logs / terminal observation match misère semantics
-        new_winner = jnp.where(
+        is_terminal = jnp.logical_or(x_just_won, o_just_won)
+        is_real_move = state.move_count > previous_state.move_count
+
+        step_penalty = jnp.where(
+            jnp.logical_or(is_terminal, jnp.logical_not(is_real_move)),
+            jnp.float32(0.0),
+            jnp.float32(self._env.consts.STEP_PENALTY)
+        )
+
+        return base_reward + step_penalty
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_observation(self, state):
+        x_won = state.winner == self._env.consts.PLAYER_X
+        o_won = state.winner == self._env.consts.PLAYER_O
+
+        misere_winner = jnp.where(
             x_won,
             jnp.int32(self._env.consts.PLAYER_O),
             jnp.where(
@@ -175,13 +208,47 @@ class MisereMod(JaxAtariPostStepModPlugin):
             )
         )
 
-        modified_state = state.replace(winner=new_winner)
-        modified_obs = self._env._get_observation(modified_state)
+        return {
+            "board": state.board.astype(jnp.int32),
+            "current_player": state.current_player.astype(jnp.int32),
+            "game_over": state.game_over.astype(jnp.int32),
+            "valid_moves": (state.board == self._env.consts.EMPTY).reshape(64).astype(jnp.int32),
+            "winner": misere_winner.astype(jnp.int32),
+        }
 
-        # Recompute info from the modified public state so winner/game phase stay consistent
-        modified_info = self._env._get_info(modified_state, info["last_move_action"])
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state, action=None):
+        act = jnp.int32(0) if action is None else action
 
-        return modified_obs, modified_state, new_reward, done, modified_info
+        x_won = state.winner == self._env.consts.PLAYER_X
+        o_won = state.winner == self._env.consts.PLAYER_O
+
+        misere_winner = jnp.where(
+            x_won,
+            jnp.int32(self._env.consts.PLAYER_O),
+            jnp.where(
+                o_won,
+                jnp.int32(self._env.consts.PLAYER_X),
+                state.winner
+            )
+        )
+
+        game_phase = jnp.where(
+            misere_winner == self._env.consts.PLAYER_X,
+            jnp.int32(1),
+            jnp.where(
+                misere_winner == self._env.consts.PLAYER_O,
+                jnp.int32(2),
+                jnp.where(state.move_count >= 64, jnp.int32(3), jnp.int32(0))
+            )
+        )
+
+        return {
+            "move_count": state.move_count,
+            "game_phase": game_phase,
+            "last_move_player": state.current_player,
+            "last_move_action": act,
+        }
 
     
 #########################################################################################################################################################################################

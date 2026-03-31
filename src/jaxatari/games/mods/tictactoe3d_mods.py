@@ -1,5 +1,5 @@
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.tictactoe3d_mod_plugins import (RandomStaticBlockersMod, RandomTurnOrderMod, StrictIllegalMoveMod,SuddenDeathMod,TemporalPenaltyMod, VariableIntelligenceMod,MisereMod,VanishingPiecesMod)
+from jaxatari.games.mods.tictactoe3d.tictactoe3d_mod_plugins import (RandomStaticBlockersMod, RandomTurnOrderMod, StrictIllegalMoveMod,SuddenDeathMod,TemporalPenaltyMod, VariableIntelligenceMod,MisereMod,VanishingPiecesMod)
 
 
 class Tictactoe3dEnvMod(JaxAtariModController):
