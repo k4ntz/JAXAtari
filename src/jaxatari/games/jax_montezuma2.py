@@ -241,7 +241,9 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             get_on_top = jnp.logical_and(is_aligned, jnp.logical_and(is_down, jnp.abs(player_feet_y - r_top) <= 5))
             get_on_bottom = jnp.logical_and(is_aligned, jnp.logical_and(is_up, jnp.abs(player_feet_y - r_bottom) <= 5))
 
-            in_rope_zone = jnp.logical_and(is_aligned, jnp.logical_and(player_feet_y >= r_top, player_feet_y <= r_bottom + 10))
+            can_climb_above = jnp.logical_and(state.room_id == 12, i == 0)
+            top_bound = jnp.where(can_climb_above, r_top - 5, r_top)
+            in_rope_zone = jnp.logical_and(is_aligned, jnp.logical_and(player_feet_y >= top_bound, player_feet_y <= r_bottom + 10))
 
             on_this_rope = jnp.where(state.is_climbing == 1, jnp.logical_and(in_rope_zone, jnp.logical_or(state.last_rope == i, state.last_rope == -1)), jnp.logical_or(catch_rope, jnp.logical_or(get_on_top, get_on_bottom)))
 
@@ -373,7 +375,11 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         # 4. Resolve Vertical Collision
         new_y = state.player_y + dy
-        new_y = jnp.where(jnp.logical_and(is_climbing == 1, rope_idx != -1), jnp.maximum(new_y, state.ropes_top[rope_idx]), new_y)
+        # Allow climbing slightly above the rope top when pressing UP to reach platforms
+        can_climb_above_rope = jnp.logical_and(state.room_id == 12, rope_idx == 0)
+        top_extension = jnp.where(jnp.logical_and(is_up, can_climb_above_rope), 25, 0)
+        rope_top_limit = state.ropes_top[rope_idx] - top_extension
+        new_y = jnp.where(jnp.logical_and(is_climbing == 1, rope_idx != -1), jnp.maximum(new_y, rope_top_limit), new_y)
         new_feet_y = new_y + self.consts.PLAYER_HEIGHT - 1
         
         new_top_y = jnp.clip(new_y, 0, 148)
