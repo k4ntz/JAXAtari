@@ -1707,7 +1707,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         )
         reward = reward + jax.lax.cond(
             jnp.logical_and(jnp.logical_and(previous_state.player[2]==2, state.player[2]==0),state.player[3]==0),
-            lambda :-1,
+            lambda :-100,
             lambda :0
         )
         reward = reward + jax.lax.cond(
