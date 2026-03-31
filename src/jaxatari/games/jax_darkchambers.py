@@ -2741,26 +2741,24 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
         def body(t, carry):
             dist, frontier = carry
 
-            def shift_frontier(f, dy, dx):
-                if dy == -1:
-                    return jnp.pad(f[1:, :], ((0, 1), (0, 0)))
-                elif dy == 1:
-                    return jnp.pad(f[:-1, :], ((1, 0), (0, 0)))
-                elif dx == -1:
-                    return jnp.pad(f[:, 1:], ((0, 0), (0, 1)))
-                else:  # dx == 1
-                    return jnp.pad(f[:, :-1], ((0, 0), (1, 0)))
+            # 4-neighbor expansion in parallel (up, down, left, right).
+            shifted_frontier = jnp.stack(
+                [
+                    jnp.pad(frontier[1:, :], ((0, 1), (0, 0))),
+                    jnp.pad(frontier[:-1, :], ((1, 0), (0, 0))),
+                    jnp.pad(frontier[:, 1:], ((0, 0), (0, 1))),
+                    jnp.pad(frontier[:, :-1], ((0, 0), (1, 0))),
+                ],
+                axis=0,
+            )
 
-            dirs = ((-1, 0), (1, 0), (0, -1), (0, 1))
-
-            new_frontier = jnp.zeros_like(frontier)
-            new_dist = dist
-
-            for dy, dx in dirs:
-                f_n = shift_frontier(frontier, dy, dx)
-                cand = f_n & ~blocked & (dist > t + 1)
-                new_frontier = new_frontier | cand
-                new_dist = jnp.where(cand, t + 1, new_dist)
+            candidate_mask = (
+                shifted_frontier
+                & (~blocked)[None, :, :]
+                & (dist[None, :, :] > (t + 1))
+            )
+            new_frontier = jnp.any(candidate_mask, axis=0)
+            new_dist = jnp.where(new_frontier, t + 1, dist)
 
             return (new_dist, new_frontier)
 
@@ -3427,16 +3425,19 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
             # Check if player is in ANY portal zone (top, middle, bottom)
             portal_hole_height = 40
             portal_gap = (self.consts.WORLD_HEIGHT - 3 * portal_hole_height) // 4
-            portal_y_starts = [
-                portal_gap,
-                portal_gap * 2 + portal_hole_height,
-                portal_gap * 3 + portal_hole_height * 2
-            ]
-            portal_y_ends = [y + portal_hole_height for y in portal_y_starts]
-            # Player is in portal zone if in any of the three
-            in_portal_zone = False
-            for y_start, y_end in zip(portal_y_starts, portal_y_ends):
-                in_portal_zone = in_portal_zone | ((prop_y >= y_start - self.consts.PLAYER_HEIGHT) & (prop_y <= y_end))
+            portal_y_starts = jnp.array(
+                [
+                    portal_gap,
+                    portal_gap * 2 + portal_hole_height,
+                    portal_gap * 3 + portal_hole_height * 2,
+                ],
+                dtype=jnp.int32,
+            )
+            portal_y_ends = portal_y_starts + portal_hole_height
+            # Player is in portal zone if in any of the three.
+            in_portal_zone = jnp.any(
+                (prop_y >= (portal_y_starts - self.consts.PLAYER_HEIGHT)) & (prop_y <= portal_y_ends)
+            )
             
             # Cycle through maps: exit left → go left map, exit right → go right map
             # Middle(0) → Left(1) → Middle(0) → Right(2) → Middle(0)
@@ -3735,7 +3736,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 moved_bullets,
                 state.bullet_positions
             )
-            updated_bullet_active = state.bullet_active & in_bounds.astype(jnp.int32) & (~bullet_wall_collisions).astype(jnp.int32)
+            updated_bullet_keep_mask = (state.bullet_active == 1) & in_bounds & (~bullet_wall_collisions)
+            updated_bullet_active = updated_bullet_keep_mask.astype(jnp.int32)
             
             # Merge spawned and moved bullets
             final_bullet_positions = jnp.where(
@@ -3831,7 +3833,8 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
                 moved_enemy_bullets,
                 new_enemy_bullet_positions
             )
-            updated_enemy_bullet_active = new_enemy_bullet_active & e_in_bounds.astype(jnp.int32) & (~enemy_bullet_wall_collisions).astype(jnp.int32)
+            updated_enemy_bullet_keep_mask = (new_enemy_bullet_active == 1) & e_in_bounds & (~enemy_bullet_wall_collisions)
+            updated_enemy_bullet_active = updated_enemy_bullet_keep_mask.astype(jnp.int32)
             
             # Final enemy bullet state
             final_enemy_bullet_positions = updated_enemy_bullet_positions

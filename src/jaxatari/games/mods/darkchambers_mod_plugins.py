@@ -9,7 +9,7 @@ from jaxatari.games.jax_darkchambers import (
     ITEM_HAMMER,
     NUM_ITEMS,
 )
-from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
+from jaxatari.modification import JaxAtariPostStepModPlugin
 
 
 EASY_MODE_RAPID_FIRE_DELTA = 10_000
@@ -17,6 +17,32 @@ EASY_MODE_REGULAR_ITEM_START = 5
 EASY_MODE_EXTRA_REGULAR_SLOTS = 16
 POTION_CLUSTER_START_SLOT = 6
 POTION_CLUSTER_COUNT = 3
+ITEM_SIZE = 8
+
+
+def _potion_collision_mask(
+    player_x,
+    player_y,
+    player_w,
+    player_h,
+    item_positions,
+    item_types,
+    prev_item_active,
+    potion_item_type,
+):
+    """Vectorized AABB collision mask for active potion items from previous state."""
+    item_x = item_positions[:, 0]
+    item_y = item_positions[:, 1]
+    was_active = prev_item_active == 1
+
+    return (
+        (player_x < (item_x + ITEM_SIZE))
+        & ((player_x + player_w) > item_x)
+        & (player_y < (item_y + ITEM_SIZE))
+        & ((player_y + player_h) > item_y)
+        & (item_types == potion_item_type)
+        & was_active
+    )
 
 
 def _spawn_potion_cluster_near_player(env, state: DarkChambersState, potion_item_type: int) -> DarkChambersState:
@@ -29,16 +55,16 @@ def _spawn_potion_cluster_near_player(env, state: DarkChambersState, potion_item
     # Place a small starter cluster directly below the spawn point.
     grid_x = ((idx - POTION_CLUSTER_START_SLOT) % 4) * 8
     grid_y = ((idx - POTION_CLUSTER_START_SLOT) // 4) * 8
-    base_x = state.player_x + jnp.array(env.consts.PLAYER_WIDTH // 2 - 12, dtype=jnp.int32)
-    base_y = state.player_y + jnp.array(env.consts.PLAYER_HEIGHT + 4, dtype=jnp.int32)
+    base_x = state.player_x + (env.consts.PLAYER_WIDTH // 2 - 12)
+    base_y = state.player_y + (env.consts.PLAYER_HEIGHT + 4)
 
     potion_x = jnp.clip(base_x + grid_x, 0, env.consts.WORLD_WIDTH - 8)
     potion_y = jnp.clip(base_y + grid_y, 0, env.consts.WORLD_HEIGHT - 8)
     potion_positions = jnp.stack([potion_x, potion_y], axis=1).astype(jnp.int32)
 
     clustered_positions = jnp.where(cluster_mask[:, None], potion_positions, state.item_positions)
-    clustered_types = jnp.where(cluster_mask, jnp.array(potion_item_type, dtype=jnp.int32), state.item_types)
-    clustered_active = jnp.where(cluster_mask, jnp.array(1, dtype=jnp.int32), state.item_active)
+    clustered_types = jnp.where(cluster_mask, jnp.asarray(potion_item_type, dtype=jnp.int32), state.item_types)
+    clustered_active = jnp.where(cluster_mask, jnp.int32(1), state.item_active)
 
     is_first_chamber = (state.map_index == 0) & (state.current_level == 0)
     return jax.lax.cond(
@@ -88,51 +114,26 @@ class SpeedPotionMod(JaxAtariPostStepModPlugin):
         # Detect collision: player position vs item positions
         player_x = new_state.player_x
         player_y = new_state.player_y
-        player_w = jnp.array(self._env.consts.PLAYER_WIDTH, dtype=jnp.int32)
-        player_h = jnp.array(self._env.consts.PLAYER_HEIGHT, dtype=jnp.int32)
-        
-        item_positions = new_state.item_positions
-        item_types = new_state.item_types
-        item_active = new_state.item_active
-        
-        # Get actual item size (8×8 for potions)
-        item_size = jnp.array(8, dtype=jnp.int32)
-        
-        # Check each item for collision with speed potion
-        def check_speed_potion_pickup(carry, i):
-            new_state_carry, timer_set = carry
-            item_x = item_positions[i, 0]
-            item_y = item_positions[i, 1]
-            item_type = item_types[i]
-            # Check if item was active in PREV state (before base game removed it)
-            was_active = prev_state.item_active[i] == 1
-            
-            # Simple AABB collision check using actual item size
-            collision = (
-                (player_x < item_x + item_size) & (player_x + player_w > item_x) &
-                (player_y < item_y + item_size) & (player_y + player_h > item_y) &
-                (item_type == ITEM_SPEED_POTION) &
-                (was_active == 1)
-            )
-            
-            # If collision and not already set, activate timer (item already removed by base game)
-            new_state_after = jax.lax.cond(
-                collision & (~timer_set),
-                lambda s: s.replace(
-                    speed_boost_timer=jnp.array(self._env.consts.SPEED_POTION_DURATION, dtype=jnp.int32)
-                ),
-                lambda s: s,
-                operand=new_state_carry
-            )
-            
-            new_timer_set = timer_set | collision
-            return (new_state_after, new_timer_set), None
-        
-        # Scan through all items to detect pickups
-        (updated_state, _), _ = jax.lax.scan(
-            check_speed_potion_pickup,
-            (new_state, False),
-            jnp.arange(NUM_ITEMS)
+        player_w = self._env.consts.PLAYER_WIDTH
+        player_h = self._env.consts.PLAYER_HEIGHT
+
+        collision_mask = _potion_collision_mask(
+            player_x=player_x,
+            player_y=player_y,
+            player_w=player_w,
+            player_h=player_h,
+            item_positions=new_state.item_positions,
+            item_types=new_state.item_types,
+            prev_item_active=prev_state.item_active,
+            potion_item_type=ITEM_SPEED_POTION,
+        )
+        picked_speed_potion = jnp.any(collision_mask)
+
+        updated_state = jax.lax.cond(
+            picked_speed_potion,
+            lambda s: s.replace(speed_boost_timer=jnp.asarray(self._env.consts.SPEED_POTION_DURATION, dtype=jnp.int32)),
+            lambda s: s,
+            operand=new_state,
         )
         
         # Decrement active timer
@@ -182,60 +183,29 @@ class HealPotionMod(JaxAtariPostStepModPlugin):
         """
         player_x = new_state.player_x
         player_y = new_state.player_y
-        player_w = jnp.array(self._env.consts.PLAYER_WIDTH, dtype=jnp.int32)
-        player_h = jnp.array(self._env.consts.PLAYER_HEIGHT, dtype=jnp.int32)
-        
-        item_positions = new_state.item_positions
-        item_types = new_state.item_types
-        item_active = new_state.item_active
-        
-        # Get actual item size (8×8 for potions)
-        item_size = jnp.array(8, dtype=jnp.int32)
-        
-        # Check each item for heal potion pickup
-        def check_heal_potion_pickup(carry, i):
-            state_carry, healed = carry
-            item_x = item_positions[i, 0]
-            item_y = item_positions[i, 1]
-            item_type = item_types[i]
-            # Check if item was active in PREV state (before base game removed it)
-            was_active = prev_state.item_active[i] == 1
-            
-            # Collision check using actual item size
-            collision = (
-                (player_x < item_x + item_size) & (player_x + player_w > item_x) &
-                (player_y < item_y + item_size) & (player_y + player_h > item_y) &
-                (item_type == ITEM_HEAL_POTION) &
-                (was_active == 1)
-            )
-            
-            # If collision and not already healed, add +1000 health (clipped to MAX_HEALTH)
-            # Follow the exact same pattern as HEART items in the main game
-            # Note: item_active is already set to 0 by base game, so we don't modify it
-            health_gain = jnp.array(1000, dtype=jnp.int32)
-            
-            def apply_heal(s):
-                new_health = jnp.clip(s.health + health_gain, 0, self._env.consts.MAX_HEALTH)
-                return s.replace(health=new_health)
-            
-            new_state_after = jax.lax.cond(
-                collision & (~healed),
-                apply_heal,
-                lambda s: s,
-                operand=state_carry
-            )
-            
-            new_healed = healed | collision
-            return (new_state_after, new_healed), None
-        
-        # Scan through all items
-        (final_state, _), _ = jax.lax.scan(
-            check_heal_potion_pickup,
-            (new_state, False),
-            jnp.arange(NUM_ITEMS)
+        player_w = self._env.consts.PLAYER_WIDTH
+        player_h = self._env.consts.PLAYER_HEIGHT
+
+        collision_mask = _potion_collision_mask(
+            player_x=player_x,
+            player_y=player_y,
+            player_w=player_w,
+            player_h=player_h,
+            item_positions=new_state.item_positions,
+            item_types=new_state.item_types,
+            prev_item_active=prev_state.item_active,
+            potion_item_type=ITEM_HEAL_POTION,
         )
-        
-        return final_state
+        picked_heal_potion = jnp.any(collision_mask)
+
+        health_gain = jnp.asarray(1000, dtype=jnp.int32)
+
+        return jax.lax.cond(
+            picked_heal_potion,
+            lambda s: s.replace(health=jnp.clip(s.health + health_gain, 0, self._env.consts.MAX_HEALTH)),
+            lambda s: s,
+            operand=new_state,
+        )
     
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
@@ -278,53 +248,30 @@ class PoisonPotionMod(JaxAtariPostStepModPlugin):
         """
         player_x = new_state.player_x
         player_y = new_state.player_y
-        player_w = jnp.array(self._env.consts.PLAYER_WIDTH, dtype=jnp.int32)
-        player_h = jnp.array(self._env.consts.PLAYER_HEIGHT, dtype=jnp.int32)
-        
-        item_positions = new_state.item_positions
-        item_types = new_state.item_types
-        item_active = new_state.item_active
-        
-        # Get actual item size (8×8 for potions)
-        item_size = jnp.array(8, dtype=jnp.int32)
-        
-        # Check for poison potion pickup
-        def check_poison_potion_pickup(carry, i):
-            state_carry, timer_set = carry
-            item_x = item_positions[i, 0]
-            item_y = item_positions[i, 1]
-            item_type = item_types[i]
-            # Check if item was active in PREV state (before base game removed it)
-            was_active = prev_state.item_active[i] == 1
-            
-            # Collision check using actual item size
-            collision = (
-                (player_x < item_x + item_size) & (player_x + player_w > item_x) &
-                (player_y < item_y + item_size) & (player_y + player_h > item_y) &
-                (item_type == ITEM_POISON_POTION) &
-                (was_active == 1)
-            )
-            
-            # Activate poison cloud at player position (item already removed by base game)
-            new_state_after = jax.lax.cond(
-                collision & (~timer_set),
-                lambda s: s.replace(
-                    poison_cloud_x=s.player_x,
-                    poison_cloud_y=s.player_y,
-                    poison_cloud_timer=jnp.array(self._env.consts.POISON_DURATION, dtype=jnp.int32)
-                ),
-                lambda s: s,
-                operand=state_carry
-            )
-            
-            new_timer_set = timer_set | collision
-            return (new_state_after, new_timer_set), None
-        
-        # Detect pickups
-        (state_after_pickup, _), _ = jax.lax.scan(
-            check_poison_potion_pickup,
-            (new_state, False),
-            jnp.arange(NUM_ITEMS)
+        player_w = self._env.consts.PLAYER_WIDTH
+        player_h = self._env.consts.PLAYER_HEIGHT
+
+        collision_mask = _potion_collision_mask(
+            player_x=player_x,
+            player_y=player_y,
+            player_w=player_w,
+            player_h=player_h,
+            item_positions=new_state.item_positions,
+            item_types=new_state.item_types,
+            prev_item_active=prev_state.item_active,
+            potion_item_type=ITEM_POISON_POTION,
+        )
+        picked_poison_potion = jnp.any(collision_mask)
+
+        state_after_pickup = jax.lax.cond(
+            picked_poison_potion,
+            lambda s: s.replace(
+                poison_cloud_x=s.player_x,
+                poison_cloud_y=s.player_y,
+                poison_cloud_timer=jnp.asarray(self._env.consts.POISON_DURATION, dtype=jnp.int32),
+            ),
+            lambda s: s,
+            operand=new_state,
         )
         
         # Decrement poison timer

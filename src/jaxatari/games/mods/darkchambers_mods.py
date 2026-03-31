@@ -119,7 +119,7 @@ class DarkchambersEnvMod(JaxAtariModController):
 
     def __init__(self,
                  env,
-                 mods_config: list = [],
+                 mods_config: list | None = None,
                  allow_conflicts: bool = False
                  ):
         """
@@ -131,9 +131,11 @@ class DarkchambersEnvMod(JaxAtariModController):
             allow_conflicts: If True, allow conflicting mods (last one wins)
         """
 
+        normalized_mods_config = [] if mods_config is None else mods_config
+
         super().__init__(
             env=env,
-            mods_config=mods_config,
+            mods_config=normalized_mods_config,
             allow_conflicts=allow_conflicts,
             registry=self.REGISTRY
         )
