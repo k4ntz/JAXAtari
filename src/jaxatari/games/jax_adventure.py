@@ -1285,7 +1285,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[AdventureObservation, AdventureState]:
         state_key, _step_key = jax.random.split(key)
         state = AdventureState(
-            step_counter = jnp.array(0, dtype=jnp.int32),
+            step_counter = jnp.array(0).astype(jnp.int32),
             #Player Spawn: x, y, tile, inventory
             player = jnp.array([self.consts.PLAYER_SPAWN[0],
                                 self.consts.PLAYER_SPAWN[1],
@@ -1401,7 +1401,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         return self.renderer.render(state)
 
     #ToDo, done for all movable entities, why, no clue
-    def _get_observation(self, state: AdventureState):
+    def _get_observation(self, state: AdventureState) -> AdventureObservation:
         player = ObjectObservation.create(
             x=state.player[0],
             y=state.player[1],
@@ -1510,8 +1510,8 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             x=state.bat[0],
             y=state.bat[1],
             active=state.bat[2]==state.player[2],
-            width=0, #bat has no hitbox
-            height=0
+            width=self.consts.DOT_SIZE[0],
+            height=self.consts.DOT_SIZE[1]
         )
         dot = ObjectObservation.create(
             x=state.dot[0],
