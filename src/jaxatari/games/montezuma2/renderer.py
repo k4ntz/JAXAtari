@@ -375,12 +375,32 @@ class Montezuma2Renderer(JAXGameRenderer):
         raster = jax.lax.fori_loop(0, state.lives, render_life, raster)
 
         # Render Inventory (Keys)
-        def render_inventory(i, raster):
+        def render_key(i, raster):
             mask = self.SHAPE_MASKS["item"][0]
             x = self.consts.ITEMBAR_LIFES_STARTING_X + i * 8
             y = self.consts.ITEMBAR_STARTING_Y
             return self.jr.render_at(raster, x, y, mask)
             
-        raster = jax.lax.fori_loop(0, state.inventory[0], render_inventory, raster)
+        raster = jax.lax.fori_loop(0, state.inventory[0], render_key, raster)
+
+        # Render Sword
+        def render_sword(raster_in):
+             offset = state.inventory[0]
+             mask = self.SHAPE_MASKS["item"][3]
+             x = self.consts.ITEMBAR_LIFES_STARTING_X + offset * 8
+             y = self.consts.ITEMBAR_STARTING_Y
+             return self.jr.render_at(raster_in, x, y, mask)
+        
+        raster = jax.lax.cond(state.inventory[1] == 1, render_sword, lambda r: r, raster)
+        
+        # Render Torch
+        def render_torch(raster_in):
+             offset = state.inventory[0] + state.inventory[1]
+             mask = self.SHAPE_MASKS["item"][4]
+             x = self.consts.ITEMBAR_LIFES_STARTING_X + offset * 8
+             y = self.consts.ITEMBAR_STARTING_Y
+             return self.jr.render_at(raster_in, x, y, mask)
+             
+        raster = jax.lax.cond(state.inventory[2] == 1, render_torch, lambda r: r, raster)
 
         return self.PALETTE[raster]

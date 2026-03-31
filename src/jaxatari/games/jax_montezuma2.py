@@ -116,7 +116,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             laser_cycle=jnp.array(0, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
             death_type=jnp.array(0, dtype=jnp.int32),
-            inventory=jnp.array([3], dtype=jnp.int32), # TODO: CHEAT for exploration 
+            inventory=jnp.array([3, 0, 0], dtype=jnp.int32), # keys, sword, torch
             global_enemies_active=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ENEMIES_PER_ROOM), dtype=jnp.int32),
             global_enemies_type=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ENEMIES_PER_ROOM), dtype=jnp.int32),
             global_items_active=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ITEMS_PER_ROOM), dtype=jnp.int32),
@@ -439,7 +439,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         # 5.5 Item Collection
         def collect_item(i, carry):
-            keys_collected, items_active, current_score = carry
+            inventory, items_active, current_score = carry
             i_x = state.items_x[i]
             i_y = state.items_y[i]
             i_active = items_active[i] == 1
@@ -450,18 +450,27 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             
             collect = jnp.logical_and(i_active, overlap)
             
-            is_key = state.items_type[i] == 0
-            new_keys = jnp.where(jnp.logical_and(collect, is_key), keys_collected + 1, keys_collected)
+            item_type = state.items_type[i]
+            is_key = item_type == 0
+            is_sword = item_type == 3
+            is_torch = item_type == 4
+            
+            new_keys = jnp.where(jnp.logical_and(collect, is_key), inventory[0] + 1, inventory[0])
+            new_sword = jnp.where(jnp.logical_and(collect, is_sword), 1, inventory[1])
+            new_torch = jnp.where(jnp.logical_and(collect, is_torch), 1, inventory[2])
+            
+            new_inventory = jnp.array([new_keys, new_sword, new_torch])
             new_items_active = jnp.where(collect, items_active.at[i].set(0), items_active)
             item_score = jnp.where(is_key, 100, 1000)
             new_score = jnp.where(collect, current_score + item_score, current_score)
             
-            return new_keys, new_items_active, new_score
+            return new_inventory, new_items_active, new_score
 
-        current_keys, new_items_active, new_score = jax.lax.fori_loop(
+        current_inventory, new_items_active, new_score = jax.lax.fori_loop(
             0, self.consts.MAX_ITEMS_PER_ROOM, collect_item,
-            (state.inventory[0], state.items_active, state.score)
+            (state.inventory, state.items_active, state.score)
         )
+        current_keys = current_inventory[0]
 
         def check_door(i, carry):
             hit, keys_left, doors_active, current_score = carry
@@ -489,6 +498,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             0, self.consts.MAX_DOORS_PER_ROOM, check_door,
             (hit_wall, current_keys, state.doors_active, new_score)
         )
+        current_inventory = current_inventory.at[0].set(current_keys)
         new_x = jnp.where(jnp.logical_or(hit_wall, is_climbing == 1), current_x, new_x)
         
         new_mid_x = new_x + self.consts.PLAYER_WIDTH // 2
@@ -638,7 +648,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             enemies_x=new_enemies_x,
             enemies_active=new_enemies_active,
             enemies_direction=new_enemies_dir,
-            inventory=jnp.array([current_keys], dtype=jnp.int32),
+            inventory=current_inventory,
             items_active=new_items_active,
             doors_active=new_doors_active,
             laser_cycle=new_laser_cycle,
