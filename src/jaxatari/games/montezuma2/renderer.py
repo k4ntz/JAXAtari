@@ -135,18 +135,24 @@ class Montezuma2Renderer(JAXGameRenderer):
         raster = self.jr.create_object_raster(self.BACKGROUND)
         
         # Draw Room Background
-        mask_0 = self.SHAPE_MASKS["room_bg_0"][:149, :]
-        mask_1 = self.SHAPE_MASKS["room_bg_1"][:149, :]
-        mask_2 = self.SHAPE_MASKS["room_bg_2"][:149, :]
-        mask_3 = self.SHAPE_MASKS["room_bg_3"][:149, :]
+        mask_0 = self.SHAPE_MASKS["room_bg_0"][:149, ...]
+        mask_1 = self.SHAPE_MASKS["room_bg_1"][:149, ...]
+        mask_2 = self.SHAPE_MASKS["room_bg_2"][:149, ...]
+        mask_3 = self.SHAPE_MASKS["room_bg_3"][:149, ...]
         
-        room_bg_mask = jnp.where(state.room_id == 5, mask_1, mask_0)
+        mask_0_modified = mask_0.at[147:149, 72:88].set(0)
+        room_bg_mask = jnp.where(state.room_id == 4, mask_1, mask_0_modified)
+        
         mask_3_modified = mask_3.at[147:149, 72:88].set(0)
         room_bg_mask = jnp.where(state.room_id == 9, mask_3_modified, room_bg_mask)
         mask_2_modified = mask_2.at[48:149, 72:88].set(0)
         room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 11, state.room_id == 10), mask_2_modified, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 13, mask_2, room_bg_mask)
-        room_bg_mask = jnp.where(state.room_id == 3, room_bg_mask.at[6:149, 156:160].set(1), room_bg_mask)
+        
+        # Add walls for side rooms Level 0
+        room_bg_mask = jnp.where(state.room_id == 3, room_bg_mask.at[6:149, 0:4].set(1), room_bg_mask)
+        room_bg_mask = jnp.where(state.room_id == 5, room_bg_mask.at[6:149, 156:160].set(1), room_bg_mask)
+        
         raster = self.jr.render_at(raster, 0, 47, room_bg_mask)
         
         # Draw Ladders (Vertical Rails + Horizontal Rungs)

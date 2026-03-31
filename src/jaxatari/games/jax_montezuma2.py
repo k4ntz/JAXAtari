@@ -30,18 +30,22 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         sprite_path_0 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "base_collision_map.npy")
         col_map_0 = jnp.load(sprite_path_0)[:149, :, 0]
-        room_col_0_4 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
-        room_col_0_4 = room_col_0_4.at[6:, 0:4].set(1) # Left wall only for room_0_4
-        room_col_0_4 = room_col_0_4.at[147:149, 72:88].set(0) # Hole for ladder down to room_1_4
+        
+        # New 3: Leftmost
+        room_col_0_3 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
+        room_col_0_3 = room_col_0_3.at[6:, 0:4].set(1) # Left wall
+        room_col_0_3 = room_col_0_3.at[147:149, 72:88].set(0) # Hole for ladder down
 
         sprite_path_1 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "mid_room_collision_level_0.npy")
         col_map_1 = jnp.load(sprite_path_1)[:149, :, 0] # (149, 160)
-        room_col_0_5 = jnp.where(col_map_1 > 0, 1, 0).astype(jnp.int32)
-        # No side walls for room_0_5 as it's connected on both sides
+        # New 4: Middle
+        room_col_0_4 = jnp.where(col_map_1 > 0, 1, 0).astype(jnp.int32)
+        # No side walls for room_0_4
 
-        room_col_0_3 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
-        room_col_0_3 = room_col_0_3.at[6:, 156:160].set(1) # Right wall only for room_0_3
-        # No hole for ladder down to room_1_4
+        # New 5: Rightmost
+        room_col_0_5 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
+        room_col_0_5 = room_col_0_5.at[6:, 156:160].set(1) # Right wall
+        room_col_0_5 = room_col_0_5.at[147:149, 72:88].set(0) # Hole for ladder down
         
         room_col_1_3 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
         room_col_1_2 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
@@ -53,8 +57,9 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         room_col_1_4 = room_col_1_4.at[147:149, 72:88].set(0) # Hole for ladder
         
         room_col_1_5 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
+        room_col_1_5 = room_col_1_5.at[6:, 156:160].set(1) # Right wall
         
-        self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0_4, room_col_0_5, room_col_0_3, room_col_1_3, room_col_1_2, room_col_1_4, room_col_1_5])
+        self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0_3, room_col_0_4, room_col_0_5, room_col_1_3, room_col_1_2, room_col_1_4, room_col_1_5])
 
     def reset(self, key: jrandom.PRNGKey) -> Tuple[Montezuma2Observation, Montezuma2State]:
         state = Montezuma2State(
@@ -117,21 +122,21 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         )
         
         gia = state.global_items_active
-        gia = gia.at[4, 0].set(1)
-        gia = gia.at[5, 0].set(1)
+        gia = gia.at[3, 0].set(1) # New 3 (Left)
+        gia = gia.at[4, 0].set(1) # New 4 (Mid)
         gia = gia.at[9, 0].set(1)
         gia = gia.at[13, 0].set(1)
         
         gda = state.global_doors_active
-        gda = gda.at[5, 0].set(1)
-        gda = gda.at[5, 1].set(1)
+        gda = gda.at[4, 0].set(1) # New 4 (Mid)
+        gda = gda.at[4, 1].set(1)
         gda = gda.at[9, 0].set(1)
         gda = gda.at[9, 1].set(1)
         
         gea = state.global_enemies_active
-        gea = gea.at[5, 0].set(1)
-        gea = gea.at[3, 0].set(1)
-        gea = gea.at[3, 1].set(1)
+        gea = gea.at[4, 0].set(1) # New 4 (Mid)
+        gea = gea.at[5, 0].set(1) # New 5 (Right)
+        gea = gea.at[5, 1].set(1)
         gea = gea.at[11, 0].set(1)
         gea = gea.at[10, 0].set(1)
         gea = gea.at[10, 1].set(1)
@@ -139,16 +144,16 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
         gety = state.global_enemies_type
         # ROLL_SKULL = 1, BOUNCE_SKULL = 2, SPIDER = 3
+        gety = gety.at[4, 0].set(1)
         gety = gety.at[5, 0].set(1)
-        gety = gety.at[3, 0].set(1)
-        gety = gety.at[3, 1].set(1)
+        gety = gety.at[5, 1].set(1)
         gety = gety.at[11, 0].set(3)
         gety = gety.at[10, 0].set(1)
         gety = gety.at[10, 1].set(1)
         gety = gety.at[9, 0].set(1)
 
         giy = state.global_items_type
-        giy = giy.at[4, 0].set(1) # Gem in room 4
+        giy = giy.at[3, 0].set(1) # Gem in room 3
         # Torch in room 9
         giy = giy.at[9, 0].set(4)
         # Sword in room 13
@@ -398,12 +403,15 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         # 5. Resolve Horizontal with Wall Collision
         raw_new_x = current_x + dx
-        transition_left = jnp.logical_and(raw_new_x < 0, jnp.logical_or(state.room_id == 5, jnp.logical_or(state.room_id == 3, jnp.logical_or(state.room_id == 11, state.room_id == 9))))
-        transition_right = jnp.logical_and(raw_new_x + self.consts.PLAYER_WIDTH > self.consts.WIDTH, jnp.logical_or(state.room_id == 4, jnp.logical_or(state.room_id == 5, jnp.logical_or(state.room_id == 10, state.room_id == 11))))
-        transition_down = jnp.logical_and(new_y >= 148, state.room_id == 4)
-        transition_up = jnp.logical_and(new_y <= 2, state.room_id == 11)
+        transition_left = jnp.logical_and(raw_new_x < 0, jnp.logical_or(state.room_id == 5, jnp.logical_or(state.room_id == 4, jnp.logical_or(state.room_id == 11, state.room_id == 9))))
+        transition_right = jnp.logical_and(raw_new_x + self.consts.PLAYER_WIDTH > self.consts.WIDTH, jnp.logical_or(state.room_id == 3, jnp.logical_or(state.room_id == 4, jnp.logical_or(state.room_id == 10, state.room_id == 11))))
+        transition_down = jnp.logical_and(new_y >= 148, jnp.logical_or(state.room_id == 3, state.room_id == 5))
+        transition_up = jnp.logical_and(new_y <= 2, jnp.logical_or(state.room_id == 11, state.room_id == 13))
 
-        new_x = jnp.clip(raw_new_x, 0, self.consts.WIDTH - self.consts.PLAYER_WIDTH)
+        new_x = jnp.where(jnp.logical_and(transition_left, state.room_id == 3), 0, raw_new_x)
+        new_x = jnp.where(jnp.logical_and(transition_right, state.room_id == 5), self.consts.WIDTH - self.consts.PLAYER_WIDTH, new_x)
+
+        new_x = jnp.clip(new_x, 0, self.consts.WIDTH - self.consts.PLAYER_WIDTH)
         new_left_x = jnp.clip(new_x, 0, self.consts.WIDTH - 1)
         new_right_x = jnp.clip(new_x + self.consts.PLAYER_WIDTH - 1, 0, self.consts.WIDTH - 1)
         
@@ -587,8 +595,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
         respawn_now = jnp.logical_and(state.death_timer == 1, new_death_timer == 0)
         
-        spawn_x = jnp.where(state.room_id == 4, 146, self.consts.INITIAL_PLAYER_X)
-        spawn_y = jnp.where(state.room_id == 4, 27, self.consts.INITIAL_PLAYER_Y)
+        spawn_x = jnp.where(state.room_id == 4, 77, self.consts.INITIAL_PLAYER_X)
+        spawn_y = jnp.where(state.room_id == 4, 26, self.consts.INITIAL_PLAYER_Y)
         
         new_lives = jnp.where(start_death, state.lives - 1, state.lives)
         final_x = jnp.where(respawn_now, spawn_x, jnp.where(new_death_timer > 0, state.player_x, new_x))
@@ -631,10 +639,10 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         )
 
         transition_any = jnp.logical_or(jnp.logical_or(transition_left, transition_right), jnp.logical_or(transition_down, transition_up))
-        new_room_id = jnp.where(transition_left, jnp.where(state.room_id == 5, 4, jnp.where(state.room_id == 11, 10, jnp.where(state.room_id == 9, 11, 5))),
-                      jnp.where(transition_right, jnp.where(state.room_id == 4, 5, jnp.where(state.room_id == 10, 11, jnp.where(state.room_id == 11, 9, 3))),
-                      jnp.where(transition_down, jnp.where(state.room_id == 4, 11, 11),
-                      jnp.where(transition_up, jnp.where(state.room_id == 11, 4, 4), state.room_id))))
+        new_room_id = jnp.where(transition_left, jnp.where(state.room_id == 5, 4, jnp.where(state.room_id == 4, 3, jnp.where(state.room_id == 11, 10, jnp.where(state.room_id == 9, 11, jnp.where(state.room_id == 13, 9, 5))))),
+                      jnp.where(transition_right, jnp.where(state.room_id == 3, 4, jnp.where(state.room_id == 4, 5, jnp.where(state.room_id == 10, 11, jnp.where(state.room_id == 11, 9, jnp.where(state.room_id == 9, 13, 3))))),
+                      jnp.where(transition_down, jnp.where(state.room_id == 3, 11, jnp.where(state.room_id == 4, 9, 13)),
+                      jnp.where(transition_up, jnp.where(state.room_id == 11, 3, jnp.where(state.room_id == 9, 4, 5)), state.room_id))))
         def transition_fn(state_in):
             st = state_in.replace(
                 global_doors_active=state_in.global_doors_active.at[state_in.room_id].set(state_in.doors_active),
