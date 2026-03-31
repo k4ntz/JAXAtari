@@ -1418,7 +1418,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         dragon_yellow = ObjectObservation.create(
             x=state.dragon_yellow[0],
             y=state.dragon_yellow[1],
-            active=state.dragon_yellow[2]==state.player[2],
+            active=state.dragon_yellow[2]==state.player[2].astype(jnp.bool_),
             width=self.consts.DRAGON_SIZE[0], 
             height=self.consts.DRAGON_SIZE[1], 
             state=state.dragon_yellow[3]
@@ -1426,7 +1426,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         dragon_green = ObjectObservation.create(
             x=state.dragon_green[0],
             y=state.dragon_green[1],
-            active=state.dragon_green[2]==state.player[2],
+            active=state.dragon_green[2]==state.player[2].astype(jnp.bool_),
             width=self.consts.DRAGON_SIZE[0], 
             height=self.consts.DRAGON_SIZE[1], 
             state=state.dragon_green[3]
@@ -1434,21 +1434,21 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         key_yellow = ObjectObservation.create(
             x=state.key_yellow[0],
             y=state.key_yellow[1],
-            active=state.key_yellow[2]==state.player[2],
+            active=state.key_yellow[2]==state.player[2].astype(jnp.bool_),
             width=self.consts.KEY_SIZE[0], 
             height=self.consts.KEY_SIZE[1]
         )
         key_black = ObjectObservation.create(
             x=state.key_black[0],
             y=state.key_black[1],
-            active=state.key_black[2]==state.player[2],
+            active=state.key_black[2]==state.player[2].astype(jnp.bool_),
             width=self.consts.KEY_SIZE[0], 
             height=self.consts.KEY_SIZE[1],
         )
         gate_yellow = ObjectObservation.create(
             x=self.consts.YELLOW_GATE_POS[0],
             y=self.consts.YELLOW_GATE_POS[1],
-            active=self.consts.YELLOW_GATE_POS[2]==state.player[2],
+            active=self.consts.YELLOW_GATE_POS[2]==state.player[2].astype(jnp.bool_),
             width=self.consts.GATE_SIZE[0], 
             height=self.consts.GATE_SIZE[1], 
             state=state.gate_yellow[0]
@@ -1456,7 +1456,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         gate_black = ObjectObservation.create(
             x=self.consts.BLACK_GATE_POS[0],
             y=self.consts.BLACK_GATE_POS[1],
-            active=self.consts.BLACK_GATE_POS[2]==state.player[2],
+            active=self.consts.BLACK_GATE_POS[2]==state.player[2].astype(jnp.bool_),
             width=self.consts.GATE_SIZE[0], 
             height=self.consts.GATE_SIZE[1], 
             state=state.gate_black[0]
@@ -1464,35 +1464,35 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         sword = ObjectObservation.create(
             x=state.sword[0],
             y=state.sword[1],
-            active=state.sword[2]==state.player[2],
+            active=state.sword[2]==state.player[2].astype(jnp.bool_),
             width=self.consts.SWORD_SIZE[0], 
             height=self.consts.SWORD_SIZE[1]
         )
         bridge = ObjectObservation.create(
             x=state.bridge[0],
             y=state.bridge[1],
-            active=state.bridge[2]==state.player[2],
+            active=state.bridge[2]==state.player[2].astype(jnp.bool_),
             width=self.consts.BRIDGE_SIZE[0], 
             height=self.consts.BRIDGE_SIZE[1]
         )
         magnet = ObjectObservation.create(
             x=state.magnet[0],
             y=state.magnet[1],
-            active=state.magnet[2]==state.player[2],
+            active=state.magnet[2]==state.player[2].astype(jnp.bool_),
             width=self.consts.MAGNET_SIZE[0], 
             height=self.consts.MAGNET_SIZE[1]
         )
         chalice = ObjectObservation.create(
             x=state.chalice[0],
             y=state.chalice[1],
-            active=state.chalice[2]==state.player[2],
+            active=state.chalice[2]==state.player[2].astype(jnp.bool_),
             width=self.consts.CHALICE_SIZE[0], 
             height=self.consts.CHALICE_SIZE[1]
         )
         dragon_red = ObjectObservation.create(
             x=state.dragon_red[0],
             y=state.dragon_red[1],
-            active=state.dragon_red[2]==state.player[2],
+            active=state.dragon_red[2]==state.player[2].astype(jnp.bool_),
             width=self.consts.DRAGON_SIZE[0], 
             height=self.consts.DRAGON_SIZE[1], 
             state=state.dragon_red[3]
@@ -1500,14 +1500,14 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         key_white = ObjectObservation.create(
             x=state.key_white[0],
             y=state.key_white[1],
-            active=state.key_white[2]==state.player[2],
+            active=state.key_white[2]==state.player[2].astype(jnp.bool_),
             width=self.consts.KEY_SIZE[0], 
             height=self.consts.KEY_SIZE[1]
         )
         gate_white = ObjectObservation.create(
             x=self.consts.WHITE_GATE_POS[0],
             y=self.consts.WHITE_GATE_POS[1],
-            active=self.consts.WHITE_GATE_POS[2]==state.player[2],
+            active=self.consts.WHITE_GATE_POS[2]==state.player[2].astype(jnp.bool_),
             width=self.consts.GATE_SIZE[0], 
             height=self.consts.GATE_SIZE[1], 
             state=state.gate_white[0]
@@ -1515,14 +1515,14 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
         bat = ObjectObservation.create(
             x=state.bat[0],
             y=state.bat[1],
-            active=state.bat[2]==state.player[2],
+            active=state.bat[2]==state.player[2].astype(jnp.bool_),
             width=self.consts.DOT_SIZE[0],
             height=self.consts.DOT_SIZE[1]
         )
         dot = ObjectObservation.create(
             x=state.dot[0],
             y=state.dot[1],
-            active=state.dot[2]==state.player[2],
+            active=state.dot[2]==state.player[2].astype(jnp.bool_),
             width=self.consts.DOT_SIZE[0], 
             height=self.consts.DOT_SIZE[1]
         )
