@@ -1691,18 +1691,49 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
     def _get_reward(self, previous_state: AdventureState, state: AdventureState):
         reward = jax.lax.cond(
             jnp.logical_or(jnp.logical_or(state.dragon_yellow[5]==1,state.dragon_green[5]==1),state.dragon_red[5]==1), #lose when eaten by dragon
-            lambda :-1,
+            lambda :-1000,
             lambda : jax.lax.cond(
                 state.chalice[2]==1, #win when chalice in yellow castle
-                lambda :state.step_counter,
-                lambda :0 #this should happen on reset?
+                lambda :1000,
+                lambda :0
             )
         )
-        #reward = jax.lax.cond(
-        #    state.chalice[2]==1,
-        #    lambda :1,
-        #    lambda :0
-        #)
+
+        #reward for goto black key
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==0, state.player[2]==2),state.player[3]==0),
+            lambda :1,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==2, state.player[2]==0),state.player[3]==0),
+            lambda :-1,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==2, state.player[2]==3),state.player[3]==0),
+            lambda :1,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(jnp.logical_and(previous_state.player[2]==3, state.player[2]==2),state.player[3]==0),
+            lambda :-1,
+            lambda :0
+        )
+
+        #reward for pickup black key
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(previous_state.player[3]==0, state.player[2]==2),
+            lambda :1,
+            lambda :0
+        )
+        reward = reward + jax.lax.cond(
+            jnp.logical_and(previous_state.player[3]==2, state.player[2]==0),
+            lambda :1,
+            lambda :0
+        )
+        #jax.debug.print("reward {a}", a = reward)
+
         return reward
 
     @partial(jax.jit, static_argnums=(0,))
