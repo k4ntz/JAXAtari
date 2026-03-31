@@ -4061,7 +4061,9 @@ class DarkChambersEnv(JaxEnvironment[DarkChambersState, DarkChambersObservation,
 
             def check_ladder_collision(item_pos):
                 overlap_x = (new_x <= (item_pos[0] + LADDER_WIDTH - 1)) & ((new_x + self.consts.PLAYER_WIDTH - 1) >= item_pos[0])
-                overlap_y = (new_y <= (item_pos[1] + LADDER_HEIGHT - 1)) & ((new_y + self.consts.PLAYER_HEIGHT - 1) >= item_pos[1])
+                player_feet_top = new_y + self.consts.PLAYER_HEIGHT - 6
+                player_feet_bottom = new_y + self.consts.PLAYER_HEIGHT - 1
+                overlap_y = (player_feet_bottom >= item_pos[1]) & (player_feet_top <= (item_pos[1] + LADDER_HEIGHT - 1))
                 return overlap_x & overlap_y
 
             ladder_collisions = jax.vmap(check_ladder_collision)(state.item_positions)
