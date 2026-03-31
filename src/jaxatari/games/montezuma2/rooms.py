@@ -375,7 +375,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         lb = lb.at[0].set(149)
         la = la.at[0].set(1)
 
-        ix = ix.at[0].set(136)
+        ix = ix.at[0].set(128)
         iy = iy.at[0].set(7)
         ia = ia.at[0].set(1)
         
