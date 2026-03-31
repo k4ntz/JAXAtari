@@ -25,7 +25,7 @@ DEFAULT_PACMAN_MAZE_LEVEL_BASENAMES: Tuple[str, ...] = (
 
 class FasterPacmanMod(JaxAtariInternalModPlugin):
     """
-    Faster Pac-Man (+20% Score):
+    Faster Pacman (+20% Score):
     Change: Set PLAYER_SPEED=2 and add a 20% score multiplier (12 for dot, 60 for power).
     Effect: Makes Pac-Man highly agile, rewarding riskier, high-speed maneuvers.
     """

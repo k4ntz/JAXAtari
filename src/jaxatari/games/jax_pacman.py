@@ -186,6 +186,10 @@ class PacmanState(NamedTuple):
     player2_current_node_index: chex.Array
     player2_target_node_index: chex.Array
     player2_active: chex.Array
+    # Coop input ownership for scalar-action mode: 0 -> P1, 1 -> P2
+    coop_control_player: chex.Array
+    # Edge trigger for space-toggle in scalar coop mode (0 -> not pressed, 1 -> pressed)
+    coop_fire_latched: chex.Array
     
     # Ghost states (4 ghosts)
     ghosts: chex.Array  # Shape: (4, 8) - [x, y, direction, state, target_x, target_y, current_node, target_node]
@@ -736,6 +740,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             player2_current_node_index=player2_current_node_index,
             player2_target_node_index=player2_target_node_index,
             player2_active=player2_active,
+            coop_control_player=jnp.array(0, dtype=jnp.int32),
+            coop_fire_latched=jnp.array(0, dtype=jnp.int32),
             ghosts=ghosts,
             dots_remaining=dots_remaining,
             power_pellets_active=jnp.array(15, dtype=jnp.int32),
@@ -769,19 +775,128 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         # In coop mode we accept either:
         # - scalar action: applied to both players (RL-compatible path)
         # - vector action [p1, p2]: independent manual controls
+        # Coop scalar protocol:
+        # - Arrow-like actions move only the currently selected player
+        # - FIRE (space) toggles selected player (P1 <-> P2)
         action = jnp.asarray(action, dtype=jnp.int32)
+        noop_action = jnp.array(Action.NOOP, dtype=jnp.int32)
+        max_action = jnp.array(Action.DOWNLEFTFIRE, dtype=jnp.int32)
+        next_control_player = state.coop_control_player
+        next_fire_latched = state.coop_fire_latched
+        single_owner_scalar_mode = jnp.array(False)
+        toggle_owner_control = jnp.array(False)
         if action.ndim == 0:
-            action_p1 = action
-            action_p2 = action
-        elif action.shape[0] >= 2:
-            action_p1 = action[0]
-            action_p2 = action[1]
+            scalar_action = jnp.clip(action, noop_action, max_action)
+            is_coop_active = state.player2_active == 1
+            single_owner_scalar_mode = is_coop_active
+
+            # Decode movement to one cardinal direction (diagonals collapse to vertical).
+            # Fire-bearing actions are reserved for toggle and do not produce movement.
+            is_up = jnp.logical_or(
+                scalar_action == Action.UP,
+                jnp.logical_or(
+                    scalar_action == Action.UPRIGHT,
+                    scalar_action == Action.UPLEFT,
+                ),
+            )
+            is_down = jnp.logical_or(
+                scalar_action == Action.DOWN,
+                jnp.logical_or(
+                    scalar_action == Action.DOWNRIGHT,
+                    scalar_action == Action.DOWNLEFT,
+                ),
+            )
+            is_left = scalar_action == Action.LEFT
+            is_right = scalar_action == Action.RIGHT
+            scalar_move_action = jnp.where(
+                is_left,
+                jnp.array(Action.LEFT, dtype=jnp.int32),
+                jnp.where(
+                    is_right,
+                    jnp.array(Action.RIGHT, dtype=jnp.int32),
+                    jnp.where(
+                        is_up,
+                        jnp.array(Action.UP, dtype=jnp.int32),
+                        jnp.where(
+                            is_down,
+                            jnp.array(Action.DOWN, dtype=jnp.int32),
+                            noop_action,
+                        ),
+                    ),
+                ),
+            )
+
+            is_fire_action = jnp.logical_or(
+                scalar_action == Action.FIRE,
+                jnp.logical_or(
+                    scalar_action == Action.UPFIRE,
+                    jnp.logical_or(
+                        scalar_action == Action.RIGHTFIRE,
+                        jnp.logical_or(
+                            scalar_action == Action.LEFTFIRE,
+                            jnp.logical_or(
+                                scalar_action == Action.DOWNFIRE,
+                                jnp.logical_or(
+                                    scalar_action == Action.UPRIGHTFIRE,
+                                    jnp.logical_or(
+                                        scalar_action == Action.UPLEFTFIRE,
+                                        jnp.logical_or(
+                                            scalar_action == Action.DOWNRIGHTFIRE,
+                                            scalar_action == Action.DOWNLEFTFIRE,
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+            fire_rising_edge = jnp.logical_and(is_fire_action, state.coop_fire_latched == 0)
+            toggle_control = jnp.logical_and(is_coop_active, fire_rising_edge)
+            toggle_owner_control = toggle_control
+            toggled_owner = 1 - state.coop_control_player
+            next_control_player = jnp.where(toggle_control, toggled_owner, state.coop_control_player)
+            next_fire_latched = jnp.where(
+                is_coop_active,
+                jnp.where(is_fire_action, jnp.array(1, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32)),
+                jnp.array(0, dtype=jnp.int32),
+            )
+            scalar_move_action = jnp.where(is_fire_action, noop_action, scalar_move_action)
+
+            action_p1 = jnp.where(
+                is_coop_active,
+                jnp.where(state.coop_control_player == 0, scalar_move_action, noop_action),
+                scalar_action,
+            )
+            action_p2 = jnp.where(
+                is_coop_active,
+                jnp.where(state.coop_control_player == 1, scalar_move_action, noop_action),
+                scalar_action,
+            )
         else:
-            action_p1 = action[0]
-            action_p2 = action[0]
+            # Accept malformed shapes safely by flattening and defaulting to NOOP.
+            flat_action = action.reshape(-1)
+            if flat_action.shape[0] >= 2:
+                action_p1 = flat_action[0]
+                action_p2 = flat_action[1]
+            elif flat_action.shape[0] == 1:
+                action_p1 = flat_action[0]
+                action_p2 = flat_action[0]
+            else:
+                action_p1 = noop_action
+                action_p2 = noop_action
+            next_fire_latched = jnp.array(0, dtype=jnp.int32)
+
+        # Clamp ids to avoid out-of-bounds indexing in neighbor lookup tables.
+        action_p1 = jnp.clip(action_p1, noop_action, max_action)
+        action_p2 = jnp.clip(action_p2, noop_action, max_action)
 
         new_state_key, step_key = jax.random.split(state.key)
         previous_state = state
+        state = state._replace(
+            coop_control_player=next_control_player,
+            coop_fire_latched=next_fire_latched,
+        )
         
         def transition_step(state):
             new_timer = state.level_transition_timer - 1
@@ -823,11 +938,33 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             state = state._replace(key=step_key)
             
             # Update player movement
-            state = self._player_step(state, action_p1)
+            def _both_players_step(s):
+                s = self._player_step(s, action_p1)
+                return jax.lax.cond(
+                    s.player2_active == 1,
+                    lambda ss: self._player2_step(ss, action_p2),
+                    lambda ss: ss,
+                    s,
+                )
+
+            def _single_owner_step(s):
+                # Toggle frame only changes owner; movement starts on following frames.
+                return jax.lax.cond(
+                    toggle_owner_control,
+                    lambda ss: ss,
+                    lambda ss: jax.lax.cond(
+                        ss.coop_control_player == 0,
+                        lambda sss: self._player_step(sss, action_p1),
+                        lambda sss: self._player2_step(sss, action_p2),
+                        ss,
+                    ),
+                    s,
+                )
+
             state = jax.lax.cond(
-                state.player2_active == 1,
-                lambda s: self._player2_step(s, action_p2),
-                lambda s: s,
+                single_owner_scalar_mode,
+                _single_owner_step,
+                _both_players_step,
                 state,
             )
             
