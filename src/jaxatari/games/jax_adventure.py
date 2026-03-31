@@ -10,7 +10,7 @@ from flax import struct
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 
 def _get_default_asset_config() -> tuple:
     """
@@ -200,32 +200,23 @@ class AdventureState(struct.PyTreeNode):
     dot: chex.Array
 
 
-class EntityPosition(struct.PyTreeNode):
-    x: jnp.ndarray
-    y: jnp.ndarray
-    tile: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    state: jnp.ndarray
-
-
 class AdventureObservation(struct.PyTreeNode):
-    player: EntityPosition
-    dragon_yellow: EntityPosition
-    dragon_green: EntityPosition
-    key_yellow: EntityPosition
-    key_black: EntityPosition
-    gate_yellow: EntityPosition
-    gate_black: EntityPosition
-    sword: EntityPosition
-    bridge: EntityPosition
-    magnet: EntityPosition
-    chalice: EntityPosition
-    dragon_red: EntityPosition
-    key_white: EntityPosition
-    gate_white: EntityPosition
-    bat: EntityPosition
-    dot: EntityPosition
+    player: ObjectObservation
+    dragon_yellow: ObjectObservation
+    dragon_green: ObjectObservation
+    key_yellow: ObjectObservation
+    key_black: ObjectObservation
+    gate_yellow: ObjectObservation
+    gate_black: ObjectObservation
+    sword: ObjectObservation
+    bridge: ObjectObservation
+    magnet: ObjectObservation
+    chalice: ObjectObservation
+    dragon_red: ObjectObservation
+    key_white: ObjectObservation
+    gate_white: ObjectObservation
+    bat: ObjectObservation
+    dot: ObjectObservation
 
 
 class AdventureInfo(struct.PyTreeNode):
@@ -1279,7 +1270,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
             chalice=jnp.array([chalice_x,chalice_y,state.chalice[2],state.chalice[3]]).astype(jnp.int32)
         )
     
-    """This function solely exists for maing the chalice change colors"""
+    
     def _chalice_step(self, state:AdventureState) -> AdventureState:
         
         chalice_color=state.chalice[3]
@@ -1411,133 +1402,123 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
     #ToDo, done for all movable entities, why, no clue
     def _get_observation(self, state: AdventureState):
-        player = EntityPosition(
+        player = ObjectObservation.create(
             x=state.player[0],
             y=state.player[1],
-            tile=state.player[2],
             width=self.consts.PLAYER_SIZE[0], 
             height=self.consts.PLAYER_SIZE[1], 
             state=state.player[4]
         )
-        dragon_yellow = EntityPosition(
+        dragon_yellow = ObjectObservation.create(
             x=state.dragon_yellow[0],
             y=state.dragon_yellow[1],
-            tile=state.dragon_yellow[2],
+            active=state.dragon_yellow[2]==state.player[2],
             width=self.consts.DRAGON_SIZE[0], 
             height=self.consts.DRAGON_SIZE[1], 
             state=state.dragon_yellow[3]
         )
-        dragon_green = EntityPosition(
+        dragon_green = ObjectObservation.create(
             x=state.dragon_green[0],
             y=state.dragon_green[1],
-            tile=state.dragon_green[2],
+            active=state.dragon_green[2]==state.player[2],
             width=self.consts.DRAGON_SIZE[0], 
             height=self.consts.DRAGON_SIZE[1], 
             state=state.dragon_green[3]
         )
-        key_yellow = EntityPosition(
+        key_yellow = ObjectObservation.create(
             x=state.key_yellow[0],
             y=state.key_yellow[1],
-            tile=state.key_yellow[2],
+            active=state.key_yellow[2]==state.player[2],
             width=self.consts.KEY_SIZE[0], 
-            height=self.consts.KEY_SIZE[1],
-            state=0 #Key has no relevant state
+            height=self.consts.KEY_SIZE[1]
         )
-        key_black = EntityPosition(
+        key_black = ObjectObservation.create(
             x=state.key_black[0],
             y=state.key_black[1],
-            tile=state.key_black[2],
+            active=state.key_black[2]==state.player[2],
             width=self.consts.KEY_SIZE[0], 
             height=self.consts.KEY_SIZE[1],
-            state=0 #Key has no relevant state
         )
-        gate_yellow = EntityPosition(
+        gate_yellow = ObjectObservation.create(
             x=self.consts.YELLOW_GATE_POS[0],
             y=self.consts.YELLOW_GATE_POS[1],
-            tile=self.consts.YELLOW_GATE_POS[2],
+            active=self.consts.YELLOW_GATE_POS[2]==state.player[2],
             width=self.consts.GATE_SIZE[0], 
             height=self.consts.GATE_SIZE[1], 
             state=state.gate_yellow[0]
         )
-        gate_black = EntityPosition(
+        gate_black = ObjectObservation.create(
             x=self.consts.BLACK_GATE_POS[0],
             y=self.consts.BLACK_GATE_POS[1],
-            tile=self.consts.BLACK_GATE_POS[2],
+            active=self.consts.BLACK_GATE_POS[2]==state.player[2],
             width=self.consts.GATE_SIZE[0], 
             height=self.consts.GATE_SIZE[1], 
             state=state.gate_black[0]
         )
-        sword = EntityPosition(
+        sword = ObjectObservation.create(
             x=state.sword[0],
             y=state.sword[1],
-            tile=state.sword[2],
+            active=state.sword[2]==state.player[2],
             width=self.consts.SWORD_SIZE[0], 
-            height=self.consts.SWORD_SIZE[1], 
-            state=0 #Sword has no relevant state
+            height=self.consts.SWORD_SIZE[1]
         )
-        bridge = EntityPosition(
+        bridge = ObjectObservation.create(
             x=state.bridge[0],
             y=state.bridge[1],
-            tile=state.bridge[2],
+            active=state.bridge[2]==state.player[2],
             width=self.consts.BRIDGE_SIZE[0], 
-            height=self.consts.BRIDGE_SIZE[1], 
-            state=0 #Bridge has no relevant state
+            height=self.consts.BRIDGE_SIZE[1]
         )
-        magnet = EntityPosition(
+        magnet = ObjectObservation.create(
             x=state.magnet[0],
             y=state.magnet[1],
-            tile=state.magnet[2],
+            active=state.magnet[2]==state.player[2],
             width=self.consts.MAGNET_SIZE[0], 
-            height=self.consts.MAGNET_SIZE[1],
-            state=0 #Magnet has no relevant state
+            height=self.consts.MAGNET_SIZE[1]
         )
-        chalice = EntityPosition(
+        chalice = ObjectObservation.create(
             x=state.chalice[0],
             y=state.chalice[1],
-            tile=state.chalice[2],
+            active=state.chalice[2]==state.player[2],
             width=self.consts.CHALICE_SIZE[0], 
-            height=self.consts.CHALICE_SIZE[1],
-            state=0 #Chalice has no relevant state
+            height=self.consts.CHALICE_SIZE[1]
         )
-        dragon_red = EntityPosition(
+        dragon_red = ObjectObservation.create(
             x=state.dragon_red[0],
             y=state.dragon_red[1],
-            tile=state.dragon_red[2],
+            active=state.dragon_red[2]==state.player[2],
             width=self.consts.DRAGON_SIZE[0], 
             height=self.consts.DRAGON_SIZE[1], 
             state=state.dragon_red[3]
         )
-        key_white = EntityPosition(
+        key_white = ObjectObservation.create(
             x=state.key_white[0],
             y=state.key_white[1],
-            tile=state.key_white[2],
+            active=state.key_white[2]==state.player[2],
             width=self.consts.KEY_SIZE[0], 
-            height=self.consts.KEY_SIZE[1],
-            state=0 #Key has no relevant state
+            height=self.consts.KEY_SIZE[1]
         )
-        gate_white = EntityPosition(
+        gate_white = ObjectObservation.create(
             x=self.consts.WHITE_GATE_POS[0],
             y=self.consts.WHITE_GATE_POS[1],
-            tile=self.consts.WHITE_GATE_POS[2],
+            active=self.consts.WHITE_GATE_POS[2]==state.player[2],
             width=self.consts.GATE_SIZE[0], 
             height=self.consts.GATE_SIZE[1], 
             state=state.gate_white[0]
         )
-        bat = EntityPosition(
+        bat = ObjectObservation.create(
             x=state.bat[0],
             y=state.bat[1],
-            tile=state.bat[2],
+            active=state.bat[2]==state.player[2],
             width=0, #bat has no hitbox
-            height=0, 
-            state=0 #bat has no relevant state
+            height=0
         )
-        dot = EntityPosition(
+        dot = ObjectObservation.create(
             x=state.dot[0],
             y=state.dot[1],
-            tile=state.dot[2],
+            active=state.dot[2]==state.player[2],
             width=self.consts.DOT_SIZE[0], 
-            height=self.consts.DOT_SIZE[1],
-            state=0 #Dot has no relevant state
+            height=self.consts.DOT_SIZE[1]
         )
 
         return AdventureObservation(
@@ -1667,6 +1648,7 @@ class JaxAdventure(JaxEnvironment[AdventureState, AdventureObservation, Adventur
 
     #ToDo, used for the RL?
     def observation_space(self) -> spaces.Dict:
+
         return spaces.Dict({
             "player": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
             "dragon_yellow": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
