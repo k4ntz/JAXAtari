@@ -227,7 +227,14 @@ class Montezuma2Renderer(JAXGameRenderer):
 
                 is_layer_2 = jnp.logical_or(state.room_id == 11, jnp.logical_or(state.room_id == 10, jnp.logical_or(state.room_id == 12, state.room_id == 14)))
                 is_long_ladder = jnp.logical_and(jnp.logical_or(state.room_id == 3, state.room_id == 5), i == 0)
-                is_long_ladder_l2 = jnp.logical_and(jnp.logical_or(state.room_id == 11, jnp.logical_or(state.room_id == 10, state.room_id == 14)), i == 0)
+                is_long_ladder_l2 = jnp.logical_and(
+                    jnp.logical_or(state.room_id == 12, 
+                        jnp.logical_or(state.room_id == 11, 
+                            jnp.logical_or(state.room_id == 10, state.room_id == 14)
+                        )
+                    ), 
+                    i == 0
+                )
                 is_small_yellow = jnp.logical_or(
                     jnp.logical_and(state.room_id == 11, i == 1),
                     jnp.logical_and(state.room_id == 13, i == 0)
