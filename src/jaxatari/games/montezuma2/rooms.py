@@ -82,11 +82,11 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         la = la.at[0].set(1)
         lx = lx.at[1].set(128)
         lt = lt.at[1].set(92)
-        lb = lb.at[1].set(133)
+        lb = lb.at[1].set(130)
         la = la.at[1].set(1)
         lx = lx.at[2].set(16)
         lt = lt.at[2].set(92)
-        lb = lb.at[2].set(133)
+        lb = lb.at[2].set(130)
         la = la.at[2].set(1)
 
         rx = ropes_x.at[0].set(111)
