@@ -215,6 +215,10 @@ class Montezuma2Renderer(JAXGameRenderer):
                     r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.LADDER_ID_L2)
                     return self.jr.draw_ladders(r_in, rung_pos, rung_size, 2, 5, self.LADDER_ID_L2)
                     
+                def draw_yellow_l2(r_in):
+                    r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.YELLOW_LADDER_ID)
+                    return self.jr.draw_ladders(r_in, rung_pos, rung_size, 2, 5, self.YELLOW_LADDER_ID)
+
                 def draw_long(r_in):
                     return render_long_ladder(r_in, self.BLUE_LADDER_ID, self.LADDER_ID)
 
@@ -223,9 +227,11 @@ class Montezuma2Renderer(JAXGameRenderer):
 
                 is_layer_2 = jnp.logical_or(state.room_id == 11, jnp.logical_or(state.room_id == 10, jnp.logical_or(state.room_id == 12, state.room_id == 14)))
                 is_long_ladder = jnp.logical_and(jnp.logical_or(state.room_id == 3, state.room_id == 5), i == 0)
-                is_long_ladder_l2 = jnp.logical_and(jnp.logical_or(state.room_id == 10, state.room_id == 14), i == 0)
+                is_long_ladder_l2 = jnp.logical_and(jnp.logical_or(state.room_id == 11, jnp.logical_or(state.room_id == 10, state.room_id == 14)), i == 0)
+                is_small_yellow = jnp.logical_and(state.room_id == 11, i == 1)
                 
                 r_out = jax.lax.cond(is_layer_2, draw_l2, draw_l1, raster_in)
+                r_out = jax.lax.cond(is_small_yellow, draw_yellow_l2, lambda r: r_out, r_out)
                 r_out = jax.lax.cond(is_long_ladder_l2, draw_long_l2, lambda r: r_out, r_out)
                 return jax.lax.cond(is_long_ladder, draw_long, lambda r: r_out, r_out)
 
