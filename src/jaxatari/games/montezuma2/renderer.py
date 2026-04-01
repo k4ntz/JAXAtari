@@ -103,7 +103,7 @@ class Montezuma2Renderer(JAXGameRenderer):
         self.LADDER_ID = self.PALETTE.shape[0] - 1
 
         # Accurate ladder color for Difficulty 1, Layer 2 (purple)
-        self.LADDER_COLOR_L2 = jnp.array([104, 25, 157], dtype=jnp.uint8)
+        self.LADDER_COLOR_L2 = jnp.array([104, 25, 154], dtype=jnp.uint8)
         self.PALETTE = jnp.concatenate([self.PALETTE, self.LADDER_COLOR_L2[None, :]], axis=0)
         self.LADDER_ID_L2 = self.PALETTE.shape[0] - 1
         
@@ -228,7 +228,10 @@ class Montezuma2Renderer(JAXGameRenderer):
                 is_layer_2 = jnp.logical_or(state.room_id == 11, jnp.logical_or(state.room_id == 10, jnp.logical_or(state.room_id == 12, state.room_id == 14)))
                 is_long_ladder = jnp.logical_and(jnp.logical_or(state.room_id == 3, state.room_id == 5), i == 0)
                 is_long_ladder_l2 = jnp.logical_and(jnp.logical_or(state.room_id == 11, jnp.logical_or(state.room_id == 10, state.room_id == 14)), i == 0)
-                is_small_yellow = jnp.logical_and(state.room_id == 11, i == 1)
+                is_small_yellow = jnp.logical_or(
+                    jnp.logical_and(state.room_id == 11, i == 1),
+                    jnp.logical_and(state.room_id == 13, i == 0)
+                )
                 
                 r_out = jax.lax.cond(is_layer_2, draw_l2, draw_l1, raster_in)
                 r_out = jax.lax.cond(is_small_yellow, draw_yellow_l2, lambda r: r_out, r_out)
