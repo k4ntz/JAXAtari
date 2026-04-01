@@ -106,6 +106,16 @@ class Montezuma2Renderer(JAXGameRenderer):
         self.LADDER_COLOR_L2 = jnp.array([104, 25, 157], dtype=jnp.uint8)
         self.PALETTE = jnp.concatenate([self.PALETTE, self.LADDER_COLOR_L2[None, :]], axis=0)
         self.LADDER_ID_L2 = self.PALETTE.shape[0] - 1
+        
+        # Blue ladder color for long ladders
+        self.BLUE_LADDER_COLOR = jnp.array([24, 59, 157], dtype=jnp.uint8)
+        self.PALETTE = jnp.concatenate([self.PALETTE, self.BLUE_LADDER_COLOR[None, :]], axis=0)
+        self.BLUE_LADDER_ID = self.PALETTE.shape[0] - 1
+
+        # Yellow ladder color for long ladders
+        self.YELLOW_LADDER_COLOR = jnp.array([204, 216, 110], dtype=jnp.uint8)
+        self.PALETTE = jnp.concatenate([self.PALETTE, self.YELLOW_LADDER_COLOR[None, :]], axis=0)
+        self.YELLOW_LADDER_ID = self.PALETTE.shape[0] - 1
 
         # Accurate door color
         self.DOOR_COLOR = jnp.array([232, 204, 99], dtype=jnp.uint8)
@@ -171,6 +181,22 @@ class Montezuma2Renderer(JAXGameRenderer):
             active = state.ladders_active[i]
 
             def _draw(raster_in):
+                def render_long_ladder(r_in, l_color, bg_color):
+                    long_top = top - 1
+                    long_height = bottom - long_top
+                    
+                    bg_pos = jnp.array([[x - 4, long_top]])
+                    bg_size = jnp.array([[24, long_height]])
+                    r_in = self.jr.draw_rects(r_in, bg_pos, bg_size, bg_color)
+                    
+                    new_rail_pos = jnp.array([[x, long_top], [x + 16 - 4, long_top]])
+                    new_rail_size = jnp.array([[4, long_height], [4, long_height]])
+                    new_rung_pos = jnp.array([[x, long_top + 4]])
+                    new_rung_size = jnp.array([[16, long_height - 4]])
+                    
+                    r_in = self.jr.draw_rects(r_in, new_rail_pos, new_rail_size, l_color)
+                    return self.jr.draw_ladders(r_in, new_rung_pos, new_rung_size, 2, 5, l_color)
+
                 ladder_width = 16
                 # Vertical Rails (4 pixels wide)
                 rail_pos = jnp.array([[x, top], [x + ladder_width - 4, top]])
@@ -188,9 +214,20 @@ class Montezuma2Renderer(JAXGameRenderer):
                 def draw_l2(r_in):
                     r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.LADDER_ID_L2)
                     return self.jr.draw_ladders(r_in, rung_pos, rung_size, 2, 5, self.LADDER_ID_L2)
+                    
+                def draw_long(r_in):
+                    return render_long_ladder(r_in, self.BLUE_LADDER_ID, self.LADDER_ID)
+
+                def draw_long_l2(r_in):
+                    return render_long_ladder(r_in, self.YELLOW_LADDER_ID, self.LADDER_ID_L2)
 
                 is_layer_2 = jnp.logical_or(state.room_id == 11, jnp.logical_or(state.room_id == 10, jnp.logical_or(state.room_id == 12, state.room_id == 14)))
-                return jax.lax.cond(is_layer_2, draw_l2, draw_l1, raster_in)
+                is_long_ladder = jnp.logical_and(jnp.logical_or(state.room_id == 3, state.room_id == 5), i == 0)
+                is_long_ladder_l2 = jnp.logical_and(jnp.logical_or(state.room_id == 10, state.room_id == 14), i == 0)
+                
+                r_out = jax.lax.cond(is_layer_2, draw_l2, draw_l1, raster_in)
+                r_out = jax.lax.cond(is_long_ladder_l2, draw_long_l2, lambda r: r_out, r_out)
+                return jax.lax.cond(is_long_ladder, draw_long, lambda r: r_out, r_out)
 
             return jax.lax.cond(active == 1, _draw, lambda r_in: r_in, r)
         raster = jax.lax.fori_loop(0, self.consts.MAX_LADDERS_PER_ROOM, draw_ladder_accurate, raster)
