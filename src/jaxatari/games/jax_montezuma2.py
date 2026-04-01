@@ -224,6 +224,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
             # To stay ON: must be within the vertical bounds
             ladder_bottom_bound = jnp.where(l_bottom >= 148, 170, l_bottom + 1)
+            # Custom fix for bottom ladders in ROOM_0_4 to prevent getting stuck in the floor
+            ladder_bottom_bound = jnp.where(jnp.logical_and(state.room_id == 4, l_bottom == 133), 131, ladder_bottom_bound)
             ladder_top_bound = jnp.where(l_top <= 6, 0, l_top - 4)
             in_ladder_zone = jnp.logical_and(is_aligned, jnp.logical_and(player_feet_y >= ladder_top_bound, player_feet_y <= ladder_bottom_bound))
 
