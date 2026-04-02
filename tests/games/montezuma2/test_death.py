@@ -10,6 +10,8 @@ def test_death_by_falling():
     # Use Room 12 (index 5)
     # Middle platform is at y=26 (feet at 45). Next floor is at 88 (feet at 87).
     # Distance = 87 - 20 + 1 - 26 = 68 - 26 = 42. 42 > 33.
+    from jaxatari.games.montezuma2.rooms import load_room
+    state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
     
     initial_lives = state.lives
     
