@@ -442,17 +442,23 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         new_y = jnp.where(hit_ceiling, state.player_y, new_y)
         new_is_jumping = jnp.where(hit_ceiling, 0, new_is_jumping)
         
-        hit_floor_rm = jnp.logical_and(dy > 0, jnp.logical_and(is_climbing == 0, check_platform_local(jnp.clip(new_feet_y, 0, 148), safe_x)))
-        snapped_y_rm = jnp.clip(new_feet_y, 0, 148) - self.consts.PLAYER_HEIGHT
-
-        # Improved static platform collision: check if we crossed any solid pixel between player_feet_y + 1 and new_feet_y
+        # Improved static platform collision: check if we crossed any solid pixel that acts as a top surface
         def check_crossed_static(i, carry):
             h_f, s_y = carry
             y_check = jnp.clip(player_feet_y + 1 + i, 0, 148)
-            is_hit = jnp.logical_and(dy > i + 1, check_platform_local(y_check, safe_x))
+            # A pixel y_check is a top surface if it's solid AND the pixel above it is empty
+            is_top_surface = jnp.logical_and(
+                check_platform_local(y_check, safe_x),
+                jnp.logical_not(check_platform_local(jnp.clip(y_check - 1, 0, 148), safe_x))
+            )
+            is_hit = jnp.logical_and(dy > i + 1, is_top_surface)
+            # To land ON TOP of y_check, feet should be at y_check - 1.
+            # player_y = feet_y - PLAYER_HEIGHT + 1 = (y_check - 1) - PLAYER_HEIGHT + 1 = y_check - PLAYER_HEIGHT.
             return jnp.logical_or(h_f, is_hit), jnp.where(is_hit, y_check - self.consts.PLAYER_HEIGHT, s_y)
 
         # Check up to 3 pixels ahead (max dy is 3 during jump descent)
+        hit_floor_rm = False
+        snapped_y_rm = new_y
         hit_floor_rm, snapped_y_rm = jax.lax.fori_loop(0, 3, check_crossed_static, (hit_floor_rm, snapped_y_rm))
         
         def check_c_hit_floor(i, carry):
