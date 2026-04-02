@@ -180,6 +180,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         state = load_room(jnp.array(self.consts.INITIAL_ROOM_ID, dtype=jnp.int32), state, self.consts)
         obs = self._get_observation(state)
         return obs, state
+    
     def step(self, state: Montezuma2State, action: int) -> Tuple[Montezuma2Observation, Montezuma2State, float, bool, Montezuma2Info]:
         room_idx = get_room_idx(state.room_id)
         room_col_map = self.ROOM_COLLISION_MAPS[room_idx]
@@ -296,9 +297,6 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
         is_climbing = jnp.where(jnp.logical_or(is_climbing_ladder, is_climbing_rope), 1, 0)
         
-        # jax.debug.print("can_ladder: {can_ladder}, abort_ladder: {abort_ladder}, is_climbing: {is_climbing}, on_ground: {on_ground}", 
-        #                can_ladder=can_ladder, abort_ladder=abort_ladder, is_climbing=is_climbing, on_ground=on_ground)
-
         # If we are aborting the ladder, or simply falling off, start the delay
         # But only if we were previously climbing!
         started_delay = jnp.logical_and(state.is_climbing == 1, is_climbing == 0)
@@ -685,6 +683,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
                       jnp.where(transition_right, jnp.where(state.room_id == 3, 4, jnp.where(state.room_id == 4, 5, jnp.where(state.room_id == 10, 11, jnp.where(state.room_id == 11, 12, jnp.where(state.room_id == 12, 13, jnp.where(state.room_id == 13, 14, 3)))))),
                       jnp.where(transition_down, jnp.where(state.room_id == 3, 11, jnp.where(state.room_id == 4, 12, jnp.where(state.room_id == 5, 13, jnp.where(state.room_id == 10, 18, state.room_id)))),
                       jnp.where(transition_up, jnp.where(state.room_id == 11, 3, jnp.where(state.room_id == 12, 4, jnp.where(state.room_id == 13, 5, jnp.where(state.room_id == 18, 10, state.room_id)))), state.room_id))))
+        
         def transition_fn(state_in):
             room_idx = get_room_idx(new_room_id)
             jax.lax.switch(room_idx, [
@@ -738,6 +737,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         info = self._get_info(state)
 
         return obs, state, reward, done, info
+    
     def action_space(self) -> Discrete:
         return Discrete(len(self.ACTION_SET))
 
@@ -800,6 +800,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         )
 
         return Montezuma2Observation(player=player_obs, enemies=enemies_obs, items=items_obs, conveyors=conveyors_obs, doors=doors_obs, ropes=ropes_obs)
+    
     def _get_info(self, state: Montezuma2State) -> Montezuma2Info:
         return Montezuma2Info(lives=state.lives, room_id=state.room_id)
 
