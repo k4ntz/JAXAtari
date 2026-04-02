@@ -35,6 +35,7 @@ class Montezuma2Renderer(JAXGameRenderer):
             {'name': 'room_bg_2', 'type': 'single', 'file': 'backgrounds/base_sprite_level_1.npy', 'transpose': False},
             {'name': 'room_bg_3', 'type': 'single', 'file': 'backgrounds/mid_room_level_1.npy', 'transpose': False},
             {'name': 'room_bg_level2_base', 'type': 'single', 'file': 'backgrounds/base_sprite_level_2.npy', 'transpose': False},
+            {'name': 'room_bg_level2_room0', 'type': 'single', 'file': 'backgrounds/room_0_level_2.npy', 'transpose': False},
             {
                 'name': 'player', 'type': 'group',
                 'files': [
@@ -166,10 +167,12 @@ class Montezuma2Renderer(JAXGameRenderer):
 
         # Level 2 rooms
         mask_l2 = self.SHAPE_MASKS["room_bg_level2_base"][:149, ...]
+        mask_l2_room0 = self.SHAPE_MASKS["room_bg_level2_room0"][:149, ...]
         room_bg_mask = jnp.where(state.room_id == 18, mask_l2, room_bg_mask)
+        room_bg_mask = jnp.where(state.room_id == 17, mask_l2_room0, room_bg_mask)
         
         # Add walls for side rooms Level 0 and Level 1 and Level 2
-        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 3, state.room_id == 10), room_bg_mask.at[6:149, 0:4].set(1), room_bg_mask)
+        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 3, jnp.logical_or(state.room_id == 10, state.room_id == 17)), room_bg_mask.at[6:149, 0:4].set(1), room_bg_mask)
         room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 5, jnp.logical_or(state.room_id == 14, state.room_id == 18)), room_bg_mask.at[6:149, 156:160].set(1), room_bg_mask)
         
         raster = self.jr.render_at(raster, 0, 47, room_bg_mask)
