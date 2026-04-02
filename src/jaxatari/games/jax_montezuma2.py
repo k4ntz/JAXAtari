@@ -127,6 +127,10 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             lasers_x=jnp.zeros(self.consts.MAX_LASERS_PER_ROOM, dtype=jnp.int32),
             lasers_active=jnp.zeros(self.consts.MAX_LASERS_PER_ROOM, dtype=jnp.int32),
             laser_cycle=jnp.array(0, dtype=jnp.int32),
+            platforms_x=jnp.zeros(self.consts.MAX_PLATFORMS_PER_ROOM, dtype=jnp.int32),
+            platforms_y=jnp.zeros(self.consts.MAX_PLATFORMS_PER_ROOM, dtype=jnp.int32),
+            platforms_active=jnp.zeros(self.consts.MAX_PLATFORMS_PER_ROOM, dtype=jnp.int32),
+            platform_cycle=jnp.array(0, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
             death_type=jnp.array(0, dtype=jnp.int32),
             inventory=jnp.array([3, 0, 0], dtype=jnp.int32), # keys, sword, torch
@@ -192,6 +196,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
     def step(self, state: Montezuma2State, action: int) -> Tuple[Montezuma2Observation, Montezuma2State, float, bool, Montezuma2Info]:
         room_idx = get_room_idx(state.room_id)
         room_col_map = self.ROOM_COLLISION_MAPS[room_idx]
+        platform_active_now = jnp.less(state.platform_cycle, 120)
         previous_score = state.score
         is_up = jnp.logical_or(action == Action.UP, jnp.logical_or(action == Action.UPRIGHT, action == Action.UPLEFT))
         is_up = jnp.logical_or(is_up, jnp.logical_or(action == Action.UPFIRE, jnp.logical_or(action == Action.UPRIGHTFIRE, action == Action.UPLEFTFIRE)))
@@ -338,6 +343,18 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         on_ground = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, check_conveyor, on_ground)
 
+        def check_p_on_ground(i, on_grnd):
+            p_x = state.platforms_x[i]
+            p_y = state.platforms_y[i] - 1
+            is_on_plat = jnp.logical_and(
+                jnp.logical_and(state.platforms_active[i] == 1, platform_active_now),
+                jnp.logical_and(player_feet_y == p_y, jnp.logical_and(safe_x >= p_x, safe_x < p_x + 12))
+            )
+            return jnp.logical_or(on_grnd, is_on_plat)
+        
+        on_ground = jax.lax.fori_loop(0, self.consts.MAX_PLATFORMS_PER_ROOM, check_p_on_ground, on_ground)
+
+
         # Update last_rope and last_ladder
         new_last_rope = jnp.where(on_ground, -1, state.last_rope)
         new_last_rope = jnp.where(is_jumping_off_rope, rope_idx, new_last_rope)
@@ -374,6 +391,17 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
                 return jnp.logical_or(p2b, is_on)
             pixel_2_below = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, check_c_pixel2, pixel_2_below)
 
+            def check_p_pixel2(i, p2b):
+                p_x = state.platforms_x[i]
+                p_y = state.platforms_y[i] - 1
+                is_on = jnp.logical_and(
+                    jnp.logical_and(state.platforms_active[i] == 1, platform_active_now),
+                    jnp.logical_and(player_feet_y + 1 == p_y, jnp.logical_and(safe_x >= p_x, safe_x < p_x + 12))
+                )
+                return jnp.logical_or(p2b, is_on)
+            pixel_2_below = jax.lax.fori_loop(0, self.consts.MAX_PLATFORMS_PER_ROOM, check_p_pixel2, pixel_2_below)
+
+
             fall_dist = jnp.where(on_ground, 0, jnp.where(pixel_2_below, 1, self.consts.GRAVITY))
             return fall_dist, 0, 0
             
@@ -407,9 +435,10 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         rope_top_limit = state.ropes_top[rope_idx] - top_extension
         new_y = jnp.where(jnp.logical_and(is_climbing == 1, rope_idx != -1), jnp.maximum(new_y, rope_top_limit), new_y)
         new_feet_y = new_y + self.consts.PLAYER_HEIGHT - 1
-        
         new_top_y = jnp.clip(new_y, 0, 148)
+        is_middle_platform_ceiling = jnp.logical_and(state.room_id == 17, jnp.logical_and(new_top_y >= 46, jnp.logical_and(new_top_y <= 48, jnp.logical_and(safe_x >= 4, safe_x < 156))))
         hit_ceiling = jnp.logical_and(dy < 0, jnp.logical_and(check_platform_local(new_top_y, safe_x), is_climbing == 0))
+        hit_ceiling = jnp.where(is_middle_platform_ceiling, 0, hit_ceiling)
         new_y = jnp.where(hit_ceiling, state.player_y, new_y)
         new_is_jumping = jnp.where(hit_ceiling, 0, new_is_jumping)
         
@@ -420,7 +449,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             h_f, s_y = carry
             c_x = state.conveyors_x[i]
             c_y = state.conveyors_y[i] - 1
-            crossed = jnp.logical_and(player_feet_y < c_y, new_feet_y >= c_y)
+            crossed = jnp.logical_and(player_feet_y <= c_y, new_feet_y >= c_y)
             is_hit = jnp.logical_and(
                 state.conveyors_active[i] == 1,
                 jnp.logical_and(dy > 0, jnp.logical_and(crossed, jnp.logical_and(safe_x >= c_x - 3, safe_x < c_x + 43)))
@@ -428,6 +457,20 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             return jnp.logical_or(h_f, is_hit), jnp.where(is_hit, c_y - self.consts.PLAYER_HEIGHT + 1, s_y)
 
         hit_floor, snapped_y = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, check_c_hit_floor, (hit_floor_rm, snapped_y_rm))
+
+        def check_p_hit_floor(i, carry):
+            h_f, s_y = carry
+            p_x = state.platforms_x[i]
+            p_y = state.platforms_y[i] - 1
+            crossed = jnp.logical_and(player_feet_y <= p_y, new_feet_y >= p_y)
+            is_hit = jnp.logical_and(
+                jnp.logical_and(state.platforms_active[i] == 1, platform_active_now),
+                jnp.logical_and(dy > 0, jnp.logical_and(crossed, jnp.logical_and(safe_x >= p_x, safe_x < p_x + 12)))
+            )
+            return jnp.logical_or(h_f, is_hit), jnp.where(is_hit, p_y - self.consts.PLAYER_HEIGHT + 1, s_y)
+
+        hit_floor, snapped_y = jax.lax.fori_loop(0, self.consts.MAX_PLATFORMS_PER_ROOM, check_p_hit_floor, (hit_floor, snapped_y))
+
 
         new_y = jnp.where(hit_floor, snapped_y, new_y)
 
@@ -454,12 +497,18 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         check_y_top = jnp.clip(new_y, 0, 148)
         check_y_mid = jnp.clip(new_y + self.consts.PLAYER_HEIGHT // 2, 0, 148)
         check_y_bot = jnp.clip(new_y + self.consts.PLAYER_HEIGHT - 1, 0, 148)
+        def is_wall(y, x):
+            ignore = jnp.logical_and(
+                state.room_id == 17,
+                jnp.logical_and(y >= 46, jnp.logical_and(y <= 48, jnp.logical_and(x >= 4, x < 156)))
+            )
+            return jnp.logical_and(room_col_map[y, x] == 1, jnp.logical_not(ignore))
         
         hit_wall = jnp.logical_or(
-            room_col_map[check_y_top, front_x] == 1,
+            is_wall(check_y_top, front_x),
             jnp.logical_or(
-                room_col_map[check_y_mid, front_x] == 1,
-                room_col_map[check_y_bot, front_x] == 1
+                is_wall(check_y_mid, front_x),
+                is_wall(check_y_bot, front_x)
             )
         )
         
@@ -626,8 +675,12 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         )
         
         # Laser Collision
+        # Update laser and platform cycles
         new_laser_cycle = jnp.mod(state.laser_cycle + 1, 128)
+        new_platform_cycle = jnp.mod(state.platform_cycle + 1, 150)
         laser_active_now = jnp.logical_and(jnp.greater_equal(state.laser_cycle, 0), jnp.less(state.laser_cycle, 92))
+        platform_active_now = jnp.less(state.platform_cycle, 120)
+
         
         def check_laser_collision(i, hit):
             l_x = state.lasers_x[i]
@@ -691,6 +744,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             items_active=new_items_active,
             doors_active=new_doors_active,
             laser_cycle=new_laser_cycle,
+            platform_cycle=new_platform_cycle,
             death_timer=new_death_timer,
             death_type=new_death_type
         )
@@ -816,8 +870,16 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             height=state.ropes_bottom - state.ropes_top,
             active=state.ropes_active
         )
+        
+        platforms_obs = ObjectObservation.create(
+            x=state.platforms_x,
+            y=state.platforms_y,
+            width=jnp.full(self.consts.MAX_PLATFORMS_PER_ROOM, 12),
+            height=jnp.full(self.consts.MAX_PLATFORMS_PER_ROOM, 4),
+            active=state.platforms_active
+        )
 
-        return Montezuma2Observation(player=player_obs, enemies=enemies_obs, items=items_obs, conveyors=conveyors_obs, doors=doors_obs, ropes=ropes_obs)
+        return Montezuma2Observation(player=player_obs, enemies=enemies_obs, items=items_obs, conveyors=conveyors_obs, doors=doors_obs, ropes=ropes_obs, platforms=platforms_obs)
     
     def _get_info(self, state: Montezuma2State) -> Montezuma2Info:
         return Montezuma2Info(lives=state.lives, room_id=state.room_id)

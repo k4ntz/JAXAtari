@@ -76,6 +76,7 @@ class Montezuma2Renderer(JAXGameRenderer):
             },
             {'name': 'door', 'type': 'single', 'file': 'door.npy', 'transpose': False},
             {'name': 'conveyor', 'type': 'single', 'file': 'conveyor_belt.npy', 'transpose': False},
+            {'name': 'dropout_floor', 'type': 'single', 'file': 'other_dropout_floor.npy', 'transpose': False},
             {'name': 'life', 'type': 'single', 'file': 'life_sprite.npy', 'transpose': False},
             {'name': 'digit_0', 'type': 'single', 'file': 'digits/digit_0.npy', 'transpose': False},
             {'name': 'digit_1', 'type': 'single', 'file': 'digits/digit_1.npy', 'transpose': False},
@@ -293,6 +294,24 @@ class Montezuma2Renderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_LASERS_PER_ROOM, draw_laser, raster)
         
+
+        # Draw Platforms
+        platform_active_now = jnp.less(state.platform_cycle, 120)
+        def render_platform(i, raster):
+            mask = self.SHAPE_MASKS["dropout_floor"]
+            # Color remap: Make it the same color as the ladders in layer 2, or just keep its own palette entries
+            # Actually, the base sprite has its own color in the palette that might be wrong, so let's remap it
+            mask = jnp.where(mask != self.jr.TRANSPARENT_ID, self.LADDER_ID_L2, self.jr.TRANSPARENT_ID)
+            
+            is_active = jnp.logical_and(state.platforms_active[i] == 1, platform_active_now)
+            return jax.lax.cond(
+                is_active,
+                lambda r: self.jr.render_at(r, state.platforms_x[i], state.platforms_y[i] + 47, mask),
+                lambda r: r,
+                raster
+            )
+        raster = jax.lax.fori_loop(0, self.consts.MAX_PLATFORMS_PER_ROOM, render_platform, raster)
+
         # Draw Conveyors
         anim_idx = jnp.less(jnp.mod(state.frame_count, 16), 8)
         def render_conveyor(i, raster):

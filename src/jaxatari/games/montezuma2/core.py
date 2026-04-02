@@ -14,6 +14,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     MAX_ITEMS_PER_ROOM: int = struct.field(pytree_node=False, default=2)
     MAX_CONVEYORS_PER_ROOM: int = struct.field(pytree_node=False, default=2)
     MAX_LASERS_PER_ROOM: int = struct.field(pytree_node=False, default=6)
+    MAX_PLATFORMS_PER_ROOM: int = struct.field(pytree_node=False, default=12)
     MAX_ROOMS: int = struct.field(pytree_node=False, default=24)
     
     # Gameplay Constants
@@ -23,7 +24,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=20)
     INITIAL_PLAYER_X: int = struct.field(pytree_node=False, default=77)
     INITIAL_PLAYER_Y: int = struct.field(pytree_node=False, default=26)
-    INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=18)
+    INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=17)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=1)
     JUMP_Y_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([3, 3, 3, 2, 2, 2, 1, 1, 1, 0, 0, -1, -1, -1, -2, -2, -2, -3, -3, -3], dtype=jnp.int32))
     GRAVITY: int = struct.field(pytree_node=False, default=2)
@@ -112,6 +113,11 @@ class Montezuma2State:
     lasers_active: jnp.ndarray
     laser_cycle: jnp.ndarray
     
+    platforms_x: jnp.ndarray
+    platforms_y: jnp.ndarray
+    platforms_active: jnp.ndarray
+    platform_cycle: jnp.ndarray
+    
     death_timer: jnp.ndarray
     death_type: jnp.ndarray
     
@@ -126,6 +132,7 @@ class Montezuma2Observation:
     conveyors: ObjectObservation
     doors: ObjectObservation
     ropes: ObjectObservation
+    platforms: ObjectObservation
 
 @struct.dataclass
 class Montezuma2Info:
