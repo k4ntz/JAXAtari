@@ -451,9 +451,9 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
                 check_platform_local(y_check, safe_x),
                 jnp.logical_not(check_platform_local(jnp.clip(y_check - 1, 0, 148), safe_x))
             )
-            is_hit = jnp.logical_and(dy > i + 1, is_top_surface)
-            # To land ON TOP of y_check, feet should be at y_check - 1.
-            # player_y = feet_y - PLAYER_HEIGHT + 1 = (y_check - 1) - PLAYER_HEIGHT + 1 = y_check - PLAYER_HEIGHT.
+            # Land if we are moving down (dy > 0) and the platform top is within our reach (y_check <= player_feet_y + dy)
+            # which is same as saying i + 1 <= dy.
+            is_hit = jnp.logical_and(dy >= i + 1, is_top_surface)
             return jnp.logical_or(h_f, is_hit), jnp.where(is_hit, y_check - self.consts.PLAYER_HEIGHT, s_y)
 
         # Check up to 3 pixels ahead (max dy is 3 during jump descent)
