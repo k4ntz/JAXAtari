@@ -167,8 +167,6 @@ class PacmanObservation(NamedTuple):
     player_action: chex.Array
     ghost_positions: chex.Array
     ghost_actions: chex.Array
-    ghost_modes: chex.Array
-    ghosts_eaten: chex.Array
     fruit_position: chex.Array
     fruit_action: chex.Array
     fruit_type: chex.Array
