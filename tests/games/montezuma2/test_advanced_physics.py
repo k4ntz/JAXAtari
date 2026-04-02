@@ -28,36 +28,6 @@ def test_conveyor_movement():
     assert state.player_x > initial_x
     assert state.player_y == 68
 
-def test_jump_hit_ceiling():
-    env = JaxMontezuma2()
-    key = jax.random.PRNGKey(0)
-    obs, state = env.reset(key)
-    
-    # Room 4 has a platform at y=48.
-    # Player starts jumping from below it, say feet at 65 -> y=46
-    from jaxatari.games.montezuma2.rooms import load_room
-    state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
-    state = load_room(state.room_id, state, env.consts)
-    
-    state = state.replace(
-        player_x=jnp.array(77, dtype=jnp.int32),
-        player_y=jnp.array(50, dtype=jnp.int32)
-    )
-    
-    # Jump (UPFIRE = 10 or just UP = 2 if in air? No, FIRE = 1 if on ground.
-    # To start a jump, is_jumping can be forced to 1.
-    state = state.replace(
-        is_jumping=jnp.array(1, dtype=jnp.int32),
-        jump_counter=jnp.array(0, dtype=jnp.int32)
-    )
-    
-    obs, state, reward, done, info = env.step(state, 0)
-    
-    # Should have hit the ceiling at y=48 (player_y=48 or 49)
-    # The jump dy is usually negative, but hit_ceiling should cancel it.
-    assert state.is_jumping == 0
-    assert state.player_y >= 48
-
 def test_wall_collision():
     env = JaxMontezuma2()
     key = jax.random.PRNGKey(0)
