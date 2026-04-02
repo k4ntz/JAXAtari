@@ -453,7 +453,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             )
             # Land if we are moving down (dy > 0) and the platform top is within our reach (y_check <= player_feet_y + dy)
             # which is same as saying i + 1 <= dy.
-            is_hit = jnp.logical_and(dy >= i + 1, is_top_surface)
+            is_hit = jnp.logical_and(is_climbing == 0, jnp.logical_and(dy >= i + 1, is_top_surface))
             return jnp.logical_or(h_f, is_hit), jnp.where(is_hit, y_check - self.consts.PLAYER_HEIGHT, s_y)
 
         # Check up to 3 pixels ahead (max dy is 3 during jump descent)
@@ -467,8 +467,11 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             c_y = state.conveyors_y[i] - 1
             crossed = jnp.logical_and(player_feet_y <= c_y, new_feet_y >= c_y)
             is_hit = jnp.logical_and(
-                state.conveyors_active[i] == 1,
-                jnp.logical_and(dy > 0, jnp.logical_and(crossed, jnp.logical_and(safe_x >= c_x - 3, safe_x < c_x + 43)))
+                is_climbing == 0,
+                jnp.logical_and(
+                    state.conveyors_active[i] == 1,
+                    jnp.logical_and(dy > 0, jnp.logical_and(crossed, jnp.logical_and(safe_x >= c_x - 3, safe_x < c_x + 43)))
+                )
             )
             return jnp.logical_or(h_f, is_hit), jnp.where(is_hit, c_y - self.consts.PLAYER_HEIGHT + 1, s_y)
 
@@ -480,8 +483,11 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             p_y = state.platforms_y[i] - 1
             crossed = jnp.logical_and(player_feet_y <= p_y, new_feet_y >= p_y)
             is_hit = jnp.logical_and(
-                jnp.logical_and(state.platforms_active[i] == 1, platform_active_now),
-                jnp.logical_and(dy > 0, jnp.logical_and(crossed, jnp.logical_and(safe_x >= p_x, safe_x < p_x + 12)))
+                is_climbing == 0,
+                jnp.logical_and(
+                    jnp.logical_and(state.platforms_active[i] == 1, platform_active_now),
+                    jnp.logical_and(dy > 0, jnp.logical_and(crossed, jnp.logical_and(safe_x >= p_x, safe_x < p_x + 12)))
+                )
             )
             return jnp.logical_or(h_f, is_hit), jnp.where(is_hit, p_y - self.consts.PLAYER_HEIGHT + 1, s_y)
 
