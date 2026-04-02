@@ -444,6 +444,16 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         hit_floor_rm = jnp.logical_and(dy > 0, jnp.logical_and(is_climbing == 0, check_platform_local(jnp.clip(new_feet_y, 0, 148), safe_x)))
         snapped_y_rm = jnp.clip(new_feet_y, 0, 148) - self.consts.PLAYER_HEIGHT
+
+        # Improved static platform collision: check if we crossed any solid pixel between player_feet_y + 1 and new_feet_y
+        def check_crossed_static(i, carry):
+            h_f, s_y = carry
+            y_check = jnp.clip(player_feet_y + 1 + i, 0, 148)
+            is_hit = jnp.logical_and(dy > i + 1, check_platform_local(y_check, safe_x))
+            return jnp.logical_or(h_f, is_hit), jnp.where(is_hit, y_check - self.consts.PLAYER_HEIGHT, s_y)
+
+        # Check up to 3 pixels ahead (max dy is 3 during jump descent)
+        hit_floor_rm, snapped_y_rm = jax.lax.fori_loop(0, 3, check_crossed_static, (hit_floor_rm, snapped_y_rm))
         
         def check_c_hit_floor(i, carry):
             h_f, s_y = carry
@@ -476,6 +486,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
         # Stop climbing if we hit a floor (e.g. landing on a conveyor belt)
         is_climbing = jnp.where(hit_floor, 0, is_climbing)
+        new_is_jumping = jnp.where(hit_floor, 0, new_is_jumping)
 
         # Set is_falling state
         new_is_falling = jnp.where(jnp.logical_and(new_is_jumping == 0, hit_floor == False), jnp.where(dy > 0, 1, 0), 0)
