@@ -294,6 +294,9 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         is_climbing_rope = jnp.logical_and(can_rope, jnp.logical_not(abort_rope))
 
         is_climbing = jnp.where(jnp.logical_or(is_climbing_ladder, is_climbing_rope), 1, 0)
+        
+        # jax.debug.print("can_ladder: {can_ladder}, abort_ladder: {abort_ladder}, is_climbing: {is_climbing}, on_ground: {on_ground}", 
+        #                can_ladder=can_ladder, abort_ladder=abort_ladder, is_climbing=is_climbing, on_ground=on_ground)
 
         # If we are aborting the ladder, or simply falling off, start the delay
         # But only if we were previously climbing!
@@ -575,7 +578,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         )
         
         def check_enemy_collision(i, carry):
-            hit, enemies_active = carry
+            hit, enemies_active, inventory, current_score = carry
             e_x = new_enemies_x[i]
             bounce_offset = jax.lax.select(state.enemies_bouncing[i] == 1, self.consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 4, 22)], 0)
             e_y = state.enemies_y[i] - bounce_offset
@@ -586,14 +589,24 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             overlap = jnp.logical_and(overlap_x, overlap_y)
             
             this_hit = jnp.logical_and(e_active, overlap)
-            new_hit = jnp.logical_or(hit, this_hit)
+            
+            # Use sword if we have one (works on any enemy: skulls, spiders, snakes)
+            has_sword = inventory[1] == 1
+            can_kill = has_sword
+            
+            kill = jnp.logical_and(this_hit, can_kill)
+            die = jnp.logical_and(this_hit, jnp.logical_not(can_kill))
+            
+            new_hit = jnp.logical_or(hit, die)
             new_enemies_active = jnp.where(this_hit, enemies_active.at[i].set(0), enemies_active)
+            new_inventory = jnp.where(kill, inventory.at[1].set(0), inventory)
+            new_score = jnp.where(kill, current_score + 100, current_score)
             
-            return new_hit, new_enemies_active
+            return new_hit, new_enemies_active, new_inventory, new_score
             
-        died_from_enemy, new_enemies_active = jax.lax.fori_loop(
+        died_from_enemy, new_enemies_active, current_inventory, new_score = jax.lax.fori_loop(
             0, self.consts.MAX_ENEMIES_PER_ROOM, check_enemy_collision, 
-            (False, state.enemies_active)
+            (False, state.enemies_active, current_inventory, new_score)
         )
         
         # Laser Collision
