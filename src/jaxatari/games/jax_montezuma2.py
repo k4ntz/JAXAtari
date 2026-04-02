@@ -67,14 +67,12 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         # New 18: Level 2, col 2 (corresponds to ROOM_2_1 in M1)
         room_col_2_2 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
-        room_col_2_2 = room_col_2_2.at[6:, 0:4].set(0) # Clear left wall for room 17
         room_col_2_2 = room_col_2_2.at[6:, 156:160].set(1) # Right wall
         
         sprite_path_3 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "room_0_collision_level_2.npy")
         col_map_3 = jnp.load(sprite_path_3)[:149, :, 0]
         room_col_2_1 = jnp.where(col_map_3 > 0, 1, 0).astype(jnp.int32)
         room_col_2_1 = room_col_2_1.at[6:, 0:4].set(1) # Left wall
-        room_col_2_1 = room_col_2_1.at[6:, 156:160].set(0) # Clear right wall for room 18
 
         self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0_3, room_col_0_4, room_col_0_5, room_col_1_3, room_col_1_2, room_col_1_4, room_col_1_5, room_col_1_6, room_col_2_2, room_col_2_1])
 
