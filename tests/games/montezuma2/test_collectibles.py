@@ -32,6 +32,9 @@ def test_open_door():
     obs, state = env.reset(key)
     
     # Room 12 has doors at (56, 86) and (100, 86)
+    from jaxatari.games.montezuma2.rooms import load_room
+    state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
+    
     # We start with 3 keys
     initial_keys = state.inventory[0]
     assert initial_keys > 0
@@ -116,6 +119,9 @@ def test_door_without_key():
     )
     
     # Place player in front of the door in Room 12 (56, 86)
+    from jaxatari.games.montezuma2.rooms import load_room
+    state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
+    
     state = state.replace(
         player_x=jnp.array(50, dtype=jnp.int32),
         player_y=jnp.array(86, dtype=jnp.int32)
@@ -134,6 +140,9 @@ def test_collect_torch():
     obs, state = env.reset(key)
     
     # Torch is in Room 12 at (77, 7)
+    from jaxatari.games.montezuma2.rooms import load_room
+    state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
+    
     state = state.replace(
         player_x=jnp.array(77, dtype=jnp.int32),
         player_y=jnp.array(7, dtype=jnp.int32)
