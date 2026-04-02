@@ -435,10 +435,10 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         rope_top_limit = state.ropes_top[rope_idx] - top_extension
         new_y = jnp.where(jnp.logical_and(is_climbing == 1, rope_idx != -1), jnp.maximum(new_y, rope_top_limit), new_y)
         new_feet_y = new_y + self.consts.PLAYER_HEIGHT - 1
-        new_top_y = jnp.clip(new_y, 0, 148)
-        is_middle_platform_ceiling = jnp.logical_and(state.room_id == 17, jnp.logical_and(new_top_y >= 46, jnp.logical_and(new_top_y <= 48, jnp.logical_and(safe_x >= 4, safe_x < 156))))
-        hit_ceiling = jnp.logical_and(dy < 0, jnp.logical_and(check_platform_local(new_top_y, safe_x), is_climbing == 0))
-        hit_ceiling = jnp.where(is_middle_platform_ceiling, 0, hit_ceiling)
+        
+        # All platforms (and ceilings) are permeable from below. 
+        # We only hit floors when moving downwards.
+        hit_ceiling = 0
         new_y = jnp.where(hit_ceiling, state.player_y, new_y)
         new_is_jumping = jnp.where(hit_ceiling, 0, new_is_jumping)
         
@@ -498,10 +498,17 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         check_y_mid = jnp.clip(new_y + self.consts.PLAYER_HEIGHT // 2, 0, 148)
         check_y_bot = jnp.clip(new_y + self.consts.PLAYER_HEIGHT - 1, 0, 148)
         def is_wall(y, x):
-            ignore = jnp.logical_and(
-                state.room_id == 17,
-                jnp.logical_and(y >= 46, jnp.logical_and(y <= 48, jnp.logical_and(x >= 4, x < 156)))
+            # A horizontal platform is permeable from below.
+            # We ignore horizontal wall collisions if we are moving upwards (jumping)
+            # and there is empty space within 3 pixels above (indicating a horizontal platform/surface).
+            is_perm_platform = jnp.logical_or(
+                room_col_map[jnp.clip(y - 1, 0, 148), x] == 0,
+                jnp.logical_or(
+                    room_col_map[jnp.clip(y - 2, 0, 148), x] == 0,
+                    room_col_map[jnp.clip(y - 3, 0, 148), x] == 0
+                )
             )
+            ignore = jnp.logical_and(dy < 0, is_perm_platform)
             return jnp.logical_and(room_col_map[y, x] == 1, jnp.logical_not(ignore))
         
         hit_wall = jnp.logical_or(
