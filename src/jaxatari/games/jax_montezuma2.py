@@ -40,6 +40,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         col_map_1 = jnp.load(sprite_path_1)[:149, :, 0] # (149, 160)
         # New 4: Middle
         room_col_0_4 = jnp.where(col_map_1 > 0, 1, 0).astype(jnp.int32)
+        room_col_0_4 = room_col_0_4.at[147:149, 72:88].set(0) # Hole for ladder down
         # No side walls for room_0_4
 
         # New 5: Rightmost
@@ -429,8 +430,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         raw_new_x = current_x + dx
         transition_left = jnp.logical_and(raw_new_x < 0, jnp.isin(state.room_id, jnp.array([4, 5, 12, 11, 13, 14, 18])))
         transition_right = jnp.logical_and(raw_new_x + self.consts.PLAYER_WIDTH > self.consts.WIDTH, jnp.isin(state.room_id, jnp.array([3, 4, 12, 10, 11, 13])))
-        transition_down = jnp.logical_and(new_y >= 148, jnp.logical_or(state.room_id == 3, jnp.logical_or(state.room_id == 5, state.room_id == 10)))
-        transition_up = jnp.logical_and(new_y <= 2, jnp.logical_or(state.room_id == 11, jnp.logical_or(state.room_id == 13, state.room_id == 18)))
+        transition_down = jnp.logical_and(new_y >= 148, jnp.isin(state.room_id, jnp.array([3, 4, 5, 10])))
+        transition_up = jnp.logical_and(new_y <= 2, jnp.isin(state.room_id, jnp.array([11, 12, 13, 18])))
 
         new_x = jnp.clip(raw_new_x, 0, self.consts.WIDTH - self.consts.PLAYER_WIDTH)
         new_left_x = jnp.clip(new_x, 0, self.consts.WIDTH - 1)
