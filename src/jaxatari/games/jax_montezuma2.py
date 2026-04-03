@@ -67,14 +67,19 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         # New 18: Level 2, col 2 (corresponds to ROOM_2_1 in M1)
         room_col_2_2 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
-        room_col_2_2 = room_col_2_2.at[6:, 156:160].set(1) # Right wall
+        # Right wall removed from room 18 (now it's in the middle)
         
         sprite_path_3 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "room_0_collision_level_2.npy")
         col_map_3 = jnp.load(sprite_path_3)[:149, :, 0]
         room_col_2_1 = jnp.where(col_map_3 > 0, 1, 0).astype(jnp.int32)
         room_col_2_1 = room_col_2_1.at[6:, 0:4].set(1) # Left wall
 
-        self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0_3, room_col_0_4, room_col_0_5, room_col_1_3, room_col_1_2, room_col_1_4, room_col_1_5, room_col_1_6, room_col_2_2, room_col_2_1])
+        sprite_path_4 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "pitroom_collision_map.npy")
+        col_map_4 = jnp.load(sprite_path_4)[:149, :, 0]
+        room_col_2_3 = jnp.where(col_map_4 > 0, 1, 0).astype(jnp.int32)
+        room_col_2_3 = room_col_2_3.at[6:, 156:160].set(1) # Right wall
+
+        self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0_3, room_col_0_4, room_col_0_5, room_col_1_3, room_col_1_2, room_col_1_4, room_col_1_5, room_col_1_6, room_col_2_2, room_col_2_1, room_col_2_3])
 
     def reset(self, key: jrandom.PRNGKey) -> Tuple[Montezuma2Observation, Montezuma2State]:
         state = Montezuma2State(
@@ -127,6 +132,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             laser_cycle=jnp.array(0, dtype=jnp.int32),
             platforms_x=jnp.zeros(self.consts.MAX_PLATFORMS_PER_ROOM, dtype=jnp.int32),
             platforms_y=jnp.zeros(self.consts.MAX_PLATFORMS_PER_ROOM, dtype=jnp.int32),
+            platforms_width=jnp.full(self.consts.MAX_PLATFORMS_PER_ROOM, 12, dtype=jnp.int32),
             platforms_active=jnp.zeros(self.consts.MAX_PLATFORMS_PER_ROOM, dtype=jnp.int32),
             platform_cycle=jnp.array(0, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
@@ -147,6 +153,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         gia = gia.at[13, 0].set(1)
         gia = gia.at[14, 0].set(1) # Key in Room 14
         gia = gia.at[17, 0].set(1) # Key in Room 17
+        gia = gia.at[19, 0].set(1) # Gem in Room 19
         
         gda = state.global_doors_active
         gda = gda.at[4, 0].set(1) # New 4 (Mid)
@@ -184,6 +191,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         giy = giy.at[12, 0].set(4)
         # Sword in room 13
         giy = giy.at[13, 0].set(3)
+        # Gem in room 19
+        giy = giy.at[19, 0].set(1)
         
         state = state.replace(global_items_active=gia, global_doors_active=gda, global_enemies_active=gea, global_enemies_type=gety, global_items_type=giy)
         
@@ -346,7 +355,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             p_y = state.platforms_y[i] - 1
             is_on_plat = jnp.logical_and(
                 jnp.logical_and(state.platforms_active[i] == 1, platform_active_now),
-                jnp.logical_and(player_feet_y == p_y, jnp.logical_and(safe_x >= p_x, safe_x < p_x + 12))
+                jnp.logical_and(player_feet_y == p_y, jnp.logical_and(safe_x >= p_x, safe_x < p_x + state.platforms_width[i]))
             )
             return jnp.logical_or(on_grnd, is_on_plat)
         
@@ -394,7 +403,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
                 p_y = state.platforms_y[i] - 1
                 is_on = jnp.logical_and(
                     jnp.logical_and(state.platforms_active[i] == 1, platform_active_now),
-                    jnp.logical_and(player_feet_y + 1 == p_y, jnp.logical_and(safe_x >= p_x, safe_x < p_x + 12))
+                    jnp.logical_and(player_feet_y + 1 == p_y, jnp.logical_and(safe_x >= p_x, safe_x < p_x + state.platforms_width[i]))
                 )
                 return jnp.logical_or(p2b, is_on)
             pixel_2_below = jax.lax.fori_loop(0, self.consts.MAX_PLATFORMS_PER_ROOM, check_p_pixel2, pixel_2_below)
@@ -491,7 +500,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
                 jnp.logical_not(is_near_top),
                 jnp.logical_and(
                     jnp.logical_and(state.platforms_active[i] == 1, platform_active_now),
-                    jnp.logical_and(dy > 0, jnp.logical_and(crossed, jnp.logical_and(safe_x >= p_x, safe_x < p_x + 12)))
+                    jnp.logical_and(dy > 0, jnp.logical_and(crossed, jnp.logical_and(safe_x >= p_x, safe_x < p_x + state.platforms_width[i])))
                 )
             )
             return jnp.logical_or(h_f, is_hit), jnp.where(is_hit, p_y - self.consts.PLAYER_HEIGHT + 1, s_y)
@@ -512,8 +521,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         # 5. Resolve Horizontal with Wall Collision
         raw_new_x = current_x + dx
-        transition_left = jnp.logical_and(raw_new_x < 0, jnp.isin(state.room_id, jnp.array([4, 5, 12, 11, 13, 14, 18, 17])))
-        transition_right = jnp.logical_and(raw_new_x + self.consts.PLAYER_WIDTH > self.consts.WIDTH, jnp.isin(state.room_id, jnp.array([3, 4, 12, 10, 11, 13, 17])))
+        transition_left = jnp.logical_and(raw_new_x < 0, jnp.isin(state.room_id, jnp.array([4, 5, 12, 11, 13, 14, 18, 17, 19])))
+        transition_right = jnp.logical_and(raw_new_x + self.consts.PLAYER_WIDTH > self.consts.WIDTH, jnp.isin(state.room_id, jnp.array([3, 4, 12, 10, 11, 13, 17, 18])))
         transition_down = jnp.logical_and(new_y >= 148, jnp.isin(state.room_id, jnp.array([3, 4, 5, 10])))
         transition_up = jnp.logical_and(new_y <= 2, jnp.isin(state.room_id, jnp.array([11, 12, 13, 18])))
 
@@ -786,8 +795,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         )
 
         transition_any = jnp.logical_or(jnp.logical_or(transition_left, transition_right), jnp.logical_or(transition_down, transition_up))
-        new_room_id = jnp.where(transition_left, jnp.where(state.room_id == 5, 4, jnp.where(state.room_id == 4, 3, jnp.where(state.room_id == 11, 10, jnp.where(state.room_id == 12, 11, jnp.where(state.room_id == 13, 12, jnp.where(state.room_id == 14, 13, jnp.where(state.room_id == 18, 17, state.room_id))))))),
-                      jnp.where(transition_right, jnp.where(state.room_id == 3, 4, jnp.where(state.room_id == 4, 5, jnp.where(state.room_id == 10, 11, jnp.where(state.room_id == 11, 12, jnp.where(state.room_id == 12, 13, jnp.where(state.room_id == 13, 14, jnp.where(state.room_id == 17, 18, state.room_id))))))),
+        new_room_id = jnp.where(transition_left, jnp.where(state.room_id == 5, 4, jnp.where(state.room_id == 4, 3, jnp.where(state.room_id == 11, 10, jnp.where(state.room_id == 12, 11, jnp.where(state.room_id == 13, 12, jnp.where(state.room_id == 14, 13, jnp.where(state.room_id == 18, 17, jnp.where(state.room_id == 19, 18, state.room_id)))))))),
+                      jnp.where(transition_right, jnp.where(state.room_id == 3, 4, jnp.where(state.room_id == 4, 5, jnp.where(state.room_id == 10, 11, jnp.where(state.room_id == 11, 12, jnp.where(state.room_id == 12, 13, jnp.where(state.room_id == 13, 14, jnp.where(state.room_id == 17, 18, jnp.where(state.room_id == 18, 19, state.room_id)))))))),
                       jnp.where(transition_down, jnp.where(state.room_id == 3, 11, jnp.where(state.room_id == 4, 12, jnp.where(state.room_id == 5, 13, jnp.where(state.room_id == 10, 18, state.room_id)))),
                       jnp.where(transition_up, jnp.where(state.room_id == 11, 3, jnp.where(state.room_id == 12, 4, jnp.where(state.room_id == 13, 5, jnp.where(state.room_id == 18, 10, state.room_id)))), state.room_id))))
         
@@ -804,6 +813,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
                 lambda: jax.debug.print("Entering room: ROOM_1_6 (index: {room_id})", room_id=new_room_id),
                 lambda: jax.debug.print("Entering room: ROOM_2_2 (index: {room_id})", room_id=new_room_id),
                 lambda: jax.debug.print("Entering room: ROOM_2_1 (index: {room_id})", room_id=new_room_id),
+                lambda: jax.debug.print("Entering room: ROOM_2_3 (index: {room_id})", room_id=new_room_id),
             ])
             st = state_in.replace(
                 global_doors_active=state_in.global_doors_active.at[state_in.room_id].set(state_in.doors_active),
@@ -910,7 +920,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         platforms_obs = ObjectObservation.create(
             x=state.platforms_x,
             y=state.platforms_y,
-            width=jnp.full(self.consts.MAX_PLATFORMS_PER_ROOM, 12),
+            width=state.platforms_width,
             height=jnp.full(self.consts.MAX_PLATFORMS_PER_ROOM, 4),
             active=state.platforms_active
         )

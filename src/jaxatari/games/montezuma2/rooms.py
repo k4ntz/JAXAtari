@@ -40,7 +40,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
 
     def load_room_0_3(args):
         # New 3 was Old 4
-        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pa = args
+        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(48)
         lb = lb.at[0].set(149)
@@ -64,11 +64,11 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 ix, iy, ia,
                 doors_x, doors_y, doors_active,
                 conveyors_x, conveyors_y, conveyors_active, conveyors_direction,
-                lax, laa, px, py, pa)
+                lax, laa, px, py, pw, pa)
 
     def load_room_0_4(args):
         # New 4 was Old 5
-        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pa = args
+        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
         ex = enemies_x.at[0].set(93)
         ey = enemies_y.at[0].set(119)
         ea = enemies_active.at[0].set(1)
@@ -118,11 +118,11 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 ix, iy, ia,
                 dx, dy, da,
                 cx, cy, ca, cd,
-                lasers_x, lasers_active, px, py, pa)
+                lasers_x, lasers_active, px, py, pw, pa)
 
     def load_room_0_5(args):
         # New 5 was Old 3
-        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pa = args
+        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
         
         ex = enemies_x.at[0].set(112)
         ey = enemies_y.at[0].set(33)
@@ -166,12 +166,12 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 ix, iy, ia,
                 dx, dy, da,
                 cx, cy, ca, cd,
-                lasers_x, lasers_active, px, py, pa)
+                lasers_x, lasers_active, px, py, pw, pa)
 
-    args = (ladders_x, ladders_top, ladders_bottom, ladders_active, items_x, items_y, items_active, lasers_x, lasers_active, jnp.zeros(consts.MAX_PLATFORMS_PER_ROOM, dtype=jnp.int32), jnp.zeros(consts.MAX_PLATFORMS_PER_ROOM, dtype=jnp.int32), jnp.zeros(consts.MAX_PLATFORMS_PER_ROOM, dtype=jnp.int32))
+    args = (ladders_x, ladders_top, ladders_bottom, ladders_active, items_x, items_y, items_active, lasers_x, lasers_active, jnp.zeros(consts.MAX_PLATFORMS_PER_ROOM, dtype=jnp.int32), jnp.zeros(consts.MAX_PLATFORMS_PER_ROOM, dtype=jnp.int32), jnp.zeros(consts.MAX_PLATFORMS_PER_ROOM, dtype=jnp.int32), jnp.zeros(consts.MAX_PLATFORMS_PER_ROOM, dtype=jnp.int32))
     
     def load_room_1_3(args):
-        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pa = args
+        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
         
         ex = enemies_x.at[0].set(92)
         ey = enemies_y.at[0].set(36)
@@ -215,10 +215,10 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 ix, iy, ia,
                 dx, dy, da,
                 cx, cy, ca, cd,
-                lasers_x, lasers_active, px, py, pa)
+                lasers_x, lasers_active, px, py, pw, pa)
 
     def load_room_1_2(args):
-        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pa = args
+        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
         
         ex = enemies_x.at[0].set(30)
         ey = enemies_y.at[0].set(33)
@@ -266,10 +266,10 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 ix, iy, ia,
                 dx, dy, da,
                 cx, cy, ca, cd,
-                lasers_x, lasers_active, px, py, pa)
+                lasers_x, lasers_active, px, py, pw, pa)
 
     def load_room_1_4(args):
-        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pa = args
+        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
         
         ex = enemies_x.at[0].set(93)
         ey = enemies_y.at[0].set(69)
@@ -321,10 +321,10 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 ix, iy, ia,
                 dx, dy, da,
                 cx, cy, ca, cd,
-                lax, laa, px, py, pa)
+                lax, laa, px, py, pw, pa)
 
     def load_room_1_5(args):
-        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pa = args
+        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
         
         # Sword room from Montezuma1 (ROOM_1_3)
         lx = lx.at[0].set(72)
@@ -365,10 +365,10 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 ix, iy, ia,
                 dx, dy, da,
                 cx, cy, ca, cd,
-                lax, laa, px, py, pa)
+                lax, laa, px, py, pw, pa)
 
     def load_room_1_6(args):
-        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pa = args
+        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
         
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(48)
@@ -415,11 +415,11 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 ix, iy, ia,
                 dx, dy, da,
                 cx, cy, ca, cd,
-                lax, laa, px, py, pa)
+                lax, laa, px, py, pw, pa)
 
     def load_room_2_2(args):
         # Corresponds to ROOM_2_1 in M1
-        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pa = args
+        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
         
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(6)
@@ -462,11 +462,11 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 ix, iy, ia,
                 dx, dy, da,
                 cx, cy, ca, cd,
-                lax, laa, px, py, pa)
+                lax, laa, px, py, pw, pa)
 
     def load_room_2_1(args):
         # Corresponds to ROOM_2_0 in M1
-        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pa = args
+        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
         
         # item: key
         ix = ix.at[0].set(77)
@@ -528,11 +528,63 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 dx, dy, da,
                 cx, cy, ca, cd,
                 lax, laa,
-                px, py, pa)
+                px, py, pw, pa)
 
-    ex, ey, ea, ed, eminx, emaxx, eb, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd, lax, laa, px, py, pa = jax.lax.switch(
+    def load_room_2_3(args):
+        # Corresponds to ROOM_2_2 in M1
+        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
+        
+        # Item: Gem
+        ix = ix.at[0].set(17)
+        iy = iy.at[0].set(7)
+        ia = ia.at[0].set(1)
+
+        # Ladder
+        lx = lx.at[0].set(72)
+        lt = lt.at[0].set(6)
+        lb = lb.at[0].set(44)
+        la = la.at[0].set(1)
+
+        # Dropout floor (using platform)
+        px = px.at[0].set(32)
+        py = py.at[0].set(48)
+        pw = pw.at[0].set(96)
+        pa = pa.at[0].set(1)
+
+        ex = enemies_x
+        ey = enemies_y
+        ea = enemies_active
+        ed = enemies_direction
+        eminx = enemies_min_x
+        emaxx = enemies_max_x
+        eb = enemies_bouncing
+
+        rx = ropes_x
+        rt = ropes_top
+        rb = ropes_bottom
+        ra = ropes_active
+        
+        dx = doors_x
+        dy = doors_y
+        da = doors_active
+        
+        cx = conveyors_x
+        cy = conveyors_y
+        ca = conveyors_active
+        cd = conveyors_direction
+        
+        return (ex, ey, ea, ed, eminx, emaxx, eb,
+                lx, lt, lb, la,
+                rx, rt, rb, ra,
+                ix, iy, ia,
+                dx, dy, da,
+                cx, cy, ca, cd,
+                lax, laa,
+                px, py, pw, pa)
+
+    ex, ey, ea, ed, eminx, emaxx, eb, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd, lax, laa, px, py, pw, pa = jax.lax.switch(
         get_room_idx(room_id),
-        [load_room_0_3, load_room_0_4, load_room_0_5, load_room_1_3, load_room_1_2, load_room_1_4, load_room_1_5, load_room_1_6, load_room_2_2, load_room_2_1], args)
+        [load_room_0_3, load_room_0_4, load_room_0_5, load_room_1_3, load_room_1_2, load_room_1_4, load_room_1_5, load_room_1_6, load_room_2_2, load_room_2_1, load_room_2_3], args)
 
     return state.replace(
         room_id=room_id,
@@ -543,7 +595,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         doors_x=dx, doors_y=dy,
         conveyors_x=cx, conveyors_y=cy, conveyors_active=ca, conveyors_direction=cd,
         lasers_x=lax, lasers_active=laa,
-        platforms_x=px, platforms_y=py, platforms_active=pa,
+        platforms_x=px, platforms_y=py, platforms_width=pw, platforms_active=pa,
         enemies_active=state.global_enemies_active[room_id],
         enemies_type=state.global_enemies_type[room_id],
         items_active=state.global_items_active[room_id],
