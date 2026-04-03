@@ -498,6 +498,8 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         py = py.at[10].set(106)
         py = py.at[11].set(116)
         pa = pa.at[6:12].set(1)
+        
+        pw = pw.at[0:12].set(12)
 
         ex = enemies_x
         ey = enemies_y
@@ -546,9 +548,9 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         la = la.at[0].set(1)
 
         # Dropout floor (using platform)
-        px = px.at[0].set(32)
+        px = px.at[0].set(36)
         py = py.at[0].set(48)
-        pw = pw.at[0].set(96)
+        pw = pw.at[0].set(84)
         pa = pa.at[0].set(1)
 
         ex = enemies_x
