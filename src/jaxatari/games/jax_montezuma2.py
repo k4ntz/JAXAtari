@@ -469,10 +469,10 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             is_hit = jnp.logical_and(jnp.logical_not(is_near_top), jnp.logical_and(dy >= i + 1, is_top_surface))
             return jnp.logical_or(h_f, is_hit), jnp.where(is_hit, y_check - self.consts.PLAYER_HEIGHT, s_y)
 
-        # Check up to 3 pixels ahead (max dy is 3 during jump descent)
+        # Check up to 5 pixels ahead (max dy is 4 during jump descent)
         hit_floor_rm = False
         snapped_y_rm = new_y
-        hit_floor_rm, snapped_y_rm = jax.lax.fori_loop(0, 3, check_crossed_static, (hit_floor_rm, snapped_y_rm))
+        hit_floor_rm, snapped_y_rm = jax.lax.fori_loop(0, 5, check_crossed_static, (hit_floor_rm, snapped_y_rm))
         
         def check_c_hit_floor(i, carry):
             h_f, s_y = carry
@@ -833,7 +833,30 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
             def is_inside(py):
                 fy = jnp.clip(py + self.consts.PLAYER_HEIGHT - 1, 0, 148)
-                return check_platform(new_room_col_map, fy, safe_px_trans, self.consts.WIDTH)
+                in_col = check_platform(new_room_col_map, fy, safe_px_trans, self.consts.WIDTH)
+                
+                def check_p(i, in_p):
+                    p_x = st.platforms_x[i]
+                    p_y = st.platforms_y[i]
+                    p_w = st.platforms_width[i]
+                    p_a = st.platforms_active[i]
+                    in_this_p = jnp.logical_and(p_a == 1, 
+                        jnp.logical_and(jnp.logical_and(fy >= p_y, fy < p_y + 4),
+                                        jnp.logical_and(safe_px_trans >= p_x, safe_px_trans < p_x + p_w)))
+                    return jnp.logical_or(in_p, in_this_p)
+                in_plat = jax.lax.fori_loop(0, self.consts.MAX_PLATFORMS_PER_ROOM, check_p, False)
+                
+                def check_c(i, in_c):
+                    c_x = st.conveyors_x[i]
+                    c_y = st.conveyors_y[i]
+                    c_a = st.conveyors_active[i]
+                    in_this_c = jnp.logical_and(c_a == 1,
+                        jnp.logical_and(jnp.logical_and(fy >= c_y, fy < c_y + 5),
+                                        jnp.logical_and(safe_px_trans >= c_x - 3, safe_px_trans < c_x + 43)))
+                    return jnp.logical_or(in_c, in_this_c)
+                in_conv = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, check_c, False)
+                
+                return jnp.logical_or(in_col, jnp.logical_or(in_plat, in_conv))
 
             new_py = temp_py
             def push_up_fn(i, py):

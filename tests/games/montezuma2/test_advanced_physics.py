@@ -78,3 +78,74 @@ def test_jump_off_ladder():
     # On the next step, player should be falling
     obs, state, reward, done, info = env.step(state, 0)
     assert state.is_falling == 1
+
+def test_transition_landing_overlap():
+    env = JaxMontezuma2()
+    key = jax.random.PRNGKey(0)
+    obs, state = env.reset(key)
+    
+    # Start in Room 18 (ROOM_2_2)
+    from jaxatari.games.montezuma2.rooms import load_room
+    state = state.replace(room_id=jnp.array(18, jnp.int32))
+    state = load_room(jnp.array(18, jnp.int32), state, env.consts)
+    
+    # Position player at the left edge, about to transition to Room 17 (ROOM_2_1)
+    # Floor in Room 17 at px=144 is py=56.
+    # Let's put the player at py=56 - 19 = 37. Feet at 56 (inside the platform).
+    # Transition should push them up to py=36 (feet at 55).
+    state = state.replace(player_x=jnp.array(0, jnp.int32), player_y=jnp.array(37, jnp.int32))
+    
+    # Action LEFT (4) to trigger transition
+    # JAXAtariAction.LEFT is 4
+    obs, state, r, d, i = env.step(state, 4)
+    
+    assert state.room_id == 17
+    assert state.player_x == 148
+    # If the fix works, it should have pushed the player up to 36.
+    # If it didn't, they'd stay at 37.
+    assert state.player_y == 36
+    assert state.player_y + 19 == 55 # Feet at 55, platform at 56.
+
+def test_jump_descent_overlap():
+    env = JaxMontezuma2()
+    key = jax.random.PRNGKey(0)
+    obs, state = env.reset(key)
+    
+    # Room 19 (ROOM_2_3)
+    from jaxatari.games.montezuma2.rooms import load_room
+    state = state.replace(room_id=jnp.array(19, jnp.int32))
+    state = load_room(jnp.array(19, jnp.int32), state, env.consts)
+    
+    # Fixed platform on the right side. 
+    # Let's find a solid pixel in the room_col_map.
+    # In room_col_2_3, there should be a platform around y=48.
+    
+    room_idx = jnp.where(state.room_id == 19, 10, 0)
+    room_col_map = env.ROOM_COLLISION_MAPS[room_idx]
+    
+    # Let's find the floor at x=140.
+    floor_y = -1
+    for y in range(40, 140):
+        if room_col_map[y, 140] == 1 and room_col_map[y-1, 140] == 0:
+            floor_y = y
+            break
+    
+    assert floor_y != -1, "Could not find floor in ROOM_2_3"
+    
+    # Position player above the floor, in a jump descent with dy=4.
+    # JUMP_Y_OFFSETS: [3, 3, 3, 2, 2, 2, 1, 1, 1, -1, -2, -3, -4, -4, -4, 0]
+    # Index 12 is -4. So we need jump_counter = 12.
+    state = state.replace(
+        player_x=jnp.array(140 - 3, jnp.int32), 
+        player_y=jnp.array(floor_y - 19 - 4, jnp.int32), # 4 pixels above where they'd be on the floor
+        is_jumping=jnp.array(1, jnp.int32),
+        jump_counter=jnp.array(12, jnp.int32)
+    )
+    
+    # One step should land them 1 pixel above floor_y.
+    # Before the fix (with loop limit 3), they would land AT floor_y (overlap).
+    # With the fix (limit 5), they should land at floor_y - 1.
+    obs, state, r, d, i = env.step(state, 0)
+    
+    assert state.player_y + 19 == floor_y - 1
+    assert state.is_jumping == 0
