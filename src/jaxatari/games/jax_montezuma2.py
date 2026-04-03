@@ -430,7 +430,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             )
         )
         
-        new_is_jumping = jnp.where(new_jump_counter >= 20, 0, new_is_jumping)
+        new_is_jumping = jnp.where(new_jump_counter >= self.consts.JUMP_Y_OFFSETS.shape[0], 0, new_is_jumping)
         
         # 4. Resolve Vertical Collision
         new_y = state.player_y + dy
