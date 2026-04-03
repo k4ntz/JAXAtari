@@ -68,9 +68,9 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "pong"
     """the id of the environment"""
-    mods: tuple[str] = ('lazy_enemy', 'random_enemy')
+    mods: tuple[str] = ()
     """modifications applied during training"""
-    eval_mods: tuple[str] = ()
+    eval_mods: tuple[str] = ('lazy_enemy', 'random_enemy')
     """modifications to use for evaluation (if empty, fall back to `mods`)"""
     # total_timesteps: int = 10_000_000 # so with frameskip=4 -> 40M frames (?)
     total_timesteps: int = 100_000 # so with frameskip=4 -> 40M frames (?)
@@ -526,10 +526,12 @@ if __name__ == "__main__":
         )
         writer.add_scalar("eval/episodic_return", np.mean(jax.device_get(episodic_returns)), global_step) 
 
-        if args.capture_video and renderer is not None: 
+        if args.capture_video: 
+            # Instantiate a clean renderer immune to the training env's downscaling
+            clean_renderer = jaxatari.make(args.env_id).renderer
             # Mirror the pqn_agent final video behavior: log a video for the
             # current eval environment under a consistent wandb key.
-            frames = jax.vmap(renderer.render)(env_states)
+            frames = jax.vmap(clean_renderer.render)(env_states)
             frames = jnp.transpose(frames, (0, 3, 1, 2))
             video = wandb.Video(np.array(frames), fps=30, format="mp4")
             wandb.log(

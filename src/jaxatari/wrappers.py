@@ -333,6 +333,10 @@ class ObjectCentricWrapper(JaxatariWrapper):
         )
 
         def reduce_info(k, v):
+            if k in ["env_reward", "all_rewards"]:
+                return jnp.sum(v, axis=0)
+            if k == "env_done":
+                return jnp.any(v)
             return v[-1]
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
@@ -443,9 +447,9 @@ class PixelObsWrapper(JaxatariWrapper):
             latest_image = jnp.maximum(image, prev_image)
         else:
             latest_image = self._env.render(last_env_state)
-        print("before processing: ", latest_image.shape)
+        #print("before processing: ", latest_image.shape)
         processed_image = self._preprocess_image(latest_image)
-        print("after processing: ", processed_image.shape)
+        #print("after processing: ", processed_image.shape)
         image_stack = jnp.concatenate([state.image_stack[1:], jnp.expand_dims(processed_image, axis=0)], axis=0)
 
         reward = jnp.sum(rewards)
@@ -464,10 +468,14 @@ class PixelObsWrapper(JaxatariWrapper):
         )
 
         def reduce_info(k, v):
+            if k in ["env_reward", "all_rewards"]:
+                return jnp.sum(v, axis=0)
+            if k == "env_done":
+                return jnp.any(v)
             return v[-1]
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
-        print("image stack: ", image_stack.shape)
+        #print("image stack: ", image_stack.shape)
         return image_stack, pixel_state, reward, done, info_dict
 
 @struct.dataclass 
@@ -639,6 +647,10 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         )
 
         def reduce_info(k, v):
+            if k in ["env_reward", "all_rewards"]:
+                return jnp.sum(v, axis=0)
+            if k == "env_done":
+                return jnp.any(v)
             return v[-1]
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
@@ -713,6 +725,10 @@ class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
         )
 
         def reduce_info(k, v):
+            if k in ["env_reward", "all_rewards"]:
+                return jnp.sum(v, axis=0)
+            if k == "env_done":
+                return jnp.any(v)
             return v[-1]
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
