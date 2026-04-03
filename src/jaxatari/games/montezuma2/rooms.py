@@ -329,7 +329,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         # Sword room from Montezuma1 (ROOM_1_3)
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(6)
-        lb = lb.at[0].set(44)
+        lb = lb.at[0].set(48)
         la = la.at[0].set(1)
 
         # item: sword
@@ -423,7 +423,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(6)
-        lb = lb.at[0].set(44)
+        lb = lb.at[0].set(48)
         la = la.at[0].set(1)
 
         ex = enemies_x.at[0].set(18)
@@ -544,7 +544,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         # Ladder
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(6)
-        lb = lb.at[0].set(44)
+        lb = lb.at[0].set(48)
         la = la.at[0].set(1)
 
         # Dropout floor (using platform)
