@@ -12,8 +12,6 @@ from typing import Sequence, NamedTuple
 
 import flax
 import flax.linen as nn
-import gym
-from gymnasium.wrappers import NormalizeObservation
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -30,7 +28,7 @@ from ppo_jaxatari_vmap_eval import evaluate
 from rtpt import RTPT
 
 # Fix weird OOM https://github.com/google/jax/discussions/6332#discussioncomment-1279991
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.6"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.7"
 # Fix CUDNN non-determinisim; https://github.com/google/jax/issues/4823#issuecomment-952835771
 os.environ["TF_XLA_FLAGS"] = "--xla_gpu_autotune_level=2 --xla_gpu_deterministic_reductions"
 os.environ["TF_CUDNN DETERMINISTIC"] = "1"
@@ -74,7 +72,8 @@ class Args:
     """modifications applied during training"""
     eval_mods: tuple[str] = ()
     """modifications to use for evaluation (if empty, fall back to `mods`)"""
-    total_timesteps: int = 10_000_000 # so with frameskip=4 -> 40M frames (?)
+    # total_timesteps: int = 10_000_000 # so with frameskip=4 -> 40M frames (?)
+    total_timesteps: int = 100_000 # so with frameskip=4 -> 40M frames (?)
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
@@ -135,16 +134,11 @@ def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, eval=False):
         env = jaxatari.make(env_id, mods=mods_arg)
         env = AtariWrapper(
                 env,
+                sticky_actions=0.0, 
                 episodic_life=not eval, # only active during training 
-                clip_reward=not eval, # only active during training
-                max_episode_length=108000,
-                frame_stack_size=4,
-                max_pooling=True,
-                frame_skip=4,
-                noop_reset=30,
-                sticky_actions=False, # seems to be default in envpool
                 first_fire=True,
-                #full_action_space=False # TODO: this is missing in jaxatari, although default is reduced action space
+                noop_max=30,
+                full_action_space=False
         )
         if pixel_based:
             env = PixelObsWrapper(
@@ -152,16 +146,28 @@ def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, eval=False):
                 do_pixel_resize=True,
                 pixel_resize_shape=(84, 84),
                 grayscale=True,
-                use_native_downscaling=True
+                use_native_downscaling=True,
+                frame_stack_size=4,
+                frame_skip=4,
+                max_pooling=True,
+                clip_reward=not eval, # only active during training
             )
         else:
-            env = FlattenObservationWrapper(NormalizeObservationWrapper(ObjectCentricWrapper(env)))
+            env = FlattenObservationWrapper(
+                NormalizeObservationWrapper(
+                    ObjectCentricWrapper(
+                        env,
+                        frame_stack_size=4,
+                        frame_skip=4,
+                        clip_reward=not eval, # only active during training
+                    )
+                )
+            )
         env = LogWrapper(env)
         env.num_envs = num_envs
         env.single_action_space = env.action_space
         env.single_observation_space = env.observation_space
         env.is_vector_env = True
-        #TODO: Do we need actionset_wrapper? (like the videopinball guys did)
         return env
     return thunk
 
@@ -528,8 +534,7 @@ if __name__ == "__main__":
             video = wandb.Video(np.array(frames), fps=30, format="mp4")
             wandb.log(
                 {
-                    f"final_video_seed{args.seed}_eval": video,
-                    f"final_return_seed{args.seed}_eval": np.mean(jax.device_get(episodic_returns)),
+                    f"eval/video": video,
                 },
                 step=global_step,
             )
@@ -544,35 +549,10 @@ if __name__ == "__main__":
         if not args.capture_video:
             return None
 
-        # Base env with mods (no training wrappers yet).
-        env = jaxatari.make(args.env_id.lower(), mods=mods_config)
-        renderer_local = env.renderer
-
         # Apply wrappers just for the agent's observations, like in pqn_agent.
-        env = AtariWrapper(
-            env,
-            episodic_life=True,
-            frame_skip=4,
-            frame_stack_size=4,
-            sticky_actions=True,
-            max_pooling=True,
-            clip_reward=False,
-            noop_reset=30,
-            max_episode_length=18000,
-        )
-        if not args.pixel_based:
-            env = ObjectCentricWrapper(env)
-            env = FlattenObservationWrapper(env)
-        else:
-            env = PixelObsWrapper(
-                env,
-                do_pixel_resize=True,
-                pixel_resize_shape=(84, 84),
-                grayscale=True,
-                use_native_downscaling=True,
-            )
-        env = NormalizeObservationWrapper(env)
-        env = LogWrapper(env)
+        fake_env = jaxatari.make(args.env_id)
+        renderer_local = fake_env.renderer
+        env = make_env(args.env_id, args.seed, 1, mods_config, args.pixel_based, eval=True)() 
 
         # Reset environment
         rng = jax.random.PRNGKey(args.seed + video_index * 10000)
@@ -737,11 +717,10 @@ if __name__ == "__main__":
     if compile_time is not None:
         print(f"Run time after first iteration: {end_time - compile_time:.2f} seconds.")
     print(f"Total train time: {end_time - start_time:.2f} seconds / {(end_time - start_time)/60:.2f} minutes.")
+    generate_final_video()
 
     if args.save_model:
         eval_and_vid(iteration, global_step)
-        generate_final_video()
-
         # if args.upload_model:
         #     from cleanrl_utils.huggingface import push_to_hub
 
