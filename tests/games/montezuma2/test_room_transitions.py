@@ -69,12 +69,27 @@ def test_room_transitions_vertical():
     obs, state, reward, done, info = env.step(state, 0) # NOOP (will fall to y=2)
     assert state.room_id == 10
 
+    # 5. Room 11 (ROOM_1_3) -> 19 (ROOM_2_3) (Down)
+    state = load_room(jnp.array(11, dtype=jnp.int32), state, env.consts)
+    state = state.replace(player_x=jnp.array(77, dtype=jnp.int32), player_y=jnp.array(147, dtype=jnp.int32))
+    obs, state, reward, done, info = env.step(state, 5) # DOWN
+    assert state.room_id == 19
+    assert state.player_y <= 20
+    
+    # 6. Room 19 (ROOM_2_3) -> 11 (ROOM_1_3) (Up)
+    state = load_room(jnp.array(19, dtype=jnp.int32), state, env.consts)
+    state = state.replace(player_x=jnp.array(77, dtype=jnp.int32), player_y=jnp.array(3, dtype=jnp.int32),
+                          is_climbing=jnp.array(1, dtype=jnp.int32), last_ladder=jnp.array(0, dtype=jnp.int32))
+    obs, state, reward, done, info = env.step(state, 2) # UP
+    assert state.room_id == 11
+    assert state.player_y >= 130
+
 def test_all_implemented_rooms_loadable():
     env = JaxMontezuma2()
     key = jax.random.PRNGKey(0)
     _, state = env.reset(key)
     
-    implemented_room_ids = [3, 4, 5, 10, 11, 12, 13, 14, 18]
+    implemented_room_ids = [3, 4, 5, 10, 11, 12, 13, 14, 18, 19]
     
     for rid in implemented_room_ids:
         new_state = load_room(jnp.array(rid, dtype=jnp.int32), state, env.consts)

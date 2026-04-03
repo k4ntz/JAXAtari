@@ -186,12 +186,12 @@ class Montezuma2Renderer(JAXGameRenderer):
         
         # Add walls for side rooms Level 0 and Level 1 and Level 2
         # Use LEVEL2_PLATFORM_ID for Level 2 walls (rooms 17 and 19)
-        left_wall_color = jnp.where(state.room_id == 17, self.LEVEL2_PLATFORM_ID, 1)
-        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 3, jnp.logical_or(state.room_id == 10, state.room_id == 17)), 
+        left_wall_color = jnp.where(jnp.logical_or(state.room_id == 17, state.room_id == 19), self.LEVEL2_PLATFORM_ID, 1)
+        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 3, jnp.logical_or(state.room_id == 10, jnp.logical_or(state.room_id == 17, state.room_id == 19))), 
                                 room_bg_mask.at[6:149, 0:4].set(left_wall_color), room_bg_mask)
         
-        right_wall_color = jnp.where(state.room_id == 19, self.LEVEL2_PLATFORM_ID, 1)
-        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 5, jnp.logical_or(state.room_id == 14, state.room_id == 19)), 
+        right_wall_color = 1
+        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 5, state.room_id == 14), 
                                 room_bg_mask.at[6:149, 156:160].set(right_wall_color), room_bg_mask)
         
         raster = self.jr.render_at(raster, 0, 47, room_bg_mask)
@@ -314,7 +314,7 @@ class Montezuma2Renderer(JAXGameRenderer):
         
 
         # Draw Platforms
-        platform_active_now = jnp.less(state.platform_cycle, 120)
+        platform_active_now = jnp.less(state.platform_cycle, self.consts.PLATFORM_ACTIVE_DURATION)
         def render_platform(i, raster):
             mask = self.SHAPE_MASKS["dropout_floor"]
             # Color remap: Use LEVEL2_PLATFORM_ID for Level 2 rooms (17, 18, 19), otherwise LADDER_ID_L2

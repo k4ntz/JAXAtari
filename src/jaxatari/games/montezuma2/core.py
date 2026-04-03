@@ -24,9 +24,9 @@ class Montezuma2Constants(struct.PyTreeNode):
     PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=20)
     INITIAL_PLAYER_X: int = struct.field(pytree_node=False, default=77)
     INITIAL_PLAYER_Y: int = struct.field(pytree_node=False, default=26)
-    INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=19)
-    PLAYER_SPEED: int = struct.field(pytree_node=False, default=1)
-    JUMP_Y_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([3, 3, 3, 2, 2, 2, 1, 1, 1, 0, 0, -1, -1, -1, -2, -2, -2, -3, -3, -3], dtype=jnp.int32))
+    INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=18)
+    PLAYER_SPEED: int = struct.field(pytree_node=False, default=2)
+    JUMP_Y_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([3, 3, 2, 2, 1, 1, 0, 0, 0, 0, -1, -1, -2, -2, -3, -3], dtype=jnp.int32))
     GRAVITY: int = struct.field(pytree_node=False, default=2)
     MODULE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -45,6 +45,8 @@ class Montezuma2Constants(struct.PyTreeNode):
     MAX_FALL_DISTANCE: int = struct.field(pytree_node=False, default=33) # ladder_height (39) - 6
     BOUNCE_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 27, 27, 27, 24, 21, 18, 15, 12, 9, 6, 3, 0], dtype=jnp.int32))
     DEATH_TIMER_FRAMES: int = struct.field(pytree_node=False, default=70)
+    PLATFORM_ACTIVE_DURATION: int = struct.field(pytree_node=False, default=70) # For spawning and disappearing platform
+    PLATFORM_CYCLE_LENGTH: int = struct.field(pytree_node=False, default=90)
 
 @struct.dataclass
 class Montezuma2State:
