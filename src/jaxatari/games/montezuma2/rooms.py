@@ -761,9 +761,57 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 conveyors_x, conveyors_y, conveyors_active, conveyors_direction,
                 lax, laa, px, py, pw, pa)
 
+    def load_room_3_7(args):
+        # Corresponds to ROOM_3_7 in M1
+        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
+
+        # Ladder to top
+        lx = lx.at[0].set(72)
+        lt = lt.at[0].set(6)
+        lb = lb.at[0].set(44)
+        la = la.at[0].set(1)
+
+        # Snake enemy
+        ex = enemies_x.at[0].set(30)
+        ey = enemies_y.at[0].set(35) # Floor at 48, snake height 13 -> 35
+        ea = enemies_active.at[0].set(1)
+        ed = enemies_direction.at[0].set(0) # Static snake
+        eminx = enemies_min_x.at[0].set(30)
+        emaxx = enemies_max_x.at[0].set(37)
+
+        # Dropout floor (using platform)
+        px = px.at[0].set(36)
+        py = py.at[0].set(48)
+        pw = pw.at[0].set(84) # Multiple of 12 (7 * 12)
+        pa = pa.at[0].set(1)
+
+        eb = enemies_bouncing
+
+        rx = ropes_x
+        rt = ropes_top
+        rb = ropes_bottom
+        ra = ropes_active
+
+        cx = conveyors_x
+        cy = conveyors_y
+        ca = conveyors_active
+        cd = conveyors_direction
+
+        dx = doors_x
+        dy = doors_y
+        da = doors_active
+
+        return (ex, ey, ea, ed, eminx, emaxx, eb,
+                lx, lt, lb, la,
+                rx, rt, rb, ra,
+                ix, iy, ia,
+                dx, dy, da,
+                cx, cy, ca, cd,
+                lax, laa, px, py, pw, pa)
+
     ex, ey, ea, ed, eminx, emaxx, eb, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd, lax, laa, px, py, pw, pa = jax.lax.switch(
         get_room_idx(room_id),
-        [load_room_0_3, load_room_0_4, load_room_0_5, load_room_1_3, load_room_1_2, load_room_1_4, load_room_1_5, load_room_1_6, load_room_2_2, load_room_2_1, load_room_2_3, load_room_2_4, load_room_2_5, load_room_2_6, load_room_2_7], args)
+        [load_room_0_3, load_room_0_4, load_room_0_5, load_room_1_3, load_room_1_2, load_room_1_4, load_room_1_5, load_room_1_6, load_room_2_2, load_room_2_1, load_room_2_3, load_room_2_4, load_room_2_5, load_room_2_6, load_room_2_7, load_room_3_7], args)
 
     return state.replace(
         room_id=room_id,

@@ -15,7 +15,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     MAX_CONVEYORS_PER_ROOM: int = struct.field(pytree_node=False, default=2)
     MAX_LASERS_PER_ROOM: int = struct.field(pytree_node=False, default=8)
     MAX_PLATFORMS_PER_ROOM: int = struct.field(pytree_node=False, default=12)
-    MAX_ROOMS: int = struct.field(pytree_node=False, default=24)
+    MAX_ROOMS: int = struct.field(pytree_node=False, default=32)
     
     # Gameplay Constants
     WIDTH: int = struct.field(pytree_node=False, default=160)
@@ -24,7 +24,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=20)
     INITIAL_PLAYER_X: int = struct.field(pytree_node=False, default=77)
     INITIAL_PLAYER_Y: int = struct.field(pytree_node=False, default=26)
-    INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=19)
+    INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=31)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=2)
     JUMP_Y_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([3, 3, 3, 2, 2, 2, 1, 1, 1, -1, -2, -3, -4, -4, -4, 0], dtype=jnp.int32))
     GRAVITY: int = struct.field(pytree_node=False, default=2)
@@ -38,7 +38,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     ITEMBAR_LIFES_STARTING_X: int = struct.field(pytree_node=False, default=56)
     DIGIT_WIDTH: int = struct.field(pytree_node=False, default=7)
     DIGIT_OFFSET: int = struct.field(pytree_node=False, default=1)
-    DIGIT_HEIGHT: int = struct.field(pytree_node=False, default=8)
+    DIGIT_HEIGHT: int = struct.field(pytree_node=8, default=8)
     
     # Gameplay Rules
     OUT_OF_LADDER_DELAY: int = struct.field(pytree_node=False, default=5)
@@ -157,7 +157,8 @@ def get_room_idx(room_id):
            jnp.where(room_id == 20, 11,
            jnp.where(room_id == 21, 12,
            jnp.where(room_id == 22, 13,
-           jnp.where(room_id == 23, 14, 0)))))))))))))))
+           jnp.where(room_id == 23, 14,
+           jnp.where(room_id == 31, 15, 0))))))))))))))))
 
 def check_platform(col_map, y, x, width):
     x_m3 = jnp.clip(x - 3, 0, width - 1)

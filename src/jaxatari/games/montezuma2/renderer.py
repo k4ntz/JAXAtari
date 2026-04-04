@@ -38,6 +38,7 @@ class Montezuma2Renderer(JAXGameRenderer):
             {'name': 'room_bg_level2_room0', 'type': 'single', 'file': 'backgrounds/room_0_level_2.npy', 'transpose': False},
             {'name': 'room_bg_level2_room6', 'type': 'single', 'file': 'backgrounds/room_6_level_2.npy', 'transpose': False},
             {'name': 'room_bg_level2_pit', 'type': 'single', 'file': 'backgrounds/pitroom_level_2.npy', 'transpose': False},
+            {'name': 'room_bg_pit_original', 'type': 'single', 'file': 'backgrounds/pitroom.npy', 'transpose': False},
             {
                 'name': 'player', 'type': 'group',
                 'files': [
@@ -211,17 +212,19 @@ class Montezuma2Renderer(JAXGameRenderer):
         mask_l2_room6 = jnp.where(mask_l2_room6 == 1, self.LEVEL2_PLATFORM_ID, mask_l2_room6)
         mask_l2_pit = self.SHAPE_MASKS["room_bg_level2_pit"][:149, ...]
         mask_l2_pit = jnp.where(mask_l2_pit == 1, self.LEVEL2_PLATFORM_ID, mask_l2_pit)
+        mask_pit_original = self.SHAPE_MASKS["room_bg_pit_original"][:149, ...]
         
         mask_l2_hole = mask_l2.at[48:, 72:88].set(0)
         
         room_bg_mask = jnp.where(state.room_id == 18, mask_l2, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 17, mask_l2_room0, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 19, mask_l2_pit, room_bg_mask)
+        room_bg_mask = jnp.where(state.room_id == 31, mask_pit_original, room_bg_mask)
         room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 20, state.room_id == 22), mask_l2_hole, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 21, mask_l2, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 23, mask_l2_room6, room_bg_mask)
 
-        # Add lava rendering for ROOM_2_3 (room_id 19)
+        # Add lava rendering for ROOM_2_3 (room_id 19) and ROOM_3_7 (room_id 31)
         lava_y_start = 76
         lava_y_end = 124 # gap ends at 123
         anim_frame = jnp.mod(state.frame_count // 8, 4)
@@ -231,12 +234,12 @@ class Montezuma2Renderer(JAXGameRenderer):
         band_color_ids = self.PIT_COLOR_IDS[color_indices]
         lava_mask = jnp.tile(band_color_ids[:, None], (1, 160))
         
-        # Apply lava only to room 19, and only in the empty (black) areas between lava_y_start and lava_y_end
+        # Apply lava only to room 19 and 31, and only in the empty (black) areas between lava_y_start and lava_y_end
         lava_region = room_bg_mask[lava_y_start:lava_y_end, :]
         is_black = jnp.all(self.PALETTE[lava_region] == 0, axis=-1)
         new_lava_region = jnp.where(is_black, lava_mask, lava_region)
         room_bg_mask_with_lava = room_bg_mask.at[lava_y_start:lava_y_end, :].set(new_lava_region)
-        room_bg_mask = jnp.where(state.room_id == 19, room_bg_mask_with_lava, room_bg_mask)
+        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 19, state.room_id == 31), room_bg_mask_with_lava, room_bg_mask)
         
         # Add walls for side rooms Level 0 and Level 1 and Level 2
         # Use LEVEL2_PLATFORM_ID for Level 2 walls (rooms 17 and 19)

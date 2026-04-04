@@ -99,7 +99,14 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         room_col_2_7 = room_col_2_7.at[:147, :].set(jnp.where(col_map_5 > 0, 1, 0))
         room_col_2_7 = room_col_2_7.at[6:, 156:160].set(1) # Right wall
 
-        self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0_3, room_col_0_4, room_col_0_5, room_col_1_3, room_col_1_2, room_col_1_4, room_col_1_5, room_col_1_6, room_col_2_2, room_col_2_1, room_col_2_3, room_col_2_4, room_col_2_5, room_col_2_6, room_col_2_7])
+        # New 31: Level 3, col 7 (corresponds to ROOM_3_7 in M1)
+        # Using pitroom_collision_map.npy as specified for ROOM_3_7
+        sprite_path_6 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "pitroom_collision_map.npy")
+        col_map_6 = jnp.load(sprite_path_6)[:149, :, 0]
+        room_col_3_7 = jnp.where(col_map_6 > 0, 1, 0).astype(jnp.int32)
+        # No side walls as requested
+
+        self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0_3, room_col_0_4, room_col_0_5, room_col_1_3, room_col_1_2, room_col_1_4, room_col_1_5, room_col_1_6, room_col_2_2, room_col_2_1, room_col_2_3, room_col_2_4, room_col_2_5, room_col_2_6, room_col_2_7, room_col_3_7])
 
     def reset(self, key: jrandom.PRNGKey) -> Tuple[Montezuma2Observation, Montezuma2State]:
         state = Montezuma2State(
@@ -195,6 +202,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         gea = gea.at[20, 0].set(1)
         gea = gea.at[20, 1].set(1)
         gea = gea.at[22, 0].set(1)
+        gea = gea.at[31, 0].set(1) # Snake in Room 31
 
         gety = state.global_enemies_type
         # ROLL_SKULL = 1, BOUNCE_SKULL = 2, SPIDER = 3, SNAKE = 4
@@ -212,6 +220,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         gety = gety.at[20, 0].set(4)
         gety = gety.at[20, 1].set(4)
         gety = gety.at[22, 0].set(3)
+        gety = gety.at[31, 0].set(4) # Snake in Room 31
 
         giy = state.global_items_type
         giy = giy.at[3, 0].set(1) # Gem in room 3
