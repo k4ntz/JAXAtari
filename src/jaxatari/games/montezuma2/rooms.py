@@ -861,9 +861,53 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 cx, cy, ca, cd,
                 lax, laa, px, py, pw, pa)
 
+    def load_room_3_6(args):
+        # Corresponds to ROOM_3_6 in M1
+        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
+        
+        ex = enemies_x.at[0].set(60)
+        ey = enemies_y.at[0].set(36)
+        ea = enemies_active.at[0].set(1)
+        ed = enemies_direction.at[0].set(1)
+        eminx = enemies_min_x.at[0].set(4)
+        emaxx = enemies_max_x.at[0].set(156)
+        
+        lx = lx.at[0].set(72)
+        lt = lt.at[0].set(6)
+        lb = lb.at[0].set(44)
+        la = la.at[0].set(1)
+
+        rx = ropes_x
+        rt = ropes_top
+        rb = ropes_bottom
+        ra = ropes_active
+
+        ix = items_x
+        iy = items_y
+        ia = items_active
+
+        cx = conveyors_x
+        cy = conveyors_y
+        ca = conveyors_active
+        cd = conveyors_direction
+
+        dx = doors_x
+        dy = doors_y
+        da = doors_active
+
+        eb = enemies_bouncing
+
+        return (ex, ey, ea, ed, eminx, emaxx, eb,
+                lx, lt, lb, la,
+                rx, rt, rb, ra,
+                ix, iy, ia,
+                dx, dy, da,
+                cx, cy, ca, cd,
+                lax, laa, px, py, pw, pa)
+
     ex, ey, ea, ed, eminx, emaxx, eb, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd, lax, laa, px, py, pw, pa = jax.lax.switch(
         get_room_idx(room_id),
-        [load_room_0_3, load_room_0_4, load_room_0_5, load_room_1_3, load_room_1_2, load_room_1_4, load_room_1_5, load_room_1_6, load_room_2_2, load_room_2_1, load_room_2_3, load_room_2_4, load_room_2_5, load_room_2_6, load_room_2_7, load_room_3_7, load_room_3_8], args)
+        [load_room_0_3, load_room_0_4, load_room_0_5, load_room_1_3, load_room_1_2, load_room_1_4, load_room_1_5, load_room_1_6, load_room_2_2, load_room_2_1, load_room_2_3, load_room_2_4, load_room_2_5, load_room_2_6, load_room_2_7, load_room_3_7, load_room_3_8, load_room_3_6], args)
 
     return state.replace(
         room_id=room_id,
