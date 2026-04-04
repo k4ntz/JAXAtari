@@ -259,10 +259,9 @@ class Montezuma2Renderer(JAXGameRenderer):
         # Use LEVEL2_PLATFORM_ID for Level 2 walls (rooms 17), LADDER_ID (green) for room 19, and ORANGE_LADDER_ID for room 30
         left_wall_color = jnp.where(state.room_id == 19, self.LADDER_ID,
                                     jnp.where(state.room_id == 30, self.ORANGE_LADDER_ID,
-                                              jnp.where(state.room_id == 27, self.DEEP_BLUE_PLATFORM_ID,
-                                                        jnp.where(state.room_id == 17, self.LEVEL2_PLATFORM_ID, 1))))
-        # Room 3, 10, 19, 30, and 27 walls should only be on top (above floor)
-        is_side_room_left = jnp.isin(state.room_id, jnp.array([3, 10, 19, 30, 27]))
+                                              jnp.where(state.room_id == 17, self.LEVEL2_PLATFORM_ID, 1)))
+        # Room 3, 10, 19, and 30 walls should only be on top (above floor)
+        is_side_room_left = jnp.isin(state.room_id, jnp.array([3, 10, 19, 30]))
         room_bg_mask = jnp.where(is_side_room_left, room_bg_mask.at[6:48, 0:4].set(left_wall_color), room_bg_mask)
         # Other rooms left wall
         room_bg_mask = jnp.where(state.room_id == 17, room_bg_mask.at[6:149, 0:4].set(left_wall_color), room_bg_mask)
