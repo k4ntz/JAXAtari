@@ -105,12 +105,46 @@ def test_room_3_8_transition():
     assert state.room_id == 31
     assert state.player_x >= 140 # Should be teleported to the right side of new room
 
+    # 3. Room 31 -> 30 (Left)
+    state = load_room(jnp.array(31, dtype=jnp.int32), state, env.consts)
+    state = state.replace(player_x=jnp.array(0, dtype=jnp.int32), player_y=jnp.array(100, dtype=jnp.int32))
+    obs, state, reward, done, info = env.step(state, 4) # LEFT
+    assert state.room_id == 30
+    assert state.player_x >= 140
+
+    # 4. Room 30 -> 31 (Right)
+    state = load_room(jnp.array(30, dtype=jnp.int32), state, env.consts)
+    state = state.replace(player_x=jnp.array(155, dtype=jnp.int32), player_y=jnp.array(100, dtype=jnp.int32))
+    obs, state, reward, done, info = env.step(state, 3) # RIGHT
+    assert state.room_id == 31
+    assert state.player_x <= 10
+
+def test_room_2_6_to_3_6_transition():
+    env = JaxMontezuma2()
+    key = jax.random.PRNGKey(0)
+    obs, state = env.reset(key)
+    
+    # 1. Room 22 (ROOM_2_6) -> 30 (ROOM_3_6) (Down)
+    state = load_room(jnp.array(22, dtype=jnp.int32), state, env.consts)
+    state = state.replace(player_x=jnp.array(77, dtype=jnp.int32), player_y=jnp.array(147, dtype=jnp.int32))
+    obs, state, reward, done, info = env.step(state, 5) # DOWN
+    assert state.room_id == 30
+    assert state.player_y <= 20
+
+    # 2. Room 30 (ROOM_3_6) -> 22 (ROOM_2_6) (Up)
+    state = load_room(jnp.array(30, dtype=jnp.int32), state, env.consts)
+    state = state.replace(player_x=jnp.array(77, dtype=jnp.int32), player_y=jnp.array(3, dtype=jnp.int32),
+                          is_climbing=jnp.array(1, dtype=jnp.int32), last_ladder=jnp.array(0, dtype=jnp.int32))
+    obs, state, reward, done, info = env.step(state, 2) # UP
+    assert state.room_id == 22
+    assert state.player_y >= 130
+
 def test_all_implemented_rooms_loadable():
     env = JaxMontezuma2()
     key = jax.random.PRNGKey(0)
     _, state = env.reset(key)
     
-    implemented_room_ids = [3, 4, 5, 10, 11, 12, 13, 14, 18, 19, 31, 32]
+    implemented_room_ids = [3, 4, 5, 10, 11, 12, 13, 14, 18, 17, 19, 20, 21, 22, 23, 30, 31, 32]
     
     for rid in implemented_room_ids:
         new_state = load_room(jnp.array(rid, dtype=jnp.int32), state, env.consts)
