@@ -231,7 +231,8 @@ class Montezuma2Renderer(JAXGameRenderer):
         room_bg_mask = jnp.where(state.room_id == 18, mask_l2, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 17, mask_l2_room0, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 19, mask_l2_pit, room_bg_mask)
-        room_bg_mask = jnp.where(state.room_id == 31, mask_pit_original, room_bg_mask)
+        is_pit_room = jnp.any(state.room_id == jnp.array([31, 27, 29]))
+        room_bg_mask = jnp.where(is_pit_room, mask_pit_original, room_bg_mask)
         room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 20, state.room_id == 22), mask_l2_hole, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 21, mask_l2, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 23, mask_l2_room6, room_bg_mask)
@@ -251,7 +252,8 @@ class Montezuma2Renderer(JAXGameRenderer):
         is_black = jnp.all(self.PALETTE[lava_region] == 0, axis=-1)
         new_lava_region = jnp.where(is_black, lava_mask, lava_region)
         room_bg_mask_with_lava = room_bg_mask.at[lava_y_start:lava_y_end, :].set(new_lava_region)
-        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 19, state.room_id == 31), room_bg_mask_with_lava, room_bg_mask)
+        is_lava_room = jnp.any(state.room_id == jnp.array([19, 31, 27, 29]))
+        room_bg_mask = jnp.where(is_lava_room, room_bg_mask_with_lava, room_bg_mask)
         
         # Add walls for side rooms Level 0 and Level 1 and Level 2
         # Use LEVEL2_PLATFORM_ID for Level 2 walls (rooms 17), LADDER_ID (green) for room 19, and ORANGE_LADDER_ID for room 30

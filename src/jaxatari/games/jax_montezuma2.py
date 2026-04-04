@@ -120,7 +120,19 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         room_col_3_4 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
         # No side walls
 
-        self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0_3, room_col_0_4, room_col_0_5, room_col_1_3, room_col_1_2, room_col_1_4, room_col_1_5, room_col_1_6, room_col_2_2, room_col_2_1, room_col_2_3, room_col_2_4, room_col_2_5, room_col_2_6, room_col_2_7, room_col_3_7, room_col_3_8, room_col_3_6, room_col_3_4])
+        # New 27: Level 3, col 3 (corresponds to ROOM_3_3 in M1)
+        # Using pitroom_collision_map.npy as specified for ROOM_3_3
+        sprite_path_7 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "pitroom_collision_map.npy")
+        col_map_7 = jnp.load(sprite_path_7)[:149, :, 0]
+        room_col_3_3 = jnp.where(col_map_7 > 0, 1, 0).astype(jnp.int32)
+
+        # New 29: Level 3, col 5 (corresponds to ROOM_3_5 in M1)
+        # Using pitroom_collision_map.npy as specified for ROOM_3_5
+        sprite_path_8 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "pitroom_collision_map.npy")
+        col_map_8 = jnp.load(sprite_path_8)[:149, :, 0]
+        room_col_3_5 = jnp.where(col_map_8 > 0, 1, 0).astype(jnp.int32)
+
+        self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0_3, room_col_0_4, room_col_0_5, room_col_1_3, room_col_1_2, room_col_1_4, room_col_1_5, room_col_1_6, room_col_2_2, room_col_2_1, room_col_2_3, room_col_2_4, room_col_2_5, room_col_2_6, room_col_2_7, room_col_3_7, room_col_3_8, room_col_3_6, room_col_3_4, room_col_3_3, room_col_3_5])
 
     def reset(self, key: jrandom.PRNGKey) -> Tuple[Montezuma2Observation, Montezuma2State]:
         state = Montezuma2State(
