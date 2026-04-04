@@ -137,6 +137,15 @@ class Montezuma2Renderer(JAXGameRenderer):
         self.PALETTE = jnp.concatenate([self.PALETTE, self.LEVEL2_PLATFORM_COLOR[None, :]], axis=0)
         self.LEVEL2_PLATFORM_ID = self.PALETTE.shape[0] - 1
 
+        # Room 31 (ROOM_3_7) specific colors
+        self.ORANGE_LADDER_COLOR = jnp.array([213, 130, 74], dtype=jnp.uint8)
+        self.PALETTE = jnp.concatenate([self.PALETTE, self.ORANGE_LADDER_COLOR[None, :]], axis=0)
+        self.ORANGE_LADDER_ID = self.PALETTE.shape[0] - 1
+
+        self.DEEP_BLUE_PLATFORM_COLOR = jnp.array([24, 26, 167], dtype=jnp.uint8)
+        self.PALETTE = jnp.concatenate([self.PALETTE, self.DEEP_BLUE_PLATFORM_COLOR[None, :]], axis=0)
+        self.DEEP_BLUE_PLATFORM_ID = self.PALETTE.shape[0] - 1
+
         # Sarlacc pit colors for ROOM_2_3
         self.PIT_RGB_BASE = jnp.array([210, 164, 74], dtype=jnp.uint8)
         self.PIT_PATTERN = jnp.array([
@@ -298,6 +307,10 @@ class Montezuma2Renderer(JAXGameRenderer):
                     r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.YELLOW_LADDER_ID)
                     return self.jr.draw_ladders(r_in, rung_pos, rung_size, 2, 5, self.YELLOW_LADDER_ID)
 
+                def draw_orange(r_in):
+                    r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.ORANGE_LADDER_ID)
+                    return self.jr.draw_ladders(r_in, rung_pos, rung_size, 2, 5, self.ORANGE_LADDER_ID)
+
                 def draw_long(r_in):
                     return render_long_ladder(r_in, self.BLUE_LADDER_ID, self.LADDER_ID)
 
@@ -318,11 +331,13 @@ class Montezuma2Renderer(JAXGameRenderer):
                     jnp.logical_and(state.room_id == 11, i == 1),
                     jnp.logical_and(state.room_id == 13, i == 0)
                 )
+                is_room_31 = state.room_id == 31
                 
                 r_out = jax.lax.cond(is_layer_2, draw_l2, draw_l1, raster_in)
                 r_out = jax.lax.cond(is_small_yellow, draw_yellow_l2, lambda r: r_out, r_out)
                 r_out = jax.lax.cond(is_long_ladder_l2, draw_long_l2, lambda r: r_out, r_out)
-                return jax.lax.cond(is_long_ladder, draw_long, lambda r: r_out, r_out)
+                r_out = jax.lax.cond(is_long_ladder, draw_long, lambda r: r_out, r_out)
+                return jax.lax.cond(is_room_31, draw_orange, lambda r: r_out, r_out)
 
             return jax.lax.cond(active == 1, _draw, lambda r_in: r_in, r)
         raster = jax.lax.fori_loop(0, self.consts.MAX_LADDERS_PER_ROOM, draw_ladder_accurate, raster)
@@ -377,6 +392,7 @@ class Montezuma2Renderer(JAXGameRenderer):
             # Color remap: Use LEVEL2_PLATFORM_ID for Level 2 rooms (17, 18, 19), otherwise LADDER_ID_L2
             is_layer_2_room = jnp.logical_or(state.room_id == 17, jnp.logical_or(state.room_id == 18, state.room_id == 19))
             p_color = jax.lax.select(is_layer_2_room, self.LEVEL2_PLATFORM_ID, self.LADDER_ID_L2)
+            p_color = jax.lax.select(state.room_id == 31, self.DEEP_BLUE_PLATFORM_ID, p_color)
             mask = jnp.where(mask != self.jr.TRANSPARENT_ID, p_color, self.jr.TRANSPARENT_ID)
 
             is_active = jnp.logical_and(state.platforms_active[i] == 1, platform_active_now)
