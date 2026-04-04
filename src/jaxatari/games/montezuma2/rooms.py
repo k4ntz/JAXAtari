@@ -584,9 +584,108 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 lax, laa,
                 px, py, pw, pa)
 
+    def load_room_2_4(args):
+        # Corresponds to ROOM_2_3 in M1
+        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
+        
+        # Two ladders: one to top, one to bottom
+        lx = lx.at[0].set(72)
+        lt = lt.at[0].set(6)
+        lb = lb.at[0].set(44)
+        la = la.at[0].set(1)
+
+        lx = lx.at[1].set(72)
+        lt = lt.at[1].set(48)
+        lb = lb.at[1].set(149)
+        la = la.at[1].set(1)
+
+        # Two snakes
+        ex = enemies_x.at[0].set(44)
+        ey = enemies_y.at[0].set(35) # Floor at 48, snake height 13 -> 35
+        ea = enemies_active.at[0].set(1)
+        ed = enemies_direction.at[0].set(0) # Static snake
+        eminx = enemies_min_x.at[0].set(44)
+        emaxx = enemies_max_x.at[0].set(51)
+
+        ex = ex.at[1].set(108)
+        ey = ey.at[1].set(35)
+        ea = ea.at[1].set(1)
+        ed = ed.at[1].set(0)
+        eminx = eminx.at[1].set(108)
+        emaxx = emaxx.at[1].set(115)
+
+        eb = enemies_bouncing
+
+        rx = ropes_x
+        rt = ropes_top
+        rb = ropes_bottom
+        ra = ropes_active
+        
+        dx = doors_x
+        dy = doors_y
+        da = doors_active
+        
+        cx = conveyors_x
+        cy = conveyors_y
+        ca = conveyors_active
+        cd = conveyors_direction
+        
+        return (ex, ey, ea, ed, eminx, emaxx, eb,
+                lx, lt, lb, la,
+                rx, rt, rb, ra,
+                ix, iy, ia,
+                dx, dy, da,
+                cx, cy, ca, cd,
+                lax, laa, px, py, pw, pa)
+
+    def load_room_2_5(args):
+        # Corresponds to ROOM_2_4 in M1
+        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
+        
+        # 8 Lasers
+        lax = lax.at[0].set(36)
+        lax = lax.at[1].set(44)
+        lax = lax.at[2].set(60)
+        lax = lax.at[3].set(68)
+        lax = lax.at[4].set(88)
+        lax = lax.at[5].set(96)
+        lax = lax.at[6].set(112)
+        lax = lax.at[7].set(120)
+        laa = laa.at[0:8].set(1)
+
+        ex = enemies_x
+        ey = enemies_y
+        ea = enemies_active
+        ed = enemies_direction
+        eminx = enemies_min_x
+        emaxx = enemies_max_x
+        eb = enemies_bouncing
+
+        rx = ropes_x
+        rt = ropes_top
+        rb = ropes_bottom
+        ra = ropes_active
+        
+        dx = doors_x
+        dy = doors_y
+        da = doors_active
+        
+        cx = conveyors_x
+        cy = conveyors_y
+        ca = conveyors_active
+        cd = conveyors_direction
+        
+        return (ex, ey, ea, ed, eminx, emaxx, eb,
+                lx, lt, lb, la,
+                rx, rt, rb, ra,
+                ix, iy, ia,
+                dx, dy, da,
+                cx, cy, ca, cd,
+                lax, laa, px, py, pw, pa)
+
     ex, ey, ea, ed, eminx, emaxx, eb, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd, lax, laa, px, py, pw, pa = jax.lax.switch(
         get_room_idx(room_id),
-        [load_room_0_3, load_room_0_4, load_room_0_5, load_room_1_3, load_room_1_2, load_room_1_4, load_room_1_5, load_room_1_6, load_room_2_2, load_room_2_1, load_room_2_3], args)
+        [load_room_0_3, load_room_0_4, load_room_0_5, load_room_1_3, load_room_1_2, load_room_1_4, load_room_1_5, load_room_1_6, load_room_2_2, load_room_2_1, load_room_2_3, load_room_2_4, load_room_2_5], args)
 
     return state.replace(
         room_id=room_id,

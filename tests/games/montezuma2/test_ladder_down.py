@@ -37,12 +37,12 @@ def test_climb_down_ladder_from_platform():
     
     # Should start climbing
     assert state.is_climbing == 1
-    assert state.player_y == 30 # Moved down 1 pixel
+    assert state.player_y == 31 # Moved down 2 pixels (PLAYER_SPEED=2)
 
     # Move down again
     obs, state, reward, done, info = env.step(state, 5)
     assert state.is_climbing == 1
-    assert state.player_y == 31
+    assert state.player_y == 33 # Moved down 2 more pixels
 
 if __name__ == "__main__":
     test_climb_down_ladder_from_platform()
