@@ -69,7 +69,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         # New 18: Level 2, col 2 (corresponds to ROOM_2_1 in M1)
         room_col_2_2 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
-        # Right wall removed from room 18 (now it's in the middle)
+        room_col_2_2 = room_col_2_2.at[6:, 156:160].set(1) # Right wall
         
         sprite_path_3 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "room_0_collision_level_2.npy")
         col_map_3 = jnp.load(sprite_path_3)[:149, :, 0]
@@ -825,9 +825,9 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
         transition_any = jnp.logical_or(jnp.logical_or(transition_left, transition_right), jnp.logical_or(transition_down, transition_up))
         new_room_id = jnp.where(transition_left, 
-                                jnp.where(state.room_id == 5, 4, jnp.where(state.room_id == 4, 3, jnp.where(state.room_id == 11, 10, jnp.where(state.room_id == 12, 11, jnp.where(state.room_id == 13, 12, jnp.where(state.room_id == 14, 13, jnp.where(state.room_id == 18, 17, jnp.where(state.room_id == 19, 18, jnp.where(state.room_id == 20, 19, jnp.where(state.room_id == 21, 20, jnp.where(state.room_id == 22, 21, jnp.where(state.room_id == 23, 22, state.room_id)))))))))))),
+                                jnp.where(state.room_id == 5, 4, jnp.where(state.room_id == 4, 3, jnp.where(state.room_id == 11, 10, jnp.where(state.room_id == 12, 11, jnp.where(state.room_id == 13, 12, jnp.where(state.room_id == 14, 13, jnp.where(state.room_id == 18, 17, jnp.where(state.room_id == 20, 19, jnp.where(state.room_id == 21, 20, jnp.where(state.room_id == 22, 21, jnp.where(state.room_id == 23, 22, state.room_id))))))))))),
                                 jnp.where(transition_right, 
-                                          jnp.where(state.room_id == 3, 4, jnp.where(state.room_id == 4, 5, jnp.where(state.room_id == 10, 11, jnp.where(state.room_id == 11, 12, jnp.where(state.room_id == 12, 13, jnp.where(state.room_id == 13, 14, jnp.where(state.room_id == 17, 18, jnp.where(state.room_id == 18, 19, jnp.where(state.room_id == 19, 20, jnp.where(state.room_id == 20, 21, jnp.where(state.room_id == 21, 22, jnp.where(state.room_id == 22, 23, state.room_id)))))))))))),
+                                          jnp.where(state.room_id == 3, 4, jnp.where(state.room_id == 4, 5, jnp.where(state.room_id == 10, 11, jnp.where(state.room_id == 11, 12, jnp.where(state.room_id == 12, 13, jnp.where(state.room_id == 13, 14, jnp.where(state.room_id == 17, 18, jnp.where(state.room_id == 19, 20, jnp.where(state.room_id == 20, 21, jnp.where(state.room_id == 21, 22, jnp.where(state.room_id == 22, 23, state.room_id))))))))))),
                                           jnp.where(transition_down, 
                                                     jnp.where(state.room_id == 3, 11, jnp.where(state.room_id == 4, 12, jnp.where(state.room_id == 5, 13, jnp.where(state.room_id == 10, 18, jnp.where(state.room_id == 11, 19, jnp.where(state.room_id == 12, 20, jnp.where(state.room_id == 13, 22, jnp.where(state.room_id == 14, 23, state.room_id)))))))),
                                                     jnp.where(transition_up, 
