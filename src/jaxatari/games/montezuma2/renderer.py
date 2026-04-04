@@ -406,7 +406,8 @@ class Montezuma2Renderer(JAXGameRenderer):
             # Color remap: Use LEVEL2_PLATFORM_ID for Level 2 rooms (17, 18, 19), otherwise LADDER_ID_L2
             is_layer_2_room = jnp.logical_or(state.room_id == 17, jnp.logical_or(state.room_id == 18, state.room_id == 19))
             p_color = jax.lax.select(is_layer_2_room, self.LEVEL2_PLATFORM_ID, self.LADDER_ID_L2)
-            p_color = jax.lax.select(state.room_id == 31, self.DEEP_BLUE_PLATFORM_ID, p_color)
+            is_deep_blue_room = jnp.any(state.room_id == jnp.array([31, 27, 29]))
+            p_color = jax.lax.select(is_deep_blue_room, self.DEEP_BLUE_PLATFORM_ID, p_color)
             mask = jnp.where(mask != self.jr.TRANSPARENT_ID, p_color, self.jr.TRANSPARENT_ID)
 
             is_active = jnp.logical_and(state.platforms_active[i] == 1, platform_active_now)
