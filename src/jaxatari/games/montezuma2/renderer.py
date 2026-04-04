@@ -207,7 +207,7 @@ class Montezuma2Renderer(JAXGameRenderer):
         
         mask_3_modified = mask_3.at[147:149, 72:88].set(0)
         room_bg_mask = jnp.where(state.room_id == 12, mask_3_modified, room_bg_mask)
-        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 32, state.room_id == 30), mask_4, room_bg_mask)
+        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 32, jnp.logical_or(state.room_id == 30, state.room_id == 28)), mask_4, room_bg_mask)
         mask_2_modified = mask_2.at[48:149, 72:88].set(0)
         room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 11, jnp.logical_or(state.room_id == 10, state.room_id == 14)), mask_2_modified, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 13, mask_2, room_bg_mask)
@@ -259,7 +259,8 @@ class Montezuma2Renderer(JAXGameRenderer):
                                     jnp.where(state.room_id == 30, self.ORANGE_LADDER_ID,
                                               jnp.where(state.room_id == 17, self.LEVEL2_PLATFORM_ID, 1)))
         # Room 3, 10, 19, and 30 walls should only be on top (above floor)
-        room_bg_mask = jnp.where(jnp.logical_or(jnp.logical_or(state.room_id == 3, state.room_id == 10), jnp.logical_or(state.room_id == 19, state.room_id == 30)), room_bg_mask.at[6:48, 0:4].set(left_wall_color), room_bg_mask)
+        is_side_room_left = jnp.isin(state.room_id, jnp.array([3, 10, 19, 30]))
+        room_bg_mask = jnp.where(is_side_room_left, room_bg_mask.at[6:48, 0:4].set(left_wall_color), room_bg_mask)
         # Other rooms left wall
         room_bg_mask = jnp.where(state.room_id == 17, room_bg_mask.at[6:149, 0:4].set(left_wall_color), room_bg_mask)
         
@@ -342,7 +343,7 @@ class Montezuma2Renderer(JAXGameRenderer):
                     jnp.logical_and(state.room_id == 11, i == 1),
                     jnp.logical_and(state.room_id == 13, i == 0)
                 )
-                is_room_orange_ladder = jnp.logical_or(state.room_id == 31, state.room_id == 30)
+                is_room_orange_ladder = jnp.isin(state.room_id, jnp.array([31, 30, 28]))
                 
                 r_out = jax.lax.cond(is_layer_2, draw_l2, draw_l1, raster_in)
                 r_out = jax.lax.cond(is_small_yellow, draw_yellow_l2, lambda r: r_out, r_out)
