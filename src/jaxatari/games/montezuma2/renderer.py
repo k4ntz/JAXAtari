@@ -135,6 +135,32 @@ class Montezuma2Renderer(JAXGameRenderer):
         self.LEVEL2_PLATFORM_COLOR = jnp.array([45, 87, 176], dtype=jnp.uint8)
         self.PALETTE = jnp.concatenate([self.PALETTE, self.LEVEL2_PLATFORM_COLOR[None, :]], axis=0)
         self.LEVEL2_PLATFORM_ID = self.PALETTE.shape[0] - 1
+
+        # Sarlacc pit colors for ROOM_2_3
+        self.PIT_RGB_BASE = jnp.array([210, 164, 74], dtype=jnp.uint8)
+        self.PIT_PATTERN = jnp.array([
+            [2, 1, 0, 1, 2, 1, 0, 1, 2],
+            [1, 0, 1, 2, 1, 0, 1, 2, 3],
+            [0, 1, 2, 1, 0, 1, 2, 3, 2],
+            [1, 2, 1, 0, 1, 2, 3, 2, 1]
+        ], dtype=jnp.int32)
+        
+        self.PIT_COLORS = []
+        for i in range(8):
+            color_index = i
+            r = int(-(0.65*color_index**2)-(14*color_index)+210)
+            r = max(r, 0)
+            g = int(-(color_index**2)-(19*color_index)+164)
+            g = max(g, 0)
+            b = int(-(0.88*color_index**2)-(11.25*color_index)+74)
+            b = max(b, 0)
+            self.PIT_COLORS.append([r, g, b])
+        
+        self.PIT_COLOR_IDS = []
+        for c in self.PIT_COLORS:
+            self.PALETTE = jnp.concatenate([self.PALETTE, jnp.array(c, dtype=jnp.uint8)[None, :]], axis=0)
+            self.PIT_COLOR_IDS.append(self.PALETTE.shape[0] - 1)
+        self.PIT_COLOR_IDS = jnp.array(self.PIT_COLOR_IDS)
         
         door_mask = self.SHAPE_MASKS["door"]
         self.SHAPE_MASKS["door"] = jnp.where(door_mask != self.jr.TRANSPARENT_ID, self.DOOR_ID, self.jr.TRANSPARENT_ID)
@@ -194,6 +220,23 @@ class Montezuma2Renderer(JAXGameRenderer):
         room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 20, state.room_id == 22), mask_l2_hole, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 21, mask_l2, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 23, mask_l2_room6, room_bg_mask)
+
+        # Add lava rendering for ROOM_2_3 (room_id 19)
+        lava_y_start = 76
+        lava_y_end = 124 # gap ends at 123
+        anim_frame = jnp.mod(state.frame_count // 8, 4)
+        row_indices = jnp.arange(lava_y_end - lava_y_start)
+        band_indices = row_indices // 2
+        color_indices = (band_indices // 9) + self.PIT_PATTERN[anim_frame][jnp.mod(band_indices, 9)]
+        band_color_ids = self.PIT_COLOR_IDS[color_indices]
+        lava_mask = jnp.tile(band_color_ids[:, None], (1, 160))
+        
+        # Apply lava only to room 19, and only in the empty (black) areas between lava_y_start and lava_y_end
+        lava_region = room_bg_mask[lava_y_start:lava_y_end, :]
+        is_black = jnp.all(self.PALETTE[lava_region] == 0, axis=-1)
+        new_lava_region = jnp.where(is_black, lava_mask, lava_region)
+        room_bg_mask_with_lava = room_bg_mask.at[lava_y_start:lava_y_end, :].set(new_lava_region)
+        room_bg_mask = jnp.where(state.room_id == 19, room_bg_mask_with_lava, room_bg_mask)
         
         # Add walls for side rooms Level 0 and Level 1 and Level 2
         # Use LEVEL2_PLATFORM_ID for Level 2 walls (rooms 17 and 19)

@@ -768,13 +768,15 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             
         died_from_laser = jax.lax.fori_loop(0, self.consts.MAX_LASERS_PER_ROOM, check_laser_collision, False)
         
-        player_died = jnp.logical_or(died_from_fall, jnp.logical_or(died_from_enemy, died_from_laser))
+        died_from_pit = jnp.logical_and(state.room_id == 19, jnp.logical_and(player_feet_y >= 110, jnp.logical_not(on_ground)))
+
+        player_died = jnp.logical_or(died_from_fall, jnp.logical_or(died_from_enemy, jnp.logical_or(died_from_laser, died_from_pit)))
         
         start_death = jnp.logical_and(state.death_timer == 0, player_died)
         new_death_timer = jnp.where(start_death, self.consts.DEATH_TIMER_FRAMES, 
                                     jnp.where(state.death_timer > 0, state.death_timer - 1, 0))
         
-        death_type = jnp.where(died_from_fall, 1, jnp.where(died_from_enemy, 2, jnp.where(died_from_laser, 3, 0)))
+        death_type = jnp.where(died_from_fall, 1, jnp.where(died_from_enemy, 2, jnp.where(died_from_laser, 3, jnp.where(died_from_pit, 1, 0))))
         new_death_type = jnp.where(start_death, death_type, jnp.where(new_death_timer == 0, 0, state.death_type))
 
         respawn_now = jnp.logical_and(state.death_timer == 1, new_death_timer == 0)
