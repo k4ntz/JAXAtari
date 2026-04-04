@@ -734,7 +734,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         # 1 Ladder to bottom
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(123)
-        lb = lb.at[0].set(147)
+        lb = lb.at[0].set(150)
         la = la.at[0].set(1)
 
         # 2 Ropes
@@ -780,9 +780,9 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         emaxx = enemies_max_x.at[0].set(37)
 
         # Dropout floor (using platform)
-        px = px.at[0].set(36)
+        px = px.at[0].set(32)
         py = py.at[0].set(48)
-        pw = pw.at[0].set(84) # Multiple of 12 (7 * 12)
+        pw = pw.at[0].set(96) # Multiple of 12 (7 * 12)
         pa = pa.at[0].set(1)
 
         eb = enemies_bouncing

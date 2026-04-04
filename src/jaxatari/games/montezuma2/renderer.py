@@ -266,6 +266,7 @@ class Montezuma2Renderer(JAXGameRenderer):
         def draw_ladder_accurate(i, r):
             x, top, bottom = state.ladders_x[i], state.ladders_top[i] + 47, state.ladders_bottom[i] + 47
             bottom = jnp.where(jnp.logical_and(state.room_id == 4, state.ladders_bottom[i] == 130), bottom + 3, bottom)
+            bottom = jnp.where(jnp.logical_and(state.room_id == 23, state.ladders_bottom[i] == 150), bottom - 3, bottom)
             active = state.ladders_active[i]
 
             def _draw(raster_in):

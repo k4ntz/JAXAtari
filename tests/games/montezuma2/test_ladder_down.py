@@ -44,5 +44,37 @@ def test_climb_down_ladder_from_platform():
     assert state.is_climbing == 1
     assert state.player_y == 33 # Moved down 2 more pixels
 
+def test_climb_down_ladder_room_2_7():
+    env = JaxMontezuma2()
+    key = jax.random.PRNGKey(0)
+    obs, state = env.reset(key)
+
+    # Room 23 is ROOM_2_7
+    room_id = 23
+    state = state.replace(
+        room_id=jnp.array(room_id, dtype=jnp.int32),
+        player_x=jnp.array(77, dtype=jnp.int32), # Aligned with ladder lx=72 (72+8-3=77)
+        player_y=jnp.array(128, dtype=jnp.int32), # Feet at 147. Ladder bottom is 150.
+        is_falling=jnp.array(0, dtype=jnp.int32),
+        is_jumping=jnp.array(0, dtype=jnp.int32),
+        is_climbing=jnp.array(1, dtype=jnp.int32),
+        last_ladder=jnp.array(0, dtype=jnp.int32)
+    )
+    from jaxatari.games.montezuma2.rooms import load_room
+    state = load_room(jnp.array(room_id, dtype=jnp.int32), state, env.consts)
+
+    # Move down until we reach the bottom and transition
+    for i in range(15):
+        obs, state, reward, done, info = env.step(state, 5)
+        if state.room_id != room_id:
+            # Successfully transitioned
+            assert state.room_id == 31 # ROOM_3_7
+            return
+        assert state.is_falling == 0
+        assert state.is_climbing == 1
+            
+    assert False, "Did not transition to ROOM_3_7"
+
 if __name__ == "__main__":
     test_climb_down_ladder_from_platform()
+    test_climb_down_ladder_room_2_7()
