@@ -186,12 +186,12 @@ class Montezuma2Renderer(JAXGameRenderer):
         mask_l2_pit = self.SHAPE_MASKS["room_bg_level2_pit"][:149, ...]
         mask_l2_pit = jnp.where(mask_l2_pit == 1, self.LEVEL2_PLATFORM_ID, mask_l2_pit)
         
-        mask_l2_hole = mask_l2.at[147:149, 72:88].set(0)
+        mask_l2_hole = mask_l2.at[48:, 72:88].set(0)
         
         room_bg_mask = jnp.where(state.room_id == 18, mask_l2, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 17, mask_l2_room0, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 19, mask_l2_pit, room_bg_mask)
-        room_bg_mask = jnp.where(state.room_id == 20, mask_l2_hole, room_bg_mask)
+        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 20, state.room_id == 22), mask_l2_hole, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 21, mask_l2, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 23, mask_l2_room6, room_bg_mask)
         
