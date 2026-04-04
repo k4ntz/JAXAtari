@@ -919,6 +919,15 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         py = py.at[0].set(48)
         pw = pw.at[0].set(96) # Multiple of 12 (7 * 12)
         pa = pa.at[0].set(1)
+        
+        # 2 Gems (coins) on the platform
+        ix = ix.at[0].set(139)
+        iy = iy.at[0].set(7)
+        ia = ia.at[0].set(1)
+
+        ix = ix.at[1].set(77)
+        iy = iy.at[1].set(7)
+        ia = ia.at[1].set(1)
 
         ex = enemies_x
         ey = enemies_y
@@ -937,10 +946,6 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         rt = ropes_top
         rb = ropes_bottom
         ra = ropes_active
-
-        ix = items_x
-        iy = items_y
-        ia = items_active
 
         cx = conveyors_x
         cy = conveyors_y
@@ -966,6 +971,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         # Hammer position
         ix = ix.at[0].set(17)
         iy = iy.at[0].set(7)
+        ia = ia.at[0].set(1)
         
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(6)

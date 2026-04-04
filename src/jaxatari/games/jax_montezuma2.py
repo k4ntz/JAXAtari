@@ -192,7 +192,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             platform_cycle=jnp.array(0, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
             death_type=jnp.array(0, dtype=jnp.int32),
-            inventory=jnp.array([3, 0, 0], dtype=jnp.int32), # keys, sword, torch
+            inventory=jnp.array([3, 0, 0, 0], dtype=jnp.int32), # keys, sword, torch, hammer
             global_enemies_active=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ENEMIES_PER_ROOM), dtype=jnp.int32),
             global_enemies_type=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ENEMIES_PER_ROOM), dtype=jnp.int32),
             global_items_active=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ITEMS_PER_ROOM), dtype=jnp.int32),
@@ -214,6 +214,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         gia = gia.at[32, 1].set(1)
         gia = gia.at[32, 2].set(1)
         gia = gia.at[28, 0].set(1) # Hammer in Room 28
+        gia = gia.at[29, 0].set(1) # Gem in Room 29
+        gia = gia.at[29, 1].set(1) # Gem in Room 29
 
         gda = state.global_doors_active
         gda = gda.at[4, 0].set(1) # New 4 (Mid)
@@ -269,6 +271,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         giy = giy.at[32, 1].set(1)
         giy = giy.at[32, 2].set(1)
         giy = giy.at[28, 0].set(2) # Hammer in room 28
+        giy = giy.at[29, 0].set(1) # Gem in room 29
+        giy = giy.at[29, 1].set(1) # Gem in room 29
         
         state = state.replace(global_items_active=gia, global_doors_active=gda, global_enemies_active=gea, global_enemies_type=gety, global_items_type=giy)
         
@@ -651,12 +655,14 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             is_key = item_type == 0
             is_sword = item_type == 3
             is_torch = item_type == 4
-            
+            is_hammer = item_type == 2
+
             new_keys = jnp.where(jnp.logical_and(collect, is_key), inventory[0] + 1, inventory[0])
             new_sword = jnp.where(jnp.logical_and(collect, is_sword), 1, inventory[1])
             new_torch = jnp.where(jnp.logical_and(collect, is_torch), 1, inventory[2])
-            
-            new_inventory = jnp.array([new_keys, new_sword, new_torch])
+            new_hammer = jnp.where(jnp.logical_and(collect, is_hammer), 1, inventory[3])
+
+            new_inventory = jnp.array([new_keys, new_sword, new_torch, new_hammer])
             new_items_active = jnp.where(collect, items_active.at[i].set(0), items_active)
             item_score = jnp.where(is_key, 100, 1000)
             new_score = jnp.where(collect, current_score + item_score, current_score)

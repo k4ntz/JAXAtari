@@ -619,4 +619,14 @@ class Montezuma2Renderer(JAXGameRenderer):
              
         raster = jax.lax.cond(state.inventory[2] == 1, render_torch, lambda r: r, raster)
 
+        # Render Hammer
+        def render_hammer(raster_in):
+             offset = state.inventory[0] + state.inventory[1] + state.inventory[2]
+             mask = self.SHAPE_MASKS["item"][2]
+             x = self.consts.ITEMBAR_LIFES_STARTING_X + offset * 8
+             y = self.consts.ITEMBAR_STARTING_Y
+             return self.jr.render_at(raster_in, x, y, mask)
+             
+        raster = jax.lax.cond(state.inventory[3] == 1, render_hammer, lambda r: r, raster)
+
         return self.PALETTE[raster]

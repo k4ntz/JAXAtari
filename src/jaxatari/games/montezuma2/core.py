@@ -24,7 +24,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=20)
     INITIAL_PLAYER_X: int = struct.field(pytree_node=False, default=77)
     INITIAL_PLAYER_Y: int = struct.field(pytree_node=False, default=26)
-    INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=30)
+    INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=29)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=2)
     JUMP_Y_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([3, 3, 3, 2, 2, 2, 1, 1, 1, -1, -2, -3, -4, -4, -4, 0], dtype=jnp.int32))
     GRAVITY: int = struct.field(pytree_node=False, default=2)
@@ -124,7 +124,7 @@ class Montezuma2State:
     death_timer: jnp.ndarray
     death_type: jnp.ndarray
     
-    inventory: jnp.ndarray
+    inventory: jnp.ndarray # keys, sword, torch, hammer
     key: jrandom.PRNGKey
 
 @struct.dataclass
