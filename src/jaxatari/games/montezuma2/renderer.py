@@ -36,6 +36,7 @@ class Montezuma2Renderer(JAXGameRenderer):
             {'name': 'room_bg_3', 'type': 'single', 'file': 'backgrounds/mid_room_level_1.npy', 'transpose': False},
             {'name': 'room_bg_level2_base', 'type': 'single', 'file': 'backgrounds/base_sprite_level_2.npy', 'transpose': False},
             {'name': 'room_bg_level2_room0', 'type': 'single', 'file': 'backgrounds/room_0_level_2.npy', 'transpose': False},
+            {'name': 'room_bg_level2_room6', 'type': 'single', 'file': 'backgrounds/room_6_level_2.npy', 'transpose': False},
             {'name': 'room_bg_level2_pit', 'type': 'single', 'file': 'backgrounds/pitroom_level_2.npy', 'transpose': False},
             {
                 'name': 'player', 'type': 'group',
@@ -177,6 +178,11 @@ class Montezuma2Renderer(JAXGameRenderer):
         mask_l2 = jnp.where(mask_l2 == 1, self.LEVEL2_PLATFORM_ID, mask_l2)
         mask_l2_room0 = self.SHAPE_MASKS["room_bg_level2_room0"][:149, ...]
         mask_l2_room0 = jnp.where(mask_l2_room0 == 1, self.LEVEL2_PLATFORM_ID, mask_l2_room0)
+        mask_l2_room6 = self.SHAPE_MASKS["room_bg_level2_room6"]
+        # Pad to 149 if height is 147
+        padding = 149 - mask_l2_room6.shape[0]
+        mask_l2_room6 = jnp.pad(mask_l2_room6, ((0, padding), (0, 0)), mode='constant', constant_values=0)
+        mask_l2_room6 = jnp.where(mask_l2_room6 == 1, self.LEVEL2_PLATFORM_ID, mask_l2_room6)
         mask_l2_pit = self.SHAPE_MASKS["room_bg_level2_pit"][:149, ...]
         mask_l2_pit = jnp.where(mask_l2_pit == 1, self.LEVEL2_PLATFORM_ID, mask_l2_pit)
         
@@ -187,6 +193,7 @@ class Montezuma2Renderer(JAXGameRenderer):
         room_bg_mask = jnp.where(state.room_id == 19, mask_l2_pit, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 20, mask_l2_hole, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 21, mask_l2, room_bg_mask)
+        room_bg_mask = jnp.where(state.room_id == 23, mask_l2_room6, room_bg_mask)
         
         # Add walls for side rooms Level 0 and Level 1 and Level 2
         # Use LEVEL2_PLATFORM_ID for Level 2 walls (rooms 17 and 19)
@@ -195,7 +202,7 @@ class Montezuma2Renderer(JAXGameRenderer):
                                 room_bg_mask.at[6:149, 0:4].set(left_wall_color), room_bg_mask)
         
         right_wall_color = 1
-        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 5, state.room_id == 14), 
+        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 5, jnp.logical_or(state.room_id == 14, state.room_id == 23)), 
                                 room_bg_mask.at[6:149, 156:160].set(right_wall_color), room_bg_mask)
         
         raster = self.jr.render_at(raster, 0, 47, room_bg_mask)

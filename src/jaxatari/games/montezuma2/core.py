@@ -156,7 +156,8 @@ def get_room_idx(room_id):
            jnp.where(room_id == 19, 10,
            jnp.where(room_id == 20, 11,
            jnp.where(room_id == 21, 12,
-           jnp.where(room_id == 22, 13, 0))))))))))))))
+           jnp.where(room_id == 22, 13,
+           jnp.where(room_id == 23, 14, 0)))))))))))))))
 
 def check_platform(col_map, y, x, width):
     x_m3 = jnp.clip(x - 3, 0, width - 1)
