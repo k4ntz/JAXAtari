@@ -256,12 +256,16 @@ class Montezuma2Renderer(JAXGameRenderer):
         # Add walls for side rooms Level 0 and Level 1 and Level 2
         # Use LEVEL2_PLATFORM_ID for Level 2 walls (rooms 17 and 19)
         left_wall_color = jnp.where(jnp.logical_or(state.room_id == 17, state.room_id == 19), self.LEVEL2_PLATFORM_ID, 1)
-        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 3, jnp.logical_or(state.room_id == 10, jnp.logical_or(state.room_id == 17, state.room_id == 19))), 
-                                room_bg_mask.at[6:149, 0:4].set(left_wall_color), room_bg_mask)
+        # Room 3, 10, and 19 walls should only be on top (above floor)
+        room_bg_mask = jnp.where(jnp.logical_or(jnp.logical_or(state.room_id == 3, state.room_id == 10), state.room_id == 19), room_bg_mask.at[6:48, 0:4].set(left_wall_color), room_bg_mask)
+        # Other rooms left wall
+        room_bg_mask = jnp.where(state.room_id == 17, room_bg_mask.at[6:149, 0:4].set(left_wall_color), room_bg_mask)
         
         right_wall_color = jnp.where(jnp.logical_or(state.room_id == 18, state.room_id == 23), self.LEVEL2_PLATFORM_ID, 1)
-        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 5, jnp.logical_or(state.room_id == 14, jnp.logical_or(state.room_id == 23, jnp.logical_or(state.room_id == 18, state.room_id == 32)))), 
-                                room_bg_mask.at[6:149, 156:160].set(right_wall_color), room_bg_mask)
+        # Room 5, 14, and 18 walls should only be on top (above floor)
+        room_bg_mask = jnp.where(jnp.logical_or(jnp.logical_or(state.room_id == 5, state.room_id == 14), state.room_id == 18), room_bg_mask.at[6:48, 156:160].set(right_wall_color), room_bg_mask)
+        # Other rooms right wall
+        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 23, state.room_id == 32), room_bg_mask.at[6:149, 156:160].set(right_wall_color), room_bg_mask)
         
         raster = self.jr.render_at(raster, 0, 47, room_bg_mask)
         

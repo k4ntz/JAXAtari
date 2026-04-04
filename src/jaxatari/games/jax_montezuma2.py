@@ -33,7 +33,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         # New 3: Leftmost
         room_col_0_3 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
-        room_col_0_3 = room_col_0_3.at[6:, 0:4].set(1) # Left wall
+        room_col_0_3 = room_col_0_3.at[6:48, 0:4].set(1) # Left wall
         room_col_0_3 = room_col_0_3.at[147:149, 72:88].set(0) # Hole for ladder down
 
         sprite_path_1 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "mid_room_collision_level_0.npy")
@@ -45,13 +45,13 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
         # New 5: Rightmost
         room_col_0_5 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
-        room_col_0_5 = room_col_0_5.at[6:, 156:160].set(1) # Right wall
+        room_col_0_5 = room_col_0_5.at[6:48, 156:160].set(1) # Right wall
         room_col_0_5 = room_col_0_5.at[147:149, 72:88].set(0) # Hole for ladder down
         
         room_col_1_3 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
         room_col_1_3 = room_col_1_3.at[147:149, 72:88].set(0) # Hole for ladder down
         room_col_1_2 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
-        room_col_1_2 = room_col_1_2.at[6:, 0:4].set(1)
+        room_col_1_2 = room_col_1_2.at[6:48, 0:4].set(1)
         room_col_1_2 = room_col_1_2.at[147:149, 72:88].set(0) # Hole for ladder down to room 18
         
         sprite_path_2 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "mid_room_collision_level_1.npy")
@@ -65,12 +65,12 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         # New 14: Rightmost on level 1 (corresponds to ROOM_1_4 in M1)
         room_col_1_6 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
-        room_col_1_6 = room_col_1_6.at[6:, 156:160].set(1) # Right wall
+        room_col_1_6 = room_col_1_6.at[6:48, 156:160].set(1) # Right wall
         room_col_1_6 = room_col_1_6.at[147:149, 72:88].set(0) # Hole for ladder down to room 22
         
         # New 18: Level 2, col 2 (corresponds to ROOM_2_1 in M1)
         room_col_2_2 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
-        room_col_2_2 = room_col_2_2.at[6:, 156:160].set(1) # Right wall
+        room_col_2_2 = room_col_2_2.at[6:48, 156:160].set(1) # Right wall
         
         sprite_path_3 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "room_0_collision_level_2.npy")
         col_map_3 = jnp.load(sprite_path_3)[:149, :, 0]
@@ -80,7 +80,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         sprite_path_4 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "pitroom_collision_map.npy")
         col_map_4 = jnp.load(sprite_path_4)[:149, :, 0]
         room_col_2_3 = jnp.where(col_map_4 > 0, 1, 0).astype(jnp.int32)
-        room_col_2_3 = room_col_2_3.at[6:, 0:4].set(1) # Left wall
+        room_col_2_3 = room_col_2_3.at[6:48, 0:4].set(1) # Left wall
 
         # New 20: Level 2, col 4 (corresponds to ROOM_2_3 in M1)
         room_col_2_4 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
