@@ -259,17 +259,20 @@ class Montezuma2Renderer(JAXGameRenderer):
         # Use LEVEL2_PLATFORM_ID for Level 2 walls (rooms 17), LADDER_ID (green) for room 19, and ORANGE_LADDER_ID for room 30
         left_wall_color = jnp.where(state.room_id == 19, self.LADDER_ID,
                                     jnp.where(state.room_id == 30, self.ORANGE_LADDER_ID,
-                                              jnp.where(state.room_id == 17, self.LEVEL2_PLATFORM_ID, 1)))
-        # Room 3, 10, 19, and 30 walls should only be on top (above floor)
-        is_side_room_left = jnp.isin(state.room_id, jnp.array([3, 10, 19, 30]))
+                                              jnp.where(state.room_id == 27, self.DEEP_BLUE_PLATFORM_ID,
+                                                        jnp.where(state.room_id == 17, self.LEVEL2_PLATFORM_ID, 1))))
+        # Room 3, 10, 19, 30, and 27 walls should only be on top (above floor)
+        is_side_room_left = jnp.isin(state.room_id, jnp.array([3, 10, 19, 30, 27]))
         room_bg_mask = jnp.where(is_side_room_left, room_bg_mask.at[6:48, 0:4].set(left_wall_color), room_bg_mask)
         # Other rooms left wall
         room_bg_mask = jnp.where(state.room_id == 17, room_bg_mask.at[6:149, 0:4].set(left_wall_color), room_bg_mask)
         
         right_wall_color = jnp.where(state.room_id == 18, self.LADDER_ID,
-                                     jnp.where(state.room_id == 23, self.LEVEL2_PLATFORM_ID, 1))
-        # Room 5, 14, 18, and 32 walls should only be on top (above floor)
-        room_bg_mask = jnp.where(jnp.logical_or(jnp.logical_or(state.room_id == 5, state.room_id == 14), jnp.logical_or(state.room_id == 18, state.room_id == 32)), room_bg_mask.at[6:48, 156:160].set(right_wall_color), room_bg_mask)
+                                     jnp.where(state.room_id == 29, self.DEEP_BLUE_PLATFORM_ID,
+                                               jnp.where(state.room_id == 23, self.LEVEL2_PLATFORM_ID, 1)))
+        # Room 5, 14, 18, 32, and 29 walls should only be on top (above floor)
+        is_side_room_right = jnp.isin(state.room_id, jnp.array([5, 14, 18, 32, 29]))
+        room_bg_mask = jnp.where(is_side_room_right, room_bg_mask.at[6:48, 156:160].set(right_wall_color), room_bg_mask)
         # Other rooms right wall
         room_bg_mask = jnp.where(state.room_id == 23, room_bg_mask.at[6:149, 156:160].set(right_wall_color), room_bg_mask)
         
