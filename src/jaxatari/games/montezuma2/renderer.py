@@ -194,8 +194,8 @@ class Montezuma2Renderer(JAXGameRenderer):
         room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 3, jnp.logical_or(state.room_id == 10, jnp.logical_or(state.room_id == 17, state.room_id == 19))), 
                                 room_bg_mask.at[6:149, 0:4].set(left_wall_color), room_bg_mask)
         
-        right_wall_color = jnp.where(state.room_id == 21, self.LEVEL2_PLATFORM_ID, 1)
-        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 5, jnp.logical_or(state.room_id == 14, state.room_id == 21)), 
+        right_wall_color = 1
+        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 5, state.room_id == 14), 
                                 room_bg_mask.at[6:149, 156:160].set(right_wall_color), room_bg_mask)
         
         raster = self.jr.render_at(raster, 0, 47, room_bg_mask)

@@ -86,7 +86,6 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
         # New 21: Level 2, col 5 (corresponds to ROOM_2_4 in M1)
         room_col_2_5 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
-        room_col_2_5 = room_col_2_5.at[6:, 156:160].set(1) # Right wall
 
         self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0_3, room_col_0_4, room_col_0_5, room_col_1_3, room_col_1_2, room_col_1_4, room_col_1_5, room_col_1_6, room_col_2_2, room_col_2_1, room_col_2_3, room_col_2_4, room_col_2_5])
 
