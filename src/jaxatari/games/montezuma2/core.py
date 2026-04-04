@@ -11,11 +11,11 @@ class Montezuma2Constants(struct.PyTreeNode):
     MAX_LADDERS_PER_ROOM: int = struct.field(pytree_node=False, default=4)
     MAX_ROPES_PER_ROOM: int = struct.field(pytree_node=False, default=2)
     MAX_DOORS_PER_ROOM: int = struct.field(pytree_node=False, default=2)
-    MAX_ITEMS_PER_ROOM: int = struct.field(pytree_node=False, default=2)
+    MAX_ITEMS_PER_ROOM: int = struct.field(pytree_node=False, default=3)
     MAX_CONVEYORS_PER_ROOM: int = struct.field(pytree_node=False, default=2)
     MAX_LASERS_PER_ROOM: int = struct.field(pytree_node=False, default=8)
     MAX_PLATFORMS_PER_ROOM: int = struct.field(pytree_node=False, default=12)
-    MAX_ROOMS: int = struct.field(pytree_node=False, default=32)
+    MAX_ROOMS: int = struct.field(pytree_node=False, default=33)
     
     # Gameplay Constants
     WIDTH: int = struct.field(pytree_node=False, default=160)
@@ -24,7 +24,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=20)
     INITIAL_PLAYER_X: int = struct.field(pytree_node=False, default=77)
     INITIAL_PLAYER_Y: int = struct.field(pytree_node=False, default=26)
-    INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=23)
+    INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=4)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=2)
     JUMP_Y_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([3, 3, 3, 2, 2, 2, 1, 1, 1, -1, -2, -3, -4, -4, -4, 0], dtype=jnp.int32))
     GRAVITY: int = struct.field(pytree_node=False, default=2)
@@ -158,7 +158,8 @@ def get_room_idx(room_id):
            jnp.where(room_id == 21, 12,
            jnp.where(room_id == 22, 13,
            jnp.where(room_id == 23, 14,
-           jnp.where(room_id == 31, 15, 0))))))))))))))))
+           jnp.where(room_id == 31, 15, 
+           jnp.where(room_id == 32, 16, 0)))))))))))))))))
 
 def check_platform(col_map, y, x, width):
     x_m3 = jnp.clip(x - 3, 0, width - 1)

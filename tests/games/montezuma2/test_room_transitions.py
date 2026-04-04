@@ -84,12 +84,33 @@ def test_room_transitions_vertical():
     assert state.room_id == 11
     assert state.player_y >= 130
 
+def test_room_3_8_transition():
+    env = JaxMontezuma2()
+    key = jax.random.PRNGKey(0)
+    obs, state = env.reset(key)
+    
+    # 1. Room 31 -> 32 (Right)
+    state = load_room(jnp.array(31, dtype=jnp.int32), state, env.consts)
+    # Move to the right edge
+    state = state.replace(player_x=jnp.array(155, dtype=jnp.int32), player_y=jnp.array(100, dtype=jnp.int32))
+    obs, state, reward, done, info = env.step(state, 3) # RIGHT
+    assert state.room_id == 32
+    assert state.player_x <= 10 # Should be teleported to the left side of new room
+    
+    # 2. Room 32 -> 31 (Left)
+    state = load_room(jnp.array(32, dtype=jnp.int32), state, env.consts)
+    # Move to the left edge
+    state = state.replace(player_x=jnp.array(0, dtype=jnp.int32), player_y=jnp.array(100, dtype=jnp.int32))
+    obs, state, reward, done, info = env.step(state, 4) # LEFT
+    assert state.room_id == 31
+    assert state.player_x >= 140 # Should be teleported to the right side of new room
+
 def test_all_implemented_rooms_loadable():
     env = JaxMontezuma2()
     key = jax.random.PRNGKey(0)
     _, state = env.reset(key)
     
-    implemented_room_ids = [3, 4, 5, 10, 11, 12, 13, 14, 18, 19]
+    implemented_room_ids = [3, 4, 5, 10, 11, 12, 13, 14, 18, 19, 31, 32]
     
     for rid in implemented_room_ids:
         new_state = load_room(jnp.array(rid, dtype=jnp.int32), state, env.consts)

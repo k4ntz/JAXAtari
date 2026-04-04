@@ -548,9 +548,9 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         la = la.at[0].set(1)
 
         # Dropout floor (using platform)
-        px = px.at[0].set(32)
+        px = px.at[0].set(36)
         py = py.at[0].set(48)
-        pw = pw.at[0].set(96)
+        pw = pw.at[0].set(84)
         pa = pa.at[0].set(1)
 
         ex = enemies_x
@@ -809,9 +809,61 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
                 cx, cy, ca, cd,
                 lax, laa, px, py, pw, pa)
 
+    def load_room_3_8(args):
+        # Corresponds to ROOM_3_8 in M1 (rightmost room level 3)
+        lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
+        
+        # 3 Gems on the top right
+        ix = ix.at[0].set(99)
+        iy = iy.at[0].set(7)
+        ia = ia.at[0].set(1)
+        
+        ix = ix.at[1].set(115)
+        iy = iy.at[1].set(7)
+        ia = ia.at[1].set(1)
+        
+        ix = ix.at[2].set(131)
+        iy = iy.at[2].set(7)
+        ia = ia.at[2].set(1)
+
+        ex = enemies_x
+        ey = enemies_y
+        ea = enemies_active
+        ed = enemies_direction
+        eminx = enemies_min_x
+        emaxx = enemies_max_x
+        eb = enemies_bouncing
+
+        lx = ladders_x
+        lt = ladders_top
+        lb = ladders_bottom
+        la = ladders_active
+
+        rx = ropes_x
+        rt = ropes_top
+        rb = ropes_bottom
+        ra = ropes_active
+
+        cx = conveyors_x
+        cy = conveyors_y
+        ca = conveyors_active
+        cd = conveyors_direction
+
+        dx = doors_x
+        dy = doors_y
+        da = doors_active
+
+        return (ex, ey, ea, ed, eminx, emaxx, eb,
+                lx, lt, lb, la,
+                rx, rt, rb, ra,
+                ix, iy, ia,
+                dx, dy, da,
+                cx, cy, ca, cd,
+                lax, laa, px, py, pw, pa)
+
     ex, ey, ea, ed, eminx, emaxx, eb, lx, lt, lb, la, rx, rt, rb, ra, ix, iy, ia, dx, dy, da, cx, cy, ca, cd, lax, laa, px, py, pw, pa = jax.lax.switch(
         get_room_idx(room_id),
-        [load_room_0_3, load_room_0_4, load_room_0_5, load_room_1_3, load_room_1_2, load_room_1_4, load_room_1_5, load_room_1_6, load_room_2_2, load_room_2_1, load_room_2_3, load_room_2_4, load_room_2_5, load_room_2_6, load_room_2_7, load_room_3_7], args)
+        [load_room_0_3, load_room_0_4, load_room_0_5, load_room_1_3, load_room_1_2, load_room_1_4, load_room_1_5, load_room_1_6, load_room_2_2, load_room_2_1, load_room_2_3, load_room_2_4, load_room_2_5, load_room_2_6, load_room_2_7, load_room_3_7, load_room_3_8], args)
 
     return state.replace(
         room_id=room_id,
