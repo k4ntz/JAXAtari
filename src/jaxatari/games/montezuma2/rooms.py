@@ -1044,14 +1044,19 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
     def load_room_3_2(args):
         # Corresponds to ROOM_3_2 in M1
         lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
-        lax = lax.at[0].set(20)
-        lax = lax.at[1].set(136)
-        laa = laa.at[0:2].set(1)
+        
+        dx = doors_x.at[0].set(20)
+        dy = doors_y.at[0].set(7)
+        da = doors_active.at[0].set(1)
+        dx = dx.at[1].set(136)
+        dy = dy.at[1].set(7)
+        da = da.at[1].set(1)
+
         return (enemies_x, enemies_y, enemies_active, enemies_direction, enemies_min_x, enemies_max_x, enemies_bouncing,
                 lx, lt, lb, la,
                 ropes_x, ropes_top, ropes_bottom, ropes_active,
                 ix, iy, ia,
-                doors_x, doors_y, doors_active,
+                dx, dy, da,
                 conveyors_x, conveyors_y, conveyors_active, conveyors_direction,
                 lax, laa, px, py, pw, pa)
 

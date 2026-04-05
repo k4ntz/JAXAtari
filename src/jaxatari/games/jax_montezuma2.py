@@ -241,6 +241,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         gda = gda.at[4, 1].set(1)
         gda = gda.at[12, 0].set(1)
         gda = gda.at[12, 1].set(1)
+        gda = gda.at[26, 0].set(1) # Room 26 (ROOM_3_2)
+        gda = gda.at[26, 1].set(1)
         
         gea = state.global_enemies_active
         gea = gea.at[4, 0].set(1) # New 4 (Mid)
