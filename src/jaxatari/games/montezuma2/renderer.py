@@ -207,7 +207,8 @@ class Montezuma2Renderer(JAXGameRenderer):
         
         mask_3_modified = mask_3.at[147:149, 72:88].set(jnp.uint8(0))
         room_bg_mask = jnp.where(state.room_id == 12, mask_3_modified, room_bg_mask)
-        room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 32, jnp.logical_or(state.room_id == 30, state.room_id == 28)), mask_4, room_bg_mask)
+        is_mask4_room = jnp.isin(state.room_id, jnp.array([25, 26, 28, 30, 32]))
+        room_bg_mask = jnp.where(is_mask4_room, mask_4, room_bg_mask)
         mask_2_modified = mask_2.at[48:149, 72:88].set(jnp.uint8(0))
         room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 11, jnp.logical_or(state.room_id == 10, state.room_id == 14)), mask_2_modified, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 13, mask_2, room_bg_mask)
@@ -260,8 +261,8 @@ class Montezuma2Renderer(JAXGameRenderer):
         left_wall_color = jnp.where(state.room_id == 19, self.LADDER_ID,
                                     jnp.where(state.room_id == 30, self.ORANGE_LADDER_ID,
                                               jnp.where(state.room_id == 17, self.LEVEL2_PLATFORM_ID, 1)))
-        # Room 3, 10, 19, and 30 walls should only be on top (above floor)
-        is_side_room_left = jnp.isin(state.room_id, jnp.array([3, 10, 19, 30]))
+        # Room 3, 10, 19, 30 and 25 walls should only be on top (above floor)
+        is_side_room_left = jnp.isin(state.room_id, jnp.array([3, 10, 19, 30, 25]))
         room_bg_mask = jnp.where(is_side_room_left, room_bg_mask.at[6:48, 0:4].set(left_wall_color.astype(jnp.uint8)), room_bg_mask)
         # Other rooms left wall
         room_bg_mask = jnp.where(state.room_id == 17, room_bg_mask.at[6:149, 0:4].set(left_wall_color.astype(jnp.uint8)), room_bg_mask)
