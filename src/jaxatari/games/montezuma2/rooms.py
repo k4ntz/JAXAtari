@@ -968,7 +968,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         # Corresponds to ROOM_3_4 in M1
         lx, lt, lb, la, ix, iy, ia, lax, laa, px, py, pw, pa = args
         
-        # Hammer position
+        # Amulet position
         ix = ix.at[0].set(17)
         iy = iy.at[0].set(7)
         ia = ia.at[0].set(1)

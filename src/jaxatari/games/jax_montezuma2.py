@@ -208,7 +208,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             platform_cycle=jnp.array(0, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
             death_type=jnp.array(0, dtype=jnp.int32),
-            inventory=jnp.array([3, 0, 0, 0], dtype=jnp.int32), # keys, sword, torch, hammer
+            inventory=jnp.array([3, 0, 0, 0], dtype=jnp.int32), # keys, sword, torch, amulet
+            amulet_time=jnp.array(0, dtype=jnp.int32),
             bonus_room_timer=jnp.array(0, dtype=jnp.int32),
             first_gem_pickup=jnp.array(0, dtype=jnp.int32),
             global_enemies_active=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ENEMIES_PER_ROOM), dtype=jnp.int32),
@@ -231,7 +232,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         gia = gia.at[32, 0].set(1) # 3 Gems in Room 32
         gia = gia.at[32, 1].set(1)
         gia = gia.at[32, 2].set(1)
-        gia = gia.at[28, 0].set(1) # Hammer in Room 28
+        gia = gia.at[28, 0].set(1) # Amulet in Room 28
         gia = gia.at[29, 0].set(1) # Gem in Room 29
         gia = gia.at[29, 1].set(1) # Gem in Room 29
         gia = gia.at[24, 0].set(1) # Gem in Room 24 (Bonus Room)
@@ -291,7 +292,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         giy = giy.at[32, 0].set(1)
         giy = giy.at[32, 1].set(1)
         giy = giy.at[32, 2].set(1)
-        giy = giy.at[28, 0].set(2) # Hammer in room 28
+        giy = giy.at[28, 0].set(2) # Amulet in room 28
         giy = giy.at[29, 0].set(1) # Gem in room 29
         giy = giy.at[29, 1].set(1) # Gem in room 29
         giy = giy.at[24, 0].set(1) # Gem in room 24 (Bonus Room)
@@ -312,6 +313,11 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         platform_active_now = jnp.less(state.platform_cycle, self.consts.PLATFORM_ACTIVE_DURATION)
         previous_score = state.score
+
+        # Amulet counter
+        new_amulet_time = jnp.maximum(state.amulet_time - 1, 0)
+        is_amulet_active = new_amulet_time > 0
+
         is_up = jnp.logical_or(action == Action.UP, jnp.logical_or(action == Action.UPRIGHT, action == Action.UPLEFT))
         is_up = jnp.logical_or(is_up, jnp.logical_or(action == Action.UPFIRE, jnp.logical_or(action == Action.UPRIGHTFIRE, action == Action.UPLEFTFIRE)))
         is_down = jnp.logical_or(action == Action.DOWN, jnp.logical_or(action == Action.DOWNRIGHT, action == Action.DOWNLEFT))
@@ -613,7 +619,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         overlap_y_item = jnp.logical_and(check_y_top < state.items_y + 8, check_y_bot >= state.items_y)
         collect_item_mask = jnp.logical_and(state.items_active == 1, jnp.logical_and(overlap_x_item, overlap_y_item))
 
-        item_scores = jnp.where(state.items_type == 0, 100, 1000)
+        item_scores = jnp.where(state.items_type == 0, 100, 
+                        jnp.where(state.items_type == 2, 100, 1000)) # Amulet score is 100
         new_score = state.score + jnp.sum(jnp.where(collect_item_mask, item_scores, 0))
         new_items_active = jnp.where(collect_item_mask, 0, state.items_active)
 
@@ -621,13 +628,16 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         keys_collected = jnp.sum(jnp.where(jnp.logical_and(collect_item_mask, state.items_type == 0), 1, 0))
         sword_collected = jnp.any(jnp.logical_and(collect_item_mask, state.items_type == 3))
         torch_collected = jnp.any(jnp.logical_and(collect_item_mask, state.items_type == 4))
-        hammer_collected = jnp.any(jnp.logical_and(collect_item_mask, state.items_type == 2))
+        amulet_collected = jnp.any(jnp.logical_and(collect_item_mask, state.items_type == 2))
 
         current_inventory = state.inventory
         current_inventory = current_inventory.at[0].add(keys_collected)
         current_inventory = current_inventory.at[1].set(jnp.where(sword_collected, 1, current_inventory[1]))
         current_inventory = current_inventory.at[2].set(jnp.where(torch_collected, 1, current_inventory[2]))
-        current_inventory = current_inventory.at[3].set(jnp.where(hammer_collected, 1, current_inventory[3]))
+        
+        # Handle amulet time reset and disappearance
+        new_amulet_time = jnp.where(amulet_collected, self.consts.AMULET_DURATION, new_amulet_time)
+        current_inventory = current_inventory.at[3].set(jnp.where(new_amulet_time > 0, 1, 0))
 
         # Door checks
         in_x_door = jnp.logical_and(front_x >= state.doors_x, front_x < state.doors_x + 4)
@@ -721,6 +731,9 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         overlap_y_enemy = jnp.logical_and(check_y_top < e_y_col + 15, check_y_bot >= e_y_col + 1)
         this_hit_enemy = jnp.logical_and(state.enemies_active == 1, jnp.logical_and(overlap_x_enemy, overlap_y_enemy))
         
+        # Neutralize enemy collision if amulet is active
+        this_hit_enemy = jnp.logical_and(this_hit_enemy, jnp.logical_not(is_amulet_active))
+
         has_sword = current_inventory[1] == 1
         kill_enemy_mask = jnp.logical_and(this_hit_enemy, has_sword)
         kill_order = jnp.cumsum(kill_enemy_mask.astype(jnp.int32))
@@ -793,6 +806,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             enemies_active=new_enemies_active,
             enemies_direction=new_enemies_direction,
             inventory=current_inventory,
+            amulet_time=new_amulet_time,
             items_x=new_items_x,
             items_active=new_items_active,
             doors_active=new_doors_active,

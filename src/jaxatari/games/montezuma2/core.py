@@ -47,6 +47,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     DEATH_TIMER_FRAMES: int = struct.field(pytree_node=False, default=70)
     PLATFORM_ACTIVE_DURATION: int = struct.field(pytree_node=False, default=70) # For spawning and disappearing platform
     PLATFORM_CYCLE_LENGTH: int = struct.field(pytree_node=False, default=90)
+    AMULET_DURATION: int = struct.field(pytree_node=False, default=660)
 
 @struct.dataclass
 class Montezuma2State:
@@ -124,7 +125,8 @@ class Montezuma2State:
     death_timer: jnp.ndarray
     death_type: jnp.ndarray
     
-    inventory: jnp.ndarray # keys, sword, torch, hammer
+    inventory: jnp.ndarray # keys, sword, torch, amulet
+    amulet_time: jnp.ndarray
     bonus_room_timer: jnp.ndarray
     first_gem_pickup: jnp.ndarray
     key: jrandom.PRNGKey

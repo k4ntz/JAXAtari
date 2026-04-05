@@ -74,7 +74,7 @@ class Montezuma2Renderer(JAXGameRenderer):
                 'files': [
                     'items/key.npy',
                     'items/gem.npy',
-                    'items/hammer.npy',
+                    'items/amulet.npy',
                     'items/sword.npy',
                     'items/torch_1.npy'
                 ]
@@ -148,6 +148,11 @@ class Montezuma2Renderer(JAXGameRenderer):
         self.DEEP_BLUE_PLATFORM_COLOR = jnp.array([24, 26, 167], dtype=jnp.uint8)
         self.PALETTE = jnp.concatenate([self.PALETTE, self.DEEP_BLUE_PLATFORM_COLOR[None, :]], axis=0)
         self.DEEP_BLUE_PLATFORM_ID = self.PALETTE.shape[0] - 1
+
+        # Gray color for neutralized enemies
+        self.GRAY_COLOR = jnp.array([142, 142, 142], dtype=jnp.uint8)
+        self.PALETTE = jnp.concatenate([self.PALETTE, self.GRAY_COLOR[None, :]], axis=0)
+        self.GRAY_ID = self.PALETTE.shape[0] - 1
 
         # Sarlacc pit colors for ROOM_2_3
         self.PIT_RGB_BASE = jnp.array([210, 164, 74], dtype=jnp.uint8)
@@ -509,6 +514,18 @@ class Montezuma2Renderer(JAXGameRenderer):
                 lambda _: base_snake_mask,
                 None
             )
+            
+            skull_mask = self.SHAPE_MASKS["skull"][anim_idx]
+            
+            # Neutralize (gray out) enemies if amulet is active
+            is_neutralized = state.amulet_time > 0
+            
+            def gray_out(mask):
+                return jnp.where(mask != self.jr.TRANSPARENT_ID, self.GRAY_ID, self.jr.TRANSPARENT_ID)
+            
+            spider_mask = jax.lax.select(is_neutralized, gray_out(spider_mask).astype(jnp.uint8), spider_mask)
+            snake_mask = jax.lax.select(is_neutralized, gray_out(snake_mask).astype(jnp.uint8), snake_mask)
+            skull_mask = jax.lax.select(is_neutralized, gray_out(skull_mask).astype(jnp.uint8), skull_mask)
 
             def _render_active(r):
                 return jax.lax.cond(
@@ -517,7 +534,7 @@ class Montezuma2Renderer(JAXGameRenderer):
                     lambda r_in: jax.lax.cond(
                         state.enemies_type[i] == 4,
                         lambda rr: self.jr.render_at(rr, state.enemies_x[i], state.enemies_y[i] + 47 - bounce_offset, snake_mask),
-                        lambda rr: self.jr.render_at(rr, state.enemies_x[i], state.enemies_y[i] + 47 - bounce_offset, self.SHAPE_MASKS["skull"][anim_idx]),
+                        lambda rr: self.jr.render_at(rr, state.enemies_x[i], state.enemies_y[i] + 47 - bounce_offset, skull_mask),
                         r_in
                     ),
                     r
@@ -644,14 +661,14 @@ class Montezuma2Renderer(JAXGameRenderer):
              
         raster = jax.lax.cond(state.inventory[2] == 1, render_torch, lambda r: r, raster)
 
-        # Render Hammer
-        def render_hammer(raster_in):
+        # Render Amulet
+        def render_amulet(raster_in):
              offset = state.inventory[0] + state.inventory[1] + state.inventory[2]
              mask = self.SHAPE_MASKS["item"][2]
              x = self.consts.ITEMBAR_LIFES_STARTING_X + offset * 8
              y = self.consts.ITEMBAR_STARTING_Y
              return self.jr.render_at(raster_in, x, y, mask)
              
-        raster = jax.lax.cond(state.inventory[3] == 1, render_hammer, lambda r: r, raster)
+        raster = jax.lax.cond(state.inventory[3] == 1, render_amulet, lambda r: r, raster)
 
         return self.PALETTE[raster]
