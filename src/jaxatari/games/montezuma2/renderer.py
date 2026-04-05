@@ -81,8 +81,16 @@ class Montezuma2Renderer(JAXGameRenderer):
             },
             {'name': 'door', 'type': 'single', 'file': 'door.npy', 'transpose': False},
             {'name': 'conveyor', 'type': 'single', 'file': 'conveyor_belt.npy', 'transpose': False},
-            {'name': 'dropout_floor', 'type': 'single', 'file': 'other_dropout_floor.npy', 'transpose': False},
-            {'name': 'pitroom_dropout_floor', 'type': 'single', 'file': 'pitroom_dropout_floor.npy', 'transpose': False},
+            {
+                'name': 'dropout_floor',
+                'type': 'group',
+                'files': ['other_dropout_floor.npy', 'other_dropout_floor2.npy']
+            },
+            {
+                'name': 'pitroom_dropout_floor',
+                'type': 'group',
+                'files': ['pitroom_dropout_floor.npy', 'pitroom_dropout_floor2.npy']
+            },
             {'name': 'life', 'type': 'single', 'file': 'life_sprite.npy', 'transpose': False},
             {'name': 'digit_0', 'type': 'single', 'file': 'digits/digit_0.npy', 'transpose': False},
             {'name': 'digit_1', 'type': 'single', 'file': 'digits/digit_1.npy', 'transpose': False},
@@ -438,7 +446,8 @@ class Montezuma2Renderer(JAXGameRenderer):
             p_color = jax.lax.select(is_deep_blue_room, self.DEEP_BLUE_PLATFORM_ID, p_color)
 
             def _draw_pit(r):
-                mask = self.SHAPE_MASKS["pitroom_dropout_floor"]
+                anim_idx = (state.frame_count // 8) % 2
+                mask = self.SHAPE_MASKS["pitroom_dropout_floor"][anim_idx]
                 mask = jnp.concatenate([mask, mask[0:1, :]], axis=0) # 7x8
                 mask = jnp.where(mask != self.jr.TRANSPARENT_ID, p_color, self.jr.TRANSPARENT_ID)
                 num_tiles = state.platforms_width[i] // 8
@@ -447,7 +456,8 @@ class Montezuma2Renderer(JAXGameRenderer):
                 return jax.lax.fori_loop(0, num_tiles, _tile_fn, r)
 
             def _draw_other(r):
-                mask = self.SHAPE_MASKS["dropout_floor"]
+                anim_idx = (state.frame_count // 8) % 2
+                mask = self.SHAPE_MASKS["dropout_floor"][anim_idx]
                 mask = jnp.where(mask != self.jr.TRANSPARENT_ID, p_color, self.jr.TRANSPARENT_ID)
                 num_tiles = state.platforms_width[i] // 12
                 def _tile_fn(j, r_in):
