@@ -58,6 +58,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         col_map_2 = jnp.load(sprite_path_2)[:149, :, 0]
         room_col_1_4 = jnp.where(col_map_2 > 0, 1, 0).astype(jnp.int32)
         room_col_1_4 = room_col_1_4.at[147:149, 72:88].set(0) # Hole for ladder
+        room_col_1_4 = room_col_1_4.at[6:46, 124:126].set(0) # Fix pillar 2 and rope collision (Right)
         
         room_col_1_5 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
         room_col_1_5 = room_col_1_5.at[147:149, 72:88].set(0) # Hole for ladder down
