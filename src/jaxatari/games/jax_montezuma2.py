@@ -137,7 +137,6 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
         # New 25: Level 3, col 1 (corresponds to ROOM_3_1 in M1)
         room_col_3_1 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
-        room_col_3_1 = room_col_3_1.at[6:48, 0:4].set(1) # Left wall
 
         # New 26: Level 3, col 2 (corresponds to ROOM_3_2 in M1)
         room_col_3_2 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
