@@ -251,6 +251,12 @@ class Montezuma2Renderer(JAXGameRenderer):
         mask_bonus = jnp.pad(mask_bonus, ((0, padding_b), (0, 0)), mode='constant', constant_values=0)
         room_bg_mask = jnp.where(state.room_id == 24, mask_bonus, room_bg_mask)
 
+        # DARK ROOM LOGIC
+        is_dark_room = jnp.isin(state.room_id, jnp.array([25, 26, 27, 28, 29, 30, 31, 32]))
+        has_torch = state.inventory[2] == 1
+        is_rendered_dark = jnp.logical_and(is_dark_room, jnp.logical_not(has_torch))
+        room_bg_mask = jnp.where(is_rendered_dark, jnp.zeros_like(room_bg_mask), room_bg_mask)
+
         # Add lava rendering for ROOM_2_3 (room_id 19) and ROOM_3_7 (room_id 31)
         lava_y_start = 76
         lava_y_end = 124 # gap ends at 123
@@ -276,18 +282,22 @@ class Montezuma2Renderer(JAXGameRenderer):
                                               jnp.where(state.room_id == 17, self.LEVEL2_PLATFORM_ID, 1)))
         # Room 3, 10, 19, 30 and 25 walls should only be on top (above floor)
         is_side_room_left = jnp.isin(state.room_id, jnp.array([3, 10, 19, 30]))
+        is_side_room_left = jnp.logical_and(is_side_room_left, jnp.logical_not(is_rendered_dark))
         room_bg_mask = jnp.where(is_side_room_left, room_bg_mask.at[6:48, 0:4].set(left_wall_color.astype(jnp.uint8)), room_bg_mask)
         # Other rooms left wall
-        room_bg_mask = jnp.where(state.room_id == 17, room_bg_mask.at[6:149, 0:4].set(left_wall_color.astype(jnp.uint8)), room_bg_mask)
+        is_left_wall_room = jnp.logical_and(state.room_id == 17, jnp.logical_not(is_rendered_dark))
+        room_bg_mask = jnp.where(is_left_wall_room, room_bg_mask.at[6:149, 0:4].set(left_wall_color.astype(jnp.uint8)), room_bg_mask)
         
         right_wall_color = jnp.where(state.room_id == 18, self.LADDER_ID,
                                      jnp.where(state.room_id == 29, self.DEEP_BLUE_PLATFORM_ID,
                                                jnp.where(state.room_id == 23, self.LEVEL2_PLATFORM_ID, 1)))
         # Room 5, 14, 18, 32, and 29 walls should only be on top (above floor)
         is_side_room_right = jnp.isin(state.room_id, jnp.array([5, 14, 18, 32, 29]))
+        is_side_room_right = jnp.logical_and(is_side_room_right, jnp.logical_not(is_rendered_dark))
         room_bg_mask = jnp.where(is_side_room_right, room_bg_mask.at[6:48, 156:160].set(right_wall_color.astype(jnp.uint8)), room_bg_mask)
         # Other rooms right wall
-        room_bg_mask = jnp.where(state.room_id == 23, room_bg_mask.at[6:149, 156:160].set(right_wall_color.astype(jnp.uint8)), room_bg_mask)
+        is_right_wall_room = jnp.logical_and(state.room_id == 23, jnp.logical_not(is_rendered_dark))
+        room_bg_mask = jnp.where(is_right_wall_room, room_bg_mask.at[6:149, 156:160].set(right_wall_color.astype(jnp.uint8)), room_bg_mask)
         
         raster = self.jr.render_at(raster, 0, 47, room_bg_mask)
         
@@ -474,6 +484,10 @@ class Montezuma2Renderer(JAXGameRenderer):
             is_flicker_off = jnp.logical_and(is_bonus_gem, jnp.mod(state.frame_count, 2) == 0)
             should_render = jnp.logical_and(state.items_active[i] == 1, jnp.logical_not(is_flicker_off))
             
+            # Hide gems/coins (type 1) if in a dark room without a torch
+            is_hidden_gem = jnp.logical_and(state.items_type[i] == 1, is_rendered_dark)
+            should_render = jnp.logical_and(should_render, jnp.logical_not(is_hidden_gem))
+            
             return jax.lax.cond(
                 should_render,
                 lambda r: self.jr.render_at(r, state.items_x[i], state.items_y[i] + 47, mask),
@@ -485,8 +499,9 @@ class Montezuma2Renderer(JAXGameRenderer):
         # Draw Doors
         def render_door(i, raster):
             mask = self.SHAPE_MASKS["door"]
+            is_active = jnp.logical_and(state.doors_active[i] == 1, jnp.logical_not(is_rendered_dark))
             return jax.lax.cond(
-                state.doors_active[i] == 1,
+                is_active,
                 lambda r: self.jr.render_at(r, state.doors_x[i], state.doors_y[i] + 47, mask),
                 lambda r: r,
                 raster
