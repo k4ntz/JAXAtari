@@ -544,12 +544,12 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         # Ladder
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(6)
-        lb = lb.at[0].set(48)
+        lb = lb.at[0].set(47)
         la = la.at[0].set(1)
 
         # Dropout floor (using platform)
         px = px.at[0].set(32)
-        py = py.at[0].set(48)
+        py = py.at[0].set(47)
         pw = pw.at[0].set(96)
         pa = pa.at[0].set(1)
 
@@ -773,7 +773,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
 
         # Snake enemy
         ex = enemies_x.at[0].set(30)
-        ey = enemies_y.at[0].set(35) # Floor at 48, snake height 13 -> 35
+        ey = enemies_y.at[0].set(34) # Floor at 47, snake height 13 -> 34
         ea = enemies_active.at[0].set(1)
         ed = enemies_direction.at[0].set(0) # Static snake
         eminx = enemies_min_x.at[0].set(30)
@@ -781,7 +781,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
 
         # Dropout floor (using platform)
         px = px.at[0].set(32)
-        py = py.at[0].set(48)
+        py = py.at[0].set(47)
         pw = pw.at[0].set(96) # Multiple of 12 (7 * 12)
         pa = pa.at[0].set(1)
 
@@ -867,7 +867,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
 
         # Dropout floor (using platform)
         px = px.at[0].set(32)
-        py = py.at[0].set(48)
+        py = py.at[0].set(47)
         pw = pw.at[0].set(96) # Multiple of 12 (7 * 12)
         pa = pa.at[0].set(1)
 
@@ -916,7 +916,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
 
         # Dropout floor (using platform)
         px = px.at[0].set(32)
-        py = py.at[0].set(48)
+        py = py.at[0].set(47)
         pw = pw.at[0].set(96) # Multiple of 12 (7 * 12)
         pa = pa.at[0].set(1)
         

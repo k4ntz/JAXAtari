@@ -82,6 +82,7 @@ class Montezuma2Renderer(JAXGameRenderer):
             {'name': 'door', 'type': 'single', 'file': 'door.npy', 'transpose': False},
             {'name': 'conveyor', 'type': 'single', 'file': 'conveyor_belt.npy', 'transpose': False},
             {'name': 'dropout_floor', 'type': 'single', 'file': 'other_dropout_floor.npy', 'transpose': False},
+            {'name': 'pitroom_dropout_floor', 'type': 'single', 'file': 'pitroom_dropout_floor.npy', 'transpose': False},
             {'name': 'life', 'type': 'single', 'file': 'life_sprite.npy', 'transpose': False},
             {'name': 'digit_0', 'type': 'single', 'file': 'digits/digit_0.npy', 'transpose': False},
             {'name': 'digit_1', 'type': 'single', 'file': 'digits/digit_1.npy', 'transpose': False},
@@ -412,25 +413,38 @@ class Montezuma2Renderer(JAXGameRenderer):
         # Draw Platforms
         platform_active_now = jnp.less(state.platform_cycle, self.consts.PLATFORM_ACTIVE_DURATION)
         def render_platform(i, raster):
-            mask = self.SHAPE_MASKS["dropout_floor"]
+            is_pit_room = jnp.isin(state.room_id, jnp.array([19, 27, 29, 31]))
+            is_active = jnp.logical_and(state.platforms_active[i] == 1, platform_active_now)
+
             # Color remap: Use LEVEL2_PLATFORM_ID for Level 2 rooms (17, 18, 19), otherwise LADDER_ID_L2
             is_layer_2_room = jnp.logical_or(state.room_id == 17, jnp.logical_or(state.room_id == 18, state.room_id == 19))
             p_color = jax.lax.select(is_layer_2_room, self.LEVEL2_PLATFORM_ID, self.LADDER_ID_L2)
             is_deep_blue_room = jnp.any(state.room_id == jnp.array([31, 27, 29]))
             p_color = jax.lax.select(is_deep_blue_room, self.DEEP_BLUE_PLATFORM_ID, p_color)
-            mask = jnp.where(mask != self.jr.TRANSPARENT_ID, p_color, self.jr.TRANSPARENT_ID)
 
-            is_active = jnp.logical_and(state.platforms_active[i] == 1, platform_active_now)
+            def _draw_pit(r):
+                mask = self.SHAPE_MASKS["pitroom_dropout_floor"]
+                mask = jnp.concatenate([mask, mask[0:1, :]], axis=0) # 7x8
+                mask = jnp.where(mask != self.jr.TRANSPARENT_ID, p_color, self.jr.TRANSPARENT_ID)
+                num_tiles = state.platforms_width[i] // 8
+                def _tile_fn(j, r_in):
+                    return self.jr.render_at(r_in, state.platforms_x[i] + j * 8, state.platforms_y[i] + 47, mask)
+                return jax.lax.fori_loop(0, num_tiles, _tile_fn, r)
 
-            def _draw(r):
+            def _draw_other(r):
+                mask = self.SHAPE_MASKS["dropout_floor"]
+                mask = jnp.where(mask != self.jr.TRANSPARENT_ID, p_color, self.jr.TRANSPARENT_ID)
                 num_tiles = state.platforms_width[i] // 12
                 def _tile_fn(j, r_in):
                     return self.jr.render_at(r_in, state.platforms_x[i] + j * 12, state.platforms_y[i] + 47, mask)
                 return jax.lax.fori_loop(0, num_tiles, _tile_fn, r)
 
+            def _draw_active(r):
+                return jax.lax.cond(is_pit_room, _draw_pit, _draw_other, r)
+
             return jax.lax.cond(
                 is_active,
-                _draw,
+                _draw_active,
                 lambda r: r,
                 raster
             )
