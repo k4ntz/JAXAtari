@@ -125,6 +125,8 @@ class Montezuma2State:
     death_type: jnp.ndarray
     
     inventory: jnp.ndarray # keys, sword, torch, hammer
+    bonus_room_timer: jnp.ndarray
+    first_gem_pickup: jnp.ndarray
     key: jrandom.PRNGKey
 
 @struct.dataclass
@@ -165,7 +167,8 @@ def get_room_idx(room_id):
            jnp.where(room_id == 27, 19,
            jnp.where(room_id == 29, 20,
            jnp.where(room_id == 25, 21,
-           jnp.where(room_id == 26, 22, 0)))))))))))))))))))))))
+           jnp.where(room_id == 26, 22,
+           jnp.where(room_id == 24, 23, 0))))))))))))))))))))))))
 
 def check_platform(col_map, y, x, width):
     x_m3 = jnp.clip(x - 3, 0, width - 1)

@@ -40,6 +40,7 @@ class Montezuma2Renderer(JAXGameRenderer):
             {'name': 'room_bg_level2_room6', 'type': 'single', 'file': 'backgrounds/room_6_level_2.npy', 'transpose': False},
             {'name': 'room_bg_level2_pit', 'type': 'single', 'file': 'backgrounds/pitroom_level_2.npy', 'transpose': False},
             {'name': 'room_bg_pit_original', 'type': 'single', 'file': 'backgrounds/pitroom.npy', 'transpose': False},
+            {'name': 'room_bg_bonus', 'type': 'single', 'file': 'backgrounds/bonus_room_sprite.npy', 'transpose': False},
             {
                 'name': 'player', 'type': 'group',
                 'files': [
@@ -237,6 +238,12 @@ class Montezuma2Renderer(JAXGameRenderer):
         room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 20, state.room_id == 22), mask_l2_hole, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 21, mask_l2, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 23, mask_l2_room6, room_bg_mask)
+
+        # Bonus Room (ROOM_3_0)
+        mask_bonus = self.SHAPE_MASKS["room_bg_bonus"]
+        padding_b = 149 - mask_bonus.shape[0]
+        mask_bonus = jnp.pad(mask_bonus, ((0, padding_b), (0, 0)), mode='constant', constant_values=0)
+        room_bg_mask = jnp.where(state.room_id == 24, mask_bonus, room_bg_mask)
 
         # Add lava rendering for ROOM_2_3 (room_id 19) and ROOM_3_7 (room_id 31)
         lava_y_start = 76
@@ -446,8 +453,12 @@ class Montezuma2Renderer(JAXGameRenderer):
         # Draw Items
         def render_item(i, raster):
             mask = self.SHAPE_MASKS["item"][state.items_type[i]]
+            is_bonus_gem = jnp.logical_and(state.room_id == 24, state.items_type[i] == 1)
+            is_flicker_off = jnp.logical_and(is_bonus_gem, jnp.mod(state.frame_count, 2) == 0)
+            should_render = jnp.logical_and(state.items_active[i] == 1, jnp.logical_not(is_flicker_off))
+            
             return jax.lax.cond(
-                state.items_active[i] == 1,
+                should_render,
                 lambda r: self.jr.render_at(r, state.items_x[i], state.items_y[i] + 47, mask),
                 lambda r: r,
                 raster
