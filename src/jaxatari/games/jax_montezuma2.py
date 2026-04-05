@@ -310,65 +310,38 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         # 0. Ladder and Rope Climbing Logic
         new_out_of_ladder_delay = jnp.where(state.out_of_ladder_delay > 0, state.out_of_ladder_delay - 1, 0)
 
-        def check_ladder(i, carry):
-            c_on_ladder, c_ladder_idx = carry
-            l_x = state.ladders_x[i]
-            ladder_mid_x = l_x + 8
-            l_top = state.ladders_top[i]
-            l_bottom = state.ladders_bottom[i]
+        # Vectorized check_ladder
+        l_x = state.ladders_x
+        ladder_mid_x = l_x + 8
+        l_top = state.ladders_top
+        l_bottom = state.ladders_bottom
+        is_aligned_ladder = jnp.logical_and(state.ladders_active == 1, jnp.abs(player_mid_x - ladder_mid_x) <= 4)
+        is_aligned_ladder = jnp.logical_and(is_aligned_ladder, new_out_of_ladder_delay == 0)
+        get_on_top_ladder = jnp.logical_and(is_aligned_ladder, jnp.logical_and(is_down, jnp.abs(player_feet_y - l_top) <= 5))
+        get_on_bottom_ladder = jnp.logical_and(is_aligned_ladder, jnp.logical_and(is_up, jnp.abs(player_feet_y - l_bottom) <= 5))
+        ladder_bottom_bound = jnp.where(l_bottom >= 148, 170, l_bottom + 1)
+        ladder_top_bound = jnp.where(l_top <= 6, 0, l_top - 4)
+        in_ladder_zone = jnp.logical_and(is_aligned_ladder, jnp.logical_and(player_feet_y >= ladder_top_bound, player_feet_y <= ladder_bottom_bound))
+        on_this_ladder = jnp.where(state.is_climbing == 1, jnp.logical_and(in_ladder_zone, jnp.logical_or(state.last_ladder == jnp.arange(self.consts.MAX_LADDERS_PER_ROOM), state.last_ladder == -1)), jnp.logical_or(get_on_top_ladder, get_on_bottom_ladder))
+        can_ladder = jnp.any(on_this_ladder)
+        ladder_idx = jnp.where(can_ladder, jnp.argmax(on_this_ladder.astype(jnp.int32)), -1)
 
-            is_aligned = jnp.logical_and(state.ladders_active[i] == 1, jnp.abs(player_mid_x - ladder_mid_x) <= 4)
-            is_aligned = jnp.logical_and(is_aligned, new_out_of_ladder_delay == 0)
-
-            # To get ON from top: must press DOWN near top
-            get_on_top = jnp.logical_and(is_aligned, jnp.logical_and(is_down, jnp.abs(player_feet_y - l_top) <= 5))
-            # To get ON from bottom: must press UP near bottom
-            get_on_bottom = jnp.logical_and(is_aligned, jnp.logical_and(is_up, jnp.abs(player_feet_y - l_bottom) <= 5))
-
-            # To stay ON: must be within the vertical bounds
-            ladder_bottom_bound = jnp.where(l_bottom >= 148, 170, l_bottom + 1)
-            ladder_top_bound = jnp.where(l_top <= 6, 0, l_top - 4)
-            in_ladder_zone = jnp.logical_and(is_aligned, jnp.logical_and(player_feet_y >= ladder_top_bound, player_feet_y <= ladder_bottom_bound))
-
-            on_this_ladder = jnp.where(state.is_climbing == 1, jnp.logical_and(in_ladder_zone, jnp.logical_or(state.last_ladder == i, state.last_ladder == -1)), jnp.logical_or(get_on_top, get_on_bottom))
-
-            new_on_ladder = jnp.logical_or(c_on_ladder, on_this_ladder)
-            new_ladder_idx = jnp.where(on_this_ladder, i, c_ladder_idx)
-            return new_on_ladder, new_ladder_idx
-        def check_rope(i, carry):
-            c_on_rope, c_rope_idx = carry
-            r_x = state.ropes_x[i]
-            r_top = state.ropes_top[i]
-            r_bottom = state.ropes_bottom[i]
-            
-            is_aligned = jnp.logical_and(state.ropes_active[i] == 1, jnp.abs(player_mid_x - r_x) <= 4)
-            
-            player_top_y = state.player_y
-            intersect_y = jnp.logical_and(player_feet_y >= r_top, player_top_y <= r_bottom)
-            
-            catch_rope = jnp.logical_and(
-                state.is_climbing == 0,
-                jnp.logical_and(is_aligned, jnp.logical_and(intersect_y, state.last_rope != i))
-            )
-
-            get_on_top = jnp.logical_and(is_aligned, jnp.logical_and(is_down, jnp.abs(player_feet_y - r_top) <= 5))
-            get_on_bottom = jnp.logical_and(is_aligned, jnp.logical_and(is_up, jnp.abs(player_feet_y - r_bottom) <= 5))
-
-            can_climb_above = jnp.logical_or(
-                jnp.logical_and(state.room_id == 12, i == 0),
-                jnp.logical_and(state.room_id == 17, i == 0)
-            )
-            top_bound = jnp.where(can_climb_above, r_top - 5, r_top)
-            in_rope_zone = jnp.logical_and(is_aligned, jnp.logical_and(player_feet_y >= top_bound, player_feet_y <= r_bottom + 10))
-
-            on_this_rope = jnp.where(state.is_climbing == 1, jnp.logical_and(in_rope_zone, jnp.logical_or(state.last_rope == i, state.last_rope == -1)), jnp.logical_or(catch_rope, jnp.logical_or(get_on_top, get_on_bottom)))
-
-            new_on_rope = jnp.logical_or(c_on_rope, on_this_rope)
-            new_rope_idx = jnp.where(on_this_rope, i, c_rope_idx)
-            return new_on_rope, new_rope_idx
-
-        can_ladder, ladder_idx = jax.lax.fori_loop(0, self.consts.MAX_LADDERS_PER_ROOM, check_ladder, (False, -1))
-        can_rope, rope_idx = jax.lax.fori_loop(0, self.consts.MAX_ROPES_PER_ROOM, check_rope, (False, -1))
+        # Vectorized check_rope
+        r_x = state.ropes_x
+        r_top = state.ropes_top
+        r_bottom = state.ropes_bottom
+        is_aligned_rope = jnp.logical_and(state.ropes_active == 1, jnp.abs(player_mid_x - r_x) <= 4)
+        player_top_y = state.player_y
+        intersect_y_rope = jnp.logical_and(player_feet_y >= r_top, player_top_y <= r_bottom)
+        catch_rope = jnp.logical_and(state.is_climbing == 0, jnp.logical_and(is_aligned_rope, jnp.logical_and(intersect_y_rope, state.last_rope != jnp.arange(self.consts.MAX_ROPES_PER_ROOM))))
+        get_on_top_rope = jnp.logical_and(is_aligned_rope, jnp.logical_and(is_down, jnp.abs(player_feet_y - r_top) <= 5))
+        get_on_bottom_rope = jnp.logical_and(is_aligned_rope, jnp.logical_and(is_up, jnp.abs(player_feet_y - r_bottom) <= 5))
+        can_climb_above = jnp.logical_or(jnp.logical_and(state.room_id == 12, jnp.arange(self.consts.MAX_ROPES_PER_ROOM) == 0), jnp.logical_and(state.room_id == 17, jnp.arange(self.consts.MAX_ROPES_PER_ROOM) == 0))
+        top_bound_rope = jnp.where(can_climb_above, r_top - 5, r_top)
+        in_rope_zone = jnp.logical_and(is_aligned_rope, jnp.logical_and(player_feet_y >= top_bound_rope, player_feet_y <= r_bottom + 10))
+        on_this_rope = jnp.where(state.is_climbing == 1, jnp.logical_and(in_rope_zone, jnp.logical_or(state.last_rope == jnp.arange(self.consts.MAX_ROPES_PER_ROOM), state.last_rope == -1)), jnp.logical_or(catch_rope, jnp.logical_or(get_on_top_rope, get_on_bottom_rope)))
+        can_rope = jnp.any(on_this_rope)
+        rope_idx = jnp.where(can_rope, jnp.argmax(on_this_rope.astype(jnp.int32)), -1)
 
         raw_new_x_check = state.player_x + dx
         new_left_x_check = jnp.clip(raw_new_x_check, 0, self.consts.WIDTH - 1)
@@ -420,27 +393,19 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         safe_y = jnp.clip(player_feet_y + 1, 0, 148)
         on_ground = check_platform_local(safe_y, safe_x)
         
-        def check_conveyor(i, on_grnd):
-            c_x = state.conveyors_x[i]
-            c_y = state.conveyors_y[i] - 1
-            is_on_conveyor = jnp.logical_and(
-                state.conveyors_active[i] == 1,
-                jnp.logical_and(player_feet_y == c_y, jnp.logical_and(player_mid_x >= c_x - 3, player_mid_x < c_x + 43))
-            )
-            return jnp.logical_or(on_grnd, is_on_conveyor)
-        
-        on_ground = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, check_conveyor, on_ground)
+        # Vectorized conveyor check
+        is_on_conveyor_ground = jnp.logical_and(
+            state.conveyors_active == 1,
+            jnp.logical_and(player_feet_y == state.conveyors_y - 1, jnp.logical_and(player_mid_x >= state.conveyors_x - 3, player_mid_x < state.conveyors_x + 43))
+        )
+        on_ground = jnp.logical_or(on_ground, jnp.any(is_on_conveyor_ground))
 
-        def check_p_on_ground(i, on_grnd):
-            p_x = state.platforms_x[i]
-            p_y = state.platforms_y[i] - 1
-            is_on_plat = jnp.logical_and(
-                jnp.logical_and(state.platforms_active[i] == 1, platform_active_now),
-                jnp.logical_and(player_feet_y == p_y, jnp.logical_and(safe_x >= p_x, safe_x < p_x + state.platforms_width[i]))
-            )
-            return jnp.logical_or(on_grnd, is_on_plat)
-        
-        on_ground = jax.lax.fori_loop(0, self.consts.MAX_PLATFORMS_PER_ROOM, check_p_on_ground, on_ground)
+        # Vectorized platform check
+        is_on_plat_ground = jnp.logical_and(
+            jnp.logical_and(state.platforms_active == 1, platform_active_now),
+            jnp.logical_and(player_feet_y == state.platforms_y - 1, jnp.logical_and(safe_x >= state.platforms_x, safe_x < state.platforms_x + state.platforms_width))
+        )
+        on_ground = jnp.logical_or(on_ground, jnp.any(is_on_plat_ground))
 
 
         # Update last_rope and last_ladder
@@ -470,25 +435,17 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             pixel_1_below = check_platform_local(safe_y, safe_x)
             pixel_2_below = check_platform_local(jnp.clip(player_feet_y + 2, 0, 148), safe_x)
             
-            def check_c_pixel2(i, p2b):
-                c_x = state.conveyors_x[i]
-                c_y = state.conveyors_y[i] - 1
-                is_on = jnp.logical_and(
-                    state.conveyors_active[i] == 1,
-                    jnp.logical_and(player_feet_y + 1 == c_y, jnp.logical_and(safe_x >= c_x - 3, safe_x < c_x + 43))
-                )
-                return jnp.logical_or(p2b, is_on)
-            pixel_2_below = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, check_c_pixel2, pixel_2_below)
+            is_on_c_pixel2 = jnp.logical_and(
+                state.conveyors_active == 1,
+                jnp.logical_and(player_feet_y + 1 == state.conveyors_y - 1, jnp.logical_and(safe_x >= state.conveyors_x - 3, safe_x < state.conveyors_x + 43))
+            )
+            pixel_2_below = jnp.logical_or(pixel_2_below, jnp.any(is_on_c_pixel2))
 
-            def check_p_pixel2(i, p2b):
-                p_x = state.platforms_x[i]
-                p_y = state.platforms_y[i] - 1
-                is_on = jnp.logical_and(
-                    jnp.logical_and(state.platforms_active[i] == 1, platform_active_now),
-                    jnp.logical_and(player_feet_y + 1 == p_y, jnp.logical_and(safe_x >= p_x, safe_x < p_x + state.platforms_width[i]))
-                )
-                return jnp.logical_or(p2b, is_on)
-            pixel_2_below = jax.lax.fori_loop(0, self.consts.MAX_PLATFORMS_PER_ROOM, check_p_pixel2, pixel_2_below)
+            is_on_p_pixel2 = jnp.logical_and(
+                jnp.logical_and(state.platforms_active == 1, platform_active_now),
+                jnp.logical_and(player_feet_y + 1 == state.platforms_y - 1, jnp.logical_and(safe_x >= state.platforms_x, safe_x < state.platforms_x + state.platforms_width))
+            )
+            pixel_2_below = jnp.logical_or(pixel_2_below, jnp.any(is_on_p_pixel2))
 
 
             fall_dist = jnp.where(on_ground, 0, jnp.where(pixel_2_below, 1, self.consts.GRAVITY))
@@ -537,59 +494,45 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         new_is_jumping = jnp.where(hit_ceiling, 0, new_is_jumping)
         
         # Improved static platform collision: check if we crossed any solid pixel that acts as a top surface
-        def check_crossed_static(i, carry):
-            h_f, s_y = carry
-            y_check = jnp.clip(player_feet_y + 1 + i, 0, 148)
-            # A pixel y_check is a top surface if it's solid AND the pixel above it is empty
-            is_top_surface = jnp.logical_and(
-                check_platform_local(y_check, safe_x),
-                jnp.logical_not(check_platform_local(jnp.clip(y_check - 1, 0, 148), safe_x))
-            )
-            # Land if we are moving down (dy > 0) and the platform top is within our reach (y_check <= player_feet_y + dy)
-            # which is same as saying i + 1 <= dy.
-            is_hit = jnp.logical_and(jnp.logical_not(is_near_top), jnp.logical_and(dy >= i + 1, is_top_surface))
-            return jnp.logical_or(h_f, is_hit), jnp.where(is_hit, y_check - self.consts.PLAYER_HEIGHT, s_y)
-
-        # Check up to 5 pixels ahead (max dy is 4 during jump descent)
-        hit_floor_rm = False
-        snapped_y_rm = new_y
-        hit_floor_rm, snapped_y_rm = jax.lax.fori_loop(0, 5, check_crossed_static, (hit_floor_rm, snapped_y_rm))
+        y_check_offsets = jnp.arange(5)
+        y_checks = jnp.clip(player_feet_y + 1 + y_check_offsets, 0, 148)
         
-        def check_c_hit_floor(i, carry):
-            h_f, s_y = carry
-            c_x = state.conveyors_x[i]
-            c_y = state.conveyors_y[i] - 1
-            crossed = jnp.logical_and(player_feet_y <= c_y, new_feet_y >= c_y)
-            is_hit = jnp.logical_and(
-                jnp.logical_not(is_near_top),
-                jnp.logical_and(
-                    state.conveyors_active[i] == 1,
-                    jnp.logical_and(dy > 0, jnp.logical_and(crossed, jnp.logical_and(safe_x >= c_x - 3, safe_x < c_x + 43)))
-                )
+        # A pixel y_check is a top surface if it's solid AND the pixel above it is empty
+        def is_solid_func(y):
+            return check_platform_local(y, safe_x)
+        
+        is_solid = jax.vmap(is_solid_func)(y_checks)
+        is_solid_above = jax.vmap(is_solid_func)(jnp.clip(y_checks - 1, 0, 148))
+        is_top_surface = jnp.logical_and(is_solid, jnp.logical_not(is_solid_above))
+        
+        is_hit_rm = jnp.logical_and(jnp.logical_not(is_near_top), jnp.logical_and(dy >= y_check_offsets + 1, is_top_surface))
+        hit_floor_rm = jnp.any(is_hit_rm)
+        snapped_y_rm = jnp.where(hit_floor_rm, y_checks[jnp.argmax(is_hit_rm.astype(jnp.int32))] - self.consts.PLAYER_HEIGHT, new_y)
+
+        # Conveyor hit floor
+        crossed_c = jnp.logical_and(player_feet_y <= state.conveyors_y - 1, new_feet_y >= state.conveyors_y - 1)
+        is_hit_c = jnp.logical_and(
+            jnp.logical_not(is_near_top),
+            jnp.logical_and(
+                state.conveyors_active == 1,
+                jnp.logical_and(dy > 0, jnp.logical_and(crossed_c, jnp.logical_and(safe_x >= state.conveyors_x - 3, safe_x < state.conveyors_x + 43)))
             )
-            return jnp.logical_or(h_f, is_hit), jnp.where(is_hit, c_y - self.consts.PLAYER_HEIGHT + 1, s_y)
+        )
+        hit_floor_c = jnp.any(is_hit_c)
+        snapped_y_c = jnp.where(hit_floor_c, state.conveyors_y[jnp.argmax(is_hit_c.astype(jnp.int32))] - 1 - self.consts.PLAYER_HEIGHT + 1, snapped_y_rm)
 
-
-
-        hit_floor, snapped_y = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, check_c_hit_floor, (hit_floor_rm, snapped_y_rm))
-
-        def check_p_hit_floor(i, carry):
-            h_f, s_y = carry
-            p_x = state.platforms_x[i]
-            p_y = state.platforms_y[i] - 1
-            crossed = jnp.logical_and(player_feet_y <= p_y, new_feet_y >= p_y)
-            is_hit = jnp.logical_and(
-                jnp.logical_not(is_near_top),
-                jnp.logical_and(
-                    jnp.logical_and(state.platforms_active[i] == 1, platform_active_now),
-                    jnp.logical_and(dy > 0, jnp.logical_and(crossed, jnp.logical_and(safe_x >= p_x, safe_x < p_x + state.platforms_width[i])))
-                )
+        # Platform hit floor
+        crossed_p = jnp.logical_and(player_feet_y <= state.platforms_y - 1, new_feet_y >= state.platforms_y - 1)
+        is_hit_p = jnp.logical_and(
+            jnp.logical_not(is_near_top),
+            jnp.logical_and(
+                jnp.logical_and(state.platforms_active == 1, platform_active_now),
+                jnp.logical_and(dy > 0, jnp.logical_and(crossed_p, jnp.logical_and(safe_x >= state.platforms_x, safe_x < state.platforms_x + state.platforms_width)))
             )
-            return jnp.logical_or(h_f, is_hit), jnp.where(is_hit, p_y - self.consts.PLAYER_HEIGHT + 1, s_y)
-
-
-        hit_floor, snapped_y = jax.lax.fori_loop(0, self.consts.MAX_PLATFORMS_PER_ROOM, check_p_hit_floor, (hit_floor, snapped_y))
-
+        )
+        hit_floor_p = jnp.any(is_hit_p)
+        snapped_y = jnp.where(hit_floor_p, state.platforms_y[jnp.argmax(is_hit_p.astype(jnp.int32))] - 1 - self.consts.PLAYER_HEIGHT + 1, snapped_y_c)
+        hit_floor = jnp.logical_or(hit_floor_rm, jnp.logical_or(hit_floor_c, hit_floor_p))
 
         new_y = jnp.where(hit_floor, snapped_y, new_y)
 
@@ -640,116 +583,78 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         )
         
         # 5.5 Item Collection
-        def collect_item(i, carry):
-            inventory, items_active, current_score = carry
-            i_x = state.items_x[i]
-            i_y = state.items_y[i]
-            i_active = items_active[i] == 1
-            
-            overlap_x = jnp.logical_and(new_left_x < i_x + 6, new_right_x >= i_x)
-            overlap_y = jnp.logical_and(check_y_top < i_y + 8, check_y_bot >= i_y)
-            overlap = jnp.logical_and(overlap_x, overlap_y)
-            
-            collect = jnp.logical_and(i_active, overlap)
-            
-            item_type = state.items_type[i]
-            is_key = item_type == 0
-            is_sword = item_type == 3
-            is_torch = item_type == 4
-            is_hammer = item_type == 2
+        overlap_x_item = jnp.logical_and(new_left_x < state.items_x + 6, new_right_x >= state.items_x)
+        overlap_y_item = jnp.logical_and(check_y_top < state.items_y + 8, check_y_bot >= state.items_y)
+        collect_item_mask = jnp.logical_and(state.items_active == 1, jnp.logical_and(overlap_x_item, overlap_y_item))
 
-            new_keys = jnp.where(jnp.logical_and(collect, is_key), inventory[0] + 1, inventory[0])
-            new_sword = jnp.where(jnp.logical_and(collect, is_sword), 1, inventory[1])
-            new_torch = jnp.where(jnp.logical_and(collect, is_torch), 1, inventory[2])
-            new_hammer = jnp.where(jnp.logical_and(collect, is_hammer), 1, inventory[3])
+        item_scores = jnp.where(state.items_type == 0, 100, 1000)
+        new_score = state.score + jnp.sum(jnp.where(collect_item_mask, item_scores, 0))
+        new_items_active = jnp.where(collect_item_mask, 0, state.items_active)
 
-            new_inventory = jnp.array([new_keys, new_sword, new_torch, new_hammer])
-            new_items_active = jnp.where(collect, items_active.at[i].set(0), items_active)
-            item_score = jnp.where(is_key, 100, 1000)
-            new_score = jnp.where(collect, current_score + item_score, current_score)
-            
-            return new_inventory, new_items_active, new_score
+        # Inventory updates
+        keys_collected = jnp.sum(jnp.where(jnp.logical_and(collect_item_mask, state.items_type == 0), 1, 0))
+        sword_collected = jnp.any(jnp.logical_and(collect_item_mask, state.items_type == 3))
+        torch_collected = jnp.any(jnp.logical_and(collect_item_mask, state.items_type == 4))
+        hammer_collected = jnp.any(jnp.logical_and(collect_item_mask, state.items_type == 2))
 
-        current_inventory, new_items_active, new_score = jax.lax.fori_loop(
-            0, self.consts.MAX_ITEMS_PER_ROOM, collect_item,
-            (state.inventory, state.items_active, state.score)
-        )
-        current_keys = current_inventory[0]
+        current_inventory = state.inventory
+        current_inventory = current_inventory.at[0].add(keys_collected)
+        current_inventory = current_inventory.at[1].set(jnp.where(sword_collected, 1, current_inventory[1]))
+        current_inventory = current_inventory.at[2].set(jnp.where(torch_collected, 1, current_inventory[2]))
+        current_inventory = current_inventory.at[3].set(jnp.where(hammer_collected, 1, current_inventory[3]))
 
-        def check_door(i, carry):
-            hit, keys_left, doors_active, current_score = carry
-            d_x = state.doors_x[i]
-            d_y = state.doors_y[i]
-            d_active = doors_active[i] == 1
-            in_x = jnp.logical_and(front_x >= d_x, front_x < d_x + 4)
-            in_y_top = jnp.logical_and(check_y_top >= d_y, check_y_top < d_y + 38)
-            in_y_mid = jnp.logical_and(check_y_mid >= d_y, check_y_mid < d_y + 38)
-            in_y_bot = jnp.logical_and(check_y_bot >= d_y, check_y_bot < d_y + 38)
-            in_y = jnp.logical_or(in_y_top, jnp.logical_or(in_y_mid, in_y_bot))
+        # Door checks
+        in_x_door = jnp.logical_and(front_x >= state.doors_x, front_x < state.doors_x + 4)
+        in_y_door_top = jnp.logical_and(check_y_top >= state.doors_y, check_y_top < state.doors_y + 38)
+        in_y_door_mid = jnp.logical_and(check_y_mid >= state.doors_y, check_y_mid < state.doors_y + 38)
+        in_y_door_bot = jnp.logical_and(check_y_bot >= state.doors_y, check_y_bot < state.doors_y + 38)
+        in_y_door = jnp.logical_or(in_y_door_top, jnp.logical_or(in_y_door_mid, in_y_door_bot))
+        hit_door_mask = jnp.logical_and(state.doors_active == 1, jnp.logical_and(in_x_door, in_y_door))
+        
+        hit_door_order = jnp.cumsum(hit_door_mask.astype(jnp.int32))
+        open_door_mask = jnp.logical_and(hit_door_mask, hit_door_order <= current_inventory[0])
+        
+        num_opened = jnp.sum(open_door_mask.astype(jnp.int32))
+        current_inventory = current_inventory.at[0].add(-num_opened)
+        new_doors_active = jnp.where(open_door_mask, 0, state.doors_active)
+        new_score = new_score + num_opened * 300
+        
+        hit_door_as_wall = jnp.logical_and(hit_door_mask, jnp.logical_not(open_door_mask))
+        hit_wall = jnp.logical_or(hit_wall, jnp.any(hit_door_as_wall))
 
-            hit_this_door = jnp.logical_and(d_active, jnp.logical_and(in_x, in_y))
-            open_it = jnp.logical_and(hit_this_door, keys_left > 0)
-            hit_as_wall = jnp.logical_and(hit_this_door, jnp.logical_not(open_it))
-
-            new_hit = jnp.logical_or(hit, hit_as_wall)
-            new_keys = jnp.where(open_it, keys_left - 1, keys_left)
-            new_doors_active = jnp.where(open_it, doors_active.at[i].set(0), doors_active)
-            new_score = jnp.where(open_it, current_score + 300, current_score)
-
-            return new_hit, new_keys, new_doors_active, new_score
-
-        hit_wall, current_keys, new_doors_active, new_score = jax.lax.fori_loop(
-            0, self.consts.MAX_DOORS_PER_ROOM, check_door,
-            (hit_wall, current_keys, state.doors_active, new_score)
-        )
-        current_inventory = current_inventory.at[0].set(current_keys)
         new_x = jnp.where(jnp.logical_or(hit_wall, is_climbing == 1), current_x, new_x)
         
         new_mid_x = new_x + self.consts.PLAYER_WIDTH // 2
         new_feet_y_after = new_y + self.consts.PLAYER_HEIGHT - 1
         
-        def apply_conveyor_physics(i, p_x):
-            c_x = state.conveyors_x[i]
-            c_y = state.conveyors_y[i] - 1
-            is_on_conveyor = jnp.logical_and(
-                state.conveyors_active[i] == 1,
-                jnp.logical_and(new_feet_y_after == c_y, jnp.logical_and(new_mid_x >= c_x - 3, new_mid_x < c_x + 43))
-            )
-            conveyor_velocity = jnp.mod(state.frame_count, 2) * state.conveyors_direction[i]
-            return jax.lax.select(jnp.logical_and(is_on_conveyor, is_climbing == 0), p_x + conveyor_velocity, p_x)
-
-        new_x = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, apply_conveyor_physics, new_x)
+        # Vectorized conveyor physics
+        is_on_conveyor_physics = jnp.logical_and(
+            state.conveyors_active == 1,
+            jnp.logical_and(new_feet_y_after == state.conveyors_y - 1, jnp.logical_and(new_mid_x >= state.conveyors_x - 3, new_mid_x < state.conveyors_x + 43))
+        )
+        conveyor_velocities = jnp.mod(state.frame_count, 2) * state.conveyors_direction
+        total_conveyor_velocity = jnp.sum(jnp.where(jnp.logical_and(is_on_conveyor_physics, is_climbing == 0), conveyor_velocities, 0))
+        new_x = new_x + total_conveyor_velocity
         new_x = jnp.clip(new_x, 0, self.consts.WIDTH - self.consts.PLAYER_WIDTH)
         
         current_vx = jnp.where(jnp.logical_or(hit_wall, hit_floor), 0, current_vx)
         
         # 6. Enemy Movement
-        def move_enemy(i, carry):
-            e_x, e_dir = carry
-            current_x = e_x[i]
-            current_dir = e_dir[i]
-            
-            # Move 1 pixel every 2 frames
-            speed = jnp.where(jnp.mod(state.frame_count, 2) == 0, 1, 0)
-            new_x = current_x + current_dir * speed
-            
-            # Bounce off walls
-            e_y = state.enemies_y[i]
-            hit_wall_left = jnp.logical_and(current_dir < 0, room_col_map[e_y + 8, jnp.clip(new_x, 0, self.consts.WIDTH - 1)] == 1)
-            hit_wall_right = jnp.logical_and(current_dir > 0, room_col_map[e_y + 8, jnp.clip(new_x + 8, 0, self.consts.WIDTH - 1)] == 1)
-            
-            # Or boundaries
-            hit_left = new_x <= state.enemies_min_x[i]
-            hit_right = new_x >= state.enemies_max_x[i]
-            
-            bounce = jnp.logical_or(hit_left, jnp.logical_or(hit_right, jnp.logical_or(hit_wall_left, hit_wall_right)))
-            
-            final_dir = jnp.where(bounce, -current_dir, current_dir)
-            final_x = jnp.where(bounce, current_x, new_x)
-            
-            return e_x.at[i].set(final_x), e_dir.at[i].set(final_dir)
-            
-        new_enemies_x, new_enemies_dir = jax.lax.fori_loop(0, self.consts.MAX_ENEMIES_PER_ROOM, move_enemy, (state.enemies_x, state.enemies_direction))
+        # Move 1 pixel every 2 frames
+        speed_enemy = jnp.where(jnp.mod(state.frame_count, 2) == 0, 1, 0)
+        raw_new_enemies_x = state.enemies_x + state.enemies_direction * speed_enemy
+        
+        # Bounce off walls
+        hit_wall_left_enemy = jnp.logical_and(state.enemies_direction < 0, room_col_map[state.enemies_y + 8, jnp.clip(raw_new_enemies_x, 0, self.consts.WIDTH - 1)] == 1)
+        hit_wall_right_enemy = jnp.logical_and(state.enemies_direction > 0, room_col_map[state.enemies_y + 8, jnp.clip(raw_new_enemies_x + 8, 0, self.consts.WIDTH - 1)] == 1)
+        
+        hit_left_enemy = raw_new_enemies_x <= state.enemies_min_x
+        hit_right_enemy = raw_new_enemies_x >= state.enemies_max_x
+        
+        bounce_enemy = jnp.logical_or(hit_left_enemy, jnp.logical_or(hit_right_enemy, jnp.logical_or(hit_wall_left_enemy, hit_wall_right_enemy)))
+        
+        new_enemies_direction = jnp.where(bounce_enemy, -state.enemies_direction, state.enemies_direction)
+        new_enemies_x = jnp.where(bounce_enemy, state.enemies_x, raw_new_enemies_x)
         
         # 7. Dying Mechanism (Fall Damage & Enemy Collision)
         new_fall_start_y = jnp.where(
@@ -771,38 +676,24 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             new_fall_start_y
         )
         
-        def check_enemy_collision(i, carry):
-            hit, enemies_active, inventory, current_score = carry
-            e_x = new_enemies_x[i]
-            bounce_offset = jax.lax.select(state.enemies_bouncing[i] == 1, self.consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 4, 22)], 0)
-            e_y = state.enemies_y[i] - bounce_offset
-            e_active = enemies_active[i] == 1
-            
-            overlap_x = jnp.logical_and(new_left_x < e_x + 7, new_right_x >= e_x + 1)
-            overlap_y = jnp.logical_and(check_y_top < e_y + 15, check_y_bot >= e_y + 1)
-            overlap = jnp.logical_and(overlap_x, overlap_y)
-            
-            this_hit = jnp.logical_and(e_active, overlap)
-            
-            # Use sword if we have one (works on any enemy: skulls, spiders, snakes)
-            has_sword = inventory[1] == 1
-            can_kill = has_sword
-            
-            kill = jnp.logical_and(this_hit, can_kill)
-            die = jnp.logical_and(this_hit, jnp.logical_not(can_kill))
-            
-            new_hit = jnp.logical_or(hit, die)
-            new_enemies_active = jnp.where(this_hit, enemies_active.at[i].set(0), enemies_active)
-            new_inventory = jnp.where(kill, inventory.at[1].set(0), inventory)
-            new_score = jnp.where(kill, current_score + 100, current_score)
-            
-            return new_hit, new_enemies_active, new_inventory, new_score
-            
-        died_from_enemy, new_enemies_active, current_inventory, new_score = jax.lax.fori_loop(
-            0, self.consts.MAX_ENEMIES_PER_ROOM, check_enemy_collision, 
-            (False, state.enemies_active, current_inventory, new_score)
-        )
+        # Vectorized enemy collision
+        e_bounce_offset = jnp.where(state.enemies_bouncing == 1, self.consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 4, 22)], 0)
+        e_y_col = state.enemies_y - e_bounce_offset
+        overlap_x_enemy = jnp.logical_and(new_left_x < new_enemies_x + 7, new_right_x >= new_enemies_x + 1)
+        overlap_y_enemy = jnp.logical_and(check_y_top < e_y_col + 15, check_y_bot >= e_y_col + 1)
+        this_hit_enemy = jnp.logical_and(state.enemies_active == 1, jnp.logical_and(overlap_x_enemy, overlap_y_enemy))
         
+        has_sword = current_inventory[1] == 1
+        kill_enemy_mask = jnp.logical_and(this_hit_enemy, has_sword)
+        kill_order = jnp.cumsum(kill_enemy_mask.astype(jnp.int32))
+        actually_killed_mask = jnp.logical_and(kill_enemy_mask, kill_order <= 1)
+        
+        died_from_enemy = jnp.any(jnp.logical_and(this_hit_enemy, jnp.logical_not(actually_killed_mask)))
+        new_enemies_active = jnp.where(this_hit_enemy, 0, state.enemies_active)
+        sword_used = jnp.any(actually_killed_mask)
+        current_inventory = current_inventory.at[1].set(jnp.where(sword_used, 0, current_inventory[1]))
+        new_score = new_score + jnp.sum(jnp.where(actually_killed_mask, 100, 0))
+
         # Laser Collision
         # Update laser and platform cycles
         new_laser_cycle = jnp.mod(state.laser_cycle + 1, 128)
@@ -810,18 +701,10 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         laser_active_now = jnp.logical_and(jnp.greater_equal(state.laser_cycle, 0), jnp.less(state.laser_cycle, 92))
         platform_active_now = jnp.less(state.platform_cycle, self.consts.PLATFORM_ACTIVE_DURATION)
 
-        
-        def check_laser_collision(i, hit):
-            l_x = state.lasers_x[i]
-            l_active = jnp.logical_and(state.lasers_active[i] == 1, laser_active_now)
-            
-            overlap_x = jnp.logical_and(new_left_x < l_x + 4, new_right_x >= l_x)
-            overlap_y = jnp.logical_and(check_y_top < 46, check_y_bot >= 7)
-            overlap = jnp.logical_and(overlap_x, overlap_y)
-            
-            return jnp.logical_or(hit, jnp.logical_and(l_active, overlap))
-            
-        died_from_laser = jax.lax.fori_loop(0, self.consts.MAX_LASERS_PER_ROOM, check_laser_collision, False)
+        l_active_las = jnp.logical_and(state.lasers_active == 1, laser_active_now)
+        overlap_x_las = jnp.logical_and(new_left_x < state.lasers_x + 4, new_right_x >= state.lasers_x)
+        overlap_y_las = jnp.logical_and(check_y_top < 46, check_y_bot >= 7)
+        died_from_laser = jnp.any(jnp.logical_and(l_active_las, jnp.logical_and(overlap_x_las, overlap_y_las)))
         
         died_from_pit = jnp.logical_and(state.room_id == 19, jnp.logical_and(player_feet_y >= 110, jnp.logical_not(on_ground)))
 
@@ -870,7 +753,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             frame_count=state.frame_count + 1,
             enemies_x=new_enemies_x,
             enemies_active=new_enemies_active,
-            enemies_direction=new_enemies_dir,
+            enemies_direction=new_enemies_direction,
             inventory=current_inventory,
             items_active=new_items_active,
             doors_active=new_doors_active,
@@ -934,33 +817,23 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
                 fy = jnp.clip(py + self.consts.PLAYER_HEIGHT - 1, 0, 148)
                 in_col = check_platform(new_room_col_map, fy, safe_px_trans, self.consts.WIDTH)
                 
-                def check_p(i, in_p):
-                    p_x = st.platforms_x[i]
-                    p_y = st.platforms_y[i]
-                    p_w = st.platforms_width[i]
-                    p_a = st.platforms_active[i]
-                    in_this_p = jnp.logical_and(p_a == 1, 
-                        jnp.logical_and(jnp.logical_and(fy >= p_y, fy < p_y + 4),
-                                        jnp.logical_and(safe_px_trans >= p_x, safe_px_trans < p_x + p_w)))
-                    return jnp.logical_or(in_p, in_this_p)
-                in_plat = jax.lax.fori_loop(0, self.consts.MAX_PLATFORMS_PER_ROOM, check_p, False)
+                in_this_p = jnp.logical_and(st.platforms_active == 1, 
+                        jnp.logical_and(jnp.logical_and(fy >= st.platforms_y, fy < st.platforms_y + 4),
+                                        jnp.logical_and(safe_px_trans >= st.platforms_x, safe_px_trans < st.platforms_x + st.platforms_width)))
+                in_plat = jnp.any(in_this_p)
                 
-                def check_c(i, in_c):
-                    c_x = st.conveyors_x[i]
-                    c_y = st.conveyors_y[i]
-                    c_a = st.conveyors_active[i]
-                    in_this_c = jnp.logical_and(c_a == 1,
-                        jnp.logical_and(jnp.logical_and(fy >= c_y, fy < c_y + 5),
-                                        jnp.logical_and(safe_px_trans >= c_x - 3, safe_px_trans < c_x + 43)))
-                    return jnp.logical_or(in_c, in_this_c)
-                in_conv = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, check_c, False)
+                in_this_c = jnp.logical_and(st.conveyors_active == 1,
+                        jnp.logical_and(jnp.logical_and(fy >= st.conveyors_y, fy < st.conveyors_y + 5),
+                                        jnp.logical_and(safe_px_trans >= st.conveyors_x - 3, safe_px_trans < st.conveyors_x + 43)))
+                in_conv = jnp.any(in_this_c)
                 
                 return jnp.logical_or(in_col, jnp.logical_or(in_plat, in_conv))
 
-            new_py = temp_py
-            def push_up_fn(i, py):
-                return jnp.where(is_inside(py), py - 1, py)
-            new_py = jax.lax.fori_loop(0, 40, push_up_fn, new_py)
+            py_offsets = jnp.arange(40)
+            py_candidates = temp_py - py_offsets
+            inside_mask = jax.vmap(is_inside)(py_candidates)
+            num_to_push = jnp.sum(jnp.cumprod(inside_mask.astype(jnp.int32)))
+            new_py = temp_py - num_to_push
 
             return st.replace(
                 player_x=new_px,
