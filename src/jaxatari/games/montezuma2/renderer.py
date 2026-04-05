@@ -395,7 +395,9 @@ class Montezuma2Renderer(JAXGameRenderer):
                 pos = jnp.stack([pos_x, pos_y], axis=-1)
                 size = jnp.stack([sizes, jnp.ones_like(sizes)], axis=-1)
                 
-                return self.jr.draw_rects(raster_in, pos, size, self.LASER_ID)
+                # Yellow lasers for ROOM_3_2 (room_id 26)
+                l_color = jax.lax.select(state.room_id == 26, self.YELLOW_LADDER_ID, self.LASER_ID)
+                return self.jr.draw_rects(raster_in, pos, size, l_color)
                 
             return jax.lax.cond(active, _draw, lambda r_in: r_in, r)
 
