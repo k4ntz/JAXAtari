@@ -26,7 +26,7 @@ class Montezuma2Renderer(JAXGameRenderer):
         
         # Transparent background base for the 210x160 raster
         bg_data = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 4), dtype=jnp.uint8)
-        bg_data = bg_data.at[:, :, 3].set(255) # Opaque black
+        bg_data = bg_data.at[:, :, 3].set(jnp.uint8(255)) # Opaque black
         
         final_asset_config = [
             {'name': 'bg', 'type': 'background', 'data': bg_data},
@@ -202,13 +202,13 @@ class Montezuma2Renderer(JAXGameRenderer):
         mask_3 = self.SHAPE_MASKS["room_bg_3"][:149, ...]
         mask_4 = self.SHAPE_MASKS["room_bg_4"][:149, ...]
         
-        mask_0_modified = mask_0.at[147:149, 72:88].set(0)
+        mask_0_modified = mask_0.at[147:149, 72:88].set(jnp.uint8(0))
         room_bg_mask = jnp.where(state.room_id == 4, mask_1, mask_0_modified)
         
-        mask_3_modified = mask_3.at[147:149, 72:88].set(0)
+        mask_3_modified = mask_3.at[147:149, 72:88].set(jnp.uint8(0))
         room_bg_mask = jnp.where(state.room_id == 12, mask_3_modified, room_bg_mask)
         room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 32, jnp.logical_or(state.room_id == 30, state.room_id == 28)), mask_4, room_bg_mask)
-        mask_2_modified = mask_2.at[48:149, 72:88].set(0)
+        mask_2_modified = mask_2.at[48:149, 72:88].set(jnp.uint8(0))
         room_bg_mask = jnp.where(jnp.logical_or(state.room_id == 11, jnp.logical_or(state.room_id == 10, state.room_id == 14)), mask_2_modified, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 13, mask_2, room_bg_mask)
 
@@ -226,7 +226,7 @@ class Montezuma2Renderer(JAXGameRenderer):
         mask_l2_pit = jnp.where(mask_l2_pit == 1, self.LEVEL2_PLATFORM_ID, mask_l2_pit)
         mask_pit_original = self.SHAPE_MASKS["room_bg_pit_original"][:149, ...]
         
-        mask_l2_hole = mask_l2.at[48:, 72:88].set(0)
+        mask_l2_hole = mask_l2.at[48:, 72:88].set(jnp.uint8(0))
         
         room_bg_mask = jnp.where(state.room_id == 18, mask_l2, room_bg_mask)
         room_bg_mask = jnp.where(state.room_id == 17, mask_l2_room0, room_bg_mask)
@@ -251,7 +251,7 @@ class Montezuma2Renderer(JAXGameRenderer):
         lava_region = room_bg_mask[lava_y_start:lava_y_end, :]
         is_black = jnp.all(self.PALETTE[lava_region] == 0, axis=-1)
         new_lava_region = jnp.where(is_black, lava_mask, lava_region)
-        room_bg_mask_with_lava = room_bg_mask.at[lava_y_start:lava_y_end, :].set(new_lava_region)
+        room_bg_mask_with_lava = room_bg_mask.at[lava_y_start:lava_y_end, :].set(new_lava_region.astype(jnp.uint8))
         is_lava_room = jnp.any(state.room_id == jnp.array([19, 31, 27, 29]))
         room_bg_mask = jnp.where(is_lava_room, room_bg_mask_with_lava, room_bg_mask)
         
@@ -262,18 +262,18 @@ class Montezuma2Renderer(JAXGameRenderer):
                                               jnp.where(state.room_id == 17, self.LEVEL2_PLATFORM_ID, 1)))
         # Room 3, 10, 19, and 30 walls should only be on top (above floor)
         is_side_room_left = jnp.isin(state.room_id, jnp.array([3, 10, 19, 30]))
-        room_bg_mask = jnp.where(is_side_room_left, room_bg_mask.at[6:48, 0:4].set(left_wall_color), room_bg_mask)
+        room_bg_mask = jnp.where(is_side_room_left, room_bg_mask.at[6:48, 0:4].set(left_wall_color.astype(jnp.uint8)), room_bg_mask)
         # Other rooms left wall
-        room_bg_mask = jnp.where(state.room_id == 17, room_bg_mask.at[6:149, 0:4].set(left_wall_color), room_bg_mask)
+        room_bg_mask = jnp.where(state.room_id == 17, room_bg_mask.at[6:149, 0:4].set(left_wall_color.astype(jnp.uint8)), room_bg_mask)
         
         right_wall_color = jnp.where(state.room_id == 18, self.LADDER_ID,
                                      jnp.where(state.room_id == 29, self.DEEP_BLUE_PLATFORM_ID,
                                                jnp.where(state.room_id == 23, self.LEVEL2_PLATFORM_ID, 1)))
         # Room 5, 14, 18, 32, and 29 walls should only be on top (above floor)
         is_side_room_right = jnp.isin(state.room_id, jnp.array([5, 14, 18, 32, 29]))
-        room_bg_mask = jnp.where(is_side_room_right, room_bg_mask.at[6:48, 156:160].set(right_wall_color), room_bg_mask)
+        room_bg_mask = jnp.where(is_side_room_right, room_bg_mask.at[6:48, 156:160].set(right_wall_color.astype(jnp.uint8)), room_bg_mask)
         # Other rooms right wall
-        room_bg_mask = jnp.where(state.room_id == 23, room_bg_mask.at[6:149, 156:160].set(right_wall_color), room_bg_mask)
+        room_bg_mask = jnp.where(state.room_id == 23, room_bg_mask.at[6:149, 156:160].set(right_wall_color.astype(jnp.uint8)), room_bg_mask)
         
         raster = self.jr.render_at(raster, 0, 47, room_bg_mask)
         
