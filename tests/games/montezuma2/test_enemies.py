@@ -48,3 +48,33 @@ def test_jump_over_enemy():
     
     # Player should NOT die because they are vertically clear
     assert state.death_timer == 0
+
+def test_room_3_3_skull():
+    env = JaxMontezuma2()
+    key = jax.random.PRNGKey(0)
+    obs, state = env.reset(key)
+    
+    # Change room to 27 (ROOM_3_3)
+    from jaxatari.games.montezuma2.rooms import load_room
+    state = state.replace(room_id=jnp.array(27, dtype=jnp.int32))
+    state = load_room(state.room_id, state, env.consts)
+    
+    # Check if the skull is active and at correct position
+    assert state.enemies_active[0] == 1
+    assert state.enemies_x[0] == 45
+    assert state.enemies_y[0] == 47
+    assert state.enemies_type[0] == 1 # Skull
+    assert state.enemies_min_x[0] == 32
+    assert state.enemies_max_x[0] == 120
+    
+    # Check if it moves
+    # Move 1 pixel every 2 frames
+    state = state.replace(frame_count=jnp.array(0, dtype=jnp.int32))
+    obs, state, reward, done, info = env.step(state, 0) # frame 0 -> moves
+    assert state.enemies_x[0] == 46
+    
+    obs, state, reward, done, info = env.step(state, 0) # frame 1 -> stays
+    assert state.enemies_x[0] == 46
+    
+    obs, state, reward, done, info = env.step(state, 0) # frame 2 -> moves
+    assert state.enemies_x[0] == 47

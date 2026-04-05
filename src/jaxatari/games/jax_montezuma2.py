@@ -237,6 +237,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         gea = gea.at[20, 0].set(1)
         gea = gea.at[20, 1].set(1)
         gea = gea.at[22, 0].set(1)
+        gea = gea.at[27, 0].set(1) # Skull in Room 27 (ROOM_3_3)
         gea = gea.at[31, 0].set(1) # Snake in Room 31
         gea = gea.at[30, 0].set(1) # Spider in Room 30
 
@@ -256,6 +257,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         gety = gety.at[20, 0].set(4)
         gety = gety.at[20, 1].set(4)
         gety = gety.at[22, 0].set(3)
+        gety = gety.at[27, 0].set(1) # ROLL_SKULL = 1
         gety = gety.at[31, 0].set(4) # Snake in Room 31
         gety = gety.at[30, 0].set(3) # Spider in Room 30
 
