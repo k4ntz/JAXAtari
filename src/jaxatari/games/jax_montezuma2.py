@@ -260,6 +260,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         gea = gea.at[22, 0].set(1)
         gea = gea.at[31, 0].set(1) # Snake in Room 31
         gea = gea.at[30, 0].set(1) # Spider in Room 30
+        gea = gea.at[27, 0].set(1) # Skull in Room 27 (ROOM_3_3)
 
         gety = state.global_enemies_type
         # ROLL_SKULL = 1, BOUNCE_SKULL = 2, SPIDER = 3, SNAKE = 4
@@ -279,6 +280,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         gety = gety.at[22, 0].set(3)
         gety = gety.at[31, 0].set(4) # Snake in Room 31
         gety = gety.at[30, 0].set(3) # Spider in Room 30
+        gety = gety.at[27, 0].set(1) # Skull in Room 27 (ROOM_3_3)
 
         giy = state.global_items_type
         giy = giy.at[3, 0].set(1) # Gem in room 3
@@ -757,7 +759,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         overlap_y_las = jnp.logical_and(check_y_top < 46, check_y_bot >= 7)
         died_from_laser = jnp.any(jnp.logical_and(l_active_las, jnp.logical_and(overlap_x_las, overlap_y_las)))
         
-        died_from_pit = jnp.logical_and(state.room_id == 19, jnp.logical_and(player_feet_y >= 110, jnp.logical_not(on_ground)))
+        is_pit_room = jnp.any(state.room_id == jnp.array([19, 27, 29, 31]))
+        died_from_pit = jnp.logical_and(is_pit_room, jnp.logical_and(player_feet_y >= 110, jnp.logical_not(on_ground)))
 
         player_died = jnp.logical_or(died_from_fall, jnp.logical_or(died_from_enemy, jnp.logical_or(died_from_laser, died_from_pit)))
         
