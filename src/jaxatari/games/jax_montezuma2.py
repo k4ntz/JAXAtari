@@ -163,6 +163,10 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             player_vx=jnp.array(0, dtype=jnp.int32),
             player_vy=jnp.array(0, dtype=jnp.int32),
             player_dir=jnp.array(1, dtype=jnp.int32),
+            entry_x=jnp.array(self.consts.INITIAL_PLAYER_X, dtype=jnp.int32),
+            entry_y=jnp.array(self.consts.INITIAL_PLAYER_Y, dtype=jnp.int32),
+            entry_is_climbing=jnp.array(0, dtype=jnp.int32),
+            entry_last_ladder=jnp.array(-1, dtype=jnp.int32),
             is_jumping=jnp.array(0, dtype=jnp.int32),
             is_falling=jnp.array(0, dtype=jnp.int32),
             fall_start_y=jnp.array(0, dtype=jnp.int32),
@@ -773,8 +777,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
         respawn_now = jnp.logical_and(state.death_timer == 1, new_death_timer == 0)
         
-        spawn_x = jnp.where(state.room_id == 4, 77, self.consts.INITIAL_PLAYER_X)
-        spawn_y = jnp.where(state.room_id == 4, 26, self.consts.INITIAL_PLAYER_Y)
+        spawn_x = state.entry_x
+        spawn_y = state.entry_y
         
         new_lives = jnp.where(start_death, state.lives - 1, state.lives)
         final_x = jnp.where(respawn_now, spawn_x, jnp.where(new_death_timer > 0, state.player_x, new_x))
@@ -784,7 +788,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         final_player_dir = jnp.where(respawn_now, 1, jnp.where(new_death_timer > 0, state.player_dir, new_player_dir))
         final_is_jumping = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, new_is_jumping)
         final_is_falling = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, new_is_falling)
-        final_is_climbing = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, is_climbing)
+        final_is_climbing = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), jnp.where(respawn_now, state.entry_is_climbing, 0), is_climbing)
+        final_last_ladder = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), jnp.where(respawn_now, state.entry_last_ladder, -1), new_last_ladder)
         final_jump_counter = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, new_jump_counter)
         final_fall_start_y = jnp.where(respawn_now, spawn_y, jnp.where(new_death_timer > 0, state.fall_start_y, new_fall_start_y))
         
@@ -801,7 +806,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             is_climbing=final_is_climbing,
             out_of_ladder_delay=jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, new_out_of_ladder_delay),
             last_rope=new_last_rope,
-            last_ladder=new_last_ladder,
+            last_ladder=final_last_ladder,
             is_falling=final_is_falling,
             fall_start_y=final_fall_start_y,
             frame_count=state.frame_count + 1,
@@ -902,7 +907,11 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
                 player_y=new_py,
                 fall_start_y=new_py,
                 last_ladder=jnp.array(-1, dtype=jnp.int32),
-                last_rope=jnp.array(-1, dtype=jnp.int32)
+                last_rope=jnp.array(-1, dtype=jnp.int32),
+                entry_x=new_px,
+                entry_y=new_py,
+                entry_is_climbing=is_climbing,
+                entry_last_ladder=jnp.array(-1, dtype=jnp.int32)
             )
 
         state = jax.lax.cond(transition_any, transition_fn, lambda x: x, state)

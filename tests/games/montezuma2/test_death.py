@@ -90,8 +90,12 @@ def test_respawn_after_death():
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
-    # Trigger death
+    # Trigger death with custom entry coordinates
     state = state.replace(
+        entry_x=jnp.array(35, dtype=jnp.int32),
+        entry_y=jnp.array(60, dtype=jnp.int32),
+        entry_is_climbing=jnp.array(1, dtype=jnp.int32),
+        entry_last_ladder=jnp.array(0, dtype=jnp.int32),
         death_timer=jnp.array(1, dtype=jnp.int32),
         death_type=jnp.array(1, dtype=jnp.int32)
     )
@@ -100,5 +104,7 @@ def test_respawn_after_death():
     obs, state, reward, done, info = env.step(state, 0)
     
     assert state.death_timer == 0
-    assert state.player_x == env.consts.INITIAL_PLAYER_X
-    assert state.player_y == env.consts.INITIAL_PLAYER_Y
+    assert state.player_x == 35
+    assert state.player_y == 60
+    assert state.is_climbing == 1
+    assert state.last_ladder == 0

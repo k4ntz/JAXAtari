@@ -64,6 +64,11 @@ class Montezuma2State:
     player_vy: jnp.ndarray
     player_dir: jnp.ndarray
     
+    entry_x: jnp.ndarray
+    entry_y: jnp.ndarray
+    entry_is_climbing: jnp.ndarray
+    entry_last_ladder: jnp.ndarray
+    
     is_jumping: jnp.ndarray
     is_falling: jnp.ndarray
     fall_start_y: jnp.ndarray
