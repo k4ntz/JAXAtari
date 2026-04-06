@@ -25,7 +25,7 @@ def test_conveyor_movement():
     for _ in range(4):
         obs, state, reward, done, info = env.step(state, 0)
         
-    assert state.player_x > initial_x
+    assert state.player_x < initial_x
     assert state.player_y == 68
 
 def test_wall_collision():

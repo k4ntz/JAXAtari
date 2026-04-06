@@ -101,7 +101,7 @@ def load_room(room_id: jnp.ndarray, state: Montezuma2State, consts: Montezuma2Co
         cx = conveyors_x.at[0].set(60)
         cy = conveyors_y.at[0].set(88)
         ca = conveyors_active.at[0].set(1)
-        cd = conveyors_direction.at[0].set(1)
+        cd = conveyors_direction.at[0].set(-1)
         
         dx = doors_x.at[0].set(16)
         dy = doors_y.at[0].set(7)
