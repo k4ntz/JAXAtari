@@ -479,6 +479,11 @@ class Montezuma2Renderer(JAXGameRenderer):
         anim_idx = jnp.less(jnp.mod(state.frame_count, 16), 8)
         def render_conveyor(i, raster):
             mask = self.SHAPE_MASKS["conveyor"]
+            # Color remap: Use LADDER_ID_L2 (purple) for Layer 2 rooms, otherwise LADDER_ID (green)
+            is_layer_2 = jnp.isin(state.room_id, jnp.array([10, 11, 12, 14]))
+            c_color = jax.lax.select(is_layer_2, self.LADDER_ID_L2, self.LADDER_ID)
+            mask = jnp.where(mask != self.jr.TRANSPARENT_ID, c_color.astype(jnp.uint8), self.jr.TRANSPARENT_ID)
+
             return jax.lax.cond(
                 state.conveyors_active[i] == 1,
                 lambda r: self.jr.render_at(r, state.conveyors_x[i], state.conveyors_y[i] + 47, mask, flip_vertical=anim_idx),
