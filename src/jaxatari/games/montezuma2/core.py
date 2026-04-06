@@ -45,8 +45,8 @@ class Montezuma2Constants(struct.PyTreeNode):
     MAX_FALL_DISTANCE: int = struct.field(pytree_node=False, default=33) # ladder_height (39) - 6
     BOUNCE_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 27, 27, 27, 24, 21, 18, 15, 12, 9, 6, 3, 0], dtype=jnp.int32))
     DEATH_TIMER_FRAMES: int = struct.field(pytree_node=False, default=70)
-    PLATFORM_ACTIVE_DURATION: int = struct.field(pytree_node=False, default=70) # For spawning and disappearing platform
-    PLATFORM_CYCLE_LENGTH: int = struct.field(pytree_node=False, default=90)
+    PLATFORM_ACTIVE_DURATION: int = struct.field(pytree_node=False, default=90) # For spawning and disappearing platform
+    PLATFORM_CYCLE_LENGTH: int = struct.field(pytree_node=False, default=128)
     AMULET_DURATION: int = struct.field(pytree_node=False, default=660)
 
 @struct.dataclass
