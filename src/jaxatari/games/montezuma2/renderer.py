@@ -73,7 +73,10 @@ class Montezuma2Renderer(JAXGameRenderer):
             {'name': 'gem', 'type': 'single', 'file': 'items/gem.npy', 'transpose': False},
             {'name': 'amulet', 'type': 'single', 'file': 'items/amulet.npy', 'transpose': False},
             {'name': 'sword', 'type': 'single', 'file': 'items/sword.npy', 'transpose': False},
-            {'name': 'torch', 'type': 'single', 'file': 'items/torch_1.npy', 'transpose': False},
+            {
+                'name': 'torch', 'type': 'group',
+                'files': ['items/torch_1.npy', 'items/torch_2.npy']
+            },
             {'name': 'door', 'type': 'single', 'file': 'door.npy', 'transpose': False},
             {'name': 'conveyor', 'type': 'single', 'file': 'conveyor_belt.npy', 'transpose': False},
             {
@@ -504,7 +507,10 @@ class Montezuma2Renderer(JAXGameRenderer):
             def render_gem(r): return self.jr.render_at(r, x, y, self.SHAPE_MASKS['gem'])
             def render_amulet(r): return self.jr.render_at(r, x, y, self.SHAPE_MASKS['amulet'])
             def render_sword(r): return self.jr.render_at(r, x, y, self.SHAPE_MASKS['sword'])
-            def render_torch(r): return self.jr.render_at(r, x, y, self.SHAPE_MASKS['torch'])
+            def render_torch(r): 
+                # Animate torch with two sprites, alternating every 8 frames
+                anim_idx = jnp.mod(state.frame_count // 8, 2)
+                return self.jr.render_at(r, x, y, self.SHAPE_MASKS['torch'][anim_idx])
             
             return jax.lax.cond(
                 should_render,
@@ -689,7 +695,8 @@ class Montezuma2Renderer(JAXGameRenderer):
         # Render Torch
         def render_torch(raster_in):
              offset = state.inventory[0] + state.inventory[1]
-             mask = self.SHAPE_MASKS["torch"]
+             # Use only the first sprite (torch_1) for HUD display
+             mask = self.SHAPE_MASKS["torch"][0]
              x = self.consts.ITEMBAR_LIFES_STARTING_X + offset * 8
              y = self.consts.ITEMBAR_STARTING_Y
              return self.jr.render_at(raster_in, x, y, mask)
