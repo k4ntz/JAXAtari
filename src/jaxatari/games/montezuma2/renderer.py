@@ -69,16 +69,11 @@ class Montezuma2Renderer(JAXGameRenderer):
                 'name': 'snake', 'type': 'group',
                 'files': ['enemies/snake_0.npy', 'enemies/snake_1.npy']
             },
-            {
-                'name': 'item', 'type': 'group',
-                'files': [
-                    'items/key.npy',
-                    'items/gem.npy',
-                    'items/amulet.npy',
-                    'items/sword.npy',
-                    'items/torch_1.npy'
-                ]
-            },
+            {'name': 'key', 'type': 'single', 'file': 'items/key.npy', 'transpose': False},
+            {'name': 'gem', 'type': 'single', 'file': 'items/gem.npy', 'transpose': False},
+            {'name': 'amulet', 'type': 'single', 'file': 'items/amulet.npy', 'transpose': False},
+            {'name': 'sword', 'type': 'single', 'file': 'items/sword.npy', 'transpose': False},
+            {'name': 'torch', 'type': 'single', 'file': 'items/torch_1.npy', 'transpose': False},
             {'name': 'door', 'type': 'single', 'file': 'door.npy', 'transpose': False},
             {'name': 'conveyor', 'type': 'single', 'file': 'conveyor_belt.npy', 'transpose': False},
             {
@@ -112,7 +107,7 @@ class Montezuma2Renderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
-        
+
         # Accurate ladder color for Difficulty 1, Layer 1
         self.LADDER_COLOR = jnp.array([66, 158, 130], dtype=jnp.uint8)
         self.PALETTE = jnp.concatenate([self.PALETTE, self.LADDER_COLOR[None, :]], axis=0)
@@ -494,7 +489,9 @@ class Montezuma2Renderer(JAXGameRenderer):
         
         # Draw Items
         def render_item(i, raster):
-            mask = self.SHAPE_MASKS["item"][state.items_type[i]]
+            x = state.items_x[i]
+            y = state.items_y[i] + 47
+            
             is_bonus_gem = jnp.logical_and(state.room_id == 24, state.items_type[i] == 1)
             is_flicker_off = jnp.logical_and(is_bonus_gem, jnp.mod(state.frame_count, 2) == 0)
             should_render = jnp.logical_and(state.items_active[i] == 1, jnp.logical_not(is_flicker_off))
@@ -503,9 +500,17 @@ class Montezuma2Renderer(JAXGameRenderer):
             is_hidden_gem = jnp.logical_and(state.items_type[i] == 1, is_rendered_dark)
             should_render = jnp.logical_and(should_render, jnp.logical_not(is_hidden_gem))
             
+            def render_key(r): return self.jr.render_at(r, x, y, self.SHAPE_MASKS['key'])
+            def render_gem(r): return self.jr.render_at(r, x, y, self.SHAPE_MASKS['gem'])
+            def render_amulet(r): return self.jr.render_at(r, x, y, self.SHAPE_MASKS['amulet'])
+            def render_sword(r): return self.jr.render_at(r, x, y, self.SHAPE_MASKS['sword'])
+            def render_torch(r): return self.jr.render_at(r, x, y, self.SHAPE_MASKS['torch'])
+            
             return jax.lax.cond(
                 should_render,
-                lambda r: self.jr.render_at(r, state.items_x[i], state.items_y[i] + 47, mask),
+                lambda r: jax.lax.switch(state.items_type[i], [
+                    render_key, render_gem, render_amulet, render_sword, render_torch
+                ], r),
                 lambda r: r,
                 raster
             )
@@ -664,7 +669,7 @@ class Montezuma2Renderer(JAXGameRenderer):
 
         # Render Inventory (Keys)
         def render_key(i, raster):
-            mask = self.SHAPE_MASKS["item"][0]
+            mask = self.SHAPE_MASKS["key"]
             x = self.consts.ITEMBAR_LIFES_STARTING_X + i * 8
             y = self.consts.ITEMBAR_STARTING_Y
             return self.jr.render_at(raster, x, y, mask)
@@ -674,7 +679,7 @@ class Montezuma2Renderer(JAXGameRenderer):
         # Render Sword
         def render_sword(raster_in):
              offset = state.inventory[0]
-             mask = self.SHAPE_MASKS["item"][3]
+             mask = self.SHAPE_MASKS["sword"]
              x = self.consts.ITEMBAR_LIFES_STARTING_X + offset * 8
              y = self.consts.ITEMBAR_STARTING_Y
              return self.jr.render_at(raster_in, x, y, mask)
@@ -684,7 +689,7 @@ class Montezuma2Renderer(JAXGameRenderer):
         # Render Torch
         def render_torch(raster_in):
              offset = state.inventory[0] + state.inventory[1]
-             mask = self.SHAPE_MASKS["item"][4]
+             mask = self.SHAPE_MASKS["torch"]
              x = self.consts.ITEMBAR_LIFES_STARTING_X + offset * 8
              y = self.consts.ITEMBAR_STARTING_Y
              return self.jr.render_at(raster_in, x, y, mask)
@@ -694,7 +699,7 @@ class Montezuma2Renderer(JAXGameRenderer):
         # Render Amulet
         def render_amulet(raster_in):
              offset = state.inventory[0] + state.inventory[1] + state.inventory[2]
-             mask = self.SHAPE_MASKS["item"][2]
+             mask = self.SHAPE_MASKS["amulet"]
              x = self.consts.ITEMBAR_LIFES_STARTING_X + offset * 8
              y = self.consts.ITEMBAR_STARTING_Y
              return self.jr.render_at(raster_in, x, y, mask)
