@@ -434,7 +434,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         # Vectorized conveyor check
         is_on_conveyor_ground = jnp.logical_and(
             state.conveyors_active == 1,
-            jnp.logical_and(player_feet_y == state.conveyors_y - 1, jnp.logical_and(player_mid_x >= state.conveyors_x - 3, player_mid_x < state.conveyors_x + 43))
+            jnp.logical_and(player_feet_y == state.conveyors_y - 1, jnp.logical_and(player_mid_x >= state.conveyors_x - 2, player_mid_x < state.conveyors_x + 42))
         )
         on_ground = jnp.logical_or(on_ground, jnp.any(is_on_conveyor_ground))
 
@@ -475,7 +475,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             
             is_on_c_pixel2 = jnp.logical_and(
                 state.conveyors_active == 1,
-                jnp.logical_and(player_feet_y + 1 == state.conveyors_y - 1, jnp.logical_and(safe_x >= state.conveyors_x - 3, safe_x < state.conveyors_x + 43))
+                jnp.logical_and(player_feet_y + 1 == state.conveyors_y - 1, jnp.logical_and(safe_x >= state.conveyors_x - 2, safe_x < state.conveyors_x + 42))
             )
             pixel_2_below = jnp.logical_or(pixel_2_below, jnp.any(is_on_c_pixel2))
 
@@ -553,7 +553,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             jnp.logical_not(is_near_top),
             jnp.logical_and(
                 state.conveyors_active == 1,
-                jnp.logical_and(dy > 0, jnp.logical_and(crossed_c, jnp.logical_and(safe_x >= state.conveyors_x - 3, safe_x < state.conveyors_x + 43)))
+                jnp.logical_and(dy > 0, jnp.logical_and(crossed_c, jnp.logical_and(safe_x >= state.conveyors_x - 2, safe_x < state.conveyors_x + 42)))
             )
         )
         hit_floor_c = jnp.any(is_hit_c)
@@ -684,7 +684,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         # Vectorized conveyor physics
         is_on_conveyor_physics = jnp.logical_and(
             state.conveyors_active == 1,
-            jnp.logical_and(new_feet_y_after == state.conveyors_y - 1, jnp.logical_and(new_mid_x >= state.conveyors_x - 3, new_mid_x < state.conveyors_x + 43))
+            jnp.logical_and(new_feet_y_after == state.conveyors_y - 1, jnp.logical_and(new_mid_x >= state.conveyors_x - 2, new_mid_x < state.conveyors_x + 42))
         )
         conveyor_velocities = jnp.mod(state.frame_count, 2) * state.conveyors_direction
         total_conveyor_velocity = jnp.sum(jnp.where(jnp.logical_and(is_on_conveyor_physics, is_climbing == 0), conveyor_velocities, 0))
@@ -891,7 +891,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
                 
                 in_this_c = jnp.logical_and(st.conveyors_active == 1,
                         jnp.logical_and(jnp.logical_and(fy >= st.conveyors_y, fy < st.conveyors_y + 5),
-                                        jnp.logical_and(safe_px_trans >= st.conveyors_x - 3, safe_px_trans < st.conveyors_x + 43)))
+                                        jnp.logical_and(safe_px_trans >= st.conveyors_x - 2, safe_px_trans < st.conveyors_x + 42)))
                 in_conv = jnp.any(in_this_c)
                 
                 return jnp.logical_or(in_col, jnp.logical_or(in_plat, in_conv))

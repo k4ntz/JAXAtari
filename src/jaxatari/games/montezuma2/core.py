@@ -178,27 +178,19 @@ def get_room_idx(room_id):
            jnp.where(room_id == 24, 23, 0))))))))))))))))))))))))
 
 def check_platform(col_map, y, x, width):
-    x_m3 = jnp.clip(x - 3, 0, width - 1)
     x_m2 = jnp.clip(x - 2, 0, width - 1)
     x_m1 = jnp.clip(x - 1, 0, width - 1)
     x_p1 = jnp.clip(x + 1, 0, width - 1)
     x_p2 = jnp.clip(x + 2, 0, width - 1)
-    x_p3 = jnp.clip(x + 3, 0, width - 1)
     return jnp.logical_or(
-        col_map[y, x_m3] == 1,
+        col_map[y, x_m2] == 1,
         jnp.logical_or(
-            col_map[y, x_m2] == 1,
+            col_map[y, x_m1] == 1,
             jnp.logical_or(
-                col_map[y, x_m1] == 1,
+                col_map[y, x, ...] == 1,
                 jnp.logical_or(
-                    col_map[y, x, ...] == 1,
-                    jnp.logical_or(
-                        col_map[y, x_p1] == 1,
-                        jnp.logical_or(
-                            col_map[y, x_p2] == 1,
-                            col_map[y, x_p3] == 1
-                        )
-                    )
+                    col_map[y, x_p1] == 1,
+                    col_map[y, x_p2] == 1
                 )
             )
         )
