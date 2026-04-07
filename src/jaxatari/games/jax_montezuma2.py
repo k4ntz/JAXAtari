@@ -310,6 +310,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         return obs, state
     
     def step(self, state: Montezuma2State, action: int) -> Tuple[Montezuma2Observation, Montezuma2State, float, bool, Montezuma2Info]:
+        is_active = state.death_timer == 0
         room_idx = get_room_idx(state.room_id)
         room_col_map = self.ROOM_COLLISION_MAPS[room_idx]
         
@@ -321,7 +322,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         previous_score = state.score
 
         # Amulet counter
-        new_amulet_time = jnp.maximum(state.amulet_time - 1, 0)
+        new_amulet_time = jnp.where(is_active, jnp.maximum(state.amulet_time - 1, 0), state.amulet_time)
         is_amulet_active = new_amulet_time > 0
 
         is_up = jnp.logical_or(action == Action.UP, jnp.logical_or(action == Action.UPRIGHT, action == Action.UPLEFT))
@@ -668,7 +669,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         new_items_active = jax.lax.select(is_bonus_gem_collected, new_items_active.at[0].set(1), new_items_active)
         new_first_gem_pickup = jnp.where(is_bonus_gem_collected, 1, state.first_gem_pickup)
         # Increment timer every frame we are in the bonus room
-        new_bonus_room_timer = jax.lax.select(is_bonus_room, state.bonus_room_timer + 1, 0)
+        new_bonus_room_timer = jax.lax.select(is_bonus_room, jnp.where(is_active, state.bonus_room_timer + 1, state.bonus_room_timer), 0)
         new_first_gem_pickup = jax.lax.select(is_bonus_room, new_first_gem_pickup, 0)
 
         new_x = jnp.where(jnp.logical_or(hit_wall, is_climbing == 1), current_x, new_x)
@@ -690,7 +691,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         # 6. Enemy Movement
         # Move 1 pixel every 2 frames
-        speed_enemy = jnp.where(jnp.mod(state.frame_count, 2) == 0, 1, 0)
+        speed_enemy = jnp.where(jnp.logical_and(is_active, jnp.mod(state.frame_count, 2) == 0), 1, 0)
         raw_new_enemies_x = state.enemies_x + state.enemies_direction * speed_enemy
         
         # Bounce off walls
@@ -700,7 +701,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         hit_left_enemy = raw_new_enemies_x <= state.enemies_min_x
         hit_right_enemy = raw_new_enemies_x >= state.enemies_max_x
         
-        bounce_enemy = jnp.logical_or(hit_left_enemy, jnp.logical_or(hit_right_enemy, jnp.logical_or(hit_wall_left_enemy, hit_wall_right_enemy)))
+        bounce_enemy = jnp.logical_and(is_active, jnp.logical_or(hit_left_enemy, jnp.logical_or(hit_right_enemy, jnp.logical_or(hit_wall_left_enemy, hit_wall_right_enemy))))
         
         new_enemies_direction = jnp.where(bounce_enemy, -state.enemies_direction, state.enemies_direction)
         new_enemies_x = jnp.where(bounce_enemy, state.enemies_x, raw_new_enemies_x)
@@ -748,8 +749,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
         # Laser Collision
         # Update laser and platform cycles
-        new_laser_cycle = jnp.mod(state.laser_cycle + 1, 128)
-        new_platform_cycle = jnp.mod(state.platform_cycle + 1, self.consts.PLATFORM_CYCLE_LENGTH)
+        new_laser_cycle = jnp.where(is_active, jnp.mod(state.laser_cycle + 1, 128), state.laser_cycle)
+        new_platform_cycle = jnp.where(is_active, jnp.mod(state.platform_cycle + 1, self.consts.PLATFORM_CYCLE_LENGTH), state.platform_cycle)
         laser_active_now = jnp.logical_and(jnp.greater_equal(state.laser_cycle, 0), jnp.less(state.laser_cycle, 92))
         platform_active_now = jnp.less(state.platform_cycle, self.consts.PLATFORM_ACTIVE_DURATION)
 
@@ -804,7 +805,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             last_ladder=final_last_ladder,
             is_falling=final_is_falling,
             fall_start_y=final_fall_start_y,
-            frame_count=state.frame_count + 1,
+            frame_count=jnp.where(is_active, state.frame_count + 1, state.frame_count),
             enemies_x=new_enemies_x,
             enemies_active=new_enemies_active,
             enemies_direction=new_enemies_direction,
