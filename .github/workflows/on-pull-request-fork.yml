@@ -134,7 +134,7 @@ jobs:
         shell: bash
 
       - name: Collapse previous CI comments
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const {owner, repo} = context.repo;
