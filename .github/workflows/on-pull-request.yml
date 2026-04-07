@@ -13,7 +13,7 @@ jobs:
       pr_head_sha: "" # No head SHA needed for same-repo PRs
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Needed for git diff
 

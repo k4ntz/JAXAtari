@@ -28,18 +28,18 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         if: ${{ inputs.pr_head_sha == '' }}
 
       - name: Check out base branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         if: ${{ inputs.pr_head_sha != '' }}
         with:
           ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Check out PR head
         if: ${{ inputs.pr_head_sha != '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ inputs.pr_head_sha }}
           path: pr_head
