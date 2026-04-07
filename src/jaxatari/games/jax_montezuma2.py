@@ -600,16 +600,11 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         check_y_bot = jnp.clip(new_y + self.consts.PLAYER_HEIGHT - 1, 0, 148)
         def is_wall(y, x):
             # A horizontal platform is permeable from below.
-            # We ignore horizontal wall collisions if we are moving upwards (jumping)
-            # and there is empty space within 3 pixels above (indicating a horizontal platform/surface).
-            is_perm_platform = jnp.logical_or(
-                room_col_map[jnp.clip(y - 1, 0, 148), x] == 0,
-                jnp.logical_or(
-                    room_col_map[jnp.clip(y - 2, 0, 148), x] == 0,
-                    room_col_map[jnp.clip(y - 3, 0, 148), x] == 0
-                )
-            )
-            ignore = jnp.logical_and(dy < 0, is_perm_platform)
+            # We ignore horizontal wall collisions if we are in the air
+            # and there is empty space within 15 pixels above (indicating a horizontal platform/surface).
+            # This allows jumping through thick platforms while still being blocked by vertical walls.
+            is_perm_platform = jnp.any(room_col_map[jnp.clip(y - jnp.arange(1, 16), 0, 148), x] == 0)
+            ignore = jnp.logical_and(on_ground == 0, is_perm_platform)
             return jnp.logical_and(room_col_map[y, x] == 1, jnp.logical_not(ignore))
         
         hit_wall = jnp.logical_or(
