@@ -132,14 +132,14 @@ def test_jump_descent_overlap():
     
     assert floor_y != -1, "Could not find floor in ROOM_2_3"
     
-    # Position player above the floor, in a jump descent with dy=4.
-    # JUMP_Y_OFFSETS: [3, 3, 3, 2, 2, 2, 1, 1, 1, -1, -2, -3, -4, -4, -4, 0]
-    # Index 12 is -4. So we need jump_counter = 12.
+    # Position player above the floor, in a jump descent with dy=3.
+    # JUMP_Y_OFFSETS: [3, 3, 3, 2, 2, 2, 1, 1, 0, 0, 0, 0, -1, -1, -2, -2, -2, -3, -3, -3]
+    # Index 17 is -3. So we need jump_counter = 17.
     state = state.replace(
         player_x=jnp.array(140 - 3, jnp.int32), 
-        player_y=jnp.array(floor_y - 19 - 4, jnp.int32), # 4 pixels above where they'd be on the floor
+        player_y=jnp.array(floor_y - 19 - 3, jnp.int32), # 3 pixels above where they'd be on the floor
         is_jumping=jnp.array(1, jnp.int32),
-        jump_counter=jnp.array(12, jnp.int32)
+        jump_counter=jnp.array(17, jnp.int32)
     )
     
     # One step should land them 1 pixel above floor_y.
