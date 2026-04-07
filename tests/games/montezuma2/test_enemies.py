@@ -48,3 +48,35 @@ def test_jump_over_enemy():
     
     # Player should NOT die because they are vertically clear
     assert state.death_timer == 0
+
+def test_skulls_synchronization():
+    env = JaxMontezuma2()
+    key = jax.random.PRNGKey(0)
+    obs, state = env.reset(key)
+    
+    # Use Room 5 (Old 3), which has 2 skulls
+    from jaxatari.games.montezuma2.rooms import load_room
+    state = state.replace(room_id=jnp.array(5, dtype=jnp.int32))
+    state = load_room(state.room_id, state, env.consts)
+    
+    # Room 5 has 2 active skulls: index 0 and 1
+    # Both ed are -1 initially.
+    
+    # Place enemy 0 near its min boundary (min_x is 10)
+    # Place enemy 1 far from its min boundary (min_x is 4)
+    state = state.replace(
+        enemies_x=state.enemies_x.at[0].set(11).at[1].set(50),
+        enemies_direction=state.enemies_direction.at[0].set(-1).at[1].set(-1),
+        enemies_active=state.enemies_active.at[0].set(1).at[1].set(1),
+        frame_count=jnp.array(0, dtype=jnp.int32) # ensure next step moves it (mod 2 == 0)
+    )
+    
+    # Step 1: enemies move left. Enemy 0 reaches 10, which is min_x.
+    # It should flip direction to 1.
+    obs, state, reward, done, info = env.step(state, 0)
+    
+    # Enemy 0 should have flipped
+    assert state.enemies_direction[0] == 1
+    
+    # Enemy 1 SHOULD also have flipped if synchronized
+    assert state.enemies_direction[1] == 1, "Enemy 1 should have flipped direction together with Enemy 0"

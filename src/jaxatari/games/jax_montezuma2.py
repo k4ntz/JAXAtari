@@ -703,8 +703,10 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         
         bounce_enemy = jnp.logical_and(is_active, jnp.logical_or(hit_left_enemy, jnp.logical_or(hit_right_enemy, jnp.logical_or(hit_wall_left_enemy, hit_wall_right_enemy))))
         
-        new_enemies_direction = jnp.where(bounce_enemy, -state.enemies_direction, state.enemies_direction)
-        new_enemies_x = jnp.where(bounce_enemy, state.enemies_x, raw_new_enemies_x)
+        # Synchronize bouncing: if ANY active enemy in the room hits a wall, ALL of them flip direction
+        bounce_any = jnp.any(jnp.logical_and(state.enemies_active == 1, bounce_enemy))
+        new_enemies_direction = jnp.where(bounce_any, -state.enemies_direction, state.enemies_direction)
+        new_enemies_x = jnp.where(bounce_any, state.enemies_x, raw_new_enemies_x)
         
         # 7. Dying Mechanism (Fall Damage & Enemy Collision)
         new_fall_start_y = jnp.where(
