@@ -90,6 +90,7 @@ MOD_MODULES = {
     "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
     "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
     "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
+    "montezuma2": "jaxatari.games.mods.montezuma2_mods.Montezuma2EnvMod",
 }
 
 

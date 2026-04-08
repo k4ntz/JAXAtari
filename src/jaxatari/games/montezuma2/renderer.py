@@ -204,7 +204,20 @@ class Montezuma2Renderer(JAXGameRenderer):
         ])
 
     @partial(jax.jit, static_argnums=(0,))
+    def _render_hook_pre_render(self, state: Montezuma2State) -> Montezuma2State:
+        """Hook called at the very beginning of render() to allow state modification."""
+        return state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_hook_post_ui(self, raster: jnp.ndarray, state: Montezuma2State) -> jnp.ndarray:
+        """Hook called at the very end of render() to allow drawing on top of the final frame."""
+        return raster
+
+    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: Montezuma2State) -> jnp.ndarray:
+        # Apply pre-render hook
+        state = self._render_hook_pre_render(state)
+
         # Start with solid black background
         raster = self.jr.create_object_raster(self.BACKGROUND)
         
@@ -712,5 +725,8 @@ class Montezuma2Renderer(JAXGameRenderer):
              return self.jr.render_at(raster_in, x, y, mask)
              
         raster = jax.lax.cond(state.inventory[3] == 1, render_amulet, lambda r: r, raster)
+
+        # Apply post-ui hook
+        raster = self._render_hook_post_ui(raster, state)
 
         return self.PALETTE[raster]

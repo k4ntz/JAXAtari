@@ -12,7 +12,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     MAX_ROPES_PER_ROOM: int = struct.field(pytree_node=False, default=2)
     MAX_DOORS_PER_ROOM: int = struct.field(pytree_node=False, default=2)
     MAX_ITEMS_PER_ROOM: int = struct.field(pytree_node=False, default=3)
-    MAX_CONVEYORS_PER_ROOM: int = struct.field(pytree_node=False, default=2)
+    MAX_CONVEYORS_PER_ROOM: int = struct.field(pytree_node=False, default=1)
     MAX_LASERS_PER_ROOM: int = struct.field(pytree_node=False, default=8)
     MAX_PLATFORMS_PER_ROOM: int = struct.field(pytree_node=False, default=12)
     MAX_ROOMS: int = struct.field(pytree_node=False, default=33)
@@ -24,7 +24,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=20)
     INITIAL_PLAYER_X: int = struct.field(pytree_node=False, default=77)
     INITIAL_PLAYER_Y: int = struct.field(pytree_node=False, default=26)
-    INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=10)
+    INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=4)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=1)
     
     # Room Transition Coordinates
