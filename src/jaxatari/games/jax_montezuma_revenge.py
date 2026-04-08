@@ -10,12 +10,12 @@ from jaxatari.spaces import Discrete
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
-from .montezuma2.core import Montezuma2Constants, Montezuma2State, Montezuma2Observation, Montezuma2Info, get_room_idx, check_platform
-from .montezuma2.renderer import Montezuma2Renderer
-from .montezuma2.rooms import load_room
+from .montezuma_revenge.core import MontezumaRevengeConstants, MontezumaRevengeState, MontezumaRevengeObservation, MontezumaRevengeInfo, get_room_idx, check_platform
+from .montezuma_revenge.renderer import MontezumaRevengeRenderer
+from .montezuma_revenge.rooms import load_room
 
 
-class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Montezuma2Info, Montezuma2Constants]):
+class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevengeObservation, MontezumaRevengeInfo, MontezumaRevengeConstants]):
     ACTION_SET: jnp.ndarray = jnp.array([
         Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN,
         Action.UPRIGHT, Action.UPLEFT, Action.DOWNRIGHT, Action.DOWNLEFT,
@@ -23,10 +23,10 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         Action.UPRIGHTFIRE, Action.UPLEFTFIRE, Action.DOWNRIGHTFIRE, Action.DOWNLEFTFIRE
     ], dtype=jnp.int32)
 
-    def __init__(self, consts: Montezuma2Constants = None):
-        consts = consts or Montezuma2Constants()
+    def __init__(self, consts: MontezumaRevengeConstants = None):
+        consts = consts or MontezumaRevengeConstants()
         super().__init__(consts)
-        self.renderer = Montezuma2Renderer(self.consts)
+        self.renderer = MontezumaRevengeRenderer(self.consts)
         
         sprite_path_0 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "base_collision_map.npy")
         col_map_0 = jnp.load(sprite_path_0)[:149, :, 0]
@@ -152,8 +152,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
 
         self.ROOM_COLLISION_MAPS = jnp.stack([room_col_0_3, room_col_0_4, room_col_0_5, room_col_1_3, room_col_1_2, room_col_1_4, room_col_1_5, room_col_1_6, room_col_2_2, room_col_2_1, room_col_2_3, room_col_2_4, room_col_2_5, room_col_2_6, room_col_2_7, room_col_3_7, room_col_3_8, room_col_3_6, room_col_3_4, room_col_3_3, room_col_3_5, room_col_3_1, room_col_3_2, room_col_3_0])
 
-    def reset(self, key: jrandom.PRNGKey) -> Tuple[Montezuma2Observation, Montezuma2State]:
-        state = Montezuma2State(
+    def reset(self, key: jrandom.PRNGKey) -> Tuple[MontezumaRevengeObservation, MontezumaRevengeState]:
+        state = MontezumaRevengeState(
             room_id=jnp.array(self.consts.INITIAL_ROOM_ID, dtype=jnp.int32),
             lives=jnp.array(5, dtype=jnp.int32),
             score=jnp.array([0], dtype=jnp.int32),
@@ -309,7 +309,7 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         obs = self._get_observation(state)
         return obs, state
     
-    def step(self, state: Montezuma2State, action: int) -> Tuple[Montezuma2Observation, Montezuma2State, float, bool, Montezuma2Info]:
+    def step(self, state: MontezumaRevengeState, action: int) -> Tuple[MontezumaRevengeObservation, MontezumaRevengeState, float, bool, MontezumaRevengeInfo]:
         is_active = state.death_timer == 0
         room_idx = get_room_idx(state.room_id)
         room_col_map = self.ROOM_COLLISION_MAPS[room_idx]
@@ -930,10 +930,10 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
     def image_space(self) -> Discrete:
         return Discrete(1)
 
-    def render(self, state: Montezuma2State) -> jnp.ndarray:
+    def render(self, state: MontezumaRevengeState) -> jnp.ndarray:
         return self.renderer.render(state)
 
-    def _get_observation(self, state: Montezuma2State) -> Montezuma2Observation:
+    def _get_observation(self, state: MontezumaRevengeState) -> MontezumaRevengeObservation:
         player_obs = ObjectObservation.create(
             x=jnp.array([state.player_x]),
             y=jnp.array([state.player_y]),
@@ -990,14 +990,14 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
             active=state.platforms_active
         )
 
-        return Montezuma2Observation(player=player_obs, enemies=enemies_obs, items=items_obs, conveyors=conveyors_obs, doors=doors_obs, ropes=ropes_obs, platforms=platforms_obs)
+        return MontezumaRevengeObservation(player=player_obs, enemies=enemies_obs, items=items_obs, conveyors=conveyors_obs, doors=doors_obs, ropes=ropes_obs, platforms=platforms_obs)
     
-    def _get_info(self, state: Montezuma2State) -> Montezuma2Info:
-        return Montezuma2Info(lives=state.lives, room_id=state.room_id)
+    def _get_info(self, state: MontezumaRevengeState) -> MontezumaRevengeInfo:
+        return MontezumaRevengeInfo(lives=state.lives, room_id=state.room_id)
 
     def _get_reward(self, previous_score: jnp.ndarray, score: jnp.ndarray) -> float:
         return jnp.sum(score - previous_score).astype(jnp.float32)
 
-    def _get_done(self, state: Montezuma2State) -> bool:
+    def _get_done(self, state: MontezumaRevengeState) -> bool:
         fell_off_bonus = jnp.logical_and(state.room_id == 24, state.player_y >= 148)
         return jnp.logical_or(state.lives < 0, fell_off_bonus)

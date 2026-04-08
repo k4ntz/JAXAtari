@@ -1,15 +1,15 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezuma2 import JaxMontezuma2
+from jaxatari.games.jax_montezuma_revenge import JaxMontezumaRevenge
 
 def test_conveyor_movement():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Room 4 has a conveyor at y=88 (surface), x=60, direction 1.
     # Feet at 87 -> player_y = 87 - 20 + 1 = 68.
-    from jaxatari.games.montezuma2.rooms import load_room
+    from jaxatari.games.montezuma_revenge.rooms import load_room
     state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
     state = load_room(state.room_id, state, env.consts)
     
@@ -29,12 +29,12 @@ def test_conveyor_movement():
     assert state.player_y == 68
 
 def test_wall_collision():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Room 5 has a right wall at x=156
-    from jaxatari.games.montezuma2.rooms import load_room
+    from jaxatari.games.montezuma_revenge.rooms import load_room
     state = state.replace(room_id=jnp.array(5, dtype=jnp.int32))
     state = load_room(state.room_id, state, env.consts)
     
@@ -52,12 +52,12 @@ def test_wall_collision():
     assert state.player_x <= 149
 
 def test_jump_off_ladder():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Room 4, ladder at x=72.
-    from jaxatari.games.montezuma2.rooms import load_room
+    from jaxatari.games.montezuma_revenge.rooms import load_room
     state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
     state = load_room(state.room_id, state, env.consts)
     
@@ -80,12 +80,12 @@ def test_jump_off_ladder():
     assert state.is_falling == 1
 
 def test_transition_landing_overlap():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Start in Room 18 (ROOM_2_2)
-    from jaxatari.games.montezuma2.rooms import load_room
+    from jaxatari.games.montezuma_revenge.rooms import load_room
     state = state.replace(room_id=jnp.array(18, jnp.int32))
     state = load_room(jnp.array(18, jnp.int32), state, env.consts)
     
@@ -107,12 +107,12 @@ def test_transition_landing_overlap():
     assert state.player_y + 19 == 55 # Feet at 55, platform at 56.
 
 def test_jump_descent_overlap():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Room 19 (ROOM_2_3)
-    from jaxatari.games.montezuma2.rooms import load_room
+    from jaxatari.games.montezuma_revenge.rooms import load_room
     state = state.replace(room_id=jnp.array(19, jnp.int32))
     state = load_room(jnp.array(19, jnp.int32), state, env.consts)
     

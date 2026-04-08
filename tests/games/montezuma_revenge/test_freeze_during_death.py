@@ -1,9 +1,9 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezuma2 import JaxMontezuma2
+from jaxatari.games.jax_montezuma_revenge import JaxMontezumaRevenge
 
 def test_enemies_freeze_during_death():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -35,12 +35,12 @@ def test_enemies_freeze_during_death():
     assert state.enemies_x[0] == enemy_x_at_death, f"Enemy moved during death! {enemy_x_at_death} -> {state.enemies_x[0]}"
 
 def test_lasers_freeze_during_death():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Trigger death by laser
-    from jaxatari.games.montezuma2.rooms import load_room
+    from jaxatari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(14, dtype=jnp.int32), state, env.consts)
     state = state.replace(
         player_x=jnp.array(40, dtype=jnp.int32),

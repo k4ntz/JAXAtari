@@ -1,15 +1,15 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezuma2 import JaxMontezuma2
+from jaxatari.games.jax_montezuma_revenge import JaxMontezumaRevenge
 
 def test_laser_inactive_cycle():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Laser is inactive when laser_cycle >= 92
     # Laser room is room 14
-    from jaxatari.games.montezuma2.rooms import load_room
+    from jaxatari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(14, dtype=jnp.int32), state, env.consts)
     
     state = state.replace(
@@ -26,12 +26,12 @@ def test_laser_inactive_cycle():
     assert state.death_timer == 0
 
 def test_ladder_delay():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Room 4, ladder at x=72.
-    from jaxatari.games.montezuma2.rooms import load_room
+    from jaxatari.games.montezuma_revenge.rooms import load_room
     state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
     state = load_room(state.room_id, state, env.consts)
     

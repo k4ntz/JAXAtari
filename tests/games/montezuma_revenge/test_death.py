@@ -1,16 +1,16 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezuma2 import JaxMontezuma2
+from jaxatari.games.jax_montezuma_revenge import JaxMontezumaRevenge
 
 def test_death_by_falling():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Use Room 12 (index 5)
     # Middle platform is at y=26 (feet at 45). Next floor is at 88 (feet at 87).
     # Distance = 87 - 20 + 1 - 26 = 68 - 26 = 42. 42 > 33.
-    from jaxatari.games.montezuma2.rooms import load_room
+    from jaxatari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
     
     initial_lives = state.lives
@@ -36,7 +36,7 @@ def test_death_by_falling():
     assert state.lives == initial_lives - 1
 
 def test_death_by_enemy():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -60,7 +60,7 @@ def test_death_by_enemy():
     assert state.lives == initial_lives - 1
 
 def test_death_by_laser():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -68,7 +68,7 @@ def test_death_by_laser():
     
     # Laser is active when laser_cycle is [0, 92)
     # Laser room is room 14
-    from jaxatari.games.montezuma2.rooms import load_room
+    from jaxatari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(14, dtype=jnp.int32), state, env.consts)
     
     state = state.replace(
@@ -86,7 +86,7 @@ def test_death_by_laser():
     assert state.lives == initial_lives - 1
 
 def test_respawn_after_death():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     

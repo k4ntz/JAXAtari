@@ -1,15 +1,15 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezuma2 import JaxMontezuma2
+from jaxatari.games.jax_montezuma_revenge import JaxMontezumaRevenge
 
 def test_climb_ladder():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Room 4 has a ladder at x=72, top=49, bottom=88
     state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
-    from jaxatari.games.montezuma2.rooms import load_room
+    from jaxatari.games.montezuma_revenge.rooms import load_room
     state = load_room(state.room_id, state, env.consts)
     
     # Place player at the bottom of the ladder
@@ -37,13 +37,13 @@ def test_climb_ladder():
     assert state.player_y == initial_y
     
 def test_climb_rope():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Room 4 has a rope at x=111, top=49, bottom=88
     state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
-    from jaxatari.games.montezuma2.rooms import load_room
+    from jaxatari.games.montezuma_revenge.rooms import load_room
     state = load_room(state.room_id, state, env.consts)
     
     # Place player at the rope
@@ -65,14 +65,14 @@ def test_climb_rope():
     assert state.player_y < initial_y
 
 def test_exit_ladder_onto_platform():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Room 4, ladder at x=72, top=49.
     # Platform is at Y=46..48.
     state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
-    from jaxatari.games.montezuma2.rooms import load_room
+    from jaxatari.games.montezuma_revenge.rooms import load_room
     state = load_room(state.room_id, state, env.consts)
     
     # Place player on ladder near top

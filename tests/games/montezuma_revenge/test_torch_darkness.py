@@ -1,10 +1,10 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezuma2 import JaxMontezuma2
-from jaxatari.games.montezuma2.rooms import load_room
+from jaxatari.games.jax_montezuma_revenge import JaxMontezumaRevenge
+from jaxatari.games.montezuma_revenge.rooms import load_room
 
 def test_torch_darkness_rendering():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -46,7 +46,7 @@ def test_torch_darkness_rendering():
     assert jnp.any(img_dark_lava[53:91, 72:88] != 0)
 
 def test_dark_room_doors_and_platforms_hidden():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -80,7 +80,7 @@ def test_dark_room_doors_and_platforms_hidden():
     assert jnp.any(img_dark_plat[94:98, 32:128] != 0)
 
 def test_dark_room_gem_hidden():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     

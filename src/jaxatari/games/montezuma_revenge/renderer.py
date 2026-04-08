@@ -5,12 +5,12 @@ import os
 
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from .core import Montezuma2Constants, Montezuma2State
+from .core import MontezumaRevengeConstants, MontezumaRevengeState
 
-class Montezuma2Renderer(JAXGameRenderer):
-    def __init__(self, consts: Montezuma2Constants = None, config: render_utils.RendererConfig = None):
+class MontezumaRevengeRenderer(JAXGameRenderer):
+    def __init__(self, consts: MontezumaRevengeConstants = None, config: render_utils.RendererConfig = None):
         super().__init__(consts)
-        self.consts = consts or Montezuma2Constants()
+        self.consts = consts or MontezumaRevengeConstants()
         
         if config is None:
             self.config = render_utils.RendererConfig(
@@ -204,17 +204,17 @@ class Montezuma2Renderer(JAXGameRenderer):
         ])
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_hook_pre_render(self, state: Montezuma2State) -> Montezuma2State:
+    def _render_hook_pre_render(self, state: MontezumaRevengeState) -> MontezumaRevengeState:
         """Hook called at the very beginning of render() to allow state modification."""
         return state
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_hook_post_ui(self, raster: jnp.ndarray, state: Montezuma2State) -> jnp.ndarray:
+    def _render_hook_post_ui(self, raster: jnp.ndarray, state: MontezumaRevengeState) -> jnp.ndarray:
         """Hook called at the very end of render() to allow drawing on top of the final frame."""
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: Montezuma2State) -> jnp.ndarray:
+    def render(self, state: MontezumaRevengeState) -> jnp.ndarray:
         # Apply pre-render hook
         state = self._render_hook_pre_render(state)
 

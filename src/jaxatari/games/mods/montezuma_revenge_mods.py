@@ -1,13 +1,13 @@
 import os
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.montezuma2.montezuma2_mod_plugins import (
+from jaxatari.games.mods.montezuma_revenge.montezuma_revenge_mod_plugins import (
     InfiniteAmuletMod, SuperJumpMod, FastPlayerMod, NoFallDamageMod,
     RevealMapMod, DebugHudMod, NoEnemiesMod, CenterBouncingSkullMod,
     RollingSkullsMod, MovingSnakesMod, JumpingSpidersMod
 )
 
 # --- The Registry ---
-MONTEZUMA2_MOD_REGISTRY = {
+MONTEZUMA_REVENGE_MOD_REGISTRY = {
     "infinite_amulet": InfiniteAmuletMod,
     "super_jump": SuperJumpMod,
     "no_fall_damage": NoFallDamageMod,
@@ -23,17 +23,17 @@ MONTEZUMA2_MOD_REGISTRY = {
     "god_mode": ["infinite_amulet", "no_fall_damage", "no_enemies", "super_jump", "fast_player"]
 }
 
-class Montezuma2EnvMod(JaxAtariModController):
+class MontezumaRevengeEnvMod(JaxAtariModController):
     """
-    Game-specific (Group 1) Mod Controller for Montezuma2.
+    Game-specific (Group 1) Mod Controller for MontezumaRevenge.
     It inherits all logic from JaxAtariModController and defines
     the REGISTRY.
     """
 
-    REGISTRY = MONTEZUMA2_MOD_REGISTRY
+    REGISTRY = MONTEZUMA_REVENGE_MOD_REGISTRY
 
     # Define the path relative to this file (mod sprites fallback)
-    _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "montezuma2", "sprites")
+    _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "montezuma_revenge", "sprites")
 
     def __init__(self,
                  env,

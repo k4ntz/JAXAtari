@@ -1,9 +1,9 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezuma2 import JaxMontezuma2
+from jaxatari.games.jax_montezuma_revenge import JaxMontezumaRevenge
 
 def test_jump_through_dynamic_platform():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
 
@@ -17,7 +17,7 @@ def test_jump_through_dynamic_platform():
         is_falling=jnp.array(0, dtype=jnp.int32),
         is_jumping=jnp.array(0, dtype=jnp.int32)
     )
-    from jaxatari.games.montezuma2.rooms import load_room
+    from jaxatari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(17, dtype=jnp.int32), state, env.consts)
 
     # Ensure we are on platform 2 (y=76)
@@ -55,7 +55,7 @@ def test_jump_through_dynamic_platform():
     assert state.player_y + 19 == 65 # Feet just above platform 1
 
 def test_jump_through_static_platform():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
 
@@ -70,7 +70,7 @@ def test_jump_through_static_platform():
         is_falling=jnp.array(0, dtype=jnp.int32),
         is_jumping=jnp.array(0, dtype=jnp.int32)
     )
-    from jaxatari.games.montezuma2.rooms import load_room
+    from jaxatari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(17, dtype=jnp.int32), state, env.consts)
 
     # Jump UP

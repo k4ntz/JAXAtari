@@ -5,7 +5,7 @@ import os
 
 from jaxatari.environment import ObjectObservation
 
-class Montezuma2Constants(struct.PyTreeNode):
+class MontezumaRevengeConstants(struct.PyTreeNode):
     # Homogeneous Padding Limits
     MAX_ENEMIES_PER_ROOM: int = struct.field(pytree_node=False, default=3)
     MAX_LADDERS_PER_ROOM: int = struct.field(pytree_node=False, default=4)
@@ -59,7 +59,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     AMULET_DURATION: int = struct.field(pytree_node=False, default=660)
 
 @struct.dataclass
-class Montezuma2State:
+class MontezumaRevengeState:
     # Game State
     room_id: jnp.ndarray
     lives: jnp.ndarray
@@ -146,7 +146,7 @@ class Montezuma2State:
     key: jrandom.PRNGKey
 
 @struct.dataclass
-class Montezuma2Observation:
+class MontezumaRevengeObservation:
     player: ObjectObservation
     enemies: ObjectObservation
     items: ObjectObservation
@@ -156,7 +156,7 @@ class Montezuma2Observation:
     platforms: ObjectObservation
 
 @struct.dataclass
-class Montezuma2Info:
+class MontezumaRevengeInfo:
     lives: jnp.ndarray
     room_id: jnp.ndarray
 

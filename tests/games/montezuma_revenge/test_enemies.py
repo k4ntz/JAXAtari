@@ -1,14 +1,14 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezuma2 import JaxMontezuma2
+from jaxatari.games.jax_montezuma_revenge import JaxMontezumaRevenge
 
 def test_enemy_bounce_bounds():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Use Room 4, enemy 0
-    from jaxatari.games.montezuma2.rooms import load_room
+    from jaxatari.games.montezuma_revenge.rooms import load_room
     state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
     state = load_room(state.room_id, state, env.consts)
     
@@ -30,7 +30,7 @@ def test_enemy_bounce_bounds():
     assert state.enemies_direction[0] == -1
 
 def test_jump_over_enemy():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -50,12 +50,12 @@ def test_jump_over_enemy():
     assert state.death_timer == 0
 
 def test_skulls_synchronization():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Use Room 5 (Old 3), which has 2 skulls
-    from jaxatari.games.montezuma2.rooms import load_room
+    from jaxatari.games.montezuma_revenge.rooms import load_room
     state = state.replace(room_id=jnp.array(5, dtype=jnp.int32))
     state = load_room(state.room_id, state, env.consts)
     

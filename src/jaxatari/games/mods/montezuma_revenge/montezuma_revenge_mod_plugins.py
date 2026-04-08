@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from functools import partial
 
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
-from jaxatari.games.montezuma2.core import Montezuma2State
+from jaxatari.games.montezuma_revenge.core import MontezumaRevengeState
 
 # --- Gameplay & Ability Mods ---
 
@@ -12,7 +12,7 @@ class InfiniteAmuletMod(JaxAtariPostStepModPlugin):
     Post-step mod to keep the amulet active forever.
     """
     @partial(jax.jit, static_argnums=(0,))
-    def run(self, prev_state: Montezuma2State, new_state: Montezuma2State):
+    def run(self, prev_state: MontezumaRevengeState, new_state: MontezumaRevengeState):
         return new_state.replace(
             amulet_time=jnp.array(660, dtype=jnp.int32),
             inventory=new_state.inventory.at[3].set(1)
@@ -50,7 +50,7 @@ class RevealMapMod(JaxAtariInternalModPlugin):
     the torch effect during rendering.
     """
     @partial(jax.jit, static_argnums=(0,))
-    def _render_hook_pre_render(self, state: Montezuma2State) -> Montezuma2State:
+    def _render_hook_pre_render(self, state: MontezumaRevengeState) -> MontezumaRevengeState:
         return state.replace(
             inventory=state.inventory.at[2].set(1)
         )
@@ -60,11 +60,11 @@ class DebugHudMod(JaxAtariInternalModPlugin):
     Internal mod to display debug info (Room ID, X, Y) on the HUD.
     """
     @partial(jax.jit, static_argnums=(0,))
-    def _render_hook_post_ui(self, raster: jnp.ndarray, state: Montezuma2State) -> jnp.ndarray:
+    def _render_hook_post_ui(self, raster: jnp.ndarray, state: MontezumaRevengeState) -> jnp.ndarray:
         jr = self._env.renderer.jr
         masks = self._env.renderer.digit_masks
         
-        # In Montezuma2, masks[0] is 'digit_none', masks[1] is '0', etc.
+        # In MontezumaRevenge, masks[0] is 'digit_none', masks[1] is '0', etc.
         # So we add 1 to the digits to get the correct sprite index.
         
         # Room ID
@@ -86,7 +86,7 @@ class NoEnemiesMod(JaxAtariPostStepModPlugin):
     Post-step mod to immediately remove any enemies in the current room.
     """
     @partial(jax.jit, static_argnums=(0,))
-    def run(self, prev_state: Montezuma2State, new_state: Montezuma2State):
+    def run(self, prev_state: MontezumaRevengeState, new_state: MontezumaRevengeState):
         return new_state.replace(
             enemies_active=jnp.zeros_like(new_state.enemies_active)
         )
@@ -98,7 +98,7 @@ class CenterBouncingSkullMod(JaxAtariPostStepModPlugin):
     Only applies if there is exactly one skull of type 1 in the room.
     """
     @partial(jax.jit, static_argnums=(0,))
-    def run(self, prev_state: Montezuma2State, new_state: Montezuma2State):
+    def run(self, prev_state: MontezumaRevengeState, new_state: MontezumaRevengeState):
         is_skull_type_1 = new_state.enemies_type == 1
         num_skulls = jnp.sum(jnp.logical_and(new_state.enemies_active == 1, is_skull_type_1))
         is_single_skull_room = num_skulls == 1
@@ -127,7 +127,7 @@ class RollingSkullsMod(JaxAtariPostStepModPlugin):
     Only applies if there are exactly two skulls of type 1 in the room.
     """
     @partial(jax.jit, static_argnums=(0,))
-    def run(self, prev_state: Montezuma2State, new_state: Montezuma2State):
+    def run(self, prev_state: MontezumaRevengeState, new_state: MontezumaRevengeState):
         is_skull_type_1 = new_state.enemies_type == 1
         num_skulls = jnp.sum(jnp.logical_and(new_state.enemies_active == 1, is_skull_type_1))
         is_double_skull_room = num_skulls == 2
@@ -157,7 +157,7 @@ class RollingSkullsMod(JaxAtariPostStepModPlugin):
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def after_reset(self, obs, state: Montezuma2State):
+    def after_reset(self, obs, state: MontezumaRevengeState):
         is_skull_type_1 = state.enemies_type == 1
         num_skulls = jnp.sum(jnp.logical_and(state.enemies_active == 1, is_skull_type_1))
         is_double_skull_room = num_skulls == 2
@@ -188,7 +188,7 @@ class MovingSnakesMod(JaxAtariPostStepModPlugin):
     They will move on the x axis from 20 to 140.
     """
     @partial(jax.jit, static_argnums=(0,))
-    def run(self, prev_state: Montezuma2State, new_state: Montezuma2State):
+    def run(self, prev_state: MontezumaRevengeState, new_state: MontezumaRevengeState):
         is_snake = new_state.enemies_type == 4
         
         new_enemies_direction = jnp.where(is_snake,
@@ -211,7 +211,7 @@ class MovingSnakesMod(JaxAtariPostStepModPlugin):
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def after_reset(self, obs, state: Montezuma2State):
+    def after_reset(self, obs, state: MontezumaRevengeState):
         is_snake = state.enemies_type == 4
         
         new_enemies_direction = jnp.where(is_snake,
@@ -239,7 +239,7 @@ class JumpingSpidersMod(JaxAtariPostStepModPlugin):
     Post-step mod to make all spiders (type 3) jump (bounce).
     """
     @partial(jax.jit, static_argnums=(0,))
-    def run(self, prev_state: Montezuma2State, new_state: Montezuma2State):
+    def run(self, prev_state: MontezumaRevengeState, new_state: MontezumaRevengeState):
         is_spider = new_state.enemies_type == 3
         
         new_enemies_bouncing = jnp.where(is_spider, 1, new_state.enemies_bouncing)
@@ -249,7 +249,7 @@ class JumpingSpidersMod(JaxAtariPostStepModPlugin):
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def after_reset(self, obs, state: Montezuma2State):
+    def after_reset(self, obs, state: MontezumaRevengeState):
         is_spider = state.enemies_type == 3
         
         new_enemies_bouncing = jnp.where(is_spider, 1, state.enemies_bouncing)

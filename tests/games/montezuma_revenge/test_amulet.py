@@ -1,10 +1,10 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezuma2 import JaxMontezuma2
-from jaxatari.games.montezuma2.rooms import load_room
+from jaxatari.games.jax_montezuma_revenge import JaxMontezumaRevenge
+from jaxatari.games.montezuma_revenge.rooms import load_room
 
 def test_collect_amulet():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -27,7 +27,7 @@ def test_collect_amulet():
     assert reward == 100
 
 def test_amulet_neutralizes_enemies():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -60,7 +60,7 @@ def test_amulet_neutralizes_enemies():
     assert state.amulet_time == 99
 
 def test_amulet_expiration():
-    env = JaxMontezuma2()
+    env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
