@@ -26,6 +26,14 @@ class SuperJumpMod(JaxAtariInternalModPlugin):
         "JUMP_Y_OFFSETS": jnp.array([3, 3, 3, 3, 2, 2, 2, 1, 1, 0, 0, 0, 0, 0, -1, -1, -2, -2, -2, -3, -3, -3, -3], dtype=jnp.int32)
     }
 
+class FastPlayerMod(JaxAtariInternalModPlugin):
+    """
+    Internal mod to increase player speed.
+    """
+    constants_overrides = {
+        "PLAYER_SPEED": 2
+    }
+
 class NoFallDamageMod(JaxAtariInternalModPlugin):
     """
     Internal mod to disable fall damage.
@@ -106,3 +114,128 @@ class CenterBouncingSkullMod(JaxAtariPostStepModPlugin):
             enemies_bouncing=new_enemies_bouncing,
             enemies_direction=new_enemies_direction
         )
+
+class RollingSkullsMod(JaxAtariPostStepModPlugin):
+    """
+    Post-step mod to make the two skulls that usually bump (bounce) roll instead,
+    and slightly augment the space between them.
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: Montezuma2State, new_state: Montezuma2State):
+        is_room_5 = new_state.room_id == 5
+        
+        # We only want to apply the initial position change when entering the room
+        just_entered_room_5 = jnp.logical_and(is_room_5, prev_state.room_id != 5)
+        
+        # Modify enemies in room 5
+        # Index 0: 112 -> 120, Index 1: 95 -> 87 (augmenting space from 17 to 33)
+        new_enemies_x = jnp.where(just_entered_room_5, 
+                                  new_state.enemies_x.at[0].set(120).at[1].set(87), 
+                                  new_state.enemies_x)
+        
+        # Disable bouncing for rolling animation and no vertical jump
+        # This can be applied every step when in room 5 to ensure they stay rolling
+        new_enemies_bouncing = jnp.where(is_room_5, 
+                                         new_state.enemies_bouncing.at[0].set(0).at[1].set(0), 
+                                         new_state.enemies_bouncing)
+        
+        return new_state.replace(
+            enemies_x=new_enemies_x,
+            enemies_bouncing=new_enemies_bouncing
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state: Montezuma2State):
+        is_room_5 = state.room_id == 5
+        
+        new_enemies_x = jnp.where(is_room_5, 
+                                  state.enemies_x.at[0].set(120).at[1].set(87), 
+                                  state.enemies_x)
+        
+        new_enemies_bouncing = jnp.where(is_room_5, 
+                                         state.enemies_bouncing.at[0].set(0).at[1].set(0), 
+                                         state.enemies_bouncing)
+        
+        state = state.replace(
+            enemies_x=new_enemies_x,
+            enemies_bouncing=new_enemies_bouncing
+        )
+        return obs, state
+
+
+class MovingSnakesMod(JaxAtariPostStepModPlugin):
+    """
+    Post-step mod to make snakes move horizontally in all rooms.
+    They will move on the x axis from 20 to 140.
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: Montezuma2State, new_state: Montezuma2State):
+        is_snake = new_state.enemies_type == 4
+        
+        new_enemies_direction = jnp.where(is_snake,
+                                          jnp.where(new_state.enemies_direction == 0, 1, new_state.enemies_direction),
+                                          new_state.enemies_direction)
+        
+        new_eminx = jnp.where(is_snake, 20, new_state.enemies_min_x)
+        new_emaxx = jnp.where(is_snake, 140, new_state.enemies_max_x)
+        
+        # Ensure their X position is strictly within bounds so they don't get stuck bouncing on speed=0 frames
+        new_enemies_x = jnp.where(is_snake, 
+                                  jnp.clip(new_state.enemies_x, 21, 139), 
+                                  new_state.enemies_x)
+
+        return new_state.replace(
+            enemies_direction=new_enemies_direction,
+            enemies_min_x=new_eminx,
+            enemies_max_x=new_emaxx,
+            enemies_x=new_enemies_x
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state: Montezuma2State):
+        is_snake = state.enemies_type == 4
+        
+        new_enemies_direction = jnp.where(is_snake,
+                                          jnp.where(state.enemies_direction == 0, 1, state.enemies_direction),
+                                          state.enemies_direction)
+        
+        new_eminx = jnp.where(is_snake, 20, state.enemies_min_x)
+        new_emaxx = jnp.where(is_snake, 140, state.enemies_max_x)
+
+        new_enemies_x = jnp.where(is_snake, 
+                                  jnp.clip(state.enemies_x, 21, 139), 
+                                  state.enemies_x)
+
+        state = state.replace(
+            enemies_direction=new_enemies_direction,
+            enemies_min_x=new_eminx,
+            enemies_max_x=new_emaxx,
+            enemies_x=new_enemies_x
+        )
+        return obs, state
+
+
+class JumpingSpidersMod(JaxAtariPostStepModPlugin):
+    """
+    Post-step mod to make all spiders (type 3) jump (bounce).
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: Montezuma2State, new_state: Montezuma2State):
+        is_spider = new_state.enemies_type == 3
+        
+        new_enemies_bouncing = jnp.where(is_spider, 1, new_state.enemies_bouncing)
+        
+        return new_state.replace(
+            enemies_bouncing=new_enemies_bouncing
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state: Montezuma2State):
+        is_spider = state.enemies_type == 3
+        
+        new_enemies_bouncing = jnp.where(is_spider, 1, state.enemies_bouncing)
+        
+        state = state.replace(
+            enemies_bouncing=new_enemies_bouncing
+        )
+        return obs, state

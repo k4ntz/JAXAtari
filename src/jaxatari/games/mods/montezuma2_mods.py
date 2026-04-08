@@ -1,8 +1,9 @@
 import os
 from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.montezuma2.montezuma2_mod_plugins import (
-    InfiniteAmuletMod, SuperJumpMod, NoFallDamageMod,
-    RevealMapMod, DebugHudMod, NoEnemiesMod, CenterBouncingSkullMod
+    InfiniteAmuletMod, SuperJumpMod, FastPlayerMod, NoFallDamageMod,
+    RevealMapMod, DebugHudMod, NoEnemiesMod, CenterBouncingSkullMod,
+    RollingSkullsMod, MovingSnakesMod, JumpingSpidersMod
 )
 
 # --- The Registry ---
@@ -14,7 +15,12 @@ MONTEZUMA2_MOD_REGISTRY = {
     "debug_hud": DebugHudMod,
     "no_enemies": NoEnemiesMod,
     "center_bouncing_skull": CenterBouncingSkullMod,
-    "god_mode": ["infinite_amulet", "no_fall_damage", "no_enemies", "super_jump"] # bundle into a modpack
+    "fast_player": FastPlayerMod,
+    "rolling_skulls": RollingSkullsMod,
+    "moving_snakes": MovingSnakesMod,
+    "jumping_spiders": JumpingSpidersMod,
+    "alternative_enemies": ["center_bouncing_skull", "rolling_skulls", "moving_snakes", "jumping_spiders"],
+    "god_mode": ["infinite_amulet", "no_fall_damage", "no_enemies", "super_jump", "fast_player"]
 }
 
 class Montezuma2EnvMod(JaxAtariModController):

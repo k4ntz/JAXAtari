@@ -24,7 +24,7 @@ class Montezuma2Constants(struct.PyTreeNode):
     PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=20)
     INITIAL_PLAYER_X: int = struct.field(pytree_node=False, default=77)
     INITIAL_PLAYER_Y: int = struct.field(pytree_node=False, default=26)
-    INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=12)
+    INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=11)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=1)
     
     # Room Transition Coordinates
