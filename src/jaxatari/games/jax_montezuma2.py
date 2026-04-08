@@ -587,8 +587,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
         raw_new_x = current_x + dx
         transition_left = jnp.logical_and(raw_new_x < 0, jnp.isin(state.room_id, jnp.array([4, 5, 12, 11, 13, 14, 18, 17, 19, 20, 21, 22, 23, 31, 32, 28, 29, 26, 27, 25])))
         transition_right = jnp.logical_and(raw_new_x + self.consts.PLAYER_WIDTH > self.consts.WIDTH, jnp.isin(state.room_id, jnp.array([3, 4, 12, 10, 11, 13, 17, 18, 19, 20, 21, 22, 30, 31, 28, 27, 25, 26, 24])))
-        transition_down = jnp.logical_and(new_y >= 148, jnp.isin(state.room_id, jnp.array([3, 4, 5, 10, 11, 12, 13, 14, 22, 23, 20])))
-        transition_up = jnp.logical_and(new_y <= 2, jnp.isin(state.room_id, jnp.array([11, 12, 13, 18, 19, 20, 21, 22, 30, 31, 28])))
+        transition_down = jnp.logical_and(new_y >= self.consts.ROOM_EXIT_Y_BOTTOM, jnp.isin(state.room_id, jnp.array([3, 4, 5, 10, 11, 12, 13, 14, 22, 23, 20])))
+        transition_up = jnp.logical_and(new_y <= self.consts.ROOM_EXIT_Y_TOP, jnp.isin(state.room_id, jnp.array([11, 12, 13, 18, 19, 20, 21, 22, 30, 31, 28])))
 
         new_x = jnp.clip(raw_new_x, 0, self.consts.WIDTH - self.consts.PLAYER_WIDTH)
         new_left_x = jnp.clip(new_x, 0, self.consts.WIDTH - 1)
@@ -869,8 +869,8 @@ class JaxMontezuma2(JaxEnvironment[Montezuma2State, Montezuma2Observation, Monte
                 global_enemies_active=state_in.global_enemies_active.at[state_in.room_id].set(state_in.enemies_active)
             )
             st = load_room(new_room_id, st, self.consts)
-            new_px = jnp.where(transition_left, 148, jnp.where(transition_right, 4, new_x))
-            temp_py = jnp.where(transition_down, 6, jnp.where(transition_up, 140, new_y))
+            new_px = jnp.where(transition_left, self.consts.ROOM_ENTRY_X_RIGHT, jnp.where(transition_right, self.consts.ROOM_ENTRY_X_LEFT, new_x))
+            temp_py = jnp.where(transition_down, self.consts.ROOM_ENTRY_Y_TOP, jnp.where(transition_up, self.consts.ROOM_ENTRY_Y_BOTTOM, new_y))
 
             # Prevent landing below floor: 
             # If feet are currently inside a floor, push up until they are just above it.

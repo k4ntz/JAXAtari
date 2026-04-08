@@ -26,6 +26,15 @@ class Montezuma2Constants(struct.PyTreeNode):
     INITIAL_PLAYER_Y: int = struct.field(pytree_node=False, default=26)
     INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=10)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=1)
+    
+    # Room Transition Coordinates
+    ROOM_ENTRY_X_LEFT: int = struct.field(pytree_node=False, default=4)
+    ROOM_ENTRY_X_RIGHT: int = struct.field(pytree_node=False, default=148)
+    ROOM_ENTRY_Y_TOP: int = struct.field(pytree_node=False, default=6)
+    ROOM_ENTRY_Y_BOTTOM: int = struct.field(pytree_node=False, default=129)
+    ROOM_EXIT_Y_TOP: int = struct.field(pytree_node=False, default=2)
+    ROOM_EXIT_Y_BOTTOM: int = struct.field(pytree_node=False, default=130)
+    
     JUMP_Y_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([3, 3, 3, 2, 2, 2, 1, 1, 0, 0, 0, 0, -1, -1, -2, -2, -2, -3, -3, -3], dtype=jnp.int32))
     GRAVITY: int = struct.field(pytree_node=False, default=2)
     MODULE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
