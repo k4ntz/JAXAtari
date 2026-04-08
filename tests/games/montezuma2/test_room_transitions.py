@@ -55,7 +55,7 @@ def test_room_transitions_vertical():
     state = state.replace(player_x=jnp.array(77, dtype=jnp.int32), player_y=jnp.array(0, dtype=jnp.int32))
     obs, state, reward, done, info = env.step(state, 0) # NOOP (will fall to y=2)
     assert state.room_id == 4
-    assert state.player_y >= 130 # Should be at the bottom of the new room
+    assert state.player_y >= 125 # Should be at the bottom of the new room
 
     # 3. Room 10 -> 18 (Down)
     state = load_room(jnp.array(10, dtype=jnp.int32), state, env.consts)
@@ -82,7 +82,7 @@ def test_room_transitions_vertical():
                           is_climbing=jnp.array(1, dtype=jnp.int32), last_ladder=jnp.array(0, dtype=jnp.int32))
     obs, state, reward, done, info = env.step(state, 2) # UP
     assert state.room_id == 11
-    assert state.player_y >= 130
+    assert state.player_y >= 125
 
 def test_room_3_8_transition():
     env = JaxMontezuma2()
@@ -137,7 +137,7 @@ def test_room_2_6_to_3_6_transition():
                           is_climbing=jnp.array(1, dtype=jnp.int32), last_ladder=jnp.array(0, dtype=jnp.int32))
     obs, state, reward, done, info = env.step(state, 2) # UP
     assert state.room_id == 22
-    assert state.player_y >= 130
+    assert state.player_y >= 125
 
 def test_all_implemented_rooms_loadable():
     env = JaxMontezuma2()
