@@ -2,6 +2,7 @@
 # Adapted to JaxAtari
 
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppo_atari_envpool_xla_jaxpy
+from jinja2.nativetypes import NativeCodeGenerator
 import os
 import random
 import time
@@ -17,9 +18,9 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import tyro
+import wandb
 from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
-from torch.utils.tensorboard import SummaryWriter
 import jaxatari
 from jaxatari.wrappers import NormalizeObservationWrapper, ObjectCentricWrapper, PixelObsWrapper, AtariWrapper, LogWrapper, FlattenObservationWrapper
 from jaxatari import spaces
@@ -33,12 +34,11 @@ os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.7"
 os.environ["TF_XLA_FLAGS"] = "--xla_gpu_autotune_level=2 --xla_gpu_deterministic_reductions"
 os.environ["TF_CUDNN DETERMINISTIC"] = "1"
 
-
 @dataclass
 class Args:
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
-    seed: int = 42
+    seed: int = 0
     """seed of the experiment"""
     torch_deterministic: bool = True
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
@@ -58,6 +58,10 @@ class Args:
     """how often to evaluate the agent during training (in num. of iterations)"""
     pixel_based: bool = True # If False -> Object-centric observations
     """whether the environment should use pixel-based observations"""
+    native_downscaling: bool = False 
+    """whether to use the native downscaling in PixelObsWrapper"""
+    smooth_image: bool = False
+    """whether to use smooth image filtering during native downscaling"""
     save_model: bool = True
     """whether to save model into the `runs/{run_name}` folder"""
     upload_model: bool = False
@@ -68,12 +72,11 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "pong"
     """the id of the environment"""
-    mods: tuple[str] = ()
+    train_mods: tuple[str] = ()
     """modifications applied during training"""
     eval_mods: tuple[str] = ('lazy_enemy', 'random_enemy')
     """modifications to use for evaluation (if empty, fall back to `mods`)"""
-    # total_timesteps: int = 10_000_000 # so with frameskip=4 -> 40M frames (?)
-    total_timesteps: int = 100_000 # so with frameskip=4 -> 40M frames (?)
+    total_timesteps: int = 10_000_000 # so with frameskip=4 -> 40M frames (?)
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
@@ -115,7 +118,7 @@ class Args:
     """the number of iterations (computed in runtime)"""
 
 
-def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, eval=False):
+def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, native_downscaling=True, smooth_image=True, eval=False):
     def thunk():
         # For training (eval=False), avoid applying multiple potentially conflicting
         # mods at once. In that case, fall back to the base environment.
@@ -146,7 +149,9 @@ def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, eval=False):
                 do_pixel_resize=True,
                 pixel_resize_shape=(84, 84),
                 grayscale=True,
-                use_native_downscaling=True,
+                use_native_downscaling=native_downscaling,
+                smooth_image=smooth_image,
+                # use_native_downscaling=False,
                 frame_stack_size=4,
                 frame_skip=4,
                 max_pooling=True,
@@ -276,22 +281,14 @@ if __name__ == "__main__":
     args.num_iterations = args.total_timesteps // args.batch_size
     run_name = f"{args.env_id}__{args.exp_name}_{'oc' if not args.pixel_based else 'pixel'}__{args.seed}__{int(time.time())}"
     if args.track:
-        import wandb
-
         wandb.init(
             project=args.wandb_project_name,
             entity=args.wandb_entity,
-            sync_tensorboard=True,
             config=vars(args),
             name=run_name,
             monitor_gym=True,
             save_code=True,
         )
-    writer = SummaryWriter(f"runs/{run_name}")
-    writer.add_text(
-        "hyperparameters",
-        "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
-    )
 
     # TRY NOT TO MODIFY: seeding
     random.seed(args.seed)
@@ -301,7 +298,7 @@ if __name__ == "__main__":
     key, obs_sample_key1, obs_sample_key2, obs_sample_key3 = jax.random.split(key, 4)
 
     # env setup
-    env = make_env(args.env_id, args.seed, args.num_envs, list(args.mods), args.pixel_based)()
+    env = make_env(args.env_id, args.seed, args.num_envs, list(args.train_mods), args.pixel_based, args.native_downscaling, args.smooth_image)()
 
     renderer = None
     if args.capture_video:
@@ -492,8 +489,9 @@ if __name__ == "__main__":
         )
         return agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, key
     
-    def eval_and_vid(iteration, global_step):
+    def eval_and_vid(iteration):
         model_path = f"runs/{run_name}/{args.exp_name}_{iteration}.cleanrl_model"
+        os.makedirs(os.path.dirname(model_path), exist_ok=True)
         with open(model_path, "wb") as f:
             f.write(
                 flax.serialization.to_bytes(
@@ -509,14 +507,14 @@ if __name__ == "__main__":
             )
         print(f"model saved to {model_path}")
 
-        # Run base-environment evaluation; per-mod videos are handled separately
-        # in generate_final_video(), where mods are applied one at a time.
         episodic_returns, env_states = evaluate(
             model_path,
             partial(
                 make_env,
-                mods=[],
+                mods=list(args.train_mods),
                 pixel_based=args.pixel_based,
+                native_downscaling=args.native_downscaling,
+                smooth_image=args.smooth_image,
                 eval=True,
             ),
             args.env_id,
@@ -524,29 +522,28 @@ if __name__ == "__main__":
             run_name=f"{run_name}-eval",
             Model=(Network, Actor, Critic) if args.pixel_based else (MLP_Network, Actor, Critic)
         )
-        writer.add_scalar("eval/episodic_return", np.mean(jax.device_get(episodic_returns)), global_step) 
+        wandb.log({"eval/episodic_return": np.mean(jax.device_get(episodic_returns)), "step": iteration})
 
         if args.capture_video: 
             # Instantiate a clean renderer immune to the training env's downscaling
             clean_renderer = jaxatari.make(args.env_id).renderer
             # Mirror the pqn_agent final video behavior: log a video for the
             # current eval environment under a consistent wandb key.
+            # env_state arrays have shape (N,)
             frames = jax.vmap(clean_renderer.render)(env_states)
+            # shape: (N, H, W, C) -> (N, C, H, W)
             frames = jnp.transpose(frames, (0, 3, 1, 2))
             video = wandb.Video(np.array(frames), fps=30, format="mp4")
             wandb.log(
                 {
                     f"eval/video": video,
                 },
-                step=global_step,
+                step=iteration,
             )
             print(f"Video (eval) logged to wandb with {frames.shape[0]} frames.")
 
     def _generate_single_final_video(mods_config, video_label, video_index=0):
         """Generate a single video for the given mod configuration and log it to wandb.
-
-        This mirrors pqn_agent._generate_single_final_video so that rendered videos
-        use the original color, full-resolution frames from the base environment.
         """
         if not args.capture_video:
             return None
@@ -554,7 +551,7 @@ if __name__ == "__main__":
         # Apply wrappers just for the agent's observations, like in pqn_agent.
         fake_env = jaxatari.make(args.env_id)
         renderer_local = fake_env.renderer
-        env = make_env(args.env_id, args.seed, 1, mods_config, args.pixel_based, eval=True)() 
+        env = make_env(args.env_id, args.seed, 1, mods_config, args.pixel_based, args.native_downscaling, args.smooth_image, eval=True)() 
 
         # Reset environment
         rng = jax.random.PRNGKey(args.seed + video_index * 10000)
@@ -603,7 +600,7 @@ if __name__ == "__main__":
                 {
                     f"final_video_seed{args.seed}_{video_label}": video,
                     f"final_return_seed{args.seed}_{video_label}": total_reward,
-                }
+                },
             )
             print(f"Video '{video_label}' logged to wandb.")
 
@@ -625,7 +622,7 @@ if __name__ == "__main__":
         video_configs.append(([], "train"))
 
         # Prefer eval_mods, fall back to mods
-        eval_mods = args.eval_mods if len(args.eval_mods) > 0 else args.mods
+        eval_mods = args.eval_mods if len(args.eval_mods) > 0 else args.train_mods
         if len(eval_mods) > 0:
             mods_list = list(eval_mods)
             for mod in mods_list:
@@ -676,7 +673,7 @@ if __name__ == "__main__":
     for iteration in range(1, args.num_iterations + 1):
         rtpt.step()
         if args.eval_during_train and iteration > 0 and iteration % args.eval_every == 0:
-           eval_and_vid(iteration, global_step) 
+           eval_and_vid(iteration) 
 
         iteration_time_start = time.time()
         agent_state, next_obs, next_done, storage, key, env_state = rollout(
@@ -696,24 +693,21 @@ if __name__ == "__main__":
         # print(f"global_step={global_step}, avg_episodic_return={avg_episodic_return}")
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
-        writer.add_scalar("charts/avg_episodic_return", avg_episodic_return, global_step)
-        writer.add_scalar(
-            "charts/avg_episodic_length", np.mean(jax.device_get(env_state.returned_episode_lengths)), global_step
-        )
-        writer.add_scalar("charts/learning_rate", agent_state.opt_state[1].hyperparams["learning_rate"].item(), global_step)
-        writer.add_scalar("losses/value_loss", v_loss[-1, -1].item(), global_step)
-        writer.add_scalar("losses/policy_loss", pg_loss[-1, -1].item(), global_step)
-        writer.add_scalar("losses/entropy", entropy_loss[-1, -1].item(), global_step)
-        writer.add_scalar("losses/approx_kl", approx_kl[-1, -1].item(), global_step)
-        writer.add_scalar("losses/loss", loss[-1, -1].item(), global_step)
-        # print("SPS:", int(global_step / (time.time() - start_time)))
-        writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
-        writer.add_scalar(
-            "charts/SPS_update", int(args.num_envs * args.num_steps / (time.time() - iteration_time_start)), global_step
-        )
-        writer.add_scalar(
-            "charts/time", time.time() - start_time, global_step
-        )
+        metrics = {
+            "charts/avg_episodic_return": avg_episodic_return,
+            "charts/avg_episodic_length": np.mean(jax.device_get(env_state.returned_episode_lengths)),
+            "charts/learning_rate": agent_state.opt_state[1].hyperparams["learning_rate"].item(),
+            "losses/value_loss": v_loss[-1, -1].item(),
+            "losses/policy_loss": pg_loss[-1, -1].item(),
+            "losses/entropy": entropy_loss[-1, -1].item(),
+            "losses/approx_kl": approx_kl[-1, -1].item(),
+            "losses/loss": loss[-1, -1].item(),
+            "charts/SPS": int(global_step / (time.time() - start_time)),
+            "charts/SPS_update": int(args.num_envs * args.num_steps / (time.time() - iteration_time_start)),
+            "charts/time": time.time() - start_time,
+            "charts/global_step": global_step,
+        }
+        wandb.log(metrics, step=iteration)
     end_time = time.time()
     print("Training done.")
     if compile_time is not None:
@@ -722,7 +716,7 @@ if __name__ == "__main__":
     generate_final_video()
 
     if args.save_model:
-        eval_and_vid(iteration, global_step)
+        eval_and_vid(iteration)
         # if args.upload_model:
         #     from cleanrl_utils.huggingface import push_to_hub
 
@@ -730,4 +724,5 @@ if __name__ == "__main__":
         #     repo_id = f"{args.hf_entity}/{repo_name}" if args.hf_entity else repo_name
         #     push_to_hub(args, episodic_returns, repo_id, "PPO", f"runs/{run_name}", f"videos/{run_name}-eval")
 
-    writer.close()
+    # writer.close()
+    wandb.finish()

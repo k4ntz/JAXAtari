@@ -73,11 +73,6 @@ def apply_native_downscaling(
 
     return False, False
 
-# NOTE: Backwards-compatible alias for existing wrappers
-_apply_native_downscaling_hotswap = apply_native_downscaling
-
-
-
 class AutoDerivedConstants(struct.PyTreeNode):
     def __init_subclass__(cls, **kwargs):
         """Override replace method after Flax's dataclass decorator runs."""

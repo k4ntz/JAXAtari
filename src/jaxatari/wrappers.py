@@ -355,13 +355,15 @@ class PixelObsWrapper(JaxatariWrapper):
     Apply this wrapper after the AtariWrapper!
     """
     # TODO: remove do_pixel_resize and resize whenever a different shape / grayscale is given?
-    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False, use_native_downscaling: bool = False, frame_stack_size: int = 4, frame_skip: int = 4, max_pooling: bool = True, clip_reward: bool = True):
+    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False, use_native_downscaling: bool = False, smooth_image: bool = True, frame_stack_size: int = 4, frame_skip: int = 4, max_pooling: bool = True, clip_reward: bool = True):
         super().__init__(env)
         assert isinstance(env, AtariWrapper), "PixelObsWrapper has to be applied after AtariWrapper"
         self.frame_stack_size = frame_stack_size
         self.frame_skip = frame_skip
         self.max_pooling = max_pooling
         self.clip_reward = clip_reward
+        self.smooth_image = smooth_image
+        self.native_downscaling = False
 
         # Access the Base Environment
         base_env = self._env._env if isinstance(self._env, AtariWrapper) else self._env
@@ -373,6 +375,7 @@ class PixelObsWrapper(JaxatariWrapper):
                 base_env, pixel_resize_shape, grayscale
             )
             self.pixel_resize_shape = pixel_resize_shape
+            self.native_downscaling = True
         else:
             self.do_pixel_resize = do_pixel_resize
             self.pixel_resize_shape = pixel_resize_shape
@@ -408,6 +411,28 @@ class PixelObsWrapper(JaxatariWrapper):
         # applies grayscale if enabled with the same method as for resize
         if self.grayscale:
             image = jnp.dot(image, jnp.array([0.2989, 0.5870, 0.1140]))[..., jnp.newaxis] # numbers for grayscale transformation as in https://en.wikipedia.org/wiki/Luma_(video)
+
+        # Apply gaussian smoothing to natively downscaled images to get similar effect to actual downscaling
+        if self.native_downscaling and self.smooth_image:
+            def gaussian_blur_2d(image, sigma=3):
+                # Create 1D Gaussian
+                size = int(sigma * 3) * 2 + 1
+                x = jnp.linspace(-size // 2, size // 2, size)
+                phi_x = jnp.exp(-0.5 * (x / sigma)**2)
+                phi_x = phi_x / phi_x.sum()
+                
+                # Make it 2D
+                kernel_2d = jnp.outer(phi_x, phi_x)
+                # Reshape to [Out_C, In_C, H, W] -> (1, 1, size, size)
+                kernel_2d = kernel_2d[None, None, :, :]
+                
+                # Apply to image [Batch, Channel, H, W]
+                return jax.lax.conv_general_dilated(
+                    image, kernel_2d, (1, 1), padding='SAME',
+                    dimension_numbers=('NCHW', 'OIHW', 'NCHW')
+                )
+                # add a batch dimension for jim.gaussian_filter
+            image = gaussian_blur_2d(image[None].transpose(0, 3, 1, 2)).squeeze().transpose(1, 2, 0) 
         
         return image.astype(jnp.uint8)
 
@@ -447,9 +472,7 @@ class PixelObsWrapper(JaxatariWrapper):
             latest_image = jnp.maximum(image, prev_image)
         else:
             latest_image = self._env.render(last_env_state)
-        #print("before processing: ", latest_image.shape)
         processed_image = self._preprocess_image(latest_image)
-        #print("after processing: ", processed_image.shape)
         image_stack = jnp.concatenate([state.image_stack[1:], jnp.expand_dims(processed_image, axis=0)], axis=0)
 
         reward = jnp.sum(rewards)
@@ -475,7 +498,6 @@ class PixelObsWrapper(JaxatariWrapper):
             return v[-1]
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
-        #print("image stack: ", image_stack.shape)
         return image_stack, pixel_state, reward, done, info_dict
 
 @struct.dataclass 
