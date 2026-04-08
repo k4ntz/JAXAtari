@@ -95,19 +95,24 @@ class CenterBouncingSkullMod(JaxAtariPostStepModPlugin):
     """
     Post-step mod to make the rolling skull (type 1) jump vertically at the center of the screen.
     Forces its X position to 77, enables bouncing, and removes horizontal direction.
+    Only applies if there is exactly one skull of type 1 in the room.
     """
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state: Montezuma2State, new_state: Montezuma2State):
-        is_rolling_skull = new_state.enemies_type == 1
+        is_skull_type_1 = new_state.enemies_type == 1
+        num_skulls = jnp.sum(jnp.logical_and(new_state.enemies_active == 1, is_skull_type_1))
+        is_single_skull_room = num_skulls == 1
+        
+        is_target = jnp.logical_and(is_single_skull_room, is_skull_type_1)
         
         # Center X is approximately 77 (160 / 2 - 6 / 2)
-        new_enemies_x = jnp.where(is_rolling_skull, 77, new_state.enemies_x)
+        new_enemies_x = jnp.where(is_target, 77, new_state.enemies_x)
         
         # Enable bouncing for vertical jumping
-        new_enemies_bouncing = jnp.where(is_rolling_skull, 1, new_state.enemies_bouncing)
+        new_enemies_bouncing = jnp.where(is_target, 1, new_state.enemies_bouncing)
         
         # Disable horizontal movement
-        new_enemies_direction = jnp.where(is_rolling_skull, 0, new_state.enemies_direction)
+        new_enemies_direction = jnp.where(is_target, 0, new_state.enemies_direction)
         
         return new_state.replace(
             enemies_x=new_enemies_x,
@@ -119,25 +124,32 @@ class RollingSkullsMod(JaxAtariPostStepModPlugin):
     """
     Post-step mod to make the two skulls that usually bump (bounce) roll instead,
     and slightly augment the space between them.
+    Only applies if there are exactly two skulls of type 1 in the room.
     """
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state: Montezuma2State, new_state: Montezuma2State):
-        is_room_5 = new_state.room_id == 5
+        is_skull_type_1 = new_state.enemies_type == 1
+        num_skulls = jnp.sum(jnp.logical_and(new_state.enemies_active == 1, is_skull_type_1))
+        is_double_skull_room = num_skulls == 2
         
-        # We only want to apply the initial position change when entering the room
-        just_entered_room_5 = jnp.logical_and(is_room_5, prev_state.room_id != 5)
+        is_target = jnp.logical_and(is_double_skull_room, is_skull_type_1)
         
-        # Modify enemies in room 5
-        # Index 0: 112 -> 120, Index 1: 95 -> 87 (augmenting space from 17 to 33)
-        new_enemies_x = jnp.where(just_entered_room_5, 
-                                  new_state.enemies_x.at[0].set(120).at[1].set(87), 
-                                  new_state.enemies_x)
+        # Apply initial position change when entering a room with 2 skulls
+        just_entered_room = new_state.room_id != prev_state.room_id
+        should_shift = jnp.logical_and(just_entered_room, is_double_skull_room)
+        
+        # General shift logic: move them further apart by 8 pixels each
+        x0 = new_state.enemies_x[0]
+        x1 = new_state.enemies_x[1]
+        new_x0 = jnp.where(x0 < x1, x0 - 8, x0 + 8)
+        new_x1 = jnp.where(x1 < x0, x1 - 8, x1 + 8)
+        
+        # We assume the skulls are at index 0 and 1 (standard in M2)
+        shifted_x = new_state.enemies_x.at[0].set(new_x0).at[1].set(new_x1)
+        new_enemies_x = jnp.where(should_shift, shifted_x, new_state.enemies_x)
         
         # Disable bouncing for rolling animation and no vertical jump
-        # This can be applied every step when in room 5 to ensure they stay rolling
-        new_enemies_bouncing = jnp.where(is_room_5, 
-                                         new_state.enemies_bouncing.at[0].set(0).at[1].set(0), 
-                                         new_state.enemies_bouncing)
+        new_enemies_bouncing = jnp.where(is_target, 0, new_state.enemies_bouncing)
         
         return new_state.replace(
             enemies_x=new_enemies_x,
@@ -146,15 +158,22 @@ class RollingSkullsMod(JaxAtariPostStepModPlugin):
 
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state: Montezuma2State):
-        is_room_5 = state.room_id == 5
+        is_skull_type_1 = state.enemies_type == 1
+        num_skulls = jnp.sum(jnp.logical_and(state.enemies_active == 1, is_skull_type_1))
+        is_double_skull_room = num_skulls == 2
         
-        new_enemies_x = jnp.where(is_room_5, 
-                                  state.enemies_x.at[0].set(120).at[1].set(87), 
+        is_target = jnp.logical_and(is_double_skull_room, is_skull_type_1)
+        
+        x0 = state.enemies_x[0]
+        x1 = state.enemies_x[1]
+        new_x0 = jnp.where(x0 < x1, x0 - 8, x0 + 8)
+        new_x1 = jnp.where(x1 < x0, x1 - 8, x1 + 8)
+        
+        new_enemies_x = jnp.where(is_double_skull_room, 
+                                  state.enemies_x.at[0].set(new_x0).at[1].set(new_x1), 
                                   state.enemies_x)
         
-        new_enemies_bouncing = jnp.where(is_room_5, 
-                                         state.enemies_bouncing.at[0].set(0).at[1].set(0), 
-                                         state.enemies_bouncing)
+        new_enemies_bouncing = jnp.where(is_target, 0, state.enemies_bouncing)
         
         state = state.replace(
             enemies_x=new_enemies_x,
