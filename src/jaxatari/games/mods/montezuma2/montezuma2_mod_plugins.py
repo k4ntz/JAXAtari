@@ -82,3 +82,27 @@ class NoEnemiesMod(JaxAtariPostStepModPlugin):
         return new_state.replace(
             enemies_active=jnp.zeros_like(new_state.enemies_active)
         )
+
+class CenterBouncingSkullMod(JaxAtariPostStepModPlugin):
+    """
+    Post-step mod to make the rolling skull (type 1) jump vertically at the center of the screen.
+    Forces its X position to 77, enables bouncing, and removes horizontal direction.
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: Montezuma2State, new_state: Montezuma2State):
+        is_rolling_skull = new_state.enemies_type == 1
+        
+        # Center X is approximately 77 (160 / 2 - 6 / 2)
+        new_enemies_x = jnp.where(is_rolling_skull, 77, new_state.enemies_x)
+        
+        # Enable bouncing for vertical jumping
+        new_enemies_bouncing = jnp.where(is_rolling_skull, 1, new_state.enemies_bouncing)
+        
+        # Disable horizontal movement
+        new_enemies_direction = jnp.where(is_rolling_skull, 0, new_state.enemies_direction)
+        
+        return new_state.replace(
+            enemies_x=new_enemies_x,
+            enemies_bouncing=new_enemies_bouncing,
+            enemies_direction=new_enemies_direction
+        )
