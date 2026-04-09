@@ -79,6 +79,7 @@ class AtariWrapper(JaxatariWrapper):
         first_fire: Take FIRE action on reset. Defaults to True.
         noop_max: Max number of no-op actions to take on reset. Defaults to 30.
         full_action_space: Use full action space of 18 actions. Defaults to False (minimal action set).
+        max_frames_per_episode: Maximum number of frames per episode before truncation. Defaults to 108,000 (30 minutes at 60fps).
 
     Note: Typically, this wrapper is followed by PixelObsWrapper, ObjectCentricWrapper or PixelAndObjectCentricWrapper.
     Frame-skipping, max-pooling, frame-stacking and reward clipping are handled in those.
@@ -189,11 +190,11 @@ class AtariWrapper(JaxatariWrapper):
         return obs, AtariState(env_state, wrapper_key, step, prev_action)
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def step(self, state: AtariState, action: Union[int, float]) -> Tuple[chex.Array, AtariState, float, bool, bool, Dict[Any, Any]]:
+    def step(self, state: AtariState, action: int) -> Tuple[chex.Array, AtariState, float, bool, bool, Dict[Any, Any]]:
         step_key, next_state_key = jax.random.split(state.key)
 
         use_sticky_action = jax.random.uniform(step_key, shape=()) < self.sticky_actions
-        new_action = jnp.where(use_sticky_action, state.prev_action, action)
+        new_action = jnp.where(use_sticky_action, state.prev_action, action).item()
         obs, new_env_state, reward, env_done, infos = self._env.step(state.env_state, new_action)
 
         terminated = env_done
@@ -226,14 +227,13 @@ class AtariWrapper(JaxatariWrapper):
 
         truncated = jnp.where(state.step + 1 >= self.max_frames_per_episode, True, False)
 
-        return obs, next_state, reward, terminated, truncated, info_dict
+        return obs, next_state, reward.item(), terminated.item(), truncated.item(), info_dict
 
 
 @struct.dataclass
 class ObjectCentricState:
     atari_state: AtariState
     obs_stack: jax.Array
-
 
 class ObjectCentricWrapper(JaxatariWrapper):
     """
@@ -297,7 +297,7 @@ class ObjectCentricWrapper(JaxatariWrapper):
     def step(
         self,
         state: ObjectCentricState,
-        action: Union[int, float],
+        action: int,
     ) -> Tuple[chex.Array, ObjectCentricState, float, bool, bool, Dict[Any, Any]]:
 
         def body_fn(carry, _):
@@ -317,7 +317,8 @@ class ObjectCentricWrapper(JaxatariWrapper):
         obs_stack = jnp.concatenate([state.obs_stack[1:], jnp.expand_dims(flat_latest_obs, axis=0)], axis=0)
 
         reward = jnp.sum(rewards)
-        reward = jnp.where(self.clip_reward, jnp.sign(reward), reward)
+        if self.clip_reward:
+            reward = jnp.sign(reward)
 
         terminated = terminations.any()
         truncated = truncations.any()
@@ -336,14 +337,13 @@ class ObjectCentricWrapper(JaxatariWrapper):
             return v[-1]
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
-        return obs_stack, oc_state, reward, terminated, truncated, info_dict
+        return obs_stack, oc_state, reward.item(), terminated, truncated, info_dict
 
 
 @struct.dataclass 
 class PixelState:
     atari_state: AtariState
     image_stack: jax.Array
-
 
 class PixelObsWrapper(JaxatariWrapper):
     """
@@ -392,7 +392,7 @@ class PixelObsWrapper(JaxatariWrapper):
         # Stack the single-frame space
         self._observation_space = spaces.stack_space(image_space, self.frame_stack_size)
 
-    def observation_space(self) -> spaces.Box:
+    def observation_space(self) -> spaces.Space:
         """Returns the stacked image space."""
         return self._observation_space
     
@@ -410,23 +410,6 @@ class PixelObsWrapper(JaxatariWrapper):
 
         # Apply gaussian smoothing to natively downscaled images to get similar effect to actual downscaling
         if self.native_downscaling and self.smooth_image:
-            # def gaussian_blur_2d(image, sigma=3):
-            #     # Create 1D Gaussian
-            #     size = int(sigma * 3) * 2 + 1
-            #     x = jnp.linspace(-size // 2, size // 2, size)
-            #     phi_x = jnp.exp(-0.5 * (x / sigma)**2)
-            #     phi_x = phi_x / phi_x.sum()
-                
-            #     # Make it 2D
-            #     kernel_2d = jnp.outer(phi_x, phi_x)
-            #     # Reshape to [Out_C, In_C, H, W] -> (1, 1, size, size)
-            #     kernel_2d = kernel_2d[None, None, :, :]
-                
-            #     # Apply to image [Batch, Channel, H, W]
-            #     return jax.lax.conv_general_dilated(
-            #         image, kernel_2d, (1, 1), padding='SAME',
-            #         dimension_numbers=('NCHW', 'OIHW', 'NCHW'),
-            #     )
             @functools.partial(jax.jit, static_argnames=['sigma'])
             def gaussian_blur_2d(image, sigma=3.0):
                 # image input: [N, C, H, W]
@@ -477,7 +460,7 @@ class PixelObsWrapper(JaxatariWrapper):
     def step(
         self,
         state: PixelState,
-        action: Union[int, float],
+        action: int,
     ) -> Tuple[chex.Array, PixelState, float, bool, bool, Dict[Any, Any]]:
 
         def body_fn(carry, _):
@@ -504,7 +487,8 @@ class PixelObsWrapper(JaxatariWrapper):
         image_stack = jnp.concatenate([state.image_stack[1:], jnp.expand_dims(processed_image, axis=0)], axis=0)
 
         reward = jnp.sum(rewards)
-        reward = jnp.where(self.clip_reward, jnp.sign(reward), reward)
+        if self.clip_reward:
+            reward = jnp.sign(reward)
         terminated = terminations.any()
         truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
@@ -522,7 +506,7 @@ class PixelObsWrapper(JaxatariWrapper):
             return v[-1]
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
-        return image_stack, pixel_state, reward, terminated, truncated, info_dict
+        return image_stack, pixel_state, reward.item(), terminated, truncated, info_dict
 
 @struct.dataclass 
 class PixelAndObjectCentricState:
@@ -647,8 +631,8 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
     def step(
         self,
         state: PixelAndObjectCentricState,
-        action: Union[int, float],
-    ) -> Tuple[chex.Array, PixelAndObjectCentricState, float, bool, bool, Dict[Any, Any]]:
+        action: int,
+    ) -> Tuple[Tuple[chex.Array, chex.Array], PixelAndObjectCentricState, float, bool, bool, Dict[Any, Any]]:
         def body_fn(carry, _):
             atari_state, action = carry
             obs, new_atari_state, reward, terminated, truncated, info = self._env.step(atari_state, action)
@@ -678,7 +662,8 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         image_stack = jnp.concatenate([state.image_stack[1:], jnp.expand_dims(processed_image, axis=0)], axis=0)
 
         reward = jnp.sum(rewards)
-        reward = jnp.where(self.clip_reward, jnp.sign(reward), reward)
+        if self.clip_reward:
+            reward = jnp.sign(reward)
         terminated = terminations.any()
         truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
@@ -696,7 +681,7 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
             return v[-1]
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
-        return (image_stack, obs_stack), pixel_oc_state, reward, terminated, truncated, info_dict
+        return (image_stack, obs_stack), pixel_oc_state, reward.item(), terminated, truncated, info_dict
 
 class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
     """
@@ -724,8 +709,8 @@ class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
     def step(
         self,
         state: PixelAndObjectCentricState,
-        action: Union[int, float],
-    ) -> Tuple[chex.Array, PixelAndObjectCentricState, float, bool, bool, Dict[Any, Any]]:
+        action: int,
+    ) -> Tuple[Tuple[chex.Array, chex.Array], PixelAndObjectCentricState, float, bool, bool, Dict[Any, Any]]:
         def body_fn(carry, _):
             atari_state, action = carry
             obs, new_atari_state, reward, terminated, truncated, info = self._env.step(atari_state, action)
@@ -776,7 +761,7 @@ class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
         new_state = PixelAndObjectCentricState(atari_state, image_stack, obs_stack)
-        return (image_stack, obs_stack), pixel_oc_state, reward, terminated, truncated, info_dict
+        return (image_stack, obs_stack), pixel_oc_state, reward.item(), terminated, truncated, info_dict
 
 
 class FlattenObservationWrapper(JaxatariWrapper):
@@ -832,7 +817,7 @@ class FlattenObservationWrapper(JaxatariWrapper):
     def step(
         self,
         state: Any,
-        action: Union[int, float],
+        action: int,
     ) -> Tuple[chex.ArrayTree, Any, float, bool, bool, Dict[str, Any]]:
         obs, next_state, reward, terminated, truncated, info = self._env.step(state, action)
         processed_obs = self._process_obs(obs)
@@ -937,12 +922,11 @@ class NormalizeObservationWrapper(JaxatariWrapper):
     def step(
         self,
         state: Any,
-        action: Union[int, float],
+        action: int,
     ) -> Tuple[chex.ArrayTree, Any, float, bool, bool, Dict[str, Any]]:
         obs, next_state, reward, terminated, truncated, info = self._env.step(state, action)
         normalized_obs = self._normalize_obs(obs)
         return normalized_obs, next_state, reward, terminated, truncated, info
-
 
 
 @struct.dataclass
@@ -970,7 +954,7 @@ class LogWrapper(JaxatariWrapper):
     def step(
         self,
         state: LogState,
-        action: Union[int, float],
+        action: int,
     ) -> Tuple[chex.Array, LogState, float, bool, bool, Dict[Any, Any]]:
         obs, atari_state, reward, terminated, truncated, info = self._env.step(state.atari_state, action)
         # use env_reward (unclipped/unchanged) for logging when available
@@ -1027,7 +1011,7 @@ class MultiRewardLogWrapper(JaxatariWrapper):
     def step(
         self,
         state: MultiRewardLogState,
-        action: Union[int, float],
+        action: int,
     ) -> Tuple[chex.Array, MultiRewardLogState, float, bool, bool, Dict[Any, Any]]:
         obs, atari_state, reward, terminated, truncated, info = self._env.step(state.atari_state, action)
         new_episode_return_env = state.episode_returns_env + info.get("env_reward", reward)
