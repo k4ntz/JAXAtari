@@ -158,16 +158,16 @@ def make_train(config):
     renderer = mod_env.renderer
 
     def apply_wrappers(env):
-        env = AtariWrapper(env, episodic_life=True, frame_skip=4, frame_stack_size=4, sticky_actions=True, max_pooling=True, clip_reward=True, noop_reset=30, max_episode_length=18000)
+        env = AtariWrapper(env)
         if config.get("OBJECT_CENTRIC", False):
             env = ObjectCentricWrapper(env)
             env = FlattenObservationWrapper(env)
         else:
-            grayscale = config.get("PIXEL_GRAYSCALE", False)
+            grayscale = config.get("PIXEL_GRAYSCALE", True)
             do_resize = config.get("PIXEL_RESIZE", True)
             resize_shape = config.get("PIXEL_RESIZE_SHAPE", [84, 84])
-            use_native_downscaling = config.get("USE_NATIVE_DOWNSCALING", False)
-            env = PixelObsWrapper(env, do_pixel_resize=do_resize, pixel_resize_shape=resize_shape, grayscale=grayscale, use_native_downscaling=use_native_downscaling)
+            use_native_downscaling = config.get("USE_NATIVE_DOWNSCALING", True)
+            env = PixelObsWrapper(env, do_pixel_resize=do_resize, pixel_resize_shape=tuple(resize_shape), grayscale=grayscale, use_native_downscaling=use_native_downscaling)
         
         env = NormalizeObservationWrapper(env)
         env = LogWrapper(env)

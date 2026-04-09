@@ -51,4 +51,7 @@ training = [
   "tensorboard",
   "rtpt>=0.0.4",
   "wandb[media]>=0.24.0",
+  "hydra-core>=1.3.2",
+  "omegaconf>=2.3.0",
+  "safetensors>=0.7.0",
 ]
