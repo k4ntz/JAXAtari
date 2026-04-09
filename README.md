@@ -75,9 +75,13 @@ import jaxatari
 
 # Create base environment
 base_env = jaxatari.make("pong")
-# Apply LazyEnemy modification
-mod_env = jaxatari.modify(base_env, "pong", "LazyEnemyWrapper")
+# pong environment with lazy_enemy mod
+mod_env = jaxatari.make("pong", mods=["lazy_enemy"])
+# you may apply multiple mods simultaneously
+mod_env = jaxatari.make("pong", mods=["lazy_enemy", "shift_enemy"])
 ```
+Developing custom modications is well supported via the JaxAtariModController.
+Feel free to share them by opening a PR.
 
 ### Using Wrappers
 
@@ -99,25 +103,25 @@ from jaxatari.wrappers import (
 base_env = jaxatari.make("pong")
 
 # Apply wrappers for different observation types
-env = AtariWrapper(base_env, frame_stack_size=4, frame_skip=4)
-env = ObjectCentricWrapper(env)  # Returns flattened object features
+atari_env = AtariWrapper(base_env)
+env = ObjectCentricWrapper(atari_env)  # Returns flattened object features
 # OR
-env = PixelObsWrapper(AtariWrapper(base_env))  # Returns pixel observations
+env = PixelObsWrapper(atari_env)  # Returns pixel observations
 # OR
-env = PixelAndObjectCentricWrapper(AtariWrapper(base_env))  # Returns both
+env = PixelAndObjectCentricWrapper(atari_env)  # Returns both
 # OR
-env = FlattenObservationWrapper(ObjectCentricWrapper(AtariWrapper(base_env)))  # Returns flattened observations
+env = FlattenObservationWrapper(ObjectCentricWrapper(atari_env))  # Returns flattened observations
 
 # Add logging wrapper for training
 env = LogWrapper(env)
 ```
 
-### Vectorized Training Example
+### Vectorized Stepping Example
 
 ```python
 import jax
 import jaxatari
-from jaxatari.wrappers import AtariWrapper, ObjectCentricWrapper
+from jaxatari.wrappers import AtariWrapper, ObjectCentricWrapper, FlattenObservationWrapper
 
 # Create environment with wrappers
 base_env = jaxatari.make("pong")
@@ -131,16 +135,16 @@ init_obs, env_state = jax.vmap(env.reset)(reset_keys)
 
 # Take one random step in each env
 action = jax.random.randint(rng, (n_envs,), 0, env.action_space().n)
-new_obs, new_env_state, reward, done, info = jax.vmap(env.step)(env_state, action)
+new_obs, new_env_state, reward, terminated, truncated, info = jax.vmap(env.step)(env_state, action)
 
 # Take 100 steps with scan
 def step_fn(carry, unused):
     _, env_state = carry
-    new_obs, new_env_state, reward, done, info = jax.vmap(env.step)(env_state, action)
-    return (new_obs, new_env_state), (reward, done, info)
+    new_obs, new_env_state, reward, terminated, truncated, info = jax.vmap(env.step)(env_state, action)
+    return (new_obs, new_env_state), (reward, terminated, truncated, info)
 
 carry = (init_obs, env_state)
-_, (rewards, dones, infos) = jax.lax.scan(
+_, (rewards, terminations, truncations, infos) = jax.lax.scan(
     step_fn, carry, None, length=100
 )
 ```
@@ -159,15 +163,7 @@ python3 scripts/play.py -g Pong
 ---
 
 ## Supported Games
-
-| Game     | Supported |
-|----------|-----------|
-| Freeway  |    ✅     |
-| Kangaroo |    ✅     |
-| Pong     |    ✅     |
-| Seaquest |    ✅     |
-
-> More games can be added via the uniform wrapper system.
+Please find a list of currently supported environments and their status in [games_covered](games_covered.md)
 
 ---
 
@@ -175,31 +171,14 @@ python3 scripts/play.py -g Pong
 
 JAXAtari provides several wrappers to customize environment behavior:
 
-- **`AtariWrapper`**: Base wrapper with frame stacking, frame skipping, and sticky actions
+- **`AtariWrapper`**: Base wrapper with atari-specific pre-processing steps. Sane defaults: same as stable_baselines and cleanRL.
 - **`ObjectCentricWrapper`**: Returns flattened object-centric features (2D array: `[frame_stack, features]`)
 - **`PixelObsWrapper`**: Returns pixel observations (4D array: `[frame_stack, height, width, channels]`)
 - **`PixelAndObjectCentricWrapper`**: Returns both pixel and object-centric observations
 - **`FlattenObservationWrapper`**: Flattens any observation structure to a single 1D array
 - **`LogWrapper`**: Tracks episode returns and lengths for training
-- **`MultiRewardLogWrapper`**: Tracks multiple reward components separately
-
-### Wrapper Usage Patterns
-
-```python
-# For pure RL with object-centric features (recommended)
-env = ObjectCentricWrapper(AtariWrapper(jaxatari.make("pong")))
-
-# For computer vision approaches
-env = PixelObsWrapper(AtariWrapper(jaxatari.make("pong")))
-
-# For multi-modal approaches
-env = PixelAndObjectCentricWrapper(AtariWrapper(jaxatari.make("pong")))
-
-# For training with logging
-env = LogWrapper(ObjectCentricWrapper(AtariWrapper(jaxatari.make("pong"))))
-
-# All wrapper combinations can be flattened using the FlattenObservationWrapper
-```
+- **`MultiRewardWrapper`**: Allows evaluating additional rewards.
+- **`MultiRewardLogWrapper`**: Tracks multiple reward components separately. Use in combination with MultiRewardWrapper.
 
 ---
 

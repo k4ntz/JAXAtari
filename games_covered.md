@@ -19,7 +19,7 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | Game                         | Status  | Mods available |
 |------------------------------|---------|----------------|
 | alien                        | 🥈       | 0 |
-| amidar                       | ❌       | 0 |
+| amidar                       | 🥇       | 0 |
 | assault                      | 🥉       | 0 |
 | asterix                      | 🥈       | 0 |
 | asteroids                    | 🥇       | 0 |
