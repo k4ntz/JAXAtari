@@ -75,15 +75,15 @@ class AtariWrapper(JaxatariWrapper):
     Args:
         env: The environment to wrap.
         sticky_actions: Sticky action probability in [0, 1]. Defaults to 0.25.
-        episodic_life: Loss of life -> done. Does not reset the environment. Defaults to True.
+        episodic_life: Loss of life -> terminated. Does not reset the environment. Defaults to True.
         first_fire: Take FIRE action on reset. Defaults to True.
         noop_max: Max number of no-op actions to take on reset. Defaults to 30.
         full_action_space: Use full action space of 18 actions. Defaults to False (minimal action set).
 
     Note: Typically, this wrapper is followed by PixelObsWrapper, ObjectCentricWrapper or PixelAndObjectCentricWrapper.
-    Frame-skipping, max-pooling, frame-stacking and reward clipping are handled in those wrappers as well.
+    Frame-skipping, max-pooling, frame-stacking and reward clipping are handled in those.
     """
-    def __init__(self, env, sticky_actions: float = 0.25, episodic_life: bool = True, first_fire: bool = True, noop_max: int = 30, full_action_space: bool = False):
+    def __init__(self, env, sticky_actions: float = 0.25, episodic_life: bool = True, first_fire: bool = True, noop_max: int = 30, full_action_space: bool = False, max_frames_per_episode: int = 108_000):
         super().__init__(env)
         self._env = env
         self.sticky_actions = float(np.clip(sticky_actions, 0.0, 1.0))
@@ -92,6 +92,7 @@ class AtariWrapper(JaxatariWrapper):
         self.noop_reset = False if noop_max == 0 else True
         self.noop_max = noop_max
         self.full_action_space = full_action_space
+        self.max_frames_per_episode = max_frames_per_episode
 
         # --- 1) HANDLE FULL ACTION SPACE LOGIC ---
         # If requested, swap the environment's (minimal) action set for the full identity set.
@@ -151,13 +152,9 @@ class AtariWrapper(JaxatariWrapper):
                     lambda: self._env.reset(env_key),
                     lambda: (next_obs, next_env_state) 
                 )
-                # # ...but only apply the update if the loop index is less than our dynamic random number.
-                # env_state_out = jax.lax.cond(i < num_noops, lambda: next_env_state, lambda: current_env_state)
-                # obs_out = jax.lax.cond(i < num_noops, lambda: next_obs, lambda: current_obs)
                 return next_obs, next_env_state
 
             # Loop for the static maximum number of no-ops.
-            # final_env_state, final_obs = jax.lax.fori_loop(0, self.noop_max, noop_body_fn, (env_state, obs))
             final_obs, final_env_state = jax.lax.fori_loop(0, num_noops, noop_body_fn, (obs, env_state)) 
             
             # Update the step counter by the dynamic number of no-ops performed.
@@ -192,20 +189,20 @@ class AtariWrapper(JaxatariWrapper):
         return obs, AtariState(env_state, wrapper_key, step, prev_action)
 
     @functools.partial(jax.jit, static_argnums=(0,))
-    def step(self, state: AtariState, action: Union[int, float]) -> Tuple[chex.Array, AtariState, float, bool, Dict[Any, Any]]:
+    def step(self, state: AtariState, action: Union[int, float]) -> Tuple[chex.Array, AtariState, float, bool, bool, Dict[Any, Any]]:
         step_key, next_state_key = jax.random.split(state.key)
 
         use_sticky_action = jax.random.uniform(step_key, shape=()) < self.sticky_actions
-        new_action = jax.lax.cond(use_sticky_action, lambda: state.prev_action, lambda: action)
+        new_action = jnp.where(use_sticky_action, state.prev_action, action)
         obs, new_env_state, reward, env_done, infos = self._env.step(state.env_state, new_action)
 
-        done = env_done
+        terminated = env_done
         if self.episodic_life:
             # If the player has lost a life, we consider the episode done
             if hasattr(state.env_state, "lives"):
-                done = jnp.logical_or(env_done, new_env_state.lives < state.env_state.lives)
+                terminated = jnp.logical_or(terminated, 0 < new_env_state.lives < state.env_state.lives)
             elif hasattr(state.env_state, "lives_lost"):
-                done = jnp.logical_or(env_done, new_env_state.lives_lost > state.env_state.lives_lost)
+                terminated = jnp.logical_or(terminated, new_env_state.lives_lost > state.env_state.lives_lost)
 
         if hasattr(infos, '_asdict'):
             # It's a namedtuple or similar, convert to dict
@@ -227,7 +224,9 @@ class AtariWrapper(JaxatariWrapper):
         # store actual reward in info dict before clipping
         info_dict["env_reward"] = reward
 
-        return obs, next_state, reward, done, info_dict
+        truncated = jnp.where(state.step + 1 >= self.max_frames_per_episode, True, False)
+
+        return obs, next_state, reward, terminated, truncated, info_dict
 
 
 @struct.dataclass
@@ -299,14 +298,14 @@ class ObjectCentricWrapper(JaxatariWrapper):
         self,
         state: ObjectCentricState,
         action: Union[int, float],
-    ) -> Tuple[chex.Array, ObjectCentricState, float, bool, Dict[Any, Any]]:
+    ) -> Tuple[chex.Array, ObjectCentricState, float, bool, bool, Dict[Any, Any]]:
 
         def body_fn(carry, _):
             atari_state, action = carry
-            obs, new_atari_state, reward, done, info = self._env.step(atari_state, action)
-            return (new_atari_state, action), (obs, reward, done, info)
+            obs, new_atari_state, reward, terminated, truncated, info = self._env.step(atari_state, action)
+            return (new_atari_state, action), (obs, reward, terminated, truncated, info)
 
-        (atari_state, _), (obs, rewards, dones, infos) = jax.lax.scan(
+        (atari_state, _), (obs, rewards, terminations, truncations, infos) = jax.lax.scan(
             body_fn,
             (state.atari_state, action),
             None,
@@ -318,13 +317,10 @@ class ObjectCentricWrapper(JaxatariWrapper):
         obs_stack = jnp.concatenate([state.obs_stack[1:], jnp.expand_dims(flat_latest_obs, axis=0)], axis=0)
 
         reward = jnp.sum(rewards)
-        reward = jax.lax.cond(
-            self.clip_reward,
-            lambda r: jnp.sign(r),
-            lambda r: r,
-            reward
-        )
-        done = dones.any()
+        reward = jnp.where(self.clip_reward, jnp.sign(reward), reward)
+
+        terminated = terminations.any()
+        truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
         obs_stack, oc_state = jax.lax.cond(
             infos["env_done"].any(),  # use actual env_done for reset condition, not affected by episodic life
@@ -340,7 +336,7 @@ class ObjectCentricWrapper(JaxatariWrapper):
             return v[-1]
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
-        return obs_stack, oc_state, reward, done, info_dict
+        return obs_stack, oc_state, reward, terminated, truncated, info_dict
 
 
 @struct.dataclass 
@@ -414,25 +410,57 @@ class PixelObsWrapper(JaxatariWrapper):
 
         # Apply gaussian smoothing to natively downscaled images to get similar effect to actual downscaling
         if self.native_downscaling and self.smooth_image:
-            def gaussian_blur_2d(image, sigma=3):
-                # Create 1D Gaussian
-                size = int(sigma * 3) * 2 + 1
-                x = jnp.linspace(-size // 2, size // 2, size)
+            # def gaussian_blur_2d(image, sigma=3):
+            #     # Create 1D Gaussian
+            #     size = int(sigma * 3) * 2 + 1
+            #     x = jnp.linspace(-size // 2, size // 2, size)
+            #     phi_x = jnp.exp(-0.5 * (x / sigma)**2)
+            #     phi_x = phi_x / phi_x.sum()
+                
+            #     # Make it 2D
+            #     kernel_2d = jnp.outer(phi_x, phi_x)
+            #     # Reshape to [Out_C, In_C, H, W] -> (1, 1, size, size)
+            #     kernel_2d = kernel_2d[None, None, :, :]
+                
+            #     # Apply to image [Batch, Channel, H, W]
+            #     return jax.lax.conv_general_dilated(
+            #         image, kernel_2d, (1, 1), padding='SAME',
+            #         dimension_numbers=('NCHW', 'OIHW', 'NCHW'),
+            #     )
+            @functools.partial(jax.jit, static_argnames=['sigma'])
+            def gaussian_blur_2d(image, sigma=3.0):
+                # image input: [N, C, H, W]
+                c = image.shape[1]
+                radius = int(sigma * 3)
+                size = radius * 2 + 1
+                x = jnp.linspace(-radius, radius, size)
                 phi_x = jnp.exp(-0.5 * (x / sigma)**2)
-                phi_x = phi_x / phi_x.sum()
+                phi_x = (phi_x / phi_x.sum()).astype(image.dtype)
+
+                # 1D Kernels for depthwise conv
+                # Horizontal: (C, 1, 1, K)
+                h_kernel = phi_x[None, None, None, :]
+                h_kernel = jnp.tile(h_kernel, (c, 1, 1, 1))
                 
-                # Make it 2D
-                kernel_2d = jnp.outer(phi_x, phi_x)
-                # Reshape to [Out_C, In_C, H, W] -> (1, 1, size, size)
-                kernel_2d = kernel_2d[None, None, :, :]
-                
-                # Apply to image [Batch, Channel, H, W]
-                return jax.lax.conv_general_dilated(
-                    image, kernel_2d, (1, 1), padding='SAME',
+                # Vertical: (C, 1, K, 1)
+                v_kernel = phi_x[None, None, :, None]
+                v_kernel = jnp.tile(v_kernel, (c, 1, 1, 1))
+
+                # Apply Horizontal pass
+                out = jax.lax.conv_general_dilated(
+                    image, h_kernel, (1, 1), padding='SAME',
+                    feature_group_count=c,
                     dimension_numbers=('NCHW', 'OIHW', 'NCHW')
                 )
-                # add a batch dimension for jim.gaussian_filter
-            image = gaussian_blur_2d(image[None].transpose(0, 3, 1, 2)).squeeze().transpose(1, 2, 0) 
+                # Apply Vertical pass
+                out = jax.lax.conv_general_dilated(
+                    out, v_kernel, (1, 1), padding='SAME',
+                    feature_group_count=c,
+                    dimension_numbers=('NCHW', 'OIHW', 'NCHW')
+                )
+                return out
+            image_gauss = gaussian_blur_2d(image[None].transpose(0, 3, 1, 2))
+            image = image_gauss.squeeze().reshape(image.shape)
         
         return image.astype(jnp.uint8)
 
@@ -450,14 +478,14 @@ class PixelObsWrapper(JaxatariWrapper):
         self,
         state: PixelState,
         action: Union[int, float],
-    ) -> Tuple[chex.Array, PixelState, float, bool, Dict[Any, Any]]:
+    ) -> Tuple[chex.Array, PixelState, float, bool, bool, Dict[Any, Any]]:
 
         def body_fn(carry, _):
             atari_state, action = carry
-            _, new_atari_state, reward, done, info = self._env.step(atari_state, action)
-            return (new_atari_state, action), (new_atari_state.env_state, reward, done, info)
+            _, new_atari_state, reward, terminated, truncated, info = self._env.step(atari_state, action)
+            return (new_atari_state, action), (new_atari_state.env_state, reward, terminated, truncated, info)
 
-        (atari_state, _), (env_states, rewards, dones, infos) = jax.lax.scan(
+        (atari_state, _), (env_states, rewards, terminations, truncations, infos) = jax.lax.scan(
             body_fn,
             (state.atari_state, action),
             None,
@@ -476,13 +504,9 @@ class PixelObsWrapper(JaxatariWrapper):
         image_stack = jnp.concatenate([state.image_stack[1:], jnp.expand_dims(processed_image, axis=0)], axis=0)
 
         reward = jnp.sum(rewards)
-        reward = jax.lax.cond(
-            self.clip_reward,
-            lambda r: jnp.sign(r),
-            lambda r: r,
-            reward
-        )
-        done = dones.any()
+        reward = jnp.where(self.clip_reward, jnp.sign(reward), reward)
+        terminated = terminations.any()
+        truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
         image_stack, pixel_state = jax.lax.cond(
             infos["env_done"].any(),  # use actual env_done for reset condition, not affected by episodic life
@@ -498,7 +522,7 @@ class PixelObsWrapper(JaxatariWrapper):
             return v[-1]
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
-        return image_stack, pixel_state, reward, done, info_dict
+        return image_stack, pixel_state, reward, terminated, truncated, info_dict
 
 @struct.dataclass 
 class PixelAndObjectCentricState:
@@ -624,13 +648,13 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         self,
         state: PixelAndObjectCentricState,
         action: Union[int, float],
-    ) -> Tuple[chex.Array, PixelAndObjectCentricState, float, bool, Dict[Any, Any]]:
+    ) -> Tuple[chex.Array, PixelAndObjectCentricState, float, bool, bool, Dict[Any, Any]]:
         def body_fn(carry, _):
             atari_state, action = carry
-            obs, new_atari_state, reward, done, info = self._env.step(atari_state, action)
-            return (new_atari_state, action), (obs, new_atari_state.env_state, reward, done, info)
+            obs, new_atari_state, reward, terminated, truncated, info = self._env.step(atari_state, action)
+            return (new_atari_state, action), (obs, new_atari_state.env_state, reward, terminated, truncated, info)
 
-        (atari_state, _), (obs, env_states, rewards, dones, infos) = jax.lax.scan(
+        (atari_state, _), (obs, env_states, rewards, terminations, truncations, infos) = jax.lax.scan(
             body_fn,
             (state.atari_state, action),
             None,
@@ -654,13 +678,9 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         image_stack = jnp.concatenate([state.image_stack[1:], jnp.expand_dims(processed_image, axis=0)], axis=0)
 
         reward = jnp.sum(rewards)
-        reward = jax.lax.cond(
-            self.clip_reward,
-            lambda r: jnp.sign(r),
-            lambda r: r,
-            reward
-        )
-        done = dones.any()
+        reward = jnp.where(self.clip_reward, jnp.sign(reward), reward)
+        terminated = terminations.any()
+        truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
         (image_stack, obs_stack), pixel_oc_state = jax.lax.cond(
             infos["env_done"].any(),  # use actual env_done for reset condition, not affected by episodic life
@@ -676,8 +696,8 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
             return v[-1]
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
-        return (image_stack, obs_stack), pixel_oc_state, reward, done, info_dict
-    
+        return (image_stack, obs_stack), pixel_oc_state, reward, terminated, truncated, info_dict
+
 class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
     """
     Exactly the same as PixelAndObjectCentricWrapper, but return structured OC-obs instead of flattened array.
@@ -705,13 +725,13 @@ class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
         self,
         state: PixelAndObjectCentricState,
         action: Union[int, float],
-    ) -> Tuple[chex.Array, PixelAndObjectCentricState, float, bool, Dict[Any, Any]]:
+    ) -> Tuple[chex.Array, PixelAndObjectCentricState, float, bool, bool, Dict[Any, Any]]:
         def body_fn(carry, _):
             atari_state, action = carry
-            obs, new_atari_state, reward, done, info = self._env.step(atari_state, action)
-            return (new_atari_state, action), (obs, new_atari_state.env_state, reward, done, info)
+            obs, new_atari_state, reward, terminated, truncated, info = self._env.step(atari_state, action)
+            return (new_atari_state, action), (obs, new_atari_state.env_state, reward, terminated, truncated, info)
 
-        (atari_state, _), (obs, env_states, rewards, dones, infos) = jax.lax.scan(
+        (atari_state, _), (obs, env_states, rewards, terminations, truncations, infos) = jax.lax.scan(
             body_fn,
             (state.atari_state, action),
             None,
@@ -738,7 +758,8 @@ class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
         image_stack = jnp.concatenate([state.image_stack[1:], jnp.expand_dims(processed_image, axis=0)], axis=0)
 
         reward = jnp.sum(rewards)
-        done = dones.any()
+        terminated = terminations.any()
+        truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
         (image_stack, obs_stack), pixel_oc_state = jax.lax.cond(
             infos["env_done"].any(),
@@ -755,7 +776,7 @@ class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
         new_state = PixelAndObjectCentricState(atari_state, image_stack, obs_stack)
-        return (image_stack, obs_stack), pixel_oc_state, reward, done, info_dict
+        return (image_stack, obs_stack), pixel_oc_state, reward, terminated, truncated, info_dict
 
 
 class FlattenObservationWrapper(JaxatariWrapper):
@@ -812,11 +833,11 @@ class FlattenObservationWrapper(JaxatariWrapper):
         self,
         state: Any,
         action: Union[int, float],
-    ) -> Tuple[chex.ArrayTree, Any, float, bool, Dict[str, Any]]:
-        obs, next_state, reward, done, info = self._env.step(state, action)
+    ) -> Tuple[chex.ArrayTree, Any, float, bool, bool, Dict[str, Any]]:
+        obs, next_state, reward, terminated, truncated, info = self._env.step(state, action)
         processed_obs = self._process_obs(obs)
-        return processed_obs, next_state, reward, done, info
-    
+        return processed_obs, next_state, reward, terminated, truncated, info
+
 
 class NormalizeObservationWrapper(JaxatariWrapper):
     """
@@ -917,10 +938,10 @@ class NormalizeObservationWrapper(JaxatariWrapper):
         self,
         state: Any,
         action: Union[int, float],
-    ) -> Tuple[chex.ArrayTree, Any, float, bool, Dict[str, Any]]:
-        obs, next_state, reward, done, info = self._env.step(state, action)
+    ) -> Tuple[chex.ArrayTree, Any, float, bool, bool, Dict[str, Any]]:
+        obs, next_state, reward, terminated, truncated, info = self._env.step(state, action)
         normalized_obs = self._normalize_obs(obs)
-        return normalized_obs, next_state, reward, done, info
+        return normalized_obs, next_state, reward, terminated, truncated, info
 
 
 
@@ -950,14 +971,13 @@ class LogWrapper(JaxatariWrapper):
         self,
         state: LogState,
         action: Union[int, float],
-    ) -> Tuple[chex.Array, LogState, float, bool, Dict[Any, Any]]:
-        obs, atari_state, reward, done, info = self._env.step(state.atari_state, action)
-        actual_done = done
+    ) -> Tuple[chex.Array, LogState, float, bool, bool, Dict[Any, Any]]:
+        obs, atari_state, reward, terminated, truncated, info = self._env.step(state.atari_state, action)
         # use env_reward (unclipped/unchanged) for logging when available
         new_episode_return = state.episode_returns + info.get("env_reward", reward)
         new_episode_length = state.episode_lengths + 1
         # use env_done for logging when available (e.g. to ignore episodic_life)
-        done = info.get("env_done", jnp.bool_(done))
+        done = info.get("env_done", jnp.bool_(terminated))
         state = LogState(
             atari_state=atari_state,
             episode_returns=jnp.where(done, jnp.float32(0), jnp.float32(new_episode_return)),
@@ -972,8 +992,8 @@ class LogWrapper(JaxatariWrapper):
         info["returned_episode_returns"] = state.returned_episode_returns
         info["returned_episode_lengths"] = state.returned_episode_lengths
         info["returned_episode"] = done
-        # Still need to return the actual/wrapped done signal (e.g. affected by episodic life)
-        return obs, state, reward, actual_done, info
+        # Still need to return the actual/wrapped termination signal (affected by episodic life)
+        return obs, state, reward, terminated, truncated, info
 
 @struct.dataclass
 class MultiRewardLogState:
@@ -997,7 +1017,7 @@ class MultiRewardLogWrapper(JaxatariWrapper):
     ) -> Tuple[chex.Array, MultiRewardLogState]:
         obs, atari_state = self._env.reset(key)
         # Dummy step to get info structure 
-        _, _, _, _, dummy_info = self._env.step(atari_state, 0)
+        _, _, _, _, _, dummy_info = self._env.step(atari_state, 0)
         rewards_shape_provider = dummy_info.get("all_rewards", jnp.zeros(1))
         episode_returns_init = jnp.zeros_like(rewards_shape_provider)
         state = MultiRewardLogState(atari_state, 0.0, episode_returns_init, 0, 0.0, episode_returns_init, 0)
@@ -1008,13 +1028,13 @@ class MultiRewardLogWrapper(JaxatariWrapper):
         self,
         state: MultiRewardLogState,
         action: Union[int, float],
-    ) -> Tuple[chex.Array, MultiRewardLogState, float, bool, Dict[Any, Any]]:
-        obs, atari_state, reward, done, info = self._env.step(state.atari_state, action)
+    ) -> Tuple[chex.Array, MultiRewardLogState, float, bool, bool, Dict[Any, Any]]:
+        obs, atari_state, reward, terminated, truncated, info = self._env.step(state.atari_state, action)
         new_episode_return_env = state.episode_returns_env + info.get("env_reward", reward)
         all_rewards_step = info.get("all_rewards", jnp.zeros_like(state.episode_returns))
         new_episode_return = state.episode_returns + all_rewards_step
         new_episode_length = state.episode_lengths + 1
-        done_ = jnp.bool_(done)
+        done_ = info.get("env_done", jnp.bool_(terminated))
         state = MultiRewardLogState(
             atari_state=atari_state,
             episode_returns_env=jnp.where(done_, jnp.float32(0), jnp.float32(new_episode_return_env)),
@@ -1034,5 +1054,5 @@ class MultiRewardLogWrapper(JaxatariWrapper):
         for i, r in enumerate(new_episode_return):
             info[f"returned_episode_returns_{i}"] = state.returned_episode_returns[i]
         info["returned_episode_lengths"] = state.returned_episode_lengths
-        info["returned_episode"] = done
-        return obs, state, reward, done, info
+        info["returned_episode"] = done_
+        return obs, state, reward, terminated, truncated, info

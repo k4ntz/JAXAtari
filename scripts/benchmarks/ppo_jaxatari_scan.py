@@ -8,7 +8,7 @@ import random
 import time
 from dataclasses import dataclass
 from functools import partial
-from turtle import end_fill
+from turtle import end_fill, done
 from typing import Sequence, NamedTuple
 
 import flax
@@ -52,17 +52,17 @@ class Args:
     """the entity (team) of wandb's project"""
     capture_video: bool = True
     """whether to capture videos of the agent performances (check out `videos` folder)"""
-    eval_during_train: bool = False # If this is active, compile and run times will increase!
+    eval_during_train: bool = True # If this is active, compile and run times will increase!
     """whether to evaluate the agent periodically during training"""
     eval_every: int = 1000 #  1000 -> all 1M steps
     """how often to evaluate the agent during training (in num. of iterations)"""
     pixel_based: bool = True # If False -> Object-centric observations
     """whether the environment should use pixel-based observations"""
-    native_downscaling: bool = False 
+    native_downscaling: bool = True 
     """whether to use the native downscaling in PixelObsWrapper"""
     smooth_image: bool = False
     """whether to use smooth image filtering during native downscaling"""
-    save_model: bool = True
+    save_model: bool = False
     """whether to save model into the `runs/{run_name}` folder"""
     upload_model: bool = False
     """whether to upload the saved model to huggingface"""
@@ -74,7 +74,7 @@ class Args:
     """the id of the environment"""
     train_mods: tuple[str] = ()
     """modifications applied during training"""
-    eval_mods: tuple[str] = ('lazy_enemy', 'random_enemy')
+    eval_mods: tuple[str] = ('lazy_enemy',)
     """modifications to use for evaluation (if empty, fall back to `mods`)"""
     total_timesteps: int = 10_000_000 # so with frameskip=4 -> 40M frames (?)
     """total timesteps of the experiments"""
@@ -137,7 +137,7 @@ def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, native_downscali
         env = jaxatari.make(env_id, mods=mods_arg)
         env = AtariWrapper(
                 env,
-                sticky_actions=0.0, 
+                sticky_actions=0.0,
                 episodic_life=not eval, # only active during training 
                 first_fire=True,
                 noop_max=30,
@@ -151,11 +151,10 @@ def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, native_downscali
                 grayscale=True,
                 use_native_downscaling=native_downscaling,
                 smooth_image=smooth_image,
-                # use_native_downscaling=False,
                 frame_stack_size=4,
                 frame_skip=4,
                 max_pooling=True,
-                clip_reward=not eval, # only active during training
+                clip_reward=True, # only active during training
             )
         else:
             env = FlattenObservationWrapper(
@@ -164,7 +163,7 @@ def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, native_downscali
                         env,
                         frame_stack_size=4,
                         frame_skip=4,
-                        clip_reward=not eval, # only active during training
+                        clip_reward=True,
                     )
                 )
             )
@@ -313,7 +312,8 @@ if __name__ == "__main__":
     
     @jax.jit
     def wrapped_step(state, action):
-        next_obs, state, reward, next_done, info = jax.vmap(env.step)(state, action)
+        next_obs, state, reward, terminated, truncated, info = jax.vmap(env.step)(state, action)
+        next_done = jnp.logical_or(terminated, truncated)
         return next_obs.squeeze(), state, reward, next_done, info
 
     vmap_reset = wrapped_reset
@@ -511,7 +511,7 @@ if __name__ == "__main__":
             model_path,
             partial(
                 make_env,
-                mods=list(args.train_mods),
+                mods=list(args.eval_mods),
                 pixel_based=args.pixel_based,
                 native_downscaling=args.native_downscaling,
                 smooth_image=args.smooth_image,
@@ -522,7 +522,7 @@ if __name__ == "__main__":
             run_name=f"{run_name}-eval",
             Model=(Network, Actor, Critic) if args.pixel_based else (MLP_Network, Actor, Critic)
         )
-        wandb.log({"eval/episodic_return": np.mean(jax.device_get(episodic_returns)), "step": iteration})
+        wandb.log({"eval/episodic_return_mod": np.mean(jax.device_get(episodic_returns)), "step": iteration})
 
         if args.capture_video: 
             # Instantiate a clean renderer immune to the training env's downscaling
@@ -562,6 +562,8 @@ if __name__ == "__main__":
         frames = []
         total_reward = 0.0
         max_steps = 5000
+        fire_action_counter = 0
+        from jaxatari.environment import JAXAtariAction
 
         for step in range(max_steps):
             # PPO network expects (B, F, H, W)
@@ -570,9 +572,12 @@ if __name__ == "__main__":
             hidden = network.apply(agent_state.params.network_params, policy_obs)
             logits = actor.apply(agent_state.params.actor_params, hidden)
             action = jnp.argmax(logits, axis=-1)[0]
+            if action == JAXAtariAction.FIRE:
+                fire_action_counter += 1
 
             rng, step_rng = jax.random.split(rng)
-            obs, env_state, reward, done, info = env.step(env_state, action)
+            obs, env_state, reward, terminated, truncated, info = env.step(env_state, action)
+            done = jnp.logical_or(terminated, truncated)
             obs = obs.squeeze()
             total_reward += float(reward)
 
@@ -590,6 +595,7 @@ if __name__ == "__main__":
                 break
 
         print(f"Final video ({video_label}): {len(frames)} frames, total reward: {total_reward:.1f}")
+        print("Number of FIRE actions taken:", fire_action_counter)
 
         if len(frames) > 0:
             frames = np.stack(frames, axis=0)

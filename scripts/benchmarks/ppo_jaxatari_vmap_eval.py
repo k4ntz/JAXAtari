@@ -32,7 +32,8 @@ def evaluate(
     @jax.jit 
     def wrapped_step(state, action):
         """wrappes the step function of the environment to correct the observation shape"""
-        next_obs, next_state, reward, done, info =  env.step(state, action.squeeze())
+        next_obs, next_state, reward, terminated, truncated, info =  env.step(state, action.squeeze())
+        done = jnp.logical_or(terminated, truncated)
         # NNs require shape (B, F, H, W), where B is the batch size and F is the frame stack size
         return next_obs.squeeze()[None, ...], next_state, reward, done, info
 
@@ -74,15 +75,15 @@ def evaluate(
         next_obs, env_state, reward, done, infos = jax.vmap(wrapped_step)(env_state, jnp.array(actions))
         first_states = jax.tree.map(lambda x: x[0], env_state)
         # since the env is eval_env (without reward clipping and episodic life), we can just accumulate the rewards
-        return (next_obs, env_state, keys), (first_states, done, reward) 
+        return (next_obs, env_state, keys), (first_states, done, reward, actions) 
 
     # evaluate eval_episodes concurrently
     reset_keys = jax.random.split(key, eval_episodes)
     next_obs, env_states = jax.vmap(wrapped_reset)(reset_keys)
-    _, (first_states, dones, rewards) = jax.lax.scan(step_fn, (next_obs, env_states, reset_keys), None, length=10_000)
+    _, (first_states, dones, rewards, actions) = jax.lax.scan(step_fn, (next_obs, env_states, reset_keys), None, length=10_000)
 
     print("scanned rewards: ", rewards.shape, jnp.sum(rewards), jnp.mean(rewards))
-    
+
     # obs shape: (time, eval_episodes, 1, H, W)
     first_done = jnp.argmax(dones, axis=0)  # shape: (eval_episodes,)
     # print("first dones: ", first_done)
@@ -95,8 +96,13 @@ def evaluate(
     # masked_rewards = rewards * (1 - mask_after_first_done)
     rewards = rewards * (1 - mask_after_first_done)
     print("filtered rewards: ", rewards.shape, jnp.sum(rewards), jnp.mean(rewards))
-
     episodic_returns = jnp.sum(rewards, axis=0)  # shape: (eval_episodes,)
+
+    # count actions that are JAXAtariAction.FIRE
+    from jaxatari.environment import JAXAtariAction
+    masked_fires = (actions == JAXAtariAction.FIRE).squeeze() * (1 - mask_after_first_done).squeeze()
+    fire_action_count = jnp.sum(masked_fires, axis=0).mean()
+    print("Number of FIRE actions taken: ", fire_action_count)
 
     # first episode video capture
     # states_until_done = first_obs[:first_done[0] + 1, 0]  # shape: (time_until_done, 1, H, W)

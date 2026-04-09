@@ -304,8 +304,10 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: AsterixState, action: int) -> tuple[
+    def step(self, state: AsterixState, action: chex.Array) -> tuple[
         AsterixObservation, AsterixState, float, bool, AsterixInfo]:
+
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         
         player_height = self.consts.player_height
         cooldown_frames = self.consts.cooldown_frames
@@ -737,16 +739,6 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
     def action_space(self) -> spaces.Discrete:
         """Returns the action space for Asterix.
-        Actions are:
-        0: NOOP
-        1: UP
-        2: RIGHT
-        3: LEFT
-        4: DOWN
-        5: UPRIGHT
-        6: UPLEFT
-        7: DOWNRIGHT
-        8: DOWNLEFT
         """
         return spaces.Discrete(len(self.ACTION_SET))
 

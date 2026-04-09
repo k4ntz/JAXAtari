@@ -538,6 +538,11 @@ def detect_collisions(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex
 
 
 class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, AirRaidConstants]):
+    # Minimal ALE action set for Pong:
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.FIRE, Action.RIGHT, Action.LEFT, Action.RIGHTFIRE, Action.LEFTFIRE],
+        dtype=jnp.int32,
+    )
     def __init__(self, consts: AirRaidConstants = None, frameskip: int = 0, reward_funcs: list = None):
         consts = consts or AirRaidConstants()
         super().__init__(consts)
@@ -632,6 +637,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
         Args: state: Current game state, action: Action to take
         Returns: Updated game state, observation, reward, done flag, and info
         """
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))  # Map action index to actual action value
 
         # Update building positions
         new_building_x = state.building_x + AirRaidConstants.BUILDING_VELOCITY
@@ -914,7 +920,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
         )
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(Action.get_all_values()))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         player_space = spaces.get_object_space(n=None, screen_size=(AirRaidConstants.HEIGHT, AirRaidConstants.WIDTH))

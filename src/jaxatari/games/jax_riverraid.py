@@ -211,67 +211,6 @@ class RiverraidObservation:
 # islands can always shrink, if shrank below a threshold it is removed entirely
 # the logic also tests wheter to despawn the island at any point (even when large)
 
-@jax.jit
-def get_action_from_keyboard(state: RiverraidState) -> Action:
-    keys = pygame.key.get_pressed()
-    left = keys[pygame.K_a] or keys[pygame.K_LEFT]
-    right = keys[pygame.K_d] or keys[pygame.K_RIGHT]
-    up = keys[pygame.K_w] or keys[pygame.K_UP]
-    down = keys[pygame.K_s] or keys[pygame.K_DOWN]
-    shooting = keys[pygame.K_SPACE]
-
-    # Diagonale Bewegungen
-    up_right = up and right and not left and not down
-    up_left = up and left and not right and not down
-    down_right = down and right and not left and not up
-    down_left = down and left and not right and not up
-
-    # Einzelne Richtungen
-    up_only = up and not left and not right and not down
-    down_only = down and not left and not right and not up
-    left_only = left and not right and not up and not down
-    right_only = right and not left and not up and not down
-
-    if shooting:
-        if up_right:
-            return Action.UPRIGHTFIRE
-        elif up_left:
-            return Action.UPLEFTFIRE
-        elif down_right:
-            return Action.DOWNRIGHTFIRE
-        elif down_left:
-            return Action.DOWNLEFTFIRE
-        elif up_only:
-            return Action.UPFIRE
-        elif down_only:
-            return Action.DOWNFIRE
-        elif left_only:
-            return Action.LEFTFIRE
-        elif right_only:
-            return Action.RIGHTFIRE
-        else:
-            return Action.FIRE
-    else:
-        if up_right:
-            return Action.UPRIGHT
-        elif up_left:
-            return Action.UPLEFT
-        elif down_right:
-            return Action.DOWNRIGHT
-        elif down_left:
-            return Action.DOWNLEFT
-        elif up_only:
-            return Action.UP
-        elif down_only:
-            return Action.DOWN
-        elif left_only:
-            return Action.LEFT
-        elif right_only:
-            return Action.RIGHT
-        else:
-            return Action.NOOP
-
-
 class JaxRiverraid(JaxEnvironment):
     # Minimal ALE action set for River Raid
     ACTION_SET: jnp.ndarray = jnp.array(
@@ -1683,10 +1622,6 @@ class JaxRiverraid(JaxEnvironment):
                                )
         observation = self._get_observation(state)
         return observation, state
-
-    @partial(jax.jit, static_argnums=(0,))
-    def get_action_space(self):
-        return jnp.array([Action.NOOP, Action.LEFT, Action.RIGHT, Action.FIRE, Action.LEFTFIRE, Action.RIGHTFIRE])
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))

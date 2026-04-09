@@ -211,6 +211,7 @@ class SpaceInvadersInfo:
 class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservation, SpaceInvadersInfo, SpaceInvadersConstants]):
     # Minimal ALE action set for Space Invaders:
     # 0=NOOP, 1=FIRE, 2=RIGHT, 3=LEFT, 4=RIGHTFIRE, 5=LEFTFIRE
+    # Note: Different for multi agent env
     ACTION_SET: jnp.ndarray = jnp.array(
         [Action.NOOP, Action.FIRE, Action.RIGHT, Action.LEFT, Action.RIGHTFIRE, Action.LEFTFIRE],
         dtype=jnp.int32,
