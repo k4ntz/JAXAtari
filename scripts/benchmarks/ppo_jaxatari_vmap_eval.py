@@ -98,12 +98,6 @@ def evaluate(
     print("filtered rewards: ", rewards.shape, jnp.sum(rewards), jnp.mean(rewards))
     episodic_returns = jnp.sum(rewards, axis=0)  # shape: (eval_episodes,)
 
-    # count actions that are JAXAtariAction.FIRE
-    from jaxatari.environment import JAXAtariAction
-    masked_fires = (actions == JAXAtariAction.FIRE).squeeze() * (1 - mask_after_first_done).squeeze()
-    fire_action_count = jnp.sum(masked_fires, axis=0).mean()
-    print("Number of FIRE actions taken: ", fire_action_count)
-
     # first episode video capture
     # states_until_done = first_obs[:first_done[0] + 1, 0]  # shape: (time_until_done, 1, H, W)
     env_states_until_done = jax.tree.map(lambda x: x[:first_done[0] + 1], first_states.atari_state.atari_state.env_state)

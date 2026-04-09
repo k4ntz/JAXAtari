@@ -52,7 +52,7 @@ class Args:
     """the entity (team) of wandb's project"""
     capture_video: bool = True
     """whether to capture videos of the agent performances (check out `videos` folder)"""
-    eval_during_train: bool = True # If this is active, compile and run times will increase!
+    eval_during_train: bool = False # If this is active, compile and run times will increase!
     """whether to evaluate the agent periodically during training"""
     eval_every: int = 1000 #  1000 -> all 1M steps
     """how often to evaluate the agent during training (in num. of iterations)"""
@@ -562,7 +562,6 @@ if __name__ == "__main__":
         frames = []
         total_reward = 0.0
         max_steps = 5000
-        fire_action_counter = 0
         from jaxatari.environment import JAXAtariAction
 
         for step in range(max_steps):
@@ -572,8 +571,6 @@ if __name__ == "__main__":
             hidden = network.apply(agent_state.params.network_params, policy_obs)
             logits = actor.apply(agent_state.params.actor_params, hidden)
             action = jnp.argmax(logits, axis=-1)[0]
-            if action == JAXAtariAction.FIRE:
-                fire_action_counter += 1
 
             rng, step_rng = jax.random.split(rng)
             obs, env_state, reward, terminated, truncated, info = env.step(env_state, action)
@@ -595,7 +592,6 @@ if __name__ == "__main__":
                 break
 
         print(f"Final video ({video_label}): {len(frames)} frames, total reward: {total_reward:.1f}")
-        print("Number of FIRE actions taken:", fire_action_counter)
 
         if len(frames) > 0:
             frames = np.stack(frames, axis=0)

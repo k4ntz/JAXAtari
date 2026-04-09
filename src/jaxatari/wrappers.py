@@ -194,14 +194,15 @@ class AtariWrapper(JaxatariWrapper):
         step_key, next_state_key = jax.random.split(state.key)
 
         use_sticky_action = jax.random.uniform(step_key, shape=()) < self.sticky_actions
-        new_action = jnp.where(use_sticky_action, state.prev_action, action).item()
+        new_action = jnp.where(use_sticky_action, state.prev_action, action)
         obs, new_env_state, reward, env_done, infos = self._env.step(state.env_state, new_action)
 
         terminated = env_done
         if self.episodic_life:
             # If the player has lost a life, we consider the episode done
             if hasattr(state.env_state, "lives"):
-                terminated = jnp.logical_or(terminated, 0 < new_env_state.lives < state.env_state.lives)
+                condition = jnp.logical_and(state.env_state.lives > 0, new_env_state.lives < state.env_state.lives)
+                terminated = jnp.logical_or(terminated, condition)
             elif hasattr(state.env_state, "lives_lost"):
                 terminated = jnp.logical_or(terminated, new_env_state.lives_lost > state.env_state.lives_lost)
 
@@ -227,7 +228,7 @@ class AtariWrapper(JaxatariWrapper):
 
         truncated = jnp.where(state.step + 1 >= self.max_frames_per_episode, True, False)
 
-        return obs, next_state, reward.item(), terminated.item(), truncated.item(), info_dict
+        return obs, next_state, reward, terminated, truncated, info_dict
 
 
 @struct.dataclass
@@ -337,8 +338,61 @@ class ObjectCentricWrapper(JaxatariWrapper):
             return v[-1]
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
-        return obs_stack, oc_state, reward.item(), terminated, truncated, info_dict
+        return obs_stack, oc_state, reward, terminated, truncated, info_dict
 
+
+@functools.partial(jax.jit, static_argnums=(0,))
+def preprocess_image(class_instance: JaxatariWrapper, image: chex.Array) -> chex.Array:
+    """Applies resizing and grayscaling to a single image frame."""
+    image = image.astype(jnp.float32)
+
+    # Has to use a standard Python `if` since jax.lax.cond would fail due to different shapes. This is possible since do_pixel_resize is a static parameter.
+    if class_instance.do_pixel_resize:
+        image = jim.resize(image, (class_instance.pixel_resize_shape[0], class_instance.pixel_resize_shape[1], image.shape[-1]), method='bilinear')
+    
+    # applies grayscale if enabled with the same method as for resize
+    if class_instance.grayscale:
+        image = jnp.dot(image, jnp.array([0.2989, 0.5870, 0.1140]))[..., jnp.newaxis] # numbers for grayscale transformation as in https://en.wikipedia.org/wiki/Luma_(video)
+
+    # Apply gaussian smoothing to natively downscaled images to get similar effect to actual downscaling
+    if class_instance.native_downscaling and class_instance.smooth_image:
+
+        @functools.partial(jax.jit, static_argnames=['sigma'])
+        def gaussian_blur_2d(image, sigma=3.0):
+            # image input: [N, C, H, W]
+            c = image.shape[1]
+            radius = int(sigma * 3)
+            size = radius * 2 + 1
+            x = jnp.linspace(-radius, radius, size)
+            phi_x = jnp.exp(-0.5 * (x / sigma)**2)
+            phi_x = (phi_x / phi_x.sum()).astype(image.dtype)
+
+            # 1D Kernels for depthwise conv
+            # Horizontal: (C, 1, 1, K)
+            h_kernel = phi_x[None, None, None, :]
+            h_kernel = jnp.tile(h_kernel, (c, 1, 1, 1))
+            
+            # Vertical: (C, 1, K, 1)
+            v_kernel = phi_x[None, None, :, None]
+            v_kernel = jnp.tile(v_kernel, (c, 1, 1, 1))
+
+            # Apply Horizontal pass
+            out = jax.lax.conv_general_dilated(
+                image, h_kernel, (1, 1), padding='SAME',
+                feature_group_count=c,
+                dimension_numbers=('NCHW', 'OIHW', 'NCHW')
+            )
+            # Apply Vertical pass
+            out = jax.lax.conv_general_dilated(
+                out, v_kernel, (1, 1), padding='SAME',
+                feature_group_count=c,
+                dimension_numbers=('NCHW', 'OIHW', 'NCHW')
+            )
+            return out
+        image_gauss = gaussian_blur_2d(image[None].transpose(0, 3, 1, 2))
+        image = image_gauss.squeeze().reshape(image.shape)
+    
+    return image.astype(jnp.uint8)
 
 @struct.dataclass 
 class PixelState:
@@ -396,62 +450,12 @@ class PixelObsWrapper(JaxatariWrapper):
         """Returns the stacked image space."""
         return self._observation_space
     
-    def _preprocess_image(self, image: chex.Array) -> chex.Array:
-        """Applies resizing and grayscaling to a single image frame."""
-        image = image.astype(jnp.float32)
-
-        # Has to use a standard Python `if` since jax.lax.cond would fail due to different shapes. This is possible since do_pixel_resize is a static parameter.
-        if self.do_pixel_resize:
-            image = jim.resize(image, (self.pixel_resize_shape[0], self.pixel_resize_shape[1], image.shape[-1]), method='bilinear')
-        
-        # applies grayscale if enabled with the same method as for resize
-        if self.grayscale:
-            image = jnp.dot(image, jnp.array([0.2989, 0.5870, 0.1140]))[..., jnp.newaxis] # numbers for grayscale transformation as in https://en.wikipedia.org/wiki/Luma_(video)
-
-        # Apply gaussian smoothing to natively downscaled images to get similar effect to actual downscaling
-        if self.native_downscaling and self.smooth_image:
-            @functools.partial(jax.jit, static_argnames=['sigma'])
-            def gaussian_blur_2d(image, sigma=3.0):
-                # image input: [N, C, H, W]
-                c = image.shape[1]
-                radius = int(sigma * 3)
-                size = radius * 2 + 1
-                x = jnp.linspace(-radius, radius, size)
-                phi_x = jnp.exp(-0.5 * (x / sigma)**2)
-                phi_x = (phi_x / phi_x.sum()).astype(image.dtype)
-
-                # 1D Kernels for depthwise conv
-                # Horizontal: (C, 1, 1, K)
-                h_kernel = phi_x[None, None, None, :]
-                h_kernel = jnp.tile(h_kernel, (c, 1, 1, 1))
-                
-                # Vertical: (C, 1, K, 1)
-                v_kernel = phi_x[None, None, :, None]
-                v_kernel = jnp.tile(v_kernel, (c, 1, 1, 1))
-
-                # Apply Horizontal pass
-                out = jax.lax.conv_general_dilated(
-                    image, h_kernel, (1, 1), padding='SAME',
-                    feature_group_count=c,
-                    dimension_numbers=('NCHW', 'OIHW', 'NCHW')
-                )
-                # Apply Vertical pass
-                out = jax.lax.conv_general_dilated(
-                    out, v_kernel, (1, 1), padding='SAME',
-                    feature_group_count=c,
-                    dimension_numbers=('NCHW', 'OIHW', 'NCHW')
-                )
-                return out
-            image_gauss = gaussian_blur_2d(image[None].transpose(0, 3, 1, 2))
-            image = image_gauss.squeeze().reshape(image.shape)
-        
-        return image.astype(jnp.uint8)
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey) -> Tuple[chex.Array, PixelState]:
         _, atari_state = self._env.reset(key)
         image = self._env.render(atari_state.env_state)
-        processed_image = self._preprocess_image(image)
+        processed_image = preprocess_image(self, image)
 
         image_stack = jnp.stack([processed_image] * self.frame_stack_size)
         return image_stack, PixelState(atari_state, image_stack)
@@ -483,7 +487,7 @@ class PixelObsWrapper(JaxatariWrapper):
             latest_image = jnp.maximum(image, prev_image)
         else:
             latest_image = self._env.render(last_env_state)
-        processed_image = self._preprocess_image(latest_image)
+        processed_image = preprocess_image(self, latest_image)
         image_stack = jnp.concatenate([state.image_stack[1:], jnp.expand_dims(processed_image, axis=0)], axis=0)
 
         reward = jnp.sum(rewards)
@@ -506,7 +510,7 @@ class PixelObsWrapper(JaxatariWrapper):
             return v[-1]
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
-        return image_stack, pixel_state, reward.item(), terminated, truncated, info_dict
+        return image_stack, pixel_state, reward, terminated, truncated, info_dict
 
 @struct.dataclass 
 class PixelAndObjectCentricState:
@@ -520,7 +524,7 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
     Apply this wrapper after the AtariWrapper!
     """
     
-    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False, use_native_downscaling: bool = False, frame_stack_size: int = 4, frame_skip: int = 4, max_pooling: bool = True, clip_reward: bool = True):
+    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False, use_native_downscaling: bool = False, smooth_image: bool = False, frame_stack_size: int = 4, frame_skip: int = 4, max_pooling: bool = True, clip_reward: bool = True):
         super().__init__(env)
         assert isinstance(env, AtariWrapper), "PixelAndObjectCentricWrapper must be applied after AtariWrapper"
         self.frame_stack_size = frame_stack_size
@@ -593,20 +597,6 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         """Returns a Tuple space containing stacked image and object spaces."""
         return self._observation_space
     
-    def _preprocess_image(self, image: chex.Array) -> chex.Array:
-        """Applies resizing and grayscaling to a single image frame."""
-        image = image.astype(jnp.float32)
-
-        # Has to use a standard Python `if` since jax.lax.cond would fail due to different shapes. This is possible since do_pixel_resize is a static parameter.
-        if self.do_pixel_resize:
-            image = jim.resize(image, (self.pixel_resize_shape[0], self.pixel_resize_shape[1], image.shape[-1]), method='bilinear')
-        
-        # applies grayscale if enabled with the same method as for resize
-        if self.grayscale:
-            image = jnp.dot(image, jnp.array([0.2989, 0.5870, 0.1140]))[..., jnp.newaxis] # numbers for grayscale transformation as in https://en.wikipedia.org/wiki/Luma_(video)
-        
-        return image.astype(jnp.uint8)
-    
     @functools.partial(jax.jit, static_argnums=(0,))
     def _flatten_single_obs(self, obs):
         """Flatten a single object-centric observation using ravel_pytree."""
@@ -621,7 +611,7 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         obs_stack = jnp.stack([flat_obs] * self.frame_stack_size)
 
         image = self._env.render(atari_state.env_state)
-        processed_image = self._preprocess_image(image)
+        processed_image = preprocess_image(self, image)
         image_stack = jnp.stack([processed_image] * self.frame_stack_size)
 
         new_state = PixelAndObjectCentricState(atari_state, image_stack, obs_stack)
@@ -658,7 +648,7 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         else:
             latest_image = self._env.render(last_env_state)
 
-        processed_image = self._preprocess_image(latest_image)
+        processed_image = preprocess_image(self, latest_image)
         image_stack = jnp.concatenate([state.image_stack[1:], jnp.expand_dims(processed_image, axis=0)], axis=0)
 
         reward = jnp.sum(rewards)
@@ -681,7 +671,7 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
             return v[-1]
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
-        return (image_stack, obs_stack), pixel_oc_state, reward.item(), terminated, truncated, info_dict
+        return (image_stack, obs_stack), pixel_oc_state, reward, terminated, truncated, info_dict
 
 class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
     """
@@ -694,7 +684,7 @@ class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
     ) -> Tuple[Tuple[chex.Array, Any], PixelAndObjectCentricState]:
         obs, atari_state = self._env.reset(key)
         image = self._env.render(atari_state.env_state)
-        processed_image = self._preprocess_image(image)
+        processed_image = preprocess_image(self, image)
         image_stack = jnp.stack([processed_image] * self.frame_stack_size)
 
         obs_stack = jax.tree.map(
@@ -739,7 +729,7 @@ class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
         else:
             latest_image = self._env.render(last_env_state)
 
-        processed_image = self._preprocess_image(latest_image)
+        processed_image = preprocess_image(self, latest_image)
         image_stack = jnp.concatenate([state.image_stack[1:], jnp.expand_dims(processed_image, axis=0)], axis=0)
 
         reward = jnp.sum(rewards)
@@ -761,7 +751,7 @@ class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
         new_state = PixelAndObjectCentricState(atari_state, image_stack, obs_stack)
-        return (image_stack, obs_stack), pixel_oc_state, reward.item(), terminated, truncated, info_dict
+        return (image_stack, obs_stack), pixel_oc_state, reward, terminated, truncated, info_dict
 
 
 class FlattenObservationWrapper(JaxatariWrapper):

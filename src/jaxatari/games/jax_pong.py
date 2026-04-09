@@ -95,7 +95,7 @@ class PongInfo(struct.PyTreeNode):
 
 class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants]):
     # Minimal ALE action set for Pong:
-    # Attention! For multiplayer, it's instead: [Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN],
+    # NOTE: for multiplayer, it's instead: [Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN],
     ACTION_SET: jnp.ndarray = jnp.array(
         [Action.NOOP, Action.FIRE, Action.RIGHT, Action.LEFT, Action.RIGHTFIRE, Action.LEFTFIRE],
         dtype=jnp.int32,
@@ -107,8 +107,8 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
         self.renderer = PongRenderer(self.consts)
 
     def _player_step(self, state: PongState, action: chex.Array) -> PongState:
-        up = (action == Action.UP)
-        down = (action == Action.DOWN)
+        up = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
+        down = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
 
         # 1. Determine Analog Target Speed
         target_speed = jax.lax.cond(
@@ -243,7 +243,10 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
 
         boost_triggered = jnp.logical_and(
             player_paddle_hit,
-            (action == Action.FIRE),
+            jnp.logical_or(
+                jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE),
+                action == Action.FIRE,
+            ),
         )
         player_max_hit = jnp.logical_and(
             player_paddle_hit,
