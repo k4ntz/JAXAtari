@@ -1,6 +1,6 @@
 import os
 from functools import partial
-from typing import Tuple, NamedTuple
+from typing import Tuple, NamedTuple, Optional
 import chex
 import jax
 from jax import tree_util
@@ -92,9 +92,13 @@ class FrostbiteConstants(struct.PyTreeNode):
     # Colors
     COLOR_ICE_WHITE: int = struct.field(pytree_node=False, default=0x0E)
     COLOR_ICE_BLUE: int = struct.field(pytree_node=False, default=0x98)
-    
-    # Igloo constants
-    IGLOO_X: int = struct.field(pytree_node=False, default=154)  # X position of igloo (far right side of screen)
+
+    # RGB Overrides for mods (if set, overrides the actual rendered color of the ice blocks)
+    RGB_ICE_WHITE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_ICE_BLUE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+
+    # Igloo constants    IGLOO_X: int = struct.field(pytree_node=False, default=154)  # X position of igloo (far right side of screen)
+    IGLOO_X: int = struct.field(pytree_node=False, default=154)
     IGLOO_Y: int = struct.field(pytree_node=False, default=44)   # Y position at top of Bailey's head when on shore
     
     # Game Constants
@@ -1210,6 +1214,11 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         return obs, state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
+    def _check_jump_intent(self, state: FrostbiteState, action: jnp.ndarray, moving_up: jnp.ndarray, moving_down: jnp.ndarray):
+        """Check if the user intends to jump. Continuous jumping is allowed."""
+        return moving_up, moving_down
+
+    @partial(jax.jit, static_argnums=(0,))
     def step(self, state: FrostbiteState, action: int):
         # Translate agent action index to ALE console action
         atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
@@ -1405,6 +1414,38 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         new_number_of_fish_eaten = jnp.where(level_reset_complete, jnp.int32(0), state.number_of_fish_eaten)
         new_fish_alive_mask = jnp.where(level_reset_complete, jnp.zeros(4, dtype=jnp.int32), state.fish_alive_mask)
 
+        # Reset bear to initial position on level completion
+        new_polar_grizzly_x = jnp.where(
+            level_reset_complete,
+            self.consts.INIT_POLAR_GRIZZLY_HORIZ_POS,
+            state.polar_grizzly_x
+        )
+        new_polar_grizzly_frac = jnp.where(
+            level_reset_complete,
+            0,
+            state.polar_grizzly_frac_accumulator
+        )
+        new_polar_grizzly_direction = jnp.where(
+            level_reset_complete,
+            1,
+            state.polar_grizzly_direction
+        )
+        new_polar_grizzly_animation_idx = jnp.where(
+            level_reset_complete,
+            7,
+            state.polar_grizzly_animation_idx
+        )
+        new_bailey_grizzly_collision_timer = jnp.where(
+            level_reset_complete,
+            0,
+            state.bailey_grizzly_collision_timer
+        )
+        new_bailey_grizzly_collision_value = jnp.where(
+            level_reset_complete,
+            0,
+            state.bailey_grizzly_collision_value
+        )
+
         next_state = state.replace(
             frame_delay=new_delay,
             building_igloo_idx=new_building_idx,
@@ -1439,7 +1480,13 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             obstacle_speed_whole=new_obstacle_speed_whole,
             obstacle_speed_frac=new_obstacle_speed_frac,
             number_of_fish_eaten=new_number_of_fish_eaten,
-            fish_alive_mask=new_fish_alive_mask
+            fish_alive_mask=new_fish_alive_mask,
+            polar_grizzly_x=new_polar_grizzly_x,
+            polar_grizzly_frac_accumulator=new_polar_grizzly_frac,
+            polar_grizzly_direction=new_polar_grizzly_direction,
+            polar_grizzly_animation_idx=new_polar_grizzly_animation_idx,
+            bailey_grizzly_collision_timer=new_bailey_grizzly_collision_timer,
+            bailey_grizzly_collision_value=new_bailey_grizzly_collision_value
         )
 
         # Spawn 4 new obstacles when level resets
@@ -1572,16 +1619,15 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         at_igloo_x = jnp.abs(state.bailey_x - 123) <= 1
         should_jump_for_igloo = is_entering_igloo & at_igloo_x
 
-        # Edge detection for jump inputs (prevent holding)
-        was_not_pressing_up = (state.last_action != Action.UP) & (state.last_action != Action.UPLEFT) & (state.last_action != Action.UPRIGHT)
-        was_not_pressing_down = (state.last_action != Action.DOWN) & (state.last_action != Action.DOWNLEFT) & (state.last_action != Action.DOWNRIGHT)
+        # Determine jump intent using the refactored method
+        intent_jump_up, intent_jump_down = self._check_jump_intent(state, action, moving_up, moving_down)
 
         # Determine if Bailey can initiate a jump
         # Up jump: allowed from ice (not shore) or for igloo entry
         # Bear chase disables all jumping
-        can_jump_up = (((moving_up & was_not_pressing_up) | (should_jump_for_igloo & (state.bailey_y > 6))) &
+        can_jump_up = ((intent_jump_up | (should_jump_for_igloo & (state.bailey_y > 6))) &
                        can_start_jump & ((state.bailey_y > self.consts.YMIN_BAILEY) | should_jump_for_igloo)) & ~being_chased_by_bear
-        can_jump_down = (moving_down & was_not_pressing_down) & can_start_jump & \
+        can_jump_down = intent_jump_down & can_start_jump & \
                         (state.bailey_y < self.consts.YMAX_BAILEY) & ~is_entering_igloo & ~being_chased_by_bear
 
         # Set jump index: 31 for up jump, 15 for down jump
@@ -2248,6 +2294,16 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             0,
             state.polar_grizzly_frac_accumulator
         )
+        new_polar_grizzly_direction = jnp.where(
+            should_respawn,
+            1,
+            state.polar_grizzly_direction
+        )
+        new_polar_grizzly_animation_idx = jnp.where(
+            should_respawn,
+            7,
+            state.polar_grizzly_animation_idx
+        )
         # Clear bear collision state on respawn
         new_bailey_grizzly_collision_timer = jnp.where(
             should_respawn,
@@ -2365,6 +2421,8 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             obstacle_active=new_obstacle_active,
             polar_grizzly_x=new_polar_grizzly_x,
             polar_grizzly_frac_accumulator=new_polar_grizzly_frac,
+            polar_grizzly_direction=new_polar_grizzly_direction,
+            polar_grizzly_animation_idx=new_polar_grizzly_animation_idx,
             bailey_grizzly_collision_timer=new_bailey_grizzly_collision_timer,
             bailey_grizzly_collision_value=new_bailey_grizzly_collision_value
         )
@@ -3016,6 +3074,53 @@ class FrostbiteRenderer(JAXGameRenderer):
         # Ice (Blue)
         ice_wide_blue = self._apply_ice_color(ice_wide_white, is_blue=True)
         ice_narrow_blue = self._apply_ice_color(ice_narrow_white, is_blue=True)
+
+        # Apply custom RGB colors if set by mods
+        if self.consts.RGB_ICE_WHITE is not None:
+            r, g, b = self.consts.RGB_ICE_WHITE
+            ice_wide_white = jnp.where(
+                ice_wide_white[..., 3:4] > 0,
+                jnp.concatenate([
+                    jnp.full_like(ice_wide_white[..., 0:1], r),
+                    jnp.full_like(ice_wide_white[..., 1:2], g),
+                    jnp.full_like(ice_wide_white[..., 2:3], b),
+                    ice_wide_white[..., 3:4]
+                ], axis=-1),
+                ice_wide_white
+            ).astype(ice_wide_white.dtype)
+            ice_narrow_white = jnp.where(
+                ice_narrow_white[..., 3:4] > 0,
+                jnp.concatenate([
+                    jnp.full_like(ice_narrow_white[..., 0:1], r),
+                    jnp.full_like(ice_narrow_white[..., 1:2], g),
+                    jnp.full_like(ice_narrow_white[..., 2:3], b),
+                    ice_narrow_white[..., 3:4]
+                ], axis=-1),
+                ice_narrow_white
+            ).astype(ice_narrow_white.dtype)
+
+        if self.consts.RGB_ICE_BLUE is not None:
+            r, g, b = self.consts.RGB_ICE_BLUE
+            ice_wide_blue = jnp.where(
+                ice_wide_blue[..., 3:4] > 0,
+                jnp.concatenate([
+                    jnp.full_like(ice_wide_blue[..., 0:1], r),
+                    jnp.full_like(ice_wide_blue[..., 1:2], g),
+                    jnp.full_like(ice_wide_blue[..., 2:3], b),
+                    ice_wide_blue[..., 3:4]
+                ], axis=-1),
+                ice_wide_blue
+            ).astype(ice_wide_blue.dtype)
+            ice_narrow_blue = jnp.where(
+                ice_narrow_blue[..., 3:4] > 0,
+                jnp.concatenate([
+                    jnp.full_like(ice_narrow_blue[..., 0:1], r),
+                    jnp.full_like(ice_narrow_blue[..., 1:2], g),
+                    jnp.full_like(ice_narrow_blue[..., 2:3], b),
+                    ice_narrow_blue[..., 3:4]
+                ], axis=-1),
+                ice_narrow_blue
+            ).astype(ice_narrow_blue.dtype)
         
         # Bear (Lightened for Night)
         bear_0_light = self._lighten_bear(bear_0)

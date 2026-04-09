@@ -457,6 +457,24 @@ class ReplaceChildWithMonkeyMod(JaxAtariInternalModPlugin):
 
 # Multiple Plugins to change bell to a fire (bundled into *modpack* in the kangaroo_mods.py file)
 
+class ReplaceFruitWithCoin(JaxAtariInternalModPlugin):
+    asset_overrides = {
+        "fruit": {
+            'name': 'fruit',
+            'type': 'group',
+            'files': ['coin.npy', 'coin2.npy', 'coin3.npy', 'coin4.npy']
+        }
+    }
+    
+class ReplaceFruitWithDiamond(JaxAtariInternalModPlugin):
+    asset_overrides = {
+        "fruit": {
+            'name': 'fruit',
+            'type': 'group',
+            'files': ['diamond.npy', 'ruby.npy', 'emerald.npy', 'amethyst.npy']
+        }
+    }
+
 class ReplaceCoconutWithFireball(JaxAtariInternalModPlugin):
     asset_overrides = {
         "coconut": {
@@ -469,6 +487,7 @@ class ReplaceCoconutWithFireball(JaxAtariInternalModPlugin):
         "THROWN_COCONUT_WIDTH": 16,
         "THROWN_COCONUT_HEIGHT": 12,
     }
+
 
 class ReplaceCoconutWithWasp(JaxAtariInternalModPlugin):
     asset_overrides = {
