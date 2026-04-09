@@ -263,7 +263,8 @@ def make_train(config):
                 eps = jnp.full(config["NUM_ENVS"], eps_scheduler(train_state.n_updates))
                 new_action = jax.vmap(eps_greedy_exploration)(_rngs, q_vals, eps)
 
-                new_obs, new_env_state, reward, new_done, info = jax.vmap(env.step)(env_state, new_action)
+                new_obs, new_env_state, reward, new_termination, new_truncation, info = jax.vmap(env.step)(env_state, new_action)
+                new_done = jnp.logical_or(new_termination, new_truncation)
 
                 transition = Transition(
                     obs=last_obs,
@@ -467,9 +468,10 @@ def make_train(config):
                     jax.random.split(_rng, config["TEST_NUM_ENVS"]), q_vals, eps
                 )
                 if mod:
-                    new_obs, new_env_state, reward, done, info = jax.vmap(mod_env.step)(env_state, action)
+                    new_obs, new_env_state, reward, terminated, truncated, info = jax.vmap(mod_env.step)(env_state, action)
                 else:
-                    new_obs, new_env_state, reward, done, info = jax.vmap(env.step)(env_state, action)
+                    new_obs, new_env_state, reward, terminated, truncated, info = jax.vmap(env.step)(env_state, action)
+                done = jnp.logical_or(terminated, truncated)
                 env_state_vid = jax.tree.map(lambda x: x[0], new_env_state)
                 dones_vid = jax.tree.map(lambda x: x[0], done)
                 return (new_env_state, new_obs, rng), (info, env_state_vid, dones_vid)
@@ -596,7 +598,8 @@ def _generate_single_final_video(
 
         # Step environment
         rng, step_rng = jax.random.split(rng)
-        obs, env_state, reward, done, info = env.step(env_state, action)
+        obs, env_state, reward, terminated, truncated, info = env.step(env_state, action)
+        done = jnp.logical_or(terminated, truncated)
         total_reward += float(reward)
 
         # Render frame (get state for rendering)
