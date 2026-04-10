@@ -7,7 +7,8 @@ from jaxatari.games.mods.kangaroo.kangaroo_mod_plugins import (
     LethalFlameMod, SpawnOnSecondFloorMod, FlameTrapMod, CenterLaddersMod, InvertLaddersMod,
     FirstLevelOnlyMod, SecondLevelOnlyMod, ThirdLevelOnlyMod, FourLaddersMod, ReplaceCoconutWithFireball,
     ReplaceCoconutWithHoneyBee, ReplaceCoconutWithWasp, ReplaceMonkeyWithChickenMod, ReplaceMonkeyWithDragonMod,
-    ReplaceMonkeyWithDangerSignMod, ReplaceMonkeyWithPolarbearMod, ReplaceMonkeyWithSnakeMod, ReplaceBellWithDangerSignMod
+    ReplaceMonkeyWithDangerSignMod, ReplaceMonkeyWithPolarbearMod, ReplaceMonkeyWithSnakeMod, ReplaceBellWithDangerSignMod, 
+    ReplaceFruitWithCoin, ReplaceFruitWithDiamond
 )
 
 # --- 3. The Registry ---
@@ -55,6 +56,8 @@ KANGAROO_MOD_REGISTRY = {
     "first_level_only": FirstLevelOnlyMod,
     "second_level_only": SecondLevelOnlyMod,
     "third_level_only": ThirdLevelOnlyMod,
+    "collectable_coins": ReplaceFruitWithCoin,
+    "collectable_diamonds": ReplaceFruitWithDiamond,
     
 }
 
