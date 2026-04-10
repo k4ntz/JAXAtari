@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from functools import partial
 
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
-from jaxatari.games.jax_bankheist import BankHeistState
+from jaxatari.games.jax_bankheist import JaxBankHeist, BankHeistState
 
 
 class RandomBankSpawnsMod(JaxAtariInternalModPlugin):
@@ -71,7 +71,6 @@ class TwoPoliceCarsMod(JaxAtariInternalModPlugin):
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey):
-        from jaxatari.games.jax_bankheist import JaxBankHeist
         obs, state = JaxBankHeist.reset(self._env, key)
         
         key1, key2 = jax.random.split(state.random_key)
@@ -94,7 +93,6 @@ class TwoPoliceCarsMod(JaxAtariInternalModPlugin):
 
     @partial(jax.jit, static_argnums=(0,))
     def map_transition(self, state: BankHeistState) -> BankHeistState:
-        from jaxatari.games.jax_bankheist import JaxBankHeist
         # Multiply bank_heists by 3 to compensate for fewer banks for gas refill and bonus
         modified_state = state.replace(bank_heists=state.bank_heists * 3)
         state = JaxBankHeist.map_transition(self._env, modified_state)
@@ -129,12 +127,17 @@ class TwoPoliceCarsMod(JaxAtariInternalModPlugin):
         new_pending_spawns = state.pending_police_spawns.at[bank_hit_index].set(120)
         new_pending_bank_indices = state.pending_police_bank_indices.at[bank_hit_index].set(bank_hit_index)
         
+        # Capture robbery position for score display
+        robbery_position = state.bank_positions.position[bank_hit_index]
+        new_pending_spawn_positions = state.pending_police_spawn_positions.at[bank_hit_index].set(robbery_position)
+
         new_money = state.money + self._env.consts.BASE_BANK_ROBBERY_REWARD
         
         return state.replace(
             bank_positions=new_banks,
             pending_police_spawns=new_pending_spawns,
             pending_police_bank_indices=new_pending_bank_indices,
+            pending_police_spawn_positions=new_pending_spawn_positions,
             pending_police_scores=new_pending_scores,
             bank_heists=new_bank_heists,
             money=new_money
@@ -156,15 +159,16 @@ class TwoPoliceCarsMod(JaxAtariInternalModPlugin):
                 new_pending_spawns = state_inner.pending_police_spawns.at[i].set(-1)
                 new_pending_indices = state_inner.pending_police_bank_indices.at[i].set(-1)
                 new_pending_scores = state_inner.pending_police_scores.at[i].set(-1)
-                
+                new_pending_positions = state_inner.pending_police_spawn_positions.at[i].set(jnp.array([-1, -1]))
+
                 return state_inner.replace(
                     bank_positions=new_banks,
                     pending_police_spawns=new_pending_spawns,
                     pending_police_bank_indices=new_pending_indices,
                     pending_police_scores=new_pending_scores,
+                    pending_police_spawn_positions=new_pending_positions,
                     random_key=key
-                )
-            
+                )            
             ready_to_spawn = current_state.pending_police_spawns[i] == 0
             return jax.lax.cond(ready_to_spawn, spawn_bank_instead, lambda s: s, current_state)
             
@@ -172,7 +176,6 @@ class TwoPoliceCarsMod(JaxAtariInternalModPlugin):
 
     @partial(jax.jit, static_argnums=(0,))
     def timer_step(self, state: BankHeistState, step_random_key: chex.PRNGKey) -> BankHeistState:
-        from jaxatari.games.jax_bankheist import JaxBankHeist
         just_hit_0 = (state.bank_spawn_timers == 1)
         
         new_state = JaxBankHeist.timer_step(self._env, state, step_random_key)
@@ -203,9 +206,7 @@ class RandomCityMod(JaxAtariInternalModPlugin):
     Randomizes which city is entered next.
     """
     @partial(jax.jit, static_argnums=(0,))
-    def map_transition(self, state: BankHeistState) -> BankHeistState:
-        from jaxatari.games.jax_bankheist import JaxBankHeist
-        
+    def map_transition(self, state: BankHeistState) -> BankHeistState:        
         # Call the original map_transition to handle level progression and difficulty
         new_state = JaxBankHeist.map_transition(self._env, state)
         
@@ -216,9 +217,13 @@ class RandomCityMod(JaxAtariInternalModPlugin):
         new_map_collision = jax.lax.dynamic_index_in_dim(self._env.city_collision_maps, random_map_id, axis=0, keepdims=False)
         new_spawn_points = jax.lax.dynamic_index_in_dim(self._env.city_spawns, random_map_id, axis=0, keepdims=False)
         
+        # Load banks for the random map
+        new_state = JaxBankHeist.load_city_state(self._env, new_state, random_map_id)
+        
         return new_state.replace(
             map_collision=new_map_collision,
             spawn_points=new_spawn_points,
+            map_id=random_map_id,
             random_key=key
         )
 
@@ -228,17 +233,36 @@ class RevisitCityMod(JaxAtariPostStepModPlugin):
     Allows the player to go back to the previous city by going through the left edge portal.
     """
     @partial(jax.jit, static_argnums=(0,))
-    def run(self, prev_state: BankHeistState, new_state: BankHeistState) -> BankHeistState:
-        from jaxatari.games.jax_bankheist import JaxBankHeist
-        
+    def run(self, prev_state: BankHeistState, new_state: BankHeistState) -> BankHeistState:        
         # Detect if the player wrapped around from the left edge to the right edge
         went_left_portal = (prev_state.player.position[0] <= 30) & (new_state.player.position[0] >= 120) & (prev_state.level > 0)
         
         def transition_back(s):
-            # To go back a level, we temporarily subtract 2 from the level before triggering map_transition
+            # 1. Save current city state before it might get reset by map_transition
+            saved_city_states = self._env.save_city_state(
+                s.city_states, s.map_id, 
+                s.bank_positions, s.bank_spawn_timers, 
+                s.bank_spawn_indices, s.bank_heists
+            )
+
+            # 2. To go back a level, we temporarily subtract 2 from the level before triggering map_transition
             # Since map_transition adds 1, it results in level - 1
             temp_state = s.replace(level=s.level - 2)
-            return JaxBankHeist.map_transition(self._env, temp_state)
+            state_after = JaxBankHeist.map_transition(self._env, temp_state)
+            
+            # 3. Restore the city states and the specific city state we just loaded
+            # because map_transition might have reset them if (s.level - 1) % 8 == 0
+            new_map_id = (s.level - 1) % 8
+            preservation_state = s.replace(city_states=saved_city_states)
+            loaded_state = self._env.load_city_state(preservation_state, new_map_id)
+            
+            return state_after.replace(
+                bank_positions=loaded_state.bank_positions,
+                bank_spawn_timers=loaded_state.bank_spawn_timers,
+                bank_heists=loaded_state.bank_heists,
+                bank_spawn_indices=loaded_state.bank_spawn_indices,
+                city_states=saved_city_states
+            )
             
         return jax.lax.cond(went_left_portal, transition_back, lambda s: s, new_state)
 
