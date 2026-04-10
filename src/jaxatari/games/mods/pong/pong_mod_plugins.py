@@ -111,3 +111,9 @@ class ShiftEnemyMod(JaxAtariInternalModPlugin):
     constants_overrides = {
         "ENEMY_X": 20,
     }
+
+
+class NoFireMod(JaxAtariInternalModPlugin):
+    attribute_overrides = {
+        "ACTION_SET": jnp.array([Action.NOOP, Action.RIGHT, Action.LEFT], dtype=jnp.int32),
+    }
