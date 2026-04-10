@@ -8,7 +8,7 @@ dependencies = [
     "absl-py>=2.3",
     "ale-py>=0.11.1",
     "chex>=0.1.87",
-    "flax>=0.10.6",
+    "flax",
     "gymnasium>=1.2.0",
     "gymnax>=0.0.8",
     "jax",

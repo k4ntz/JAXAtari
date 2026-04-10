@@ -1,3 +1,4 @@
+from PIL.Image import new
 import os
 from functools import partial
 from typing import NamedTuple, Tuple, Dict, Any, Optional, Sequence, Callable
@@ -1494,25 +1495,19 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObservation, TennisInfo, Te
             state.ball_state.bounces
         )
 
-        # update the scores and start pause of game
-        after_score_update_game_state = jax.lax.cond(
-            jnp.logical_or(
-                jnp.logical_and(  # If player is top field and ball is bottom field the player scores
-                    state.ball_state.ball_y >= self.consts.GAME_MIDDLE,
-                    state.player_state.player_field == 1
-                ),
-                jnp.logical_and(  # If player is bottom field and ball is top field the player scores
-                    state.ball_state.ball_y <= self.consts.GAME_MIDDLE,
-                    state.player_state.player_field == -1
-                )
-            ),
-            lambda _: GameState(jnp.array(True), jnp.array(self.consts.PAUSE_DURATION), state.game_state.player_score + 1,
-                                state.game_state.enemy_score, state.game_state.player_game_score,
-                                state.game_state.enemy_game_score, state.game_state.is_finished),
-            lambda _: GameState(jnp.array(True), jnp.array(self.consts.PAUSE_DURATION), state.game_state.player_score,
-                                state.game_state.enemy_score + 1, state.game_state.player_game_score,
-                                state.game_state.enemy_game_score, state.game_state.is_finished),
-            None
+        # Use the last hitter as point winner when the ball has bounced out the rally.
+        # This avoids side-mapping mistakes when player/enemy fields swap.
+        player_scored = state.ball_state.last_hit == self.consts.PLAYER_CONST
+        enemy_scored = state.ball_state.last_hit == self.consts.ENEMY_CONST
+
+        after_score_update_game_state = GameState(
+            jnp.array(True),
+            jnp.array(self.consts.PAUSE_DURATION),
+            state.game_state.player_score + player_scored.astype(state.game_state.player_score.dtype),
+            state.game_state.enemy_score + enemy_scored.astype(state.game_state.enemy_score.dtype),
+            state.game_state.player_game_score,
+            state.game_state.enemy_game_score,
+            state.game_state.is_finished,
         )
 
         # Check if a set has ended and if the game has ended
@@ -2333,7 +2328,11 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObservation, TennisInfo, Te
         )
 
     def _get_reward(self, previous_state: TennisState, state: TennisState) -> float:
-        return 0.0
+        new_player_score = state.game_state.player_score - previous_state.game_state.player_score 
+        new_enemy_score = state.game_state.enemy_score - previous_state.game_state.enemy_score
+        reward = new_player_score - new_enemy_score
+        jax.debug.print("Reward: {}", reward)
+        return reward 
 
     def _get_done(self, state: TennisState) -> bool:
         return state.game_state.is_finished
@@ -2428,8 +2427,8 @@ class TennisRenderer(JAXGameRenderer):
         self.PLAYER_RACKET_STACK = self.SHAPE_MASKS['racket_anim']
         self.ENEMY_RACKET_STACK = vmap_swap(self.PLAYER_RACKET_STACK)
         
-        self.PLAYER_DIGITS_STACK = self.SHAPE_MASKS['digits']
-        self.ENEMY_DIGITS_STACK = vmap_swap(self.PLAYER_DIGITS_STACK)
+        self.ENEMY_DIGITS_STACK = self.SHAPE_MASKS['digits']
+        self.PLAYER_DIGITS_STACK = vmap_swap(self.ENEMY_DIGITS_STACK)
         
         self.PLAYER_UI_A = self.SHAPE_MASKS['ui_a']
         self.ENEMY_UI_A = swap_colors(self.PLAYER_UI_A)
@@ -2456,10 +2455,10 @@ class TennisRenderer(JAXGameRenderer):
             player_digit_stack = self.PLAYER_DIGITS_STACK
             enemy_digit_stack = self.ENEMY_DIGITS_STACK
             r = self._render_number_centered(r, state.game_state.player_game_score, 
-                                             (self.consts.FRAME_WIDTH // 4) * 3, 2, 
+                                             self.consts.FRAME_WIDTH // 4, 2, 
                                              player_digit_stack)
             r = self._render_number_centered(r, state.game_state.enemy_game_score,
-                                             self.consts.FRAME_WIDTH // 4, 2,
+                                             (self.consts.FRAME_WIDTH)*3 // 4, 2,
                                              enemy_digit_stack)
             return r
         def render_current_score(r):
@@ -2487,8 +2486,8 @@ class TennisRenderer(JAXGameRenderer):
                 enum = tennis_scores[eid]
                 player_digit_stack = self.PLAYER_DIGITS_STACK
                 enemy_digit_stack = self.ENEMY_DIGITS_STACK
-                r_out = self._render_number_centered(r_in, pnum, (self.consts.FRAME_WIDTH // 4) * 3, 2, player_digit_stack)
-                r_out = self._render_number_centered(r_out, enum, self.consts.FRAME_WIDTH // 4, 2, enemy_digit_stack)
+                r_out = self._render_number_centered(r_in, pnum, (self.consts.FRAME_WIDTH // 4), 2, player_digit_stack)
+                r_out = self._render_number_centered(r_out, enum, (self.consts.FRAME_WIDTH // 4)*3, 2, enemy_digit_stack)
                 return r_out
             return jax.lax.cond(deuce_like, render_deuce, render_regular, r)
         return jax.lax.cond(
