@@ -24,7 +24,7 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | asterix                      | 🥈       | 0 |
 | asteroids                    | 🥇       | 0 |
 | atlantis                     | 🥇       | 0 |
-| bank_heist                   | 🥉       | 0 |
+| bank_heist                   | 🥉       | 8 |
 | battle_zone                  | 🥉       | 0 |
 | beam_rider                   | ❌       | 0 |
 | berzerk                      | 🥈       | 0 |
