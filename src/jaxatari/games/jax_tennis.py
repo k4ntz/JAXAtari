@@ -2331,7 +2331,6 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObservation, TennisInfo, Te
         new_player_score = state.game_state.player_score - previous_state.game_state.player_score 
         new_enemy_score = state.game_state.enemy_score - previous_state.game_state.enemy_score
         reward = new_player_score - new_enemy_score
-        jax.debug.print("Reward: {}", reward)
         return reward 
 
     def _get_done(self, state: TennisState) -> bool:
