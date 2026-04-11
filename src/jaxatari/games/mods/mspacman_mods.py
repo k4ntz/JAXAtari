@@ -9,7 +9,8 @@ from jaxatari.games.mods.mspacman.mspacman_mod_plugins import (
     SetMaze4Mod,
     Only1GhostMod,
     Only2GhostMod,
-    Only3GhostMod
+    Only3GhostMod,
+    RandomGhostNavigationMod
 )
 
 class MsPacmanEnvMod(JaxAtariModController):
@@ -26,6 +27,7 @@ class MsPacmanEnvMod(JaxAtariModController):
         "only_1_ghost": Only1GhostMod,
         "only_2_ghost": Only2GhostMod,
         "only_3_ghost": Only3GhostMod,
+        "random_ghost_navigation": RandomGhostNavigationMod,
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "mspacman", "sprites")

@@ -293,3 +293,30 @@ class Only3GhostMod(JaxAtariPostStepModPlugin):
         new_timers = jnp.where(is_inactive, jnp.array(9999, dtype=jnp.float16), ghosts.timers)
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
         return state._replace(ghosts=new_ghosts)
+
+
+class RandomGhostNavigationMod(JaxAtariPostStepModPlugin):
+    """
+    Mod that randomizes the navigation of all ghosts by forcing them into RANDOM mode
+    whenever they would normally be in CHASE or SCATTER mode.
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        new_state = self._randomize_ghosts(state)
+        new_obs = JaxPacman.get_observation(new_state)
+        return new_obs, new_state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state, new_state):
+        return self._randomize_ghosts(new_state)
+
+    def _randomize_ghosts(self, state):
+        ghosts = state.ghosts
+        # Force CHASE (1) and SCATTER (2) to RANDOM (0)
+        new_modes = jnp.where(
+            (ghosts.modes == GhostMode.CHASE.value) | (ghosts.modes == GhostMode.SCATTER.value),
+            GhostMode.RANDOM.value,
+            ghosts.modes
+        )
+        new_ghosts = ghosts._replace(modes=new_modes)
+        return state._replace(ghosts=new_ghosts)
