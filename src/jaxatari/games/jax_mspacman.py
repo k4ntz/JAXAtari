@@ -614,7 +614,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, MsPac
                         (
                             start_chase_no_reverse, # 0: RANDOM
                             start_scatter,          # 1: CHASE
-                            start_chase_reverse,    # 2: SCATTER
+                            start_chase_offset,     # 2: SCATTER
                             start_blinking,         # 3: FRIGHTENED
                             start_chase_no_reverse, # 4: BLINKING
                             start_returned,         # 5: RETURNING
@@ -671,19 +671,19 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, MsPac
             scaled_offset = jnp.round(MAX_SCATTER_OFFSET * OFFSET_SCALE)
             return (
                 jnp.array(GhostMode.SCATTER, dtype=jnp.uint8),
-                jnp.array(reverse_action(action), dtype=jnp.uint8),
+                jnp.array(action, dtype=jnp.uint8),
                 jnp.array(SCATTER_DURATION + (jax.random.randint(common_key, (), -scaled_offset, scaled_offset) / OFFSET_SCALE), dtype=jnp.float16),
-                True
+                False
             )
         
-        def start_chase_reverse(action, step_count): # succeeds scatter mode
+        def start_chase_offset(action, step_count): # succeeds scatter mode
             OFFSET_SCALE = 10.0
             scaled_offset = jnp.round(MAX_CHASE_OFFSET * OFFSET_SCALE)
             return (
                 jnp.array(GhostMode.CHASE, dtype=jnp.uint8),
-                jnp.array(reverse_action(action), dtype=jnp.uint8),
+                jnp.array(action, dtype=jnp.uint8),
                 jnp.array(CHASE_DURATION + (jax.random.randint(common_key, (), -scaled_offset, scaled_offset) / OFFSET_SCALE), dtype=jnp.float16),
-                True
+                False
             )
         
         def start_chase_no_reverse(action, step_count): # succeeds blinking, returning and random mode
