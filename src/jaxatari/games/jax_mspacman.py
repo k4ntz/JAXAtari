@@ -1062,8 +1062,8 @@ class MsPacmanRenderer(JAXGameRenderer):
         # Original masks are LEFT looking
         left = self.SHAPE_MASKS['pacman']
         right = jnp.flip(left, axis=2)
-        up = jnp.rot90(right, k=3, axes=(1, 2))
-        down = jnp.rot90(right, k=1, axes=(1, 2))
+        up = jnp.rot90(right, k=1, axes=(1, 2))
+        down = jnp.rot90(right, k=3, axes=(1, 2))
         self.PACMAN_MASKS = jnp.stack([up, right, left, down])
         
         # Pre-calculate backgrounds for all 4 mazes
