@@ -642,7 +642,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, MsPac
             )
 
         def choose_direction(type, mode, action, position, key):
-            allowed = get_allowed_directions(position, action, state.level.dofmaze)
+            allowed = get_allowed_directions(position, action, state.level.dofmaze, is_ghost=True)
             n_allowed = jnp.sum(allowed != 0)
             return jax.lax.cond(
                 n_allowed == 0,
@@ -1325,7 +1325,7 @@ def stop_wall(pos: chex.Array, dofmaze: chex.Array):
     ], dtype=jnp.bool_)
 
 
-def get_allowed_directions(position: chex.Array, action: chex.Array, dofmaze: chex.Array):
+def get_allowed_directions(position: chex.Array, action: chex.Array, dofmaze: chex.Array, is_ghost: bool = False):
     """
     Returns an array of all directions (JAXAtari actions) in which movement is possible.
     To be jit-compatible the size of the output array is fixed, so invalid directions are marked with 0 (NOOP).
@@ -1337,6 +1337,14 @@ def get_allowed_directions(position: chex.Array, action: chex.Array, dofmaze: ch
     def at_center(_):
         # Available directions for the current position
         available_mask = available_directions(position, dofmaze)
+        
+        # Restrict ghosts from entering side tunnels
+        available_mask = jax.lax.cond(
+            jnp.array(is_ghost, dtype=jnp.bool_),
+            lambda: available_mask.at[1].set(jnp.where(position[0] >= 132, False, available_mask[1])).at[2].set(jnp.where(position[0] <= 28, False, available_mask[2])),
+            lambda: available_mask
+        )
+
         # Directions that are not the reverse of current action
         not_reverse_mask = jnp.arange(direction_count) != act_to_dir(reverse_action(action))
 
