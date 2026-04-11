@@ -13,11 +13,12 @@ from typing import Any, Dict, NamedTuple, Optional, Tuple
 import chex
 import jax
 import jax.numpy as jnp
+from flax import struct
 
 import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-from jaxatari.renderers import AtraJaxisRenderer
-from jaxatari.rendering import atraJaxis as aj
+from jaxatari.renderers import JAXGameRenderer
+from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.games.mspacman_mazes import MsPacmanMaze
 
 
@@ -48,75 +49,116 @@ class GhostMode(IntEnum):
 
 
 # -------- Constants --------
-# GENERAL
-RESET_LEVEL = 1 # The starting level, loaded when reset is called
-TIME_SCALE = 20 # Approximate number of timesteps in a second scaled to the original game speed (on my hardware: ~56 steps/s, ~2.8x faster than the ALE version -> 56 / 2.8 = 16)
-INITIAL_LIVES = 3 # Number of starting bonus lives
-MAX_LIVE_COUNT = 4 # Maximum possible number of lives
-MAX_SCORE_DIGITS = 6 # Number of digits to display in the score
-BONUS_LIFE_SCORE = 10000 # Score at which a bonus life is rewarded
-COLLISION_THRESHOLD = 6 # Contacts below this distance count as collision
-PELLETS_TO_COLLECT = jnp.array([154, 150, 158, 154]) # Total pellets to collect in each maze (including power pellets)
+class MsPacmanConstants(struct.PyTreeNode):
+    # GENERAL
+    RESET_LEVEL: int = struct.field(pytree_node=False, default=1) # The starting level, loaded when reset is called
+    TIME_SCALE: int = struct.field(pytree_node=False, default=20) # Approximate number of timesteps in a second scaled to the original game speed
+    INITIAL_LIVES: int = struct.field(pytree_node=False, default=3) # Number of starting bonus lives
+    MAX_LIVE_COUNT: int = struct.field(pytree_node=False, default=4) # Maximum possible number of lives
+    MAX_SCORE_DIGITS: int = struct.field(pytree_node=False, default=6) # Number of digits to display in the score
+    BONUS_LIFE_SCORE: int = struct.field(pytree_node=False, default=10000) # Score at which a bonus life is rewarded
+    COLLISION_THRESHOLD: int = struct.field(pytree_node=False, default=6) # Contacts below this distance count as collision
+    PELLETS_TO_COLLECT: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([154, 150, 158, 154])) # Total pellets to collect in each maze
 
-# GHOST TIMINGS
-SUE_RELEASE_TIME = 1*TIME_SCALE
-INKY_RELEASE_TIME = 5*TIME_SCALE
-PINKY_RELEASE_TIME = 7*TIME_SCALE
-RESET_TIMER = 4*TIME_SCALE # Timer for resetting the game after death
-CHASE_DURATION = 20*TIME_SCALE # Approximately 20s
-SCATTER_DURATION = 7*TIME_SCALE # Approximately 7s
-FRIGHTENED_DURATION = 13*TIME_SCALE # Approximately 13s
-BLINKING_DURATION = 4*TIME_SCALE # Approximately 4s
-ENJAILED_DURATION = 10*TIME_SCALE # Approximately 10s
-FRIGHTENED_REDUCTION = 0.85 # This factor times the level number is applied to the frightened and blinking duration
-RETURN_DURATION = TIME_SCALE/2 # Should be as long as it takes the ghost to return from jail to the path
-MAX_CHASE_OFFSET = CHASE_DURATION/10 # Maximum value that can be added to the chase duration
-MAX_SCATTER_OFFSET = SCATTER_DURATION/10 # Maximum value that can be added to the scatter duration
+    # GHOST TIMINGS
+    SUE_RELEASE_TIME: int = struct.field(pytree_node=False, default=1*20)
+    INKY_RELEASE_TIME: int = struct.field(pytree_node=False, default=5*20)
+    PINKY_RELEASE_TIME: int = struct.field(pytree_node=False, default=7*20)
+    RESET_TIMER: int = struct.field(pytree_node=False, default=4*20)
+    CHASE_DURATION: int = struct.field(pytree_node=False, default=20*20)
+    SCATTER_DURATION: int = struct.field(pytree_node=False, default=7*20)
+    FRIGHTENED_DURATION: int = struct.field(pytree_node=False, default=13*20)
+    BLINKING_DURATION: int = struct.field(pytree_node=False, default=4*20)
+    ENJAILED_DURATION: int = struct.field(pytree_node=False, default=10*20)
+    FRIGHTENED_REDUCTION: float = struct.field(pytree_node=False, default=0.85)
+    RETURN_DURATION: int = struct.field(pytree_node=False, default=int(20/2))
+    MAX_CHASE_OFFSET: float = struct.field(pytree_node=False, default=20*20/10)
+    MAX_SCATTER_OFFSET: float = struct.field(pytree_node=False, default=7*20/10)
 
-# FRUITS
-FRUIT_SPAWN_THRESHOLDS = jnp.array([50, 100])
-FRUIT_WANDER_DURATION = jnp.array(25*TIME_SCALE, dtype=jnp.uint16) # Approximately 25s
+    # FRUITS
+    FRUIT_SPAWN_THRESHOLDS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([50, 100]))
+    FRUIT_WANDER_DURATION: int = struct.field(pytree_node=False, default=25*20)
 
-# POSITIONS
-POWER_PELLET_TILES = jnp.array([[1, 3], [36, 3], [1, 36], [36, 36]])
-POWER_PELLET_HITBOXES = jnp.array([[1, 3], [36, 3], [1, 36], [36, 36],
-                                   [1, 4], [36, 4], [1, 37], [36, 37]])
-JAIL_POSITION = jnp.array([75, 75])
-INITIAL_GHOSTS_POSITIONS = jnp.array([[75, 54], JAIL_POSITION, JAIL_POSITION, JAIL_POSITION])
-INITIAL_PACMAN_POSITION = jnp.array([75, 102])
-SCATTER_TARGETS = jnp.array([
-    [MsPacmanMaze.WIDTH - 1, 0],                        # Upper right corner - Blinky
-    [0, 0],                                             # Upper left corner - Pinky
-    [MsPacmanMaze.WIDTH - 1, MsPacmanMaze.HEIGHT - 1],  # Lower right corner - Inky
-    [0, MsPacmanMaze.HEIGHT - 1]                        # Lower left corner - Sue
-])
+    # POSITIONS
+    POWER_PELLET_TILES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([[1, 3], [36, 3], [1, 36], [36, 36]]))
+    POWER_PELLET_HITBOXES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([[1, 3], [36, 3], [1, 36], [36, 36], [1, 4], [36, 4], [1, 37], [36, 37]]))
+    JAIL_POSITION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([75, 75]))
+    INITIAL_GHOSTS_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([[75, 54], [75, 75], [75, 75], [75, 75]]))
+    INITIAL_PACMAN_POSITION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([75, 102]))
+    SCATTER_TARGETS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([[MsPacmanMaze.WIDTH - 1, 0], [0, 0], [MsPacmanMaze.WIDTH - 1, MsPacmanMaze.HEIGHT - 1], [0, MsPacmanMaze.HEIGHT - 1]]))
 
-# ACTIONS
-DIRECTIONS = jnp.array([Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN])
-ACTIONS = jnp.array([ # Translates generic JAXAtari actions to MsPacman actions
-    (0, 0),   # NOOP
-    (0, 0),   # FIRE (unused)
-    (0, -1),  # UP
-    (1, 0),   # RIGHT
-    (-1, 0),  # LEFT
-    (0, 1)    # DOWN
-])
-INITIAL_ACTION = Action.LEFT # LEFT
-INITIAL_LAST_ACTION = Action.LEFT # LEFT
+    # ACTIONS
+    DIRECTIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN]))
+    ACTIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([(0, 0), (0, 0), (0, -1), (1, 0), (-1, 0), (0, 1)]))
+    INITIAL_ACTION: int = struct.field(pytree_node=False, default=Action.LEFT)
+    INITIAL_LAST_ACTION: int = struct.field(pytree_node=False, default=Action.LEFT)
 
-# POINTS
-PELLET_POINTS = 10
-POWER_PELLET_POINTS = 50
-FRUIT_REWARDS = jnp.array([100, 200, 500, 700, 1000, 2000, 5000]) # cherry, strawberry, orange, pretzel, apple, pear, banana
-EAT_GHOSTS_BASE_POINTS = 200
-LEVEL_COMPLETED_POINTS = 500
+    # POINTS
+    PELLET_POINTS: int = struct.field(pytree_node=False, default=10)
+    POWER_PELLET_POINTS: int = struct.field(pytree_node=False, default=50)
+    FRUIT_REWARDS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([100, 200, 500, 700, 1000, 2000, 5000]))
+    EAT_GHOSTS_BASE_POINTS: int = struct.field(pytree_node=False, default=200)
+    LEVEL_COMPLETED_POINTS: int = struct.field(pytree_node=False, default=500)
 
-# COLORS
-PATH_COLOR = jnp.array([0, 28, 136], dtype=jnp.uint8)
-WALL_COLOR = jnp.array([228, 111, 111], dtype=jnp.uint8)
-PELLET_COLOR = WALL_COLOR  # Same color as walls for pellets
-POWER_PELLET_SPRITE = jnp.tile(jnp.concatenate([PELLET_COLOR, jnp.array([255], dtype=jnp.uint8)]), (4, 7, 1))  # 4x7 sprite
-PACMAN_COLOR = jnp.array([210, 164, 74, 255], dtype=jnp.uint8)
+    # COLORS
+    PATH_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 28, 136], dtype=jnp.uint8))
+    WALL_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([228, 111, 111], dtype=jnp.uint8))
+    PELLET_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([228, 111, 111], dtype=jnp.uint8))
+    PACMAN_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([210, 164, 74, 255], dtype=jnp.uint8))
+
+
+# Instantiate default constants for backward compatibility and internal use
+CONSTS = MsPacmanConstants()
+
+RESET_LEVEL = CONSTS.RESET_LEVEL
+TIME_SCALE = CONSTS.TIME_SCALE
+INITIAL_LIVES = CONSTS.INITIAL_LIVES
+MAX_LIVE_COUNT = CONSTS.MAX_LIVE_COUNT
+MAX_SCORE_DIGITS = CONSTS.MAX_SCORE_DIGITS
+BONUS_LIFE_SCORE = CONSTS.BONUS_LIFE_SCORE
+COLLISION_THRESHOLD = CONSTS.COLLISION_THRESHOLD
+PELLETS_TO_COLLECT = CONSTS.PELLETS_TO_COLLECT
+
+SUE_RELEASE_TIME = CONSTS.SUE_RELEASE_TIME
+INKY_RELEASE_TIME = CONSTS.INKY_RELEASE_TIME
+PINKY_RELEASE_TIME = CONSTS.PINKY_RELEASE_TIME
+RESET_TIMER = CONSTS.RESET_TIMER
+CHASE_DURATION = CONSTS.CHASE_DURATION
+SCATTER_DURATION = CONSTS.SCATTER_DURATION
+FRIGHTENED_DURATION = CONSTS.FRIGHTENED_DURATION
+BLINKING_DURATION = CONSTS.BLINKING_DURATION
+ENJAILED_DURATION = CONSTS.ENJAILED_DURATION
+FRIGHTENED_REDUCTION = CONSTS.FRIGHTENED_REDUCTION
+RETURN_DURATION = CONSTS.RETURN_DURATION
+MAX_CHASE_OFFSET = CONSTS.MAX_CHASE_OFFSET
+MAX_SCATTER_OFFSET = CONSTS.MAX_SCATTER_OFFSET
+
+FRUIT_SPAWN_THRESHOLDS = CONSTS.FRUIT_SPAWN_THRESHOLDS
+FRUIT_WANDER_DURATION = jnp.array(CONSTS.FRUIT_WANDER_DURATION, dtype=jnp.uint16)
+
+POWER_PELLET_TILES = CONSTS.POWER_PELLET_TILES
+POWER_PELLET_HITBOXES = CONSTS.POWER_PELLET_HITBOXES
+JAIL_POSITION = CONSTS.JAIL_POSITION
+INITIAL_GHOSTS_POSITIONS = CONSTS.INITIAL_GHOSTS_POSITIONS
+INITIAL_PACMAN_POSITION = CONSTS.INITIAL_PACMAN_POSITION
+SCATTER_TARGETS = CONSTS.SCATTER_TARGETS
+
+DIRECTIONS = CONSTS.DIRECTIONS
+ACTIONS = CONSTS.ACTIONS
+INITIAL_ACTION = Action.LEFT
+INITIAL_LAST_ACTION = Action.LEFT
+
+PELLET_POINTS = CONSTS.PELLET_POINTS
+POWER_PELLET_POINTS = CONSTS.POWER_PELLET_POINTS
+FRUIT_REWARDS = CONSTS.FRUIT_REWARDS
+EAT_GHOSTS_BASE_POINTS = CONSTS.EAT_GHOSTS_BASE_POINTS
+LEVEL_COMPLETED_POINTS = CONSTS.LEVEL_COMPLETED_POINTS
+
+PATH_COLOR = CONSTS.PATH_COLOR
+WALL_COLOR = CONSTS.WALL_COLOR
+PELLET_COLOR = CONSTS.PELLET_COLOR
+POWER_PELLET_SPRITE = jnp.tile(jnp.concatenate([PELLET_COLOR, jnp.array([255], dtype=jnp.uint8)]), (4, 7, 1))
+PACMAN_COLOR = CONSTS.PACMAN_COLOR
 TRANSPARENT = jnp.array([0, 0, 0, 0], dtype=jnp.uint8)
 
 
@@ -161,6 +203,7 @@ class PacmanState(NamedTuple):
     score_changed: chex.Array       # Bool[] - Indicates which score digit changed since the last step
     freeze_timer: chex.Array        # Int - Time until game is unfrozen, decrements every step
     step_count: chex.Array          # Int - Number of steps made in the current level
+    key: chex.PRNGKey               # PRNGKey for RNG during step
 
 class PacmanObservation(NamedTuple):
     player_position: chex.Array
@@ -180,9 +223,10 @@ class PacmanInfo(NamedTuple):
 
 
 # -------- Game class --------
-class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
-    def __init__(self):
-        super().__init__()
+class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, MsPacmanConstants]):
+    def __init__(self, consts: MsPacmanConstants = None):
+        consts = consts or MsPacmanConstants()
+        super().__init__(consts)
         self.frame_stack_size = 1
         self.action_set = [
             Action.NOOP,
@@ -196,6 +240,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             Action.DOWNRIGHT,
             Action.DOWNLEFT,
         ]
+        self.renderer = MsPacmanRenderer(self.consts)
 
     def action_space(self) -> spaces.Discrete:
         """Returns the action space for MsPacman.
@@ -217,19 +262,27 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         """
         Resets the game to its initial state.
         """
-        return None, reset_game(RESET_LEVEL, INITIAL_LIVES, 0, key)
+        if key is None:
+            key = jax.random.PRNGKey(0)
+        state = reset_game(self.consts.RESET_LEVEL, self.consts.INITIAL_LIVES, 0, key)
+        return self.get_observation(state), state
+
+    def render(self, state: PacmanState) -> jnp.ndarray:
+        return self.renderer.render(state)
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: PacmanState, action: chex.Array, key: chex.PRNGKey) -> tuple[
+    def step(self, state: PacmanState, action: chex.Array) -> tuple[
         PacmanObservation, PacmanState, jax.Array, jax.Array, PacmanInfo]:
         """
         Updates the game state by applying the game logic on the current state.
         """
+        key, step_key = jax.random.split(state.key)
+        
         ( # 1) If in death animation, decrement timer and freeze everything
             new_state,
             frozen,
             done
-        ) = self.death_step(state, key)
+        ) = self.death_step(state, step_key)
         
         ( # 2) Pacman handling
             player_position,
@@ -246,7 +299,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         ( # 3) Fruit handling
             fruit_state,
             fruit_reward
-        ) = self.fruit_step(state, player_position, collected_pellets, key)
+        ) = self.fruit_step(state, player_position, collected_pellets, step_key)
 
         ( # 4) Ghost handling
             ghost_positions,
@@ -257,14 +310,14 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
             new_lives,
             new_death_timer,
             ghosts_reward
-        ) = self.ghosts_step(state, ate_power_pellet, key)
+        ) = self.ghosts_step(state, ate_power_pellet, step_key)
 
         # 5) Calculate reward, new score, bonus life and flag score change digit-wise
         reward = pellet_reward + fruit_reward + ghosts_reward
         new_score = state.score + reward
         score_changed = self.flag_score_change(state.score, new_score)
         new_lives = jax.lax.cond(
-            (new_score >= BONUS_LIFE_SCORE) & (state.score < BONUS_LIFE_SCORE),
+            (new_score >= self.consts.BONUS_LIFE_SCORE) & (state.score < self.consts.BONUS_LIFE_SCORE),
             lambda: new_lives + 1,
             lambda: new_lives
         )
@@ -272,7 +325,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         # 6) Update state
         new_state = jax.lax.cond(
             frozen,
-            lambda: new_state,
+            lambda: new_state._replace(key=key),
             lambda: jax.lax.cond(
                 level_id != state.level.id,
                 lambda: reset_game(level_id, state.lives, new_score, key),
@@ -307,7 +360,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
                     score=new_score,
                     score_changed=score_changed,
                     freeze_timer=new_death_timer,
-                    step_count=state.step_count + 1
+                    step_count=state.step_count + 1,
+                    key=key
                 )
             )
         )
@@ -948,267 +1002,190 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo]):
         """
         Flags the score digits for rendering that changed during the current step.
         """
-        new_score_digits        = aj.int_to_digits(new_score, max_digits=MAX_SCORE_DIGITS)
-        current_score_digits    = aj.int_to_digits(current_score, max_digits=MAX_SCORE_DIGITS)
+        def int_to_digits(n, max_digits):
+            n = jnp.maximum(n, 0)
+            def scan_body(carry, _):
+                digit = carry % 10
+                next_carry = carry // 10
+                return next_carry, digit
+            _, digits_reversed = jax.lax.scan(scan_body, n, None, length=max_digits)
+            return jnp.flip(digits_reversed, axis=0)
+
+        new_score_digits        = int_to_digits(new_score, MAX_SCORE_DIGITS)
+        current_score_digits    = int_to_digits(current_score, MAX_SCORE_DIGITS)
         score_changed           = new_score_digits != current_score_digits
         return score_changed
 
 
 # -------- Render class --------
-class MsPacmanRenderer(AtraJaxisRenderer):
+class MsPacmanRenderer(JAXGameRenderer):
     """JAX-based MsPacman game renderer, optimized with JIT compilation."""
 
-    def __init__(self):
-        super().__init__()
-        self.SPRITES = MsPacmanRenderer.load_sprites()
-        self.BG_SPRITES = jnp.stack([MsPacmanMaze.load_background(i) for i in range(len(MsPacmanMaze.MAZES))])
+    def __init__(self, consts: MsPacmanConstants = None, config: render_utils.RendererConfig = None):
+        super().__init__(consts)
+        self.consts = consts or MsPacmanConstants()
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(210, 160),
+                channels=3
+            )
+        else:
+            self.config = config
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+        
+        sprite_path = os.path.join(os.path.dirname(__file__), "sprites", "mspacman")
+        
+        # Define asset config
+        asset_config = [
+            {'name': 'dummy_bg', 'type': 'background', 'data': jnp.zeros((210, 160, 4), dtype=jnp.uint8)},
+            {'name': 'pacman', 'type': 'group', 'files': ['pacman_0.npy', 'pacman_1.npy', 'pacman_2.npy', 'pacman_3.npy']},
+            {'name': 'ghosts', 'type': 'group', 'files': [
+                'ghost_blinky.npy', 'ghost_pinky.npy', 'ghost_inky.npy', 'ghost_sue.npy', 
+                'ghost_blue.npy', 'ghost_white.npy'
+            ]},
+            {'name': 'fruit', 'type': 'group', 'files': [
+                'fruit_cherry.npy', 'fruit_strawberry.npy', 'fruit_orange.npy',
+                'fruit_pretzel.npy', 'fruit_apple.npy', 'fruit_pear.npy', 'fruit_banana.npy'
+            ]},
+            {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
+        ]
+        
+        # Include background colors in the palette (Path, Wall, and Black for UI padding)
+        bg_colors = jnp.stack([self.consts.PATH_COLOR, self.consts.WALL_COLOR, jnp.array([0, 0, 0], dtype=jnp.uint8)])
+        bg_colors = jnp.concatenate([bg_colors, jnp.full((3, 1), 255, dtype=jnp.uint8)], axis=1)
+        asset_config.append({'name': 'bg_colors', 'type': 'procedural', 'data': bg_colors[:, None, :]})
+
+        (self.PALETTE, self.SHAPE_MASKS, _, self.COLOR_TO_ID, self.FLIP_OFFSETS) = \
+            self.jr.load_and_setup_assets(asset_config, sprite_path)
+
+        # Pre-rotate Pacman masks: 0: UP, 1: RIGHT, 2: LEFT, 3: DOWN
+        # Original masks are LEFT looking
+        left = self.SHAPE_MASKS['pacman']
+        right = jnp.flip(left, axis=2)
+        up = jnp.rot90(right, k=3, axes=(1, 2))
+        down = jnp.rot90(right, k=1, axes=(1, 2))
+        self.PACMAN_MASKS = jnp.stack([up, right, left, down])
+        
+        # Pre-calculate backgrounds for all 4 mazes
+        self.MAZE_BACKGROUNDS = self._create_all_backgrounds()
+
+    def _create_all_backgrounds(self):
+        bgs = []
+        for i in range(4):
+            bg = MsPacmanMaze.load_background(i) # Returns (W, H, 3)
+            bg = jnp.transpose(bg, (1, 0, 2)) # Convert to (H, W, 3)
+            if bg.shape[2] == 3:
+                bg = jnp.concatenate([bg, jnp.full((*bg.shape[:2], 1), 255, dtype=jnp.uint8)], axis=2)
+            
+            bg_id = self.jr._create_background_raster(bg, self.COLOR_TO_ID)
+            bgs.append(bg_id)
+        return jnp.stack(bgs)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: PacmanState):
-        """Renders the current game state on screen."""
-
-        def render_background():
-            bg = self.BG_SPRITES[get_level_maze(state.level.id)]
-            bg = MsPacmanRenderer.render_lives(bg, state.lives, self.SPRITES["pacman"][1][1])  # Life sprite (right looking pacman)
-            bg = MsPacmanRenderer.render_score(bg, state.score, jnp.arange(MAX_SCORE_DIGITS) >= (MAX_SCORE_DIGITS - get_digit_count(state.score)), self.SPRITES["score"])
-            return bg
-
-        def render_pellets(background):
-            x_range, y_range = jnp.nonzero(state.level.pellets, size=state.level.pellets.size)
-            x_offset = jnp.where(x_range < 9, 8, 12)
-            n_pellets = jnp.sum(state.level.pellets)
-            mask = jnp.arange(state.level.pellets.size) < n_pellets
-
-            x_positions = x_range * 8 + x_offset
-            y_positions = y_range * 12 + 9
-            dx = jnp.arange(4)[:, None]   # (w, 1)
-            dy = jnp.arange(2)[None, :]   # (1, h)
-
-            rows = x_positions[:, None, None] + dx   # (N, w, 1)
-            cols = y_positions[:, None, None] + dy   # (N, 1, h)
-            rows = jnp.where(mask[:, None, None], rows, -1)
-            cols = jnp.where(mask[:, None, None], cols, -1)
-            return background.at[rows, cols].set(MsPacmanMaze.WALL_COLOR)
-
-        def render_power_pellets(background):
-            def render_power_pellet(idx, bg):
-                return jax.lax.cond(
-                    state.level.power_pellets[idx],
-                    lambda: aj.render_at(
-                        bg,
-                        (POWER_PELLET_TILES[idx][0]) * MsPacmanMaze.TILE_SCALE + 4,
-                        (POWER_PELLET_TILES[idx][1]) * MsPacmanMaze.TILE_SCALE + 6,
-                        POWER_PELLET_SPRITE),
-                    lambda: bg
-                ) 
-
-            return jax.lax.cond(
-                (state.step_count & 0b1000) >> 3,  # Alternate power pellet rendering for blinking animation
-                lambda: jax.lax.fori_loop(
-                    0,
-                    POWER_PELLET_TILES.shape[0],
-                    render_power_pellet,
-                    background
-                ),
-                lambda: background
-            )                      
+        maze_idx = get_level_maze(state.level.id)
+        background = self.MAZE_BACKGROUNDS[maze_idx]
+        raster = self.jr.create_object_raster(background)
         
-        def render_pacman(background):
-            orientation = act_to_dir(state.player.action)
-            pacman_sprite = self.SPRITES["pacman"][orientation][((state.step_count & 0b1000) >> 2)]
-            return aj.render_at(background, state.player.position[0], state.player.position[1] - 1, pacman_sprite)
-
-        def render_ghosts(background):
-            ghosts_orientation = ((state.step_count & 0b10000) >> 4)
-
-            def render_ghost(idx, raster):
-                mode = state.ghosts.modes[idx]
-                g_sprite = jax.lax.cond(
-                    jnp.logical_not((mode == GhostMode.FRIGHTENED) | (mode == GhostMode.BLINKING)),
-                    lambda: self.SPRITES["ghost"][ghosts_orientation][idx],  # normal
-                    lambda: jax.lax.cond(
-                        (mode == GhostMode.BLINKING) & (((state.step_count & 0b1000) >> 3)),
-                        lambda: self.SPRITES["ghost"][ghosts_orientation][5],   # blinking
-                        lambda: self.SPRITES["ghost"][ghosts_orientation][4]    # frightened
-                    )
-                )
-                return aj.render_at(raster, state.ghosts.positions[idx][0], state.ghosts.positions[idx][1] - 1, g_sprite)
-
-            return jax.lax.fori_loop(
-                0,
-                state.ghosts.positions.shape[0],
-                render_ghost,
-                background
-            )
+        # 1. Render Pellets
+        wall_color_tuple = tuple(map(int, self.consts.WALL_COLOR.tolist()))
+        wall_id = self.COLOR_TO_ID[wall_color_tuple]
+        raster = self.render_pellets(raster, state.level.pellets, wall_id)
         
-        def render_fruit(raster, fruit: FruitState, fruit_sprites):
-            """Renders the fruit at its current position."""
-            return aj.render_at(raster, fruit.position[0], fruit.position[1] - 1, fruit_sprites[fruit.type])
+        # 2. Power Pellets
+        raster = self.render_power_pellets(raster, state, wall_id)
         
-        def render_fruit_indicator(raster, fruit_type, fruit_sprites, x_pos = 128, y_pos = 182):
-            """Renders the level fruit indicator in the UI bar."""
-            return aj.render_at(raster, x_pos, y_pos, fruit_sprites[fruit_type])
-
-        # -------- Render playing field --------
-        # Render background for new game or level
-        background = render_background()
-
-        # Render pellets
-        background = render_pellets(background)
-
-        # Render power pellets
-        background = render_power_pellets(background)
+        # 3. Pacman
+        orientation = act_to_dir(state.player.action)
+        orientation = jnp.where(orientation == -1, 2, orientation) # Default to LEFT
+        frame = (state.step_count & 0b1000) >> 2
+        pacman_mask = self.PACMAN_MASKS[orientation.astype(jnp.int32), frame.astype(jnp.int32)]
+        raster = self.jr.render_at(raster, state.player.position[0].astype(jnp.int32), state.player.position[1].astype(jnp.int32) - 1, pacman_mask)
         
-        # Render pacman
-        background = render_pacman(background)
-
-        # Render ghosts
-        background = render_ghosts(background)
-
-        # Render fruit if present
-        background = jax.lax.cond(
+        # 4. Ghosts
+        raster = self.render_ghosts(raster, state)
+        
+        # 5. Fruit
+        raster = jax.lax.cond(
             state.fruit.spawned,
-            lambda: render_fruit(background, state.fruit, self.SPRITES["fruit"]),
-            lambda: background
-        )
-
-        # -------- Render UI --------
-        # Render score if changed
-        background = jax.lax.cond(
-            jnp.any(state.score_changed),
-            lambda: MsPacmanRenderer.render_score(background, state.score, state.score_changed, self.SPRITES["score"]),
-            lambda: background
-        )
-
-        # Remove one life if a life is lost
-        background = jax.lax.cond(
-            state.freeze_timer == RESET_TIMER-1,
-            lambda: MsPacmanRenderer.render_lives(background, state.lives - 1, self.SPRITES["pacman"][1][1]),
-            lambda: background
-        )
-
-        # Render level fruit indicator
-        background = render_fruit_indicator(background, state.fruit.type, self.SPRITES["fruit"])
-
-        return background
-    
-
-    @staticmethod
-    def render_score(raster, score, score_changed, digit_sprites, score_x=60, score_y=190, spacing=1, bg_color=jnp.array([0, 0, 0])):
-        """Render the score on the raster at a fixed position. Only updates digits that have changed."""
-        digits = aj.int_to_digits(score, max_digits=MAX_SCORE_DIGITS)
-
-        def digit_loop(idx, rast):
-            def update_digit():
-                d_sprite    = digit_sprites[digits[idx]]
-                bg_sprite   = jnp.full(d_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
-                digit_x     = score_x + idx * (d_sprite.shape[1] + spacing)
-                new_raster  = aj.render_at(rast, digit_x, score_y, bg_sprite)
-                new_raster  = aj.render_at(new_raster, digit_x, score_y, d_sprite)
-                return new_raster
-
-            return jax.lax.cond(
-                score_changed[idx],
-                update_digit,
-                lambda: rast
-            )
-
-        return jax.lax.fori_loop(
-            0,
-            digits.shape[0],
-            digit_loop,
+            lambda r: self.jr.render_at(r, state.fruit.position[0].astype(jnp.int32), state.fruit.position[1].astype(jnp.int32) - 1, self.SHAPE_MASKS['fruit'][state.fruit.type.astype(jnp.int32)]),
+            lambda r: r,
             raster
         )
-    
-    @staticmethod
-    def render_lives(raster, current_lives, life_sprite, life_x=12, life_y=182, spacing=4, bg_color=jnp.array([0, 0, 0])):
-        """Render the lives on the raster at a fixed position."""
-        bg_sprite = jnp.full(life_sprite.shape, jnp.append(bg_color, 255), dtype=jnp.uint8)
-        displayed_lives = current_lives - 1
-
-        def live_loop(idx, rast):
-            life_offset, this_sprite = jax.lax.cond(
-                idx < displayed_lives,
-                lambda: (idx, life_sprite),
-                lambda: (displayed_lives.astype(jnp.int32), bg_sprite)
-            )
-            this_life_x = life_x + life_offset * (life_sprite.shape[1] + spacing)
-            return aj.render_at(rast, this_life_x, life_y, this_sprite)
-
-        return jax.lax.fori_loop(
-            0,
-            MAX_LIVE_COUNT,
-            live_loop,
-            raster
-        )
-    
-    @staticmethod
-    def load_sprites() -> dict[str, Any]:
-        """Loads the game sprites from files into a class dictionary for rendering."""
-        SPRITE_PATH = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/mspacman"
-        sprites: Dict[str, Any] = {}
-     
-        # Helper function to load a single sprite frame
-        def load_sprite_frame(name: str) -> Optional[chex.Array]:
-            path = os.path.join(SPRITE_PATH, f'{name}.npy')
-            frame = aj.loadFrame(path)
-            if isinstance(frame, jnp.ndarray) and frame.ndim >= 2:
-                return frame.astype(jnp.uint8)
-            return None
-    
-        # List of alls sprite names
-        sprite_names = [ # The order here is important as it determines the sprites index
-            'fruit_cherry','fruit_strawberry','fruit_orange',
-            'fruit_pretzel','fruit_apple','fruit_pear','fruit_banana',
-            'ghost_blinky','ghost_pinky','ghost_inky','ghost_sue','ghost_blue','ghost_white',
-            'pacman_0','pacman_1','pacman_2','pacman_3',
-            'score_0','score_1','score_2','score_3','score_4',
-            'score_5','score_6','score_7','score_8','score_9'
-        ]
         
-        # Load raw sprites
-        fruits = []
-        ghosts = []
-        pacmans = []
-        score = []
-        for name in sprite_names:
-            loaded_sprite = load_sprite_frame(name)
-            if loaded_sprite is not None:
-                if "fruit" in name:
-                    fruits.append(loaded_sprite)
-                if "ghost" in name:
-                    ghosts.append(loaded_sprite)
-                elif "pacman" in name:
-                    pacmans.append(loaded_sprite)
-                elif "score" in name:
-                    score.append(loaded_sprite)
+        # 6. UI
+        raster = self.render_ui(raster, state)
+        
+        return self.jr.render_from_palette(raster, self.PALETTE)
 
-        # Postprocess fruit sprites
-        padded_fruits = aj.pad_to_match(fruits)
-        jax_fruits = jnp.stack(padded_fruits)
-        # Postprocess ghost sprites
-        symmetric_ghosts = [jnp.flipud(ghost) for ghost in ghosts]
-        jax_ghosts = jnp.stack([jnp.array(ghosts), jnp.array(symmetric_ghosts)])
-        # Postprocess pacman sprites
-        pacmans_right = [jnp.flipud(p) for p in pacmans]
-        pacmans_up = [jnp.rot90(p, 3) for p in pacmans_right]
-        pacmans_down = [jnp.rot90(p) for p in pacmans_right]
-        jax_pacmans = jnp.stack([
-            jnp.stack(pacmans_up),
-            jnp.stack(pacmans_right),
-            jnp.stack(pacmans),
-            jnp.stack(pacmans_down)
-        ])
-        # Postprocess score sprites
-        padded_score = aj.pad_to_match(score)
-        jax_score = jnp.stack(padded_score)
+    @partial(jax.jit, static_argnums=(0,))
+    def render_pellets(self, raster, pellets, color_id):
+        x_range, y_range = jnp.nonzero(pellets, size=pellets.size)
+        x_offset = jnp.where(x_range < 9, 8, 12)
+        n_pellets = jnp.sum(pellets)
+        mask = jnp.arange(pellets.size) < n_pellets
 
-        # Save resulting sprites
-        sprites["fruit"] = jax_fruits
-        sprites["ghost"] = jax_ghosts
-        sprites["pacman"] = jax_pacmans
-        sprites["score"] = jax_score
-        return sprites
+        x_positions = x_range * 8 + x_offset
+        y_positions = y_range * 12 + 9
+        
+        positions = jnp.stack([x_positions, y_positions], axis=1).astype(jnp.int32)
+        positions = jnp.where(mask[:, None], positions, -1)
+        sizes = jnp.tile(jnp.array([4, 2], dtype=jnp.int32), (pellets.size, 1))
+        
+        return self.jr.draw_rects(raster, positions, sizes, color_id)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render_power_pellets(self, raster, state, color_id):
+        # 4x7 sprite
+        sprite = jnp.full((7, 4), color_id, dtype=raster.dtype)
+        
+        def render_one(i, r):
+            should_draw = state.level.power_pellets[i] & (((state.step_count & 0b1000) >> 3) == 1)
+            x = (self.consts.POWER_PELLET_TILES[i][0] * 4 + 4).astype(jnp.int32)
+            y = (self.consts.POWER_PELLET_TILES[i][1] * 4 + 6).astype(jnp.int32)
+            return jax.lax.cond(should_draw, 
+                                lambda r_in: self.jr.render_at(r_in, x, y, sprite),
+                                lambda r_in: r_in,
+                                r)
+        
+        return jax.lax.fori_loop(0, 4, render_one, raster)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render_ghosts(self, raster, state):
+        anim_frame = (state.step_count & 0b10000) >> 4
+        
+        def render_one(i, r):
+            mode = state.ghosts.modes[i]
+            is_frightened = (mode == GhostMode.FRIGHTENED) | (mode == GhostMode.BLINKING)
+            is_blinking_frame = (mode == GhostMode.BLINKING) & (((state.step_count & 0b1000) >> 3) == 1)
+            
+            ghost_idx = jax.lax.cond(
+                is_frightened,
+                lambda: jnp.where(is_blinking_frame, 5, 4),
+                lambda: i
+            ).astype(jnp.int32)
+            
+            mask = self.SHAPE_MASKS['ghosts'][ghost_idx]
+            flip = anim_frame == 1
+            return self.jr.render_at(r, state.ghosts.positions[i][0].astype(jnp.int32), state.ghosts.positions[i][1].astype(jnp.int32) - 1, mask, flip_horizontal=flip)
+
+        return jax.lax.fori_loop(0, 4, render_one, raster)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render_ui(self, raster, state):
+        # Score
+        digits = self.jr.int_to_digits(state.score, max_digits=self.consts.MAX_SCORE_DIGITS)
+        raster = self.jr.render_label_selective(raster, 60, 190, digits, self.SHAPE_MASKS['digits'], 0, self.consts.MAX_SCORE_DIGITS, spacing=8)
+        
+        # Lives
+        life_mask = self.PACMAN_MASKS[1, 1] # Right looking, frame 1
+        raster = self.jr.render_indicator(raster, 12, 182, (state.lives - 1).astype(jnp.int32), life_mask, spacing=14, max_value=self.consts.MAX_LIVE_COUNT)
+        
+        # Fruit indicator
+        fruit_mask = self.SHAPE_MASKS['fruit'][state.fruit.type.astype(jnp.int32)]
+        raster = self.jr.render_at(raster, 128, 182, fruit_mask)
+        
+        return raster
 
 
 # -------- Helper functions --------
@@ -1640,6 +1617,7 @@ def reset_game(level: chex.Array, lives: chex.Array, score: chex.Array, key: che
         score_changed   = jnp.arange(MAX_SCORE_DIGITS) >= (MAX_SCORE_DIGITS - get_digit_count(score)),
         freeze_timer    = jnp.array(0, dtype=jnp.uint32),
         step_count      = jnp.array(0, dtype=jnp.uint32),
+        key             = key
     )
 
 def reset_entities(state: PacmanState, key: chex.PRNGKey):
@@ -1660,4 +1638,5 @@ def reset_entities(state: PacmanState, key: chex.PRNGKey):
         score_changed   = state.score_changed,
         freeze_timer    = state.freeze_timer,
         step_count      = jnp.array(0, dtype=jnp.uint32),
+        key             = state.key
     )
