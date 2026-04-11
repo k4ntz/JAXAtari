@@ -2428,11 +2428,11 @@ class TennisRenderer(JAXGameRenderer):
         self.PLAYER_RACKET_STACK = self.SHAPE_MASKS['racket_anim']
         self.ENEMY_RACKET_STACK = vmap_swap(self.PLAYER_RACKET_STACK)
         
-        self.PLAYER_DIGITS_STACK = self.SHAPE_MASKS['digits']
-        self.ENEMY_DIGITS_STACK = vmap_swap(self.PLAYER_DIGITS_STACK)
+        self.PLAYER_DIGITS_STACK = vmap_swap(self.SHAPE_MASKS['digits'])
+        self.ENEMY_DIGITS_STACK = self.SHAPE_MASKS['digits']
         
-        self.PLAYER_UI_A = self.SHAPE_MASKS['ui_a']
-        self.ENEMY_UI_A = swap_colors(self.PLAYER_UI_A)
+        self.PLAYER_UI_A = swap_colors(self.SHAPE_MASKS['ui_a'])
+        self.ENEMY_UI_A = self.SHAPE_MASKS['ui_a']
         # 7. Store animation lengths
         self.anim_len = {
             'player': self.ENEMY_STACK.shape[0],
@@ -2456,10 +2456,10 @@ class TennisRenderer(JAXGameRenderer):
             player_digit_stack = self.PLAYER_DIGITS_STACK
             enemy_digit_stack = self.ENEMY_DIGITS_STACK
             r = self._render_number_centered(r, state.game_state.player_game_score, 
-                                             (self.consts.FRAME_WIDTH // 4) * 3, 2, 
+                                             self.consts.FRAME_WIDTH // 4, 2, 
                                              player_digit_stack)
             r = self._render_number_centered(r, state.game_state.enemy_game_score,
-                                             self.consts.FRAME_WIDTH // 4, 2,
+                                             (self.consts.FRAME_WIDTH // 4) * 3, 2,
                                              enemy_digit_stack)
             return r
         def render_current_score(r):
@@ -2470,16 +2470,24 @@ class TennisRenderer(JAXGameRenderer):
             deuce_like = (ps >= 3) & (es >= 3)
             def render_deuce(r_in):
                 is_tied = (ps == es)
-                ad_in = ((ps > es) & serving) | ((es > ps) & (~serving))
-                ui_mask = jax.lax.select(ad_in, self.PLAYER_UI_A, self.ENEMY_UI_A)
-                x_pos = (self.consts.FRAME_WIDTH // 4) - (ui_mask.shape[1] // 2)
-                r_out = jax.lax.cond(
-                    is_tied,
-                    lambda r_l: self.jr.render_at(r_l, x_pos, 2, self.ENEMY_UI_A, flip_offset=self.FLIP_OFFSETS['ui_a']),
-                    lambda r_l: self.jr.render_at(r_l, x_pos, 2, ui_mask, flip_offset=self.FLIP_OFFSETS['ui_a']),
-                    r_in
-                )
-                return r_out
+                def render_tied(r_l):
+                    r_l = self._render_number_centered(r_l, 40, self.consts.FRAME_WIDTH // 4, 2, self.PLAYER_DIGITS_STACK)
+                    r_l = self._render_number_centered(r_l, 40, (self.consts.FRAME_WIDTH // 4) * 3, 2, self.ENEMY_DIGITS_STACK)
+                    return r_l
+                def render_adv(r_l):
+                    return jax.lax.cond(
+                        ps > es,
+                        lambda r_inner: self.jr.render_at(
+                            self._render_number_centered(r_inner, 40, (self.consts.FRAME_WIDTH // 4) * 3, 2, self.ENEMY_DIGITS_STACK),
+                            self.consts.FRAME_WIDTH // 4 - (self.PLAYER_UI_A.shape[1] // 2), 2, self.PLAYER_UI_A, flip_offset=self.FLIP_OFFSETS['ui_a']
+                        ),
+                        lambda r_inner: self.jr.render_at(
+                            self._render_number_centered(r_inner, 40, self.consts.FRAME_WIDTH // 4, 2, self.PLAYER_DIGITS_STACK),
+                            (self.consts.FRAME_WIDTH // 4) * 3 - (self.ENEMY_UI_A.shape[1] // 2), 2, self.ENEMY_UI_A, flip_offset=self.FLIP_OFFSETS['ui_a']
+                        ),
+                        r_l
+                    )
+                return jax.lax.cond(is_tied, render_tied, render_adv, r_in)
             def render_regular(r_in):
                 pid = jnp.minimum(3, ps)
                 eid = jnp.minimum(3, es)
@@ -2487,8 +2495,8 @@ class TennisRenderer(JAXGameRenderer):
                 enum = tennis_scores[eid]
                 player_digit_stack = self.PLAYER_DIGITS_STACK
                 enemy_digit_stack = self.ENEMY_DIGITS_STACK
-                r_out = self._render_number_centered(r_in, pnum, (self.consts.FRAME_WIDTH // 4) * 3, 2, player_digit_stack)
-                r_out = self._render_number_centered(r_out, enum, self.consts.FRAME_WIDTH // 4, 2, enemy_digit_stack)
+                r_out = self._render_number_centered(r_in, pnum, self.consts.FRAME_WIDTH // 4, 2, player_digit_stack)
+                r_out = self._render_number_centered(r_out, enum, (self.consts.FRAME_WIDTH // 4) * 3, 2, enemy_digit_stack)
                 return r_out
             return jax.lax.cond(deuce_like, render_deuce, render_regular, r)
         return jax.lax.cond(
