@@ -1175,7 +1175,10 @@ class MsPacmanRenderer(JAXGameRenderer):
     def render_ui(self, raster, state):
         # Score
         digits = self.jr.int_to_digits(state.score, max_digits=self.consts.MAX_SCORE_DIGITS)
-        raster = self.jr.render_label_selective(raster, 60, 190, digits, self.SHAPE_MASKS['digits'], 0, self.consts.MAX_SCORE_DIGITS, spacing=8)
+        digit_count = get_digit_count(state.score).astype(jnp.int32)
+        start_index = self.consts.MAX_SCORE_DIGITS - digit_count
+        render_x = 60 + start_index * 8
+        raster = self.jr.render_label_selective(raster, render_x, 190, digits, self.SHAPE_MASKS['digits'], start_index, digit_count, spacing=8, max_digits_to_render=self.consts.MAX_SCORE_DIGITS)
         
         # Lives
         life_mask = self.PACMAN_MASKS[1, 1] # Right looking, frame 1
