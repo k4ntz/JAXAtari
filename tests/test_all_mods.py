@@ -433,7 +433,7 @@ class TestModWithWrappers:
             action = wrapped.action_space().sample(key)
             key, _ = jax.random.split(key)
             try:
-                obs, state, reward, done, info = wrapped.step(state, action)
+                obs, state, reward, done, _, info = wrapped.step(state, action)
             except Exception as e:
                 pytest.fail(
                     f"step() with PixelWrapper+native_downscaling failed at step {i} "
