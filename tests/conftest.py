@@ -1,9 +1,16 @@
 import pytest
 import sys
+import os
 import importlib.util
 import inspect
 import gc
 from pathlib import Path
+
+# Force CPU before any JAX import (jaxatari pulls JAX in transitively).
+# Overrides a user/shell JAX_PLATFORMS so pytest never tries to init a missing GPU.
+os.environ["JAX_PLATFORMS"] = "cpu"
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+
 from jaxatari.environment import JaxEnvironment
 from jaxatari.wrappers import (
     AtariWrapper,

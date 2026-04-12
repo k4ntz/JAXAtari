@@ -1465,8 +1465,7 @@ class Renderer_NameThisGame(JAXGameRenderer):
         if config is None:
             self.config = render_utils.RendererConfig(
                 game_dimensions=(self.consts.screen_height, self.consts.screen_width),
-                channels=1,
-                downscale=(84, 84)
+                channels=3,
             )
         else:
             self.config = config

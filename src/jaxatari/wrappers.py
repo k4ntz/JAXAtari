@@ -531,6 +531,8 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         self.frame_skip = frame_skip
         self.max_pooling = max_pooling
         self.clip_reward = clip_reward
+        self.smooth_image = smooth_image
+        self.native_downscaling = False
         
         # Access the Base Environment
         base_env = self._env._env if isinstance(self._env, AtariWrapper) else self._env
@@ -542,6 +544,7 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
                 base_env, pixel_resize_shape, grayscale
             )
             self.pixel_resize_shape = pixel_resize_shape
+            self.native_downscaling = True
         else:
             self.do_pixel_resize = do_pixel_resize
             self.pixel_resize_shape = pixel_resize_shape
