@@ -5,7 +5,7 @@ from functools import partial
 from flax import struct
 
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
-from jaxatari.games.jax_bankheist import JaxBankHeist, BankHeistState, Entity, init_banks_or_police
+from jaxatari.games.jax_bankheist import JaxBankHeist, BankHeistState, Entity
 
 
 class RandomBankSpawnsMod(JaxAtariInternalModPlugin):

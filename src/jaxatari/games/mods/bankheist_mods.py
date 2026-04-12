@@ -1,10 +1,16 @@
 import os
 
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.bankheist.bankheist_mod_plugins import RandomBankSpawnsMod, \
-    UnlimitedGasMod, NoPoliceMod, TwoPoliceCarsMod, RandomCityMod, RevisitCityMod, MovingBanksMod, DoubleSpeedMod
-
-
+from jaxatari.games.mods.bankheist.bankheist_mod_plugins import (
+    RandomBankSpawnsMod,
+    UnlimitedGasMod,
+    NoPoliceMod,
+    TwoPoliceCarsMod,
+    RandomCityMod,
+    RevisitCityMod,
+    MovingBanksMod,
+    DoubleSpeedMod,
+)
 
 # --- The Registry ---
 BANKHEIST_MOD_REGISTRY = {

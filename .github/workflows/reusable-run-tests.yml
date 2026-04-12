@@ -28,18 +28,18 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         if: ${{ inputs.pr_head_sha == '' }}
 
       - name: Check out base branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         if: ${{ inputs.pr_head_sha != '' }}
         with:
           ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Check out PR head
         if: ${{ inputs.pr_head_sha != '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ inputs.pr_head_sha }}
           path: pr_head
@@ -57,7 +57,7 @@ jobs:
         shell: bash
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
@@ -105,7 +105,7 @@ jobs:
 
       - name: Upload report artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pytest-report-${{ matrix.game }}
           path: pytest_output_${{ matrix.game }}.txt

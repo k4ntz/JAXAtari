@@ -212,7 +212,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         Returns the action space of the environment.
         Returns: The action space of the environment as a Discrete space.
         """
-        return spaces.Discrete(18)
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces:
         return spaces.Dict({

@@ -95,7 +95,7 @@ class PongInfo(struct.PyTreeNode):
 
 class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants]):
     # Minimal ALE action set for Pong:
-    # 0=NOOP, 1=FIRE, 2=RIGHT, 3=LEFT, 4=RIGHTFIRE, 5=LEFTFIRE
+    # NOTE: for multiplayer, it's instead: [Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN],
     ACTION_SET: jnp.ndarray = jnp.array(
         [Action.NOOP, Action.FIRE, Action.RIGHT, Action.LEFT, Action.RIGHTFIRE, Action.LEFTFIRE],
         dtype=jnp.int32,
@@ -355,17 +355,6 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
         initial_obs = self._get_observation(state)
 
         return initial_obs, state
-
-    @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: PongState, action: chex.Array) -> Tuple[PongObservation, PongState, float, bool, PongInfo]:
-        # Translate compact agent action index to ALE console action
-        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
-
-        previous_state = state
-        state = self._player_step(state, atari_action)
-        state = self._enemy_step(state)
-        state = self._ball_step(state, atari_action)
-        state = self._score_and_reset(state)
 
     def _reset_ball_after_goal(self, state_and_goal: Tuple[PongState, bool]) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
         state, scored_right = state_and_goal
