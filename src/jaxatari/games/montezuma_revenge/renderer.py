@@ -5,7 +5,7 @@ import os
 
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from .core import MontezumaRevengeConstants, MontezumaRevengeState
+from jaxatari.games.montezuma_revenge.core import MontezumaRevengeConstants, MontezumaRevengeState
 
 class MontezumaRevengeRenderer(JAXGameRenderer):
     def __init__(self, consts: MontezumaRevengeConstants = None, config: render_utils.RendererConfig = None):

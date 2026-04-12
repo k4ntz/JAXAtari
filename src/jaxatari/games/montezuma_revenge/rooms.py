@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from .core import MontezumaRevengeConstants, MontezumaRevengeState, get_room_idx
+from jaxatari.games.montezuma_revenge.core import MontezumaRevengeConstants, MontezumaRevengeState, get_room_idx
 
 def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: MontezumaRevengeConstants) -> MontezumaRevengeState:
     enemies_x = jnp.zeros(consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32)

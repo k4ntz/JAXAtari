@@ -10,9 +10,16 @@ from jaxatari.spaces import Discrete
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
-from .montezuma_revenge.core import MontezumaRevengeConstants, MontezumaRevengeState, MontezumaRevengeObservation, MontezumaRevengeInfo, get_room_idx, check_platform
-from .montezuma_revenge.renderer import MontezumaRevengeRenderer
-from .montezuma_revenge.rooms import load_room
+from jaxatari.games.montezuma_revenge.core import (
+    MontezumaRevengeConstants,
+    MontezumaRevengeState,
+    MontezumaRevengeObservation,
+    MontezumaRevengeInfo,
+    get_room_idx,
+    check_platform,
+)
+from jaxatari.games.montezuma_revenge.renderer import MontezumaRevengeRenderer
+from jaxatari.games.montezuma_revenge.rooms import load_room
 
 
 class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevengeObservation, MontezumaRevengeInfo, MontezumaRevengeConstants]):
