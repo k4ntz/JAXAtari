@@ -140,7 +140,7 @@ class BankHeistConstants(AutoDerivedConstants):
     # Fuel constants
     FUEL_CAPACITY: float = struct.field(pytree_node=False, default=10200.0)
     TANK_HEIGHT: float = struct.field(pytree_node=False, default=25.0)
-    TANK_LEVELS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 1, 2, 4, 6, 9, 12, 16, 18, 25]))
+    TANK_LEVELS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 0, 2, 4, 6, 9, 12, 16, 18, 25]))
     DYNAMITE_DELAY: int = struct.field(pytree_node=False, default=60)
     DYNAMITE_EXPLOSION_DELAY: int = struct.field(pytree_node=False, default=30)
     
@@ -170,11 +170,38 @@ class BankHeistConstants(AutoDerivedConstants):
     POLICE_KILL_REWARD: Tuple[int, int, int] = struct.field(pytree_node=False, default=(50, 30, 10))
     CITY_REWARD: Tuple[int, int, int, int] = struct.field(pytree_node=False, default=(93, 186, 279, 372))
     BONUS_REWARD: int = struct.field(pytree_node=False, default=372)
+
+    # The deterministic 16-step flat array from ALE
+    HARDCODED_BANK_SPAWNS: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array(
+            [
+                [68, 94],  # 0
+                [16, 102],  # 1
+                [136, 78],  # 2
+                [56, 142],  # 3
+                [136, 134],  # 4
+                [76, 134],  # 5
+                [116, 62],  # 6
+                [16, 166],  # 7
+                [136, 54],  # 8
+                [128, 86],  # 9
+                [84, 166],  # 10
+                [84, 46],  # 11
+                [32, 46],  # 12
+                [36, 126],  # 13
+                [84, 110],  # 14
+                [48, 70],  # 15
+            ],
+            dtype=jnp.int32,
+        ),
+    )
     
     # Position constants
     FUEL_TANK_POSITION: Tuple[int, int] = struct.field(pytree_node=False, default=(42, 12))
     COLLISION_BOX: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 8))
-    PORTAL_X: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([16, 138]))
+    PORTAL_X: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([17, 140]))
+    LEVEL_TRANSITION_SPAWN: Tuple[int, int] = struct.field(pytree_node=False, default=(13, 78))
     
     # Window dimensions (derived constants)
     # Derived constants (dynamic calculation based on static fields)
@@ -187,6 +214,11 @@ class BankHeistConstants(AutoDerivedConstants):
     POLICE_SPAWN_DELAY: int = struct.field(pytree_node=False, default=120)
     POLICE_RANDOM_FACTOR: float = struct.field(pytree_node=False, default=0.7)
     POLICE_BIAS_FACTOR: float = struct.field(pytree_node=False, default=0.4)
+    # Difficulty-based police spawn delays (frames) after each bank robbery
+    SPAWN_DELAYS: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([150, 118, 102, 78, 46, 30, 14]),
+    )
     
     # Path constants
     MODULE_DIR: str = struct.field(pytree_node=False, default_factory=lambda: os.path.dirname(os.path.abspath(__file__)))
@@ -228,6 +260,14 @@ class BankHeistState(struct.PyTreeNode):
     level: chex.Array
     difficulty_level: chex.Array
     player: Entity
+    # ALE-like behavior: "facing" (player.direction) can update every frame from input,
+    # but actual movement direction only updates on movement ticks.
+    player_move_direction: chex.Array
+    # ALE applies actions with a 1-frame delay.
+    latched_action: chex.Array
+    # ALE portal timing: collision with a portal arms a one-movement-tick delayed teleport.
+    portal_pending: chex.Array
+    portal_pending_side: chex.Array
     dynamite_position: chex.Array
     enemy_positions: Entity
     bank_positions: Entity
@@ -246,14 +286,18 @@ class BankHeistState(struct.PyTreeNode):
     police_spawn_timers: chex.Array
     dynamite_timer: chex.Array
     pending_police_spawns: chex.Array  # Timer for delayed police spawning
-    pending_police_bank_indices: chex.Array  # Bank indices where police should spawn
+    pending_police_bank_indices: chex.Array  # Police slot index for each pending spawn
+    pending_police_spawn_positions: chex.Array  # (3, 2) position captured at robbery time
     pending_police_scores: chex.Array  # Bank robbery score for the pending spawn
     killed_police_scores: chex.Array  # Score when police is killed, displayed while bank_spawn_timers is high
     game_paused: chex.Array  # Game paused state Is set at beginning and after life was lost
+    pending_exit: chex.Array  # Whether a level exit has been requested (one-frame delay)
     bank_heists: chex.Array  # number of bank heists completed in the current level
     explosion_timer: chex.Array  # Timer for the screen flash effect when dynamite explodes
     last_raw_action: chex.Array
     current_diagonal_priority: chex.Array
+    total_banks_robbed: chex.Array  # global counter of banks robbed (for difficulty)
+    bank_spawn_indices: chex.Array  # 3 independent indices into HARDCODED_BANK_SPAWNS
     random_key: chex.PRNGKey  # Persistent random key that advances each step
     time: chex.Array
 
@@ -344,15 +388,20 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
     
     def reset(self, key: chex.PRNGKey) -> BankHeistState:
         # Minimal state initialization
+        initial_player = Entity(
+            position=jnp.array([12, 78]).astype(jnp.int32),
+            direction=jnp.array(4).astype(jnp.int32),
+            visibility=jnp.array(1).astype(jnp.int32)
+        )
         state = BankHeistState(
             level=jnp.array(0).astype(jnp.int32),
             difficulty_level=jnp.array(0).astype(jnp.int32),
             fuel=jnp.array(self.consts.FUEL_CAPACITY).astype(jnp.float32),
-            player=Entity(
-                position=jnp.array([12, 78]).astype(jnp.int32),
-                direction=jnp.array(4).astype(jnp.int32),
-                visibility=jnp.array(1).astype(jnp.int32)
-            ),
+            player=initial_player,
+            player_move_direction=initial_player.direction,
+            latched_action=jnp.array(Action.NOOP).astype(jnp.int32),
+            portal_pending=jnp.array(False).astype(jnp.bool_),
+            portal_pending_side=jnp.array(-1).astype(jnp.int32),
             dynamite_position=jnp.array([-1, -1]).astype(jnp.int32),  # Inactive at [-1, -1]
             enemy_positions=init_banks_or_police(),
             bank_positions=init_banks_or_police(),
@@ -373,11 +422,15 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             pending_police_bank_indices=jnp.array([-1, -1, -1]).astype(jnp.int32),  # Bank indices for pending spawns
             pending_police_scores=jnp.array([-1, -1, -1]).astype(jnp.int32),  # Score for the pending spawn
             killed_police_scores=jnp.array([-1, -1, -1]).astype(jnp.int32),  # Score when police is killed
+            pending_police_spawn_positions=jnp.full((3, 2), -1).astype(jnp.int32),
             game_paused=jnp.array(False).astype(jnp.bool_),
+            pending_exit=jnp.array(False).astype(jnp.bool_),
             bank_heists=jnp.array(0).astype(jnp.int32),
             explosion_timer=jnp.array(0).astype(jnp.int32),
             last_raw_action=jnp.array(Action.NOOP).astype(jnp.int32),
             current_diagonal_priority=jnp.array(self.consts.DIR_UP).astype(jnp.int32),
+            total_banks_robbed=jnp.array(0).astype(jnp.int32),
+            bank_spawn_indices=jnp.array([0, 5, 10]).astype(jnp.int32),
             random_key=key,  # Use the provided random key
             time=jnp.array(0, dtype=jnp.int32),
         )
@@ -496,16 +549,6 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
 
     @partial(jax.jit, static_argnums=(0,))
     def handle_bank_robbery(self, state: BankHeistState, bank_hit_index: chex.Array) -> BankHeistState:
-        """
-        Handle a bank robbery by hiding the bank and setting up delayed police spawn.
-
-        Args:
-            state: Current game state
-            bank_hit_index: Index of the bank that was robbed
-
-        Returns:
-            BankHeistState: Updated state with bank hidden and police spawn scheduled
-        """
         # Hide the robbed bank
         new_bank_visibility = state.bank_positions.visibility.at[bank_hit_index].set(0)
         new_banks = state.bank_positions.replace(visibility=new_bank_visibility)
@@ -516,12 +559,19 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         first_available_slot = jnp.min(slot_index)
         first_available_slot = jnp.where(first_available_slot >= len(available_spawn_slots), 0, first_available_slot)
         
-        # Set up delayed spawn using constant
-        new_pending_spawns = state.pending_police_spawns.at[first_available_slot].set(self.consts.POLICE_SPAWN_DELAY)
+        # EXACT ALE SPAWN MATH: 158 base - (8 * total_banks_robbed), floored at 14
+        calculated_delay = 158 - (8 * state.total_banks_robbed)
+        calculated_delay = jnp.maximum(14, calculated_delay)
+        
+        # Capture the exact robbery position NOW so the cop always spawns here,
+        # regardless of whether the bank slot moves to a new position later.
+        robbery_position = state.bank_positions.position[bank_hit_index]
+        new_pending_spawns = state.pending_police_spawns.at[first_available_slot].set(calculated_delay)
         new_pending_bank_indices = state.pending_police_bank_indices.at[first_available_slot].set(bank_hit_index)
+        new_pending_spawn_positions = state.pending_police_spawn_positions.at[first_available_slot].set(robbery_position)
 
-        # Increase bank heists count by 1
         new_bank_heists = state.bank_heists + 1
+        new_total_banks_robbed = state.total_banks_robbed + 1
 
         money_bonus = jnp.minimum(new_bank_heists, 9)
         new_pending_scores = state.pending_police_scores.at[first_available_slot].set(money_bonus)
@@ -534,8 +584,10 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             pending_police_spawns=new_pending_spawns,
             pending_police_bank_indices=new_pending_bank_indices,
             pending_police_scores=new_pending_scores,
+            pending_police_spawn_positions=new_pending_spawn_positions,
             bank_heists=new_bank_heists,
-            money=new_money
+            total_banks_robbed=new_total_banks_robbed,
+            money=new_money,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -566,28 +618,32 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         new_police_positions = jnp.where(visible_mask[:, None], reset_positions, state.enemy_positions.position)
         new_police = state.enemy_positions.replace(position=new_police_positions)
         
+        # Cap difficulty upon death (Grants the 38-frame pity timer)
+        new_total_banks_robbed = jnp.minimum(state.total_banks_robbed, jnp.array(15).astype(jnp.int32))
+
         return state.replace(
             player_lives=new_player_lives,
             player=new_player,
+            player_move_direction=new_player.direction,
+            portal_pending=jnp.array(False).astype(jnp.bool_),
+            portal_pending_side=jnp.array(-1).astype(jnp.int32),
             enemy_positions=new_police,
-            game_paused=jnp.array(True)
+            total_banks_robbed=new_total_banks_robbed,
+            game_paused=jnp.array(True),
+            pending_exit=jnp.array(False).astype(jnp.bool_),
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def spawn_police_car(self, state: BankHeistState, bank_index: chex.Array) -> BankHeistState:
+    def spawn_police_car(self, state: BankHeistState, police_slot: chex.Array, spawn_position: chex.Array) -> BankHeistState:
         """
-        Spawn a police car at the position of the specified bank index.
+        Spawn a police car at an explicit position into the given police slot.
 
         Returns:
             BankHeistState: Updated state with a police car spawned.
-        """        
-        # Get spawn position from bank index
-        spawn_position = state.bank_positions.position[bank_index]
-        
-        # Update police positions
-        new_positions = state.enemy_positions.position.at[bank_index].set(spawn_position)
-        new_directions = state.enemy_positions.direction.at[bank_index].set(4)  # Default direction
-        new_visibility = state.enemy_positions.visibility.at[bank_index].set(1)  # Make visible
+        """
+        new_positions = state.enemy_positions.position.at[police_slot].set(spawn_position)
+        new_directions = state.enemy_positions.direction.at[police_slot].set(4)  # Default direction
+        new_visibility = state.enemy_positions.visibility.at[police_slot].set(1)  # Make visible
 
         new_police = state.enemy_positions.replace(
             position=new_positions,
@@ -606,17 +662,19 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             BankHeistState: Updated state with police cars spawned and pending spawns cleared.
         """
         def process_single_spawn(i, current_state):
-            # Check if this spawn slot is ready
             def spawn_at_bank_index(state_inner):
-                bank_index = state_inner.pending_police_bank_indices[i]
-                spawned_state = self.spawn_police_car(state_inner, bank_index)
-                # Clear the pending spawn
+                police_slot = state_inner.pending_police_bank_indices[i]
+                spawn_pos = state_inner.pending_police_spawn_positions[i]
+                spawned_state = self.spawn_police_car(state_inner, police_slot, spawn_pos)
                 new_pending_spawns = spawned_state.pending_police_spawns.at[i].set(-1)
                 new_pending_indices = spawned_state.pending_police_bank_indices.at[i].set(-1)
                 new_pending_scores = spawned_state.pending_police_scores.at[i].set(-1)
+                new_pending_positions = spawned_state.pending_police_spawn_positions.at[i].set(jnp.array([-1, -1]))
+
                 return spawned_state.replace(
                     pending_police_spawns=new_pending_spawns,
                     pending_police_bank_indices=new_pending_indices,
+                    pending_police_spawn_positions=new_pending_positions,
                     pending_police_scores=new_pending_scores
                 )
             
@@ -798,44 +856,57 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
     
     @partial(jax.jit, static_argnums=(0,))
     def map_transition(self, state: BankHeistState) -> BankHeistState:
-        new_level = state.level+1
-        new_difficulty_level = jnp.minimum(new_level // self.consts.CITIES_PER_LEVEL, self.consts.MAX_LEVEL-1)
-        default_player_position = jnp.array([12, 78]).astype(jnp.int32)
+        new_level = state.level + 1
+        new_difficulty_level = jnp.minimum(new_level // self.consts.CITIES_PER_LEVEL, self.consts.MAX_LEVEL - 1)
+        # ALE spawns 1px further right after level transitions (but not on initial reset).
+        default_player_position = jnp.array(self.consts.LEVEL_TRANSITION_SPAWN).astype(jnp.int32)
         new_player = state.player.replace(position=default_player_position)
         empty_police = init_banks_or_police()
         empty_banks = init_banks_or_police()
         new_speed = self.consts.BASE_SPEED * jnp.power(self.consts.SPEED_INCREASE_PER_LEVEL, new_difficulty_level)
         new_fuel_consumption = jnp.power(self.consts.FUEL_CONSUMPTION_INCREASE_PER_LEVEL, new_difficulty_level)
+        
+        # Fuel refill: Original logic is actually fine! If they robbed 0 banks, REFILL_TABLE[0] is 0. 
+        # jnp.maximum means they just keep whatever fuel they had left (no refill).
         new_fuel = jnp.maximum(state.fuel, jax.lax.dynamic_index_in_dim(self.consts.REFILL_TABLE, state.bank_heists, axis=0, keepdims=False))
-        new_fuel_refill=jnp.array(0).astype(jnp.int32)
+        new_fuel_refill = jnp.array(0).astype(jnp.int32)
+        
         map_id = new_level % len(self.city_collision_maps)
         new_map_collision = jax.lax.dynamic_index_in_dim(self.city_collision_maps, map_id, axis=0, keepdims=False)
         new_spawn_points = jax.lax.dynamic_index_in_dim(self.city_spawns, map_id, axis=0, keepdims=False)
         new_dynamite_position = jnp.array([-1, -1]).astype(jnp.int32)  # Inactive dynamite
-        new_bank_spawn_timers = jnp.array([1,1,1]).astype(jnp.int32)
-        new_police_spawn_timers = jnp.array([-1,-1,-1]).astype(jnp.int32)
+        new_bank_spawn_timers = jnp.array([1, 1, 1]).astype(jnp.int32)
+        new_police_spawn_timers = jnp.array([-1, -1, -1]).astype(jnp.int32)
         new_dynamite_timer = jnp.array([-1]).astype(jnp.int32)
-        new_player_lives = jax.lax.cond(state.bank_heists >= 9, lambda: state.player_lives + 1, lambda: state.player_lives)
         
-        # Calculate city reward if 9 or more banks were robbed
-        # Use level % 4 to cycle through CITY_REWARD indices (0, 1, 2, 3)
+        # Extra life awarded only if 9 or more banks robbed
+        new_player_lives = jax.lax.cond(
+            state.bank_heists >= 9, 
+            lambda: state.player_lives + 1, 
+            lambda: state.player_lives
+        )
+        
+        # Calculate city reward based on the level cycle
         city_reward_index = state.level % 4
-        # Use JAX operations to select reward based on index
-        # city_reward_index cycles through 0, 1, 2, 3 -> rewards are 93, 186, 279, 372
         city_reward = jnp.where(city_reward_index == 0, self.consts.CITY_REWARD[0],
                       jnp.where(city_reward_index == 1, self.consts.CITY_REWARD[1],
                       jnp.where(city_reward_index == 2, self.consts.CITY_REWARD[2], self.consts.CITY_REWARD[3])))
-        city_reward_bonus = jax.lax.cond(
+        
+        # Both the base reward AND the difficulty bonus are gated behind the 9-bank requirement
+        total_bonus = jax.lax.cond(
             state.bank_heists >= 9,
             lambda: city_reward + (state.difficulty_level * self.consts.BONUS_REWARD),
-            lambda: 0
+            lambda: jnp.array(0).astype(jnp.int32)
         )
-        new_money = state.money + city_reward_bonus
+        new_money = state.money + total_bonus
         
         return state.replace(
             level=new_level,
             difficulty_level=new_difficulty_level,
             player=new_player,
+            player_move_direction=new_player.direction,
+            portal_pending=jnp.array(False).astype(jnp.bool_),
+            portal_pending_side=jnp.array(-1).astype(jnp.int32),
             player_lives=new_player_lives,
             money=new_money,
             enemy_positions=empty_police,
@@ -852,8 +923,10 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             dynamite_timer=new_dynamite_timer,
             pending_police_spawns=jnp.array([-1, -1, -1]).astype(jnp.int32),
             pending_police_bank_indices=jnp.array([-1, -1, -1]).astype(jnp.int32),
+            pending_police_spawn_positions=jnp.full((3, 2), -1).astype(jnp.int32),
             bank_heists=jnp.array(0).astype(jnp.int32),
-            random_key=jax.random.PRNGKey(new_level + 100)  # New random key for new level
+            pending_exit=jnp.array(False).astype(jnp.bool_),
+            random_key=jax.random.fold_in(state.random_key, new_level + 100)  # New random key for new level
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -932,18 +1005,26 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         valid_directions = self.get_valid_directions(state, police_position, current_direction)
         player_position = state.player.position
         
+        # Compute reverse direction for dead-end fallback
+        reverse_direction = jax.lax.switch(current_direction, [
+            lambda: self.consts.DIR_UP,    # If going DOWN, reverse is UP
+            lambda: self.consts.DIR_DOWN,  # If going UP, reverse is DOWN
+            lambda: self.consts.DIR_LEFT,  # If going RIGHT, reverse is LEFT
+            lambda: self.consts.DIR_RIGHT, # If going LEFT, reverse is RIGHT
+            lambda: current_direction,     # If NOOP, no reverse
+        ])
+
         # Count valid directions
         valid_count = jnp.sum(valid_directions >= 0)
         
-        # If no valid directions, it means we are in a dead end. Reverse direction.
+        # If no valid directions, allow reversing to escape dead ends
         def no_valid_directions():
-            return jax.lax.switch(current_direction, [
-                lambda: self.consts.DIR_UP,    # If going DOWN, reverse is UP
-                lambda: self.consts.DIR_DOWN,  # If going UP, reverse is DOWN  
-                lambda: self.consts.DIR_LEFT,  # If going RIGHT, reverse is LEFT
-                lambda: self.consts.DIR_RIGHT, # If going LEFT, reverse is RIGHT
-                lambda: current_direction,     # Default fallback
-            ])
+            can_reverse = self.check_valid_direction(state, police_position, reverse_direction)
+            return jax.lax.cond(
+                can_reverse,
+                lambda: reverse_direction,
+                lambda: current_direction
+            )
         
         # If only one valid direction, take it
         def one_valid_direction():
@@ -1075,9 +1156,9 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
 
         # Get random key for this step and advance state's random key
         step_random_key, new_state = self.advance_random_key(state)
-        
+
         # Determine the new priority if the action changed to a diagonal
-        action_changed = atari_action != state.last_raw_action
+        action_changed = atari_action != state.latched_action
         new_priority = jnp.where(
             action_changed,
             jnp.select(
@@ -1092,29 +1173,44 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
                     atari_action == Action.DOWNLEFTFIRE,
                 ],
                 choicelist=[
-                    jnp.where(state.last_raw_action == Action.UP, self.consts.DIR_RIGHT, self.consts.DIR_UP),
-                    jnp.where(state.last_raw_action == Action.UP, self.consts.DIR_LEFT, self.consts.DIR_UP),
-                    jnp.where(state.last_raw_action == Action.DOWN, self.consts.DIR_RIGHT, self.consts.DIR_DOWN),
-                    jnp.where(state.last_raw_action == Action.DOWN, self.consts.DIR_LEFT, self.consts.DIR_DOWN),
-                    jnp.where(jnp.logical_or(state.last_raw_action == Action.UP, state.last_raw_action == Action.UPFIRE), self.consts.DIR_RIGHT, self.consts.DIR_UP),
-                    jnp.where(jnp.logical_or(state.last_raw_action == Action.UP, state.last_raw_action == Action.UPFIRE), self.consts.DIR_LEFT, self.consts.DIR_UP),
-                    jnp.where(jnp.logical_or(state.last_raw_action == Action.DOWN, state.last_raw_action == Action.DOWNFIRE), self.consts.DIR_RIGHT, self.consts.DIR_DOWN),
-                    jnp.where(jnp.logical_or(state.last_raw_action == Action.DOWN, state.last_raw_action == Action.DOWNFIRE), self.consts.DIR_LEFT, self.consts.DIR_DOWN),
+                    jnp.where(state.latched_action == Action.UP, self.consts.DIR_RIGHT, self.consts.DIR_UP),
+                    jnp.where(state.latched_action == Action.UP, self.consts.DIR_LEFT, self.consts.DIR_UP),
+                    jnp.where(state.latched_action == Action.DOWN, self.consts.DIR_RIGHT, self.consts.DIR_DOWN),
+                    jnp.where(state.latched_action == Action.DOWN, self.consts.DIR_LEFT, self.consts.DIR_DOWN),
+                    jnp.where(jnp.logical_or(state.latched_action == Action.UP, state.latched_action == Action.UPFIRE), self.consts.DIR_RIGHT, self.consts.DIR_UP),
+                    jnp.where(jnp.logical_or(state.latched_action == Action.UP, state.latched_action == Action.UPFIRE), self.consts.DIR_LEFT, self.consts.DIR_UP),
+                    jnp.where(jnp.logical_or(state.latched_action == Action.DOWN, state.latched_action == Action.DOWNFIRE), self.consts.DIR_RIGHT, self.consts.DIR_DOWN),
+                    jnp.where(jnp.logical_or(state.latched_action == Action.DOWN, state.latched_action == Action.DOWNFIRE), self.consts.DIR_LEFT, self.consts.DIR_DOWN),
                 ],
                 default=state.current_diagonal_priority
             ),
             state.current_diagonal_priority
         )
         
+        # Update the state with the newly calculated priority
+        new_state = new_state.replace(current_diagonal_priority=new_priority)
+
+        # Apply player input EVERY frame (even when movement doesn't happen),
+        # but with a 1-frame latch to match ALE timing.
+        new_state = self.player_input_step(new_state, state.latched_action)
+
+        # Movement is gated by the speed accumulator (fractional speeds move every N frames).
         full_speed = new_state.speed + new_state.reserve_speed
-        new_state = new_state.replace(
-            reserve_speed=jnp.mod(full_speed, 1.0),
-            last_raw_action=atari_action,
-            current_diagonal_priority=new_priority
-        )
-        full_speed = full_speed.astype(jnp.int32)
-        # Player step. Must be run first as this step unpauses the game if it is paused!
-        new_state = jax.lax.fori_loop(0, full_speed, lambda i, s: self.player_step(s, atari_action), new_state)
+        movement_ticks = full_speed.astype(jnp.int32)
+
+        # ALE phase: at speeds < 1 pixel/frame, the movement tick is only consumed
+        # on one of the two frame phases.
+        is_subpixel = new_state.speed < 1.0
+        consume_phase = (state.time % 2) == 0  # allow consumption on even times
+        movement_ticks = jnp.where(jnp.logical_and(is_subpixel, jnp.logical_not(consume_phase)), 0, movement_ticks)
+
+        # Update reserve using "used distance" (not mod) so we can carry >1.0 when phase-blocked.
+        new_reserve = full_speed - movement_ticks.astype(jnp.float32)
+        new_state = new_state.replace(reserve_speed=new_reserve)
+        new_state = jax.lax.fori_loop(0, movement_ticks, lambda i, s: self.player_move_step(s), new_state)
+
+        # Latch the *current* action for next frame (ALE behavior).
+        new_state = new_state.replace(latched_action=atari_action)
         police_speed = jax.lax.cond(
             new_state.game_paused,
             lambda: jnp.array(0).astype(jnp.float32),
@@ -1135,6 +1231,17 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             new_state.game_paused,
             lambda: new_state,
             lambda: self.fuel_step(new_state)
+        )
+
+        # Apply pending level transition *after* fuel consumption so that
+        # starvation on the exit frame still costs a life.
+        new_state = jax.lax.cond(
+            jnp.logical_and(
+                jnp.logical_not(new_state.game_paused),
+                jnp.logical_and(new_state.player_lives >= 0, new_state.pending_exit),
+            ),
+            lambda: self.map_transition(new_state),
+            lambda: new_state,
         )
 
         
@@ -1169,9 +1276,9 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         return self._get_observation(new_state), new_state, reward, done, info
 
     @partial(jax.jit, static_argnums=(0,))
-    def player_step(self, state: BankHeistState, atari_action: chex.Array) -> BankHeistState:
+    def player_input_step(self, state: BankHeistState, atari_action: chex.Array) -> BankHeistState:
         """
-        Handles player Input & movement.
+        Handles player input for a single frame (no movement).
 
         Returns:
             BankHeistState: The new state of the game after the player's action.
@@ -1222,40 +1329,36 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             default=self.consts.DIR_NOOP,  # NOOP, FIRE, or unknown -> NOOP
         )
         
-        # For NOOP and FIRE, keep current direction
+        # For NOOP and FIRE, snap facing back to current movement direction.
+        # This avoids rapid "facing jitter" when repeatedly requesting a turn
+        # on frames where movement cannot commit it (ALE-like behavior).
         player_input = jnp.where(
             jnp.logical_or(atari_action == Action.NOOP, atari_action == Action.FIRE),
-            state.player.direction,
-            internal_direction
+            state.player_move_direction,
+            internal_direction,
         )
-        
-        current_player, invalid_input = self.validate_input(state, state.player, player_input)
-        new_player = self.move(current_player, current_player.direction)
-        collision = self.check_background_collision(state, new_player)
-        new_player = jax.lax.cond(collision >= 255,
-            lambda: current_player,
-            lambda: new_player
-        )
-        new_player = self.portal_handler(new_player, collision, False)
+
+        # ALE-like: update "facing" immediately from input each frame,
+        # even if movement won't occur this frame.
+        faced_player = state.player.replace(direction=player_input)
+
+        # Reject turns into walls (ALE behavior): if the attempted direction would collide,
+        # keep facing aligned with the current movement direction.
+        # Use a player whose current direction equals the movement direction so the
+        # "fallback" direction is correct.
+        base_player = state.player.replace(direction=state.player_move_direction)
+        validated_player, invalid_input = self.validate_input(state, base_player, player_input)
+        faced_player = faced_player.replace(direction=validated_player.direction)
 
         new_state = state.replace(
-            player=new_player,
-            game_paused=jnp.where(jnp.logical_and(jnp.logical_not(invalid_input), atari_action != Action.NOOP), jnp.array(False).astype(jnp.bool_), state.game_paused)
+            player=faced_player,
+            player_move_direction=state.player_move_direction,
+            game_paused=jnp.where(
+                jnp.logical_and(jnp.logical_not(invalid_input), atari_action != Action.NOOP),
+                jnp.array(False).astype(jnp.bool_),
+                state.game_paused,
+            ),
         )
-
-        # Check for bank collisions and handle bank robberies (before any other state changes)
-        bank_collision_mask, bank_hit_index = self.check_bank_collision(new_player, state.bank_positions)
-        
-        # Apply bank robbery logic if any bank was hit
-        bank_hit = bank_hit_index >= 0
-        new_state = jax.lax.cond(bank_hit, lambda: self.handle_bank_robbery(new_state, bank_hit_index), lambda: new_state)
-
-        # Check for police collisions and handle player death
-        police_collision_mask, police_hit_index = self.check_police_collision(new_player, state.enemy_positions)
-        
-        # Apply police collision logic if any police car was hit
-        police_hit = police_hit_index >= 0
-        new_state = jax.lax.cond(police_hit, lambda: self.lose_life(new_state), lambda: new_state)
 
         # Handle dynamite placement when FIRE action is pressed
         # Check if action is a fire action (any action with FIRE in it)
@@ -1270,18 +1373,99 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             )
         )
         new_state = jax.lax.cond(is_fire, 
-            lambda: self.place_dynamite(new_state, new_player),
-            lambda: new_state
-        )
-
-        new_state = jax.lax.cond(collision == 200, lambda: self.map_transition(new_state), lambda: new_state)
-
-        new_state = jax.lax.cond(
-            jnp.logical_and(new_state.game_paused, jnp.logical_not(police_hit)),
-            lambda: state,
+            lambda: self.place_dynamite(new_state, new_state.player),
             lambda: new_state
         )
         return new_state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def player_move_step(self, state: BankHeistState) -> BankHeistState:
+        """
+        Move the player by 1 pixel in the current direction (if not paused),
+        and apply collisions / transitions that depend on the new position.
+        """
+        def do_move(moving_state: BankHeistState) -> BankHeistState:
+            current_player = moving_state.player
+
+            # On movement ticks, update movement direction toward current facing
+            # (unless blocked by a wall).
+            desired_dir = current_player.direction
+            # Validate the desired turn (for wall collisions)
+            base_player = current_player.replace(direction=moving_state.player_move_direction)
+            turning_player, _ = self.validate_input(moving_state, base_player, desired_dir)
+            new_move_dir = turning_player.direction
+
+            attempted_player = self.move(current_player, new_move_dir)
+            collision = self.check_background_collision(moving_state, attempted_player)
+            new_player = jax.lax.cond(
+                collision >= 255,
+                lambda: current_player,
+                lambda: attempted_player,
+            )
+
+            # Snap facing to movement direction on movement ticks. This creates
+            # the "flip then flip back" behavior on the disallowed phase.
+            new_player = new_player.replace(direction=new_move_dir)
+
+            moved_state = moving_state.replace(
+                player=new_player,
+                player_move_direction=new_move_dir,
+            )
+
+            # Portal trigger timing (ALE-like): the portal "activates" one pixel deeper.
+            # We model this by requiring two consecutive portal collisions on movement ticks.
+            side = (new_player.position[0] <= 80).astype(jnp.int32)
+            should_teleport_now = jnp.logical_and(moved_state.portal_pending, collision == 100)
+
+            def teleport(s: BankHeistState) -> BankHeistState:
+                teleported_player = s.player.replace(
+                    position=jnp.array([self.consts.PORTAL_X[s.portal_pending_side], s.player.position[1]])
+                )
+                return s.replace(
+                    player=teleported_player,
+                    player_move_direction=teleported_player.direction,
+                    portal_pending=jnp.array(False).astype(jnp.bool_),
+                    portal_pending_side=jnp.array(-1).astype(jnp.int32),
+                )
+
+            moved_state = jax.lax.cond(should_teleport_now, teleport, lambda s: s, moved_state)
+
+            moved_state = moved_state.replace(
+                portal_pending=jnp.where(should_teleport_now, jnp.array(False).astype(jnp.bool_), collision == 100),
+                portal_pending_side=jnp.where(
+                    should_teleport_now,
+                    jnp.array(-1).astype(jnp.int32),
+                    jnp.where(collision == 100, side, jnp.array(-1).astype(jnp.int32)),
+                ),
+            )
+
+            # Check for bank collisions and handle bank robberies
+            _, bank_hit_index = self.check_bank_collision(new_player, moved_state.bank_positions)
+            bank_hit = bank_hit_index >= 0
+            moved_state = jax.lax.cond(bank_hit, lambda: self.handle_bank_robbery(moved_state, bank_hit_index), lambda: moved_state)
+
+            # Check for police collisions and handle player death
+            _, police_hit_index = self.check_police_collision(new_player, moved_state.enemy_positions)
+            police_hit = police_hit_index >= 0
+            moved_state = jax.lax.cond(police_hit, lambda: self.lose_life(moved_state), lambda: moved_state)
+
+            # Mark that we hit an exit tile; actual map transition is applied
+            # after fuel consumption via a one-frame delay.
+            moved_state = moved_state.replace(
+                pending_exit=jnp.logical_or(moved_state.pending_exit, collision == 200)
+            )
+
+            # Preserve previous "pause rollback" behavior: if a life-loss set pause,
+            # keep the original state instead of the partially-updated one.
+            moved_state = jax.lax.cond(
+                jnp.logical_and(moved_state.game_paused, jnp.logical_not(police_hit)),
+                lambda s: moving_state,
+                lambda s: moved_state,
+                operand=None,
+            )
+            return moved_state
+
+        return jax.lax.cond(state.game_paused, lambda s: state, do_move, state)
     
     @partial(jax.jit, static_argnums=(0,))
     def fuel_step(self, state: BankHeistState) -> BankHeistState:
@@ -1299,24 +1483,41 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         return new_state
 
     @partial(jax.jit, static_argnums=(0,))
+    def spawn_banks_fn(self, state: BankHeistState, step_random_key: chex.PRNGKey) -> BankHeistState:
+        """Deterministic ALE behavior: each bank independently traverses the 16-step array."""
+        del step_random_key  # Unused in deterministic behavior
+
+        spawning_mask = state.bank_spawn_timers == 0  # (3,)
+        chosen_points = self.consts.HARDCODED_BANK_SPAWNS[state.bank_spawn_indices]  # (3,2)
+
+        new_indices = jnp.where(
+            spawning_mask,
+            (state.bank_spawn_indices + 1) % 16,
+            state.bank_spawn_indices,
+        )
+
+        new_bank_positions = jnp.where(
+            spawning_mask[:, None], chosen_points, state.bank_positions.position
+        )
+        new_visibility = jnp.where(
+            state.bank_spawn_timers == 0,
+            jnp.array([1, 1, 1]),
+            state.bank_positions.visibility,
+        )
+
+        new_banks = state.bank_positions.replace(
+            position=new_bank_positions, visibility=new_visibility
+        )
+        return state.replace(bank_positions=new_banks, bank_spawn_indices=new_indices)
+
+    @partial(jax.jit, static_argnums=(0,))
     def timer_step(self, state: BankHeistState, step_random_key: chex.PRNGKey) -> BankHeistState:
         """
         Handles the countdown of timers for the spawning of police cars and banks as well as dynamite explosions.
-
+        
         Returns:
             BankHeistState: The new state of the game after the timer step.
         """
-        def spawn_bank(state: BankHeistState) -> BankHeistState:
-            # Use the step random key for bank spawning
-            new_bank_spawns = jax.random.randint(step_random_key, shape=(state.bank_positions.position.shape[0],), minval=0, maxval=state.spawn_points.shape[0])
-            chosen_points = state.spawn_points[new_bank_spawns]
-            mask = (state.bank_spawn_timers == 0)[:, None]  # shape (3, 1)
-            new_bank_positions = jnp.where(mask, chosen_points, state.bank_positions.position)
-
-            new_visibility = jnp.where(state.bank_spawn_timers == 0, jnp.array([1,1,1]), state.bank_positions.visibility)
-
-            new_banks = state.bank_positions.replace(position=new_bank_positions, visibility=new_visibility)
-            return state.replace(bank_positions=new_banks)
 
         new_bank_spawn_timers = jnp.where(state.bank_spawn_timers >= 0, state.bank_spawn_timers - 1, state.bank_spawn_timers)
         new_police_spawn_timers = jnp.where(state.police_spawn_timers >= 0, state.police_spawn_timers - 1, state.police_spawn_timers)
@@ -1335,15 +1536,27 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
         )        
         # Spawn banks when their timers reach 0
         spawn_bank_condition = jnp.any(new_bank_spawn_timers == 0)
-        new_state = jax.lax.cond(spawn_bank_condition, lambda: spawn_bank(new_state), lambda: new_state)
+        new_state = jax.lax.cond(
+            spawn_bank_condition,
+            lambda: self.spawn_banks_fn(new_state, step_random_key),
+            lambda: new_state,
+        )
         
         # Process delayed police spawns
         spawn_police_condition = jnp.any(new_pending_police_spawns == 0)
-        new_state = jax.lax.cond(spawn_police_condition, lambda: self.process_pending_police_spawns(new_state), lambda: new_state)
+        new_state = jax.lax.cond(
+            spawn_police_condition,
+            lambda: self.process_pending_police_spawns(new_state),
+            lambda: new_state,
+        )
         
         # Handle dynamite explosion when timer reaches 0 (check original timer before decrementing)
         dynamite_explode_condition = state.dynamite_timer[0] == 0
-        new_state = jax.lax.cond(dynamite_explode_condition, lambda: self.explode_dynamite(new_state), lambda: new_state)
+        new_state = jax.lax.cond(
+            dynamite_explode_condition,
+            lambda: self.explode_dynamite(new_state),
+            lambda: new_state,
+        )
         
         return new_state
 

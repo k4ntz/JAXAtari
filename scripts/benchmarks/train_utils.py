@@ -8,15 +8,15 @@ import wandb
 from safetensors.flax import save_file, load_file
 from flax.traverse_util import flatten_dict, unflatten_dict
 
-def video_callback(states, dones, step, renderer, mod=False):
+def video_callback(states, dones, step, renderer, mod=False, mod_name=None):
     """
     Starting a new thread to render video so that it doesn't block training.
     """
     # video_thread = threading.Thread(target=video_renderer, args=(states, dones, step, renderer, mod))
     # video_thread.start()
-    video_renderer(states, dones, step, renderer, mod)
+    video_renderer(states, dones, step, renderer, mod, mod_name)
 
-def video_renderer(states, dones, step, renderer, mod):
+def video_renderer(states, dones, step, renderer, mod, mod_name):
     print("Rendering video...")
     video_folder = f"{wandb.run.dir}/media/videos/"
     os.makedirs(video_folder, exist_ok=True)
@@ -45,7 +45,11 @@ def video_renderer(states, dones, step, renderer, mod):
     video = wandb.Video(frames, fps=fps, format="mp4")
     name = f"video_{step}"
     if mod:
-        name = f"video_{step}_mod"
+        if mod_name is not None:
+            safe_mod_name = str(mod_name).replace("/", "_")
+            name = f"video_{step}_mod_{safe_mod_name}"
+        else:
+            name = f"video_{step}_mod"
     wandb.log({name: video})
     print("Video done.")
 

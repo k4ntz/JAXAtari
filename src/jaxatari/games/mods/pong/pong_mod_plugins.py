@@ -67,18 +67,14 @@ class AlwaysZeroScoreMod(JaxAtariPostStepModPlugin):
     
 
 class LinearMovementMod(JaxAtariInternalModPlugin):
-    constants_overrides = {
-        "PLAYER_ACCELERATION": (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
-    }
-
     @partial(jax.jit, static_argnums=(0,))
     def _player_step(self, state: PongState, action: chex.Array) -> PongState:
         up = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
         down = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
 
         # Direct movement: move 2 pixels per frame when input pressed
-        move_amount = jnp.array(2, dtype=jnp.int32)
-        
+        move_amount = jnp.array(2.0, dtype=jnp.float32)
+
         new_player_y = state.player_y
         new_player_y = jax.lax.cond(
             up,
@@ -86,7 +82,7 @@ class LinearMovementMod(JaxAtariInternalModPlugin):
             lambda y: y,
             operand=new_player_y,
         )
-        
+
         new_player_y = jax.lax.cond(
             down,
             lambda y: y + move_amount,
@@ -94,18 +90,16 @@ class LinearMovementMod(JaxAtariInternalModPlugin):
             operand=new_player_y,
         )
 
-        # Hard boundaries
+        # Hard boundaries using the analog paddle limits
         new_player_y = jnp.clip(
             new_player_y,
-            self._env.consts.WALL_TOP_Y + self._env.consts.WALL_TOP_HEIGHT - 10,
-            self._env.consts.WALL_BOTTOM_Y - 4,
+            self._env.consts.PADDLE_MIN_Y,
+            self._env.consts.PADDLE_MAX_Y,
         )
 
         return state.replace(
             player_y=new_player_y,
-            player_speed=jnp.array(0, dtype=jnp.int32),
-            acceleration_counter=jnp.array(0, dtype=jnp.int32),
-            buffer=new_player_y
+            player_speed=jnp.array(0.0, dtype=jnp.float32),
         )
 
 class ShiftPlayerMod(JaxAtariInternalModPlugin):
@@ -116,4 +110,10 @@ class ShiftPlayerMod(JaxAtariInternalModPlugin):
 class ShiftEnemyMod(JaxAtariInternalModPlugin):
     constants_overrides = {
         "ENEMY_X": 20,
+    }
+
+
+class NoFireMod(JaxAtariInternalModPlugin):
+    attribute_overrides = {
+        "ACTION_SET": jnp.array([Action.NOOP, Action.RIGHT, Action.LEFT], dtype=jnp.int32),
     }

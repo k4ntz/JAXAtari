@@ -11,6 +11,7 @@ BANKHEIST_MOD_REGISTRY = {
     "2_police_cars": TwoPoliceCarsMod,
     "random_city": RandomCityMod,
     "revisit_city": RevisitCityMod,
+    "random_spawns": RandomBankSpawnsMod,
 }
 
 class BankHeistEnvMod(JaxAtariModController):

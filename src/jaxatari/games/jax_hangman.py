@@ -435,6 +435,7 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: HangmanState, action: chex.Array) -> Tuple[
         HangmanObservation, HangmanState, float, bool, HangmanInfo]:
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         # Calculate raw button state
         commit = _action_commit(action).astype(jnp.int32)
 

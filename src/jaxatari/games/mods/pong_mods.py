@@ -1,6 +1,6 @@
 import os
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.pong.pong_mod_plugins import LazyEnemyMod, RandomEnemyMod, AlwaysZeroScoreMod, LinearMovementMod, ShiftPlayerMod, ShiftEnemyMod
+from jaxatari.games.mods.pong.pong_mod_plugins import LazyEnemyMod, RandomEnemyMod, AlwaysZeroScoreMod, LinearMovementMod, ShiftPlayerMod, ShiftEnemyMod, NoFireMod
 
 class PongEnvMod(JaxAtariModController):    
     """
@@ -15,6 +15,7 @@ class PongEnvMod(JaxAtariModController):
         "linear_movement": LinearMovementMod,
         "shift_player": ShiftPlayerMod,
         "shift_enemy": ShiftEnemyMod,
+        "no_fire": NoFireMod,
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "pong", "sprites")

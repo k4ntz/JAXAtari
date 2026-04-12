@@ -748,28 +748,24 @@ def activate_next_level(constants, level, lives, enemy_positions, enemy_directio
 
 
 class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, AmidarConstants]):
-    def __init__(self, consts: AmidarConstants = None, constants: AmidarConstants = None, reward_funcs: list[callable]=None):
-        consts = consts or constants or AmidarConstants()
-        super().__init__(consts)
-        self.frame_stack_size = 4
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
-        self.action_set = [
+    ACTION_SET: jnp.ndarray = jnp.array([
             Action.NOOP,
             Action.FIRE,
             Action.RIGHT,
             Action.LEFT,
-            Action.UP,
             Action.DOWN,
+            Action.UP,
             Action.RIGHTFIRE,
             Action.LEFTFIRE,
-            Action.UPFIRE,
             Action.DOWNFIRE,
-        ]
-        self.constants = consts
-        self.obs_size = 4 #TODO add as needed
-        self.renderer = AmidarRenderer(consts)
+        ], dtype=jnp.int32)
+
+    def __init__(self, consts: AmidarConstants = None):
+        consts = consts or AmidarConstants()
+        super().__init__(consts) #sets self.consts
+        self.frame_stack_size = 4
+        self.constants = self.consts
+        self.renderer = AmidarRenderer(self.consts)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AmidarState) -> bool:
@@ -786,7 +782,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             frame_counter=state.frame_counter,
         )
 
-    def reset(self, key = jax.random.key(3)) -> Tuple[AmidarObservation, AmidarState]:
+    def reset(self, key = jax.random.PRNGKey(42)) -> Tuple[AmidarObservation, AmidarState]:
         """
         Resets the game state to the initial state.
         Returns the initial state and the reward (i.e. 0)
@@ -814,9 +810,6 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             times_jumped=jnp.array(0).astype(jnp.int32), 
         )
         initial_obs = self._get_observation(state)
-
-        # jnp.set_printoptions(threshold=jnp.inf)
-        # jax.debug.print("{m}", m=PATH_MASK)
 
         return initial_obs, state
     
@@ -848,11 +841,8 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             "completed_rectangles": spaces.get_object_space(n=rectangle_count, screen_size=screen_size),
         })
 
-    def state_space(self) -> spaces.Box:
-        return spaces.Box(low=0, high=255, shape=(self.constants.HEIGHT, self.constants.WIDTH, 4), dtype=jnp.uint8)
-
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def image_space(self) -> spaces.Box:
         """
@@ -872,9 +862,9 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: AmidarState, action: chex.Array) -> Tuple[AmidarObservation, AmidarState, float, bool, AmidarInfo]:
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))  # Convert action index to actual action
 
         previous_state = state
-            
         def take_step():
             random_key, random_enemies_key = jax.random.split(state.random_key)
 
@@ -1110,10 +1100,6 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             completed_rectangles=completed_rectangles
         )
         
-    
-    def get_action_space(self) -> jnp.ndarray:
-        return jnp.array(self.action_set)
-
 class AmidarRenderer(JAXGameRenderer):
     """JAX-based Amidar game renderer, optimized with JIT compilation."""
 

@@ -427,10 +427,29 @@ class VentureInfo(struct.PyTreeNode):
 
 class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, VentureConstants]):
     """JAX-based implementation of the Venture Atari game."""
+    ACTION_SET: jnp.ndarray = jnp.array([
+        Action.NOOP,
+        Action.FIRE,
+        Action.UP,
+        Action.RIGHT,
+        Action.LEFT,
+        Action.DOWN,
+        Action.UPRIGHT,
+        Action.UPLEFT,
+        Action.DOWNRIGHT,
+        Action.DOWNLEFT,
+        Action.UPFIRE,
+        Action.RIGHTFIRE,
+        Action.LEFTFIRE,
+        Action.DOWNFIRE,
+        Action.UPRIGHTFIRE,
+        Action.UPLEFTFIRE,
+        Action.DOWNRIGHTFIRE,
+        Action.DOWNLEFTFIRE
+    ], dtype=jnp.int32)
 
     def __init__(self, consts: VentureConstants = None):
         super().__init__(consts or VentureConstants())
-
         self.renderer = VentureRenderer(self.consts)
 
 
@@ -513,10 +532,11 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
         return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: GameState, action: int) -> tuple[
+    def step(self, state: GameState, action: chex.Array) -> tuple[
         VentureObservation, Any, Array | ndarray[Any, dtype[Any]], bool, VentureInfo]:
         """Performs one step of the environment given the agent's actions."""
 
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         # Store the current level before any transitions occur.
         state = state.replace(last_level=state.current_level)
 
@@ -1523,7 +1543,7 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
 
     def action_space(self) -> spaces.Discrete:
         """Returns the action space of the environment."""
-        return spaces.Discrete(len(Action.get_all_values()))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space of the environment."""

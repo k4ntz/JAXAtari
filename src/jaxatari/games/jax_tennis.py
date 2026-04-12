@@ -1,3 +1,4 @@
+from PIL.Image import new
 import os
 from functools import partial
 from typing import NamedTuple, Tuple, Dict, Any, Optional, Sequence, Callable
@@ -1170,14 +1171,14 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObservation, TennisInfo, Te
                 y_movement_direction=jnp.array(1),
             ),
             ball_state=BallState(
-                ball_x=jnp.array(self.consts.FRAME_WIDTH / 2.0 - self.consts.BALL_WIDTH / 2),
+                ball_x=jnp.array(self.consts.START_X + 2*self.consts.BALL_WIDTH),
                 ball_y=jnp.array(self.consts.GAME_OFFSET_TOP),
                 ball_z=jnp.array(0.0),
                 ball_z_fp=jnp.array(0.0),
                 ball_velocity_z_fp=jnp.array(0.0),
                 ball_hit_start_x=jnp.array(0.0),
                 ball_hit_start_y=jnp.array(0.0),
-                ball_hit_target_x=jnp.array(self.consts.FRAME_WIDTH / 2.0 - self.consts.BALL_WIDTH / 2),
+                ball_hit_target_x=jnp.array(self.consts.START_X + 2*self.consts.BALL_WIDTH),
                 ball_hit_target_y=jnp.array(self.consts.GAME_OFFSET_TOP),
                 move_x=jnp.array(0.0),
                 move_y=jnp.array(0.0),
@@ -1494,25 +1495,19 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObservation, TennisInfo, Te
             state.ball_state.bounces
         )
 
-        # update the scores and start pause of game
-        after_score_update_game_state = jax.lax.cond(
-            jnp.logical_or(
-                jnp.logical_and(  # If player is top field and ball is bottom field the player scores
-                    state.ball_state.ball_y >= self.consts.GAME_MIDDLE,
-                    state.player_state.player_field == 1
-                ),
-                jnp.logical_and(  # If player is bottom field and ball is top field the player scores
-                    state.ball_state.ball_y <= self.consts.GAME_MIDDLE,
-                    state.player_state.player_field == -1
-                )
-            ),
-            lambda _: GameState(jnp.array(True), jnp.array(self.consts.PAUSE_DURATION), state.game_state.player_score + 1,
-                                state.game_state.enemy_score, state.game_state.player_game_score,
-                                state.game_state.enemy_game_score, state.game_state.is_finished),
-            lambda _: GameState(jnp.array(True), jnp.array(self.consts.PAUSE_DURATION), state.game_state.player_score,
-                                state.game_state.enemy_score + 1, state.game_state.player_game_score,
-                                state.game_state.enemy_game_score, state.game_state.is_finished),
-            None
+        # Use the last hitter as point winner when the ball has bounced out the rally.
+        # This avoids side-mapping mistakes when player/enemy fields swap.
+        player_scored = state.ball_state.last_hit == self.consts.PLAYER_CONST
+        enemy_scored = state.ball_state.last_hit == self.consts.ENEMY_CONST
+
+        after_score_update_game_state = GameState(
+            jnp.array(True),
+            jnp.array(self.consts.PAUSE_DURATION),
+            state.game_state.player_score + player_scored.astype(state.game_state.player_score.dtype),
+            state.game_state.enemy_score + enemy_scored.astype(state.game_state.enemy_score.dtype),
+            state.game_state.player_game_score,
+            state.game_state.enemy_game_score,
+            state.game_state.is_finished,
         )
 
         # Check if a set has ended and if the game has ended
@@ -2333,7 +2328,10 @@ class TennisJaxEnv(JaxEnvironment[TennisState, TennisObservation, TennisInfo, Te
         )
 
     def _get_reward(self, previous_state: TennisState, state: TennisState) -> float:
-        return 0.0
+        new_player_score = state.game_state.player_score - previous_state.game_state.player_score 
+        new_enemy_score = state.game_state.enemy_score - previous_state.game_state.enemy_score
+        reward = new_player_score - new_enemy_score
+        return reward 
 
     def _get_done(self, state: TennisState) -> bool:
         return state.game_state.is_finished

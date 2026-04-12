@@ -73,11 +73,6 @@ def apply_native_downscaling(
 
     return False, False
 
-# NOTE: Backwards-compatible alias for existing wrappers
-_apply_native_downscaling_hotswap = apply_native_downscaling
-
-
-
 class AutoDerivedConstants(struct.PyTreeNode):
     def __init_subclass__(cls, **kwargs):
         """Override replace method after Flax's dataclass decorator runs."""
@@ -762,7 +757,14 @@ class JaxAtariModWrapper(JaxatariWrapper):
         # 2. Run all post-step mods in order
         for mod_fn in self.post_step_mods:
             new_state = mod_fn(state, new_state)
-            
+
+        # 3. Recompute outputs from the final post-modded state so all returned
+        # values stay consistent with the state the caller receives.
+        obs = self._env._get_observation(new_state)
+        reward = self._env._get_reward(state, new_state)
+        done = self._env._get_done(new_state)
+        info = self._env._get_info(new_state)
+
         return obs, new_state, reward, done, info
 
 

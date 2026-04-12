@@ -135,6 +135,7 @@ class JaxSurround(
     
     # Minimal ALE action set for Surround (from scripts/action_space_helper.py)
     # Note: FIRE is NOT in the ALE action set for this game
+    # Note: multi-agent might be different
     ACTION_SET: jnp.ndarray = jnp.array(
         [
             Action.NOOP,
