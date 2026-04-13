@@ -34,8 +34,9 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         consts = consts or MontezumaRevengeConstants()
         super().__init__(consts)
         self.renderer = MontezumaRevengeRenderer(self.consts)
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "montezuma")
         
-        sprite_path_0 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "base_collision_map.npy")
+        sprite_path_0 = os.path.join(sprite_path, "backgrounds", "base_collision_map.npy")
         col_map_0 = jnp.load(sprite_path_0)[:149, :, 0]
         
         # New 3: Leftmost
@@ -43,7 +44,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         room_col_0_3 = room_col_0_3.at[6:48, 0:4].set(1) # Left wall
         room_col_0_3 = room_col_0_3.at[147:149, 72:88].set(0) # Hole for ladder down
 
-        sprite_path_1 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "mid_room_collision_level_0.npy")
+        sprite_path_1 = os.path.join(sprite_path, "backgrounds", "mid_room_collision_level_0.npy")
         col_map_1 = jnp.load(sprite_path_1)[:149, :, 0] # (149, 160)
         # New 4: Middle
         room_col_0_4 = jnp.where(col_map_1 > 0, 1, 0).astype(jnp.int32)
@@ -61,7 +62,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         room_col_1_2 = room_col_1_2.at[6:48, 0:4].set(1)
         room_col_1_2 = room_col_1_2.at[147:149, 72:88].set(0) # Hole for ladder down to room 18
         
-        sprite_path_2 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "mid_room_collision_level_1.npy")
+        sprite_path_2 = os.path.join(sprite_path, "backgrounds", "mid_room_collision_level_1.npy")
         col_map_2 = jnp.load(sprite_path_2)[:149, :, 0]
         room_col_1_4 = jnp.where(col_map_2 > 0, 1, 0).astype(jnp.int32)
         room_col_1_4 = room_col_1_4.at[147:149, 72:88].set(0) # Hole for ladder
@@ -80,12 +81,12 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         room_col_2_2 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
         room_col_2_2 = room_col_2_2.at[6:48, 156:160].set(1) # Right wall
         
-        sprite_path_3 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "room_0_collision_level_2.npy")
+        sprite_path_3 = os.path.join(sprite_path, "backgrounds", "room_0_collision_level_2.npy")
         col_map_3 = jnp.load(sprite_path_3)[:149, :, 0]
         room_col_2_1 = jnp.where(col_map_3 > 0, 1, 0).astype(jnp.int32)
         room_col_2_1 = room_col_2_1.at[6:, 0:4].set(1) # Left wall
 
-        sprite_path_4 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "pitroom_collision_map.npy")
+        sprite_path_4 = os.path.join(sprite_path, "backgrounds", "pitroom_collision_map.npy")
         col_map_4 = jnp.load(sprite_path_4)[:149, :, 0]
         room_col_2_3 = jnp.where(col_map_4 > 0, 1, 0).astype(jnp.int32)
         room_col_2_3 = room_col_2_3.at[6:48, 0:4].set(1) # Left wall
@@ -102,7 +103,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         room_col_2_6 = room_col_2_6.at[147:149, 72:88].set(0) # Hole for ladder down
 
         # New 23: Level 2, col 7 (corresponds to ROOM_2_6 in M1)
-        sprite_path_5 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "room_6_collision_level_2.npy")
+        sprite_path_5 = os.path.join(sprite_path, "backgrounds", "room_6_collision_level_2.npy")
         col_map_5 = jnp.load(sprite_path_5)[:147, :, 0]
         room_col_2_7 = jnp.zeros((149, 160), dtype=jnp.int32)
         room_col_2_7 = room_col_2_7.at[:147, :].set(jnp.where(col_map_5 > 0, 1, 0))
@@ -111,7 +112,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
 
         # New 31: Level 3, col 7 (corresponds to ROOM_3_7 in M1)
         # Using pitroom_collision_map.npy as specified for ROOM_3_7
-        sprite_path_6 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "pitroom_collision_map.npy")
+        sprite_path_6 = os.path.join(sprite_path, "backgrounds", "pitroom_collision_map.npy")
         col_map_6 = jnp.load(sprite_path_6)[:149, :, 0]
         room_col_3_7 = jnp.where(col_map_6 > 0, 1, 0).astype(jnp.int32)
         # No side walls as requested
@@ -130,14 +131,14 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
 
         # New 27: Level 3, col 3 (corresponds to ROOM_3_3 in M1)
         # Using pitroom_collision_map.npy as specified for ROOM_3_3
-        sprite_path_7 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "pitroom_collision_map.npy")
+        sprite_path_7 = os.path.join(sprite_path, "backgrounds", "pitroom_collision_map.npy")
         col_map_7 = jnp.load(sprite_path_7)[:149, :, 0]
         room_col_3_3 = jnp.where(col_map_7 > 0, 1, 0).astype(jnp.int32)
         # No left wall (open to ROOM_3_2)
 
         # New 29: Level 3, col 5 (corresponds to ROOM_3_5 in M1)
         # Using pitroom_collision_map.npy as specified for ROOM_3_5
-        sprite_path_8 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "pitroom_collision_map.npy")
+        sprite_path_8 = os.path.join(sprite_path, "backgrounds", "pitroom_collision_map.npy")
         col_map_8 = jnp.load(sprite_path_8)[:149, :, 0]
         room_col_3_5 = jnp.where(col_map_8 > 0, 1, 0).astype(jnp.int32)
         room_col_3_5 = room_col_3_5.at[6:48, 156:160].set(1) # Right wall
@@ -149,7 +150,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         room_col_3_2 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
 
         # New 24: Bonus Room (corresponds to ROOM_3_0 in M1)
-        sprite_path_9 = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma", "backgrounds", "bonus_room_collision_map.npy")
+        sprite_path_9 = os.path.join(sprite_path, "backgrounds", "bonus_room_collision_map.npy")
         col_map_9 = jnp.load(sprite_path_9)[:149, :, 0]
         room_col_3_0 = jnp.zeros((149, 160), dtype=jnp.int32)
         room_col_3_0 = room_col_3_0.at[:col_map_9.shape[0], :].set(jnp.where(col_map_9 > 0, 1, 0))

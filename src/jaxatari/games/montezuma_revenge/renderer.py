@@ -30,7 +30,7 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
             downscale=None,
         )
         self.jr = render_utils.JaxRenderingUtils(internal_config)
-        sprite_path = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma")
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "montezuma")
         
         # Transparent background base for the 210x160 raster
         bg_data = jnp.zeros((self.consts.HEIGHT, self.consts.WIDTH, 4), dtype=jnp.uint8)
