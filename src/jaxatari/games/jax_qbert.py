@@ -226,7 +226,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             :param number: if the character is red, which index of red should be used otherwise arbitrary
             :param position: the position of the character
             """
-        # Snake (Coily) stepping onto a disk: remove snake, award 500 points if lives==3.
+        # Snake (Coily) stepping onto a disk: remove snake, award 500 points.
         snake_on_disk = jnp.logical_and(character == 3, state.pyramid[position[1], position[0]] == -2)
         pyra, pos, lives, points = jax.lax.cond(
             pred=snake_on_disk,
@@ -234,7 +234,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
                 vals[0].pyramid,
                 jnp.array([-1, -1], dtype=jnp.int32),
                 vals[0].lives,
-                jnp.where(vals[0].lives == 3, jnp.array(500, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32)),
+                jnp.array(500, dtype=jnp.int32),
             ),
             false_fun=lambda vals: jax.lax.cond(
                 pred=jnp.logical_and(vals[0].pyramid[vals[1][1], vals[1][0]] == -2, vals[2] == 0),
@@ -419,11 +419,10 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
         pos,player_lives,points=jax.lax.cond(
             pred=character == 0,
             true_fun=lambda state2: (jnp.array([1,1]).astype(jnp.int32), jnp.array(state2[0].lives - 1).astype(jnp.int32), jnp.array(0).astype(jnp.int32)),
-            false_fun=lambda state2: jax.lax.cond(
-                pred=state.lives == 3,
-                true_fun=lambda vals: (jnp.array([-1,-1]).astype(jnp.int32), 0, jnp.array(500).astype(jnp.int32)),
-                false_fun=lambda vals: (jnp.array([-1,-1]).astype(jnp.int32), 0, jnp.array(0).astype(jnp.int32)),
-                operand=state2
+            false_fun=lambda state2: (
+                jnp.array([-1,-1]).astype(jnp.int32),
+                state2[0].lives,
+                jnp.where(character == 3, jnp.array(500, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32))
             ),
             operand=(state,character)
         )
