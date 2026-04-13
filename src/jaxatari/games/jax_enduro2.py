@@ -417,6 +417,10 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
             Action.RIGHT,
             Action.LEFT,
             Action.DOWN,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
         ],
         dtype=jnp.int32,
     )
@@ -456,8 +460,8 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
         atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
 
         # 1. Handle Speed (Acceleration and Braking)
-        is_fire = (atari_action == Action.FIRE)
-        is_down = (atari_action == Action.DOWN)
+        is_fire = (atari_action == Action.FIRE) | (atari_action == Action.LEFTFIRE) | (atari_action == Action.RIGHTFIRE)
+        is_down = (atari_action == Action.DOWN) | (atari_action == Action.DOWNLEFT) | (atari_action == Action.DOWNRIGHT)
         
         # Decide acceleration based on current speed
         accel = jnp.where(
@@ -472,8 +476,8 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
         new_speed = jnp.clip(state.player_speed + speed_delta, self.consts.min_speed, self.consts.max_speed)
 
         # 2. Handle Steering and Drift
-        is_left = (atari_action == Action.LEFT) | (atari_action == Action.LEFTFIRE)
-        is_right = (atari_action == Action.RIGHT) | (atari_action == Action.RIGHTFIRE)
+        is_left = (atari_action == Action.LEFT) | (atari_action == Action.LEFTFIRE) | (atari_action == Action.DOWNLEFT)
+        is_right = (atari_action == Action.RIGHT) | (atari_action == Action.RIGHTFIRE) | (atari_action == Action.DOWNRIGHT)
 
         # Get curvature from whole_track
         track_starts = self.consts.whole_track[:, 1]
