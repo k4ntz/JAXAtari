@@ -740,7 +740,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
                 ]),
                 operand=None
-            ),jnp.array(jnp.mod(vals[1], 5) + 1).astype(jnp.int32) , jax.lax.cond(vals[1] == 4, lambda l: jnp.minimum(5, l + 1), lambda l: l, vals[2]).astype(jnp.int32), jnp.array(3100).astype(jnp.int32), jnp.array([1,1]), jnp.array(1).astype(jnp.int32), vals[5]),
+            ),jnp.array(jnp.mod(vals[1], 4) + 1).astype(jnp.int32) , jax.lax.cond(vals[1] == 4, lambda l: jnp.minimum(5, l + 1), lambda l: l, vals[2]).astype(jnp.int32), jnp.array(3100).astype(jnp.int32), jnp.array([1,1]), jnp.array(1).astype(jnp.int32), vals[5]),
             false_fun=lambda vals: (vals[0],vals[1],vals[2], jnp.array(0).astype(jnp.int32), player_position, vals[4], vals[6]),
             operand=(pyramid,round,level,state.prng_state[6],spawned, state.step_counter, green_ball_freeze_step)
         )
@@ -1052,7 +1052,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             "lives": spaces.Box(-1, 9, (), jnp.int32),
             "pyramid": spaces.Box(-2, 3, (8, 8), jnp.int32),
             "level_number": spaces.Box(1, 5, (), jnp.int32),
-            "round_number": spaces.Box(1, 6, (), jnp.int32),
+            "round_number": spaces.Box(1, 4, (), jnp.int32),
         })
 
     @partial(jax.jit, static_argnums=(0,))
