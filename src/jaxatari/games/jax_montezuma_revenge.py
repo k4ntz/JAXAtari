@@ -6,7 +6,7 @@ from functools import partial
 import os
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
-from jaxatari.spaces import Discrete
+import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
@@ -928,14 +928,23 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
 
         return obs, state, reward, done, info
     
-    def action_space(self) -> Discrete:
-        return Discrete(len(self.ACTION_SET))
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(len(self.ACTION_SET))
 
-    def observation_space(self) -> Discrete:
-        return Discrete(1)
+    def observation_space(self) -> spaces.Dict:
+        screen_size = (self.consts.HEIGHT, self.consts.WIDTH)
+        return spaces.Dict({
+            "player": spaces.get_object_space(n=1, screen_size=screen_size),
+            "enemies": spaces.get_object_space(n=self.consts.MAX_ENEMIES_PER_ROOM, screen_size=screen_size),
+            "items": spaces.get_object_space(n=self.consts.MAX_ITEMS_PER_ROOM, screen_size=screen_size),
+            "conveyors": spaces.get_object_space(n=self.consts.MAX_CONVEYORS_PER_ROOM, screen_size=screen_size),
+            "doors": spaces.get_object_space(n=self.consts.MAX_DOORS_PER_ROOM, screen_size=screen_size),
+            "ropes": spaces.get_object_space(n=self.consts.MAX_ROPES_PER_ROOM, screen_size=screen_size),
+            "platforms": spaces.get_object_space(n=self.consts.MAX_PLATFORMS_PER_ROOM, screen_size=screen_size),
+        })
         
-    def image_space(self) -> Discrete:
-        return Discrete(1)
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(low=0, high=255, shape=(self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
 
     def render(self, state: MontezumaRevengeState) -> jnp.ndarray:
         return self.renderer.render(state)

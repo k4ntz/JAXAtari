@@ -1,4 +1,5 @@
 import jax
+import jax.image as jim
 import jax.numpy as jnp
 from functools import partial
 import os
@@ -21,7 +22,14 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         else:
             self.config = config
 
-        self.jr = render_utils.JaxRenderingUtils(self.config)
+        # Keep rendering logic in native 210x160 RGB space, then optionally apply
+        # final-frame downscaling / grayscale conversion from self.config.
+        internal_config = render_utils.RendererConfig(
+            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
+            channels=3,
+            downscale=None,
+        )
+        self.jr = render_utils.JaxRenderingUtils(internal_config)
         sprite_path = os.path.join(self.consts.MODULE_DIR, "sprites", "montezuma")
         
         # Transparent background base for the 210x160 raster
@@ -729,4 +737,20 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         # Apply post-ui hook
         raster = self._render_hook_post_ui(raster, state)
 
-        return self.PALETTE[raster]
+        frame = self.PALETTE[raster]
+
+        if self.config.downscale is not None:
+            target_h, target_w = self.config.downscale
+            frame = jim.resize(
+                frame.astype(jnp.float32),
+                (target_h, target_w, frame.shape[-1]),
+                method="bilinear",
+            )
+
+        if self.config.channels == 1:
+            frame = jnp.dot(
+                frame.astype(jnp.float32),
+                jnp.array([0.2989, 0.5870, 0.1140], dtype=jnp.float32),
+            )[..., None]
+
+        return frame.astype(jnp.uint8)

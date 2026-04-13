@@ -57,9 +57,14 @@ class NoPoliceMod(JaxAtariInternalModPlugin):
     Mod that removes all police cars from the game and automatically respawns banks.
     """
     @partial(jax.jit, static_argnums=(0,))
-    def spawn_police_car(self, state: BankHeistState, bank_index: chex.Array) -> BankHeistState:
+    def spawn_police_car(
+        self,
+        state: BankHeistState,
+        police_slot: chex.Array,
+        spawn_position: chex.Array,
+    ) -> BankHeistState:
         # Instead of spawning a police car, trigger a bank respawn for the next frame
-        new_bank_timers = state.bank_spawn_timers.at[bank_index].set(1)
+        new_bank_timers = state.bank_spawn_timers.at[police_slot].set(1)
         return state.replace(bank_spawn_timers=new_bank_timers)
 
 class TwoPoliceCarsMod(JaxAtariInternalModPlugin):

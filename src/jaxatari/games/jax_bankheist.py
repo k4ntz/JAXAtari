@@ -1642,11 +1642,20 @@ class BankHeistRenderer(JAXGameRenderer):
         def apply_flash(palette):
             flash_idx = state.explosion_timer % 15
             is_light_grey = (flash_idx >= 5) & (flash_idx < 10)
-            flash_color = jnp.where(
-                is_light_grey,
-                jnp.array([170, 170, 170], dtype=jnp.uint8),
-                jnp.array([100, 100, 100], dtype=jnp.uint8)
-            )
+            # channels is static on RendererConfig (not traced); Python if avoids
+            # lax.cond's requirement that both branches return identical shapes.
+            if self.config.channels == 1:
+                flash_color = jnp.where(
+                    is_light_grey,
+                    jnp.array([170], dtype=jnp.uint8),
+                    jnp.array([100], dtype=jnp.uint8),
+                )
+            else:
+                flash_color = jnp.where(
+                    is_light_grey,
+                    jnp.array([170, 170, 170], dtype=jnp.uint8),
+                    jnp.array([100, 100, 100], dtype=jnp.uint8),
+                )
             return palette.at[self.black_color_id].set(flash_color)
 
         final_palette = jax.lax.cond(
