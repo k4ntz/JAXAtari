@@ -21,10 +21,10 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | alien                        | 🥈       | 0 |
 | amidar                       | 🥇       | 0 |
 | assault                      | 🥉       | 0 |
-| asterix                      | 🥈       | 0 |
+| asterix                      | 🥇       | 0 |
 | asteroids                    | 🥇       | 0 |
-| atlantis                     | 🥇       | 0 |
-| bank_heist                   | 🥉       | 8 |
+| atlantis                     | 🥈       | 0 |
+| bank_heist                   | 🥇       | 8 |
 | battle_zone                  | 🥉       | 0 |
 | beam_rider                   | ❌       | 0 |
 | berzerk                      | 🥈       | 0 |

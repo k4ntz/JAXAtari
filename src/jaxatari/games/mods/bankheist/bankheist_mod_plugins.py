@@ -217,14 +217,22 @@ class RandomCityMod(JaxAtariInternalModPlugin):
         
         new_map_collision = jax.lax.dynamic_index_in_dim(self._env.city_collision_maps, random_map_id, axis=0, keepdims=False)
         new_spawn_points = jax.lax.dynamic_index_in_dim(self._env.city_spawns, random_map_id, axis=0, keepdims=False)
-        
-        # Load banks for the random map
-        new_state = JaxBankHeist.load_city_state(self._env, new_state, random_map_id)
+
+        # Keep base ALE bank progression (global spawn index sequence) and only
+        # randomize which city layout/collision map is entered next.
+        # Loading per-city bank snapshots here would "pin" cities to fixed bank
+        # states and make random jumps feel like revisiting saved cities.
+        #
+        # Instead, skip the bank sequence to a map-specific offset so jumping to
+        # map k behaves like skipping ahead in the deterministic progression.
+        base_indices = jnp.array([0, 5, 10], dtype=jnp.int32)
+        map_bank_indices = (base_indices + random_map_id * 3) % 16
         
         return new_state.replace(
             map_collision=new_map_collision,
             spawn_points=new_spawn_points,
             map_id=random_map_id,
+            bank_spawn_indices=map_bank_indices,
             random_key=key
         )
 

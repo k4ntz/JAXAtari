@@ -219,6 +219,7 @@ class BankHeistConstants(AutoDerivedConstants):
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
     
     def compute_derived(self):
+        """Compute derived constants based on static fields."""
         return {
             'REFILL_TABLE': self.TANK_LEVELS / self.TANK_HEIGHT * self.FUEL_CAPACITY,
             'DYNAMITE_COST': self.FUEL_CAPACITY * 0.02,
@@ -739,49 +740,48 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
     
     @partial(jax.jit, static_argnums=(0,))
     def map_transition(self, state: BankHeistState) -> BankHeistState:
-        # 1. Save current city state
+        # Preserve per-city snapshots for mods that revisit or randomize cities.
         saved_city_states = self.save_city_state(
-            state.city_states, state.map_id, 
-            state.bank_positions, state.bank_spawn_timers, 
-            state.bank_spawn_indices, state.bank_heists
+            state.city_states,
+            state.map_id,
+            state.bank_positions,
+            state.bank_spawn_timers,
+            state.bank_spawn_indices,
+            state.bank_heists,
         )
 
         new_level = state.level + 1
         new_difficulty_level = jnp.minimum(new_level // self.consts.CITIES_PER_LEVEL, self.consts.MAX_LEVEL - 1)
-        
-        # 2. Reset city states if starting a new loop
         num_maps = len(self.city_collision_maps)
         is_new_loop = (new_level % num_maps == 0) & (new_level > state.level)
         saved_city_states = jax.lax.cond(
             is_new_loop,
             lambda cs: self._init_city_states(),
             lambda cs: cs,
-            saved_city_states
+            saved_city_states,
         )
-
         new_map_id = new_level % num_maps
-        
-        # 3. Load next city state
-        # Create a temporary state to use load_city_state
-        temp_state = state.replace(city_states=saved_city_states)
-        loaded_state = self.load_city_state(temp_state, new_map_id)
 
+        # ALE spawns 1px further right after level transitions (but not on initial reset).
         default_player_position = jnp.array(self.consts.LEVEL_TRANSITION_SPAWN).astype(jnp.int32)
         new_player = state.player.replace(position=default_player_position)
         empty_police = init_banks_or_police()
+        empty_banks = init_banks_or_police()
         
         new_speed = self.consts.BASE_SPEED * jnp.power(self.consts.SPEED_INCREASE_PER_LEVEL, new_difficulty_level)
         new_fuel_consumption = jnp.power(self.consts.FUEL_CONSUMPTION_INCREASE_PER_LEVEL, new_difficulty_level)
         
-        # Fuel refill based on PREVIOUS city's heists (state.bank_heists)
+        # Fuel refill: if they robbed 0 banks, REFILL_TABLE[0] is 0 and they keep current fuel.
         new_fuel = jnp.maximum(state.fuel, jax.lax.dynamic_index_in_dim(self.consts.REFILL_TABLE, state.bank_heists, axis=0, keepdims=False))
         new_fuel_refill = jnp.array(0).astype(jnp.int32)
         
         new_map_collision = jax.lax.dynamic_index_in_dim(self.city_collision_maps, new_map_id, axis=0, keepdims=False)
         new_spawn_points = jax.lax.dynamic_index_in_dim(self.city_spawns, new_map_id, axis=0, keepdims=False)
-        new_dynamite_position = jnp.array([-1, -1]).astype(jnp.int32)  
+        new_dynamite_position = jnp.array([-1, -1]).astype(jnp.int32)
+        new_bank_spawn_timers = jnp.array([1, 1, 1]).astype(jnp.int32)
         new_police_spawn_timers = jnp.array([-1, -1, -1]).astype(jnp.int32)
         new_dynamite_timer = jnp.array([-1]).astype(jnp.int32)
+        new_explosion_timer = jnp.array(0).astype(jnp.int32)
         
         new_player_lives = jax.lax.cond(
             state.bank_heists >= 9, 
@@ -812,7 +812,7 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             player_lives=new_player_lives,
             money=new_money,
             enemy_positions=empty_police,
-            bank_positions=loaded_state.bank_positions,
+            bank_positions=empty_banks,
             speed=new_speed,
             fuel_consumption=new_fuel_consumption,
             fuel=new_fuel,
@@ -820,14 +820,18 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
             map_collision=new_map_collision,
             spawn_points=new_spawn_points,
             dynamite_position=new_dynamite_position,
-            bank_spawn_timers=loaded_state.bank_spawn_timers,
+            bank_spawn_timers=new_bank_spawn_timers,
             police_spawn_timers=new_police_spawn_timers,
             dynamite_timer=new_dynamite_timer,
+            explosion_timer=new_explosion_timer,
             pending_police_spawns=jnp.array([-1, -1, -1]).astype(jnp.int32),
             pending_police_bank_indices=jnp.array([-1, -1, -1]).astype(jnp.int32),
+            pending_police_scores=jnp.array([-1, -1, -1]).astype(jnp.int32),
+            killed_police_scores=jnp.array([-1, -1, -1]).astype(jnp.int32),
             pending_police_spawn_positions=jnp.full((3, 2), -1).astype(jnp.int32),
-            bank_heists=loaded_state.bank_heists,
-            bank_spawn_indices=loaded_state.bank_spawn_indices,
+            bank_heists=jnp.array(0).astype(jnp.int32),
+            # Keep ALE-style global bank sequence across city transitions.
+            bank_spawn_indices=state.bank_spawn_indices,
             city_states=saved_city_states,
             pending_exit=jnp.array(False).astype(jnp.bool_),
             random_key=jax.random.fold_in(state.random_key, new_level + 100)
@@ -1259,10 +1263,11 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
 
     @partial(jax.jit, static_argnums=(0,))
     def spawn_banks_fn(self, state: BankHeistState, step_random_key: chex.PRNGKey) -> BankHeistState:
-        del step_random_key 
+        """Deterministic ALE behavior: each bank independently traverses the 16-step array."""
+        del step_random_key  # Unused in deterministic behavior
 
-        spawning_mask = state.bank_spawn_timers == 0  
-        chosen_points = self.consts.HARDCODED_BANK_SPAWNS[state.bank_spawn_indices] 
+        spawning_mask = state.bank_spawn_timers == 0  # (3,)
+        chosen_points = self.consts.HARDCODED_BANK_SPAWNS[state.bank_spawn_indices]  # (3,2)
 
         new_indices = jnp.where(
             spawning_mask,
