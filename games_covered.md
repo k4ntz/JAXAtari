@@ -49,7 +49,7 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | kangaroo                     | 🥇       | 1 |
 | krull                        | ❌       | 0 |
 | kung_fu_master               | ❌       | 0 |
-| montezuma_revenge            | 🥉       | 0 |
+| montezuma_revenge            | 🥇       | 11 |
 | ms_pacman                    | ❌       | 0 |
 | name_this_game               | 🥈       | 0 |
 | phoenix                      | 🥈       | 0 |
@@ -76,7 +76,7 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | yars_revenge                 | ❌       | 0 |
 | zaxxon                       | ❌       | 0 |
 
-Total:  🥇: 8   |   🥈: 13   |   🥉: 12   |   ❌: 24 
+Total:  🥇: 11   |   🥈: 13   |   🥉: 10   |   ❌: 23 
 
 ## Remaining ALE games
 | Game                         | Status  | Mods available |
