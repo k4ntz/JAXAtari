@@ -54,6 +54,7 @@ class SeaquestConstants(AutoDerivedConstants):
     ))
     ENEMY_SUB_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([170, 170, 170]))  # Gray for enemy subs
     OXYGEN_BAR_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([214, 214, 214, 255]))  # White for oxygen
+    OXYGEN_BAR_BG_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([163, 57, 21, 255]))  # Reddish background
     SCORE_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([210, 210, 64]))  # Score color
     OXYGEN_TEXT_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 0, 0]))  # Black for oxygen text
 
@@ -2705,9 +2706,10 @@ class SeaquestRenderer(JAXGameRenderer):
         # Pre-compute oxygen bar color ID (convert JAX array to numpy, then tuple for dict lookup)
         oxygen_color_rgb = np.asarray(self.consts.OXYGEN_BAR_COLOR[:3])
         self.OXYGEN_COLOR_ID = self.COLOR_TO_ID.get(tuple(oxygen_color_rgb), 0)
-        
-        self.SHARK_COLOR_MAP = self._precompute_shark_color_map()
+        oxygen_bar_bg_color_rgb = np.asarray(self.consts.OXYGEN_BAR_BG_COLOR[:3])
+        self.OXYGEN_BAR_BG_COLOR_ID = self.COLOR_TO_ID.get(tuple(oxygen_bar_bg_color_rgb), 0)
 
+        self.SHARK_COLOR_MAP = self._precompute_shark_color_map()
     def _create_procedural_sprites(self) -> dict:
         """Creates 1x1 pixel sprites to ensure colors are in the palette."""
         procedural_sprites = {}
@@ -2717,6 +2719,8 @@ class SeaquestRenderer(JAXGameRenderer):
         
         rgba_oxy = jnp.array(list(self.consts.OXYGEN_BAR_COLOR[:3]) + [255], dtype=jnp.uint8).reshape(1, 1, 4)
         procedural_sprites['oxygen_bar_color'] = rgba_oxy
+        rgba_oxy_bg = jnp.array(list(self.consts.OXYGEN_BAR_BG_COLOR[:3]) + [255], dtype=jnp.uint8).reshape(1, 1, 4)
+        procedural_sprites['oxygen_bar_bg_color'] = rgba_oxy_bg
         return procedural_sprites
 
     def _precompute_shark_color_map(self) -> jnp.ndarray:
@@ -2818,13 +2822,13 @@ class SeaquestRenderer(JAXGameRenderer):
         
         # Collected divers blink when there are 6 of them
         visible_divers = jax.lax.select(
-            jnp.logical_and(state.divers_collected == 6, (state.step_counter % 16) > 8),
+            jnp.logical_and(state.divers_collected == 6, (state.step_counter % 16) < 8),
             0,
             state.divers_collected
         )
         raster = self.jr.render_indicator(raster, 49, 178, visible_divers, self.SHAPE_MASKS['diver_indicator'], spacing=10, max_value=6)
 
-        raster = self.jr.render_bar(raster, 49, 170, state.oxygen, 64, 63, 5, self.OXYGEN_COLOR_ID, self.jr.TRANSPARENT_ID)
+        raster = self.jr.render_bar(raster, 49, 170, state.oxygen, 64, 63, 5, self.OXYGEN_COLOR_ID, self.OXYGEN_BAR_BG_COLOR_ID)
 
         raster = self.jr.draw_rects(
             raster,

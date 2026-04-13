@@ -101,7 +101,7 @@ class SeaquestEnvMod(JaxAtariModController):
             )
             raster = jr.render_indicator(raster, 49, 178, visible_divers, renderer.SHAPE_MASKS['diver_indicator'], spacing=10, max_value=6)
 
-            raster = jr.render_bar(raster, 49, 170, state.oxygen, 64, 63, 5, renderer.OXYGEN_COLOR_ID, jr.TRANSPARENT_ID)
+            raster = jr.render_bar(raster, 49, 170, state.oxygen, 64, 63, 5, renderer.OXYGEN_COLOR_ID, renderer.OXYGEN_BAR_BG_COLOR_ID)
 
             raster = jr.draw_rects(
                 raster,
