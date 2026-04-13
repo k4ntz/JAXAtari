@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezuma_revenge import JaxMontezumaRevenge
+from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
 
 def test_enemies_freeze_during_death():
     env = JaxMontezumaRevenge()

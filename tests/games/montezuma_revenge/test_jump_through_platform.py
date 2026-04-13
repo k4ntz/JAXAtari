@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezuma_revenge import JaxMontezumaRevenge
+from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
 
 def test_jump_through_dynamic_platform():
     env = JaxMontezumaRevenge()

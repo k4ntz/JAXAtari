@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezuma_revenge import JaxMontezumaRevenge
+from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
 from jaxatari.games.montezuma_revenge.rooms import load_room
 
 def test_room_transitions_horizontal():
