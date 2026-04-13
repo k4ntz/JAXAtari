@@ -51,6 +51,7 @@ GAME_MODULES = {
     "kingkong": "jaxatari.games.jax_kingkong",
     "klax": "jaxatari.games.jax_klax",
     "lasergates": "jaxatari.games.jax_lasergates",
+    "montezumarevenge": "jaxatari.games.jax_montezumarevenge",
     "namethisgame": "jaxatari.games.jax_namethisgame",
     "phoenix": "jaxatari.games.jax_phoenix",
     "pong": "jaxatari.games.jax_pong",
@@ -88,8 +89,9 @@ MOD_MODULES = {
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
     "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
     "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
-    "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
     "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
+    "montezumarevenge": "jaxatari.games.mods.montezuma_revenge_mods.MontezumaRevengeEnvMod",
+    "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
 }
 
 

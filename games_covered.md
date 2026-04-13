@@ -21,10 +21,10 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | alien                        | 🥈       | 0 |
 | amidar                       | 🥇       | 0 |
 | assault                      | 🥉       | 0 |
-| asterix                      | 🥈       | 0 |
+| asterix                      | 🥇       | 0 |
 | asteroids                    | 🥇       | 0 |
-| atlantis                     | 🥇       | 0 |
-| bank_heist                   | 🥉       | 0 |
+| atlantis                     | 🥈       | 0 |
+| bank_heist                   | 🥇       | 8 |
 | battle_zone                  | 🥉       | 0 |
 | beam_rider                   | ❌       | 0 |
 | berzerk                      | 🥈       | 0 |
@@ -49,7 +49,7 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | kangaroo                     | 🥇       | 1 |
 | krull                        | ❌       | 0 |
 | kung_fu_master               | ❌       | 0 |
-| montezuma_revenge            | 🥉       | 0 |
+| montezuma_revenge            | 🥇       | 11 |
 | ms_pacman                    | ❌       | 0 |
 | name_this_game               | 🥈       | 0 |
 | phoenix                      | 🥈       | 0 |
@@ -76,7 +76,7 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | yars_revenge                 | ❌       | 0 |
 | zaxxon                       | ❌       | 0 |
 
-Total:  🥇: 8   |   🥈: 13   |   🥉: 12   |   ❌: 24 
+Total:  🥇: 11   |   🥈: 13   |   🥉: 10   |   ❌: 23 
 
 ## Remaining ALE games
 | Game                         | Status  | Mods available |
