@@ -1,16 +1,67 @@
-import argparse
+import os
 import sys
+
+# Force JAX on CPU before importing jax (must run before `import jax`).
+if "--cpu" in sys.argv:
+    os.environ.setdefault("JAX_PLATFORMS", "cpu")
+    os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+
+import argparse
 import pygame
 
 import jax
+import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
 
 from jaxatari.environment import JAXAtariAction
-from utils import get_human_action, update_pygame, load_game_environment, load_game_mods, print_observation_tree
+from utils import (
+    get_human_action,
+    load_game_environment,
+    load_game_mods,
+    print_observation_tree,
+    reset_or_load_state,
+    save_env_state_json,
+    update_pygame,
+)
 from jaxatari.core import make as jaxatari_make
 
 UPSCALE_FACTOR = 4
+
+
+def _process_rss_bytes() -> int:
+    """Resident set size (RSS) of this process in bytes. Linux: /proc/self/status."""
+    try:
+        with open("/proc/self/status", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    kb = int(line.split()[1])
+                    return kb * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        import resource
+
+        maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # Linux: kilobytes; macOS: bytes
+        if sys.platform == "darwin":
+            return maxrss
+        return maxrss * 1024
+    except Exception:
+        return -1
+
+
+def _print_post_init_memory(use_cpu: bool) -> None:
+    rss = _process_rss_bytes()
+    if rss >= 0:
+        mib = rss / (1024 * 1024)
+        print(
+            f"RAM (process RSS after env init / first jitted reset): {mib:.2f} MiB ({rss:,} bytes)"
+        )
+    else:
+        print("RAM (process RSS): could not be determined on this platform.")
+    if use_cpu:
+        print(f"JAX devices (--cpu): {jax.devices()}")
 
 
 def _normalize_mods(mods):
@@ -49,7 +100,6 @@ ACTION_NAMES = {
     for k, v in vars(JAXAtariAction).items()
     if not k.startswith("_") and isinstance(v, int)
 }
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -111,6 +161,27 @@ def main():
         "--verbose",
         action="store_true",
         help="Verbose mode.",
+    )
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Run JAX on CPU (sets JAX_PLATFORMS=cpu before backend init).",
+    )
+    parser.add_argument(
+        "--load-state",
+        type=str,
+        metavar="FILE",
+        help=(
+            "On each reset (and at startup), merge leaves from this JSON into the state "
+            "from reset() (written with S or save_env_state_json). Unknown JSON keys warn; "
+            "missing leaves keep reset values."
+        ),
+    )
+    parser.add_argument(
+        "--save-state-path",
+        type=str,
+        default="jaxatari_play_state.json",
+        help="Path written when pressing S during play (default: jaxatari_play_state.json).",
     )
 
     args = parser.parse_args()
@@ -174,11 +245,25 @@ def main():
     jitted_step = jax.jit(env.step)
     jitted_render = jax.jit(env.render)
 
-    # initialize the environment with the first reset key
-    reset_key = jrandom.fold_in(master_key, reset_counter)
-    obs, state = jitted_reset(reset_key)
-    reset_counter += 1
-    
+    # initialize the environment with the first reset key (or JSON state if --load-state)
+    load_path = args.load_state if not args.replay else None
+    if args.replay:
+        reset_key = jrandom.fold_in(master_key, reset_counter)
+        obs, state = jitted_reset(reset_key)
+        reset_counter += 1
+    else:
+        obs, state, reset_counter = reset_or_load_state(
+            load_path=load_path,
+            game=args.game,
+            mods=args.mods,
+            master_key=master_key,
+            reset_counter=reset_counter,
+            jitted_reset=jitted_reset,
+            label="startup",
+        )
+    if not args.replay:
+        _print_post_init_memory(args.cpu)
+
     # For random actions, we need a separate key stream
     action_key = jrandom.fold_in(master_key, 1000000)  # Use a large offset to avoid collision
 
@@ -240,6 +325,7 @@ def main():
             master_key = jrandom.PRNGKey(seed)
             reset_key = jrandom.fold_in(master_key, 0)  # Use first reset key
             obs, state = jitted_reset(reset_key)
+            _print_post_init_memory(args.cpu)
 
         # loop over all the actions and play the game
         for action in actions_array:
@@ -284,10 +370,27 @@ def main():
                     if event.key == pygame.K_p:  # pause
                         pause = not pause
                     elif event.key == pygame.K_r:  # reset
-                        reset_key = jrandom.fold_in(master_key, reset_counter)
-                        obs, state = jitted_reset(reset_key)
-                        reset_counter += 1
+                        obs, state, reset_counter = reset_or_load_state(
+                            load_path=load_path,
+                            game=args.game,
+                            mods=args.mods,
+                            master_key=master_key,
+                            reset_counter=reset_counter,
+                            jitted_reset=jitted_reset,
+                            label="manual reset",
+                        )
                         total_return = 0
+                    elif event.key == pygame.K_s:  # save full state to JSON
+                        try:
+                            save_env_state_json(
+                                args.save_state_path,
+                                state,
+                                game=args.game,
+                                mods=args.mods,
+                            )
+                            print(f"Saved state to {args.save_state_path!r}")
+                        except OSError as e:
+                            print(f"Failed to save state: {e}")
                     elif event.key == pygame.K_f:
                         frame_by_frame = not frame_by_frame
                     elif event.key == pygame.K_n:
@@ -326,9 +429,15 @@ def main():
         if done:
             print(f"Done. Total return {total_return}")
             total_return = 0
-            reset_key = jrandom.fold_in(master_key, reset_counter)
-            obs, state = jitted_reset(reset_key)
-            reset_counter += 1
+            obs, state, reset_counter = reset_or_load_state(
+                load_path=load_path,
+                game=args.game,
+                mods=args.mods,
+                master_key=master_key,
+                reset_counter=reset_counter,
+                jitted_reset=jitted_reset,
+                label="episode",
+            )
 
         # Render the environment
         if not execute_without_rendering:

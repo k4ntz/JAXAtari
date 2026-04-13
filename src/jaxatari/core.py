@@ -39,6 +39,7 @@ GAME_MODULES = {
     "centipede": "jaxatari.games.jax_centipede",
     "choppercommand": "jaxatari.games.jax_choppercommand",
     "enduro": "jaxatari.games.jax_enduro",
+    "enduro2": "jaxatari.games.jax_enduro2",
     "fishingderby": "jaxatari.games.jax_fishingderby",
     "flagcapture": "jaxatari.games.jax_flagcapture",
     "freeway": "jaxatari.games.jax_freeway",
@@ -90,6 +91,7 @@ MOD_MODULES = {
     "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
     "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
     "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
+    "enduro2": "jaxatari.games.mods.enduro2_mods.Enduro2EnvMod",
 }
 
 
