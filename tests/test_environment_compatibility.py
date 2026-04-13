@@ -802,8 +802,9 @@ class TestAdvancedWrapperFeatures:
 
         env_sticky_always = AtariWrapper(raw_env, sticky_actions=1.0)
         _, state_sticky_always = env_sticky_always.reset(key)
+        prev_action_before_step = state_sticky_always.prev_action
         _, state_sticky_always, _, _, _, _ = env_sticky_always.step(state_sticky_always, 2)  # UP action
-        assert state_sticky_always.prev_action == 0, "With sticky_actions=1.0, prev_action should repeat the previous action"
+        assert state_sticky_always.prev_action == prev_action_before_step, "With sticky_actions=1.0, prev_action should repeat the previous action"
         
         # Test episodic_life feature
         # We'll just verify the wrapper accepts the parameter
