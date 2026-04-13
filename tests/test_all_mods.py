@@ -35,6 +35,36 @@ def get_base_env(env) -> Any:
     return env
 
 
+def assert_mod_reward_contract(env, state, mod_key: str, stage: str) -> None:
+    """
+    Assert that _get_reward follows the mod-pipeline contract:
+    _get_reward(previous_state, state) -> scalar reward.
+
+    This catches interface mismatches early and reports a precise failure reason.
+    """
+    # Unwrap wrapper state containers (e.g., PixelState -> AtariState -> env_state).
+    core_state = state
+    while hasattr(core_state, "env_state") or hasattr(core_state, "atari_state"):
+        if hasattr(core_state, "env_state"):
+            core_state = core_state.env_state
+        elif hasattr(core_state, "atari_state"):
+            core_state = core_state.atari_state
+
+    try:
+        reward = env._get_reward(core_state, core_state)
+        _ = float(reward)
+    except Exception as e:
+        signature = inspect.signature(env._get_reward)
+        pytest.fail(
+            f"Reward contract mismatch during {stage} for mod '{mod_key}'. "
+            f"Expected _get_reward(previous_state, state) to accept full state objects and "
+            f"return a scalar reward. Current signature: {signature}. "
+            f"Likely scenario: this environment's reward function still expects score tensors "
+            f"(or another non-state input), which breaks the mod post-step pipeline. "
+            f"Original error: {e}"
+        )
+
+
 def get_all_mods_for_game(game_name: str) -> Dict[str, List[str]]:
     """
     Get all available mods for a game, separating individual mods from modpacks.
@@ -210,6 +240,7 @@ class TestModExecution:
 
         assert obs is not None, f"reset() returned None observation with mod '{mod_key}'"
         assert state is not None, f"reset() returned None state with mod '{mod_key}'"
+        assert_mod_reward_contract(env, state, mod_key, stage="mod execution test")
 
         num_steps = 10
         for i in range(num_steps):
@@ -428,6 +459,7 @@ class TestModWithWrappers:
 
         assert obs is not None
         assert state is not None
+        assert_mod_reward_contract(wrapped, state, mod_key, stage="PixelWrapper+native_downscaling test")
 
         for i in range(5):
             action = wrapped.action_space().sample(key)

@@ -923,7 +923,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         state = jax.lax.cond(transition_any, transition_fn, lambda x: x, state)
 
         obs = self._get_observation(state)
-        reward = self._get_reward(previous_score, state.score)
+        reward = self._get_reward_from_scores(previous_score, state.score)
         done = self._get_done(state)
         info = self._get_info(state)
 
@@ -1012,8 +1012,12 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
     def _get_info(self, state: MontezumaRevengeState) -> MontezumaRevengeInfo:
         return MontezumaRevengeInfo(lives=state.lives, room_id=state.room_id)
 
-    def _get_reward(self, previous_score: jnp.ndarray, score: jnp.ndarray) -> float:
+    def _get_reward_from_scores(self, previous_score: jnp.ndarray, score: jnp.ndarray) -> float:
         return jnp.sum(score - previous_score).astype(jnp.float32)
+
+    def _get_reward(self, previous_state: MontezumaRevengeState, state: MontezumaRevengeState) -> float:
+        """Mod-pipeline contract: reward is computed from (previous_state, state)."""
+        return self._get_reward_from_scores(previous_state.score, state.score)
 
     def _get_done(self, state: MontezumaRevengeState) -> bool:
         fell_off_bonus = jnp.logical_and(state.room_id == 24, state.player_y >= 148)
