@@ -92,9 +92,16 @@ class SeaquestEnvMod(JaxAtariModController):
             raster = jr.render_label(raster, 58, 18, score_digits, renderer.SHAPE_MASKS['digits'], spacing=8, max_digits=6)
             
             raster = jr.render_indicator(raster, 14, 28, state.lives, renderer.SHAPE_MASKS['life_indicator'], spacing=10, max_value=3)
-            raster = jr.render_indicator(raster, 49, 178, state.divers_collected, renderer.SHAPE_MASKS['diver_indicator'], spacing=10, max_value=6)
+            
+            # Collected divers blink when there are 6 of them
+            visible_divers = jax.lax.select(
+                jnp.logical_and(state.divers_collected == 6, (state.step_counter % 8) >= 4),
+                0,
+                state.divers_collected
+            )
+            raster = jr.render_indicator(raster, 49, 178, visible_divers, renderer.SHAPE_MASKS['diver_indicator'], spacing=10, max_value=6)
 
-            raster = jr.render_bar(raster, 49, 170, state.oxygen, 64, 63, 5, renderer.OXYGEN_COLOR_ID, jr.TRANSPARENT_ID)
+            raster = jr.render_bar(raster, 49, 170, state.oxygen, 64, 63, 5, renderer.OXYGEN_COLOR_ID, renderer.OXYGEN_BAR_BG_COLOR_ID)
 
             raster = jr.draw_rects(
                 raster,
