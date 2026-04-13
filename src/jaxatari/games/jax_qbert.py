@@ -265,7 +265,19 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
         old_color=pyramid[playerPos[1]][playerPos[0]]
         pyramid=jax.lax.cond(
             pred=jnp.logical_and(samPos[0]!= -1, samPos[1] != -1),
-            true_fun=lambda vals: vals[0].at[vals[1][1],vals[1][0]].set(0),
+            true_fun=lambda vals: vals[0].at[vals[1][1],vals[1][0]].set(
+                jax.lax.switch(
+                    index=level - 1,
+                    branches=[
+                        lambda v: jnp.where(v > 0, 0, v),
+                        lambda v: jnp.where(v > 0, v - 1, v),
+                        lambda v: jnp.where(v > 0, 0, v),
+                        lambda v: jnp.where(v > 0, v - 1, v),
+                        lambda v: jnp.where(v > 0, v - 1, v),
+                    ],
+                    operand=vals[0][vals[1][1]][vals[1][0]]
+                )
+            ),
             false_fun=lambda vals: vals[0],
             operand=(pyramid,samPos)
         )
