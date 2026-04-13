@@ -2815,10 +2815,26 @@ class SeaquestRenderer(JAXGameRenderer):
         )
         
         # --- UI Elements (Unchanged) ---
-        score_digits = self.jr.int_to_digits(state.score, max_digits=6)
-        raster = self.jr.render_label(raster, 58, 18, score_digits, self.SHAPE_MASKS['digits'], spacing=8, max_digits=6)
+        max_score_digits = 6
+        score_digits = self.jr.int_to_digits(state.score, max_digits=max_score_digits)
+        clamped_score = jnp.minimum(jnp.maximum(state.score, 0), 10**max_score_digits - 1)
+        score_digit_thresholds = jnp.array([1, 10, 100, 1000, 10000, 100000], dtype=clamped_score.dtype)
+        num_score_digits = jnp.maximum(1, jnp.sum(clamped_score >= score_digit_thresholds))
+        score_start_index = max_score_digits - num_score_digits
+        score_x = 59 + score_start_index * 8
+        raster = self.jr.render_label_selective(
+            raster,
+            score_x,
+            9,
+            score_digits,
+            self.SHAPE_MASKS['digits'],
+            score_start_index,
+            num_score_digits,
+            spacing=8,
+            max_digits_to_render=max_score_digits,
+        )
         
-        raster = self.jr.render_indicator(raster, 14, 28, state.lives, self.SHAPE_MASKS['life_indicator'], spacing=10, max_value=3)
+        raster = self.jr.render_indicator(raster, 58, 22, state.lives, self.SHAPE_MASKS['life_indicator'], spacing=8, max_value=3)
         
         # Collected divers blink when there are 6 of them
         visible_divers = jax.lax.select(
