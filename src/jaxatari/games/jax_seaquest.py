@@ -2331,9 +2331,22 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             )
 
         def handle_score_freeze():
-            # on scoring, the death counter will be set to -(oxygen * 2 + 16 * 6)
-            # thats when we get in here, so duplicate the death animation pattern, but decrease the oxygen until its 0
-            # Calculate new positions with frozen X coordinates
+            # Calculate points logic based on the rescues prior to the recent increment
+            rescues_for_calc = state.successful_rescues - 1
+            
+            diver_bonus_val = self.consts.SCORE_DIVER_STEP * rescues_for_calc
+            points_per_diver = jnp.minimum(
+                self.consts.SCORE_DIVER_BASE + diver_bonus_val,
+                self.consts.SCORE_DIVER_MAX,
+            )
+            
+            oxygen_bonus_val = self.consts.SCORE_OXYGEN_STEP * rescues_for_calc
+            points_per_oxygen_unit = jnp.minimum(
+                self.consts.SCORE_OXYGEN_BASE + oxygen_bonus_val,
+                self.consts.SCORE_OXYGEN_MAX
+            )
+
+            # Keep X positions from original state, only update Y for sharks
             shark_y_positions, _, _, _ = self.step_enemy_movement(
                 state.spawn_state,
                 state.shark_positions,
@@ -2341,18 +2354,39 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 state.step_counter,
                 state.rng_key,
             )
-
-            # Keep X positions from original state, only update Y
             new_shark_positions = state.shark_positions.at[:, 1].set(
                 shark_y_positions[:, 1]
             )
 
-            # calculate the new oxygen
-            new_ox = jnp.where(
-                state.death_counter % 2 == 0, state.oxygen - 1, state.oxygen
-            )
+            # Animation has two phases: Oxygen phase (< -96) and Diver phase (>= -96)
+            is_oxygen_phase = state.death_counter < -96
+            is_diver_phase = state.death_counter >= -96
 
-            new_ox = jnp.where(new_ox <= 0, jnp.array(0), state.oxygen)
+            # Phase 1: Drain oxygen (1 unit every 2 ticks)
+            drain_this_tick = jnp.logical_and(is_oxygen_phase, state.death_counter % 2 == 0)
+            has_oxygen = state.oxygen > 0
+            actually_drain = jnp.logical_and(drain_this_tick, has_oxygen)
+            
+            new_ox = jnp.where(
+                actually_drain,
+                state.oxygen - 1,
+                state.oxygen
+            )
+            oxygen_points = jnp.where(actually_drain, points_per_oxygen_unit, 0)
+
+            # Phase 2: Free divers (1 diver every 16 ticks)
+            free_diver_this_tick = jnp.logical_and(is_diver_phase, state.death_counter % 16 == 0)
+            has_divers = state.divers_collected > 0
+            actually_free = jnp.logical_and(free_diver_this_tick, has_divers)
+
+            new_divers_collected = jnp.where(
+                actually_free,
+                state.divers_collected - 1,
+                state.divers_collected
+            )
+            diver_points = jnp.where(actually_free, points_per_diver, 0)
+
+            new_score = state.score + oxygen_points + diver_points
 
             # Return either final reset or animation frame
             return jax.lax.cond(
@@ -2361,13 +2395,13 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                     player_x=state.player_x,
                     player_y=state.player_y,
                     player_direction=state.player_direction,
-                    score=state.score,
+                    score=new_score,
                     lives=state.lives,
                     successful_rescues=state.successful_rescues,
                     divers_collected=jnp.array(0),
                     spawn_state=self.soft_reset_spawn_state(state.spawn_state),
                     surface_sub_position=state.surface_sub_position,
-                    oxygen=jnp.array(0),
+                    oxygen=jnp.array(0),  # This triggers the oxygen refill mechanism
                 ),
                 lambda _: state.replace(
                     death_counter=state.death_counter + 1,
@@ -2377,6 +2411,8 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                     player_missile_position=jnp.zeros(3),
                     step_counter=state.step_counter + 1,
                     oxygen=new_ox,
+                    divers_collected=new_divers_collected,
+                    score=new_score,
                 ),
                 operand=None,
             )
@@ -2521,37 +2557,13 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 spawn_state=self.soft_reset_spawn_state(state_updated.spawn_state),
             )
             
-            # 1. Calculate Diver Points
-            # Formula: Base (50) + (Step (50) * Rescues), Capped at Max (1000)
-            diver_bonus_val = self.consts.SCORE_DIVER_STEP * state.successful_rescues
-            points_per_diver = jnp.minimum(
-                self.consts.SCORE_DIVER_BASE + diver_bonus_val,
-                self.consts.SCORE_DIVER_MAX,
-            )
-            total_diver_points = points_per_diver * state.divers_collected
-
-            # 2. Calculate Oxygen Points
-            # Formula: Base (20) + (Step (10) * Rescues), Capped at Max (90)
-            # This applies per unit of oxygen remaining.
-            oxygen_bonus_val = self.consts.SCORE_OXYGEN_STEP * state.successful_rescues
-            points_per_oxygen_unit = jnp.minimum(
-                self.consts.SCORE_OXYGEN_BASE + oxygen_bonus_val,
-                self.consts.SCORE_OXYGEN_MAX
-            )
-            oxygen_bonus = state.oxygen * points_per_oxygen_unit
-
-            # Calculate total points for successful rescue
-            total_rescue_points = total_diver_points + oxygen_bonus
-
-            # TODO: somewhere the oxygen is depleted on surfacing, this currently blocks the slow draining of oxygen (which is not gameplay relevant -> low priority)
-            # scoring freeze, 16 ticks per diver i.e. 6 * 16 and also 2 ticks per remaining oxygen (which is drained!)
             # Create the scoring state
             scoring_state = state_updated.replace(
                 player_x=player_x,
                 player_y=player_y,
                 player_direction=player_direction,
                 lives=state_updated.lives,
-                score=state_updated.score + total_rescue_points,
+                score=state_updated.score,
                 successful_rescues=state_updated.successful_rescues + 1,
                 spawn_state=self.soft_reset_spawn_state(state_updated.spawn_state).replace(
                     difficulty=state_updated.spawn_state.difficulty + 1,
