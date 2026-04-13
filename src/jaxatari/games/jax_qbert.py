@@ -1069,6 +1069,18 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: QbertState):
+        # Keep coordinates in-space; disappearance is represented by active=0.
+        red_x = jnp.maximum(state.red_ball_positions[:, 0], 0)
+        red_y = jnp.maximum(state.red_ball_positions[:, 1], 0)
+        purple_x = jnp.maximum(state.purple_ball_position[0], 0)
+        purple_y = jnp.maximum(state.purple_ball_position[1], 0)
+        snake_x = jnp.maximum(state.snake_position[0], 0)
+        snake_y = jnp.maximum(state.snake_position[1], 0)
+        green_x = jnp.maximum(state.green_ball_position[0], 0)
+        green_y = jnp.maximum(state.green_ball_position[1], 0)
+        sam_x = jnp.maximum(state.sam_position[0], 0)
+        sam_y = jnp.maximum(state.sam_position[1], 0)
+
         player = ObjectObservation.create(
             x=state.player_position[0],
             y=state.player_position[1],
@@ -1076,36 +1088,36 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             height=jnp.array(1, dtype=jnp.int32),
         )
         red_balls = ObjectObservation.create(
-            x=state.red_ball_positions[:, 0],
-            y=state.red_ball_positions[:, 1],
+            x=red_x,
+            y=red_y,
             width=jnp.ones(3, dtype=jnp.int32),
             height=jnp.ones(3, dtype=jnp.int32),
             active=(state.red_ball_positions[:, 0] != -1).astype(jnp.int32),
         )
         purple_ball = ObjectObservation.create(
-            x=state.purple_ball_position[0],
-            y=state.purple_ball_position[1],
+            x=purple_x,
+            y=purple_y,
             width=jnp.array(1, dtype=jnp.int32),
             height=jnp.array(1, dtype=jnp.int32),
             active=(state.purple_ball_position[0] != -1).astype(jnp.int32),
         )
         snake = ObjectObservation.create(
-            x=state.snake_position[0],
-            y=state.snake_position[1],
+            x=snake_x,
+            y=snake_y,
             width=jnp.array(1, dtype=jnp.int32),
             height=jnp.array(1, dtype=jnp.int32),
             active=(state.snake_position[0] != -1).astype(jnp.int32),
         )
         green_ball = ObjectObservation.create(
-            x=state.green_ball_position[0],
-            y=state.green_ball_position[1],
+            x=green_x,
+            y=green_y,
             width=jnp.array(1, dtype=jnp.int32),
             height=jnp.array(1, dtype=jnp.int32),
             active=(state.green_ball_position[0] != -1).astype(jnp.int32),
         )
         sam = ObjectObservation.create(
-            x=state.sam_position[0],
-            y=state.sam_position[1],
+            x=sam_x,
+            y=sam_y,
             width=jnp.array(1, dtype=jnp.int32),
             height=jnp.array(1, dtype=jnp.int32),
             active=(state.sam_position[0] != -1).astype(jnp.int32),
