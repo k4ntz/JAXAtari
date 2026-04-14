@@ -167,7 +167,9 @@ def test_log_wrapper(raw_env):
     while not done and steps < 100:  # Limit steps to avoid infinite loops
         obs, state, reward, done, _, info = env.step(state, 0)  # Use NOOP action
         logged_done = bool(info.get("returned_episode", False))
-        total_reward += reward
+        # LogWrapper sums info["env_reward"] (unclipped frame-skip total), not the returned clipped reward.
+        step_return = info.get("env_reward", reward)
+        total_reward += float(jnp.asarray(step_return).reshape(()))
         steps += 1
         
         # Verify observation format remains consistent
@@ -231,7 +233,8 @@ def test_multi_reward_log_wrapper(raw_env):
     while not done and steps < 100:  # Limit steps to avoid infinite loops
         obs, state, reward, done, _, info = env.step(state, 0)  # Use NOOP action
         logged_done = bool(info.get("returned_episode", False))
-        total_reward_env += reward
+        step_return_env = info.get("env_reward", reward)
+        total_reward_env += float(jnp.asarray(step_return_env).reshape(()))
         total_rewards += info["all_rewards"]
         steps += 1
         

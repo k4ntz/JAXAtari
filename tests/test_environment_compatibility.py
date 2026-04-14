@@ -708,7 +708,8 @@ class TestAdvancedWrapperFeatures:
         
         while not done and steps < 100:
             obs, state, reward, done, _, info = env.step(state, 0)
-            total_reward += reward
+            step_return = info.get("env_reward", reward)
+            total_reward += float(jnp.asarray(step_return).reshape(()))
             steps += 1
             logged_done = bool(info.get("returned_episode", False))
             
@@ -748,7 +749,8 @@ class TestAdvancedWrapperFeatures:
         while not done and steps < 100:
             obs, state, reward, done, _, info = env.step(state, 0)
             logged_done = bool(info.get("returned_episode", False))
-            total_reward_env += reward
+            step_return_env = info.get("env_reward", reward)
+            total_reward_env += float(jnp.asarray(step_return_env).reshape(()))
             total_rewards += info["all_rewards"]
             steps += 1
             

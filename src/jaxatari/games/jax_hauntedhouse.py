@@ -299,6 +299,8 @@ class HauntedHouseObservation:
 @struct.dataclass
 class HauntedHouseInfo:
     time: jnp.ndarray
+    # Dense-style shaping signal (former MDP reward); not used as sparse win reward.
+    shaped_aux: jnp.ndarray
 
 
 class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation, HauntedHouseInfo, HauntedHouseConstants]):
@@ -1148,10 +1150,11 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
             # Items: Scepter, 6 Urn pieces, Full Urn (n=8)
             "items": spaces.get_object_space(n=8, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
             
-            "item_held": spaces.Discrete(9),
-            "match_duration": spaces.Discrete(2),
+            # Integer boxes (not spaces.Discrete): OC / flatten wrappers only expand Box leaves.
+            "item_held": spaces.Box(low=0, high=8, shape=(), dtype=jnp.int32),
+            "match_duration": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             "matches_used": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
-            "chasing": spaces.Discrete(2),
+            "chasing": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=9, shape=(), dtype=jnp.int32),
         })
 
@@ -1165,12 +1168,23 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: HauntedHouseState) -> HauntedHouseInfo:
-        return HauntedHouseInfo(time=state.step_counter)
+        penalty_chasing = jnp.where(state.chasing > 0, 1, 0)
+        shaped_aux = (
+            state.item_held.astype(jnp.float32)
+            + state.lives.astype(jnp.float32)
+            - state.stun_duration.astype(jnp.float32) / 10.0
+            - state.matches_used.astype(jnp.float32)
+            - penalty_chasing.astype(jnp.float32)
+        )
+        return HauntedHouseInfo(time=state.step_counter, shaped_aux=shaped_aux)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: HauntedHouseState, state: HauntedHouseState):
-        penality_chasing = jnp.where(state.chasing > 0, 1, 0)
-        return state.item_held + state.lives - state.stun_duration / 10 - state.matches_used - penality_chasing
+        win = jnp.logical_and(
+            jnp.logical_and(state.item_held == 8, state.player[2] == 1),
+            state.player[0] + self.consts.PLAYER_SIZE[0] > 155,
+        )
+        return jnp.where(win, jnp.float32(1.0), jnp.float32(0.0))
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: HauntedHouseState) -> bool:

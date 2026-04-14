@@ -357,20 +357,26 @@ def stack_space(space: Space, stack_size: int) -> Space:
     )
 
 
-def get_object_space(n: int = None, screen_size=(210, 160), orientation_range=(0.0, 360.0)) -> Dict:
+def get_object_space(
+    n: int = None,
+    screen_size=(210, 160),
+    orientation_range=(0.0, 360.0),
+    xy_low: float = 0.0,
+) -> Dict:
     """
     Generates the standard space for an ObjectObservation.
     Args:
         n: Number of objects. None (or 1) for scalars, >1 for arrays.
         screen_size: Tuple (height, width) for bounds (uses HWC for consistency).
         orientation_range: Tuple (min_orientation, max_orientation) for orientation bounds.
+        xy_low: Lower bound for x/y (default 0). Use -1 when observations use -1 as an off-screen sentinel.
     """
     shape = () if n is None else (n,)
     h, w = screen_size
     
     return Dict({
-        "x": Box(low=0, high=w, shape=shape, dtype=jnp.int16),
-        "y": Box(low=0, high=h, shape=shape, dtype=jnp.int16),
+        "x": Box(low=xy_low, high=w, shape=shape, dtype=jnp.int16),
+        "y": Box(low=xy_low, high=h, shape=shape, dtype=jnp.int16),
         "width": Box(low=0, high=w, shape=shape, dtype=jnp.int16),
         "height": Box(low=0, high=h, shape=shape, dtype=jnp.int16),
         "active": Box(low=0, high=1, shape=shape, dtype=jnp.int8), # or Discrete(2)
