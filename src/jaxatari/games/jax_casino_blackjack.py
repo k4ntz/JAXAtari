@@ -18,24 +18,37 @@ import os
 import chex
 import jax
 import jax.numpy as jnp
+from flax import struct
 
 from jaxatari.environment import JAXAtariAction as Action
 from jaxatari.environment import JaxEnvironment
 from jaxatari.spaces import Space, Discrete, Box, Dict
-from jax_casino_renderer import CasinoRenderer
+try:
+    from jaxatari.games.jax_casino import CasinoRenderer
+except ImportError:
+    from jax_casino import CasinoRenderer
 
 
-class CasinoBlackjackConstants(NamedTuple):
-    WIDTH = 160
-    HEIGHT = 210
-    INITIAL_PLAYER_SCORE = jnp.array(1000).astype(jnp.int32)
-    INITIAL_PLAYER_MAIN_BET = jnp.array(20).astype(jnp.int32)
-    CARD_VALUES = jnp.array([2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 0])
-    CARD_SHUFFLING_RULE = 0
+class CasinoBlackjackConstants(struct.PyTreeNode):
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    INITIAL_PLAYER_SCORE: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array(1000, dtype=jnp.int32),
+    )
+    INITIAL_PLAYER_MAIN_BET: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array(20, dtype=jnp.int32),
+    )
+    CARD_VALUES: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 0], dtype=jnp.int32),
+    )
+    CARD_SHUFFLING_RULE: int = struct.field(pytree_node=False, default=0)
     """ Determines when the cards are being shuffled, 0 = after every round, 1 = after drawing 34 cards """
-    ALLOW_SPLITTING = 1
+    ALLOW_SPLITTING: int = struct.field(pytree_node=False, default=1)
     """ Determines if splitting is allowed (-> when splitting is not allowed additionally the player can take only 5 cards): 0 = splitting is not allowed, 1 = splitting is allowed """
-    PLAYING_RULE = 0
+    PLAYING_RULE: int = struct.field(pytree_node=False, default=0)
     """
     Determines the playing rules, 0 = Casino Rules 1, 1 = Casino Rules 2
     Casino 1 Rules:
@@ -128,7 +141,6 @@ class CasinoBlackjackObservation(NamedTuple):
 
 class CasinoBlackjackInfo(NamedTuple):
     time: jnp.ndarray
-    all_rewards: jnp.ndarray
 
 @jax.jit
 def calculate_card_value_sum(hand: chex.Array, consts):
@@ -976,21 +988,17 @@ def calculate_player_score_and_last_round(state, player_score, consts, hand_to_e
     return new_player_score, new_last_round
 
 class JaxCasinoBlackjack(JaxEnvironment[CasinoBlackjackState, CasinoBlackjackObservation, CasinoBlackjackInfo, CasinoBlackjackConstants]):
-    def __init__(self, consts: CasinoBlackjackConstants = None, reward_funcs: list[callable] = None):
-        super().__init__()
-        self.frame_stack_size = 4
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
-        self.action_set = [
-            Action.NOOP,
-            Action.UP,
-            Action.DOWN,
-            Action.FIRE
-        ]
-        self.obs_size = 11
-        self.renderer = CasinoRenderer()
-        self.consts = consts or CasinoBlackjackConstants()
+    ACTION_SET = jnp.array([
+        Action.NOOP,
+        Action.FIRE,
+        Action.UP,
+        Action.DOWN,
+    ], dtype=jnp.int32)
+
+    def __init__(self, consts: CasinoBlackjackConstants = None):
+        consts = consts or CasinoBlackjackConstants()
+        super().__init__(consts)
+        self.renderer = CasinoRenderer(self.consts)
 
     def reset(self, key=jax.random.PRNGKey(int.from_bytes(os.urandom(3), byteorder='big'))) -> Tuple[CasinoBlackjackObservation, CasinoBlackjackState]:
         # Resets the game state to the initial state.
@@ -1026,6 +1034,7 @@ class JaxCasinoBlackjack(JaxEnvironment[CasinoBlackjackState, CasinoBlackjackObs
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: CasinoBlackjackState, action: chex.Array) -> Tuple[CasinoBlackjackObservation, CasinoBlackjackState, float, bool, CasinoBlackjackInfo]:
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         new_state = jax.lax.switch(
             index=state.state_counter - 1,
             branches=[select_bet_value, draw_initial_cards, select_insurance_action, select_next_action, execute_hit, execute_stay, execute_double, execute_split, check_player_bust, check_dealer_draw, execute_dealer_draw, check_winner],
@@ -1034,8 +1043,7 @@ class JaxCasinoBlackjack(JaxEnvironment[CasinoBlackjackState, CasinoBlackjackObs
 
         done = self._get_done(new_state)
         env_reward = self._get_reward(state, new_state)
-        all_rewards = self._get_all_reward(state, new_state)
-        info = self._get_info(new_state, all_rewards)
+        info = self._get_info(new_state)
         observation = self._get_observation(new_state)
 
         return observation, new_state, env_reward, done, info
@@ -1045,30 +1053,8 @@ class JaxCasinoBlackjack(JaxEnvironment[CasinoBlackjackState, CasinoBlackjackObs
         return state.player_score - previous_state.player_score
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_all_reward(self, previous_state: CasinoBlackjackState, state: CasinoBlackjackState):
-        if self.reward_funcs is None:
-            return jnp.zeros(1)
-        rewards = jnp.array(
-            [reward_func(previous_state, state)
-             for reward_func in self.reward_funcs]
-        )
-        return rewards
-
-    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: CasinoBlackjackState) -> jnp.ndarray:
-        card_matrix = jnp.array([
-            [state.cards_dealer[0], jnp.where(jnp.logical_and(state.state_counter >= 2, state.state_counter <= 8), -1, state.cards_dealer[1]), state.cards_dealer[2], state.cards_dealer[3], state.cards_dealer[4]],
-            [jnp.where(self.consts.ALLOW_SPLITTING == 1, state.cards_dealer[5], 0), jnp.where(self.consts.ALLOW_SPLITTING == 1, state.cards_dealer[6], 0), jnp.where(self.consts.ALLOW_SPLITTING == 1, state.cards_dealer[7], 0), jnp.where(self.consts.ALLOW_SPLITTING == 1, state.cards_dealer[8], 0), jnp.where(self.consts.ALLOW_SPLITTING == 1, state.cards_dealer[9], 0),],
-            [state.cards_player_main[0], state.cards_player_main[1], state.cards_player_main[2], state.cards_player_main[3], state.cards_player_main[4]],
-            [state.cards_player_main[5], state.cards_player_main[6], state.cards_player_main[7], state.cards_player_main[8], state.cards_player_main[9]],
-            [state.cards_player_split[0], state.cards_player_split[1], state.cards_player_split[2], state.cards_player_split[3], state.cards_player_split[4]],
-            [state.cards_player_split[5], state.cards_player_split[6], state.cards_player_split[7], state.cards_player_split[8], state.cards_player_split[9]]
-        ], dtype=jnp.int32)
-        width = self.consts.WIDTH
-        height = self.consts.HEIGHT
-        player_score, player_main_bet, player_split_bet, label_main, label_split, char = self.get_params(state)
-
-        return self.renderer.render(card_matrix, player_score, width, height, char, player_main_bet, player_split_bet, label_main, label_split)
+        return self.renderer.render(state)
 
     @partial(jax.jit, static_argnums=(0,))
     def get_params(self, state: CasinoBlackjackState):
@@ -1124,7 +1110,7 @@ class JaxCasinoBlackjack(JaxEnvironment[CasinoBlackjackState, CasinoBlackjackObs
         return player_score, player_main_bet, player_split_bet, label_main[0], label_split, char
 
     def action_space(self) -> Discrete:
-        return Discrete(len(self.action_set))
+        return Discrete(len(self.ACTION_SET))
 
     def image_space(self) -> Box:
         return Box(0, 255, shape=(self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
@@ -1183,8 +1169,8 @@ class JaxCasinoBlackjack(JaxEnvironment[CasinoBlackjackState, CasinoBlackjackObs
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: CasinoBlackjackState, all_rewards: jnp.ndarray = None) -> CasinoBlackjackInfo:
-        return CasinoBlackjackInfo(state.step_counter, all_rewards)
+    def _get_info(self, state: CasinoBlackjackState) -> CasinoBlackjackInfo:
+        return CasinoBlackjackInfo(state.step_counter)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: CasinoBlackjackState) -> bool:

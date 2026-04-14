@@ -17,19 +17,29 @@ from typing import NamedTuple, Tuple
 import chex
 import jax
 import jax.numpy as jnp
-from jax_casino_renderer import CasinoRenderer  # pylint: disable=import-error
+from flax import struct
+try:
+    from jaxatari.games.jax_casino import CasinoRenderer
+except ImportError:
+    from jax_casino import CasinoRenderer
 
 from jaxatari.environment import JAXAtariAction as Action
 from jaxatari.environment import JaxEnvironment
 from jaxatari.spaces import Box, Dict, Discrete, Space
 
 
-class CasinoPokerSolitaireConstants(NamedTuple):
-    WIDTH = 160
-    HEIGHT = 210
-    INITIAL_PLAYER_SCORE = jnp.array(0).astype(jnp.int32)  # starts with 0
-    CARD_VALUES = jnp.array([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
-    NUM_CARDS_IN_DECK = 52
+class CasinoPokerSolitaireConstants(struct.PyTreeNode):
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    INITIAL_PLAYER_SCORE: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array(0, dtype=jnp.int32),
+    )
+    CARD_VALUES: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14], dtype=jnp.int32),
+    )
+    NUM_CARDS_IN_DECK: int = struct.field(pytree_node=False, default=52)
     """
     Scoring:
       Royal Flush       500     Three of a Kind     60
@@ -91,7 +101,6 @@ class CasinoPokerSolitaireObservation(NamedTuple):
 
 class CasinoPokerSolitaireInfo(NamedTuple):
     time: jnp.ndarray
-    all_rewards: jnp.ndarray
 
 
 @jax.jit
@@ -170,8 +179,8 @@ def step_controls(state: CasinoPokerSolitaireState, action: chex.Array, consts: 
     ## move cursor left/right
     cursor_x = (
         state.cursor_pos_x
-        + jnp.where(action == Action.LEFT, -1, 0)  # add or subtract 1 based on action
-        + jnp.where(action == Action.RIGHT, 1, 0)
+        + jnp.where(action == Action.UP, -1, 0)  # add or subtract 1 based on action
+        + jnp.where(action == Action.DOWN, 1, 0)
     )
     # add or subtract to cursor_pos_y based on over/underflow of x, no wrapping
     cursor_y = state.cursor_pos_y + (cursor_x // 5)
@@ -268,16 +277,17 @@ def step_end_game(state: CasinoPokerSolitaireState, action: chex.Array, consts: 
     return state
 
 class JaxCasinoPokerSolitaire(JaxEnvironment[CasinoPokerSolitaireState, CasinoPokerSolitaireObservation, CasinoPokerSolitaireInfo, CasinoPokerSolitaireConstants]):
-    def __init__(self, consts: CasinoPokerSolitaireConstants = None, reward_funcs: list[callable] = None):
-        super().__init__()
-        self.frame_stack_size = 4
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
-        self.action_set = [Action.NOOP, Action.LEFT, Action.RIGHT, Action.FIRE]
-        self.obs_size = 5
-        self.renderer = CasinoRenderer()
-        self.consts = consts or CasinoPokerSolitaireConstants()
+    ACTION_SET = jnp.array([
+        Action.NOOP,
+        Action.FIRE,
+        Action.UP,
+        Action.DOWN,
+    ], dtype=jnp.int32)
+
+    def __init__(self, consts: CasinoPokerSolitaireConstants = None):
+        consts = consts or CasinoPokerSolitaireConstants()
+        super().__init__(consts)
+        self.renderer = CasinoRenderer(self.consts)
 
     def reset(self, key=None) -> Tuple[CasinoPokerSolitaireObservation, CasinoPokerSolitaireState]:
         # Resets the game state to the initial state, reset score, sample cards
@@ -307,6 +317,7 @@ class JaxCasinoPokerSolitaire(JaxEnvironment[CasinoPokerSolitaireState, CasinoPo
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: CasinoPokerSolitaireState, action: chex.Array) -> Tuple[CasinoPokerSolitaireObservation, CasinoPokerSolitaireState, float, bool, CasinoPokerSolitaireInfo]:
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         # Steps:
         # move cursor left/right
         # OR execute placement if possible, place card, uncover next card from staple
@@ -345,11 +356,10 @@ class JaxCasinoPokerSolitaire(JaxEnvironment[CasinoPokerSolitaireState, CasinoPo
 
         # get reward
         reward = self._get_reward(previous_state, state)
-        all_rewards = self._get_all_reward(previous_state, state)
         # get observation
         obs = self._get_observation(state)
         # get info
-        info = self._get_info(state, all_rewards)
+        info = self._get_info(state)
         # get done
         done = self._get_done(state)
         return obs, state, reward, done, info
@@ -359,38 +369,11 @@ class JaxCasinoPokerSolitaire(JaxEnvironment[CasinoPokerSolitaireState, CasinoPo
         return state.player_score - previous_state.player_score
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_all_reward(self, previous_state: CasinoPokerSolitaireState, state: CasinoPokerSolitaireState):
-        if self.reward_funcs is None:
-            return jnp.zeros(1)
-        rewards = jnp.array(
-            [reward_func(previous_state, state) for reward_func in self.reward_funcs]
-        )
-        return rewards
-
-    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: CasinoPokerSolitaireState) -> jnp.ndarray:
-        card_matrix = jnp.vstack(
-            (jnp.array([[0, 0, state.current_card, 0, 0]]), state.board.reshape((5, 5)))
-        ).astype(jnp.int32)
-        width = self.consts.WIDTH
-        height = self.consts.HEIGHT
-        player_score = state.player_score
-        player_main_bet = jnp.where(
-            state.player_round_score == 0, -1, state.player_round_score
-        )
-        cursor_pos = jnp.array([state.cursor_pos_x, state.cursor_pos_y + 1])
-
-        return self.renderer.render(
-            card_matrix,
-            player_score,
-            width,
-            height,
-            player_main_bet=player_main_bet,
-            blinking_card=cursor_pos,
-        )
+        return self.renderer.render(state)
 
     def action_space(self) -> Discrete:
-        return Discrete(len(self.action_set)) # 4
+        return Discrete(len(self.ACTION_SET))
 
     def image_space(self) -> Box:
         return Box(
@@ -434,8 +417,8 @@ class JaxCasinoPokerSolitaire(JaxEnvironment[CasinoPokerSolitaireState, CasinoPo
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: CasinoPokerSolitaireState, all_rewards: jnp.ndarray = None) -> CasinoPokerSolitaireInfo:
-        return CasinoPokerSolitaireInfo(state.step_counter, all_rewards)
+    def _get_info(self, state: CasinoPokerSolitaireState) -> CasinoPokerSolitaireInfo:
+        return CasinoPokerSolitaireInfo(state.step_counter)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: CasinoPokerSolitaireState) -> bool:
