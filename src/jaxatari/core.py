@@ -36,6 +36,7 @@ GAME_MODULES = {
     "berzerk": "jaxatari.games.jax_berzerk",
     "blackjack": "jaxatari.games.jax_blackjack",
     "breakout": "jaxatari.games.jax_breakout",
+    "casino": "jaxatari.games.jax_casino",
     "centipede": "jaxatari.games.jax_centipede",
     "choppercommand": "jaxatari.games.jax_choppercommand",
     "enduro": "jaxatari.games.jax_enduro",
