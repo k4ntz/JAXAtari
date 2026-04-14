@@ -329,7 +329,9 @@ class JaxCasino(JaxEnvironment):
         return self.env.step(state, action)
 
     def render(self, state):
-        return self.env.render(state)
+        # Use the wrapper-level renderer so renderer hot-swaps (e.g. native
+        # downscaling) applied to this environment are respected.
+        return self.renderer.render(state)
 
     def action_space(self):
         return self.env.action_space()
