@@ -3,10 +3,9 @@ import chex
 import jax
 import jax.numpy as jnp
 from dataclasses import dataclass
-from typing import Any, Tuple, NamedTuple, Callable, Sequence, Optional
+from typing import Tuple, Optional
 import os
 import numpy as np
-import collections
 from flax import struct
 import jaxatari.rendering.jax_rendering_utils as render_utils 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
@@ -121,13 +120,11 @@ def _get_default_asset_config() -> tuple:
     )
 
 class SkiingConstants(AutoDerivedConstants):
-    ORIGINAL_SCORES: chex.Array = struct.field(pytree_node=False, default=jnp.array([-1, -2, -2], dtype=jnp.float32)) 
+    ORIGINAL_SCORES: chex.Array = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([-1, -2, -2], dtype=jnp.float32),
+    )
     USE_ORIGINAL_ALE_REWARD: bool = struct.field(pytree_node=False, default=True) 
-    NOOP: int = struct.field(pytree_node=False, default=0)
-    LEFT: int = struct.field(pytree_node=False, default=1)
-    RIGHT: int = struct.field(pytree_node=False, default=2)
-    FIRE: int = struct.field(pytree_node=False, default=3)
-    DOWN: int = struct.field(pytree_node=False, default=4)
     BOTTOM_BORDER: int = struct.field(pytree_node=False, default=176)
     TOP_BORDER: int = struct.field(pytree_node=False, default=-15)
     """Game configuration parameters"""
@@ -294,7 +291,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
     def reset(self, key: Optional[jax.random.PRNGKey] = jax.random.PRNGKey(1701)) -> Tuple[SkiingObservation, SkiingState]:
         """Initialize a new game state deterministically from `key`."""
         c = self.consts
-        k_flags, k_trees, k_moguls, new_key = jax.random.split(key, 4)
+        _, new_key = jax.random.split(key, 2)
 
         row_spacing = jnp.float32(31.0)
         base_y = jnp.float32(60.0)
@@ -435,27 +432,15 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         # [deterministic]         k1 = jnp.array([k1, k2, k3, k4])
         k = state.key
 
-        def check_flags(i, flags):
-            x_flag = self._get_new_flag_x(state, jnp.array(i, dtype=jnp.int32))
+        # Flags are independent, so we can respawn all of them in one vectorized pass.
+        flag_idx = jnp.arange(new_flags.shape[0], dtype=jnp.int32)
+        x_flags = jax.vmap(lambda i: self._get_new_flag_x(state, i))(flag_idx)
+        y_flags = new_flags[:, 1] + jnp.float32(248.0)
+        y_flags = jnp.where(state.gates_seen >= 18, jnp.float32(10000.0), y_flags)
 
-            row_old = flags.at[i].get()  # Shape (2,) or (4,)
-
-            # Constant vertical distance: always spawn exactly 8 rows (248.0 pixels) behind its current position
-            # This perfectly preserves the sequence density even with multiple objects per row
-            y = row_old.at[1].get() + jnp.float32(248.0)
-
-            # Prevent spawning after the 20th gate (0 to 19).
-            # When state.gates_seen >= 18, we have already spawned up to gate 19.
-            y = jnp.where(state.gates_seen >= 18, jnp.float32(10000.0), y)
-
-            row_new = row_old.at[0].set(x_flag).at[1].set(y)
-
-            # Only respawn if the flag despawned above TOP_BORDER
-            cond = jnp.less(flags.at[i, 1].get(), self.consts.TOP_BORDER)
-            out_row = jax.lax.cond(cond, lambda _: row_new, lambda _: row_old, operand=None)
-            return flags.at[i].set(out_row)
-
-        flags = jax.lax.fori_loop(0, 2, check_flags, new_flags)
+        flags_new = new_flags.at[:, 0].set(x_flags).at[:, 1].set(y_flags)
+        respawn_flags = new_flags[:, 1] < self.consts.TOP_BORDER
+        flags = jnp.where(respawn_flags[:, None], flags_new, new_flags)
 
         # ---- Trees ----
         # [deterministic]         k, k1, k2, k3, k4, k5, k6, k7, k8 = jax.random.split(k, 9)
@@ -487,7 +472,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             row_new = row_old.at[0].set(x_tree).at[1].set(y).at[4].set(new_type)
 
             cond = jnp.less(trees.at[i, 1].get(), self.consts.TOP_BORDER)
-            out_row = jax.lax.cond(cond, lambda _: row_new, lambda _: row_old, operand=None)
+            out_row = jnp.where(cond, row_new, row_old)
             return trees.at[i].set(out_row)
 
         trees = jax.lax.fori_loop(0, 4, check_trees, new_trees)
@@ -526,7 +511,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             row_new = row_old.at[0].set(x_mogul).at[1].set(y)
 
             cond = jnp.less(moguls.at[i, 1].get(), self.consts.TOP_BORDER)
-            out_row = jax.lax.cond(cond, lambda _: row_new, lambda _: row_old, operand=None)
+            out_row = jnp.where(cond, row_new, row_old)
             return moguls.at[i].set(out_row)
 
         moguls = jax.lax.fori_loop(0, 3, check_moguls, new_moguls)
@@ -547,26 +532,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         mogul_X_DIST = jnp.float32(8.0)
         Y_HIT_DIST  = jnp.float32(4.0)
 
-        # Translate agent action (0,1,2) to ALE action
-        atari_action = jnp.take(self.ACTION_SET, action)
-        
-        # Map ALE action to internal constants
-        norm_action = jnp.where(
-            atari_action == Action.NOOP, self.consts.NOOP,
-            jnp.where(
-                atari_action == Action.RIGHT, self.consts.RIGHT,
-                jnp.where(
-                    atari_action == Action.LEFT, self.consts.LEFT,
-                    jnp.where(
-                        atari_action == Action.FIRE, self.consts.FIRE,
-                        jnp.where(
-                            atari_action == Action.DOWN, self.consts.DOWN,
-                            self.consts.NOOP  # fallback to NOOP
-                        )
-                    )
-                )
-            )
-        )
+        # ACTION_SET stores the jaxatari actions for this game.
+        norm_action = jnp.take(self.ACTION_SET, action)
 
         # Atari feel: stepwise heading with auto-repeat while holding the key.
         # We do NOT add new state fields; we re-use 'direction_change_counter' as a repeat timer.
@@ -582,8 +549,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         #   if counter==0 -> allow step now and set counter=REPEAT_FRAMES
         #   else          -> just decrement by 1
         counter_now = state.direction_change_counter
-        want_left   = jnp.equal(norm_action, self.consts.LEFT)
-        want_right  = jnp.equal(norm_action, self.consts.RIGHT)
+        want_left   = jnp.equal(norm_action, Action.LEFT)
+        want_right  = jnp.equal(norm_action, Action.RIGHT)
         want_turn   = jnp.logical_or(want_left, want_right)
 
         can_step_now = jnp.logical_and(want_turn, jnp.equal(counter_now, 0))
@@ -593,7 +560,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         new_skier_pos = jnp.clip(new_skier_pos, 0, 7)
 
         direction_change_counter = jnp.where(
-            jnp.equal(norm_action, self.consts.NOOP),
+            jnp.equal(norm_action, Action.NOOP),
             jnp.int32(0),
             jnp.where(
                 jnp.equal(counter_now, 0),
@@ -604,7 +571,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         skier_pos = new_skier_pos
 
         # Jumping logic: configurable duration and cooldown
-        want_jump = jnp.equal(norm_action, self.consts.FIRE)
+        want_jump = jnp.equal(norm_action, Action.FIRE)
         can_jump = jnp.equal(state.jump_timer, 0)
         
         total_jump_frames = jnp.int32(self.consts.jump_duration + self.consts.jump_cooldown)
@@ -633,7 +600,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         friction_x = jnp.float32(0.04)
         friction_y = jnp.float32(0.01)
         
-        is_down_action = jnp.equal(norm_action, self.consts.DOWN)
+        is_down_action = jnp.equal(norm_action, Action.DOWN)
         
         # Compute maximum speed limit based on action
         max_speed = jax.lax.select(
@@ -744,9 +711,9 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             return jnp.logical_or(jnp.logical_and(dx1 <= x_d, dy_hit),
                                   jnp.logical_and(dx2 <= x_d, dy_hit))
 
-        collisions_tree = jax.vmap(coll_tree)(jnp.array(new_trees_nom))
-        collisions_mogul = jax.vmap(coll_mogul)(jnp.array(new_moguls_nom))
-        collisions_flag = jax.vmap(coll_flag)(jnp.array(new_flags_nom))
+        collisions_tree = jax.vmap(coll_tree)(new_trees_nom)
+        collisions_mogul = jax.vmap(coll_mogul)(new_moguls_nom)
+        collisions_flag = jax.vmap(coll_flag)(new_flags_nom)
         
         # Make moguls conditionally collidable (and ignore if jumping)
         collisions_mogul = jnp.where(
@@ -760,9 +727,9 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         collisions_mogul = jnp.where(ignore_collisions, jnp.zeros_like(collisions_mogul), collisions_mogul)
         collisions_flag = jnp.where(ignore_collisions, jnp.zeros_like(collisions_flag), collisions_flag)
 
-        collided_tree = jnp.sum(collisions_tree) > 0
-        collided_mogul = jnp.sum(collisions_mogul) > 0
-        collided_flag = jnp.sum(collisions_flag) > 0
+        collided_tree = jnp.any(collisions_tree)
+        collided_mogul = jnp.any(collisions_mogul)
+        collided_flag = jnp.any(collisions_flag)
 
         # Recovery on *any* obstacle collision (tree/mogul/flag)
         start_recovery = jnp.logical_and(
@@ -786,37 +753,36 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
 
 
         # 7) skier_fell & collision_type aktualisieren
-        new_skier_fell = jax.lax.cond(
+        new_skier_fell = jnp.where(
             start_recovery,
-            lambda _: RECOVERY_FRAMES,
-            lambda _: jax.lax.cond(in_recovery,
-                                   lambda __: jnp.maximum(state.skier_fell - 1, 0),
-                                   lambda __: jnp.array(0, dtype=jnp.int32),
-                                   operand=None),
-            operand=None,
+            RECOVERY_FRAMES,
+            jnp.where(
+                in_recovery,
+                jnp.maximum(state.skier_fell - 1, 0),
+                jnp.array(0, dtype=jnp.int32),
+            ),
         )
         # Collision debounce: Briefly ignore collisions after recovery ends
         COOLDOWN_FRAMES = jnp.int32(30)
-        new_collision_cooldown = jax.lax.cond(
-            # If recovery just ended (was >0, now ==0) -> set cooldown
+        new_collision_cooldown = jnp.where(
             jnp.logical_and(in_recovery, jnp.equal(new_skier_fell, 0)),
-            lambda _: COOLDOWN_FRAMES,
-            # else countdown (not negative)
-            lambda _: jnp.maximum(state.collision_cooldown - 1, 0),
-            operand=None
+            COOLDOWN_FRAMES,
+            jnp.maximum(state.collision_cooldown - 1, 0),
         )
         new_skier_just_respawned = jnp.greater(new_collision_cooldown, 0)
-        new_collision_type = jax.lax.cond(
-            start_recovery,
-            lambda _: jnp.where(
-                collided_tree, jnp.array(1, dtype=jnp.int32),
-                jnp.where(
-                    collided_mogul, jnp.array(2, dtype=jnp.int32),
-                    jnp.where(collided_flag, jnp.array(3, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32))
-                )
+        recovery_collision_type = jnp.where(
+            collided_tree,
+            jnp.array(1, dtype=jnp.int32),
+            jnp.where(
+                collided_mogul,
+                jnp.array(2, dtype=jnp.int32),
+                jnp.where(collided_flag, jnp.array(3, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32)),
             ),
-            lambda _: state.collision_type,
-            operand=None,
+        )
+        new_collision_type = jnp.where(
+            start_recovery,
+            recovery_collision_type,
+            state.collision_type,
         )
         # Recompute freeze based on updated recovery counter
         freeze = jnp.greater(new_skier_fell, 0)
@@ -865,12 +831,10 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         gates_scored = jnp.sum(gate_pass)
         new_score = state.successful_gates - gates_scored
         game_over = jnp.greater_equal(new_gates_seen, 20)
-        new_step_count = jax.lax.cond(
+        new_step_count = jnp.where(
             jnp.greater(state.step_count, 9223372036854775807 / 2),
-            lambda _: jnp.array(0, dtype=jnp.int32),
-            # lambda _: state.step_count + 1 + missed_penalty,
-            lambda _: state.step_count + 1,
-            operand=None,
+            jnp.array(0, dtype=jnp.int32),
+            state.step_count + 1,
         )
 
         new_state = SkiingState(
