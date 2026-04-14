@@ -34,7 +34,7 @@ EVAL_MODS: null
 # Note: This will massively increase compile and run time!
 # Turn off for final reported training run.
 TEST_DURING_TRAINING: False
-TEST_INTERVAL: 1.0 # in terms of total updates
+TEST_INTERVAL: 0.1 # in terms of total updates
 TEST_NUM_ENVS: 128
 TEST_NUM_STEPS: 10000
 EPS_TEST: 0.0 # 0 for greedy policy

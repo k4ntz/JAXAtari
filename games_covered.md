@@ -66,7 +66,7 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | space_invaders               | 🥈       | 0 |
 | star_gunner                  | ❌       | 0 |
 | surround                     | 🥉       | 0 |
-| tennis                       | 🥈       | 0 |
+| tennis                       | 🥇       | 0 |
 | time_pilot                   | 🥈       | 0 |
 | tutankham                    | ❌       | 0 |
 | up_n_down                    | ❌       | 0 |
@@ -76,13 +76,13 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | yars_revenge                 | ❌       | 0 |
 | zaxxon                       | ❌       | 0 |
 
-Total:  🥇: 11   |   🥈: 13   |   🥉: 10   |   ❌: 23 
+Total:  🥇: 12   |   🥈: 12   |   🥉: 10   |   ❌: 23 
 
 ## Remaining ALE games
 | Game                         | Status  | Mods available |
 |------------------------------|---------|----------------|
 | adventure                    | ❌       | 0 |
-| air_raid                     | 🥉       | 0 |
+| air_raid                     | 🥈       | 0 |
 | atlantis2                    | ❌       | 0 |
 | backgammon                   | 🥉       | 0 |
 | basic_math                   | ❌       | 0 |
@@ -130,4 +130,4 @@ Total:  🥇: 11   |   🥈: 13   |   🥉: 10   |   ❌: 23 
 | video_cube                   | 🥈       | 0 |
 | word_zapper                  | 🥈       | 0 |
 
-Total:  🥇: 2   |   🥈: 16   |   🥉: 6   |   ❌: 24
+Total:  🥇: 2   |   🥈: 17   |   🥉: 5   |   ❌: 24

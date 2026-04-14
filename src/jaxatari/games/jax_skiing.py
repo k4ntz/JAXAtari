@@ -14,9 +14,6 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.spaces as spaces
 from jaxatari.modification import AutoDerivedConstants
 
-ORIGINAL_SCORES = jnp.array([-1, -2, -2])
-USE_ORIGINAL_ALE_REWARD = True
-
 def _create_static_procedural_sprites() -> dict:
     """Creates procedural sprites that don't depend on dynamic values."""
     # Procedural white background
@@ -124,6 +121,8 @@ def _get_default_asset_config() -> tuple:
     )
 
 class SkiingConstants(AutoDerivedConstants):
+    ORIGINAL_SCORES: chex.Array = struct.field(pytree_node=False, default=jnp.array([-1, -2, -2], dtype=jnp.float32)) 
+    USE_ORIGINAL_ALE_REWARD: bool = struct.field(pytree_node=False, default=True) 
     NOOP: int = struct.field(pytree_node=False, default=0)
     LEFT: int = struct.field(pytree_node=False, default=1)
     RIGHT: int = struct.field(pytree_node=False, default=2)
@@ -979,14 +978,14 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: SkiingState, state: SkiingState):
-        if USE_ORIGINAL_ALE_REWARD:
+        if self.consts.USE_ORIGINAL_ALE_REWARD:
             done = self._get_done(state)
             # In ALE, the final reward incorporates a massive penalty for missed gates.
             # state.successful_gates tracks (20 - successfully_passed_gates), which represents the missed gates.
             missed_gates = 20 - state.successful_gates
             end_penalty = - missed_gates * 500
             
-            step_reward = ORIGINAL_SCORES[state.step_count % 3]
+            step_reward = self.consts.ORIGINAL_SCORES[state.step_count % 3] # time penalty
             
             return jnp.where(done, end_penalty, step_reward).astype(jnp.float32)
             
