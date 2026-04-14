@@ -1,22 +1,18 @@
-# Third party imports
+import os
 import chex
 import jax
 import jax.numpy as jnp
 from functools import partial
-from typing import NamedTuple, Tuple, Any, List, Optional
-from jax import Array
-import os
-from pathlib import Path
-from enum import IntEnum
-
-# Project imports
+from typing import Tuple, List, Optional, Any
+from flax import struct
 from jaxatari.environment import JaxEnvironment, JAXAtariAction
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
+from jaxatari.modification import AutoDerivedConstants
 import jaxatari.spaces as spaces
 
 """
-Contributors: Ayush Bansal, Mahta Mollaeian, Anh Tuan Nguyen, Abdallah Siwar  
+Contributors: Ayush Bansal, Mahta Mollaeian, Anh Tuan Nguyen, Abdallah Siwar, Pascha Sobouti  
 
 Game: JAX Backgammon
 
@@ -24,25 +20,106 @@ This module defines a JAX-accelerated backgammon environment for reinforcement l
 It includes the environment class, state structures, move validation and execution logic, rendering, and user interaction.
 """
 
+def _get_asset_config() -> tuple:
+    """Returns the declarative manifest of all assets for backgammon."""
+    return (
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        # Checkers
+        {'name': 'white_checker', 'type': 'single', 'file': 'white_checker.npy'},
+        {'name': 'black_checker', 'type': 'single', 'file': 'black_checker.npy'},
+        {'name': 'highlight_checker', 'type': 'single', 'file': 'highlight_checker.npy'},
+        # Triangles (6 variants: light/dark × left/right + highlight × left/right)
+        {'name': 'triangle_light_right', 'type': 'single', 'file': 'triangle_light_right.npy'},
+        {'name': 'triangle_dark_right', 'type': 'single', 'file': 'triangle_dark_right.npy'},
+        {'name': 'triangle_light_left', 'type': 'single', 'file': 'triangle_light_left.npy'},
+        {'name': 'triangle_dark_left', 'type': 'single', 'file': 'triangle_dark_left.npy'},
+        {'name': 'triangle_highlight_right', 'type': 'single', 'file': 'triangle_highlight_right.npy'},
+        {'name': 'triangle_highlight_left', 'type': 'single', 'file': 'triangle_highlight_left.npy'},
+        # Bar highlights
+        {'name': 'bar_highlight_left', 'type': 'single', 'file': 'bar_highlight_left.npy'},
+        {'name': 'bar_highlight_right', 'type': 'single', 'file': 'bar_highlight_right.npy'},
+        # Dice
+        {'name': 'die_white', 'type': 'single', 'file': 'die_white.npy'},
+        {'name': 'die_red', 'type': 'single', 'file': 'die_red.npy'},
+        {'name': 'pip_black', 'type': 'single', 'file': 'pip_black.npy'},
+        {'name': 'pip_white', 'type': 'single', 'file': 'pip_white.npy'},
+    )
 
-class BackgammonConstants(NamedTuple):
-    """Constants for game Environment"""
-    NUM_POINTS = 24
-    NUM_CHECKERS = 15
-    BAR_INDEX = 24
-    HOME_INDEX = 25
-    MAX_DICE = 2
-    WHITE_HOME = jnp.array(range(18, 24))
-    BLACK_HOME = jnp.array(range(0, 6))
-    WHITE = 1
-    BLACK = -1
-    DOUBLING_CUBE = 1  # 1x by default; set to 2, 4, 8... if you add a doubling cube UI
+_RIGHT_BAR_INDEX = 26
+
+class BackgammonConstants(AutoDerivedConstants):
+    """Constants for game Environment.
+    
+    Board layout:
+    - Points 0-23: Playable triangles
+    - Point 24 (BAR_INDEX): Bar for hit checkers
+    - Point 25 (HOME_INDEX): Borne-off checkers
+    
+    Home boards (for bearing off):
+    - White home: Points 18-23 (WHITE_HOME_RANGE)
+    - Black home: Points 0-5 (BLACK_HOME_RANGE)
+    """
+    NUM_POINTS: int = struct.field(pytree_node=False, default=24)
+    NUM_CHECKERS: int = struct.field(pytree_node=False, default=15)
+    BAR_INDEX: int = struct.field(pytree_node=False, default=24)
+    RIGHT_BAR_INDEX: int = struct.field(pytree_node=False, default=_RIGHT_BAR_INDEX)
+    HOME_INDEX: int = struct.field(pytree_node=False, default=25)
+    # Home board ranges - used for bearing-off eligibility checks
+    WHITE_HOME_RANGE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(range(18, 24)))
+    BLACK_HOME_RANGE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(range(0, 6)))
+    WHITE: int = struct.field(pytree_node=False, default=1)
+    BLACK: int = struct.field(pytree_node=False, default=-1)
+    DOUBLING_CUBE: int = struct.field(pytree_node=False, default=1)  # Multiplier for gammon/backgammon scoring
+
+    # Theme for board colors: "classic", "brown", "blue"
+    THEME: str = struct.field(pytree_node=False, default="classic")
+
+    # Frame dimensions
+    FRAME_HEIGHT: int = struct.field(pytree_node=False, default=210)
+    FRAME_WIDTH: int = struct.field(pytree_node=False, default=160)
+
+    # Geometry constants (same as original)
+    TOP_MARGIN_FOR_DICE: int = struct.field(pytree_node=False, default=25)
+    BOARD_MARGIN: int = struct.field(pytree_node=False, default=8)
+    TRIANGLE_LENGTH: int = struct.field(pytree_node=False, default=60)
+    TRIANGLE_THICKNESS: int = struct.field(pytree_node=False, default=12)
+    BAR_THICKNESS: int = struct.field(pytree_node=False, default=14)
+    CHECKER_WIDTH: int = struct.field(pytree_node=False, default=4)
+    CHECKER_HEIGHT: int = struct.field(pytree_node=False, default=4)
+    BASE_MARGIN: int = struct.field(pytree_node=False, default=2)
+    BAND_TOP_MARGIN: float = struct.field(pytree_node=False, default=1.2)
+    BAND_BOTTOM_MARGIN: int = struct.field(pytree_node=False, default=1)
+    CHIP_GAP_Y: int = struct.field(pytree_node=False, default=2)
+    CHIP_GAP_X: int = struct.field(pytree_node=False, default=4)
+    BAR_EDGE_PADDING: int = struct.field(pytree_node=False, default=2)
+    BAR_VERTICAL_PADDING: int = struct.field(pytree_node=False, default=2)
+    DICE_SIZE: int = struct.field(pytree_node=False, default=12)
+    PIP_SIZE: int = struct.field(pytree_node=False, default=2)
+
+    # Derived constants (computed from base constants via compute_derived)
+    CHECKER_STACK_OFFSET: Optional[int] = struct.field(pytree_node=False, default=None)
+    BAR_Y: Optional[int] = struct.field(pytree_node=False, default=None)
+    BAR_X: Optional[int] = struct.field(pytree_node=False, default=None)
+    BAR_WIDTH: Optional[int] = struct.field(pytree_node=False, default=None)
+
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_asset_config)
+
+    def compute_derived(self):
+        """Compute derived constants from base geometry constants."""
+        return {
+            'CHECKER_STACK_OFFSET': self.CHECKER_HEIGHT + self.CHIP_GAP_Y,
+            'BAR_Y': self.TOP_MARGIN_FOR_DICE + self.FRAME_HEIGHT // 2 - self.BAR_THICKNESS // 2 - 10,
+            'BAR_X': self.BOARD_MARGIN,
+            'BAR_WIDTH': self.FRAME_WIDTH - 2 * self.BOARD_MARGIN,
+        }
 
 
-class BackgammonState(NamedTuple):
+@struct.dataclass
+class BackgammonState:
     """Represents the complete state of a backgammon game."""
     board: jnp.ndarray  # (2, 26)
-    dice: jnp.ndarray  # (4,)
+    dice: jnp.ndarray  # (4,) - remaining moves available
+    original_dice: jnp.ndarray  # (2,) - original roll values for display (ALE shows these)
     current_player: int
     is_game_over: bool
     key: jax.random.PRNGKey
@@ -54,76 +131,110 @@ class BackgammonState(NamedTuple):
     last_action: int = JAXAtariAction.NOOP  # Store last action for keyup handling
     await_keyup: bool = False
     last_valid_drop: int = -1  # -1 means no persistent highlight
-    picked_bar_side: int = -1  # 24 (left), 26 (right), or -1 if not from bar
+    picked_bar_side: int = -1  # BAR_INDEX (left), RIGHT_BAR_INDEX (right), or -1 if not from bar
+    move_repeat_timer: int = 0  # Frames since last cursor move (for hold-to-repeat)
 
 
-
-class BackgammonInfo(NamedTuple):
+@struct.dataclass
+class BackgammonInfo:
     """Contains auxiliary information about the environment (e.g., timing or metadata)."""
     player: jnp.ndarray
     dice: jnp.ndarray
     all_rewards: chex.Array
 
-
-class BackgammonObservation(NamedTuple):
-    """Complete backgammon observation structure for object-centric observations."""
-    board: jnp.ndarray  # (2, 26) - full board state [white_checkers, black_checkers]
-    dice: jnp.ndarray  # (4,) - available dice values
-    current_player: jnp.ndarray  # (1,) - current player (-1 for black, 1 for white)
-    is_game_over: jnp.ndarray  # (1,) - game over flag
-    bar_counts: jnp.ndarray  # (2,) - checkers on bar [white, black]
-    home_counts: jnp.ndarray  # (2,) - checkers borne off [white, black]
-
-
-class GamePhase(IntEnum):
-    """Phases of the interactive gameplay."""
-    WAITING_FOR_ROLL = 0  # Waiting for space to roll dice
-    SELECTING_CHECKER = 1  # Moving cursor to select a checker
-    MOVING_CHECKER = 2  # Checker picked up, moving to destination
-    TURN_COMPLETE = 3  # All moves done, waiting for space to end turn
+@struct.dataclass
+class BackgammonObservation:
+    """Object-centric styled observation of the game."""
+    board: jnp.ndarray
+    dice: jnp.ndarray
+    current_player: jnp.ndarray
+    is_game_over: jnp.ndarray
+    bar_counts: jnp.ndarray
+    home_counts: jnp.ndarray
+    cursor_position: jnp.ndarray
+    game_phase: jnp.ndarray
+    picked_checker_from: jnp.ndarray
+    last_valid_drop: jnp.ndarray
 
 
-class InteractiveState(NamedTuple):
-    """State for interactive gameplay."""
-    game_phase: int
-    cursor_position: int  # Current cursor position (0-25)
-    picked_checker_from: int  # Where we picked up a checker from (-1 if none)
-    current_die_index: int  # Which die we're using (0-3)
-    moves_made: jnp.ndarray  # Track which dice have been used
+# ============================================================================
+# PRE-COMPUTED CURSOR NAVIGATION MAPS (computed at module load time)
+# ============================================================================
+# Rotated ring order: 0→1→2→3→4→5→RIGHT_BAR_INDEX→6→7→8→9→10→11→12→13→14→15→16→17→24→18→19→20→21→22→23
+_CURSOR_RING = jnp.array(
+    [0, 1, 2, 3, 4, 5, _RIGHT_BAR_INDEX, 6, 7, 8, 9, 10, 11,
+     12, 13, 14, 15, 16, 17, 24, 18, 19, 20, 21, 22, 23],
+    dtype=jnp.int32
+)
+
+def _build_cursor_maps():
+    """Pre-compute LEFT/RIGHT navigation maps for the cursor ring."""
+    ring = _CURSOR_RING
+    ring_len = ring.shape[0]
+    next_left = jnp.arange(27, dtype=jnp.int32)
+    next_right = jnp.arange(27, dtype=jnp.int32)
+    
+    def body(i, carry):
+        nL, nR = carry
+        a = ring[i]
+        b = ring[(i + 1) % ring_len]  # LEFT goes forward in ring array
+        c = ring[(i - 1) % ring_len]  # RIGHT goes backward in ring array
+        nL = nL.at[a].set(b)
+        nR = nR.at[a].set(c)
+        return (nL, nR)
+    
+    return jax.lax.fori_loop(0, ring_len, body, (next_left, next_right))
+
+# Build maps once at module load time
+_CURSOR_NEXT_LEFT, _CURSOR_NEXT_RIGHT = _build_cursor_maps()
 
 
-WHITE_PATH = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
-BLACK_PATH = [23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 24, 25]
+# Available board color themes
+BACKGAMMON_THEMES = ["classic", "brown", "blue"]
 
 
-class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, BackgammonConstants]):
+class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, BackgammonInfo, BackgammonConstants]):
     """
     JAX-based backgammon environment supporting JIT compilation and vectorized operations.
     Provides functionality for state initialization, step transitions, valid move evaluation, and observation generation.
+    
+    Args:
+        consts: Game constants (optional, uses defaults if None)
+        reward_funcs: Custom reward functions (optional)
+        theme: Board color theme - one of "classic" (green), "brown" (wooden), "blue" (tournament)
+               If None, uses consts.THEME (which defaults to "classic")
     """
 
-    def __init__(self, consts: BackgammonConstants = None, reward_funcs: list[callable] = None):
-        consts = consts or BackgammonConstants()
-        super().__init__(consts)
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            JAXAtariAction.NOOP,
+            JAXAtariAction.FIRE,
+            JAXAtariAction.RIGHT,
+            JAXAtariAction.LEFT,
+        ],
+        dtype=jnp.int32,
+    )
 
-        # Pre-compute all possible moves
+    def __init__(self, consts: BackgammonConstants = None, config: jr.RendererConfig = None):
+        self.consts = consts or BackgammonConstants()
+        super().__init__(self.consts)
+
+        # Pre-compute all possible moves (from_point, to_point) for points 0..25
+        # Shape: (676, 2) = 26×26 combinations
+        # This will be used for vectorized move validation
+        NUM_ACTION_PAIRS = 26 * 26
         self._action_pairs = jnp.array([(i, j) for i in range(26) for j in range(26)], dtype=jnp.int32)
+        assert self._action_pairs.shape == (NUM_ACTION_PAIRS, 2), \
+            f"Action pairs shape mismatch: expected ({NUM_ACTION_PAIRS}, 2), got {self._action_pairs.shape}"
 
         # Special action indices for interactive play
         self._roll_action_index = self._action_pairs.shape[0]
 
-        self.renderer = BackgammonRenderer(self)
-        if reward_funcs is not None:
-            reward_funcs = tuple(reward_funcs)
-        self.reward_funcs = reward_funcs
+        self.renderer = BackgammonRenderer(self, config=config)
+        self.reward_funcs = None
 
-        # Define action set for jaxatari compatibility
-        self.action_set = [
-            JAXAtariAction.LEFT,  # Move cursor left
-            JAXAtariAction.RIGHT,  # Move cursor right
-            JAXAtariAction.FIRE,  # Space (select/drop/roll)
-            JAXAtariAction.NOOP  # No-op (do nothing)
-        ]
+        # Lowercase alias retained for compatibility with older helper scripts.
+        self.action_set = list(self.ACTION_SET)
 
     @partial(jax.jit, static_argnums=(0,))
     def init_state(self, key) -> BackgammonState:
@@ -177,9 +288,13 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             current_player == self.consts.WHITE, lambda _: 0, lambda _: 23, operand=None
         )
 
+        # Store original dice for display (always 2 values)
+        original_dice = jnp.array([first, second], dtype=jnp.int32)
+
         return BackgammonState(
             board=board,
             dice=dice,
+            original_dice=original_dice,
             current_player=current_player,
             is_game_over=False,
             key=key,
@@ -191,9 +306,10 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             last_action=JAXAtariAction.NOOP,
             await_keyup=False,
             last_valid_drop=-1,
+            move_repeat_timer=0,
         )
 
-    def reset(self, key: jax.random.PRNGKey = None) -> Tuple[jnp.ndarray, BackgammonState]:
+    def reset(self, key: jax.random.PRNGKey = None) -> Tuple[BackgammonObservation, BackgammonState]:
         """Reset the environment. The initial roll happens inside init_state now."""
         if key is None:
             key = jax.random.PRNGKey(0)
@@ -223,84 +339,72 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
     @partial(jax.jit, static_argnums=(0,))
     def get_player_index(self, player: int) -> int:
-        return jax.lax.cond(player == self.consts.WHITE, lambda _: 0, lambda _: 1, operand=None)
+        return jnp.where(player == self.consts.WHITE, 0, 1)
 
     @partial(jax.jit, static_argnums=(0,))
     def _is_valid_move_basic(self, state: BackgammonState, move: Tuple[int, int]) -> bool:
-        from_point, to_point = move
-        board = state.board
-        player = state.current_player
-        player_idx = self.get_player_index(player)
-        opponent_idx = 1 - player_idx
+        """Branchless move validation — uses jnp.where instead of nested lax.cond
+        to avoid 2^N path explosion under vmap."""
+        from_point = jnp.asarray(move[0], dtype=jnp.int32)
+        to_point   = jnp.asarray(move[1], dtype=jnp.int32)
+        board      = state.board
+        player_idx = jnp.where(state.current_player == self.consts.WHITE, 0, 1)
+        opp_idx    = 1 - player_idx
+        is_white   = (state.current_player == self.consts.WHITE)
 
-        in_bounds = ((0 <= from_point) & (from_point <= 24) &
-                    (0 <= to_point) & (to_point <= self.consts.HOME_INDEX) &
-                    (to_point != self.consts.BAR_INDEX))
+        has_bar         = board[player_idx, 24] > 0
+        moving_from_bar = (from_point == 24)
+        to_home         = (to_point == 25)
 
-        from_point = jnp.asarray(from_point)
-        to_point   = jnp.asarray(to_point)
+        # ── fast-reject without branching ────────────────────────────────────────
+        in_bounds  = (from_point >= 0) & (from_point <= 24) & (to_point >= 0) & \
+                     (to_point <= 25) & (to_point != 24)
+        must_bar   = has_bar & (~moving_from_bar)
+        early_fail = (~in_bounds) | must_bar | (from_point == to_point)
 
-        same_point         = from_point == to_point
-        has_bar_checkers   = board[player_idx, self.consts.BAR_INDEX] > 0
-        moving_from_bar    = from_point == self.consts.BAR_INDEX
-        must_move_from_bar = (~moving_from_bar) & has_bar_checkers
-        moving_to_bar      = to_point == self.consts.BAR_INDEX
+        # ── compute ALL three case results unconditionally ────────────────────────
 
-        early_invalid = (~in_bounds) | must_move_from_bar | same_point | moving_to_bar
-        def return_false(_): return jnp.bool_(False)
+        # Case A: bar entry
+        fp_safe     = jnp.clip(from_point, 0, 23)
+        tp_safe     = jnp.clip(to_point, 0, 23)
+        def is_valid_bar_entry(dv):
+            expected_entry = jnp.where(is_white, dv - 1, jnp.int32(24) - dv)
+            matches_entry  = (to_point == expected_entry)
+            safe_entry     = jnp.clip(expected_entry, 0, 23)
+            entry_open     = board[opp_idx, safe_entry] <= 1
+            return matches_entry & entry_open
+        bar_valid   = (board[player_idx, 24] > 0) & jnp.any(jax.vmap(is_valid_bar_entry)(state.dice))
 
-        def continue_check(_):
-            def bar_case(_):
-                def is_valid_entry(dv) -> bool:
-                    expected_entry = jax.lax.select(player == self.consts.WHITE, dv - 1, 24 - dv)
-                    matches_entry  = (to_point == expected_entry)
-                    entry_open     = board[opponent_idx, expected_entry] <= 1
-                    return matches_entry & entry_open
-                bar_has  = board[player_idx, self.consts.BAR_INDEX] > 0
-                valid_en = jnp.any(jax.vmap(is_valid_entry)(state.dice))
-                return bar_has & valid_en
+        # Case B: normal move
+        has_piece   = board[player_idx, fp_safe] > 0
+        raw_dist    = jnp.where(is_white, to_point - from_point, from_point - to_point)
+        dest_in_bd  = (to_point >= 0) & (to_point <= 23)
+        dest_open   = jnp.where(dest_in_bd, board[opp_idx, tp_safe] <= 1, jnp.bool_(False))
+        dice_match  = jnp.any(state.dice == raw_dist)
+        normal_valid = has_piece & dest_in_bd & dest_open & (raw_dist > 0) & dice_match
 
-            def bearing_off_case(_):
-                can_bear_off = self.check_bearing_off(state, player)
-                bearing_off_distance = jax.lax.cond(
-                    player == self.consts.WHITE,
-                    lambda _: self.consts.HOME_INDEX - from_point - 1,
-                    lambda _: from_point + 1,
-                    operand=None
-                )
-                dice_match = jnp.any(state.dice == bearing_off_distance)
+        # Case C: bearing off
+        can_bear    = self.check_bearing_off(state, state.current_player)
+        bear_dist   = jnp.where(is_white, jnp.int32(24) - from_point, from_point + jnp.int32(1))
+        exact_die   = jnp.any(state.dice == bear_dist)
 
-                def white_check():
-                    full_home = jax.lax.dynamic_slice(board[player_idx], (18,), (6,))
-                    mask = (jnp.arange(18, 24) < from_point)
-                    return jnp.any(full_home * mask > 0)
-                def black_check():
-                    full_home = jax.lax.dynamic_slice(board[player_idx], (0,), (6,))
-                    mask = (jnp.arange(0, 6) > from_point)
-                    return jnp.any(full_home * mask > 0)
+        # higher_exists: vectorised prefix/suffix, no cond
+        wh          = board[player_idx, 18:24]
+        w_higher    = jnp.any(wh * (jnp.arange(18, 24) < from_point) > 0)
+        bh          = board[player_idx, 0:6]
+        b_higher    = jnp.any(bh * (jnp.arange(0, 6) > from_point) > 0)
+        higher      = jnp.where(is_white, w_higher, b_higher)
 
-                higher_exists = jax.lax.cond(player == self.consts.WHITE, lambda _: white_check(), lambda _: black_check(), operand=None)
-                larger_ok     = jnp.any(state.dice > bearing_off_distance)
-                has_piece     = board[player_idx, from_point] > 0
-                valid_bear    = has_piece & (dice_match | ((~higher_exists) & larger_ok))
-                return jax.lax.cond(can_bear_off, lambda _: valid_bear, lambda _: jnp.bool_(False), operand=None)
+        oversize    = (~higher) & jnp.any(state.dice > bear_dist)
+        in_home     = jnp.where(is_white, (from_point >= 18) & (from_point <= 23),
+                                           (from_point >= 0)  & (from_point <= 5))
+        bear_valid  = can_bear & has_piece & in_home & (exact_die | oversize)
 
-            def normal_case(_):
-                has_piece   = board[player_idx, from_point] > 0
-                not_blocked = board[opponent_idx, to_point] <= 1
-                base_dist   = jax.lax.select(player == self.consts.WHITE, to_point - from_point, from_point - to_point)
-                correct_dir = base_dist > 0
-                dice_match  = jnp.any(state.dice == base_dist)
-                return has_piece & not_blocked & correct_dir & dice_match & (to_point != self.consts.BAR_INDEX)
+        # ── select result with jnp.where (no cond nesting) ───────────────────────
+        result = jnp.where(moving_from_bar, bar_valid,
+                   jnp.where(to_home, bear_valid, normal_valid))
 
-            return jax.lax.cond(
-                moving_from_bar,
-                bar_case,
-                lambda _: jax.lax.cond(to_point == self.consts.HOME_INDEX, bearing_off_case, normal_case, operand=None),
-                operand=None
-            )
-
-        return jax.lax.cond(early_invalid, return_false, continue_check, operand=None)
+        return (~early_fail) & result
 
     @partial(jax.jit, static_argnums=(0,))
     def _distinct_nonzero_dice(self, dice: jnp.ndarray):
@@ -311,43 +415,116 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         return has_two, lo, hi
 
     @partial(jax.jit, static_argnums=(0,))
+    def _candidate_to_points_for_die(self, state: BackgammonState, from_point: jnp.ndarray, die: jnp.ndarray):
+        """Return at most two candidate destinations for a single die move from one source point.
+
+        Candidate 0: normal destination (or bar entry destination when moving from bar)
+        Candidate 1: optional HOME destination for bearing off
+        """
+        from_point = jnp.asarray(from_point, dtype=jnp.int32)
+        die = jnp.asarray(die, dtype=jnp.int32)
+        player = state.current_player
+
+        normal_to = jax.lax.cond(
+            player == self.consts.WHITE,
+            lambda _: from_point + die,
+            lambda _: from_point - die,
+            operand=None,
+        )
+        bar_to = jax.lax.cond(
+            player == self.consts.WHITE,
+            lambda _: die - 1,
+            lambda _: 24 - die,
+            operand=None,
+        )
+
+        is_from_bar = from_point == jnp.int32(self.consts.BAR_INDEX)
+        primary_to = jax.lax.select(is_from_bar, bar_to, normal_to)
+
+        in_white_home = (from_point >= 18) & (from_point <= 23)
+        in_black_home = (from_point >= 0) & (from_point <= 5)
+        in_home_board = jax.lax.select(player == self.consts.WHITE, in_white_home, in_black_home)
+        can_bear_off_here = (~is_from_bar) & in_home_board & self.check_bearing_off(state, player)
+
+        secondary_to = jnp.int32(self.consts.HOME_INDEX)
+        secondary_valid = can_bear_off_here & (primary_to != secondary_to)
+
+        return jnp.array([primary_to, secondary_to], dtype=jnp.int32), jnp.array([True, secondary_valid], dtype=jnp.bool_)
+
+    @partial(jax.jit, static_argnums=(0,))
     def _any_move_with_single_die(self, state: BackgammonState, die_value) -> bool:
+        """Branchless check: can any checker move with the given die value?
+        Uses jnp.where instead of lax.cond to avoid path explosion under vmap."""
         die = jnp.asarray(die_value, dtype=jnp.int32)
-        test_state = state._replace(dice=jnp.array([die, 0, 0, 0], dtype=jnp.int32))
-        mask = jax.vmap(lambda mv: self._is_valid_move_basic(test_state, mv))(self._action_pairs)
-        return jnp.any(mask)
+        no_die = die <= 0
+        test_state = state.replace(dice=jnp.array([die, 0, 0, 0], dtype=jnp.int32))
+
+        player_idx = jnp.where(state.current_player == self.consts.WHITE, 0, 1)
+        from_points = jnp.arange(self.consts.BAR_INDEX + 1, dtype=jnp.int32)  # 0..24
+        has_piece = state.board[player_idx, from_points] > 0
+
+        # If player has checkers on bar, only bar moves are legal.
+        has_bar_checker = state.board[player_idx, self.consts.BAR_INDEX] > 0
+        bar_gate = jnp.where(
+            has_bar_checker,
+            from_points == self.consts.BAR_INDEX,
+            jnp.ones_like(from_points, dtype=jnp.bool_),
+        )
+        allowed_from = has_piece & bar_gate
+
+        def eval_from(fp, allowed):
+            to_points, to_valid = self._candidate_to_points_for_die(test_state, fp, die)
+
+            def eval_to(tp, valid):
+                mv = jnp.array([fp, tp], dtype=jnp.int32)
+                result = self._is_valid_move_basic(test_state, mv)
+                return valid & result
+
+            move_ok = jnp.any(jax.vmap(eval_to)(to_points, to_valid))
+            return allowed & move_ok
+
+        has_any = jnp.any(jax.vmap(eval_from)(from_points, allowed_from))
+        return jnp.where(no_die, jnp.bool_(False), has_any)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _precompute_dice_enforcement(self, state: BackgammonState):
+        """Compute higher-die enforcement state once per board position.
+
+        Returns:
+            need_rule: True when higher-die rule must be enforced
+            state_hi: state with only higher die active (for uses_hi check)
+        """
+        has_two, lo, hi = self._distinct_nonzero_dice(state.dice)
+        can_hi = self._any_move_with_single_die(state, hi)
+        can_lo = jax.lax.cond(
+            has_two,
+            lambda __: self._any_move_with_single_die(state, lo),
+            lambda __: jnp.bool_(False),
+            operand=None,
+        )
+        need_rule = has_two & can_hi & (~can_lo)
+        state_hi = state.replace(dice=jnp.array([hi, 0, 0, 0], dtype=jnp.int32))
+        return need_rule, state_hi
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _is_valid_move_with_enforcement(self, state: BackgammonState, move: Tuple[int, int],
+                                        need_rule: jnp.ndarray, state_hi: BackgammonState) -> bool:
+        """Branchless move validation with higher-die enforcement."""
+        basic_ok = self._is_valid_move_basic(state, move)
+        uses_hi = self._is_valid_move_basic(state_hi, move)
+        enforcement_ok = jnp.where(need_rule, uses_hi, jnp.bool_(True))
+        return basic_ok & enforcement_ok
 
     @partial(jax.jit, static_argnums=(0,))
     def is_valid_move(self, state: BackgammonState, move: Tuple[int, int]) -> bool:
-        basic_ok = self._is_valid_move_basic(state, move)
-
-        def enforce(_):
-            has_two, lo, hi = self._distinct_nonzero_dice(state.dice)  # JAX scalars
-
-            can_hi = self._any_move_with_single_die(state, hi)
-            can_lo = jax.lax.cond(
-                has_two,
-                lambda __: self._any_move_with_single_die(state, lo),
-                lambda __: jnp.bool_(False),
-                operand=None
-            )
-
-            need_rule = has_two & can_hi & (~can_lo)
-
-            def must_use_hi(_):
-                state_hi = state._replace(dice=jnp.array([hi, 0, 0, 0], dtype=jnp.int32))
-                return self._is_valid_move_basic(state_hi, move)
-
-            ok2 = jax.lax.cond(need_rule, must_use_hi, lambda __: jnp.bool_(True), operand=None)
-            return basic_ok & ok2
-
-        return jax.lax.cond(basic_ok, enforce, lambda _: jnp.bool_(False), operand=None)
+        need_rule, state_hi = self._precompute_dice_enforcement(state)
+        return self._is_valid_move_with_enforcement(state, move, need_rule, state_hi)
 
     @partial(jax.jit, static_argnums=(0,))
     def check_bearing_off(self, state: BackgammonState, player: int) -> bool:
-        """Check for bearing off using lax.cond instead of if statements."""
+        """Branchless bearing-off eligibility check."""
         board = state.board
-        player_idx = self.get_player_index(player)
+        player_idx = jnp.where(player == self.consts.WHITE, 0, 1)
 
         # Full 0–23 range (playable points)
         point_indices = jnp.arange(24)
@@ -364,8 +541,14 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
     @partial(jax.jit, static_argnums=(0,))
     def has_any_legal_move(self, state: BackgammonState) -> jnp.ndarray:
-        mask = jax.vmap(lambda mv: self.is_valid_move(state, mv))(self._action_pairs)
-        return jnp.any(mask)
+        """Branchless legal move check."""
+        has_two, lo, hi = self._distinct_nonzero_dice(state.dice)
+
+        can_hi = self._any_move_with_single_die(state, hi)
+        # Always compute can_lo (both branches run under vmap anyway)
+        can_lo = self._any_move_with_single_die(state, lo)
+        # Only count can_lo if we actually have two distinct dice
+        return can_hi | (has_two & can_lo)
 
     @partial(jax.jit, static_argnums=(0,))
     def _auto_pass_if_stuck(self, state: BackgammonState) -> BackgammonState:
@@ -378,12 +561,15 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         """
         def do_pass(_):
             next_dice, new_key = self.roll_dice(state.key)
+            # New roll means new original_dice for display
+            new_original = jnp.array([next_dice[0], next_dice[1]], dtype=jnp.int32)
             next_player = -state.current_player
-            next_cursor = jax.lax.cond(
-                next_player == self.consts.WHITE, lambda _: jnp.int32(0), lambda _: jnp.int32(23), operand=None
+            next_cursor = jnp.where(
+                next_player == self.consts.WHITE, jnp.int32(0), jnp.int32(23)
             )
-            return state._replace(
+            return state.replace(
                 dice=next_dice,
+                original_dice=new_original,
                 key=new_key,
                 current_player=next_player,
                 game_phase=jnp.int32(1),          # SELECTING_CHECKER
@@ -397,25 +583,21 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
     @partial(jax.jit, static_argnums=(0,))
     def execute_move(self, board, player_idx, opponent_idx, from_point, to_point):
-        """Apply a move to the board, updating for possible hits or bearing off."""
-        # Remove checker from source first
+        """Apply a move to the board — branchless using jnp.where."""
+        # Remove checker from source
         board = board.at[player_idx, from_point].add(-1)
 
-        # If hitting opponent, update opponent's bar and clear their point
-        board = jax.lax.cond(
-            (to_point != self.consts.HOME_INDEX) & (board[opponent_idx, to_point] == 1),
-            lambda b: b.at[opponent_idx, to_point].set(0).at[opponent_idx, self.consts.BAR_INDEX].add(1),
-            lambda b: b,
-            operand=board
-        )
+        # Hit detection: opponent has exactly 1 checker at destination (not HOME)
+        is_hit = (to_point != self.consts.HOME_INDEX) & (board[opponent_idx, to_point] == 1)
+        # Compute hit board unconditionally, select with where
+        hit_board = board.at[opponent_idx, to_point].set(0).at[opponent_idx, self.consts.BAR_INDEX].add(1)
+        board = jax.tree.map(lambda h, o: jnp.where(is_hit, h, o), hit_board, board)
 
-        # Add to destination: either to_point or HOME_INDEX
-        board = jax.lax.cond(
-            to_point == self.consts.HOME_INDEX,
-            lambda b: b.at[player_idx, self.consts.HOME_INDEX].add(1),
-            lambda b: b.at[player_idx, to_point].add(1),
-            operand=board
-        )
+        # Add to destination: HOME_INDEX or to_point
+        is_home = (to_point == self.consts.HOME_INDEX)
+        board_home = board.at[player_idx, self.consts.HOME_INDEX].add(1)
+        board_dest = board.at[player_idx, to_point].add(1)
+        board = jax.tree.map(lambda h, d: jnp.where(is_home, h, d), board_home, board_dest)
         return board
 
     @partial(jax.jit, static_argnums=(0,))
@@ -474,40 +656,23 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
     @partial(jax.jit, static_argnums=(0,))
     def compute_distance(self, player, from_point, to_point):
-        """Compute move distance based on player and points, including bearing off."""
-        is_from_bar = from_point == self.consts.BAR_INDEX
+        """Compute move distance — branchless using jnp.where."""
+        is_white    = (player == self.consts.WHITE)
+        is_from_bar = (from_point == self.consts.BAR_INDEX)
+        is_to_home  = (to_point == self.consts.HOME_INDEX)
 
         # Distance when entering from BAR
-        bar_distance = jax.lax.cond(
-            player == self.consts.WHITE,
-            lambda _: to_point + 1,         # WHITE enters on 0..5 → die = to_point+1
-            lambda _: 24 - to_point,        # BLACK enters on 23..18 → die = 24-to_point
-            operand=None
-        )
+        bar_distance = jnp.where(is_white, to_point + 1, jnp.int32(24) - to_point)
 
-        # Regular / bearing-off distance
-        regular_distance = jax.lax.cond(
-            to_point == self.consts.HOME_INDEX,
-            # FIX: bearing-off distance
-            # WHITE home is 18..23, with point 23 = 1-pip → distance = 24 - from_point
-            # BLACK home is 0..5,   with point 0  = 1-pip → distance = from_point + 1
-            lambda _: jax.lax.cond(
-                player == self.consts.WHITE,
-                lambda _: jnp.int32(24) - from_point,   
-                lambda _: from_point + 1,
-                operand=None
-            ),
-            # Normal board move
-            lambda _: jax.lax.cond(
-                player == self.consts.WHITE,
-                lambda _: to_point - from_point,        # WHITE moves upward in index
-                lambda _: from_point - to_point,        # BLACK moves downward in index
-                operand=None
-            ),
-            operand=None
-        )
+        # Bearing-off distance
+        bear_distance = jnp.where(is_white, jnp.int32(24) - from_point, from_point + jnp.int32(1))
 
-        return jax.lax.cond(is_from_bar, lambda _: bar_distance, lambda _: regular_distance, operand=None)
+        # Normal board move distance
+        normal_distance = jnp.where(is_white, to_point - from_point, from_point - to_point)
+
+        # Select: bar > bear-off > normal
+        regular_distance = jnp.where(is_to_home, bear_distance, normal_distance)
+        return jnp.where(is_from_bar, bar_distance, regular_distance)
 
     @staticmethod
     @jax.jit
@@ -600,12 +765,15 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
         def next_turn(k):
             next_dice, new_key = JaxBackgammonEnv.roll_dice(k)
-            return next_dice, -state.current_player, new_key
+            # New turn gets new original_dice for display
+            new_original = jnp.array([next_dice[0], next_dice[1]], dtype=jnp.int32)
+            return next_dice, new_original, -state.current_player, new_key
 
         def same_turn(k):
-            return new_dice, state.current_player, k
+            # Keep the same original_dice during the turn
+            return new_dice, state.original_dice, state.current_player, k
 
-        next_dice, next_player, new_key = jax.lax.cond(all_dice_used, next_turn, same_turn, key)
+        next_dice, next_original, next_player, new_key = jax.lax.cond(all_dice_used, next_turn, same_turn, key)
 
         white_won = new_board[0, self.consts.HOME_INDEX] == self.consts.NUM_CHECKERS
         black_won = new_board[1, self.consts.HOME_INDEX] == self.consts.NUM_CHECKERS
@@ -614,6 +782,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         new_state = BackgammonState(
             board=new_board,
             dice=next_dice,
+            original_dice=next_original,
             current_player=next_player,
             is_game_over=game_over,
             key=new_key,
@@ -621,7 +790,15 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             last_dice=used_dice
         )
         
-        new_state = self._auto_pass_if_stuck(new_state)
+        # Only check auto-pass when we just switched players (all dice used)
+        # and the game isn't over — avoids expensive has_any_legal_move call
+        # on every single step
+        new_state = jax.lax.cond(
+            all_dice_used & (~game_over),
+            lambda s: self._auto_pass_if_stuck(s),
+            lambda s: s,
+            operand=new_state
+        )
 
         obs = self._get_observation(new_state)
         reward = self._get_reward(state, new_state)
@@ -630,239 +807,428 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         info = self._get_info(new_state, all_rewards)
         return obs, new_state, reward, done, info, new_key
 
+    @partial(jax.jit, static_argnums=(0,))
+    def get_valid_action_mask(self, state: BackgammonState) -> jnp.ndarray:
+        """
+        Returns a boolean mask of valid actions for the current state.
+        
+        Shape: (677,) where:
+            - indices 0-675: Valid (from, to) move pairs
+            - index 676: Roll action (valid only in phase 0)
+        
+        Usage:
+            mask = env.get_valid_action_mask(state)
+            # In your agent: logits[~mask] = -inf before softmax
+        """
+        # Precompute higher-die enforcement once per state and reuse for all 676 moves.
+        need_rule, state_hi = self._precompute_dice_enforcement(state)
+        move_mask = jax.vmap(
+            lambda mv: self._is_valid_move_with_enforcement(state, mv, need_rule, state_hi)
+        )(self._action_pairs)
+        
+        # Roll action is valid only in phase 0 (IDLE/waiting for roll)
+        roll_valid = (state.game_phase == jnp.int32(0))
+        
+        return jnp.concatenate([move_mask, jnp.array([roll_valid])])
 
-    def step(self, state: BackgammonState, action: jnp.ndarray):
-        """Interactive step with JAX-safe debounce: each press triggers once; holding does nothing until NOOP arrives."""
+    @partial(jax.jit, static_argnums=(0,))
+    def get_legal_move_indices(self, state: BackgammonState) -> jnp.ndarray:
+        """
+        Returns indices of valid moves (not a mask, but actual indices).
+        Useful for random action selection or debugging.
+        
+        Returns:
+            Array of valid move indices. Padded with -1 for fixed shape.
+        """
+        mask = self.get_valid_action_mask(state)
+        indices = jnp.arange(677)
+        # Return indices where mask is True, padded with -1
+        valid_indices = jnp.where(mask, indices, -1)
+        return valid_indices
 
-        # Action flags (JAX bool scalars)
-        is_left  = action == JAXAtariAction.LEFT
+    @partial(jax.jit, static_argnums=(0,))
+    def sample_random_action(self, state: BackgammonState, key: jax.Array) -> Tuple[int, jax.Array]:
+        """
+        Sample a random valid action uniformly.
+        
+        Args:
+            state: Current game state
+            key: JAX random key
+        
+        Returns:
+            (action_index, new_key)
+        """
+        mask = self.get_valid_action_mask(state)
+        key, subkey = jax.random.split(key)
+        
+        # Sample uniformly from valid actions
+        # Use categorical with logits: valid=0, invalid=-inf
+        logits = jnp.where(mask, 0.0, -jnp.inf)
+        action = jax.random.categorical(subkey, logits)
+        
+        return action, key
+
+    @property
+    def num_actions(self) -> int:
+        """Total number of possible actions (676 moves + 1 roll)."""
+        return self._action_pairs.shape[0] + 1
+
+    # ============================================================================
+    # DECOMPOSED STEP HELPERS (Design Guide Section 4: Modular, JIT-compatible)
+    # ============================================================================
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _handle_cursor_move(self, state: BackgammonState, direction: int) -> BackgammonState:
+        """
+        Handle cursor movement (LEFT=-1 or RIGHT=1).
+        
+        Cursor moves on the rotated ring:
+        LEFT  : 0→1→2→3→4→5→RIGHT_BAR_INDEX→6→7→8→9→10→11→12→13→14→15→16→17→24→18→19→20→21→22→23
+        RIGHT : reverse of the above.
+        
+        Rules:
+        - Bars (24, 26) are cursor-only (you can stand on them but not drop there).
+        - No wrap 0↔23 ever.
+        - While MOVING at 0/23: blocked unless legal bear-off jump to HOME (25).
+        - Leaving HOME (25) only back to its visual edge.
+        
+        Returns: Updated state with new cursor_position.
+        """
+        can_move = (state.game_phase == 1) | (state.game_phase == 2)
+        pos = state.cursor_position
+
+        is_left = jnp.array(direction == -1, dtype=jnp.bool_)
+        is_right = jnp.array(direction == 1, dtype=jnp.bool_)
+
+        at_home = (pos == jnp.int32(self.consts.HOME_INDEX))  # 25
+        at_left_edge = (pos == jnp.int32(0))
+        at_right_edge = (pos == jnp.int32(23))
+
+        is_moving = (state.game_phase == jnp.int32(2))
+        is_white = (state.current_player == self.consts.WHITE)
+
+        # Use pre-computed module-level navigation maps
+        next_left = _CURSOR_NEXT_LEFT
+        next_right = _CURSOR_NEXT_RIGHT
+
+        # Candidate target from ring movement
+        ring_target = jax.lax.select(is_left, next_left[pos],
+                        jax.lax.select(is_right, next_right[pos], pos))
+
+        # ---- Bear-off jump to HOME (only when MOVING and bearing-off is allowed) ----
+        not_from_bar = (state.picked_checker_from != jnp.int32(self.consts.BAR_INDEX))
+        can_bear_off_now = self.check_bearing_off(state, state.current_player)
+        jump_home_white = is_moving & is_left & at_right_edge & is_white
+        jump_home_black = is_moving & is_right & at_left_edge & (~is_white)
+        to_home_attempt = (jump_home_white | jump_home_black) & not_from_bar & can_bear_off_now
+        home_target = jnp.int32(self.consts.HOME_INDEX)
+
+        # ---- Block wrap 0↔23 always ----
+        block_wrap = (at_left_edge & is_right) | (at_right_edge & is_left)
+        ring_target = jax.lax.select(block_wrap, pos, ring_target)
+
+        # ---- While MOVING on edges, block forbidden direction (unless home jump) ----
+        block_edge_dir = is_moving & (
+            (at_left_edge & is_right & (~to_home_attempt)) |
+            (at_right_edge & is_left & (~to_home_attempt))
+        )
+        ring_target = jax.lax.select(block_edge_dir, pos, ring_target)
+
+        # ---- Leaving HOME only to the correct edge ----
+        from_home_target = jax.lax.cond(
+            is_white,
+            lambda _: jax.lax.select(is_left, jnp.int32(23), pos),  # White: 25 + LEFT → 23
+            lambda _: jax.lax.select(is_right, jnp.int32(0), pos),   # Black: 25 + RIGHT → 0
+            operand=None
+        )
+
+        # Final resolution
+        target_if_move = jax.lax.cond(
+            at_home,
+            lambda _: from_home_target,
+            lambda _: jax.lax.select(to_home_attempt, home_target, ring_target),
+            operand=None
+        )
+
+        new_cursor = jax.lax.cond(can_move, lambda _: target_if_move, lambda _: pos, operand=None)
+        return state.replace(cursor_position=new_cursor)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _handle_roll_dice(self, state: BackgammonState) -> BackgammonState:
+        """
+        Handle dice roll action (FIRE in phase 0).
+        Rolls dice and transitions to SELECTING_CHECKER phase.
+        Auto-passes if no legal moves available.
+        
+        Returns: Updated state with new dice, original_dice, and game_phase.
+        """
+        dice, key = self.roll_dice(state.key)
+        # Store original roll for display (ALE always shows 2 dice with original values)
+        # For doubles, both display dice show the same value
+        original_dice = jnp.array([dice[0], dice[1]], dtype=jnp.int32)
+        new_state = state.replace(dice=dice, original_dice=original_dice, key=key, game_phase=1)
+        # Auto-pass if no legal move with these dice
+        return self._auto_pass_if_stuck(new_state)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _handle_pick_checker(self, state: BackgammonState) -> BackgammonState:
+        """
+        Handle checker selection (FIRE in phase 1).
+        Picks up a checker at cursor position if player owns one there.
+        
+        Returns: Updated state with picked_checker_from set and phase=2 if valid.
+        """
+        player_idx = self.get_player_index(state.current_player)
+        pos = state.cursor_position
+        is_bar_cursor = (pos == jnp.int32(self.consts.BAR_INDEX)) | (pos == jnp.int32(self.consts.RIGHT_BAR_INDEX))
+
+        selectable = jax.lax.cond(
+            is_bar_cursor,
+            lambda _: state.board[player_idx, self.consts.BAR_INDEX],
+            lambda _: state.board[player_idx, pos],
+            operand=None
+        )
+        has_checker = selectable > 0
+        picked_from = jax.lax.select(is_bar_cursor, jnp.int32(self.consts.BAR_INDEX), pos)
+        picked_bar_side = jax.lax.select(is_bar_cursor, pos, state.picked_bar_side)
+
+        return jax.lax.cond(
+            has_checker,
+            lambda s: s.replace(
+                picked_checker_from=picked_from,
+                picked_bar_side=picked_bar_side,
+                game_phase=2
+            ),
+            lambda s: s,
+            operand=state
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _handle_drop_checker(self, state: BackgammonState) -> Tuple[BackgammonState, float, bool]:
+        """
+        Handle checker drop (FIRE in phase 2).
+        Attempts to drop the picked checker at cursor position.
+        If valid: executes move via step_impl, updates phase.
+        If invalid: returns checker to origin, stays in phase 1.
+        
+        Returns: (new_state, reward, done)
+        """
+        move = (state.picked_checker_from, state.cursor_position)
+        is_valid = self.is_valid_move(state, move)
+
+        def execute_valid_move(s):
+            obs, ns, reward, done, info, key = self.step_impl(s, move, s.key)
+            all_dice_used = jnp.all(ns.dice == 0)
+            next_phase = jax.lax.cond(all_dice_used, lambda _: 0, lambda _: 1, operand=None)
+            next_cursor = jax.lax.cond(
+                ns.current_player != s.current_player,
+                lambda _: jax.lax.cond(ns.current_player == self.consts.WHITE, lambda _: 0, lambda _: 23, operand=None),
+                lambda _: s.cursor_position,
+                operand=None
+            )
+            final_state = ns.replace(
+                picked_checker_from=-1,
+                picked_bar_side=-1,
+                game_phase=next_phase,
+                cursor_position=next_cursor,
+                key=key,
+                last_valid_drop=s.cursor_position
+            )
+            return final_state, reward, done
+
+        def invalid_drop(s):
+            # Return checker to origin
+            was_from_bar = (s.picked_checker_from == jnp.int32(self.consts.BAR_INDEX))
+            fallback_cursor = jax.lax.cond(
+                was_from_bar & (s.picked_bar_side >= 0),
+                lambda _: s.picked_bar_side,
+                lambda _: s.picked_checker_from,
+                operand=None
+            )
+            ns = s.replace(
+                picked_checker_from=-1,
+                picked_bar_side=-1,
+                game_phase=1,
+                cursor_position=fallback_cursor
+            )
+            return ns, 0.0, False
+
+        return jax.lax.cond(is_valid, execute_valid_move, invalid_drop, operand=state)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _handle_fire_action(self, state: BackgammonState) -> Tuple[BackgammonState, float, bool]:
+        """
+        Handle FIRE action by dispatching to the appropriate phase handler.
+        Phase 0: Roll dice
+        Phase 1: Pick checker
+        Phase 2: Drop checker
+        
+        Returns: (new_state, reward, done)
+        """
+        def do_roll(s):
+            ns = self._handle_roll_dice(s)
+            return ns, 0.0, False
+
+        def do_pick(s):
+            ns = self._handle_pick_checker(s)
+            return ns, 0.0, False
+
+        def do_drop(s):
+            return self._handle_drop_checker(s)
+
+        return jax.lax.switch(state.game_phase, [do_roll, do_pick, do_drop], operand=state)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _process_action(self, state: BackgammonState, action: jnp.ndarray) -> Tuple[BackgammonState, float, bool]:
+        """
+        Process a single action and return new state.
+        Dispatches to appropriate handler based on action type.
+        
+        Returns: (new_state, reward, done)
+        """
+        is_left = action == JAXAtariAction.LEFT
         is_right = action == JAXAtariAction.RIGHT
-        is_fire  = action == JAXAtariAction.FIRE
-        is_noop  = action == JAXAtariAction.NOOP
+        is_fire = action == JAXAtariAction.FIRE
 
-        # ---------- helpers (JAX-safe) ----------
-        def handle_cursor_move(s, direction):
-            """
-            Cursor moves on the rotated ring:
+        def handle_left(s):
+            ns = self._handle_cursor_move(s, -1)
+            return ns, 0.0, False
 
-            LEFT  : 0→1→2→3→4→5→26→6→7→8→9→10→11→12→13→14→15→16→17→24→18→19→20→21→22→23
-            RIGHT : reverse of the above.
+        def handle_right(s):
+            ns = self._handle_cursor_move(s, 1)
+            return ns, 0.0, False
 
-            Rules:
-            - Bars (24, 26) are cursor-only (you can stand on them but not drop there).
-            - No wrap 0↔23 ever.
-            - While MOVING at 0/23:
-                * at 0  : RIGHT does nothing (unless legal bear-off jump to 25), LEFT is allowed.
-                * at 23 : LEFT  does nothing (unless legal bear-off jump to 25), RIGHT is allowed.
-            - Leaving HOME (25) only back to its visual edge (25+LEFT→23 for White, 25+RIGHT→0 for Black).
-            """
-            can_move = (s.game_phase == 1) | (s.game_phase == 2)
-            pos      = s.cursor_position
+        def handle_noop(s):
+            return s, 0.0, False
 
-            is_left  = jnp.array(direction == -1, dtype=jnp.bool_)
-            is_right = jnp.array(direction ==  1, dtype=jnp.bool_)
-
-            at_home       = (pos == jnp.int32(self.consts.HOME_INDEX))   # 25
-            at_left_edge  = (pos == jnp.int32(0))
-            at_right_edge = (pos == jnp.int32(23))
-
-            is_moving = (s.game_phase == jnp.int32(2))
-            is_white  = (s.current_player == self.consts.WHITE)
-
-            # Rotated ring order (26 = right bar, 24 = left bar)
-            ring = jnp.array(
-                [0, 1, 2, 3, 4, 5, 26, 6, 7, 8, 9, 10, 11,
-                12, 13, 14, 15, 16, 17, 24, 18, 19, 20, 21, 22, 23],
-                dtype=jnp.int32
-            )
-            ring_len = ring.shape[0]
-
-            # Precompute next maps for LEFT/RIGHT on the ring
-            def build_maps(_):
-                next_left  = jnp.arange(27, dtype=jnp.int32)
-                next_right = jnp.arange(27, dtype=jnp.int32)
-                def body(i, carry):
-                    nL, nR = carry
-                    a = ring[i]
-                    b = ring[(i + 1) % ring_len]  # LEFT goes forward in ring array
-                    c = ring[(i - 1) % ring_len]  # RIGHT goes backward in ring array
-                    nL = nL.at[a].set(b)
-                    nR = nR.at[a].set(c)
-                    return (nL, nR)
-                return jax.lax.fori_loop(0, ring_len, body, (next_left, next_right))
-
-            next_left, next_right = build_maps(None)
-
-            # Candidate target from ring movement (no special cases yet)
-            ring_target = jax.lax.select(is_left, next_left[pos],
-                            jax.lax.select(is_right, next_right[pos], pos))
-
-            # ---- Bear-off jump to HOME (only when MOVING and bearing-off is allowed) ----
-            not_from_bar     = (s.picked_checker_from != jnp.int32(self.consts.BAR_INDEX))
-            can_bear_off_now = self.check_bearing_off(s, s.current_player)
-            # Your desired directions:
-            #  - from 23 with LEFT  → 25 (White)
-            #  - from  0 with RIGHT → 25 (Black)
-            jump_home_white  = is_moving & is_left  & at_right_edge & is_white
-            jump_home_black  = is_moving & is_right & at_left_edge  & (~is_white)
-            to_home_attempt  = (jump_home_white | jump_home_black) & not_from_bar & can_bear_off_now
-            home_target      = jnp.int32(self.consts.HOME_INDEX)
-
-            # ---- Block wrap 0↔23 always ----
-            block_wrap = (at_left_edge & is_right) | (at_right_edge & is_left)
-            ring_target = jax.lax.select(block_wrap, pos, ring_target)
-
-            # ---- While MOVING on edges, block only the forbidden direction (don't "stick") ----
-            # At 0  : block RIGHT (unless home jump)
-            # At 23 : block LEFT  (unless home jump)
-            block_edge_dir = is_moving & (
-                (at_left_edge  & is_right & (~to_home_attempt)) |
-                (at_right_edge & is_left  & (~to_home_attempt))
-            )
-            ring_target = jax.lax.select(block_edge_dir, pos, ring_target)
-
-            # ---- Leaving HOME only to the correct edge ----
-            from_home_target = jax.lax.cond(
-                is_white,
-                lambda _: jax.lax.select(is_left,  jnp.int32(23), pos),  # White: 25 + LEFT  → 23
-                lambda _: jax.lax.select(is_right, jnp.int32(0),  pos),  # Black: 25 + RIGHT → 0
-                operand=None
-            )
-
-            # Final resolution:
-            # 1) If at HOME → restrict leaving
-            # 2) Else if a legal HOME jump now → 25
-            # 3) Else follow the (possibly blocked) ring target
-            target_if_move = jax.lax.cond(
-                at_home,
-                lambda _: from_home_target,
-                lambda _: jax.lax.select(to_home_attempt, home_target, ring_target),
-                operand=None
-            )
-
-            new_cursor = jax.lax.cond(can_move, lambda _: target_if_move, lambda _: pos, operand=None)
-            ns = s._replace(cursor_position=new_cursor)
-            return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
-
-
-        def handle_space(s):
-            def do_roll(ss):
-                dice, key = self.roll_dice(ss.key)
-                ns = ss._replace(dice=dice, key=key, game_phase=1)  # SELECTING_CHECKER
-                # Auto-pass if no legal move with these dice
-                ns = self._auto_pass_if_stuck(ns)
-                return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
-
-            def do_select(ss):
-                player_idx = self.get_player_index(ss.current_player)
-                pos = ss.cursor_position
-                is_bar_cursor = (pos == jnp.int32(self.consts.BAR_INDEX)) | (pos == jnp.int32(26))
-
-                selectable = jax.lax.cond(
-                    is_bar_cursor,
-                    lambda _: ss.board[player_idx, self.consts.BAR_INDEX],   # real bar store
-                    lambda _: ss.board[player_idx, pos],
-                    operand=None
-                )
-                has_checker = selectable > 0
-                picked_from = jax.lax.select(is_bar_cursor, jnp.int32(self.consts.BAR_INDEX), pos)
-                picked_bar_side = jax.lax.select(is_bar_cursor, pos, ss.picked_bar_side)
-                
-                ns = jax.lax.cond(
-                    has_checker,
-                    # enter MOVING and remember which bar half we picked from
-                    lambda s2: s2._replace(
-                        picked_checker_from=picked_from,
-                        picked_bar_side=picked_bar_side,
-                        game_phase=2
-                    ),
-                    lambda s2: s2,
-                    operand=ss
-                )
-                return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
-
-            def do_drop(ss):
-                move = (ss.picked_checker_from, ss.cursor_position)
-                is_valid = self.is_valid_move(ss, move)
-
-                def execute_valid_move(s2):
-                    obs, ns, reward, done, info, key = self.step_impl(s2, move, s2.key)
-                    all_dice_used = jnp.all(ns.dice == 0)
-                    next_phase = jax.lax.cond(all_dice_used, lambda _: 0, lambda _: 1, operand=None)
-                    next_cursor = jax.lax.cond(
-                        ns.current_player != s2.current_player,
-                        lambda _: jax.lax.cond(ns.current_player == self.consts.WHITE, lambda _: 0, lambda _: 23, operand=None),
-                        lambda _: s2.cursor_position,
-                        operand=None
-                    )
-                    fs = ns._replace(
-                        picked_checker_from=-1,
-                        picked_bar_side=-1,                   
-                        game_phase=next_phase,
-                        cursor_position=next_cursor,
-                        key=key,
-                        last_valid_drop=s2.cursor_position
-                    )
-                    return obs, fs, reward, done, info
-
-                def invalid_drop(s2):
-                    # Checker jumps back: move cursor to origin, return to SELECTING phase
-                    ns = s2._replace(
-                        picked_checker_from=-1,
-                        picked_bar_side=-1,                   
-                        game_phase=1,
-                        cursor_position=s2.picked_checker_from
-                    )
-                    return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
-
-                return jax.lax.cond(is_valid, execute_valid_move, invalid_drop, operand=ss)
-
-            return jax.lax.switch(state.game_phase, [do_roll, do_select, do_drop], operand=state)
-
-        def process_action_once(s):
-            """Select exactly one action branch using nested lax.cond (priority: LEFT, RIGHT, FIRE, else NOOP/idle)."""
-            # LEFT
-            return jax.lax.cond(
-                is_left,
-                lambda ss: handle_cursor_move(ss, -1),
-                lambda ss: jax.lax.cond(
-                    is_right,
-                    lambda ss2: handle_cursor_move(ss2, 1),
-                    lambda ss2: jax.lax.cond(
-                        is_fire,
-                        handle_space,
-                        # default/NOOP: no state change
-                        lambda ss3: (self._get_observation(ss3), ss3, 0.0, False, self._get_info(ss3)),
-                        operand=ss2
-                    ),
-                    operand=ss
+        # Nested dispatch: LEFT > RIGHT > FIRE > NOOP
+        return jax.lax.cond(
+            is_left,
+            handle_left,
+            lambda s: jax.lax.cond(
+                is_right,
+                handle_right,
+                lambda s2: jax.lax.cond(
+                    is_fire,
+                    self._handle_fire_action,
+                    handle_noop,
+                    operand=s2
                 ),
                 operand=s
-            )
+            ),
+            operand=state
+        )
 
-        # When awaiting key-up: only NOOP clears; everything else is ignored.
-        def handle_when_blocked(s):
+    # Movement repeat delay disabled: process held LEFT/RIGHT every step.
+    MOVE_REPEAT_DELAY: int = 0
+    MOVE_INITIAL_DELAY: int = 0
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _apply_debounce(self, state: BackgammonState, action: jnp.ndarray, 
+                        new_state: BackgammonState) -> BackgammonState:
+        """
+        Apply debounce logic: arm await_keyup for FIRE only.
+        LEFT/RIGHT update last_action and reset timer.
+        
+        Returns: State with debounce flags updated.
+        """
+        is_left = action == JAXAtariAction.LEFT
+        is_right = action == JAXAtariAction.RIGHT
+        is_fire = action == JAXAtariAction.FIRE
+        is_movement = is_left | is_right
+        
+        # Only FIRE needs full debounce (wait for key release)
+        # Movement actions reset the repeat timer instead
+        return jax.lax.cond(
+            is_fire,
+            lambda s: s.replace(await_keyup=True, last_action=action, move_repeat_timer=0),
+            lambda s: jax.lax.cond(
+                is_movement,
+                lambda s2: s2.replace(last_action=action, move_repeat_timer=0),
+                lambda s2: s2,
+                operand=s
+            ),
+            operand=new_state
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _handle_blocked_input(self, state: BackgammonState, action: jnp.ndarray) -> BackgammonState:
+        """
+        Handle input when awaiting key-up (debounce active for FIRE).
+        NOOP clears the debounce; LEFT/RIGHT can still move.
+        
+        Returns: State with await_keyup potentially cleared.
+        """
+        is_noop = action == JAXAtariAction.NOOP
+        return jax.lax.cond(
+            is_noop,
+            lambda s: s.replace(await_keyup=False, last_action=JAXAtariAction.NOOP, move_repeat_timer=0),
+            lambda s: s,
+            operand=state
+        )
+
+    # ============================================================================
+    # MAIN STEP FUNCTION (Orchestrator Pattern - Design Guide Section 5)
+    # ============================================================================
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: BackgammonState, action: jnp.ndarray):
+        """
+        Interactive step with JAX-safe debounce and continuous movement.
+        
+        This is the main entry point for gameplay. It follows the orchestrator pattern:
+        - Delegates to helper functions for specific logic
+        - Handles debounce for FIRE key-press/release behavior
+        - LEFT/RIGHT are processed each step (no repeat delay)
+        - Returns (observation, new_state, reward, done, info)
+        
+        FIRE triggers once per press; LEFT/RIGHT repeat when held.
+        """
+        # Translate policy action index to ALE-style action constant.
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
+        is_left = atari_action == JAXAtariAction.LEFT
+        is_right = atari_action == JAXAtariAction.RIGHT
+        is_movement = is_left | is_right
+        
+        # Branch 1: Debounce active (FIRE held) - wait for key release, but allow movement
+        def when_blocked(s):
+            # Allow movement even when FIRE is blocked
+            def do_movement(s2):
+                def process_repeat(s3):
+                    ns, _, _ = self._process_action(s3, atari_action)
+                    return ns.replace(last_action=atari_action, move_repeat_timer=0)
+                return process_repeat(s2)
+            
             ns = jax.lax.cond(
-                is_noop,
-                lambda _: s._replace(await_keyup=False, last_action=JAXAtariAction.NOOP),
-                lambda _: s,
-                operand=None
+                is_movement,
+                do_movement,
+                lambda s2: self._handle_blocked_input(s2, action),
+                operand=s
             )
             return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
 
-        # When free: process one action and then arm debounce for LEFT/RIGHT/FIRE.
-        def handle_when_free(s):
-            obs, ns, reward, done, info = process_action_once(s)
-            should_arm = jnp.logical_or(jnp.logical_or(is_left, is_right), is_fire)  # arm for left/right/space
-            ns2 = jax.lax.cond(
-                should_arm,
-                lambda _: ns._replace(await_keyup=True, last_action=action),
-                lambda _: ns,
-                operand=None
-            )
-            return obs, ns2, reward, done, info
+        # Branch 2: Ready for input - process action
+        def when_free(s):
+            # For movement: process each LEFT/RIGHT step immediately.
+            def handle_movement(s2):
+                def process_move(s3):
+                    ns, reward, done = self._process_action(s3, atari_action)
+                    ns = ns.replace(last_action=atari_action, move_repeat_timer=0)
+                    return ns, reward, done
+                return process_move(s2)
+            
+            def handle_other(s2):
+                ns, reward, done = self._process_action(s2, atari_action)
+                ns = self._apply_debounce(s, atari_action, ns)
+                return ns, reward, done
+            
+            ns, reward, done = jax.lax.cond(is_movement, handle_movement, handle_other, operand=s)
+            obs = self._get_observation(ns)
+            info = self._get_info(ns)
+            return obs, ns, reward, done, info
 
-        return jax.lax.cond(state.await_keyup, handle_when_blocked, handle_when_free, operand=state)
+        return jax.lax.cond(state.await_keyup, when_blocked, when_free, operand=state)
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -873,8 +1239,12 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             obs.dice.flatten(),
             obs.current_player.flatten(),
             obs.is_game_over.flatten(),
-            obs.bar_counts.flatten(),  # 2 elements
-            obs.home_counts.flatten()
+            obs.bar_counts.flatten(),
+            obs.home_counts.flatten(),
+            obs.cursor_position.flatten(),
+            obs.game_phase.flatten(),
+            obs.picked_checker_from.flatten(),
+            obs.last_valid_drop.flatten(),
         ]).astype(jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -896,8 +1266,8 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         )
 
     def action_space(self) -> spaces.Discrete:
-        """Return the discrete action space (scalar index into move list)."""
-        return spaces.Discrete(self._action_pairs.shape[0] + 1)  # +1 for roll action
+        """Interactive ALE-style action space used by wrappers and benchmark training."""
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         """Return the observation space for the environment."""
@@ -938,6 +1308,30 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
                 shape=(2,),
                 dtype=jnp.int32
             ),
+            "cursor_position": spaces.Box(
+                low=0,
+                high=26,
+                shape=(1,),
+                dtype=jnp.int32
+            ),
+            "game_phase": spaces.Box(
+                low=0,
+                high=2,
+                shape=(1,),
+                dtype=jnp.int32
+            ),
+            "picked_checker_from": spaces.Box(
+                low=-1,
+                high=26,
+                shape=(1,),
+                dtype=jnp.int32
+            ),
+            "last_valid_drop": spaces.Box(
+                low=-1,
+                high=26,
+                shape=(1,),
+                dtype=jnp.int32
+            ),
         })
 
     @partial(jax.jit, static_argnums=(0,))
@@ -949,7 +1343,11 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             current_player=jnp.array([state.current_player], dtype=jnp.int32),
             is_game_over=jnp.array([jnp.where(state.is_game_over, 1, 0)], dtype=jnp.int32),
             bar_counts=jnp.array([state.board[0, 24], state.board[1, 24]], dtype=jnp.int32),
-            home_counts=jnp.array([state.board[0, 25], state.board[1, 25]], dtype=jnp.int32)
+            home_counts=jnp.array([state.board[0, 25], state.board[1, 25]], dtype=jnp.int32),
+            cursor_position=jnp.array([state.cursor_position], dtype=jnp.int32),
+            game_phase=jnp.array([state.game_phase], dtype=jnp.int32),
+            picked_checker_from=jnp.array([state.picked_checker_from], dtype=jnp.int32),
+            last_valid_drop=jnp.array([state.last_valid_drop], dtype=jnp.int32),
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -988,624 +1386,576 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         return state.is_game_over
 
     def get_valid_moves(self, state: BackgammonState) -> List[Tuple[int, int]]:
-        player = state.current_player
-
-        @jax.jit
-        def _check_all_moves(state):
-            return jax.vmap(lambda move: self.is_valid_move(state, move))(self._action_pairs)
-
-        valid_mask = _check_all_moves(state)
-        valid_moves_array = self._action_pairs[valid_mask]
-        return [tuple(map(int, move)) for move in valid_moves_array]
+        """Python utility; use get_valid_action_mask() for JIT-compatible pipelines."""
+        valid_mask = jax.device_get(self.get_valid_action_mask(state)[: self._action_pairs.shape[0]])
+        valid_indices = jnp.where(valid_mask)[0]
+        return [tuple(map(int, self._action_pairs[int(i)])) for i in valid_indices]
 
     def render(self, state: BackgammonState) -> jnp.ndarray:
         return self.renderer.render(state)
 
 
+# ============================================================================
+# RENDERER (Using JaxRenderingUtils - Design Guide + Renderer Guide)
+# ============================================================================
+
 class BackgammonRenderer(JAXGameRenderer):
-    def __init__(self, env=None):
-        super().__init__()
+    """
+    JAX-native Backgammon renderer using JaxRenderingUtils.
+    
+    Supports multiple color themes:
+    - "classic": Original green theme
+    - "brown": Wooden/brown theme  
+    - "blue": Tournament/blue theme
+    """
+    
+    def __init__(self, env: "JaxBackgammonEnv" = None, config: Optional[jr.RendererConfig] = None, consts: Optional[Any] = None):
+        # Allow being called without env (as in some wrapper tests or modifications)
+        # but ensure config and consts are handled.
+        if config is None:
+            # Create a default config if not provided
+            from jaxatari.rendering.jax_rendering_utils import RendererConfig
+            config = RendererConfig()
+            
+        super().__init__(env, config=config)
         self.env = env
-        # Initialize all rendering parameters
+        
+        # Determine consts from env or argument
+        self.consts = consts if consts is not None else (env.consts if env else None)
+        
+        # Determine theme from env or consts
+        if env is not None:
+            self.theme = env.consts.THEME
+        elif self.consts is not None:
+            self.theme = getattr(self.consts, "THEME", "classic")
+        else:
+            self.theme = "classic"
+        
+        # Frame dimensions
         self.frame_height = 210
         self.frame_width = 160
-        self.color_background = jnp.array([0, 0, 0], dtype=jnp.uint8)  # black background
-        self.color_board = jnp.array([0, 0, 0], dtype=jnp.uint8)  # black board
-        self.color_triangle_light = jnp.array([42, 44, 168], dtype=jnp.uint8)  # blue points
-        self.color_triangle_dark = jnp.array([87, 147, 74], dtype=jnp.uint8)  # green points
-        self.color_white_checker = jnp.array([255, 255, 255], dtype=jnp.uint8)  # white checkers
-        self.color_black_checker = jnp.array([230, 88, 83], dtype=jnp.uint8)  # red checkers
-        self.color_border = jnp.array([81, 146, 119], dtype=jnp.uint8)  # green bar
-
-        self.top_margin_for_dice = 25  # pixels reserved for dice row
-
-        # Geometry
-        self.board_margin = 8
-        self.triangle_length = 60
-        self.triangle_thickness = 12
-        self.bar_thickness = 14
-        # Chip geometry
-        self.checker_width  = 4
+        
+        # Geometry constants (updated to match extracted ALE sprites)
+        self.top_margin_for_dice = 15
+        self.board_margin = 24
+        self.triangle_length = 48
+        self.triangle_thickness = 11
+        self.bar_thickness = 11
+        self.checker_width = 4          # ALE checker is 4x4 pixels
         self.checker_height = 4
-
-        # Horizontal distance of the first column from the triangle BASE edge
-        self.base_margin = 2          # pixels
-
-        # vertical & horizontal spacing controls
-        self.band_top_margin    = 1.2   # distance from top band edge
-        self.band_bottom_margin = 1   # distance from bottom band edge
-        self.chip_gap_y         = 2   # vertical gap between the two chip rows
-        self.chip_gap_x         = 4   # horizontal gap between columns (used in cx step)
-
+        self.base_margin = 2
+        self.band_top_margin = 0.5
+        self.band_bottom_margin = 0.5
+        self.chip_gap_y = 1              # Gap between checker rows (ALE: row0 at y=39, row1 at y=44 -> offset=5)
+        self.chip_gap_x = 4              # Gap between checker columns (ALE: col_step=8 = 4+4)
         self.checker_stack_offset = self.checker_height + self.chip_gap_y
-
-        self.edge_line_thickness = 2
-        self.edge_line_color     = jnp.array([81, 146, 119], dtype=jnp.uint8)
-
-        self.bar_y = self.top_margin_for_dice + self.frame_height // 2 - self.bar_thickness // 2 - 10
+        self.bar_edge_padding = 2
+        self.bar_vertical_padding = 2
+        self.dice_width = 14 
+        self.dice_height = 17
+        self.pip_size = 2
+        
+        # Computed positions (ALE bar is at y=110-120)
+        self.bar_y = 110  # Fixed to match ALE
         self.bar_x = self.board_margin
-        self.bar_width = self.frame_width - 2 * self.board_margin
-        self.bar_edge_padding = 2 
-        self.bar_vertical_padding = 2  
+        self.bar_width = self.frame_width - 2 * self.board_margin - 7
+        
+        # Pre-compute triangle positions
         self.triangle_positions = self._compute_triangle_positions()
-
+        
+        # Setup JaxRenderingUtils
+        from jaxatari.rendering import jax_rendering_utils as render_utils
+        
+        self.config = config or render_utils.RendererConfig(
+            game_dimensions=(self.frame_height, self.frame_width),
+            channels=3,
+        )
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+        
+        # Load assets from theme folder
+        base_sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/backgammon"
+        sprite_path = f"{base_sprite_path}/themes/{self.theme}"
+        
+        # Fallback to base folder if theme folder doesn't exist
+        if not os.path.exists(sprite_path):
+            print(f"Warning: Theme folder '{self.theme}' not found, using base sprites")
+            sprite_path = base_sprite_path
+            
+        asset_config = list(_get_asset_config())
+        
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        
+        # Pre-bake the static triangle raster (triangles never change)
+        self._prebaked_triangle_raster = self._prebake_triangle_raster()
+        
+        # Pre-compute a 4-triangle mask stack for branchless selection:
+        # [light_right, dark_right, light_left, dark_left]
+        self._triangle_mask_stack = jnp.stack([
+            self.SHAPE_MASKS["triangle_light_right"],
+            self.SHAPE_MASKS["triangle_dark_right"],
+            self.SHAPE_MASKS["triangle_light_left"],
+            self.SHAPE_MASKS["triangle_dark_left"],
+        ])
+        
+        # Pre-compute pip bitmask table for dice rendering (values 1-6)
+        # 7 pip positions: TL=0, TR=1, ML=2, C=3, MR=4, BL=5, BR=6
+        # Each row is a bool mask for which pips to draw
+        self._pip_table = jnp.array([
+            [0, 0, 0, 1, 0, 0, 0],  # 1: center
+            [1, 0, 0, 0, 0, 0, 1],  # 2: TL, BR
+            [1, 0, 0, 1, 0, 0, 1],  # 3: TL, C, BR
+            [1, 1, 0, 0, 0, 1, 1],  # 4: TL, TR, BL, BR
+            [1, 1, 0, 1, 0, 1, 1],  # 5: TL, TR, C, BL, BR
+            [1, 1, 1, 0, 1, 1, 1],  # 6: TL, TR, ML, MR, BL, BR
+        ], dtype=jnp.bool_)
+        
+        # Pip position offsets within a die (local x, y)
+        self._pip_positions = jnp.array([
+            [2, 2],    # TL
+            [10, 2],   # TR
+            [2, 7],    # ML
+            [6, 7],    # C
+            [10, 7],   # MR
+            [2, 12],   # BL
+            [10, 12],  # BR
+        ], dtype=jnp.int32)
+    
+    def _get_asset_config(self) -> list:
+        """Backwards-compatible accessor for the shared module-level manifest."""
+        return list(_get_asset_config())
+    
     def _compute_triangle_positions(self):
-        # Screen anchors
-        left_x  = self.board_margin
+        """Compute (x, y) positions for all 24 triangles + bar positions.
+        
+        ALE layout (verified from frame analysis):
+        - Upper band: y=38-108 (6 triangles, each 11 rows with 1-row gaps)
+        - Bar: y=110-120 (teal)
+        - Lower band: y=122-192 (6 triangles, each 11 rows with 1-row gaps)
+        - Triangle stride: 12 rows (11 triangle + 1 gap)
+        """
+        left_x = self.board_margin
         right_x = self.frame_width - self.board_margin - self.triangle_length
-
-        y_top    = self.top_margin_for_dice + self.board_margin
-        y_bottom = self.frame_height - self.board_margin
-        band_h   = 6 * self.triangle_thickness
-
+        
+        # ALE-accurate positions
+        upper_band_start = 38  # First upper triangle starts here
+        lower_band_start = 122  # First lower triangle starts here
+        triangle_stride = 12   # 11 rows + 1 gap between triangles
+        
         positions = []
-
-        # 0..5  (lower-right)  bottom -> top   (0 lowest, 5 highest)
+        
+        # 0..5 (lower-right) bottom -> top
+        # Point 0 is at bottom (y=182), point 5 is at top (y=122)
         for i in range(6):
-            y = y_bottom - (i + 1) * self.triangle_thickness
+            y = lower_band_start + (5 - i) * triangle_stride
             positions.append((right_x, y))
-
-        # 6..11 (upper-right)  bottom -> top   (6 lowest near center, 11 highest)
+        
+        # 6..11 (upper-right) bottom -> top
+        # Point 6 is at bottom (y=98), point 11 is at top (y=38)
         for i in range(6):
-            y = y_top + (5 - i) * self.triangle_thickness
+            y = upper_band_start + (5 - i) * triangle_stride
             positions.append((right_x, y))
-
-        # 12..17 (upper-left)  top -> bottom   (12 highest, 17 lowest)
+        
+        # 12..17 (upper-left) top -> bottom
+        # Point 12 is at top (y=38), point 17 is at bottom (y=98)
         for i in range(6):
-            y = y_top + i * self.triangle_thickness
+            y = upper_band_start + i * triangle_stride
             positions.append((left_x, y))
-
-        # 18..23 (lower-left)  top -> bottom   (18 highest near center, 23 lowest)  <-- FIX
-        lower_left_top_y = y_bottom - band_h  # top edge of the lower band
+        
+        # 18..23 (lower-left) top -> bottom
+        # Point 18 is at top (y=122), point 23 is at bottom (y=182)
         for i in range(6):
-            y = lower_left_top_y + i * self.triangle_thickness
+            y = lower_band_start + i * triangle_stride
             positions.append((left_x, y))
-
-        # bar-left (24): center of left half of the bar (logic unchanged)
-        bar_left_x   = self.bar_x + (self.bar_width // 4)
+        
+        # bar-left (24): center of left half of the bar
+        bar_left_x = self.bar_x + (self.bar_width // 4)
         bar_center_y = self.bar_y + self.bar_thickness // 2
         positions.append((bar_left_x, bar_center_y))
-
+        
         return jnp.array(positions, dtype=jnp.int32)
+    
+    def _get_player_index(self, player):
+        """Helper to get player index without env dependency."""
+        return jnp.where(player == self.consts.WHITE, 0, 1)
 
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _draw_rectangle(self, frame, x, y, width, height, color):
-        yy, xx = jnp.mgrid[0:self.frame_height, 0:self.frame_width]
-        mask = (xx >= x) & (xx < (x + width)) & (yy >= y) & (yy < (y + height))
-        return jnp.where(mask[..., None], color, frame)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _draw_triangle(self, frame, x, y, length, thickness, color, point_right=True):
-        """
-        Draw an isosceles triangle whose rectangular bounding box is:
-           x <= xx < x+length,   y <= yy < y+thickness
-        If point_right==True, the triangle's tip is at (x+length, center_y) (points right).
-        If point_right==False, the tip is at (x, center_y) (points left).
-        """
-        yy, xx = jnp.mgrid[0:self.frame_height, 0:self.frame_width]
-        xx_f = xx.astype(jnp.float32)
-        yy_f = yy.astype(jnp.float32)
-        x_f = jnp.asarray(x, dtype=jnp.float32)
-        y_f = jnp.asarray(y, dtype=jnp.float32)
-        length_f = jnp.asarray(length, dtype=jnp.float32)
-        thickness_f = jnp.asarray(thickness, dtype=jnp.float32)
-
-        center_y = y_f + thickness_f / 2.0
-
-        t = jax.lax.select(point_right, (xx_f - x_f) / length_f, (x_f + length_f - xx_f) / length_f)
-        half_width = (1.0 - t) * (thickness_f / 2.0)
-        in_bbox = (xx >= x) & (xx < (x + length)) & (yy >= y) & (yy < (y + thickness))
-        valid_t = (t >= 0.0) & (t <= 1.0)
-        within_profile = jnp.abs(yy_f - center_y) <= half_width
-        mask = in_bbox & valid_t & within_profile
-
-        return jnp.where(mask[..., None], color, frame)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _draw_circle(self, frame, cx, cy, radius, color):
-        yy, xx = jnp.mgrid[0:self.frame_height, 0:self.frame_width]
-        cx_f = jnp.asarray(cx, dtype=jnp.float32)
-        cy_f = jnp.asarray(cy, dtype=jnp.float32)
-        xx_f = xx.astype(jnp.float32)
-        yy_f = yy.astype(jnp.float32)
-        mask = (xx_f - cx_f) ** 2 + (yy_f - cy_f) ** 2 <= (radius ** 2)
-        return jnp.where(mask[..., None], color, frame)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _draw_board_outline(self, frame):
-        frame = self._draw_rectangle(frame, 0, 0, self.frame_width, self.frame_height, self.color_background)
-        board_x = self.board_margin - 6
-        board_y = self.top_margin_for_dice + self.board_margin - 6
-        board_w = self.frame_width - 2 * (self.board_margin - 6)
-        board_h = self.frame_height - self.top_margin_for_dice - 2 * (self.board_margin - 6)
-
-        frame = self._draw_rectangle(frame, board_x, board_y, board_w, board_h, self.color_board)
-
-        # Split bar into two half rectangles (left for Red, right for White)
-        half_w = self.bar_width // 2
-        # left half
-        frame = self._draw_rectangle(frame, self.bar_x, self.bar_y, half_w, self.bar_thickness, self.color_border)
-        # right half
-        frame = self._draw_rectangle(frame, self.bar_x + half_w, self.bar_y, self.bar_width - half_w, self.bar_thickness, self.color_border)
-        return frame
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _draw_triangles(self, frame):
-        """
-        Draw triangles using the rotated layout.
-        - Left column triangles point RIGHT (toward center)
-        - Right column triangles point LEFT (toward center)
-        - Alternate colors by column and row to get the classic pattern.
-        """
-        left_x  = self.board_margin
-        right_x = self.frame_width - self.board_margin - self.triangle_length
-
-        def draw_triangle_at_index(i, fr):
+    def _prebake_triangle_raster(self):
+        """Pre-render all 24 triangles onto the background. Called once at init."""
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+        left_x = self.board_margin
+        
+        # Python loop at init time — not JIT-compiled, runs once
+        for i in range(24):
             pos = self.triangle_positions[i]
-            x = pos[0]; y = pos[1]
+            x, y = int(pos[0]), int(pos[1])
+            
+            is_left_column = (x == left_x)
+            band_idx = i % 6
+            band_id = i // 6
+            
+            is_upper_band = (6 <= i < 12) or (12 <= i < 18)
+            if is_left_column:
+                start_light = is_upper_band
+            else:
+                start_light = not is_upper_band
+            if band_id in (1, 3):
+                start_light = not start_light
+            use_light = (band_idx % 2 == 0) if start_light else (band_idx % 2 == 1)
+            
+            if is_left_column:
+                key = "triangle_light_right" if use_light else "triangle_dark_right"
+            else:
+                key = "triangle_light_left" if use_light else "triangle_dark_left"
+            
+            raster = self.jr.render_at(raster, x, y, self.SHAPE_MASKS[key])
+        
+        return raster
 
-            # Column flags
-            is_left_column  = (x == left_x)
-
-            # Row index within its column band (0..5):
-            #  - lower-right:  i in 0..5
-            #  - upper-right:  i in 6..11
-            #  - upper-left:   i in 12..17
-            #  - lower-left:   i in 18..23
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: BackgammonState) -> jnp.ndarray:
+        """
+        Render the current game state using palette-based rendering.
+        
+        Optimized: uses pre-baked triangle raster as starting point.
+        """
+        # 1. Start with pre-baked background + triangles (no per-frame cost)
+        raster = self._prebaked_triangle_raster.copy()
+        
+        # 2. Draw highlight (cursor or picked position)
+        raster = self._draw_highlight(raster, state)
+        
+        # 3. Draw checkers on all points
+        raster = self._draw_all_checkers(raster, state)
+        
+        # 4. Draw bar checkers
+        raster = self._draw_bar_checkers(raster, state)
+        
+        # 5. Draw floating checker (if in MOVING phase)
+        raster = self._draw_floating_checker(raster, state)
+        
+        # 6. Draw dice
+        raster = self._draw_dice(raster, state)
+        
+        # 7. Convert to RGB
+        return self.jr.render_from_palette(raster, self.PALETTE)
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_all_triangles(self, raster, state):
+        """Draw all 24 triangles with correct colors."""
+        left_x = self.board_margin
+        
+        def draw_triangle_at_index(i, r):
+            pos = self.triangle_positions[i]
+            x, y = pos[0], pos[1]
+            
+            is_left_column = (x == left_x)
             band_idx = jnp.where(i < 6, i,
                         jnp.where(i < 12, i - 6,
                         jnp.where(i < 18, i - 12, i - 18)))
-
-            # Base start color by column & band (your original logic)
-            is_upper_band = ((i >= 6) & (i < 12)) | ((i >= 12) & (i < 18))
-            start_light = jnp.where(
-                is_left_column,
-                jnp.where(is_upper_band, True, False),   # left column: upper starts LIGHT, lower starts DARK
-                jnp.where(is_upper_band, False, True)    # right column: upper starts DARK,  lower starts LIGHT
-            )
-
-            # --- Flip alternation for specific bands: upper-right (6..11) and lower-left (18..23) ---
-            # band_id: 0=lower-right, 1=upper-right, 2=upper-left, 3=lower-left
             band_id = jnp.where(i < 6, 0,
                         jnp.where(i < 12, 1,
                         jnp.where(i < 18, 2, 3)))
+            
+            is_upper_band = ((i >= 6) & (i < 12)) | ((i >= 12) & (i < 18))
+            start_light = jnp.where(
+                is_left_column,
+                jnp.where(is_upper_band, True, False),
+                jnp.where(is_upper_band, False, True)
+            )
             flip = (band_id == 1) | (band_id == 3)
             start_light = jnp.logical_xor(start_light, flip)
-
-            # Alternate color within the band
             use_light = jnp.where(start_light, (band_idx % 2 == 0), (band_idx % 2 == 1))
-            color = jax.lax.select(use_light, self.color_triangle_light, self.color_triangle_dark)
-
-            # Tip direction: left column points right; right column points left.
-            point_right = is_left_column
-
-            return self._draw_triangle(fr, x, y, self.triangle_length, self.triangle_thickness, color, point_right)
-
-        return jax.lax.fori_loop(0, 24, draw_triangle_at_index, frame)
-
-
+            
+            # Select triangle mask based on color and direction
+            # Left column: point_right=True, Right column: point_right=False
+            mask = jax.lax.cond(
+                is_left_column,
+                lambda _: jax.lax.select(use_light, 
+                    self.SHAPE_MASKS["triangle_light_right"],
+                    self.SHAPE_MASKS["triangle_dark_right"]),
+                lambda _: jax.lax.select(use_light,
+                    self.SHAPE_MASKS["triangle_light_left"],
+                    self.SHAPE_MASKS["triangle_dark_left"]),
+                operand=None
+            )
+            
+            return self.jr.render_at(r, x, y, mask)
+        
+        return jax.lax.fori_loop(0, 24, draw_triangle_at_index, raster)
+    
     @partial(jax.jit, static_argnums=(0,))
-    def _draw_edge_lines(self, frame):
-        # triangle columns start/end
-        left_x  = self.board_margin
-        right_x = self.frame_width - self.board_margin - self.triangle_length
-        tri_span_x = left_x
-        tri_span_w = (right_x + self.triangle_length) - left_x  # ends exactly where triangles end
-
-        # vertical reference: triangles occupy [y_top_tri, y_bottom_tri)
-        y_top_tri    = self.top_margin_for_dice + self.board_margin
-        y_bottom_tri = self.frame_height - self.board_margin
-
-        # tweak thickness/offsets
-        thickness     = self.edge_line_thickness               # e.g., 3
-        bottom_offset = 2                                       # <- push the lower band a bit lower
-
-        # positions
-        top_y    = y_top_tri - thickness                        # just above top triangles
-        bottom_y = y_bottom_tri + bottom_offset                  # a bit below bottom triangles
-
-        # draw
-        frame = self._draw_rectangle(frame, tri_span_x, top_y,    tri_span_w, thickness, self.edge_line_color)
-        frame = self._draw_rectangle(frame, tri_span_x, bottom_y, tri_span_w, thickness, self.edge_line_color)
-        return frame
-
-
+    def _draw_highlight(self, raster, state):
+        """Branchless highlight rendering."""
+        # Compute highlight index without nested lax.cond
+        is_moving = (state.game_phase == jnp.int32(2))
+        is_selecting = (state.game_phase == jnp.int32(1))
+        
+        # Moving phase: use picked_checker_from (with bar side logic)
+        is_bar_pick = (state.picked_checker_from == jnp.int32(self.consts.BAR_INDEX))
+        moving_hi = jnp.where(
+            is_bar_pick,
+            jnp.where(state.picked_bar_side == jnp.int32(self.consts.RIGHT_BAR_INDEX),
+                      jnp.int32(self.consts.RIGHT_BAR_INDEX), jnp.int32(self.consts.BAR_INDEX)),
+            jnp.int32(state.picked_checker_from)
+        )
+        
+        hi = jnp.where(is_moving, moving_hi,
+               jnp.where(is_selecting,
+                         jnp.int32(state.cursor_position),
+                         jnp.int32(state.last_valid_drop)))
+        
+        no_hi = (hi < 0)
+        
+        # Select which mask and position to use — compute all, select with where
+        safe_hi = jnp.clip(hi, 0, 23)  # safe index for triangle_positions
+        tri_pos = self.triangle_positions[safe_hi]
+        is_left = (tri_pos[0] == self.board_margin)
+        tri_mask = jax.lax.select(is_left,
+            self.SHAPE_MASKS["triangle_highlight_right"],
+            self.SHAPE_MASKS["triangle_highlight_left"])
+        
+        # Compute all possible render targets
+        # Triangle render
+        raster_tri = self.jr.render_at(raster, tri_pos[0], tri_pos[1], tri_mask)
+        # Bar left render
+        raster_bar_l = self.jr.render_at(raster, self.bar_x, self.bar_y,
+            self.SHAPE_MASKS["bar_highlight_left"])
+        # Bar right render
+        half_w = self.bar_width // 2
+        raster_bar_r = self.jr.render_at(raster, self.bar_x + half_w, self.bar_y,
+            self.SHAPE_MASKS["bar_highlight_right"])
+        
+        # Select the right result with jnp.where over the raster arrays
+        is_tri = (hi < jnp.int32(24))
+        is_bar_l = (hi == jnp.int32(self.consts.BAR_INDEX))  # 24
+        is_bar_r = (hi == jnp.int32(self.consts.RIGHT_BAR_INDEX))
+        
+        result = jnp.where(no_hi, raster,
+                   jnp.where(is_tri, raster_tri,
+                     jnp.where(is_bar_l, raster_bar_l,
+                       jnp.where(is_bar_r, raster_bar_r, raster))))
+        return result
+    
     @partial(jax.jit, static_argnums=(0,))
-    def _draw_checkers_on_point(self, frame, point_idx, white_count, black_count):
-        """
-        Draw 2-high stacks that fill from BOTTOM to TOP inside each triangle band.
-        Spacing is controlled by:
-        - base_margin:   horizontal padding from the triangle base edge
-        - chip_gap_x:    horizontal gap between columns
-        - band_top_margin / band_bottom_margin: vertical paddings in the band
-        - checker_stack_offset: vertical distance between the two rows
-        """
+    def _draw_all_checkers(self, raster, state):
+        """Draw checkers on all 24 points — branchless count adjustment."""
+        player_idx = self._get_player_index(state.current_player)
+        is_picking = (state.game_phase == 2)
+        
+        def draw_point_checkers(point_idx, r):
+            white_count = state.board[0, point_idx]
+            black_count = state.board[1, point_idx]
+            
+            # Subtract one from picked position — branchless
+            pick_here = is_picking & (state.picked_checker_from == point_idx)
+            white_count = jnp.where(pick_here & (player_idx == 0),
+                                    jnp.maximum(white_count - 1, 0), white_count)
+            black_count = jnp.where(pick_here & (player_idx == 1),
+                                    jnp.maximum(black_count - 1, 0), black_count)
+            
+            return self._draw_checkers_on_point(r, point_idx, white_count, black_count)
+        
+        return jax.lax.fori_loop(0, 24, draw_point_checkers, raster)
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_checkers_on_point(self, raster, point_idx, white_count, black_count):
+        """Draw checker stacks on a single point."""
         pos = self.triangle_positions[point_idx]
         x, y = pos[0], pos[1]
-
+        
         is_left_column = (x == self.board_margin)
-        # march direction (+1 on left column, -1 on right column)
         dir_sign = jnp.where(is_left_column, 1, -1)
-
-        # start near the triangle BASE edge, not the tip
+        
         base_x = jnp.where(
             is_left_column,
             x + self.base_margin,
             x + self.triangle_length - self.checker_width - self.base_margin
         )
-
-        # band vertical limits with adjustable paddings
-        band_top    = y + self.band_top_margin
-        band_bottom = y + self.triangle_thickness - self.band_bottom_margin
-
-        # bottom row sits against band_bottom; second row above it
-        row0_y = jnp.int32(band_bottom - self.checker_height)
-        row1_y = jnp.int32(row0_y - self.checker_stack_offset)
-
-        # horizontal step between columns uses chip_gap_x
+        
+        # ALE stacks checkers from TIP toward BASE:
+        # For upper triangles (pointing DOWN): tip is at bottom (higher y), base at top (lower y)
+        # For lower triangles (pointing UP): tip is at top (lower y), base at bottom (higher y)
+        # First checker (i=0, row=0) goes near the TIP (y + 1 + offset)
+        # Second checker (i=1, row=1) goes near the BASE (y + 1)
+        # For upper triangles (y=38): TIP row at y=44, BASE row at y=39
+        near_base_y = jnp.int32(y + 1)  # Row closer to wide part of triangle
+        near_tip_y = jnp.int32(near_base_y + self.checker_stack_offset)  # Row closer to triangle point
         col_step = self.checker_width + self.chip_gap_x
-
-        def draw_stack(fr, count, color):
+        
+        def draw_stack(r, count, mask):
             def draw_single(i, f):
-                col = i // 2     # column index along the triangle
-                row = i & 1      # 0 or 1 (bottom row first, then above)
-                cx  = base_x + dir_sign * (col * col_step)
-                cy  = jnp.where(row == 0, row0_y, row1_y)
-                return self._draw_rectangle(f, cx, cy, self.checker_width, self.checker_height, color)
-            return jax.lax.fori_loop(0, count, draw_single, fr)
-
-        frame = draw_stack(frame, white_count, self.color_white_checker)
-        frame = draw_stack(frame, black_count, self.color_black_checker)
-        return frame
-
+                col = i // 2
+                row = i & 1
+                cx = base_x + dir_sign * (col * col_step)
+                # row=0 (first/single checker) goes near tip, row=1 (second) goes near base
+                cy = jnp.where(row == 0, near_tip_y, near_base_y)
+                return self.jr.render_at(f, cx, cy, mask)
+            return jax.lax.fori_loop(0, count, draw_single, r)
+        
+        raster = draw_stack(raster, white_count, self.SHAPE_MASKS["white_checker"])
+        raster = draw_stack(raster, black_count, self.SHAPE_MASKS["black_checker"])
+        return raster
+    
     @partial(jax.jit, static_argnums=(0,))
-    def _draw_bar_checkers(self, frame, white_count, black_count):
+    def _draw_bar_checkers(self, raster, state):
+        """Draw checkers on the bar.
+        
+        ALE layout:
+        - White checkers on LEFT side of bar, starting at x=26, expanding RIGHT
+        - Black/Red checkers on RIGHT side of bar, starting at x=130, expanding LEFT
+        - Stacking order (same as triangles): Base first, then Top
+          - i=0: col 0, row 0 (y=116, base/bottom)
+          - i=1: col 0, row 1 (y=111, top)
+          - i=2: col 1, row 0 (y=116, base/bottom)
+          - i=3: col 1, row 1 (y=111, top)
         """
-        Bar stacks anchored to OUTER edges, growing bottom→top.
-        Uses chip_gap_x for horizontal spacing and checker_stack_offset for vertical.
-        """
-        col_step = self.checker_width + self.chip_gap_x
-        row_step = self.checker_stack_offset
-        two_cols_w = 2 * self.checker_width + self.chip_gap_x  # total width of two columns with one gap
-
-        # leftmost and rightmost anchors inside the bar
-        base_x_left  = self.bar_x + self.bar_edge_padding
-        base_x_right = self.bar_x + self.bar_width - self.bar_edge_padding - two_cols_w
-
-        # bottom y inside the bar
-        base_y_bottom = (
-            self.bar_y + self.bar_thickness
-            - self.bar_vertical_padding - self.checker_height
-        )
-
-        def draw_stack(fr, count, base_x, color):
-            def draw_single(i, f):
-                row = i // 2
-                col = i % 2
-                x = base_x + col * col_step
-                y = base_y_bottom - row * row_step   # bottom→top stacking
-                return self._draw_rectangle(f, x, y, self.checker_width, self.checker_height, color)
-            return jax.lax.fori_loop(0, count, draw_single, fr)
-
-        # Red (black player) on the far LEFT, White on the far RIGHT
-        frame = draw_stack(frame, black_count, base_x_left,  self.color_black_checker)
-        frame = draw_stack(frame, white_count, base_x_right, self.color_white_checker)
-        return frame
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _draw_dice(self, frame, dice, current_player):
-        """Draw dice above the board, colored by the player with the turn."""
-        dice_size = 12
-        total_width = 4 * (dice_size + 3)
-        start_x = self.frame_width // 2 - total_width // 2 + 12
-        dice_y = self.board_margin
-
-        # player-colored background, contrasting pips
-        die_bg = jax.lax.cond(
-            current_player == self.env.consts.WHITE,
-            lambda _: self.color_white_checker,   # white
-            lambda _: self.color_black_checker,   # red
-            operand=None
-        )
-        pip = jax.lax.cond(
-            current_player == self.env.consts.WHITE,
-            lambda _: jnp.array([0, 0, 0], dtype=jnp.uint8),       # black pips on white
-            lambda _: jnp.array([255, 255, 255], dtype=jnp.uint8), # white pips on red
-            operand=None
-        )
-
-        def draw_single(i, fr):
-            val = dice[i]
-            dx = start_x + i * (dice_size + 3)
-
-            def draw_val(_):
-                fr2 = self._draw_rectangle(fr, dx, dice_y, dice_size, dice_size, die_bg)
-                center_x = dx + dice_size // 2
-                center_y = dice_y + dice_size // 2
-
-                pip_size = 2
-
-                def dot(f, x, y):
-                    return self._draw_rectangle(f, x - pip_size // 2, y - pip_size // 2,
-                                                pip_size, pip_size, pip)
-
-                def p1(_): return dot(fr2, center_x, center_y)
-                def p2(_):
-                    fr3 = dot(fr2, center_x - 3, center_y - 3)
-                    return dot(fr3, center_x + 3, center_y + 3)
-                def p3(_):
-                    fr3 = dot(fr2, center_x - 3, center_y - 3)
-                    fr3 = dot(fr3, center_x, center_y)
-                    return dot(fr3, center_x + 3, center_y + 3)
-                def p4(_):
-                    fr4 = dot(fr2, center_x - 3, center_y - 3)
-                    fr4 = dot(fr4, center_x + 3, center_y - 3)
-                    fr4 = dot(fr4, center_x - 3, center_y + 3)
-                    return dot(fr4, center_x + 3, center_y + 3)
-                def p5(_):
-                    fr5 = p4(None)
-                    return dot(fr5, center_x, center_y)
-                def p6(_):
-                    fr6 = dot(fr2, center_x - 3, center_y - 3)
-                    fr6 = dot(fr6, center_x - 3, center_y)
-                    fr6 = dot(fr6, center_x - 3, center_y + 3)
-                    fr6 = dot(fr6, center_x + 3, center_y - 3)
-                    fr6 = dot(fr6, center_x + 3, center_y)
-                    return dot(fr6, center_x + 3, center_y + 3)
-
-                funcs = [p1, p2, p3, p4, p5, p6]
-                return jax.lax.switch(jnp.clip(val - 1, 0, 5), funcs, operand=None)
-
-            return jax.lax.cond(val > 0, draw_val, lambda _: fr, operand=None)
-
-        return jax.lax.fori_loop(0, 4, draw_single, frame)
-
-
-    @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: BackgammonState):
-        frame = jnp.zeros((self.frame_height, self.frame_width, 3), dtype=jnp.uint8)
-
-        frame = self._draw_board_outline(frame)
-        frame = self._draw_triangles(frame)
-
-        frame = self._draw_edge_lines(frame)
-
-        # Draw highlight: under cursor in SELECTING, pinned to source in MOVING
-        def draw_cursor_highlight(f):
-            # Color used for the highlight overlay
-            highlight_color = jnp.array([199, 172, 91], dtype=jnp.uint8)
-
-            def which_index(_):
-                # When MOVING, highlight the origin. If origin is BAR (24), use the remembered bar half (24 or 26).
-                def moving_origin(_):
-                    return jax.lax.cond(
-                        state.picked_checker_from == jnp.int32(self.env.consts.BAR_INDEX),
-                        # If we picked from bar, choose left(24) or right(26) based on picked_bar_side.
-                        lambda __: jax.lax.select(
-                            state.picked_bar_side == jnp.int32(26),
-                            jnp.int32(26),
-                            jnp.int32(self.env.consts.BAR_INDEX)
-                        ),
-                        # Otherwise just highlight the original triangle index.
-                        lambda __: jnp.int32(state.picked_checker_from),
-                        operand=None
-                    )
-
-                return jax.lax.cond(
-                    state.game_phase == jnp.int32(2),   # MOVING
-                    moving_origin,
-                    lambda __: jax.lax.cond(
-                        state.game_phase == jnp.int32(1),  # SELECTING
-                        lambda ___: jnp.int32(state.cursor_position),
-                        # IDLE (phase 0 or others): show last valid drop if any, else -1
-                        lambda ___: jnp.int32(state.last_valid_drop),
-                        operand=None
-                    ),
-                    operand=None
-                )
-
-            hi = which_index(None)
-            no_hi = (hi < 0)
-
-            def add_highlight(frame):
-                # Triangle highlight (0..23)
-                def on_triangle(fr):
-                    return self._draw_triangle(
-                        fr,
-                        self.triangle_positions[hi][0],
-                        self.triangle_positions[hi][1],
-                        self.triangle_length,
-                        self.triangle_thickness,
-                        highlight_color,
-                        self.triangle_positions[hi][0] == self.board_margin
-                    )
-
-                # Bar highlight halves
-                def on_bar_left(fr):
-                    half_w = self.bar_width // 2
-                    return self._draw_rectangle(fr, self.bar_x, self.bar_y, half_w, self.bar_thickness, highlight_color)
-
-                def on_bar_right(fr):
-                    half_w = self.bar_width // 2
-                    return self._draw_rectangle(fr, self.bar_x + half_w, self.bar_y,
-                                                self.bar_width - half_w, self.bar_thickness, highlight_color)
-
-                # Home (25) or anything else: no highlight
-                def noop(fr): 
-                    return fr
-
-                return jax.lax.cond(
-                    hi < jnp.int32(24),
-                    on_triangle,
-                    lambda fr2: jax.lax.cond(
-                        hi == jnp.int32(self.env.consts.BAR_INDEX), on_bar_left,
-                        lambda fr3: jax.lax.cond(hi == jnp.int32(26), on_bar_right, noop, operand=fr3),
-                        operand=fr2
-                    ),
-                    operand=frame
-                )
-
-            return jax.lax.cond(no_hi, lambda fr: fr, add_highlight, operand=f)
-
-
-        frame = draw_cursor_highlight(frame)
-
-        # Draw checkers (with one removed if picked)
-        def draw_point_checkers(point_idx, fr):
-            player_idx = self.env.get_player_index(state.current_player)
-            white_count = state.board[0, point_idx]
-            black_count = state.board[1, point_idx]
-
-            # Subtract one from picked position if in moving phase
-            white_count = jax.lax.cond(
-                (state.game_phase == 2) & (state.picked_checker_from == point_idx) & (player_idx == 0),
-                lambda c: jnp.maximum(c - 1, 0),
-                lambda c: c,
-                operand=white_count
-            )
-
-            black_count = jax.lax.cond(
-                (state.game_phase == 2) & (state.picked_checker_from == point_idx) & (player_idx == 1),
-                lambda c: jnp.maximum(c - 1, 0),
-                lambda c: c,
-                operand=black_count
-            )
-
-            return self._draw_checkers_on_point(fr, point_idx, white_count, black_count)
-
-        frame = jax.lax.fori_loop(0, 24, draw_point_checkers, frame)
-
-        # Bar and home stacks
-        player_idx = self.env.get_player_index(state.current_player)
-        picked_from_bar = (state.game_phase == 2) & (state.picked_checker_from == self.env.consts.BAR_INDEX)
-
-        # subtract 1 from the current player's bar if we picked the checker from BAR
-        white_bar = state.board[0, self.env.consts.BAR_INDEX] - jnp.where(picked_from_bar & (player_idx == 0), 1, 0)
-        black_bar = state.board[1, self.env.consts.BAR_INDEX] - jnp.where(picked_from_bar & (player_idx == 1), 1, 0)
-
+        player_idx = self._get_player_index(state.current_player)
+        picked_from_bar = (state.game_phase == 2) & (state.picked_checker_from == self.consts.BAR_INDEX)
+        
+        white_bar = state.board[0, self.consts.BAR_INDEX] - jnp.where(picked_from_bar & (player_idx == 0), 1, 0)
+        black_bar = state.board[1, self.consts.BAR_INDEX] - jnp.where(picked_from_bar & (player_idx == 1), 1, 0)
         white_bar = jnp.maximum(white_bar, 0)
         black_bar = jnp.maximum(black_bar, 0)
-
-        frame = self._draw_bar_checkers(frame, white_bar, black_bar)
-
-        def draw_floating_checker(f):
-            player_idx = self.env.get_player_index(state.current_player)
-            color = jax.lax.cond(
-                player_idx == 0,
-                lambda _: self.color_white_checker,
-                lambda _: self.color_black_checker,
-                operand=None
-            )
-
-            pos = state.cursor_position
-            is_home      = (pos == self.env.consts.HOME_INDEX)                 # 25
-            is_bar_left  = (pos == jnp.int32(self.env.consts.BAR_INDEX))       # 24
-            is_bar_right = (pos == jnp.int32(26))                               # split-bar right half (cursor-only)
-
-            # Choose edge triangle for HOME anchor:
-            # If picked from WHITE home (18..23) → use point 23; else use point 0.
-            src = state.picked_checker_from
-            use_right_edge = (src >= 18)  # white home points
-            edge_idx = jax.lax.select(use_right_edge, jnp.int32(23), jnp.int32(0))
-
-            # Triangle X center at chosen edge
-            tri_x = self.triangle_positions[edge_idx][0] + self.triangle_length // 2
-
-            # Place HOME just outside the correct band for the rotated layout:
-            # - if edge_idx is in top half (6..17) → just above the top band
-            # - else (0..5 or 18..23)              → just below the bottom band
-            y_top_tri    = self.top_margin_for_dice + self.board_margin
-            y_bottom_tri = self.frame_height - self.board_margin
-            edge_is_top_half = ( (edge_idx >= 6) & (edge_idx <= 17) )
-
-            home_cx = tri_x
-            home_cy = jax.lax.select(
-                edge_is_top_half,
-                y_top_tri - (self.checker_height // 2) - 1,   # above top band
-                y_bottom_tri + (self.checker_height // 2) + 1 # below bottom band
-            )
-
-            # Centers for split bar halves
-            bar_left_cx  = self.bar_x + (self.bar_width // 4)
-            bar_right_cx = self.bar_x + (3 * self.bar_width // 4)
-            bar_cy       = self.bar_y + self.bar_thickness // 2
-
-            # Compute draw position
-            cx = jax.lax.cond(
-                is_home,
-                lambda _: home_cx,
-                lambda _: jax.lax.cond(
-                    pos < 24,  # triangles 0..23
-                    lambda _: self.triangle_positions[pos][0] + self.triangle_length // 2,
-                    lambda _: jax.lax.cond(
-                        is_bar_left,
-                        lambda _: bar_left_cx,          # left bar (24)
-                        lambda _: jax.lax.cond(
-                            is_bar_right,
-                            lambda _: bar_right_cx,     # right bar (26)
-                            lambda _: self.frame_width // 2,  # fallback (shouldn't hit)
-                            operand=None
-                        ),
-                        operand=None
-                    ),
-                    operand=None
-                ),
-                operand=None
-            )
-
-            cy = jax.lax.cond(
-                is_home,
-                lambda _: home_cy,
-                lambda _: jax.lax.cond(
-                    pos < 24,  # triangles 0..23
-                    lambda _: self.triangle_positions[pos][1] + self.triangle_thickness // 2,
-                    lambda _: jax.lax.cond(
-                        is_bar_left | is_bar_right,
-                        lambda _: bar_cy,               # both bar halves
-                        lambda _: self.bar_y + self.bar_thickness // 2,  # fallback
-                        operand=None
-                    ),
-                    operand=None
-                ),
-                operand=None
-            )
-
-            return self._draw_rectangle(
-                f,
-                cx - self.checker_width // 2,
-                cy - self.checker_height // 2,
-                self.checker_width,
-                self.checker_height,
-                color
-            )
-
-        frame = jax.lax.cond(
-            state.game_phase == 2,  # Only in MOVING_CHECKER phase
-            draw_floating_checker,
-            lambda f: f,
-            operand=frame
-        )
-
-        frame = self._draw_dice(frame, state.dice, state.current_player)
-        return frame
+        
+        col_step = self.checker_width + self.chip_gap_x  # 4 + 4 = 8
+        row_step = self.checker_stack_offset  # 5
+        
+        # White starts at x=26 (left edge), expands right
+        base_x_white = self.bar_x + 2  # x=26
+        
+        # Black starts at x=130 (right edge), expands left
+        base_x_black = self.bar_x + 106  # x=130 (24 + 106)
+        
+        # Y positions: base (bottom) at y=116, top at y=111
+        # Bar is at y=110
+        base_y = self.bar_y + 6  # y=116 for row 0 (base/bottom)
+        top_y = self.bar_y + 1   # y=111 for row 1 (top)
+        
+        def draw_white_stack(r, count, mask):
+            """White expands left to right (positive X direction)"""
+            def draw_single(i, f):
+                col = i // 2
+                row = i % 2
+                x = base_x_white + col * col_step
+                y = jnp.where(row == 0, base_y, top_y)
+                return self.jr.render_at(f, x, y, mask)
+            return jax.lax.fori_loop(0, count, draw_single, r)
+        
+        def draw_black_stack(r, count, mask):
+            """Black expands right to left (negative X direction)"""
+            def draw_single(i, f):
+                col = i // 2
+                row = i % 2
+                x = base_x_black - col * col_step  # Subtract to go left
+                y = jnp.where(row == 0, base_y, top_y)
+                return self.jr.render_at(f, x, y, mask)
+            return jax.lax.fori_loop(0, count, draw_single, r)
+        
+        raster = draw_white_stack(raster, white_bar, self.SHAPE_MASKS["white_checker"])
+        raster = draw_black_stack(raster, black_bar, self.SHAPE_MASKS["black_checker"])
+        return raster
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_floating_checker(self, raster, state):
+        """Draw the floating checker — branchless position calculation."""
+        player_idx = self._get_player_index(state.current_player)
+        mask = jax.lax.select(player_idx == 0,
+            self.SHAPE_MASKS["white_checker"],
+            self.SHAPE_MASKS["black_checker"])
+        
+        pos = state.cursor_position
+        is_home = (pos == jnp.int32(self.consts.HOME_INDEX))
+        is_bar_left = (pos == jnp.int32(self.consts.BAR_INDEX))
+        is_bar_right = (pos == jnp.int32(self.consts.RIGHT_BAR_INDEX))
+        is_on_board = (pos >= 0) & (pos < 24)
+        
+        # Home position
+        src = state.picked_checker_from
+        use_right_edge = (src >= 18)
+        edge_idx = jax.lax.select(use_right_edge, jnp.int32(23), jnp.int32(0))
+        tri_x = self.triangle_positions[edge_idx][0] + self.triangle_length // 2
+        y_top_tri = self.top_margin_for_dice + self.board_margin
+        y_bottom_tri = self.frame_height - self.board_margin
+        edge_is_top_half = (edge_idx >= 6) & (edge_idx <= 17)
+        home_cx = tri_x
+        home_cy = jax.lax.select(edge_is_top_half,
+            y_top_tri - (self.checker_height // 2) - 1,
+            y_bottom_tri + (self.checker_height // 2) + 1)
+        
+        # Board position (safe index)
+        safe_pos = jnp.clip(pos, 0, 23)
+        board_cx = self.triangle_positions[safe_pos][0] + self.triangle_length // 2
+        board_cy = self.triangle_positions[safe_pos][1] + self.triangle_thickness // 2
+        
+        # Bar position
+        bar_left_cx = self.bar_x + (self.bar_width // 4)
+        bar_right_cx = self.bar_x + (3 * self.bar_width // 4)
+        bar_cy = self.bar_y + self.bar_thickness // 2
+        
+        # Select with chained jnp.where — no nested lax.cond
+        cx = jnp.where(is_home, home_cx,
+               jnp.where(is_on_board, board_cx,
+                 jnp.where(is_bar_left, bar_left_cx,
+                   jnp.where(is_bar_right, bar_right_cx,
+                     self.frame_width // 2))))
+        
+        cy = jnp.where(is_home, home_cy,
+               jnp.where(is_on_board, board_cy,
+                 jnp.where(is_bar_left | is_bar_right, bar_cy,
+                   self.bar_y + self.bar_thickness // 2)))
+        
+        # Always compute the rendered raster, then select with where
+        rendered = self.jr.render_at(raster, cx - self.checker_width // 2,
+                                    cy - self.checker_height // 2, mask)
+        
+        should_draw = (state.game_phase == 2) & (state.cursor_position != self.consts.HOME_INDEX)
+        return jnp.where(should_draw, rendered, raster)
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_dice(self, raster, state):
+        """Draw dice — uses pre-computed pip bitmask table instead of lax.switch."""
+        dice_gap = 6
+        start_x = 64
+        dice_y = 17
+        
+        is_white_player = (state.current_player == self.consts.WHITE)
+        die_mask = jax.lax.select(is_white_player,
+            self.SHAPE_MASKS["die_white"],
+            self.SHAPE_MASKS["die_red"])
+        pip_mask = jax.lax.select(is_white_player,
+            self.SHAPE_MASKS["pip_black"],
+            self.SHAPE_MASKS["pip_white"])
+        
+        display_dice = state.original_dice
+        pip_table = self._pip_table      # (6, 7) bool
+        pip_positions = self._pip_positions  # (7, 2) int32
+        
+        def draw_single_die(i, r):
+            val = display_dice[i]
+            dx = start_x + i * (self.dice_width + dice_gap)
+            
+            # Draw die background
+            r_with_die = self.jr.render_at(r, dx, dice_y, die_mask)
+            
+            # Look up active pips from bitmask table
+            pip_active = pip_table[jnp.clip(val - 1, 0, 5)]  # (7,) bool
+            
+            # Draw all 7 possible pip positions, masking by active flag
+            def draw_pip(j, f):
+                px = dx + pip_positions[j, 0]
+                py = dice_y + pip_positions[j, 1]
+                rendered = self.jr.render_at(f, px, py, pip_mask)
+                return jnp.where(pip_active[j], rendered, f)
+            
+            r_with_pips = jax.lax.fori_loop(0, 7, draw_pip, r_with_die)
+            
+            # Only draw if val > 0
+            return jnp.where(val > 0, r_with_pips, r)
+        
+        return jax.lax.fori_loop(0, 2, draw_single_die, raster)
+    
