@@ -88,7 +88,7 @@ Total:  🥇: 12   |   🥈: 12   |   🥉: 10   |   ❌: 23 
 | basic_math                   | ❌       | 0 |
 | blackjack                    | 🥈       | 0 |
 | carnival                     | ❌       | 0 |
-| casino                       | 🥉       | 0 |
+| casino                       | 🥈       | 0 |
 | crossbow                     | ❌       | 0 |
 | darkchambers                 | ❌       | 0 |
 | donkey_kong                  | 🥈       | 0 |
@@ -130,4 +130,4 @@ Total:  🥇: 12   |   🥈: 12   |   🥉: 10   |   ❌: 23 
 | video_cube                   | 🥈       | 0 |
 | word_zapper                  | 🥈       | 0 |
 
-Total:  🥇: 2   |   🥈: 17   |   🥉: 5   |   ❌: 24
+Total:  🥇: 2   |   🥈: 18   |   🥉: 4   |   ❌: 24
