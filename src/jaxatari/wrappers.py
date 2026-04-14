@@ -260,6 +260,9 @@ class ObjectCentricWrapper(JaxatariWrapper):
                 high_arr = np.broadcast_to(leaf_space.high, leaf_space.shape).flatten()
                 lows.append(low_arr)
                 highs.append(high_arr)
+            elif isinstance(leaf_space, spaces.Discrete):
+                lows.append(np.array([0], dtype=leaf_space.dtype))
+                highs.append(np.array([leaf_space.n - 1], dtype=leaf_space.dtype))
             else:
                 raise TypeError(f"Unsupported space type for flattening: {type(leaf_space)}")
 
@@ -573,6 +576,9 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
                 high_arr = np.broadcast_to(leaf_space.high, leaf_space.shape).flatten()
                 lows.append(low_arr)
                 highs.append(high_arr)
+            elif isinstance(leaf_space, spaces.Discrete):
+                lows.append(np.array([0], dtype=leaf_space.dtype))
+                highs.append(np.array([leaf_space.n - 1], dtype=leaf_space.dtype))
             else:
                 raise TypeError(f"Unsupported space type for flattening: {type(leaf_space)}")
         
