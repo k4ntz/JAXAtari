@@ -91,7 +91,7 @@ Total:  🥇: 12   |   🥈: 12   |   🥉: 10   |   ❌: 23 
 | casino                       | 🥈       | 0 |
 | crossbow                     | ❌       | 0 |
 | darkchambers                 | ❌       | 0 |
-| donkey_kong                  | 🥈       | 0 |
+| donkey_kong                  | 🥇       | 0 |
 | earthworld                   | ❌       | 0 |
 | elevator_action              | ❌       | 0 |
 | entombed                     | ❌       | 0 |
