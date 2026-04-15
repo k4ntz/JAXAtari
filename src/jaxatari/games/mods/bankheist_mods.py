@@ -1,17 +1,27 @@
 import os
+
 from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.bankheist.bankheist_mod_plugins import (
-    UnlimitedGasMod, NoPoliceMod, TwoPoliceCarsMod, RandomCityMod, RevisitCityMod
+    RandomBankSpawnsMod,
+    UnlimitedGasMod,
+    NoPoliceMod,
+    TwoPoliceCarsMod,
+    RandomCityMod,
+    RevisitCityMod,
+    MovingBanksMod,
+    DoubleSpeedMod,
 )
 
 # --- The Registry ---
 BANKHEIST_MOD_REGISTRY = {
+    "random_spawns": RandomBankSpawnsMod,
     "unlimited_gas": UnlimitedGasMod,
     "no_police": NoPoliceMod,
     "2_police_cars": TwoPoliceCarsMod,
     "random_city": RandomCityMod,
     "revisit_city": RevisitCityMod,
-    "random_spawns": RandomBankSpawnsMod,
+    "moving_banks": MovingBanksMod,
+    "double_speed": DoubleSpeedMod,
 }
 
 class BankHeistEnvMod(JaxAtariModController):
@@ -35,5 +45,5 @@ class BankHeistEnvMod(JaxAtariModController):
             env=env,
             mods_config=mods_config,
             allow_conflicts=allow_conflicts,
-            registry=self.REGISTRY
+            registry=self.REGISTRY,
         )

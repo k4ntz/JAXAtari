@@ -1,15 +1,12 @@
-from jaxatari.games.jax_asterix import Enemy
-from PIL.Image import new
 import os
 from functools import partial
-from typing import NamedTuple, Tuple, Dict, Any, Optional, Sequence, Callable
+from typing import Tuple, Dict, Any
 import jax.lax
 import jax.numpy as jnp
 import chex
 import jax.random as random
 import jax
 import numpy as np
-import collections
 from flax import struct
 
 # Replaced legacy utils with new one
@@ -18,9 +15,6 @@ import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.modification import AutoDerivedConstants
-
-rand_key = random.key(0)
-
 
 def _get_default_asset_config() -> tuple:
     """
@@ -177,7 +171,6 @@ class AnimatorState:
     enemy_racket_frame: chex.Array = 0
     enemy_racket_animation: chex.Array = False
 
-
 @struct.dataclass
 class TennisState:
     player_state: PlayerState
@@ -188,13 +181,6 @@ class TennisState:
     animator_state: AnimatorState
     random_key: jax.random.PRNGKey
 
-
-# All top-level functions (tennis_step, normal_step, animator_step, 
-# check_score, check_set, check_end, player_step, enemy_step, 
-# ball_step, is_overlapping, handle_ball_fire, tennis_reset)
-# have been moved into the TennisJaxEnv class below.
-
-    
 @struct.dataclass
 class TennisObservation:
     player: ObjectObservation

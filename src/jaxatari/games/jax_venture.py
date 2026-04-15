@@ -1415,6 +1415,21 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
 
     def _get_observation(self, state: GameState) -> VentureObservation:
         """Constructs an observation from the current game state."""
+        w = self.consts.SCREEN_WIDTH
+        h = self.consts.SCREEN_HEIGHT
+
+        def clip_xy(t):
+            return jnp.clip(jnp.round(t), -1, w).astype(jnp.int16)
+
+        def clip_xy_y(t):
+            return jnp.clip(jnp.round(t), -1, h).astype(jnp.int16)
+
+        def clip_wh_x(t):
+            return jnp.clip(jnp.round(t), 0, w).astype(jnp.int16)
+
+        def clip_wh_y(t):
+            return jnp.clip(jnp.round(t), 0, h).astype(jnp.int16)
+
         is_in_room = state.current_level != 0
 
         player_width = jax.lax.cond(is_in_room,
@@ -1426,22 +1441,28 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
                                      lambda: jnp.array(self.consts.PLAYER_DOT_RENDER_HEIGHT, dtype=jnp.float32))
 
         player = ObjectObservation.create(
-            x=state.player.x,
-            y=state.player.y,
-            width=player_width,
-            height=player_height,
-            active=True,
+            x=clip_xy(state.player.x),
+            y=clip_xy_y(state.player.y),
+            width=clip_wh_x(player_width),
+            height=clip_wh_y(player_height),
+            active=jnp.array(1, dtype=jnp.int8),
+            orientation=jnp.array(0.0, dtype=jnp.float32),
         )
 
         monsters_x = jnp.where(state.monsters.active, state.monsters.x, -1)  # Move inactive monsters off-screen
         monsters_y = jnp.where(state.monsters.active, state.monsters.y, -1)
 
         monsters = ObjectObservation.create(
-            x=monsters_x,
-            y=monsters_y,
-            width = jnp.full((self.consts.TOTAL_MONSTERS,), self.consts.MONSTER_RENDER_WIDTH, dtype=jnp.float32),
-            height = jnp.full((self.consts.TOTAL_MONSTERS,), self.consts.MONSTER_RENDER_HEIGHT, dtype=jnp.float32),
-            active=state.monsters.active
+            x=clip_xy(monsters_x),
+            y=clip_xy_y(monsters_y),
+            width=clip_wh_x(
+                jnp.full((self.consts.TOTAL_MONSTERS,), self.consts.MONSTER_RENDER_WIDTH, dtype=jnp.float32)
+            ),
+            height=clip_wh_y(
+                jnp.full((self.consts.TOTAL_MONSTERS,), self.consts.MONSTER_RENDER_HEIGHT, dtype=jnp.float32)
+            ),
+            active=state.monsters.active.astype(jnp.int8),
+            orientation=jnp.zeros((self.consts.TOTAL_MONSTERS,), dtype=jnp.float32),
         )
 
         # Portals (Walls)
@@ -1454,11 +1475,12 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
         # Could also be more sophisticated, but this is also not visible in the image!
 
         portals = ObjectObservation.create(
-            x=jnp.where(portal_active, portals_array[:, 0] + portals_array[:, 2] / 2, -1.0),
-            y=jnp.where(portal_active, portals_array[:, 1] + portals_array[:, 3] / 2, -1.0),
-            width=portals_array[:, 2],
-            height=portals_array[:, 3],
-            active=portal_active
+            x=clip_xy(jnp.where(portal_active, portals_array[:, 0] + portals_array[:, 2] / 2, -1.0)),
+            y=clip_xy_y(jnp.where(portal_active, portals_array[:, 1] + portals_array[:, 3] / 2, -1.0)),
+            width=clip_wh_x(portals_array[:, 2]),
+            height=clip_wh_y(portals_array[:, 3]),
+            active=portal_active.astype(jnp.int8),
+            orientation=jnp.zeros((portals_array.shape[0],), dtype=jnp.float32),
         )
 
         # Chests
@@ -1468,11 +1490,12 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
         chest_active = (level_idx > 0) & state.chests_active[room_idx] & (state.collected_chest_in_current_visit != room_idx)
 
         chest = ObjectObservation.create(
-            x=jnp.where(chest_active, chest_pos[0], -1.0),
-            y=jnp.where(chest_active, chest_pos[1], -1.0),
-            width=jnp.array(self.consts.CHEST_WIDTH, dtype=jnp.float32),
-            height=jnp.array(self.consts.CHEST_HEIGHT, dtype=jnp.float32),
-            active=chest_active
+            x=clip_xy(jnp.where(chest_active, chest_pos[0], -1.0)),
+            y=clip_xy_y(jnp.where(chest_active, chest_pos[1], -1.0)),
+            width=clip_wh_x(jnp.array(self.consts.CHEST_WIDTH, dtype=jnp.float32)),
+            height=clip_wh_y(jnp.array(self.consts.CHEST_HEIGHT, dtype=jnp.float32)),
+            active=chest_active.astype(jnp.int8),
+            orientation=jnp.array(0.0, dtype=jnp.float32),
         )
 
         # Lasers
@@ -1499,20 +1522,22 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
         lasers_h = jnp.array([room_h, room_h, thickness, thickness])
 
         lasers = ObjectObservation.create(
-            x=jnp.where(is_laser_level, lasers_x, -1.0),
-            y=jnp.where(is_laser_level, lasers_y, -1.0),
-            width=lasers_w,
-            height=lasers_h,
-            active=jnp.full(4, is_laser_level, dtype=jnp.bool_)
+            x=clip_xy(jnp.where(is_laser_level, lasers_x, -1.0)),
+            y=clip_xy_y(jnp.where(is_laser_level, lasers_y, -1.0)),
+            width=clip_wh_x(lasers_w),
+            height=clip_wh_y(lasers_h),
+            active=jnp.where(is_laser_level, jnp.ones(4, dtype=jnp.int8), jnp.zeros(4, dtype=jnp.int8)),
+            orientation=jnp.zeros((4,), dtype=jnp.float32),
         )
 
         # Chaser
         chaser = ObjectObservation.create(
-            x=jnp.where(state.chaser.active, state.chaser.x, -1.0),
-            y=jnp.where(state.chaser.active, state.chaser.y, -1.0),
-            width=jnp.array(self.consts.CHASER_RENDER_WIDTH, dtype=jnp.float32),
-            height=jnp.array(self.consts.CHASER_RENDER_HEIGHT, dtype=jnp.float32),
-            active=state.chaser.active
+            x=clip_xy(jnp.where(state.chaser.active, state.chaser.x, -1.0)),
+            y=clip_xy_y(jnp.where(state.chaser.active, state.chaser.y, -1.0)),
+            width=clip_wh_x(jnp.array(self.consts.CHASER_RENDER_WIDTH, dtype=jnp.float32)),
+            height=clip_wh_y(jnp.array(self.consts.CHASER_RENDER_HEIGHT, dtype=jnp.float32)),
+            active=state.chaser.active.astype(jnp.int8),
+            orientation=jnp.array(0.0, dtype=jnp.float32),
         )
         obs = VentureObservation(
             player=player,
@@ -1550,14 +1575,20 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
         h = int(self.consts.SCREEN_HEIGHT)
         w = int(self.consts.SCREEN_WIDTH)
         screen_size = (h, w)
-        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size, xy_low=-1.0)
         return spaces.Dict({
             "player": single_obj,
-            "monsters": spaces.get_object_space(n=self.consts.TOTAL_MONSTERS, screen_size=screen_size),
-            "portals": spaces.get_object_space(n=self.consts.JAX_TRANSITIONS.shape[2], screen_size=screen_size),  # Max portals per level based on manifest
-            "chest": single_obj, 
-            "lasers": spaces.get_object_space(n=4, screen_size=screen_size),  # 4 lasers max in the current game design
-            "chaser": single_obj
+            "monsters": spaces.get_object_space(
+                n=self.consts.TOTAL_MONSTERS, screen_size=screen_size, xy_low=-1.0
+            ),
+            "portals": spaces.get_object_space(
+                n=self.consts.JAX_TRANSITIONS.shape[2],
+                screen_size=screen_size,
+                xy_low=-1.0,
+            ),
+            "chest": single_obj,
+            "lasers": spaces.get_object_space(n=4, screen_size=screen_size, xy_low=-1.0),
+            "chaser": single_obj,
         })
 
     def image_space(self) -> spaces.Box:

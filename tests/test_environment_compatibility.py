@@ -708,7 +708,8 @@ class TestAdvancedWrapperFeatures:
         
         while not done and steps < 100:
             obs, state, reward, done, _, info = env.step(state, 0)
-            total_reward += reward
+            step_return = info.get("env_reward", reward)
+            total_reward += float(jnp.asarray(step_return).reshape(()))
             steps += 1
             logged_done = bool(info.get("returned_episode", False))
             
@@ -748,7 +749,8 @@ class TestAdvancedWrapperFeatures:
         while not done and steps < 100:
             obs, state, reward, done, _, info = env.step(state, 0)
             logged_done = bool(info.get("returned_episode", False))
-            total_reward_env += reward
+            step_return_env = info.get("env_reward", reward)
+            total_reward_env += float(jnp.asarray(step_return_env).reshape(()))
             total_rewards += info["all_rewards"]
             steps += 1
             
@@ -802,8 +804,9 @@ class TestAdvancedWrapperFeatures:
 
         env_sticky_always = AtariWrapper(raw_env, sticky_actions=1.0)
         _, state_sticky_always = env_sticky_always.reset(key)
+        prev_action_before_step = state_sticky_always.prev_action
         _, state_sticky_always, _, _, _, _ = env_sticky_always.step(state_sticky_always, 2)  # UP action
-        assert state_sticky_always.prev_action == 0, "With sticky_actions=1.0, prev_action should repeat the previous action"
+        assert state_sticky_always.prev_action == prev_action_before_step, "With sticky_actions=1.0, prev_action should repeat the previous action"
         
         # Test episodic_life feature
         # We'll just verify the wrapper accepts the parameter

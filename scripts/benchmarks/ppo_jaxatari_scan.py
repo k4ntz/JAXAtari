@@ -2,7 +2,6 @@
 # Adapted to JaxAtari
 
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppo_atari_envpool_xla_jaxpy
-from jinja2.nativetypes import NativeCodeGenerator
 import os
 import random
 import time

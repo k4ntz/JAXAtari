@@ -226,7 +226,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             :param number: if the character is red, which index of red should be used otherwise arbitrary
             :param position: the position of the character
             """
-        # Snake (Coily) stepping onto a disk: remove snake, award 500 points if lives==3.
+        # Snake (Coily) stepping onto a disk: remove snake, award 500 points.
         snake_on_disk = jnp.logical_and(character == 3, state.pyramid[position[1], position[0]] == -2)
         pyra, pos, lives, points = jax.lax.cond(
             pred=snake_on_disk,
@@ -234,7 +234,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
                 vals[0].pyramid,
                 jnp.array([-1, -1], dtype=jnp.int32),
                 vals[0].lives,
-                jnp.where(vals[0].lives == 3, jnp.array(500, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32)),
+                jnp.array(500, dtype=jnp.int32),
             ),
             false_fun=lambda vals: jax.lax.cond(
                 pred=jnp.logical_and(vals[0].pyramid[vals[1][1], vals[1][0]] == -2, vals[2] == 0),
@@ -265,7 +265,19 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
         old_color=pyramid[playerPos[1]][playerPos[0]]
         pyramid=jax.lax.cond(
             pred=jnp.logical_and(samPos[0]!= -1, samPos[1] != -1),
-            true_fun=lambda vals: vals[0].at[vals[1][1],vals[1][0]].set(0),
+            true_fun=lambda vals: vals[0].at[vals[1][1],vals[1][0]].set(
+                jax.lax.switch(
+                    index=level - 1,
+                    branches=[
+                        lambda v: jnp.where(v > 0, 0, v),
+                        lambda v: jnp.where(v > 0, v - 1, v),
+                        lambda v: jnp.where(v > 0, 0, v),
+                        lambda v: jnp.where(v > 0, v - 1, v),
+                        lambda v: jnp.where(v > 0, v - 1, v),
+                    ],
+                    operand=vals[0][vals[1][1]][vals[1][0]]
+                )
+            ),
             false_fun=lambda vals: vals[0],
             operand=(pyramid,samPos)
         )
@@ -419,11 +431,10 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
         pos,player_lives,points=jax.lax.cond(
             pred=character == 0,
             true_fun=lambda state2: (jnp.array([1,1]).astype(jnp.int32), jnp.array(state2[0].lives - 1).astype(jnp.int32), jnp.array(0).astype(jnp.int32)),
-            false_fun=lambda state2: jax.lax.cond(
-                pred=state.lives == 3,
-                true_fun=lambda vals: (jnp.array([-1,-1]).astype(jnp.int32), 0, jnp.array(500).astype(jnp.int32)),
-                false_fun=lambda vals: (jnp.array([-1,-1]).astype(jnp.int32), 0, jnp.array(0).astype(jnp.int32)),
-                operand=state2
+            false_fun=lambda state2: (
+                jnp.array([-1,-1]).astype(jnp.int32),
+                state2[0].lives,
+                jnp.where(character == 3, jnp.array(500, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32))
             ),
             operand=(state,character)
         )
@@ -741,7 +752,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
                 ]),
                 operand=None
-            ),jnp.array(jnp.mod(vals[1], 5) + 1).astype(jnp.int32) , jax.lax.cond(vals[1] == 4, lambda l: jnp.minimum(5, l + 1), lambda l: l, vals[2]).astype(jnp.int32), jnp.array(3100).astype(jnp.int32), jnp.array([1,1]), jnp.array(1).astype(jnp.int32), vals[5]),
+            ),jnp.array(jnp.mod(vals[1], 4) + 1).astype(jnp.int32) , jax.lax.cond(vals[1] == 4, lambda l: jnp.minimum(5, l + 1), lambda l: l, vals[2]).astype(jnp.int32), jnp.array(3100).astype(jnp.int32), jnp.array([1,1]), jnp.array(1).astype(jnp.int32), vals[5]),
             false_fun=lambda vals: (vals[0],vals[1],vals[2], jnp.array(0).astype(jnp.int32), player_position, vals[4], vals[6]),
             operand=(pyramid,round,level,state.prng_state[6],spawned, state.step_counter, green_ball_freeze_step)
         )
@@ -1053,11 +1064,23 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             "lives": spaces.Box(-1, 9, (), jnp.int32),
             "pyramid": spaces.Box(-2, 3, (8, 8), jnp.int32),
             "level_number": spaces.Box(1, 5, (), jnp.int32),
-            "round_number": spaces.Box(1, 6, (), jnp.int32),
+            "round_number": spaces.Box(1, 4, (), jnp.int32),
         })
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: QbertState):
+        # Keep coordinates in-space; disappearance is represented by active=0.
+        red_x = jnp.maximum(state.red_ball_positions[:, 0], 0)
+        red_y = jnp.maximum(state.red_ball_positions[:, 1], 0)
+        purple_x = jnp.maximum(state.purple_ball_position[0], 0)
+        purple_y = jnp.maximum(state.purple_ball_position[1], 0)
+        snake_x = jnp.maximum(state.snake_position[0], 0)
+        snake_y = jnp.maximum(state.snake_position[1], 0)
+        green_x = jnp.maximum(state.green_ball_position[0], 0)
+        green_y = jnp.maximum(state.green_ball_position[1], 0)
+        sam_x = jnp.maximum(state.sam_position[0], 0)
+        sam_y = jnp.maximum(state.sam_position[1], 0)
+
         player = ObjectObservation.create(
             x=state.player_position[0],
             y=state.player_position[1],
@@ -1065,36 +1088,36 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             height=jnp.array(1, dtype=jnp.int32),
         )
         red_balls = ObjectObservation.create(
-            x=state.red_ball_positions[:, 0],
-            y=state.red_ball_positions[:, 1],
+            x=red_x,
+            y=red_y,
             width=jnp.ones(3, dtype=jnp.int32),
             height=jnp.ones(3, dtype=jnp.int32),
             active=(state.red_ball_positions[:, 0] != -1).astype(jnp.int32),
         )
         purple_ball = ObjectObservation.create(
-            x=state.purple_ball_position[0],
-            y=state.purple_ball_position[1],
+            x=purple_x,
+            y=purple_y,
             width=jnp.array(1, dtype=jnp.int32),
             height=jnp.array(1, dtype=jnp.int32),
             active=(state.purple_ball_position[0] != -1).astype(jnp.int32),
         )
         snake = ObjectObservation.create(
-            x=state.snake_position[0],
-            y=state.snake_position[1],
+            x=snake_x,
+            y=snake_y,
             width=jnp.array(1, dtype=jnp.int32),
             height=jnp.array(1, dtype=jnp.int32),
             active=(state.snake_position[0] != -1).astype(jnp.int32),
         )
         green_ball = ObjectObservation.create(
-            x=state.green_ball_position[0],
-            y=state.green_ball_position[1],
+            x=green_x,
+            y=green_y,
             width=jnp.array(1, dtype=jnp.int32),
             height=jnp.array(1, dtype=jnp.int32),
             active=(state.green_ball_position[0] != -1).astype(jnp.int32),
         )
         sam = ObjectObservation.create(
-            x=state.sam_position[0],
-            y=state.sam_position[1],
+            x=sam_x,
+            y=sam_y,
             width=jnp.array(1, dtype=jnp.int32),
             height=jnp.array(1, dtype=jnp.int32),
             active=(state.sam_position[0] != -1).astype(jnp.int32),

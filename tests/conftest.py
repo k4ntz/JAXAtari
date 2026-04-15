@@ -59,17 +59,38 @@ def discover_games_with_snapshots() -> list[str]:
 
 def pytest_collection_modifyitems(config, items):
     """
-    Skips tests marked with `requires_snapshot` if no snapshot is found for the game.
+    Applies folder-specific game scoping and skips snapshot-dependent tests
+    when no matching snapshot exists for the parametrized game.
     """
 
     games_with_snapshots = discover_games_with_snapshots()
-    
+    specified_games = parse_game_list(config.getoption("--game"))
+    normalized_specified_games = set()
+    if specified_games:
+        normalized_specified_games = {normalize_game_name(game) for game in specified_games}
+
+    folder_game_scopes = discover_folder_game_scopes(Path(__file__).parent)
+
+    deselected = []
+    kept = []
+
     for item in items:
+        item_path = Path(str(item.fspath))
+        required_games = get_required_games_for_test(item_path, folder_game_scopes)
+        if required_games and normalized_specified_games and required_games.isdisjoint(normalized_specified_games):
+            deselected.append(item)
+            continue
+
         if item.get_closest_marker("requires_snapshot"):
             if hasattr(item, "callspec") and 'game_name' in item.callspec.params:
                 game_name = item.callspec.params['game_name']
                 if game_name not in games_with_snapshots:
                     item.add_marker(pytest.mark.skip(reason=f"No snapshot found for game '{game_name}'"))
+        kept.append(item)
+
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = kept
 
 # ==============================================================================
 # 1. DYNAMIC ENVIRONMENT LOADER AND DISCOVERY (SHARED UTILITIES)
@@ -100,6 +121,57 @@ def parse_game_list(option_value: str | None) -> list[str] | None:
     items = [item for item in items if item]
     return items or None
 
+def normalize_game_name(game_name: str) -> str:
+    """Normalizes game names so aliases like montezuma_revenge still match."""
+    return game_name.lower().replace("_", "").replace("-", "").strip()
+
+def parse_folder_game_scope(config_file: Path) -> set[str]:
+    """
+    Parse folder game scope config (.pytest-game).
+    Supports comma-separated values and line-separated values.
+    """
+    content = config_file.read_text(encoding="utf-8")
+    normalized_games = set()
+    for line in content.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        for token in line.split(","):
+            normalized = normalize_game_name(token)
+            if normalized:
+                normalized_games.add(normalized)
+    return normalized_games
+
+def discover_folder_game_scopes(tests_dir: Path) -> dict[Path, set[str]]:
+    """
+    Discover all folder-level game scopes in tests via `.pytest-game` files.
+    The config file applies to its containing folder and all descendants.
+    """
+    scope_files = tests_dir.rglob(".pytest-game")
+    scopes = {}
+    for scope_file in scope_files:
+        folder = scope_file.parent.resolve()
+        games = parse_folder_game_scope(scope_file)
+        if games:
+            scopes[folder] = games
+    return scopes
+
+def get_required_games_for_test(
+    test_path: Path,
+    folder_game_scopes: dict[Path, set[str]],
+) -> set[str] | None:
+    """Return nearest folder scope for a test file, if one exists."""
+    resolved = test_path.resolve()
+    best_match = None
+    best_depth = -1
+    for folder, games in folder_game_scopes.items():
+        if folder == resolved or folder in resolved.parents:
+            depth = len(folder.parts)
+            if depth > best_depth:
+                best_match = games
+                best_depth = depth
+    return best_match
+
 def pytest_generate_tests(metafunc):
     """
     Dynamically parametrizes any test that uses the 'game_name' fixture.
@@ -112,25 +184,23 @@ def pytest_generate_tests(metafunc):
 
     if 'game_name' in metafunc.fixturenames:
         specified_games = parse_game_list(metafunc.config.getoption("--game"))
-        if specified_games:
-            metafunc.parametrize("game_name", specified_games)
+
+        test_path = Path(str(getattr(metafunc.definition, "path", metafunc.definition.fspath)))
+        folder_game_scopes = discover_folder_game_scopes(Path(__file__).parent)
+        required_games = get_required_games_for_test(test_path, folder_game_scopes)
+
+        if is_regression_test:
+            game_list = discover_games_with_snapshots()
         else:
-            if is_regression_test:
-                # For regression tests, only use games that have snapshots.
-                game_list = discover_games_with_snapshots()
-                if not game_list:
-                    # If no games with snapshots are found, we should probably skip
-                    # all regression tests. We can do this by parametrizing with an
-                    # empty list, but it's better to let pytest handle it.
-                    # A single dummy value and a skip inside the test might be better.
-                    pass
-            else:
-                game_list = discover_games()
-            
-            if is_regression_test:
-                metafunc.parametrize("game_name", discover_games_with_snapshots())
-            else:
-                metafunc.parametrize("game_name", discover_games())
+            game_list = discover_games()
+
+        if specified_games:
+            game_list = [game for game in game_list if normalize_game_name(game) in {normalize_game_name(g) for g in specified_games}]
+
+        if required_games:
+            game_list = [game for game in game_list if normalize_game_name(game) in required_games]
+
+        metafunc.parametrize("game_name", game_list)
 
 def load_game_environment(game_name: str) -> JaxEnvironment:
     """Dynamically loads a game environment from a.py file."""

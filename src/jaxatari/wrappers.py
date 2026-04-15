@@ -226,7 +226,7 @@ class AtariWrapper(JaxatariWrapper):
         # store actual reward in info dict before clipping
         info_dict["env_reward"] = reward
 
-        truncated = jnp.where(state.step + 1 >= self.max_frames_per_episode, True, False)
+        truncated = (state.step + 1 >= self.max_frames_per_episode)
 
         return obs, next_state, reward, terminated, truncated, info_dict
 
@@ -260,6 +260,9 @@ class ObjectCentricWrapper(JaxatariWrapper):
                 high_arr = np.broadcast_to(leaf_space.high, leaf_space.shape).flatten()
                 lows.append(low_arr)
                 highs.append(high_arr)
+            elif isinstance(leaf_space, spaces.Discrete):
+                lows.append(np.array([0], dtype=leaf_space.dtype))
+                highs.append(np.array([leaf_space.n - 1], dtype=leaf_space.dtype))
             else:
                 raise TypeError(f"Unsupported space type for flattening: {type(leaf_space)}")
 
@@ -573,6 +576,9 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
                 high_arr = np.broadcast_to(leaf_space.high, leaf_space.shape).flatten()
                 lows.append(low_arr)
                 highs.append(high_arr)
+            elif isinstance(leaf_space, spaces.Discrete):
+                lows.append(np.array([0], dtype=leaf_space.dtype))
+                highs.append(np.array([leaf_space.n - 1], dtype=leaf_space.dtype))
             else:
                 raise TypeError(f"Unsupported space type for flattening: {type(leaf_space)}")
         
@@ -955,6 +961,7 @@ class LogWrapper(JaxatariWrapper):
         new_episode_length = state.episode_lengths + 1
         # use env_done for logging when available (e.g. to ignore episodic_life)
         done = info.get("env_done", jnp.bool_(terminated))
+        done = jnp.logical_or(done, truncated) # truncated episodes are considered done for logging purposes
         state = LogState(
             atari_state=atari_state,
             episode_returns=jnp.where(done, jnp.float32(0), jnp.float32(new_episode_return)),
