@@ -97,6 +97,7 @@ class Enduro2Constants(AutoDerivedConstants):
 
     # Acceleration and Braking
     acceleration_slow_down_threshold: float = struct.field(pytree_node=False, default=45.0)
+    render_full_road: bool = struct.field(pytree_node=False, default=False)
     
     window_offset_left: int = struct.field(pytree_node=False, default=8)
     window_offset_bottom: int = struct.field(pytree_node=False, default=55)
@@ -231,22 +232,7 @@ class Enduro2Renderer(JAXGameRenderer):
         raster = jnp.where(grass_mask, self.grass_id, raster)
         
         # 3. Draw curved track with perspective
-        left_xs, right_xs = self._generate_viewable_track_lookup(state.track_top_x, state.track_top_x_curve_offset)
-        
-        # We need to map yy to track rows (0 to track_height-1)
-        # track starts at sky_height and ends at game_window_height - 1
-        track_row = (yy - self.consts.sky_height).astype(jnp.int32)
-        
-        # Boundary check for track_row
-        is_track_row = (yy >= self.consts.sky_height) & (yy < self.consts.game_window_height - 1)
-        
-        # Get boundaries for each pixel's row
-        # Use jnp.take or simple indexing since it's vmapped/jitted over xx, yy
-        l_x = left_xs[jnp.clip(track_row, 0, self.consts.track_height - 1)]
-        r_x = right_xs[jnp.clip(track_row, 0, self.consts.track_height - 1)]
-        
-        track_mask = is_track_row & (xx >= l_x) & (xx <= r_x)
-        raster = jnp.where(track_mask, self.track_id, raster)
+        raster = self._render_track(raster, state, xx, yy)
         
         # 4. Render the lower background overlays
         raster = self.jr.render_at(raster, 0, self.consts.game_window_height - 1, self.SHAPE_MASKS['background_overlay'])
@@ -265,6 +251,36 @@ class Enduro2Renderer(JAXGameRenderer):
         
         # Convert ID raster to RGB
         return self.jr.render_from_palette(raster, self.PALETTE)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_track(self, raster: jnp.ndarray, state: Enduro2GameState, xx: jnp.ndarray, yy: jnp.ndarray) -> jnp.ndarray:
+        """
+        Renders the track. If render_full_road is True, it renders the full road area.
+        Otherwise, it renders only the side boundaries of the road.
+        """
+        left_xs, right_xs = self._generate_viewable_track_lookup(state.track_top_x, state.track_top_x_curve_offset)
+        
+        # We need to map yy to track rows (0 to track_height-1)
+        # track starts at sky_height and ends at game_window_height - 1
+        track_row = (yy - self.consts.sky_height).astype(jnp.int32)
+        
+        # Boundary check for track_row
+        is_track_row = (yy >= self.consts.sky_height) & (yy < self.consts.game_window_height - 1)
+        
+        # Get boundaries for each pixel's row
+        l_x = left_xs[jnp.clip(track_row, 0, self.consts.track_height - 1)]
+        r_x = right_xs[jnp.clip(track_row, 0, self.consts.track_height - 1)]
+        
+        # Determine the track mask based on the render_full_road flag
+        track_mask = jax.lax.cond(
+            self.consts.render_full_road,
+            lambda: (xx >= l_x) & (xx <= r_x),
+            lambda: (xx == l_x) | (xx == r_x)
+        )
+        
+        track_mask = is_track_row & track_mask
+        raster = jnp.where(track_mask, self.track_id, raster)
+        return raster
 
     @partial(jax.jit, static_argnums=(0,))
     def _generate_viewable_track_lookup(

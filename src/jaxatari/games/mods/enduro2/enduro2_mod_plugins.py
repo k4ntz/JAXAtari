@@ -11,6 +11,14 @@ class StartInCurveMod(JaxAtariInternalModPlugin):
         "straight_km_start": 0.0
     }
 
+class FilledRoadMod(JaxAtariInternalModPlugin):
+    """
+    Displays the full filled road instead of only the side.
+    """
+    constants_overrides = {
+        "render_full_road": True
+    }
+
 class SpeedAndXPosHudMod(JaxAtariInternalModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def _render_cars_to_pass(self, raster: jnp.ndarray, state) -> jnp.ndarray:
