@@ -89,16 +89,14 @@ class Enduro2Constants(AutoDerivedConstants):
     player_y_start: float = struct.field(pytree_node=False, default=144.0)
     
     steering_speed: float = struct.field(pytree_node=False, default=2.0)
-    drift_per_frame: float = struct.field(pytree_node=False, default=2.5 / 60.0)
+    drift_per_frame: float = struct.field(pytree_node=False, default=2.5 / 60.0) # Reduced from 2.5
+    drift_speed_scaling: float = struct.field(pytree_node=False, default=0.2) # Parameter to control how much speed affects drift
     max_speed: float = struct.field(pytree_node=False, default=120.0)
     min_speed: float = struct.field(pytree_node=False, default=6.0)
     frame_rate: float = struct.field(pytree_node=False, default=60.0)
 
     # Acceleration and Braking
-    acceleration_per_frame: float = struct.field(pytree_node=False, default=10.5 / 60.0)
-    slower_acceleration_per_frame: float = struct.field(pytree_node=False, default=3.75 / 60.0)
-    acceleration_slow_down_threshold: float = struct.field(pytree_node=False, default=46.0)
-    breaking_per_frame: float = struct.field(pytree_node=False, default=30.0 / 60.0)
+    acceleration_slow_down_threshold: float = struct.field(pytree_node=False, default=45.0)
     
     window_offset_left: int = struct.field(pytree_node=False, default=8)
     window_offset_bottom: int = struct.field(pytree_node=False, default=55)
@@ -463,15 +461,19 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
         is_fire = (atari_action == Action.FIRE) | (atari_action == Action.LEFTFIRE) | (atari_action == Action.RIGHTFIRE)
         is_down = (atari_action == Action.DOWN) | (atari_action == Action.DOWNLEFT) | (atari_action == Action.DOWNRIGHT)
         
-        # Decide acceleration based on current speed
-        accel = jnp.where(
-            state.player_speed < self.consts.acceleration_slow_down_threshold,
-            self.consts.acceleration_per_frame,
-            self.consts.slower_acceleration_per_frame
-        )
+        # Acceleration: if speed <= 45: +2, else +1
+        accel_amount = jnp.where(state.player_speed <= self.consts.acceleration_slow_down_threshold, 2.0, 1.0)
         
-        # Speed delta: accelerate if FIRE, brake if DOWN, otherwise slow decay (friction)
-        speed_delta = jnp.where(is_fire, accel, jnp.where(is_down, -self.consts.breaking_per_frame, -0.01))
+        # Speed delta: -1 every step if DOWN, +accel every 8 steps if FIRE, otherwise 0
+        speed_delta = jnp.where(
+            is_down,
+            -1.0,
+            jnp.where(
+                is_fire & (state.step_count % 8 == 0),
+                accel_amount,
+                0.0
+            )
+        )
         
         new_speed = jnp.clip(state.player_speed + speed_delta, self.consts.min_speed, self.consts.max_speed)
 
@@ -489,7 +491,9 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
         steering_delta = jnp.where(is_left, -self.consts.steering_speed, jnp.where(is_right, self.consts.steering_speed, 0.0))
         
         # Drift delta (opposes curve)
-        drift_delta = -curvature * self.consts.drift_per_frame * (new_speed / self.consts.min_speed)
+        # Drift increases slightly with speed
+        speed_factor = 1.0 + self.consts.drift_speed_scaling * ((new_speed - self.consts.min_speed) / (self.consts.max_speed - self.consts.min_speed))
+        drift_delta = -curvature * self.consts.drift_per_frame * speed_factor
 
         new_player_x = jnp.clip(state.player_x + steering_delta + drift_delta, 0, self.consts.screen_width - 16)
 

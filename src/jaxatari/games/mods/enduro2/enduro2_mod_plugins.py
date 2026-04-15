@@ -3,6 +3,14 @@ import jax.numpy as jnp
 from functools import partial
 from jaxatari.modification import JaxAtariInternalModPlugin
 
+class StartInCurveMod(JaxAtariInternalModPlugin):
+    """
+    Starts the game directly in the curve by setting straight_km_start to 0.
+    """
+    constants_overrides = {
+        "straight_km_start": 0.0
+    }
+
 class SpeedAndXPosHudMod(JaxAtariInternalModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def _render_cars_to_pass(self, raster: jnp.ndarray, state) -> jnp.ndarray:

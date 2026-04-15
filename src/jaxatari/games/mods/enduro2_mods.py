@@ -1,5 +1,5 @@
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.enduro2.enduro2_mod_plugins import SpeedAndXPosHudMod
+from jaxatari.games.mods.enduro2.enduro2_mod_plugins import SpeedAndXPosHudMod, StartInCurveMod
 
 class Enduro2EnvMod(JaxAtariModController):    
     """
@@ -7,6 +7,7 @@ class Enduro2EnvMod(JaxAtariModController):
     """
     REGISTRY = {
         "hud": SpeedAndXPosHudMod,
+        "start_in_curve": StartInCurveMod,
     }
 
     def __init__(self,
