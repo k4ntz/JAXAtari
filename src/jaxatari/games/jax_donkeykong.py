@@ -2240,9 +2240,7 @@ class DonkeyKongRenderer(JAXGameRenderer):
 
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "donkeyKong")
-        if not os.path.exists(sprite_path):
-            sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites", "donkeyKong")
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "donkeykong")
         asset_config = [
             {"name": "background", "type": "background", "file": "donkeyKong_background_level_1.npy"},
             {"name": "background_level_2", "type": "single", "file": "donkeyKong_background_level_2.npy"},
