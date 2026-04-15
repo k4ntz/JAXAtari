@@ -39,6 +39,7 @@ GAME_MODULES = {
     "casino": "jaxatari.games.jax_casino",
     "centipede": "jaxatari.games.jax_centipede",
     "choppercommand": "jaxatari.games.jax_choppercommand",
+    "donkeykong": "jaxatari.games.jax_donkeykong",
     "enduro": "jaxatari.games.jax_enduro",
     "fishingderby": "jaxatari.games.jax_fishingderby",
     "flagcapture": "jaxatari.games.jax_flagcapture",
