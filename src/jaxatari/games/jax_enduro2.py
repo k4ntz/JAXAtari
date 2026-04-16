@@ -208,9 +208,10 @@ class Enduro2Constants(AutoDerivedConstants):
     snow_weather_index: int = struct.field(pytree_node=False, default=3)
     steering_snow_factor: float = struct.field(pytree_node=False, default=2.0)
     
-    # Snow colors
+    # Weather colors
     snow_grass_color: tuple = struct.field(pytree_node=False, default=(236, 236, 236))
     snow_mountain_color: tuple = struct.field(pytree_node=False, default=(214, 214, 214))
+    mountain_color: tuple = struct.field(pytree_node=False, default=(136, 146, 62))
 
     # UI Positions
     info_box_x_pos: int = struct.field(pytree_node=False, default=48)
@@ -229,6 +230,7 @@ class Enduro2Constants(AutoDerivedConstants):
         {'name': 'score_box', 'type': 'single', 'file': 'backgrounds/score_box.npy'},
         {'name': 'sky_color', 'type': 'procedural', 'data': jnp.array([[[45, 50, 184, 255]]], dtype=jnp.uint8)},
         {'name': 'grass_color', 'type': 'procedural', 'data': jnp.array([[[0, 68, 0, 255]]], dtype=jnp.uint8)},
+        {'name': 'mountain_color', 'type': 'procedural', 'data': jnp.array([[[136, 146, 62, 255]]], dtype=jnp.uint8)},
         {'name': 'snow_grass_color', 'type': 'procedural', 'data': jnp.array([[[236, 236, 236, 255]]], dtype=jnp.uint8)},
         {'name': 'snow_mountain_color', 'type': 'procedural', 'data': jnp.array([[[214, 214, 214, 255]]], dtype=jnp.uint8)},
         {'name': 'track_colors', 'type': 'procedural', 'data': jnp.array([[list(c) + [255] for c in [
@@ -361,7 +363,7 @@ class Enduro2Renderer(JAXGameRenderer):
         # Snow color IDs
         self.snow_grass_id = self.COLOR_TO_ID.get(self.consts.snow_grass_color, 0)
         self.snow_mountain_id = self.COLOR_TO_ID.get(self.consts.snow_mountain_color, 0)
-        self.mountain_id = self.COLOR_TO_ID.get((111, 111, 111), 0)
+        self.mountain_id = self.COLOR_TO_ID.get(self.consts.mountain_color, 0)
 
         # Store Odometer Sheet ID Masks
         self.black_digit_sheet_mask = self.SHAPE_MASKS['black_digit_array']
