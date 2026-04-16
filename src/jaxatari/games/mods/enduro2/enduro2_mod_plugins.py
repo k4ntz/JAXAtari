@@ -11,6 +11,15 @@ class StartInCurveMod(JaxAtariInternalModPlugin):
         "straight_km_start": 0.0
     }
 
+class StartInMaxCurveMod(JaxAtariInternalModPlugin):
+    """
+    Starts the game in a full curve.
+    """
+    constants_overrides = {
+        "straight_km_start": 0.0,
+        "initial_track_top_x_curve_offset": 50.0
+    }
+
 class FilledRoadMod(JaxAtariInternalModPlugin):
     """
     Displays the full filled road instead of only the side.

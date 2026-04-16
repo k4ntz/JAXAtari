@@ -18,13 +18,13 @@ import jaxatari.spaces as spaces
 
 @struct.dataclass
 class Enduro2GameState:
-    player_x: jnp.ndarray
+    player_x: jnp.ndarray  # Float position
     player_y: jnp.ndarray
     step_count: jnp.ndarray
     player_speed: jnp.ndarray
     distance: jnp.ndarray
     cars_to_pass: jnp.ndarray
-    track_top_x: jnp.ndarray
+    track_top_x: jnp.ndarray  # Float position
     track_top_x_curve_offset: jnp.ndarray
 
 @struct.dataclass
@@ -88,12 +88,13 @@ class Enduro2Constants(AutoDerivedConstants):
     player_x_start: float = struct.field(pytree_node=False, default=76.0)
     player_y_start: float = struct.field(pytree_node=False, default=144.0)
     
-    steering_speed: float = struct.field(pytree_node=False, default=2.0)
-    drift_per_frame: float = struct.field(pytree_node=False, default=2.5 / 60.0) # Reduced from 2.5
-    drift_speed_scaling: float = struct.field(pytree_node=False, default=0.2) # Parameter to control how much speed affects drift
+    horizontal_movement_slope: float = struct.field(pytree_node=False, default=0.015)
+    horizontal_movement_offset: float = struct.field(pytree_node=False, default=0.2)
     max_speed: float = struct.field(pytree_node=False, default=120.0)
     min_speed: float = struct.field(pytree_node=False, default=6.0)
+    initial_speed: float = struct.field(pytree_node=False, default=120.0)
     frame_rate: float = struct.field(pytree_node=False, default=60.0)
+    centripedal_shift_ratio: float = struct.field(pytree_node=False, default=256.0)
 
     # Acceleration and Braking
     acceleration_slow_down_threshold: float = struct.field(pytree_node=False, default=45.0)
@@ -111,6 +112,7 @@ class Enduro2Constants(AutoDerivedConstants):
     min_track_section_length: float = struct.field(pytree_node=False, default=1.0)
     max_track_section_length: float = struct.field(pytree_node=False, default=15.0)
     track_max_top_x_offset: float = struct.field(pytree_node=False, default=50.0)
+    initial_track_top_x_curve_offset: float = struct.field(pytree_node=False, default=0.0)
     curve_rate: float = struct.field(pytree_node=False, default=0.05)
 
     # UI Positions
@@ -247,7 +249,7 @@ class Enduro2Renderer(JAXGameRenderer):
         if player_mask.ndim == 3:
              player_mask = player_mask[0]
              
-        raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
+        raster = self.jr.render_at(raster, state.player_x.astype(jnp.int32), state.player_y, player_mask)
         
         # Convert ID raster to RGB
         return self.jr.render_from_palette(raster, self.PALETTE)
@@ -285,7 +287,7 @@ class Enduro2Renderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def _generate_viewable_track_lookup(
             self,
-            top_x: jnp.int32,
+            top_x: jnp.ndarray,
             top_x_curve_offset: jnp.float32
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
         """
@@ -302,8 +304,8 @@ class Enduro2Renderer(JAXGameRenderer):
         base_left_curve = self.consts.precomputed_left_curves[curve_index]
         base_right_curve = self.consts.precomputed_right_curves[curve_index]
 
-        final_left_xs = base_left_curve + top_x
-        final_right_xs = base_right_curve + top_x
+        final_left_xs = base_left_curve + top_x.astype(jnp.int32)
+        final_right_xs = base_right_curve + top_x.astype(jnp.int32)
 
         return final_left_xs, final_right_xs
 
@@ -460,11 +462,11 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
             player_x=jnp.array(self.consts.player_x_start, dtype=jnp.float32),
             player_y=jnp.array(self.consts.player_y_start, dtype=jnp.float32),
             step_count=jnp.array(0, dtype=jnp.int32),
-            player_speed=jnp.array(self.consts.min_speed, dtype=jnp.float32),
+            player_speed=jnp.array(self.consts.initial_speed, dtype=jnp.float32),
             distance=jnp.array(0.0, dtype=jnp.float32),
             cars_to_pass=jnp.array(200, dtype=jnp.int32),
-            track_top_x=jnp.array(84, dtype=jnp.int32),
-            track_top_x_curve_offset=jnp.array(0.0, dtype=jnp.float32)
+            track_top_x=jnp.array(84.0, dtype=jnp.float32),
+            track_top_x_curve_offset=jnp.array(self.consts.initial_track_top_x_curve_offset, dtype=jnp.float32)
         )
         return self._get_observation(state), state
 
@@ -497,26 +499,26 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
         is_left = (atari_action == Action.LEFT) | (atari_action == Action.LEFTFIRE) | (atari_action == Action.DOWNLEFT)
         is_right = (atari_action == Action.RIGHT) | (atari_action == Action.RIGHTFIRE) | (atari_action == Action.DOWNRIGHT)
 
-        # Get curvature from whole_track
+        # Steering delta (speed-dependent)
+        steering_speed = self.consts.horizontal_movement_slope * new_speed + self.consts.horizontal_movement_offset
+        steering_delta = jnp.where(is_left, -steering_speed, jnp.where(is_right, steering_speed, 0.0))
+
+        # Centripetal drift (pushes car away from curve proportional to visual curvature and speed)
+        # Curve ratio is from -1.0 to 1.0 based on current visual track curve
+        curve_ratio = state.track_top_x_curve_offset / self.consts.track_max_top_x_offset
+        drift_delta = -curve_ratio * (new_speed / self.consts.centripedal_shift_ratio)
+
+        # Apply horizontal movement
+        new_player_x = jnp.clip(state.player_x + steering_delta + drift_delta, 0.0, self.consts.screen_width - 16.0)
+        # 3. Handle Track Curvature (Top X and Offset)
+        # Track top_x moves opposite to player movement on X axis
+        new_track_top_x = 84.0 + self.consts.player_x_start - new_player_x
+
+        # Get curvature from whole_track for track bending
         track_starts = self.consts.whole_track[:, 1]
         directions = self.consts.whole_track[:, 0]
         segment_index = jnp.searchsorted(track_starts, state.distance, side='right') - 1
         curvature = directions[segment_index]
-
-        # Steering delta
-        steering_delta = jnp.where(is_left, -self.consts.steering_speed, jnp.where(is_right, self.consts.steering_speed, 0.0))
-        
-        # Drift delta (opposes curve)
-        # Drift increases slightly with speed
-        speed_factor = 1.0 + self.consts.drift_speed_scaling * ((new_speed - self.consts.min_speed) / (self.consts.max_speed - self.consts.min_speed))
-        drift_delta = -curvature * self.consts.drift_per_frame * speed_factor
-
-        new_player_x = jnp.clip(state.player_x + steering_delta + drift_delta, 0, self.consts.screen_width - 16)
-
-        # 3. Handle Track Curvature (Top X and Offset)
-        # Track top_x moves opposite to player movement on X axis
-        # Base top_x is 84 (center of game window)
-        new_track_top_x = (84 + self.consts.player_x_start - new_player_x).astype(jnp.int32)
 
         # Target offset based on curvature
         target_offset = curvature * self.consts.track_max_top_x_offset
