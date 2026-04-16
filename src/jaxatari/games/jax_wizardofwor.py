@@ -1,14 +1,77 @@
-from functools import partial
+from jax._src.pjit import JitWrapped
 import os
-from typing import NamedTuple, Tuple
+from functools import partial
+from typing import Tuple, NamedTuple
 import jax
+import jax.lax
 import jax.numpy as jnp
 import chex
+from flax import struct
 
 import jaxatari.spaces as spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
-import jaxatari.rendering.jax_rendering_utils_legacy as jr
+from jaxatari.rendering import jax_rendering_utils as render_utils
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
+
+def _get_default_asset_config() -> tuple:
+    return (
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        # Characters: each 7 frames (4 walk + 3 death) as 'group'
+        {'name': 'player', 'type': 'group', 'files': [
+            'player/player_0.npy', 'player/player_1.npy',
+            'player/player_2.npy', 'player/player_3.npy',
+            'player/death_0.npy', 'player/death_1.npy', 'player/death_2.npy',
+        ]},
+        {'name': 'burwor', 'type': 'group', 'files': [
+            'enemies/burwor/burwor_0.npy', 'enemies/burwor/burwor_1.npy',
+            'enemies/burwor/burwor_2.npy', 'enemies/burwor/burwor_3.npy',
+            'enemies/burwor/death_0.npy', 'enemies/burwor/death_1.npy',
+            'enemies/burwor/death_2.npy',
+        ]},
+        {'name': 'garwor', 'type': 'group', 'files': [
+            'enemies/garwor/garwor_0.npy', 'enemies/garwor/garwor_1.npy',
+            'enemies/garwor/garwor_2.npy', 'enemies/garwor/garwor_3.npy',
+            'enemies/garwor/death_0.npy', 'enemies/garwor/death_1.npy',
+            'enemies/garwor/death_2.npy',
+        ]},
+        {'name': 'thorwor', 'type': 'group', 'files': [
+            'enemies/thorwor/thorwor_0.npy', 'enemies/thorwor/thorwor_1.npy',
+            'enemies/thorwor/thorwor_2.npy', 'enemies/thorwor/thorwor_3.npy',
+            'enemies/thorwor/death_0.npy', 'enemies/thorwor/death_1.npy',
+            'enemies/thorwor/death_2.npy',
+        ]},
+        {'name': 'worluk', 'type': 'group', 'files': [
+            'enemies/worluk/worluk_0.npy', 'enemies/worluk/worluk_1.npy',
+            'enemies/worluk/worluk_2.npy', 'enemies/worluk/worluk_3.npy',
+            'enemies/worluk/death_0.npy', 'enemies/worluk/death_1.npy',
+            'enemies/worluk/death_2.npy',
+        ]},
+        {'name': 'wizard', 'type': 'group', 'files': [
+            'enemies/wizard/wizard_0.npy', 'enemies/wizard/wizard_1.npy',
+            'enemies/wizard/wizard_2.npy', 'enemies/wizard/wizard_3.npy',
+            'enemies/wizard/death_0.npy', 'enemies/wizard/death_1.npy',
+            'enemies/wizard/death_2.npy',
+        ]},
+        # Enemy bullets: 6 entries indexed by enemy type (0=NONE dummy, 1=BURWOR, ..., 5=WIZARD)
+        {'name': 'enemy_bullet', 'type': 'group', 'files': [
+            'bullets/burwor.npy', 'bullets/burwor.npy',
+            'bullets/garwor.npy', 'bullets/thorwor.npy',
+            'bullets/worluk.npy', 'bullets/wizard.npy',
+        ]},
+        # Player bullet
+        {'name': 'bullet', 'type': 'single', 'file': 'bullet.npy'},
+        # Walls
+        {'name': 'wall_horizontal', 'type': 'single', 'file': 'wall_horizontal.npy'},
+        {'name': 'wall_vertical', 'type': 'single', 'file': 'wall_vertical.npy'},
+        # Radar blips: 6 entries indexed by enemy type (0=empty, 1=burwor, ..., 5=wizard)
+        {'name': 'radar_blip', 'type': 'group', 'files': [
+            'radar/radar_empty.npy', 'radar/radar_burwor.npy',
+            'radar/radar_garwor.npy', 'radar/radar_thorwor.npy',
+            'radar/radar_worluk.npy', 'radar/radar_wizard.npy',
+        ]},
+        # Score digits
+        {'name': 'digits', 'type': 'digits', 'pattern': 'digits/score_{}.npy'},
+    )
 
 
 #
@@ -29,10 +92,10 @@ class EntityPosition(NamedTuple):
     direction: int  # Richtung aus UP, DOWN, LEFT, RIGHT
 
 
-class WizardOfWorConstants(NamedTuple):
+class WizardOfWorConstants(struct.PyTreeNode):
     # Window size
-    WINDOW_WIDTH: int = 160
-    WINDOW_HEIGHT: int = 210
+    WINDOW_WIDTH: int = struct.field(pytree_node=False, default=160)
+    WINDOW_HEIGHT: int = struct.field(pytree_node=False, default=210)
 
     # 4 tuples for each direction
     BULLET_ORIGIN_UP: Tuple[int, int] = (4, 1)
@@ -136,7 +199,7 @@ class WizardOfWorConstants(NamedTuple):
     # IMPORTANT: About the coordinates
     # The board goes from 0,0 (top-left) to 110,60 (bottom-right)
     BOARD_SIZE: Tuple[int, int] = (110, 60)  # Size of the game board in tiles
-
+    
     # Rendering
     DEATH_ANIMATION_STEPS = [10, 20]
     PLAYER_SIZE: Tuple[int, int] = (8, 8)
@@ -1745,207 +1808,120 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
 
 
 class WizardOfWorRenderer(JAXGameRenderer):
-    def __init__(self, consts: WizardOfWorConstants = None):
-        super().__init__()
+    def __init__(self, consts: WizardOfWorConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or WizardOfWorConstants()
+        super().__init__(self.consts)
+
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.WINDOW_HEIGHT, self.consts.WINDOW_WIDTH),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
+
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        base_sprite_dir = os.path.join("src", "jaxatari", "games", "sprites")
+        sprite_path = os.path.join(base_sprite_dir, "wizardofwor") # render_utils.get_base_sprite_dir()
+
+        final_asset_config = list(_get_default_asset_config())
+
         (
-            self.SPRITE_BG,
-            self.SPRITE_PLAYER,
-            self.SPRITE_BURWOR,
-            self.SPRITE_GARWOR,
-            self.SPRITE_THORWOR,
-            self.SPRITE_WORLUK,
-            self.SPRITE_WIZARD,
-            self.SPRITE_BULLET,
-            self.SPRITE_ENEMY_BULLET,
-            self.SCORE_DIGIT_SPRITES,
-            self.SPRITE_WALL_HORIZONTAL,
-            self.SPRITE_WALL_VERTICAL,
-            self.SPRITE_RADAR_BLIP,
-            self.SCORE_DIGIT_SPRITES
-        ) = self.load_sprites()
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
-    @partial(jax.jit, static_argnums=(0,))
-    def load_sprites(self):
-        MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+        self._cache_sprite_references()
 
-        bg = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/background.npy"))
-        player0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/player/player_0.npy"))
-        player1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/player/player_1.npy"))
-        player2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/player/player_2.npy"))
-        player3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/player/player_3.npy"))
-        player_death0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/player/death_0.npy"))
-        player_death1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/player/death_1.npy"))
-        player_death2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/player/death_2.npy"))
-        burwor0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/burwor/burwor_0.npy"))
-        burwor1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/burwor/burwor_1.npy"))
-        burwor2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/burwor/burwor_2.npy"))
-        burwor3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/burwor/burwor_3.npy"))
-        burwor_death0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/burwor/death_0.npy"))
-        burwor_death1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/burwor/death_1.npy"))
-        burwor_death2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/burwor/death_2.npy"))
-        burwor_bullet = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/bullets/burwor.npy"))
-        garwor0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/garwor/garwor_0.npy"))
-        garwor1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/garwor/garwor_1.npy"))
-        garwor2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/garwor/garwor_2.npy"))
-        garwor3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/garwor/garwor_3.npy"))
-        garwor_death0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/garwor/death_0.npy"))
-        garwor_death1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/garwor/death_1.npy"))
-        garwor_death2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/garwor/death_2.npy"))
-        garwor_bullet = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/bullets/garwor.npy"))
-        thorwor0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/thorwor/thorwor_0.npy"))
-        thorwor1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/thorwor/thorwor_1.npy"))
-        thorwor2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/thorwor/thorwor_2.npy"))
-        thorwor3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/thorwor/thorwor_3.npy"))
-        thorwor_death0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/thorwor/death_0.npy"))
-        thorwor_death1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/thorwor/death_1.npy"))
-        thorwor_death2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/thorwor/death_2.npy"))
-        thorwor_bullet = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/bullets/thorwor.npy"))
-        worluk0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/worluk/worluk_0.npy"))
-        worluk1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/worluk/worluk_1.npy"))
-        worluk2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/worluk/worluk_2.npy"))
-        worluk3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/worluk/worluk_3.npy"))
-        worluk_death0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/worluk/death_0.npy"))
-        worluk_death1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/worluk/death_1.npy"))
-        worluk_death2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/worluk/death_2.npy"))
-        worluk_bullet = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/bullets/worluk.npy"))
-        wizard0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/wizard/wizard_0.npy"))
-        wizard1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/wizard/wizard_1.npy"))
-        wizard2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/wizard/wizard_2.npy"))
-        wizard3 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/wizard/wizard_3.npy"))
-        wizard_death0 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/wizard/death_0.npy"))
-        wizard_death1 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/wizard/death_1.npy"))
-        wizard_death2 = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/enemies/wizard/death_2.npy"))
-        wizard_bullet = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/bullets/wizard.npy"))
-        bullet = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/bullet.npy"))
-        wall_horizontal = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/wall_horizontal.npy"))
-        wall_vertical = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/wall_vertical.npy"))
-        radar_blip_empty = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/radar/radar_empty.npy"))
-        radar_blip_burwor = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/radar/radar_burwor.npy"))
-        radar_blip_garwor = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/radar/radar_garwor.npy"))
-        radar_blip_thorwor = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/radar/radar_thorwor.npy"))
-        radar_blip_worluk = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/radar/radar_worluk.npy"))
-        radar_blip_wizard = jr.loadFrame(os.path.join(MODULE_DIR, "sprites/wizardofwor/radar/radar_wizard.npy"))
+    def _cache_sprite_references(self):
+        # Character stacks: each (7, H, W) — frames 0-3 walk, 4-6 death
+        self.PLAYER_STACK = self.SHAPE_MASKS['player']
+        self.PLAYER_OFFSET = self.FLIP_OFFSETS['player']
 
-        SPRITE_PLAYER = jnp.stack([player0, player1, player2, player3, player_death0, player_death1, player_death2],
-                                  axis=0)
-        SPRITE_BURWOR = jnp.stack([burwor0, burwor1, burwor2, burwor3, burwor_death0, burwor_death1, burwor_death2],
-                                  axis=0)
-        SPRITE_GARWOR = jnp.stack([garwor0, garwor1, garwor2, garwor3, garwor_death0, garwor_death1, garwor_death2],
-                                  axis=0)
-        SPRITE_THORWOR = jnp.stack(
-            [thorwor0, thorwor1, thorwor2, thorwor3, thorwor_death0, thorwor_death1, thorwor_death2], axis=0)
-        SPRITE_WORLUK = jnp.stack([worluk0, worluk1, worluk2, worluk3, worluk_death0, worluk_death1, worluk_death2],
-                                  axis=0)
-        SPRITE_WIZARD = jnp.stack([wizard0, wizard1, wizard2, wizard3, wizard_death0, wizard_death1, wizard_death2],
-                                  axis=0)
-        SPRITE_RADAR_BLIP = jnp.stack([radar_blip_empty, radar_blip_burwor, radar_blip_garwor,
-                                       radar_blip_thorwor, radar_blip_worluk, radar_blip_wizard], axis=0)
+        # Build unified enemy mega-stack for efficient JIT indexing by enemy_type
+        # Index: 0=dummy(ENEMY_NONE), 1=BURWOR, 2=GARWOR, 3=THORWOR, 4=WORLUK, 5=WIZARD
+        character_names = ['player', 'burwor', 'garwor', 'thorwor', 'worluk', 'wizard']
+        character_stacks = [self.SHAPE_MASKS[n] for n in character_names]
+        character_offsets = [self.FLIP_OFFSETS[n] for n in character_names]
 
-        SPRITE_BG = jnp.expand_dims(bg, axis=0)
-        SPRITE_BULLET = jnp.expand_dims(bullet, axis=0)
-        SPRITE_ENEMY_BULLET = jnp.stack(
-            [burwor_bullet, burwor_bullet, garwor_bullet, thorwor_bullet, worluk_bullet, wizard_bullet],
-            axis=0)
-        SPRITE_WALL_HORIZONTAL = jnp.expand_dims(wall_horizontal, axis=0)
-        SPRITE_WALL_VERTICAL = jnp.expand_dims(wall_vertical, axis=0)
+        # Pad all to same dimensions
+        max_h = max(s.shape[1] for s in character_stacks)
+        max_w = max(s.shape[2] for s in character_stacks)
 
-        SCORE_DIGIT_SPRITES = jr.load_and_pad_digits(
-            os.path.join(MODULE_DIR, "sprites/wizardofwor/digits/score_{}.npy"),
-            num_chars=10,
-        )
+        padded_stacks = []
+        for stack in character_stacks:
+            h, w = stack.shape[1], stack.shape[2]
+            padded = jnp.pad(
+                stack,
+                ((0, 0), (0, max_h - h), (0, max_w - w)),
+                mode="constant",
+                constant_values=self.jr.TRANSPARENT_ID
+            )
+            padded_stacks.append(padded)
 
-        return (
-            SPRITE_BG,
-            SPRITE_PLAYER,
-            SPRITE_BURWOR,
-            SPRITE_GARWOR,
-            SPRITE_THORWOR,
-            SPRITE_WORLUK,
-            SPRITE_WIZARD,
-            SPRITE_BULLET,
-            SPRITE_ENEMY_BULLET,
-            SCORE_DIGIT_SPRITES,
-            SPRITE_WALL_HORIZONTAL,
-            SPRITE_WALL_VERTICAL,
-            SPRITE_RADAR_BLIP,
-            SCORE_DIGIT_SPRITES
-        )
+        self.ALL_CHARACTER_STACKS = jnp.stack(padded_stacks)  # (6, 7, max_H, max_W)
+        self.ALL_CHARACTER_OFFSETS = jnp.stack(character_offsets)  # (6, 2)
+
+        # Other sprite references
+        self.ENEMY_BULLET_STACK = self.SHAPE_MASKS['enemy_bullet']  # (6, H, W)
+        self.BULLET_MASK = self.SHAPE_MASKS['bullet']  # (H, W)
+        self.WALL_H_MASK = self.SHAPE_MASKS['wall_horizontal']  # (H, W)
+        self.WALL_V_MASK = self.SHAPE_MASKS['wall_vertical']  # (H, W)
+        self.RADAR_BLIP_STACK = self.SHAPE_MASKS['radar_blip']  # (6, H, W)
+        self.DIGIT_MASKS = self.SHAPE_MASKS['digits']  # (10, H, W)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: WizardOfWorState):
-        # Raster initialisieren
-        raster = jr.create_initial_frame(width=self.consts.WINDOW_WIDTH, height=self.consts.WINDOW_HEIGHT)
-        raster = self._render_gameboard(raster=raster, state=state)
-        raster = self._render_radar(raster=raster, state=state)
-        raster = self._render_player(raster=raster, state=state)
-        raster = self._render_enemies(raster=raster, state=state)
-        raster = self._render_player_bullet(raster=raster, state=state)
-        raster = self._render_enemy_bullet(raster=raster, state=state)
-        raster = self._render_score(raster=raster, state=state)
-        raster = self._render_lives(raster=raster, state=state)
-        return raster
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+        raster = self._render_gameboard(raster, state)
+        raster = self._render_radar(raster, state)
+        raster = self._render_player(raster, state)
+        raster = self._render_enemies(raster, state)
+        raster = self._render_player_bullet(raster, state)
+        raster = self._render_enemy_bullet(raster, state)
+        raster = self._render_score(raster, state)
+        raster = self._render_lives(raster, state)
+        return self.jr.render_from_palette(raster, self.PALETTE)
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_gameboard(self, raster, state: WizardOfWorState):
-        def _render_gameboard_background(raster):
-            return jr.render_at(
-                raster=raster,
-                sprite_frame=jr.get_sprite_frame(self.SPRITE_BG, 0),
-                x=self.consts.BOARD_POSITION[0],
-                y=self.consts.BOARD_POSITION[1]
-            )
-
         def _render_gameboard_walls(raster, state: WizardOfWorState):
             walls_horizontal, walls_vertical = self.consts.get_walls_for_gameboard(gameboard=state.gameboard)
 
-            def _render_horizontal_wall(raster, x: int, y: int, is_wall: int):
-                def _get_raster_x_for_horizontal_wall(x):
-                    return self.consts.GAME_AREA_OFFSET[0] + (
-                            x * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[0]))
-
-                def _get_raster_y_for_horizontal_wall(y):
-                    return self.consts.GAME_AREA_OFFSET[1] + self.consts.TILE_SIZE[1] + (
-                            y * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[1]))
-
+            def _render_horizontal_wall(raster, x, y, is_wall):
+                wall_x = self.consts.GAME_AREA_OFFSET[0] + (
+                    x * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[0]))
+                wall_y = self.consts.GAME_AREA_OFFSET[1] + self.consts.TILE_SIZE[1] + (
+                    y * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[1]))
                 return jax.lax.cond(
                     is_wall > 0,
-                    lambda _: jr.render_at(
-                        raster=raster,
-                        sprite_frame=jr.get_sprite_frame(self.SPRITE_WALL_HORIZONTAL, 0),
-                        x=_get_raster_x_for_horizontal_wall(x),
-                        y=_get_raster_y_for_horizontal_wall(y)
-                    ),
+                    lambda _: self.jr.render_at(raster, wall_x, wall_y, self.WALL_H_MASK),
                     lambda _: raster,
+                    # raster
                     operand=None
                 )
 
             def _render_vertical_wall(raster, x, y, is_wall):
-                def _get_raster_x_for_vertical_wall(x):
-                    return self.consts.GAME_AREA_OFFSET[0] + self.consts.TILE_SIZE[0] + (
-                            x * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[0]))
-
-                def _get_raster_y_for_vertical_wall(y):
-                    return self.consts.GAME_AREA_OFFSET[1] + (
-                            y * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[1]))
-
+                wall_x = self.consts.GAME_AREA_OFFSET[0] + self.consts.TILE_SIZE[0] + (
+                    x * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[0]))
+                wall_y = self.consts.GAME_AREA_OFFSET[1] + (
+                    y * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[1]))
                 return jax.lax.cond(
                     is_wall > 0,
-                    lambda _: jr.render_at(
-                        raster=raster,
-                        sprite_frame=jr.get_sprite_frame(self.SPRITE_WALL_VERTICAL, 0),
-                        x=_get_raster_x_for_vertical_wall(x=x),
-                        y=_get_raster_y_for_vertical_wall(y=y)
-                    ),
-                    lambda _: raster,
-                    operand=None
+                    lambda r: self.jr.render_at(r, wall_x, wall_y, self.WALL_V_MASK),
+                    lambda r: r,
+                    raster
                 )
 
             def _render_horizontal_walls(raster, grid_vals):
                 H, W = grid_vals.shape[:2]
                 xs = jnp.repeat(jnp.arange(H)[:, None], W, axis=1)
                 ys = jnp.repeat(jnp.arange(W)[None, :], H, axis=0)
-
                 xs_f = xs.ravel()
                 ys_f = ys.ravel()
                 vals_f = grid_vals.reshape(-1, *grid_vals.shape[2:])
@@ -1956,20 +1932,13 @@ class WizardOfWorRenderer(JAXGameRenderer):
                     r = _render_horizontal_wall(raster=r, x=col, y=row, is_wall=v)
                     return r, None
 
-                init = raster
-                elems = (xs_f, ys_f, vals_f)
-                raster_final, _ = jax.lax.scan(
-                    f=body,
-                    init=init,
-                    xs=elems
-                )
+                raster_final, _ = jax.lax.scan(f=body, init=raster, xs=(xs_f, ys_f, vals_f))
                 return raster_final
 
             def _render_vertical_walls(raster, grid_vals):
                 H, W = grid_vals.shape[:2]
                 xs = jnp.repeat(jnp.arange(H)[:, None], W, axis=1)
                 ys = jnp.repeat(jnp.arange(W)[None, :], H, axis=0)
-
                 xs_f = xs.ravel()
                 ys_f = ys.ravel()
                 vals_f = grid_vals.reshape(-1, *grid_vals.shape[2:])
@@ -1980,254 +1949,243 @@ class WizardOfWorRenderer(JAXGameRenderer):
                     r = _render_vertical_wall(raster=r, x=col, y=row, is_wall=v)
                     return r, None
 
-                init = raster
-                elems = (xs_f, ys_f, vals_f)
-                raster_final, _ = jax.lax.scan(
-                    f=body,
-                    init=init,
-                    xs=elems
-                )
+                raster_final, _ = jax.lax.scan(f=body, init=raster, xs=(xs_f, ys_f, vals_f))
                 return raster_final
 
-            new_raster = _render_horizontal_walls(
-                raster=raster,
-                grid_vals=walls_horizontal
-            )
-            new_raster = _render_vertical_walls(
-                raster=new_raster,
-                grid_vals=walls_vertical
-            )
+            new_raster = _render_horizontal_walls(raster=raster, grid_vals=walls_horizontal)
+            new_raster = _render_vertical_walls(raster=new_raster, grid_vals=walls_vertical)
             return new_raster
 
         def _render_gameboard_teleporter(raster, state: WizardOfWorState):
-            # if teleporter is not active render two walls at TELEPORTER_LEFT_POSITION and TELEPORTER_RIGHT_POSITION.
+            def _render_both_teleporter_walls(raster):
+                raster = self.jr.render_at(
+                    raster,
+                    self.consts.GAME_AREA_OFFSET[0] + self.consts.TELEPORTER_LEFT_POSITION[0],
+                    self.consts.GAME_AREA_OFFSET[1] + self.consts.TELEPORTER_LEFT_POSITION[1],
+                    self.WALL_V_MASK
+                )
+                raster = self.jr.render_at(
+                    raster,
+                    self.consts.GAME_AREA_OFFSET[0] + self.consts.TELEPORTER_RIGHT_POSITION[0],
+                    self.consts.GAME_AREA_OFFSET[1] + self.consts.TELEPORTER_RIGHT_POSITION[1],
+                    self.WALL_V_MASK
+                )
+                return raster
+
             return jax.lax.cond(
                 state.teleporter,
-                lambda _: raster,  # If teleporter is active, do not render walls
-                lambda _: _render_both_teleporter_walls(raster),
-                operand=None
+                lambda r: r,
+                lambda r: _render_both_teleporter_walls(r),
+                raster
             )
 
-        def _render_both_teleporter_walls(raster):
-            # Render the left teleporter wall
-            raster = jr.render_at(
-                raster=raster,
-                sprite_frame=jr.get_sprite_frame(self.SPRITE_WALL_VERTICAL, 0),
-                x=self.consts.GAME_AREA_OFFSET[0] + self.consts.TELEPORTER_LEFT_POSITION[0],
-                y=self.consts.GAME_AREA_OFFSET[1] + self.consts.TELEPORTER_LEFT_POSITION[1]
-            )
-            # Render the right teleporter wall
-            raster = jr.render_at(
-                raster=raster,
-                sprite_frame=jr.get_sprite_frame(self.SPRITE_WALL_VERTICAL, 0),
-                x=self.consts.GAME_AREA_OFFSET[0] + self.consts.TELEPORTER_RIGHT_POSITION[0],
-                y=self.consts.GAME_AREA_OFFSET[1] + self.consts.TELEPORTER_RIGHT_POSITION[1]
-            )
-            return raster
-
-        new_raster = _render_gameboard_background(raster=raster)
-        new_raster = _render_gameboard_walls(raster=new_raster, state=state)
+        # Background is already in the raster via create_object_raster
+        new_raster = _render_gameboard_walls(raster=raster, state=state)
         new_raster = _render_gameboard_teleporter(raster=new_raster, state=state)
         return new_raster
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_radar(self, raster, state: WizardOfWorState):
-        # We calculate the radar blips based on the enemies' positions.
-        # If a monster is fully on a tile, it will be rendered as a radar blip.
-        # If the monster is between tiles, it will be rendered as the tile its back is facing.
-        def _render_radar_blip(raster, x, y, direction, enemy_type, death_animation):
-            radar_x = jax.lax.cond(
-                direction == self.consts.LEFT,
-                lambda _: jnp.ceil(x / (self.consts.TILE_SIZE[0] + self.consts.WALL_THICKNESS)),
-                lambda _: jax.lax.cond(
-                    direction == self.consts.RIGHT,
-                    lambda _: jnp.floor(x / (self.consts.TILE_SIZE[0] + self.consts.WALL_THICKNESS)),
-                    lambda _: jnp.floor(x / (self.consts.TILE_SIZE[0] + self.consts.WALL_THICKNESS)),
-                    operand=None
-                ),
-                operand=None
-            )
-            radar_y = jax.lax.cond(
-                direction == self.consts.UP,
-                lambda _: jnp.ceil(y / (self.consts.TILE_SIZE[1] + self.consts.WALL_THICKNESS)),
-                lambda _: jax.lax.cond(
-                    direction == self.consts.DOWN,
-                    lambda _: jnp.floor(y / (self.consts.TILE_SIZE[1] + self.consts.WALL_THICKNESS)),
-                    lambda _: jnp.floor(y / (self.consts.TILE_SIZE[1] + self.consts.WALL_THICKNESS)),
-                    operand=None
-                ),
-                operand=None
-            )
-            return jax.lax.cond(
-                (enemy_type == self.consts.ENEMY_NONE) | (death_animation > 0),
-                lambda _: raster,
-                lambda _: jr.render_at(
-                    raster=raster,
-                    sprite_frame=jr.get_sprite_frame(self.SPRITE_RADAR_BLIP, enemy_type),
-                    x=self.consts.RADAR_OFFSET[0] + radar_x * self.consts.RADAR_BLIP_SIZE[0],
-                    y=self.consts.RADAR_OFFSET[1] + radar_y * self.consts.RADAR_BLIP_SIZE[1]
-                ),
-                operand=None
-            )
-
         def body(carry, enemy):
             r = carry
             x, y, direction, enemy_type, death_animation, timer, last_seen = enemy
-            # Calculate the radar blip position based on the enemy's position
-            # If the monster is between tiles, it will be rendered as the tile opposite to the direction it is facing.
-            # so we have to use direction to determine the radar blip position.
-            # 0 <= radar_x < self.consts.BOARD_SIZE[0]
-            # 0 <= radar_y < self.consts.BOARD_SIZE[1]
 
-            # Render the radar blip at the calculated position
-            r = _render_radar_blip(raster=r, x=x, y=y, direction=direction, enemy_type=enemy_type,
-                                   death_animation=death_animation)
+            radar_x = jax.lax.cond(
+                direction == self.consts.LEFT,
+                lambda: jnp.ceil(x / (self.consts.TILE_SIZE[0] + self.consts.WALL_THICKNESS)),
+                lambda: jnp.floor(x / (self.consts.TILE_SIZE[0] + self.consts.WALL_THICKNESS))
+            )
+            radar_y = jax.lax.cond(
+                direction == self.consts.UP,
+                lambda: jnp.ceil(y / (self.consts.TILE_SIZE[1] + self.consts.WALL_THICKNESS)),
+                lambda: jnp.floor(y / (self.consts.TILE_SIZE[1] + self.consts.WALL_THICKNESS))
+            )
+
+            blip_x = (self.consts.RADAR_OFFSET[0] + radar_x * self.consts.RADAR_BLIP_SIZE[0]).astype(jnp.int32)
+            blip_y = (self.consts.RADAR_OFFSET[1] + radar_y * self.consts.RADAR_BLIP_SIZE[1]).astype(jnp.int32)
+            blip_mask = self.RADAR_BLIP_STACK[enemy_type]
+
+            r = jax.lax.cond(
+                (enemy_type == self.consts.ENEMY_NONE) | (death_animation > 0),
+                lambda r: r,
+                lambda r: self.jr.render_at(r, blip_x, blip_y, blip_mask),
+                r
+            )
             return r, None
 
-        raster_final, _ = jax.lax.scan(
-            f=body,
-            init=raster,
-            xs=state.enemies
-        )
+        raster_final, _ = jax.lax.scan(f=body, init=raster, xs=state.enemies)
         return raster_final
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_enemies(self, raster, state: WizardOfWorState):
-        def _render_enemies(self, raster, state: WizardOfWorState):
-            def body(carry, enemy):
-                r = carry
-                x, y, direction, enemy_type, death_animation, timer, last_seen = enemy
-                r = jax.lax.cond(
-                    enemy_type != self.consts.ENEMY_NONE,
-                    lambda _: jax.lax.switch(
-                        enemy_type,
-                        [
-                            lambda: r,  # ENEMY_NONE, nichts rendern
-                            lambda: self._render_character(
-                                r,
-                                self.SPRITE_BURWOR,
-                                EntityPosition(x=x, y=y, direction=direction, width=self.consts.ENEMY_SIZE[0],
-                                               height=self.consts.ENEMY_SIZE[1]),
-                                death_animation=death_animation
-                            ),
-                            lambda: jax.lax.cond(
-                                jnp.logical_or(last_seen < self.consts.INVISIBILITY_TIMER_GARWOR, death_animation > 0),
-                                lambda _: self._render_character(
-                                    r,
-                                    self.SPRITE_GARWOR,
-                                    EntityPosition(x=x, y=y, direction=direction, width=self.consts.ENEMY_SIZE[0],
-                                                   height=self.consts.ENEMY_SIZE[1]),
-                                    death_animation=death_animation
-                                ),
-                                lambda _: r,
-                                operand=None
-                            ),
-                            lambda: jax.lax.cond(
-                                jnp.logical_or(last_seen < self.consts.INVISIBILITY_TIMER_THORWOR, death_animation > 0),
-                                lambda _: self._render_character(
-                                    r,
-                                    self.SPRITE_THORWOR,
-                                    EntityPosition(x=x, y=y, direction=direction, width=self.consts.ENEMY_SIZE[0],
-                                                   height=self.consts.ENEMY_SIZE[1]),
-                                    death_animation=death_animation
-                                ),
-                                lambda _: r,
-                                operand=None
-                            ),
-                            lambda: self._render_character(
-                                r,
-                                self.SPRITE_WORLUK,
-                                EntityPosition(x=x, y=y, direction=direction, width=self.consts.ENEMY_SIZE[0],
-                                               height=self.consts.ENEMY_SIZE[1]),
-                                death_animation=death_animation
-                            ),
-                            lambda: self._render_character(
-                                r,
-                                self.SPRITE_WIZARD,
-                                EntityPosition(x=x, y=y, direction=direction, width=self.consts.ENEMY_SIZE[0],
-                                               height=self.consts.ENEMY_SIZE[1]),
-                                death_animation=death_animation
-                            ),
-                        ]
-                    ),
-                    lambda _: r,
-                    operand=None
+    def _render_character(self, raster, sprite_stack, flip_offset, entity: EntityPosition,
+                          death_animation, is_worluk=False):
+        direction = entity.direction
+        render_x = self.consts.GAME_AREA_OFFSET[0] + entity.x
+        render_y = self.consts.GAME_AREA_OFFSET[1] + entity.y
+
+        def render_death_animation(raster):
+            frame_index = jax.lax.cond(
+                death_animation < self.consts.DEATH_ANIMATION_STEPS[0],
+                lambda: 4,
+                lambda: jax.lax.cond(
+                    death_animation > self.consts.DEATH_ANIMATION_STEPS[1],
+                    lambda: 6,
+                    lambda: 5,
                 )
-                return r, None
-
-            raster_final, _ = jax.lax.scan(
-                f=body,
-                init=raster,
-                xs=state.enemies
             )
-            return raster_final
+            mask = sprite_stack[frame_index]
+            return self.jr.render_at(raster, render_x, render_y, mask)
 
-        new_raster = _render_enemies(self, raster=raster, state=state)
-        return new_raster
+        def render_normal(raster):
+            frame_offset = ((entity.x + entity.y + 1) // 2) % 2
+            # Special case for lives rendering: if y >= 60, force frame_offset to 1
+            frame_offset = jax.lax.cond(
+                entity.y >= 60,
+                lambda: jnp.int32(1),
+                lambda: frame_offset.astype(jnp.int32),
+            )
+            frame_index = jax.lax.cond(
+                (direction == self.consts.LEFT) | (direction == self.consts.RIGHT),
+                lambda: frame_offset,
+                lambda: 2 + frame_offset,
+            )
+            mask = sprite_stack[frame_index]
+
+            # Worluk sprites are never flipped
+            flip_h = jax.lax.select(is_worluk, False, direction == self.consts.RIGHT)
+            flip_v = jax.lax.select(is_worluk, False, direction == self.consts.UP)
+
+            return jax.lax.cond(
+                direction == self.consts.NONE,
+                lambda r: r,
+                lambda r: self.jr.render_at(
+                    r, render_x, render_y, mask,
+                    flip_horizontal=flip_h,
+                    flip_vertical=flip_v,
+                    flip_offset=flip_offset
+                ),
+                raster
+            )
+
+        return jax.lax.cond(
+            death_animation > 0,
+            render_death_animation,
+            render_normal,
+            raster
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_player(self, raster, state: WizardOfWorState):
+        return self._render_character(
+            raster,
+            self.PLAYER_STACK,
+            self.PLAYER_OFFSET,
+            state.player,
+            death_animation=state.player_death_animation,
+            is_worluk=False
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_enemies(self, raster, state: WizardOfWorState):
+        def body(carry, enemy):
+            r = carry
+            x, y, direction, enemy_type, death_animation, timer, last_seen = enemy
+
+            sprite_stack = self.ALL_CHARACTER_STACKS[enemy_type]
+            sprite_offset = self.ALL_CHARACTER_OFFSETS[enemy_type]
+
+            is_worluk = enemy_type == self.consts.ENEMY_WORLUK
+
+            # Handle invisibility for garwor and thorwor
+            is_invisible = (
+                ((enemy_type == self.consts.ENEMY_GARWOR) &
+                 (last_seen >= self.consts.INVISIBILITY_TIMER_GARWOR) &
+                 (death_animation == 0)) |
+                ((enemy_type == self.consts.ENEMY_THORWOR) &
+                 (last_seen >= self.consts.INVISIBILITY_TIMER_THORWOR) &
+                 (death_animation == 0))
+            )
+
+            should_render = (enemy_type != self.consts.ENEMY_NONE) & ~is_invisible
+
+            r = jax.lax.cond(
+                should_render,
+                lambda r: self._render_character(
+                    r, sprite_stack, sprite_offset,
+                    EntityPosition(x=x, y=y, direction=direction,
+                                   width=self.consts.ENEMY_SIZE[0],
+                                   height=self.consts.ENEMY_SIZE[1]),
+                    death_animation=death_animation,
+                    is_worluk=is_worluk
+                ),
+                lambda r: r,
+                r
+            )
+            return r, None
+
+        raster_final, _ = jax.lax.scan(f=body, init=raster, xs=state.enemies)
+        return raster_final
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_player_bullet(self, raster, state: WizardOfWorState):
-        new_raster = jax.lax.cond(
-            state.bullet.x >= 0,  # Check if the bullet is active (x >= 0)
-            lambda _: jr.render_at(
-                raster=raster,
-                sprite_frame=jr.get_sprite_frame(self.SPRITE_BULLET, 0),
-                x=self.consts.GAME_AREA_OFFSET[0] + state.bullet.x,
-                y=self.consts.GAME_AREA_OFFSET[1] + state.bullet.y
+        return jax.lax.cond(
+            state.bullet.x >= 0,
+            lambda _: self.jr.render_at(
+                raster,
+                self.consts.GAME_AREA_OFFSET[0] + state.bullet.x,
+                self.consts.GAME_AREA_OFFSET[1] + state.bullet.y,
+                self.BULLET_MASK
             ),
-            lambda _: raster,  # If the bullet is not active, return the raster unchanged
+            lambda _: raster,
+            # raster
             operand=None
         )
-        return new_raster
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_enemy_bullet(self, raster, state: WizardOfWorState):
         enemy_type = jax.lax.cond(
-            state.idx_enemy_bullet_shot_by >= 0,  # Check if the index is valid
-            lambda: state.enemies[state.idx_enemy_bullet_shot_by, 3],  # Get the enemy type
-            lambda: self.consts.ENEMY_NONE  # Default to NONE if invalid
+            state.idx_enemy_bullet_shot_by >= 0,
+            lambda: state.enemies[state.idx_enemy_bullet_shot_by, 3],
+            lambda: self.consts.ENEMY_NONE
         )
-        new_raster = jax.lax.cond(
-            state.enemy_bullet.x >= 0,  # Check if the bullet is active (x >= 0)
-            lambda _: jr.render_at(
-                raster=raster,
-                sprite_frame=jr.get_sprite_frame(self.SPRITE_ENEMY_BULLET, enemy_type),
-                x=self.consts.GAME_AREA_OFFSET[0] + state.enemy_bullet.x,
-                y=self.consts.GAME_AREA_OFFSET[1] + state.enemy_bullet.y
+        bullet_mask = self.ENEMY_BULLET_STACK[enemy_type]
+        return jax.lax.cond(
+            state.enemy_bullet.x >= 0,
+            lambda r: self.jr.render_at(
+                r,
+                self.consts.GAME_AREA_OFFSET[0] + state.enemy_bullet.x,
+                self.consts.GAME_AREA_OFFSET[1] + state.enemy_bullet.y,
+                bullet_mask
             ),
-            lambda _: raster,  # If the bullet is not active, return the raster unchanged
-            operand=None
+            lambda r: r,
+            raster
         )
-        return new_raster
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _render_player(self, raster, state: WizardOfWorState):
-        new_raster = self._render_character(raster, self.SPRITE_PLAYER, state.player,
-                                            death_animation=state.player_death_animation)
-        return new_raster
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_score(self, raster, state: WizardOfWorState):
-        score_digits = jr.int_to_digits(state.score, max_digits=5)
-
-        new_raster = jr.render_label_selective(raster=raster, x=self.consts.SCORE_OFFSET[0],
-                                               y=self.consts.SCORE_OFFSET[1],
-                                               all_digits=score_digits, char_sprites=self.SCORE_DIGIT_SPRITES,
-                                               start_index=0, num_to_render=5,
-                                               spacing=self.consts.SCORE_DIGIT_SPACING)
-        return new_raster
+        score_digits = self.jr.int_to_digits(state.score, max_digits=5)
+        return self.jr.render_label_selective(
+            raster,
+            self.consts.SCORE_OFFSET[0],
+            self.consts.SCORE_OFFSET[1],
+            score_digits,
+            self.DIGIT_MASKS,
+            start_index=0,
+            num_to_render=5,
+            spacing=self.consts.SCORE_DIGIT_SPACING,
+            max_digits_to_render=5
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_lives(self, raster, state: WizardOfWorState):
-        new_raster = raster
-
         def render_life(carry, i):
             r = carry
             r = jax.lax.cond(
                 (state.lives - 1) > i,
-                lambda _: self._render_character(
+                lambda r: self._render_character(
                     raster=r,
-                    sprite=self.SPRITE_PLAYER,
+                    sprite_stack=self.PLAYER_STACK,
+                    flip_offset=self.PLAYER_OFFSET,
                     entity=EntityPosition(
                         x=self.consts.LIVES_OFFSET[0] - (i * (self.consts.PLAYER_SIZE[0] + self.consts.LIVES_GAP)),
                         y=self.consts.LIVES_OFFSET[1],
@@ -2235,112 +2193,14 @@ class WizardOfWorRenderer(JAXGameRenderer):
                         height=self.consts.PLAYER_SIZE[1],
                         direction=self.consts.LEFT
                     ),
-                    death_animation=0),
-                lambda _: r,
-                operand=None
+                    death_animation=0,
+                    is_worluk=False
+                ),
+                lambda r: r,
+                r
             )
             return r, None
 
         indices = jnp.arange(start=0, stop=self.consts.MAX_LIVES, dtype=jnp.int32)
-        new_raster, _ = jax.lax.scan(render_life, new_raster, indices)
+        new_raster, _ = jax.lax.scan(render_life, raster, indices)
         return new_raster
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _render_character(self, raster, sprite, entity: EntityPosition, death_animation):
-        """
-        Renders a character sprite at the specified position and direction.
-        :param raster: The raster to render on.
-        :param sprite: The sprite to render.
-        :param entity: The entity to render, containing x, y,width,height and direction.
-        :return: The raster with the rendered character.
-        """
-        direction = entity.direction
-
-        def render_death_animation(_):
-            frame_index = frame_index = jax.lax.cond(
-                death_animation < self.consts.DEATH_ANIMATION_STEPS[0],
-                lambda _: 4,
-                lambda _: jax.lax.cond(
-                    death_animation > self.consts.DEATH_ANIMATION_STEPS[1],
-                    lambda _: 6,
-                    lambda _: 5,
-                    operand=None
-                ),
-                operand=None
-            )
-            sprite_frame = jr.get_sprite_frame(sprite, frame_index)
-            return jr.render_at(
-                raster=raster,
-                sprite_frame=sprite_frame,
-                x=self.consts.GAME_AREA_OFFSET[0] + entity.x,
-                y=self.consts.GAME_AREA_OFFSET[1] + entity.y
-            )
-
-        def render_normal(_):
-            frame_offset = ((entity.x + entity.y + 1) // 2) % 2
-            # if the y position is above 60 frame offset is 1. THIS IS A SPECIAL CASE FOR LIVES RENDERING
-            frame_offset = jax.lax.cond(
-                entity.y >= 60,
-                lambda _: 1,
-                lambda _: frame_offset,
-                operand=None
-            )
-            frame_index = jax.lax.cond(
-                (direction == self.consts.LEFT) | (direction == self.consts.RIGHT),
-                lambda _: frame_offset,
-                lambda _: 2 + frame_offset,
-                operand=None
-            )
-            sprite_frame = jr.get_sprite_frame(sprite, frame_index)
-            # Spezialfall: Worluk-Sprite nicht flippen
-            is_worluk = jnp.all(sprite == self.SPRITE_WORLUK)
-            return jax.lax.cond(
-                is_worluk,
-                lambda _: jr.render_at(
-                    raster=raster,
-                    sprite_frame=sprite_frame,
-                    x=self.consts.GAME_AREA_OFFSET[0] + entity.x,
-                    y=self.consts.GAME_AREA_OFFSET[1] + entity.y
-                ),
-                lambda _: jax.lax.cond(
-                    direction == self.consts.RIGHT,
-                    lambda _: jr.render_at(
-                        raster=raster,
-                        sprite_frame=sprite_frame,
-                        x=self.consts.GAME_AREA_OFFSET[0] + entity.x,
-                        y=self.consts.GAME_AREA_OFFSET[1] + entity.y,
-                        flip_horizontal=True
-                    ),
-                    lambda _: jax.lax.cond(
-                        direction == self.consts.UP,
-                        lambda _: jr.render_at(
-                            raster=raster,
-                            sprite_frame=sprite_frame,
-                            x=self.consts.GAME_AREA_OFFSET[0] + entity.x,
-                            y=self.consts.GAME_AREA_OFFSET[1] + entity.y,
-                            flip_vertical=True
-                        ),
-                        lambda _: jax.lax.cond(
-                            direction == self.consts.NONE,
-                            lambda _: raster,  # Nichts rendern, wenn Richtung NONE
-                            lambda _: jr.render_at(
-                                raster=raster,
-                                sprite_frame=sprite_frame,
-                                x=self.consts.GAME_AREA_OFFSET[0] + entity.x,
-                                y=self.consts.GAME_AREA_OFFSET[1] + entity.y
-                            ),
-                            operand=None
-                        ),
-                        operand=None
-                    ),
-                    operand=None
-                ),
-                operand=None
-            )
-
-        return jax.lax.cond(
-            death_animation > 0,
-            render_death_animation,
-            render_normal,
-            operand=None
-        )
