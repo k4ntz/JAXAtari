@@ -168,6 +168,21 @@ class Enduro2Constants(AutoDerivedConstants):
     collision_push_back: float = struct.field(pytree_node=False, default=0.5)
     collision_duration: int = struct.field(pytree_node=False, default=14)
 
+    # Track Colors and Animation
+    track_colors: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
+        [74, 74, 74],  # top
+        [111, 111, 111],  # moving top
+        [170, 170, 170],  # moving bottom
+        [192, 192, 192],  # bottom - rest
+    ], dtype=jnp.int32))
+    track_top_min_length: int = struct.field(pytree_node=False, default=33)
+    track_moving_top_length: int = struct.field(pytree_node=False, default=13)
+    track_moving_bottom_length: int = struct.field(pytree_node=False, default=18)
+    track_move_range: int = struct.field(pytree_node=False, default=12)
+    track_moving_bottom_spawn_step: int = struct.field(pytree_node=False, default=6)
+    track_color_move_speed_per_speed: float = struct.field(pytree_node=False, default=0.05)
+    track_speed_animation_factor: float = struct.field(pytree_node=False, default=0.085)
+
     # Opponents
     opponent_speed: int = struct.field(pytree_node=False, default=24)
     opponent_relative_speed_factor: float = struct.field(pytree_node=False, default=2.5)
@@ -216,7 +231,9 @@ class Enduro2Constants(AutoDerivedConstants):
         {'name': 'grass_color', 'type': 'procedural', 'data': jnp.array([[[0, 68, 0, 255]]], dtype=jnp.uint8)},
         {'name': 'snow_grass_color', 'type': 'procedural', 'data': jnp.array([[[236, 236, 236, 255]]], dtype=jnp.uint8)},
         {'name': 'snow_mountain_color', 'type': 'procedural', 'data': jnp.array([[[214, 214, 214, 255]]], dtype=jnp.uint8)},
-        {'name': 'track_color', 'type': 'procedural', 'data': jnp.array([[[111, 111, 111, 255]]], dtype=jnp.uint8)},
+        {'name': 'track_colors', 'type': 'procedural', 'data': jnp.array([[list(c) + [255] for c in [
+            [74, 74, 74], [111, 111, 111], [170, 170, 170], [192, 192, 192]
+        ]]], dtype=jnp.uint8)},
         {'name': 'digits_black', 'type': 'digits', 'pattern': 'digits/{}_black.npy'},
         {'name': 'black_digit_array', 'type': 'single', 'file': 'digits/black_digit_array.npy'},
         {'name': 'brown_digit_array', 'type': 'single', 'file': 'digits/brown_digit_array.npy'},
@@ -336,7 +353,10 @@ class Enduro2Renderer(JAXGameRenderer):
         # Store color IDs
         self.sky_id = self.COLOR_TO_ID.get((45, 50, 184), 0)
         self.grass_id = self.COLOR_TO_ID.get((0, 68, 0), 0)
-        self.track_id = self.COLOR_TO_ID.get((111, 111, 111), 0)
+        
+        # Store Track Color IDs
+        track_rgbs = [tuple(c.tolist()) for c in self.consts.track_colors]
+        self.TRACK_COLOR_IDS = jnp.array([self.COLOR_TO_ID.get(rgb, 0) for rgb in track_rgbs], dtype=jnp.uint8)
 
         # Snow color IDs
         self.snow_grass_id = self.COLOR_TO_ID.get(self.consts.snow_grass_color, 0)
@@ -520,7 +540,42 @@ class Enduro2Renderer(JAXGameRenderer):
         )
         
         track_mask = is_track_row & track_mask
-        raster = jnp.where(track_mask, self.track_id, raster)
+
+        # Calculate animation step
+        effective_speed = (self.consts.min_speed +
+                           (state.player_speed - self.consts.min_speed) * self.consts.track_speed_animation_factor)
+        animation_step = jnp.floor(
+            effective_speed * state.step_count * self.consts.track_color_move_speed_per_speed
+        ) % self.consts.track_move_range
+        animation_step = animation_step.astype(jnp.int32)
+
+        # Calculate color indices for each row
+        top_region_end = self.consts.track_top_min_length + animation_step
+        moving_top_end = top_region_end + self.consts.track_moving_top_length
+        spawn_moving_bottom = animation_step >= self.consts.track_moving_bottom_spawn_step
+        moving_bottom_end = jnp.where(
+            spawn_moving_bottom,
+            moving_top_end + self.consts.track_moving_bottom_length,
+            moving_top_end
+        )
+
+        color_indices = jnp.where(
+            track_row < top_region_end,
+            0,
+            jnp.where(
+                track_row < moving_top_end,
+                1,
+                jnp.where(
+                    (track_row < moving_bottom_end) & spawn_moving_bottom,
+                    2,
+                    3
+                )
+            )
+        ).astype(jnp.int32)
+
+        track_pixel_color_ids = self.TRACK_COLOR_IDS[color_indices]
+        
+        raster = jnp.where(track_mask, track_pixel_color_ids, raster)
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
