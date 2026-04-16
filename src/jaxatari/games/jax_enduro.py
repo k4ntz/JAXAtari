@@ -2653,15 +2653,11 @@ class EnduroRenderer(JAXGameRenderer):
         # Get the correct mask
         player_color_idx = self.consts.PLAYER_COLOR_INDEX
         color_id = self.CAR_COLOR_IDS[player_color_idx]
-        
+
         # Use player-specific day masks
         base_mask = self.player_base_car_masks_day[frame_index]
         body_mask = self.player_car_body_masks_day[frame_index]
-        day_mask = jnp.where(body_mask, color_id, base_mask)
-        
-        night_mask = self.player_car_night_mask
-        
-        final_mask = jax.lax.cond(is_day, lambda: day_mask, lambda: night_mask)
+        final_mask = jnp.where(body_mask, color_id, base_mask)
 
         # Render player car position
         raster = self.jr.render_at(raster,

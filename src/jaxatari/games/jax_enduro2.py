@@ -207,6 +207,7 @@ class Enduro2Constants(AutoDerivedConstants):
     # === Weather ===
     snow_weather_index: int = struct.field(pytree_node=False, default=3)
     night_weather_index: int = struct.field(pytree_node=False, default=12)
+    fog_weather_index: int = struct.field(pytree_node=False, default=13)
     steering_snow_factor: float = struct.field(pytree_node=False, default=2.0)
     
     # Weather colors
@@ -216,6 +217,8 @@ class Enduro2Constants(AutoDerivedConstants):
     night_grass_color: tuple = struct.field(pytree_node=False, default=(0, 0, 0))
     night_mountain_color: tuple = struct.field(pytree_node=False, default=(142, 142, 142))
     mountain_color: tuple = struct.field(pytree_node=False, default=(136, 146, 62))
+    fog_color: tuple = struct.field(pytree_node=False, default=(74, 74, 74))
+    fog_height: int = struct.field(pytree_node=False, default=103)
 
     # UI Positions
     info_box_x_pos: int = struct.field(pytree_node=False, default=48)
@@ -240,6 +243,7 @@ class Enduro2Constants(AutoDerivedConstants):
         {'name': 'night_sky_color', 'type': 'procedural', 'data': jnp.array([[[74, 74, 74, 255]]], dtype=jnp.uint8)},
         {'name': 'night_grass_color', 'type': 'procedural', 'data': jnp.array([[[0, 0, 0, 255]]], dtype=jnp.uint8)},
         {'name': 'night_mountain_color', 'type': 'procedural', 'data': jnp.array([[[142, 142, 142, 255]]], dtype=jnp.uint8)},
+        {'name': 'fog_color', 'type': 'procedural', 'data': jnp.array([[[74, 74, 74, 255]]], dtype=jnp.uint8)},
         {'name': 'track_colors', 'type': 'procedural', 'data': jnp.array([[list(c) + [255] for c in [
             [74, 74, 74], [111, 111, 111], [170, 170, 170], [192, 192, 192]
         ]]], dtype=jnp.uint8)},
@@ -382,6 +386,9 @@ class Enduro2Renderer(JAXGameRenderer):
         self.night_grass_id = self.COLOR_TO_ID.get(self.consts.night_grass_color, 0)
         self.night_mountain_id = self.COLOR_TO_ID.get(self.consts.night_mountain_color, 0)
 
+        # Fog color ID
+        self.fog_color_id = self.COLOR_TO_ID.get(self.consts.fog_color, 0)
+
         # Store Odometer Sheet ID Masks
         self.black_digit_sheet_mask = self.SHAPE_MASKS['black_digit_array']
         self.brown_digit_sheet_mask = self.SHAPE_MASKS['brown_digit_array']
@@ -402,9 +409,14 @@ class Enduro2Renderer(JAXGameRenderer):
         raster = self.BACKGROUND
         
         xx, yy = self.jr._xx, self.jr._yy
-        
+        is_fog = state.weather_index == self.consts.fog_weather_index
+
         # 1. Draw Sky (top part of game window)
-        sky_color = jnp.where(state.weather_index == self.consts.night_weather_index, self.night_sky_id, self.sky_id)
+        sky_color = jnp.where(
+            is_fog,
+            self.fog_color_id,
+            jnp.where(state.weather_index == self.consts.night_weather_index, self.night_sky_id, self.sky_id)
+        )
         sky_mask = (xx >= self.consts.window_offset_left) & (yy < self.consts.sky_height)
         raster = jnp.where(sky_mask, sky_color, raster)
         
@@ -413,9 +425,13 @@ class Enduro2Renderer(JAXGameRenderer):
 
         # 3. Draw Grass (bottom part of game window)
         grass_color = jnp.where(
-            state.weather_index == self.consts.snow_weather_index, 
-            self.snow_grass_id, 
-            jnp.where(state.weather_index == self.consts.night_weather_index, self.night_grass_id, self.grass_id)
+            is_fog,
+            self.fog_color_id,
+            jnp.where(
+                state.weather_index == self.consts.snow_weather_index, 
+                self.snow_grass_id, 
+                jnp.where(state.weather_index == self.consts.night_weather_index, self.night_grass_id, self.grass_id)
+            )
         )
         grass_mask = (xx >= self.consts.window_offset_left) & (yy >= self.consts.sky_height) & (yy < self.consts.game_window_height)
         raster = jnp.where(grass_mask, grass_color, raster)
@@ -455,7 +471,8 @@ class Enduro2Renderer(JAXGameRenderer):
         animation_step = jnp.floor(state.step_count / animation_period)
         frame_index = (animation_step % 2).astype(jnp.int32)
         
-        is_night = state.weather_index == self.consts.night_weather_index
+        is_fog = state.weather_index == self.consts.fog_weather_index
+        is_night = (state.weather_index == self.consts.night_weather_index) | is_fog
 
         def render_slot(r, i):
             pos = state.visible_opponent_positions[i]
@@ -463,6 +480,8 @@ class Enduro2Renderer(JAXGameRenderer):
             
             # -1 indicates no car in this slot
             exists = x != -1
+            # In fog, hide if above fog_height
+            visible = jnp.where(is_fog, y >= self.consts.fog_height, True)
             
             def do_render(r_inner):
                 mask_day = self.SHAPE_MASKS[f'car_{i}']
@@ -490,7 +509,7 @@ class Enduro2Renderer(JAXGameRenderer):
                 
                 return self.jr.render_at_clipped(r_inner, x.astype(jnp.int32), y.astype(jnp.int32), mask)
 
-            return jax.lax.cond(exists, do_render, lambda r_in: r_in, r)
+            return jax.lax.cond(exists & visible, do_render, lambda r_in: r_in, r)
 
         # Render from far (6) to near (0) so near cars are on top
         for i in range(6, -1, -1):
@@ -504,56 +523,63 @@ class Enduro2Renderer(JAXGameRenderer):
         """
         Renders mountains using dynamic scrolling and wrapping.
         """
-        mountain_left_sprite = self.SHAPE_MASKS['mountain_left']
-        mountain_right_sprite = self.SHAPE_MASKS['mountain_right']
+        is_fog = state.weather_index == self.consts.fog_weather_index
+        def skip_render(r):
+            return r
 
-        # Dynamic recoloring for snow and night
-        mountain_color_id = jnp.where(
-            state.weather_index == self.consts.snow_weather_index,
-            self.snow_mountain_id,
-            jnp.where(state.weather_index == self.consts.night_weather_index, self.night_mountain_id, self.mountain_id)
-        )
-        
-        def recolor_mountain(mask):
-            is_body = (mask != self.jr.TRANSPARENT_ID)
-            return jnp.where(is_body, mountain_color_id, mask)
+        def do_render_mountains(r):
+            mountain_left_sprite = self.SHAPE_MASKS['mountain_left']
+            mountain_right_sprite = self.SHAPE_MASKS['mountain_right']
 
-        mountain_left_sprite = recolor_mountain(mountain_left_sprite)
-        mountain_right_sprite = recolor_mountain(mountain_right_sprite)
+            # Dynamic recoloring for snow and night
+            mountain_color_id = jnp.where(
+                state.weather_index == self.consts.snow_weather_index,
+                self.snow_mountain_id,
+                jnp.where(state.weather_index == self.consts.night_weather_index, self.night_mountain_id, self.mountain_id)
+            )
+            
+            def recolor_mountain(mask):
+                is_body = (mask != self.jr.TRANSPARENT_ID)
+                return jnp.where(is_body, mountain_color_id, mask)
 
-        # Positions
-        x_left = state.mountain_left_x.astype(jnp.int32)
-        x_right = state.mountain_right_x.astype(jnp.int32)
-        
-        y_left = self.consts.sky_height - mountain_left_sprite.shape[0]
-        y_right = self.consts.sky_height - mountain_right_sprite.shape[0]
+            mountain_left_sprite = recolor_mountain(mountain_left_sprite)
+            mountain_right_sprite = recolor_mountain(mountain_right_sprite)
 
-        # Visible interval
-        lo = self.consts.window_offset_left
-        hi = self.consts.screen_width
-        period = hi - lo + 1
+            # Positions
+            x_left = state.mountain_left_x.astype(jnp.int32)
+            x_right = state.mountain_right_x.astype(jnp.int32)
+            
+            y_left = self.consts.sky_height - mountain_left_sprite.shape[0]
+            y_right = self.consts.sky_height - mountain_right_sprite.shape[0]
 
-        # 1) Base draw
-        raster = self.jr.render_at_clipped(raster, x_left, y_left, mountain_left_sprite)
-        raster = self.jr.render_at_clipped(raster, x_right, y_right, mountain_right_sprite)
+            # Visible interval
+            lo = self.consts.window_offset_left
+            hi = self.consts.screen_width
+            period = hi - lo + 1
 
-        # 2) Wrap-around
-        overflow_left = (x_left + mountain_left_sprite.shape[1]) > (hi + 1)
-        overflow_right = (x_right + mountain_right_sprite.shape[1]) > (hi + 1)
+            # 1) Base draw
+            r = self.jr.render_at_clipped(r, x_left, y_left, mountain_left_sprite)
+            r = self.jr.render_at_clipped(r, x_right, y_right, mountain_right_sprite)
 
-        raster = jax.lax.cond(
-            overflow_left,
-            lambda r: self.jr.render_at_clipped(r, x_left - period, y_left, mountain_left_sprite),
-            lambda r: r,
-            raster
-        )
-        raster = jax.lax.cond(
-            overflow_right,
-            lambda r: self.jr.render_at_clipped(r, x_right - period, y_right, mountain_right_sprite),
-            lambda r: r,
-            raster
-        )
-        return raster
+            # 2) Wrap-around
+            overflow_left = (x_left + mountain_left_sprite.shape[1]) > (hi + 1)
+            overflow_right = (x_right + mountain_right_sprite.shape[1]) > (hi + 1)
+
+            r = jax.lax.cond(
+                overflow_left,
+                lambda r_inner: self.jr.render_at_clipped(r_inner, x_left - period, y_left, mountain_left_sprite),
+                lambda r_inner: r_inner,
+                r
+            )
+            r = jax.lax.cond(
+                overflow_right,
+                lambda r_inner: self.jr.render_at_clipped(r_inner, x_right - period, y_right, mountain_right_sprite),
+                lambda r_inner: r_inner,
+                r
+            )
+            return r
+
+        return jax.lax.cond(is_fog, skip_render, do_render_mountains, raster)
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_track(self, raster: jnp.ndarray, state: Enduro2GameState, xx: jnp.ndarray, yy: jnp.ndarray) -> jnp.ndarray:
@@ -570,6 +596,10 @@ class Enduro2Renderer(JAXGameRenderer):
         # Boundary check for track_row
         is_track_row = (yy >= self.consts.sky_height) & (yy < self.consts.game_window_height - 1)
         
+        # In fog, hide track above fog_height
+        is_fog = state.weather_index == self.consts.fog_weather_index
+        is_visible = jnp.where(is_fog, yy >= self.consts.fog_height, True)
+
         # Get boundaries for each pixel's row
         l_x = left_xs[jnp.clip(track_row, 0, self.consts.track_height - 1)]
         r_x = right_xs[jnp.clip(track_row, 0, self.consts.track_height - 1)]
@@ -581,7 +611,7 @@ class Enduro2Renderer(JAXGameRenderer):
             lambda: (xx == l_x) | (xx == r_x)
         )
         
-        track_mask = is_track_row & track_mask
+        track_mask = is_track_row & track_mask & is_visible
 
         # Calculate animation step
         effective_speed = (self.consts.min_speed +
