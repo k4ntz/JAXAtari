@@ -26,6 +26,8 @@ class Enduro2GameState:
     cars_to_pass: jnp.ndarray
     track_top_x: jnp.ndarray  # Float position
     track_top_x_curve_offset: jnp.ndarray
+    collision_mode: jnp.ndarray  # bool
+    collision_steps: jnp.ndarray  # int
 
 @struct.dataclass
 class Enduro2Observation:
@@ -114,6 +116,9 @@ class Enduro2Constants(AutoDerivedConstants):
     track_max_top_x_offset: float = struct.field(pytree_node=False, default=50.0)
     initial_track_top_x_curve_offset: float = struct.field(pytree_node=False, default=0.0)
     curve_rate: float = struct.field(pytree_node=False, default=0.05)
+    side_collision_speed_drop: float = struct.field(pytree_node=False, default=0.75)
+    collision_push_back: float = struct.field(pytree_node=False, default=0.5)
+    collision_duration: int = struct.field(pytree_node=False, default=14)
 
     # UI Positions
     info_box_x_pos: int = struct.field(pytree_node=False, default=48)
@@ -466,7 +471,9 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
             distance=jnp.array(0.0, dtype=jnp.float32),
             cars_to_pass=jnp.array(200, dtype=jnp.int32),
             track_top_x=jnp.array(84.0, dtype=jnp.float32),
-            track_top_x_curve_offset=jnp.array(self.consts.initial_track_top_x_curve_offset, dtype=jnp.float32)
+            track_top_x_curve_offset=jnp.array(self.consts.initial_track_top_x_curve_offset, dtype=jnp.float32),
+            collision_mode=jnp.array(False, dtype=jnp.bool_),
+            collision_steps=jnp.array(0, dtype=jnp.int32)
         )
         return self._get_observation(state), state
 
@@ -508,9 +515,47 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
         curve_ratio = state.track_top_x_curve_offset / self.consts.track_max_top_x_offset
         drift_delta = -curve_ratio * (new_speed / self.consts.centripedal_shift_ratio)
 
-        # Apply horizontal movement
-        new_player_x = jnp.clip(state.player_x + steering_delta + drift_delta, 0.0, self.consts.screen_width - 16.0)
-        # 3. Handle Track Curvature (Top X and Offset)
+        # 3. Handle Collision and Horizontal Movement
+        offset_int = jnp.clip(
+            jnp.floor(state.track_top_x_curve_offset).astype(jnp.int32),
+            -self.consts.curve_offset_base,
+            self.consts.curve_offset_base
+        )
+        curve_index = offset_int + self.consts.curve_offset_base
+        base_left_curve = self.consts.precomputed_left_curves[curve_index]
+        base_right_curve = self.consts.precomputed_right_curves[curve_index]
+        player_row = (state.player_y - self.consts.sky_height).astype(jnp.int32)
+        l_x = base_left_curve[player_row] + state.track_top_x
+        r_x = base_right_curve[player_row] + state.track_top_x
+
+        def collision_update(_):
+            new_collision_steps = state.collision_steps - 1
+            new_collision_mode = new_collision_steps > 0
+            coll_speed = new_speed  # Speed drops only once at the moment of collision
+            push_direction = jnp.where(state.player_x < self.consts.player_x_start, 1.0, -1.0)
+            coll_player_x = state.player_x + push_direction * self.consts.collision_push_back
+            return coll_player_x, coll_speed, new_collision_mode, new_collision_steps
+
+        def normal_update(_):
+            # Apply horizontal movement
+            normal_player_x = jnp.clip(state.player_x + steering_delta + drift_delta, 0.0, self.consts.screen_width - 16.0)
+            # Collision if the new position would hit the side lines
+            is_colliding = (normal_player_x <= l_x) | (normal_player_x + 16.0 >= r_x)
+            
+            return jax.lax.cond(
+                is_colliding,
+                lambda: (state.player_x, new_speed * self.consts.side_collision_speed_drop, True, jnp.array(self.consts.collision_duration, dtype=jnp.int32)),
+                lambda: (normal_player_x, new_speed, False, jnp.array(0, dtype=jnp.int32))
+            )
+
+        new_player_x, new_speed, new_collision_mode, new_collision_steps = jax.lax.cond(
+            state.collision_mode,
+            collision_update,
+            normal_update,
+            None
+        )
+
+        # 4. Handle Track Curvature (Top X and Offset)
         # Track top_x moves opposite to player movement on X axis
         new_track_top_x = 84.0 + self.consts.player_x_start - new_player_x
 
@@ -541,7 +586,9 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
             distance=new_distance,
             step_count=state.step_count + 1,
             track_top_x=new_track_top_x,
-            track_top_x_curve_offset=new_top_x_curve_offset
+            track_top_x_curve_offset=new_top_x_curve_offset,
+            collision_mode=new_collision_mode,
+            collision_steps=new_collision_steps
         )
 
         obs = self._get_observation(new_state)
