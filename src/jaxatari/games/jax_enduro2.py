@@ -297,7 +297,9 @@ class Enduro2Renderer(JAXGameRenderer):
 
         # Load car sprites manually
         for i in range(7):
-            car_path = os.path.join(self._sprite_path, f'cars/car_{i}.npy')
+            # For the largest opponent slot (0), we use car_1.npy to avoid using the player car sprite.
+            actual_idx = i if i > 0 else 1
+            car_path = os.path.join(self._sprite_path, f'cars/car_{actual_idx}.npy')
             if os.path.exists(car_path):
                 car_data = jnp.load(car_path)
                 asset_config.append({'name': f'car_{i}', 'type': 'procedural', 'data': car_data})

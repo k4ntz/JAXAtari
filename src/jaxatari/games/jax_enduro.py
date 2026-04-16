@@ -2397,15 +2397,26 @@ class EnduroRenderer(JAXGameRenderer):
         )
 
         # 6. Manually Load, Recolor, and Store Car ID Masks
-        self.base_car_masks_day, self.car_body_masks_day, self.car_masks_night, self.player_car_night_mask = self._setup_car_masks()
+        (self.opponent_base_car_masks_day, 
+         self.opponent_car_body_masks_day, 
+         self.player_base_car_masks_day,
+         self.player_car_body_masks_day,
+         self.car_masks_night, 
+         self.player_car_night_mask) = self._setup_car_masks()
         
-    def _setup_car_masks(self) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    def _setup_car_masks(self) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         """
         Loads all RGBA car sprites and extracts base ID masks and boolean body masks.
         Runs once during __init__.
         """
-        car_names = [f'cars/car_{i}.npy' for i in range(7)]
-        car_night_names = [f'cars/car_{i}_night.npy' for i in range(7)]
+        # Load player car (day) from car_0.npy
+        player_car_day_name = 'cars/car_0.npy'
+        player_car_day_sprite = _load_rgba_sprite(os.path.join(self._sprite_path, player_car_day_name))
+
+        # Load opponent cars (day) from car_1.npy to car_6.npy
+        # We use car_1.npy for the largest size (0) as well to avoid using the player's car_0.npy
+        car_names = ['cars/car_1.npy'] + [f'cars/car_{i}.npy' for i in range(1, 7)]
+        car_night_names = ['cars/car_1_night.npy'] + [f'cars/car_{i}_night.npy' for i in range(1, 7)]
         player_car_night_name = 'cars/car_0_night.npy' # Player uses car_0_night
 
         # --- Load Base RGBA Sprites ---
@@ -2414,7 +2425,7 @@ class EnduroRenderer(JAXGameRenderer):
         player_car_night_sprite = _load_rgba_sprite(os.path.join(self._sprite_path, player_car_night_name))
 
         # --- Find Max Dimensions ---
-        all_sprites = base_car_sprites + base_car_night_sprites + [player_car_night_sprite]
+        all_sprites = base_car_sprites + base_car_night_sprites + [player_car_night_sprite, player_car_day_sprite]
         max_h = max(s.shape[1] for s in all_sprites)
         max_w = max(s.shape[2] for s in all_sprites)
 
@@ -2425,10 +2436,12 @@ class EnduroRenderer(JAXGameRenderer):
 
         # --- Process Day Cars (Base + Body Masks) ---
         num_sizes = 7
-        max_frames = max(sprite.shape[0] for sprite in base_car_sprites)
-        num_anims_day = max(2, max_frames)  # Ensure at least 2 frames for animation
-        base_car_masks_day = []
-        car_body_masks_day = []
+        max_frames_opp = max(sprite.shape[0] for sprite in base_car_sprites)
+        max_frames_play = player_car_day_sprite.shape[0]
+        num_anims_day = max(2, max_frames_opp, max_frames_play)  # Ensure at least 2 frames for animation
+        
+        opponent_base_masks_day = []
+        opponent_body_masks_day = []
         
         for size_idx in range(num_sizes):
             base_sprite_stack = base_car_sprites[size_idx] # (N, H, W, 4) where N can vary
@@ -2445,8 +2458,10 @@ class EnduroRenderer(JAXGameRenderer):
                 rgb_frame = frame_rgba_np[..., :3]
                 alpha_mask = frame_rgba_np[..., 3] > 0
                 not_black = np.any(rgb_frame > 0, axis=-1)
-                not_white = np.any(rgb_frame < 255, axis=-1)
-                color_mask = alpha_mask & not_black & not_white
+                
+                # For opponents, we also include white pixels in the body mask 
+                # to prevent them from looking like the player car.
+                color_mask = alpha_mask & not_black
                 
                 # Create ID mask using numpy
                 id_mask = np.zeros(frame_rgba_np.shape[:2], dtype=np.uint8)
@@ -2464,11 +2479,41 @@ class EnduroRenderer(JAXGameRenderer):
                 size_masks.append(padded_mask)
                 size_body_masks.append(padded_body_mask)
                 
-            base_car_masks_day.append(np.stack(size_masks))
-            car_body_masks_day.append(np.stack(size_body_masks))
+            opponent_base_masks_day.append(np.stack(size_masks))
+            opponent_body_masks_day.append(np.stack(size_body_masks))
             
-        base_car_masks_day = jnp.array(np.stack(base_car_masks_day))
-        car_body_masks_day = jnp.array(np.stack(car_body_masks_day))
+        opponent_base_car_masks_day = jnp.array(np.stack(opponent_base_masks_day))
+        opponent_car_body_masks_day = jnp.array(np.stack(opponent_body_masks_day))
+
+        # --- Process Player Day Car ---
+        player_base_masks_day = []
+        player_body_masks_day = []
+        num_frames_play = player_car_day_sprite.shape[0]
+        for frame_idx in range(num_anims_day):
+            actual_frame_idx = min(frame_idx, num_frames_play - 1)
+            frame_rgba_np = np.array(player_car_day_sprite[actual_frame_idx])
+            
+            rgb_frame = frame_rgba_np[..., :3]
+            alpha_mask = frame_rgba_np[..., 3] > 0
+            not_black = np.any(rgb_frame > 0, axis=-1)
+            # Use a threshold to catch near-white pixels for details
+            not_white = np.any(rgb_frame < 240, axis=-1)
+            # Player body mask EXCLUDES white pixels to preserve details (stripes, etc.)
+            color_mask = alpha_mask & not_black & not_white
+            
+            id_mask = np.zeros(frame_rgba_np.shape[:2], dtype=np.uint8)
+            for color_rgb, color_id in self.COLOR_TO_ID.items():
+                if color_id == self.jr.TRANSPARENT_ID:
+                    continue
+                color_matches = np.all(rgb_frame == color_rgb[:3], axis=-1)
+                valid_pixels = color_matches & alpha_mask
+                id_mask[valid_pixels] = color_id
+                
+            player_base_masks_day.append(_pad_mask(id_mask))
+            player_body_masks_day.append(_pad_mask(color_mask, pad_val=False))
+            
+        player_base_car_masks_day = jnp.array(np.stack(player_base_masks_day))
+        player_car_body_masks_day = jnp.array(np.stack(player_body_masks_day))
         # Final Shape: [num_sizes, num_anims_day, max_h, max_w]
 
         # --- Process Night Cars (Opponents) ---
@@ -2520,7 +2565,7 @@ class EnduroRenderer(JAXGameRenderer):
             def scale_stack(size_stack):
                 return jax.vmap(jax.vmap(scale_mask))(size_stack)
             
-            base_car_masks_day = scale_stack(base_car_masks_day)
+            opponent_base_car_masks_day = scale_stack(opponent_base_car_masks_day)
             
             def scale_bool_mask(mask):
                 original_h, original_w = mask.shape
@@ -2532,11 +2577,18 @@ class EnduroRenderer(JAXGameRenderer):
             def scale_bool_stack(size_stack):
                 return jax.vmap(jax.vmap(scale_bool_mask))(size_stack)
                 
-            car_body_masks_day = scale_bool_stack(car_body_masks_day)
+            opponent_car_body_masks_day = scale_bool_stack(opponent_car_body_masks_day)
+            
+            # Scale player day masks
+            player_base_car_masks_day = jax.vmap(scale_mask)(player_base_car_masks_day)
+            player_car_body_masks_day = jax.vmap(scale_bool_mask)(player_car_body_masks_day)
+            
             car_masks_night = scale_stack(car_masks_night)
             player_car_night_mask = scale_mask(player_car_night_mask)
 
-        return base_car_masks_day, car_body_masks_day, car_masks_night, player_car_night_mask
+        return (opponent_base_car_masks_day, opponent_car_body_masks_day, 
+                player_base_car_masks_day, player_car_body_masks_day,
+                car_masks_night, player_car_night_mask)
 
     def _scale_mask(self, mask: jnp.ndarray) -> jnp.ndarray:
         """Helper to scale a mask when downscaling is enabled."""
@@ -2602,8 +2654,9 @@ class EnduroRenderer(JAXGameRenderer):
         player_color_idx = self.consts.PLAYER_COLOR_INDEX
         color_id = self.CAR_COLOR_IDS[player_color_idx]
         
-        base_mask = self.base_car_masks_day[0, frame_index]
-        body_mask = self.car_body_masks_day[0, frame_index]
+        # Use player-specific day masks
+        base_mask = self.player_base_car_masks_day[frame_index]
+        body_mask = self.player_car_body_masks_day[frame_index]
         day_mask = jnp.where(body_mask, color_id, base_mask)
         
         night_mask = self.player_car_night_mask
@@ -2728,8 +2781,8 @@ class EnduroRenderer(JAXGameRenderer):
             should_draw = (x != -1)
             def _draw_car(r_in):
                 # Get the correct mask based on day/night and color
-                base_mask = self.base_car_masks_day[i, frame_index]
-                body_mask = self.car_body_masks_day[i, frame_index]
+                base_mask = self.opponent_base_car_masks_day[i, frame_index]
+                body_mask = self.opponent_car_body_masks_day[i, frame_index]
                 color_id = self.CAR_COLOR_IDS[color_idx]
                 
                 day_mask = jnp.where(body_mask, color_id, base_mask)
