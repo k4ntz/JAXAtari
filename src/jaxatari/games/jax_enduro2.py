@@ -104,7 +104,7 @@ def _compute_base_opponents(opponent_spawn_seed: int, opponent_density: float, l
     lane_choices = jax.random.randint(key_lanes, (length_of_opponent_array,), 0, 3, dtype=jnp.int8)
 
     def generate_opponent_color_index(color_key):
-        idx = jax.random.randint(color_key, (), 0, 15)
+        idx = jax.random.randint(color_key, (), 0, 13)
         return jnp.where(idx >= player_color_idx, idx + 1, idx).astype(jnp.int32)
 
     color_keys = jax.random.split(key_colors, length_of_opponent_array)
@@ -295,6 +295,15 @@ class Enduro2Renderer(JAXGameRenderer):
         asset_config = list(self.consts.ASSET_CONFIG)
         asset_config.append({'name': 'player_car', 'type': 'procedural', 'data': player_car_data})
 
+        # Add car colors to asset config to ensure they are in the palette
+        car_rgbs_to_add = [
+            (136, 146, 62), (72, 160, 72), (104, 72, 198), (66, 136, 176), 
+            (66, 114, 194), (198, 108, 58), (162, 162, 42), (66, 158, 130), 
+            (162, 134, 56), (110, 156, 66), (184, 70, 162), (66, 72, 200), (200, 72, 72)
+        ]
+        color_dummy = jnp.array([[list(rgb) + [255] for rgb in car_rgbs_to_add]], dtype=jnp.uint8)
+        asset_config.append({'name': 'car_colors', 'type': 'procedural', 'data': color_dummy})
+
         # Load car sprites manually
         for i in range(7):
             # For the largest opponent slot (0), we use car_1.npy to avoid using the player car sprite.
@@ -322,14 +331,15 @@ class Enduro2Renderer(JAXGameRenderer):
         self.black_digit_sheet_mask = self.SHAPE_MASKS['black_digit_array']
         self.brown_digit_sheet_mask = self.SHAPE_MASKS['brown_digit_array']
 
-        # Store Car Color IDs for recoloring (optional for now, but good to have)
+        # Store Car Color IDs for recoloring
         car_rgbs = [
-            (0, 0, 0), (0, 0, 170), (0, 170, 0), (0, 170, 170),
-            (170, 0, 0), (170, 0, 170), (170, 85, 0), (170, 170, 170),
-            (85, 85, 85), (85, 85, 255), (85, 255, 85), (85, 255, 255),
-            (255, 85, 85), (255, 85, 255), (255, 255, 85), (255, 255, 255)
+            (136, 146, 62), (72, 160, 72), (104, 72, 198), (66, 136, 176), 
+            (66, 114, 194), (198, 108, 58), (162, 162, 42), (66, 158, 130), 
+            (162, 134, 56), (110, 156, 66), (184, 70, 162), (66, 72, 200), (200, 72, 72)
         ]
         self.CAR_COLOR_IDS = jnp.array([self.COLOR_TO_ID.get(rgb, 0) for rgb in car_rgbs], dtype=jnp.uint8)
+        self.black_id = self.COLOR_TO_ID.get((0, 0, 0), 0)
+        self.white_id = self.COLOR_TO_ID.get((255, 255, 255), 0)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: Enduro2GameState) -> jnp.ndarray:
@@ -367,9 +377,8 @@ class Enduro2Renderer(JAXGameRenderer):
         player_mask = self.SHAPE_MASKS['player_car']
         if player_mask.ndim == 3:
              player_mask = player_mask[0]
-             
-        raster = self.jr.render_at(raster, state.player_x.astype(jnp.int32), state.player_y, player_mask)
-        
+
+        raster = self.jr.render_at(raster, state.player_x.astype(jnp.int32), state.player_y, player_mask)        
         # Convert ID raster to RGB
         return self.jr.render_from_palette(raster, self.PALETTE)
 
@@ -399,8 +408,12 @@ class Enduro2Renderer(JAXGameRenderer):
                     num_frames = mask.shape[0]
                     mask = mask[jnp.minimum(frame_index, num_frames - 1)]
                 
-                # Simple rendering without full recoloring for now
-                # In a real implementation, we would use the color_idx to recolor the body
+                # Dynamic recoloring
+                car_color_id = self.CAR_COLOR_IDS[color_idx % len(self.CAR_COLOR_IDS)]
+                # Replace everything that is NOT transparent, NOT black, and NOT white
+                is_body = (mask != self.jr.TRANSPARENT_ID) & (mask != self.black_id) & (mask != self.white_id)
+                mask = jnp.where(is_body, car_color_id, mask)
+                
                 return self.jr.render_at_clipped(r_inner, x.astype(jnp.int32), y.astype(jnp.int32), mask)
 
             return jax.lax.cond(exists, do_render, lambda r_in: r_in, r)
