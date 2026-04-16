@@ -206,11 +206,15 @@ class Enduro2Constants(AutoDerivedConstants):
 
     # === Weather ===
     snow_weather_index: int = struct.field(pytree_node=False, default=3)
+    night_weather_index: int = struct.field(pytree_node=False, default=12)
     steering_snow_factor: float = struct.field(pytree_node=False, default=2.0)
     
     # Weather colors
     snow_grass_color: tuple = struct.field(pytree_node=False, default=(236, 236, 236))
     snow_mountain_color: tuple = struct.field(pytree_node=False, default=(214, 214, 214))
+    night_sky_color: tuple = struct.field(pytree_node=False, default=(74, 74, 74))
+    night_grass_color: tuple = struct.field(pytree_node=False, default=(0, 0, 0))
+    night_mountain_color: tuple = struct.field(pytree_node=False, default=(142, 142, 142))
     mountain_color: tuple = struct.field(pytree_node=False, default=(136, 146, 62))
 
     # UI Positions
@@ -233,6 +237,9 @@ class Enduro2Constants(AutoDerivedConstants):
         {'name': 'mountain_color', 'type': 'procedural', 'data': jnp.array([[[136, 146, 62, 255]]], dtype=jnp.uint8)},
         {'name': 'snow_grass_color', 'type': 'procedural', 'data': jnp.array([[[236, 236, 236, 255]]], dtype=jnp.uint8)},
         {'name': 'snow_mountain_color', 'type': 'procedural', 'data': jnp.array([[[214, 214, 214, 255]]], dtype=jnp.uint8)},
+        {'name': 'night_sky_color', 'type': 'procedural', 'data': jnp.array([[[74, 74, 74, 255]]], dtype=jnp.uint8)},
+        {'name': 'night_grass_color', 'type': 'procedural', 'data': jnp.array([[[0, 0, 0, 255]]], dtype=jnp.uint8)},
+        {'name': 'night_mountain_color', 'type': 'procedural', 'data': jnp.array([[[142, 142, 142, 255]]], dtype=jnp.uint8)},
         {'name': 'track_colors', 'type': 'procedural', 'data': jnp.array([[list(c) + [255] for c in [
             [74, 74, 74], [111, 111, 111], [170, 170, 170], [192, 192, 192]
         ]]], dtype=jnp.uint8)},
@@ -342,6 +349,11 @@ class Enduro2Renderer(JAXGameRenderer):
             if os.path.exists(car_path):
                 car_data = jnp.load(car_path)
                 asset_config.append({'name': f'car_{i}', 'type': 'procedural', 'data': car_data})
+                
+            car_night_path = os.path.join(self._sprite_path, f'cars/car_{actual_idx}_night.npy')
+            if os.path.exists(car_night_path):
+                car_night_data = jnp.load(car_night_path)
+                asset_config.append({'name': f'car_night_{i}', 'type': 'procedural', 'data': car_night_data})
         
         # Load assets
         (
@@ -365,6 +377,11 @@ class Enduro2Renderer(JAXGameRenderer):
         self.snow_mountain_id = self.COLOR_TO_ID.get(self.consts.snow_mountain_color, 0)
         self.mountain_id = self.COLOR_TO_ID.get(self.consts.mountain_color, 0)
 
+        # Night color IDs
+        self.night_sky_id = self.COLOR_TO_ID.get(self.consts.night_sky_color, 0)
+        self.night_grass_id = self.COLOR_TO_ID.get(self.consts.night_grass_color, 0)
+        self.night_mountain_id = self.COLOR_TO_ID.get(self.consts.night_mountain_color, 0)
+
         # Store Odometer Sheet ID Masks
         self.black_digit_sheet_mask = self.SHAPE_MASKS['black_digit_array']
         self.brown_digit_sheet_mask = self.SHAPE_MASKS['brown_digit_array']
@@ -387,14 +404,19 @@ class Enduro2Renderer(JAXGameRenderer):
         xx, yy = self.jr._xx, self.jr._yy
         
         # 1. Draw Sky (top part of game window)
+        sky_color = jnp.where(state.weather_index == self.consts.night_weather_index, self.night_sky_id, self.sky_id)
         sky_mask = (xx >= self.consts.window_offset_left) & (yy < self.consts.sky_height)
-        raster = jnp.where(sky_mask, self.sky_id, raster)
+        raster = jnp.where(sky_mask, sky_color, raster)
         
         # 2. Draw Mountains
         raster = self._render_mountains(raster, state)
 
         # 3. Draw Grass (bottom part of game window)
-        grass_color = jnp.where(state.weather_index == self.consts.snow_weather_index, self.snow_grass_id, self.grass_id)
+        grass_color = jnp.where(
+            state.weather_index == self.consts.snow_weather_index, 
+            self.snow_grass_id, 
+            jnp.where(state.weather_index == self.consts.night_weather_index, self.night_grass_id, self.grass_id)
+        )
         grass_mask = (xx >= self.consts.window_offset_left) & (yy >= self.consts.sky_height) & (yy < self.consts.game_window_height)
         raster = jnp.where(grass_mask, grass_color, raster)
         
@@ -432,6 +454,8 @@ class Enduro2Renderer(JAXGameRenderer):
         animation_period = jnp.maximum(1.0, animation_period)
         animation_step = jnp.floor(state.step_count / animation_period)
         frame_index = (animation_step % 2).astype(jnp.int32)
+        
+        is_night = state.weather_index == self.consts.night_weather_index
 
         def render_slot(r, i):
             pos = state.visible_opponent_positions[i]
@@ -441,7 +465,16 @@ class Enduro2Renderer(JAXGameRenderer):
             exists = x != -1
             
             def do_render(r_inner):
-                mask = self.SHAPE_MASKS[f'car_{i}']
+                mask_day = self.SHAPE_MASKS[f'car_{i}']
+                mask_night = self.SHAPE_MASKS[f'car_night_{i}']
+                
+                # Make sure both have the same number of dimensions before jax.lax.cond
+                if mask_day.ndim == 3 and mask_night.ndim == 2:
+                    mask_night = jnp.expand_dims(mask_night, axis=0)
+                    mask_night = jnp.repeat(mask_night, mask_day.shape[0], axis=0)
+
+                mask = jax.lax.cond(is_night, lambda: mask_night, lambda: mask_day)
+                
                 if mask.ndim == 3:
                     # Use animated frame if available
                     num_frames = mask.shape[0]
@@ -451,7 +484,9 @@ class Enduro2Renderer(JAXGameRenderer):
                 car_color_id = self.CAR_COLOR_IDS[color_idx % len(self.CAR_COLOR_IDS)]
                 # Replace everything that is NOT transparent, NOT black, and NOT white
                 is_body = (mask != self.jr.TRANSPARENT_ID) & (mask != self.black_id) & (mask != self.white_id)
-                mask = jnp.where(is_body, car_color_id, mask)
+                
+                # If it's night, we don't recolor the body because it's only lights. We only draw the original mask.
+                mask = jnp.where(~is_night & is_body, car_color_id, mask)
                 
                 return self.jr.render_at_clipped(r_inner, x.astype(jnp.int32), y.astype(jnp.int32), mask)
 
@@ -463,6 +498,7 @@ class Enduro2Renderer(JAXGameRenderer):
             
         return raster
 
+
     @partial(jax.jit, static_argnums=(0,))
     def _render_mountains(self, raster: jnp.ndarray, state: Enduro2GameState) -> jnp.ndarray:
         """
@@ -471,8 +507,12 @@ class Enduro2Renderer(JAXGameRenderer):
         mountain_left_sprite = self.SHAPE_MASKS['mountain_left']
         mountain_right_sprite = self.SHAPE_MASKS['mountain_right']
 
-        # Dynamic recoloring for snow
-        mountain_color_id = jnp.where(state.weather_index == self.consts.snow_weather_index, self.snow_mountain_id, self.mountain_id)
+        # Dynamic recoloring for snow and night
+        mountain_color_id = jnp.where(
+            state.weather_index == self.consts.snow_weather_index,
+            self.snow_mountain_id,
+            jnp.where(state.weather_index == self.consts.night_weather_index, self.night_mountain_id, self.mountain_id)
+        )
         
         def recolor_mountain(mask):
             is_body = (mask != self.jr.TRANSPARENT_ID)
