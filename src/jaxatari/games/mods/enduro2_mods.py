@@ -1,5 +1,5 @@
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.enduro2.enduro2_mod_plugins import SpeedAndXPosHudMod, StartInCurveMod, StartInMaxCurveMod, FilledRoadMod
+from jaxatari.games.mods.enduro2.enduro2_mod_plugins import SpeedAndXPosHudMod, StartInCurveMod, StartInMaxCurveMod, FilledRoadMod, SnowWeatherMod
 
 class Enduro2EnvMod(JaxAtariModController):    
     """
@@ -10,6 +10,7 @@ class Enduro2EnvMod(JaxAtariModController):
         "start_in_curve": StartInCurveMod,
         "start_in_max_curve": StartInMaxCurveMod,
         "filled_road": FilledRoadMod,
+        "snow": SnowWeatherMod,
     }
 
     def __init__(self,

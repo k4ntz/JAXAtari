@@ -35,6 +35,7 @@ class Enduro2GameState:
     adjusted_opponent_lane: jnp.ndarray  # jnp.int32
     visible_opponent_positions: jnp.ndarray # shape (7, 3) [x, y, color_idx]
     opponent_index: jnp.ndarray
+    weather_index: jnp.ndarray # jnp.int32
 
 @struct.dataclass
 class Enduro2Observation:
@@ -188,6 +189,14 @@ class Enduro2Constants(AutoDerivedConstants):
     mountain_right_x_pos: float = struct.field(pytree_node=False, default=108.0)
     mountain_pixel_movement_per_frame_per_speed_unit: float = struct.field(pytree_node=False, default=0.01)
 
+    # === Weather ===
+    snow_weather_index: int = struct.field(pytree_node=False, default=3)
+    steering_snow_factor: float = struct.field(pytree_node=False, default=2.0)
+    
+    # Snow colors
+    snow_grass_color: tuple = struct.field(pytree_node=False, default=(236, 236, 236))
+    snow_mountain_color: tuple = struct.field(pytree_node=False, default=(214, 214, 214))
+
     # UI Positions
     info_box_x_pos: int = struct.field(pytree_node=False, default=48)
     info_box_y_pos: int = struct.field(pytree_node=False, default=161)
@@ -205,6 +214,8 @@ class Enduro2Constants(AutoDerivedConstants):
         {'name': 'score_box', 'type': 'single', 'file': 'backgrounds/score_box.npy'},
         {'name': 'sky_color', 'type': 'procedural', 'data': jnp.array([[[45, 50, 184, 255]]], dtype=jnp.uint8)},
         {'name': 'grass_color', 'type': 'procedural', 'data': jnp.array([[[0, 68, 0, 255]]], dtype=jnp.uint8)},
+        {'name': 'snow_grass_color', 'type': 'procedural', 'data': jnp.array([[[236, 236, 236, 255]]], dtype=jnp.uint8)},
+        {'name': 'snow_mountain_color', 'type': 'procedural', 'data': jnp.array([[[214, 214, 214, 255]]], dtype=jnp.uint8)},
         {'name': 'track_color', 'type': 'procedural', 'data': jnp.array([[[111, 111, 111, 255]]], dtype=jnp.uint8)},
         {'name': 'digits_black', 'type': 'digits', 'pattern': 'digits/{}_black.npy'},
         {'name': 'black_digit_array', 'type': 'single', 'file': 'digits/black_digit_array.npy'},
@@ -327,6 +338,11 @@ class Enduro2Renderer(JAXGameRenderer):
         self.grass_id = self.COLOR_TO_ID.get((0, 68, 0), 0)
         self.track_id = self.COLOR_TO_ID.get((111, 111, 111), 0)
 
+        # Snow color IDs
+        self.snow_grass_id = self.COLOR_TO_ID.get(self.consts.snow_grass_color, 0)
+        self.snow_mountain_id = self.COLOR_TO_ID.get(self.consts.snow_mountain_color, 0)
+        self.mountain_id = self.COLOR_TO_ID.get((111, 111, 111), 0)
+
         # Store Odometer Sheet ID Masks
         self.black_digit_sheet_mask = self.SHAPE_MASKS['black_digit_array']
         self.brown_digit_sheet_mask = self.SHAPE_MASKS['brown_digit_array']
@@ -356,8 +372,9 @@ class Enduro2Renderer(JAXGameRenderer):
         raster = self._render_mountains(raster, state)
 
         # 3. Draw Grass (bottom part of game window)
+        grass_color = jnp.where(state.weather_index == self.consts.snow_weather_index, self.snow_grass_id, self.grass_id)
         grass_mask = (xx >= self.consts.window_offset_left) & (yy >= self.consts.sky_height) & (yy < self.consts.game_window_height)
-        raster = jnp.where(grass_mask, self.grass_id, raster)
+        raster = jnp.where(grass_mask, grass_color, raster)
         
         # 4. Draw curved track with perspective
         raster = self._render_track(raster, state, xx, yy)
@@ -431,6 +448,16 @@ class Enduro2Renderer(JAXGameRenderer):
         """
         mountain_left_sprite = self.SHAPE_MASKS['mountain_left']
         mountain_right_sprite = self.SHAPE_MASKS['mountain_right']
+
+        # Dynamic recoloring for snow
+        mountain_color_id = jnp.where(state.weather_index == self.consts.snow_weather_index, self.snow_mountain_id, self.mountain_id)
+        
+        def recolor_mountain(mask):
+            is_body = (mask != self.jr.TRANSPARENT_ID)
+            return jnp.where(is_body, mountain_color_id, mask)
+
+        mountain_left_sprite = recolor_mountain(mountain_left_sprite)
+        mountain_right_sprite = recolor_mountain(mountain_right_sprite)
 
         # Positions
         x_left = state.mountain_left_x.astype(jnp.int32)
@@ -711,7 +738,8 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
             adjusted_opponent_index=jnp.array(-1, dtype=jnp.int32),
             adjusted_opponent_lane=jnp.array(-1, dtype=jnp.int32),
             visible_opponent_positions=visible_opponent_positions,
-            opponent_index=opponent_index
+            opponent_index=opponent_index,
+            weather_index=jnp.array(0, dtype=jnp.int32)
         )
         return self._get_observation(state), state
 
@@ -908,6 +936,14 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
 
         # Steering delta (speed-dependent)
         steering_speed = self.consts.horizontal_movement_slope * new_speed + self.consts.horizontal_movement_offset
+        
+        # Add snow steering effect (slower steering)
+        steering_speed = steering_speed / jnp.where(
+            state.weather_index == self.consts.snow_weather_index,
+            self.consts.steering_snow_factor,
+            1.0
+        )
+        
         steering_delta = jnp.where(is_left, -steering_speed, jnp.where(is_right, steering_speed, 0.0))
 
         # Centripetal drift (pushes car away from curve proportional to visual curvature and speed)
