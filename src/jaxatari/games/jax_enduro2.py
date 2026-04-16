@@ -531,7 +531,8 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
         def collision_update(_):
             new_collision_steps = state.collision_steps - 1
             new_collision_mode = new_collision_steps > 0
-            coll_speed = new_speed  # Speed drops only once at the moment of collision
+            # Ignore acceleration/braking during collision push-back
+            coll_speed = state.player_speed
             push_direction = jnp.where(state.player_x < self.consts.player_x_start, 1.0, -1.0)
             coll_player_x = state.player_x + push_direction * self.consts.collision_push_back
             return coll_player_x, coll_speed, new_collision_mode, new_collision_steps
