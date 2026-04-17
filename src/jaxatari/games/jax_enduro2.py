@@ -468,8 +468,19 @@ class Enduro2Renderer(JAXGameRenderer):
 
         # 1. Draw Sky (top part of game window)
         sky_color = current_weather_colors[0]
-        sky_mask = (xx >= self.consts.window_offset_left) & (yy < self.consts.sky_height)
+        sky_mask = (xx >= self.consts.window_offset_left) & (yy < self.consts.sky_height - 6)
         raster = jnp.where(sky_mask, sky_color, raster)
+
+        # 1.1 Draw Horizons (h3, h2, h1 from top to bottom)
+        h3_mask = (xx >= self.consts.window_offset_left) & (yy >= self.consts.sky_height - 6) & (yy < self.consts.sky_height - 4)
+        raster = jnp.where(h3_mask, current_weather_colors[5], raster)
+
+        h2_mask = (xx >= self.consts.window_offset_left) & (yy >= self.consts.sky_height - 4) & (yy < self.consts.sky_height - 2)
+        raster = jnp.where(h2_mask, current_weather_colors[4], raster)
+
+        h1_mask = (xx >= self.consts.window_offset_left) & (yy >= self.consts.sky_height - 2) & (yy < self.consts.sky_height)
+        raster = jnp.where(h1_mask, current_weather_colors[3], raster)
+
         
         # 2. Draw Mountains
         raster = self._render_mountains(raster, state)
