@@ -125,11 +125,6 @@ class WizardOfWorConstants(struct.PyTreeNode):
     DOWN: int = Action.DOWN
     LEFT: int = Action.LEFT
     RIGHT: int = Action.RIGHT
-    FIRE: int = Action.FIRE
-    UPFIRE: int = Action.UPFIRE
-    DOWNFIRE: int = Action.DOWNFIRE
-    LEFTFIRE: int = Action.LEFTFIRE
-    RIGHTFIRE: int = Action.RIGHTFIRE
 
     # Enemy types
     ENEMY_NONE: int = 0
@@ -359,6 +354,10 @@ def update_state(state: WizardOfWorState, player: EntityPosition = None, enemies
 
 
 class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, WizardOfWorInfo, WizardOfWorConstants]):
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.FIRE, Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT, Action.UPFIRE, Action.DOWNFIRE, Action.LEFTFIRE, Action.RIGHTFIRE],
+        dtype=jnp.int32,
+    )
     def __init__(self, consts: WizardOfWorConstants = None, reward_funcs: list[callable] = None):
         consts = consts or WizardOfWorConstants()
         super().__init__(consts)
@@ -418,16 +417,18 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
         :param action: The action taken by the player.
         :return: A tuple containing the new observation, the updated state, the reward, whether the game is done, and additional info.
         """
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
         previous_state = state
         new_state = update_state(
             state=state,
             frame_counter=(state.frame_counter + 1) % 360,
-            rng_key=jax.random.fold_in(state.rng_key, action),
+            rng_key=jax.random.fold_in(state.rng_key, atari_action),
             # Teleporter is true if the frame_counter is below 180
             teleporter=(state.frame_counter < 180)
         )
         new_state = self._step_level_change(state=new_state)
-        new_state = self._step_player_movement(state=new_state, action=action)
+        new_state = self._step_player_movement(state=new_state, action=atari_action)
         new_state = self._step_bullet_movement(state=new_state)
         new_state = self._step_enemy_movement(state=new_state)
         new_state = self._step_collision_detection(state=new_state)
@@ -451,7 +452,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
 
     def action_space(self) -> spaces.Discrete:
         """Returns the action space of the game."""
-        return spaces.Discrete(6)  # Platzhalter
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def image_space(self) -> spaces.Box:
         """Returns the image space of the game."""
@@ -789,7 +790,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
 
         def _is_spawn_action(action):
             # Prüft, ob die Aktion eine echte Bewegung oder Schuss ist (kein NOOP)
-            return ~jnp.equal(action, self.consts.NONE)
+            return ~jnp.equal(action, Action.NOOP)
 
         def _spawn_player_at_start():
             spawn_pos = self.consts.PLAYER_SPAWN_POSITION
@@ -809,7 +810,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
         def handle_alive():
             def _get_new_position(player: EntityPosition, action: int) -> EntityPosition:
                 return jax.lax.cond(
-                    jnp.logical_or(jnp.equal(action, self.consts.UP), jnp.equal(action, self.consts.UPFIRE)),
+                    jnp.logical_or(jnp.equal(action, Action.UP), jnp.equal(action, Action.UPFIRE)),
                     lambda: EntityPosition(
                         x=player.x,
                         y=player.y - self.consts.STEP_SIZE,
@@ -818,7 +819,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
                         direction=self.consts.UP
                     ),
                     lambda: jax.lax.cond(
-                        jnp.logical_or(jnp.equal(action, self.consts.DOWN), jnp.equal(action, self.consts.DOWNFIRE)),
+                        jnp.logical_or(jnp.equal(action, Action.DOWN), jnp.equal(action, Action.DOWNFIRE)),
                         lambda: EntityPosition(
                             x=player.x,
                             y=player.y + self.consts.STEP_SIZE,
@@ -827,8 +828,8 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
                             direction=self.consts.DOWN
                         ),
                         lambda: jax.lax.cond(
-                            jnp.logical_or(jnp.equal(action, self.consts.LEFT),
-                                           jnp.equal(action, self.consts.LEFTFIRE)),
+                            jnp.logical_or(jnp.equal(action, Action.LEFT),
+                                           jnp.equal(action, Action.LEFTFIRE)),
                             lambda: EntityPosition(
                                 x=player.x - self.consts.STEP_SIZE,
                                 y=player.y,
@@ -837,8 +838,8 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
                                 direction=self.consts.LEFT
                             ),
                             lambda: jax.lax.cond(
-                                jnp.logical_or(jnp.equal(action, self.consts.RIGHT),
-                                               jnp.equal(action, self.consts.RIGHTFIRE)),
+                                jnp.logical_or(jnp.equal(action, Action.RIGHT),
+                                               jnp.equal(action, Action.RIGHTFIRE)),
                                 lambda: EntityPosition(
                                     x=player.x + self.consts.STEP_SIZE,
                                     y=player.y,
@@ -945,14 +946,14 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
             new_bullet = jax.lax.cond(
                 jnp.logical_or(
                     jnp.logical_or(
-                        jnp.equal(action, self.consts.FIRE),
-                        jnp.equal(action, self.consts.UPFIRE)
+                        jnp.equal(action, Action.FIRE),
+                        jnp.equal(action, Action.UPFIRE)
                     ),
                     jnp.logical_or(
-                        jnp.equal(action, self.consts.DOWNFIRE),
+                        jnp.equal(action, Action.DOWNFIRE),
                         jnp.logical_or(
-                            jnp.equal(action, self.consts.LEFTFIRE),
-                            jnp.equal(action, self.consts.RIGHTFIRE)
+                            jnp.equal(action, Action.LEFTFIRE),
+                            jnp.equal(action, Action.RIGHTFIRE)
                         )
                     )
                 ) & (state.bullet.direction == self.consts.NONE),
@@ -1834,8 +1835,7 @@ class WizardOfWorRenderer(JAXGameRenderer):
 
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        base_sprite_dir = os.path.join("src", "jaxatari", "games", "sprites")
-        sprite_path = os.path.join(base_sprite_dir, "wizardofwor") # render_utils.get_base_sprite_dir()
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "wizardofwor")
 
         final_asset_config = list(_get_default_asset_config())
 
