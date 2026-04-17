@@ -846,7 +846,7 @@ class Enduro2Renderer(JAXGameRenderer):
             animation_step = (state.step_count // 8) % 2
             flag_mask = self.SHAPE_MASKS['flags'][animation_step.astype(jnp.int32)]
             # Draw flags with black background
-            return self.jr.render_at(r, self.consts.score_start_x - 2, self.consts.score_start_y, flag_mask)
+            return self.jr.render_at(r, self.consts.score_start_x - 9, self.consts.score_start_y - 1, flag_mask)
             
         def render_digits(r):
             digit_sprites = self.SHAPE_MASKS['digits_black']
