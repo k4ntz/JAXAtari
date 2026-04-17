@@ -197,24 +197,8 @@ class SpeedAndXPosHudMod(JaxAtariInternalModPlugin):
 
 class DistanceWeatherMod(JaxAtariInternalModPlugin):
     """
-    Iterates the weather state every 10km driven instead of based on time.
+    Iterates the weather state every 16km driven instead of based on time.
     """
-    @partial(jax.jit, static_argnums=(0,))
-    def reset(self, key: jax.random.PRNGKey = None):
-        obs, state = self._env.__class__.reset(self._env, key)
-        new_weather_index = (state.distance // 1.0).astype(jnp.int32) % 16
-        state = state.replace(weather_index=new_weather_index)
-        return obs, state
-
-    @partial(jax.jit, static_argnums=(0,))
-    def step(self, state, action):
-        # Apply distance-based weather before step for logic like snow steering
-        dist_weather_index = (state.distance // 1.0).astype(jnp.int32) % 16
-        state = state.replace(weather_index=dist_weather_index)
-        
-        obs, state, reward, done, info = self._env.__class__.step(self._env, state, action)
-        
-        # Apply again after step because the base step overrides it with time-based logic
-        dist_weather_index_new = (state.distance // 1.0).astype(jnp.int32) % 16
-        state = state.replace(weather_index=dist_weather_index_new)
-        return obs, state, reward, done, info
+    constants_overrides = {
+        "weather_cycle_distance": 16.0
+    }

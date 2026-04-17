@@ -249,6 +249,7 @@ class Enduro2Constants(AutoDerivedConstants):
     steering_snow_factor: float = struct.field(pytree_node=False, default=2.0)
     weather_with_night_car_sprite: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([12, 13, 14], dtype=jnp.int32))
     fog_height: int = struct.field(pytree_node=False, default=80)
+    weather_cycle_distance: float = struct.field(pytree_node=False, default=0.0)
 
     # Dynamic derived constants for weather
     weather_starts_s: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
@@ -260,8 +261,10 @@ class Enduro2Constants(AutoDerivedConstants):
     info_box_y_pos: int = struct.field(pytree_node=False, default=161)
     distance_odometer_start_x: int = struct.field(pytree_node=False, default=65)
     score_start_x: int = struct.field(pytree_node=False, default=81)
+    level_x: int = struct.field(pytree_node=False, default=57)
     score_start_y: Optional[int] = struct.field(pytree_node=False, default=None)
     distance_odometer_start_y: Optional[int] = struct.field(pytree_node=False, default=None)
+    level_y: Optional[int] = struct.field(pytree_node=False, default=None)
 
     # Asset config for simplified renderer
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=lambda: (
@@ -329,6 +332,7 @@ class Enduro2Constants(AutoDerivedConstants):
             'km_per_speed_unit_per_frame': km_per_speed_unit_per_frame,
             'distance_odometer_start_y': game_window_height + 9,
             'score_start_y': game_window_height + 25,
+            'level_y': game_window_height + 25,
             'track_height': track_height,
             'curve_offset_base': curve_offset_base,
             'precomputed_left_curves': precomputed_left_curves,
@@ -505,6 +509,7 @@ class Enduro2Renderer(JAXGameRenderer):
         # 6. Render UI
         raster = self._render_distance_odometer(raster, state)
         raster = self._render_cars_to_pass(raster, state)
+        raster = self._render_day_counter(raster, state)
 
         # 7. Render Opponents
         raster = self._render_opponent_cars(raster, state)
@@ -887,6 +892,25 @@ class Enduro2Renderer(JAXGameRenderer):
             raster
         )
 
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_day_counter(self, raster: jnp.ndarray, state: Enduro2GameState) -> jnp.ndarray:
+        """
+        Renders the current day (level) digit.
+        """
+        # In Enduro, the day counter is the level number (starting from 1)
+        current_day = state.level
+        
+        # Clip current_day to 0-9 for safety, though level should be 1-5
+        safe_day = jnp.clip(current_day, 0, 9).astype(jnp.int32)
+        
+        digit_sprites = self.SHAPE_MASKS['digits_black']
+        day_digit_mask = digit_sprites[safe_day]
+        
+        # Render the day digit at the designated position
+        raster = self.jr.render_at(raster, self.consts.level_x, self.consts.level_y, day_digit_mask)
+        
+        return raster
+
 
 class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Info, Enduro2Constants]):
     ACTION_SET: jnp.ndarray = jnp.array(
@@ -956,7 +980,7 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
             game_over=jnp.array(False, dtype=jnp.bool_),
             player_speed=jnp.array(self.consts.initial_speed, dtype=jnp.float32),
             distance=jnp.array(0.0, dtype=jnp.float32),
-            cars_to_pass=jnp.array(2, dtype=jnp.int32),
+            cars_to_pass=jnp.array(200, dtype=jnp.int32),
             track_top_x=jnp.array(track_top_x, dtype=jnp.float32),
             track_top_x_curve_offset=jnp.array(self.consts.initial_track_top_x_curve_offset, dtype=jnp.float32),
             collision_mode=jnp.array(False, dtype=jnp.bool_),
@@ -1310,14 +1334,24 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
 
         # 5. Update Weather and Day Cycle
         new_step_count = state.step_count + 1
+
+        # Calculate time-based weather and day
         cycled_time = (new_step_count / self.consts.frame_rate) % self.consts.day_cycle_time
-        new_weather_index = jnp.searchsorted(self.consts.weather_starts_s, cycled_time, side='right')
-        
-        # Calculate current day based on total elapsed time
-        new_day_count = jnp.floor(new_step_count / self.consts.frame_rate / self.consts.day_cycle_time).astype(jnp.int32)
-        
-        # Day transition and level logic
-        # Check if the player passed the level (cars_to_pass reaches 0)
+        time_weather_index = jnp.searchsorted(self.consts.weather_starts_s, cycled_time, side='right')
+        time_day_count = jnp.floor(new_step_count / self.consts.frame_rate / self.consts.day_cycle_time).astype(jnp.int32)
+
+        # Calculate distance-based weather and day
+        # In distance mode, weather cycles every 16km, changing index every 1km
+        dist_weather_index = (new_distance // 1.0).astype(jnp.int32) % 16
+        dist_day_count = (new_distance // 16.0).astype(jnp.int32)
+
+        # Use distance-based if configured
+        use_dist = self.consts.weather_cycle_distance > 0.0
+
+        new_weather_index = jax.lax.select(use_dist, dist_weather_index, time_weather_index)
+        new_day_count = jax.lax.select(use_dist, dist_day_count, time_day_count)
+
+        # Day transition and level logic        # Check if the player passed the level (cars_to_pass reaches 0)
         new_level_passed = jnp.logical_or(
             state.level_passed,
             new_cars_to_pass <= 0
