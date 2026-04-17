@@ -39,6 +39,9 @@ class Enduro2GameState:
     adjusted_opponent_lane: jnp.ndarray  # jnp.int32
     visible_opponent_positions: jnp.ndarray # shape (7, 3) [x, y, color_idx]
     opponent_index: jnp.ndarray
+    opponent_speed: jnp.ndarray
+    opponent_density: jnp.ndarray
+    base_opponents: jnp.ndarray
     weather_index: jnp.ndarray # jnp.int32
 
 @struct.dataclass
@@ -125,17 +128,15 @@ def _compute_static_track(track_seed: int, max_track_length: float, min_track_se
     rest_segments = jnp.stack([directions, track_starts], axis=1)
     return jnp.concatenate([first_segment, rest_segments], axis=0)
 
-@partial(jax.jit, static_argnums=(0, 1, 2, 3, 4))
-def _compute_base_opponents(opponent_spawn_seed: int, opponent_density: float, length_of_opponent_array: int, opponent_delay_slots: int, player_color_idx: int) -> jnp.ndarray:
-    key = jax.random.PRNGKey(opponent_spawn_seed)
+@partial(jax.jit, static_argnums=(1, 2, 3))
+def _compute_base_opponents(key: jrandom.PRNGKey, length_of_opponent_array: int, opponent_delay_slots: int, player_color_idx: int) -> jnp.ndarray:
     key, key_colors = jax.random.split(key)
-    num_occupied = int(round(opponent_density * length_of_opponent_array))
     key, key_positions = jax.random.split(key)
-    all_indices = jnp.arange(length_of_opponent_array)
-    shuffled_indices = jax.random.permutation(key_positions, all_indices)
-    occupied_positions = shuffled_indices[:num_occupied]
-    occupancy_mask = jnp.zeros(length_of_opponent_array, dtype=jnp.bool_)
-    occupancy_mask = occupancy_mask.at[occupied_positions].set(True)
+    
+    # Generate spawn priority for each slot
+    spawn_priority = jax.random.permutation(key_positions, jnp.arange(length_of_opponent_array))
+    spawn_priority = spawn_priority.astype(jnp.float32) / length_of_opponent_array
+
     key, key_lanes = jax.random.split(key)
     lane_choices = jax.random.randint(key_lanes, (length_of_opponent_array,), 0, 3, dtype=jnp.int8)
 
@@ -148,21 +149,31 @@ def _compute_base_opponents(opponent_spawn_seed: int, opponent_density: float, l
 
     def process_slot(carry, inputs):
         key_step, last_two_lanes, non_gap_count = carry
-        is_occupied, candidate_lane, color = inputs
+        candidate_lane, color = inputs
         key_step, key_fix = jax.random.split(key_step)
+        
+        # We always process as if occupied to ensure no triples in the base pattern
         has_valid_triple = ((non_gap_count >= 2) & (last_two_lanes[0] != last_two_lanes[1]) & (candidate_lane != last_two_lanes[0]) & (candidate_lane != last_two_lanes[1]))
         fixed_lane = jax.random.choice(key_fix, jnp.array([last_two_lanes[0], last_two_lanes[1]]))
-        final_lane = jax.lax.select(has_valid_triple & is_occupied, fixed_lane, candidate_lane)
-        final_val = jax.lax.select(is_occupied, final_lane, jnp.array(-1, dtype=jnp.int8))
-        new_non_gap = jax.lax.select(is_occupied, non_gap_count + 1, 0)
-        new_last_two = jax.lax.select(is_occupied, jnp.array([last_two_lanes[1], final_lane]), last_two_lanes)
-        new_color = jax.lax.select(is_occupied, color, -1)
-        return (key_step, new_last_two, new_non_gap), jnp.array([final_val, new_color])
+        final_lane = jax.lax.select(has_valid_triple, fixed_lane, candidate_lane)
+        
+        new_non_gap = non_gap_count + 1
+        new_last_two = jnp.array([last_two_lanes[1], final_lane])
+        return (key_step, new_last_two, new_non_gap), jnp.array([final_lane, color])
 
     init_carry = (key, jnp.array([-1, -1], dtype=jnp.int8), 0)
-    _, final_opponents = jax.lax.scan(process_slot, init_carry, (occupancy_mask, lane_choices, colors))
+    _, final_opponents = jax.lax.scan(process_slot, init_carry, (lane_choices, colors))
     final_opponents = jnp.transpose(final_opponents)
-    delay_block = jnp.full((2, opponent_delay_slots), -1, dtype=jnp.int32)
+    
+    # Add spawn_priority row
+    final_opponents = jnp.concatenate([final_opponents, spawn_priority[jnp.newaxis, :]], axis=0)
+
+    # Add delay block with -1 lanes and 2.0 spawn priority (never spawn)
+    delay_block = jnp.array([
+        jnp.full((opponent_delay_slots,), -1, dtype=jnp.float32),
+        jnp.full((opponent_delay_slots,), -1, dtype=jnp.float32),
+        jnp.full((opponent_delay_slots,), 2.0, dtype=jnp.float32)
+    ])
     return jnp.concatenate([final_opponents, delay_block], axis=1)
 
 class Enduro2Constants(AutoDerivedConstants):
@@ -236,6 +247,12 @@ class Enduro2Constants(AutoDerivedConstants):
     initial_position: int = struct.field(pytree_node=False, default=200)
     next_day_car_position: int = struct.field(pytree_node=False, default=300)
 
+    # Difficulty Scaling
+    opponent_speed_increment: float = struct.field(pytree_node=False, default=4.0)
+    opponent_density_increment: float = struct.field(pytree_node=False, default=0.05)
+    max_opponent_density: float = struct.field(pytree_node=False, default=0.45)
+    max_opponent_speed: float = struct.field(pytree_node=False, default=80.0)
+
     # Mountains
     mountain_left_x_pos: float = struct.field(pytree_node=False, default=40.0)
     mountain_right_x_pos: float = struct.field(pytree_node=False, default=108.0)
@@ -305,7 +322,7 @@ class Enduro2Constants(AutoDerivedConstants):
         ], dtype=jnp.int32)
 
         base_opponents = _compute_base_opponents(
-            self.opponent_spawn_seed, self.opponent_density,
+            jax.random.PRNGKey(self.opponent_spawn_seed),
             self.length_of_opponent_array, self.opponent_delay_slots, self.PLAYER_COLOR_INDEX
         )
 
@@ -520,8 +537,8 @@ class Enduro2Renderer(JAXGameRenderer):
         is_night = jnp.isin(state.weather_index, self.consts.weather_with_night_car_sprite)
 
         # Calculate animation period based on player speed
-        animation_period = self.consts.opponent_animation_steps - (state.player_speed - self.consts.opponent_speed) / (
-                self.consts.max_speed - self.consts.opponent_speed) * (self.consts.opponent_animation_steps - 1)
+        animation_period = self.consts.opponent_animation_steps - (state.player_speed - state.opponent_speed) / (
+                self.consts.max_speed - state.opponent_speed) * (self.consts.opponent_animation_steps - 1)
         animation_period = jnp.maximum(1.0, animation_period)
         
         # Faster vibration during collision
@@ -557,8 +574,8 @@ class Enduro2Renderer(JAXGameRenderer):
         Renders visible opponent cars.
         """
         # Calculate animation period based on player speed
-        animation_period = self.consts.opponent_animation_steps - (state.player_speed - self.consts.opponent_speed) / (
-                self.consts.max_speed - self.consts.opponent_speed) * (self.consts.opponent_animation_steps - 1)
+        animation_period = self.consts.opponent_animation_steps - (state.player_speed - state.opponent_speed) / (
+                self.consts.max_speed - state.opponent_speed) * (self.consts.opponent_animation_steps - 1)
         animation_period = jnp.maximum(1.0, animation_period)
         animation_step = jnp.floor(state.step_count / animation_period)
         frame_index = (animation_step % 2).astype(jnp.int32)
@@ -966,6 +983,7 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
         visible_opponent_positions = self._get_visible_opponent_positions(
             opponent_index,
             self.consts.base_opponents,
+            jnp.array(self.consts.opponent_density, dtype=jnp.float32),
             jnp.array(-1, dtype=jnp.int32),
             jnp.array(-1, dtype=jnp.int32),
             visible_track_left,
@@ -993,6 +1011,9 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
             adjusted_opponent_lane=jnp.array(-1, dtype=jnp.int32),
             visible_opponent_positions=visible_opponent_positions,
             opponent_index=opponent_index,
+            opponent_speed=jnp.array(self.consts.opponent_speed, dtype=jnp.float32),
+            opponent_density=jnp.array(self.consts.opponent_density, dtype=jnp.float32),
+            base_opponents=self.consts.base_opponents,
             weather_index=jnp.array(0, dtype=jnp.int32)
         )
         return self._get_observation(state), state
@@ -1000,6 +1021,7 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
     @partial(jax.jit, static_argnums=(0,))
     def _get_visible_opponent_positions(self, opponent_index: jnp.ndarray,
                                         base_opponents: jnp.ndarray,
+                                        opponent_density: jnp.ndarray,
                                         adjusted_opponent_index: jnp.ndarray,
                                         adjusted_opponent_lane: jnp.ndarray,
                                         visible_track_left: jnp.ndarray,
@@ -1018,8 +1040,14 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
         opponent_array_size = base_opponents.shape[1]
         slot_indices = (index_integer + jnp.arange(7)) % opponent_array_size
         
-        current_slots = base_opponents[0][slot_indices]
-        current_colors = base_opponents[1][slot_indices]
+        # New structure: row 0 = lane, row 1 = color, row 2 = spawn_priority
+        current_slots = base_opponents[0][slot_indices].astype(jnp.int32)
+        current_colors = base_opponents[1][slot_indices].astype(jnp.int32)
+        spawn_priorities = base_opponents[2][slot_indices]
+
+        # Use density to mask opponents
+        is_occupied = spawn_priorities < opponent_density
+        current_slots = jnp.where(is_occupied, current_slots, -1)
 
         is_adjusted = slot_indices == adjusted_opponent_index
         current_slots = jnp.where(is_adjusted & (adjusted_opponent_lane != -1), adjusted_opponent_lane, current_slots)
@@ -1055,7 +1083,8 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
         return result
 
     @partial(jax.jit, static_argnums=(0,))
-    def _adjust_opponent_positions_when_overtaking(self, state: Enduro2GameState, new_opponent_index: jnp.ndarray, 
+    def _adjust_opponent_positions_when_overtaking(self, state: Enduro2GameState, new_opponent_index: jnp.ndarray,
+                                                  base_opponents: jnp.ndarray,
                                                   visible_track_left: jnp.ndarray, visible_track_right: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
         new_integer_index = jnp.floor(new_opponent_index).astype(jnp.int32)
         previous_integer_index = jnp.floor(state.opponent_index).astype(jnp.int32)
@@ -1074,24 +1103,23 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
             player_in_lane_1 = (player_left_ratio < 2 / 3) & (player_right_ratio > 1 / 3)
             player_in_lane_2 = (player_left_ratio < 1.0) & (player_right_ratio > 2 / 3)
 
-            opponent_array_size = self.consts.base_opponents.shape[1]
+            opponent_array_size = base_opponents.shape[1]
             slot_0_index = new_integer_index % opponent_array_size
-            
-            base_lane = self.consts.base_opponents[0, slot_0_index]
+
+            base_lane = base_opponents[0, slot_0_index].astype(jnp.int32)
             slot_0_lane = jnp.where((slot_0_index == state.adjusted_opponent_index) & (state.adjusted_opponent_lane != -1),
                                     state.adjusted_opponent_lane, base_lane)
-
             would_collide = ((slot_0_lane == 0) & player_in_lane_0) | \
                             ((slot_0_lane == 1) & player_in_lane_1) | \
                             ((slot_0_lane == 2) & player_in_lane_2)
 
-            safe_lane = jnp.where(~player_in_lane_0, 0, jnp.where(~player_in_lane_2, 2, 1))
+            safe_lane = jnp.where(~player_in_lane_0, 0, jnp.where(~player_in_lane_2, 2, 1)).astype(jnp.int32)
 
             needs_adjustment = would_collide & (slot_0_lane != -1)
             new_lane = jnp.where(needs_adjustment, safe_lane, slot_0_lane)
             
-            return jnp.where(needs_adjustment, slot_0_index, state.adjusted_opponent_index), \
-                   jnp.where(needs_adjustment, new_lane, state.adjusted_opponent_lane)
+            return jnp.where(needs_adjustment, slot_0_index, state.adjusted_opponent_index).astype(jnp.int32), \
+                   jnp.where(needs_adjustment, new_lane, state.adjusted_opponent_lane).astype(jnp.int32)
 
         return lax.cond(
             slots_retreated > 0,
@@ -1224,14 +1252,17 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
 
         # ====== OPPONENT MOVEMENT AND OVERTAKING ======
         base_progression_rate = self.consts.opponent_relative_speed_factor / self.consts.frame_rate
-        relative_speed = (new_speed - self.consts.opponent_speed) / self.consts.opponent_speed * base_progression_rate
+        relative_speed = (new_speed - state.opponent_speed) / state.opponent_speed * base_progression_rate
         new_opponent_index = state.opponent_index + relative_speed
 
-        new_adjusted_idx, new_adjusted_lane = self._adjust_opponent_positions_when_overtaking(state, new_opponent_index, visible_track_left, visible_track_right)
+        new_adjusted_idx, new_adjusted_lane = self._adjust_opponent_positions_when_overtaking(
+            state, new_opponent_index, state.base_opponents, visible_track_left, visible_track_right
+        )
 
         new_visible_opponent_positions = self._get_visible_opponent_positions(
             new_opponent_index,
-            self.consts.base_opponents,
+            state.base_opponents,
+            state.opponent_density,
             new_adjusted_idx,
             new_adjusted_lane,
             visible_track_left,
@@ -1364,16 +1395,24 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
             # If day advances and level is not passed, game over!
             is_game_over = jnp.logical_not(new_level_passed).astype(jnp.bool_)
             level = jnp.where(is_game_over, state.level, state.level + 1)
-            # When advancing level, reset cars to pass. For simplicity here, just using a fixed 200/300 etc if needed
-            # Or just keep it 200 for now. Original enduro increases it by 100 per level up to max.
-            cars_increase_per_level = 100
+            
+            # Difficulty scaling
+            final_opp_speed = jnp.minimum(
+                self.consts.max_opponent_speed,
+                state.opponent_speed + self.consts.opponent_speed_increment
+            )
+            final_opp_density = jnp.minimum(
+                self.consts.max_opponent_density,
+                state.opponent_density + self.consts.opponent_density_increment
+            )
+            
             cars_to_pass = jnp.where(is_game_over, new_cars_to_pass, self.consts.next_day_car_position)
-            return level, jnp.array(0, dtype=jnp.int32), is_game_over, cars_to_pass
+            return level, jnp.array(0, dtype=jnp.int32), is_game_over, cars_to_pass, final_opp_speed, final_opp_density
 
         def do_nothing():
-            return state.level, new_level_passed, state.game_over, new_cars_to_pass
+            return state.level, new_level_passed, state.game_over, new_cars_to_pass, state.opponent_speed, state.opponent_density
 
-        new_level, final_level_passed, new_game_over, final_cars_to_pass = lax.cond(
+        new_level, final_level_passed, new_game_over, final_cars_to_pass, final_opp_speed, final_opp_density = lax.cond(
             new_day_count > state.day_count,
             reset_day,
             do_nothing,
@@ -1400,6 +1439,8 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
             visible_opponent_positions=new_visible_opponent_positions,
             adjusted_opponent_index=new_adjusted_idx,
             adjusted_opponent_lane=new_adjusted_lane,
+            opponent_speed=final_opp_speed,
+            opponent_density=final_opp_density,
             cars_to_pass=final_cars_to_pass
         )
 

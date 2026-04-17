@@ -205,3 +205,12 @@ class ShortDaysMod(JaxAtariInternalModPlugin):
         "initial_position": 20,
         "next_day_car_position": 30
     }
+
+class NoOpponentsMod(JaxAtariInternalModPlugin):
+    """
+    Disables all opponent cars.
+    """
+    constants_overrides = {
+        "opponent_density": 0.0,
+        "opponent_density_increment": 0.0
+    }
