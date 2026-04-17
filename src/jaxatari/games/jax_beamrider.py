@@ -2,11 +2,12 @@
 import os
 from enum import IntEnum
 from functools import partial
-from typing import NamedTuple, Optional, Tuple
+from typing import Optional, Tuple
 import chex
 import jax
 import jax.lax
 import jax.numpy as jnp
+from flax import struct
 
 import jaxatari.spaces as spaces
 
@@ -187,175 +188,172 @@ class StandbyPhase(IntEnum):
     SECTOR_DONE = 3
 
 
-class BeamriderConstants(NamedTuple):
+@struct.dataclass
+class BeamriderConstants:
+    STARTING_SECTOR: int = struct.field(pytree_node=False, default=1)
+    STARTING_LIVES: int = struct.field(pytree_node=False, default=3)
+    MAX_LIVES: int = struct.field(pytree_node=False, default=14)
+    WHITE_UFOS_PER_SECTOR: int = struct.field(pytree_node=False, default=15)
 
-    STARTING_SECTOR: int = 1
-    STARTING_LIVES: int = 3
-    MAX_LIVES: int = 14
-    WHITE_UFOS_PER_SECTOR: int = 15
+    RENDER_SCALE_FACTOR: int = struct.field(pytree_node=False, default=4)
+    SCREEN_WIDTH: int = struct.field(pytree_node=False, default=160)
+    SCREEN_HEIGHT: int = struct.field(pytree_node=False, default=210)
+    PLAYER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(223, 183, 85))
+    LEFT_CLIP_PLAYER: int = struct.field(pytree_node=False, default=27)
+    RIGHT_CLIP_PLAYER: int = struct.field(pytree_node=False, default=142)
+    BOTTOM_OF_LANES: Tuple[int, int, int, int, int] = struct.field(pytree_node=False, default=(27, 52, 77, 102, 127))
+    TOP_OF_LANES: Tuple[int, int, int, int, int] = struct.field(pytree_node=False, default=(38, 61, 71, 81, 91, 102, 123))  #lane 0,6 are connected to points in middle of the map, not to bottom lane points
 
-    RENDER_SCALE_FACTOR: int = 4
-    SCREEN_WIDTH: int = 160
-    SCREEN_HEIGHT: int = 210
-    PLAYER_COLOR: Tuple[int, int, int] = (223, 183, 85)
-    LEFT_CLIP_PLAYER: int = 27
-    RIGHT_CLIP_PLAYER: int = 142
-    BOTTOM_OF_LANES: Tuple[int, int, int, int, int] = (27,52,77,102,127)
-    TOP_OF_LANES: Tuple[int, int, int, int, int] = (38,61,71,81,91,102,123)  #lane 0,6 are connected to points in middle of the map, not to bottom lane points
-    
-    TOP_TO_BOTTOM_LANE_VECTORS: Tuple[Tuple[float, float],Tuple[float, float],Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]] = ((-2,4),(-1, 4), (-0.52, 4), (0,4), (0.52, 4), (1, 4),(2,4))
+    TOP_TO_BOTTOM_LANE_VECTORS: Tuple[
+        Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[
+            float, float], Tuple[float, float]] = struct.field(pytree_node=False,
+                                                               default=((-2, 4), (-1, 4), (-0.52, 4), (0, 4), (0.52, 4),
+                                                                        (1, 4), (2, 4)))
 
-
-    MAX_LASER_Y: int = 64
-    MIN_BULLET_Y:int =155
-    MAX_TORPEDO_Y: int = 49
-    MAX_TORPEDO_Y_MOTHERSHIP_SCENE: int = 45
-    BOTTOM_TO_TOP_LANE_VECTORS: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]] = ((-1, 4), (-0.52, 4), (0,4), (0.52, 4), (1, 4))
-
-    PLAYER_POS_Y: int = 164
-    PLAYER_SPEED: float = 2.5
+    MAX_LASER_Y: int = struct.field(pytree_node=False, default=64)
+    MIN_BULLET_Y: int = struct.field(pytree_node=False, default=155)
+    MAX_TORPEDO_Y: int = struct.field(pytree_node=False, default=49)
+    MAX_TORPEDO_Y_MOTHERSHIP_SCENE: int = struct.field(pytree_node=False, default=45)
+    BOTTOM_TO_TOP_LANE_VECTORS: Tuple[
+        Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[
+            float, float]] = struct.field(pytree_node=False, default=((-1, 4), (-0.52, 4), (0, 4), (0.52, 4), (1, 4)))
+    PLAYER_POS_Y: int = struct.field(pytree_node=False, default=164)
+    PLAYER_SPEED: float = struct.field(pytree_node=False, default=2.5)
     # ALE immediately re-arms after a clean despawn at the horizon.
     # Impacts add an 8-frame recovery window before a new launch can be queued.
-    PLAYER_SHOT_RECOVERY: int = 8
+    PLAYER_SHOT_RECOVERY: int = struct.field(pytree_node=False, default=8)
     # After gameplay starts, ALE spawns the projectile on the next frame.
-    PLAYER_SHOT_LAUNCH_DELAY: int = 1
+    PLAYER_SHOT_LAUNCH_DELAY: int = struct.field(pytree_node=False, default=1)
 
-    BOTTOM_CLIP:int = 164
-    TOP_CLIP:int=43
-    LASER_ID: int = 1
-    TORPEDO_ID: int = 2
-    BULLET_OFFSCREEN_POS: Tuple[int, int] = (800.0, 800.0)
-    ENEMY_OFFSCREEN_POS: Tuple[int,int] = (-100, -100)
-    MIN_BLUE_LINE_POS: int = 46
-    MAX_BLUE_LINE_POS: int = 160
-    WHITE_UFO_RETREAT_DURATION: int = 28
-    ####PATTERNS:                                                           IDLE | DROP_STRAIGHT | DROP_RIGHT | DROP_LEFT | RETREAT | SHOOT | MOVE_BACK | KAMIKAZE | TRIPLE_SHOT_RIGHT | TRIPLE_SHOT_LEFT
-    WHITE_UFO_PATTERN_DURATIONS: Tuple[int, ...] =                          (0,          42,            42,         42,         28,     0,      42,         100,            123,                123)
-    WHITE_UFO_PATTERN_PROBS: Tuple[float, ...] =                            (            0.3,           0.2,        0.2,                0.2,    0.1,        0.3,            0.2,                0.2) #these probas are not 1:1, as some patterns have activation conditions
-    WHITE_UFO_SPEED_FACTOR: float = 0.1
-    WHITE_UFO_SHOT_SPEED_FACTOR: float = 0.8
-    WHITE_UFO_RETREAT_P_MIN: float = 0.005
-    WHITE_UFO_RETREAT_P_MAX: float = 0.1
-    WHITE_UFO_RETREAT_ALPHA: float = 0.01
-    WHITE_UFO_RETREAT_SPEED_MULT: float = 2.5
-    WHITE_UFO_TOP_LANE_MIN_SPEED: float = 0.3
-    WHITE_UFO_TOP_LANE_TURN_SPEED: float = 0.5
-    WHITE_UFO_ATTACK_P_MIN: float = 0.0004
-    WHITE_UFO_ATTACK_P_MAX: float = 0.8
-    WHITE_UFO_ATTACK_ALPHA: float = 0.0002
-    ENEMY_EXPLOSION_FRAMES: int = 21
-    KAMIKAZE_Y_THRESHOLD: float = 86.0
-    ENEMY_HITBOX_TOP_EXTENSION: int = 5
+    BOTTOM_CLIP: int = struct.field(pytree_node=False, default=164)
+    TOP_CLIP: int = struct.field(pytree_node=False, default=43)
+    LASER_ID: int = struct.field(pytree_node=False, default=1)
+    TORPEDO_ID: int = struct.field(pytree_node=False, default=2)
+    BULLET_OFFSCREEN_POS: Tuple[float, float] = struct.field(pytree_node=False, default=(800.0, 800.0))
+    ENEMY_OFFSCREEN_POS: Tuple[int, int] = struct.field(pytree_node=False, default=(-100, -100))
+    MIN_BLUE_LINE_POS: int = struct.field(pytree_node=False, default=46)
+    MAX_BLUE_LINE_POS: int = struct.field(pytree_node=False, default=160)
+    WHITE_UFO_RETREAT_DURATION: int = struct.field(pytree_node=False, default=28)
+
+    ####PATTERNS:  IDLE | DROP_STRAIGHT | DROP_RIGHT | DROP_LEFT | RETREAT | SHOOT | MOVE_BACK | KAMIKAZE | TRIPLE_SHOT_RIGHT | TRIPLE_SHOT_LEFT
+    WHITE_UFO_PATTERN_DURATIONS: Tuple[int, ...] = struct.field(pytree_node=False,
+                                                                default=(0, 42, 42, 42, 28, 0, 42, 100, 123, 123))
+    WHITE_UFO_PATTERN_PROBS: Tuple[float, ...] = struct.field(pytree_node=False,
+                                                              default=(0.3, 0.2, 0.2, 0.2, 0.1, 0.3, 0.2, 0.2)) #these probas are not 1:1, as some patterns have activation conditions
+    WHITE_UFO_SPEED_FACTOR: float = struct.field(pytree_node=False, default=0.1)
+    WHITE_UFO_SHOT_SPEED_FACTOR: float = struct.field(pytree_node=False, default=0.8)
+    WHITE_UFO_RETREAT_P_MIN: float = struct.field(pytree_node=False, default=0.005)
+    WHITE_UFO_RETREAT_P_MAX: float = struct.field(pytree_node=False, default=0.1)
+    WHITE_UFO_RETREAT_ALPHA: float = struct.field(pytree_node=False, default=0.01)
+    WHITE_UFO_RETREAT_SPEED_MULT: float = struct.field(pytree_node=False, default=2.5)
+    WHITE_UFO_TOP_LANE_MIN_SPEED: float = struct.field(pytree_node=False, default=0.3)
+    WHITE_UFO_TOP_LANE_TURN_SPEED: float = struct.field(pytree_node=False, default=0.5)
+    WHITE_UFO_ATTACK_P_MIN: float = struct.field(pytree_node=False, default=0.0004)
+    WHITE_UFO_ATTACK_P_MAX: float = struct.field(pytree_node=False, default=0.8)
+    WHITE_UFO_ATTACK_ALPHA: float = struct.field(pytree_node=False, default=0.0002)
+    ENEMY_EXPLOSION_FRAMES: int = struct.field(pytree_node=False, default=21)
+    KAMIKAZE_Y_THRESHOLD: float = struct.field(pytree_node=False, default=86.0)
+    ENEMY_HITBOX_TOP_EXTENSION: int = struct.field(pytree_node=False, default=5)
 
     # Bouncer constants
-    BOUNCER_SPAWN_HEIGHT: float = 75.0
-    BOUNCER_START_LEVEL: int = 8
-    BOUNCER_SPEED_PATTERN: Tuple[int, int, int, int] = (0, 3, 0, 3)
-    BOUNCER_SWITCH_SPEED_X: float = 1.2
-    BOUNCER_SWITCH_SPEED_Y: float = 1.0
+    BOUNCER_SPAWN_HEIGHT: float = struct.field(pytree_node=False, default=75.0)
+    BOUNCER_START_LEVEL: int = struct.field(pytree_node=False, default=8)
+    BOUNCER_SPEED_PATTERN: Tuple[int, int, int, int] = struct.field(pytree_node=False, default=(0, 3, 0, 3))
+    BOUNCER_SWITCH_SPEED_X: float = struct.field(pytree_node=False, default=1.2)
+    BOUNCER_SWITCH_SPEED_Y: float = struct.field(pytree_node=False, default=1.0)
 
     # Mothership Explosion
     # Sequence: 1, 2, 1, 2, 3, 2, 3, 2, 3 (indices 0, 1, 0, 1, 2, 1, 2, 1, 2)
     # 8 frames per sprite step -> total 9 steps * 8 frames = 72 frames
-    MOTHERSHIP_EXPLOSION_SEQUENCE: Tuple[int, ...] = (0, 1, 0, 1, 2, 1, 2, 1, 2)
-    MOTHERSHIP_EXPLOSION_STEP_DURATION: int = 8
-    MOTHERSHIP_HITBOX_SIZE: int = 16
+    MOTHERSHIP_EXPLOSION_SEQUENCE: Tuple[int, ...] = struct.field(pytree_node=False,
+                                                                  default=(0, 1, 0, 1, 2, 1, 2, 1, 2))
+    MOTHERSHIP_EXPLOSION_STEP_DURATION: int = struct.field(pytree_node=False, default=8)
+    MOTHERSHIP_HITBOX_SIZE: int = struct.field(pytree_node=False, default=16)
 
     # Sprite sizes (H, W)
-    PLAYER_SPRITE_SIZE: Tuple[int, int] = (16, 15)
-    UFO_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = (
-        (1, 1), (2, 3), (2, 4), (2, 4), (4, 6), (4, 7), (6, 8)
-    )
-    BOUNCER_SPRITE_SIZE: Tuple[int, int] = (7, 8)
-    METEOROID_SPRITE_SIZE: Tuple[int, int] = (7, 7)
-    BULLET_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = (
-        (5, 8), (1, 1), (3, 3), (5, 5) # Laser, Torpedo 3, 2, 1
-    )
-    ENEMY_SHOT_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = (
-        (6, 2), (2, 4) # Vertical, Horizontal
-    )
-    REJUVENATOR_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = (
-        (2, 3), (4, 3), (5, 4), (7, 5), (7, 7) # Stage 1-4, Dead
-    )
-    FALLING_ROCK_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = (
-        (3, 4), (4, 5), (5, 6), (6, 8)
-    )
-    LANE_BLOCKER_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = (
-        (3, 3), (4, 5), (7, 8), (7, 8)
-    )
-    MOTHERSHIP_SPRITE_SIZE: Tuple[int, int] = (7, 16)
+    PLAYER_SPRITE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(16, 15))
+    UFO_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = struct.field(pytree_node=False, default=((1, 1), (2, 3), (2, 4), (2, 4), (4, 6), (4, 7), (6, 8)))
+    BOUNCER_SPRITE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(7, 8))
+    METEOROID_SPRITE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(7, 7))
+    BULLET_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = struct.field(pytree_node=False, default=((5, 8), (1, 1), (3, 3), (5, 5))) # Laser, Torpedo 3, 2, 1
+    ENEMY_SHOT_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = struct.field(pytree_node=False, default=((6, 2), (2, 4))) # Vertical, Horizontal
+    REJUVENATOR_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = struct.field(pytree_node=False, default=((2, 3), (4, 3), (5, 4), (7, 5), (7, 7))) # Stage 1-4, Dead
+    FALLING_ROCK_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = struct.field(pytree_node=False, default=((3, 4), (4, 5), (5, 6), (6, 8)))
+    LANE_BLOCKER_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = struct.field(pytree_node=False, default=((3, 3), (4, 5), (7, 8), (7, 8)))
+    MOTHERSHIP_SPRITE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(7, 16))
 
     # Blue line constants
-    BLUE_LINE_OFFSCREEN_Y = 500
+    BLUE_LINE_OFFSCREEN_Y: int = struct.field(pytree_node=False, default=500)
 
-    CHASING_METEOROID_MAX: int = 8
-    CHASING_METEOROID_WAVE_MIN: int = 2
-    CHASING_METEOROID_WAVE_MAX: int = 8
-    CHASING_METEOROID_SPAWN_INTERVAL_MIN: int = 2
-    CHASING_METEOROID_SPAWN_INTERVAL_MAX: int = 40
-    CHASING_METEOROID_SPAWN_Y: float = 54.0
-    CHASING_METEOROID_LANE_SPEED: float = 0.9
-    CHASING_METEOROID_ACCEL: float = 0.045
-    CHASING_METEOROID_LANE_ALIGN_THRESHOLD: float = 1.5
-    CHASING_METEOROID_CYCLE_DX: Tuple[int, ...] = (2, 0, 1, 0, 2, 0, 2, 0)
-    CHASING_METEOROID_CYCLE_DY: Tuple[int, ...] = (1, 0, 0, 0, 1, 0, 0, 0)
-    MOTHERSHIP_OFFSCREEN_POS: int = 500
-    MOTHERSHIP_ANIM_X: Tuple[int, int, int, int, int, int, int] = (9, 9, 10, 10, 11, 12, 12)
-    MOTHERSHIP_HEIGHT: int = 7
-    MOTHERSHIP_EMERGE_Y: int = 44
+    CHASING_METEOROID_MAX: int = struct.field(pytree_node=False, default=8)
+    CHASING_METEOROID_WAVE_MIN: int = struct.field(pytree_node=False, default=2)
+    CHASING_METEOROID_WAVE_MAX: int = struct.field(pytree_node=False, default=8)
+    CHASING_METEOROID_SPAWN_INTERVAL_MIN: int = struct.field(pytree_node=False, default=2)
+    CHASING_METEOROID_SPAWN_INTERVAL_MAX: int = struct.field(pytree_node=False, default=40)
+    CHASING_METEOROID_SPAWN_Y: float = struct.field(pytree_node=False, default=54.0)
+    CHASING_METEOROID_LANE_SPEED: float = struct.field(pytree_node=False, default=0.9)
+    CHASING_METEOROID_ACCEL: float = struct.field(pytree_node=False, default=0.045)
+    CHASING_METEOROID_LANE_ALIGN_THRESHOLD: float = struct.field(pytree_node=False, default=1.5)
+    CHASING_METEOROID_CYCLE_DX: Tuple[int, ...] = struct.field(pytree_node=False, default=(2, 0, 1, 0, 2, 0, 2, 0))
+    CHASING_METEOROID_CYCLE_DY: Tuple[int, ...] = struct.field(pytree_node=False, default=(1, 0, 0, 0, 1, 0, 0, 0))
+    MOTHERSHIP_OFFSCREEN_POS: int = struct.field(pytree_node=False, default=500)
+    MOTHERSHIP_ANIM_X: Tuple[int, int, int, int, int, int, int] = struct.field(pytree_node=False,
+                                                                               default=(9, 9, 10, 10, 11, 12, 12))
+    MOTHERSHIP_HEIGHT: int = struct.field(pytree_node=False, default=7)
+    MOTHERSHIP_EMERGE_Y: int = struct.field(pytree_node=False, default=44)
 
-    REJUVENATOR_SPAWN_PROB: float = 1/4000
-    REJUVENATOR_STAGE_2_Y: float = 62.0
-    REJUVENATOR_STAGE_3_Y: float = 93.0
-    REJUVENATOR_STAGE_4_Y: float = 112.0
-    DEATH_DURATION: int = 120
+    REJUVENATOR_SPAWN_PROB: float = struct.field(pytree_node=False, default=1 / 4000)
+    REJUVENATOR_STAGE_2_Y: float = struct.field(pytree_node=False, default=62.0)
+    REJUVENATOR_STAGE_3_Y: float = struct.field(pytree_node=False, default=93.0)
+    REJUVENATOR_STAGE_4_Y: float = struct.field(pytree_node=False, default=112.0)
+    DEATH_DURATION: int = struct.field(pytree_node=False, default=120)
 
     # Falling Rock constants
-    FALLING_ROCK_MAX: int = 3
-    FALLING_ROCK_SPAWN_PROB: float = 0.0065
-    FALLING_ROCK_SPAWN_Y: float = 43.0
-    FALLING_ROCK_BOTTOM_CLIP: float = 164.0
-    FALLING_ROCK_INIT_VEL: float = 0.07
-    FALLING_ROCK_ACCEL: float = 0.021
+    FALLING_ROCK_MAX: int = struct.field(pytree_node=False, default=3)
+    FALLING_ROCK_SPAWN_PROB: float = struct.field(pytree_node=False, default=0.0065)
+    FALLING_ROCK_SPAWN_Y: float = struct.field(pytree_node=False, default=43.0)
+    FALLING_ROCK_BOTTOM_CLIP: float = struct.field(pytree_node=False, default=164.0)
+    FALLING_ROCK_INIT_VEL: float = struct.field(pytree_node=False, default=0.07)
+    FALLING_ROCK_ACCEL: float = struct.field(pytree_node=False, default=0.021)
 
     # Lane blocker constants
-    LANE_BLOCKER_MAX: int = 1
-    LANE_BLOCKER_START_LEVEL: int = 10
-    LANE_BLOCKER_SPAWN_PROB: float = 1 / 1800
-    LANE_BLOCKER_SPAWN_Y: float = 43.0
-    LANE_BLOCKER_BOTTOM_Y: float = 155.0
-    LANE_BLOCKER_SPAWN_LANES: Tuple[int, int, int] = (2, 3, 4)
-    LANE_BLOCKER_HOLD_FRAMES: int = 122
-    LANE_BLOCKER_INIT_VEL: float = 0.02
-    LANE_BLOCKER_SINK_INTERVAL: int = 2
-    LANE_BLOCKER_WIDTH: int = 8
-    LANE_BLOCKER_HEIGHT: int = 7
-    LANE_BLOCKER_RETREAT_SPEED_MULT: float = 2.5
+    LANE_BLOCKER_MAX: int = struct.field(pytree_node=False, default=1)
+    LANE_BLOCKER_START_LEVEL: int = struct.field(pytree_node=False, default=10)
+    LANE_BLOCKER_SPAWN_PROB: float = struct.field(pytree_node=False, default=1 / 1800)
+    LANE_BLOCKER_SPAWN_Y: float = struct.field(pytree_node=False, default=43.0)
+    LANE_BLOCKER_BOTTOM_Y: float = struct.field(pytree_node=False, default=155.0)
+    LANE_BLOCKER_SPAWN_LANES: Tuple[int, int, int] = struct.field(pytree_node=False, default=(2, 3, 4))
+    LANE_BLOCKER_HOLD_FRAMES: int = struct.field(pytree_node=False, default=122)
+    LANE_BLOCKER_INIT_VEL: float = struct.field(pytree_node=False, default=0.02)
+    LANE_BLOCKER_SINK_INTERVAL: int = struct.field(pytree_node=False, default=2)
+    LANE_BLOCKER_WIDTH: int = struct.field(pytree_node=False, default=8)
+    LANE_BLOCKER_HEIGHT: int = struct.field(pytree_node=False, default=7)
+    LANE_BLOCKER_RETREAT_SPEED_MULT: float = struct.field(pytree_node=False, default=2.5)
     
     # Standby Mode
-    STANDBY_DECEL_DURATION: int = 120
-    STANDBY_SECTOR_DONE_DURATION: int = 124
-    STANDBY_BLINK_DURATION: int = 16
+    STANDBY_DECEL_DURATION: int = struct.field(pytree_node=False, default=120)
+    STANDBY_SECTOR_DONE_DURATION: int = struct.field(pytree_node=False, default=124)
+    STANDBY_BLINK_DURATION: int = struct.field(pytree_node=False, default=16)
 
     # Kamikaze constants
-    KAMIKAZE_MAX: int = 1
-    KAMIKAZE_SPAWN_INTERVAL: int = 250
-    KAMIKAZE_START_SECTOR: int = 12
-    KAMIKAZE_START_Y: float = 43.0
-    KAMIKAZE_TRACK_Y: float = 60.0
-    KAMIKAZE_SPRITE_Y_THRESHOLDS: Tuple[float, float, float, float] = (43.0, 65.0, 72.0, 95.0)
-
+    KAMIKAZE_MAX: int = struct.field(pytree_node=False, default=1)
+    KAMIKAZE_SPAWN_INTERVAL: int = struct.field(pytree_node=False, default=250)
+    KAMIKAZE_START_SECTOR: int = struct.field(pytree_node=False, default=12)
+    KAMIKAZE_START_Y: float = struct.field(pytree_node=False, default=43.0)
+    KAMIKAZE_TRACK_Y: float = struct.field(pytree_node=False, default=60.0)
+    KAMIKAZE_SPRITE_Y_THRESHOLDS: Tuple[float, float, float, float] = struct.field(pytree_node=False,
+                                                                                   default=(43.0, 65.0, 72.0, 95.0))
     # Coin constants
-    COIN_MAX: int = 3
-    COIN_SPAWN_PROB: float = 1/500
-    COIN_SPAWN_Y: float = 55.0
-    COIN_EXIT_Y: float = 95.0
-    COIN_SPAWN_X_LEFT: float = 5.0
-    COIN_SPAWN_X_RIGHT: float = 155.0
-    COIN_SPEED_Y: float = 0.5
-    COIN_SPEED_X: float = 1.9375
-    COIN_ANIM_SEQ: Tuple[int, ...] = (3, 2, 1, 0, 1, 2)
-    COIN_SPRITE_SIZE: Tuple[int, int] = (7, 8)
+    COIN_MAX: int = struct.field(pytree_node=False, default=3)
+    COIN_SPAWN_PROB: float = struct.field(pytree_node=False, default=1 / 500)
+    COIN_SPAWN_Y: float = struct.field(pytree_node=False, default=55.0)
+    COIN_EXIT_Y: float = struct.field(pytree_node=False, default=95.0)
+    COIN_SPAWN_X_LEFT: float = struct.field(pytree_node=False, default=5.0)
+    COIN_SPAWN_X_RIGHT: float = struct.field(pytree_node=False, default=155.0)
+    COIN_SPEED_Y: float = struct.field(pytree_node=False, default=0.5)
+    COIN_SPEED_X: float = struct.field(pytree_node=False, default=1.9375)
+    COIN_ANIM_SEQ: Tuple[int, ...] = struct.field(pytree_node=False, default=(3, 2, 1, 0, 1, 2))
+    COIN_SPRITE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(7, 8))
 
 
 def _get_index_ufo(pos: chex.Array) -> chex.Array:
@@ -418,8 +416,8 @@ def _get_player_screen_x(player_pos: chex.Array) -> chex.Array:
         jnp.where(player_pos == 52.0, 51.0, jnp.where(player_pos == 127.0, 128.0, player_pos)),
     )
 
-
-class LevelState(NamedTuple):
+@struct.dataclass
+class LevelState:
     player_pos: chex.Array
     player_vel: chex.Array
     white_ufo_left: chex.Array
@@ -529,8 +527,8 @@ class LevelState(NamedTuple):
 
     background_flash_timer: chex.Array
 
-
-class BeamriderState(NamedTuple):
+@struct.dataclass
+class BeamriderState:
     level: LevelState
     score: chex.Array
     sector: chex.Array
@@ -541,13 +539,13 @@ class BeamriderState(NamedTuple):
     ufo_killed: chex.Array
     rng: chex.Array
 
-
-class BeamriderInfo(NamedTuple):
+@struct.dataclass
+class BeamriderInfo:
     score: chex.Array
     sector: chex.Array
 
-
-class BeamriderObservation(NamedTuple):
+@struct.dataclass
+class BeamriderObservation:
     pos: chex.Array
     shooting_cd: chex.Array
     torpedoes_left: chex.Array
@@ -593,9 +591,9 @@ class BeamriderObservation(NamedTuple):
     mothership_stage: chex.Array
     rejuvenator_dead: chex.Array
 
-class WhiteUFOUpdate(NamedTuple):
+@struct.dataclass
+class WhiteUFOUpdate:
     """Aggregated quantities needed after updating all white UFOs."""
-
     pos: chex.Array
     vel: chex.Array
     time_on_lane: chex.Array
@@ -1617,7 +1615,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 standby_phase=jnp.where(just_died, int(StandbyPhase.DECEL), int(StandbyPhase.SECTOR_DONE)).astype(jnp.int32),
                 coin_spawn_count=coin_spawn_count,
             )
-            return reset_level_state._replace(
+            return reset_level_state.replace(
                 line_positions=line_positions, blue_line_counter=blue_line_counter,
                 death_timer=jnp.where(just_died, self.consts.STANDBY_DECEL_DURATION, reset_level_state.death_timer),
                 player_pos=player_x,
@@ -1657,7 +1655,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         # During init, we ONLY update the blue line positions and counter.
         # We ALSO advance the RNG so the game doesn't start identically every time.
         rngs = jax.random.split(state.rng, 2)
-        new_level = state.level._replace(
+        new_level = state.level.replace(
             line_positions=line_positions,
             blue_line_counter=blue_line_counter,
             shooting_cooldown=jnp.maximum(state.level.shooting_cooldown - 1, 0),
@@ -1666,7 +1664,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             rejuvenator_explosion_frame=state.level.rejuvenator_explosion_frame,
             rejuvenator_explosion_pos=state.level.rejuvenator_explosion_pos,
         )
-        new_state = state._replace(level=new_level, steps=state.steps + 1, rng=rngs[0])
+        new_state = state.replace(level=new_level, steps=state.steps + 1, rng=rngs[0])
 
         return self._standby_result(new_state)
 
@@ -1693,7 +1691,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             jnp.maximum(state.level.death_timer - 1, 0),
         )
         
-        new_level = state.level._replace(
+        new_level = state.level.replace(
             line_positions=line_positions,
             blue_line_counter=blue_line_counter,
             standby_phase=next_phase,
@@ -1705,7 +1703,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             rejuvenator_explosion_frame=state.level.rejuvenator_explosion_frame,
             rejuvenator_explosion_pos=state.level.rejuvenator_explosion_pos,
         )
-        new_state = state._replace(level=new_level, steps=state.steps + 1)
+        new_state = state.replace(level=new_level, steps=state.steps + 1)
 
         return self._standby_result(new_state)
 
@@ -1718,7 +1716,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         # Reset blue_line_counter to 0 if we exit wait phase, to trigger acceleration (init)
         next_counter = jnp.where(pressed, 0, blue_line_counter)
         
-        new_level = state.level._replace(
+        new_level = state.level.replace(
             line_positions=line_positions,
             blue_line_counter=next_counter,
             standby_phase=next_phase,
@@ -1730,7 +1728,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         )
         # Advance RNG to ensure variety after resume
         rngs = jax.random.split(state.rng, 2)
-        new_state = state._replace(level=new_level, steps=state.steps + 1, rng=rngs[0])
+        new_state = state.replace(level=new_level, steps=state.steps + 1, rng=rngs[0])
 
         return self._standby_result(new_state)
 
@@ -1750,7 +1748,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         next_ufo_pos = jnp.where(finished, initial_ufo_pos, state.level.white_ufo_pos)
         next_line_counter = jnp.where(finished, 0, blue_line_counter)
 
-        new_level = state.level._replace(
+        new_level = state.level.replace(
             line_positions=line_positions,
             blue_line_counter=next_line_counter,
             standby_phase=next_phase,
@@ -1769,7 +1767,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             rejuvenator_explosion_frame=state.level.rejuvenator_explosion_frame,
             rejuvenator_explosion_pos=state.level.rejuvenator_explosion_pos,
         )
-        new_state = state._replace(level=new_level, steps=state.steps + 1, sector=next_sector)
+        new_state = state.replace(level=new_level, steps=state.steps + 1, sector=next_sector)
 
         return self._standby_result(new_state)
 
@@ -3810,7 +3808,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         rejuv_offscreen = self.enemy_offscreen
         
         # Create a state for rendering where enemies are offscreen if initializing
-        render_level = state.level._replace(
+        render_level = state.level.replace(
             white_ufo_pos=jnp.where(is_init, ufo_offscreen, state.level.white_ufo_pos),
             enemy_shot_pos=jnp.where(is_init, enemy_shot_offscreen, state.level.enemy_shot_pos),
             enemy_shot_explosion_pos=jnp.where(is_init, enemy_shot_offscreen, state.level.enemy_shot_explosion_pos),
@@ -3827,7 +3825,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             bouncer_pos=jnp.where(is_init, self.enemy_offscreen, state.level.bouncer_pos),
             bouncer_active=jnp.where(is_init, False, state.level.bouncer_active),
         )
-        render_state = state._replace(level=render_level)
+        render_state = state.replace(level=render_level)
         
         return self.renderer.render(render_state)
 
