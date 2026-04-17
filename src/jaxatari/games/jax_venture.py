@@ -300,7 +300,11 @@ class VentureConstants(AutoDerivedConstants):
     ALL_WALL_MAPS_PER_WORLD: chex.Array = struct.field(pytree_node=False, default_factory=lambda: ALL_WALL_MAPS_PER_WORLD)  # Multi-world wall maps.
     PLAY_AREA_Y_START: int = struct.field(pytree_node=False, default=20)  # Top boundary of the playable area.
     PLAY_AREA_Y_END: int = struct.field(pytree_node=False, default=180)  # Bottom boundary of the playable area.
-    MONSTER_SPEED: float = struct.field(pytree_node=False, default=1.0)
+    MONSTER_SPEEDS: chex.Array = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([1.0, 1.5, 2.0, 2.5], dtype=jnp.float32)
+    )
+    MAX_MONSTER_SPEED_INDEX: int = struct.field(pytree_node=False, default=3)
     MONSTER_RENDER_WIDTH: int = struct.field(pytree_node=False, default=7)
     MONSTER_RENDER_HEIGHT: int = struct.field(pytree_node=False, default=10)
     MONSTER_CHANGE_DIR_PROB: float = struct.field(pytree_node=False, default=0.01)  # Probability of a monster changing direction each frame.
@@ -308,7 +312,7 @@ class VentureConstants(AutoDerivedConstants):
     DEAD_MONSTER_LIFETIME_FRAMES: int = struct.field(pytree_node=False, default=90)  # Frames a dead monster remains on screen (1.5 sec.).
 
     LIVES: int = struct.field(pytree_node=False, default=4)
-    PLAYER_INITIAL_X: float = struct.field(pytree_node=False, default=45.0)
+    PLAYER_INITIAL_X: float = struct.field(pytree_node=False, default=67.0)
     PLAYER_INITIAL_Y: float = struct.field(pytree_node=False, default=185.0)
     FINAL_GAME_OVER_DELAY_FRAMES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(60, dtype=jnp.int32))  # Delay before fully ending the game.
     LIFE_LOST_DELAY_FRAMES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(45, dtype=jnp.int32))  # Delay after losing a life (0.75 sec. @ 60fps).
@@ -318,7 +322,7 @@ class VentureConstants(AutoDerivedConstants):
     PROJECTILE_SPEED: float = struct.field(pytree_node=False, default_factory=lambda: jnp.array(2.0, dtype=jnp.float32))
     PROJECTILE_RADIUS: int = struct.field(pytree_node=False, default=2)
     PROJECTILE_LIFETIME_FRAMES: int = struct.field(pytree_node=False, default=30)
-    AIMING_DOT_OFFSET: float = struct.field(pytree_node=False, default_factory=lambda: jnp.array(5.0, dtype=jnp.float32))   # Distance of aiming dot from player.
+    AIMING_DOT_OFFSET: float = struct.field(pytree_node=False, default_factory=lambda: jnp.array(6.0, dtype=jnp.float32))   # Distance of aiming dot from player.
 
     CHEST_WIDTH: int = struct.field(pytree_node=False, default=7)
     CHEST_HEIGHT: int = struct.field(pytree_node=False, default=11)
@@ -347,10 +351,10 @@ class VentureConstants(AutoDerivedConstants):
     LASER_THICKNESS: float = struct.field(pytree_node=False, default_factory=lambda: jnp.array(4.0, dtype=jnp.float32))
     # Movement boundaries for 4 lasers ([min_coord, max_coord]).
     LASER_BOUNDS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
-        [45.0, 65.0],  # Vertical Laser 1 (moves Left -> Right)
-        [115.0, 95.0],  # Vertical Laser 2 (moves Right -> Left)
-        [50.0, 80.0],  # Horizontal Laser 1 (moves Top -> Bottom)
-        [130.0, 160.0],  # Horizontal Laser 2 (moves Bottom -> Top)
+        [40.0, 65.0],  # Vertical Laser 1 (moves Left -> Right)
+        [120.0, 95.0],  # Vertical Laser 2 (moves Right -> Left)
+        [45.0, 85.0],  # Horizontal Laser 1 (moves Top -> Bottom)
+        [130.0, 170.0],  # Horizontal Laser 2 (moves Bottom -> Top)
     ], dtype=jnp.float32))
     LASER_INITIAL_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         70.0,  # Laser 0 starts at the left
@@ -396,6 +400,7 @@ class GameState(struct.PyTreeNode):
     is_in_collision: chex.Array
     current_level: chex.Array  # Current level (0 for main map, 1-4 for rooms).
     world_level: chex.Array  # Current world (1 or 2).
+    monster_speed_index: chex.Array  # Current monster speed tier index (0..3).
     world_transition_timer: chex.Array  # Countdown timer for world transition.
     last_level: chex.Array  # Tracks the previous level to detect transitions.
     collected_chest_in_current_visit: chex.Array # Records if a chest was collected in the current room visit.
@@ -524,6 +529,7 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
             is_in_collision=jnp.array(False, dtype=jnp.bool_),
             current_level=jnp.array(0, dtype=jnp.int32),
             world_level=jnp.array(1, dtype=jnp.int32),
+            monster_speed_index=jnp.array(1, dtype=jnp.int32),
             world_transition_timer=jnp.array(0, dtype=jnp.int32),
             last_level=jnp.array(0, dtype=jnp.int32),
             collected_chest_in_current_visit=jnp.array(-1, dtype=jnp.int32),
@@ -630,12 +636,32 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
                 )
 
                 is_in_room_flag = current_state.current_level != 0
-                new_player_state, new_is_in_collision = self._update_player(
-                    current_state.player, action, current_state.is_in_collision,
-                    effective_wall_map, is_in_room_flag
+
+                # update player state only every other frame
+                new_player_state, new_is_in_collision = jax.lax.cond(
+                    jnp.mod(current_state.step_counter, 2) == 0,
+                    lambda: self._update_player(
+                        current_state.player, action, current_state.is_in_collision,
+                        effective_wall_map, is_in_room_flag
+                    ),
+                    lambda: (current_state.player, current_state.is_in_collision)
                 )
-                new_monster_state = self._update_monsters(current_state.monsters, monster_update_key, effective_wall_map)
-                new_dead_monsters_state = self._update_dead_monsters(current_state.dead_monsters)
+                # update monsters every third frame
+                new_monster_state = jax.lax.cond(
+                    jnp.mod(current_state.step_counter, 3) == 0,
+                    lambda: self._update_monsters(
+                        current_state.monsters,
+                        monster_update_key,
+                        effective_wall_map,
+                        self.consts.MONSTER_SPEEDS[current_state.monster_speed_index]
+                    ),
+                    lambda: current_state.monsters
+                )
+                new_dead_monsters_state = jax.lax.cond(
+                    jnp.mod(current_state.step_counter, 3) == 0,
+                    lambda: self._update_dead_monsters(current_state.dead_monsters),
+                    lambda: current_state.dead_monsters
+                ) 
                 return current_state.replace(
                     player=new_player_state, monsters=new_monster_state,
                     dead_monsters=new_dead_monsters_state, is_in_collision=new_is_in_collision
@@ -821,25 +847,17 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
                 new_game_over_timer = jnp.where(is_final_life, self.consts.FINAL_GAME_OVER_DELAY_FRAMES, s.game_over_timer)
                 return s.replace(lives=s.lives - 1, life_lost_timer=self.consts.LIFE_LOST_DELAY_FRAMES, game_over_timer=new_game_over_timer)
             state_after_collision = jax.lax.cond(player_hazard_collision, on_collision, lambda s_in: s_in, state_after_laser_move)
+            #TODO: remove
+            state_after_collision = state_after_laser_move
 
-            # Check for progression (e.g., finishing a world or the game).
+            # Check for progression (finishing the current world).
             def check_for_progression(s: GameState) -> GameState:
                 all_rewards_collected = jnp.all(~s.chests_active)
                 returned_to_main_map = (s.current_level == 0) & (s.last_level > 0)
                 should_progress = all_rewards_collected & returned_to_main_map
 
                 def _handle_progression(state_to_update: GameState) -> GameState:
-                    def _complete_world_1(s1: GameState) -> GameState:
-                        return s1.replace(world_transition_timer=self.consts.WORLD_TRANSITION_DELAY_FRAMES)
-                    def _complete_world_2(s2: GameState) -> GameState:
-                        return s2.replace(game_over_timer=self.consts.FINAL_GAME_OVER_DELAY_FRAMES)
-
-                    return jax.lax.cond(
-                        state_to_update.world_level == 1,
-                        _complete_world_1,
-                        _complete_world_2,
-                        state_to_update
-                    )
+                    return state_to_update.replace(world_transition_timer=self.consts.WORLD_TRANSITION_DELAY_FRAMES)
                 return jax.lax.cond(
                     should_progress,
                     _handle_progression,
@@ -901,7 +919,13 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
         indices = jnp.arange(self.consts.TOTAL_MONSTERS)
 
         total_levels_per_world = 5
-        next_world_level_id = state.world_level + 1
+        completed_world_2 = state.world_level == 2
+        next_world_level_id = jnp.where(completed_world_2, jnp.array(1, dtype=jnp.int32), state.world_level + 1)
+        next_speed_index = jnp.where(
+            completed_world_2,
+            jnp.minimum(state.monster_speed_index + 1, self.consts.MAX_MONSTER_SPEED_INDEX),
+            state.monster_speed_index
+        )
         next_world_main_map_global_idx = (next_world_level_id - 1) * total_levels_per_world + 0
 
         offset_start = self.consts.LEVEL_OFFSETS[next_world_main_map_global_idx]
@@ -932,7 +956,8 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
             last_level=jnp.array(0, dtype=jnp.int32),
             level_timer=jnp.array(0, dtype=jnp.int32),
             key=key,
-            world_level=next_world_level_id,  # Increment world level.
+            world_level=next_world_level_id,
+            monster_speed_index=next_speed_index,
             world_transition_timer=jnp.array(0, dtype=jnp.int32),
             collected_chest_in_current_visit=jnp.array(-1, dtype=jnp.int32)
         )
@@ -1097,7 +1122,7 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
         return jax.lax.fori_loop(0, max_portals, body_fn, state)
 
     def _update_monsters(self, monster_state: MonsterState, key: jax.random.PRNGKey,
-                         wall_map: chex.Array) -> MonsterState:
+                         wall_map: chex.Array, monster_speed: chex.Array) -> MonsterState:
         """Updates the positions and directions of active monsters, handling wall collisions."""
         key, dir_key, move_key = jax.random.split(key, 3)
         change_dir = jax.random.uniform(dir_key, (self.consts.TOTAL_MONSTERS,)) < self.consts.MONSTER_CHANGE_DIR_PROB
@@ -1107,7 +1132,7 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
         new_dx, new_dy = jnp.cos(angles), jnp.sin(angles)
         dx = jnp.where(change_dir, new_dx, monster_state.dx)
         dy = jnp.where(change_dir, new_dy, monster_state.dy)
-        px, py = monster_state.x + dx * self.consts.MONSTER_SPEED, monster_state.y + dy * self.consts.MONSTER_SPEED
+        px, py = monster_state.x + dx * monster_speed, monster_state.y + dy * monster_speed
 
         def check_collision(x, y):
             hw, hh = self.consts.MONSTER_RENDER_WIDTH / 2, self.consts.MONSTER_RENDER_HEIGHT / 2
@@ -1373,7 +1398,7 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
             new_last_dx = jnp.where(is_moving, normalized_dx, player_state.last_dx)
             new_last_dy = jnp.where(is_moving, normalized_dy, player_state.last_dy)
 
-            proposed_x = player_state.x + dx
+            proposed_x = player_state.x + dx/2 # x speed is halved
             proposed_y = player_state.y + dy
 
             # Clip proposed position to playable area boundaries.
