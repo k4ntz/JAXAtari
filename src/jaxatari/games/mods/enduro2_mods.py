@@ -1,5 +1,7 @@
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.enduro2.enduro2_mod_plugins import SpeedAndXPosHudMod, StartInCurveMod, StartInMaxCurveMod, FilledRoadMod, SnowWeatherMod, NightWeatherMod, FogWeatherMod, DayWeatherMod, SunsetWeatherMod, DawnWeatherMod, DistanceWeatherMod
+from jaxatari.games.mods.enduro2.enduro2_mod_plugins import SpeedAndXPosHudMod, StartInCurveMod, \
+    StartInMaxCurveMod, FilledRoadMod, SnowWeatherMod, NightWeatherMod, FogWeatherMod, DayWeatherMod, \
+        SunsetWeatherMod, DawnWeatherMod, ShortDaysMod
 
 class Enduro2EnvMod(JaxAtariModController):    
     """
@@ -16,7 +18,7 @@ class Enduro2EnvMod(JaxAtariModController):
         "day": DayWeatherMod,
         "sunset": SunsetWeatherMod,
         "dawn": DawnWeatherMod,
-        "distance_weather": DistanceWeatherMod,
+        "short_days": ShortDaysMod,
     }
 
     def __init__(self,

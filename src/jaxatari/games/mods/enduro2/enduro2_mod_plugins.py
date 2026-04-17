@@ -195,10 +195,13 @@ class SpeedAndXPosHudMod(JaxAtariInternalModPlugin):
         
         return raster
 
-class DistanceWeatherMod(JaxAtariInternalModPlugin):
+class ShortDaysMod(JaxAtariInternalModPlugin):
     """
     Iterates the weather state every 16km driven instead of based on time.
+    Also scales the number of cars to pass (divided by 10).
     """
     constants_overrides = {
-        "weather_cycle_distance": 16.0
+        "weather_cycle_distance": 16.0,
+        "initial_position": 20,
+        "next_day_car_position": 30
     }

@@ -233,6 +233,8 @@ class Enduro2Constants(AutoDerivedConstants):
     car_heights: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([11, 8, 6, 4, 3, 2, 1], dtype=jnp.int32))
     car_width_0: int = struct.field(pytree_node=False, default=16)
     car_height_0: int = struct.field(pytree_node=False, default=11)
+    initial_position: int = struct.field(pytree_node=False, default=200)
+    next_day_car_position: int = struct.field(pytree_node=False, default=300)
 
     # Mountains
     mountain_left_x_pos: float = struct.field(pytree_node=False, default=40.0)
@@ -980,7 +982,7 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
             game_over=jnp.array(False, dtype=jnp.bool_),
             player_speed=jnp.array(self.consts.initial_speed, dtype=jnp.float32),
             distance=jnp.array(0.0, dtype=jnp.float32),
-            cars_to_pass=jnp.array(200, dtype=jnp.int32),
+            cars_to_pass=jnp.array(self.consts.initial_position, dtype=jnp.int32),
             track_top_x=jnp.array(track_top_x, dtype=jnp.float32),
             track_top_x_curve_offset=jnp.array(self.consts.initial_track_top_x_curve_offset, dtype=jnp.float32),
             collision_mode=jnp.array(False, dtype=jnp.bool_),
@@ -1365,7 +1367,7 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
             # When advancing level, reset cars to pass. For simplicity here, just using a fixed 200/300 etc if needed
             # Or just keep it 200 for now. Original enduro increases it by 100 per level up to max.
             cars_increase_per_level = 100
-            cars_to_pass = jnp.where(is_game_over, new_cars_to_pass, 200 + cars_increase_per_level * (level - 1))
+            cars_to_pass = jnp.where(is_game_over, new_cars_to_pass, self.consts.next_day_car_position)
             return level, jnp.array(0, dtype=jnp.int32), is_game_over, cars_to_pass
 
         def do_nothing():
