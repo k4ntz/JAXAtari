@@ -64,7 +64,7 @@ def test_climb_rope():
     obs, state, reward, done, info = env.step(state, 2) # UP
     assert state.player_y < initial_y
 
-def test_exit_ladder_onto_platform():
+def test_no_drop_ladder_onto_platform():
     env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
@@ -84,10 +84,10 @@ def test_exit_ladder_onto_platform():
         is_climbing=jnp.array(1, dtype=jnp.int32)
     )
     
-    # Move RIGHT (3) to exit ladder
+    # Move RIGHT (3) to do nothing 
     obs, state, reward, done, info = env.step(state, 3)
     
-    # Should no longer be climbing and should be on the platform
-    assert state.is_climbing == 0
+    # everything stays the same 
+    assert state.is_climbing == 1
     assert state.is_falling == 0
     assert state.player_y == 26

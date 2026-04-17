@@ -43,8 +43,9 @@ def test_ladder_delay():
     )
     
     # Jump off to trigger delay
-    RIGHTFIRE = 11
-    obs, state, reward, done, info = env.step(state, RIGHTFIRE)
+    DOWN = 5
+    while state.is_climbing:
+        obs, state, reward, done, info = env.step(state, DOWN)
     
     assert state.out_of_ladder_delay == env.consts.OUT_OF_LADDER_DELAY
     
