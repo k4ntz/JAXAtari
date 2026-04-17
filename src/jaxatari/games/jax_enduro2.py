@@ -218,7 +218,7 @@ class Enduro2Constants(AutoDerivedConstants):
     night_mountain_color: tuple = struct.field(pytree_node=False, default=(142, 142, 142))
     mountain_color: tuple = struct.field(pytree_node=False, default=(136, 146, 62))
     fog_color: tuple = struct.field(pytree_node=False, default=(74, 74, 74))
-    fog_height: int = struct.field(pytree_node=False, default=103)
+    fog_height: int = struct.field(pytree_node=False, default=80)
 
     # UI Positions
     info_box_x_pos: int = struct.field(pytree_node=False, default=48)
@@ -329,12 +329,15 @@ class Enduro2Renderer(JAXGameRenderer):
         # Load player car manually because it's 4D (animated) and the standard
         # loadFrame only supports 3D sprites.
         player_car_path = os.path.join(self._sprite_path, 'cars/car_0.npy')
-        if not os.path.exists(player_car_path):
-            pass
-        player_car_data = jnp.load(player_car_path)
+        player_car_night_path = os.path.join(self._sprite_path, 'cars/car_0_night.npy')
         
+        player_car_data = jnp.load(player_car_path)
         asset_config = list(self.consts.ASSET_CONFIG)
         asset_config.append({'name': 'player_car', 'type': 'procedural', 'data': player_car_data})
+
+        if os.path.exists(player_car_night_path):
+            player_car_night_data = jnp.load(player_car_night_path)
+            asset_config.append({'name': 'player_car_night', 'type': 'procedural', 'data': player_car_night_data})
 
         # Add car colors to asset config to ensure they are in the palette
         car_rgbs_to_add = [
@@ -451,11 +454,37 @@ class Enduro2Renderer(JAXGameRenderer):
         raster = self._render_opponent_cars(raster, state)
 
         # 8. Render player car
-        player_mask = self.SHAPE_MASKS['player_car']
-        if player_mask.ndim == 3:
-             player_mask = player_mask[0]
+        is_night = (state.weather_index == self.consts.night_weather_index) | is_fog
+        
+        # Calculate animation period based on player speed
+        animation_period = self.consts.opponent_animation_steps - (state.player_speed - self.consts.opponent_speed) / (
+                self.consts.max_speed - self.consts.opponent_speed) * (self.consts.opponent_animation_steps - 1)
+        animation_period = jnp.maximum(1.0, animation_period)
+        
+        # Faster vibration during collision
+        animation_period = jnp.where(state.collision_mode, 2.0, animation_period)
 
-        raster = self.jr.render_at(raster, state.player_x.astype(jnp.int32), state.player_y, player_mask)        
+        animation_step = jnp.floor(state.step_count / animation_period)
+        frame_index = (animation_step % 2).astype(jnp.int32)
+
+        def get_player_mask():
+            mask_day = self.SHAPE_MASKS['player_car']
+            mask_night = self.SHAPE_MASKS.get('player_car_night', mask_day)
+            
+            def get_day_frame():
+                if mask_day.ndim == 3:
+                    return mask_day[jnp.minimum(frame_index, mask_day.shape[0] - 1)]
+                return mask_day
+                
+            def get_night_frame():
+                if mask_night.ndim == 3:
+                    return mask_night[jnp.minimum(frame_index, mask_night.shape[0] - 1)]
+                return mask_night
+
+            return jax.lax.cond(is_night, get_night_frame, get_day_frame)
+
+        player_mask = get_player_mask()
+        raster = self.jr.render_at(raster, state.player_x.astype(jnp.int32), state.player_y.astype(jnp.int32), player_mask)
         # Convert ID raster to RGB
         return self.jr.render_from_palette(raster, self.PALETTE)
 
@@ -1134,19 +1163,24 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
             coll_speed = state.player_speed
             push_direction = jnp.where(state.player_x < self.consts.player_x_start, 1.0, -1.0)
             coll_player_x = state.player_x + push_direction * self.consts.collision_push_back
-            return coll_player_x, coll_speed, new_collision_mode, new_collision_steps
+            # During collision, move back to base y
+            coll_player_y = self.consts.player_y_start
+            return coll_player_x, coll_player_y, coll_speed, new_collision_mode, new_collision_steps
 
         def normal_update(_):
             # Apply horizontal movement
             normal_player_x = jnp.clip(state.player_x + steering_delta + drift_delta, 0.0, self.consts.screen_width - 16.0)
             
+            # Update player_y based on speed: move up to 10 pixels forward as speed increases
+            normal_player_y = self.consts.player_y_start - jnp.floor(new_speed / (self.consts.max_speed / 10.0))
+
             # Side Collision
             is_side_colliding = (normal_player_x <= l_x) | (normal_player_x + 16.0 >= r_x)
             
             # Opponent Collision
             is_opponent_colliding = self._check_car_opponent_collision_optimized(
                 normal_player_x.astype(jnp.int32),
-                state.player_y.astype(jnp.int32),
+                normal_player_y.astype(jnp.int32),
                 new_visible_opponent_positions
             )
             
@@ -1154,11 +1188,11 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
             
             return jax.lax.cond(
                 is_colliding,
-                lambda: (state.player_x, jnp.where(is_opponent_colliding, jnp.minimum(new_speed * self.consts.side_collision_speed_drop, 6.0), new_speed * self.consts.side_collision_speed_drop), True, jnp.array(self.consts.collision_duration, dtype=jnp.int32)),
-                lambda: (normal_player_x, new_speed, False, jnp.array(0, dtype=jnp.int32))
+                lambda: (state.player_x, state.player_y, jnp.where(is_opponent_colliding, jnp.minimum(new_speed * self.consts.side_collision_speed_drop, 6.0), new_speed * self.consts.side_collision_speed_drop), True, jnp.array(self.consts.collision_duration, dtype=jnp.int32)),
+                lambda: (normal_player_x, normal_player_y, new_speed, False, jnp.array(0, dtype=jnp.int32))
             )
 
-        new_player_x, new_speed, new_collision_mode, new_collision_steps = jax.lax.cond(
+        new_player_x, new_player_y, new_speed, new_collision_mode, new_collision_steps = jax.lax.cond(
             state.collision_mode,
             collision_update,
             normal_update,
@@ -1204,6 +1238,7 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
 
         new_state = state.replace(
             player_x=new_player_x,
+            player_y=new_player_y,
             player_speed=new_speed,
             distance=new_distance,
             step_count=state.step_count + 1,
