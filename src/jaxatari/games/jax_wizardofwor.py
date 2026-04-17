@@ -98,26 +98,26 @@ class WizardOfWorConstants(struct.PyTreeNode):
     WINDOW_HEIGHT: int = struct.field(pytree_node=False, default=210)
 
     # 4 tuples for each direction
-    BULLET_ORIGIN_UP: Tuple[int, int] = (4, 1)
-    BULLET_ORIGIN_DOWN: Tuple[int, int] = (4, 7)
-    BULLET_ORIGIN_LEFT: Tuple[int, int] = (1, 4)
-    BULLET_ORIGIN_RIGHT: Tuple[int, int] = (7, 4)
+    BULLET_ORIGIN_UP: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
+    BULLET_ORIGIN_DOWN: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 7))
+    BULLET_ORIGIN_LEFT: Tuple[int, int] = struct.field(pytree_node=False, default=(1, 4))
+    BULLET_ORIGIN_RIGHT: Tuple[int, int] = struct.field(pytree_node=False, default=(7, 4))
 
     # Enemy Speed Up Timers
-    SPEED_TIMER_1 = 1500
-    SPEED_TIMER_2 = 3000
-    SPEED_TIMER_3 = 4500
-    SPEED_TIMER_MAX = 6000
-    SPEED_TIMER_BASE_MOD = 20
-    SPEED_TIMER_1_MOD = 16
-    SPEED_TIMER_2_MOD = 8
-    SPEED_TIMER_3_MOD = 4
-    SPEED_TIMER_MAX_MOD = 2
+    SPEED_TIMER_1: int = struct.field(pytree_node=False, default=1500)
+    SPEED_TIMER_2: int = struct.field(pytree_node=False, default=3000)
+    SPEED_TIMER_3: int = struct.field(pytree_node=False, default=4500)
+    SPEED_TIMER_MAX: int = struct.field(pytree_node=False, default=6000)
+    SPEED_TIMER_BASE_MOD: int = struct.field(pytree_node=False, default=20)
+    SPEED_TIMER_1_MOD: int = struct.field(pytree_node=False, default=16)
+    SPEED_TIMER_2_MOD: int = struct.field(pytree_node=False, default=8)
+    SPEED_TIMER_3_MOD: int = struct.field(pytree_node=False, default=4)
+    SPEED_TIMER_MAX_MOD: int = struct.field(pytree_node=False, default=2)
 
     # Enemy invisibility timers
-    MAX_LAST_SEEN = 200
-    INVISIBILITY_TIMER_GARWOR = 100
-    INVISIBILITY_TIMER_THORWOR = 100
+    MAX_LAST_SEEN: int = struct.field(pytree_node=False, default=200)
+    INVISIBILITY_TIMER_GARWOR: int = struct.field(pytree_node=False, default=100)
+    INVISIBILITY_TIMER_THORWOR: int = struct.field(pytree_node=False, default=100)
 
     # Directions
     NONE: int = Action.NOOP
@@ -161,6 +161,14 @@ class WizardOfWorConstants(struct.PyTreeNode):
         [1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1],
         [0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0],
         [0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0]])
+
+    # GAMEBOARD_1_WALLS_HORIZONTAL: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
+    #     [0, 1, 1, 0, 0, 1, 0, 0, 1, 1, 0],
+    #     [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
+    #     [1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1],
+    #     [0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+    #     [0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0]]))
+
     GAMEBOARD_1_WALLS_VERTICAL = jnp.array([
         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
@@ -211,7 +219,7 @@ class WizardOfWorConstants(struct.PyTreeNode):
     RADAR_BLIP_GAP: int = 0
     BOARD_POSITION: Tuple[int, int] = (16, 64)
     GAME_AREA_OFFSET: Tuple[int, int] = (
-        BOARD_POSITION[0] + WALL_THICKNESS + TILE_SIZE[0], BOARD_POSITION[1] + WALL_THICKNESS)
+        BOARD_POSITION[0] + WALL_THICKNESS + TILE_SIZE[0], BOARD_POSITION[1] + WALL_THICKNESS) # 
     LIVES_OFFSET: Tuple[int, int] = (100, 60)  # Offset for lives display
     LIVES_GAP: int = 5  # Gap between lives icons
     RADAR_OFFSET: Tuple[int, int] = (BOARD_POSITION[0] + 53, BOARD_POSITION[1] + 72)  # Offset for radar display
@@ -271,7 +279,8 @@ class WizardOfWorConstants(struct.PyTreeNode):
         )
 
 
-class WizardOfWorObservation(NamedTuple):
+@struct.dataclass
+class WizardOfWorObservation:
     player: EntityPosition
     enemies: chex.Array
     bullet: EntityPosition
@@ -280,11 +289,13 @@ class WizardOfWorObservation(NamedTuple):
     lives: chex.Array
 
 
-class WizardOfWorInfo(NamedTuple):
+@struct.dataclass
+class WizardOfWorInfo:
     all_rewards: chex.Array
 
 
-class WizardOfWorState(NamedTuple):
+@struct.dataclass
+class WizardOfWorState:
     player: EntityPosition
     player_death_animation: int
     enemies: chex.Array  # Array of EntityPosition with length WizardOfWorConstants.MAX_ENEMIES
@@ -1836,6 +1847,17 @@ class WizardOfWorRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
+        bg_h, bg_w = self.BACKGROUND.shape
+        board_x, board_y = self.consts.BOARD_POSITION
+        full_bg = jnp.full(
+            (self.consts.WINDOW_HEIGHT, self.consts.WINDOW_WIDTH),
+            self.jr.TRANSPARENT_ID,
+            dtype=jnp.asarray(self.BACKGROUND).dtype,
+        )
+        self.BACKGROUND = full_bg.at[
+            board_y:board_y + bg_h, board_x:board_x + bg_w
+        ].set(jnp.asarray(self.BACKGROUND))
+
         self._cache_sprite_references()
 
     def _cache_sprite_references(self):
@@ -2130,7 +2152,7 @@ class WizardOfWorRenderer(JAXGameRenderer):
     def _render_player_bullet(self, raster, state: WizardOfWorState):
         return jax.lax.cond(
             state.bullet.x >= 0,
-            lambda _: self.jr.render_at(
+            lambda _: self.jr.render_at_clipped(
                 raster,
                 self.consts.GAME_AREA_OFFSET[0] + state.bullet.x,
                 self.consts.GAME_AREA_OFFSET[1] + state.bullet.y,
