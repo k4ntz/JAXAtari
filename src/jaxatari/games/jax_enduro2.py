@@ -21,6 +21,10 @@ class Enduro2GameState:
     player_x: jnp.ndarray  # Float position
     player_y: jnp.ndarray
     step_count: jnp.ndarray
+    day_count: jnp.ndarray
+    level: jnp.ndarray
+    level_passed: jnp.ndarray
+    game_over: jnp.ndarray
     player_speed: jnp.ndarray
     distance: jnp.ndarray
     cars_to_pass: jnp.ndarray
@@ -45,6 +49,37 @@ class Enduro2Observation:
 @struct.dataclass
 class Enduro2Info:
     pass
+
+def _get_weather_color_codes() -> jnp.ndarray:
+    """Returns the RGB color codes for each weather and each sprite scraped from the game."""
+    return jnp.array([
+        # sky,          gras,       mountains,      horizon 1,      horizon 2,  horizon 3 (highest)
+
+        # day
+        [[24, 26, 167], [0, 68, 0], [134, 134, 29], [24, 26, 167], [24, 26, 167], [24, 26, 167], ],  # day 1
+        [[45, 50, 184], [0, 68, 0], [136, 146, 62], [45, 50, 184], [45, 50, 184], [45, 50, 184]],  # day 2
+        [[45, 50, 184], [0, 68, 0], [192, 192, 192], [45, 50, 184], [45, 50, 184], [45, 50, 184]],  # day white mountain
+        [[45, 50, 184], [236, 236, 236], [214, 214, 214], [45, 50, 184], [45, 50, 184], [45, 50, 184]],  # snow
+
+        # Sunsets
+        [[24, 26, 167], [20, 60, 0], [0, 68, 0], [24, 26, 167], [24, 26, 167], [24, 26, 167]],  # 1
+        [[24, 26, 167], [20, 60, 0], [0, 68, 0], [104, 25, 154], [51, 26, 163], [24, 26, 167]],  # 2
+        [[51, 26, 163], [20, 60, 0], [0, 68, 0], [151, 25, 122], [104, 25, 154], [51, 26, 163]],  # 3
+        [[51, 26, 163], [20, 60, 0], [0, 68, 0], [167, 26, 26], [151, 25, 122], [104, 25, 154]],  # 4
+        [[104, 25, 154], [48, 56, 0], [0, 0, 0], [163, 57, 21], [167, 26, 26], [151, 25, 122]],  # 5
+        [[151, 25, 122], [48, 56, 0], [0, 0, 0], [181, 83, 40], [163, 57, 21], [167, 26, 26]],  # 6
+        [[167, 26, 26], [48, 56, 0], [0, 0, 0], [162, 98, 33], [181, 83, 40], [163, 57, 21]],  # 7
+        [[163, 57, 21], [48, 56, 0], [0, 0, 0], [134, 134, 29], [162, 98, 33], [181, 83, 40]],  # 8
+
+        # night
+        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],  # night 1
+        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],  # fog night
+        [[74, 74, 74], [0, 0, 0], [142, 142, 142], [74, 74, 74], [74, 74, 74], [74, 74, 74]],  # night 2
+
+        # dawn
+        [[111, 111, 111], [0, 0, 0], [181, 83, 40], [111, 111, 111], [111, 111, 111], [111, 111, 111]],  # dawn
+
+    ], dtype=jnp.int32)
 
 @partial(jax.jit, static_argnums=(0, 1, 2, 3))
 def precompute_all_track_curves(max_offset: int, track_height: int, track_width: int, left: bool) -> jnp.ndarray:
@@ -205,20 +240,20 @@ class Enduro2Constants(AutoDerivedConstants):
     mountain_pixel_movement_per_frame_per_speed_unit: float = struct.field(pytree_node=False, default=0.01)
 
     # === Weather ===
+    day_weather_index: int = struct.field(pytree_node=False, default=1)
     snow_weather_index: int = struct.field(pytree_node=False, default=3)
+    sunset_weather_index: int = struct.field(pytree_node=False, default=8)
     night_weather_index: int = struct.field(pytree_node=False, default=12)
     fog_weather_index: int = struct.field(pytree_node=False, default=13)
+    dawn_weather_index: int = struct.field(pytree_node=False, default=15)
     steering_snow_factor: float = struct.field(pytree_node=False, default=2.0)
-    
-    # Weather colors
-    snow_grass_color: tuple = struct.field(pytree_node=False, default=(236, 236, 236))
-    snow_mountain_color: tuple = struct.field(pytree_node=False, default=(214, 214, 214))
-    night_sky_color: tuple = struct.field(pytree_node=False, default=(74, 74, 74))
-    night_grass_color: tuple = struct.field(pytree_node=False, default=(0, 0, 0))
-    night_mountain_color: tuple = struct.field(pytree_node=False, default=(142, 142, 142))
-    mountain_color: tuple = struct.field(pytree_node=False, default=(136, 146, 62))
-    fog_color: tuple = struct.field(pytree_node=False, default=(74, 74, 74))
+    weather_with_night_car_sprite: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([12, 13, 14], dtype=jnp.int32))
     fog_height: int = struct.field(pytree_node=False, default=80)
+
+    # Dynamic derived constants for weather
+    weather_starts_s: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
+    day_cycle_time: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
+    weather_color_codes: jnp.ndarray = struct.field(pytree_node=False, default_factory=_get_weather_color_codes)
 
     # UI Positions
     info_box_x_pos: int = struct.field(pytree_node=False, default=48)
@@ -235,15 +270,6 @@ class Enduro2Constants(AutoDerivedConstants):
         {'name': 'mountain_left', 'type': 'single', 'file': 'misc/mountain_left.npy'},
         {'name': 'mountain_right', 'type': 'single', 'file': 'misc/mountain_right.npy'},
         {'name': 'score_box', 'type': 'single', 'file': 'backgrounds/score_box.npy'},
-        {'name': 'sky_color', 'type': 'procedural', 'data': jnp.array([[[45, 50, 184, 255]]], dtype=jnp.uint8)},
-        {'name': 'grass_color', 'type': 'procedural', 'data': jnp.array([[[0, 68, 0, 255]]], dtype=jnp.uint8)},
-        {'name': 'mountain_color', 'type': 'procedural', 'data': jnp.array([[[136, 146, 62, 255]]], dtype=jnp.uint8)},
-        {'name': 'snow_grass_color', 'type': 'procedural', 'data': jnp.array([[[236, 236, 236, 255]]], dtype=jnp.uint8)},
-        {'name': 'snow_mountain_color', 'type': 'procedural', 'data': jnp.array([[[214, 214, 214, 255]]], dtype=jnp.uint8)},
-        {'name': 'night_sky_color', 'type': 'procedural', 'data': jnp.array([[[74, 74, 74, 255]]], dtype=jnp.uint8)},
-        {'name': 'night_grass_color', 'type': 'procedural', 'data': jnp.array([[[0, 0, 0, 255]]], dtype=jnp.uint8)},
-        {'name': 'night_mountain_color', 'type': 'procedural', 'data': jnp.array([[[142, 142, 142, 255]]], dtype=jnp.uint8)},
-        {'name': 'fog_color', 'type': 'procedural', 'data': jnp.array([[[74, 74, 74, 255]]], dtype=jnp.uint8)},
         {'name': 'track_colors', 'type': 'procedural', 'data': jnp.array([[list(c) + [255] for c in [
             [74, 74, 74], [111, 111, 111], [170, 170, 170], [192, 192, 192]
         ]]], dtype=jnp.uint8)},
@@ -278,6 +304,26 @@ class Enduro2Constants(AutoDerivedConstants):
             self.length_of_opponent_array, self.opponent_delay_slots, self.PLAYER_COLOR_INDEX
         )
 
+        weather_starts_s = jnp.array([
+            34,  # day 1
+            34 + 34,  # day 2 (lighter)
+            34 + 34 + 34,  # day 3 (white mountains)
+            34 + 34 + 34 + 69,  # snow (steering is more difficult)
+            34 + 34 + 34 + 69 + 8 * 1,  # Sunset 1
+            34 + 34 + 34 + 69 + 8 * 2,  # Sunset 2
+            34 + 34 + 34 + 69 + 8 * 3,  # Sunset 3
+            34 + 34 + 34 + 69 + 8 * 4,  # Sunset 4
+            34 + 34 + 34 + 69 + 8 * 5,  # Sunset 5
+            34 + 34 + 34 + 69 + 8 * 6,  # Sunset 6
+            34 + 34 + 34 + 69 + 8 * 7,  # Sunset 7
+            34 + 34 + 34 + 69 + 8 * 8,  # Sunset 8
+            34 + 34 + 34 + 69 + 8 * 8 + 69,  # night 1
+            34 + 34 + 34 + 69 + 8 * 8 + 69 + 69,  # fog night
+            34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34,  # night 2
+            34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34 + 34,  # dawn
+        ], dtype=jnp.int32)
+        day_cycle_time = weather_starts_s[15]
+
         return {
             'game_window_height': game_window_height,
             'km_per_speed_unit_per_frame': km_per_speed_unit_per_frame,
@@ -290,6 +336,8 @@ class Enduro2Constants(AutoDerivedConstants):
             'whole_track': whole_track,
             'opponent_slot_ys': opponent_slot_ys,
             'base_opponents': base_opponents,
+            'weather_starts_s': weather_starts_s,
+            'day_cycle_time': day_cycle_time,
         }
     
     game_window_height: Optional[int] = struct.field(pytree_node=False, default=None)
@@ -348,6 +396,14 @@ class Enduro2Renderer(JAXGameRenderer):
         color_dummy = jnp.array([[list(rgb) + [255] for rgb in car_rgbs_to_add]], dtype=jnp.uint8)
         asset_config.append({'name': 'car_colors', 'type': 'procedural', 'data': color_dummy})
 
+        # Add all 16 weather colors to palette so they exist in COLOR_TO_ID
+        weather_colors = self.consts.weather_color_codes
+        num_weathers = weather_colors.shape[0]
+        for weather_idx in range(num_weathers):
+            for color_idx in range(6): # sky, grass, mountain, horizon1, 2, 3
+                color = np.array(list(weather_colors[weather_idx, color_idx]) + [255], dtype=np.uint8)
+                asset_config.append({'name': f'weather_color_{weather_idx}_{color_idx}', 'type': 'procedural', 'data': color.reshape(1, 1, 4)})
+
         # Load car sprites manually
         for i in range(7):
             # For the largest opponent slot (0), we use car_1.npy to avoid using the player car sprite.
@@ -371,26 +427,19 @@ class Enduro2Renderer(JAXGameRenderer):
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, self._sprite_path)
         
-        # Store color IDs
-        self.sky_id = self.COLOR_TO_ID.get((45, 50, 184), 0)
-        self.grass_id = self.COLOR_TO_ID.get((0, 68, 0), 0)
-        
+        # Store WEATHER Color IDs [weather_idx, color_idx (sky, grass, mountain, h1, h2, h3)]
+        weather_ids = []
+        for w_idx in range(num_weathers):
+            w_colors = []
+            for c_idx in range(6):
+                rgb = tuple(weather_colors[w_idx, c_idx].tolist())
+                w_colors.append(self.COLOR_TO_ID.get(rgb, 0))
+            weather_ids.append(w_colors)
+        self.WEATHER_COLOR_IDS = jnp.array(weather_ids, dtype=jnp.uint8)
+
         # Store Track Color IDs
         track_rgbs = [tuple(c.tolist()) for c in self.consts.track_colors]
         self.TRACK_COLOR_IDS = jnp.array([self.COLOR_TO_ID.get(rgb, 0) for rgb in track_rgbs], dtype=jnp.uint8)
-
-        # Snow color IDs
-        self.snow_grass_id = self.COLOR_TO_ID.get(self.consts.snow_grass_color, 0)
-        self.snow_mountain_id = self.COLOR_TO_ID.get(self.consts.snow_mountain_color, 0)
-        self.mountain_id = self.COLOR_TO_ID.get(self.consts.mountain_color, 0)
-
-        # Night color IDs
-        self.night_sky_id = self.COLOR_TO_ID.get(self.consts.night_sky_color, 0)
-        self.night_grass_id = self.COLOR_TO_ID.get(self.consts.night_grass_color, 0)
-        self.night_mountain_id = self.COLOR_TO_ID.get(self.consts.night_mountain_color, 0)
-
-        # Fog color ID
-        self.fog_color_id = self.COLOR_TO_ID.get(self.consts.fog_color, 0)
 
         # Store Odometer Sheet ID Masks
         self.black_digit_sheet_mask = self.SHAPE_MASKS['black_digit_array']
@@ -414,12 +463,11 @@ class Enduro2Renderer(JAXGameRenderer):
         xx, yy = self.jr._xx, self.jr._yy
         is_fog = state.weather_index == self.consts.fog_weather_index
 
+        # Get current weather colors [sky, grass, mountain, h1, h2, h3]
+        current_weather_colors = self.WEATHER_COLOR_IDS[state.weather_index]
+
         # 1. Draw Sky (top part of game window)
-        sky_color = jnp.where(
-            is_fog,
-            self.fog_color_id,
-            jnp.where(state.weather_index == self.consts.night_weather_index, self.night_sky_id, self.sky_id)
-        )
+        sky_color = current_weather_colors[0]
         sky_mask = (xx >= self.consts.window_offset_left) & (yy < self.consts.sky_height)
         raster = jnp.where(sky_mask, sky_color, raster)
         
@@ -427,15 +475,7 @@ class Enduro2Renderer(JAXGameRenderer):
         raster = self._render_mountains(raster, state)
 
         # 3. Draw Grass (bottom part of game window)
-        grass_color = jnp.where(
-            is_fog,
-            self.fog_color_id,
-            jnp.where(
-                state.weather_index == self.consts.snow_weather_index, 
-                self.snow_grass_id, 
-                jnp.where(state.weather_index == self.consts.night_weather_index, self.night_grass_id, self.grass_id)
-            )
-        )
+        grass_color = jnp.where(is_fog, current_weather_colors[0], current_weather_colors[1])
         grass_mask = (xx >= self.consts.window_offset_left) & (yy >= self.consts.sky_height) & (yy < self.consts.game_window_height)
         raster = jnp.where(grass_mask, grass_color, raster)
         
@@ -454,8 +494,8 @@ class Enduro2Renderer(JAXGameRenderer):
         raster = self._render_opponent_cars(raster, state)
 
         # 8. Render player car
-        is_night = (state.weather_index == self.consts.night_weather_index) | is_fog
-        
+        is_night = jnp.isin(state.weather_index, self.consts.weather_with_night_car_sprite)
+
         # Calculate animation period based on player speed
         animation_period = self.consts.opponent_animation_steps - (state.player_speed - self.consts.opponent_speed) / (
                 self.consts.max_speed - self.consts.opponent_speed) * (self.consts.opponent_animation_steps - 1)
@@ -501,7 +541,7 @@ class Enduro2Renderer(JAXGameRenderer):
         frame_index = (animation_step % 2).astype(jnp.int32)
         
         is_fog = state.weather_index == self.consts.fog_weather_index
-        is_night = (state.weather_index == self.consts.night_weather_index) | is_fog
+        is_night = jnp.isin(state.weather_index, self.consts.weather_with_night_car_sprite)
 
         def render_slot(r, i):
             pos = state.visible_opponent_positions[i]
@@ -561,11 +601,8 @@ class Enduro2Renderer(JAXGameRenderer):
             mountain_right_sprite = self.SHAPE_MASKS['mountain_right']
 
             # Dynamic recoloring for snow and night
-            mountain_color_id = jnp.where(
-                state.weather_index == self.consts.snow_weather_index,
-                self.snow_mountain_id,
-                jnp.where(state.weather_index == self.consts.night_weather_index, self.night_mountain_id, self.mountain_id)
-            )
+            current_weather_colors = self.WEATHER_COLOR_IDS[state.weather_index]
+            mountain_color_id = current_weather_colors[2]
             
             def recolor_mountain(mask):
                 is_body = (mask != self.jr.TRANSPARENT_ID)
@@ -882,6 +919,10 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
             player_x=jnp.array(self.consts.player_x_start, dtype=jnp.float32),
             player_y=jnp.array(self.consts.player_y_start, dtype=jnp.float32),
             step_count=jnp.array(0, dtype=jnp.int32),
+            day_count=jnp.array(0, dtype=jnp.int32),
+            level=jnp.array(1, dtype=jnp.int32),
+            level_passed=jnp.array(0, dtype=jnp.int32),
+            game_over=jnp.array(False, dtype=jnp.bool_),
             player_speed=jnp.array(self.consts.initial_speed, dtype=jnp.float32),
             distance=jnp.array(0.0, dtype=jnp.float32),
             cars_to_pass=jnp.array(200, dtype=jnp.int32),
@@ -1236,12 +1277,52 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
         distance_delta = new_speed * self.consts.km_per_speed_unit_per_frame
         new_distance = state.distance + distance_delta
 
+        # 5. Update Weather and Day Cycle
+        new_step_count = state.step_count + 1
+        cycled_time = (new_step_count / self.consts.frame_rate) % self.consts.day_cycle_time
+        new_weather_index = jnp.searchsorted(self.consts.weather_starts_s, cycled_time, side='right')
+        
+        # Calculate current day based on total elapsed time
+        new_day_count = jnp.floor(new_step_count / self.consts.frame_rate / self.consts.day_cycle_time).astype(jnp.int32)
+        
+        # Day transition and level logic
+        # Check if the player passed the level (cars_to_pass reaches 0)
+        new_level_passed = jnp.logical_or(
+            state.level_passed,
+            new_cars_to_pass <= 0
+        ).astype(jnp.int32)
+
+        def reset_day():
+            # If day advances and level is passed, advance to next level.
+            # If day advances and level is not passed, game over!
+            is_game_over = jnp.logical_not(new_level_passed).astype(jnp.bool_)
+            level = jnp.where(is_game_over, state.level, state.level + 1)
+            # When advancing level, reset cars to pass. For simplicity here, just using a fixed 200/300 etc if needed
+            # Or just keep it 200 for now. Original enduro increases it by 100 per level up to max.
+            cars_increase_per_level = 100
+            cars_to_pass = jnp.where(is_game_over, new_cars_to_pass, 200 + cars_increase_per_level * (level - 1))
+            return level, jnp.array(0, dtype=jnp.int32), is_game_over, cars_to_pass
+
+        def do_nothing():
+            return state.level, new_level_passed, state.game_over, new_cars_to_pass
+
+        new_level, final_level_passed, new_game_over, final_cars_to_pass = lax.cond(
+            new_day_count > state.day_count,
+            reset_day,
+            do_nothing,
+        )
+
         new_state = state.replace(
             player_x=new_player_x,
             player_y=new_player_y,
             player_speed=new_speed,
             distance=new_distance,
-            step_count=state.step_count + 1,
+            step_count=new_step_count,
+            day_count=new_day_count,
+            level=new_level,
+            level_passed=final_level_passed,
+            game_over=new_game_over,
+            weather_index=new_weather_index,
             track_top_x=new_track_top_x,
             track_top_x_curve_offset=new_top_x_curve_offset,
             collision_mode=new_collision_mode,
@@ -1252,7 +1333,7 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
             visible_opponent_positions=new_visible_opponent_positions,
             adjusted_opponent_index=new_adjusted_idx,
             adjusted_opponent_lane=new_adjusted_lane,
-            cars_to_pass=new_cars_to_pass
+            cars_to_pass=final_cars_to_pass
         )
 
         obs = self._get_observation(new_state)
@@ -1270,7 +1351,7 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: Enduro2GameState) -> bool:
-        return False
+        return state.game_over
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: Enduro2GameState) -> Enduro2Info:

@@ -85,6 +85,57 @@ class FogWeatherMod(JaxAtariInternalModPlugin):
         state = state.replace(weather_index=jnp.array(self._env.consts.fog_weather_index, dtype=jnp.int32))
         return obs, state, reward, done, info
 
+class DayWeatherMod(JaxAtariInternalModPlugin):
+    """
+    Forces the weather to day.
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def reset(self, key: jax.random.PRNGKey = None):
+        obs, state = self._env.__class__.reset(self._env, key)
+        state = state.replace(weather_index=jnp.array(self._env.consts.day_weather_index, dtype=jnp.int32))
+        return obs, state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state, action):
+        state = state.replace(weather_index=jnp.array(self._env.consts.day_weather_index, dtype=jnp.int32))
+        obs, state, reward, done, info = self._env.__class__.step(self._env, state, action)
+        state = state.replace(weather_index=jnp.array(self._env.consts.day_weather_index, dtype=jnp.int32))
+        return obs, state, reward, done, info
+
+class SunsetWeatherMod(JaxAtariInternalModPlugin):
+    """
+    Forces the weather to sunset.
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def reset(self, key: jax.random.PRNGKey = None):
+        obs, state = self._env.__class__.reset(self._env, key)
+        state = state.replace(weather_index=jnp.array(self._env.consts.sunset_weather_index, dtype=jnp.int32))
+        return obs, state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state, action):
+        state = state.replace(weather_index=jnp.array(self._env.consts.sunset_weather_index, dtype=jnp.int32))
+        obs, state, reward, done, info = self._env.__class__.step(self._env, state, action)
+        state = state.replace(weather_index=jnp.array(self._env.consts.sunset_weather_index, dtype=jnp.int32))
+        return obs, state, reward, done, info
+
+class DawnWeatherMod(JaxAtariInternalModPlugin):
+    """
+    Forces the weather to dawn.
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def reset(self, key: jax.random.PRNGKey = None):
+        obs, state = self._env.__class__.reset(self._env, key)
+        state = state.replace(weather_index=jnp.array(self._env.consts.dawn_weather_index, dtype=jnp.int32))
+        return obs, state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state, action):
+        state = state.replace(weather_index=jnp.array(self._env.consts.dawn_weather_index, dtype=jnp.int32))
+        obs, state, reward, done, info = self._env.__class__.step(self._env, state, action)
+        state = state.replace(weather_index=jnp.array(self._env.consts.dawn_weather_index, dtype=jnp.int32))
+        return obs, state, reward, done, info
+
 class SpeedAndXPosHudMod(JaxAtariInternalModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def _render_cars_to_pass(self, raster: jnp.ndarray, state) -> jnp.ndarray:
