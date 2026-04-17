@@ -383,6 +383,11 @@ class Enduro2Renderer(JAXGameRenderer):
         asset_config = list(self.consts.ASSET_CONFIG)
         asset_config.append({'name': 'player_car', 'type': 'procedural', 'data': player_car_data})
 
+        flags_path = os.path.join(self._sprite_path, 'misc/flags.npy')
+        if os.path.exists(flags_path):
+            flags_data = jnp.load(flags_path)
+            asset_config.append({'name': 'flags', 'type': 'procedural', 'data': flags_data})
+
         if os.path.exists(player_car_night_path):
             player_car_night_data = jnp.load(player_car_night_path)
             asset_config.append({'name': 'player_car_night', 'type': 'procedural', 'data': player_car_night_data})
@@ -834,38 +839,53 @@ class Enduro2Renderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def _render_cars_to_pass(self, raster: jnp.ndarray, state: Enduro2GameState) -> jnp.ndarray:
         """
-        Renders the "Cars to pass" digits.
+        Renders the "Cars to pass" digits or green flags if level passed.
         """
-        digit_sprites = self.SHAPE_MASKS['digits_black']
-        
-        hundreds = (state.cars_to_pass // 100) % 10
-        tens = (state.cars_to_pass // 10) % 10
-        ones = state.cars_to_pass % 10
-        
-        spacing = digit_sprites.shape[2] + 2
-        
-        # Only show hundreds if > 0
-        hundreds_mask = digit_sprites[hundreds]
-        raster = jax.lax.cond(
-            state.cars_to_pass >= 100,
-            lambda r: self.jr.render_at(r, self.consts.score_start_x, self.consts.score_start_y, hundreds_mask),
-            lambda r: r,
+        def render_flags(r):
+            # Animate the flags: switch frame every 8 steps
+            animation_step = (state.step_count // 8) % 2
+            flag_mask = self.SHAPE_MASKS['flags'][animation_step.astype(jnp.int32)]
+            # Draw flags with black background
+            return self.jr.render_at(r, self.consts.score_start_x - 2, self.consts.score_start_y, flag_mask)
+            
+        def render_digits(r):
+            digit_sprites = self.SHAPE_MASKS['digits_black']
+            
+            hundreds = (state.cars_to_pass // 100) % 10
+            tens = (state.cars_to_pass // 10) % 10
+            ones = state.cars_to_pass % 10
+            
+            spacing = digit_sprites.shape[2] + 2
+            
+            # Only show hundreds if > 0
+            hundreds_mask = digit_sprites[hundreds]
+            r = jax.lax.cond(
+                state.cars_to_pass >= 100,
+                lambda r_in: self.jr.render_at(r_in, self.consts.score_start_x, self.consts.score_start_y, hundreds_mask),
+                lambda r_in: r_in,
+                r
+            )
+            
+            # Only show tens if >= 10
+            tens_mask = digit_sprites[tens]
+            r = jax.lax.cond(
+                state.cars_to_pass >= 10,
+                lambda r_in: self.jr.render_at(r_in, self.consts.score_start_x + spacing, self.consts.score_start_y, tens_mask),
+                lambda r_in: r_in,
+                r
+            )
+            
+            ones_mask = digit_sprites[ones]
+            r = self.jr.render_at(r, self.consts.score_start_x + 2 * spacing, self.consts.score_start_y, ones_mask)
+            
+            return r
+
+        return jax.lax.cond(
+            state.level_passed > 0,
+            render_flags,
+            render_digits,
             raster
         )
-        
-        # Only show tens if >= 10
-        tens_mask = digit_sprites[tens]
-        raster = jax.lax.cond(
-            state.cars_to_pass >= 10,
-            lambda r: self.jr.render_at(r, self.consts.score_start_x + spacing, self.consts.score_start_y, tens_mask),
-            lambda r: r,
-            raster
-        )
-        
-        ones_mask = digit_sprites[ones]
-        raster = self.jr.render_at(raster, self.consts.score_start_x + 2 * spacing, self.consts.score_start_y, ones_mask)
-        
-        return raster
 
 
 class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Info, Enduro2Constants]):
@@ -936,7 +956,7 @@ class JaxEnduro2(JaxEnvironment[Enduro2GameState, Enduro2Observation, Enduro2Inf
             game_over=jnp.array(False, dtype=jnp.bool_),
             player_speed=jnp.array(self.consts.initial_speed, dtype=jnp.float32),
             distance=jnp.array(0.0, dtype=jnp.float32),
-            cars_to_pass=jnp.array(200, dtype=jnp.int32),
+            cars_to_pass=jnp.array(2, dtype=jnp.int32),
             track_top_x=jnp.array(track_top_x, dtype=jnp.float32),
             track_top_x_curve_offset=jnp.array(self.consts.initial_track_top_x_curve_offset, dtype=jnp.float32),
             collision_mode=jnp.array(False, dtype=jnp.bool_),
