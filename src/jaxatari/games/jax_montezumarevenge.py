@@ -219,7 +219,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             platform_cycle=jnp.array(0, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
             death_type=jnp.array(0, dtype=jnp.int32),
-            inventory=jnp.array([3, 0, 0, 0], dtype=jnp.int32), # keys, sword, torch, amulet
+            inventory=jnp.array([0, 0, 0, 0], dtype=jnp.int32), # keys, sword, torch, amulet
             amulet_time=jnp.array(0, dtype=jnp.int32),
             bonus_room_timer=jnp.array(0, dtype=jnp.int32),
             first_gem_pickup=jnp.array(0, dtype=jnp.int32),
@@ -849,33 +849,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
                                                     jnp.where(state.room_id == 11, 3, jnp.where(state.room_id == 12, 4, jnp.where(state.room_id == 13, 5, jnp.where(state.room_id == 18, 10, jnp.where(state.room_id == 19, 11, jnp.where(state.room_id == 20, 12, jnp.where(state.room_id == 21, 13, jnp.where(state.room_id == 22, 14, jnp.where(state.room_id == 31, 23, jnp.where(state.room_id == 30, 22, jnp.where(state.room_id == 28, 20, state.room_id))))))))))), 
                                                     state.room_id))))
         def transition_fn(state_in):
-            room_idx = get_room_idx(new_room_id)
-            jax.lax.switch(room_idx, [
-                lambda: jax.debug.print("Entering room: ROOM_0_3 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_0_4 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_0_5 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_1_3 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_1_2 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_1_4 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_1_5 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_1_6 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_2_2 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_2_1 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_2_3 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_2_4 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_2_5 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_2_6 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_2_7 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_7 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_8 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_6 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_4 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_3 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_5 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_1 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_2 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_0 (index: {room_id})", room_id=new_room_id),
-            ])
+            # room_idx = get_room_idx(new_room_id)
             st = state_in.replace(
                 global_doors_active=state_in.global_doors_active.at[state_in.room_id].set(state_in.doors_active),
                 global_items_active=state_in.global_items_active.at[state_in.room_id].set(state_in.items_active),
