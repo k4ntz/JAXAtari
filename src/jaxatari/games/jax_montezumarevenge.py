@@ -415,9 +415,8 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
 
         can_move_off = jnp.logical_and(jnp.logical_or(is_left, is_right), jnp.logical_not(hit_wall_check))
 
-        is_jumping_off_ladder = jnp.logical_and(can_ladder, jnp.logical_and(state.is_climbing == 1, jnp.logical_and(is_fire, can_move_off)))
-        is_moving_off_ladder = jnp.logical_and(can_ladder, jnp.logical_and(state.is_climbing == 1, can_move_off))
-        abort_ladder = jnp.logical_or(is_jumping_off_ladder, is_moving_off_ladder)
+        # Ladders are vertical-only: horizontal input does not disengage climbing.
+        abort_ladder = jnp.array(False)
 
         is_jumping_off_rope = jnp.logical_and(can_rope, jnp.logical_and(state.is_climbing == 1, jnp.logical_and(is_fire, can_move_off)))
         abort_rope = is_jumping_off_rope
@@ -470,7 +469,17 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         new_last_ladder = jnp.where(is_climbing == 1, ladder_idx, new_last_ladder)
 
         # 2. Process Jump Initiation
-        start_jump_normal = jnp.logical_and(is_fire, jnp.logical_and(on_ground, jnp.logical_and(state.is_jumping == 0, is_climbing == 0)))
+        was_on_ladder = jnp.logical_and(state.is_climbing == 1, state.last_ladder != -1)
+        start_jump_normal = jnp.logical_and(
+            is_fire,
+            jnp.logical_and(
+                on_ground,
+                jnp.logical_and(
+                    state.is_jumping == 0,
+                    jnp.logical_and(is_climbing == 0, jnp.logical_not(was_on_ladder)),
+                ),
+            ),
+        )
         start_jump = jnp.logical_or(start_jump_normal, is_jumping_off_rope)
         is_jumping = jnp.where(start_jump, 1, state.is_jumping)
         is_jumping = jnp.where(is_climbing == 1, 0, is_jumping) # cancel jump

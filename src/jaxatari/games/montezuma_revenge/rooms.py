@@ -73,8 +73,8 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         ey = enemies_y.at[0].set(119)
         ea = enemies_active.at[0].set(1)
         ed = enemies_direction.at[0].set(1)
-        eminx = enemies_min_x.at[0].set(45)
-        emaxx = enemies_max_x.at[0].set(110)
+        eminx = enemies_min_x.at[0].set(55)
+        emaxx = enemies_max_x.at[0].set(100)
         
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(49)
