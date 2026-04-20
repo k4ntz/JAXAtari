@@ -42,8 +42,7 @@ def _create_wall_map_from_sprite(sprite_path: str) -> chex.Array:
         sprite_rgba = jnp.concatenate([sprite_rgba, alpha], axis=2)
     
     target_shape = (210, 160, 4)
-    if sprite_rgba.shape != target_shape:
-        sprite_rgba = jax.image.resize(sprite_rgba, target_shape, method='nearest').astype(jnp.uint8)
+    assert sprite_rgba.shape == target_shape, f"Expected sprite shape {target_shape}, got {sprite_rgba.shape} for {sprite_path}"
 
     rgb_channels = sprite_rgba[:, :, :3]
     color_sum = jnp.sum(rgb_channels.astype(jnp.int32), axis=-1)
@@ -529,7 +528,7 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
             is_in_collision=jnp.array(False, dtype=jnp.bool_),
             current_level=jnp.array(0, dtype=jnp.int32),
             world_level=jnp.array(1, dtype=jnp.int32),
-            monster_speed_index=jnp.array(1, dtype=jnp.int32),
+            monster_speed_index=jnp.array(0, dtype=jnp.int32),
             world_transition_timer=jnp.array(0, dtype=jnp.int32),
             last_level=jnp.array(0, dtype=jnp.int32),
             collected_chest_in_current_visit=jnp.array(-1, dtype=jnp.int32),
@@ -2056,11 +2055,13 @@ class VentureRenderer(JAXGameRenderer):
         
         def draw_aiming_dot(c):
             # Same sprite as player dot (map mode)
-            mask = jax.lax.cond(state.world_level == 1, lambda: self.SHAPE_MASKS['player_dot_w1'], lambda: self.SHAPE_MASKS['player_dot_w2'])
+            mask = jnp.where(state.world_level == 1, self.SHAPE_MASKS['player_dot_w1'], self.SHAPE_MASKS['player_dot_w2'])
+            player_width = self.consts.PLAYER_DETAILED_RENDER_WIDTH
+            player_height = self.consts.PLAYER_DETAILED_RENDER_HEIGHT
             # Dot offset
-            dot_x = state.player.x + state.player.last_dx * self.consts.AIMING_DOT_OFFSET
-            dot_y = state.player.y + state.player.last_dy * self.consts.AIMING_DOT_OFFSET
-            
+            dot_x = state.player.x + state.player.last_dx * (player_width / 2 + self.consts.AIMING_DOT_OFFSET)
+            dot_y = state.player.y + state.player.last_dy * (player_height / 2 + self.consts.AIMING_DOT_OFFSET)
+
             # Dimensions of dot? Old code: 
             # proj_sprite = jr.get_sprite_frame(self.sprites['player_dot'][world_idx], 0)
             # px = ... - proj_size_x / 2
