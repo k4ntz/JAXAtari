@@ -51,7 +51,8 @@ def test_wall_collision():
     # Player_x shouldn't exceed 149
     assert state.player_x <= 149
 
-def test_jump_off_ladder():
+def test_jump_off_ladder_impossible():
+    #It is not possible to move off of ladders
     env = JaxMontezumaRevenge()
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
@@ -72,12 +73,15 @@ def test_jump_off_ladder():
     
     obs, state, reward, done, info = env.step(state, RIGHTFIRE)
     
-    # Should abort the ladder, but NOT jump
-    assert state.is_climbing == 0
+    # Should keep climbing and not start falling or jumping 
+    assert state.is_climbing == 1
     assert state.is_jumping == 0
-    # On the next step, player should be falling
+    assert state.is_falling == 0
+    # On the next step, still shouldn't fall 
     obs, state, reward, done, info = env.step(state, 0)
-    assert state.is_falling == 1
+    assert state.is_climbing == 1
+    assert state.is_jumping == 0
+    assert state.is_falling == 0
 
 def test_transition_landing_overlap():
     env = JaxMontezumaRevenge()
