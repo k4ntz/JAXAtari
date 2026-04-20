@@ -171,7 +171,7 @@ class SkiingState:
     """Represents the current state of the game"""
 
     skier_x: chex.Array
-    skier_pos: chex.Array  # --> --_  \   |   |   /  _-- <-- States are doubles in ALE
+    skier_pos: chex.Array  # --> --_  \  |  |   | |  /  _-- <-- States are doubles in ALE (9 total)
     skier_fell: chex.Array
     skier_x_speed: chex.Array
     skier_y_speed: chex.Array
@@ -211,8 +211,6 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         Action.NOOP,
         Action.RIGHT,
         Action.LEFT,
-        Action.FIRE,
-        Action.DOWN
     ], dtype=jnp.int32)
 
     def __init__(self, consts: SkiingConstants | None = None):
@@ -523,9 +521,11 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         self, state: SkiingState, action: int
     ) -> tuple[SkiingObservation, SkiingState, float, bool, SkiingInfo]:
         #                              -->  --_      \     |     |    /    _-- <--
-        side_speed = jnp.array([-1.0, -0.5, -0.333, 0.0, 0.0, 0.333, 0.5, 1.0], jnp.float32)
+        # side_speed = jnp.array([-1.0, -0.5, -0.333, 0.0, 0.0, 0.333, 0.5, 1.0], jnp.float32)
+        side_speed = jnp.array([-0.8, -0.3, -0.2, -0.1, 0.0, 0.0, 0.1, 0.2, 0.3, 0.8], jnp.float32)
         #                              -->  --_   \     |    |     /    _--  <--
-        down_speed = jnp.array([0.0, 0.5, 0.875, 1.0, 1.0, 0.875, 0.5, 0.0], jnp.float32)
+        # down_speed = jnp.array([0.0, 0.5, 0.875, 1.0, 1.0, 0.875, 0.5, 0.0], jnp.float32)
+        down_speed = jnp.array([0.0, 0.2, 0.3, 0.9, 1.0, 1.0, 0.9, 0.3, 0.2, 0.0], jnp.float32)
 
         RECOVERY_FRAMES = jnp.int32(60)
         TREE_X_DIST = jnp.float32(8.0)
@@ -541,7 +541,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         # - When a LEFT/RIGHT key is held and the counter hits 0, advance one discrete step and reset the counter.
         # - While the counter > 0, it counts down each frame and no additional step happens.
         # - On NOOP, reset the counter to 0 (so the next tap is immediate).
-        REPEAT_FRAMES = jnp.int32(4)  # small cadence to feel snappy (tap-friendly)
+        REPEAT_FRAMES = jnp.int32(8)  # small cadence to feel snappy (tap-friendly)
 
         # Count down when a direction key is pressed; else zero.
         # If NOOP: counter -> 0
@@ -557,7 +557,7 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
 
         delta = jnp.where(want_left, -1, jnp.where(want_right, +1, 0)).astype(jnp.int32)
         new_skier_pos = jnp.where(can_step_now, state.skier_pos + delta, state.skier_pos)
-        new_skier_pos = jnp.clip(new_skier_pos, 0, 7)
+        new_skier_pos = jnp.clip(new_skier_pos, 0, 9)
 
         direction_change_counter = jnp.where(
             jnp.equal(norm_action, Action.NOOP),
@@ -593,12 +593,12 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         in_recovery = jnp.greater(state.skier_fell, 0)
 
         # Recovery: Face front, 0 horizontal speed, y speed same as front
-        skier_pos = jax.lax.select(in_recovery, jnp.array(3), skier_pos)
+        skier_pos = jax.lax.select(in_recovery, jnp.array(4), skier_pos) # default to facing front
         dx_target = jax.lax.select(in_recovery, jnp.array(0.0, dtype=jnp.float32), dx_target)
-        dy_target = jax.lax.select(in_recovery, down_speed.at[3].get(), dy_target)
+        dy_target = jax.lax.select(in_recovery, down_speed.at[4].get(), dy_target)
 
         friction_x = jnp.float32(0.04)
-        friction_y = jnp.float32(0.01)
+        friction_y = jnp.float32(0.02)
         
         is_down_action = jnp.equal(norm_action, Action.DOWN)
         
@@ -1163,9 +1163,16 @@ class SkiingRenderer(JAXGameRenderer):
         # 3. Get and Draw Skier
         skier_masks = self.SHAPE_MASKS['skier_group']
         skier_offset = self.FLIP_OFFSETS['skier_group']
-        
-        pos = jnp.clip(state.skier_pos, 0, 7)
-        skier_base = skier_masks[pos]
+
+        def map_ski_to_sprite(pos):
+            return jax.lax.switch(pos,
+                [lambda: skier_masks[0], lambda: skier_masks[1], lambda: skier_masks[2], lambda: skier_masks[3],
+                 lambda: skier_masks[3], lambda: skier_masks[4], lambda: skier_masks[4], lambda: skier_masks[5],
+                 lambda: skier_masks[6], lambda: skier_masks[7]]
+            ) 
+        pos = jnp.clip(state.skier_pos, 0, 9)
+        # skier_base = skier_masks[pos]
+        skier_base = map_ski_to_sprite(pos)
 
         is_fallen = (state.skier_fell > 0) & \
                     ((state.collision_type == 1) | (state.collision_type == 2) | (state.collision_type == 3))
