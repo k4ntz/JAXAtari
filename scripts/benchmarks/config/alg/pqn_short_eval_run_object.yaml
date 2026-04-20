@@ -1,7 +1,6 @@
 # This is adapted from Atari configuration 
 HIDDEN_SIZE: 256
 NUM_LAYERS: 3
-NAME_INITIALS: "RE"
 ALG_NAME: "pqn"
 TOTAL_TIMESTEPS: 2e8 # 1e8 == 100M, but times 4 (frame-skipping) -> pqn paper: enough to outperform Rainbow
 TOTAL_TIMESTEPS_DECAY: 2e8 # will be used for decay functions, in case you want to test for less timesteps and keep decays same
