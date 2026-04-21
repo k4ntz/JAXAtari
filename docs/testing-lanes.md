@@ -50,3 +50,9 @@ For local verification on one game:
 ```bash
 pytest --game montezumarevenge --slow tests/
 ```
+
+## Full CI for PRs (manual by label)
+
+- Add the label `full-ci` to a PR to trigger a one-off full `--slow` run for that PR head commit.
+- It does not re-run automatically on every later commit; add/remove/re-add the label (or use manual dispatch) when you want another full run.
+- This run validates the full PR content (not games-only overlay).

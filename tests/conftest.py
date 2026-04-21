@@ -246,18 +246,6 @@ def pytest_generate_tests(metafunc):
 
         metafunc.parametrize("game_name", game_list)
     
-    if "representative_game_name" in metafunc.fixturenames:
-        specified_games = parse_game_list(metafunc.config.getoption("--game"))
-        selected_core_games = list(CORE_INFRA_GAMES)
-        if specified_games:
-            normalized_requested = {normalize_game_name(g) for g in specified_games}
-            selected_core_games = [
-                game for game in selected_core_games
-                if normalize_game_name(game) in normalized_requested
-            ]
-        if selected_core_games:
-            metafunc.parametrize("representative_game_name", selected_core_games)
-
 def load_game_environment(game_name: str) -> JaxEnvironment:
     """Dynamically loads a game environment from a.py file."""
     test_file_dir = Path(__file__).parent.resolve()
@@ -307,14 +295,20 @@ def raw_env(game_name):
     return load_game_environment(game_name)
 
 @pytest.fixture
-def representative_game_name(request):
-    """Parameterized representative game fixture for heavy tests."""
-    return request.param
+def raw_env_representative(raw_env, request):
+    """
+    Raw env fixture for heavy tests.
+    - If --game is provided, run for the selected game(s).
+    - Otherwise, limit heavy checks to the Core-5 representative subset.
+    """
+    specified_games = parse_game_list(request.config.getoption("--game"))
+    if specified_games:
+        return raw_env
 
-@pytest.fixture
-def raw_env_representative(representative_game_name):
-    """Raw env fixture restricted to representative games only."""
-    return load_game_environment(representative_game_name)
+    current_game = raw_env.__class__.__module__.split(".")[-1].replace("jax_", "")
+    if normalize_game_name(current_game) not in {normalize_game_name(g) for g in CORE_INFRA_GAMES}:
+        pytest.skip(f"Skipping non-representative game '{current_game}' for heavy checks")
+    return raw_env
 
 # Define the wrapper combinations to test against.
 WRAPPER_RECIPES = {
@@ -352,9 +346,19 @@ def wrapped_env_full(game_name, request):
     return _build_wrapped_env(game_name, request.param)
 
 @pytest.fixture(params=WRAPPER_RECIPES.values(), ids=WRAPPER_RECIPES.keys())
-def wrapped_env_full_representative(representative_game_name, request):
-    """Full wrapper fixture restricted to representative games."""
-    return _build_wrapped_env(representative_game_name, request.param)
+def wrapped_env_full_representative(wrapped_env_full, game_name, request):
+    """
+    Full wrapper fixture for heavy checks.
+    - If --game is provided, run for the selected game(s).
+    - Otherwise, limit to Core-5 representative games.
+    """
+    specified_games = parse_game_list(request.config.getoption("--game"))
+    if specified_games:
+        return wrapped_env_full
+
+    if normalize_game_name(game_name) not in {normalize_game_name(g) for g in CORE_INFRA_GAMES}:
+        pytest.skip(f"Skipping non-representative game '{game_name}' for heavy checks")
+    return wrapped_env_full
 
 @pytest.fixture(params=[WRAPPER_RECIPES[name] for name in SMOKE_WRAPPER_RECIPE_NAMES], ids=SMOKE_WRAPPER_RECIPE_NAMES)
 def wrapped_env(game_name, request):

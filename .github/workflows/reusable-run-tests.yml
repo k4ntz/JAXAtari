@@ -17,6 +17,11 @@ on:
         required: false
         type: string
         default: ""
+      pr_overlay_scope:
+        description: "When pr_head_sha is set: games_only or full_repo"
+        required: false
+        type: string
+        default: "games_only"
     outputs:
       test_outcomes:
         description: "JSON object of test outcomes"
@@ -49,10 +54,16 @@ jobs:
           ref: ${{ inputs.pr_head_sha }}
           path: pr_head
 
-      - name: Override src with PR changes
-        if: ${{ inputs.pr_head_sha != '' }}
+      - name: Override games with PR changes
+        if: ${{ inputs.pr_head_sha != '' && inputs.pr_overlay_scope == 'games_only' }}
         run: |
           rsync -av pr_head/src/jaxatari/games/ src/jaxatari/games/
+        shell: bash
+
+      - name: Override full repo with PR changes
+        if: ${{ inputs.pr_head_sha != '' && inputs.pr_overlay_scope == 'full_repo' }}
+        run: |
+          rsync -av --delete --exclude='.git' pr_head/ ./
         shell: bash
 
       - name: Remove PR head sources
