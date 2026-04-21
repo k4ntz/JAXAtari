@@ -54,6 +54,12 @@ jobs:
           ref: ${{ inputs.pr_head_sha }}
           path: pr_head
 
+      - name: Check out PR head (full repo)
+        if: ${{ inputs.pr_head_sha != '' && inputs.pr_overlay_scope == 'full_repo' }}
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.pr_head_sha }}
+
       - name: Override games with PR changes
         if: ${{ inputs.pr_head_sha != '' && inputs.pr_overlay_scope == 'games_only' }}
         run: |
@@ -63,7 +69,7 @@ jobs:
       - name: Override full repo with PR changes
         if: ${{ inputs.pr_head_sha != '' && inputs.pr_overlay_scope == 'full_repo' }}
         run: |
-          rsync -av --delete --exclude='.git' pr_head/ ./
+          echo "Full-repo overlay is provided by direct checkout of pr_head_sha."
         shell: bash
 
       - name: Remove PR head sources
