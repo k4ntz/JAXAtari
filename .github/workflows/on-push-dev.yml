@@ -31,18 +31,21 @@ jobs:
             /^src\/jaxatari\/wrappers\// {print; next}
           ')
 
+          CHANGED_GAME_FILES=$(echo "$CHANGED_FILES" | awk '/^src\/jaxatari\/games\/jax_.*\.py$/ {print}')
+          if [[ -n "$CHANGED_GAME_FILES" ]]; then
+            CHANGED_GAME_MATRIX=$(echo "$CHANGED_GAME_FILES" | sed -e 's|src/jaxatari/games/jax_||' | sed -e 's|\.py||' | jq -R . | jq -cs .)
+          else
+            CHANGED_GAME_MATRIX="[]"
+          fi
+
           if [[ -n "$CORE_INFRA_CHANGED" ]]; then
-            echo "Core infrastructure changed on dev. Running Core-5 integration matrix."
-            CHANGED_GAMES='["seaquest","kangaroo","montezumarevenge","pong","phoenix"]'
+            echo "Core infrastructure changed on dev. Running Core-5 plus any touched game env tests."
+            CORE_FIVE='["seaquest","kangaroo","montezumarevenge","pong","phoenix"]'
+            CHANGED_GAMES=$(jq -cn --argjson a "$CORE_FIVE" --argjson b "$CHANGED_GAME_MATRIX" '$a + $b | unique')
             PYTEST_ARGS='--integration --wrapper-full'
           else
             echo "Running targeted smoke lane for changed games on dev."
-            CHANGED_GAME_FILES=$(echo "$CHANGED_FILES" | awk '/^src\/jaxatari\/games\/jax_.*\.py$/ {print}')
-            if [[ -n "$CHANGED_GAME_FILES" ]]; then
-              CHANGED_GAMES=$(echo "$CHANGED_GAME_FILES" | sed -e 's|src/jaxatari/games/jax_||' | sed -e 's|\.py||' | jq -R . | jq -cs .)
-            else
-              CHANGED_GAMES="[]"
-            fi
+            CHANGED_GAMES="$CHANGED_GAME_MATRIX"
             PYTEST_ARGS=''
           fi
 
