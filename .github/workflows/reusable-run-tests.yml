@@ -93,13 +93,17 @@ jobs:
           pytest -n 2 --dist=loadfile --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes -m "not serial" ${{ inputs.pytest_args }} tests/ 2>&1 | tee pytest_output_with_color.txt
 
           # 2) Serial-only tests (if any), run without xdist.
-          SERIAL_COLLECT_OUTPUT=$(pytest --collect-only --game ${{ matrix.game }} -m "serial" -q tests/ || true)
-          SERIAL_COUNT=$(echo "${SERIAL_COLLECT_OUTPUT}" | awk '/collected/ {print $1}' | tail -n1)
-          if [[ -n "${SERIAL_COUNT}" && "${SERIAL_COUNT}" != "0" ]]; then
-            echo "Running ${SERIAL_COUNT} serial tests"
+          SERIAL_RC=0
+          pytest --collect-only --game ${{ matrix.game }} -m "serial" -q tests/ >/tmp/serial_collect.txt 2>&1 || SERIAL_RC=$?
+          if [[ "${SERIAL_RC}" -eq 0 ]]; then
+            echo "Running serial tests"
             pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes -m "serial" ${{ inputs.pytest_args }} tests/ 2>&1 | tee -a pytest_output_with_color.txt
-          else
+          elif [[ "${SERIAL_RC}" -eq 5 ]]; then
             echo "No serial tests selected for this matrix entry" | tee -a pytest_output_with_color.txt
+          else
+            echo "Unexpected error while collecting serial tests (exit ${SERIAL_RC})" | tee -a pytest_output_with_color.txt
+            cat /tmp/serial_collect.txt | tee -a pytest_output_with_color.txt
+            exit "${SERIAL_RC}"
           fi
         shell: bash
 
