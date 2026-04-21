@@ -183,6 +183,11 @@ def main():
         default="jaxatari_play_state.json",
         help="Path written when pressing S during play (default: jaxatari_play_state.json).",
     )
+    parser.add_argument(
+        "--profile",
+        action=argparse.BooleanOptionalAction,
+        help="Enable profiling.",
+    )
 
     args = parser.parse_args()
 
@@ -190,7 +195,7 @@ def main():
     args.mods = _normalize_mods(args.mods)
 
     execute_without_rendering = False
-    
+
     try:
         # 1. Try the registered path (core.make)
         env = jaxatari_make(
@@ -358,101 +363,111 @@ def main():
         update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
         clock.tick(frame_rate)
 
-    # main game loop
-    while running:
-        # check for external actions
-        if not execute_without_rendering:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-                    continue
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_p:  # pause
-                        pause = not pause
-                    elif event.key == pygame.K_r:  # reset
-                        obs, state, reset_counter = reset_or_load_state(
-                            load_path=load_path,
-                            game=args.game,
-                            mods=args.mods,
-                            master_key=master_key,
-                            reset_counter=reset_counter,
-                            jitted_reset=jitted_reset,
-                            label="manual reset",
-                        )
-                        total_return = 0
-                    elif event.key == pygame.K_s:  # save full state to JSON
-                        try:
-                            save_env_state_json(
-                                args.save_state_path,
-                                state,
+    def running_fn():
+        nonlocal running, pause, frame_by_frame, next_frame_asked
+        nonlocal obs, state, reset_counter, total_return, action_key
+        while running:
+            # check for external actions
+            if not execute_without_rendering:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        running = False
+                        continue
+                    elif event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_p:  # pause
+                            pause = not pause
+                        elif event.key == pygame.K_r:  # reset
+                            obs, state, reset_counter = reset_or_load_state(
+                                load_path=load_path,
                                 game=args.game,
                                 mods=args.mods,
+                                master_key=master_key,
+                                reset_counter=reset_counter,
+                                jitted_reset=jitted_reset,
+                                label="manual reset",
                             )
-                            print(f"Saved state to {args.save_state_path!r}")
-                        except OSError as e:
-                            print(f"Failed to save state: {e}")
-                    elif event.key == pygame.K_f:
-                        frame_by_frame = not frame_by_frame
-                    elif event.key == pygame.K_n:
-                        next_frame_asked = True
+                            total_return = 0
+                        elif event.key == pygame.K_s:  # save full state to JSON
+                            try:
+                                save_env_state_json(
+                                    args.save_state_path,
+                                    state,
+                                    game=args.game,
+                                    mods=args.mods,
+                                )
+                                print(f"Saved state to {args.save_state_path!r}")
+                            except OSError as e:
+                                print(f"Failed to save state: {e}")
+                        elif event.key == pygame.K_f:
+                            frame_by_frame = not frame_by_frame
+                        elif event.key == pygame.K_n:
+                            next_frame_asked = True
 
-            if pause or (frame_by_frame and not next_frame_asked):
+                if pause or (frame_by_frame and not next_frame_asked):
+                    image = jitted_render(state)
+                    update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
+                    clock.tick(frame_rate)
+                    continue
+            
+            if args.random:
+                # sample an action from the action space array
+                action = action_space.sample(action_key)
+                action_key, _ = jax.random.split(action_key)
+            else:
+                # get the pressed keys (returns Action constant) and map to action index
+                action_constant = get_human_action()
+                action = map_action_to_index(action_constant)
+                # Save the action to the save_keys dictionary
+                if args.record:
+                    # Save the action to the save_keys dictionary
+                    save_keys[len(save_keys)] = action
+
+            if not frame_by_frame or next_frame_asked:
+
+                obs, state, reward, done, info = jitted_step(state, action)
+                # print(reward)
+                total_return += reward
+                if next_frame_asked:
+                    next_frame_asked = False
+            else:
+                # Need to get action to update event queue even if paused
+                action_constant = get_human_action()
+                action = map_action_to_index(action_constant)
+
+            if done:
+                print(f"Done. Total return {total_return}")
+                total_return = 0
+                obs, state, reset_counter = reset_or_load_state(
+                    load_path=load_path,
+                    game=args.game,
+                    mods=args.mods,
+                    master_key=master_key,
+                    reset_counter=reset_counter,
+                    jitted_reset=jitted_reset,
+                    label="episode",
+                )
+
+            # Render the environment
+            if not execute_without_rendering:
                 image = jitted_render(state)
                 update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
                 clock.tick(frame_rate)
-                continue
-        
-        if args.random:
-            # sample an action from the action space array
-            action = action_space.sample(action_key)
-            action_key, _ = jax.random.split(action_key)
-        else:
-            # get the pressed keys (returns Action constant) and map to action index
-            action_constant = get_human_action()
-            action = map_action_to_index(action_constant)
-            # Save the action to the save_keys dictionary
-            if args.record:
-                # Save the action to the save_keys dictionary
-                save_keys[len(save_keys)] = action
+            
+            # Handle loop for no-rendering execution
+            if execute_without_rendering:
+                if done:
+                    running = False # Run for one episode if not rendering
+                if pause or (frame_by_frame and not next_frame_asked):
+                    continue
+                if frame_by_frame and next_frame_asked:
+                    next_frame_asked = False
 
-        if not frame_by_frame or next_frame_asked:
-            obs, state, reward, done, info = jitted_step(state, action)
-            # print(reward)
-            total_return += reward
-            if next_frame_asked:
-                next_frame_asked = False
-        else:
-            # Need to get action to update event queue even if paused
-            action_constant = get_human_action()
-            action = map_action_to_index(action_constant)
-
-        if done:
-            print(f"Done. Total return {total_return}")
-            total_return = 0
-            obs, state, reset_counter = reset_or_load_state(
-                load_path=load_path,
-                game=args.game,
-                mods=args.mods,
-                master_key=master_key,
-                reset_counter=reset_counter,
-                jitted_reset=jitted_reset,
-                label="episode",
-            )
-
-        # Render the environment
-        if not execute_without_rendering:
-            image = jitted_render(state)
-            update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
-            clock.tick(frame_rate)
-        
-        # Handle loop for no-rendering execution
-        if execute_without_rendering:
-            if done:
-                running = False # Run for one episode if not rendering
-            if pause or (frame_by_frame and not next_frame_asked):
-                continue
-            if frame_by_frame and next_frame_asked:
-                next_frame_asked = False
+    # main game loop
+    if args.profile:
+        with jax.profiler.trace("/tmp/jax-atari-play-profiler", create_perfetto_link=True):
+            running_fn()
+    else:
+        running_fn()
 
     if args.record:
         # Convert dictionary to array of actions
