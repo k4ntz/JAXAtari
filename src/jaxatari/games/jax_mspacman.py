@@ -1021,7 +1021,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, MsPac
 class MsPacmanRenderer(JAXGameRenderer):
     """JAX-based MsPacman game renderer, optimized with JIT compilation."""
 
-    def __init__(self, consts: MsPacmanConstants = None, config: render_utils.RendererConfig = None):
+    def __init__(self, consts: MsPacmanConstants = None, config: render_utils.RendererConfig = None, sprite_dir_name: str = "mspacman"):
         super().__init__(consts)
         self.consts = consts or MsPacmanConstants()
         if config is None:
@@ -1033,7 +1033,7 @@ class MsPacmanRenderer(JAXGameRenderer):
             self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
-        sprite_path = os.path.join(os.path.dirname(__file__), "sprites", "mspacman")
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), sprite_dir_name)
         
         # Define asset config
         asset_config = [
