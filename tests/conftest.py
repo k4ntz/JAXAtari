@@ -330,6 +330,12 @@ SMOKE_WRAPPER_RECIPE_NAMES = (
     "Pixel",
     "LoggedFlattenedPixelAndObject",
 )
+INTEGRATION_WRAPPER_RECIPE_NAMES = (
+    "Atari",
+    "Pixel",
+    "ObjectCentric",
+    "LoggedFlattenedPixelAndObject",
+)
 
 def _build_wrapped_env(game_name, wrapper_recipe):
     fresh_raw_env = load_game_environment(game_name)
@@ -343,6 +349,11 @@ def wrapped_env_smoke(game_name, request):
 @pytest.fixture(params=WRAPPER_RECIPES.values(), ids=WRAPPER_RECIPES.keys())
 def wrapped_env_full(game_name, request):
     """Wrapper fixture for exhaustive lanes."""
+    return _build_wrapped_env(game_name, request.param)
+
+@pytest.fixture(params=[WRAPPER_RECIPES[name] for name in INTEGRATION_WRAPPER_RECIPE_NAMES], ids=INTEGRATION_WRAPPER_RECIPE_NAMES)
+def wrapped_env_integration(game_name, request):
+    """Reduced wrapper fixture for integration lanes."""
     return _build_wrapped_env(game_name, request.param)
 
 @pytest.fixture(params=WRAPPER_RECIPES.values(), ids=WRAPPER_RECIPES.keys())
@@ -359,6 +370,22 @@ def wrapped_env_full_representative(wrapped_env_full, game_name, request):
     if normalize_game_name(game_name) not in {normalize_game_name(g) for g in CORE_INFRA_GAMES}:
         pytest.skip(f"Skipping non-representative game '{game_name}' for heavy checks")
     return wrapped_env_full
+
+@pytest.fixture
+def wrapped_env_integration_representative(wrapped_env_integration, game_name, request):
+    """Reduced wrapper fixture for integration lanes on representative games."""
+    specified_games = parse_game_list(request.config.getoption("--game"))
+    if specified_games:
+        return wrapped_env_integration
+
+    if normalize_game_name(game_name) not in {normalize_game_name(g) for g in CORE_INFRA_GAMES}:
+        pytest.skip(f"Skipping non-representative game '{game_name}' for heavy checks")
+    return wrapped_env_integration
+
+@pytest.fixture
+def wrapped_env_single(game_name):
+    """Single stable wrapper for tests that do not need wrapper fanout."""
+    return _build_wrapped_env(game_name, WRAPPER_RECIPES["Pixel"])
 
 @pytest.fixture(params=[WRAPPER_RECIPES[name] for name in SMOKE_WRAPPER_RECIPE_NAMES], ids=SMOKE_WRAPPER_RECIPE_NAMES)
 def wrapped_env(game_name, request):
