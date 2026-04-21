@@ -5,7 +5,6 @@ from jaxatari.games.jax_battlezone import (BattlezoneState, BattlezoneObservatio
                                            BattlezoneConstants, Enemy, Projectile)
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
-import chex
 
 
 
@@ -87,6 +86,12 @@ class SmallFOVMod(JaxAtariInternalModPlugin):
 
 
 class AfkEnemiesMod(JaxAtariInternalModPlugin):
-    def enemy_movement(self, enemy: Enemy, projectile: Projectile):
+    def enemy_movement(
+        self,
+        enemy: Enemy,
+        projectile: Projectile,
+        score: jnp.int32,
+        player_projectile: Projectile,
+    ):
         return enemy, projectile
 
