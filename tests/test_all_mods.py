@@ -215,6 +215,7 @@ class TestModExecution:
     run 10 steps and assert no crash.
     """
 
+    @pytest.mark.integration
     def test_mod_runs_reset_and_10_steps(self, mod_game_name: str, mod_key: str, mod_type: str):
         """
         Create env with the given mod, run reset then 10 steps; assert no errors.
@@ -424,6 +425,7 @@ class TestModWithWrappers:
     and mod tracking should remain valid.
     """
 
+    @pytest.mark.slow
     def test_pixel_native_downscaling_does_not_crash_modded_env(
         self, mod_game_name: str, mod_key: str, mod_type: str
     ):
@@ -512,6 +514,7 @@ def test_no_duplicate_mod_keys():
     assert len(all_mod_keys) > 0, "Should discover at least one mod across all games"
 
 
+@pytest.mark.integration
 def test_mod_vs_unmodded_comparison(mod_game_name): 
     """
     Compare modded environment with unmodded baseline.

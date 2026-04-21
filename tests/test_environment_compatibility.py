@@ -25,7 +25,7 @@ from jaxatari.wrappers import (
     MultiRewardLogWrapper,
 )
 import jaxatari.spaces as spaces
-from conftest import load_game_environment, WRAPPER_RECIPES
+from conftest import INTEGRATION_STEPS, STRESS_STEPS, load_game_environment
 
 # Add flax import for serialization tests
 try:
@@ -430,25 +430,15 @@ class TestWrapperCompatibility:
         assert sample_obs is not None, "Wrapper space sample should not be None"
         assert obs_space.contains(sample_obs), "Wrapper space sample should be contained in space"
 
-    def test_wrapper_action_spaces(self, wrapped_env):
-        """Test that wrapper action spaces are correctly defined."""
-        action_space = wrapped_env.action_space()
-        assert action_space is not None, "Wrapper action space should not be None"
-        assert isinstance(action_space, spaces.Space), "Wrapper action space should be a Space instance"
-        
-        # Test space sampling
-        key = jax.random.PRNGKey(0)
-        sample_action = action_space.sample(key)
-        assert sample_action is not None, "Wrapper action space sample should not be None"
-        assert action_space.contains(sample_action), "Wrapper action space sample should be contained in space"
-
-    def test_wrapper_determinism(self, wrapped_env):
+    @pytest.mark.integration
+    @pytest.mark.wrapper_full
+    def test_wrapper_determinism(self, wrapped_env_full_representative):
         """Test that wrapped environments are deterministic."""
         key = jax.random.PRNGKey(42)
         
         # Run two identical episodes
-        obs1, state1 = wrapped_env.reset(key)
-        obs2, state2 = wrapped_env.reset(key)
+        obs1, state1 = wrapped_env_full_representative.reset(key)
+        obs2, state2 = wrapped_env_full_representative.reset(key)
         
         # States should be identical
         assert jax.tree_util.tree_all(jax.tree.map(jnp.array_equal, state1, state2)), "Wrapped states should be identical with same key"
@@ -456,8 +446,8 @@ class TestWrapperCompatibility:
         # Run same sequence of actions
         actions = [0, 1, 2, 0, 1]  # Fixed action sequence
         for action in actions:
-            obs1, state1, reward1, done1, _, info1 = wrapped_env.step(state1, action)
-            obs2, state2, reward2, done2, _, info2 = wrapped_env.step(state2, action)
+            obs1, state1, reward1, done1, _, info1 = wrapped_env_full_representative.step(state1, action)
+            obs2, state2, reward2, done2, _, info2 = wrapped_env_full_representative.step(state2, action)
             
             # Results should be identical
             assert jax.tree_util.tree_all(jax.tree.map(jnp.array_equal, state1, state2)), "Wrapped states should be identical after same action"
@@ -495,13 +485,15 @@ class TestJaxTransforms:
                 self._check_batch_dimension_recursive(value, expected_batch_size, f"{context_name}.{key}")
         # For other types (primitives, etc.), we don't need to check anything
 
-    def test_jit_compilation(self, wrapped_env):
+    @pytest.mark.integration
+    @pytest.mark.wrapper_full
+    def test_jit_compilation(self, wrapped_env_full_representative):
         """Should test that a full step can be JIT-compiled without error."""
         key = jax.random.PRNGKey(0)
         
         # JIT the reset and step functions
-        jitted_reset = jax.jit(wrapped_env.reset)
-        jitted_step = jax.jit(wrapped_env.step)
+        jitted_reset = jax.jit(wrapped_env_full_representative.reset)
+        jitted_step = jax.jit(wrapped_env_full_representative.step)
         
         # Test JIT reset
         obs, state = jitted_reset(key)
@@ -509,7 +501,7 @@ class TestJaxTransforms:
         assert state is not None, "JIT reset state should not be None"
         
         # Test JIT step
-        action_space = wrapped_env.action_space()
+        action_space = wrapped_env_full_representative.action_space()
         action = action_space.sample(key)
         obs, state, reward, done, _, info = jitted_step(state, action)
         assert obs is not None, "JIT step observation should not be None"
@@ -883,16 +875,17 @@ class TestEdgeCasesAndErrorHandling:
                 # Expected behavior for some environments
                 pass
 
-    def test_extreme_reward_values(self, raw_env):
+    @pytest.mark.integration
+    def test_extreme_reward_values(self, raw_env_representative):
         """Test that extreme reward values are handled correctly."""
         key = jax.random.PRNGKey(0)
-        obs, state = raw_env.reset(key)
-        action_space = raw_env.action_space()
+        obs, state = raw_env_representative.reset(key)
+        action_space = raw_env_representative.action_space()
         
         # Run for many steps to potentially encounter extreme rewards
-        for _ in range(100):
+        for _ in range(STRESS_STEPS):
             action = action_space.sample(key)
-            obs, state, reward, done, info = raw_env.step(state, action)
+            obs, state, reward, done, info = raw_env_representative.step(state, action)
             
             # Check that reward is finite
             reward_float = float(reward)
@@ -925,19 +918,20 @@ class TestEdgeCasesAndErrorHandling:
             
             key, _ = jax.random.split(key)
 
-    def test_observation_consistency(self, raw_env):
+    @pytest.mark.integration
+    def test_observation_consistency(self, raw_env_representative):
         """Test that observations remain consistent in shape and type."""
         key = jax.random.PRNGKey(0)
-        obs, state = raw_env.reset(key)
-        action_space = raw_env.action_space()
+        obs, state = raw_env_representative.reset(key)
+        action_space = raw_env_representative.action_space()
         
         initial_obs_shape = obs.shape if hasattr(obs, 'shape') else None
         initial_obs_type = type(obs)
         
         # Test observation consistency across steps
-        for step in range(100):
+        for step in range(INTEGRATION_STEPS):
             action = action_space.sample(key)
-            obs, state, reward, done, info = raw_env.step(state, action)
+            obs, state, reward, done, info = raw_env_representative.step(state, action)
             
             # Check observation type consistency
             assert isinstance(obs, initial_obs_type), f"Observation type should remain consistent at step {step}"

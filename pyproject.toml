@@ -55,3 +55,13 @@ training = [
   "omegaconf>=2.3.0",
   "safetensors>=0.7.0",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+  "requires_snapshot: marks tests that rely on snapshot artifacts",
+  "smoke: fast checks for PR validation",
+  "integration: broader integration checks",
+  "slow: expensive checks for exhaustive validation",
+  "wrapper_full: tests that should run with the full wrapper recipe matrix",
+  "serial: tests that must run without xdist parallel workers",
+]

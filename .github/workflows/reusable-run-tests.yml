@@ -12,6 +12,11 @@ on:
         description: "The SHA of the PR head"
         required: false
         type: string
+      pytest_args:
+        description: "Additional pytest args (markers/fixtures/options)"
+        required: false
+        type: string
+        default: ""
     outputs:
       test_outcomes:
         description: "JSON object of test outcomes"
@@ -84,7 +89,18 @@ jobs:
           echo "Running tests for game: ${{ matrix.game }}"
 
           . .venv/bin/activate
-          pytest -n auto --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes tests/ 2>&1 | tee pytest_output_with_color.txt
+          # 1) Parallel-safe tests with conservative xdist settings.
+          pytest -n 2 --dist=loadfile --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes -m "not serial" ${{ inputs.pytest_args }} tests/ 2>&1 | tee pytest_output_with_color.txt
+
+          # 2) Serial-only tests (if any), run without xdist.
+          SERIAL_COLLECT_OUTPUT=$(pytest --collect-only --game ${{ matrix.game }} -m "serial" -q tests/ || true)
+          SERIAL_COUNT=$(echo "${SERIAL_COLLECT_OUTPUT}" | awk '/collected/ {print $1}' | tail -n1)
+          if [[ -n "${SERIAL_COUNT}" && "${SERIAL_COUNT}" != "0" ]]; then
+            echo "Running ${SERIAL_COUNT} serial tests"
+            pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes -m "serial" ${{ inputs.pytest_args }} tests/ 2>&1 | tee -a pytest_output_with_color.txt
+          else
+            echo "No serial tests selected for this matrix entry" | tee -a pytest_output_with_color.txt
+          fi
         shell: bash
 
       - name: Get pytest output
