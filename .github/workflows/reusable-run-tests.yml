@@ -31,6 +31,7 @@ jobs:
   run-tests:
     if: ${{ inputs.game_matrix != '[]' && inputs.game_matrix != '' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -106,15 +107,26 @@ jobs:
           echo "Running tests for game: ${{ matrix.game }}"
 
           . .venv/bin/activate
+          free -h
+
+          # Some environments are significantly heavier; reduce xdist pressure to avoid runner instability.
+          XDIST_WORKERS=2
+          case "${{ matrix.game }}" in
+            montezumarevenge|choppercommand)
+              XDIST_WORKERS=1
+              ;;
+          esac
+          echo "Using xdist workers: ${XDIST_WORKERS}"
+
           # 1) Parallel-safe tests with conservative xdist settings.
-          pytest -n 2 --dist=loadfile --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes -m "not serial" ${{ inputs.pytest_args }} tests/ 2>&1 | tee pytest_output_with_color.txt
+          /usr/bin/time -v pytest -n "${XDIST_WORKERS}" --dist=loadfile --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --durations=20 --color=yes -m "not serial" ${{ inputs.pytest_args }} tests/ 2>&1 | tee pytest_output_with_color.txt
 
           # 2) Serial-only tests (if any), run without xdist.
           SERIAL_RC=0
           pytest --collect-only --game ${{ matrix.game }} -m "serial" -q tests/ >/tmp/serial_collect.txt 2>&1 || SERIAL_RC=$?
           if [[ "${SERIAL_RC}" -eq 0 ]]; then
             echo "Running serial tests"
-            pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes -m "serial" ${{ inputs.pytest_args }} tests/ 2>&1 | tee -a pytest_output_with_color.txt
+            /usr/bin/time -v pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --durations=20 --color=yes -m "serial" ${{ inputs.pytest_args }} tests/ 2>&1 | tee -a pytest_output_with_color.txt
           elif [[ "${SERIAL_RC}" -eq 5 ]]; then
             echo "No serial tests selected for this matrix entry" | tee -a pytest_output_with_color.txt
           else
@@ -122,6 +134,7 @@ jobs:
             cat /tmp/serial_collect.txt | tee -a pytest_output_with_color.txt
             exit "${SERIAL_RC}"
           fi
+          free -h
         shell: bash
 
       - name: Get pytest output
