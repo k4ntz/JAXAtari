@@ -183,6 +183,7 @@ class PlayerState(NamedTuple):
     action: chex.Array              # Enum - 0: NOOP, 1: FURE, 2: UP, 3: RIGHT, 4: LEFT, 5: DOWN
     has_pellet: chex.Array          # Bool - Indicates if pacman just collected a pellet
     eaten_ghosts: chex.Array        # Int - Indicates the number of ghosts eaten since the last power pellet
+    last_horiz_dir: chex.Array = jnp.array(2, dtype=jnp.int32) # Default LEFT (2 in act_to_dir)
 
 class FruitState(NamedTuple):
     position: chex.Array            # Tuple - (x, y)

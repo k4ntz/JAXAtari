@@ -17,16 +17,134 @@ import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.games.mspacman_mazes import MsPacmanMaze
 from jaxatari.games.jax_mspacman import (
     GhostMode, GhostType, FruitType, 
     LevelState, GhostsState, PlayerState, FruitState, PacmanState,
     PacmanObservation, PacmanInfo, MsPacmanRenderer,
     available_directions, stop_wall, get_allowed_directions,
-    pathfind, get_level_maze,
+    pathfind,
     reverse_action, detect_collision, act_to_dir, dir_to_act,
     last_pressed_action, get_digit_count
 )
+
+def get_level_maze(level: chex.Array):
+    return jnp.array(0, dtype=jnp.int32)
+
+
+MAZE = jnp.array([
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1],
+        [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1],
+        [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1],
+        [1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 1],
+        [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1],
+        [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1],
+        [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1],
+        [1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1],
+        [1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1],
+        [1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1],
+        [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1],
+        [1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1],
+        [1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1],
+        [1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1],
+        [1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1],
+        [1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+], dtype=bool)
+
+class PacmanMaze:
+    MAZE0 = MAZE
+    MAZES = jnp.array([MAZE0], dtype=jnp.bool_)
+    TILE_SCALE = 4
+    WIDTH = 160
+    HEIGHT = 160
+    
+    WALL_COLOR = jnp.array([228, 111, 111], dtype=jnp.uint8)
+    PATH_COLOR = jnp.array([0, 28, 136], dtype=jnp.uint8)
+
+    # We reuse MsPacman maze 0 pellets for compatibility
+    BASE_PELLETS = jnp.array([ 
+       	[1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1]
+       	], dtype=bool)
+
+    @staticmethod
+    def precompute_dof(maze_id: int):
+        maze = PacmanMaze.MAZES[maze_id]
+        sum_horizontal_strip = (
+            jnp.roll(maze, 1, axis=1) + 
+            jnp.roll(maze, -1, axis=1) +
+            maze 
+        )
+        sum_vertical_strip = (
+            jnp.roll(maze, 1, axis=0) + 
+            jnp.roll(maze, -1, axis=0) +
+            maze
+        )
+        no_wall_above = jnp.roll(sum_horizontal_strip, 2, axis=0) == 0
+        no_wall_below = jnp.roll(sum_horizontal_strip, -2, axis=0) == 0
+        no_wall_left = jnp.roll(sum_vertical_strip, 2, axis=1) == 0
+        no_wall_right = jnp.roll(sum_vertical_strip, -2, axis=1) == 0
+        dof_grid = jnp.stack([no_wall_above, no_wall_right, no_wall_left, no_wall_below], axis=-1)
+        dof_grid = jnp.transpose(dof_grid, (1, 0, 2))
+        return dof_grid
+
+    @staticmethod
+    def load_background(maze_id: int):
+        maze = PacmanMaze.MAZES[maze_id]
+        maze_expanded = jnp.repeat(jnp.repeat(maze, PacmanMaze.TILE_SCALE, axis=0), PacmanMaze.TILE_SCALE, axis=1)
+        background = jnp.where(
+            maze_expanded[..., None],
+            PacmanMaze.WALL_COLOR,
+            PacmanMaze.PATH_COLOR
+        )
+        pad_height = 210 - background.shape[0]
+        background = jnp.pad(background, ((0, pad_height), (0, 0), (0, 0)))
+        return jnp.swapaxes(background, 0, 1)
+
+
 
 # -------- Constants --------
 class PacmanConstants(struct.PyTreeNode):
@@ -66,7 +184,7 @@ class PacmanConstants(struct.PyTreeNode):
     JAIL_POSITION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([75, 75]))
     INITIAL_GHOSTS_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([[75, 54], [75, 75], [75, 75], [75, 75]]))
     INITIAL_PACMAN_POSITION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([75, 102]))
-    SCATTER_TARGETS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([[MsPacmanMaze.WIDTH - 1, 0], [0, 0], [MsPacmanMaze.WIDTH - 1, MsPacmanMaze.HEIGHT - 1], [0, MsPacmanMaze.HEIGHT - 1]]))
+    SCATTER_TARGETS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([[PacmanMaze.WIDTH - 1, 0], [0, 0], [PacmanMaze.WIDTH - 1, PacmanMaze.HEIGHT - 1], [0, PacmanMaze.HEIGHT - 1]]))
 
     # ACTIONS
     DIRECTIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN]))
@@ -84,9 +202,183 @@ class PacmanConstants(struct.PyTreeNode):
     PATH_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 28, 136], dtype=jnp.uint8))
     WALL_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([228, 111, 111], dtype=jnp.uint8))
     PELLET_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([228, 111, 111], dtype=jnp.uint8))
+    POWER_PELLET_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([252, 144, 200], dtype=jnp.uint8))
     PACMAN_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([210, 164, 74, 255], dtype=jnp.uint8))
+    PALE_BLUE_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([144, 144, 252], dtype=jnp.uint8))
 
 CONSTS = PacmanConstants()
+
+class PacmanRenderer(MsPacmanRenderer):
+    """JAX-based Pacman game renderer, optimized with JIT compilation."""
+
+    def __init__(self, consts: PacmanConstants = None, config: render_utils.RendererConfig = None, sprite_dir_name: str = "pacman"):
+        super(MsPacmanRenderer, self).__init__(consts)
+        self.consts = consts or PacmanConstants()
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(210, 160),
+                channels=3
+            )
+        else:
+            self.config = config
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), sprite_dir_name)
+
+        # Define asset config
+        vitamin_color = jnp.array([252, 144, 200, 255], dtype=jnp.uint8)
+        vitamin_data = jnp.zeros((10, 10, 4), dtype=jnp.uint8)
+        vitamin_data = vitamin_data.at[3:7, 1:9].set(vitamin_color)
+        vitamin_data = vitamin_data.at[1:9, 3:7].set(vitamin_color)
+
+        asset_config = [
+            {'name': 'dummy_bg', 'type': 'background', 'data': jnp.zeros((210, 160, 4), dtype=jnp.uint8)},
+            {'name': 'pacman', 'type': 'group', 'files': ['pacman_0.npy', 'pacman_1.npy', 'pacman_2.npy']},
+            {'name': 'ghosts', 'type': 'group', 'files': [
+                'ghost_0.npy', 'ghost_1.npy', 'ghost_2.npy', 'ghost_3.npy'
+            ], 'recolorings': {
+                'frightened': tuple(map(int, self.consts.PALE_BLUE_COLOR.tolist()))
+            }},
+            {'name': 'life', 'type': 'single', 'file': 'life.npy'},
+            {'name': 'fruit', 'type': 'group', 'data': [vitamin_data]},
+            {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
+        ]
+
+        # Include background colors in the palette (Path, Wall, Black, Pink Power Pellet, Pale Blue)
+        bg_colors = jnp.stack([
+            self.consts.PATH_COLOR, 
+            self.consts.WALL_COLOR, 
+            jnp.array([0, 0, 0], dtype=jnp.uint8),
+            self.consts.POWER_PELLET_COLOR,
+            self.consts.PALE_BLUE_COLOR
+        ])
+        bg_colors = jnp.concatenate([bg_colors, jnp.full((5, 1), 255, dtype=jnp.uint8)], axis=1)
+        asset_config.append({'name': 'bg_colors', 'type': 'procedural', 'data': bg_colors[:, None, :]})
+
+        (self.PALETTE, self.SHAPE_MASKS, _, self.COLOR_TO_ID, self.FLIP_OFFSETS) = \
+            self.jr.load_and_setup_assets(asset_config, sprite_path)
+
+        # Pacman masks are just right looking: 0, 1, 2
+        self.PACMAN_MASKS = self.SHAPE_MASKS['pacman']
+        self.LIFE_MASK = self.SHAPE_MASKS['life']
+
+        # Pre-calculate backgrounds
+        self.MAZE_BACKGROUNDS = self._create_all_backgrounds()
+
+    def _create_all_backgrounds(self):
+        bgs = []
+        for i in range(1): # Only one maze for Pacman
+            bg = PacmanMaze.load_background(i) # Returns (W, H, 3)
+            bg = jnp.transpose(bg, (1, 0, 2)) # Convert to (H, W, 3)
+            if bg.shape[2] == 3:
+                bg = jnp.concatenate([bg, jnp.full((*bg.shape[:2], 1), 255, dtype=jnp.uint8)], axis=2)
+
+            bg_id = self.jr._create_background_raster(bg, self.COLOR_TO_ID)
+            bgs.append(bg_id)
+        return jnp.stack(bgs)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: PacmanState):
+        maze_idx = get_level_maze(state.level.id)
+        background = self.MAZE_BACKGROUNDS[maze_idx]
+        raster = self.jr.create_object_raster(background)
+        
+        # 1. Render Pellets
+        wall_id = self.COLOR_TO_ID[tuple(map(int, self.consts.WALL_COLOR.tolist()))]
+        raster = self.render_pellets(raster, state.level.pellets, wall_id)
+        
+        # 2. Power Pellets
+        pink_id = self.COLOR_TO_ID[tuple(map(int, self.consts.POWER_PELLET_COLOR.tolist()))]
+        pale_blue_id = self.COLOR_TO_ID[tuple(map(int, self.consts.PALE_BLUE_COLOR.tolist()))]
+        
+        # Check if power pellet effect is active (any ghost frightened or blinking)
+        power_pellet_active = jnp.any((state.ghosts.modes == GhostMode.FRIGHTENED) | (state.ghosts.modes == GhostMode.BLINKING))
+        power_pellet_color_id = jax.lax.select(power_pellet_active, pale_blue_id, pink_id)
+        
+        raster = self.render_power_pellets(raster, state, power_pellet_color_id)
+        
+        # 3. Pacman
+        is_left = state.player.last_horiz_dir == 2 # 2 is LEFT, 1 is RIGHT
+        cycle = (state.step_count // 4) % 4
+        frame = jnp.array([0, 1, 2, 1])[cycle]
+        pacman_mask = self.PACMAN_MASKS[frame.astype(jnp.int32)]
+        
+        raster = self.jr.render_at(raster, state.player.position[0].astype(jnp.int32), state.player.position[1].astype(jnp.int32) - 1, pacman_mask, flip_horizontal=is_left)
+        
+        # 4. Ghosts
+        raster = self.render_ghosts(raster, state)
+        
+        # 5. Fruit (Vitamin)
+        raster = jax.lax.cond(
+            state.fruit.spawned,
+            lambda r: self.jr.render_at(r, state.fruit.position[0].astype(jnp.int32), state.fruit.position[1].astype(jnp.int32) - 1, self.SHAPE_MASKS['fruit'][state.fruit.type.astype(jnp.int32)]),
+            lambda r: r,
+            raster
+        )
+        
+        # 6. UI
+        raster = self.render_ui(raster, state)
+        
+        return self.jr.render_from_palette(raster, self.PALETTE)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render_ghosts(self, raster, state):
+        # Animation frame changes every 8 frames
+        sprite_idx = (state.step_count // 8) % 4
+        normal_mask = self.SHAPE_MASKS['ghosts'][sprite_idx]
+        frightened_mask = self.SHAPE_MASKS['ghosts_frightened'][sprite_idx]
+
+        def render_one(i, r):
+            pos = state.ghosts.positions[i]
+            mode = state.ghosts.modes[i]
+            is_frightened = (mode == GhostMode.FRIGHTENED) | (mode == GhostMode.BLINKING)
+            
+            # Blinking logic (every 8 frames toggle color)
+            # Actually just using frightened mask if they are frightened/blinking.
+            # If we want blinking, we can toggle between normal and frightened mask based on step_count
+            is_blinking_frame = is_frightened & (mode == GhostMode.BLINKING) & ((state.step_count // 8) % 2 == 0)
+            use_normal = (~is_frightened) | is_blinking_frame
+            mask = jax.lax.select(use_normal, normal_mask, frightened_mask)
+            
+            # Only draw if not enjailed or returning? No, usually enjailed just means eyes, but we only have 1 sprite.
+            # Keep as original for now, just apply mask
+            return self.jr.render_at(r, pos[0].astype(jnp.int32), pos[1].astype(jnp.int32) - 1, mask)
+
+        return jax.lax.fori_loop(0, 4, render_one, raster)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render_power_pellets(self, raster, state, color_id):
+        # 10x4 sprite (10 height, 4 width)
+        sprite = jnp.full((10, 4), color_id, dtype=raster.dtype)
+        
+        def render_one(i, r):
+            should_draw = state.level.power_pellets[i] & (((state.step_count & 0b1000) >> 3) == 1)
+            x = (self.consts.POWER_PELLET_TILES[i][0] * 4 + 4).astype(jnp.int32)
+            y = (self.consts.POWER_PELLET_TILES[i][1] * 4 + 4).astype(jnp.int32)
+            return jax.lax.cond(should_draw, 
+                                lambda r_in: self.jr.render_at(r_in, x, y, sprite),
+                                lambda r_in: r_in,
+                                r)
+        
+        return jax.lax.fori_loop(0, 4, render_one, raster)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render_ui(self, raster, state):
+        # Score
+        digits = self.jr.int_to_digits(state.score, max_digits=self.consts.MAX_SCORE_DIGITS)
+        digit_count = get_digit_count(state.score).astype(jnp.int32)
+        start_index = self.consts.MAX_SCORE_DIGITS - digit_count
+        render_x = 60 + start_index * 8
+        raster = self.jr.render_label_selective(raster, render_x, 190, digits, self.SHAPE_MASKS['digits'], start_index, digit_count, spacing=8, max_digits_to_render=self.consts.MAX_SCORE_DIGITS)
+        
+        # Lives
+        raster = self.jr.render_indicator(raster, 12, 182, (state.lives - 1).astype(jnp.int32), self.LIFE_MASK, spacing=14, max_value=self.consts.MAX_LIVE_COUNT)
+        
+        # Fruit indicator
+        fruit_mask = self.SHAPE_MASKS['fruit'][state.fruit.type.astype(jnp.int32)]
+        raster = self.jr.render_at(raster, 128, 182, fruit_mask)
+        
+        return raster
 
 class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, PacmanConstants]):
     def __init__(self, consts: PacmanConstants = None):
@@ -97,7 +389,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN,
             Action.UPRIGHT, Action.UPLEFT, Action.DOWNRIGHT, Action.DOWNLEFT,
         ]
-        self.renderer = MsPacmanRenderer(self.consts, sprite_dir_name="pacman")
+        self.renderer = PacmanRenderer(self.consts, sprite_dir_name="pacman")
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(10)
@@ -157,7 +449,17 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
                         power_pellets=power_pellets,
                         loaded=jax.lax.cond(state.level.loaded < 2, lambda: state.level.loaded + 1, lambda: state.level.loaded)
                     ),
-                    player = PlayerState(position=player_position, action=player_action, has_pellet=has_pellet, eaten_ghosts=eaten_ghosts),
+                    player = PlayerState(
+                        position=player_position, 
+                        action=player_action, 
+                        has_pellet=has_pellet, 
+                        eaten_ghosts=eaten_ghosts,
+                        last_horiz_dir=jax.lax.cond(
+                            (player_action == Action.LEFT) | (player_action == Action.RIGHT),
+                            lambda: act_to_dir(player_action).astype(jnp.int32),
+                            lambda: state.player.last_horiz_dir
+                        )
+                    ),
                     ghosts = GhostsState(positions=ghost_positions, types=state.ghosts.types, actions=ghost_actions, modes=ghost_modes, timers=ghost_timers),
                     fruit=fruit_state,
                     lives=new_lives,
@@ -244,7 +546,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             return jax.lax.cond(pellets[tile_x, tile_y] & in_bounds, lambda: (pellets.at[tile_x, tile_y].set(False), True), lambda: (pellets, False))
         
         pellets, ate_pellet = jax.lax.cond(check_pellet(new_pacman_pos), lambda: eat_pellet(new_pacman_pos, state.level.pellets), lambda: (state.level.pellets, False))
-        power_pellet_hit = jnp.where(jnp.all(jnp.round(new_pacman_pos / MsPacmanMaze.TILE_SCALE) == CONSTS.POWER_PELLET_HITBOXES, axis=1), size=1, fill_value=-1)[0][0]
+        power_pellet_hit = jnp.where(jnp.all(jnp.round(new_pacman_pos / PacmanMaze.TILE_SCALE) == CONSTS.POWER_PELLET_HITBOXES, axis=1), size=1, fill_value=-1)[0][0]
         power_pellets, ate_power_pellet = jax.lax.cond(check_power_pellet(power_pellet_hit, state.level.power_pellets), lambda: (eat_power_pellet(power_pellet_hit, state.level.power_pellets), True), lambda: (state.level.power_pellets, False))
         
         reward = jax.lax.cond(ate_power_pellet, lambda: CONSTS.POWER_PELLET_POINTS, lambda: jax.lax.cond(ate_pellet, lambda: CONSTS.PELLET_POINTS, lambda: 0))
@@ -369,16 +671,16 @@ def get_chase_target(ghost: GhostType,
         return player_pos.astype(jnp.int32)
     
     def get_pinky_target(_):
-        return (player_pos.astype(jnp.int32) + 4*MsPacmanMaze.TILE_SCALE * CONSTS.ACTIONS[player_dir]).astype(jnp.int32)
+        return (player_pos.astype(jnp.int32) + 4*PacmanMaze.TILE_SCALE * CONSTS.ACTIONS[player_dir]).astype(jnp.int32)
     
     def get_inky_target(_):
-        two_ahead = player_pos.astype(jnp.int32) + 2*MsPacmanMaze.TILE_SCALE * CONSTS.ACTIONS[player_dir]
+        two_ahead = player_pos.astype(jnp.int32) + 2*PacmanMaze.TILE_SCALE * CONSTS.ACTIONS[player_dir]
         vect = two_ahead - blinky_pos.astype(jnp.int32)
         return (blinky_pos.astype(jnp.int32) + 2 * vect).astype(jnp.int32)
     
     def get_sue_target(_):
         dist = jnp.linalg.norm(ghost_position.astype(jnp.float32) - player_pos.astype(jnp.float32))
-        return jax.lax.cond(dist > 8*MsPacmanMaze.TILE_SCALE, lambda: player_pos.astype(jnp.int32), lambda: CONSTS.SCATTER_TARGETS[GhostType.SUE].astype(jnp.int32))
+        return jax.lax.cond(dist > 8*PacmanMaze.TILE_SCALE, lambda: player_pos.astype(jnp.int32), lambda: CONSTS.SCATTER_TARGETS[GhostType.SUE].astype(jnp.int32))
     
     return jax.lax.switch(
         ghost,
@@ -400,10 +702,16 @@ def reset_game(level: chex.Array, lives: chex.Array, score: chex.Array, key: che
     return PacmanState(level=reset_level(level), player=reset_player(), ghosts=reset_ghosts(), fruit=reset_fruit(level, key), lives=jnp.array(lives, dtype=jnp.int8), score=jnp.array(score, dtype=jnp.uint32), score_changed=jnp.zeros(6, dtype=jnp.bool_), freeze_timer=jnp.array(0, dtype=jnp.uint32), step_count=jnp.array(0, dtype=jnp.uint32), key=key)
 
 def reset_level(level: chex.Array):
-    return LevelState(id=jnp.array(level, dtype=jnp.uint8), collected_pellets=jnp.array(0, dtype=jnp.uint8), dofmaze=MsPacmanMaze.precompute_dof(get_level_maze(level)), pellets=jnp.copy(MsPacmanMaze.BASE_PELLETS), power_pellets=jnp.ones(4, dtype=jnp.bool_), loaded=jnp.array(0, dtype=jnp.uint8))
+    return LevelState(id=jnp.array(level, dtype=jnp.uint8), collected_pellets=jnp.array(0, dtype=jnp.uint8), dofmaze=PacmanMaze.precompute_dof(get_level_maze(level)), pellets=jnp.copy(PacmanMaze.BASE_PELLETS), power_pellets=jnp.ones(4, dtype=jnp.bool_), loaded=jnp.array(0, dtype=jnp.uint8))
 
 def reset_player():
-    return PlayerState(position=CONSTS.INITIAL_PACMAN_POSITION.astype(jnp.uint8), action=jnp.array(Action.LEFT, dtype=jnp.int32), has_pellet=jnp.array(False, dtype=jnp.bool_), eaten_ghosts=jnp.array(0, dtype=jnp.uint8))
+    return PlayerState(
+        position=CONSTS.INITIAL_PACMAN_POSITION.astype(jnp.uint8), 
+        action=jnp.array(Action.LEFT, dtype=jnp.int32), 
+        has_pellet=jnp.array(False, dtype=jnp.bool_), 
+        eaten_ghosts=jnp.array(0, dtype=jnp.uint8),
+        last_horiz_dir=jnp.array(2, dtype=jnp.int32)
+    )
 
 def reset_ghosts():
     return GhostsState(positions=CONSTS.INITIAL_GHOSTS_POSITIONS.astype(jnp.int32), types=jnp.array([GhostType.BLINKY, GhostType.PINKY, GhostType.INKY, GhostType.SUE], dtype=jnp.uint8), actions=jnp.array([Action.LEFT, Action.NOOP, Action.NOOP, Action.NOOP], dtype=jnp.uint8), modes=jnp.array([GhostMode.RANDOM, GhostMode.ENJAILED, GhostMode.ENJAILED, GhostMode.ENJAILED], dtype=jnp.uint8), timers=jnp.array([CONSTS.SCATTER_DURATION, CONSTS.PINKY_RELEASE_TIME, CONSTS.INKY_RELEASE_TIME, CONSTS.SUE_RELEASE_TIME], dtype=jnp.float16))
