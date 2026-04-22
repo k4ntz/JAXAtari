@@ -1432,14 +1432,32 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         new_state = mario_walking_into_invisible_wall(new_state)
 
 
-        # Check if mario is hitted by barrel/fire
+        # Check if mario is hit by barrel/fire
         def mario_enemy_collision(state):
             # checking for barrels
             def check_collision_for_each_barrel(idx, state):
-                mario_got_hit = JaxDonkeyKong._collision_between_two_objects(state.mario_y, state.mario_x, self.consts.MARIO_HIT_BOX_Y, self.consts.MARIO_HIT_BOX_X,
-                                                                        state.barrels.barrel_y[idx], state.barrels.barrel_x[idx], self.consts.BARREL_HIT_BOX_Y, self.consts.BARREL_HIT_BOX_X)
+                mario_collision = JaxDonkeyKong._collision_between_two_objects(
+                    state.mario_y,
+                    state.mario_x,
+                    self.consts.MARIO_HIT_BOX_Y,
+                    self.consts.MARIO_HIT_BOX_X,
+                    state.barrels.barrel_y[idx],
+                    state.barrels.barrel_x[idx],
+                    self.consts.BARREL_HIT_BOX_Y,
+                    self.consts.BARREL_HIT_BOX_X,
+                )
+                mario_is_jumping = jnp.logical_or(state.mario_jumping, state.mario_jumping_wide)
+                # Jumping is safe when Mario's feet are clearly above most of the barrel.
+                # Using a partial-height threshold preserves jump-over gameplay while still
+                # treating side/body overlap as a hit.
+                mario_is_above_barrel = (
+                    state.mario_y + self.consts.MARIO_HIT_BOX_Y
+                    <= state.barrels.barrel_y[idx] + (self.consts.BARREL_HIT_BOX_Y // 2)
+                )
+
+                mario_got_hit = mario_collision
                 mario_got_hit &= jnp.logical_not(state.barrels.reached_the_end[idx])
-                mario_got_hit &= jnp.logical_not(jnp.logical_or(state.mario_jumping, state.mario_jumping_wide))
+                mario_got_hit &= jnp.logical_not(jnp.logical_and(mario_is_jumping, mario_is_above_barrel))
                 game_freeze_start = jax.lax.cond(
                     state.mario_got_hit,
                     lambda _: state.game_freeze_start,
@@ -1502,7 +1520,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             # if state.mario_jumping_over_enemy is set True --> mario jumped over an enemy, gives the player additional 100 score
             # CAREFUL: one step before, it was checked if there is a collision between mario and enemy
             game_score = jax.lax.cond(
-                jnp.logical_and(state.mario_jumping_over_enemy == True, state.mario_got_hit == False),
+                jnp.logical_and(state.mario_jumping_over_enemy, ~state.mario_got_hit),
                 lambda _: state.game_score + self.consts.SCORE_FOR_JUMPING_OVER_ENEMY,
                 lambda _: state.game_score,
                 operand=None
@@ -1513,10 +1531,9 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             )
 
             return jax.lax.cond(
-                jnp.logical_and(state.step_counter - state.start_frame_when_mario_jumped >= self.consts.MARIO_JUMPING_FRAME_DURATION, jnp.logical_or(state.mario_jumping == True, state.mario_jumping_wide == True)),
-                lambda _: new_state,
-                lambda _: state,
-                operand=None
+                jnp.logical_and(state.step_counter - state.start_frame_when_mario_jumped >= self.consts.MARIO_JUMPING_FRAME_DURATION, jnp.logical_or(state.mario_jumping, state.mario_jumping_wide)),
+                lambda: new_state,
+                lambda: state,
             )
         new_state = reset_jumping(new_state)
 
