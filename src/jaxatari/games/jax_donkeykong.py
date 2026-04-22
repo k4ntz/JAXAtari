@@ -2213,7 +2213,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
-            "level": spaces.Discrete(2), 
+            "level": spaces.Box(low=1, high=2, shape=(), dtype=jnp.int32),
             "mario": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
             # Hammer
             "hammer": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
