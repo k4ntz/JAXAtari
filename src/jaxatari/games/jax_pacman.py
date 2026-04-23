@@ -402,7 +402,7 @@ class PacmanRenderer(MsPacmanRenderer):
             
             mask = self.SHAPE_MASKS['ghosts'][ghost_idx]
             flip = anim_frame == 1
-            return self.jr.render_at(r, state.ghosts.positions[i][0].astype(jnp.int32), state.ghosts.positions[i][1].astype(jnp.int32) - 1, mask, flip_horizontal=flip)
+            return self.jr.render_at(r, state.ghosts.positions[i][0].astype(jnp.int32) + 3, state.ghosts.positions[i][1].astype(jnp.int32) - 2, mask, flip_horizontal=flip)
 
         return jax.lax.fori_loop(0, 4, render_one, raster)
 
