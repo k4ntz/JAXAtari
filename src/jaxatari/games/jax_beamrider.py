@@ -249,7 +249,7 @@ class BeamriderConstants:
     WHITE_UFO_PATTERN_DURATIONS: Tuple[int, ...] = struct.field(pytree_node=False,
                                                                 default=(0, 42, 42, 42, 28, 0, 42, 100, 123, 123))
     WHITE_UFO_PATTERN_PROBS: Tuple[float, ...] = struct.field(pytree_node=False,
-                                                              default=(0.3, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2)) #these probas are not 1:1, as some patterns have activation conditions
+                                                              default=(0.3, 0.2, 0.2, 0.2, 0.2, 0.1, 0.2, 0.2)) #these probas are not 1:1, as some patterns have activation conditions
     WHITE_UFO_SPEED_FACTOR: float = struct.field(pytree_node=False, default=0.1)
     WHITE_UFO_SHOT_SPEED_FACTOR: float = struct.field(pytree_node=False, default=0.8)
     WHITE_UFO_RETREAT_P_MIN: float = struct.field(pytree_node=False, default=0.05)
@@ -312,7 +312,7 @@ class BeamriderConstants:
     MOTHERSHIP_HEIGHT: int = struct.field(pytree_node=False, default=7)
     MOTHERSHIP_EMERGE_Y: int = struct.field(pytree_node=False, default=44)
 
-    REJUVENATOR_SPAWN_PROB: float = struct.field(pytree_node=False, default=1 / 3500)
+    REJUVENATOR_SPAWN_PROB: float = struct.field(pytree_node=False, default=1 / 2500)
     REJUVENATOR_STAGE_2_Y: float = struct.field(pytree_node=False, default=62.0)
     REJUVENATOR_STAGE_3_Y: float = struct.field(pytree_node=False, default=93.0)
     REJUVENATOR_STAGE_4_Y: float = struct.field(pytree_node=False, default=112.0)
@@ -320,7 +320,7 @@ class BeamriderConstants:
 
     # Falling Rock constants
     FALLING_ROCK_MAX: int = struct.field(pytree_node=False, default=3)
-    FALLING_ROCK_SPAWN_PROB: float = struct.field(pytree_node=False, default=0.0065)
+    FALLING_ROCK_SPAWN_PROB: float = struct.field(pytree_node=False, default=0.0002)
     FALLING_ROCK_SPAWN_Y: float = struct.field(pytree_node=False, default=43.0)
     FALLING_ROCK_BOTTOM_CLIP: float = struct.field(pytree_node=False, default=164.0)
     FALLING_ROCK_INIT_VEL: float = struct.field(pytree_node=False, default=0.07)
