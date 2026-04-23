@@ -314,7 +314,7 @@ class PacmanRenderer(MsPacmanRenderer):
         size = max(h, w)
         pad_h = (size - h) // 2
         pad_w = (size - w) // 2
-        right = jnp.pad(pacman_raw, ((0, 0), (pad_h, size - h - pad_h), (pad_w, size - w - pad_w)))
+        right = jnp.pad(pacman_raw, ((0, 0), (pad_h, size - h - pad_h), (pad_w, size - w - pad_w)), constant_values=self.jr.TRANSPARENT_ID)
         
         left = jnp.flip(right, axis=2)
         up = jnp.rot90(right, k=1, axes=(1, 2))
@@ -359,9 +359,8 @@ class PacmanRenderer(MsPacmanRenderer):
         raster = self.render_power_pellets(raster, state, power_pellet_color_id)
         
         # 3. Pacman
-        orientation = act_to_dir(state.player.action)
-        # 0: UP, 1: RIGHT, 2: LEFT, 3: DOWN
-        orientation = jnp.where(orientation == -1, 2, orientation) # Default to LEFT
+        # Pacman should only face LEFT or RIGHT, even when moving UP or DOWN
+        orientation = state.player.last_horiz_dir
         
         cycle = (state.step_count // 4) % 4
         frame = jnp.array([0, 1, 2, 1])[cycle]
