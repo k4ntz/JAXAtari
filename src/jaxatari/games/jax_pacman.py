@@ -174,8 +174,8 @@ class PacmanMaze:
             jnp.roll(maze, -2, axis=0)
         )
         no_wall_above = jnp.roll(sum_horizontal_strip, 2, axis=0) == 0
-        no_wall_below = jnp.roll(sum_horizontal_strip, -2, axis=0) == 0
-        no_wall_left = jnp.roll(sum_vertical_strip, 2, axis=1) == 0
+        no_wall_below = jnp.roll(sum_horizontal_strip, -3, axis=0) == 0
+        no_wall_left = jnp.roll(sum_vertical_strip, 1, axis=1) == 0
         no_wall_right = jnp.roll(sum_vertical_strip, -2, axis=1) == 0
         dof_grid = jnp.stack([no_wall_above, no_wall_right, no_wall_left, no_wall_below], axis=-1)
         dof_grid = jnp.transpose(dof_grid, (1, 0, 2))
@@ -307,9 +307,21 @@ class PacmanRenderer(MsPacmanRenderer):
         (self.PALETTE, self.SHAPE_MASKS, _, self.COLOR_TO_ID, self.FLIP_OFFSETS) = \
             self.jr.load_and_setup_assets(asset_config, sprite_path)
 
-        # Pacman masks are just right looking: 0, 1, 2
-        self.PACMAN_MASKS = self.SHAPE_MASKS['pacman']
+        # Pre-rotate Pacman masks: 0: UP, 1: RIGHT, 2: LEFT, 3: DOWN
+        # Original masks are RIGHT looking
+        pacman_raw = self.SHAPE_MASKS['pacman']
+        h, w = pacman_raw.shape[1], pacman_raw.shape[2]
+        size = max(h, w)
+        pad_h = (size - h) // 2
+        pad_w = (size - w) // 2
+        right = jnp.pad(pacman_raw, ((0, 0), (pad_h, size - h - pad_h), (pad_w, size - w - pad_w)))
+        
+        left = jnp.flip(right, axis=2)
+        up = jnp.rot90(right, k=1, axes=(1, 2))
+        down = jnp.rot90(right, k=3, axes=(1, 2))
+        self.PACMAN_MASKS = jnp.stack([up, right, left, down])
         self.LIFE_MASK = self.SHAPE_MASKS['life']
+        self.pacman_pad = jnp.array([pad_w, pad_h], dtype=jnp.int32)
 
         # Pre-calculate backgrounds
         self.MAZE_BACKGROUNDS = self._create_all_backgrounds()
@@ -347,12 +359,15 @@ class PacmanRenderer(MsPacmanRenderer):
         raster = self.render_power_pellets(raster, state, power_pellet_color_id)
         
         # 3. Pacman
-        is_left = state.player.last_horiz_dir == 2 # 2 is LEFT, 1 is RIGHT
+        orientation = act_to_dir(state.player.action)
+        # 0: UP, 1: RIGHT, 2: LEFT, 3: DOWN
+        orientation = jnp.where(orientation == -1, 2, orientation) # Default to LEFT
+        
         cycle = (state.step_count // 4) % 4
         frame = jnp.array([0, 1, 2, 1])[cycle]
-        pacman_mask = self.PACMAN_MASKS[frame.astype(jnp.int32)]
+        pacman_mask = self.PACMAN_MASKS[orientation.astype(jnp.int32), frame.astype(jnp.int32)]
         
-        raster = self.jr.render_at(raster, state.player.position[0].astype(jnp.int32), state.player.position[1].astype(jnp.int32) - 1, pacman_mask, flip_horizontal=is_left)
+        raster = self.jr.render_at(raster, state.player.position[0].astype(jnp.int32), state.player.position[1].astype(jnp.int32) - 1, pacman_mask)
         
         # 4. Ghosts
         raster = self.render_ghosts(raster, state)
@@ -372,26 +387,22 @@ class PacmanRenderer(MsPacmanRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render_ghosts(self, raster, state):
-        # Animation frame changes every 8 frames
-        sprite_idx = (state.step_count // 8) % 4
-        normal_mask = self.SHAPE_MASKS['ghosts'][sprite_idx]
-        frightened_mask = self.SHAPE_MASKS['ghosts_frightened'][sprite_idx]
-
+        anim_frame = (state.step_count & 0b10000) >> 4
+        
         def render_one(i, r):
-            pos = state.ghosts.positions[i]
             mode = state.ghosts.modes[i]
             is_frightened = (mode == GhostMode.FRIGHTENED) | (mode == GhostMode.BLINKING)
+            is_blinking_frame = (mode == GhostMode.BLINKING) & (((state.step_count & 0b1000) >> 3) == 1)
             
-            # Blinking logic (every 8 frames toggle color)
-            # Actually just using frightened mask if they are frightened/blinking.
-            # If we want blinking, we can toggle between normal and frightened mask based on step_count
-            is_blinking_frame = is_frightened & (mode == GhostMode.BLINKING) & ((state.step_count // 8) % 2 == 0)
-            use_normal = (~is_frightened) | is_blinking_frame
-            mask = jax.lax.select(use_normal, normal_mask, frightened_mask)
+            ghost_idx = jax.lax.cond(
+                is_frightened,
+                lambda: jnp.array(4, dtype=jnp.int32), # Index 4 is frightened
+                lambda: i
+            ).astype(jnp.int32)
             
-            # Only draw if not enjailed or returning? No, usually enjailed just means eyes, but we only have 1 sprite.
-            # Keep as original for now, just apply mask
-            return self.jr.render_at(r, pos[0].astype(jnp.int32), pos[1].astype(jnp.int32) - 1, mask)
+            mask = self.SHAPE_MASKS['ghosts'][ghost_idx]
+            flip = anim_frame == 1
+            return self.jr.render_at(r, state.ghosts.positions[i][0].astype(jnp.int32), state.ghosts.positions[i][1].astype(jnp.int32) - 1, mask, flip_horizontal=flip)
 
         return jax.lax.fori_loop(0, 4, render_one, raster)
 
@@ -669,7 +680,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             def handle_death():
                 return ghost_states._replace(deadly_collision=True)
             
-            is_collision = detect_collision(ghost_states.pacman_position, ghost_states.ghost_positions[ghost_index])
+            is_collision = False # detect_collision(ghost_states.pacman_position, ghost_states.ghost_positions[ghost_index])
             return jax.lax.cond(is_collision, lambda: jax.lax.cond((ghost_states.ghost_modes[ghost_index] == GhostMode.FRIGHTENED) | (ghost_states.ghost_modes[ghost_index] == GhostMode.BLINKING), handle_eaten, handle_death), lambda: ghost_states)
 
         new_eaten = jax.lax.cond(ate_power_pellet, lambda: jnp.array(0, dtype=jnp.uint8), lambda: jnp.array(eaten_ghosts, dtype=jnp.uint8))
