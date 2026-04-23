@@ -1,3 +1,4 @@
+import math
 import os
 from functools import partial
 from typing import Tuple, NamedTuple
@@ -167,6 +168,7 @@ class PhoenixConstants(AutoDerivedConstants):
     # --- Projectiles ---
     PLAYER_PROJECTILE_SPEED: int = struct.field(pytree_node=False, default=6)
     PLAYER_PROJECTILE_INITIAL_OFFSET: int = struct.field(pytree_node=False, default=-5)
+    RESET_START_LEVEL: int = struct.field(pytree_node=False, default=1)
     ENEMY_PROJECTILE_SPEED: int = struct.field(pytree_node=False, default=2)
 
     # --- Global / shared enemy timing and odds ---
@@ -221,8 +223,11 @@ class PhoenixConstants(AutoDerivedConstants):
     BAT_DIVE_SLOW_STEP: float = struct.field(pytree_node=False, default=1.0)
     BAT_DIVE_FAST_INTERVAL: int = struct.field(pytree_node=False, default=2)
     BAT_DIVE_FAST_STEP: float = struct.field(pytree_node=False, default=2.0)
-    BAT_DIVE_EXTRA_DEPTH: float = struct.field(pytree_node=False, default=5.0)
-    BAT_DIVE_EXTRA_HOLD_FRAMES: int = struct.field(pytree_node=False, default=8)
+    BAT_DIVE_EARLY_PULLUP_FRAMES: int = struct.field(pytree_node=False, default=14)
+    BAT_DIVE_PLAYER_OVERLAP_PX: float = struct.field(pytree_node=False, default=1.0)
+    BAT_DIVE_BOTTOM_MISSING_Y_GAP: float = struct.field(pytree_node=False, default=8.0)
+    BAT_DIVE_EXTRA_DEPTH: float = struct.field(pytree_node=False, default=0)
+    BAT_DIVE_EXTRA_HOLD_FRAMES: int = struct.field(pytree_node=False, default=4)
     # Upper y-boundaries for bat body-kill scoring zones (100..450); above last bound => 500.
     BAT_SCORE_Y_BOUNDS: jnp.ndarray = struct.field(
         pytree_node=False,
@@ -245,7 +250,15 @@ class PhoenixConstants(AutoDerivedConstants):
     # Boss-only render delay (mod hook): projectile must travel this many pixels
     # below its spawn line before being visible. Default 0 keeps vanilla visibility.
     BOSS_PROJECTILE_RENDER_DELAY_PX: int = struct.field(pytree_node=False, default=0)
-    BOSS_KILL_SCORE: int = struct.field(pytree_node=False, default=1000)
+    # Y-boundaries for boss proximity scoring bands (boss.y spans ~76–126).
+    BOSS_SCORE_Y_BOUNDS: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([89.0, 101.0, 114.0], dtype=jnp.float32),
+    )
+    BOSS_SCORE_VALUES: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([1000, 2000, 3000, 4000], dtype=jnp.int32),
+    )
     BOSS_BLUE_BLOCK_WIDTH: int = struct.field(pytree_node=False, default=4)
     BOSS_BLUE_BLOCK_HEIGHT: int = struct.field(pytree_node=False, default=2)
     BOSS_RED_BLOCK_WIDTH: int = struct.field(pytree_node=False, default=4)
@@ -291,6 +304,13 @@ class PhoenixConstants(AutoDerivedConstants):
     BOSS_RED_DY: jnp.ndarray = struct.field(pytree_node=False, default=None)
     BOSS_GREEN_DX: jnp.ndarray = struct.field(pytree_node=False, default=None)
     BOSS_GREEN_DY: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    # Flattened blue offsets for vectorized rendering (2 rows × 20 cols → 40 elements)
+    BOSS_FLAT_BLUE_DX: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    BOSS_FLAT_BLUE_DY: jnp.ndarray = struct.field(pytree_node=False, default=None)
+    # Python ints for per-pixel block rendering (needed at jit trace time)
+    BOSS_BLUE_X0: int = struct.field(pytree_node=False, default=-40)
+    BOSS_RED_DY0: int = struct.field(pytree_node=False, default=4)
+    BOSS_GREEN_DY0: int = struct.field(pytree_node=False, default=-3)
 
     # --- Asset manifest (immutable default; override via constants.replace) ---
     ASSET_CONFIG: tuple = _get_default_asset_config()
@@ -335,6 +355,11 @@ class PhoenixConstants(AutoDerivedConstants):
             "BOSS_RED_DY": red_dy,
             "BOSS_GREEN_DX": green_dx,
             "BOSS_GREEN_DY": green_dy,
+            "BOSS_FLAT_BLUE_DX": jnp.tile(blue_dx, 2),
+            "BOSS_FLAT_BLUE_DY": jnp.repeat(blue_dy, blue_dx.shape[0]),
+            "BOSS_BLUE_X0": int(blue_dx[0].item()),
+            "BOSS_RED_DY0": int(red_dy[0].item()),
+            "BOSS_GREEN_DY0": int(green_dy[0].item()),
         }
 
 # === GAME STATE ===
@@ -400,11 +425,7 @@ class PhoenixState:
     player_respawn_timer: chex.Array = struct.field(default_factory=lambda: jnp.array(0)) # Invincibility timer
     level: chex.Array = struct.field(default_factory=lambda: jnp.array(1))  # Level, starts at 1
     level_transition_timer: chex.Array = struct.field(default_factory=lambda: jnp.array(0)) # Timer for level transition
-    phoenix_salvo_owner: chex.Array = struct.field(default_factory=lambda: jnp.array(-1, dtype=jnp.int32))
-    phoenix_salvo_shots_left: chex.Array = struct.field(default_factory=lambda: jnp.array(0, dtype=jnp.int32))
     phoenix_salvo_gap_timer: chex.Array = struct.field(default_factory=lambda: jnp.array(0, dtype=jnp.int32))
-    phoenix_salvo_pause_timer: chex.Array = struct.field(default_factory=lambda: jnp.array(0, dtype=jnp.int32))
-    phoenix_salvo_phase: chex.Array = struct.field(default_factory=lambda: jnp.array(0, dtype=jnp.int32))
     phoenix_salvo_cycle_shots: chex.Array = struct.field(default_factory=lambda: jnp.array(0, dtype=jnp.int32))
     phoenix_salvo_enemy_cooldowns: chex.Array = struct.field(default_factory=lambda: jnp.full((8,), 0, dtype=jnp.int32))
     phoenix_salvo_enemy_shot_counts: chex.Array = struct.field(default_factory=lambda: jnp.full((8,), 0, dtype=jnp.int32))
@@ -455,11 +476,7 @@ class PhoenixSalvoEnemyFire(NamedTuple):
     salvo_fire_mask: chex.Array
     salvo_x: chex.Array
     salvo_y: chex.Array
-    owner: chex.Array
-    shots_left: chex.Array
     gap_timer: chex.Array
-    pause_timer: chex.Array
-    phase: chex.Array
     cycle_shots: chex.Array
     enemy_cooldowns: chex.Array
     enemy_shot_counts: chex.Array
@@ -865,13 +882,13 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
                 direction_mask
             )
         )
-        new_direction = jax.lax.cond(
+        new_direction = jnp.where(
             at_left_boundary,
-            lambda: jnp.full_like(state.horizontal_direction_enemies, 1.0, dtype=jnp.float32),
-            lambda: jax.lax.cond(
+            jnp.full_like(state.horizontal_direction_enemies, 1.0, dtype=jnp.float32),
+            jnp.where(
                 at_right_boundary,
-                lambda: jnp.full_like(state.horizontal_direction_enemies, -1.0, dtype=jnp.float32),
-                lambda: state.horizontal_direction_enemies.astype(jnp.float32),
+                jnp.full_like(state.horizontal_direction_enemies, -1.0, dtype=jnp.float32),
+                state.horizontal_direction_enemies.astype(jnp.float32),
             ),
         )
 
@@ -934,9 +951,15 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         formation_idx = (state.level - 1) % 5
         slot_y = self.consts.ENEMY_POSITIONS_Y[formation_idx]
         valid_slots = slot_y < self.consts.HEIGHT + 10
+        valid_slot_count = jnp.sum(valid_slots.astype(jnp.int32))
         lowest_slot_y = jnp.max(jnp.where(valid_slots, slot_y, -jnp.inf))
         lowest_alive_y = jnp.max(jnp.where(active_bats, state.enemies_y, -jnp.inf))
-        missing_bottom_slots = (alive_count > 0) & (lowest_alive_y < (lowest_slot_y - 0.5))
+        # Trigger dives only when the bottom lane is truly gone (not from normal 1px formation wobble).
+        missing_bottom_slots = (
+            (alive_count > 0)
+            & (alive_count < valid_slot_count)
+            & (lowest_alive_y < (lowest_slot_y - self.consts.BAT_DIVE_BOTTOM_MISSING_Y_GAP))
+        )
         ready_to_start_dive = (
             (state.bat_dive_phase == 0) & (state.bat_dive_timer <= 0) & missing_bottom_slots
         )
@@ -945,8 +968,15 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             (lowest_slot_y - lowest_alive_y) + self.consts.BAT_DIVE_EXTRA_DEPTH,
             state.bat_dive_goal,
         )
-        # Ensure a dive can barely reach player-contact height.
-        graze_player_goal = (state.player_y - self.consts.ENEMY_HEIGHT + 1) - lowest_alive_y
+        # Convert the requested early pull-up timing (in frames) into pixels at the current dive speed.
+        dive_pixels_per_frame = dive_step_pixels / jnp.maximum(dive_move_interval.astype(jnp.float32), 1.0)
+        early_pullup_px = self.consts.BAT_DIVE_EARLY_PULLUP_FRAMES * dive_pixels_per_frame
+        # Keep a slight overlap budget, but pull up earlier so dives don't heavily enter the player's lane.
+        graze_player_goal = (
+            (state.player_y - self.consts.ENEMY_HEIGHT + self.consts.BAT_DIVE_PLAYER_OVERLAP_PX)
+            - lowest_alive_y
+            - early_pullup_px
+        )
         dive_goal = jnp.where(
             ready_to_start_dive,
             jnp.maximum(dive_goal, graze_player_goal),
@@ -954,10 +984,12 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         )
         dive_goal = jnp.maximum(dive_goal, 0.0).astype(jnp.float32)
 
-        hold_steps = jnp.maximum(
-            1, jnp.ceil(self.consts.BAT_DIVE_HOLD_PIXELS / jnp.maximum(dive_step_pixels, 1e-5)).astype(jnp.int32)
-        )
-        hold_frames = hold_steps * dive_move_interval + self.consts.BAT_DIVE_EXTRA_HOLD_FRAMES
+        # hold_frames takes 2 static values depending on is_fast_dive — pre-computed to avoid ceil/div at runtime.
+        _fast_hold = int(math.ceil(self.consts.BAT_DIVE_HOLD_PIXELS / max(self.consts.BAT_DIVE_FAST_STEP, 1e-5)))
+        _slow_hold = int(math.ceil(self.consts.BAT_DIVE_HOLD_PIXELS / max(self.consts.BAT_DIVE_SLOW_STEP, 1e-5)))
+        _fast_hold_frames = max(1, _fast_hold) * self.consts.BAT_DIVE_FAST_INTERVAL + self.consts.BAT_DIVE_EXTRA_HOLD_FRAMES
+        _slow_hold_frames = max(1, _slow_hold) * self.consts.BAT_DIVE_SLOW_INTERVAL + self.consts.BAT_DIVE_EXTRA_HOLD_FRAMES
+        hold_frames = jnp.where(is_fast_dive, _fast_hold_frames, _slow_hold_frames)
 
         bat_dive_phase = jnp.where(ready_to_start_dive, 1, state.bat_dive_phase).astype(jnp.int32)
         bat_dive_timer = jnp.where(
@@ -996,17 +1028,13 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         bat_dive_hold_timer = jnp.where(finished_dive, 0, bat_dive_hold_timer).astype(jnp.int32)
         bat_dive_timer = jnp.where(finished_dive, self.consts.BAT_DIVE_INTERVAL, bat_dive_timer).astype(jnp.int32)
 
-        # Horizontal clip and bounce use wing-aware bounds so wings never leave the playfield
-        # (PLAYER_BOUNDS only fits the 6px body; wings extend WING_WIDTH past the body).
-        bat_x_min = jnp.where(
-            (state.bat_wings == 2) | (state.bat_wings == -1),
-            self.consts.BAT_X_MIN_WITH_LEFT_WING,
-            0,
-        )
-        bat_x_max = jnp.where(
-            (state.bat_wings == 2) | (state.bat_wings == 1),
-            self.consts.BAT_X_MAX_WITH_RIGHT_WING,
-            self.consts.WIDTH - self.consts.ENEMY_WIDTH - 1,
+        # The composite sprite is always placed at comp_x = x - WING_WIDTH, so x must stay in
+        # [WING_WIDTH, WIDTH - ENEMY_WIDTH - WING_WIDTH] = [5, 149] for all bats regardless of
+        # current wing state. Going outside this range causes the composite to overflow the raster
+        # and render_at wraps the overflow pixels to the opposite edge of the screen.
+        bat_x_min = jnp.full((8,), self.consts.BAT_X_MIN_WITH_LEFT_WING, dtype=jnp.float32)
+        bat_x_max = jnp.full(
+            (8,), self.consts.WIDTH - self.consts.ENEMY_WIDTH - self.consts.WING_WIDTH, dtype=jnp.float32
         )
 
         # Initialisiere neue Richtungen für jede Fledermaus
@@ -1055,17 +1083,9 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         motion_tick = jnp.where(active_bats, state.bat_motion_tick + 1, state.bat_motion_tick)
         profile_interval = jnp.where(
             post_turn_timer > 12,
-            jnp.full((8,), 4, dtype=jnp.int32),  # 8 frames -> 1 px every 4 frames
-            jnp.where(
-                post_turn_timer > 0,
-                jnp.full((8,), 2, dtype=jnp.int32),  # next 12 frames -> 1 px every 2 frames
-                jnp.where(
-                    in_pre_edge_zone,
-                    jnp.full((8,), 2, dtype=jnp.int32),  # pre-edge 22-frame style cadence
-                    jnp.full((8,), 1, dtype=jnp.int32),  # baseline 1 px every frame
-                ),
-            ),
-        )
+            4,  # 8 frames -> 1 px every 4 frames
+            jnp.where((post_turn_timer > 0) | in_pre_edge_zone, 2, 1),
+        ).astype(jnp.int32)
         move_this_frame = active_bats & ((motion_tick % profile_interval) == 0)
         x_step = jnp.where(move_this_frame, new_directions * bat_step_size, 0.0)
 
@@ -1216,12 +1236,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         new_boss_y = jnp.where(drop_tick & boss.active & (~player_respawning), dropped_y, boss.y)
 
         shift_tick = (step % c.BOSS_BLUE_SHIFT_INTERVAL == 0) & (~player_respawning)
-        new_blue_alive = jax.lax.cond(
-            shift_tick,
-            lambda b: jnp.roll(b, shift=1, axis=1),
-            lambda b: b,
-            boss.blue_alive,
-        )
+        new_blue_alive = jnp.where(shift_tick, jnp.roll(boss.blue_alive, shift=1, axis=1), boss.blue_alive)
 
         proj_x = state.projectile_x.astype(jnp.float32)
         proj_y = state.projectile_y.astype(jnp.float32)
@@ -1239,7 +1254,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
 
             hit_x = (proj_x + c.PROJECTILE_WIDTH >= abs_x) & (proj_x <= abs_x + block_w)
             hit_y = (proj_y + c.PROJECTILE_HEIGHT >= abs_y) & (proj_y <= abs_y + block_h)
-            hits = hit_x & hit_y & alive_mask & proj_active
+            hits = hit_x & hit_y & alive_mask & proj_active & boss.active
             hit_detected = jnp.any(hits)
 
             flat_hits = hits.flatten()
@@ -1258,42 +1273,43 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             c.BOSS_RED_BLOCK_WIDTH,
             c.BOSS_RED_BLOCK_HEIGHT,
         )
-        new_blue_alive, blue_hit = jax.lax.cond(
-            red_hit,
-            lambda _: (new_blue_alive, jnp.array(False, dtype=jnp.bool_)),
-            lambda _: check_block_hits(
-                c.BOSS_BLUE_DX,
-                c.BOSS_BLUE_DY,
-                new_blue_alive,
-                c.BOSS_BLUE_BLOCK_WIDTH,
-                c.BOSS_BLUE_BLOCK_HEIGHT,
-                is_2d_blue=True,
-            ),
-            operand=None,
+        _blue_alive_hit, _blue_hit = check_block_hits(
+            c.BOSS_BLUE_DX,
+            c.BOSS_BLUE_DY,
+            new_blue_alive,
+            c.BOSS_BLUE_BLOCK_WIDTH,
+            c.BOSS_BLUE_BLOCK_HEIGHT,
+            is_2d_blue=True,
         )
-        new_green_alive, green_hit = jax.lax.cond(
-            red_hit | blue_hit,
-            lambda _: (boss.green_alive, jnp.array(False, dtype=jnp.bool_)),
-            lambda _: check_block_hits(
-                c.BOSS_GREEN_DX,
-                c.BOSS_GREEN_DY,
-                boss.green_alive,
-                c.BOSS_GREEN_BLOCK_WIDTH,
-                c.BOSS_GREEN_BLOCK_HEIGHT,
-            ),
-            operand=None,
+        new_blue_alive = jnp.where(red_hit, new_blue_alive, _blue_alive_hit)
+        blue_hit = (~red_hit) & _blue_hit
+
+        _green_alive_hit, _green_hit = check_block_hits(
+            c.BOSS_GREEN_DX,
+            c.BOSS_GREEN_DY,
+            boss.green_alive,
+            c.BOSS_GREEN_BLOCK_WIDTH,
+            c.BOSS_GREEN_BLOCK_HEIGHT,
         )
+        new_green_alive = jnp.where(red_hit | blue_hit, boss.green_alive, _green_alive_hit)
+        green_hit = (~(red_hit | blue_hit)) & _green_hit
 
         core_abs_y = new_boss_y + c.BOSS_CORE_Y_OFFSET
         core_hit_x = (proj_x + c.PROJECTILE_WIDTH >= boss.x - c.BOSS_CORE_WIDTH / 2.0) & (
             proj_x <= boss.x + c.BOSS_CORE_WIDTH / 2.0
         )
         core_hit_y = (proj_y + c.PROJECTILE_HEIGHT >= core_abs_y) & (proj_y <= core_abs_y + c.BOSS_CORE_HEIGHT)
-        core_hit = core_hit_x & core_hit_y & proj_active & ~(red_hit | blue_hit | green_hit)
+        core_hit = core_hit_x & core_hit_y & proj_active & boss.active & ~(red_hit | blue_hit | green_hit)
 
         any_hit = red_hit | blue_hit | green_hit | core_hit
         new_boss_active = jnp.where(core_hit, False, boss.active)
-        score_reward = jnp.where(core_hit, c.BOSS_KILL_SCORE, 0.0)
+        score_idx = jnp.clip(
+            jnp.searchsorted(c.BOSS_SCORE_Y_BOUNDS, boss.y, side="left"),
+            0, c.BOSS_SCORE_VALUES.shape[0] - 1,
+        )
+        boss_round = (state.level - 1) // 5
+        kill_score = jnp.clip(c.BOSS_SCORE_VALUES[score_idx] + boss_round * 1000, 1000, 9000)
+        score_reward = jnp.where(core_hit, kill_score, 0.0)
         new_boss = boss.replace(
             active=new_boss_active,
             y=new_boss_y,
@@ -1361,10 +1377,11 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         return out_x.astype(jnp.float32), out_y.astype(jnp.float32)
 
     def reset(self, key: jax.random.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[PhoenixObservation, PhoenixState]:
-        initial_level = jnp.array(1)
+        initial_level = jnp.array(self.consts.RESET_START_LEVEL, dtype=jnp.int32)
         key, bat_anim_key = jax.random.split(key)
-        initial_enemies_x = self.consts.ENEMY_POSITIONS_X[0]
-        initial_enemies_y = self.consts.ENEMY_POSITIONS_Y[0]
+        initial_formation_idx = (initial_level - 1) % 5
+        initial_enemies_x = self.consts.ENEMY_POSITIONS_X[initial_formation_idx]
+        initial_enemies_y = self.consts.ENEMY_POSITIONS_Y[initial_formation_idx]
         initial_horizontal_dirs = self._initial_enemy_horizontal_directions(
             initial_level, initial_enemies_x, initial_enemies_y
         )
@@ -1383,13 +1400,9 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             score = jnp.array(0), # Standardwert: Score=0
             lives=jnp.array(self.consts.PLAYER_LIVES), # Standardwert: 4 Leben
             player_respawn_timer=jnp.array(0),
-            level=jnp.array(1),
+            level=initial_level,
             level_transition_timer=jnp.array(0),  # Timer for level transition, starts at 0
-            phoenix_salvo_owner=jnp.array(-1, dtype=jnp.int32),
-            phoenix_salvo_shots_left=jnp.array(0, dtype=jnp.int32),
             phoenix_salvo_gap_timer=jnp.array(0, dtype=jnp.int32),
-            phoenix_salvo_pause_timer=jnp.array(0, dtype=jnp.int32),
-            phoenix_salvo_phase=jnp.array(0, dtype=jnp.int32),
             phoenix_salvo_cycle_shots=jnp.array(0, dtype=jnp.int32),
             phoenix_salvo_enemy_cooldowns=jnp.full((8,), 0, dtype=jnp.int32),
             phoenix_salvo_enemy_shot_counts=jnp.full((8,), 0, dtype=jnp.int32),
@@ -1633,9 +1646,6 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         salvo_x = jnp.where(salvo_fire_mask, spawn_x, state.enemy_projectile_x)
         salvo_y = jnp.where(salvo_fire_mask, spawn_y, state.enemy_projectile_y)
 
-        owner = jnp.where(has_trigger_enemy, trigger_enemy_idx, jnp.array(-1, dtype=jnp.int32))
-        shots_left = jnp.where(has_trigger_enemy, jnp.array(1, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32))
-        phase = jnp.where(has_trigger_enemy, jnp.array(1, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32))
         cycle_shots = jnp.where(
             has_trigger_enemy,
             state.phoenix_salvo_cycle_shots + can_fire_now.astype(jnp.int32),
@@ -1658,11 +1668,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             salvo_fire_mask=salvo_fire_mask,
             salvo_x=salvo_x,
             salvo_y=salvo_y,
-            owner=owner,
-            shots_left=shots_left,
             gap_timer=new_gap_timer,
-            pause_timer=jnp.array(0, dtype=jnp.int32),
-            phase=phase,
             cycle_shots=cycle_shots,
             enemy_cooldowns=updated_enemy_cooldowns.astype(jnp.int32),
             enemy_shot_counts=updated_enemy_shot_counts.astype(jnp.int32),
@@ -1752,8 +1758,21 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             None,
         )
 
-        phoenix_fire = self._phoenix_small_bird_enemy_fire(
-            state, pre_step_phoenix_do_attack, state.step_counter
+        phoenix_fire = jax.lax.cond(
+            is_phoenix_level,
+            lambda _: self._phoenix_small_bird_enemy_fire(
+                state, pre_step_phoenix_do_attack, state.step_counter
+            ),
+            lambda _: PhoenixSalvoEnemyFire(
+                salvo_fire_mask=jnp.zeros((8,), dtype=jnp.bool_),
+                salvo_x=state.enemy_projectile_x.astype(jnp.float32),
+                salvo_y=state.enemy_projectile_y.astype(jnp.float32),
+                gap_timer=state.phoenix_salvo_gap_timer,
+                cycle_shots=state.phoenix_salvo_cycle_shots,
+                enemy_cooldowns=state.phoenix_salvo_enemy_cooldowns,
+                enemy_shot_counts=state.phoenix_salvo_enemy_shot_counts,
+            ),
+            operand=None,
         )
 
         eff_enemy_x = non_phoenix_fire.eff_enemy_x
@@ -1774,12 +1793,13 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         enemy_fire_mask = jnp.where(
             is_phoenix_level, phoenix_fire.salvo_fire_mask, non_phoenix_fire.enemy_fire_mask
         )
+        # Suppress all enemy fire during the respawn blink window so the player
+        # never faces bullets the moment they become vulnerable.
+        enemy_fire_mask = jnp.where(
+            state.player_respawn_timer > 0, jnp.zeros((8,), dtype=jnp.bool_), enemy_fire_mask
+        )
 
-        owner = phoenix_fire.owner
-        shots_left = phoenix_fire.shots_left
         gap_timer = phoenix_fire.gap_timer
-        pause_timer = phoenix_fire.pause_timer
-        phase = phoenix_fire.phase
         cycle_shots = phoenix_fire.cycle_shots
         enemy_cooldowns = phoenix_fire.enemy_cooldowns
         enemy_shot_counts = phoenix_fire.enemy_shot_counts
@@ -1817,17 +1837,10 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         # Kollisionsprüfung Gegner
         enemy_collisions_raw = jax.vmap(lambda enemy_pos: check_collision(enemy_pos, projectile_pos))(enemy_positions)
 
-        # Boss level: blocks act as a shield. If the projectile overlaps any visible block,
-        # do not allow an immediate hit on the boss core behind it.
-        shield_hit = jax.lax.cond(
-            is_boss_level & (projectile_y >= 0) & (state.enemies_x[0] > -1),
-            lambda _: self._boss_player_missile_hits_barrier(state, projectile_x, projectile_y),
-            lambda _: jnp.array(False),
-            operand=None,
-        )
-
+        # On boss levels all scoring/kill logic runs in boss_step. Suppress the
+        # generic collision on slot 0 entirely to prevent double-awarding.
         enemy_collisions_raw = enemy_collisions_raw.at[0].set(
-            jnp.where(is_boss_level & shield_hit, False, enemy_collisions_raw[0])
+            jnp.where(is_boss_level, False, enemy_collisions_raw[0])
         )
         is_bat_level = jnp.logical_or((state.level % 5) == 3, (state.level % 5) == 4)
         dying_mask = jnp.where(is_bat_level, state.bat_dying, state.phoenix_dying)
@@ -1927,25 +1940,14 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         )
         large_bird_scores = self.consts.BAT_SCORE_VALUES[bat_score_idx]
 
-        # 3. Boss (Level 5)
-        # 1000 to 4000 based on proximity in the first round[cite: 104].
-        boss_lane = jnp.clip((state.enemies_y - 20) / 25.0, 0.0, 3.0).astype(jnp.int32)
-        boss_base_score = 1000 + (boss_lane * 1000)
-        
-        # Max score increases by 1000 per loop round, capped at 9000[cite: 106].
-        boss_round = (state.level - 1) // 5
-        boss_scores = jnp.clip(boss_base_score + (boss_round * 1000), 1000, 9000)
-
         # Identify level type
         level_type = (state.level % 5)
         is_small_bird_level = (level_type == 1) | (level_type == 2)
-        is_bat_level = (level_type == 3) | (level_type == 4)
-        
-        # Map the correct score logic to the enemies array based on current level
-        enemy_hit_scores = jnp.where(
-            is_small_bird_level, small_bird_scores,
-            jnp.where(is_bat_level, large_bird_scores, boss_scores)
-        )
+
+        # Map the correct score logic to the enemies array based on current level.
+        # Boss levels (level_type == 0) are handled entirely in boss_step; slot 0
+        # is suppressed in enemy_collisions_raw so this fallback never fires for them.
+        enemy_hit_scores = jnp.where(is_small_bird_level, small_bird_scores, large_bird_scores)
 
         # Mask scores so only hit enemies award points, then sum 
         actual_hit_scores = jnp.where(enemy_collisions, enemy_hit_scores, 0)
@@ -2108,6 +2110,10 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         )
         player_death_done = new_player_dying & (dec_player_timer == 0) & (player_death_timer_start > 0)
 
+        # Clear all in-flight enemy bullets so they can't kill the player the instant they respawn.
+        enemy_projectile_x = jnp.where(player_death_done, jnp.full((8,), -1, dtype=jnp.int32), enemy_projectile_x)
+        enemy_projectile_y = jnp.where(player_death_done, jnp.full((8,), -1, dtype=jnp.int32), enemy_projectile_y)
+
         player_x = jnp.where(player_death_done, self.consts.PLAYER_POSITION[0], state.player_x)
         player_respawn_timer = jnp.where(
             player_death_done,
@@ -2162,11 +2168,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         new_phoenix_cooldown = jnp.where(formation_reset, jnp.full((8,), 0), state.phoenix_cooldown)
         new_phoenix_drift = jnp.where(formation_reset, jnp.full((8,), 0.0), state.phoenix_drift)
         new_phoenix_original_y = jnp.where(formation_reset, jnp.full((8,), -1.0), state.phoenix_original_y)
-        new_salvo_owner = jnp.where(formation_reset, -1, owner)
-        new_salvo_shots_left = jnp.where(formation_reset, 0, shots_left)
         new_salvo_gap_timer = jnp.where(formation_reset, 0, gap_timer)
-        new_salvo_pause_timer = jnp.where(formation_reset, 0, pause_timer)
-        new_salvo_phase = jnp.where(formation_reset, 0, phase)
         new_salvo_cycle_shots = jnp.where(formation_reset, 0, cycle_shots)
         new_salvo_enemy_cooldowns = jnp.where(formation_reset, jnp.full((8,), 0), enemy_cooldowns)
         new_salvo_enemy_shot_counts = jnp.where(formation_reset, jnp.full((8,), 0), enemy_shot_counts)
@@ -2220,11 +2222,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             bat_dive_travelled=new_bat_dive_travelled,
             bat_dive_goal=new_bat_dive_goal,
             bat_anim_phase_offset=new_bat_anim_phase_offset,
-            phoenix_salvo_owner=new_salvo_owner.astype(jnp.int32),
-            phoenix_salvo_shots_left=new_salvo_shots_left.astype(jnp.int32),
             phoenix_salvo_gap_timer=new_salvo_gap_timer.astype(jnp.int32),
-            phoenix_salvo_pause_timer=new_salvo_pause_timer.astype(jnp.int32),
-            phoenix_salvo_phase=new_salvo_phase.astype(jnp.int32),
             phoenix_salvo_cycle_shots=new_salvo_cycle_shots.astype(jnp.int32),
             phoenix_salvo_enemy_cooldowns=new_salvo_enemy_cooldowns.astype(jnp.int32),
             phoenix_salvo_enemy_shot_counts=new_salvo_enemy_shot_counts.astype(jnp.int32),
@@ -2552,7 +2550,7 @@ class PhoenixRenderer(JAXGameRenderer):
             x, y = state.enemy_projectile_x[i], state.enemy_projectile_y[i]
             return jax.lax.cond(
                 y > -1,
-                lambda r: self.jr.render_at_clipped(r, x, y, self.SHAPE_MASKS['enemy_projectile']),
+                lambda r: self.jr.render_at(r, x, y, self.SHAPE_MASKS['enemy_projectile']),
                 lambda r: r,
                 current_raster
             )
@@ -2645,7 +2643,7 @@ class PhoenixRenderer(JAXGameRenderer):
                     dh, dw = death_mask.shape
                     ox = x + (bw - dw) // 2 - 5
                     oy = y + (bh - dh) // 2
-                    return self.jr.render_at_clipped(r, ox, oy, death_mask, flip_offset=body_offsets)
+                    return self.jr.render_at(r, ox, oy, death_mask, flip_offset=body_offsets)
 
                 def draw_alive(r):
                     def draw_composite(r2):
@@ -2659,12 +2657,12 @@ class PhoenixRenderer(JAXGameRenderer):
                         comp_mask = composite_masks[frame_idx]
                         comp_x = x - self.consts.WING_WIDTH
                         comp_y = y
-                        return self.jr.render_at_clipped(
+                        return self.jr.render_at(
                             r2, comp_x, comp_y, comp_mask, flip_offset=composite_offsets
                         )
 
                     def draw_legacy(r2):
-                        r_new = self.jr.render_at_clipped(r2, x, y, body_masks[0], flip_offset=body_offsets)
+                        r_new = self.jr.render_at(r2, x, y, body_masks[0], flip_offset=body_offsets)
                         wing_state = state.bat_wings[i].astype(jnp.int32)
                         draw_left = (wing_state == 2) | (wing_state == -1)
                         draw_right = (wing_state == 2) | (wing_state == 1)
@@ -2673,7 +2671,7 @@ class PhoenixRenderer(JAXGameRenderer):
                         y_wings = y + 2 + y_shift_by_variant[wing_variant]
                         r_new = jax.lax.cond(
                             draw_left,
-                            lambda r3: self.jr.render_at_clipped(
+                            lambda r3: self.jr.render_at(
                                 r3, x_left, y_wings, left_wing_mask, flip_offset=wing_offsets
                             ),
                             lambda r3: r3,
@@ -2681,7 +2679,7 @@ class PhoenixRenderer(JAXGameRenderer):
                         )
                         r_new = jax.lax.cond(
                             draw_right,
-                            lambda r3: self.jr.render_at_clipped(
+                            lambda r3: self.jr.render_at(
                                 r3, x_right, y_wings, right_wing_mask, flip_offset=wing_offsets
                             ),
                             lambda r3: r3,
@@ -2689,9 +2687,13 @@ class PhoenixRenderer(JAXGameRenderer):
                         )
                         return r_new
 
-                    wing_state = state.bat_wings[i].astype(jnp.int32)
-                    use_composite = has_composite & (wing_state == 2)
-                    return jax.lax.cond(use_composite, draw_composite, draw_legacy, r)
+                    # One-wing composite frames can drift relative to the body anchor.
+                    # Keep composite only for full-wing bats; use legacy anchored body+wing
+                    # rendering for damaged states so sprite and hitbox stay aligned.
+                    if has_composite:
+                        return jax.lax.cond(state.bat_wings[i] == 2, draw_composite, draw_legacy, r)
+                    else:
+                        return draw_legacy(r)
 
                 return jax.lax.cond(is_dying, draw_death, draw_alive, rr)
 
@@ -2710,43 +2712,78 @@ class PhoenixRenderer(JAXGameRenderer):
         core_y = boss.y + c.BOSS_CORE_Y_OFFSET
         raster = jax.lax.cond(
             boss.active,
-            lambda r: self.jr.render_at_clipped(
+            lambda r: self.jr.render_at(
                 r, core_x.astype(jnp.int32), core_y.astype(jnp.int32), boss_mask, flip_offset=boss_flip_offset
             ),
             lambda r: r,
             raster,
         )
 
-        blue_color_id = jnp.asarray(self.SHAPE_MASKS["boss_block_blue"][0][0, 0], dtype=jnp.int32)
-        red_color_id = jnp.asarray(self.SHAPE_MASKS["boss_block_red"][0][0, 0], dtype=jnp.int32)
-        green_color_id = jnp.asarray(self.SHAPE_MASKS["boss_block_green"][0][0, 0], dtype=jnp.int32)
+        # Per-pixel direct lookup: 3 fully-vectorized O(H×W) passes, no loop over blocks.
+        # For each raster pixel we compute which block it belongs to via integer arithmetic
+        # and look up alive status — avoiding the 162-iteration sequential fori_loop.
+        bx = jnp.round(boss.x).astype(jnp.int32)
+        by = jnp.round(boss.y).astype(jnp.int32)
+        rel_x = self.jr._xx - bx  # (H, W) pixel coords relative to boss
+        rel_y = self.jr._yy - by
 
-        flat_blue_alive = boss.blue_alive.flatten()
-        flat_blue_dx = jnp.tile(c.BOSS_BLUE_DX, 2)
-        flat_blue_dy = jnp.repeat(c.BOSS_BLUE_DY, 20)
-        blue_pos = jnp.stack([boss.x + flat_blue_dx, boss.y + flat_blue_dy], axis=1)
-        blue_pos = jnp.where((flat_blue_alive & boss.active)[:, None], blue_pos, -1.0)
-        blue_sizes = jnp.tile(
-            jnp.array([[c.BOSS_BLUE_BLOCK_WIDTH, c.BOSS_BLUE_BLOCK_HEIGHT]], dtype=jnp.float32),
-            (blue_pos.shape[0], 1),
+        # --- Blue blocks: 2 rows × 20 cols, 4×2 px each ---
+        blue_mask = self.SHAPE_MASKS["boss_block_blue"][0]
+        bh_b, bw_b = int(blue_mask.shape[0]), int(blue_mask.shape[1])  # (2, 4)
+        n_cols_b, n_rows_b = 20, 2
+        blue_x0 = c.BOSS_BLUE_X0                          # Python int = -40
+        blue_col = ((rel_x - blue_x0) // bw_b).clip(0, n_cols_b - 1).astype(jnp.int32)
+        blue_row = (rel_y // bh_b).clip(0, n_rows_b - 1).astype(jnp.int32)
+        blue_alive_px = boss.blue_alive[blue_row, blue_col]
+        in_blue = (
+            (rel_x >= blue_x0) & (rel_x < -blue_x0) &
+            (rel_y >= 0) & (rel_y < n_rows_b * bh_b) &
+            blue_alive_px & boss.active
         )
-        raster = self.jr.draw_rects(raster, blue_pos, blue_sizes, blue_color_id)
+        raster = jnp.where(in_blue, blue_mask[0, 0], raster)
 
-        red_pos = jnp.stack([boss.x + c.BOSS_RED_DX, boss.y + c.BOSS_RED_DY], axis=1)
-        red_pos = jnp.where((boss.red_alive & boss.active)[:, None], red_pos, -1.0)
-        red_sizes = jnp.tile(
-            jnp.array([[c.BOSS_RED_BLOCK_WIDTH, c.BOSS_RED_BLOCK_HEIGHT]], dtype=jnp.float32),
-            (red_pos.shape[0], 1),
+        # --- Red blocks: pyramid (rows [20,18,16,14,12,8,4]), 4×3 px each ---
+        red_mask = self.SHAPE_MASKS["boss_block_red"][0]
+        bh_r, bw_r = int(red_mask.shape[0]), int(red_mask.shape[1])  # (3, 4)
+        dy_r = c.BOSS_RED_DY0                              # Python int = 4
+        n_per_row_r = jnp.array([20, 18, 16, 14, 12, 8, 4], dtype=jnp.int32)
+        row_offsets_r = jnp.array([0, 20, 38, 54, 68, 80, 88], dtype=jnp.int32)
+        red_row = ((rel_y - dy_r) // bh_r).clip(0, 6).astype(jnp.int32)
+        nk_r = n_per_row_r[red_row]                       # (H, W)
+        half_r = nk_r * (bw_r // 2)                       # = nk_r * 2, half-span in px
+        red_col = ((rel_x + half_r) // bw_r).astype(jnp.int32)
+        red_col = jnp.minimum(jnp.maximum(red_col, 0), nk_r - 1)
+        flat_r = (row_offsets_r[red_row] + red_col).clip(0, 91)
+        in_red = (
+            (rel_y >= dy_r) & (rel_y < dy_r + 7 * bh_r) &
+            (rel_x >= -half_r) & (rel_x < half_r) &
+            boss.red_alive[flat_r] & boss.active
         )
-        raster = self.jr.draw_rects(raster, red_pos, red_sizes, red_color_id)
+        raster = jnp.where(in_red, red_mask[0, 0], raster)
 
-        green_pos = jnp.stack([boss.x + c.BOSS_GREEN_DX, boss.y + c.BOSS_GREEN_DY], axis=1)
-        green_pos = jnp.where((boss.green_alive & boss.active)[:, None], green_pos, -1.0)
-        green_sizes = jnp.tile(
-            jnp.array([[c.BOSS_GREEN_BLOCK_WIDTH, c.BOSS_GREEN_BLOCK_HEIGHT]], dtype=jnp.float32),
-            (green_pos.shape[0], 1),
+        # --- Green blocks: 5 rows above boss, 4×3 px, center gap at rel_x in [-4,4) ---
+        green_mask = self.SHAPE_MASKS["boss_block_green"][0]
+        bh_g, bw_g = int(green_mask.shape[0]), int(green_mask.shape[1])  # (3, 4)
+        dy_g = c.BOSS_GREEN_DY0                            # Python int = -3
+        n_per_row_g = jnp.array([12, 10, 8, 6, 4], dtype=jnp.int32)
+        row_offsets_g = jnp.array([0, 10, 18, 24, 28], dtype=jnp.int32)
+        # Row 0: dy=-3, row 1: dy=-6, … pixel y in [dy_g - 4*bh_g, dy_g + bh_g) = [-15, 0)
+        green_row = ((-rel_y - 1) // bh_g).clip(0, 4).astype(jnp.int32)
+        nk_g = n_per_row_g[green_row]                     # (H, W)
+        half_g = nk_g * (bw_g // 2)                       # = nk_g * 2
+        col_full = ((rel_x + half_g) // bw_g).astype(jnp.int32)
+        col_full = jnp.minimum(jnp.maximum(col_full, 0), nk_g - 1)
+        center_col1 = nk_g // 2 - 1
+        # Skip center 2 columns (always at rel_x in [-bw_g, bw_g))
+        alive_col_g = jnp.where(col_full <= center_col1, col_full, col_full - 2).clip(0, 29)
+        flat_g = (row_offsets_g[green_row] + alive_col_g).clip(0, 29)
+        in_green = (
+            (rel_y >= dy_g - 4 * bh_g) & (rel_y < 0) &
+            (rel_x >= -half_g) & (rel_x < half_g) &
+            ~((rel_x >= -bw_g) & (rel_x < bw_g)) &        # exclude center gap
+            boss.green_alive[flat_g] & boss.active
         )
-        raster = self.jr.draw_rects(raster, green_pos, green_sizes, green_color_id)
+        raster = jnp.where(in_green, green_mask[0, 0], raster)
 
         # Boss-level layering: enemy missiles should stay visible above block rectangles.
         def render_enemy_projectile(i, current_raster):
