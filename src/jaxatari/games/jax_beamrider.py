@@ -249,11 +249,11 @@ class BeamriderConstants:
     WHITE_UFO_PATTERN_DURATIONS: Tuple[int, ...] = struct.field(pytree_node=False,
                                                                 default=(0, 42, 42, 42, 28, 0, 42, 100, 123, 123))
     WHITE_UFO_PATTERN_PROBS: Tuple[float, ...] = struct.field(pytree_node=False,
-                                                              default=(0.3, 0.2, 0.2, 0.2, 0.1, 0.3, 0.2, 0.2)) #these probas are not 1:1, as some patterns have activation conditions
+                                                              default=(0.3, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2)) #these probas are not 1:1, as some patterns have activation conditions
     WHITE_UFO_SPEED_FACTOR: float = struct.field(pytree_node=False, default=0.1)
     WHITE_UFO_SHOT_SPEED_FACTOR: float = struct.field(pytree_node=False, default=0.8)
-    WHITE_UFO_RETREAT_P_MIN: float = struct.field(pytree_node=False, default=0.005)
-    WHITE_UFO_RETREAT_P_MAX: float = struct.field(pytree_node=False, default=0.1)
+    WHITE_UFO_RETREAT_P_MIN: float = struct.field(pytree_node=False, default=0.05)
+    WHITE_UFO_RETREAT_P_MAX: float = struct.field(pytree_node=False, default=0.2)
     WHITE_UFO_RETREAT_ALPHA: float = struct.field(pytree_node=False, default=0.01)
     WHITE_UFO_RETREAT_SPEED_MULT: float = struct.field(pytree_node=False, default=2.5)
     WHITE_UFO_TOP_LANE_MIN_SPEED: float = struct.field(pytree_node=False, default=0.3)
@@ -312,7 +312,7 @@ class BeamriderConstants:
     MOTHERSHIP_HEIGHT: int = struct.field(pytree_node=False, default=7)
     MOTHERSHIP_EMERGE_Y: int = struct.field(pytree_node=False, default=44)
 
-    REJUVENATOR_SPAWN_PROB: float = struct.field(pytree_node=False, default=1 / 4000)
+    REJUVENATOR_SPAWN_PROB: float = struct.field(pytree_node=False, default=1 / 3500)
     REJUVENATOR_STAGE_2_Y: float = struct.field(pytree_node=False, default=62.0)
     REJUVENATOR_STAGE_3_Y: float = struct.field(pytree_node=False, default=93.0)
     REJUVENATOR_STAGE_4_Y: float = struct.field(pytree_node=False, default=112.0)
@@ -1054,6 +1054,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         player_y_topleft = float(self.consts.PLAYER_POS_Y)
         player_size = self.player_sprite_size
 
+        hitbox_y_top = player_y_topleft - 3.0
+        hitbox_y_bottom = player_y_topleft + player_size[0]
+
         alignment_at_player = -1.0
 
         # UFO
@@ -1061,7 +1064,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         ufo_y = white_ufo_pos[1]
         ufo_size = self.ufo_sprite_sizes[6]
         # look if ufo is near before computing exact hits
-        is_ufo_near = (ufo_y >= player_y_topleft - ufo_size[0]) & (ufo_y <= player_y_topleft + player_size[0])
+        is_ufo_near = (ufo_y >= hitbox_y_top - ufo_size[0]) & (ufo_y <= hitbox_y_bottom)
         ufo_hits = is_ufo_near & (ufo_x < player_x_topleft + player_size[1]) & (player_x_topleft < ufo_x + ufo_size[1])
         ufo_hit_count = jnp.sum(ufo_hits, dtype=jnp.int32)
 
@@ -1069,8 +1072,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         bouncer_x = bouncer_pos[0] + alignment_at_player
         bouncer_y = bouncer_pos[1]
         bouncer_size = self.bouncer_sprite_size
-        is_bouncer_near = bouncer_active & (bouncer_y >= player_y_topleft - bouncer_size[0]) & (
-                    bouncer_y <= player_y_topleft + player_size[0])
+        is_bouncer_near = bouncer_active & (bouncer_y >= hitbox_y_top - bouncer_size[0]) & (
+                    bouncer_y <= hitbox_y_bottom)
         bouncer_hits = is_bouncer_near & (bouncer_x < player_x_topleft + player_size[1]) & (
                     player_x_topleft < bouncer_x + bouncer_size[1])
         bouncer_hit_count = jnp.sum(bouncer_hits, dtype=jnp.int32)
@@ -1079,8 +1082,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         meteoroid_x = chasing_meteoroid_pos[0] + alignment_at_player
         meteoroid_y = chasing_meteoroid_pos[1]
         meteoroid_size = self.meteoroid_sprite_size
-        is_meteoroid_near = chasing_meteoroid_active & (meteoroid_y >= player_y_topleft - meteoroid_size[0]) & (
-                    meteoroid_y <= player_y_topleft + player_size[0])
+        is_meteoroid_near = chasing_meteoroid_active & (meteoroid_y >= hitbox_y_top - meteoroid_size[0]) & (
+                    meteoroid_y <= hitbox_y_bottom)
         chasing_meteoroid_hits = is_meteoroid_near & (meteoroid_x < player_x_topleft + player_size[1]) & (
                     player_x_topleft < meteoroid_x + meteoroid_size[1])
         chasing_meteoroid_hit_count = jnp.sum(chasing_meteoroid_hits, dtype=jnp.int32)
@@ -1089,8 +1092,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         rejuv_x = rejuv_pos[0] + alignment_at_player
         rejuv_y = rejuv_pos[1]
         rejuv_size = jnp.where(rejuv_dead, self.rejuvenator_sprite_sizes[4], self.rejuvenator_sprite_sizes[3])
-        is_rejuv_near = rejuv_active & (rejuv_y >= player_y_topleft - rejuv_size[0]) & (
-                    rejuv_y <= player_y_topleft + player_size[0])
+        is_rejuv_near = rejuv_active & (rejuv_y >= hitbox_y_top - rejuv_size[0]) & (rejuv_y <= hitbox_y_bottom)
         rejuv_hit_player = is_rejuv_near & (rejuv_x < player_x_topleft + player_size[1]) & (
                     player_x_topleft < rejuv_x + rejuv_size[1])
         gain_life = rejuv_hit_player & jnp.logical_not(rejuv_dead)
@@ -1100,8 +1102,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         rock_x = falling_rock_pos[0] + alignment_at_player
         rock_y = falling_rock_pos[1]
         rock_size = self.falling_rock_sprite_sizes[3]
-        is_rock_near = falling_rock_active & (rock_y >= player_y_topleft - rock_size[0]) & (
-                    rock_y <= player_y_topleft + player_size[0])
+        is_rock_near = falling_rock_active & (rock_y >= hitbox_y_top - rock_size[0]) & (rock_y <= hitbox_y_bottom)
         rock_hits = is_rock_near & (rock_x < player_x_topleft + player_size[1]) & (
                     player_x_topleft < rock_x + rock_size[1])
         rock_hit_count = jnp.sum(rock_hits, dtype=jnp.int32)
@@ -1119,8 +1120,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         kamikaze_x = kamikaze_pos[0, 0] + alignment_at_player
         kamikaze_y = kamikaze_pos[1, 0]
         kamikaze_size = self.lane_blocker_sprite_sizes[3]
-        is_kamikaze_near = kamikaze_active[0] & (kamikaze_y >= player_y_topleft - kamikaze_size[0]) & (
-                    kamikaze_y <= player_y_topleft + player_size[0])
+        is_kamikaze_near = kamikaze_active[0] & (kamikaze_y >= hitbox_y_top - kamikaze_size[0]) & (
+                    kamikaze_y <= hitbox_y_bottom)
         kamikaze_hits_player = is_kamikaze_near & (kamikaze_x < player_x_topleft + player_size[1]) & (
                     player_x_topleft < kamikaze_x + kamikaze_size[1])
         kamikaze_hit_count = kamikaze_hits_player.astype(jnp.int32)
@@ -2501,7 +2502,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         is_retreat = pattern_id == int(WhiteUFOPattern.RETREAT)
         is_move_back = pattern_id == int(WhiteUFOPattern.MOVE_BACK)
         is_kamikaze = pattern_id == int(WhiteUFOPattern.KAMIKAZE)
-        is_triple = (pattern_id == int(WhiteUFOPattern.TRIPLE_SHOT_RIGHT)) | (pattern_id == int(WhiteUFOPattern.TRIPLE_SHOT_LEFT))
+        is_triple = (pattern_id == int(WhiteUFOPattern.TRIPLE_SHOT_RIGHT)) | (
+                    pattern_id == int(WhiteUFOPattern.TRIPLE_SHOT_LEFT))
 
         cross_track = target_lane_x - x
         distance_to_lane = jnp.abs(cross_track)
@@ -2518,7 +2520,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             retreat_vy = -lane_vector[1] * speed_factor * retreat_mult
             move_back_vy = -lane_vector[1] * speed_factor
             kamikaze_vy = lane_vector[1] * speed_factor * retreat_mult
-            triple_vy = 0.25 # Stick to normal vertical speed for triple shot
+            triple_vy = 0.25  # Stick to normal vertical speed for triple shot
 
             new_vy = jnp.where(is_retreat, retreat_vy, normal_vy)
             new_vy = jnp.where(is_move_back, move_back_vy, new_vy)
@@ -2662,13 +2664,13 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         shot_x = shot_pos[0] + _get_ufo_alignment(shot_pos[1])
         shot_y = shot_pos[1]
 
-        timer = shot_timer
-        sprite_idx = (jnp.floor_divide(timer, 4) % 2).astype(jnp.int32)
-        shot_sizes = jnp.take(self.enemy_shot_sprite_sizes, sprite_idx, axis=0)
+        shot_sizes = self.consts.ENEMY_SHOT_SPRITE_SIZES[0] # always take the larger size
 
-        hits = (shot_active) & \
-               (shot_x < player_left + player_size[1]) & (player_left < shot_x + shot_sizes[:, 1]) & \
-               (shot_y < player_y + player_size[0]) & (player_y < shot_y + shot_sizes[:, 0])
+        player_hitbox_top = player_y - 4 # shots should hit player a bit earlier
+
+        hits = shot_active & \
+               (shot_x < player_left + player_size[1]) & (player_left < shot_x + shot_sizes[1]) & \
+               (shot_y < player_y + player_size[0]) & (player_hitbox_top < shot_y + shot_sizes[0])
 
         hit_count = jnp.sum(hits, dtype=jnp.int32)
 
