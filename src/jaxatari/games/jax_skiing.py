@@ -1142,6 +1142,33 @@ class SkiingRenderer(JAXGameRenderer):
         return jnp.stack([minutes_digit, colon, s_t, s_o, colon, ms_t, ms_o], axis=0)
 
     @partial(jax.jit, static_argnums=(0,))
+    def _draw_flags(self, raster: jnp.ndarray, state) -> jnp.ndarray:
+        flags_xy = state.flags[..., :2]
+        left_pos = flags_xy.astype(jnp.int32)
+        right_pos = (flags_xy + jnp.array([self.consts.flag_distance, 0.0])).astype(jnp.int32)
+
+        n_flags = state.flags.shape[0]
+        # The 20th gate is always in slot 1, and is the last one spawned.
+        # It should be red when it is spawned (gates_seen >= 18).
+        is_twentieth_visible = jnp.greater_equal(state.gates_seen, jnp.int32(18))
+        is_red_mask = jnp.zeros((n_flags,), dtype=bool).at[1].set(is_twentieth_visible)
+
+        def draw_flag(i, r):
+            is_red = is_red_mask[i]
+            mask = jax.lax.select(is_red, self.RED_FLAG_MASK, self.BLUE_FLAG_MASK)
+            offset = jax.lax.select(is_red, self.RED_FLAG_OFFSET, self.BLUE_FLAG_OFFSET)
+            cx_left, cy = left_pos[i]
+            cx_right, _ = right_pos[i]
+            top = (cy - (mask.shape[0] // 2)).astype(jnp.int32)
+            left_l = (cx_left - (mask.shape[1] // 2)).astype(jnp.int32)
+            left_r = (cx_right - (mask.shape[1] // 2)).astype(jnp.int32)
+            r = self.jr.render_at_clipped(r, left_l, top, mask, flip_offset=offset)
+            r = self.jr.render_at_clipped(r, left_r, top, mask, flip_offset=offset)
+            return r
+
+        return jax.lax.fori_loop(0, self.consts.max_num_flags, draw_flag, raster)
+
+    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: SkiingState) -> jnp.ndarray:
         # 1. Start with the white background
         bg_raster = self.jr.create_object_raster(self.BACKGROUND)
@@ -1186,36 +1213,7 @@ class SkiingRenderer(JAXGameRenderer):
         )
 
         # 4. Draw Flags (in front of skier)
-        flags_xy = state.flags[..., :2]
-        left_pos = flags_xy.astype(jnp.int32)
-        right_pos = (flags_xy + jnp.array([self.consts.flag_distance, 0.0])).astype(jnp.int32)
-        
-        n_flags = state.flags.shape[0]
-        # The 20th gate is always in slot 1, and is the last one spawned.
-        # It should be red when it is spawned (gates_seen >= 18).
-        is_twentieth_visible = jnp.greater_equal(state.gates_seen, jnp.int32(18))
-        is_red_mask = jnp.zeros((n_flags,), dtype=bool).at[1].set(is_twentieth_visible)
-        
-        # Render flags one by one
-        def draw_flag(i, r):
-            is_red = is_red_mask[i]
-            mask = jax.lax.select(is_red, self.RED_FLAG_MASK, self.BLUE_FLAG_MASK)
-            offset = jax.lax.select(is_red, self.RED_FLAG_OFFSET, self.BLUE_FLAG_OFFSET)
-            
-            # Center coords
-            cx_left, cy = left_pos[i]
-            cx_right, _ = right_pos[i]
-            
-            # Top-left coords
-            top = (cy - (mask.shape[0] // 2)).astype(jnp.int32)
-            left_l = (cx_left - (mask.shape[1] // 2)).astype(jnp.int32)
-            left_r = (cx_right - (mask.shape[1] // 2)).astype(jnp.int32)
-            
-            r = self.jr.render_at_clipped(r, left_l, top, mask, flip_offset=offset)
-            r = self.jr.render_at_clipped(r, left_r, top, mask, flip_offset=offset)
-            return r
-
-        raster = jax.lax.fori_loop(0, self.consts.max_num_flags, draw_flag, raster)
+        raster = self._draw_flags(raster, state)
 
         # 5. Draw Trees (in front of skier)
         tree_masks = self.SHAPE_MASKS['tree_group']
