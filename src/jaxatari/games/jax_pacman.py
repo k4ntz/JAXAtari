@@ -6,7 +6,7 @@ Based on the original Atari 2600 version.
 from enum import IntEnum
 import os
 from functools import partial
-from typing import Any, Dict, NamedTuple, Optional, Tuple
+from typing import NamedTuple, Tuple
 
 import chex
 import jax
