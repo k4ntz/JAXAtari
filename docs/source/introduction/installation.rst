@@ -1,38 +1,40 @@
 Installation
 ============
 
-Requirements
-------------
+Install
+-------
 
-- Python 3.10+
-- JAX with GPU support (optional but recommended)
-
-Install from source
--------------------
+Create a virtual environment and install JAXAtari:
 
 .. code-block:: bash
 
-   git clone https://github.com/Farama-Foundation/JAXAtari.git
-   cd JAXAtari
    python3 -m venv .venv
    source .venv/bin/activate
-   pip install -e .
 
-Verify installation
--------------------
+   python3 -m pip install -U pip
+   pip3 install -e .
 
-.. code-block:: python
+.. note::
+   This will install JAX without GPU acceleration.
 
-   import jaxatari
-   from jaxatari import JAXtari
+GPU Support (CUDA)
+------------------
 
-   env = JAXtari("pong")
-   state = env.get_init_state()
-   print("JAXAtari installed successfully!")
-
-Run a game manually
--------------------
+CUDA users should run the following to add GPU support:
 
 .. code-block:: bash
 
-   python -m jaxatari.games.jax_seaquest
+   pip install -U "jax[cuda12]"
+
+For other accelerator types, please follow the instructions in the
+`JAX installation guide <https://docs.jax.dev/en/latest/installation.html>`_.
+
+Sprite Assets
+-------------
+
+Next, you need to download the original Atari 2600 sprites. Before downloading,
+you will be asked to confirm ownership of the original ROMs:
+
+.. code-block:: bash
+
+   .venv/bin/install_sprites

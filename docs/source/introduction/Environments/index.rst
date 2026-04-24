@@ -1,19 +1,5 @@
 Environments
 ============
-
-JAXAtari provides GPU-accelerated, object-centric implementations of classic Atari games.
-Each environment exposes the same JAX-native interface, compatible with the Arcade Learning Environment (ALE).
-
-.. code-block:: python
-
-   from jaxatari import JAXtari
-
-   env = JAXtari("seaquest")
-   state = env.get_init_state()
-   state, reward, done, info = env.step(state, action=0)
-
-----
-
 .. raw:: html
 
    <div class="env-grid">
@@ -60,7 +46,7 @@ Each environment exposes the same JAX-native interface, compatible with the Arca
        <div class="env-name">Skiing</div>
      </a>
 
-     <a class="env-card" href="montezumarevenge.html">
+     <a class="env-card" href="montezuma.html">
        <img src="../../_static/gifs/montezumarevenge.gif" alt="Montezuma's Revenge" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Montezuma's Revenge</div>

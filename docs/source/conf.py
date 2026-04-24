@@ -43,7 +43,7 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'scripts', 'tests']
 pygments_style = 'sphinx'
 todo_include_todos = False
 
-autodoc_mock_imports = ['jax', 'jaxlib', 'flax', 'chex', 'gymnasium', 'absl', 'ale_py']
+
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
