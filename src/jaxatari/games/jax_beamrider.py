@@ -201,7 +201,7 @@ class StandbyPhase(IntEnum):
 
 @struct.dataclass
 class BeamriderConstants:
-    STARTING_SECTOR: int = struct.field(pytree_node=False, default=12)
+    STARTING_SECTOR: int = struct.field(pytree_node=False, default=1)
     STARTING_LIVES: int = struct.field(pytree_node=False, default=3)
     MAX_LIVES: int = struct.field(pytree_node=False, default=14)
     WHITE_UFOS_PER_SECTOR: int = struct.field(pytree_node=False, default=15)
@@ -313,7 +313,7 @@ class BeamriderConstants:
     MOTHERSHIP_HEIGHT: int = struct.field(pytree_node=False, default=7)
     MOTHERSHIP_EMERGE_Y: int = struct.field(pytree_node=False, default=44)
 
-    REJUVENATOR_SPAWN_PROB: float = struct.field(pytree_node=False, default=1 / 2500)
+    REJUVENATOR_SPAWN_PROB: float = struct.field(pytree_node=False, default=1 / 3000)
     REJUVENATOR_STAGE_2_Y: float = struct.field(pytree_node=False, default=62.0)
     REJUVENATOR_STAGE_3_Y: float = struct.field(pytree_node=False, default=93.0)
     REJUVENATOR_STAGE_4_Y: float = struct.field(pytree_node=False, default=112.0)
@@ -1993,8 +1993,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         new_patterns = jnp.where(hit_mask_ufo, int(WhiteUFOPattern.IDLE), current_patterns)
         new_timers = jnp.where(hit_mask_ufo, 0, current_timers)
 
-        # Random delay up to 300 steps for hit UFOs
-        new_spawn_delays = jnp.where(hit_mask_ufo, jax.random.randint(key, (3,), 1, 301), current_spawn_delays)
+        rolls = jax.random.uniform(key, shape=(3,))
+        random_delays = jnp.floor(rolls * 300.0).astype(jnp.int32) + 1
+        new_spawn_delays = jnp.where(hit_mask_ufo, random_delays, current_spawn_delays)
 
         player_shot_pos = jnp.where(hit_exists_ufo, self.bullet_offscreen, new_shot_pos)
         enemy_pos = jnp.where(hit_exists_ufo, enemy_pos_after_hit, new_white_ufo_pos)
@@ -2091,13 +2092,19 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         offscreen_pos = self.enemy_offscreen
         is_offscreen = jnp.all(white_ufo_position == offscreen_pos)
 
-        new_key, key_use = jax.random.split(key)
-        key_pattern, key_motion, key_spawn = jax.random.split(key_use, 3)
+        key_out, choice_key1, choice_key2, float_key = jax.random.split(key, 4)
+        float_rolls = jax.random.uniform(float_key, shape=(4,))
+
+        spawn_delay_roll = float_rolls[0]
+        motion_roll = float_rolls[1]
+        retreat_roll = float_rolls[2]
+        start_roll = float_rolls[3]
 
         spawn_delay = jnp.maximum(spawn_delay - 1, 0)
 
         pattern_id, pattern_timer, time_on_lane, attack_time = self._white_ufo_update_pattern_state(
-            sector, white_ufo_position, time_on_lane, attack_time, already_left, spawn_delay, pattern_id, pattern_timer, key_pattern
+            sector, white_ufo_position, time_on_lane, attack_time, already_left, spawn_delay, pattern_id, pattern_timer,
+            retreat_roll, start_roll, choice_key1, choice_key2
         )
 
         requires_lane_motion = self._white_ufo_pattern_requires_lane_motion(pattern_id)
@@ -2106,10 +2113,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         already_left = already_left | jnp.logical_not(on_top_lane)
 
         def follow_lane(_):
-            return self._white_ufo_normal(white_ufo_position, white_ufo_vel_x, white_ufo_vel_y, pattern_id, already_left)
+            return self._white_ufo_normal(white_ufo_position, white_ufo_vel_x, white_ufo_vel_y, pattern_id,
+                                          already_left)
 
         def stay_on_top(_):
-            return self._white_ufo_top_lane(white_ufo_position, white_ufo_vel_x, pattern_id, key_motion)
+            return self._white_ufo_top_lane(white_ufo_position, white_ufo_vel_x, pattern_id, motion_roll)
 
         white_ufo_vel_x, white_ufo_vel_y = jax.lax.cond(
             requires_lane_motion,
@@ -2145,7 +2153,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         white_ufo_vel_y = jnp.where(should_respawn, 0.0, white_ufo_vel_y)
         time_on_lane = jnp.where(should_respawn, 0, time_on_lane)
         attack_time = jnp.where(should_respawn, 0, attack_time)
-        spawn_delay = jnp.where(should_respawn, jax.random.randint(key_spawn, (), 1, 301), spawn_delay)
+
+        new_spawn_delay_val = jnp.floor(spawn_delay_roll * 300.0).astype(jnp.int32) + 1
+        spawn_delay = jnp.where(should_respawn, new_spawn_delay_val, spawn_delay)
+
         pattern_id = jnp.where(should_respawn, int(WhiteUFOPattern.IDLE), pattern_id)
         pattern_timer = jnp.where(should_respawn, 0, pattern_timer)
 
@@ -2160,32 +2171,27 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         pattern_timer = jnp.where(is_offscreen, 0, pattern_timer)
 
         return (
-            white_ufo_position,
-            white_ufo_vel_x,
-            white_ufo_vel_y,
-            time_on_lane,
-            attack_time,
-            already_left,
-            spawn_delay,
-            pattern_id,
-            pattern_timer,
-            new_key,
+            white_ufo_position, white_ufo_vel_x, white_ufo_vel_y, time_on_lane, attack_time,
+            already_left, spawn_delay, pattern_id, pattern_timer, key_out,
         )
 
     def _white_ufo_pattern_requires_lane_motion(self, pattern_id: chex.Array) -> chex.Array:
         return jnp.isin(pattern_id, self._lane_motion_patterns)
 
     def _white_ufo_update_pattern_state(
-        self,
-        sector: chex.Array,
-        position: chex.Array,
-        time_on_lane: chex.Array,
-        attack_time: chex.Array,
-        already_left: chex.Array,
-        spawn_delay: chex.Array,
-        pattern_id: chex.Array,
-        pattern_timer: chex.Array,
-        key: chex.Array,
+            self,
+            sector: chex.Array,
+            position: chex.Array,
+            time_on_lane: chex.Array,
+            attack_time: chex.Array,
+            already_left: chex.Array,
+            spawn_delay: chex.Array,
+            pattern_id: chex.Array,
+            pattern_timer: chex.Array,
+            retreat_roll: chex.Array,
+            start_roll: chex.Array,
+            key_chain_choice: chex.Array,
+            key_start_choice: chex.Array
     ):
         on_top_lane = position[1] <= self.consts.TOP_CLIP
         time_on_lane = jnp.where(on_top_lane, time_on_lane + 1, 0)
@@ -2201,7 +2207,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         dist_to_lane = jnp.abs(closest_lane_x - ufo_x)
         is_on_lane = dist_to_lane <= 0.25
 
-        is_triple = (pattern_id == int(WhiteUFOPattern.TRIPLE_SHOT_RIGHT)) | (pattern_id == int(WhiteUFOPattern.TRIPLE_SHOT_LEFT))
+        is_triple = (pattern_id == int(WhiteUFOPattern.TRIPLE_SHOT_RIGHT)) | (
+                    pattern_id == int(WhiteUFOPattern.TRIPLE_SHOT_LEFT))
 
         # Triple Shot State Machine:
         # pattern_timer bits: [shoot_now (1 bit) | last_lane (4 bits) | shots_left (3 bits)]
@@ -2259,7 +2266,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         pattern_timer = jnp.where(movement_finished, 0, pattern_timer)
         attack_time = jnp.where(movement_finished, 0, attack_time)
 
-        triple_finished = is_triple & ((pattern_timer & 7) == 0) & jnp.logical_not((pattern_timer >> 7) & 1) & is_on_lane
+        triple_finished = is_triple & ((pattern_timer & 7) == 0) & jnp.logical_not(
+            (pattern_timer >> 7) & 1) & is_on_lane
 
         # Stuck check: if target lane is same as current lane due to clipping in stage 6/7, finish triple shot.
         lane_offset = jnp.where(pattern_id == int(WhiteUFOPattern.TRIPLE_SHOT_RIGHT), 1, 0)
@@ -2269,7 +2277,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         max_lane = jnp.where(in_restricted_stage, 5, 6)
         target_lane_id = jnp.clip(closest_lane_id + lane_offset, min_lane, max_lane)
 
-        triple_stuck = is_triple & is_on_lane & (shots_left > 0) & (target_lane_id == closest_lane_id) & (closest_lane_id == last_lane)
+        triple_stuck = is_triple & is_on_lane & (shots_left > 0) & (target_lane_id == closest_lane_id) & (
+                    closest_lane_id == last_lane)
         triple_finished = triple_finished | triple_stuck
 
         pattern_finished_off_top = jnp.logical_and.reduce(jnp.array([
@@ -2279,12 +2288,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             is_on_lane,
         ]))
 
-        key_floats, key_chain_choice, key_start_choice = jax.random.split(key, 3)
-        rolls = jax.random.uniform(key_floats, shape=(2,))
-        retreat_roll = rolls[0]
-        start_roll = rolls[1]
         retreat_prob = self._white_ufo_retreat_prob(attack_time)
         retreat_now = jnp.logical_and(pattern_finished_off_top, retreat_roll < retreat_prob)
+
         pattern_id = jnp.where(retreat_now, int(WhiteUFOPattern.RETREAT), pattern_id)
         pattern_timer = jnp.where(retreat_now, self.consts.WHITE_UFO_RETREAT_DURATION, pattern_timer)
         attack_time = jnp.where(retreat_now, 0, attack_time)
@@ -2333,6 +2339,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             p_min=jnp.where(already_left, 0.1, self.consts.WHITE_UFO_ATTACK_P_MIN),
             p_max=self.consts.WHITE_UFO_ATTACK_P_MAX,
         )
+
         start_attack = jnp.logical_and(should_choose_new, start_roll < p_start)
 
         def choose_new_pattern(_):
@@ -2346,7 +2353,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 lane=closest_lane_id,
                 is_on_lane=is_on_lane
             )
-            is_new_triple = (pattern == int(WhiteUFOPattern.TRIPLE_SHOT_RIGHT)) | (pattern == int(WhiteUFOPattern.TRIPLE_SHOT_LEFT))
+            is_new_triple = (pattern == int(WhiteUFOPattern.TRIPLE_SHOT_RIGHT)) | (
+                        pattern == int(WhiteUFOPattern.TRIPLE_SHOT_LEFT))
             init_timer = jnp.where(is_new_triple, duration | (15 << 3), duration)
             return pattern, init_timer
 
@@ -2445,7 +2453,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         duration = self.ufo_pattern_durations[pattern]
         return pattern, duration
 
-    def _white_ufo_top_lane(self, white_ufo_pos, white_ufo_vel_x, pattern_id, key: chex.Array):
+    def _white_ufo_top_lane(self, white_ufo_pos, white_ufo_vel_x, pattern_id, motion_roll: chex.Array):
         hold_position = jnp.logical_or(
             pattern_id == int(WhiteUFOPattern.SHOOT),
             white_ufo_pos[1] > float(self.consts.TOP_CLIP),
@@ -2455,7 +2463,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         vx = jnp.where(hold_position, 0.0, white_ufo_vel_x)
         need_boost = jnp.logical_and(jnp.logical_not(hold_position), jnp.abs(vx) < min_speed)
-        random_sign = jnp.where(jax.random.uniform(key) < 0.5, -1.0, 1.0)
+
+        random_sign = jnp.where(motion_roll < 0.5, -1.0, 1.0)
+
         direction = jnp.where(vx == 0.0, random_sign, jnp.sign(vx))
         vx = jnp.where(need_boost, direction * min_speed, vx)
 
@@ -2471,6 +2481,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             vx,
         )
         return vx, 0.0
+
     def _white_ufo_normal(self, white_ufo_pos, white_ufo_vel_x, white_ufo_vel_y, pattern_id, already_left): #velocities not used anymore
         speed_factor = self.consts.WHITE_UFO_SPEED_FACTOR
         retreat_mult = self.consts.WHITE_UFO_RETREAT_SPEED_MULT
@@ -2696,8 +2707,17 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         is_sector_6_plus = state.sector >= 6
 
-        key_floats, key_wave, key_interval = jax.random.split(key, 3)
-        rolls = jax.random.uniform(key_floats, shape=(2,))
+        rolls = jax.random.uniform(key, shape=(4,))
+        start_chance_roll = rolls[0]
+        side_roll = rolls[1]
+
+        min_w = jnp.where(white_ufo_left == 0, self.consts.CHASING_METEOROID_WAVE_MIN, 1)
+        max_w = jnp.where(white_ufo_left == 0, self.consts.CHASING_METEOROID_WAVE_MAX, 3)
+        wave_count = jnp.floor(rolls[2] * (max_w - min_w + 1.0)).astype(jnp.int32) + min_w
+
+        interval_min = self.consts.CHASING_METEOROID_SPAWN_INTERVAL_MIN
+        interval_max = self.consts.CHASING_METEOROID_SPAWN_INTERVAL_MAX
+        spawn_interval = jnp.floor(rolls[3] * (interval_max - interval_min + 1.0)).astype(jnp.int32) + interval_min
 
         ms_stage = state.level.mothership_stage
         ms_pos = state.level.mothership_position
@@ -2717,22 +2737,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         start_chance = jnp.where(can_spawn_in_ms, 0.05, jnp.where(is_sector_6_plus & (white_ufo_left > 0), 0.0021, 0.0))
 
         start_wave = jnp.logical_and(
-            rolls[0] < start_chance,
+            start_chance_roll < start_chance,
             jnp.logical_not(wave_active)
         )
 
         wave_active = jnp.where(start_wave, True, wave_active)
 
-        # Chunk size: max 3 during normal play, full range during Mothership phase
-        min_w = jnp.where(white_ufo_left == 0, self.consts.CHASING_METEOROID_WAVE_MIN, 1)
-        max_w = jnp.where(white_ufo_left == 0, self.consts.CHASING_METEOROID_WAVE_MAX, 3)
-
-        wave_count = jax.random.randint(
-            key_wave,
-            (),
-            min_w,
-            max_w + 1,
-        )
         remaining = jnp.where(start_wave, wave_count, remaining)
         spawn_timer = jnp.where(start_wave, 0, spawn_timer)
 
@@ -2764,13 +2774,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         has_slot = jnp.any(jnp.logical_not(active))
         should_spawn = jnp.logical_and(should_spawn, has_slot)
 
-        spawn_interval = jax.random.randint(
-            key_interval,
-            (),
-            self.consts.CHASING_METEOROID_SPAWN_INTERVAL_MIN,
-            self.consts.CHASING_METEOROID_SPAWN_INTERVAL_MAX + 1,
-        )
-        spawn_side = jnp.where(rolls[1] < 0.5, 1, -1)
+        spawn_side = jnp.where(side_roll < 0.5, 1, -1)
         spawn_x = jnp.where(
             spawn_side == 1,
             float(self.consts.LEFT_CLIP_PLAYER),
@@ -3043,19 +3047,17 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         lane = state.level.rejuvenator_lane
         mothership_active = state.level.mothership_stage > 0
 
-        key_spawn, key_lane = jax.random.split(key)
+        rolls = jax.random.uniform(key, shape=(2,))
+        spawn_roll = rolls[0]
+        spawn_lane = jnp.floor(rolls[1] * 5.0).astype(jnp.int32) + 1
 
         # Spawning logic: only spawn if not already active
-        spawn_roll = jax.random.uniform(key_spawn)
         should_spawn = jnp.logical_and.reduce(jnp.array([
             jnp.logical_not(active),
             jnp.logical_not(mothership_active),
             spawn_roll < self.consts.REJUVENATOR_SPAWN_PROB,
             state.level.white_ufo_left > 0
         ]))
-
-        # Lanes 1 to 5
-        spawn_lane = jax.random.randint(key_lane, (), 1, 6)
 
         spawn_x = self.top_lanes_x[spawn_lane]
         spawn_y = float(self.consts.TOP_CLIP)
@@ -3099,9 +3101,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         )
 
         new_y = y + jnp.where(should_move, dy, 0.0)
-
-        # Update X based on lane
-        new_x = jnp.take(self.top_lanes_x, lane) + jnp.take(self.lane_dx_over_dy, lane) * (new_y - float(self.consts.TOP_CLIP))
+        new_x = jnp.take(self.top_lanes_x, lane) + jnp.take(self.lane_dx_over_dy, lane) * (
+                    new_y - float(self.consts.TOP_CLIP))
 
         pos = jnp.where(active, jnp.array([new_x, new_y]), pos)
         frame = jnp.where(should_move, frame + 1, frame)
@@ -3121,11 +3122,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         vel_y = state.level.falling_rock_vel_y
         mothership_active = state.level.mothership_stage > 0
 
-        key_spawn, key_lane = jax.random.split(key)
+        rolls = jax.random.uniform(key, shape=(2,))
+        spawn_roll = rolls[0]
+        spawn_lane = jnp.floor(rolls[1] * 5.0).astype(jnp.int32) + 1
 
         # Spawning logic: Level 2 onwards
         is_level_2_plus = state.sector >= 2
-        spawn_roll = jax.random.uniform(key_spawn)
         can_spawn = jnp.logical_and.reduce(jnp.array([
             is_level_2_plus,
             jnp.sum(active, dtype=jnp.int32) < self.consts.FALLING_ROCK_MAX,
@@ -3134,10 +3136,6 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         ]))
         should_spawn = jnp.logical_and(can_spawn, spawn_roll < self.consts.FALLING_ROCK_SPAWN_PROB)
 
-        # Random lane from 1 to 5 (inner lanes)
-        spawn_lane = jax.random.randint(key_lane, (), 1, 6)
-
-        # Find first inactive slot
         inactive_mask = jnp.logical_not(active)
         slot = jnp.argmax(inactive_mask)
         one_hot = jax.nn.one_hot(slot, self.consts.FALLING_ROCK_MAX, dtype=pos.dtype)
@@ -3157,8 +3155,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         # Slower during sprite 1 (y < 64) and 2 (y < 85)
         y = pos[1]
         accel = jnp.where(y < 64, 0.004,
-                jnp.where(y < 85, 0.008,
-                self.consts.FALLING_ROCK_ACCEL))
+                          jnp.where(y < 85, 0.008,
+                                    self.consts.FALLING_ROCK_ACCEL))
 
         new_vel_y = vel_y + accel
         new_y = y + new_vel_y
@@ -3327,11 +3325,14 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         hold_timer = state.level.lane_blocker_timer
         mothership_active = state.level.mothership_stage > 0
 
-        key_spawn, key_lane = jax.random.split(key)
+        rolls = jax.random.uniform(key, shape=(2,))
+        spawn_roll = rolls[0]
 
-        # Spawning logic: Level 10 onwards
+        lane_idx = jnp.floor(rolls[1] * 3.0).astype(jnp.int32)
+        middle_lanes = self.middle_lane_spawn
+        spawn_lane = middle_lanes[lane_idx]
+
         is_level_10_plus = state.sector >= self.consts.LANE_BLOCKER_START_LEVEL
-        spawn_roll = jax.random.uniform(key_spawn)
         can_spawn = jnp.logical_and.reduce(jnp.array([
             is_level_10_plus,
             jnp.sum(active, dtype=jnp.int32) < self.consts.LANE_BLOCKER_MAX,
@@ -3339,10 +3340,6 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             state.level.white_ufo_left > 0
         ]))
         should_spawn = jnp.logical_and(can_spawn, spawn_roll < self.consts.LANE_BLOCKER_SPAWN_PROB)
-
-        # Random lane from the middle lanes (2, 3, 4)
-        middle_lanes = self.middle_lane_spawn
-        spawn_lane = jax.random.choice(key_lane, middle_lanes)
 
         # Find first inactive slot
         inactive_mask = jnp.logical_not(active)
@@ -3864,7 +3861,9 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         should_spawn = is_level_12_plus & jnp.logical_not(active) & (spawn_timer >= self.consts.KAMIKAZE_SPAWN_INTERVAL)
         should_spawn = jnp.logical_and(should_spawn, jnp.logical_not(mothership_active))
 
-        spawn_lane = jax.random.randint(key, (), 1, 6) # Inner lanes 1-5
+        roll = jax.random.uniform(key)
+        spawn_lane = jnp.floor(roll * 5.0).astype(jnp.int32) + 1
+
         spawn_x = self.top_lanes_x[spawn_lane]
         spawn_y = float(self.consts.KAMIKAZE_START_Y)
 
