@@ -564,7 +564,7 @@ def single_run(config: dict):
         agent_state, obs, done, key, env_state = carry
         action, logprob, value, key = get_action_and_value(agent_state, obs, key)
 
-        next_obs, env_state, reward, next_done, _ = env_step_fn(env_state, action)
+        next_obs, env_state, reward, next_done, info = env_step_fn(env_state, action)
         storage = Storage(
             obs=obs,
             actions=action,
@@ -575,13 +575,13 @@ def single_run(config: dict):
             returns=jnp.zeros_like(reward),
             advantages=jnp.zeros_like(reward),
         )
-        return ((agent_state, next_obs, next_done, key, env_state), storage)
+        return ((agent_state, next_obs, next_done, key, env_state), storage, info)
 
     def rollout(agent_state, next_obs, next_done, key, env_state, step_once_fn, max_steps):
-        (agent_state, next_obs, next_done, key, env_state), storage = jax.lax.scan(
+        (agent_state, next_obs, next_done, key, env_state), storage, info = jax.lax.scan(
             step_once_fn, (agent_state, next_obs, next_done, key, env_state), (), max_steps
         )
-        return agent_state, next_obs, next_done, storage, key, env_state
+        return agent_state, next_obs, next_done, storage, key, env_state, info
 
     rollout = partial(rollout, step_once_fn=partial(step_once, env_step_fn=vmap_step), max_steps=config["NUM_STEPS"])
 
@@ -595,7 +595,7 @@ def single_run(config: dict):
            eval_and_vid(iteration) 
 
         iteration_time_start = time.time()
-        agent_state, next_obs, next_done, storage, key, env_state = rollout(
+        agent_state, next_obs, next_done, storage, key, env_state, info = rollout(
             agent_state, next_obs, next_done, key, env_state
         )
         global_step += config["NUM_STEPS"] * config["NUM_ENVS"]
@@ -608,13 +608,12 @@ def single_run(config: dict):
         if compile_time is None:
             compile_time = time.time()
             print(f"Compile + first iteration time: {compile_time - start_time:.2f} seconds.")
-        avg_episodic_return = np.mean(jax.device_get(env_state.returned_episode_returns))
         # print(f"global_step={global_step}, avg_episodic_return={avg_episodic_return}")
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         metrics = {
-            "charts/avg_episodic_return": avg_episodic_return,
-            "charts/avg_episodic_length": np.mean(jax.device_get(env_state.returned_episode_lengths)),
+            "charts/avg_episodic_return": info["returned_episodic_returns"].mean(), 
+            "charts/avg_episodic_length": info["returned_episodic_lengths"].mean(),
             "charts/learning_rate": agent_state.opt_state[1].hyperparams["learning_rate"].item(),
             "losses/value_loss": v_loss[-1, -1].item(),
             "losses/policy_loss": pg_loss[-1, -1].item(),
@@ -626,6 +625,8 @@ def single_run(config: dict):
             "charts/time": time.time() - start_time,
             "charts/global_step": global_step,
         }
+        # merge metrics and info (under charts/)
+        metrics = {**metrics, **{f"charts/{k}": v for k, v in info.items()}}
         wandb.log(metrics, step=iteration)
     end_time = time.time()
     print("Training done.")
