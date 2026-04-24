@@ -210,6 +210,7 @@ class PacmanConstants(struct.PyTreeNode):
     RETURN_DURATION: int = struct.field(pytree_node=False, default=int(20/2))
     MAX_CHASE_OFFSET: float = struct.field(pytree_node=False, default=20*20/10)
     MAX_SCATTER_OFFSET: float = struct.field(pytree_node=False, default=7*20/10)
+    TUNNEL_DELAY: int = struct.field(pytree_node=False, default=76)
 
     # VITAMINS (Fruit)
     VITAMIN_SPAWN_THRESHOLDS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([50, 100]))
@@ -218,7 +219,7 @@ class PacmanConstants(struct.PyTreeNode):
 
     # WEAPONS (Updated for Pacman)
     POWER_PELLET_TILES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([[1, 3], [36, 3], [1, 39], [36, 39]]))
-    POWER_PELLET_HITBOXES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([[1, 3], [36, 3], [1, 39], [36, 39], [1, 4], [36, 4], [1, 40], [36, 40]]))
+    POWER_PELLET_HITBOXES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([[1, 5], [36, 5], [1, 40], [36, 40], [0, 5], [35, 5], [0, 40], [35, 40]]))
 
     JAIL_POSITION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([75, 75]))
     INITIAL_GHOST_POSITION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([73, 78]))
@@ -356,7 +357,12 @@ class PacmanRenderer(MsPacmanRenderer):
         frame = jnp.array([0, 1, 2, 1])[cycle]
         pacman_mask = self.PACMAN_MASKS[orientation.astype(jnp.int32), frame.astype(jnp.int32)]
         
-        raster = self.jr.render_at(raster, state.player.position[0].astype(jnp.int32), state.player.position[1].astype(jnp.int32) - 1, pacman_mask)
+        raster = jax.lax.cond(
+            state.player.tunnel_timer == 0,
+            lambda r: self.jr.render_at(r, state.player.position[0].astype(jnp.int32), state.player.position[1].astype(jnp.int32) - 1, pacman_mask),
+            lambda r: r,
+            raster
+        )
         
         # 4. Ghosts
         raster = self.render_ghosts(raster, state)
@@ -478,6 +484,10 @@ def dof(pos: chex.Array, dofmaze: chex.Array, is_ghost: bool = False):
     up = jnp.where(jnp.array(is_ghost, dtype=jnp.bool_) & is_at_top & is_in_tunnel, False, up)
     down = jnp.where(jnp.array(is_ghost, dtype=jnp.bool_) & is_at_bottom & is_in_tunnel, False, down)
 
+    # Ghosts can exit the cage through the center door
+    is_cage_door = (x >= 71) & (x <= 75) & (y >= 73) & (y <= 78)
+    up = jnp.where(jnp.array(is_ghost, dtype=jnp.bool_) & is_cage_door, True, up)
+
     return up, right, left, down
 
 def available_directions(pos: chex.Array, dofmaze: chex.Array, is_ghost: bool = False):
@@ -574,7 +584,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         (
             player_position, player_action, pellets, has_pellet,
             collected_pellets, power_pellets, ate_power_pellet,
-            pellet_reward, level_id
+            pellet_reward, level_id, new_tunnel_timer
         ) = self.player_step(state, action)
 
         (fruit_state, fruit_reward) = self.fruit_step(state, player_position, collected_pellets, step_key)
@@ -619,7 +629,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
                             (player_action == Action.LEFT) | (player_action == Action.RIGHT),
                             lambda: act_to_dir(player_action).astype(jnp.int32),
                             lambda: state.player.last_horiz_dir
-                        )
+                        ),
+                        tunnel_timer=new_tunnel_timer
                     ),
                     ghosts = GhostsState(positions=ghost_positions, types=state.ghosts.types, actions=ghost_actions, modes=ghost_modes, timers=ghost_timers),
                     fruit=fruit_state,
@@ -682,12 +693,55 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         action = jnp.array(action, dtype=jnp.int32)
         action = last_pressed_action(action, state.player.action)
         action = jax.lax.cond((action < 0) | (action > len(CONSTS.ACTIONS) - 1), lambda: jnp.array(Action.NOOP, dtype=jnp.int32), lambda: action)
-        available = available_directions(state.player.position, state.level.dofmaze)
-        new_action = jax.lax.cond((action != Action.NOOP) & (action != Action.FIRE) & available[act_to_dir(action)], lambda: action, lambda: state.player.action)
-        new_pos = jax.lax.cond(stop_wall(state.player.position, state.level.dofmaze)[act_to_dir(state.player.action)], lambda: state.player.position, lambda: get_new_position(state.player.position, new_action)) 
+
+        def normal_step(_):
+            available = available_directions(state.player.position, state.level.dofmaze)
+            new_action = jax.lax.cond((action != Action.NOOP) & (action != Action.FIRE) & available[act_to_dir(action)], lambda: action, lambda: state.player.action)
+            
+            # Check for tunnel entry
+            is_in_tunnel_x = (state.player.position[0] >= 71) & (state.player.position[0] <= 74)
+            # Wrap points: y=0 moving UP, y=191 moving DOWN
+            will_wrap_up = (state.player.position[1] == 0) & (new_action == Action.UP)
+            will_wrap_down = (state.player.position[1] == 191) & (new_action == Action.DOWN)
+            is_tunnel_entry = is_in_tunnel_x & (will_wrap_up | will_wrap_down)
+            
+            def tunnel_entry_step(_):
+                return state.player.position, new_action, jnp.array(CONSTS.TUNNEL_DELAY, dtype=jnp.int32)
+            
+            def standard_step(_):
+                is_blocked = stop_wall(state.player.position, state.level.dofmaze)[act_to_dir(new_action)]
+                res_pos = jax.lax.cond(is_blocked, lambda: state.player.position, lambda: get_new_position(state.player.position, new_action))
+                return res_pos, new_action, jnp.array(0, dtype=jnp.int32)
+                
+            return jax.lax.cond(is_tunnel_entry, tunnel_entry_step, standard_step, None)
+
+        def tunnel_timer_step(_):
+            new_timer = state.player.tunnel_timer - 1
+            
+            def teleport(_):
+                # Wrapped position
+                wrapped_pos = get_new_position(state.player.position, state.player.action)
+                return wrapped_pos, state.player.action, jnp.array(0, dtype=jnp.int32)
+                
+            def wait(_):
+                return state.player.position, state.player.action, new_timer
+                
+            return jax.lax.cond(new_timer == 0, teleport, wait, None)
+
+        player_pos, player_action, tunnel_timer = jax.lax.cond(
+            state.player.tunnel_timer > 0,
+            tunnel_timer_step,
+            normal_step,
+            None
+        )
+
+        (pellets, has_pellet, collected_pellets, power_pellets, ate_power_pellet, reward, level_id) = JaxPacman.pellet_step(state, player_pos)
         
-        (pellets, has_pellet, collected_pellets, power_pellets, ate_power_pellet, reward, level_id) = JaxPacman.pellet_step(state, new_pos)
-        return (new_pos, new_action, pellets, has_pellet, collected_pellets, power_pellets, ate_power_pellet, reward, level_id)
+        # Disable interactions if in tunnel
+        reward = jax.lax.select(state.player.tunnel_timer > 0, 0, reward)
+        has_pellet = jax.lax.select(state.player.tunnel_timer > 0, False, has_pellet)
+        
+        return (player_pos, player_action, pellets, has_pellet, collected_pellets, power_pellets, ate_power_pellet, reward, level_id, tunnel_timer)
 
     @staticmethod
     def pellet_step(state: PacmanState, new_pacman_pos: chex.Array):
@@ -749,7 +803,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             n_allowed = jnp.sum(allowed != 0)
             
             chase_target = jax.lax.cond(new_mode == GhostMode.CHASE, lambda: get_chase_target(state.ghosts.types[ghost_index], state.ghosts.positions[ghost_index], state.ghosts.positions[0], state.player.position, state.player.action), lambda: CONSTS.SCATTER_TARGETS[ghost_index])
-            new_action = jax.lax.cond(skip | (new_mode == GhostMode.ENJAILED) | (new_mode == GhostMode.RETURNING), lambda: new_action, lambda: jax.lax.cond(n_allowed == 0, lambda: new_action, lambda: jax.lax.cond(n_allowed == 1, lambda: allowed[0], lambda: jax.lax.cond((new_mode == GhostMode.FRIGHTENED) | (new_mode == GhostMode.BLINKING), lambda: allowed[jax.random.randint(ghost_keys[ghost_index], (), 0, n_allowed)], lambda: pathfind(state.ghosts.positions[ghost_index], new_action, chase_target, allowed, ghost_keys[ghost_index])))))
+            new_action = jax.lax.cond(skip | (new_mode == GhostMode.ENJAILED) | (new_mode == GhostMode.RETURNING), lambda: new_action, lambda: jax.lax.cond(n_allowed == 0, lambda: jax.lax.cond((state.ghosts.positions[ghost_index][0] >= 71) & (state.ghosts.positions[ghost_index][0] <= 74) & ((state.ghosts.positions[ghost_index][1] <= 7) | (state.ghosts.positions[ghost_index][1] >= 184)), lambda: reverse_action(new_action), lambda: new_action), lambda: jax.lax.cond(n_allowed == 1, lambda: allowed[0], lambda: jax.lax.cond((new_mode == GhostMode.FRIGHTENED) | (new_mode == GhostMode.BLINKING), lambda: allowed[jax.random.randint(ghost_keys[ghost_index], (), 0, n_allowed)], lambda: pathfind(state.ghosts.positions[ghost_index], new_action, chase_target, allowed, ghost_keys[ghost_index])))))
             
             slow_down = ((new_mode == GhostMode.FRIGHTENED) | (new_mode == GhostMode.BLINKING) | (new_mode == GhostMode.RETURNING)) & (state.step_count % 2 == 0)
             new_pos = jax.lax.cond(slow_down, lambda: state.ghosts.positions[ghost_index], lambda: get_new_position(state.ghosts.positions[ghost_index], new_action))
@@ -759,11 +813,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         ghost_keys = jax.random.split(common_key, 4)
         (new_modes, new_actions, new_positions, new_timers) = jax.lax.fori_loop(0, 4, ghost_step, (jnp.zeros(4, dtype=jnp.uint8), jnp.zeros(4, dtype=jnp.uint8), jnp.zeros((4, 2), dtype=jnp.int32), jnp.zeros(4, dtype=jnp.float16)))
         
-        (new_positions, new_actions, new_modes, new_timers, eaten_ghosts, new_lives, new_death_timer, reward) = JaxPacman.ghosts_collision(new_positions, new_actions, new_modes, new_timers, state.player.position, state.player.eaten_ghosts, ate_power_pellet, state.lives)
+        (new_positions, new_actions, new_modes, new_timers, eaten_ghosts, new_lives, new_death_timer, reward) = JaxPacman.ghosts_collision(new_positions, new_actions, new_modes, new_timers, state.player.position, state.player.eaten_ghosts, ate_power_pellet, state.lives, state.player.tunnel_timer)
         return new_positions, new_actions, new_modes, new_timers, eaten_ghosts, new_lives, new_death_timer, reward
 
     @staticmethod
-    def ghosts_collision(ghost_positions, ghost_actions, ghost_modes, ghost_timers, new_pacman_pos, eaten_ghosts, ate_power_pellet, lives):
+    def ghosts_collision(ghost_positions, ghost_actions, ghost_modes, ghost_timers, new_pacman_pos, eaten_ghosts, ate_power_pellet, lives, tunnel_timer):
         class GhostStates(NamedTuple):
             pacman_position: chex.Array
             reward: chex.Array
@@ -781,7 +835,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             def handle_death():
                 return ghost_states._replace(deadly_collision=True)
             
-            is_collision = False # detect_collision(ghost_states.pacman_position, ghost_states.ghost_positions[ghost_index])
+            is_collision = jax.lax.cond(tunnel_timer > 0, lambda: False, lambda: False) # detect_collision(ghost_states.pacman_position, ghost_states.ghost_positions[ghost_index])
             return jax.lax.cond(is_collision, lambda: jax.lax.cond((ghost_states.ghost_modes[ghost_index] == GhostMode.FRIGHTENED) | (ghost_states.ghost_modes[ghost_index] == GhostMode.BLINKING), handle_eaten, handle_death), lambda: ghost_states)
 
         new_eaten = jax.lax.cond(ate_power_pellet, lambda: jnp.array(0, dtype=jnp.uint8), lambda: jnp.array(eaten_ghosts, dtype=jnp.uint8))
@@ -872,7 +926,8 @@ def reset_player():
         action=jnp.array(Action.LEFT, dtype=jnp.int32), 
         has_pellet=jnp.array(False, dtype=jnp.bool_), 
         eaten_ghosts=jnp.array(0, dtype=jnp.uint8),
-        last_horiz_dir=jnp.array(2, dtype=jnp.int32)
+        last_horiz_dir=jnp.array(2, dtype=jnp.int32),
+        tunnel_timer=jnp.array(0, dtype=jnp.int32)
     )
 
 def reset_ghosts():
