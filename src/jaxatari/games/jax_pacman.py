@@ -1115,13 +1115,30 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             return power_pellets.at[idx % 4].set(False)
         
         def check_pellet(pos: chex.Array):
-            return (pos[0] % 4 == 1) & (pos[1] % 24 == 6)
+            return pos[1] % 24 == 6
 
         def eat_pellet(pos: chex.Array, pellets: chex.Array):
             adjusted_x = jax.lax.select(pos[0] > 85, pos[0] - 4, pos[0])
-            tile_x, tile_y = (adjusted_x - 2) // 8, (pos[1] + 4) // 24
-            in_bounds = (tile_x >= 0) & (tile_x < pellets.shape[0]) & (tile_y >= 0) & (tile_y < pellets.shape[1])
-            return jax.lax.cond(pellets[tile_x, tile_y] & in_bounds, lambda: (pellets.at[tile_x, tile_y].set(False), True), lambda: (pellets, False))
+            tile_y = (pos[1] + 4) // 24
+            
+            tile_x1 = (adjusted_x - 2) // 8
+            tile_x2 = (adjusted_x + 1) // 8
+            
+            in_bounds1 = (tile_x1 >= 0) & (tile_x1 < pellets.shape[0]) & (tile_y >= 0) & (tile_y < pellets.shape[1])
+            in_bounds2 = (tile_x2 >= 0) & (tile_x2 < pellets.shape[0]) & (tile_y >= 0) & (tile_y < pellets.shape[1])
+            
+            has_1 = pellets[tile_x1, tile_y] & in_bounds1
+            has_2 = pellets[tile_x2, tile_y] & in_bounds2
+            
+            return jax.lax.cond(
+                has_1,
+                lambda: (pellets.at[tile_x1, tile_y].set(False), True),
+                lambda: jax.lax.cond(
+                    has_2,
+                    lambda: (pellets.at[tile_x2, tile_y].set(False), True),
+                    lambda: (pellets, False)
+                )
+            )
         pellets, ate_pellet = jax.lax.cond(check_pellet(new_pacman_pos), lambda: eat_pellet(new_pacman_pos, state.level.pellets), lambda: (state.level.pellets, False))
         power_pellet_hit = jnp.where(jnp.all(jnp.round(new_pacman_pos / PacmanMaze.TILE_SCALE) == CONSTS.POWER_PELLET_HITBOXES, axis=1), size=1, fill_value=-1)[0][0]
         power_pellets, ate_power_pellet = jax.lax.cond(check_power_pellet(power_pellet_hit, state.level.power_pellets), lambda: (eat_power_pellet(power_pellet_hit, state.level.power_pellets), True), lambda: (state.level.power_pellets, False))
