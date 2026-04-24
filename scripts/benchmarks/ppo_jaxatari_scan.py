@@ -56,7 +56,7 @@ def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, native_downscali
                 episodic_life=not eval, # only active during training 
                 first_fire=True,
                 noop_max=30,
-                full_action_space=False
+                full_action_space=False,
         )
         if pixel_based:
             env = PixelObsWrapper(
@@ -575,10 +575,10 @@ def single_run(config: dict):
             returns=jnp.zeros_like(reward),
             advantages=jnp.zeros_like(reward),
         )
-        return ((agent_state, next_obs, next_done, key, env_state), storage, info)
+        return ((agent_state, next_obs, next_done, key, env_state), (storage, info))
 
     def rollout(agent_state, next_obs, next_done, key, env_state, step_once_fn, max_steps):
-        (agent_state, next_obs, next_done, key, env_state), storage, info = jax.lax.scan(
+        (agent_state, next_obs, next_done, key, env_state), (storage, info) = jax.lax.scan(
             step_once_fn, (agent_state, next_obs, next_done, key, env_state), (), max_steps
         )
         return agent_state, next_obs, next_done, storage, key, env_state, info
@@ -612,8 +612,8 @@ def single_run(config: dict):
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         metrics = {
-            "charts/avg_episodic_return": info["returned_episodic_returns"].mean(), 
-            "charts/avg_episodic_length": info["returned_episodic_lengths"].mean(),
+            "charts/avg_episodic_return": info["returned_episode_returns"].mean(), 
+            "charts/avg_episodic_length": info["returned_episode_lengths"].mean(),
             "charts/learning_rate": agent_state.opt_state[1].hyperparams["learning_rate"].item(),
             "losses/value_loss": v_loss[-1, -1].item(),
             "losses/policy_loss": pg_loss[-1, -1].item(),
@@ -626,7 +626,6 @@ def single_run(config: dict):
             "charts/global_step": global_step,
         }
         # merge metrics and info (under charts/)
-        metrics = {**metrics, **{f"charts/{k}": v for k, v in info.items()}}
         wandb.log(metrics, step=iteration)
     end_time = time.time()
     print("Training done.")

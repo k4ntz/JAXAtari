@@ -227,7 +227,6 @@ class AtariWrapper(JaxatariWrapper):
         info_dict["env_reward"] = reward
 
         truncated = (state.step + 1 >= self.max_frames_per_episode)
-
         return obs, next_state, reward, terminated, truncated, info_dict
 
 
@@ -328,7 +327,7 @@ class ObjectCentricWrapper(JaxatariWrapper):
         truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
         obs_stack, oc_state = jax.lax.cond(
-            infos["env_done"].any(),  # use actual env_done for reset condition, not affected by episodic life
+            jnp.logical_or(infos["env_done"].any(), truncated),  # use actual env_done for reset condition, not affected by episodic life
             lambda: self.reset(atari_state.key),  # reset if done, using the current key for proper random state advancement
             lambda: (obs_stack, ObjectCentricState(atari_state, obs_stack)),  # step if not done
         )
@@ -500,7 +499,7 @@ class PixelObsWrapper(JaxatariWrapper):
         truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
         image_stack, pixel_state = jax.lax.cond(
-            infos["env_done"].any(),  # use actual env_done for reset condition, not affected by episodic life
+            jnp.logical_or(infos["env_done"].any(), truncated),  # use actual env_done for reset condition, not affected by episodic life
             lambda: self.reset(atari_state.key),  
             lambda: (image_stack, PixelState(atari_state, image_stack))
         )
@@ -667,7 +666,7 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
         (image_stack, obs_stack), pixel_oc_state = jax.lax.cond(
-            infos["env_done"].any(),  # use actual env_done for reset condition, not affected by episodic life
+            jnp.logical_or(infos["env_done"].any(), truncated),  # use actual env_done for reset condition, not affected by episodic life
             lambda: self.reset(atari_state.key),
             lambda: ((image_stack, obs_stack), PixelAndObjectCentricState(atari_state, image_stack, obs_stack))
         )
@@ -746,7 +745,7 @@ class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
         truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
         (image_stack, obs_stack), pixel_oc_state = jax.lax.cond(
-            infos["env_done"].any(),
+            jnp.logical_or(infos["env_done"].any(), truncated),  # use actual env_done for reset condition, not affected by episodic life
             lambda: self.reset(atari_state.key),
             lambda: ((image_stack, obs_stack), PixelAndObjectCentricState(atari_state, image_stack, obs_stack)),
         )
