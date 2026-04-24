@@ -4,6 +4,7 @@ import time
 import signal
 import re
 import math
+from datetime import datetime, timezone
 from contextlib import contextmanager
 from itertools import combinations
 from typing import Any, Dict, List, Optional, Tuple, cast
@@ -472,6 +473,14 @@ def _open_results_csv_writer(csv_path: str, fieldnames: List[str]):
     return abs_path, csv_file, writer
 
 
+def _append_timestamp_to_csv_path(csv_path: str) -> str:
+    root, ext = os.path.splitext(csv_path)
+    if not ext:
+        ext = ".csv"
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return f"{root}_{timestamp}{ext}"
+
+
 def _write_results_csv_row(csv_file, csv_writer, row: Dict[str, Any]):
     csv_writer.writerow(row)
     csv_file.flush()
@@ -650,8 +659,9 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     csv_file = None
     csv_writer = None
     if save_results_csv:
-        print("Writing results to CSV at:", results_csv_path)
-        csv_output_path, csv_file, csv_writer = _open_results_csv_writer(results_csv_path, RESULT_COLUMNS)
+        csv_output_path = _append_timestamp_to_csv_path(results_csv_path)
+        print("Writing results to CSV at:", csv_output_path)
+        csv_output_path, csv_file, csv_writer = _open_results_csv_writer(csv_output_path, RESULT_COLUMNS)
 
     def _record_result_row(row: Dict[str, Any]):
         nonlocal run_step
