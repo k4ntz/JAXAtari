@@ -164,6 +164,7 @@ class SkiingConstants(AutoDerivedConstants):
 
     # Asset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
+    fps = 60 # this is required.
 
 
 @struct.dataclass
@@ -860,15 +861,15 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: SkiingState, state: SkiingState):
         if self.consts.USE_ORIGINAL_ALE_REWARD:
-            done = self._get_done(state)
+            # https://github.com/Farama-Foundation/Arcade-Learning-Environment/blob/d10a9b3f2ea27da2a53d3bed732ef62c5c51b82f/src/ale/games/supported/Skiing.cpp
             # In ALE, the final reward incorporates a massive penalty for missed gates.
-            # state.successful_gates tracks (20 - successfully_passed_gates), which represents the missed gates.
+            done = self._get_done(state)
             missed_gates = 20 - state.successful_gates
-            end_penalty = - missed_gates * 500
+            end_penalty = -(missed_gates * 500.0)
             
             step_reward = self.consts.ORIGINAL_SCORES[state.step_count % 3] # time penalty
-            
-            return jnp.where(done, end_penalty, step_reward).astype(jnp.float32)
+            reward = jnp.where(done, end_penalty, step_reward).astype(jnp.float32)
+            return reward
             
         return (previous_state.successful_gates - state.successful_gates).astype(jnp.float32)
 
@@ -1042,7 +1043,7 @@ class SkiingRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def _format_step_count_digits(self, t: jnp.ndarray) -> jnp.ndarray:
         t = jnp.maximum(t.astype(jnp.float32), 0.0)
-        FPS = jnp.float32(60.0)
+        FPS = jnp.float32(self.consts.fps)
         seconds_total = t / FPS
 
         minutes_digit = (jnp.floor(seconds_total / 60.0).astype(jnp.int32)) % 10
