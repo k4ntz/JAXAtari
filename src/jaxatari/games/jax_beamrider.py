@@ -201,7 +201,7 @@ class StandbyPhase(IntEnum):
 
 @struct.dataclass
 class BeamriderConstants:
-    STARTING_SECTOR: int = struct.field(pytree_node=False, default=1)
+    STARTING_SECTOR: int = struct.field(pytree_node=False, default=12)
     STARTING_LIVES: int = struct.field(pytree_node=False, default=3)
     MAX_LIVES: int = struct.field(pytree_node=False, default=14)
     WHITE_UFOS_PER_SECTOR: int = struct.field(pytree_node=False, default=15)
@@ -321,7 +321,7 @@ class BeamriderConstants:
 
     # Falling Rock constants
     FALLING_ROCK_MAX: int = struct.field(pytree_node=False, default=3)
-    FALLING_ROCK_SPAWN_PROB: float = struct.field(pytree_node=False, default=0.0002)
+    FALLING_ROCK_SPAWN_PROB: float = struct.field(pytree_node=False, default=0.002)
     FALLING_ROCK_SPAWN_Y: float = struct.field(pytree_node=False, default=43.0)
     FALLING_ROCK_BOTTOM_CLIP: float = struct.field(pytree_node=False, default=164.0)
     FALLING_ROCK_INIT_VEL: float = struct.field(pytree_node=False, default=0.07)
@@ -3825,37 +3825,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: BeamriderState):
-        is_init = state.level.blue_line_counter < len(BLUE_LINE_INIT_TABLE)
-
-        ufo_offscreen = self.enemy_offscreen_ufo
-        enemy_shot_offscreen = self.bullet_offscreen_shots
-        chasing_meteoroid_offscreen = self.enemy_offscreen_meteoroids
-        falling_rock_offscreen = self.enemy_offscreen_falling
-        lane_blocker_offscreen = self.enemy_offscreen_lane_blocker
-        coin_offscreen = self.enemy_offscreen_coins
-        rejuv_offscreen = self.enemy_offscreen
-
-        # Create a state for rendering where enemies are offscreen if initializing
-        render_level = state.level.replace(
-            white_ufo_pos=jnp.where(is_init, ufo_offscreen, state.level.white_ufo_pos),
-            enemy_shot_pos=jnp.where(is_init, enemy_shot_offscreen, state.level.enemy_shot_pos),
-            enemy_shot_explosion_pos=jnp.where(is_init, enemy_shot_offscreen, state.level.enemy_shot_explosion_pos),
-            chasing_meteoroid_pos=jnp.where(is_init, chasing_meteoroid_offscreen, state.level.chasing_meteoroid_pos),
-            rejuvenator_pos=jnp.where(is_init, rejuv_offscreen, state.level.rejuvenator_pos),
-            rejuvenator_explosion_pos=jnp.where(is_init, rejuv_offscreen, state.level.rejuvenator_explosion_pos),
-            falling_rock_pos=jnp.where(is_init, falling_rock_offscreen, state.level.falling_rock_pos),
-            falling_rock_explosion_pos=jnp.where(is_init, falling_rock_offscreen, state.level.falling_rock_explosion_pos),
-            lane_blocker_pos=jnp.where(is_init, lane_blocker_offscreen, state.level.lane_blocker_pos),
-            lane_blocker_explosion_pos=jnp.where(is_init, lane_blocker_offscreen, state.level.lane_blocker_explosion_pos),
-            lane_blocker_active=jnp.where(is_init, False, state.level.lane_blocker_active),
-            coin_pos=jnp.where(is_init, coin_offscreen, state.level.coin_pos),
-            coin_explosion_pos=jnp.where(is_init, coin_offscreen, state.level.coin_explosion_pos),
-            bouncer_pos=jnp.where(is_init, self.enemy_offscreen, state.level.bouncer_pos),
-            bouncer_active=jnp.where(is_init, False, state.level.bouncer_active),
-        )
-        render_state = state.replace(level=render_level)
-
-        return self.renderer.render(render_state)
+        return self.renderer.render(state)
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
@@ -4095,6 +4065,12 @@ class BeamriderRenderer(JAXGameRenderer):
         self._torpedo_icon_thresholds = jnp.array([3, 2, 1], dtype=jnp.int32)
         self._torpedo_icon_ys = jnp.array([128, 136, 144], dtype=jnp.int32)
 
+        self._lane_blocker_height = self.SHAPE_MASKS["lane_blocker"][0].shape[0]
+        self._lane_blocker_row_idx = jnp.arange(self._lane_blocker_height)
+
+        self._mothership_mask_height = self.SHAPE_MASKS["mothership"].shape[0]
+        self._mothership_y_indices = jnp.arange(self._mothership_mask_height)[:, None]
+
     # def _create_player_sprite(self) -> jnp.ndarray:
     #     """Procedurally creates an RGBA sprite for the background"""
     #     player_color_rgba = (214, 239, 30, 0.7) # e.g., (236, 236, 236, 255)
@@ -4213,7 +4189,7 @@ class BeamriderRenderer(JAXGameRenderer):
         
         def render_color(r, mask_name):
             mask = self.SHAPE_MASKS[mask_name]
-            return self.jr.render_at_clipped(r, 0, 0, mask)
+            return self.jr.render_at(r, 0, 0, mask)
 
         conditions = jnp.array([
             is_yellow_flash | is_yellow_death,
@@ -4284,9 +4260,10 @@ class BeamriderRenderer(JAXGameRenderer):
     def _render_coins(self, raster, state):
         coin_masks = self.SHAPE_MASKS["coin"]
         explosion_masks = self.SHAPE_MASKS["enemy_explosion"]
+        is_init = self._is_init(state)
         
         def body_fun(raster, idx):
-            active = state.level.coin_active[idx]
+            active = state.level.coin_active[idx] & jnp.logical_not(is_init)
             timer = state.level.coin_timer[idx]
             pos = state.level.coin_pos[:, idx]
             explosion_frame = state.level.coin_explosion_frame[idx]
@@ -4295,8 +4272,7 @@ class BeamriderRenderer(JAXGameRenderer):
                 sprite_idx, y_offset = self._get_enemy_explosion_visuals(explosion_frame)
                 sprite = explosion_masks[sprite_idx]
                 x_pos = state.level.coin_explosion_pos[0][idx] + _get_ufo_alignment(
-                    state.level.coin_explosion_pos[1][idx]
-                )
+                    state.level.coin_explosion_pos[1][idx])
                 y_pos = state.level.coin_explosion_pos[1][idx] + y_offset
                 return self.jr.render_at_clipped(r_in, x_pos, y_pos, sprite)
 
@@ -4308,16 +4284,10 @@ class BeamriderRenderer(JAXGameRenderer):
                 
                 # Adjust X for screen position
                 x_pos = pos[0] + _get_ufo_alignment(pos[1])
-                y_pos = jnp.where(active, pos[1], 500)
-                return self.jr.render_at_clipped(r_in, x_pos, y_pos, mask)
+                return jax.lax.cond(active, lambda r: self.jr.render_at_clipped(r, x_pos, pos[1], mask), lambda r: r,
+                                    r_in)
 
-            new_raster = jax.lax.cond(
-                explosion_frame > 0,
-                render_explosion,
-                render_coin,
-                raster,
-            )
-            return new_raster, None
+            return jax.lax.cond(explosion_frame > 0, render_explosion, render_coin, raster), None
 
         raster, _ = jax.lax.scan(body_fun, raster, jnp.arange(self.consts.COIN_MAX))
         return raster
@@ -4325,9 +4295,10 @@ class BeamriderRenderer(JAXGameRenderer):
     def _render_falling_rocks(self, raster, state):
         falling_rock_masks = self.SHAPE_MASKS["falling_rocks"]
         explosion_masks = self.SHAPE_MASKS["enemy_explosion"]
-        
+        is_init = self._is_init(state)
+
         def body_fun(idx, r_in):
-            is_active = state.level.falling_rock_active[idx]
+            is_active = state.level.falling_rock_active[idx] & jnp.logical_not(is_init)
             explosion_frame = state.level.falling_rock_explosion_frame[idx]
 
             def render_explosion(r):
@@ -4361,17 +4332,17 @@ class BeamriderRenderer(JAXGameRenderer):
     def _render_lane_blockers(self, raster, state):
         lane_blocker_masks = self.SHAPE_MASKS["lane_blocker"]
         explosion_masks = self.SHAPE_MASKS["enemy_explosion"]
-        
+        is_init = self._is_init(state)
+
         def body_fun(idx, r_in):
-            is_active = state.level.lane_blocker_active[idx]
+            is_active = state.level.lane_blocker_active[idx] & jnp.logical_not(is_init)
             explosion_frame = state.level.lane_blocker_explosion_frame[idx]
 
             def render_explosion(r):
                 sprite_idx, y_offset = self._get_enemy_explosion_visuals(explosion_frame)
                 sprite = explosion_masks[sprite_idx]
                 x_pos = state.level.lane_blocker_explosion_pos[0][idx] + _get_ufo_alignment(
-                    state.level.lane_blocker_explosion_pos[1][idx]
-                )
+                    state.level.lane_blocker_explosion_pos[1][idx])
                 y_pos = state.level.lane_blocker_explosion_pos[1][idx] + y_offset
                 return self.jr.render_at(r, x_pos, y_pos, sprite)
 
@@ -4380,20 +4351,14 @@ class BeamriderRenderer(JAXGameRenderer):
                 sprite_idx = jnp.clip(sprite_idx, 0, lane_blocker_masks.shape[0] - 1)
                 base_sprite = lane_blocker_masks[sprite_idx]
 
-                x_pos = state.level.lane_blocker_pos[0][idx] + _get_ufo_alignment(
-                    state.level.lane_blocker_pos[1][idx]
-                )
+                x_pos = state.level.lane_blocker_pos[0][idx] + _get_ufo_alignment(state.level.lane_blocker_pos[1][idx])
                 y_pos = state.level.lane_blocker_pos[1][idx]
 
-                clip_rows = jnp.maximum(
-                    0, jnp.round(y_pos - self.consts.LANE_BLOCKER_BOTTOM_Y).astype(jnp.int32)
-                )
+                clip_rows = jnp.maximum(0, jnp.round(y_pos - self.consts.LANE_BLOCKER_BOTTOM_Y).astype(jnp.int32))
                 is_sinking = state.level.lane_blocker_phase[idx] == int(LaneBlockerState.SINK)
 
-                height = base_sprite.shape[0]
-                visible_rows = jnp.maximum(0, height - clip_rows)
-                row_idx = jnp.arange(height)
-                row_mask = row_idx < visible_rows
+                visible_rows = jnp.maximum(0, self._lane_blocker_height - clip_rows)
+                row_mask = self._lane_blocker_row_idx < visible_rows
                 transparent = jnp.array(self.jr.TRANSPARENT_ID, dtype=base_sprite.dtype)
 
                 clipped_sprite = jnp.where(row_mask[:, None], base_sprite, transparent)
@@ -4408,15 +4373,16 @@ class BeamriderRenderer(JAXGameRenderer):
                 r_in
             )
 
-        raster = jax.lax.fori_loop(0, self.consts.LANE_BLOCKER_MAX, body_fun, raster)
-        return raster
+        return jax.lax.fori_loop(0, self.consts.LANE_BLOCKER_MAX, body_fun, raster)
 
     def _render_rejuvenator(self, raster, state):
         rejuv_pos = state.level.rejuvenator_pos
-        active = state.level.rejuvenator_active
+        is_active = state.level.rejuvenator_active & jnp.logical_not(self._is_init(state))
         dead = state.level.rejuvenator_dead
         explosion_frame = state.level.rejuvenator_explosion_frame
+
         explosion_masks = self.SHAPE_MASKS["enemy_explosion"]
+        rejuv_masks = self.SHAPE_MASKS["rejuvenator"]
 
         def render_explosion(r_in):
             sprite_idx, y_offset = self._get_enemy_explosion_visuals(explosion_frame)
@@ -4427,43 +4393,39 @@ class BeamriderRenderer(JAXGameRenderer):
             y_pos = state.level.rejuvenator_explosion_pos[1] + y_offset
             return self.jr.render_at_clipped(r_in, x_pos, y_pos, sprite)
 
-        def render_rejuv(r_in):
-            # Determine mask
-            rejuv_masks = self.SHAPE_MASKS["rejuvenator"]
-            
-            stage = _get_index_rejuvenator(rejuv_pos[1])
-            # stage 1..4 maps to masks 0..3
-            # dead state is mask index 4
-            sprite_idx = jnp.where(dead, 4, jnp.clip(stage - 1, 0, 3))
-            
-            mask = rejuv_masks[sprite_idx]
-            
-            # Handle offscreen for rendering: ensure they are definitely outside [0, 160/210]
-            final_y = jnp.where(active, rejuv_pos[1], -50.0)
-            final_x = jnp.where(active, rejuv_pos[0], -50.0)
-            
-            return self.jr.render_at_clipped(r_in, final_x, final_y, mask)
+        def render_active_rejuv(r_in):
+            def draw_rejuv(r):
+                stage = _get_index_rejuvenator(rejuv_pos[1])
+                # stage 1..4 maps to masks 0..3, dead state is mask index 4
+                sprite_idx = jnp.where(dead, 4, jnp.clip(stage - 1, 0, 3))
+                mask = rejuv_masks[sprite_idx]
+
+                return self.jr.render_at_clipped(r, rejuv_pos[0], rejuv_pos[1], mask)
+
+            return jax.lax.cond(is_active, draw_rejuv, lambda r: r, r_in)
 
         return jax.lax.cond(
             explosion_frame > 0,
             render_explosion,
-            render_rejuv,
+            render_active_rejuv,
             raster,
         )
+
+    def _is_init(self, state: BeamriderState) -> jnp.bool_:
+        return state.level.blue_line_counter < len(BLUE_LINE_INIT_TABLE)
 
     def _render_blue_lines(self, raster, state):
         """Draw the scrolling foreground lines."""
 
         blue_line_mask = self.SHAPE_MASKS["blue_line"]
-        
+
         def body_fun(raster, idx):
             y_pos = state.level.line_positions[idx]
-            # y_pos is -1 if line is inactive
-            final_y = jnp.where(y_pos >= 0, y_pos, self.consts.BLUE_LINE_OFFSCREEN_Y)
-            new_raster = self.jr.render_at_clipped(
-                raster, 8, final_y, blue_line_mask
-            )
-            return new_raster, None
+
+            def draw(r):
+                return self.jr.render_at_clipped(r, 8, y_pos, blue_line_mask)
+
+            return jax.lax.cond(y_pos >= 0, draw, lambda r: r, raster), None
 
         raster, _ = jax.lax.scan(body_fun, raster, jnp.arange(7))
         return raster
@@ -4486,9 +4448,11 @@ class BeamriderRenderer(JAXGameRenderer):
         def body_fun(raster, idx):
             threshold = thresholds[idx]
             y = ys[idx]
-            y_pos = jnp.where(state.level.torpedoes_left >= threshold, y, 500)
-            new_raster = self.jr.render_at_clipped(raster, y_pos, 32, torpedo_mask)
-            return new_raster, None
+
+            def draw(r):
+                return self.jr.render_at(r, y, 32, torpedo_mask)
+
+            return jax.lax.cond(state.level.torpedoes_left >= threshold, draw, lambda r: r, raster), None
 
         raster, _ = jax.lax.scan(body_fun, raster, jnp.arange(3))
         return raster
@@ -4555,11 +4519,13 @@ class BeamriderRenderer(JAXGameRenderer):
                 jnp.logical_and(visible_normally, flash_visible),
                 visible_normally
             )
-            
+
             # Icons start at x=32, spaced by 9 pixels
-            pos_x = jnp.where(is_visible, 32 + (idx * 9), -100)
-            new_raster = self.jr.render_at_clipped(raster, pos_x, 183, hp_mask)
-            return new_raster, None
+            def draw(r):
+                pos_x = 32 + (idx * 9)
+                return self.jr.render_at(r, pos_x, 183, hp_mask)
+
+            return jax.lax.cond(is_visible, draw, lambda r: r, raster), None
 
         raster, _ = jax.lax.scan(body_fun, raster, jnp.arange(max_visible_lives))
         return raster
@@ -4710,13 +4676,11 @@ class BeamriderRenderer(JAXGameRenderer):
 
         def render_active_bouncer(r_in):
             is_active = state.level.bouncer_active
-            y_pos = jnp.where(is_active, state.level.bouncer_pos[1], 500)
-            x_pos = jnp.where(
-                is_active,
-                state.level.bouncer_pos[0] + _get_ufo_alignment(y_pos),
-                500,
-            )
-            return self.jr.render_at_clipped(r_in, x_pos, y_pos, bouncer_mask)
+            def draw_bouncer(r_draw):
+                y_pos = state.level.bouncer_pos[1]
+                x_pos = state.level.bouncer_pos[0] + _get_ufo_alignment(y_pos)
+                return self.jr.render_at_clipped(r_draw, x_pos, y_pos, bouncer_mask)
+            return jax.lax.cond(is_active, draw_bouncer, lambda r_skip: r_skip, r_in)
 
         return jax.lax.cond(
             explosion_frame > 0,
@@ -4728,7 +4692,8 @@ class BeamriderRenderer(JAXGameRenderer):
     def _render_chasing_meteoroids(self, raster, state):
         meteoroid_mask = self.SHAPE_MASKS["chasing_meteoroid"]
         explosion_masks = self.SHAPE_MASKS["enemy_explosion"]
-        
+        is_init = self._is_init(state)
+
         def body_fun(raster, idx):
             explosion_frame = state.level.chasing_meteoroid_explosion_frame[idx]
 
@@ -4742,14 +4707,15 @@ class BeamriderRenderer(JAXGameRenderer):
                 return self.jr.render_at_clipped(r_in, x_pos, y_pos, sprite)
 
             def render_meteoroid(r_in):
-                is_active = state.level.chasing_meteoroid_active[idx]
-                y_pos = jnp.where(is_active, state.level.chasing_meteoroid_pos[1][idx], 500)
-                x_pos = jnp.where(
-                    is_active,
-                    state.level.chasing_meteoroid_pos[0][idx] + _get_ufo_alignment(y_pos),
-                    500,
-                )
-                return self.jr.render_at_clipped(r_in, x_pos, y_pos, meteoroid_mask)
+                is_active = state.level.chasing_meteoroid_active[idx] & jnp.logical_not(is_init)
+
+                # Schritt 3: Rendering komplett überspringen, wenn inaktiv
+                def draw(r):
+                    y_pos = state.level.chasing_meteoroid_pos[1][idx]
+                    x_pos = state.level.chasing_meteoroid_pos[0][idx] + _get_ufo_alignment(y_pos)
+                    return self.jr.render_at_clipped(r, x_pos, y_pos, meteoroid_mask)
+
+                return jax.lax.cond(is_active, draw, lambda r: r, r_in)
 
             new_raster = jax.lax.cond(
                 explosion_frame > 0,
