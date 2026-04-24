@@ -184,7 +184,6 @@ class PlayerState(NamedTuple):
     has_pellet: chex.Array          # Bool - Indicates if pacman just collected a pellet
     eaten_ghosts: chex.Array        # Int - Indicates the number of ghosts eaten since the last power pellet
     last_horiz_dir: chex.Array = jnp.array(2, dtype=jnp.int32) # Default LEFT (2 in act_to_dir)
-    tunnel_timer: chex.Array = jnp.array(0, dtype=jnp.int32)
 
 class FruitState(NamedTuple):
     position: chex.Array            # Tuple - (x, y)
@@ -1596,8 +1595,7 @@ def reset_player():
         position            = INITIAL_PACMAN_POSITION,
         action              = INITIAL_ACTION,
         has_pellet          = jnp.array(False),
-        eaten_ghosts        = jnp.array(0, dtype=jnp.uint8), # number of eaten ghost since power pellet consumed
-        tunnel_timer        = jnp.array(0, dtype=jnp.int32)
+        eaten_ghosts        = jnp.array(0, dtype=jnp.uint8)
     )
 
 def reset_ghosts():
