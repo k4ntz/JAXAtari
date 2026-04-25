@@ -226,8 +226,7 @@ class AtariWrapper(JaxatariWrapper):
         # store actual reward in info dict before clipping
         info_dict["env_reward"] = reward
 
-        truncated = jnp.where(state.step + 1 >= self.max_frames_per_episode, True, False)
-
+        truncated = (state.step + 1 >= self.max_frames_per_episode)
         return obs, next_state, reward, terminated, truncated, info_dict
 
 
@@ -260,6 +259,9 @@ class ObjectCentricWrapper(JaxatariWrapper):
                 high_arr = np.broadcast_to(leaf_space.high, leaf_space.shape).flatten()
                 lows.append(low_arr)
                 highs.append(high_arr)
+            elif isinstance(leaf_space, spaces.Discrete):
+                lows.append(np.array([0], dtype=leaf_space.dtype))
+                highs.append(np.array([leaf_space.n - 1], dtype=leaf_space.dtype))
             else:
                 raise TypeError(f"Unsupported space type for flattening: {type(leaf_space)}")
 
@@ -325,7 +327,7 @@ class ObjectCentricWrapper(JaxatariWrapper):
         truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
         obs_stack, oc_state = jax.lax.cond(
-            infos["env_done"].any(),  # use actual env_done for reset condition, not affected by episodic life
+            jnp.logical_or(infos["env_done"].any(), truncated),  # use actual env_done for reset condition, not affected by episodic life
             lambda: self.reset(atari_state.key),  # reset if done, using the current key for proper random state advancement
             lambda: (obs_stack, ObjectCentricState(atari_state, obs_stack)),  # step if not done
         )
@@ -405,7 +407,7 @@ class PixelObsWrapper(JaxatariWrapper):
     Apply this wrapper after the AtariWrapper!
     """
     # TODO: remove do_pixel_resize and resize whenever a different shape / grayscale is given?
-    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False, use_native_downscaling: bool = False, smooth_image: bool = True, frame_stack_size: int = 4, frame_skip: int = 4, max_pooling: bool = True, clip_reward: bool = True):
+    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False, use_native_downscaling: bool = False, smooth_image: bool = False, frame_stack_size: int = 4, frame_skip: int = 4, max_pooling: bool = True, clip_reward: bool = True):
         super().__init__(env)
         assert isinstance(env, AtariWrapper), "PixelObsWrapper has to be applied after AtariWrapper"
         self.frame_stack_size = frame_stack_size
@@ -497,7 +499,7 @@ class PixelObsWrapper(JaxatariWrapper):
         truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
         image_stack, pixel_state = jax.lax.cond(
-            infos["env_done"].any(),  # use actual env_done for reset condition, not affected by episodic life
+            jnp.logical_or(infos["env_done"].any(), truncated),  # use actual env_done for reset condition, not affected by episodic life
             lambda: self.reset(atari_state.key),  
             lambda: (image_stack, PixelState(atari_state, image_stack))
         )
@@ -573,6 +575,9 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
                 high_arr = np.broadcast_to(leaf_space.high, leaf_space.shape).flatten()
                 lows.append(low_arr)
                 highs.append(high_arr)
+            elif isinstance(leaf_space, spaces.Discrete):
+                lows.append(np.array([0], dtype=leaf_space.dtype))
+                highs.append(np.array([leaf_space.n - 1], dtype=leaf_space.dtype))
             else:
                 raise TypeError(f"Unsupported space type for flattening: {type(leaf_space)}")
         
@@ -661,7 +666,7 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
         (image_stack, obs_stack), pixel_oc_state = jax.lax.cond(
-            infos["env_done"].any(),  # use actual env_done for reset condition, not affected by episodic life
+            jnp.logical_or(infos["env_done"].any(), truncated),  # use actual env_done for reset condition, not affected by episodic life
             lambda: self.reset(atari_state.key),
             lambda: ((image_stack, obs_stack), PixelAndObjectCentricState(atari_state, image_stack, obs_stack))
         )
@@ -740,7 +745,7 @@ class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
         truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
         (image_stack, obs_stack), pixel_oc_state = jax.lax.cond(
-            infos["env_done"].any(),
+            jnp.logical_or(infos["env_done"].any(), truncated),  # use actual env_done for reset condition, not affected by episodic life
             lambda: self.reset(atari_state.key),
             lambda: ((image_stack, obs_stack), PixelAndObjectCentricState(atari_state, image_stack, obs_stack)),
         )
@@ -955,6 +960,7 @@ class LogWrapper(JaxatariWrapper):
         new_episode_length = state.episode_lengths + 1
         # use env_done for logging when available (e.g. to ignore episodic_life)
         done = info.get("env_done", jnp.bool_(terminated))
+        done = jnp.logical_or(done, truncated) # truncated episodes are considered done for logging purposes
         state = LogState(
             atari_state=atari_state,
             episode_returns=jnp.where(done, jnp.float32(0), jnp.float32(new_episode_return)),

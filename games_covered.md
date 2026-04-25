@@ -21,10 +21,10 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | alien                        | 🥈       | 0 |
 | amidar                       | 🥇       | 0 |
 | assault                      | 🥉       | 0 |
-| asterix                      | 🥈       | 0 |
+| asterix                      | 🥇       | 0 |
 | asteroids                    | 🥇       | 0 |
-| atlantis                     | 🥇       | 0 |
-| bank_heist                   | 🥉       | 0 |
+| atlantis                     | 🥈       | 0 |
+| bank_heist                   | 🥇       | 8 |
 | battle_zone                  | 🥉       | 0 |
 | beam_rider                   | ❌       | 0 |
 | berzerk                      | 🥈       | 0 |
@@ -49,10 +49,10 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | kangaroo                     | 🥇       | 1 |
 | krull                        | ❌       | 0 |
 | kung_fu_master               | ❌       | 0 |
-| montezuma_revenge            | 🥉       | 0 |
+| montezuma_revenge            | 🥇       | 11 |
 | ms_pacman                    | ❌       | 0 |
 | name_this_game               | 🥈       | 0 |
-| phoenix                      | 🥈       | 0 |
+| phoenix                      | 🥇       | 1 |
 | pitfall                      | ❌       | 0 |
 | pong                         | 🥇       | 2 |
 | private_eye                  | ❌       | 0 |
@@ -66,7 +66,7 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | space_invaders               | 🥈       | 0 |
 | star_gunner                  | ❌       | 0 |
 | surround                     | 🥉       | 0 |
-| tennis                       | 🥈       | 0 |
+| tennis                       | 🥇       | 0 |
 | time_pilot                   | 🥈       | 0 |
 | tutankham                    | ❌       | 0 |
 | up_n_down                    | ❌       | 0 |
@@ -76,22 +76,22 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | yars_revenge                 | ❌       | 0 |
 | zaxxon                       | ❌       | 0 |
 
-Total:  🥇: 8   |   🥈: 13   |   🥉: 12   |   ❌: 24 
+Total:  🥇: 13   |   🥈: 11   |   🥉: 10   |   ❌: 23 
 
 ## Remaining ALE games
 | Game                         | Status  | Mods available |
 |------------------------------|---------|----------------|
 | adventure                    | ❌       | 0 |
-| air_raid                     | 🥉       | 0 |
+| air_raid                     | 🥈       | 0 |
 | atlantis2                    | ❌       | 0 |
 | backgammon                   | 🥉       | 0 |
 | basic_math                   | ❌       | 0 |
 | blackjack                    | 🥈       | 0 |
 | carnival                     | ❌       | 0 |
-| casino                       | 🥉       | 0 |
+| casino                       | 🥈       | 0 |
 | crossbow                     | ❌       | 0 |
 | darkchambers                 | ❌       | 0 |
-| donkey_kong                  | 🥈       | 0 |
+| donkey_kong                  | 🥇       | 0 |
 | earthworld                   | ❌       | 0 |
 | elevator_action              | ❌       | 0 |
 | entombed                     | ❌       | 0 |
@@ -130,4 +130,4 @@ Total:  🥇: 8   |   🥈: 13   |   🥉: 12   |   ❌: 24 
 | video_cube                   | 🥈       | 0 |
 | word_zapper                  | 🥈       | 0 |
 
-Total:  🥇: 2   |   🥈: 16   |   🥉: 6   |   ❌: 24
+Total:  🥇: 3   |   🥈: 17   |   🥉: 4   |   ❌: 24

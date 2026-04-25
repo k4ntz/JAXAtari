@@ -9,7 +9,6 @@ from jax import lax
 import jax.lax
 import jax
 from flax import struct
-from sympy import false
 
 import jaxatari.spaces as spaces
 

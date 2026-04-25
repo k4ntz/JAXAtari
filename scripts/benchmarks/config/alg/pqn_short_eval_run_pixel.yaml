@@ -1,5 +1,4 @@
 # This is adapted from Atari configuration 
-NAME_INITIALS: "RE"
 ALG_NAME: "pqn"
 TOTAL_TIMESTEPS: 1e8 # 1e8 == 100M, but times 4 (frame-skipping) -> pqn paper: enough to outperform Rainbow
 TOTAL_TIMESTEPS_DECAY: 1e8 # will be used for decay functions, in case you want to test for less timesteps and keep decays same
@@ -34,7 +33,7 @@ EVAL_MODS: null
 # Note: This will massively increase compile and run time!
 # Turn off for final reported training run.
 TEST_DURING_TRAINING: False
-TEST_INTERVAL: 1.0 # in terms of total updates
+TEST_INTERVAL: 0.1 # in terms of total updates
 TEST_NUM_ENVS: 128
 TEST_NUM_STEPS: 10000
 EPS_TEST: 0.0 # 0 for greedy policy

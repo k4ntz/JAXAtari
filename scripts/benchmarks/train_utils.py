@@ -31,7 +31,7 @@ def video_renderer(states, dones, step, renderer, mod, mod_name):
     num_states = jnp.argmax(dones)
     # or len of the first array of the states pytree
     if num_states == 0:
-        num_states = len(states[-1])
+        num_states = jax.tree_util.tree_leaves(states)[0].shape[0]
 
     # select every 4th frame (and only the first num_states)
     states_reduced = jax.tree_util.tree_map(lambda x: x[:num_states], states)
