@@ -932,6 +932,7 @@ class EnduroRenderer(JAXGameRenderer):
 
 
 class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, EnduroConstants]):
+    # Action set for Enduro
     ACTION_SET: jnp.ndarray = jnp.array(
         [
             Action.NOOP,
@@ -1193,8 +1194,16 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
 
         # 1. Handle Speed (Acceleration and Braking)
-        is_fire = (atari_action == Action.FIRE) | (atari_action == Action.LEFTFIRE) | (atari_action == Action.RIGHTFIRE)
-        is_down = (atari_action == Action.DOWN) | (atari_action == Action.DOWNLEFT) | (atari_action == Action.DOWNRIGHT)
+        is_fire = (
+            (atari_action == Action.FIRE)
+            | (atari_action == Action.RIGHTFIRE)
+            | (atari_action == Action.LEFTFIRE)
+        )
+        is_down = (
+            (atari_action == Action.DOWN)
+            | (atari_action == Action.DOWNRIGHT)
+            | (atari_action == Action.DOWNLEFT)
+        )
         
         # Acceleration: if speed <= 45: +2, else +1
         accel_amount = jnp.where(state.player_speed <= self.consts.acceleration_slow_down_threshold, 2.0, 1.0)
@@ -1213,8 +1222,16 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         new_speed = jnp.clip(state.player_speed + speed_delta, self.consts.min_speed, self.consts.max_speed)
 
         # 2. Handle Steering and Drift
-        is_left = (atari_action == Action.LEFT) | (atari_action == Action.LEFTFIRE) | (atari_action == Action.DOWNLEFT)
-        is_right = (atari_action == Action.RIGHT) | (atari_action == Action.RIGHTFIRE) | (atari_action == Action.DOWNRIGHT)
+        is_left = (
+            (atari_action == Action.LEFT)
+            | (atari_action == Action.DOWNLEFT)
+            | (atari_action == Action.LEFTFIRE)
+        )
+        is_right = (
+            (atari_action == Action.RIGHT)
+            | (atari_action == Action.DOWNRIGHT)
+            | (atari_action == Action.RIGHTFIRE)
+        )
 
         # Steering delta (speed-dependent)
         steering_speed = self.consts.horizontal_movement_slope * new_speed + self.consts.horizontal_movement_offset
@@ -1282,7 +1299,18 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             (window_moved < 0) & (new_visible_opponent_positions[0, 0] > -1),
             1, 0
         )
-        new_cars_to_pass = jnp.maximum(0, state.cars_to_pass - cars_overtaken_change)
+        # After a level is marked as passed, freeze overtaking progress/reward
+        # until the day rollover logic handles the transition.
+        cars_overtaken_change = jnp.where(state.level_passed > 0, 0, cars_overtaken_change)
+        # Keep the "cars to pass" counter bounded:
+        # - decreases when the player overtakes
+        # - increases when opponents overtake from behind
+        # - never below 0 and never above the initial position (200)
+        new_cars_to_pass = jnp.clip(
+            state.cars_to_pass - cars_overtaken_change,
+            0,
+            self.consts.initial_position
+        )
 
         # ====== COLLISIONS ======
         def collision_update(_):
@@ -1454,8 +1482,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, state: EnduroGameState, new_state: EnduroGameState) -> float:
         cars_overtaken = (state.cars_to_pass - new_state.cars_to_pass).astype(jnp.float32)
-        distance_reward = new_state.distance - state.distance - self.consts.km_per_speed_unit_per_frame
-        return cars_overtaken + distance_reward
+        return cars_overtaken
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: EnduroGameState) -> bool:
