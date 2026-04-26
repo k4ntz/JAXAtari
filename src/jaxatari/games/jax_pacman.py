@@ -648,7 +648,8 @@ class PacmanRenderer(MsPacmanRenderer):
             {'name': 'ghosts', 'type': 'group', 'files': [
                 'ghost_0.npy', 'ghost_1.npy', 'ghost_2.npy', 'ghost_3.npy'
             ], 'recolorings': {
-                'frightened': tuple(map(int, self.consts.PALE_BLUE_COLOR.tolist()))
+                'frightened': tuple(map(int, self.consts.PALE_BLUE_COLOR.tolist())),
+                'white': (255, 255, 255)
             }},
             {'name': 'life', 'type': 'single', 'file': 'life.npy'},
             {'name': 'fruit', 'type': 'group', 'data': [vitamin_data]},
@@ -669,6 +670,14 @@ class PacmanRenderer(MsPacmanRenderer):
 
         (self.PALETTE, self.SHAPE_MASKS, _, self.COLOR_TO_ID, self.FLIP_OFFSETS) = \
             self.jr.load_and_setup_assets(asset_config, sprite_path)
+
+        # Concatenate recolored ghosts to the main ghosts group
+        # Index 4: Frightened (Pale Blue), Index 5: White (Blinking)
+        self.SHAPE_MASKS['ghosts'] = jnp.concatenate([
+            self.SHAPE_MASKS['ghosts'],
+            self.SHAPE_MASKS['ghosts_frightened'][0:1],
+            self.SHAPE_MASKS['ghosts_white'][0:1]
+        ], axis=0)
 
         # Make digits black
         black_id = self.COLOR_TO_ID[(0, 0, 0)]
@@ -772,7 +781,7 @@ class PacmanRenderer(MsPacmanRenderer):
             
             ghost_idx = jax.lax.cond(
                 is_frightened,
-                lambda: jnp.array(4, dtype=jnp.int32), # Index 4 is frightened
+                lambda: jnp.where(is_blinking_frame, 5, 4).astype(jnp.int32), 
                 lambda: i
             ).astype(jnp.int32)
             
@@ -1230,7 +1239,9 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             def handle_death():
                 return ghost_states._replace(deadly_collision=True)
             
-            is_collision = jax.lax.cond(tunnel_timer > 0, lambda: False, lambda: False) # detect_collision(ghost_states.pacman_position, ghost_states.ghost_positions[ghost_index])
+            is_active = (ghost_states.ghost_modes[ghost_index] != GhostMode.ENJAILED.value) & \
+                        (ghost_states.ghost_modes[ghost_index] != GhostMode.RETURNING.value)
+            is_collision = (tunnel_timer == 0) & is_active & detect_collision(ghost_states.pacman_position, ghost_states.ghost_positions[ghost_index])
             return jax.lax.cond(is_collision, lambda: jax.lax.cond((ghost_states.ghost_modes[ghost_index] == GhostMode.FRIGHTENED) | (ghost_states.ghost_modes[ghost_index] == GhostMode.BLINKING), handle_eaten, handle_death), lambda: ghost_states)
 
         new_eaten = jax.lax.cond(ate_power_pellet, lambda: jnp.array(0, dtype=jnp.uint8), lambda: jnp.array(eaten_ghosts, dtype=jnp.uint8))
