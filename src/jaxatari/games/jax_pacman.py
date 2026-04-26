@@ -117,6 +117,7 @@ class PacmanMaze:
         dof_grid = jnp.stack([no_wall_above, no_wall_right, no_wall_left, no_wall_below], axis=-1)
         dof_grid = jnp.transpose(dof_grid, (1, 0, 2))
         return dof_grid
+    
     @staticmethod
     def load_background(maze_id: int):
         maze = PacmanMaze.MAZES[maze_id]
@@ -161,9 +162,9 @@ class PacmanConstants(struct.PyTreeNode):
     TUNNEL_DELAY: int = struct.field(pytree_node=False, default=76)
 
     # VITAMINS (Fruit)
-    VITAMIN_SPAWN_THRESHOLDS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([50, 100]))
-    VITAMIN_DURATION: int = struct.field(pytree_node=False, default=10*20) # Stationary for a few moments
-    VITAMIN_POSITION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([75, 75])) # Center of playfield
+    VITAMINS_SPAWN_THRESHOLDS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([50, 100]))
+    VITAMINS_DURATION: int = struct.field(pytree_node=False, default=10*20) # Stationary for a few moments
+    VITAMINS_POSITION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([76, 103])) # Center of playfield
 
     # WEAPONS (Updated for Pacman)
     POWER_PELLET_TILES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([[1, 3], [36, 3], [1, 39], [36, 39]]))
@@ -188,7 +189,7 @@ class PacmanConstants(struct.PyTreeNode):
     # POINTS (Updated for Pacman)
     PELLET_POINTS: int = struct.field(pytree_node=False, default=1)
     POWER_PELLET_POINTS: int = struct.field(pytree_node=False, default=5)
-    VITAMIN_REWARD: int = struct.field(pytree_node=False, default=100)
+    VITAMINS_REWARD: int = struct.field(pytree_node=False, default=100)
     EAT_GHOSTS_POINTS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([20, 40, 80, 160], dtype=jnp.uint32))
     LEVEL_COMPLETED_POINTS: int = struct.field(pytree_node=False, default=0)
 
@@ -445,7 +446,7 @@ def reverse_action(dir_idx: chex.Array):
 
 def detect_collision(position_1: chex.Array, position_2: chex.Array):
     """Checks if the two positions are closer than the collision threshold."""
-    return jnp.all(abs(jnp.array(position_1) - jnp.array(position_2)) < COLLISION_THRESHOLD)
+    return jnp.all(abs(position_1.astype(jnp.int32) - position_2.astype(jnp.int32)) < COLLISION_THRESHOLD)
 
 
 class PacmanRenderer(JAXGameRenderer):
@@ -466,11 +467,6 @@ class PacmanRenderer(JAXGameRenderer):
         sprite_path = os.path.join(render_utils.get_base_sprite_dir(), sprite_dir_name)
 
         # Define asset config
-        vitamin_color = jnp.array([252, 144, 200, 255], dtype=jnp.uint8)
-        vitamin_data = jnp.zeros((10, 10, 4), dtype=jnp.uint8)
-        vitamin_data = vitamin_data.at[3:7, 1:9].set(vitamin_color)
-        vitamin_data = vitamin_data.at[1:9, 3:7].set(vitamin_color)
-
         asset_config = [
             {'name': 'dummy_bg', 'type': 'background', 'data': jnp.zeros((210, 160, 4), dtype=jnp.uint8)},
             {'name': 'pacman', 'type': 'group', 'files': ['pacman_0.npy', 'pacman_1.npy', 'pacman_2.npy']},
@@ -481,7 +477,7 @@ class PacmanRenderer(JAXGameRenderer):
                 'white': (255, 255, 255)
             }},
             {'name': 'life', 'type': 'single', 'file': 'life.npy'},
-            {'name': 'fruit', 'type': 'group', 'data': [vitamin_data]},
+            {'name': 'fruit', 'type': 'group', 'files': ['vitamins.npy']},
             {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
         ]
 
@@ -1082,16 +1078,17 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
     @staticmethod
     def fruit_step(state: PacmanState, new_pacman_pos: chex.Array, eaten_pellets: chex.Array, key: chex.Array):
         def spawn_vitamin():
-            return FruitState(position=CONSTS.VITAMIN_POSITION.astype(jnp.uint8), exit=CONSTS.VITAMIN_POSITION.astype(jnp.uint8), type=jnp.array(0, dtype=jnp.uint8), action=jnp.array(Action.NOOP, dtype=jnp.uint8), spawn=jnp.array(False, dtype=jnp.bool), spawned=jnp.array(True, dtype=jnp.bool), timer=jnp.array(CONSTS.VITAMIN_DURATION, dtype=jnp.uint16)), 0
+            return FruitState(position=CONSTS.VITAMINS_POSITION.astype(jnp.uint8), exit=CONSTS.VITAMINS_POSITION.astype(jnp.uint8), type=jnp.array(0, dtype=jnp.uint8), action=jnp.array(Action.NOOP, dtype=jnp.uint8), spawn=jnp.array(False, dtype=jnp.bool), spawned=jnp.array(True, dtype=jnp.bool), timer=jnp.array(CONSTS.VITAMINS_DURATION, dtype=jnp.uint16)), 0
         def consume_vitamin():
-            return FruitState(jnp.zeros(2, dtype=jnp.uint8), jnp.zeros(2, dtype=jnp.uint8), jnp.array(0, dtype=jnp.uint8), jnp.array(Action.NOOP, dtype=jnp.uint8), state.fruit.spawn, jnp.array(False, dtype=jnp.bool), jnp.array(CONSTS.VITAMIN_DURATION, dtype=jnp.uint16)), CONSTS.VITAMIN_REWARD
+            return FruitState(jnp.zeros(2, dtype=jnp.uint8), jnp.zeros(2, dtype=jnp.uint8), jnp.array(0, dtype=jnp.uint8), jnp.array(Action.NOOP, dtype=jnp.uint8), state.fruit.spawn, jnp.array(False, dtype=jnp.bool), jnp.array(CONSTS.VITAMINS_DURATION, dtype=jnp.uint16)), CONSTS.VITAMINS_REWARD
         def step_vitamin():
             new_timer = jax.lax.cond(state.fruit.timer > 0, lambda: state.fruit.timer - 1, lambda: state.fruit.timer)
             return state.fruit._replace(timer=new_timer), 0
         def clear_vitamin():
             return state.fruit._replace(spawned=False), 0
 
-        fruit_spawn = jnp.any(CONSTS.VITAMIN_SPAWN_THRESHOLDS == eaten_pellets) & state.player.has_pellet
+        fruit_spawn = jnp.any(CONSTS.VITAMINS_SPAWN_THRESHOLDS == eaten_pellets) & state.player.has_pellet
+        
         return jax.lax.cond(
             state.fruit.spawned,
             lambda: jax.lax.cond(detect_collision(new_pacman_pos, state.fruit.position), consume_vitamin, lambda: jax.lax.cond(state.fruit.timer == 0, clear_vitamin, step_vitamin)),
@@ -1147,7 +1144,7 @@ def reset_ghosts():
     return GhostsState(positions=jnp.tile(CONSTS.INITIAL_GHOST_POSITION, (4, 1)).astype(jnp.int32), actions=jnp.array([Action.LEFT, Action.NOOP, Action.NOOP, Action.NOOP], dtype=jnp.uint8), modes=jnp.array([GhostMode.RANDOM, GhostMode.ENJAILED, GhostMode.ENJAILED, GhostMode.ENJAILED], dtype=jnp.uint8), timers=jnp.array([CONSTS.SCATTER_DURATION, CONSTS.PINKY_RELEASE_TIME, CONSTS.INKY_RELEASE_TIME, CONSTS.SUE_RELEASE_TIME], dtype=jnp.float16))
 
 def reset_fruit(level: chex.Array, key: chex.PRNGKey):
-    return FruitState(position=jnp.zeros(2, dtype=jnp.uint8), exit=jnp.zeros(2, dtype=jnp.uint8), type=jnp.array(0, dtype=jnp.uint8), action=jnp.array(Action.NOOP, dtype=jnp.uint8), spawn=jnp.array(False, dtype=jnp.bool_), spawned=jnp.array(False, dtype=jnp.bool_), timer=jnp.array(CONSTS.VITAMIN_DURATION, dtype=jnp.uint16))
+    return FruitState(position=jnp.zeros(2, dtype=jnp.uint8), exit=jnp.zeros(2, dtype=jnp.uint8), type=jnp.array(0, dtype=jnp.uint8), action=jnp.array(Action.NOOP, dtype=jnp.uint8), spawn=jnp.array(False, dtype=jnp.bool_), spawned=jnp.array(False, dtype=jnp.bool_), timer=jnp.array(CONSTS.VITAMINS_DURATION, dtype=jnp.uint16))
 
 def reset_entities(state: PacmanState, key: chex.PRNGKey):
     return state._replace(player=reset_player(), ghosts=reset_ghosts(), fruit=reset_fruit(state.level.id, key), step_count=jnp.array(0, dtype=jnp.uint32))
