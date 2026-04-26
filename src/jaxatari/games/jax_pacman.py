@@ -199,6 +199,8 @@ class PacmanConstants(struct.PyTreeNode):
     POWER_PELLET_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([252, 144, 200], dtype=jnp.uint8))
     PACMAN_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([210, 164, 74, 255], dtype=jnp.uint8))
     PALE_BLUE_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([144, 144, 252], dtype=jnp.uint8))
+    GREEN_BAND_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([72, 176, 110], dtype=jnp.uint8))
+    GREEN_BAND_HEIGHT: int = struct.field(pytree_node=False, default=9)
 
 CONSTS = PacmanConstants()
 
@@ -659,13 +661,23 @@ class PacmanRenderer(MsPacmanRenderer):
             self.consts.WALL_COLOR, 
             jnp.array([0, 0, 0], dtype=jnp.uint8),
             self.consts.POWER_PELLET_COLOR,
-            self.consts.PALE_BLUE_COLOR
+            self.consts.PALE_BLUE_COLOR,
+            self.consts.GREEN_BAND_COLOR
         ])
-        bg_colors = jnp.concatenate([bg_colors, jnp.full((5, 1), 255, dtype=jnp.uint8)], axis=1)
+        bg_colors = jnp.concatenate([bg_colors, jnp.full((6, 1), 255, dtype=jnp.uint8)], axis=1)
         asset_config.append({'name': 'bg_colors', 'type': 'procedural', 'data': bg_colors[:, None, :]})
 
         (self.PALETTE, self.SHAPE_MASKS, _, self.COLOR_TO_ID, self.FLIP_OFFSETS) = \
             self.jr.load_and_setup_assets(asset_config, sprite_path)
+
+        # Make digits black
+        black_id = self.COLOR_TO_ID[(0, 0, 0)]
+        transparent_id = self.jr.TRANSPARENT_ID
+        self.SHAPE_MASKS['digits'] = jnp.where(
+            self.SHAPE_MASKS['digits'] != transparent_id,
+            black_id,
+            self.SHAPE_MASKS['digits']
+        )
 
         # Pre-rotate Pacman masks: 0: UP, 1: RIGHT, 2: LEFT, 3: DOWN
         # Original masks are RIGHT looking
@@ -811,19 +823,23 @@ class PacmanRenderer(MsPacmanRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render_ui(self, raster, state):
+        # Green Band
+        green_id = self.COLOR_TO_ID[tuple(map(int, self.consts.GREEN_BAND_COLOR.tolist()))]
+        raster = self.jr.draw_rects(raster, jnp.array([[0, 193]]), jnp.array([[160, self.consts.GREEN_BAND_HEIGHT]]), green_id)
+
         # Score
         digits = self.jr.int_to_digits(state.score, max_digits=self.consts.MAX_SCORE_DIGITS)
         digit_count = get_digit_count(state.score).astype(jnp.int32)
         start_index = self.consts.MAX_SCORE_DIGITS - digit_count
         render_x = 60 + start_index * 8
-        raster = self.jr.render_label_selective(raster, render_x, 190, digits, self.SHAPE_MASKS['digits'], start_index, digit_count, spacing=8, max_digits_to_render=self.consts.MAX_SCORE_DIGITS)
+        raster = self.jr.render_label_selective(raster, render_x, 194, digits, self.SHAPE_MASKS['digits'], start_index, digit_count, spacing=8, max_digits_to_render=self.consts.MAX_SCORE_DIGITS)
         
         # Lives
-        raster = self.jr.render_indicator(raster, 12, 182, (state.lives - 1).astype(jnp.int32), self.LIFE_MASK, spacing=14, max_value=self.consts.MAX_LIVE_COUNT)
+        raster = self.jr.render_indicator(raster, 12, 203, (state.lives - 1).astype(jnp.int32), self.LIFE_MASK, spacing=14, max_value=self.consts.MAX_LIVE_COUNT)
         
         # Fruit indicator
-        fruit_mask = self.SHAPE_MASKS['fruit'][state.fruit.type.astype(jnp.int32)]
-        raster = self.jr.render_at(raster, 128, 182, fruit_mask)
+        # fruit_mask = self.SHAPE_MASKS['fruit'][state.fruit.type.astype(jnp.int32)]
+        # raster = self.jr.render_at(raster, 128, 182, fruit_mask)
         
         return raster
 
