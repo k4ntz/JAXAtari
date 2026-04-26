@@ -277,177 +277,6 @@ class PacmanInfo(NamedTuple):
     score: chex.Array
     lives: chex.Array
 
-class MsPacmanRenderer(JAXGameRenderer):
-    """JAX-based MsPacman game renderer, optimized with JIT compilation."""
-
-    def __init__(self, consts: PacmanConstants = None, config: render_utils.RendererConfig = None, sprite_dir_name: str = "mspacman"):
-        super().__init__(consts)
-        self.consts = consts or PacmanConstants()
-        if config is None:
-            self.config = render_utils.RendererConfig(
-                game_dimensions=(210, 160),
-                channels=3
-            )
-        else:
-            self.config = config
-        self.jr = render_utils.JaxRenderingUtils(self.config)
-        
-        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), sprite_dir_name)
-        
-        # Define asset config
-        asset_config = [
-            {'name': 'dummy_bg', 'type': 'background', 'data': jnp.zeros((210, 160, 4), dtype=jnp.uint8)},
-            {'name': 'pacman', 'type': 'group', 'files': ['pacman_0.npy', 'pacman_1.npy', 'pacman_2.npy', 'pacman_3.npy']},
-            {'name': 'ghosts', 'type': 'group', 'files': [
-                'ghost_blinky.npy', 'ghost_pinky.npy', 'ghost_inky.npy', 'ghost_sue.npy', 
-                'ghost_blue.npy', 'ghost_white.npy'
-            ]},
-            {'name': 'fruit', 'type': 'group', 'files': [
-                'fruit_cherry.npy', 'fruit_strawberry.npy', 'fruit_orange.npy',
-                'fruit_pretzel.npy', 'fruit_apple.npy', 'fruit_pear.npy', 'fruit_banana.npy'
-            ]},
-            {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
-        ]
-        
-        # Include background colors in the palette (Path, Wall, and Black for UI padding)
-        bg_colors = jnp.stack([self.consts.PATH_COLOR, self.consts.WALL_COLOR, jnp.array([0, 0, 0], dtype=jnp.uint8)])
-        bg_colors = jnp.concatenate([bg_colors, jnp.full((3, 1), 255, dtype=jnp.uint8)], axis=1)
-        asset_config.append({'name': 'bg_colors', 'type': 'procedural', 'data': bg_colors[:, None, :]})
-
-        (self.PALETTE, self.SHAPE_MASKS, _, self.COLOR_TO_ID, self.FLIP_OFFSETS) = \
-            self.jr.load_and_setup_assets(asset_config, sprite_path)
-
-        # Pre-rotate Pacman masks: 0: UP, 1: RIGHT, 2: LEFT, 3: DOWN
-        # Original masks are LEFT looking
-        left = self.SHAPE_MASKS['pacman']
-        right = jnp.flip(left, axis=2)
-        up = jnp.rot90(right, k=1, axes=(1, 2))
-        down = jnp.rot90(right, k=3, axes=(1, 2))
-        self.PACMAN_MASKS = jnp.stack([up, right, left, down])
-        
-        # Pre-calculate backgrounds for all 4 mazes
-        self.MAZE_BACKGROUNDS = self._create_all_backgrounds()
-
-    def _create_all_backgrounds(self):
-        bgs = []
-        for i in range(4):
-            bg = PacmanMaze.load_background(i) # Returns (W, H, 3)
-            bg = jnp.transpose(bg, (1, 0, 2)) # Convert to (H, W, 3)
-            if bg.shape[2] == 3:
-                bg = jnp.concatenate([bg, jnp.full((*bg.shape[:2], 1), 255, dtype=jnp.uint8)], axis=2)
-            
-            bg_id = self.jr._create_background_raster(bg, self.COLOR_TO_ID)
-            bgs.append(bg_id)
-        return jnp.stack(bgs)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: PacmanState):
-        maze_idx = get_level_maze(state.level.id)
-        background = self.MAZE_BACKGROUNDS[maze_idx]
-        raster = self.jr.create_object_raster(background)
-        
-        # 1. Render Pellets
-        wall_color_tuple = tuple(map(int, self.consts.WALL_COLOR.tolist()))
-        wall_id = self.COLOR_TO_ID[wall_color_tuple]
-        raster = self.render_pellets(raster, state.level.pellets, wall_id)
-        
-        # 2. Power Pellets
-        raster = self.render_power_pellets(raster, state, wall_id)
-        
-        # 3. Pacman
-        orientation = act_to_dir(state.player.action)
-        orientation = jnp.where(orientation == -1, 2, orientation) # Default to LEFT
-        frame = (state.step_count & 0b1000) >> 2
-        pacman_mask = self.PACMAN_MASKS[orientation.astype(jnp.int32), frame.astype(jnp.int32)]
-        raster = self.jr.render_at(raster, state.player.position[0].astype(jnp.int32), state.player.position[1].astype(jnp.int32) - 1, pacman_mask)
-        
-        # 4. Ghosts
-        raster = self.render_ghosts(raster, state)
-        
-        # 5. Fruit
-        raster = jax.lax.cond(
-            state.fruit.spawned,
-            lambda r: self.jr.render_at(r, state.fruit.position[0].astype(jnp.int32), state.fruit.position[1].astype(jnp.int32) - 1, self.SHAPE_MASKS['fruit'][state.fruit.type.astype(jnp.int32)]),
-            lambda r: r,
-            raster
-        )
-        
-        # 6. UI
-        raster = self.render_ui(raster, state)
-        
-        return self.jr.render_from_palette(raster, self.PALETTE)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def render_pellets(self, raster, pellets, color_id):
-        x_range, y_range = jnp.nonzero(pellets, size=pellets.size)
-        x_offset = jnp.where(x_range < 9, 8, 12)
-        n_pellets = jnp.sum(pellets)
-        mask = jnp.arange(pellets.size) < n_pellets
-
-        x_positions = x_range * 8 + x_offset
-        y_positions = y_range * 12 + 9
-        
-        positions = jnp.stack([x_positions, y_positions], axis=1).astype(jnp.int32)
-        positions = jnp.where(mask[:, None], positions, -1)
-        sizes = jnp.tile(jnp.array([4, 2], dtype=jnp.int32), (pellets.size, 1))
-        
-        return self.jr.draw_rects(raster, positions, sizes, color_id)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def render_power_pellets(self, raster, state, color_id):
-        # 4x7 sprite
-        sprite = jnp.full((7, 4), color_id, dtype=raster.dtype)
-        
-        def render_one(i, r):
-            should_draw = state.level.power_pellets[i] & (((state.step_count & 0b1000) >> 3) == 1)
-            x = (self.consts.POWER_PELLET_TILES[i][0] * 4 + 4).astype(jnp.int32)
-            y = (self.consts.POWER_PELLET_TILES[i][1] * 4 + 6).astype(jnp.int32)
-            return jax.lax.cond(should_draw, 
-                                lambda r_in: self.jr.render_at(r_in, x, y, sprite),
-                                lambda r_in: r_in,
-                                r)
-        
-        return jax.lax.fori_loop(0, 4, render_one, raster)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def render_ghosts(self, raster, state):
-        anim_frame = (state.step_count & 0b10000) >> 4
-        
-        def render_one(i, r):
-            mode = state.ghosts.modes[i]
-            is_frightened = (mode == GhostMode.FRIGHTENED) | (mode == GhostMode.BLINKING)
-            is_blinking_frame = (mode == GhostMode.BLINKING) & (((state.step_count & 0b1000) >> 3) == 1)
-            
-            ghost_idx = jax.lax.cond(
-                is_frightened,
-                lambda: jnp.where(is_blinking_frame, 5, 4),
-                lambda: i
-            ).astype(jnp.int32)
-            
-            mask = self.SHAPE_MASKS['ghosts'][ghost_idx]
-            flip = anim_frame == 1
-            return self.jr.render_at(r, state.ghosts.positions[i][0].astype(jnp.int32), state.ghosts.positions[i][1].astype(jnp.int32) - 1, mask, flip_horizontal=flip)
-
-        return jax.lax.fori_loop(0, 4, render_one, raster)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def render_ui(self, raster, state):
-        # Score
-        digits = self.jr.int_to_digits(state.score, max_digits=self.consts.MAX_SCORE_DIGITS)
-        digit_count = get_digit_count(state.score).astype(jnp.int32)
-        start_index = self.consts.MAX_SCORE_DIGITS - digit_count
-        render_x = 60 + start_index * 8
-        raster = self.jr.render_label_selective(raster, render_x, 190, digits, self.SHAPE_MASKS['digits'], start_index, digit_count, spacing=8, max_digits_to_render=self.consts.MAX_SCORE_DIGITS)
-        
-        # Lives
-        life_mask = self.PACMAN_MASKS[1, 1] # Right looking, frame 1
-        raster = self.jr.render_indicator(raster, 12, 182, (state.lives - 1).astype(jnp.int32), life_mask, spacing=14, max_value=self.consts.MAX_LIVE_COUNT)
-        
-        # Fruit indicator
-        fruit_mask = self.SHAPE_MASKS['fruit'][state.fruit.type.astype(jnp.int32)]
-        raster = self.jr.render_at(raster, 128, 182, fruit_mask)
-        
-        return raster
 
 def get_digit_count(number: chex.Array):
     """Returns the number of digits in a given decimal number."""
@@ -619,11 +448,11 @@ def detect_collision(position_1: chex.Array, position_2: chex.Array):
     return jnp.all(abs(jnp.array(position_1) - jnp.array(position_2)) < COLLISION_THRESHOLD)
 
 
-class PacmanRenderer(MsPacmanRenderer):
+class PacmanRenderer(JAXGameRenderer):
     """JAX-based Pacman game renderer, optimized with JIT compilation."""
 
     def __init__(self, consts: PacmanConstants = None, config: render_utils.RendererConfig = None, sprite_dir_name: str = "pacman"):
-        super(MsPacmanRenderer, self).__init__(consts)
+        super().__init__(consts)
         self.consts = consts or PacmanConstants()
         if config is None:
             self.config = render_utils.RendererConfig(
@@ -777,11 +606,10 @@ class PacmanRenderer(MsPacmanRenderer):
         def render_one(i, r):
             mode = state.ghosts.modes[i]
             is_frightened = (mode == GhostMode.FRIGHTENED) | (mode == GhostMode.BLINKING)
-            is_blinking_frame = (mode == GhostMode.BLINKING) & (((state.step_count & 0b1000) >> 3) == 1)
             
             ghost_idx = jax.lax.cond(
                 is_frightened,
-                lambda: jnp.where(is_blinking_frame, 5, 4).astype(jnp.int32), 
+                lambda: jnp.array(4, dtype=jnp.int32), 
                 lambda: i
             ).astype(jnp.int32)
             
@@ -911,7 +739,6 @@ def get_allowed_directions(position: chex.Array, action: chex.Array, dofmaze: ch
         avail = available_directions(position, dofmaze, is_ghost)
         
         # Directions that are not the reverse of current action
-        # Note: reverse_action and act_to_dir are imported from jax_mspacman
         not_reverse_mask = jnp.arange(direction_count) != act_to_dir(reverse_action(action))
         
         allowed_mask = avail & not_reverse_mask
@@ -1185,7 +1012,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             def start_chase(action, step_count):
                 return (jnp.array(GhostMode.CHASE, dtype=jnp.uint8), jnp.array(action, dtype=jnp.uint8), jnp.array(CONSTS.CHASE_DURATION, dtype=jnp.float16), False)
             def start_blinking(action, step_count):
-                return (jnp.array(GhostMode.BLINKING, dtype=jnp.uint8), jnp.array(action, dtype=jnp.uint8), jnp.array(jnp.round(CONSTS.BLINKING_DURATION * timing_factor), dtype=jnp.float16), False)
+                # Transition directly to chase/returning, effectively removing the blinking state
+                return start_returned(action, step_count)
             def start_returning(action, step_count):
                 return (jnp.array(GhostMode.RETURNING, dtype=jnp.uint8), jnp.array(Action.UP, dtype=jnp.uint8), jnp.array(CONSTS.RETURN_DURATION, dtype=jnp.float16), True)
             def start_returned(action, step_count):
@@ -1193,7 +1021,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
 
             return jax.lax.cond(
                 ate_power_pellet & (mode != GhostMode.ENJAILED) & (mode != GhostMode.RETURNING),
-                lambda: (jnp.array(GhostMode.FRIGHTENED, dtype=jnp.uint8), jnp.array(reverse_action(action), dtype=jnp.uint8), jnp.array(CONSTS.FRIGHTENED_DURATION * timing_factor, dtype=jnp.float16), True),
+                lambda: (jnp.array(GhostMode.FRIGHTENED, dtype=jnp.uint8), jnp.array(reverse_action(action), dtype=jnp.uint8), jnp.array((CONSTS.FRIGHTENED_DURATION + CONSTS.BLINKING_DURATION) * timing_factor, dtype=jnp.float16), True),
                 lambda: jax.lax.cond(
                     (timer > 0) & (new_timer <= 0),
                     lambda: jax.lax.switch(mode, (start_returned, start_scatter, start_chase, start_blinking, start_returned, start_returned, start_returning), action, step_count),
