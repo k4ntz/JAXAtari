@@ -74,6 +74,7 @@ GAME_MODULES = {
     "videopinball": "jaxatari.games.jax_videopinball",
     "wordzapper": "jaxatari.games.jax_wordzapper",
     "mspacman": "jaxatari.games.jax_mspacman",
+    "pacman": "jaxatari.games.jax_pacman",
     # Add new games here
 }
 
@@ -90,6 +91,7 @@ MOD_MODULES = {
     "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
     "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
     "mspacman": "jaxatari.games.mods.mspacman_mods.MsPacmanEnvMod",
+    "pacman": "jaxatari.games.mods.pacman_mods.PacmanEnvMod",
 }
 
 
