@@ -178,6 +178,12 @@ class PacmanConstants(struct.PyTreeNode):
     DIRECTIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN]))
     ACTIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([(0, 0), (0, 0), (0, -1), (1, 0), (-1, 0), (0, 1)]))
     INITIAL_ACTION: int = struct.field(pytree_node=False, default=Action.LEFT)
+    HORIZONTAL_SPEED: int = struct.field(pytree_node=False, default=1)
+    VERTICAL_SPEED: int = struct.field(pytree_node=False, default=2)
+    SLOW_VERTICAL_SPEED: int = struct.field(pytree_node=False, default=1)
+
+    def slow_vertical_speed(self):
+        return self.replace(VERTICAL_SPEED=self.SLOW_VERTICAL_SPEED)
 
     # POINTS (Updated for Pacman)
     PELLET_POINTS: int = struct.field(pytree_node=False, default=1)
@@ -1073,7 +1079,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             
             def standard_step(_):
                 is_blocked = stop_wall(state.player.position, state.level.dofmaze)[act_to_dir(new_action)]
-                res_pos = jax.lax.cond(is_blocked, lambda: state.player.position, lambda: get_new_position(state.player.position, new_action))
+                res_pos = jax.lax.cond(is_blocked, lambda: state.player.position, lambda: get_new_position(state.player.position, new_action, speed=jnp.array([CONSTS.HORIZONTAL_SPEED, CONSTS.VERTICAL_SPEED])))
                 return res_pos, new_action, jnp.array(0, dtype=jnp.int32)
                 
             return jax.lax.cond(is_tunnel_entry, tunnel_entry_step, standard_step, None)
@@ -1083,7 +1089,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             
             def teleport(_):
                 # Wrapped position
-                wrapped_pos = get_new_position(state.player.position, state.player.action)
+                wrapped_pos = get_new_position(state.player.position, state.player.action, speed=jnp.array([CONSTS.HORIZONTAL_SPEED, CONSTS.VERTICAL_SPEED]))
                 return wrapped_pos, state.player.action, jnp.array(0, dtype=jnp.int32)
                 
             def wait(_):
@@ -1261,8 +1267,8 @@ def get_chase_target(player_pos: chex.Array) -> chex.Array:
     """
     return player_pos.astype(jnp.int32)
 
-def get_new_position(position: chex.Array, action: chex.Array):
-    new_position = position + CONSTS.ACTIONS[action]
+def get_new_position(position: chex.Array, action: chex.Array, speed: chex.Array = jnp.array([1, 1])):
+    new_position = position + CONSTS.ACTIONS[action] * speed
     # Atari 2600 Pacman has vertical tunnels (wrapping Y), not horizontal (wrapping X)
     # The maze height is 48 rows * 4 pixels = 192 pixels.
     return new_position.at[1].set(new_position[1] % 192).astype(position.dtype)
