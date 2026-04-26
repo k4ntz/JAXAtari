@@ -142,7 +142,7 @@ class PacmanConstants(struct.PyTreeNode):
     MAX_SCORE_DIGITS: int = struct.field(pytree_node=False, default=6)
     BONUS_LIFE_SCORE: int = struct.field(pytree_node=False, default=1000000) # Effectively disabled by score, logic uses maze clear
     COLLISION_THRESHOLD: int = struct.field(pytree_node=False, default=6)
-    PELLETS_TO_COLLECT: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([154, 150, 158, 154]))
+    PELLETS_TO_COLLECT: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([130, 130, 130, 130]))
 
     # GHOST TIMINGS
     SUE_RELEASE_TIME: int = struct.field(pytree_node=False, default=1*20)
@@ -220,7 +220,7 @@ class GhostMode(IntEnum):
 
 class LevelState(NamedTuple):
     id: chex.Array                  # Int - Number of the current level, starts at 1
-    collected_pellets: chex.Array   # Int - Number of collected pellets
+    eaten_pellets: chex.Array       # Int - Number of collected pellets
     dofmaze: chex.Array             # Bool[x][y][4] - Precomputed degree of freedom maze layout
     pellets: chex.Array             # Bool[x][y] - 2D grid of 0 (empty) or 1 (pellet)
     power_pellets: chex.Array       # Bool[4] - Indicates wheter the power pellet is available
@@ -968,11 +968,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         
         (
             player_position, player_action, pellets, has_pellet,
-            collected_pellets, power_pellets, ate_power_pellet,
+            eaten_pellets, power_pellets, ate_power_pellet,
             pellet_reward, level_id, new_tunnel_timer
         ) = self.player_step(state, action)
 
-        (fruit_state, fruit_reward) = self.fruit_step(state, player_position, collected_pellets, step_key)
+        (fruit_state, fruit_reward) = self.fruit_step(state, player_position, eaten_pellets, step_key)
 
         (
             ghost_positions, ghost_actions, ghost_modes, ghost_timers,
@@ -983,23 +983,16 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         new_score = state.score + reward
         score_changed = self.flag_score_change(state.score, new_score)
         
-        # Pacman logic: extra life when clearing a maze
-        new_lives = jax.lax.cond(
-            level_id > state.level.id,
-            lambda: jnp.minimum(new_lives + 1, self.consts.MAX_LIVE_COUNT).astype(jnp.int8),
-            lambda: new_lives
-        )
-        
         new_state = jax.lax.cond(
             frozen,
             lambda: new_state._replace(key=key),
             lambda: jax.lax.cond(
                 level_id != state.level.id,
-                lambda: reset_game(level_id, new_lives, new_score, key),
+                lambda: reset_maze(level_id, state.lives, new_score, key),
                 lambda: PacmanState(
                     level = LevelState(
                         id=level_id,
-                        collected_pellets=collected_pellets,
+                        eaten_pellets=eaten_pellets,
                         dofmaze=state.level.dofmaze,
                         pellets=pellets,
                         power_pellets=power_pellets,
@@ -1120,13 +1113,13 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             None
         )
 
-        (pellets, has_pellet, collected_pellets, power_pellets, ate_power_pellet, reward, level_id) = JaxPacman.pellet_step(state, player_pos)
+        (pellets, has_pellet, eaten_pellets, power_pellets, ate_power_pellet, reward, level_id) = JaxPacman.pellet_step(state, player_pos)
         
         # Disable interactions if in tunnel
         reward = jax.lax.select(state.player.tunnel_timer > 0, 0, reward)
         has_pellet = jax.lax.select(state.player.tunnel_timer > 0, False, has_pellet)
         
-        return (player_pos, player_action, pellets, has_pellet, collected_pellets, power_pellets, ate_power_pellet, reward, level_id, tunnel_timer)
+        return (player_pos, player_action, pellets, has_pellet, eaten_pellets, power_pellets, ate_power_pellet, reward, level_id, tunnel_timer)
 
     @staticmethod
     def pellet_step(state: PacmanState, new_pacman_pos: chex.Array):
@@ -1167,10 +1160,10 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         
         reward = jax.lax.cond(ate_power_pellet, lambda: CONSTS.POWER_PELLET_POINTS, lambda: jax.lax.cond(ate_pellet, lambda: CONSTS.PELLET_POINTS, lambda: 0))
         has_pellet = ate_power_pellet | ate_pellet
-        collected_pellets = jax.lax.cond(has_pellet, lambda: state.level.collected_pellets + 1, lambda: state.level.collected_pellets)
+        eaten_pellets = jax.lax.cond(has_pellet, lambda: state.level.eaten_pellets + 1, lambda: state.level.eaten_pellets)
         
-        level_id, reward = jax.lax.cond(collected_pellets >= CONSTS.PELLETS_TO_COLLECT[get_level_maze(state.level.id)], lambda: (state.level.id + 1, reward + CONSTS.LEVEL_COMPLETED_POINTS), lambda: (state.level.id, reward))
-        return (pellets, has_pellet, collected_pellets, power_pellets, ate_power_pellet, reward, level_id)
+        level_id, reward = jax.lax.cond(eaten_pellets >= CONSTS.PELLETS_TO_COLLECT[get_level_maze(state.level.id)], lambda: (state.level.id + 1, reward + CONSTS.LEVEL_COMPLETED_POINTS), lambda: (state.level.id, reward))
+        return (pellets, has_pellet, eaten_pellets, power_pellets, ate_power_pellet, reward, level_id)
 
     @staticmethod
     def ghosts_step(state: PacmanState, ate_power_pellet: chex.Array, common_key: chex.Array):
@@ -1248,7 +1241,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         return res.ghost_positions, res.ghost_actions, res.ghost_modes, res.ghost_timers, res.eaten_ghosts, new_lives, new_death_timer, res.reward
 
     @staticmethod
-    def fruit_step(state: PacmanState, new_pacman_pos: chex.Array, collected_pellets: chex.Array, key: chex.Array):
+    def fruit_step(state: PacmanState, new_pacman_pos: chex.Array, eaten_pellets: chex.Array, key: chex.Array):
         def spawn_vitamin():
             return FruitState(position=CONSTS.VITAMIN_POSITION.astype(jnp.uint8), exit=CONSTS.VITAMIN_POSITION.astype(jnp.uint8), type=jnp.array(0, dtype=jnp.uint8), action=jnp.array(Action.NOOP, dtype=jnp.uint8), spawn=jnp.array(False, dtype=jnp.bool), spawned=jnp.array(True, dtype=jnp.bool), timer=jnp.array(CONSTS.VITAMIN_DURATION, dtype=jnp.uint16)), 0
         def consume_vitamin():
@@ -1259,7 +1252,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         def clear_vitamin():
             return state.fruit._replace(spawned=False), 0
 
-        fruit_spawn = jnp.any(CONSTS.VITAMIN_SPAWN_THRESHOLDS == collected_pellets) & state.player.has_pellet
+        fruit_spawn = jnp.any(CONSTS.VITAMIN_SPAWN_THRESHOLDS == eaten_pellets) & state.player.has_pellet
         return jax.lax.cond(
             state.fruit.spawned,
             lambda: jax.lax.cond(detect_collision(new_pacman_pos, state.fruit.position), consume_vitamin, lambda: jax.lax.cond(state.fruit.timer == 0, clear_vitamin, step_vitamin)),
@@ -1294,7 +1287,12 @@ def reset_game(level: chex.Array, lives: chex.Array, score: chex.Array, key: che
     return PacmanState(level=reset_level(level), player=reset_player(), ghosts=reset_ghosts(), fruit=reset_fruit(level, key), lives=jnp.array(lives, dtype=jnp.int8), score=jnp.array(score, dtype=jnp.uint32), score_changed=jnp.zeros(6, dtype=jnp.bool_), freeze_timer=jnp.array(0, dtype=jnp.uint32), step_count=jnp.array(0, dtype=jnp.uint32), key=key)
 
 def reset_level(level: chex.Array):
-    return LevelState(id=jnp.array(level, dtype=jnp.uint8), collected_pellets=jnp.array(0, dtype=jnp.uint8), dofmaze=PacmanMaze.precompute_dof(get_level_maze(level)), pellets=jnp.copy(PacmanMaze.BASE_PELLETS), power_pellets=jnp.ones(4, dtype=jnp.bool_), loaded=jnp.array(0, dtype=jnp.uint8))
+    return LevelState(id=jnp.array(level, dtype=jnp.uint8), eaten_pellets=jnp.array(0, dtype=jnp.uint8), dofmaze=PacmanMaze.precompute_dof(get_level_maze(level)), pellets=jnp.copy(PacmanMaze.BASE_PELLETS), power_pellets=jnp.ones(4, dtype=jnp.bool_), loaded=jnp.array(0, dtype=jnp.uint8))
+
+def reset_maze(level: chex.Array, lives: chex.Array, score: chex.Array, key: chex.PRNGKey):
+    """Resets the maze after clearing it: pellets reset, extra life, positions reset."""
+    new_lives = jnp.minimum(lives + 1, CONSTS.MAX_LIVE_COUNT).astype(jnp.int8)
+    return reset_game(level, new_lives, score, key)
 
 def reset_player():
     return PlayerState(
