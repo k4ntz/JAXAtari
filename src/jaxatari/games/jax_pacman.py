@@ -623,7 +623,7 @@ class PacmanRenderer(JAXGameRenderer):
         pacman_mask = self.PACMAN_MASKS[orientation.astype(jnp.int32), frame.astype(jnp.int32)]
         
         raster = jax.lax.cond(
-            state.player.tunnel_timer == 0,
+            (state.player.tunnel_timer == 0) & (state.player.position[1] < 189),
             lambda r: self.jr.render_at(r, state.player.position[0].astype(jnp.int32), state.player.position[1].astype(jnp.int32) - 1, pacman_mask),
             lambda r: r,
             raster
