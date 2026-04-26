@@ -183,6 +183,7 @@ def main():
         default="jaxatari_play_state.json",
         help="Path written when pressing S during play (default: jaxatari_play_state.json).",
     )
+
     parser.add_argument(
         "--profile",
         action=argparse.BooleanOptionalAction,
