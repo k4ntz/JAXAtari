@@ -33,6 +33,7 @@ GAME_MODULES = {
     "asteroids": "jaxatari.games.jax_asteroids",
     "atlantis": "jaxatari.games.jax_atlantis",
     "bankheist": "jaxatari.games.jax_bankheist",
+    "beamrider": "jaxatari.games.jax_beamrider",
     "berzerk": "jaxatari.games.jax_berzerk",
     "blackjack": "jaxatari.games.jax_blackjack",
     "breakout": "jaxatari.games.jax_breakout",
@@ -94,6 +95,7 @@ MOD_MODULES = {
     "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
     "montezumarevenge": "jaxatari.games.mods.montezuma_revenge_mods.MontezumaRevengeEnvMod",
     "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
+    "beamrider": "jaxatari.games.mods.beamrider_mods.BeamRiderEnvMod"
 }
 
 
