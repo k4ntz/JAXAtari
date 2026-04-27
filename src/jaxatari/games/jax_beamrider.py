@@ -1,4 +1,3 @@
-"Authors: Lasse Reith, Benedikt Schwarz, Shir Nussbaum"
 import os
 from enum import IntEnum
 from functools import partial
@@ -4041,7 +4040,7 @@ class BeamriderRenderer(JAXGameRenderer):
 
         #2 Update asset config to include sprites 
         asset_config = self._get_asset_config()
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/beamrider"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "beamrider")
 
         # 3. Make a single call to the setup function
         (
