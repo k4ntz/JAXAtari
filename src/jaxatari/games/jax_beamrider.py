@@ -1638,7 +1638,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 key=key_reset,
                 white_ufo_left=white_ufo_left, torpedoes_left=torpedos_left, shooting_cooldown=shooting_cooldown,
                 shooting_delay=shooting_delay, shot_type_pending=shot_type_pending,
-                standby_phase=jnp.where(just_died, int(StandbyPhase.DECEL), int(StandbyPhase.SECTOR_DONE)).astype(jnp.int32),
+                standby_phase=jnp.where(
+                    sector_advanced,
+                    int(StandbyPhase.SECTOR_DONE),
+                    jnp.where(just_died, int(StandbyPhase.DECEL), int(StandbyPhase.NONE)),
+                ).astype(jnp.int32),
                 coin_spawn_count=coin_spawn_count,
             )
             return reset_level_state.replace(
@@ -1869,8 +1873,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             shooting_delay == 0
         ]))
 
-        want_torpedo = (action == Action.UP) & (state.level.torpedoes_left >= 1)
-        want_laser = action == Action.FIRE
+        want_torpedo = jnp.isin(action, self._torpedo_actions) & (state.level.torpedoes_left >= 1)
+        want_laser = jnp.isin(action, self._actions_fire)
 
         initiate_launch = can_initiate_launch & (want_torpedo | want_laser)
 
