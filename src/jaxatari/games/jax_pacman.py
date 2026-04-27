@@ -300,7 +300,8 @@ class FruitState(NamedTuple):
     spawned: chex.Array             # Bool - Indicates wether a fruit is currently present within the maze
     timer: chex.Array
 
-class PacmanState(NamedTuple):
+@struct.dataclass
+class PacmanState:
     level: LevelState               # LevelState
     player: PlayerState             # PlayerState
     ghosts: GhostsState             # GhostStates
@@ -312,7 +313,8 @@ class PacmanState(NamedTuple):
     step_count: chex.Array          # Int - Number of steps made in the current level
     key: chex.PRNGKey
 
-class PacmanObservation(NamedTuple):
+@struct.dataclass
+class PacmanObservation:
     player_position: chex.Array
     player_action: chex.Array
     ghost_positions: chex.Array
@@ -323,7 +325,8 @@ class PacmanObservation(NamedTuple):
     pellets: chex.Array
     power_pellets: chex.Array
 
-class PacmanInfo(NamedTuple):
+@struct.dataclass
+class PacmanInfo:
     level: chex.Array
     score: chex.Array
     lives: chex.Array
@@ -867,7 +870,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
         
         new_state = jax.lax.cond(
             frozen,
-            lambda: new_state._replace(key=key),
+            lambda: new_state.replace(key=key),
             lambda: jax.lax.cond(
                 level_id != state.level.id,
                 lambda: reset_maze(level_id, state.lives, new_score, key),
@@ -928,11 +931,39 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
     @jax.jit
     def get_info(state: PacmanState):
         return PacmanInfo(level=state.level.id, score=state.score, lives=state.lives)
-    
+
+    def _get_observation(self, state: PacmanState) -> PacmanObservation:
+        return JaxPacman.get_observation(state)
+
+    def _get_info(self, state: PacmanState, all_rewards=None) -> PacmanInfo:
+        return JaxPacman.get_info(state)
+
+    def _get_reward(self, previous_state: PacmanState, state: PacmanState) -> chex.Array:
+        return (state.score - previous_state.score).astype(jnp.float32)
+
+    def _get_done(self, state: PacmanState) -> chex.Array:
+        return state.lives < 0
+
+    def observation_space(self) -> spaces.Dict:
+        return spaces.Dict({
+            "player_position": spaces.Box(low=0, high=255, shape=(2,), dtype=jnp.int32),
+            "player_action": spaces.Box(low=0, high=5, shape=(), dtype=jnp.uint8),
+            "ghost_positions": spaces.Box(low=0, high=255, shape=(4, 2), dtype=jnp.int32),
+            "ghost_actions": spaces.Box(low=0, high=5, shape=(4,), dtype=jnp.uint8),
+            "fruit_position": spaces.Box(low=0, high=255, shape=(2,), dtype=jnp.uint8),
+            "fruit_action": spaces.Box(low=0, high=255, shape=(2,), dtype=jnp.uint8),
+            "fruit_type": spaces.Box(low=0, high=6, shape=(), dtype=jnp.uint8),
+            "pellets": spaces.Box(low=0, high=1, shape=(18, 8), dtype=jnp.uint8),
+            "power_pellets": spaces.Box(low=0, high=1, shape=(4,), dtype=jnp.uint8),
+        })
+
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(low=0, high=255, shape=(210, 160, 3), dtype=jnp.uint8)
+
     @staticmethod
     def death_step(state: PacmanState, key: chex.PRNGKey):
         def decrement_timer(state: PacmanState):
-            return state._replace(freeze_timer=state.freeze_timer - 1)
+            return state.replace(freeze_timer=state.freeze_timer - 1)
 
         return jax.lax.cond(
             state.freeze_timer == 0,
@@ -1198,4 +1229,4 @@ def reset_fruit(level: chex.Array, key: chex.PRNGKey):
     return FruitState(position=jnp.zeros(2, dtype=jnp.uint8), exit=jnp.zeros(2, dtype=jnp.uint8), type=jnp.array(0, dtype=jnp.uint8), action=jnp.array(Action.NOOP, dtype=jnp.uint8), spawn=jnp.array(False, dtype=jnp.bool_), spawned=jnp.array(False, dtype=jnp.bool_), timer=jnp.array(CONSTS.VITAMINS_DURATION, dtype=jnp.uint16))
 
 def reset_entities(state: PacmanState, key: chex.PRNGKey):
-    return state._replace(player=reset_player(), ghosts=reset_ghosts(), fruit=reset_fruit(state.level.id, key), step_count=jnp.array(0, dtype=jnp.uint32))
+    return state.replace(player=reset_player(), ghosts=reset_ghosts(), fruit=reset_fruit(state.level.id, key), step_count=jnp.array(0, dtype=jnp.uint32))

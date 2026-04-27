@@ -22,7 +22,7 @@ class CagedGhostsMod(JaxAtariPostStepModPlugin):
         new_positions = jnp.full_like(ghosts.positions, jnp.array(JAIL_POSITION, dtype=jnp.uint8))
         new_timers = jnp.full_like(ghosts.timers, 9999)
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
-        return state._replace(ghosts=new_ghosts)
+        return state.replace(ghosts=new_ghosts)
 
 
 class ConstantFruitsMod(JaxAtariPostStepModPlugin):
@@ -32,7 +32,7 @@ class ConstantFruitsMod(JaxAtariPostStepModPlugin):
             spawn=jnp.array(True, dtype=jnp.bool_),
             timer=jnp.array(9999, dtype=jnp.uint16)
         )
-        return new_state._replace(fruit=new_fruit)
+        return new_state.replace(fruit=new_fruit)
 
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
@@ -40,7 +40,7 @@ class ConstantFruitsMod(JaxAtariPostStepModPlugin):
             spawn=jnp.array(True, dtype=jnp.bool_),
             timer=jnp.array(9999, dtype=jnp.uint16)
         )
-        new_state = state._replace(fruit=new_fruit)
+        new_state = state.replace(fruit=new_fruit)
         new_obs = JaxPacman.get_observation(new_state)
         return new_obs, new_state
 
@@ -164,7 +164,7 @@ class Only1GhostMod(JaxAtariPostStepModPlugin):
             jnp.array(9999, dtype=jnp.float16)
         )
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
-        return state._replace(ghosts=new_ghosts, key=key)
+        return state.replace(ghosts=new_ghosts, key=key)
 
     def _maintain_ghosts(self, state):
         ghosts = state.ghosts
@@ -174,7 +174,7 @@ class Only1GhostMod(JaxAtariPostStepModPlugin):
         new_positions = jnp.where(is_inactive[:, None], jnp.array(JAIL_POSITION, dtype=jnp.uint8), ghosts.positions)
         new_timers = jnp.where(is_inactive, jnp.array(9999, dtype=jnp.float16), ghosts.timers)
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
-        return state._replace(ghosts=new_ghosts)
+        return state.replace(ghosts=new_ghosts)
 
 class Only2GhostMod(JaxAtariPostStepModPlugin):
     num_ghosts = 2
@@ -224,7 +224,7 @@ class Only2GhostMod(JaxAtariPostStepModPlugin):
             jnp.array(9999, dtype=jnp.float16)
         )
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
-        return state._replace(ghosts=new_ghosts, key=key)
+        return state.replace(ghosts=new_ghosts, key=key)
 
     def _maintain_ghosts(self, state):
         ghosts = state.ghosts
@@ -233,7 +233,7 @@ class Only2GhostMod(JaxAtariPostStepModPlugin):
         new_positions = jnp.where(is_inactive[:, None], jnp.array(JAIL_POSITION, dtype=jnp.uint8), ghosts.positions)
         new_timers = jnp.where(is_inactive, jnp.array(9999, dtype=jnp.float16), ghosts.timers)
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
-        return state._replace(ghosts=new_ghosts)
+        return state.replace(ghosts=new_ghosts)
 
 class Only3GhostMod(JaxAtariPostStepModPlugin):
     num_ghosts = 3
@@ -283,7 +283,7 @@ class Only3GhostMod(JaxAtariPostStepModPlugin):
             jnp.array(9999, dtype=jnp.float16)
         )
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
-        return state._replace(ghosts=new_ghosts, key=key)
+        return state.replace(ghosts=new_ghosts, key=key)
 
     def _maintain_ghosts(self, state):
         ghosts = state.ghosts
@@ -292,7 +292,7 @@ class Only3GhostMod(JaxAtariPostStepModPlugin):
         new_positions = jnp.where(is_inactive[:, None], jnp.array(JAIL_POSITION, dtype=jnp.uint8), ghosts.positions)
         new_timers = jnp.where(is_inactive, jnp.array(9999, dtype=jnp.float16), ghosts.timers)
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
-        return state._replace(ghosts=new_ghosts)
+        return state.replace(ghosts=new_ghosts)
 
 
 class RandomGhostNavigationMod(JaxAtariPostStepModPlugin):
@@ -319,4 +319,4 @@ class RandomGhostNavigationMod(JaxAtariPostStepModPlugin):
             ghosts.modes
         )
         new_ghosts = ghosts._replace(modes=new_modes)
-        return state._replace(ghosts=new_ghosts)
+        return state.replace(ghosts=new_ghosts)

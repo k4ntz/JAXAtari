@@ -194,7 +194,8 @@ class FruitState(NamedTuple):
     spawned: chex.Array             # Bool - Indicates wether a fruit is currently present within the maze
     timer: chex.Array               # Int - Time until leaving through the exit tunnel, decrements every step
 
-class PacmanState(NamedTuple):
+@struct.dataclass
+class PacmanState:
     level: LevelState               # LevelState
     player: PlayerState             # PlayerState
     ghosts: GhostsState             # GhostStates
@@ -206,7 +207,8 @@ class PacmanState(NamedTuple):
     step_count: chex.Array          # Int - Number of steps made in the current level
     key: chex.PRNGKey               # PRNGKey for RNG during step
 
-class PacmanObservation(NamedTuple):
+@struct.dataclass
+class PacmanObservation:
     player_position: chex.Array
     player_action: chex.Array
     ghost_positions: chex.Array
@@ -217,7 +219,8 @@ class PacmanObservation(NamedTuple):
     pellets: chex.Array
     power_pellets: chex.Array
 
-class PacmanInfo(NamedTuple):
+@struct.dataclass
+class PacmanInfo:
     level: chex.Array
     score: chex.Array
     lives: chex.Array
@@ -326,7 +329,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, MsPac
         # 6) Update state
         new_state = jax.lax.cond(
             frozen,
-            lambda: new_state._replace(key=key),
+            lambda: new_state.replace(key=key),
             lambda: jax.lax.cond(
                 level_id != state.level.id,
                 lambda: reset_game(level_id, state.lives, new_score, key),
@@ -400,14 +403,42 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, MsPac
             score=state.score,
             lives=state.lives
         )
-    
+
+    def _get_observation(self, state: PacmanState) -> PacmanObservation:
+        return JaxPacman.get_observation(state)
+
+    def _get_info(self, state: PacmanState, all_rewards=None) -> PacmanInfo:
+        return JaxPacman.get_info(state)
+
+    def _get_reward(self, previous_state: PacmanState, state: PacmanState) -> chex.Array:
+        return (state.score - previous_state.score).astype(jnp.float32)
+
+    def _get_done(self, state: PacmanState) -> chex.Array:
+        return state.lives < 0
+
+    def observation_space(self) -> spaces.Dict:
+        return spaces.Dict({
+            "player_position": spaces.Box(low=0, high=255, shape=(2,), dtype=jnp.int32),
+            "player_action": spaces.Box(low=0, high=5, shape=(), dtype=jnp.uint8),
+            "ghost_positions": spaces.Box(low=0, high=255, shape=(4, 2), dtype=jnp.int32),
+            "ghost_actions": spaces.Box(low=0, high=5, shape=(4,), dtype=jnp.uint8),
+            "fruit_position": spaces.Box(low=0, high=255, shape=(2,), dtype=jnp.uint8),
+            "fruit_action": spaces.Box(low=0, high=255, shape=(2,), dtype=jnp.uint8),
+            "fruit_type": spaces.Box(low=0, high=6, shape=(), dtype=jnp.uint8),
+            "pellets": spaces.Box(low=0, high=1, shape=(18, 14), dtype=jnp.uint8),
+            "power_pellets": spaces.Box(low=0, high=1, shape=(4,), dtype=jnp.uint8),
+        })
+
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(low=0, high=255, shape=(210, 160, 3), dtype=jnp.uint8)
+
     @staticmethod
     def death_step(state: PacmanState, key: chex.PRNGKey):
         """
         Updates the game state when a deadly collision occured.
         """
         def decrement_timer(state: PacmanState):
-            return state._replace(freeze_timer=state.freeze_timer - 1)
+            return state.replace(freeze_timer=state.freeze_timer - 1)
 
         return jax.lax.cond(
             state.freeze_timer == 0,
@@ -447,7 +478,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, MsPac
             stop_wall(state.player.position, state.level.dofmaze)[act_to_dir(state.player.action)],
             lambda: state.player.position,
             lambda: get_new_position(state.player.position, new_action)
-        ) 
+        )
         # 4) Update pellets based on the new player position
         (
             pellets,
