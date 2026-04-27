@@ -13,8 +13,6 @@ from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariActi
 from jaxatari.spaces import Space
 from jaxatari.modification import AutoDerivedConstants
 
-# Phoenix Game by: Florian Schmidt, Finn Keller
-# Curated by: Paul Seitz
 
 def _create_static_procedural_sprites() -> dict:
     """Creates procedural sprites that don't depend on dynamic values."""
