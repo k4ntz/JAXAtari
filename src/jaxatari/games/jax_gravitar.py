@@ -4552,18 +4552,6 @@ class GravitarRenderer(JAXGameRenderer):
             is_in_reactor = (state.mode == 1) & (state.current_level == 4)
             final_frame = jax.lax.cond(is_in_reactor, draw_reactor_timer, lambda fc: fc, frame_after_lives)
 
-            # If native downscaling is configured, apply it here so the renderer
-            # returns the downscaled image natively (used by PixelObsWrapper hot-swap).
-            if getattr(self, 'config', None) and self.config.downscale:
-                th, tw = self.config.downscale
-                resized = jim.resize(final_frame.astype(jnp.float32), (th, tw, final_frame.shape[2]), method='bilinear')
-                final_frame = resized.astype(jnp.uint8)
-            
-            # Convert to grayscale if configured
-            if getattr(self, 'config', None) and self.config.channels == 1:
-                # Standard RGB to grayscale conversion: 0.299*R + 0.587*G + 0.114*B
-                gray = (0.299 * final_frame[..., 0] + 0.587 * final_frame[..., 1] + 0.114 * final_frame[..., 2])
-                final_frame = gray.astype(jnp.uint8)[..., None]  # Add channel dimension
             
             return final_frame
 
