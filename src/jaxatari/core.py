@@ -76,6 +76,7 @@ GAME_MODULES = {
     "videocube": "jaxatari.games.jax_videocube",
     "videopinball": "jaxatari.games.jax_videopinball",
     "wordzapper": "jaxatari.games.jax_wordzapper",
+    "wizardofwor": "jaxatari.games.jax_wizardofwor"
     # Add new games here
 }
 
