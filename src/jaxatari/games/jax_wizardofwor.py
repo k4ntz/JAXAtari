@@ -1835,7 +1835,9 @@ class WizardOfWorRenderer(JAXGameRenderer):
 
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "wizardofwor")
+        # sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "wizardofwor")
+        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}"
+        sprite_path = os.path.join(sprite_path, "sprites", "wizardofwor")
 
         final_asset_config = list(_get_default_asset_config())
 
