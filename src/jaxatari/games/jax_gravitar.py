@@ -218,22 +218,23 @@ _TERRAIN_MASK_DY_FULL = jnp.arange(-_TERRAIN_MASK_R_MAX, _TERRAIN_MASK_R_MAX + 1
 _TERRAIN_MASK_DX, _TERRAIN_MASK_DY = jnp.meshgrid(_TERRAIN_MASK_DX_FULL, _TERRAIN_MASK_DY_FULL, indexing='xy')
 _TERRAIN_MASK_DIST2 = _TERRAIN_MASK_DX * _TERRAIN_MASK_DX + _TERRAIN_MASK_DY * _TERRAIN_MASK_DY
 
+# Precomputed grids for terrain_hit hot path
+_TERRAIN_HIT_RMAX = 16
+_TERRAIN_HIT_DX = jnp.arange(-_TERRAIN_HIT_RMAX, _TERRAIN_HIT_RMAX + 1, dtype=jnp.int32)
+_TERRAIN_HIT_DY = jnp.arange(-_TERRAIN_HIT_RMAX, _TERRAIN_HIT_RMAX + 1, dtype=jnp.int32)
+_TERRAIN_HIT_DIST2 = _TERRAIN_HIT_DY[:, None] ** 2 + _TERRAIN_HIT_DX[None, :] ** 2
+
+# Precomputed trigonometry to avoid jnp.arctan2 in hot loops
+_SHIP_ANGLES_COS = jnp.cos(_DEFAULT_CONSTS.SHIP_ANGLES)
+_SHIP_ANGLES_SIN = jnp.sin(_DEFAULT_CONSTS.SHIP_ANGLES)
+
 
 @jax.jit
 def snap_angle_to_discrete(angle: jnp.ndarray) -> jnp.ndarray:
     """Snap a continuous angle to the nearest of 16 discrete ship angles."""
-    # Normalize angle to [-pi, pi]
-    normalized = jnp.arctan2(jnp.sin(angle), jnp.cos(angle))
-
-    # Calculate angular distance to each discrete angle
-    angle_diffs = jnp.abs(
-        jnp.arctan2(
-            jnp.sin(normalized - SHIP_ANGLES),
-            jnp.cos(normalized - SHIP_ANGLES),
-        )
-    )
-
-    closest_idx = jnp.argmin(angle_diffs)
+    # Fast squared distance in 2D space avoids slow arctan2/sin/cos
+    cost = (jnp.cos(angle) - _SHIP_ANGLES_COS) ** 2 + (jnp.sin(angle) - _SHIP_ANGLES_SIN) ** 2
+    closest_idx = jnp.argmin(cost)
     return SHIP_ANGLES[closest_idx]
 
 
@@ -246,12 +247,8 @@ def get_ship_sprite_idx(angle: jnp.ndarray) -> jnp.ndarray:
     Returns:
         Sprite index from SHIP_SPRITE_INDICES
     """
-    # Find which discrete angle this is
-    angle_diffs = jnp.abs(jnp.arctan2(
-        jnp.sin(angle - SHIP_ANGLES),
-        jnp.cos(angle - SHIP_ANGLES)
-    ))
-    closest_idx = jnp.argmin(angle_diffs)
+    cost = (jnp.cos(angle) - _SHIP_ANGLES_COS) ** 2 + (jnp.sin(angle) - _SHIP_ANGLES_SIN) ** 2
+    closest_idx = jnp.argmin(cost)
     return SHIP_SPRITE_INDICES[closest_idx]
 
 
@@ -568,11 +565,11 @@ class EnvState:
 
     current_level: jnp.ndarray  # int32, current level ID (typically -1 in map mode)
     terrain_sprite_idx: jnp.ndarray  # int32, terrain sprite for the current level (TERRAIN* / REACTOR_TERR)
-    terrain_mask: jnp.ndarray  # (Hmask, Wmask) bool/uint8
+    terrain_mask: jnp.ndarray  # (Hmask, Wmask) uint8
     terrain_scale: jnp.ndarray  # float32, rendering scale factor
     terrain_offset: jnp.ndarray  # (2,) float32, screen-top-left offset [ox, oy]
 
-    terrain_bank: jnp.ndarray  # uint8，shape (B, H, W)
+    terrain_bank: jnp.ndarray  # int32，shape (B, H, W)
     terrain_bank_idx: jnp.ndarray  # int32, index of the currently used bank (0 = no terrain)
     respawn_shift_x: jnp.ndarray  # float32
     reactor_dest_active: jnp.ndarray  # bool
@@ -1298,10 +1295,10 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
         fuel=jnp.array(STARTING_FUEL, dtype=jnp.float32),
         current_level=jnp.int32(-1),
         terrain_sprite_idx=jnp.int32(-1),
-        terrain_mask=jnp.zeros((WINDOW_HEIGHT, WINDOW_WIDTH), dtype=jnp.uint8),
+        terrain_mask=jnp.zeros((WINDOW_HEIGHT, WINDOW_WIDTH), dtype=jnp.int32),
         terrain_scale=jnp.array(1.0),
         terrain_offset=jnp.array([0.0, 0.0]),
-        terrain_bank=jnp.zeros((6, WINDOW_HEIGHT, WINDOW_WIDTH, 3), dtype=jnp.uint8), 
+        terrain_bank=jnp.zeros((6, WINDOW_HEIGHT, WINDOW_WIDTH, 3), dtype=jnp.int32),
         terrain_bank_idx=jnp.int32(0),
         reactor_timer=jnp.int32(0),
         reactor_activated=jnp.array(False),
@@ -1627,23 +1624,18 @@ def terrain_hit(env_state: EnvState, x: jnp.ndarray, y: jnp.ndarray, radius=jnp.
     xi = jnp.clip(jnp.round(adjusted_x).astype(jnp.int32), 0, W - 1)
     yi = jnp.clip(jnp.round(adjusted_y).astype(jnp.int32), 0, H - 1)
 
-    RMAX = 16
-    dx = jnp.arange(-RMAX, RMAX + 1, dtype=jnp.int32)
-    dy = jnp.arange(-RMAX, RMAX + 1, dtype=jnp.int32)
-    xs = jnp.clip(xi + dx, 0, W - 1)
-    ys = jnp.clip(yi + dy, 0, H - 1)
+    xs = jnp.clip(xi + _TERRAIN_HIT_DX, 0, W - 1)
+    ys = jnp.clip(yi + _TERRAIN_HIT_DY, 0, H - 1)
 
     bi = jnp.clip(env_state.terrain_bank_idx, 0, env_state.terrain_bank.shape[0] - 1)
     page = env_state.terrain_bank[bi]
 
     patch = page[ys[:, None], xs[None, :]]
 
-    dxf, dyf = dx.astype(jnp.float32), dy.astype(jnp.float32)
-    dist2 = dyf[:, None] ** 2 + dxf[None, :] ** 2
-
-    r_eff = jnp.minimum(jnp.float32(radius), jnp.float32(RMAX))
-    mask = dist2 <= (r_eff ** 2)
-    is_not_black = jnp.sum(patch, axis=-1) > 0
+    r_eff = jnp.minimum(jnp.float32(radius), jnp.float32(_TERRAIN_HIT_RMAX))
+    mask = _TERRAIN_HIT_DIST2 <= (r_eff ** 2)
+    bg_val = env_state.terrain_bank[0, 0, 0]
+    is_not_black = patch != bg_val
 
     return jnp.any(is_not_black & mask)
 
@@ -1737,11 +1729,8 @@ def ship_step(state: ShipState,
     left = jnp.isin(action, rotate_left_actions)
 
     # Find current angle index in the discrete angle array
-    current_angle_diffs = jnp.abs(jnp.arctan2(
-        jnp.sin(state.angle - SHIP_ANGLES),
-        jnp.cos(state.angle - SHIP_ANGLES)
-    ))
-    current_idx = jnp.argmin(current_angle_diffs)
+    cost = (jnp.cos(state.angle) - _SHIP_ANGLES_COS) ** 2 + (jnp.sin(state.angle) - _SHIP_ANGLES_SIN) ** 2
+    current_idx = jnp.argmin(cost)
     
     # Only allow rotation if cooldown has expired
     can_rotate = state.rotation_cooldown <= 0
@@ -2152,31 +2141,6 @@ def enemy_fire(enemies: Enemies,
     return bullets_out, new_fire_cooldown, key
 
 
-# ========== Collision Detection ==========
-@jax.jit
-def check_collision(bullets: Bullets, enemies: Enemies):
-    def bullet_hits_enemy(i, carry):  # `carry` is the cumulative result, a boolean array of shape (MAX_BULLETS,)
-        x = bullets.x[i]  # x, y are the current bullet coordinates
-        y = bullets.y[i]
-        alive = bullets.alive[i]
-
-        def check_each_enemy(j, hit):
-            # Rectangle bounding box, Enemy's bounding box: (x, x+w), (y, y+h)
-            within_x = (x > enemies.x[j]) & (x < enemies.x[j] + enemies.w[j])
-            within_y = (y > enemies.y[j]) & (y < enemies.y[j] + enemies.h[j])
-
-            return hit | (within_x & within_y)
-
-        hit_any = jax.lax.fori_loop(0, MAX_ENEMIES, check_each_enemy, False)
-
-        return carry.at[i].set(hit_any & alive)
-
-    hits = jnp.zeros((MAX_BULLETS,), dtype=bool)
-    hits = jax.lax.fori_loop(0, MAX_BULLETS, bullet_hits_enemy, hits)
-
-    return hits
-
-
 # ========== Step Core Map ==========
 @jax.jit
 def step_core_map(state: ShipState,
@@ -2240,10 +2204,11 @@ def terrain_hit_mask(mask: jnp.ndarray, x: jnp.ndarray, y: jnp.ndarray, radius: 
     sx = jnp.clip(mx + _TERRAIN_MASK_DX, 0, W - 1)
     sy = jnp.clip(my + _TERRAIN_MASK_DY, 0, H - 1)
 
-    samples = mask[sy, sx].astype(jnp.uint8)
-    samples = jnp.where(valid, samples, 0)
+    samples = mask[sy, sx]
+    bg_val = mask[0, 0]
+    samples = jnp.where(valid, samples, bg_val)
 
-    return jnp.any(samples > 0)
+    return jnp.any(samples != bg_val)
 
 
 @jax.jit
@@ -3175,8 +3140,8 @@ def _bullets_hit_terrain(env_state: EnvState, bullets: Bullets) -> Bullets:
     yi = jnp.clip(jnp.round(bullets.y).astype(jnp.int32), 0, H - 1)
 
     pixel_colors = terrain_map[yi, xi]
-
-    hit_terrain_mask = jnp.sum(pixel_colors, axis=-1) > 0
+    bg_val = env_state.terrain_bank[0, 0, 0]
+    hit_terrain_mask = pixel_colors != bg_val
 
     final_hit_mask = bullets.alive & hit_terrain_mask
 
@@ -3190,8 +3155,8 @@ def _ufo_ground_safe_y_at(terrain_bank, terrain_bank_idx, xf):
 
     terrain_page = terrain_bank[bank_idx]
     col_x = jnp.clip(xf.astype(jnp.int32), 0, W - 1)
-
-    is_ground_in_col = jnp.sum(terrain_page[:, col_x], axis=-1) > 0
+    bg_val = terrain_bank[0, 0, 0]
+    is_ground_in_col = terrain_page[:, col_x] != bg_val
     y_indices = jnp.arange(H, dtype=jnp.int32)
 
     ground_indices = jnp.where(is_ground_in_col, y_indices, H)
@@ -3859,7 +3824,7 @@ class JaxGravitar(JaxEnvironment):
             crash_timer=jnp.int32(0), planets_px=jnp.array(px_np), planets_py=jnp.array(py_np),
             planets_pr=jnp.array(pr_np), planets_pi=jnp.array(pi_np), planets_id=jnp.array(ids_np),
             current_level=jnp.int32(-1), terrain_sprite_idx=jnp.int32(-1),
-            terrain_mask=jnp.zeros((WINDOW_HEIGHT, WINDOW_WIDTH), dtype=jnp.uint8),
+            terrain_mask=jnp.zeros((WINDOW_HEIGHT, WINDOW_WIDTH), dtype=jnp.int32),
             terrain_scale=jnp.array(1.0), 
             terrain_offset=jnp.array([0.0, 0.0]),
             terrain_bank=self.terrain_bank, 
@@ -3983,7 +3948,7 @@ class JaxGravitar(JaxEnvironment):
             key=key, crash_timer=jnp.int32(0), current_level=level_id,
             done=jnp.array(False),
             terrain_sprite_idx=terrain_sprite_idx,
-            terrain_mask=jnp.zeros((WINDOW_HEIGHT, WINDOW_WIDTH), dtype=jnp.uint8),
+            terrain_mask=jnp.zeros((WINDOW_HEIGHT, WINDOW_WIDTH), dtype=jnp.int32),
             terrain_scale=scale,
             terrain_offset=jnp.array([ox, oy]),
             terrain_bank_idx=bank_idx,
@@ -4003,7 +3968,7 @@ class JaxGravitar(JaxEnvironment):
     # --- Helper Methods ---
     def _build_terrain_bank(self) -> jnp.ndarray:
         W, H = WINDOW_WIDTH, WINDOW_HEIGHT
-        bank = [np.zeros((H, W, 3), dtype=np.uint8)]
+        bank = [np.full((H, W), self.renderer.jr.TRANSPARENT_ID, dtype=np.int32)]
         BANK_IDX_TO_LEVEL_ID = {v: k for k, v in LEVEL_ID_TO_BANK_IDX.items()}
 
         def sprite_to_mask(idx: int, bank_idx: int) -> np.ndarray:
@@ -4033,19 +3998,22 @@ class JaxGravitar(JaxEnvironment):
             if surf.shape[0] != sh or surf.shape[1] != sw:
                 scale_h = max(1, int(round(sh / surf.shape[0])))
                 scale_w = max(1, int(round(sw / surf.shape[1])))
-                rgb_array_hwc = np.repeat(np.repeat(surf[:, :, :3], scale_h, axis=0), scale_w, axis=1)[:sh, :sw]
+                rgba_array = np.repeat(np.repeat(surf, scale_h, axis=0), scale_w, axis=1)[:sh, :sw]
             else:
-                rgb_array_hwc = surf[:, :, :3]
+                rgba_array = surf
 
-            color_map = np.zeros((H, W, 3), dtype=np.uint8)
-            src_w, src_h = rgb_array_hwc.shape[1], rgb_array_hwc.shape[0]
+            id_mask = np.array(self.renderer.jr._create_id_mask(rgba_array, self.renderer.COLOR_TO_ID))
+
+            color_map = np.full((H, W), self.renderer.jr.TRANSPARENT_ID, dtype=np.int32)
+            src_w, src_h = id_mask.shape[1], id_mask.shape[0]
             dst_x, dst_y = max(ox, 0), max(oy, 0)
             src_x = abs(min(ox, 0))
             src_y = abs(min(oy, 0))
             copy_w = min(W - dst_x, src_w - src_x)
             copy_h = min(H - dst_y, src_h - src_y)
             if copy_w > 0 and copy_h > 0:
-                color_map[dst_y:dst_y + copy_h, dst_x:dst_x + copy_w] = rgb_array_hwc[src_y:src_y + copy_h, src_x:src_x + copy_w]
+                color_map[dst_y:dst_y + copy_h, dst_x:dst_x + copy_w] = id_mask[
+                    src_y:src_y + copy_h, src_x:src_x + copy_w]
             return color_map
 
         terrains_to_build = [
@@ -4054,7 +4022,7 @@ class JaxGravitar(JaxEnvironment):
         ]
         for sprite_idx, bank_idx in terrains_to_build:
             bank.append(sprite_to_mask(int(sprite_idx), bank_idx))
-        return jnp.array(np.stack(bank, axis=0), dtype=np.uint8)
+        return jnp.array(np.stack(bank, axis=0), dtype=jnp.int32)
 
 
 class GravitarRenderer(JAXGameRenderer):
@@ -4087,33 +4055,29 @@ class GravitarRenderer(JAXGameRenderer):
             else:
                 # Create a placeholder 1x1 transparent sprite for missing indices
                 sprites_list.append(jnp.zeros((1, 1, 4), dtype=jnp.uint8))
-        self.sprites = tuple(sprites_list)  # Store as tuple for JIT-compatible indexing
 
-        def _no_op_blit(frame, x, y):
-            return frame
+        ui_colors = jnp.array([[[255, 255, 0, 255], [50, 50, 50, 255], [0, 0, 0, 255]]], dtype=jnp.uint8)
+        all_assets = sprites_list + [ui_colors]
+        self.PALETTE, self.COLOR_TO_ID = self.jr._create_palette(all_assets)
 
-        blit_functions = {}
-        for sprite_idx, sprite_array_rgba in jax_sprites.items():
-            if sprite_array_rgba is None: continue
+        if self.COLOR_TO_ID:
+            self.jr.TRANSPARENT_ID = max(self.COLOR_TO_ID.values()) + 1
+        else:
+            self.jr.TRANSPARENT_ID = 255
 
-            def make_blit_func(sprite_data):
-                sprite_h, sprite_w, _ = sprite_data.shape
-                sprite_rgb = sprite_data[..., :3]
-                sprite_alpha = (sprite_data[..., 3] / 255.0)[..., None]
+        palette_size = self.PALETTE.shape[0]
+        required_size = self.jr.TRANSPARENT_ID + 1
+        if palette_size < required_size:
+            padding = jnp.zeros((required_size - palette_size, 3), dtype=self.PALETTE.dtype)
+            self.PALETTE = jnp.concatenate([self.PALETTE, padding], axis=0)
 
-                def _blit_sprite(frame, x, y):
-                    start_x = jnp.round(x - sprite_w / 2).astype(jnp.int32)
-                    start_y = jnp.round(y - sprite_h / 2).astype(jnp.int32)
-                    target_patch = jax.lax.dynamic_slice(frame, (start_y, start_x, 0), (sprite_h, sprite_w, 3))
-                    blended_patch = sprite_rgb * sprite_alpha + target_patch * (1 - sprite_alpha)
-                    return jax.lax.dynamic_update_slice(frame, blended_patch.astype(jnp.uint8), (start_y, start_x, 0))
+        self.color_yellow = self.COLOR_TO_ID.get((255, 255, 0), 0)
+        self.color_gray = self.COLOR_TO_ID.get((50, 50, 50), 0)
 
-                return _blit_sprite
-
-            blit_functions[sprite_idx] = make_blit_func(sprite_array_rgba)
-
-        max_idx = max(jax_sprites.keys()) if jax_sprites else -1
-        self.blit_branches = tuple(blit_functions.get(i, _no_op_blit) for i in range(max_idx + 1))
+        masks_list = []
+        for s in sprites_list:
+            masks_list.append(self.jr._create_id_mask(s, self.COLOR_TO_ID))
+        self.sprites = tuple(masks_list)
 
         idle_sprite = jax_sprites.get(int(SpriteIdx.SHIP_IDLE))
         crash_sprite = jax_sprites.get(int(SpriteIdx.SHIP_CRASH))
@@ -4147,55 +4111,58 @@ class GravitarRenderer(JAXGameRenderer):
             max_h = max(s.shape[0] for s in valid_ship_sprites)
             max_w = max(s.shape[1] for s in valid_ship_sprites)
 
-            def pad_sprite(sprite, h, w):
-                pad_h = (h - sprite.shape[0]) // 2
-                pad_w = (w - sprite.shape[1]) // 2
-                return jnp.pad(sprite,
-                               ((pad_h, h - sprite.shape[0] - pad_h), (pad_w, w - sprite.shape[1] - pad_w), (0, 0)))
+            def pad_mask(sprite_rgba, h, w):
+                if sprite_rgba is None:
+                    return jnp.full((h, w), self.jr.TRANSPARENT_ID, dtype=jnp.int32)
+                mask = self.jr._create_id_mask(sprite_rgba, self.COLOR_TO_ID)
+                pad_h = (h - mask.shape[0]) // 2
+                pad_w = (w - mask.shape[1]) // 2
+                return jnp.pad(mask,
+                               ((pad_h, h - mask.shape[0] - pad_h), (pad_w, w - mask.shape[1] - pad_w)),
+                               constant_values=self.jr.TRANSPARENT_ID)
 
-            self.padded_ship_idle = pad_sprite(idle_sprite, max_h, max_w) if idle_sprite is not None else jnp.zeros((max_h, max_w, 4), dtype=jnp.uint8)
-            self.padded_ship_crash = pad_sprite(crash_sprite, max_h, max_w) if crash_sprite is not None else jnp.zeros((max_h, max_w, 4), dtype=jnp.uint8)
-            self.padded_ship_thrust = pad_sprite(thrust_sprite, max_h, max_w) if thrust_sprite is not None else jnp.zeros((max_h, max_w, 4), dtype=jnp.uint8)
-            
-            # Pad all 16 orientation sprites
+            self.padded_ship_idle = pad_mask(idle_sprite, max_h, max_w)
+            self.padded_ship_crash = pad_mask(crash_sprite, max_h, max_w)
+            self.padded_ship_thrust = pad_mask(thrust_sprite, max_h, max_w)
+
             self.padded_ship_orientations = tuple(
-                pad_sprite(sprite, max_h, max_w) if sprite is not None else jnp.zeros((max_h, max_w, 4), dtype=jnp.uint8)
+                pad_mask(sprite, max_h, max_w)
                 for sprite in orientation_sprites
             )
+            self.ship_orientations_array = jnp.stack(self.padded_ship_orientations)
         else:
-            default_sprite = jnp.zeros((1, 1, 4), dtype=jnp.uint8)
-            self.padded_ship_idle = default_sprite
-            self.padded_ship_crash = default_sprite
-            self.padded_ship_thrust = default_sprite
-            self.padded_ship_orientations = tuple(default_sprite for _ in range(16))
+            default_mask = jnp.full((1, 1), self.jr.TRANSPARENT_ID, dtype=jnp.int32)
+            self.padded_ship_idle = default_mask
+            self.padded_ship_crash = default_mask
+            self.padded_ship_thrust = default_mask
+            self.padded_ship_orientations = tuple(default_mask for _ in range(16))
+            self.ship_orientations_array = jnp.stack(self.padded_ship_orientations)
 
     @partial(jax.jit, static_argnames=('self',))
     def render(self, state: EnvState) -> jnp.ndarray:
         H, W = self.height, self.width
-        # Start with a black frame for each render cycle.
-        frame = jnp.zeros((H, W, 3), dtype=jnp.uint8)
+        frame = jnp.full((H, W), self.jr.TRANSPARENT_ID, dtype=jnp.int32)
 
         # 1. Draw map elements
         def draw_map_elements(f):
-            def draw_one_planet(i, frame_carry):
-                sprite_idx = state.planets_pi[i]
-                x, y = state.planets_px[i], state.planets_py[i]
-
-                # Conditions to check before drawing a map object.
-                is_planet_cleared = (i < state.planets_cleared_mask.shape[0]) & state.planets_cleared_mask[i]
-                is_reactor_and_destroyed = (sprite_idx == int(SpriteIdx.REACTOR)) & state.reactor_destroyed
-                should_draw = ~(is_planet_cleared | is_reactor_and_destroyed)
-
-                def perform_blit(fc):
-                    # Safely select the correct blit function and draw the sprite.
-                    safe_idx = jnp.clip(sprite_idx, 0, len(self.blit_branches) - 1)
-                    branches = tuple(lambda op, b=b: b(op[0], op[1], op[2]) for b in self.blit_branches)
-
-                    return jax.lax.switch(safe_idx, branches, (fc, x, y))
-
-                return jax.lax.cond(should_draw, perform_blit, lambda fc: fc, frame_carry)
-
-            return jax.lax.fori_loop(0, state.planets_pi.shape[0], draw_one_planet, f)
+            for sprite_id in [SpriteIdx.PLANET1, SpriteIdx.PLANET2, SpriteIdx.PLANET3, SpriteIdx.PLANET4, 
+                              SpriteIdx.REACTOR, SpriteIdx.OBSTACLE, SpriteIdx.SPAWN_LOC]:
+                sprite_id_int = int(sprite_id)
+                sprite_arr = self.sprites[sprite_id_int]
+                
+                is_type = state.planets_pi == sprite_id_int
+                is_reactor_destroyed = (sprite_id_int == int(SpriteIdx.REACTOR)) & state.reactor_destroyed
+                
+                def draw_one_planet(i, fc):
+                    is_cleared = (i < state.planets_cleared_mask.shape[0]) & state.planets_cleared_mask[i]
+                    should_draw = is_type[i] & ~(is_cleared | is_reactor_destroyed)
+                    return jax.lax.cond(
+                        should_draw,
+                        lambda fc: self.jr.render_at(fc, state.planets_px[i], state.planets_py[i], sprite_arr),
+                        lambda fc: fc, fc
+                    )
+                f = jax.lax.fori_loop(0, state.planets_pi.shape[0], draw_one_planet, f)
+            return f
 
         frame = jax.lax.cond(state.mode == 0, draw_map_elements, lambda f: f, frame)
 
@@ -4204,76 +4171,63 @@ class GravitarRenderer(JAXGameRenderer):
             # Select the correct pre-rendered terrain map from the bank.
             bank_idx = jnp.clip(state.terrain_bank_idx, 0, state.terrain_bank.shape[0] - 1)
             terrain_map = state.terrain_bank[bank_idx]
-            # Draw the terrain map wherever its pixels are not black.
-            is_terrain_pixel = jnp.sum(terrain_map, axis=-1) > 0
+            is_terrain_pixel = terrain_map != self.jr.TRANSPARENT_ID
 
-            return jnp.where(is_terrain_pixel[..., None], terrain_map, f)
+            return jnp.where(is_terrain_pixel, terrain_map, f)
 
         frame = jax.lax.cond(state.mode == 1, draw_level_terrain, lambda f: f, frame)
 
         # === 3. Draw Level Actors (Enemies, Fuel Tanks, UFO) ===
         def draw_enemies(f):
-            def draw_enemy_func(i, current_frame):
-                is_alive = state.enemies.w[i] > 0
-                is_exploding = state.enemies.death_timer[i] > 0
+            def draw_type(sprite_id, f_in):
+                sprite_arr = self.sprites[sprite_id]
+                def draw_one(i, fc):
+                    is_alive = state.enemies.w[i] > 0
+                    is_exploding = state.enemies.death_timer[i] > 0
+                    active = is_alive & ~is_exploding & (state.enemies.sprite_idx[i] == sprite_id)
+                    return jax.lax.cond(
+                        active,
+                        lambda fc: self.jr.render_at(fc, state.enemies.x[i], state.enemies.y[i], sprite_arr),
+                        lambda fc: fc, fc
+                    )
+                return jax.lax.fori_loop(0, MAX_ENEMIES, draw_one, f_in)
 
-                sprite_idx = state.enemies.sprite_idx[i]
-                x, y = state.enemies.x[i], state.enemies.y[i]
+            f = draw_type(int(SpriteIdx.ENEMY_ORANGE), f)
+            f = draw_type(int(SpriteIdx.ENEMY_GREEN), f)
+            f = draw_type(int(SpriteIdx.ENEMY_ORANGE_FLIPPED), f)
 
-                def perform_blit(sprite_id, frame_in):
-                    safe_idx = jnp.clip(sprite_id, 0, len(self.blit_branches) - 1)
-                    branches = tuple(lambda op, b=b: b(op[0], op[1], op[2]) for b in self.blit_branches)
+            crash_sprite = self.sprites[int(SpriteIdx.ENEMY_CRASH)]
+            def draw_explosions(f_in):
+                def draw_one(i, fc):
+                    return jax.lax.cond(
+                        state.enemies.death_timer[i] > 0,
+                        lambda fc: self.jr.render_at(fc, state.enemies.x[i], state.enemies.y[i], crash_sprite),
+                        lambda fc: fc, fc
+                    )
+                return jax.lax.fori_loop(0, MAX_ENEMIES, draw_one, f_in)
 
-                    return jax.lax.switch(safe_idx, branches, (frame_in, x, y))
-
-                # Draw either the alive sprite or nothing.
-                frame_alive = jax.lax.cond(is_alive & ~is_exploding, lambda f_in: perform_blit(sprite_idx, f_in),
-                                           lambda f_in: f_in, current_frame)
-                # On top of that, draw the explosion if the enemy is exploding.
-                frame_exploding = jax.lax.cond(is_exploding,
-                                               lambda f_in: perform_blit(int(SpriteIdx.ENEMY_CRASH), f_in),
-                                               lambda f_in: f_in, frame_alive)
-
-                return frame_exploding
-
-            return jax.lax.fori_loop(0, MAX_ENEMIES, draw_enemy_func, f)
+            f = draw_explosions(f)
+            return f
 
         def draw_fuel_tanks(f):
-            def draw_tank_func(i, current_frame):
-                # 1. Read data from the state.fuel_tanks field
-                is_active = state.fuel_tanks.active[i]
-                sprite_idx = state.fuel_tanks.sprite_idx[i]
-                x, y = state.fuel_tanks.x[i], state.fuel_tanks.y[i]
-
-                # 2. Define the blit function
-                def perform_blit(frame_in):
-                    safe_idx = jnp.clip(sprite_idx, 0, len(self.blit_branches) - 1)
-                    branches = tuple(lambda op, b=b: b(op[0], op[1], op[2]) for b in self.blit_branches)
-                    return jax.lax.switch(safe_idx, branches, (frame_in, x, y))
-
-                # 3. Only draw the tank if it is active
-                return jax.lax.cond(is_active, perform_blit, lambda f_in: f_in, current_frame)
-
-            # Iterate through all possible tank slots
-            return jax.lax.fori_loop(0, MAX_ENEMIES, draw_tank_func, f)
+            sprite_arr = self.sprites[int(SpriteIdx.FUEL_TANK)]
+            def draw_one(i, fc):
+                return jax.lax.cond(
+                    state.fuel_tanks.active[i],
+                    lambda fc: self.jr.render_at(fc, state.fuel_tanks.x[i], state.fuel_tanks.y[i], sprite_arr),
+                    lambda fc: fc, fc
+                )
+            return jax.lax.fori_loop(0, MAX_ENEMIES, draw_one, f)
 
         def draw_ufo(f):
             ufo = state.ufo
-
-            def draw_alive_ufo(frame_in):
-                blit_func = self.blit_branches[int(SpriteIdx.ENEMY_UFO)]
-                return blit_func(frame_in, ufo.x, ufo.y)
-
-            def draw_ufo_explosion(frame_in):
-                blit_func = self.blit_branches[int(SpriteIdx.ENEMY_CRASH)]
-                return blit_func(frame_in, ufo.x, ufo.y)
-
-            # First, attempt to draw the alive UFO
-            frame_after_alive = jax.lax.cond(ufo.alive, draw_alive_ufo, lambda f_in: f_in, f)
-            # Then, on top of that, attempt to draw the explosion if its timer is active
-            final_frame = jax.lax.cond(ufo.death_timer > 0, draw_ufo_explosion, lambda f_in: f_in, frame_after_alive)
-
-            return final_frame
+            f = jax.lax.cond(ufo.alive,
+                             lambda fc: self.jr.render_at(fc, ufo.x, ufo.y, self.sprites[int(SpriteIdx.ENEMY_UFO)]),
+                             lambda fc: fc, f)
+            f = jax.lax.cond(ufo.death_timer > 0,
+                             lambda fc: self.jr.render_at(fc, ufo.x, ufo.y, self.sprites[int(SpriteIdx.ENEMY_CRASH)]),
+                             lambda fc: fc, f)
+            return f
 
         # Combine all level actor drawing functions into one group.
         def draw_level_actors(f):
@@ -4289,36 +4243,24 @@ class GravitarRenderer(JAXGameRenderer):
         # === 3.5. Draw Saucer and Reactor Destination ===
         def draw_saucer(f):
             saucer = state.saucer
-
-            def draw_alive_saucer(frame_in):
-                blit_func = self.blit_branches[int(SpriteIdx.ENEMY_SAUCER)]
-                return blit_func(frame_in, saucer.x, saucer.y)
-
-            def draw_saucer_explosion(frame_in):
-                blit_func = self.blit_branches[int(SpriteIdx.SAUCER_CRASH)]
-                return blit_func(frame_in, saucer.x, saucer.y)
-
-            # Similar to UFO, use a chained conditional draw
-            frame_after_alive = jax.lax.cond(saucer.alive, draw_alive_saucer, lambda f_in: f_in, f)
-            final_frame = jax.lax.cond(saucer.death_timer > 0, draw_saucer_explosion, lambda f_in: f_in,
-                                       frame_after_alive)
-
-            return final_frame
+            f = jax.lax.cond(saucer.alive,
+                             lambda fc: self.jr.render_at(fc, saucer.x, saucer.y, self.sprites[int(SpriteIdx.ENEMY_SAUCER)]),
+                             lambda fc: fc, f)
+            f = jax.lax.cond(saucer.death_timer > 0,
+                             lambda fc: self.jr.render_at(fc, saucer.x, saucer.y, self.sprites[int(SpriteIdx.SAUCER_CRASH)]),
+                             lambda fc: fc, f)
+            return f
 
         # Saucer is only drawn in map or arena mode.
         frame = jax.lax.cond((state.mode == 0) | (state.mode == 2), draw_saucer, lambda f: f, frame)
 
         def draw_reactor_destination(f):
-            return jax.lax.cond(
+            sprite_arr = jax.lax.select(
                 state.reactor_activated,
-                lambda f_in: self.blit_branches[int(SpriteIdx.REACTOR_DEST_HIT)](
-                    f_in, state.reactor_dest_x, state.reactor_dest_y
-                ),
-                lambda f_in: self.blit_branches[int(SpriteIdx.REACTOR_DEST)](
-                    f_in, state.reactor_dest_x, state.reactor_dest_y
-                ),
-                f,
+                self.sprites[int(SpriteIdx.REACTOR_DEST_HIT)],
+                self.sprites[int(SpriteIdx.REACTOR_DEST)]
             )
+            return self.jr.render_at(f, state.reactor_dest_x, state.reactor_dest_y, sprite_arr)
 
         # The destination is only drawn under specific conditions.
         should_draw_destination = (state.mode == 1) & (
@@ -4326,47 +4268,35 @@ class GravitarRenderer(JAXGameRenderer):
         frame = jax.lax.cond(should_draw_destination, draw_reactor_destination, lambda f: f, frame)
 
         # === 4. Draw Bullets ===
-        def draw_bullets_with_sprite_idx(bullets, current_frame):
-            """Draw bullets using their individual sprite_idx field."""
-            # Pre-fetch the two possible blit functions
-            orange_blit = self.blit_branches[int(SpriteIdx.ENEMY_BULLET)]
-            green_blit = self.blit_branches[int(SpriteIdx.ENEMY_GREEN_BULLET)]
-            
-            def draw_one_bullet(i, f):
-                x, y = bullets.x[i], bullets.y[i]
-                is_alive = bullets.alive[i]
-                bullet_sprite = bullets.sprite_idx[i]
-                
-                # Select blit function based on sprite_idx (green bullet uses different sprite)
-                is_green = bullet_sprite == int(SpriteIdx.ENEMY_GREEN_BULLET)
-                
-                def blit_bullet(frame_in):
-                    return jax.lax.cond(
-                        is_green,
-                        lambda f_in: green_blit(f_in, x, y),
-                        lambda f_in: orange_blit(f_in, x, y),
-                        frame_in
-                    )
-                
-                return jax.lax.cond(is_alive, blit_bullet, lambda frame_in: frame_in, f)
-
-            return jax.lax.fori_loop(0, bullets.x.shape[0], draw_one_bullet, current_frame)
-        
         def draw_bullets_fixed_sprite(bullets, sprite_idx, current_frame):
             """Draw bullets using a fixed sprite (for ship bullets)."""
-            blit_func = self.blit_branches[sprite_idx]
-
+            sprite_arr = self.sprites[sprite_idx]
             def draw_one_bullet(i, f):
                 x, y = bullets.x[i], bullets.y[i]
-                is_alive = bullets.alive[i]
-
-                return jax.lax.cond(is_alive, lambda frame_in: blit_func(frame_in, x, y), lambda frame_in: frame_in, f)
+                return jax.lax.cond(bullets.alive[i], 
+                                    lambda fc: self.jr.render_at(fc, x, y, sprite_arr), 
+                                    lambda fc: fc, f)
 
             return jax.lax.fori_loop(0, bullets.x.shape[0], draw_one_bullet, current_frame)
+
+        def draw_enemy_bullets(f):
+            def draw_type(sprite_id, f_in):
+                sprite_arr = self.sprites[sprite_id]
+                def draw_one(i, fc):
+                    active = state.enemy_bullets.alive[i] & (state.enemy_bullets.sprite_idx[i] == sprite_id)
+                    return jax.lax.cond(
+                        active,
+                        lambda fc: self.jr.render_at(fc, state.enemy_bullets.x[i], state.enemy_bullets.y[i], sprite_arr),
+                        lambda fc: fc, fc
+                    )
+                return jax.lax.fori_loop(0, state.enemy_bullets.x.shape[0], draw_one, f_in)
+            f = draw_type(int(SpriteIdx.ENEMY_BULLET), f)
+            f = draw_type(int(SpriteIdx.ENEMY_GREEN_BULLET), f)
+            return f
 
         # Draw all types of bullets.
         frame = draw_bullets_fixed_sprite(state.bullets, int(SpriteIdx.SHIP_BULLET), frame)
-        frame = draw_bullets_with_sprite_idx(state.enemy_bullets, frame)
+        frame = draw_enemy_bullets(frame)
         # UFOs don't shoot, no ufo_bullets to render
 
         # --- 5. Draw the ship ---
@@ -4374,62 +4304,17 @@ class GravitarRenderer(JAXGameRenderer):
         is_crashing = state.crash_timer > 0
         is_thrusting = ship_state.is_thrusting
 
-        # Select ship sprite: crash sprite if crashing, otherwise oriented sprite
-        def get_crash_sprite():
-            return self.padded_ship_crash
-        
-        def get_oriented_sprite():
-            # Get the correct sprite index based on ship's discrete angle
-            angle_diffs = jnp.abs(jnp.arctan2(
-                jnp.sin(ship_state.angle - SHIP_ANGLES),
-                jnp.cos(ship_state.angle - SHIP_ANGLES)
-            ))
-            angle_idx = jnp.argmin(angle_diffs)
-            
-            # Use lax.switch to select the correct padded orientation sprite based on angle index
-            # All padded sprites have uniform dimensions, satisfying lax.switch requirements
-            return jax.lax.switch(
-                angle_idx,
-                [
-                    lambda: self.padded_ship_orientations[0],   # 0: N
-                    lambda: self.padded_ship_orientations[1],   # 1: NNE
-                    lambda: self.padded_ship_orientations[2],   # 2: NE
-                    lambda: self.padded_ship_orientations[3],   # 3: ENE
-                    lambda: self.padded_ship_orientations[4],   # 4: E
-                    lambda: self.padded_ship_orientations[5],   # 5: ESE
-                    lambda: self.padded_ship_orientations[6],   # 6: SE
-                    lambda: self.padded_ship_orientations[7],   # 7: SSE
-                    lambda: self.padded_ship_orientations[8],   # 8: S
-                    lambda: self.padded_ship_orientations[9],   # 9: SSW
-                    lambda: self.padded_ship_orientations[10],  # 10: SW
-                    lambda: self.padded_ship_orientations[11],  # 11: WSW
-                    lambda: self.padded_ship_orientations[12],  # 12: W
-                    lambda: self.padded_ship_orientations[13],  # 13: WNW
-                    lambda: self.padded_ship_orientations[14],  # 14: NW
-                    lambda: self.padded_ship_orientations[15],  # 15: NNW
-                ]
-            )
-        
-        oriented_ship_rgba = jax.lax.cond(
-            is_crashing,
-            get_crash_sprite,
-            get_oriented_sprite
+        angle_diffs = jnp.abs(jnp.arctan2(
+            jnp.sin(ship_state.angle - SHIP_ANGLES),
+            jnp.cos(ship_state.angle - SHIP_ANGLES)
         )
+        )
+        angle_idx = jnp.argmin(angle_diffs)
 
-        # Blit the pre-rendered ship sprite onto the frame
-        ship_h, ship_w, _ = oriented_ship_rgba.shape
-        ship_rgb = oriented_ship_rgba[..., :3]
-        ship_alpha = (oriented_ship_rgba[..., 3] / 255.0)[..., None]
+        oriented_ship_mask = self.ship_orientations_array[angle_idx]
+        ship_sprite = jax.lax.select(is_crashing, self.padded_ship_crash, oriented_ship_mask)
+        frame = self.jr.render_at(frame, ship_state.x, ship_state.y, ship_sprite)
 
-        start_x = jnp.round(ship_state.x - ship_w / 2).astype(jnp.int32)
-        start_y = jnp.round(ship_state.y - ship_h / 2).astype(jnp.int32)
-
-        # Safe blitting logic to handle cases where the sprite is partially off-screen
-        # (This is a simplified version; for full safety, more complex slicing is needed)
-        target_patch = jax.lax.dynamic_slice(frame, (start_y, start_x, 0), (ship_h, ship_w, 3))
-        blended_patch = ship_rgb * ship_alpha + target_patch * (1 - ship_alpha)
-        frame = jax.lax.dynamic_update_slice(frame, blended_patch.astype(jnp.uint8), (start_y, start_x, 0))
-        
         # Layer thrust flame sprite at the back of the ship if thrusting (and not crashing)
         def draw_thrust_flame(f):
             # Calculate position at the back of the ship
@@ -4438,30 +4323,14 @@ class GravitarRenderer(JAXGameRenderer):
             thrust_x = ship_state.x - jnp.cos(ship_state.angle) * THRUST_OFFSET
             thrust_y = ship_state.y - jnp.sin(ship_state.angle) * THRUST_OFFSET
             
-            # Use the same pre-rendered sprite (thrust sprite is orientation-agnostic for now)
-            # TODO: Could add directional thrust sprites if needed
-            thrust_rgba = self.padded_ship_thrust
-            
-            # Calculate blit position for thrust
-            thrust_h, thrust_w, _ = thrust_rgba.shape
-            thrust_start_x = jnp.round(thrust_x - thrust_w / 2).astype(jnp.int32)
-            thrust_start_y = jnp.round(thrust_y - thrust_h / 2).astype(jnp.int32)
-            
-            # Blit the thrust flame at the back position
-            thrust_rgb = thrust_rgba[..., :3]
-            thrust_alpha = (thrust_rgba[..., 3] / 255.0)[..., None]
-            
-            target_patch_thrust = jax.lax.dynamic_slice(f, (thrust_start_y, thrust_start_x, 0), (thrust_h, thrust_w, 3))
-            blended_thrust = thrust_rgb * thrust_alpha + target_patch_thrust * (1 - thrust_alpha)
-            return jax.lax.dynamic_update_slice(f, blended_thrust.astype(jnp.uint8), (thrust_start_y, thrust_start_x, 0))
+            return self.jr.render_at(f, thrust_x, thrust_y, self.padded_ship_thrust)
         
         frame = jax.lax.cond(is_thrusting & (~is_crashing), draw_thrust_flame, lambda f: f, frame)
 
         # Draw shield (works in all modes) and tractor beam (only in planet surface levels)
         def draw_shield_and_tractor(f):
             # Always draw shield when shield_active is true (works in solar system, planet levels, and reactor)
-            shield_blit_func = self.blit_branches[int(SpriteIdx.SHIELD)]
-            f_with_shield = shield_blit_func(f, ship_state.x, ship_state.y)
+            f_with_shield = self.jr.render_at(f, ship_state.x, ship_state.y, self.sprites[int(SpriteIdx.SHIELD)])
             
             # Check if we should also show tractor beam (only in planet surface levels, not reactor)
             is_planet_level = state.mode == 1
@@ -4474,9 +4343,7 @@ class GravitarRenderer(JAXGameRenderer):
                 TRACTOR_OFFSET = 8.0  # Distance from ship center to tractor beam position
                 tractor_x = ship_state.x - jnp.cos(ship_state.angle) * TRACTOR_OFFSET
                 tractor_y = ship_state.y - jnp.sin(ship_state.angle) * TRACTOR_OFFSET
-                
-                tractor_blit_func = self.blit_branches[int(SpriteIdx.SHIP_THRUST_BACK)]
-                return tractor_blit_func(frame_in, tractor_x, tractor_y)
+                return self.jr.render_at(frame_in, tractor_x, tractor_y, self.sprites[int(SpriteIdx.SHIP_THRUST_BACK)])
             
             return jax.lax.cond(can_show_tractor, draw_tractor, lambda frame_in: frame_in, f_with_shield)
 
@@ -4486,78 +4353,63 @@ class GravitarRenderer(JAXGameRenderer):
         def draw_hud(f):
             # --- Common parameters ---
             W, H = self.width, self.height
-            RIGHT_MARGIN = 15
-            LEFT_MARGIN = 10
-            DIGIT_WIDTH = 8
-            HP_WIDTH = 8
-            Y_TOP_ROW = 5   
-            Y_LIVES_ROW = 17 
-
-            def draw_fuel_display(frame_carry):
-                fuel_val = state.fuel.astype(jnp.int32)
-                digits = jnp.array([(fuel_val // 10 ** (4 - i)) % 10 for i in range(5)])
-                def draw_one_fuel_digit(i, f_carry):
-                    sprite_idx = digits[i] + int(SpriteIdx.DIGIT_0)
-                    x_pos = LEFT_MARGIN + i * DIGIT_WIDTH
-                    y_pos = Y_TOP_ROW
-                    operand = (f_carry, x_pos, y_pos)
-                    branches = tuple(lambda op, branch=b: branch(op[0], op[1], op[2]) for b in self.blit_branches)
-                    safe_idx = jnp.clip(sprite_idx, 0, len(branches) - 1)
-                    return jax.lax.switch(safe_idx, branches, operand)
-                return jax.lax.fori_loop(0, 5, draw_one_fuel_digit, frame_carry)
+            digit_masks = jnp.stack([self.sprites[int(SpriteIdx.DIGIT_0) + i] for i in range(10)])
             
-            frame_after_fuel = draw_fuel_display(f)
-
-            def draw_score_display(frame_carry):
-                score_val = state.score.astype(jnp.int32)
-                digits = jnp.array([(score_val // 10 ** (5 - i)) % 10 for i in range(6)])
-                def draw_one_digit(i, f_carry):
-                    sprite_idx = digits[i] + int(SpriteIdx.DIGIT_0)
-                    x_pos = W - RIGHT_MARGIN - (6 - i) * DIGIT_WIDTH
-                    y_pos = Y_TOP_ROW
-                    operand = (f_carry, x_pos, y_pos)
-                    branches = tuple(lambda op, branch=b: branch(op[0], op[1], op[2]) for b in self.blit_branches)
-                    safe_idx = jnp.clip(sprite_idx, 0, len(branches) - 1)
-                    return jax.lax.switch(safe_idx, branches, operand)
-                return jax.lax.fori_loop(0, 6, draw_one_digit, frame_carry)
-
-            frame_after_score = draw_score_display(frame_after_fuel)
-
-            def draw_lives_display(frame_carry):
-                hp_blit_func = self.blit_branches[int(SpriteIdx.HP_UI)]
-                def draw_one_life(i, f_carry):
-                    is_active = i < state.lives
-                    x_pos = W - RIGHT_MARGIN - (MAX_LIVES - i) * HP_WIDTH
-                    y_pos = Y_LIVES_ROW
-                    return jax.lax.cond(is_active, lambda fc: hp_blit_func(fc, x_pos, y_pos), lambda fc: fc, f_carry)
-                return jax.lax.fori_loop(0, MAX_LIVES, draw_one_life, frame_carry)
+            # Fuel (Digits)
+            f = self.jr.render_label(
+                f, 
+                x=10, 
+                y=5, 
+                digits=self.jr.int_to_digits(state.fuel.astype(jnp.int32), max_digits=5),
+                digit_masks=digit_masks,
+                spacing=8,
+                max_digits=5
+            )
             
-            frame_after_lives = draw_lives_display(frame_after_score)
+            # Score
+            f = self.jr.render_label(
+                f, 
+                x=W - 55, 
+                y=5, 
+                digits=self.jr.int_to_digits(state.score.astype(jnp.int32), max_digits=6),
+                digit_masks=digit_masks,
+                spacing=8,
+                max_digits=6
+            )
+            
+            # Lives
+            f = self.jr.render_indicator(
+                f, 
+                x=W - 50, 
+                y=17, 
+                value=state.lives,
+                shape_mask=self.sprites[int(SpriteIdx.HP_UI)],
+                spacing=8,
+                max_value=self.consts.MAX_LIVES
+            )
 
             def draw_reactor_timer(frame_carry):
                 seconds_left = state.reactor_timer // 60
-                digits = jnp.array([(seconds_left // 10) % 10, seconds_left % 10])
-                center_x = W // 2
-                start_x = center_x - DIGIT_WIDTH
-                def draw_one_timer_digit(i, f_carry):
-                    sprite_idx = digits[i] + int(SpriteIdx.DIGIT_0)
-                    x_pos = start_x + i * DIGIT_WIDTH
-                    y_pos = Y_TOP_ROW
-                    operand = (f_carry, x_pos, y_pos)
-                    branches = tuple(lambda op, branch=b: branch(op[0], op[1], op[2]) for b in self.blit_branches)
-                    safe_idx = jnp.clip(sprite_idx, 0, len(branches) - 1)
-                    return jax.lax.switch(safe_idx, branches, operand)
-                return jax.lax.fori_loop(0, 2, draw_one_timer_digit, frame_carry)
+                return self.jr.render_label(
+                    frame_carry, 
+                    x=W // 2 - 8, 
+                    y=5, 
+                    digits=self.jr.int_to_digits(seconds_left, max_digits=2),
+                    digit_masks=digit_masks,
+                    spacing=8,
+                    max_digits=2
+                )
 
             is_in_reactor = (state.mode == 1) & (state.current_level == 4)
-            final_frame = jax.lax.cond(is_in_reactor, draw_reactor_timer, lambda fc: fc, frame_after_lives)
+            final_frame = jax.lax.cond(is_in_reactor, draw_reactor_timer, lambda fc: fc, f)
 
             
             return final_frame
 
         frame = draw_hud(frame)
 
-        return frame
+        frame_rgb = self.jr.render_from_palette(frame, self.PALETTE)
+        return frame_rgb
 
 
 __all__ = ["JaxGravitar", "get_env_and_renderer"]
