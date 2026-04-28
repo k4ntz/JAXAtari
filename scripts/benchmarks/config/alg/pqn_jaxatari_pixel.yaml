@@ -28,8 +28,9 @@ PIXEL_RESIZE_SHAPE: [84, 84]
 USE_NATIVE_DOWNSCALING: True
 # Apply this mod during testing
 # Activate this only for the test run (or debugging)
-# Set to None for final training run.
-MOD_NAME: None
+# Set to null for final training run.
+TRAIN_MODS: null
+EVAL_MODS: null
 
 # Note: This will massively increase compile and run time!
 # Turn off for final reported training run.

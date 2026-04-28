@@ -23,7 +23,8 @@ OBJECT_CENTRIC: True
 # Apply this mod during testing
 # Set to None for training run.
 # Activate this for the final test run (or debugging)
-MOD_NAME: LazyEnemy
+TRAIN_MODS: null
+EVAL_MODS: null
 
 # Note: This will massively increase compile and run time!
 # But is useful for debugging (watching the video).

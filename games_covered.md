@@ -52,7 +52,7 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | montezuma_revenge            | 🥇       | 11 |
 | ms_pacman                    | ❌       | 0 |
 | name_this_game               | 🥈       | 0 |
-| phoenix                      | 🥈       | 0 |
+| phoenix                      | 🥇       | 1 |
 | pitfall                      | ❌       | 0 |
 | pong                         | 🥇       | 2 |
 | private_eye                  | ❌       | 0 |
@@ -76,7 +76,7 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | yars_revenge                 | ❌       | 0 |
 | zaxxon                       | ❌       | 0 |
 
-Total:  🥇: 12   |   🥈: 12   |   🥉: 10   |   ❌: 23 
+Total:  🥇: 13   |   🥈: 11   |   🥉: 10   |   ❌: 23 
 
 ## Remaining ALE games
 | Game                         | Status  | Mods available |
@@ -130,4 +130,4 @@ Total:  🥇: 12   |   🥈: 12   |   🥉: 10   |   ❌: 23 
 | video_cube                   | 🥈       | 0 |
 | word_zapper                  | 🥈       | 0 |
 
-Total:  🥇: 2   |   🥈: 18   |   🥉: 4   |   ❌: 24
+Total:  🥇: 3   |   🥈: 17   |   🥉: 4   |   ❌: 24
