@@ -200,7 +200,7 @@ class StandbyPhase(IntEnum):
 
 @struct.dataclass
 class BeamriderConstants:
-    STARTING_SECTOR: int = struct.field(pytree_node=False, default=2)
+    STARTING_SECTOR: int = struct.field(pytree_node=False, default=1)
     STARTING_LIVES: int = struct.field(pytree_node=False, default=3)
     MAX_LIVES: int = struct.field(pytree_node=False, default=14)
     WHITE_UFOS_PER_SECTOR: int = struct.field(pytree_node=False, default=15)
