@@ -1647,7 +1647,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             )
             return reset_level_state.replace(
                 line_positions=line_positions, blue_line_counter=blue_line_counter,
-                death_timer=jnp.where(just_died, self.consts.STANDBY_DECEL_DURATION, reset_level_state.death_timer),
+                death_timer=jnp.where(jnp.logical_and(just_died, jnp.logical_not(sector_advanced)), self.consts.STANDBY_DECEL_DURATION, reset_level_state.death_timer),
                 player_pos=player_x,
                 background_flash_timer=next_flash_timer,
                 rejuvenator_explosion_frame=rejuv_explosion_frame,
