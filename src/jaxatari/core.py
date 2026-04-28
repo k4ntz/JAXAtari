@@ -96,6 +96,7 @@ MOD_MODULES = {
     "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
     "phoenix": "jaxatari.games.mods.phoenix_mods.PhoenixEnvMod",
     "enduro": "jaxatari.games.mods.enduro_mods.EnduroEnvMod",
+    "qbert": "jaxatari.games.mods.qbert_mods.QbertEnvMod",
 }
 
 
