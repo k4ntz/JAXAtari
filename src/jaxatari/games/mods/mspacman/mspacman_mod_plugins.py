@@ -2,9 +2,12 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 from jaxatari.modification import JaxAtariPostStepModPlugin
-from jaxatari.games.jax_mspacman import JaxPacman, GhostMode, JAIL_POSITION, reset_game
+from jaxatari.games.jax_mspacman import JaxPacman, GhostMode, reset_game
 
 class CagedGhostsMod(JaxAtariPostStepModPlugin):
+    def _jail_position(self, dtype):
+        return jnp.array(self._env.consts.JAIL_POSITION, dtype=dtype)
+
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         new_state = self._cage_ghosts(state)
@@ -19,7 +22,7 @@ class CagedGhostsMod(JaxAtariPostStepModPlugin):
     def _cage_ghosts(self, state):
         ghosts = state.ghosts
         new_modes = jnp.full_like(ghosts.modes, GhostMode.ENJAILED.value)
-        new_positions = jnp.full_like(ghosts.positions, jnp.array(JAIL_POSITION, dtype=jnp.uint8))
+        new_positions = jnp.full_like(ghosts.positions, self._jail_position(ghosts.positions.dtype))
         new_timers = jnp.full_like(ghosts.timers, 9999)
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
         return state.replace(ghosts=new_ghosts)
@@ -49,7 +52,7 @@ class SetMaze1Mod(JaxAtariPostStepModPlugin):
     maze_level = 1
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
-        new_state = reset_game(jnp.array(self.maze_level, dtype=jnp.uint8), state.lives, state.score, state.key)
+        new_state = reset_game(self._env.consts, jnp.array(self.maze_level, dtype=jnp.uint8), state.lives, state.score, state.key)
         new_obs = JaxPacman.get_observation(new_state)
         return new_obs, new_state
 
@@ -58,7 +61,7 @@ class SetMaze1Mod(JaxAtariPostStepModPlugin):
         transitioned = new_state.level.id != prev_state.level.id
         return jax.lax.cond(
             transitioned,
-            lambda: reset_game(jnp.array(self.maze_level, dtype=jnp.uint8), new_state.lives, new_state.score, new_state.key),
+            lambda: reset_game(self._env.consts, jnp.array(self.maze_level, dtype=jnp.uint8), new_state.lives, new_state.score, new_state.key),
             lambda: new_state
         )
 
@@ -66,7 +69,7 @@ class SetMaze2Mod(JaxAtariPostStepModPlugin):
     maze_level = 3
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
-        new_state = reset_game(jnp.array(self.maze_level, dtype=jnp.uint8), state.lives, state.score, state.key)
+        new_state = reset_game(self._env.consts, jnp.array(self.maze_level, dtype=jnp.uint8), state.lives, state.score, state.key)
         new_obs = JaxPacman.get_observation(new_state)
         return new_obs, new_state
 
@@ -75,7 +78,7 @@ class SetMaze2Mod(JaxAtariPostStepModPlugin):
         transitioned = new_state.level.id != prev_state.level.id
         return jax.lax.cond(
             transitioned,
-            lambda: reset_game(jnp.array(self.maze_level, dtype=jnp.uint8), new_state.lives, new_state.score, new_state.key),
+            lambda: reset_game(self._env.consts, jnp.array(self.maze_level, dtype=jnp.uint8), new_state.lives, new_state.score, new_state.key),
             lambda: new_state
         )
 
@@ -83,7 +86,7 @@ class SetMaze3Mod(JaxAtariPostStepModPlugin):
     maze_level = 5
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
-        new_state = reset_game(jnp.array(self.maze_level, dtype=jnp.uint8), state.lives, state.score, state.key)
+        new_state = reset_game(self._env.consts, jnp.array(self.maze_level, dtype=jnp.uint8), state.lives, state.score, state.key)
         new_obs = JaxPacman.get_observation(new_state)
         return new_obs, new_state
 
@@ -92,7 +95,7 @@ class SetMaze3Mod(JaxAtariPostStepModPlugin):
         transitioned = new_state.level.id != prev_state.level.id
         return jax.lax.cond(
             transitioned,
-            lambda: reset_game(jnp.array(self.maze_level, dtype=jnp.uint8), new_state.lives, new_state.score, new_state.key),
+            lambda: reset_game(self._env.consts, jnp.array(self.maze_level, dtype=jnp.uint8), new_state.lives, new_state.score, new_state.key),
             lambda: new_state
         )
 
@@ -100,7 +103,7 @@ class SetMaze4Mod(JaxAtariPostStepModPlugin):
     maze_level = 7
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
-        new_state = reset_game(jnp.array(self.maze_level, dtype=jnp.uint8), state.lives, state.score, state.key)
+        new_state = reset_game(self._env.consts, jnp.array(self.maze_level, dtype=jnp.uint8), state.lives, state.score, state.key)
         new_obs = JaxPacman.get_observation(new_state)
         return new_obs, new_state
 
@@ -109,13 +112,15 @@ class SetMaze4Mod(JaxAtariPostStepModPlugin):
         transitioned = new_state.level.id != prev_state.level.id
         return jax.lax.cond(
             transitioned,
-            lambda: reset_game(jnp.array(self.maze_level, dtype=jnp.uint8), new_state.lives, new_state.score, new_state.key),
+            lambda: reset_game(self._env.consts, jnp.array(self.maze_level, dtype=jnp.uint8), new_state.lives, new_state.score, new_state.key),
             lambda: new_state
         )
 
 
 class Only1GhostMod(JaxAtariPostStepModPlugin):
     num_ghosts = 1
+    def _jail_position(self, dtype):
+        return jnp.array(self._env.consts.JAIL_POSITION, dtype=dtype)
 
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
@@ -148,7 +153,7 @@ class Only1GhostMod(JaxAtariPostStepModPlugin):
         new_positions = jnp.where(
             is_active[:, None],
             ghosts.positions,
-            jnp.array(JAIL_POSITION, dtype=jnp.uint8)
+            self._jail_position(ghosts.positions.dtype)
         )
         
         # Give active enjailed ghosts a very short timer so they leave immediately
@@ -171,13 +176,15 @@ class Only1GhostMod(JaxAtariPostStepModPlugin):
         # Any ghost with a huge timer was marked as inactive
         is_inactive = ghosts.timers > 9000.0
         new_modes = jnp.where(is_inactive, GhostMode.ENJAILED.value, ghosts.modes)
-        new_positions = jnp.where(is_inactive[:, None], jnp.array(JAIL_POSITION, dtype=jnp.uint8), ghosts.positions)
+        new_positions = jnp.where(is_inactive[:, None], self._jail_position(ghosts.positions.dtype), ghosts.positions)
         new_timers = jnp.where(is_inactive, jnp.array(9999, dtype=jnp.float16), ghosts.timers)
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
         return state.replace(ghosts=new_ghosts)
 
 class Only2GhostMod(JaxAtariPostStepModPlugin):
     num_ghosts = 2
+    def _jail_position(self, dtype):
+        return jnp.array(self._env.consts.JAIL_POSITION, dtype=dtype)
 
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
@@ -208,7 +215,7 @@ class Only2GhostMod(JaxAtariPostStepModPlugin):
         new_positions = jnp.where(
             is_active[:, None],
             ghosts.positions,
-            jnp.array(JAIL_POSITION, dtype=jnp.uint8)
+            self._jail_position(ghosts.positions.dtype)
         )
         
         # Give active enjailed ghosts a very short timer so they leave immediately
@@ -230,13 +237,15 @@ class Only2GhostMod(JaxAtariPostStepModPlugin):
         ghosts = state.ghosts
         is_inactive = ghosts.timers > 9000.0
         new_modes = jnp.where(is_inactive, GhostMode.ENJAILED.value, ghosts.modes)
-        new_positions = jnp.where(is_inactive[:, None], jnp.array(JAIL_POSITION, dtype=jnp.uint8), ghosts.positions)
+        new_positions = jnp.where(is_inactive[:, None], self._jail_position(ghosts.positions.dtype), ghosts.positions)
         new_timers = jnp.where(is_inactive, jnp.array(9999, dtype=jnp.float16), ghosts.timers)
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
         return state.replace(ghosts=new_ghosts)
 
 class Only3GhostMod(JaxAtariPostStepModPlugin):
     num_ghosts = 3
+    def _jail_position(self, dtype):
+        return jnp.array(self._env.consts.JAIL_POSITION, dtype=dtype)
 
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
@@ -267,7 +276,7 @@ class Only3GhostMod(JaxAtariPostStepModPlugin):
         new_positions = jnp.where(
             is_active[:, None],
             ghosts.positions,
-            jnp.array(JAIL_POSITION, dtype=jnp.uint8)
+            self._jail_position(ghosts.positions.dtype)
         )
         
         # Give active enjailed ghosts a very short timer so they leave immediately
@@ -289,7 +298,7 @@ class Only3GhostMod(JaxAtariPostStepModPlugin):
         ghosts = state.ghosts
         is_inactive = ghosts.timers > 9000.0
         new_modes = jnp.where(is_inactive, GhostMode.ENJAILED.value, ghosts.modes)
-        new_positions = jnp.where(is_inactive[:, None], jnp.array(JAIL_POSITION, dtype=jnp.uint8), ghosts.positions)
+        new_positions = jnp.where(is_inactive[:, None], self._jail_position(ghosts.positions.dtype), ghosts.positions)
         new_timers = jnp.where(is_inactive, jnp.array(9999, dtype=jnp.float16), ghosts.timers)
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
         return state.replace(ghosts=new_ghosts)

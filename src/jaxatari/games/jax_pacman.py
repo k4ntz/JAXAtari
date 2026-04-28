@@ -569,7 +569,7 @@ class PacmanRenderer(JAXGameRenderer):
         ], axis=0)
 
         # Make digits black
-        black_id = self.COLOR_TO_ID[(0, 0, 0)]
+        black_id = self.COLOR_TO_ID.get((0, 0, 0), self.COLOR_TO_ID.get((0, 0, 0, 255), self.jr.TRANSPARENT_ID))
         transparent_id = self.jr.TRANSPARENT_ID
         self.SHAPE_MASKS['digits'] = jnp.where(
             self.SHAPE_MASKS['digits'] != transparent_id,

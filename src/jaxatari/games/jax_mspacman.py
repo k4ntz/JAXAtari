@@ -1077,7 +1077,10 @@ class MsPacmanRenderer(JAXGameRenderer):
         
         # 1. Render Pellets
         wall_color_tuple = tuple(map(int, self.consts.WALL_COLOR.tolist()))
-        wall_id = self.COLOR_TO_ID[wall_color_tuple]
+        wall_id = self.COLOR_TO_ID.get(
+            wall_color_tuple,
+            self.COLOR_TO_ID.get((*wall_color_tuple, 255), self.jr.TRANSPARENT_ID)
+        )
         raster = self.render_pellets(raster, state.level.pellets, wall_id)
         
         # 2. Power Pellets
