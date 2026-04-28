@@ -9,7 +9,7 @@ from jaxatari.games.montezuma_revenge.core import MontezumaRevengeConstants, Mon
 from jaxatari.games.montezuma_revenge.rooms import load_room
 
 class MontezumaRevengeRenderer(JAXGameRenderer):
-    def __init__(self, consts: MontezumaRevengeConstants = None, config: render_utils.RendererConfig = None):
+    def __init__(self, consts: MontezumaRevengeConstants = None, config: render_utils.RendererConfig = None, pre_load_rooms: bool = True):
         super().__init__(consts)
         self.consts = consts or MontezumaRevengeConstants()
         
@@ -22,14 +22,8 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         else:
             self.config = config
 
-        # Keep rendering logic in native 210x160 RGB space, then optionally apply
-        # final-frame downscaling / grayscale conversion from self.config.
-        # internal_config = render_utils.RendererConfig(
-        #     game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
-        #     channels=3,
-        #     downscale=None,
-        # )
-        # self.jr = render_utils.JaxRenderingUtils(internal_config)
+        self.pre_load_rooms = pre_load_rooms
+
         self.jr = render_utils.JaxRenderingUtils(self.config)
         sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "montezuma")
         
@@ -197,12 +191,12 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
             self.SHAPE_MASKS["digit_8"],
             self.SHAPE_MASKS["digit_9"],
         ])
-
-        room_template_state = self._create_room_geometry_template_state()
-        self.room_backgrounds = jnp.stack([
-            self._build_room_background(room_id, self._load_room_geometry(room_id, room_template_state))
-            for room_id in range(self.consts.MAX_ROOMS)
-        ])
+        if pre_load_rooms:
+            room_template_state = self._create_room_geometry_template_state()
+            self.room_backgrounds = jnp.stack([
+                self._build_room_background(room_id, self._load_room_geometry(room_id, room_template_state))
+                for room_id in range(self.consts.MAX_ROOMS)
+            ])
 
     def _create_room_geometry_template_state(self) -> MontezumaRevengeState:
         return MontezumaRevengeState(
@@ -279,7 +273,7 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
 
     def _load_room_geometry(self, room_id: int, template_state: MontezumaRevengeState) -> MontezumaRevengeState:
         return load_room(jnp.array(room_id, dtype=jnp.int32), template_state, self.consts)
-
+    
     def _build_room_background(self, room_id: int, room_state: MontezumaRevengeState) -> jnp.ndarray:
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
@@ -310,65 +304,90 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         raster = self.jr.render_at(raster, 0, room_y, self.SHAPE_MASKS["room_bg_0"])
         raster = clear_hole(raster, 147, 149, 72, 88)
 
-        if room_id == 4:
-            raster = stamp_room(raster, self.SHAPE_MASKS["room_bg_1"])
+        raster = jax.lax.cond(
+            room_id == 4,
+            lambda r: stamp_room(r, self.SHAPE_MASKS["room_bg_1"]),
+            lambda r: r,
+            raster,
+        )
 
-        if room_id == 12:
-            raster = stamp_room(raster, self.SHAPE_MASKS["room_bg_3"])
-            raster = clear_hole(raster, 147, 149, 72, 88)
+        raster = jax.lax.cond(
+            room_id == 12,
+            lambda r: clear_hole(stamp_room(r, self.SHAPE_MASKS["room_bg_3"]), 147, 149, 72, 88),
+            lambda r: r,
+            raster,
+        )
 
-        if room_id in (25, 26, 28, 30, 32):
-            raster = stamp_room(raster, self.SHAPE_MASKS["room_bg_4"])
+        raster = jax.lax.cond(
+            jnp.isin(room_id, jnp.array([25, 26, 28, 30, 32])),
+            lambda r: stamp_room(r, self.SHAPE_MASKS["room_bg_4"]),
+            lambda r: r,
+            raster,
+        )
 
-        if room_id in (10, 11, 14):
-            raster = stamp_room(raster, self.SHAPE_MASKS["room_bg_2"])
-            raster = clear_hole(raster, 48, 149, 72, 88)
+        raster = jax.lax.cond(
+            jnp.isin(room_id, jnp.array([10, 11, 14])),
+            lambda r: clear_hole(stamp_room(r, self.SHAPE_MASKS["room_bg_2"]), 48, 149, 72, 88),
+            lambda r: r,
+            raster,
+        )
 
-        if room_id == 13:
-            raster = stamp_room(raster, self.SHAPE_MASKS["room_bg_2"])
+        raster = jax.lax.cond(
+            room_id == 13,
+            lambda r: stamp_room(r, self.SHAPE_MASKS["room_bg_2"]),
+            lambda r: r,
+            raster,
+        )
 
         mask_l2 = jnp.where(self.SHAPE_MASKS["room_bg_level2_base"] == 1, self.LEVEL2_PLATFORM_ID, self.SHAPE_MASKS["room_bg_level2_base"])
         mask_l2_room0 = jnp.where(self.SHAPE_MASKS["room_bg_level2_room0"] == 1, self.LEVEL2_PLATFORM_ID, self.SHAPE_MASKS["room_bg_level2_room0"])
         mask_l2_room6 = jnp.where(self.SHAPE_MASKS["room_bg_level2_room6"] == 1, self.LEVEL2_PLATFORM_ID, self.SHAPE_MASKS["room_bg_level2_room6"])
         mask_l2_pit = jnp.where(self.SHAPE_MASKS["room_bg_level2_pit"] == 1, self.LEVEL2_PLATFORM_ID, self.SHAPE_MASKS["room_bg_level2_pit"])
 
-        if room_id == 18:
-            raster = stamp_room(raster, mask_l2)
-        if room_id == 17:
-            raster = stamp_room(raster, mask_l2_room0)
-        if room_id == 19:
-            raster = stamp_room(raster, mask_l2_pit)
-        if room_id in (27, 29, 31):
-            raster = stamp_room(raster, self.SHAPE_MASKS["room_bg_pit_original"])
+        raster = jax.lax.cond(room_id == 18, lambda r: stamp_room(r, mask_l2), lambda r: r, raster)
+        raster = jax.lax.cond(room_id == 17, lambda r: stamp_room(r, mask_l2_room0), lambda r: r, raster)
+        raster = jax.lax.cond(room_id == 19, lambda r: stamp_room(r, mask_l2_pit), lambda r: r, raster)
+        raster = jax.lax.cond(
+            jnp.isin(room_id, jnp.array([27, 29, 31])),
+            lambda r: stamp_room(r, self.SHAPE_MASKS["room_bg_pit_original"]),
+            lambda r: r,
+            raster,
+        )
 
-        if room_id in (20, 22):
-            raster = stamp_room(raster, mask_l2)
-            raster = clear_hole(raster, 48, 149, 72, 88)
+        raster = jax.lax.cond(
+            jnp.isin(room_id, jnp.array([20, 22])),
+            lambda r: clear_hole(stamp_room(r, mask_l2), 48, 149, 72, 88),
+            lambda r: r,
+            raster,
+        )
 
-        if room_id == 21:
-            raster = stamp_room(raster, mask_l2)
+        raster = jax.lax.cond(room_id == 21, lambda r: stamp_room(r, mask_l2), lambda r: r, raster)
 
-        if room_id == 23:
-            raster = stamp_room(raster, mask_l2_room6)
+        raster = jax.lax.cond(room_id == 23, lambda r: stamp_room(r, mask_l2_room6), lambda r: r, raster)
 
-        if room_id == 24:
-            raster = stamp_room(raster, self.SHAPE_MASKS["room_bg_bonus"])
+        raster = jax.lax.cond(room_id == 24, lambda r: stamp_room(r, self.SHAPE_MASKS["room_bg_bonus"]), lambda r: r, raster)
 
         left_wall_color = jnp.where(room_id == 19, self.LADDER_ID,
                                     jnp.where(room_id == 30, self.ORANGE_LADDER_ID,
                                               jnp.where(room_id == 17, self.LEVEL2_PLATFORM_ID, 1)))
-        if room_id in (3, 10, 19, 30):
-            raster = draw_wall(raster, 0, 6, 48, left_wall_color)
-        if room_id == 17:
-            raster = draw_wall(raster, 0, 6, 149, left_wall_color)
+        raster = jax.lax.cond(
+            jnp.isin(room_id, jnp.array([3, 10, 19, 30])),
+            lambda r: draw_wall(r, 0, 6, 48, left_wall_color),
+            lambda r: r,
+            raster,
+        )
+        raster = jax.lax.cond(room_id == 17, lambda r: draw_wall(r, 0, 6, 149, left_wall_color), lambda r: r, raster)
 
         right_wall_color = jnp.where(room_id == 18, self.LADDER_ID,
                                      jnp.where(room_id == 29, self.DEEP_BLUE_PLATFORM_ID,
                                                jnp.where(room_id == 23, self.LEVEL2_PLATFORM_ID, 1)))
-        if room_id in (5, 14, 18, 32, 29):
-            raster = draw_wall(raster, 156, 6, 48, right_wall_color)
-        if room_id == 23:
-            raster = draw_wall(raster, 156, 6, 149, right_wall_color)
+        raster = jax.lax.cond(
+            jnp.isin(room_id, jnp.array([5, 14, 18, 32, 29])),
+            lambda r: draw_wall(r, 156, 6, 48, right_wall_color),
+            lambda r: r,
+            raster,
+        )
+        raster = jax.lax.cond(room_id == 23, lambda r: draw_wall(r, 156, 6, 149, right_wall_color), lambda r: r, raster)
 
         # Draw ladders as static room geometry.
         def draw_ladder_accurate(i, r):
@@ -424,14 +443,14 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
                 def draw_long_l2(r_in):
                     return render_long_ladder(r_in, self.YELLOW_LADDER_ID, self.LADDER_ID_L2)
 
-                is_layer_2 = room_id in (10, 11, 12, 14)
-                is_long_ladder = jnp.logical_and(room_id in (3, 5), i == 0)
-                is_long_ladder_l2 = jnp.logical_and(room_id in (10, 11, 12, 14), i == 0)
+                is_layer_2 = jnp.isin(room_id, jnp.array([10, 11, 12, 14]))
+                is_long_ladder = jnp.logical_and(jnp.isin(room_id, jnp.array([3, 5])), i == 0)
+                is_long_ladder_l2 = jnp.logical_and(jnp.isin(room_id, jnp.array([10, 11, 12, 14])), i == 0)
                 is_small_yellow = jnp.logical_or(
                     jnp.logical_and(room_id == 11, i == 1),
                     jnp.logical_and(room_id == 13, i == 0)
                 )
-                is_room_orange_ladder = room_id in (28, 30, 31)
+                is_room_orange_ladder = jnp.isin(room_id, jnp.array([28, 30, 31]))
 
                 ladder_draw_case = jnp.where(is_layer_2, 1, 0)
                 ladder_draw_case = jnp.where(is_small_yellow, 2, ladder_draw_case)
@@ -483,7 +502,10 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         state = self._render_hook_pre_render(state)
 
         # Select the precomputed static room background.
-        background_raster = self.room_backgrounds[state.room_id]
+        if self.pre_load_rooms:
+            background_raster = self.room_backgrounds[state.room_id]
+        else:
+            background_raster = self._build_room_background(state.room_id, state) 
         background_before_dark = background_raster
         room_y = 47
 
