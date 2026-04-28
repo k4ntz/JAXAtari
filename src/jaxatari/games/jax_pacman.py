@@ -576,6 +576,7 @@ class PacmanRenderer(JAXGameRenderer):
             self.jr.load_and_setup_assets(asset_config, sprite_path)
 
         for color in (
+            tuple(map(int, self.consts.PATH_COLOR.tolist())),
             tuple(map(int, self.consts.WALL_COLOR.tolist())),
             tuple(map(int, self.consts.POWER_PELLET_COLOR.tolist())),
             tuple(map(int, self.consts.PALE_BLUE_COLOR.tolist())),
