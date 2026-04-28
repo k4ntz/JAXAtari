@@ -516,6 +516,21 @@ class PacmanRenderer(JAXGameRenderer):
         down_frames = [jnp.rot90(frame, k=3, axes=(0, 1)) for frame in right_frames]
         return up_frames + right_frames + left_frames + down_frames
 
+    def _ensure_palette_color(self, color_rgb: tuple[int, int, int]) -> None:
+        color_rgba = (*color_rgb, 255)
+        if color_rgb in self.COLOR_TO_ID:
+            return
+        if color_rgba in self.COLOR_TO_ID:
+            self.COLOR_TO_ID[color_rgb] = self.COLOR_TO_ID[color_rgba]
+            return
+        self.PALETTE, color_id = self.jr.add_palette_color(self.PALETTE, color_rgb)
+        self.COLOR_TO_ID[color_rgb] = int(color_id)
+        self.COLOR_TO_ID[color_rgba] = int(color_id)
+
+    def _resolve_color_id(self, color_rgb: tuple[int, int, int]) -> int:
+        self._ensure_palette_color(color_rgb)
+        return self.COLOR_TO_ID.get(color_rgb, self.jr.TRANSPARENT_ID)
+
     def __init__(self, consts: PacmanConstants = None, config: render_utils.RendererConfig = None, sprite_dir_name: str = "pacman"):
         super().__init__(consts)
         self.consts = consts or PacmanConstants()
@@ -560,6 +575,15 @@ class PacmanRenderer(JAXGameRenderer):
         (self.PALETTE, self.SHAPE_MASKS, _, self.COLOR_TO_ID, self.FLIP_OFFSETS) = \
             self.jr.load_and_setup_assets(asset_config, sprite_path)
 
+        for color in (
+            tuple(map(int, self.consts.WALL_COLOR.tolist())),
+            tuple(map(int, self.consts.POWER_PELLET_COLOR.tolist())),
+            tuple(map(int, self.consts.PALE_BLUE_COLOR.tolist())),
+            tuple(map(int, self.consts.GREEN_BAND_COLOR.tolist())),
+            (0, 0, 0),
+        ):
+            self._ensure_palette_color(color)
+
         # Concatenate recolored ghosts to the main ghosts group
         # Index 4: Frightened (Pale Blue), Index 5: White (Blinking)
         self.SHAPE_MASKS['ghosts'] = jnp.concatenate([
@@ -569,7 +593,7 @@ class PacmanRenderer(JAXGameRenderer):
         ], axis=0)
 
         # Make digits black
-        black_id = self.COLOR_TO_ID.get((0, 0, 0), self.COLOR_TO_ID.get((0, 0, 0, 255), self.jr.TRANSPARENT_ID))
+        black_id = self._resolve_color_id((0, 0, 0))
         transparent_id = self.jr.TRANSPARENT_ID
         self.SHAPE_MASKS['digits'] = jnp.where(
             self.SHAPE_MASKS['digits'] != transparent_id,
@@ -606,12 +630,12 @@ class PacmanRenderer(JAXGameRenderer):
         raster = self.jr.create_object_raster(background)
         
         # 1. Render Pellets
-        wall_id = self.COLOR_TO_ID[tuple(map(int, self.consts.WALL_COLOR.tolist()))]
+        wall_id = self._resolve_color_id(tuple(map(int, self.consts.WALL_COLOR.tolist())))
         raster = self.render_pellets(raster, state.level.pellets, wall_id)
 
         # 2. Power Pellets
-        pink_id = self.COLOR_TO_ID[tuple(map(int, self.consts.POWER_PELLET_COLOR.tolist()))]
-        pale_blue_id = self.COLOR_TO_ID[tuple(map(int, self.consts.PALE_BLUE_COLOR.tolist()))]
+        pink_id = self._resolve_color_id(tuple(map(int, self.consts.POWER_PELLET_COLOR.tolist())))
+        pale_blue_id = self._resolve_color_id(tuple(map(int, self.consts.PALE_BLUE_COLOR.tolist())))
         
         # Check if power pellet effect is active (any ghost frightened or blinking)
         power_pellet_active = jnp.any((state.ghosts.modes == GhostMode.FRIGHTENED) | (state.ghosts.modes == GhostMode.BLINKING))
@@ -732,7 +756,7 @@ class PacmanRenderer(JAXGameRenderer):
     def render_ui(self, raster, state):
         y_off = jnp.int32(self.GAME_Y_OFFSET)
         # Green Band
-        green_id = self.COLOR_TO_ID[tuple(map(int, self.consts.GREEN_BAND_COLOR.tolist()))]
+        green_id = self._resolve_color_id(tuple(map(int, self.consts.GREEN_BAND_COLOR.tolist())))
         raster = self.jr.draw_rects(
             raster,
             jnp.array([[0, 193 + y_off]], dtype=jnp.int32),

@@ -998,6 +998,21 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, MsPac
 class MsPacmanRenderer(JAXGameRenderer):
     """JAX-based MsPacman game renderer, optimized with JIT compilation."""
 
+    def _ensure_palette_color(self, color_rgb: tuple[int, int, int]) -> None:
+        color_rgba = (*color_rgb, 255)
+        if color_rgb in self.COLOR_TO_ID:
+            return
+        if color_rgba in self.COLOR_TO_ID:
+            self.COLOR_TO_ID[color_rgb] = self.COLOR_TO_ID[color_rgba]
+            return
+        self.PALETTE, color_id = self.jr.add_palette_color(self.PALETTE, color_rgb)
+        self.COLOR_TO_ID[color_rgb] = int(color_id)
+        self.COLOR_TO_ID[color_rgba] = int(color_id)
+
+    def _resolve_color_id(self, color_rgb: tuple[int, int, int]) -> int:
+        self._ensure_palette_color(color_rgb)
+        return self.COLOR_TO_ID.get(color_rgb, self.jr.TRANSPARENT_ID)
+
     def _build_pacman_oriented_group(self, sprite_path: str) -> list[jnp.ndarray]:
         """
         Build Pacman animation sprites as a single orientation-major group:
@@ -1049,16 +1064,12 @@ class MsPacmanRenderer(JAXGameRenderer):
         (self.PALETTE, self.SHAPE_MASKS, _, self.COLOR_TO_ID, self.FLIP_OFFSETS) = \
             self.jr.load_and_setup_assets(asset_config, sprite_path)
 
-        # Ensure wall color exists explicitly in palette/mapping even if preprocessing
-        # (e.g. downscale interpolation paths) misses an exact tuple match.
-        wall_rgb = tuple(map(int, self.consts.WALL_COLOR.tolist()))
-        wall_rgba = (*wall_rgb, 255)
-        if wall_rgb not in self.COLOR_TO_ID and wall_rgba not in self.COLOR_TO_ID:
-            self.PALETTE, wall_id = self.jr.add_palette_color(self.PALETTE, wall_rgb)
-            self.COLOR_TO_ID[wall_rgb] = int(wall_id)
-            self.COLOR_TO_ID[wall_rgba] = int(wall_id)
-        elif wall_rgb not in self.COLOR_TO_ID and wall_rgba in self.COLOR_TO_ID:
-            self.COLOR_TO_ID[wall_rgb] = self.COLOR_TO_ID[wall_rgba]
+        for color in (
+            tuple(map(int, self.consts.PATH_COLOR.tolist())),
+            tuple(map(int, self.consts.WALL_COLOR.tolist())),
+            (0, 0, 0),
+        ):
+            self._ensure_palette_color(color)
 
         # Pacman mask group is loaded orientation-major:
         # 0: UP, 1: RIGHT, 2: LEFT, 3: DOWN, each with 4 animation frames.
@@ -1087,11 +1098,7 @@ class MsPacmanRenderer(JAXGameRenderer):
         raster = self.jr.create_object_raster(background)
         
         # 1. Render Pellets
-        wall_color_tuple = tuple(map(int, self.consts.WALL_COLOR.tolist()))
-        wall_id = self.COLOR_TO_ID.get(
-            wall_color_tuple,
-            self.COLOR_TO_ID.get((*wall_color_tuple, 255), self.jr.TRANSPARENT_ID)
-        )
+        wall_id = self._resolve_color_id(tuple(map(int, self.consts.WALL_COLOR.tolist())))
         raster = self.render_pellets(raster, state.level.pellets, wall_id)
         
         # 2. Power Pellets
