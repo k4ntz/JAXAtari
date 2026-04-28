@@ -57,6 +57,7 @@ class MontezumaRevengeConstants(struct.PyTreeNode):
     PLATFORM_ACTIVE_DURATION: int = struct.field(pytree_node=False, default=90) # For spawning and disappearing platform
     PLATFORM_CYCLE_LENGTH: int = struct.field(pytree_node=False, default=128)
     AMULET_DURATION: int = struct.field(pytree_node=False, default=660)
+    KILL_ENEMY_REWARD: int = struct.field(pytree_node=False, default=100)
 
 @struct.dataclass
 class MontezumaRevengeState:

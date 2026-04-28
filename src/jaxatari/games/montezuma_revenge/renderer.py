@@ -726,14 +726,14 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         raster = jax.lax.fori_loop(0, state.inventory[0], render_key, raster)
 
         # Render Sword
-        def render_sword(raster_in):
-             offset = state.inventory[0]
+        def render_sword(i, raster_in):
+             offset = state.inventory[0] + i
              mask = self.SHAPE_MASKS["sword"]
              x = self.consts.ITEMBAR_LIFES_STARTING_X + offset * 8
              y = self.consts.ITEMBAR_STARTING_Y
              return self.jr.render_at(raster_in, x, y, mask)
         
-        raster = jax.lax.cond(state.inventory[1] == 1, render_sword, lambda r: r, raster)
+        raster = jax.lax.fori_loop(0, state.inventory[1], render_sword, raster)
         
         # Render Torch
         def render_torch(raster_in):

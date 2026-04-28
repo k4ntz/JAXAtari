@@ -651,13 +651,13 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
 
         # Inventory updates
         keys_collected = jnp.sum(jnp.where(jnp.logical_and(collect_item_mask, state.items_type == 0), 1, 0))
-        sword_collected = jnp.any(jnp.logical_and(collect_item_mask, state.items_type == 3))
+        swords_collected = jnp.sum(jnp.where(jnp.logical_and(collect_item_mask, state.items_type == 3), 1, 0))
         torch_collected = jnp.any(jnp.logical_and(collect_item_mask, state.items_type == 4))
         amulet_collected = jnp.any(jnp.logical_and(collect_item_mask, state.items_type == 2))
 
         current_inventory = state.inventory
         current_inventory = current_inventory.at[0].add(keys_collected)
-        current_inventory = current_inventory.at[1].set(jnp.where(sword_collected, 1, current_inventory[1]))
+        current_inventory = current_inventory.at[1].set(jnp.minimum(current_inventory[1] + swords_collected, 3))
         current_inventory = current_inventory.at[2].set(jnp.where(torch_collected, 1, current_inventory[2]))
         
         # Handle amulet time reset and disappearance
@@ -754,16 +754,16 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         # Neutralize enemy collision if amulet is active
         this_hit_enemy = jnp.logical_and(this_hit_enemy, jnp.logical_not(is_amulet_active))
 
-        has_sword = current_inventory[1] == 1
+        has_sword = current_inventory[1] > 0
         kill_enemy_mask = jnp.logical_and(this_hit_enemy, has_sword)
         kill_order = jnp.cumsum(kill_enemy_mask.astype(jnp.int32))
-        actually_killed_mask = jnp.logical_and(kill_enemy_mask, kill_order <= 1)
+        actually_killed_mask = jnp.logical_and(kill_enemy_mask, kill_order <= current_inventory[1])
         
         died_from_enemy = jnp.any(jnp.logical_and(this_hit_enemy, jnp.logical_not(actually_killed_mask)))
         new_enemies_active = jnp.where(this_hit_enemy, 0, state.enemies_active)
-        sword_used = jnp.any(actually_killed_mask)
-        current_inventory = current_inventory.at[1].set(jnp.where(sword_used, 0, current_inventory[1]))
-        new_score = new_score + jnp.sum(jnp.where(actually_killed_mask, 100, 0))
+        swords_used = jnp.sum(actually_killed_mask.astype(jnp.int32))
+        current_inventory = current_inventory.at[1].add(-swords_used)
+        new_score = new_score + jnp.sum(jnp.where(actually_killed_mask, self.consts.KILL_ENEMY_REWARD, 0))
 
         # Laser Collision
         # Update laser and platform cycles
