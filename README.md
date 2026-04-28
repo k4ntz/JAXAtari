@@ -7,6 +7,38 @@ Quentin Delfosse, Raban Emunds, Jannis Blüml, Paul Seitz, Sebastian Wette, Domi
 
 ---
 
+<div class="collage">
+  <div class="row" align="center">
+    <img src="https://raw.githubusercontent.com/k4ntz/JAXAtari/f114b0dcd00a269a9349e8dc9d3df77a3722dd85/docs/source/_static/gifs/pong.gif" alt="Pong" width="16%">
+    <img src="https://raw.githubusercontent.com/k4ntz/JAXAtari/f114b0dcd00a269a9349e8dc9d3df77a3722dd85/docs/source/_static/gifs/beamrider.gif" alt="Beamrider" width="16%">
+    <img src="https://raw.githubusercontent.com/k4ntz/JAXAtari/f114b0dcd00a269a9349e8dc9d3df77a3722dd85/docs/source/_static/gifs/phoenix.gif" alt="Phoenix" width="16%">
+    <img src="https://raw.githubusercontent.com/k4ntz/JAXAtari/f114b0dcd00a269a9349e8dc9d3df77a3722dd85/docs/source/_static/gifs/tennis.gif" alt="Tennis" width="16%">
+  </div>
+
+  <div class="row" align="center">
+    <img src="https://raw.githubusercontent.com/k4ntz/JAXAtari/f114b0dcd00a269a9349e8dc9d3df77a3722dd85/docs/source/_static/gifs/skiing.gif" alt="Skiing" width="16%">
+    <img src="https://raw.githubusercontent.com/k4ntz/JAXAtari/f114b0dcd00a269a9349e8dc9d3df77a3722dd85/docs/source/_static/gifs/montezumarevenge.gif" alt="Montezuma" width="16%">
+    <img src="https://raw.githubusercontent.com/k4ntz/JAXAtari/f114b0dcd00a269a9349e8dc9d3df77a3722dd85/docs/source/_static/gifs/seaquest.gif" alt="Seaquest" width="16%">
+    <img src="https://raw.githubusercontent.com/k4ntz/JAXAtari/f114b0dcd00a269a9349e8dc9d3df77a3722dd85/docs/source/_static/gifs/kangaroo.gif" alt="Kangaroo" width="16%">
+  </div>
+
+  <div class="row" align="center">
+    <img src="https://raw.githubusercontent.com/k4ntz/JAXAtari/f114b0dcd00a269a9349e8dc9d3df77a3722dd85/docs/source/_static/gifs/freeway.gif" alt="Freeway" width="16%">
+    <img src="https://raw.githubusercontent.com/k4ntz/JAXAtari/f114b0dcd00a269a9349e8dc9d3df77a3722dd85/docs/source/_static/gifs/venture.gif" alt="Venture" width="16%">
+    <img src="https://raw.githubusercontent.com/k4ntz/JAXAtari/f114b0dcd00a269a9349e8dc9d3df77a3722dd85/docs/source/_static/gifs/qbert.gif" alt="Qbert" width="16%">
+    <img src="https://raw.githubusercontent.com/k4ntz/JAXAtari/f114b0dcd00a269a9349e8dc9d3df77a3722dd85/docs/source/_static/gifs/frostbite.gif" alt="Frostbite" width="16%">
+  </div>
+
+  <div class="row" align="center">
+    <img src="https://raw.githubusercontent.com/k4ntz/JAXAtari/f114b0dcd00a269a9349e8dc9d3df77a3722dd85/docs/source/_static/gifs/bankheist.gif" alt="Bankheist" width="16%">
+    <img src="https://raw.githubusercontent.com/k4ntz/JAXAtari/f114b0dcd00a269a9349e8dc9d3df77a3722dd85/docs/source/_static/gifs/mspacman.gif" alt="Ms. PacMan" width="16%">
+    <img src="https://raw.githubusercontent.com/k4ntz/JAXAtari/f114b0dcd00a269a9349e8dc9d3df77a3722dd85/docs/source/_static/gifs/gravitar.gif" alt="Gravitar" width="16%">
+    <img src="https://raw.githubusercontent.com/k4ntz/JAXAtari/f114b0dcd00a269a9349e8dc9d3df77a3722dd85/docs/source/_static/gifs/enduro.gif" alt="Enduro" width="16%">
+  </div>
+</div>
+
+---
+
 **JAXAtari** introduces a GPU-accelerated, object-centric Atari environment framework powered by [JAX](https://github.com/google/jax). Inspired by [OCAtari](https://github.com/k4ntz/OC_Atari), this framework enables up to **16,000x faster training speeds** through just-in-time (JIT) compilation, vectorization, and massive parallelization on GPU.
 Similar to [HackAtari](https://github.com/k4ntz/HackAtari), it implements a number of small **game modifications** , for simple testing of the generalization capabilities of agents. 
 
