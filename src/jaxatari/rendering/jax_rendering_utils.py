@@ -744,7 +744,7 @@ class JaxRenderingUtils:
     
 
     @partial(jax.jit, static_argnums=(0,))
-    def render_at(self, object_raster: jnp.ndarray, x: int, y: int, sprite_mask: jnp.ndarray, flip_horizontal: bool = False, flip_vertical: bool = False, flip_offset: jnp.ndarray = jnp.array([0, 0]), forced=False) -> jnp.ndarray:
+    def render_at(self, object_raster: jnp.ndarray, x: int, y: int, sprite_mask: jnp.ndarray, flip_horizontal: bool = False, flip_vertical: bool = False, flip_offset: jnp.ndarray = jnp.array([0, 0])) -> jnp.ndarray:
         """
         Stamps an object's ID onto a raster using an efficient local slice update.
         

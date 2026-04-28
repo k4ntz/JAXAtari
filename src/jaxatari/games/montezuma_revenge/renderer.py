@@ -9,7 +9,7 @@ from jaxatari.games.montezuma_revenge.core import MontezumaRevengeConstants, Mon
 from jaxatari.games.montezuma_revenge.rooms import load_room
 
 class MontezumaRevengeRenderer(JAXGameRenderer):
-    def __init__(self, consts: MontezumaRevengeConstants = None, config: render_utils.RendererConfig = None, pre_load_rooms: bool = True):
+    def __init__(self, consts: MontezumaRevengeConstants = None, config: render_utils.RendererConfig = None, pre_load_rooms: bool = False):
         super().__init__(consts)
         self.consts = consts or MontezumaRevengeConstants()
         
@@ -524,90 +524,137 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         background_raster = jax.lax.cond(is_rendered_dark, clear_room, lambda rr: rr, background_raster)
 
         # Add lava rendering for ROOM_2_3 (room_id 19) and ROOM_3_7 (room_id 31)
-        def _add_lava(r_in):
+        def _render_lava(background_raster):
             lava_y_start = 76
-            lava_y_end = 124  # gap ends at 123
-            lava_y_start_abs = room_y + lava_y_start
+            lava_y_end = 124 # gap ends at 123
+            # scale the coords
+            lava_y_start_scaled = int(self.jr.config.height_scaling * lava_y_start)
+            lava_y_end_scaled = int(self.jr.config.height_scaling * lava_y_end)
             anim_frame = jnp.mod(state.frame_count // 8, 4)
-            row_indices = jnp.arange(lava_y_end - lava_y_start)
+            row_indices = jnp.arange(lava_y_end_scaled - lava_y_start_scaled)
             band_indices = row_indices // 2
             color_indices = (band_indices // 9) + self.PIT_PATTERN[anim_frame][jnp.mod(band_indices, 9)]
             band_color_ids = self.PIT_COLOR_IDS[color_indices]
-
-            def _draw_lava_row(j, rr):
-                pos = jnp.array([[0, lava_y_start_abs + j]])
-                size = jnp.array([[160, 1]])
-                return self.jr.draw_rects(rr, pos, size, band_color_ids[j].astype(jnp.uint8))
-
-            lava_raster = jax.lax.fori_loop(0, lava_y_end - lava_y_start, _draw_lava_row, r_in)
-            # draw lava only where background is black / transparent
-            lava_raster = jnp.where(background_before_dark == 0, lava_raster, r_in)
-            return lava_raster
-
-        is_lava_room = jnp.isin(state.room_id, jnp.array([19, 27, 29, 31]))
-        background_raster = jax.lax.cond(is_lava_room, lambda r: _add_lava(r), lambda r: r, background_raster)
-
-        raster = background_raster
-        
-        # Draw Lasers
-        laser_active_now = jnp.logical_and(jnp.greater_equal(state.laser_cycle, 0), jnp.less(state.laser_cycle, 92))
-        laser_offset = jnp.mod(state.laser_cycle, 4)
-        def draw_laser(i, r):
-            x = state.lasers_x[i]
-            active = jnp.logical_and(state.lasers_active[i] == 1, laser_active_now)
+            lava_width = int(self.jr.config.width_scaling * 160)
+            lava_mask = jnp.tile(band_color_ids[:, None], (1, lava_width))
             
-            def _draw(raster_in):
-                # 40 pixels high. We batch 11 stripes max to handle offset properly.
-                start_j = jnp.mod(4 - laser_offset, 4) - 4
-                k_idx = jnp.arange(11)
-                j_vals = start_j + k_idx * 4
-                
-                valid = jnp.logical_and(j_vals >= 0, j_vals < 40)
-                pos_x = jnp.where(valid, x, -1)
-                pos_y = jnp.where(valid, 54 + j_vals, -1)
-                
-                sizes = jnp.where(valid, 4, 1)
-                
-                pos = jnp.stack([pos_x, pos_y], axis=-1)
-                size = jnp.stack([sizes, jnp.ones_like(sizes)], axis=-1)
-                
-                return self.jr.draw_rects(raster_in, pos, size, self.LASER_ID)
-                
-            return jax.lax.cond(active, _draw, lambda r_in: r_in, r)
+            lava_raster = self.jr.render_at(background_raster, 0, room_y + lava_y_start, lava_mask)
+            lava_raster = jnp.where(background_before_dark == 0, lava_raster, background_raster)
+            is_lava_room = jnp.any(state.room_id == jnp.array([19, 31, 27, 29]))
+            lava_cond = jnp.logical_and(is_lava_room, jnp.logical_not(is_rendered_dark))  # Only show lava if it's a lava room and not dark
+            background_raster = jax.lax.cond(lava_cond, lambda r: lava_raster, lambda r: r, background_raster)
+            return background_raster
 
-        raster = jax.lax.fori_loop(0, self.consts.MAX_LASERS_PER_ROOM, draw_laser, raster)
-        
+        raster = jax.lax.cond(jnp.any(state.room_id == jnp.array([19, 27, 29, 31])), _render_lava, lambda r: r, background_raster) 
+
+        def _draw_lasers(raster):
+            # Draw Lasers - vectorized to draw all lasers at once
+            laser_active_now = jnp.logical_and(jnp.greater_equal(state.laser_cycle, 0), jnp.less(state.laser_cycle, 92))
+            laser_offset = jnp.mod(state.laser_cycle, 4)
+            
+            # Compute stripe j values (40 pixels high, 4-pixel spacing with offset)
+            start_j = jnp.mod(4 - laser_offset, 4) - 4
+            k_idx = jnp.arange(11)
+            j_vals = start_j + k_idx * 4  # shape: (11,)
+            
+            # Broadcast laser positions and active states across all lasers and stripes
+            # Shape: (MAX_LASERS_PER_ROOM, 11)
+            x_per_laser = jnp.tile(state.lasers_x[:, None], (1, 11))
+            j_vals_per_laser = jnp.tile(j_vals[None, :], (self.consts.MAX_LASERS_PER_ROOM, 1))
+            active_per_laser = jnp.tile(
+                jnp.logical_and(state.lasers_active == 1, laser_active_now)[:, None],
+                (1, 11)
+            )
+            
+            # Check validity: stripe within [0, 40) range AND laser is active
+            valid = jnp.logical_and(
+                jnp.logical_and(j_vals_per_laser >= 0, j_vals_per_laser < 40),
+                active_per_laser
+            )
+            
+            # Build positions and sizes
+            pos_x = jnp.where(valid, x_per_laser, -1)
+            pos_y = jnp.where(valid, 54 + j_vals_per_laser, -1)
+            sizes = jnp.where(valid, 4, 1)
+            
+            # Flatten all positions and draw in one call
+            pos_flat = jnp.stack([pos_x.flatten(), pos_y.flatten()], axis=-1)
+            size_flat = jnp.stack([sizes.flatten(), jnp.ones_like(sizes.flatten())], axis=-1)
+
+            raster = self.jr.draw_rects(raster, pos_flat, size_flat, self.LASER_ID)
+            return raster
+
+        raster = jax.lax.cond(jnp.any(state.lasers_active == 1), lambda r: _draw_lasers(r), lambda r: r, raster)
 
         # Draw Platforms
+        # Pre-compute room state checks (same for all platforms in this frame)
         platform_active_now = jnp.less(state.platform_cycle, self.consts.PLATFORM_ACTIVE_DURATION)
+        is_pit_room = jnp.isin(state.room_id, jnp.array([19, 27, 29, 31]))
+        is_layer_2_room = jnp.logical_or(state.room_id == 17, jnp.logical_or(state.room_id == 18, state.room_id == 19))
+        is_deep_blue_room = jnp.any(state.room_id == jnp.array([31, 27, 29]))
+        p_color = jax.lax.select(is_layer_2_room, self.LEVEL2_PLATFORM_ID, self.LADDER_ID_L2)
+        p_color = jax.lax.select(is_deep_blue_room, self.DEEP_BLUE_PLATFORM_ID, p_color)
+        anim_idx_platform = (state.frame_count // 8) % 2
+        
         def render_platform(i, raster):
-            is_pit_room = jnp.isin(state.room_id, jnp.array([19, 27, 29, 31]))
             is_active = jnp.logical_and(state.platforms_active[i] == 1, platform_active_now)
 
-            # Color remap: Use LEVEL2_PLATFORM_ID for Level 2 rooms (17, 18, 19), otherwise LADDER_ID_L2
-            is_layer_2_room = jnp.logical_or(state.room_id == 17, jnp.logical_or(state.room_id == 18, state.room_id == 19))
-            p_color = jax.lax.select(is_layer_2_room, self.LEVEL2_PLATFORM_ID, self.LADDER_ID_L2)
-            is_deep_blue_room = jnp.any(state.room_id == jnp.array([31, 27, 29]))
-            p_color = jax.lax.select(is_deep_blue_room, self.DEEP_BLUE_PLATFORM_ID, p_color)
-
             def _draw_pit(r):
-                anim_idx = (state.frame_count // 8) % 2
-                mask = self.SHAPE_MASKS["pitroom_dropout_floor"][anim_idx]
-                mask = jnp.concatenate([mask, mask[0:1, :]], axis=0) # 7x8
+                # 1. Prepare and scale the base tile
+                mask = self.SHAPE_MASKS["pitroom_dropout_floor"][anim_idx_platform]
+                mask = jnp.concatenate([mask, mask[0:1, :]], axis=0)
                 mask = jnp.where(mask != self.jr.TRANSPARENT_ID, p_color, self.jr.TRANSPARENT_ID)
+
+                # 2. Get the dimensions AFTER scaling
+                # These are concrete values to JAX during tracing if MAX_TILES is an int
+                MAX_TILES = 12
+                tile_h, tile_w = mask.shape 
+
+                # 3. Tile horizontally
+                total_mask = jnp.tile(mask, (1, MAX_TILES))
+                
+                # 4. Calculate dynamic visibility based on current mask width
+                # We find how many original 8px tiles fit, then multiply by current tile_w
                 num_tiles = state.platforms_width[i] // 8
-                def _tile_fn(j, r_in):
-                    return self.jr.render_at(r_in, state.platforms_x[i] + j * 8, state.platforms_y[i] + 47, mask)
-                return jax.lax.fori_loop(0, num_tiles, _tile_fn, r)
+                actual_width_px = num_tiles * tile_w
+                
+                # Use total_mask.shape[1] to guarantee the indices match the array width
+                x_indices = jnp.arange(total_mask.shape[1])
+                is_visible = x_indices < actual_width_px
+                
+                # 5. Mask and Render
+                full_mask = jnp.where(is_visible[None, :], total_mask, self.jr.TRANSPARENT_ID)
+
+                return self.jr.render_at(r, state.platforms_x[i], state.platforms_y[i] + 47, full_mask)
 
             def _draw_other(r):
-                anim_idx = (state.frame_count // 8) % 2
-                mask = self.SHAPE_MASKS["dropout_floor"][anim_idx]
+                # 1. Prepare and scale the base tile
+                mask = self.SHAPE_MASKS["dropout_floor"][anim_idx_platform]
                 mask = jnp.where(mask != self.jr.TRANSPARENT_ID, p_color, self.jr.TRANSPARENT_ID)
+
+                # 2. Setup Static Dimensions
+                # Based on your previous code, max width seems to be 12 tiles
+                MAX_TILES = 12 
+                tile_h, tile_w = mask.shape
+
+                # 3. Create the tiled "Super Mask" (Horizontal)
+                # Shape: (tile_h, tile_w * 12)
+                total_mask = jnp.tile(mask, (1, MAX_TILES))
+
+                # 4. Calculate Dynamic Visibility
+                # Original tile width was 12. We find how many tiles, then map to scaled width.
                 num_tiles = state.platforms_width[i] // 12
-                def _tile_fn(j, r_in):
-                    return self.jr.render_at(r_in, state.platforms_x[i] + j * 12, state.platforms_y[i] + 47, mask)
-                return jax.lax.fori_loop(0, num_tiles, _tile_fn, r)
+                actual_width_px = num_tiles * tile_w
+                
+                # Create the x-axis index mask
+                x_indices = jnp.arange(total_mask.shape[1])
+                is_visible = x_indices < actual_width_px
+                
+                # Mask out the inactive tiles
+                full_mask = jnp.where(is_visible[None, :], total_mask, self.jr.TRANSPARENT_ID)
+
+                # 5. Render in one shot
+                return self.jr.render_at(r, state.platforms_x[i], state.platforms_y[i] + 47, full_mask)
 
             def _draw_active(r):
                 return jax.lax.cond(is_pit_room, _draw_pit, _draw_other, r)
@@ -618,24 +665,37 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
                 lambda r: r,
                 raster
             )
-        raster = jax.lax.fori_loop(0, self.consts.MAX_PLATFORMS_PER_ROOM, render_platform, raster)
+        
+        raster = jax.lax.cond(
+            jnp.any(state.platforms_active == 1),
+            lambda r: jax.lax.fori_loop(0, self.consts.MAX_PLATFORMS_PER_ROOM, render_platform, r),
+            lambda r: r,
+            raster
+        )
 
         # Draw Conveyors
+        # Pre-compute room state check and animation (same for all conveyors in this frame)
         anim_idx = jnp.less(jnp.mod(state.frame_count, 16), 8)
-        def render_conveyor(i, raster):
-            mask = self.SHAPE_MASKS["conveyor"]
-            # Color remap: Use LADDER_ID_L2 (purple) for Layer 2 rooms, otherwise LADDER_ID (green)
-            is_layer_2 = jnp.isin(state.room_id, jnp.array([10, 11, 12, 14]))
-            c_color = jax.lax.select(is_layer_2, self.LADDER_ID_L2, self.LADDER_ID)
-            mask = jnp.where(mask != self.jr.TRANSPARENT_ID, c_color.astype(jnp.uint8), self.jr.TRANSPARENT_ID)
+        is_layer_2 = jnp.isin(state.room_id, jnp.array([10, 11, 12, 14]))
+        c_color = jax.lax.select(is_layer_2, self.LADDER_ID_L2, self.LADDER_ID)
+        base_mask = self.SHAPE_MASKS["conveyor"]
+        conveyor_mask = jnp.where(base_mask != self.jr.TRANSPARENT_ID, c_color.astype(jnp.uint8), self.jr.TRANSPARENT_ID)
+        
+        def render_conveyor_body(i, raster):
             return jax.lax.cond(
                 state.conveyors_active[i] == 1,
-                lambda r: self.jr.render_at(r, state.conveyors_x[i], state.conveyors_y[i] + 47, mask, flip_vertical=anim_idx, forced=True),
+                lambda r: self.jr.render_at(r, state.conveyors_x[i], state.conveyors_y[i] + 47, conveyor_mask, flip_vertical=anim_idx),
                 lambda r: r,
                 raster
             )
-        raster = jax.lax.cond(jnp.any(state.conveyors_active == 1), lambda r: jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, render_conveyor, r), lambda r: r, raster)
-        # raster = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, render_conveyor, raster)
+        
+        raster = jax.lax.cond(
+            jnp.any(state.conveyors_active == 1),
+            # _render_conveyor,
+            lambda r: jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, render_conveyor_body, raster),
+            lambda r: r,
+            raster
+        )
         
         # Draw Items
         def render_item(i, raster):
