@@ -200,7 +200,7 @@ class StandbyPhase(IntEnum):
 
 @struct.dataclass
 class BeamriderConstants:
-    STARTING_SECTOR: int = struct.field(pytree_node=False, default=1)
+    STARTING_SECTOR: int = struct.field(pytree_node=False, default=2)
     STARTING_LIVES: int = struct.field(pytree_node=False, default=3)
     MAX_LIVES: int = struct.field(pytree_node=False, default=14)
     WHITE_UFOS_PER_SECTOR: int = struct.field(pytree_node=False, default=15)
@@ -245,14 +245,14 @@ class BeamriderConstants:
     MAX_BLUE_LINE_POS: int = struct.field(pytree_node=False, default=160)
     WHITE_UFO_RETREAT_DURATION: int = struct.field(pytree_node=False, default=28)
 
-    ####PATTERNS:  IDLE | DROP_STRAIGHT | DROP_RIGHT | DROP_LEFT | RETREAT | SHOOT | MOVE_BACK | KAMIKAZE | TRIPLE_SHOT_RIGHT | TRIPLE_SHOT_LEFT
+    ####PATTERNS:  (IDLE) | 0: DROP_STRAIGHT | 1: DROP_RIGHT | 2: DROP_LEFT | (RETREAT) | 3: SHOOT | 4: MOVE_BACK | 5: KAMIKAZE |  6: TRIPLE_SHOT_RIGHT | 7: TRIPLE_SHOT_LEFT
     WHITE_UFO_PATTERN_DURATIONS: Tuple[int, ...] = struct.field(pytree_node=False,
                                                                 default=(0, 42, 42, 42, 28, 0, 42, 100, 123, 123))
     WHITE_UFO_PATTERN_PROBS: Tuple[float, ...] = struct.field(pytree_node=False,
-                                                              default=(0.3, 0.2, 0.2, 0.2, 0.2, 0.1, 0.2, 0.2)) #these probas are not 1:1, as some patterns have activation conditions
+                                                              default=(0.3, 0.2, 0.2, 0.15, 0.2, 0.1, 0.2, 0.2)) #these probas are not 1:1, as some patterns have activation conditions
     WHITE_UFO_SPEED_FACTOR: float = struct.field(pytree_node=False, default=0.1)
     WHITE_UFO_SHOT_SPEED_FACTOR: float = struct.field(pytree_node=False, default=0.8)
-    WHITE_UFO_RETREAT_P_MIN: float = struct.field(pytree_node=False, default=0.05)
+    WHITE_UFO_RETREAT_P_MIN: float = struct.field(pytree_node=False, default=0.03)
     WHITE_UFO_RETREAT_P_MAX: float = struct.field(pytree_node=False, default=0.2)
     WHITE_UFO_RETREAT_ALPHA: float = struct.field(pytree_node=False, default=0.01)
     WHITE_UFO_RETREAT_SPEED_MULT: float = struct.field(pytree_node=False, default=2.5)
