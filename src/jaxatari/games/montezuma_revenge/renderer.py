@@ -6,6 +6,7 @@ import os
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.games.montezuma_revenge.core import MontezumaRevengeConstants, MontezumaRevengeState
+from jaxatari.games.montezuma_revenge.rooms import load_room
 
 class MontezumaRevengeRenderer(JAXGameRenderer):
     def __init__(self, consts: MontezumaRevengeConstants = None, config: render_utils.RendererConfig = None):
@@ -197,6 +198,275 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
             self.SHAPE_MASKS["digit_9"],
         ])
 
+        room_template_state = self._create_room_geometry_template_state()
+        self.room_backgrounds = jnp.stack([
+            self._build_room_background(room_id, self._load_room_geometry(room_id, room_template_state))
+            for room_id in range(self.consts.MAX_ROOMS)
+        ])
+
+    def _create_room_geometry_template_state(self) -> MontezumaRevengeState:
+        return MontezumaRevengeState(
+            room_id=jnp.array(self.consts.INITIAL_ROOM_ID, dtype=jnp.int32),
+            lives=jnp.array(5, dtype=jnp.int32),
+            score=jnp.array([0], dtype=jnp.int32),
+            frame_count=jnp.array(0, dtype=jnp.int32),
+            player_x=jnp.array(self.consts.INITIAL_PLAYER_X, dtype=jnp.int32),
+            player_y=jnp.array(self.consts.INITIAL_PLAYER_Y, dtype=jnp.int32),
+            player_vx=jnp.array(0, dtype=jnp.int32),
+            player_vy=jnp.array(0, dtype=jnp.int32),
+            player_dir=jnp.array(1, dtype=jnp.int32),
+            entry_x=jnp.array(self.consts.INITIAL_PLAYER_X, dtype=jnp.int32),
+            entry_y=jnp.array(self.consts.INITIAL_PLAYER_Y, dtype=jnp.int32),
+            entry_is_climbing=jnp.array(0, dtype=jnp.int32),
+            entry_last_ladder=jnp.array(-1, dtype=jnp.int32),
+            is_jumping=jnp.array(0, dtype=jnp.int32),
+            is_falling=jnp.array(0, dtype=jnp.int32),
+            fall_after_jump=jnp.array(0, dtype=jnp.int32),
+            fall_distance=jnp.array(0, dtype=jnp.int32),
+            jump_counter=jnp.array(0, dtype=jnp.int32),
+            is_climbing=jnp.array(0, dtype=jnp.int32),
+            out_of_ladder_delay=jnp.array(0, dtype=jnp.int32),
+            last_rope=jnp.array(-1, dtype=jnp.int32),
+            last_ladder=jnp.array(-1, dtype=jnp.int32),
+            enemies_x=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
+            enemies_y=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
+            enemies_active=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
+            enemies_direction=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
+            enemies_type=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
+            enemies_min_x=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
+            enemies_max_x=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
+            enemies_bouncing=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
+            ladders_x=jnp.zeros(self.consts.MAX_LADDERS_PER_ROOM, dtype=jnp.int32),
+            ladders_top=jnp.zeros(self.consts.MAX_LADDERS_PER_ROOM, dtype=jnp.int32),
+            ladders_bottom=jnp.zeros(self.consts.MAX_LADDERS_PER_ROOM, dtype=jnp.int32),
+            ladders_active=jnp.zeros(self.consts.MAX_LADDERS_PER_ROOM, dtype=jnp.int32),
+            ropes_x=jnp.zeros(self.consts.MAX_ROPES_PER_ROOM, dtype=jnp.int32),
+            ropes_top=jnp.zeros(self.consts.MAX_ROPES_PER_ROOM, dtype=jnp.int32),
+            ropes_bottom=jnp.zeros(self.consts.MAX_ROPES_PER_ROOM, dtype=jnp.int32),
+            ropes_active=jnp.zeros(self.consts.MAX_ROPES_PER_ROOM, dtype=jnp.int32),
+            items_x=jnp.zeros(self.consts.MAX_ITEMS_PER_ROOM, dtype=jnp.int32),
+            items_y=jnp.zeros(self.consts.MAX_ITEMS_PER_ROOM, dtype=jnp.int32),
+            items_active=jnp.zeros(self.consts.MAX_ITEMS_PER_ROOM, dtype=jnp.int32),
+            items_type=jnp.zeros(self.consts.MAX_ITEMS_PER_ROOM, dtype=jnp.int32),
+            doors_x=jnp.zeros(self.consts.MAX_DOORS_PER_ROOM, dtype=jnp.int32),
+            doors_y=jnp.zeros(self.consts.MAX_DOORS_PER_ROOM, dtype=jnp.int32),
+            doors_active=jnp.zeros(self.consts.MAX_DOORS_PER_ROOM, dtype=jnp.int32),
+            conveyors_x=jnp.zeros(self.consts.MAX_CONVEYORS_PER_ROOM, dtype=jnp.int32),
+            conveyors_y=jnp.zeros(self.consts.MAX_CONVEYORS_PER_ROOM, dtype=jnp.int32),
+            conveyors_active=jnp.zeros(self.consts.MAX_CONVEYORS_PER_ROOM, dtype=jnp.int32),
+            conveyors_direction=jnp.zeros(self.consts.MAX_CONVEYORS_PER_ROOM, dtype=jnp.int32),
+            lasers_x=jnp.zeros(self.consts.MAX_LASERS_PER_ROOM, dtype=jnp.int32),
+            lasers_active=jnp.zeros(self.consts.MAX_LASERS_PER_ROOM, dtype=jnp.int32),
+            laser_cycle=jnp.array(0, dtype=jnp.int32),
+            platforms_x=jnp.zeros(self.consts.MAX_PLATFORMS_PER_ROOM, dtype=jnp.int32),
+            platforms_y=jnp.zeros(self.consts.MAX_PLATFORMS_PER_ROOM, dtype=jnp.int32),
+            platforms_width=jnp.full(self.consts.MAX_PLATFORMS_PER_ROOM, 12, dtype=jnp.int32),
+            platforms_active=jnp.zeros(self.consts.MAX_PLATFORMS_PER_ROOM, dtype=jnp.int32),
+            platform_cycle=jnp.array(0, dtype=jnp.int32),
+            death_timer=jnp.array(0, dtype=jnp.int32),
+            death_type=jnp.array(0, dtype=jnp.int32),
+            inventory=jnp.array([0, 0, 0, 0], dtype=jnp.int32),
+            amulet_time=jnp.array(0, dtype=jnp.int32),
+            bonus_room_timer=jnp.array(0, dtype=jnp.int32),
+            first_gem_pickup=jnp.array(0, dtype=jnp.int32),
+            global_enemies_active=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ENEMIES_PER_ROOM), dtype=jnp.int32),
+            global_enemies_type=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ENEMIES_PER_ROOM), dtype=jnp.int32),
+            global_items_active=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ITEMS_PER_ROOM), dtype=jnp.int32),
+            global_items_type=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_ITEMS_PER_ROOM), dtype=jnp.int32),
+            global_doors_active=jnp.zeros((self.consts.MAX_ROOMS, self.consts.MAX_DOORS_PER_ROOM), dtype=jnp.int32),
+            key=jax.random.PRNGKey(0),
+        )
+
+    def _load_room_geometry(self, room_id: int, template_state: MontezumaRevengeState) -> MontezumaRevengeState:
+        return load_room(jnp.array(room_id, dtype=jnp.int32), template_state, self.consts)
+
+    def _build_room_background(self, room_id: int, room_state: MontezumaRevengeState) -> jnp.ndarray:
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+
+        room_y = 47
+        room_h = 149
+        room_w = 160
+
+        def clear_room(r_in):
+            pos = jnp.array([[0, room_y]])
+            size = jnp.array([[room_w, room_h]])
+            return self.jr.draw_rects(r_in, pos, size, jnp.uint8(0))
+
+        def clear_hole(r_in, y0, y1, x0, x1):
+            pos = jnp.array([[x0, room_y + y0]])
+            size = jnp.array([[x1 - x0, y1 - y0]])
+            return self.jr.draw_rects(r_in, pos, size, jnp.uint8(0))
+
+        def stamp_room(r_in, mask):
+            rr = clear_room(r_in)
+            return self.jr.render_at(rr, 0, room_y, mask)
+
+        def draw_wall(r_in, x, y0, y1, color):
+            pos = jnp.array([[x, room_y + y0]])
+            size = jnp.array([[4, y1 - y0]])
+            return self.jr.draw_rects(r_in, pos, size, color.astype(jnp.uint8))
+
+        raster = clear_room(raster)
+        raster = self.jr.render_at(raster, 0, room_y, self.SHAPE_MASKS["room_bg_0"])
+        raster = clear_hole(raster, 147, 149, 72, 88)
+
+        if room_id == 4:
+            raster = stamp_room(raster, self.SHAPE_MASKS["room_bg_1"])
+
+        if room_id == 12:
+            raster = stamp_room(raster, self.SHAPE_MASKS["room_bg_3"])
+            raster = clear_hole(raster, 147, 149, 72, 88)
+
+        if room_id in (25, 26, 28, 30, 32):
+            raster = stamp_room(raster, self.SHAPE_MASKS["room_bg_4"])
+
+        if room_id in (10, 11, 14):
+            raster = stamp_room(raster, self.SHAPE_MASKS["room_bg_2"])
+            raster = clear_hole(raster, 48, 149, 72, 88)
+
+        if room_id == 13:
+            raster = stamp_room(raster, self.SHAPE_MASKS["room_bg_2"])
+
+        mask_l2 = jnp.where(self.SHAPE_MASKS["room_bg_level2_base"] == 1, self.LEVEL2_PLATFORM_ID, self.SHAPE_MASKS["room_bg_level2_base"])
+        mask_l2_room0 = jnp.where(self.SHAPE_MASKS["room_bg_level2_room0"] == 1, self.LEVEL2_PLATFORM_ID, self.SHAPE_MASKS["room_bg_level2_room0"])
+        mask_l2_room6 = jnp.where(self.SHAPE_MASKS["room_bg_level2_room6"] == 1, self.LEVEL2_PLATFORM_ID, self.SHAPE_MASKS["room_bg_level2_room6"])
+        mask_l2_pit = jnp.where(self.SHAPE_MASKS["room_bg_level2_pit"] == 1, self.LEVEL2_PLATFORM_ID, self.SHAPE_MASKS["room_bg_level2_pit"])
+
+        if room_id == 18:
+            raster = stamp_room(raster, mask_l2)
+        if room_id == 17:
+            raster = stamp_room(raster, mask_l2_room0)
+        if room_id == 19:
+            raster = stamp_room(raster, mask_l2_pit)
+        if room_id in (27, 29, 31):
+            raster = stamp_room(raster, self.SHAPE_MASKS["room_bg_pit_original"])
+
+        if room_id in (20, 22):
+            raster = stamp_room(raster, mask_l2)
+            raster = clear_hole(raster, 48, 149, 72, 88)
+
+        if room_id == 21:
+            raster = stamp_room(raster, mask_l2)
+
+        if room_id == 23:
+            raster = stamp_room(raster, mask_l2_room6)
+
+        if room_id == 24:
+            raster = stamp_room(raster, self.SHAPE_MASKS["room_bg_bonus"])
+
+        left_wall_color = jnp.where(room_id == 19, self.LADDER_ID,
+                                    jnp.where(room_id == 30, self.ORANGE_LADDER_ID,
+                                              jnp.where(room_id == 17, self.LEVEL2_PLATFORM_ID, 1)))
+        if room_id in (3, 10, 19, 30):
+            raster = draw_wall(raster, 0, 6, 48, left_wall_color)
+        if room_id == 17:
+            raster = draw_wall(raster, 0, 6, 149, left_wall_color)
+
+        right_wall_color = jnp.where(room_id == 18, self.LADDER_ID,
+                                     jnp.where(room_id == 29, self.DEEP_BLUE_PLATFORM_ID,
+                                               jnp.where(room_id == 23, self.LEVEL2_PLATFORM_ID, 1)))
+        if room_id in (5, 14, 18, 32, 29):
+            raster = draw_wall(raster, 156, 6, 48, right_wall_color)
+        if room_id == 23:
+            raster = draw_wall(raster, 156, 6, 149, right_wall_color)
+
+        # Draw ladders as static room geometry.
+        def draw_ladder_accurate(i, r):
+            x = room_state.ladders_x[i]
+            top = room_state.ladders_top[i] + 47
+            bottom = room_state.ladders_bottom[i] + 47
+            bottom = jnp.where(jnp.logical_and(room_id == 4, room_state.ladders_bottom[i] == 130), bottom + 3, bottom)
+            bottom = jnp.where(jnp.logical_and(room_id == 23, room_state.ladders_bottom[i] == 150), bottom - 3, bottom)
+            active = room_state.ladders_active[i]
+
+            def _draw(raster_in):
+                def render_long_ladder(r_in, l_color, bg_color):
+                    long_top = top - 1
+                    long_height = bottom - long_top
+
+                    bg_pos = jnp.array([[x - 4, long_top]])
+                    bg_size = jnp.array([[24, long_height]])
+                    r_in = self.jr.draw_rects(r_in, bg_pos, bg_size, bg_color)
+
+                    new_rail_pos = jnp.array([[x, long_top], [x + 16 - 4, long_top]])
+                    new_rail_size = jnp.array([[4, long_height], [4, long_height]])
+                    new_rung_pos = jnp.array([[x, long_top + 4]])
+                    new_rung_size = jnp.array([[16, long_height - 4]])
+
+                    r_in = self.jr.draw_rects(r_in, new_rail_pos, new_rail_size, l_color)
+                    return self.jr.draw_ladders(r_in, new_rung_pos, new_rung_size, 2, 5, l_color)
+
+                ladder_width = 16
+                rail_pos = jnp.array([[x, top], [x + ladder_width - 4, top]])
+                rail_size = jnp.array([[4, bottom - top], [4, bottom - top]])
+                rung_pos = jnp.array([[x, top + 4]])
+                rung_size = jnp.array([[ladder_width, bottom - top - 4]])
+
+                def draw_l1(r_in):
+                    r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.LADDER_ID)
+                    return self.jr.draw_ladders(r_in, rung_pos, rung_size, 2, 5, self.LADDER_ID)
+
+                def draw_l2(r_in):
+                    r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.LADDER_ID_L2)
+                    return self.jr.draw_ladders(r_in, rung_pos, rung_size, 2, 5, self.LADDER_ID_L2)
+
+                def draw_yellow_l2(r_in):
+                    r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.YELLOW_LADDER_ID)
+                    return self.jr.draw_ladders(r_in, rung_pos, rung_size, 2, 5, self.YELLOW_LADDER_ID)
+
+                def draw_orange(r_in):
+                    r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.ORANGE_LADDER_ID)
+                    return self.jr.draw_ladders(r_in, rung_pos, rung_size, 2, 5, self.ORANGE_LADDER_ID)
+
+                def draw_long(r_in):
+                    return render_long_ladder(r_in, self.BLUE_LADDER_ID, self.LADDER_ID)
+
+                def draw_long_l2(r_in):
+                    return render_long_ladder(r_in, self.YELLOW_LADDER_ID, self.LADDER_ID_L2)
+
+                is_layer_2 = room_id in (10, 11, 12, 14)
+                is_long_ladder = jnp.logical_and(room_id in (3, 5), i == 0)
+                is_long_ladder_l2 = jnp.logical_and(room_id in (10, 11, 12, 14), i == 0)
+                is_small_yellow = jnp.logical_or(
+                    jnp.logical_and(room_id == 11, i == 1),
+                    jnp.logical_and(room_id == 13, i == 0)
+                )
+                is_room_orange_ladder = room_id in (28, 30, 31)
+
+                ladder_draw_case = jnp.where(is_layer_2, 1, 0)
+                ladder_draw_case = jnp.where(is_small_yellow, 2, ladder_draw_case)
+                ladder_draw_case = jnp.where(is_long_ladder_l2, 3, ladder_draw_case)
+                ladder_draw_case = jnp.where(is_long_ladder, 4, ladder_draw_case)
+                ladder_draw_case = jnp.where(is_room_orange_ladder, 5, ladder_draw_case)
+
+                return jax.lax.switch(
+                    ladder_draw_case,
+                    [draw_l1, draw_l2, draw_yellow_l2, draw_long_l2, draw_long, draw_orange],
+                    raster_in,
+                )
+
+            return jax.lax.cond(active == 1, _draw, lambda r_in: r_in, r)
+
+        raster = jax.lax.fori_loop(0, self.consts.MAX_LADDERS_PER_ROOM, draw_ladder_accurate, raster)
+
+        # Draw ropes as static room geometry.
+        def draw_rope(i, r):
+            x = room_state.ropes_x[i]
+            top = room_state.ropes_top[i] + 47
+            bottom = room_state.ropes_bottom[i] + 47
+            active = room_state.ropes_active[i]
+
+            def _draw(raster_in):
+                rail_pos = jnp.array([[x, top]])
+                rail_size = jnp.array([[1, bottom - top + 1]])
+                return self.jr.draw_rects(raster_in, rail_pos, rail_size, self.DOOR_ID)
+
+            return jax.lax.cond(active == 1, _draw, lambda r_in: r_in, r)
+
+        raster = jax.lax.fori_loop(0, self.consts.MAX_ROPES_PER_ROOM, draw_rope, raster)
+
+        return raster
+
     @partial(jax.jit, static_argnums=(0,))
     def _render_hook_pre_render(self, state: MontezumaRevengeState) -> MontezumaRevengeState:
         """Hook called at the very beginning of render() to allow state modification."""
@@ -212,74 +482,18 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         # Apply pre-render hook
         state = self._render_hook_pre_render(state)
 
-        # Start with solid black background
-        raster = self.jr.create_object_raster(self.BACKGROUND)
-        
-        # Draw Room Background by stamping selected masks into a dedicated raster.
-        background_raster = raster
+        # Select the precomputed static room background.
+        background_raster = self.room_backgrounds[state.room_id]
+        background_before_dark = background_raster
         room_y = 47
-        room_h = 149
-        room_w = 160
+
 
         def clear_room(r_in):
+            room_h = 149
+            room_w = 160
             pos = jnp.array([[0, room_y]])
             size = jnp.array([[room_w, room_h]])
             return self.jr.draw_rects(r_in, pos, size, jnp.uint8(0))
-
-        def stamp_room(r_in, cond, mask):
-            def _stamp(rr):
-                rr = clear_room(rr)
-                return self.jr.render_at(rr, 0, room_y, mask)
-            return jax.lax.cond(cond, _stamp, lambda rr: rr, r_in)
-
-        def clear_hole(r_in, cond, y0, y1, x0, x1):
-            def _clear(rr):
-                pos = jnp.array([[x0, room_y + y0]])
-                size = jnp.array([[x1 - x0, y1 - y0]])
-                return self.jr.draw_rects(rr, pos, size, jnp.uint8(0))
-            return jax.lax.cond(cond, _clear, lambda rr: rr, r_in)
-
-        # Base level 0 room then room-specific overrides.
-        background_raster = clear_room(background_raster)
-        background_raster = self.jr.render_at(background_raster, 0, room_y, self.SHAPE_MASKS["room_bg_0"])
-        background_raster = clear_hole(background_raster, jnp.array(True), 147, 149, 72, 88)
-
-        background_raster = stamp_room(background_raster, state.room_id == 4, self.SHAPE_MASKS["room_bg_1"])
-
-        background_raster = stamp_room(background_raster, state.room_id == 12, self.SHAPE_MASKS["room_bg_3"])
-        background_raster = clear_hole(background_raster, state.room_id == 12, 147, 149, 72, 88)
-
-        is_mask4_room = jnp.isin(state.room_id, jnp.array([25, 26, 28, 30, 32]))
-        background_raster = stamp_room(background_raster, is_mask4_room, self.SHAPE_MASKS["room_bg_4"])
-
-        is_layer1_cutout = jnp.isin(state.room_id, jnp.array([10, 11, 14]))
-        background_raster = stamp_room(background_raster, is_layer1_cutout, self.SHAPE_MASKS["room_bg_2"])
-        background_raster = clear_hole(background_raster, is_layer1_cutout, 48, 149, 72, 88)
-        background_raster = stamp_room(background_raster, state.room_id == 13, self.SHAPE_MASKS["room_bg_2"])
-
-        # Level 2 rooms
-        mask_l2 = jnp.where(self.SHAPE_MASKS["room_bg_level2_base"] == 1, self.LEVEL2_PLATFORM_ID, self.SHAPE_MASKS["room_bg_level2_base"])
-        mask_l2_room0 = jnp.where(self.SHAPE_MASKS["room_bg_level2_room0"] == 1, self.LEVEL2_PLATFORM_ID, self.SHAPE_MASKS["room_bg_level2_room0"])
-        mask_l2_room6 = jnp.where(self.SHAPE_MASKS["room_bg_level2_room6"] == 1, self.LEVEL2_PLATFORM_ID, self.SHAPE_MASKS["room_bg_level2_room6"])
-        mask_l2_pit = jnp.where(self.SHAPE_MASKS["room_bg_level2_pit"] == 1, self.LEVEL2_PLATFORM_ID, self.SHAPE_MASKS["room_bg_level2_pit"])
-
-        background_raster = stamp_room(background_raster, state.room_id == 18, mask_l2)
-        background_raster = stamp_room(background_raster, state.room_id == 17, mask_l2_room0)
-        background_raster = stamp_room(background_raster, state.room_id == 19, mask_l2_pit)
-        is_pit_room = jnp.isin(state.room_id, jnp.array([27, 29, 31]))
-        # jax.debug.print("bg_pit_orig: {}", self.SHAPE_MASKS["room_bg_pit_original"])
-        background_raster = stamp_room(background_raster, is_pit_room, self.SHAPE_MASKS["room_bg_pit_original"])
-        full_pit_background = background_raster
-
-        is_l2_hole_room = jnp.isin(state.room_id, jnp.array([20, 22]))
-        background_raster = stamp_room(background_raster, is_l2_hole_room, mask_l2)
-        background_raster = clear_hole(background_raster, is_l2_hole_room, 48, 149, 72, 88)
-
-        background_raster = stamp_room(background_raster, state.room_id == 21, mask_l2)
-        background_raster = stamp_room(background_raster, state.room_id == 23, mask_l2_room6)
-
-        # Bonus Room (ROOM_3_0)
-        background_raster = stamp_room(background_raster, state.room_id == 24, self.SHAPE_MASKS["room_bg_bonus"])
 
         # DARK ROOM LOGIC
         is_dark_room = jnp.isin(state.room_id, jnp.array([25, 26, 27, 28, 29, 30, 31, 32]))
@@ -305,146 +519,13 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
 
             lava_raster = jax.lax.fori_loop(0, lava_y_end - lava_y_start, _draw_lava_row, r_in)
             # draw lava only where background is black / transparent
-            # jax.debug.print("{}", r_in)
-            # background_color_cond = jnp.logical_or(r_in == 0, r_in == self.jr.TRANSPARENT_ID)
-            background_color_cond = (full_pit_background == 0)
-            # background_color_cond = jnp.logical_or(background_color_cond, r_in == 5) 
-            lava_raster = jnp.where(background_color_cond, lava_raster, r_in)
-            lava_raster = jnp.where(r_in == 0, lava_raster, r_in)
+            lava_raster = jnp.where(background_before_dark == 0, lava_raster, r_in)
             return lava_raster
 
         is_lava_room = jnp.isin(state.room_id, jnp.array([19, 27, 29, 31]))
         background_raster = jax.lax.cond(is_lava_room, lambda r: _add_lava(r), lambda r: r, background_raster)
 
-        # Add walls for side rooms Level 0 and Level 1 and Level 2.
-        # Use LEVEL2_PLATFORM_ID for Level 2 walls (room 17), LADDER_ID for room 19, and ORANGE_LADDER_ID for room 30.
-        def draw_wall(r_in, cond, x, y0, y1, color):
-            def _draw(rr):
-                pos = jnp.array([[x, room_y + y0]])
-                size = jnp.array([[4, y1 - y0]])
-                return self.jr.draw_rects(rr, pos, size, color.astype(jnp.uint8))
-            return jax.lax.cond(cond, _draw, lambda rr: rr, r_in)
-
-        left_wall_color = jnp.where(state.room_id == 19, self.LADDER_ID,
-                                    jnp.where(state.room_id == 30, self.ORANGE_LADDER_ID,
-                                              jnp.where(state.room_id == 17, self.LEVEL2_PLATFORM_ID, 1)))
-        is_side_room_left = jnp.isin(state.room_id, jnp.array([3, 10, 19, 30]))
-        is_side_room_left = jnp.logical_and(is_side_room_left, jnp.logical_not(is_rendered_dark))
-        background_raster = draw_wall(background_raster, is_side_room_left, 0, 6, 48, left_wall_color)
-        is_left_wall_room = jnp.logical_and(state.room_id == 17, jnp.logical_not(is_rendered_dark))
-        background_raster = draw_wall(background_raster, is_left_wall_room, 0, 6, 149, left_wall_color)
-
-        right_wall_color = jnp.where(state.room_id == 18, self.LADDER_ID,
-                                     jnp.where(state.room_id == 29, self.DEEP_BLUE_PLATFORM_ID,
-                                               jnp.where(state.room_id == 23, self.LEVEL2_PLATFORM_ID, 1)))
-        is_side_room_right = jnp.isin(state.room_id, jnp.array([5, 14, 18, 32, 29]))
-        is_side_room_right = jnp.logical_and(is_side_room_right, jnp.logical_not(is_rendered_dark))
-        background_raster = draw_wall(background_raster, is_side_room_right, 156, 6, 48, right_wall_color)
-        is_right_wall_room = jnp.logical_and(state.room_id == 23, jnp.logical_not(is_rendered_dark))
-        background_raster = draw_wall(background_raster, is_right_wall_room, 156, 6, 149, right_wall_color)
-
         raster = background_raster
-        
-        # Draw Ladders (Vertical Rails + Horizontal Rungs)
-        def draw_ladder_accurate(i, r):
-            x, top, bottom = state.ladders_x[i], state.ladders_top[i] + 47, state.ladders_bottom[i] + 47
-            bottom = jnp.where(jnp.logical_and(state.room_id == 4, state.ladders_bottom[i] == 130), bottom + 3, bottom)
-            bottom = jnp.where(jnp.logical_and(state.room_id == 23, state.ladders_bottom[i] == 150), bottom - 3, bottom)
-            active = state.ladders_active[i]
-
-            def _draw(raster_in):
-                def render_long_ladder(r_in, l_color, bg_color):
-                    long_top = top - 1
-                    long_height = bottom - long_top
-                    
-                    bg_pos = jnp.array([[x - 4, long_top]])
-                    bg_size = jnp.array([[24, long_height]])
-                    r_in = self.jr.draw_rects(r_in, bg_pos, bg_size, bg_color)
-                    
-                    new_rail_pos = jnp.array([[x, long_top], [x + 16 - 4, long_top]])
-                    new_rail_size = jnp.array([[4, long_height], [4, long_height]])
-                    new_rung_pos = jnp.array([[x, long_top + 4]])
-                    new_rung_size = jnp.array([[16, long_height - 4]])
-                    
-                    r_in = self.jr.draw_rects(r_in, new_rail_pos, new_rail_size, l_color)
-                    return self.jr.draw_ladders(r_in, new_rung_pos, new_rung_size, 2, 5, l_color)
-
-                ladder_width = 16
-                # Vertical Rails (4 pixels wide)
-                rail_pos = jnp.array([[x, top], [x + ladder_width - 4, top]])
-                rail_size = jnp.array([[4, bottom - top], [4, bottom - top]])
-
-                # Horizontal Rungs (2 pixels high, 5 pixels gap)
-                # First rung starts at top + 4
-                rung_pos = jnp.array([[x, top + 4]])
-                rung_size = jnp.array([[ladder_width, bottom - top - 4]])
-                
-                def draw_l1(r_in):
-                    r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.LADDER_ID)
-                    return self.jr.draw_ladders(r_in, rung_pos, rung_size, 2, 5, self.LADDER_ID)
-
-                def draw_l2(r_in):
-                    r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.LADDER_ID_L2)
-                    return self.jr.draw_ladders(r_in, rung_pos, rung_size, 2, 5, self.LADDER_ID_L2)
-                    
-                def draw_yellow_l2(r_in):
-                    r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.YELLOW_LADDER_ID)
-                    return self.jr.draw_ladders(r_in, rung_pos, rung_size, 2, 5, self.YELLOW_LADDER_ID)
-
-                def draw_orange(r_in):
-                    r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.ORANGE_LADDER_ID)
-                    return self.jr.draw_ladders(r_in, rung_pos, rung_size, 2, 5, self.ORANGE_LADDER_ID)
-
-                def draw_long(r_in):
-                    return render_long_ladder(r_in, self.BLUE_LADDER_ID, self.LADDER_ID)
-
-                def draw_long_l2(r_in):
-                    return render_long_ladder(r_in, self.YELLOW_LADDER_ID, self.LADDER_ID_L2)
-
-                is_layer_2 = jnp.logical_or(state.room_id == 11, jnp.logical_or(state.room_id == 10, jnp.logical_or(state.room_id == 12, state.room_id == 14)))
-                is_long_ladder = jnp.logical_and(jnp.logical_or(state.room_id == 3, state.room_id == 5), i == 0)
-                is_long_ladder_l2 = jnp.logical_and(
-                    jnp.logical_or(state.room_id == 12, 
-                        jnp.logical_or(state.room_id == 11, 
-                            jnp.logical_or(state.room_id == 10, state.room_id == 14)
-                        )
-                    ), 
-                    i == 0
-                )
-                is_small_yellow = jnp.logical_or(
-                    jnp.logical_and(state.room_id == 11, i == 1),
-                    jnp.logical_and(state.room_id == 13, i == 0)
-                )
-                is_room_orange_ladder = jnp.isin(state.room_id, jnp.array([31, 30, 28]))
-
-                ladder_draw_case = jnp.where(is_layer_2, 1, 0)
-                ladder_draw_case = jnp.where(is_small_yellow, 2, ladder_draw_case)
-                ladder_draw_case = jnp.where(is_long_ladder_l2, 3, ladder_draw_case)
-                ladder_draw_case = jnp.where(is_long_ladder, 4, ladder_draw_case)
-                ladder_draw_case = jnp.where(is_room_orange_ladder, 5, ladder_draw_case)
-
-                return jax.lax.switch(
-                    ladder_draw_case,
-                    [draw_l1, draw_l2, draw_yellow_l2, draw_long_l2, draw_long, draw_orange],
-                    raster_in,
-                )
-
-            return jax.lax.cond(active == 1, _draw, lambda r_in: r_in, r)
-        raster = jax.lax.fori_loop(0, self.consts.MAX_LADDERS_PER_ROOM, draw_ladder_accurate, raster)
-
-        # Draw Ropes
-        def draw_rope(i, r):
-            x, top, bottom = state.ropes_x[i], state.ropes_top[i] + 47, state.ropes_bottom[i] + 47
-            active = state.ropes_active[i]
-            
-            def _draw(raster_in):
-                rail_pos = jnp.array([[x, top]])
-                rail_size = jnp.array([[1, bottom - top + 1]])
-                return self.jr.draw_rects(raster_in, rail_pos, rail_size, self.DOOR_ID)
-                
-            return jax.lax.cond(active == 1, _draw, lambda r_in: r_in, r)
-
-        raster = jax.lax.fori_loop(0, self.consts.MAX_ROPES_PER_ROOM, draw_rope, raster)
         
         # Draw Lasers
         laser_active_now = jnp.logical_and(jnp.greater_equal(state.laser_cycle, 0), jnp.less(state.laser_cycle, 92))
@@ -531,7 +612,8 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
                 lambda r: r,
                 raster
             )
-        raster = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, render_conveyor, raster)
+        raster = jax.lax.cond(jnp.any(state.conveyors_active == 1), lambda r: jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, render_conveyor, r), lambda r: r, raster)
+        # raster = jax.lax.fori_loop(0, self.consts.MAX_CONVEYORS_PER_ROOM, render_conveyor, raster)
         
         # Draw Items
         def render_item(i, raster):
