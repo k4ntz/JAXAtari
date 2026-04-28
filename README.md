@@ -38,6 +38,28 @@ Quentin Delfosse, Raban Emunds, Jannis Blüml, Paul Seitz, Sebastian Wette, Domi
 </div>
 
 ---
+## Available Environments
+
+| Environment     | Mods available | Runtime |
+| --------------- | -------------- | ------- |
+| Pong            | -              | -       |
+| Beamrider       | -              | -       |
+| Phoenix         | -              | -       |
+| Tennis          | -              | -       |
+| Skiing          | -              | -       |
+| Montezuma       | -              | -       |
+| Seaquest        | -              | -       |
+| Kangaroo        | -              | -       |
+| Freeway         | -              | -       |
+| Venture         | -              | -       |
+| Qbert           | -              | -       |
+| Frostbite       | -              | -       |
+| Bankheist       | -              | -       |
+| Ms. PacMan      | -              | -       |
+| Gravitar        | -              | -       |
+| Enduro          | -              | -       |
+
+---
 
 **JAXAtari** introduces a GPU-accelerated, object-centric Atari environment framework powered by [JAX](https://github.com/google/jax). Inspired by [OCAtari](https://github.com/k4ntz/OC_Atari), this framework enables up to **16,000x faster training speeds** through just-in-time (JIT) compilation, vectorization, and massive parallelization on GPU.
 Similar to [HackAtari](https://github.com/k4ntz/HackAtari), it implements a number of small **game modifications** , for simple testing of the generalization capabilities of agents. 
