@@ -91,7 +91,6 @@ MOD_MODULES = {
     "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
     "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
     "mspacman": "jaxatari.games.mods.mspacman_mods.MsPacmanEnvMod",
-    "pacman": "jaxatari.games.mods.pacman_mods.PacmanEnvMod",
 }
 
 

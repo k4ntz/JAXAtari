@@ -1049,6 +1049,17 @@ class MsPacmanRenderer(JAXGameRenderer):
         (self.PALETTE, self.SHAPE_MASKS, _, self.COLOR_TO_ID, self.FLIP_OFFSETS) = \
             self.jr.load_and_setup_assets(asset_config, sprite_path)
 
+        # Ensure wall color exists explicitly in palette/mapping even if preprocessing
+        # (e.g. downscale interpolation paths) misses an exact tuple match.
+        wall_rgb = tuple(map(int, self.consts.WALL_COLOR.tolist()))
+        wall_rgba = (*wall_rgb, 255)
+        if wall_rgb not in self.COLOR_TO_ID and wall_rgba not in self.COLOR_TO_ID:
+            self.PALETTE, wall_id = self.jr.add_palette_color(self.PALETTE, wall_rgb)
+            self.COLOR_TO_ID[wall_rgb] = int(wall_id)
+            self.COLOR_TO_ID[wall_rgba] = int(wall_id)
+        elif wall_rgb not in self.COLOR_TO_ID and wall_rgba in self.COLOR_TO_ID:
+            self.COLOR_TO_ID[wall_rgb] = self.COLOR_TO_ID[wall_rgba]
+
         # Pacman mask group is loaded orientation-major:
         # 0: UP, 1: RIGHT, 2: LEFT, 3: DOWN, each with 4 animation frames.
         pacman_group = self.SHAPE_MASKS['pacman_oriented']
