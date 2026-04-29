@@ -2966,20 +2966,15 @@ def step_arena(env_state: EnvState, action: int, terrain_bank: jnp.array):
 
 
 @jax.jit
-@jax.jit
 def _bullets_hit_terrain(env_state: EnvState, terrain_bank: jnp.ndarray, bullets: Bullets) -> Bullets:
     H, W = terrain_bank.shape[1] - 2 * _TERRAIN_HIT_RMAX, terrain_bank.shape[2] - 2 * _TERRAIN_HIT_RMAX
 
     bank_idx = jnp.clip(env_state.terrain_bank_idx, 0, terrain_bank.shape[0] - 1)
     terrain_map = terrain_bank[bank_idx]
 
-    xi = jnp.clip(jnp.round(bullets.x).astype(jnp.int32), 0, W - 1)
-    yi = jnp.clip(jnp.round(bullets.y).astype(jnp.int32), 0, H - 1)
-
-    def get_pixel(y, x):
-        return jax.lax.dynamic_slice(terrain_map, (y + _TERRAIN_HIT_RMAX, x + _TERRAIN_HIT_RMAX), (1, 1))[0, 0]
-    
-    pixel_colors = jax.vmap(get_pixel)(yi, xi)
+    xi = jnp.clip(jnp.round(bullets.x).astype(jnp.int32) + _TERRAIN_HIT_RMAX, 0, W + 2 * _TERRAIN_HIT_RMAX - 1)
+    yi = jnp.clip(jnp.round(bullets.y).astype(jnp.int32) + _TERRAIN_HIT_RMAX, 0, H + 2 * _TERRAIN_HIT_RMAX - 1)
+    pixel_colors = terrain_map[yi, xi]
     bg_val = terrain_bank[0, 0, 0]
     hit_terrain_mask = pixel_colors != bg_val
 
@@ -4137,13 +4132,8 @@ class GravitarRenderer(JAXGameRenderer):
         is_crashing = state.crash_timer > 0
         is_thrusting = ship_state.is_thrusting
 
-        angle_diffs = jnp.abs(jnp.arctan2(
-            jnp.sin(ship_state.angle - self.consts.SHIP_ANGLES),
-            jnp.cos(ship_state.angle - self.consts.SHIP_ANGLES)
-        ))
-        angle_idx = jnp.argmin(angle_diffs)
+        oriented_ship_mask = self.ship_orientations_array[ship_state.angle_idx]
 
-        oriented_ship_mask = self.ship_orientations_array[angle_idx]
         ship_sprite = jax.lax.select(is_crashing, self.padded_ship_crash, oriented_ship_mask)
         frame = render_centered(frame, ship_state.x, ship_state.y, ship_sprite)
 
