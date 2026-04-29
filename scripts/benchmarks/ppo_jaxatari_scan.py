@@ -5,9 +5,7 @@
 import os
 import random
 import time
-from dataclasses import dataclass
 from functools import partial
-from turtle import end_fill, done
 from typing import Sequence, NamedTuple
 
 import flax
@@ -16,11 +14,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-import tyro
 import wandb
 from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
 import jaxatari
+import hydra
+from omegaconf import OmegaConf
 from jaxatari.wrappers import NormalizeObservationWrapper, ObjectCentricWrapper, PixelObsWrapper, AtariWrapper, LogWrapper, FlattenObservationWrapper
 from jaxatari import spaces
 from ppo_jaxatari_vmap_eval import evaluate
@@ -32,89 +31,6 @@ os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.7"
 # Fix CUDNN non-determinisim; https://github.com/google/jax/issues/4823#issuecomment-952835771
 os.environ["TF_XLA_FLAGS"] = "--xla_gpu_autotune_level=2 --xla_gpu_deterministic_reductions"
 os.environ["TF_CUDNN DETERMINISTIC"] = "1"
-
-@dataclass
-class Args:
-    exp_name: str = os.path.basename(__file__)[: -len(".py")]
-    """the name of this experiment"""
-    seed: int = 0
-    """seed of the experiment"""
-    torch_deterministic: bool = True
-    """if toggled, `torch.backends.cudnn.deterministic=False`"""
-    cuda: bool = True
-    """if toggled, cuda will be enabled by default"""
-    track: bool = True
-    """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "cleanRL"
-    """the wandb's project name"""
-    wandb_entity: str = ""
-    """the entity (team) of wandb's project"""
-    capture_video: bool = True
-    """whether to capture videos of the agent performances (check out `videos` folder)"""
-    eval_during_train: bool = False # If this is active, compile and run times will increase!
-    """whether to evaluate the agent periodically during training"""
-    eval_every: int = 1000 #  1000 -> all 1M steps
-    """how often to evaluate the agent during training (in num. of iterations)"""
-    pixel_based: bool = True # If False -> Object-centric observations
-    """whether the environment should use pixel-based observations"""
-    native_downscaling: bool = True 
-    """whether to use the native downscaling in PixelObsWrapper"""
-    smooth_image: bool = False
-    """whether to use smooth image filtering during native downscaling"""
-    save_model: bool = False
-    """whether to save model into the `runs/{run_name}` folder"""
-    upload_model: bool = False
-    """whether to upload the saved model to huggingface"""
-    hf_entity: str = ""
-    """the user or org name of the model repository from the Hugging Face Hub"""
-
-    # Algorithm specific arguments
-    env_id: str = "pong"
-    """the id of the environment"""
-    train_mods: tuple[str] = ()
-    """modifications applied during training"""
-    eval_mods: tuple[str] = ('lazy_enemy',)
-    """modifications to use for evaluation (if empty, fall back to `mods`)"""
-    total_timesteps: int = 10_000_000 # so with frameskip=4 -> 40M frames (?)
-    """total timesteps of the experiments"""
-    learning_rate: float = 2.5e-4
-    """the learning rate of the optimizer"""
-    num_envs: int = 8
-    """the number of parallel game environments"""
-    num_steps: int = 128
-    """the number of steps to run in each environment per policy rollout"""
-    anneal_lr: bool = True
-    """Toggle learning rate annealing for policy and value networks"""
-    gamma: float = 0.99
-    """the discount factor gamma"""
-    gae_lambda: float = 0.95
-    """the lambda for the general advantage estimation"""
-    num_minibatches: int = 4
-    """the number of mini-batches"""
-    update_epochs: int = 4
-    """the K epochs to update the policy"""
-    norm_adv: bool = True
-    """Toggles advantages normalization"""
-    clip_coef: float = 0.1
-    """the surrogate clipping coefficient"""
-    clip_vloss: bool = False # True in original paper, but envpool impl. used False (don't think this setting does something here, actually.)
-    """Toggles whether or not to use a clipped loss for the value function, as per the paper."""
-    ent_coef: float = 0.01
-    """coefficient of the entropy"""
-    vf_coef: float = 0.5
-    """coefficient of the value function"""
-    max_grad_norm: float = 0.5
-    """the maximum norm for the gradient clipping"""
-    target_kl: float = None
-    """the target KL divergence threshold"""
-
-    # to be filled in runtime
-    batch_size: int = 0
-    """the batch size (computed in runtime)"""
-    minibatch_size: int = 0
-    """the mini-batch size (computed in runtime)"""
-    num_iterations: int = 0
-    """the number of iterations (computed in runtime)"""
 
 
 def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, native_downscaling=True, smooth_image=True, eval=False):
@@ -140,7 +56,7 @@ def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, native_downscali
                 episodic_life=not eval, # only active during training 
                 first_fire=True,
                 noop_max=30,
-                full_action_space=False
+                full_action_space=False,
         )
         if pixel_based:
             env = PixelObsWrapper(
@@ -272,35 +188,37 @@ class EpisodeStatistics:
     returned_episode_lengths: jnp.array
 
 
-if __name__ == "__main__":
-    args = tyro.cli(Args)
-    args.batch_size = int(args.num_envs * args.num_steps)
-    args.minibatch_size = int(args.batch_size // args.num_minibatches)
-    args.num_iterations = args.total_timesteps // args.batch_size
-    run_name = f"{args.env_id}__{args.exp_name}_{'oc' if not args.pixel_based else 'pixel'}__{args.seed}__{int(time.time())}"
-    if args.track:
+def single_run(config: dict):
+    config = {k.upper(): v for k, v in config.items() if k != "alg"}
+
+    if isinstance(config.get("TRAIN_MODS"), list):
+        config["TRAIN_MODS"] = tuple(config["TRAIN_MODS"])
+    if isinstance(config.get("EVAL_MODS"), list):
+        config["EVAL_MODS"] = tuple(config["EVAL_MODS"])
+
+    config["BATCH_SIZE"] = int(config["NUM_ENVS"] * config["NUM_STEPS"])
+    config["MINIBATCH_SIZE"] = int(config["BATCH_SIZE"] // config["NUM_MINIBATCHES"])
+    config["NUM_ITERATIONS"] = int(config["TOTAL_TIMESTEPS"] // config["BATCH_SIZE"])
+
+    run_name = f'{config["ENV_ID"]}_{config["EXP_NAME"]}_{"oc" if not config["PIXEL_BASED"] else "pixel"}_{config["SEED"]}'
+    if config["TRACK"]:
         wandb.init(
-            project=args.wandb_project_name,
-            entity=args.wandb_entity,
-            config=vars(args),
+            project=config["PROJECT"],
+            entity=config["ENTITY"],
+            config=config,
             name=run_name,
-            monitor_gym=True,
             save_code=True,
         )
 
     # TRY NOT TO MODIFY: seeding
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    key = jax.random.PRNGKey(args.seed)
+    random.seed(config["SEED"])
+    np.random.seed(config["SEED"])
+    key = jax.random.PRNGKey(config["SEED"])
     key, network_key, actor_key, critic_key = jax.random.split(key, 4)
     key, obs_sample_key1, obs_sample_key2, obs_sample_key3 = jax.random.split(key, 4)
 
     # env setup
-    env = make_env(args.env_id, args.seed, args.num_envs, list(args.train_mods), args.pixel_based, args.native_downscaling, args.smooth_image)()
-
-    renderer = None
-    if args.capture_video:
-        renderer = env.renderer
+    env = make_env(config["ENV_ID"], config["SEED"], config["NUM_ENVS"], list(config["TRAIN_MODS"]), config["PIXEL_BASED"], config["NATIVE_DOWNSCALING"], config["SMOOTH_IMAGE"])()
    
     # vmap and squeeze observations in order to get (B, F, H, W, 1) -> (B, F, H, W),
     # where F is the frame stack which becomes the channel for the convolutions
@@ -323,11 +241,11 @@ if __name__ == "__main__":
 
     def linear_schedule(count):
         # anneal learning rate linearly after one training iteration which contains
-        # (args.num_minibatches * args.update_epochs) gradient updates
-        frac = 1.0 - (count // (args.num_minibatches * args.update_epochs)) / args.num_iterations
-        return args.learning_rate * frac
+        # (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"]) gradient updates
+        frac = 1.0 - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"])) / config["NUM_ITERATIONS"]
+        return config["LEARNING_RATE"] * frac
 
-    network = Network() if args.pixel_based else MLP_Network()
+    network = Network() if config["PIXEL_BASED"] else MLP_Network()
     actor = Actor(action_dim=env.action_space().n)
     critic = Critic()
     # network_params = network.init(network_key, env.observation_space().sample(obs_sample_key1).squeeze()[None, ...])
@@ -341,9 +259,9 @@ if __name__ == "__main__":
             critic_params=critic.init(critic_key, network.apply(network_params, np.array([env.observation_space().sample(obs_sample_key3).squeeze()]))),
         ),
         tx=optax.chain(
-            optax.clip_by_global_norm(args.max_grad_norm),
+            optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
             optax.inject_hyperparams(optax.adam)(
-                learning_rate=linear_schedule if args.anneal_lr else args.learning_rate, eps=1e-5
+                learning_rate=linear_schedule if config["ANNEAL_LR"] else config["LEARNING_RATE"], eps=1e-5
             ),
         ),
     )
@@ -396,7 +314,7 @@ if __name__ == "__main__":
         advantages = delta + gamma * gae_lambda * nextnonterminal * advantages
         return advantages, advantages
 
-    compute_gae_once = partial(compute_gae_once, gamma=args.gamma, gae_lambda=args.gae_lambda)
+    compute_gae_once = partial(compute_gae_once, gamma=config["GAMMA"], gae_lambda=config["GAE_LAMBDA"])
 
     @jax.jit
     def compute_gae(
@@ -409,7 +327,7 @@ if __name__ == "__main__":
             agent_state.params.critic_params, network.apply(agent_state.params.network_params, next_obs)
         ).squeeze()
 
-        advantages = jnp.zeros((args.num_envs,))
+        advantages = jnp.zeros((config["NUM_ENVS"],))
         dones = jnp.concatenate([storage.dones, next_done[None, :]], axis=0)
         values = jnp.concatenate([storage.values, next_value[None, :]], axis=0)
         _, advantages = jax.lax.scan(
@@ -427,19 +345,19 @@ if __name__ == "__main__":
         ratio = jnp.exp(logratio)
         approx_kl = ((ratio - 1) - logratio).mean()
 
-        if args.norm_adv:
+        if config["NORM_ADV"]:
             mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
 
         # Policy loss
         pg_loss1 = -mb_advantages * ratio
-        pg_loss2 = -mb_advantages * jnp.clip(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
+        pg_loss2 = -mb_advantages * jnp.clip(ratio, 1 - config["CLIP_COEF"], 1 + config["CLIP_COEF"])
         pg_loss = jnp.maximum(pg_loss1, pg_loss2).mean()
 
         # Value loss
         v_loss = 0.5 * ((newvalue - mb_returns) ** 2).mean()
 
         entropy_loss = entropy.mean()
-        loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+        loss = pg_loss - config["ENT_COEF"] * entropy_loss + v_loss * config["VF_COEF"]
         return loss, (pg_loss, v_loss, entropy_loss, jax.lax.stop_gradient(approx_kl))
 
     ppo_loss_grad_fn = jax.value_and_grad(ppo_loss, has_aux=True)
@@ -460,7 +378,7 @@ if __name__ == "__main__":
             # taken from: https://github.com/google/brax/blob/main/brax/training/agents/ppo/train.py
             def convert_data(x: jnp.ndarray):
                 x = jax.random.permutation(subkey, x)
-                x = jnp.reshape(x, (args.num_minibatches, -1) + x.shape[1:])
+                x = jnp.reshape(x, (config["NUM_MINIBATCHES"], -1) + x.shape[1:])
                 return x
 
             flatten_storage = jax.tree.map(flatten, storage)
@@ -484,18 +402,18 @@ if __name__ == "__main__":
             return (agent_state, key), (loss, pg_loss, v_loss, entropy_loss, approx_kl, grads)
 
         (agent_state, key), (loss, pg_loss, v_loss, entropy_loss, approx_kl, grads) = jax.lax.scan(
-            update_epoch, (agent_state, key), (), length=args.update_epochs
+            update_epoch, (agent_state, key), (), length=config["UPDATE_EPOCHS"]
         )
         return agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, key
     
     def eval_and_vid(iteration):
-        model_path = f"runs/{run_name}/{args.exp_name}_{iteration}.cleanrl_model"
+        model_path = f'runs/{run_name}/{config["EXP_NAME"]}_{iteration}.cleanrl_model'
         os.makedirs(os.path.dirname(model_path), exist_ok=True)
         with open(model_path, "wb") as f:
             f.write(
                 flax.serialization.to_bytes(
                     [
-                        vars(args),
+                        config,
                         [
                             agent_state.params.network_params,
                             agent_state.params.actor_params,
@@ -510,22 +428,23 @@ if __name__ == "__main__":
             model_path,
             partial(
                 make_env,
-                mods=list(args.eval_mods),
-                pixel_based=args.pixel_based,
-                native_downscaling=args.native_downscaling,
-                smooth_image=args.smooth_image,
+                mods=list(config["EVAL_MODS"]),
+                pixel_based=config["PIXEL_BASED"],
+                native_downscaling=config["NATIVE_DOWNSCALING"],
+                smooth_image=config["SMOOTH_IMAGE"],
                 eval=True,
             ),
-            args.env_id,
+            config["ENV_ID"],
             eval_episodes=10,
             run_name=f"{run_name}-eval",
-            Model=(Network, Actor, Critic) if args.pixel_based else (MLP_Network, Actor, Critic)
+            Model=(Network, Actor, Critic) if config["PIXEL_BASED"] else (MLP_Network, Actor, Critic),
+            seed=config["SEED"],
         )
         wandb.log({"eval/episodic_return_mod": np.mean(jax.device_get(episodic_returns)), "step": iteration})
 
-        if args.capture_video: 
+        if config["CAPTURE_VIDEO"]: 
             # Instantiate a clean renderer immune to the training env's downscaling
-            clean_renderer = jaxatari.make(args.env_id).renderer
+            clean_renderer = jaxatari.make(config["ENV_ID"]).renderer
             # Mirror the pqn_agent final video behavior: log a video for the
             # current eval environment under a consistent wandb key.
             # env_state arrays have shape (N,)
@@ -535,7 +454,7 @@ if __name__ == "__main__":
             video = wandb.Video(np.array(frames), fps=30, format="mp4")
             wandb.log(
                 {
-                    f"eval/video": video,
+                    "eval/video": video,
                 },
                 step=iteration,
             )
@@ -544,16 +463,16 @@ if __name__ == "__main__":
     def _generate_single_final_video(mods_config, video_label, video_index=0):
         """Generate a single video for the given mod configuration and log it to wandb.
         """
-        if not args.capture_video:
+        if not config["CAPTURE_VIDEO"]:
             return None
 
         # Apply wrappers just for the agent's observations, like in pqn_agent.
-        fake_env = jaxatari.make(args.env_id)
+        fake_env = jaxatari.make(config["ENV_ID"])
         renderer_local = fake_env.renderer
-        env = make_env(args.env_id, args.seed, 1, mods_config, args.pixel_based, args.native_downscaling, args.smooth_image, eval=True)() 
+        env = make_env(config["ENV_ID"], config["SEED"], 1, mods_config, config["PIXEL_BASED"], config["NATIVE_DOWNSCALING"], config["SMOOTH_IMAGE"], eval=True)() 
 
         # Reset environment
-        rng = jax.random.PRNGKey(args.seed + video_index * 10000)
+        rng = jax.random.PRNGKey(config["SEED"] + video_index * 10000)
         rng, reset_rng = jax.random.split(rng)
         obs, env_state = env.reset(reset_rng)
         obs = obs.squeeze()  # (F, H, W)
@@ -561,7 +480,6 @@ if __name__ == "__main__":
         frames = []
         total_reward = 0.0
         max_steps = 5000
-        from jaxatari.environment import JAXAtariAction
 
         for step in range(max_steps):
             # PPO network expects (B, F, H, W)
@@ -599,8 +517,8 @@ if __name__ == "__main__":
             video = wandb.Video(frames, fps=30, format="mp4")
             wandb.log(
                 {
-                    f"final_video_seed{args.seed}_{video_label}": video,
-                    f"final_return_seed{args.seed}_{video_label}": total_reward,
+                    f'final_video_seed{config["SEED"]}_{video_label}': video,
+                    f'final_return_seed{config["SEED"]}_{video_label}': total_reward,
                 },
             )
             print(f"Video '{video_label}' logged to wandb.")
@@ -613,17 +531,17 @@ if __name__ == "__main__":
         This mirrors pqn_agent.generate_final_video: first a video on the
         training environment (no mods), then one per entry in eval_mods (or mods).
         """
-        if not args.capture_video:
+        if not config["CAPTURE_VIDEO"]:
             return
 
-        print(f"Generating final videos for seed {args.seed}...")
+        print(f'Generating final videos for seed {config["SEED"]}...')
 
         video_configs = []
         # Always add train env (no mods)
         video_configs.append(([], "train"))
 
         # Prefer eval_mods, fall back to mods
-        eval_mods = args.eval_mods if len(args.eval_mods) > 0 else args.train_mods
+        eval_mods = config["EVAL_MODS"] if len(config["EVAL_MODS"]) > 0 else config["TRAIN_MODS"]
         if len(eval_mods) > 0:
             mods_list = list(eval_mods)
             for mod in mods_list:
@@ -638,15 +556,15 @@ if __name__ == "__main__":
     key, reset_key = jax.random.split(key)
     global_step = 0
     start_time = time.time()
-    next_obs, env_state = vmap_reset(jax.random.split(reset_key, args.num_envs))
-    next_done = jnp.zeros(args.num_envs, dtype=jax.numpy.bool_)
+    next_obs, env_state = vmap_reset(jax.random.split(reset_key, config["NUM_ENVS"]))
+    next_done = jnp.zeros(config["NUM_ENVS"], dtype=jax.numpy.bool_)
 
     # based on https://github.dev/google/evojax/blob/0625d875262011d8e1b6aa32566b236f44b4da66/evojax/sim_mgr.py
     def step_once(carry, step, env_step_fn):
         agent_state, obs, done, key, env_state = carry
         action, logprob, value, key = get_action_and_value(agent_state, obs, key)
 
-        next_obs, env_state, reward, next_done, _ = env_step_fn(env_state, action)
+        next_obs, env_state, reward, next_done, info = env_step_fn(env_state, action)
         storage = Storage(
             obs=obs,
             actions=action,
@@ -657,30 +575,30 @@ if __name__ == "__main__":
             returns=jnp.zeros_like(reward),
             advantages=jnp.zeros_like(reward),
         )
-        return ((agent_state, next_obs, next_done, key, env_state), storage)
+        return ((agent_state, next_obs, next_done, key, env_state), (storage, info))
 
     def rollout(agent_state, next_obs, next_done, key, env_state, step_once_fn, max_steps):
-        (agent_state, next_obs, next_done, key, env_state), storage = jax.lax.scan(
+        (agent_state, next_obs, next_done, key, env_state), (storage, info) = jax.lax.scan(
             step_once_fn, (agent_state, next_obs, next_done, key, env_state), (), max_steps
         )
-        return agent_state, next_obs, next_done, storage, key, env_state
+        return agent_state, next_obs, next_done, storage, key, env_state, info
 
-    rollout = partial(rollout, step_once_fn=partial(step_once, env_step_fn=vmap_step), max_steps=args.num_steps)
+    rollout = partial(rollout, step_once_fn=partial(step_once, env_step_fn=vmap_step), max_steps=config["NUM_STEPS"])
 
-    rtpt = RTPT(name_initials='RE', experiment_name='PPO_JAXAtari', max_iterations=args.num_iterations)
+    rtpt = RTPT(name_initials='RE', experiment_name='PPO_JAXAtari', max_iterations=config["NUM_ITERATIONS"])
     rtpt.start()
     start_time = time.time()
     compile_time = None
-    for iteration in range(1, args.num_iterations + 1):
+    for iteration in range(1, config["NUM_ITERATIONS"] + 1):
         rtpt.step()
-        if args.eval_during_train and iteration > 0 and iteration % args.eval_every == 0:
+        if config["EVAL_DURING_TRAIN"] and iteration > 0 and iteration % config["EVAL_EVERY"] == 0:
            eval_and_vid(iteration) 
 
         iteration_time_start = time.time()
-        agent_state, next_obs, next_done, storage, key, env_state = rollout(
+        agent_state, next_obs, next_done, storage, key, env_state, info = rollout(
             agent_state, next_obs, next_done, key, env_state
         )
-        global_step += args.num_steps * args.num_envs
+        global_step += config["NUM_STEPS"] * config["NUM_ENVS"]
         storage = compute_gae(agent_state, next_obs, next_done, storage)
         agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, key = update_ppo(
             agent_state,
@@ -690,13 +608,12 @@ if __name__ == "__main__":
         if compile_time is None:
             compile_time = time.time()
             print(f"Compile + first iteration time: {compile_time - start_time:.2f} seconds.")
-        avg_episodic_return = np.mean(jax.device_get(env_state.returned_episode_returns))
         # print(f"global_step={global_step}, avg_episodic_return={avg_episodic_return}")
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         metrics = {
-            "charts/avg_episodic_return": avg_episodic_return,
-            "charts/avg_episodic_length": np.mean(jax.device_get(env_state.returned_episode_lengths)),
+            "charts/avg_episodic_return": info["returned_episode_returns"].mean(), 
+            "charts/avg_episodic_length": info["returned_episode_lengths"].mean(),
             "charts/learning_rate": agent_state.opt_state[1].hyperparams["learning_rate"].item(),
             "losses/value_loss": v_loss[-1, -1].item(),
             "losses/policy_loss": pg_loss[-1, -1].item(),
@@ -704,10 +621,11 @@ if __name__ == "__main__":
             "losses/approx_kl": approx_kl[-1, -1].item(),
             "losses/loss": loss[-1, -1].item(),
             "charts/SPS": int(global_step / (time.time() - start_time)),
-            "charts/SPS_update": int(args.num_envs * args.num_steps / (time.time() - iteration_time_start)),
+            "charts/SPS_update": int(config["NUM_ENVS"] * config["NUM_STEPS"] / (time.time() - iteration_time_start)),
             "charts/time": time.time() - start_time,
             "charts/global_step": global_step,
         }
+        # merge metrics and info (under charts/)
         wandb.log(metrics, step=iteration)
     end_time = time.time()
     print("Training done.")
@@ -716,14 +634,31 @@ if __name__ == "__main__":
     print(f"Total train time: {end_time - start_time:.2f} seconds / {(end_time - start_time)/60:.2f} minutes.")
     generate_final_video()
 
-    if args.save_model:
+    if config["SAVE_MODEL"]:
         eval_and_vid(iteration)
-        # if args.upload_model:
+        # if config["UPLOAD_MODEL"]:
         #     from cleanrl_utils.huggingface import push_to_hub
 
-        #     repo_name = f"{args.env_id}-{args.exp_name}-seed{args.seed}"
-        #     repo_id = f"{args.hf_entity}/{repo_name}" if args.hf_entity else repo_name
-        #     push_to_hub(args, episodic_returns, repo_id, "PPO", f"runs/{run_name}", f"videos/{run_name}-eval")
+        #     repo_name = f'{config["ENV_ID"]}-{config["EXP_NAME"]}-seed{config["SEED"]}'
+        #     repo_id = f'{config["HF_ENTITY"]}/{repo_name}' if config["HF_ENTITY"] else repo_name
+        #     push_to_hub(config, episodic_returns, repo_id, "PPO", f"runs/{run_name}", f"videos/{run_name}-eval")
 
     # writer.close()
     wandb.finish()
+
+
+@hydra.main(version_base=None, config_path="./config", config_name="config")
+def main(config):
+    config = OmegaConf.to_container(config, resolve=True)
+    merged_config = {**config, **config.get("alg", {})}
+    print("Config:\n", OmegaConf.to_yaml(OmegaConf.create(config)))
+
+    for seed_add in range(merged_config["NUM_SEEDS"]):
+        seed = merged_config["SEED"] + seed_add
+        print(f"\n\n=== Running seed {seed_add} / {merged_config['NUM_SEEDS']-1} ===\n\n")
+        merged_config["SEED"] = seed
+        single_run(merged_config)
+
+
+if __name__ == "__main__":
+    main()

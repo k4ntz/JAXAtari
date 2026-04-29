@@ -3,9 +3,6 @@
 #
 # Simulates the Space Invaders game using JAX
 #
-# Authors:
-# - Luca Philippi 
-# - Julian Bayer 
 import os
 from functools import partial
 from typing import NamedTuple, Tuple

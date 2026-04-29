@@ -10,10 +10,10 @@
 | battle_zone                  | 🥉       | 0 |
 | double_dunk                  | ❌       | 0 |
 | name_this_game               | 🥈       | 0 |
-| phoenix                      | 🥈       | 0 |
+| phoenix                      | 🥇       | 1 |
 | qbert                        | 🥉       | 0 |
 
-Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
+Total:  🥇: 1   |   🥈: 2   |   🥉: 2   |   ❌: 1
 
 ## Atari 57
 | Game                         | Status  | Mods available |
@@ -31,16 +31,16 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | bowling                      | ❌       | 0 |
 | boxing                       | 🥉       | 0 |
 | breakout                     | 🥇       | 4 |
-| centipede                    | 🥉       | 0 |
+| centipede                    | 🥈       | 0 |
 | chopper_command              | 🥈       | 0 |
 | crazy_climber                | ❌       | 0 |
 | defender                     | ❌       | 0 |
 | demon_attack                 | ❌       | 0 |
 | double_dunk                  | ❌       | 0 |
-| enduro                       | 🥉       | 0 |
+| enduro                       | 🥇       | 0 |
 | fishing_derby                | 🥇       | 0 |
 | freeway                      | 🥇       | 3 |
-| frostbite                    | 🥈       | 0 |
+| frostbite                    | 🥇       | 0 |
 | gopher                       | ❌       | 0 |
 | gravitar                     | 🥉       | 0 |
 | hero                         | ❌       | 0 |
@@ -50,13 +50,13 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | krull                        | ❌       | 0 |
 | kung_fu_master               | ❌       | 0 |
 | montezuma_revenge            | 🥇       | 11 |
-| ms_pacman                    | ❌       | 0 |
+| ms_pacman                    | 🥈       | 0 |
 | name_this_game               | 🥈       | 0 |
-| phoenix                      | 🥈       | 0 |
+| phoenix                      | 🥇       | 1 |
 | pitfall                      | ❌       | 0 |
 | pong                         | 🥇       | 2 |
 | private_eye                  | ❌       | 0 |
-| qbert                        | 🥉       | 0 |
+| qbert                        | 🥈       | 0 |
 | riverraid                    | 🥈       | 0 |
 | road_runner                  | ❌       | 0 |
 | robotank                     | ❌       | 0 |
@@ -65,7 +65,7 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | solaris                      | ❌       | 0 |
 | space_invaders               | 🥈       | 0 |
 | star_gunner                  | ❌       | 0 |
-| surround                     | 🥉       | 0 |
+| surround                     | ❌       | 0 |
 | tennis                       | 🥇       | 0 |
 | time_pilot                   | 🥈       | 0 |
 | tutankham                    | ❌       | 0 |
@@ -76,7 +76,7 @@ Total:  🥇: 0   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | yars_revenge                 | ❌       | 0 |
 | zaxxon                       | ❌       | 0 |
 
-Total:  🥇: 12   |   🥈: 12   |   🥉: 10   |   ❌: 23 
+Total:  🥇: 15   |   🥈: 13   |   🥉: 8   |   ❌: 23
 
 ## Remaining ALE games
 | Game                         | Status  | Mods available |
@@ -114,7 +114,7 @@ Total:  🥇: 12   |   🥈: 12   |   🥉: 10   |   ❌: 23 
 | miniature_golf               | ❌       | 0 |
 | mr_do                        | ❌       | 0 |
 | othello                      | 🥉       | 0 |
-| pacman                       | ❌       | 0 |
+| pacman                       | 🥉       | 0 |
 | pitfall2                     | ❌       | 0 |
 | pooyan                       | ❌       | 0 |
 | sir_lancelot                 | 🥈       | 0 |
@@ -130,4 +130,4 @@ Total:  🥇: 12   |   🥈: 12   |   🥉: 10   |   ❌: 23 
 | video_cube                   | 🥈       | 0 |
 | word_zapper                  | 🥈       | 0 |
 
-Total:  🥇: 2   |   🥈: 18   |   🥉: 4   |   ❌: 24
+Total:  🥇: 3   |   🥈: 17   |   🥉: 5   |   ❌: 23

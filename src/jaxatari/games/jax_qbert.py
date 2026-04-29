@@ -5,11 +5,6 @@
 #
 # Simulates the Atari Q*bert game
 #
-# Authors:
-# - Xarion99
-# - Keksmo
-# - Embuer
-# - Snocember
 import os
 from typing import Tuple
 from functools import partial
