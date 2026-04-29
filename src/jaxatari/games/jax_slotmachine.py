@@ -5,8 +5,6 @@ This module implements a traditional three-reel slot machine Atari 2600 game usi
 and JIT compilation. The game features authentic slot machine mechanics with spinning reels,
 various symbols, and a payout system. Two players compete against each other until one of them goes broke.
 
-Author: Ashish Bhandari, ashish.bhandari@stud.tu-darmstadt.de, https://github.com/zatakashish
-
 License: TU Darmstadt, All rights reserved.
 
 ========================================================================================================================

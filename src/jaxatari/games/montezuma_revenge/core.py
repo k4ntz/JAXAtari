@@ -57,6 +57,7 @@ class MontezumaRevengeConstants(struct.PyTreeNode):
     PLATFORM_ACTIVE_DURATION: int = struct.field(pytree_node=False, default=90) # For spawning and disappearing platform
     PLATFORM_CYCLE_LENGTH: int = struct.field(pytree_node=False, default=128)
     AMULET_DURATION: int = struct.field(pytree_node=False, default=660)
+    KILL_ENEMY_REWARD: int = struct.field(pytree_node=False, default=100)
 
 @struct.dataclass
 class MontezumaRevengeState:
@@ -80,7 +81,8 @@ class MontezumaRevengeState:
     
     is_jumping: jnp.ndarray
     is_falling: jnp.ndarray
-    fall_start_y: jnp.ndarray
+    fall_after_jump: jnp.ndarray
+    fall_distance: jnp.ndarray
     jump_counter: jnp.ndarray
     is_climbing: jnp.ndarray
     out_of_ladder_delay: jnp.ndarray
@@ -186,21 +188,34 @@ def get_room_idx(room_id):
            jnp.where(room_id == 26, 22,
            jnp.where(room_id == 24, 23, 0))))))))))))))))))))))))
 
+# def check_platform(col_map, y, x, width):
+#    # 5 px wide platform check (centered on player)
+#     x_m2 = jnp.clip(x - 2, 0, width - 1)
+#     x_m1 = jnp.clip(x - 1, 0, width - 1)
+#     x_p1 = jnp.clip(x + 1, 0, width - 1)
+#     x_p2 = jnp.clip(x + 2, 0, width - 1)
+#     return jnp.logical_or(
+#         col_map[y, x_m2] == 1,
+#         jnp.logical_or(
+#             col_map[y, x_m1] == 1,
+#             jnp.logical_or(
+#                 col_map[y, x, ...] == 1,
+#                 jnp.logical_or(
+#                     col_map[y, x_p1] == 1,
+#                     col_map[y, x_p2] == 1
+#                 )
+#             )
+#         )
+#     )
+
 def check_platform(col_map, y, x, width):
-    x_m2 = jnp.clip(x - 2, 0, width - 1)
+    # 3 px wide platform check (centered on player)
     x_m1 = jnp.clip(x - 1, 0, width - 1)
     x_p1 = jnp.clip(x + 1, 0, width - 1)
-    x_p2 = jnp.clip(x + 2, 0, width - 1)
     return jnp.logical_or(
-        col_map[y, x_m2] == 1,
-        jnp.logical_or(
             col_map[y, x_m1] == 1,
-            jnp.logical_or(
-                col_map[y, x, ...] == 1,
                 jnp.logical_or(
-                    col_map[y, x_p1] == 1,
-                    col_map[y, x_p2] == 1
+                    col_map[y, x, ...] == 1,
+                    col_map[y, x_p1] == 1
                 )
             )
-        )
-    )

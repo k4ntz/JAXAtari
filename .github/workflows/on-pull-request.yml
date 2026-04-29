@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
+      pytest_args: ${{ steps.set-matrix.outputs.pytest_args }}
       pr_head_sha: "" # No head SHA needed for same-repo PRs
     steps:
       - name: Check out code
@@ -20,23 +21,37 @@ jobs:
       - name: Generate matrix
         id: set-matrix
         run: |
-          # Scenario 1: PR to the default branch (run all tests)
-          if [[ "${{ github.base_ref }}" == "${{ github.event.repository.default_branch }}" ]]; then
-            echo "PR is to the default branch. Testing all games."
-            cd src/jaxatari/games/
-            CHANGED_GAMES=$(find . -type f -name "jax_*.py" -printf "%f\n" | sed -e 's/^jax_//' | sed -e 's/\.py//' | jq -R . | jq -cs .)
-          # Scenario 2: PR to a non-default branch (run changed tests)
+          CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }})
+
+          CORE_INFRA_CHANGED=$(echo "$CHANGED_FILES" | sed '/^$/d' | awk '
+            /^src\/jaxatari\/core\.py$/ {print; next}
+            /^src\/jaxatari\/modification\.py$/ {print; next}
+            /^src\/jaxatari\/spaces\.py$/ {print; next}
+            /^src\/jaxatari\/gym_wrapper\.py$/ {print; next}
+            /^src\/jaxatari\/renderers\/rendering_utils\.py$/ {print; next}
+            /^src\/jaxatari\/wrappers\// {print; next}
+          ')
+
+          CHANGED_GAME_FILES=$(echo "$CHANGED_FILES" | awk '/^src\/jaxatari\/games\/jax_.*\.py$/ {print}')
+          if [[ -n "$CHANGED_GAME_FILES" ]]; then
+            CHANGED_GAME_MATRIX=$(echo "$CHANGED_GAME_FILES" | sed -e 's|src/jaxatari/games/jax_||' | sed -e 's|\.py||' | jq -R . | jq -cs .)
           else
-            echo "PR is to a non-default branch. Testing changed games."
-            CHANGED_GAME_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} | grep 'src/jaxatari/games/jax_.*\.py' || true)
-            if [[ -n "$CHANGED_GAME_FILES" ]]; then
-              CHANGED_GAMES=$(echo "$CHANGED_GAME_FILES" | sed -e 's|src/jaxatari/games/jax_||' | sed -e 's|\.py||' | jq -R . | jq -cs .)
-            else
-              CHANGED_GAMES="[]"
-            fi
+            CHANGED_GAME_MATRIX="[]"
           fi
-          echo $CHANGED_GAMES # debug
+
+          if [[ -n "$CORE_INFRA_CHANGED" ]]; then
+            echo "Core infrastructure changed. Running Core-5 plus any touched game env tests."
+            CORE_FIVE='["seaquest","kangaroo","montezumarevenge","pong","phoenix"]'
+            CHANGED_GAMES=$(jq -cn --argjson a "$CORE_FIVE" --argjson b "$CHANGED_GAME_MATRIX" '$a + $b | unique')
+            PYTEST_ARGS='--integration --wrapper-full'
+          else
+            echo "Running targeted smoke lane for changed games."
+            CHANGED_GAMES="$CHANGED_GAME_MATRIX"
+            PYTEST_ARGS=''
+          fi
+          echo "$CHANGED_GAMES" # debug
           echo "matrix=$CHANGED_GAMES" >> $GITHUB_OUTPUT
+          echo "pytest_args=$PYTEST_ARGS" >> $GITHUB_OUTPUT
         shell: bash
 
   trigger:
@@ -44,4 +59,5 @@ jobs:
     uses: ./.github/workflows/reusable-run-tests.yml
     with:
       game_matrix: ${{ needs.prepare-matrix.outputs.matrix }}
+      pytest_args: ${{ needs.prepare-matrix.outputs.pytest_args }}
       pr_head_sha: ${{ needs.prepare-matrix.outputs.pr_head_sha }}

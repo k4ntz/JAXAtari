@@ -12,6 +12,16 @@ on:
         description: "The SHA of the PR head"
         required: false
         type: string
+      pytest_args:
+        description: "Additional pytest args (markers/fixtures/options)"
+        required: false
+        type: string
+        default: ""
+      pr_overlay_scope:
+        description: "When pr_head_sha is set: games_only or full_repo"
+        required: false
+        type: string
+        default: "games_only"
     outputs:
       test_outcomes:
         description: "JSON object of test outcomes"
@@ -21,6 +31,7 @@ jobs:
   run-tests:
     if: ${{ inputs.game_matrix != '[]' && inputs.game_matrix != '' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -44,10 +55,22 @@ jobs:
           ref: ${{ inputs.pr_head_sha }}
           path: pr_head
 
-      - name: Override src with PR changes
-        if: ${{ inputs.pr_head_sha != '' }}
+      - name: Check out PR head (full repo)
+        if: ${{ inputs.pr_head_sha != '' && inputs.pr_overlay_scope == 'full_repo' }}
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.pr_head_sha }}
+
+      - name: Override games with PR changes
+        if: ${{ inputs.pr_head_sha != '' && inputs.pr_overlay_scope == 'games_only' }}
         run: |
           rsync -av pr_head/src/jaxatari/games/ src/jaxatari/games/
+        shell: bash
+
+      - name: Override full repo with PR changes
+        if: ${{ inputs.pr_head_sha != '' && inputs.pr_overlay_scope == 'full_repo' }}
+        run: |
+          echo "Full-repo overlay is provided by direct checkout of pr_head_sha."
         shell: bash
 
       - name: Remove PR head sources
@@ -84,7 +107,34 @@ jobs:
           echo "Running tests for game: ${{ matrix.game }}"
 
           . .venv/bin/activate
-          pytest -n auto --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --color=yes tests/ 2>&1 | tee pytest_output_with_color.txt
+          free -h
+
+          # Some environments are significantly heavier; reduce xdist pressure to avoid runner instability.
+          XDIST_WORKERS=2
+          case "${{ matrix.game }}" in
+            montezumarevenge|choppercommand)
+              XDIST_WORKERS=1
+              ;;
+          esac
+          echo "Using xdist workers: ${XDIST_WORKERS}"
+
+          # 1) Parallel-safe tests with conservative xdist settings.
+          /usr/bin/time -v pytest -n "${XDIST_WORKERS}" --dist=loadfile --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --durations=20 --color=yes -m "not serial" ${{ inputs.pytest_args }} tests/ 2>&1 | tee pytest_output_with_color.txt
+
+          # 2) Serial-only tests (if any), run without xdist.
+          SERIAL_RC=0
+          pytest --collect-only --game ${{ matrix.game }} -m "serial" -q tests/ >/tmp/serial_collect.txt 2>&1 || SERIAL_RC=$?
+          if [[ "${SERIAL_RC}" -eq 0 ]]; then
+            echo "Running serial tests"
+            /usr/bin/time -v pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --durations=20 --color=yes -m "serial" ${{ inputs.pytest_args }} tests/ 2>&1 | tee -a pytest_output_with_color.txt
+          elif [[ "${SERIAL_RC}" -eq 5 ]]; then
+            echo "No serial tests selected for this matrix entry" | tee -a pytest_output_with_color.txt
+          else
+            echo "Unexpected error while collecting serial tests (exit ${SERIAL_RC})" | tee -a pytest_output_with_color.txt
+            cat /tmp/serial_collect.txt | tee -a pytest_output_with_color.txt
+            exit "${SERIAL_RC}"
+          fi
+          free -h
         shell: bash
 
       - name: Get pytest output

@@ -13,7 +13,7 @@ def test_jump_through_dynamic_platform():
         room_id=jnp.array(17, dtype=jnp.int32),
         player_x=jnp.array(4, dtype=jnp.int32),
         player_y=jnp.array(56, dtype=jnp.int32), # Feet at 75
-        fall_start_y=jnp.array(56, dtype=jnp.int32),
+        fall_distance=jnp.array(0, dtype=jnp.int32),
         is_falling=jnp.array(0, dtype=jnp.int32),
         is_jumping=jnp.array(0, dtype=jnp.int32)
     )
@@ -66,7 +66,7 @@ def test_jump_through_static_platform():
         room_id=jnp.array(17, dtype=jnp.int32),
         player_x=jnp.array(10, dtype=jnp.int32),
         player_y=jnp.array(36, dtype=jnp.int32),
-        fall_start_y=jnp.array(36, dtype=jnp.int32),
+        fall_distance=jnp.array(0, dtype=jnp.int32),
         is_falling=jnp.array(0, dtype=jnp.int32),
         is_jumping=jnp.array(0, dtype=jnp.int32)
     )

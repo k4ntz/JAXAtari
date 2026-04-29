@@ -1,15 +1,18 @@
-GAME_NAMES: ["pong", "kangaroo", "seaquest"]
+# GAME_NAMES: ["pong", "kangaroo", "seaquest"]
+GAME_NAMES: ["MontezumaRevenge", "Skiing", "Frostbite", "Pong"]
 # For multi-env benchmarking, use only names and keep env IDs unset.
-# GAME_NAMES: ["pong", "breakout", "freeway"]
-BENCHMARK_BACKENDS: ["jaxatari", "ale", "ale_vectorenv"]
-ALE_TIMEOUT_S: 3600
+BENCHMARK_BACKENDS: ["jaxatari", "gym_ale", "ale_vectorenv"]
+# BENCHMARK_BACKENDS: ["ale_vectorenv"]
+GYM_ALE_TIMEOUT_S: 3600
 
-ALE_VECTORENV_ASYNC_STEPPING: false
-# If null, defaults to floor(2 * num_envs / 3).
+# ALE_VECTORENV_ASYNC_STEPPING: [false, true]
+ALE_VECTORENV_ASYNC_STEPPING: [true]
+# If null, defaults to a power-of-two in the 80-100% band when available, else num_envs.
 ALE_VECTORENV_BATCH_SIZE: null
 ALE_VECTORENV_THREAD_AFFINITY_OFFSET: null
 
 JAXATARI_MODES: ["oc", "pixel"]
+# Pixel benchmark uses the exact wrapper/downscaling combo below.
 JAXATARI_PIXEL_OPTIONS: ["resized", "grayscale", "native"]
 JAXATARI_PIXEL_TRY_ALL_COMBINATIONS: false
 JAXATARI_PIXEL_OPTION_COMBINATIONS:
@@ -17,7 +20,9 @@ JAXATARI_PIXEL_OPTION_COMBINATIONS:
   # - ["resized"]
   # - ["resized", "native"]
   - ["resized", "native", "grayscale"]
-JAXATARI_PLATFORMS: ["gpu", "cpu"]
+# Run both JAX platforms for JAXAtari modes.
+# JAXATARI_PLATFORMS: ["cpu", "gpu"]
+JAXATARI_PLATFORMS: ["gpu"]
 ATARI_FRAME_SKIP: [4] #[1, 4]
 PIXEL_RESIZE_SHAPE: [84, 84]
 
@@ -26,8 +31,8 @@ RESULTS_CSV_PATH: "./outputs/throughput_results.csv"
 
 SEED: 0
 
-ENV_COUNTS: [1, 4, 16, 32, 64, 128, 256, 512, 1024, 2048]
-NUM_STEPS: 10000 # n_steps per env
+ENV_COUNTS: [1, 8, 32, 128, 256, 1024, 2048, 4096, 8192]
+NUM_STEPS: 1000 # n_steps per env
 
 GIVEN_ACTION: 0
 
