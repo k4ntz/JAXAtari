@@ -11,7 +11,7 @@ from flax import struct
 
 import jaxatari.spaces as spaces
 
-from jaxatari.environment import JAXAtariAction as Action, JaxEnvironment
+from jaxatari.environment import JAXAtariAction as Action, JaxEnvironment, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
@@ -416,7 +416,7 @@ def _get_player_screen_x(player_pos: chex.Array) -> chex.Array:
     return jnp.select(conds, choices, default=player_pos)
 
 @struct.dataclass
-class LevelState:
+class LevelState(struct.PyTreeNode):
     player_pos: chex.Array
     player_vel: chex.Array
     white_ufo_left: chex.Array
@@ -527,7 +527,7 @@ class LevelState:
     background_flash_timer: chex.Array
 
 @struct.dataclass
-class BeamriderState:
+class BeamriderState(struct.PyTreeNode):
     level: LevelState
     score: chex.Array
     sector: chex.Array
@@ -539,43 +539,27 @@ class BeamriderState:
     rng: chex.Array
 
 @struct.dataclass
-class BeamriderInfo:
+class BeamriderInfo(struct.PyTreeNode):
     score: chex.Array
     sector: chex.Array
 
 @struct.dataclass
-class BeamriderObservation:
-    pos: chex.Array
+class BeamriderObservation(struct.PyTreeNode):
+    player: ObjectObservation
+    player_shots: ObjectObservation
+    white_ufo: ObjectObservation
+    enemy_shots: ObjectObservation
+    chasing_meteoroids: ObjectObservation
+    falling_rocks: ObjectObservation
+    lane_blockers: ObjectObservation
+    coins: ObjectObservation
+    kamikaze: ObjectObservation
+    rejuvenator: ObjectObservation
+    bouncer: ObjectObservation
+    mothership: ObjectObservation
     shooting_cd: chex.Array
     torpedoes_left: chex.Array
-    player_shots_pos: chex.Array
-    player_shots_vel: chex.Array
     white_ufo_left: chex.Array
-
-    # enemies
-    enemy_type: chex.Array
-    white_ufo_pos: chex.Array
-    white_ufo_vel: chex.Array
-    enemy_shot_pos: chex.Array
-    enemy_shot_vel: chex.Array
-
-    # other objects
-    chasing_meteoroid_pos: chex.Array
-    chasing_meteoroid_active: chex.Array
-    rejuvenator_pos: chex.Array
-    rejuvenator_active: chex.Array
-    falling_rock_pos: chex.Array
-    falling_rock_active: chex.Array
-    lane_blocker_pos: chex.Array
-    lane_blocker_active: chex.Array
-    bouncer_pos: chex.Array
-    bouncer_active: chex.Array
-    coin_pos: chex.Array
-    coin_active: chex.Array
-    kamikaze_pos: chex.Array
-    kamikaze_active: chex.Array
-
-    # game state
     lives: chex.Array
     sector: chex.Array
     shooting_delay: chex.Array
@@ -585,7 +569,6 @@ class BeamriderObservation:
     death_timer: chex.Array
     white_ufo_pattern_id: chex.Array
     white_ufo_pattern_timer: chex.Array
-    mothership_position: chex.Array
     mothership_timer: chex.Array
     mothership_stage: chex.Array
     rejuvenator_dead: chex.Array
@@ -916,32 +899,170 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         ufo_offscreen = self.enemy_offscreen_ufo
         enemy_shot_offscreen = self.bullet_offscreen_shots
 
+        player_x = jnp.clip(_get_player_screen_x(level.player_pos), 0, self.consts.SCREEN_WIDTH)
+        player_y = jnp.clip(jnp.array(self.consts.PLAYER_POS_Y), 0, self.consts.SCREEN_HEIGHT)
+        player_active = jnp.array(level.death_timer == 0, dtype=jnp.bool_)
+        player = ObjectObservation.create(
+            x=player_x.astype(jnp.int32),
+            y=player_y.astype(jnp.int32),
+            width=jnp.array(self.consts.PLAYER_SPRITE_SIZE[1], dtype=jnp.int32),
+            height=jnp.array(self.consts.PLAYER_SPRITE_SIZE[0], dtype=jnp.int32),
+            active=player_active.astype(jnp.int32)
+        )
+
+        shot_active = level.player_shot_pos[1] < self.consts.BOTTOM_CLIP
+        shot_x = _get_player_shot_screen_x(level.player_shot_pos, level.player_shot_vel, level.bullet_type, self.consts.LASER_ID)
+        shot_idx = _get_index_bullet(level.player_shot_pos[1], level.bullet_type, self.consts.LASER_ID)
+        shot_size = jnp.take(self.bullet_sprite_sizes, shot_idx, axis=0)
+        player_shots = ObjectObservation.create(
+            x=jnp.clip(shot_x, 0, self.consts.SCREEN_WIDTH).astype(jnp.int32)[None],
+            y=jnp.clip(level.player_shot_pos[1], 0, self.consts.SCREEN_HEIGHT).astype(jnp.int32)[None],
+            width=shot_size[1].astype(jnp.int32)[None],
+            height=shot_size[0].astype(jnp.int32)[None],
+            active=shot_active.astype(jnp.int32)[None],
+            visual_id=level.bullet_type.astype(jnp.int32)[None]
+        )
+
+        ufo_pos = jnp.where(is_init, ufo_offscreen, level.white_ufo_pos)
+        ufo_y = ufo_pos[1]
+        ufo_x = ufo_pos[0] + _get_ufo_alignment(ufo_y)
+        ufo_active = ufo_y >= 0.0
+        ufo_indices = jnp.clip(_get_index_ufo(ufo_y) - 1, 0, len(self.consts.UFO_SPRITE_SIZES) - 1)
+        ufo_sizes = jnp.take(self.ufo_sprite_sizes, ufo_indices, axis=0)
+        white_ufo = ObjectObservation.create(
+            x=jnp.clip(ufo_x, 0, self.consts.SCREEN_WIDTH).astype(jnp.int32),
+            y=jnp.clip(ufo_y, 0, self.consts.SCREEN_HEIGHT).astype(jnp.int32),
+            width=ufo_sizes[:, 1].astype(jnp.int32),
+            height=ufo_sizes[:, 0].astype(jnp.int32),
+            active=ufo_active.astype(jnp.int32)
+        )
+
+        es_pos = jnp.where(is_init, enemy_shot_offscreen, level.enemy_shot_pos)
+        es_y = es_pos[1]
+        es_x = es_pos[0] + _get_ufo_alignment(es_y)
+        es_active = es_y <= self.consts.BOTTOM_CLIP
+        es_sprite_idx = (jnp.floor_divide(level.enemy_shot_timer, 4) % 2).astype(jnp.int32)
+        es_sizes = jnp.take(self.enemy_shot_sprite_sizes, es_sprite_idx, axis=0)
+        enemy_shots = ObjectObservation.create(
+            x=jnp.clip(es_x, 0, self.consts.SCREEN_WIDTH).astype(jnp.int32),
+            y=jnp.clip(es_y, 0, self.consts.SCREEN_HEIGHT).astype(jnp.int32),
+            width=es_sizes[:, 1].astype(jnp.int32),
+            height=es_sizes[:, 0].astype(jnp.int32),
+            active=es_active.astype(jnp.int32),
+            visual_id=es_sprite_idx
+        )
+
+        cm_y = level.chasing_meteoroid_pos[1]
+        cm_x = level.chasing_meteoroid_pos[0] + _get_ufo_alignment(cm_y)
+        chasing_meteoroids = ObjectObservation.create(
+            x=jnp.clip(cm_x, 0, self.consts.SCREEN_WIDTH).astype(jnp.int32),
+            y=jnp.clip(cm_y, 0, self.consts.SCREEN_HEIGHT).astype(jnp.int32),
+            width=jnp.full((self.consts.CHASING_METEOROID_MAX,), self.consts.METEOROID_SPRITE_SIZE[1], dtype=jnp.int32),
+            height=jnp.full((self.consts.CHASING_METEOROID_MAX,), self.consts.METEOROID_SPRITE_SIZE[0], dtype=jnp.int32),
+            active=level.chasing_meteoroid_active.astype(jnp.int32)
+        )
+
+        fr_y = level.falling_rock_pos[1]
+        fr_x = level.falling_rock_pos[0] + _get_ufo_alignment(fr_y)
+        fr_indices = jnp.clip(_get_index_falling_rock(fr_y) - 1, 0, len(self.consts.FALLING_ROCK_SPRITE_SIZES) - 1)
+        fr_sizes = jnp.take(self.falling_rock_sprite_sizes, fr_indices, axis=0)
+        falling_rocks = ObjectObservation.create(
+            x=jnp.clip(fr_x, 0, self.consts.SCREEN_WIDTH).astype(jnp.int32),
+            y=jnp.clip(fr_y, 0, self.consts.SCREEN_HEIGHT).astype(jnp.int32),
+            width=fr_sizes[:, 1].astype(jnp.int32),
+            height=fr_sizes[:, 0].astype(jnp.int32),
+            active=level.falling_rock_active.astype(jnp.int32)
+        )
+
+        lb_y = level.lane_blocker_pos[1]
+        lb_x = level.lane_blocker_pos[0] + _get_ufo_alignment(lb_y)
+        lb_indices = jnp.clip(_get_index_lane_blocker(lb_y) - 1, 0, len(self.consts.LANE_BLOCKER_SPRITE_SIZES) - 1)
+        lb_indices = jnp.where(lb_indices == 2, 3, lb_indices)
+        lb_sizes = jnp.take(self.lane_blocker_sprite_sizes, lb_indices, axis=0)
+        lane_blockers = ObjectObservation.create(
+            x=jnp.clip(lb_x, 0, self.consts.SCREEN_WIDTH).astype(jnp.int32),
+            y=jnp.clip(lb_y, 0, self.consts.SCREEN_HEIGHT).astype(jnp.int32),
+            width=lb_sizes[:, 1].astype(jnp.int32),
+            height=lb_sizes[:, 0].astype(jnp.int32),
+            active=level.lane_blocker_active.astype(jnp.int32),
+            visual_id=level.lane_blocker_phase.astype(jnp.int32)
+        )
+
+        c_y = level.coin_pos[1]
+        c_x = level.coin_pos[0] + _get_ufo_alignment(c_y)
+        coins = ObjectObservation.create(
+            x=jnp.clip(c_x, 0, self.consts.SCREEN_WIDTH).astype(jnp.int32),
+            y=jnp.clip(c_y, 0, self.consts.SCREEN_HEIGHT).astype(jnp.int32),
+            width=jnp.full((self.consts.COIN_MAX,), self.consts.COIN_SPRITE_SIZE[1], dtype=jnp.int32),
+            height=jnp.full((self.consts.COIN_MAX,), self.consts.COIN_SPRITE_SIZE[0], dtype=jnp.int32),
+            active=level.coin_active.astype(jnp.int32)
+        )
+
+        k_y = level.kamikaze_pos[1]
+        k_x = level.kamikaze_pos[0] + _get_ufo_alignment(k_y)
+        k_indices = jnp.clip(_get_index_kamikaze(k_y) - 1, 0, 3)
+        k_sizes = jnp.take(self.lane_blocker_sprite_sizes, k_indices, axis=0)
+        kamikaze = ObjectObservation.create(
+            x=jnp.clip(k_x, 0, self.consts.SCREEN_WIDTH).astype(jnp.int32),
+            y=jnp.clip(k_y, 0, self.consts.SCREEN_HEIGHT).astype(jnp.int32),
+            width=k_sizes[:, 1].astype(jnp.int32),
+            height=k_sizes[:, 0].astype(jnp.int32),
+            active=level.kamikaze_active.astype(jnp.int32)
+        )
+
+        rej_y = level.rejuvenator_pos[1]
+        rej_x = level.rejuvenator_pos[0] + _get_ufo_alignment(rej_y)
+        rej_indices = jnp.where(level.rejuvenator_dead, 4, jnp.clip(_get_index_rejuvenator(rej_y) - 1, 0, 3))
+        rej_sizes = jnp.take(self.rejuvenator_sprite_sizes, rej_indices, axis=0)
+        rejuvenator = ObjectObservation.create(
+            x=jnp.clip(rej_x, 0, self.consts.SCREEN_WIDTH).astype(jnp.int32),
+            y=jnp.clip(rej_y, 0, self.consts.SCREEN_HEIGHT).astype(jnp.int32),
+            width=rej_sizes[1].astype(jnp.int32),
+            height=rej_sizes[0].astype(jnp.int32),
+            active=level.rejuvenator_active.astype(jnp.int32),
+            visual_id=level.rejuvenator_dead.astype(jnp.int32)
+        )
+
+        b_y = level.bouncer_pos[1]
+        b_x = level.bouncer_pos[0] + _get_ufo_alignment(b_y)
+        bouncer = ObjectObservation.create(
+            x=jnp.clip(b_x, 0, self.consts.SCREEN_WIDTH).astype(jnp.int32),
+            y=jnp.clip(b_y, 0, self.consts.SCREEN_HEIGHT).astype(jnp.int32),
+            width=jnp.array(self.consts.BOUNCER_SPRITE_SIZE[1], dtype=jnp.int32),
+            height=jnp.array(self.consts.BOUNCER_SPRITE_SIZE[0], dtype=jnp.int32),
+            active=level.bouncer_active.astype(jnp.int32)
+        )
+
+        ms_stage = level.mothership_stage.astype(jnp.int32)
+        ms_active = ms_stage > 0
+        ms_y = jnp.array(self.consts.MOTHERSHIP_EMERGE_Y - self.consts.MOTHERSHIP_HEIGHT, dtype=jnp.float32)
+        ms_x = level.mothership_position
+        mothership = ObjectObservation.create(
+            x=jnp.clip(ms_x, 0, self.consts.SCREEN_WIDTH).astype(jnp.int32),
+            y=jnp.clip(ms_y, 0, self.consts.SCREEN_HEIGHT).astype(jnp.int32),
+            width=jnp.array(self.consts.MOTHERSHIP_SPRITE_SIZE[1], dtype=jnp.int32),
+            height=jnp.array(self.consts.MOTHERSHIP_SPRITE_SIZE[0], dtype=jnp.int32),
+            active=ms_active.astype(jnp.int32),
+            visual_id=ms_stage
+        )
+
         return BeamriderObservation(
-            pos=level.player_pos,
+            player=player,
+            player_shots=player_shots,
+            white_ufo=white_ufo,
+            enemy_shots=enemy_shots,
+            chasing_meteoroids=chasing_meteoroids,
+            falling_rocks=falling_rocks,
+            lane_blockers=lane_blockers,
+            coins=coins,
+            kamikaze=kamikaze,
+            rejuvenator=rejuvenator,
+            bouncer=bouncer,
+            mothership=mothership,
+
             shooting_cd=level.shooting_cooldown,
             torpedoes_left=level.torpedoes_left,
-            player_shots_pos=level.player_shot_pos,
-            player_shots_vel=level.player_shot_vel,
             white_ufo_left=level.white_ufo_left,
-            enemy_type=level.enemy_type,
-            white_ufo_pos=jnp.where(is_init, ufo_offscreen, level.white_ufo_pos),
-            white_ufo_vel=jnp.where(is_init, 0.0, level.white_ufo_vel),
-            enemy_shot_pos=jnp.where(is_init, enemy_shot_offscreen, level.enemy_shot_pos),
-            enemy_shot_vel=jnp.where(is_init, 0, level.enemy_shot_vel),
-            chasing_meteoroid_pos=level.chasing_meteoroid_pos,
-            chasing_meteoroid_active=level.chasing_meteoroid_active,
-            rejuvenator_pos=level.rejuvenator_pos,
-            rejuvenator_active=level.rejuvenator_active,
-            falling_rock_pos=level.falling_rock_pos,
-            falling_rock_active=level.falling_rock_active,
-            lane_blocker_pos=level.lane_blocker_pos,
-            lane_blocker_active=level.lane_blocker_active,
-            bouncer_pos=level.bouncer_pos,
-            bouncer_active=level.bouncer_active,
-            coin_pos=level.coin_pos,
-            coin_active=level.coin_active,
-            kamikaze_pos=level.kamikaze_pos,
-            kamikaze_active=level.kamikaze_active,
             lives=state.lives,
             sector=state.sector,
             shooting_delay=level.shooting_delay,
@@ -951,7 +1072,6 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             death_timer=level.death_timer,
             white_ufo_pattern_id=jnp.where(is_init, 0, level.white_ufo_pattern_id),
             white_ufo_pattern_timer=jnp.where(is_init, 0, level.white_ufo_pattern_timer),
-            mothership_position=level.mothership_position,
             mothership_timer=level.mothership_timer,
             mothership_stage=level.mothership_stage,
             rejuvenator_dead=level.rejuvenator_dead,
@@ -3992,31 +4112,21 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
     def observation_space(self) -> spaces.Dict:
         return spaces.Dict({
-            "pos": spaces.Box(low=0.0, high=160.0, shape=(), dtype=jnp.float32),
+            "player": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "player_shots": spaces.get_object_space(n=1, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "white_ufo": spaces.get_object_space(n=3, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "enemy_shots": spaces.get_object_space(n=9, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "chasing_meteoroids": spaces.get_object_space(n=self.consts.CHASING_METEOROID_MAX, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "falling_rocks": spaces.get_object_space(n=self.consts.FALLING_ROCK_MAX, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "lane_blockers": spaces.get_object_space(n=self.consts.LANE_BLOCKER_MAX, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "coins": spaces.get_object_space(n=self.consts.COIN_MAX, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "kamikaze": spaces.get_object_space(n=self.consts.KAMIKAZE_MAX, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "rejuvenator": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "bouncer": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "mothership": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
             "shooting_cd": spaces.Box(low=0.0, high=255.0, shape=(), dtype=jnp.float32),
             "torpedoes_left": spaces.Box(low=0.0, high=3.0, shape=(), dtype=jnp.float32),
-            "player_shots_pos": spaces.Box(low=0.0, high=800.0, shape=(2,), dtype=jnp.float32),
-            "player_shots_vel": spaces.Box(low=-10.0, high=10.0, shape=(2,), dtype=jnp.float32),
             "white_ufo_left": spaces.Box(low=0.0, high=100.0, shape=(), dtype=jnp.float32),
-            "enemy_type": spaces.Box(low=0.0, high=10.0, shape=(3,), dtype=jnp.float32),
-            "white_ufo_pos": spaces.Box(low=-100.0, high=255.0, shape=(2, 3), dtype=jnp.float32),
-            "white_ufo_vel": spaces.Box(low=-10.0, high=10.0, shape=(2, 3), dtype=jnp.float32),
-            "enemy_shot_pos": spaces.Box(low=-100.0, high=800.0, shape=(2, 9), dtype=jnp.float32),
-            "enemy_shot_vel": spaces.Box(low=-10.0, high=10.0, shape=(9,), dtype=jnp.float32),
-            "chasing_meteoroid_pos": spaces.Box(low=-100.0, high=255.0, shape=(2, self.consts.CHASING_METEOROID_MAX),dtype=jnp.float32),
-            "chasing_meteoroid_active": spaces.Box(low=0.0, high=1.0, shape=(self.consts.CHASING_METEOROID_MAX,),dtype=jnp.float32),
-            "falling_rock_pos": spaces.Box(low=-100.0, high=255.0, shape=(2, self.consts.FALLING_ROCK_MAX),dtype=jnp.float32),
-            "falling_rock_active": spaces.Box(low=0.0, high=1.0, shape=(self.consts.FALLING_ROCK_MAX,),dtype=jnp.float32),
-            "lane_blocker_pos": spaces.Box(low=-100.0, high=255.0, shape=(2, self.consts.LANE_BLOCKER_MAX),dtype=jnp.float32),
-            "lane_blocker_active": spaces.Box(low=0.0, high=1.0, shape=(self.consts.LANE_BLOCKER_MAX,),dtype=jnp.float32),
-            "coin_pos": spaces.Box(low=-100.0, high=255.0, shape=(2, self.consts.COIN_MAX), dtype=jnp.float32),
-            "coin_active": spaces.Box(low=0.0, high=1.0, shape=(self.consts.COIN_MAX,), dtype=jnp.float32),
-            "kamikaze_pos": spaces.Box(low=-100.0, high=255.0, shape=(2, self.consts.KAMIKAZE_MAX), dtype=jnp.float32),
-            "kamikaze_active": spaces.Box(low=0.0, high=1.0, shape=(self.consts.KAMIKAZE_MAX,), dtype=jnp.float32),
-            "rejuvenator_pos": spaces.Box(low=-100.0, high=255.0, shape=(2,), dtype=jnp.float32),
-            "rejuvenator_active": spaces.Box(low=0.0, high=1.0, shape=(), dtype=jnp.float32),
-            "bouncer_pos": spaces.Box(low=-100.0, high=255.0, shape=(2,), dtype=jnp.float32),
-            "bouncer_active": spaces.Box(low=0.0, high=1.0, shape=(), dtype=jnp.float32),
             "lives": spaces.Box(low=0.0, high=255.0, shape=(), dtype=jnp.float32),
             "sector": spaces.Box(low=1.0, high=15.0, shape=(), dtype=jnp.float32),
             "shooting_delay": spaces.Box(low=0.0, high=255.0, shape=(), dtype=jnp.float32),
@@ -4026,7 +4136,6 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             "death_timer": spaces.Box(low=0.0, high=120.0, shape=(), dtype=jnp.float32),
             "white_ufo_pattern_id": spaces.Box(low=0.0, high=9.0, shape=(3,), dtype=jnp.float32),
             "white_ufo_pattern_timer": spaces.Box(low=0.0, high=255.0, shape=(3,), dtype=jnp.float32),
-            "mothership_position": spaces.Box(low=0.0, high=500.0, shape=(), dtype=jnp.float32),
             "mothership_timer": spaces.Box(low=0.0, high=255.0, shape=(), dtype=jnp.float32),
             "mothership_stage": spaces.Box(low=0.0, high=5.0, shape=(), dtype=jnp.float32),
             "rejuvenator_dead": spaces.Box(low=0.0, high=1.0, shape=(), dtype=jnp.float32),
@@ -4034,11 +4143,6 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(low=0, high=255, shape=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH, 3), dtype=jnp.uint8)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: BeamriderObservation) -> jnp.ndarray:
-        flat_obs, _unravel_fn = ravel_pytree(obs)
-        return flat_obs
 
 class BeamriderRenderer(JAXGameRenderer):
     def __init__(self, consts=None, config: render_utils.RendererConfig = None):
