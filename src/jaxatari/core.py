@@ -93,7 +93,7 @@ MOD_MODULES = {
     "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
     "montezumarevenge": "jaxatari.games.mods.montezuma_revenge_mods.MontezumaRevengeEnvMod",
     "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
-    "gravitar": "jaxatari.games.mods.gravitar_mods.GravitarEnvMod"
+    "gravitar": "jaxatari.games.mods.gravitar_mods.GravitarEnvMod",
     "mspacman": "jaxatari.games.mods.mspacman_mods.MsPacmanEnvMod",
 }
 
