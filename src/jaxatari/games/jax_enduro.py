@@ -1,15 +1,13 @@
 import chex
 from functools import partial
 import jax
-import pygame
 from jax import numpy as jnp, lax
 import jax.random as jrandom
-import numpy as np
-import os
-from pathlib import Path
 from flax import struct
+import os
+import numpy as np
 
-from typing import Tuple, NamedTuple, Any, List, Dict, Optional
+from typing import Tuple, Optional, List, Dict, Any
 
 # jaxatari
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
@@ -17,133 +15,44 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.modification import AutoDerivedConstants
 import jaxatari.spaces as spaces
-from jaxatari.environment import ObjectObservation
 
-# +++ HELPER FUNCTIONS (for setup) +++
+@struct.dataclass
+class EnduroGameState:
+    player_x: jnp.ndarray  # Float position
+    player_y: jnp.ndarray
+    step_count: jnp.ndarray
+    day_count: jnp.ndarray
+    level: jnp.ndarray
+    level_passed: jnp.ndarray
+    game_over: jnp.ndarray
+    player_speed: jnp.ndarray
+    distance: jnp.ndarray
+    cars_to_pass: jnp.ndarray
+    track_top_x: jnp.ndarray  # Float position
+    track_top_x_curve_offset: jnp.ndarray
+    collision_mode: jnp.ndarray  # bool
+    collision_steps: jnp.ndarray  # int
+    mountain_left_x: jnp.ndarray
+    mountain_right_x: jnp.ndarray
+    # opponents
+    adjusted_opponent_index: jnp.ndarray # jnp.int32
+    adjusted_opponent_lane: jnp.ndarray  # jnp.int32
+    visible_opponent_positions: jnp.ndarray # shape (7, 3) [x, y, color_idx]
+    opponent_index: jnp.ndarray
+    opponent_index_watermark: jnp.ndarray  # jnp.int32, max floor(opponent_index) ever reached
+    opponent_speed: jnp.ndarray
+    opponent_density: jnp.ndarray
+    base_opponents: jnp.ndarray
+    weather_index: jnp.ndarray # jnp.int32
 
-# These are used *once* in __init__ and are NOT JIT-compiled.
+@struct.dataclass
+class EnduroObservation:
+    enemy_positions: jnp.ndarray
+    road_features: jnp.ndarray
 
-def _load_rgba_sprite(sprite_path_car: str) -> np.ndarray:
-
-    """Loads a .npy file as a numpy array with shape (N, H, W, 4) or (1, H, W, 4)."""
-    module_dir = os.path.dirname(os.path.abspath(__file__))
-    sprite_path = Path(sprite_path_car)
-
-    if not sprite_path.is_absolute():
-        sprite_path = module_dir / sprite_path
-
-    arr = np.load(str(sprite_path))  # (N, H, W, C) or (H, W, C)
-    if arr.ndim == 3:
-        if arr.shape[2] != 4:
-            raise ValueError(f"Static sprite must have 4 channels (RGBA), got shape {arr.shape}")
-        arr = arr[None, ...]  # Add frame axis -> (1, H, W, 4)
-    elif arr.ndim == 4:
-        if arr.shape[3] != 4:
-            raise ValueError(f"Animated sprite must have 4 channels (RGBA), got shape {arr.shape}")
-    else:
-        raise ValueError(f"Unsupported array shape: {arr.shape}")
-
-    return arr.astype(np.uint8)
-
-def _recolor_rgba_sprite_np(rgba_sprite_frame: np.ndarray, new_rgb: np.ndarray) -> np.ndarray:
-
-    """Recolors a single (H, W, 4) RGBA sprite frame. Uses NumPy."""
-
-    # Create a mask for non-black, non-white, non-transparent pixels
-
-    rgb_frame = rgba_sprite_frame[..., :3]
-    alpha_mask = rgba_sprite_frame[..., 3] > 0
-
-    # Original Enduro sprites use black (0,0,0) for shadows/outlines
-    # and white (255,255,255) for highlights. We only want to color the 'body'.
-    # We find pixels that are not black and not white.
-    not_black = np.any(rgb_frame > 0, axis=-1)
-    not_white = np.any(rgb_frame < 255, axis=-1)
-
-    # Combine masks: must be visible AND not black AND not white
-    color_mask = alpha_mask & not_black & not_white
-
-    # Create a new frame to hold the result
-    recolored_frame = rgba_sprite_frame.copy()
-
-    # Apply the new color
-    recolored_frame[color_mask, 0] = new_rgb[0]
-    recolored_frame[color_mask, 1] = new_rgb[1]
-    recolored_frame[color_mask, 2] = new_rgb[2]
-
-    return recolored_frame
-
-def precompute_all_track_curves(max_offset: int, track_height: int, track_width: int, left: bool) -> jnp.ndarray:
-    """
-    Precomputes all possible track curves using integer offsets.
-
-    Args:
-        max_offset: The maximum offset in pixels that the curve has
-        track_height: the height of the viewable track
-        track_width: the maximum width of the track
-
-    Returns:
-        tuple containing:
-        - precomputed_left_curves: Array of shape (num_offsets, track_height)
-        - precomputed_right_curves: Array of shape (num_offsets, track_height)
-    """
-
-    # Calculate the range of possible integer offsets
-    offset_range = range(-max_offset, max_offset + 1)  # -50 to +50 = 101 values
-    num_offsets = len(offset_range)
-
-    # Pre-calculate static components that are the same for all curves
-    i = jnp.arange(track_height)
-    perspective_offsets = jnp.where(i < 2, 0, (i - 1) // 2)
-    depth_ratio = (track_height - i) / track_height
-    curved_depth_ratio = jnp.power(depth_ratio, 3.0)
-
-    # Pre-calculate track spaces (width at each row)
-    track_spaces = jnp.where(i < 2, -1, jnp.minimum(i - 2, track_width)).astype(jnp.int32)
-
-    # Storage for all precomputed curves
-    all_left_curves = []
-    all_right_curves = []
-
-    # print(f"Precomputing {num_offsets} track curves...") # Removed print for JAX compatibility
-
-    # Generate a curve for each possible integer offset
-    for offset in offset_range:
-        # Calculate curve shifts for this specific integer offset
-        curve_shifts = jnp.floor(offset * curved_depth_ratio).astype(jnp.int32)
-
-        # Generate left track (relative to top_x=0)
-        base_left_xs = -perspective_offsets  # Start from 0 instead of top_x
-        final_left_xs = base_left_xs + curve_shifts
-        final_left_xs = final_left_xs.at[-1].set(final_left_xs[-2])  # Straighten end
-
-        # Generate right track
-        final_right_xs = jnp.where(
-            track_spaces == -1,
-            final_left_xs,
-            final_left_xs + track_spaces + 1
-        )
-        final_right_xs = final_right_xs.at[-1].set(final_right_xs[-2])
-
-        all_left_curves.append(final_left_xs.astype(jnp.int32))
-        all_right_curves.append(final_right_xs.astype(jnp.int32))
-
-    # Convert to JAX arrays
-    precomputed_left_curves = jnp.array(all_left_curves)  # Shape: (101, track_height)
-    precomputed_right_curves = jnp.array(all_right_curves)  # Shape: (101, track_height)
-
-    # print(f"Precomputed curves shape: {precomputed_left_curves.shape}") # Removed print
-
-    return precomputed_left_curves if left else precomputed_right_curves
-
-def _create_static_procedural_sprites(car_palette: List[Tuple[int, int, int]]) -> dict:
-    """Creates procedural sprites that don't depend on dynamic values."""
-    sprites = {}
-    # 1. Add 1x1 pixel sprites for each car color to ensure they are in the palette
-    for i, rgb in enumerate(car_palette):
-        color = jnp.array(list(rgb) + [255], dtype=jnp.uint8)
-        sprites[f'car_color_{i}'] = color.reshape(1, 1, 4)
-    return sprites
+@struct.dataclass
+class EnduroInfo:
+    pass
 
 def _get_weather_color_codes() -> jnp.ndarray:
     """Returns the RGB color codes for each weather and each sprite scraped from the game."""
@@ -176,367 +85,294 @@ def _get_weather_color_codes() -> jnp.ndarray:
 
     ], dtype=jnp.int32)
 
-def _get_default_asset_config(
-    weather_colors: np.ndarray, 
-    car_palette: List[Tuple[int, int, int]]
-) -> tuple:
+@partial(jax.jit, static_argnums=(0, 1, 2, 3))
+def precompute_all_track_curves(max_offset: int, track_height: int, track_width: int, left: bool) -> jnp.ndarray:
     """
-    Returns the default declarative asset manifest for Enduro.
-    This now generates all weather assets procedurally.
-    Car assets are loaded manually by the renderer.
+    Precomputes all possible track curves using integer offsets.
     """
-    # Base path for loading RGBA data
-    base_sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "enduro")
-    config_list = [
-        # --- Static Backgrounds ---
-        {'name': 'background', 'type': 'background', 'file': 'backgrounds/background.npy'},
-        {'name': 'background_overlay', 'type': 'single', 'file': 'backgrounds/background_overlay.npy'},
-        {'name': 'score_box', 'type': 'single', 'file': 'backgrounds/score_box.npy'},
-        {'name': 'activision_logo', 'type': 'single', 'file': 'backgrounds/activision_logo.npy'},
-        {'name': 'green_level_background', 'type': 'single', 'file': 'backgrounds/green_level_background.npy'},
-        {'name': 'fog_box', 'type': 'single', 'file': 'misc/fog_box.npy'},
-        # --- UI Elements ---
-        {'name': 'digits_black', 'type': 'digits', 'pattern': 'digits/{}_black.npy'},
-        # --- Odometer Sprite Sheets ---
-        {'name': 'black_digit_array', 'type': 'single', 'file': 'digits/black_digit_array.npy'},
-        {'name': 'brown_digit_array', 'type': 'single', 'file': 'digits/brown_digit_array.npy'},
-    ]
+    offset_range = jnp.arange(-max_offset, max_offset + 1)
 
-    # Load flags.npy as a multi-frame file and split into frames
-    flags_path = os.path.join(base_sprite_path, "misc/flags.npy")
-    flags_data = _load_rgba_sprite(flags_path)  # Returns (N, H, W, 4) or (1, H, W, 4)
-    # Ensure we have at least 2 frames (if only 1 frame, duplicate it)
-    if flags_data.shape[0] == 1:
-        flags_frames = jnp.concatenate([flags_data, flags_data], axis=0)
-    else:
-        flags_frames = flags_data[:2]  # Take first 2 frames
-    config_list.append({'name': 'flags', 'type': 'procedural', 'data': flags_frames})
+    i = jnp.arange(track_height)
+    perspective_offsets = jnp.where(i < 2, 0, (i - 1) // 2)
+    depth_ratio = (track_height - i) / track_height
+    curved_depth_ratio = jnp.power(depth_ratio, 3.0)
 
-    # --- Procedural Weather Assets ---
-    # Manually load, recolor, and add all 16 weather variations
-    weather_asset_configs = [
-        ('background_sky.npy', 'sky', 'backgrounds'),
-        ('background_gras.npy', 'grass', 'backgrounds'),
-        ('mountain_left.npy', 'mountain_left', 'misc'),
-        ('mountain_right.npy', 'mountain_right', 'misc'),
-        ('background_horizon.npy', 'horizon_1', 'backgrounds'),
-        ('background_horizon.npy', 'horizon_2', 'backgrounds'),
-        ('background_horizon.npy', 'horizon_3', 'backgrounds'),
-    ]
-    # Map asset names to their color index in the weather_colors array
-    name_to_color_idx = {
-        'sky': 0, 'grass': 1, 'mountain_left': 2, 'mountain_right': 2,
-        'horizon_1': 3, 'horizon_2': 4, 'horizon_3': 5
-    }
-    # Load base sprites ONCE (for file-based assets)
-    base_weather_sprites = {}
-    for base_file, asset_name, folder in weather_asset_configs:
-        if base_file not in base_weather_sprites:
-            full_path = os.path.join(base_sprite_path, f"{folder}/{base_file}")
-            # Load as (1, H, W, 4)
-            base_weather_sprites[base_file] = _load_rgba_sprite(full_path)[0] # Get (H, W, 4)
-    # Generate 16 versions for each weather asset
-    num_weathers = weather_colors.shape[0] # Should be 16
-    for weather_idx in range(num_weathers):
-        # Process file-based weather assets (including mountains)
-        for base_file, asset_name, folder in weather_asset_configs:
-            # Get the correct color for this asset and this weather
-            color_idx = name_to_color_idx[asset_name]
-            new_rgb = weather_colors[weather_idx, color_idx]
-            # Recolor the base sprite
-            base_sprite_np = np.array(base_weather_sprites[base_file])
-            recolored_sprite_np = _recolor_rgba_sprite_np(base_sprite_np, new_rgb)
-            # Add to config list
-            config_list.append({
-                'name': f'{asset_name}_{weather_idx}',
-                'type': 'procedural',
-                'data': jnp.array(recolored_sprite_np)
-            })
-    # --- Procedural Car Color Palette ---
-    static_procedural = _create_static_procedural_sprites(car_palette)
-    for name, data in static_procedural.items():
-        config_list.append({'name': name, 'type': 'procedural', 'data': data})
+    track_spaces = jnp.where(i < 2, -1, jnp.minimum(i - 2, track_width)).astype(jnp.int32)
+    base_left_xs = -perspective_offsets
 
-    return tuple(config_list)
+    def compute_single_curve(offset):
+        curve_shifts = jnp.floor(offset * curved_depth_ratio).astype(jnp.int32)
+        final_left_xs = base_left_xs + curve_shifts
+        final_left_xs = final_left_xs.at[-1].set(final_left_xs[-2])
 
-# TODO: what is framerate even doing? Can it be removed??
+        final_right_xs = jnp.where(
+            track_spaces == -1,
+            final_left_xs,
+            final_left_xs + track_spaces + 1
+        )
+        final_right_xs = final_right_xs.at[-1].set(final_right_xs[-2])
+        
+        return jnp.where(left, final_left_xs.astype(jnp.int32), final_right_xs.astype(jnp.int32))
+
+    return jax.vmap(compute_single_curve)(offset_range)
+
+@partial(jax.jit, static_argnums=(0, 1, 2, 3, 4, 5))
+def _compute_static_track(track_seed: int, max_track_length: float, min_track_section_length: float, max_track_section_length: float, straight_km_start: float, max_segments_buffer: int) -> jnp.ndarray:
+    key = jax.random.PRNGKey(track_seed)
+    max_segments = int(max_track_length) + max_segments_buffer
+    key, subkey = jax.random.split(key)
+    directions = jax.random.choice(subkey, jnp.array([-1, 0, 1]), shape=(max_segments,), replace=True)
+    key, subkey = jax.random.split(key)
+    segment_lengths = jax.random.uniform(subkey, shape=(max_segments,), minval=min_track_section_length, maxval=max_track_section_length)
+    track_starts = jnp.cumsum(jnp.concatenate([jnp.array([straight_km_start]), segment_lengths[:-1]]))
+    first_segment = jnp.array([[0.0, 0.0]])
+    rest_segments = jnp.stack([directions, track_starts], axis=1)
+    return jnp.concatenate([first_segment, rest_segments], axis=0)
+
+@partial(jax.jit, static_argnums=(1, 2, 3, 4))
+def _compute_base_opponents(key: jrandom.PRNGKey, length_of_opponent_array: int, opponent_delay_slots: int, player_color_idx: int, num_guaranteed: int = 0) -> jnp.ndarray:
+    key, key_colors = jax.random.split(key)
+    key, key_positions = jax.random.split(key)
+    
+    # Generate spawn priority for each slot
+    spawn_priority = jax.random.permutation(key_positions, jnp.arange(length_of_opponent_array))
+    spawn_priority = spawn_priority.astype(jnp.float32) / length_of_opponent_array
+
+    key, key_lanes = jax.random.split(key)
+    # Edge-biased lane distribution: lane 0 ~45%, lane 2 ~45%, lane 1 ~10%
+    _raw = jax.random.uniform(key_lanes, (length_of_opponent_array,))
+    lane_choices = jnp.where(_raw < 0.45, jnp.int8(0), jnp.where(_raw < 0.90, jnp.int8(2), jnp.int8(1))).astype(jnp.int8)
+
+    def generate_opponent_color_index(color_key):
+        idx = jax.random.randint(color_key, (), 0, 13)
+        return jnp.where(idx >= player_color_idx, idx + 1, idx).astype(jnp.int32)
+
+    color_keys = jax.random.split(key_colors, length_of_opponent_array)
+    colors = jax.vmap(generate_opponent_color_index)(color_keys)
+
+    def process_slot(carry, inputs):
+        key_step, last_two_lanes, non_gap_count = carry
+        candidate_lane, color = inputs
+        key_step, key_follow, key_fix = jax.random.split(key_step, 3)
+
+        # Bias toward same lane as the previous car so "behind" patterns dominate
+        # and side-by-side spawning is significantly reduced.
+        # P(same lane) ≈ 0.5 + 0.5*(1/3) = 0.67 vs. 0.33 baseline.
+        last_lane = last_two_lanes[1]
+        has_prev = last_lane >= 0
+        biased_lane = jnp.where(
+            has_prev & (jax.random.uniform(key_follow) < 0.5),
+            last_lane,
+            candidate_lane
+        )
+
+        # Prevent three consecutive all-different lanes
+        has_valid_triple = ((non_gap_count >= 2) & (last_two_lanes[0] != last_two_lanes[1]) & (biased_lane != last_two_lanes[0]) & (biased_lane != last_two_lanes[1]))
+        fixed_lane = jax.random.choice(key_fix, jnp.array([last_two_lanes[0], last_two_lanes[1]]))
+        final_lane = jax.lax.select(has_valid_triple, fixed_lane, biased_lane)
+
+        new_non_gap = non_gap_count + 1
+        new_last_two = jnp.array([last_two_lanes[1], final_lane])
+        return (key_step, new_last_two, new_non_gap), jnp.array([final_lane, color])
+
+    init_carry = (key, jnp.array([-1, -1], dtype=jnp.int8), 0)
+    _, final_opponents = jax.lax.scan(process_slot, init_carry, (lane_choices, colors))
+    final_opponents = jnp.transpose(final_opponents)
+    
+    # Force the first num_guaranteed slots to always spawn (priority < any density value).
+    guaranteed = jnp.arange(length_of_opponent_array) < num_guaranteed
+    spawn_priority = jnp.where(guaranteed, 0.0, spawn_priority)
+
+    # Add spawn_priority row
+    final_opponents = jnp.concatenate([final_opponents, spawn_priority[jnp.newaxis, :]], axis=0)
+
+    # Add delay block with -1 lanes and 2.0 spawn priority (never spawn)
+    delay_block = jnp.array([
+        jnp.full((opponent_delay_slots,), -1, dtype=jnp.float32),
+        jnp.full((opponent_delay_slots,), -1, dtype=jnp.float32),
+        jnp.full((opponent_delay_slots,), 2.0, dtype=jnp.float32)
+    ])
+    return jnp.concatenate([final_opponents, delay_block], axis=1)
+
 class EnduroConstants(AutoDerivedConstants):
-    """Game configuration parameters"""
-    # Game runs at 60 frames per second. This is used to approximate the configs with values from play-testing the game.
-    # Only change this variable if you are sure the original Enduro implementation ran at a lower rate!
-    frame_rate: int = struct.field(pytree_node=False, default=60)
-
-    # ====================
-    # === Window Sizes ===
-    # ====================
+    """Game configuration parameters for Enduro"""
     screen_width: int = struct.field(pytree_node=False, default=160)
     screen_height: int = struct.field(pytree_node=False, default=210)
+    
+    player_x_start: float = struct.field(pytree_node=False, default=76.0)
+    player_y_start: float = struct.field(pytree_node=False, default=142.0)
+    
+    # Phase 0 = at the black line (min speed), phase 9 = 9 px above (max speed).
+    # At phase 0: steering 0.125 px/frame (1 px/8 frames); at phase 9: ~1.5 px/frame.
+    horizontal_movement_slope: float = struct.field(pytree_node=False, default=0.1528)
+    horizontal_movement_offset: float = struct.field(pytree_node=False, default=0.125)
+    max_speed: float = struct.field(pytree_node=False, default=9.0)
+    min_speed: float = struct.field(pytree_node=False, default=0.0)
+    initial_speed: float = struct.field(pytree_node=False, default=0.0)
+    frame_rate: float = struct.field(pytree_node=False, default=60.0)
+    centripedal_shift_ratio: float = struct.field(pytree_node=False, default=19.2)
 
-    # Enduro has a game window that is smaller
+    # Acceleration intervals (frames per phase step) matching ALE timing data.
+    # Each entry is how many frames of held FIRE to advance from phase N to N+1.
+    accel_intervals: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(
+        [15, 30, 30, 30, 30, 40, 60, 60, 60], dtype=jnp.int32
+    ))
+    # Frames of held DOWN before losing one speed phase (3 = ~3× slower than gaining a phase).
+    brake_interval: int = struct.field(pytree_node=False, default=3)
+
+    # Opponents: guaranteed start cars and initial index placing them right at the player.
+    # initial_opponent_index=0.9 puts slot-0 car just behind the player (y≈153 vs player y≈142)
+    # so it overtakes within ~1 second at minimum speed.
+    initial_opponent_index: float = struct.field(pytree_node=False, default=0.9)
+    initial_guaranteed_cars: int = struct.field(pytree_node=False, default=2)
+    render_full_road: bool = struct.field(pytree_node=False, default=False)
+    
     window_offset_left: int = struct.field(pytree_node=False, default=8)
     window_offset_bottom: int = struct.field(pytree_node=False, default=55)
-    game_window_height: Optional[int] = struct.field(pytree_node=False, default=None)
-    game_window_width: Optional[int] = struct.field(pytree_node=False, default=None)
-    game_screen_middle: Optional[int] = struct.field(pytree_node=False, default=None)
-
-    # the track is in the game window below the sky
     sky_height: int = struct.field(pytree_node=False, default=50)
 
-    # ============
-    # === Cars ===
-    # ============
-    # car sizes from close to far
-    car_width_0: int = struct.field(pytree_node=False, default=16)
-    car_height_0: int = struct.field(pytree_node=False, default=11)
-
-    # for all different car sizes the widths and heights
-    car_widths: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([16, 12, 8, 6, 4, 4, 2], dtype=jnp.int32))
-    car_heights: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([11, 8, 6, 4, 3, 2, 1], dtype=jnp.int32))
-
-    # player car start position
-    player_x_start: Optional[float] = struct.field(pytree_node=False, default=None)
-    player_y_start: Optional[int] = struct.field(pytree_node=False, default=None)
-    
-    # Static car color palette (16 colors)
-
-    # Using a standard 16-color palette (e.g., CGA, Windows)
-
-    CAR_COLOR_PALETTE: List[Tuple[int, int, int]] = struct.field(pytree_node=False, default_factory=lambda: [
-
-        (0, 0, 0),       # 0. Black (Player Color)
-
-        (0, 0, 170),     # 1. Blue
-
-        (0, 170, 0),     # 2. Green
-
-        (0, 170, 170),   # 3. Cyan
-
-        (170, 0, 0),     # 4. Red
-
-        (170, 0, 170),   # 5. Magenta
-
-        (170, 85, 0),    # 6. Brown
-
-        (170, 170, 170), # 7. Light Gray
-
-        (85, 85, 85),    # 8. Dark Gray
-
-        (85, 85, 255),   # 9. Light Blue
-
-        (85, 255, 85),   # 10. Light Green
-
-        (85, 255, 255),  # 11. Light Cyan
-
-        (255, 85, 85),   # 12. Light Red
-
-        (255, 85, 255),  # 13. Light Magenta
-
-        (255, 255, 85),  # 14. Yellow
-
-        (255, 255, 255)  # 15. White
-
-    ])
-
-    PLAYER_COLOR_INDEX: int = struct.field(pytree_node=False, default=15) # Player is White
-
-    # =============
-    # === Track ===
-    # =============
+    # Track
     track_width: int = struct.field(pytree_node=False, default=98)
-    track_height: Optional[int] = struct.field(pytree_node=False, default=None)
-
-    max_track_length: float = struct.field(pytree_node=False, default=9999.9) # in km
     track_seed: int = struct.field(pytree_node=False, default=42)
-    straight_km_start: float = struct.field(pytree_node=False, default=5.0)  # how many km the track goes straight at the start of the game
-    min_track_section_length: float = struct.field(pytree_node=False, default=1.0)  # how long a curve or straight passage is at least
-    max_track_section_length:float = struct.field(pytree_node=False, default=15.0)
-    track_max_curvature_width: int = struct.field(pytree_node=False, default=17)
-    # How many pixels the top-x of the track moves in a curve into the curve direction for the full curve
+    max_track_length: float = struct.field(pytree_node=False, default=9999.9)
+    straight_km_start: float = struct.field(pytree_node=False, default=5.0)
+    min_track_section_length: float = struct.field(pytree_node=False, default=1.0)
+    max_track_section_length: float = struct.field(pytree_node=False, default=15.0)
     track_max_top_x_offset: float = struct.field(pytree_node=False, default=50.0)
-    # how fast the track curve starts to build in the game when going from a straight track into a curve
+    initial_track_top_x_curve_offset: float = struct.field(pytree_node=False, default=0.0)
     curve_rate: float = struct.field(pytree_node=False, default=0.05)
-    
-    # Derived constants (dynamic calculation based on static fields)
-    track_x_start: Optional[int] = struct.field(pytree_node=False, default=None)
-    curve_offset_base: Optional[int] = struct.field(pytree_node=False, default=None)
-    precomputed_left_curves: Optional[chex.Array] = struct.field(pytree_node=False, default=None)
-    precomputed_right_curves: Optional[chex.Array] = struct.field(pytree_node=False, default=None)
+    # Collision resets speed to 0 (car goes back to the black line).
+    side_collision_speed_drop: float = struct.field(pytree_node=False, default=0.0)
+    collision_push_back: float = struct.field(pytree_node=False, default=0.5)
+    collision_duration: int = struct.field(pytree_node=False, default=14)
 
-    # Bumpers
-    track_bumper_max_length: int = struct.field(pytree_node=False, default=30)  # the maximum bumper length at the bottom of the screen
-    track_bumper_min_length: int = struct.field(pytree_node=False, default=5)  # the minimum bumper length at the top of the screen
-    track_bumper_max_width: float = struct.field(pytree_node=False, default=4.0)  # the maximum bumper width pixels at bottom
-    track_bumper_min_width: float = struct.field(pytree_node=False, default=1.0)  # the maximum bumper width pixels at top
-    track_bumper_smoothening_pixels: int = struct.field(pytree_node=False, default=4)  # How many pixels are used to smoothen the bumper edges
-    bumper_perspective_speed: float = struct.field(pytree_node=False, default=2.0)  # A factor for how much slower bumpers move at the top of the track
-    first_n_pixels_without_bumper: int = struct.field(pytree_node=False, default=5)
-
-    # track colors
+    # Track Colors and Animation
     track_colors: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         [74, 74, 74],  # top
-        [111, 111, 111],  # moving top - movement range: track_move_range
-        [170, 170, 170],  # moving bottom - spawns after track_moving_bottom_spawn_step
+        [111, 111, 111],  # moving top
+        [170, 170, 170],  # moving bottom
         [192, 192, 192],  # bottom - rest
     ], dtype=jnp.int32))
-    track_top_min_length: int = struct.field(pytree_node=False, default=33)  # or 32
+    track_top_min_length: int = struct.field(pytree_node=False, default=33)
     track_moving_top_length: int = struct.field(pytree_node=False, default=13)
     track_moving_bottom_length: int = struct.field(pytree_node=False, default=18)
     track_move_range: int = struct.field(pytree_node=False, default=12)
     track_moving_bottom_spawn_step: int = struct.field(pytree_node=False, default=6)
-    track_color_move_speed_per_speed: float = struct.field(pytree_node=False, default=0.05)
-    track_speed_animation_factor: float = struct.field(pytree_node=False, default=0.085)  # determines how fast the animation speed increases
+    # Track animation rate: phase 0 → 0.25 steps/frame (1 step/4 frames),
+    # phase 9 → 1.0 steps/frame (every frame).
+    track_animation_min_rate: float = struct.field(pytree_node=False, default=0.25)
+    track_animation_speed_factor: float = struct.field(pytree_node=False, default=0.0833)
 
-    # === Track collision ===
-    track_collision_kickback_pixels: float = struct.field(pytree_node=False, default=3.0)
-    track_collision_speed_reduction_per_speed_unit: float = struct.field(pytree_node=False, default=0.25)  # from RAM extraction
-    min_left_x: float = struct.field(pytree_node=False, default=58.0)  # the minimum x value before a left side collision will be checked
-    max_right_x: float = struct.field(pytree_node=False, default=84.0)  # the maximum x value before a right side collision will be checked
-
-    # ======================
-    # === Speed controls ===
-    # ======================
-    min_speed: int = struct.field(pytree_node=False, default=6)  # from RAM state 22
-    max_speed: int = struct.field(pytree_node=False, default=120)  # from RAM state 22
-    # measured by starting the original game and letting the car progress with min speed for 5 km --> 2:23 min
-    # 1/ 143 seconds / 5 km =~ 0.035
-    # at which speed the slower_acceleration is applied
-    acceleration_slow_down_threshold: float = struct.field(pytree_node=False, default=46.0)
-    breaking_per_second: float = struct.field(pytree_node=False, default=30.0)  # controls how fast the car break
-    
-    # Derived constants (dynamic calculation based on static fields)
-    km_per_second_per_speed_unit: Optional[float] = struct.field(pytree_node=False, default=None)
-    km_per_speed_unit_per_frame: Optional[float] = struct.field(pytree_node=False, default=None)
-    acceleration_per_frame: Optional[float] = struct.field(pytree_node=False, default=None)
-    slower_acceleration_per_frame: Optional[float] = struct.field(pytree_node=False, default=None)
-    breaking_per_frame: Optional[float] = struct.field(pytree_node=False, default=None)
-
-    # ================
-    # === Steering ===
-    # ================
-    # how many pixels the car can move from one edge of the track to the other one
-    steering_range_in_pixels: int = struct.field(pytree_node=False, default=28)
-    # with increasing speed the car moves faster on the x-axis.
-    # When moving faster than sensitivity_change_speed the sensitivity rate becomes lower
-    # sensitivity(speed) = steering_range_in_pixels / (base_sensitivity + sensitivity_per_speed * speed) / frame_rate
-    slow_base_sensitivity: float = struct.field(pytree_node=False, default=8.0)
-    fast_base_sensitivity: float = struct.field(pytree_node=False, default=4.86)
-    slow_steering_sensitivity_per_speed_unit: float = struct.field(pytree_node=False, default=-0.15)  # speed <= 32
-    fast_steering_sensitivity_per_speed_unit: float = struct.field(pytree_node=False, default=-0.056)  # speed > 32
-    sensitivity_change_speed: int = struct.field(pytree_node=False, default=32)
-    minimum_steering_sensitivity: float = struct.field(pytree_node=False, default=1.0)  # from play-testing
-    steering_snow_factor: float = struct.field(pytree_node=False, default=2.0)  # during snow the steering becomes much worse
-    drift_per_second_pixels: float = struct.field(pytree_node=False, default=2.5)  # controls how much the car drifts in a curve
-    
-    # Derived constants (dynamic calculation based on static fields)
-    steering_sensitivity: Optional[float] = struct.field(pytree_node=False, default=None)
-    drift_per_frame: Optional[float] = struct.field(pytree_node=False, default=None)
-
-    # ===============
-    # === Weather ===
-    # ===============
-    # special events in the weather:
-    snow_weather_index: int = struct.field(pytree_node=False, default=3)  # which part of the weather array is snow (reduced steering)
-    night_fog_index: int = struct.field(pytree_node=False, default=13)  # which part of the weather array has the reduced visibility (fog)
-    fog_height: int = struct.field(pytree_node=False, default=103)  # the height of the fog sprite
-    weather_with_night_car_sprite: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([12, 13, 14], dtype=jnp.int32))  # renders only the rear lights
-    
-    # Derived constants (dynamic calculation based on static fields)
-    weather_starts_s: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
-    day_cycle_time: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
-
-    # The rgb color codes for each weather and each sprite scraped from the game
-    weather_color_codes: jnp.ndarray = struct.field(pytree_node=False, default_factory=_get_weather_color_codes)
-
-    
-    # Asset config baked into constants (immutable default)
-    # Derived constant (dynamic calculation based on static fields)
-    ASSET_CONFIG: Optional[tuple] = struct.field(pytree_node=False, default=None)
-
-    # =================
-    # === Opponents ===
-    # =================
-    opponent_speed: int = struct.field(pytree_node=False, default=24)  # measured from RAM state
-    # a factor of 1 translates into overtake time of 1 second when speed is twice as high as the opponent's
+    # Opponents
+    opponent_speed: int = struct.field(pytree_node=False, default=2)
     opponent_relative_speed_factor: float = struct.field(pytree_node=False, default=2.5)
     opponent_spawn_seed: int = struct.field(pytree_node=False, default=42)
     length_of_opponent_array: int = struct.field(pytree_node=False, default=5000)
-    opponent_density: float = struct.field(pytree_node=False, default=0.2)
+    opponent_density: float = struct.field(pytree_node=False, default=0.17)
     opponent_delay_slots: int = struct.field(pytree_node=False, default=10)
-    # How many opponents to overtake to progress into the next level
-    cars_to_pass_per_level: int = struct.field(pytree_node=False, default=200)
-    cars_increase_per_level: int = struct.field(pytree_node=False, default=100)
-    max_level: int = struct.field(pytree_node=False, default=5)
-    # defines how many y pixels the car size will have size 0
     car_zero_y_pixel_range: int = struct.field(pytree_node=False, default=20)
-    
-    # Derived constants (dynamic calculation based on static fields)
-    opponent_slot_ys: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
-    # Opponent lane position
-    # The ratio of where in the track the opponents are rendered. From left, middle to right
     lane_ratios: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0.25, 0.5, 0.75], dtype=jnp.float32))
+    PLAYER_COLOR_INDEX: int = struct.field(pytree_node=False, default=15)
+    opponent_animation_steps: int = struct.field(pytree_node=False, default=8)
+    # Pixel-accurate AABBs from sprites (slots 0-1 both use car_1.npy = 12×8).
+    car_widths: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([12, 12, 8, 6, 4, 4, 2], dtype=jnp.int32))
+    car_heights: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([8, 8, 6, 4, 3, 2, 1], dtype=jnp.int32))
+    car_width_0: int = struct.field(pytree_node=False, default=16)
+    car_height_0: int = struct.field(pytree_node=False, default=11)
+    player_collision_width: int = struct.field(pytree_node=False, default=14)
+    opponent_primary_collision_width: int = struct.field(pytree_node=False, default=12)
+    opponent_secondary_collision_width: int = struct.field(pytree_node=False, default=12)
+    collision_box_height: int = struct.field(pytree_node=False, default=6)
+    secondary_collision_special_y_values: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([133, 134], dtype=jnp.int32),
+    )
+    secondary_collision_overlap_exception_max: int = struct.field(pytree_node=False, default=2)
+    initial_position: int = struct.field(pytree_node=False, default=200)
+    next_day_car_position: int = struct.field(pytree_node=False, default=300)
 
-    # ===========================
-    # === Opponents Collision ===
-    # ===========================
-    car_crash_cooldown_seconds: float = struct.field(pytree_node=False, default=3.0)
-    
-    # Derived constants (dynamic calculation based on static fields)
-    car_crash_cooldown_frames: Optional[int] = struct.field(pytree_node=False, default=None)
-    crash_kickback_speed_per_frame: Optional[float] = struct.field(pytree_node=False, default=None)
+    # Difficulty Scaling (opponent_speed scaled from 24→2, so increments scale by 2/24)
+    start_level: int = struct.field(pytree_node=False, default=1)
+    opponent_speed_increment: float = struct.field(pytree_node=False, default=0.2)
+    opponent_density_increment: float = struct.field(pytree_node=False, default=0.025)
+    max_opponent_density: float = struct.field(pytree_node=False, default=0.35)
+    max_opponent_speed: float = struct.field(pytree_node=False, default=5.0)
 
-    # =================
-    # === Cosmetics ===
-    # =================
-    logo_x_position: int = struct.field(pytree_node=False, default=20)
-    logo_y_position: int = struct.field(pytree_node=False, default=196)
+    # Mountains
+    mountain_left_x_pos: float = struct.field(pytree_node=False, default=40.0)
+    mountain_right_x_pos: float = struct.field(pytree_node=False, default=108.0)
+    mountain_pixel_movement_per_frame_per_speed_unit: float = struct.field(pytree_node=False, default=0.133)
+
+    # === Weather ===
+    day_weather_index: int = struct.field(pytree_node=False, default=1)
+    snow_weather_index: int = struct.field(pytree_node=False, default=3)
+    sunset_weather_index: int = struct.field(pytree_node=False, default=8)
+    night_weather_index: int = struct.field(pytree_node=False, default=12)
+    fog_weather_index: int = struct.field(pytree_node=False, default=13)
+    dawn_weather_index: int = struct.field(pytree_node=False, default=15)
+    steering_snow_factor: float = struct.field(pytree_node=False, default=2.0)
+    weather_with_night_car_sprite: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([12, 13, 14], dtype=jnp.int32))
+    fog_height: int = struct.field(pytree_node=False, default=80)
+    weather_cycle_distance: float = struct.field(pytree_node=False, default=0.0)
+
+    # Dynamic derived constants for weather
+    weather_starts_s: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
+    day_cycle_time: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
+    weather_color_codes: jnp.ndarray = struct.field(pytree_node=False, default_factory=_get_weather_color_codes)
+
+    # UI Positions
     info_box_x_pos: int = struct.field(pytree_node=False, default=48)
     info_box_y_pos: int = struct.field(pytree_node=False, default=161)
     distance_odometer_start_x: int = struct.field(pytree_node=False, default=65)
     score_start_x: int = struct.field(pytree_node=False, default=81)
     level_x: int = struct.field(pytree_node=False, default=57)
-    mountain_left_x_pos: float = struct.field(pytree_node=False, default=40.0)
-    mountain_right_x_pos: float = struct.field(pytree_node=False, default=120.0)
-    mountain_pixel_movement_per_frame_per_speed_unit: float = struct.field(pytree_node=False, default=0.01)
-    # how many steps per animation
-    opponent_animation_steps: int = struct.field(pytree_node=False, default=8)
-    
-    # Derived constants (dynamic calculation based on static fields)
-    distance_odometer_start_y: Optional[int] = struct.field(pytree_node=False, default=None)
     score_start_y: Optional[int] = struct.field(pytree_node=False, default=None)
+    distance_odometer_start_y: Optional[int] = struct.field(pytree_node=False, default=None)
     level_y: Optional[int] = struct.field(pytree_node=False, default=None)
-    
-    def compute_derived(self):
-        """Compute derived constants based on static fields."""
-        # Level 1: Basic window calculations
+
+    # Asset config for simplified renderer
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=lambda: (
+        {'name': 'background', 'type': 'background', 'file': 'backgrounds/background.npy'},
+        {'name': 'background_overlay', 'type': 'single', 'file': 'backgrounds/background_overlay.npy'},
+        {'name': 'mountain_left', 'type': 'single', 'file': 'misc/mountain_left.npy'},
+        {'name': 'mountain_right', 'type': 'single', 'file': 'misc/mountain_right.npy'},
+        {'name': 'score_box', 'type': 'single', 'file': 'backgrounds/score_box.npy'},
+        {'name': 'track_colors', 'type': 'procedural', 'data': jnp.array([[list(c) + [255] for c in [
+            [74, 74, 74], [111, 111, 111], [170, 170, 170], [192, 192, 192]
+        ]]], dtype=jnp.uint8)},
+        {'name': 'digits_black', 'type': 'digits', 'pattern': 'digits/{}_black.npy'},
+        {'name': 'black_digit_array', 'type': 'single', 'file': 'digits/black_digit_array.npy'},
+        {'name': 'brown_digit_array', 'type': 'single', 'file': 'digits/brown_digit_array.npy'},
+    ))
+
+    def compute_derived(self) -> Dict[str, Any]:
         game_window_height = self.screen_height - self.window_offset_bottom
-        game_window_width = self.screen_width - self.window_offset_left
-        game_screen_middle = game_window_width // 2
+        # Calibrated so phase 0 → ~0.035 km/s and phase 10 → ~0.7 km/s (same as old ALE min/max).
+        # Use old-equivalent base speed 6 to avoid division by zero (min_speed is now 0).
+        km_per_speed_unit_per_frame = 0.035 / (6.0 * self.frame_rate)
         
-        # Level 2: Player position
-        player_x_start = float(game_screen_middle)
-        player_y_start = game_window_height - self.car_height_0 - 1
-        
-        # Level 3: Track calculations
         track_height = game_window_height - self.sky_height - 1
-        track_x_start = int(player_x_start)
         curve_offset_base = int(self.track_max_top_x_offset)
-        
-        # Level 4: Precomputed curves (depend on track_height and curve_offset_base)
         precomputed_left_curves = precompute_all_track_curves(curve_offset_base, track_height, self.track_width, left=True)
         precomputed_right_curves = precompute_all_track_curves(curve_offset_base, track_height, self.track_width, left=False)
+        whole_track = _compute_static_track(self.track_seed, self.max_track_length, self.min_track_section_length, self.max_track_section_length, self.straight_km_start, 100)
         
-        # Level 5: Speed calculations
-        km_per_second_per_speed_unit = 0.035 / self.min_speed
-        km_per_speed_unit_per_frame = km_per_second_per_speed_unit / self.frame_rate
-        acceleration_per_frame = 10.5 / self.frame_rate
-        slower_acceleration_per_frame = 3.75 / self.frame_rate
-        breaking_per_frame = self.breaking_per_second / self.frame_rate
-        
-        # Level 6: Steering calculations
-        steering_sensitivity = self.steering_range_in_pixels / 3.0 / self.frame_rate
-        drift_per_frame = self.drift_per_second_pixels / self.frame_rate
-        
-        # Level 7: Weather calculations
+        opponent_slot_ys = jnp.array([
+            game_window_height - self.car_zero_y_pixel_range,
+            game_window_height - self.car_zero_y_pixel_range - 20,
+            game_window_height - self.car_zero_y_pixel_range - 20 - 20,
+            game_window_height - self.car_zero_y_pixel_range - 20 - 20 - 10,
+            game_window_height - self.car_zero_y_pixel_range - 20 - 20 - 10 - 10,
+            game_window_height - self.car_zero_y_pixel_range - 20 - 20 - 10 - 10 - 6,
+            game_window_height - self.car_zero_y_pixel_range - 20 - 20 - 10 - 10 - 6 - 5,
+        ], dtype=jnp.int32)
+
+        base_opponents = _compute_base_opponents(
+            jax.random.PRNGKey(self.opponent_spawn_seed),
+            self.length_of_opponent_array, self.opponent_delay_slots, self.PLAYER_COLOR_INDEX,
+            self.initial_guaranteed_cars
+        )
+
         weather_starts_s = jnp.array([
             34,  # day 1
             34 + 34,  # day 2 (lighter)
@@ -556,1927 +392,44 @@ class EnduroConstants(AutoDerivedConstants):
             34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34 + 34,  # dawn
         ], dtype=jnp.int32)
         day_cycle_time = weather_starts_s[15]
-        
-        # Level 8: Asset config (depends on weather_color_codes and CAR_COLOR_PALETTE)
-        asset_config = _get_default_asset_config(self.weather_color_codes, self.CAR_COLOR_PALETTE)
-        
-        # Level 9: Opponent calculations (depend on game_window_height)
-        opponent_slot_ys = jnp.array([
-            game_window_height - self.car_zero_y_pixel_range,
-            game_window_height - self.car_zero_y_pixel_range - 20,
-            game_window_height - self.car_zero_y_pixel_range - 20 - 20,
-            game_window_height - self.car_zero_y_pixel_range - 20 - 20 - 10,
-            game_window_height - self.car_zero_y_pixel_range - 20 - 20 - 10 - 10,
-            game_window_height - self.car_zero_y_pixel_range - 20 - 20 - 10 - 10 - 6,
-            game_window_height - self.car_zero_y_pixel_range - 20 - 20 - 10 - 10 - 6 - 5,
-        ], dtype=jnp.int32)
-        
-        # Level 10: Collision calculations
-        car_crash_cooldown_frames = int(self.car_crash_cooldown_seconds * self.frame_rate)
-        crash_kickback_speed_per_frame = self.track_width / self.car_crash_cooldown_seconds / self.frame_rate / 3
-        
-        # Level 11: UI calculations (depend on game_window_height)
-        distance_odometer_start_y = game_window_height + 9
-        score_start_y = game_window_height + 25
-        level_y = score_start_y
-        
+
         return {
             'game_window_height': game_window_height,
-            'game_window_width': game_window_width,
-            'game_screen_middle': game_screen_middle,
-            'player_x_start': player_x_start,
-            'player_y_start': player_y_start,
+            'km_per_speed_unit_per_frame': km_per_speed_unit_per_frame,
+            'distance_odometer_start_y': game_window_height + 9,
+            'score_start_y': game_window_height + 25,
+            'level_y': game_window_height + 25,
             'track_height': track_height,
-            'track_x_start': track_x_start,
             'curve_offset_base': curve_offset_base,
             'precomputed_left_curves': precomputed_left_curves,
             'precomputed_right_curves': precomputed_right_curves,
-            'km_per_second_per_speed_unit': km_per_second_per_speed_unit,
-            'km_per_speed_unit_per_frame': km_per_speed_unit_per_frame,
-            'acceleration_per_frame': acceleration_per_frame,
-            'slower_acceleration_per_frame': slower_acceleration_per_frame,
-            'breaking_per_frame': breaking_per_frame,
-            'steering_sensitivity': steering_sensitivity,
-            'drift_per_frame': drift_per_frame,
+            'whole_track': whole_track,
+            'opponent_slot_ys': opponent_slot_ys,
+            'base_opponents': base_opponents,
             'weather_starts_s': weather_starts_s,
             'day_cycle_time': day_cycle_time,
-            'ASSET_CONFIG': asset_config,
-            'opponent_slot_ys': opponent_slot_ys,
-            'car_crash_cooldown_frames': car_crash_cooldown_frames,
-            'crash_kickback_speed_per_frame': crash_kickback_speed_per_frame,
-            'distance_odometer_start_y': distance_odometer_start_y,
-            'score_start_y': score_start_y,
-            'level_y': level_y,
         }
-
-@struct.dataclass
-class EnduroGameState:
-    """Represents the current state of the game"""
-
-    step_count: jnp.int32  # incremented every step
-    day_count: jnp.int32  # incremented every day-night cycle, starts by 0
-
-    # visible
-    player_x_abs_position: chex.Array  # jnp.float32 -> to have sub-step movement per frame
-    player_y_abs_position: chex.Array  # jnp.int32
-    cars_to_overtake: chex.Array  # goal for current level
-    distance: chex.Array
-    level: chex.Array
-    level_passed: chex.Array
-
-    # opponents
-    # opponent_pos_and_color: chex.Array  # shape (N, 2) where [:, 0] is lane_idx (-1 to 2), [:, 1] is color_idx (0-15)
-
-    opponent_pos_and_color: chex.Array  # shape (2, N) where [0] is lane_idx, [1] is color_idx
-
-    visible_opponent_positions: chex.Array # shape (7, 3) [x, y, color_idx]
-    opponent_index: chex.Array
-    is_collision: chex.Array
-
-    # visible but implicit
-    weather_index: chex.Array
-    mountain_left_x: chex.Array
-    mountain_right_x: chex.Array
-    cooldown_drift_direction: chex.Array
-    cars_overtaken: chex.Array
-
-    # track
-    track_top_x: chex.Array  # jnp.int32
-    track_top_x_curve_offset: chex.Array  # The amount that the top_x moves further into the curve direction
-    visible_track_left: chex.Array  # shape: (track_height,), dtype=int32 the absolute x position of the left track
-    visible_track_right: chex.Array  # shape: (track_height,), dtype=int32 the absolute x position of the right track
-    visible_track_spaces: chex.Array  # shape: (track_height,), dtype=int32, the spaces between the left and right track
-
-    # invisible
-    whole_track: chex.Array  # shape (N, 2), where track[i] = [direction, start_km]
-    player_speed: chex.Array
-    cooldown: chex.Array  # cooldown after collision with another car
-    game_over: chex.Array  # game over if you fail to pass enough cars before the day ends
-    total_cars_overtaken: chex.Array  # the all-time counter of overtaken cars - for the reward function
-    total_time_elapsed: chex.Array
-
-
-class VehicleSpec:
-    """
-    Holds all static specifications for a vehicle type (e.g., the player's car).
-    This includes all possible sprites for perspective scaling and their masks.
-    This data is created once at the start and does not change.
-    """
-
-    def __init__(self, sprite_path_car):
-        """
-        Args:
-            sprite_path_car: Path to the .npy file for the largest sprite,
-                                  which may contain multiple animation frames.
-        """
-        # load full path
-        base_dir = render_utils.get_base_sprite_dir()
-        sprite_path = Path(sprite_path_car)
-        if not sprite_path.is_absolute():
-            sprite_path = base_dir / sprite_path
-
-        # Load the sprite with the absolute path
-        largest_sprite_data = np.load(str(sprite_path))
-
-        # --- Create the Union Collision Mask ---
-
-        # 1. Initialize an empty boolean mask with the correct dimensions (H, W).
-        height, width, _ = largest_sprite_data.shape[1:]
-        union_mask = np.zeros((height, width), dtype=bool)
-
-        # 2. Iterate through each animation frame using a standard Python loop.
-        #    This is fine because this is a one-time setup operation, not part of the JIT path.
-        for frame in largest_sprite_data:
-            # Determine which pixels are solid in the current frame (white is transparent).
-            is_solid_in_frame = np.sum(frame[:, :, :3], axis=-1) < (255 * 3)
-
-            # Use a logical OR to add the solid pixels from this frame to our union_mask.
-            # If a pixel is solid in *any* frame, it will become True in the union_mask.
-            union_mask = np.logical_or(union_mask, is_solid_in_frame)
-
-        # 3. The `union_mask` is now our final, most reliable collision mask.
-        #    Convert it to a JAX array.
-        self.collision_mask = jnp.array(union_mask)
-
-        # --- Pre-calculate Collision Coordinates ---
-        # Pre-calculate the relative coordinates from this robust union mask.
-        solid_y, solid_x = jnp.where(
-            self.collision_mask,
-            size=self.collision_mask.size,  # Guarantee static shape
-            fill_value=-1  # Fill with an invalid value
-        )
-        self.collision_mask_relative_xs = solid_x
-        self.collision_mask_relative_ys = solid_y
-        self.num_solid_pixels = jnp.sum(self.collision_mask).astype(jnp.int32)
-        self.height = height
-        self.width = width
-
-@struct.dataclass
-class EnduroObservation:
-    player: ObjectObservation
-    opponents: ObjectObservation
-    track_left: jnp.ndarray
-    track_right: jnp.ndarray
-    curvature: jnp.ndarray
-    cars_to_overtake: jnp.ndarray
-    distance: jnp.ndarray
-    level: jnp.ndarray
-    level_passed: jnp.ndarray
-    cooldown: jnp.ndarray
-    weather_index: jnp.ndarray
-
-@struct.dataclass
-class EnduroInfo:
-    distance: jnp.ndarray
-    level: jnp.ndarray
-
-
-StepResult = Tuple[EnduroObservation, EnduroGameState, jnp.ndarray, bool, EnduroInfo]
-
-
-# https://www.free80sarcade.com/atari2600_Enduro.php
-class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, EnduroConstants]):
-    # Minimal ALE action set for Enduro
-    ACTION_SET: jnp.ndarray = jnp.array(
-        [
-            Action.NOOP,
-            Action.FIRE,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.DOWN,
-            Action.DOWNRIGHT,
-            Action.DOWNLEFT,
-            Action.RIGHTFIRE,
-            Action.LEFTFIRE,
-        ],
-        dtype=jnp.int32,
-    )
     
-    def __init__(self, consts: EnduroConstants = None):
-        self.config = consts or EnduroConstants()
-        super().__init__(self.config)
-        self.state = self.reset()
-        self.car_0_spec = VehicleSpec("enduro/cars/car_0.npy")
-        self.car_1_spec = VehicleSpec("enduro/cars/car_1.npy")
+    game_window_height: Optional[int] = struct.field(pytree_node=False, default=None)
+    km_per_speed_unit_per_frame: Optional[float] = struct.field(pytree_node=False, default=None)
+    track_height: Optional[int] = struct.field(pytree_node=False, default=None)
+    curve_offset_base: Optional[int] = struct.field(pytree_node=False, default=None)
+    precomputed_left_curves: Optional[chex.Array] = struct.field(pytree_node=False, default=None)
+    precomputed_right_curves: Optional[chex.Array] = struct.field(pytree_node=False, default=None)
+    whole_track: Optional[chex.Array] = struct.field(pytree_node=False, default=None)
+    opponent_slot_ys: Optional[jnp.ndarray] = struct.field(pytree_node=False, default=None)
+    base_opponents: Optional[chex.Array] = struct.field(pytree_node=False, default=None)
 
-        self.renderer = EnduroRenderer(consts=self.config)
 
-    def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.ACTION_SET))
-
-    def image_space(self) -> spaces.Box:
-        return spaces.Box(
-            low=0,
-            high=255,
-            shape=(210, 160, 3),
-            dtype=jnp.uint8
-        )
-
-    def observation_space(self) -> spaces.Dict:
-        return spaces.Dict({
-            "player": spaces.get_object_space(n=None, screen_size=(self.config.screen_height, self.config.screen_width)),
-            "opponents": spaces.get_object_space(n=7, screen_size=(self.config.screen_height, self.config.screen_width)),
-            
-            # Track geometry (Dense Arrays)
-            "track_left": spaces.Box(low=-1, high=self.config.screen_width, shape=(self.config.track_height,), dtype=jnp.float32),
-            "track_right": spaces.Box(low=-1, high=self.config.screen_width, shape=(self.config.track_height,), dtype=jnp.float32),
-            "curvature": spaces.Box(low=-1, high=1, shape=(1,), dtype=jnp.float32),
-
-            # Game State
-            "cars_to_overtake": spaces.Box(low=0, high=500, shape=(1,), dtype=jnp.float32),
-            "distance": spaces.Box(low=0.0, high=self.config.max_track_length, shape=(1,), dtype=jnp.float32),
-            "level": spaces.Box(low=1, high=self.config.max_level, shape=(1,), dtype=jnp.float32),
-            "level_passed": spaces.Box(low=0, high=1, shape=(1,), dtype=jnp.float32),
-            
-            # Environment
-            "cooldown": spaces.Box(low=0, high=self.config.car_crash_cooldown_frames, shape=(1,), dtype=jnp.float32),
-            "weather_index": spaces.Box(low=0, high=len(self.config.weather_starts_s) - 1, shape=(1,), dtype=jnp.float32),
-        })
-
-    @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: EnduroGameState) -> jnp.ndarray:
-        return self.renderer.render(state)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def reset(self, key: jrandom.PRNGKey = None) -> Tuple[EnduroObservation, EnduroGameState]:
-        whole_track = self._build_whole_track(seed=self.config.track_seed)
-        # use same position as the player
-        top_x = jnp.round(self.config.player_x_start).astype(jnp.int32)
-        left_xs, right_xs = self._generate_viewable_track_lookup(top_x, 0.0)
-
-        # opponents
-        opponent_spawns = self._generate_opponent_spawns(
-            seed=self.config.opponent_spawn_seed,
-            length_of_opponent_array=self.config.length_of_opponent_array,
-            opponent_density=self.config.opponent_density,
-            opponent_delay_slots=self.config.opponent_delay_slots
-        )
-        visible_opponent_positions = self._get_visible_opponent_positions(jnp.array(0.0), opponent_spawns, left_xs,
-                                                                          right_xs)
-
-        state = EnduroGameState(
-            # counts
-            step_count=jnp.array(0),
-            day_count=jnp.array(0),
-
-            # observation
-            player_x_abs_position=jnp.array(self.config.player_x_start).astype(jnp.float32),
-            player_y_abs_position=jnp.array(self.config.player_y_start),
-            cars_to_overtake=jnp.array(self.config.cars_to_pass_per_level),
-            distance=jnp.array(0.0, dtype=jnp.float32),
-            level=jnp.array(1),
-            level_passed=jnp.array(0, dtype=jnp.int32),
-
-            # opponents
-            opponent_pos_and_color=opponent_spawns,
-            visible_opponent_positions=visible_opponent_positions,
-            opponent_index=jnp.array(0.0),
-            is_collision=jnp.bool_(False),
-
-            # visible but implicit
-            cars_overtaken=jnp.array(0),
-            weather_index=jnp.array(0),
-            mountain_left_x=jnp.array(self.config.mountain_left_x_pos),
-            mountain_right_x=jnp.array(self.config.mountain_right_x_pos),
-            cooldown_drift_direction=jnp.array(0),
-
-            # track
-            track_top_x=jnp.array(self.config.track_x_start),
-            track_top_x_curve_offset=jnp.array(0.0),
-            visible_track_left=left_xs,
-            visible_track_right=right_xs,
-            visible_track_spaces=self._generate_track_spaces(),
-            whole_track=whole_track,
-
-            player_speed=jnp.array(0.0, dtype=jnp.float32),
-            cooldown=jnp.array(0.0, dtype=jnp.float32),
-            game_over=jnp.array(False),
-            total_cars_overtaken=jnp.array(0, dtype=jnp.int32),
-            total_time_elapsed=jnp.array(0.0, dtype=jnp.float32),
-        )
-
-        return self._get_observation(state), state
-
-    @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: EnduroGameState, action: int) -> StepResult:
-        # Translate compact agent action index to ALE console action
-        action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
-
-        """
-        Performs a single frame update of the Enduro environment.
-
-        Applies the action to update the player's position and increments the
-        total frame counter. Computes the new observation, reward, and done state.
-
-        Args:
-            state (EnduroGameState): The current game state.
-            action (int): The discrete action to apply (e.g., LEFT, RIGHT, etc.).
-
-        Returns:
-            Tuple[EnduroObservation, EnduroGameState, float, bool, EnduroInfo]:
-                - The new observation after the action.
-                - The updated game state.
-                - The reward for this step.
-                - A boolean indicating if the episode has ended.
-                - Additional info such as level and distance.
-        """
-        # ====== COOLDOWN MANAGEMENT ======
-        # Always decrement cooldown first
-        new_cooldown = jnp.maximum(0, state.cooldown - 1)
-        is_cooldown_active = state.cooldown > 0
-
-        # ===== TRACK AND WEATHER POSITION =====
-        curvature, new_weather_index = self._step_get_curvature_and_weather(state)
-
-        # ===== CAR HANDLING =====
-        new_speed, new_x_abs, new_y_abs = self._step_car_handling(
-            state=state,
-            action=action,
-            new_weather_index=new_weather_index,
-            curvature=curvature
-        )
-
-        # ===== TRACK HANDLING =====
-        (new_speed, new_x_abs, new_cooldown_drift_direction,
-         new_left_xs, new_right_xs, logical_left_xs, logical_right_xs,
-         new_track_top_x, new_top_x_curve_offset) = self._step_track_handling(
-            state=state,
-            new_speed=new_speed,
-            new_x_abs=new_x_abs,
-            new_y_abs=new_y_abs,
-            curvature=curvature,
-            is_cooldown_active=is_cooldown_active
-        )
-
-        # ===== OPPONENT MOVEMENT AND OVERTAKING =====
-        (new_opponent_index, new_visible_opponent_positions, adjusted_opponents_pos,
-         new_cars_overtaken, new_total_cars_overtaken, new_cars_to_overtake) = self._step_opponents_and_overtaking(
-            state=state,
-            new_speed=new_speed,
-            logical_left_xs=logical_left_xs,
-            logical_right_xs=logical_right_xs
-        )
-        # update the opponent array if the opponents would crash into the player
-        state = state.replace(opponent_pos_and_color=adjusted_opponents_pos)
-
-        # ===== OPPONENT COLLISION =====
-        new_cooldown, new_cooldown_drift_direction, is_collision = self._step_opponent_collision(
-            state=state,
-            new_x_abs=new_x_abs,
-            new_y_abs=new_y_abs,
-            new_visible_opponent_positions=new_visible_opponent_positions,
-            current_cooldown=new_cooldown,
-            current_cooldown_drift_direction=new_cooldown_drift_direction
-        )
-
-        # ====== DISTANCE ======
-        # New distance
-        distance_delta = new_speed.astype(jnp.float32) * jnp.float32(self.config.km_per_speed_unit_per_frame)
-        new_distance = state.distance + distance_delta
-
-        # ====== MOUNTAINS ======
-        # mountains move opposing to the curve and the move faster with higher speed
-        new_mountain_left_x, new_mountain_right_x = self._step_mountain_positions(state, curvature, new_speed)
-
-        # ===== NEW DAY HANDLING =====
-        (final_cars_overtaken, new_level, new_level_passed,
-         new_game_over, new_day_count) = self._step_new_day_handling(
-            state=state,
-            new_cars_overtaken=new_cars_overtaken
-        )
-
-        # Build new state with updated positions
-        new_state: EnduroGameState = state.replace(
-            step_count=state.step_count + 1,
-            day_count=new_day_count,
-
-            player_x_abs_position=new_x_abs,
-            player_y_abs_position=new_y_abs,
-            total_time_elapsed=state.step_count / self.config.frame_rate,
-            distance=new_distance,
-            player_speed=new_speed,
-            level=new_level,
-            level_passed=new_level_passed,
-
-            opponent_index=new_opponent_index,
-            visible_opponent_positions=new_visible_opponent_positions,
-            cars_overtaken=new_cars_overtaken,
-            cars_to_overtake=new_cars_to_overtake,
-            is_collision=is_collision,
-
-            weather_index=new_weather_index,
-            mountain_left_x=new_mountain_left_x,
-            mountain_right_x=new_mountain_right_x,
-            cooldown_drift_direction=new_cooldown_drift_direction,
-
-            track_top_x=new_track_top_x,
-            track_top_x_curve_offset=new_top_x_curve_offset,
-            visible_track_left=new_left_xs.astype(jnp.int32),
-            visible_track_right=new_right_xs.astype(jnp.int32),
-            cooldown=new_cooldown,
-            total_cars_overtaken=new_total_cars_overtaken,
-
-            game_over=new_game_over,
-        )
-
-        # Return updated observation and state
-        obs = self._get_observation(new_state)
-        reward = self._get_reward(state, new_state)
-        done = self._get_done(new_state)
-        info = self._get_info(new_state)
-
-        return obs, new_state, reward, done, info
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _step_get_curvature_and_weather(self, state: EnduroGameState) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        """
-        Calculates current track curvature and weather conditions based on game state.
-
-        This function manages:
-        - Track segment identification based on player's current distance traveled
-        - Extraction of track curvature from the current track segment
-        - Weather condition determination based on time of day cycle
-        - Cyclic weather progression throughout the game day
-
-        Args:
-            state: Current game state containing distance, step count, and track data
-
-        Returns:
-            Tuple containing:
-            - curvature: Current track curvature value affecting car drift and steering
-            - new_weather_index: Index of current weather condition (affects visibility, steering sensitivity, etc.)
-        """
-
-        # ===== Track position =====
-        directions = state.whole_track[:, 0]
-        track_starts = state.whole_track[:, 1]
-        segment_index = jnp.searchsorted(track_starts, state.distance, side='right') - 1
-        curvature = directions[segment_index]
-
-        # ===== Weather position =====
-        # determine the position in the weather array
-        cycled_time = (state.step_count / self.config.frame_rate) % self.config.day_cycle_time
-        new_weather_index = jnp.searchsorted(self.config.weather_starts_s, cycled_time, side='right')
-
-        return curvature, new_weather_index
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _step_car_handling(self, state: EnduroGameState, action: int, new_weather_index: jnp.ndarray,
-                           curvature: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-        """
-        Handles car movement including speed, steering, and position updates.
-
-        Args:
-            state: Current game state
-            action: Player action input
-            new_weather_index: Current weather condition index
-            curvature: Current track curvature value
-
-        Returns:
-            Tuple of (new_speed, new_x_abs, new_y_abs)
-        """
-        is_cooldown_active = state.cooldown > 0
-
-        def regular_handling() -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-            # ====== GAS ======
-            is_gas = jnp.isin(action, jnp.array([
-                Action.FIRE,
-                Action.LEFTFIRE,
-                Action.RIGHTFIRE,
-                Action.DOWNFIRE  # explicitly included, as it implies FIRE
-            ]))
-
-            # ====== BRAKE (only when DOWN) ======
-            is_brake = (action == Action.DOWN)
-
-            # Final speed delta
-            speed_delta = jnp.where(
-                is_gas,
-                # accelerate according to the current speed
-                jnp.where(
-                    state.player_speed < self.config.acceleration_slow_down_threshold,
-                    self.config.acceleration_per_frame,
-                    self.config.slower_acceleration_per_frame
-                ),
-                jnp.where(is_brake, -self.config.breaking_per_frame, 0.0)
-            )
-
-            speed = jnp.clip(state.player_speed + speed_delta, self.config.min_speed, self.config.max_speed)
-
-            # ====== STEERING ======
-            # Determine if action is a left-turn
-            is_left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
-            # Determine if action is a right-turn
-            is_right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
-
-            # calculate the time it should take to steer from left to right (seconds) based on the current speed
-            time_from_left_to_right = jnp.clip(
-                jnp.where(
-                    speed > self.config.sensitivity_change_speed,
-                    self.config.slow_base_sensitivity + self.config.slow_steering_sensitivity_per_speed_unit * speed,
-                    self.config.fast_base_sensitivity + self.config.fast_steering_sensitivity_per_speed_unit * speed,
-                ),
-                self.config.minimum_steering_sensitivity  # never let the sensitivity go below a threshold
-            )
-            # add the snow effects when applicable
-            time_from_left_to_right = time_from_left_to_right * jnp.where(
-                new_weather_index == self.config.snow_weather_index,
-                self.config.steering_snow_factor,
-                1)
-
-            # calculate the final steering sensitivity
-            current_steering_sensitivity = (self.config.steering_range_in_pixels /
-                                            time_from_left_to_right / self.config.frame_rate)
-            # calculate the steering delta based on sensitivity and player input
-            steering_delta = jnp.where(is_left, -1 * current_steering_sensitivity,
-                                       jnp.where(is_right, current_steering_sensitivity, 0.0))
-
-            # ====== DRIFT ======
-            drift_delta = -curvature * self.config.drift_per_frame  # drift opposes curve
-
-            # Combine steering and drift
-            total_delta_x = steering_delta + drift_delta
-            x_abs = state.player_x_abs_position + total_delta_x
-
-            # ====== Car y-Position ======
-            # move one pixel forward for every 5th speed increase
-            y_abs = jnp.subtract(self.config.player_y_start, jnp.floor_divide(speed, self.config.max_speed / 10))
-
-            return speed, x_abs, y_abs.astype(jnp.int32)
-
-        def cooldown_handling() -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-            new_x = state.player_x_abs_position + state.cooldown_drift_direction * self.config.crash_kickback_speed_per_frame
-            return (
-                jnp.array(self.config.min_speed, dtype=jnp.float32),
-                jnp.array(new_x, dtype=jnp.float32),
-                jnp.array(self.config.player_y_start, dtype=jnp.int32)
-            )
-
-        new_speed, new_x_abs, new_y_abs = lax.cond(
-            is_cooldown_active,
-            lambda _: cooldown_handling(),
-            lambda _: regular_handling(),
-            None
-        )
-
-        return new_speed, new_x_abs, new_y_abs
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _step_track_handling(self, state: EnduroGameState, new_speed: jnp.ndarray, new_x_abs: jnp.ndarray,
-                             new_y_abs: jnp.ndarray, curvature: jnp.ndarray, is_cooldown_active: bool) -> Tuple[
-        jnp.ndarray,  # updated_speed
-        jnp.ndarray,  # updated_x_abs
-        jnp.ndarray,  # new_cooldown_drift_direction
-        jnp.ndarray,  # new_left_xs
-        jnp.ndarray,  # new_right_xs
-        jnp.ndarray,  # logical_left_xs
-        jnp.ndarray,  # logical_right_xs
-        jnp.ndarray,  # new_track_top_x
-        jnp.ndarray  # new_top_x_curve_offset
-    ]:
-        """
-        Handles track generation, positioning, and collision detection with the player car.
-
-        This function manages:
-        - Track positioning and curve offset calculations based on car movement
-        - Generation of visible track boundaries (left and right sides)
-        - Addition of track bumpers for visual representation
-        - Collision detection between player car and track boundaries
-        - Speed reduction and kickback mechanics when collisions occur
-        - Cooldown drift direction updates during track collisions
-
-        Args:
-            state: Current game state
-            new_speed: Car's current speed
-            new_x_abs: Car's current absolute X position
-            new_y_abs: Car's current absolute Y position
-            curvature: Current track curvature value
-            is_cooldown_active: Whether collision cooldown is currently active
-
-        Returns:
-            Tuple containing:
-            - updated_speed: Speed after collision penalties
-            - updated_x_abs: X position after kickback effects
-            - new_cooldown_drift_direction: Updated drift direction for cooldown
-            - new_left_xs: Left track boundaries with bumpers
-            - new_right_xs: Right track boundaries with bumpers
-            - logical_left_xs: Left track boundaries without bumpers (for opponents)
-            - logical_right_xs: Right track boundaries without bumpers (for opponents)
-            - new_track_top_x: Updated track top X position
-            - new_top_x_curve_offset: Updated curve offset value
-        """
-
-        # ====== TRACK ======
-        # 1. Draw the top of the track based on the car position.
-        #    The track moves in the opposite position of the car.
-        new_track_top_x = (self.config.track_x_start + self.config.player_x_start - new_x_abs).astype(jnp.int32)
-
-        # 2. Define the target offset based on the curvature.
-        #    This is the value we want to eventually reach when the curve is fully curved.
-        target_offset = curvature * self.config.track_max_top_x_offset  # e.g., -1 * 50 = -50, or 0 * 50 = 0
-
-        # 3. Calculate the difference (the "offset") between where we are and where we want to be in terms of curvature
-        current_offset = target_offset - state.track_top_x_curve_offset
-
-        # 4. Limit the change per step. The change cannot be faster than curve_rate.
-        #    jnp.clip is perfect here. This lets the offset move towards the target without overshooting.
-        # Calculate speed-dependent curve rate multiplier
-        # At min_speed (6): multiplier = 1 (current rate)
-        # At max_speed (120): multiplier = 30 (30x faster)
-        speed_multiplier = 1 + (new_speed - self.config.min_speed) / (
-                self.config.max_speed - self.config.min_speed) * 29
-        speed_adjusted_curve_rate = self.config.curve_rate * speed_multiplier
-        offset_change = jnp.clip(current_offset, -speed_adjusted_curve_rate, speed_adjusted_curve_rate)
-
-        # 5. Apply the calculated change to the current offset.
-        new_top_x_curve_offset = state.track_top_x_curve_offset + offset_change
-
-        # 6. Generate the new track with the top_x of the track and its offset
-        # They do not have the bumpers yet, but we also need the logical track boundaries for opponent spawning later
-        logical_left_xs, logical_right_xs = self._generate_viewable_track(new_track_top_x, new_top_x_curve_offset)
-
-        # 7. Add bumpers to the track
-        new_left_xs = self._add_track_bumpers(logical_left_xs, state, is_left_side=True)
-        new_right_xs = self._add_track_bumpers(logical_right_xs, state, is_left_side=False)
-
-        # ====== TRACK COLLISION ======
-        # 1. Check whether the player car collided with the track
-        collision_side = self._check_car_track_collision(
-            car_x_abs=new_x_abs.astype(jnp.int32),
-            car_y_abs=new_y_abs.astype(jnp.int32),
-            left_track_xs=new_left_xs,
-            right_track_xs=new_right_xs
-        )
-        collided_track = (collision_side != 0)
-
-        # 2. Calculate the speed with collision penalty.
-        updated_speed = jnp.where(
-            collided_track,
-            # If collided, reduce speed.
-            new_speed - self.config.track_collision_speed_reduction_per_speed_unit * new_speed,
-            new_speed  # If not, keep the new speed.
-        )
-        # Ensure speed does not drop below the minimum value
-        updated_speed = jnp.maximum(1.0, updated_speed)  # Use maximum() to enforce a floor.
-
-        # 3. Kickback
-        # The kickback direction is simply the inverse of `collision_side`.
-        track_kickback_direction = -collision_side
-        # add a special treatment for cooldown where kickback is minimal
-        kickback_pixels = jnp.where(is_cooldown_active, 1, self.config.track_collision_kickback_pixels)
-
-        updated_x_abs = jnp.where(
-            collided_track,
-            # Apply the kickback based on the actual collision side.
-            new_x_abs + (kickback_pixels * track_kickback_direction),
-            new_x_abs  # If not collided, do nothing.
-        )
-
-        # 4. Handle cooldowns
-        new_cooldown_drift_direction = jnp.where(
-            collided_track,
-            # Change the cooldown drift direction if the car crashes into the track while in cooldown
-            state.cooldown_drift_direction * -1,
-            state.cooldown_drift_direction
-        )
-
-        return (
-            updated_speed,
-            updated_x_abs,
-            new_cooldown_drift_direction,
-            new_left_xs,
-            new_right_xs,
-            logical_left_xs,
-            logical_right_xs,
-            new_track_top_x,
-            new_top_x_curve_offset
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _step_opponents_and_overtaking(self, state: EnduroGameState, new_speed: jnp.ndarray,
-                                       logical_left_xs: jnp.ndarray, logical_right_xs: jnp.ndarray) -> Tuple[
-        jnp.ndarray,  # new_opponent_index
-        jnp.ndarray,  # new_visible_opponent_positions
-        jnp.ndarray,  # updated_opponent_pos_and_color
-        jnp.ndarray,  # new_cars_overtaken
-        jnp.ndarray,  # new_total_cars_overtaken
-        jnp.ndarray  # new_cars_to_overtake
-    ]:
-        """
-        Handles opponent positioning, movement, and overtaking mechanics.
-
-        This function manages:
-        - Opponent movement relative to player speed progression
-        - Calculation of visible opponent positions on the track
-        - Lane adjustment for opponents during overtaking maneuvers
-        - Detection of overtaking events (player passing opponents or vice versa)
-        - Tracking of cars overtaken for level progression requirements
-
-        Args:
-            state: Current game state
-            new_speed: Player car's current speed
-            logical_left_xs: Left track boundaries without bumpers
-            logical_right_xs: Right track boundaries without bumpers
-
-        Returns:
-            Tuple containing:
-            - new_opponent_index: Updated position in opponent array
-            - new_visible_opponent_positions: Positions of opponents currently visible
-            - updated_opponent_pos_and_color: Updated opponent data with lane adjustments
-            - new_cars_overtaken: Updated count of cars overtaken in current level
-            - new_total_cars_overtaken: Updated total count of all cars overtaken
-            - new_cars_to_overtake: Target number of cars to overtake for current level
-        """
-
-        # ====== Opponent Movement ======
-        # This should be calibrated so that at opponent_speed, we move at "normal" rate
-        base_progression_rate = self.config.opponent_relative_speed_factor / self.config.frame_rate
-        # Relative speed: how much faster/slower we are compared to opponents
-        relative_speed = (new_speed - self.config.opponent_speed) / self.config.opponent_speed * base_progression_rate
-        # calculate new the index where we are at the opponent array
-        new_opponent_index = state.opponent_index + relative_speed
-
-        # calculate the absolute positions of all opponents
-        new_visible_opponent_positions = self._get_visible_opponent_positions(
-            new_opponent_index,
-            state.opponent_pos_and_color,
-            logical_left_xs, logical_right_xs)  # use the track without bumpers, else cars wiggle around bumpers
-
-        # adjust the opponents lane if necessary
-        updated_opponent_pos_and_color = self._adjust_opponent_positions_when_overtaking(state, new_opponent_index)
-
-        # ====== Overtaking Detection ======
-        # Simple overtaking logic
-        old_window_start = jnp.floor(state.opponent_index).astype(jnp.int32)
-        new_window_start = jnp.floor(new_opponent_index).astype(jnp.int32)
-        window_moved = new_window_start - old_window_start
-
-        cars_overtaken_change = 0
-        # If we moved forward, check if we overtook a car (old slot 0 had a car)
-        cars_overtaken_change += jnp.where(
-            (window_moved > 0) & (state.visible_opponent_positions[0, 0] > -1),
-            1, 0
-        )
-        # If we moved backward, check if a car overtook us (new slot 0 has a car)
-        cars_overtaken_change -= jnp.where(
-            (window_moved < 0) & (new_visible_opponent_positions[0, 0] > -1),
-            1, 0
-        )
-
-        # ====== Overtaking Scoring ======
-        # don't allow negative numbers here
-        new_cars_overtaken = jnp.clip(state.cars_overtaken + cars_overtaken_change, 0)
-        new_total_cars_overtaken = (state.total_cars_overtaken + cars_overtaken_change).astype(jnp.int32)
-        new_cars_to_overtake = self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * (
-                state.level - 1)
-
-        return (
-            new_opponent_index,
-            new_visible_opponent_positions,
-            updated_opponent_pos_and_color,
-            new_cars_overtaken,
-            new_total_cars_overtaken,
-            new_cars_to_overtake
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _step_opponent_collision(self, state: EnduroGameState, new_x_abs: jnp.ndarray,
-                                 new_y_abs: jnp.ndarray, new_visible_opponent_positions: jnp.ndarray,
-                                 current_cooldown: jnp.ndarray, current_cooldown_drift_direction: jnp.ndarray) -> Tuple[
-        jnp.ndarray,  # updated_cooldown
-        jnp.ndarray,  # updated_cooldown_drift_direction
-        jnp.ndarray  # is_collision
-    ]:
-        """
-        Handles collision detection and response between player car and opponent vehicles.
-
-        This function manages:
-        - Detection of collisions between player car and visible opponent cars
-        - Activation of collision cooldown period when crashes occur
-        - Determination of kickback drift direction based on collision circumstances
-        - Collision response mechanics that affect player control
-
-        Args:
-            state: Current game state
-            new_x_abs: Player car's current absolute X position
-            new_y_abs: Player car's current absolute Y position
-            new_visible_opponent_positions: Current positions of visible opponent cars
-            current_cooldown: Current cooldown value (may be from track collision)
-            current_cooldown_drift_direction: Current drift direction during cooldown
-
-        Returns:
-            Tuple containing:
-            - updated_cooldown: Cooldown value after potential opponent collision
-            - updated_cooldown_drift_direction: Updated drift direction after collision
-            - is_collision: Boolean indicating if collision with opponent occurred
-        """
-
-        # ===== Opponent Collision Detection =====
-        is_collision = self._check_car_opponent_collision_optimized(
-            new_x_abs.astype(jnp.int32),
-            new_y_abs.astype(jnp.int32),
-            new_visible_opponent_positions)
-
-        # ===== Collision Response =====
-        # Apply cooldown if there was a collision
-        updated_cooldown = jnp.where(
-            is_collision,
-            self.config.car_crash_cooldown_frames,  # Set cooldown if collision
-            current_cooldown  # Keep current cooldown if no collision
-        )
-
-        # Determine drift direction for collision kickback
-        updated_cooldown_drift_direction = jnp.where(
-            is_collision,
-            self._determine_kickback_direction(state),
-            current_cooldown_drift_direction
-        )
-
-        return updated_cooldown, updated_cooldown_drift_direction, is_collision
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _step_mountain_positions(self, state: EnduroGameState, curvature: jnp.ndarray, new_speed: jnp.ndarray) -> Tuple[
-        jnp.ndarray, jnp.ndarray]:
-        """
-        Updates mountain background positions based on track curvature and player speed.
-
-        This function manages:
-        - Mountain parallax movement opposing track curvature for visual depth effect
-        - Speed-dependent mountain movement to create realistic motion blur/parallax
-        - Wrapping mountain positions within screen boundaries for seamless scrolling
-
-        Args:
-            state: Current game state containing current mountain positions
-            curvature: Current track curvature value affecting movement direction
-            new_speed: Player car's current speed affecting movement intensity
-
-        Returns:
-            Tuple containing:
-            - new_mountain_left_x: Updated X position of left mountain background
-            - new_mountain_right_x: Updated X position of right mountain background
-        """
-
-        # ====== MOUNTAINS ======
-        # mountains move opposing to the curve and the move faster with higher speed
-        mountain_movement = -curvature * self.config.mountain_pixel_movement_per_frame_per_speed_unit * new_speed
-
-        # make sure the mountain x is always within the game screen
-        new_mountain_left_x = self.config.window_offset_left + jnp.mod(
-            state.mountain_left_x + mountain_movement - self.config.window_offset_left,
-            self.config.screen_width - self.config.window_offset_left + 1,
-        )
-        new_mountain_right_x = self.config.window_offset_left + jnp.mod(
-            state.mountain_right_x + mountain_movement - self.config.window_offset_left,
-            self.config.screen_width - self.config.window_offset_left + 1,
-        )
-
-        return new_mountain_left_x, new_mountain_right_x
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _step_new_day_handling(self, state: EnduroGameState, new_cars_overtaken: jnp.ndarray) -> Tuple[
-        jnp.ndarray,  # final_cars_overtaken
-        jnp.ndarray,  # new_level
-        jnp.ndarray,  # new_level_passed
-        jnp.ndarray,  # new_game_over
-        jnp.ndarray  # new_day_count
-    ]:
-        """
-        Handles day transitions, level progression, and game over conditions.
-
-        This function manages:
-        - Level completion detection based on cars overtaken vs target
-        - Day cycle progression and detection of new day starts
-        - Level advancement when days transition and level requirements are met
-        - Game over conditions when day ends without completing level requirements
-        - Resetting of daily progress counters for new levels
-
-        Args:
-            state: Current game state
-            new_cars_overtaken: Updated count of cars overtaken in current level
-
-        Returns:
-            Tuple containing:
-            - final_cars_overtaken: Cars overtaken count (reset to 0 on new day)
-            - new_level: Current level (advanced on successful day completion)
-            - final_level_passed: Whether current level requirements are satisfied
-            - new_game_over: Whether game over condition has been triggered
-            - new_day_count: Updated day counter
-        """
-
-        # ===== Level Completion Check =====
-        # Check whether the current level is passed.
-        # Once a level is passed it does not matter whether opponents will overtake the player again.
-        new_level_passed = jnp.logical_or(
-            state.level_passed,
-            new_cars_overtaken >=
-            self.config.cars_to_pass_per_level + self.config.cars_increase_per_level * (state.level - 1)
-        ).astype(jnp.int32)
-
-        # ===== Day Transition Logic =====
-        def reset_day():
-            # do not allow level to go beyond the max level
-            level = jnp.clip(state.level + 1, 1, self.config.max_level)
-            # cars_overtaken, level increase, level passed, game_over
-            # if a new day starts and the level is not passed it is game over
-            return (
-                jnp.array(0, dtype=jnp.int32),
-                level,
-                jnp.array(0, dtype=jnp.int32),
-                jnp.logical_not(new_level_passed).astype(jnp.bool_)
-            )
-
-        def do_nothing():
-            # cars_overtaken, level increase, level passed, game_over
-            return new_cars_overtaken, state.level, new_level_passed, state.game_over
-
-        # ===== Day Count Calculation =====
-        # Calculate current and previous day numbers
-        new_day_count = jnp.floor(state.step_count / self.config.frame_rate / self.config.day_cycle_time).astype(
-            jnp.int32)
-
-        # ===== Apply Day Transition =====
-        final_cars_overtaken, new_level, new_level_passed, new_game_over = lax.cond(
-            new_day_count > state.day_count,  # New day started
-            lambda: reset_day(),
-            lambda: do_nothing(),
-        )
-
-        return final_cars_overtaken, new_level, new_level_passed, new_game_over, new_day_count
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_observation(self, state: EnduroGameState):
-        """
-        Extract game state information that's directly relevant for RL decision-making.
-
-        This observation focuses on information that affects optimal actions (steering, acceleration, braking)
-        while excluding cosmetic elements that don't impact gameplay decisions. The design philosophy mirrors
-        what a human player would consciously use: track position, nearby obstacles, and objectives.
-
-        Key design decisions:
-        - Player position: Essential for collision avoidance and lane positioning
-        - Opponents: Only x,y coordinates (colors are cosmetic and irrelevant for decisions)
-        - Track boundaries: Full arrays preserved as they're critical for steering decisions
-        - Game objectives: Distance, level, cars_to_overtake directly affect strategy
-        - Environmental state: Weather affects steering mechanics, cooldown affects control responsiveness
-        - Consistent encoding: Empty opponent slots use (-1, -1) to avoid mixed signals to neural networks
-
-        Fog simulation:
-        When weather_index indicates fog conditions, the observation mimics reduced visibility by:
-        - Hiding opponents completely obscured by fog (bottom of car above fog line)
-        - Masking track boundaries in the fog zone (top 53 pixels of track)
-        - Ensuring agents experience the same visibility constraints as human players
-
-        This creates a challenging but fair learning environment where agents must handle uncertainty
-        and partial observability, just like the original game experience.
-
-        Returns:
-            EnduroObservation with cleaned, game-relevant state information
-        TODO: update Docstring
-        """
-        track = state.whole_track
-        directions = track[:, 0]
-        track_starts = track[:, 1]
-
-        segment_index = jnp.searchsorted(track_starts, state.distance, side='right') - 1
-        curvature = directions[segment_index]
-
-        # Check if we're in fog conditions
-        is_fog = state.weather_index == self.config.night_fog_index
-        fog_height = self.config.fog_height  # 103 pixels
-
-        # === Handle opponents with fog visibility ===
-        visible_opponents_base = state.visible_opponent_positions[:, :2]  # Remove colors
-
-        # In fog, hide opponents that are completely within the fog zone
-        def apply_fog_to_opponents(opponents):
-            # Only check fog for opponents that actually exist (x != -1)
-            opponent_exists = opponents[:, 0] != -1
-
-            # Check if bottom of car (y + car_height) is still in fog zone
-            car_bottom_ys = opponents[:, 1] + self.config.car_heights
-            completely_in_fog = car_bottom_ys < fog_height
-
-            # Hide opponents that exist AND are completely in fog
-            should_hide = opponent_exists & completely_in_fog
-
-            # Set both x and y to -1 for hidden opponents
-            fogged_opponents = opponents.at[:, 0].set(
-                jnp.where(should_hide, -1, opponents[:, 0])
-            )
-            fogged_opponents = fogged_opponents.at[:, 1].set(
-                jnp.where(should_hide, -1, fogged_opponents[:, 1])
-            )
-            return fogged_opponents
-
-        visible_opponents = jnp.where(
-            is_fog,
-            apply_fog_to_opponents(visible_opponents_base),
-            visible_opponents_base
-        )
-
-        # === Handle track with fog visibility ===
-        # Fog covers sky (50px) + top 53 pixels of track
-        # Track arrays start at sky boundary, so fog affects first 53 elements
-        fog_track_rows = fog_height - self.config.sky_height  # 103 - 50 = 53 rows
-
-        def apply_fog_to_track(track_xs):
-            # Set fogged track positions to -1 or some "invisible" value
-            fog_mask = jnp.arange(len(track_xs)) < fog_track_rows
-            return jnp.where(fog_mask, -1, track_xs)
-
-        track_left_xs = jnp.where(
-            is_fog,
-            apply_fog_to_track(state.visible_track_left),
-            state.visible_track_left
-        )
-
-        track_right_xs = jnp.where(
-            is_fog,
-            apply_fog_to_track(state.visible_track_right),
-            state.visible_track_right
-        )
-
-        # === Construct Objects ===
-        player_direction = jnp.sign(state.player_x_abs_position)
-        # Player Object
-        # Clip to screen dimensions
-        p_x = jnp.clip(state.player_x_abs_position, 0, self.config.screen_width)
-        p_y = jnp.clip(state.player_y_abs_position, 0, self.config.screen_height)
-        # Orientation: 1 -> 90.0 (Right), -1 -> 270.0 (Left), 0 -> 0.0 (Straight)
-        p_orientation = jnp.select(
-            [player_direction == 1, player_direction == -1],
-            [90.0, 270.0],
-            default=0.0
-        )
-        
-        player = ObjectObservation.create(
-            x=p_x.astype(jnp.int32),
-            y=p_y.astype(jnp.int32),
-            width=jnp.array(self.config.car_width_0, dtype=jnp.int32),
-            height=jnp.array(self.config.car_height_0, dtype=jnp.int32),
-            orientation=p_orientation.astype(jnp.float32),
-            active=jnp.array(1, dtype=jnp.int32)
-        )
-
-        # Opponent Objects
-        # visible_opponents has shape (7, 2) [x, y]
-        opp_x = visible_opponents[:, 0]
-        opp_y = visible_opponents[:, 1]
-        opp_active = opp_x != -1
-        
-        opponents = ObjectObservation.create(
-            x=jnp.clip(opp_x, 0, self.config.screen_width).astype(jnp.int32),
-            y=jnp.clip(opp_y, 0, self.config.screen_height).astype(jnp.int32),
-            width=self.config.car_widths.astype(jnp.int32),
-            height=self.config.car_heights.astype(jnp.int32),
-            active=opp_active.astype(jnp.int32)
-        )
-
-        return EnduroObservation(
-            player=player,
-            opponents=opponents,
-            track_left=track_left_xs.astype(jnp.float32),
-            track_right=track_right_xs.astype(jnp.float32),
-            curvature=jnp.array([curvature], dtype=jnp.float32),
-            cars_to_overtake=jnp.array([state.cars_to_overtake], dtype=jnp.float32),
-            distance=jnp.array([state.distance], dtype=jnp.float32),
-            level=jnp.array([state.level], dtype=jnp.float32),
-            level_passed=jnp.array([state.level_passed], dtype=jnp.float32),
-            cooldown=jnp.array([state.cooldown], dtype=jnp.float32),
-            weather_index=jnp.array([state.weather_index], dtype=jnp.float32),
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: EnduroGameState) -> EnduroInfo:
-        return EnduroInfo(distance=state.distance, level=state.level)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(self, previous_state: EnduroGameState, state: EnduroGameState) -> jnp.ndarray:
-        return (state.total_cars_overtaken - previous_state.total_cars_overtaken) \
-            + (state.distance - previous_state.distance
-               - self.config.km_per_speed_unit_per_frame)  # no reward at minimum speed
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_done(self, state: EnduroGameState) -> jnp.array(bool):
-        return state.game_over
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _generate_viewable_track_lookup(
-            self,
-            top_x: jnp.int32,
-            top_x_curve_offset: jnp.float32
-    ) -> tuple[jnp.ndarray, jnp.ndarray]:
-        """
-        Ultra-fast track generation using precomputed curve lookup with integer truncation.
-
-        Args:
-            top_x: Horizontal position where track should be drawn
-            top_x_curve_offset: Curve intensity (will be truncated to integer for lookup)
-
-        Returns:
-            Left and right track boundary coordinates
-        """
-
-        # Convert float offset to integer for lookup (simple truncation)
-        offset_int = jnp.clip(
-            jnp.floor(top_x_curve_offset).astype(jnp.int32),  # Just truncate to integer
-            -self.config.curve_offset_base,
-            self.config.curve_offset_base
-        )
-
-        # Convert to array index (offset + base to handle negative values)
-        # e.g., offset -50 becomes index 0, offset 0 becomes index 50, offset +50 becomes index 100
-        curve_index = offset_int + self.config.curve_offset_base
-
-        # Lookup precomputed curve (ultra-fast array access!)
-        base_left_curve = self.config.precomputed_left_curves[curve_index]
-        base_right_curve = self.config.precomputed_right_curves[curve_index]
-
-        # Apply horizontal offset (simple addition!)
-        final_left_xs = base_left_curve + top_x
-        final_right_xs = base_right_curve + top_x
-
-        return final_left_xs, final_right_xs
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _generate_viewable_track(
-            self,
-            top_x: jnp.int32,
-            top_x_curve_offset: jnp.float32
-    ) -> tuple[jnp.ndarray, jnp.ndarray]:
-        """
-        Generates the viewable track by applying a progressive horizontal shift.
-
-        Args:
-            top_x: The base position of the track at the horizon.
-            top_x_curve_offset: The maximum shift at the horizon, indicating curve direction and magnitude.
-
-        Returns:
-            Two arrays that represent the x coordinates of the left and right track
-        """
-
-        # --- Step 1: Calculate the base straight track with perspective ---
-        i = jnp.arange(self.config.track_height)  # Row index array: 0, 1, 2...
-        perspective_offsets = jnp.where(i < 2, 0, (i - 1) // 2)
-        straight_left_xs = top_x - perspective_offsets
-
-        # --- Step 2: Calculate the progressive curve shift for EACH row ---
-
-        # Create a normalized "depth" factor that goes from 1.0 (at the horizon) to 0.0 (at the bottom).
-        # We use (track_height - i) to invert the range.
-        depth_ratio = (self.config.track_height - i) / self.config.track_height
-
-        # Apply a curve to this ratio (e.g., squaring it) to make the turn feel more natural
-        # and less like a linear ramp. This makes the shift stronger at the top.
-        curved_depth_ratio = jnp.power(depth_ratio, 3.0)  # You can tune the exponent (1.5, 2.0, etc.)
-
-        # Calculate the horizontal shift for each row by scaling the max offset by the depth ratio.
-        # The result is an array where the shift is `top_x_curve_offset` at the top row
-        # and smoothly falls to 0 at the bottom row.
-        curve_shifts = jnp.floor(top_x_curve_offset * curved_depth_ratio)
-
-        # --- Step 3: Combine perspective and curve shifts ---
-        # We simply ADD the curve shift to the base track coordinates. No more `jnp.where`!
-        # Remember to SUBTRACT to match the visual direction from your last fix.
-        final_left_xs = straight_left_xs + curve_shifts
-        final_left_xs = final_left_xs.at[-1].set(final_left_xs[-2])  # straighten the end of the track
-
-        # We add one more pixel to the left track because the right track starts a pixel lower.
-        # final_left_xs = jnp.concatenate([final_left_xs, final_left_xs[-1:]], axis=0)
-
-        # --- Step 4: Generate the right track based on the final left track ---
-        final_right_xs = self._generate_other_track_side_coords(final_left_xs)
-
-        return final_left_xs.astype(jnp.int32), final_right_xs.astype(jnp.int32)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _generate_other_track_side_coords(self, left_xs: jnp.ndarray) -> jnp.ndarray:
-        """
-        Returns (x_coords, y_coords) for the right boundary of the track.
-        Skips rows where space == -1 by collapsing to left_x.
-        """
-
-        track_spaces = self._generate_track_spaces()
-        x = jnp.where(spaces == -1, left_xs, left_xs + track_spaces + 1)  # +1 to include gap
-        x = x.at[-1].set(x[-2])  # Set last value equal to second last because the right side is 1 lower than the left
-        return x  # use same Y as left
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _generate_track_spaces(self) -> jnp.ndarray:
-        """
-        Generates a JAX array of shape (track_height,) containing the visual width of the track.
-        First two rows are -1 (right boundary not drawn),
-        then the width increases by 1 per row until capped at self.game_config.track_width (97).
-        """
-        max_width = self.config.track_width
-
-        def body_fn(i, widths):
-            """
-            Computes the width for row i:
-            - Rows 0 and 1 are set to -1 (skip rendering).
-            - From row 2 onward, width increases by 1 each row.
-            - Width is capped at max_width.
-            """
-            width = lax.select(i < 2, -1, jnp.minimum(i - 2, max_width))
-            return widths.at[i].set(width)
-
-        track_spaces = jnp.zeros(self.config.track_height, dtype=jnp.int32)
-        track_spaces = lax.fori_loop(0, 103, body_fn, track_spaces)
-
-        return track_spaces
-
-    @partial(jax.jit, static_argnums=(0, 3))
-    def _add_track_bumpers(self, track_xs: jnp.ndarray, state: EnduroGameState, is_left_side: bool) -> jnp.ndarray:
-        """
-        Adds bumpers to the track that appear every 400m and move down with perspective.
-        """
-        # Calculate bumper cycle (every 0.4 km = 400m)
-        bumper_cycle = 0.4
-        cycle_position = (state.distance % bumper_cycle) / bumper_cycle  # 0.0 to 1.0
-
-        # Apply perspective - slower at top, faster at bottom
-        perspective_position = jnp.power(cycle_position, self.config.bumper_perspective_speed)
-        bumper_row = jnp.floor(perspective_position * self.config.track_height).astype(jnp.int32)
-        bumper_row = jnp.clip(bumper_row, 0, self.config.track_height - 1)
-
-        # Calculate bumper parameters based on row (perspective scaling)
-        row_ratio = jnp.arange(self.config.track_height) / (self.config.track_height - 1)
-
-        # Bumper height: 10 pixels at top, 25 pixels at bottom
-        bumper_heights = self.config.track_bumper_min_length + (
-                self.config.track_bumper_max_length - self.config.track_bumper_min_length) * row_ratio
-
-        # Bumper width: min to max pixels (linear over whole track)
-        bumper_widths = self.config.track_bumper_min_width + (
-                self.config.track_bumper_max_width - self.config.track_bumper_min_width) * row_ratio
-
-        def apply_bumper_to_row(row_idx: jnp.int32, original_x: jnp.int32) -> jnp.int32:
-            """Apply bumper to a specific row with edge smoothing."""
-
-            # Skip bumpers for the first n pixels
-            skip_bumper = row_idx < self.config.first_n_pixels_without_bumper
-
-            bumper_height = bumper_heights[row_idx].astype(jnp.int32)
-            bumper_width = bumper_widths[row_idx]
-
-            # Check if we're in the main bumper area
-            bumper_start = bumper_row
-            bumper_end = bumper_row + bumper_height
-
-            # Edge smoothing: 5 pixels on each side
-            edge_smooth_pixels = self.config.track_bumper_smoothening_pixels
-
-            # Calculate bumper presence with edge smoothing
-            distance_from_start = row_idx - bumper_start
-            distance_from_end = bumper_end - row_idx
-
-            # Linear smoothing factor for edges
-            start_smooth = jnp.clip(distance_from_start / edge_smooth_pixels, 0.0, 1.0)
-            end_smooth = jnp.clip(distance_from_end / edge_smooth_pixels, 0.0, 1.0)
-            smooth_factor = jnp.minimum(start_smooth, end_smooth)
-
-            # Only apply smoothing if we're within the bumper area
-            in_bumper_area = (row_idx >= bumper_start) & (row_idx <= bumper_end)
-            final_smooth_factor = jnp.where(in_bumper_area, smooth_factor, 0.0)
-
-            # Skip bumper if in the no-bumper zone
-            final_smooth_factor = jnp.where(skip_bumper, 0.0, final_smooth_factor)
-
-            # Apply bumper width with smoothing
-            effective_width = bumper_width * final_smooth_factor
-
-            # Apply inward movement
-            left_side_x = original_x + effective_width
-            right_side_x = original_x - effective_width
-
-            modified_x = jnp.where(is_left_side, left_side_x, right_side_x)
-
-            return jnp.where(final_smooth_factor > 0.0, modified_x, original_x)
-
-        # Apply bumper to each row
-        row_indices = jnp.arange(self.config.track_height)
-        modified_track = jax.vmap(apply_bumper_to_row)(row_indices, track_xs)
-
-        return modified_track
-
-    @partial(jax.jit, static_argnums=(0, 2, 3, 4))
-    def _generate_opponent_spawns(
-            self,
-            seed: int,
-            length_of_opponent_array: int,
-            opponent_density: float,
-            opponent_delay_slots: int
-    ) -> jnp.ndarray:
-        """
-        Generate a precomputed spawn sequence with an *exact* occupancy equal to
-        round(opponent_density * number_of_enemies) while forbidding any contiguous
-        triple of non-gaps that covers all three lanes {0,1,2} in any order.
-
-        Args:
-            seed: Random seed for deterministic generation
-            length_of_opponent_array: Total length of the main opponent processing array (including empty slots)
-            opponent_density: Fraction (0.0-1.0) of slots that will contain actual opponents (lane 0,1,2 vs -1)
-            opponent_delay_slots: Number of guaranteed empty slots (-1) added at the beginning of the final array
-
-        Returns:
-            2D array of shape (2, total_length) where:
-
-            - Row 0: lane positions (-1 = empty, 0 = left, 1 = middle, 2 = right)
-
-            - Row 1: color_index (0-15, or -1 for no opponent)
-
-        Encoding:
-
-            -1 = empty slot (gap), 0 = left, 1 = middle, 2 = right
-
-        """
-        key = jax.random.PRNGKey(seed)
-        key, key_colors = jax.random.split(key)  # Split key for color generation
-
-        # Calculate exact number of occupied slots
-        num_occupied = int(round(opponent_density * length_of_opponent_array))
-
-        # Generate random positions for occupied slots
-        key, key_positions = jax.random.split(key)
-        all_indices = jnp.arange(length_of_opponent_array)
-        shuffled_indices = jax.random.permutation(key_positions, all_indices)
-        occupied_positions = shuffled_indices[:num_occupied]
-
-        # Create occupancy mask
-        occupancy_mask = jnp.zeros(length_of_opponent_array, dtype=jnp.bool_)
-        occupancy_mask = occupancy_mask.at[occupied_positions].set(True)
-
-        # Generate lane assignments for occupied slots
-        key, key_lanes = jax.random.split(key)
-        lane_choices = jax.random.randint(key_lanes, (length_of_opponent_array,), 0, 3, dtype=jnp.int8)
-
-        # Generate colors for all positions (we'll mask out non-opponents later)
-        def generate_opponent_color_index(color_key):
-            """Generate a random color index from 0 to 15."""
-            # We skip the player's color index to avoid using the same color
-            idx = jax.random.randint(color_key, (), 0, 15) # Generates 0-14
-
-            return jnp.where(idx >= self.config.PLAYER_COLOR_INDEX, idx + 1, idx).astype(jnp.int32)
-
-        # Generate colors for each position
-        color_keys = jax.random.split(key_colors, length_of_opponent_array)
-        colors = jax.vmap(generate_opponent_color_index)(color_keys)
-
-        def process_slot(carry, inputs):
-            """Process each slot, enforcing the no-triple-lane constraint"""
-            key_step, last_two_lanes, non_gap_count = carry
-            is_occupied, candidate_lane, color = inputs
-
-            key_step, key_fix = jax.random.split(key_step)
-
-            # Check if placing candidate would create a {0,1,2} triple
-            has_valid_triple = (
-                    (non_gap_count >= 2) &
-                    (last_two_lanes[0] != last_two_lanes[1]) &
-                    (candidate_lane != last_two_lanes[0]) &
-                    (candidate_lane != last_two_lanes[1])
-            )
-
-            # If violation, randomly pick one of the last two lanes
-            fix_choice = jax.random.randint(key_fix, (), 0, 2)
-            fixed_lane = jnp.where(fix_choice == 0, last_two_lanes[0], last_two_lanes[1])
-            final_lane = jnp.where(has_valid_triple, fixed_lane, candidate_lane)
-
-            # Output: -1 for gap, final_lane for occupied
-            output_lane = jnp.where(is_occupied, final_lane, jnp.int8(-1))
-            output_color = jnp.where(is_occupied, color, jnp.int32(-1)) # Use -1 for no opponent
-
-            # Update carry for next iteration
-            new_non_gap_count = jnp.where(is_occupied, non_gap_count + 1, jnp.int32(0))
-            new_last_two = jnp.where(
-                is_occupied,
-                jnp.array([last_two_lanes[1], final_lane], dtype=jnp.int8),
-                jnp.array([-1, -1], dtype=jnp.int8)
-            )
-
-            new_carry = (key_step, new_last_two, new_non_gap_count)
-            return new_carry, (output_lane, output_color)
-
-        # Initial state: no lane history, zero non-gap count
-        initial_carry = (
-            key,
-            jnp.array([-1, -1], dtype=jnp.int8),
-            jnp.int32(0)
-        )
-
-        # Process all slots
-        inputs = (occupancy_mask, lane_choices, colors)
-        _, (lane_sequence, color_sequence) = jax.lax.scan(process_slot, initial_carry, inputs)
-
-        # Add delay slots at the beginning
-        delay_lanes = jnp.full((opponent_delay_slots,), -1, dtype=jnp.int8)
-        delay_colors = jnp.full((opponent_delay_slots,), -1, dtype=jnp.int32)
-
-        final_lanes = jnp.concatenate([delay_lanes, lane_sequence])
-        final_colors = jnp.concatenate([delay_colors, color_sequence])
-
-        # Stack into 2D array: [lanes, colors]
-        result = jnp.stack([final_lanes.astype(jnp.int32), final_colors], axis=0)
-
-        return result
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_visible_opponent_positions(self, opponent_index: jnp.ndarray,
-                                        opponent_pos_and_color: jnp.ndarray,
-                                        visible_track_left: jnp.ndarray,
-                                        visible_track_right: jnp.ndarray) -> jnp.ndarray:
-        """
-        Calculate the x,y positions and colors of all 7 opponent slots based on the current opponent_index.
-
-        The opponent_index acts as a sliding window into the opponent spawn array.
-        The integer part determines which 7 consecutive slots to use.
-        The decimal part determines vertical positioning within each slot's pixel range.
-
-        Args:
-            opponent_index: Current position in opponent array (float with decimal movement)
-            opponent_pos_and_color: Array of opponent spawn data with position [0] and color [1] of the car.
-            visible_track_left: Left track boundary x-coordinates for each track row
-            visible_track_right: Right track boundary x-coordinates for each track row
-
-        Returns:
-            jnp.ndarray of shape (7, 3) where each row is [x_position, y_position, color]
-            For empty slots: x_position = -1, y_position = -1, color = 0
-        """
-        # Base y positions for each slot (top of each slot)
-        base_y_positions = self.config.opponent_slot_ys
-
-        # Calculate slot heights from consecutive y positions
-        slot_heights = jnp.diff(base_y_positions, prepend=self.config.game_window_height)
-        slot_heights = jnp.abs(slot_heights)  # Ensure positive values
-
-        # Extract integer and decimal parts of opponent_index
-        index_integer = jnp.floor(opponent_index).astype(jnp.int32)
-        index_decimal = opponent_index - index_integer
-
-        # Get the 7 consecutive opponent slots starting from index_integer
-        # Use modulo to handle array bounds safely
-        opponent_array_size = opponent_pos_and_color[0].shape[0]
-        slot_indices = (index_integer + jnp.arange(7)) % opponent_array_size
-        current_slots = opponent_pos_and_color[0][slot_indices]  # Shape: (7,) with lane values
-        current_colors = opponent_pos_and_color[1][slot_indices]  # Shape: (7,) with color values
-
-        # Calculate y-positions based on decimal part of opponent_index
-        # The decimal part determines how far through each slot the opponents have moved
-        y_offsets = jnp.floor(index_decimal * slot_heights).astype(jnp.int32)
-        y_positions = base_y_positions + y_offsets
-
-        # Convert y positions to track row indices (relative to sky height)
-        track_row_indices = y_positions - self.config.sky_height
-        track_row_indices = jnp.clip(track_row_indices, 0, self.config.track_height - 1)
-
-        # Get track boundaries for each opponent slot's y position
-        left_boundaries = visible_track_left[track_row_indices]
-        right_boundaries = visible_track_right[track_row_indices]
-        track_widths = right_boundaries - left_boundaries
-
-        # Calculate x-positions based on lane assignments using track-relative positions
-        # Get car widths for each opponent slot (0=closest/largest, 6=farthest/smallest)
-        car_widths = self.config.car_widths  # Shape: (7,)
-
-        def calculate_x_for_lane(slot_idx, lane_code, left_bound, track_width):
-            # For empty slots (-1), return -1 as "not visible" marker
-            valid_lane = jnp.clip(lane_code, 0, 2)  # Clamp to valid range
-            ratio = self.config.lane_ratios[valid_lane]
-
-            # Calculate center position of the car
-            center_x = left_bound + (track_width * ratio)
-
-            # Adjust to leftmost pixel by subtracting half the car width
-            car_width = car_widths[slot_idx]
-            leftmost_x = center_x - (car_width // 2)
-
-            return jnp.where(lane_code == -1, -1.0, leftmost_x)
-
-        # Vectorized calculation for all opponent slots
-        slot_indices = jnp.arange(7)
-        x_positions = jax.vmap(calculate_x_for_lane)(
-            slot_indices, current_slots, left_boundaries, track_widths
-        ).astype(jnp.int32)
-
-        # Set y_positions to -1 when there's no opponent (x_positions == -1)
-        no_opponent_mask = x_positions == -1
-        y_positions_final = jnp.where(no_opponent_mask, -1, y_positions)
-
-        # Combine into final result: [x, y, color] for each slot
-        result = jnp.stack([x_positions, y_positions_final, current_colors], axis=1)
-
-        return result
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _adjust_opponent_positions_when_overtaking(self, state, new_opponent_index: jnp.ndarray):
-        """
-        Prevents unavoidable collisions when opponents overtake the player by automatically moving
-        opponents to safe lanes. When opponents are faster than the player, new cars spawn in slot 0
-        (closest position) as the player moves backwards through the opponent array. Without this
-        adjustment, opponents could spawn directly on the player's position.
-
-        Args:
-            state: Current game state containing player position, opponent data, and track boundaries.
-            new_opponent_index: The opponent array index after this step, used to detect if new
-                opponents are becoming visible.
-
-        Returns:
-            Modified opponent_pos_and_color array with collision-avoiding lane changes, or the
-            original array if no adjustments were needed.
-        """
-        # Check if opponents are overtaking (moving backwards through array)
-        new_integer_index = jnp.floor(new_opponent_index).astype(jnp.int32)
-        previous_integer_index = jnp.floor(state.opponent_index).astype(jnp.int32)
-        slots_retreated = jnp.maximum(0, previous_integer_index - new_integer_index)
-
-        def adjust_opponents():
-            # Calculate which lane(s) the player occupies
-            # Get track boundaries at player's y position
-            left_boundary = state.visible_track_left[self.config.player_y_start]
-            right_boundary = state.visible_track_right[self.config.player_y_start]
-            track_width = right_boundary - left_boundary
-
-            # Calculate player car's position relative to track (left and right edges)
-            player_left_ratio = (state.player_x_abs_position - left_boundary) / track_width
-            player_right_ratio = (state.player_x_abs_position + self.config.car_width_0 - left_boundary) / track_width
-
-            # Check which lanes the player car overlaps (lanes are roughly at 0-1/3, 1/3-2/3, 2/3-1)
-            player_in_lane_0 = (player_left_ratio < 1 / 3) & (player_right_ratio > 0)
-            player_in_lane_1 = (player_left_ratio < 2 / 3) & (player_right_ratio > 1 / 3)
-            player_in_lane_2 = (player_left_ratio < 1.0) & (player_right_ratio > 2 / 3)
-
-            # Adjust opponent in slot 0 if it would collide
-            opponent_array_size = state.opponent_pos_and_color.shape[1]
-            slot_0_index = new_integer_index % opponent_array_size
-            slot_0_lane = state.opponent_pos_and_color[0, slot_0_index]
-
-            # Check for collision
-            would_collide = ((slot_0_lane == 0) & player_in_lane_0) | \
-                            ((slot_0_lane == 1) & player_in_lane_1) | \
-                            ((slot_0_lane == 2) & player_in_lane_2)
-
-            # Find a safe lane (prefer one the player doesn't occupy)
-            safe_lane = jnp.where(~player_in_lane_0, 0,
-                                  jnp.where(~player_in_lane_2, 2, 1))
-
-            # Update lane if collision and opponent exists
-            new_lane = jnp.where(would_collide & (slot_0_lane != -1), safe_lane, slot_0_lane)
-
-            # Update the opponent array
-            modified_positions = state.opponent_pos_and_color[0].at[slot_0_index].set(new_lane)
-            return jnp.array([modified_positions, state.opponent_pos_and_color[1]])
-
-        # Only adjust when opponents are actually overtaking
-        return jnp.where(slots_retreated > 0,
-                         adjust_opponents(),
-                         state.opponent_pos_and_color)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _build_whole_track(self, seed: int) -> jnp.ndarray:
-        """
-        Generate a precomputed Enduro track up to (and beyond) `self.config.max_track_length`.
-
-        The track begins with a fixed 100 meters (0.1 km) of straight driving, followed by
-        randomly generated segments.
-
-        Each track segment is defined by:
-            - direction: -1 (left), 0 (straight), or 1 (right)
-            - start_distance: cumulative distance at which the segment begins [in km]
-
-        To avoid JAX tracing issues (e.g., with boolean indexing), we generate slightly more
-        segments than strictly necessary and do not mask or slice the output dynamically.
-
-        Returns:
-            track: jnp.ndarray of shape (N, 2), where each row is [direction, start_distance]
-        """
-        key = jax.random.PRNGKey(seed)
-
-        # Add buffer so we never run short
-        max_segments = int(self.config.max_track_length) + 100
-
-        key, subkey = jax.random.split(key)
-        directions = jax.random.choice(subkey, jnp.array([-1, 0, 1]), shape=(max_segments,), replace=True)
-
-        key, subkey = jax.random.split(key)
-        segment_lengths = jax.random.uniform(subkey,
-                                             shape=(max_segments,),
-                                             minval=self.config.min_track_section_length,
-                                             maxval=self.config.max_track_section_length)
-
-        track_starts = jnp.cumsum(jnp.concatenate([jnp.array([self.config.straight_km_start]), segment_lengths[:-1]]))
-
-        # Combine fixed start + rest (no masking)
-        first_segment = jnp.array([[0.0, 0.0]])  # straight start
-        rest_segments = jnp.stack([directions, track_starts], axis=1)
-
-        track = jnp.concatenate([first_segment, rest_segments], axis=0)
-
-        return track
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _check_car_track_collision_ultra_optimized(
-            self,
-            car_x_abs: jnp.int32,
-            car_y_abs: jnp.int32,
-            left_track_xs: jnp.ndarray,
-            right_track_xs: jnp.ndarray
-    ) -> jnp.int32:
-        """
-        Ultra-optimized version with minimal computations and early exits.
-        """
-        # Quick edge distance calculations
-        left_distance = self.config.min_left_x - car_x_abs
-        right_distance = car_x_abs - self.config.max_right_x
-
-        near_left = left_distance > 0
-        near_right = right_distance > 0
-
-        # Early exit if not near any edge
-        def check_left_side():
-            # Only check left corners
-            corner_x, corner_y = car_x_abs, car_y_abs + 3  # Primary left corner
-            track_row = corner_y - self.config.sky_height
-
-            on_track = (track_row >= 0) & (track_row < self.config.track_height)
-
-            def check_left_boundary():
-                safe_row = jnp.clip(track_row, 0, self.config.track_height - 1)
-                return corner_x <= left_track_xs[safe_row]
-
-            collision = jnp.where(on_track, check_left_boundary(), False)
-            return jnp.where(collision, -1, 0)
-
-        def check_right_side():
-            # Only check right corners
-            corner_x, corner_y = car_x_abs + 15, car_y_abs + 3  # Primary right corner
-            track_row = corner_y - self.config.sky_height
-
-            on_track = (track_row >= 0) & (track_row < self.config.track_height)
-
-            def check_right_boundary():
-                safe_row = jnp.clip(track_row, 0, self.config.track_height - 1)
-                return corner_x >= right_track_xs[safe_row]
-
-            collision = jnp.where(on_track, check_right_boundary(), False)
-            return jnp.where(collision, 1, 0)
-
-        # Only execute the check for the relevant side
-        return jnp.where(
-            near_left,
-            check_left_side(),
-            jnp.where(near_right, check_right_side(), 0)
-        )
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _check_car_track_collision(
-            self,
-            car_x_abs: jnp.int32,
-            car_y_abs: jnp.int32,
-            left_track_xs: jnp.ndarray,
-            right_track_xs: jnp.ndarray
-    ) -> jnp.int32:  # Note: Changed from jnp.bool_ to jnp.int32
-        """
-        Checks the track collision. First the function checks whether the player car is close to the edge before
-        checking the collision to improve performance.
-
-        Returns:
-            An integer: 0 for no collision, -1 for a left-side collision, 1 for a right-side collision.
-        """
-        # Performance optimization: only check collision if car is near track edges
-        near_left_edge = car_x_abs < self.config.min_left_x
-        near_right_edge = car_x_abs > self.config.max_right_x
-
-        # If car is not near either edge, no collision possible
-        collision_side = jnp.where(
-            near_left_edge | near_right_edge,
-            self._pixel_perfect_car_track_collision(car_x_abs, car_y_abs, left_track_xs, right_track_xs),
-            0  # No collision
-        )
-
-        return collision_side
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _pixel_perfect_car_track_collision(
-            self,
-            car_x_abs: jnp.int32,
-            car_y_abs: jnp.int32,
-            left_track_xs: jnp.ndarray,
-            right_track_xs: jnp.ndarray
-    ) -> jnp.bool_:
-        """
-        Checks for pixel-perfect collision between the player car and the track boundaries.
-
-        Args:
-            car_x_abs: The absolute x-coordinate of the car sprite's top-left corner.
-            car_y_abs: The absolute y-coordinate of the car sprite's top-left corner.
-            left_track_xs: Array of x-coordinates for the left track boundary.
-            right_track_xs: Array of x-coordinates for the right track boundary.
-
-        Returns:
-            An integer: 0 for no collision, -1 for a left-side collision,
-            1 for a right-side collision.
-        """
-        spec = self.car_0_spec  # Get the pre-calculated car spec
-
-        # --- Calculate the absolute screen coordinates of all solid car pixels ---
-        absolute_car_xs = car_x_abs + spec.collision_mask_relative_xs
-        absolute_car_ys = car_y_abs + spec.collision_mask_relative_ys
-
-        def check_one_pixel(collision_side_so_far, i):
-            """
-            This is the core logic that lax.scan will run for each pixel.
-            It checks the i-th solid pixel of the car for a collision.
-            Args:
-                collision_side_so_far: is an integer (0, 1, or -1) which indicates the side of a collision
-                i: The index of the pixel
-            """
-            # A check to ensure we only process valid pixels, not the padded values.
-            is_valid_pixel = i < spec.num_solid_pixels
-
-            # Get the absolute coordinates of this specific car pixel
-            pixel_x = absolute_car_xs[i]
-            pixel_y = absolute_car_ys[i]
-
-            # Convert the pixel's absolute Y position to a track row index because the track is saved as an x value.
-            # This is how we look up the track boundaries for that specific row.
-            track_row_index = pixel_y - self.config.sky_height
-
-            # --- Perform collision check for this single pixel ---
-
-            # 1. Is the pixel vertically within the drawable track area?
-            is_y_on_track = (track_row_index >= 0) & (track_row_index < self.config.track_height)
-
-            # 2. To prevent out-of-bounds indexing, we clamp the index.
-            #    The result is only used if is_y_on_track is True anyway.
-            clamped_row = jnp.clip(track_row_index, 0, self.config.track_height - 1)
-            left_boundary_at_row = left_track_xs[clamped_row]
-            right_boundary_at_row = right_track_xs[clamped_row]
-
-            # 3. Is the pixel's x-coordinate outside the track boundaries for its row?
-            x_collides_left = (pixel_x <= left_boundary_at_row)
-            x_collides_right = (pixel_x >= right_boundary_at_row)
-
-            # 4. Determine the collision side for *this pixel*
-            # If it collides left, side is -1. If right, side is 1, otherwise it is 0.
-            this_pixel_side = jnp.where(x_collides_left, -1, 0) + jnp.where(x_collides_right, 1, 0)
-            # A valid collision only happens if it's on the track vertically.
-            this_pixel_side = jnp.where(is_valid_pixel & is_y_on_track, this_pixel_side, 0)
-
-            # 5. Update the overall collision side.
-            # We only update if we haven't found a collision yet. This gives priority
-            # to the first pixel that collides.
-            return jnp.where(collision_side_so_far != 0, collision_side_so_far, this_pixel_side), None
-
-        # Use lax.scan to iterate over every potential pixel in our padded array.
-        # The initial value for `collision_so_far` is False.
-        final_collision_side, _ = jax.lax.scan(
-            check_one_pixel,
-            0,  # Initial carry (0 equals no collision, else it shows the kickback direction)
-            jnp.arange(spec.collision_mask.size)  # Iterate from 0 to max possible pixels
-        )
-
-        return final_collision_side
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _check_car_opponent_collision_optimized(
-            self,
-            player_car_x: jnp.int32,
-            player_car_y: jnp.int32,
-            visible_opponents: jnp.ndarray
-    ) -> jnp.bool_:
-        """
-        Optimized collision detection using game-specific rules instead of pixel-perfect collision.
-
-        This approach leverages the specific mechanics of Enduro where:
-        1. car_0 (slot 0) is always at the same Y depth as the player, so only X overlap matters
-        2. car_1 (slot 1) can be at different Y positions with specific collision rules
-        3. Other cars (slots 2-6) are too far away to require collision checking
-
-        Performance improvement: ~50-100x faster than pixel-perfect collision
-
-        Args:
-            player_car_x: Player car's top-left X coordinate
-            player_car_y: Player car's top-left Y coordinate
-            visible_opponents: Array of shape (7, 3) with [x_pos, y_pos, color] for each opponent
-
-        Returns:
-            Boolean scalar indicating if any collision occurred
-        """
-
-        # Ensure we extract scalars, not arrays
-        car_0_x = visible_opponents[0, 0]
-        car_0_y = visible_opponents[0, 1]
-        car_1_x = visible_opponents[1, 0]
-        car_1_y = visible_opponents[1, 1]
-
-        # Check if cars exist (scalar comparisons)
-        car_0_exists = car_0_x != -1
-        car_1_exists = car_1_x != -1
-
-        # Get car dimensions - use hardcoded values to avoid potential array issues
-        player_car_width = 16  # Standard car width
-        car_0_width = 16  # car_0 width
-        car_1_width = 14  # car_1 width (slightly smaller)
-        car_height = 8  # Standard car height
-
-        # --- CAR_0 COLLISION CHECK ---
-        # Only check X overlap since car_0 is at same Y depth as player
-        def check_car_0():
-            player_left = player_car_x
-            player_right = player_car_x + player_car_width
-            car_0_left = car_0_x
-            car_0_right = car_0_x + car_0_width
-
-            # X overlap test: left1 < right2 AND left2 < right1
-            return (player_left < car_0_right) & (car_0_left < player_right)
-
-        # --- CAR_1 COLLISION CHECK ---
-        def check_car_1():
-            # Distance-based early elimination
-            x_distance = jnp.abs(player_car_x - car_1_x)
-            y_distance = jnp.abs(player_car_y - car_1_y)
-
-            # Skip if too far apart
-            too_far = (x_distance >= car_1_width) | (y_distance >= car_height)
-
-            def detailed_check():
-                # X overlap
-                player_left = player_car_x
-                player_right = player_car_x + player_car_width
-                car_1_left = car_1_x
-                car_1_right = car_1_x + car_1_width
-                x_overlap = (player_left < car_1_right) & (car_1_left < player_right)
-
-                # Y overlap
-                player_top = player_car_y
-                player_bottom = player_car_y + car_height
-                car_1_top = car_1_y
-                car_1_bottom = car_1_y + car_height
-                y_overlap = (player_top < car_1_bottom) & (car_1_top < player_bottom)
-
-                basic_collision = x_overlap & y_overlap
-
-                # Special case for Y positions 133 or 134
-                car_1_y_int = car_1_y.astype(jnp.int32)
-                is_special_y = (car_1_y_int == 133) | (car_1_y_int == 134)
-
-                # Calculate X overlap pixels
-                overlap_left = jnp.maximum(player_left, car_1_left)
-                overlap_right = jnp.minimum(player_right, car_1_right)
-                overlap_pixels = jnp.maximum(0, overlap_right - overlap_left)
-
-                # Exception: no collision if special Y position and small overlap
-                exception = is_special_y & (overlap_pixels <= 2)
-
-                return basic_collision & ~exception
-
-            return jnp.where(too_far, False, detailed_check())
-
-        # Combine results - ensure we return a scalar boolean
-        collision_0 = jnp.where(car_0_exists, check_car_0(), False)
-        collision_1 = jnp.where(car_1_exists, check_car_1(), False)
-
-        # Force scalar result using item() or explicit scalar conversion
-        result = collision_0 | collision_1
-        return jnp.bool_(result)  # Ensure scalar boolean type
-
-    def _determine_kickback_direction(self, state: EnduroGameState):
-        """
-        Determine the initial kickback direction of a car collision.
-        If the car is more left of the track it is to the right and vice versa.
-        Args:
-            state: the enduro GameState
-
-        Returns:
-            a direction either left (-1) or right (1)
-        """
-        # calculate based on the track position of the player
-        left_boundary = state.visible_track_left[self.config.player_y_start]
-        right_boundary = state.visible_track_right[self.config.player_y_start]
-        track_width = right_boundary - left_boundary
-
-        # Calculate player car's position relative to track (left and right edges)
-        player_left_ratio = (state.player_x_abs_position - left_boundary) / track_width
-        player_right_ratio = (state.player_x_abs_position + self.config.car_width_0 - left_boundary) / track_width
-
-        # Calculate center position of player car
-        player_center_ratio = (player_left_ratio + player_right_ratio) / 2.0
-
-        return lax.cond(
-            player_center_ratio < 0.5,  # Car is on left half of track
-            lambda: 1,  # Kick to the right
-            lambda: -1  # Kick to the left
-        )
 
 class EnduroRenderer(JAXGameRenderer):
     """
-    Renders the jax_enduro game using the new JAX-native rendering utils
+    Simplified renderer for Enduro
     """
     def __init__(self, consts: EnduroConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or EnduroConstants()
         super().__init__(self.consts)
         
-        # Use injected config if provided, else default
         if config is None:
             self.config = render_utils.RendererConfig(
                 game_dimensions=(self.consts.screen_height, self.consts.screen_width),
@@ -2485,376 +438,418 @@ class EnduroRenderer(JAXGameRenderer):
             )
         else:
             self.config = config
-        self.jr = render_utils.JaxRenderingUtils(self.config)
-        # Store scaling factors as static values for use in JIT functions
-        self._height_scaling = float(self.config.height_scaling)
-        self._width_scaling = float(self.config.width_scaling)
-        # Asset base path
-        module_dir = os.path.dirname(os.path.abspath(__file__))
-        self._sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "enduro")
-        # 1. Load all declared assets (weather, UI, background, etc.)
-        final_asset_config = list(self.consts.ASSET_CONFIG)
-        
-        # Add car sprites to asset config so their colors are included in the palette
-        # Car files are multi-frame (4D), so we load them manually and add as procedural data
-        # We'll load them again manually in _setup_car_masks for recoloring, but this ensures
-        # all their colors are in COLOR_TO_ID
-        for i in range(7):
-            # Load day car (may have multiple frames)
-            car_day_path = os.path.join(self._sprite_path, f'cars/car_{i}.npy')
-            car_day_data = _load_rgba_sprite(car_day_path)  # (N, H, W, 4)
-            final_asset_config.append({'name': f'car_base_{i}', 'type': 'procedural', 'data': jnp.array(car_day_data)})
             
-            # Load night car (single frame)
-            car_night_path = os.path.join(self._sprite_path, f'cars/car_{i}_night.npy')
-            car_night_data = _load_rgba_sprite(car_night_path)  # (1, H, W, 4) or (N, H, W, 4)
-            final_asset_config.append({'name': f'car_night_base_{i}', 'type': 'procedural', 'data': jnp.array(car_night_data)})
+        self.jr = render_utils.JaxRenderingUtils(self.config)
         
+        # Asset base path
+        self._sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "enduro")
+
+        # Load player car manually because it's 4D (animated) and the standard
+        # loadFrame only supports 3D sprites.
+        player_car_path = os.path.join(self._sprite_path, 'cars/car_0.npy')
+        player_car_night_path = os.path.join(self._sprite_path, 'cars/car_0_night.npy')
+        
+        player_car_data = jnp.load(player_car_path)
+        asset_config = list(self.consts.ASSET_CONFIG)
+        asset_config.append({'name': 'player_car', 'type': 'procedural', 'data': player_car_data})
+
+        flags_path = os.path.join(self._sprite_path, 'misc/flags.npy')
+        if os.path.exists(flags_path):
+            flags_data = jnp.load(flags_path)
+            asset_config.append({'name': 'flags', 'type': 'procedural', 'data': flags_data})
+
+        if os.path.exists(player_car_night_path):
+            player_car_night_data = jnp.load(player_car_night_path)
+            asset_config.append({'name': 'player_car_night', 'type': 'procedural', 'data': player_car_night_data})
+
+        # Add car colors to asset config to ensure they are in the palette
+        car_rgbs_to_add = [
+            (136, 146, 62), (72, 160, 72), (104, 72, 198), (66, 136, 176), 
+            (66, 114, 194), (198, 108, 58), (162, 162, 42), (66, 158, 130), 
+            (162, 134, 56), (110, 156, 66), (184, 70, 162), (66, 72, 200), (200, 72, 72)
+        ]
+        color_dummy = jnp.array([[list(rgb) + [255] for rgb in car_rgbs_to_add]], dtype=jnp.uint8)
+        asset_config.append({'name': 'car_colors', 'type': 'procedural', 'data': color_dummy})
+
+        # Add all 16 weather colors to palette so they exist in COLOR_TO_ID
+        weather_colors = self.consts.weather_color_codes
+        num_weathers = weather_colors.shape[0]
+        for weather_idx in range(num_weathers):
+            for color_idx in range(6): # sky, grass, mountain, horizon1, 2, 3
+                color = np.array(list(weather_colors[weather_idx, color_idx]) + [255], dtype=np.uint8)
+                asset_config.append({'name': f'weather_color_{weather_idx}_{color_idx}', 'type': 'procedural', 'data': color.reshape(1, 1, 4)})
+
+        # Load car sprites manually
+        for i in range(7):
+            # For the largest opponent slot (0), we use car_1.npy to avoid using the player car sprite.
+            actual_idx = i if i > 0 else 1
+            car_path = os.path.join(self._sprite_path, f'cars/car_{actual_idx}.npy')
+            if os.path.exists(car_path):
+                car_data = jnp.load(car_path)
+                asset_config.append({'name': f'car_{i}', 'type': 'procedural', 'data': car_data})
+                
+            car_night_path = os.path.join(self._sprite_path, f'cars/car_{actual_idx}_night.npy')
+            if os.path.exists(car_night_path):
+                car_night_data = jnp.load(car_night_path)
+                asset_config.append({'name': f'car_night_{i}', 'type': 'procedural', 'data': car_night_data})
+        
+        # Load assets
         (
             self.PALETTE,
             self.SHAPE_MASKS,
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS,
-        ) = self.jr.load_and_setup_assets(final_asset_config, self._sprite_path)
+        ) = self.jr.load_and_setup_assets(asset_config, self._sprite_path)
+        
+        # Store WEATHER Color IDs [weather_idx, color_idx (sky, grass, mountain, h1, h2, h3)]
+        weather_ids = []
+        for w_idx in range(num_weathers):
+            w_colors = []
+            for c_idx in range(6):
+                rgb = tuple(weather_colors[w_idx, c_idx].tolist())
+                w_colors.append(self.COLOR_TO_ID.get(rgb, 0))
+            weather_ids.append(w_colors)
+        self.WEATHER_COLOR_IDS = jnp.array(weather_ids, dtype=jnp.uint8)
 
-        # 2. Store Track Color IDs
-        # Convert jnp array of [R, G, B] to list of tuples for dict lookup
-        track_rgbs_list = [tuple(c.tolist()) for c in self.consts.track_colors]
-        self.TRACK_COLOR_IDS = jnp.array(
-            [self.COLOR_TO_ID[rgb] for rgb in track_rgbs_list], 
-            dtype=jnp.uint8
-        )
+        # Store Track Color IDs
+        track_rgbs = [tuple(c.tolist()) for c in self.consts.track_colors]
+        self.TRACK_COLOR_IDS = jnp.array([self.COLOR_TO_ID.get(rgb, 0) for rgb in track_rgbs], dtype=jnp.uint8)
 
-        # 3. Stack Weather Stencils for easy indexing
-        num_weathers = len(self.consts.weather_color_codes)
-        self.sky_masks = jnp.stack([self.SHAPE_MASKS[f'sky_{i}'] for i in range(num_weathers)])
-        self.grass_masks = jnp.stack([self.SHAPE_MASKS[f'grass_{i}'] for i in range(num_weathers)])
-        self.mountain_left_masks = jnp.stack([self.SHAPE_MASKS[f'mountain_left_{i}'] for i in range(num_weathers)])
-        self.mountain_right_masks = jnp.stack([self.SHAPE_MASKS[f'mountain_right_{i}'] for i in range(num_weathers)])
-        self.horizon_1_masks = jnp.stack([self.SHAPE_MASKS[f'horizon_1_{i}'] for i in range(num_weathers)])
-        self.horizon_2_masks = jnp.stack([self.SHAPE_MASKS[f'horizon_2_{i}'] for i in range(num_weathers)])
-        self.horizon_3_masks = jnp.stack([self.SHAPE_MASKS[f'horizon_3_{i}'] for i in range(num_weathers)])
-
-        # 4. Store Odometer Sheet ID Masks
+        # Store Odometer Sheet ID Masks
         self.black_digit_sheet_mask = self.SHAPE_MASKS['black_digit_array']
         self.brown_digit_sheet_mask = self.SHAPE_MASKS['brown_digit_array']
 
-        # 5. Manually Load, Recolor, and Store Car ID Masks
-        self.recolored_car_masks_day, self.car_masks_night, self.player_car_night_mask = self._setup_car_masks()
-        
-    def _setup_car_masks(self) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-        """
-        Loads all RGBA car sprites, recolors them for each palette color,
-        and converts them to stacked ID masks. Runs once during __init__.
-        """
-        car_names = [f'cars/car_{i}.npy' for i in range(7)]
-        car_night_names = [f'cars/car_{i}_night.npy' for i in range(7)]
-        player_car_night_name = 'cars/car_0_night.npy' # Player uses car_0_night
+        # Store Car Color IDs for recoloring
+        car_rgbs = [
+            (136, 146, 62), (72, 160, 72), (104, 72, 198), (66, 136, 176), 
+            (66, 114, 194), (198, 108, 58), (162, 162, 42), (66, 158, 130), 
+            (162, 134, 56), (110, 156, 66), (184, 70, 162), (66, 72, 200), (200, 72, 72)
+        ]
+        self.CAR_COLOR_IDS = jnp.array([self.COLOR_TO_ID.get(rgb, 0) for rgb in car_rgbs], dtype=jnp.uint8)
+        self.black_id = self.COLOR_TO_ID.get((0, 0, 0), 0)
+        self.white_id = self.COLOR_TO_ID.get((255, 255, 255), 0)
 
-        # --- Load Base RGBA Sprites ---
-        base_car_sprites = [_load_rgba_sprite(os.path.join(self._sprite_path, name)) for name in car_names]
-        base_car_night_sprites = [_load_rgba_sprite(os.path.join(self._sprite_path, name)) for name in car_night_names]
-        player_car_night_sprite = _load_rgba_sprite(os.path.join(self._sprite_path, player_car_night_name))
+        # Height of the black boundary bar in pixels.
+        # The bar is anchored at game_window_height-1; reducing this trims from the bottom up.
+        # Full sprite is 12 rows; set lower to avoid overlapping the distance odometer.
+        self.overlay_height = 8
+        self.OVERLAY_MASK = self.SHAPE_MASKS['background_overlay'][:self.overlay_height]
 
-        # --- Find Max Dimensions ---
-        all_sprites = base_car_sprites + base_car_night_sprites + [player_car_night_sprite]
-        max_h = max(s.shape[1] for s in all_sprites)
-        max_w = max(s.shape[2] for s in all_sprites)
-
-        def _pad_mask(id_mask, h=max_h, w=max_w):
-            pad_h = h - id_mask.shape[0]
-            pad_w = w - id_mask.shape[1]
-            return jnp.pad(
-                id_mask, 
-                ((0, pad_h), (0, pad_w)), 
-                'constant', 
-                constant_values=self.jr.TRANSPARENT_ID
-            )
-
-        # --- Process Day Cars (Recolored) ---
-        num_colors = len(self.consts.CAR_COLOR_PALETTE)
-        num_sizes = 7
-        # Find the maximum number of frames across all car sprites
-        max_frames = max(sprite.shape[0] for sprite in base_car_sprites)
-        num_anims_day = max(2, max_frames)  # Ensure at least 2 frames for animation
-        all_car_masks = []
-        for color_idx in range(num_colors):
-            rgb_tuple = self.consts.CAR_COLOR_PALETTE[color_idx]
-            new_rgb_np = np.array(rgb_tuple)
-            
-            color_masks_day = []
-            for size_idx in range(num_sizes):
-                base_sprite_stack = base_car_sprites[size_idx] # (N, H, W, 4) where N can vary
-                num_frames = base_sprite_stack.shape[0]
-                recolored_frames = []
-                
-                for frame_idx in range(num_anims_day):
-                    # If this car has fewer frames, use the last frame (or duplicate if only 1 frame)
-                    actual_frame_idx = min(frame_idx, num_frames - 1)
-                    frame_rgba_np = np.array(base_sprite_stack[actual_frame_idx])
-                    recolored_frame_np = _recolor_rgba_sprite_np(frame_rgba_np, new_rgb_np)
-                    id_mask = self.jr._create_id_mask(jnp.array(recolored_frame_np), self.COLOR_TO_ID)
-                    padded_mask = _pad_mask(id_mask)
-                    recolored_frames.append(padded_mask)
-                    
-                color_masks_day.append(jnp.stack(recolored_frames))
-            all_car_masks.append(jnp.stack(color_masks_day))
-            
-        recolored_car_masks_day = jnp.stack(all_car_masks)
-        # Final Shape: [num_colors, num_sizes, num_anims_day, max_h, max_w]
-
-        # --- Process Night Cars (Opponents) ---
-        num_anims_night = 1
-        all_car_masks_night = []
-        for size_idx in range(num_sizes):
-            base_sprite_stack = base_car_night_sprites[size_idx] # (1, H, W, 4)
-            frame_rgba_np = np.array(base_sprite_stack[0]) # Get the single frame
-            id_mask = self.jr._create_id_mask(jnp.array(frame_rgba_np), self.COLOR_TO_ID)
-            padded_mask = _pad_mask(id_mask)
-            all_car_masks_night.append(padded_mask[None, ...]) # Add anim dim back
-            
-        car_masks_night = jnp.stack(all_car_masks_night)
-        # Final Shape: [num_sizes, 1, max_h, max_w]
-
-        # --- Process Night Car (Player) ---
-        player_frame_np = np.array(player_car_night_sprite[0])
-        player_id_mask = self.jr._create_id_mask(jnp.array(player_frame_np), self.COLOR_TO_ID)
-        player_car_night_mask = _pad_mask(player_id_mask)
-        # Final Shape: [max_h, max_w]
-
-        # --- Scale car masks if downscaling is enabled ---
-        if self.config.downscale:
-            def scale_mask(mask):
-                """Scale a single mask using nearest-neighbor interpolation."""
-                original_h, original_w = mask.shape
-                scaled_h = jnp.maximum(1, jnp.round(original_h * self.config.height_scaling)).astype(jnp.int32)
-                scaled_w = jnp.maximum(1, jnp.round(original_w * self.config.width_scaling)).astype(jnp.int32)
-                return jax.image.resize(mask, (scaled_h, scaled_w), method='nearest')
-            
-            # Scale day car masks: [num_colors, num_sizes, num_anims_day, H, W]
-            def scale_day_car_stack(color_stack):
-                def scale_size_stack(size_stack):
-                    def scale_anim_stack(anim_stack):
-                        return jax.vmap(scale_mask)(anim_stack)
-                    return jax.vmap(scale_anim_stack)(size_stack)
-                return jax.vmap(scale_size_stack)(color_stack)
-            recolored_car_masks_day = scale_day_car_stack(recolored_car_masks_day)
-            
-            # Scale night car masks: [num_sizes, 1, H, W]
-            def scale_night_car_stack(size_stack):
-                def scale_anim(anim_stack):
-                    return jax.vmap(scale_mask)(anim_stack)
-                return jax.vmap(scale_anim)(size_stack)
-            car_masks_night = scale_night_car_stack(car_masks_night)
-            
-            # Scale player night mask: [H, W]
-            player_car_night_mask = scale_mask(player_car_night_mask)
-
-        return recolored_car_masks_day, car_masks_night, player_car_night_mask
-
-    def _scale_mask(self, mask: jnp.ndarray) -> jnp.ndarray:
-        """Helper to scale a mask when downscaling is enabled."""
-        original_h, original_w = mask.shape
-        scaled_h = jnp.maximum(1, jnp.round(original_h * self.config.height_scaling)).astype(jnp.int32)
-        scaled_w = jnp.maximum(1, jnp.round(original_w * self.config.width_scaling)).astype(jnp.int32)
-        return jax.image.resize(mask, (scaled_h, scaled_w), method='nearest')
+        # Opponents whose top-left y >= (game_window_height - this value) are hidden.
+        # Increase to despawn cars earlier (further from the boundary line).
+        self.opponent_bottom_cutoff = 2
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: EnduroGameState) -> jnp.ndarray:
-        """Render the game state to a raster image."""
-        # Start with the static background
+        # Start with the static background (mostly black)
         raster = self.BACKGROUND
+        
+        xx, yy = self.jr._xx, self.jr._yy
+        is_fog = state.weather_index == self.consts.fog_weather_index
 
-        # render weather first because it changes the backgrounds
-        raster = self._render_weather(raster, state)
+        # Get current weather colors [sky, grass, mountain, h1, h2, h3]
+        current_weather_colors = self.WEATHER_COLOR_IDS[state.weather_index]
 
-        # render the player car
-        raster = self._render_player_car(raster, state)
+        # 1. Draw Sky (top part of game window)
+        sky_color = current_weather_colors[0]
+        sky_mask = (xx >= self.consts.window_offset_left) & (yy < self.consts.sky_height - 6)
+        raster = jnp.where(sky_mask, sky_color, raster)
 
-        # render the opponents
-        raster = self._render_opponent_cars(raster, state)
+        # 1.1 Draw Horizons (h3, h2, h1 from top to bottom)
+        h3_mask = (xx >= self.consts.window_offset_left) & (yy >= self.consts.sky_height - 6) & (yy < self.consts.sky_height - 4)
+        raster = jnp.where(h3_mask, current_weather_colors[5], raster)
 
-        # render the lower background again to make opponents below the screen disappear
-        raster = self._render_lower_background(raster)
+        h2_mask = (xx >= self.consts.window_offset_left) & (yy >= self.consts.sky_height - 4) & (yy < self.consts.sky_height - 2)
+        raster = jnp.where(h2_mask, current_weather_colors[4], raster)
 
-        # render the track
-        raster = self._render_track_from_state(raster, state)
+        h1_mask = (xx >= self.consts.window_offset_left) & (yy >= self.consts.sky_height - 2) & (yy < self.consts.sky_height)
+        raster = jnp.where(h1_mask, current_weather_colors[3], raster)
 
-        # render the distance odometer, level score and cars to overtake
-        raster = self._render_distance_odometer(raster, state)
-        raster = self._render_cars_to_overtake_score(raster, state)  # must be rendered before level, due to background
-        raster = self._render_level_score(raster, state)
-
-        # render the mountains
+        
+        # 2. Draw Mountains
         raster = self._render_mountains(raster, state)
 
-        # render the fog as the last thing!
-        raster = self._render_fog(raster, state)
+        # 3. Draw Grass (bottom part of game window)
+        grass_color = jnp.where(is_fog, current_weather_colors[0], current_weather_colors[1])
+        grass_mask = (xx >= self.consts.window_offset_left) & (yy >= self.consts.sky_height) & (yy < self.consts.game_window_height)
+        raster = jnp.where(grass_mask, grass_color, raster)
         
-        # Convert the final ID raster to an RGB image
-        return self.jr.render_from_palette(raster, self.PALETTE)
+        # 4. Draw curved track with perspective
+        raster = self._render_track(raster, state, xx, yy)
+        
+        # 5. Render score box background
+        raster = self.jr.render_at(raster, self.consts.info_box_x_pos, self.consts.info_box_y_pos, self.SHAPE_MASKS['score_box'])
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _render_player_car(self, raster: jnp.ndarray, state: EnduroGameState):
-        """
-        Renders the player car. The animation speed depends on the player speed
-        """
+        # 6. Render UI
+        raster = self._render_distance_odometer(raster, state)
+        raster = self._render_cars_to_pass(raster, state)
+        raster = self._render_day_counter(raster, state)
+
+        # 7. Render Opponents
+        raster = self._render_opponent_cars(raster, state)
+
+        # 8. Render player car
+        is_night = jnp.isin(state.weather_index, self.consts.weather_with_night_car_sprite)
+
         # Calculate animation period based on player speed
-        animation_period = self.consts.opponent_animation_steps - (state.player_speed - self.consts.opponent_speed) / (
-                self.consts.max_speed - self.consts.opponent_speed) * (self.consts.opponent_animation_steps - 1)
+        animation_period = self.consts.opponent_animation_steps - (state.player_speed - state.opponent_speed) / (
+                self.consts.max_speed - state.opponent_speed) * (self.consts.opponent_animation_steps - 1)
+        animation_period = jnp.maximum(1.0, animation_period)
+        
+        # Faster vibration during collision
+        animation_period = jnp.where(state.collision_mode, 2.0, animation_period)
 
-        # Calculate animation step (slower at low speeds, faster at high speeds)
         animation_step = jnp.floor(state.step_count / animation_period)
-
-        # Alternate between frame 0 and 1 based on animation step
         frame_index = (animation_step % 2).astype(jnp.int32)
 
-        # Check if it's day or night
-        is_day = ~jnp.isin(state.weather_index, self.consts.weather_with_night_car_sprite)
-        
-        # Get the correct mask
-        player_color_idx = self.consts.PLAYER_COLOR_INDEX
-        day_mask = self.recolored_car_masks_day[player_color_idx, 0, frame_index] # Size 0
-        night_mask = self.player_car_night_mask
-        
-        final_mask = jax.lax.cond(is_day, lambda: day_mask, lambda: night_mask)
+        def get_player_mask():
+            mask_day = self.SHAPE_MASKS['player_car']
+            mask_night = self.SHAPE_MASKS.get('player_car_night', mask_day)
+            
+            def get_day_frame():
+                if mask_day.ndim == 3:
+                    return mask_day[jnp.minimum(frame_index, mask_day.shape[0] - 1)]
+                return mask_day
+                
+            def get_night_frame():
+                if mask_night.ndim == 3:
+                    return mask_night[jnp.minimum(frame_index, mask_night.shape[0] - 1)]
+                return mask_night
 
-        # Render player car position
-        raster = self.jr.render_at(raster,
-                              state.player_x_abs_position.astype(jnp.int32),
-                              state.player_y_abs_position.astype(jnp.int32),
-                              final_mask)
+            return jax.lax.cond(is_night, get_night_frame, get_day_frame)
 
-        return raster
+        player_mask = get_player_mask()
+        raster = self.jr.render_at(raster, state.player_x.astype(jnp.int32), state.player_y.astype(jnp.int32), player_mask)
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _render_track_from_state(self, raster: jnp.ndarray, state: EnduroGameState):
-        """
-        Renders the track pixels from the Enduro Game State with animated colors.
-        """
-        # get a less steep slope for the acceleration of the animation
-        effective_speed = (self.consts.min_speed +
-                           (state.player_speed - self.consts.min_speed) * self.consts.track_speed_animation_factor)
-        # Calculate animation step
-        animation_step = jnp.floor(
-            effective_speed * state.step_count * self.consts.track_color_move_speed_per_speed
-        ) % self.consts.track_move_range
-        animation_step = animation_step.astype(jnp.int32)
+        # 9. Black boundary bar — drawn last so no sprite clips over the screen edge.
+        raster = self.jr.render_at(raster, 0, self.consts.game_window_height - 1, self.OVERLAY_MASK)
 
-        # build the y array
-        y = jnp.add(jnp.arange(self.consts.track_height), self.consts.sky_height)
-
-        # Concatenate both sides and create a grid of x & y coordinates
-        x_coords = jnp.concatenate([state.visible_track_left, state.visible_track_right])
-        y_coords = jnp.concatenate([y, y])
-
-        # Create track sprite (ID MASK) with animated colors
-        track_id_mask = self._draw_animated_track_sprite(
-            x_coords, y_coords, animation_step, self.TRACK_COLOR_IDS
-        )
-        # Scale track mask if downscaling is enabled - compute scaled dimensions from static values
-        if self.config.downscale:
-            scaled_h = max(1, int(round(self.consts.screen_height * self._height_scaling)))
-            scaled_w = max(1, int(round(self.consts.screen_width * self._width_scaling)))
-            track_id_mask = jax.image.resize(track_id_mask, (scaled_h, scaled_w), method='nearest')
-        # Render to raster
-        raster = self.jr.render_at(raster, 0, 0, track_id_mask)
-
-        return raster
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _draw_animated_track_sprite(self, x_coords: jnp.ndarray, y_coords: jnp.ndarray,
-                                    animation_step: jnp.int32, 
-                                    track_color_ids: jnp.ndarray) -> jnp.ndarray:
-        """
-        Creates an ID MASK sprite for the track with animated colors.
-        """
-        # Create full-screen-sized ID mask, initialized to transparent
-        sprite = jnp.full(
-            (self.consts.screen_height, self.consts.screen_width), 
-            self.jr.TRANSPARENT_ID, 
-            dtype=jnp.uint8
-        )
-
-        def get_track_color_index(track_row_index: jnp.int32) -> jnp.int32:
-            """Determine color *index* (0-3) for a given track row."""
-            # Calculate boundaries (these shift with animation_step)
-            top_region_end = self.consts.track_top_min_length + animation_step
-            moving_top_end = top_region_end + self.consts.track_moving_top_length
-
-            # Check if we should spawn moving bottom
-            spawn_moving_bottom = animation_step >= self.consts.track_moving_bottom_spawn_step
-            moving_bottom_end = jnp.where(
-                spawn_moving_bottom,
-                moving_top_end + self.consts.track_moving_bottom_length,
-                moving_top_end
-            )
-
-            # Determine color index
-            color_idx = jnp.where(
-                track_row_index < top_region_end,
-                0,  # top color index
-                jnp.where(
-                    track_row_index < moving_top_end,
-                    1,  # moving top color index
-                    jnp.where(
-                        (track_row_index < moving_bottom_end) & spawn_moving_bottom,
-                        2,  # moving bottom color index
-                        3   # bottom/rest color index
-                    )
-                )
-            )
-
-            return color_idx.astype(jnp.int32)
-
-        def draw_pixel(i, s):
-            x = x_coords[i]
-            y = y_coords[i]
-            track_row_index = y - self.consts.sky_height
-            color_idx = get_track_color_index(track_row_index)
-            color_id = track_color_ids[color_idx] # Get ID from lookup array
-            return s.at[y, x].set(color_id)
-
-        sprite = jax.lax.fori_loop(0, x_coords.shape[0], draw_pixel, sprite)
-        return sprite
+        # Convert ID raster to RGB
+        return self.jr.render_from_palette(raster, self.PALETTE)
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_opponent_cars(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
-        Renders all opponent cars onto the raster using pre-compiled ID masks.
+        Renders visible opponent cars.
         """
-        # adjust the animation speed for opponents
-        animation_step = jnp.floor(state.step_count / self.consts.opponent_animation_steps)
+        # Calculate animation period based on player speed
+        animation_period = self.consts.opponent_animation_steps - (state.player_speed - state.opponent_speed) / (
+                self.consts.max_speed - state.opponent_speed) * (self.consts.opponent_animation_steps - 1)
+        animation_period = jnp.maximum(1.0, animation_period)
+        animation_step = jnp.floor(state.step_count / animation_period)
         frame_index = (animation_step % 2).astype(jnp.int32)
+        
+        is_fog = state.weather_index == self.consts.fog_weather_index
+        is_night = jnp.isin(state.weather_index, self.consts.weather_with_night_car_sprite)
 
-        is_day = ~jnp.isin(state.weather_index, self.consts.weather_with_night_car_sprite)
-
-        # Get opponent positions and color indices
-        opponent_positions = state.visible_opponent_positions # (7, 3) [x, y, color_idx]
-        xs = opponent_positions[:, 0]
-        ys = opponent_positions[:, 1]
-        color_indices = opponent_positions[:, 2]
-
-        def render_one_car(i, r):
-            # i = size_idx (0 to 6)
-            x, y, color_idx = xs[i], ys[i], color_indices[i]
+        def render_slot(r, i):
+            pos = state.visible_opponent_positions[i]
+            x, y, color_idx = pos[0], pos[1], pos[2].astype(jnp.int32)
             
-            # Check if opponent exists in this slot
-            should_draw = (x != -1)
-            def _draw_car(r_in):
-                # Get the correct mask based on day/night and color
-                day_mask = self.recolored_car_masks_day[color_idx, i, frame_index]
-                night_mask = self.car_masks_night[i, 0] # size i, anim 0
+            # -1 indicates no car in this slot
+            exists = x != -1
+            # Hide cars that have scrolled too close to (or past) the bottom boundary.
+            below_cutoff = y >= self.consts.game_window_height - self.opponent_bottom_cutoff
+            # In fog, also hide if above fog_height
+            visible = ~below_cutoff & jnp.where(is_fog, y >= self.consts.fog_height, True)
+            
+            def do_render(r_inner):
+                mask_day = self.SHAPE_MASKS[f'car_{i}']
+                mask_night = self.SHAPE_MASKS[f'car_night_{i}']
                 
-                final_mask = jax.lax.cond(is_day, lambda: day_mask, lambda: night_mask)
+                # Make sure both have the same number of dimensions before jax.lax.cond
+                if mask_day.ndim == 3 and mask_night.ndim == 2:
+                    mask_night = jnp.expand_dims(mask_night, axis=0)
+                    mask_night = jnp.repeat(mask_night, mask_day.shape[0], axis=0)
+
+                mask = jax.lax.cond(is_night, lambda: mask_night, lambda: mask_day)
                 
-                return self.jr.render_at(r_in, x, y, final_mask)
+                if mask.ndim == 3:
+                    # Use animated frame if available
+                    num_frames = mask.shape[0]
+                    mask = mask[jnp.minimum(frame_index, num_frames - 1)]
+                
+                # Dynamic recoloring
+                car_color_id = self.CAR_COLOR_IDS[color_idx % len(self.CAR_COLOR_IDS)]
+                # Replace everything that is NOT transparent, NOT black, and NOT white
+                is_body = (mask != self.jr.TRANSPARENT_ID) & (mask != self.black_id) & (mask != self.white_id)
+                
+                # If it's night, we don't recolor the body because it's only lights. We only draw the original mask.
+                mask = jnp.where(~is_night & is_body, car_color_id, mask)
+                
+                return self.jr.render_at_clipped(r_inner, x.astype(jnp.int32), y.astype(jnp.int32), mask)
 
-            return jax.lax.cond(should_draw, _draw_car, lambda r_in: r_in, r)
+            return jax.lax.cond(exists & visible, do_render, lambda r_in: r_in, r)
 
-        raster = jax.lax.fori_loop(0, 7, render_one_car, raster)
+        # Render from far (6) to near (0) so near cars are on top
+        for i in range(6, -1, -1):
+            raster = render_slot(raster, i)
+            
         return raster
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_mountains(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
+        """
+        Renders mountains using dynamic scrolling and wrapping.
+        """
+        is_fog = state.weather_index == self.consts.fog_weather_index
+        def skip_render(r):
+            return r
+
+        def do_render_mountains(r):
+            mountain_left_sprite = self.SHAPE_MASKS['mountain_left']
+            mountain_right_sprite = self.SHAPE_MASKS['mountain_right']
+
+            # Dynamic recoloring for snow and night
+            current_weather_colors = self.WEATHER_COLOR_IDS[state.weather_index]
+            mountain_color_id = current_weather_colors[2]
+            
+            def recolor_mountain(mask):
+                is_body = (mask != self.jr.TRANSPARENT_ID)
+                return jnp.where(is_body, mountain_color_id, mask)
+
+            mountain_left_sprite = recolor_mountain(mountain_left_sprite)
+            mountain_right_sprite = recolor_mountain(mountain_right_sprite)
+
+            # Positions
+            x_left = state.mountain_left_x.astype(jnp.int32)
+            x_right = state.mountain_right_x.astype(jnp.int32)
+            
+            y_left = self.consts.sky_height - mountain_left_sprite.shape[0]
+            y_right = self.consts.sky_height - mountain_right_sprite.shape[0]
+
+            # Visible interval
+            lo = self.consts.window_offset_left
+            hi = self.consts.screen_width
+            period = hi - lo + 1
+
+            # 1) Base draw
+            r = self.jr.render_at_clipped(r, x_left, y_left, mountain_left_sprite)
+            r = self.jr.render_at_clipped(r, x_right, y_right, mountain_right_sprite)
+
+            # 2) Wrap-around
+            overflow_left = (x_left + mountain_left_sprite.shape[1]) > (hi + 1)
+            overflow_right = (x_right + mountain_right_sprite.shape[1]) > (hi + 1)
+
+            r = jax.lax.cond(
+                overflow_left,
+                lambda r_inner: self.jr.render_at_clipped(r_inner, x_left - period, y_left, mountain_left_sprite),
+                lambda r_inner: r_inner,
+                r
+            )
+            r = jax.lax.cond(
+                overflow_right,
+                lambda r_inner: self.jr.render_at_clipped(r_inner, x_right - period, y_right, mountain_right_sprite),
+                lambda r_inner: r_inner,
+                r
+            )
+            return r
+
+        return jax.lax.cond(is_fog, skip_render, do_render_mountains, raster)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_track(self, raster: jnp.ndarray, state: EnduroGameState, xx: jnp.ndarray, yy: jnp.ndarray) -> jnp.ndarray:
+        """
+        Renders the track. If render_full_road is True, it renders the full road area.
+        Otherwise, it renders only the side boundaries of the road.
+        """
+        left_xs, right_xs = self._generate_viewable_track_lookup(state.track_top_x, state.track_top_x_curve_offset)
+        width_scale = self.config.width_scaling
+        height_scale = self.config.height_scaling
+
+        # Map target raster coordinates back to source-space coordinates so
+        # procedural geometry stays aligned when rendering at downscaled sizes.
+        src_x = jnp.floor(xx / width_scale).astype(jnp.int32)
+        src_y = jnp.floor(yy / height_scale).astype(jnp.int32)
+
+        # We need to map source-space y to track rows (0 to track_height-1)
+        # track starts at sky_height and ends at game_window_height - 1
+        track_row = src_y - self.consts.sky_height
+
+        # Boundary check for track_row
+        is_track_row = (src_y >= self.consts.sky_height) & (src_y < self.consts.game_window_height - 1)
+
+        # In fog, hide track above fog_height
+        is_fog = state.weather_index == self.consts.fog_weather_index
+        is_visible = jnp.where(is_fog, src_y >= self.consts.fog_height, True)
+
+        # Get boundaries for each pixel's row
+        l_x = left_xs[jnp.clip(track_row, 0, self.consts.track_height - 1)]
+        r_x = right_xs[jnp.clip(track_row, 0, self.consts.track_height - 1)]
+        
+        # Determine the track mask based on the render_full_road flag.
+        # For downscaled rendering, make edge-only road lines 2px wide so they
+        # survive 84x84 + grayscale conversion.
+        edge_half_thickness = jnp.where(width_scale < 0.75, 1, 0).astype(jnp.int32)
+        track_mask = jax.lax.cond(
+            self.consts.render_full_road,
+            lambda: (src_x >= l_x) & (src_x <= r_x),
+            lambda: (jnp.abs(src_x - l_x) <= edge_half_thickness) | (jnp.abs(src_x - r_x) <= edge_half_thickness)
+        )
+        
+        track_mask = is_track_row & track_mask & is_visible
+
+        # Track stripe animation: phase 0 → 0.25 steps/frame (1 step/4 frames),
+        # phase 10 → 1.0 steps/frame (every frame), linearly interpolated.
+        animation_rate = self.consts.track_animation_min_rate + state.player_speed * self.consts.track_animation_speed_factor
+        animation_step = jnp.floor(animation_rate * state.step_count) % self.consts.track_move_range
+        animation_step = animation_step.astype(jnp.int32)
+
+        # Calculate color indices for each row
+        top_region_end = self.consts.track_top_min_length + animation_step
+        moving_top_end = top_region_end + self.consts.track_moving_top_length
+        spawn_moving_bottom = animation_step >= self.consts.track_moving_bottom_spawn_step
+        moving_bottom_end = jnp.where(
+            spawn_moving_bottom,
+            moving_top_end + self.consts.track_moving_bottom_length,
+            moving_top_end
+        )
+
+        color_indices = jnp.where(
+            track_row < top_region_end,
+            0,
+            jnp.where(
+                track_row < moving_top_end,
+                1,
+                jnp.where(
+                    (track_row < moving_bottom_end) & spawn_moving_bottom,
+                    2,
+                    3
+                )
+            )
+        ).astype(jnp.int32)
+
+        track_pixel_color_ids = self.TRACK_COLOR_IDS[color_indices]
+        
+        raster = jnp.where(track_mask, track_pixel_color_ids, raster)
+        return raster
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _generate_viewable_track_lookup(
+            self,
+            top_x: jnp.ndarray,
+            top_x_curve_offset: jnp.float32
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        """
+        Fast track generation using precomputed curve lookup.
+        """
+        offset_int = jnp.clip(
+            jnp.floor(top_x_curve_offset).astype(jnp.int32),
+            -self.consts.curve_offset_base,
+            self.consts.curve_offset_base
+        )
+
+        curve_index = offset_int + self.consts.curve_offset_base
+
+        base_left_curve = self.consts.precomputed_left_curves[curve_index]
+        base_right_curve = self.consts.precomputed_right_curves[curve_index]
+
+        final_left_xs = base_left_curve + top_x.astype(jnp.int32)
+        final_right_xs = base_right_curve + top_x.astype(jnp.int32)
+
+        return final_left_xs, final_right_xs
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_distance_odometer(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
@@ -2936,529 +931,745 @@ class EnduroRenderer(JAXGameRenderer):
         return raster
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_level_score(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
+    def _render_cars_to_pass(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
-        Renders the current level digit.
+        Renders the "Cars to pass" digits or green flags if level passed.
         """
-        current_level = state.level
-        digit_sprites = self.SHAPE_MASKS['digits_black'] # Stacked (10, H, W)
-        level_digit_mask = digit_sprites[current_level]
-        raster = self.jr.render_at(raster, self.consts.level_x, self.consts.level_y, level_digit_mask)
-        return raster
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _render_cars_to_overtake_score(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
-        """
-        Renders the score that shows how many cars still have to be overtaken.
-        Renders flags instead if the level goal has been reached.
-        """
-        def render_level_passed(flag_raster) -> jnp.ndarray:
-            # change the flag animation every second
-            frame_index = (state.step_count // 60) % 2
-            flag_sprite = self.SHAPE_MASKS['flags'][frame_index]
-            # render the flags at the hundreds position - the car symbol
-            x_pos = self.consts.score_start_x - 9
-            flag_raster = self.jr.render_at(flag_raster, x_pos, self.consts.score_start_y - 1, flag_sprite)
-            # render the background color of the level score differently (in green)
-            background_sprite = self.SHAPE_MASKS['green_level_background']
-            flag_raster = self.jr.render_at(flag_raster, self.consts.level_x - 1, self.consts.level_y - 1, background_sprite)
-            return flag_raster
-
-        def render_digits(digit_raster) -> jnp.ndarray:
-            cars_to_overtake = state.cars_to_overtake - state.cars_overtaken
+        def render_flags(r):
+            # Animate the flags: switch frame every 8 steps
+            animation_step = (state.step_count // 8) % 2
+            flag_mask = self.SHAPE_MASKS['flags'][animation_step.astype(jnp.int32)]
+            # Draw flags with black background
+            return self.jr.render_at(r, self.consts.score_start_x - 9, self.consts.score_start_y - 1, flag_mask)
+            
+        def render_digits(r):
             digit_sprites = self.SHAPE_MASKS['digits_black']
-            digit_width = digit_sprites.shape[2]
-            spacing = digit_width + 2
-            ones_digit = cars_to_overtake % 10
-            tens_digit = (cars_to_overtake // 10) % 10
-            hundreds_digit = (cars_to_overtake // 100) % 10
-            ones_sprite = digit_sprites[ones_digit]
-            tens_sprite = digit_sprites[tens_digit]
-            hundreds_sprite = digit_sprites[hundreds_digit]
-            # Render the ones digit window
-            ones_x = self.consts.score_start_x + 2 * spacing
-            digit_raster = self.jr.render_at(digit_raster, ones_x, self.consts.score_start_y, ones_sprite)
-            # Only render tens digit if number >= 10
-            tens_x = self.consts.score_start_x + spacing
-            digit_raster = jnp.where(
-                cars_to_overtake >= 10,
-                self.jr.render_at(digit_raster, tens_x, self.consts.score_start_y, tens_sprite),
-                digit_raster
+            
+            hundreds = (state.cars_to_pass // 100) % 10
+            tens = (state.cars_to_pass // 10) % 10
+            ones = state.cars_to_pass % 10
+            
+            spacing = digit_sprites.shape[2] + 2
+            
+            # Only show hundreds if > 0
+            hundreds_mask = digit_sprites[hundreds]
+            r = jax.lax.cond(
+                state.cars_to_pass >= 100,
+                lambda r_in: self.jr.render_at(r_in, self.consts.score_start_x, self.consts.score_start_y, hundreds_mask),
+                lambda r_in: r_in,
+                r
             )
-            # Only render hundreds digit if number >= 100
-            hundreds_x = self.consts.score_start_x
-            digit_raster = jnp.where(
-                cars_to_overtake >= 100,
-                self.jr.render_at(digit_raster, hundreds_x, self.consts.score_start_y, hundreds_sprite),
-                digit_raster
+            
+            # Only show tens if >= 10
+            tens_mask = digit_sprites[tens]
+            r = jax.lax.cond(
+                state.cars_to_pass >= 10,
+                lambda r_in: self.jr.render_at(r_in, self.consts.score_start_x + spacing, self.consts.score_start_y, tens_mask),
+                lambda r_in: r_in,
+                r
             )
-            return digit_raster
+            
+            ones_mask = digit_sprites[ones]
+            r = self.jr.render_at(r, self.consts.score_start_x + 2 * spacing, self.consts.score_start_y, ones_mask)
+            
+            return r
 
-        raster = lax.cond(
+        return jax.lax.cond(
             state.level_passed > 0,
-            render_level_passed,
+            render_flags,
             render_digits,
             raster
         )
-        return raster
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_mountains(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
+    def _render_day_counter(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
         """
-        Renders mountains using pre-compiled, pre-colored weather stencils.
+        Renders the current day (level) digit.
         """
-        weather_idx = state.weather_index
+        # In Enduro, the day counter is the level number (starting from 1)
+        current_day = state.level
         
-        # Get the correct pre-colored mask for the current weather
-        mountain_left_sprite = self.mountain_left_masks[weather_idx]
-        mountain_right_sprite = self.mountain_right_masks[weather_idx]
+        # Clip current_day to 0-9 for safety, though level should be 1-5
+        safe_day = jnp.clip(current_day, 0, 9).astype(jnp.int32)
+        
+        digit_sprites = self.SHAPE_MASKS['digits_black']
+        day_digit_mask = digit_sprites[safe_day]
+        
+        # Render the day digit at the designated position
+        raster = self.jr.render_at(raster, self.consts.level_x, self.consts.level_y, day_digit_mask)
+        
+        return raster
 
-        # Geometry / sizes
-        mountain_left_height = mountain_left_sprite.shape[0]
-        mountain_right_height = mountain_right_sprite.shape[0]
-        mountain_left_width = mountain_left_sprite.shape[1]
-        mountain_right_width = mountain_right_sprite.shape[1]
 
-        # Visible interval and period
+class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, EnduroConstants]):
+    # Action set for Enduro
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            Action.NOOP,
+            Action.FIRE,
+            Action.RIGHT,
+            Action.LEFT,
+            Action.DOWN,
+            Action.DOWNRIGHT,
+            Action.DOWNLEFT,
+            Action.RIGHTFIRE,
+            Action.LEFTFIRE,
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: EnduroConstants = None):
+        super().__init__(consts or EnduroConstants())
+        self.renderer = EnduroRenderer(consts=self.consts)
+
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(len(self.ACTION_SET))
+
+    def observation_space(self) -> spaces.Space:
+        return spaces.Dict({
+            "enemy_positions": spaces.Box(
+                low=jnp.array([[-1.0, -1.0]] * 7, dtype=jnp.float32),
+                high=jnp.array(
+                    [[float(self.consts.screen_width), float(self.consts.screen_height)]] * 7,
+                    dtype=jnp.float32,
+                ),
+                shape=(7, 2),
+                dtype=jnp.float32,
+            ),
+            "road_features": spaces.Box(
+                low=jnp.array([
+                    -self.consts.track_max_top_x_offset,
+                    0.0,
+                    0.0,
+                ], dtype=jnp.float32),
+                high=jnp.array([
+                    self.consts.track_max_top_x_offset,
+                    float(self.consts.screen_width),
+                    float(self.consts.screen_width),
+                ], dtype=jnp.float32),
+                shape=(3,),
+                dtype=jnp.float32,
+            )
+        })
+
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(self.consts.screen_height, self.consts.screen_width, 3),
+            dtype=jnp.uint8
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def reset(self, key: jrandom.PRNGKey = None) -> Tuple[EnduroObservation, EnduroGameState]:
+        start_level = max(1, int(self.consts.start_level))
+        level_offset = float(start_level - 1)
+        initial_opp_speed = min(
+            float(self.consts.max_opponent_speed),
+            float(self.consts.opponent_speed) + level_offset * float(self.consts.opponent_speed_increment),
+        )
+        initial_opp_density = min(
+            float(self.consts.max_opponent_density),
+            float(self.consts.opponent_density) + level_offset * float(self.consts.opponent_density_increment),
+        )
+        initial_cars_to_pass = (
+            self.consts.initial_position if start_level <= 1 else self.consts.next_day_car_position
+        )
+
+        # Generate initial visible opponent positions
+        opponent_index = jnp.array(self.consts.initial_opponent_index, dtype=jnp.float32)
+        
+        # We need a dummy track to calculate initial positions
+        # In reset, the track is straight (offset 0)
+        track_height = self.consts.track_height
+        curve_offset_base = self.consts.curve_offset_base
+        base_left_curve = self.consts.precomputed_left_curves[curve_offset_base]
+        base_right_curve = self.consts.precomputed_right_curves[curve_offset_base]
+        track_top_x = 84.0
+        visible_track_left = base_left_curve + track_top_x
+        visible_track_right = base_right_curve + track_top_x
+
+        visible_opponent_positions = self._get_visible_opponent_positions(
+            opponent_index,
+            self.consts.base_opponents,
+            jnp.array(initial_opp_density, dtype=jnp.float32),
+            jnp.array(-1, dtype=jnp.int32),
+            jnp.array(-1, dtype=jnp.int32),
+            visible_track_left,
+            visible_track_right
+        )
+
+        state = EnduroGameState(
+            player_x=jnp.array(self.consts.player_x_start, dtype=jnp.float32),
+            player_y=jnp.array(self.consts.player_y_start, dtype=jnp.float32),
+            step_count=jnp.array(0, dtype=jnp.int32),
+            day_count=jnp.array(start_level - 1, dtype=jnp.int32),
+            level=jnp.array(start_level, dtype=jnp.int32),
+            level_passed=jnp.array(0, dtype=jnp.int32),
+            game_over=jnp.array(False, dtype=jnp.bool_),
+            player_speed=jnp.array(self.consts.initial_speed, dtype=jnp.float32),
+            distance=jnp.array(0.0, dtype=jnp.float32),
+            cars_to_pass=jnp.array(initial_cars_to_pass, dtype=jnp.int32),
+            track_top_x=jnp.array(track_top_x, dtype=jnp.float32),
+            track_top_x_curve_offset=jnp.array(self.consts.initial_track_top_x_curve_offset, dtype=jnp.float32),
+            collision_mode=jnp.array(False, dtype=jnp.bool_),
+            collision_steps=jnp.array(0, dtype=jnp.int32),
+            mountain_left_x=jnp.array(self.consts.mountain_left_x_pos, dtype=jnp.float32),
+            mountain_right_x=jnp.array(self.consts.mountain_right_x_pos, dtype=jnp.float32),
+            adjusted_opponent_index=jnp.array(-1, dtype=jnp.int32),
+            adjusted_opponent_lane=jnp.array(-1, dtype=jnp.int32),
+            visible_opponent_positions=visible_opponent_positions,
+            opponent_index=opponent_index,
+            opponent_index_watermark=jnp.floor(opponent_index).astype(jnp.int32),
+            opponent_speed=jnp.array(initial_opp_speed, dtype=jnp.float32),
+            opponent_density=jnp.array(initial_opp_density, dtype=jnp.float32),
+            base_opponents=self.consts.base_opponents,
+            weather_index=jnp.array(0, dtype=jnp.int32)
+        )
+        return self._get_observation(state), state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_visible_opponent_positions(self, opponent_index: jnp.ndarray,
+                                        base_opponents: jnp.ndarray,
+                                        opponent_density: jnp.ndarray,
+                                        adjusted_opponent_index: jnp.ndarray,
+                                        adjusted_opponent_lane: jnp.ndarray,
+                                        visible_track_left: jnp.ndarray,
+                                        visible_track_right: jnp.ndarray) -> jnp.ndarray:
+        """
+        Calculate the x,y positions and colors of all 7 opponent slots.
+        Adapted from jax_enduro.py
+        """
+        base_y_positions = self.consts.opponent_slot_ys
+        slot_heights = jnp.diff(base_y_positions, prepend=self.consts.game_window_height)
+        slot_heights = jnp.abs(slot_heights)
+
+        index_integer = jnp.floor(opponent_index).astype(jnp.int32)
+        index_decimal = opponent_index - index_integer
+
+        opponent_array_size = base_opponents.shape[1]
+        slot_indices = (index_integer + jnp.arange(7)) % opponent_array_size
+        
+        # New structure: row 0 = lane, row 1 = color, row 2 = spawn_priority
+        current_slots = base_opponents[0][slot_indices].astype(jnp.int32)
+        current_colors = base_opponents[1][slot_indices].astype(jnp.int32)
+        spawn_priorities = base_opponents[2][slot_indices]
+
+        # Use density to mask opponents
+        is_occupied = spawn_priorities < opponent_density
+        current_slots = jnp.where(is_occupied, current_slots, -1)
+
+        is_adjusted = slot_indices == adjusted_opponent_index
+        current_slots = jnp.where(is_adjusted & (adjusted_opponent_lane != -1), adjusted_opponent_lane, current_slots)
+
+        y_offsets = jnp.floor(index_decimal * slot_heights).astype(jnp.int32)
+        y_positions = base_y_positions + y_offsets
+
+        track_row_indices = y_positions - self.consts.sky_height
+        track_row_indices = jnp.clip(track_row_indices, 0, self.consts.track_height - 1)
+
+        left_boundaries = visible_track_left[track_row_indices]
+        right_boundaries = visible_track_right[track_row_indices]
+        track_widths = right_boundaries - left_boundaries
+
+        car_widths = self.consts.car_widths
+
+        def calculate_x_for_lane(slot_idx, lane_code, left_bound, track_width):
+            valid_lane = jnp.clip(lane_code, 0, 2)
+            ratio = self.consts.lane_ratios[valid_lane]
+            center_x = left_bound + (track_width * ratio)
+            car_width = car_widths[slot_idx]
+            leftmost_x = center_x - (car_width // 2)
+            return jnp.where(lane_code == -1, -1.0, leftmost_x)
+
+        local_slot_indices = jnp.arange(7)
+        x_positions = jax.vmap(calculate_x_for_lane)(
+            local_slot_indices, current_slots, left_boundaries, track_widths
+        ).astype(jnp.int32)
+
+        no_opponent_mask = x_positions == -1
+        y_positions_final = jnp.where(no_opponent_mask, -1, y_positions)
+        result = jnp.stack([x_positions, y_positions_final, current_colors], axis=1)
+        return result
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _adjust_opponent_positions_when_overtaking(self, state: EnduroGameState, new_opponent_index: jnp.ndarray,
+                                                  base_opponents: jnp.ndarray,
+                                                  visible_track_left: jnp.ndarray, visible_track_right: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        new_integer_index = jnp.floor(new_opponent_index).astype(jnp.int32)
+        previous_integer_index = jnp.floor(state.opponent_index).astype(jnp.int32)
+        slots_retreated = jnp.maximum(0, previous_integer_index - new_integer_index)
+
+        def adjust_opponents():
+            player_row = (state.player_y - self.consts.sky_height).astype(jnp.int32)
+            left_boundary = visible_track_left[player_row]
+            right_boundary = visible_track_right[player_row]
+            track_width = right_boundary - left_boundary
+
+            player_left_ratio = (state.player_x - left_boundary) / track_width
+            player_right_ratio = (state.player_x + self.consts.car_width_0 - left_boundary) / track_width
+
+            player_in_lane_0 = (player_left_ratio < 1 / 3) & (player_right_ratio > 0)
+            player_in_lane_1 = (player_left_ratio < 2 / 3) & (player_right_ratio > 1 / 3)
+            player_in_lane_2 = (player_left_ratio < 1.0) & (player_right_ratio > 2 / 3)
+
+            opponent_array_size = base_opponents.shape[1]
+            slot_0_index = new_integer_index % opponent_array_size
+
+            base_lane = base_opponents[0, slot_0_index].astype(jnp.int32)
+            slot_0_lane = jnp.where((slot_0_index == state.adjusted_opponent_index) & (state.adjusted_opponent_lane != -1),
+                                    state.adjusted_opponent_lane, base_lane)
+            would_collide = ((slot_0_lane == 0) & player_in_lane_0) | \
+                            ((slot_0_lane == 1) & player_in_lane_1) | \
+                            ((slot_0_lane == 2) & player_in_lane_2)
+
+            safe_lane = jnp.where(~player_in_lane_0, 0, jnp.where(~player_in_lane_2, 2, 1)).astype(jnp.int32)
+
+            needs_adjustment = would_collide & (slot_0_lane != -1)
+            new_lane = jnp.where(needs_adjustment, safe_lane, slot_0_lane)
+            
+            return jnp.where(needs_adjustment, slot_0_index, state.adjusted_opponent_index).astype(jnp.int32), \
+                   jnp.where(needs_adjustment, new_lane, state.adjusted_opponent_lane).astype(jnp.int32)
+
+        return lax.cond(
+            slots_retreated > 0,
+            adjust_opponents,
+            lambda: (state.adjusted_opponent_index, state.adjusted_opponent_lane)
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _check_car_opponent_collision_optimized(
+            self,
+            player_car_x: jnp.int32,
+            player_car_y: jnp.int32,
+            visible_opponents: jnp.ndarray
+    ) -> jnp.ndarray:
+        car_0_x = visible_opponents[0, 0]
+        car_0_y = visible_opponents[0, 1]
+        car_1_x = visible_opponents[1, 0]
+        car_1_y = visible_opponents[1, 1]
+
+        car_0_exists = car_0_x != -1
+        car_1_exists = car_1_x != -1
+
+        player_car_width = self.consts.player_collision_width
+        car_0_width = self.consts.opponent_primary_collision_width
+        car_1_width = self.consts.opponent_secondary_collision_width
+        car_height = self.consts.collision_box_height
+
+        def check_car_0():
+            player_left = player_car_x
+            player_right = player_car_x + player_car_width
+            car_0_left = car_0_x
+            car_0_right = car_0_x + car_0_width
+            return (player_left < car_0_right) & (car_0_left < player_right)
+
+        def check_car_1():
+            x_distance = jnp.abs(player_car_x - car_1_x)
+            y_distance = jnp.abs(player_car_y - car_1_y)
+            too_far = (x_distance >= car_1_width) | (y_distance >= car_height)
+
+            def detailed_check():
+                player_left = player_car_x
+                player_right = player_car_x + player_car_width
+                car_1_left = car_1_x
+                car_1_right = car_1_x + car_1_width
+                x_overlap = (player_left < car_1_right) & (car_1_left < player_right)
+
+                player_top = player_car_y
+                player_bottom = player_car_y + car_height
+                car_1_top = car_1_y
+                car_1_bottom = car_1_y + car_height
+                y_overlap = (player_top < car_1_bottom) & (car_1_top < player_bottom)
+
+                basic_collision = x_overlap & y_overlap
+                car_1_y_int = car_1_y.astype(jnp.int32)
+                is_special_y = jnp.isin(car_1_y_int, self.consts.secondary_collision_special_y_values)
+                overlap_left = jnp.maximum(player_left, car_1_left)
+                overlap_right = jnp.minimum(player_right, car_1_right)
+                overlap_pixels = jnp.maximum(0, overlap_right - overlap_left)
+                exception = is_special_y & (overlap_pixels <= self.consts.secondary_collision_overlap_exception_max)
+                return basic_collision & ~exception
+
+            return jnp.where(too_far, False, detailed_check())
+
+        collision_0 = jnp.where(car_0_exists, check_car_0(), False)
+        collision_1 = jnp.where(car_1_exists, check_car_1(), False)
+        return collision_0 | collision_1
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: EnduroGameState, action: int) -> Tuple[EnduroObservation, EnduroGameState, float, bool, EnduroInfo]:
+        # Translate compact agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
+        # 1. Handle Speed (Acceleration and Braking)
+        is_fire = (
+            (atari_action == Action.FIRE)
+            | (atari_action == Action.RIGHTFIRE)
+            | (atari_action == Action.LEFTFIRE)
+        )
+        is_down = (
+            (atari_action == Action.DOWN)
+            | (atari_action == Action.DOWNRIGHT)
+            | (atari_action == Action.DOWNLEFT)
+        )
+        
+        # Acceleration: +1 phase after phase-specific number of FIRE frames (ALE-matched timing).
+        phase_idx = jnp.clip(jnp.floor(state.player_speed).astype(jnp.int32), 0, 8)
+        accel_interval = self.consts.accel_intervals[phase_idx]
+
+        # Speed delta: -1 phase every brake_interval frames if DOWN, +1 phase every accel_interval frames if FIRE, else 0
+        speed_delta = jnp.where(
+            is_down & (state.step_count % self.consts.brake_interval == 0),
+            -1.0,
+            jnp.where(
+                is_fire & (state.step_count % accel_interval == 0),
+                1.0,
+                0.0
+            )
+        )
+        
+        new_speed = jnp.clip(state.player_speed + speed_delta, self.consts.min_speed, self.consts.max_speed)
+
+        # 2. Handle Steering and Drift
+        is_left = (
+            (atari_action == Action.LEFT)
+            | (atari_action == Action.DOWNLEFT)
+            | (atari_action == Action.LEFTFIRE)
+        )
+        is_right = (
+            (atari_action == Action.RIGHT)
+            | (atari_action == Action.DOWNRIGHT)
+            | (atari_action == Action.RIGHTFIRE)
+        )
+
+        # Steering delta (speed-dependent)
+        steering_speed = self.consts.horizontal_movement_slope * new_speed + self.consts.horizontal_movement_offset
+        
+        # Add snow steering effect (slower steering)
+        steering_speed = steering_speed / jnp.where(
+            state.weather_index == self.consts.snow_weather_index,
+            self.consts.steering_snow_factor,
+            1.0
+        )
+        
+        steering_delta = jnp.where(is_left, -steering_speed, jnp.where(is_right, steering_speed, 0.0))
+
+        # Centripetal drift (pushes car away from curve proportional to visual curvature and speed)
+        # Curve ratio is from -1.0 to 1.0 based on current visual track curve
+        curve_ratio = state.track_top_x_curve_offset / self.consts.track_max_top_x_offset
+        drift_delta = -curve_ratio * (new_speed / self.consts.centripedal_shift_ratio)
+
+        # 3. Handle Collision and Horizontal Movement
+        offset_int = jnp.clip(
+            jnp.floor(state.track_top_x_curve_offset).astype(jnp.int32),
+            -self.consts.curve_offset_base,
+            self.consts.curve_offset_base
+        )
+        curve_index = offset_int + self.consts.curve_offset_base
+        base_left_curve = self.consts.precomputed_left_curves[curve_index]
+        base_right_curve = self.consts.precomputed_right_curves[curve_index]
+        
+        visible_track_left = base_left_curve + state.track_top_x
+        visible_track_right = base_right_curve + state.track_top_x
+        
+        player_row = (state.player_y - self.consts.sky_height).astype(jnp.int32)
+        l_x = visible_track_left[player_row]
+        r_x = visible_track_right[player_row]
+
+        # ====== OPPONENT MOVEMENT AND OVERTAKING ======
+        base_progression_rate = self.consts.opponent_relative_speed_factor / self.consts.frame_rate
+        relative_speed = (new_speed - state.opponent_speed) / state.opponent_speed * base_progression_rate
+        new_opponent_index = state.opponent_index + relative_speed
+
+        # During collision the player is stopped, so freeze the index entirely to prevent
+        # the immediate ghost-car effect (index drifts negative → passed cars snap back
+        # into view, then vanish when the player accelerates).
+        new_opponent_index = jnp.where(
+            state.collision_mode,
+            state.opponent_index,
+            new_opponent_index
+        )
+
+        # Watermark: track the furthest slot we have ever advanced to.
+        # Cars within LOOKBACK slots behind the watermark can still re-overtake the player;
+        # anything further back is considered permanently gone and stays masked.
+        # This prevents ghost spawns caused by density changes on re-visited slots or
+        # index wrap-around on very long runs.
+        _LOOKBACK = 10
+        new_watermark = jnp.maximum(
+            state.opponent_index_watermark,
+            jnp.floor(new_opponent_index).astype(jnp.int32)
+        )
+        new_opponent_index = jnp.maximum(
+            new_opponent_index,
+            (new_watermark - _LOOKBACK).astype(jnp.float32)
+        )
+
+        new_adjusted_idx, new_adjusted_lane = self._adjust_opponent_positions_when_overtaking(
+            state, new_opponent_index, state.base_opponents, visible_track_left, visible_track_right
+        )
+
+        new_visible_opponent_positions = self._get_visible_opponent_positions(
+            new_opponent_index,
+            state.base_opponents,
+            state.opponent_density,
+            new_adjusted_idx,
+            new_adjusted_lane,
+            visible_track_left,
+            visible_track_right
+        )
+
+        # Overtaking detection
+        old_window_start = jnp.floor(state.opponent_index).astype(jnp.int32)
+        new_window_start = jnp.floor(new_opponent_index).astype(jnp.int32)
+        window_moved = new_window_start - old_window_start
+
+        cars_overtaken_change = jnp.where(
+            (window_moved > 0) & (state.visible_opponent_positions[0, 0] > -1),
+            1, 0
+        )
+        cars_overtaken_change -= jnp.where(
+            (window_moved < 0) & (new_visible_opponent_positions[0, 0] > -1),
+            1, 0
+        )
+        # After a level is marked as passed, freeze overtaking progress/reward
+        # until the day rollover logic handles the transition.
+        cars_overtaken_change = jnp.where(state.level_passed > 0, 0, cars_overtaken_change)
+        # Keep the "cars to pass" counter bounded:
+        # - decreases when the player overtakes
+        # - increases when opponents overtake from behind
+        # - never below 0 and never above the initial position (200)
+        new_cars_to_pass = jnp.clip(
+            state.cars_to_pass - cars_overtaken_change,
+            0,
+            self.consts.initial_position
+        )
+
+        # ====== COLLISIONS ======
+        def collision_update(_):
+            new_collision_steps = state.collision_steps - 1
+            new_collision_mode = new_collision_steps > 0
+            # Ignore acceleration/braking during collision push-back
+            coll_speed = state.player_speed
+            push_direction = jnp.where(state.player_x < self.consts.player_x_start, 1.0, -1.0)
+            coll_player_x = state.player_x + push_direction * self.consts.collision_push_back
+            # During collision, move back to base y
+            coll_player_y = self.consts.player_y_start
+            return coll_player_x, coll_player_y, coll_speed, new_collision_mode, new_collision_steps
+
+        def normal_update(_):
+            # Apply horizontal movement
+            player_width_f = jnp.float32(self.consts.player_collision_width)
+            normal_player_x = jnp.clip(state.player_x + steering_delta + drift_delta, 0.0, self.consts.screen_width - player_width_f)
+            
+            # player_y encodes speed phase directly: phase N → N pixels above the black base line.
+            normal_player_y = self.consts.player_y_start - jnp.floor(new_speed)
+
+            # Side Collision
+            is_side_colliding = (normal_player_x <= l_x) | (normal_player_x + player_width_f >= r_x)
+            
+            # Opponent Collision
+            is_opponent_colliding = self._check_car_opponent_collision_optimized(
+                normal_player_x.astype(jnp.int32),
+                normal_player_y.astype(jnp.int32),
+                new_visible_opponent_positions
+            )
+            
+            is_colliding = is_side_colliding | is_opponent_colliding
+            
+            return jax.lax.cond(
+                is_colliding,
+                lambda: (state.player_x, state.player_y, jnp.where(is_opponent_colliding, jnp.minimum(new_speed * self.consts.side_collision_speed_drop, self.consts.min_speed), new_speed * self.consts.side_collision_speed_drop), True, jnp.array(self.consts.collision_duration, dtype=jnp.int32)),
+                lambda: (normal_player_x, normal_player_y, new_speed, False, jnp.array(0, dtype=jnp.int32))
+            )
+
+        new_player_x, new_player_y, new_speed, new_collision_mode, new_collision_steps = jax.lax.cond(
+            state.collision_mode,
+            collision_update,
+            normal_update,
+            None
+        )
+
+        # 4. Handle Track Curvature (Top X and Offset)
+        # Track top_x moves opposite to player movement on X axis
+        new_track_top_x = 84.0 + self.consts.player_x_start - new_player_x
+
+        # Get curvature from whole_track for track bending
+        track_starts = self.consts.whole_track[:, 1]
+        directions = self.consts.whole_track[:, 0]
+        segment_index = jnp.searchsorted(track_starts, state.distance, side='right') - 1
+        curvature = directions[segment_index]
+
+        # ====== MOUNTAINS ======
+        horizon_shift = new_track_top_x - state.track_top_x
+        mountain_movement = -curvature * self.consts.mountain_pixel_movement_per_frame_per_speed_unit * new_speed + horizon_shift
+        
+        # Wrapping logic
         lo = self.consts.window_offset_left
         hi = self.consts.screen_width
-        period = (hi - lo + 1)
-
-        # Positions of the mountain edges
-        x_left_mountain = state.mountain_left_x.astype(jnp.int32)
-        x_right_mountain = state.mountain_right_x.astype(jnp.int32)
-        y_left_mountain = self.consts.sky_height - mountain_left_height
-        y_right_mountain = self.consts.sky_height - mountain_right_height
-
-        # 1) Base draw at current positions (use clipped render)
-        raster = self.jr.render_at_clipped(raster, x_left_mountain, y_left_mountain, mountain_left_sprite)
-        raster = self.jr.render_at_clipped(raster, x_right_mountain, y_right_mountain, mountain_right_sprite)
-
-        # 2) If the sprite overflows the right edge, draw a wrapped copy
-        overflow_left = (x_left_mountain + mountain_left_width) > (hi + 1)
-        overflow_right = (x_right_mountain + mountain_right_width) > (hi + 1)
-        raster = lax.cond(
-            overflow_left,
-            lambda r: self.jr.render_at_clipped(r, x_left_mountain - period, y_left_mountain, mountain_left_sprite),
-            lambda r: r,
-            raster,
-        )
-        raster = lax.cond(
-            overflow_right,
-            lambda r: self.jr.render_at_clipped(r, x_right_mountain - period, y_right_mountain, mountain_right_sprite),
-            lambda r: r,
-            raster,
-        )
+        period = hi - lo + 1
         
-        # 3) No manual masking needed. The BACKGROUND raster already provides the borders.
-        return raster
+        new_mountain_left_x = lo + jnp.mod(state.mountain_left_x + mountain_movement - lo, period)
+        new_mountain_right_x = lo + jnp.mod(state.mountain_right_x + mountain_movement - lo, period)
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _render_weather(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
-        """
-        Renders the skybox and the track background using pre-compiled stencils.
-        """
-        weather_idx = state.weather_index
-        # sky background
-        raster = self.jr.render_at(raster, self.consts.window_offset_left, 0, self.sky_masks[weather_idx])
-        # green background
-        raster = self.jr.render_at(raster, self.consts.window_offset_left, self.consts.sky_height, self.grass_masks[weather_idx])
-        # render the horizon stripes
-        raster = self.jr.render_at(raster, self.consts.window_offset_left, self.consts.sky_height - 2, self.horizon_1_masks[weather_idx])
-        raster = self.jr.render_at(raster, self.consts.window_offset_left, self.consts.sky_height - 4, self.horizon_2_masks[weather_idx])
-        raster = self.jr.render_at(raster, self.consts.window_offset_left, self.consts.sky_height - 6, self.horizon_3_masks[weather_idx])
-        return raster
+        # Target offset based on curvature
+        target_offset = curvature * self.consts.track_max_top_x_offset
+        current_offset = target_offset - state.track_top_x_curve_offset
+        
+        # Speed-adjusted curve rate
+        speed_multiplier = 1 + (new_speed - self.consts.min_speed) / (self.consts.max_speed - self.consts.min_speed) * 2.0
+        adjusted_curve_rate = self.consts.curve_rate * speed_multiplier
+        
+        offset_change = jnp.clip(current_offset, -adjusted_curve_rate, adjusted_curve_rate)
+        new_top_x_curve_offset = state.track_top_x_curve_offset + offset_change
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _render_lower_background(self, raster: jnp.ndarray) -> jnp.ndarray:
-        """
-        Renders the background and score box under the player screen.
-        """
-        # black background
-        background_overlay = self.SHAPE_MASKS['background_overlay']
-        raster = self.jr.render_at(raster, 0, self.consts.game_window_height - 1, background_overlay)
-        # score box
-        score_box = self.SHAPE_MASKS['score_box']
-        raster = self.jr.render_at(raster, self.consts.info_box_x_pos, self.consts.info_box_y_pos, score_box)
-        return raster
+        # 4. Update distance
+        # Map phase 0–10 to old-equivalent speed 6–120 so distance rate is unchanged vs ALE.
+        effective_old_speed = 6.0 + new_speed * (114.0 / self.consts.max_speed)
+        distance_delta = effective_old_speed * self.consts.km_per_speed_unit_per_frame
+        new_distance = state.distance + distance_delta
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _render_fog(self, raster: jnp.ndarray, state: EnduroGameState) -> jnp.ndarray:
-        """
-        Renders the fog if applicable.
-        """
-        fog_mask = self.SHAPE_MASKS['fog_box']
-        raster = jnp.where(
-            state.weather_index == self.consts.night_fog_index,
-            self.jr.render_at(raster, self.consts.window_offset_left, 0, fog_mask),
-            raster
-        )
-        return raster
+        # 5. Update Weather and Day Cycle
+        new_step_count = state.step_count + 1
 
+        # Calculate time-based weather and day
+        cycled_time = (new_step_count / self.consts.frame_rate) % self.consts.day_cycle_time
+        time_weather_index = jnp.searchsorted(self.consts.weather_starts_s, cycled_time, side='right')
+        time_day_count = jnp.floor(new_step_count / self.consts.frame_rate / self.consts.day_cycle_time).astype(jnp.int32)
 
-"""
-ACTIVISION (R)
+        # Calculate distance-based weather and day
+        # In distance mode, weather cycles every 16km, changing index every 1km
+        dist_weather_index = (new_distance // 1.0).astype(jnp.int32) % 16
+        dist_day_count = (new_distance // 16.0).astype(jnp.int32)
 
-RULES AND REGULATIONS
+        # Use distance-based if configured
+        use_dist = self.consts.weather_cycle_distance > 0.0
 
-ENDURO TM
+        new_weather_index = jax.lax.select(use_dist, dist_weather_index, time_weather_index)
+        new_day_count = jax.lax.select(use_dist, dist_day_count, time_day_count)
 
+        # Day transition and level logic        # Check if the player passed the level (cars_to_pass reaches 0)
+        new_level_passed = jnp.logical_or(
+            state.level_passed,
+            new_cars_to_pass <= 0
+        ).astype(jnp.int32)
 
+        def reset_day():
+            # If day advances and level is passed, advance to next level.
+            # If day advances and level is not passed, game over!
+            is_game_over = jnp.logical_not(new_level_passed).astype(jnp.bool_)
+            level = jnp.where(is_game_over, state.level, state.level + 1)
+            
+            # Difficulty scaling
+            final_opp_speed = jnp.minimum(
+                self.consts.max_opponent_speed,
+                state.opponent_speed + self.consts.opponent_speed_increment
+            )
+            final_opp_density = jnp.minimum(
+                self.consts.max_opponent_density,
+                state.opponent_density + self.consts.opponent_density_increment
+            )
+            
+            cars_to_pass = jnp.where(is_game_over, new_cars_to_pass, self.consts.next_day_car_position)
+            return level, jnp.array(0, dtype=jnp.int32), is_game_over, cars_to_pass, final_opp_speed, final_opp_density
 
-ACTIVISION NATIONAL ENDURO TM RULES AND REGULATIONS
+        def do_nothing():
+            return state.level, new_level_passed, state.game_over, new_cars_to_pass, state.opponent_speed, state.opponent_density
 
-Strap on your goggles. Sink into your seat. And leave all your
-fears in the pit. You're about to enter the race of your life.
-You'll be required to pass lots of cars each day. Through sun
-and snow and fog and ice, sunrise to sunset - as fast as you
-can. Welcome to the National Enduro!
-
-ENDURO TM BASICS
-
-1.   Hook up your video game system. Follow manufacturer's
-     instructions.
-
-2.   With power OFF, plug in game cartridge.
-
-3.   Turn the power ON. If no picture appears, check
-     connection of your game system to your TV; then repeat
-     steps 1-3.
-
-4.   Plug in the LEFT Joystick Controller (right Controller is
-     not used).
-
-5.   The difficulty switch and game select switch are not
-     used.
-
-6.   To start, press game reset switch.
-
-7.   The Joystick Controller is held with the red button in
-     the upper left position. Push the Joystick right or left
-     top move your car right or left. The red button is your
-     accelerator. The longer you keep the button depressed,
-     the faster your car will go, until it reaches top speed.
-     To coast at a constant speed, press the red button until
-     the desired speed is reached. When you release the
-     button, this speed will be maintained. To slow down,
-     release the red button and apply the brakes by pulling
-     the Joystick back.
-
-8.   Passing cars. The number of cars you must pass is posted
-     at the beginning of each day in the lower right corner of
-     your instrument panel (200 on the first day, 300 on
-     subsequent days). Each time you pass a car, this meter
-     counts off by one. When you pass the required number of
-     cars, green flags appear. But keep going. All additional
-     kilometres are added to your total. You'll move on to the
-     next day when the present day ends. If you don't pass the
-     required number of cars by daybreak, the game ends.
-
-SPECIAL FEATURES OF ENDURO TM
-
-Time of day. From dawn till the black of night, you'll be on
-the road. Pay attention to the lighting and scenery. It
-represents the time of day, letting you know how much time is
-remaining. And, use caution at night. You can only see the
-tail lights of the other cars.
-
-Weather conditions keep changing, so brace yourself. Can you
-hang in through ice and fog? A white, icy road means your car
-will be less responsive to your steering. A thick, fog-
-shrouded screen gives you less time to react, since it will
-take you longer to see the cars up ahead.
-
-Days and kilometres. A realistic odometer registers the
-kilometres you've covered. Beneath the odometer is the day
-indicator, which keeps track of the number of days you've been
-on the Enduro circuit. When the race is over, the kilometre
-reading on the odometer and the day on the indicator represent
-your racing results or score.
-
-Increasing difficulty. The race gets tougher with each new
-day. The other cars travel faster and spread out across the
-road more and more, making it harder to pass them.
-
-GETTING THE FEEL OF ENDURO RACING
-
-In preparing for a race, every pro driver checks out the
-course. Be sure to do the same thing. Get to know the timing
-of the weather and lighting conditions. Learn how your car
-responds to your touch.
-
-Slow down on the ice and keep your eyes on the patterns of the
-cars in the distance. Drive defensively, since the other cars
-will not get out of your way. The fog will really test your
-reflexes. You'll need to slow down and develop a rapid
-steering response to make up for the limited visibility.
-
-JOIN THE ACTIVISION (R) "ROADBUSTERS" 
-
-Do you have the drive, the stamina, the grit to endure this
-race for 5 days or more? If so, an on-screen racing trophy
-will pop up before your very eyes. Now you can join the
-"Roadbusters" and really start breaking records. Send a photo
-of the TV screen showing your winning race results, along with
-your name and address, to your nearest Activision distributor
-(a complete list enclosed). We'll send you the official high
-performance emblem.
-
-HOW TO BECOME A "ROADBUSTER"
-Tips from Larry Miller, designer of Enduro TM
-
-Larry Miller is a powerhouse game designer with a PhD in
-physics. When he isn't designing games, he may be sailing,
-skiing or playing the piano. His most recent hit was Spider
-Fighter TM.
-
-"The best way to outlast other drivers is to pace yourself.
-You won't survive long if you stay at maximum speed because
-you'll keep hitting the other cars. Go only as fast as it
-takes to pass the required number of cars each day.
-
-"If you can choose between steering into the side of the road
-or hitting another car, always steer into the roadside. It's
-just a minor setback, and you won't lose as much time.
-
-"Also, it's always better to go around diagonally paired cars
-than to squeeze between them. But, if you must squeeze between
-them, keep your speed just above theirs and be careful!
-
-"Here's another tip; If you approach a group of cars that are
-really blocking the road - slow down. Let them disappear back
-into the distance ahead of you. Then, accelerate. When you
-meet up with these cars again, they will have probably changed
-their positions.
-
-"I hope you enjoy the National Enduro as much as I enjoyed
-designing it. Drop me a card from your next pit stop - I'd
-love to hear from you. And please, remember to fasten your
-seatbelts."
-
-[Photo - Larry Miller beside a 1934 Invicta, one of only five
-remaining in the world (courtesy of Paradise Motorcars,
-Sacramento, California, USA).]
-
-ACTIVISION (R) VIDEO GAME CARTRIDGE
-LIMITED ONE YEAR WARRANTY
-
-Activision, Inc. warrants to the original consumer purchaser
-of this Activision video game cartridge that, if the cartridge
-is discovered to be defective in materials or workmanship
-within one (1) year from the date of purchase, Activision will
-either repair or replace, at its option, such cartridge free
-of charge, upon receipt of the cartridge, postage prepaid,
-with proof of date of purchase, at its distribution center.
-
-This warranty is limited to the electronic circuitry and
-mechanical parts originally provided by Activision and is not
-applicable to normal wear and tear. This warranty shall not be
-applicable and shall be void if the defect in the cartridge
-has arisen through abuse, unreasonable use, mistreatment or
-neglect. Except as specified in this warranty, Activision
-gives no express or implied guarantees, undertakings,
-conditions or warranties and makes no representations
-concerning the cartridges. In no event will Activision be
-responsible under this warranty for any special, incidental,
-or consequential damage incurred by any consumer producer.
-
-This warranty and the statements contained herein do not
-affect any statutory rights of the consumer against the
-manufacturer or supplier of the cartridge.
-
-NOTE: For service in your area, please see the distributor
-list.
-
-YOUR BEST GAME SCORES
-"""
-
-
-class EnduroDebugRenderer:
-    """ Custom renderer for debugging. Wrapped into a class to make it easy to collapse """
-    DIRECTION_LABELS = {
-        -1: "Left",
-        0: "Straight",
-        1: "Right"
-    }
-
-    @staticmethod
-    def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300):
-        """Updates the Pygame display with the rendered raster.
-
-        Args:
-            pygame_screen: The Pygame screen surface.
-            raster: JAX array of shape (Height, Width, 3/4) containing the image data.
-            SCALING_FACTOR: Factor to scale the raster for display.
-            WIDTH: Expected width of the input raster (used for scaling calculation).
-            HEIGHT: Expected height of the input raster (used for scaling calculation).
-        """
-        pygame_screen.fill((0, 0, 0))
-
-        # Convert JAX array to NumPy, then transpose to (W, H, C) for pygame if needed
-        raster_np = np.array(raster)
-        raster_np = raster_np.astype(np.uint8)
-        # Transpose only if shape is (H, W, C) - new renderer outputs (H, W, C)
-        if len(raster_np.shape) == 3 and raster_np.shape[0] != raster_np.shape[1]:
-            # Likely (H, W, C) format, transpose to (W, H, C) for pygame
-            raster_np = np.transpose(raster_np, (1, 0, 2))  # (H, W, C) -> (W, H, C)
-
-        # Pygame surface needs (W, H). make_surface expects (W, H, C) correctly.
-        frame_surface = pygame.surfarray.make_surface(raster_np)
-
-        # Pygame scale expects target (width, height)
-        target_width_px = int(WIDTH * SCALING_FACTOR)
-        target_height_px = int(HEIGHT * SCALING_FACTOR)
-        # Optional: Adjust scaling if raster size differs from constants
-        if raster_np.shape[0] != WIDTH or raster_np.shape[1] != HEIGHT:
-            target_width_px = int(raster_np.shape[0] * SCALING_FACTOR)
-            target_height_px = int(raster_np.shape[1] * SCALING_FACTOR)
-
-        frame_surface_scaled = pygame.transform.scale(
-            frame_surface, (target_width_px, target_height_px)
+        new_level, final_level_passed, new_game_over, final_cars_to_pass, final_opp_speed, final_opp_density = lax.cond(
+            new_day_count > state.day_count,
+            reset_day,
+            do_nothing,
         )
 
-        pygame_screen.blit(frame_surface_scaled, (0, 0))
-        pygame.display.flip()
+        new_state = state.replace(
+            player_x=new_player_x,
+            player_y=new_player_y,
+            player_speed=new_speed,
+            distance=new_distance,
+            step_count=new_step_count,
+            day_count=new_day_count,
+            level=new_level,
+            level_passed=final_level_passed,
+            game_over=new_game_over,
+            weather_index=new_weather_index,
+            track_top_x=new_track_top_x,
+            track_top_x_curve_offset=new_top_x_curve_offset,
+            collision_mode=new_collision_mode,
+            collision_steps=new_collision_steps,
+            mountain_left_x=new_mountain_left_x,
+            mountain_right_x=new_mountain_right_x,
+            opponent_index=new_opponent_index,
+            opponent_index_watermark=new_watermark,
+            visible_opponent_positions=new_visible_opponent_positions,
+            adjusted_opponent_index=new_adjusted_idx,
+            adjusted_opponent_lane=new_adjusted_lane,
+            opponent_speed=final_opp_speed,
+            opponent_density=final_opp_density,
+            cars_to_pass=final_cars_to_pass
+        )
 
-    @staticmethod
-    def render_debug_overlay(screen, state: EnduroGameState, font, game_config, obs: EnduroObservation, reward):
-        """Render debug information as pygame text overlay"""
-        track_direction_starts_at = state.whole_track[:, 1]
-        track_segment_index = int(jnp.searchsorted(track_direction_starts_at, state.distance, side='right') - 1)
-        track_direction = state.whole_track[track_segment_index, 0]
-        debug_info = [
-            f"Speed: {float(state.player_speed):.2f}",  # Convert JAX arrays to Python floats
-            f"Player X (abs): {state.player_x_abs_position}",
-            f"Player Y (abs): {state.player_y_abs_position}",
-            f"Time: {state.total_time_elapsed}",
-            # f"Distance: {state.distance}",
-            f"Level: {state.level}",
-            f"Level passed: {state.level_passed}",
-            f"Day count: {state.day_count}",
-            # f"Steering sensitivity: {}",
-            # f"Left Mountain x: {state.mountain_left_x}",
-            # f"Opponent Index: {state.opponent_index}",
-            f"Opponents: {state.visible_opponent_positions}",
-            # f"Cars To overtake: {state.cars_to_overtake}",
-            # f"Cars overtaken: {state.cars_overtaken}",
-            # f"Opponent Collision: {state.is_collision}",
-            # f"Cooldown Drift direction: {state.cooldown_drift_direction}"
-            # f"Weather: {state.weather_index}",
-            # f"Track direction: {self.DIRECTION_LABELS.get(int(track_direction))} ({track_direction})",
-            # f"Track top X: {state.track_top_x}",
-            # f"Track left X: {state.visible_track_left}",
-            # f"Track right X: {state.visible_track_right}",
-            # f"Top X Offset: {state.track_top_x_curve_offset}",
-            # f"Obs right track: {obs.track_right_xs}",
-            # f"Obs Opponents: {obs.visible_opponents}",
-            # f"Obs Cooldown: {obs.cooldown}",
-            f"Reward: {reward}",
-        ]
+        obs = self._get_observation(new_state)
+        reward = self._get_reward(state, new_state)
+        done = self._get_done(new_state)
+        info = self._get_info(new_state)
 
-        # Semi-transparent background for better readability
-        overlay = pygame.Surface((250, len(debug_info) * 25 + 20))  # Made slightly larger
-        overlay.set_alpha(180)
-        overlay.fill((0, 0, 0))
-        screen.blit(overlay, (10, 10))
+        return obs, new_state, reward, done, info
 
-        # Render each debug line
-        for i, text in enumerate(debug_info):
-            text_surface = font.render(text, True, (255, 255, 255))
-            screen.blit(text_surface, (15, 15 + i * 25))
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, state: EnduroGameState, new_state: EnduroGameState) -> float:
+        # Guard against scene/day rollover resets (e.g., cars_to_pass jumping up for next day).
+        # Reward should reflect overtakes, not bookkeeping resets.
+        day_rolled_over = new_state.day_count > state.day_count
+        cars_overtaken = (state.cars_to_pass - new_state.cars_to_pass).astype(jnp.float32)
+        cars_overtaken = jnp.where(day_rolled_over, 0.0, cars_overtaken)
+        return cars_overtaken
 
-    def play_enduro(self, debug_mode=True):
-        """
-        Plays the game with a renderer
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_done(self, state: EnduroGameState) -> bool:
+        return state.game_over
 
-        Args:
-            debug_mode: If True, shows debug overlay. Set to False for production/optimized runs.
-        """
-        pygame.init()
-        # Initialize game and renderer
-        game = JaxEnduro()
-        renderer = EnduroRenderer(game.config)
-        scaling = 4
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: EnduroGameState) -> EnduroInfo:
+        return EnduroInfo()
 
-        screen = pygame.display.set_mode((160 * scaling, 210 * scaling))
-        pygame.display.set_caption("Enduro" + (" - DEBUG MODE" if debug_mode else ""))
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: EnduroGameState) -> jnp.ndarray:        return self.renderer.render(state)
 
-        font = pygame.font.Font(None, 20)  # You can adjust size as needed
-        small_font = pygame.font.Font(None, 16)
+    def _get_observation(self, state: EnduroGameState) -> EnduroObservation:
+        offset_int = jnp.clip(
+            jnp.floor(state.track_top_x_curve_offset).astype(jnp.int32),
+            -self.consts.curve_offset_base,
+            self.consts.curve_offset_base
+        )
+        curve_index = offset_int + self.consts.curve_offset_base
+        visible_track_left = self.consts.precomputed_left_curves[curve_index] + state.track_top_x
+        visible_track_right = self.consts.precomputed_right_curves[curve_index] + state.track_top_x
 
-        # Always JIT compile the core game functions
-        # This ensures JIT compatibility is tested even during debugging
-        step_fn = jax.jit(game.step)
-        render_fn = jax.jit(renderer.render)
-        reset_fn = jax.jit(game.reset)
+        player_row = jnp.clip(
+            (state.player_y - self.consts.sky_height).astype(jnp.int32),
+            0,
+            self.consts.track_height - 1,
+        )
+        left_x = visible_track_left[player_row]
+        right_x = visible_track_right[player_row]
 
-        init_obs, state = reset_fn()
+        dist_left = jnp.clip(state.player_x - left_x, 0.0, float(self.consts.screen_width))
+        dist_right = jnp.clip(
+            right_x - (state.player_x + float(self.consts.car_width_0)),
+            0.0,
+            float(self.consts.screen_width),
+        )
 
-        # Setup game loop
-        clock = pygame.time.Clock()
-        running = True
-        done = False
-
-        print(f"Starting game in {'DEBUG' if debug_mode else 'PRODUCTION'} mode")
-        print("Core game functions are JIT compiled for performance and compatibility testing")
-        if debug_mode:
-            print("Press 'D' to toggle debug overlay")
-
-        show_debug = debug_mode  # Can be toggled during gameplay
-
-        while running and not done:
-            # Handle events
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_d and debug_mode:
-                        show_debug = not show_debug
-                        print(f"Debug overlay: {'ON' if show_debug else 'OFF'}")
-
-            # Handle input
-            keys = pygame.key.get_pressed()
-            # allow arrows and wsad
-            if (keys[pygame.K_a] or keys[pygame.K_LEFT]) and keys[pygame.K_SPACE]:
-                action = Action.LEFTFIRE
-            elif (keys[pygame.K_d] or keys[pygame.K_RIGHT]) and keys[pygame.K_SPACE]:
-                action = Action.RIGHTFIRE
-            elif (keys[pygame.K_s] or keys[pygame.K_DOWN]) and keys[pygame.K_SPACE]:
-                action = Action.DOWNFIRE
-            elif keys[pygame.K_SPACE]:
-                action = Action.FIRE
-            elif keys[pygame.K_a] or keys[pygame.K_LEFT]:
-                action = Action.LEFT
-            elif keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-                action = Action.RIGHT
-            elif keys[pygame.K_s] or keys[pygame.K_DOWN]:
-                action = Action.DOWN
-            else:
-                action = Action.NOOP
-
-            # Update game state
-            obs, state, reward, done, info = step_fn(state, action)
-
-            # Render game frame
-            frame = render_fn(state)
-            self.update_pygame(screen, frame, scaling, 160, 210)
-
-            # Add debug overlay if enabled
-            if debug_mode and show_debug:
-                self.render_debug_overlay(screen, state, font, renderer.consts, obs, reward)
-
-                # Add controls help in corner
-                help_text = small_font.render("Press 'D' to toggle debug", True, (200, 200, 200))
-                screen.blit(help_text, (screen.get_width() - 180, screen.get_height() - 20))
-
-            pygame.display.flip()
-
-            clock.tick(60)
-
-        # If game over, wait before closing
-        if done:
-            pygame.time.wait(2000)
-
-
-# Run this for more a debug overlay that enables you to view the state variables.
-if __name__ == '__main__':
-    # For debugging and development
-    EnduroDebugRenderer().play_enduro(debug_mode=True)
+        return EnduroObservation(
+            enemy_positions=state.visible_opponent_positions[:, :2].astype(jnp.float32),
+            road_features=jnp.array(
+                [
+                    state.track_top_x_curve_offset,
+                    dist_left,
+                    dist_right,
+                ],
+                dtype=jnp.float32,
+            )
+        )
