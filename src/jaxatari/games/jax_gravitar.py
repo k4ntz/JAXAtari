@@ -568,7 +568,6 @@ class EnvState:
     terrain_scale: jnp.ndarray  # float32, rendering scale factor
     terrain_offset: jnp.ndarray  # (2,) float32, screen-top-left offset [ox, oy]
 
-    terrain_bank: jnp.ndarray  # int32，shape (B, H, W)
     terrain_bank_idx: jnp.ndarray  # int32, index of the currently used bank (0 = no terrain)
     respawn_shift_x: jnp.ndarray  # float32
     reactor_dest_active: jnp.ndarray  # bool
@@ -1296,7 +1295,6 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
         terrain_sprite_idx=jnp.int32(-1),
         terrain_scale=jnp.array(1.0),
         terrain_offset=jnp.array([0.0, 0.0]),
-        terrain_bank=jnp.zeros((6, WINDOW_HEIGHT, WINDOW_WIDTH, 3), dtype=jnp.int32),
         terrain_bank_idx=jnp.int32(0),
         reactor_timer=jnp.int32(0),
         reactor_activated=jnp.array(False),
@@ -1598,9 +1596,10 @@ def check_enemy_hit(bullets: Bullets, enemies: Enemies) -> Tuple[Bullets, Enemie
 
 
 @jax.jit
-def terrain_hit(env_state: EnvState, x: jnp.ndarray, y: jnp.ndarray, radius=jnp.float32(0.3)) -> jnp.ndarray:
+def terrain_hit(env_state: EnvState, terrain_bank: jnp.ndarray, x: jnp.ndarray, y: jnp.ndarray,
+                radius=jnp.float32(0.3)) -> jnp.ndarray:
     adjusted_x, adjusted_y = x, y
-    H, W = env_state.terrain_bank.shape[1], env_state.terrain_bank.shape[2]
+    H, W = terrain_bank.shape[1], terrain_bank.shape[2]
 
     xi = jnp.clip(jnp.round(adjusted_x).astype(jnp.int32), 0, W - 1)
     yi = jnp.clip(jnp.round(adjusted_y).astype(jnp.int32), 0, H - 1)
@@ -1608,14 +1607,14 @@ def terrain_hit(env_state: EnvState, x: jnp.ndarray, y: jnp.ndarray, radius=jnp.
     xs = jnp.clip(xi + _TERRAIN_HIT_DX, 0, W - 1)
     ys = jnp.clip(yi + _TERRAIN_HIT_DY, 0, H - 1)
 
-    bi = jnp.clip(env_state.terrain_bank_idx, 0, env_state.terrain_bank.shape[0] - 1)
-    page = env_state.terrain_bank[bi]
+    bi = jnp.clip(env_state.terrain_bank_idx, 0, terrain_bank.shape[0] - 1)
+    page = terrain_bank[bi]
 
     patch = page[ys[:, None], xs[None, :]]
 
     r_eff = jnp.minimum(jnp.float32(radius), jnp.float32(_TERRAIN_HIT_RMAX))
     mask = _TERRAIN_HIT_DIST2 <= (r_eff ** 2)
-    bg_val = env_state.terrain_bank[0, 0, 0]
+    bg_val = terrain_bank[0, 0, 0]
     is_not_black = patch != bg_val
 
     return jnp.any(is_not_black & mask)
@@ -2050,8 +2049,8 @@ def enemy_step(enemies: Enemies, window_width: int) -> Enemies:
                    death_timer=enemies.death_timer, hp=enemies.hp)
 
 @jax.jit
-def step_map(env_state: EnvState, action: int):
-    # --- 1. State Preparation ---
+def step_map(env_state: EnvState, action: int, terrain_bank: jnp.ndarray):
+    # --- 1. State Preparation -
     # Check if the ship was crashing in the previous frame
     was_crashing = env_state.crash_timer > 0
 
@@ -2276,7 +2275,7 @@ def step_map(env_state: EnvState, action: int):
 
 
 @jax.jit
-def _step_level_core(env_state: EnvState, action: int):
+def _step_level_core(env_state: EnvState, action: int, terrain_bank: jnp.ndarray):
     # --- 1. UFO Spawn ---
     def _spawn_ufo_once(env):
         W, H = WINDOW_WIDTH, WINDOW_HEIGHT
@@ -2289,11 +2288,11 @@ def _step_level_core(env_state: EnvState, action: int):
         vx = jnp.where(is_born_on_left, 0.6 / WORLD_SCALE, -0.6 / WORLD_SCALE)
 
         # 2. Check for the safe altitude across the entire future path
-        bank_idx = jnp.clip(env.terrain_bank_idx, 0, env.terrain_bank.shape[0] - 1)
-        terrain_page = env.terrain_bank[bank_idx]
+        bank_idx = jnp.clip(env.terrain_bank_idx, 0, terrain_bank.shape[0] - 1)
+        terrain_page = terrain_bank[bank_idx]
 
         # We no longer slice, but compute over the entire terrain map
-        bg_val = env.terrain_bank[0, 0, 0]
+        bg_val = terrain_bank[0, 0, 0]
         is_ground = terrain_page != bg_val
         is_ground_any_x = jnp.any(is_ground, axis=1)
         highest_point_on_map = jnp.argmax(is_ground_any_x)
@@ -2431,7 +2430,7 @@ def _step_level_core(env_state: EnvState, action: int):
 
     # --- 3. Integrate UFO Logic ---
     # Call the new helper function that returns an `env_state` with partially updated UFO-related states
-    state_after_ufo = _update_ufo(state_after_spawn, ship_after_move, bullets)
+    state_after_ufo = _update_ufo(state_after_spawn, ship_after_move, bullets, terrain_bank)
     # Extract the updated state from the return value
     ufo = state_after_ufo.ufo
     bullets = state_after_ufo.bullets
@@ -2548,8 +2547,8 @@ def _step_level_core(env_state: EnvState, action: int):
     enemy_bullets = update_bullets(enemy_bullets)
 
     # --- 6. Collision Detection ---
-    bullets = _bullets_hit_terrain(state_after_ufo, bullets)
-    enemy_bullets = _bullets_hit_terrain(state_after_ufo, enemy_bullets)
+    bullets = _bullets_hit_terrain(state_after_ufo, terrain_bank, bullets)
+    enemy_bullets = _bullets_hit_terrain(state_after_ufo, terrain_bank, enemy_bullets)
     enemies_before_hits = enemies
     bullets, enemies = check_enemy_hit(bullets, enemies)
 
@@ -2574,7 +2573,7 @@ def _step_level_core(env_state: EnvState, action: int):
     new_fuel_tanks = new_fuel_tanks._replace(active=new_fuel_tanks.active | hidden_tank_to_reveal)
 
     enemy_bullets, hit_by_enemy_bullet = consume_ship_hits(ship_after_move, enemy_bullets, SHIP_RADIUS)
-    hit_terr = terrain_hit(state_after_ufo, ship_after_move.x, ship_after_move.y, 2)
+    hit_terr = terrain_hit(state_after_ufo, terrain_bank, ship_after_move.x, ship_after_move.y, 2)
     
     # Check for collision with UFO (rammer) - use state BEFORE UFO update to detect collision
     # (UFO may already be marked dead after update, but collision still happened)
@@ -2788,12 +2787,12 @@ def _step_level_core(env_state: EnvState, action: int):
 
     return obs, final_env_state, reward, game_over, info, reset, jnp.int32(-1)
 
-batched_terrain_hit = jax.vmap(terrain_hit, in_axes=(None, 0, 0, None))
+batched_terrain_hit = jax.vmap(terrain_hit, in_axes=(None, None, 0, 0, None))
 
 
 # ========== Arena Step Core ==========
 @jax.jit
-def step_arena(env_state: EnvState, action: int):
+def step_arena(env_state: EnvState, action: int, terrain_bank: jnp.array):
     # --- 1. Setup ---
     ship = env_state.state
     saucer = env_state.saucer
@@ -2965,17 +2964,18 @@ def step_arena(env_state: EnvState, action: int):
 
 
 @jax.jit
-def _bullets_hit_terrain(env_state: EnvState, bullets: Bullets) -> Bullets:
-    H, W = env_state.terrain_bank.shape[1], env_state.terrain_bank.shape[2]
+@jax.jit
+def _bullets_hit_terrain(env_state: EnvState, terrain_bank: jnp.ndarray, bullets: Bullets) -> Bullets:
+    H, W = terrain_bank.shape[1], terrain_bank.shape[2]
 
-    bank_idx = jnp.clip(env_state.terrain_bank_idx, 0, env_state.terrain_bank.shape[0] - 1)
-    terrain_map = env_state.terrain_bank[bank_idx]
+    bank_idx = jnp.clip(env_state.terrain_bank_idx, 0, terrain_bank.shape[0] - 1)
+    terrain_map = terrain_bank[bank_idx]
 
     xi = jnp.clip(jnp.round(bullets.x).astype(jnp.int32), 0, W - 1)
     yi = jnp.clip(jnp.round(bullets.y).astype(jnp.int32), 0, H - 1)
 
     pixel_colors = terrain_map[yi, xi]
-    bg_val = env_state.terrain_bank[0, 0, 0]
+    bg_val = terrain_bank[0, 0, 0]
     hit_terrain_mask = pixel_colors != bg_val
 
     final_hit_mask = bullets.alive & hit_terrain_mask
@@ -3001,7 +3001,7 @@ def _ufo_ground_safe_y_at(terrain_bank, terrain_bank_idx, xf):
 
 # --- Logic for when the UFO is alive ---
 @jax.jit
-def _ufo_alive_step(e, ship, bullets):
+def _ufo_alive_step(e, ship, bullets, terrain_bank):
     u = e.ufo
     # --- 1. Define physics and boundary constants ---
     LEFT_BOUNDARY = 8.0
@@ -3026,7 +3026,7 @@ def _ufo_alive_step(e, ship, bullets):
 
     # --- 3. Vertical Movement Logic (New smooth version) ---
     # a. Find the safe Y coordinate below the current X position
-    safe_y_here = _ufo_ground_safe_y_at(e.terrain_bank, e.terrain_bank_idx, final_x)
+    safe_y_here = _ufo_ground_safe_y_at(terrain_bank, e.terrain_bank_idx, final_x)
 
     # b. Determine the UFO's vertical target position
     #    Target = 20 pixels above ground, but not lower than the minimum altitude
@@ -3079,7 +3079,7 @@ def _ufo_alive_step(e, ship, bullets):
 
 @jax.jit
 # --- Logic for when the UFO is dead ---
-def _ufo_dead_step(e, ship, bullets):
+def _ufo_dead_step(e, ship, bullets, terrain_bank):
     u = e.ufo
     u2 = u._replace(death_timer=jnp.maximum(u.death_timer - 1, 0))
     # Tick down spawn timer when death animation is finished
@@ -3093,18 +3093,18 @@ def _ufo_dead_step(e, ship, bullets):
 
 
 @jax.jit
-def _update_ufo(env: EnvState, ship: ShipState, bullets: Bullets) -> EnvState:
+def _update_ufo(env: EnvState, ship: ShipState, bullets: Bullets, terrain_bank: jnp.ndarray) -> EnvState:
     return jax.lax.cond(
         env.ufo.alive,
         _ufo_alive_step,
         _ufo_dead_step,
-        env, ship, bullets
+        env, ship, bullets, terrain_bank
     )
 
 
 # ========== Step Core ==========
 @jax.jit
-def step_core(env_state: EnvState, action: int):
+def step_core(env_state: EnvState, action: int, terrain_bank: jnp.ndarray):
     # `jax.lax.switch` selects a function from the list based on the value of `mode` (0, 1, or 2)
     # It automatically passes the `(env_state, action)` operands to the chosen function.
     def _game_is_over(state, _):
@@ -3145,7 +3145,8 @@ def step_core(env_state: EnvState, action: int):
             jnp.clip(state.mode, 0, 2),
             [step_map, _step_level_core, step_arena],  
             state,
-            act
+            act,
+            terrain_bank
         )
 
     return jax.lax.cond(
@@ -3356,7 +3357,7 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
         new_env_state = new_env_state._replace(done=jnp.array(False, dtype=bool))
         return obs, new_env_state, reward, done, no_reset_info, reset, level
 
-    obs, new_env_state, reward, done, info, reset, level = step_core(env_state, action)
+    obs, new_env_state, reward, done, info, reset, level = step_core(env_state, action, env_instance.terrain_bank)
 
     # Ensure life-loss transitions go through reset handling only outside level
     # mode. In level mode, `_step_level_core` already handles in-level respawn
@@ -3611,7 +3612,7 @@ class JaxGravitar(JaxEnvironment):
 
     def render(self, env_state: EnvState) -> Tuple[jnp.ndarray]:
         """Renders the state using the pure JAX renderer."""
-        frame = self.renderer.render(env_state)
+        frame = self.renderer.render(env_state, self.terrain_bank)
         return frame
 
     # ===  Ensure all reset functions return JAX arrays ===
@@ -3660,7 +3661,6 @@ class JaxGravitar(JaxEnvironment):
             current_level=jnp.int32(-1), terrain_sprite_idx=jnp.int32(-1),
             terrain_scale=jnp.array(1.0), 
             terrain_offset=jnp.array([0.0, 0.0]),
-            terrain_bank=self.terrain_bank, 
             terrain_bank_idx=jnp.int32(0), 
             respawn_shift_x=jnp.float32(0.0),
             reactor_dest_active=jnp.array(False), 
@@ -3965,7 +3965,7 @@ class GravitarRenderer(JAXGameRenderer):
             self.ship_orientations_array = jnp.stack(self.padded_ship_orientations)
 
     @partial(jax.jit, static_argnames=('self',))
-    def render(self, state: EnvState) -> jnp.ndarray:
+    def render(self, state: EnvState, terrain_bank: jnp.ndarray) -> jnp.ndarray:
         H, W = self.height, self.width
         frame = jnp.full((H, W), self.jr.TRANSPARENT_ID, dtype=jnp.int32)
 
@@ -4017,8 +4017,8 @@ class GravitarRenderer(JAXGameRenderer):
 
         # === 2. Draw Terrain (only in Level Modus) ===
         def draw_level_terrain(f):
-            bank_idx = jnp.clip(state.terrain_bank_idx, 0, state.terrain_bank.shape[0] - 1)
-            terrain_map = state.terrain_bank[bank_idx]
+            bank_idx = jnp.clip(state.terrain_bank_idx, 0, terrain_bank.shape[0] - 1)
+            terrain_map = terrain_bank[bank_idx]
             is_terrain_pixel = terrain_map != self.jr.TRANSPARENT_ID
             return jnp.where(is_terrain_pixel, terrain_map, f)
 
