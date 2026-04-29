@@ -565,7 +565,6 @@ class EnvState:
 
     current_level: jnp.ndarray  # int32, current level ID (typically -1 in map mode)
     terrain_sprite_idx: jnp.ndarray  # int32, terrain sprite for the current level (TERRAIN* / REACTOR_TERR)
-    terrain_mask: jnp.ndarray  # (Hmask, Wmask) uint8
     terrain_scale: jnp.ndarray  # float32, rendering scale factor
     terrain_offset: jnp.ndarray  # (2,) float32, screen-top-left offset [ox, oy]
 
@@ -1295,7 +1294,6 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
         fuel=jnp.array(STARTING_FUEL, dtype=jnp.float32),
         current_level=jnp.int32(-1),
         terrain_sprite_idx=jnp.int32(-1),
-        terrain_mask=jnp.zeros((WINDOW_HEIGHT, WINDOW_WIDTH), dtype=jnp.int32),
         terrain_scale=jnp.array(1.0),
         terrain_offset=jnp.array([0.0, 0.0]),
         terrain_bank=jnp.zeros((6, WINDOW_HEIGHT, WINDOW_WIDTH, 3), dtype=jnp.int32),
@@ -1386,52 +1384,35 @@ def update_bullets(bullets: Bullets) -> Bullets:
 
 
 # ========== Merge Bullets ==========
-@jax.jit
+@partial(jax.jit, static_argnames=('max_len',))
 def merge_bullets(prev: Bullets, add: Bullets, max_len: int | None = None) -> Bullets:
-    # provided, default to the capacity of the previous pool (static shape)
     cap = prev.x.shape[0] if (max_len is None) else max_len
     cap_i = jnp.int32(cap)
 
-    # First, enforce the cap on the old bullet pool to prioritize keeping older bullets
     prev0 = _enforce_cap_keep_old(prev, cap_i)
-    used = jnp.minimum(_bullets_alive_count(prev0), cap_i)
-    space_left0 = cap_i - used
-
-    def place_one(carry, i):
-        b, space_left = carry
-        take = add.alive[i] & (space_left > 0)
-
-        # Find the first available empty slot
-        dead_mask = ~b.alive
-        has_slot = jnp.any(dead_mask)
-
-        take = take & has_slot
-        idx = jnp.argmax(dead_mask.astype(jnp.int32))
-
-        b2 = jax.lax.cond(
-            take,
-            lambda _: Bullets(
-                x=b.x.at[idx].set(add.x[i]),
-                y=b.y.at[idx].set(add.y[i]),
-                vx=b.vx.at[idx].set(add.vx[i]),
-                vy=b.vy.at[idx].set(add.vy[i]),
-                alive=b.alive.at[idx].set(True),
-                sprite_idx=b.sprite_idx.at[idx].set(add.sprite_idx[i]),
-            ),
-            lambda _: b,
-            operand=None
-        )
-        space2 = jnp.where(take, space_left - 1, space_left)
-
-        return (b2, space2), None
-
     n_add = add.x.shape[0]  # Static length
-    (merged, _), _ = jax.lax.scan(place_one, (prev0, space_left0), jnp.arange(n_add))
 
-    # Re-enforce the cap to ensure the total number of alive bullets does not exceed the capacity
-    merged = _enforce_cap_keep_old(merged, cap_i)
+    empty_mask = ~prev0.alive
+    empty_keys = jnp.where(empty_mask, jnp.arange(cap), cap + 1)
+    empty_indices = jnp.sort(empty_keys)
 
-    return merged
+    add_keys = jnp.where(add.alive, jnp.arange(n_add), n_add + 1)
+    add_indices = jnp.sort(add_keys)
+
+    valid_transfer = (empty_indices[:n_add] < cap) & (add_indices[:n_add] < n_add)
+    safe_target = jnp.where(valid_transfer, empty_indices[:n_add], 0)
+    safe_source = jnp.where(valid_transfer, add_indices[:n_add], 0)
+
+    # 4. Paralleles Scatter-Update
+    new_x = prev0.x.at[safe_target].set(jnp.where(valid_transfer, add.x[safe_source], prev0.x[safe_target]))
+    new_y = prev0.y.at[safe_target].set(jnp.where(valid_transfer, add.y[safe_source], prev0.y[safe_target]))
+    new_vx = prev0.vx.at[safe_target].set(jnp.where(valid_transfer, add.vx[safe_source], prev0.vx[safe_target]))
+    new_vy = prev0.vy.at[safe_target].set(jnp.where(valid_transfer, add.vy[safe_source], prev0.vy[safe_target]))
+    new_sprite = prev0.sprite_idx.at[safe_target].set(jnp.where(valid_transfer, add.sprite_idx[safe_source], prev0.sprite_idx[safe_target]))
+    new_alive = prev0.alive.at[safe_target].set(jnp.where(valid_transfer, True, prev0.alive[safe_target]))
+
+    merged = Bullets(x=new_x, y=new_y, vx=new_vx, vy=new_vy, alive=new_alive, sprite_idx=new_sprite)
+    return _enforce_cap_keep_old(merged, cap_i)
 
 
 @jax.jit
@@ -1491,7 +1472,7 @@ def _fire_single_from_to(bullets: Bullets, sx, sy, tx, ty, speed=jnp.float32(0.7
         sprite_idx=jnp.array([int(SpriteIdx.ENEMY_BULLET)], dtype=jnp.int32)
     )
 
-    return merge_bullets(bullets, one, max_len=16)
+    return merge_bullets(bullets, one)
 
 
 # ========== Ship Collision Utilities ==========
@@ -1570,7 +1551,7 @@ def check_enemy_hit(bullets: Bullets, enemies: Enemies) -> Tuple[Bullets, Enemie
     cond_x = (bx >= ex1) & (bx <= ex2)
     cond_y = (by >= ey1) & (by <= ey2)
 
-    hit_matrix = cond_x & cond_y & bullets.alive[:, None] & (enemies.w > 0)[:, None].T
+    hit_matrix = cond_x & cond_y & bullets.alive[:, None] & (enemies.w > 0)[None, :]
 
     bullet_hit = jnp.any(hit_matrix, axis=1)
     enemy_hit = jnp.any(hit_matrix, axis=0)
@@ -1661,31 +1642,6 @@ def consume_ship_hits(state, bullets, hitbox_size):
     )
 
     return new_bullets, any_hit
-
-
-@jax.jit
-def kill_bullets_hit_terrain_segment(prev: Bullets, nxt: Bullets, terrain_mask: jnp.ndarray,
-                                     samples: int = 4) -> Bullets:
-    H, W = terrain_mask.shape
-
-    def body(i, acc_hit):
-        t = jnp.float32(i) / jnp.float32(samples - 1)  # 0..1
-        xs = prev.x + t * (nxt.x - prev.x)
-        ys = prev.y + t * (nxt.y - prev.y)
-
-        xi = jnp.clip(xs.astype(jnp.int32), 0, jnp.int32(W - 1))
-        yi = jnp.clip(ys.astype(jnp.int32), 0, jnp.int32(H - 1))
-
-        hit_i = terrain_mask[yi, xi] > 0
-
-        return acc_hit | hit_i
-
-    init = jnp.zeros_like(prev.alive, dtype=jnp.bool_)
-    hits = jax.lax.fori_loop(0, samples, body, init)
-    alive = nxt.alive & (~hits) & prev.alive  # Only active bullets are considered
-
-    return Bullets(x=nxt.x, y=nxt.y, vx=nxt.vx, vy=nxt.vy, alive=alive, sprite_idx=nxt.sprite_idx)
-
 
 # ========== Ship Step ==========
 # Ship movement
@@ -2006,7 +1962,7 @@ def _saucer_fire_random(sauc: SaucerState,
             sprite_idx=jnp.array([int(SpriteIdx.ENEMY_BULLET)], dtype=jnp.int32)
         )
         
-        merged = merge_bullets(prev_enemy_bullets, one, max_len=16)
+        merged = merge_bullets(prev_enemy_bullets, one)
         return _enforce_cap_keep_old(merged, cap=max_active_bullets)
 
     return jax.lax.cond(can_fire, do_fire, lambda _: prev_enemy_bullets, operand=None)
@@ -2092,124 +2048,6 @@ def enemy_step(enemies: Enemies, window_width: int) -> Enemies:
 
     return Enemies(x=x, y=enemies.y, w=enemies.w, h=enemies.h, vx=vx, sprite_idx=enemies.sprite_idx,
                    death_timer=enemies.death_timer, hp=enemies.hp)
-
-
-# ========== Enemy Fire ==========
-@jax.jit
-def enemy_fire(enemies: Enemies,
-               ship_x: float,
-               ship_y: float,
-               enemy_bullet_speed: float,
-               fire_cooldown: jnp.ndarray,  # shape should match len(enemies.x)
-               fire_interval: int,
-               key: jax.random.PRNGKey
-               ) -> tuple[Bullets, jnp.ndarray, jax.random.PRNGKey]:
-    ex_center = enemies.x + enemies.w / 2
-    ey_center = enemies.y - enemies.h / 2
-
-    dx = ship_x - ex_center  # shape=(N,)
-    dy = ship_y - ey_center  # shape=(N,)
-
-    dist = jnp.sqrt(dx ** 2 + dy ** 2)
-    dist = jnp.where(dist < 1e-3, 1.0, dist)
-
-    vx = dx / dist * enemy_bullet_speed
-    vy = dy / dist * enemy_bullet_speed
-
-    # 1. Determine which turrets "should" fire in this frame
-    alive_mask = (enemies.w > 0.0) & (enemies.death_timer == 0)
-    should_fire = (fire_cooldown == 0) & alive_mask
-
-    # 2. Calculate the cooldown for the "next frame"
-    # - If a turret fired this frame (`should_fire` is True), its cooldown is reset to `fire_interval`
-    # - Otherwise, the cooldown remains unchanged (since the decrement happens in `_step_level_core`)
-    new_fire_cooldown = jnp.where(should_fire, fire_interval, fire_cooldown)
-    x_out = jnp.where(should_fire, ex_center, -1.0)
-    y_out = jnp.where(should_fire, ey_center, -1.0)
-
-    vx_out = jnp.where(should_fire, vx, 0.0)
-    vy_out = jnp.where(should_fire, vy, 0.0)
-
-    bullets_out = Bullets(
-        x=x_out,
-        y=y_out,
-        vx=vx_out,
-        vy=vy_out,
-        alive=should_fire
-    )
-
-    return bullets_out, new_fire_cooldown, key
-
-
-# ========== Step Core Map ==========
-@jax.jit
-def step_core_map(state: ShipState,
-                  action: int,
-                  window_size: Tuple[int, int],
-                  hud_height: int,
-                  fuel: jnp.ndarray = jnp.float32(0.0),
-                  terrain_bank_idx: jnp.ndarray = jnp.int32(0),
-                  thrust_power: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.THRUST_POWER),
-                  max_speed: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.MAX_SPEED),
-                  solar_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.SOLAR_GRAVITY),
-                  planetary_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.PLANETARY_GRAVITY),
-                  reactor_gravity: jnp.ndarray = jnp.float32(_DEFAULT_CONSTS.REACTOR_GRAVITY)
-                  ) -> Tuple[GravitarObservation, ShipState, float, bool, GravitarInfo, bool, int]:
-    new_state = ship_step(state, action, window_size, hud_height, fuel=fuel, terrain_bank_idx=terrain_bank_idx,
-                          thrust_power=thrust_power,
-                          max_speed=max_speed,
-                          solar_gravity=solar_gravity,
-                          planetary_gravity=planetary_gravity,
-                          reactor_gravity=reactor_gravity)
-
-    obs = _get_observation_from_ship_state(new_state)
-
-    reward = 0.0
-    done = jnp.array(False)
-    info = GravitarInfo(
-        lives=jnp.int32(0),
-        score=jnp.float32(0.0),
-        fuel=fuel,
-        mode=jnp.int32(0),
-        crash_timer=jnp.int32(0),
-        done=done,
-        current_level=jnp.int32(-1),
-    )
-    planet_x = jnp.array([60.0, 120.0, 200.0])
-    planet_y = jnp.array([120.0, 200.0, 80.0])
-    planet_r = jnp.array([3, 3, 3])
-    level_ids = jnp.array([0, 1, 2])
-    dx = planet_x - new_state.x
-    dy = planet_y - new_state.y
-    dists = jnp.sqrt(dx ** 2 + dy ** 2)
-    within_planet = dists < planet_r
-    reset = jnp.any(within_planet)
-    level_idx = jnp.argmax(within_planet)
-    level = jnp.where(reset, level_ids[level_idx], -1)
-
-    return obs, new_state, reward, done, info, reset, level
-
-
-# ========== Step Core Level Skeleton ==========
-@jax.jit
-def terrain_hit_mask(mask: jnp.ndarray, x: jnp.ndarray, y: jnp.ndarray, radius: float = 2) -> jnp.ndarray:
-    H, W = mask.shape
-    r = jnp.int32(jnp.clip(radius, 1.0, float(_TERRAIN_MASK_R_MAX)))
-
-    valid = (_TERRAIN_MASK_DIST2 <= (r * r))
-
-    mx = jnp.floor(x).astype(jnp.int32)
-    my = jnp.floor(y).astype(jnp.int32)
-
-    sx = jnp.clip(mx + _TERRAIN_MASK_DX, 0, W - 1)
-    sy = jnp.clip(my + _TERRAIN_MASK_DY, 0, H - 1)
-
-    samples = mask[sy, sx]
-    bg_val = mask[0, 0]
-    samples = jnp.where(valid, samples, bg_val)
-
-    return jnp.any(samples != bg_val)
-
 
 @jax.jit
 def step_map(env_state: EnvState, action: int):
@@ -2455,17 +2293,14 @@ def _step_level_core(env_state: EnvState, action: int):
         terrain_page = env.terrain_bank[bank_idx]
 
         # We no longer slice, but compute over the entire terrain map
-        is_ground = jnp.sum(terrain_page, axis=-1) > 0
-        y_indices = jnp.arange(H, dtype=jnp.int32)[:, None]  # Convert to column vector for broadcasting
-
-        # Find the y-coordinates of all ground points in the terrain
-        ground_indices = jnp.where(is_ground, y_indices, H)
-
-        # Among all these points, find the highest one (with the smallest y-value)
-        highest_point_on_map = jnp.min(ground_indices)
+        bg_val = env.terrain_bank[0, 0, 0]
+        is_ground = terrain_page != bg_val
+        is_ground_any_x = jnp.any(is_ground, axis=1)
+        highest_point_on_map = jnp.argmax(is_ground_any_x)
+        has_ground = is_ground_any_x[highest_point_on_map]
 
         # 3. Calculate the final spawn Y coordinate (logic unchanged)
-        safe_y = jnp.float32(highest_point_on_map) - 10.0
+        safe_y = jnp.where(has_ground, jnp.float32(highest_point_on_map) - 10.0, jnp.float32(H) - 10.0)
         final_y0 = jnp.clip(safe_y, HUD_HEIGHT + 20.0, H - 20.0)
 
         # 4. Return the updated environment state with spawn timer set to respawn delay
@@ -3157,10 +2992,9 @@ def _ufo_ground_safe_y_at(terrain_bank, terrain_bank_idx, xf):
     col_x = jnp.clip(xf.astype(jnp.int32), 0, W - 1)
     bg_val = terrain_bank[0, 0, 0]
     is_ground_in_col = terrain_page[:, col_x] != bg_val
-    y_indices = jnp.arange(H, dtype=jnp.int32)
-
-    ground_indices = jnp.where(is_ground_in_col, y_indices, H)
-    ground_y = jnp.min(ground_indices)
+    ground_y = jnp.argmax(is_ground_in_col)
+    has_ground = is_ground_in_col[ground_y]
+    ground_y = jnp.where(has_ground, ground_y, H)
 
     return jnp.float32(ground_y) - 20.0  # CLEARANCE
 
@@ -3824,7 +3658,6 @@ class JaxGravitar(JaxEnvironment):
             crash_timer=jnp.int32(0), planets_px=jnp.array(px_np), planets_py=jnp.array(py_np),
             planets_pr=jnp.array(pr_np), planets_pi=jnp.array(pi_np), planets_id=jnp.array(ids_np),
             current_level=jnp.int32(-1), terrain_sprite_idx=jnp.int32(-1),
-            terrain_mask=jnp.zeros((WINDOW_HEIGHT, WINDOW_WIDTH), dtype=jnp.int32),
             terrain_scale=jnp.array(1.0), 
             terrain_offset=jnp.array([0.0, 0.0]),
             terrain_bank=self.terrain_bank, 
@@ -3948,7 +3781,6 @@ class JaxGravitar(JaxEnvironment):
             key=key, crash_timer=jnp.int32(0), current_level=level_id,
             done=jnp.array(False),
             terrain_sprite_idx=terrain_sprite_idx,
-            terrain_mask=jnp.zeros((WINDOW_HEIGHT, WINDOW_WIDTH), dtype=jnp.int32),
             terrain_scale=scale,
             terrain_offset=jnp.array([ox, oy]),
             terrain_bank_idx=bank_idx,
@@ -4395,4 +4227,3 @@ def get_env_and_renderer():
     # Just instantiate it, or pass in your game resolution as parameters
     renderer = GravitarRenderer(width=WINDOW_WIDTH, height=WINDOW_HEIGHT)
     return env, renderer
-
