@@ -584,3 +584,12 @@ class SwapColorsMod(JaxAtariInternalModPlugin):
             init_val=raster,
         )
 
+
+class CollectingBonusOnlyMod(JaxAtariInternalModPlugin):
+    constants_overrides = {
+        "GREEN_BALL_REWARD": 100 * 20,
+        "SAM_REWARD": 300 * 20,
+        "CUBE_COLOR_REWARD": 0,
+        "ROUND_COMPLETE_REWARD": 0
+    }
+

@@ -89,6 +89,11 @@ class QbertConstants(struct.PyTreeNode):
     COILY_DELAY: int = struct.field(pytree_node=False, default=200)
     SPAWN_INTERVAL: int = struct.field(pytree_node=False, default=250)
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
+    CUBE_COLOR_REWARD: int = struct.field(pytree_node=False, default=25)
+    GREEN_BALL_REWARD: int = struct.field(pytree_node=False, default=100)
+    SAM_REWARD: int = struct.field(pytree_node=False, default=300)
+    COILY_REWARD: int = struct.field(pytree_node=False, default=500)
+    ROUND_COMPLETE_REWARD: int = struct.field(pytree_node=False, default=3100)
 
 
 class QbertState(struct.PyTreeNode):
@@ -221,7 +226,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             :param number: if the character is red, which index of red should be used otherwise arbitrary
             :param position: the position of the character
             """
-        # Snake (Coily) stepping onto a disk: remove snake, award 500 points.
+        # Snake (Coily) stepping onto a disk: remove snake, award COILY_REWARD points.
         snake_on_disk = jnp.logical_and(character == 3, state.pyramid[position[1], position[0]] == -2)
         pyra, pos, lives, points = jax.lax.cond(
             pred=snake_on_disk,
@@ -229,7 +234,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
                 vals[0].pyramid,
                 jnp.array([-1, -1], dtype=jnp.int32),
                 vals[0].lives,
-                jnp.array(500, dtype=jnp.int32),
+                jnp.array(self.consts.COILY_REWARD, dtype=jnp.int32),
             ),
             false_fun=lambda vals: jax.lax.cond(
                 pred=jnp.logical_and(vals[0].pyramid[vals[1][1], vals[1][0]] == -2, vals[2] == 0),
@@ -299,8 +304,8 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             )
         points=jax.lax.cond(
             pred=jnp.logical_and(pyramid[playerPos[1]][playerPos[0]] == 2, old_color != 2),
-            true_fun=lambda i: 25,
-            false_fun=lambda i: 0,
+            true_fun=lambda i: jnp.int32(self.consts.CUBE_COLOR_REWARD),
+            false_fun=lambda i: jnp.int32(0),
             operand=None
         )
 
@@ -389,13 +394,13 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
             enemies = enemies.at[3].set(new3)
             enemies = enemies.at[5].set(new5)
-            # Points: 100 for green (4), 300 for sam (6), else 0.
+            # Points: GREEN_BALL_REWARD for green (4), SAM_REWARD for sam (6), else 0.
             points = jax.lax.cond(
                 pred=(index == jnp.int32(4)),
-                true_fun=lambda i: jnp.int32(100),
+                true_fun=lambda i: jnp.int32(self.consts.GREEN_BALL_REWARD),
                 false_fun=lambda i: jax.lax.cond(
-                    pred=(i == jnp.int32(6)),
-                    true_fun=lambda j: jnp.int32(300),
+                    pred=(index == jnp.int32(6)),
+                    true_fun=lambda j: jnp.int32(self.consts.SAM_REWARD),
                     false_fun=lambda j: jnp.int32(0),
                     operand=i
                 ),
@@ -429,7 +434,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             false_fun=lambda state2: (
                 jnp.array([-1,-1]).astype(jnp.int32),
                 state2[0].lives,
-                jnp.where(character == 3, jnp.array(500, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32))
+                jnp.where(character == 3, jnp.array(self.consts.COILY_REWARD, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32))
             ),
             operand=(state,character)
         )
@@ -747,7 +752,7 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
                 ]),
                 operand=None
-            ),jnp.array(jnp.mod(vals[1], 4) + 1).astype(jnp.int32) , jax.lax.cond(vals[1] == 4, lambda l: jnp.minimum(5, l + 1), lambda l: l, vals[2]).astype(jnp.int32), jnp.array(3100).astype(jnp.int32), jnp.array([1,1]), jnp.array(1).astype(jnp.int32), vals[5]),
+            ),jnp.array(jnp.mod(vals[1], 4) + 1).astype(jnp.int32) , jax.lax.cond(vals[1] == 4, lambda l: jnp.minimum(5, l + 1), lambda l: l, vals[2]).astype(jnp.int32), jnp.array(self.consts.ROUND_COMPLETE_REWARD).astype(jnp.int32), jnp.array([1,1]), jnp.array(1).astype(jnp.int32), vals[5]),
             false_fun=lambda vals: (vals[0],vals[1],vals[2], jnp.array(0).astype(jnp.int32), player_position, vals[4], vals[6]),
             operand=(pyramid,round,level,state.prng_state[6],spawned, state.step_counter, green_ball_freeze_step)
         )
