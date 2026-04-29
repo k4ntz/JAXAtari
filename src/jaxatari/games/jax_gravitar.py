@@ -3611,9 +3611,9 @@ class JaxGravitar(JaxEnvironment):
     def get_ale_lives(self, state: EnvState) -> jnp.ndarray:
         return state.lives
 
-    def render(self, env_state: EnvState) -> Tuple[jnp.ndarray]:
+    def render(self, env_state: EnvState) -> jnp.ndarray:
         """Renders the state using the pure JAX renderer."""
-        frame = self.renderer.render(env_state, self.terrain_bank)
+        frame = self.renderer.render(env_state, self.terrain_bank, downscale=self.renderer.config.downscale)
         return frame
 
     # ===  Ensure all reset functions return JAX arrays ===
@@ -3991,13 +3991,13 @@ class GravitarRenderer(JAXGameRenderer):
         self.enemy_stack = build_stack([SpriteIdx.ENEMY_ORANGE, SpriteIdx.ENEMY_GREEN, SpriteIdx.ENEMY_ORANGE_FLIPPED, SpriteIdx.ENEMY_CRASH])
         self.enemy_bullet_stack = build_stack([SpriteIdx.ENEMY_BULLET, SpriteIdx.ENEMY_GREEN_BULLET])
 
-    @partial(jax.jit, static_argnames=('self',))
-    def render(self, state: EnvState, terrain_bank: jnp.ndarray) -> jnp.ndarray:
+    @partial(jax.jit, static_argnames=('self', 'downscale'))
+    def render(self, state: EnvState, terrain_bank: jnp.ndarray, downscale=None) -> jnp.ndarray:
         H, W = self.height, self.width
         empty_bg = jnp.full((H, W), self.jr.TRANSPARENT_ID, dtype=jnp.int32)
         bank_idx = jnp.clip(state.terrain_bank_idx, 0, terrain_bank.shape[0] - 1)
-        level_bg = terrain_bank[bank_idx, _TERRAIN_HIT_RMAX:-_TERRAIN_HIT_RMAX, _TERRAIN_HIT_RMAX:-_TERRAIN_HIT_RMAX]
-        
+        level_bg = jax.lax.dynamic_slice(terrain_bank[bank_idx], (_TERRAIN_HIT_RMAX, _TERRAIN_HIT_RMAX), (H, W))
+
         frame = jax.lax.select(state.mode == 1, level_bg, empty_bg)
 
         def render_centered(f_in, x, y, sprite_arr):
@@ -4202,6 +4202,10 @@ class GravitarRenderer(JAXGameRenderer):
         frame = draw_hud(frame)
 
         frame_rgb = self.jr.render_from_palette(frame, self.PALETTE)
+        if downscale is not None:
+            channels = (frame_rgb.shape[-1],)
+            frame_rgb = jax.image.resize(frame_rgb, downscale + channels, method='linear').astype(jnp.uint8)
+
         return frame_rgb
 
 __all__ = ["JaxGravitar", "get_env_and_renderer"]
