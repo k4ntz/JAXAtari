@@ -3987,7 +3987,11 @@ class GravitarRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnames=('self',))
     def render(self, state: EnvState, terrain_bank: jnp.ndarray) -> jnp.ndarray:
         H, W = self.height, self.width
-        frame = jnp.full((H, W), self.jr.TRANSPARENT_ID, dtype=jnp.int32)
+        empty_bg = jnp.full((H, W), self.jr.TRANSPARENT_ID, dtype=jnp.int32)
+        bank_idx = jnp.clip(state.terrain_bank_idx, 0, terrain_bank.shape[0] - 1)
+        level_bg = terrain_bank[bank_idx]
+        
+        frame = jax.lax.select(state.mode == 1, level_bg, empty_bg)
 
         def render_centered(f_in, x, y, sprite_arr):
             h, w = sprite_arr.shape[0], sprite_arr.shape[1]
@@ -4013,15 +4017,6 @@ class GravitarRenderer(JAXGameRenderer):
             return jax.lax.fori_loop(0, state.planets_pi.shape[0], draw_one_planet, f)
 
         frame = jax.lax.cond(state.mode == 0, draw_map_elements, lambda f: f, frame)
-
-        # === 2. Draw Terrain (only in Level Modus) ===
-        def draw_level_terrain(f):
-            bank_idx = jnp.clip(state.terrain_bank_idx, 0, terrain_bank.shape[0] - 1)
-            terrain_map = terrain_bank[bank_idx]
-            is_terrain_pixel = terrain_map != self.jr.TRANSPARENT_ID
-            return jnp.where(is_terrain_pixel, terrain_map, f)
-
-        frame = jax.lax.cond(state.mode == 1, draw_level_terrain, lambda f: f, frame)
 
         # === 3. Draw Level Actors (Enemies & Tanks) ===
         def draw_level_actors(f):
