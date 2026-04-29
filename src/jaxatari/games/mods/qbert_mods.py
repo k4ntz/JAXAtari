@@ -5,7 +5,9 @@ from jaxatari.games.mods.qbert.qbert_mod_plugins import (
     NoCoilyMod,
     NoGreenBallMod,
     NoSamMod,
-    NoEnemiesMod
+    NoEnemiesMod,
+    DiagonalControlMod,
+    SwapColorsMod
 )
 
 class QbertEnvMod(JaxAtariModController):
@@ -19,6 +21,8 @@ class QbertEnvMod(JaxAtariModController):
         "no_green_ball": NoGreenBallMod,
         "no_sam": NoSamMod,
         "no_enemies": NoEnemiesMod,
+        "diagonal_control": DiagonalControlMod,
+        "swap_colors": SwapColorsMod,
     }
 
     def __init__(self,
