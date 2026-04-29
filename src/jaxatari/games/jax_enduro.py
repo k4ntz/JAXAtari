@@ -39,6 +39,7 @@ class EnduroGameState:
     adjusted_opponent_lane: jnp.ndarray  # jnp.int32
     visible_opponent_positions: jnp.ndarray # shape (7, 3) [x, y, color_idx]
     opponent_index: jnp.ndarray
+    opponent_index_watermark: jnp.ndarray  # jnp.int32, max floor(opponent_index) ever reached
     opponent_speed: jnp.ndarray
     opponent_density: jnp.ndarray
     base_opponents: jnp.ndarray
@@ -138,7 +139,9 @@ def _compute_base_opponents(key: jrandom.PRNGKey, length_of_opponent_array: int,
     spawn_priority = spawn_priority.astype(jnp.float32) / length_of_opponent_array
 
     key, key_lanes = jax.random.split(key)
-    lane_choices = jax.random.randint(key_lanes, (length_of_opponent_array,), 0, 3, dtype=jnp.int8)
+    # Edge-biased lane distribution: lane 0 ~45%, lane 2 ~45%, lane 1 ~10%
+    _raw = jax.random.uniform(key_lanes, (length_of_opponent_array,))
+    lane_choices = jnp.where(_raw < 0.45, jnp.int8(0), jnp.where(_raw < 0.90, jnp.int8(2), jnp.int8(1))).astype(jnp.int8)
 
     def generate_opponent_color_index(color_key):
         idx = jax.random.randint(color_key, (), 0, 13)
@@ -150,13 +153,24 @@ def _compute_base_opponents(key: jrandom.PRNGKey, length_of_opponent_array: int,
     def process_slot(carry, inputs):
         key_step, last_two_lanes, non_gap_count = carry
         candidate_lane, color = inputs
-        key_step, key_fix = jax.random.split(key_step)
-        
-        # We always process as if occupied to ensure no triples in the base pattern
-        has_valid_triple = ((non_gap_count >= 2) & (last_two_lanes[0] != last_two_lanes[1]) & (candidate_lane != last_two_lanes[0]) & (candidate_lane != last_two_lanes[1]))
+        key_step, key_follow, key_fix = jax.random.split(key_step, 3)
+
+        # Bias toward same lane as the previous car so "behind" patterns dominate
+        # and side-by-side spawning is significantly reduced.
+        # P(same lane) ≈ 0.5 + 0.5*(1/3) = 0.67 vs. 0.33 baseline.
+        last_lane = last_two_lanes[1]
+        has_prev = last_lane >= 0
+        biased_lane = jnp.where(
+            has_prev & (jax.random.uniform(key_follow) < 0.5),
+            last_lane,
+            candidate_lane
+        )
+
+        # Prevent three consecutive all-different lanes
+        has_valid_triple = ((non_gap_count >= 2) & (last_two_lanes[0] != last_two_lanes[1]) & (biased_lane != last_two_lanes[0]) & (biased_lane != last_two_lanes[1]))
         fixed_lane = jax.random.choice(key_fix, jnp.array([last_two_lanes[0], last_two_lanes[1]]))
-        final_lane = jax.lax.select(has_valid_triple, fixed_lane, candidate_lane)
-        
+        final_lane = jax.lax.select(has_valid_triple, fixed_lane, biased_lane)
+
         new_non_gap = non_gap_count + 1
         new_last_two = jnp.array([last_two_lanes[1], final_lane])
         return (key_step, new_last_two, new_non_gap), jnp.array([final_lane, color])
@@ -254,7 +268,7 @@ class EnduroConstants(AutoDerivedConstants):
     opponent_relative_speed_factor: float = struct.field(pytree_node=False, default=2.5)
     opponent_spawn_seed: int = struct.field(pytree_node=False, default=42)
     length_of_opponent_array: int = struct.field(pytree_node=False, default=5000)
-    opponent_density: float = struct.field(pytree_node=False, default=0.2)
+    opponent_density: float = struct.field(pytree_node=False, default=0.17)
     opponent_delay_slots: int = struct.field(pytree_node=False, default=10)
     car_zero_y_pixel_range: int = struct.field(pytree_node=False, default=20)
     lane_ratios: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0.25, 0.5, 0.75], dtype=jnp.float32))
@@ -265,10 +279,10 @@ class EnduroConstants(AutoDerivedConstants):
     car_heights: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([8, 8, 6, 4, 3, 2, 1], dtype=jnp.int32))
     car_width_0: int = struct.field(pytree_node=False, default=16)
     car_height_0: int = struct.field(pytree_node=False, default=11)
-    player_collision_width: int = struct.field(pytree_node=False, default=16)
+    player_collision_width: int = struct.field(pytree_node=False, default=14)
     opponent_primary_collision_width: int = struct.field(pytree_node=False, default=12)
     opponent_secondary_collision_width: int = struct.field(pytree_node=False, default=12)
-    collision_box_height: int = struct.field(pytree_node=False, default=8)
+    collision_box_height: int = struct.field(pytree_node=False, default=6)
     secondary_collision_special_y_values: jnp.ndarray = struct.field(
         pytree_node=False,
         default_factory=lambda: jnp.array([133, 134], dtype=jnp.int32),
@@ -278,10 +292,11 @@ class EnduroConstants(AutoDerivedConstants):
     next_day_car_position: int = struct.field(pytree_node=False, default=300)
 
     # Difficulty Scaling (opponent_speed scaled from 24→2, so increments scale by 2/24)
-    opponent_speed_increment: float = struct.field(pytree_node=False, default=0.33)
-    opponent_density_increment: float = struct.field(pytree_node=False, default=0.05)
-    max_opponent_density: float = struct.field(pytree_node=False, default=0.45)
-    max_opponent_speed: float = struct.field(pytree_node=False, default=6.0)
+    start_level: int = struct.field(pytree_node=False, default=1)
+    opponent_speed_increment: float = struct.field(pytree_node=False, default=0.2)
+    opponent_density_increment: float = struct.field(pytree_node=False, default=0.025)
+    max_opponent_density: float = struct.field(pytree_node=False, default=0.35)
+    max_opponent_speed: float = struct.field(pytree_node=False, default=5.0)
 
     # Mountains
     mountain_left_x_pos: float = struct.field(pytree_node=False, default=40.0)
@@ -741,27 +756,37 @@ class EnduroRenderer(JAXGameRenderer):
         Otherwise, it renders only the side boundaries of the road.
         """
         left_xs, right_xs = self._generate_viewable_track_lookup(state.track_top_x, state.track_top_x_curve_offset)
-        
-        # We need to map yy to track rows (0 to track_height-1)
+        width_scale = self.config.width_scaling
+        height_scale = self.config.height_scaling
+
+        # Map target raster coordinates back to source-space coordinates so
+        # procedural geometry stays aligned when rendering at downscaled sizes.
+        src_x = jnp.floor(xx / width_scale).astype(jnp.int32)
+        src_y = jnp.floor(yy / height_scale).astype(jnp.int32)
+
+        # We need to map source-space y to track rows (0 to track_height-1)
         # track starts at sky_height and ends at game_window_height - 1
-        track_row = (yy - self.consts.sky_height).astype(jnp.int32)
-        
+        track_row = src_y - self.consts.sky_height
+
         # Boundary check for track_row
-        is_track_row = (yy >= self.consts.sky_height) & (yy < self.consts.game_window_height - 1)
-        
+        is_track_row = (src_y >= self.consts.sky_height) & (src_y < self.consts.game_window_height - 1)
+
         # In fog, hide track above fog_height
         is_fog = state.weather_index == self.consts.fog_weather_index
-        is_visible = jnp.where(is_fog, yy >= self.consts.fog_height, True)
+        is_visible = jnp.where(is_fog, src_y >= self.consts.fog_height, True)
 
         # Get boundaries for each pixel's row
         l_x = left_xs[jnp.clip(track_row, 0, self.consts.track_height - 1)]
         r_x = right_xs[jnp.clip(track_row, 0, self.consts.track_height - 1)]
         
-        # Determine the track mask based on the render_full_road flag
+        # Determine the track mask based on the render_full_road flag.
+        # For downscaled rendering, make edge-only road lines 2px wide so they
+        # survive 84x84 + grayscale conversion.
+        edge_half_thickness = jnp.where(width_scale < 0.75, 1, 0).astype(jnp.int32)
         track_mask = jax.lax.cond(
             self.consts.render_full_road,
-            lambda: (xx >= l_x) & (xx <= r_x),
-            lambda: (xx == l_x) | (xx == r_x)
+            lambda: (src_x >= l_x) & (src_x <= r_x),
+            lambda: (jnp.abs(src_x - l_x) <= edge_half_thickness) | (jnp.abs(src_x - r_x) <= edge_half_thickness)
         )
         
         track_mask = is_track_row & track_mask & is_visible
@@ -1037,6 +1062,20 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: jrandom.PRNGKey = None) -> Tuple[EnduroObservation, EnduroGameState]:
+        start_level = max(1, int(self.consts.start_level))
+        level_offset = float(start_level - 1)
+        initial_opp_speed = min(
+            float(self.consts.max_opponent_speed),
+            float(self.consts.opponent_speed) + level_offset * float(self.consts.opponent_speed_increment),
+        )
+        initial_opp_density = min(
+            float(self.consts.max_opponent_density),
+            float(self.consts.opponent_density) + level_offset * float(self.consts.opponent_density_increment),
+        )
+        initial_cars_to_pass = (
+            self.consts.initial_position if start_level <= 1 else self.consts.next_day_car_position
+        )
+
         # Generate initial visible opponent positions
         opponent_index = jnp.array(self.consts.initial_opponent_index, dtype=jnp.float32)
         
@@ -1053,7 +1092,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         visible_opponent_positions = self._get_visible_opponent_positions(
             opponent_index,
             self.consts.base_opponents,
-            jnp.array(self.consts.opponent_density, dtype=jnp.float32),
+            jnp.array(initial_opp_density, dtype=jnp.float32),
             jnp.array(-1, dtype=jnp.int32),
             jnp.array(-1, dtype=jnp.int32),
             visible_track_left,
@@ -1064,13 +1103,13 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             player_x=jnp.array(self.consts.player_x_start, dtype=jnp.float32),
             player_y=jnp.array(self.consts.player_y_start, dtype=jnp.float32),
             step_count=jnp.array(0, dtype=jnp.int32),
-            day_count=jnp.array(0, dtype=jnp.int32),
-            level=jnp.array(1, dtype=jnp.int32),
+            day_count=jnp.array(start_level - 1, dtype=jnp.int32),
+            level=jnp.array(start_level, dtype=jnp.int32),
             level_passed=jnp.array(0, dtype=jnp.int32),
             game_over=jnp.array(False, dtype=jnp.bool_),
             player_speed=jnp.array(self.consts.initial_speed, dtype=jnp.float32),
             distance=jnp.array(0.0, dtype=jnp.float32),
-            cars_to_pass=jnp.array(self.consts.initial_position, dtype=jnp.int32),
+            cars_to_pass=jnp.array(initial_cars_to_pass, dtype=jnp.int32),
             track_top_x=jnp.array(track_top_x, dtype=jnp.float32),
             track_top_x_curve_offset=jnp.array(self.consts.initial_track_top_x_curve_offset, dtype=jnp.float32),
             collision_mode=jnp.array(False, dtype=jnp.bool_),
@@ -1081,8 +1120,9 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             adjusted_opponent_lane=jnp.array(-1, dtype=jnp.int32),
             visible_opponent_positions=visible_opponent_positions,
             opponent_index=opponent_index,
-            opponent_speed=jnp.array(self.consts.opponent_speed, dtype=jnp.float32),
-            opponent_density=jnp.array(self.consts.opponent_density, dtype=jnp.float32),
+            opponent_index_watermark=jnp.floor(opponent_index).astype(jnp.int32),
+            opponent_speed=jnp.array(initial_opp_speed, dtype=jnp.float32),
+            opponent_density=jnp.array(initial_opp_density, dtype=jnp.float32),
             base_opponents=self.consts.base_opponents,
             weather_index=jnp.array(0, dtype=jnp.int32)
         )
@@ -1342,6 +1382,30 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         relative_speed = (new_speed - state.opponent_speed) / state.opponent_speed * base_progression_rate
         new_opponent_index = state.opponent_index + relative_speed
 
+        # During collision the player is stopped, so freeze the index entirely to prevent
+        # the immediate ghost-car effect (index drifts negative → passed cars snap back
+        # into view, then vanish when the player accelerates).
+        new_opponent_index = jnp.where(
+            state.collision_mode,
+            state.opponent_index,
+            new_opponent_index
+        )
+
+        # Watermark: track the furthest slot we have ever advanced to.
+        # Cars within LOOKBACK slots behind the watermark can still re-overtake the player;
+        # anything further back is considered permanently gone and stays masked.
+        # This prevents ghost spawns caused by density changes on re-visited slots or
+        # index wrap-around on very long runs.
+        _LOOKBACK = 10
+        new_watermark = jnp.maximum(
+            state.opponent_index_watermark,
+            jnp.floor(new_opponent_index).astype(jnp.int32)
+        )
+        new_opponent_index = jnp.maximum(
+            new_opponent_index,
+            (new_watermark - _LOOKBACK).astype(jnp.float32)
+        )
+
         new_adjusted_idx, new_adjusted_lane = self._adjust_opponent_positions_when_overtaking(
             state, new_opponent_index, state.base_opponents, visible_track_left, visible_track_right
         )
@@ -1537,6 +1601,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             mountain_left_x=new_mountain_left_x,
             mountain_right_x=new_mountain_right_x,
             opponent_index=new_opponent_index,
+            opponent_index_watermark=new_watermark,
             visible_opponent_positions=new_visible_opponent_positions,
             adjusted_opponent_index=new_adjusted_idx,
             adjusted_opponent_lane=new_adjusted_lane,
