@@ -249,7 +249,7 @@ class BeamriderConstants:
     WHITE_UFO_PATTERN_DURATIONS: Tuple[int, ...] = struct.field(pytree_node=False,
                                                                 default=(0, 42, 42, 42, 28, 0, 42, 100, 123, 123))
     WHITE_UFO_PATTERN_PROBS: Tuple[float, ...] = struct.field(pytree_node=False,
-                                                              default=(0.3, 0.15, 0.15, 0.1, 0.2, 0.1, 0.2, 0.2)) #these probas are not 1:1, as some patterns have activation conditions
+                                                              default=(0.3, 0.2, 0.2, 0.1, 0.2, 0.1, 0.2, 0.2)) #these probas are not 1:1, as some patterns have activation conditions
     WHITE_UFO_SPEED_FACTOR: float = struct.field(pytree_node=False, default=0.1)
     WHITE_UFO_SHOT_SPEED_FACTOR: float = struct.field(pytree_node=False, default=0.8)
     WHITE_UFO_RETREAT_P_MIN: float = struct.field(pytree_node=False, default=0.03)
