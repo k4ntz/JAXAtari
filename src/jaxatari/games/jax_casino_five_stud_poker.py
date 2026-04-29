@@ -5,11 +5,6 @@
 #
 # Simulates the Atari Casino Five Stud Poker game
 #
-# Authors:
-# - Xarion99
-# - Keksmo
-# - Embuer
-# - Snocember
 
 from typing import NamedTuple, Tuple
 from functools import partial

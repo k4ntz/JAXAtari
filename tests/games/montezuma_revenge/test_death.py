@@ -21,7 +21,7 @@ def test_death_by_falling():
     state = state.replace(
         player_x=jnp.array(50, dtype=jnp.int32),
         player_y=jnp.array(26, dtype=jnp.int32),
-        fall_start_y=jnp.array(26, dtype=jnp.int32),
+        fall_distance=jnp.array(0, dtype=jnp.int32),
         is_falling=jnp.array(1, dtype=jnp.int32)
     )
     

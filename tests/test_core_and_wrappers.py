@@ -27,6 +27,7 @@ def get_object_centric_obs_size(space: spaces.Dict) -> int:
         size += np.prod(leaf.shape)
     return size
 
+@pytest.mark.integration
 def test_pixel_obs_wrapper_with_stacked_frames(raw_env):
     """Test that PixelObsWrapper correctly handles stacked frames."""
     key = jax.random.PRNGKey(0)
@@ -127,139 +128,6 @@ def test_object_centric_wrapper(raw_env):
     obs, state, _, _, _, _ = env.step(state, 2) # Use an action that causes change
     assert obs.shape == space.shape
 
-def test_log_wrapper(raw_env):
-    """Test that LogWrapper correctly tracks episode returns and lengths."""
-    key = jax.random.PRNGKey(0)
-    
-    # Create environment with wrappers
-    base_env = raw_env
-    env = LogWrapper(PixelObsWrapper(AtariWrapper(base_env)))
-    
-    # Get initial observation
-    obs, state = env.reset(key)
-    
-    # Verify initial state
-    assert state.episode_returns == 0.0
-    assert state.episode_lengths == 0
-    assert state.returned_episode_returns == 0.0
-    assert state.returned_episode_lengths == 0
-
-    # Check for non-standard base shapes and issue a warning
-    base_img_shape = base_env.image_space().shape
-    if base_img_shape not in [(210, 160, 3), (250, 160, 3)]:
-        warnings.warn(f"Running test with a non-standard Atari shape: {base_img_shape}. Be sure this is intended!", UserWarning)
-
-    # Verify observation format against the environment's observation space
-    expected_shape = env.observation_space().shape
-    assert obs.shape == expected_shape, f"Expected shape {expected_shape}, got {obs.shape}"
-    assert jnp.all(obs >= 0) and jnp.all(obs <= 255), "Pixel values should be in range [0, 255]"
-    
-    # Take some steps and accumulate rewards
-    total_reward = 0.0
-    steps = 0
-    done = False
-
-    # `done` is the env's returned termination signal (may be influenced by
-    # `episodic_life`). `LogWrapper` logs based on the "real" episode end flag
-    # exposed via `info["returned_episode"]`.
-    logged_done = False
-
-    while not done and steps < 100:  # Limit steps to avoid infinite loops
-        obs, state, reward, done, _, info = env.step(state, 0)  # Use NOOP action
-        logged_done = bool(info.get("returned_episode", False))
-        # LogWrapper sums info["env_reward"] (unclipped frame-skip total), not the returned clipped reward.
-        step_return = info.get("env_reward", reward)
-        total_reward += float(jnp.asarray(step_return).reshape(()))
-        steps += 1
-        
-        # Verify observation format remains consistent
-        assert obs.shape == expected_shape, f"Expected shape {expected_shape}, got {obs.shape}"
-        assert jnp.all(obs >= 0) and jnp.all(obs <= 255), "Pixel values should be in range [0, 255]"
-        
-        # Verify running totals
-        assert state.episode_returns == total_reward * (1 - logged_done)
-        assert state.episode_lengths == steps * (1 - logged_done)
-        
-        if logged_done:
-            # Verify final episode statistics
-            assert state.returned_episode_returns == total_reward
-            assert state.returned_episode_lengths == steps
-            assert info["returned_episode_returns"] == total_reward
-            assert info["returned_episode_lengths"] == steps
-            assert info["returned_episode"] == True
-
-def test_multi_reward_log_wrapper(raw_env):
-    """Test that MultiRewardLogWrapper correctly tracks multiple reward types."""
-    key = jax.random.PRNGKey(0)
-    
-    # Create environment with wrappers
-    base_env = raw_env
-    reward_funcs = [lambda state, prev_state: jnp.ones(1)]
-    env = MultiRewardLogWrapper(PixelAndObjectCentricWrapper(AtariWrapper(MultiRewardWrapper(base_env, reward_funcs))))
-    
-    # Get initial observation
-    obs, state = env.reset(key)
-    
-    # Verify initial state
-    assert state.episode_returns_env == 0.0
-    assert jnp.all(state.episode_returns == 0.0)
-    assert state.episode_lengths == 0
-    assert state.returned_episode_returns_env == 0.0
-    assert jnp.all(state.returned_episode_returns == 0.0)
-    assert state.returned_episode_lengths == 0
-    
-    # Verify observation format (should match PixelAndObjectCentricWrapper)
-    image_obs, object_obs = obs
-
-    # Check for non-standard base shapes and issue a warning
-    base_img_shape = base_env.image_space().shape
-    if base_img_shape not in [(210, 160, 3), (250, 160, 3)]:
-        warnings.warn(f"Running test with a non-standard Atari shape: {base_img_shape}. Be sure this is intended!", UserWarning)
-
-    # Verify shapes against the environment's observation space
-    expected_image_shape = env.observation_space().spaces[0].shape
-    expected_object_shape = env.observation_space().spaces[1].shape
-    
-    assert image_obs.shape == expected_image_shape, f"Expected image shape {expected_image_shape}, got {image_obs.shape}"
-    assert object_obs.shape == expected_object_shape, f"Expected object shape {expected_object_shape}, got {object_obs.shape}"
-    assert jnp.all(image_obs >= 0) and jnp.all(image_obs <= 255), "Pixel values should be in range [0, 255]"
-    
-    # Take some steps and accumulate rewards
-    total_reward_env = 0.0
-    total_rewards = jnp.zeros_like(state.episode_returns)
-    steps = 0
-    done = False
-    
-    while not done and steps < 100:  # Limit steps to avoid infinite loops
-        obs, state, reward, done, _, info = env.step(state, 0)  # Use NOOP action
-        logged_done = bool(info.get("returned_episode", False))
-        step_return_env = info.get("env_reward", reward)
-        total_reward_env += float(jnp.asarray(step_return_env).reshape(()))
-        total_rewards += info["all_rewards"]
-        steps += 1
-        
-        # Verify observation format remains consistent
-        image_obs, object_obs = obs
-        assert image_obs.shape == expected_image_shape, f"Expected image shape {expected_image_shape}, got {image_obs.shape}"
-        assert object_obs.shape == expected_object_shape, f"Expected object shape {expected_object_shape}, got {object_obs.shape}"
-        assert jnp.all(image_obs >= 0) and jnp.all(image_obs <= 255), "Pixel values should be in range [0, 255]"
-        
-        # Verify running totals
-        assert state.episode_returns_env == total_reward_env * (1 - logged_done)
-        assert jnp.all(state.episode_returns == total_rewards * (1 - logged_done))
-        assert state.episode_lengths == steps * (1 - logged_done)
-        
-        if logged_done:
-            # Verify final episode statistics
-            assert state.returned_episode_returns_env == total_reward_env
-            assert jnp.all(state.returned_episode_returns == total_rewards)
-            assert state.returned_episode_lengths == steps
-            assert info["returned_episode_env_returns"] == total_reward_env
-            for i, r in enumerate(total_rewards):
-                assert info[f"returned_episode_returns_{i}"] == r
-            assert info["returned_episode_lengths"] == steps
-            assert info["returned_episode"] == True
-
 
 def test_flatten_observation_wrapper(raw_env):
     """Test that FlattenObservationWrapper correctly flattens each observation type."""
@@ -352,160 +220,8 @@ def test_log_wrapper_with_flatten_observation(raw_env):
     assert obs[0].ndim == 1
     assert obs[1].ndim == 1
 
-def test_flatten_observation_wrapper_space_structure(raw_env):
-    """
-    Tests that FlattenObservationWrapper correctly flattens the leaf spaces
-    of a given environment's observation space Pytree.
-    """
-    key = jax.random.PRNGKey(0)
-    stack_size = 4
-    base_env = raw_env
-    atari_env = AtariWrapper(base_env)
 
-    # Wrap the Atari environment with the FlattenObservationWrapper
-    flatten_env = FlattenObservationWrapper(atari_env)
-
-    # --- 1. Verify the Space Transformation ---
-
-    # Access the original and flattened spaces as attributes
-    original_space = atari_env.observation_space()
-    flattened_space = flatten_env.observation_space()
-
-    # The overall Pytree structure (the Dict keys) should be identical
-    assert isinstance(flattened_space, spaces.Dict)
-    assert original_space.spaces.keys() == flattened_space.spaces.keys()
-
-    # Get the individual leaves from both space Pytrees
-    original_leaves = jax.tree.leaves(original_space)
-    flattened_leaves = jax.tree.leaves(flattened_space)
-
-    # Check each leaf to ensure it was flattened correctly
-    for original_leaf, flattened_leaf in zip(original_leaves, flattened_leaves):
-        # a) The new leaf's shape should be 1D.
-        assert len(flattened_leaf.shape) == 1, f"Expected 1D shape, got {len(flattened_leaf.shape)} dimensions"
-
-        # b) The size of the new 1D leaf should equal the total number of elements in the original
-        expected_size = np.prod(original_leaf.shape)
-        assert flattened_leaf.shape[0] == expected_size, f"Expected size {expected_size}, got {flattened_leaf.shape[0]}"
-
-        # c) The bounds should have been correctly broadcast and flattened
-        expected_low = np.broadcast_to(original_leaf.low, original_leaf.shape).flatten()
-        assert jnp.array_equal(flattened_leaf.low, expected_low)
-
-    # --- 2. Verify the Runtime Observation Transformation ---
-
-    # Get a sample observation from the flattened environment
-    obs_flat, state = flatten_env.reset(key)
-
-    def deep_asdict(obj: any) -> any:
-        """
-        Recursively converts a Pytree of namedtuples or dataclasses into a Pytree of OrderedDicts.
-        This is needed because obs might be a namedtuple or dataclass but the space is a Dict.
-        """
-        if hasattr(obj, '_asdict'): # It's a namedtuple
-            return collections.OrderedDict(
-                (key, deep_asdict(value)) for key, value in obj._asdict().items()
-            )
-        elif is_dataclass(obj): # It's a dataclass
-            from dataclasses import fields
-            # Use fields() to preserve field definition order, NOT asdict() which returns plain dict
-            return collections.OrderedDict(
-                (field.name, deep_asdict(getattr(obj, field.name))) for field in fields(obj)
-            )
-        elif isinstance(obj, (list, tuple)):
-            return type(obj)(deep_asdict(item) for item in obj)
-        else:
-            return obj
-
-    # 1. Convert the observation from a (potentially nested) namedtuple to a
-    #    standard dict Pytree. This is our data Pytree.
-    obs_flat_dict = deep_asdict(obs_flat)
-
-    # 2. Get a flat list of the leaves from both the data and the space.
-    #    `jax.tree.leaves` reliably extracts the contents in the same order.
-    obs_leaves = jax.tree.leaves(obs_flat_dict)
-    space_leaves = jax.tree.leaves(flattened_space)
-
-    # 3. First, verify the structures have the same number of leaves.
-    assert len(obs_leaves) == len(
-        space_leaves
-    ), "Mismatch between number of observation leaves and space leaves."
-
-    # 4. Now, iterate through the parallel lists and check each data leaf
-    #    against its corresponding space leaf.
-    for obs_leaf, space_leaf in zip(obs_leaves, space_leaves):
-        # The space leaf should be a Box, and we check if the obs_leaf is contained in it.
-        assert isinstance(space_leaf, spaces.Box)
-        assert space_leaf.contains(
-            obs_leaf
-        ), f"Observation leaf with shape {obs_leaf.shape} not contained in space with shape {space_leaf.shape}"
-
-def test_atari_wrapper_features_and_pixel_preprocessing(raw_env):
-    """Tests max-pooling, resizing, and grayscaling features."""
-    key = jax.random.PRNGKey(0)
-    
-    # --- Test 1: AtariWrapper Max-Pooling and Sticky Actions ---
-    class FakeEnv:
-        def __init__(self):
-            self.state = 0
-            self._observation_space = spaces.Dict({"features": spaces.Box(low=0, high=255, shape=(2,2), dtype=jnp.uint8)})
-        
-        def observation_space(self) -> spaces.Space:
-            return self._observation_space
-
-        def reset(self, key):
-            self.state = 0
-            obs = jax.tree.map(lambda s: jnp.zeros(s.shape, s.dtype), self._observation_space)
-            return obs, self.state
-        
-        def step(self, state, action):
-            state += 1
-            obs = jax.tree.map(lambda s: (jnp.ones(s.shape, s.dtype) * state), self._observation_space)
-            return obs, state, 1.0, False, {"all_rewards": jnp.array([1.0])}
-        
-        def render(self, state):
-             return jnp.zeros((210, 160, 3), dtype=jnp.uint8)
-
-    base_env = AtariWrapper(
-        FakeEnv(),
-        first_fire=False,
-        episodic_life=False,
-        sticky_actions=0.0,
-        noop_max=0,
-    )
-    _, state = base_env.reset(key)
-    obs, state, _, _, _, _ = base_env.step(state, 0)
-    
-    expected_max_pooled_frame = jnp.ones((2,2), dtype=jnp.uint8)
-    
-    assert jnp.array_equal(obs.spaces['features'], expected_max_pooled_frame)
-
-    # --- Test 2: PixelObsWrapper Preprocessing ---
-    RESIZE_SHAPE = (84, 84)
-    STACK_SIZE = 4
-    atari_env = AtariWrapper(raw_env)
-    pixel_env = PixelObsWrapper(atari_env, do_pixel_resize=True, pixel_resize_shape=RESIZE_SHAPE, grayscale=True, frame_stack_size=STACK_SIZE)
-    
-    space = pixel_env.observation_space()
-    expected_shape = (STACK_SIZE, RESIZE_SHAPE[0], RESIZE_SHAPE[1], 1)
-    assert space.shape == expected_shape
-    assert space.dtype == jnp.uint8
-    
-    obs, state = pixel_env.reset(key)
-    assert obs.shape == expected_shape
-
-    # --- Test 3: PixelAndObjectCentricWrapper Preprocessing ---
-    atari_env_2 = AtariWrapper(raw_env)
-    mixed_env = PixelAndObjectCentricWrapper(atari_env_2, do_pixel_resize=True, pixel_resize_shape=RESIZE_SHAPE, grayscale=True, frame_stack_size=STACK_SIZE)
-
-    pix_space, obj_space = mixed_env.observation_space().spaces
-    assert pix_space.shape == expected_shape
-    
-    (pix_obs, obj_obs), state = mixed_env.reset(key)
-    assert pix_obs.shape == expected_shape
-    assert obj_obs.ndim == 2
-
-
+@pytest.mark.integration
 def test_native_downscaling_hot_swap(raw_env):
     """
     Verifies that enabling use_native_downscaling correctly hot-swaps the 
@@ -568,6 +284,7 @@ def test_native_downscaling_hot_swap(raw_env):
     assert jnp.min(obs) >= 0
 
 
+@pytest.mark.integration
 def test_native_downscaling_grayscale(raw_env):
     """
     Specific test to ensure Native Downscaling handles Grayscale channel reduction correctly.

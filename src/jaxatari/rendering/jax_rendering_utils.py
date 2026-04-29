@@ -546,38 +546,6 @@ class JaxRenderingUtils:
                 shape_masks[name] = jnp.stack(masks)
             else: # Single sprite
                 shape_masks[name] = self._create_id_mask(data, color_to_id)
-            
-            # Scale sprite masks proportionally if downscaling is configured
-            if self.config.downscale:
-                if data.ndim == 4: # Batched sprites
-                    scaled_masks = []
-                    for mask in shape_masks[name]:
-                        # Calculate new dimensions based on scaling factors
-                        original_h, original_w = mask.shape
-
-                        scaled_h = jnp.maximum(1, jnp.round(original_h * self.config.height_scaling)).astype(jnp.int32)
-                        scaled_w = jnp.maximum(1, jnp.round(original_w * self.config.width_scaling)).astype(jnp.int32)
-                        
-                        scaled_mask = jax.image.resize(
-                            mask, 
-                            (scaled_h, scaled_w), 
-                            method='nearest'
-                        )
-                        scaled_masks.append(scaled_mask)
-                    shape_masks[name] = jnp.stack(scaled_masks)
-                else: # Single sprite
-                    # Calculate new dimensions based on scaling factors
-                    original_h, original_w = shape_masks[name].shape
-
-                    scaled_h = jnp.maximum(1, jnp.round(original_h * self.config.height_scaling)).astype(jnp.int32)
-                    scaled_w = jnp.maximum(1, jnp.round(original_w * self.config.width_scaling)).astype(jnp.int32)
-                    
-                    scaled_mask = jax.image.resize(
-                        shape_masks[name], 
-                        (scaled_h, scaled_w), 
-                        method='nearest'
-                    )
-                    shape_masks[name] = scaled_mask
         
         return shape_masks
 
@@ -714,7 +682,26 @@ class JaxRenderingUtils:
         if background_rgba is None:
             raise ValueError("No background asset found")
 
-        # 2. Palette Generation
+        # 2. Downscaling 
+        if self.config.downscale:
+            def downscale_rgba_sprite(sprite_rgba: jnp.ndarray) -> jnp.ndarray:
+                original_h, original_w = sprite_rgba.shape[:2]
+                scaled_h = jnp.maximum(1, jnp.round(original_h * self.config.height_scaling)).astype(jnp.int32)
+                scaled_w = jnp.maximum(1, jnp.round(original_w * self.config.width_scaling)).astype(jnp.int32)
+                #NOTE: had to use cubic here (e.g. due to montezuma lava pit floor rendering)
+                return jax.image.resize(sprite_rgba, (scaled_h, scaled_w, sprite_rgba.shape[2]), method='cubic').astype(sprite_rgba.dtype)
+
+            downscaled_sprites = {}
+            for sprite_name, sprite_data in raw_sprites_dict.items():
+                if sprite_data.ndim == 4:
+                    downscaled_batch = [downscale_rgba_sprite(s) for s in sprite_data]
+                    downscaled_sprites[sprite_name] = jnp.stack(downscaled_batch)
+                else:
+                    downscaled_sprites[sprite_name] = downscale_rgba_sprite(sprite_data)
+
+            raw_sprites_dict = downscaled_sprites
+
+        # 3. Palette Generation
         all_scan_assets = [background_rgba] + list(raw_sprites_dict.values())
         PALETTE, COLOR_TO_ID = self._create_palette(all_scan_assets)
         
@@ -738,36 +725,10 @@ class JaxRenderingUtils:
                 padding = jnp.zeros((required_size - palette_size, 3), dtype=PALETTE.dtype)
             PALETTE = jnp.concatenate([PALETTE, padding], axis=0)
 
-        # Extend palette to include TRANSPARENT_ID entry to prevent out-of-bounds indexing
-        # Use black (0,0,0) as the default color for transparent pixels
-        palette_size = PALETTE.shape[0]
-        required_size = self.TRANSPARENT_ID + 1
-        if palette_size < required_size:
-            if self.config.channels == 1:
-                # Grayscale: pad with black (0)
-                padding = jnp.zeros((required_size - palette_size, 1), dtype=PALETTE.dtype)
-            else:
-                # RGB: pad with black (0,0,0)
-                padding = jnp.zeros((required_size - palette_size, 3), dtype=PALETTE.dtype)
-            PALETTE = jnp.concatenate([PALETTE, padding], axis=0)
-
-        # Extend palette to include TRANSPARENT_ID entry to prevent out-of-bounds indexing
-        # Use black (0,0,0) as the default color for transparent pixels
-        palette_size = PALETTE.shape[0]
-        required_size = self.TRANSPARENT_ID + 1
-        if palette_size < required_size:
-            if self.config.channels == 1:
-                # Grayscale: pad with black (0)
-                padding = jnp.zeros((required_size - palette_size, 1), dtype=PALETTE.dtype)
-            else:
-                # RGB: pad with black (0,0,0)
-                padding = jnp.zeros((required_size - palette_size, 3), dtype=PALETTE.dtype)
-            PALETTE = jnp.concatenate([PALETTE, padding], axis=0)
-
         # 3. Mask Generation
         SHAPE_MASKS = self._create_shape_masks(raw_sprites_dict, COLOR_TO_ID)
 
-        # 4. Background Raster
+        # 5. Background Raster
         BACKGROUND = self._create_background_raster(background_rgba, COLOR_TO_ID)
 
         return PALETTE, SHAPE_MASKS, BACKGROUND, COLOR_TO_ID, FLIP_OFFSETS
@@ -822,8 +783,12 @@ class JaxRenderingUtils:
         # --- 3. Scale and Stamp ---
         # The rest of the function proceeds as before, using the
         # flipped_mask and the corrected_x/y coordinates.
-        scaled_x = jnp.round(corrected_x * self.config.width_scaling).astype(jnp.int32)
-        scaled_y = jnp.round(corrected_y * self.config.height_scaling).astype(jnp.int32)
+        if self.config.width_scaling == 1.0 and self.config.height_scaling == 1.0:
+            scaled_x = corrected_x.astype(jnp.int32)
+            scaled_y = corrected_y.astype(jnp.int32)
+        else:
+            scaled_x = jnp.round(corrected_x * self.config.width_scaling).astype(jnp.int32)
+            scaled_y = jnp.round(corrected_y * self.config.height_scaling).astype(jnp.int32)
         
         target_slice = jax.lax.dynamic_slice(object_raster, (scaled_y, scaled_x), flipped_mask.shape)
         updated_slice = jnp.where(flipped_mask != self.TRANSPARENT_ID, flipped_mask, target_slice).astype(object_raster.dtype)
@@ -847,8 +812,12 @@ class JaxRenderingUtils:
         corrected_y = jax.lax.select(flip_vertical, y - flip_offset[1], y)
 
         # --- 3. Scale Coordinates (Unchanged) ---
-        scaled_x = jnp.round(corrected_x * self.config.width_scaling).astype(jnp.int32)
-        scaled_y = jnp.round(corrected_y * self.config.height_scaling).astype(jnp.int32)
+        if self.config.width_scaling == 1.0 and self.config.height_scaling == 1.0:
+            scaled_x = corrected_x.astype(jnp.int32)
+            scaled_y = corrected_y.astype(jnp.int32)
+        else:
+            scaled_x = jnp.round(corrected_x * self.config.width_scaling).astype(jnp.int32)
+            scaled_y = jnp.round(corrected_y * self.config.height_scaling).astype(jnp.int32)
         
         # --- 4. NEW: Create Sprite Coordinate Maps for the Full Raster ---
         # For each pixel on the main raster (self._xx, self._yy), calculate its
@@ -948,6 +917,61 @@ class JaxRenderingUtils:
             return jax.lax.cond(should_draw, true_fn, false_fn, current_raster)
 
         return jax.lax.fori_loop(0, max_value, render_single_indicator, object_raster)
+
+    def add_palette_color(
+        self,
+        palette: jnp.ndarray,
+        color: Union[jnp.ndarray, Tuple[int, ...], List[int]],
+    ) -> Tuple[jnp.ndarray, int]:
+        """Appends one color to a palette and returns (updated_palette, new_color_id)."""
+        color_arr = jnp.asarray(color, dtype=palette.dtype)
+        if color_arr.ndim != 1:
+            raise ValueError("color must be a 1D array-like value")
+
+        if self.config.channels == 1 and color_arr.shape[0] == 3:
+            gray = int(
+                0.299 * int(color_arr[0])
+                + 0.587 * int(color_arr[1])
+                + 0.114 * int(color_arr[2])
+            )
+            color_arr = jnp.asarray([gray], dtype=palette.dtype)
+        elif color_arr.shape[0] != self.config.channels:
+            raise ValueError(
+                f"color must have {self.config.channels} channel(s), got {color_arr.shape[0]}"
+            )
+
+        updated_palette = jnp.concatenate([palette, color_arr[None, :]], axis=0)
+        return updated_palette, updated_palette.shape[0] - 1
+
+    def add_palette_colors(
+        self,
+        palette: jnp.ndarray,
+        colors: Union[jnp.ndarray, List[List[int]], List[Tuple[int, ...]]],
+    ) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        """Appends multiple colors to a palette and returns (updated_palette, new_color_ids)."""
+        colors_arr = jnp.asarray(colors, dtype=palette.dtype)
+
+        if colors_arr.ndim == 1:
+            colors_arr = colors_arr[None, :]
+        if colors_arr.ndim != 2:
+            raise ValueError("colors must be a 2D array-like value")
+
+        if self.config.channels == 1 and colors_arr.shape[1] == 3:
+            gray = (
+                0.299 * colors_arr[:, 0].astype(jnp.float32)
+                + 0.587 * colors_arr[:, 1].astype(jnp.float32)
+                + 0.114 * colors_arr[:, 2].astype(jnp.float32)
+            )
+            colors_arr = gray.astype(palette.dtype)[:, None]
+        elif colors_arr.shape[1] != self.config.channels:
+            raise ValueError(
+                f"each color must have {self.config.channels} channel(s), got {colors_arr.shape[1]}"
+            )
+
+        start_idx = palette.shape[0]
+        updated_palette = jnp.concatenate([palette, colors_arr], axis=0)
+        new_ids = jnp.arange(start_idx, start_idx + colors_arr.shape[0], dtype=jnp.int32)
+        return updated_palette, new_ids
 
 
     @partial(jax.jit, static_argnames=['self'])
