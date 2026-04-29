@@ -295,9 +295,9 @@ class BeamriderConstants:
     # Blue line constants
     BLUE_LINE_OFFSCREEN_Y: int = struct.field(pytree_node=False, default=500)
 
-    CHASING_METEOROID_MAX: int = struct.field(pytree_node=False, default=5)
+    CHASING_METEOROID_MAX: int = struct.field(pytree_node=False, default=6)
     CHASING_METEOROID_WAVE_MIN: int = struct.field(pytree_node=False, default=2)
-    CHASING_METEOROID_WAVE_MAX: int = struct.field(pytree_node=False, default=5)
+    CHASING_METEOROID_WAVE_MAX: int = struct.field(pytree_node=False, default=6)
     CHASING_METEOROID_SPAWN_INTERVAL_MIN: int = struct.field(pytree_node=False, default=2)
     CHASING_METEOROID_SPAWN_INTERVAL_MAX: int = struct.field(pytree_node=False, default=40)
     CHASING_METEOROID_SPAWN_Y: float = struct.field(pytree_node=False, default=54.0)
@@ -1051,7 +1051,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         player_y_topleft = float(self.consts.PLAYER_POS_Y)
         player_size = self.player_sprite_size
 
-        hitbox_y_top = player_y_topleft - 1.0
+        hitbox_y_top = player_y_topleft - 3.0
         hitbox_y_bottom = player_y_topleft + player_size[0]
 
         alignment_at_player = -1.0
@@ -2677,7 +2677,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         shot_sizes = self.consts.ENEMY_SHOT_SPRITE_SIZES[0] # always take the larger size
 
-        player_hitbox_top = player_y - 1
+        player_hitbox_top = player_y - 3
 
         hits = shot_active & \
                (shot_x < player_left + player_size[1]) & (player_left < shot_x + shot_sizes[1]) & \
