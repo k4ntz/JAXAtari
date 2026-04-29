@@ -199,7 +199,7 @@ class StandbyPhase(IntEnum):
 
 
 @struct.dataclass
-class BeamriderConstants:
+class BeamriderConstants(struct.PyTreeNode):
     STARTING_SECTOR: int = struct.field(pytree_node=False, default=1)
     STARTING_LIVES: int = struct.field(pytree_node=False, default=3)
     MAX_LIVES: int = struct.field(pytree_node=False, default=14)
@@ -610,7 +610,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         self.consts = consts or BeamriderConstants()
         self.key = jax.random.PRNGKey(42067)
         self.renderer = BeamriderRenderer(self.consts)
-        self.obs_size = 121
+
         self.action_set = [
             Action.NOOP,
             Action.FIRE,
@@ -734,6 +734,24 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             type(self)._white_ufo_step,
             in_axes=(None, None, 1, 1, 0, 0, 0, 0, 0, 0, 0),
         )
+
+        # Dynamically calculate actual observation size
+        # Create a dummy LevelState to get the initial shapes of all fields
+        dummy_level_state = self._create_level_state(key=jax.random.PRNGKey(0))
+        dummy_state = BeamriderState(
+            level=dummy_level_state,
+            score=jnp.array(0),
+            sector=jnp.array(1),
+            level_finished=jnp.array(0),
+            reset_coords=jnp.array(False),
+            lives=jnp.array(self.consts.STARTING_LIVES, dtype=jnp.int32),
+            steps=_counter_array(0),
+            ufo_killed=jnp.array(False),
+            rng=jax.random.PRNGKey(0),
+        )
+        dummy_obs = self._get_observation(dummy_state)
+        flat_dummy_obs, _ = ravel_pytree(dummy_obs)
+        self.obs_size = flat_dummy_obs.shape[0]
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: Optional[chex.PRNGKey] = None) -> Tuple[BeamriderObservation, BeamriderState]:
@@ -3985,20 +4003,20 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             "white_ufo_vel": spaces.Box(low=-10.0, high=10.0, shape=(2, 3), dtype=jnp.float32),
             "enemy_shot_pos": spaces.Box(low=-100.0, high=800.0, shape=(2, 9), dtype=jnp.float32),
             "enemy_shot_vel": spaces.Box(low=-10.0, high=10.0, shape=(9,), dtype=jnp.float32),
-            "chasing_meteoroid_pos": spaces.Box(low=-100.0, high=255.0, shape=(2, 8), dtype=jnp.float32),
-            "chasing_meteoroid_active": spaces.Box(low=0.0, high=1.0, shape=(8,), dtype=jnp.float32),
+            "chasing_meteoroid_pos": spaces.Box(low=-100.0, high=255.0, shape=(2, self.consts.CHASING_METEOROID_MAX),dtype=jnp.float32),
+            "chasing_meteoroid_active": spaces.Box(low=0.0, high=1.0, shape=(self.consts.CHASING_METEOROID_MAX,),dtype=jnp.float32),
+            "falling_rock_pos": spaces.Box(low=-100.0, high=255.0, shape=(2, self.consts.FALLING_ROCK_MAX),dtype=jnp.float32),
+            "falling_rock_active": spaces.Box(low=0.0, high=1.0, shape=(self.consts.FALLING_ROCK_MAX,),dtype=jnp.float32),
+            "lane_blocker_pos": spaces.Box(low=-100.0, high=255.0, shape=(2, self.consts.LANE_BLOCKER_MAX),dtype=jnp.float32),
+            "lane_blocker_active": spaces.Box(low=0.0, high=1.0, shape=(self.consts.LANE_BLOCKER_MAX,),dtype=jnp.float32),
+            "coin_pos": spaces.Box(low=-100.0, high=255.0, shape=(2, self.consts.COIN_MAX), dtype=jnp.float32),
+            "coin_active": spaces.Box(low=0.0, high=1.0, shape=(self.consts.COIN_MAX,), dtype=jnp.float32),
+            "kamikaze_pos": spaces.Box(low=-100.0, high=255.0, shape=(2, self.consts.KAMIKAZE_MAX), dtype=jnp.float32),
+            "kamikaze_active": spaces.Box(low=0.0, high=1.0, shape=(self.consts.KAMIKAZE_MAX,), dtype=jnp.float32),
             "rejuvenator_pos": spaces.Box(low=-100.0, high=255.0, shape=(2,), dtype=jnp.float32),
             "rejuvenator_active": spaces.Box(low=0.0, high=1.0, shape=(), dtype=jnp.float32),
-            "falling_rock_pos": spaces.Box(low=-100.0, high=255.0, shape=(2, 3), dtype=jnp.float32),
-            "falling_rock_active": spaces.Box(low=0.0, high=1.0, shape=(3,), dtype=jnp.float32),
-            "lane_blocker_pos": spaces.Box(low=-100.0, high=255.0, shape=(2, 1), dtype=jnp.float32),
-            "lane_blocker_active": spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=jnp.float32),
             "bouncer_pos": spaces.Box(low=-100.0, high=255.0, shape=(2,), dtype=jnp.float32),
             "bouncer_active": spaces.Box(low=0.0, high=1.0, shape=(), dtype=jnp.float32),
-            "coin_pos": spaces.Box(low=-100.0, high=255.0, shape=(2, 3), dtype=jnp.float32),
-            "coin_active": spaces.Box(low=0.0, high=1.0, shape=(3,), dtype=jnp.float32),
-            "kamikaze_pos": spaces.Box(low=-100.0, high=255.0, shape=(2, 1), dtype=jnp.float32),
-            "kamikaze_active": spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=jnp.float32),
             "lives": spaces.Box(low=0.0, high=255.0, shape=(), dtype=jnp.float32),
             "sector": spaces.Box(low=1.0, high=15.0, shape=(), dtype=jnp.float32),
             "shooting_delay": spaces.Box(low=0.0, high=255.0, shape=(), dtype=jnp.float32),

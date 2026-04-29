@@ -11,7 +11,7 @@ from jaxatari.games.mods.beamrider.beamrider_mod_plugins import (
 )
 
 
-class BeamriderEnvMod(JaxAtariModController):
+class BeamRiderEnvMod(JaxAtariModController):
     """
     Game-specific Mod Controller for Beamrider.
     """

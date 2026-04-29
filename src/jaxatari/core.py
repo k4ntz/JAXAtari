@@ -52,6 +52,7 @@ GAME_MODULES = {
     "kingkong": "jaxatari.games.jax_kingkong",
     "klax": "jaxatari.games.jax_klax",
     "lasergates": "jaxatari.games.jax_lasergates",
+    "montezumarevenge": "jaxatari.games.jax_montezumarevenge",
     "namethisgame": "jaxatari.games.jax_namethisgame",
     "phoenix": "jaxatari.games.jax_phoenix",
     "pong": "jaxatari.games.jax_pong",
