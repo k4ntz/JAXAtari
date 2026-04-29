@@ -128,8 +128,8 @@ class GravitarConstants(struct.PyTreeNode):
     SOLAR_GRAVITY: float = struct.field(pytree_node=False, default=0.044)
     PLANETARY_GRAVITY: float = struct.field(pytree_node=False, default=0.0032)
     REACTOR_GRAVITY: float = struct.field(pytree_node=False, default=0.0001)
-    THRUST_POWER: float = struct.field(pytree_node=False, default=0.035)
-    MAX_SPEED: float = struct.field(pytree_node=False, default=3.0)
+    THRUST_POWER: float = struct.field(pytree_node=False, default=0.030)
+    MAX_SPEED: float = struct.field(pytree_node=False, default=2.5)
     FUEL_CONSUME_THRUST: float = struct.field(pytree_node=False, default=4.0)
     FUEL_CONSUME_SHIELD_TRACTOR: float = struct.field(pytree_node=False, default=10.0)
     STARTING_FUEL: float = struct.field(pytree_node=False, default=10000.0)
@@ -4132,18 +4132,6 @@ class GravitarRenderer(JAXGameRenderer):
         is_crashing = state.crash_timer > 0
         is_thrusting = ship_state.is_thrusting
 
-        oriented_ship_mask = self.ship_orientations_array[ship_state.angle_idx]
-
-        ship_sprite = jax.lax.select(is_crashing, self.padded_ship_crash, oriented_ship_mask)
-        frame = render_centered(frame, ship_state.x, ship_state.y, ship_sprite)
-
-        def draw_thrust_flame(f):
-            THRUST_OFFSET = 5.0
-            thrust_x = ship_state.x - jnp.cos(ship_state.angle) * THRUST_OFFSET
-            thrust_y = ship_state.y - jnp.sin(ship_state.angle) * THRUST_OFFSET
-            return render_centered(f, thrust_x, thrust_y, self.padded_ship_thrust)
-
-        frame = jax.lax.cond(is_thrusting & (~is_crashing), draw_thrust_flame, lambda f: f, frame)
 
         def draw_shield_and_tractor(f):
             f_with_shield = render_centered(f, ship_state.x, ship_state.y, self.sprites[int(SpriteIdx.SHIELD)])
@@ -4154,13 +4142,26 @@ class GravitarRenderer(JAXGameRenderer):
 
             def draw_tractor(frame_in):
                 TRACTOR_OFFSET = 8.0
-                tractor_x = ship_state.x - jnp.cos(ship_state.angle) * TRACTOR_OFFSET
-                tractor_y = ship_state.y - jnp.sin(ship_state.angle) * TRACTOR_OFFSET
+                tractor_x = ship_state.x
+                tractor_y = ship_state.y + TRACTOR_OFFSET
                 return render_centered(frame_in, tractor_x, tractor_y, self.sprites[int(SpriteIdx.SHIP_THRUST_BACK)])
 
             return jax.lax.cond(can_show_tractor, draw_tractor, lambda frame_in: frame_in, f_with_shield)
 
         frame = jax.lax.cond(state.shield_active, draw_shield_and_tractor, lambda f: f, frame)
+
+        def draw_thrust_flame(f):
+            THRUST_OFFSET = 5.0
+            thrust_x = ship_state.x - jnp.cos(ship_state.angle) * THRUST_OFFSET
+            thrust_y = ship_state.y - jnp.sin(ship_state.angle) * THRUST_OFFSET
+            return render_centered(f, thrust_x, thrust_y, self.padded_ship_thrust)
+
+        frame = jax.lax.cond(is_thrusting & (~is_crashing), draw_thrust_flame, lambda f: f, frame)
+
+        oriented_ship_mask = self.ship_orientations_array[ship_state.angle_idx]
+
+        ship_sprite = jax.lax.select(is_crashing, self.padded_ship_crash, oriented_ship_mask)
+        frame = render_centered(frame, ship_state.x, ship_state.y, ship_sprite)
 
         # === 6. Draw the HUD ===
         def draw_hud(f):
