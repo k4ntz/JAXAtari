@@ -249,7 +249,7 @@ class BeamriderConstants:
     WHITE_UFO_PATTERN_DURATIONS: Tuple[int, ...] = struct.field(pytree_node=False,
                                                                 default=(0, 42, 42, 42, 28, 0, 42, 100, 123, 123))
     WHITE_UFO_PATTERN_PROBS: Tuple[float, ...] = struct.field(pytree_node=False,
-                                                              default=(0.3, 0.2, 0.2, 0.1, 0.2, 0.1, 0.2, 0.2)) #these probas are not 1:1, as some patterns have activation conditions
+                                                              default=(0.35, 0.15, 0.15, 0.1, 0.2, 0.1, 0.2, 0.2)) #these probas are not 1:1, as some patterns have activation conditions
     WHITE_UFO_SPEED_FACTOR: float = struct.field(pytree_node=False, default=0.1)
     WHITE_UFO_SHOT_SPEED_FACTOR: float = struct.field(pytree_node=False, default=0.8)
     WHITE_UFO_RETREAT_P_MIN: float = struct.field(pytree_node=False, default=0.03)
@@ -295,14 +295,14 @@ class BeamriderConstants:
     # Blue line constants
     BLUE_LINE_OFFSCREEN_Y: int = struct.field(pytree_node=False, default=500)
 
-    CHASING_METEOROID_MAX: int = struct.field(pytree_node=False, default=7)
+    CHASING_METEOROID_MAX: int = struct.field(pytree_node=False, default=5)
     CHASING_METEOROID_WAVE_MIN: int = struct.field(pytree_node=False, default=2)
     CHASING_METEOROID_WAVE_MAX: int = struct.field(pytree_node=False, default=5)
     CHASING_METEOROID_SPAWN_INTERVAL_MIN: int = struct.field(pytree_node=False, default=2)
     CHASING_METEOROID_SPAWN_INTERVAL_MAX: int = struct.field(pytree_node=False, default=40)
     CHASING_METEOROID_SPAWN_Y: float = struct.field(pytree_node=False, default=54.0)
     CHASING_METEOROID_LANE_SPEED: float = struct.field(pytree_node=False, default=0.9)
-    CHASING_METEOROID_ACCEL: float = struct.field(pytree_node=False, default=0.045)
+    CHASING_METEOROID_ACCEL: float = struct.field(pytree_node=False, default=0.040)
     CHASING_METEOROID_LANE_ALIGN_THRESHOLD: float = struct.field(pytree_node=False, default=1.5)
     CHASING_METEOROID_CYCLE_DX: Tuple[int, ...] = struct.field(pytree_node=False, default=(2, 0, 1, 0, 2, 0, 2, 0))
     CHASING_METEOROID_CYCLE_DY: Tuple[int, ...] = struct.field(pytree_node=False, default=(1, 0, 0, 0, 1, 0, 0, 0))
@@ -324,7 +324,7 @@ class BeamriderConstants:
     FALLING_ROCK_SPAWN_Y: float = struct.field(pytree_node=False, default=43.0)
     FALLING_ROCK_BOTTOM_CLIP: float = struct.field(pytree_node=False, default=164.0)
     FALLING_ROCK_INIT_VEL: float = struct.field(pytree_node=False, default=0.07)
-    FALLING_ROCK_ACCEL: float = struct.field(pytree_node=False, default=0.021)
+    FALLING_ROCK_ACCEL: float = struct.field(pytree_node=False, default=0.018)
 
     # Lane blocker constants
     LANE_BLOCKER_MAX: int = struct.field(pytree_node=False, default=1)
@@ -1051,7 +1051,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         player_y_topleft = float(self.consts.PLAYER_POS_Y)
         player_size = self.player_sprite_size
 
-        hitbox_y_top = player_y_topleft - 3.0
+        hitbox_y_top = player_y_topleft - 1.0
         hitbox_y_bottom = player_y_topleft + player_size[0]
 
         alignment_at_player = -1.0
@@ -2677,7 +2677,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         shot_sizes = self.consts.ENEMY_SHOT_SPRITE_SIZES[0] # always take the larger size
 
-        player_hitbox_top = player_y - 4 # shots should hit player a bit earlier
+        player_hitbox_top = player_y - 1
 
         hits = shot_active & \
                (shot_x < player_left + player_size[1]) & (player_left < shot_x + shot_sizes[1]) & \
