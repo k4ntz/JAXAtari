@@ -488,6 +488,7 @@ class ShipState:
     angle: jnp.ndarray
     is_thrusting: jnp.ndarray  # Boolean flag to track if ship is actively thrusting
     rotation_cooldown: jnp.ndarray  # Frames until next rotation is allowed
+    angle_idx: jnp.ndarray
 
     def _replace(self, **kwargs):
         return self.replace(**kwargs)
@@ -583,6 +584,7 @@ class EnvState:
     map_return_vx: jnp.ndarray  # float32
     map_return_vy: jnp.ndarray  # float32
     map_return_angle: jnp.ndarray  # float32
+    map_return_angle_idx: jnp.ndarray
     saucer_spawn_timer: jnp.ndarray  # Tracks if a saucer has spawned in the current level
 
     ufo: UFOState
@@ -1265,6 +1267,7 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
             vx=jnp.array(0.0),
             vy=jnp.array(0.0),
             angle=jnp.array(-jnp.pi / 2),
+            angle_idx=jnp.int32(0),
             is_thrusting=jnp.array(False),
             rotation_cooldown=jnp.int32(0)
         ),
@@ -1310,6 +1313,7 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
         map_return_vx=jnp.float32(0.0),
         map_return_vy=jnp.float32(0.0),
         map_return_angle=jnp.float32(-jnp.pi / 2),
+            map_return_angle_idx=jnp.int32(0),
         saucer_spawn_timer=jnp.int32(SAUCER_SPAWN_DELAY_FRAMES),
         ufo=make_empty_ufo(),
         ufo_spawn_timer=jnp.int32(0),
@@ -1352,13 +1356,16 @@ def make_level_start_state(level_id: int) -> ShipState:
 
     angle = jnp.array(-jnp.pi / 2, dtype=jnp.float32)  # Pointing up for normal levels
     angle_down = jnp.array(jnp.pi / 2, dtype=jnp.float32)  # Pointing down for reactor
+    angle_idx_up = jnp.int32(0)
+    angle_idx_down = jnp.int32(8)
 
     is_reactor = (jnp.asarray(level_id, dtype=jnp.int32) == 4)
     x = jnp.where(is_reactor, x - 55.0, x)
     y = jnp.where(is_reactor, REACTOR_START_Y, y)
     angle = jnp.where(is_reactor, angle_down, angle)
+    angle_idx = jnp.where(is_reactor, angle_idx_down, angle_idx_up)
 
-    return ShipState(x=x, y=y, vx=jnp.float32(0.0), vy=jnp.float32(0.0), angle=angle, is_thrusting=jnp.array(False), rotation_cooldown=jnp.int32(0))
+    return ShipState(x=x, y=y, vx=jnp.float32(0.0), vy=jnp.float32(0.0), angle=angle, is_thrusting=jnp.array(False), rotation_cooldown=jnp.int32(0), angle_idx=angle_idx)
 
 
 # ========== Update Bullets ==========
@@ -1593,7 +1600,7 @@ def check_enemy_hit(bullets: Bullets, enemies: Enemies) -> Tuple[Bullets, Enemie
 def terrain_hit(env_state: EnvState, terrain_bank: jnp.ndarray, x: jnp.ndarray, y: jnp.ndarray,
                 radius=jnp.float32(0.3)) -> jnp.ndarray:
     adjusted_x, adjusted_y = x, y
-    H, W = terrain_bank.shape[1], terrain_bank.shape[2]
+    H, W = terrain_bank.shape[1] - 2 * _TERRAIN_HIT_RMAX, terrain_bank.shape[2] - 2 * _TERRAIN_HIT_RMAX
 
     xi = jnp.clip(jnp.round(adjusted_x).astype(jnp.int32), 0, W - 1)
     yi = jnp.clip(jnp.round(adjusted_y).astype(jnp.int32), 0, H - 1)
@@ -1601,11 +1608,9 @@ def terrain_hit(env_state: EnvState, terrain_bank: jnp.ndarray, x: jnp.ndarray, 
     bi = jnp.clip(env_state.terrain_bank_idx, 0, terrain_bank.shape[0] - 1)
     page = terrain_bank[bi]
     bg_val = terrain_bank[0, 0, 0]
-    
-    # Pad array, um den Patch per dynamic_slice ohne OOB-Fehler zentriert rauszuschneiden
-    page_padded = jnp.pad(page, _TERRAIN_HIT_RMAX, mode='constant', constant_values=bg_val)
+
     patch_size = 2 * _TERRAIN_HIT_RMAX + 1
-    patch = jax.lax.dynamic_slice(page_padded, (yi, xi), (patch_size, patch_size))
+    patch = jax.lax.dynamic_slice(page, (yi, xi), (patch_size, patch_size))
 
     r_eff = jnp.minimum(jnp.float32(radius), jnp.float32(_TERRAIN_HIT_RMAX))
     mask = _TERRAIN_HIT_DIST2 <= (r_eff ** 2)
@@ -1841,7 +1846,7 @@ def ship_step(state: ShipState,
     normalized_angle = (angle + jnp.pi) % (2 * jnp.pi) - jnp.pi
 
     # f. Return the new state with corrected position and velocity
-    return ShipState(x=final_x, y=final_y, vx=final_vx, vy=final_vy, angle=normalized_angle, is_thrusting=is_thrusting_now, rotation_cooldown=new_rotation_cooldown)
+    return ShipState(x=final_x, y=final_y, vx=final_vx, vy=final_vy, angle=normalized_angle, is_thrusting=is_thrusting_now, rotation_cooldown=new_rotation_cooldown, angle_idx=next_idx)
 
 
 # ========== Logic about saucer ==========
@@ -2187,6 +2192,7 @@ def step_map(env_state: EnvState, action: int, terrain_bank: jnp.ndarray):
             map_return_vx=env.state.vx,
             map_return_vy=env.state.vy,
             map_return_angle=env.state.angle,
+            map_return_angle_idx=env.state.angle_idx,
         )
     
     new_env = jax.lax.cond(can_enter_planet, _save_map_position, lambda e: e, new_env)
@@ -2226,6 +2232,7 @@ def step_map(env_state: EnvState, action: int, terrain_bank: jnp.ndarray):
             map_return_vx=env.state.vx,
             map_return_vy=env.state.vy,
             map_return_angle=env.state.angle,
+            map_return_angle_idx=env.state.angle_idx,
         )
 
     new_env = jax.lax.cond(hit_to_arena, _enter_arena, lambda e: e, new_env)
@@ -2283,7 +2290,7 @@ def _step_level_core(env_state: EnvState, action: int, terrain_bank: jnp.ndarray
 
         # 2. Check for the safe altitude across the entire future path
         bank_idx = jnp.clip(env.terrain_bank_idx, 0, terrain_bank.shape[0] - 1)
-        terrain_page = terrain_bank[bank_idx]
+        terrain_page = terrain_bank[bank_idx, _TERRAIN_HIT_RMAX:-_TERRAIN_HIT_RMAX, _TERRAIN_HIT_RMAX:-_TERRAIN_HIT_RMAX]
 
         # We no longer slice, but compute over the entire terrain map
         bg_val = terrain_bank[0, 0, 0]
@@ -2940,7 +2947,8 @@ def step_arena(env_state: EnvState, action: int, terrain_bank: jnp.array):
             vy=env.map_return_vy,
             angle=env.map_return_angle,
             is_thrusting=jnp.array(False),
-            rotation_cooldown=jnp.int32(0)
+            rotation_cooldown=jnp.int32(0),
+            angle_idx=env.map_return_angle_idx
         )
         return env._replace(
             # Keep arena mode for this transition frame so step_full can
@@ -2960,7 +2968,7 @@ def step_arena(env_state: EnvState, action: int, terrain_bank: jnp.array):
 @jax.jit
 @jax.jit
 def _bullets_hit_terrain(env_state: EnvState, terrain_bank: jnp.ndarray, bullets: Bullets) -> Bullets:
-    H, W = terrain_bank.shape[1], terrain_bank.shape[2]
+    H, W = terrain_bank.shape[1] - 2 * _TERRAIN_HIT_RMAX, terrain_bank.shape[2] - 2 * _TERRAIN_HIT_RMAX
 
     bank_idx = jnp.clip(env_state.terrain_bank_idx, 0, terrain_bank.shape[0] - 1)
     terrain_map = terrain_bank[bank_idx]
@@ -2969,7 +2977,7 @@ def _bullets_hit_terrain(env_state: EnvState, terrain_bank: jnp.ndarray, bullets
     yi = jnp.clip(jnp.round(bullets.y).astype(jnp.int32), 0, H - 1)
 
     def get_pixel(y, x):
-        return jax.lax.dynamic_slice(terrain_map, (y, x), (1, 1))[0, 0]
+        return jax.lax.dynamic_slice(terrain_map, (y + _TERRAIN_HIT_RMAX, x + _TERRAIN_HIT_RMAX), (1, 1))[0, 0]
     
     pixel_colors = jax.vmap(get_pixel)(yi, xi)
     bg_val = terrain_bank[0, 0, 0]
@@ -2985,7 +2993,7 @@ def _ufo_ground_safe_y_at(terrain_bank, terrain_bank_idx, xf):
     W, H = WINDOW_WIDTH, WINDOW_HEIGHT
     bank_idx = jnp.clip(terrain_bank_idx, 0, terrain_bank.shape[0] - 1)
 
-    terrain_page = terrain_bank[bank_idx]
+    terrain_page = terrain_bank[bank_idx, _TERRAIN_HIT_RMAX:-_TERRAIN_HIT_RMAX, _TERRAIN_HIT_RMAX:-_TERRAIN_HIT_RMAX]
     col_x = jnp.clip(xf.astype(jnp.int32), 0, W - 1)
     bg_val = terrain_bank[0, 0, 0]
     is_ground_in_col = terrain_page[:, col_x] != bg_val
@@ -3251,7 +3259,8 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
                         vy=jnp.float32(0.0),
                         angle=jnp.float32(-jnp.pi / 2),
                         is_thrusting=jnp.array(False),
-                        rotation_cooldown=jnp.int32(0)
+                    rotation_cooldown=jnp.int32(0),
+                    angle_idx=jnp.int32(0)
                     )
                     # Call reset_map to properly initialize all map state, then override ship position
                     obs_reset, map_state = env_instance.reset_map(
@@ -3632,7 +3641,8 @@ class JaxGravitar(JaxEnvironment):
             vy=jnp.array(jnp.sin(-jnp.pi / 4) * 0.02, dtype=jnp.float32),
             angle=jnp.array(-jnp.pi / 2, dtype=jnp.float32),
             is_thrusting=jnp.array(False),
-            rotation_cooldown=jnp.int32(0)
+            rotation_cooldown=jnp.int32(0),
+            angle_idx=jnp.int32(0)
         )
         px_np, py_np, pr_np, pi_np = self.planets
         ids_np = [SPRITE_TO_LEVEL_ID.get(sprite_idx, -1) for sprite_idx in pi_np]
@@ -3671,6 +3681,7 @@ class JaxGravitar(JaxEnvironment):
             map_return_y=jnp.float32(0.0),
             map_return_vx=jnp.float32(0.0),
             map_return_vy=jnp.float32(0.0),
+            map_return_angle_idx=jnp.int32(0),
             map_return_angle=jnp.float32(-jnp.pi / 2),
             ufo=make_empty_ufo(), ufo_spawn_timer=jnp.int32(0), 
             ufo_home_x=jnp.float32(0.0), 
@@ -3851,7 +3862,8 @@ class JaxGravitar(JaxEnvironment):
         ]
         for sprite_idx, bank_idx in terrains_to_build:
             bank.append(sprite_to_mask(int(sprite_idx), bank_idx))
-        return jnp.array(np.stack(bank, axis=0), dtype=jnp.int32)
+        bank_array = jnp.array(np.stack(bank, axis=0), dtype=jnp.int32)
+        return jnp.pad(bank_array, ((0,0), (_TERRAIN_HIT_RMAX, _TERRAIN_HIT_RMAX), (_TERRAIN_HIT_RMAX, _TERRAIN_HIT_RMAX)), mode='constant', constant_values=self.renderer.jr.TRANSPARENT_ID)
 
 
 class GravitarRenderer(JAXGameRenderer):
@@ -3989,7 +4001,7 @@ class GravitarRenderer(JAXGameRenderer):
         H, W = self.height, self.width
         empty_bg = jnp.full((H, W), self.jr.TRANSPARENT_ID, dtype=jnp.int32)
         bank_idx = jnp.clip(state.terrain_bank_idx, 0, terrain_bank.shape[0] - 1)
-        level_bg = terrain_bank[bank_idx]
+        level_bg = terrain_bank[bank_idx, _TERRAIN_HIT_RMAX:-_TERRAIN_HIT_RMAX, _TERRAIN_HIT_RMAX:-_TERRAIN_HIT_RMAX]
         
         frame = jax.lax.select(state.mode == 1, level_bg, empty_bg)
 
