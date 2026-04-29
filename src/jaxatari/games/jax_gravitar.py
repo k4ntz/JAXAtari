@@ -1494,31 +1494,23 @@ def check_ship_crash(state: ShipState, enemies: Enemies, hitbox_size: float) -> 
 
 
 @jax.jit
-def check_ship_enemy_collisions(ship: ShipState, enemies: Enemies, ship_radius: float) -> jnp.ndarray:
-    # Treat enemy coordinates as the center of a rectangle
-    enemy_half_w = enemies.w / 2
-    enemy_half_h = enemies.h / 2
-
-    # Calculate the distance between the ship's center and each enemy's center
-    delta_x = ship.x - enemies.x
-    delta_y = ship.y - enemies.y
-
-    # Clamp the distance to the enemy's rectangular bounds
+def _check_single_ship_enemy_collision(sx, sy, ship_radius, ex, ey, ew, eh):
+    enemy_half_w = ew / 2
+    enemy_half_h = eh / 2
+    delta_x = sx - ex
+    delta_y = sy - ey
     clamped_x = jnp.clip(delta_x, -enemy_half_w, enemy_half_w)
     clamped_y = jnp.clip(delta_y, -enemy_half_h, enemy_half_h)
-
-    # Find the vector from the ship's center to the closest point on the rectangle
     closest_point_dx = delta_x - clamped_x
     closest_point_dy = delta_y - clamped_y
-
-    # Calculate the squared distance
     distance_sq = closest_point_dx ** 2 + closest_point_dy ** 2
+    return (distance_sq < ship_radius ** 2) & (ew > 0.0)
 
-    # A collision occurs if the distance is less than the ship's radius
-    # Also ensure the enemy is "alive" (width > 0)）
-    collided_mask = (distance_sq < ship_radius ** 2) & (enemies.w > 0.0)
+_check_ship_enemy_collisions_batch = jax.vmap(_check_single_ship_enemy_collision, in_axes=(None, None, None, 0, 0, 0, 0))
 
-    return collided_mask
+@jax.jit
+def check_ship_enemy_collisions(ship: ShipState, enemies: Enemies, ship_radius: float) -> jnp.ndarray:
+    return _check_ship_enemy_collisions_batch(ship.x, ship.y, ship_radius, enemies.x, enemies.y, enemies.w, enemies.h)
 
 
 @jax.jit
@@ -1535,22 +1527,24 @@ def check_ship_hit(state: ShipState, bullets: Bullets, hitbox_size: float) -> bo
 
 
 @jax.jit
-def check_enemy_hit(bullets: Bullets, enemies: Enemies) -> Tuple[Bullets, Enemies]:
-    # 1. Perform all collision detection calculations first
+def _check_single_enemy_hit(bx, by, b_alive, ex, ey, ew, eh):
     padding = 0.2
-    ex1 = enemies.x - enemies.w / 2 - padding
-    ex2 = enemies.x + enemies.w / 2 + padding
-    ey1 = enemies.y - enemies.h / 2 - padding
-    ey2 = enemies.y + enemies.h / 2
-
-    bx = bullets.x[:, None]
-    by = bullets.y[:, None]
-
+    ex1 = ex - ew / 2 - padding
+    ex2 = ex + ew / 2 + padding
+    ey1 = ey - eh / 2 - padding
+    ey2 = ey + eh / 2
     cond_x = (bx >= ex1) & (bx <= ex2)
     cond_y = (by >= ey1) & (by <= ey2)
+    return cond_x & cond_y & b_alive & (ew > 0)
 
-    hit_matrix = cond_x & cond_y & bullets.alive[:, None] & (enemies.w > 0)[None, :]
+_check_enemy_hit_batch = jax.vmap(
+    jax.vmap(_check_single_enemy_hit, in_axes=(None, None, None, 0, 0, 0, 0)),
+    in_axes=(0, 0, 0, None, None, None, None)
+)
 
+@jax.jit
+def check_enemy_hit(bullets: Bullets, enemies: Enemies) -> Tuple[Bullets, Enemies]:
+    hit_matrix = _check_enemy_hit_batch(bullets.x, bullets.y, bullets.alive, enemies.x, enemies.y, enemies.w, enemies.h)
     bullet_hit = jnp.any(hit_matrix, axis=1)
     enemy_hit = jnp.any(hit_matrix, axis=0)
 
@@ -1604,17 +1598,17 @@ def terrain_hit(env_state: EnvState, terrain_bank: jnp.ndarray, x: jnp.ndarray, 
     xi = jnp.clip(jnp.round(adjusted_x).astype(jnp.int32), 0, W - 1)
     yi = jnp.clip(jnp.round(adjusted_y).astype(jnp.int32), 0, H - 1)
 
-    xs = jnp.clip(xi + _TERRAIN_HIT_DX, 0, W - 1)
-    ys = jnp.clip(yi + _TERRAIN_HIT_DY, 0, H - 1)
-
     bi = jnp.clip(env_state.terrain_bank_idx, 0, terrain_bank.shape[0] - 1)
     page = terrain_bank[bi]
-
-    patch = page[ys[:, None], xs[None, :]]
+    bg_val = terrain_bank[0, 0, 0]
+    
+    # Pad array, um den Patch per dynamic_slice ohne OOB-Fehler zentriert rauszuschneiden
+    page_padded = jnp.pad(page, _TERRAIN_HIT_RMAX, mode='constant', constant_values=bg_val)
+    patch_size = 2 * _TERRAIN_HIT_RMAX + 1
+    patch = jax.lax.dynamic_slice(page_padded, (yi, xi), (patch_size, patch_size))
 
     r_eff = jnp.minimum(jnp.float32(radius), jnp.float32(_TERRAIN_HIT_RMAX))
     mask = _TERRAIN_HIT_DIST2 <= (r_eff ** 2)
-    bg_val = terrain_bank[0, 0, 0]
     is_not_black = patch != bg_val
 
     return jnp.any(is_not_black & mask)
@@ -2974,7 +2968,10 @@ def _bullets_hit_terrain(env_state: EnvState, terrain_bank: jnp.ndarray, bullets
     xi = jnp.clip(jnp.round(bullets.x).astype(jnp.int32), 0, W - 1)
     yi = jnp.clip(jnp.round(bullets.y).astype(jnp.int32), 0, H - 1)
 
-    pixel_colors = terrain_map[yi, xi]
+    def get_pixel(y, x):
+        return jax.lax.dynamic_slice(terrain_map, (y, x), (1, 1))[0, 0]
+    
+    pixel_colors = jax.vmap(get_pixel)(yi, xi)
     bg_val = terrain_bank[0, 0, 0]
     hit_terrain_mask = pixel_colors != bg_val
 
