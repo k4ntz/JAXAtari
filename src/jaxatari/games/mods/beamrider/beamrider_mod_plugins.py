@@ -332,11 +332,11 @@ def _get_mothership_y(env):
 
 
 def _get_mothership_stop_x(env, lane):
-    head_y = float(env.consts.MOTHERSHIP_EMERGE_Y) + 1.0
+    head_y = jnp.array(float(env.consts.MOTHERSHIP_EMERGE_Y) + 1.0, dtype=jnp.float32)
     laser_left_x = _get_lane_x(env, lane, head_y) + _get_ufo_alignment(head_y)
     ship_half_width = env.consts.MOTHERSHIP_SPRITE_SIZE[1] / 2.0
     laser_half_width = env.consts.ENEMY_SHOT_SPRITE_SIZES[MOTHERSHIP_LASER_SPRITE_IDX][1] / 2.0
-    return (laser_left_x + laser_half_width - ship_half_width).astype(jnp.float32)
+    return jnp.array(laser_left_x + laser_half_width - ship_half_width, dtype=jnp.float32)
 
 
 def _pack_mothership_laser_timer(lane, phase_timer, firing, post_fire):
@@ -993,25 +993,33 @@ class DoubleEnemySpeedMod(JaxAtariInternalModPlugin):
         rejuv_pos = jnp.where(rejuv_destroyed, env.enemy_offscreen, rejuv_pos)
         player_shot_pos = jnp.where(rejuv_hit, env.bullet_offscreen, player_shot_pos)
         score = jnp.where(rejuv_destroyed, score + 150, score)
+        bullet_size = jnp.take(env.bullet_sprite_sizes, bullet_idx, axis=0)
+        is_torpedo = bullet_type == env.consts.TORPEDO_ID
 
         shot_x_screen = _get_player_shot_screen_x(player_shot_pos, player_shot_vel, bullet_type, env.consts.LASER_ID)
+        shot_active = player_shot_pos[1] < env.consts.BOTTOM_CLIP
         hit_mothership = env._mothership_bullet_collision(
             state.level.mothership_stage,
             state.level.mothership_position,
             player_shot_pos,
-            bullet_type,
             shot_x_screen,
+            shot_active,
+            bullet_size,
+            is_torpedo
         )
         player_shot_pos = jnp.where(hit_mothership, env.bullet_offscreen, player_shot_pos)
         score = jnp.where(hit_mothership, score + 300 + 30 * clamped_sector + jnp.maximum(state.lives - 1, 0) * (100 + 10 * clamped_sector), score)
 
         shot_x_screen = _get_player_shot_screen_x(player_shot_pos, player_shot_vel, bullet_type, env.consts.LASER_ID)
+        shot_active = player_shot_pos[1] < env.consts.BOTTOM_CLIP
         hit_mask_shot, hit_exists_shot = env._enemy_shot_bullet_collision(
             enemy_shot_pos,
             enemy_shot_timer,
             player_shot_pos,
-            bullet_type,
             shot_x_screen,
+            shot_active,
+            bullet_size,
+            is_torpedo
         )
         enemy_shot_pos_pre_collision = enemy_shot_pos
         enemy_shot_pos = jnp.where(hit_mask_shot[None, :], env.bullet_offscreen_shots, enemy_shot_pos)
@@ -1635,8 +1643,12 @@ class DoubleEnemySpeedMod(JaxAtariInternalModPlugin):
         offscreen_pos = env.enemy_offscreen
         is_offscreen = jnp.all(white_ufo_position == offscreen_pos)
 
-        new_key, key_use = jax.random.split(key)
-        key_pattern, key_motion_1, key_motion_2, key_spawn = jax.random.split(key_use, 4)
+        new_key, key_motion_1, key_motion_2, choice_key1, choice_key2, float_key = jax.random.split(key, 6)
+        float_rolls = jax.random.uniform(float_key, shape=(4,))
+
+        spawn_delay_roll = float_rolls[0]
+        retreat_roll = float_rolls[2]
+        start_roll = float_rolls[3]
 
         spawn_delay = jnp.maximum(spawn_delay - 1, 0)
 
@@ -1649,7 +1661,10 @@ class DoubleEnemySpeedMod(JaxAtariInternalModPlugin):
             spawn_delay,
             pattern_id,
             pattern_timer,
-            key_pattern,
+            retreat_roll,
+            start_roll,
+            choice_key1,
+            choice_key2,
         )
 
         requires_lane_motion = env._white_ufo_pattern_requires_lane_motion(pattern_id)
@@ -1715,7 +1730,8 @@ class DoubleEnemySpeedMod(JaxAtariInternalModPlugin):
         white_ufo_vel_y = jnp.where(should_respawn, 0.0, white_ufo_vel_y)
         time_on_lane = jnp.where(should_respawn, 0, time_on_lane)
         attack_time = jnp.where(should_respawn, 0, attack_time)
-        spawn_delay = jnp.where(should_respawn, jax.random.randint(key_spawn, (), 1, 301), spawn_delay)
+        new_spawn_delay_val = jnp.floor(spawn_delay_roll * 300.0).astype(jnp.int32) + 1
+        spawn_delay = jnp.where(should_respawn, new_spawn_delay_val, spawn_delay)
         pattern_id = jnp.where(should_respawn, int(WhiteUFOPattern.IDLE), pattern_id)
         pattern_timer = jnp.where(should_respawn, 0, pattern_timer)
 
@@ -1978,12 +1994,12 @@ class DoubleEnemySpeedMod(JaxAtariInternalModPlugin):
         base_step = type(env)._mothership_step
 
         pos_1, timer_1, stage_1, sector_advance_1 = base_step(env, state, white_ufo_left, enemy_explosion_frame, is_hit)
-        level_1 = state.level._replace(
+        level_1 = state.level.replace(
             mothership_position=pos_1,
             mothership_timer=timer_1,
             mothership_stage=stage_1,
         )
-        state_1 = state._replace(level=level_1)
+        state_1 = state.replace(level=level_1)
         can_advance_twice = (stage_1 != 0) & (stage_1 != 4) & (stage_1 != 5)
 
         pos_2, timer_2, stage_2, sector_advance_2 = base_step(env, state_1, white_ufo_left, enemy_explosion_frame, is_hit)
@@ -2098,7 +2114,10 @@ class ThreeLanesMod(JaxAtariInternalModPlugin):
         spawn_delay,
         pattern_id,
         pattern_timer,
-        key,
+        retreat_roll,
+        start_roll,
+        key_chain_choice,
+        key_start_choice
     ):
         on_top_lane = position[1] <= self._env.consts.TOP_CLIP
         time_on_lane = jnp.where(on_top_lane, time_on_lane + 1, 0)
@@ -2162,8 +2181,6 @@ class ThreeLanesMod(JaxAtariInternalModPlugin):
 
         pattern_finished_off_top = (~on_top_lane) & is_engagement_pattern & jnp.where(is_triple, triple_finished, pattern_timer == 0) & is_on_lane
 
-        key_start_roll, key_start_choice, key_retreat_roll, key_chain_choice, _ = jax.random.split(key, 5)
-        retreat_roll = jax.random.uniform(key_retreat_roll)
         retreat_prob = self._env._white_ufo_retreat_prob(attack_time)
         retreat_now = pattern_finished_off_top & (retreat_roll < retreat_prob)
         pattern_id = jnp.where(retreat_now, int(WhiteUFOPattern.RETREAT), pattern_id)
@@ -2201,7 +2218,6 @@ class ThreeLanesMod(JaxAtariInternalModPlugin):
             p_min=jnp.where(already_left, 0.1, self._env.consts.WHITE_UFO_ATTACK_P_MIN),
             p_max=self._env.consts.WHITE_UFO_ATTACK_P_MAX,
         )
-        start_roll = jax.random.uniform(key_start_roll)
         start_attack = should_choose_new & (start_roll < p_start)
 
         def choose_new_pattern(_):
@@ -2227,14 +2243,14 @@ class ThreeLanesMod(JaxAtariInternalModPlugin):
         return pattern_id, pattern_timer, time_on_lane, attack_time
 
     @partial(jax.jit, static_argnums=(0,))
-    def _white_ufo_top_lane(self, white_ufo_pos, white_ufo_vel_x, pattern_id, key):
+    def _white_ufo_top_lane(self, white_ufo_pos, white_ufo_vel_x, pattern_id, motion_roll):
         hold_position = (pattern_id == int(WhiteUFOPattern.SHOOT)) | (white_ufo_pos[1] > float(self._env.consts.TOP_CLIP))
         min_speed = float(self._env.consts.WHITE_UFO_TOP_LANE_MIN_SPEED)
         turn_speed = float(self._env.consts.WHITE_UFO_TOP_LANE_TURN_SPEED)
 
         vx = jnp.where(hold_position, 0.0, white_ufo_vel_x)
         need_boost = (~hold_position) & (jnp.abs(vx) < min_speed)
-        random_sign = jnp.where(jax.random.uniform(key) < 0.5, -1.0, 1.0)
+        random_sign = jnp.where(motion_roll < 0.5, -1.0, 1.0)
         direction = jnp.where(vx == 0.0, random_sign, jnp.sign(vx))
         vx = jnp.where(need_boost, direction * min_speed, vx)
 
@@ -3001,10 +3017,11 @@ class MothershipLaserMod(JaxAtariInternalModPlugin):
         def moving_or_firing_logic():
             target_lane = _get_mothership_laser_lane_from_timer(timer)
             stop_x = _get_mothership_stop_x(self._env, target_lane)
+            exit_x_val = self._env.mothership_anim_x[6]
             exit_x = jnp.where(
                 is_ltr,
-                (160.0 - 16.0 - self._env.mothership_anim_x[6] + 8.0).astype(jnp.float32),
-                self._env.mothership_anim_x[6].astype(jnp.float32),
+                160.0 - 16.0 - exit_x_val + 8.0,
+                exit_x_val,
             )
             phase_timer = _get_mothership_laser_phase_timer(timer)
             firing = _is_mothership_laser_firing(timer)
@@ -3343,7 +3360,10 @@ class TeleportUFOsMod(JaxAtariInternalModPlugin):
         spawn_delay,
         pattern_id,
         pattern_timer,
-        key,
+        retreat_roll,
+        start_roll,
+        key_chain_choice,
+        key_start_choice
     ):
         on_top_lane = position[1] <= self._env.consts.TOP_CLIP
         time_on_lane = jnp.where(on_top_lane, time_on_lane + 1, 0)
@@ -3415,8 +3435,6 @@ class TeleportUFOsMod(JaxAtariInternalModPlugin):
         pattern_finished = jnp.where(is_triple, triple_finished, jnp.where(is_teleport, teleport_finished, pattern_timer == 0))
         pattern_finished_off_top = (~on_top_lane) & is_engagement_pattern & pattern_finished & is_on_lane
 
-        key_start_roll, key_start_choice, key_retreat_roll, key_chain_choice, _ = jax.random.split(key, 5)
-        retreat_roll = jax.random.uniform(key_retreat_roll)
         retreat_prob = self._env._white_ufo_retreat_prob(attack_time)
         retreat_now = pattern_finished_off_top & (retreat_roll < retreat_prob)
         pattern_id = jnp.where(retreat_now, int(WhiteUFOPattern.RETREAT), pattern_id)
@@ -3452,7 +3470,6 @@ class TeleportUFOsMod(JaxAtariInternalModPlugin):
             p_min=jnp.where(already_left, 0.1, self._env.consts.WHITE_UFO_ATTACK_P_MIN),
             p_max=self._env.consts.WHITE_UFO_ATTACK_P_MAX,
         )
-        start_roll = jax.random.uniform(key_start_roll)
         start_attack = should_choose_new & (start_roll < p_start)
 
         def choose_new_pattern(_):
@@ -3494,8 +3511,13 @@ class TeleportUFOsMod(JaxAtariInternalModPlugin):
         offscreen_pos = self._env.enemy_offscreen
         is_offscreen = jnp.all(white_ufo_position == offscreen_pos)
 
-        new_key, key_use = jax.random.split(key)
-        key_pattern, key_motion, key_spawn = jax.random.split(key_use, 3)
+        new_key, key_motion, key_chain_choice, key_start_choice, float_key = jax.random.split(key, 5)
+        float_rolls = jax.random.uniform(float_key, shape=(4,))
+
+        spawn_delay_roll = float_rolls[0]
+        motion_roll = float_rolls[1]
+        retreat_roll = float_rolls[2]
+        start_roll = float_rolls[3]
 
         spawn_delay = jnp.maximum(spawn_delay - 1, 0)
 
@@ -3508,7 +3530,10 @@ class TeleportUFOsMod(JaxAtariInternalModPlugin):
             spawn_delay,
             pattern_id,
             pattern_timer,
-            key_pattern,
+            retreat_roll,
+            start_roll,
+            key_chain_choice,
+            key_start_choice
         )
 
         ufo_x = white_ufo_position[0].astype(jnp.float32)
@@ -3551,7 +3576,7 @@ class TeleportUFOsMod(JaxAtariInternalModPlugin):
             return self._env._white_ufo_normal(white_ufo_position, white_ufo_vel_x, white_ufo_vel_y, pattern_id, already_left)
 
         def stay_on_top(_):
-            return self._env._white_ufo_top_lane(white_ufo_position, white_ufo_vel_x, pattern_id, key_motion)
+            return self._env._white_ufo_top_lane(white_ufo_position, white_ufo_vel_x, pattern_id, motion_roll)
 
         white_ufo_vel_x, white_ufo_vel_y = jax.lax.cond(requires_lane_motion, follow_lane, stay_on_top, operand=None)
 
@@ -3570,7 +3595,8 @@ class TeleportUFOsMod(JaxAtariInternalModPlugin):
         white_ufo_vel_y = jnp.where(should_respawn, 0.0, white_ufo_vel_y)
         time_on_lane = jnp.where(should_respawn, 0, time_on_lane)
         attack_time = jnp.where(should_respawn, 0, attack_time)
-        spawn_delay = jnp.where(should_respawn, jax.random.randint(key_spawn, (), 1, 301), spawn_delay)
+        new_spawn_delay_val = jnp.floor(spawn_delay_roll * 300.0).astype(jnp.int32) + 1
+        spawn_delay = jnp.where(should_respawn, new_spawn_delay_val, spawn_delay)
         pattern_id = jnp.where(should_respawn, int(WhiteUFOPattern.IDLE), pattern_id)
         pattern_timer = jnp.where(should_respawn, 0, pattern_timer)
 
