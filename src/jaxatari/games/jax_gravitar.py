@@ -3961,6 +3961,29 @@ class GravitarRenderer(JAXGameRenderer):
             self.padded_ship_orientations = tuple(default_mask for _ in range(16))
             self.ship_orientations_array = jnp.stack(self.padded_ship_orientations)
 
+        def build_stack(indices):
+            valid_sprites = [self.sprites[int(i)] for i in indices if self.sprites[int(i)] is not None]
+            if not valid_sprites:
+                return jnp.full((max(indices) + 1, 1, 1), self.jr.TRANSPARENT_ID, dtype=jnp.int32)
+            max_h = max(s.shape[0] for s in valid_sprites)
+            max_w = max(s.shape[1] for s in valid_sprites)
+            
+            stack_arrays = []
+            for i in range(max(indices) + 1):
+                if i in indices and self.sprites[int(i)] is not None:
+                    s = self.sprites[int(i)]
+                    pad_h = (max_h - s.shape[0]) // 2
+                    pad_w = (max_w - s.shape[1]) // 2
+                    padded = jnp.pad(s, ((pad_h, max_h - s.shape[0] - pad_h), (pad_w, max_w - s.shape[1] - pad_w)), constant_values=self.jr.TRANSPARENT_ID)
+                    stack_arrays.append(padded)
+                else:
+                    stack_arrays.append(jnp.full((max_h, max_w), self.jr.TRANSPARENT_ID, dtype=jnp.int32))
+            return jnp.stack(stack_arrays)
+
+        self.map_elements_stack = build_stack([SpriteIdx.PLANET1, SpriteIdx.PLANET2, SpriteIdx.PLANET3, SpriteIdx.PLANET4, SpriteIdx.REACTOR, SpriteIdx.OBSTACLE, SpriteIdx.SPAWN_LOC])
+        self.enemy_stack = build_stack([SpriteIdx.ENEMY_ORANGE, SpriteIdx.ENEMY_GREEN, SpriteIdx.ENEMY_ORANGE_FLIPPED, SpriteIdx.ENEMY_CRASH])
+        self.enemy_bullet_stack = build_stack([SpriteIdx.ENEMY_BULLET, SpriteIdx.ENEMY_GREEN_BULLET])
+
     @partial(jax.jit, static_argnames=('self',))
     def render(self, state: EnvState, terrain_bank: jnp.ndarray) -> jnp.ndarray:
         H, W = self.height, self.width
@@ -3981,30 +4004,9 @@ class GravitarRenderer(JAXGameRenderer):
                 should_draw = (pid >= 0) & ~(is_cleared | is_reactor_destroyed)
 
                 def draw_p(r):
-                    r = jax.lax.cond(pid == int(SpriteIdx.PLANET1),
-                                     lambda rr: render_centered(rr, state.planets_px[i], state.planets_py[i],
-                                                                self.sprites[int(SpriteIdx.PLANET1)]), lambda rr: rr, r)
-                    r = jax.lax.cond(pid == int(SpriteIdx.PLANET2),
-                                     lambda rr: render_centered(rr, state.planets_px[i], state.planets_py[i],
-                                                                self.sprites[int(SpriteIdx.PLANET2)]), lambda rr: rr, r)
-                    r = jax.lax.cond(pid == int(SpriteIdx.PLANET3),
-                                     lambda rr: render_centered(rr, state.planets_px[i], state.planets_py[i],
-                                                                self.sprites[int(SpriteIdx.PLANET3)]), lambda rr: rr, r)
-                    r = jax.lax.cond(pid == int(SpriteIdx.PLANET4),
-                                     lambda rr: render_centered(rr, state.planets_px[i], state.planets_py[i],
-                                                                self.sprites[int(SpriteIdx.PLANET4)]), lambda rr: rr, r)
-                    r = jax.lax.cond(pid == int(SpriteIdx.REACTOR),
-                                     lambda rr: render_centered(rr, state.planets_px[i], state.planets_py[i],
-                                                                self.sprites[int(SpriteIdx.REACTOR)]), lambda rr: rr, r)
-                    r = jax.lax.cond(pid == int(SpriteIdx.OBSTACLE),
-                                     lambda rr: render_centered(rr, state.planets_px[i], state.planets_py[i],
-                                                                self.sprites[int(SpriteIdx.OBSTACLE)]), lambda rr: rr,
-                                     r)
-                    r = jax.lax.cond(pid == int(SpriteIdx.SPAWN_LOC),
-                                     lambda rr: render_centered(rr, state.planets_px[i], state.planets_py[i],
-                                                                self.sprites[int(SpriteIdx.SPAWN_LOC)]), lambda rr: rr,
-                                     r)
-                    return r
+                    safe_pid = jnp.clip(pid, 0, self.map_elements_stack.shape[0] - 1)
+                    sprite_to_draw = self.map_elements_stack[safe_pid]
+                    return render_centered(r, state.planets_px[i], state.planets_py[i], sprite_to_draw)
 
                 return jax.lax.cond(should_draw, draw_p, lambda r: r, fc)
 
@@ -4044,23 +4046,15 @@ class GravitarRenderer(JAXGameRenderer):
                 is_exploding = death_timer > 0
                 is_active = is_alive & ~is_exploding
 
-                fc = jax.lax.cond(is_active & (sprite_id == int(SpriteIdx.ENEMY_ORANGE)),
-                                  lambda r: render_centered(r, state.enemies.x[i], state.enemies.y[i],
-                                                            self.sprites[int(SpriteIdx.ENEMY_ORANGE)]),
-                                  lambda r: r, fc)
-                fc = jax.lax.cond(is_active & (sprite_id == int(SpriteIdx.ENEMY_GREEN)),
-                                  lambda r: render_centered(r, state.enemies.x[i], state.enemies.y[i],
-                                                            self.sprites[int(SpriteIdx.ENEMY_GREEN)]),
-                                  lambda r: r, fc)
-                fc = jax.lax.cond(is_active & (sprite_id == int(SpriteIdx.ENEMY_ORANGE_FLIPPED)),
-                                  lambda r: render_centered(r, state.enemies.x[i], state.enemies.y[i],
-                                                            self.sprites[int(SpriteIdx.ENEMY_ORANGE_FLIPPED)]),
-                                  lambda r: r, fc)
-                fc = jax.lax.cond(is_exploding,
-                                  lambda r: render_centered(r, state.enemies.x[i], state.enemies.y[i],
-                                                            self.sprites[int(SpriteIdx.ENEMY_CRASH)]),
-                                  lambda r: r, fc)
-                return fc
+                should_draw = is_active | is_exploding
+                final_sprite_id = jnp.where(is_exploding, int(SpriteIdx.ENEMY_CRASH), sprite_id)
+
+                def draw_e(r):
+                    safe_id = jnp.clip(final_sprite_id, 0, self.enemy_stack.shape[0] - 1)
+                    sprite_to_draw = self.enemy_stack[safe_id]
+                    return render_centered(r, state.enemies.x[i], state.enemies.y[i], sprite_to_draw)
+
+                return jax.lax.cond(should_draw, draw_e, lambda r: r, fc)
 
             f_enemies = jax.lax.fori_loop(0, self.consts.MAX_ENEMIES, draw_one_enemy, f_tanks)
 
@@ -4119,15 +4113,12 @@ class GravitarRenderer(JAXGameRenderer):
                 active = state.enemy_bullets.alive[i]
                 sprite_id = state.enemy_bullets.sprite_idx[i]
 
-                fc = jax.lax.cond(active & (sprite_id == int(SpriteIdx.ENEMY_BULLET)),
-                                  lambda r: render_centered(r, state.enemy_bullets.x[i], state.enemy_bullets.y[i],
-                                                            self.sprites[int(SpriteIdx.ENEMY_BULLET)]),
-                                  lambda r: r, fc)
-                fc = jax.lax.cond(active & (sprite_id == int(SpriteIdx.ENEMY_GREEN_BULLET)),
-                                  lambda r: render_centered(r, state.enemy_bullets.x[i], state.enemy_bullets.y[i],
-                                                            self.sprites[int(SpriteIdx.ENEMY_GREEN_BULLET)]),
-                                  lambda r: r, fc)
-                return fc
+                def draw_eb(r):
+                    safe_id = jnp.clip(sprite_id, 0, self.enemy_bullet_stack.shape[0] - 1)
+                    sprite_to_draw = self.enemy_bullet_stack[safe_id]
+                    return render_centered(r, state.enemy_bullets.x[i], state.enemy_bullets.y[i], sprite_to_draw)
+
+                return jax.lax.cond(active, draw_eb, lambda r: r, fc)
 
             return jax.lax.fori_loop(0, state.enemy_bullets.x.shape[0], draw_one, f)
 
