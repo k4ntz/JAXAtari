@@ -1,9 +1,3 @@
-"""
-Group: Sooraj Rathore, Kadir Özen
-Edit: Jan Rafflewski
-"""
-
-
 # -------- Imports --------
 from enum import IntEnum
 import os
