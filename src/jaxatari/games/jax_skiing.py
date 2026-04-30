@@ -130,6 +130,9 @@ class SkiingConstants(AutoDerivedConstants):
     """Game configuration parameters"""
     screen_width: int = struct.field(pytree_node=False, default=160)
     screen_height: int = struct.field(pytree_node=False, default=210)
+    border_top: int = struct.field(pytree_node=False, default=3)
+    border_left: int = struct.field(pytree_node=False, default=8)
+    border_right: int = struct.field(pytree_node=False, default=8)
     skier_width: int = struct.field(pytree_node=False, default=10)
     skier_height: int = struct.field(pytree_node=False, default=18)
     skier_y: int = struct.field(pytree_node=False, default=46)
@@ -247,16 +250,20 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
     @partial(jax.jit, static_argnums=(0,))
     def _get_initial_flags_x(self) -> chex.Array:
         c = self.consts
-        min_fx = jnp.int32(50)
-        max_fx = jnp.int32(110)
+        min_fx = jnp.int32(c.border_left + 50)
+        max_fx = jnp.int32(c.screen_width - c.border_right - 50)
         span_fx = max_fx - min_fx + 1
         return (min_fx + ((jnp.arange(c.max_num_flags, dtype=jnp.int32) * 13) % span_fx)).astype(jnp.float32)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_initial_trees_x(self) -> chex.Array:
         c = self.consts
-        tree_val_gap = (jnp.arange(c.max_num_trees, dtype=jnp.int32) * 101) % 138
-        return jnp.where(tree_val_gap <= 66, -6.0 + tree_val_gap, 100.0 + (tree_val_gap - 67)).astype(jnp.float32)
+        xmin = float(c.border_left)
+        xmax = float(c.screen_width - c.border_right)
+        span = int(xmax - xmin)
+        tree_val_gap = (jnp.arange(c.max_num_trees, dtype=jnp.int32) * 101) % span
+        mid = span // 2
+        return jnp.where(tree_val_gap <= mid, xmin + tree_val_gap, xmin + mid + 34.0 + (tree_val_gap - mid - 1)).astype(jnp.float32)
 
     @partial(jax.jit, static_argnums=(0,))
     def _enforce_tree_gap(self, x_tree: chex.Array) -> chex.Array:
@@ -269,22 +276,26 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_new_flag_x(self, state: SkiingState, i: chex.Array) -> chex.Array:
-        min_fx = jnp.int32(50)
-        max_fx = jnp.int32(110)
+        min_fx = jnp.int32(self.consts.border_left + 50)
+        max_fx = jnp.int32(self.consts.screen_width - self.consts.border_right - 50)
         span_fx = max_fx - min_fx + 1
         step_fx = 13
         return (min_fx + (((state.gates_seen + i) * step_fx) % span_fx)).astype(jnp.float32)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_new_tree_x(self, state: SkiingState, i: chex.Array) -> chex.Array:
+        xmin = float(self.consts.border_left)
+        xmax = float(self.consts.screen_width - self.consts.border_right)
+        span = int(xmax - xmin)
+        mid = span // 2
         step_tx = 101
-        tree_val_gap = ((state.gates_seen * 13 + i * 23) * step_tx) % 138
-        return jnp.where(tree_val_gap <= 66, -6.0 + tree_val_gap, 100.0 + (tree_val_gap - 67)).astype(jnp.float32)
+        tree_val_gap = ((state.gates_seen * 13 + i * 23) * step_tx) % span
+        return jnp.where(tree_val_gap <= mid, xmin + tree_val_gap, xmin + mid + 34.0 + (tree_val_gap - mid - 1)).astype(jnp.float32)
     
     @partial(jax.jit, static_argnums=(0,))
     def _get_new_mogul_x(self, state: SkiingState, i: chex.Array) -> chex.Array:
-        min_rx = jnp.int32(50)
-        max_rx = jnp.int32(110)
+        min_rx = jnp.int32(self.consts.border_left + 50)
+        max_rx = jnp.int32(self.consts.screen_width - self.consts.border_right - 50)
         span_rx = max_rx - min_rx + 1
         step_rx = 19
         return (min_rx + (((state.gates_seen + i) * step_rx) % span_rx)).astype(jnp.float32)
@@ -331,8 +342,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         trees_y = trees_y + stagger_t
 
         min_sep_tree = 0.5*(jnp.float32(c.tree_width)+jnp.float32(c.tree_width)) + jnp.float32(c.sep_margin_tree_tree)
-        xmin = jnp.float32(-6.0)
-        xmax = jnp.float32(170.0)
+        xmin = jnp.float32(c.border_left)
+        xmax = jnp.float32(c.screen_width - c.border_right)
 
         def adj_tree_i(i, tx):
             x0 = tx[i]
@@ -346,8 +357,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
             trees_x, trees_y, trees_type
         ], axis=1)
 
-        min_rx = jnp.int32(50)
-        max_rx = jnp.int32(110)
+        min_rx = jnp.int32(c.border_left + 50)
+        max_rx = jnp.int32(c.screen_width - c.border_right - 50)
         span_rx = max_rx - min_rx + 1
         moguls_x = (min_rx + ((jnp.arange(c.max_num_moguls, dtype=jnp.int32) * 19) % span_rx)).astype(jnp.float32)
         moguls_per_row = jnp.maximum(1, c.max_num_moguls // 2)
@@ -356,15 +367,15 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         base_offsets_r = jnp.array([2, 6], dtype=jnp.float32)
         r_moguls = (row_idx_r // 2) * 8.0 + jnp.take(base_offsets_r, row_idx_r % 2)
         moguls_y = base_y + r_moguls * row_spacing
-        
+
         # Add a deterministic stagger (-7 to +7 pixels) so they are not perfectly aligned
         stagger_r = ((i_r * 11) % 15).astype(jnp.float32) - 7.0
         moguls_y = moguls_y + stagger_r
         # Enforce separation from trees and already placed moguls
         min_sep_mogul_tree = 0.5*(jnp.float32(self.consts.mogul_width)+jnp.float32(self.consts.tree_width)) + jnp.float32(self.consts.sep_margin_tree_mogul)
         min_sep_mogul_mogul = 0.5*(jnp.float32(self.consts.mogul_width)+jnp.float32(self.consts.mogul_width)) + jnp.float32(self.consts.sep_margin_mogul_mogul)
-        xmin_r = jnp.float32(50.0)
-        xmax_r = jnp.float32(110.0)
+        xmin_r = jnp.float32(c.border_left + 50)
+        xmax_r = jnp.float32(c.screen_width - c.border_right - 50)
 
         tree_xs_fixed = trees[:, 0]
 
@@ -593,8 +604,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         eff_x_speed_nom = jax.lax.select(first_frame, jnp.array(0.0, jnp.float32), new_skier_x_speed_nom)
         eff_y_speed_nom = jax.lax.select(first_frame, jnp.array(0.0, jnp.float32), new_skier_y_speed_nom)
 
-        min_x = self.consts.skier_width / 2
-        max_x = self.consts.screen_width - self.consts.skier_width / 2
+        min_x = self.consts.skier_width / 2 + self.consts.border_left
+        max_x = self.consts.screen_width - self.consts.skier_width / 2 - self.consts.border_right
         new_x_nom = jnp.clip(state.skier_x + eff_x_speed_nom, min_x, max_x)
 
         # 3) World - move "nominally" first (for collision detection),
@@ -1005,6 +1016,21 @@ class SkiingRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
 
+        # 4b. Bake black borders into the background raster (zero runtime cost)
+        bt = self.consts.border_top
+        bl = self.consts.border_left
+        br = self.consts.border_right
+        if bt > 0 or bl > 0 or br > 0:
+            black_id = self.COLOR_TO_ID[(0, 0, 0)]
+            bg = np.array(self.BACKGROUND)
+            if bt > 0:
+                bg[:bt, :] = black_id
+            if bl > 0:
+                bg[:, :bl] = black_id
+            if br > 0:
+                bg[:, -br:] = black_id
+            self.BACKGROUND = jnp.array(bg)
+
         # 5. Store key color/shape IDs
         self.RED_FLAG_MASK = self.SHAPE_MASKS['flag_red']
         self.BLUE_FLAG_MASK = self.SHAPE_MASKS['flag_blue']
@@ -1016,6 +1042,9 @@ class SkiingRenderer(JAXGameRenderer):
         self.glyph_height = self.SHAPE_MASKS['digits'].shape[1]
         self.glyph_width = self.SHAPE_MASKS['digits'].shape[2]
         self.glyph_spacing = 1  # From old _center_positions logic
+
+        # 7. Scale the scroll-mask band height to match the actual raster resolution
+        self.scroll_band = max(1, round(32 * self.config.height_scaling))
 
     def _load_rgba_sprite(self, file_name: str) -> np.ndarray:
         """Helper to load and standardize sprites to RGBA."""
@@ -1157,9 +1186,16 @@ class SkiingRenderer(JAXGameRenderer):
             return self.jr.render_at_clipped(r, left, top, mask, flip_offset=tree_offset)            
         raster = jax.lax.fori_loop(0, self.consts.max_num_trees, draw_tree, raster)
 
-        # 6.5 Apply 32px top and bottom white bands to hide scrolled objects
-        raster = raster.at[:32, :].set(bg_raster[:32, :])
-        raster = raster.at[-32:, :].set(bg_raster[-32:, :])
+        # 6.5 Apply top/bottom white bands and border columns from bg_raster.
+        # bg_raster already has black baked into the border regions, so these
+        # restores both clear sprite overdraw and apply the borders simultaneously.
+        bl = self.consts.border_left
+        br = self.consts.border_right
+        sb = self.scroll_band
+        raster = raster.at[:sb, :].set(bg_raster[:sb, :])
+        raster = raster.at[-sb:, :].set(bg_raster[-sb:, :])
+        raster = raster.at[:, :bl].set(bg_raster[:, :bl])
+        raster = raster.at[:, self.consts.screen_width - br:].set(bg_raster[:, self.consts.screen_width - br:])
 
         # 7. Draw UI
         score_digits = self._format_score_digits(state.successful_gates)
@@ -1170,21 +1206,22 @@ class SkiingRenderer(JAXGameRenderer):
         total_w_score = num_glyphs_score * self.glyph_width + (num_glyphs_score - 1) * self.glyph_spacing
         left_score = (self.consts.screen_width - total_w_score) // 2
         
+        ui_top = self.consts.border_top + 2
         raster = self.jr.render_label(
-            raster, left_score, 2, score_digits,
-            self.SHAPE_MASKS['digits'], 
+            raster, left_score, ui_top, score_digits,
+            self.SHAPE_MASKS['digits'],
             spacing=self.glyph_width + self.glyph_spacing,
             max_digits=num_glyphs_score
         )
-        
+
         # Center step_count
         num_glyphs_step_count = step_count_digits.shape[0]
         total_w_step_count = num_glyphs_step_count * self.glyph_width + (num_glyphs_step_count - 1) * self.glyph_spacing
         left_step_count = (self.consts.screen_width - total_w_step_count) // 2
-        
+
         raster = self.jr.render_label(
-            raster, left_step_count, 2 + self.glyph_height + 2, step_count_digits,
-            self.SHAPE_MASKS['digits'], 
+            raster, left_step_count, ui_top + self.glyph_height + 2, step_count_digits,
+            self.SHAPE_MASKS['digits'],
             spacing=self.glyph_width + self.glyph_spacing,
             max_digits=num_glyphs_step_count
         )
