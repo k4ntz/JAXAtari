@@ -33,6 +33,7 @@ GAME_MODULES = {
     "asteroids": "jaxatari.games.jax_asteroids",
     "atlantis": "jaxatari.games.jax_atlantis",
     "bankheist": "jaxatari.games.jax_bankheist",
+    "beamrider": "jaxatari.games.jax_beamrider",
     "berzerk": "jaxatari.games.jax_berzerk",
     "blackjack": "jaxatari.games.jax_blackjack",
     "breakout": "jaxatari.games.jax_breakout",
@@ -94,7 +95,11 @@ MOD_MODULES = {
     "montezumarevenge": "jaxatari.games.mods.montezuma_revenge_mods.MontezumaRevengeEnvMod",
     "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
     "gravitar": "jaxatari.games.mods.gravitar_mods.GravitarEnvMod",
+    "phoenix": "jaxatari.games.mods.phoenix_mods.PhoenixEnvMod",
+    "enduro": "jaxatari.games.mods.enduro_mods.EnduroEnvMod",
+    "qbert": "jaxatari.games.mods.qbert_mods.QbertEnvMod",
     "mspacman": "jaxatari.games.mods.mspacman_mods.MsPacmanEnvMod",
+    "beamrider": "jaxatari.games.mods.beamrider_mods.BeamRiderEnvMod"
 }
 
 
