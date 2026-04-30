@@ -9,6 +9,7 @@ import os
 from typing import Tuple
 from functools import partial
 
+import numpy as np
 import chex
 import jax
 import jax.numpy as jnp
@@ -1179,6 +1180,141 @@ class QbertRenderer(JAXGameRenderer):
         self.COLOR_POSITIONS = jnp.array([[68, 33], [56, 62], [80, 62], [44, 91], [68, 91], [92, 91], [32, 120], [56, 120], [80, 120], [104, 120], [20, 149], [44, 149], [68, 149], [92, 149], [116, 149], [8, 178], [32, 178], [56, 178], [80, 178], [104, 178], [128, 178]]).astype(jnp.int32)
         self.LIVE_POSITIONS = jnp.array([[33, 16], [41, 16], [49, 16], [57, 16], [65, 16], [73, 16], [81, 16], [89, 16], [97, 16]]).astype(jnp.int32)
         self.QBERT_POSITIONS = jnp.array([[74, 18], [62, 47], [86, 47], [50, 76], [74, 76], [98, 76], [38, 105], [62, 105], [86, 105], [110, 105], [26, 134], [50, 134], [74, 134], [98, 134], [122, 134], [14, 163], [38, 163], [62, 163], [86, 163], [110, 163], [134, 163]]).astype(jnp.int32)
+        
+        # Pre-calculate Backgrounds with Shadows
+        def render_shadows(round_idx):
+            r = self.BACKGROUND
+            M = self.SHAPE_MASKS
+            jr = self.jr
+            r = jr.render_at(r, 68, 40, M['cube_shadow_right'][round_idx])
+            r = jr.render_at(r, 56, 69, M['cube_shadow_right'][round_idx])
+            r = jr.render_at(r, 80, 69, M['cube_shadow_left'][round_idx])
+            r = jr.render_at(r, 44, 98, M['cube_shadow_right'][round_idx])
+            r = jr.render_at(r, 68, 98, M['cube_shadow_right'][round_idx])
+            r = jr.render_at(r, 92, 98, M['cube_shadow_left'][round_idx])
+            r = jr.render_at(r, 32, 127, M['cube_shadow_right'][round_idx])
+            r = jr.render_at(r, 56, 127, M['cube_shadow_right'][round_idx])
+            r = jr.render_at(r, 80, 127, M['cube_shadow_left'][round_idx])
+            r = jr.render_at(r, 104, 127, M['cube_shadow_left'][round_idx])
+            r = jr.render_at(r, 20, 156, M['cube_shadow_right'][round_idx])
+            r = jr.render_at(r, 44, 156, M['cube_shadow_right'][round_idx])
+            r = jr.render_at(r, 68, 156, M['cube_shadow_right'][round_idx])
+            r = jr.render_at(r, 92, 156, M['cube_shadow_left'][round_idx])
+            r = jr.render_at(r, 116, 156, M['cube_shadow_left'][round_idx])
+            r = jr.render_at(r, 8, 185, M['cube_shadow_right'][round_idx])
+            r = jr.render_at(r, 32, 185, M['cube_shadow_right'][round_idx])
+            r = jr.render_at(r, 56, 185, M['cube_shadow_right'][round_idx])
+            r = jr.render_at(r, 80, 185, M['cube_shadow_left'][round_idx])
+            r = jr.render_at(r, 104, 185, M['cube_shadow_left'][round_idx])
+            r = jr.render_at(r, 128, 185, M['cube_shadow_left'][round_idx])
+            return r
+
+        self.BG_WITH_SHADOWS = jnp.stack([render_shadows(i) for i in range(5)])
+        
+        # Pre-calculate Freeze Background with Shadows
+        old_bg = self.BACKGROUND
+        self.BACKGROUND = self.FREEZE_BG
+        self.FREEZE_BG_WITH_SHADOWS = jnp.stack([render_shadows(i) for i in range(5)])
+        self.BACKGROUND = old_bg
+
+        # Pre-calculate Pyramid Maps
+        target_h, target_w = self.BACKGROUND.shape[:2]
+        self.PYRAMID_MAP = jnp.full((target_h, target_w), -1, dtype=jnp.int32)
+        self.PYRAMID_LOCAL_Y = jnp.zeros((target_h, target_w), dtype=jnp.int32)
+        self.PYRAMID_LOCAL_X = jnp.zeros((target_h, target_w), dtype=jnp.int32)
+        
+        # Use a dummy raster to find where each cube is
+        # We need to use the masks as they are in SHAPE_MASKS (might be downscaled)
+        cube_mask = self.SHAPE_MASKS['color_start']
+        ch, cw = cube_mask.shape
+        
+        for idx in range(21):
+            x, y = self.COLOR_POSITIONS[idx][0], self.COLOR_POSITIONS[idx][1] + 2
+            
+            # Use jr.render_at to find the scaled positions
+            # We create a temporary map to see where this cube lands
+            temp_map = jnp.full((target_h, target_w), -1, dtype=jnp.int32)
+            # Identity sprite for this cube
+            id_sprite = jnp.full((ch, cw), idx, dtype=jnp.int32)
+            # We need to handle transparency in the mask
+            # But render_at expects the mask itself. 
+            # We can't easily use render_at to build the ID map if we want to store local coords too.
+            
+            # Let's manually compute scaled coordinates
+            if self.config.width_scaling == 1.0 and self.config.height_scaling == 1.0:
+                sx, sy = x, y
+            else:
+                sx = int(round(x * self.config.width_scaling))
+                sy = int(round(y * self.config.height_scaling))
+            
+            # Update maps
+            mask_np = np.array(cube_mask) != self.jr.TRANSPARENT_ID
+            for i in range(ch):
+                for j in range(cw):
+                    if mask_np[i, j]:
+                        if sy+i < target_h and sx+j < target_w:
+                            self.PYRAMID_MAP = self.PYRAMID_MAP.at[sy+i, sx+j].set(idx)
+                            self.PYRAMID_LOCAL_Y = self.PYRAMID_LOCAL_Y.at[sy+i, sx+j].set(i)
+                            self.PYRAMID_LOCAL_X = self.PYRAMID_LOCAL_X.at[sy+i, sx+j].set(j)
+
+        # Pre-calculate Lives Map
+        self.LIVES_MAP = jnp.full((target_h, target_w), -1, dtype=jnp.int32)
+        self.LIVES_LOCAL_Y = jnp.zeros((target_h, target_w), dtype=jnp.int32)
+        self.LIVES_LOCAL_X = jnp.zeros((target_h, target_w), dtype=jnp.int32)
+        live_mask = self.SHAPE_MASKS['qbert_live']
+        lh, lw = live_mask.shape
+        for idx in range(9):
+            x, y = self.LIVE_POSITIONS[idx][0], self.LIVE_POSITIONS[idx][1]
+            if self.config.width_scaling == 1.0 and self.config.height_scaling == 1.0:
+                sx, sy = x, y
+            else:
+                sx = int(round(x * self.config.width_scaling))
+                sy = int(round(y * self.config.height_scaling))
+            
+            mask_np = np.array(live_mask) != self.jr.TRANSPARENT_ID
+            for i in range(lh):
+                for j in range(lw):
+                    if mask_np[i, j]:
+                        if sy+i < target_h and sx+j < target_w:
+                            self.LIVES_MAP = self.LIVES_MAP.at[sy+i, sx+j].set(idx)
+                            self.LIVES_LOCAL_Y = self.LIVES_LOCAL_Y.at[sy+i, sx+j].set(i)
+                            self.LIVES_LOCAL_X = self.LIVES_LOCAL_X.at[sy+i, sx+j].set(j)
+
+        # Pre-calculate Score Map
+        self.SCORE_MAP = jnp.full((target_h, target_w), -1, dtype=jnp.int32)
+        self.SCORE_LOCAL_Y = jnp.zeros((target_h, target_w), dtype=jnp.int32)
+        self.SCORE_LOCAL_X = jnp.zeros((target_h, target_w), dtype=jnp.int32)
+        score_masks = self.SHAPE_MASKS['score_digits']
+        sh, sw = score_masks[0].shape
+        for idx in range(5):
+            x, y = 34 + idx * 8, 6
+            if self.config.width_scaling == 1.0 and self.config.height_scaling == 1.0:
+                sx, sy = x, y
+                spacing = 8
+            else:
+                sx = int(round(x * self.config.width_scaling))
+                sy = int(round(y * self.config.height_scaling))
+                spacing = int(round(8 * self.config.width_scaling))
+            
+            # Recalculate sx based on spacing to match render_label_selective
+            sx = int(round(34 * self.config.width_scaling)) + idx * spacing
+
+            for i in range(sh):
+                for j in range(sw):
+                    if sy+i < target_h and sx+j < target_w:
+                        self.SCORE_MAP = self.SCORE_MAP.at[sy+i, sx+j].set(idx)
+                        self.SCORE_LOCAL_Y = self.SCORE_LOCAL_Y.at[sy+i, sx+j].set(i)
+                        self.SCORE_LOCAL_X = self.SCORE_LOCAL_X.at[sy+i, sx+j].set(j)
+
+        # Pre-stack all cube sprites for fast vectorized lookup
+        self.ALL_CUBE_SPRITES = jnp.stack([
+            self.SHAPE_MASKS['color_start'],
+            self.SHAPE_MASKS['color_intermediate'],
+            self.SHAPE_MASKS['color_destination']
+        ]) # (3, 5, 20)
+        self.WIN_ANIMATION_SPRITES = self.SHAPE_MASKS['win_animation'] # (32, 5, 20)
+
+        self.QBERT_POSITIONS = jnp.array([[74, 18], [62, 47], [86, 47], [50, 76], [74, 76], [98, 76], [38, 105], [62, 105], [86, 105], [110, 105], [26, 134], [50, 134], [74, 134], [98, 134], [122, 134], [14, 163], [38, 163], [62, 163], [86, 163], [110, 163], [134, 163]]).astype(jnp.int32)
         self.QBERT_MOVE_RIGHT_DOWN = jnp.array([[0, 0], [1, -1], [2, -2], [3, -3], [4, -4], [5, -5], [6, -6], [7, -5], [8, -4], [9, -3], [10, -2], [11, -1], [12, -0], [12, 1], [12, 3], [12, 5], [12, 8], [12, 10], [12, 12], [12, 14], [12, 17], [12, 19], [12, 21], [12, 23], [12, 25], [12, 27], [12, 29], [12, 29], [12, 29], [12, 29]]).astype(jnp.int32)
         self.QBERT_MOVE_RIGHT_UP = jnp.array([[0, 0], [0, -2], [0, -4], [0, -6], [0, -8], [0, -10], [0, -12], [0, -15], [0, -17], [0, -19], [0, -21], [0, -24], [0, -26], [0, -28], [0, -29], [1, -30], [2, -31], [3, -32], [4, -33], [5, -34], [6, -35], [7, -34], [8, -33], [9, -32], [10, -31], [11, -30], [12, -29], [12, -29], [12, -29], [12, -29]]).astype(jnp.int32)
         self.QBERT_MOVE_LEFT_DOWN = jnp.array([[0, 0], [-1, -1], [-2, -2], [-3, -3], [-4, -4], [-5, -5], [-6, -6], [-7, -5], [-8, -4], [-9, -3], [-10, -2], [-11, -1], [-12, -0], [-12, 1], [-12, 3], [-12, 5], [-12, 8], [-12, 10], [-12, 12], [-12, 14], [-12, 17], [-12, 19], [-12, 21], [-12, 23], [-12, 25], [-12, 27], [-12, 29], [-12, 29], [-12, 29], [-12, 29]]).astype(jnp.int32)
@@ -1198,68 +1334,37 @@ class QbertRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _draw_colors(self, raster: jnp.ndarray, state: QbertState, pyra: jnp.ndarray) -> jnp.ndarray:
-        jr = self.jr
-        M = self.SHAPE_MASKS
-        return jax.lax.fori_loop(
-            lower=1,
-            upper=7,
-            body_fun=lambda i, val: jax.lax.fori_loop(
-                lower=1,
-                upper=i + 1,
-                body_fun=lambda j, val2: jnp.select(
-                    condlist=[
-                        state.next_round_animation_counter != 0,
-                        pyra[i, j] == 0,
-                        pyra[i, j] == 1,
-                        pyra[i, j] == 2,
-                    ],
-                    choicelist=[
-                        jr.render_at(val2, self.COLOR_POSITIONS[jnp.array(i * (i - 1) / 2 + (j - 1)).astype(jnp.int32)][0], self.COLOR_POSITIONS[jnp.array(i * (i - 1) / 2 + (j - 1)).astype(jnp.int32)][1] + 2, M['win_animation'][jnp.floor(state.next_round_animation_counter / 32).astype(jnp.int32)]),
-                        jr.render_at(val2, self.COLOR_POSITIONS[jnp.array(i * (i - 1) / 2 + (j - 1)).astype(jnp.int32)][0], self.COLOR_POSITIONS[jnp.array(i * (i - 1) / 2 + (j - 1)).astype(jnp.int32)][1] + 2, M['color_start']),
-                        jr.render_at(val2, self.COLOR_POSITIONS[jnp.array(i * (i - 1) / 2 + (j - 1)).astype(jnp.int32)][0], self.COLOR_POSITIONS[jnp.array(i * (i - 1) / 2 + (j - 1)).astype(jnp.int32)][1] + 2, M['color_intermediate']),
-                        jr.render_at(val2, self.COLOR_POSITIONS[jnp.array(i * (i - 1) / 2 + (j - 1)).astype(jnp.int32)][0], self.COLOR_POSITIONS[jnp.array(i * (i - 1) / 2 + (j - 1)).astype(jnp.int32)][1] + 2, M['color_destination']),
-                    ],
-                    default=val2,
-                ),
-                init_val=val,
-            ),
-            init_val=raster,
+        cube_indices_i = jnp.array([1, 2, 2, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6], dtype=jnp.int32)
+        cube_indices_j = jnp.array([1, 1, 2, 1, 2, 3, 1, 2, 3, 4, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 6], dtype=jnp.int32)
+        cube_states = pyra[cube_indices_i, cube_indices_j] 
+        
+        cube_idx = self.PYRAMID_MAP
+        ly = self.PYRAMID_LOCAL_Y
+        lx = self.PYRAMID_LOCAL_X
+        
+        win_anim_frame = jnp.floor(state.next_round_animation_counter / 32).astype(jnp.int32)
+        
+        # Vectorized lookup using either win animation sprites or state sprites
+        pixel_id = jax.lax.cond(
+            state.next_round_animation_counter != 0,
+            lambda _: self.WIN_ANIMATION_SPRITES[win_anim_frame, ly, lx],
+            lambda _: self.ALL_CUBE_SPRITES[jnp.clip(cube_states[cube_idx], 0, 2), ly, lx],
+            None
         )
+        
+        return jnp.where(cube_idx != -1, pixel_id, raster)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: QbertState) -> jnp.ndarray:
         jr = self.jr
         M = self.SHAPE_MASKS
 
-        raster = jnp.where(state.step_counter == state.green_ball_freeze_step, self.BACKGROUND, self.FREEZE_BG)
-
         round_idx = jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)
-        raster = jr.render_at(raster, 68, 40, M['cube_shadow_right'][round_idx])
-
-        raster = jr.render_at(raster, 56, 69, M['cube_shadow_right'][round_idx])
-        raster = jr.render_at(raster, 80, 69, M['cube_shadow_left'][round_idx])
-
-        raster = jr.render_at(raster, 44, 98, M['cube_shadow_right'][round_idx])
-        raster = jr.render_at(raster, 68, 98, M['cube_shadow_right'][round_idx])
-        raster = jr.render_at(raster, 92, 98, M['cube_shadow_left'][round_idx])
-
-        raster = jr.render_at(raster, 32, 127, M['cube_shadow_right'][round_idx])
-        raster = jr.render_at(raster, 56, 127, M['cube_shadow_right'][round_idx])
-        raster = jr.render_at(raster, 80, 127, M['cube_shadow_left'][round_idx])
-        raster = jr.render_at(raster, 104, 127, M['cube_shadow_left'][round_idx])
-
-        raster = jr.render_at(raster, 20, 156, M['cube_shadow_right'][round_idx])
-        raster = jr.render_at(raster, 44, 156, M['cube_shadow_right'][round_idx])
-        raster = jr.render_at(raster, 68, 156, M['cube_shadow_right'][round_idx])
-        raster = jr.render_at(raster, 92, 156, M['cube_shadow_left'][round_idx])
-        raster = jr.render_at(raster, 116, 156, M['cube_shadow_left'][round_idx])
-
-        raster = jr.render_at(raster, 8, 185, M['cube_shadow_right'][round_idx])
-        raster = jr.render_at(raster, 32, 185, M['cube_shadow_right'][round_idx])
-        raster = jr.render_at(raster, 56, 185, M['cube_shadow_right'][round_idx])
-        raster = jr.render_at(raster, 80, 185, M['cube_shadow_left'][round_idx])
-        raster = jr.render_at(raster, 104, 185, M['cube_shadow_left'][round_idx])
-        raster = jr.render_at(raster, 128, 185, M['cube_shadow_left'][round_idx])
+        round_idx = jnp.clip(round_idx, 0, 4)
+        
+        raster = jnp.where(state.step_counter == state.green_ball_freeze_step, 
+                           self.BG_WITH_SHADOWS[round_idx], 
+                           self.FREEZE_BG_WITH_SHADOWS[round_idx])
 
         raster = jnp.where(state.last_pyramid[2][0] == -2, jr.render_at(raster, 38, 84, M['disc']), raster)
         raster = jnp.where(state.last_pyramid[2][3] == -2, jr.render_at(raster, 110, 84, M['disc']), raster)
@@ -1269,15 +1374,16 @@ class QbertRenderer(JAXGameRenderer):
         pyra = state.pyramid.at[state.player_position[1], state.player_position[0]].set(state.last_pyramid[state.player_position[1]][state.player_position[0]])
         raster = self._draw_colors(raster, state, pyra)
 
+        # Vectorized Score
         player_score_digits = jr.int_to_digits(state.player_score, max_digits=5)
-        raster = jnp.where(state.player_position[1] >= 3, jr.render_label_selective(raster, 34, 6, player_score_digits, M['score_digits'], 0, 5, spacing=8, max_digits_to_render=5), raster)
+        digit_idx = self.SCORE_MAP
+        score_pixel_id = M['score_digits'][player_score_digits[digit_idx], self.SCORE_LOCAL_Y, self.SCORE_LOCAL_X]
+        raster = jnp.where((digit_idx != -1) & (state.player_position[1] >= 3), score_pixel_id, raster)
 
-        raster = jax.lax.fori_loop(
-            lower=0,
-            upper=state.lives,
-            body_fun=lambda i, val: jnp.where(state.player_position[1] >= 3, jr.render_at(val, self.LIVE_POSITIONS[i][0], self.LIVE_POSITIONS[i][1], M['qbert_live']), val),
-            init_val=raster,
-        )
+        # Vectorized Lives
+        live_idx = self.LIVES_MAP
+        live_pixel_id = M['qbert_live'][self.LIVES_LOCAL_Y, self.LIVES_LOCAL_X]
+        raster = jnp.where((live_idx != -1) & (live_idx < state.lives) & (state.player_position[1] >= 3), live_pixel_id, raster)
 
         qbert_j = state.player_last_position[0]
         qbert_i = state.player_last_position[1]
