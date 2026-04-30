@@ -541,8 +541,7 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
             lava_raster = self.jr.render_at(background_raster, 0, room_y + lava_y_start, lava_mask)
             lava_raster = jnp.where(background_before_dark == 0, lava_raster, background_raster)
             is_lava_room = jnp.any(state.room_id == jnp.array([19, 31, 27, 29]))
-            lava_cond = jnp.logical_and(is_lava_room, jnp.logical_not(is_rendered_dark))  # Only show lava if it's a lava room and not dark
-            background_raster = jax.lax.cond(lava_cond, lambda r: lava_raster, lambda r: r, background_raster)
+            background_raster = jax.lax.cond(is_lava_room, lambda r: lava_raster, lambda r: r, background_raster)
             return background_raster
 
         raster = jax.lax.cond(jnp.any(state.room_id == jnp.array([19, 27, 29, 31])), _render_lava, lambda r: r, background_raster) 
