@@ -44,6 +44,7 @@ GAME_MODULES = {
     "freeway": "jaxatari.games.jax_freeway",
     "frostbite": "jaxatari.games.jax_frostbite",
     "galaxian": "jaxatari.games.jax_galaxian",
+    "gravitar": "jaxatari.games.jax_gravitar",
     "hangman": "jaxatari.games.jax_hangman",
     "hauntedhouse": "jaxatari.games.jax_hauntedhouse",
     "humancannonball": "jaxatari.games.jax_humancannonball",
@@ -90,6 +91,9 @@ MOD_MODULES = {
     "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
     "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
     "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
+    "montezumarevenge": "jaxatari.games.mods.montezuma_revenge_mods.MontezumaRevengeEnvMod",
+    "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
+    "gravitar": "jaxatari.games.mods.gravitar_mods.GravitarEnvMod",
     "mspacman": "jaxatari.games.mods.mspacman_mods.MsPacmanEnvMod",
 }
 
