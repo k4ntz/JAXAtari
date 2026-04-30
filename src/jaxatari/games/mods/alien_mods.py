@@ -1,0 +1,29 @@
+import os
+from jaxatari.modification import JaxAtariModController
+from jaxatari.games.mods.alien.alien_mod_plugins import LastEggMod, EndGameMod
+
+class AlienEnvMod(JaxAtariModController):    
+    """
+    Game-specific Mod Controller for Alien.
+    It simply inherits all logic from JaxAtariModController and defines the Alien_MOD_REGISTRY.
+    """
+
+    REGISTRY = {
+        "last_egg": LastEggMod,
+        "end_game": EndGameMod,
+    }
+
+    _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "alien", "sprites")
+
+    def __init__(self,
+                 env,
+                 mods_config: list = [],
+                 allow_conflicts: bool = False
+                 ):
+
+        super().__init__(
+            env=env,
+            mods_config=mods_config,
+            allow_conflicts=allow_conflicts,
+            registry=self.REGISTRY
+        )

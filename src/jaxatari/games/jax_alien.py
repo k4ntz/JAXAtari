@@ -298,7 +298,7 @@ class AlienConstants(struct.PyTreeNode):
     ITEM_SCORE_MULTIPLIERS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 100, 500, 1000, 2000, 3000, 5000], dtype=jnp.int32))# Score for collecting items, last item is not a score item
     ENEMY_KILL_SCORE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([500, 1000, 1500], dtype=jnp.int32)) # Score for killing enemies, depending on how many have been killed in succession
 
-    # egg discription:
+    # egg description:
     # x-coordinate
     # y-coordinate
     # status : 1 (on the field),  0 (not on the field)
@@ -2797,7 +2797,7 @@ class AlienRenderer(JAXGameRenderer):
             )
         )
 
-        flip = (last_orient == 2) | (orient == 2)
+        flip = (last_orient == 3) | (orient == 3)
         blink = (flame_active | state.player.blink) & ((state.level.frame_count % 2) == 0)
         visible = ~blink
         
