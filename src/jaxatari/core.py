@@ -33,13 +33,12 @@ GAME_MODULES = {
     "asteroids": "jaxatari.games.jax_asteroids",
     "atlantis": "jaxatari.games.jax_atlantis",
     "bankheist": "jaxatari.games.jax_bankheist",
+    "beamrider": "jaxatari.games.jax_beamrider",
     "berzerk": "jaxatari.games.jax_berzerk",
     "blackjack": "jaxatari.games.jax_blackjack",
     "breakout": "jaxatari.games.jax_breakout",
-    "casino": "jaxatari.games.jax_casino",
     "centipede": "jaxatari.games.jax_centipede",
     "choppercommand": "jaxatari.games.jax_choppercommand",
-    "donkeykong": "jaxatari.games.jax_donkeykong",
     "enduro": "jaxatari.games.jax_enduro",
     "fishingderby": "jaxatari.games.jax_fishingderby",
     "flagcapture": "jaxatari.games.jax_flagcapture",
@@ -53,7 +52,6 @@ GAME_MODULES = {
     "kingkong": "jaxatari.games.jax_kingkong",
     "klax": "jaxatari.games.jax_klax",
     "lasergates": "jaxatari.games.jax_lasergates",
-    "montezumarevenge": "jaxatari.games.jax_montezumarevenge",
     "namethisgame": "jaxatari.games.jax_namethisgame",
     "phoenix": "jaxatari.games.jax_phoenix",
     "pong": "jaxatari.games.jax_pong",
@@ -76,6 +74,8 @@ GAME_MODULES = {
     "videocube": "jaxatari.games.jax_videocube",
     "videopinball": "jaxatari.games.jax_videopinball",
     "wordzapper": "jaxatari.games.jax_wordzapper",
+    "mspacman": "jaxatari.games.jax_mspacman",
+    "pacman": "jaxatari.games.jax_pacman",
     # Add new games here
 }
 
@@ -86,7 +86,6 @@ MOD_MODULES = {
     "freeway": "jaxatari.games.mods.freeway_mods.FreewayEnvMod",
     "breakout": "jaxatari.games.mods.breakout_mods.BreakoutEnvMod",
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
-    "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod",
     "videopinball": "jaxatari.games.mods.videopinball_mods.VideoPinballEnvMod",
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
     "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
@@ -97,6 +96,8 @@ MOD_MODULES = {
     "phoenix": "jaxatari.games.mods.phoenix_mods.PhoenixEnvMod",
     "enduro": "jaxatari.games.mods.enduro_mods.EnduroEnvMod",
     "qbert": "jaxatari.games.mods.qbert_mods.QbertEnvMod",
+    "mspacman": "jaxatari.games.mods.mspacman_mods.MsPacmanEnvMod",
+    "beamrider": "jaxatari.games.mods.beamrider_mods.BeamRiderEnvMod"
 }
 
 
