@@ -15,6 +15,69 @@ from enum import IntEnum
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
+def _get_default_asset_config() -> tuple:
+    return (
+        # Ship sprites
+        {'name': 'ship_idle',   'type': 'single', 'file': 'spaceship.npy'},
+        {'name': 'ship_thrust', 'type': 'single', 'file': 'ship_thrust.npy'},
+        {'name': 'ship_crash',  'type': 'single', 'file': 'ship_crash.npy'},
+        {'name': 'ship_thrust_back', 'type': 'single', 'file': 'ship_thrust_back.npy'},
+        {'name': 'shield',      'type': 'single', 'file': 'shield.npy'},
+        {'name': 'ship_bullet', 'type': 'single', 'file': 'ship_bullet.npy'},
+        # 16 ship orientations as a group so they get padded to equal size
+        {'name': 'ship_orientations', 'type': 'group', 'files': [
+            'spaceship.npy',     # 0: N  (= SHIP_IDLE)
+            'spaceship_nne.npy', # 1: NNE
+            'spaceship_ne.npy',  # 2: NE
+            'spaceship_nee.npy', # 3: NEE
+            'spaceship_e.npy',   # 4: E
+            'spaceship_see.npy', # 5: SEE
+            'spaceship_se.npy',  # 6: SE
+            'spaceship_sse.npy', # 7: SSE
+            'spaceship_s.npy',   # 8: S
+            'spaceship_ssw.npy', # 9: SSW
+            'spaceship_sw.npy',  # 10: SW
+            'spaceship_sww.npy', # 11: SWW
+            'spaceship_w.npy',   # 12: W
+            'spaceship_nww.npy', # 13: NWW
+            'spaceship_nw.npy',  # 14: NW
+            'spaceship_nnw.npy', # 15: NNW
+        ]},
+        # Enemies
+        {'name': 'enemy_orange',   'type': 'single', 'file': 'enemy_orange.npy'},
+        {'name': 'enemy_green',    'type': 'single', 'file': 'enemy_green.npy'},
+        {'name': 'enemy_saucer',   'type': 'single', 'file': 'saucer.npy'},
+        {'name': 'enemy_ufo',      'type': 'single', 'file': 'UFO.npy'},
+        {'name': 'enemy_crash',    'type': 'single', 'file': 'enemy_crash.npy'},
+        {'name': 'saucer_crash',   'type': 'single', 'file': 'saucer_crash.npy'},
+        # Bullets
+        {'name': 'enemy_bullet',       'type': 'single', 'file': 'enemy_bullet.npy'},
+        {'name': 'enemy_green_bullet', 'type': 'single', 'file': 'enemy_green_bullet.npy'},
+        # Level objects
+        {'name': 'fuel_tank',    'type': 'single', 'file': 'fuel_tank.npy'},
+        {'name': 'obstacle',     'type': 'single', 'file': 'obstacle.npy'},
+        {'name': 'spawn_loc',    'type': 'single', 'file': 'spawn_location.npy'},
+        {'name': 'reactor',      'type': 'single', 'file': 'reactor.npy'},
+        {'name': 'reactor_dest',     'type': 'single', 'file': 'reactor_destination.npy'},
+        {'name': 'reactor_dest_hit', 'type': 'single', 'file': 'reactor_destination_hit.npy'},
+        # Map screen planets / reactor icon
+        {'name': 'planet1', 'type': 'single', 'file': 'planet1.npy'},
+        {'name': 'planet2', 'type': 'single', 'file': 'planet2.npy'},
+        {'name': 'planet3', 'type': 'single', 'file': 'planet3.npy'},
+        {'name': 'planet4', 'type': 'single', 'file': 'planet4.npy'},
+        # Terrain sprites (included so their colors enter the palette)
+        {'name': 'terrain1',      'type': 'single', 'file': 'terrain1.npy'},
+        {'name': 'terrain2',      'type': 'single', 'file': 'terrain2.npy'},
+        {'name': 'terrain3',      'type': 'single', 'file': 'terrain3.npy'},
+        {'name': 'terrain4',      'type': 'single', 'file': 'terrain4.npy'},
+        {'name': 'reactor_terr',  'type': 'single', 'file': 'reactor_terrain.npy'},
+        # HUD
+        {'name': 'hp_ui', 'type': 'single', 'file': 'HP.npy'},
+        # Digits 0-9 as a group
+        {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
+    )
+
+
 def _get_default_ship_angles():
     """Ship discrete rotation system (16 angles like original ALE)"""
     return jnp.array([
@@ -154,6 +217,10 @@ class GravitarConstants(struct.PyTreeNode):
 
     # Optional full sprite table (same layout as load_sprites_tuple()). None = bundled defaults.
     SPRITES_TUPLE: Optional[tuple] = struct.field(pytree_node=False, default=None)
+
+    # Asset configuration for the renderer — exposed here so the modding pipeline
+    # can override individual sprites via asset_overrides in mod plugins.
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
 
 # Module-level constants used by free functions (not methods)
@@ -3564,82 +3631,9 @@ class GravitarRenderer(JAXGameRenderer):
         obs_sprites = _resolve_obs_sprites(self.consts)
         sprite_dir = os.path.join(render_utils.get_base_sprite_dir(), "gravitar")
 
-        # Build the flipped orange enemy as procedural data so load_and_setup_assets
-        # includes it in the palette scan and downscaling pass.
-        orange_raw = obs_sprites[int(SpriteIdx.ENEMY_ORANGE)]
-        orange_flipped_data = (
-            jnp.array(np.flip(orange_raw, axis=0), dtype=jnp.uint8)
-            if orange_raw is not None
-            else jnp.zeros((1, 1, 4), dtype=jnp.uint8)
-        )
-
-        # Procedural 1×1 black background keeps load_and_setup_assets happy while
-        # rendering uses terrain rasters (built below) as the actual background.
-        black_bg = jnp.zeros((1, 1, 4), dtype=jnp.uint8)
-        black_bg = black_bg.at[0, 0, 3].set(255)
-
-        asset_config = [
-            {'name': 'background', 'type': 'background', 'data': black_bg},
-            # Ship sprites
-            {'name': 'ship_idle',   'type': 'single', 'file': 'spaceship.npy'},
-            {'name': 'ship_thrust', 'type': 'single', 'file': 'ship_thrust.npy'},
-            {'name': 'ship_crash',  'type': 'single', 'file': 'ship_crash.npy'},
-            {'name': 'ship_thrust_back', 'type': 'single', 'file': 'ship_thrust_back.npy'},
-            {'name': 'shield',      'type': 'single', 'file': 'shield.npy'},
-            {'name': 'ship_bullet', 'type': 'single', 'file': 'ship_bullet.npy'},
-            # 16 ship orientations as a group so they get padded to equal size
-            {'name': 'ship_orientations', 'type': 'group', 'files': [
-                'spaceship.npy',     # 0: N  (= SHIP_IDLE)
-                'spaceship_nne.npy', # 1: NNE
-                'spaceship_ne.npy',  # 2: NE
-                'spaceship_nee.npy', # 3: NEE
-                'spaceship_e.npy',   # 4: E
-                'spaceship_see.npy', # 5: SEE
-                'spaceship_se.npy',  # 6: SE
-                'spaceship_sse.npy', # 7: SSE
-                'spaceship_s.npy',   # 8: S
-                'spaceship_ssw.npy', # 9: SSW
-                'spaceship_sw.npy',  # 10: SW
-                'spaceship_sww.npy', # 11: SWW
-                'spaceship_w.npy',   # 12: W
-                'spaceship_nww.npy', # 13: NWW
-                'spaceship_nw.npy',  # 14: NW
-                'spaceship_nnw.npy', # 15: NNW
-            ]},
-            # Enemies
-            {'name': 'enemy_orange',   'type': 'single', 'file': 'enemy_orange.npy'},
-            {'name': 'enemy_green',    'type': 'single', 'file': 'enemy_green.npy'},
-            {'name': 'enemy_saucer',   'type': 'single', 'file': 'saucer.npy'},
-            {'name': 'enemy_ufo',      'type': 'single', 'file': 'UFO.npy'},
-            {'name': 'enemy_crash',    'type': 'single', 'file': 'enemy_crash.npy'},
-            {'name': 'saucer_crash',   'type': 'single', 'file': 'saucer_crash.npy'},
-            {'name': 'enemy_orange_flipped', 'type': 'procedural', 'data': orange_flipped_data},
-            # Bullets
-            {'name': 'enemy_bullet',       'type': 'single', 'file': 'enemy_bullet.npy'},
-            {'name': 'enemy_green_bullet', 'type': 'single', 'file': 'enemy_green_bullet.npy'},
-            # Level objects
-            {'name': 'fuel_tank',    'type': 'single', 'file': 'fuel_tank.npy'},
-            {'name': 'obstacle',     'type': 'single', 'file': 'obstacle.npy'},
-            {'name': 'spawn_loc',    'type': 'single', 'file': 'spawn_location.npy'},
-            {'name': 'reactor',      'type': 'single', 'file': 'reactor.npy'},
-            {'name': 'reactor_dest',     'type': 'single', 'file': 'reactor_destination.npy'},
-            {'name': 'reactor_dest_hit', 'type': 'single', 'file': 'reactor_destination_hit.npy'},
-            # Map screen planets / reactor icon
-            {'name': 'planet1', 'type': 'single', 'file': 'planet1.npy'},
-            {'name': 'planet2', 'type': 'single', 'file': 'planet2.npy'},
-            {'name': 'planet3', 'type': 'single', 'file': 'planet3.npy'},
-            {'name': 'planet4', 'type': 'single', 'file': 'planet4.npy'},
-            # Terrain sprites (included so their colors enter the palette)
-            {'name': 'terrain1',      'type': 'single', 'file': 'terrain1.npy'},
-            {'name': 'terrain2',      'type': 'single', 'file': 'terrain2.npy'},
-            {'name': 'terrain3',      'type': 'single', 'file': 'terrain3.npy'},
-            {'name': 'terrain4',      'type': 'single', 'file': 'terrain4.npy'},
-            {'name': 'reactor_terr',  'type': 'single', 'file': 'reactor_terrain.npy'},
-            # HUD
-            {'name': 'hp_ui', 'type': 'single', 'file': 'HP.npy'},
-            # Digits 0-9 as a group
-            {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
-        ]
+        # Build the complete asset config from constants (allows mod pipeline overrides),
+        # then prepend the procedural background and append the runtime-derived flipped enemy.
+        asset_config = self._build_asset_config(obs_sprites)
 
         (
             self.PALETTE,
@@ -3722,6 +3716,28 @@ class GravitarRenderer(JAXGameRenderer):
         # These are (num_banks, render_H, render_W) ID-rasters.
         # Bank 0 = empty (transparent), banks 1-5 = terrain levels.
         self.terrain_rasters = self._build_terrain_rasters(obs_sprites)
+
+    def _build_asset_config(self, obs_sprites: tuple) -> list:
+        """Build the full asset config list from constants, adding procedural entries."""
+        # Start from constants so the mod pipeline can override file-based sprites
+        asset_config = list(self.consts.ASSET_CONFIG)
+
+        # Prepend a 1×1 opaque black background — load_and_setup_assets requires one,
+        # but actual rendering uses terrain_rasters as the background.
+        black_bg = jnp.zeros((1, 1, 4), dtype=jnp.uint8).at[0, 0, 3].set(255)
+        asset_config.insert(0, {'name': 'background', 'type': 'background', 'data': black_bg})
+
+        # Append the flipped orange enemy as a runtime-derived procedural sprite.
+        # It can't be in ASSET_CONFIG (no file on disk), but it must enter the palette.
+        orange_raw = obs_sprites[int(SpriteIdx.ENEMY_ORANGE)]
+        orange_flipped = (
+            jnp.array(np.flip(orange_raw, axis=0), dtype=jnp.uint8)
+            if orange_raw is not None
+            else jnp.zeros((1, 1, 4), dtype=jnp.uint8)
+        )
+        asset_config.append({'name': 'enemy_orange_flipped', 'type': 'procedural', 'data': orange_flipped})
+
+        return asset_config
 
     def _build_terrain_rasters(self, obs_sprites: tuple) -> jnp.ndarray:
         """Build terrain ID-rasters at render resolution (respects downscale)."""
