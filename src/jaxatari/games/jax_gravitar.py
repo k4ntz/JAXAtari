@@ -10,18 +10,10 @@ from flax import struct
 import jaxatari.spaces as spaces
 from jaxatari.core import JaxEnvironment
 from jaxatari.environment import ObjectObservation
-from typing import Tuple, Optional
+from typing import Optional, Tuple
 from enum import IntEnum
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-import jax.debug
-
-"""
-    Group members of the Gravitar base: Xusong Yin, Elizaveta Kuznetsova, Li Dai
-
-    Gravitar Rework by Tiago Soares
-"""
-
 
 def _get_default_ship_angles():
     """Ship discrete rotation system (16 angles like original ALE)"""
@@ -88,7 +80,6 @@ class GravitarConstants(struct.PyTreeNode):
     # Window dimensions
     WINDOW_WIDTH: int = struct.field(pytree_node=False, default=160)
     WINDOW_HEIGHT: int = struct.field(pytree_node=False, default=210)
-    
     # Spawn and respawn timing
     SAUCER_SPAWN_DELAY_FRAMES: int = struct.field(pytree_node=False, default=200)
     SAUCER_RESPAWN_DELAY_FRAMES: int = struct.field(pytree_node=False, default=180 * 3)
@@ -160,6 +151,9 @@ class GravitarConstants(struct.PyTreeNode):
     # - {'type': <SpriteIdx/int>, 'coords': (<x>, <y>)}
     # - (<SpriteIdx/int>, <x>, <y>)
     REACTOR_LEVEL_LAYOUT: tuple = struct.field(pytree_node=False, default_factory=tuple)
+
+    # Optional full sprite table (same layout as load_sprites_tuple()). None = bundled defaults.
+    SPRITES_TUPLE: Optional[tuple] = struct.field(pytree_node=False, default=None)
 
 
 # Module-level constants used by free functions (not methods)
@@ -671,22 +665,26 @@ def _clip_xy_to_screen(x: jnp.ndarray, y: jnp.ndarray) -> tuple[jnp.ndarray, jnp
     return cx, cy
 
 
-def _sprite_wh_scalar(sprite_idx: jnp.ndarray, fallback_w: int = 0, fallback_h: int = 0) -> tuple[jnp.ndarray, jnp.ndarray]:
+def _sprite_wh_scalar(
+    sprite_dims: jnp.ndarray, sprite_idx: jnp.ndarray, fallback_w: int = 0, fallback_h: int = 0
+) -> tuple[jnp.ndarray, jnp.ndarray]:
     idx = sprite_idx.astype(jnp.int32)
-    max_idx = _OBS_SPRITE_DIMS.shape[0] - 1
+    max_idx = sprite_dims.shape[0] - 1
     safe_idx = jnp.clip(idx, 0, max_idx)
-    wh = _OBS_SPRITE_DIMS[safe_idx]
+    wh = sprite_dims[safe_idx]
     valid = (idx >= 0) & (idx <= max_idx)
     w = jnp.where(valid, wh[0], jnp.array(fallback_w, dtype=jnp.int16))
     h = jnp.where(valid, wh[1], jnp.array(fallback_h, dtype=jnp.int16))
     return w, h
 
 
-def _sprite_wh_vector(sprite_idx: jnp.ndarray, fallback_w: int = 0, fallback_h: int = 0) -> tuple[jnp.ndarray, jnp.ndarray]:
+def _sprite_wh_vector(
+    sprite_dims: jnp.ndarray, sprite_idx: jnp.ndarray, fallback_w: int = 0, fallback_h: int = 0
+) -> tuple[jnp.ndarray, jnp.ndarray]:
     idx = sprite_idx.astype(jnp.int32)
-    max_idx = _OBS_SPRITE_DIMS.shape[0] - 1
+    max_idx = sprite_dims.shape[0] - 1
     safe_idx = jnp.clip(idx, 0, max_idx)
-    wh = _OBS_SPRITE_DIMS[safe_idx]
+    wh = sprite_dims[safe_idx]
     valid = (idx >= 0) & (idx <= max_idx)
     w = jnp.where(valid, wh[:, 0], jnp.full(idx.shape, fallback_w, dtype=jnp.int16))
     h = jnp.where(valid, wh[:, 1], jnp.full(idx.shape, fallback_h, dtype=jnp.int16))
@@ -694,7 +692,7 @@ def _sprite_wh_vector(sprite_idx: jnp.ndarray, fallback_w: int = 0, fallback_h: 
 
 
 @jax.jit
-def _get_observation_from_state(state: EnvState) -> GravitarObservation:
+def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> GravitarObservation:
     ship: ShipState = state.state
     enemies: Enemies = state.enemies
     fuel_tanks: FuelTanks = state.fuel_tanks
@@ -707,7 +705,7 @@ def _get_observation_from_state(state: EnvState) -> GravitarObservation:
     ship_active = jnp.array(1, dtype=jnp.int32)
     ship_visual_id = SHIP_SPRITE_INDICES[ship.angle_idx].astype(jnp.int16)
     ship_orientation = ship.angle.astype(jnp.float32)
-    ship_w, ship_h = _sprite_wh_scalar(ship_visual_id, fallback_w=3, fallback_h=7)
+    ship_w, ship_h = _sprite_wh_scalar(sprite_dims, ship_visual_id, fallback_w=3, fallback_h=7)
 
     ship_obj = ObjectObservation.create(
         x=sx,
@@ -764,7 +762,7 @@ def _get_observation_from_state(state: EnvState) -> GravitarObservation:
     saucer_active_i = saucer_present.astype(jnp.int32)
     sax, say = _clip_xy_to_screen(saucer.x, saucer.y)
     saucer_visual_id = jnp.array(int(SpriteIdx.ENEMY_SAUCER), dtype=jnp.int16)
-    saucer_w, saucer_h = _sprite_wh_scalar(saucer_visual_id, fallback_w=8, fallback_h=7)
+    saucer_w, saucer_h = _sprite_wh_scalar(sprite_dims, saucer_visual_id, fallback_w=8, fallback_h=7)
     saucer_obj = ObjectObservation.create(
         x=sax,
         y=say,
@@ -781,7 +779,7 @@ def _get_observation_from_state(state: EnvState) -> GravitarObservation:
     ufo_active_i = ufo_present.astype(jnp.int32)
     uax, uay = _clip_xy_to_screen(ufo.x, ufo.y)
     ufo_visual_id = jnp.array(int(SpriteIdx.ENEMY_UFO), dtype=jnp.int16)
-    ufo_w, ufo_h = _sprite_wh_scalar(ufo_visual_id, fallback_w=7, fallback_h=6)
+    ufo_w, ufo_h = _sprite_wh_scalar(sprite_dims, ufo_visual_id, fallback_w=7, fallback_h=6)
     ufo_obj = ObjectObservation.create(
         x=uax,
         y=uay,
@@ -798,14 +796,14 @@ def _get_observation_from_state(state: EnvState) -> GravitarObservation:
     px = jnp.clip(enemy_bullets.x, 0.0, float(WINDOW_WIDTH)).astype(jnp.int16)
     py = jnp.clip(enemy_bullets.y, 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
     p_visual = jnp.where(pb_alive, enemy_bullets.sprite_idx, jnp.int32(0)).astype(jnp.int16)
-    bullet_w, bullet_h = _sprite_wh_vector(p_visual, fallback_w=1, fallback_h=2)
+    bullet_w, bullet_h = _sprite_wh_vector(sprite_dims, p_visual, fallback_w=1, fallback_h=2)
 
     # --- Solar system objects (planets/reactor/obstacle/spawn marker) ---
     planets_active = (state.planets_pi >= 0).astype(jnp.int32)
     planet_x = jnp.clip(state.planets_px, 0.0, float(WINDOW_WIDTH)).astype(jnp.int16)
     planet_y = jnp.clip(state.planets_py, 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
     planet_visual = jnp.where(state.planets_pi >= 0, state.planets_pi, jnp.int32(0)).astype(jnp.int16)
-    planet_w, planet_h = _sprite_wh_vector(planet_visual, fallback_w=0, fallback_h=0)
+    planet_w, planet_h = _sprite_wh_vector(sprite_dims, planet_visual, fallback_w=0, fallback_h=0)
 
     planets_obj = ObjectObservation.create(
         x=planet_x,
@@ -822,7 +820,9 @@ def _get_observation_from_state(state: EnvState) -> GravitarObservation:
     terrain_x = jnp.clip(state.terrain_offset[0], 0.0, float(WINDOW_WIDTH)).astype(jnp.int16)
     terrain_y = jnp.clip(state.terrain_offset[1], 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
     terrain_visual = jnp.where(state.terrain_sprite_idx >= 0, state.terrain_sprite_idx, jnp.int32(0)).astype(jnp.int16)
-    terrain_w, terrain_h = _sprite_wh_scalar(terrain_visual, fallback_w=WINDOW_WIDTH, fallback_h=WINDOW_HEIGHT)
+    terrain_w, terrain_h = _sprite_wh_scalar(
+        sprite_dims, terrain_visual, fallback_w=WINDOW_WIDTH, fallback_h=WINDOW_HEIGHT
+    )
 
     terrain_obj = ObjectObservation.create(
         x=terrain_x,
@@ -843,7 +843,9 @@ def _get_observation_from_state(state: EnvState) -> GravitarObservation:
         jnp.int32(int(SpriteIdx.REACTOR_DEST_HIT)),
         jnp.int32(int(SpriteIdx.REACTOR_DEST)),
     ).astype(jnp.int16)
-    reactor_dest_w, reactor_dest_h = _sprite_wh_scalar(reactor_dest_visual, fallback_w=5, fallback_h=5)
+    reactor_dest_w, reactor_dest_h = _sprite_wh_scalar(
+        sprite_dims, reactor_dest_visual, fallback_w=5, fallback_h=5
+    )
 
     reactor_destination_obj = ObjectObservation.create(
         x=reactor_dest_x,
@@ -883,10 +885,10 @@ def _get_observation_from_state(state: EnvState) -> GravitarObservation:
 
 
 @jax.jit
-def _get_observation_from_ship_state(ship: ShipState) -> GravitarObservation:
+def _get_observation_from_ship_state(ship: ShipState, sprite_dims: jnp.ndarray) -> GravitarObservation:
     sx, sy = _clip_xy_to_screen(ship.x, ship.y)
     ship_visual_id = SHIP_SPRITE_INDICES[ship.angle_idx].astype(jnp.int16)
-    ship_w, ship_h = _sprite_wh_scalar(ship_visual_id, fallback_w=3, fallback_h=7)
+    ship_w, ship_h = _sprite_wh_scalar(sprite_dims, ship_visual_id, fallback_w=3, fallback_h=7)
 
     ship_obj = ObjectObservation.create(
         x=sx,
@@ -912,11 +914,11 @@ def _get_observation_from_ship_state(ship: ShipState) -> GravitarObservation:
     zero_orientation_planets = jnp.zeros((_OBS_MAX_PLANETS,), dtype=jnp.float32)
 
     saucer_visual_id = jnp.array(int(SpriteIdx.ENEMY_SAUCER), dtype=jnp.int16)
-    saucer_w, saucer_h = _sprite_wh_scalar(saucer_visual_id, fallback_w=8, fallback_h=7)
+    saucer_w, saucer_h = _sprite_wh_scalar(sprite_dims, saucer_visual_id, fallback_w=8, fallback_h=7)
     ufo_visual_id = jnp.array(int(SpriteIdx.ENEMY_UFO), dtype=jnp.int16)
-    ufo_w, ufo_h = _sprite_wh_scalar(ufo_visual_id, fallback_w=7, fallback_h=6)
+    ufo_w, ufo_h = _sprite_wh_scalar(sprite_dims, ufo_visual_id, fallback_w=7, fallback_h=6)
     bullet_visual_id = jnp.full((MAX_ENEMIES,), int(SpriteIdx.ENEMY_BULLET), dtype=jnp.int16)
-    bullet_w, bullet_h = _sprite_wh_vector(bullet_visual_id, fallback_w=1, fallback_h=2)
+    bullet_w, bullet_h = _sprite_wh_vector(sprite_dims, bullet_visual_id, fallback_w=1, fallback_h=2)
 
     enemies_obj = ObjectObservation.create(
         x=inactive_pool16,
@@ -1167,9 +1169,7 @@ def _opt(name_wo_ext: str):
         return None
 
 
-def _load_and_convert_sprites():
-    numpy_sprites = load_sprites_tuple()
-
+def _load_and_convert_sprites(numpy_sprites: tuple) -> dict:
     def array_to_jax(arr):
         if arr is None:
             return None
@@ -1275,15 +1275,17 @@ def _build_obs_sprite_dims(sprites: tuple) -> jnp.ndarray:
     return jnp.array(dims, dtype=jnp.int16)
 
 
-_OBS_SPRITES = load_sprites_tuple()
-_OBS_SPRITE_DIMS = _build_obs_sprite_dims(_OBS_SPRITES)
-
-# JAX (jnp) versions of all sprites, cached once at module level.
-# GravitarRenderer.__init__ reuses this instead of calling _load_and_convert_sprites() again.
-_JAX_SPRITES_DICT: dict = _load_and_convert_sprites()
+_DEFAULT_OBS_SPRITES: tuple = load_sprites_tuple()
 
 
-def _build_default_planets() -> tuple:
+def _resolve_obs_sprites(consts: GravitarConstants) -> tuple:
+    """Sprite tuple used by env and renderer; constants override defaults when set."""
+    if consts.SPRITES_TUPLE is not None:
+        return consts.SPRITES_TUPLE
+    return _DEFAULT_OBS_SPRITES
+
+
+def _build_default_planets(obs_sprites: tuple) -> tuple:
     MAP_SCALE = 3
     HITBOX_SCALE = 0.90
     layout = [
@@ -1298,7 +1300,7 @@ def _build_default_planets() -> tuple:
     px, py, pr, pi = [], [], [], []
     for idx, center_x, center_y in layout:
         cx, cy = float(center_x), float(center_y)
-        spr = _OBS_SPRITES[int(idx)]
+        spr = obs_sprites[int(idx)]
         if spr is not None:
             if idx == SpriteIdx.SPAWN_LOC:
                 r = 0.0
@@ -1313,8 +1315,8 @@ def _build_default_planets() -> tuple:
             np.array(pr, dtype=np.float32), np.array(pi, dtype=np.int32))
 
 
-def _build_default_level_data() -> tuple:
-    """Build all static level/layout JAX arrays once at module load time."""
+def _build_default_level_data(obs_sprites: tuple) -> tuple:
+    """Build static level/layout JAX arrays from a sprite tuple (defaults at import, or per-env)."""
     num_levels = max(LEVEL_LAYOUTS.keys()) + 1
     max_objects = max(len(v) for v in LEVEL_LAYOUTS.values()) if LEVEL_LAYOUTS else 1
     layout_types = np.full((num_levels, max_objects), -1, dtype=np.int32)
@@ -1339,7 +1341,7 @@ def _build_default_level_data() -> tuple:
     max_sprite_id = max(int(e) for e in SpriteIdx)
     dims_array = np.zeros((max_sprite_id + 1, 2), dtype=np.float32)
     for sprite_idx_enum in SpriteIdx:
-        surf = _OBS_SPRITES[int(sprite_idx_enum)]
+        surf = obs_sprites[int(sprite_idx_enum)]
         if surf is not None:
             dims_array[int(sprite_idx_enum)] = (surf.shape[1], surf.shape[0])
     jax_sprite_dims = jnp.array(dims_array)
@@ -1352,7 +1354,7 @@ def _build_default_level_data() -> tuple:
     level_transforms = np.zeros((num_levels, 3), dtype=np.float32)
     for level_id in level_ids_sorted:
         terrain_sprite_enum = LEVEL_ID_TO_TERRAIN_SPRITE[level_id]
-        terr_surf = _OBS_SPRITES[int(terrain_sprite_enum)]
+        terr_surf = obs_sprites[int(terrain_sprite_enum)]
         th, tw = terr_surf.shape[0], terr_surf.shape[1]
         scale = min(WINDOW_WIDTH / tw, WINDOW_HEIGHT / th)
         extra = TERRAIN_SCALE_OVERRIDES.get(terrain_sprite_enum, 1.0)
@@ -1367,13 +1369,13 @@ def _build_default_level_data() -> tuple:
     return jax_layout, jax_sprite_dims, jax_level_to_terrain, jax_level_to_bank, jax_level_offsets, jax_level_transforms
 
 
-_DEFAULT_PLANETS = _build_default_planets()
+_DEFAULT_PLANETS = _build_default_planets(_DEFAULT_OBS_SPRITES)
 (_DEFAULT_JAX_LAYOUT, _DEFAULT_JAX_SPRITE_DIMS, _DEFAULT_JAX_LEVEL_TO_TERRAIN,
  _DEFAULT_JAX_LEVEL_TO_BANK, _DEFAULT_JAX_LEVEL_OFFSETS,
- _DEFAULT_JAX_LEVEL_TRANSFORMS) = _build_default_level_data()
+ _DEFAULT_JAX_LEVEL_TRANSFORMS) = _build_default_level_data(_DEFAULT_OBS_SPRITES)
 
-# Lazy cache for the terrain bank — same for every default instance, built once on first init.
-_TERRAIN_BANK_CACHE: list = [None]
+# Terrain bank keyed by sprite tuple object identity (default tuple shared across vanilla envs).
+_TERRAIN_BANK_CACHE: dict = {}
 
 
 # Initializes an empty bullet pool
@@ -2280,7 +2282,13 @@ def _update_ufo(
 
 # ========== Step Core ==========
 @jax.jit
-def step_core_linear(env_state: EnvState, action: int, terrain_bank: jnp.ndarray, terrain_heightmaps: jnp.ndarray):
+def step_core_linear(
+    env_state: EnvState,
+    action: int,
+    terrain_bank: jnp.ndarray,
+    terrain_heightmaps: jnp.ndarray,
+    obs_sprite_dims: jnp.ndarray,
+):
     def _game_is_over(state, _):
         info = GravitarInfo(
             lives=state.lives,
@@ -2301,7 +2309,7 @@ def step_core_linear(env_state: EnvState, action: int, terrain_bank: jnp.ndarray
                 jnp.float32(0.0),
             ], dtype=jnp.float32),
         )
-        obs = _get_observation_from_state(state)
+        obs = _get_observation_from_state(state, obs_sprite_dims)
         return obs, state, 0.0, jnp.array(True), info, jnp.array(False), jnp.int32(-1)
 
     def _unified_game_loop(state, act):
@@ -2860,7 +2868,7 @@ def step_core_linear(env_state: EnvState, action: int, terrain_bank: jnp.ndarray
             map_return_angle_idx=map_return_angle_idx,
         )
 
-        obs = _get_observation_from_state(final_env_state)
+        obs = _get_observation_from_state(final_env_state, obs_sprite_dims)
 
         # Info: map/arena returns saucer reward; level returns turret/level/ufo rewards
         all_rewards = jnp.where(
@@ -2897,8 +2905,14 @@ def step_core_linear(env_state: EnvState, action: int, terrain_bank: jnp.ndarray
 
 
 @jax.jit
-def step_core(env_state: EnvState, action: int, terrain_bank: jnp.ndarray, terrain_heightmaps: jnp.ndarray):
-    return step_core_linear(env_state, action, terrain_bank, terrain_heightmaps)
+def step_core(
+    env_state: EnvState,
+    action: int,
+    terrain_bank: jnp.ndarray,
+    terrain_heightmaps: jnp.ndarray,
+    obs_sprite_dims: jnp.ndarray,
+):
+    return step_core_linear(env_state, action, terrain_bank, terrain_heightmaps, obs_sprite_dims)
 
 
 @partial(jax.jit, static_argnums=(2,))
@@ -2908,7 +2922,11 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
     """
     # 1) core physics and per-mode stepping
     obs, state_after_step, reward, done_core, info, reset_signal, level_target = step_core(
-        env_state, action, env_instance.terrain_bank, env_instance.terrain_heightmaps
+        env_state,
+        action,
+        env_instance.terrain_bank,
+        env_instance.terrain_heightmaps,
+        env_instance.obs_sprite_dims,
     )
 
     # 2) event detection (branch-free boolean math)
@@ -3088,24 +3106,30 @@ class JaxGravitar(JaxEnvironment):
         self.obs_shape = (5,)
         self.num_actions = 18
 
-        # ---- Resource Loading and JAX Renderer Initialization ----
-        self.sprites = _OBS_SPRITES
-        self.renderer = GravitarRenderer(width=self.consts.WINDOW_WIDTH, height=self.consts.WINDOW_HEIGHT, consts=self.consts)
+        # ---- Sprites and derived layout from constants (defaults use module tuple) ----
+        self.obs_sprites = _resolve_obs_sprites(self.consts)
+        self.sprites = self.obs_sprites
+        self.obs_sprite_dims = _build_obs_sprite_dims(self.obs_sprites)
 
-        # --- Terrain bank: built once and shared across all default instances ---
-        if _TERRAIN_BANK_CACHE[0] is None:
-            _TERRAIN_BANK_CACHE[0] = self._build_terrain_bank()
-        self.terrain_bank = _TERRAIN_BANK_CACHE[0]
+        self.planets = _build_default_planets(self.obs_sprites)
+        (
+            self._jax_layout_default,
+            self.jax_sprite_dims,
+            self.jax_level_to_terrain,
+            self.jax_level_to_bank,
+            self.jax_level_offsets,
+            self.jax_level_transforms,
+        ) = _build_default_level_data(self.obs_sprites)
+
+        self.renderer = GravitarRenderer(
+            width=self.consts.WINDOW_WIDTH, height=self.consts.WINDOW_HEIGHT, consts=self.consts
+        )
+
+        _tb_key = id(self.obs_sprites)
+        if _tb_key not in _TERRAIN_BANK_CACHE:
+            _TERRAIN_BANK_CACHE[_tb_key] = self._build_terrain_bank()
+        self.terrain_bank = _TERRAIN_BANK_CACHE[_tb_key]
         self.terrain_heightmaps = self._build_heightmaps(self.terrain_bank)
-
-        # --- All static level data comes from module-level singletons ---
-        # Only rebuild jax_layout when REACTOR_LEVEL_LAYOUT is overridden via constants.
-        self.planets = _DEFAULT_PLANETS
-        self.jax_sprite_dims = _DEFAULT_JAX_SPRITE_DIMS
-        self.jax_level_to_terrain = _DEFAULT_JAX_LEVEL_TO_TERRAIN
-        self.jax_level_to_bank = _DEFAULT_JAX_LEVEL_TO_BANK
-        self.jax_level_offsets = _DEFAULT_JAX_LEVEL_OFFSETS
-        self.jax_level_transforms = _DEFAULT_JAX_LEVEL_TRANSFORMS
 
         reactor_override = tuple(self.consts.REACTOR_LEVEL_LAYOUT)
         if reactor_override:
@@ -3130,7 +3154,7 @@ class JaxGravitar(JaxEnvironment):
             self.jax_layout = {"types": jnp.array(layout_types), "coords_x": jnp.array(layout_coords_x),
                                "coords_y": jnp.array(layout_coords_y)}
         else:
-            self.jax_layout = _DEFAULT_JAX_LAYOUT
+            self.jax_layout = self._jax_layout_default
 
         # ---- JIT Helper Initialization ----
         dummy_key = jax.random.PRNGKey(0)
@@ -3149,15 +3173,20 @@ class JaxGravitar(JaxEnvironment):
         self.reset_level_out_struct = (obs_struct, state_struct)
 
     def __hash__(self):
-        # Instances that share terrain_bank and jax_layout are JIT-equivalent:
+        # Instances that share terrain_bank, layout, and sprite table are JIT-equivalent:
         # step_full(static_argnums=2) uses this to avoid recompiling for every new instance.
-        return hash((id(self.terrain_bank), id(self.jax_layout['types'])))
+        return hash(
+            (id(self.terrain_bank), id(self.jax_layout["types"]), id(self.obs_sprites))
+        )
 
     def __eq__(self, other):
         if not isinstance(other, JaxGravitar):
             return NotImplemented
-        return (self.terrain_bank is other.terrain_bank and
-                self.jax_layout['types'] is other.jax_layout['types'])
+        return (
+            self.terrain_bank is other.terrain_bank
+            and self.jax_layout["types"] is other.jax_layout["types"]
+            and self.obs_sprites is other.obs_sprites
+        )
 
     def _get_reward(self, previous_state: EnvState, state: EnvState) -> jnp.ndarray:
         """
@@ -3192,7 +3221,7 @@ class JaxGravitar(JaxEnvironment):
 
         Returns: A structured observation dataclass containing the vector observation.
         """
-        return _get_observation_from_state(state)
+        return _get_observation_from_state(state, self.obs_sprite_dims)
     
 
     def _get_info(self, state: EnvState, all_rewards: Optional[jnp.ndarray] = None) -> GravitarInfo:
@@ -3258,8 +3287,7 @@ class JaxGravitar(JaxEnvironment):
 
     def render(self, env_state: EnvState) -> jnp.ndarray:
         """Renders the state using the pure JAX renderer."""
-        frame = self.renderer.render(env_state, self.terrain_bank, downscale=self.renderer.config.downscale)
-        return frame
+        return self.renderer.render(env_state)
 
     # ===  Ensure all reset functions return JAX arrays ===
     def reset_map(self, key: jnp.ndarray,
@@ -3519,144 +3547,286 @@ class GravitarRenderer(JAXGameRenderer):
                  config: render_utils.RendererConfig = None):
         super().__init__()
         self.consts = consts or GravitarConstants()
-        self.width = width if width is not None else self.consts.WINDOW_WIDTH
-        self.height = height if height is not None else self.consts.WINDOW_HEIGHT
-        
-        # Use injected config if provided, else default
+
         if config is None:
+            game_h = height if height is not None else self.consts.WINDOW_HEIGHT
+            game_w = width if width is not None else self.consts.WINDOW_WIDTH
             self.config = render_utils.RendererConfig(
-                game_dimensions=(self.height, self.width),
+                game_dimensions=(game_h, game_w),
                 channels=3,
-                downscale=None
+                downscale=None,
             )
         else:
             self.config = config
+
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        jax_sprites = _JAX_SPRITES_DICT
-        
-        # Convert sprites dict to tuple for JIT-compatible indexing
-        max_sprite_idx = max(jax_sprites.keys()) if jax_sprites else -1
-        sprites_list = []
-        for i in range(max_sprite_idx + 1):
-            sprite = jax_sprites.get(i)
-            if sprite is not None:
-                sprites_list.append(sprite)
-            else:
-                # Create a placeholder 1x1 transparent sprite for missing indices
-                sprites_list.append(jnp.zeros((1, 1, 4), dtype=jnp.uint8))
+        obs_sprites = _resolve_obs_sprites(self.consts)
+        sprite_dir = os.path.join(render_utils.get_base_sprite_dir(), "gravitar")
 
-        ui_colors = jnp.array([[[255, 255, 0, 255], [50, 50, 50, 255], [0, 0, 0, 255]]], dtype=jnp.uint8)
-        all_assets = sprites_list + [ui_colors]
+        # Build the flipped orange enemy as procedural data so load_and_setup_assets
+        # includes it in the palette scan and downscaling pass.
+        orange_raw = obs_sprites[int(SpriteIdx.ENEMY_ORANGE)]
+        orange_flipped_data = (
+            jnp.array(np.flip(orange_raw, axis=0), dtype=jnp.uint8)
+            if orange_raw is not None
+            else jnp.zeros((1, 1, 4), dtype=jnp.uint8)
+        )
 
-        self.PALETTE, self.COLOR_TO_ID = self.jr._create_palette(all_assets)
+        # Procedural 1×1 black background keeps load_and_setup_assets happy while
+        # rendering uses terrain rasters (built below) as the actual background.
+        black_bg = jnp.zeros((1, 1, 4), dtype=jnp.uint8)
+        black_bg = black_bg.at[0, 0, 3].set(255)
 
-        if self.COLOR_TO_ID:
-            self.jr.TRANSPARENT_ID = max(self.COLOR_TO_ID.values()) + 1
-        else:
-            self.jr.TRANSPARENT_ID = 255
-
-        palette_size = self.PALETTE.shape[0]
-        required_size = self.jr.TRANSPARENT_ID + 1
-        if palette_size < required_size:
-            if self.config.channels == 1:
-                padding = jnp.zeros((required_size - palette_size, 1), dtype=self.PALETTE.dtype)
-            else:
-                padding = jnp.zeros((required_size - palette_size, 3), dtype=self.PALETTE.dtype)
-            self.PALETTE = jnp.concatenate([self.PALETTE, padding], axis=0)
-
-        self.color_yellow = self.COLOR_TO_ID.get((255, 255, 0), 0)
-        self.color_gray = self.COLOR_TO_ID.get((50, 50, 50), 0)
-
-        masks_list = []
-        for s in sprites_list:
-            masks_list.append(self.jr._create_id_mask(s, self.COLOR_TO_ID))
-        self.sprites = tuple(masks_list)
-
-
-        self.digit_masks = jnp.stack([self.sprites[int(SpriteIdx.DIGIT_0) + i] for i in range(10)])
-
-        idle_sprite = jax_sprites.get(int(SpriteIdx.SHIP_IDLE))
-        crash_sprite = jax_sprites.get(int(SpriteIdx.SHIP_CRASH))
-        thrust_sprite = jax_sprites.get(int(SpriteIdx.SHIP_THRUST))
-
-        orientation_sprites = [
-            jax_sprites.get(int(SpriteIdx.SHIP_N)), jax_sprites.get(int(SpriteIdx.SHIP_NNE)),
-            jax_sprites.get(int(SpriteIdx.SHIP_NE)), jax_sprites.get(int(SpriteIdx.SHIP_NEE)),
-            jax_sprites.get(int(SpriteIdx.SHIP_E)), jax_sprites.get(int(SpriteIdx.SHIP_SEE)),
-            jax_sprites.get(int(SpriteIdx.SHIP_SE)), jax_sprites.get(int(SpriteIdx.SHIP_SSE)),
-            jax_sprites.get(int(SpriteIdx.SHIP_S)), jax_sprites.get(int(SpriteIdx.SHIP_SSW)),
-            jax_sprites.get(int(SpriteIdx.SHIP_SW)), jax_sprites.get(int(SpriteIdx.SHIP_SWW)),
-            jax_sprites.get(int(SpriteIdx.SHIP_W)), jax_sprites.get(int(SpriteIdx.SHIP_NWW)),
-            jax_sprites.get(int(SpriteIdx.SHIP_NW)), jax_sprites.get(int(SpriteIdx.SHIP_NNW)),
+        asset_config = [
+            {'name': 'background', 'type': 'background', 'data': black_bg},
+            # Ship sprites
+            {'name': 'ship_idle',   'type': 'single', 'file': 'spaceship.npy'},
+            {'name': 'ship_thrust', 'type': 'single', 'file': 'ship_thrust.npy'},
+            {'name': 'ship_crash',  'type': 'single', 'file': 'ship_crash.npy'},
+            {'name': 'ship_thrust_back', 'type': 'single', 'file': 'ship_thrust_back.npy'},
+            {'name': 'shield',      'type': 'single', 'file': 'shield.npy'},
+            {'name': 'ship_bullet', 'type': 'single', 'file': 'ship_bullet.npy'},
+            # 16 ship orientations as a group so they get padded to equal size
+            {'name': 'ship_orientations', 'type': 'group', 'files': [
+                'spaceship.npy',     # 0: N  (= SHIP_IDLE)
+                'spaceship_nne.npy', # 1: NNE
+                'spaceship_ne.npy',  # 2: NE
+                'spaceship_nee.npy', # 3: NEE
+                'spaceship_e.npy',   # 4: E
+                'spaceship_see.npy', # 5: SEE
+                'spaceship_se.npy',  # 6: SE
+                'spaceship_sse.npy', # 7: SSE
+                'spaceship_s.npy',   # 8: S
+                'spaceship_ssw.npy', # 9: SSW
+                'spaceship_sw.npy',  # 10: SW
+                'spaceship_sww.npy', # 11: SWW
+                'spaceship_w.npy',   # 12: W
+                'spaceship_nww.npy', # 13: NWW
+                'spaceship_nw.npy',  # 14: NW
+                'spaceship_nnw.npy', # 15: NNW
+            ]},
+            # Enemies
+            {'name': 'enemy_orange',   'type': 'single', 'file': 'enemy_orange.npy'},
+            {'name': 'enemy_green',    'type': 'single', 'file': 'enemy_green.npy'},
+            {'name': 'enemy_saucer',   'type': 'single', 'file': 'saucer.npy'},
+            {'name': 'enemy_ufo',      'type': 'single', 'file': 'UFO.npy'},
+            {'name': 'enemy_crash',    'type': 'single', 'file': 'enemy_crash.npy'},
+            {'name': 'saucer_crash',   'type': 'single', 'file': 'saucer_crash.npy'},
+            {'name': 'enemy_orange_flipped', 'type': 'procedural', 'data': orange_flipped_data},
+            # Bullets
+            {'name': 'enemy_bullet',       'type': 'single', 'file': 'enemy_bullet.npy'},
+            {'name': 'enemy_green_bullet', 'type': 'single', 'file': 'enemy_green_bullet.npy'},
+            # Level objects
+            {'name': 'fuel_tank',    'type': 'single', 'file': 'fuel_tank.npy'},
+            {'name': 'obstacle',     'type': 'single', 'file': 'obstacle.npy'},
+            {'name': 'spawn_loc',    'type': 'single', 'file': 'spawn_location.npy'},
+            {'name': 'reactor',      'type': 'single', 'file': 'reactor.npy'},
+            {'name': 'reactor_dest',     'type': 'single', 'file': 'reactor_destination.npy'},
+            {'name': 'reactor_dest_hit', 'type': 'single', 'file': 'reactor_destination_hit.npy'},
+            # Map screen planets / reactor icon
+            {'name': 'planet1', 'type': 'single', 'file': 'planet1.npy'},
+            {'name': 'planet2', 'type': 'single', 'file': 'planet2.npy'},
+            {'name': 'planet3', 'type': 'single', 'file': 'planet3.npy'},
+            {'name': 'planet4', 'type': 'single', 'file': 'planet4.npy'},
+            # Terrain sprites (included so their colors enter the palette)
+            {'name': 'terrain1',      'type': 'single', 'file': 'terrain1.npy'},
+            {'name': 'terrain2',      'type': 'single', 'file': 'terrain2.npy'},
+            {'name': 'terrain3',      'type': 'single', 'file': 'terrain3.npy'},
+            {'name': 'terrain4',      'type': 'single', 'file': 'terrain4.npy'},
+            {'name': 'reactor_terr',  'type': 'single', 'file': 'reactor_terrain.npy'},
+            # HUD
+            {'name': 'hp_ui', 'type': 'single', 'file': 'HP.npy'},
+            # Digits 0-9 as a group
+            {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
         ]
 
-        all_ship_sprites = [idle_sprite, crash_sprite, thrust_sprite] + orientation_sprites
-        valid_ship_sprites = [s for s in all_ship_sprites if s is not None]
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS,
+        ) = self.jr.load_and_setup_assets(asset_config, sprite_dir)
 
-        if valid_ship_sprites:
-            max_h = max(s.shape[0] for s in valid_ship_sprites)
-            max_w = max(s.shape[1] for s in valid_ship_sprites)
+        SM = self.SHAPE_MASKS
+        T = self.jr.TRANSPARENT_ID
 
-            def pad_mask(sprite_rgba, h, w):
-                if sprite_rgba is None:
-                    return jnp.full((h, w), self.jr.TRANSPARENT_ID, dtype=jnp.int32)
-                mask = self.jr._create_id_mask(sprite_rgba, self.COLOR_TO_ID)
-                pad_h = (h - mask.shape[0]) // 2
-                pad_w = (w - mask.shape[1]) // 2
-                return jnp.pad(mask,
-                               ((pad_h, h - mask.shape[0] - pad_h), (pad_w, w - mask.shape[1] - pad_w)),
-                               constant_values=self.jr.TRANSPARENT_ID)
+        self.digit_masks = SM['digits']  # shape (10, H, W)
 
-            self.padded_ship_idle = pad_mask(idle_sprite, max_h, max_w)
-            self.padded_ship_crash = pad_mask(crash_sprite, max_h, max_w)
-            self.padded_ship_thrust = pad_mask(thrust_sprite, max_h, max_w)
-            self.padded_ship_orientations = tuple(pad_mask(sprite, max_h, max_w) for sprite in orientation_sprites)
-            self.ship_orientations_array = jnp.stack(self.padded_ship_orientations)
-        else:
-            default_mask = jnp.full((1, 1), self.jr.TRANSPARENT_ID, dtype=jnp.int32)
-            self.padded_ship_idle = default_mask
-            self.padded_ship_crash = default_mask
-            self.padded_ship_thrust = default_mask
-            self.padded_ship_orientations = tuple(default_mask for _ in range(16))
-            self.ship_orientations_array = jnp.stack(self.padded_ship_orientations)
+        # All ship variants must be padded to the same spatial size so they can be
+        # selected via jax.lax.select (requires equal shapes).
+        ship_variant_names = ['ship_idle', 'ship_crash', 'ship_thrust']
+        all_ship_masks = [SM['ship_orientations'][i] for i in range(16)] + \
+                         [SM[n] for n in ship_variant_names]
+        oh = max(m.shape[0] for m in all_ship_masks)
+        ow = max(m.shape[1] for m in all_ship_masks)
 
-        def build_stack(indices):
-            valid_sprites = [self.sprites[int(i)] for i in indices if self.sprites[int(i)] is not None]
-            if not valid_sprites:
-                return jnp.full((max(indices) + 1, 1, 1), self.jr.TRANSPARENT_ID, dtype=jnp.int32)
-            max_h = max(s.shape[0] for s in valid_sprites)
-            max_w = max(s.shape[1] for s in valid_sprites)
-            
-            stack_arrays = []
-            for i in range(max(indices) + 1):
-                if i in indices and self.sprites[int(i)] is not None:
-                    s = self.sprites[int(i)]
-                    pad_h = (max_h - s.shape[0]) // 2
-                    pad_w = (max_w - s.shape[1]) // 2
-                    padded = jnp.pad(s, ((pad_h, max_h - s.shape[0] - pad_h), (pad_w, max_w - s.shape[1] - pad_w)), constant_values=self.jr.TRANSPARENT_ID)
-                    stack_arrays.append(padded)
+        def _pad_to(mask, h, w):
+            ph = h - mask.shape[0]
+            pw = w - mask.shape[1]
+            return jnp.pad(mask,
+                           ((ph // 2, ph - ph // 2), (pw // 2, pw - pw // 2)),
+                           constant_values=T)
+
+        # Re-pad orientation group to the unified size
+        self.ship_orientations_array = jnp.stack(
+            [_pad_to(SM['ship_orientations'][i], oh, ow) for i in range(16)]
+        )
+
+        self.padded_ship_idle   = _pad_to(SM['ship_idle'],   oh, ow)
+        self.padded_ship_crash  = _pad_to(SM['ship_crash'],  oh, ow)
+        self.padded_ship_thrust = _pad_to(SM['ship_thrust'], oh, ow)
+
+        # Sprite stacks indexed by SpriteIdx integer value.
+        # Each stack is (max_idx+1, H, W) with transparent fill for unused slots.
+        def _build_named_stack(name_map: dict):
+            """name_map: {SpriteIdx_value: mask_name_in_SHAPE_MASKS}"""
+            masks = {idx: SM[name] for idx, name in name_map.items() if name in SM}
+            if not masks:
+                return jnp.full((1, 1, 1), T, dtype=jnp.int32)
+            max_idx = max(masks)
+            mh = max(m.shape[0] for m in masks.values())
+            mw = max(m.shape[1] for m in masks.values())
+            rows = []
+            for i in range(max_idx + 1):
+                if i in masks:
+                    rows.append(_pad_to(masks[i], mh, mw))
                 else:
-                    stack_arrays.append(jnp.full((max_h, max_w), self.jr.TRANSPARENT_ID, dtype=jnp.int32))
-            return jnp.stack(stack_arrays)
+                    rows.append(jnp.full((mh, mw), T, dtype=jnp.int32))
+            return jnp.stack(rows)
 
-        self.map_elements_stack = build_stack([SpriteIdx.PLANET1, SpriteIdx.PLANET2, SpriteIdx.PLANET3, SpriteIdx.PLANET4, SpriteIdx.REACTOR, SpriteIdx.OBSTACLE, SpriteIdx.SPAWN_LOC])
-        self.enemy_stack = build_stack([SpriteIdx.ENEMY_ORANGE, SpriteIdx.ENEMY_GREEN, SpriteIdx.ENEMY_ORANGE_FLIPPED, SpriteIdx.ENEMY_CRASH])
-        self.enemy_bullet_stack = build_stack([SpriteIdx.ENEMY_BULLET, SpriteIdx.ENEMY_GREEN_BULLET])
+        self.map_elements_stack = _build_named_stack({
+            int(SpriteIdx.PLANET1):  'planet1',
+            int(SpriteIdx.PLANET2):  'planet2',
+            int(SpriteIdx.PLANET3):  'planet3',
+            int(SpriteIdx.PLANET4):  'planet4',
+            int(SpriteIdx.REACTOR):  'reactor',
+            int(SpriteIdx.OBSTACLE): 'obstacle',
+            int(SpriteIdx.SPAWN_LOC): 'spawn_loc',
+        })
 
-    @partial(jax.jit, static_argnames=('self', 'downscale'))
-    def render(self, state: EnvState, terrain_bank: jnp.ndarray, downscale=None) -> jnp.ndarray:
-        H, W = self.height, self.width
-        empty_bg = jnp.full((H, W), self.jr.TRANSPARENT_ID, dtype=jnp.int32)
-        bank_idx = jnp.clip(state.terrain_bank_idx, 0, terrain_bank.shape[0] - 1)
-        level_bg = jax.lax.dynamic_slice(terrain_bank[bank_idx], (_TERRAIN_HIT_RMAX, _TERRAIN_HIT_RMAX), (H, W))
+        self.enemy_stack = _build_named_stack({
+            int(SpriteIdx.ENEMY_ORANGE):         'enemy_orange',
+            int(SpriteIdx.ENEMY_GREEN):          'enemy_green',
+            int(SpriteIdx.ENEMY_ORANGE_FLIPPED): 'enemy_orange_flipped',
+            int(SpriteIdx.ENEMY_CRASH):          'enemy_crash',
+        })
+
+        self.enemy_bullet_stack = _build_named_stack({
+            int(SpriteIdx.ENEMY_BULLET):       'enemy_bullet',
+            int(SpriteIdx.ENEMY_GREEN_BULLET): 'enemy_green_bullet',
+        })
+
+        # Build downscaled terrain rasters for rendering.
+        # These are (num_banks, render_H, render_W) ID-rasters.
+        # Bank 0 = empty (transparent), banks 1-5 = terrain levels.
+        self.terrain_rasters = self._build_terrain_rasters(obs_sprites)
+
+    def _build_terrain_rasters(self, obs_sprites: tuple) -> jnp.ndarray:
+        """Build terrain ID-rasters at render resolution (respects downscale)."""
+        if self.config.downscale:
+            rH, rW = self.config.downscale
+        else:
+            rH, rW = self.config.game_dimensions
+        GH, GW = self.config.game_dimensions
+
+        T = self.jr.TRANSPARENT_ID
+        empty_page = np.full((rH, rW), T, dtype=np.int32)
+        bank = [empty_page]
+
+        BANK_IDX_TO_LEVEL_ID = {v: k for k, v in LEVEL_ID_TO_BANK_IDX.items()}
+
+        terrain_entries = [
+            (SpriteIdx.TERRAIN1,     1),
+            (SpriteIdx.TERRAIN2,     2),
+            (SpriteIdx.TERRAIN3,     3),
+            (SpriteIdx.TERRAIN4,     4),
+            (SpriteIdx.REACTOR_TERR, 5),
+        ]
+
+        for sprite_idx_enum, bank_idx in terrain_entries:
+            mask_name = {
+                SpriteIdx.TERRAIN1:     'terrain1',
+                SpriteIdx.TERRAIN2:     'terrain2',
+                SpriteIdx.TERRAIN3:     'terrain3',
+                SpriteIdx.TERRAIN4:     'terrain4',
+                SpriteIdx.REACTOR_TERR: 'reactor_terr',
+            }[sprite_idx_enum]
+
+            # SHAPE_MASKS already contains downscaled ID-masks from the pipeline.
+            # Re-derive from the raw sprite so we can position it correctly on the canvas.
+            surf = obs_sprites[int(sprite_idx_enum)]
+            if surf is None:
+                bank.append(empty_page.copy())
+                continue
+
+            th, tw = surf.shape[0], surf.shape[1]
+            scale = min(GW / tw, GH / th)
+            extra = TERRAIN_SCALE_OVERRIDES.get(sprite_idx_enum, 1.0)
+            scale *= float(extra)
+            sw, sh = int(tw * scale), int(th * scale)
+
+            ox, oy = (GW - sw) // 2, (GH - sh) // 2
+            level_id = BANK_IDX_TO_LEVEL_ID.get(bank_idx)
+            if level_id is not None:
+                lox, loy = LEVEL_OFFSETS.get(level_id, (0, 0))
+                ox += lox
+                oy += loy
+
+            # Scale sprite to full-game-resolution canvas, then apply color IDs, then
+            # downscale to render resolution.
+            if surf.shape[0] != sh or surf.shape[1] != sw:
+                scale_h = max(1, int(round(sh / surf.shape[0])))
+                scale_w = max(1, int(round(sw / surf.shape[1])))
+                rgba_scaled = np.repeat(np.repeat(surf, scale_h, axis=0), scale_w, axis=1)[:sh, :sw]
+            else:
+                rgba_scaled = surf
+
+            id_mask = np.array(self.jr._create_id_mask(
+                jnp.array(rgba_scaled, dtype=jnp.uint8), self.COLOR_TO_ID
+            ))
+
+            full_canvas = np.full((GH, GW), T, dtype=np.int32)
+            dst_x, dst_y = max(ox, 0), max(oy, 0)
+            src_x = abs(min(ox, 0))
+            src_y = abs(min(oy, 0))
+            copy_w = min(GW - dst_x, id_mask.shape[1] - src_x)
+            copy_h = min(GH - dst_y, id_mask.shape[0] - src_y)
+            if copy_w > 0 and copy_h > 0:
+                full_canvas[dst_y:dst_y + copy_h, dst_x:dst_x + copy_w] = \
+                    id_mask[src_y:src_y + copy_h, src_x:src_x + copy_w]
+
+            if rH != GH or rW != GW:
+                render_page = np.array(
+                    jax.image.resize(
+                        jnp.array(full_canvas, dtype=jnp.float32),
+                        (rH, rW), method='nearest'
+                    ).astype(jnp.int32)
+                )
+            else:
+                render_page = full_canvas
+
+            bank.append(render_page)
+
+        return jnp.array(np.stack(bank, axis=0), dtype=jnp.int32)
+
+    @partial(jax.jit, static_argnames=('self',))
+    def render(self, state: EnvState) -> jnp.ndarray:
+        rH, rW = self.terrain_rasters.shape[1], self.terrain_rasters.shape[2]
+        empty_bg = jnp.full((rH, rW), self.jr.TRANSPARENT_ID, dtype=jnp.int32)
+        bank_idx = jnp.clip(state.terrain_bank_idx, 0, self.terrain_rasters.shape[0] - 1)
+        level_bg = self.terrain_rasters[bank_idx]
 
         frame = jax.lax.select(state.mode == 1, level_bg, empty_bg)
 
         def render_centered(f_in, x, y, sprite_arr):
-            h, w = sprite_arr.shape[0], sprite_arr.shape[1]
-            cx = jnp.round(x - w / 2).astype(jnp.int32)
-            cy = jnp.round(y - h / 2).astype(jnp.int32)
+            # Sprite dimensions are in render-space; convert to game-space for coordinate math
+            # so that render_at_clipped's internal scaling produces correct placement.
+            w_game = sprite_arr.shape[1] / self.config.width_scaling
+            h_game = sprite_arr.shape[0] / self.config.height_scaling
+            cx = jnp.round(x - w_game / 2).astype(jnp.int32)
+            cy = jnp.round(y - h_game / 2).astype(jnp.int32)
             return self.jr.render_at_clipped(f_in, cx, cy, sprite_arr)
 
         # === 1. Draw Map Elements ===
@@ -3697,7 +3867,7 @@ class GravitarRenderer(JAXGameRenderer):
             empty_bg_local = jnp.full_like(f, self.jr.TRANSPARENT_ID)
 
             # Fuel Tanks
-            sprite_arr_tank = self.sprites[int(SpriteIdx.FUEL_TANK)]
+            sprite_arr_tank = self.SHAPE_MASKS['fuel_tank']
             @partial(jax.vmap, in_axes=(None, 0, 0, 0))
             def render_tanks(empty, x, y, active):
                 return jax.lax.cond(
@@ -3742,10 +3912,10 @@ class GravitarRenderer(JAXGameRenderer):
             # UFO
             ufo = state.ufo
             f_ufo = jax.lax.cond(ufo.alive,
-                                 lambda r: render_centered(r, ufo.x, ufo.y, self.sprites[int(SpriteIdx.ENEMY_UFO)]),
+                                 lambda r: render_centered(r, ufo.x, ufo.y, self.SHAPE_MASKS['enemy_ufo']),
                                  lambda r: r, f_enemies)
             f_ufo = jax.lax.cond(ufo.death_timer > 0,
-                                 lambda r: render_centered(r, ufo.x, ufo.y, self.sprites[int(SpriteIdx.ENEMY_CRASH)]),
+                                 lambda r: render_centered(r, ufo.x, ufo.y, self.SHAPE_MASKS['enemy_crash']),
                                  lambda r: r, f_ufo)
             return f_ufo
 
@@ -3756,11 +3926,11 @@ class GravitarRenderer(JAXGameRenderer):
             saucer = state.saucer
             f = jax.lax.cond(saucer.alive,
                              lambda r: render_centered(r, saucer.x, saucer.y,
-                                                       self.sprites[int(SpriteIdx.ENEMY_SAUCER)]),
+                                                       self.SHAPE_MASKS['enemy_saucer']),
                              lambda r: r, f)
             f = jax.lax.cond(saucer.death_timer > 0,
                              lambda r: render_centered(r, saucer.x, saucer.y,
-                                                       self.sprites[int(SpriteIdx.SAUCER_CRASH)]),
+                                                       self.SHAPE_MASKS['saucer_crash']),
                              lambda r: r, f)
             return f
 
@@ -3769,8 +3939,8 @@ class GravitarRenderer(JAXGameRenderer):
         def draw_reactor_destination(f):
             sprite_arr = jax.lax.select(
                 state.reactor_activated,
-                self.sprites[int(SpriteIdx.REACTOR_DEST_HIT)],
-                self.sprites[int(SpriteIdx.REACTOR_DEST)]
+                self.SHAPE_MASKS['reactor_dest_hit'],
+                self.SHAPE_MASKS['reactor_dest']
             )
             return render_centered(f, state.reactor_dest_x, state.reactor_dest_y, sprite_arr)
 
@@ -3780,7 +3950,7 @@ class GravitarRenderer(JAXGameRenderer):
 
         # === 4. Bullets ===
         def draw_player_bullets(f):
-            sprite_arr = self.sprites[int(SpriteIdx.SHIP_BULLET)]
+            sprite_arr = self.SHAPE_MASKS['ship_bullet']
             empty_bg_local = jnp.full_like(f, self.jr.TRANSPARENT_ID)
 
             @partial(jax.vmap, in_axes=(None, 0, 0, 0))
@@ -3824,9 +3994,8 @@ class GravitarRenderer(JAXGameRenderer):
         is_crashing = state.crash_timer > 0
         is_thrusting = ship_state.is_thrusting
 
-
         def draw_shield_and_tractor(f):
-            f_with_shield = render_centered(f, ship_state.x, ship_state.y, self.sprites[int(SpriteIdx.SHIELD)])
+            f_with_shield = render_centered(f, ship_state.x, ship_state.y, self.SHAPE_MASKS['shield'])
 
             is_planet_level = state.mode == 1
             is_reactor = state.terrain_sprite_idx == int(SpriteIdx.REACTOR_TERR)
@@ -3836,7 +4005,7 @@ class GravitarRenderer(JAXGameRenderer):
                 TRACTOR_OFFSET = 8.0
                 tractor_x = ship_state.x
                 tractor_y = ship_state.y + TRACTOR_OFFSET
-                return render_centered(frame_in, tractor_x, tractor_y, self.sprites[int(SpriteIdx.SHIP_THRUST_BACK)])
+                return render_centered(frame_in, tractor_x, tractor_y, self.SHAPE_MASKS['ship_thrust_back'])
 
             return jax.lax.cond(can_show_tractor, draw_tractor, lambda frame_in: frame_in, f_with_shield)
 
@@ -3857,7 +4026,8 @@ class GravitarRenderer(JAXGameRenderer):
 
         # === 6. Draw the HUD ===
         def draw_hud(f):
-            W, H = self.width, self.height
+            rW = self.terrain_rasters.shape[2]
+            rH = self.terrain_rasters.shape[1]
 
             # Fuel
             f = self.jr.render_label(
@@ -3865,18 +4035,18 @@ class GravitarRenderer(JAXGameRenderer):
                 digits=self.jr.int_to_digits(state.fuel.astype(jnp.int32), max_digits=5),
                 digit_masks=self.digit_masks, spacing=8, max_digits=5
             )
-            
+
             # Score
             f = self.jr.render_label(
-                f, x=W - 55, y=5,
+                f, x=rW - 55, y=5,
                 digits=self.jr.int_to_digits(state.score.astype(jnp.int32), max_digits=6),
                 digit_masks=self.digit_masks, spacing=8, max_digits=6
             )
-            
+
             # Lives
             f = self.jr.render_indicator(
-                f, x=W - 50, y=17,
-                value=state.lives, shape_mask=self.sprites[int(SpriteIdx.HP_UI)],
+                f, x=rW - 50, y=17,
+                value=state.lives, shape_mask=self.SHAPE_MASKS['hp_ui'],
                 spacing=8, max_value=self.consts.MAX_LIVES
             )
 
@@ -3884,7 +4054,7 @@ class GravitarRenderer(JAXGameRenderer):
             def draw_reactor_timer(frame_carry):
                 seconds_left = state.reactor_timer // 60
                 return self.jr.render_label(
-                    frame_carry, x=W // 2 - 8, y=5,
+                    frame_carry, x=rW // 2 - 8, y=5,
                     digits=self.jr.int_to_digits(seconds_left, max_digits=2),
                     digit_masks=self.digit_masks, spacing=8, max_digits=2
                 )
@@ -3894,12 +4064,7 @@ class GravitarRenderer(JAXGameRenderer):
 
         frame = draw_hud(frame)
 
-        frame_rgb = self.jr.render_from_palette(frame, self.PALETTE)
-        if downscale is not None:
-            channels = (frame_rgb.shape[-1],)
-            frame_rgb = jax.image.resize(frame_rgb, downscale + channels, method='linear').astype(jnp.uint8)
-
-        return frame_rgb
+        return self.jr.render_from_palette(frame, self.PALETTE)
 
 __all__ = ["JaxGravitar", "get_env_and_renderer"]
 
