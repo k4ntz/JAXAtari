@@ -1432,57 +1432,95 @@ class QbertRenderer(JAXGameRenderer):
             operand=state,
         )
 
+        # --- Dynamic Entities ---
+        
+        # Sam
         sam_j = state.sam_position[0]
         sam_i = state.sam_position[1]
-        raster = jnp.where(jnp.logical_and(state.sam_position[0] == -1, state.sam_position[1] == -1), raster, jr.render_at(raster,
-                                                                                                                           self.QBERT_POSITIONS[jnp.array(sam_i * (sam_i - 1) / 2 + (sam_j - 1)).astype(jnp.int32)][0],
-                                                                                                                           self.QBERT_POSITIONS[jnp.array(sam_i * (sam_i - 1) / 2 + (sam_j - 1)).astype(jnp.int32)][1] + 1,
-                                                                                                                           M['sam']))
+        sam_active = jnp.logical_and(sam_j != -1, sam_i != -1)
+        raster = jax.lax.cond(
+            sam_active,
+            lambda r: jr.render_at(r,
+                                   self.QBERT_POSITIONS[jnp.array(sam_i * (sam_i - 1) / 2 + (sam_j - 1)).astype(jnp.int32)][0],
+                                   self.QBERT_POSITIONS[jnp.array(sam_i * (sam_i - 1) / 2 + (sam_j - 1)).astype(jnp.int32)][1] + 1,
+                                   M['sam']),
+            lambda r: r,
+            raster
+        )
 
+        # Green Ball
         green_ball_j = state.green_ball_position[0]
         green_ball_i = state.green_ball_position[1]
+        gb_active = jnp.logical_and(green_ball_j != -1, green_ball_i != -1)
         green_ball_index = jnp.floor(state.enemy_moving_counter / jnp.ceil(self._enemy_move_tick[state.level_number] / 2).astype(jnp.int32)).astype(jnp.int32)
-        raster = jnp.where(jnp.logical_and(state.green_ball_position[0] == -1, state.green_ball_position[1] == -1), raster, jr.render_at(raster,
-                                                                                                                                         self.QBERT_POSITIONS[jnp.array(green_ball_i * (green_ball_i - 1) / 2 + (green_ball_j - 1)).astype(jnp.int32)][0] + self.BALL_MOVE[green_ball_index][0],
-                                                                                                                                         self.QBERT_POSITIONS[jnp.array(green_ball_i * (green_ball_i - 1) / 2 + (green_ball_j - 1)).astype(jnp.int32)][1] + self.BALL_MOVE[green_ball_index][1],
-                                                                                                                                         M['green_ball'][green_ball_index]))
+        raster = jax.lax.cond(
+            gb_active,
+            lambda r: jr.render_at(r,
+                                   self.QBERT_POSITIONS[jnp.array(green_ball_i * (green_ball_i - 1) / 2 + (green_ball_j - 1)).astype(jnp.int32)][0] + self.BALL_MOVE[green_ball_index][0],
+                                   self.QBERT_POSITIONS[jnp.array(green_ball_i * (green_ball_i - 1) / 2 + (green_ball_j - 1)).astype(jnp.int32)][1] + self.BALL_MOVE[green_ball_index][1],
+                                   M['green_ball'][green_ball_index]),
+            lambda r: r,
+            raster
+        )
 
+        # Purple Ball
         purple_ball_j = state.purple_ball_position[0]
         purple_ball_i = state.purple_ball_position[1]
+        pb_active = jnp.logical_and(purple_ball_j != -1, purple_ball_i != -1)
         purple_ball_index = jnp.floor(state.enemy_moving_counter / jnp.ceil(self._enemy_move_tick[state.level_number] / 2).astype(jnp.int32)).astype(jnp.int32)
-        raster = jnp.where(jnp.logical_and(state.purple_ball_position[0] == -1, state.purple_ball_position[1] == -1), raster, jr.render_at(raster,
-                                                                                                                                           self.QBERT_POSITIONS[jnp.array(purple_ball_i * (purple_ball_i - 1) / 2 + (purple_ball_j - 1)).astype(jnp.int32)][0] + self.BALL_MOVE[purple_ball_index][0],
-                                                                                                                                           self.QBERT_POSITIONS[jnp.array(purple_ball_i * (purple_ball_i - 1) / 2 + (purple_ball_j - 1)).astype(jnp.int32)][1] + self.BALL_MOVE[purple_ball_index][1],
-                                                                                                                                           M['purple_ball'][purple_ball_index]))
+        raster = jax.lax.cond(
+            pb_active,
+            lambda r: jr.render_at(r,
+                                   self.QBERT_POSITIONS[jnp.array(purple_ball_i * (purple_ball_i - 1) / 2 + (purple_ball_j - 1)).astype(jnp.int32)][0] + self.BALL_MOVE[purple_ball_index][0],
+                                   self.QBERT_POSITIONS[jnp.array(purple_ball_i * (purple_ball_i - 1) / 2 + (purple_ball_j - 1)).astype(jnp.int32)][1] + self.BALL_MOVE[purple_ball_index][1],
+                                   M['purple_ball'][purple_ball_index]),
+            lambda r: r,
+            raster
+        )
 
+        # Snake
         snake_j = state.snake_position[0]
         snake_i = state.snake_position[1]
+        snake_active = jnp.logical_and(snake_j != -1, snake_i != -1)
         snake_index = jnp.floor(state.enemy_moving_counter / jnp.ceil(self._enemy_move_tick[state.level_number] / 5).astype(jnp.int32)).astype(jnp.int32)
-        raster = jnp.where(jnp.logical_and(state.snake_position[0] == -1, state.snake_position[1] == -1), raster, jr.render_at(raster,
-                                                                                                                               self.QBERT_POSITIONS[jnp.array(snake_i * (snake_i - 1) / 2 + (snake_j - 1)).astype(jnp.int32)][0] + self.SNAKE_MOVE[snake_index][0],
-                                                                                                                               self.QBERT_POSITIONS[jnp.array(snake_i * (snake_i - 1) / 2 + (snake_j - 1)).astype(jnp.int32)][1] + self.SNAKE_MOVE[snake_index][1],
-                                                                                                                               M['snake'][snake_index]))
+        raster = jax.lax.cond(
+            snake_active,
+            lambda r: jr.render_at(r,
+                                   self.QBERT_POSITIONS[jnp.array(snake_i * (snake_i - 1) / 2 + (snake_j - 1)).astype(jnp.int32)][0] + self.SNAKE_MOVE[snake_index][0],
+                                   self.QBERT_POSITIONS[jnp.array(snake_i * (snake_i - 1) / 2 + (snake_j - 1)).astype(jnp.int32)][1] + self.SNAKE_MOVE[snake_index][1],
+                                   M['snake'][snake_index]),
+            lambda r: r,
+            raster
+        )
 
+        # Red Balls
         def render_red_ball(i, r):
             red_ball_j = state.red_ball_positions[i][0]
             red_ball_i = state.red_ball_positions[i][1]
+            rb_active = jnp.logical_and(red_ball_j != -1, red_ball_i != -1)
             red_ball_index = jnp.floor(state.enemy_moving_counter / jnp.ceil(self._enemy_move_tick[state.level_number] / 2).astype(jnp.int32)).astype(jnp.int32)
-            r = jnp.where(jnp.logical_and(state.red_ball_positions[i][0] == -1, state.red_ball_positions[i][1] == -1), r, jr.render_at(r,
-                                                                                                                                            self.QBERT_POSITIONS[jnp.array(red_ball_i * (red_ball_i - 1) / 2 + (red_ball_j - 1)).astype(jnp.int32)][0] + self.BALL_MOVE[red_ball_index][0],
-                                                                                                                                            self.QBERT_POSITIONS[jnp.array(red_ball_i * (red_ball_i - 1) / 2 + (red_ball_j - 1)).astype(jnp.int32)][1] + self.BALL_MOVE[red_ball_index][1],
-                                                                                                                                            M['red_ball'][red_ball_index]))
-            return r
+            
+            return jax.lax.cond(
+                rb_active,
+                lambda ras: jr.render_at(ras,
+                                         self.QBERT_POSITIONS[jnp.array(red_ball_i * (red_ball_i - 1) / 2 + (red_ball_j - 1)).astype(jnp.int32)][0] + self.BALL_MOVE[red_ball_index][0],
+                                         self.QBERT_POSITIONS[jnp.array(red_ball_i * (red_ball_i - 1) / 2 + (red_ball_j - 1)).astype(jnp.int32)][1] + self.BALL_MOVE[red_ball_index][1],
+                                         M['red_ball'][red_ball_index]),
+                lambda ras: ras,
+                r
+            )
 
-        raster = jax.lax.fori_loop(
-            lower=0,
-            upper=3,
-            body_fun=render_red_ball,
-            init_val=raster,
+        raster = jax.lax.fori_loop(0, 3, render_red_ball, raster)
+
+        # Dead Animation
+        raster = jax.lax.cond(
+            state.dead_animation_counter != 0,
+            lambda r: jr.render_at(r,
+                                   self.QBERT_POSITIONS[jnp.array(qbert_i * (qbert_i - 1) / 2 + (qbert_j - 1)).astype(jnp.int32)][0] + 15,
+                                   self.QBERT_POSITIONS[jnp.array(qbert_i * (qbert_i - 1) / 2 + (qbert_j - 1)).astype(jnp.int32)][1] - 9,
+                                   M['dead']),
+            lambda r: r,
+            raster
         )
-
-        raster = jnp.where(state.dead_animation_counter != 0, jr.render_at(raster,
-                                                                           self.QBERT_POSITIONS[jnp.array(qbert_i * (qbert_i - 1) / 2 + (qbert_j - 1)).astype(jnp.int32)][0] + 15,
-                                                                           self.QBERT_POSITIONS[jnp.array(qbert_i * (qbert_i - 1) / 2 + (qbert_j - 1)).astype(jnp.int32)][1] - 9,
-                                                                           M['dead']), raster)
 
         return jr.render_from_palette(raster, self.PALETTE)
