@@ -482,11 +482,27 @@ class JaxRenderingUtils:
                 pixels = np.array(sprite.reshape(-1, 4))
                 for r, g, b, a in pixels:
                     if a > 128:
-                        rgb = (int(r), int(g), int(b))
-                        if rgb not in color_to_id:
-                            color_to_id[rgb] = next_id
-                            palette_list.append(rgb)
-                            next_id += 1
+                        color_val = (int(r), int(g), int(b))
+                        if self.config.channels == 1:
+                            # For grayscale, convert RGB to a single intensity value
+                            gray_value = (int(0.299*r + 0.587*g + 0.114*b),)
+                            # Non unique grayscale
+                            if gray_value in palette_list:
+                                # color not in palette but same gray value exists, reuse existing ID
+                                if color_val not in color_to_id:
+                                    existing_id = palette_list.index(gray_value)
+                                    color_to_id[color_val] = existing_id
+                                else:
+                                    pass
+                            else: # New unique grayscale color, add to palette
+                                color_to_id[color_val] = next_id
+                                palette_list.append(gray_value)
+                                next_id += 1
+                        else:
+                            if color_val not in color_to_id:
+                                color_to_id[color_val] = next_id
+                                palette_list.append(color_val)
+                                next_id += 1
         
         # Determine dtype based on palette size to avoid overflow
         # uint8: 0-255 colors (IDs 0-254, TRANSPARENT_ID 255), 
@@ -501,11 +517,11 @@ class JaxRenderingUtils:
             dtype = jnp.uint8
 
         # Create the final JAX array for the palette
-        if self.config.channels == 1:
-            gray_palette = [int(0.299*r + 0.587*g + 0.114*b) for r, g, b in palette_list]
-            PALETTE = jnp.array(gray_palette, dtype=dtype).reshape(-1, 1)
-        else:
-            PALETTE = jnp.array(palette_list, dtype=dtype)
+        # if self.config.channels == 1:
+        #     gray_palette = [int(0.299*r + 0.587*g + 0.114*b) for r, g, b in palette_list]
+        #     PALETTE = jnp.array(gray_palette, dtype=dtype).reshape(-1, 1)
+        # else:
+        PALETTE = jnp.array(palette_list, dtype=dtype)
             
         return PALETTE, color_to_id
 

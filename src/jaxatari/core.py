@@ -45,6 +45,7 @@ GAME_MODULES = {
     "freeway": "jaxatari.games.jax_freeway",
     "frostbite": "jaxatari.games.jax_frostbite",
     "galaxian": "jaxatari.games.jax_galaxian",
+    "gravitar": "jaxatari.games.jax_gravitar",
     "hangman": "jaxatari.games.jax_hangman",
     "hauntedhouse": "jaxatari.games.jax_hauntedhouse",
     "humancannonball": "jaxatari.games.jax_humancannonball",
@@ -75,6 +76,7 @@ GAME_MODULES = {
     "videopinball": "jaxatari.games.jax_videopinball",
     "wordzapper": "jaxatari.games.jax_wordzapper",
     "mspacman": "jaxatari.games.jax_mspacman",
+    "montezumarevenge": "jaxatari.games.jax_montezumarevenge",
     "pacman": "jaxatari.games.jax_pacman",
     # Add new games here
 }
@@ -93,6 +95,7 @@ MOD_MODULES = {
     "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
     "montezumarevenge": "jaxatari.games.mods.montezuma_revenge_mods.MontezumaRevengeEnvMod",
     "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
+    "gravitar": "jaxatari.games.mods.gravitar_mods.GravitarEnvMod",
     "phoenix": "jaxatari.games.mods.phoenix_mods.PhoenixEnvMod",
     "enduro": "jaxatari.games.mods.enduro_mods.EnduroEnvMod",
     "qbert": "jaxatari.games.mods.qbert_mods.QbertEnvMod",

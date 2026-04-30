@@ -6,6 +6,9 @@ import os
 from jaxatari.environment import ObjectObservation
 
 class MontezumaRevengeConstants(struct.PyTreeNode):
+    # Improves throughput, but increases memory usage and initialization time.
+    RENDERER_PRELOAD_ROOMS: bool = struct.field(pytree_node=False, default=False)
+
     # Homogeneous Padding Limits
     MAX_ENEMIES_PER_ROOM: int = struct.field(pytree_node=False, default=3)
     MAX_LADDERS_PER_ROOM: int = struct.field(pytree_node=False, default=4)

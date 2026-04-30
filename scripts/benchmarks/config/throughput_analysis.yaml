@@ -1,9 +1,13 @@
-# GAME_NAMES: ["pong", "kangaroo", "seaquest"]
-GAME_NAMES: ["MontezumaRevenge", "Skiing", "Frostbite", "Pong"]
+# ALL_GAME_NAMES: ["AirRaid", "Alien", "Amidar", "Asterix", "Asteroids", "Atlantis", "BankHeist", "Berzerk", "Blackjack", "Breakout", "Casino", "CasinoBlackjack", "CasinoFiveStudPoker", "CasinoPokerSolitaire", "Centipede", "ChopperCommand", "DonkeyKong", "Enduro", "FishingDerby", "FlagCapture", "Freeway", "Frostbite", "Galaxian", "Hangman", "HauntedHouse", "HumanCannonball", "Kangaroo", "KingKong", "Klax", "LaserGates", "MontezumaRevenge", "NameThisGame", "Phoenix", "Pong", "Qbert", "Riverraid", "Seaquest", "SirLancelot", "Skiing", "SlotMachine", "SpaceInvaders", "Spacewar", "Surround", "Tennis", "Tetris", "TimePilot", "Tron", "Turmoil", "Venture", "VideoCheckers", "VideoCube", "VideoPinball", "WordZapper"]
+# GAME_NAMES: ["Centipede", "ChopperCommand", "DonkeyKong", "Enduro", "FishingDerby", "FlagCapture", "Freeway", "Frostbite", "Galaxian", "Hangman", "HauntedHouse", "HumanCannonball", "Kangaroo", "KingKong", "Klax", "LaserGates", "MontezumaRevenge", "NameThisGame", "Phoenix", "Pong", "Qbert", "Riverraid", "Seaquest", "SirLancelot", "Skiing", "SlotMachine", "SpaceInvaders", "Spacewar", "Surround", "Tennis", "Tetris", "TimePilot", "Tron", "Turmoil", "Venture", "VideoCheckers", "VideoCube", "VideoPinball", "WordZapper"]
+# GAME_NAMES: ["Enduro", "Frostbite", "Venture", "TimePilot"]
+GAME_NAMES: ["MontezumaRevenge"]
+
+# GAME_NAMES: ["MontezumaRevenge"]
 # For multi-env benchmarking, use only names and keep env IDs unset.
-BENCHMARK_BACKENDS: ["jaxatari", "gym_ale", "ale_vectorenv"]
+BENCHMARK_BACKENDS: ["jaxatari"] #, "gym_ale", "ale_vectorenv"]
 # BENCHMARK_BACKENDS: ["ale_vectorenv"]
-GYM_ALE_TIMEOUT_S: 3600
+GYM_ALE_TIMEOUT_S: 1200 # stop after 20min
 
 # ALE_VECTORENV_ASYNC_STEPPING: [false, true]
 ALE_VECTORENV_ASYNC_STEPPING: [true]
@@ -11,7 +15,8 @@ ALE_VECTORENV_ASYNC_STEPPING: [true]
 ALE_VECTORENV_BATCH_SIZE: null
 ALE_VECTORENV_THREAD_AFFINITY_OFFSET: null
 
-JAXATARI_MODES: ["oc", "pixel"]
+# JAXATARI_MODES: ["oc", "pixel"]
+JAXATARI_MODES: ["pixel"]
 # Pixel benchmark uses the exact wrapper/downscaling combo below.
 JAXATARI_PIXEL_OPTIONS: ["resized", "grayscale", "native"]
 JAXATARI_PIXEL_TRY_ALL_COMBINATIONS: false
@@ -27,16 +32,18 @@ ATARI_FRAME_SKIP: [4] #[1, 4]
 PIXEL_RESIZE_SHAPE: [84, 84]
 
 SAVE_RESULTS_CSV: true
-RESULTS_CSV_PATH: "./outputs/throughput_results.csv"
+RESULTS_CSV_PATH: "./outputs/throughput_results_jaxatari_only_montezuma_dynamic.csv"
 
 SEED: 0
 
-ENV_COUNTS: [1, 8, 32, 128, 256, 1024, 2048, 4096, 8192]
-NUM_STEPS: 1000 # n_steps per env
+# ENV_COUNTS: [1, 8, 32, 128, 256, 1024, 2048, 4096, 8192]
+ENV_COUNTS: [8192]
+# ENV_COUNTS: [8192]
+NUM_STEPS: 10000 # n_steps per env
 
 GIVEN_ACTION: 0
 
-WANDB_MODE: "online"
+WANDB_MODE: "offline"
 ENTITY: ""
 PROJECT: "jaxatari-throughput"
 RUN_NAME: "throughput_analysis"

@@ -11,9 +11,9 @@
 | double_dunk                  | ❌       | 0 |
 | name_this_game               | 🥈       | 0 |
 | phoenix                      | 🥇       | 1 |
-| qbert                        | 🥉       | 0 |
+| qbert                        | 🥈       | 0 |
 
-Total:  🥇: 1   |   🥈: 2   |   🥉: 2   |   ❌: 1
+Total:  🥇: 1   |   🥈: 3   |   🥉: 1   |   ❌: 1
 
 ## Atari 57
 | Game                         | Status  | Mods available |
@@ -26,7 +26,7 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | atlantis                     | 🥈       | 0 |
 | bank_heist                   | 🥇       | 8 |
 | battle_zone                  | 🥉       | 0 |
-| beam_rider                   | ❌       | 0 |
+| beam_rider                   | 🥈       | 0 |
 | berzerk                      | 🥈       | 0 |
 | bowling                      | ❌       | 0 |
 | boxing                       | 🥉       | 0 |
@@ -42,7 +42,7 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | freeway                      | 🥇       | 3 |
 | frostbite                    | 🥇       | 0 |
 | gopher                       | ❌       | 0 |
-| gravitar                     | 🥉       | 0 |
+| gravitar                     | 🥇       | 0 |
 | hero                         | ❌       | 0 |
 | ice_hockey                   | ❌       | 0 |
 | jamesbond                    | ❌       | 0 |
@@ -76,7 +76,7 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 2   |   ❌: 1
 | yars_revenge                 | ❌       | 0 |
 | zaxxon                       | ❌       | 0 |
 
-Total:  🥇: 15   |   🥈: 13   |   🥉: 8   |   ❌: 23
+Total:  🥇: 16   |   🥈: 14   |   🥉: 7   |   ❌: 22
 
 ## Remaining ALE games
 | Game                         | Status  | Mods available |
