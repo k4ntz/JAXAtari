@@ -71,6 +71,8 @@ Total:  🥇: 1   |   🥈: 3   |   🥉: 1   |   ❌: 1
 | tutankham                    | ❌       | 0 |
 | up_n_down                    | ❌       | 0 |
 | venture                      | 🥈       | 0 |
+| venture_world1               | 🥈       | 0 |
+| venture_world2               | 🥈       | 0 |
 | video_pinball                | 🥈       | 2(?) |
 | wizard_of_wor                | 🥉       | 0 |
 | yars_revenge                 | ❌       | 0 |

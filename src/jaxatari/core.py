@@ -71,6 +71,8 @@ GAME_MODULES = {
     "tron": "jaxatari.games.jax_tron",
     "turmoil": "jaxatari.games.jax_turmoil",
     "venture": "jaxatari.games.jax_venture",
+    "ventureworld1": "jaxatari.games.jax_venture_world1",
+    "ventureworld2": "jaxatari.games.jax_venture_world2",
     "videocheckers": "jaxatari.games.jax_videocheckers",
     "videocube": "jaxatari.games.jax_videocube",
     "videopinball": "jaxatari.games.jax_videopinball",
