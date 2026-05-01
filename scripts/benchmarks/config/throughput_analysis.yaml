@@ -1,7 +1,8 @@
 # ALL_GAME_NAMES: ["AirRaid", "Alien", "Amidar", "Asterix", "Asteroids", "Atlantis", "BankHeist", "Berzerk", "Blackjack", "Breakout", "Casino", "CasinoBlackjack", "CasinoFiveStudPoker", "CasinoPokerSolitaire", "Centipede", "ChopperCommand", "DonkeyKong", "Enduro", "FishingDerby", "FlagCapture", "Freeway", "Frostbite", "Galaxian", "Hangman", "HauntedHouse", "HumanCannonball", "Kangaroo", "KingKong", "Klax", "LaserGates", "MontezumaRevenge", "NameThisGame", "Phoenix", "Pong", "Qbert", "Riverraid", "Seaquest", "SirLancelot", "Skiing", "SlotMachine", "SpaceInvaders", "Spacewar", "Surround", "Tennis", "Tetris", "TimePilot", "Tron", "Turmoil", "Venture", "VideoCheckers", "VideoCube", "VideoPinball", "WordZapper"]
 # GAME_NAMES: ["Centipede", "ChopperCommand", "DonkeyKong", "Enduro", "FishingDerby", "FlagCapture", "Freeway", "Frostbite", "Galaxian", "Hangman", "HauntedHouse", "HumanCannonball", "Kangaroo", "KingKong", "Klax", "LaserGates", "MontezumaRevenge", "NameThisGame", "Phoenix", "Pong", "Qbert", "Riverraid", "Seaquest", "SirLancelot", "Skiing", "SlotMachine", "SpaceInvaders", "Spacewar", "Surround", "Tennis", "Tetris", "TimePilot", "Tron", "Turmoil", "Venture", "VideoCheckers", "VideoCube", "VideoPinball", "WordZapper"]
 # GAME_NAMES: ["Enduro", "Frostbite", "Venture", "TimePilot"]
-GAME_NAMES: ["MontezumaRevenge"]
+# GAME_NAMES: ["Frostbite", "BankHeist"]
+GAME_NAMES: ["BankHeist"]
 
 # GAME_NAMES: ["MontezumaRevenge"]
 # For multi-env benchmarking, use only names and keep env IDs unset.
@@ -37,7 +38,7 @@ RESULTS_CSV_PATH: "./outputs/throughput_results_jaxatari_only_montezuma_dynamic.
 SEED: 0
 
 # ENV_COUNTS: [1, 8, 32, 128, 256, 1024, 2048, 4096, 8192]
-ENV_COUNTS: [8192]
+ENV_COUNTS: [1024, 8192]
 # ENV_COUNTS: [8192]
 NUM_STEPS: 10000 # n_steps per env
 
