@@ -1,10 +1,6 @@
 """
 create_clean_sprites.py
 
-Generates a copyright-safe "clean_sprites" folder alongside the original sprites.
-Processes .npy files (RGBA uint8 arrays) which are the actual assets loaded by the envs.
-The .png files are human-preview only and are copied as-is.
-
 - Regular sprites  → solid rectangle of the median non-transparent pixel colour,
                      same width/height as the original.
 - Background arrays → hue-rotated + slightly desaturated version that preserves
