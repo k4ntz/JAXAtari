@@ -831,7 +831,7 @@ class JaxRiverraid(JaxEnvironment):
         is_start_frame = (state.player_velocity_x == 0.0) & (target_dir != 0.0)
         raw_subpixel = jnp.where(is_start_frame, raw_subpixel + target_dir, raw_subpixel)
 
-        step_x = jnp.fix(raw_subpixel)
+        step_x = jnp.trunc(raw_subpixel)
         new_subpixel = raw_subpixel - step_x
 
         new_x = state.player_x + step_x
