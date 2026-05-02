@@ -27,10 +27,11 @@ from ppo_jaxatari_vmap_eval import evaluate
 from rtpt import RTPT
 
 # Fix weird OOM https://github.com/google/jax/discussions/6332#discussioncomment-1279991
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.7"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "true"
+# os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 # Fix CUDNN non-determinisim; https://github.com/google/jax/issues/4823#issuecomment-952835771
 os.environ["TF_XLA_FLAGS"] = "--xla_gpu_autotune_level=2 --xla_gpu_deterministic_reductions"
-os.environ["TF_CUDNN DETERMINISTIC"] = "1"
+# os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 
 
 def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, native_downscaling=True, smooth_image=True, eval=False):

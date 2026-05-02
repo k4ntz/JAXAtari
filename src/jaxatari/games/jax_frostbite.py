@@ -3143,6 +3143,13 @@ class FrostbiteRenderer(JAXGameRenderer):
         self.GEESE_MASKS = self._pad_mask_stack_to_shape(
             self.GEESE_MASKS, obstacle_target_h, obstacle_target_w, self.jr.TRANSPARENT_ID
         )
+        # Pad Geese to 10 frames to match fish/crab/clam stacks for vectorized selection
+        self.GEESE_MASKS = jnp.pad(
+            self.GEESE_MASKS,
+            ((0, 8), (0, 0), (0, 0)),
+            mode="constant",
+            constant_values=self.jr.TRANSPARENT_ID,
+        )
         self.FISH_MASKS = self._pad_mask_stack_to_shape(
             self.FISH_MASKS, obstacle_target_h, obstacle_target_w, self.jr.TRANSPARENT_ID
         )
@@ -3152,11 +3159,26 @@ class FrostbiteRenderer(JAXGameRenderer):
         self.CLAM_MASKS = self._pad_mask_stack_to_shape(
             self.CLAM_MASKS, obstacle_target_h, obstacle_target_w, self.jr.TRANSPARENT_ID
         )
+
+        # Pad ice masks to uniform shape for batched segment rendering
+        ice_target_h = jnp.max(jnp.array([m.shape[0] for m in self.ICE_MASKS]))
+        ice_target_w = jnp.max(jnp.array([m.shape[1] for m in self.ICE_MASKS]))
+        self.ICE_MASKS = self._pad_mask_stack_to_shape(
+            self.ICE_MASKS, ice_target_h, ice_target_w, self.jr.TRANSPARENT_ID
+        )
+
         self.BEAR_MASKS = self.SHAPE_MASKS['bear']
         self.BEAR_LIGHT_MASKS = self.SHAPE_MASKS['bear_light']
         self.IGLOO_BLOCK_MASK = self.SHAPE_MASKS['igloo'][0]
         self.IGLOO_DOOR_MASK = self.SHAPE_MASKS['igloo'][1]
         self.DEGREE_MASK = self.SHAPE_MASKS['degree']
+        # Pad degree mask to digit shape for vectorized HUD rendering
+        self.DEGREE_MASK = self._pad_mask_stack_to_shape(
+            self.DEGREE_MASK[jnp.newaxis],
+            self.DIGIT_MASKS.shape[1],
+            self.DIGIT_MASKS.shape[2],
+            self.jr.TRANSPARENT_ID
+        )[0]
         self.BLACK_BAR_MASK = self.SHAPE_MASKS['black_bar']
 
         # Pre-calculate a single stack of all obstacle masks for vectorized rendering
@@ -3198,6 +3220,13 @@ class FrostbiteRenderer(JAXGameRenderer):
         self.ICE_STRIP_WIDE_BLUE    = _build_strip(self.ICE_MASKS[1], 3, _ws)
         self.ICE_STRIP_NARROW_WHITE = _build_strip(self.ICE_MASKS[2], 6, _ns)
         self.ICE_STRIP_NARROW_BLUE  = _build_strip(self.ICE_MASKS[3], 6, _ns)
+
+        self.ICE_STRIPS = jnp.stack([
+            self.ICE_STRIP_WIDE_WHITE,    # 0
+            self.ICE_STRIP_WIDE_BLUE,     # 1
+            self.ICE_STRIP_NARROW_WHITE,  # 2
+            self.ICE_STRIP_NARROW_BLUE,   # 3
+        ])  # (4, H, STRIP_W)
 
         # Pre-build 17 igloo canvas layers (indices 0..16, where index = building_igloo_idx+1).
         # Each canvas is a 24×32 palette-ID sprite covering the full igloo bounding box.
@@ -3362,40 +3391,23 @@ class FrostbiteRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_hud(self, raster, state):
-        """Render HUD elements at top of screen."""
+        """Render HUD elements at top of screen using vectorized batch rendering."""
         digits_masks = self.DIGIT_MASKS
         score_y, lives_y, temp_y = 10, 22, 22
         should_flash = state.temperature < 0x10
         is_visible = ~should_flash | ((state.frame_count % 90) < 45)
-        # Render lives
-        lives_x = 59
+        
+        # 1. Lives
         lives_clamped = jnp.clip(state.remaining_lives, 0, 9)
-        lives_sprite = digits_masks[lives_clamped]
-        raster = jax.lax.cond(
-            is_visible, lambda r: self.jr.render_at(r, lives_x, lives_y, lives_sprite), lambda r: r, raster
-        )
+        lives_mask = digits_masks[lives_clamped]
+        lives_x = 59
         
-        # Render temperature
-        temp_x_base = lives_x - 16 - 6
+        # 2. Temperature
         temp_tens, temp_ones = (state.temperature >> 4) & 0x0F, state.temperature & 0x0F
+        temp_x_base = lives_x - 16 - 6
         temp_x = jnp.where(temp_tens > 0, temp_x_base - 16, temp_x_base - 8)
-        x_offset = temp_x
-        tens_sprite = digits_masks[temp_tens]
-        raster = jax.lax.cond(
-            (temp_tens > 0) & is_visible, lambda r, x: self.jr.render_at(r, x, temp_y, tens_sprite),
-            lambda r, x: r, raster, x_offset
-        )
-        x_offset += jnp.where(temp_tens > 0, 8, 0)
-        ones_sprite = digits_masks[temp_ones]
-        raster = jax.lax.cond(
-            is_visible, lambda r: self.jr.render_at(r, x_offset, temp_y, ones_sprite), lambda r: r, raster
-        )
-        degree_sprite = self.DEGREE_MASK
-        raster = jax.lax.cond(
-            is_visible, lambda r: self.jr.render_at(r, temp_x_base, temp_y, degree_sprite), lambda r: r, raster
-        )
         
-        # Render score
+        # 3. Score
         total_score = self._bcd_to_decimal(state.score)
         num_digits = jnp.where(
             total_score == 0,
@@ -3406,15 +3418,53 @@ class FrostbiteRenderer(JAXGameRenderer):
         score_digits = self.jr.int_to_digits(total_score, max_digits=6)
         start_index = 6 - num_digits
         
-        raster = self.jr.render_label_selective(
-            raster, score_x_start, score_y,
-            score_digits, digits_masks,
-            start_index, num_digits,
-            spacing=8,
-            max_digits_to_render=6
-        )
+        # Collect everything into a batch
+        # 0: Lives, 1: Temp Tens, 2: Temp Ones, 3: Degree, 4-9: Score Digits
+        hud_masks = jnp.zeros((10, *digits_masks.shape[1:]), dtype=digits_masks.dtype)
+        hud_x = jnp.zeros(10, dtype=jnp.int32)
+        hud_y = jnp.zeros(10, dtype=jnp.int32)
+        hud_active = jnp.zeros(10, dtype=jnp.bool_)
         
-        return raster
+        # Lives
+        hud_masks = hud_masks.at[0].set(lives_mask)
+        hud_x = hud_x.at[0].set(lives_x)
+        hud_y = hud_y.at[0].set(lives_y)
+        hud_active = hud_active.at[0].set(is_visible)
+        
+        # Temp Tens
+        hud_masks = hud_masks.at[1].set(digits_masks[temp_tens])
+        hud_x = hud_x.at[1].set(temp_x)
+        hud_y = hud_y.at[1].set(temp_y)
+        hud_active = hud_active.at[1].set(is_visible & (temp_tens > 0))
+        
+        # Temp Ones
+        hud_masks = hud_masks.at[2].set(digits_masks[temp_ones])
+        hud_x = hud_x.at[2].set(jnp.where(temp_tens > 0, temp_x + 8, temp_x))
+        hud_y = hud_y.at[2].set(temp_y)
+        hud_active = hud_active.at[2].set(is_visible)
+        
+        # Degree
+        hud_masks = hud_masks.at[3].set(self.DEGREE_MASK)
+        hud_x = hud_x.at[3].set(temp_x_base)
+        hud_y = hud_y.at[3].set(temp_y)
+        hud_active = hud_active.at[3].set(is_visible)
+        
+        # Score Digits
+        score_idx = jnp.arange(6)
+        score_mask_idx = jnp.take(score_digits, start_index + score_idx)
+        score_masks = digits_masks[score_mask_idx]
+        score_x = score_x_start + score_idx * 8
+        
+        hud_masks = hud_masks.at[4:].set(score_masks)
+        hud_x = hud_x.at[4:].set(score_x)
+        hud_y = hud_y.at[4:].set(score_y)
+        hud_active = hud_active.at[4:].set(score_idx < num_digits)
+        
+        # Final filtering
+        hud_masks = jnp.where(hud_active[:, jnp.newaxis, jnp.newaxis], hud_masks, self.jr.TRANSPARENT_ID)
+        
+        return self.jr.render_at_batch(raster, hud_x, hud_y, hud_masks)
+
     
     @partial(jax.jit, static_argnums=(0,))
     def _render_igloo_blocks(self, raster, state):
