@@ -1,8 +1,20 @@
 import jax
 import jax.numpy as jnp
 from functools import partial
-from jaxatari.modification import JaxAtariPostStepModPlugin
+from jaxatari.modification import JaxAtariPostStepModPlugin, JaxAtariInternalModPlugin
 from jaxatari.games.jax_mspacman import JaxPacman, GhostMode, reset_game
+
+class FruitGhostBonusMod(JaxAtariInternalModPlugin):
+    """
+    Mod that deactivates points for pellets and power pellets,
+    but multiplies rewards for eating ghosts and fruits by 4.
+    """
+    constants_overrides = {
+        "PELLET_POINTS": 0,
+        "POWER_PELLET_POINTS": 0,
+        "FRUIT_REWARDS": jnp.array([400, 800, 2000, 2800, 4000, 8000, 20000]),
+        "EAT_GHOSTS_BASE_POINTS": 800,
+    }
 
 class CagedGhostsMod(JaxAtariPostStepModPlugin):
     def _jail_position(self, dtype):

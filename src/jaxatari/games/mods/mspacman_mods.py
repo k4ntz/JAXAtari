@@ -3,6 +3,7 @@ from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.mspacman.mspacman_mod_plugins import (
     CagedGhostsMod,
     ConstantFruitsMod,
+    FruitGhostBonusMod,
     SetMaze1Mod,
     SetMaze2Mod,
     SetMaze3Mod,
@@ -20,6 +21,7 @@ class MsPacmanEnvMod(JaxAtariModController):
     REGISTRY = {
         "caged_ghosts": CagedGhostsMod,
         "constant_fruits": ConstantFruitsMod,
+        "fruit_ghost_bonus": FruitGhostBonusMod,
         "set_maze_1": SetMaze1Mod,
         "set_maze_2": SetMaze2Mod,
         "set_maze_3": SetMaze3Mod,

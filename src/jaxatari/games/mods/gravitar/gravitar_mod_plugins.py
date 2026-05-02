@@ -81,3 +81,31 @@ class HighSpeedMod(JaxAtariInternalModPlugin):
         "THRUST_POWER": 0.075,
         "MAX_SPEED": 6.0,
     }
+
+
+class InfiniteFuelMod(JaxAtariInternalModPlugin):
+    """Disable fuel consumption."""
+
+    constants_overrides = {
+        "FUEL_CONSUME_THRUST": 0.0,
+        "FUEL_CONSUME_SHIELD_TRACTOR": 0.0,
+    }
+
+
+class SlowEnemiesMod(JaxAtariInternalModPlugin):
+    """Decrease the movement speed of saucers and bullets."""
+
+    constants_overrides = {
+        "SAUCER_SPEED_MAP": 0.09,
+        "SAUCER_SPEED_ARENA": 0.18,
+        "SAUCER_BULLET_SPEED": 1.0,
+        "ENEMY_BULLET_SPEED": 0.65,
+    }
+
+
+class LongRangeTractorMod(JaxAtariInternalModPlugin):
+    """Increase the range of the tractor beam."""
+
+    constants_overrides = {
+        "TRACTOR_BEAM_RANGE": 50.0,
+    }

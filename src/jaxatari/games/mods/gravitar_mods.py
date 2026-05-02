@@ -8,6 +8,9 @@ from jaxatari.games.mods.gravitar.gravitar_mod_plugins import (
     ValuableReactorMod,
     AntiGravityMod,
     HighSpeedMod,
+    InfiniteFuelMod,
+    SlowEnemiesMod,
+    LongRangeTractorMod,
 )
 
 
@@ -23,6 +26,9 @@ class GravitarEnvMod(JaxAtariModController):
         "valuable_reactor": ValuableReactorMod,
         "anti_gravity": AntiGravityMod,
         "high_speed": HighSpeedMod,
+        "infinite_fuel": InfiniteFuelMod,
+        "slow_enemies": SlowEnemiesMod,
+        "long_range_tractor": LongRangeTractorMod,
     }
 
     def __init__(

@@ -100,7 +100,8 @@ MOD_MODULES = {
     "enduro": "jaxatari.games.mods.enduro_mods.EnduroEnvMod",
     "qbert": "jaxatari.games.mods.qbert_mods.QbertEnvMod",
     "mspacman": "jaxatari.games.mods.mspacman_mods.MsPacmanEnvMod",
-    "beamrider": "jaxatari.games.mods.beamrider_mods.BeamRiderEnvMod"
+    "beamrider": "jaxatari.games.mods.beamrider_mods.BeamRiderEnvMod",
+    "venture": "jaxatari.games.mods.venture_mods.VentureEnvMod"
 }
 
 

@@ -1,6 +1,14 @@
 import os
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.tennis.tennis_mod_plugins import RandomWalkSpeedWrapper, RandomBallSpeedWrapper
+from jaxatari.games.mods.tennis.tennis_mod_plugins import (
+    RandomBallSpeedWrapper,
+    RandomWalkSpeedWrapper,
+    FastPlayerMod,
+    SuperGravityMod,
+    LazyEnemyMod,
+    HighBounceMod,
+    FastEnemyMod,
+)
 
 class TennisEnvMod(JaxAtariModController):
     """
@@ -11,6 +19,11 @@ class TennisEnvMod(JaxAtariModController):
     REGISTRY = {
         "random_ball_speed": RandomBallSpeedWrapper,
         "random_walk_speed": RandomWalkSpeedWrapper,
+        "fast_player": FastPlayerMod,
+        "super_gravity": SuperGravityMod,
+        "lazy_enemy": LazyEnemyMod,
+        "high_bounce": HighBounceMod,
+        "fast_enemy": FastEnemyMod,
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "tennis", "sprites")
