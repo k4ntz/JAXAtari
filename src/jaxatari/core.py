@@ -24,10 +24,10 @@ def _warn_deprecated_obs_to_flat_array(env: JaxEnvironment) -> None:
 
 
 
-# Map of game names to their module paths
+# Map of game names to their module paths (commented out games are WIP and will be supported in the near future)
 GAME_MODULES = {
     "amidar": "jaxatari.games.jax_amidar",
-    "airraid": "jaxatari.games.jax_airraid",
+    # "airraid": "jaxatari.games.jax_airraid",
     "alien": "jaxatari.games.jax_alien",
     "asterix": "jaxatari.games.jax_asterix",
     "asteroids": "jaxatari.games.jax_asteroids",
@@ -46,12 +46,12 @@ GAME_MODULES = {
     "frostbite": "jaxatari.games.jax_frostbite",
     "galaxian": "jaxatari.games.jax_galaxian",
     "gravitar": "jaxatari.games.jax_gravitar",
-    "hangman": "jaxatari.games.jax_hangman",
+    # "hangman": "jaxatari.games.jax_hangman",
     "hauntedhouse": "jaxatari.games.jax_hauntedhouse",
     "humancannonball": "jaxatari.games.jax_humancannonball",
     "kangaroo": "jaxatari.games.jax_kangaroo",
     "kingkong": "jaxatari.games.jax_kingkong",
-    "klax": "jaxatari.games.jax_klax",
+    # "klax": "jaxatari.games.jax_klax",
     "lasergates": "jaxatari.games.jax_lasergates",
     "namethisgame": "jaxatari.games.jax_namethisgame",
     "phoenix": "jaxatari.games.jax_phoenix",
@@ -71,13 +71,13 @@ GAME_MODULES = {
     "tron": "jaxatari.games.jax_tron",
     "turmoil": "jaxatari.games.jax_turmoil",
     "venture": "jaxatari.games.jax_venture",
-    "videocheckers": "jaxatari.games.jax_videocheckers",
+    # "videocheckers": "jaxatari.games.jax_videocheckers",
     "videocube": "jaxatari.games.jax_videocube",
     "videopinball": "jaxatari.games.jax_videopinball",
     "wordzapper": "jaxatari.games.jax_wordzapper",
     "mspacman": "jaxatari.games.jax_mspacman",
     "montezumarevenge": "jaxatari.games.jax_montezumarevenge",
-    "pacman": "jaxatari.games.jax_pacman",
+    # "pacman": "jaxatari.games.jax_pacman",
     # Add new games here
 }
 
