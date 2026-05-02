@@ -166,12 +166,10 @@ def make(game_name: str,
         if env_class is None:
             raise ImportError(f"No JaxEnvironment subclass found in {GAME_MODULES[game_name]}")
 
-        # 2. Get default constants
-        base_consts = env_class().consts
-
-        # 3. Handle mods if requested
+        # 2. Mods need default consts for pre-scan; otherwise a single env_class() is enough.
         if mods:
             try:
+                base_consts = env_class().consts
                 env = apply_modifications(
                     game_name=game_name,
                     mods_config=mods,
@@ -190,8 +188,7 @@ def make(game_name: str,
                     UserWarning
                 )
 
-        # No mods: return default base env with default constants
-        env = env_class(consts=base_consts)
+        env = env_class()
         _warn_deprecated_obs_to_flat_array(env)
         return env
 

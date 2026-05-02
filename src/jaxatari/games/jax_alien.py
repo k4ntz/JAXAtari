@@ -1,13 +1,3 @@
-# We are Implementing the Game Alien
-# We are a Group of 4: 
-# 
-# 
-# Dennis Breder	
-# Christos Toutoulas	
-# David Grguric
-# Niklas Ihm
-#
-#
 import array
 import os
 from functools import partial

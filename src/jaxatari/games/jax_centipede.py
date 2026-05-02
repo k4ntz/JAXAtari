@@ -1,9 +1,3 @@
-"""
-
-Lukas Bergholz, Linus Orlob, Vincent Jahn
-
-"""
-
 import os
 import jax
 import jax.numpy as jnp

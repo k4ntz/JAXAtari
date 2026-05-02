@@ -1,7 +1,3 @@
-"""
-authors: Paula Troszt, Ernst Christian Böhringer, Aiman Sammy Rahlf
-"""
-
 import os
 from functools import partial
 from typing import NamedTuple, Tuple, Dict, Any, Optional
