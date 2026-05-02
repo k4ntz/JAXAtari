@@ -102,7 +102,8 @@ MOD_MODULES = {
     "mspacman": "jaxatari.games.mods.mspacman_mods.MsPacmanEnvMod",
     "beamrider": "jaxatari.games.mods.beamrider_mods.BeamRiderEnvMod",
     "venture": "jaxatari.games.mods.venture_mods.VentureEnvMod",
-    "spaceinvaders": "jaxatari.games.mods.spaceinvaders_mods.SpaceInvadersEnvMod"
+    "spaceinvaders": "jaxatari.games.mods.spaceinvaders_mods.SpaceInvadersEnvMod",
+    "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod"
 }
 
 

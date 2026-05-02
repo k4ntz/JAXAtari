@@ -314,8 +314,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         row_spacing = jnp.float32(31.0)
         base_y = jnp.float32(60.0)
 
-        # Flags: r = 3, 7 in the repeating sequence
-        r_flags = jnp.array([3, 7], dtype=jnp.float32)
+        # Flags: patterned rows
+        r_flags = jnp.arange(c.max_num_flags, dtype=jnp.float32) * 4.0 + 3.0
         flags_y = base_y + r_flags * row_spacing
         
         flags_x = self._get_initial_flags_x()
