@@ -1,7 +1,8 @@
 # ALL_GAME_NAMES: ["AirRaid", "Alien", "Amidar", "Asterix", "Asteroids", "Atlantis", "BankHeist", "Berzerk", "Blackjack", "Breakout", "Casino", "CasinoBlackjack", "CasinoFiveStudPoker", "CasinoPokerSolitaire", "Centipede", "ChopperCommand", "DonkeyKong", "Enduro", "FishingDerby", "FlagCapture", "Freeway", "Frostbite", "Galaxian", "Hangman", "HauntedHouse", "HumanCannonball", "Kangaroo", "KingKong", "Klax", "LaserGates", "MontezumaRevenge", "NameThisGame", "Phoenix", "Pong", "Qbert", "Riverraid", "Seaquest", "SirLancelot", "Skiing", "SlotMachine", "SpaceInvaders", "Spacewar", "Surround", "Tennis", "Tetris", "TimePilot", "Tron", "Turmoil", "Venture", "VideoCheckers", "VideoCube", "VideoPinball", "WordZapper"]
 # GAME_NAMES: ["Centipede", "ChopperCommand", "DonkeyKong", "Enduro", "FishingDerby", "FlagCapture", "Freeway", "Frostbite", "Galaxian", "Hangman", "HauntedHouse", "HumanCannonball", "Kangaroo", "KingKong", "Klax", "LaserGates", "MontezumaRevenge", "NameThisGame", "Phoenix", "Pong", "Qbert", "Riverraid", "Seaquest", "SirLancelot", "Skiing", "SlotMachine", "SpaceInvaders", "Spacewar", "Surround", "Tennis", "Tetris", "TimePilot", "Tron", "Turmoil", "Venture", "VideoCheckers", "VideoCube", "VideoPinball", "WordZapper"]
-GAME_NAMES: ["Frostbite", "Seaquest"]
-# GAME_NAMES: ["MontezumaRevenge"]
+# GAME_NAMES: ["Enduro", "Frostbite", "Venture", "TimePilot"]
+# GAME_NAMES: ["Frostbite", "BankHeist"]
+GAME_NAMES: ["BankHeist"]
 
 # GAME_NAMES: ["MontezumaRevenge"]
 # For multi-env benchmarking, use only names and keep env IDs unset.
@@ -15,8 +16,8 @@ ALE_VECTORENV_ASYNC_STEPPING: [true]
 ALE_VECTORENV_BATCH_SIZE: null
 ALE_VECTORENV_THREAD_AFFINITY_OFFSET: null
 
-JAXATARI_MODES: ["oc"]
-# JAXATARI_MODES: ["pixel"]
+# JAXATARI_MODES: ["oc", "pixel"]
+JAXATARI_MODES: ["pixel"]
 # Pixel benchmark uses the exact wrapper/downscaling combo below.
 JAXATARI_PIXEL_OPTIONS: ["resized", "grayscale", "native"]
 JAXATARI_PIXEL_TRY_ALL_COMBINATIONS: false
@@ -27,7 +28,7 @@ JAXATARI_PIXEL_OPTION_COMBINATIONS:
   - ["resized", "native", "grayscale"]
 # Run both JAX platforms for JAXAtari modes.
 # JAXATARI_PLATFORMS: ["cpu", "gpu"]
-JAXATARI_PLATFORMS: ["cpu"]
+JAXATARI_PLATFORMS: ["gpu"]
 ATARI_FRAME_SKIP: [4] #[1, 4]
 PIXEL_RESIZE_SHAPE: [84, 84]
 
@@ -37,8 +38,7 @@ RESULTS_CSV_PATH: "./outputs/throughput_results_jaxatari_only_montezuma_dynamic.
 SEED: 0
 
 # ENV_COUNTS: [1, 8, 32, 128, 256, 1024, 2048, 4096, 8192]
-ENV_COUNTS: [1, 8, 64]
-# ENV_COUNTS: [8192]
+ENV_COUNTS: [1024, 8192]
 # ENV_COUNTS: [8192]
 NUM_STEPS: 10000 # n_steps per env
 
