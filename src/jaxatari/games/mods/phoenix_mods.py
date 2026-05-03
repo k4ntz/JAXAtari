@@ -6,6 +6,11 @@ from jaxatari.games.mods.phoenix.phoenix_mod_plugins import (
     InvinciblePlayerMod,
     FastEnemyBulletsMod,
     NoAbilityCooldownMod,
+    NightMod,
+    GrayscaleMod,
+    InvertedColorsMod,
+    MatrixMod,
+    BloodMoonMod,
 )
 
 
@@ -21,6 +26,11 @@ class PhoenixEnvMod(JaxAtariModController):
         "invincible_player": InvinciblePlayerMod,
         "fast_enemy_bullets": FastEnemyBulletsMod,
         "no_ability_cooldown": NoAbilityCooldownMod,
+        "night_mode": NightMod,
+        "grayscale": GrayscaleMod,
+        "inverted_colors": InvertedColorsMod,
+        "matrix_theme": MatrixMod,
+        "blood_moon": BloodMoonMod,
     }
 
     def __init__(
