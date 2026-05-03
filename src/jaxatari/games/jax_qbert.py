@@ -6,7 +6,7 @@
 # Simulates the Atari Q*bert game
 #
 import os
-from typing import Tuple
+from typing import Tuple, Optional
 from functools import partial
 
 import numpy as np
@@ -95,6 +95,16 @@ class QbertConstants(struct.PyTreeNode):
     SAM_REWARD: int = struct.field(pytree_node=False, default=300)
     COILY_REWARD: int = struct.field(pytree_node=False, default=500)
     ROUND_COMPLETE_REWARD: int = struct.field(pytree_node=False, default=3100)
+    
+    # Visual overrides
+    RGB_BACKGROUND: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_QBERT: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_COILY: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_SAM: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_RED_BALL: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_CUBE_START: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_CUBE_INTER: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_CUBE_DEST: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
 
 
 class QbertState(struct.PyTreeNode):
@@ -1164,6 +1174,43 @@ class QbertRenderer(JAXGameRenderer):
         final_asset_config = list(self.consts.ASSET_CONFIG)
         sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "qbert")
 
+        has_recolorings = False
+        for i in range(len(final_asset_config)):
+            asset_name = final_asset_config[i]['name']
+            asset_rules = []
+            
+            if asset_name in ('background',):
+                if self.consts.RGB_BACKGROUND is not None:
+                    asset_rules.append({'source': (0, 0, 0), 'target': self.consts.RGB_BACKGROUND})
+            elif asset_name in ('qbert_sprites', 'qbert_live', 'dead'):
+                if self.consts.RGB_QBERT is not None:
+                    asset_rules.append({'source': (181, 83, 40), 'target': self.consts.RGB_QBERT})
+            elif asset_name in ('coily', 'purple_ball', 'snake'):
+                if self.consts.RGB_COILY is not None:
+                    asset_rules.append({'source': (146, 70, 192), 'target': self.consts.RGB_COILY})
+            elif asset_name in ('sam', 'green_ball'):
+                if self.consts.RGB_SAM is not None:
+                    asset_rules.append({'source': (50, 132, 50), 'target': self.consts.RGB_SAM})
+            elif asset_name in ('red_ball',):
+                if self.consts.RGB_RED_BALL is not None:
+                    asset_rules.append({'source': (173, 5, 64), 'target': self.consts.RGB_RED_BALL})
+            elif asset_name in ('color_start',):
+                if self.consts.RGB_CUBE_START is not None:
+                    asset_rules.append({'source': (45, 87, 176), 'target': self.consts.RGB_CUBE_START})
+            elif asset_name in ('color_intermediate',):
+                if self.consts.RGB_CUBE_INTER is not None:
+                    asset_rules.append({'source': (110, 156, 66), 'target': self.consts.RGB_CUBE_INTER})
+            elif asset_name in ('color_destination',):
+                if self.consts.RGB_CUBE_DEST is not None:
+                    asset_rules.append({'source': (210, 210, 64), 'target': self.consts.RGB_CUBE_DEST})
+            elif asset_name in ('win_animation',):
+                pass # Usually handled differently or uses multiple colors
+                
+            if asset_rules:
+                final_asset_config[i] = dict(final_asset_config[i])
+                final_asset_config[i]['recolorings'] = {'mods': asset_rules}
+                has_recolorings = True
+
         (
             self.PALETTE,
             self.SHAPE_MASKS,
@@ -1171,6 +1218,9 @@ class QbertRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+        
+        # Suffix handling for masks when mods are active
+        self._mask_suffix = '_mods' if has_recolorings else ''
 
         freeze_rgba = self.jr.loadFrame(os.path.join(sprite_path, "freeze.npy"))
         self.FREEZE_BG = self.jr._create_background_raster(freeze_rgba, self.COLOR_TO_ID)
@@ -1184,7 +1234,7 @@ class QbertRenderer(JAXGameRenderer):
         # Pre-calculate Backgrounds with Shadows
         def render_shadows(round_idx):
             r = self.BACKGROUND
-            M = self.SHAPE_MASKS
+            M = {k: self.SHAPE_MASKS.get(k + self._mask_suffix, self.SHAPE_MASKS[k]) for k in self.SHAPE_MASKS if not k.endswith('_mods')}
             jr = self.jr
             r = jr.render_at(r, 68, 40, M['cube_shadow_right'][round_idx])
             r = jr.render_at(r, 56, 69, M['cube_shadow_right'][round_idx])
@@ -1224,8 +1274,11 @@ class QbertRenderer(JAXGameRenderer):
         self.PYRAMID_LOCAL_X = jnp.zeros((target_h, target_w), dtype=jnp.int32)
         
         # Use a dummy raster to find where each cube is
+        def get_mask(key):
+            return self.SHAPE_MASKS.get(key + self._mask_suffix, self.SHAPE_MASKS[key])
+            
         # We need to use the masks as they are in SHAPE_MASKS (might be downscaled)
-        cube_mask = self.SHAPE_MASKS['color_start']
+        cube_mask = get_mask('color_start')
         ch, cw = cube_mask.shape
         
         for idx in range(21):
@@ -1261,7 +1314,7 @@ class QbertRenderer(JAXGameRenderer):
         self.LIVES_MAP = jnp.full((target_h, target_w), -1, dtype=jnp.int32)
         self.LIVES_LOCAL_Y = jnp.zeros((target_h, target_w), dtype=jnp.int32)
         self.LIVES_LOCAL_X = jnp.zeros((target_h, target_w), dtype=jnp.int32)
-        live_mask = self.SHAPE_MASKS['qbert_live']
+        live_mask = get_mask('qbert_live')
         lh, lw = live_mask.shape
         for idx in range(9):
             x, y = self.LIVE_POSITIONS[idx][0], self.LIVE_POSITIONS[idx][1]
@@ -1284,7 +1337,7 @@ class QbertRenderer(JAXGameRenderer):
         self.SCORE_MAP = jnp.full((target_h, target_w), -1, dtype=jnp.int32)
         self.SCORE_LOCAL_Y = jnp.zeros((target_h, target_w), dtype=jnp.int32)
         self.SCORE_LOCAL_X = jnp.zeros((target_h, target_w), dtype=jnp.int32)
-        score_masks = self.SHAPE_MASKS['score_digits']
+        score_masks = get_mask('score_digits')
         sh, sw = score_masks[0].shape
         for idx in range(5):
             x, y = 34 + idx * 8, 6
@@ -1308,11 +1361,11 @@ class QbertRenderer(JAXGameRenderer):
 
         # Pre-stack all cube sprites for fast vectorized lookup
         self.ALL_CUBE_SPRITES = jnp.stack([
-            self.SHAPE_MASKS['color_start'],
-            self.SHAPE_MASKS['color_intermediate'],
-            self.SHAPE_MASKS['color_destination']
+            get_mask('color_start'),
+            get_mask('color_intermediate'),
+            get_mask('color_destination')
         ]) # (3, 5, 20)
-        self.WIN_ANIMATION_SPRITES = self.SHAPE_MASKS['win_animation'] # (32, 5, 20)
+        self.WIN_ANIMATION_SPRITES = get_mask('win_animation') # (32, 5, 20)
 
         self.QBERT_POSITIONS = jnp.array([[74, 18], [62, 47], [86, 47], [50, 76], [74, 76], [98, 76], [38, 105], [62, 105], [86, 105], [110, 105], [26, 134], [50, 134], [74, 134], [98, 134], [122, 134], [14, 163], [38, 163], [62, 163], [86, 163], [110, 163], [134, 163]]).astype(jnp.int32)
         self.QBERT_MOVE_RIGHT_DOWN = jnp.array([[0, 0], [1, -1], [2, -2], [3, -3], [4, -4], [5, -5], [6, -6], [7, -5], [8, -4], [9, -3], [10, -2], [11, -1], [12, -0], [12, 1], [12, 3], [12, 5], [12, 8], [12, 10], [12, 12], [12, 14], [12, 17], [12, 19], [12, 21], [12, 23], [12, 25], [12, 27], [12, 29], [12, 29], [12, 29], [12, 29]]).astype(jnp.int32)
@@ -1357,7 +1410,9 @@ class QbertRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: QbertState) -> jnp.ndarray:
         jr = self.jr
-        M = self.SHAPE_MASKS
+        def get_mask(key):
+            return self.SHAPE_MASKS.get(key + self._mask_suffix, self.SHAPE_MASKS[key])
+        M = {k: get_mask(k) for k in self.SHAPE_MASKS if not k.endswith('_mods')}
 
         round_idx = jnp.where(state.next_round_animation_counter != 0, state.round_number - 2, state.round_number - 1)
         round_idx = jnp.clip(round_idx, 0, 4)

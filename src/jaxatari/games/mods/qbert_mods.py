@@ -8,7 +8,14 @@ from jaxatari.games.mods.qbert.qbert_mod_plugins import (
     NoEnemiesMod,
     DiagonalControlMod,
     SwapColorsMod,
-    CollectingBonusOnlyMod
+    CollectingBonusOnlyMod,
+    IcePyramidMod,
+    DarkPyramidMod,
+    NightMod,
+    GrayscaleMod,
+    InvertedColorsMod,
+    SwapCollectiblesEnemiesMod,
+    RedCoilyMod
 )
 
 class QbertEnvMod(JaxAtariModController):
@@ -25,6 +32,13 @@ class QbertEnvMod(JaxAtariModController):
         "diagonal_control": DiagonalControlMod,
         "swap_colors": SwapColorsMod,
         "collecting_bonus_only": CollectingBonusOnlyMod,
+        "ice_pyramid": IcePyramidMod,
+        "dark_pyramid": DarkPyramidMod,
+        "night_mode": NightMod,
+        "grayscale": GrayscaleMod,
+        "inverted_colors": InvertedColorsMod,
+        "swap_collectibles_enemies": SwapCollectiblesEnemiesMod,
+        "red_coily": RedCoilyMod,
     }
 
     def __init__(self,
