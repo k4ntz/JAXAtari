@@ -729,7 +729,8 @@ class NPYImageEditor:
             return
 
         self.mouse_pressed = True
-        x, y = int(event.xdata), int(event.ydata)
+        x = max(0, min(int(event.xdata + 0.5), self.image.shape[1] - 1))
+        y = max(0, min(int(event.ydata + 0.5), self.image.shape[0] - 1))
 
         if self.tool == "pencil":
             self.image[y, x] = self.current_color
@@ -741,12 +742,14 @@ class NPYImageEditor:
             self.set_current_color(color)
 
     def on_mouse_release(self, event):
-        if self.mouse_pressed and event.xdata and event.ydata:
+        if self.mouse_pressed and event.xdata is not None and event.ydata is not None:
+            x = max(0, min(int(event.xdata + 0.5), self.image.shape[1] - 1))
+            y = max(0, min(int(event.ydata + 0.5), self.image.shape[0] - 1))
             if self.tool == "rectangular_selection":
                 if self.selection_start is None:
                     self.mouse_pressed = False
                     return
-                self.selection_end = (int(event.ydata), int(event.xdata))
+                self.selection_end = (y, x)
                 y0 = min(self.selection_start[0], self.selection_end[0])
                 x0 = min(self.selection_start[1], self.selection_end[1])
                 y1 = max(self.selection_start[0], self.selection_end[0])
@@ -759,7 +762,7 @@ class NPYImageEditor:
             if self.tool == "pencil":
                 self.update_state("pencil")
             if self.tool == "magic_wand":
-                new_selection = self.magic_wand(int(event.ydata), int(event.xdata), self.image[int(event.ydata), int(event.xdata)])
+                new_selection = self.magic_wand(y, x, self.image[y, x])
                 if self.cmd_pressed:
                     if self.selected is None:
                         self.selected = new_selection
@@ -770,7 +773,7 @@ class NPYImageEditor:
                 self.update_state("magic_wand")
 
             if self.tool == "select_all_with_color":
-                new_selection = np.all(self.image == self.image[int(event.ydata), int(event.xdata)], axis=2)
+                new_selection = np.all(self.image == self.image[y, x], axis=2)
                 self.submit_selection(new_selection)
                 self.update_state("select with same color")
 
@@ -810,7 +813,8 @@ class NPYImageEditor:
 
     def on_mouse_motion(self, event):
         if event.xdata is not None and event.ydata is not None:
-            x, y = int(event.xdata), int(event.ydata)
+            x = max(0, min(int(event.xdata + 0.5), self.image.shape[1] - 1))
+            y = max(0, min(int(event.ydata + 0.5), self.image.shape[0] - 1))
             self.current_mouse_position.set(f"x={x}, y={y}")
             if self.tool == "pencil" and self.mouse_pressed:
                 if self.selection_start:
@@ -825,7 +829,7 @@ class NPYImageEditor:
                 self.selection_start = (y, x)
 
             if self.tool == "rectangular_selection" and self.mouse_pressed:
-                self.selection_end = (int(event.ydata), int(event.xdata))
+                self.selection_end = (y, x)
         else:
             self.current_mouse_position.set("x=--, y=--")
 
