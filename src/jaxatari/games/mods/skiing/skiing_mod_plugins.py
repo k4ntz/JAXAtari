@@ -132,6 +132,15 @@ class InvertFlagsMod(JaxAtariPostStepModPlugin):
         return new_state.replace(successful_gates=corrected_score, flags_passed=new_flags_passed)
 
 
+class InvertFlagColorsMod(JaxAtariInternalModPlugin):
+    """
+    Inverts the colors of the slalom flags (all flags become red, the last one becomes blue).
+    """
+    constants_overrides = {
+        "invert_flag_colors": True,
+    }
+
+
 class MovingFlagsMod(JaxAtariPostStepModPlugin):
     """
     Causes the flags to slide horizontally across the screen while you ski.
@@ -290,4 +299,49 @@ class MogulsToTreesMod(JaxAtariInternalModPlugin):
     }
     asset_overrides = {
         "mogul": {'name': 'mogul', 'type': 'single', 'file': 'tree_0.npy'}
+    }
+
+
+class ClassicTreesMod(JaxAtariInternalModPlugin):
+    """
+    Replaces the default tree sprites with classic versions.
+    """
+    asset_overrides = {
+        "tree_group": {
+            'name': 'tree_group', 
+            'type': 'group', 
+            'files': [
+                'classic_tree_0.npy',
+                'classic_tree_1.npy',
+                'classic_tree_2.npy',
+                'classic_tree_3.npy'
+            ]
+        }
+    }
+
+
+class ThinMogulsMod(JaxAtariInternalModPlugin):
+    """
+    Replaces the standard moguls with thinner ones.
+    """
+    asset_overrides = {
+        "mogul": {'name': 'mogul', 'type': 'single', 'file': 'thin_mogul.npy'}
+    }
+
+
+class BlueSkiierMod(JaxAtariInternalModPlugin):
+    """
+    Replaces the skier sprites with blue versions.
+    """
+    constants_overrides = {
+        "blue_skier": True
+    }
+
+
+class GreenFlagsMod(JaxAtariInternalModPlugin):
+    """
+    Recolors all flags to green.
+    """
+    constants_overrides = {
+        "green_flags": True
     }

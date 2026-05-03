@@ -138,3 +138,60 @@ class CenterCarsOnResetMod(JaxAtariPostStepModPlugin):
         # Return modified observation and state
         modified_state = state.replace(cars=centered_cars)
         return obs, modified_state
+
+
+import os
+from jaxatari.rendering.jax_rendering_utils import JaxRenderingUtils, RendererConfig, get_base_sprite_dir
+
+# Initialize utilities
+_jr = JaxRenderingUtils(RendererConfig())
+_bike_path = os.path.join(get_base_sprite_dir(), "freeway", "bike.npy")
+_bike_array = _jr.loadFrame(_bike_path)
+
+# Define distinct color pairs for 10 lanes (Biker, Motorbike)
+_color_pairs = [
+    ((255, 0, 0), (0, 0, 255)),       # Lane 0: Red / Blue
+    ((0, 255, 0), (255, 255, 0)),     # Lane 1: Green / Yellow
+    ((255, 0, 255), (0, 255, 255)),   # Lane 2: Magenta / Cyan
+    ((255, 128, 0), (128, 0, 255)),   # Lane 3: Orange / Purple
+    ((255, 255, 255), (0, 0, 0)),     # Lane 4: White / Black
+    ((0, 0, 255), (255, 0, 0)),       # Lane 5: Blue / Red
+    ((255, 255, 0), (0, 255, 0)),     # Lane 6: Yellow / Green
+    ((0, 255, 255), (255, 0, 255)),   # Lane 7: Cyan / Magenta
+    ((128, 0, 255), (255, 128, 0)),   # Lane 8: Purple / Orange
+    ((0, 0, 0), (255, 255, 255)),     # Lane 9: Black / White
+]
+
+_recolored_bikes = []
+for _biker_color, _motorbike_color in _color_pairs:
+    _rule = [
+        {'source': (80, 184, 57), 'target': _biker_color},
+        {'source': (32, 167, 32), 'target': _biker_color},
+        {'source': (234, 61, 49), 'target': _motorbike_color},
+        {'source': (255, 32, 32), 'target': _motorbike_color}
+    ]
+    _recolored_bikes.append(_jr.perform_recoloring(_bike_array, _rule))
+
+
+class BikesMod(JaxAtariInternalModPlugin):
+    """Replaces all cars with uniquely colored bike sprites."""
+    constants_overrides = {
+        "ASSET_CONFIG": (
+            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+            {
+                'name': 'player', 'type': 'group',
+                'files': ['player_hit.npy', 'player_walk.npy', 'player_idle.npy']
+            },
+            {'name': 'car_dark_red', 'type': 'procedural', 'data': _recolored_bikes[0]},
+            {'name': 'car_light_green', 'type': 'procedural', 'data': _recolored_bikes[1]},
+            {'name': 'car_dark_green', 'type': 'procedural', 'data': _recolored_bikes[2]},
+            {'name': 'car_light_red', 'type': 'procedural', 'data': _recolored_bikes[3]},
+            {'name': 'car_blue', 'type': 'procedural', 'data': _recolored_bikes[4]},
+            {'name': 'car_brown', 'type': 'procedural', 'data': _recolored_bikes[5]},
+            {'name': 'car_light_blue', 'type': 'procedural', 'data': _recolored_bikes[6]},
+            {'name': 'car_red', 'type': 'procedural', 'data': _recolored_bikes[7]},
+            {'name': 'car_green', 'type': 'procedural', 'data': _recolored_bikes[8]},
+            {'name': 'car_yellow', 'type': 'procedural', 'data': _recolored_bikes[9]},
+            {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
+        )
+    }
