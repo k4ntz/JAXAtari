@@ -286,7 +286,7 @@ class AlienConstants(struct.PyTreeNode):
     ], dtype=jnp.int32))
     
     ITEM_SCORE_MULTIPLIERS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 100, 500, 1000, 2000, 3000, 5000], dtype=jnp.int32))# Score for collecting items, last item is not a score item
-    ENEMY_KILL_SCORE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([500, 1000, 1500], dtype=jnp.int32)) # Score for killing enemies, depending on how many have been killed in succession
+    ENEMY_KILL_SCORE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([500, 1000, 2000], dtype=jnp.int32)) # 1st/2nd/3rd alien in a vulnerable streak (manual: 500 / 1000 / 2000)
 
     # egg description:
     # x-coordinate
@@ -376,7 +376,7 @@ class SingleEnemyState(struct.PyTreeNode):
     position_at_death_x: jnp.ndarray # x position of the enemy when one of the enemies is killed, used to freeze enemies during death animation
     position_at_death_y: jnp.ndarray # y position of the enemy when one of the enemies is killed, used to freeze enemies during death animation
     active_enemy: jnp.ndarray # defines if the enemy is active, used to activate enemies especially from going from primary to bonus stage
-    kill_score_flag: jnp.ndarray # defines if first, second or third enemy kill in a row, used to give score for killing enemies in a row (500, 1000, 1500)
+    kill_score_flag: jnp.ndarray # first/second/third kill in current vulnerable streak (500, 1000, 2000 per manual)
 
 #Deines params of all enemies, but vectors of the single enemy params
 class MultipleEnemiesState(struct.PyTreeNode):
