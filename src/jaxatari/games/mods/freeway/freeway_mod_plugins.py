@@ -173,25 +173,62 @@ for _biker_color, _motorbike_color in _color_pairs:
     _recolored_bikes.append(_jr.perform_recoloring(_bike_array, _rule))
 
 
+class FrogMod(JaxAtariInternalModPlugin):
+    """Replaces the player sprites with frog sprites."""
+    asset_overrides = {
+        "player": {
+            'name': 'player', 'type': 'group',
+            'files': ['frog_hit.npy', 'frog_walk.npy', 'frog_idle.npy']
+        }
+    }
+
+
 class BikesMod(JaxAtariInternalModPlugin):
     """Replaces all cars with uniquely colored bike sprites."""
-    constants_overrides = {
-        "ASSET_CONFIG": (
-            {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-            {
-                'name': 'player', 'type': 'group',
-                'files': ['player_hit.npy', 'player_walk.npy', 'player_idle.npy']
-            },
-            {'name': 'car_dark_red', 'type': 'procedural', 'data': _recolored_bikes[0]},
-            {'name': 'car_light_green', 'type': 'procedural', 'data': _recolored_bikes[1]},
-            {'name': 'car_dark_green', 'type': 'procedural', 'data': _recolored_bikes[2]},
-            {'name': 'car_light_red', 'type': 'procedural', 'data': _recolored_bikes[3]},
-            {'name': 'car_blue', 'type': 'procedural', 'data': _recolored_bikes[4]},
-            {'name': 'car_brown', 'type': 'procedural', 'data': _recolored_bikes[5]},
-            {'name': 'car_light_blue', 'type': 'procedural', 'data': _recolored_bikes[6]},
-            {'name': 'car_red', 'type': 'procedural', 'data': _recolored_bikes[7]},
-            {'name': 'car_green', 'type': 'procedural', 'data': _recolored_bikes[8]},
-            {'name': 'car_yellow', 'type': 'procedural', 'data': _recolored_bikes[9]},
-            {'name': 'score_digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
-        )
+    asset_overrides = {
+        'car_dark_red': {'name': 'car_dark_red', 'type': 'procedural', 'data': _recolored_bikes[0]},
+        'car_light_green': {'name': 'car_light_green', 'type': 'procedural', 'data': _recolored_bikes[1]},
+        'car_dark_green': {'name': 'car_dark_green', 'type': 'procedural', 'data': _recolored_bikes[2]},
+        'car_light_red': {'name': 'car_light_red', 'type': 'procedural', 'data': _recolored_bikes[3]},
+        'car_blue': {'name': 'car_blue', 'type': 'procedural', 'data': _recolored_bikes[4]},
+        'car_brown': {'name': 'car_brown', 'type': 'procedural', 'data': _recolored_bikes[5]},
+        'car_light_blue': {'name': 'car_light_blue', 'type': 'procedural', 'data': _recolored_bikes[6]},
+        'car_red': {'name': 'car_red', 'type': 'procedural', 'data': _recolored_bikes[7]},
+        'car_green': {'name': 'car_green', 'type': 'procedural', 'data': _recolored_bikes[8]},
+        'car_yellow': {'name': 'car_yellow', 'type': 'procedural', 'data': _recolored_bikes[9]},
+    }
+
+
+_bg_path = os.path.join(get_base_sprite_dir(), "freeway", "background.npy")
+_bg_array = _jr.loadFrame(_bg_path)
+
+_lane_color_rule = [
+    {'source': (214, 214, 214), 'target': (0, 0, 0)},       # Lane separation black
+    {'source': (252, 252, 84), 'target': (255, 0, 0)}       # Double lane separation red
+]
+_recolored_bg = _jr.perform_recoloring(_bg_array, _lane_color_rule)
+
+class NewLaneColorsMod(JaxAtariInternalModPlugin):
+    """Makes the lane separation black and the double lane separation red."""
+    asset_overrides = {
+        'background': {
+            'name': 'background',
+            'type': 'background',
+            'data': _recolored_bg
+        }
+    }
+
+_score_paths = [os.path.join(get_base_sprite_dir(), "freeway", f"score_{i}.npy") for i in range(10)]
+_score_array = _jr._load_and_pad_digits_from_paths(_score_paths)
+_green_score_rule = [{'source': (228, 111, 111), 'target': (0, 255, 0)}]
+_recolored_score = _jr.perform_recoloring(_score_array, _green_score_rule)
+
+class GreenScoreMod(JaxAtariInternalModPlugin):
+    """Makes the score digits green."""
+    asset_overrides = {
+        'score_digits': {
+            'name': 'score_digits',
+            'type': 'digits',
+            'data': _recolored_score
+        }
     }

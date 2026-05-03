@@ -96,10 +96,30 @@ class FrostbiteConstants(struct.PyTreeNode):
     # RGB Overrides for mods (if set, overrides the actual rendered color of the ice blocks)
     RGB_ICE_WHITE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
     RGB_ICE_BLUE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    
+    # RGB Overrides for obstacles
+    RGB_FISH: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_GEESE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_CRAB: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_CLAM: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+
+    # Sprite overrides
+    BEAR_SPRITE_0: str = struct.field(pytree_node=False, default="bear_00.npy")
+    BEAR_SPRITE_1: str = struct.field(pytree_node=False, default="bear_01.npy")
+
+    # Igloo overrides
+    IGLOO_X_OFFSET: int = struct.field(pytree_node=False, default=0)
+    RGB_IGLOO: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    TARGET_IGLOO_X: int = struct.field(pytree_node=False, default=123)
 
     # Igloo constants    IGLOO_X: int = struct.field(pytree_node=False, default=154)  # X position of igloo (far right side of screen)
     IGLOO_X: int = struct.field(pytree_node=False, default=154)
     IGLOO_Y: int = struct.field(pytree_node=False, default=44)   # Y position at top of Bailey's head when on shore
+    
+    # Environment mode overrides
+    CONSTANT_NIGHT: bool = struct.field(pytree_node=False, default=False)
+    RGB_NIGHT: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    DRAW_SHORE_LINE: bool = struct.field(pytree_node=False, default=False)
     
     # Game Constants
     MAX_IGLOO_INDEX: int = struct.field(pytree_node=False, default=15)  # Complete igloo has 16 blocks (0-15)
@@ -1566,7 +1586,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         x_max = self.consts.SHORE_X_MAX
 
         # Automatic movement toward igloo during entry sequence
-        target_igloo_x = 123  # Fixed igloo X position
+        target_igloo_x = self.consts.TARGET_IGLOO_X  # Mod-aware igloo X position
         auto_dx = jnp.where(
             is_entering_igloo,
             jnp.sign(target_igloo_x - state.bailey_x) * jnp.minimum(2, jnp.abs(target_igloo_x - state.bailey_x)),
@@ -1611,7 +1631,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         can_start_jump = state.bailey_jumping_idx == 0  # Not already jumping
 
         # Special case: automatic jump when entering igloo
-        at_igloo_x = jnp.abs(state.bailey_x - 123) <= 1
+        at_igloo_x = jnp.abs(state.bailey_x - target_igloo_x) <= 1
         should_jump_for_igloo = is_entering_igloo & at_igloo_x
 
         # Determine jump intent using the refactored method
@@ -2854,7 +2874,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         not_entering = state.igloo_entry_status == 0
 
         # Door collision box (igloo door is at specific X position)
-        door_x = 122
+        door_x = self.consts.TARGET_IGLOO_X - 1
         bailey_right_edge = state.bailey_x + 16
         near_door = (bailey_right_edge >= door_x) & (state.bailey_x <= door_x + 8)
 
@@ -2998,8 +3018,8 @@ class FrostbiteRenderer(JAXGameRenderer):
         crab_1 = self._load_frame_legacy("king_crab_01.npy")
         clam_0 = jnp.flip(self._load_frame_legacy("clam_00.npy"), axis=1)
         clam_1 = jnp.flip(self._load_frame_legacy("clam_01.npy"), axis=1)
-        bear_0 = self._load_frame_legacy("bear_00.npy")
-        bear_1 = self._load_frame_legacy("bear_01.npy")
+        bear_0 = self._load_frame_legacy(self.consts.BEAR_SPRITE_0)
+        bear_1 = self._load_frame_legacy(self.consts.BEAR_SPRITE_1)
         igloo_block = self._load_frame_legacy("igloo_block_00.npy")
         igloo_door = self._load_frame_legacy("igloo_door.npy")
         degree_symbol = self._load_frame_legacy("degree_symbol.npy")
@@ -3021,50 +3041,50 @@ class FrostbiteRenderer(JAXGameRenderer):
         # Apply custom RGB colors if set by mods
         if self.consts.RGB_ICE_WHITE is not None:
             r, g, b = self.consts.RGB_ICE_WHITE
-            ice_wide_white = jnp.where(
-                ice_wide_white[..., 3:4] > 0,
-                jnp.concatenate([
-                    jnp.full_like(ice_wide_white[..., 0:1], r),
-                    jnp.full_like(ice_wide_white[..., 1:2], g),
-                    jnp.full_like(ice_wide_white[..., 2:3], b),
-                    ice_wide_white[..., 3:4]
-                ], axis=-1),
-                ice_wide_white
-            ).astype(ice_wide_white.dtype)
-            ice_narrow_white = jnp.where(
-                ice_narrow_white[..., 3:4] > 0,
-                jnp.concatenate([
-                    jnp.full_like(ice_narrow_white[..., 0:1], r),
-                    jnp.full_like(ice_narrow_white[..., 1:2], g),
-                    jnp.full_like(ice_narrow_white[..., 2:3], b),
-                    ice_narrow_white[..., 3:4]
-                ], axis=-1),
-                ice_narrow_white
-            ).astype(ice_narrow_white.dtype)
+            ice_wide_white = self._apply_custom_tint(ice_wide_white, r, g, b)
+            ice_narrow_white = self._apply_custom_tint(ice_narrow_white, r, g, b)
 
         if self.consts.RGB_ICE_BLUE is not None:
             r, g, b = self.consts.RGB_ICE_BLUE
-            ice_wide_blue = jnp.where(
-                ice_wide_blue[..., 3:4] > 0,
-                jnp.concatenate([
-                    jnp.full_like(ice_wide_blue[..., 0:1], r),
-                    jnp.full_like(ice_wide_blue[..., 1:2], g),
-                    jnp.full_like(ice_wide_blue[..., 2:3], b),
-                    ice_wide_blue[..., 3:4]
-                ], axis=-1),
-                ice_wide_blue
-            ).astype(ice_wide_blue.dtype)
-            ice_narrow_blue = jnp.where(
-                ice_narrow_blue[..., 3:4] > 0,
-                jnp.concatenate([
-                    jnp.full_like(ice_narrow_blue[..., 0:1], r),
-                    jnp.full_like(ice_narrow_blue[..., 1:2], g),
-                    jnp.full_like(ice_narrow_blue[..., 2:3], b),
-                    ice_narrow_blue[..., 3:4]
-                ], axis=-1),
-                ice_narrow_blue
-            ).astype(ice_narrow_blue.dtype)
-        
+            ice_wide_blue = self._apply_custom_tint(ice_wide_blue, r, g, b)
+            ice_narrow_blue = self._apply_custom_tint(ice_narrow_blue, r, g, b)
+
+        if self.consts.RGB_GEESE is not None:
+            r, g, b = self.consts.RGB_GEESE
+            geese_0 = self._apply_custom_tint(geese_0, r, g, b)
+            geese_1 = self._apply_custom_tint(geese_1, r, g, b)
+
+        if self.consts.RGB_FISH is not None:
+            r, g, b = self.consts.RGB_FISH
+            fish_0 = self._apply_custom_tint(fish_0, r, g, b)
+            fish_1 = self._apply_custom_tint(fish_1, r, g, b)
+
+        if self.consts.RGB_CRAB is not None:
+            r, g, b = self.consts.RGB_CRAB
+            crab_0 = self._apply_custom_tint(crab_0, r, g, b)
+            crab_1 = self._apply_custom_tint(crab_1, r, g, b)
+
+        if self.consts.RGB_CLAM is not None:
+            r, g, b = self.consts.RGB_CLAM
+            clam_0 = self._apply_custom_tint(clam_0, r, g, b)
+            clam_1 = self._apply_custom_tint(clam_1, r, g, b)
+
+        if self.consts.RGB_IGLOO is not None:
+            r, g, b = self.consts.RGB_IGLOO
+            igloo_block = self._apply_custom_tint(igloo_block, r, g, b)
+            # The door is black (0,0,0); tinting it makes it disappear into the igloo blocks.
+            # We leave igloo_door as-is.
+
+        if self.consts.RGB_NIGHT is not None:
+            r, g, b = self.consts.RGB_NIGHT
+            bg_night = self._apply_custom_tint(bg_night, r, g, b)
+            bg_day = self._apply_custom_tint(bg_day, r, g, b)
+
+        if self.consts.DRAW_SHORE_LINE:
+            line_color = jnp.array([255, 255, 255, 255], dtype=jnp.uint8)
+            bg_night = bg_night.at[78, :].set(line_color)
+            bg_day = bg_day.at[78, :].set(line_color)
+
         # Bear (Lightened for Night)
         bear_0_light = self._lighten_bear(bear_0)
         bear_1_light = self._lighten_bear(bear_1)
@@ -3240,7 +3260,7 @@ class FrostbiteRenderer(JAXGameRenderer):
         import numpy as _np
 
         _CH, _CW = 24, 32
-        _cx0, _cy0 = 111, 35   # canvas origin in raster coords
+        _cx0, _cy0 = 111 + self.consts.IGLOO_X_OFFSET, 35   # canvas origin in raster coords
 
         _bm = _np.array(self.IGLOO_BLOCK_MASK)   # (8,8) palette IDs
         _dm = _np.array(self.IGLOO_DOOR_MASK)    # (8,8) palette IDs
@@ -3304,6 +3324,20 @@ class FrostbiteRenderer(JAXGameRenderer):
     
     # --- Tinting helpers (used only in __init__) ---
     
+    @staticmethod
+    def _apply_custom_tint(sprite, r, g, b):
+        """Apply a custom RGB tint to a sprite, preserving alpha."""
+        return jnp.where(
+            sprite[..., 3:4] > 0,
+            jnp.concatenate([
+                jnp.full_like(sprite[..., 0:1], r),
+                jnp.full_like(sprite[..., 1:2], g),
+                jnp.full_like(sprite[..., 2:3], b),
+                sprite[..., 3:4]
+            ], axis=-1),
+            sprite
+        ).astype(sprite.dtype)
+
     @staticmethod
     def _apply_ice_color(block_sprite, is_blue):
         """Apply color tinting to ice block sprites."""
@@ -3557,7 +3591,7 @@ class FrostbiteRenderer(JAXGameRenderer):
         """Render the polar grizzly (bear) when active."""
         should_render = state.polar_grizzly_active == 1
         def draw_bear(r):
-            is_night = ((state.level - 1) // 4) % 2 == 1
+            is_night = jnp.logical_or(((state.level - 1) // 4) % 2 == 1, self.consts.CONSTANT_NIGHT)
             
             bear_stack = jax.lax.select(is_night, self.BEAR_LIGHT_MASKS, self.BEAR_MASKS)
             
@@ -3583,7 +3617,7 @@ class FrostbiteRenderer(JAXGameRenderer):
         
         # 1. Render background (day/night)
         raster = self.jr.create_object_raster(self.BACKGROUND).astype(self.PALETTE.dtype)
-        is_night = ((state.level - 1) // 4) % 2 == 1
+        is_night = jnp.logical_or(((state.level - 1) // 4) % 2 == 1, self.consts.CONSTANT_NIGHT)
         raster = jax.lax.cond(
             is_night,
             lambda r: self.jr.render_at(r, 0, 0, self.SHAPE_MASKS['background_night']),
