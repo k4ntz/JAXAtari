@@ -1,6 +1,6 @@
 import os
 from functools import partial
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 from functools import lru_cache
 
 import jax
@@ -433,6 +433,24 @@ class VentureConstants(AutoDerivedConstants):
         default_factory=lambda: jnp.zeros((2, 1), dtype=jnp.int32)
     )
 
+    # Base Colors
+    RGB_BACKGROUND: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_PLAYER_DETAILED: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_W1_WALLS: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_W2_WALLS: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    
+    # Monsters
+    RGB_MONSTER_W1_MAP: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_MONSTER_W1_R2: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_MONSTER_W1_R3: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_MONSTER_W1_R4: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    
+    RGB_MONSTER_W2_MAP: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_MONSTER_W2_R1: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_MONSTER_W2_R2: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_MONSTER_W2_R3: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_MONSTER_W2_R4: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+
 
 class LaserState(struct.PyTreeNode):
     """Holds the state of the moving laser walls."""
@@ -525,6 +543,20 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
             JAX_TRANSITIONS=static_data["jax_transitions"],
             MAIN_MAP_PORTAL_MASKS=static_data["main_map_portal_masks"],
             MAIN_MAP_PORTAL_TO_LEVELS=static_data["main_map_portal_to_levels"],
+            
+            RGB_BACKGROUND=base_consts.RGB_BACKGROUND,
+            RGB_PLAYER_DETAILED=base_consts.RGB_PLAYER_DETAILED,
+            RGB_W1_WALLS=base_consts.RGB_W1_WALLS,
+            RGB_W2_WALLS=base_consts.RGB_W2_WALLS,
+            RGB_MONSTER_W1_MAP=base_consts.RGB_MONSTER_W1_MAP,
+            RGB_MONSTER_W1_R2=base_consts.RGB_MONSTER_W1_R2,
+            RGB_MONSTER_W1_R3=base_consts.RGB_MONSTER_W1_R3,
+            RGB_MONSTER_W1_R4=base_consts.RGB_MONSTER_W1_R4,
+            RGB_MONSTER_W2_MAP=base_consts.RGB_MONSTER_W2_MAP,
+            RGB_MONSTER_W2_R1=base_consts.RGB_MONSTER_W2_R1,
+            RGB_MONSTER_W2_R2=base_consts.RGB_MONSTER_W2_R2,
+            RGB_MONSTER_W2_R3=base_consts.RGB_MONSTER_W2_R3,
+            RGB_MONSTER_W2_R4=base_consts.RGB_MONSTER_W2_R4,
         )
         super().__init__(initialized_consts)
         self.renderer = VentureRenderer(self.consts)
@@ -1797,7 +1829,67 @@ class VentureRenderer(JAXGameRenderer):
         # Add procedural sprites (projectiles, lasers)
         procedural_assets = self._create_procedural_assets(sprite_path)
         asset_config.extend(procedural_assets)
-        
+
+        # Inject Recoloring Rules based on Constants
+        has_recolorings = False
+        for i in range(len(asset_config)):
+            asset_name = asset_config[i]['name']
+            asset_rules = []
+            
+            if asset_name == 'background':
+                if self.consts.RGB_BACKGROUND is not None:
+                    asset_rules.append({'source': (0, 0, 0), 'target': self.consts.RGB_BACKGROUND})
+            elif asset_name in ('map_w1', 'room1_w1', 'room2_w1', 'room3_w1', 'room4_w1', 'player_dot_w1', 'health_w1'):
+                if self.consts.RGB_W1_WALLS is not None:
+                    asset_rules.append({'source': (168, 48, 143), 'target': self.consts.RGB_W1_WALLS})
+            elif asset_name in ('map_w2', 'room1_w2', 'room2_w2', 'room3_w2', 'room4_w2', 'player_dot_w2', 'health_w2'):
+                if self.consts.RGB_W2_WALLS is not None:
+                    asset_rules.append({'source': (45, 87, 176), 'target': self.consts.RGB_W2_WALLS})
+            elif asset_name in ('player_detailed', 'projectile_resized'):
+                if self.consts.RGB_PLAYER_DETAILED is not None:
+                    asset_rules.append({'source': (167, 26, 26), 'target': self.consts.RGB_PLAYER_DETAILED})
+            elif asset_name in ('monster_map_w1', 'monster_dead_map_w1', 'chaser'):
+                if self.consts.RGB_MONSTER_W1_MAP is not None:
+                    asset_rules.append({'source': (82, 126, 45), 'target': self.consts.RGB_MONSTER_W1_MAP})
+            elif asset_name in ('monster_r2_w1', 'monster_dead_r2_w1'):
+                if self.consts.RGB_MONSTER_W1_R2 is not None:
+                    asset_rules.append({'source': (82, 126, 45), 'target': self.consts.RGB_MONSTER_W1_R2})
+            elif asset_name in ('monster_r3_w1', 'monster_dead_r3_w1'):
+                if self.consts.RGB_MONSTER_W1_R3 is not None:
+                    asset_rules.append({'source': (78, 50, 181), 'target': self.consts.RGB_MONSTER_W1_R3})
+            elif asset_name in ('monster_r4_w1', 'monster_dead_r4_w1'):
+                if self.consts.RGB_MONSTER_W1_R4 is not None:
+                    asset_rules.append({'source': (111, 111, 111), 'target': self.consts.RGB_MONSTER_W1_R4})
+            elif asset_name in ('monster_map_w2', 'monster_dead_map_w2', 'laser_ho', 'laser_ve', 'laser_ve_stretched', 'laser_ho_stretched'):
+                if self.consts.RGB_MONSTER_W2_MAP is not None:
+                    asset_rules.append({'source': (181, 83, 40), 'target': self.consts.RGB_MONSTER_W2_MAP})
+            elif asset_name in ('monster_r1_w2', 'monster_dead_r1_w2'):
+                if self.consts.RGB_MONSTER_W2_R1 is not None:
+                    asset_rules.append({'source': (184, 50, 50), 'target': self.consts.RGB_MONSTER_W2_R1})
+            elif asset_name in ('monster_r2_w2', 'monster_dead_r2_w2'):
+                if self.consts.RGB_MONSTER_W2_R2 is not None:
+                    asset_rules.append({'source': (111, 111, 111), 'target': self.consts.RGB_MONSTER_W2_R2})
+            elif asset_name in ('monster_r3_w2', 'monster_dead_r3_w2'):
+                if self.consts.RGB_MONSTER_W2_R3 is not None:
+                    asset_rules.append({'source': (134, 134, 29), 'target': self.consts.RGB_MONSTER_W2_R3})
+            elif asset_name in ('monster_r4_w2', 'monster_dead_r4_w2'):
+                if self.consts.RGB_MONSTER_W2_R4 is not None:
+                    asset_rules.append({'source': (181, 83, 40), 'target': self.consts.RGB_MONSTER_W2_R4})
+            
+            # Additional catches for text and rewards
+            elif asset_name in ('digits',):
+                if self.consts.RGB_PLAYER_DETAILED is not None: # Use player color for text as it's typically prominent
+                    asset_rules.append({'source': (170, 170, 170), 'target': self.consts.RGB_PLAYER_DETAILED})
+            elif asset_name.startswith('reward'):
+                if self.consts.RGB_PLAYER_DETAILED is not None: # Turn rewards to player color
+                    # Global replace for simplicity on rewards
+                    asset_rules.append({'target': self.consts.RGB_PLAYER_DETAILED})
+                    
+            if asset_rules:
+                asset_config[i] = dict(asset_config[i])
+                asset_config[i]['recolorings'] = {'mods': asset_rules}
+                has_recolorings = True
+
         (
             self.PALETTE,
             self.SHAPE_MASKS,
@@ -1805,6 +1897,11 @@ class VentureRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        
+        self._mask_suffix = '_mods' if has_recolorings else ''
+        
+        def get_mask(key):
+            return self.SHAPE_MASKS.get(key + self._mask_suffix, self.SHAPE_MASKS[key])
 
         # --- Pre-stack masks for efficient indexing (Avoids Switches/Conds in render) ---
         
@@ -1817,8 +1914,8 @@ class VentureRenderer(JAXGameRenderer):
         # 1. Wall Masks -> Pre-baked Background Rasters
         # We stamp the wall masks onto the base background raster once during __init__
         all_wall_masks = jnp.stack([
-            stack_and_pad([self.SHAPE_MASKS['map_w1'], self.SHAPE_MASKS['room1_w1'], self.SHAPE_MASKS['room2_w1'], self.SHAPE_MASKS['room3_w1'], self.SHAPE_MASKS['room4_w1']]),
-            stack_and_pad([self.SHAPE_MASKS['map_w2'], self.SHAPE_MASKS['room1_w2'], self.SHAPE_MASKS['room2_w2'], self.SHAPE_MASKS['room3_w2'], self.SHAPE_MASKS['room4_w2']])
+            stack_and_pad([get_mask('map_w1'), get_mask('room1_w1'), get_mask('room2_w1'), get_mask('room3_w1'), get_mask('room4_w1')]),
+            stack_and_pad([get_mask('map_w2'), get_mask('room1_w2'), get_mask('room2_w2'), get_mask('room3_w2'), get_mask('room4_w2')])
         ])
         base_raster = self.jr.create_object_raster(self.BACKGROUND)
         self.all_background_rasters = jax.vmap(jax.vmap(lambda m: self.jr.render_at(base_raster, 0, 0, m)))(all_wall_masks)
@@ -1827,48 +1924,48 @@ class VentureRenderer(JAXGameRenderer):
         # Note: Room 1 in W1 uses map monster.
         self.all_monster_masks = jnp.stack([
             stack_and_pad([
-                self.SHAPE_MASKS['monster_map_w1'],
-                self.SHAPE_MASKS['monster_map_w1'],
-                self.SHAPE_MASKS['monster_r2_w1'],
-                self.SHAPE_MASKS['monster_r3_w1'],
-                self.SHAPE_MASKS['monster_r4_w1']
+                get_mask('monster_map_w1'),
+                get_mask('monster_map_w1'),
+                get_mask('monster_r2_w1'),
+                get_mask('monster_r3_w1'),
+                get_mask('monster_r4_w1')
             ]),
             stack_and_pad([
-                self.SHAPE_MASKS['monster_map_w2'],
-                self.SHAPE_MASKS['monster_r1_w2'],
-                self.SHAPE_MASKS['monster_r2_w2'],
-                self.SHAPE_MASKS['monster_r3_w2'],
-                self.SHAPE_MASKS['monster_r4_w2']
+                get_mask('monster_map_w2'),
+                get_mask('monster_r1_w2'),
+                get_mask('monster_r2_w2'),
+                get_mask('monster_r3_w2'),
+                get_mask('monster_r4_w2')
             ])
         ])
 
         # 3. Dead Monster Masks: (World, Level, H, W)
         self.all_dead_monster_masks = jnp.stack([
             stack_and_pad([
-                self.SHAPE_MASKS['monster_dead_map_w1'],
-                self.SHAPE_MASKS['monster_dead_map_w1'],
-                self.SHAPE_MASKS['monster_dead_r2_w1'],
-                self.SHAPE_MASKS['monster_dead_r3_w1'],
-                self.SHAPE_MASKS['monster_dead_r4_w1']
+                get_mask('monster_dead_map_w1'),
+                get_mask('monster_dead_map_w1'),
+                get_mask('monster_dead_r2_w1'),
+                get_mask('monster_dead_r3_w1'),
+                get_mask('monster_dead_r4_w1')
             ]),
             stack_and_pad([
-                self.SHAPE_MASKS['monster_dead_map_w2'],
-                self.SHAPE_MASKS['monster_dead_r1_w2'],
-                self.SHAPE_MASKS['monster_dead_r2_w2'],
-                self.SHAPE_MASKS['monster_dead_r3_w2'],
-                self.SHAPE_MASKS['monster_dead_r4_w2']
+                get_mask('monster_dead_map_w2'),
+                get_mask('monster_dead_r1_w2'),
+                get_mask('monster_dead_r2_w2'),
+                get_mask('monster_dead_r3_w2'),
+                get_mask('monster_dead_r4_w2')
             ])
         ])
 
         # 4. Chest Masks: (World, Room, H, W) -> Rooms 1-4 (indices 0-3)
         self.all_chest_masks = jnp.stack([
-            stack_and_pad([self.SHAPE_MASKS['reward1_w1'], self.SHAPE_MASKS['reward2_w1'], self.SHAPE_MASKS['reward3_w1'], self.SHAPE_MASKS['reward4_w1']]),
-            stack_and_pad([self.SHAPE_MASKS['reward1_w2'], self.SHAPE_MASKS['reward2_w2'], self.SHAPE_MASKS['reward3_w2'], self.SHAPE_MASKS['reward4_w2']])
+            stack_and_pad([get_mask('reward1_w1'), get_mask('reward2_w1'), get_mask('reward3_w1'), get_mask('reward4_w1')]),
+            stack_and_pad([get_mask('reward1_w2'), get_mask('reward2_w2'), get_mask('reward3_w2'), get_mask('reward4_w2')])
         ])
 
         # 5. UI and Player Masks
-        self.all_life_masks = stack_and_pad([self.SHAPE_MASKS['health_w1'], self.SHAPE_MASKS['health_w2']])
-        self.all_player_dot_masks = stack_and_pad([self.SHAPE_MASKS['player_dot_w1'], self.SHAPE_MASKS['player_dot_w2']])
+        self.all_life_masks = stack_and_pad([get_mask('health_w1'), get_mask('health_w2')])
+        self.all_player_dot_masks = stack_and_pad([get_mask('player_dot_w1'), get_mask('player_dot_w2')])
         
         # Precompute static offsets
         self.monster_offsets = jnp.array([self.consts.MONSTER_RENDER_WIDTH / 2, self.consts.MONSTER_RENDER_HEIGHT / 2], dtype=jnp.int32)
@@ -1906,6 +2003,9 @@ class VentureRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         """Renders the game state to an RGBA image array."""
+        def get_mask(key):
+            return self.SHAPE_MASKS.get(key + self._mask_suffix, self.SHAPE_MASKS[key])
+
         world_idx = state.world_level - 1
         level_idx = state.current_level
         is_in_room = level_idx > 0
@@ -1915,7 +2015,7 @@ class VentureRenderer(JAXGameRenderer):
 
         # --- 2. Score and Lives ---
         score_digits = self.jr.int_to_digits(state.score, max_digits=6)
-        canvas = self.jr.render_label(canvas, 8, 10, score_digits, self.SHAPE_MASKS['digits'], spacing=6, max_digits=6)
+        canvas = self.jr.render_label(canvas, 8, 10, score_digits, get_mask('digits'), spacing=6, max_digits=6)
 
         life_mask = self.all_life_masks[world_idx]
         canvas = self.jr.render_indicator(canvas, 120, 10, state.lives - 1, life_mask, spacing=10, max_value=3)
@@ -1978,7 +2078,7 @@ class VentureRenderer(JAXGameRenderer):
         chaser_tl = (jnp.array([state.chaser.x, state.chaser.y]) - self.chaser_offsets).astype(jnp.int32)
         canvas = jax.lax.cond(
             state.chaser.active,
-            lambda c: self.jr.render_at(c, chaser_tl[0], chaser_tl[1], self.SHAPE_MASKS['chaser']),
+            lambda c: self.jr.render_at(c, chaser_tl[0], chaser_tl[1], get_mask('chaser')),
             lambda c: c,
             canvas
         )
@@ -1988,10 +2088,10 @@ class VentureRenderer(JAXGameRenderer):
             x_span_start, _, y_span_start, _ = self.consts.LASER_ROOM_SPAN
             thick_h = self.consts.LASER_THICKNESS / 2
             
-            c = self.jr.render_at(c, (state.lasers.positions[0] - thick_h).astype(jnp.int32), y_span_start.astype(jnp.int32), self.SHAPE_MASKS['laser_ve_stretched'])
-            c = self.jr.render_at(c, (state.lasers.positions[1] - thick_h).astype(jnp.int32), y_span_start.astype(jnp.int32), self.SHAPE_MASKS['laser_ve_stretched'])
-            c = self.jr.render_at(c, x_span_start.astype(jnp.int32), (state.lasers.positions[2] - thick_h).astype(jnp.int32), self.SHAPE_MASKS['laser_ho_stretched'])
-            c = self.jr.render_at(c, x_span_start.astype(jnp.int32), (state.lasers.positions[3] - thick_h).astype(jnp.int32), self.SHAPE_MASKS['laser_ho_stretched'])
+            c = self.jr.render_at(c, (state.lasers.positions[0] - thick_h).astype(jnp.int32), y_span_start.astype(jnp.int32), get_mask('laser_ve_stretched'))
+            c = self.jr.render_at(c, (state.lasers.positions[1] - thick_h).astype(jnp.int32), y_span_start.astype(jnp.int32), get_mask('laser_ve_stretched'))
+            c = self.jr.render_at(c, x_span_start.astype(jnp.int32), (state.lasers.positions[2] - thick_h).astype(jnp.int32), get_mask('laser_ho_stretched'))
+            c = self.jr.render_at(c, x_span_start.astype(jnp.int32), (state.lasers.positions[3] - thick_h).astype(jnp.int32), get_mask('laser_ho_stretched'))
             return c
 
         canvas = jax.lax.cond((level_idx == 1) & (state.world_level == 1), draw_lasers, lambda c: c, canvas)
@@ -2001,7 +2101,7 @@ class VentureRenderer(JAXGameRenderer):
             def _room(_c):
                 px = (state.player.x - self.player_detailed_offsets[0]).astype(jnp.int32)
                 py = (state.player.y - self.player_detailed_offsets[1]).astype(jnp.int32)
-                return self.jr.render_at(_c, px, py, self.SHAPE_MASKS['player_detailed'])
+                return self.jr.render_at(_c, px, py, get_mask('player_detailed'))
             def _map(_c):
                 mask = self.all_player_dot_masks[world_idx]
                 px = (state.player.x - self.player_dot_offsets[0]).astype(jnp.int32)
@@ -2023,7 +2123,7 @@ class VentureRenderer(JAXGameRenderer):
         def draw_projectile(c):
              px = (state.projectile.x - self.consts.PROJECTILE_RADIUS).astype(jnp.int32)
              py = (state.projectile.y - self.consts.PROJECTILE_RADIUS).astype(jnp.int32)
-             return self.jr.render_at(c, px, py, self.SHAPE_MASKS['projectile_resized'])
+             return self.jr.render_at(c, px, py, get_mask('projectile_resized'))
 
         def draw_room_extras(c):
             return jax.lax.cond(state.projectile.active, draw_projectile, draw_aiming_dot, c)
