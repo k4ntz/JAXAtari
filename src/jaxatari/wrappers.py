@@ -227,7 +227,6 @@ class AtariWrapper(JaxatariWrapper):
         info_dict["env_reward"] = reward
 
         truncated = (state.step + 1 >= self.max_frames_per_episode)
-
         return obs, next_state, reward, terminated, truncated, info_dict
 
 
@@ -328,7 +327,7 @@ class ObjectCentricWrapper(JaxatariWrapper):
         truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
         obs_stack, oc_state = jax.lax.cond(
-            infos["env_done"].any(),  # use actual env_done for reset condition, not affected by episodic life
+            jnp.logical_or(infos["env_done"].any(), truncated),  # use actual env_done for reset condition, not affected by episodic life
             lambda: self.reset(atari_state.key),  # reset if done, using the current key for proper random state advancement
             lambda: (obs_stack, ObjectCentricState(atari_state, obs_stack)),  # step if not done
         )
@@ -342,6 +341,36 @@ class ObjectCentricWrapper(JaxatariWrapper):
 
         info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
         return obs_stack, oc_state, reward, terminated, truncated, info_dict
+
+
+@functools.partial(jax.jit, static_argnames=('sigma',))
+def _gaussian_blur_2d_nchw(image: chex.Array, sigma: float = 3.0) -> chex.Array:
+    """Depthwise separable Gaussian blur for NCHW images (used by preprocess_image)."""
+    # image input: [N, C, H, W]
+    c = image.shape[1]
+    radius = int(sigma * 3)
+    size = radius * 2 + 1
+    x = jnp.linspace(-radius, radius, size)
+    phi_x = jnp.exp(-0.5 * (x / sigma)**2)
+    phi_x = (phi_x / phi_x.sum()).astype(image.dtype)
+
+    h_kernel = phi_x[None, None, None, :]
+    h_kernel = jnp.tile(h_kernel, (c, 1, 1, 1))
+
+    v_kernel = phi_x[None, None, :, None]
+    v_kernel = jnp.tile(v_kernel, (c, 1, 1, 1))
+
+    out = jax.lax.conv_general_dilated(
+        image, h_kernel, (1, 1), padding='SAME',
+        feature_group_count=c,
+        dimension_numbers=('NCHW', 'OIHW', 'NCHW')
+    )
+    out = jax.lax.conv_general_dilated(
+        out, v_kernel, (1, 1), padding='SAME',
+        feature_group_count=c,
+        dimension_numbers=('NCHW', 'OIHW', 'NCHW')
+    )
+    return out
 
 
 @functools.partial(jax.jit, static_argnums=(0,))
@@ -359,40 +388,7 @@ def preprocess_image(class_instance: JaxatariWrapper, image: chex.Array) -> chex
 
     # Apply gaussian smoothing to natively downscaled images to get similar effect to actual downscaling
     if class_instance.native_downscaling and class_instance.smooth_image:
-
-        @functools.partial(jax.jit, static_argnames=['sigma'])
-        def gaussian_blur_2d(image, sigma=3.0):
-            # image input: [N, C, H, W]
-            c = image.shape[1]
-            radius = int(sigma * 3)
-            size = radius * 2 + 1
-            x = jnp.linspace(-radius, radius, size)
-            phi_x = jnp.exp(-0.5 * (x / sigma)**2)
-            phi_x = (phi_x / phi_x.sum()).astype(image.dtype)
-
-            # 1D Kernels for depthwise conv
-            # Horizontal: (C, 1, 1, K)
-            h_kernel = phi_x[None, None, None, :]
-            h_kernel = jnp.tile(h_kernel, (c, 1, 1, 1))
-            
-            # Vertical: (C, 1, K, 1)
-            v_kernel = phi_x[None, None, :, None]
-            v_kernel = jnp.tile(v_kernel, (c, 1, 1, 1))
-
-            # Apply Horizontal pass
-            out = jax.lax.conv_general_dilated(
-                image, h_kernel, (1, 1), padding='SAME',
-                feature_group_count=c,
-                dimension_numbers=('NCHW', 'OIHW', 'NCHW')
-            )
-            # Apply Vertical pass
-            out = jax.lax.conv_general_dilated(
-                out, v_kernel, (1, 1), padding='SAME',
-                feature_group_count=c,
-                dimension_numbers=('NCHW', 'OIHW', 'NCHW')
-            )
-            return out
-        image_gauss = gaussian_blur_2d(image[None].transpose(0, 3, 1, 2))
+        image_gauss = _gaussian_blur_2d_nchw(image[None].transpose(0, 3, 1, 2))
         image = image_gauss.squeeze().reshape(image.shape)
     
     return image.astype(jnp.uint8)
@@ -408,7 +404,7 @@ class PixelObsWrapper(JaxatariWrapper):
     Apply this wrapper after the AtariWrapper!
     """
     # TODO: remove do_pixel_resize and resize whenever a different shape / grayscale is given?
-    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False, use_native_downscaling: bool = False, smooth_image: bool = True, frame_stack_size: int = 4, frame_skip: int = 4, max_pooling: bool = True, clip_reward: bool = True):
+    def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False, use_native_downscaling: bool = False, smooth_image: bool = False, frame_stack_size: int = 4, frame_skip: int = 4, max_pooling: bool = True, clip_reward: bool = True):
         super().__init__(env)
         assert isinstance(env, AtariWrapper), "PixelObsWrapper has to be applied after AtariWrapper"
         self.frame_stack_size = frame_stack_size
@@ -500,7 +496,7 @@ class PixelObsWrapper(JaxatariWrapper):
         truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
         image_stack, pixel_state = jax.lax.cond(
-            infos["env_done"].any(),  # use actual env_done for reset condition, not affected by episodic life
+            jnp.logical_or(infos["env_done"].any(), truncated),  # use actual env_done for reset condition, not affected by episodic life
             lambda: self.reset(atari_state.key),  
             lambda: (image_stack, PixelState(atari_state, image_stack))
         )
@@ -667,7 +663,7 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
         (image_stack, obs_stack), pixel_oc_state = jax.lax.cond(
-            infos["env_done"].any(),  # use actual env_done for reset condition, not affected by episodic life
+            jnp.logical_or(infos["env_done"].any(), truncated),  # use actual env_done for reset condition, not affected by episodic life
             lambda: self.reset(atari_state.key),
             lambda: ((image_stack, obs_stack), PixelAndObjectCentricState(atari_state, image_stack, obs_stack))
         )
@@ -746,7 +742,7 @@ class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
         truncated = truncations.any()
         # Autoreset (gym's SAME_STEP mode) -> reset whole stack
         (image_stack, obs_stack), pixel_oc_state = jax.lax.cond(
-            infos["env_done"].any(),
+            jnp.logical_or(infos["env_done"].any(), truncated),  # use actual env_done for reset condition, not affected by episodic life
             lambda: self.reset(atari_state.key),
             lambda: ((image_stack, obs_stack), PixelAndObjectCentricState(atari_state, image_stack, obs_stack)),
         )

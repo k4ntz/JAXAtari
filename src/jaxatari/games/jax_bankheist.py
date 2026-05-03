@@ -1396,6 +1396,11 @@ class JaxBankHeist(JaxEnvironment[BankHeistState, BankHeistObservation, BankHeis
     def _get_done(self, state: BankHeistState) -> bool:
         return state.player_lives < 0
 
+def pad_to_shape(mask, shape, transparent_id):
+    h, w = mask.shape
+    return jnp.pad(mask, ((0, shape[0]-h), (0, shape[1]-w)), 
+                  mode='constant', constant_values=transparent_id)
+
 class BankHeistRenderer(JAXGameRenderer):
     def __init__(self, consts: BankHeistConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or BankHeistConstants()
@@ -1455,214 +1460,175 @@ class BankHeistRenderer(JAXGameRenderer):
         )
         self.POLICE_MASKS = jnp.stack([pol_side_mask, pol_front_padded])
         
+        # --- Pre-compute masks for all 4 directions ---
+        # Player directions: 0: DOWN, 1: UP, 2: RIGHT, 3: LEFT
+        # Based on ACTION_SET: 2: RIGHT, 3: LEFT, 0: DOWN, 1: UP
+        self.PLAYER_DIRECTION_MASKS = jnp.stack([
+            self.PLAYER_MASKS[1],                   # 0: DOWN
+            self.PLAYER_MASKS[1],                   # 1: UP
+            self.PLAYER_MASKS[0],                   # 2: RIGHT
+            jnp.flip(self.PLAYER_MASKS[0], axis=1), # 3: LEFT
+        ])
+        
+        # Police directions: 0: DOWN, 1: UP, 2: RIGHT, 3: LEFT
+        # Based on DIR_UP=1, DIR_DOWN=0, DIR_LEFT=3, DIR_RIGHT=2
+        self.POLICE_DIRECTION_MASKS = jnp.stack([
+            pol_front_padded,                       # 0: DOWN
+            pol_front_padded,                       # 1: UP
+            jnp.flip(pol_side_mask, axis=1),        # 2: RIGHT
+            pol_side_mask,                          # 3: LEFT
+        ])
+        
+        # --- Bake static elements into city maps ---
+        tank_mask = self.SHAPE_MASKS['fuel_tank']
+        tx, ty = self.consts.FUEL_TANK_POSITION
+        stx = jnp.round(tx * self.jr.config.width_scaling).astype(jnp.int32)
+        sty = jnp.round(ty * self.jr.config.height_scaling).astype(jnp.int32)
+        
+        def bake_tank(city_map):
+            target_slice = jax.lax.dynamic_slice(city_map, (sty, stx), tank_mask.shape)
+            updated_slice = jnp.where(tank_mask != self.jr.TRANSPARENT_ID, tank_mask, target_slice)
+            return jax.lax.dynamic_update_slice(city_map, updated_slice, (sty, stx))
+            
+        self.SHAPE_MASKS['city_maps'] = jax.vmap(bake_tank)(self.SHAPE_MASKS['city_maps'])
+        
+        # --- Prepare uniform shapes for vectorized batch rendering ---
+        # We'll use 12x12 as the uniform shape (max of all small sprites)
+        self.BATCH_SHAPE = (12, 12)
+        
+        def pad_to_batch(mask):
+            h, w = mask.shape
+            return jnp.pad(mask, ((0, self.BATCH_SHAPE[0]-h), (0, self.BATCH_SHAPE[1]-w)), 
+                          mode='constant', constant_values=self.jr.TRANSPARENT_ID)
+
+        self.PLAYER_BATCH_MASKS = jax.vmap(pad_to_batch)(self.PLAYER_DIRECTION_MASKS)
+        self.POLICE_BATCH_MASKS = jax.vmap(pad_to_batch)(self.POLICE_DIRECTION_MASKS)
+        self.BANK_BATCH_MASK = pad_to_batch(self.SHAPE_MASKS['bank'])
+        self.SCORE_BATCH_MASKS = jax.vmap(pad_to_batch)(self.SHAPE_MASKS['bank_scores'])
+        self.DIGIT_BATCH_MASKS = jax.vmap(pad_to_batch)(self.SHAPE_MASKS['digits'])
+        self.DYNAMITE_BATCH_MASK = pad_to_batch(self.SHAPE_MASKS['dynamite'])
+
         # --- Procedural color IDs ---
         self.fuel_color_id = self.COLOR_TO_ID[(167, 26, 26)]
         self.black_color_id = self.COLOR_TO_ID.get((0, 0, 0), 0)
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_fuel_tank(self, raster, state):
+        # Now only renders the fill, since outline is baked into background
         tank_mask = self.SHAPE_MASKS['fuel_tank'] 
-        tank_x, tank_y = self.consts.FUEL_TANK_POSITION
-        raster = self.jr.render_at(raster, tank_x, tank_y, tank_mask, flip_offset=self.FLIP_OFFSETS['fuel_tank'])
+        tx, ty = self.consts.FUEL_TANK_POSITION
+        
+        stx = jnp.round(tx * self.jr.config.width_scaling).astype(jnp.int32)
+        sty = jnp.round(ty * self.jr.config.height_scaling).astype(jnp.int32)
+        sh, sw = tank_mask.shape 
+        
+        target_slice = jax.lax.dynamic_slice(raster, (sty, stx), (sh, sw))
+        
         level = state.fuel / self.consts.FUEL_CAPACITY
+        pixel_level = jnp.ceil(level * sh).astype(jnp.int32)
+        fill_y_mask = (jnp.arange(sh) >= (sh - pixel_level))
         
-        scaled_tank_x = jnp.round(tank_x * self.jr.config.width_scaling).astype(jnp.int32)
-        scaled_tank_y = jnp.round(tank_y * self.jr.config.height_scaling).astype(jnp.int32)
+        # Fill where tank is NOT transparent
+        final_fill_mask = fill_y_mask[:, None] & (tank_mask != self.jr.TRANSPARENT_ID)
+        updated_slice = jnp.where(final_fill_mask, jnp.asarray(self.fuel_color_id, raster.dtype), target_slice)
         
-        sprite_h, sprite_w = tank_mask.shape 
-        
-        pixel_level = jnp.ceil(level * sprite_h).astype(jnp.int32)
-        
-        xx, yy = self.jr._xx, self.jr._yy
-        
-        fill_top_y = scaled_tank_y + sprite_h - pixel_level
-        
-        fill_box_mask = (yy >= fill_top_y) & (yy < scaled_tank_y + sprite_h) & \
-                        (xx >= scaled_tank_x) & (xx < scaled_tank_x + sprite_w)
-        
-        sprite_coords_y = yy - scaled_tank_y
-        sprite_coords_x = xx - scaled_tank_x
-        sampled_tank_mask = map_coordinates(
-            tank_mask,
-            [sprite_coords_y, sprite_coords_x],
-            order=0,
-            cval=self.jr.TRANSPARENT_ID
-        )
-        tank_pixels_mask = (sampled_tank_mask != self.jr.TRANSPARENT_ID)
-        final_fill_mask = fill_box_mask & tank_pixels_mask
-        
-        return jnp.where(final_fill_mask, jnp.asarray(self.fuel_color_id, raster.dtype), raster)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def render_lives(self, raster, state, life_mask):
-        def body_fun(i, rast):
-            return jax.lax.cond(
-                i < state.player_lives,
-                lambda r: self.jr.render_at(r, self.consts.LIFE_POSITIONS[i][0], self.consts.LIFE_POSITIONS[i][1], life_mask, flip_offset=jnp.array([0,0])),
-                lambda r: r,
-                rast
-            )
-        raster = jax.lax.fori_loop(0, len(self.consts.LIFE_POSITIONS), body_fun, raster)
-        return raster
+        return jax.lax.dynamic_update_slice(raster, updated_slice, (sty, stx))
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
-        raster = self.jr.create_object_raster(self.BACKGROUND)
-        ### Render City
-        city_mask = self.SHAPE_MASKS['city_maps'][state.map_id % self.SHAPE_MASKS['city_maps'].shape[0]]
-        raster = self.jr.render_at(raster, 0, 0, city_mask, flip_offset=self.FLIP_OFFSETS['city_maps'])
-        ### Render Player
-        branches = [
-            lambda: self.PLAYER_MASKS[1],  # DOWN (Front)
-            lambda: self.PLAYER_MASKS[1],  # UP (Front)
-            lambda: self.PLAYER_MASKS[0],  # RIGHT (Side)
-            lambda: jnp.flip(self.PLAYER_MASKS[0], axis=1),   # LEFT (Flipped Side)
-        ]
-        player_direction = jax.lax.cond(
-            state.player.direction == 4, # NOOP
-            lambda: 2, # Default to RIGHT
-            lambda: state.player.direction
-        )
-        player_mask = jax.lax.switch(player_direction, branches)
-        raster = self.jr.render_at(raster, state.player.position[0], state.player.position[1], player_mask, flip_offset=jnp.array([0,0]))
+        # 1. Start with the pre-rendered city background (including baked fuel tank outline)
+        raster = self.SHAPE_MASKS['city_maps'][state.map_id % self.SHAPE_MASKS['city_maps'].shape[0]]
         
-        ### Render Fuel Tank
-        raster = self._render_fuel_tank(raster, state)
-        fuel_gauge_position = jax.lax.dynamic_index_in_dim(self.consts.TANK_LEVELS, state.bank_heists, axis=0, keepdims=False)
-        fuel_gauge_mask = self.SHAPE_MASKS['fuel_gauge']
-        raster = jax.lax.cond(fuel_gauge_position > 0,
-                              lambda: self.jr.render_at(raster, 
-                                                        self.consts.FUEL_TANK_POSITION[0]+8, 
-                                                        self.consts.FUEL_TANK_POSITION[1]+(self.consts.TANK_HEIGHT - fuel_gauge_position), 
-                                                        fuel_gauge_mask,
-                                                        flip_offset=self.FLIP_OFFSETS['fuel_gauge']),
-                              lambda: raster,
-                              )
+        # 2. Collect ALL dynamic objects for a single vectorized batch render
+        # We'll build arrays of (x, y) and (mask) for every possible object
+        # and hide inactive ones by placing them off-screen.
         
-        ### Render Player Lives
-        life_mask = self.PLAYER_MASKS[0] 
-        raster = self.render_lives(raster, state, life_mask)
+        xs = []
+        ys = []
+        masks = []
         
-        ### Render Banks
-        bank_mask = self.SHAPE_MASKS['bank']
-        bank_flip_offset = self.FLIP_OFFSETS['bank']
-        def render_bank(i, r):
-            return jax.lax.cond(
-                state.bank_positions.visibility[i] != 0,
-                lambda r_in: self.jr.render_at(r_in, state.bank_positions.position[i, 0], state.bank_positions.position[i, 1], bank_mask, flip_offset=bank_flip_offset),
-                lambda r_in: r_in,
-                r
-            )
-        raster = jax.lax.fori_loop(0, state.bank_positions.position.shape[0], render_bank, raster)
-
-        ### MERGED: Render Pending Bank Scores (Uses exact spawn positions)
-        def render_bank_score(i, r):
-            score_index = state.pending_police_scores[i] - 1
-            safe_score_index = jnp.clip(score_index, 0, 8)
-            score_mask = self.SHAPE_MASKS['bank_scores'][safe_score_index]
-            score_flip_offset = self.FLIP_OFFSETS['bank_scores']
+        # --- Player ---
+        p_dir = jax.lax.select(state.player.direction == 4, 2, state.player.direction)
+        xs.append(state.player.position[0])
+        ys.append(state.player.position[1])
+        masks.append(self.PLAYER_BATCH_MASKS[p_dir])
+        
+        # --- Fuel Tank Gauge ---
+        fuel_gauge_y_offset = jax.lax.dynamic_index_in_dim(self.consts.TANK_LEVELS, state.bank_heists, axis=0, keepdims=False)
+        # Use -100 to hide if gauge is 0
+        xs.append(jax.lax.select(fuel_gauge_y_offset > 0, self.consts.FUEL_TANK_POSITION[0]+8, -100))
+        ys.append(self.consts.FUEL_TANK_POSITION[1] + (self.consts.TANK_HEIGHT - fuel_gauge_y_offset))
+        masks.append(pad_to_shape(self.SHAPE_MASKS['fuel_gauge'], self.BATCH_SHAPE, self.jr.TRANSPARENT_ID))
+        
+        # --- Lives (Unrolled into list) ---
+        life_mask = self.PLAYER_BATCH_MASKS[2]
+        for i in range(len(self.consts.LIFE_POSITIONS)):
+            xs.append(jax.lax.select(i < state.player_lives, self.consts.LIFE_POSITIONS[i][0], -100))
+            ys.append(self.consts.LIFE_POSITIONS[i][1])
+            masks.append(life_mask)
             
-            # Using File 2's specific spawn_positions array instead of bank array
-            safe_x = state.pending_police_spawn_positions[i, 0]
-            safe_y = state.pending_police_spawn_positions[i, 1]
+        # --- Banks ---
+        for i in range(3):
+            xs.append(jax.lax.select(state.bank_positions.visibility[i] != 0, state.bank_positions.position[i, 0], -100))
+            ys.append(state.bank_positions.position[i, 1])
+            masks.append(self.BANK_BATCH_MASK)
             
-            return jax.lax.cond(
-                state.pending_police_spawns[i] > 0,
-                lambda r_in: self.jr.render_at(r_in, safe_x, safe_y, score_mask, flip_offset=score_flip_offset),
-                lambda r_in: r_in,
-                r
-            )
-        raster = jax.lax.fori_loop(0, state.pending_police_spawns.shape[0], render_bank_score, raster)
-        
-        ### MERGED: Render Killed Police Scores
-        def render_killed_police_score(i, r):
-            score_index = state.killed_police_scores[i] - 1
-            safe_score_index = jnp.clip(score_index, 0, 8)
-            score_mask = self.SHAPE_MASKS['bank_scores'][safe_score_index]
-            score_flip_offset = self.FLIP_OFFSETS['bank_scores']
+        # --- Pending Bank Scores ---
+        for i in range(3):
+            s_idx = jnp.clip(state.pending_police_scores[i] - 1, 0, 8)
+            xs.append(jax.lax.select(state.pending_police_spawns[i] > 0, state.pending_police_spawn_positions[i, 0], -100))
+            ys.append(state.pending_police_spawn_positions[i, 1])
+            masks.append(self.SCORE_BATCH_MASKS[s_idx])
             
-            display_condition = state.bank_spawn_timers[i] > (self.consts.BANK_RESPAWN_TIME - 120)
+        # --- Killed Police Scores ---
+        for i in range(3):
+            s_idx = jnp.clip(state.killed_police_scores[i] - 1, 0, 8)
+            visible = state.bank_spawn_timers[i] > (self.consts.BANK_RESPAWN_TIME - 120)
+            xs.append(jax.lax.select(visible, state.enemy_positions.position[i, 0], -100))
+            ys.append(state.enemy_positions.position[i, 1])
+            masks.append(self.SCORE_BATCH_MASKS[s_idx])
             
-            return jax.lax.cond(
-                display_condition,
-                lambda r_in: self.jr.render_at(r_in, state.enemy_positions.position[i, 0], state.enemy_positions.position[i, 1], score_mask, flip_offset=score_flip_offset),
-                lambda r_in: r_in,
-                r
-            )
-        raster = jax.lax.fori_loop(0, state.bank_spawn_timers.shape[0], render_killed_police_score, raster)
-
-        ### Render Police Cars
-        police_branches = [
-            lambda: self.POLICE_MASKS[1],  # DOWN (Front)
-            lambda: self.POLICE_MASKS[1],  # UP (Front)
-            lambda: jnp.flip(self.POLICE_MASKS[0], axis=1),   # RIGHT (Flipped Side)
-            lambda: self.POLICE_MASKS[0],   # LEFT (Side)
-        ]
-        
-        def render_police_car(i, r):
-            def render_police(raster_input):
-                police_direction = jax.lax.cond(
-                    state.enemy_positions.direction[i] == 4, # NOOP
-                    lambda: 2,  # Default to RIGHT
-                    lambda: state.enemy_positions.direction[i]
-                )
-                police_mask = jax.lax.switch(police_direction, police_branches)
-                return self.jr.render_at(raster_input, state.enemy_positions.position[i, 0], state.enemy_positions.position[i, 1], police_mask, flip_offset=jnp.array([0,0]))
+        # --- Police Cars ---
+        for i in range(3):
+            p_dir = jax.lax.select(state.enemy_positions.direction[i] == 4, 2, state.enemy_positions.direction[i])
+            xs.append(jax.lax.select(state.enemy_positions.visibility[i] != 0, state.enemy_positions.position[i, 0], -100))
+            ys.append(state.enemy_positions.position[i, 1])
+            masks.append(self.POLICE_BATCH_MASKS[p_dir])
             
-            return jax.lax.cond(
-                state.enemy_positions.visibility[i] != 0,
-                render_police,
-                lambda r_in: r_in,
-                r
-            )
-        raster = jax.lax.fori_loop(0, state.enemy_positions.position.shape[0], render_police_car, raster)
-        
-        ### MERGED: Render Dynamite (with blink effect)
-        def render_dynamite(raster_input):
-            dynamite_mask = self.SHAPE_MASKS['dynamite']
-            return self.jr.render_at(raster_input, state.dynamite_position[0], state.dynamite_position[1], dynamite_mask, flip_offset=self.FLIP_OFFSETS['dynamite'])
-        
+        # --- Dynamite ---
         dynamite_active = ~jnp.all(state.dynamite_position == jnp.array([-1, -1]))
         dynamite_visible = dynamite_active & ((state.dynamite_timer[0] % 8) < 4)
-        raster = jax.lax.cond(dynamite_visible, render_dynamite, lambda r: r, raster)
+        xs.append(jax.lax.select(dynamite_visible, state.dynamite_position[0], -100))
+        ys.append(state.dynamite_position[1])
+        masks.append(self.DYNAMITE_BATCH_MASK)
         
-        ### Render Score
-        score_digits_arr = self.jr.int_to_digits(state.money, max_digits=4)
-        raster = self.jr.render_label_selective(
-            raster, 90, 179, 
-            all_digits=score_digits_arr, 
-            digit_id_masks=self.SHAPE_MASKS['digits'], 
-            start_index=0, 
-            num_to_render=4,
-            spacing=12,
-            max_digits_to_render=4
+        # --- Score ---
+        score_digits = self.jr.int_to_digits(state.money, max_digits=4)
+        for i in range(4):
+            xs.append(jnp.array(90 + i * 12))
+            ys.append(jnp.array(179))
+            masks.append(self.DIGIT_BATCH_MASKS[score_digits[i]])
+            
+        # 3. Execution of single vectorized batch stamp
+        raster = self.jr.render_at_batch(
+            raster, 
+            jnp.stack(xs), 
+            jnp.stack(ys), 
+            jnp.stack(masks)
         )
+        
+        # 4. Final dynamic elements (Fuel level and Flash)
+        raster = self._render_fuel_tank(raster, state)
 
-        ### MERGED: Render Explosion Flashes
         def apply_flash(palette):
             flash_idx = state.explosion_timer % 15
             is_light_grey = (flash_idx >= 5) & (flash_idx < 10)
-            # channels is static on RendererConfig (not traced); Python if avoids
-            # lax.cond's requirement that both branches return identical shapes.
             if self.config.channels == 1:
-                flash_color = jnp.where(
-                    is_light_grey,
-                    jnp.array([170], dtype=jnp.uint8),
-                    jnp.array([100], dtype=jnp.uint8),
-                )
+                flash_color = jnp.where(is_light_grey, jnp.array([170], dtype=jnp.uint8), jnp.array([100], dtype=jnp.uint8))
             else:
-                flash_color = jnp.where(
-                    is_light_grey,
-                    jnp.array([170, 170, 170], dtype=jnp.uint8),
-                    jnp.array([100, 100, 100], dtype=jnp.uint8),
-                )
+                flash_color = jnp.where(is_light_grey, jnp.array([170, 170, 170], dtype=jnp.uint8), jnp.array([100, 100, 100], dtype=jnp.uint8))
             return palette.at[self.black_color_id].set(flash_color)
 
-        final_palette = jax.lax.cond(
-            state.explosion_timer > 0,
-            apply_flash,
-            lambda p: p,
-            self.PALETTE
-        )
+        final_palette = jax.lax.cond(state.explosion_timer > 0, apply_flash, lambda p: p, self.PALETTE)
 
         return self.jr.render_from_palette(raster, final_palette)

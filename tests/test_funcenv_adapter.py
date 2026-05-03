@@ -39,6 +39,7 @@ def func_env(raw_env):
 class TestGymnasiumApiCompliance:
     """Tests core compliance with the Gymnasium API."""
 
+    @pytest.mark.integration
     def test_gymnasium_env_checker(self, gym_env):
         """Validates the wrapper against Gymnasium's official environment checker."""
         try:
@@ -67,6 +68,7 @@ class TestGymnasiumApiCompliance:
         assert isinstance(info, dict), "Info from step must be a dictionary."
         assert gym_env.observation_space.contains(obs), "Observation from step is not in the observation space."
 
+    @pytest.mark.integration
     def test_render_method(self, gym_env):
         """Tests that rendering in 'rgb_array' mode returns a valid image."""
         gym_env.reset(seed=42)
@@ -76,6 +78,7 @@ class TestGymnasiumApiCompliance:
         assert frame.ndim == 3 and frame.shape[2] == 3, "Rendered frame must be a HxWx3 NumPy array."
         assert frame.dtype == gym_env.observation_space.dtype, "Rendered frame dtype should match observation space dtype."
 
+    @pytest.mark.integration
     def test_seeding_and_determinism(self, raw_env):
         """Ensures that seeding the environment produces deterministic trajectories."""
         # Create two separate wrapper instances from the same raw env
@@ -103,6 +106,7 @@ class TestGymnasiumApiCompliance:
 class TestGymWrapperIntegration:
     """Tests that the environment correctly composes with standard Gymnasium wrappers."""
 
+    @pytest.mark.integration
     def test_time_limit_wrapper(self, gym_env):
         """Tests integration with the TimeLimit wrapper."""
         max_steps = 15
@@ -117,6 +121,7 @@ class TestGymWrapperIntegration:
         assert truncated, "TimeLimit wrapper should signal truncation at max_episode_steps."
         env.close()
 
+    @pytest.mark.integration
     def test_preprocessing_wrappers(self, gym_env):
         """Tests integration with observation preprocessing wrappers like Resize and Grayscale."""
         env = gymnasium.wrappers.ResizeObservation(gym_env, shape=(84, 84))
@@ -127,6 +132,7 @@ class TestGymWrapperIntegration:
         assert obs.shape == (84, 84, 1), "Observation shape should match the wrapped space."
         env.close()
 
+    @pytest.mark.integration
     def test_frame_stack_wrapper(self, gym_env):
         """Tests integration with the FrameStack wrapper."""
         num_stack = 4
@@ -143,6 +149,7 @@ class TestGymWrapperIntegration:
 class TestJaxTransforms:
     """Tests if the underlying functional environment is compatible with JAX transforms."""
 
+    @pytest.mark.integration
     def test_jittable_transition(self, func_env):
         """Tests that the core transition function can be JIT-compiled."""
         jit_transition = jax.jit(func_env.transition)

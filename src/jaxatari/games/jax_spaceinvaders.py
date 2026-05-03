@@ -3,9 +3,6 @@
 #
 # Simulates the Space Invaders game using JAX
 #
-# Authors:
-# - Luca Philippi 
-# - Julian Bayer 
 import os
 from functools import partial
 from typing import NamedTuple, Tuple
@@ -1394,7 +1391,11 @@ class SpaceInvadersRenderer(JAXGameRenderer):
         # Calculate canvas size
         canvas_h = (self.consts.ENEMY_ROWS - 1) * step_y + sprite_h
         canvas_w = (self.consts.ENEMY_COLS - 1) * step_x + sprite_w
-        enemy_canvas = jnp.full((canvas_h, canvas_w), self.jr.TRANSPARENT_ID, dtype=jnp.uint8)
+        enemy_canvas = jnp.full(
+            (canvas_h, canvas_w),
+            self.jr.TRANSPARENT_ID,
+            dtype=sample_sprite.dtype,
+        )
 
         total = self.consts.ENEMY_ROWS * self.consts.ENEMY_COLS
         indices = jnp.arange(total)

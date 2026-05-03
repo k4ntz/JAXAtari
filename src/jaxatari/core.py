@@ -24,19 +24,19 @@ def _warn_deprecated_obs_to_flat_array(env: JaxEnvironment) -> None:
 
 
 
-# Map of game names to their module paths
+# Map of game names to their module paths (commented out games are WIP and will be supported in the near future)
 GAME_MODULES = {
     "amidar": "jaxatari.games.jax_amidar",
-    "airraid": "jaxatari.games.jax_airraid",
+    # "airraid": "jaxatari.games.jax_airraid",
     "alien": "jaxatari.games.jax_alien",
     "asterix": "jaxatari.games.jax_asterix",
     "asteroids": "jaxatari.games.jax_asteroids",
     "atlantis": "jaxatari.games.jax_atlantis",
     "bankheist": "jaxatari.games.jax_bankheist",
+    "beamrider": "jaxatari.games.jax_beamrider",
     "berzerk": "jaxatari.games.jax_berzerk",
     "blackjack": "jaxatari.games.jax_blackjack",
     "breakout": "jaxatari.games.jax_breakout",
-    "casino": "jaxatari.games.jax_casino",
     "centipede": "jaxatari.games.jax_centipede",
     "choppercommand": "jaxatari.games.jax_choppercommand",
     "enduro": "jaxatari.games.jax_enduro",
@@ -45,14 +45,14 @@ GAME_MODULES = {
     "freeway": "jaxatari.games.jax_freeway",
     "frostbite": "jaxatari.games.jax_frostbite",
     "galaxian": "jaxatari.games.jax_galaxian",
-    "hangman": "jaxatari.games.jax_hangman",
+    "gravitar": "jaxatari.games.jax_gravitar",
+    # "hangman": "jaxatari.games.jax_hangman",
     "hauntedhouse": "jaxatari.games.jax_hauntedhouse",
     "humancannonball": "jaxatari.games.jax_humancannonball",
     "kangaroo": "jaxatari.games.jax_kangaroo",
     "kingkong": "jaxatari.games.jax_kingkong",
-    "klax": "jaxatari.games.jax_klax",
+    # "klax": "jaxatari.games.jax_klax",
     "lasergates": "jaxatari.games.jax_lasergates",
-    "montezumarevenge": "jaxatari.games.jax_montezumarevenge",
     "namethisgame": "jaxatari.games.jax_namethisgame",
     "phoenix": "jaxatari.games.jax_phoenix",
     "pong": "jaxatari.games.jax_pong",
@@ -71,10 +71,13 @@ GAME_MODULES = {
     "tron": "jaxatari.games.jax_tron",
     "turmoil": "jaxatari.games.jax_turmoil",
     "venture": "jaxatari.games.jax_venture",
-    "videocheckers": "jaxatari.games.jax_videocheckers",
+    # "videocheckers": "jaxatari.games.jax_videocheckers",
     "videocube": "jaxatari.games.jax_videocube",
     "videopinball": "jaxatari.games.jax_videopinball",
     "wordzapper": "jaxatari.games.jax_wordzapper",
+    "mspacman": "jaxatari.games.jax_mspacman",
+    "montezumarevenge": "jaxatari.games.jax_montezumarevenge",
+    # "pacman": "jaxatari.games.jax_pacman",
     # Add new games here
 }
 
@@ -85,7 +88,6 @@ MOD_MODULES = {
     "freeway": "jaxatari.games.mods.freeway_mods.FreewayEnvMod",
     "breakout": "jaxatari.games.mods.breakout_mods.BreakoutEnvMod",
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
-    "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod",
     "videopinball": "jaxatari.games.mods.videopinball_mods.VideoPinballEnvMod",
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
     "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
@@ -93,6 +95,12 @@ MOD_MODULES = {
     "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
     "montezumarevenge": "jaxatari.games.mods.montezuma_revenge_mods.MontezumaRevengeEnvMod",
     "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
+    "gravitar": "jaxatari.games.mods.gravitar_mods.GravitarEnvMod",
+    "phoenix": "jaxatari.games.mods.phoenix_mods.PhoenixEnvMod",
+    "enduro": "jaxatari.games.mods.enduro_mods.EnduroEnvMod",
+    "qbert": "jaxatari.games.mods.qbert_mods.QbertEnvMod",
+    "mspacman": "jaxatari.games.mods.mspacman_mods.MsPacmanEnvMod",
+    "beamrider": "jaxatari.games.mods.beamrider_mods.BeamRiderEnvMod"
 }
 
 
@@ -158,12 +166,10 @@ def make(game_name: str,
         if env_class is None:
             raise ImportError(f"No JaxEnvironment subclass found in {GAME_MODULES[game_name]}")
 
-        # 2. Get default constants
-        base_consts = env_class().consts
-
-        # 3. Handle mods if requested
+        # 2. Mods need default consts for pre-scan; otherwise a single env_class() is enough.
         if mods:
             try:
+                base_consts = env_class().consts
                 env = apply_modifications(
                     game_name=game_name,
                     mods_config=mods,
@@ -182,8 +188,7 @@ def make(game_name: str,
                     UserWarning
                 )
 
-        # No mods: return default base env with default constants
-        env = env_class(consts=base_consts)
+        env = env_class()
         _warn_deprecated_obs_to_flat_array(env)
         return env
 

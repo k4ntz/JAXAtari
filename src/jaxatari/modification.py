@@ -18,6 +18,66 @@ import dataclasses
 import jax.numpy as jnp
 
 
+def _register_jit_invalidation_target(core_env, maybe_jitted_callable) -> None:
+    """
+    Register a jitted callable on the core env so renderer swaps can invalidate it.
+    """
+    underlying_fn = getattr(maybe_jitted_callable, "__func__", maybe_jitted_callable)
+    if not hasattr(underlying_fn, "clear_cache"):
+        return
+    if not hasattr(core_env, "_jit_invalidation_targets"):
+        core_env._jit_invalidation_targets = []
+    if all(existing is not underlying_fn for existing in core_env._jit_invalidation_targets):
+        core_env._jit_invalidation_targets.append(underlying_fn)
+
+
+def _targets_with_compiled_cache(core_env) -> list[str]:
+    """
+    Return repr labels for registered jit targets that already hold compiled cache.
+    """
+    compiled = []
+    for target in getattr(core_env, "_jit_invalidation_targets", []):
+        cache_size_fn = getattr(target, "_cache_size", None)
+        if callable(cache_size_fn):
+            try:
+                if cache_size_fn() > 0:
+                    compiled.append(getattr(target, "__qualname__", repr(target)))
+            except Exception:
+                # Keep tripwire best-effort; never fail normal mod operations.
+                pass
+    return compiled
+
+
+def _mark_jit_mutation(core_env, reason: str) -> None:
+    """
+    Mark that runtime behavior changed. Warn if this happened after tracing.
+    """
+    core_env._jit_mutation_epoch = getattr(core_env, "_jit_mutation_epoch", 0) + 1
+    if not getattr(core_env, "_jit_tripwire_enabled", True):
+        return
+    compiled_targets = _targets_with_compiled_cache(core_env)
+    if compiled_targets:
+        preview = ", ".join(compiled_targets[:4])
+        if len(compiled_targets) > 4:
+            preview += ", ..."
+        warnings.warn(
+            "JIT tripwire: runtime monkeypatch/override happened after JIT tracing. "
+            f"Reason: {reason}. Compiled targets detected: {preview}. "
+            "If this override changes traced behavior, clear caches/retrace to avoid stale execution.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+
+def _clear_registered_jit_caches(core_env) -> None:
+    """
+    Clear all registered jitted callables that may have captured old renderer state.
+    """
+    for target in getattr(core_env, "_jit_invalidation_targets", []):
+        if hasattr(target, "clear_cache"):
+            target.clear_cache()
+
+
 def apply_native_downscaling(
     base_env,
     pixel_resize_shape: tuple[int, int],
@@ -55,9 +115,34 @@ def apply_native_downscaling(
             if hasattr(old_renderer, fn_name):
                 patched_method = getattr(old_renderer, fn_name)
                 setattr(new_renderer, fn_name, patched_method)
+                # The patched method is a bound plugin method; its JIT cache is keyed
+                # by the plugin instance (static_argnums=0), which survives the renderer
+                # swap unchanged. Clear it so the method retraces against the new renderer.
+                underlying_fn = getattr(patched_method, '__func__', patched_method)
+                if hasattr(underlying_fn, 'clear_cache'):
+                    underlying_fn.clear_cache()
 
     # 6. Swap the renderer on the *core* env used by render()
     core_env.renderer = new_renderer
+
+    _mark_jit_mutation(core_env, "renderer_swap_native_downscaling")
+
+    # 6a. Clear all explicitly registered JIT targets that may have captured old
+    #     renderer internals as compile-time constants.
+    _clear_registered_jit_caches(core_env)
+
+    # 6b. Clear JIT caches on any controller render() methods in the chain.
+    #     Controllers (e.g. SeaquestEnvMod) may define their own @jit render()
+    #     that closed over the old renderer as a compile-time constant. Walking
+    #     toward core_env and clearing per-class render() forces a retrace.
+    env_layer = base_env
+    while env_layer is not core_env:
+        render_fn = type(env_layer).__dict__.get('render')
+        if render_fn is not None and hasattr(render_fn, 'clear_cache'):
+            render_fn.clear_cache()
+        env_layer = getattr(env_layer, '_env', None)
+        if env_layer is None:
+            break
 
     # 7. Patch image_space() on the externally visible env (base_env)
     #    so wrappers query the correct downscaled shape.
@@ -388,6 +473,7 @@ def _apply_attribute_overrides(env, attribute_overrides_dict: dict, mod_key: str
                 f"but this attribute does not exist on the base environment."
             )
         setattr(env, attr_name, value)
+        _mark_jit_mutation(env, f"attribute_override:{mod_key}:{attr_name}")
 
 
 class JaxAtariModController:
@@ -623,10 +709,14 @@ class JaxAtariModController:
                         )
                     elif env_has_attr:
                         setattr(self._env, fn_name, fn_logic)
+                        _register_jit_invalidation_target(self._env, fn_logic)
+                        _mark_jit_mutation(self._env, f"env_method_patch:{mod_key}:{fn_name}")
                         # LOGGING
                         self._env._mod_history["method"].add(f"Env.{fn_name}")
                     elif renderer_has_attr:
                         setattr(self._env.renderer, fn_name, fn_logic)
+                        _register_jit_invalidation_target(self._env, fn_logic)
+                        _mark_jit_mutation(self._env, f"renderer_method_patch:{mod_key}:{fn_name}")
                         # LOGGING & TRACKING
                         self._env._mod_history["method"].add(f"Renderer.{fn_name}")
                         if fn_name not in self._env._patched_renderer_methods:

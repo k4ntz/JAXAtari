@@ -99,3 +99,34 @@ class HallOfFameMod(JaxAtariInternalModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def _apply_tree_separation_respawn(self, i: chex.Array, x_tree: chex.Array, taken_from_trees: chex.Array, taken_from_moguls: chex.Array, min_sep_tree_tree: chex.Array, min_sep_tree_mogul: chex.Array, xmin_t: chex.Array, xmax_t: chex.Array) -> chex.Array:
         return x_tree
+
+
+class InvertFlagsMod(JaxAtariInternalModPlugin):
+    """Swaps flag colors: blue gates become red and the special 20th gate becomes blue."""
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _draw_flags(self, raster: jnp.ndarray, state) -> jnp.ndarray:
+        renderer = self._env.renderer
+        flags_xy = state.flags[..., :2]
+        left_pos = flags_xy.astype(jnp.int32)
+        right_pos = (flags_xy + jnp.array([self._env.consts.flag_distance, 0.0])).astype(jnp.int32)
+
+        n_flags = state.flags.shape[0]
+        is_twentieth_visible = jnp.greater_equal(state.gates_seen, jnp.int32(18))
+        # Inverted: all red by default; the 20th gate slot switches to blue when visible
+        is_red_mask = jnp.ones((n_flags,), dtype=bool).at[1].set(jnp.logical_not(is_twentieth_visible))
+
+        def draw_flag(i, r):
+            is_red = is_red_mask[i]
+            mask = jax.lax.select(is_red, renderer.RED_FLAG_MASK, renderer.BLUE_FLAG_MASK)
+            offset = jax.lax.select(is_red, renderer.RED_FLAG_OFFSET, renderer.BLUE_FLAG_OFFSET)
+            cx_left, cy = left_pos[i]
+            cx_right, _ = right_pos[i]
+            top = (cy - (mask.shape[0] // 2)).astype(jnp.int32)
+            left_l = (cx_left - (mask.shape[1] // 2)).astype(jnp.int32)
+            left_r = (cx_right - (mask.shape[1] // 2)).astype(jnp.int32)
+            r = renderer.jr.render_at_clipped(r, left_l, top, mask, flip_offset=offset)
+            r = renderer.jr.render_at_clipped(r, left_r, top, mask, flip_offset=offset)
+            return r
+
+        return jax.lax.fori_loop(0, self._env.consts.max_num_flags, draw_flag, raster)

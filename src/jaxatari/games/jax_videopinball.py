@@ -1,12 +1,6 @@
 """
 Project: JAXAtari VideoPinball
-Description: Our team's JAX implementation of Video Pinball.
-
-Authors:
-    - Michael Olenberger <michael.olenberger@stud.tu-darmstadt.de>
-    - Maximilian Roth <maximilian.roth@stud.tu-darmstadt.de>
-    - Jonas Neumann <jonas.neumann@stud.tu-darmstadt.de>
-    - Yuddhish Chooah <yuddhish.chooah@stud.tu-darmstadt.de>
+Description: JAX implementation of Video Pinball for JAXAtari.
 
 """
 

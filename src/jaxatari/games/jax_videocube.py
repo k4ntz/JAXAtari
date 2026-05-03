@@ -5,11 +5,6 @@
 #
 # Simulates the Atari VideoCube game
 #
-# Authors:
-# - Xarion99
-# - Keksmo
-# - Embuer
-# - Snocember
 import os
 from typing import NamedTuple, Tuple
 from functools import partial

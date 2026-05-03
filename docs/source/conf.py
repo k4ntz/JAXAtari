@@ -12,8 +12,8 @@ sys.path.insert(0, os.path.abspath('../../src'))
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'JAXAtari'
-copyright = '2026 Quentin Delfosse, Jannis Blüml'
-author = 'Quentin Delfosse, Jannis Blüml'
+copyright = '2025, JAXAtari contributors'
+author = 'JAXAtari contributors'
 version = ''
 release = ''
 
