@@ -219,11 +219,18 @@ class NPYImageEditor:
         pencil_btn = tk.Button(main_toolbar_frame, image=self.pencil_icon, command=self.activate_pencil)
         pencil_btn.pack(side=tk.LEFT, padx=2, pady=2)
         Tooltip(pencil_btn, "Pencil")
-        
+
+        self.bucket_fill_btn = tk.Button(main_toolbar_frame, text="Bucket", command=self.activate_bucket_fill)
+        self.bucket_fill_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(self.bucket_fill_btn, "Bucket Fill (Contiguous)")
+
+        self.replace_color_btn = tk.Button(main_toolbar_frame, text="Replace", command=self.activate_replace_color)
+        self.replace_color_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(self.replace_color_btn, "Replace Color (Global)")
+
         dropper_btn = tk.Button(main_toolbar_frame, image=self.dropper_icon, command=self.activate_dropper)
         dropper_btn.pack(side=tk.LEFT, padx=2, pady=2)
         Tooltip(dropper_btn, "Color Dropper")
-
         # --- NEW: Toggle Grid Button ---
         self.grid_btn = tk.Button(main_toolbar_frame, text="Grid", command=self.toggle_grid)
         self.grid_btn.pack(side=tk.LEFT, padx=2, pady=2)
@@ -293,8 +300,16 @@ class NPYImageEditor:
         tk.Button(self.selection_mode_frame, text="Save as Preset", command=lambda: self.save_selection_preset()).pack(side=tk.LEFT)
         tk.Button(self.selection_mode_frame, text="Load from Preset", command=lambda: self.load_selection_preset()).pack(side=tk.LEFT)
 
-        status_bar = tk.Label(self.root, textvariable=self.current_mouse_position, bd=1, relief=tk.SUNKEN, anchor=tk.W)
-        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        status_bar_frame = tk.Frame(self.root, bd=1, relief=tk.SUNKEN)
+        status_bar_frame.pack(side=tk.BOTTOM, fill=tk.X)
+
+        status_bar = tk.Label(status_bar_frame, textvariable=self.current_mouse_position, anchor=tk.W)
+        status_bar.pack(side=tk.LEFT)
+
+        self.current_image_size = tk.StringVar()
+        self.current_image_size.set("Size: -- x --")
+        size_label = tk.Label(status_bar_frame, textvariable=self.current_image_size, anchor=tk.E)
+        size_label.pack(side=tk.RIGHT)
         
         # --- MODIFIED: Right Sidebar with Tabs (History / Colors) ---
         self.sidebar_frame = tk.Frame(self.root, width=220)
@@ -678,6 +693,14 @@ class NPYImageEditor:
         self.tool = "dropper"
         self.selection_mode_frame.pack_forget()
 
+    def activate_bucket_fill(self):
+        self.tool = "bucket_fill"
+        self.selection_mode_frame.pack_forget()
+
+    def activate_replace_color(self):
+        self.tool = "replace_color"
+        self.selection_mode_frame.pack_forget()
+
     def select_all_with_color(self):
         self.tool = "select_all_with_color"
         self.selection_mode_frame.pack(fill=tk.X)
@@ -777,6 +800,20 @@ class NPYImageEditor:
                 self.submit_selection(new_selection)
                 self.update_state("select with same color")
 
+            if self.tool == "bucket_fill":
+                target_color = self.image[y, x].copy()
+                if not np.array_equal(target_color, self.current_color):
+                    fill_mask = self.magic_wand(y, x, target_color)
+                    self.image[fill_mask] = self.current_color
+                    self.update_state("bucket_fill")
+
+            if self.tool == "replace_color":
+                target_color = self.image[y, x].copy()
+                if not np.array_equal(target_color, self.current_color):
+                    mask = np.all(self.image == target_color, axis=2)
+                    self.image[mask] = self.current_color
+                    self.update_state("replace_color")
+
         self.selection_start = None
         self.selection_end = None
         self.mouse_pressed = False
@@ -850,6 +887,10 @@ class NPYImageEditor:
     def update_display(self):
         if self.image is None:
             return
+
+        h, w = self.image.shape[:2]
+        if hasattr(self, 'current_image_size'):
+            self.current_image_size.set(f"Size: {w} x {h}")
 
         self.ax.clear()
         
