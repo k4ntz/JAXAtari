@@ -3,7 +3,6 @@ import os
 from typing import NamedTuple, Tuple
 import jax.numpy as jnp
 import chex
-import pygame
 from functools import partial
 from jax import lax
 import jax.lax
@@ -1894,7 +1893,8 @@ class RiverraidRenderer(JAXGameRenderer):
         is_bank = is_left_bank | is_right_bank | is_island
         
         # 6. Create base raster of river color at target resolution
-        raster = jnp.full((target_h, target_w), river_color, dtype=jnp.uint8)
+        id_dtype = self.BACKGROUND.dtype
+        raster = jnp.full((target_h, target_w), river_color, dtype=id_dtype)
         
         # 7. Paint banks on top
         raster = jnp.where(is_bank, green_banks, raster)
@@ -2114,7 +2114,9 @@ class RiverraidRenderer(JAXGameRenderer):
         ui_height_px = int(round(self.consts.UI_HEIGHT * self.config.height_scaling))
         
         if ui_height_px > 0:
-            ui_block = jnp.full((ui_height_px, target_w), self.UI_COLOR_ID, dtype=jnp.uint8)
+            ui_block = jnp.full(
+                (ui_height_px, target_w), self.UI_COLOR_ID, dtype=raster.dtype
+            )
             raster = raster.at[target_h - ui_height_px:, :].set(ui_block)
 
         # Redraw black line

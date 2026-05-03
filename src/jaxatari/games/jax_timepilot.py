@@ -1696,20 +1696,23 @@ class TimePilotRenderer(JAXGameRenderer):
         # --- 5. Render Enemies ---
         # Helper functions remain inside, they are JAX-pure
         def get_plane_frame(i, current_level_sprites, current_level_offsets):
-            enemy_sprite_mask = current_level_sprites['enemy_pos'][state.enemy_states[0][2]]
+            # Palette IDs exceed 255 (uint16 masks); never cast masks to uint8.
+            enemy_sprite_mask = current_level_sprites['enemy_pos'][
+                state.enemy_states[i][2]
+            ]
             enemy_sprite_mask = jax.lax.cond(
                 state.level_boss == i,
                 lambda: jax.lax.cond(
                     jnp.isin(state.enemy_states[i][2], jnp.array(range(1, 5))),
                     lambda: current_level_sprites['level_boss_left_left'],
-                    lambda: current_level_sprites['level_boss_right_right']
+                    lambda: current_level_sprites['level_boss_right_right'],
                 ),
-                lambda: enemy_sprite_mask
+                lambda: enemy_sprite_mask,
             )
             enemy_sprite_mask = jax.lax.cond(
                 state.enemy_death_timers[i] > 0,
                 lambda: current_level_sprites['enemy_death'],
-                lambda: enemy_sprite_mask
+                lambda: enemy_sprite_mask,
             )
             return enemy_sprite_mask, (0, 0)
         
@@ -1725,13 +1728,21 @@ class TimePilotRenderer(JAXGameRenderer):
                          (jnp.array(sprite_idx==4, jnp.int32)-jnp.array(sprite_idx==2, jnp.int32))*frame_idx)
             )
             
-            enemy_sprite_mask = current_level_sprites['enemy_pos'][2*sprite_idx + frame_idx]
-            
-            # Boss logic
-            boss_mask_A = jnp.array(current_level_sprites['level_boss_left_left']*frame_idx + 
-                                  current_level_sprites['level_boss_left_right']*(1-frame_idx), jnp.uint8)
-            boss_mask_B = jnp.array(current_level_sprites['level_boss_right_left']*frame_idx + 
-                                  current_level_sprites['level_boss_right_right']*(1-frame_idx), jnp.uint8)
+            enemy_sprite_mask = current_level_sprites['enemy_pos'][
+                2 * sprite_idx + frame_idx
+            ]
+
+            # Boss logic (select frames without uint8 arithmetic — IDs are uint16)
+            boss_mask_A = jax.lax.select(
+                frame_idx == 0,
+                current_level_sprites['level_boss_left_right'],
+                current_level_sprites['level_boss_left_left'],
+            )
+            boss_mask_B = jax.lax.select(
+                frame_idx == 0,
+                current_level_sprites['level_boss_right_right'],
+                current_level_sprites['level_boss_right_left'],
+            )
             enemy_sprite_mask, render_offset = jax.lax.cond(
                 state.level_boss == i,
                 lambda: (jax.lax.cond(
@@ -1744,7 +1755,7 @@ class TimePilotRenderer(JAXGameRenderer):
             enemy_sprite_mask = jax.lax.cond(
                 state.enemy_death_timers[i] > 0,
                 lambda: current_level_sprites['enemy_death'],
-                lambda: enemy_sprite_mask
+                lambda: enemy_sprite_mask,
             )
             return enemy_sprite_mask, render_offset
         
