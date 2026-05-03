@@ -14,10 +14,6 @@ from jaxatari.spaces import Space
 from jaxatari.environment import ObjectObservation, JAXAtariAction as Action
 
 
-#
-# by Tim Morgner and Jan Larionow
-#
-
 class FlagCaptureConstants(struct.PyTreeNode):
     WIDTH: int = struct.field(pytree_node=False, default=160)
     HEIGHT: int = struct.field(pytree_node=False, default=210)
