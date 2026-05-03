@@ -1,9 +1,3 @@
-"""
-
-Lukas Bergholz, Linus Orlob, Vincent Jahn
-
-"""
-
 import os
 import jax
 import jax.numpy as jnp
@@ -1790,7 +1784,7 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
         )
 
         # 4. Extract the integer pixel movement per frame
-        raw_vel_x = jnp.fix(new_velocity_x).astype(jnp.int32)
+        raw_vel_x = jnp.trunc(new_velocity_x).astype(jnp.int32)
 
         # 5. Apply the slide-to-grid rule (if no input, slide exactly 1 pixel until x % 4 == 0)
         dx = jnp.where(
