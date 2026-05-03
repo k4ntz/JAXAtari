@@ -109,3 +109,58 @@ class LongRangeTractorMod(JaxAtariInternalModPlugin):
     constants_overrides = {
         "TRACTOR_BEAM_RANGE": 50.0,
     }
+
+class NeonMod(JaxAtariInternalModPlugin):
+    """
+    Changes colors to bright neon variants.
+    """
+    constants_overrides = {
+        "RECOLOR_RULES": (
+            {"source": (101, 183, 217), "target": (255, 20, 147)},
+            {"source": (198, 108, 58), "target": (0, 255, 0)},
+            {"source": (72, 160, 72), "target": (255, 255, 0)},
+            {"source": (223, 183, 85), "target": (0, 255, 255)},
+        )
+    }
+
+class RedAlertMod(JaxAtariInternalModPlugin):
+    """
+    Makes all terrain red/orange for a high-alert aesthetic.
+    """
+    constants_overrides = {
+        "RECOLOR_RULES": (
+            {"source": (223, 183, 85), "target": (255, 50, 50)},
+            {"source": (84, 160, 197), "target": (220, 40, 40)},
+            {"source": (66, 72, 200), "target": (200, 30, 30)},
+            {"source": (213, 130, 74), "target": (255, 0, 0)},
+        )
+    }
+
+class GrayscaleMod(JaxAtariInternalModPlugin):
+    """
+    Converts the visual palette to grayscale.
+    """
+    constants_overrides = {
+        "RECOLOR_RULES": (
+            {"source": (223, 183, 85), "target": (150, 150, 150)},
+            {"source": (84, 160, 197), "target": (120, 120, 120)},
+            {"source": (66, 72, 200), "target": (80, 80, 80)},
+            {"source": (228, 111, 111), "target": (140, 140, 140)},
+            {"source": (213, 130, 74), "target": (160, 160, 160)},
+            {"source": (101, 183, 217), "target": (220, 220, 220)},
+            {"source": (198, 108, 58), "target": (110, 110, 110)},
+            {"source": (72, 160, 72), "target": (90, 90, 90)},
+        )
+    }
+
+class InvertedColorsMod(JaxAtariInternalModPlugin):
+    """
+    Inverts the primary colors.
+    """
+    constants_overrides = {
+        "RECOLOR_RULES": (
+            {"source": (101, 183, 217), "target": (154, 72, 38)}, 
+            {"source": (223, 183, 85), "target": (32, 72, 170)},  
+            {"source": (84, 160, 197), "target": (171, 95, 58)},
+        )
+    }

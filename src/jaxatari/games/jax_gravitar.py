@@ -108,6 +108,9 @@ class GravitarConstants(struct.PyTreeNode):
     FORCE_SPRITES: bool = struct.field(pytree_node=False, default=True)
     SCALE: int = struct.field(pytree_node=False, default=1)
     
+    # Visual overrides
+    RECOLOR_RULES: tuple = struct.field(pytree_node=False, default=())
+    
     # Object limits
     MAX_BULLETS: int = struct.field(pytree_node=False, default=16) # reduced from 64 for faster compilation
     MAX_ENEMIES: int = struct.field(pytree_node=False, default=4) # reduced from 16 for faster compilation
@@ -3643,6 +3646,14 @@ class GravitarRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, sprite_dir)
 
+        if self.consts.RECOLOR_RULES:
+            for k in list(self.SHAPE_MASKS.keys()):
+                if k.endswith('_mods'):
+                    base_k = k[:-5]
+                    self.SHAPE_MASKS[base_k] = self.SHAPE_MASKS[k]
+                    if k in self.FLIP_OFFSETS:
+                        self.FLIP_OFFSETS[base_k] = self.FLIP_OFFSETS[k]
+
         SM = self.SHAPE_MASKS
         T = self.jr.TRANSPARENT_ID
 
@@ -3737,6 +3748,18 @@ class GravitarRenderer(JAXGameRenderer):
         )
         asset_config.append({'name': 'enemy_orange_flipped', 'type': 'procedural', 'data': orange_flipped})
 
+        if self.consts.RECOLOR_RULES:
+            recolor_rules = list(self.consts.RECOLOR_RULES)
+            for i in range(len(asset_config)):
+                if asset_config[i].get('type') == 'background':
+                    continue
+                asset_config[i] = dict(asset_config[i])
+                if 'recolorings' not in asset_config[i]:
+                    asset_config[i]['recolorings'] = {'mods': recolor_rules}
+                else:
+                    asset_config[i]['recolorings'] = dict(asset_config[i]['recolorings'])
+                    asset_config[i]['recolorings']['mods'] = recolor_rules
+
         return asset_config
 
     def _build_terrain_rasters(self, obs_sprites: tuple) -> jnp.ndarray:
@@ -3776,6 +3799,12 @@ class GravitarRenderer(JAXGameRenderer):
             if surf is None:
                 bank.append(empty_page.copy())
                 continue
+                
+            if self.consts.RECOLOR_RULES:
+                surf = np.array(self.jr.perform_recoloring(
+                    jnp.array(surf, dtype=jnp.uint8), 
+                    list(self.consts.RECOLOR_RULES)
+                ))
 
             th, tw = surf.shape[0], surf.shape[1]
             scale = min(GW / tw, GH / th)

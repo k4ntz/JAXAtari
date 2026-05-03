@@ -11,6 +11,10 @@ from jaxatari.games.mods.gravitar.gravitar_mod_plugins import (
     InfiniteFuelMod,
     SlowEnemiesMod,
     LongRangeTractorMod,
+    NeonMod,
+    RedAlertMod,
+    GrayscaleMod,
+    InvertedColorsMod,
 )
 
 
@@ -29,6 +33,10 @@ class GravitarEnvMod(JaxAtariModController):
         "infinite_fuel": InfiniteFuelMod,
         "slow_enemies": SlowEnemiesMod,
         "long_range_tractor": LongRangeTractorMod,
+        "neon_mode": NeonMod,
+        "red_alert": RedAlertMod,
+        "grayscale": GrayscaleMod,
+        "inverted_colors": InvertedColorsMod,
     }
 
     def __init__(
