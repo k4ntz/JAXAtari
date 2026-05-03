@@ -1,6 +1,6 @@
 import os
 from functools import partial
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional
 import jax.lax
 import jax.numpy as jnp
 import chex
@@ -93,6 +93,12 @@ class TennisConstants(AutoDerivedConstants):
     ENEMY_CONST: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1))
 
     GAME_MIDDLE_HORIZONTAL: chex.Array = struct.field(pytree_node=False, default=None)
+    # Visual overrides
+    RGB_COURT: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_BLUE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_RED: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_LINES: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    
     # Asset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default=_get_default_asset_config())
 
@@ -1450,10 +1456,38 @@ class TennisRenderer(JAXGameRenderer):
         # Get file-based assets from consts
         final_asset_config = list(self.consts.ASSET_CONFIG)
         
+        court_color = self.consts.RGB_COURT if self.consts.RGB_COURT is not None else (82, 126, 45)
+        blue_color = self.consts.RGB_BLUE if self.consts.RGB_BLUE is not None else (117, 128, 240)
+        red_color = self.consts.RGB_RED if self.consts.RGB_RED is not None else (240, 128, 128)
+        lines_color = self.consts.RGB_LINES if self.consts.RGB_LINES is not None else (214, 214, 214)
+        
+        recolor_rules = []
+        if self.consts.RGB_COURT is not None:
+            recolor_rules.append({'source': (82, 126, 45), 'target': court_color})
+        if self.consts.RGB_BLUE is not None:
+            recolor_rules.append({'source': (117, 128, 240), 'target': blue_color})
+        if self.consts.RGB_RED is not None:
+            recolor_rules.append({'source': (240, 128, 128), 'target': red_color})
+        if self.consts.RGB_LINES is not None:
+            recolor_rules.append({'source': (214, 214, 214), 'target': lines_color})
+            
+        if recolor_rules:
+            background_rgba = self.jr.perform_recoloring(background_rgba, recolor_rules)
+            
+            # Recolor everything in the asset config that is file-based (like players)
+            for i in range(len(final_asset_config)):
+                if 'recolorings' not in final_asset_config[i]:
+                    final_asset_config[i] = dict(final_asset_config[i])
+                    final_asset_config[i]['recolorings'] = {'mods': recolor_rules}
+                else:
+                    # We won't worry about merging if they already have recolorings, 
+                    # but none do in the default asset config.
+                    pass
+        
         # Create procedural assets
         procedural_colors = jnp.array([
-            [117, 128, 240, 255],
-            [240, 128, 128, 255],
+            [blue_color[0], blue_color[1], blue_color[2], 255],
+            [red_color[0], red_color[1], red_color[2], 255],
         ], dtype=jnp.uint8).reshape(-1, 1, 1, 4)
         
         # Add procedural and specially-handled background assets
@@ -1473,12 +1507,12 @@ class TennisRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
         # 5. Get color IDs
-        self.BLUE_ID = self.COLOR_TO_ID.get((117, 128, 240), 0)
-        self.RED_ID = self.COLOR_TO_ID.get((240, 128, 128), 0)
+        self.BLUE_ID = self.COLOR_TO_ID.get(blue_color, 0)
+        self.RED_ID = self.COLOR_TO_ID.get(red_color, 0)
         
         if self.BLUE_ID == 0 or self.RED_ID == 0:
-            blue_rgb = np.array([117, 128, 240], dtype=np.uint8)
-            red_rgb = np.array([240, 128, 128], dtype=np.uint8)
+            blue_rgb = np.array(blue_color, dtype=np.uint8)
+            red_rgb = np.array(red_color, dtype=np.uint8)
             palette_np = np.array(self.PALETTE)
             palette_rgb = palette_np[:, :3] if palette_np.shape[1] >= 3 else palette_np
             if self.BLUE_ID == 0:
@@ -1496,17 +1530,21 @@ class TennisRenderer(JAXGameRenderer):
         self.BG_TOP_MASK = self.BACKGROUND
         self.BG_BOTTOM_MASK = swap_colors(self.BG_TOP_MASK)
         
-        self.PLAYER_STACK = self.SHAPE_MASKS['player_anim']
+        suffix = '_mods' if recolor_rules else ''
+        def get_mask(name):
+            return self.SHAPE_MASKS.get(name + suffix, self.SHAPE_MASKS[name])
+            
+        self.PLAYER_STACK = get_mask('player_anim')
         self.ENEMY_STACK = vmap_swap(self.PLAYER_STACK)
         
-        self.PLAYER_RACKET_STACK = self.SHAPE_MASKS['racket_anim']
+        self.PLAYER_RACKET_STACK = get_mask('racket_anim')
         self.ENEMY_RACKET_STACK = vmap_swap(self.PLAYER_RACKET_STACK)
         
-        self.PLAYER_DIGITS_STACK = vmap_swap(self.SHAPE_MASKS['digits'])
-        self.ENEMY_DIGITS_STACK = self.SHAPE_MASKS['digits']
+        self.PLAYER_DIGITS_STACK = vmap_swap(get_mask('digits'))
+        self.ENEMY_DIGITS_STACK = get_mask('digits')
         
-        self.PLAYER_UI_A = swap_colors(self.SHAPE_MASKS['ui_a'])
-        self.ENEMY_UI_A = self.SHAPE_MASKS['ui_a']
+        self.PLAYER_UI_A = swap_colors(get_mask('ui_a'))
+        self.ENEMY_UI_A = get_mask('ui_a')
         # 7. Store animation lengths
         self.anim_len = {
             'player': self.ENEMY_STACK.shape[0],
@@ -1608,10 +1646,11 @@ class TennisRenderer(JAXGameRenderer):
         
         raster = self.jr.create_object_raster(bg_mask)
         # 2. Render Ball Shadow
+        ball_shadow_mask = self.SHAPE_MASKS.get('ball_shadow_mods', self.SHAPE_MASKS['ball_shadow'])
         raster = self.jr.render_at_clipped(
             raster, state.ball_state.ball_x, state.ball_state.ball_y,
-            self.SHAPE_MASKS['ball_shadow'], 
-            flip_offset=self.FLIP_OFFSETS['ball_shadow']
+            ball_shadow_mask, 
+            flip_offset=self.FLIP_OFFSETS.get('ball_shadow_mods', self.FLIP_OFFSETS['ball_shadow'])
         )
         
         # 3. Render Player & Enemy
@@ -1685,9 +1724,10 @@ class TennisRenderer(JAXGameRenderer):
         )
         
         # 4. Render Ball
+        ball_mask = self.SHAPE_MASKS.get('ball_mods', self.SHAPE_MASKS['ball'])
         raster = self.jr.render_at_clipped(
             raster, state.ball_state.ball_x, state.ball_state.ball_y - state.ball_state.ball_z,
-            self.SHAPE_MASKS['ball'], flip_offset=self.FLIP_OFFSETS['ball']
+            ball_mask, flip_offset=self.FLIP_OFFSETS.get('ball_mods', self.FLIP_OFFSETS['ball'])
         )
         
         # 5. Render Score UI

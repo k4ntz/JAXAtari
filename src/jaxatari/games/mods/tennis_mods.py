@@ -8,6 +8,12 @@ from jaxatari.games.mods.tennis.tennis_mod_plugins import (
     LazyEnemyMod,
     HighBounceMod,
     FastEnemyMod,
+    ClayCourtMod,
+    GrassCourtMod,
+    HardCourtMod,
+    NightMod,
+    GrayscaleMod,
+    InvertedColorsMod,
 )
 
 class TennisEnvMod(JaxAtariModController):
@@ -24,6 +30,12 @@ class TennisEnvMod(JaxAtariModController):
         "lazy_enemy": LazyEnemyMod,
         "high_bounce": HighBounceMod,
         "fast_enemy": FastEnemyMod,
+        "clay_court": ClayCourtMod,
+        "grass_court": GrassCourtMod,
+        "hard_court": HardCourtMod,
+        "night_mode": NightMod,
+        "grayscale": GrayscaleMod,
+        "inverted_colors": InvertedColorsMod,
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "tennis", "sprites")

@@ -317,3 +317,60 @@ class FastEnemyMod(JaxAtariInternalModPlugin):
             new_enemy_direction,
             enemy_state_after_y_step.y_movement_direction
         )
+
+class ClayCourtMod(JaxAtariInternalModPlugin):
+    """
+    Changes the court colors to a clay court aesthetic (orange/red).
+    """
+    constants_overrides = {
+        "RGB_COURT": (180, 80, 40),
+    }
+
+class GrassCourtMod(JaxAtariInternalModPlugin):
+    """
+    Changes the court colors to a grass court aesthetic (green).
+    """
+    constants_overrides = {
+        "RGB_COURT": (40, 140, 60),
+    }
+
+class HardCourtMod(JaxAtariInternalModPlugin):
+    """
+    Changes the court colors to a hard court aesthetic (light blue and dark blue).
+    """
+    constants_overrides = {
+        "RGB_COURT": (40, 80, 140),
+    }
+
+class NightMod(JaxAtariInternalModPlugin):
+    """
+    Darkens the court for a night-time aesthetic.
+    """
+    constants_overrides = {
+        "RGB_COURT": (15, 25, 15),
+        "RGB_BLUE": (58, 64, 120),  # Dimmed original (117, 128, 240)
+        "RGB_RED": (120, 64, 64),   # Dimmed original (240, 128, 128)
+        "RGB_LINES": (100, 100, 100),
+    }
+
+class GrayscaleMod(JaxAtariInternalModPlugin):
+    """
+    Makes the court grayscale.
+    """
+    constants_overrides = {
+        "RGB_COURT": (60, 60, 60),
+        "RGB_BLUE": (120, 120, 120),
+        "RGB_RED": (80, 80, 80),
+        "RGB_LINES": (200, 200, 200),
+    }
+
+
+class InvertedColorsMod(JaxAtariInternalModPlugin):
+    """
+    Swaps the player and opponent colors.
+    """
+    constants_overrides = {
+        "RGB_BLUE": (240, 128, 128),
+        "RGB_RED": (117, 128, 240),
+    }
+
