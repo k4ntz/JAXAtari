@@ -220,6 +220,8 @@ class AsteroidsConstants(AutoDerivedConstants):
 
     # Asteroid constants
     ASTEROID_SPEED: Tuple[int, int] = struct.field(pytree_node=False, default=(2, 1))
+    # Pixels per step pulled toward screen center (0 = disabled, 1 = subtle, 2 = strong)
+    GRAVITY_STRENGTH: int = struct.field(pytree_node=False, default=0)
     
     # Derived Asteroid Borders
     ASTEROID_BORDER_LEFT: Optional[int] = struct.field(pytree_node=False, default=None)
@@ -572,37 +574,50 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
             lambda: side_step_counter - counter_step
         )
 
-        @jax.jit
-        def update_asteroid(i, asteroid_states):
-            ret = jnp.copy(asteroid_states)
-            axis_directions = jax.lax.switch(
-                ret[i][2],
-                [
-                    lambda: (self.consts.ASTEROID_SPEED[0], self.consts.ASTEROID_SPEED[1]),
-                    lambda: (-self.consts.ASTEROID_SPEED[0], self.consts.ASTEROID_SPEED[1]),
-                    lambda: (-self.consts.ASTEROID_SPEED[0], -self.consts.ASTEROID_SPEED[1]),
-                    lambda: (self.consts.ASTEROID_SPEED[0], -self.consts.ASTEROID_SPEED[1])
-                ]
-            )
-            return ret.at[i].set(jax.lax.cond(
-                ret[i][3] != self.consts.INACTIVE,
-                lambda: jnp.array([self.final_pos(self.consts.MIN_ENTITY_X,
-                                                  self.consts.MAX_ENTITY_X,
-                                                  jax.lax.cond(
-                                                      side_step,
-                                                      lambda: ret[i][0] + axis_directions[0],
-                                                      lambda: ret[i][0])),
-                                   self.final_pos(self.consts.MIN_ENTITY_Y,
-                                                  self.consts.MAX_ENTITY_Y,
-                                                  ret[i][1] + axis_directions[1]),
-                                   ret[i][2], ret[i][3], ret[i][4]]),
-                lambda: ret[i]
-            ))
+        # Index corresponds to rotation:
+        # 0=(+x,+y), 1=(-x,+y), 2=(-x,-y), 3=(+x,-y)
+        dx = jnp.array([
+            self.consts.ASTEROID_SPEED[0],
+            -self.consts.ASTEROID_SPEED[0],
+            -self.consts.ASTEROID_SPEED[0],
+            self.consts.ASTEROID_SPEED[0],
+        ])
+        dy = jnp.array([
+            self.consts.ASTEROID_SPEED[1],
+            self.consts.ASTEROID_SPEED[1],
+            -self.consts.ASTEROID_SPEED[1],
+            -self.consts.ASTEROID_SPEED[1],
+        ])
 
-        # update asteroid positions
-        asteroid_states = jax.lax.fori_loop(0, self.consts.MAX_NUMBER_OF_ASTEROIDS, update_asteroid, asteroid_states)
+        center_x = self.consts.WIDTH // 2
+        center_y = (self.consts.MIN_ENTITY_Y + self.consts.MAX_ENTITY_Y) // 2
 
-        return asteroid_states, side_step_counter, rng_key
+        def update_single_asteroid(ast_state):
+            x = ast_state[0]
+            y = ast_state[1]
+            rot = ast_state[2]
+            size = ast_state[3]
+            color = ast_state[4]
+
+            vel_x = dx[rot]
+            vel_y = dy[rot]
+
+            # Pull each asteroid slightly toward the screen center each step
+            pull_x = jnp.sign(center_x - x) * self.consts.GRAVITY_STRENGTH
+            pull_y = jnp.sign(center_y - y) * self.consts.GRAVITY_STRENGTH
+
+            new_x_raw = x + jnp.where(side_step, vel_x + pull_x, 0)
+            new_y_raw = y + vel_y + pull_y
+
+            new_x = self.final_pos(self.consts.MIN_ENTITY_X, self.consts.MAX_ENTITY_X, new_x_raw)
+            new_y = self.final_pos(self.consts.MIN_ENTITY_Y, self.consts.MAX_ENTITY_Y, new_y_raw)
+
+            updated_ast = jnp.array([new_x, new_y, rot, size, color])
+            return jnp.where(size != self.consts.INACTIVE, updated_ast, ast_state)
+
+        new_asteroid_states = jax.vmap(update_single_asteroid)(asteroid_states)
+
+        return new_asteroid_states, side_step_counter, rng_key
 
     @partial(jax.jit, static_argnums=(0,))
     def entities_collide(
@@ -630,34 +645,46 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
     def player_hit(self, player_x, player_y, player_active, asteroid_states) -> int:
         """
         Returns index of asteroid hit by player (or -1 if no asteroid is hit)
+        using fully vectorized broadcast collisions.
         """
-        @jax.jit
-        def get_hit_asteroid(i, index):
-            asteroid_dims = jax.lax.switch(
-                asteroid_states[i][3],
-                [
-                    lambda: (0, 0),
-                    lambda: self.consts.ASTEROID_SIZE_L,
-                    lambda: self.consts.ASTEROID_SIZE_L,
-                    lambda: self.consts.ASTEROID_SIZE_M,
-                    lambda: self.consts.ASTEROID_SIZE_S
-                ]
-            )
-            # return i if collision with asteroids at index i occurred, old index otherwise
-            return jax.lax.cond(
-                self.entities_collide(player_x, player_y,
-                                      self.consts.PLAYER_SIZE[0], self.consts.PLAYER_SIZE[1],
-                                      asteroid_states[i][0], asteroid_states[i][1],
-                                      asteroid_dims[0], asteroid_dims[1]),
-                lambda: i,
-                lambda: index
-            )
-
-        return jax.lax.cond(
-            player_active,
-            lambda: jax.lax.fori_loop(0, self.consts.MAX_NUMBER_OF_ASTEROIDS, get_hit_asteroid, -1),
-            lambda: -1
+        w_map = jnp.array(
+            [
+                0,
+                self.consts.ASTEROID_SIZE_L[0],
+                self.consts.ASTEROID_SIZE_L[0],
+                self.consts.ASTEROID_SIZE_M[0],
+                self.consts.ASTEROID_SIZE_S[0],
+            ]
         )
+        h_map = jnp.array(
+            [
+                0,
+                self.consts.ASTEROID_SIZE_L[1],
+                self.consts.ASTEROID_SIZE_L[1],
+                self.consts.ASTEROID_SIZE_M[1],
+                self.consts.ASTEROID_SIZE_S[1],
+            ]
+        )
+
+        ast_x = asteroid_states[:, 0]
+        ast_y = asteroid_states[:, 1]
+        ast_sizes = asteroid_states[:, 3]
+        ast_w = w_map[ast_sizes]
+        ast_h = h_map[ast_sizes]
+
+        collisions = self.entities_collide(
+            player_x,
+            player_y,
+            self.consts.PLAYER_SIZE[0],
+            self.consts.PLAYER_SIZE[1],
+            ast_x,
+            ast_y,
+            ast_w,
+            ast_h,
+        )
+        valid_hits = jnp.logical_and(collisions, player_active)
+        valid_hits = jnp.logical_and(valid_hits, ast_sizes != self.consts.INACTIVE)
+        return jnp.where(jnp.any(valid_hits), jnp.argmax(valid_hits), -1)
 
     @partial(jax.jit, static_argnums=(0,))
     def missile_hit(
@@ -672,153 +699,204 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
     ):
         """
         Returns indices of asteroids hit by missiles (or -1 if no asteroid is hit)
+        using fully vectorized broadcast collisions.
         """
-        @jax.jit
-        def get_hit_asteroid(missile_x, missile_y, i, index):
-            asteroid_dims = jax.lax.switch(
-                asteroid_states[i][3],
-                [
-                    lambda: (0, 0),
-                    lambda: self.consts.ASTEROID_SIZE_L,
-                    lambda: self.consts.ASTEROID_SIZE_L,
-                    lambda: self.consts.ASTEROID_SIZE_M,
-                    lambda: self.consts.ASTEROID_SIZE_S
-                ]
-            )
-            # return i if collision with asteroids at index i occurred, old index otherwise
-            return jax.lax.cond(
-                self.entities_collide(missile_x, missile_y,
-                                      self.consts.MISSILE_SIZE[0], self.consts.MISSILE_SIZE[1],
-                                      asteroid_states[i][0], asteroid_states[i][1],
-                                      asteroid_dims[0], asteroid_dims[1]),
-                lambda: i,
-                lambda: index)
-
-        missile_1_hit = jax.lax.cond(
-            missile_1_active,
-            lambda: jax.lax.fori_loop(0, asteroid_states.shape[0],
-                        lambda i, index: get_hit_asteroid(missile_1_x, missile_1_y, i, index), -1),
-            lambda: -1
+        w_map = jnp.array(
+            [
+                0,
+                self.consts.ASTEROID_SIZE_L[0],
+                self.consts.ASTEROID_SIZE_L[0],
+                self.consts.ASTEROID_SIZE_M[0],
+                self.consts.ASTEROID_SIZE_S[0],
+            ]
         )
-        missile_2_hit = jax.lax.cond(
-            missile_2_active,
-            lambda: jax.lax.fori_loop(0, asteroid_states.shape[0],
-                        lambda i, index: get_hit_asteroid(missile_2_x, missile_2_y, i, index), -1),
-            lambda: -1
+        h_map = jnp.array(
+            [
+                0,
+                self.consts.ASTEROID_SIZE_L[1],
+                self.consts.ASTEROID_SIZE_L[1],
+                self.consts.ASTEROID_SIZE_M[1],
+                self.consts.ASTEROID_SIZE_S[1],
+            ]
         )
 
-        return missile_1_hit, missile_2_hit
+        ast_x = asteroid_states[:, 0]
+        ast_y = asteroid_states[:, 1]
+        ast_sizes = asteroid_states[:, 3]
+        ast_w = w_map[ast_sizes]
+        ast_h = h_map[ast_sizes]
+
+        m1_collisions = self.entities_collide(
+            missile_1_x,
+            missile_1_y,
+            self.consts.MISSILE_SIZE[0],
+            self.consts.MISSILE_SIZE[1],
+            ast_x,
+            ast_y,
+            ast_w,
+            ast_h,
+        )
+        m1_hits = jnp.logical_and(m1_collisions, missile_1_active)
+        m1_hits = jnp.logical_and(m1_hits, ast_sizes != self.consts.INACTIVE)
+        m1_idx = jnp.where(jnp.any(m1_hits), jnp.argmax(m1_hits), -1)
+
+        m2_collisions = self.entities_collide(
+            missile_2_x,
+            missile_2_y,
+            self.consts.MISSILE_SIZE[0],
+            self.consts.MISSILE_SIZE[1],
+            ast_x,
+            ast_y,
+            ast_w,
+            ast_h,
+        )
+        m2_hits = jnp.logical_and(m2_collisions, missile_2_active)
+        m2_hits = jnp.logical_and(m2_hits, ast_sizes != self.consts.INACTIVE)
+        m2_idx = jnp.where(jnp.any(m2_hits), jnp.argmax(m2_hits), -1)
+
+        return m1_idx, m2_idx
 
     @partial(jax.jit, static_argnums=(0,))
-    def destroy_asteroid(self, asteroid_states, index, side_step, rng_key: jax.random.PRNGKey):
+    def resolve_collisions(
+        self,
+        player_x_screen,
+        player_y_screen,
+        player_active,
+        missile_states,
+        asteroid_states,
+        side_step,
+        score,
+        rng_key: jax.random.PRNGKey,
+    ):
         """
-        Removes destroyed asteroids from asteroid_states and returns generated score
+        Vectorized collision resolution for player/missiles vs asteroids.
+        Returns updated asteroid states, collision metadata, score, hit indices, and rng key.
         """
-        asteroid_count = jnp.count_nonzero(asteroid_states, 0)[3]
+        p_hit = self.player_hit(player_x_screen, player_y_screen, player_active, asteroid_states)
+        m_hit = self.missile_hit(
+            missile_states[0][0],
+            missile_states[0][1],
+            missile_states[0][5] > 0,
+            missile_states[1][0],
+            missile_states[1][1],
+            missile_states[1][5] > 0,
+            asteroid_states,
+        )
+        pre_collision_asteroid_states = asteroid_states
 
-        # get size of new asteroid(s)
-        new_asteroid_size = jax.lax.switch(
-            asteroid_states[index][3],
-            (
-                lambda: self.consts.INACTIVE,
-                lambda: self.consts.MEDIUM,
-                lambda: self.consts.MEDIUM,
-                lambda: self.consts.SMALL,
-                lambda: self.consts.INACTIVE
+        raw_hit_idx = jnp.array([p_hit, m_hit[0], m_hit[1]])
+        display_unique = jnp.array(
+            [
+                True,
+                raw_hit_idx[1] != raw_hit_idx[0],
+                (raw_hit_idx[2] != raw_hit_idx[0]) & (raw_hit_idx[2] != raw_hit_idx[1]),
+            ]
+        )
+        display_valid_hits = (raw_hit_idx >= 0) & display_unique
+
+        # Only missile hits should split/award score. Player collision is handled via life loss.
+        split_raw_hit_idx = jnp.array([m_hit[0], m_hit[1], -1])
+        split_unique = jnp.array(
+            [
+                True,
+                split_raw_hit_idx[1] != split_raw_hit_idx[0],
+                False,
+            ]
+        )
+        valid_hits = (split_raw_hit_idx >= 0) & split_unique
+        hit_idx = jnp.where(valid_hits, split_raw_hit_idx, -1)
+        safe_hit_idx = jnp.maximum(hit_idx, 0)
+
+        display_hit_idx = jnp.where(display_valid_hits, raw_hit_idx, -1)
+        safe_display_hit_idx = jnp.maximum(display_hit_idx, 0)
+
+        rng_key, sub_key = jax.random.split(rng_key)
+        hit_sizes = jnp.where(display_valid_hits, asteroid_states[safe_display_hit_idx, 3], 0)
+        anim_steps = jax.random.randint(sub_key, (3,), 0, 2)
+        colliding_asteroids = jnp.stack([display_hit_idx, hit_sizes, anim_steps], axis=-1)
+
+        asteroid_ids = jnp.arange(self.consts.MAX_NUMBER_OF_ASTEROIDS)
+        is_hit = jax.vmap(lambda i: jnp.any(valid_hits & (hit_idx == i)))(asteroid_ids)
+
+        rng_key, sk1, sk2, sk3 = jax.random.split(rng_key, 4)
+        flip_x = jax.random.randint(sk1, (self.consts.MAX_NUMBER_OF_ASTEROIDS,), 0, 4)
+        new_colors = jax.random.randint(sk2, (self.consts.MAX_NUMBER_OF_ASTEROIDS,), 0, 8)
+        ghost_colors = jax.random.randint(sk3, (self.consts.MAX_NUMBER_OF_ASTEROIDS,), 0, 8)
+
+        sizes = asteroid_states[:, 3]
+        rots = asteroid_states[:, 2]
+        xs = asteroid_states[:, 0]
+        ys = asteroid_states[:, 1]
+
+        new_sizes = jnp.where(
+            (sizes == self.consts.LARGE_1) | (sizes == self.consts.LARGE_2),
+            self.consts.MEDIUM,
+            jnp.where(sizes == self.consts.MEDIUM, self.consts.SMALL, self.consts.INACTIVE),
+        )
+
+        new_rots = jnp.where(flip_x % 2 == 1, jnp.bitwise_xor(rots, 1), rots)
+        dx = jnp.array(
+            [
+                self.consts.ASTEROID_SPEED[0],
+                -self.consts.ASTEROID_SPEED[0],
+                -self.consts.ASTEROID_SPEED[0],
+                self.consts.ASTEROID_SPEED[0],
+            ]
+        )
+        new_xs = xs + jnp.where(side_step, dx[new_rots], 0)
+
+        downgraded_states = jnp.where(
+            is_hit[:, None],
+            jnp.stack([new_xs, ys, new_rots, new_sizes, new_colors], axis=-1),
+            asteroid_states,
+        )
+
+        # Match original split rules:
+        # - large -> one downgraded medium in-place + one additional medium spawn
+        # - medium -> downgraded small in-place only (no additional spawn)
+        # - small -> inactive in-place only (no additional spawn)
+        needs_spawn = is_hit & (
+            (sizes == self.consts.LARGE_1) | (sizes == self.consts.LARGE_2)
+        )
+        ghost_rots = jnp.where(flip_x >= 2, jnp.bitwise_xor(rots, 1), rots)
+        ghost_xs = xs + jnp.where(side_step, dx[ghost_rots], 0)
+        ghost_ys = ys + 20
+        all_ghosts = jnp.stack([ghost_xs, ghost_ys, ghost_rots, new_sizes, ghost_colors], axis=-1)
+
+        def place_ghost(i, current_states):
+            valid_spawn = valid_hits[i] & needs_spawn[safe_hit_idx[i]]
+            is_inactive = current_states[:, 3] == self.consts.INACTIVE
+            empty_slot_idx = jnp.argmax(is_inactive)
+            return jax.lax.cond(
+                valid_spawn & jnp.any(is_inactive),
+                lambda states: states.at[empty_slot_idx].set(all_ghosts[safe_hit_idx[i]]),
+                lambda states: states,
+                current_states,
             )
+
+        asteroid_states = jax.lax.fori_loop(0, 3, place_ghost, downgraded_states)
+        score = score + self.get_transition_score(pre_collision_asteroid_states, asteroid_states)
+
+        return asteroid_states, colliding_asteroids, score, p_hit, m_hit, rng_key
+
+    @partial(jax.jit, static_argnums=(0,))
+    def get_transition_score(self, prev_asteroid_states, new_asteroid_states):
+        """
+        Computes score from per-index asteroid size transitions.
+        This is robust against missed per-hit add_score accumulation.
+        """
+        prev_sizes = prev_asteroid_states[:, 3]
+        new_sizes = new_asteroid_states[:, 3]
+
+        is_large_destroy = ((prev_sizes == self.consts.LARGE_1) | (prev_sizes == self.consts.LARGE_2)) & (new_sizes == self.consts.MEDIUM)
+        is_medium_destroy = (prev_sizes == self.consts.MEDIUM) & (new_sizes == self.consts.SMALL)
+        is_small_destroy = (prev_sizes == self.consts.SMALL) & (new_sizes == self.consts.INACTIVE)
+
+        return (
+            20 * jnp.sum(is_large_destroy.astype(jnp.int32))
+            + 50 * jnp.sum(is_medium_destroy.astype(jnp.int32))
+            + 100 * jnp.sum(is_small_destroy.astype(jnp.int32))
         )
-
-        # get score according to size of destroyed asteroid
-        score = jax.lax.switch(
-            asteroid_states[index][3],
-            (
-                lambda: 0,
-                lambda: 20,
-                lambda: 20,
-                lambda: 50,
-                lambda: 100
-            )
-        )
-
-        rng_key, subkey = jax.random.split(rng_key)
-        flip_x = jax.random.randint(subkey, [], 0, 4)
-
-        rng_key, subkey = jax.random.split(rng_key)
-
-        # get new asteroid direction
-        asteroid_rot = jax.lax.cond( # flip direction with 50% chance
-            flip_x % 2 == 1,
-            lambda: jnp.bitwise_xor(asteroid_states[index][2], 1),
-            lambda: asteroid_states[index][2]
-        )
-        x_direction = jax.lax.switch(
-                asteroid_rot,
-                [
-                    lambda: self.consts.ASTEROID_SPEED[0],
-                    lambda: -self.consts.ASTEROID_SPEED[0],
-                    lambda: -self.consts.ASTEROID_SPEED[0],
-                    lambda: self.consts.ASTEROID_SPEED[0]
-                ]
-            )
-
-        # get new asteroid x-position
-        asteroid_x = jax.lax.cond(
-            side_step,
-            lambda: asteroid_states[index][0] + x_direction,
-            lambda: asteroid_states[index][0] # same x postition
-        )
-
-        # set new asteroid
-        new_asteroid_states = asteroid_states.at[index].set(jnp.array([
-            asteroid_x,
-            asteroid_states[index][1], # same y position
-            asteroid_rot,
-            new_asteroid_size,
-            jax.random.randint(rng_key, [], 0, 8)])) # random color
-
-        # add second new medium asteroid for destruction of large asteroids
-        rng_key, subkey = jax.random.split(rng_key)
-
-        # get additional asteroid direction
-        asteroid_rot = jax.lax.cond( # flip direction with 50% chance
-            flip_x >= 2,
-            lambda: jnp.bitwise_xor(asteroid_states[index][2], 1),
-            lambda: asteroid_states[index][2]
-        )
-        x_direction = jax.lax.switch(
-                asteroid_rot,
-                [
-                    lambda: self.consts.ASTEROID_SPEED[0],
-                    lambda: -self.consts.ASTEROID_SPEED[0],
-                    lambda: -self.consts.ASTEROID_SPEED[0],
-                    lambda: self.consts.ASTEROID_SPEED[0]
-                ]
-            )
-
-        # get additional asteroid x-position
-        asteroid_x = jax.lax.cond(
-            side_step,
-            lambda: asteroid_states[index][0] + x_direction,
-            lambda: asteroid_states[index][0] # same x position
-        )
-
-        # set additional asteroid if applicable
-        new_asteroid_states = jax.lax.cond(
-            jnp.logical_and(
-                jnp.logical_and(
-                    asteroid_count < self.consts.MAX_NUMBER_OF_ASTEROIDS,
-                    new_asteroid_size != self.consts.SMALL),
-                new_asteroid_size != self.consts.INACTIVE),
-            lambda: new_asteroid_states.at[asteroid_count].set(jnp.array([
-                asteroid_x,
-                asteroid_states[index][1] + 20,  # y position for second asteroid is increased by 20
-                asteroid_rot,
-                new_asteroid_size,
-                jax.random.randint(rng_key, [], 0, 8)])), # random color
-            lambda: new_asteroid_states,
-        )
-
-        return new_asteroid_states, score, rng_key
 
     @partial(jax.jit, static_argnums=(0,))
     def new_stage(self, player_x, player_y, rng_key: jax.random.PRNGKey):
@@ -970,41 +1048,16 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
         # update asteroids
         asteroid_states, side_step_counter, rng_key = self.asteroids_step(state)
 
-        # get all colliding asteroids
-        p_hit = self.player_hit(self.to_screen_pos(player_x), self.to_screen_pos(player_y), respawn_timer==0, asteroid_states)
-        m_hit = self.missile_hit(missile_states[0][0], missile_states[0][1],
-                                 missile_states[0][5] > 0, missile_states[1][0],
-                                 missile_states[1][1], missile_states[1][5] > 0,
-                                 asteroid_states)
         side_step = side_step_counter > state.side_step_counter
-
-        # update asteroids and score after collisions
-        def update_collisions(i, vals):
-            index = jax.lax.switch(
-                i,
-                [
-                    lambda: p_hit,
-                    lambda: m_hit[0],
-                    lambda: m_hit[1],
-                ]
-            )
-
-            # add asteroid to colliding asteroids
-            new_rng_key, sub_key = jax.random.split(vals[3])
-            colliding_asteroid = jnp.array([index, vals[0][index][3], jax.random.randint(sub_key, [], 0, 2)])
-            new_colliding_asteroids = vals[1].at[i].set(colliding_asteroid)
-
-            # destroy asteroid on hit. DESTRUCTION!!!!!
-            new_asteroid_states, add_score, new_rng_key = jax.lax.cond(
-                index >= 0,
-                lambda: self.destroy_asteroid(vals[0], index, side_step, new_rng_key),
-                lambda: (vals[0], 0, new_rng_key)
-            )
-            return new_asteroid_states, new_colliding_asteroids, vals[2] + add_score, new_rng_key
-
-        colliding_asteroids = jnp.array([[-1, 0, 0], [-1, 0, 0], [-1, 0, 0]])
-        asteroid_states, colliding_asteroids, score, rng_key = jax.lax.fori_loop(
-            0, 3, update_collisions, (asteroid_states, colliding_asteroids, state.score, rng_key)
+        asteroid_states, colliding_asteroids, score, p_hit, m_hit, rng_key = self.resolve_collisions(
+            self.to_screen_pos(player_x),
+            self.to_screen_pos(player_y),
+            respawn_timer == 0,
+            missile_states,
+            asteroid_states,
+            side_step,
+            state.score,
+            rng_key,
         )
 
         # reset score if it exceeds maximum
@@ -1309,17 +1362,31 @@ class AsteroidsRenderer(JAXGameRenderer):
         )
 
         # --- Render Asteroids ---
-        def render_asteroid(i, r):
-            asteroid = state.asteroid_states[i]
-            
-            size_offset = self.ASTEROID_SIZE_OFFSET_MAP[asteroid[3] - 1]
-            asteroid_idx = size_offset + asteroid[4]
-            mask = self.ASTEROID_MASKS_STACKED[asteroid_idx]
+        asteroid_x = state.asteroid_states[:, 0]
+        asteroid_y = state.asteroid_states[:, 1]
+        asteroid_sizes = state.asteroid_states[:, 3]
+        asteroid_colors = state.asteroid_states[:, 4]
 
-            is_active = (state.step_counter % 2 == 1) & (asteroid[3] != self.consts.INACTIVE) & \
-                        ~jnp.any(i == state.colliding_asteroids[:,0])
-            
-            return jax.lax.cond(is_active, lambda ras: self.jr.render_at_clipped(ras, asteroid[0], asteroid[1], mask), lambda ras: ras, r)
+        safe_sizes = jnp.maximum(asteroid_sizes - 1, 0)
+        size_offsets = self.ASTEROID_SIZE_OFFSET_MAP[safe_sizes]
+        asteroid_indices = size_offsets + asteroid_colors
+
+        asteroid_ids = jnp.arange(self.consts.MAX_NUMBER_OF_ASTEROIDS)
+        is_colliding = jax.vmap(
+            lambda asteroid_id: jnp.any(asteroid_id == state.colliding_asteroids[:, 0])
+        )(asteroid_ids)
+        is_active = (state.step_counter % 2 == 1) & (asteroid_sizes != self.consts.INACTIVE) & ~is_colliding
+
+        def render_asteroid(i, r):
+            return jax.lax.cond(
+                is_active[i],
+                lambda ras: self.jr.render_at_clipped(
+                    ras, asteroid_x[i], asteroid_y[i], self.ASTEROID_MASKS_STACKED[asteroid_indices[i]]
+                ),
+                lambda ras: ras,
+                r,
+            )
+
         raster = jax.lax.fori_loop(0, self.consts.MAX_NUMBER_OF_ASTEROIDS, render_asteroid, raster)
 
         # --- Render Asteroid Death Animations ---
