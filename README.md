@@ -12,6 +12,36 @@ Quentin Delfosse, Raban Emunds, Paul Seitz, Jannis Blüml, Sebastian Wette, Domi
 
 ---
 
+
+<div class="collage">
+  <div class="row" align="center">
+    <img src="./docs/source/_static/gifs/pong.gif" alt="Pong" width="24%">
+    <img src="./docs/source/_static/gifs/beamrider.gif" alt="Beamrider" width="24%">
+    <img src="./docs/source/_static/gifs/phoenix.gif" alt="Phoenix" width="24%">
+    <img src="./docs/source/_static/gifs/tennis.gif" alt="Tennis" width="24%">
+  </div>
+  <div class="row" align="center">
+    <img src="./docs/source/_static/gifs/skiing.gif" alt="Skiing" width="24%">
+    <img src="./docs/source/_static/gifs/montezumarevenge.gif" alt="Montezuma" width="24%">
+    <img src="./docs/source/_static/gifs/seaquest.gif" alt="Seaquest" width="24%">
+    <img src="./docs/source/_static/gifs/kangaroo.gif" alt="Kangaroo" width="24%">
+  </div>
+  <div class="row" align="center">
+    <img src="./docs/source/_static/gifs/freeway.gif" alt="Freeway" width="24%">
+    <img src="./docs/source/_static/gifs/venture.gif" alt="Venture" width="24%">
+    <img src="./docs/source/_static/gifs/qbert.gif" alt="Qbert" width="24%">
+    <img src="./docs/source/_static/gifs/frostbite.gif" alt="Frostbite" width="24%">
+  </div>
+  <div class="row" align="center">
+    <img src="./docs/source/_static/gifs/bankheist.gif" alt="Bankheist" width="24%">
+    <img src="./docs/source/_static/gifs/mspacman.gif" alt="Ms. PacMan" width="24%">
+    <img src="./docs/source/_static/gifs/gravitar.gif" alt="Gravitar" width="24%">
+    <img src="./docs/source/_static/gifs/enduro.gif" alt="Enduro" width="24%">
+  </div>
+</div>
+
+---
+
 ## Features
 
 - **Object-centric observations** — structured game state with per-object positions, types, and attributes
