@@ -345,3 +345,13 @@ class GreenFlagsMod(JaxAtariInternalModPlugin):
     constants_overrides = {
         "green_flags": True
     }
+
+
+class RewardAtGateMod(JaxAtariInternalModPlugin):
+    """
+    Changes the reward function to give +1 reward for passing a gate,
+    instead of the original ALE reward (time penalty + massive end penalty).
+    """
+    constants_overrides = {
+        "USE_ORIGINAL_ALE_REWARD": False,
+    }

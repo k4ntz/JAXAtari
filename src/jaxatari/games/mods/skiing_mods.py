@@ -4,7 +4,7 @@ from jaxatari.games.mods.skiing.skiing_mod_plugins import (
     MoreTreesMod, MoreMogulsMod, DangerousMogulsMod, JumpToBreakMod, 
     SpeedBurstMod, TreesEverywhereMod, HallOfFameMod,
     InvertFlagsMod, InvertFlagColorsMod, MovingFlagsMod, RandomFlagsMod, FlagFlurryMod, MogulsToTreesMod,
-    ClassicTreesMod, ThinMogulsMod, BlueSkiierMod, GreenFlagsMod
+    ClassicTreesMod, ThinMogulsMod, BlueSkiierMod, GreenFlagsMod, RewardAtGateMod
 )
 
 class SkiingEnvMod(JaxAtariModController):
@@ -34,6 +34,7 @@ class SkiingEnvMod(JaxAtariModController):
         "thin_moguls": ThinMogulsMod,
         "blue_skiier": BlueSkiierMod,
         "green_flags": GreenFlagsMod,
+        "reward_at_gate": RewardAtGateMod,
         "off_piste": ["_more_trees", "_trees_everywhere", "_more_moguls", "_dangerous_moguls"],
         "change_sprites": ["classic_trees", "thin_moguls", "blue_skiier", "green_flags"],
     }
