@@ -36,7 +36,6 @@ import jax.numpy as jnp
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
-import jaxatari.rendering.jax_rendering_utils as jr
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -162,6 +161,12 @@ class BowlingInfo(NamedTuple):
 class JaxBowling(JaxEnvironment[BowlingState, BowlingObservation, BowlingInfo, BowlingConstants]):
     """Atari-flavoured Bowling, fully jitted."""
 
+    # Map agent action indices (0..3) to ALE console actions.
+    # 0 -> NOOP, 1 -> FIRE, 2 -> UP, 3 -> DOWN
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.FIRE, Action.UP, Action.DOWN], dtype=jnp.int32
+    )
+
     def __init__(self, consts: BowlingConstants = None, reward_funcs: list[callable] = None):
         if consts is None:
             consts = BowlingConstants()
@@ -197,6 +202,9 @@ class JaxBowling(JaxEnvironment[BowlingState, BowlingObservation, BowlingInfo, B
         c = self.consts
 
         action = jnp.asarray(action, dtype=jnp.int32)
+        # Translate the discrete agent index (0..3) into the raw Atari code
+        # (NOOP=0, FIRE=1, UP=2, DOWN=5) that the rest of the code compares against.
+        action = jnp.take(self.ACTION_SET, action)
 
         is_waiting   = state.phase == PHASE_WAITING
         is_rolling   = state.phase == PHASE_ROLLING
@@ -445,7 +453,7 @@ class JaxBowling(JaxEnvironment[BowlingState, BowlingObservation, BowlingInfo, B
         We follow the freeway convention: return Discrete(N) for the count,
         while the env itself accepts the raw atari ints above.
         """
-        return spaces.Discrete(4)
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         c = self.consts
@@ -517,25 +525,44 @@ class BowlingRenderer(JAXGameRenderer):
         self.sprites = self._load_sprites()
 
     def _load_sprites(self) -> Dict[str, jnp.ndarray]:
-        """Load the .npy sprite assets ripped from the Atari ROM."""
+        """Load the .npy sprite assets ripped from the Atari ROM as RGBA arrays."""
         module_dir = os.path.dirname(os.path.abspath(__file__))
-        sprite_dir = os.path.join(module_dir, "mods", "bowling","sprites")
+        sprite_dir = os.path.join(module_dir, "mods", "bowling", "sprites")
 
         names = ["background", "player", "ball", "pin_up", "pin_down"]
         out: Dict[str, jnp.ndarray] = {}
         for name in names:
             path = os.path.join(sprite_dir, f"{name}.npy")
-            frame = jr.loadFrame(path).astype(jnp.uint8)   # (H, W, 4)
-            out[name] = frame
+            frame = jnp.asarray(jnp.load(path))
+            if frame.ndim != 3:
+                raise ValueError(f"Bowling sprite {name} has unexpected shape {frame.shape}")
+            # Pad RGB -> RGBA (treat pure-black pixels as transparent)
+            if frame.shape[2] == 3:
+                is_transparent = (frame[..., 0] == 0) & (frame[..., 1] == 0) & (frame[..., 2] == 0)
+                alpha = jnp.where(is_transparent, 0, 255).astype(frame.dtype)
+                frame = jnp.concatenate([frame, alpha[..., None]], axis=2)
+            out[name] = frame.astype(jnp.uint8)
         return out
+
+    @staticmethod
+    def _blit_rgba(raster: jnp.ndarray, x, y, sprite: jnp.ndarray) -> jnp.ndarray:
+        """Alpha-composite an RGBA sprite onto a (H, W, 3) uint8 raster."""
+        h, w = sprite.shape[0], sprite.shape[1]
+        x = jnp.asarray(x, dtype=jnp.int32)
+        y = jnp.asarray(y, dtype=jnp.int32)
+        target = jax.lax.dynamic_slice(raster, (y, x, 0), (h, w, 3))
+        rgb = sprite[..., :3].astype(jnp.uint8)
+        opaque = (sprite[..., 3:4] > 0)
+        blended = jnp.where(opaque, rgb, target).astype(jnp.uint8)
+        return jax.lax.dynamic_update_slice(raster, blended, (y, x, 0))
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: BowlingState) -> jnp.ndarray:
         c = self.consts
-        raster = jr.create_initial_frame(width=c.screen_width, height=c.screen_height)
+        raster = jnp.zeros((c.screen_height, c.screen_width, 3), dtype=jnp.uint8)
 
         # ── Background: full-frame lane orange (matches the ROM exactly) ─
-        raster = jr.render_at(raster, 0, 0, self.sprites["background"])
+        raster = self._blit_rgba(raster, 0, 0, self.sprites["background"])
 
         # ── Lane border lines (the two horizontal blue stripes) ──────────
         line_color = jnp.array([45, 50, 184], dtype=jnp.uint8)
@@ -553,17 +580,17 @@ class BowlingRenderer(JAXGameRenderer):
                 lambda: pin_up,
                 lambda: pin_down,
             )
-            raster = jr.render_at(raster, c.pin_x[i], c.pin_y[i], sprite)
+            raster = self._blit_rgba(raster, c.pin_x[i], c.pin_y[i], sprite)
 
         # ── Player ───────────────────────────────────────────────────────
-        raster = jr.render_at(
+        raster = self._blit_rgba(
             raster, c.player_x, state.player_y, self.sprites["player"]
         )
 
         # ── Ball (always drawn — sits next to the player while waiting) ─
         ball_x_int = jnp.round(state.ball_x).astype(jnp.int32)
         ball_y_int = jnp.round(state.ball_y).astype(jnp.int32)
-        raster = jr.render_at(raster, ball_x_int, ball_y_int, self.sprites["ball"])
+        raster = self._blit_rgba(raster, ball_x_int, ball_y_int, self.sprites["ball"])
 
         # ── Lightweight HUD: a yellow score bar (max 100 = 1 strike-out
         # game), plus 10 frame ticks across the top edge.
