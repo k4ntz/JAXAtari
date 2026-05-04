@@ -167,7 +167,8 @@ class SkiingConstants(AutoDerivedConstants):
 
     # Asset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
-    fps = 60 # this is required.
+    fps: int = 60 # this is required.
+    max_steps: int = 5*60*fps # Skiing stops after 5min
 
 
 @struct.dataclass
@@ -887,7 +888,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: SkiingState) -> bool:
-        return jnp.greater_equal(state.gates_seen, 20)
+        time_limit_reached = jnp.greater_equal(state.step_count, self.consts.max_steps)
+        return jnp.logical_or(jnp.greater_equal(state.gates_seen, 20), time_limit_reached)
 
 
 @dataclass
