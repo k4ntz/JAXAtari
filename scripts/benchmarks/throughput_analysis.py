@@ -14,7 +14,7 @@ import numpy as np
 import gymnasium as gym
 import ale_py
 from omegaconf import DictConfig, OmegaConf
-import wandb
+# import wandb
 from cleanrl_atari_wrapper import (
     ClipRewardEnv,
     EpisodicLifeEnv,
@@ -643,15 +643,16 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     gym.register_envs(ale_py)
 
-    run = wandb.init(
-        entity=config["ENTITY"],
-        project=config["PROJECT"],
-        mode=config["WANDB_MODE"],
-        name=config.get("RUN_NAME", "throughput_analysis"),
-        tags=list(config.get("TAGS", [])),
-        notes=config.get("NOTES", ""),
-        config=config,
-    )
+    run = None
+    # run = wandb.init(
+    #     entity=config["ENTITY"],
+    #     project=config["PROJECT"],
+    #     mode=config["WANDB_MODE"],
+    #     name=config.get("RUN_NAME", "throughput_analysis"),
+    #     tags=list(config.get("TAGS", [])),
+    #     notes=config.get("NOTES", ""),
+    #     config=config,
+    # )
 
     results: List[Dict[str, Any]] = []
     run_step = 0
@@ -907,7 +908,7 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
                 row["status"],
                 row["error"],
             )
-        wandb.log({"benchmark/results_table": table})
+        # wandb.log({"benchmark/results_table": table})
 
         if save_results_csv:
             print(f"Saved results CSV: {csv_output_path}")
@@ -922,7 +923,7 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 @hydra.main(version_base=None, config_path="./config", config_name="throughput_analysis")
 def main(cfg: DictConfig):
-    print("Config:\n", OmegaConf.to_yaml(cfg))
+    # print("Config:\n", OmegaConf.to_yaml(cfg))
     config = cast(Dict[str, Any], OmegaConf.to_container(cfg, resolve=True))
     run_throughput_benchmark(config)
 

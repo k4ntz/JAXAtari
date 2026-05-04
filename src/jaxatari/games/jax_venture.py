@@ -379,6 +379,7 @@ class VentureConstants(AutoDerivedConstants):
     CHEST_WIDTH: int = struct.field(pytree_node=False, default=7)
     CHEST_HEIGHT: int = struct.field(pytree_node=False, default=11)
     CHEST_SCORE: int = struct.field(pytree_node=False, default=200)
+    KILL_REWARD: int = struct.field(pytree_node=False, default=0)
     # Chest positions for each level (global index: 0-4 for World 1, 5-9 for World 2).
     CHEST_POSITIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         [0.0, 0.0],  # Level 0 (World 1 Main map, no chest)
@@ -822,7 +823,7 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
                 chest_idx = level_idx - 1
                 is_bonus_active = jax.lax.cond(level_idx > 0, lambda: s.kill_bonus_active[chest_idx], lambda: jnp.array(False))
                 num_killed_monsters = jnp.sum(monsters_hit_mask)
-                score_to_add = jax.lax.cond(is_bonus_active, lambda: num_killed_monsters * 100, lambda: 0)
+                score_to_add = jax.lax.cond(is_bonus_active, lambda: num_killed_monsters * 100, lambda: 0) + num_killed_monsters * self.consts.KILL_REWARD
                 new_score = s.score + score_to_add
                 new_mon_active = jnp.where(monsters_hit_mask, False, s.monsters.active)
                 new_dead_for = jnp.where(

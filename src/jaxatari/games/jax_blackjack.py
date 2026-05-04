@@ -4,9 +4,6 @@
 # JAX Blackjack
 #
 # Simulates a Blackjack game with casino rules using JAX
-#
-# Authors:
-# - JAXAtari contributors
 
 import os
 from functools import partial

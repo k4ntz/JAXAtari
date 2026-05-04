@@ -1,5 +1,8 @@
 from typing import Dict, Any, Tuple
-from jaxatari.modification import JaxAtariInternalModPlugin
+from functools import partial
+import jax
+import jax.numpy as jnp
+from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
 
 class NightMod(JaxAtariInternalModPlugin):
     """Dims the entire screen by 50% for a night mode experience."""
@@ -102,3 +105,44 @@ class BloodMoonMod(JaxAtariInternalModPlugin):
         'RGB_MONSTER_W2_R3': (255, 150, 150),
         'RGB_MONSTER_W2_R4': (255, 100, 100),
     }
+
+class SlowEnemiesMod(JaxAtariInternalModPlugin):
+    """Reduces the speed of all enemies."""
+    name = "slow_enemies"
+    constants_overrides = {
+        'MONSTER_SPEEDS': jnp.array([0.5, 0.75, 1.0, 1.25], dtype=jnp.float32),
+        'CHASER_SPEED': jnp.array(0.2, dtype=jnp.float32),
+    }
+
+class FastEnemiesMod(JaxAtariInternalModPlugin):
+    """Increases the speed of all enemies."""
+    name = "fast_enemies"
+    constants_overrides = {
+        'MONSTER_SPEEDS': jnp.array([2.0, 3.0, 4.0, 5.0], dtype=jnp.float32),
+        'CHASER_SPEED': jnp.array(0.8, dtype=jnp.float32),
+    }
+
+class RewardForKillMod(JaxAtariInternalModPlugin):
+    """Adds a reward BONUS of 100 per kill in the rooms."""
+    name = "reward_for_kill"
+    constants_overrides = {
+        'KILL_REWARD': 100,
+    }
+
+class RemoveOverworldMobsMod(JaxAtariPostStepModPlugin):
+    """Removes all monsters from the main map."""
+    name = "remove_overworld_mobs"
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        # Deactivate all monsters since we start on the main map (level 0)
+        new_active = jnp.zeros_like(state.monsters.active)
+        new_state = state.replace(monsters=state.monsters.replace(active=new_active))
+        return obs, new_state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state, new_state):
+        # If we are on the main map (level 0), deactivate all monsters
+        is_level_0 = new_state.current_level == 0
+        new_active = jnp.where(is_level_0, jnp.zeros_like(new_state.monsters.active), new_state.monsters.active)
+        return new_state.replace(monsters=new_state.monsters.replace(active=new_active))

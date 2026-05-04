@@ -220,7 +220,15 @@ class MsPacmanMaze:
        WALL_COLOR = jnp.array([228, 111, 111], dtype=jnp.uint8)  # Wall color (RGB)
        PATH_COLOR = jnp.array([0, 28, 136], dtype=jnp.uint8)  # Path color (RGB)
 
+       DOF_MAZES = None
+
        # -------- Methods --------
+       @staticmethod
+       def get_dof_mazes():
+              if MsPacmanMaze.DOF_MAZES is None:
+                     MsPacmanMaze.DOF_MAZES = jnp.stack([MsPacmanMaze.precompute_dof(i) for i in range(4)])
+              return MsPacmanMaze.DOF_MAZES
+
        @staticmethod
        def precompute_dof(maze_id: int):
               """

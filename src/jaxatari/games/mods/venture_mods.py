@@ -6,6 +6,10 @@ from jaxatari.games.mods.venture.venture_mod_plugins import (
     InvertedColorsMod,
     MatrixMod,
     BloodMoonMod,
+    SlowEnemiesMod,
+    FastEnemiesMod,
+    RemoveOverworldMobsMod,
+    RewardForKillMod,
 )
 
 class VentureEnvMod(JaxAtariModController):
@@ -19,6 +23,10 @@ class VentureEnvMod(JaxAtariModController):
         'inverted_colors': InvertedColorsMod,
         'matrix_theme': MatrixMod,
         'blood_moon': BloodMoonMod,
+        'slow_enemies': SlowEnemiesMod,
+        'fast_enemies': FastEnemiesMod,
+        'remove_overworld_mobs': RemoveOverworldMobsMod,
+        'reward_for_kill': RewardForKillMod,
     }
 
     def __init__(self,

@@ -1,5 +1,5 @@
 myst-parser
-sphinx-rtd-theme
+furo
 sphinxcontrib-applehelp
 sphinxcontrib-bibtex
 sphinxcontrib-devhelp
