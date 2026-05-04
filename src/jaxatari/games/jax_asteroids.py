@@ -220,8 +220,6 @@ class AsteroidsConstants(AutoDerivedConstants):
 
     # Asteroid constants
     ASTEROID_SPEED: Tuple[int, int] = struct.field(pytree_node=False, default=(2, 1))
-    # Pixels per step pulled toward screen center (0 = disabled, 1 = subtle, 2 = strong)
-    GRAVITY_STRENGTH: int = struct.field(pytree_node=False, default=0)
     
     # Derived Asteroid Borders
     ASTEROID_BORDER_LEFT: Optional[int] = struct.field(pytree_node=False, default=None)
@@ -589,9 +587,6 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
             -self.consts.ASTEROID_SPEED[1],
         ])
 
-        center_x = self.consts.WIDTH // 2
-        center_y = (self.consts.MIN_ENTITY_Y + self.consts.MAX_ENTITY_Y) // 2
-
         def update_single_asteroid(ast_state):
             x = ast_state[0]
             y = ast_state[1]
@@ -602,12 +597,8 @@ class JaxAsteroids(JaxEnvironment[AsteroidsState, AsteroidsObservation, Asteroid
             vel_x = dx[rot]
             vel_y = dy[rot]
 
-            # Pull each asteroid slightly toward the screen center each step
-            pull_x = jnp.sign(center_x - x) * self.consts.GRAVITY_STRENGTH
-            pull_y = jnp.sign(center_y - y) * self.consts.GRAVITY_STRENGTH
-
-            new_x_raw = x + jnp.where(side_step, vel_x + pull_x, 0)
-            new_y_raw = y + vel_y + pull_y
+            new_x_raw = x + jnp.where(side_step, vel_x, 0)
+            new_y_raw = y + vel_y
 
             new_x = self.final_pos(self.consts.MIN_ENTITY_X, self.consts.MAX_ENTITY_X, new_x_raw)
             new_y = self.final_pos(self.consts.MIN_ENTITY_Y, self.consts.MAX_ENTITY_Y, new_y_raw)
