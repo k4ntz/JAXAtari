@@ -1,3 +1,5 @@
+import os
+import numpy as np
 import chex
 import jax
 import jax.numpy as jnp
@@ -6,6 +8,38 @@ from flax import struct
 
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
 from jaxatari.games.jax_bankheist import JaxBankHeist, BankHeistState, Entity
+from jaxatari.rendering.jax_rendering_utils import get_base_sprite_dir
+
+
+def _recolor_bankheist_sprite(filename: str, original_rgb: tuple, new_rgb: tuple) -> np.ndarray:
+    """Load a bankheist sprite .npy and replace original_rgb with new_rgb (alpha preserved)."""
+    sprite_dir = os.path.join(get_base_sprite_dir(), "bankheist")
+    sprite_path = os.path.join(sprite_dir, filename)
+    sprite = np.load(sprite_path).copy()
+    original = np.array([*original_rgb, 255], dtype=np.uint8)
+    replacement = np.array([*new_rgb, 255], dtype=np.uint8)
+    mask = np.all(sprite == original, axis=-1)
+    sprite[mask] = replacement
+    return sprite
+
+
+def _recolor_bankheist_road(filename: str, original_rgb: tuple, new_rgb: tuple) -> np.ndarray:
+    """Load a bankheist sprite .npy and replace original_rgb with new_rgb only in the maze road area."""
+    sprite_dir = os.path.join(get_base_sprite_dir(), "bankheist")
+    sprite_path = os.path.join(sprite_dir, filename)
+    sprite = np.load(sprite_path).copy()
+    original = np.array([*original_rgb, 255], dtype=np.uint8)
+    replacement = np.array([*new_rgb, 255], dtype=np.uint8)
+    
+    mask = np.all(sprite == original, axis=-1)
+    
+    # Restrict to the maze Y-coordinates (Y=45 to Y=186 inclusive)
+    y_mask = np.zeros_like(mask)
+    y_mask[45:187, 12:148] = True
+    
+    final_mask = mask & y_mask
+    sprite[final_mask] = replacement
+    return sprite
 
 
 class RandomBankSpawnsMod(JaxAtariInternalModPlugin):
@@ -142,7 +176,7 @@ class TwoPoliceCarsMod(JaxAtariInternalModPlugin):
         return state.replace(
             bank_positions=new_banks,
             pending_police_spawns=new_pending_spawns,
-            pending_police_bank_indices=new_pending_bank_indices,
+            pending_police_bank_indices=new_pending_indices,
             pending_police_spawn_positions=new_pending_spawn_positions,
             pending_police_scores=new_pending_scores,
             bank_heists=new_bank_heists,
@@ -540,3 +574,95 @@ class DoubleSpeedMod(JaxAtariInternalModPlugin):
         state = JaxBankHeist.player_move_step(self._env, state)
         state = JaxBankHeist.player_move_step(self._env, state)
         return state
+
+
+class GreyRoadMod(JaxAtariInternalModPlugin):
+    """Modifies the road color to grey."""
+    asset_overrides = {
+        "cities": None,  # Prevent BankHeistRenderer from overwriting our manual overrides
+        "background": {
+            "name": "background",
+            "type": "background",
+            "data": _recolor_bankheist_road("map_1.npy", (0, 0, 0), (80, 80, 80))
+        },
+        "city_maps": {
+            "name": "city_maps",
+            "type": "group",
+            "data": [_recolor_bankheist_road(f"map_{i+1}.npy", (0, 0, 0), (80, 80, 80)) for i in range(8)]
+        }
+    }
+
+
+class RedPoliceCarsMod(JaxAtariInternalModPlugin):
+    """Modifies the color of police cars to red."""
+    asset_overrides = {
+        "police_side": {
+            "name": "police_side",
+            "type": "single",
+            "data": _recolor_bankheist_sprite("police_side.npy", (24, 26, 167), (200, 0, 0))
+        },
+        "police_front": {
+            "name": "police_front",
+            "type": "single",
+            "data": _recolor_bankheist_sprite("police_front.npy", (24, 26, 167), (200, 0, 0))
+        }
+    }
+
+
+class GoldenBanksMod(JaxAtariInternalModPlugin):
+    """Modifies the color of banks to golden."""
+    asset_overrides = {
+        "bank": {
+            "name": "bank",
+            "type": "single",
+            "data": _recolor_bankheist_sprite("bank.npy", (142, 142, 142), (218, 165, 32))
+        }
+    }
+
+
+class BluePlayerMod(JaxAtariInternalModPlugin):
+    """Modifies the color of the player to light blue (cyan)."""
+    asset_overrides = {
+        "player_side": {
+            "name": "player_side",
+            "type": "single",
+            "data": _recolor_bankheist_sprite("player_side.npy", (162, 98, 33), (0, 255, 255))
+        },
+        "player_front": {
+            "name": "player_front",
+            "type": "single",
+            "data": _recolor_bankheist_sprite("player_front.npy", (162, 98, 33), (0, 255, 255))
+        }
+    }
+
+
+class DynamitePenaltyMod(JaxAtariInternalModPlugin):
+    """
+    Modifies the reward for killing a police car with dynamite to a penalty of -500.
+    """
+    constants_overrides = {
+        "POLICE_KILL_REWARD": (-500, -500, -500)
+    }
+
+
+class FuelForBanksMod(JaxAtariInternalModPlugin):
+    """
+    Augments the player's fuel when 3 banks have been robbed.
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def handle_bank_robbery(self, state: BankHeistState, bank_hit_index: chex.Array) -> BankHeistState:
+        # Call the original method to handle the robbery logic
+        state = JaxBankHeist.handle_bank_robbery(self._env, state, bank_hit_index)
+        
+        # We augment the fuel if total_banks_robbed is a multiple of 3
+        # Ensure we don't refill exactly at 0 (though handle_bank_robbery already increased it)
+        is_multiple_of_3 = (state.total_banks_robbed % 3 == 0) & (state.total_banks_robbed > 0)
+        
+        # Add a quarter of a tank for every 3 banks
+        fuel_bonus = self._env.consts.FUEL_CAPACITY * 0.25
+        new_fuel = jnp.where(is_multiple_of_3, 
+                             jnp.minimum(state.fuel + fuel_bonus, self._env.consts.FUEL_CAPACITY), 
+                             state.fuel)
+                             
+        return state.replace(fuel=new_fuel)
+
