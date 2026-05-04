@@ -100,6 +100,21 @@ class MsPacmanConstants(struct.PyTreeNode):
     WALL_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([228, 111, 111], dtype=jnp.uint8))
     PELLET_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([228, 111, 111], dtype=jnp.uint8))
     PACMAN_COLOR: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([210, 164, 74, 255], dtype=jnp.uint8))
+    
+    # MOD COLORS (Optional overrides)
+    RGB_BACKGROUND: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_PACMAN: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_WALLS: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_PATH: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_PELLETS: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_GHOST_BLINKY: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_GHOST_PINKY: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_GHOST_INKY: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_GHOST_SUE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_GHOST_FRIGHTENED: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_GHOST_BLINKING: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_FRUIT: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_SCORE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
 
 
 # -------- Entity classes --------
@@ -980,9 +995,17 @@ class MsPacmanRenderer(JAXGameRenderer):
         
         sprite_path = os.path.join(render_utils.get_base_sprite_dir(), sprite_dir_name)
         
+        # Effective colors
+        bg_color = self.consts.RGB_BACKGROUND or (0, 0, 0)
+        wall_color = self.consts.RGB_WALLS or tuple(map(int, self.consts.WALL_COLOR.tolist()[:3]))
+        path_color = self.consts.RGB_PATH or tuple(map(int, self.consts.PATH_COLOR.tolist()[:3]))
+        pacman_color = self.consts.RGB_PACMAN or tuple(map(int, self.consts.PACMAN_COLOR.tolist()[:3]))
+        pellet_color = self.consts.RGB_PELLETS or wall_color # Default to wall color if not specified
+        score_color = self.consts.RGB_SCORE or (255, 255, 255) # Default white for score
+
         # Define asset config
         asset_config = [
-            {'name': 'dummy_bg', 'type': 'background', 'data': jnp.zeros((210, 160, 4), dtype=jnp.uint8)},
+            {'name': 'dummy_bg', 'type': 'background', 'data': jnp.zeros((210, 160, 4), dtype=jnp.uint8).at[:, :, :3].set(jnp.array(bg_color, dtype=jnp.uint8))},
             {'name': 'pacman_oriented', 'type': 'group', 'data': self._build_pacman_oriented_group(sprite_path)},
             {'name': 'ghosts', 'type': 'group', 'files': [
                 'ghost_blinky.npy', 'ghost_pinky.npy', 'ghost_inky.npy', 'ghost_sue.npy', 
@@ -995,33 +1018,77 @@ class MsPacmanRenderer(JAXGameRenderer):
             {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
         ]
         
+        # Apply recoloring rules if any overrides are present
+        has_recolorings = False
+        for i in range(len(asset_config)):
+            asset = asset_config[i]
+            asset_name = asset['name']
+            rules = []
+            
+            if asset_name == 'pacman_oriented':
+                if self.consts.RGB_PACMAN is not None:
+                    rules.append({'target': pacman_color})
+            elif asset_name == 'ghosts':
+                # Blinky (Red), Pinky (Pink), Inky (Cyan), Sue (Orange)
+                # Blue (Frightened), White (Blinking)
+                if self.consts.RGB_GHOST_BLINKY is not None:
+                    rules.append({'source': (228, 111, 111), 'target': self.consts.RGB_GHOST_BLINKY})
+                if self.consts.RGB_GHOST_PINKY is not None:
+                    rules.append({'source': (228, 164, 228), 'target': self.consts.RGB_GHOST_PINKY})
+                if self.consts.RGB_GHOST_INKY is not None:
+                    rules.append({'source': (24, 164, 180), 'target': self.consts.RGB_GHOST_INKY})
+                if self.consts.RGB_GHOST_SUE is not None:
+                    rules.append({'source': (210, 164, 74), 'target': self.consts.RGB_GHOST_SUE})
+                if self.consts.RGB_GHOST_FRIGHTENED is not None:
+                    rules.append({'source': (66, 72, 200), 'target': self.consts.RGB_GHOST_FRIGHTENED})
+                if self.consts.RGB_GHOST_BLINKING is not None:
+                    rules.append({'source': (255, 255, 255), 'target': self.consts.RGB_GHOST_BLINKING})
+            elif asset_name == 'fruit':
+                if self.consts.RGB_FRUIT is not None:
+                    rules.append({'target': self.consts.RGB_FRUIT})
+            elif asset_name == 'digits':
+                if self.consts.RGB_SCORE is not None:
+                    rules.append({'target': self.consts.RGB_SCORE})
+            
+            if rules:
+                asset_config[i] = dict(asset)
+                asset_config[i]['recolorings'] = {'mods': rules}
+                has_recolorings = True
+
         # Include background colors in the palette (Path, Wall, and Black for UI padding)
-        bg_colors = jnp.stack([self.consts.PATH_COLOR, self.consts.WALL_COLOR, jnp.array([0, 0, 0], dtype=jnp.uint8)])
+        bg_colors = jnp.stack([jnp.array(path_color, dtype=jnp.uint8), jnp.array(wall_color, dtype=jnp.uint8), jnp.array(bg_color, dtype=jnp.uint8)])
         bg_colors = jnp.concatenate([bg_colors, jnp.full((3, 1), 255, dtype=jnp.uint8)], axis=1)
         asset_config.append({'name': 'bg_colors', 'type': 'procedural', 'data': bg_colors[:, None, :]})
 
         (self.PALETTE, self.SHAPE_MASKS, _, self.COLOR_TO_ID, self.FLIP_OFFSETS) = \
             self.jr.load_and_setup_assets(asset_config, sprite_path)
 
-        for color in (
-            tuple(map(int, self.consts.PATH_COLOR.tolist())),
-            tuple(map(int, self.consts.WALL_COLOR.tolist())),
-            (0, 0, 0),
-        ):
+        for color in (path_color, wall_color, bg_color):
             self._ensure_palette_color(color)
+
+        self._mask_suffix = '_mods' if has_recolorings else ''
+        
+        def get_mask(key):
+            return self.SHAPE_MASKS.get(key + self._mask_suffix, self.SHAPE_MASKS[key])
 
         # Pacman mask group is loaded orientation-major:
         # 0: UP, 1: RIGHT, 2: LEFT, 3: DOWN, each with 4 animation frames.
-        pacman_group = self.SHAPE_MASKS['pacman_oriented']
+        pacman_group = get_mask('pacman_oriented')
         self.PACMAN_MASKS = pacman_group.reshape(4, 4, pacman_group.shape[1], pacman_group.shape[2])
         
         # Pre-calculate backgrounds for all 4 mazes
-        self.MAZE_BACKGROUNDS = self._create_all_backgrounds()
+        self.MAZE_BACKGROUNDS = self._create_all_backgrounds(
+            jnp.array(wall_color, dtype=jnp.uint8),
+            jnp.array(path_color, dtype=jnp.uint8)
+        )
+        
+        self.wall_id = self._resolve_color_id(wall_color)
+        self.pellet_id = self._resolve_color_id(pellet_color)
 
-    def _create_all_backgrounds(self):
+    def _create_all_backgrounds(self, wall_color=None, path_color=None):
         bgs = []
         for i in range(4):
-            bg = MsPacmanMaze.load_background(i) # Returns (W, H, 3)
+            bg = MsPacmanMaze.load_background(i, wall_color=wall_color, path_color=path_color) # Returns (W, H, 3)
             bg = jnp.transpose(bg, (1, 0, 2)) # Convert to (H, W, 3)
             if bg.shape[2] == 3:
                 bg = jnp.concatenate([bg, jnp.full((*bg.shape[:2], 1), 255, dtype=jnp.uint8)], axis=2)
@@ -1037,11 +1104,10 @@ class MsPacmanRenderer(JAXGameRenderer):
         raster = self.jr.create_object_raster(background)
         
         # 1. Render Pellets
-        wall_id = self._resolve_color_id(tuple(map(int, self.consts.WALL_COLOR.tolist())))
-        raster = self.render_pellets(raster, state.level.pellets, wall_id)
+        raster = self.render_pellets(raster, state.level.pellets, self.pellet_id)
         
         # 2. Power Pellets
-        raster = self.render_power_pellets(raster, state, wall_id)
+        raster = self.render_power_pellets(raster, state, self.pellet_id)
         
         # 3. Pacman
         orientation = act_to_dir(state.player.action)

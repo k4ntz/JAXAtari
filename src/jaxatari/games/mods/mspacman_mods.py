@@ -11,7 +11,8 @@ from jaxatari.games.mods.mspacman.mspacman_mod_plugins import (
     Only1GhostMod,
     Only2GhostMod,
     Only3GhostMod,
-    RandomGhostNavigationMod
+    RandomGhostNavigationMod,
+    MatrixMod
 )
 
 class MsPacmanEnvMod(JaxAtariModController):
@@ -30,6 +31,7 @@ class MsPacmanEnvMod(JaxAtariModController):
         "only_2_ghost": Only2GhostMod,
         "only_3_ghost": Only3GhostMod,
         "random_ghost_navigation": RandomGhostNavigationMod,
+        "matrix_theme": MatrixMod,
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "mspacman", "sprites")
@@ -46,3 +48,6 @@ class MsPacmanEnvMod(JaxAtariModController):
             allow_conflicts=allow_conflicts,
             registry=self.REGISTRY
         )
+
+# Alias for utils.py loader which uses capitalize()
+MspacmanEnvMod = MsPacmanEnvMod
