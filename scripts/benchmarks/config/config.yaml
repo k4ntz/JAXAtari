@@ -11,7 +11,7 @@ WANDB_MODE: "online"  # set to online to activate wandb
 ENTITY: "jaxatari"
 PROJECT: "submission_runs"
 alg:
-  WANDB_LOG_ALL_SEEDS: False # will log all the vmapped seeds separetely
+  WANDB_LOG_ALL_SEEDS: True # will log all the vmapped seeds separetely
 
 # where to save the params (if None, will not save)
 SAVE_PATH: "./models"

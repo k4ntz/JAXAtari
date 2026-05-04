@@ -3,6 +3,13 @@
 
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppo_atari_envpool_xla_jaxpy
 import os
+# Fix weird OOM https://github.com/google/jax/discussions/6332#discussioncomment-1279991
+# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.9"
+# os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+# Fix CUDNN non-determinisim; https://github.com/google/jax/issues/4823#issuecomment-952835771
+# os.environ["XLA_FLAGS"] = "--xla_gpu_enable_command_buffers="
+# os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 import random
 import time
 from functools import partial
@@ -26,12 +33,6 @@ from ppo_jaxatari_vmap_eval import evaluate
 
 from rtpt import RTPT
 
-# Fix weird OOM https://github.com/google/jax/discussions/6332#discussioncomment-1279991
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "true"
-# os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
-# Fix CUDNN non-determinisim; https://github.com/google/jax/issues/4823#issuecomment-952835771
-os.environ["TF_XLA_FLAGS"] = "--xla_gpu_autotune_level=2 --xla_gpu_deterministic_reductions"
-# os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 
 
 def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, native_downscaling=True, smooth_image=True, eval=False):
@@ -653,13 +654,7 @@ def main(config):
     config = OmegaConf.to_container(config, resolve=True)
     merged_config = {**config, **config.get("alg", {})}
     print("Config:\n", OmegaConf.to_yaml(OmegaConf.create(config)))
-
-    for seed_add in range(merged_config["NUM_SEEDS"]):
-        seed = merged_config["SEED"] + seed_add
-        print(f"\n\n=== Running seed {seed_add} / {merged_config['NUM_SEEDS']-1} ===\n\n")
-        merged_config["SEED"] = seed
-        single_run(merged_config)
-
+    single_run(merged_config)
 
 if __name__ == "__main__":
     main()
