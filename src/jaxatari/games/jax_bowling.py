@@ -519,7 +519,7 @@ class BowlingRenderer(JAXGameRenderer):
     def _load_sprites(self) -> Dict[str, jnp.ndarray]:
         """Load the .npy sprite assets ripped from the Atari ROM."""
         module_dir = os.path.dirname(os.path.abspath(__file__))
-        sprite_dir = os.path.join(module_dir, "sprites", "bowling")
+        sprite_dir = os.path.join(module_dir, "mods", "bowling","sprites")
 
         names = ["background", "player", "ball", "pin_up", "pin_down"]
         out: Dict[str, jnp.ndarray] = {}
