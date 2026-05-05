@@ -15,7 +15,8 @@ from jaxatari.games.mods.qbert.qbert_mod_plugins import (
     GrayscaleMod,
     InvertedColorsMod,
     SwapCollectiblesEnemiesMod,
-    RedCoilyMod
+    RedCoilyMod,
+    PenalizeAllCollectablesMod
 )
 
 class QbertEnvMod(JaxAtariModController):
@@ -39,6 +40,7 @@ class QbertEnvMod(JaxAtariModController):
         "inverted_colors": InvertedColorsMod,
         "swap_collectibles_enemies": SwapCollectiblesEnemiesMod,
         "red_coily": RedCoilyMod,
+        "penalize_all_collectables": PenalizeAllCollectablesMod,
     }
 
     def __init__(self,

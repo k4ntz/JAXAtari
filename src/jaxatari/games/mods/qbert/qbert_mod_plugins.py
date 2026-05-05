@@ -436,8 +436,24 @@ class AlternatingColorsMod(JaxAtariInternalModPlugin):
             init_val=raster,
         )
 
-        player_score_digits = jr.int_to_digits(state.player_score, max_digits=5)
+        player_score_digits = jr.int_to_digits(jnp.abs(state.player_score), max_digits=5)
         raster = jnp.where(state.player_position[1] >= 3, jr.render_label_selective(raster, 34, 6, player_score_digits, M['score_digits'], 0, 5, spacing=8, max_digits_to_render=5), raster)
+
+        # Draw minus sign if score is negative
+        def draw_minus(r):
+            transparent_id = self._env.renderer.jr.TRANSPARENT_ID
+            mask_0 = M['score_digits'][0]
+            digit_color = jnp.where(mask_0 != transparent_id, mask_0, jnp.inf).min().astype(mask_0.dtype)
+            minus_mask = jnp.full((7, 5), transparent_id, dtype=mask_0.dtype)
+            minus_mask = minus_mask.at[3, 0:4].set(digit_color)
+            return self._env.renderer.jr.render_at(r, int(round(26 * self._env.renderer.config.width_scaling)), 6, minus_mask)
+
+        raster = jax.lax.cond(
+            state.player_score < 0,
+            draw_minus,
+            lambda r: r,
+            raster
+        )
 
         raster = jax.lax.fori_loop(
             lower=0,
@@ -669,5 +685,15 @@ class RedCoilyMod(JaxAtariInternalModPlugin):
     """
     constants_overrides = {
         "RGB_COILY": (173, 5, 64),
+    }
+
+class PenalizeAllCollectablesMod(JaxAtariInternalModPlugin):
+    """
+    Penalizes collecting items that normally give positive rewards.
+    """
+    constants_overrides = {
+        "GREEN_BALL_REWARD": -100,
+        "SAM_REWARD": -300,
+        "COILY_REWARD": -500,
     }
 

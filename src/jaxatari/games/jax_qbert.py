@@ -1430,10 +1430,30 @@ class QbertRenderer(JAXGameRenderer):
         raster = self._draw_colors(raster, state, pyra)
 
         # Vectorized Score
-        player_score_digits = jr.int_to_digits(state.player_score, max_digits=5)
+        abs_score = jnp.abs(state.player_score)
+        player_score_digits = jr.int_to_digits(abs_score, max_digits=5)
         digit_idx = self.SCORE_MAP
         score_pixel_id = M['score_digits'][player_score_digits[digit_idx], self.SCORE_LOCAL_Y, self.SCORE_LOCAL_X]
         raster = jnp.where((digit_idx != -1) & (state.player_position[1] >= 3), score_pixel_id, raster)
+
+        # Draw minus sign if score is negative
+        def draw_minus(r):
+            # Use a simple horizontal line as a minus sign
+            # Digit color can be extracted from digit 0 mask
+            transparent_id = self.jr.TRANSPARENT_ID
+            mask_0 = M['score_digits'][0]
+            digit_color = jnp.where(mask_0 != transparent_id, mask_0, jnp.inf).min().astype(mask_0.dtype)
+            # Create a 5x7 mask for the minus sign
+            minus_mask = jnp.full((7, 5), transparent_id, dtype=mask_0.dtype)
+            minus_mask = minus_mask.at[3, 0:4].set(digit_color)
+            return self.jr.render_at(r, int(round(26 * self.config.width_scaling)), 6, minus_mask)
+
+        raster = jax.lax.cond(
+            state.player_score < 0,
+            draw_minus,
+            lambda r: r,
+            raster
+        )
 
         # Vectorized Lives
         live_idx = self.LIVES_MAP
