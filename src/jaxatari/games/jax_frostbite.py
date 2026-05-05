@@ -76,7 +76,8 @@ class FrostbiteConstants(struct.PyTreeNode):
     
     # Debug/Testing
     START_LEVEL: int = struct.field(pytree_node=False, default=1)
-    
+    START_IGLOO_COMPLETE: bool = struct.field(pytree_node=False, default=False)  # start with igloo fully built
+
     # Bailey jump offset tables (Y deltas per ALE frame; consumed 2 entries per step for 60 Hz parity)
     BAILEY_JUMP_OFFSETS: tuple = struct.field(pytree_node=False, default_factory=lambda: (
         6, 5, 5, 5, 4, 3, 2, 1, 0, 0, 0, 0, -1, -2, -3,
@@ -110,7 +111,7 @@ class FrostbiteConstants(struct.PyTreeNode):
     # Igloo overrides
     IGLOO_X_OFFSET: int = struct.field(pytree_node=False, default=0)
     RGB_IGLOO: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
-    TARGET_IGLOO_X: int = struct.field(pytree_node=False, default=123)
+    TARGET_IGLOO_X: int = struct.field(pytree_node=False, default=122)
 
     # Igloo constants    IGLOO_X: int = struct.field(pytree_node=False, default=154)  # X position of igloo (far right side of screen)
     IGLOO_X: int = struct.field(pytree_node=False, default=154)
@@ -200,6 +201,8 @@ class FrostbiteConstants(struct.PyTreeNode):
     INIT_DELAY_ACTION_VALUE: int = struct.field(pytree_node=False, default=120)  # 2 seconds for block removal
     INCREMENT_SCORE_FRAME_DELAY: int = struct.field(pytree_node=False, default=8)   # 120/16 ≈ 8 frames per block
     TEMP_DECREMENT_DELAY: int = struct.field(pytree_node=False, default=1)  # 1 frame per temperature degree
+    TEMP_DRAIN_INTERVAL: int = struct.field(pytree_node=False, default=65)  # frames between each in-game temperature drop (~2.17s at 60fps)
+    IGLOO_DOOR_HALF_WIDTH: int = struct.field(pytree_node=False, default=4)  # half-width of igloo door collision box
 
     # Sprite duplication modes
     SPRITE_SINGLE: int = struct.field(pytree_node=False, default=0b000)
@@ -678,7 +681,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             # Level and score
             level=level,
             score=jnp.zeros(3, dtype=jnp.int32),
-            building_igloo_idx=jnp.array(-1, dtype=jnp.int32),
+            building_igloo_idx=jnp.array(self.consts.MAX_IGLOO_INDEX if self.consts.START_IGLOO_COMPLETE else -1, dtype=jnp.int32),
             igloo_entry_status=jnp.array(0, dtype=jnp.int32),
             temperature=jnp.array(self.consts.INIT_TEMPERATURE, dtype=jnp.int32),
             remaining_lives=jnp.array(self.consts.INIT_LIVES, dtype=jnp.int32),
@@ -771,7 +774,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             completed_ice_blocks_delay=jnp.array(0, dtype=jnp.int32),
             level=level,
             score=jnp.zeros(3, dtype=jnp.int32),
-            building_igloo_idx=jnp.array(-1, dtype=jnp.int32),
+            building_igloo_idx=jnp.array(self.consts.MAX_IGLOO_INDEX if self.consts.START_IGLOO_COMPLETE else -1, dtype=jnp.int32),
             igloo_entry_status=jnp.array(0, dtype=jnp.int32),
             temperature=jnp.array(self.consts.INIT_TEMPERATURE, dtype=jnp.int32),
             remaining_lives=jnp.array(self.consts.INIT_LIVES, dtype=jnp.int32),
@@ -1219,7 +1222,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             return jax.lax.cond((tens == 0) & (ones == 0), lambda: 0, lambda: result)
 
         # Temperature decreases every ~2.17 seconds (130 frames at 60 FPS)
-        should_decrease_temp = (state.frame_count % 130) == 0
+        should_decrease_temp = (state.frame_count % self.consts.TEMP_DRAIN_INTERVAL) == 0
 
         # Only decrease temperature during active gameplay
         is_playing = (state.bailey_death_frame == 0)  # Not in death animation
@@ -2857,10 +2860,9 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         not_jumping = state.bailey_jumping_idx == 0
         not_entering = state.igloo_entry_status == 0
 
-        # Door collision box (igloo door is at specific X position)
-        door_x = self.consts.TARGET_IGLOO_X - 1
-        bailey_right_edge = state.bailey_x + 16
-        near_door = (bailey_right_edge >= door_x) & (state.bailey_x <= door_x + 8)
+        # Door collision: asymmetric window around TARGET_IGLOO_X (left side 1px narrower)
+        near_door = (state.bailey_x >= self.consts.TARGET_IGLOO_X - self.consts.IGLOO_DOOR_HALF_WIDTH + 1) & \
+                    (state.bailey_x <= self.consts.TARGET_IGLOO_X + self.consts.IGLOO_DOOR_HALF_WIDTH)
 
         # Check if player is pressing UP (or diagonal up)
         pressing_up = (action == Action.UP) | (action == Action.UPLEFT) | (action == Action.UPRIGHT)
@@ -3135,7 +3137,7 @@ class FrostbiteRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
-        
+
         # 5. Store helper dimensions
         self.DIGIT_MASKS = self.SHAPE_MASKS['digits']
         self.BAILEY_MASKS = self.SHAPE_MASKS['bailey']
