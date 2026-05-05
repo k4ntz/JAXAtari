@@ -2354,8 +2354,26 @@ class KangarooRenderer(JAXGameRenderer):
 
         # --- 4. Draw UI ---
         # Score
-        score_digits = self.jr.int_to_digits(state.score, max_digits=6)
+        is_negative = state.score < 0
+        score_digits = self.jr.int_to_digits(jnp.abs(state.score), max_digits=6)
         raster = self.jr.render_label(raster, 105, 182, score_digits, self.SHAPE_MASKS["score_digits"], spacing=8, max_digits=6)
+
+        # Draw minus sign if score is negative, in front of the 6 digits (left side)
+        def draw_minus(r):
+            transparent_id = self.jr.TRANSPARENT_ID
+            mask_0 = self.SHAPE_MASKS["score_digits"][0]
+            # The digit color is the one that is not transparent
+            digit_color = jnp.where(mask_0 != transparent_id, mask_0, jnp.inf).min().astype(mask_0.dtype)
+            minus_mask = jnp.full((7, 7), transparent_id, dtype=mask_0.dtype)
+            minus_mask = minus_mask.at[3, 2:5].set(digit_color)
+            return self.jr.render_at(r, 105 - 8, 182, minus_mask)
+
+        raster = jax.lax.cond(
+            is_negative,
+            draw_minus,
+            lambda r: r,
+            raster
+        )
 
         # Lives
         lives_count = jnp.maximum(state.lives.astype(int) - 1, 0)

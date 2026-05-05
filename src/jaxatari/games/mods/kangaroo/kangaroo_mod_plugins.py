@@ -89,26 +89,24 @@ class NoMonkeyMod(JaxAtariInternalModPlugin):
             jnp.array(False),                
         )
 
-class DontPunchMod(JaxAtariInternalModPlugin):
+class DontPunchMod(JaxAtariPostStepModPlugin):
     """
-    Internal mod that provides negative reward for punching monkeys.
+    Post-step mod that provides negative reward for punching monkeys.
+    It recalculates if a monkey was punched and updates the game score.
     """
     @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(self, previous_state: KangarooState, state: KangarooState) -> float:
-        # Standard reward
-        reward = state.score - previous_state.score
-        
+    def run(self, previous_state: KangarooState, state: KangarooState) -> KangarooState:
         punching = state.player.punch_left | state.player.punch_right
         
         # Fist position (re-calculate as in _monkey_controller)
         fist_w = 3
         fist_h = 4
         fist_x = jnp.where(
-            state.player.orientation > 0,
-            state.player.x + self._env.consts.PLAYER_WIDTH,
-            state.player.x - fist_w,
+            previous_state.player.orientation > 0,
+            previous_state.player.x + self._env.consts.PLAYER_WIDTH,
+            previous_state.player.x - fist_w,
         )
-        fist_y = state.player.y + 8
+        fist_y = previous_state.player.y + 8
 
         def check_punch(f_x, f_y, f_w, f_h, m_x, m_y, m_w, m_h, m_state, punching):
             return jnp.logical_and(
@@ -133,9 +131,14 @@ class DontPunchMod(JaxAtariInternalModPlugin):
         )
         
         num_punched = jnp.sum(monkeys_punched)
-        # The game already gives +200 per monkey. 
-        # To make it net negative (e.g. -200), we subtract 400.
-        return reward - num_punched * 400.0
+        
+        # The base game already added +200 per monkey to `state.score`.
+        # To make it -200 per monkey, we subtract 400.
+        penalty = num_punched * 400
+        
+        # Update the score
+        new_score = state.score - penalty
+        return state.replace(score=new_score)
 
 class NoFallingCoconutMod(JaxAtariInternalModPlugin):
     """
