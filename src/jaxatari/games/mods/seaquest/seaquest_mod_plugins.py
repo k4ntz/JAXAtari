@@ -120,4 +120,29 @@ class GravityMod(JaxAtariPostStepModPlugin):
 class RandomColorEnemiesMod(JaxAtariInternalModPlugin):
     pass
 
+class DontKillMod(JaxAtariInternalModPlugin):
+    """
+    Internal mod that punishes killing and shooting.
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def calculate_kill_points(self, successful_rescues: chex.Array) -> chex.Array:
+        # Punish killing by returning a negative value
+        return jnp.array(-100, dtype=jnp.int32)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: SeaquestState, state: SeaquestState):
+        # Standard reward (which now includes the negative kill points from calculate_kill_points)
+        reward = state.score - previous_state.score
+        
+        # Punish shooting
+        # A shot is fired when a missile is newly active (state[2] != 0)
+        shot_fired = jnp.logical_and(
+            previous_state.player_missile_position[2] == 0,
+            state.player_missile_position[2] != 0
+        )
+        # We use a penalty for every shot fired
+        shooting_penalty = jnp.where(shot_fired, 10.0, 0.0)
+        
+        return reward.astype(jnp.float32) - shooting_penalty
+
 

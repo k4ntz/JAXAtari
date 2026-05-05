@@ -89,6 +89,54 @@ class NoMonkeyMod(JaxAtariInternalModPlugin):
             jnp.array(False),                
         )
 
+class DontPunchMod(JaxAtariInternalModPlugin):
+    """
+    Internal mod that provides negative reward for punching monkeys.
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: KangarooState, state: KangarooState) -> float:
+        # Standard reward
+        reward = state.score - previous_state.score
+        
+        punching = state.player.punch_left | state.player.punch_right
+        
+        # Fist position (re-calculate as in _monkey_controller)
+        fist_w = 3
+        fist_h = 4
+        fist_x = jnp.where(
+            state.player.orientation > 0,
+            state.player.x + self._env.consts.PLAYER_WIDTH,
+            state.player.x - fist_w,
+        )
+        fist_y = state.player.y + 8
+
+        def check_punch(f_x, f_y, f_w, f_h, m_x, m_y, m_w, m_h, m_state, punching):
+            return jnp.logical_and(
+                self._env._entities_collide(f_x, f_y, f_w, f_h, m_x, m_y, m_w, m_h),
+                jnp.logical_and(m_state != 0, punching),
+            )
+
+        monkeys_punched = jax.vmap(
+            check_punch,
+            in_axes=(None, None, None, None, 0, 0, None, None, 0, None),
+        )(
+            fist_x,
+            fist_y,
+            fist_w,
+            fist_h,
+            previous_state.level.monkey_positions[:, 0],
+            previous_state.level.monkey_positions[:, 1],
+            self._env.consts.MONKEY_WIDTH,
+            self._env.consts.MONKEY_HEIGHT,
+            previous_state.level.monkey_states,
+            punching,
+        )
+        
+        num_punched = jnp.sum(monkeys_punched)
+        # The game already gives +200 per monkey. 
+        # To make it net negative (e.g. -200), we subtract 400.
+        return reward - num_punched * 400.0
+
 class NoFallingCoconutMod(JaxAtariInternalModPlugin):
     """
     Internal mod to disable the single falling coconut.

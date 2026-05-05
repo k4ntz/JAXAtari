@@ -2816,12 +2816,23 @@ class SeaquestRenderer(JAXGameRenderer):
         
         # --- UI Elements (Unchanged) ---
         max_score_digits = 6
-        score_digits = self.jr.int_to_digits(state.score, max_digits=max_score_digits)
-        clamped_score = jnp.minimum(jnp.maximum(state.score, 0), 10**max_score_digits - 1)
-        score_digit_thresholds = jnp.array([1, 10, 100, 1000, 10000, 100000], dtype=clamped_score.dtype)
-        num_score_digits = jnp.maximum(1, jnp.sum(clamped_score >= score_digit_thresholds))
+        abs_score = jnp.abs(state.score)
+        score_digits = self.jr.int_to_digits(abs_score, max_digits=max_score_digits)
+        clamped_abs_score = jnp.minimum(abs_score, 10**max_score_digits - 1)
+        score_digit_thresholds = jnp.array([1, 10, 100, 1000, 10000, 100000], dtype=clamped_abs_score.dtype)
+        num_score_digits = jnp.maximum(1, jnp.sum(clamped_abs_score >= score_digit_thresholds))
         score_start_index = max_score_digits - num_score_digits
         score_x = 59 + score_start_index * 8
+
+        # Render negative sign if needed
+        is_negative = state.score < 0
+        raster = jax.lax.cond(
+            is_negative,
+            lambda r: self.jr.render_at(r, score_x - 8, 9, self.SHAPE_MASKS['digits'][10]),
+            lambda r: r,
+            raster
+        )
+
         raster = self.jr.render_label_selective(
             raster,
             score_x,

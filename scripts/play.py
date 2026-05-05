@@ -426,7 +426,8 @@ def main():
             if not frame_by_frame or next_frame_asked:
 
                 obs, state, reward, done, info = jitted_step(state, action)
-                # print(reward)
+                if reward != 0:
+                    print(reward)
                 total_return += reward
                 if next_frame_asked:
                     next_frame_asked = False

@@ -8,7 +8,7 @@ from jaxatari.games.mods.kangaroo.kangaroo_mod_plugins import (
     FirstLevelOnlyMod, SecondLevelOnlyMod, ThirdLevelOnlyMod, FourLaddersMod, ReplaceCoconutWithFireball,
     ReplaceCoconutWithHoneyBee, ReplaceCoconutWithWasp, ReplaceMonkeyWithChickenMod, ReplaceMonkeyWithDragonMod,
     ReplaceMonkeyWithDangerSignMod, ReplaceMonkeyWithPolarbearMod, ReplaceMonkeyWithSnakeMod, ReplaceBellWithDangerSignMod, 
-    ReplaceFruitWithCoin, ReplaceFruitWithDiamond
+    ReplaceFruitWithCoin, ReplaceFruitWithDiamond, DontPunchMod
 )
 
 # --- 3. The Registry ---
@@ -16,6 +16,7 @@ KANGAROO_MOD_REGISTRY = {
     "no_bell": NoBellMod,
     "no_fruit": NoFruitMod,
     "no_monkey": NoMonkeyMod,
+    "dont_punch": DontPunchMod,
     "no_falling_coconut": NoFallingCoconutMod,
     "no_thrown_coconut": NoThrownCoconutMod,
     "high_thrown_coconuts": AlwaysHighCoconutMod,
