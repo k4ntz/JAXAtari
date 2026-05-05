@@ -83,7 +83,7 @@ class HallOfFameMod(JaxAtariInternalModPlugin):
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_new_flag_x(self, state, i: chex.Array) -> chex.Array:
-        return jnp.float32(60.0)
+        return jnp.full(i.shape, 60.0, dtype=jnp.float32)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_initial_trees_x(self) -> chex.Array:
