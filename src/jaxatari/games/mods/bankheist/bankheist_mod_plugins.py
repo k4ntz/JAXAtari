@@ -176,7 +176,7 @@ class TwoPoliceCarsMod(JaxAtariInternalModPlugin):
         return state.replace(
             bank_positions=new_banks,
             pending_police_spawns=new_pending_spawns,
-            pending_police_bank_indices=new_pending_indices,
+            pending_police_bank_indices=new_pending_bank_indices,
             pending_police_spawn_positions=new_pending_spawn_positions,
             pending_police_scores=new_pending_scores,
             bank_heists=new_bank_heists,

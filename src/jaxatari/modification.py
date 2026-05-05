@@ -2,6 +2,7 @@ import inspect
 import importlib
 import types
 from typing import Any, Dict
+from contextlib import contextmanager
 import jax
 import chex
 import warnings
@@ -53,6 +54,8 @@ def _mark_jit_mutation(core_env, reason: str) -> None:
     Mark that runtime behavior changed. Warn if this happened after tracing.
     """
     core_env._jit_mutation_epoch = getattr(core_env, "_jit_mutation_epoch", 0) + 1
+    if getattr(core_env, "_jit_tripwire_suppression_depth", 0) > 0:
+        return
     if not getattr(core_env, "_jit_tripwire_enabled", True):
         return
     compiled_targets = _targets_with_compiled_cache(core_env)
@@ -66,6 +69,20 @@ def _mark_jit_mutation(core_env, reason: str) -> None:
             "If this override changes traced behavior, clear caches/retrace to avoid stale execution.",
             RuntimeWarning,
             stacklevel=3,
+        )
+
+
+@contextmanager
+def _suspend_jit_tripwire(core_env):
+    """
+    Temporarily suppress tripwire warnings for controlled setup-time mutations.
+    """
+    core_env._jit_tripwire_suppression_depth = getattr(core_env, "_jit_tripwire_suppression_depth", 0) + 1
+    try:
+        yield
+    finally:
+        core_env._jit_tripwire_suppression_depth = max(
+            0, getattr(core_env, "_jit_tripwire_suppression_depth", 1) - 1
         )
 
 
@@ -991,16 +1008,17 @@ def apply_modifications(
             else:
                 base_env._mod_history["constant"].add(k)
 
-    modded_env = ControllerClass(
-        env=base_env,
-        mods_config=expanded_mods_config,
-        allow_conflicts=allow_conflicts
-    )
+    with _suspend_jit_tripwire(base_env):
+        modded_env = ControllerClass(
+            env=base_env,
+            mods_config=expanded_mods_config,
+            allow_conflicts=allow_conflicts
+        )
 
-    final_env = JaxAtariModWrapper(
-        env=modded_env,
-        mods_config=expanded_mods_config,
-        allow_conflicts=allow_conflicts
-    )
+        final_env = JaxAtariModWrapper(
+            env=modded_env,
+            mods_config=expanded_mods_config,
+            allow_conflicts=allow_conflicts
+        )
 
     return final_env
