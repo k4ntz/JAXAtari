@@ -4623,10 +4623,13 @@ class BeamriderRenderer(JAXGameRenderer):
         # Add negative sign if score < 0
         is_negative = state.score < 0
         digit_mask = score_masks[0]
-        minus_color_id = jnp.max(digit_mask)
-        minus_mask = jnp.zeros_like(digit_mask)
+        transparent_id = self.jr.TRANSPARENT_ID
+        # Get the actual color ID of the digit
+        digit_color = jnp.where(digit_mask != transparent_id, digit_mask, jnp.inf).min().astype(digit_mask.dtype)
+        
+        minus_mask = jnp.full_like(digit_mask, transparent_id)
         mid_y = digit_mask.shape[0] // 2
-        minus_mask = minus_mask.at[mid_y, 1:-1].set(minus_color_id)
+        minus_mask = minus_mask.at[mid_y, 1:-1].set(digit_color)
         
         raster = jax.lax.cond(
             is_negative,

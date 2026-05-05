@@ -163,3 +163,8 @@ class ChangePlayerColorMod(JaxAtariInternalModPlugin):
             "data": _recolor_sprite("player.npy", (92, 186, 92), _NEW_PLAYER_COLOR),
         }
     }
+
+
+class RewardAccelerationMod(JaxAtariInternalModPlugin):
+    """Rewards (+2) the player each time the ball is accelerated by the player."""
+    constants_overrides = {"ACCELERATION_REWARD": 2.0}

@@ -121,6 +121,16 @@ class MatrixMod(JaxAtariInternalModPlugin):
         'RGB_BATS_RED': (50, 255, 50),
     }
 
+class PenalizeShootMod(JaxAtariInternalModPlugin):
+    """
+    Penalize (-50 points) for each time the player shoots.
+    """
+
+    constants_overrides = {
+        "SHOOTING_REWARD": -50,
+    }
+
+
 class BloodMoonMod(JaxAtariInternalModPlugin):
     """A dark red themed mod."""
     name = "blood_moon"

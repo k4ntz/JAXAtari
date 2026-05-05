@@ -65,6 +65,7 @@ class PongConstants(struct.PyTreeNode):
     PADDLE_MIN_Y: float = struct.field(pytree_node=False, default=24.0)
     PADDLE_MAX_Y: float = struct.field(pytree_node=False, default=190.0)
     PADDLE_DAMPENING_Y: float = struct.field(pytree_node=False, default=170.0)
+    ACCELERATION_REWARD: float = struct.field(pytree_node=False, default=0.0)
 
 
 class PongState(struct.PyTreeNode):
@@ -481,9 +482,15 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: PongState, state: PongState):
-        return (state.player_score - state.enemy_score) - (
+        score_reward = (state.player_score - state.enemy_score) - (
             previous_state.player_score - previous_state.enemy_score
         )
+        # Acceleration detection: magnitude increased and sign flipped from positive to negative
+        accelerated = jnp.logical_and(
+            jnp.abs(state.ball_vel_x) > jnp.abs(previous_state.ball_vel_x),
+            jnp.logical_and(previous_state.ball_vel_x > 0, state.ball_vel_x < 0)
+        )
+        return score_reward + jnp.where(accelerated, self.consts.ACCELERATION_REWARD, 0.0)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: PongState) -> bool:

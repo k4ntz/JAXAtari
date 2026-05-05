@@ -3,7 +3,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from jaxatari.modification import JaxAtariInternalModPlugin
+from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
 from jaxatari.games.jax_beamrider import (
     BLUE_LINE_INIT_TABLE,
     BeamriderState,
@@ -3624,7 +3624,7 @@ class TeleportUFOsMod(JaxAtariInternalModPlugin):
         )
 
 
-class DontKillMod(JaxAtariInternalModPlugin):
+class DontKillMod(JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin):
     """Internal mod that punishes killing and shooting."""
 
     constants_overrides = {
@@ -3639,17 +3639,22 @@ class DontKillMod(JaxAtariInternalModPlugin):
     }
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(self, previous_state: BeamriderState, state: BeamriderState):
-        # Standard reward (which now includes the negative kill points from overrides)
-        reward = state.score - previous_state.score
-        
-        # Punish shooting
+    def run(self, prev_state: BeamriderState, new_state: BeamriderState) -> BeamriderState:
         # A shot is fired when player_shot_frame transitions from -1 to >= 0
         shot_fired = jnp.logical_and(
-            previous_state.level.player_shot_frame == -1,
-            state.level.player_shot_frame != -1
+            prev_state.level.player_shot_frame == -1,
+            new_state.level.player_shot_frame != -1
         )
-        # We use a penalty for every shot fired
-        shooting_penalty = jnp.where(shot_fired, 10.0, 0.0)
+        shooting_penalty = jnp.where(shot_fired, 10, 0).astype(new_state.score.dtype)
         
-        return reward.astype(jnp.float32) - shooting_penalty
+        # We also need to add survival reward? Not requested.
+        new_score = new_state.score - shooting_penalty
+        return new_state.replace(score=new_score)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: BeamriderState, state: BeamriderState):
+        # We return the difference in score.
+        # Since we modify the score directly in `run`, `state.score` already includes the penalty.
+        # So reward is just the difference in score!
+        reward = state.score - previous_state.score
+        return reward.astype(jnp.float32)

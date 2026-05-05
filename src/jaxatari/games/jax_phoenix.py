@@ -168,6 +168,7 @@ class PhoenixConstants(AutoDerivedConstants):
     PLAYER_PROJECTILE_INITIAL_OFFSET: int = struct.field(pytree_node=False, default=-5)
     RESET_START_LEVEL: int = struct.field(pytree_node=False, default=1)
     ENEMY_PROJECTILE_SPEED: int = struct.field(pytree_node=False, default=2)
+    SHOOTING_REWARD: int = struct.field(pytree_node=False, default=0)
 
     # --- Global / shared enemy timing and odds ---
     ENEMY_DEATH_DURATION: int = struct.field(pytree_node=False, default=30)  # ca. 0,25 Sekunden bei 30 FPS
@@ -1958,8 +1959,8 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         actual_hit_scores = jnp.where(enemy_collisions, enemy_hit_scores, 0)
         total_hit_score = jnp.sum(actual_hit_scores)
 
-        # Update overall score with sub_step (wings) + main kills
-        score = (state.score + sub_step_score + total_hit_score).astype(jnp.int32)
+        # Update overall score with sub_step (wings) + main kills + shooting reward
+        score = (state.score + sub_step_score + total_hit_score + jnp.where(firing, self.consts.SHOOTING_REWARD, 0)).astype(jnp.int32)
 
         # Gegner entfernen nach Ablauf der jeweiligen Death-Animation
         death_done_any = jnp.where(is_bat_level, b_death_done, p_death_done)
@@ -2852,7 +2853,11 @@ class PhoenixRenderer(JAXGameRenderer):
         score_y = 10 + score_dy
         digit_masks = self.get_mask('digits')
         digit_w = digit_masks[0].shape[1]
-        score_digits = self.jr.int_to_digits(state.score, max_digits=max_digits)
+
+        # Handle negative score
+        abs_score = jnp.abs(state.score.astype(jnp.int32))
+        score_digits = self.jr.int_to_digits(abs_score, max_digits=max_digits)
+
         has_nonzero = jnp.any(score_digits != 0)
         first_idx = jnp.where(has_nonzero, jnp.argmax(score_digits != 0), max_digits - 1)
         num_to_render = jnp.where(has_nonzero, max_digits - first_idx, 1)
@@ -2860,6 +2865,23 @@ class PhoenixRenderer(JAXGameRenderer):
         field_total_w = max_digits * spacing
         base_left = (self.consts.WIDTH - field_total_w) // 2
         score_x = base_left + first_idx * spacing + score_dx
+
+        # Render minus sign if negative
+        is_negative = state.score < 0
+        # Use a pixel from digit '0' that is likely to be colored (top-center)
+        digit_color_id = digit_masks[0][0, digit_w // 2]
+        raster = jax.lax.cond(
+            is_negative,
+            lambda r: self.jr.draw_rects(
+                r,
+                positions=jnp.array([[score_x - 7, score_y + 3]]),
+                sizes=jnp.array([[5, 1]]),
+                color_id=digit_color_id.astype(r.dtype)
+            ),
+            lambda r: r,
+            raster
+        )
+
         raster = self.jr.render_label_selective(
             raster, score_x, score_y,
             score_digits, digit_masks,
