@@ -1,6 +1,6 @@
 import os
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.freeway.freeway_mod_plugins import StopAllCarsMod, StaticCarsMod, SlowCarsMod, BlackCarsMod, CenterCarsOnResetMod, InvertSpeed, HallOfFameMod, BikesMod, FrogMod, NewLaneColorsMod, GreenScoreMod
+from jaxatari.games.mods.freeway.freeway_mod_plugins import StopAllCarsMod, StaticCarsMod, SlowCarsMod, BlackCarsMod, CenterCarsOnResetMod, InvertSpeed, HallOfFameMod, BikesMod, FrogMod, NewLaneColorsMod, GreenScoreMod, TooClosePenaltyMod
 
 class FreewayEnvMod(JaxAtariModController):
     """
@@ -21,6 +21,7 @@ class FreewayEnvMod(JaxAtariModController):
         "frog": FrogMod,
         "new_lane_colors": NewLaneColorsMod,
         "green_score": GreenScoreMod,
+        "too_close_penalty": TooClosePenaltyMod,
         "change_sprites": ["frog", "bikes", "new_lane_colors", "green_score"],
     }
 

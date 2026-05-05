@@ -6,6 +6,7 @@ import jax.numpy as jnp
 from jaxatari.modification import JaxAtariInternalModPlugin
 from jaxatari.games.jax_beamrider import (
     BLUE_LINE_INIT_TABLE,
+    BeamriderState,
     LaneBlockerState,
     WhiteUFOUpdate,
     WhiteUFOPattern,
@@ -3621,3 +3622,34 @@ class TeleportUFOsMod(JaxAtariInternalModPlugin):
             pattern_timer,
             new_key,
         )
+
+
+class DontKillMod(JaxAtariInternalModPlugin):
+    """Internal mod that punishes killing and shooting."""
+
+    constants_overrides = {
+        "UFO_REWARD": -100,
+        "UFO_SECTOR_REWARD": 0,
+        "BOUNCER_REWARD": -100,
+        "REJUVENATOR_REWARD": -100,
+        "MOTHERSHIP_REWARD": -100,
+        "MOTHERSHIP_SECTOR_REWARD": 0,
+        "MOTHERSHIP_LIFE_REWARD": 0,
+        "MOTHERSHIP_LIFE_SECTOR_REWARD": 0,
+    }
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: BeamriderState, state: BeamriderState):
+        # Standard reward (which now includes the negative kill points from overrides)
+        reward = state.score - previous_state.score
+        
+        # Punish shooting
+        # A shot is fired when player_shot_frame transitions from -1 to >= 0
+        shot_fired = jnp.logical_and(
+            previous_state.level.player_shot_frame == -1,
+            state.level.player_shot_frame != -1
+        )
+        # We use a penalty for every shot fired
+        shooting_penalty = jnp.where(shot_fired, 10.0, 0.0)
+        
+        return reward.astype(jnp.float32) - shooting_penalty

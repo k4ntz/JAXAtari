@@ -126,6 +126,12 @@ class FrostbiteConstants(struct.PyTreeNode):
     MAX_EATEN_FISH: int = struct.field(pytree_node=False, default=12)  # Max fish that can be eaten per level
     MAX_RESERVED_LIVES: int = struct.field(pytree_node=False, default=9)  # Maximum reserve lives
     
+    # Rewards
+    REWARD_ICE_BLOCK: int = struct.field(pytree_node=False, default=10) # Multiplied by level
+    REWARD_FISH: int = struct.field(pytree_node=False, default=200)
+    REWARD_IGLOO_BLOCK: int = struct.field(pytree_node=False, default=10) # Multiplied by level
+    REWARD_TEMPERATURE: int = struct.field(pytree_node=False, default=10) # Multiplied by level
+    
     # Status Masks
     OBSTACLE_DIR_MASK: int = struct.field(pytree_node=False, default=0x80)
     ICE_BLOCK_DIR_MASK: int = struct.field(pytree_node=False, default=0x40)
@@ -421,6 +427,9 @@ class FrostbiteState:
     ice_segments_x: chex.Array
     ice_segments_w: chex.Array
     
+    # Score sign (1 for positive, -1 for negative)
+    score_sign: chex.Array
+    
     # JAX
     rng_key: chex.PRNGKey
 
@@ -490,14 +499,15 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
 
         self.renderer = FrostbiteRenderer(self.consts)
     
-    def _get_point_value_for_level(self, level: jnp.ndarray):
-        """Get point value for level × 10 in BCD format"""
-        points = level * 10
-        points = jnp.minimum(points, 90)
-        hundreds = points // 100
-        tens = (points % 100) // 10
-        ones = points % 10
-        return (hundreds << 8) | (tens << 4) | ones
+    def _get_reward_decimal(self, level: jnp.ndarray, base_reward: int):
+        """Get point value for level × base_reward"""
+        points = level * base_reward
+        # Original game caps the level multiplier at 9
+        return jnp.minimum(points, 9 * base_reward)
+    
+    def _get_fish_reward_decimal(self):
+        """Get fish reward"""
+        return jnp.int32(self.consts.REWARD_FISH)
     
     def _get_obstacle_pattern_mask(self, level: jnp.ndarray):
         """Get pattern mask to control obstacle density based on level.
@@ -724,6 +734,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             reserve_lives=jnp.array(self.consts.INIT_LIVES, dtype=jnp.int32),
             ice_segments_x=jnp.full((4, 6), self.consts.ICE_UNUSED_POS, dtype=jnp.int32),
             ice_segments_w=jnp.zeros((4, 6), dtype=jnp.int32),
+            score_sign=jnp.array(1, dtype=jnp.int32),
             rng_key=key
         )
         # Spawn all 4 obstacles at the start
@@ -820,6 +831,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             reserve_lives=jnp.array(self.consts.INIT_LIVES, dtype=jnp.int32),
             ice_segments_x=jnp.full((4, 6), self.consts.ICE_UNUSED_POS, dtype=jnp.int32),
             ice_segments_w=jnp.zeros((4, 6), dtype=jnp.int32),
+            score_sign=jnp.array(1, dtype=jnp.int32),
             rng_key=key
         )
         seg_x, seg_w = self._compute_ice_segments(state)
@@ -912,7 +924,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         hits = active & (px >= seg_x) & (px < seg_x + seg_w) # Shape: (4, 6, 16)
         ice_grid = jnp.any(hits, axis=1).astype(jnp.int32) # Shape: (4, 16)
 
-        score_val = self._bcd_to_decimal(state.score)
+        score_val = self._bcd_to_decimal(state.score) * state.score_sign
         temp_val = self._bcd_to_decimal(jnp.array([0, 0, state.temperature], dtype=jnp.int32))
 
         return FrostbiteObservation(
@@ -1124,8 +1136,8 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: FrostbiteState, state: FrostbiteState) -> chex.Array:
         """Calculate reward based on score difference."""
-        prev_score_val = self._bcd_to_decimal(previous_state.score)
-        curr_score_val = self._bcd_to_decimal(state.score)
+        prev_score_val = self._bcd_to_decimal(previous_state.score) * previous_state.score_sign
+        curr_score_val = self._bcd_to_decimal(state.score) * state.score_sign
         return (curr_score_val - prev_score_val).astype(jnp.float32)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1285,11 +1297,11 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             should_remove_block, state.building_igloo_idx - 1, state.building_igloo_idx
         )
 
-        # Award points for each removed block (level × 10 in BCD)
-        point_value = self._get_point_value_for_level(state.level)
-        block_points = jnp.where(should_remove_block, point_value, 0)
-        new_score = self._add_bcd_score(state.score, block_points)
-        new_remaining_lives = self._check_extra_life(state.score, new_score, state.remaining_lives)
+        # Award points for each removed block (level × base in BCD)
+        block_reward = self._get_reward_decimal(state.level, self.consts.REWARD_IGLOO_BLOCK)
+        block_points = jnp.where(should_remove_block, block_reward, 0)
+        new_score, new_score_sign = self._add_score_decimal(state.score, state.score_sign, block_points)
+        new_remaining_lives = self._check_extra_life(state.score, state.score_sign, new_score, new_score_sign, state.remaining_lives)
 
         # When all blocks are removed, start temperature countdown phase
         blocks_just_finished = is_level_complete & (state.building_igloo_idx == 0) & (new_building_idx < 0)
@@ -1316,10 +1328,12 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         new_temperature = jnp.where(should_decrement_temp, decrement_temp_bcd(state.temperature), state.temperature)
 
         # Award points for each temperature degree (same as block points)
-        temp_points = jnp.where(should_decrement_temp, point_value, 0)
+        temp_reward = self._get_reward_decimal(state.level, self.consts.REWARD_TEMPERATURE)
+        temp_points = jnp.where(should_decrement_temp, temp_reward, 0)
         old_score_for_temp = new_score  # Use the already-updated score from block removal
-        new_score = self._add_bcd_score(new_score, temp_points)
-        new_remaining_lives = self._check_extra_life(old_score_for_temp, new_score, new_remaining_lives)
+        old_sign_for_temp = new_score_sign
+        new_score, new_score_sign = self._add_score_decimal(new_score, new_score_sign, temp_points)
+        new_remaining_lives = self._check_extra_life(old_score_for_temp, old_sign_for_temp, new_score, new_score_sign, new_remaining_lives)
         
         # Phase 3: Reset game state for next level when temperature reaches zero
         level_reset_complete = (
@@ -1452,6 +1466,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             frame_delay=new_delay,
             building_igloo_idx=new_building_idx,
             score=new_score,
+            score_sign=new_score_sign,
             remaining_lives=new_remaining_lives,
             bailey_x=new_bailey_x,
             bailey_y=new_bailey_y,
@@ -2341,16 +2356,15 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         )
 
         # Award points and igloo blocks for collecting ice
-        new_score = state.score  # No need for .copy() in JAX
         new_building_idx = state.building_igloo_idx
 
-        # Points based on level (level × 10 in BCD)
-        point_value = self._get_point_value_for_level(state.level)
-        points = jnp.where(row_changed, point_value, 0)
-        new_score = self._add_bcd_score(new_score, points)
-        
+        # Points based on level
+        ice_reward = self._get_reward_decimal(state.level, self.consts.REWARD_ICE_BLOCK)
+        points = jnp.where(row_changed, ice_reward, 0)
+        new_score, new_score_sign = self._add_score_decimal(state.score, state.score_sign, points)
+
         # Check for extra life
-        new_remaining_lives = self._check_extra_life(state.score, new_score, new_remaining_lives)
+        new_remaining_lives = self._check_extra_life(state.score, state.score_sign, new_score, new_score_sign, new_remaining_lives)
         
         new_building_idx = jnp.where(
             row_changed & (state.building_igloo_idx < self.consts.MAX_IGLOO_INDEX),
@@ -2407,6 +2421,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             completed_ice_blocks_delay=new_delay,
             bailey_death_frame=final_death_frame,
             score=new_score,
+            score_sign=new_score_sign,
             building_igloo_idx=new_building_idx,
             remaining_lives=new_remaining_lives,
             temperature=new_temperature,
@@ -2433,67 +2448,31 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
 
         return updated_state
     
-    def _add_bcd_score(self, score, points):
-        """Add points to BCD score (Binary Coded Decimal)."""
-        current = self._bcd_to_decimal(score)
-        hundreds = (points >> 8) & 0x0F
-        tens = (points >> 4) & 0x0F
-        ones = points & 0x0F
-        decimal_points = hundreds * 100 + tens * 10 + ones
+    def _add_score_decimal(self, score, score_sign, decimal_points):
+        """Add decimal points to BCD score, returning new score and sign."""
+        current = self._bcd_to_decimal(score) * score_sign
         new_total = current + decimal_points
-        d5 = (new_total // 100000) % 10
-        d4 = (new_total // 10000) % 10
-        d3 = (new_total // 1000) % 10
-        d2 = (new_total // 100) % 10
-        d1 = (new_total // 10) % 10
-        d0 = new_total % 10
+        new_sign = jnp.where(new_total < 0, jnp.int32(-1), jnp.int32(1))
+        abs_total = jnp.abs(new_total)
+        d5 = (abs_total // 100000) % 10
+        d4 = (abs_total // 10000) % 10
+        d3 = (abs_total // 1000) % 10
+        d2 = (abs_total // 100) % 10
+        d1 = (abs_total // 10) % 10
+        d0 = abs_total % 10
         new_score = score.at[0].set((d5 << 4) | d4)
         new_score = new_score.at[1].set((d3 << 4) | d2)
         new_score = new_score.at[2].set((d1 << 4) | d0)
-        return new_score
-    
-    def _check_extra_life(self, old_score, new_score, lives):
-        """Check if score crossed a 5000-point boundary and award extra life.
+        return new_score, new_sign
 
-        In Frostbite, players earn an extra life every 5000 points. This method
-        checks if the score increase crossed one or more 5000-point thresholds
-        and awards lives accordingly. Maximum of 9 reserve lives is enforced.
-
-        Args:
-            old_score: Previous integer score
-            new_score: Updated integer score after points were added
-            lives: Current number of reserve lives
-
-        Returns:
-            Updated number of lives, capped at 9 (hardcoded limit)
-        """
-        # Calculate how many 5000-point thresholds were crossed
-        # Integer division gives us the number of extra lives earned so far
-        old_total = self._bcd_to_decimal(old_score)
-        new_total = self._bcd_to_decimal(new_score)
-        old_lives_earned = old_total // 5000
-        new_lives_earned = new_total // 5000
-
-        # Award extra lives for all thresholds crossed, but enforce the 9-life maximum
-        # Note: MAX_RESERVED_LIVES constant exists but isn't used - limit is hardcoded
+    def _check_extra_life(self, old_score, old_sign, new_score, new_sign, lives):
+        """Check if score crossed a 5000-point boundary and award extra life."""
+        old_total = self._bcd_to_decimal(old_score) * old_sign
+        new_total = self._bcd_to_decimal(new_score) * new_sign
+        old_lives_earned = jnp.maximum(0, old_total) // 5000
+        new_lives_earned = jnp.maximum(0, new_total) // 5000
         lives_to_add = new_lives_earned - old_lives_earned
-        new_lives = jnp.where(lives_to_add > 0, jnp.minimum(lives + lives_to_add, 9), lives)
-
-        return new_lives
-    
-    def _add_bcd_score_decimal(self, score, decimal_points):
-        current = self._bcd_to_decimal(score)
-        new_total = current + decimal_points
-        d5 = (new_total // 100000) % 10
-        d4 = (new_total // 10000) % 10
-        d3 = (new_total // 1000) % 10
-        d2 = (new_total // 100) % 10
-        d1 = (new_total // 10) % 10
-        d0 = new_total % 10
-        new_score = score.at[0].set((d5 << 4) | d4)
-        new_score = new_score.at[1].set((d3 << 4) | d2)
-        new_score = new_score.at[2].set((d1 << 4) | d0)
-        return new_score
+        return jnp.where(lives_to_add > 0, jnp.minimum(lives + lives_to_add, 9), lives)
     
     @partial(jax.jit, static_argnums=(0,))
     def _check_obstacle_collisions(self, state: FrostbiteState):
@@ -2570,15 +2549,20 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         hit_is_fish = has_hit & (hit_type == self.consts.ID_FISH)
         can_award = hit_is_fish & (state.number_of_fish_eaten < self.consts.MAX_EATEN_FISH)
 
-        new_score = jax.lax.cond(
+        def award_fish(score_info):
+            score, sign = score_info
+            return self._add_score_decimal(score, sign, self._get_fish_reward_decimal())
+
+        new_score, new_score_sign = jax.lax.cond(
             can_award,
-            lambda s: self._add_bcd_score(s, jnp.int32(0x0200)),
-            lambda s: s,
-            state.score
+            award_fish,
+            lambda args: args,
+            (state.score, state.score_sign)
         )
+
         new_remaining_lives = jax.lax.cond(
             can_award,
-            lambda _: self._check_extra_life(state.score, new_score, state.remaining_lives),
+            lambda _: self._check_extra_life(state.score, state.score_sign, new_score, new_score_sign, state.remaining_lives),
             lambda _: state.remaining_lives,
             operand=None
         )
@@ -2630,6 +2614,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             fish_alive_mask=new_fish_masks,
             obstacle_x=new_obstacle_x,
             score=new_score,
+            score_sign=new_score_sign,
             remaining_lives=new_remaining_lives
         )
     
@@ -3442,63 +3427,81 @@ class FrostbiteRenderer(JAXGameRenderer):
         temp_x = jnp.where(temp_tens > 0, temp_x_base - 16, temp_x_base - 8)
         
         # 3. Score
-        total_score = self._bcd_to_decimal(state.score)
+        total_score_val = self._bcd_to_decimal(state.score) * state.score_sign
+        total_score_abs = jnp.abs(total_score_val)
+        score_is_negative = total_score_val < 0
+
         num_digits = jnp.where(
-            total_score == 0,
+            total_score_abs == 0,
             1,
-            jnp.floor(jnp.log10(jnp.maximum(1, total_score) + 0.5)).astype(jnp.int32) + 1
+            jnp.floor(jnp.log10(jnp.maximum(1, total_score_abs) + 0.5)).astype(jnp.int32) + 1
         )
         score_x_start = lives_x - ((num_digits - 1) * 4)
-        score_digits = self.jr.int_to_digits(total_score, max_digits=6)
+        score_digits = self.jr.int_to_digits(total_score_abs, max_digits=6)
         start_index = 6 - num_digits
-        
+
         # Collect everything into a batch
-        # 0: Lives, 1: Temp Tens, 2: Temp Ones, 3: Degree, 4-9: Score Digits
-        hud_masks = jnp.zeros((10, *digits_masks.shape[1:]), dtype=digits_masks.dtype)
-        hud_x = jnp.zeros(10, dtype=jnp.int32)
-        hud_y = jnp.zeros(10, dtype=jnp.int32)
-        hud_active = jnp.zeros(10, dtype=jnp.bool_)
-        
+        # 0: Lives, 1: Temp Tens, 2: Temp Ones, 3: Degree, 4-9: Score Digits, 10: Minus Sign
+        hud_masks = jnp.zeros((11, *digits_masks.shape[1:]), dtype=digits_masks.dtype)
+        hud_x = jnp.zeros(11, dtype=jnp.int32)
+        hud_y = jnp.zeros(11, dtype=jnp.int32)
+        hud_active = jnp.zeros(11, dtype=jnp.bool_)
+
         # Lives
         hud_masks = hud_masks.at[0].set(lives_mask)
         hud_x = hud_x.at[0].set(lives_x)
         hud_y = hud_y.at[0].set(lives_y)
         hud_active = hud_active.at[0].set(is_visible)
-        
+
         # Temp Tens
         hud_masks = hud_masks.at[1].set(digits_masks[temp_tens])
         hud_x = hud_x.at[1].set(temp_x)
         hud_y = hud_y.at[1].set(temp_y)
         hud_active = hud_active.at[1].set(is_visible & (temp_tens > 0))
-        
+
         # Temp Ones
         hud_masks = hud_masks.at[2].set(digits_masks[temp_ones])
         hud_x = hud_x.at[2].set(jnp.where(temp_tens > 0, temp_x + 8, temp_x))
         hud_y = hud_y.at[2].set(temp_y)
         hud_active = hud_active.at[2].set(is_visible)
-        
+
         # Degree
         hud_masks = hud_masks.at[3].set(self.DEGREE_MASK)
         hud_x = hud_x.at[3].set(temp_x_base)
         hud_y = hud_y.at[3].set(temp_y)
         hud_active = hud_active.at[3].set(is_visible)
-        
+
         # Score Digits
         score_idx = jnp.arange(6)
         score_mask_idx = jnp.take(score_digits, start_index + score_idx)
         score_masks = digits_masks[score_mask_idx]
         score_x = score_x_start + score_idx * 8
-        
-        hud_masks = hud_masks.at[4:].set(score_masks)
-        hud_x = hud_x.at[4:].set(score_x)
-        hud_y = hud_y.at[4:].set(score_y)
-        hud_active = hud_active.at[4:].set(score_idx < num_digits)
-        
+
+        hud_masks = hud_masks.at[4:10].set(score_masks)
+        hud_x = hud_x.at[4:10].set(score_x)
+        hud_y = hud_y.at[4:10].set(score_y)
+        hud_active = hud_active.at[4:10].set(score_idx < num_digits)
+
+        # Minus Sign
+        minus_x = score_x_start - 8
+        minus_y = score_y
+        text_color_idx = jnp.max(digits_masks[0])
+        h, w = digits_masks.shape[1], digits_masks.shape[2]
+        yy, xx = jnp.mgrid[:h, :w]
+        minus_mask = jnp.where(
+            (yy >= h // 2 - 1) & (yy <= h // 2) & (xx > 1) & (xx < w - 1),
+            text_color_idx,
+            self.jr.TRANSPARENT_ID
+        )
+        hud_masks = hud_masks.at[10].set(minus_mask)
+        hud_x = hud_x.at[10].set(minus_x)
+        hud_y = hud_y.at[10].set(minus_y)
+        hud_active = hud_active.at[10].set(score_is_negative)
+
         # Final filtering
         hud_masks = jnp.where(hud_active[:, jnp.newaxis, jnp.newaxis], hud_masks, self.jr.TRANSPARENT_ID)
-        
-        return self.jr.render_at_batch(raster, hud_x, hud_y, hud_masks)
 
+        return self.jr.render_at_batch(raster, hud_x, hud_y, hud_masks)
     
     @partial(jax.jit, static_argnums=(0,))
     def _render_igloo_blocks(self, raster, state):

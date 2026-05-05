@@ -365,6 +365,19 @@ class BeamriderConstants(struct.PyTreeNode):
     COIN_ANIM_SEQ: Tuple[int, ...] = struct.field(pytree_node=False, default=(3, 2, 1, 0, 1, 2))
     COIN_SPRITE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(7, 8))
 
+    UFO_REWARD: int = struct.field(pytree_node=False, default=40)
+    UFO_SECTOR_REWARD: int = struct.field(pytree_node=False, default=4)
+    BOUNCER_REWARD: int = struct.field(pytree_node=False, default=80)
+    REJUVENATOR_REWARD: int = struct.field(pytree_node=False, default=150)
+    COIN_REWARD: int = struct.field(pytree_node=False, default=300)
+    COIN_SECTOR_REWARD: int = struct.field(pytree_node=False, default=30)
+    COIN_LIFE_REWARD: int = struct.field(pytree_node=False, default=100)
+    COIN_LIFE_SECTOR_REWARD: int = struct.field(pytree_node=False, default=10)
+    MOTHERSHIP_REWARD: int = struct.field(pytree_node=False, default=300)
+    MOTHERSHIP_SECTOR_REWARD: int = struct.field(pytree_node=False, default=30)
+    MOTHERSHIP_LIFE_REWARD: int = struct.field(pytree_node=False, default=100)
+    MOTHERSHIP_LIFE_SECTOR_REWARD: int = struct.field(pytree_node=False, default=10)
+
 
 def _get_index_ufo(pos: chex.Array) -> chex.Array:
     return _UFO_INDEX_TABLE[jnp.clip(pos.astype(jnp.int32), 0, 800)]
@@ -1440,7 +1453,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         bouncer_pos = jnp.where(bouncer_destroyed, self.enemy_offscreen, bouncer_pos)
         bouncer_active = jnp.where(bouncer_destroyed, False, bouncer_active)
         player_shot_pos = jnp.where(bouncer_hit, self.bullet_offscreen, player_shot_pos)
-        score = jnp.where(bouncer_destroyed, score + 80, score)
+        score = jnp.where(bouncer_destroyed, score + self.consts.BOUNCER_REWARD, score)
 
         # Meteoroid bullet collision
         pre_collision_meteoroid_pos = chasing_meteoroid_pos
@@ -1492,7 +1505,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         coin_active = jnp.where(hit_mask_coin, False, coin_active)
         player_shot_pos = jnp.where(hit_exists_coin, self.bullet_offscreen, player_shot_pos)
         clamped_sector = jnp.minimum(state.sector, 89)
-        score = jnp.where(hit_exists_coin, score + 300 + 30 * clamped_sector + jnp.maximum(state.lives - 1, 0) * (100 + 10 * clamped_sector), score)
+        score = jnp.where(hit_exists_coin, score + self.consts.COIN_REWARD + self.consts.COIN_SECTOR_REWARD * clamped_sector + jnp.maximum(state.lives - 1, 0) * (self.consts.COIN_LIFE_REWARD + self.consts.COIN_LIFE_SECTOR_REWARD * clamped_sector), score)
 
         # Rejuvenator bullet collision
         rejuv_hit, rejuv_destroyed = self._rejuvenator_bullet_collision(rejuv_pos, rejuv_active, rejuv_dead, player_shot_pos,
@@ -1502,13 +1515,13 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         rejuv_active = jnp.where(rejuv_destroyed, False, rejuv_active)
         rejuv_pos = jnp.where(rejuv_destroyed, self.enemy_offscreen, rejuv_pos)
         player_shot_pos = jnp.where(rejuv_hit, self.bullet_offscreen, player_shot_pos)
-        score = jnp.where(rejuv_destroyed, score + 150, score)
+        score = jnp.where(rejuv_destroyed, score + self.consts.REJUVENATOR_REWARD, score)
 
         # Mothership bullet collision
         hit_mothership = self._mothership_bullet_collision(state.level.mothership_stage, state.level.mothership_position,
                                                            player_shot_pos, shot_x_screen, shot_active, bullet_size, is_torpedo)
         player_shot_pos = jnp.where(hit_mothership, self.bullet_offscreen, player_shot_pos)
-        score = jnp.where(hit_mothership, score + 300 + 30 * clamped_sector + jnp.maximum(state.lives - 1, 0) * (100 + 10 * clamped_sector), score)
+        score = jnp.where(hit_mothership, score + self.consts.MOTHERSHIP_REWARD + self.consts.MOTHERSHIP_SECTOR_REWARD * clamped_sector + jnp.maximum(state.lives - 1, 0) * (self.consts.MOTHERSHIP_LIFE_REWARD + self.consts.MOTHERSHIP_LIFE_SECTOR_REWARD * clamped_sector), score)
 
         # Enemy shot collision
         hit_mask_shot, hit_exists_shot = self._enemy_shot_bullet_collision(enemy_shot_pos, enemy_shot_timer, player_shot_pos,
@@ -2146,7 +2159,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             state.level.white_ufo_left,
         )
         clamped_sector = jnp.minimum(state.sector, 89)
-        ufo_score = 40 + 4 * clamped_sector
+        ufo_score = self.consts.UFO_REWARD + self.consts.UFO_SECTOR_REWARD * clamped_sector
         score = jnp.where(hit_exists_ufo, state.score + ufo_score, state.score)
         return (enemy_pos, player_shot_pos, new_patterns, new_timers, new_spawn_delays, white_ufo_left, score, hit_mask_ufo, hit_exists_ufo)
 
@@ -4600,11 +4613,28 @@ class BeamriderRenderer(JAXGameRenderer):
         )
 
     def _render_score(self, raster, state):
-        yellow_digits = self.jr.int_to_digits(state.score, max_digits=6)
+        abs_score = jnp.abs(state.score)
+        yellow_digits = self.jr.int_to_digits(abs_score, max_digits=6)
         score_masks = self.SHAPE_MASKS["yellow_numbers"]
-        return self.jr.render_label_selective(
+        raster = self.jr.render_label_selective(
             raster, 61, 10, yellow_digits, score_masks, 0, 6, spacing=8, max_digits_to_render=6
         )
+        
+        # Add negative sign if score < 0
+        is_negative = state.score < 0
+        digit_mask = score_masks[0]
+        minus_color_id = jnp.max(digit_mask)
+        minus_mask = jnp.zeros_like(digit_mask)
+        mid_y = digit_mask.shape[0] // 2
+        minus_mask = minus_mask.at[mid_y, 1:-1].set(minus_color_id)
+        
+        raster = jax.lax.cond(
+            is_negative,
+            lambda r: self.jr.render_at(r, 61 - 8, 10, minus_mask),
+            lambda r: r,
+            raster
+        )
+        return raster
 
     def _render_sector(self, raster, state):
         sector_digits = self.jr.int_to_digits(state.sector, max_digits=2)

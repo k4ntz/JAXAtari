@@ -232,3 +232,29 @@ class GreenScoreMod(JaxAtariInternalModPlugin):
             'data': _recolored_score
         }
     }
+
+class TooClosePenaltyMod(JaxAtariInternalModPlugin):
+    """Provides a -1 reward if the chicken is too close to a car on the same line."""
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: FreewayState, state: FreewayState):
+        base_reward = state.score - previous_state.score
+
+        chicken_x = self._env.consts.chicken_x
+        chicken_y_top = state.chicken_y - self._env.consts.chicken_height
+        chicken_y_bottom = state.chicken_y
+
+        cars_x = state.cars[:, 0]
+        cars_y_top = state.cars[:, 1] - self._env.consts.car_height
+        cars_y_bottom = state.cars[:, 1]
+
+        y_overlap = jnp.logical_and(
+            chicken_y_top < cars_y_bottom,
+            chicken_y_bottom > cars_y_top
+        )
+
+        x_close = jnp.abs(chicken_x - cars_x) < 10
+
+        too_close_any = jnp.any(jnp.logical_and(y_overlap, x_close))
+        penalty = jnp.where(too_close_any, 1.0, 0.0)
+
+        return base_reward.astype(jnp.float32) - penalty

@@ -2,7 +2,7 @@ import os
 from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.frostbite.frostbite_mod_plugins import (
     NoEnemiesMod, LightBlueIceMod, _StaticIceMod, _MisalignedIceMod, _AlignedIceMod, RecoloredObstaclesMod, TigerMod,
-    WhiteIglooMod, LeftIglooMod, EarlyBearMod, DarkNightMod
+    WhiteIglooMod, LeftIglooMod, EarlyBearMod, DarkNightMod, BadFishesRewardMod
 )
 
 # --- The Registry ---
@@ -15,6 +15,7 @@ FROSTBITE_MOD_REGISTRY = {
     "left_igloo": LeftIglooMod,
     "early_bear": EarlyBearMod,
     "dark_night": DarkNightMod,
+    "bad_fishes_reward": BadFishesRewardMod,
     "_static_ice": _StaticIceMod,
     "_misaligned_ice": _MisalignedIceMod,
     "_aligned_ice": _AlignedIceMod,

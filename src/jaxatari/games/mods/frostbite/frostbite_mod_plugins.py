@@ -188,3 +188,11 @@ class DarkNightMod(JaxAtariInternalModPlugin):
         "RGB_NIGHT": (20, 20, 60),  # Dark blue sky
         "DRAW_SHORE_LINE": True,
     }
+
+class BadFishesRewardMod(JaxAtariInternalModPlugin):
+    """
+    Punishes the player for collecting fish by granting negative points.
+    """
+    constants_overrides = {
+        "REWARD_FISH": -200,
+    }
