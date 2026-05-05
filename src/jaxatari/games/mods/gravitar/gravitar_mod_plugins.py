@@ -164,3 +164,12 @@ class InvertedColorsMod(JaxAtariInternalModPlugin):
             {"source": (84, 160, 197), "target": (171, 95, 58)},
         )
     }
+
+
+class SharpshooterMod(JaxAtariInternalModPlugin):
+    """Punishes shooting (-100) and rewards killing enemies (+500)."""
+
+    constants_overrides = {
+        "FIRE_REWARD": -100.0,
+        "ENEMY_KILL_SCORE": 500.0,
+    }

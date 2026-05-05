@@ -195,6 +195,7 @@ class GravitarConstants(struct.PyTreeNode):
     LEVEL_CLEAR_SCORE: float = struct.field(pytree_node=False, default=1000.0)
     UFO_KILL_SCORE: float = struct.field(pytree_node=False, default=100.0)
     SAUCER_KILL_SCORE: float = struct.field(pytree_node=False, default=100.0)
+    FIRE_REWARD: float = struct.field(pytree_node=False, default=0.0)
 
     # Bonuses
     SOLAR_SYSTEM_BONUS_FUEL: float = struct.field(pytree_node=False, default=7000.0)
@@ -705,6 +706,7 @@ class EnvState:
     level_clear_score: jnp.ndarray  # float32
     ufo_kill_score: jnp.ndarray  # float32
     saucer_kill_score: jnp.ndarray  # float32
+    fire_reward: jnp.ndarray  # float32
     thrust_power: jnp.ndarray  # float32 (unscaled; divided by WORLD_SCALE in physics)
     max_speed: jnp.ndarray  # float32 (unscaled; divided by WORLD_SCALE in physics)
     prev_action: jnp.ndarray  # int32, previous action taken
@@ -1573,6 +1575,7 @@ def create_env_state(rng: jnp.ndarray) -> EnvState:
         level_clear_score=jnp.float32(LEVEL_CLEAR_SCORE),
         ufo_kill_score=jnp.float32(UFO_KILL_SCORE),
         saucer_kill_score=jnp.float32(SAUCER_KILL_SCORE),
+        fire_reward=jnp.float32(_DEFAULT_CONSTS.FIRE_REWARD),
         prev_action=jnp.int32(0),
     )
 
@@ -2759,7 +2762,8 @@ def step_core_linear(
         # Level: lives decrease on death_event; map/arena: handled externally
         lives_after_death = state_after_spawn.lives - jnp.where(death_event_level, 1, 0)
         score_before = state_after_spawn.score
-        level_score_after = score_before + level_score_delta
+        score_from_fire = jnp.where(can_fire_player, state_after_spawn.fire_reward, 0.0)
+        level_score_after = score_before + level_score_delta + score_from_fire
         bonus_life_crossed = (level_score_after // 10000) > (score_before // 10000)
         lives_gained_from_score = jnp.where(bonus_life_crossed & is_level, 1, 0)
         final_lives = lives_after_death + lives_gained_from_score
@@ -2767,7 +2771,7 @@ def step_core_linear(
 
         # Map/arena: saucer reward; level: turret/clear/UFO rewards
         map_score_delta = reward_saucer
-        score_delta = jnp.where(is_level, level_score_delta, map_score_delta)
+        score_delta = jnp.where(is_level, level_score_delta, map_score_delta) + score_from_fire
         fuel_next = jnp.maximum(0.0, state_after_spawn.fuel - fuel_consumed + fuel_gained)
 
         # mode_timer: map increments from map_mode_timer computed above; arena also increments; level increments
@@ -3452,6 +3456,7 @@ class JaxGravitar(JaxEnvironment):
             level_clear_score=jnp.float32(self.consts.LEVEL_CLEAR_SCORE),
             ufo_kill_score=jnp.float32(self.consts.UFO_KILL_SCORE),
             saucer_kill_score=jnp.float32(self.consts.SAUCER_KILL_SCORE),
+            fire_reward=jnp.float32(self.consts.FIRE_REWARD),
             prev_action=jnp.int32(0),
         )
 

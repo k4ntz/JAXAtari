@@ -214,3 +214,19 @@ class NoOpponentsMod(JaxAtariInternalModPlugin):
         "opponent_density": 0.0,
         "opponent_density_increment": 0.0
     }
+
+class MaxSpeedRewardMod(JaxAtariInternalModPlugin):
+    """
+    Provides +2 every 20th frame when at maximum speed.
+    """
+    constants_overrides = {
+        "max_speed_reward": 2.0
+    }
+
+class DontMaxSpeedMod(JaxAtariInternalModPlugin):
+    """
+    Does not reward the player if the player is at maximum speed.
+    """
+    constants_overrides = {
+        "disable_reward_at_max_speed": True
+    }

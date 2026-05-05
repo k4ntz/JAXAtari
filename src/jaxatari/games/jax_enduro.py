@@ -290,6 +290,8 @@ class EnduroConstants(AutoDerivedConstants):
     secondary_collision_overlap_exception_max: int = struct.field(pytree_node=False, default=2)
     initial_position: int = struct.field(pytree_node=False, default=200)
     next_day_car_position: int = struct.field(pytree_node=False, default=300)
+    max_speed_reward: float = struct.field(pytree_node=False, default=0.0)
+    disable_reward_at_max_speed: bool = struct.field(pytree_node=False, default=False)
 
     # Difficulty Scaling (opponent_speed scaled from 24→2, so increments scale by 2/24)
     start_level: int = struct.field(pytree_node=False, default=1)
@@ -1629,7 +1631,16 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         day_rolled_over = new_state.day_count > state.day_count
         cars_overtaken = (state.cars_to_pass - new_state.cars_to_pass).astype(jnp.float32)
         cars_overtaken = jnp.where(day_rolled_over, 0.0, cars_overtaken)
-        return cars_overtaken
+
+        # Max speed reward
+        is_max_speed = new_state.player_speed >= self.consts.max_speed
+        is_20th_frame = (new_state.step_count % 20) == 0
+        max_speed_reward = jnp.where(is_max_speed & is_20th_frame, self.consts.max_speed_reward, 0.0)
+
+        total_reward = cars_overtaken + max_speed_reward
+        total_reward = jnp.where(self.consts.disable_reward_at_max_speed & is_max_speed, 0.0, total_reward)
+
+        return total_reward
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: EnduroGameState) -> bool:

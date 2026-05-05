@@ -96,6 +96,8 @@ class SpaceInvadersConstants(AutoDerivedConstants):
 
     POSITION_LIFE_X: int = struct.field(pytree_node=False, default=83)
 
+    SHOOTING_REWARD: int = struct.field(pytree_node=False, default=0)
+
     # Thresholds: [15, 29, 33, 34, 35] (Total destroyed count)
     MOVEMENT_THRESHOLDS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([15, 29, 33, 34, 35], dtype=jnp.int32))
     # Rates: Delays in frames. 
@@ -642,6 +644,8 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
 
         new_bullet_active, new_bullet_x, new_bullet_y = self._player_bullet_step(state, action)
 
+        actually_fired = new_bullet_active & ~state.bullet_active
+
         new_bullet_state = state.replace(
             bullet_active=new_bullet_active,
             bullet_x=new_bullet_x,
@@ -649,6 +653,8 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         )
         
         new_destroyed, new_score, final_bullet_active, new_ufo_state = self._check_bullet_enemy_collisions(new_bullet_state)
+
+        new_score = new_score + jnp.where(actually_fired, self.consts.SHOOTING_REWARD, 0)
 
         def find_bounds(has_occupied, limit):
             # Identify first and last indices
@@ -1217,7 +1223,8 @@ class SpaceInvadersRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render_score(self, state: SpaceInvadersState, raster):
-        digits = self.jr.int_to_digits(state.player_score, max_digits=4)
+        abs_score = jnp.abs(state.player_score.astype(jnp.int32))
+        digits = self.jr.int_to_digits(abs_score, max_digits=4)
         score_pos_x = jnp.array([3, 6, 9, 12], dtype=jnp.int32)
         score_pos_y = jnp.array([9, 10, 10, 9], dtype=jnp.int32)
         yellow_zero_mask = self.SHAPE_MASKS['zero_yellow']
@@ -1231,7 +1238,32 @@ class SpaceInvadersRenderer(JAXGameRenderer):
             yy = score_pos_y[i]
             return self.jr.render_at(r, xy, yy, yellow_zero_mask)
 
-        return jax.lax.fori_loop(0, 4, render_digit_and_zero, raster)
+        raster = jax.lax.fori_loop(0, 4, render_digit_and_zero, raster)
+
+        # Handle minus sign
+        has_nonzero = jnp.any(digits != 0)
+        first_idx = jnp.where(has_nonzero, jnp.argmax(digits != 0), 3)
+        is_negative = state.player_score < 0
+        
+        # Use a pixel from digit '0' (green) for the minus sign color
+        digit_color_id = self.SHAPE_MASKS['digits_green'][0][0, self.consts.NUMBER_SIZE[0] // 2]
+        
+        minus_x = score_pos_x[first_idx] + first_idx * self.consts.NUMBER_SIZE[0] - 6
+        minus_y = score_pos_y[first_idx] + 4
+
+        raster = jax.lax.cond(
+            is_negative,
+            lambda r: self.jr.draw_rects(
+                r,
+                positions=jnp.array([[minus_x, minus_y]]),
+                sizes=jnp.array([[4, 1]]),
+                color_id=digit_color_id.astype(r.dtype)
+            ),
+            lambda r: r,
+            raster
+        )
+
+        return raster
 
     @partial(jax.jit, static_argnums=(0,))
     def render_defense(self, state: SpaceInvadersState, raster):

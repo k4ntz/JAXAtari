@@ -106,3 +106,13 @@ class NoDangerMod(JaxAtariPostStepModPlugin):
             enemy_bullets_active=jnp.zeros_like(state.enemy_bullets_active, dtype=jnp.bool_)
         )
         return self._env._get_observation(state), state
+
+
+class PenalizeShootMod(JaxAtariInternalModPlugin):
+    """
+    Penalize (-5 points) for each time the player shoots.
+    """
+
+    constants_overrides = {
+        "SHOOTING_REWARD": -5,
+    }

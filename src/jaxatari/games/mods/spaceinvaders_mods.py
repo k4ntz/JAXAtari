@@ -6,7 +6,8 @@ from jaxatari.games.mods.spaceinvaders.spaceinvaders_mod_plugins import (
     DisableShieldRightMod,
     ShiftShieldsMod,
     ControllableMissileMod,
-    NoDangerMod
+    NoDangerMod,
+    PenalizeShootMod
 )
 
 class SpaceInvadersEnvMod(JaxAtariModController):    
@@ -21,6 +22,7 @@ class SpaceInvadersEnvMod(JaxAtariModController):
         "shift_shields": ShiftShieldsMod,
         "controllable_missile": ControllableMissileMod,
         "no_danger": NoDangerMod,
+        "penalize_shoot": PenalizeShootMod,
     }
 
     def __init__(self,

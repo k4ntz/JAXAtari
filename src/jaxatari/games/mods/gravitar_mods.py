@@ -15,6 +15,7 @@ from jaxatari.games.mods.gravitar.gravitar_mod_plugins import (
     RedAlertMod,
     GrayscaleMod,
     InvertedColorsMod,
+    SharpshooterMod,
 )
 
 
@@ -37,6 +38,7 @@ class GravitarEnvMod(JaxAtariModController):
         "red_alert": RedAlertMod,
         "grayscale": GrayscaleMod,
         "inverted_colors": InvertedColorsMod,
+        "sharpshooter": SharpshooterMod,
     }
 
     def __init__(
