@@ -112,7 +112,7 @@ def _get_default_asset_config() -> tuple:
             'tree_2.npy',
             'tree_3.npy'
         ]},
-        {'name': 'mogul', 'type': 'single', 'file': 'stone.npy'},
+        {'name': 'mogul', 'type': 'single', 'file': 'mogul.npy'},
         
         # UI
         {'name': 'digits', 'type': 'procedural', 'data': procedural_digits},
@@ -127,6 +127,9 @@ class SkiingConstants(AutoDerivedConstants):
     USE_ORIGINAL_ALE_REWARD: bool = struct.field(pytree_node=False, default=True) 
     BOTTOM_BORDER: int = struct.field(pytree_node=False, default=176)
     TOP_BORDER: int = struct.field(pytree_node=False, default=-15)
+    invert_flag_colors: bool = struct.field(pytree_node=False, default=False)
+    green_flags: bool = struct.field(pytree_node=False, default=False)
+    blue_skier: bool = struct.field(pytree_node=False, default=False)
     """Game configuration parameters"""
     screen_width: int = struct.field(pytree_node=False, default=160)
     screen_height: int = struct.field(pytree_node=False, default=210)
@@ -315,8 +318,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         row_spacing = jnp.float32(31.0)
         base_y = jnp.float32(60.0)
 
-        # Flags: r = 3, 7 in the repeating sequence
-        r_flags = jnp.array([3, 7], dtype=jnp.float32)
+        # Flags: patterned rows
+        r_flags = jnp.arange(c.max_num_flags, dtype=jnp.float32) * 4.0 + 3.0
         flags_y = base_y + r_flags * row_spacing
         
         flags_x = self._get_initial_flags_x()
@@ -988,11 +991,23 @@ class SkiingRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Start from (possibly modded) asset config provided via constants
-        final_asset_config = list(self.consts.ASSET_CONFIG)
+        final_asset_config = []
+        for asset in self.consts.ASSET_CONFIG:
+            new_asset = dict(asset)
+            if asset.get('name') == 'skier_group' and getattr(self.consts, "blue_skier", False):
+                new_asset['recolorings'] = {'blue': (0, 0, 255)}
+            final_asset_config.append(new_asset)
         
         # 3. Load flags (needs sprite path, so done here)
         flag_red_rgba = self._load_rgba_sprite("checkered_flag_red.npy")
         flag_blue_rgba = self._load_rgba_sprite("checkered_flag_blue.npy")
+        
+        if getattr(self.consts, "invert_flag_colors", False):
+            flag_red_rgba, flag_blue_rgba = flag_blue_rgba, flag_red_rgba
+            
+        if getattr(self.consts, "green_flags", False):
+            flag_red_rgba = np.array(self.jr.perform_recoloring(jnp.array(flag_red_rgba), (50, 200, 50)))
+            flag_blue_rgba = np.array(self.jr.perform_recoloring(jnp.array(flag_blue_rgba), (50, 200, 50)))
         
         # Pad them so they have the same shape for jax.lax.select
         max_h = max(flag_red_rgba.shape[0], flag_blue_rgba.shape[0])
@@ -1034,6 +1049,10 @@ class SkiingRenderer(JAXGameRenderer):
             self.BACKGROUND = jnp.array(bg)
 
         # 5. Store key color/shape IDs
+        if 'skier_group_blue' in self.SHAPE_MASKS:
+            self.SHAPE_MASKS['skier_group'] = self.SHAPE_MASKS['skier_group_blue']
+            self.FLIP_OFFSETS['skier_group'] = self.FLIP_OFFSETS['skier_group_blue']
+
         self.RED_FLAG_MASK = self.SHAPE_MASKS['flag_red']
         self.BLUE_FLAG_MASK = self.SHAPE_MASKS['flag_blue']
         self.RED_FLAG_OFFSET = self.FLIP_OFFSETS['flag_red']
@@ -1056,13 +1075,6 @@ class SkiingRenderer(JAXGameRenderer):
             a = np.full(rgba.shape[:2] + (1,), 255, np.uint8)
             rgba = np.concatenate([rgba, a], axis=-1)
         return rgba
-
-    def _recolor_rgba(self, sprite_rgba: np.ndarray, rgb: Tuple[int,int,int]) -> np.ndarray:
-        """Manually recolors an RGBA sprite. For setup only."""
-        mask = (sprite_rgba[..., 3:4] > 0)
-        rgb_arr = np.array(rgb, dtype=np.uint8)[None, None, :]
-        new_rgb = np.where(mask, rgb_arr, sprite_rgba[..., :3])
-        return np.concatenate([new_rgb, sprite_rgba[..., 3:4]], axis=-1)
         
     @partial(jax.jit, static_argnums=(0,))
     def _format_score_digits(self, score: jnp.ndarray) -> jnp.ndarray:

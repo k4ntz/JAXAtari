@@ -40,7 +40,7 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   ❌: 2
 | enduro                       | 🥇       | 0 |
 | fishing_derby                | 🥇       | 0 |
 | freeway                      | 🥇       | 3 |
-| frostbite                    | 🥇       | 0 |
+| frostbite                    | 🥇       | 11 |
 | gopher                       | ❌       | 0 |
 | gravitar                     | 🥇       | 0 |
 | hero                         | ❌       | 0 |

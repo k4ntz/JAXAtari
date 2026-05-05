@@ -1,8 +1,20 @@
 import jax
 import jax.numpy as jnp
 from functools import partial
-from jaxatari.modification import JaxAtariPostStepModPlugin
+from jaxatari.modification import JaxAtariPostStepModPlugin, JaxAtariInternalModPlugin
 from jaxatari.games.jax_mspacman import JaxPacman, GhostMode, reset_game
+
+class FruitGhostBonusMod(JaxAtariInternalModPlugin):
+    """
+    Mod that deactivates points for pellets and power pellets,
+    but multiplies rewards for eating ghosts and fruits by 4.
+    """
+    constants_overrides = {
+        "PELLET_POINTS": 0,
+        "POWER_PELLET_POINTS": 0,
+        "FRUIT_REWARDS": jnp.array([400, 800, 2000, 2800, 4000, 8000, 20000]),
+        "EAT_GHOSTS_BASE_POINTS": 800,
+    }
 
 class CagedGhostsMod(JaxAtariPostStepModPlugin):
     def _jail_position(self, dtype):
@@ -329,3 +341,24 @@ class RandomGhostNavigationMod(JaxAtariPostStepModPlugin):
         )
         new_ghosts = ghosts._replace(modes=new_modes)
         return state.replace(ghosts=new_ghosts)
+
+
+class MatrixMod(JaxAtariInternalModPlugin):
+    """A Matrix-themed mod: black background, green walls, green ghosts, white pacman."""
+    name = "matrix_theme"
+    
+    constants_overrides = {
+        'RGB_BACKGROUND': (0, 0, 0),
+        'RGB_PACMAN': (255, 255, 255),
+        'RGB_WALLS': (0, 200, 0),
+        'RGB_PATH': (0, 0, 0),
+        'RGB_PELLETS': (0, 255, 0),
+        'RGB_GHOST_BLINKY': (50, 255, 50),
+        'RGB_GHOST_PINKY': (0, 255, 100),
+        'RGB_GHOST_INKY': (0, 180, 0),
+        'RGB_GHOST_SUE': (100, 255, 100),
+        'RGB_GHOST_FRIGHTENED': (0, 100, 0),
+        'RGB_GHOST_BLINKING': (150, 255, 150),
+        'RGB_FRUIT': (0, 255, 0),
+        'RGB_SCORE': (0, 255, 0),
+    }

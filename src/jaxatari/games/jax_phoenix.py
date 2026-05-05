@@ -1,7 +1,7 @@
 import math
 import os
 from functools import partial
-from typing import Tuple, NamedTuple
+from typing import Tuple, NamedTuple, Optional
 import jax
 import jax.numpy as jnp
 import chex
@@ -278,6 +278,13 @@ class PhoenixConstants(AutoDerivedConstants):
     BOSS_GREEN_COLOR: Tuple[int, int, int] = struct.field(
         pytree_node=False, default_factory=lambda: (135, 183, 84)
     )
+
+    # Visual Mod Overrides
+    RGB_BACKGROUND: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_FLOOR: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_PHOENIX_MAIN: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_BATS_BLUE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_BATS_RED: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
 
     # --- Enemy spawn grids (5 formations x 8 slots). X: playfield x (unused slot = -1). Y: row height; 230 = below playfield (inactive). ---
     ENEMY_POSITIONS_X: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
@@ -2423,7 +2430,35 @@ class PhoenixRenderer(JAXGameRenderer):
                 {"name": "boss_block_green", "type": "group", "data": [green_block]},
             ]
         )
+        
+        has_recolorings = False
+        for i in range(len(patched_config)):
+            asset_name = patched_config[i]['name']
+            asset_rules = []
+            if asset_name == 'background' and self.consts.RGB_BACKGROUND is not None:
+                asset_rules.append({'source': (0, 0, 0), 'target': self.consts.RGB_BACKGROUND})
+            elif asset_name == 'floor' and self.consts.RGB_FLOOR is not None:
+                asset_rules.append({'source': (146, 70, 192), 'target': self.consts.RGB_FLOOR})
+            elif asset_name in ('player', 'player_ability', 'player_projectile', 'digits', 'life_indicator'):
+                if self.consts.PLAYER_COLOR != (213, 130, 74):
+                    asset_rules.append({'source': (213, 130, 74), 'target': self.consts.PLAYER_COLOR})
+            elif asset_name == 'phoenix':
+                if self.consts.RGB_PHOENIX_MAIN is not None:
+                    # Target the main body and wings
+                    asset_rules.append({'source': (125, 48, 173), 'target': self.consts.RGB_PHOENIX_MAIN})
+                    asset_rules.append({'source': (227, 151, 89), 'target': self.consts.RGB_PHOENIX_MAIN})
+            elif 'bat_blue' in asset_name and self.consts.RGB_BATS_BLUE is not None:
+                asset_rules.append({'target': self.consts.RGB_BATS_BLUE})
+            elif 'bat_red' in asset_name and self.consts.RGB_BATS_RED is not None:
+                asset_rules.append({'target': self.consts.RGB_BATS_RED})
+            
+            if asset_rules:
+                patched_config[i] = dict(patched_config[i])
+                patched_config[i]['recolorings'] = {'mods': asset_rules}
+                has_recolorings = True
+                
         final_asset_config = patched_config
+        self._mask_suffix = '_mods' if has_recolorings else ''
         
         # 4. Load all assets, create palette, and generate ID masks in one call
         (
@@ -2456,6 +2491,9 @@ class PhoenixRenderer(JAXGameRenderer):
         cid = jnp.asarray(color_id, dtype=raster.dtype)
         return jnp.where(outline, cid, raster)
 
+    def get_mask(self, key):
+        return self.SHAPE_MASKS.get(key + self._mask_suffix, self.SHAPE_MASKS[key])
+
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         # Start with the background raster
@@ -2486,7 +2524,7 @@ class PhoenixRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_common(self, state, raster):
-        raster = self.jr.render_at(raster, 0, self.consts.FLOOR_Y, self.SHAPE_MASKS['floor'])
+        raster = self.jr.render_at(raster, 0, self.consts.FLOOR_Y, self.get_mask('floor'))
 
         player_death_sprite_duration = self.consts.PLAYER_DEATH_DURATION // 3
         death_idx = jax.lax.select(
@@ -2501,7 +2539,7 @@ class PhoenixRenderer(JAXGameRenderer):
             jax.lax.select(state.player_moving & anim_toggle, 4, 0)
         )
         player_frame_index = jax.lax.select(state.player_dying, death_idx, alive_idx)
-        player_mask = self.SHAPE_MASKS["player"][player_frame_index]
+        player_mask = self.get_mask("player")[player_frame_index]
         player_flip_offset = self.FLIP_OFFSETS["player"]
 
         def draw_player(r):
@@ -2513,9 +2551,9 @@ class PhoenixRenderer(JAXGameRenderer):
         )
 
         # Player projectile: don't render if it's inside the player sprite
-        projectile_mask = self.SHAPE_MASKS["player_projectile"]
+        projectile_mask = self.get_mask("player_projectile")
         proj_h, proj_w = projectile_mask.shape
-        player_mask_local = self.SHAPE_MASKS["player"][player_frame_index]
+        player_mask_local = self.get_mask("player")[player_frame_index]
         ph, pw = player_mask_local.shape
 
         overlap_x = (state.projectile_x + proj_w > state.player_x) & (state.projectile_x < state.player_x + pw)
@@ -2533,8 +2571,8 @@ class PhoenixRenderer(JAXGameRenderer):
         )
 
         def render_ability(r):
-            ability_mask = self.SHAPE_MASKS['player_ability']
-            player_mask_local = self.SHAPE_MASKS["player"][player_frame_index]
+            ability_mask = self.get_mask('player_ability')
+            player_mask_local = self.get_mask("player")[player_frame_index]
             ah, aw = ability_mask.shape
             ph, pw = player_mask_local.shape
             ax = state.player_x + (pw - aw) // 2
@@ -2548,7 +2586,7 @@ class PhoenixRenderer(JAXGameRenderer):
             x, y = state.enemy_projectile_x[i], state.enemy_projectile_y[i]
             return jax.lax.cond(
                 y > -1,
-                lambda r: self.jr.render_at(r, x, y, self.SHAPE_MASKS['enemy_projectile']),
+                lambda r: self.jr.render_at(r, x, y, self.get_mask('enemy_projectile')),
                 lambda r: r,
                 current_raster
             )
@@ -2575,7 +2613,7 @@ class PhoenixRenderer(JAXGameRenderer):
         phoenix_death_phase = (state.phoenix_death_timer <= self.consts.ENEMY_DEATH_DURATION // 2).astype(jnp.int32)
         anim_toggle = ((state.step_counter // self.consts.ENEMY_ANIMATION_SPEED) % 2) == 0
         phoenix_flip_offset = self.FLIP_OFFSETS['phoenix']
-        green_enemy_mask = self.SHAPE_MASKS['green_enemy']
+        green_enemy_mask = self.get_mask('green_enemy')
 
         def render_single_phoenix(i, current_raster):
             x, y = state.enemies_x[i], state.enemies_y[i]
@@ -2585,7 +2623,7 @@ class PhoenixRenderer(JAXGameRenderer):
                 death_idx = jax.lax.select(phoenix_death_phase[i] == 0, 3, 4)
                 alive_idx = jax.lax.select(is_moving_vert[i], 2, jax.lax.select(anim_toggle, 0, 1))
                 frame_idx = jax.lax.select(phoenix_death_flags[i], death_idx, alive_idx)
-                phoenix_mask = self.SHAPE_MASKS['phoenix'][frame_idx]
+                phoenix_mask = self.get_mask('phoenix')[frame_idx]
                 use_green_enemy = is_level_two & (~phoenix_death_flags[i]) & (~is_moving_vert[i])
                 return jax.lax.cond(
                     use_green_enemy,
@@ -2601,13 +2639,13 @@ class PhoenixRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0, 3))
     def _render_bat_level(self, state, raster, is_blue_level: bool):
         bat_death_seg = jnp.maximum(1, self.consts.ENEMY_DEATH_DURATION // 3)
-        body_masks = self.SHAPE_MASKS['bat_blue_body'] if is_blue_level else self.SHAPE_MASKS['bat_red_body']
+        body_masks = self.get_mask('bat_blue_body') if is_blue_level else self.get_mask('bat_red_body')
         body_offsets = self.FLIP_OFFSETS['bat_blue_body'] if is_blue_level else self.FLIP_OFFSETS['bat_red_body']
         composite_name = "bat_blue_composite_anim" if is_blue_level else "bat_red_composite_anim"
-        has_composite = composite_name in self.SHAPE_MASKS
-        composite_masks = self.SHAPE_MASKS.get(composite_name, None)
-        composite_offsets = self.FLIP_OFFSETS.get(composite_name, jnp.array([0, 0], dtype=jnp.int32))
-        wing_masks = self.SHAPE_MASKS['bat_blue_wings'] if is_blue_level else self.SHAPE_MASKS['bat_red_wings']
+        composite_masks = self.get_mask(composite_name) if composite_name in self.SHAPE_MASKS else None
+        has_composite = composite_masks is not None
+        composite_offsets = self.FLIP_OFFSETS.get(composite_name + self._mask_suffix, self.FLIP_OFFSETS.get(composite_name, jnp.array([0, 0], dtype=jnp.int32)))
+        wing_masks = self.get_mask('bat_blue_wings') if is_blue_level else self.get_mask('bat_red_wings')
         wing_offsets = self.FLIP_OFFSETS['bat_blue_wings'] if is_blue_level else self.FLIP_OFFSETS['bat_red_wings']
         # 7-phase cycle, each phase lasts 8 frames:
         # middle -> down_2 -> down -> down_2 -> middle -> up -> middle
@@ -2704,7 +2742,7 @@ class PhoenixRenderer(JAXGameRenderer):
         c = self.consts
         boss = state.boss
 
-        boss_mask = self.SHAPE_MASKS["boss"]
+        boss_mask = self.get_mask("boss")
         boss_flip_offset = self.FLIP_OFFSETS["boss"]
         core_x = boss.x - (c.BOSS_CORE_WIDTH / 2.0)
         core_y = boss.y + c.BOSS_CORE_Y_OFFSET
@@ -2726,7 +2764,7 @@ class PhoenixRenderer(JAXGameRenderer):
         rel_y = self.jr._yy - by
 
         # --- Blue blocks: 2 rows × 20 cols, 4×2 px each ---
-        blue_mask = self.SHAPE_MASKS["boss_block_blue"][0]
+        blue_mask = self.get_mask("boss_block_blue")[0]
         bh_b, bw_b = int(blue_mask.shape[0]), int(blue_mask.shape[1])  # (2, 4)
         n_cols_b, n_rows_b = 20, 2
         blue_x0 = c.BOSS_BLUE_X0                          # Python int = -40
@@ -2741,7 +2779,7 @@ class PhoenixRenderer(JAXGameRenderer):
         raster = jnp.where(in_blue, blue_mask[0, 0], raster)
 
         # --- Red blocks: pyramid (rows [20,18,16,14,12,8,4]), 4×3 px each ---
-        red_mask = self.SHAPE_MASKS["boss_block_red"][0]
+        red_mask = self.get_mask("boss_block_red")[0]
         bh_r, bw_r = int(red_mask.shape[0]), int(red_mask.shape[1])  # (3, 4)
         dy_r = c.BOSS_RED_DY0                              # Python int = 4
         n_per_row_r = jnp.array([20, 18, 16, 14, 12, 8, 4], dtype=jnp.int32)
@@ -2760,7 +2798,7 @@ class PhoenixRenderer(JAXGameRenderer):
         raster = jnp.where(in_red, red_mask[0, 0], raster)
 
         # --- Green blocks: 5 rows above boss, 4×3 px, center gap at rel_x in [-4,4) ---
-        green_mask = self.SHAPE_MASKS["boss_block_green"][0]
+        green_mask = self.get_mask("boss_block_green")[0]
         bh_g, bw_g = int(green_mask.shape[0]), int(green_mask.shape[1])  # (3, 4)
         dy_g = c.BOSS_GREEN_DY0                            # Python int = -3
         n_per_row_g = jnp.array([12, 10, 8, 6, 4], dtype=jnp.int32)
@@ -2794,7 +2832,7 @@ class PhoenixRenderer(JAXGameRenderer):
             visible = (y > -1) & (y >= min_visible_y)
             return jax.lax.cond(
                 visible,
-                lambda r: self.jr.render_at_clipped(r, x, y, self.SHAPE_MASKS["enemy_projectile"]),
+                lambda r: self.jr.render_at_clipped(r, x, y, self.get_mask("enemy_projectile")),
                 lambda r: r,
                 current_raster,
             )
@@ -2812,7 +2850,7 @@ class PhoenixRenderer(JAXGameRenderer):
         # HUD placement: score centered in WIDTH with optional pixel nudge.
         score_dx, score_dy = 3, -5
         score_y = 10 + score_dy
-        digit_masks = self.SHAPE_MASKS['digits']
+        digit_masks = self.get_mask('digits')
         digit_w = digit_masks[0].shape[1]
         score_digits = self.jr.int_to_digits(state.score, max_digits=max_digits)
         has_nonzero = jnp.any(score_digits != 0)
@@ -2828,7 +2866,7 @@ class PhoenixRenderer(JAXGameRenderer):
             start_index, num_to_render,
             spacing=spacing, max_digits_to_render=max_digits
         )
-        life_mask = self.SHAPE_MASKS['life_indicator']
+        life_mask = self.get_mask('life_indicator')
         life_w = life_mask.shape[1]
         life_spacing = 4
         lives_dx, lives_dy = 3, -7
