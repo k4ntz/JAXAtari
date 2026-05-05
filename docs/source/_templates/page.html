@@ -1,0 +1,31 @@
+{% extends "!page.html" %}
+{% block footer %}
+<div class="bottom-of-page">
+  <div class="left-details">
+    {%- if show_copyright %}
+    <div class="copyright">
+      {%- if hasdoc('copyright') %}
+        {% trans path=pathto('copyright'), copyright=copyright|e -%}
+          <a href="{{ path }}">Copyright</a> &#169; {{ copyright }}
+        {%- endtrans %}
+      {%- else %}
+        {% trans copyright=copyright|e -%}
+          Copyright &#169; {{ copyright }}
+        {%- endtrans %}
+      {%- endif %}
+    </div>
+    {%- endif %}
+  </div>
+  <div class="right-details">
+    {% if theme_footer_icons -%}
+    <div class="icons">
+      {% for icon_dict in theme_footer_icons -%}
+      <a class="muted-link {{ icon_dict.class }}" href="{{ icon_dict.url }}" aria-label="{{ icon_dict.name }}">
+        {{- icon_dict.html -}}
+      </a>
+      {% endfor %}
+    </div>
+    {%- endif %}
+  </div>
+</div>
+{% endblock footer %}

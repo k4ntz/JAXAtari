@@ -3103,8 +3103,11 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
         _, st_b, rew_b, inf_b, key_b, lvl_b, _, _, rst_b = branch_args
         new_key, subkey = jax.random.split(key_b)
 
-        all_planets_cleared = jnp.all(st_b.planets_cleared_mask)
-        solar_system_complete = st_b.reactor_destroyed | all_planets_cleared
+        playable_non_reactor_levels = (st_b.planets_id >= 0) & (st_b.planets_id != jnp.int32(4))
+        all_non_reactor_levels_cleared = jnp.all(
+            jnp.where(playable_non_reactor_levels, st_b.planets_cleared_mask, jnp.array(True))
+        )
+        solar_system_complete = st_b.reactor_destroyed | all_non_reactor_levels_cleared
 
         final_fuel = st_b.fuel + jnp.where(solar_system_complete, SOLAR_SYSTEM_BONUS_FUEL, 0.0)
         final_lives = st_b.lives + jnp.where(solar_system_complete, SOLAR_SYSTEM_BONUS_LIVES, 0)

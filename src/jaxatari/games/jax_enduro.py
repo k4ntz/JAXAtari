@@ -510,11 +510,14 @@ class EnduroRenderer(JAXGameRenderer):
                 rgb = tuple(weather_colors[w_idx, c_idx].tolist())
                 w_colors.append(self.COLOR_TO_ID.get(rgb, 0))
             weather_ids.append(w_colors)
-        self.WEATHER_COLOR_IDS = jnp.array(weather_ids, dtype=jnp.uint8)
+        _id_dtype = self.SHAPE_MASKS["black_digit_array"].dtype
+        self.WEATHER_COLOR_IDS = jnp.array(weather_ids, dtype=_id_dtype)
 
         # Store Track Color IDs
         track_rgbs = [tuple(c.tolist()) for c in self.consts.track_colors]
-        self.TRACK_COLOR_IDS = jnp.array([self.COLOR_TO_ID.get(rgb, 0) for rgb in track_rgbs], dtype=jnp.uint8)
+        self.TRACK_COLOR_IDS = jnp.array(
+            [self.COLOR_TO_ID.get(rgb, 0) for rgb in track_rgbs], dtype=_id_dtype
+        )
 
         # Store Odometer Sheet ID Masks
         self.black_digit_sheet_mask = self.SHAPE_MASKS['black_digit_array']
@@ -526,7 +529,9 @@ class EnduroRenderer(JAXGameRenderer):
             (66, 114, 194), (198, 108, 58), (162, 162, 42), (66, 158, 130), 
             (162, 134, 56), (110, 156, 66), (184, 70, 162), (66, 72, 200), (200, 72, 72)
         ]
-        self.CAR_COLOR_IDS = jnp.array([self.COLOR_TO_ID.get(rgb, 0) for rgb in car_rgbs], dtype=jnp.uint8)
+        self.CAR_COLOR_IDS = jnp.array(
+            [self.COLOR_TO_ID.get(rgb, 0) for rgb in car_rgbs], dtype=_id_dtype
+        )
         self.black_id = self.COLOR_TO_ID.get((0, 0, 0), 0)
         self.white_id = self.COLOR_TO_ID.get((255, 255, 255), 0)
 

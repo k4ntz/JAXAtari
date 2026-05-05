@@ -298,7 +298,9 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         def draw_wall(r_in, x, y0, y1, color):
             pos = jnp.array([[x, room_y + y0]])
             size = jnp.array([[4, y1 - y0]])
-            return self.jr.draw_rects(r_in, pos, size, color.astype(jnp.uint8))
+            return self.jr.draw_rects(
+                r_in, pos, size, jnp.asarray(color, dtype=r_in.dtype)
+            )
 
         raster = clear_room(raster)
         raster = self.jr.render_at(raster, 0, room_y, self.SHAPE_MASKS["room_bg_0"])
@@ -678,7 +680,11 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         is_layer_2 = jnp.isin(state.room_id, jnp.array([10, 11, 12, 14]))
         c_color = jax.lax.select(is_layer_2, self.LADDER_ID_L2, self.LADDER_ID)
         base_mask = self.SHAPE_MASKS["conveyor"]
-        conveyor_mask = jnp.where(base_mask != self.jr.TRANSPARENT_ID, c_color.astype(jnp.uint8), self.jr.TRANSPARENT_ID)
+        conveyor_mask = jnp.where(
+            base_mask != self.jr.TRANSPARENT_ID,
+            jnp.asarray(c_color, dtype=base_mask.dtype),
+            jnp.asarray(self.jr.TRANSPARENT_ID, dtype=base_mask.dtype),
+        )
         
         def render_conveyor_body(i, raster):
             return jax.lax.cond(

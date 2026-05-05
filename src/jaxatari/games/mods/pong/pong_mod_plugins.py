@@ -1,3 +1,5 @@
+import os
+import numpy as np
 import jax
 import jax.numpy as jnp
 from functools import partial
@@ -5,6 +7,22 @@ from jaxatari.games.jax_pong import PongState
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
 import chex
 from jaxatari.environment import JAXAtariAction as Action
+from jaxatari.rendering.jax_rendering_utils import get_base_sprite_dir
+
+
+def _recolor_sprite(filename: str, original_rgb: tuple, new_rgb: tuple) -> np.ndarray:
+    """Load a pong sprite .npy and replace original_rgb with new_rgb (alpha preserved)."""
+    sprite_path = os.path.join(get_base_sprite_dir(), "pong", filename)
+    sprite = np.load(sprite_path).copy()
+    original = np.array([*original_rgb, 255], dtype=np.uint8)
+    replacement = np.array([*new_rgb, 255], dtype=np.uint8)
+    mask = np.all(sprite == original, axis=-1)
+    sprite[mask] = replacement
+    return sprite
+
+
+def _make_recolored_background(new_color: tuple) -> np.ndarray:
+    return _recolor_sprite("background.npy", (144, 72, 17), new_color)
 
 # --- 1. Individual Mod Plugins ---
 class LazyEnemyMod(JaxAtariInternalModPlugin):
@@ -116,4 +134,32 @@ class ShiftEnemyMod(JaxAtariInternalModPlugin):
 class NoFireMod(JaxAtariInternalModPlugin):
     attribute_overrides = {
         "ACTION_SET": jnp.array([Action.NOOP, Action.RIGHT, Action.LEFT], dtype=jnp.int32),
+    }
+
+
+class ChangeBackgroundColorMod(JaxAtariInternalModPlugin):
+    """Changes the playfield background color. Default: navy blue (0, 0, 128)."""
+    _NEW_BG_COLOR = (0, 0, 128)
+
+    constants_overrides = {"BACKGROUND_COLOR": _NEW_BG_COLOR}
+    asset_overrides = {
+        "background": {
+            "name": "background",
+            "type": "background",
+            "data": _make_recolored_background(_NEW_BG_COLOR),
+        }
+    }
+
+
+class ChangePlayerColorMod(JaxAtariInternalModPlugin):
+    """Changes the player paddle color. Default: red (255, 0, 0)."""
+    _NEW_PLAYER_COLOR = (255, 0, 0)
+
+    constants_overrides = {"PLAYER_COLOR": _NEW_PLAYER_COLOR}
+    asset_overrides = {
+        "player": {
+            "name": "player",
+            "type": "single",
+            "data": _recolor_sprite("player.npy", (92, 186, 92), _NEW_PLAYER_COLOR),
+        }
     }

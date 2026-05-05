@@ -864,6 +864,56 @@ class JaxRenderingUtils:
             object_raster
         )
 
+    @partial(jax.jit, static_argnums=(0,))
+    def render_at_batch(self, raster: jnp.ndarray, x: jnp.ndarray, y: jnp.ndarray, 
+                       masks: jnp.ndarray) -> jnp.ndarray:
+        """
+        Renders a batch of sprites of the SAME SHAPE in parallel using GPU-friendly scatter.
+        All transparent pixels are dropped. If sprites overlap, the one with the higher 
+        index in the batch will typically prevail (hardware-dependent).
+        
+        Args:
+            raster: (H, W) base raster to draw on.
+            x, y: (N,) arrays of native game coordinates for each sprite.
+            masks: (N, sprite_H, sprite_W) array of sprite ID masks.
+        """
+        # 1. Scale coordinates
+        if self.config.width_scaling == 1.0 and self.config.height_scaling == 1.0:
+            scaled_x = jnp.round(x).astype(jnp.int32)
+            scaled_y = jnp.round(y).astype(jnp.int32)
+        else:
+            scaled_x = jnp.round(x * self.config.width_scaling).astype(jnp.int32)
+            scaled_y = jnp.round(y * self.config.height_scaling).astype(jnp.int32)
+
+        num_objects, sh, sw = masks.shape
+        H, W = raster.shape
+        
+        # 2. Create relative coordinates for the sprite shape
+        # (sh, sw)
+        yy_rel, xx_rel = jnp.meshgrid(jnp.arange(sh), jnp.arange(sw), indexing='ij')
+        
+        # 3. Generate absolute coordinates for all pixels of all objects in the batch
+        # We use repeat/tile to create the full list of (abs_y, abs_x) for every pixel
+        # of every sprite.
+        abs_y = jnp.repeat(scaled_y, sh * sw) + jnp.tile(yy_rel.flatten(), num_objects)
+        abs_x = jnp.repeat(scaled_x, sh * sw) + jnp.tile(xx_rel.flatten(), num_objects)
+        
+        # 4. Flatten all colors in the batch
+        colors = masks.flatten()
+        
+        # 5. Mask out transparent and off-screen pixels by redirecting them to -1
+        # jax.lax.scatter (via .at[].set()) with mode='drop' will ignore any index < 0.
+        is_valid = (colors != self.TRANSPARENT_ID) & \
+                   (abs_y >= 0) & (abs_y < H) & \
+                   (abs_x >= 0) & (abs_x < W)
+                   
+        final_y = jnp.where(is_valid, abs_y, -1)
+        final_x = jnp.where(is_valid, abs_x, -1)
+        
+        # 6. Perform parallel scatter. 
+        # This is the heavy lifter that executes in parallel on the GPU.
+        return raster.at[final_y, final_x].set(colors, mode='drop')
+
     # ============= Various sequential rendering functions =============
     @partial(jax.jit, static_argnames=['self', 'spacing', 'max_digits'])
     def render_label(self, object_raster: jnp.ndarray, x: int, y: int, digits: jnp.ndarray, digit_masks: jnp.ndarray,

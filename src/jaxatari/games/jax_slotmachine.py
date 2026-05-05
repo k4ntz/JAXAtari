@@ -671,9 +671,11 @@ class SlotMachineRenderer(JAXGameRenderer):
 
         def render_digit_ids():
             # Build a sprite ID mask: pattern>0 -> color_id, else TRANSPARENT
-            sprite_mask = jnp.where(pattern > 0,
-                                    jnp.asarray(color_id, dtype=jnp.uint8),
-                                    jnp.asarray(self.jr.TRANSPARENT_ID, dtype=jnp.uint8))
+            sprite_mask = jnp.where(
+                pattern > 0,
+                jnp.asarray(color_id, dtype=raster.dtype),
+                jnp.asarray(self.jr.TRANSPARENT_ID, dtype=raster.dtype),
+            )
             # Stamp via render_utils (handles dynamic positions)
             return self.jr.render_at(raster, x, y, sprite_mask)
     
@@ -733,8 +735,8 @@ class SlotMachineRenderer(JAXGameRenderer):
                 continue
             sprite_mask = jnp.where(
                 pattern > 0,
-                jnp.asarray(color_id, dtype=jnp.uint8),
-                jnp.asarray(self.jr.TRANSPARENT_ID, dtype=jnp.uint8)
+                jnp.asarray(color_id, dtype=raster.dtype),
+                jnp.asarray(self.jr.TRANSPARENT_ID, dtype=raster.dtype),
             )
             raster = self.jr.render_at(raster, cur_x, y, sprite_mask)
             cur_x += pattern.shape[1] + 1

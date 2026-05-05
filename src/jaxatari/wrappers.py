@@ -343,6 +343,36 @@ class ObjectCentricWrapper(JaxatariWrapper):
         return obs_stack, oc_state, reward, terminated, truncated, info_dict
 
 
+@functools.partial(jax.jit, static_argnames=('sigma',))
+def _gaussian_blur_2d_nchw(image: chex.Array, sigma: float = 3.0) -> chex.Array:
+    """Depthwise separable Gaussian blur for NCHW images (used by preprocess_image)."""
+    # image input: [N, C, H, W]
+    c = image.shape[1]
+    radius = int(sigma * 3)
+    size = radius * 2 + 1
+    x = jnp.linspace(-radius, radius, size)
+    phi_x = jnp.exp(-0.5 * (x / sigma)**2)
+    phi_x = (phi_x / phi_x.sum()).astype(image.dtype)
+
+    h_kernel = phi_x[None, None, None, :]
+    h_kernel = jnp.tile(h_kernel, (c, 1, 1, 1))
+
+    v_kernel = phi_x[None, None, :, None]
+    v_kernel = jnp.tile(v_kernel, (c, 1, 1, 1))
+
+    out = jax.lax.conv_general_dilated(
+        image, h_kernel, (1, 1), padding='SAME',
+        feature_group_count=c,
+        dimension_numbers=('NCHW', 'OIHW', 'NCHW')
+    )
+    out = jax.lax.conv_general_dilated(
+        out, v_kernel, (1, 1), padding='SAME',
+        feature_group_count=c,
+        dimension_numbers=('NCHW', 'OIHW', 'NCHW')
+    )
+    return out
+
+
 @functools.partial(jax.jit, static_argnums=(0,))
 def preprocess_image(class_instance: JaxatariWrapper, image: chex.Array) -> chex.Array:
     """Applies resizing and grayscaling to a single image frame."""
@@ -358,40 +388,7 @@ def preprocess_image(class_instance: JaxatariWrapper, image: chex.Array) -> chex
 
     # Apply gaussian smoothing to natively downscaled images to get similar effect to actual downscaling
     if class_instance.native_downscaling and class_instance.smooth_image:
-
-        @functools.partial(jax.jit, static_argnames=['sigma'])
-        def gaussian_blur_2d(image, sigma=3.0):
-            # image input: [N, C, H, W]
-            c = image.shape[1]
-            radius = int(sigma * 3)
-            size = radius * 2 + 1
-            x = jnp.linspace(-radius, radius, size)
-            phi_x = jnp.exp(-0.5 * (x / sigma)**2)
-            phi_x = (phi_x / phi_x.sum()).astype(image.dtype)
-
-            # 1D Kernels for depthwise conv
-            # Horizontal: (C, 1, 1, K)
-            h_kernel = phi_x[None, None, None, :]
-            h_kernel = jnp.tile(h_kernel, (c, 1, 1, 1))
-            
-            # Vertical: (C, 1, K, 1)
-            v_kernel = phi_x[None, None, :, None]
-            v_kernel = jnp.tile(v_kernel, (c, 1, 1, 1))
-
-            # Apply Horizontal pass
-            out = jax.lax.conv_general_dilated(
-                image, h_kernel, (1, 1), padding='SAME',
-                feature_group_count=c,
-                dimension_numbers=('NCHW', 'OIHW', 'NCHW')
-            )
-            # Apply Vertical pass
-            out = jax.lax.conv_general_dilated(
-                out, v_kernel, (1, 1), padding='SAME',
-                feature_group_count=c,
-                dimension_numbers=('NCHW', 'OIHW', 'NCHW')
-            )
-            return out
-        image_gauss = gaussian_blur_2d(image[None].transpose(0, 3, 1, 2))
+        image_gauss = _gaussian_blur_2d_nchw(image[None].transpose(0, 3, 1, 2))
         image = image_gauss.squeeze().reshape(image.shape)
     
     return image.astype(jnp.uint8)

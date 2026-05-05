@@ -12,10 +12,6 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.modification import AutoDerivedConstants
 
-# Group: Kaan Yilmaz, Jonathan Frey
-# Game: Berzerk
-# Tested on Ubuntu Virtual Machine
-
 def _create_static_procedural_sprites() -> dict:
     """Creates procedural sprites that don't depend on dynamic values."""
     # A black background

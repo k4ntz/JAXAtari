@@ -1,6 +1,6 @@
 import os
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.skiing.skiing_mod_plugins import MoreTreesMod, MoreMogulsMod, DangerousMogulsMod, JumpToBreakMod, SpeedBurstMod, TreesEverywhereMod, HallOfFameMod
+from jaxatari.games.mods.skiing.skiing_mod_plugins import MoreTreesMod, MoreMogulsMod, DangerousMogulsMod, JumpToBreakMod, SpeedBurstMod, TreesEverywhereMod, HallOfFameMod, InvertFlagsMod
 
 class SkiingEnvMod(JaxAtariModController):
     """
@@ -17,6 +17,7 @@ class SkiingEnvMod(JaxAtariModController):
         "speed_burst": SpeedBurstMod,
         "hall_of_fame": HallOfFameMod,
         "off_piste": ["_more_trees", "_trees_everywhere", "_more_moguls", "_dangerous_moguls"],
+        "invert_flags": InvertFlagsMod,
     }
 
     def __init__(self,

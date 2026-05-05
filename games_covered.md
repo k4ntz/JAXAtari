@@ -1,19 +1,19 @@
 # Games covered in JaxAtari
 - 🥇: game is very close to original game and well optimized.
 - 🥈: game is close to original game, but may miss some parts, implements them differently or is not yet optimized for performance. 
-- 🥉: game differs significantly from original game (some of these can only be found in the experimental/games branch as they are under active development).
+- 🥉: game differs significantly from original game (these may be present in the games/ folder but are not yet added to the core.py file or could reside in various branches of the repository and are on the shortlist to be added next).
 - ❌: unsupported game yet.
 
 ## Atari 5
 | Game                         | Status  | Mods available |
 |------------------------------|---------|----------------|
-| battle_zone                  | 🥉       | 0 |
+| battle_zone                  | ❌       | 0 |
 | double_dunk                  | ❌       | 0 |
 | name_this_game               | 🥈       | 0 |
 | phoenix                      | 🥇       | 1 |
 | qbert                        | 🥈       | 0 |
 
-Total:  🥇: 1   |   🥈: 3   |   🥉: 1   |   ❌: 1
+Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   ❌: 2
 
 ## Atari 57
 | Game                         | Status  | Mods available |
@@ -29,7 +29,7 @@ Total:  🥇: 1   |   🥈: 3   |   🥉: 1   |   ❌: 1
 | beam_rider                   | 🥈       | 0 |
 | berzerk                      | 🥈       | 0 |
 | bowling                      | ❌       | 0 |
-| boxing                       | 🥉       | 0 |
+| boxing                       | ❌       | 0 |
 | breakout                     | 🥇       | 4 |
 | centipede                    | 🥈       | 0 |
 | chopper_command              | 🥈       | 0 |
@@ -61,7 +61,7 @@ Total:  🥇: 1   |   🥈: 3   |   🥉: 1   |   ❌: 1
 | road_runner                  | ❌       | 0 |
 | robotank                     | ❌       | 0 |
 | seaquest                     | 🥇       | 1 |
-| skiing                       | 🥉       | 0 |
+| skiing                       | 🥈       | 0 |
 | solaris                      | ❌       | 0 |
 | space_invaders               | 🥈       | 0 |
 | star_gunner                  | ❌       | 0 |
@@ -76,13 +76,13 @@ Total:  🥇: 1   |   🥈: 3   |   🥉: 1   |   ❌: 1
 | yars_revenge                 | ❌       | 0 |
 | zaxxon                       | ❌       | 0 |
 
-Total:  🥇: 16   |   🥈: 14   |   🥉: 7   |   ❌: 22
+Total:  🥇: 16   |   🥈: 15   |   🥉: 3   |   ❌: 23
 
 ## Remaining ALE games
 | Game                         | Status  | Mods available |
 |------------------------------|---------|----------------|
 | adventure                    | ❌       | 0 |
-| air_raid                     | 🥈       | 0 |
+| airraid                     | 🥉       | 0 |
 | atlantis2                    | ❌       | 0 |
 | backgammon                   | 🥉       | 0 |
 | basic_math                   | ❌       | 0 |
@@ -99,14 +99,14 @@ Total:  🥇: 16   |   🥈: 14   |   🥉: 7   |   ❌: 22
 | flag_capture                 | 🥇       | 0 |
 | frogger                      | ❌       | 0 |
 | galaxian                     | 🥈       | 0 |
-| hangman                      | 🥈       | 0 |
+| hangman                      | 🥉       | 0 |
 | haunted_house                | 🥇       | 0 |
 | human_cannonball             | 🥈       | 0 |
 | journey_escape               | ❌       | 0 |
 | kaboom                       | ❌       | 0 |
 | keystone_kapers              | ❌       | 0 |
 | king_kong                    | 🥈       | 0 |
-| klax                         | 🥈       | 0 |
+| klax                         | 🥉       | 0 |
 | koolaid                      | ❌       | 0 |
 | laser_gates                  | 🥈       | 0 |
 | lost_luggage                 | ❌       | 0 |
@@ -130,4 +130,4 @@ Total:  🥇: 16   |   🥈: 14   |   🥉: 7   |   ❌: 22
 | video_cube                   | 🥈       | 0 |
 | word_zapper                  | 🥈       | 0 |
 
-Total:  🥇: 3   |   🥈: 17   |   🥉: 5   |   ❌: 23
+Total:  🥇: 3   |   🥈: 14   |   🥉: 8   |   ❌: 23

@@ -665,56 +665,60 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
 
             def perform_normal_move():
                 world_idx = current_state.world_level - 1
-                original_wall_map = self.consts.ALL_WALL_MAPS_PER_WORLD[world_idx, current_state.current_level]
+                level_idx = current_state.current_level
+                wall_map = self.consts.ALL_WALL_MAPS_PER_WORLD[world_idx, level_idx]
 
-                # Dynamically "fill" portals on the main map if their corresponding chest is not collected.
-                def _maybe_add_air_walls(s: GameState, base_map: chex.Array) -> chex.Array:
+                # Identify locked portals on main map
+                def get_locked_portal_info(s: GameState):
                     world_idx_inner = s.world_level - 1
-                    portal_masks = self.consts.MAIN_MAP_PORTAL_MASKS[world_idx_inner]
-                    to_levels = self.consts.MAIN_MAP_PORTAL_TO_LEVELS[world_idx_inner]
+                    transitions = self.consts.JAX_TRANSITIONS[world_idx_inner, 0] # Main map portals
+                    to_levels = transitions[:, 4].astype(jnp.int32)
+                    
                     is_valid_portal = to_levels > 0
-
                     safe_chest_idx = jnp.clip(to_levels - 1, 0, s.chests_active.shape[0] - 1)
                     is_portal_locked = (to_levels > 0) & (~s.chests_active[safe_chest_idx])
                     should_fill = is_valid_portal & is_portal_locked
-                    fill_mask = jnp.any(portal_masks & should_fill[:, None, None], axis=0)
+                    return transitions[:, 0:4], should_fill
 
-                    return jnp.where(fill_mask, jnp.uint8(1), base_map)
+                portal_rects, should_fill = get_locked_portal_info(current_state)
+                on_main_map = (level_idx == 0)
 
-                effective_wall_map = jax.lax.cond(
-                    current_state.current_level == 0,
-                    lambda: _maybe_add_air_walls(current_state, original_wall_map),
-                    lambda: original_wall_map
-                )
-
-                is_in_room_flag = current_state.current_level != 0
+                is_in_room_flag = level_idx != 0
 
                 # update player state only every other frame
                 new_player_state, new_is_in_collision = jax.lax.cond(
                     jnp.mod(current_state.step_counter, 2) == 0,
                     lambda: self._update_player(
                         current_state.player, action, current_state.is_in_collision,
-                        effective_wall_map, is_in_room_flag
+                        wall_map, is_in_room_flag, on_main_map, portal_rects, should_fill
                     ),
                     lambda: (current_state.player, current_state.is_in_collision)
                 )
+
                 # update monsters every third frame
                 new_monster_state = jax.lax.cond(
                     jnp.mod(current_state.step_counter, 3) == 0,
-                    lambda: self._update_monsters(
+                    lambda: self._update_monsters_optimized(
                         current_state.monsters,
                         monster_update_key,
-                        effective_wall_map,
-                        self.consts.MONSTER_SPEEDS[current_state.monster_speed_index]
+                        wall_map,
+                        self.consts.MONSTER_SPEEDS[current_state.monster_speed_index],
+                        level_idx,
+                        world_idx,
+                        on_main_map,
+                        portal_rects,
+                        should_fill
                     ),
                     lambda: current_state.monsters,
                 )
+                
                 new_dead_monsters_state = jax.lax.cond(
                     jnp.mod(current_state.step_counter, 3) == 0,
                     lambda: self._update_dead_for(current_state.monsters.dead_for),
                     lambda: current_state.monsters.dead_for
                 ) 
                 new_monster_state = new_monster_state.replace(dead_for=new_dead_monsters_state)
+                
                 return current_state.replace(
                     player=new_player_state, monsters=new_monster_state,
                     is_in_collision=new_is_in_collision
@@ -1204,6 +1208,84 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
         keys = jax.random.split(key, self.consts.TOTAL_MONSTERS)
         return jax.vmap(single_monster_update)(monster_state, keys)
 
+    def _update_monsters_optimized(self, monster_state: MonsterState, key: jax.random.PRNGKey,
+                                   wall_map: chex.Array, monster_speed: chex.Array,
+                                   level_idx: int, world_idx: int, on_main_map: bool,
+                                   portal_rects: chex.Array, should_fill: chex.Array) -> MonsterState:
+        """Updates only the monsters relevant to the current level using slicing."""
+        
+        global_level = world_idx * 5 + level_idx
+        start_idx = self.consts.LEVEL_OFFSETS[global_level]
+        num_monsters = self.consts.LEVEL_OFFSETS[global_level + 1] - start_idx
+        
+        # JAX requires static slice sizes for dynamic_slice, but we know the max monsters per level is 6.
+        MAX_MONSTERS_PER_LEVEL = 6 
+        
+        def update_slice(m_x, m_y, m_dx, m_dy, m_active, m_immortal, m_dead_for, k):
+            def single_monster_update(x, y, dx, dy, active, immortal, dead_for, skey):
+                def _do_update():
+                    skey1, skey2, skey3 = jax.random.split(skey, 3)
+                    change_dir = jax.random.uniform(skey2) < self.consts.MONSTER_CHANGE_DIR_PROB
+                    angle = jax.random.uniform(skey3, minval=0, maxval=2 * jnp.pi)
+                    
+                    new_dx = jnp.where(change_dir, jnp.cos(angle), dx)
+                    new_dy = jnp.where(change_dir, jnp.sin(angle), dy)
+
+                    proposed_x = x + new_dx * monster_speed
+                    proposed_y = y + new_dy * monster_speed
+
+                    hw, hh = self.consts.MONSTER_RENDER_WIDTH / 2.0, self.consts.MONSTER_RENDER_HEIGHT / 2.0
+                    c_x = jnp.array([proposed_x - hw, proposed_x + hw - 1, proposed_x - hw, proposed_x + hw - 1])
+                    c_y = jnp.array([proposed_y - hh, proposed_y - hh, proposed_y + hh - 1, proposed_y + hh - 1])
+                    
+                    ic_x = jnp.clip(c_x.astype(jnp.int32), 0, self.consts.SCREEN_WIDTH - 1)
+                    ic_y = jnp.clip(c_y.astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT - 1)
+                    
+                    base_coll = jnp.any(wall_map[ic_y, ic_x] == 1)
+                    
+                    def check_portals():
+                        def check_single_rect(rect, fill):
+                            rx, ry, rw, rh = rect
+                            # Check if any corner is in rect
+                            in_rect = (c_x >= rx) & (c_x < rx + rw) & (c_y >= ry) & (c_y < ry + rh)
+                            return jnp.any(in_rect & fill)
+                        return jnp.any(jax.vmap(check_single_rect)(portal_rects, should_fill))
+
+                    portal_coll = jax.lax.cond(on_main_map, check_portals, lambda: False)
+                    
+                    oob = (c_x[0] < 0) | (c_x[1] >= self.consts.SCREEN_WIDTH) | \
+                          (c_y[0] < self.consts.PLAY_AREA_Y_START) | (c_y[3] >= self.consts.PLAY_AREA_Y_END)
+                    
+                    is_colliding = base_coll | portal_coll | oob
+                    
+                    return jnp.where(is_colliding, x, proposed_x), \
+                           jnp.where(is_colliding, y, proposed_y), \
+                           jnp.where(is_colliding, -new_dx, new_dx), \
+                           jnp.where(is_colliding, -new_dy, new_dy)
+
+                return jax.lax.cond(active, _do_update, lambda: (x, y, dx, dy))
+
+            skeys = jax.random.split(k, MAX_MONSTERS_PER_LEVEL)
+            return jax.vmap(single_monster_update)(m_x, m_y, m_dx, m_dy, m_active, m_immortal, m_dead_for, skeys)
+
+        # Use dynamic_slice with static size
+        slice_x = jax.lax.dynamic_slice(monster_state.x, (start_idx,), (MAX_MONSTERS_PER_LEVEL,))
+        slice_y = jax.lax.dynamic_slice(monster_state.y, (start_idx,), (MAX_MONSTERS_PER_LEVEL,))
+        slice_dx = jax.lax.dynamic_slice(monster_state.dx, (start_idx,), (MAX_MONSTERS_PER_LEVEL,))
+        slice_dy = jax.lax.dynamic_slice(monster_state.dy, (start_idx,), (MAX_MONSTERS_PER_LEVEL,))
+        slice_active = jax.lax.dynamic_slice(monster_state.active, (start_idx,), (MAX_MONSTERS_PER_LEVEL,))
+        slice_immortal = jax.lax.dynamic_slice(monster_state.is_immortal, (start_idx,), (MAX_MONSTERS_PER_LEVEL,))
+        slice_dead_for = jax.lax.dynamic_slice(monster_state.dead_for, (start_idx,), (MAX_MONSTERS_PER_LEVEL,))
+        
+        new_x, new_y, new_dx, new_dy = update_slice(slice_x, slice_y, slice_dx, slice_dy, slice_active, slice_immortal, slice_dead_for, key)
+        
+        return monster_state.replace(
+            x=jax.lax.dynamic_update_slice(monster_state.x, new_x, (start_idx,)),
+            y=jax.lax.dynamic_update_slice(monster_state.y, new_y, (start_idx,)),
+            dx=jax.lax.dynamic_update_slice(monster_state.dx, new_dx, (start_idx,)),
+            dy=jax.lax.dynamic_update_slice(monster_state.dy, new_dy, (start_idx,))
+        )
+
     def _update_dead_for(self, dead_for: chex.Array) -> chex.Array:
         """Decrements corpse timers; -1 marks monsters that are not dead."""
         new_dead_for = jnp.where(dead_for > 0, dead_for - 1, dead_for)
@@ -1326,7 +1408,7 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
         return any_monster_collision | any_chaser_collision | any_laser_collision
 
     def _update_player(self, player_state: PlayerState, action: int, is_in_collision: bool, wall_map: chex.Array,
-                       is_in_room: bool) -> \
+                       is_in_room: bool, on_main_map: bool, portal_rects: chex.Array, should_fill: chex.Array) -> \
             tuple[PlayerState, chex.Array]:
         """Updates player position based on action, handling wall collisions and boundary checks."""
 
@@ -1341,16 +1423,30 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
         )
         player_radius = float(self.consts.PLAYER_ROOM_RADIUS)
 
-        @jax.jit
         def check_collision_rect(pos_x, pos_y):
             corners_x = jnp.array([pos_x - player_hw, pos_x + player_hw - 1, pos_x - player_hw, pos_x + player_hw - 1], dtype=jnp.int32)
             corners_y = jnp.array([pos_y - player_hh, pos_y - player_hh, pos_y + player_hh - 1, pos_y + player_hh - 1], dtype=jnp.int32)
 
-            # clipped_corners_x = jnp.clip(corners_x.astype(jnp.int32), 0, self.consts.SCREEN_WIDTH - 1)
-            # clipped_corners_y = jnp.clip(corners_y.astype(jnp.int32), 0, self.consts.SCREEN_HEIGHT - 1)
-            # map_vals = wall_map[clipped_corners_y, clipped_corners_x]
             map_vals = wall_map[corners_y, corners_x]
-            return jnp.any(map_vals == 1)
+            base_collision = jnp.any(map_vals == 1)
+
+            def check_portals():
+                def check_single_corner(cx, cy):
+                    def check_single_rect(rect, fill):
+                        rx, ry, rw, rh = rect
+                        in_rect = (cx >= rx) & (cx < rx + rw) & (cy >= ry) & (cy < ry + rh)
+                        return in_rect & fill
+                    return jnp.any(jax.vmap(check_single_rect)(portal_rects, should_fill))
+                
+                # Check all 4 corners against locked portals
+                portal_hits = jax.vmap(check_single_corner)(
+                    jnp.array([pos_x - player_hw, pos_x + player_hw - 1, pos_x - player_hw, pos_x + player_hw - 1]),
+                    jnp.array([pos_y - player_hh, pos_y - player_hh, pos_y + player_hh - 1, pos_y + player_hh - 1])
+                )
+                return jnp.any(portal_hits)
+
+            portal_collision = jax.lax.cond(on_main_map, check_portals, lambda: False)
+            return base_collision | portal_collision
 
         def bounce_back():
             """Player reverts to last valid position if previously in collision."""
@@ -1397,12 +1493,6 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
             proposed_x = jnp.clip(proposed_x, min_x_clip, max_x_clip)
             proposed_y = jnp.clip(proposed_y, min_y_clip, max_y_clip)
 
-            # Check for collision with walls at the new position.
-            # is_colliding_now = jax.lax.cond(
-            #     is_in_room,
-            #     lambda: check_collision_circle(proposed_x, proposed_y),
-            #     lambda: check_collision_rect(proposed_x, proposed_y)
-            # )
             is_colliding_now = check_collision_rect(proposed_x, proposed_y)
 
             new_last_valid_x = jnp.where(is_colliding_now, player_state.x, proposed_x)
@@ -1715,54 +1805,100 @@ class VentureRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
-    
+
+        # --- Pre-stack masks for efficient indexing (Avoids Switches/Conds in render) ---
+        
+        def stack_and_pad(masks):
+            max_h = max(m.shape[0] for m in masks)
+            max_w = max(m.shape[1] for m in masks)
+            padded = [jnp.pad(m, ((0, max_h - m.shape[0]), (0, max_w - m.shape[1])), constant_values=self.jr.TRANSPARENT_ID) for m in masks]
+            return jnp.stack(padded)
+
+        # 1. Wall Masks -> Pre-baked Background Rasters
+        # We stamp the wall masks onto the base background raster once during __init__
+        all_wall_masks = jnp.stack([
+            stack_and_pad([self.SHAPE_MASKS['map_w1'], self.SHAPE_MASKS['room1_w1'], self.SHAPE_MASKS['room2_w1'], self.SHAPE_MASKS['room3_w1'], self.SHAPE_MASKS['room4_w1']]),
+            stack_and_pad([self.SHAPE_MASKS['map_w2'], self.SHAPE_MASKS['room1_w2'], self.SHAPE_MASKS['room2_w2'], self.SHAPE_MASKS['room3_w2'], self.SHAPE_MASKS['room4_w2']])
+        ])
+        base_raster = self.jr.create_object_raster(self.BACKGROUND)
+        self.all_background_rasters = jax.vmap(jax.vmap(lambda m: self.jr.render_at(base_raster, 0, 0, m)))(all_wall_masks)
+
+        # 2. Monster Masks: (World, Level, H, W)
+        # Note: Room 1 in W1 uses map monster.
+        self.all_monster_masks = jnp.stack([
+            stack_and_pad([
+                self.SHAPE_MASKS['monster_map_w1'],
+                self.SHAPE_MASKS['monster_map_w1'],
+                self.SHAPE_MASKS['monster_r2_w1'],
+                self.SHAPE_MASKS['monster_r3_w1'],
+                self.SHAPE_MASKS['monster_r4_w1']
+            ]),
+            stack_and_pad([
+                self.SHAPE_MASKS['monster_map_w2'],
+                self.SHAPE_MASKS['monster_r1_w2'],
+                self.SHAPE_MASKS['monster_r2_w2'],
+                self.SHAPE_MASKS['monster_r3_w2'],
+                self.SHAPE_MASKS['monster_r4_w2']
+            ])
+        ])
+
+        # 3. Dead Monster Masks: (World, Level, H, W)
+        self.all_dead_monster_masks = jnp.stack([
+            stack_and_pad([
+                self.SHAPE_MASKS['monster_dead_map_w1'],
+                self.SHAPE_MASKS['monster_dead_map_w1'],
+                self.SHAPE_MASKS['monster_dead_r2_w1'],
+                self.SHAPE_MASKS['monster_dead_r3_w1'],
+                self.SHAPE_MASKS['monster_dead_r4_w1']
+            ]),
+            stack_and_pad([
+                self.SHAPE_MASKS['monster_dead_map_w2'],
+                self.SHAPE_MASKS['monster_dead_r1_w2'],
+                self.SHAPE_MASKS['monster_dead_r2_w2'],
+                self.SHAPE_MASKS['monster_dead_r3_w2'],
+                self.SHAPE_MASKS['monster_dead_r4_w2']
+            ])
+        ])
+
+        # 4. Chest Masks: (World, Room, H, W) -> Rooms 1-4 (indices 0-3)
+        self.all_chest_masks = jnp.stack([
+            stack_and_pad([self.SHAPE_MASKS['reward1_w1'], self.SHAPE_MASKS['reward2_w1'], self.SHAPE_MASKS['reward3_w1'], self.SHAPE_MASKS['reward4_w1']]),
+            stack_and_pad([self.SHAPE_MASKS['reward1_w2'], self.SHAPE_MASKS['reward2_w2'], self.SHAPE_MASKS['reward3_w2'], self.SHAPE_MASKS['reward4_w2']])
+        ])
+
+        # 5. UI and Player Masks
+        self.all_life_masks = stack_and_pad([self.SHAPE_MASKS['health_w1'], self.SHAPE_MASKS['health_w2']])
+        self.all_player_dot_masks = stack_and_pad([self.SHAPE_MASKS['player_dot_w1'], self.SHAPE_MASKS['player_dot_w2']])
+        
+        # Precompute static offsets
+        self.monster_offsets = jnp.array([self.consts.MONSTER_RENDER_WIDTH / 2, self.consts.MONSTER_RENDER_HEIGHT / 2], dtype=jnp.int32)
+        self.chest_offsets = jnp.array([self.consts.CHEST_WIDTH / 2, self.consts.CHEST_HEIGHT / 2], dtype=jnp.int32)
+        self.player_dot_offsets = jnp.array([self.consts.PLAYER_DOT_RENDER_WIDTH / 2, self.consts.PLAYER_DOT_RENDER_HEIGHT / 2], dtype=jnp.int32)
+        self.player_detailed_offsets = jnp.array([self.consts.PLAYER_DETAILED_RENDER_WIDTH / 2, self.consts.PLAYER_DETAILED_RENDER_HEIGHT / 2], dtype=jnp.int32)
+        self.chaser_offsets = jnp.array([self.consts.CHASER_RENDER_WIDTH / 2, self.consts.CHASER_RENDER_HEIGHT / 2], dtype=jnp.int32)
+
     def _create_procedural_assets(self, sprite_path: str) -> list[dict]:
         """Creates resized/procedural sprites for lasers and projectile."""
         assets = []
         
         # Helper to load and resize
         def load_resize(filename, target_shape, name):
-            # Shape is (H, W, 4)
             path = os.path.join(sprite_path, filename)
             frame = self.jr.loadFrame(path)
             resized = jax.image.resize(frame, target_shape, method='nearest').astype(jnp.uint8)
-            # Ensure 4 channels
             if resized.shape[-1] == 3:
                 resized = jnp.concatenate([resized, jnp.full(resized.shape[:2] + (1,), 255, dtype=jnp.uint8)], axis=-1)
-            # Add wrapper dims for 'procedural' type (it expects (H, W, 4) or usually (1, H, W, 4) for single frame?)
-            # jr.load_and_setup_assets expects 'data' for procedural to be the array.
-            # If it's a single sprite, it usually expects (H, W, 4) or maybe (1, H, W, 4).
-            # Looking at source/seaquest:
-            # "rgba = jnp.array(list(color) + [255], dtype=jnp.uint8).reshape(1, 1, 4)"
-            # It seems to accept (H, W, 4) directly if it's treated as a single sprite frame? 
-            # Or does it need stacking?
-            # load_and_setup_assets logic:
-            # if type == 'procedural':
-            #    raw_data = item['data']
-            #    if raw_data.ndim == 3: raw_data = raw_data[None, ...]
-            # So (H,W,4) is fine, it will be expanded to (1,H,W,4).
             return {'name': name, 'type': 'procedural', 'data': resized}
 
-        # 1. Projectile
-        # Size: Radius * 2. 
-        # But Radius=2, so Dia=4.
-        # Check projectile target shape in original code:
-        # proj_size = self.consts.PROJECTILE_RADIUS * 2
-        # proj_target_shape = (proj_size, proj_size, 4)
-        proj_size = int(self.consts.PROJECTILE_RADIUS)
+        proj_size = int(self.consts.PROJECTILE_RADIUS * 2)
         assets.append(load_resize('player_dot.npy', (proj_size, proj_size, 4), 'projectile_resized'))
 
-        # 2. Lasers
-        # Span: [70, 90, 95, 115] -> x_start, x_end, y_start, y_end
         x_span_start, x_span_end, y_span_start, y_span_end = self.consts.LASER_ROOM_SPAN
-        room_w = int(x_span_end - x_span_start) # 90-70 = 20
-        room_h = int(y_span_end - y_span_start) # 115-95= 20
-        thickness = int(self.consts.LASER_THICKNESS) # 4
+        room_h = int(y_span_end - y_span_start)
+        room_w = int(x_span_end - x_span_start)
+        thickness = int(self.consts.LASER_THICKNESS)
         
-        # Vertical laser: thickness x room_h
         assets.append(load_resize('laser_wall_ve.npy', (room_h, thickness, 4), 'laser_ve_stretched'))
-        
-        # Horizontal laser: room_w x thickness
         assets.append(load_resize('laser_wall_ho.npy', (thickness, room_w, 4), 'laser_ho_stretched'))
         
         return assets
@@ -1770,316 +1906,130 @@ class VentureRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
         """Renders the game state to an RGBA image array."""
-        # Start with black background (ID 0)
-        canvas = self.jr.create_object_raster(self.BACKGROUND)
-        
-        # --- Draw Map/Room Walls ---
-        # Select correct wall mask based on world and level
-        def get_wall_mask():
-            # Level 0 is map. Levels 1-4 are rooms.
-            # World 1: 0=map_w1, 1=room1_w1, ...
-            # World 2: 0=map_w2, 1=room1_w2, ...
-            
-            # Since we didn't group them perfectly in a single stack (to avoid loading complexity), 
-            # we can switch. Or we could have laid them out in a robust structure.
-            # Given strictly 2 worlds and 5 levels, switch is fine.
-            
-            def _get_w1():
-                return jax.lax.switch(state.current_level, [
-                    lambda: self.SHAPE_MASKS['map_w1'],
-                    lambda: self.SHAPE_MASKS['room1_w1'],
-                    lambda: self.SHAPE_MASKS['room2_w1'],
-                    lambda: self.SHAPE_MASKS['room3_w1'],
-                    lambda: self.SHAPE_MASKS['room4_w1'],
-                ])
-                
-            def _get_w2():
-                return jax.lax.switch(state.current_level, [
-                    lambda: self.SHAPE_MASKS['map_w2'],
-                    lambda: self.SHAPE_MASKS['room1_w2'],
-                    lambda: self.SHAPE_MASKS['room2_w2'],
-                    lambda: self.SHAPE_MASKS['room3_w2'],
-                    lambda: self.SHAPE_MASKS['room4_w2'],
-                ])
-                
-            return jax.lax.cond(state.world_level == 1, _get_w1, _get_w2)
+        world_idx = state.world_level - 1
+        level_idx = state.current_level
+        is_in_room = level_idx > 0
 
-        wall_mask = get_wall_mask()
-        canvas = self.jr.render_at(canvas, 0, 0, wall_mask)
+        # --- 1. Backgrounds (Walls pre-baked) ---
+        canvas = self.all_background_rasters[world_idx, level_idx]
 
-        # --- Draw Score (Digits) ---
+        # --- 2. Score and Lives ---
         score_digits = self.jr.int_to_digits(state.score, max_digits=6)
         canvas = self.jr.render_label(canvas, 8, 10, score_digits, self.SHAPE_MASKS['digits'], spacing=6, max_digits=6)
 
-        # --- Draw Lives ---
-        life_mask = jax.lax.cond(
-            state.world_level == 1,
-            lambda: self.SHAPE_MASKS['health_w1'],
-            lambda: self.SHAPE_MASKS['health_w2']
-        )
+        life_mask = self.all_life_masks[world_idx]
         canvas = self.jr.render_indicator(canvas, 120, 10, state.lives - 1, life_mask, spacing=10, max_value=3)
 
-        # --- Draw Chests ---
-        # Only in rooms (current_level > 0). Specific chest for specific room.
+        # --- 3. Chests ---
         def draw_chests(c):
-            # Calculate index: 0-3 for room 1-4.
-            # But wait: state.current_level is 1-4. chest_idx for chests_active is 0-3.
-            chest_idx = state.current_level - 1
-            
-            # Lookup position
-            # global_idx uses full 0-9 range (0=map, 1-4=rooms w1, 5=map2, 6-9=rooms w2)
-            # The CHEST_POSITIONS array includes dummy 0 and 5 positions for maps?
-            # Or is it packed?
-            # Assuming CHEST_POSITIONS is (10, 2).
-            global_idx = (state.world_level - 1) * 5 + state.current_level
+            chest_idx = level_idx - 1
+            global_idx = world_idx * 5 + level_idx
             pos = self.consts.CHEST_POSITIONS[global_idx]
             
-            # is_active logic:
-            # state.chests_active is (4,) bool array for current world?
             is_active = state.chests_active[chest_idx] & (state.collected_chest_in_current_visit != chest_idx)
+            top_left = (pos - self.chest_offsets).astype(jnp.int32)
+            mask = self.all_chest_masks[world_idx, chest_idx]
             
-            # Center it: pos is center, need top-left for render_at
-            top_left_x = (pos[0] - self.consts.CHEST_WIDTH / 2).astype(jnp.int32)
-            top_left_y = (pos[1] - self.consts.CHEST_HEIGHT / 2).astype(jnp.int32)
-            
-            def do_render(_c):
-                 # w1: reward1..4, w2: reward1..4
-                def _w1():
-                    return jax.lax.switch(chest_idx, [
-                        lambda: self.jr.render_at(_c, top_left_x, top_left_y, self.SHAPE_MASKS['reward1_w1']),
-                        lambda: self.jr.render_at(_c, top_left_x, top_left_y, self.SHAPE_MASKS['reward2_w1']),
-                        lambda: self.jr.render_at(_c, top_left_x, top_left_y, self.SHAPE_MASKS['reward3_w1']),
-                        lambda: self.jr.render_at(_c, top_left_x, top_left_y, self.SHAPE_MASKS['reward4_w1']),
-                    ])
-                def _w2():
-                    return jax.lax.switch(chest_idx, [
-                        lambda: self.jr.render_at(_c, top_left_x, top_left_y, self.SHAPE_MASKS['reward1_w2']),
-                        lambda: self.jr.render_at(_c, top_left_x, top_left_y, self.SHAPE_MASKS['reward2_w2']),
-                        lambda: self.jr.render_at(_c, top_left_x, top_left_y, self.SHAPE_MASKS['reward3_w2']),
-                        lambda: self.jr.render_at(_c, top_left_x, top_left_y, self.SHAPE_MASKS['reward4_w2']),
-                    ])
-                return jax.lax.cond(state.world_level == 1, _w1, _w2)
-
             return jax.lax.cond(
                 is_active,
-                do_render,
+                lambda _c: self.jr.render_at(_c, top_left[0], top_left[1], mask),
                 lambda _c: _c,
                 c
             )
 
-        canvas = jax.lax.cond(state.current_level > 0, draw_chests, lambda c: c, canvas)
+        canvas = jax.lax.cond(is_in_room, draw_chests, lambda c: c, canvas)
 
-        # --- Draw Active Monsters ---
-        def draw_monsters(c):
-            total_levels = 5
-            global_level = (state.world_level - 1) * total_levels + state.current_level
-            start_idx = self.consts.LEVEL_OFFSETS[global_level]
-            end_idx = self.consts.LEVEL_OFFSETS[global_level + 1]
-            
-            def draw_single_monster(i, _c):
-                should_draw = state.monsters.active[i]
-                mx = (state.monsters.x[i] - self.consts.MONSTER_RENDER_WIDTH / 2).astype(jnp.int32)
-                my = (state.monsters.y[i] - self.consts.MONSTER_RENDER_HEIGHT / 2).astype(jnp.int32)
+        # --- 4. Monsters (Active) ---
+        global_level = world_idx * 5 + level_idx
+        start_idx = self.consts.LEVEL_OFFSETS[global_level]
+        end_idx = self.consts.LEVEL_OFFSETS[global_level + 1]
+        monster_mask = self.all_monster_masks[world_idx, level_idx]
 
-                def do_render(__c):
-                    # W1 switch logic
-                    def _w1():
-                         return jax.lax.switch(state.current_level, [
-                             lambda: self.jr.render_at(__c, mx, my, self.SHAPE_MASKS['monster_map_w1']),
-                             lambda: self.jr.render_at(__c, mx, my, self.SHAPE_MASKS['monster_map_w1']), # Room 1 uses map monster in W1
-                             lambda: self.jr.render_at(__c, mx, my, self.SHAPE_MASKS['monster_r2_w1']),
-                             lambda: self.jr.render_at(__c, mx, my, self.SHAPE_MASKS['monster_r3_w1']),
-                             lambda: self.jr.render_at(__c, mx, my, self.SHAPE_MASKS['monster_r4_w1']),
-                         ])
-                    # W2 switch logic
-                    def _w2():
-                        return jax.lax.switch(state.current_level, [
-                            lambda: self.jr.render_at(__c, mx, my, self.SHAPE_MASKS['monster_map_w2']),
-                            lambda: self.jr.render_at(__c, mx, my, self.SHAPE_MASKS['monster_r1_w2']),
-                            lambda: self.jr.render_at(__c, mx, my, self.SHAPE_MASKS['monster_r2_w2']),
-                            lambda: self.jr.render_at(__c, mx, my, self.SHAPE_MASKS['monster_r3_w2']),
-                            lambda: self.jr.render_at(__c, mx, my, self.SHAPE_MASKS['monster_r4_w2']),
-                        ])
-                    return jax.lax.cond(state.world_level == 1, _w1, _w2)
+        def draw_single_monster(i, _c):
+            mx = (state.monsters.x[i] - self.monster_offsets[0]).astype(jnp.int32)
+            my = (state.monsters.y[i] - self.monster_offsets[1]).astype(jnp.int32)
+            return jax.lax.cond(
+                state.monsters.active[i],
+                lambda __c: self.jr.render_at(__c, mx, my, monster_mask),
+                lambda __c: __c,
+                _c
+            )
+        
+        canvas = jax.lax.fori_loop(start_idx, end_idx, draw_single_monster, canvas)
 
-                return jax.lax.cond(
-                    should_draw,
-                    do_render,
-                    lambda __c: __c,
-                    _c
-                )
-            
-            return jax.lax.fori_loop(start_idx, end_idx, draw_single_monster, c)
-            
-        canvas = draw_monsters(canvas)
+        # --- 5. Dead Monsters ---
+        dead_monster_mask = self.all_dead_monster_masks[world_idx, level_idx]
 
-        # --- Draw Dead Monsters ---
-        def draw_dead_monsters(c):
-             # Logic is slightly different in original code for dead monsters mapping
-             # "main_map_dead_monster_filename = f'monster{w_suffix}2_dead.npy' if world_num == 1 else f'monster21_dead.npy'"
-             # So W1 Map uses monster2_dead. W2 Map uses monster21_dead.
-             # W1 Rooms:
-             # dead_monster_sprite_branches W1: [dead2, dead2 (room1?), dead2, dead3, dead4] ??
-             
-             # Old code for W1 (w_suffix=""):
-             # map -> monster2_dead (main_map_dead_monster_filename)
-             # room1 -> monster2_dead
-             # room2 -> monster2_dead
-             # room3 -> monster3_dead
-             # room4 -> monster4_dead
-             
-             # Old code for W2 (w_suffix="2"):
-             # map -> monster21_dead
-             # room1 (21) -> monster21_dead
-             # room2 (22) -> monster22_dead
-             # room3 (23) -> monster23_dead
-             # room4 (24) -> monster24_dead
-            
-            def get_dead_monster_mask():
-                def _w1():
-                    return jax.lax.switch(state.current_level, [
-                        lambda: self.SHAPE_MASKS['monster_dead_map_w1'], # map -> 2_dead
-                        # My asset config mapped monster_dead_map_w1 to 'monster2_dead.npy'. Correct.
-                        lambda: self.SHAPE_MASKS['monster_dead_map_w1'], # room1 -> 2_dead
-                        lambda: self.SHAPE_MASKS['monster_dead_r2_w1'], # room2 -> 2_dead (Wait, 2_dead again?)
-                        # Yes, existing code used monster2_dead for room2.
-                        lambda: self.SHAPE_MASKS['monster_dead_r3_w1'],
-                        lambda: self.SHAPE_MASKS['monster_dead_r4_w1'],
-                    ])
-                
-                def _w2():
-                    return jax.lax.switch(state.current_level, [
-                        lambda: self.SHAPE_MASKS['monster_dead_map_w2'], # map -> 21_dead
-                        lambda: self.SHAPE_MASKS['monster_dead_r1_w2'], # room1 -> 21_dead
-                        lambda: self.SHAPE_MASKS['monster_dead_r2_w2'],
-                        lambda: self.SHAPE_MASKS['monster_dead_r3_w2'],
-                        lambda: self.SHAPE_MASKS['monster_dead_r4_w2'],
-                    ])
-                return jax.lax.cond(state.world_level == 1, _w1, _w2)
-            
-            mask = get_dead_monster_mask()
+        def draw_single_dead_monster(i, _c):
+            mx = (state.monsters.x[i] - self.monster_offsets[0]).astype(jnp.int32)
+            my = (state.monsters.y[i] - self.monster_offsets[1]).astype(jnp.int32)
+            return jax.lax.cond(
+                state.monsters.dead_for[i] > 0,
+                lambda __c: self.jr.render_at(__c, mx, my, dead_monster_mask),
+                lambda __c: __c,
+                _c
+            )
+        
+        # Dead monsters could be from any level recently? 
+        # Actually in Venture they only appear in the room they were killed in, and they are cleared on transition.
+        canvas = jax.lax.fori_loop(start_idx, end_idx, draw_single_dead_monster, canvas)
 
-            def _loop_body(i, _c):
-                should_draw = state.monsters.dead_for[i] > 0
-                mx = (state.monsters.x[i] - self.consts.MONSTER_RENDER_WIDTH / 2).astype(jnp.int32)
-                my = (state.monsters.y[i] - self.consts.MONSTER_RENDER_HEIGHT / 2).astype(jnp.int32)
-                return jax.lax.cond(
-                    should_draw,
-                    lambda __c: self.jr.render_at(__c, mx, my, mask),
-                    lambda __c: __c,
-                    _c
-                )
-            return jax.lax.fori_loop(0, self.consts.TOTAL_MONSTERS, _loop_body, c)
-
-        canvas = draw_dead_monsters(canvas)
-
-        # --- Draw Chaser ---
+        # --- 6. Chaser ---
+        chaser_tl = (jnp.array([state.chaser.x, state.chaser.y]) - self.chaser_offsets).astype(jnp.int32)
         canvas = jax.lax.cond(
             state.chaser.active,
-            lambda c: self.jr.render_at(
-                c, 
-                (state.chaser.x - self.consts.CHASER_RENDER_WIDTH / 2).astype(jnp.int32), 
-                (state.chaser.y - self.consts.CHASER_RENDER_HEIGHT / 2).astype(jnp.int32), 
-                self.SHAPE_MASKS['chaser']
-            ),
+            lambda c: self.jr.render_at(c, chaser_tl[0], chaser_tl[1], self.SHAPE_MASKS['chaser']),
             lambda c: c,
             canvas
         )
 
-        # --- Draw Lasers (World 1, Room 1 only) ---
+        # --- 7. Lasers ---
         def draw_lasers(c):
-            x_span_start, x_span_end, y_span_start, y_span_end = self.consts.LASER_ROOM_SPAN
+            x_span_start, _, y_span_start, _ = self.consts.LASER_ROOM_SPAN
+            thick_h = self.consts.LASER_THICKNESS / 2
             
-            v_laser_width = self.consts.LASER_THICKNESS
-            h_laser_height = self.consts.LASER_THICKNESS
-            
-            v_laser1_x = state.lasers.positions[0] - v_laser_width / 2
-            c = self.jr.render_at(c, v_laser1_x.astype(jnp.int32), y_span_start.astype(jnp.int32), self.SHAPE_MASKS['laser_ve_stretched'])
-            
-            v_laser2_x = state.lasers.positions[1] - v_laser_width / 2
-            c = self.jr.render_at(c, v_laser2_x.astype(jnp.int32), y_span_start.astype(jnp.int32), self.SHAPE_MASKS['laser_ve_stretched'])
-            
-            h_laser1_y = state.lasers.positions[2] - h_laser_height / 2
-            c = self.jr.render_at(c, x_span_start.astype(jnp.int32), h_laser1_y.astype(jnp.int32), self.SHAPE_MASKS['laser_ho_stretched'])
-            
-            h_laser2_y = state.lasers.positions[3] - h_laser_height / 2
-            c = self.jr.render_at(c, x_span_start.astype(jnp.int32), h_laser2_y.astype(jnp.int32), self.SHAPE_MASKS['laser_ho_stretched'])
-            
+            c = self.jr.render_at(c, (state.lasers.positions[0] - thick_h).astype(jnp.int32), y_span_start.astype(jnp.int32), self.SHAPE_MASKS['laser_ve_stretched'])
+            c = self.jr.render_at(c, (state.lasers.positions[1] - thick_h).astype(jnp.int32), y_span_start.astype(jnp.int32), self.SHAPE_MASKS['laser_ve_stretched'])
+            c = self.jr.render_at(c, x_span_start.astype(jnp.int32), (state.lasers.positions[2] - thick_h).astype(jnp.int32), self.SHAPE_MASKS['laser_ho_stretched'])
+            c = self.jr.render_at(c, x_span_start.astype(jnp.int32), (state.lasers.positions[3] - thick_h).astype(jnp.int32), self.SHAPE_MASKS['laser_ho_stretched'])
             return c
 
-        canvas = jax.lax.cond(
-            (state.current_level == 1) & (state.world_level == 1),
-            draw_lasers,
-            lambda c: c,
-            canvas
-        )
+        canvas = jax.lax.cond((level_idx == 1) & (state.world_level == 1), draw_lasers, lambda c: c, canvas)
 
-        # --- Draw Player ---
-        is_in_room = state.current_level != 0
-        def draw_player_map(c):
-             # W1: player_dot_w1, W2: player_dot_w2
-             mask = jax.lax.cond(state.world_level == 1, lambda: self.SHAPE_MASKS['player_dot_w1'], lambda: self.SHAPE_MASKS['player_dot_w2'])
-             px = (state.player.x - self.consts.PLAYER_DOT_RENDER_WIDTH / 2).astype(jnp.int32)
-             py = (state.player.y - self.consts.PLAYER_DOT_RENDER_HEIGHT / 2).astype(jnp.int32)
-             return self.jr.render_at(c, px, py, mask)
+        # --- 8. Player ---
+        def draw_player(c):
+            def _room(_c):
+                px = (state.player.x - self.player_detailed_offsets[0]).astype(jnp.int32)
+                py = (state.player.y - self.player_detailed_offsets[1]).astype(jnp.int32)
+                return self.jr.render_at(_c, px, py, self.SHAPE_MASKS['player_detailed'])
+            def _map(_c):
+                mask = self.all_player_dot_masks[world_idx]
+                px = (state.player.x - self.player_dot_offsets[0]).astype(jnp.int32)
+                py = (state.player.y - self.player_dot_offsets[1]).astype(jnp.int32)
+                return self.jr.render_at(_c, px, py, mask)
+            return jax.lax.cond(is_in_room, _room, _map, c)
 
-        def draw_player_room(c):
-             mask = self.SHAPE_MASKS['player_detailed']
-             px = (state.player.x - self.consts.PLAYER_DETAILED_RENDER_WIDTH / 2).astype(jnp.int32)
-             py = (state.player.y - self.consts.PLAYER_DETAILED_RENDER_HEIGHT / 2).astype(jnp.int32)
-             return self.jr.render_at(c, px, py, mask)
+        canvas = draw_player(canvas)
 
-        canvas = jax.lax.cond(is_in_room, draw_player_room, draw_player_map, canvas)
-
-        # --- Draw Aiming Dot / Projectile ---
-        # Uses 'projectile' (which maps to player_dot files in my config? No, I defined 'projectile' group.)
-        # Actually simplest to just reuse player dot mask logic
-        
+        # --- 9. Aiming Dot / Projectile ---
         def draw_aiming_dot(c):
-            # Same sprite as player dot (map mode)
-            mask = jnp.where(state.world_level == 1, self.SHAPE_MASKS['player_dot_w1'], self.SHAPE_MASKS['player_dot_w2'])
-            player_width = self.consts.PLAYER_DETAILED_RENDER_WIDTH
-            player_height = self.consts.PLAYER_DETAILED_RENDER_HEIGHT
-            # Dot offset
-            dot_x = state.player.x + state.player.last_dx * (player_width / 2 + self.consts.AIMING_DOT_OFFSET)
-            dot_y = state.player.y + state.player.last_dy * (player_height / 2 + self.consts.AIMING_DOT_OFFSET)
+            mask = self.all_player_dot_masks[world_idx]
+            player_hw = self.consts.PLAYER_DETAILED_RENDER_WIDTH / 2
+            player_hh = self.consts.PLAYER_DETAILED_RENDER_HEIGHT / 2
+            dot_x = state.player.x + state.player.last_dx * (player_hw + self.consts.AIMING_DOT_OFFSET)
+            dot_y = state.player.y + state.player.last_dy * (player_hh + self.consts.AIMING_DOT_OFFSET)
+            return self.jr.render_at(c, (dot_x - self.player_dot_offsets[0]).astype(jnp.int32), (dot_y - self.player_dot_offsets[1]).astype(jnp.int32), mask)
 
-            # Dimensions of dot? Old code: 
-            # proj_sprite = jr.get_sprite_frame(self.sprites['player_dot'][world_idx], 0)
-            # px = ... - proj_size_x / 2
-            
-            # Using constant dims for safety (1x2)
-            px = (dot_x - self.consts.PLAYER_DOT_RENDER_WIDTH / 2).astype(jnp.int32)
-            py = (dot_y - self.consts.PLAYER_DOT_RENDER_HEIGHT / 2).astype(jnp.int32)
-            return self.jr.render_at(c, px, py, mask)
-
-        def draw_projectile_active(c):
-             mask = jax.lax.cond(state.world_level == 1, lambda: self.SHAPE_MASKS['player_dot_w1'], lambda: self.SHAPE_MASKS['player_dot_w2'])
-             # In old code, projectile uses player_dot sprite but resized to PROJECTILE_RADIUS*2 ?
-             # "proj_size = self.consts.PROJECTILE_RADIUS * 2 ... jax.image.resize(player_dot_frame...)"
-             # So the projectile is BIGGER than the player dot?
-             # PLAYER_DOT_RENDER_WIDTH=1, HEIGHT=2.
-             # PROJECTILE_RADIUS=2 -> dia=4.
-             # So I need a separate sprite for the projectile!
-             # My asset config reused `player_dot_files`. That's wrong if the size is different.
-             # I need to create a procedural resized version of player_dot for the projectile.
-             
-             mask = self.SHAPE_MASKS['projectile_resized'] # We will create this
+        def draw_projectile(c):
              px = (state.projectile.x - self.consts.PROJECTILE_RADIUS).astype(jnp.int32)
              py = (state.projectile.y - self.consts.PROJECTILE_RADIUS).astype(jnp.int32)
-             return self.jr.render_at(c, px, py, mask)
+             return self.jr.render_at(c, px, py, self.SHAPE_MASKS['projectile_resized'])
 
-        canvas = jax.lax.cond(
-            is_in_room & ~state.projectile.active,
-            draw_aiming_dot,
-            lambda c: c,
-            canvas
-        )
-        canvas = jax.lax.cond(
-            state.projectile.active,
-            draw_projectile_active,
-            lambda c: c,
-            canvas
-        )
+        def draw_room_extras(c):
+            return jax.lax.cond(state.projectile.active, draw_projectile, draw_aiming_dot, c)
+
+        canvas = jax.lax.cond(state.projectile.active, draw_projectile,
+                              lambda c: jax.lax.cond(is_in_room, draw_aiming_dot, lambda _c: _c, c),
+                              canvas)
 
         return self.jr.render_from_palette(canvas, self.PALETTE)
