@@ -87,3 +87,17 @@ class EndGameMod(JaxAtariInternalModPlugin):
     constants_overrides = {
         "EGG_ARRAY": jnp.array(egg_positions, dtype=jnp.int32)
     }
+
+class MatrixMod(JaxAtariInternalModPlugin):
+    """A Matrix-themed mod: black background, green walls, green enemies, green eggs."""
+    name = "matrix_theme"
+    
+    constants_overrides = {
+        'RGB_BACKGROUND': (0, 0, 0),
+        'RGB_BASIC_BLUE': (0, 200, 0),   # Walls, Player, UI
+        'RGB_ORANGE': (0, 255, 0),       # Flame, etc
+        'RGB_PINK': (50, 255, 50),
+        'RGB_GREEN': (0, 255, 100),
+        'RGB_YELLOW': (100, 255, 100),
+        'RGB_FRIGHTENED': (0, 100, 0),
+    }

@@ -1,6 +1,6 @@
 import os
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.alien.alien_mod_plugins import LastEggMod, EndGameMod
+from jaxatari.games.mods.alien.alien_mod_plugins import LastEggMod, EndGameMod, MatrixMod
 
 class AlienEnvMod(JaxAtariModController):    
     """
@@ -11,6 +11,7 @@ class AlienEnvMod(JaxAtariModController):
     REGISTRY = {
         "last_egg": LastEggMod,
         "end_game": EndGameMod,
+        "matrix_theme": MatrixMod,
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "alien", "sprites")

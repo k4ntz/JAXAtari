@@ -103,7 +103,8 @@ MOD_MODULES = {
     "beamrider": "jaxatari.games.mods.beamrider_mods.BeamRiderEnvMod",
     "venture": "jaxatari.games.mods.venture_mods.VentureEnvMod",
     "spaceinvaders": "jaxatari.games.mods.spaceinvaders_mods.SpaceInvadersEnvMod",
-    "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod"
+    "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod",
+    "alien": "jaxatari.games.mods.alien_mods.AlienEnvMod"
 }
 
 

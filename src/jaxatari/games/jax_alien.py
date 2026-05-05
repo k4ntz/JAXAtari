@@ -1,7 +1,7 @@
 import array
 import os
 from functools import partial
-from typing import NamedTuple, Tuple, Any, Callable, Dict
+from typing import NamedTuple, Tuple, Any, Callable, Dict, Optional
 import jax.numpy as jnp
 import chex
 from jaxatari.renderers import JAXGameRenderer
@@ -26,7 +26,15 @@ COLORS = {
     'FRIGHTENED': (101, 111, 228),  # "Other Blue" / Killable Enemy
 }
 
-def get_alien_asset_config():
+def get_alien_asset_config(consts: "AlienConstants" = None):
+    # Resolve colors
+    basic_blue = (consts.RGB_BASIC_BLUE or COLORS['BASIC_BLUE']) if consts else COLORS['BASIC_BLUE']
+    orange     = (consts.RGB_ORANGE     or COLORS['ORANGE'])     if consts else COLORS['ORANGE']
+    pink       = (consts.RGB_PINK       or COLORS['PINK'])       if consts else COLORS['PINK']
+    green      = (consts.RGB_GREEN      or COLORS['GREEN'])      if consts else COLORS['GREEN']
+    yellow     = (consts.RGB_YELLOW     or COLORS['YELLOW'])     if consts else COLORS['YELLOW']
+    frightened = (consts.RGB_FRIGHTENED or COLORS['FRIGHTENED']) if consts else COLORS['FRIGHTENED']
+
     return [
         # --- Backgrounds ---
         {'name': 'map_primary', 'type': 'background', 'file': 'bg/map_sprite.npy'},
@@ -41,8 +49,8 @@ def get_alien_asset_config():
                       'player_animation/player3.npy',
                       'player_animation/player2.npy'], # Added 4th frame (ping-pong) to match teleport shape
             'recolorings': {
-                'normal': COLORS['BASIC_BLUE'],
-                'flame':  COLORS['ORANGE']
+                'normal': basic_blue,
+                'flame':  orange
             }
         },
         {
@@ -52,7 +60,7 @@ def get_alien_asset_config():
                       'player_death_animation/player_death_2_sprite.npy',
                       'player_death_animation/player_death_3_sprite.npy',
                       'player_death_animation/player_death_4_sprite.npy'],
-            'recolorings': {'normal': COLORS['BASIC_BLUE']}
+            'recolorings': {'normal': basic_blue}
         },
         {
             'name': 'player_teleport',
@@ -61,7 +69,7 @@ def get_alien_asset_config():
                       'player_teleport_animation/teleport2.npy',
                       'player_teleport_animation/teleport3.npy',
                       'player_teleport_animation/teleport4.npy'],
-            'recolorings': {'normal': COLORS['BASIC_BLUE']}
+            'recolorings': {'normal': basic_blue}
         },
 
         # --- Flame ---
@@ -69,7 +77,7 @@ def get_alien_asset_config():
             'name': 'flame',
             'type': 'single',
             'file': 'flame/flame_sprite.npy',
-            'recolorings': {'normal': COLORS['ORANGE']}
+            'recolorings': {'normal': orange}
         },
 
         # --- Enemies ---
@@ -81,10 +89,10 @@ def get_alien_asset_config():
                       'enemy_animation/enemy_walk3.npy',
                       'enemy_animation/enemy_walk2.npy'], # Added 4th frame (ping-pong) to match teleport shape
             'recolorings': {
-                'pink':       COLORS['PINK'],
-                'yellow':     COLORS['YELLOW'],
-                'green':      COLORS['GREEN'],
-                'frightened': COLORS['FRIGHTENED']
+                'pink':       pink,
+                'yellow':     yellow,
+                'green':      green,
+                'frightened': frightened
             }
         },
         {
@@ -95,10 +103,10 @@ def get_alien_asset_config():
                       'enemy_teleport_animation/3.npy',
                       'enemy_teleport_animation/4.npy'],
             'recolorings': {
-                'pink':       COLORS['PINK'],
-                'yellow':     COLORS['YELLOW'],
-                'green':      COLORS['GREEN'],
-                'frightened': COLORS['FRIGHTENED']
+                'pink':       pink,
+                'yellow':     yellow,
+                'green':      green,
+                'frightened': frightened
             }
         },
         {
@@ -108,7 +116,7 @@ def get_alien_asset_config():
                       'alien_death_animation/alien_death2.npy',
                       'alien_death_animation/alien_death3.npy',
                       'alien_death_animation/alien_death4.npy'],
-            'recolorings': {'normal': COLORS['FRIGHTENED']}
+            'recolorings': {'normal': frightened}
         },
 
         # --- Items ---
@@ -117,8 +125,8 @@ def get_alien_asset_config():
             'type': 'group',
             'files': ['items/evil_item_1.npy', 'items/evil_item_2.npy'],
             'recolorings': {
-                'normal': COLORS['ORANGE'],
-                'bonus_green': COLORS['GREEN'] 
+                'normal': orange,
+                'bonus_green': green 
             }
         },
         {
@@ -127,7 +135,7 @@ def get_alien_asset_config():
             'files': ['items/pulsar.npy', 'items/rocket.npy', 
                       'items/saturn.npy', 'items/starship.npy', 
                       'items/orb.npy',    'items/pi.npy'], 
-            'recolorings': {'normal': COLORS['YELLOW']}
+            'recolorings': {'normal': yellow}
         },
 
         # --- Eggs ---
@@ -136,11 +144,11 @@ def get_alien_asset_config():
             'type': 'single',
             'file': 'egg/egg.npy',
             'recolorings': {
-                'yellow': COLORS['YELLOW'],
-                'orange': COLORS['ORANGE'],
-                'blue':   COLORS['BASIC_BLUE'],
-                'pink':   COLORS['PINK'],
-                'green':  COLORS['GREEN']
+                'yellow': yellow,
+                'orange': orange,
+                'blue':   basic_blue,
+                'pink':   pink,
+                'green':  green
             }
         },
         {
@@ -148,11 +156,11 @@ def get_alien_asset_config():
             'type': 'single',
             'file': 'egg/half_egg.npy',
             'recolorings': {
-                'yellow': COLORS['YELLOW'],
-                'orange': COLORS['ORANGE'],
-                'blue':   COLORS['BASIC_BLUE'],
-                'pink':   COLORS['PINK'],
-                'green':  COLORS['GREEN']
+                'yellow': yellow,
+                'orange': orange,
+                'blue':   basic_blue,
+                'pink':   pink,
+                'green':  green
             }
         },
 
@@ -161,13 +169,13 @@ def get_alien_asset_config():
             'name': 'digits',
             'type': 'digits',
             'pattern': 'digits/{}.npy',
-            'recolorings': {'normal': COLORS['BASIC_BLUE']}
+            'recolorings': {'normal': basic_blue}
         },
         {
             'name': 'life',
             'type': 'single',
             'file': 'life/life_sprite.npy',
-            'recolorings': {'normal': COLORS['BASIC_BLUE']}
+            'recolorings': {'normal': basic_blue}
         }
     ]
 
@@ -236,6 +244,16 @@ class AlienConstants(struct.PyTreeNode):
     SCATTER_DURATION_1: int =  struct.field(pytree_node=False, default=100)
     CHASE_DURATION_1: int = struct.field(pytree_node=False, default=200)
     MODECHANGE_PROBABILITY_1: float = struct.field(pytree_node=False, default=0.5)
+
+    # MOD COLORS (Optional overrides)
+    RGB_BACKGROUND: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_BASIC_BLUE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_ORANGE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_PINK: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_GREEN: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_YELLOW: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_FRIGHTENED: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_MAP_PRIMARY: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
     SCATTER_POINT_X_1: int = struct.field(pytree_node=False, default=0)
     SCATTER_POINT_Y_1: int = struct.field(pytree_node=False, default=0)
 
@@ -2497,14 +2515,21 @@ class AlienRenderer(JAXGameRenderer):
         # Pre-load background
         preprocessed_assets = self._load_and_preprocess_assets(sprite_path)
         
-        raw_config = get_alien_asset_config()
+        raw_config = get_alien_asset_config(self.consts)
         asset_config = []
         
         for asset in raw_config:
             if asset['name'] == 'map_primary':
                 asset_copy = asset.copy()
-                del asset_copy['file']
+                if 'file' in asset_copy:
+                    del asset_copy['file']
                 asset_copy['data'] = preprocessed_assets['map_primary']
+                asset_config.append(asset_copy)
+            elif asset['name'] == 'map_bonus':
+                asset_copy = asset.copy()
+                if 'file' in asset_copy:
+                    del asset_copy['file']
+                asset_copy['data'] = preprocessed_assets['map_bonus']
                 asset_config.append(asset_copy)
             else:
                 asset_config.append(asset)
@@ -2522,12 +2547,35 @@ class AlienRenderer(JAXGameRenderer):
     def _load_and_preprocess_assets(self, sprite_path: str) -> dict:
         target_shape = (self.consts.HEIGHT, self.consts.WIDTH, 4)
         
-        full_bg = jnp.zeros(target_shape, dtype=jnp.uint8)
-        full_bg = full_bg.at[:, :, 3].set(255)
+        bg_color = self.consts.RGB_BACKGROUND or (0, 0, 0)
+        full_bg = jnp.full(target_shape, jnp.array([*bg_color, 255], dtype=jnp.uint8))
         
         map_path = os.path.join(sprite_path, "bg/map_sprite.npy")
         map_raw = self.jr.loadFrame(map_path) 
         
+        bonus_map_path = os.path.join(sprite_path, "bg/bonus_map_sprite.npy")
+        bonus_map_raw = self.jr.loadFrame(bonus_map_path)
+        
+        # Original hardcoded colors in the Alien maps
+        orig_bg_color = jnp.array([45, 50, 184], dtype=jnp.uint8)
+        orig_wall_color = jnp.array([80, 0, 132], dtype=jnp.uint8)
+        
+        if self.consts.RGB_BACKGROUND is not None:
+             target_bg = jnp.array(self.consts.RGB_BACKGROUND, dtype=jnp.uint8)
+             mask_bg_primary = jnp.all(map_raw[..., :3] == orig_bg_color, axis=-1)
+             map_raw = map_raw.at[mask_bg_primary, :3].set(target_bg)
+             
+             mask_bg_bonus = jnp.all(bonus_map_raw[..., :3] == orig_bg_color, axis=-1)
+             bonus_map_raw = bonus_map_raw.at[mask_bg_bonus, :3].set(target_bg)
+
+        if self.consts.RGB_BASIC_BLUE is not None:
+             target_wall = jnp.array(self.consts.RGB_BASIC_BLUE, dtype=jnp.uint8)
+             mask_wall_primary = jnp.all(map_raw[..., :3] == orig_wall_color, axis=-1)
+             map_raw = map_raw.at[mask_wall_primary, :3].set(target_wall)
+             
+             mask_wall_bonus = jnp.all(bonus_map_raw[..., :3] == orig_wall_color, axis=-1)
+             bonus_map_raw = bonus_map_raw.at[mask_wall_bonus, :3].set(target_wall)
+
         # Placement:
         # Offsets are (Y=5, X=8)
         # We write map_raw into full_bg at [5:..., 8:...]
@@ -2538,7 +2586,8 @@ class AlienRenderer(JAXGameRenderer):
         map_primary_full = full_bg.at[off_y:off_y+h, off_x:off_x+w, :].set(map_raw)
 
         return {
-            'map_primary': map_primary_full
+            'map_primary': map_primary_full,
+            'map_bonus': bonus_map_raw
         }
 
     def _cache_sprite_stacks(self):
