@@ -27,8 +27,8 @@ N_SEEDS = 1
 WORKERS_PER_GPU = 1 # we already run three seeds per GPU/Env
 
 CONFIGS = [
-    "pqn_jaxatari_object",
-    "pqn_jaxatari_pixel",
+    "pqn_jaxatari_object_repr",
+    "pqn_jaxatari_pixel_repr",
 ]
 
 def worker(gpu_id: str, worker_id: int, task_queue: queue.Queue, extra_args: list):
