@@ -8,6 +8,7 @@ from flax import struct
 
 # --- 1. Individual Mod Plugins ---
 class LastEggMod(JaxAtariInternalModPlugin):
+    """Only one egg is remaining."""
     key = jax.random.key(-1)
     egg_selected = jax.random.choice(key, 106)
     egg_positions = [
@@ -47,6 +48,7 @@ class LastEggMod(JaxAtariInternalModPlugin):
     }
 
 class EndGameMod(JaxAtariInternalModPlugin):
+    """Only one area has remaining eggs."""
     key = jax.random.key(-1)
     cluster_selected = jax.random.choice(key, 2, (2, ))
     cluster = list(range(38, 53)) if cluster_selected[1] else list(range(16))
@@ -136,7 +138,14 @@ class DontKillMod(JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin):
         is_shooting = new_state.player.flame.flame_flag > 0
         shooting_punishment = jnp.where(is_shooting, 2, 0).astype(jnp.uint16)
         
-        new_score = new_state.level.score - shooting_punishment
+        # Reward 10 points every 100 frames
+        survival_reward = jnp.where(
+            jnp.logical_and(new_state.step_counter > 0, new_state.step_counter % 100 == 0), 
+            10, 
+            0
+        ).astype(jnp.uint16)
+        
+        new_score = new_state.level.score - shooting_punishment + survival_reward
         
         return new_state.replace(level=new_state.level.replace(score=new_score))
 
