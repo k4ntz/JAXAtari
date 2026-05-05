@@ -223,6 +223,7 @@ class AlienConstants(struct.PyTreeNode):
     LIFE_Y: int = struct.field(pytree_node=False, default=187)
     LIFE_OFFSET_X: int = struct.field(pytree_node=False, default=2) # Offset between life sprites
     LIFE_WIDTH: int = struct.field(pytree_node=False, default=5)
+    MAX_LIVES_RENDERED: int = struct.field(pytree_node=False, default=3)
 
     # Enemy_player_collision_offset
     ENEMY_PLAYER_COLLISION_OFFSET_Y_LOW: int = struct.field(pytree_node=False, default=4)
@@ -2950,9 +2951,12 @@ class AlienRenderer(JAXGameRenderer):
     def _render_hud(self, state: AlienState, raster):
         # 1. Score: right-aligned — starts as 1 digit on the right, expands left as score grows
         score_val = state.level.score.astype(jnp.int32)
-        score_digits = self.jr.int_to_digits(score_val, max_digits=6)
+        score_val = jnp.where(score_val > 32768, score_val - 65536, score_val)
+        
+        abs_score = jnp.abs(score_val)
+        score_digits = self.jr.int_to_digits(abs_score, max_digits=6)
         score_flat = score_digits.flatten()
-        n = jnp.maximum(score_val, 0)
+        n = jnp.maximum(abs_score, 0)
         num_digits = jnp.where(
             n > 0,
             jnp.ceil(jnp.log10(n.astype(jnp.float32) + 1.0)).astype(jnp.int32),
@@ -2976,6 +2980,19 @@ class AlienRenderer(JAXGameRenderer):
             max_digits_to_render=6
         )
         
+        # Add negative sign if score < 0
+        is_negative = jnp.squeeze(score_val < 0)
+        minus_color_id = jnp.max(self.DIGITS[0])
+        minus_mask = jnp.zeros_like(self.DIGITS[0])
+        minus_mask = minus_mask.at[3, 1:5].set(minus_color_id)
+        
+        raster = jax.lax.cond(
+            is_negative,
+            lambda r: self.jr.render_at(r, score_x - score_spacing + 2, self.consts.SCORE_Y + self.consts.RENDER_OFFSET_Y, minus_mask),
+            lambda r: r,
+            raster
+        )
+        
         # 2. Lives (shifted up)
         raster = self.jr.render_indicator(
             raster,
@@ -2984,7 +3001,7 @@ class AlienRenderer(JAXGameRenderer):
             jnp.squeeze(state.level.lifes),
             self.LIFE,
             spacing=self.consts.LIFE_WIDTH + self.consts.LIFE_OFFSET_X,
-            max_value=3
+            max_value=self.consts.MAX_LIVES_RENDERED
         )
         
         return raster
