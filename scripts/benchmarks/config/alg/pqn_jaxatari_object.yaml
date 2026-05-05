@@ -10,7 +10,8 @@ EPS_DECAY: 0.1
 NUM_EPOCHS: 1
 NUM_MINIBATCHES: 4096 # match to default (256)
 NORM_TYPE: "layer_norm" # layer_norm or batch_norm
-LR: 2.5e-4
+# LR: 2.5e-4
+LR: 2.5e-3
 MAX_GRAD_NORM: 10
 LR_LINEAR_DECAY: False #True
 GAMMA: 0.99

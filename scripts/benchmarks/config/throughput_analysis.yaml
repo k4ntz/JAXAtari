@@ -1,11 +1,11 @@
 # ALL_GAME_NAMES: ["AirRaid", "Alien", "Amidar", "Asterix", "Asteroids", "Atlantis", "BankHeist", "Berzerk", "Blackjack", "Breakout", "Casino", "CasinoBlackjack", "CasinoFiveStudPoker", "CasinoPokerSolitaire", "Centipede", "ChopperCommand", "DonkeyKong", "Enduro", "FishingDerby", "FlagCapture", "Freeway", "Frostbite", "Galaxian", "Hangman", "HauntedHouse", "HumanCannonball", "Kangaroo", "KingKong", "Klax", "LaserGates", "MontezumaRevenge", "NameThisGame", "Phoenix", "Pong", "Qbert", "Riverraid", "Seaquest", "SirLancelot", "Skiing", "SlotMachine", "SpaceInvaders", "Spacewar", "Surround", "Tennis", "Tetris", "TimePilot", "Tron", "Turmoil", "Venture", "VideoCheckers", "VideoCube", "VideoPinball", "WordZapper"]
 # GAME_NAMES: ["Centipede", "ChopperCommand", "DonkeyKong", "Enduro", "FishingDerby", "FlagCapture", "Freeway", "Frostbite", "Galaxian", "Hangman", "HauntedHouse", "HumanCannonball", "Kangaroo", "KingKong", "Klax", "LaserGates", "MontezumaRevenge", "NameThisGame", "Phoenix", "Pong", "Qbert", "Riverraid", "Seaquest", "SirLancelot", "Skiing", "SlotMachine", "SpaceInvaders", "Spacewar", "Surround", "Tennis", "Tetris", "TimePilot", "Tron", "Turmoil", "Venture", "VideoCheckers", "VideoCube", "VideoPinball", "WordZapper"]
-GAME_NAMES: ["BankHeist", "Breakout", "BeamRider", "Enduro", "Freeway", "Frostbite", "Kangaroo", "MontezumaRevenge","Phoenix", "Pong", "Qbert", "Seaquest", "Skiing", "SpaceInvaders", "Tennis", "Venture", "Gravitar", "MsPacman", "TimePilot", "Asteroids"]
+# GAME_NAMES: ["BankHeist", "Breakout", "BeamRider", "Enduro", "Freeway", "Frostbite", "Kangaroo", "MontezumaRevenge","Phoenix", "Pong", "Qbert", "Seaquest", "Skiing", "SpaceInvaders", "Tennis", "Venture", "Gravitar", "MsPacman", "TimePilot", "Asteroids"]
 # GAME_NAMES: ["Frostbite", "Kangaroo", "MontezumaRevenge","Phoenix", "Pong"] # "Qbert", "Seaquest", "Skiing", "SpaceInvaders", "Tennis", "Venture", "Gravitar", "MsPacman", "TimePilot", "Asteroids"]
 # GAME_NAMES:  ["Qbert", "Seaquest", "Skiing", "SpaceInvaders", "Tennis"] # "Venture", "Gravitar", "MsPacman", "TimePilot", "Asteroids"]
 # GAME_NAMES:  ["Venture", "Gravitar", "MsPacman", "TimePilot", "Asteroids"]
 
-# GAME_NAMES: ["MontezumaRevenge"]
+GAME_NAMES: ["Frostbite"]
 # For multi-env benchmarking, use only names and keep env IDs unset.
 BENCHMARK_BACKENDS: ["jaxatari"] #, "gym_ale", "ale_vectorenv"]
 # BENCHMARK_BACKENDS: ["ale_vectorenv"]
@@ -34,11 +34,11 @@ ATARI_FRAME_SKIP: [4] #[1, 4]
 PIXEL_RESIZE_SHAPE: [84, 84]
 
 SAVE_RESULTS_CSV: true
-RESULTS_CSV_PATH: "./outputs/throughput_results_jaxatari_max_scaling.csv"
+RESULTS_CSV_PATH: "./outputs/throughput_results_jaxatari_new_frostbite.csv"
 
 SEED: 0
 
-ENV_COUNTS: [16384, 32768, 65536]
+ENV_COUNTS: [1,8,32,64,128,256,512,1024,2048,4096,8192,16384, 32768, 65536]
 NUM_STEPS: 2000 # n_steps per env
 
 GIVEN_ACTION: 0

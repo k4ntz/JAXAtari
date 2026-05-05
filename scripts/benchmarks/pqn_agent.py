@@ -733,6 +733,8 @@ def single_run(config):
     if config.get("SAVE_PATH", None) is not None:
         model_state = outs["runner_state"][0]
         save_dir = os.path.join(config["SAVE_PATH"], env_name)
+        # add time to save_dir
+        save_dir = os.path.join(save_dir, time.strftime("%Y-%m-%d_%H-%M-%S"))
         os.makedirs(save_dir, exist_ok=True)
         OmegaConf.save(
             config,

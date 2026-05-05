@@ -9,7 +9,8 @@ HYP_TUNE: False
 # wandb params
 WANDB_MODE: "online"  # set to online to activate wandb
 ENTITY: "jaxatari"
-PROJECT: "submission_runs"
+# PROJECT: "debug"
+PROJECT: "submission_runs_big"
 alg:
   WANDB_LOG_ALL_SEEDS: True # will log all the vmapped seeds separetely
 
