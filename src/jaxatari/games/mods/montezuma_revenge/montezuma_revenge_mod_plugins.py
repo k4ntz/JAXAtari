@@ -258,3 +258,28 @@ class JumpingSpidersMod(JaxAtariPostStepModPlugin):
             enemies_bouncing=new_enemies_bouncing
         )
         return obs, state
+
+class SwordKillBonusMod(JaxAtariInternalModPlugin):
+    """
+    Internal mod to provide bonus points if the player kills an enemy with the sword.
+    It overrides the KILL_ENEMY_REWARD constant to 300.
+    """
+    constants_overrides = {
+        "KILL_ENEMY_REWARD": 300
+    }
+
+class ThreeSwordsMod(JaxAtariPostStepModPlugin):
+    """
+    Post-step mod to start the player with 3 swords.
+    Since the base game now natively supports up to 3 swords in the inventory,
+    we simply set it at reset.
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state: MontezumaRevengeState):
+        # Give 3 swords natively
+        new_inventory = state.inventory.at[1].set(3)
+        
+        state = state.replace(
+            inventory=new_inventory
+        )
+        return obs, state

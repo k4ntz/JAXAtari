@@ -5,11 +5,6 @@
 #
 # Simulates the Atari Casino Poker Solitaire game
 #
-# Authors:
-# - Xarion99
-# - Keksmo
-# - Embuer
-# - Snocember
 
 from functools import partial
 from typing import NamedTuple, Tuple

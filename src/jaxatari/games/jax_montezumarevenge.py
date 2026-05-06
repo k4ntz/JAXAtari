@@ -2,12 +2,10 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 from typing import Tuple
-from functools import partial
 import os
 
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 import jaxatari.spaces as spaces
-from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
 from jaxatari.games.montezuma_revenge.core import (
@@ -177,7 +175,8 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             entry_last_ladder=jnp.array(-1, dtype=jnp.int32),
             is_jumping=jnp.array(0, dtype=jnp.int32),
             is_falling=jnp.array(0, dtype=jnp.int32),
-            fall_start_y=jnp.array(0, dtype=jnp.int32),
+            fall_after_jump=jnp.array(0, dtype=jnp.int32),
+            fall_distance=jnp.array(0, dtype=jnp.int32),
             jump_counter=jnp.array(0, dtype=jnp.int32),
             is_climbing=jnp.array(0, dtype=jnp.int32),
             out_of_ladder_delay=jnp.array(0, dtype=jnp.int32),
@@ -220,7 +219,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             platform_cycle=jnp.array(0, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
             death_type=jnp.array(0, dtype=jnp.int32),
-            inventory=jnp.array([3, 0, 0, 0], dtype=jnp.int32), # keys, sword, torch, amulet
+            inventory=jnp.array([0, 0, 0, 0], dtype=jnp.int32), # keys, sword, torch, amulet
             amulet_time=jnp.array(0, dtype=jnp.int32),
             bonus_room_timer=jnp.array(0, dtype=jnp.int32),
             first_gem_pickup=jnp.array(0, dtype=jnp.int32),
@@ -344,11 +343,18 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         is_fire = jnp.logical_or(action == Action.FIRE, jnp.logical_or(action == Action.UPFIRE, jnp.logical_or(action == Action.DOWNFIRE, jnp.logical_or(action == Action.RIGHTFIRE, action == Action.LEFTFIRE))))
         is_fire = jnp.logical_or(is_fire, jnp.logical_or(action == Action.UPRIGHTFIRE, jnp.logical_or(action == Action.UPLEFTFIRE, jnp.logical_or(action == Action.DOWNRIGHTFIRE, action == Action.DOWNLEFTFIRE))))
         
-        # Player Velocity is locked during jump and falls
-        is_in_air = jnp.logical_or(state.is_jumping == 1, state.is_falling == 1)
+        # Player Velocity is locked during jump (or falls after jumps), not during actual falls
+        is_in_air = jnp.logical_or(state.is_jumping == 1, state.fall_after_jump == 1)
         new_vx = jax.lax.select(is_right, self.consts.PLAYER_SPEED, 0)
         new_vx = jax.lax.select(is_left, -self.consts.PLAYER_SPEED, new_vx)
-        dx = jnp.where(is_in_air, state.player_vx, new_vx)
+
+        air_vx = state.player_vx
+        air_dx = jnp.where(jnp.logical_and(is_in_air, state.frame_count % 2 == 0), air_vx, 0)
+        air_dx = jnp.where(state.is_jumping, state.player_vx, air_dx) # Allow horizontal control during jump, but not during fall after jump
+        dx = jnp.where(is_in_air, air_dx, new_vx)
+        # x: move only every other frame (when in air)
+        # just falling: no x velocity
+        dx = jnp.where(jnp.logical_and(state.is_falling == 1, state.fall_after_jump == 0), 0, dx)
         new_player_dir = jnp.where(is_right, 1, jnp.where(is_left, -1, state.player_dir))
 
         player_mid_x = state.player_x + self.consts.PLAYER_WIDTH // 2
@@ -366,10 +372,15 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         is_aligned_ladder = jnp.logical_and(is_aligned_ladder, new_out_of_ladder_delay == 0)
         get_on_top_ladder = jnp.logical_and(is_aligned_ladder, jnp.logical_and(is_down, jnp.abs(player_feet_y - l_top) <= 5))
         get_on_bottom_ladder = jnp.logical_and(is_aligned_ladder, jnp.logical_and(is_up, jnp.abs(player_feet_y - l_bottom) <= 5))
+        is_airborne = jnp.logical_or(state.is_jumping == 1, jnp.logical_or(state.is_falling == 1, state.fall_after_jump == 1))
+        can_grab_ladder = jnp.logical_or(
+            get_on_top_ladder,
+            jnp.logical_and(get_on_bottom_ladder, jnp.logical_not(is_airborne))
+        )
         ladder_bottom_bound = jnp.where(l_bottom >= 148, 170, l_bottom + 1)
         ladder_top_bound = jnp.where(l_top <= 6, 0, l_top - 4)
         in_ladder_zone = jnp.logical_and(is_aligned_ladder, jnp.logical_and(player_feet_y >= ladder_top_bound, player_feet_y <= ladder_bottom_bound))
-        on_this_ladder = jnp.where(state.is_climbing == 1, jnp.logical_and(in_ladder_zone, jnp.logical_or(state.last_ladder == jnp.arange(self.consts.MAX_LADDERS_PER_ROOM), state.last_ladder == -1)), jnp.logical_or(get_on_top_ladder, get_on_bottom_ladder))
+        on_this_ladder = jnp.where(state.is_climbing == 1, jnp.logical_and(in_ladder_zone, jnp.logical_or(state.last_ladder == jnp.arange(self.consts.MAX_LADDERS_PER_ROOM), state.last_ladder == -1)), can_grab_ladder)
         can_ladder = jnp.any(on_this_ladder)
         ladder_idx = jnp.where(can_ladder, jnp.argmax(on_this_ladder.astype(jnp.int32)), -1)
 
@@ -386,7 +397,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         can_climb_above = jnp.logical_or(jnp.logical_and(state.room_id == 12, jnp.arange(self.consts.MAX_ROPES_PER_ROOM) == 0), jnp.logical_and(state.room_id == 17, jnp.arange(self.consts.MAX_ROPES_PER_ROOM) == 0))
         top_bound_rope = jnp.where(can_climb_above, r_top - 5, r_top)
         in_rope_zone = jnp.logical_and(is_aligned_rope, jnp.logical_and(player_feet_y >= top_bound_rope, player_top_y <= r_bottom + 2))
-        on_this_rope = jnp.where(state.is_climbing == 1, jnp.logical_and(in_rope_zone, jnp.logical_or(state.last_rope == jnp.arange(self.consts.MAX_ROPES_PER_ROOM), state.last_rope == -1)), jnp.logical_or(catch_rope, jnp.logical_or(get_on_top_rope, get_on_bottom_rope)))
+        on_this_rope = jnp.where(state.is_climbing == 1, jnp.logical_and(in_rope_zone, jnp.logical_or(state.last_rope == jnp.arange(self.consts.MAX_ROPES_PER_ROOM), state.last_rope == -1)), jnp.logical_and(catch_rope, jnp.logical_or(get_on_top_rope, jnp.logical_or(get_on_bottom_rope, in_rope_zone))))
         can_rope = jnp.any(on_this_rope)
         rope_idx = jnp.where(can_rope, jnp.argmax(on_this_rope.astype(jnp.int32)), -1)
 
@@ -409,9 +420,8 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
 
         can_move_off = jnp.logical_and(jnp.logical_or(is_left, is_right), jnp.logical_not(hit_wall_check))
 
-        is_jumping_off_ladder = jnp.logical_and(can_ladder, jnp.logical_and(state.is_climbing == 1, jnp.logical_and(is_fire, can_move_off)))
-        is_moving_off_ladder = jnp.logical_and(can_ladder, jnp.logical_and(state.is_climbing == 1, can_move_off))
-        abort_ladder = jnp.logical_or(is_jumping_off_ladder, is_moving_off_ladder)
+        # Ladders are vertical-only: horizontal input does not disengage climbing.
+        abort_ladder = jnp.array(False)
 
         is_jumping_off_rope = jnp.logical_and(can_rope, jnp.logical_and(state.is_climbing == 1, jnp.logical_and(is_fire, can_move_off)))
         abort_rope = is_jumping_off_rope
@@ -464,14 +474,24 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         new_last_ladder = jnp.where(is_climbing == 1, ladder_idx, new_last_ladder)
 
         # 2. Process Jump Initiation
-        start_jump_normal = jnp.logical_and(is_fire, jnp.logical_and(on_ground, jnp.logical_and(state.is_jumping == 0, is_climbing == 0)))
+        was_on_ladder = jnp.logical_and(state.is_climbing == 1, state.last_ladder != -1)
+        start_jump_normal = jnp.logical_and(
+            is_fire,
+            jnp.logical_and(
+                on_ground,
+                jnp.logical_and(
+                    state.is_jumping == 0,
+                    jnp.logical_and(is_climbing == 0, jnp.logical_not(was_on_ladder)),
+                ),
+            ),
+        )
         start_jump = jnp.logical_or(start_jump_normal, is_jumping_off_rope)
         is_jumping = jnp.where(start_jump, 1, state.is_jumping)
         is_jumping = jnp.where(is_climbing == 1, 0, is_jumping) # cancel jump
         jump_counter = jnp.where(start_jump, 0, state.jump_counter)
 
-        # Horizontal velocity to carry over (used for momentum and animation tracking)
-        current_vx = dx
+        # Keep latched airborne momentum even on frames where dx is intentionally zero.
+        current_vx = jnp.where(is_in_air, air_vx, dx)
 
         # 3. Calculate DY
         def get_jump_dy():
@@ -636,13 +656,13 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
 
         # Inventory updates
         keys_collected = jnp.sum(jnp.where(jnp.logical_and(collect_item_mask, state.items_type == 0), 1, 0))
-        sword_collected = jnp.any(jnp.logical_and(collect_item_mask, state.items_type == 3))
+        swords_collected = jnp.sum(jnp.where(jnp.logical_and(collect_item_mask, state.items_type == 3), 1, 0))
         torch_collected = jnp.any(jnp.logical_and(collect_item_mask, state.items_type == 4))
         amulet_collected = jnp.any(jnp.logical_and(collect_item_mask, state.items_type == 2))
 
         current_inventory = state.inventory
         current_inventory = current_inventory.at[0].add(keys_collected)
-        current_inventory = current_inventory.at[1].set(jnp.where(sword_collected, 1, current_inventory[1]))
+        current_inventory = current_inventory.at[1].set(jnp.minimum(current_inventory[1] + swords_collected, 3))
         current_inventory = current_inventory.at[2].set(jnp.where(torch_collected, 1, current_inventory[2]))
         
         # Handle amulet time reset and disappearance
@@ -698,8 +718,8 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         current_vx = jnp.where(jnp.logical_or(hit_wall, hit_floor), 0, current_vx)
         
         # 6. Enemy Movement
-        # Move 1 pixel every 2 frames
-        speed_enemy = jnp.where(jnp.logical_and(is_active, jnp.mod(state.frame_count, 2) == 0), 1, 0)
+        # Move 1 pixel every 4 frames
+        speed_enemy = jnp.where(jnp.logical_and(is_active, jnp.mod(state.frame_count, 4) == 0), 1, 0)
         raw_new_enemies_x = state.enemies_x + state.enemies_direction * speed_enemy
         
         # Bounce off walls
@@ -717,23 +737,16 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         new_enemies_x = jnp.where(bounce_any, state.enemies_x, raw_new_enemies_x)
         
         # 7. Dying Mechanism (Fall Damage & Enemy Collision)
-        new_fall_start_y = jnp.where(
-            jnp.logical_and(state.is_falling == 0, new_is_falling == 1),
-            state.player_y,
-            state.fall_start_y
-        )
         fall_stopped = jnp.logical_and(state.is_falling == 1, new_is_falling == 0)
-        fall_distance = new_y - state.fall_start_y
         died_from_fall = jnp.logical_and(
             jnp.logical_and(fall_stopped, is_climbing == 0),
-            fall_distance > self.consts.MAX_FALL_DISTANCE
+            state.fall_distance > self.consts.MAX_FALL_DISTANCE
         )
-        
-        # Reset fall_start_y when not falling and not just stopped falling
-        new_fall_start_y = jnp.where(
-            jnp.logical_and(new_is_falling == 0, fall_stopped == 0),
-            new_y,
-            new_fall_start_y
+
+        new_fall_distance = jnp.where(
+            dy > 0,
+            state.fall_distance + dy,
+            0
         )
         
         # Vectorized enemy collision
@@ -746,16 +759,16 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         # Neutralize enemy collision if amulet is active
         this_hit_enemy = jnp.logical_and(this_hit_enemy, jnp.logical_not(is_amulet_active))
 
-        has_sword = current_inventory[1] == 1
+        has_sword = current_inventory[1] > 0
         kill_enemy_mask = jnp.logical_and(this_hit_enemy, has_sword)
         kill_order = jnp.cumsum(kill_enemy_mask.astype(jnp.int32))
-        actually_killed_mask = jnp.logical_and(kill_enemy_mask, kill_order <= 1)
+        actually_killed_mask = jnp.logical_and(kill_enemy_mask, kill_order <= current_inventory[1])
         
         died_from_enemy = jnp.any(jnp.logical_and(this_hit_enemy, jnp.logical_not(actually_killed_mask)))
         new_enemies_active = jnp.where(this_hit_enemy, 0, state.enemies_active)
-        sword_used = jnp.any(actually_killed_mask)
-        current_inventory = current_inventory.at[1].set(jnp.where(sword_used, 0, current_inventory[1]))
-        new_score = new_score + jnp.sum(jnp.where(actually_killed_mask, 100, 0))
+        swords_used = jnp.sum(actually_killed_mask.astype(jnp.int32))
+        current_inventory = current_inventory.at[1].add(-swords_used)
+        new_score = new_score + jnp.sum(jnp.where(actually_killed_mask, self.consts.KILL_ENEMY_REWARD, 0))
 
         # Laser Collision
         # Update laser and platform cycles
@@ -797,7 +810,12 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         final_is_climbing = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), jnp.where(respawn_now, state.entry_is_climbing, 0), is_climbing)
         final_last_ladder = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), jnp.where(respawn_now, state.entry_last_ladder, -1), new_last_ladder)
         final_jump_counter = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, new_jump_counter)
-        final_fall_start_y = jnp.where(respawn_now, spawn_y, jnp.where(new_death_timer > 0, state.fall_start_y, new_fall_start_y))
+        final_fall_distance = jnp.where(respawn_now, 0, jnp.where(new_death_timer > 0, state.fall_distance, new_fall_distance))
+
+        # if jumped before
+        # fall_after_jump -> (prev_jumped, not anymore , or prev fall_after_jump) and falling
+        fall_after_jump = jnp.where(jnp.logical_or(state.fall_after_jump == 1, jnp.logical_and(state.is_jumping == 1, new_is_jumping == 0)), 1, 0)
+        fall_after_jump = jnp.where(final_is_falling == 1, fall_after_jump, 0)
         
         state = state.replace(
             lives=new_lives,
@@ -808,13 +826,14 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             player_vy=final_vy,
             player_dir=final_player_dir,
             is_jumping=final_is_jumping,
+            fall_after_jump=fall_after_jump,
             jump_counter=final_jump_counter,
             is_climbing=final_is_climbing,
             out_of_ladder_delay=jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, new_out_of_ladder_delay),
             last_rope=new_last_rope,
             last_ladder=final_last_ladder,
             is_falling=final_is_falling,
-            fall_start_y=final_fall_start_y,
+            fall_distance=final_fall_distance,
             frame_count=jnp.where(is_active, state.frame_count + 1, state.frame_count),
             enemies_x=new_enemies_x,
             enemies_active=new_enemies_active,
@@ -844,33 +863,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
                                                     jnp.where(state.room_id == 11, 3, jnp.where(state.room_id == 12, 4, jnp.where(state.room_id == 13, 5, jnp.where(state.room_id == 18, 10, jnp.where(state.room_id == 19, 11, jnp.where(state.room_id == 20, 12, jnp.where(state.room_id == 21, 13, jnp.where(state.room_id == 22, 14, jnp.where(state.room_id == 31, 23, jnp.where(state.room_id == 30, 22, jnp.where(state.room_id == 28, 20, state.room_id))))))))))), 
                                                     state.room_id))))
         def transition_fn(state_in):
-            room_idx = get_room_idx(new_room_id)
-            jax.lax.switch(room_idx, [
-                lambda: jax.debug.print("Entering room: ROOM_0_3 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_0_4 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_0_5 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_1_3 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_1_2 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_1_4 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_1_5 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_1_6 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_2_2 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_2_1 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_2_3 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_2_4 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_2_5 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_2_6 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_2_7 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_7 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_8 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_6 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_4 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_3 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_5 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_1 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_2 (index: {room_id})", room_id=new_room_id),
-                lambda: jax.debug.print("Entering room: ROOM_3_0 (index: {room_id})", room_id=new_room_id),
-            ])
+            # room_idx = get_room_idx(new_room_id)
             st = state_in.replace(
                 global_doors_active=state_in.global_doors_active.at[state_in.room_id].set(state_in.doors_active),
                 global_items_active=state_in.global_items_active.at[state_in.room_id].set(state_in.items_active),
@@ -911,7 +904,6 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             return st.replace(
                 player_x=new_px,
                 player_y=new_py,
-                fall_start_y=new_py,
                 last_ladder=jnp.array(-1, dtype=jnp.int32),
                 last_rope=jnp.array(-1, dtype=jnp.int32),
                 entry_x=new_px,

@@ -170,6 +170,14 @@ class JaxEnvironment(Generic[EnvState, EnvObs, EnvInfo, EnvConstants]):
         # Functional: Tracks which renderer methods mods have patched.
         # Used by wrappers to safely transfer patches during renderer swaps.
         self._patched_renderer_methods = []
+
+        # Functional: Explicit registry of jitted callables that must be invalidated
+        # when renderer hot-swaps occur (e.g., native downscaling).
+        self._jit_invalidation_targets = []
+        # Functional: mutation epoch + tripwire controls for detecting risky
+        # post-trace monkeypatching.
+        self._jit_mutation_epoch = 0
+        self._jit_tripwire_enabled = True
         
         # Informational: Structured audit log of every change made by the mod system.
         # Machine-parseable: dict of category -> set of names that were changed.

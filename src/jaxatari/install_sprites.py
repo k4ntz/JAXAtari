@@ -11,11 +11,11 @@ from platformdirs import user_data_dir
 # 1. Configuration
 SPRITES_URL = os.environ.get(
     "JAXATARI_SPRITES_URL",
-    "https://github.com/k4ntz/JAXAtari/releases/download/v0.1/sprites.zip",
+    "https://drive.google.com/uc?export=download&id=1HX2TS8ulXGSnjrzUCAV83cINj0usBTvM",
 )
 STATES_URL = os.environ.get(
     "JAXATARI_STATES_URL",
-    "https://github.com/k4ntz/JAXAtari/releases/download/v0.1/states.zip",
+    "https://drive.google.com/uc?export=download&id=1GRFPXwVJcUhSRTvwWsIUoOMSygmCSrdM",
 )
 STORAGE_DIR = Path(user_data_dir("jaxatari"))
 LICENSE_TEXT = """

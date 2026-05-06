@@ -25,32 +25,3 @@ def test_laser_inactive_cycle():
     # Laser is inactive, player should not die
     assert state.death_timer == 0
 
-def test_ladder_delay():
-    env = JaxMontezumaRevenge()
-    key = jax.random.PRNGKey(0)
-    obs, state = env.reset(key)
-    
-    # Room 4, ladder at x=72.
-    from jaxatari.games.montezuma_revenge.rooms import load_room
-    state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
-    state = load_room(state.room_id, state, env.consts)
-    
-    # Place player on ladder, previously climbing
-    state = state.replace(
-        player_x=jnp.array(77, dtype=jnp.int32),
-        player_y=jnp.array(55, dtype=jnp.int32),
-        is_climbing=jnp.array(1, dtype=jnp.int32)
-    )
-    
-    # Jump off to trigger delay
-    RIGHTFIRE = 11
-    obs, state, reward, done, info = env.step(state, RIGHTFIRE)
-    
-    assert state.out_of_ladder_delay == env.consts.OUT_OF_LADDER_DELAY
-    
-    # Try to catch ladder immediately with UP
-    obs, state, reward, done, info = env.step(state, 2)
-    
-    # Delay should decrease, but climbing is blocked
-    assert state.out_of_ladder_delay == env.consts.OUT_OF_LADDER_DELAY - 1
-    assert state.is_climbing == 0

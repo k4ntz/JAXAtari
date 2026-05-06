@@ -1,9 +1,3 @@
-"""
-
-Lukas Bergholz, Linus Orlob, Vincent Jahn
-
-"""
-
 import os
 import jax
 import jax.numpy as jnp
@@ -1790,7 +1784,7 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
         )
 
         # 4. Extract the integer pixel movement per frame
-        raw_vel_x = jnp.fix(new_velocity_x).astype(jnp.int32)
+        raw_vel_x = jnp.trunc(new_velocity_x).astype(jnp.int32)
 
         # 5. Apply the slide-to-grid rule (if no input, slide exactly 1 pixel until x % 4 == 0)
         dx = jnp.where(
@@ -2232,8 +2226,6 @@ class CentipedeRenderer(JAXGameRenderer):
         ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
 
         # 4. Store original sprite color IDs (for palette swapping)
-        # These are based on the first frame/color in the original game
-        # Convert JAX arrays to numpy arrays, then to tuples for dictionary lookup
         self.PLAYER_ORIGINAL_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.ORANGE)), 0)
         self.CENTIPEDE_ORIGINAL_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.PINK)), 0)
         self.MUSHROOM_ORIGINAL_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.ORANGE)), 0)
@@ -2242,12 +2234,7 @@ class CentipedeRenderer(JAXGameRenderer):
         self.SCORPION_ORIGINAL_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.LIGHT_BLUE)), 0)
         self.BORDER_ORIGINAL_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.GREEN)), 0)
 
-        # We assume the 4 spark sprites all use the same color in their source .npy
-        # and that we will dynamically "paint" them. Let's assume their original
-        # color is white (or the first color in the palette).
-        # We find this by checking the color of the 'sparks' sprite.
-        # This is complex. Let's assume they are different colors as in the old code.
-        # We need IDs for Blue, Yellow, Red, Orange for the sparks.
+        # Spark specific logic
         self.SPARK_BLUE_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.DARK_BLUE)), 0)
         self.SPARK_YELLOW_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.YELLOW)), 0)
         self.SPARK_RED_ID = self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.RED)), 0)
@@ -2313,10 +2300,10 @@ class CentipedeRenderer(JAXGameRenderer):
             self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.DARK_YELLOW)), 0),
             self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.PINK)), 0),
             self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.RED)), 0),
-            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.RED)), 0),  # Wave 7 also uses RED
+            self.COLOR_TO_ID.get(tuple(np.asarray(self.consts.RED)), 0),
         ])
 
-        # 6. Replicate Animation Stack Logic (from old load_sprites)
+        # 6. Replicate Animation Stack Logic
         self.SHAPE_MASKS['poisoned_mushroom'] = jnp.concatenate(
             [jnp.repeat(self.SHAPE_MASKS['poisoned_mushroom_group'][i][None], 4, axis=0) for i in range(16)]
         )
@@ -2332,11 +2319,11 @@ class CentipedeRenderer(JAXGameRenderer):
 
         # 7. Store animation lengths
         self.anim_len = {
-            'poisoned_mushroom': self.SHAPE_MASKS['poisoned_mushroom'].shape[0],  # 64
-            'spider': self.SHAPE_MASKS['spider'].shape[0],  # 32
-            'flea': self.SHAPE_MASKS['flea'].shape[0],  # 4
-            'scorpion': self.SHAPE_MASKS['scorpion'].shape[0],  # 16
-            'sparks': self.SHAPE_MASKS['sparks'].shape[0],  # 4
+            'poisoned_mushroom': self.SHAPE_MASKS['poisoned_mushroom'].shape[0],
+            'spider': self.SHAPE_MASKS['spider'].shape[0],
+            'flea': self.SHAPE_MASKS['flea'].shape[0],
+            'scorpion': self.SHAPE_MASKS['scorpion'].shape[0],
+            'sparks': self.SHAPE_MASKS['sparks'].shape[0],
         }
 
         # 8. Pre-build colored spark masks
@@ -2350,6 +2337,13 @@ class CentipedeRenderer(JAXGameRenderer):
 
         self.COLORED_SPARK_MASKS = jax.vmap(create_colored_mask)(self.SHAPE_MASKS['sparks'], spark_colors)
 
+        # 9. Stack spider score masks for branchless rendering
+        self.SPIDER_SCORE_MASKS = jnp.stack([
+            self.SHAPE_MASKS['spider_300'],
+            self.SHAPE_MASKS['spider_600'],
+            self.SHAPE_MASKS['spider_900']
+        ])
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_frame_palette(self, wave: chex.Array) -> chex.Array:
         """Dynamically build the palette for the current wave."""
@@ -2358,7 +2352,7 @@ class CentipedeRenderer(JAXGameRenderer):
 
         frame_palette = frame_palette.at[self.PLAYER_ORIGINAL_ID].set(self.PLAYER_COLOR_IDS[wave_mod])
         frame_palette = frame_palette.at[self.CENTIPEDE_ORIGINAL_ID].set(self.CENTIPEDE_COLOR_IDS[wave_mod])
-        frame_palette = frame_palette.at[self.MUSHROOM_ORIGINAL_ID].set(self.PLAYER_COLOR_IDS[wave_mod])  # Uses player color
+        frame_palette = frame_palette.at[self.MUSHROOM_ORIGINAL_ID].set(self.PLAYER_COLOR_IDS[wave_mod])
         frame_palette = frame_palette.at[self.SPIDER_ORIGINAL_ID].set(self.SPIDER_COLOR_IDS[wave_mod])
         frame_palette = frame_palette.at[self.FLEA_ORIGINAL_ID].set(self.FLEA_COLOR_IDS[wave_mod])
         frame_palette = frame_palette.at[self.SCORPION_ORIGINAL_ID].set(self.SCORPION_COLOR_IDS[wave_mod])
@@ -2369,54 +2363,29 @@ class CentipedeRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_sparks(self, raster, state: CentipedeState) -> chex.Array:
-        """Render player death or mushroom healing sparks."""
+        is_player_spark = state.death_counter < 0
+        is_mush_spark = (state.death_counter > 0) & (((state.death_counter - 1) % 4) >= 2)
 
-        def no_render(r):
-            return r
+        p_idx = (-(state.death_counter // 4 + 1)) % 4
+        m_idx = (-jnp.mod(state.death_counter, 4)).astype(jnp.int32)
 
-        def player_sparks(r):
-            # Sparks logic is complex, just select a frame
-            idx = (-(state.death_counter // 4 + 1)) % 4
-            spark_mask = self.COLORED_SPARK_MASKS[idx]
+        idx = jnp.where(is_player_spark, p_idx, jnp.where(is_mush_spark, m_idx, 0))
+        spark_mask = self.COLORED_SPARK_MASKS[idx]
 
-            return self.jr.render_at_clipped(
-                r, state.player_x - 4, state.player_y + 3,
-                spark_mask, flip_offset=self.FLIP_OFFSETS['sparks']
-            )
+        mush_pos = state.spark_position
 
-        def mushroom_sparks(r):
-            idx = (-jnp.mod(state.death_counter, 4)).astype(jnp.int32)
-            spark_mask = self.COLORED_SPARK_MASKS[idx]
+        draw_x = jnp.where(is_player_spark, state.player_x - 4,
+                           jnp.where(is_mush_spark, mush_pos[0] - 2, -100)).astype(jnp.int32)
+        draw_y = jnp.where(is_player_spark, state.player_y + 3,
+                           jnp.where(is_mush_spark, mush_pos[1] - 2, -100)).astype(jnp.int32)
 
-
-            mush_pos = state.spark_position
-
-            return self.jr.render_at_clipped(
-                r, mush_pos[0] - 2, mush_pos[1] - 2, # Use the pre-calculated pos
-                spark_mask, flip_offset=self.FLIP_OFFSETS['sparks']
-            )
-
-        return jax.lax.cond(
-            state.death_counter != 0,
-            lambda r: jax.lax.cond(
-                state.death_counter < 0,
-                player_sparks,
-                lambda r_in: jax.lax.cond(
-                    (state.death_counter - 1) % 4 >= 2,
-                    mushroom_sparks,
-                    no_render,
-                    r_in
-                ),
-                r
-            ),
-            no_render,
-            raster
+        return self.jr.render_at_clipped(
+            raster, draw_x, draw_y, spark_mask, flip_offset=self.FLIP_OFFSETS['sparks']
         )
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: CentipedeState):
         # --- 1. Setup ---
-        # Start with the static background
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
         # --- 2. Get Dynamic Animation Frames ---
@@ -2426,32 +2395,31 @@ class CentipedeRenderer(JAXGameRenderer):
         scorpion_anim_idx = state.step_counter % self.anim_len['scorpion']
 
         # --- 3. Render player ---
-        raster = jax.lax.cond(
-            state.death_counter >= 0,
-            lambda r: self.jr.render_at(
-                r, state.player_x, state.player_y,
-                self.SHAPE_MASKS['player'], flip_offset=self.FLIP_OFFSETS['player']
-            ),
-            lambda r: r,
-            raster
+        player_alive = state.death_counter >= 0
+        draw_player_x = jnp.where(player_alive, state.player_x, -100).astype(jnp.int32)
+        draw_player_y = jnp.where(player_alive, state.player_y, -100).astype(jnp.int32)
+
+        raster = self.jr.render_at_clipped(
+            raster, draw_player_x, draw_player_y,
+            self.SHAPE_MASKS['player'], flip_offset=self.FLIP_OFFSETS['player']
         )
 
         # --- 4. Render player spell ---
-        raster = jax.lax.cond(
-            state.player_spell[2] != 0,
-            lambda r: self.jr.render_at_clipped(
-                r, state.player_spell[0], state.player_spell[1],
-                self.SHAPE_MASKS['player_spell'], flip_offset=self.FLIP_OFFSETS['player_spell']
-            ),
-            lambda r: r,
-            raster
+        spell_alive = state.player_spell[2] != 0
+        draw_spell_x = jnp.where(spell_alive, state.player_spell[0], -100).astype(jnp.int32)
+        draw_spell_y = jnp.where(spell_alive, state.player_spell[1], -100).astype(jnp.int32)
+
+        raster = self.jr.render_at_clipped(
+            raster, draw_spell_x, draw_spell_y,
+            self.SHAPE_MASKS['player_spell'], flip_offset=self.FLIP_OFFSETS['player_spell']
         )
 
         # --- 5. Render mushrooms ---
         frame_poisoned_mushroom = self.SHAPE_MASKS['poisoned_mushroom'][poison_anim_idx]
-        pmush_offset = self.FLIP_OFFSETS['poisoned_mushroom_group']  # Assumes all padded same
+        pmush_offset = self.FLIP_OFFSETS['poisoned_mushroom_group']
         mushroom_alive = state.mushroom_positions[:, 3] > 0
         mushroom_poisoned = state.mushroom_positions[:, 2] == 1
+
         normal_mushroom_mask = jnp.logical_and(mushroom_alive, jnp.logical_not(mushroom_poisoned))
         normal_positions = jnp.where(
             normal_mushroom_mask[:, None],
@@ -2464,100 +2432,89 @@ class CentipedeRenderer(JAXGameRenderer):
         )
         raster = self.jr.draw_rects(raster, normal_positions, mushroom_sizes, self.MUSHROOM_ORIGINAL_ID)
 
-        def render_poisoned_scan(raster_in, pos):
-            x, y, poisoned, lives = pos
-            should_render = jnp.logical_and(lives > 0, poisoned == 1)
-            return jax.lax.cond(
-                should_render,
-                lambda r: self.jr.render_at(r, x, y, frame_poisoned_mushroom, flip_offset=pmush_offset),
-                lambda r: r,
-                raster_in,
-            ), None
+        poisoned_mushroom_mask = jnp.logical_and(mushroom_alive, mushroom_poisoned)
+        p_x = jnp.where(poisoned_mushroom_mask, state.mushroom_positions[:, 0] - pmush_offset[0], -100).astype(
+            jnp.int32)
+        p_y = jnp.where(poisoned_mushroom_mask, state.mushroom_positions[:, 1] - pmush_offset[1], -100).astype(
+            jnp.int32)
 
-        raster, _ = jax.lax.scan(render_poisoned_scan, raster, state.mushroom_positions)
+        tiled_p_masks = jnp.tile(frame_poisoned_mushroom[None, :, :], (state.mushroom_positions.shape[0], 1, 1))
+        raster = self.jr.render_at_batch(raster, p_x, p_y, tiled_p_masks)
 
         # --- 6. Render centipede ---
         frame_centipede = self.SHAPE_MASKS['centipede']
         cent_offset = self.FLIP_OFFSETS['centipede']
 
-        def render_segment_scan(raster_in, pos):
-            x, y, _, _, alive_flag = pos
-            should_render = (alive_flag != 0) & (state.death_counter <= 0)
+        c_x = state.centipede_position[:, 0]
+        c_y = state.centipede_position[:, 1]
+        c_alive = state.centipede_position[:, 4] != 0
 
-            def render_fn(r):
-                return self.jr.render_at(r, x, y, frame_centipede, flip_offset=cent_offset)
+        segment_active = c_alive & (state.death_counter <= 0)
 
-            return jax.lax.cond(should_render, render_fn, lambda r: r, raster_in), None
+        draw_c_x = jnp.where(segment_active, c_x - cent_offset[0], -100).astype(jnp.int32)
+        draw_c_y = jnp.where(segment_active, c_y - cent_offset[1], -100).astype(jnp.int32)
 
-        raster, _ = jax.lax.scan(render_segment_scan, raster, state.centipede_position)
+        # Tile the mask for all 9 possible segments
+        tiled_c_masks = jnp.tile(frame_centipede[None, :, :], (state.centipede_position.shape[0], 1, 1))
+        raster = self.jr.render_at_batch(raster, draw_c_x, draw_c_y, tiled_c_masks)
 
         # --- 7. Render spider ---
         frame_spider = self.SHAPE_MASKS['spider'][spider_anim_idx]
         spider_offset = self.FLIP_OFFSETS['spider_group']
+        spider_alive = state.spider_position[2] != 0
 
-        raster = jax.lax.cond(
-            state.spider_position[2] != 0,
-            lambda r: self.jr.render_at_clipped(
-                r, state.spider_position[0] + 2, state.spider_position[1] - 2,
-                frame_spider, flip_offset=spider_offset
-            ),
-            lambda r: r,
-            raster
+        draw_spider_x = jnp.where(spider_alive, state.spider_position[0] + 2, -100).astype(jnp.int32)
+        draw_spider_y = jnp.where(spider_alive, state.spider_position[1] - 2, -100).astype(jnp.int32)
+
+        raster = self.jr.render_at_clipped(
+            raster, draw_spider_x, draw_spider_y,
+            frame_spider, flip_offset=spider_offset
         )
 
         # --- 8. Render spider score ---
-        frame_spider300 = self.SHAPE_MASKS['spider_300']
-        frame_spider600 = self.SHAPE_MASKS['spider_600']
-        frame_spider900 = self.SHAPE_MASKS['spider_900']
-
-        score_mask = jnp.where(
-            state.spider_points[0] == 1, frame_spider300,
-            jnp.where(state.spider_points[0] == 2, frame_spider600, frame_spider900)
-        )
-        # Assuming offsets are similar, pick one
+        score_idx = jnp.clip(state.spider_points[0] - 1, 0, 2).astype(jnp.int32)
+        score_mask = self.SPIDER_SCORE_MASKS[score_idx]
         score_offset = self.FLIP_OFFSETS['spider_300']
+        score_alive = state.spider_points[1] != 0
 
-        raster = jax.lax.cond(
-            state.spider_points[1] != 0,
-            lambda r: self.jr.render_at_clipped(
-                r, state.spider_position[0] + 2, state.spider_position[1] - 2,
-                score_mask, flip_offset=score_offset
-            ),
-            lambda r: r,
-            raster
+        draw_score_x = jnp.where(score_alive, state.spider_position[0] + 2, -100).astype(jnp.int32)
+        draw_score_y = jnp.where(score_alive, state.spider_position[1] - 2, -100).astype(jnp.int32)
+
+        raster = self.jr.render_at_clipped(
+            raster, draw_score_x, draw_score_y,
+            score_mask, flip_offset=score_offset
         )
 
         # --- 9. Render Flea ---
         frame_flea = self.SHAPE_MASKS['flea'][flea_anim_idx]
         flea_offset = self.FLIP_OFFSETS['flea_group']
-        raster = jax.lax.cond(
-            state.flea_position[2] != 0,
-            lambda r: self.jr.render_at_clipped(
-                r, state.flea_position[0], state.flea_position[1],
-                frame_flea, flip_offset=flea_offset
-            ),
-            lambda r: r,
-            raster
+        flea_alive = state.flea_position[2] != 0
+
+        draw_flea_x = jnp.where(flea_alive, state.flea_position[0], -100).astype(jnp.int32)
+        draw_flea_y = jnp.where(flea_alive, state.flea_position[1], -100).astype(jnp.int32)
+
+        raster = self.jr.render_at_clipped(
+            raster, draw_flea_x, draw_flea_y,
+            frame_flea, flip_offset=flea_offset
         )
 
         # --- 10. Render Scorpion ---
         frame_scorpion = self.SHAPE_MASKS['scorpion'][scorpion_anim_idx]
         scorpion_offset = self.FLIP_OFFSETS['scorpion_group']
+        scorpion_alive = state.scorpion_position[2] != 0
 
-        raster = jax.lax.cond(
-            state.scorpion_position[2] != 0,
-            lambda r: self.jr.render_at_clipped(
-                r, state.scorpion_position[0] + 2, state.scorpion_position[1] - 2,
-                frame_scorpion,
-                flip_horizontal=(state.scorpion_position[2] == -1),
-                flip_offset=scorpion_offset
-            ),
-            lambda r: r,
-            raster
+        draw_scorpion_x = jnp.where(scorpion_alive, state.scorpion_position[0] + 2, -100).astype(jnp.int32)
+        draw_scorpion_y = jnp.where(scorpion_alive, state.scorpion_position[1] - 2, -100).astype(jnp.int32)
+        flip_horizontal = state.scorpion_position[2] == -1
+
+        raster = self.jr.render_at_clipped(
+            raster, draw_scorpion_x, draw_scorpion_y,
+            frame_scorpion,
+            flip_horizontal=flip_horizontal,
+            flip_offset=scorpion_offset
         )
 
         # --- 11. Render sparks ---
-        # This function is complex and dynamically paints masks
         raster = self._render_sparks(raster, state)
 
         # --- 12. Render bottom border ---
@@ -2578,12 +2535,10 @@ class CentipedeRenderer(JAXGameRenderer):
         raster = self.jr.render_indicator(
             raster, 16, 187, state.lives - 1,
             self.SHAPE_MASKS['life_indicator'],
-            spacing=8, max_value=5  # Assuming max 5 lives
+            spacing=8, max_value=5
         )
 
-        # --- 15. Final Palette Lookup (Now with Dynamic Updates) ---
-
-        # Gather the palette indices we need to update
+        # --- 15. Final Palette Lookup ---
         wave_mod = state.wave[1] % 8
         indices_to_update = jnp.array([
             self.PLAYER_ORIGINAL_ID,
@@ -2599,7 +2554,7 @@ class CentipedeRenderer(JAXGameRenderer):
         new_color_ids = jnp.array([
             self.PLAYER_COLOR_IDS[wave_mod],
             self.CENTIPEDE_COLOR_IDS[wave_mod],
-            self.PLAYER_COLOR_IDS[wave_mod],  # Mushroom uses player color
+            self.PLAYER_COLOR_IDS[wave_mod],
             self.SPIDER_COLOR_IDS[wave_mod],
             self.FLEA_COLOR_IDS[wave_mod],
             self.SCORPION_COLOR_IDS[wave_mod],

@@ -1,5 +1,6 @@
 # experiment params
-NUM_SEEDS: 1
+NAME_INITIALS: "RE"
+NUM_SEEDS: 3
 SEED: 0
 
 # if  hyperparameters tuning
@@ -8,9 +9,10 @@ HYP_TUNE: False
 # wandb params
 WANDB_MODE: "online"  # set to online to activate wandb
 ENTITY: "jaxatari"
-PROJECT: "debug"
+# PROJECT: "debug"
+PROJECT: "submission_runs_big"
 alg:
-  WANDB_LOG_ALL_SEEDS: False # will log all the vmapped seeds separetely
+  WANDB_LOG_ALL_SEEDS: True # will log all the vmapped seeds separetely
 
 # where to save the params (if None, will not save)
 SAVE_PATH: "./models"

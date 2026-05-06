@@ -15,7 +15,7 @@ from jaxatari.renderers import JAXGameRenderer
 class AirRaidConstants(struct.PyTreeNode):
     # Game environment
     WIDTH: int = struct.field(pytree_node=False, default=160)
-    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    HEIGHT: int = struct.field(pytree_node=False, default=250)
 
     # Player
     PLAYER_WIDTH: int = struct.field(pytree_node=False, default=14)
@@ -30,18 +30,18 @@ class AirRaidConstants(struct.PyTreeNode):
     BUILDING_WIDTH: int = struct.field(pytree_node=False, default=50)
     BUILDING_HEIGHT: int = struct.field(pytree_node=False, default=25)
     MAX_BUILDING_DAMAGE: int = struct.field(pytree_node=False, default=6)
-    BUILDING_INITIAL_Y: int = struct.field(pytree_node=False, default=160)
+    BUILDING_INITIAL_Y: int = struct.field(pytree_node=False, default=205)
     BUILDING_VELOCITY: int = struct.field(pytree_node=False, default=1)
     BUILDING_SPACING: int = struct.field(pytree_node=False, default=90)
 
-    # Height and Y position based on damage level
+    # Height and Y position based on damage level (bottom of building anchored at y=230)
     BUILDING_HEIGHTS: chex.Array = struct.field(
         pytree_node=False,
         default_factory=lambda: jnp.array([25, 21, 17, 13, 9, 5, 0]),
     )
     BUILDING_Y_POSITIONS: chex.Array = struct.field(
         pytree_node=False,
-        default_factory=lambda: jnp.array([160, 164, 168, 172, 176, 180, 190]),
+        default_factory=lambda: jnp.array([205, 209, 213, 217, 221, 225, 230]),
     )
 
     # Enemies
@@ -1152,7 +1152,7 @@ class AirRaidRenderer(JAXGameRenderer):
 
         def render_life(i, raster_in):
             icon_x = 30 + i * self.life_spacing
-            render_result = self.jr.render_at(raster_in, icon_x, 200, life_mask)
+            render_result = self.jr.render_at(raster_in, icon_x, AirRaidConstants.HEIGHT - 17, life_mask)
             return jnp.where(i < lives - 1, render_result, raster_in)
 
         raster = jax.lax.fori_loop(0, 2, render_life, raster)

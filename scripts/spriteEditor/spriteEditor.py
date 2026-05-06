@@ -219,11 +219,18 @@ class NPYImageEditor:
         pencil_btn = tk.Button(main_toolbar_frame, image=self.pencil_icon, command=self.activate_pencil)
         pencil_btn.pack(side=tk.LEFT, padx=2, pady=2)
         Tooltip(pencil_btn, "Pencil")
-        
+
+        self.bucket_fill_btn = tk.Button(main_toolbar_frame, text="Bucket", command=self.activate_bucket_fill)
+        self.bucket_fill_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(self.bucket_fill_btn, "Bucket Fill (Contiguous)")
+
+        self.replace_color_btn = tk.Button(main_toolbar_frame, text="Replace", command=self.activate_replace_color)
+        self.replace_color_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(self.replace_color_btn, "Replace Color (Global)")
+
         dropper_btn = tk.Button(main_toolbar_frame, image=self.dropper_icon, command=self.activate_dropper)
         dropper_btn.pack(side=tk.LEFT, padx=2, pady=2)
         Tooltip(dropper_btn, "Color Dropper")
-
         # --- NEW: Toggle Grid Button ---
         self.grid_btn = tk.Button(main_toolbar_frame, text="Grid", command=self.toggle_grid)
         self.grid_btn.pack(side=tk.LEFT, padx=2, pady=2)
@@ -293,8 +300,16 @@ class NPYImageEditor:
         tk.Button(self.selection_mode_frame, text="Save as Preset", command=lambda: self.save_selection_preset()).pack(side=tk.LEFT)
         tk.Button(self.selection_mode_frame, text="Load from Preset", command=lambda: self.load_selection_preset()).pack(side=tk.LEFT)
 
-        status_bar = tk.Label(self.root, textvariable=self.current_mouse_position, bd=1, relief=tk.SUNKEN, anchor=tk.W)
-        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        status_bar_frame = tk.Frame(self.root, bd=1, relief=tk.SUNKEN)
+        status_bar_frame.pack(side=tk.BOTTOM, fill=tk.X)
+
+        status_bar = tk.Label(status_bar_frame, textvariable=self.current_mouse_position, anchor=tk.W)
+        status_bar.pack(side=tk.LEFT)
+
+        self.current_image_size = tk.StringVar()
+        self.current_image_size.set("Size: -- x --")
+        size_label = tk.Label(status_bar_frame, textvariable=self.current_image_size, anchor=tk.E)
+        size_label.pack(side=tk.RIGHT)
         
         # --- MODIFIED: Right Sidebar with Tabs (History / Colors) ---
         self.sidebar_frame = tk.Frame(self.root, width=220)
@@ -678,6 +693,14 @@ class NPYImageEditor:
         self.tool = "dropper"
         self.selection_mode_frame.pack_forget()
 
+    def activate_bucket_fill(self):
+        self.tool = "bucket_fill"
+        self.selection_mode_frame.pack_forget()
+
+    def activate_replace_color(self):
+        self.tool = "replace_color"
+        self.selection_mode_frame.pack_forget()
+
     def select_all_with_color(self):
         self.tool = "select_all_with_color"
         self.selection_mode_frame.pack(fill=tk.X)
@@ -729,7 +752,8 @@ class NPYImageEditor:
             return
 
         self.mouse_pressed = True
-        x, y = int(event.xdata), int(event.ydata)
+        x = max(0, min(int(event.xdata + 0.5), self.image.shape[1] - 1))
+        y = max(0, min(int(event.ydata + 0.5), self.image.shape[0] - 1))
 
         if self.tool == "pencil":
             self.image[y, x] = self.current_color
@@ -741,12 +765,14 @@ class NPYImageEditor:
             self.set_current_color(color)
 
     def on_mouse_release(self, event):
-        if self.mouse_pressed and event.xdata and event.ydata:
+        if self.mouse_pressed and event.xdata is not None and event.ydata is not None:
+            x = max(0, min(int(event.xdata + 0.5), self.image.shape[1] - 1))
+            y = max(0, min(int(event.ydata + 0.5), self.image.shape[0] - 1))
             if self.tool == "rectangular_selection":
                 if self.selection_start is None:
                     self.mouse_pressed = False
                     return
-                self.selection_end = (int(event.ydata), int(event.xdata))
+                self.selection_end = (y, x)
                 y0 = min(self.selection_start[0], self.selection_end[0])
                 x0 = min(self.selection_start[1], self.selection_end[1])
                 y1 = max(self.selection_start[0], self.selection_end[0])
@@ -759,7 +785,7 @@ class NPYImageEditor:
             if self.tool == "pencil":
                 self.update_state("pencil")
             if self.tool == "magic_wand":
-                new_selection = self.magic_wand(int(event.ydata), int(event.xdata), self.image[int(event.ydata), int(event.xdata)])
+                new_selection = self.magic_wand(y, x, self.image[y, x])
                 if self.cmd_pressed:
                     if self.selected is None:
                         self.selected = new_selection
@@ -770,9 +796,23 @@ class NPYImageEditor:
                 self.update_state("magic_wand")
 
             if self.tool == "select_all_with_color":
-                new_selection = np.all(self.image == self.image[int(event.ydata), int(event.xdata)], axis=2)
+                new_selection = np.all(self.image == self.image[y, x], axis=2)
                 self.submit_selection(new_selection)
                 self.update_state("select with same color")
+
+            if self.tool == "bucket_fill":
+                target_color = self.image[y, x].copy()
+                if not np.array_equal(target_color, self.current_color):
+                    fill_mask = self.magic_wand(y, x, target_color)
+                    self.image[fill_mask] = self.current_color
+                    self.update_state("bucket_fill")
+
+            if self.tool == "replace_color":
+                target_color = self.image[y, x].copy()
+                if not np.array_equal(target_color, self.current_color):
+                    mask = np.all(self.image == target_color, axis=2)
+                    self.image[mask] = self.current_color
+                    self.update_state("replace_color")
 
         self.selection_start = None
         self.selection_end = None
@@ -810,7 +850,8 @@ class NPYImageEditor:
 
     def on_mouse_motion(self, event):
         if event.xdata is not None and event.ydata is not None:
-            x, y = int(event.xdata), int(event.ydata)
+            x = max(0, min(int(event.xdata + 0.5), self.image.shape[1] - 1))
+            y = max(0, min(int(event.ydata + 0.5), self.image.shape[0] - 1))
             self.current_mouse_position.set(f"x={x}, y={y}")
             if self.tool == "pencil" and self.mouse_pressed:
                 if self.selection_start:
@@ -825,7 +866,7 @@ class NPYImageEditor:
                 self.selection_start = (y, x)
 
             if self.tool == "rectangular_selection" and self.mouse_pressed:
-                self.selection_end = (int(event.ydata), int(event.xdata))
+                self.selection_end = (y, x)
         else:
             self.current_mouse_position.set("x=--, y=--")
 
@@ -846,6 +887,10 @@ class NPYImageEditor:
     def update_display(self):
         if self.image is None:
             return
+
+        h, w = self.image.shape[:2]
+        if hasattr(self, 'current_image_size'):
+            self.current_image_size.set(f"Size: {w} x {h}")
 
         self.ax.clear()
         

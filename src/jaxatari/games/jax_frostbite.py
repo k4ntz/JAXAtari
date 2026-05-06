@@ -1,6 +1,7 @@
 import os
 from functools import partial
 from typing import Tuple, NamedTuple, Optional
+import numpy as _np
 import chex
 import jax
 from jax import tree_util
@@ -76,18 +77,19 @@ class FrostbiteConstants(struct.PyTreeNode):
     
     # Debug/Testing
     START_LEVEL: int = struct.field(pytree_node=False, default=1)
-    
-    # Bailey jump offset tables (modified for symmetric jumping)
+    START_IGLOO_COMPLETE: bool = struct.field(pytree_node=False, default=False)  # start with igloo fully built
+
+    # Bailey jump offset tables (Y deltas per ALE frame; consumed 2 entries per step for 60 Hz parity)
     BAILEY_JUMP_OFFSETS: tuple = struct.field(pytree_node=False, default_factory=lambda: (
         6, 5, 5, 5, 4, 3, 2, 1, 0, 0, 0, 0, -1, -2, -3,
         0,
         2, 2, 1, 0, 0, 0, 0, 0, -1, -2, -3, -4, -5, -6, -9,
         0
     ))
-    
-    
+
+
     # Speed reference values
-    BAILEY_WALK_SPEED_FRAC: int = struct.field(pytree_node=False, default=4)
+    BAILEY_WALK_SPEED_FRAC: int = struct.field(pytree_node=False, default=8)
     
     # Colors
     COLOR_ICE_WHITE: int = struct.field(pytree_node=False, default=0x0E)
@@ -96,10 +98,30 @@ class FrostbiteConstants(struct.PyTreeNode):
     # RGB Overrides for mods (if set, overrides the actual rendered color of the ice blocks)
     RGB_ICE_WHITE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
     RGB_ICE_BLUE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    
+    # RGB Overrides for obstacles
+    RGB_FISH: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_GEESE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_CRAB: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_CLAM: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+
+    # Sprite overrides
+    BEAR_SPRITE_0: str = struct.field(pytree_node=False, default="bear_00.npy")
+    BEAR_SPRITE_1: str = struct.field(pytree_node=False, default="bear_01.npy")
+
+    # Igloo overrides
+    IGLOO_X_OFFSET: int = struct.field(pytree_node=False, default=0)
+    RGB_IGLOO: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    TARGET_IGLOO_X: int = struct.field(pytree_node=False, default=122)
 
     # Igloo constants    IGLOO_X: int = struct.field(pytree_node=False, default=154)  # X position of igloo (far right side of screen)
     IGLOO_X: int = struct.field(pytree_node=False, default=154)
     IGLOO_Y: int = struct.field(pytree_node=False, default=44)   # Y position at top of Bailey's head when on shore
+    
+    # Environment mode overrides
+    CONSTANT_NIGHT: bool = struct.field(pytree_node=False, default=False)
+    RGB_NIGHT: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    DRAW_SHORE_LINE: bool = struct.field(pytree_node=False, default=False)
     
     # Game Constants
     MAX_IGLOO_INDEX: int = struct.field(pytree_node=False, default=15)  # Complete igloo has 16 blocks (0-15)
@@ -163,23 +185,25 @@ class FrostbiteConstants(struct.PyTreeNode):
     
     # Stutter movement logic for Level 5+
     OBSTACLE_STUTTER_LEVEL: int = struct.field(pytree_node=False, default=5)
-    OBSTACLE_STUTTER_MASK: int = struct.field(pytree_node=False, default=0x40)  # Pause when (frame_count & 0x40) != 0
+    OBSTACLE_STUTTER_MASK: int = struct.field(pytree_node=False, default=0x20)  # Pause when (frame_count & 0x20) != 0
 
     # Floating obstacle animation
     FLOATING_OBSTACLE_OFFSETS: tuple = struct.field(pytree_node=False, default_factory=lambda: (4, 3, 2, 1, 0, 0, 0, 1, 2, 3, 4, 3, 2, 1, 0, 0))
     FLOATING_OBSTACLE_MAX_OFFSET: int = struct.field(pytree_node=False, default=4)
     FLOATING_OBSTACLE_PHASE_MASK: int = struct.field(pytree_node=False, default=0x1F)  # 5-bit sawtooth mask after shifting frame count
-    FLOATING_OBSTACLE_PHASE_SHIFT: int = struct.field(pytree_node=False, default=3)    # Divide frame count by 8 (>> 3)
-    OBSTACLE_ANIMATION_MASK_DEFAULT: int = struct.field(pytree_node=False, default=0x20)  # Slower flip for geese/fish/crab (adjusted for halved step rate)
-    OBSTACLE_ANIMATION_MASK_CLAM: int = struct.field(pytree_node=False, default=0x40)     # Clams animate even slower (double the default period)
+    FLOATING_OBSTACLE_PHASE_SHIFT: int = struct.field(pytree_node=False, default=2)    # Divide frame count by 4 (>> 2)
+    OBSTACLE_ANIMATION_MASK_DEFAULT: int = struct.field(pytree_node=False, default=0x10)  # Flip every 16 frames
+    OBSTACLE_ANIMATION_MASK_CLAM: int = struct.field(pytree_node=False, default=0x20)     # Clams animate slower (every 32 frames)
 
     # Polar grizzly animation map - defines which sprite frame (0 or 1) to use for each animation step
     POLAR_GRIZZLY_ANIM_MAP: tuple = struct.field(pytree_node=False, default_factory=lambda: (0, 0, 1, 1, 0, 0, 1, 1))
     
     # Frame delays for level progression
-    INIT_DELAY_ACTION_VALUE: int = struct.field(pytree_node=False, default=240)  # 4 seconds for block removal only  
-    INCREMENT_SCORE_FRAME_DELAY: int = struct.field(pytree_node=False, default=15)  # 240/16 = 15 frames per block
-    TEMP_DECREMENT_DELAY: int = struct.field(pytree_node=False, default=2)  # 2 frames per temperature degree
+    INIT_DELAY_ACTION_VALUE: int = struct.field(pytree_node=False, default=120)  # 2 seconds for block removal
+    INCREMENT_SCORE_FRAME_DELAY: int = struct.field(pytree_node=False, default=8)   # 120/16 ≈ 8 frames per block
+    TEMP_DECREMENT_DELAY: int = struct.field(pytree_node=False, default=1)  # 1 frame per temperature degree
+    TEMP_DRAIN_INTERVAL: int = struct.field(pytree_node=False, default=65)  # frames between each in-game temperature drop (~2.17s at 60fps)
+    IGLOO_DOOR_HALF_WIDTH: int = struct.field(pytree_node=False, default=4)  # half-width of igloo door collision box
 
     # Sprite duplication modes
     SPRITE_SINGLE: int = struct.field(pytree_node=False, default=0b000)
@@ -396,6 +420,10 @@ class FrostbiteState:
     demo_mode: chex.Array  # 1=demo mode, 0=playing
     igloo_status: chex.Array  # Full igloo status flags
     reserve_lives: chex.Array  # Max 9 reserve lives
+
+    # Precomputed render/collision segments for ice rows (shape: 4x6)
+    ice_segments_x: chex.Array
+    ice_segments_w: chex.Array
     
     # JAX
     rng_key: chex.PRNGKey
@@ -460,28 +488,15 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             consts = FrostbiteConstants()
         super().__init__(consts)
 
-        # how many simulation ticks to run per external step
-        # Default to 2 (equivalent to engine_fps=30)
-        self._substeps = 2
-
         self.renderer = FrostbiteRenderer(self.consts)
     
     def _get_point_value_for_level(self, level: jnp.ndarray):
         """Get point value for level × 10 in BCD format"""
-        # Level 1 = 10 points (0x0010 BCD)
-        # Level 9 = 90 points (0x0090 BCD)
-        # Level 9+ = 90 points (stays at 0x0090 BCD)
-
         points = level * 10
-        # Cap at 90 for level 9+
         points = jnp.minimum(points, 90)
-
-        # Convert decimal to BCD format
         hundreds = points // 100
         tens = (points % 100) // 10
         ones = points % 10
-
-        # Pack into 16-bit BCD (we'll use lower 2 bytes)
         return (hundreds << 8) | (tens << 4) | ones
     
     def _get_obstacle_pattern_mask(self, level: jnp.ndarray):
@@ -518,18 +533,18 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         )
         S = jnp.maximum(S_raw - (reductions * 3), 0)
 
-        # Ice speed: (S >> 1) in fractional units
-        ice_speed_raw = S >> 1
+        # Ice speed: doubled for single-substep 60 Hz parity
+        ice_speed_raw = S
         ice_speed_whole = ice_speed_raw // 16
         ice_speed_frac = ice_speed_raw % 16
 
-        # Obstacle speed: (S - 1) in fractional units
-        obstacle_speed_raw = jnp.maximum(S - 1, 0)
+        # Obstacle speed: doubled for single-substep 60 Hz parity
+        obstacle_speed_raw = jnp.maximum(2 * (S - 1), 0)
         obstacle_speed_whole = obstacle_speed_raw // 16
         obstacle_speed_frac = obstacle_speed_raw % 16
 
-        # Bailey jump speed: S in fractional units
-        bailey_jump_speed_raw = S
+        # Bailey jump speed: doubled for single-substep 60 Hz parity
+        bailey_jump_speed_raw = 2 * S
         bailey_jump_speed_whole = bailey_jump_speed_raw // 16
         bailey_jump_speed_frac = bailey_jump_speed_raw % 16
         
@@ -577,22 +592,34 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         return positions, counts
 
     def _get_row_segments(self, state: FrostbiteState, row_idx: int):
-        block_positions = state.ice_block_positions[row_idx]
-        block_count = state.ice_block_counts[row_idx]
-        breathing_active = (
-            (state.level >= self.consts.ICE_BREATH_MIN_LEVEL) &
-            ((state.level & 1) == 1) &
-            (block_count <= 3)
-        )
-        return _compute_row_segments(
-            self.consts,
-            block_positions,
-            block_count,
-            state.ice_fine_motion_index,
-            breathing_active,
-            state.ice_x[row_idx]
-        )
-    
+        segment_positions = state.ice_segments_x[row_idx]
+        segment_widths = state.ice_segments_w[row_idx]
+        segment_mask = segment_widths > 0
+        return segment_positions, segment_widths, segment_mask
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _compute_ice_segments(self, state: FrostbiteState) -> tuple[jnp.ndarray, jnp.ndarray]:
+        """Precompute per-row ice segment positions and widths for render/collision."""
+        def row_segments(row_idx):
+            block_positions = state.ice_block_positions[row_idx]
+            block_count = state.ice_block_counts[row_idx]
+            breathing_active = (
+                (state.level >= self.consts.ICE_BREATH_MIN_LEVEL) &
+                ((state.level & 1) == 1) &
+                (block_count <= 3)
+            )
+            pos, widths, _ = _compute_row_segments(
+                self.consts,
+                block_positions,
+                block_count,
+                state.ice_fine_motion_index,
+                breathing_active,
+                state.ice_x[row_idx],
+            )
+            return pos, widths
+
+        return jax.vmap(row_segments)(jnp.arange(4, dtype=jnp.int32))
+
     def reset(self, key: jax.random.PRNGKey = None) -> Tuple[FrostbiteObservation, FrostbiteState]:
         """Initialize game state"""
         
@@ -655,7 +682,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             # Level and score
             level=level,
             score=jnp.zeros(3, dtype=jnp.int32),
-            building_igloo_idx=jnp.array(-1, dtype=jnp.int32),
+            building_igloo_idx=jnp.array(self.consts.MAX_IGLOO_INDEX if self.consts.START_IGLOO_COMPLETE else -1, dtype=jnp.int32),
             igloo_entry_status=jnp.array(0, dtype=jnp.int32),
             temperature=jnp.array(self.consts.INIT_TEMPERATURE, dtype=jnp.int32),
             remaining_lives=jnp.array(self.consts.INIT_LIVES, dtype=jnp.int32),
@@ -695,6 +722,8 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             demo_mode=jnp.array(0, dtype=jnp.int32),  # Included but not used
             igloo_status=jnp.array(self.consts.INIT_IGLOO_STATUS, dtype=jnp.int32),
             reserve_lives=jnp.array(self.consts.INIT_LIVES, dtype=jnp.int32),
+            ice_segments_x=jnp.full((4, 6), self.consts.ICE_UNUSED_POS, dtype=jnp.int32),
+            ice_segments_w=jnp.zeros((4, 6), dtype=jnp.int32),
             rng_key=key
         )
         # Spawn all 4 obstacles at the start
@@ -746,7 +775,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             completed_ice_blocks_delay=jnp.array(0, dtype=jnp.int32),
             level=level,
             score=jnp.zeros(3, dtype=jnp.int32),
-            building_igloo_idx=jnp.array(-1, dtype=jnp.int32),
+            building_igloo_idx=jnp.array(self.consts.MAX_IGLOO_INDEX if self.consts.START_IGLOO_COMPLETE else -1, dtype=jnp.int32),
             igloo_entry_status=jnp.array(0, dtype=jnp.int32),
             temperature=jnp.array(self.consts.INIT_TEMPERATURE, dtype=jnp.int32),
             remaining_lives=jnp.array(self.consts.INIT_LIVES, dtype=jnp.int32),
@@ -789,8 +818,12 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             demo_mode=jnp.array(0, dtype=jnp.int32),  # Included but not used
             igloo_status=jnp.array(self.consts.INIT_IGLOO_STATUS, dtype=jnp.int32),
             reserve_lives=jnp.array(self.consts.INIT_LIVES, dtype=jnp.int32),
+            ice_segments_x=jnp.full((4, 6), self.consts.ICE_UNUSED_POS, dtype=jnp.int32),
+            ice_segments_w=jnp.zeros((4, 6), dtype=jnp.int32),
             rng_key=key
         )
+        seg_x, seg_w = self._compute_ice_segments(state)
+        state = state.replace(ice_segments_x=seg_x, ice_segments_w=seg_w)
         
         obs = self._get_observation(state)
         return obs, state
@@ -814,35 +847,31 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         )
 
         # --- Obstacles ---
-        # Logic to extract individual obstacle copies from rows
-        # Each of 4 rows can have multiple copies based on duplication mode
+        # Vectorize over 4 rows without vmap
+        x_base = state.obstacle_x[:, None] # (4, 1)
+        y = state.obstacle_y[:, None] # (4, 1)
+        active = state.obstacle_active[:, None] # (4, 1)
+        dir_ = state.obstacle_directions[:, None] # (4, 1)
+        mode = state.obstacle_duplication_mode # (4,)
         
-        def extract_row_obstacles(i):
-            x_base = state.obstacle_x[i]
-            y = state.obstacle_y[i]
-            active = state.obstacle_active[i]
-            dir_ = state.obstacle_directions[i]
-            mode = state.obstacle_duplication_mode[i]
-            
-            # FIXED: Call instance method without passing self.consts
-            copies, spacing = self._decode_sprite_duplication(mode)
-            
-            # Generate 3 potential slots
-            slots = jnp.arange(3)
-            xs = x_base + slots * spacing
-            valid = (slots < copies) & (active == 1)
-            
-            # Filter out off-screen copies (simple bounding box check)
-            # Obs width is 8x8
-            on_screen = (xs > -8) & (xs < self.consts.SCREEN_WIDTH)
-            
-            final_active = valid & on_screen
-            final_ori = jnp.where(dir_ == 0, 90.0, 270.0) # 0=Right, 1=Left
-            
-            return xs, jnp.full(3, y), jnp.full(3, final_ori), final_active.astype(jnp.int32)
-
-        # Vectorize over 4 rows
-        xs, ys, oris, actives = jax.vmap(extract_row_obstacles)(jnp.arange(4))
+        # _decode_sprite_duplication handles vectors automatically via jnp.where
+        copies, spacing = self._decode_sprite_duplication(mode)
+        copies = copies[:, None] # (4, 1)
+        spacing = spacing[:, None] # (4, 1)
+        
+        slots = jnp.arange(3)[None, :] # (1, 3)
+        xs = x_base + slots * spacing # (4, 3)
+        valid = (slots < copies) & (active == 1) # (4, 3)
+        
+        # Filter out off-screen copies (simple bounding box check)
+        on_screen = (xs > -8) & (xs < self.consts.SCREEN_WIDTH)
+        
+        final_active = valid & on_screen
+        final_ori = jnp.where(dir_ == 0, 90.0, 270.0) # (4, 1)
+        
+        ys = jnp.broadcast_to(y, (4, 3))
+        oris = jnp.broadcast_to(final_ori, (4, 3))
+        actives = final_active.astype(jnp.int32)
         
         # Flatten (4, 3) -> (12,)
         obstacles = ObjectObservation.create(
@@ -871,27 +900,20 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         grid_width = 16 # Discretize screen width into 16 chunks
         sample_xs = jnp.linspace(self.consts.PLAYFIELD_LEFT, self.consts.PLAYFIELD_RIGHT, grid_width).astype(jnp.int32)
         
-        def sample_row(row_idx):
-            # Reuse the renderer's logic to find active segments
-            pos, widths, mask = self._get_row_segments(state, row_idx)
-            
-            def check_point(px):
-                # Check if px falls within any active segment
-                # Check standard position
-                # Note: _compute_row_segments returns canonical positions, so simple check works
-                def is_in_segment(seg_x, seg_w, active):
-                    return active & (px >= seg_x) & (px < seg_x + seg_w)
+        pos = state.ice_segments_x # (4, 6)
+        widths = state.ice_segments_w # (4, 6)
+        mask = widths > 0 # (4, 6)
+        
+        px = sample_xs.reshape(1, 1, 16)
+        seg_x = pos.reshape(4, 6, 1)
+        seg_w = widths.reshape(4, 6, 1)
+        active = mask.reshape(4, 6, 1)
+        
+        hits = active & (px >= seg_x) & (px < seg_x + seg_w) # Shape: (4, 6, 16)
+        ice_grid = jnp.any(hits, axis=1).astype(jnp.int32) # Shape: (4, 16)
 
-                hits = jax.vmap(is_in_segment)(pos, widths, mask)
-                return jnp.any(hits)
-
-            return jax.vmap(check_point)(sample_xs)
-
-        ice_grid = jax.vmap(sample_row)(jnp.arange(4)).astype(jnp.int32)
-
-        # --- Helper for BCD ---
         score_val = self._bcd_to_decimal(state.score)
-        temp_val = self._bcd_to_decimal(jnp.array([0, 0, state.temperature], dtype=jnp.int32)) # Only uses lowest byte
+        temp_val = self._bcd_to_decimal(jnp.array([0, 0, state.temperature], dtype=jnp.int32))
 
         return FrostbiteObservation(
             bailey=bailey,
@@ -954,7 +976,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         # 0-based currentLevel (on-screen level - 1)
         level_idx = jnp.maximum(state.level - 1, 0)
 
-        # Clamp random 0..7 to ≤ min(currentLevel, 7)
+        # Clamp random 0..7 to <= min(currentLevel, 7)
         level_cap = jnp.minimum(level_idx, 7)
         raw_type = rand_val & 7
         raw_type = jnp.minimum(raw_type, level_cap)
@@ -1033,69 +1055,96 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         n = 4
         spawn_mask = spawn_mask.astype(jnp.bool_)
 
-        # One split; use 'key' to draw an (n,) vector and carry 'new_key' forward.
-        key, new_key = jrandom.split(state.rng_key)
-        rand_vals = jrandom.randint(key, (n,), 0, 256, dtype=jnp.int32)
+        def do_spawn(_):
+            # One split; use 'key' to draw an (n,) vector and carry 'new_key' forward.
+            key, new_key = jrandom.split(state.rng_key)
+            rand_vals = jrandom.randint(key, (n,), 0, 256, dtype=jnp.int32)
 
-        level_idx = jnp.maximum(state.level - 1, 0)        # scalar
-        level_cap = jnp.minimum(level_idx, 7)              # scalar
+            level_idx = jnp.maximum(state.level - 1, 0)        # scalar
+            level_cap = jnp.minimum(level_idx, 7)              # scalar
 
-        raw_type = jnp.minimum(rand_vals & 7, level_cap)   # (n,)
-        fish_exhausted = state.number_of_fish_eaten >= self.consts.MAX_EATEN_FISH
-        raw_type = jnp.where(
-            fish_exhausted & (((raw_type & self.consts.OBSTACLE_TYPE_MASK) == self.consts.ID_FISH)),
-            raw_type + 1,
-            raw_type
+            # Match original scalar spawn behavior (biased clamp).
+            raw_type = jnp.minimum(rand_vals & 7, level_cap)   # (n,)
+            fish_exhausted = state.number_of_fish_eaten >= self.consts.MAX_EATEN_FISH
+            raw_type = jnp.where(
+                fish_exhausted & (((raw_type & self.consts.OBSTACLE_TYPE_MASK) == self.consts.ID_FISH)),
+                raw_type + 1,
+                raw_type
+            )
+            new_type = raw_type & self.consts.OBSTACLE_TYPE_MASK  # (n,)
+
+            # Level 2 tuning:
+            # - Always guarantee at least one goose lane when all 4 lanes are spawned.
+            # - Keep the original 12.5% chance to add a second goose in a different lane.
+            level_two = level_idx == 1
+            spawning_all_lanes = jnp.all(spawn_mask)
+            apply_level_two_goose_rule = level_two & spawning_all_lanes
+
+            primary_goose_lane = (rand_vals[0] & 3).astype(jnp.int32)
+            secondary_offset = ((rand_vals[2] % 3) + 1).astype(jnp.int32)  # 1..3 ensures different lane
+            secondary_goose_lane = (primary_goose_lane + secondary_offset) % 4
+            spawn_second_goose = (rand_vals[1] & 7) == 0  # 1/8 = 12.5%
+
+            lane_indices = jnp.arange(n, dtype=jnp.int32)
+            primary_mask = lane_indices == primary_goose_lane
+            secondary_mask = lane_indices == secondary_goose_lane
+
+            forced_types = jnp.where(primary_mask, self.consts.ID_SNOW_GOOSE, new_type)
+            forced_types = jnp.where(spawn_second_goose & secondary_mask, self.consts.ID_SNOW_GOOSE, forced_types)
+            new_type = jnp.where(apply_level_two_goose_rule, forced_types, new_type)
+
+            preserved_bits = state.obstacle_attributes & (self.consts.OBSTACLE_DIR_MASK | self.consts.ICE_BLOCK_DIR_MASK)
+            new_attr = (preserved_bits | new_type) ^ (rand_vals & self.consts.OBSTACLE_DIR_MASK)
+            new_dir = (new_attr >> 7) & 1
+            new_x  = jnp.where(new_dir == 0, self.consts.OBSTACLE_SPAWN_LEFT, self.consts.OBSTACLE_SPAWN_RIGHT)
+
+            # Pattern index selection (scalar -> broadcast), same logic as _spawn_obstacle
+            pattern_table_idx = jnp.where(
+                level_idx == self.consts.POLAR_GRIZZLY_LEVEL,
+                0,
+                level_idx & 3
+            )
+            pattern_indexes = jnp.array([1, 5, 5, 7], dtype=jnp.int32)
+            pat = pattern_indexes[pattern_table_idx]  # scalar
+
+            # max copies derived from pattern
+            max_copies_scalar = jnp.where(pat == 1, 1, jnp.where(pat == 5, 2, 3))
+            max_copies = jnp.full((n,), max_copies_scalar, dtype=jnp.int32)
+
+            # Fish alive bitmask per obstacle
+            initial_fish_mask = jnp.where(
+                new_type == self.consts.ID_FISH,
+                (jnp.int32(1) << max_copies) - 1,   # 1, 3, or 7
+                jnp.int32(0)
+            )
+
+            # Apply per-lane updates only where spawn_mask is True
+            def sel(old, new): return jnp.where(spawn_mask, new, old)
+
+            return state.replace(
+                obstacle_x=sel(state.obstacle_x, new_x),
+                obstacle_types=sel(state.obstacle_types, new_type),
+                obstacle_directions=sel(state.obstacle_directions, new_dir),
+                obstacle_active=sel(state.obstacle_active, jnp.ones((n,), dtype=jnp.int32)),
+                obstacle_pattern_index=sel(state.obstacle_pattern_index, jnp.full((n,), pat, dtype=jnp.int32)),
+                obstacle_max_copies=sel(state.obstacle_max_copies, max_copies),
+                obstacle_attributes=sel(state.obstacle_attributes, new_attr),
+                obstacle_frac_accumulators=sel(state.obstacle_frac_accumulators, jnp.zeros((n,), dtype=jnp.int32)),
+                obstacle_dx_last_frame=sel(state.obstacle_dx_last_frame, jnp.zeros((n,), dtype=jnp.int32)),
+                fish_alive_mask=sel(state.fish_alive_mask, initial_fish_mask),
+                rng_key=new_key
+            )
+
+        return jax.lax.cond(
+            jnp.any(spawn_mask),
+            do_spawn,
+            lambda _: state,
+            None
         )
-        new_type = raw_type & self.consts.OBSTACLE_TYPE_MASK  # (n,)
-
-        preserved_bits = state.obstacle_attributes & (self.consts.OBSTACLE_DIR_MASK | self.consts.ICE_BLOCK_DIR_MASK)
-        new_attr = (preserved_bits | new_type) ^ (rand_vals & self.consts.OBSTACLE_DIR_MASK)
-        new_dir = (new_attr >> 7) & 1
-        new_x  = jnp.where(new_dir == 0, self.consts.OBSTACLE_SPAWN_LEFT, self.consts.OBSTACLE_SPAWN_RIGHT)
-
-        # Pattern index selection (scalar -> broadcast), same logic as _spawn_obstacle
-        pattern_table_idx = jnp.where(
-            level_idx == self.consts.POLAR_GRIZZLY_LEVEL,
-            0,
-            level_idx & 3
-        )
-        pattern_indexes = jnp.array([1, 5, 5, 7], dtype=jnp.int32)
-        pat = pattern_indexes[pattern_table_idx]  # scalar
-
-        # max copies derived from pattern
-        max_copies_scalar = jnp.where(pat == 1, 1, jnp.where(pat == 5, 2, 3))
-        max_copies = jnp.full((n,), max_copies_scalar, dtype=jnp.int32)
-
-        # Fish alive bitmask per obstacle
-        initial_fish_mask = jnp.where(
-            new_type == self.consts.ID_FISH,
-            (jnp.int32(1) << max_copies) - 1,   # 1, 3, or 7
-            jnp.int32(0)
-        )
-
-        # Apply per-lane updates only where spawn_mask is True
-        def sel(old, new): return jnp.where(spawn_mask, new, old)
-
-        state = state.replace(
-            obstacle_x=sel(state.obstacle_x, new_x),
-            obstacle_types=sel(state.obstacle_types, new_type),
-            obstacle_directions=sel(state.obstacle_directions, new_dir),
-            obstacle_active=sel(state.obstacle_active, jnp.ones((n,), dtype=jnp.int32)),
-            obstacle_pattern_index=sel(state.obstacle_pattern_index, jnp.full((n,), pat, dtype=jnp.int32)),
-            obstacle_max_copies=sel(state.obstacle_max_copies, max_copies),
-            obstacle_attributes=sel(state.obstacle_attributes, new_attr),
-            obstacle_frac_accumulators=sel(state.obstacle_frac_accumulators, jnp.zeros((n,), dtype=jnp.int32)),
-            obstacle_dx_last_frame=sel(state.obstacle_dx_last_frame, jnp.zeros((n,), dtype=jnp.int32)),
-            fish_alive_mask=sel(state.fish_alive_mask, initial_fish_mask),
-            rng_key=new_key
-        )
-        return state
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: FrostbiteState, state: FrostbiteState) -> chex.Array:
         """Calculate reward based on score difference."""
-        # Convert BCD scores to decimal values
         prev_score_val = self._bcd_to_decimal(previous_state.score)
         curr_score_val = self._bcd_to_decimal(state.score)
         return (curr_score_val - prev_score_val).astype(jnp.float32)
@@ -1103,14 +1152,12 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: FrostbiteState) -> chex.Array:
         """Check if game is over."""
-        frozen_death_complete = (state.temperature == 0) & (state.bailey_death_frame >= 120)
-        final_death_complete = (state.bailey_death_frame >= 120) & (state.remaining_lives == 0)
+        frozen_death_complete = (state.temperature == 0) & (state.bailey_death_frame >= 60)
+        final_death_complete = (state.bailey_death_frame >= 60) & (state.remaining_lives == 0)
         return frozen_death_complete | final_death_complete
 
     def _bcd_to_decimal(self, bcd_score: jnp.ndarray) -> jnp.ndarray:
         """Convert 3-byte BCD score to decimal value."""
-        # Each byte contains two BCD digits - convert in single expression
-        # This is more JIT-friendly than sequential operations
         return (((bcd_score[0] >> 4) & 0xF) * 100000 +
                 (bcd_score[0] & 0xF) * 10000 +
                 ((bcd_score[1] >> 4) & 0xF) * 1000 +
@@ -1147,7 +1194,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         should_drift = (
             (state.level >= self.consts.ICE_BREATH_MIN_LEVEL) &  # Level 7+
             (state.level % 2 == 1) &  # Odd levels only
-            ((state.frame_count & 7) == 0)  # Update every 8 frames
+            ((state.frame_count & 3) == 0)  # Update every 4 frames
         )
         new_fine_motion_index = jnp.where(
             should_drift,
@@ -1168,26 +1215,15 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         state = self._update_polar_grizzly(state)  # Update bear behavior
 
         def decrement_bcd(temp):
-            """Decrement temperature in BCD (Binary Coded Decimal) format.
-
-            BCD stores each decimal digit in 4 bits, so 45° is stored as 0x45.
-            This function properly handles the decimal carry when decrementing.
-            """
-            ones = temp & 0x0F  # Extract ones digit
-            tens = (temp >> 4) & 0x0F  # Extract tens digit
-
-            # Handle BCD borrow: if ones is 0, borrow from tens and set ones to 9
+            ones = temp & 0x0F
+            tens = (temp >> 4) & 0x0F
             new_ones = jax.lax.cond(ones == 0, lambda: 9, lambda: ones - 1)
             new_tens = jax.lax.cond(ones == 0, lambda: jnp.maximum(0, tens - 1), lambda: tens)
-
-            # Combine digits back to BCD
             result = (new_tens << 4) | new_ones
-
-            # Return 0 if already at 0
             return jax.lax.cond((tens == 0) & (ones == 0), lambda: 0, lambda: result)
 
         # Temperature decreases every ~2.17 seconds (130 frames at 60 FPS)
-        should_decrease_temp = (state.frame_count % 130) == 0
+        should_decrease_temp = (state.frame_count % self.consts.TEMP_DRAIN_INTERVAL) == 0
 
         # Only decrease temperature during active gameplay
         is_playing = (state.bailey_death_frame == 0)  # Not in death animation
@@ -1200,6 +1236,10 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         )
         state = state.replace(temperature=new_temperature)
 
+        # Precompute ice segments for rendering and collision
+        seg_x, seg_w = self._compute_ice_segments(state)
+        state = state.replace(ice_segments_x=seg_x, ice_segments_w=seg_w)
+
         # Check for collisions and special conditions
         state = self._check_collisions(state)  # Handle Bailey-ice collisions
         state = self._check_igloo_entry(state, action)  # Check if Bailey enters igloo
@@ -1208,10 +1248,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         reward = self._get_reward(prev_state, state)
         done = self._get_done(state)
 
-        obs = self._get_observation(state)
-        info = self._get_info(state)
-
-        return obs, state, reward, done, info
+        return state, reward, done
 
     @partial(jax.jit, static_argnums=(0,))
     def _check_jump_intent(self, state: FrostbiteState, action: jnp.ndarray, moving_up: jnp.ndarray, moving_down: jnp.ndarray):
@@ -1220,25 +1257,14 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: FrostbiteState, action: int):
-        # Translate agent action index to ALE console action
         atari_action = jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
-        """Framesafe wrapper: run the 60 Hz simulation multiple times per engine tick."""
-        def body(carry, _):
-            st, reward_sum = carry
-            obs, st, r, done, info = self._step_once(st, atari_action)
-            # We keep simulating for determinism even if done flips; callers can stop next frame.
-            return (st, reward_sum + r), (obs, done, info)
 
-        (state_out, reward_total), (obs_seq, done_seq, info_seq) = jax.lax.scan(
-            body, (state, jnp.array(0.0, dtype=jnp.float32)), None, length=self._substeps
-        )
+        state_out, reward, done = self._step_once(state, atari_action)
 
-        # take the last substep's values
-        obs_last  = tree_util.tree_map(lambda x: x[-1], obs_seq)
-        info_last = tree_util.tree_map(lambda x: x[-1], info_seq)
-        done_last = done_seq[-1]
+        obs_last = self._get_observation(state_out)
+        info_last = self._get_info(state_out)
 
-        return obs_last, state_out, reward_total, done_last, info_last
+        return obs_last, state_out, reward, done, info_last
 
     def _process_level_complete(self, state: FrostbiteState):
         """Handle level completion sequence with igloo deconstruction.
@@ -1286,11 +1312,11 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
 
         # When all blocks are removed, start temperature countdown phase
         blocks_just_finished = is_level_complete & (state.building_igloo_idx == 0) & (new_building_idx < 0)
-        new_delay = jnp.where(blocks_just_finished, 90, new_delay)  # Reset timer for temp phase
+        new_delay = jnp.where(blocks_just_finished, 45, new_delay)  # Reset timer for temp phase
 
         # Phase 2: Decrement temperature to zero
         in_temp_phase = is_level_complete & (new_building_idx < 0) & (state.temperature > 0)
-        temp_elapsed = 90 - new_delay  # Frames elapsed in temperature phase
+        temp_elapsed = 45 - new_delay  # Frames elapsed in temperature phase
 
         # Decrement temperature every TEMP_DECREMENT_DELAY frames
         should_decrement_temp = (
@@ -1298,20 +1324,15 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             ((temp_elapsed % self.consts.TEMP_DECREMENT_DELAY) == 0)
         )
 
+        # Update temperature during countdown
         def decrement_temp_bcd(temp):
-            """Decrement temperature by 1 degree in BCD format."""
             ones = temp & 0x0F
             tens = (temp >> 4) & 0x0F
-            # Handle BCD borrow when ones digit is 0
             new_ones = jnp.where(ones > 0, ones - 1, 9)
             new_tens = jnp.where(ones == 0, jnp.maximum(0, tens - 1), tens)
             result = (new_tens << 4) | new_ones
             return jnp.where((tens == 0) & (ones == 0), 0, result)
-
-        # Update temperature during countdown
-        new_temperature = jnp.where(
-            should_decrement_temp, decrement_temp_bcd(state.temperature), state.temperature
-        )
+        new_temperature = jnp.where(should_decrement_temp, decrement_temp_bcd(state.temperature), state.temperature)
 
         # Award points for each temperature degree (same as block points)
         temp_points = jnp.where(should_decrement_temp, point_value, 0)
@@ -1488,6 +1509,8 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             bailey_grizzly_collision_timer=new_bailey_grizzly_collision_timer,
             bailey_grizzly_collision_value=new_bailey_grizzly_collision_value
         )
+        seg_x, seg_w = self._compute_ice_segments(next_state)
+        next_state = next_state.replace(ice_segments_x=seg_x, ice_segments_w=seg_w)
 
         # Spawn 4 new obstacles when level resets
         def _spawn_all(s):
@@ -1571,7 +1594,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         x_max = self.consts.SHORE_X_MAX
 
         # Automatic movement toward igloo during entry sequence
-        target_igloo_x = 123  # Fixed igloo X position
+        target_igloo_x = self.consts.TARGET_IGLOO_X  # Mod-aware igloo X position
         auto_dx = jnp.where(
             is_entering_igloo,
             jnp.sign(target_igloo_x - state.bailey_x) * jnp.minimum(2, jnp.abs(target_igloo_x - state.bailey_x)),
@@ -1616,7 +1639,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         can_start_jump = state.bailey_jumping_idx == 0  # Not already jumping
 
         # Special case: automatic jump when entering igloo
-        at_igloo_x = jnp.abs(state.bailey_x - 123) <= 1
+        at_igloo_x = jnp.abs(state.bailey_x - target_igloo_x) <= 1
         should_jump_for_igloo = is_entering_igloo & at_igloo_x
 
         # Determine jump intent using the refactored method
@@ -1656,7 +1679,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         # Walking animation cycles between two frames
         # Bear chase overrides walking animation (controlled by bear logic)
         is_moving = (moving_left | moving_right | is_entering_igloo) & ~being_chased_by_bear
-        walk_frame = jnp.where(is_moving, (state.frame_count >> 3) & 1, 0)  # Toggle every 8 frames
+        walk_frame = jnp.where(is_moving, (state.frame_count >> 2) & 1, 0)  # Toggle every 4 frames
 
         # Select final animation frame
         new_animation = jnp.where(
@@ -1690,18 +1713,21 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             Tuple of (new_jump_index, new_y_position)
         """
 
-        # Load jump offset table - contains Y deltas for each frame of jump
+        # Load jump offset table - contains Y deltas per ALE frame.
+        # Advance by 2 entries per step (2 ALE frames per JAX step for 60 Hz parity).
         offset_table = jnp.array(self.consts.BAILEY_JUMP_OFFSETS)
 
-        # Advance jump animation by one frame
-        raw_next_idx = jump_idx - 1
-        table_idx = jnp.clip(raw_next_idx, 0, 31)  # Ensure valid table index
-        offset = offset_table[table_idx]  # Get Y offset for this frame
+        idx_a_raw = jump_idx - 1
+        idx_b_raw = jump_idx - 2
+        offset_a = offset_table[jnp.clip(idx_a_raw, 0, 31)]
+        # Only add second entry if it's a valid (non-negative) index
+        offset_b = jnp.where(idx_b_raw >= 0, offset_table[jnp.clip(idx_b_raw, 0, 31)], 0)
+        offset = offset_a + offset_b
         new_y = current_y + offset
 
-        # Handle jump completion
-        # Index 16 is the transition point between down and up jumps
-        next_idx = jnp.where(raw_next_idx == 16, 0, raw_next_idx)
+        # Handle jump completion: index 16 is the transition / termination point
+        raw_next_idx = jump_idx - 2
+        next_idx = jnp.where((jump_idx - 1 == 16) | (jump_idx - 2 == 16), 0, raw_next_idx)
         next_idx = jnp.maximum(0, next_idx)
 
         # Special case: Add extra drop when landing on first ice row
@@ -1805,31 +1831,22 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         block_counts = jnp.where(layout_changed, base_counts, state.ice_block_counts)
 
         # Ice movement calculation using fractional accumulator system
-        # This provides smooth sub-pixel movement across different speeds
         should_move = jnp.bitwise_and(state.frame_count, 1) == 0  # Move every other frame
-
-        # Whole pixel component of speed
         speed_whole = jnp.where(
             should_move,
             state.ice_speed_whole.astype(jnp.int32),
             jnp.zeros_like(state.ice_speed_whole, dtype=jnp.int32)
         )
-
-        # Fractional component (in 1/16 pixel units)
         frac_increment = jnp.where(
             should_move,
             state.ice_speed_frac,
             jnp.zeros_like(state.ice_speed_frac)
         )
-
-        # Accumulate fractional movement and convert to pixels
         frac_sum = state.ice_frac_accumulators + frac_increment
-        extra_pixels = frac_sum // 16  # Convert 16ths to whole pixels
+        extra_pixels = frac_sum // 16
         new_frac = jnp.where(should_move, frac_sum % 16, state.ice_frac_accumulators)
-
-        # Calculate total movement for this frame
         move_pixels = speed_whole + extra_pixels
-        direction = jnp.where(new_ice_directions == 0, 1, -1)  # 0=right(+1), 1=left(-1)
+        direction = jnp.where(new_ice_directions == 0, 1, -1)
         move_dx = direction * move_pixels
         move_dx = jnp.where(block_counts > 0, move_dx, jnp.int32(0))  # Only move active rows
 
@@ -1897,7 +1914,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
 
         # Return updated state with new ice positions and directions
         new_block_counts = block_counts
-        return state.replace(
+        next_state = state.replace(
             ice_x=new_ice_x,  # Leftmost position of each row
             ice_block_positions=updated_positions,  # All block positions
             ice_block_counts=new_block_counts,  # Blocks per row (3 or 6)
@@ -1906,6 +1923,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             ice_dx_last_frame=move_dx,  # Movement from this frame (for Bailey drift)
             building_igloo_idx=new_building_idx  # Updated after reversal cost
         )
+        return next_state
     
     def _update_obstacles(self, state: FrostbiteState):
         """Update all obstacles (birds, fish, crabs, clams) with movement and spawning.
@@ -1915,7 +1933,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         - Level 5+ stuttering behavior (crabs/clams alternate freezing)
         - Despawn/respawn when off-screen
         - Animation frame cycling
-        - Sprite duplication patterns for gradual reveal
+        - Sprite duplication patterns
 
         Args:
             state: Current game state
@@ -1934,8 +1952,6 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         frac_acc = state.obstacle_frac_accumulators + frac_increment
         pixels = (state.obstacle_speed_whole.astype(jnp.int32) * move_mask) + (frac_acc // 16)
         new_frac = jnp.where(should_move, frac_acc % 16, state.obstacle_frac_accumulators)
-
-        # Apply direction to movement (0=right, 1=left)
         dx = jnp.where(state.obstacle_directions == 0, pixels, -pixels)
 
         # Phase 2: Level 5+ stuttering movement pattern
@@ -2020,29 +2036,9 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         float_offsets = jnp.where(state.obstacle_active == 1, float_offsets, jnp.zeros_like(float_offsets))
 
         # Sprite duplication pattern calculation
-        # Creates gradual reveal effect as obstacles enter from screen edge
-        # Birds appear as 1, then 2, then 3 copies as they move onto screen
-
-        # Position threshold for pattern calculation
-        XMAX_MINUS_32 = 128  # Screen edge minus margin
-
-        # Calculate masking index based on X position
-        # Far off-screen obstacles use full mask (index 8)
-        # As they approach, mask reduces to reveal more copies
-        masking_idx = jnp.where(
-            state.obstacle_x < XMAX_MINUS_32,
-            8,  # Full mask when far off-screen
-            jnp.minimum((state.obstacle_x - XMAX_MINUS_32) // 16, 8)  # Gradual reveal
-        )
-
-        # Masking values control how many bits of pattern index are used
-        # Lower values = fewer copies, higher values = more copies
-        masking_values = jnp.array([6, 4, 0, 0, 0, 0, 1, 3, 7], dtype=jnp.int32)
-        masking_idx = jnp.clip(masking_idx, 0, 8)
-        mask_value = masking_values[masking_idx]
-
-        # Apply mask to pattern index to determine duplication mode
-        table_idx = state.obstacle_pattern_index & mask_value
+        # Duplication mode is stable for the full screen traversal; derived
+        # directly from the pattern index assigned at spawn time.
+        table_idx = state.obstacle_pattern_index & 7
 
         # Lookup table for sprite duplication modes
         # Maps pattern index to number of copies and spacing
@@ -2111,7 +2107,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         # Y positions: shore at 56, then ice rows at 84, 109, 134, 159
         bailey_ice_y = jnp.array([84, 109, 134, 159])
         y_distances = jnp.abs(state.bailey_y - bailey_ice_y)
-        bailey_row = jnp.where(jnp.min(y_distances) < 3, jnp.argmin(y_distances), -1)
+        bailey_row = jnp.where(jnp.min(y_distances) < 8, jnp.argmin(y_distances), -1)
 
         def check_collision_for_row(row_idx):
             """Check if Bailey is standing on any ice block in the specified row."""
@@ -2200,7 +2196,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
 
         # Death animation management
         just_died = (state.bailey_alive == 1) & (new_alive == 0)
-        animation_in_progress = (state.bailey_death_frame > 0) & (state.bailey_death_frame < 120)
+        animation_in_progress = (state.bailey_death_frame > 0) & (state.bailey_death_frame < 60)
 
         # Start or continue death animation
         new_death_frame = jnp.where(
@@ -2209,9 +2205,9 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         )
 
         # Life management after death animation completes
-        death_animation_complete = state.bailey_death_frame >= 120
+        death_animation_complete = state.bailey_death_frame >= 60
         new_remaining_lives = jnp.where(
-            death_animation_complete & (state.bailey_death_frame == 120),
+            death_animation_complete & (state.bailey_death_frame == 60),
             jnp.maximum(0, state.remaining_lives - 1),
             state.remaining_lives
         )
@@ -2366,7 +2362,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         
         all_blue = jnp.all(new_ice_colors == self.consts.COLOR_ICE_BLUE)
         new_delay = jnp.where(
-            all_blue & (state.completed_ice_blocks_delay == 0), 32,
+            all_blue & (state.completed_ice_blocks_delay == 0), 16,
             jnp.maximum(0, state.completed_ice_blocks_delay - 1)
         )
         
@@ -2440,45 +2436,22 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         return updated_state
     
     def _add_bcd_score(self, score, points):
-        """Add points to BCD score (Binary Coded Decimal).
-
-        The original Atari used BCD format where each nibble (4 bits) represents
-        a decimal digit 0-9. This method converts BCD points to decimal, adds them
-        to the score, then stores the result back in our simplified BCD format.
-
-        Args:
-            score: 3-element array [ten-thousands/thousands, hundreds/tens, ones]
-            points: Points to add in BCD format (e.g., 0x10 = 10 points, 0x90 = 90 points)
-
-        Returns:
-            Updated score array in the same format
-        """
-        # Convert the 3-element score array to a single decimal value
-        # score[0] holds digits 5-4 (ten-thousands and thousands)
-        # score[1] holds digits 3-2 (hundreds and tens)
-        # score[2] holds digits 1-0 (ones)
+        """Add points to BCD score (Binary Coded Decimal)."""
         current = self._bcd_to_decimal(score)
-
-        # Convert BCD points to decimal (handles up to 3 digits)
-        # For values like 0x0100 (100 in BCD), extract all digits
         hundreds = (points >> 8) & 0x0F
         tens = (points >> 4) & 0x0F
         ones = points & 0x0F
         decimal_points = hundreds * 100 + tens * 10 + ones
         new_total = current + decimal_points
-
-        # Convert back to BCD format (each byte stores 2 BCD digits)
         d5 = (new_total // 100000) % 10
         d4 = (new_total // 10000) % 10
         d3 = (new_total // 1000) % 10
         d2 = (new_total // 100) % 10
         d1 = (new_total // 10) % 10
         d0 = new_total % 10
-
         new_score = score.at[0].set((d5 << 4) | d4)
         new_score = new_score.at[1].set((d3 << 4) | d2)
         new_score = new_score.at[2].set((d1 << 4) | d0)
-
         return new_score
     
     def _check_extra_life(self, old_score, new_score, lives):
@@ -2489,19 +2462,17 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         and awards lives accordingly. Maximum of 9 reserve lives is enforced.
 
         Args:
-            old_score: Previous score array [ten-thousands/thousands, hundreds/tens, ones]
-            new_score: Updated score array after points were added
+            old_score: Previous integer score
+            new_score: Updated integer score after points were added
             lives: Current number of reserve lives
 
         Returns:
             Updated number of lives, capped at 9 (hardcoded limit)
         """
-        # Convert BCD scores to decimal for threshold calculation
-        old_total = self._bcd_to_decimal(old_score)
-        new_total = self._bcd_to_decimal(new_score)
-
         # Calculate how many 5000-point thresholds were crossed
         # Integer division gives us the number of extra lives earned so far
+        old_total = self._bcd_to_decimal(old_score)
+        new_total = self._bcd_to_decimal(new_score)
         old_lives_earned = old_total // 5000
         new_lives_earned = new_total // 5000
 
@@ -2513,37 +2484,17 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         return new_lives
     
     def _add_bcd_score_decimal(self, score, decimal_points):
-        """Add decimal points directly to BCD score.
-
-        Unlike _add_bcd_score which expects BCD-formatted points, this method
-        accepts points already converted to decimal. Used for temperature bonus
-        scoring where the temperature value is already in a decimal format.
-
-        Args:
-            score: 3-element array [ten-thousands/thousands, hundreds/tens, ones]
-            decimal_points: Points to add as a decimal integer (e.g., 45 for 45 points)
-
-        Returns:
-            Updated score array maintaining the same 3-element format
-        """
-        # Convert current score from 3-element array to decimal
         current = self._bcd_to_decimal(score)
-
-        # Add the decimal points directly (no BCD conversion needed)
         new_total = current + decimal_points
-
-        # Convert back to BCD format (each byte stores 2 BCD digits)
         d5 = (new_total // 100000) % 10
         d4 = (new_total // 10000) % 10
         d3 = (new_total // 1000) % 10
         d2 = (new_total // 100) % 10
         d1 = (new_total // 10) % 10
         d0 = new_total % 10
-
         new_score = score.at[0].set((d5 << 4) | d4)
         new_score = new_score.at[1].set((d3 << 4) | d2)
         new_score = new_score.at[2].set((d1 << 4) | d0)
-
         return new_score
     
     @partial(jax.jit, static_argnums=(0,))
@@ -2762,7 +2713,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
 
         # Animation timing
         frame_mod4 = state.frame_count & 3  # For chase movement (every 4th frame)
-        bailey_chase_animation = (state.frame_count >> 1) & 3  # Bailey's dragged animation
+        bailey_chase_animation = state.frame_count & 3  # Bailey's dragged animation
 
         def chase_branch(_):
             """Handle bear dragging Bailey off-screen to his doom."""
@@ -2780,7 +2731,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
 
             # Update chase timer for animation
             chase_timer = state.bailey_grizzly_collision_timer + 1
-            chase_anim_idx = ((chase_timer >> 3) & 7).astype(jnp.int32)  # 8-frame animation cycle, slower (every 8 frames)
+            chase_anim_idx = ((chase_timer >> 2) & 7).astype(jnp.int32)  # 8-frame animation cycle (every 4 frames)
 
             return state.replace(
                 polar_grizzly_active=new_active,
@@ -2910,10 +2861,9 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         not_jumping = state.bailey_jumping_idx == 0
         not_entering = state.igloo_entry_status == 0
 
-        # Door collision box (igloo door is at specific X position)
-        door_x = 122
-        bailey_right_edge = state.bailey_x + 16
-        near_door = (bailey_right_edge >= door_x) & (state.bailey_x <= door_x + 8)
+        # Door collision: asymmetric window around TARGET_IGLOO_X (left side 1px narrower)
+        near_door = (state.bailey_x >= self.consts.TARGET_IGLOO_X - self.consts.IGLOO_DOOR_HALF_WIDTH + 1) & \
+                    (state.bailey_x <= self.consts.TARGET_IGLOO_X + self.consts.IGLOO_DOOR_HALF_WIDTH)
 
         # Check if player is pressing UP (or diagonal up)
         pressing_up = (action == Action.UP) | (action == Action.UPLEFT) | (action == Action.UPRIGHT)
@@ -3055,8 +3005,8 @@ class FrostbiteRenderer(JAXGameRenderer):
         crab_1 = self._load_frame_legacy("king_crab_01.npy")
         clam_0 = jnp.flip(self._load_frame_legacy("clam_00.npy"), axis=1)
         clam_1 = jnp.flip(self._load_frame_legacy("clam_01.npy"), axis=1)
-        bear_0 = self._load_frame_legacy("bear_00.npy")
-        bear_1 = self._load_frame_legacy("bear_01.npy")
+        bear_0 = self._load_frame_legacy(self.consts.BEAR_SPRITE_0)
+        bear_1 = self._load_frame_legacy(self.consts.BEAR_SPRITE_1)
         igloo_block = self._load_frame_legacy("igloo_block_00.npy")
         igloo_door = self._load_frame_legacy("igloo_door.npy")
         degree_symbol = self._load_frame_legacy("degree_symbol.npy")
@@ -3078,50 +3028,50 @@ class FrostbiteRenderer(JAXGameRenderer):
         # Apply custom RGB colors if set by mods
         if self.consts.RGB_ICE_WHITE is not None:
             r, g, b = self.consts.RGB_ICE_WHITE
-            ice_wide_white = jnp.where(
-                ice_wide_white[..., 3:4] > 0,
-                jnp.concatenate([
-                    jnp.full_like(ice_wide_white[..., 0:1], r),
-                    jnp.full_like(ice_wide_white[..., 1:2], g),
-                    jnp.full_like(ice_wide_white[..., 2:3], b),
-                    ice_wide_white[..., 3:4]
-                ], axis=-1),
-                ice_wide_white
-            ).astype(ice_wide_white.dtype)
-            ice_narrow_white = jnp.where(
-                ice_narrow_white[..., 3:4] > 0,
-                jnp.concatenate([
-                    jnp.full_like(ice_narrow_white[..., 0:1], r),
-                    jnp.full_like(ice_narrow_white[..., 1:2], g),
-                    jnp.full_like(ice_narrow_white[..., 2:3], b),
-                    ice_narrow_white[..., 3:4]
-                ], axis=-1),
-                ice_narrow_white
-            ).astype(ice_narrow_white.dtype)
+            ice_wide_white = self._apply_custom_tint(ice_wide_white, r, g, b)
+            ice_narrow_white = self._apply_custom_tint(ice_narrow_white, r, g, b)
 
         if self.consts.RGB_ICE_BLUE is not None:
             r, g, b = self.consts.RGB_ICE_BLUE
-            ice_wide_blue = jnp.where(
-                ice_wide_blue[..., 3:4] > 0,
-                jnp.concatenate([
-                    jnp.full_like(ice_wide_blue[..., 0:1], r),
-                    jnp.full_like(ice_wide_blue[..., 1:2], g),
-                    jnp.full_like(ice_wide_blue[..., 2:3], b),
-                    ice_wide_blue[..., 3:4]
-                ], axis=-1),
-                ice_wide_blue
-            ).astype(ice_wide_blue.dtype)
-            ice_narrow_blue = jnp.where(
-                ice_narrow_blue[..., 3:4] > 0,
-                jnp.concatenate([
-                    jnp.full_like(ice_narrow_blue[..., 0:1], r),
-                    jnp.full_like(ice_narrow_blue[..., 1:2], g),
-                    jnp.full_like(ice_narrow_blue[..., 2:3], b),
-                    ice_narrow_blue[..., 3:4]
-                ], axis=-1),
-                ice_narrow_blue
-            ).astype(ice_narrow_blue.dtype)
-        
+            ice_wide_blue = self._apply_custom_tint(ice_wide_blue, r, g, b)
+            ice_narrow_blue = self._apply_custom_tint(ice_narrow_blue, r, g, b)
+
+        if self.consts.RGB_GEESE is not None:
+            r, g, b = self.consts.RGB_GEESE
+            geese_0 = self._apply_custom_tint(geese_0, r, g, b)
+            geese_1 = self._apply_custom_tint(geese_1, r, g, b)
+
+        if self.consts.RGB_FISH is not None:
+            r, g, b = self.consts.RGB_FISH
+            fish_0 = self._apply_custom_tint(fish_0, r, g, b)
+            fish_1 = self._apply_custom_tint(fish_1, r, g, b)
+
+        if self.consts.RGB_CRAB is not None:
+            r, g, b = self.consts.RGB_CRAB
+            crab_0 = self._apply_custom_tint(crab_0, r, g, b)
+            crab_1 = self._apply_custom_tint(crab_1, r, g, b)
+
+        if self.consts.RGB_CLAM is not None:
+            r, g, b = self.consts.RGB_CLAM
+            clam_0 = self._apply_custom_tint(clam_0, r, g, b)
+            clam_1 = self._apply_custom_tint(clam_1, r, g, b)
+
+        if self.consts.RGB_IGLOO is not None:
+            r, g, b = self.consts.RGB_IGLOO
+            igloo_block = self._apply_custom_tint(igloo_block, r, g, b)
+            # The door is black (0,0,0); tinting it makes it disappear into the igloo blocks.
+            # We leave igloo_door as-is.
+
+        if self.consts.RGB_NIGHT is not None:
+            r, g, b = self.consts.RGB_NIGHT
+            bg_night = self._apply_custom_tint(bg_night, r, g, b)
+            bg_day = self._apply_custom_tint(bg_day, r, g, b)
+
+        if self.consts.DRAW_SHORE_LINE:
+            line_color = jnp.array([255, 255, 255, 255], dtype=jnp.uint8)
+            bg_night = bg_night.at[78, :].set(line_color)
+            bg_day = bg_day.at[78, :].set(line_color)
+
         # Bear (Lightened for Night)
         bear_0_light = self._lighten_bear(bear_0)
         bear_1_light = self._lighten_bear(bear_1)
@@ -3188,26 +3138,189 @@ class FrostbiteRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
-        
+
         # 5. Store helper dimensions
         self.DIGIT_MASKS = self.SHAPE_MASKS['digits']
         self.BAILEY_MASKS = self.SHAPE_MASKS['bailey']
         self.BAILEY_FROZEN_MASKS = self.SHAPE_MASKS['bailey_frozen']
+        # Pre-flipped Bailey stacks to avoid runtime jnp.flip in render hot path.
+        self.BAILEY_MASKS_FLIPPED = jnp.flip(self.BAILEY_MASKS, axis=2)
+        self.BAILEY_FROZEN_MASKS_FLIPPED = jnp.flip(self.BAILEY_FROZEN_MASKS, axis=2)
         self.ICE_MASKS = self.SHAPE_MASKS['ice']
         self.GEESE_MASKS = self.SHAPE_MASKS['geese']
         self.FISH_MASKS = self.SHAPE_MASKS['fish']
         self.CRAB_MASKS = self.SHAPE_MASKS['crab']
         self.CLAM_MASKS = self.SHAPE_MASKS['clam']
+
+        obstacle_target_h = max(
+            self.GEESE_MASKS.shape[1],
+            self.FISH_MASKS.shape[1],
+            self.CRAB_MASKS.shape[1],
+            self.CLAM_MASKS.shape[1],
+        )
+        obstacle_target_w = max(
+            self.GEESE_MASKS.shape[2],
+            self.FISH_MASKS.shape[2],
+            self.CRAB_MASKS.shape[2],
+            self.CLAM_MASKS.shape[2],
+        )
+        # Keep HUD glyphs in their native size and also precompute obstacle-width
+        # variants (8x8) so HUD and obstacle stacks can be concatenated in one batch.
+        self.DIGIT_MASKS_W8 = self._pad_mask_stack_to_shape(
+            self.DIGIT_MASKS,
+            self.DIGIT_MASKS.shape[1],
+            obstacle_target_w,
+            self.jr.TRANSPARENT_ID
+        )
+        self.GEESE_MASKS = self._pad_mask_stack_to_shape(
+            self.GEESE_MASKS, obstacle_target_h, obstacle_target_w, self.jr.TRANSPARENT_ID
+        )
+        # Pad Geese to 10 frames to match fish/crab/clam stacks for vectorized selection
+        self.GEESE_MASKS = jnp.pad(
+            self.GEESE_MASKS,
+            ((0, 8), (0, 0), (0, 0)),
+            mode="constant",
+            constant_values=self.jr.TRANSPARENT_ID,
+        )
+        self.FISH_MASKS = self._pad_mask_stack_to_shape(
+            self.FISH_MASKS, obstacle_target_h, obstacle_target_w, self.jr.TRANSPARENT_ID
+        )
+        self.CRAB_MASKS = self._pad_mask_stack_to_shape(
+            self.CRAB_MASKS, obstacle_target_h, obstacle_target_w, self.jr.TRANSPARENT_ID
+        )
+        self.CLAM_MASKS = self._pad_mask_stack_to_shape(
+            self.CLAM_MASKS, obstacle_target_h, obstacle_target_w, self.jr.TRANSPARENT_ID
+        )
+
+        # Pad ice masks to uniform shape for batched segment rendering
+        ice_target_h = jnp.max(jnp.array([m.shape[0] for m in self.ICE_MASKS]))
+        ice_target_w = jnp.max(jnp.array([m.shape[1] for m in self.ICE_MASKS]))
+        self.ICE_MASKS = self._pad_mask_stack_to_shape(
+            self.ICE_MASKS, ice_target_h, ice_target_w, self.jr.TRANSPARENT_ID
+        )
+
         self.BEAR_MASKS = self.SHAPE_MASKS['bear']
         self.BEAR_LIGHT_MASKS = self.SHAPE_MASKS['bear_light']
+        # Pre-flipped Bear stacks to avoid runtime jnp.flip in render hot path.
+        self.BEAR_MASKS_FLIPPED = jnp.flip(self.BEAR_MASKS, axis=2)
+        self.BEAR_LIGHT_MASKS_FLIPPED = jnp.flip(self.BEAR_LIGHT_MASKS, axis=2)
         self.IGLOO_BLOCK_MASK = self.SHAPE_MASKS['igloo'][0]
         self.IGLOO_DOOR_MASK = self.SHAPE_MASKS['igloo'][1]
         self.DEGREE_MASK = self.SHAPE_MASKS['degree']
+        # Pad degree mask to digit shape for vectorized HUD rendering
+        self.DEGREE_MASK = self._pad_mask_stack_to_shape(
+            self.DEGREE_MASK[jnp.newaxis],
+            self.DIGIT_MASKS.shape[1],
+            self.DIGIT_MASKS.shape[2],
+            self.jr.TRANSPARENT_ID
+        )[0]
+        self.DEGREE_MASK_W8 = self._pad_mask_stack_to_shape(
+            self.DEGREE_MASK[jnp.newaxis],
+            self.DIGIT_MASKS.shape[1],
+            obstacle_target_w,
+            self.jr.TRANSPARENT_ID
+        )[0]
         self.BLACK_BAR_MASK = self.SHAPE_MASKS['black_bar']
-        
+
+        # Pre-calculate a single stack of all obstacle masks for vectorized rendering
+        # Geese: 10 (padded). Fish: 10. Crab: 10. Clam: 10. Total 40.
+        # Geese: [0..9]  (frames 0-1 real, 2-9 transparent padding)
+        # Fish:  [10..19] (anim*5 + float_offset)
+        # Crab:  [20..29]
+        # Clam:  [30..39]
+        self.ALL_OBSTACLE_MASKS = jnp.concatenate([
+            self.GEESE_MASKS,
+            self.FISH_MASKS,
+            self.CRAB_MASKS,
+            self.CLAM_MASKS,
+        ], axis=0)
+        # Pre-flipped stack (indices 40-79) avoids runtime jnp.flip when vmapped
+        self.ALL_OBSTACLE_MASKS_BOTH = jnp.concatenate([
+            self.ALL_OBSTACLE_MASKS,
+            jnp.flip(self.ALL_OBSTACLE_MASKS, axis=2),
+        ], axis=0)
+
         # Convert ICE_ROW_Y tuple to JAX array for dynamic indexing
         self.ICE_ROW_Y_ARRAY = jnp.array(self.consts.ICE_ROW_Y, dtype=jnp.int32)
-    
+
+        # Pre-tile one 152px-wide palette-ID strip per ice variant so the render
+        # loop stamps one strip per row (3 dynamic_update_slice calls) instead of
+        # one sprite per segment (up to 18 calls).  Built once at init, zero cost
+        # at render time.
+        _STRIP_W = self.consts.PLAYFIELD_WIDTH   # 152
+        _TRANSP  = self.jr.TRANSPARENT_ID
+
+        def _build_strip(block_mask, n_blocks, spacing):
+            H, BW = block_mask.shape
+            strip = jnp.full((H, _STRIP_W), _TRANSP, dtype=block_mask.dtype)
+            for i in range(n_blocks):
+                off = i * spacing
+                if off >= _STRIP_W:
+                    break
+                actual_end = min(off + BW, _STRIP_W)
+                piece = block_mask[:, :actual_end - off]
+                strip = strip.at[:, off:actual_end].set(
+                    jnp.where(piece != _TRANSP, piece, strip[:, off:actual_end])
+                )
+            return strip
+
+        _ws = self.consts.ICE_WIDE_SPACING    # 32
+        _ns = self.consts.ICE_NARROW_SPACING  # 16
+        self.ICE_STRIP_WIDE_WHITE   = _build_strip(self.ICE_MASKS[0], 3, _ws)
+        self.ICE_STRIP_WIDE_BLUE    = _build_strip(self.ICE_MASKS[1], 3, _ws)
+        self.ICE_STRIP_NARROW_WHITE = _build_strip(self.ICE_MASKS[2], 6, _ns)
+        self.ICE_STRIP_NARROW_BLUE  = _build_strip(self.ICE_MASKS[3], 6, _ns)
+
+        self.ICE_STRIPS = jnp.stack([
+            self.ICE_STRIP_WIDE_WHITE,    # 0
+            self.ICE_STRIP_WIDE_BLUE,     # 1
+            self.ICE_STRIP_NARROW_WHITE,  # 2
+            self.ICE_STRIP_NARROW_BLUE,   # 3
+        ])  # (4, H, STRIP_W)
+
+        # Pre-build 17 igloo canvas layers (indices 0..16, where index = building_igloo_idx+1).
+        # Each canvas is a 24×32 palette-ID sprite covering the full igloo bounding box.
+        # At render time we index once and stamp with a single render_at call instead of
+        # running fori_loop(0,16) with multiple lax.cond calls per iteration.
+        _CH, _CW = 24, 32
+        _cx0, _cy0 = 111 + self.consts.IGLOO_X_OFFSET, 35   # canvas origin in raster coords
+
+        _bm = _np.array(self.IGLOO_BLOCK_MASK)   # (8,8) palette IDs
+        _dm = _np.array(self.IGLOO_DOOR_MASK)    # (8,8) palette IDs
+        _TRANSP_NP = int(self.jr.TRANSPARENT_ID)
+
+        # Canvas-relative (x, y) for each block 0..15
+        _BLK_CX = _np.array([0, 8, 16, 24, 24, 16, 8, 0, 0, 8, 16, 24, 4, 16, 8, 11], dtype=_np.int32)
+        _BLK_CY = _np.array([16,16, 16,16, 12, 12,12,12, 8, 8,  8,  8, 4,  4, 0, 12], dtype=_np.int32)
+
+        def _stamp_np(canvas, bx, by, mask):
+            ey = min(by + mask.shape[0], _CH)
+            ex = min(bx + mask.shape[1], _CW)
+            if ey <= by or ex <= bx:
+                return canvas
+            src = mask[:ey - by, :ex - bx]
+            dst = canvas[by:ey, bx:ex]
+            canvas[by:ey, bx:ex] = _np.where(src != _TRANSP_NP, src, dst)
+            return canvas
+
+        _igloo_layers = []
+        for _n in range(17):   # 0 = no blocks, n = first n blocks (0..n-1) visible
+            _canvas = _np.full((_CH, _CW), _TRANSP_NP, dtype=_bm.dtype)
+            for _b in range(min(_n, 16)):
+                if _b == 15:
+                    _canvas = _stamp_np(_canvas, int(_BLK_CX[15]), int(_BLK_CY[15]), _dm)
+                else:
+                    _canvas = _stamp_np(_canvas, int(_BLK_CX[_b]), int(_BLK_CY[_b]), _bm)
+                    if _b in (12, 13):
+                        _canvas = _stamp_np(_canvas, int(_BLK_CX[_b]) + 4, int(_BLK_CY[_b]), _bm)
+                    if _b == 14:
+                        _canvas = _stamp_np(_canvas, int(_BLK_CX[_b]) + 8, int(_BLK_CY[_b]), _bm)
+            _igloo_layers.append(_canvas)
+
+        self.IGLOO_LAYERS = jnp.stack([jnp.array(c) for c in _igloo_layers])  # (17, 24, 32)
+        self._IGLOO_CX0 = _cx0
+        self._IGLOO_CY0 = _cy0
+
     @staticmethod
     def _decode_sprite_duplication(consts, code: jnp.ndarray):
         """Decode sprite duplication mode to get number of copies and spacing.
@@ -3234,6 +3347,20 @@ class FrostbiteRenderer(JAXGameRenderer):
     
     # --- Tinting helpers (used only in __init__) ---
     
+    @staticmethod
+    def _apply_custom_tint(sprite, r, g, b):
+        """Apply a custom RGB tint to a sprite, preserving alpha."""
+        return jnp.where(
+            sprite[..., 3:4] > 0,
+            jnp.concatenate([
+                jnp.full_like(sprite[..., 0:1], r),
+                jnp.full_like(sprite[..., 1:2], g),
+                jnp.full_like(sprite[..., 2:3], b),
+                sprite[..., 3:4]
+            ], axis=-1),
+            sprite
+        ).astype(sprite.dtype)
+
     @staticmethod
     def _apply_ice_color(block_sprite, is_blue):
         """Apply color tinting to ice block sprites."""
@@ -3285,6 +3412,20 @@ class FrostbiteRenderer(JAXGameRenderer):
         mask = rows < cutoff  # Only show pixels above water line
         return jnp.where(mask, s, jnp.zeros_like(s))
 
+    @staticmethod
+    def _pad_mask_stack_to_shape(mask_stack, target_h, target_w, transparent_id):
+        """Pad an (N,H,W) mask stack to a uniform (N,target_h,target_w)."""
+        return jnp.pad(
+            mask_stack,
+            (
+                (0, 0),
+                (0, target_h - mask_stack.shape[1]),
+                (0, target_w - mask_stack.shape[2]),
+            ),
+            mode="constant",
+            constant_values=transparent_id,
+        )
+
     # --- JIT-compiled Render Helpers ---
     @partial(jax.jit, static_argnums=(0,))
     def _render_with_wrap(self, raster, x, y, sprite_mask):
@@ -3309,222 +3450,125 @@ class FrostbiteRenderer(JAXGameRenderer):
                 (bcd_score[1] & 0xF) * 100 +
                 ((bcd_score[2] >> 4) & 0xF) * 10 +
                 (bcd_score[2] & 0xF)).astype(jnp.int32)
-    
+
     @partial(jax.jit, static_argnums=(0,))
-    def _render_hud(self, raster, state):
-        """Render HUD elements at top of screen."""
-        digits_masks = self.DIGIT_MASKS
+    def _render_hud_and_obstacles(self, raster, state):
+        """Render HUD and obstacles without using render_at_batch."""
         score_y, lives_y, temp_y = 10, 22, 22
         should_flash = state.temperature < 0x10
-        is_visible = ~should_flash | ((state.frame_count % 90) < 45)
-        # Render lives
+        is_visible = ~should_flash | ((state.frame_count % 45) < 22)
         lives_x = 59
+
+        # --- HUD (10 entries, masks padded to obstacle sprite width) ---
+        dm = self.DIGIT_MASKS_W8
         lives_clamped = jnp.clip(state.remaining_lives, 0, 9)
-        lives_sprite = digits_masks[lives_clamped]
-        raster = jax.lax.cond(
-            is_visible, lambda r: self.jr.render_at(r, lives_x, lives_y, lives_sprite), lambda r: r, raster
-        )
-        
-        # Render temperature
-        temp_x_base = lives_x - 16 - 6
         temp_tens, temp_ones = (state.temperature >> 4) & 0x0F, state.temperature & 0x0F
+        temp_x_base = lives_x - 16 - 6
         temp_x = jnp.where(temp_tens > 0, temp_x_base - 16, temp_x_base - 8)
-        x_offset = temp_x
-        tens_sprite = digits_masks[temp_tens]
-        raster = jax.lax.cond(
-            (temp_tens > 0) & is_visible, lambda r, x: self.jr.render_at(r, x, temp_y, tens_sprite),
-            lambda r, x: r, raster, x_offset
-        )
-        x_offset += jnp.where(temp_tens > 0, 8, 0)
-        ones_sprite = digits_masks[temp_ones]
-        raster = jax.lax.cond(
-            is_visible, lambda r: self.jr.render_at(r, x_offset, temp_y, ones_sprite), lambda r: r, raster
-        )
-        degree_sprite = self.DEGREE_MASK
-        raster = jax.lax.cond(
-            is_visible, lambda r: self.jr.render_at(r, temp_x_base, temp_y, degree_sprite), lambda r: r, raster
-        )
-        
-        # Render score
+
         total_score = self._bcd_to_decimal(state.score)
         num_digits = jnp.where(
-            total_score == 0,
-            1,
+            total_score == 0, 1,
             jnp.floor(jnp.log10(jnp.maximum(1, total_score) + 0.5)).astype(jnp.int32) + 1
         )
         score_x_start = lives_x - ((num_digits - 1) * 4)
         score_digits = self.jr.int_to_digits(total_score, max_digits=6)
-        start_index = 6 - num_digits
-        
-        raster = self.jr.render_label_selective(
-            raster, score_x_start, score_y,
-            score_digits, digits_masks,
-            start_index, num_digits,
-            spacing=8,
-            max_digits_to_render=6
+        score_idx = jnp.arange(6)
+        score_masks = dm[jnp.take(score_digits, (6 - num_digits) + score_idx)]
+
+        # Build all 10 HUD masks/coords in parallel with jnp.concatenate
+        hud_masks = jnp.concatenate([
+            dm[lives_clamped][None],
+            dm[temp_tens][None],
+            dm[temp_ones][None],
+            self.DEGREE_MASK_W8[None],
+            score_masks,
+        ], axis=0)  # (10, 8, 8)
+
+        hud_x = jnp.array([
+            lives_x,
+            temp_x,
+            jnp.where(temp_tens > 0, temp_x + 8, temp_x),
+            temp_x_base,
+            score_x_start + 0 * 8, score_x_start + 1 * 8, score_x_start + 2 * 8,
+            score_x_start + 3 * 8, score_x_start + 4 * 8, score_x_start + 5 * 8,
+        ], dtype=jnp.int32)
+        hud_y = jnp.array([lives_y, temp_y, temp_y, temp_y,
+                            score_y, score_y, score_y, score_y, score_y, score_y], dtype=jnp.int32)
+        hud_active = jnp.array([
+            is_visible, is_visible & (temp_tens > 0), is_visible, is_visible,
+            score_idx[0] < num_digits, score_idx[1] < num_digits, score_idx[2] < num_digits,
+            score_idx[3] < num_digits, score_idx[4] < num_digits, score_idx[5] < num_digits,
+        ])
+        hud_masks = jnp.where(hud_active[:, None, None], hud_masks, self.jr.TRANSPARENT_ID)
+
+        # --- Obstacles (24 entries × 8×8) ---
+        copies_per_lane, spacing_per_lane = self._decode_sprite_duplication(
+            self.consts, state.obstacle_duplication_mode
         )
-        
-        return raster
+        lane_idx = jnp.arange(4)
+        copy_idx = jnp.arange(3)
+        L, K = jnp.meshgrid(lane_idx, copy_idx, indexing='ij')
+        L, K = L.flatten(), K.flatten()
+
+        ob_type   = state.obstacle_types[L]
+        anim      = state.obstacle_animation_idx[L]
+        float_off = jnp.clip(state.obstacle_float_offsets[L].astype(jnp.int32), 0, 4)
+        direction = state.obstacle_directions[L]
+        base_x    = state.obstacle_x[L]
+        base_y    = state.obstacle_y[L]
+
+        x_pos = base_x + K * spacing_per_lane[L]
+        is_aquatic = ob_type != self.consts.ID_SNOW_GOOSE
+        y_pos = jnp.where(is_aquatic, base_y + float_off, base_y)
+
+        selector = jnp.where(ob_type == self.consts.ID_SNOW_GOOSE, 0,
+                   jnp.where(ob_type == self.consts.ID_FISH, 1,
+                   jnp.where(ob_type == self.consts.ID_KING_CRAB, 2, 3)))
+        mask_idx = jnp.where(selector == 0, anim,
+                   jnp.where(selector == 1, 10 + anim * 5 + float_off,
+                   jnp.where(selector == 2, 20 + anim * 5 + float_off,
+                   30 + anim * 5 + float_off)))
+        flip_offset = (direction == 1).astype(jnp.int32) * self.ALL_OBSTACLE_MASKS.shape[0]
+        obs_masks = self.ALL_OBSTACLE_MASKS_BOTH[mask_idx + flip_offset]
+
+        is_active  = (state.obstacle_active[L] == 1)
+        in_range   = K < copies_per_lane[L]
+        fish_alive = ((state.fish_alive_mask[L] >> K) & 1) == 1
+        is_fish    = ob_type == self.consts.ID_FISH
+        should_show = is_active & in_range & (~is_fish | fish_alive)
+
+        # Obstacles do not need horizontal wrap copies in Frostbite.
+        obs_xs = jnp.where(should_show, x_pos, -100)
+        obs_ys = jnp.where(should_show, y_pos, -100)
+
+        # --- Combine HUD + Obstacles ---
+        all_xs = jnp.concatenate([hud_x, obs_xs])
+        all_ys = jnp.concatenate([hud_y, obs_ys])
+        all_masks = jnp.concatenate([hud_masks, obs_masks], axis=0)
+
+        def draw_one(i, r):
+            x_i = all_xs[i]
+            y_i = all_ys[i]
+            m_i = all_masks[i]
+            should_draw = (x_i >= 0) & (y_i >= 0)
+            return jax.lax.cond(
+                should_draw,
+                # Use clipped draw so edge sprites don't wrap/pop on boundaries.
+                lambda rr: self.jr.render_at_clipped(rr, x_i, y_i, m_i),
+                lambda rr: rr,
+                r
+            )
+
+        return jax.lax.fori_loop(0, all_xs.shape[0], draw_one, raster)
+
     
     @partial(jax.jit, static_argnums=(0,))
     def _render_igloo_blocks(self, raster, state):
-        """Render igloo blocks in the specific construction pattern."""
-        block_mask = self.IGLOO_BLOCK_MASK
-        door_mask = self.IGLOO_DOOR_MASK
-        base_x, base_y = self.consts.IGLOO_X, self.consts.IGLOO_Y
-        igloo_offset = -43
-        
-        # Precompute all positions
-        x_pos = jnp.array([
-            base_x + igloo_offset + 0,  # 0
-            base_x + igloo_offset + 8,  # 1
-            base_x + igloo_offset + 16, # 2
-            base_x + igloo_offset + 24, # 3
-            base_x + igloo_offset + 24, # 4
-            base_x + igloo_offset + 16, # 5
-            base_x + igloo_offset + 8,  # 6
-            base_x + igloo_offset + 0,  # 7
-            base_x + igloo_offset + 0,  # 8
-            base_x + igloo_offset + 8,  # 9
-            base_x + igloo_offset + 16, # 10
-            base_x + igloo_offset + 24, # 11
-            base_x + igloo_offset + 4,  # 12
-            base_x + igloo_offset + 16, # 13
-            base_x + igloo_offset + 8,  # 14
-            122                       # 15 (door)
-        ], dtype=jnp.int32)
-        y_pos = jnp.array([
-            base_y + 7, base_y + 7, base_y + 7, base_y + 7, # 0-3
-            base_y + 3, base_y + 3, base_y + 3, base_y + 3, # 4-7
-            base_y - 1, base_y - 1, base_y - 1, base_y - 1, # 8-11
-            base_y - 5, base_y - 5, # 12-13
-            base_y - 9, # 14
-            base_y + 3  # 15 (door)
-        ], dtype=jnp.int32)
-        
-        def render_block(i, r):
-            should_render = i <= state.building_igloo_idx
-            x, y = x_pos[i], y_pos[i]
-            
-            def draw_fn(r_in):
-                # Render block 15 (door)
-                r_out = jax.lax.cond(
-                    i == 15,
-                    lambda r: self.jr.render_at(r, x, y, door_mask),
-                    lambda r: r,
-                    r_in)
-                
-                # Render blocks 0-14
-                r_out = jax.lax.cond(
-                    i < 15,
-                    lambda r: self.jr.render_at(r, x, y, block_mask),
-                    lambda r: r,
-                    r_out)
-                
-                # Render extra sprites for wider blocks
-                r_out = jax.lax.cond(
-                    (i >= 12) & (i <= 13), # Blocks 12, 13
-                    lambda r: self.jr.render_at(r, x + 4, y, block_mask),
-                    lambda r: r,
-                    r_out)
-                r_out = jax.lax.cond(
-                    i == 14, # Block 14
-                    lambda r: self.jr.render_at(r, x + 8, y, block_mask),
-                    lambda r: r,
-                    r_out)
-                
-                return r_out
-            return jax.lax.cond(should_render, draw_fn, lambda r: r, r)
-        raster = jax.lax.fori_loop(0, 16, render_block, raster)
-        return raster
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def _render_obstacles(self, raster, state):
-        """Render all active obstacles with sprite duplication patterns."""
-        
-        def render_lane(i, r):
-            if_render = state.obstacle_active[i] == 1
-            
-            def draw_lane(r_in):
-                anim_idx = state.obstacle_animation_idx[i]
-                direction = state.obstacle_directions[i]
-                x_pos = state.obstacle_x[i]
-                y_pos = state.obstacle_y[i]
-                float_offset_int = jnp.clip(state.obstacle_float_offsets[i].astype(jnp.int32), 0, 4)
-                obstacle_type = state.obstacle_types[i]
-                alive_mask_i = state.fish_alive_mask[i]
-                
-                copies, spacing = self._decode_sprite_duplication(self.consts, state.obstacle_duplication_mode[i])
-                
-                # Helper function to render a single obstacle type
-                def render_obstacle_type(base_sprite, is_aquatic_flag):
-                    # Adjust Y position for floating
-                    y_render = jnp.where(is_aquatic_flag, y_pos + float_offset_int, y_pos)
-                    # Flip sprite based on direction
-                    sprite = jax.lax.cond(
-                        direction == 1, lambda s: jnp.flip(s, axis=1), lambda s: s, base_sprite
-                    )
-                    
-                    # Render copies
-                    def render_copy(k, r_copy):
-                        xp = x_pos + k * spacing
-                        copy_alive = jnp.where(
-                            obstacle_type == self.consts.ID_FISH,
-                            ((alive_mask_i >> jnp.int32(k)) & 1) == 1,
-                            True
-                        )
-                        should_show = (k < copies) & copy_alive
-                        
-                        return jax.lax.cond(
-                            should_show,
-                            lambda r: self.jr.render_at_clipped(r, xp, y_render, sprite),
-                            lambda r: r,
-                            r_copy
-                        )
-                    
-                    return jax.lax.fori_loop(0, 3, render_copy, r_in)
-                
-                # Select the correct sprite animation stack
-                # flat_idx = anim_idx * 5 + float_offset_int
-                fish_mask = self.FISH_MASKS[anim_idx * 5 + float_offset_int]
-                crab_mask = self.CRAB_MASKS[anim_idx * 5 + float_offset_int]
-                clam_mask = self.CLAM_MASKS[anim_idx * 5 + float_offset_int]
-                
-                # Render each obstacle type (each branch returns the raster, so shapes match)
-                def render_geese(r):
-                    sprite = self.GEESE_MASKS[anim_idx]
-                    return render_obstacle_type(sprite, False)
-                
-                def render_fish(r):
-                    return render_obstacle_type(fish_mask, True)
-                
-                def render_crab(r):
-                    return render_obstacle_type(crab_mask, True)
-                
-                def render_clam(r):
-                    return render_obstacle_type(clam_mask, True)
-                
-                # Select and render the correct obstacle type
-                r_out = jax.lax.cond(
-                    obstacle_type == self.consts.ID_SNOW_GOOSE,
-                    render_geese,
-                    lambda r: jax.lax.cond(
-                        obstacle_type == self.consts.ID_FISH,
-                        render_fish,
-                        lambda r: jax.lax.cond(
-                            obstacle_type == self.consts.ID_KING_CRAB,
-                            render_crab,
-                            render_clam,
-                            r
-                        ),
-                        r
-                    ),
-                    r_in
-                )
-                return r_out
-            return jax.lax.cond(if_render, draw_lane, lambda r: r, r)
-        raster = jax.lax.fori_loop(0, 4, render_lane, raster)
-        return raster
+        """Render igloo blocks using a pre-built canvas layer (one render_at call)."""
+        canvas_idx = jnp.clip(state.building_igloo_idx + 1, 0, 16)
+        canvas = self.IGLOO_LAYERS[canvas_idx]
+        return self.jr.render_at(raster, self._IGLOO_CX0, self._IGLOO_CY0, canvas)
     
     @partial(jax.jit, static_argnums=(0,))
     def _render_black_bar(self, raster):
@@ -3536,128 +3580,163 @@ class FrostbiteRenderer(JAXGameRenderer):
         """Render the polar grizzly (bear) when active."""
         should_render = state.polar_grizzly_active == 1
         def draw_bear(r):
-            is_night = ((state.level - 1) // 4) % 2 == 1
-            
-            bear_stack = jax.lax.select(is_night, self.BEAR_LIGHT_MASKS, self.BEAR_MASKS)
+            is_night = jnp.logical_or(((state.level - 1) // 4) % 2 == 1, self.consts.CONSTANT_NIGHT)
+            bear_right_stack = jax.lax.select(is_night, self.BEAR_LIGHT_MASKS, self.BEAR_MASKS)
+            bear_left_stack = jax.lax.select(is_night, self.BEAR_LIGHT_MASKS_FLIPPED, self.BEAR_MASKS_FLIPPED)
             
             anim_idx = jnp.clip(state.polar_grizzly_animation_idx, 0, 7)
             animation_frame_idx = jnp.array(self.consts.POLAR_GRIZZLY_ANIM_MAP)[anim_idx]
-            bear_sprite = bear_stack[animation_frame_idx]
+            bear_sprite_right = bear_right_stack[animation_frame_idx]
+            bear_sprite_left = bear_left_stack[animation_frame_idx]
+            bear_sprite = jax.lax.select(state.polar_grizzly_direction == 0, bear_sprite_left, bear_sprite_right)
             bear_y_offset = jnp.where(animation_frame_idx == 1, 1, 0)
             bear_y = self.consts.YMIN_BAILEY + bear_y_offset
-            
-            bear_sprite_flipped = jax.lax.cond(
-                state.polar_grizzly_direction == 0,
-                lambda s: jnp.flip(s, axis=1),
-                lambda s: s,
-                bear_sprite
-            )
-            
-            return self.jr.render_at(r, state.polar_grizzly_x, bear_y, bear_sprite_flipped)
+            return self.jr.render_at(r, state.polar_grizzly_x, bear_y, bear_sprite)
         return jax.lax.cond(should_render, draw_bear, lambda r: r, raster)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_ice_strip_rows(self, raster, state):
+        """Render ice as one prebuilt strip per row (plus one wrap copy)."""
+        # Use persistent row anchors, not segment[0], to avoid wrap-order jumps
+        # when individual blocks are sorted/rewrapped near screen boundaries.
+        row_x = state.ice_x
+        row_w = jnp.where(state.ice_block_counts == 6, jnp.int32(12), jnp.int32(24))
+        row_y = self.ICE_ROW_Y_ARRAY
+        row_active = state.ice_block_counts > 0
+
+        is_blue = state.ice_colors == self.consts.COLOR_ICE_BLUE
+        is_narrow = row_w == 12
+        base_idx = is_blue.astype(jnp.int32)
+        strip_idx = jnp.where(is_narrow, 2 + base_idx, base_idx)
+        row_masks = self.ICE_STRIPS[strip_idx]  # (4, H, 152)
+
+        def draw_row(i, r):
+            return jax.lax.cond(
+                row_active[i],
+                lambda rr: self._render_with_wrap(rr, row_x[i], row_y[i], row_masks[i]),
+                lambda rr: rr,
+                r,
+            )
+
+        return jax.lax.fori_loop(0, 4, draw_row, raster)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_ice_segments_vectorized(self, raster, state):
+        """Render all ice segments without using render_at_batch."""
+        row_indices = jnp.arange(4)
+        seg_indices = jnp.arange(6)
+        R, S = jnp.meshgrid(row_indices, seg_indices, indexing='ij')
+        R = R.flatten()  # (24,)
+        S = S.flatten()  # (24,)
+
+        y_pos = self.ICE_ROW_Y_ARRAY[R]
+        is_blue = state.ice_colors[R] == self.consts.COLOR_ICE_BLUE
+
+        seg_x = state.ice_segments_x[R, S]
+        seg_w = state.ice_segments_w[R, S]
+        active = seg_w > 0
+
+        is_narrow = seg_w == 12
+        base_idx = jnp.int32(is_blue)
+        mask_idx = jnp.where(is_narrow, 2 + base_idx, base_idx)
+        masks = self.ICE_MASKS[mask_idx]  # (24, H, W)
+
+        W = self.consts.PLAYFIELD_WIDTH
+        wrap_x = jnp.where(seg_x < W // 2, seg_x + W, seg_x - W)
+
+        xs = jnp.stack([seg_x, wrap_x], axis=1).flatten()  # (48,)
+        ys = jnp.stack([y_pos, y_pos], axis=1).flatten()
+        final_masks = jnp.repeat(masks, 2, axis=0)  # (48, H, W)
+        draw_active = jnp.stack([active, active], axis=1).flatten()
+
+        def draw_seg(i, r):
+            return jax.lax.cond(
+                draw_active[i],
+                lambda rr: self.jr.render_at_clipped(rr, xs[i], ys[i], final_masks[i]),
+                lambda rr: rr,
+                r,
+            )
+
+        return jax.lax.fori_loop(0, xs.shape[0], draw_seg, raster)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_ice_vectorized(self, raster, state):
+        """
+        Fast path: prebuilt strip per row for regular geometry.
+        Correctness path: per-segment renderer for breathing levels where segment
+        spacing is dynamic and cannot be represented by a single static strip.
+        """
+        is_breathing_level = (state.level >= self.consts.ICE_BREATH_MIN_LEVEL) & ((state.level & 1) == 1)
+        return jax.lax.cond(
+            is_breathing_level,
+            lambda r: self._render_ice_segments_vectorized(r, state),
+            lambda r: self._render_ice_strip_rows(r, state),
+            raster,
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: FrostbiteState) -> jnp.ndarray:
         """Render the complete game frame from the current state."""
-        
-        # 1. Render background (day/night)
-        raster = self.jr.create_object_raster(self.BACKGROUND)
-        is_night = ((state.level - 1) // 4) % 2 == 1
+
+        # 1. Create raster and render background (day/night)
+        raster = self.jr.create_object_raster(self.BACKGROUND).astype(self.PALETTE.dtype)
+        is_night = jnp.logical_or(((state.level - 1) // 4) % 2 == 1, self.consts.CONSTANT_NIGHT)
         raster = jax.lax.cond(
             is_night,
             lambda r: self.jr.render_at(r, 0, 0, self.SHAPE_MASKS['background_night']),
             lambda r: r,
             raster
         )
-        # 2. Render ice blocks
-        ice_masks = self.ICE_MASKS # (4, H, W) [wide_w, wide_b, narrow_w, narrow_b]
-        def render_row(row_idx, raster_in):
-            y_pos = self.ICE_ROW_Y_ARRAY[row_idx]
-            is_blue = state.ice_colors[row_idx] == self.consts.COLOR_ICE_BLUE
-            block_positions = state.ice_block_positions[row_idx]
-            block_count = state.ice_block_counts[row_idx]
-            is_narrow = (block_count == 6)
-            
-            breathing_active = (
-                (state.level >= self.consts.ICE_BREATH_MIN_LEVEL) &
-                ((state.level & 1) == 1) &
-                ~is_narrow
-            )
-            segment_positions, segment_widths, segment_mask = _compute_row_segments(
-                self.consts,
-                block_positions,
-                block_count,
-                state.ice_fine_motion_index,
-                breathing_active,
-                state.ice_x[row_idx]
-            )
-            
-            # Select base masks: 0=wide_w, 1=wide_b
-            base_idx = jnp.int32(is_blue) 
-            # Select narrow masks: 2=narrow_w, 3=narrow_b
-            narrow_idx_offset = jnp.int32(is_narrow) * 2 
-            
-            def render_one_segment(i, raster_seg):
-                active = segment_mask[i]
-                width = segment_widths[i] # 12 or 24
-                
-                # Must use lax.select
-                sprite_mask = jax.lax.select(width == 12, 
-                                             ice_masks[2 + base_idx], # narrow_mask
-                                             ice_masks[0 + base_idx]) # wide_mask
-                
-                return jax.lax.cond(
-                    active,
-                    lambda r: self._render_with_wrap(r, segment_positions[i], y_pos, sprite_mask),
-                    lambda r: r,
-                    raster_seg
-                )
-            final_raster = jax.lax.fori_loop(0, segment_positions.shape[0], render_one_segment, raster_in)
-            return final_raster
-        raster = jax.lax.fori_loop(0, 4, render_row, raster)
-        # 3. Render game entities in proper z-order
-        raster = self._render_hud(raster, state)
+
+        # 2. Render ice blocks (vectorized)
+        raster = self._render_ice_vectorized(raster, state)
+
+        # 3. Render game entities in proper z-order (HUD + obstacles share one scatter call)
+        raster = self._render_hud_and_obstacles(raster, state)
         raster = self._render_igloo_blocks(raster, state)
-        raster = self._render_obstacles(raster, state)
         raster = self._render_polar_grizzly(raster, state)
+
         # 4. Render Bailey
         is_dead = (state.bailey_alive == 0) | (state.bailey_death_frame > 0)
         is_visible = state.bailey_visible == 1
-        
+
         # Select correct animation frame
         animation_idx = jnp.where(
-            is_dead, 3 + ((state.bailey_death_frame // 30) % 2), state.bailey_animation_idx
+            is_dead, 3 + ((state.bailey_death_frame // 15) % 2), state.bailey_animation_idx
         )
-        
+
         bailey_stack = jax.lax.select(
             state.bailey_frozen == 1,
             self.BAILEY_FROZEN_MASKS,
             self.BAILEY_MASKS
         )
-        
+        bailey_stack_flipped = jax.lax.select(
+            state.bailey_frozen == 1,
+            self.BAILEY_FROZEN_MASKS_FLIPPED,
+            self.BAILEY_MASKS_FLIPPED
+        )
+
         # Get the final mask
         frame_bailey = bailey_stack[animation_idx] # Dynamic slice
-        
+        frame_bailey_flipped = bailey_stack_flipped[animation_idx]
+
         # Flip sprite horizontally when facing left
         flip = (state.bailey_direction == 1) & (animation_idx < 3)
-        frame_bailey_flipped = jax.lax.cond(
-            flip,
-            lambda f: jnp.flip(f, axis=1), lambda f: f, frame_bailey
-        )
-        
+        final_bailey_mask = jax.lax.select(flip, frame_bailey_flipped, frame_bailey)
+
         # Adjust Y for walking frame
         y_offset = jnp.where(animation_idx == 1, -1, 0)
         adjusted_y = state.bailey_y + y_offset
         # Render if visible
         raster = jax.lax.cond(
             is_visible,
-            lambda r: self.jr.render_at(r, state.bailey_x, adjusted_y, frame_bailey_flipped),
+            lambda r: self.jr.render_at(r, state.bailey_x, adjusted_y, final_bailey_mask),
             lambda r: r, 
             raster
         )
-        
+
         # 5. Render the black bar over the gutter to hide spawns
         raster = self._render_black_bar(raster)
-        
+
         # 6. Final palette lookup
         return self.jr.render_from_palette(raster, self.PALETTE)

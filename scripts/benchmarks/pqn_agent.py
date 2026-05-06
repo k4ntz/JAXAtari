@@ -105,6 +105,7 @@ class QNetwork(nn.Module):
                 x = nn.relu(x)
         else:
             # Use CNN for pixel based observations
+            x = x / 255.0 # pixel normalization
             x = CNN(norm_type=self.norm_type)(x, train)
 
         x = nn.Dense(self.action_dim)(x)
@@ -158,18 +159,42 @@ def make_train(config):
     renderer = mod_env.renderer
 
     def apply_wrappers(env):
-        env = AtariWrapper(env)
+        env = AtariWrapper(
+                env,
+                sticky_actions=0.0,
+                episodic_life=True,
+                first_fire=True,
+                noop_max=30,
+                full_action_space=False
+        )
         if config.get("OBJECT_CENTRIC", False):
-            env = ObjectCentricWrapper(env)
+            env = ObjectCentricWrapper(
+                env,
+                frame_stack_size=4,
+                frame_skip=4,
+                clip_reward=True
+            )
+            env = NormalizeObservationWrapper(env)
             env = FlattenObservationWrapper(env)
         else:
             grayscale = config.get("PIXEL_GRAYSCALE", True)
             do_resize = config.get("PIXEL_RESIZE", True)
             resize_shape = config.get("PIXEL_RESIZE_SHAPE", [84, 84])
             use_native_downscaling = config.get("USE_NATIVE_DOWNSCALING", True)
-            env = PixelObsWrapper(env, do_pixel_resize=do_resize, pixel_resize_shape=tuple(resize_shape), grayscale=grayscale, use_native_downscaling=use_native_downscaling)
+            smooth_image = config.get("SMOOTH_IMAGE", False)
+            env = PixelObsWrapper(
+                env,
+                do_pixel_resize=do_resize,
+                pixel_resize_shape=tuple(resize_shape),
+                grayscale=grayscale,
+                use_native_downscaling=use_native_downscaling,
+                smooth_image=smooth_image,
+                frame_stack_size=4,
+                frame_skip=4,
+                max_pooling=True,
+                clip_reward=True
+            )
         
-        env = NormalizeObservationWrapper(env)
         env = LogWrapper(env)
         return env
 
@@ -688,7 +713,7 @@ def single_run(config):
             env_name.upper(),
             f"jax_{jax.__version__}",
         ],
-        name=config.get("NAME", f'{config["ALG_NAME"]}_{config["ENV_NAME"]}'),
+        name=config.get("NAME", f'{config["ALG_NAME"]}_{config["ENV_NAME"]}_{"oc" if config.get("OBJECT_CENTRIC", False) else "pixel"}'),
         config=config,
         mode=config["WANDB_MODE"],
     )
@@ -708,6 +733,8 @@ def single_run(config):
     if config.get("SAVE_PATH", None) is not None:
         model_state = outs["runner_state"][0]
         save_dir = os.path.join(config["SAVE_PATH"], env_name)
+        # add time to save_dir
+        save_dir = os.path.join(save_dir, time.strftime("%Y-%m-%d_%H-%M-%S"))
         os.makedirs(save_dir, exist_ok=True)
         OmegaConf.save(
             config,

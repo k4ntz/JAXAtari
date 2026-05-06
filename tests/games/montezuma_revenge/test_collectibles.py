@@ -35,23 +35,20 @@ def test_open_door():
     from jaxatari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
     
-    # We start with 3 keys
-    initial_keys = state.inventory[0]
-    assert initial_keys > 0
-    
     # Place player in front of a door
     # Door is at (56, 86), width 4, height 38.
     # Player width 7, height 20.
     state = state.replace(
         player_x=jnp.array(50, dtype=jnp.int32), # next step will hit 51 if RIGHT (3)
-        player_y=jnp.array(86, dtype=jnp.int32)
+        player_y=jnp.array(86, dtype=jnp.int32),
+        inventory=state.inventory.at[0].set(3) # ensure we have keys
     )
     
     # Step RIGHT to hit the door
     obs, state, reward, done, info = env.step(state, 3)
     
     # Door should be opened
-    assert state.inventory[0] == initial_keys - 1
+    assert state.inventory[0] == 2 # one less key
     assert state.doors_active[0] == 0
     assert reward == 300
 

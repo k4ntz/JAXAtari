@@ -23,6 +23,11 @@ from jaxatari.wrappers import (
     MultiRewardLogWrapper,
 )
 
+CORE_INFRA_GAMES = ("seaquest", "kangaroo", "montezumarevenge", "pong", "phoenix")
+SMOKE_STEPS = 5
+INTEGRATION_STEPS = 25
+STRESS_STEPS = 100
+
 def pytest_addoption(parser):
     """Adds the --game command-line option to pytest."""
     parser.addoption(
@@ -31,10 +36,33 @@ def pytest_addoption(parser):
         default=None,
         help="Run tests for specific games by name (comma-separated, e.g. 'skiing,spacewar')",
     )
+    parser.addoption(
+        "--integration",
+        action="store_true",
+        default=False,
+        help="Include integration-marked tests.",
+    )
+    parser.addoption(
+        "--slow",
+        action="store_true",
+        default=False,
+        help="Include slow tests (implies integration).",
+    )
+    parser.addoption(
+        "--wrapper-full",
+        action="store_true",
+        default=False,
+        help="Include full wrapper-matrix tests.",
+    )
 
 def pytest_configure(config):
     """Registers the 'requires_snapshot' marker."""
     config.addinivalue_line("markers", "requires_snapshot: mark test as requiring a snapshot")
+    config.addinivalue_line("markers", "smoke: fast checks for PR validation")
+    config.addinivalue_line("markers", "integration: broader integration checks")
+    config.addinivalue_line("markers", "slow: expensive checks for exhaustive validation")
+    config.addinivalue_line("markers", "wrapper_full: runs only with full wrapper matrix")
+    config.addinivalue_line("markers", "serial: must run without xdist parallel workers")
 
 def discover_games_with_snapshots() -> list[str]:
     """
@@ -65,6 +93,12 @@ def pytest_collection_modifyitems(config, items):
 
     games_with_snapshots = discover_games_with_snapshots()
     specified_games = parse_game_list(config.getoption("--game"))
+    include_integration = bool(config.getoption("integration"))
+    include_slow = bool(config.getoption("slow"))
+    include_wrapper_full = bool(config.getoption("wrapper_full"))
+    if include_slow:
+        include_integration = True
+        include_wrapper_full = True
     normalized_specified_games = set()
     if specified_games:
         normalized_specified_games = {normalize_game_name(game) for game in specified_games}
@@ -86,6 +120,16 @@ def pytest_collection_modifyitems(config, items):
                 game_name = item.callspec.params['game_name']
                 if game_name not in games_with_snapshots:
                     item.add_marker(pytest.mark.skip(reason=f"No snapshot found for game '{game_name}'"))
+
+        if item.get_closest_marker("slow") and not include_slow:
+            deselected.append(item)
+            continue
+        if item.get_closest_marker("integration") and not include_integration:
+            deselected.append(item)
+            continue
+        if item.get_closest_marker("wrapper_full") and not include_wrapper_full:
+            deselected.append(item)
+            continue
         kept.append(item)
 
     if deselected:
@@ -201,7 +245,7 @@ def pytest_generate_tests(metafunc):
             game_list = [game for game in game_list if normalize_game_name(game) in required_games]
 
         metafunc.parametrize("game_name", game_list)
-
+    
 def load_game_environment(game_name: str) -> JaxEnvironment:
     """Dynamically loads a game environment from a.py file."""
     test_file_dir = Path(__file__).parent.resolve()
@@ -250,6 +294,22 @@ def raw_env(game_name):
     """Provides a single, raw, unwrapped instance of the specified game environment."""
     return load_game_environment(game_name)
 
+@pytest.fixture
+def raw_env_representative(raw_env, request):
+    """
+    Raw env fixture for heavy tests.
+    - If --game is provided, run for the selected game(s).
+    - Otherwise, limit heavy checks to the Core-5 representative subset.
+    """
+    specified_games = parse_game_list(request.config.getoption("--game"))
+    if specified_games:
+        return raw_env
+
+    current_game = raw_env.__class__.__module__.split(".")[-1].replace("jax_", "")
+    if normalize_game_name(current_game) not in {normalize_game_name(g) for g in CORE_INFRA_GAMES}:
+        pytest.skip(f"Skipping non-representative game '{current_game}' for heavy checks")
+    return raw_env
+
 # Define the wrapper combinations to test against.
 WRAPPER_RECIPES = {
     "Atari": lambda env: AtariWrapper(env),
@@ -266,12 +326,68 @@ WRAPPER_RECIPES = {
     ),
 }
 
-@pytest.fixture(params=WRAPPER_RECIPES.values(), ids=WRAPPER_RECIPES.keys())
-def wrapped_env(game_name, request):
-    """
-    Parameterized fixture. For each wrapper recipe, it creates a fresh instance
-    of the raw environment and then wraps it.
-    """
-    wrapper_recipe = request.param
+SMOKE_WRAPPER_RECIPE_NAMES = (
+    "Pixel",
+    "LoggedFlattenedPixelAndObject",
+)
+INTEGRATION_WRAPPER_RECIPE_NAMES = (
+    "Atari",
+    "Pixel",
+    "ObjectCentric",
+    "LoggedFlattenedPixelAndObject",
+)
+
+def _build_wrapped_env(game_name, wrapper_recipe):
     fresh_raw_env = load_game_environment(game_name)
     return wrapper_recipe(fresh_raw_env)
+
+@pytest.fixture(params=[WRAPPER_RECIPES[name] for name in SMOKE_WRAPPER_RECIPE_NAMES], ids=SMOKE_WRAPPER_RECIPE_NAMES)
+def wrapped_env_smoke(game_name, request):
+    """Wrapper fixture for fast PR lanes."""
+    return _build_wrapped_env(game_name, request.param)
+
+@pytest.fixture(params=WRAPPER_RECIPES.values(), ids=WRAPPER_RECIPES.keys())
+def wrapped_env_full(game_name, request):
+    """Wrapper fixture for exhaustive lanes."""
+    return _build_wrapped_env(game_name, request.param)
+
+@pytest.fixture(params=[WRAPPER_RECIPES[name] for name in INTEGRATION_WRAPPER_RECIPE_NAMES], ids=INTEGRATION_WRAPPER_RECIPE_NAMES)
+def wrapped_env_integration(game_name, request):
+    """Reduced wrapper fixture for integration lanes."""
+    return _build_wrapped_env(game_name, request.param)
+
+@pytest.fixture(params=WRAPPER_RECIPES.values(), ids=WRAPPER_RECIPES.keys())
+def wrapped_env_full_representative(wrapped_env_full, game_name, request):
+    """
+    Full wrapper fixture for heavy checks.
+    - If --game is provided, run for the selected game(s).
+    - Otherwise, limit to Core-5 representative games.
+    """
+    specified_games = parse_game_list(request.config.getoption("--game"))
+    if specified_games:
+        return wrapped_env_full
+
+    if normalize_game_name(game_name) not in {normalize_game_name(g) for g in CORE_INFRA_GAMES}:
+        pytest.skip(f"Skipping non-representative game '{game_name}' for heavy checks")
+    return wrapped_env_full
+
+@pytest.fixture
+def wrapped_env_integration_representative(wrapped_env_integration, game_name, request):
+    """Reduced wrapper fixture for integration lanes on representative games."""
+    specified_games = parse_game_list(request.config.getoption("--game"))
+    if specified_games:
+        return wrapped_env_integration
+
+    if normalize_game_name(game_name) not in {normalize_game_name(g) for g in CORE_INFRA_GAMES}:
+        pytest.skip(f"Skipping non-representative game '{game_name}' for heavy checks")
+    return wrapped_env_integration
+
+@pytest.fixture
+def wrapped_env_single(game_name):
+    """Single stable wrapper for tests that do not need wrapper fanout."""
+    return _build_wrapped_env(game_name, WRAPPER_RECIPES["Pixel"])
+
+@pytest.fixture(params=[WRAPPER_RECIPES[name] for name in SMOKE_WRAPPER_RECIPE_NAMES], ids=SMOKE_WRAPPER_RECIPE_NAMES)
+def wrapped_env(game_name, request):
+    """Default wrapper fixture used in PR lanes."""
+    return _build_wrapped_env(game_name, request.param)
