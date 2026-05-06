@@ -372,10 +372,15 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         is_aligned_ladder = jnp.logical_and(is_aligned_ladder, new_out_of_ladder_delay == 0)
         get_on_top_ladder = jnp.logical_and(is_aligned_ladder, jnp.logical_and(is_down, jnp.abs(player_feet_y - l_top) <= 5))
         get_on_bottom_ladder = jnp.logical_and(is_aligned_ladder, jnp.logical_and(is_up, jnp.abs(player_feet_y - l_bottom) <= 5))
+        is_airborne = jnp.logical_or(state.is_jumping == 1, jnp.logical_or(state.is_falling == 1, state.fall_after_jump == 1))
+        can_grab_ladder = jnp.logical_or(
+            get_on_top_ladder,
+            jnp.logical_and(get_on_bottom_ladder, jnp.logical_not(is_airborne))
+        )
         ladder_bottom_bound = jnp.where(l_bottom >= 148, 170, l_bottom + 1)
         ladder_top_bound = jnp.where(l_top <= 6, 0, l_top - 4)
         in_ladder_zone = jnp.logical_and(is_aligned_ladder, jnp.logical_and(player_feet_y >= ladder_top_bound, player_feet_y <= ladder_bottom_bound))
-        on_this_ladder = jnp.where(state.is_climbing == 1, jnp.logical_and(in_ladder_zone, jnp.logical_or(state.last_ladder == jnp.arange(self.consts.MAX_LADDERS_PER_ROOM), state.last_ladder == -1)), jnp.logical_or(get_on_top_ladder, get_on_bottom_ladder))
+        on_this_ladder = jnp.where(state.is_climbing == 1, jnp.logical_and(in_ladder_zone, jnp.logical_or(state.last_ladder == jnp.arange(self.consts.MAX_LADDERS_PER_ROOM), state.last_ladder == -1)), can_grab_ladder)
         can_ladder = jnp.any(on_this_ladder)
         ladder_idx = jnp.where(can_ladder, jnp.argmax(on_this_ladder.astype(jnp.int32)), -1)
 
