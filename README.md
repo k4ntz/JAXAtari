@@ -8,7 +8,7 @@ Quentin Delfosse, Raban Emunds, Paul Seitz, Jannis Blüml, Sebastian Wette, Domi
 
 [Features](#features) • [Installation](#installation) • [Quick Start](#quick-start) • [Wrappers](#wrapper-reference) • [Environments](#available-environments) • [Contributing](#contributing) • [Citation](#citation)
 
-**JAXAtari** is a GPU-accelerated, object-centric Atari environment framework powered by [JAX](https://github.com/google/jax). Inspired by [OCAtari](https://github.com/k4ntz/OC_Atari), it delivers up to **16,000× faster training** through JIT compilation, vectorization, and full GPU parallelization — while exposing structured, object-centric observations alongside standard pixel inputs. Similar to [HackAtari](https://github.com/k4ntz/HackAtari), it also supports game modifications for testing agent generalization.
+**JAXAtari** is a GPU-accelerated, object-centric Atari environment framework powered by [JAX](https://github.com/google/jax). Inspired by [OCAtari](https://github.com/k4ntz/OC_Atari), it enables training agents with 100M steps in under 1 hour (pixel-based observations) or under 15 minutes (object-centric observation) through JIT compilation, vectorization, and full GPU parallelization — while exposing structured, object-centric observations alongside standard pixel inputs. Similar to [HackAtari](https://github.com/k4ntz/HackAtari), it also supports game modifications for testing agent generalization.
 
 ---
 
@@ -265,24 +265,24 @@ base env  →  [MultiRewardWrapper]  →  AtariWrapper  →  <obs wrapper>  → 
 A full status overview with quality ratings is in [games_covered.md](games_covered.md). Featured environments:
 
 
-| Environment | Mods available | Runtime |
-| ----------- | -------------- | ------- |
-| Pong        | -              | -       |
-| Beamrider   | -              | -       |
-| Phoenix     | -              | -       |
-| Tennis      | -              | -       |
-| Skiing      | -              | -       |
-| Montezuma   | -              | -       |
-| Seaquest    | -              | -       |
-| Kangaroo    | -              | -       |
-| Freeway     | -              | -       |
-| Venture     | -              | -       |
-| Qbert       | -              | -       |
-| Frostbite   | -              | -       |
-| Bankheist   | -              | -       |
-| Ms. PacMan  | -              | -       |
-| Gravitar    | -              | -       |
-| Enduro      | -              | -       |
+| Environment | Mods available |
+| ----------- | -------------- |
+| Pong        | 9              |
+| Beamrider   | 8              |
+| Phoenix     | 11             |
+| Tennis      | 13             |
+| Skiing      | 20             |
+| Montezuma   | 15             |
+| Seaquest    | 7              |
+| Kangaroo    | 42             |
+| Freeway     | 13             |
+| Venture     | 9              |
+| Qbert       | 16             |
+| Frostbite   | 14             |
+| Bankheist   | 14             |
+| Ms. PacMan  | 12             |
+| Gravitar    | 15             |
+| Enduro      | 12             |
 
 
 ---
