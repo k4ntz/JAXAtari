@@ -1329,13 +1329,13 @@ class JaxRenderingUtils:
     @partial(jax.jit, static_argnames=["max_digits", "self"])
     def int_to_digits(self, n, max_digits=8):
         """
-        Convert a non-negative integer or a batch of integers to a fixed-length
-        JAX array of digits. Handles both scalar and batched inputs.
+        Convert an integer or a batch of integers to a fixed-length
+        JAX array of digits (using absolute value).
         """
-        # This logic works whether 'n' is a scalar or a batched array.
-        n = jnp.maximum(n, 0)
+        # Use absolute value to support negative numbers
+        n_abs = jnp.abs(n)
         max_val = 10**max_digits - 1
-        n = jnp.minimum(n, max_val)
+        n_abs = jnp.minimum(n_abs, max_val)
 
         def scan_body(carry, _):
             digit = carry % 10
@@ -1344,7 +1344,7 @@ class JaxRenderingUtils:
 
         # lax.scan on a batched `n` produces a shape of (length, batch_size).
         # On a scalar `n`, it produces a shape of (length,).
-        _, digits_reversed = jax.lax.scan(scan_body, n, None, length=max_digits)
+        _, digits_reversed = jax.lax.scan(scan_body, n_abs, None, length=max_digits)
 
         # Flip to get digits in the correct order (most significant first).
         digits = jnp.flip(digits_reversed, axis=0)

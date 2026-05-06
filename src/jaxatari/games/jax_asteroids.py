@@ -16,8 +16,12 @@ def _create_static_procedural_sprites() -> dict:
     """Creates procedural sprites that don't depend on dynamic values."""
     # Create a procedural sprite for the wall color to ensure it's in the palette
     wall_color_rgba = jnp.array([0, 0, 0, 255], dtype=jnp.uint8).reshape(1, 1, 4)
+    # Create a minus sign for negative scores
+    minus_sign = jnp.zeros((10, 12, 4), dtype=jnp.uint8)
+    minus_sign = minus_sign.at[4:6, 2:10, :].set(255)
     return {
         'wall_color': wall_color_rgba,
+        'minus_sign': minus_sign,
     }
 
 def _get_default_asset_config() -> tuple:
@@ -1347,13 +1351,25 @@ class AsteroidsRenderer(JAXGameRenderer):
         wall_sizes = jnp.array([[self.consts.WIDTH, self.consts.WALL_TOP_HEIGHT], [self.consts.WIDTH, self.consts.WALL_BOTTOM_HEIGHT]])
         raster = self.jr.draw_rects(raster, wall_positions, wall_sizes, wall_color_id)
         def _get_number_of_digits(val):
-            return jax.lax.cond(val < 10, lambda: 1, lambda: 
-                   jax.lax.cond(val < 100, lambda: 2, lambda: 
-                   jax.lax.cond(val < 1000, lambda: 3, lambda: 
-                   jax.lax.cond(val < 10000, lambda: 4, lambda: 5))))    
+            val_abs = jnp.abs(val)
+            return jax.lax.cond(val_abs < 10, lambda: 1, lambda: 
+                   jax.lax.cond(val_abs < 100, lambda: 2, lambda: 
+                   jax.lax.cond(val_abs < 1000, lambda: 3, lambda: 
+                   jax.lax.cond(val_abs < 10000, lambda: 4, lambda: 5))))    
         score_digits_arr = self.jr.int_to_digits(state.score, max_digits=5)
         num_score_digits = _get_number_of_digits(state.score)
-        raster = self.jr.render_label_selective(raster, 68 - 16 * (num_score_digits - 1), 5,
+        
+        # Render minus sign if negative
+        is_negative = state.score < 0
+        score_x = 68 - 16 * (num_score_digits - 1)
+        raster = jax.lax.cond(
+            is_negative,
+            lambda r: self.jr.render_at(r, score_x - 16, 5, self.SHAPE_MASKS['minus_sign']),
+            lambda r: r,
+            raster
+        )
+
+        raster = self.jr.render_label_selective(raster, score_x, 5,
                                                 score_digits_arr, self.SHAPE_MASKS['digits'], 
                                                 5 - num_score_digits, num_score_digits, spacing=16, max_digits_to_render=5)
         lives_digits_arr = self.jr.int_to_digits(state.lives, max_digits=1)
