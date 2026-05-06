@@ -104,7 +104,8 @@ MOD_MODULES = {
     "venture": "jaxatari.games.mods.venture_mods.VentureEnvMod",
     "spaceinvaders": "jaxatari.games.mods.spaceinvaders_mods.SpaceInvadersEnvMod",
     "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod",
-    "alien": "jaxatari.games.mods.alien_mods.AlienEnvMod"
+    "alien": "jaxatari.games.mods.alien_mods.AlienEnvMod",
+    "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod"
 }
 
 
