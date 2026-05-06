@@ -10,73 +10,73 @@
 | battle_zone                  | ❌       | 0 |
 | double_dunk                  | ❌       | 0 |
 | name_this_game               | 🥈       | 0 |
-| phoenix                      | 🥇       | 1 |
-| qbert                        | 🥈       | 0 |
+| phoenix                      | 🥇       | 11 |
+| qbert                        | 🥈       | 16 |
 
-Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   ❌: 2
+Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   ❌: 2
 
 ## Atari 57
 | Game                         | Status  | Mods available |
 |------------------------------|---------|----------------|
-| alien                        | 🥈       | 0 |
+| alien                        | 🥈       | 8 |
 | amidar                       | 🥇       | 0 |
 | assault                      | 🥉       | 0 |
 | asterix                      | 🥇       | 0 |
-| asteroids                    | 🥇       | 0 |
-| atlantis                     | 🥈       | 0 |
-| bank_heist                   | 🥇       | 8 |
+| asteroids                    | 🥇       | 4 |
+| atlantis                     | 🥈       | 6 |
+| bank_heist                   | 🥇       | 14 |
 | battle_zone                  | 🥉       | 0 |
-| beam_rider                   | 🥈       | 0 |
+| beam_rider                   | 🥈       | 8 |
 | berzerk                      | 🥈       | 0 |
 | bowling                      | ❌       | 0 |
 | boxing                       | ❌       | 0 |
-| breakout                     | 🥇       | 4 |
+| breakout                     | 🥇       | 8 |
 | centipede                    | 🥈       | 0 |
 | chopper_command              | 🥈       | 0 |
 | crazy_climber                | ❌       | 0 |
 | defender                     | ❌       | 0 |
 | demon_attack                 | ❌       | 0 |
 | double_dunk                  | ❌       | 0 |
-| enduro                       | 🥇       | 0 |
-| fishing_derby                | 🥇       | 0 |
-| freeway                      | 🥇       | 3 |
-| frostbite                    | 🥇       | 11 |
+| enduro                       | 🥇       | 12 |
+| fishing_derby                | 🥇       | 6 |
+| freeway                      | 🥇       | 13 |
+| frostbite                    | 🥇       | 14 |
 | gopher                       | ❌       | 0 |
-| gravitar                     | 🥇       | 0 |
+| gravitar                     | 🥇       | 15 |
 | hero                         | ❌       | 0 |
 | ice_hockey                   | ❌       | 0 |
 | jamesbond                    | ❌       | 0 |
-| kangaroo                     | 🥇       | 1 |
+| kangaroo                     | 🥇       | 42 |
 | krull                        | ❌       | 0 |
 | kung_fu_master               | ❌       | 0 |
-| montezuma_revenge            | 🥇       | 11 |
-| ms_pacman                    | 🥈       | 0 |
+| montezuma_revenge            | 🥇       | 15 |
+| ms_pacman                    | 🥈       | 12 |
 | name_this_game               | 🥈       | 0 |
-| phoenix                      | 🥇       | 1 |
+| phoenix                      | 🥇       | 11 |
 | pitfall                      | ❌       | 0 |
-| pong                         | 🥇       | 2 |
+| pong                         | 🥇       | 9 |
 | private_eye                  | ❌       | 0 |
-| qbert                        | 🥈       | 0 |
+| qbert                        | 🥈       | 16 |
 | riverraid                    | 🥈       | 0 |
 | road_runner                  | ❌       | 0 |
 | robotank                     | ❌       | 0 |
-| seaquest                     | 🥇       | 1 |
-| skiing                       | 🥈       | 0 |
+| seaquest                     | 🥇       | 7 |
+| skiing                       | 🥈       | 20 |
 | solaris                      | ❌       | 0 |
-| space_invaders               | 🥈       | 0 |
+| space_invaders               | 🥈       | 6 |
 | star_gunner                  | ❌       | 0 |
 | surround                     | ❌       | 0 |
-| tennis                       | 🥇       | 0 |
+| tennis                       | 🥇       | 13 |
 | time_pilot                   | 🥈       | 0 |
 | tutankham                    | ❌       | 0 |
 | up_n_down                    | ❌       | 0 |
-| venture                      | 🥈       | 0 |
-| video_pinball                | 🥈       | 2(?) |
+| venture                      | 🥈       | 9 |
+| video_pinball                | 🥈       | 4 |
 | wizard_of_wor                | 🥉       | 0 |
 | yars_revenge                 | ❌       | 0 |
 | zaxxon                       | ❌       | 0 |
 
-Total:  🥇: 16   |   🥈: 15   |   🥉: 3   |   ❌: 23
+Total:  🥇: 16   |   🥈: 15   |   🥉: 3   |   ❌: 23
 
 ## Remaining ALE games
 | Game                         | Status  | Mods available |
@@ -114,7 +114,7 @@ Total:  🥇: 16   |   🥈: 15   |   🥉: 3   |   ❌: 23
 | miniature_golf               | ❌       | 0 |
 | mr_do                        | ❌       | 0 |
 | othello                      | 🥉       | 0 |
-| pacman                       | 🥉       | 0 |
+| pacman                       | 🥉       | 7 |
 | pitfall2                     | ❌       | 0 |
 | pooyan                       | ❌       | 0 |
 | sir_lancelot                 | 🥈       | 0 |
@@ -130,4 +130,4 @@ Total:  🥇: 16   |   🥈: 15   |   🥉: 3   |   ❌: 23
 | video_cube                   | 🥈       | 0 |
 | word_zapper                  | 🥈       | 0 |
 
-Total:  🥇: 3   |   🥈: 14   |   🥉: 8   |   ❌: 23
+Total:  🥇: 3   |   🥈: 14   |   🥉: 8   |   ❌: 23
