@@ -1,6 +1,5 @@
 # JAXAtari: GPU-Accelerated Object-Centric Atari Environments
 
-[Documentation](https://jaxatari.readthedocs.io/en/latest/)
 [License](LICENSE)
 
 Quentin Delfosse, Raban Emunds, Paul Seitz, Jannis Blüml, Sebastian Wette, Dominik Mandok —  
@@ -49,8 +48,6 @@ Quentin Delfosse, Raban Emunds, Paul Seitz, Jannis Blüml, Sebastian Wette, Domi
 - **Comprehensive wrapper system** — pixel, object-centric, combined, normalized, flattened — all composable
 - **Game modifications** — pre-built mods and a clean API for custom distribution shifts
 
-📘 [Read the Documentation](https://jaxatari.readthedocs.io/en/latest/)
-
 ---
 
 ## Installation
@@ -90,10 +87,13 @@ For other accelerators see the [JAX installation guide](https://docs.jax.dev/en/
 
 ### Download sprites
 
-Before running any environment you will be asked to confirm ROM ownership of the original Atari ROMs. This is necessary to download the original sprites:
+Before running any environment for the first time you will be asked to confirm ROM ownership of the original Atari ROMs. This is necessary to download sprites that look similar to the original ALE sprites.
+
+If you do not have ownership of the original Atari ROMs, you can continue with replacement/custom sprites. In that case, please decline the ownership and the installer will download the alternative sprites package.
+You can also use your own sprites by placing them in the ~/.local/share/jaxatari/sprites directory.
 
 ```bash
-.venv/bin/install_sprites
+python3 scripts/install_sprites.py
 ```
 
 ---

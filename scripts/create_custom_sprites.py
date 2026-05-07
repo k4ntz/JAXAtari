@@ -7,14 +7,18 @@ create_clean_sprites.py
                       spatial structure but is visually distinct from the originals.
 
 Usage:
-    python scripts/create_clean_sprites.py [--hue-shift DEG] [--saturation-scale S]
-                                           [--src DIR] [--dst DIR]
+    python scripts/create_custom_sprites.py [--hue-shift DEG] [--saturation-scale S]
+                                            [--shift-regular-sprites]
+                                            [--regular-sprite-hue-shift DEG]
+                                            [--src DIR] [--dst DIR]
 
 Defaults:
     --src  ~/.local/share/jaxatari/sprites
-    --dst  ~/.local/share/jaxatari/clean_sprites
+    --dst  ~/.local/share/jaxatari/custom_sprites
     --hue-shift        137   (degrees, golden-angle-ish so colours stay spread out)
     --saturation-scale 0.55  (compress saturation toward grey)
+    --shift-regular-sprites disabled by default
+    --regular-sprite-hue-shift 18 (degrees, only used when flag is enabled)
 """
 
 import argparse
@@ -25,7 +29,7 @@ import numpy as np
 from platformdirs import user_data_dir
 
 DEFAULT_SRC = Path(user_data_dir("jaxatari")) / "sprites"
-DEFAULT_DST = Path(user_data_dir("jaxatari")) / "clean_sprites"
+DEFAULT_DST = Path(user_data_dir("jaxatari")) / "custom_sprites"
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +64,7 @@ def median_color(arr: np.ndarray) -> np.ndarray:
     return result
 
 
-def solid_rectangle(arr: np.ndarray) -> np.ndarray:
+def solid_rectangle(arr: np.ndarray, hue_shift_deg: float | None = None) -> np.ndarray:
     """
     Fill the entire bounding box with the median colour of the original visible pixels.
     The whole H×W area becomes fully opaque — no shape information is preserved.
@@ -69,6 +73,13 @@ def solid_rectangle(arr: np.ndarray) -> np.ndarray:
     if arr.ndim == 4:
         return np.stack([solid_rectangle(frame) for frame in arr])
     color = median_color(arr)
+    if hue_shift_deg is not None:
+        rgb = color[:3].astype(np.float32).reshape(1, 1, 3) / 255.0
+        hh, ss, vv = _rgb_to_hsv_vectorised(rgb)
+        hh = (hh + hue_shift_deg / 360.0) % 1.0
+        shifted_rgb = (_hsv_to_rgb_vectorised(hh, ss, vv) * 255).astype(np.uint8).reshape(3)
+        color = color.copy()
+        color[:3] = shifted_rgb
     out = np.full_like(arr, color)
     # For RGBA, ensure alpha is fully opaque everywhere
     if arr.shape[-1] == 4:
@@ -187,7 +198,14 @@ def _hsv_to_rgb_vectorised(h, s, v):
 # Main
 # ---------------------------------------------------------------------------
 
-def process_sprites(src: Path, dst: Path, hue_shift: float, sat_scale: float):
+def process_sprites(
+    src: Path,
+    dst: Path,
+    hue_shift: float,
+    sat_scale: float,
+    shift_regular_sprites: bool,
+    regular_sprite_hue_shift: float,
+):
     npy_files = list(src.rglob("*.npy"))
     png_files = list(src.rglob("*.png"))
     print(f"Found {len(npy_files)} .npy files and {len(png_files)} .png files under {src}")
@@ -211,7 +229,10 @@ def process_sprites(src: Path, dst: Path, hue_shift: float, sat_scale: float):
         if is_background:
             out_arr = recolor_background(arr, hue_shift, sat_scale)
         else:
-            out_arr = solid_rectangle(arr)
+            out_arr = solid_rectangle(
+                arr,
+                hue_shift_deg=regular_sprite_hue_shift if shift_regular_sprites else None,
+            )
 
         np.save(dst_path, out_arr)
 
@@ -222,7 +243,7 @@ def process_sprites(src: Path, dst: Path, hue_shift: float, sat_scale: float):
         dst_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_path, dst_path)
 
-    print(f"Done. Clean sprites written to {dst}")
+    print(f"Done. Custom sprites written to {dst}")
 
 
 def main():
@@ -231,11 +252,22 @@ def main():
     parser.add_argument("--src", type=Path, default=DEFAULT_SRC,
                         help="Source sprites directory")
     parser.add_argument("--dst", type=Path, default=DEFAULT_DST,
-                        help="Destination clean_sprites directory")
+                        help="Destination custom_sprites directory")
     parser.add_argument("--hue-shift", type=float, default=137.0,
                         help="Hue rotation applied to backgrounds (degrees, default 137)")
     parser.add_argument("--saturation-scale", type=float, default=0.55,
                         help="Saturation multiplier for backgrounds (default 0.55)")
+    parser.add_argument(
+        "--shift-regular-sprites",
+        action="store_true",
+        help="If set, also hue-shift regular (non-background) sprites.",
+    )
+    parser.add_argument(
+        "--regular-sprite-hue-shift",
+        type=float,
+        default=18.0,
+        help="Hue rotation in degrees for regular sprites when --shift-regular-sprites is set (default 18).",
+    )
     args = parser.parse_args()
 
     if not args.src.exists():
@@ -245,7 +277,14 @@ def main():
     if args.dst.exists():
         print(f"Destination {args.dst} already exists — overwriting changed files.")
 
-    process_sprites(args.src, args.dst, args.hue_shift, args.saturation_scale)
+    process_sprites(
+        args.src,
+        args.dst,
+        args.hue_shift,
+        args.saturation_scale,
+        args.shift_regular_sprites,
+        args.regular_sprite_hue_shift,
+    )
 
 
 if __name__ == "__main__":
