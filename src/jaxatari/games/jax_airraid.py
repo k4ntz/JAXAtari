@@ -15,7 +15,7 @@ from jaxatari.renderers import JAXGameRenderer
 class AirRaidConstants(struct.PyTreeNode):
     # Game environment
     WIDTH: int = struct.field(pytree_node=False, default=160)
-    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    HEIGHT: int = struct.field(pytree_node=False, default=250)
 
     # Player
     PLAYER_WIDTH: int = struct.field(pytree_node=False, default=14)
@@ -30,18 +30,18 @@ class AirRaidConstants(struct.PyTreeNode):
     BUILDING_WIDTH: int = struct.field(pytree_node=False, default=50)
     BUILDING_HEIGHT: int = struct.field(pytree_node=False, default=25)
     MAX_BUILDING_DAMAGE: int = struct.field(pytree_node=False, default=6)
-    BUILDING_INITIAL_Y: int = struct.field(pytree_node=False, default=160)
+    BUILDING_INITIAL_Y: int = struct.field(pytree_node=False, default=205)
     BUILDING_VELOCITY: int = struct.field(pytree_node=False, default=1)
     BUILDING_SPACING: int = struct.field(pytree_node=False, default=90)
 
-    # Height and Y position based on damage level
+    # Height and Y position based on damage level (bottom of building anchored at y=230)
     BUILDING_HEIGHTS: chex.Array = struct.field(
         pytree_node=False,
         default_factory=lambda: jnp.array([25, 21, 17, 13, 9, 5, 0]),
     )
     BUILDING_Y_POSITIONS: chex.Array = struct.field(
         pytree_node=False,
-        default_factory=lambda: jnp.array([160, 164, 168, 172, 176, 180, 190]),
+        default_factory=lambda: jnp.array([205, 209, 213, 217, 221, 225, 230]),
     )
 
     # Enemies
@@ -538,6 +538,11 @@ def detect_collisions(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex
 
 
 class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, AirRaidConstants]):
+    # Minimal ALE action set for Pong:
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.FIRE, Action.RIGHT, Action.LEFT, Action.RIGHTFIRE, Action.LEFTFIRE],
+        dtype=jnp.int32,
+    )
     def __init__(self, consts: AirRaidConstants = None, frameskip: int = 0, reward_funcs: list = None):
         consts = consts or AirRaidConstants()
         super().__init__(consts)
@@ -632,6 +637,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
         Args: state: Current game state, action: Action to take
         Returns: Updated game state, observation, reward, done flag, and info
         """
+        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))  # Map action index to actual action value
 
         # Update building positions
         new_building_x = state.building_x + AirRaidConstants.BUILDING_VELOCITY
@@ -851,10 +857,13 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
         Args: Current game state
         Returns: Observation object containing entity positions and game data
         """
+        w, h = AirRaidConstants.WIDTH, AirRaidConstants.HEIGHT
         player_is_visible = state.player_visible == 1
+        px = jnp.clip(state.player_x, 0, w)
+        py = jnp.clip(state.player_y, 0, h)
         player = ObjectObservation.create(
-            x=jnp.where(player_is_visible, state.player_x, jnp.array(-1, dtype=jnp.int32)),
-            y=jnp.where(player_is_visible, state.player_y, jnp.array(-1, dtype=jnp.int32)),
+            x=jnp.where(player_is_visible, px, 0),
+            y=jnp.where(player_is_visible, py, 0),
             width=jnp.where(player_is_visible, jnp.array(AirRaidConstants.PLAYER_WIDTH, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32)),
             height=jnp.where(player_is_visible, jnp.array(AirRaidConstants.PLAYER_HEIGHT, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32)),
             active=state.player_visible,
@@ -863,9 +872,11 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
         building_active = (state.building_damage < AirRaidConstants.MAX_BUILDING_DAMAGE).astype(jnp.int32)
         building_y = DEFAULT_AIRRAID_CONSTANTS.BUILDING_Y_POSITIONS[state.building_damage]
         building_h = DEFAULT_AIRRAID_CONSTANTS.BUILDING_HEIGHTS[state.building_damage]
+        bx = jnp.clip(state.building_x, 0, w)
+        by = jnp.clip(building_y, 0, h)
         buildings_obs = ObjectObservation.create(
-            x=jnp.where(building_active == 1, state.building_x, -1),
-            y=jnp.where(building_active == 1, building_y, -1),
+            x=jnp.where(building_active == 1, bx, 0),
+            y=jnp.where(building_active == 1, by, 0),
             width=jnp.full_like(state.building_x, AirRaidConstants.BUILDING_WIDTH),
             height=building_h,
             active=building_active,
@@ -878,26 +889,32 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
             18,
             jnp.where(state.enemy_type < 3, 16, 14),
         )
+        ex = jnp.clip(state.enemy_x, 0, w)
+        ey = jnp.clip(state.enemy_y, 0, h)
         enemies_obs = ObjectObservation.create(
-            x=jnp.where(state.enemy_active == 1, state.enemy_x, -1),
-            y=jnp.where(state.enemy_active == 1, state.enemy_y, -1),
+            x=jnp.where(state.enemy_active == 1, ex, 0),
+            y=jnp.where(state.enemy_active == 1, ey, 0),
             width=enemy_widths,
             height=enemy_heights,
             active=state.enemy_active,
             visual_id=state.enemy_type,
         )
 
+        pmx = jnp.clip(state.player_missile_x, 0, w)
+        pmy = jnp.clip(state.player_missile_y, 0, h)
         player_missiles_obs = ObjectObservation.create(
-            x=jnp.where(state.player_missile_active == 1, state.player_missile_x, -1),
-            y=jnp.where(state.player_missile_active == 1, state.player_missile_y, -1),
+            x=jnp.where(state.player_missile_active == 1, pmx, 0),
+            y=jnp.where(state.player_missile_active == 1, pmy, 0),
             width=jnp.full_like(state.player_missile_x, AirRaidConstants.MISSILE_WIDTH),
             height=jnp.full_like(state.player_missile_y, AirRaidConstants.MISSILE_HEIGHT),
             active=state.player_missile_active,
         )
 
+        emx = jnp.clip(state.enemy_missile_x, 0, w)
+        emy = jnp.clip(state.enemy_missile_y, 0, h)
         enemy_missiles_obs = ObjectObservation.create(
-            x=jnp.where(state.enemy_missile_active == 1, state.enemy_missile_x, -1),
-            y=jnp.where(state.enemy_missile_active == 1, state.enemy_missile_y, -1),
+            x=jnp.where(state.enemy_missile_active == 1, emx, 0),
+            y=jnp.where(state.enemy_missile_active == 1, emy, 0),
             width=jnp.full_like(state.enemy_missile_x, AirRaidConstants.MISSILE_WIDTH),
             height=jnp.full_like(state.enemy_missile_y, AirRaidConstants.MISSILE_HEIGHT),
             active=state.enemy_missile_active,
@@ -914,10 +931,12 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
         )
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(Action.get_all_values()))
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
-        player_space = spaces.get_object_space(n=None, screen_size=(AirRaidConstants.HEIGHT, AirRaidConstants.WIDTH))
+        player_space = spaces.get_object_space(
+            n=None, screen_size=(AirRaidConstants.HEIGHT, AirRaidConstants.WIDTH)
+        )
         buildings_space = spaces.get_object_space(
             n=AirRaidConstants.NUM_BUILDINGS,
             screen_size=(AirRaidConstants.HEIGHT, AirRaidConstants.WIDTH),
@@ -1133,7 +1152,7 @@ class AirRaidRenderer(JAXGameRenderer):
 
         def render_life(i, raster_in):
             icon_x = 30 + i * self.life_spacing
-            render_result = self.jr.render_at(raster_in, icon_x, 200, life_mask)
+            render_result = self.jr.render_at(raster_in, icon_x, AirRaidConstants.HEIGHT - 17, life_mask)
             return jnp.where(i < lives - 1, render_result, raster_in)
 
         raster = jax.lax.fori_loop(0, 2, render_life, raster)

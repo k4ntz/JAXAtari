@@ -1,220 +1,356 @@
-# 🎮 JAXAtari: JAX-Based Object-Centric Atari Environments
+# JAXAtari: GPU-Accelerated Object-Centric Atari Environments
 
-Quentin Delfosse, Raban Emunds, Jannis Blüml, Paul Seitz, Sebastian Wette, Dominik Mandok
-[AI/ML Lab – TU Darmstadt](https://www.aiml.informatik.tu-darmstadt.de/)
+[License](LICENSE)
 
-> A GPU-accelerated, object-centric Atari environment suite built with JAX for fast, scalable reinforcement learning research.
+Quentin Delfosse, Raban Emunds, Paul Seitz, Jannis Blüml, Sebastian Wette, Dominik Mandok —  
+[AI/ML Lab, TU Darmstadt](https://www.aiml.informatik.tu-darmstadt.de/)
+
+[Features](#features) • [Installation](#installation) • [Quick Start](#quick-start) • [Wrappers](#wrapper-reference) • [Environments](#available-environments) • [Contributing](#contributing) • [Citation](#citation)
+
+**JAXAtari** is a GPU-accelerated, object-centric Atari environment framework powered by [JAX](https://github.com/google/jax). Inspired by [OCAtari](https://github.com/k4ntz/OC_Atari), it enables training agents with 100M steps in under 1 hour (pixel-based observations) or under 15 minutes (object-centric observation) through JIT compilation, vectorization, and full GPU parallelization — while exposing structured, object-centric observations alongside standard pixel inputs. Similar to [HackAtari](https://github.com/k4ntz/HackAtari), it also supports game modifications for testing agent generalization.
 
 ---
 
-**JAXAtari** introduces a GPU-accelerated, object-centric Atari environment framework powered by [JAX](https://github.com/google/jax). Inspired by [OCAtari](https://github.com/k4ntz/OC_Atari), this framework enables up to **16,000x faster training speeds** through just-in-time (JIT) compilation, vectorization, and massive parallelization on GPU.
-Similar to [HackAtari](https://github.com/k4ntz/HackAtari), it implements a number of small **game modifications** , for simple testing of the generalization capabilities of agents. 
 
-<!-- --- -->
+<div class="collage">
+  <div class="row" align="center">
+    <img src="./docs/source/_static/gifs/pong.gif" alt="Pong" width="24%">
+    <img src="./docs/source/_static/gifs/beamrider.gif" alt="Beamrider" width="24%">
+    <img src="./docs/source/_static/gifs/phoenix.gif" alt="Phoenix" width="24%">
+    <img src="./docs/source/_static/gifs/tennis.gif" alt="Tennis" width="24%">
+  </div>
+  <div class="row" align="center">
+    <img src="./docs/source/_static/gifs/skiing.gif" alt="Skiing" width="24%">
+    <img src="./docs/source/_static/gifs/montezumarevenge.gif" alt="Montezuma" width="24%">
+    <img src="./docs/source/_static/gifs/seaquest.gif" alt="Seaquest" width="24%">
+    <img src="./docs/source/_static/gifs/kangaroo.gif" alt="Kangaroo" width="24%">
+  </div>
+  <div class="row" align="center">
+    <img src="./docs/source/_static/gifs/freeway.gif" alt="Freeway" width="24%">
+    <img src="./docs/source/_static/gifs/venture.gif" alt="Venture" width="24%">
+    <img src="./docs/source/_static/gifs/qbert.gif" alt="Qbert" width="24%">
+    <img src="./docs/source/_static/gifs/frostbite.gif" alt="Frostbite" width="24%">
+  </div>
+  <div class="row" align="center">
+    <img src="./docs/source/_static/gifs/bankheist.gif" alt="Bankheist" width="24%">
+    <img src="./docs/source/_static/gifs/mspacman.gif" alt="Ms. PacMan" width="24%">
+    <img src="./docs/source/_static/gifs/gravitar.gif" alt="Gravitar" width="24%">
+    <img src="./docs/source/_static/gifs/enduro.gif" alt="Enduro" width="24%">
+  </div>
+</div>
+
+---
 
 ## Features
-- **Object-centric extraction** of Atari game states with structured observations
-- **JAX-based vectorized execution** with full GPU support and JIT compilation
-- **Comprehensive wrapper system** for different observation types (pixel, object-centric, combined)
-- **Game modifications** to test agent generalization across distribution shifts (+ simple implementation of custom modifications).
 
-📘 [Read the Documentation](https://jaxatari.readthedocs.io/en/latest/) 
+- **Object-centric observations** — structured game state with per-object positions, types, and attributes
+- **Full GPU pipeline** — end-to-end JAX with JIT compilation, `vmap`, and `lax.scan`; no CPU/GPU transfer bottlenecks
+- **Comprehensive wrapper system** — pixel, object-centric, combined, normalized, flattened — all composable
+- **Game modifications** — pre-built mods and a clean API for custom distribution shifts
 
-## Getting Started
+---
 
-<!-- ### Prerequisites -->
-### Install
+## Installation
+
+### Basic
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-
-python3 -m pip install -U pip
-pip3 install -e .
+pip install -U pip
+pip install -e .
 ```
 
-**Note**: This will install JAX without GPU acceleration.
+### With development tools (tests + manual play)
 
-**CUDA Users** should run the following to add GPU support:
+Includes `pytest`, `pygame`, and testing extras:
+
+```bash
+pip install -e ".[dev]"
+```
+
+### With training scripts
+
+Includes `wandb`, `tensorboard`, `hydra`, and other training dependencies:
+
+```bash
+pip install -e ".[training]"
+```
+
+### GPU acceleration (CUDA)
+
 ```bash
 pip install -U "jax[cuda12]"
 ```
 
-For other accelerator types, please follow the instructions [here](https://docs.jax.dev/en/latest/installation.html).
+For other accelerators see the [JAX installation guide](https://docs.jax.dev/en/latest/installation.html).
 
-**Note**: Next, you need to download the original Atari 2600 sprites. Before downloading, you will be asked to confirm ownership of the original ROMs.
+### Download sprites
+
+Before running any environment for the first time you will be asked to confirm ROM ownership of the original Atari ROMs. This is necessary to download sprites that look similar to the original ALE sprites.
+
+If you do not have ownership of the original Atari ROMs, you can continue with replacement/custom sprites. In that case, please decline the ownership and the installer will download the alternative sprites package.
+You can also use your own sprites by placing them in the ~/.local/share/jaxatari/sprites directory.
 
 ```bash
-.venv/bin/install_sprites
+python3 scripts/install_sprites.py
 ```
 
-## Usage
+---
 
-### Basic Environment Creation
+## Quick Start
 
-The main entry point is the `make()` function:
+### Basic environment creation
 
 ```python
 import jax
 import jaxatari
 
-# Create an environment
-env = jaxatari.make("pong")  # or "seaquest", "kangaroo", "freeway", etc.
+env = jaxatari.make("pong")
 
-# Get available games
-available_games = jaxatari.list_available_games()
-print(f"Available games: {available_games}")
+# List all available games
+print(jaxatari.list_available_games())
 ```
 
-### Using Modifications
+### Game modifications
 
-JAXAtari provides some pre-implemented game modifications: 
+JAXAtari ships with pre-built modifications for testing generalization:
 
 ```python
-import jax
 import jaxatari
 
-# Create base environment
-base_env = jaxatari.make("pong")
-# Apply LazyEnemy modification
-mod_env = jaxatari.modify(base_env, "pong", "LazyEnemyWrapper")
+# Single mod
+env = jaxatari.make("pong", mods=["lazy_enemy"])
+
+# Multiple mods simultaneously
+env = jaxatari.make("pong", mods=["lazy_enemy", "shift_enemy"])
 ```
 
-### Using Wrappers
+### Applying wrappers
 
-JAXAtari provides a comprehensive wrapper system for different use cases:
+Wrappers must be applied in order: `AtariWrapper` first, then an observation wrapper, then optional utility wrappers.
 
 ```python
-import jax
 import jaxatari
 from jaxatari.wrappers import (
-    AtariWrapper, 
-    ObjectCentricWrapper, 
+    AtariWrapper,
+    ObjectCentricWrapper,
     PixelObsWrapper,
     PixelAndObjectCentricWrapper,
     FlattenObservationWrapper,
-    LogWrapper
+    NormalizeObservationWrapper,
+    LogWrapper,
 )
 
-# Create base environment
 base_env = jaxatari.make("pong")
+atari_env = AtariWrapper(base_env)
 
-# Apply wrappers for different observation types
-env = AtariWrapper(base_env, frame_stack_size=4, frame_skip=4)
-env = ObjectCentricWrapper(env)  # Returns flattened object features
-# OR
-env = PixelObsWrapper(AtariWrapper(base_env))  # Returns pixel observations
-# OR
-env = PixelAndObjectCentricWrapper(AtariWrapper(base_env))  # Returns both
-# OR
-env = FlattenObservationWrapper(ObjectCentricWrapper(AtariWrapper(base_env)))  # Returns flattened observations
+# Choose one observation type:
+env = ObjectCentricWrapper(atari_env, frame_stack_size=4, frame_skip=4)          # shape: (frame_stack, features)
+# env = PixelObsWrapper(atari_env)             # shape: (frame_stack, H, W, C)
+# env = PixelAndObjectCentricWrapper(atari_env) # both
 
-# Add logging wrapper for training
+# Optional: flatten to 1D
+env = FlattenObservationWrapper(env)
+
+# Optional: normalize observations to [0, 1]
+env = NormalizeObservationWrapper(env)
+
+# Optional: track episode returns and lengths
 env = LogWrapper(env)
 ```
 
-### Vectorized Training Example
+### Vectorized stepping
 
 ```python
 import jax
 import jaxatari
-from jaxatari.wrappers import AtariWrapper, ObjectCentricWrapper
+from jaxatari.wrappers import AtariWrapper, ObjectCentricWrapper, FlattenObservationWrapper
 
-# Create environment with wrappers
-base_env = jaxatari.make("pong")
-env = FlattenObservationWrapper(ObjectCentricWrapper(AtariWrapper(base_env)))
+env = FlattenObservationWrapper(ObjectCentricWrapper(AtariWrapper(jaxatari.make("pong"))))
+
 n_envs = 1024
 rng = jax.random.PRNGKey(0)
 reset_keys = jax.random.split(rng, n_envs)
 
-# Initialize n_envs parallel environments
-init_obs, env_state = jax.vmap(env.reset)(reset_keys)
+# Initialise n_envs parallel environments
+obs, env_state = jax.vmap(env.reset)(reset_keys)
 
-# Take one random step in each env
+# Single parallel step
 action = jax.random.randint(rng, (n_envs,), 0, env.action_space().n)
-new_obs, new_env_state, reward, done, info = jax.vmap(env.step)(env_state, action)
+obs, env_state, reward, terminated, truncated, info = jax.vmap(env.step)(env_state, action)
 
-# Take 100 steps with scan
-def step_fn(carry, unused):
-    _, env_state = carry
-    new_obs, new_env_state, reward, done, info = jax.vmap(env.step)(env_state, action)
-    return (new_obs, new_env_state), (reward, done, info)
+# 100 steps with scan
+def step_fn(carry, _):
+    obs, state = carry
+    new_obs, new_state, reward, terminated, truncated, info = jax.vmap(env.step)(state, action)
+    return (new_obs, new_state), (reward, terminated, truncated, info)
 
-carry = (init_obs, env_state)
-_, (rewards, dones, infos) = jax.lax.scan(
-    step_fn, carry, None, length=100
+_, (rewards, terminations, truncations, infos) = jax.lax.scan(
+    step_fn, (obs, env_state), None, length=100
 )
 ```
 
-### Manual Game Play
+### Gymnasium compatibility *(WIP)*
 
-Run a game manually with human input (e.g. on Pong):
-```bash
-pip install pygame
-```
-
-```bash
-python3 scripts/play.py -g Pong
-```
-
----
-
-## Supported Games
-
-| Game     | Supported |
-|----------|-----------|
-| Freeway  |    ✅     |
-| Kangaroo |    ✅     |
-| Pong     |    ✅     |
-| Seaquest |    ✅     |
-
-> More games can be added via the uniform wrapper system.
-
----
-
-## Wrapper System
-
-JAXAtari provides several wrappers to customize environment behavior:
-
-- **`AtariWrapper`**: Base wrapper with frame stacking, frame skipping, and sticky actions
-- **`ObjectCentricWrapper`**: Returns flattened object-centric features (2D array: `[frame_stack, features]`)
-- **`PixelObsWrapper`**: Returns pixel observations (4D array: `[frame_stack, height, width, channels]`)
-- **`PixelAndObjectCentricWrapper`**: Returns both pixel and object-centric observations
-- **`FlattenObservationWrapper`**: Flattens any observation structure to a single 1D array
-- **`LogWrapper`**: Tracks episode returns and lengths for training
-- **`MultiRewardLogWrapper`**: Tracks multiple reward components separately
-
-### Wrapper Usage Patterns
+> **Note:** This wrapper is currently work in progress and supports interoperability with CPU-based Gymnasium pipelines (e.g. stable-baselines3). It currently only exposes pixel observations and does not accept JAXAtari wrappers. For JAX-native training use the wrapper stack above instead.
 
 ```python
-# For pure RL with object-centric features (recommended)
-env = ObjectCentricWrapper(AtariWrapper(jaxatari.make("pong")))
+from jaxatari.gym_wrapper import GymnasiumJaxAtariWrapper
+import jaxatari
 
-# For computer vision approaches
-env = PixelObsWrapper(AtariWrapper(jaxatari.make("pong")))
+base_env = jaxatari.make("pong")
+gym_env = GymnasiumJaxAtariWrapper(base_env)
 
-# For multi-modal approaches
-env = PixelAndObjectCentricWrapper(AtariWrapper(jaxatari.make("pong")))
+obs, info = gym_env.reset()
+obs, reward, terminated, truncated, info = gym_env.step(gym_env.action_space.sample())
+```
 
-# For training with logging
-env = LogWrapper(ObjectCentricWrapper(AtariWrapper(jaxatari.make("pong"))))
+### Multiple reward functions
 
-# All wrapper combinations can be flattened using the FlattenObservationWrapper
+Use `MultiRewardWrapper` to compute several reward signals in parallel (apply it directly after the base environment, before any other wrapper):
+
+```python
+import jaxatari
+from jaxatari.wrappers import MultiRewardWrapper, AtariWrapper, ObjectCentricWrapper, MultiRewardLogWrapper
+
+def survival_reward(prev_state, state):
+    return 1.0  # reward every surviving step
+
+def score_delta(prev_state, state):
+    return state.score - prev_state.score
+
+base_env = jaxatari.make("pong")
+env = MultiRewardWrapper(base_env, reward_funcs=[survival_reward, score_delta])
+env = ObjectCentricWrapper(AtariWrapper(env))
+env = MultiRewardLogWrapper(env)
+```
+
+### Manual play
+
+```bash
+# requires the [dev] extra (pygame)
+python3 scripts/play.py -g Pong --mods lazy_enemy
+```
+
+---
+
+## Wrapper Reference
+
+All wrappers live in `src/jaxatari/wrappers.py`. The standard stack is:
+
+```
+base env  →  [MultiRewardWrapper]  →  AtariWrapper  →  <obs wrapper>  →  [utility wrappers]
+```
+
+
+| Wrapper                        | Description                                                                                                                            |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `AtariWrapper`                 | Atari-specific pre-processing: sticky actions, episodic life, noop reset, frame-skip config. Must come before any observation wrapper. |
+| `ObjectCentricWrapper`         | Stacked object-centric features. Output shape: `(frame_stack, features)`.                                                              |
+| `PixelObsWrapper`              | Stacked pixel frames with max-pooling. Output shape: `(frame_stack, H, W, C)`.                                                         |
+| `PixelAndObjectCentricWrapper` | Both pixel and object-centric observations as a tuple.                                                                                 |
+| `PixelAndObjectObsWrapper`     | Same as above but returns structured (non-flattened) OC observations.                                                                  |
+| `FlattenObservationWrapper`    | Flattens any observation pytree to a single 1D array.                                                                                  |
+| `NormalizeObservationWrapper`  | Normalizes observations to `[0, 1]` (or `[-1, 1]` with `to_neg_one=True`). Compatible with any pytree structure.                       |
+| `LogWrapper`                   | Tracks episode returns and lengths.                                                                                                    |
+| `MultiRewardWrapper`           | Computes multiple reward functions at every step. Apply before `AtariWrapper`.                                                         |
+| `MultiRewardLogWrapper`        | Tracks multiple reward components separately. Use with `MultiRewardWrapper`.                                                           |
+
+
+---
+
+## Available Environments
+
+A full status overview with quality ratings is in [games_covered.md](games_covered.md). Featured environments:
+
+
+| Environment | Mods available |
+| ----------- | -------------- |
+| Pong        | 9              |
+| Beamrider   | 8              |
+| Phoenix     | 11             |
+| Tennis      | 13             |
+| Skiing      | 20             |
+| Montezuma   | 15             |
+| Seaquest    | 7              |
+| Kangaroo    | 42             |
+| Freeway     | 13             |
+| Venture     | 9              |
+| Qbert       | 16             |
+| Frostbite   | 14             |
+| Bankheist   | 14             |
+| Ms. PacMan  | 12             |
+| Gravitar    | 15             |
+| Enduro      | 12             |
+
+
+---
+
+## Project Structure
+
+```
+JAXAtari/
+├── src/jaxatari/
+│   ├── core.py              # make() factory, game and mod registries
+│   ├── environment.py       # JaxEnvironment base class
+│   ├── wrappers.py          # all wrappers
+│   ├── modification.py      # mod system (plugins, conflict detection)
+│   ├── gym_wrapper.py       # Gymnasium compatibility adapter
+│   ├── renderers.py         # JAX rendering utilities
+│   ├── spaces.py            # action/observation space definitions
+│   ├── install_sprites.py   # sprite download script
+│   └── games/
+│       ├── jax_<game>.py    # one file per environment
+│       └── mods/
+│           ├── <game>_mods.py          # mod controller per game
+│           └── <game>/
+│               └── <game>_mod_plugins.py  # individual mod plugin classes
+├── scripts/                 # see scripts/README.md for a full description
+│   ├── play.py              # interactive human play
+│   └── benchmarks/          # PPO/PQN training and evaluation scripts
+├── tests/                   # pytest test suite
+├── docs/                    # Sphinx documentation source
+├── games_covered.md         # full environment status table
+└── pyproject.toml
 ```
 
 ---
 
 ## Contributing
 
-Contributions are welcome!
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guides on adding mods, environments, and wrappers. Quick overview below.
 
-1. Fork this repository  
-2. Create your feature branch: `git checkout -b feature/my-feature`  
-3. Commit your changes: `git commit -m 'Add some feature'`  
-4. Push to the branch: `git push origin feature/my-feature`  
-5. Open a pull request  
+### Adding a new environment
+
+1. Create `src/jaxatari/games/jax_<game>.py` implementing `JaxEnvironment`
+2. Register it in `GAME_MODULES` in `src/jaxatari/core.py`
+3. Add a test in `tests/games/`
+4. Update your game's status in [games_covered.md](games_covered.md)
+
+### Adding a mod
+
+1. Create `src/jaxatari/games/mods/<game>/<game>_mod_plugins.py` with your plugin class(es) extending `JaxAtariInternalModPlugin` or `JaxAtariPostStepModPlugin`
+2. Create or update `src/jaxatari/games/mods/<game>_mods.py` — add your mod key to the `REGISTRY` dict
+3. Register the controller in `MOD_MODULES` in `src/jaxatari/core.py` (if not already present)
+
+### Adding a wrapper
+
+1. Subclass `JaxatariWrapper` in `src/jaxatari/wrappers.py`
+2. Implement `reset()`, `step()`, and `observation_space()` / `action_space()`
+3. Export it from `src/jaxatari/__init__.py`
+
+### General
+
+1. Fork this repository
+2. Create a feature branch: `git checkout -b feature/my-feature`
+3. Commit your changes and open a pull request
+
+Feel free to share new mods or environments by opening a PR!
 
 ---
-## Cite us
+
+## Citation
 
 ```bibtex
 @misc{jaxatari2026,
@@ -226,11 +362,9 @@ Contributions are welcome!
   howpublished = {https://github.com/k4ntz/JAXAtari/},
 }
 ```
+
 ---
 
 ## License
 
-This project is licensed under the MIT License.  
-See the [LICENSE](LICENSE) file for details.
-
----
+This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.

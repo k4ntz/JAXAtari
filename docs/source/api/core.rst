@@ -16,5 +16,5 @@ Here’s a minimal example:
 
 .. automodule:: jaxatari.core
    :members:
-   :undoc-members:
    :show-inheritance:
+   :undoc-members:

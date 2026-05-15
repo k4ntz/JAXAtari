@@ -1,7 +1,3 @@
-"""
-authors: Paula Troszt, Ernst Christian Böhringer, Aiman Sammy Rahlf
-"""
-
 import jax.numpy as jnp
 from typing import NamedTuple
 import chex

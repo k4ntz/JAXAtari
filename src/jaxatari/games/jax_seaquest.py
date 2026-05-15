@@ -54,6 +54,7 @@ class SeaquestConstants(AutoDerivedConstants):
     ))
     ENEMY_SUB_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([170, 170, 170]))  # Gray for enemy subs
     OXYGEN_BAR_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([214, 214, 214, 255]))  # White for oxygen
+    OXYGEN_BAR_BG_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([163, 57, 21, 255]))  # Reddish background
     SCORE_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([210, 210, 64]))  # Score color
     OXYGEN_TEXT_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 0, 0]))  # Black for oxygen text
 
@@ -2331,9 +2332,22 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             )
 
         def handle_score_freeze():
-            # on scoring, the death counter will be set to -(oxygen * 2 + 16 * 6)
-            # thats when we get in here, so duplicate the death animation pattern, but decrease the oxygen until its 0
-            # Calculate new positions with frozen X coordinates
+            # Calculate points logic based on the rescues prior to the recent increment
+            rescues_for_calc = state.successful_rescues - 1
+            
+            diver_bonus_val = self.consts.SCORE_DIVER_STEP * rescues_for_calc
+            points_per_diver = jnp.minimum(
+                self.consts.SCORE_DIVER_BASE + diver_bonus_val,
+                self.consts.SCORE_DIVER_MAX,
+            )
+            
+            oxygen_bonus_val = self.consts.SCORE_OXYGEN_STEP * rescues_for_calc
+            points_per_oxygen_unit = jnp.minimum(
+                self.consts.SCORE_OXYGEN_BASE + oxygen_bonus_val,
+                self.consts.SCORE_OXYGEN_MAX
+            )
+
+            # Keep X positions from original state, only update Y for sharks
             shark_y_positions, _, _, _ = self.step_enemy_movement(
                 state.spawn_state,
                 state.shark_positions,
@@ -2341,18 +2355,39 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 state.step_counter,
                 state.rng_key,
             )
-
-            # Keep X positions from original state, only update Y
             new_shark_positions = state.shark_positions.at[:, 1].set(
                 shark_y_positions[:, 1]
             )
 
-            # calculate the new oxygen
-            new_ox = jnp.where(
-                state.death_counter % 2 == 0, state.oxygen - 1, state.oxygen
-            )
+            # Animation has two phases: Oxygen phase (< -96) and Diver phase (>= -96)
+            is_oxygen_phase = state.death_counter < -96
+            is_diver_phase = state.death_counter >= -96
 
-            new_ox = jnp.where(new_ox <= 0, jnp.array(0), state.oxygen)
+            # Phase 1: Drain oxygen (1 unit every 2 ticks)
+            drain_this_tick = jnp.logical_and(is_oxygen_phase, state.death_counter % 2 == 0)
+            has_oxygen = state.oxygen > 0
+            actually_drain = jnp.logical_and(drain_this_tick, has_oxygen)
+            
+            new_ox = jnp.where(
+                actually_drain,
+                state.oxygen - 1,
+                state.oxygen
+            )
+            oxygen_points = jnp.where(actually_drain, points_per_oxygen_unit, 0)
+
+            # Phase 2: Free divers (1 diver every 16 ticks)
+            free_diver_this_tick = jnp.logical_and(is_diver_phase, state.death_counter % 16 == 0)
+            has_divers = state.divers_collected > 0
+            actually_free = jnp.logical_and(free_diver_this_tick, has_divers)
+
+            new_divers_collected = jnp.where(
+                actually_free,
+                state.divers_collected - 1,
+                state.divers_collected
+            )
+            diver_points = jnp.where(actually_free, points_per_diver, 0)
+
+            new_score = state.score + oxygen_points + diver_points
 
             # Return either final reset or animation frame
             return jax.lax.cond(
@@ -2361,13 +2396,13 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                     player_x=state.player_x,
                     player_y=state.player_y,
                     player_direction=state.player_direction,
-                    score=state.score,
+                    score=new_score,
                     lives=state.lives,
                     successful_rescues=state.successful_rescues,
                     divers_collected=jnp.array(0),
                     spawn_state=self.soft_reset_spawn_state(state.spawn_state),
                     surface_sub_position=state.surface_sub_position,
-                    oxygen=jnp.array(0),
+                    oxygen=jnp.array(0),  # This triggers the oxygen refill mechanism
                 ),
                 lambda _: state.replace(
                     death_counter=state.death_counter + 1,
@@ -2377,6 +2412,8 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                     player_missile_position=jnp.zeros(3),
                     step_counter=state.step_counter + 1,
                     oxygen=new_ox,
+                    divers_collected=new_divers_collected,
+                    score=new_score,
                 ),
                 operand=None,
             )
@@ -2521,37 +2558,13 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 spawn_state=self.soft_reset_spawn_state(state_updated.spawn_state),
             )
             
-            # 1. Calculate Diver Points
-            # Formula: Base (50) + (Step (50) * Rescues), Capped at Max (1000)
-            diver_bonus_val = self.consts.SCORE_DIVER_STEP * state.successful_rescues
-            points_per_diver = jnp.minimum(
-                self.consts.SCORE_DIVER_BASE + diver_bonus_val,
-                self.consts.SCORE_DIVER_MAX,
-            )
-            total_diver_points = points_per_diver * state.divers_collected
-
-            # 2. Calculate Oxygen Points
-            # Formula: Base (20) + (Step (10) * Rescues), Capped at Max (90)
-            # This applies per unit of oxygen remaining.
-            oxygen_bonus_val = self.consts.SCORE_OXYGEN_STEP * state.successful_rescues
-            points_per_oxygen_unit = jnp.minimum(
-                self.consts.SCORE_OXYGEN_BASE + oxygen_bonus_val,
-                self.consts.SCORE_OXYGEN_MAX
-            )
-            oxygen_bonus = state.oxygen * points_per_oxygen_unit
-
-            # Calculate total points for successful rescue
-            total_rescue_points = total_diver_points + oxygen_bonus
-
-            # TODO: somewhere the oxygen is depleted on surfacing, this currently blocks the slow draining of oxygen (which is not gameplay relevant -> low priority)
-            # scoring freeze, 16 ticks per diver i.e. 6 * 16 and also 2 ticks per remaining oxygen (which is drained!)
             # Create the scoring state
             scoring_state = state_updated.replace(
                 player_x=player_x,
                 player_y=player_y,
                 player_direction=player_direction,
                 lives=state_updated.lives,
-                score=state_updated.score + total_rescue_points,
+                score=state_updated.score,
                 successful_rescues=state_updated.successful_rescues + 1,
                 spawn_state=self.soft_reset_spawn_state(state_updated.spawn_state).replace(
                     difficulty=state_updated.spawn_state.difficulty + 1,
@@ -2693,9 +2706,10 @@ class SeaquestRenderer(JAXGameRenderer):
         # Pre-compute oxygen bar color ID (convert JAX array to numpy, then tuple for dict lookup)
         oxygen_color_rgb = np.asarray(self.consts.OXYGEN_BAR_COLOR[:3])
         self.OXYGEN_COLOR_ID = self.COLOR_TO_ID.get(tuple(oxygen_color_rgb), 0)
-        
-        self.SHARK_COLOR_MAP = self._precompute_shark_color_map()
+        oxygen_bar_bg_color_rgb = np.asarray(self.consts.OXYGEN_BAR_BG_COLOR[:3])
+        self.OXYGEN_BAR_BG_COLOR_ID = self.COLOR_TO_ID.get(tuple(oxygen_bar_bg_color_rgb), 0)
 
+        self.SHARK_COLOR_MAP = self._precompute_shark_color_map()
     def _create_procedural_sprites(self) -> dict:
         """Creates 1x1 pixel sprites to ensure colors are in the palette."""
         procedural_sprites = {}
@@ -2705,6 +2719,8 @@ class SeaquestRenderer(JAXGameRenderer):
         
         rgba_oxy = jnp.array(list(self.consts.OXYGEN_BAR_COLOR[:3]) + [255], dtype=jnp.uint8).reshape(1, 1, 4)
         procedural_sprites['oxygen_bar_color'] = rgba_oxy
+        rgba_oxy_bg = jnp.array(list(self.consts.OXYGEN_BAR_BG_COLOR[:3]) + [255], dtype=jnp.uint8).reshape(1, 1, 4)
+        procedural_sprites['oxygen_bar_bg_color'] = rgba_oxy_bg
         return procedural_sprites
 
     def _precompute_shark_color_map(self) -> jnp.ndarray:
@@ -2799,13 +2815,36 @@ class SeaquestRenderer(JAXGameRenderer):
         )
         
         # --- UI Elements (Unchanged) ---
-        score_digits = self.jr.int_to_digits(state.score, max_digits=6)
-        raster = self.jr.render_label(raster, 58, 18, score_digits, self.SHAPE_MASKS['digits'], spacing=8, max_digits=6)
+        max_score_digits = 6
+        score_digits = self.jr.int_to_digits(state.score, max_digits=max_score_digits)
+        clamped_score = jnp.minimum(jnp.maximum(state.score, 0), 10**max_score_digits - 1)
+        score_digit_thresholds = jnp.array([1, 10, 100, 1000, 10000, 100000], dtype=clamped_score.dtype)
+        num_score_digits = jnp.maximum(1, jnp.sum(clamped_score >= score_digit_thresholds))
+        score_start_index = max_score_digits - num_score_digits
+        score_x = 59 + score_start_index * 8
+        raster = self.jr.render_label_selective(
+            raster,
+            score_x,
+            9,
+            score_digits,
+            self.SHAPE_MASKS['digits'],
+            score_start_index,
+            num_score_digits,
+            spacing=8,
+            max_digits_to_render=max_score_digits,
+        )
         
-        raster = self.jr.render_indicator(raster, 14, 28, state.lives, self.SHAPE_MASKS['life_indicator'], spacing=10, max_value=3)
-        raster = self.jr.render_indicator(raster, 49, 178, state.divers_collected, self.SHAPE_MASKS['diver_indicator'], spacing=10, max_value=6)
+        raster = self.jr.render_indicator(raster, 58, 22, state.lives, self.SHAPE_MASKS['life_indicator'], spacing=8, max_value=3)
+        
+        # Collected divers blink when there are 6 of them
+        visible_divers = jax.lax.select(
+            jnp.logical_and(state.divers_collected == 6, (state.step_counter % 16) < 8),
+            0,
+            state.divers_collected
+        )
+        raster = self.jr.render_indicator(raster, 49, 178, visible_divers, self.SHAPE_MASKS['diver_indicator'], spacing=10, max_value=6)
 
-        raster = self.jr.render_bar(raster, 49, 170, state.oxygen, 64, 63, 5, self.OXYGEN_COLOR_ID, self.jr.TRANSPARENT_ID)
+        raster = self.jr.render_bar(raster, 49, 170, state.oxygen, 64, 63, 5, self.OXYGEN_COLOR_ID, self.OXYGEN_BAR_BG_COLOR_ID)
 
         raster = self.jr.draw_rects(
             raster,

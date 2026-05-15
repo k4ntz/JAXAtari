@@ -4,12 +4,6 @@
 # JAX Blackjack
 #
 # Simulates a Blackjack game with casino rules using JAX
-#
-# Authors:
-# - Xarion99
-# - Keksmo
-# - Embuer
-# - Snocember
 
 import os
 from functools import partial

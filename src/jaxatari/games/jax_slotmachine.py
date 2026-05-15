@@ -5,8 +5,6 @@ This module implements a traditional three-reel slot machine Atari 2600 game usi
 and JIT compilation. The game features authentic slot machine mechanics with spinning reels,
 various symbols, and a payout system. Two players compete against each other until one of them goes broke.
 
-Author: Ashish Bhandari, ashish.bhandari@stud.tu-darmstadt.de, https://github.com/zatakashish
-
 License: TU Darmstadt, All rights reserved.
 
 ========================================================================================================================
@@ -673,9 +671,11 @@ class SlotMachineRenderer(JAXGameRenderer):
 
         def render_digit_ids():
             # Build a sprite ID mask: pattern>0 -> color_id, else TRANSPARENT
-            sprite_mask = jnp.where(pattern > 0,
-                                    jnp.asarray(color_id, dtype=jnp.uint8),
-                                    jnp.asarray(self.jr.TRANSPARENT_ID, dtype=jnp.uint8))
+            sprite_mask = jnp.where(
+                pattern > 0,
+                jnp.asarray(color_id, dtype=raster.dtype),
+                jnp.asarray(self.jr.TRANSPARENT_ID, dtype=raster.dtype),
+            )
             # Stamp via render_utils (handles dynamic positions)
             return self.jr.render_at(raster, x, y, sprite_mask)
     
@@ -735,8 +735,8 @@ class SlotMachineRenderer(JAXGameRenderer):
                 continue
             sprite_mask = jnp.where(
                 pattern > 0,
-                jnp.asarray(color_id, dtype=jnp.uint8),
-                jnp.asarray(self.jr.TRANSPARENT_ID, dtype=jnp.uint8)
+                jnp.asarray(color_id, dtype=raster.dtype),
+                jnp.asarray(self.jr.TRANSPARENT_ID, dtype=raster.dtype),
             )
             raster = self.jr.render_at(raster, cur_x, y, sprite_mask)
             cur_x += pattern.shape[1] + 1

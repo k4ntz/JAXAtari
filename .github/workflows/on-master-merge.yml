@@ -1,0 +1,52 @@
+name: Master Merge Full Tests
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      game_filter:
+        description: "Optional single game (e.g. phoenix). Leave empty to run all games."
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  prepare-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      - name: Generate full game matrix
+        id: set-matrix
+        run: |
+          GAME_FILTER="${{ github.event.inputs.game_filter }}"
+
+          if [[ -n "${GAME_FILTER}" ]]; then
+            GAME_FILTER=$(echo "${GAME_FILTER}" | tr '[:upper:]' '[:lower:]')
+            GAME_FILTER=$(echo "${GAME_FILTER}" | tr -d ' _-')
+            echo "Manual dispatch with single game filter: ${GAME_FILTER}"
+
+            if [[ -f "src/jaxatari/games/jax_${GAME_FILTER}.py" ]]; then
+              MATRIX=$(printf '["%s"]' "${GAME_FILTER}")
+            else
+              echo "Requested game jax_${GAME_FILTER}.py not found."
+              exit 1
+            fi
+          else
+            MATRIX=$(ls src/jaxatari/games/jax_*.py | sed -e 's|src/jaxatari/games/jax_||' -e 's|\.py$||' | jq -R . | jq -cs .)
+          fi
+
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+        shell: bash
+
+  trigger:
+    needs: prepare-matrix
+    uses: ./.github/workflows/reusable-run-tests.yml
+    with:
+      game_matrix: ${{ needs.prepare-matrix.outputs.matrix }}
+      pytest_args: "--slow"

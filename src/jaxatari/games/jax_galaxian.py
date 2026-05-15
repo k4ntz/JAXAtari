@@ -16,14 +16,6 @@ from jaxatari.renderers import JAXGameRenderer
 import jaxatari.rendering.jax_rendering_utils as render_utils
 from jaxatari.modification import AutoDerivedConstants
 
-"""
-README
-Aaron Reinhardt
-Aaron Weis
-Leon Denis Kristof
-"""
-
-
 def _get_default_asset_config() -> tuple:
     """
     Returns the default declarative asset manifest for Galaxian.

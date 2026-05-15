@@ -1,7 +1,4 @@
 # This is adapted from Atari configuration 
-HIDDEN_SIZE: 256
-NUM_LAYERS: 3
-NAME_INITIALS: "RE"
 ALG_NAME: "pqn"
 TOTAL_TIMESTEPS: 2e8 # 1e8 == 100M, but times 4 (frame-skipping) -> pqn paper: enough to outperform Rainbow
 TOTAL_TIMESTEPS_DECAY: 2e8 # will be used for decay functions, in case you want to test for less timesteps and keep decays same
@@ -12,7 +9,7 @@ EPS_START: 1.0
 EPS_FINISH: 0.001
 EPS_DECAY: 0.1
 NUM_EPOCHS: 3 #2 -> adapted UtD ratio
-NUM_MINIBATCHES: 128 # minibatches per epoch
+NUM_MINIBATCHES: 64 # minibatches per epoch
 NORM_TYPE: "layer_norm" # layer_norm or batch_norm
 LR: 1e-3
 MAX_GRAD_NORM: 10
@@ -28,7 +25,7 @@ OBJECT_CENTRIC: True
 # TRAIN_MODS: mods applied during training (set to null for base env training)
 # EVAL_MODS: mods evaluated separately after training
 TRAIN_MODS: null
-EVAL_MODS: ['lazy_enemy', 'random_enemy', 'linear_movement']
+EVAL_MODS: null 
 
 # Note: This will massively increase compile and run time!
 # But is useful for debugging (watching the video).

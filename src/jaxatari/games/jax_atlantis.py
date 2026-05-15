@@ -105,9 +105,11 @@ class AtlantisState(struct.PyTreeNode):
 class AtlantisObservation(struct.PyTreeNode):
     enemy: ObjectObservation
     bullet: ObjectObservation
+    plasma: ObjectObservation
     score: jnp.ndarray
     installations_alive: jnp.ndarray
     command_post_alive: jnp.ndarray
+    fire_cooldown: jnp.ndarray
 
 
 class AtlantisInfo(struct.PyTreeNode):
@@ -909,6 +911,14 @@ class JaxAtlantis(
             # Compute how many enemies next wave should have
             next_count = cfg.wave_start_enemy_count + new_wave * 2
 
+            # Wipe out remaining entities to clean the screen in case the wave
+            # was aborted early due to all defenses being down.
+            empty_enemies = jnp.zeros_like(s.enemies)
+            empty_bullets = jnp.zeros_like(s.bullets)
+            empty_bullets_alive = jnp.zeros_like(s.bullets_alive)
+            empty_lanes = jnp.ones_like(s.lanes_free)
+            full_plasma = jnp.ones_like(s.plasma_active)
+
             return s.replace(
                 wave=new_wave,
                 wave_end_cooldown_remaining=jnp.array(
@@ -919,16 +929,33 @@ class JaxAtlantis(
                 score_spent=new_score_spent,  # Track spent revival credits
                 command_post_alive=new_command_post_alive,  # Apply command post revival
                 installations=final_installations,  # Apply installation revivals
+                enemies=empty_enemies,
+                bullets=empty_bullets,
+                bullets_alive=empty_bullets_alive,
+                lanes_free=empty_lanes,
+                plasma_active=full_plasma,
             )
 
         def _same_wave(s: AtlantisState) -> AtlantisState:
             """Continue current wave without changes."""
             return s
 
-        # Start new wave if no enemies remaining and screen is empty
-        wave_complete = (state.number_enemies_wave_remaining == 0) & (
+        # Start new wave if no enemies remaining and screen is empty,
+        # or if all defenses are down but we have credits to revive.
+        standard_wave_complete = (state.number_enemies_wave_remaining == 0) & (
             ~jnp.any(state.enemies[:, 5] == 1)
         )
+
+        # Early skip logic: if all defenses are down but we still have credits,
+        # immediately end the wave so revival happens at wave end (matching manual).
+        total_revival_credits = state.score // 10000
+        used_credits = state.score_spent // 10000
+        available_credits = total_revival_credits - used_credits
+        can_revive = available_credits > 0
+
+        defenses_down = (~state.command_post_alive) & (~jnp.any(state.installations))
+
+        wave_complete = standard_wave_complete | (defenses_down & can_revive)
 
         return jax.lax.cond(
             wave_complete,
@@ -1213,12 +1240,75 @@ class JaxAtlantis(
             orientation=bullet_angle
         )
 
+        # --- PLASMA BEAMS (DEATHRAYS) ---
+        # Enemies in 4th lane (index 3) with active plasma fire a vertical beam.
+        is_lane4 = (state.enemies[:, 4] == 3) & (state.enemies[:, 5] == 1)
+        plasma_firing = is_lane4 & state.plasma_active
+        plasma_alive = plasma_firing.astype(jnp.int32)
+
+        # Compute beam X position from enemy center, matching plasma collision logic
+        dx_i = state.enemies[:, 2]
+        x_i = state.enemies[:, 0].astype(jnp.int32)
+        half_w = cfg.enemy_width[type_ids] // 2
+        centers = jnp.where(
+            dx_i < 0, x_i + half_w, x_i + cfg.enemy_width[type_ids] - half_w
+        ).astype(jnp.int32)
+
+        plasma_x = jnp.where(plasma_alive == 1, centers, 0)
+        plasma_y_val = jnp.array(cfg.start_beam, dtype=jnp.int32)
+        plasma_y = jnp.where(
+            plasma_alive == 1,
+            jnp.full_like(centers, plasma_y_val, dtype=jnp.int32),
+            0,
+        )
+
+        # Use a narrow vertical beam; height from start_beam to bottom of screen
+        plasma_w_val = jnp.array(3, dtype=jnp.int32)
+        plasma_h_val = jnp.array(cfg.screen_height - cfg.start_beam, dtype=jnp.int32)
+        plasma_w = jnp.where(
+            plasma_alive == 1,
+            jnp.full_like(centers, plasma_w_val, dtype=jnp.int32),
+            0,
+        )
+        plasma_h = jnp.where(
+            plasma_alive == 1,
+            jnp.full_like(centers, plasma_h_val, dtype=jnp.int32),
+            0,
+        )
+
+        # Fixed vertical orientation (downwards)
+        plasma_orientation = jnp.where(
+            plasma_alive == 1,
+            jnp.full_like(centers, 270.0, dtype=jnp.float32),
+            jnp.zeros_like(centers, dtype=jnp.float32),
+        )
+
+        plasma_visual_id = jnp.zeros_like(centers, dtype=jnp.int32)
+
+        plasma_pos = ObjectObservation.create(
+            x=plasma_x,
+            y=plasma_y,
+            width=plasma_w,
+            height=plasma_h,
+            active=plasma_alive,
+            visual_id=plasma_visual_id,
+            orientation=plasma_orientation,
+        )
+
+        # --- FIRE COOLDOWN (NORMALIZED) ---
+        fire_cd_max = jnp.array(cfg.fire_cooldown_frames, dtype=jnp.float32)
+        fire_cooldown_norm = state.fire_cooldown.astype(jnp.float32) / jnp.maximum(
+            fire_cd_max, jnp.array(1.0, dtype=jnp.float32)
+        )
+
         return AtlantisObservation(
             enemy=enemy_pos,
             bullet=bullet_pos,
+            plasma=plasma_pos,
             score=state.score,
             installations_alive=state.installations.astype(jnp.int32),
             command_post_alive=state.command_post_alive.astype(jnp.int32),
+            fire_cooldown=fire_cooldown_norm,
         )
     
     def observation_space(self) -> spaces.Dict:
@@ -1228,6 +1318,7 @@ class JaxAtlantis(
             {
                 "enemy": spaces.get_object_space(n=cfg.max_enemies, screen_size=(cfg.screen_height, cfg.screen_width), orientation_range=(0.0, 180.0)),
                 "bullet": spaces.get_object_space(n=cfg.max_bullets, screen_size=(cfg.screen_height, cfg.screen_width), orientation_range=(0.0, 360.0)),
+                "plasma": spaces.get_object_space(n=cfg.max_enemies, screen_size=(cfg.screen_height, cfg.screen_width), orientation_range=(0.0, 360.0)),
                 "score": spaces.Box(
                     low=0,
                     high=(10**cfg.max_digits_for_score) - 1,
@@ -1245,6 +1336,12 @@ class JaxAtlantis(
                     high=1,
                     shape=(),
                     dtype=jnp.int32,
+                ),
+                "fire_cooldown": spaces.Box(
+                    low=0.0,
+                    high=1.0,
+                    shape=(),
+                    dtype=jnp.float32,
                 ),
             }
         )
@@ -1277,23 +1374,30 @@ class JaxAtlantis(
         """
         Game is done when:
           1) Score has reached the maximum representable (i.e. max_digits_for_score), OR
-          2) The central command post is destroyed and all installations are destroyed.
+          2) The central command post is destroyed and all installations are destroyed,
+             and there are no reserve credits left to revive a base.
         """
         # 1) Max‐score condition
         max_score = 10**self.consts.max_digits_for_score
         reached_max = state.score >= max_score  # bool scalar
 
-        # 2) All defenses down?
+        # 2) Calculate available reserve credits
+        total_revival_credits = state.score // 10000
+        used_credits = state.score_spent // 10000
+        available_credits = total_revival_credits - used_credits
+
+        # 3) Are all physical defenses currently down?
         cmd_alive = state.command_post_alive  # bool scalar
         any_install_alive = jnp.any(
             state.installations
         )  # True if at least one installation remains
         defenses_down = (~cmd_alive) & (~any_install_alive)
 
-        # 3) Final done flag
-        done = reached_max | defenses_down
+        # 4) Are we completely out of extra lives?
+        out_of_reserves = available_credits <= 0
 
-        # jax.debug.print("[_get_done] score={}|{}  cmd_alive={}  any_inst_alive={}  → done={}", state.score, max_score, cmd_alive, any_install_alive, done)
+        # 5) Game only ends if defenses are down AND we have no credits left
+        done = reached_max | (defenses_down & out_of_reserves)
 
         return done
 

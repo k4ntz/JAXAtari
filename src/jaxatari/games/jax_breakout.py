@@ -634,9 +634,8 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
         new_player_x, new_paddle_v, new_acceleration_counter = self._player_step(
             state.player_x, state.player_speed, state.acceleration_counter, atari_action
         )
-        #TODO: this is a hack -> always fire
-        game_started = jnp.logical_or(state.game_started, True)
-        # game_started = jnp.logical_or(state.game_started, atari_action == Action.FIRE)
+        # Start the round only after FIRE is pressed (or if it already started).
+        game_started = jnp.logical_or(state.game_started, atari_action == Action.FIRE)
 
         # Update ball, check collisions, etc., as before, but now pass new_player_x
         (ball_x, ball_y, ball_vel_x, ball_vel_y, ball_speed_idx, ball_direction_idx,

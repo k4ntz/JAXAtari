@@ -14,10 +14,6 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvOb
 from jaxatari.spaces import Space
 from jaxatari.modification import AutoDerivedConstants
 
-#
-# by Tim Morgner and Jan Larionow
-#
-
 # IMPORTANT: WE, THE PLAYER, PLAY AS BLACK, THE OPPONENT IS WHITE.
 
 # Transitions between game phases

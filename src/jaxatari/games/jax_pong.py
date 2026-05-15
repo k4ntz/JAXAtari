@@ -30,7 +30,6 @@ def _get_default_asset_config() -> tuple:
 
 class PongConstants(struct.PyTreeNode):
     # Static Configuration (Integers/Tuples) -> pytree_node=False
-    MAX_SPEED: int = struct.field(pytree_node=False, default=12)
     ENEMY_STEP_SIZE: int = struct.field(pytree_node=False, default=2)
     WIDTH: int = struct.field(pytree_node=False, default=160)
     HEIGHT: int = struct.field(pytree_node=False, default=210)
@@ -58,9 +57,14 @@ class PongConstants(struct.PyTreeNode):
 
     # Ball and Player Constants
     BALL_SPEED: Tuple[int, int] = struct.field(pytree_node=False, default=(-1, 1))
-    PLAYER_ACCELERATION: Tuple[int, int, int, int, int, int, int, int, int, int, int, int, int] = struct.field(pytree_node=False, default=(6, 3, 1, -1, 1, -1, 0, 0, 1, 0, -1, 0, 1))
     BALL_START_X: int = struct.field(pytree_node=False, default=78)
     BALL_START_Y: int = struct.field(pytree_node=False, default=115)
+
+    # New Analog Paddle Constants
+    PADDLE_MAX_SPEED: float = struct.field(pytree_node=False, default=5.75)
+    PADDLE_MIN_Y: float = struct.field(pytree_node=False, default=24.0)
+    PADDLE_MAX_Y: float = struct.field(pytree_node=False, default=190.0)
+    PADDLE_DAMPENING_Y: float = struct.field(pytree_node=False, default=170.0)
 
 
 class PongState(struct.PyTreeNode):
@@ -75,8 +79,6 @@ class PongState(struct.PyTreeNode):
     player_score: chex.Array
     enemy_score: chex.Array
     step_counter: chex.Array
-    acceleration_counter: chex.Array
-    buffer: chex.Array
     key: chex.PRNGKey
 
 class PongObservation(struct.PyTreeNode):
@@ -93,7 +95,7 @@ class PongInfo(struct.PyTreeNode):
 
 class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants]):
     # Minimal ALE action set for Pong:
-    # 0=NOOP, 1=FIRE, 2=RIGHT, 3=LEFT, 4=RIGHTFIRE, 5=LEFTFIRE
+    # NOTE: for multiplayer, it's instead: [Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN],
     ACTION_SET: jnp.ndarray = jnp.array(
         [Action.NOOP, Action.FIRE, Action.RIGHT, Action.LEFT, Action.RIGHTFIRE, Action.LEFTFIRE],
         dtype=jnp.int32,
@@ -108,95 +110,41 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
         up = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
         down = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
 
-        acceleration_array = jnp.array(self.consts.PLAYER_ACCELERATION, dtype=jnp.int32)
-        acceleration = acceleration_array[state.acceleration_counter]
-
-        touches_wall = jnp.logical_or(
-            state.player_y < self.consts.WALL_TOP_Y,
-            state.player_y + self.consts.PLAYER_SIZE[1] > self.consts.WALL_BOTTOM_Y,
-        )
-
-        player_speed = state.player_speed
-
-        player_speed = jax.lax.cond(
-            jnp.logical_or(jnp.logical_not(jnp.logical_or(up, down)), touches_wall),
-            lambda s: jnp.round(s / 2).astype(jnp.int32),
-            lambda s: s,
-            operand=player_speed,
-        )
-
-        direction_change_up = jnp.logical_and(up, state.player_speed > 0)
-        player_speed = jax.lax.cond(
-            direction_change_up,
-            lambda s: 0,
-            lambda s: s,
-            operand=player_speed,
-        )
-        direction_change_down = jnp.logical_and(down, state.player_speed < 0)
-
-        player_speed = jax.lax.cond(
-            direction_change_down,
-            lambda s: 0,
-            lambda s: s,
-            operand=player_speed,
-        )
-
-        direction_change = jnp.logical_or(direction_change_up, direction_change_down)
-        acceleration_counter = jax.lax.cond(
-            direction_change,
-            lambda _: 0,
-            lambda s: s,
-            operand=state.acceleration_counter,
-        )
-
-        player_speed = jax.lax.cond(
-            up,
-            lambda s: jnp.maximum(s - acceleration, -self.consts.MAX_SPEED),
-            lambda s: s,
-            operand=player_speed,
-        )
-
-        player_speed = jax.lax.cond(
+        # 1. Determine Analog Target Speed
+        target_speed = jax.lax.cond(
             down,
-            lambda s: jnp.minimum(s + acceleration, self.consts.MAX_SPEED),
-            lambda s: s,
-            operand=player_speed,
-        )
-
-        new_acceleration_counter = jax.lax.cond(
-            jnp.logical_or(up, down),
-            lambda s: jnp.minimum(s + 1, 15),
-            lambda s: 0,
-            operand=acceleration_counter,
-        )
-
-        proposed_player_y = jnp.clip(
-            state.player_y + player_speed,
-            self.consts.WALL_TOP_Y + self.consts.WALL_TOP_HEIGHT - 10,
-            self.consts.WALL_BOTTOM_Y - 4,
-        )
-
-        # Match original timing/buffering behavior
-        new_player_y, new_player_speed, new_acc_counter = jax.lax.cond(
-            state.step_counter % 2 == 0,
-            lambda _: (proposed_player_y, player_speed, new_acceleration_counter),
-            lambda _: (state.player_y, state.player_speed, state.acceleration_counter),
+            lambda _: self.consts.PADDLE_MAX_SPEED,
+            lambda _: jax.lax.cond(
+                up,
+                lambda _: -self.consts.PADDLE_MAX_SPEED,
+                lambda _: 0.0,
+                operand=None,
+            ),
             operand=None,
         )
 
-        buffer = jax.lax.cond(
-            jax.lax.eq(state.buffer, state.player_y),
-            lambda _: new_player_y,
-            lambda _: state.buffer,
-            operand=None,
+        # 2. RC Capacitor Acceleration (The Magic 0.3)
+        # Asymptotically pulls the current speed toward the target
+        new_speed = state.player_speed + (target_speed - state.player_speed) * 0.3
+
+        # 3. Bottom Dampening (The "Squishy Wall" Asymptote)
+        # Uses 0.25 to match the ALE deceleration curve
+        applied_dy = jnp.where(
+            jnp.logical_and(state.player_y >= self.consts.PADDLE_DAMPENING_Y, new_speed > 0),
+            jnp.minimum(new_speed, (self.consts.PADDLE_MAX_Y - state.player_y) * 0.25),
+            new_speed,
         )
-        final_player_y = state.buffer
+
+        # 4. Apply position update and clip to physical bounds
+        new_y = jnp.clip(
+            state.player_y + applied_dy,
+            self.consts.PADDLE_MIN_Y,
+            self.consts.PADDLE_MAX_Y,
+        )
 
         return state.replace(
-            player_y=final_player_y,
-            player_speed=new_player_speed,
-            acceleration_counter=new_acc_counter,
-            buffer=buffer
+            player_y=new_y,
+            player_speed=new_speed,
         )
 
     def _ball_step(self, state: PongState, action) -> PongState:
@@ -300,7 +248,10 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
                 action == Action.FIRE,
             ),
         )
-        player_max_hit = jnp.logical_and(player_paddle_hit, state.player_speed == self.consts.MAX_SPEED)
+        player_max_hit = jnp.logical_and(
+            player_paddle_hit,
+            jnp.abs(state.player_speed) >= self.consts.PADDLE_MAX_SPEED,
+        )
         ball_vel_x = jnp.where(
             jnp.logical_or(boost_triggered, player_max_hit),
             state.ball_vel_x
@@ -405,17 +356,6 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
 
         return initial_obs, state
 
-    @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: PongState, action: chex.Array) -> Tuple[PongObservation, PongState, float, bool, PongInfo]:
-        # Translate compact agent action index to ALE console action
-        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
-
-        previous_state = state
-        state = self._player_step(state, atari_action)
-        state = self._enemy_step(state)
-        state = self._ball_step(state, atari_action)
-        state = self._score_and_reset(state)
-
     def _reset_ball_after_goal(self, state_and_goal: Tuple[PongState, bool]) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
         state, scored_right = state_and_goal
 
@@ -440,8 +380,8 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
         # Split key for env reset if needed and for state storage
         state_key, _step_key = jax.random.split(key)
         state = PongState(
-            player_y=jnp.array(96).astype(jnp.int32),
-            player_speed=jnp.array(0.0).astype(jnp.int32),
+            player_y=jnp.array(96.0, dtype=jnp.float32),
+            player_speed=jnp.array(0.0, dtype=jnp.float32),
             ball_x=jnp.array(self.consts.BALL_START_X).astype(jnp.int32),
             ball_y=jnp.array(self.consts.BALL_START_Y).astype(jnp.int32),
             enemy_y=jnp.array(115).astype(jnp.int32),
@@ -451,8 +391,6 @@ class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants
             player_score=jnp.array(0).astype(jnp.int32),
             enemy_score=jnp.array(0).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
-            acceleration_counter=jnp.array(0).astype(jnp.int32),
-            buffer=jnp.array(96).astype(jnp.int32),
             key=state_key,
         )
         initial_obs = self._get_observation(state)
@@ -597,10 +535,20 @@ class PongRenderer(JAXGameRenderer):
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
         player_mask = self.SHAPE_MASKS["player"]
-        raster = self.jr.render_at(raster, self.consts.PLAYER_X, state.player_y, player_mask)
+        raster = self.jr.render_at(
+            raster,
+            self.consts.PLAYER_X,
+            jnp.round(state.player_y).astype(jnp.int32),
+            player_mask,
+        )
 
         enemy_mask = self.SHAPE_MASKS["enemy"]
-        raster = self.jr.render_at(raster, self.consts.ENEMY_X, state.enemy_y, enemy_mask)
+        raster = self.jr.render_at(
+            raster,
+            self.consts.ENEMY_X,
+            state.enemy_y,
+            enemy_mask,
+        )
 
         ball_mask = self.SHAPE_MASKS["ball"]
         raster = self.jr.render_at(raster, state.ball_x, state.ball_y, ball_mask)
