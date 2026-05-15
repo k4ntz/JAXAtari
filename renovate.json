@@ -1,6 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "baseBranches": ["dev"],
+  "baseBranchPatterns": [
+    "dev"
+  ],
   "dependencyDashboard": true,
   "dependencyDashboardApproval": true,
   "ignorePaths": ["docs/**"],
