@@ -106,7 +106,8 @@ class ReverseChronologyMod(JaxAtariInternalModPlugin):
     }
 
 class InstantTurnMod(JaxAtariInternalModPlugin):
-    """Directly places the plane in the direction given by the action instead of progressively turning it, including diagonals."""
+    """Directly places the plane in the direction given by the action instead of progressively turning it, including diagonals. 
+    Also moves the ship."""
     name = "instant_turn"
 
     # Override the game's ACTION_SET to include diagonal actions
