@@ -46,10 +46,275 @@ class Tooltip:
 
 # -----------------
 
-class NPYImageEditor:
-    def __init__(self, master):
-        self.root = master
-        self.root.title("NPY Image Editor")
+class SpriteEditorApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("NPY Sprite Editor")
+
+        self.main_container = tk.Frame(self.root)
+        self.main_container.pack(fill=tk.BOTH, expand=True)
+
+        self.notebook = ttk.Notebook(self.main_container)
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+        self.paned_window = None
+        self.layout_mode = "tabs"  # "tabs", "horizontal", "vertical"
+
+        self.editors_info = []  # List of dicts: {'frame': frame, 'editor': editor, 'title': title}
+        self.active_editor = None
+
+        self.create_menu()
+        self.add_tab()  # Start with an empty tab
+        self.refresh_layout()
+
+        # Global bindings that delegate to active tab
+        self.root.bind("<Control-o>", lambda e: self.open_file())
+        self.root.bind("<Control-s>", lambda e: self.save_full_image())
+        self.root.bind("<Control-n>", lambda e: self.add_tab())
+        self.root.bind("<Control-w>", lambda e: self.close_tab())
+        self.root.bind("<Control-z>", lambda e: self.delegate_to_active("undo", e))
+        self.root.bind("<Control-y>", lambda e: self.delegate_to_active("redo", e))
+        self.root.bind("<Control-a>", lambda e: self.delegate_to_active("select_all", e))
+        self.root.bind("<Control-d>", lambda e: self.delegate_to_active("deselect_all", e))
+        self.root.bind("<Delete>", lambda e: self.delegate_to_active("delete_selected", e))
+
+    def create_menu(self):
+        menu = tk.Menu(self.root)
+        self.root.config(menu=menu)
+
+        file_menu = tk.Menu(menu, tearoff=0)
+        menu.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="New Tab", command=self.add_tab, accelerator="Ctrl+N")
+        file_menu.add_command(label="Open", command=self.open_file, accelerator="Ctrl+O")
+        file_menu.add_command(label="Save Selection", command=lambda: self.delegate_to_active("save_selection", None))
+        file_menu.add_command(label="Save full image", command=self.save_full_image, accelerator="Ctrl+S")
+        file_menu.add_command(label="Close Tab", command=self.close_tab, accelerator="Ctrl+W")
+        file_menu.add_command(label="Exit", command=self.root.quit)
+
+        edit_menu = tk.Menu(menu, tearoff=0)
+        menu.add_cascade(label="Edit", menu=edit_menu)
+        edit_menu.add_command(label="Undo", command=lambda: self.delegate_to_active("undo", None), accelerator="Ctrl+Z")
+        edit_menu.add_command(label="Redo", command=lambda: self.delegate_to_active("redo", None), accelerator="Ctrl+Y")
+
+        view_menu = tk.Menu(menu, tearoff=0)
+        menu.add_cascade(label="View", menu=view_menu)
+        view_menu.add_command(label="Tabs", command=lambda: self.set_layout("tabs"))
+        view_menu.add_command(label="Side-by-Side (Horizontal)", command=lambda: self.set_layout("horizontal"))
+        view_menu.add_command(label="Side-by-Side (Vertical)", command=lambda: self.set_layout("vertical"))
+        view_menu.add_command(label="Split / Move Tab", command=self.move_tab_to_other_panel)
+
+        select_menu = tk.Menu(menu, tearoff=0)
+        menu.add_cascade(label="Select", menu=select_menu)
+        select_menu.add_command(label="Rectangular Selection", command=lambda: self.delegate_to_active("activate_rectangular_selection"))
+        select_menu.add_command(label="Magic Wand", command=lambda: self.delegate_to_active("activate_magic_wand"))
+        select_menu.add_command(label="Select w/ Same Color", command=lambda: self.delegate_to_active("select_all_with_color"))
+        select_menu.add_separator()
+        select_menu.add_command(label="Select All", command=lambda: self.delegate_to_active("select_all", None), accelerator="Ctrl+A")
+        select_menu.add_command(label="Deselect All", command=lambda: self.delegate_to_active("deselect_all", None), accelerator="Ctrl+D")
+
+        # --- NEW: Canvas Resize Menu ---
+        canvas_menu = tk.Menu(menu, tearoff=0)
+        menu.add_cascade(label="Canvas", menu=canvas_menu)
+        canvas_menu.add_command(label="Add Row (Top)", command=lambda: self.delegate_to_active('resize_canvas', 'top', 'add'))
+        canvas_menu.add_command(label="Add Row (Bottom)", command=lambda: self.delegate_to_active('resize_canvas', 'bottom', 'add'))
+        canvas_menu.add_command(label="Add Column (Left)", command=lambda: self.delegate_to_active('resize_canvas', 'left', 'add'))
+        canvas_menu.add_command(label="Add Column (Right)", command=lambda: self.delegate_to_active('resize_canvas', 'right', 'add'))
+        canvas_menu.add_separator()
+        canvas_menu.add_command(label="Remove Row (Top)", command=lambda: self.delegate_to_active('resize_canvas', 'top', 'remove'))
+        canvas_menu.add_command(label="Remove Row (Bottom)", command=lambda: self.delegate_to_active('resize_canvas', 'bottom', 'remove'))
+        canvas_menu.add_command(label="Remove Column (Left)", command=lambda: self.delegate_to_active('resize_canvas', 'left', 'remove'))
+        canvas_menu.add_command(label="Remove Column (Right)", command=lambda: self.delegate_to_active('resize_canvas', 'right', 'remove'))
+
+    def add_tab(self, file_path=None):
+        editor_frame = tk.Frame(self.main_container)
+        editor = NPYImageEditor(editor_frame, self)
+        editor.pack(fill=tk.BOTH, expand=True)
+
+        title = "New Image"
+        if file_path:
+            title = file_path.split("/")[-1]
+            editor.load_file_data(file_path)
+
+        info = {'frame': editor_frame, 'editor': editor, 'title': title}
+        self.editors_info.append(info)
+        self.set_active_editor(editor)
+
+        self.refresh_layout()
+
+        if self.layout_mode == "tabs":
+            self.notebook.select(editor_frame)
+
+    def close_tab(self):
+        editor = self.get_active_editor()
+        if not editor:
+            return
+
+        info_to_remove = None
+        for info in self.editors_info:
+            if info['editor'] == editor:
+                info_to_remove = info
+                break
+
+        if info_to_remove:
+            self.editors_info.remove(info_to_remove)
+            info_to_remove['frame'].destroy()
+
+            if self.editors_info:
+                self.set_active_editor(self.editors_info[-1]['editor'])
+            else:
+                self.active_editor = None
+
+            self.refresh_layout()
+
+    def set_layout(self, mode):
+        self.layout_mode = mode
+        self.refresh_layout()
+
+    def on_tab_changed(self, event):
+        if self.layout_mode == "tabs":
+            editor = self.get_active_editor()
+            if editor:
+                self.active_editor = editor
+
+    def move_tab_to_other_panel(self):
+        if self.layout_mode == "tabs":
+            self.set_layout("horizontal")
+            return
+        
+        editor = self.get_active_editor()
+        if not editor: return
+        
+        info_to_move = None
+        for info in self.editors_info:
+            if info['editor'] == editor:
+                info_to_move = info
+                break
+        
+        if info_to_move:
+            self.editors_info.remove(info_to_move)
+            self.editors_info.append(info_to_move)
+            self.refresh_layout()
+
+    def on_sub_tab_changed(self, nb):
+        if self.layout_mode != "tabs":
+            try:
+                current = nb.select()
+                if not current: return
+                for info in self.editors_info:
+                    if str(info['frame']) == str(current):
+                        self.set_active_editor(info['editor'])
+                        break
+            except tk.TclError:
+                pass
+
+    def refresh_layout(self):
+        self.notebook.pack_forget()
+        if self.paned_window:
+            try:
+                for info in self.editors_info:
+                    try: self.notebook_left.forget(info['frame'])
+                    except: pass
+                    try: self.notebook_right.forget(info['frame'])
+                    except: pass
+            except: pass
+            self.paned_window.pack_forget()
+            self.paned_window.destroy()
+            self.paned_window = None
+
+        for info in self.editors_info:
+            try:
+                self.notebook.forget(info['frame'])
+            except tk.TclError:
+                pass
+            info['frame'].pack_forget()
+
+        if self.layout_mode == "tabs":
+            self.notebook.pack(fill=tk.BOTH, expand=True)
+            for info in self.editors_info:
+                self.notebook.add(info['frame'], text=info['title'])
+        else:
+            orient = tk.HORIZONTAL if self.layout_mode == "horizontal" else tk.VERTICAL
+            self.paned_window = tk.PanedWindow(self.main_container, orient=orient, sashrelief=tk.RAISED, bg="black", bd=2)
+            self.paned_window.pack(fill=tk.BOTH, expand=True)
+            
+            self.notebook_left = ttk.Notebook(self.paned_window)
+            self.notebook_right = ttk.Notebook(self.paned_window)
+            
+            self.notebook_left.bind("<<NotebookTabChanged>>", lambda e: self.on_sub_tab_changed(self.notebook_left))
+            self.notebook_right.bind("<<NotebookTabChanged>>", lambda e: self.on_sub_tab_changed(self.notebook_right))
+
+            self.paned_window.add(self.notebook_left, stretch="always")
+            self.paned_window.add(self.notebook_right, stretch="always")
+
+            mid = (len(self.editors_info) + 1) // 2
+            for i, info in enumerate(self.editors_info):
+                target_nb = self.notebook_left if i < mid else self.notebook_right
+                target_nb.add(info['frame'], text=info['title'])
+                
+                if hasattr(info['frame'], 'title_label'):
+                    info['frame'].title_label.pack_forget()
+            
+            # Force redraw to ensure matplotlib canvas appears after repacking
+            for info in self.editors_info:
+                info['editor'].update_display()
+
+    def set_active_editor(self, editor):
+        if self.active_editor and self.active_editor != editor:
+            if hasattr(self.active_editor.master, 'title_label'):
+                self.active_editor.master.title_label.config(bg="grey")
+
+        self.active_editor = editor
+        if self.active_editor:
+            if hasattr(self.active_editor.master, 'title_label'):
+                self.active_editor.master.title_label.config(bg="blue")
+            
+            if self.layout_mode == "tabs":
+                try:
+                    self.notebook.select(editor.master)
+                except tk.TclError:
+                    pass
+            else:
+                try:
+                    if hasattr(self, 'notebook_left'):
+                        self.notebook_left.select(editor.master)
+                except tk.TclError:
+                    try:
+                        if hasattr(self, 'notebook_right'):
+                            self.notebook_right.select(editor.master)
+                    except tk.TclError:
+                        pass
+
+    def open_file(self):
+        file_path = filedialog.askopenfilename(filetypes=[("NumPy files", "*.npy")])
+        if file_path:
+            self.add_tab(file_path)
+
+    def save_full_image(self):
+        editor = self.get_active_editor()
+        if editor:
+            editor.save_full_image(None)
+
+    def delegate_to_active(self, method_name, *args):
+        editor = self.get_active_editor()
+        if editor and hasattr(editor, method_name):
+            getattr(editor, method_name)(*args)
+
+    def get_active_editor(self):
+        if self.layout_mode == "tabs":
+            try:
+                current = self.notebook.select()
+                for info in self.editors_info:
+                    if str(info['frame']) == str(current):
+                        return info['editor']
+            except tk.TclError:
+                pass
+        return self.active_editor
+
+
+class NPYImageEditor(tk.Frame):
+    def __init__(self, master, app):
+        super().__init__(master)
+        self.master = master
+        self.app = app
 
         self.current_mouse_position = tk.StringVar()
         self.current_mouse_position.set("x=--, y=--")
@@ -126,17 +391,10 @@ class NPYImageEditor:
 
         self.create_widgets()
         
-        # Bind keyboard shortcuts
-        self.root.bind("<Control-z>", self.undo)
-        self.root.bind("<Control-y>", self.redo)
-        self.root.bind("<Control-a>", self.select_all)
-        self.root.bind("<Control-d>", self.deselect_all)
-        self.root.bind("<Control-s>", self.save_full_image) 
-        self.root.bind("<Control-o>", lambda e: self.open_file())
-        self.root.bind("<Control-MouseWheel>", self.on_mouse_scroll)
-        self.root.bind("<Delete>", self.delete_selected)
-        self.root.bind("<Key>", self.on_key_press)
-        self.root.bind("<KeyRelease>", self.on_key_release)
+        # Bind keyboard shortcuts (handled globally by SpriteEditorApp)
+        self.bind("<Control-MouseWheel>", self.on_mouse_scroll)
+        self.bind("<Key>", self.on_key_press)
+        self.bind("<KeyRelease>", self.on_key_release)
 
     def on_key_press(self, event):
         if event.keysym in ('Control_L', 'Control_R', 'Control'):
@@ -147,124 +405,85 @@ class NPYImageEditor:
             self.cmd_pressed = False
 
     def create_widgets(self):
-        # Menu
-        menu = tk.Menu(self.root)
-        self.root.config(menu=menu)
+        toolbar1 = tk.Frame(self)
+        toolbar1.pack(side=tk.TOP, fill=tk.X)
+        toolbar2 = tk.Frame(self)
+        toolbar2.pack(side=tk.TOP, fill=tk.X)
 
-        file_menu = tk.Menu(menu, tearoff=0)
-        menu.add_cascade(label="File", menu=file_menu)
-        file_menu.add_command(label="Open", command=self.open_file, accelerator="Ctrl+O")
-        file_menu.add_command(label="Save Selection", command=lambda: self.save_selection(None))
-        file_menu.add_command(label="Save full image", command=lambda: self.save_full_image(None), accelerator="Ctrl+S")
-        file_menu.add_command(label="Exit", command=self.root.quit, accelerator="Ctrl+Q")
-
-        edit_menu = tk.Menu(menu, tearoff=0)
-        menu.add_cascade(label="Edit", menu=edit_menu)
-        edit_menu.add_command(label="Undo", command=self.undo_menu, accelerator="Ctrl+Z")
-        edit_menu.add_command(label="Redo", command=self.redo_menu, accelerator="Ctrl+Y")
-
-        select_menu = tk.Menu(menu, tearoff=0)
-        menu.add_cascade(label="Select", menu=select_menu)
-        select_menu.add_command(label="Rectangular Selection", command=self.activate_rectangular_selection)
-        select_menu.add_command(label="Magic Wand", command=self.activate_magic_wand)
-        select_menu.add_command(label="Select w/ Same Color", command=self.select_all_with_color)
-        select_menu.add_separator()
-        select_menu.add_command(label="Select All", command=lambda: self.select_all(None), accelerator="Ctrl+A")
-        select_menu.add_command(label="Deselect All", command=lambda: self.deselect_all(None), accelerator="Ctrl+D")
-
-        # --- NEW: Canvas Resize Menu ---
-        canvas_menu = tk.Menu(menu, tearoff=0)
-        menu.add_cascade(label="Canvas", menu=canvas_menu)
-        canvas_menu.add_command(label="Add Row (Top)", command=lambda: self.resize_canvas('top', 'add'))
-        canvas_menu.add_command(label="Add Row (Bottom)", command=lambda: self.resize_canvas('bottom', 'add'))
-        canvas_menu.add_command(label="Add Column (Left)", command=lambda: self.resize_canvas('left', 'add'))
-        canvas_menu.add_command(label="Add Column (Right)", command=lambda: self.resize_canvas('right', 'add'))
-        canvas_menu.add_separator()
-        canvas_menu.add_command(label="Remove Row (Top)", command=lambda: self.resize_canvas('top', 'remove'))
-        canvas_menu.add_command(label="Remove Row (Bottom)", command=lambda: self.resize_canvas('bottom', 'remove'))
-        canvas_menu.add_command(label="Remove Column (Left)", command=lambda: self.resize_canvas('left', 'remove'))
-        canvas_menu.add_command(label="Remove Column (Right)", command=lambda: self.resize_canvas('right', 'remove'))
-        # -------------------------------
-        
-        main_toolbar_frame = tk.Frame(self.root)
-        main_toolbar_frame.pack(side=tk.TOP, fill=tk.X)
-
-        # File buttons
-        open_btn = tk.Button(main_toolbar_frame, image=self.open_icon, command=self.open_file)
+        # Row 1: File, Zoom, Flip/Rotate
+        open_btn = tk.Button(toolbar1, image=self.open_icon, command=self.app.open_file)
         open_btn.pack(side=tk.LEFT, padx=2, pady=2)
         Tooltip(open_btn, "Open File (Ctrl+O)")
 
-        save_btn = tk.Button(main_toolbar_frame, image=self.save_icon, command=lambda: self.save_full_image(None))
+        save_btn = tk.Button(toolbar1, image=self.save_icon, command=lambda: self.save_full_image(None))
         save_btn.pack(side=tk.LEFT, padx=2, pady=2)
         Tooltip(save_btn, "Save File (Ctrl+S)")
 
-        tk.Frame(main_toolbar_frame, width=2, height=24, bg="grey").pack(side=tk.LEFT, padx=5)
+        tk.Frame(toolbar1, width=2, height=24, bg="grey").pack(side=tk.LEFT, padx=5)
 
-        # Zoom buttons
-        zoom_in_btn = tk.Button(main_toolbar_frame, image=self.zoom_in_icon, command=self.zoom_in)
+        zoom_in_btn = tk.Button(toolbar1, image=self.zoom_in_icon, command=self.zoom_in)
         zoom_in_btn.pack(side=tk.LEFT, padx=2, pady=2)
         Tooltip(zoom_in_btn, "Zoom In")
         
-        zoom_out_btn = tk.Button(main_toolbar_frame, image=self.zoom_out_icon, command=self.zoom_out)
+        zoom_out_btn = tk.Button(toolbar1, image=self.zoom_out_icon, command=self.zoom_out)
         zoom_out_btn.pack(side=tk.LEFT, padx=2, pady=2)
         Tooltip(zoom_out_btn, "Zoom Out")
 
-        zoom_reset_btn = tk.Button(main_toolbar_frame, image=self.zoom_reset_icon, command=self.reset_zoom)
+        zoom_reset_btn = tk.Button(toolbar1, image=self.zoom_reset_icon, command=self.reset_zoom)
         zoom_reset_btn.pack(side=tk.LEFT, padx=2, pady=2)
         Tooltip(zoom_reset_btn, "Reset Zoom (1:1)")
 
-        tk.Frame(main_toolbar_frame, width=2, height=24, bg="grey").pack(side=tk.LEFT, padx=5)
-        
-        # Tools
-        pencil_btn = tk.Button(main_toolbar_frame, image=self.pencil_icon, command=self.activate_pencil)
-        pencil_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(pencil_btn, "Pencil")
+        tk.Frame(toolbar1, width=2, height=24, bg="grey").pack(side=tk.LEFT, padx=5)
 
-        self.bucket_fill_btn = tk.Button(main_toolbar_frame, text="Bucket", command=self.activate_bucket_fill)
-        self.bucket_fill_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(self.bucket_fill_btn, "Bucket Fill (Contiguous)")
-
-        self.replace_color_btn = tk.Button(main_toolbar_frame, text="Replace", command=self.activate_replace_color)
-        self.replace_color_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(self.replace_color_btn, "Replace Color (Global)")
-
-        dropper_btn = tk.Button(main_toolbar_frame, image=self.dropper_icon, command=self.activate_dropper)
-        dropper_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(dropper_btn, "Color Dropper")
-        # --- NEW: Toggle Grid Button ---
-        self.grid_btn = tk.Button(main_toolbar_frame, text="Grid", command=self.toggle_grid)
-        self.grid_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(self.grid_btn, "Toggle Pixel Grid")
-        # -------------------------------
-
-        tk.Frame(main_toolbar_frame, width=2, height=24, bg="grey").pack(side=tk.LEFT, padx=5)
-
-        rect_select_btn = tk.Button(main_toolbar_frame, image=self.rect_select_icon, command=self.activate_rectangular_selection)
-        rect_select_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(rect_select_btn, "Rectangular Selection")
-
-        magic_wand_btn = tk.Button(main_toolbar_frame, image=self.magic_wand_icon, command=self.activate_magic_wand)
-        magic_wand_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(magic_wand_btn, "Magic Wand")
-
-        select_color_btn = tk.Button(main_toolbar_frame, image=self.select_color_icon, command=self.select_all_with_color)
-        select_color_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(select_color_btn, "Select All w/ Same Color")
-
-        vflip_btn = tk.Button(main_toolbar_frame, image=self.vflip_icon, command=self.vertical_flip)
+        vflip_btn = tk.Button(toolbar1, image=self.vflip_icon, command=self.vertical_flip)
         vflip_btn.pack(side=tk.LEFT, padx=2, pady=2)
         Tooltip(vflip_btn, "Vertical Flip")
         
-        hflip_btn = tk.Button(main_toolbar_frame, image=self.hflip_icon, command=self.horizontal_flip)
+        hflip_btn = tk.Button(toolbar1, image=self.hflip_icon, command=self.horizontal_flip)
         hflip_btn.pack(side=tk.LEFT, padx=2, pady=2)
         Tooltip(hflip_btn, "Horizontal Flip")
 
-        rotate90_btn = tk.Button(main_toolbar_frame, image=self.rotate90_icon, command=self.rotate_90)
+        rotate90_btn = tk.Button(toolbar1, image=self.rotate90_icon, command=self.rotate_90)
         rotate90_btn.pack(side=tk.LEFT, padx=2, pady=2)
         Tooltip(rotate90_btn, "Rotate 90° CCW")
 
+        # Row 2: Tools, Select
+        pencil_btn = tk.Button(toolbar2, image=self.pencil_icon, command=self.activate_pencil)
+        pencil_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(pencil_btn, "Pencil")
+
+        self.bucket_fill_btn = tk.Button(toolbar2, text="Bucket", command=self.activate_bucket_fill)
+        self.bucket_fill_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(self.bucket_fill_btn, "Bucket Fill (Contiguous)")
+
+        self.replace_color_btn = tk.Button(toolbar2, text="Replace", command=self.activate_replace_color)
+        self.replace_color_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(self.replace_color_btn, "Replace Color (Global)")
+
+        dropper_btn = tk.Button(toolbar2, image=self.dropper_icon, command=self.activate_dropper)
+        dropper_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(dropper_btn, "Color Dropper")
+
+        self.grid_btn = tk.Button(toolbar2, text="Grid", command=self.toggle_grid)
+        self.grid_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(self.grid_btn, "Toggle Pixel Grid")
+
+        tk.Frame(toolbar2, width=2, height=24, bg="grey").pack(side=tk.LEFT, padx=5)
+
+        rect_select_btn = tk.Button(toolbar2, image=self.rect_select_icon, command=self.activate_rectangular_selection)
+        rect_select_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(rect_select_btn, "Rectangular Selection")
+
+        magic_wand_btn = tk.Button(toolbar2, image=self.magic_wand_icon, command=self.activate_magic_wand)
+        magic_wand_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(magic_wand_btn, "Magic Wand")
+
+        select_color_btn = tk.Button(toolbar2, image=self.select_color_icon, command=self.select_all_with_color)
+        select_color_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(select_color_btn, "Select All w/ Same Color")
+
         # Color Tools Frame
-        tools_frame = tk.Frame(self.root)
+        tools_frame = tk.Frame(self)
         tools_frame.pack(side=tk.TOP, fill=tk.X) 
 
         self.color_indicator = tk.Label(tools_frame, text="", bg=self.rgb_to_hex(self.current_color[:3]),
@@ -287,7 +506,7 @@ class NPYImageEditor:
         self.tool = None
 
         # Selection Mode Frame
-        self.selection_mode_frame = tk.Frame(self.root)
+        self.selection_mode_frame = tk.Frame(self)
         self.selection_mode_frame.pack(side=tk.TOP, fill=tk.X) 
         self.selection_mode_frame.pack_forget()
 
@@ -300,7 +519,7 @@ class NPYImageEditor:
         tk.Button(self.selection_mode_frame, text="Save as Preset", command=lambda: self.save_selection_preset()).pack(side=tk.LEFT)
         tk.Button(self.selection_mode_frame, text="Load from Preset", command=lambda: self.load_selection_preset()).pack(side=tk.LEFT)
 
-        status_bar_frame = tk.Frame(self.root, bd=1, relief=tk.SUNKEN)
+        status_bar_frame = tk.Frame(self, bd=1, relief=tk.SUNKEN)
         status_bar_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
         status_bar = tk.Label(status_bar_frame, textvariable=self.current_mouse_position, anchor=tk.W)
@@ -312,8 +531,9 @@ class NPYImageEditor:
         size_label.pack(side=tk.RIGHT)
         
         # --- MODIFIED: Right Sidebar with Tabs (History / Colors) ---
-        self.sidebar_frame = tk.Frame(self.root, width=220)
+        self.sidebar_frame = tk.Frame(self, width=220)
         self.sidebar_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=5)
+        self.sidebar_frame.pack_propagate(False)
         
         self.sidebar_tabs = ttk.Notebook(self.sidebar_frame)
         self.sidebar_tabs.pack(expand=True, fill=tk.BOTH)
@@ -359,7 +579,7 @@ class NPYImageEditor:
         self.palette_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         # -------------------------------------------------------------
 
-        self.canvas_frame = tk.Frame(self.root)
+        self.canvas_frame = tk.Frame(self)
         self.canvas_frame.pack(fill=tk.BOTH, expand=True)
 
         self.scroll_canvas = tk.Canvas(self.canvas_frame)
@@ -585,9 +805,6 @@ class NPYImageEditor:
         else:
             print("No more steps to undo.")
 
-    def undo_menu(self):
-        self.undo(None)
-
     def redo(self, _):
         if self.current_state_index < len(self.state_queue) - 1:
             self.current_state_index += 1
@@ -597,20 +814,15 @@ class NPYImageEditor:
         else:
             print("No more steps to redo.")
 
-    def redo_menu(self):
-        self.redo(None)
-
     def create_thumbnail(self, image):
         img_pil = Image.fromarray(image)
         img_resized = img_pil.resize((50, 50))
         return ImageTk.PhotoImage(img_resized)
 
-    def open_file(self):
-        file_path = filedialog.askopenfilename(filetypes=[("NumPy files", "*.npy")])
+    def load_file_data(self, file_path):
         if not file_path:
             return
         try:
-            self.root.title(f"NPY Image Editor - {file_path}")
             self.image = np.load(file_path)
             if len(self.image.shape) == 3 and self.image.shape[2] == 3:
                 print("RGB format detected. Converts to RGBA format.")
@@ -742,12 +954,13 @@ class NPYImageEditor:
             self.set_current_color([int(r), int(g), int(b), a])
 
     def open_alpha_input(self, event=None):
-        alpha = simpledialog.askinteger("Input", "Enter an integer between 0 and 255", parent=self.root, minvalue=0, maxvalue=255)
+        alpha = simpledialog.askinteger("Input", "Enter an integer between 0 and 255", parent=self, minvalue=0, maxvalue=255)
         if alpha is not None:
             self.current_color[3] = alpha
             self.set_current_color(self.current_color)
 
     def on_mouse_press(self, event):
+        self.app.set_active_editor(self)
         if self.image is None or event.xdata is None or event.ydata is None:
             return
 
@@ -955,5 +1168,5 @@ class NPYImageEditor:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = NPYImageEditor(root)
+    app = SpriteEditorApp(root)
     root.mainloop()
