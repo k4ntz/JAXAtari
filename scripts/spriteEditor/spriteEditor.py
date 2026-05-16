@@ -63,6 +63,7 @@ class SpriteEditorApp:
         self.active_editor = None
 
         self.create_menu()
+        self.create_global_toolbars()
         self.add_tab()  # Start with an empty tab
         self.refresh_layout()
 
@@ -76,6 +77,171 @@ class SpriteEditorApp:
         self.root.bind("<Control-a>", lambda e: self.delegate_to_active("select_all", e))
         self.root.bind("<Control-d>", lambda e: self.delegate_to_active("deselect_all", e))
         self.root.bind("<Delete>", lambda e: self.delegate_to_active("delete_selected", e))
+
+
+    def create_global_toolbars(self):
+        self.toolbar_container = tk.Frame(self.main_container)
+        self.toolbar_container.pack(side=tk.TOP, fill=tk.X)
+        # --- ICONS (Keeping your existing base64 data) ---
+        # (I will use placeholders for the new Grid icon to keep code clean, 
+        # but you can replace the base64 string)
+        
+        self.save_icon_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABdElEQVR4nO2Xv07DMBCHP6dJxFAJXoGBlQdhRKyw8RZU/BEvgMQzILFQCUYGdhZeAgnEhMRAW5qGwXfEOLHaoNAu/kmnqy/2+avvaqUAN0AhVorNOrIpMAbOsUoBg6fyn20mftAEkcpDn2oiCxeR8dbrxgA92aMAzmR84sRK40xGgj3gAHgAkgVARt4cA/Ql1y5wgS0FsvGpC5EGkr4Az3M2Vh0Ce9hTy4E74FKevTnzegJyLGOF+FWvqfgd7LfPxDdZLv7ay3Erp5AA+xL7ouoH/TzQI2mSTjaES6Cd/oE97hGwJmMXyJWRk9CeyJNA8jZKJKnavJwKUQJHXQD8VQYouwDQC0etaAMR6gG32fw6+nPWsb3Ul/gGVRlqt56vEMAnVZOFNBF/BbxjuzsD7p1147YASrwFvGKbJQShN+gT8OjEM2AbW45NL29N/k24dK3yVxABIkAEiAARIAJEgB+AVb4P1P6aLV0JMGT++1/X0v2G35Nljn+igX7oAAAAAElFTkSuQmCC"
+        self.save_icon = tk.PhotoImage(data=self.save_icon_data)
+        
+        self.open_icon_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACAklEQVR4nL2Xu0oEMRSGv5kdFbEQK/HyEKK9pa21vU+gD+IrWImVgmDhDUQLK621E0QtBC+FgrI7Y5FznGx2ZjNroj8czu5kkvMn5z9JBpojFYuKBJho+O6L+BbQiUngxfNOLv4QWAMehUQOFDFIFAPYA7Bi9W3JJJpYLfKG1raIbAFTAZP+QcJgy1gImRYmFeuY1ECZqrp+b1WxBiWg6AgJ6K+hQmK8AvPiu2JmnkB15FLKSmhSRaqVHvgI9BNPq09bY/gIfAIfAePbKahczToNaI5XgR0M0XYgkUoRaqNtusG8A5MBQV3U7g8uAa33M+lYK6AYqNKALpPWtyp+GBiLHD+tIqDqPhKvs9/AbMNt/OL1QcV5r3/UOuJvgRGLwAhwR2+6Qm3TnUmOWfJTTAkOA1/AHDArBGPcCXQ733UJ6HIfiNdgS+ILwgVZSPAn4Fwf2OX3AUzLy6qHc7orJMR0jD17hlCeZleYcz+TZzPAgrTFWH67ypK0omHfebYIjGLyH2M/0NvUCVBkTkMBXGJOOBXgskMwBCrya+AGSGwCOrttp9O4+NDatwkcy++satCmt+TfQFN+YD+sOoxsi7Xp6FjPlJNMMvy5jXL1ptzCLzDXuBTIM/7wpHMwJN7e5PIM/4dJDOgq5pSHXA6DfZrFIvL6j/H88H42/QFiiToOvgG4j9n07GmfLQAAAABJRU5ErkJggg=="
+        self.open_icon = tk.PhotoImage(data=self.open_icon_data)
+        
+        self.zoom_in_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAADLElEQVR4nM3XSYicRRQH8N90z+K4EEfJKG4EccklrmgS8SCIC8ZD9KA55SYKnkxILh70Ho+KoEQU9WZydQHHZQK5mEH0kriAkoMHwQQTHRMz0x7qPfrrL193z7RM9MFHdb31X1Xvvaoes3oaq/zujGA/ErUx3sBvBb+1VoFbelcMF2MdJmv8doPuUBpk0MZS/H4Q27EF12MKv+M7fI4DOFoBvbxaIE3BRcA55azzO4c/a7wzeBVX1uxHojzrZ3E2AvyIl7AV12IGN2Ib3goAHWUXbgv7kfIikT+ju7p9ypk3gUzahM9C/xfcMgqIDH63svJlPFeRT4XOXhxXVtrWTcZJHAwQC6HflMR9KZUPhZNXgj8R/AR4IORPx3y8IpvGtyF/oSIfSunggTD+SSm3ammlzntKdTxRC5Djw+Hj5wA0ZsAu5BmlwlNhvF/J9Gwy7drXxEsQn+Br3KAkbceAXEhB1vuWAPNxzM+EbEnJixzhdMxT51x88GEE3lpb4Hk0HsKOsuXXhZPjwd+DO5SEbIfefWH7InaG3nLI3g3wx4K/oV/gKoCkCSWTz2Ix5i8r59hE9zfwWgHgr5inbd9LqwpgEaeURrMOJ7EZN4eDbM27Ivg+HA4fS8ouHFZWPhM+T8Q4tBQzF7LtPjLA6O2KTj96M3Sej3nfUmzVxrkYd4SDSd2reKoywmUxvyjGidC9BI+H/RehO/RySgA3KVn9B24NXrs2vo+/8WRtddkR90TweWUXV9yOM8Br4eBLZVUZJAN9EPIEkMlLaeOnQv5Qze9QSrQz+CGcHMSlFUfjytnvx9V6z/YepXw7eL0CfFWU27VJudU6SlfbNsDmcmXbT+veoPOYrQDvS02ZnuW2Ee/g3uAfwadKk1nEFbgLj+Ka0HkDtyvluxCyX/W+rlZEiXoKu/G93hdQ/ZvDY2FzVQTvBOj1NZ89NKhBVN9200pf36y012n8prwJD+Gb0JtQKmQWH+FO/3Inqu+AlerlOKu7EwtWmBPDAmQ5Vn831fkwEGv2P6IfiCP/BxBf6SbmpCEvpbUAsV65LecvNAB6n34XLGid/rPAVTpvB/4Bb2G5yZFPJYsAAAAASUVORK5CYII="
+        self.zoom_in_icon = tk.PhotoImage(data=self.zoom_in_data)
+        
+        self.zoom_out_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAC30lEQVR4nM3Xy49URRQG8F/3vDJgAkSBhEeiCa8FCGaiwI5AIAQ3/hNGt8Sww8geloCJC4hhLVtlARqGxI0MBBY81ER04cJEjYLAAHNZ1Cn79qX79p3m+SWVvlV1Hl+dOqequmX+aJW+iyH0h8IIRnuMt2O8/bwct3WvGBZgEcYr4yM9ZAeiTmEEj+J7Fz7ANqzGBP7BTXyHr3C9RHpuvkR6ORcOz0l7ndtD3KmM3cdRvF7RHwp5rz/CbDj4GZ9hO1bgDbyF93EiCBRSFN4O/aHyIjP/UGd1h6U9r8MmfBvyv2PdMCSy8ylp5XP4uDQ/GjI5Mdu6q2Mcp4PEjJQnvZK4L7LwhTByJMbHGhjJ5CdxNfT3l4gPRDawI5R/kcptPqWVHe0JG7eCUKuJjax8XAr9p9GfCBJN2mjJzqUgsbOywCeQkyTX+7Zgeyb692OuSXsYDb4OAtuj3zcCozFZSCFfFUZ+i/ED2BJRqcvoXDGngvyN0H+zRud/AhljUibP4m70D0n72BTtIHAv+lm376VVJnAX/2KlVPd/YyvWhoFBiTSH70NuSYz9Fb+1W1AE81n8KG3DBvwqldTVAY57YSp+r9dKVYjAwSB0MvrjujO8ro2F7ELpNJzDxrAz8ETMAmukzL+D9THW9GLJ1/OBWMS0zonZCNnRsTBwXloV9adZq+R8SsqjArsrdgcis12Cn8LIabxWmq+GvWz8Xal8C3zegHhP5HBtkvaxwGXp2u2XyYulsN/WOQ+msSzmayPQy2h+CW3Al3gvxi/iLK7hP+lNMIW90hsBvsBmqXxnYu4P3a+rRsisJ/CJVJ5FTTuHfaGzPJwXQXppxWYX6g6X8ttuUjrXt0rH6yT+lN6EF3Al5MbwQAr/N3jHU0ai1Y95jVz+XaYTiRkNc2KQg3L25+9edT6IxHP7H9GPxMVXgcQPOok5ruFL6VmSWCrdltMvmgCdcL9Qp1W8NMdlPBGBx/VXqCrJTq4vAAAAAElFTkSuQmCC"
+        self.zoom_out_icon = tk.PhotoImage(data=self.zoom_out_data)
+        
+        self.pencil_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACR0lEQVR4nL3XT4iNURjH8c/9NwwzkZQUEsnWguUsZCk7O7HHQv4sLCRkQVJslYWUlfInjST5k2I2SmwmUZKMbBTRjHHH4pzTe+Ztppu5772/Or33Offc8z3Pc859zvPSP9XQyOxG7OsbPGkYy/oFhnp8NnEZE/iGKxjqB7yGFu5gptRu9BoOA7gXgVNoxzaNv72GL8JoBk+etyP8dy/hi3F/DvgM/sTn6V7BB/GwBEstLeZSr+BL8GgeeLITvKEiJfhSPO4Av5jBK0lECT6EJx3gF3oFH8azOeDtzD4Xxzargqf9W4bnHeBnq4anSZbjRQf4marhjdjW42UH+Kmq4fkk+yJkMkLL8JNVw9OBWyH81+FwhKW8Ph3tE1XBaxHcjPYqjAv5vRX7jpm9DcergJerF1iNN4q9viXcdHBEiMDRDL5g5asewGaM4LXC0+TtbUUktsZnXRdK8LrgzbjZGa2dfU6XyqgiEv8Nz0NVU1QvN7Er9o/FVseBOKat2KKnQvhbQmQWrDThecGzd9hRGrNbKCLSFuyP/V2FPU1Qx9oI+IqN2cKaQnUD1yL8YLRbulAzA0xir1DJHMJ7YW+nSov8Eu0H0a6srtuGH/gs3OuNDJq8rOGtkHDWZAvrSntwNcJ/YnvsL+eBlbiuOPmVwAkHK/2lxrAu+24QW4RL5VMcMyHkhpQlK9EGRRE5gw9C1pswOw/cxab4m8re6/JQ7xTeVj7iF77jlfBKNZKNq8zzfMKyR0PCYcxVadjnUio2ymrO09+1/gHVZMGquu7zPAAAAABJRU5ErkJggg=="
+        self.pencil_icon = tk.PhotoImage(data=self.pencil_data)
+
+        self.magic_wand_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACnklEQVR4nL3Xv49NURDA8c9bD4uEbTQiIRG/Co2OUinEj4IoaOwPi/9As1EQeiqFCg2FxL+g8CtKiRARBdGJH7FrPcWdyT3vsrx9761Jbs69886d+d6ZOXPOo1uWxVU+w3F8wU20MFLMGYl5LQNKaSAdJMB9/MQnjBXzS5C+JA200MEe7A1nIwXUs7h/ia+F85/YgP26I7coyRf3BkQHk43fluMANjb0O/Em3rkcuvagAHMxniicl9JWRWBT4byDq/0CUKdisjB4R3eOt2BtMf9gMfcuVuhOW98QJ3AD2+J5Ox7iM97iVOhXq8J+RR3Fvpzn0mv7vZB24p36S5s1UkqrsNV3QVLlvI0dDedPMKuq/A6mYv6oAXvAMVW+Z8LYsoB4XDi/H/pJzKsL9UwBPRo27uBw6HvqE2Vo88Wt4WQ+QKiKTDjp4FuM50N/tLDzXVUj9BCdm3iPR9gcL4zho7r7Zbh34YU6Aj9iHMc6PMUHXFdFrOdOOVaQLo/7k7qjcxGvddfEXAMC1vfqNKWkbFZv9oX84mZNnI7nWd01scIiJZcQdW9PI1PqnJc1kR1yogExHfpFdcSMQrO3p/6MOhKfwimsijEj1YxETxDZPhfq7aMxngt99oFsRgND5IS/9fZMTzPnQ4NoYSUuqXp7eU5IA4dUq2V8qSD+BJVfPhPGnsdz1sTQIdrq/V4B8EC9EnKdn10qiFIS4IhqY7qmSk8u0X9FYsqQ0kHd26kilEb+C0SzKFP6heirWS20qy0EkRtYE6K5dwxFeoWYVrXzvHb/T4g1Mc6Efh4XhgnwN4jMeZ4nMg1Hhw3wJ4jcyi/ilbrd3zbg4bUXiGndG1he9wzpD20vEBPq82MHtwrnrSUlCEdZ7ftUR7p78VsLnV+hsfuN/rgq+gAAAABJRU5ErkJggg=="
+        self.magic_wand_icon = tk.PhotoImage(data=self.magic_wand_data)
+
+        self.rect_select_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACKElEQVR4nO2WzWoVQRCFv/m5XggkJuJOIch9Cp/BhZCYhwkuxI2+gW7EdZCIK/ExDNm4TcCVihGM4o3JHRd92qnp9PwnKOiBonrOdHVXV1d3F/zHH0ZSw6eSAjgzfC59arhM4ywkTfZ/P1LpGfAM2DT8FHgkmZq+m+o7M+PE7DvBh3gHF75jYEXcXXGF2ujfsbgdM461XxJXt90VZNL3gEPgibgUWAfeStbFZepzKBsi9j4femPZtL33mXHSrmiJ81iOcJ0RC1fS0k5r/g+aOAPuADcCPmlxrs2+FT4JH+OSaB+X8XUTj7YflByXibEhHL0F4UBDMdYeGHmMhtrbi+iA6kXUx34DeA88pedFFLuK+1yl3oFXsv8KrDbZ58G3f07va/I3wHfcChZ0x1z9v9VNPBQ5553OjFyRfoGLwAfgurjc6MqAfXAa4c4i7RPpAjiioSgJHfChngHbuC14KX4CPFC/h8BP9d0AtnCh9lXQbfW7CuwahxLgHe6mnDc51KcemBu+q3j7PIxAIb2rVbzGJVIK7EmQTvXvuaJQUB63FdwbsAA+m4nB1Ql7lHVkLewb31YPrAJruIRbozyGH4Fb4q5JKqeiLglT3PFLjPcJZTJ53re/BPY/pAvgE+4+sPhtX+fAIpjED5aYdozP5KTtN6F8jovQvukYFh05y/toTeXIJPK/gouuB/zK93HROMCdpAu9Dbs4kOPqgZsB/+8gwUWhdYt/AZVmjyIoHY1fAAAAAElFTkSuQmCC"
+        self.rect_select_icon = tk.PhotoImage(data=self.rect_select_data)
+        
+        self.dropper_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACsklEQVR4nM2XS29NURTHf/e2vc1FgmivREhIxGNQIhdtZ0JIg4GhLyBMRQzFB2DokRhIfACdMlGPNjHREgYaj4QYGEhI0Iqix2D9l3Pucd60rORk77POevz32mutvU+N8lSLzIMK+pWoC+hO4NfFry+U4zqdKwZYAiwHGjF+V4JsLmUpdAE/NN8HHAGGgHVAL/AReAbcAa4D0xHQ82WBJDlHDsewvfbnOzAT430FLgCrYvqVyPf6ODAnBy+Bs8AwsAboAzYAh4CrAhBgUdgm/Up54ciPEa7uHLbnWTQA3Jb8W2BTFRDuvI2tfB44EfneLRlPzDqd1dEARgViCsuTpCROJReekJHz4vcUMOLgm8AT6Z+MAM8lN7BHyq+wcitTWu7ogGy8FqBaERuufAkL/ZkYvyj5nj8UiL16T60KV/B6H8LQ3tRYttW6vRvSHdZ7agR83wMs5GuBb8Ab8ao2lKeyu74oYrBka2AVMFfRsdOsxqbG1EhGAXwBPmGRWCZe6d4unT7NP+TZqQtdHVv1cwlvJaz1MuTNa6fepzNkfwGIjmMaj1I+AT2XlgKHNb+rb7m55AA2Yn19BtgsXtGDxY/n03I+TskouqOLMnAPS0zI7ge1iPM2lkcBsD9mN5cc7UrghYyM0pmQ3bEnanwXYfleLgA8kTxcA9ipFgCPsGM3LZNXYGH/TJiE40BL3zMjkGTUb0JbgGvAbvEngVtYk5nFSq0NjGB3BIArwHZgEDsRR4B3dN6uCpGj7gVOYeUZZDxjwEHprJbzQKD7YzY7KKvRRO92TayvD2LttQm8x+6EE8BjyfVgrbyFnSc7+MNI1NKQZ8j52CKMxBQFcyLPQTT7fZ5U53kgFuw/Ig3E5P8A4gFhYjYoeFP6myD6gftYj1hUABCGe1GdxumfOY7SbxH4CTJflNcFG2UUAAAAAElFTkSuQmCC"
+        self.dropper_icon = tk.PhotoImage(data=self.dropper_data)
+
+        self.zoom_reset_data = self.dropper_data 
+        self.zoom_reset_icon = tk.PhotoImage(data=self.zoom_reset_data)
+
+        self.select_color_data = self.magic_wand_data
+        self.select_color_icon = tk.PhotoImage(data=self.select_color_data)
+
+        self.vflip_icon_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAEq0lEQVR4nM1XX2ibVRT/nXvvlyYtpQVZtUuWzLDm22JF1KoPwqI4RJt2g0H2sBdxMBB8mNMHUR9ihQk+yNSn+aK+iEhe/NPO4RwjwvYwu8FQ4tqVQGq7yXDaWtOm+b57jw/Jl6ZZE+ycrQe+P1zOPb/fvffc8wdYJWmB/1xWY1DDP9+zazAijYoycYc0kE3tkGEIi8gxV6envspVDI8Y297buUTYzYaVp6oFNDEVtXDzv/58suBhAYBaYTViQnbyFYI6JpTVBiLQKn6NwiCScPTCYm/v0Jbr11ECgCL0m7627peNWwaoMl+AAWaQoeWQnXxjZmLsXQ+TPDbR6J6usvLPgqgd4JNgLjGR0xyfWUhFbNzxmYmB40COgIwO7tr7mGDxojGu8lZAzBaI/AANgnnRb9ytU1On/kSVIgHgUCgV4PbFnJC+oKvdJ69Pfn2uxfLXLb2x4ceVVGeNKc+o0l/xQiFbQm2PUimJTEYHY8mXlNV+XLtLeeHjgWndXkQgz4hGTVPLGQDI6JWBtEAqR8gAeDgvsBSlsFzsMGUalyoQdZ3Fo7OTY+95mN4sAtICiYQKxZLnI/0pDsYGPwIAJBIKtyvVucHY4CcVm8nzlbG0QPUCeMYZACGbdWVs6JB2Sxekans+1Dd4eiZ78jPseKYNU50uEjdaeeWKZHsYOxYUsqeWQ/bQQSGt57RbWlCgQ8hmXeAJUcVswrgveTgc38/b7OHfIva+7be7AeHY8L3b7OGb4fh+DvYlD9djeHLrihIJhWzWDdrJzy2r44DjFH8g4H0Glchwc1+oExYkCOxn4IhldTziOMXM7MTYAc92awIVf6Dw/eNduiy+t6xAP8Br7VdLoerbcZZ+kj6ze/rHgXlghNGw9c3OlADw1p1P3SW54wUGxxjsWx8BKhNoUpM4ce3KFzdRF/1aka577mReqHl9/VMD9b5rs/OcJtvDSAG4cYMaz3GVbk8PIwPUbkwz3SpmjUkkkvCju9uPuTqVbqBw+cu5+gkAEI3u6dKdHVTT7QbkQpHz+e/mG3UjD+zrbrSJublSNRJWdiC8c+ghA/EN2PjBVVJEhkgKw+6lLtn+dC4HDWR00E6+LoT1KmvHALVsqUlawhjnndmJsbeBlIzHIefdxdNCqAeZtQGzqNplIlEimGenr4xe2oD831r+H0eATXTCxoFNu4ZrstuIQLTpofjWXJ9ISGRHXF1OnrCsQP8dSUbl4ofAyJrJqBH8jqbjiL1v+zrScaVKjcSGdmpBF4RQncZZPjhz9V8UJFO1guRTY9wFafjRwuToFQ+rgcjmlGT/rCi9GDVIAcjEeTXzlESqBYH8GkWpu3RkdmL0Aw9zQ8tyS6qz2ji/qNLCfYVCdhmouwU+3x++Mvxb2LhKEr8WiiVXGhMGCyGNNvrja5OjZ4CUBOIcssePklADRrsMoqb+UWlM2G+Mq4hxt2UFfABKAEgBYCAt8vmR+ZCdTJOQx4SwkqtaM2YI5QOX5gyAM0Cce3sv+sF4S6lAO0uN5jGtGkWYoY2zDNdNV7qildasRhStmlMShuXSuZnct797k8M79sbZEn0wDoNFUwatmtMG2fj2/G+NVp8I4AoNGQAAAABJRU5ErkJggg=="
+        self.vflip_icon = tk.PhotoImage(data=self.vflip_icon_data)
+
+        self.hflip_icon_data = "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"
+        self.hflip_icon = tk.PhotoImage(data=self.hflip_icon_data)
+
+        self.rotate_icon_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACkklEQVR4nMXXS6hNURgH8N859yhvCYmBPEZKKXkkA0lhxoiBxFQmBoYMpDs0VMYMpEQxQGGsDCgGYuL9Si55pe7DYK1197r7nnPP3se5+ddq77X2933/b33fenyb/4xGjzrNTHesZGc0tr6jiYF+y1aNwABG4vt8bMEGrIr9P3iLx7iPl5kjY7H1hBRuWImzeJUZbde+4Rp2ZHaaekBDEaHjGGpD9hOf8bWDMxexKNqomr5x8iZauFAy+hyD2ClEZTGWYxOO4V5J/hnW1nGikQleiUZG8QMnMKeCjd14kjnxDqvjt67pSOSDUXkEr7Exk2lFubQd84glgnnCWkhOPMJME7dwR/KNUWkYXxQhnDGVcslBUfZW5sRgiWcSkve3M6UDGXkdJJLFeC9E8hdWlLgmka+PwqO4G8daZeGKSHpHFRM608lmGjidCe8VwtirA2l9zMcHYVKPTNzi40gRuBPJP2KBEMqBdgoVkVJxSXF2jKchkTaid63s4zPhVBuJrdfjNM32QezPxpr0rbwQ5gjbBz4JUbmAm8Jh0zZ0FTAmLMSEhWUH2oX5G7bhEPZgXzRU60jthlYkHY79H/gd35fgiCIF9+N4L3d9A8uy/lB8jqd1s3C2N3E9fhhSXDIPM0N1MeUihO2KbfcYT7N+WnynokLd7dh1G5YNrovPYcW2HMHV+F43/APR1kEsjWM3hEm1FKm3FeeEq7Z8p0/wuCY5FY7i3PAs7MJ5vBBKrcMlg1VQ+zJqmpyOuULB0Q19vY5TMdIqjXVCp+LinwqSnLiK8Fx9LsmqIBnaL1TJX0xevP9UlHZDStHlNqS1yvJe7/l0HpzEd2F2b4S8t/sxmZZftanQ91+zqYjK4Z22n9NpwV9RzcSsJey9ggAAAABJRU5ErkJggg=="
+        self.rotate90_icon = tk.PhotoImage(data=self.rotate_icon_data)
+        # ------------------------------------
+
+    
+        toolbar1 = tk.Frame(self.toolbar_container)
+        toolbar1.pack(side=tk.TOP, fill=tk.X)
+        toolbar2 = tk.Frame(self.toolbar_container)
+        toolbar2.pack(side=tk.TOP, fill=tk.X)
+
+        # Row 1: File, Zoom, Flip/Rotate
+        open_btn = tk.Button(toolbar1, image=self.open_icon, command=self.open_file)
+        open_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(open_btn, "Open File (Ctrl+O)")
+
+        save_btn = tk.Button(toolbar1, image=self.save_icon, command=self.save_full_image)
+        save_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(save_btn, "Save File (Ctrl+S)")
+
+        tk.Frame(toolbar1, width=2, height=24, bg="grey").pack(side=tk.LEFT, padx=5)
+
+        zoom_in_btn = tk.Button(toolbar1, image=self.zoom_in_icon, command=lambda: self.delegate_to_active("zoom_in"))
+        zoom_in_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(zoom_in_btn, "Zoom In")
+        
+        zoom_out_btn = tk.Button(toolbar1, image=self.zoom_out_icon, command=lambda: self.delegate_to_active("zoom_out"))
+        zoom_out_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(zoom_out_btn, "Zoom Out")
+
+        zoom_reset_btn = tk.Button(toolbar1, image=self.zoom_reset_icon, command=lambda: self.delegate_to_active("reset_zoom"))
+        zoom_reset_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(zoom_reset_btn, "Reset Zoom (1:1)")
+
+        tk.Frame(toolbar1, width=2, height=24, bg="grey").pack(side=tk.LEFT, padx=5)
+
+        vflip_btn = tk.Button(toolbar1, image=self.vflip_icon, command=lambda: self.delegate_to_active("vertical_flip"))
+        vflip_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(vflip_btn, "Vertical Flip")
+        
+        hflip_btn = tk.Button(toolbar1, image=self.hflip_icon, command=lambda: self.delegate_to_active("horizontal_flip"))
+        hflip_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(hflip_btn, "Horizontal Flip")
+
+        rotate90_btn = tk.Button(toolbar1, image=self.rotate90_icon, command=lambda: self.delegate_to_active("rotate_90"))
+        rotate90_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(rotate90_btn, "Rotate 90° CCW")
+
+        # Row 2: Tools, Select
+        pencil_btn = tk.Button(toolbar2, image=self.pencil_icon, command=lambda: self.delegate_to_active("activate_pencil"))
+        pencil_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(pencil_btn, "Pencil")
+
+        self.bucket_fill_btn = tk.Button(toolbar2, text="Bucket", command=lambda: self.delegate_to_active("activate_bucket_fill"))
+        self.bucket_fill_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(self.bucket_fill_btn, "Bucket Fill (Contiguous)")
+
+        self.replace_color_btn = tk.Button(toolbar2, text="Replace", command=lambda: self.delegate_to_active("activate_replace_color"))
+        self.replace_color_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(self.replace_color_btn, "Replace Color (Global)")
+
+        dropper_btn = tk.Button(toolbar2, image=self.dropper_icon, command=lambda: self.delegate_to_active("activate_dropper"))
+        dropper_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(dropper_btn, "Color Dropper")
+
+        self.grid_btn = tk.Button(toolbar2, text="Grid", command=lambda: self.delegate_to_active("toggle_grid"))
+        self.grid_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(self.grid_btn, "Toggle Pixel Grid")
+
+        tk.Frame(toolbar2, width=2, height=24, bg="grey").pack(side=tk.LEFT, padx=5)
+
+        rect_select_btn = tk.Button(toolbar2, image=self.rect_select_icon, command=lambda: self.delegate_to_active("activate_rectangular_selection"))
+        rect_select_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(rect_select_btn, "Rectangular Selection")
+
+        magic_wand_btn = tk.Button(toolbar2, image=self.magic_wand_icon, command=lambda: self.delegate_to_active("activate_magic_wand"))
+        magic_wand_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(magic_wand_btn, "Magic Wand")
+
+        select_color_btn = tk.Button(toolbar2, image=self.select_color_icon, command=lambda: self.delegate_to_active("select_all_with_color"))
+        select_color_btn.pack(side=tk.LEFT, padx=2, pady=2)
+        Tooltip(select_color_btn, "Select All w/ Same Color")
+
+        # Color Tools Frame
+        tools_frame = tk.Frame(self.toolbar_container)
+        tools_frame.pack(side=tk.TOP, fill=tk.X) 
+
+        self.color_indicator = tk.Label(tools_frame, text="", bg="#000000",
+                                        width=5, relief=tk.RAISED)
+        self.color_indicator.pack(side=tk.LEFT, padx=5)
+        self.color_indicator.bind("<Button-1>", lambda e: self.delegate_to_active("open_color_palette"))
+        Tooltip(self.color_indicator, "Click to change color")
+
+        self.alpha_indicator = tk.Label(tools_frame, text="a: 255", width=5, relief=tk.RAISED)
+        self.alpha_indicator.pack(side=tk.LEFT, padx=5)
+        self.alpha_indicator.bind("<Button-1>", lambda e: self.delegate_to_active("open_alpha_input"))
+        Tooltip(self.alpha_indicator, "Click to change alpha (opacity)")
+
+        # --- NEW: Transparent Color Button ---
+        transparent_btn = tk.Button(tools_frame, text="Transparent", command=lambda: self.delegate_to_active("set_transparent_color"))
+        transparent_btn.pack(side=tk.LEFT, padx=5)
+        Tooltip(transparent_btn, "Set current color to fully transparent")
+        # -------------------------------------
+
+        self.tool = None
+
+        # Selection Mode Frame
+        self.selection_mode_frame = tk.Frame(self.toolbar_container)
+        self.selection_mode_frame.pack(side=tk.TOP, fill=tk.X) 
+        self.selection_mode_frame.pack_forget()
+
+        tk.Label(self.selection_mode_frame, text="Selection Mode:").pack(side=tk.LEFT, padx=5)
+        tk.Button(self.selection_mode_frame, text="New", command=lambda: self.delegate_to_active("set_selection_mode", "new")).pack(side=tk.LEFT)
+        tk.Button(self.selection_mode_frame, text="Add", command=lambda: self.delegate_to_active("set_selection_mode", "add")).pack(side=tk.LEFT)
+        tk.Button(self.selection_mode_frame, text="Subtract", command=lambda: self.delegate_to_active("set_selection_mode", "subtract")).pack(side=tk.LEFT)
+        tk.Button(self.selection_mode_frame, text="Intersect", command=lambda: self.delegate_to_active("set_selection_mode", "intersect")).pack(side=tk.LEFT)
+        tk.Button(self.selection_mode_frame, text="Fill Selected", command=lambda: self.delegate_to_active("fill_selected")).pack(side=tk.LEFT)
+        tk.Button(self.selection_mode_frame, text="Save as Preset", command=lambda: self.delegate_to_active("save_selection_preset")).pack(side=tk.LEFT)
+        tk.Button(self.selection_mode_frame, text="Load from Preset", command=lambda: self.delegate_to_active("load_selection_preset")).pack(side=tk.LEFT)
+
+
 
     def create_menu(self):
         menu = tk.Menu(self.root)
@@ -265,6 +431,19 @@ class SpriteEditorApp:
             return
         self.active_editor = editor
         if self.active_editor:
+            # Update global UI
+            if hasattr(self, 'color_indicator'):
+                if self.active_editor.current_color[3] == 0:
+                    self.color_indicator.config(bg="white", text="Transp")
+                else:
+                    self.color_indicator.config(bg=self.active_editor.rgb_to_hex(self.active_editor.current_color[:3]), text="")
+                self.alpha_indicator.config(text=f"a: {self.active_editor.current_color[3]}")
+                self.grid_btn.config(relief=tk.SUNKEN if self.active_editor.show_grid else tk.RAISED)
+                if self.active_editor.tool in ["magic_wand", "rectangular_selection", "select_all_with_color"]:
+                    self.selection_mode_frame.pack(fill=tk.X)
+                else:
+                    self.selection_mode_frame.pack_forget()
+
             if self.layout_mode == "tabs":
                 try:
                     self.notebook.select(editor.master)
@@ -343,49 +522,6 @@ class NPYImageEditor(tk.Frame):
         self.default_canvas_size = (600, 400) 
         self.cmd_pressed = False
 
-        # --- ICONS (Keeping your existing base64 data) ---
-        # (I will use placeholders for the new Grid icon to keep code clean, 
-        # but you can replace the base64 string)
-        
-        self.save_icon_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABdElEQVR4nO2Xv07DMBCHP6dJxFAJXoGBlQdhRKyw8RZU/BEvgMQzILFQCUYGdhZeAgnEhMRAW5qGwXfEOLHaoNAu/kmnqy/2+avvaqUAN0AhVorNOrIpMAbOsUoBg6fyn20mftAEkcpDn2oiCxeR8dbrxgA92aMAzmR84sRK40xGgj3gAHgAkgVARt4cA/Ql1y5wgS0FsvGpC5EGkr4Az3M2Vh0Ce9hTy4E74FKevTnzegJyLGOF+FWvqfgd7LfPxDdZLv7ay3Erp5AA+xL7ouoH/TzQI2mSTjaES6Cd/oE97hGwJmMXyJWRk9CeyJNA8jZKJKnavJwKUQJHXQD8VQYouwDQC0etaAMR6gG32fw6+nPWsb3Ul/gGVRlqt56vEMAnVZOFNBF/BbxjuzsD7p1147YASrwFvGKbJQShN+gT8OjEM2AbW45NL29N/k24dK3yVxABIkAEiAARIAJEgB+AVb4P1P6aLV0JMGT++1/X0v2G35Nljn+igX7oAAAAAElFTkSuQmCC"
-        self.save_icon = tk.PhotoImage(data=self.save_icon_data)
-        
-        self.open_icon_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACAklEQVR4nL2Xu0oEMRSGv5kdFbEQK/HyEKK9pa21vU+gD+IrWImVgmDhDUQLK621E0QtBC+FgrI7Y5FznGx2ZjNroj8czu5kkvMn5z9JBpojFYuKBJho+O6L+BbQiUngxfNOLv4QWAMehUQOFDFIFAPYA7Bi9W3JJJpYLfKG1raIbAFTAZP+QcJgy1gImRYmFeuY1ECZqrp+b1WxBiWg6AgJ6K+hQmK8AvPiu2JmnkB15FLKSmhSRaqVHvgI9BNPq09bY/gIfAIfAePbKahczToNaI5XgR0M0XYgkUoRaqNtusG8A5MBQV3U7g8uAa33M+lYK6AYqNKALpPWtyp+GBiLHD+tIqDqPhKvs9/AbMNt/OL1QcV5r3/UOuJvgRGLwAhwR2+6Qm3TnUmOWfJTTAkOA1/AHDArBGPcCXQ733UJ6HIfiNdgS+ILwgVZSPAn4Fwf2OX3AUzLy6qHc7orJMR0jD17hlCeZleYcz+TZzPAgrTFWH67ypK0omHfebYIjGLyH2M/0NvUCVBkTkMBXGJOOBXgskMwBCrya+AGSGwCOrttp9O4+NDatwkcy++satCmt+TfQFN+YD+sOoxsi7Xp6FjPlJNMMvy5jXL1ptzCLzDXuBTIM/7wpHMwJN7e5PIM/4dJDOgq5pSHXA6DfZrFIvL6j/H88H42/QFiiToOvgG4j9n07GmfLQAAAABJRU5ErkJggg=="
-        self.open_icon = tk.PhotoImage(data=self.open_icon_data)
-        
-        self.zoom_in_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAADLElEQVR4nM3XSYicRRQH8N90z+K4EEfJKG4EccklrmgS8SCIC8ZD9KA55SYKnkxILh70Ho+KoEQU9WZydQHHZQK5mEH0kriAkoMHwQQTHRMz0x7qPfrrL193z7RM9MFHdb31X1Xvvaoes3oaq/zujGA/ErUx3sBvBb+1VoFbelcMF2MdJmv8doPuUBpk0MZS/H4Q27EF12MKv+M7fI4DOFoBvbxaIE3BRcA55azzO4c/a7wzeBVX1uxHojzrZ3E2AvyIl7AV12IGN2Ib3goAHWUXbgv7kfIikT+ju7p9ypk3gUzahM9C/xfcMgqIDH63svJlPFeRT4XOXhxXVtrWTcZJHAwQC6HflMR9KZUPhZNXgj8R/AR4IORPx3y8IpvGtyF/oSIfSunggTD+SSm3ammlzntKdTxRC5Djw+Hj5wA0ZsAu5BmlwlNhvF/J9Gwy7drXxEsQn+Br3KAkbceAXEhB1vuWAPNxzM+EbEnJixzhdMxT51x88GEE3lpb4Hk0HsKOsuXXhZPjwd+DO5SEbIfefWH7InaG3nLI3g3wx4K/oV/gKoCkCSWTz2Ix5i8r59hE9zfwWgHgr5inbd9LqwpgEaeURrMOJ7EZN4eDbM27Ivg+HA4fS8ouHFZWPhM+T8Q4tBQzF7LtPjLA6O2KTj96M3Sej3nfUmzVxrkYd4SDSd2reKoywmUxvyjGidC9BI+H/RehO/RySgA3KVn9B24NXrs2vo+/8WRtddkR90TweWUXV9yOM8Br4eBLZVUZJAN9EPIEkMlLaeOnQv5Qze9QSrQz+CGcHMSlFUfjytnvx9V6z/YepXw7eL0CfFWU27VJudU6SlfbNsDmcmXbT+veoPOYrQDvS02ZnuW2Ee/g3uAfwadKk1nEFbgLj+Ka0HkDtyvluxCyX/W+rlZEiXoKu/G93hdQ/ZvDY2FzVQTvBOj1NZ89NKhBVN9200pf36y012n8prwJD+Gb0JtQKmQWH+FO/3Inqu+AlerlOKu7EwtWmBPDAmQ5Vn831fkwEGv2P6IfiCP/BxBf6SbmpCEvpbUAsV65LecvNAB6n34XLGid/rPAVTpvB/4Bb2G5yZFPJYsAAAAASUVORK5CYII="
-        self.zoom_in_icon = tk.PhotoImage(data=self.zoom_in_data)
-        
-        self.zoom_out_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAC30lEQVR4nM3Xy49URRQG8F/3vDJgAkSBhEeiCa8FCGaiwI5AIAQ3/hNGt8Sww8geloCJC4hhLVtlARqGxI0MBBY81ER04cJEjYLAAHNZ1Cn79qX79p3m+SWVvlV1Hl+dOqequmX+aJW+iyH0h8IIRnuMt2O8/bwct3WvGBZgEcYr4yM9ZAeiTmEEj+J7Fz7ANqzGBP7BTXyHr3C9RHpuvkR6ORcOz0l7ndtD3KmM3cdRvF7RHwp5rz/CbDj4GZ9hO1bgDbyF93EiCBRSFN4O/aHyIjP/UGd1h6U9r8MmfBvyv2PdMCSy8ylp5XP4uDQ/GjI5Mdu6q2Mcp4PEjJQnvZK4L7LwhTByJMbHGhjJ5CdxNfT3l4gPRDawI5R/kcptPqWVHe0JG7eCUKuJjax8XAr9p9GfCBJN2mjJzqUgsbOywCeQkyTX+7Zgeyb692OuSXsYDb4OAtuj3zcCozFZSCFfFUZ+i/ED2BJRqcvoXDGngvyN0H+zRud/AhljUibP4m70D0n72BTtIHAv+lm376VVJnAX/2KlVPd/YyvWhoFBiTSH70NuSYz9Fb+1W1AE81n8KG3DBvwqldTVAY57YSp+r9dKVYjAwSB0MvrjujO8ro2F7ELpNJzDxrAz8ETMAmukzL+D9THW9GLJ1/OBWMS0zonZCNnRsTBwXloV9adZq+R8SsqjArsrdgcis12Cn8LIabxWmq+GvWz8Xal8C3zegHhP5HBtkvaxwGXp2u2XyYulsN/WOQ+msSzmayPQy2h+CW3Al3gvxi/iLK7hP+lNMIW90hsBvsBmqXxnYu4P3a+rRsisJ/CJVJ5FTTuHfaGzPJwXQXppxWYX6g6X8ttuUjrXt0rH6yT+lN6EF3Al5MbwQAr/N3jHU0ai1Y95jVz+XaYTiRkNc2KQg3L25+9edT6IxHP7H9GPxMVXgcQPOok5ruFL6VmSWCrdltMvmgCdcL9Qp1W8NMdlPBGBx/VXqCrJTq4vAAAAAElFTkSuQmCC"
-        self.zoom_out_icon = tk.PhotoImage(data=self.zoom_out_data)
-        
-        self.pencil_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACR0lEQVR4nL3XT4iNURjH8c/9NwwzkZQUEsnWguUsZCk7O7HHQv4sLCRkQVJslYWUlfInjST5k2I2SmwmUZKMbBTRjHHH4pzTe+Ztppu5772/Or33Offc8z3Pc859zvPSP9XQyOxG7OsbPGkYy/oFhnp8NnEZE/iGKxjqB7yGFu5gptRu9BoOA7gXgVNoxzaNv72GL8JoBk+etyP8dy/hi3F/DvgM/sTn6V7BB/GwBEstLeZSr+BL8GgeeLITvKEiJfhSPO4Av5jBK0lECT6EJx3gF3oFH8azOeDtzD4Xxzargqf9W4bnHeBnq4anSZbjRQf4marhjdjW42UH+Kmq4fkk+yJkMkLL8JNVw9OBWyH81+FwhKW8Ph3tE1XBaxHcjPYqjAv5vRX7jpm9DcergJerF1iNN4q9viXcdHBEiMDRDL5g5asewGaM4LXC0+TtbUUktsZnXRdK8LrgzbjZGa2dfU6XyqgiEv8Nz0NVU1QvN7Er9o/FVseBOKat2KKnQvhbQmQWrDThecGzd9hRGrNbKCLSFuyP/V2FPU1Qx9oI+IqN2cKaQnUD1yL8YLRbulAzA0xir1DJHMJ7YW+nSov8Eu0H0a6srtuGH/gs3OuNDJq8rOGtkHDWZAvrSntwNcJ/YnvsL+eBlbiuOPmVwAkHK/2lxrAu+24QW4RL5VMcMyHkhpQlK9EGRRE5gw9C1pswOw/cxab4m8re6/JQ7xTeVj7iF77jlfBKNZKNq8zzfMKyR0PCYcxVadjnUio2ymrO09+1/gHVZMGquu7zPAAAAABJRU5ErkJggg=="
-        self.pencil_icon = tk.PhotoImage(data=self.pencil_data)
-
-        self.magic_wand_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACnklEQVR4nL3Xv49NURDA8c9bD4uEbTQiIRG/Co2OUinEj4IoaOwPi/9As1EQeiqFCg2FxL+g8CtKiRARBdGJH7FrPcWdyT3vsrx9761Jbs69886d+d6ZOXPOo1uWxVU+w3F8wU20MFLMGYl5LQNKaSAdJMB9/MQnjBXzS5C+JA200MEe7A1nIwXUs7h/ia+F85/YgP26I7coyRf3BkQHk43fluMANjb0O/Em3rkcuvagAHMxniicl9JWRWBT4byDq/0CUKdisjB4R3eOt2BtMf9gMfcuVuhOW98QJ3AD2+J5Ox7iM97iVOhXq8J+RR3Fvpzn0mv7vZB24p36S5s1UkqrsNV3QVLlvI0dDedPMKuq/A6mYv6oAXvAMVW+Z8LYsoB4XDi/H/pJzKsL9UwBPRo27uBw6HvqE2Vo88Wt4WQ+QKiKTDjp4FuM50N/tLDzXVUj9BCdm3iPR9gcL4zho7r7Zbh34YU6Aj9iHMc6PMUHXFdFrOdOOVaQLo/7k7qjcxGvddfEXAMC1vfqNKWkbFZv9oX84mZNnI7nWd01scIiJZcQdW9PI1PqnJc1kR1yogExHfpFdcSMQrO3p/6MOhKfwimsijEj1YxETxDZPhfq7aMxngt99oFsRgND5IS/9fZMTzPnQ4NoYSUuqXp7eU5IA4dUq2V8qSD+BJVfPhPGnsdz1sTQIdrq/V4B8EC9EnKdn10qiFIS4IhqY7qmSk8u0X9FYsqQ0kHd26kilEb+C0SzKFP6heirWS20qy0EkRtYE6K5dwxFeoWYVrXzvHb/T4g1Mc6Efh4XhgnwN4jMeZ4nMg1Hhw3wJ4jcyi/ilbrd3zbg4bUXiGndG1he9wzpD20vEBPq82MHtwrnrSUlCEdZ7ftUR7p78VsLnV+hsfuN/rgq+gAAAABJRU5ErkJggg=="
-        self.magic_wand_icon = tk.PhotoImage(data=self.magic_wand_data)
-
-        self.rect_select_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACKElEQVR4nO2WzWoVQRCFv/m5XggkJuJOIch9Cp/BhZCYhwkuxI2+gW7EdZCIK/ExDNm4TcCVihGM4o3JHRd92qnp9PwnKOiBonrOdHVXV1d3F/zHH0ZSw6eSAjgzfC59arhM4ywkTfZ/P1LpGfAM2DT8FHgkmZq+m+o7M+PE7DvBh3gHF75jYEXcXXGF2ujfsbgdM461XxJXt90VZNL3gEPgibgUWAfeStbFZepzKBsi9j4femPZtL33mXHSrmiJ81iOcJ0RC1fS0k5r/g+aOAPuADcCPmlxrs2+FT4JH+OSaB+X8XUTj7YflByXibEhHL0F4UBDMdYeGHmMhtrbi+iA6kXUx34DeA88pedFFLuK+1yl3oFXsv8KrDbZ58G3f07va/I3wHfcChZ0x1z9v9VNPBQ5553OjFyRfoGLwAfgurjc6MqAfXAa4c4i7RPpAjiioSgJHfChngHbuC14KX4CPFC/h8BP9d0AtnCh9lXQbfW7CuwahxLgHe6mnDc51KcemBu+q3j7PIxAIb2rVbzGJVIK7EmQTvXvuaJQUB63FdwbsAA+m4nB1Ql7lHVkLewb31YPrAJruIRbozyGH4Fb4q5JKqeiLglT3PFLjPcJZTJ53re/BPY/pAvgE+4+sPhtX+fAIpjED5aYdozP5KTtN6F8jovQvukYFh05y/toTeXIJPK/gouuB/zK93HROMCdpAu9Dbs4kOPqgZsB/+8gwUWhdYt/AZVmjyIoHY1fAAAAAElFTkSuQmCC"
-        self.rect_select_icon = tk.PhotoImage(data=self.rect_select_data)
-        
-        self.dropper_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACsklEQVR4nM2XS29NURTHf/e2vc1FgmivREhIxGNQIhdtZ0JIg4GhLyBMRQzFB2DokRhIfACdMlGPNjHREgYaj4QYGEhI0Iqix2D9l3Pucd60rORk77POevz32mutvU+N8lSLzIMK+pWoC+hO4NfFry+U4zqdKwZYAiwHGjF+V4JsLmUpdAE/NN8HHAGGgHVAL/AReAbcAa4D0xHQ82WBJDlHDsewvfbnOzAT430FLgCrYvqVyPf6ODAnBy+Bs8AwsAboAzYAh4CrAhBgUdgm/Up54ciPEa7uHLbnWTQA3Jb8W2BTFRDuvI2tfB44EfneLRlPzDqd1dEARgViCsuTpCROJReekJHz4vcUMOLgm8AT6Z+MAM8lN7BHyq+wcitTWu7ogGy8FqBaERuufAkL/ZkYvyj5nj8UiL16T60KV/B6H8LQ3tRYttW6vRvSHdZ7agR83wMs5GuBb8Ab8ao2lKeyu74oYrBka2AVMFfRsdOsxqbG1EhGAXwBPmGRWCZe6d4unT7NP+TZqQtdHVv1cwlvJaz1MuTNa6fepzNkfwGIjmMaj1I+AT2XlgKHNb+rb7m55AA2Yn19BtgsXtGDxY/n03I+TskouqOLMnAPS0zI7ge1iPM2lkcBsD9mN5cc7UrghYyM0pmQ3bEnanwXYfleLgA8kTxcA9ipFgCPsGM3LZNXYGH/TJiE40BL3zMjkGTUb0JbgGvAbvEngVtYk5nFSq0NjGB3BIArwHZgEDsRR4B3dN6uCpGj7gVOYeUZZDxjwEHprJbzQKD7YzY7KKvRRO92TayvD2LttQm8x+6EE8BjyfVgrbyFnSc7+MNI1NKQZ8j52CKMxBQFcyLPQTT7fZ5U53kgFuw/Ig3E5P8A4gFhYjYoeFP6myD6gftYj1hUABCGe1GdxumfOY7SbxH4CTJflNcFG2UUAAAAAElFTkSuQmCC"
-        self.dropper_icon = tk.PhotoImage(data=self.dropper_data)
-
-        self.zoom_reset_data = self.dropper_data 
-        self.zoom_reset_icon = tk.PhotoImage(data=self.zoom_reset_data)
-
-        self.select_color_data = self.magic_wand_data
-        self.select_color_icon = tk.PhotoImage(data=self.select_color_data)
-
-        self.vflip_icon_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAEq0lEQVR4nM1XX2ibVRT/nXvvlyYtpQVZtUuWzLDm22JF1KoPwqI4RJt2g0H2sBdxMBB8mNMHUR9ihQk+yNSn+aK+iEhe/NPO4RwjwvYwu8FQ4tqVQGq7yXDaWtOm+b57jw/Jl6ZZE+ycrQe+P1zOPb/fvffc8wdYJWmB/1xWY1DDP9+zazAijYoycYc0kE3tkGEIi8gxV6envspVDI8Y297buUTYzYaVp6oFNDEVtXDzv/58suBhAYBaYTViQnbyFYI6JpTVBiLQKn6NwiCScPTCYm/v0Jbr11ECgCL0m7627peNWwaoMl+AAWaQoeWQnXxjZmLsXQ+TPDbR6J6usvLPgqgd4JNgLjGR0xyfWUhFbNzxmYmB40COgIwO7tr7mGDxojGu8lZAzBaI/AANgnnRb9ytU1On/kSVIgHgUCgV4PbFnJC+oKvdJ69Pfn2uxfLXLb2x4ceVVGeNKc+o0l/xQiFbQm2PUimJTEYHY8mXlNV+XLtLeeHjgWndXkQgz4hGTVPLGQDI6JWBtEAqR8gAeDgvsBSlsFzsMGUalyoQdZ3Fo7OTY+95mN4sAtICiYQKxZLnI/0pDsYGPwIAJBIKtyvVucHY4CcVm8nzlbG0QPUCeMYZACGbdWVs6JB2Sxekans+1Dd4eiZ78jPseKYNU50uEjdaeeWKZHsYOxYUsqeWQ/bQQSGt57RbWlCgQ8hmXeAJUcVswrgveTgc38/b7OHfIva+7be7AeHY8L3b7OGb4fh+DvYlD9djeHLrihIJhWzWDdrJzy2r44DjFH8g4H0Glchwc1+oExYkCOxn4IhldTziOMXM7MTYAc92awIVf6Dw/eNduiy+t6xAP8Br7VdLoerbcZZ+kj6ze/rHgXlghNGw9c3OlADw1p1P3SW54wUGxxjsWx8BKhNoUpM4ce3KFzdRF/1aka577mReqHl9/VMD9b5rs/OcJtvDSAG4cYMaz3GVbk8PIwPUbkwz3SpmjUkkkvCju9uPuTqVbqBw+cu5+gkAEI3u6dKdHVTT7QbkQpHz+e/mG3UjD+zrbrSJublSNRJWdiC8c+ghA/EN2PjBVVJEhkgKw+6lLtn+dC4HDWR00E6+LoT1KmvHALVsqUlawhjnndmJsbeBlIzHIefdxdNCqAeZtQGzqNplIlEimGenr4xe2oD831r+H0eATXTCxoFNu4ZrstuIQLTpofjWXJ9ISGRHXF1OnrCsQP8dSUbl4ofAyJrJqBH8jqbjiL1v+zrScaVKjcSGdmpBF4RQncZZPjhz9V8UJFO1guRTY9wFafjRwuToFQ+rgcjmlGT/rCi9GDVIAcjEeTXzlESqBYH8GkWpu3RkdmL0Aw9zQ8tyS6qz2ji/qNLCfYVCdhmouwU+3x++Mvxb2LhKEr8WiiVXGhMGCyGNNvrja5OjZ4CUBOIcssePklADRrsMoqb+UWlM2G+Mq4hxt2UFfABKAEgBYCAt8vmR+ZCdTJOQx4SwkqtaM2YI5QOX5gyAM0Cce3sv+sF4S6lAO0uN5jGtGkWYoY2zDNdNV7qildasRhStmlMShuXSuZnct797k8M79sbZEn0wDoNFUwatmtMG2fj2/G+NVp8I4AoNGQAAAABJRU5ErkJggg=="
-        self.vflip_icon = tk.PhotoImage(data=self.vflip_icon_data)
-
-        self.hflip_icon_data = "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"
-        self.hflip_icon = tk.PhotoImage(data=self.hflip_icon_data)
-
-        self.rotate_icon_data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACkklEQVR4nMXXS6hNURgH8N859yhvCYmBPEZKKXkkA0lhxoiBxFQmBoYMpDs0VMYMpEQxQGGsDCgGYuL9Si55pe7DYK1197r7nnPP3se5+ddq77X2933/b33fenyb/4xGjzrNTHesZGc0tr6jiYF+y1aNwABG4vt8bMEGrIr9P3iLx7iPl5kjY7H1hBRuWImzeJUZbde+4Rp2ZHaaekBDEaHjGGpD9hOf8bWDMxexKNqomr5x8iZauFAy+hyD2ClEZTGWYxOO4V5J/hnW1nGikQleiUZG8QMnMKeCjd14kjnxDqvjt67pSOSDUXkEr7Exk2lFubQd84glgnnCWkhOPMJME7dwR/KNUWkYXxQhnDGVcslBUfZW5sRgiWcSkve3M6UDGXkdJJLFeC9E8hdWlLgmka+PwqO4G8daZeGKSHpHFRM608lmGjidCe8VwtirA2l9zMcHYVKPTNzi40gRuBPJP2KBEMqBdgoVkVJxSXF2jKchkTaid63s4zPhVBuJrdfjNM32QezPxpr0rbwQ5gjbBz4JUbmAm8Jh0zZ0FTAmLMSEhWUH2oX5G7bhEPZgXzRU60jthlYkHY79H/gd35fgiCIF9+N4L3d9A8uy/lB8jqd1s3C2N3E9fhhSXDIPM0N1MeUihO2KbfcYT7N+WnynokLd7dh1G5YNrovPYcW2HMHV+F43/APR1kEsjWM3hEm1FKm3FeeEq7Z8p0/wuCY5FY7i3PAs7MJ5vBBKrcMlg1VQ+zJqmpyOuULB0Q19vY5TMdIqjXVCp+LinwqSnLiK8Fx9LsmqIBnaL1TJX0xevP9UlHZDStHlNqS1yvJe7/l0HpzEd2F2b4S8t/sxmZZftanQ91+zqYjK4Z22n9NpwV9RzcSsJey9ggAAAABJRU5ErkJggg=="
-        self.rotate90_icon = tk.PhotoImage(data=self.rotate_icon_data)
-        # ------------------------------------
 
         self.create_widgets()
         
@@ -403,120 +539,6 @@ class NPYImageEditor(tk.Frame):
             self.cmd_pressed = False
 
     def create_widgets(self):
-        toolbar1 = tk.Frame(self)
-        toolbar1.pack(side=tk.TOP, fill=tk.X)
-        toolbar2 = tk.Frame(self)
-        toolbar2.pack(side=tk.TOP, fill=tk.X)
-
-        # Row 1: File, Zoom, Flip/Rotate
-        open_btn = tk.Button(toolbar1, image=self.open_icon, command=self.app.open_file)
-        open_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(open_btn, "Open File (Ctrl+O)")
-
-        save_btn = tk.Button(toolbar1, image=self.save_icon, command=lambda: self.save_full_image(None))
-        save_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(save_btn, "Save File (Ctrl+S)")
-
-        tk.Frame(toolbar1, width=2, height=24, bg="grey").pack(side=tk.LEFT, padx=5)
-
-        zoom_in_btn = tk.Button(toolbar1, image=self.zoom_in_icon, command=self.zoom_in)
-        zoom_in_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(zoom_in_btn, "Zoom In")
-        
-        zoom_out_btn = tk.Button(toolbar1, image=self.zoom_out_icon, command=self.zoom_out)
-        zoom_out_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(zoom_out_btn, "Zoom Out")
-
-        zoom_reset_btn = tk.Button(toolbar1, image=self.zoom_reset_icon, command=self.reset_zoom)
-        zoom_reset_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(zoom_reset_btn, "Reset Zoom (1:1)")
-
-        tk.Frame(toolbar1, width=2, height=24, bg="grey").pack(side=tk.LEFT, padx=5)
-
-        vflip_btn = tk.Button(toolbar1, image=self.vflip_icon, command=self.vertical_flip)
-        vflip_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(vflip_btn, "Vertical Flip")
-        
-        hflip_btn = tk.Button(toolbar1, image=self.hflip_icon, command=self.horizontal_flip)
-        hflip_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(hflip_btn, "Horizontal Flip")
-
-        rotate90_btn = tk.Button(toolbar1, image=self.rotate90_icon, command=self.rotate_90)
-        rotate90_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(rotate90_btn, "Rotate 90° CCW")
-
-        # Row 2: Tools, Select
-        pencil_btn = tk.Button(toolbar2, image=self.pencil_icon, command=self.activate_pencil)
-        pencil_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(pencil_btn, "Pencil")
-
-        self.bucket_fill_btn = tk.Button(toolbar2, text="Bucket", command=self.activate_bucket_fill)
-        self.bucket_fill_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(self.bucket_fill_btn, "Bucket Fill (Contiguous)")
-
-        self.replace_color_btn = tk.Button(toolbar2, text="Replace", command=self.activate_replace_color)
-        self.replace_color_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(self.replace_color_btn, "Replace Color (Global)")
-
-        dropper_btn = tk.Button(toolbar2, image=self.dropper_icon, command=self.activate_dropper)
-        dropper_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(dropper_btn, "Color Dropper")
-
-        self.grid_btn = tk.Button(toolbar2, text="Grid", command=self.toggle_grid, relief=tk.SUNKEN if self.show_grid else tk.RAISED)
-        self.grid_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(self.grid_btn, "Toggle Pixel Grid")
-
-        tk.Frame(toolbar2, width=2, height=24, bg="grey").pack(side=tk.LEFT, padx=5)
-
-        rect_select_btn = tk.Button(toolbar2, image=self.rect_select_icon, command=self.activate_rectangular_selection)
-        rect_select_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(rect_select_btn, "Rectangular Selection")
-
-        magic_wand_btn = tk.Button(toolbar2, image=self.magic_wand_icon, command=self.activate_magic_wand)
-        magic_wand_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(magic_wand_btn, "Magic Wand")
-
-        select_color_btn = tk.Button(toolbar2, image=self.select_color_icon, command=self.select_all_with_color)
-        select_color_btn.pack(side=tk.LEFT, padx=2, pady=2)
-        Tooltip(select_color_btn, "Select All w/ Same Color")
-
-        # Color Tools Frame
-        tools_frame = tk.Frame(self)
-        tools_frame.pack(side=tk.TOP, fill=tk.X) 
-
-        self.color_indicator = tk.Label(tools_frame, text="", bg=self.rgb_to_hex(self.current_color[:3]),
-                                        width=5, relief=tk.RAISED)
-        self.color_indicator.pack(side=tk.LEFT, padx=5)
-        self.color_indicator.bind("<Button-1>", self.open_color_palette)
-        Tooltip(self.color_indicator, "Click to change color")
-
-        self.alpha_indicator = tk.Label(tools_frame, text=f"a: {self.current_color[3]}", width=5, relief=tk.RAISED)
-        self.alpha_indicator.pack(side=tk.LEFT, padx=5)
-        self.alpha_indicator.bind("<Button-1>", self.open_alpha_input)
-        Tooltip(self.alpha_indicator, "Click to change alpha (opacity)")
-
-        # --- NEW: Transparent Color Button ---
-        transparent_btn = tk.Button(tools_frame, text="Transparent", command=self.set_transparent_color)
-        transparent_btn.pack(side=tk.LEFT, padx=5)
-        Tooltip(transparent_btn, "Set current color to fully transparent")
-        # -------------------------------------
-
-        self.tool = None
-
-        # Selection Mode Frame
-        self.selection_mode_frame = tk.Frame(self)
-        self.selection_mode_frame.pack(side=tk.TOP, fill=tk.X) 
-        self.selection_mode_frame.pack_forget()
-
-        tk.Label(self.selection_mode_frame, text="Selection Mode:").pack(side=tk.LEFT, padx=5)
-        tk.Button(self.selection_mode_frame, text="New", command=lambda: self.set_selection_mode("new")).pack(side=tk.LEFT)
-        tk.Button(self.selection_mode_frame, text="Add", command=lambda: self.set_selection_mode("add")).pack(side=tk.LEFT)
-        tk.Button(self.selection_mode_frame, text="Subtract", command=lambda: self.set_selection_mode("subtract")).pack(side=tk.LEFT)
-        tk.Button(self.selection_mode_frame, text="Intersect", command=lambda: self.set_selection_mode("intersect")).pack(side=tk.LEFT)
-        tk.Button(self.selection_mode_frame, text="Fill Selected", command=lambda: self.fill_selected()).pack(side=tk.LEFT)
-        tk.Button(self.selection_mode_frame, text="Save as Preset", command=lambda: self.save_selection_preset()).pack(side=tk.LEFT)
-        tk.Button(self.selection_mode_frame, text="Load from Preset", command=lambda: self.load_selection_preset()).pack(side=tk.LEFT)
-
         status_bar_frame = tk.Frame(self, bd=1, relief=tk.SUNKEN)
         status_bar_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
@@ -621,16 +643,16 @@ class NPYImageEditor(tk.Frame):
         # Update Indicators
         if self.current_color[3] == 0:
             # Indicate transparency
-            self.color_indicator.config(bg="white", text="Transp")
+            self.app.color_indicator.config(bg="white", text="Transp")
         else:
-            self.color_indicator.config(bg=self.rgb_to_hex(self.current_color[:3]), text="")
+            self.app.color_indicator.config(bg=self.rgb_to_hex(self.current_color[:3]), text="")
             
-        self.alpha_indicator.config(text=f"a: {self.current_color[3]}")
+        self.app.alpha_indicator.config(text=f"a: {self.current_color[3]}")
 
     # --- NEW: Toggle Grid ---
     def toggle_grid(self):
         self.show_grid = not self.show_grid
-        self.grid_btn.config(relief=tk.SUNKEN if self.show_grid else tk.RAISED)
+        self.app.grid_btn.config(relief=tk.SUNKEN if self.show_grid else tk.RAISED)
         self.update_display()
 
     # --- NEW: Update Palette and History UI ---
@@ -889,31 +911,31 @@ class NPYImageEditor(tk.Frame):
 
     def activate_pencil(self):
         self.tool = "pencil"
-        self.selection_mode_frame.pack_forget()
+        self.app.selection_mode_frame.pack_forget()
 
     def activate_magic_wand(self):
         self.tool = "magic_wand"
-        self.selection_mode_frame.pack(fill=tk.X)
+        self.app.selection_mode_frame.pack(fill=tk.X)
 
     def activate_rectangular_selection(self):
         self.tool = "rectangular_selection"
-        self.selection_mode_frame.pack(fill=tk.X)
+        self.app.selection_mode_frame.pack(fill=tk.X)
 
     def activate_dropper(self):
         self.tool = "dropper"
-        self.selection_mode_frame.pack_forget()
+        self.app.selection_mode_frame.pack_forget()
 
     def activate_bucket_fill(self):
         self.tool = "bucket_fill"
-        self.selection_mode_frame.pack_forget()
+        self.app.selection_mode_frame.pack_forget()
 
     def activate_replace_color(self):
         self.tool = "replace_color"
-        self.selection_mode_frame.pack_forget()
+        self.app.selection_mode_frame.pack_forget()
 
     def select_all_with_color(self):
         self.tool = "select_all_with_color"
-        self.selection_mode_frame.pack(fill=tk.X)
+        self.app.selection_mode_frame.pack(fill=tk.X)
 
     def vertical_flip(self):
         if self.image is None: return
