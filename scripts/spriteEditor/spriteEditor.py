@@ -231,9 +231,10 @@ class SpriteEditorApp:
             self.notebook.pack(fill=tk.BOTH, expand=True)
             for info in self.editors_info:
                 self.notebook.add(info['frame'], text=info['title'])
+                info['frame'].lift()
         else:
             orient = tk.HORIZONTAL if self.layout_mode == "horizontal" else tk.VERTICAL
-            self.paned_window = tk.PanedWindow(self.main_container, orient=orient, sashrelief=tk.RAISED, bg="black", bd=2)
+            self.paned_window = tk.PanedWindow(self.main_container, orient=orient, sashrelief=tk.RAISED, bg="grey", bd=2)
             self.paned_window.pack(fill=tk.BOTH, expand=True)
             
             self.notebook_left = ttk.Notebook(self.paned_window)
@@ -249,24 +250,21 @@ class SpriteEditorApp:
             for i, info in enumerate(self.editors_info):
                 target_nb = self.notebook_left if i < mid else self.notebook_right
                 target_nb.add(info['frame'], text=info['title'])
-                
-                if hasattr(info['frame'], 'title_label'):
-                    info['frame'].title_label.pack_forget()
+                info['frame'].lift()
             
-            # Force redraw to ensure matplotlib canvas appears after repacking
-            for info in self.editors_info:
-                info['editor'].update_display()
+        # Restore active editor selection
+        if self.active_editor:
+            self.set_active_editor(self.active_editor)
+
+        # Force redraw to ensure matplotlib canvas appears after repacking
+        for info in self.editors_info:
+            info['editor'].update_display()
 
     def set_active_editor(self, editor):
-        if self.active_editor and self.active_editor != editor:
-            if hasattr(self.active_editor.master, 'title_label'):
-                self.active_editor.master.title_label.config(bg="grey")
-
+        if hasattr(self, 'active_editor') and self.active_editor == editor:
+            return
         self.active_editor = editor
         if self.active_editor:
-            if hasattr(self.active_editor.master, 'title_label'):
-                self.active_editor.master.title_label.config(bg="blue")
-            
             if self.layout_mode == "tabs":
                 try:
                     self.notebook.select(editor.master)

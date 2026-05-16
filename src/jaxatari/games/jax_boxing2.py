@@ -47,6 +47,23 @@ def _get_default_asset_config() -> tuple:
         {'name': 'black_punch_right_1', 'type': 'single', 'file': 'black_boxing_animation_right/1.npy'},
         {'name': 'black_punch_right_2', 'type': 'single', 'file': 'black_boxing_animation_right/2.npy'},
         {'name': 'black_punch_right_3', 'type': 'single', 'file': 'black_boxing_animation_right/3.npy'},
+        # Arm sprites
+        {'name': 'white_arm_left_0', 'type': 'single', 'file': 'arms/white_boxing_animation_left/0.npy'},
+        {'name': 'white_arm_left_1', 'type': 'single', 'file': 'arms/white_boxing_animation_left/1.npy'},
+        {'name': 'white_arm_left_2', 'type': 'single', 'file': 'arms/white_boxing_animation_left/2.npy'},
+        {'name': 'white_arm_left_3', 'type': 'single', 'file': 'arms/white_boxing_animation_left/3.npy'},
+        {'name': 'white_arm_right_0', 'type': 'single', 'file': 'arms/white_boxing_animation_right/0.npy'},
+        {'name': 'white_arm_right_1', 'type': 'single', 'file': 'arms/white_boxing_animation_right/1.npy'},
+        {'name': 'white_arm_right_2', 'type': 'single', 'file': 'arms/white_boxing_animation_right/2.npy'},
+        {'name': 'white_arm_right_3', 'type': 'single', 'file': 'arms/white_boxing_animation_right/3.npy'},
+        {'name': 'black_arm_left_0', 'type': 'single', 'file': 'arms/black_boxing_animation_left/0.npy'},
+        {'name': 'black_arm_left_1', 'type': 'single', 'file': 'arms/black_boxing_animation_left/1.npy'},
+        {'name': 'black_arm_left_2', 'type': 'single', 'file': 'arms/black_boxing_animation_left/2.npy'},
+        {'name': 'black_arm_left_3', 'type': 'single', 'file': 'arms/black_boxing_animation_left/3.npy'},
+        {'name': 'black_arm_right_0', 'type': 'single', 'file': 'arms/black_boxing_animation_right/0.npy'},
+        {'name': 'black_arm_right_1', 'type': 'single', 'file': 'arms/black_boxing_animation_right/1.npy'},
+        {'name': 'black_arm_right_2', 'type': 'single', 'file': 'arms/black_boxing_animation_right/2.npy'},
+        {'name': 'black_arm_right_3', 'type': 'single', 'file': 'arms/black_boxing_animation_right/3.npy'},
         {'name': 'digits_white', 'type': 'digits', 'pattern': 'digits_white/{}.npy'},
         {'name': 'digits_black', 'type': 'digits', 'pattern': 'digits_black/{}.npy'},
         {'name': 'digits_time', 'type': 'digits', 'pattern': 'digits_time/{}.npy'},
@@ -78,6 +95,7 @@ class BoxingConstants(struct.PyTreeNode):
     
     # Punch Mechanics
     PUNCH_STATE_MAX: int = 4
+    PUNCH_COOLDOWN: int = 8   # Delay between punches
     JAB_DIST: float = 28.0    # Distance for 1pt hit
     POWER_DIST: float = 16.0  # Distance for 2pt hit
     
@@ -103,6 +121,7 @@ class BoxingState:
     score: chex.Array        # [2]
     punch_state: chex.Array  # [2] (0-4)
     punch_arm: chex.Array    # [2] (0: left, 1: right)
+    punch_cooldown: chex.Array # [2] (frames until next punch allowed)
     has_hit: chex.Array      # [2] (bool)
     stun_timer: chex.Array   # [2]
     timer: chex.Array        # int32
@@ -154,6 +173,7 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             score=jnp.array([0, 0], dtype=jnp.int32),
             punch_state=jnp.array([0, 0], dtype=jnp.int32),
             punch_arm=jnp.array([0, 0], dtype=jnp.int32),
+            punch_cooldown=jnp.array([0, 0], dtype=jnp.int32),
             has_hit=jnp.array([False, False], dtype=jnp.bool_),
             stun_timer=jnp.array([0, 0], dtype=jnp.int32),
             timer=jnp.array(self.consts.TOTAL_TIME, dtype=jnp.int32),
@@ -206,6 +226,14 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             clock_seconds=(total_sec % 60).astype(jnp.int32)
         )
 
+    def _get_reward(self, state: BoxingState, new_state: BoxingState) -> jnp.ndarray:
+        p1_points = new_state.score[0] - state.score[0]
+        p2_points = new_state.score[1] - state.score[1]
+        return (p1_points - p2_points).astype(jnp.float32)
+
+    def _get_done(self, state: BoxingState) -> jnp.ndarray:
+        return state.done
+
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.action_set))
 
@@ -252,30 +280,65 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         ])
         return new_pos
 
-    def _update_punch(self, state: BoxingState, action, idx):
-        fire = jnp.isin(action, jnp.array([Action.FIRE, Action.UPFIRE, Action.DOWNFIRE, Action.LEFTFIRE, Action.RIGHTFIRE, Action.UPLEFTFIRE, Action.UPRIGHTFIRE, Action.DOWNLEFTFIRE, Action.DOWNRIGHTFIRE]))
+    def _update_punch(self, state: BoxingState, action, idx, opponent_idx):
+        # Explicitly convert action to int for comparison
+        action_int = jnp.asarray(action, dtype=jnp.int32)
+        fire_actions = jnp.array([
+            Action.FIRE, Action.UPFIRE, Action.DOWNFIRE, Action.LEFTFIRE, Action.RIGHTFIRE,
+            Action.UPLEFTFIRE, Action.UPRIGHTFIRE, Action.DOWNLEFTFIRE, Action.DOWNRIGHTFIRE
+        ], dtype=jnp.int32)
+        fire = jnp.any(action_int == fire_actions)
         
         curr_state = state.punch_state[idx]
+        curr_cooldown = state.punch_cooldown[idx]
         is_stunned = state.stun_timer[idx] > 0
         
-        # Logic: If stunned, punch is cancelled (reset to 0)
-        # If fire is held and we are at state 0, start state 1
-        # If we are in state 1-4, increment
-        # If we just finished state 4, go to 0 and toggle arm if fire still held
+        # New cooldown (always decrement if > 0)
+        dec_cooldown = jnp.maximum(curr_cooldown - 1, 0)
+        
+        # Determine target arm if we start a punch based on Y relative position
+        # For White (idx 0), facing Right: if above opponent, use bottom arm (1: right)
+        # For Black (idx 1), facing Left: if above opponent, use bottom arm (0: left)
+        # So we invert the arm selection for Black.
+        target_arm = jnp.where(state.pos[idx, 1] < state.pos[opponent_idx, 1], 1, 0)
+        target_arm = jnp.where(idx == 1, 1 - target_arm, target_arm)
+        
+        # Alternating logic: if holding fire, we might want to alternate.
+        # But the original game also allows picking the best arm.
+        # The user said "following the same logic as the other player".
+        # Let's keep it simple and pick the best arm for now, but fix the black boxer's inversion.
+        # To truly follow the original, we should probably toggle.
+        # Let's implement toggling to match the description "automatically alternates".
+        next_arm = 1 - state.punch_arm[idx]
         
         def next_state_logic():
-            # Standard progression
-            progression = jnp.where(curr_state > 0, curr_state + 1, jnp.where(fire, 1, 0))
-            # Reset and toggle arm if cycle finished
-            cycle_finished = progression > self.consts.PUNCH_STATE_MAX
-            new_state = jnp.where(cycle_finished, jnp.where(fire, 1, 0), progression)
-            new_arm = jnp.where(cycle_finished, 1 - state.punch_arm[idx], state.punch_arm[idx])
-            new_has_hit = jnp.where(jnp.logical_or(curr_state == 0, cycle_finished), False, state.has_hit[idx])
-            return new_state, new_arm, new_has_hit
+            # If idle and ready
+            start_punch = jnp.logical_and(curr_state == 0, jnp.logical_and(dec_cooldown == 0, fire))
+            
+            # Progress punch state
+            progressing = jnp.logical_and(curr_state > 0, curr_state < self.consts.PUNCH_STATE_MAX)
+            finishing = curr_state == self.consts.PUNCH_STATE_MAX
+            
+            new_s = jnp.where(start_punch, 1, 
+                             jnp.where(progressing, curr_state + 1, 0))
+            
+            # Use next_arm for alternation if we just finished a punch and FIRE is still held,
+            # or just use target_arm for the first punch.
+            # Actually, the simplest alternating logic is to toggle every time a punch starts.
+            new_a = jnp.where(start_punch, next_arm, state.punch_arm[idx])
+            
+            new_h = jnp.where(start_punch, False, state.has_hit[idx])
+            
+            new_c = jnp.where(finishing, self.consts.PUNCH_COOLDOWN, dec_cooldown)
+            
+            return new_s, new_a, new_h, new_c
 
-        new_s, new_a, new_h = jax.lax.cond(is_stunned, lambda: (0, state.punch_arm[idx], False), next_state_logic)
+        # If stunned, reset state but keep decrementing cooldown
+        new_s, new_a, new_h, new_c = jax.lax.cond(is_stunned, 
+                                                 lambda: (0, state.punch_arm[idx], False, dec_cooldown), 
+                                                 next_state_logic)
         
-        return state.punch_state.at[idx].set(new_s), state.punch_arm.at[idx].set(new_a), state.has_hit.at[idx].set(new_h)
+        return new_s, new_a, new_h, new_c
 
     def _cpu_logic(self, state: BoxingState):
         p1_pos = state.pos[0]
@@ -332,10 +395,14 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         state = replace(state, pos=jnp.stack([new_p1_pos, new_p2_pos]))
         
         # 4. Punch State Update
-        new_p_state_0, new_p_arm_0, new_h_hit_0 = self._update_punch(state, action, 0)
-        state = replace(state, punch_state=new_p_state_0, punch_arm=new_p_arm_0, has_hit=new_h_hit_0)
-        new_p_state_1, new_p_arm_1, new_h_hit_1 = self._update_punch(state, p2_action, 1)
-        state = replace(state, punch_state=new_p_state_1, punch_arm=new_p_arm_1, has_hit=new_h_hit_1)
+        s0, a0, h0, c0 = self._update_punch(state, action, 0, 1)
+        s1, a1, h1, c1 = self._update_punch(state, p2_action, 1, 0)
+        
+        state = replace(state, 
+                        punch_state=jnp.array([s0, s1]), 
+                        punch_arm=jnp.array([a0, a1]), 
+                        has_hit=jnp.array([h0, h1]),
+                        punch_cooldown=jnp.array([c0, c1]))
         
         # 5. Hit Detection & Scoring & Knockback
         def check_hit(attacker_idx, defender_idx, s):
@@ -425,18 +492,49 @@ class BoxingRenderer(JAXGameRenderer):
         
         # Pre-collect masks for white
         self.white_masks = {
-            "idle": self.SHAPE_MASKS["white_idle"],
+            "body": self.SHAPE_MASKS["white_idle"],
             "stunned": self.SHAPE_MASKS["white_stunned"],
-            "punch_left": [self.SHAPE_MASKS[f"white_punch_left_{i}"] for i in range(4)],
-            "punch_right": [self.SHAPE_MASKS[f"white_punch_right_{i}"] for i in range(4)],
+            "arm_left": [self.SHAPE_MASKS[f"white_arm_left_{i}"] for i in range(4)],
+            "arm_right": [self.SHAPE_MASKS[f"white_arm_right_{i}"] for i in range(4)],
         }
         # Pre-collect masks for black
         self.black_masks = {
-            "idle": self.SHAPE_MASKS["black_idle"],
+            "body": self.SHAPE_MASKS["black_idle"],
             "stunned": self.SHAPE_MASKS["black_stunned"],
-            "punch_left": [self.SHAPE_MASKS[f"black_punch_left_{i}"] for i in range(4)],
-            "punch_right": [self.SHAPE_MASKS[f"black_punch_right_{i}"] for i in range(4)],
+            "arm_left": [self.SHAPE_MASKS[f"black_arm_left_{i}"] for i in range(4)],
+            "arm_right": [self.SHAPE_MASKS[f"black_arm_right_{i}"] for i in range(4)],
         }
+
+    def _render_body(self, raster, pos, masks, is_stunned):
+        m = jax.lax.cond(is_stunned, lambda: masks["stunned"], lambda: masks["body"])
+        return self.jr.render_at(raster, pos[0], pos[1], m)
+
+    def _render_arms(self, raster, pos, opp_pos, masks, p_state, arm_idx):
+        # Map punch_state (1-4) to animation frame (0-3)
+        anim_frame = jax.lax.switch(jnp.clip(p_state - 1, 0, 3),
+                                    [lambda: 0, lambda: 1, lambda: 2, lambda: 2])
+        
+        # Determine punch direction based on opponent's X
+        is_punching_right = pos[0] < opp_pos[0]
+        
+        # Select arm mask set based on direction
+        arm_masks = jax.lax.cond(is_punching_right,
+                                    lambda: masks["arm_right"],
+                                    lambda: masks["arm_left"])
+        
+        arm_mask = jax.lax.switch(anim_frame, [lambda: arm_masks[i] for i in range(4)])
+        
+        # Arm offsets
+        arm_w = arm_mask.shape[1]
+        x_offset = jax.lax.cond(is_punching_right,
+                                lambda: 14,      # Punch right: arm starts after 14px body
+                                lambda: -arm_w)  # Punch left: arm is to the left of x
+        
+        # Y offset: keep feet aligned (idle 47, arm 46)
+        # and use arm_idx to distinguish between top/bottom arms
+        y_offset = 1 + jax.lax.cond(arm_idx == 0, lambda: 0, lambda: 4)
+        
+        return self.jr.render_at(raster, pos[0] + x_offset, pos[1] + y_offset, arm_mask)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: BoxingState) -> jnp.ndarray:
@@ -444,28 +542,20 @@ class BoxingRenderer(JAXGameRenderer):
         
         def render_boxer(raster, idx, masks):
             p_pos = state.pos[idx].astype(jnp.int32)
+            opp_pos = state.pos[1 - idx].astype(jnp.int32)
             is_stunned = state.stun_timer[idx] > 0
             p_state = state.punch_state[idx]
             arm_idx = state.punch_arm[idx]
-            frame = jnp.clip(p_state - 1, 0, 3)
             
-            def render_idle(r):
-                return self.jr.render_at(r, p_pos[0], p_pos[1], masks["idle"])
+            # Render body
+            raster = self._render_body(raster, p_pos, masks, is_stunned)
             
-            def render_stun(r):
-                return self.jr.render_at(r, p_pos[0], p_pos[1], masks["stunned"])
-            
-            def render_punch(r):
-                # Switch on frame
-                m = jax.lax.cond(arm_idx == 0,
-                                 lambda: jax.lax.switch(frame, [lambda: masks["punch_left"][i] for i in range(4)]),
-                                 lambda: jax.lax.switch(frame, [lambda: masks["punch_right"][i] for i in range(4)]))
-                return self.jr.render_at(r, p_pos[0], p_pos[1], m)
-
-            # Final selection
-            return jax.lax.cond(is_stunned, render_stun,
-                                lambda r: jax.lax.cond(p_state > 0, render_punch, render_idle, r),
-                                raster)
+            # Render arms if punching
+            raster = jax.lax.cond(p_state > 0,
+                                  lambda r: self._render_arms(r, p_pos, opp_pos, masks, p_state, arm_idx),
+                                  lambda r: r,
+                                  raster)
+            return raster
 
         raster = render_boxer(raster, 0, self.white_masks)
         raster = render_boxer(raster, 1, self.black_masks)
