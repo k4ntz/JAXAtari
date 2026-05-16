@@ -57,7 +57,7 @@ class SpriteEditorApp:
         self.notebook = ttk.Notebook(self.main_container)
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
         self.paned_window = None
-        self.layout_mode = "tabs"  # "tabs", "horizontal", "vertical"
+        self.layout_mode = "horizontal"  # "tabs", "horizontal", "vertical"
 
         self.editors_info = []  # List of dicts: {'frame': frame, 'editor': editor, 'title': title}
         self.active_editor = None
@@ -329,7 +329,7 @@ class NPYImageEditor(tk.Frame):
         # --------------------------
 
         # --- NEW: Grid State ---
-        self.show_grid = False
+        self.show_grid = True
         # -----------------------
 
         self.mouse_pressed = False
@@ -464,7 +464,7 @@ class NPYImageEditor(tk.Frame):
         dropper_btn.pack(side=tk.LEFT, padx=2, pady=2)
         Tooltip(dropper_btn, "Color Dropper")
 
-        self.grid_btn = tk.Button(toolbar2, text="Grid", command=self.toggle_grid)
+        self.grid_btn = tk.Button(toolbar2, text="Grid", command=self.toggle_grid, relief=tk.SUNKEN if self.show_grid else tk.RAISED)
         self.grid_btn.pack(side=tk.LEFT, padx=2, pady=2)
         Tooltip(self.grid_btn, "Toggle Pixel Grid")
 
