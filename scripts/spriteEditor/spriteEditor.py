@@ -50,12 +50,22 @@ class SpriteEditorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("NPY Sprite Editor")
+        
+        style = ttk.Style()
+        # On macOS 'aqua', background color changes are ignored, but we can change the foreground (text) color.
+        # This restores the native default look while highlighting the active tab's text in blue.
+        style.configure("TNotebook.Tab", foreground="black")
+        style.map("TNotebook.Tab", foreground=[("selected", "blue")])
 
         self.main_container = tk.Frame(self.root)
         self.main_container.pack(fill=tk.BOTH, expand=True)
 
+        self.close_icon_data = "iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAAP0lEQVR4nGNgoDf4T0iMCYvEf3xijETYgKKOCZcELjEmBhIBExqfLE/DnIHsFLgcTAO6YmxsDNtxhRAhOfwAACfIDwaV2shOAAAAAElFTkSuQmCC"
+        self.close_icon = tk.PhotoImage(data=self.close_icon_data)
+
         self.notebook = ttk.Notebook(self.main_container)
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+        self.notebook.bind("<Button-1>", lambda e: self.on_tab_click(e, self.notebook))
         self.paned_window = None
         self.layout_mode = "horizontal"  # "tabs", "horizontal", "vertical"
 
@@ -68,15 +78,35 @@ class SpriteEditorApp:
         self.refresh_layout()
 
         # Global bindings that delegate to active tab
-        self.root.bind("<Control-o>", lambda e: self.open_file())
-        self.root.bind("<Control-s>", lambda e: self.save_full_image())
-        self.root.bind("<Control-n>", lambda e: self.add_tab())
-        self.root.bind("<Control-w>", lambda e: self.close_tab())
-        self.root.bind("<Control-z>", lambda e: self.delegate_to_active("undo", e))
-        self.root.bind("<Control-y>", lambda e: self.delegate_to_active("redo", e))
-        self.root.bind("<Control-a>", lambda e: self.delegate_to_active("select_all", e))
-        self.root.bind("<Control-d>", lambda e: self.delegate_to_active("deselect_all", e))
+        self.root.bind("<Command-o>", lambda e: self.open_file())
+        self.root.bind("<Command-s>", lambda e: self.save_full_image())
+        self.root.bind("<Command-n>", lambda e: self.add_tab())
+        self.root.bind("<Command-w>", lambda e: self.close_tab())
+        self.root.bind("<Command-z>", lambda e: self.delegate_to_active("undo", e))
+        self.root.bind("<Command-y>", lambda e: self.delegate_to_active("redo", e))
+        self.root.bind("<Command-a>", lambda e: self.delegate_to_active("select_all", e))
+        self.root.bind("<Command-d>", lambda e: self.delegate_to_active("deselect_all", e))
         self.root.bind("<Delete>", lambda e: self.delegate_to_active("delete_selected", e))
+        # Canvas resize shortcuts
+        self.root.bind("<Command-Up>", lambda e: self.delegate_to_active("resize_canvas", "top", "add"))
+        self.root.bind("<Command-Shift-Up>", lambda e: self.delegate_to_active("resize_canvas", "top", "remove"))
+        self.root.bind("<Command-Up>", lambda e: self.delegate_to_active("resize_canvas", "top", "add"))
+        self.root.bind("<Command-Shift-Up>", lambda e: self.delegate_to_active("resize_canvas", "top", "remove"))
+        
+        self.root.bind("<Command-Down>", lambda e: self.delegate_to_active("resize_canvas", "bottom", "add"))
+        self.root.bind("<Command-Shift-Down>", lambda e: self.delegate_to_active("resize_canvas", "bottom", "remove"))
+        self.root.bind("<Command-Down>", lambda e: self.delegate_to_active("resize_canvas", "bottom", "add"))
+        self.root.bind("<Command-Shift-Down>", lambda e: self.delegate_to_active("resize_canvas", "bottom", "remove"))
+
+        self.root.bind("<Command-Left>", lambda e: self.delegate_to_active("resize_canvas", "left", "add"))
+        self.root.bind("<Command-Shift-Left>", lambda e: self.delegate_to_active("resize_canvas", "left", "remove"))
+        self.root.bind("<Command-Left>", lambda e: self.delegate_to_active("resize_canvas", "left", "add"))
+        self.root.bind("<Command-Shift-Left>", lambda e: self.delegate_to_active("resize_canvas", "left", "remove"))
+
+        self.root.bind("<Command-Right>", lambda e: self.delegate_to_active("resize_canvas", "right", "add"))
+        self.root.bind("<Command-Shift-Right>", lambda e: self.delegate_to_active("resize_canvas", "right", "remove"))
+        self.root.bind("<Command-Right>", lambda e: self.delegate_to_active("resize_canvas", "right", "add"))
+        self.root.bind("<Command-Shift-Right>", lambda e: self.delegate_to_active("resize_canvas", "right", "remove"))
 
 
     def create_global_toolbars(self):
@@ -249,17 +279,17 @@ class SpriteEditorApp:
 
         file_menu = tk.Menu(menu, tearoff=0)
         menu.add_cascade(label="File", menu=file_menu)
-        file_menu.add_command(label="New Tab", command=self.add_tab, accelerator="Ctrl+N")
-        file_menu.add_command(label="Open", command=self.open_file, accelerator="Ctrl+O")
+        file_menu.add_command(label="New Tab", command=self.add_tab, accelerator="Cmd+N")
+        file_menu.add_command(label="Open", command=self.open_file, accelerator="Cmd+O")
         file_menu.add_command(label="Save Selection", command=lambda: self.delegate_to_active("save_selection", None))
-        file_menu.add_command(label="Save full image", command=self.save_full_image, accelerator="Ctrl+S")
-        file_menu.add_command(label="Close Tab", command=self.close_tab, accelerator="Ctrl+W")
+        file_menu.add_command(label="Save full image", command=self.save_full_image, accelerator="Cmd+S")
+        file_menu.add_command(label="Close Tab", command=self.close_tab, accelerator="Cmd+W")
         file_menu.add_command(label="Exit", command=self.root.quit)
 
         edit_menu = tk.Menu(menu, tearoff=0)
         menu.add_cascade(label="Edit", menu=edit_menu)
-        edit_menu.add_command(label="Undo", command=lambda: self.delegate_to_active("undo", None), accelerator="Ctrl+Z")
-        edit_menu.add_command(label="Redo", command=lambda: self.delegate_to_active("redo", None), accelerator="Ctrl+Y")
+        edit_menu.add_command(label="Undo", command=lambda: self.delegate_to_active("undo", None), accelerator="Cmd+Z")
+        edit_menu.add_command(label="Redo", command=lambda: self.delegate_to_active("redo", None), accelerator="Cmd+Y")
 
         view_menu = tk.Menu(menu, tearoff=0)
         menu.add_cascade(label="View", menu=view_menu)
@@ -274,21 +304,21 @@ class SpriteEditorApp:
         select_menu.add_command(label="Magic Wand", command=lambda: self.delegate_to_active("activate_magic_wand"))
         select_menu.add_command(label="Select w/ Same Color", command=lambda: self.delegate_to_active("select_all_with_color"))
         select_menu.add_separator()
-        select_menu.add_command(label="Select All", command=lambda: self.delegate_to_active("select_all", None), accelerator="Ctrl+A")
-        select_menu.add_command(label="Deselect All", command=lambda: self.delegate_to_active("deselect_all", None), accelerator="Ctrl+D")
+        select_menu.add_command(label="Select All", command=lambda: self.delegate_to_active("select_all", None), accelerator="Cmd+A")
+        select_menu.add_command(label="Deselect All", command=lambda: self.delegate_to_active("deselect_all", None), accelerator="Cmd+D")
 
         # --- NEW: Canvas Resize Menu ---
         canvas_menu = tk.Menu(menu, tearoff=0)
         menu.add_cascade(label="Canvas", menu=canvas_menu)
-        canvas_menu.add_command(label="Add Row (Top)", command=lambda: self.delegate_to_active('resize_canvas', 'top', 'add'))
-        canvas_menu.add_command(label="Add Row (Bottom)", command=lambda: self.delegate_to_active('resize_canvas', 'bottom', 'add'))
-        canvas_menu.add_command(label="Add Column (Left)", command=lambda: self.delegate_to_active('resize_canvas', 'left', 'add'))
-        canvas_menu.add_command(label="Add Column (Right)", command=lambda: self.delegate_to_active('resize_canvas', 'right', 'add'))
+        canvas_menu.add_command(label="Add Row (Top)", command=lambda: self.delegate_to_active('resize_canvas', 'top', 'add'), accelerator="Cmd+Up")
+        canvas_menu.add_command(label="Add Row (Bottom)", command=lambda: self.delegate_to_active('resize_canvas', 'bottom', 'add'), accelerator="Cmd+Down")
+        canvas_menu.add_command(label="Add Column (Left)", command=lambda: self.delegate_to_active('resize_canvas', 'left', 'add'), accelerator="Cmd+Left")
+        canvas_menu.add_command(label="Add Column (Right)", command=lambda: self.delegate_to_active('resize_canvas', 'right', 'add'), accelerator="Cmd+Right")
         canvas_menu.add_separator()
-        canvas_menu.add_command(label="Remove Row (Top)", command=lambda: self.delegate_to_active('resize_canvas', 'top', 'remove'))
-        canvas_menu.add_command(label="Remove Row (Bottom)", command=lambda: self.delegate_to_active('resize_canvas', 'bottom', 'remove'))
-        canvas_menu.add_command(label="Remove Column (Left)", command=lambda: self.delegate_to_active('resize_canvas', 'left', 'remove'))
-        canvas_menu.add_command(label="Remove Column (Right)", command=lambda: self.delegate_to_active('resize_canvas', 'right', 'remove'))
+        canvas_menu.add_command(label="Remove Row (Top)", command=lambda: self.delegate_to_active('resize_canvas', 'top', 'remove'), accelerator="Cmd+Shift+Up")
+        canvas_menu.add_command(label="Remove Row (Bottom)", command=lambda: self.delegate_to_active('resize_canvas', 'bottom', 'remove'), accelerator="Cmd+Shift+Down")
+        canvas_menu.add_command(label="Remove Column (Left)", command=lambda: self.delegate_to_active('resize_canvas', 'left', 'remove'), accelerator="Cmd+Shift+Left")
+        canvas_menu.add_command(label="Remove Column (Right)", command=lambda: self.delegate_to_active('resize_canvas', 'right', 'remove'), accelerator="Cmd+Shift+Right")
 
     def add_tab(self, file_path=None):
         editor_frame = tk.Frame(self.main_container)
@@ -311,28 +341,50 @@ class SpriteEditorApp:
 
     def close_tab(self):
         editor = self.get_active_editor()
-        if not editor:
-            return
-
+        if not editor: return
         info_to_remove = None
         for info in self.editors_info:
             if info['editor'] == editor:
                 info_to_remove = info
                 break
-
         if info_to_remove:
-            self.editors_info.remove(info_to_remove)
-            info_to_remove['frame'].destroy()
-
-            if self.editors_info:
-                self.set_active_editor(self.editors_info[-1]['editor'])
-            else:
-                self.active_editor = None
-
-            self.refresh_layout()
+            self.close_tab_by_info(info_to_remove)
 
     def set_layout(self, mode):
         self.layout_mode = mode
+        self.refresh_layout()
+    def on_tab_click(self, event, nb):
+        try:
+            index = nb.index(f"@{event.x},{event.y}")
+            bbox = nb.bbox(index)
+            frame_id = nb.tabs()[index]
+            
+            # Check if clicked on the close icon
+            if event.x >= bbox[0] + bbox[2] - 20:
+                info_to_remove = None
+                for info in self.editors_info:
+                    if str(info['frame']) == str(frame_id):
+                        info_to_remove = info
+                        break
+                if info_to_remove:
+                    self.close_tab_by_info(info_to_remove)
+                return
+
+            # Otherwise, just make sure this tab becomes the globally active editor
+            for info in self.editors_info:
+                if str(info['frame']) == str(frame_id):
+                    self.set_active_editor(info['editor'])
+                    break
+        except tk.TclError:
+            pass
+
+    def close_tab_by_info(self, info_to_remove):
+        self.editors_info.remove(info_to_remove)
+        info_to_remove['frame'].destroy()
+        if self.editors_info:
+            self.set_active_editor(self.editors_info[-1]['editor'])
+        else:
+            self.active_editor = None
         self.refresh_layout()
 
     def on_tab_changed(self, event):
@@ -396,7 +448,7 @@ class SpriteEditorApp:
         if self.layout_mode == "tabs":
             self.notebook.pack(fill=tk.BOTH, expand=True)
             for info in self.editors_info:
-                self.notebook.add(info['frame'], text=info['title'])
+                self.notebook.add(info['frame'], text=info['title'] + "   ", image=self.close_icon, compound=tk.RIGHT)
                 info['frame'].lift()
         else:
             orient = tk.HORIZONTAL if self.layout_mode == "horizontal" else tk.VERTICAL
@@ -407,7 +459,9 @@ class SpriteEditorApp:
             self.notebook_right = ttk.Notebook(self.paned_window)
             
             self.notebook_left.bind("<<NotebookTabChanged>>", lambda e: self.on_sub_tab_changed(self.notebook_left))
+            self.notebook_left.bind("<Button-1>", lambda e: self.on_tab_click(e, self.notebook_left))
             self.notebook_right.bind("<<NotebookTabChanged>>", lambda e: self.on_sub_tab_changed(self.notebook_right))
+            self.notebook_right.bind("<Button-1>", lambda e: self.on_tab_click(e, self.notebook_right))
 
             self.paned_window.add(self.notebook_left, stretch="always")
             self.paned_window.add(self.notebook_right, stretch="always")
@@ -415,7 +469,7 @@ class SpriteEditorApp:
             mid = (len(self.editors_info) + 1) // 2
             for i, info in enumerate(self.editors_info):
                 target_nb = self.notebook_left if i < mid else self.notebook_right
-                target_nb.add(info['frame'], text=info['title'])
+                target_nb.add(info['frame'], text=info['title'] + "   ", image=self.close_icon, compound=tk.RIGHT)
                 info['frame'].lift()
             
         # Restore active editor selection
@@ -526,7 +580,7 @@ class NPYImageEditor(tk.Frame):
         self.create_widgets()
         
         # Bind keyboard shortcuts (handled globally by SpriteEditorApp)
-        self.bind("<Control-MouseWheel>", self.on_mouse_scroll)
+        self.bind("<Command-MouseWheel>", self.on_mouse_scroll)
         self.bind("<Key>", self.on_key_press)
         self.bind("<KeyRelease>", self.on_key_release)
 

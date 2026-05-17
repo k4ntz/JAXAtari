@@ -26,6 +26,24 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 def _get_default_asset_config() -> tuple:
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {'name': 'white_main_body', 'type': 'single', 'file': 'body_white/main_body.npy'},
+        {'name': 'white_top_arm_idle', 'type': 'single', 'file': 'body_white/top_arm_idle.npy'},
+        {'name': 'white_top_arm_retracted', 'type': 'single', 'file': 'body_white/top_arm_retracted.npy'},
+        {'name': 'white_top_arm_stretched', 'type': 'single', 'file': 'body_white/top_arm_stretched.npy'},
+        {'name': 'white_top_arm_extended', 'type': 'single', 'file': 'body_white/top_arm_extended.npy'},
+        {'name': 'white_bottom_arm_idle', 'type': 'single', 'file': 'body_white/bottom_arm_idle.npy'},
+        {'name': 'white_bottom_arm_retracted', 'type': 'single', 'file': 'body_white/bottom_arm_retracted.npy'},
+        {'name': 'white_bottom_arm_stretched', 'type': 'single', 'file': 'body_white/bottom_arm_stretched.npy'},
+        {'name': 'white_bottom_arm_extended', 'type': 'single', 'file': 'body_white/bottom_arm_extended.npy'},
+        {'name': 'black_main_body', 'type': 'single', 'file': 'body_black/main_body.npy'},
+        {'name': 'black_top_arm_idle', 'type': 'single', 'file': 'body_black/top_arm_idle.npy'},
+        {'name': 'black_top_arm_retracted', 'type': 'single', 'file': 'body_black/top_arm_retracted.npy'},
+        {'name': 'black_top_arm_stretched', 'type': 'single', 'file': 'body_black/top_arm_stretched.npy'},
+        {'name': 'black_top_arm_extended', 'type': 'single', 'file': 'body_black/top_arm_extended.npy'},
+        {'name': 'black_bottom_arm_idle', 'type': 'single', 'file': 'body_black/bottom_arm_idle.npy'},
+        {'name': 'black_bottom_arm_retracted', 'type': 'single', 'file': 'body_black/bottom_arm_retracted.npy'},
+        {'name': 'black_bottom_arm_stretched', 'type': 'single', 'file': 'body_black/bottom_arm_stretched.npy'},
+        {'name': 'black_bottom_arm_extended', 'type': 'single', 'file': 'body_black/bottom_arm_extended.npy'},
         {'name': 'white_idle', 'type': 'single', 'file': 'white_idle.npy'},
         {'name': 'black_idle', 'type': 'single', 'file': 'black_idle.npy'},
         {'name': 'white_stunned', 'type': 'single', 'file': 'white_stunned.npy'},
@@ -104,8 +122,8 @@ class BoxingConstants(struct.PyTreeNode):
     TOTAL_TIME: int = 7200 # 2 minutes at 60Hz
     
     # Starting positions
-    P1_START_X: float = 50.0
-    P2_START_X: float = 95.0
+    P1_START_X: float = 95.0
+    P2_START_X: float = 50.0
     START_Y: float = 82.0
 
     ASSET_CONFIG: tuple = _get_default_asset_config()
@@ -118,6 +136,7 @@ class BoxingConstants(struct.PyTreeNode):
 @struct.dataclass
 class BoxingState:
     pos: chex.Array          # [2, 2] (P1/P2, X/Y)
+    orientation: chex.Array  # [2] (0: Right, 1: Left)
     score: chex.Array        # [2]
     punch_state: chex.Array  # [2] (0-4)
     punch_arm: chex.Array    # [2] (0: left, 1: right)
@@ -167,9 +186,15 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
 
     def reset(self, key: chex.PRNGKey) -> Tuple[BoxingObservation, BoxingState]:
         key, subkey = jax.random.split(key)
+        pos = jnp.array([[self.consts.P1_START_X, self.consts.START_Y],
+                         [self.consts.P2_START_X, self.consts.START_Y]], dtype=jnp.float32)
+        orientation = jnp.array([
+            (pos[0, 0] > pos[1, 0]).astype(jnp.int32),
+            (pos[1, 0] > pos[0, 0]).astype(jnp.int32)
+        ])
         state = BoxingState(
-            pos=jnp.array([[self.consts.P1_START_X, self.consts.START_Y],
-                           [self.consts.P2_START_X, self.consts.START_Y]], dtype=jnp.float32),
+            pos=pos,
+            orientation=orientation,
             score=jnp.array([0, 0], dtype=jnp.int32),
             punch_state=jnp.array([0, 0], dtype=jnp.int32),
             punch_arm=jnp.array([0, 0], dtype=jnp.int32),
@@ -195,7 +220,7 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             active=jnp.array(True),
             visual_id=jnp.array(0),
             state=state.punch_state[0],
-            orientation=jnp.array(0),
+            orientation=state.orientation[0],
         )
         
         right_boxer = ObjectObservation(
@@ -206,7 +231,7 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             active=jnp.array(True),
             visual_id=jnp.array(1),
             state=state.punch_state[1],
-            orientation=jnp.array(1),
+            orientation=state.orientation[1],
         )
         
         return BoxingObservation(
@@ -316,8 +341,9 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             start_punch = jnp.logical_and(curr_state == 0, jnp.logical_and(dec_cooldown == 0, fire))
             
             # Progress punch state
-            progressing = jnp.logical_and(curr_state > 0, curr_state < self.consts.PUNCH_STATE_MAX)
-            finishing = curr_state == self.consts.PUNCH_STATE_MAX
+            max_state = 17
+            progressing = jnp.logical_and(curr_state > 0, curr_state < max_state)
+            finishing = curr_state == max_state
             
             new_s = jnp.where(start_punch, 1, 
                              jnp.where(progressing, curr_state + 1, 0))
@@ -392,11 +418,25 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         new_p1_pos = jnp.clip(new_p1_pos, jnp.array([self.consts.XMIN, self.consts.YMIN]), jnp.array([self.consts.XMAX, self.consts.YMAX]))
         new_p2_pos = jnp.clip(new_p2_pos, jnp.array([self.consts.XMIN, self.consts.YMIN]), jnp.array([self.consts.XMAX, self.consts.YMAX]))
         
-        state = replace(state, pos=jnp.stack([new_p1_pos, new_p2_pos]))
+        pos = jnp.stack([new_p1_pos, new_p2_pos])
+        orientation = jnp.array([
+            (pos[0, 0] > pos[1, 0]).astype(jnp.int32),
+            (pos[1, 0] > pos[0, 0]).astype(jnp.int32)
+        ])
+        state = replace(state, pos=pos, orientation=orientation)
         
         # 4. Punch State Update
         s0, a0, h0, c0 = self._update_punch(state, action, 0, 1)
         s1, a1, h1, c1 = self._update_punch(state, p2_action, 1, 0)
+        
+        def print_idle(operand):
+            jax.debug.print("White Player: Idle")
+
+        def print_punching(operand):
+            state_val, arm_val = operand
+            jax.debug.print("White Player: Punching - Arm (0=Top, 1=Bottom): {arm}, State: {state}", arm=arm_val, state=state_val)
+
+        jax.lax.cond(s0 == 0, print_idle, print_punching, (s0, a0))
         
         state = replace(state, 
                         punch_state=jnp.array([s0, s1]), 
@@ -418,13 +458,19 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             # State 3: Almost fully extended -> Long Jab (1pt)
             # State 4: Fully extended -> Power Punch (2pt)
             
-            # We only register a Jab at State 3 if we are in the jab range 
-            # (and not too close, as that would be a Power Punch opportunity at State 4)
-            is_jab = jnp.logical_and(p_state == 3, 
+            # Jab states: (8, 9, 13, 14)
+            is_jab_state = jnp.isin(p_state, jnp.array([8, 9, 13, 14]))
+            
+            # Power states: (10, 11, 12)
+            is_power_state = jnp.isin(p_state, jnp.array([10, 11, 12]))
+
+            # We only register a Jab if we are in the jab range 
+            # (and not too close, as that would be a Power Punch opportunity)
+            is_jab = jnp.logical_and(is_jab_state, 
                                      jnp.logical_and(dist < self.consts.JAB_DIST, dist >= self.consts.POWER_DIST))
             
-            # We only register a Power Punch at State 4 if we are in power range
-            is_power = jnp.logical_and(p_state == 4, dist < self.consts.POWER_DIST)
+            # We only register a Power Punch if we are in power range
+            is_power = jnp.logical_and(is_power_state, dist < self.consts.POWER_DIST)
             
             valid_hit = jnp.logical_and(jnp.logical_or(is_jab, is_power), 
                                         jnp.logical_and(not_hit_yet, d_not_stunned))
@@ -458,8 +504,14 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         new_p2_pos_kb = jnp.clip(new_p2_pos_kb, jnp.array([self.consts.XMIN, self.consts.YMIN]), jnp.array([self.consts.XMAX, self.consts.YMAX]))
         new_p1_pos_kb = jnp.clip(new_p1_pos_kb, jnp.array([self.consts.XMIN, self.consts.YMIN]), jnp.array([self.consts.XMAX, self.consts.YMAX]))
         
+        pos_kb = jnp.stack([new_p1_pos_kb, new_p2_pos_kb])
+        orientation_kb = jnp.array([
+            (pos_kb[0, 0] > pos_kb[1, 0]).astype(jnp.int32),
+            (pos_kb[1, 0] > pos_kb[0, 0]).astype(jnp.int32)
+        ])
         state = replace(state, 
-                        pos=jnp.stack([new_p1_pos_kb, new_p2_pos_kb]),
+                        pos=pos_kb,
+                        orientation=orientation_kb,
                         score=new_scores,
                         has_hit=new_has_hit,
                         stun_timer=new_stun,
@@ -490,75 +542,102 @@ class BoxingRenderer(JAXGameRenderer):
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/boxing"
         (self.PALETTE, self.SHAPE_MASKS, self.BACKGROUND, self.COLOR_TO_ID, _) = self.jr.load_and_setup_assets(list(self.consts.ASSET_CONFIG), sprite_path)
         
-        # Pre-collect masks for white
         self.white_masks = {
-            "body": self.SHAPE_MASKS["white_idle"],
+            "body": self.SHAPE_MASKS["white_main_body"],
             "stunned": self.SHAPE_MASKS["white_stunned"],
-            "arm_left": [self.SHAPE_MASKS[f"white_arm_left_{i}"] for i in range(4)],
-            "arm_right": [self.SHAPE_MASKS[f"white_arm_right_{i}"] for i in range(4)],
+            "top_arm": [
+                self.SHAPE_MASKS["white_top_arm_idle"],
+                self.SHAPE_MASKS["white_top_arm_retracted"],
+                self.SHAPE_MASKS["white_top_arm_stretched"],
+                self.SHAPE_MASKS["white_top_arm_extended"],
+            ],
+            "bottom_arm": [
+                self.SHAPE_MASKS["white_bottom_arm_idle"],
+                self.SHAPE_MASKS["white_bottom_arm_retracted"],
+                self.SHAPE_MASKS["white_bottom_arm_stretched"],
+                self.SHAPE_MASKS["white_bottom_arm_extended"],
+            ],
         }
-        # Pre-collect masks for black
         self.black_masks = {
-            "body": self.SHAPE_MASKS["black_idle"],
+            "body": self.SHAPE_MASKS["black_main_body"],
             "stunned": self.SHAPE_MASKS["black_stunned"],
-            "arm_left": [self.SHAPE_MASKS[f"black_arm_left_{i}"] for i in range(4)],
-            "arm_right": [self.SHAPE_MASKS[f"black_arm_right_{i}"] for i in range(4)],
+            "top_arm": [
+                self.SHAPE_MASKS["black_top_arm_idle"],
+                self.SHAPE_MASKS["black_top_arm_retracted"],
+                self.SHAPE_MASKS["black_top_arm_stretched"],
+                self.SHAPE_MASKS["black_top_arm_extended"],
+            ],
+            "bottom_arm": [
+                self.SHAPE_MASKS["black_bottom_arm_idle"],
+                self.SHAPE_MASKS["black_bottom_arm_retracted"],
+                self.SHAPE_MASKS["black_bottom_arm_stretched"],
+                self.SHAPE_MASKS["black_bottom_arm_extended"],
+            ],
         }
 
-    def _render_body(self, raster, pos, masks, is_stunned):
-        m = jax.lax.cond(is_stunned, lambda: masks["stunned"], lambda: masks["body"])
-        return self.jr.render_at(raster, pos[0], pos[1], m)
+    def _render_boxer(self, raster, pos, is_stunned, p_state, arm_idx, masks, orientation):
+        x = pos[0]
+        y = pos[1]
+        
+        def render_stunned(r):
+            mask = masks["stunned"]
+            # If oriented Left (1), flip
+            mask = jnp.where(orientation == 1, mask[:, ::-1], mask)
+            return self.jr.render_at(r, x, y, mask)
+            
+        def render_normal(r):
+            # Map punch state (0-17) to arm animation frame (0=idle, 1=retract, 2=stretch, 3=extend)
+            frame_map = jnp.array([0, 0, 0, 1, 1, 1, 0, 0, 2, 2, 3, 3, 3, 2, 2, 0, 0, 0])
+            anim_frame = frame_map[p_state]
+            
+            top_frame = jnp.where(jnp.logical_and(p_state > 0, arm_idx == 0), anim_frame, 0)
+            bot_frame = jnp.where(jnp.logical_and(p_state > 0, arm_idx == 1), anim_frame, 0)
+            
+            def render_arm(op, i, is_top):
+                mask_key = "top_arm" if is_top else "bottom_arm"
+                mask = masks[mask_key][i]
+                
+                # Flip if facing Left (1)
+                mask = jnp.where(orientation == 1, mask[:, ::-1], mask)
+                
+                arm_w = mask.shape[1]
+                
+                # Logic for Right (orientation 0)
+                arm_x_right = x - (arm_w - 14)
+                arm_x_right = jnp.where(i == 2, arm_x_right + 8, arm_x_right)
+                arm_x_right = jnp.where(i == 3, arm_x_right + 16, arm_x_right)
+                
+                # Logic for Left (orientation 1)
+                arm_x_left = jnp.where(i == 2, x - 8, x)
+                arm_x_left = jnp.where(i == 3, x - 16, arm_x_left)
+                
+                arm_x = jnp.where(orientation == 0, arm_x_right, arm_x_left)
+                arm_y = y if is_top else y + 34
+                return self.jr.render_at(op, arm_x, arm_y, mask)
+                
+            r = jax.lax.switch(top_frame, [lambda op, i=i: render_arm(op, i, True) for i in range(4)], r)
+            
+            body_mask = masks["body"]
+            # If oriented Left (1), flip
+            body_mask = jnp.where(orientation == 1, body_mask[:, ::-1], body_mask)
+            r = self.jr.render_at(r, x, y + 12, body_mask)
+            
+            r = jax.lax.switch(bot_frame, [lambda op, i=i: render_arm(op, i, False) for i in range(4)], r)
+            return r
 
-    def _render_arms(self, raster, pos, opp_pos, masks, p_state, arm_idx):
-        # Map punch_state (1-4) to animation frame (0-3)
-        anim_frame = jax.lax.switch(jnp.clip(p_state - 1, 0, 3),
-                                    [lambda: 0, lambda: 1, lambda: 2, lambda: 2])
-        
-        # Determine punch direction based on opponent's X
-        is_punching_right = pos[0] < opp_pos[0]
-        
-        # Select arm mask set based on direction
-        arm_masks = jax.lax.cond(is_punching_right,
-                                    lambda: masks["arm_right"],
-                                    lambda: masks["arm_left"])
-        
-        arm_mask = jax.lax.switch(anim_frame, [lambda: arm_masks[i] for i in range(4)])
-        
-        # Arm offsets
-        arm_w = arm_mask.shape[1]
-        x_offset = jax.lax.cond(is_punching_right,
-                                lambda: 14,      # Punch right: arm starts after 14px body
-                                lambda: -arm_w)  # Punch left: arm is to the left of x
-        
-        # Y offset: keep feet aligned (idle 47, arm 46)
-        # and use arm_idx to distinguish between top/bottom arms
-        y_offset = 1 + jax.lax.cond(arm_idx == 0, lambda: 0, lambda: 4)
-        
-        return self.jr.render_at(raster, pos[0] + x_offset, pos[1] + y_offset, arm_mask)
+        return jax.lax.cond(is_stunned, render_stunned, render_normal, raster)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: BoxingState) -> jnp.ndarray:
         raster = self.jr.create_object_raster(self.BACKGROUND)
         
-        def render_boxer(raster, idx, masks):
-            p_pos = state.pos[idx].astype(jnp.int32)
-            opp_pos = state.pos[1 - idx].astype(jnp.int32)
-            is_stunned = state.stun_timer[idx] > 0
-            p_state = state.punch_state[idx]
-            arm_idx = state.punch_arm[idx]
-            
-            # Render body
-            raster = self._render_body(raster, p_pos, masks, is_stunned)
-            
-            # Render arms if punching
-            raster = jax.lax.cond(p_state > 0,
-                                  lambda r: self._render_arms(r, p_pos, opp_pos, masks, p_state, arm_idx),
-                                  lambda r: r,
-                                  raster)
-            return raster
-
-        raster = render_boxer(raster, 0, self.white_masks)
-        raster = render_boxer(raster, 1, self.black_masks)
+        raster = self._render_boxer(raster, state.pos[0].astype(jnp.int32), 
+                                    state.stun_timer[0] > 0, state.punch_state[0], 
+                                    state.punch_arm[0], self.white_masks, state.orientation[0])
+                                    
+        raster = self._render_boxer(raster, state.pos[1].astype(jnp.int32), 
+                                    state.stun_timer[1] > 0, state.punch_state[1], 
+                                    state.punch_arm[1], self.black_masks, state.orientation[1])
         
         # HUD: Scores
         white_digits = self.jr.int_to_digits(state.score[0], max_digits=2)
