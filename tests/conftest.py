@@ -58,7 +58,7 @@ def pytest_addoption(parser):
 def pytest_configure(config):
     """Registers the 'requires_snapshot' marker."""
     config.addinivalue_line("markers", "requires_snapshot: mark test as requiring a snapshot")
-    config.addinivalue_line("markers", "smoke: fast checks for PR validation")
+    config.addinivalue_line("markers", "smoke: required PR checks (native downscaling, mod contracts, etc.)")
     config.addinivalue_line("markers", "integration: broader integration checks")
     config.addinivalue_line("markers", "slow: expensive checks for exhaustive validation")
     config.addinivalue_line("markers", "wrapper_full: runs only with full wrapper matrix")
@@ -153,6 +153,7 @@ def discover_games() -> list[str]:
     except FileNotFoundError as e:
         print(f"Could not discover games: {e}", file=sys.stderr)
         return
+
 
 def parse_game_list(option_value: str | None) -> list[str] | None:
     """

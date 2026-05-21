@@ -472,14 +472,14 @@ class TestJaxTransforms:
                 self._check_batch_dimension_recursive(value, expected_batch_size, f"{context_name}.{key}")
         # For other types (primitives, etc.), we don't need to check anything
 
-    @pytest.mark.integration
-    def test_jit_compilation(self, wrapped_env_integration_representative):
+    @pytest.mark.smoke
+    def test_jit_compilation(self, wrapped_env_smoke):
         """Should test that a full step can be JIT-compiled without error."""
         key = jax.random.PRNGKey(0)
         
         # JIT the reset and step functions
-        jitted_reset = jax.jit(wrapped_env_integration_representative.reset)
-        jitted_step = jax.jit(wrapped_env_integration_representative.step)
+        jitted_reset = jax.jit(wrapped_env_smoke.reset)
+        jitted_step = jax.jit(wrapped_env_smoke.step)
         
         # Test JIT reset
         obs, state = jitted_reset(key)
@@ -487,7 +487,7 @@ class TestJaxTransforms:
         assert state is not None, "JIT reset state should not be None"
         
         # Test JIT step
-        action_space = wrapped_env_integration_representative.action_space()
+        action_space = wrapped_env_smoke.action_space()
         action = action_space.sample(key)
         obs, state, reward, done, _, info = jitted_step(state, action)
         assert obs is not None, "JIT step observation should not be None"

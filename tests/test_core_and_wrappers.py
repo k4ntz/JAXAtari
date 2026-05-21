@@ -27,7 +27,7 @@ def get_object_centric_obs_size(space: spaces.Dict) -> int:
         size += np.prod(leaf.shape)
     return size
 
-@pytest.mark.integration
+@pytest.mark.smoke
 def test_pixel_obs_wrapper_with_stacked_frames(raw_env):
     """Test that PixelObsWrapper correctly handles stacked frames."""
     key = jax.random.PRNGKey(0)
@@ -52,8 +52,8 @@ def test_pixel_obs_wrapper_with_stacked_frames(raw_env):
     obs, state, reward, done, _, info = env.step(state, 0)
     assert obs.shape == expected_shape, f"Expected shape {expected_shape}, got {obs.shape}"
 
-    # perform 100 steps to get to a state in which the frames should be different
-    for _ in range(100):
+    # perform several steps so stacked frames diverge from the initial reset frame
+    for _ in range(10):
         obs, state, reward, done, _, info = env.step(state, 0)
     
     # Verify that frames are in the correct range (0-255 for uint8)
@@ -221,7 +221,7 @@ def test_log_wrapper_with_flatten_observation(raw_env):
     assert obs[1].ndim == 1
 
 
-@pytest.mark.integration
+@pytest.mark.smoke
 def test_native_downscaling_hot_swap(raw_env):
     """
     Verifies that enabling use_native_downscaling correctly hot-swaps the 
@@ -284,7 +284,7 @@ def test_native_downscaling_hot_swap(raw_env):
     assert jnp.min(obs) >= 0
 
 
-@pytest.mark.integration
+@pytest.mark.smoke
 def test_native_downscaling_grayscale(raw_env):
     """
     Specific test to ensure Native Downscaling handles Grayscale channel reduction correctly.

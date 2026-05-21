@@ -222,7 +222,7 @@ class TestModExecution:
     run 10 steps and assert no crash.
     """
 
-    @pytest.mark.integration
+    @pytest.mark.smoke
     def test_mod_runs_reset_and_10_steps(self, mod_game_name: str, mod_key: str, mod_type: str):
         """
         Create env with the given mod, run reset then 10 steps; assert no errors.
@@ -432,7 +432,7 @@ class TestModWithWrappers:
     and mod tracking should remain valid.
     """
 
-    @pytest.mark.slow
+    @pytest.mark.smoke
     def test_pixel_native_downscaling_does_not_crash_modded_env(
         self, mod_game_name: str, mod_key: str, mod_type: str
     ):
@@ -497,7 +497,7 @@ class TestModWithWrappers:
                     f"Patched renderer method '{fn_name}' should exist on renderer (mod '{mod_key}')."
                 )
 
-    @pytest.mark.slow
+    @pytest.mark.smoke
     def test_obs_shape_correct_after_native_downscaling(
         self, mod_game_name: str, mod_key: str, mod_type: str
     ):
@@ -545,7 +545,7 @@ class TestModWithWrappers:
             f"for mod '{mod_key}' (game '{mod_game_name}'). obs.shape={obs.shape}."
         )
 
-    @pytest.mark.slow
+    @pytest.mark.smoke
     def test_obs_shape_stable_when_downscaling_applied_after_pretrace(
         self, mod_game_name: str, mod_key: str, mod_type: str
     ):
@@ -1016,6 +1016,7 @@ class _SyntheticRendererPatchMod(JaxAtariInternalModPlugin):
         return raster
 
 
+@pytest.mark.smoke
 def test_renderer_patch_jit_staleness_fixed():
     """
     Regression: apply_native_downscaling must clear JIT caches for patched
@@ -1064,6 +1065,7 @@ def test_renderer_patch_jit_staleness_fixed():
     )
 
 
+@pytest.mark.smoke
 def test_native_downscaling_clears_registered_jit_targets():
     class _CacheProbe:
         def __init__(self):

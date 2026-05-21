@@ -149,7 +149,7 @@ class TestGymWrapperIntegration:
 class TestJaxTransforms:
     """Tests if the underlying functional environment is compatible with JAX transforms."""
 
-    @pytest.mark.integration
+    @pytest.mark.smoke
     def test_jittable_transition(self, func_env):
         """Tests that the core transition function can be JIT-compiled."""
         jit_transition = jax.jit(func_env.transition)
