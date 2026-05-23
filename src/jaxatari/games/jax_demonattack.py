@@ -312,6 +312,102 @@ class DemonAttackRenderer(JAXGameRenderer):
         super().__init__(consts)
         self.consts = consts or DemonAttackConstants()
 
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(210, 160),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
+
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        # Create procedural assets
+        bg_rgba = jnp.zeros((*self.config.game_dimensions, 4), dtype=jnp.uint8)
+        bg_rgba = bg_rgba.at[:, :, :3].set(jnp.array(self.consts.BACKGROUND_COLOR))
+        bg_rgba = bg_rgba.at[:, :, 3].set(255)
+
+        player_sprite = _create_player_sprite(self.consts)
+        demon_sprite = _create_demon_sprite(self.consts)
+        laser_sprite = _create_projectile_sprite(self.consts.LASER_SIZE, self.consts.LASER_COLOR)
+        bomb_sprite = _create_projectile_sprite(self.consts.BOMB_SIZE, self.consts.BOMB_COLOR)
+        explosion_sprite = _create_explosion_sprite(self.consts)
+        digit_sprites = _create_digit_sprites(self.consts)
+
+        # Update asset config with procedural data
+        asset_config = [
+            {'name': 'background', 'type': 'background', 'data': bg_rgba},
+            {'name': 'player', 'type': 'procedural', 'data': player_sprite},
+            {'name': 'demon', 'type': 'procedural', 'data': demon_sprite},
+            {'name': 'projectile_player', 'type': 'procedural', 'data': laser_sprite},
+            {'name': 'projectile_demon', 'type': 'procedural', 'data': bomb_sprite},
+            {'name': 'explosion', 'type': 'procedural', 'data': explosion_sprite},
+            {'name': 'score_digits', 'type': 'procedural', 'data': digit_sprites},
+        ]
+
+        # Bake assets
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "demonattack")
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state):
-        pass
+    def render(self, state: DemonAttackState):
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+
+        # Render player or explosion
+        player_mask = jax.lax.select(state.player_exploding, self.SHAPE_MASKS["explosion"], self.SHAPE_MASKS["player"])
+        raster = self.jr.render_at(raster, state.player_x, self.consts.PLAYER_Y, player_mask)
+
+        # Render demons
+        demon_mask = self.SHAPE_MASKS["demon"]
+
+        def render_demon(i, r):
+            return jax.lax.cond(
+                state.demons_alive[i],
+                lambda: self.jr.render_at(r, state.demons_x[i], state.demons_y[i], demon_mask),
+                lambda: r
+            )
+
+        raster = jax.lax.fori_loop(0, self.consts.MAX_DEMONS, render_demon, raster)
+
+        # Render laser
+        laser_mask = self.SHAPE_MASKS["projectile_player"]
+        raster = jax.lax.cond(
+            state.laser_active,
+            lambda: self.jr.render_at(raster, state.laser_x, state.laser_y, laser_mask),
+            lambda: raster
+        )
+
+        # Render bomb
+        bomb_mask = self.SHAPE_MASKS["projectile_demon"]
+        raster = jax.lax.cond(
+            state.bomb_active,
+            lambda: self.jr.render_at(raster, state.bomb_x, state.bomb_y, bomb_mask),
+            lambda: raster
+        )
+
+        # Render Score
+        score_digits = self.jr.int_to_digits(state.score, max_digits=4)
+        digit_masks = self.SHAPE_MASKS["score_digits"]
+
+        is_single_digit = state.score < 10
+        is_double_digit = jnp.logical_and(state.score >= 10, state.score < 100)
+        is_triple_digit = jnp.logical_and(state.score >= 100, state.score < 1000)
+
+        start_index = jax.lax.select(is_single_digit, 3,
+                                     jax.lax.select(is_double_digit, 2,
+                                                    jax.lax.select(is_triple_digit, 1, 0)))
+        num_to_render = jax.lax.select(is_single_digit, 1,
+                                       jax.lax.select(is_double_digit, 2,
+                                                      jax.lax.select(is_triple_digit, 3, 4)))
+
+        raster = self.jr.render_label_selective(raster, 70, 10, score_digits, digit_masks,
+                                                start_index, num_to_render, spacing=8)
+
+        return self.jr.render_from_palette(raster, self.PALETTE)
