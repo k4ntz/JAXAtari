@@ -7,22 +7,70 @@ import jax.numpy as jnp
 from flax import struct
 
 import jaxatari.spaces as spaces
-from jaxatari.environment import JaxEnvironment
+from jaxatari.environment import JaxEnvironment, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
+def _get_default_asset_config() -> tuple:
+    return (
+        {'name': 'background', 'type': 'procedural'},
+        {'name': 'player', 'type': 'procedural'},
+        {'name': 'demon', 'type': 'procedural'},
+        {'name': 'projectile_player', 'type': 'procedural'},
+        {'name': 'projectile_demon', 'type': 'procedural'},
+        {'name': 'score_digits', 'type': 'procedural'},
+    )
 
 class DemonAttackConstants(struct.PyTreeNode):
-    pass
+    # Static Configuration
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    PLAYER_SPEED: int = struct.field(pytree_node=False, default=2)
+    MAX_DEMONS: int = struct.field(pytree_node=False, default=3)
+
+    # Coordinates & Sizes
+    PLAYER_Y: int = struct.field(pytree_node=False, default=184)
+    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 12))
+    DEMON_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 12))
+    LASER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(1, 6))
+    BOMB_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(2, 4))
+
+    # Boundaries
+    PLAYER_MIN_X: int = struct.field(pytree_node=False, default=16)
+    PLAYER_MAX_X: int = struct.field(pytree_node=False, default=136)
+
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
 class DemonAttackState(struct.PyTreeNode):
-    pass
+    player_x: chex.Array
+    laser_x: chex.Array
+    laser_y: chex.Array
+    laser_active: chex.Array
+
+    demons_x: chex.Array
+    demons_y: chex.Array  # Shape: (MAX_DEMONS,)
+    demons_dir: chex.Array  # Shape: (MAX_DEMONS,) 1 for right, -1 for left
+    demons_alive: chex.Array  # Shape: (MAX_DEMONS,) bool
+
+    bomb_x: chex.Array
+    bomb_y: chex.Array
+    bomb_active: chex.Array
+
+    score: chex.Array
+    lives: chex.Array
+    step_counter: chex.Array
+    key: chex.PRNGKey
 
 class DemonAttackObservation(struct.PyTreeNode):
-    pass
+    player: ObjectObservation
+    demons: ObjectObservation
+    laser: ObjectObservation
+    bomb: ObjectObservation
+    score: jnp.ndarray
+    lives: jnp.ndarray
 
 class DemonAttackInfo(struct.PyTreeNode):
-    pass
+    time: jnp.ndarray
 
 class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, DemonAttackInfo, DemonAttackConstants]):
 
