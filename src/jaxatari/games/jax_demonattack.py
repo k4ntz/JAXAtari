@@ -1,3 +1,4 @@
+import os
 from functools import partial
 from typing import Tuple
 
@@ -26,13 +27,13 @@ def _create_demon_sprite(consts: "DemonAttackConstants") -> jnp.ndarray:
 
     sprite = jnp.zeros((*consts.DEMON_SIZE, 4), dtype=jnp.uint8)
     color = jnp.array((*consts.DEMON_COLOR, 255), dtype=jnp.uint8)
-    
+
     # Center the 8x10 mask in the 8x12 sprite
     start_col = (consts.DEMON_SIZE[1] - 10) // 2
 
     mask_rgba = jnp.where(mask[:, :, None] == 1, color, jnp.zeros(4, dtype=jnp.uint8))
-    sprite = sprite.at[:, start_col:start_col+10, :].set(mask_rgba)
-    
+    sprite = sprite.at[:, start_col:start_col + 10, :].set(mask_rgba)
+
     return sprite
 
 def _create_player_sprite(consts: "DemonAttackConstants") -> jnp.ndarray:
@@ -49,13 +50,13 @@ def _create_player_sprite(consts: "DemonAttackConstants") -> jnp.ndarray:
 
     sprite = jnp.zeros((*consts.PLAYER_SIZE, 4), dtype=jnp.uint8)
     color = jnp.array((*consts.PLAYER_COLOR, 255), dtype=jnp.uint8)
-    
+
     # Center the 8x10 mask in the 8x12 sprite
     start_col = (consts.PLAYER_SIZE[1] - 10) // 2
 
     mask_rgba = jnp.where(mask[:, :, None] == 1, color, jnp.zeros(4, dtype=jnp.uint8))
-    sprite = sprite.at[:, start_col:start_col+10, :].set(mask_rgba)
-    
+    sprite = sprite.at[:, start_col:start_col + 10, :].set(mask_rgba)
+
     return sprite
 
 def _create_projectile_sprite(size: Tuple[int, int], color_rgb: Tuple[int, int, int]) -> jnp.ndarray:
@@ -68,24 +69,24 @@ def _create_digit_sprites(consts: "DemonAttackConstants") -> jnp.ndarray:
     color = (*consts.SCORE_COLOR, 255)
 
     patterns = [
-        [[1,1,1],[1,0,1],[1,0,1],[1,0,1],[1,1,1]],
-        [[0,1,0],[0,1,0],[0,1,0],[0,1,0],[0,1,0]],
-        [[1,1,1],[0,0,1],[1,1,1],[1,0,0],[1,1,1]],
-        [[1,1,1],[0,0,1],[1,1,1],[0,0,1],[1,1,1]],
-        [[1,0,1],[1,0,1],[1,1,1],[0,0,1],[0,0,1]],
-        [[1,1,1],[1,0,0],[1,1,1],[0,0,1],[1,1,1]],
-        [[1,1,1],[1,0,0],[1,1,1],[1,0,1],[1,1,1]],
-        [[1,1,1],[0,0,1],[0,0,1],[0,0,1],[0,0,1]],
-        [[1,1,1],[1,0,1],[1,1,1],[1,0,1],[1,1,1]],
-        [[1,1,1],[1,0,1],[1,1,1],[0,0,1],[1,1,1]],
+        [[1, 1, 1], [1, 0, 1], [1, 0, 1], [1, 0, 1], [1, 1, 1]],
+        [[0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0]],
+        [[1, 1, 1], [0, 0, 1], [1, 1, 1], [1, 0, 0], [1, 1, 1]],
+        [[1, 1, 1], [0, 0, 1], [1, 1, 1], [0, 0, 1], [1, 1, 1]],
+        [[1, 0, 1], [1, 0, 1], [1, 1, 1], [0, 0, 1], [0, 0, 1]],
+        [[1, 1, 1], [1, 0, 0], [1, 1, 1], [0, 0, 1], [1, 1, 1]],
+        [[1, 1, 1], [1, 0, 0], [1, 1, 1], [1, 0, 1], [1, 1, 1]],
+        [[1, 1, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1]],
+        [[1, 1, 1], [1, 0, 1], [1, 1, 1], [1, 0, 1], [1, 1, 1]],
+        [[1, 1, 1], [1, 0, 1], [1, 1, 1], [0, 0, 1], [1, 1, 1]],
     ]
-    
+
     for i, pattern in enumerate(patterns):
         for r, row in enumerate(pattern):
             for c, val in enumerate(row):
                 if val:
-                    digits[i, r+1, c+2] = color
-                    
+                    digits[i, r + 1, c + 2] = color
+
     return jnp.array(digits)
 
 def _create_explosion_sprite(consts: "DemonAttackConstants") -> jnp.ndarray:
@@ -102,11 +103,11 @@ def _create_explosion_sprite(consts: "DemonAttackConstants") -> jnp.ndarray:
 
     sprite = jnp.zeros((*consts.PLAYER_SIZE, 4), dtype=jnp.uint8)
     color = jnp.array((*consts.PLAYER_COLOR, 255), dtype=jnp.uint8)
-    
+
     start_col = (consts.PLAYER_SIZE[1] - 10) // 2
     mask_rgba = jnp.where(mask[:, :, None] == 1, color, jnp.zeros(4, dtype=jnp.uint8))
-    sprite = sprite.at[:, start_col:start_col+10, :].set(mask_rgba)
-    
+    sprite = sprite.at[:, start_col:start_col + 10, :].set(mask_rgba)
+
     return sprite
 
 def _get_default_asset_config() -> tuple:
@@ -199,7 +200,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[DemonAttackObservation, DemonAttackState]:
         key, player_key, demon_key = jax.random.split(key, 3)
-        
+
         state = DemonAttackState(
             player_x=jnp.array(76, dtype=jnp.int32),
             laser_x=jnp.array(0, dtype=jnp.int32),
@@ -235,7 +236,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             width=jnp.array(self.consts.PLAYER_SIZE[0]),
             height=jnp.array(self.consts.PLAYER_SIZE[1]),
         )
-        
+
         demons = ObjectObservation.create(
             x=state.demons_x,
             y=state.demons_y,
@@ -243,7 +244,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             height=jnp.array(self.consts.DEMON_SIZE[1]),
             active=state.demons_alive
         )
-        
+
         laser = ObjectObservation.create(
             x=state.laser_x,
             y=state.laser_y,
@@ -251,7 +252,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             height=jnp.array(self.consts.LASER_SIZE[1]),
             active=state.laser_active
         )
-        
+
         bomb = ObjectObservation.create(
             x=state.bomb_x,
             y=state.bomb_y,
@@ -259,7 +260,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             height=jnp.array(self.consts.BOMB_SIZE[1]),
             active=state.bomb_active
         )
-        
+
         return DemonAttackObservation(
             player=player,
             demons=demons,
@@ -274,8 +275,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def observation_space(self) -> spaces.Dict:
         object_space = spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
-        demons_space = spaces.get_object_space(n=self.consts.MAX_DEMONS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
-        
+        demons_space = spaces.get_object_space(n=self.consts.MAX_DEMONS,
+                                               screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
+
         return spaces.Dict({
             "player": object_space,
             "demons": demons_space,
