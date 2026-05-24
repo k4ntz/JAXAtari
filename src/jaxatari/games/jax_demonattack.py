@@ -223,8 +223,172 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: DemonAttackState, action: chex.Array) -> Tuple[DemonAttackObservation, DemonAttackState, float, bool, DemonAttackInfo]:
-        pass
+    def step(self, state: DemonAttackState, action: chex.Array) -> Tuple[
+        DemonAttackObservation, DemonAttackState, float, bool, DemonAttackInfo]:
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
+        prev_state = state
+
+        # Handle Explosion Timer
+        def update_explosion(s):
+            new_timer = s.explosion_timer - 1
+            exploding = new_timer > 0
+            # If timer reaches 0, player hit logic should have already reduced lives.
+            # We just need to stop exploding.
+            return s.replace(explosion_timer=new_timer, player_exploding=exploding)
+
+        def normal_step(s, act):
+            # 1. Player Step
+            s = self._player_step(s, act)
+            # 2. Laser Step
+            s = self._laser_step(s, act)
+            # 3. Demon Step
+            s = self._demons_step(s)
+            # 4. Bomb Step
+            s = self._bomb_step(s)
+            # 5. Collision Detection
+            s = self._handle_collisions(s)
+            return s
+
+        state = jax.lax.cond(
+            state.player_exploding,
+            update_explosion,
+            lambda s: normal_step(s, atari_action),
+            operand=state
+        )
+
+        # Update key and step counter
+        key, next_key = jax.random.split(state.key)
+        state = state.replace(key=next_key, step_counter=state.step_counter + 1)
+
+        observation = self._get_observation(state)
+        reward = self._get_reward(prev_state, state)
+        done = self._get_done(state)
+        info = self._get_info(state)
+
+        return observation, state, reward, done, info
+
+    def _player_step(self, state: DemonAttackState, action: chex.Array) -> DemonAttackState:
+        move_right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
+        move_left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
+
+        dx = jax.lax.select(move_right, self.consts.PLAYER_SPEED,
+                            jax.lax.select(move_left, -self.consts.PLAYER_SPEED, 0))
+
+        new_x = jnp.clip(state.player_x + dx, self.consts.PLAYER_MIN_X, self.consts.PLAYER_MAX_X)
+        return state.replace(player_x=new_x)
+
+    def _laser_step(self, state: DemonAttackState, action: chex.Array) -> DemonAttackState:
+        # Fire laser if not active and FIRE action
+        fire = jnp.logical_or(jnp.logical_or(action == Action.FIRE, action == Action.RIGHTFIRE),
+                              action == Action.LEFTFIRE)
+
+        should_fire = jnp.logical_and(fire, jnp.logical_not(state.laser_active))
+
+        laser_x = jax.lax.select(should_fire, state.player_x + self.consts.PLAYER_SIZE[0] // 2, state.laser_x)
+        laser_y = jax.lax.select(should_fire,
+                                 jnp.array(self.consts.PLAYER_Y - self.consts.LASER_SIZE[1], dtype=jnp.int32),
+                                 state.laser_y)
+        laser_active = jnp.logical_or(should_fire, state.laser_active)
+
+        # Move laser
+        laser_y = jax.lax.select(laser_active, laser_y - self.consts.LASER_SPEED, laser_y)
+
+        # Deactivate if out of bounds
+        laser_active = jnp.logical_and(laser_active, laser_y > 0)
+
+        return state.replace(laser_x=laser_x, laser_y=laser_y, laser_active=laser_active)
+
+    def _demons_step(self, state: DemonAttackState) -> DemonAttackState:
+        # Simple demon movement: move horizontally, bounce at edges
+        new_x = state.demons_x + state.demons_dir * self.consts.DEMON_SPEED
+
+        at_right_edge = new_x >= self.consts.DEMON_MAX_X
+        at_left_edge = new_x <= self.consts.DEMON_MIN_X
+
+        new_dir = jnp.where(at_right_edge, -1, jnp.where(at_left_edge, 1, state.demons_dir))
+        new_x = jnp.clip(new_x, self.consts.DEMON_MIN_X, self.consts.DEMON_MAX_X)
+
+        # Respawn demons if all are dead
+        all_dead = jnp.logical_not(jnp.any(state.demons_alive))
+        demons_alive = jnp.where(all_dead, True, state.demons_alive)
+
+        return state.replace(demons_x=new_x, demons_dir=new_dir, demons_alive=demons_alive)
+
+    def _bomb_step(self, state: DemonAttackState) -> DemonAttackState:
+        # Drop bomb from a random living demon if no bomb is active
+        key, drop_key, demon_idx_key = jax.random.split(state.key, 3)
+
+        should_drop = jnp.logical_and(jnp.logical_not(state.bomb_active), jax.random.uniform(drop_key) < 0.05)
+
+        # Pick a random demon index
+        demon_idx = jax.random.randint(demon_idx_key, (), 0, self.consts.MAX_DEMONS)
+        demon_idx = jnp.where(state.demons_alive[demon_idx], demon_idx, jnp.argmax(state.demons_alive))
+
+        bomb_x = jax.lax.select(should_drop, state.demons_x[demon_idx] + self.consts.DEMON_SIZE[0] // 2, state.bomb_x)
+        bomb_y = jax.lax.select(should_drop, state.demons_y[demon_idx] + self.consts.DEMON_SIZE[1], state.bomb_y)
+        bomb_active = jnp.logical_or(should_drop, state.bomb_active)
+
+        # Move bomb
+        bomb_y = jax.lax.select(bomb_active, bomb_y + self.consts.BOMB_SPEED, bomb_y)
+
+        # Deactivate if out of bounds
+        bomb_active = jnp.logical_and(bomb_active, bomb_y < self.consts.HEIGHT)
+
+        return state.replace(bomb_x=bomb_x, bomb_y=bomb_y, bomb_active=bomb_active, key=key)
+
+    def _handle_collisions(self, state: DemonAttackState) -> DemonAttackState:
+        # Laser vs Demons
+        def check_demon_collision(i, carry):
+            s_alive, s_score, l_active = carry
+
+            demon_hit = jnp.logical_and(
+                s_alive[i],
+                jnp.logical_and(
+                    l_active,
+                    jnp.logical_and(
+                        jnp.abs(state.laser_x - state.demons_x[i]) < self.consts.DEMON_SIZE[0],
+                        jnp.logical_and(
+                            state.laser_y < state.demons_y[i] + self.consts.DEMON_SIZE[1],
+                            state.laser_y + self.consts.LASER_SIZE[1] > state.demons_y[i]
+                        )
+                    )
+                )
+            )
+
+            new_alive = s_alive.at[i].set(jnp.logical_and(s_alive[i], jnp.logical_not(demon_hit)))
+            new_score = jnp.where(demon_hit, s_score + 10, s_score)
+            new_laser_active = jnp.logical_and(l_active, jnp.logical_not(demon_hit))
+
+            return (new_alive, new_score, new_laser_active)
+
+        init_carry = (state.demons_alive, state.score, state.laser_active)
+        demons_alive, score, laser_active = jax.lax.fori_loop(0, self.consts.MAX_DEMONS, check_demon_collision,
+                                                              init_carry)
+
+        # Bomb vs Player
+        player_hit = jnp.logical_and(
+            state.bomb_active,
+            jnp.logical_and(
+                jnp.abs(state.bomb_x - state.player_x) < self.consts.PLAYER_SIZE[0],
+                jnp.logical_and(
+                    state.bomb_y < self.consts.PLAYER_Y + self.consts.PLAYER_SIZE[1],
+                    state.bomb_y + self.consts.BOMB_SIZE[1] > self.consts.PLAYER_Y
+                )
+            )
+        )
+
+        lives = jnp.where(player_hit, state.lives - 1, state.lives)
+        score = jnp.where(player_hit, 0, score)
+        bomb_active = jnp.logical_and(state.bomb_active, jnp.logical_not(player_hit))
+
+        # If player hit, start explosion
+        player_exploding = jnp.logical_or(state.player_exploding, player_hit)
+        explosion_timer = jnp.where(player_hit, 20, state.explosion_timer)
+
+        return state.replace(demons_alive=demons_alive, score=score, laser_active=laser_active,
+                             lives=lives, bomb_active=bomb_active,
+                             player_exploding=player_exploding, explosion_timer=explosion_timer)
 
     def render(self, state: DemonAttackState) -> jnp.ndarray:
         return self.renderer.render(state)
