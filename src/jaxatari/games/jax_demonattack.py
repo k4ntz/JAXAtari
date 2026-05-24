@@ -38,24 +38,48 @@ def _create_demon_sprite(consts: "DemonAttackConstants") -> jnp.ndarray:
 
 def _create_player_sprite(consts: "DemonAttackConstants") -> jnp.ndarray:
     mask = jnp.array([
-        [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
-        [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
-        [0, 0, 0, 1, 1, 1, 1, 0, 0, 0],
-        [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
-        [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
-        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-        [1, 1, 0, 1, 1, 1, 1, 0, 1, 1],
+        [0, 0, 1, 0, 1, 0, 0],
+        [0, 0, 1, 0, 1, 0, 0],
+        [0, 1, 1, 0, 1, 1, 0],
+        [1, 1, 1, 0, 1, 1, 1],
+        [1, 1, 0, 0, 0, 1, 1],
+        [1, 1, 0, 0, 0, 1, 1],
     ], dtype=jnp.uint8)
 
-    sprite = jnp.zeros((*consts.PLAYER_SIZE, 4), dtype=jnp.uint8)
     color = jnp.array((*consts.PLAYER_COLOR, 255), dtype=jnp.uint8)
-
-    # Center the 8x10 mask in the 8x12 sprite
-    start_col = (consts.PLAYER_SIZE[1] - 10) // 2
-
     mask_rgba = jnp.where(mask[:, :, None] == 1, color, jnp.zeros(4, dtype=jnp.uint8))
-    sprite = sprite.at[:, start_col:start_col + 10, :].set(mask_rgba)
+    sprite = jnp.zeros((*consts.PLAYER_SIZE, 4), dtype=jnp.uint8)
+    sprite = sprite.at[:].set(mask_rgba)
+
+    return sprite
+
+def _create_explosion_sprite(consts: "DemonAttackConstants") -> jnp.ndarray:
+    mask = jnp.array([
+        [1, 0, 0, 1, 0, 0, 1],
+        [0, 1, 0, 1, 0, 1, 0],
+        [0, 0, 1, 0, 1, 0, 0],
+        [1, 1, 0, 0, 0, 1, 1],
+        [0, 1, 0, 1, 0, 1, 0],
+        [1, 0, 1, 0, 1, 0, 1],
+    ], dtype=jnp.uint8)
+
+    color = jnp.array((*consts.PLAYER_COLOR, 255), dtype=jnp.uint8)
+    mask_rgba = jnp.where(mask[:, :, None] == 1, color, jnp.zeros(4, dtype=jnp.uint8))
+    sprite = jnp.zeros((*consts.PLAYER_SIZE, 4), dtype=jnp.uint8)
+    sprite = sprite.at[:].set(mask_rgba)
+
+    return sprite
+
+def _create_small_player_sprite(consts: "DemonAttackConstants") -> jnp.ndarray:
+    mask = jnp.array([
+        [0, 1, 0],
+        [1, 0, 1],
+    ], dtype=jnp.uint8)
+
+    sprite = jnp.zeros((2, 3, 4), dtype=jnp.uint8)
+    color = jnp.array((*consts.PLAYER_COLOR, 255), dtype=jnp.uint8)
+    mask_rgba = jnp.where(mask[:, :, None] == 1, color, jnp.zeros(4, dtype=jnp.uint8))
+    sprite = sprite.at[:].set(mask_rgba)
 
     return sprite
 
@@ -89,27 +113,6 @@ def _create_digit_sprites(consts: "DemonAttackConstants") -> jnp.ndarray:
 
     return jnp.array(digits)
 
-def _create_explosion_sprite(consts: "DemonAttackConstants") -> jnp.ndarray:
-    mask = jnp.array([
-        [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
-        [1, 0, 0, 1, 1, 1, 1, 0, 0, 1],
-        [0, 1, 1, 0, 1, 1, 0, 1, 1, 0],
-        [0, 0, 1, 1, 0, 0, 1, 1, 0, 0],
-        [1, 1, 0, 0, 1, 1, 0, 0, 1, 1],
-        [0, 1, 1, 0, 1, 1, 0, 1, 1, 0],
-        [1, 0, 0, 1, 1, 1, 1, 0, 0, 1],
-        [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
-    ], dtype=jnp.uint8)
-
-    sprite = jnp.zeros((*consts.PLAYER_SIZE, 4), dtype=jnp.uint8)
-    color = jnp.array((*consts.PLAYER_COLOR, 255), dtype=jnp.uint8)
-
-    start_col = (consts.PLAYER_SIZE[1] - 10) // 2
-    mask_rgba = jnp.where(mask[:, :, None] == 1, color, jnp.zeros(4, dtype=jnp.uint8))
-    sprite = sprite.at[:, start_col:start_col + 10, :].set(mask_rgba)
-
-    return sprite
-
 def _get_default_asset_config() -> tuple:
     return (
         {'name': 'background', 'type': 'procedural'},
@@ -119,6 +122,8 @@ def _get_default_asset_config() -> tuple:
         {'name': 'projectile_demon', 'type': 'procedural'},
         {'name': 'explosion', 'type': 'procedural'},
         {'name': 'score_digits', 'type': 'procedural'},
+        {'name': 'lives_bg', 'type': 'procedural'},
+        {'name': 'small_player', 'type': 'procedural'},
     )
 
 class DemonAttackConstants(struct.PyTreeNode):
@@ -132,11 +137,15 @@ class DemonAttackConstants(struct.PyTreeNode):
     BOMB_SPEED: int = struct.field(pytree_node=False, default=2)
 
     # Coordinates & Sizes
-    PLAYER_Y: int = struct.field(pytree_node=False, default=184)
-    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 12))
+    PLAYER_Y: int = struct.field(pytree_node=False, default=182)
+    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(6, 7))
     DEMON_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 12))
     LASER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(1, 6))
     BOMB_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(2, 4))
+    LIVES_X: int = struct.field(pytree_node=False, default=16)
+    LIVES_Y: int = struct.field(pytree_node=False, default=194)
+    LIVES_BG_HEIGHT: int = struct.field(pytree_node=False, default=16)
+    LIVES_SPACING: int = struct.field(pytree_node=False, default=5)
 
     # Boundaries
     PLAYER_MIN_X: int = struct.field(pytree_node=False, default=16)
@@ -151,6 +160,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     LASER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(252, 252, 252))
     BOMB_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(252, 252, 252))
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(252, 252, 252))
+    LIVES_BG_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(45, 50, 184))
 
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
@@ -497,6 +507,11 @@ class DemonAttackRenderer(JAXGameRenderer):
         bomb_sprite = _create_projectile_sprite(self.consts.BOMB_SIZE, self.consts.BOMB_COLOR)
         explosion_sprite = _create_explosion_sprite(self.consts)
         digit_sprites = _create_digit_sprites(self.consts)
+        small_player_sprite = _create_small_player_sprite(self.consts)
+
+        lives_bg_sprite = jnp.zeros((self.consts.LIVES_BG_HEIGHT, 160, 4), dtype=jnp.uint8)
+        lives_bg_sprite = lives_bg_sprite.at[:, :, :3].set(jnp.array(self.consts.LIVES_BG_COLOR))
+        lives_bg_sprite = lives_bg_sprite.at[:, :, 3].set(255)
 
         # Update asset config with procedural data
         asset_config = [
@@ -507,6 +522,8 @@ class DemonAttackRenderer(JAXGameRenderer):
             {'name': 'projectile_demon', 'type': 'procedural', 'data': bomb_sprite},
             {'name': 'explosion', 'type': 'procedural', 'data': explosion_sprite},
             {'name': 'score_digits', 'type': 'procedural', 'data': digit_sprites},
+            {'name': 'lives_bg', 'type': 'procedural', 'data': lives_bg_sprite},
+            {'name': 'small_player', 'type': 'procedural', 'data': small_player_sprite},
         ]
 
         # Bake assets
@@ -572,5 +589,19 @@ class DemonAttackRenderer(JAXGameRenderer):
 
         raster = self.jr.render_label_selective(raster, 70, 10, score_digits, digit_masks,
                                                 start_index, num_to_render, spacing=8)
+
+        # Render Lives Indicator
+        lives_bg_mask = self.SHAPE_MASKS["lives_bg"]
+        raster = self.jr.render_at(raster, 0, self.consts.LIVES_Y, lives_bg_mask)
+        player_icon = self.SHAPE_MASKS["small_player"]
+
+        def render_life_icon(i, r):
+            return jax.lax.cond(
+                i < state.lives,
+                lambda: self.jr.render_at(r, self.consts.LIVES_X + i * self.consts.LIVES_SPACING, self.consts.LIVES_Y, player_icon),
+                lambda: r
+            )
+        
+        raster = jax.lax.fori_loop(0, 6, render_life_icon, raster)
 
         return self.jr.render_from_palette(raster, self.PALETTE)
