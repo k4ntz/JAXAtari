@@ -224,7 +224,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             bomb_y=jnp.array(0, dtype=jnp.int32),
             bomb_active=jnp.array(False, dtype=jnp.bool_),
             score=jnp.array(0, dtype=jnp.int32),
-            lives=jnp.array(3, dtype=jnp.int32),
+            lives=jnp.array(6, dtype=jnp.int32),
             player_exploding=jnp.array(False, dtype=jnp.bool_),
             explosion_timer=jnp.array(0, dtype=jnp.int32),
             step_counter=jnp.array(0, dtype=jnp.int32),
