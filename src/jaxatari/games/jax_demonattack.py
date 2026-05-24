@@ -379,7 +379,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
         lives = jnp.where(player_hit, state.lives - 1, state.lives)
-        score = jnp.where(player_hit, 0, score)
         bomb_active = jnp.logical_and(state.bomb_active, jnp.logical_not(player_hit))
 
         # If player hit, start explosion
