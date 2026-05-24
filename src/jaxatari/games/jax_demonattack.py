@@ -77,7 +77,7 @@ def _create_small_player_sprite(consts: "DemonAttackConstants") -> jnp.ndarray:
     ], dtype=jnp.uint8)
 
     sprite = jnp.zeros((2, 3, 4), dtype=jnp.uint8)
-    color = jnp.array((*consts.PLAYER_COLOR, 255), dtype=jnp.uint8)
+    color = jnp.array((*consts.SMALL_PLAYER_COLOR, 255), dtype=jnp.uint8)
     mask_rgba = jnp.where(mask[:, :, None] == 1, color, jnp.zeros(4, dtype=jnp.uint8))
     sprite = sprite.at[:].set(mask_rgba)
 
@@ -140,12 +140,12 @@ class DemonAttackConstants(struct.PyTreeNode):
     PLAYER_Y: int = struct.field(pytree_node=False, default=182)
     PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(6, 7))
     DEMON_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 12))
-    LASER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(1, 6))
-    BOMB_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(2, 4))
+    LASER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
+    BOMB_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
     LIVES_X: int = struct.field(pytree_node=False, default=16)
     LIVES_Y: int = struct.field(pytree_node=False, default=194)
     LIVES_BG_HEIGHT: int = struct.field(pytree_node=False, default=16)
-    LIVES_SPACING: int = struct.field(pytree_node=False, default=5)
+    LIVES_SPACING: int = struct.field(pytree_node=False, default=6)
 
     # Boundaries
     PLAYER_MIN_X: int = struct.field(pytree_node=False, default=16)
@@ -155,12 +155,13 @@ class DemonAttackConstants(struct.PyTreeNode):
 
     # Colors
     BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0))
-    PLAYER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(184, 70, 162))
+    PLAYER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(206, 49, 173))
+    SMALL_PLAYER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(242, 128, 135))
     DEMON_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(184, 70, 162))
-    LASER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(252, 252, 252))
-    BOMB_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(252, 252, 252))
-    SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(252, 252, 252))
-    LIVES_BG_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(45, 50, 184))
+    LASER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(252, 124, 254))
+    BOMB_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(251, 135, 140))
+    SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(194, 169, 53))
+    LIVES_BG_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 176))
 
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
@@ -295,9 +296,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         should_fire = jnp.logical_and(fire, jnp.logical_not(state.laser_active))
 
-        laser_x = jax.lax.select(should_fire, state.player_x + self.consts.PLAYER_SIZE[0] // 2, state.laser_x)
+        laser_x = jax.lax.select(should_fire, state.player_x + self.consts.PLAYER_SIZE[1] // 2, state.laser_x)
         laser_y = jax.lax.select(should_fire,
-                                 jnp.array(self.consts.PLAYER_Y - self.consts.LASER_SIZE[1], dtype=jnp.int32),
+                                 jnp.array(self.consts.PLAYER_Y - self.consts.LASER_SIZE[0], dtype=jnp.int32),
                                  state.laser_y)
         laser_active = jnp.logical_or(should_fire, state.laser_active)
 
@@ -558,11 +559,17 @@ class DemonAttackRenderer(JAXGameRenderer):
 
         # Render laser
         laser_mask = self.SHAPE_MASKS["projectile_player"]
-        raster = jax.lax.cond(
+        laser_render_x = jax.lax.select(
             state.laser_active,
-            lambda: self.jr.render_at(raster, state.laser_x, state.laser_y, laser_mask),
-            lambda: raster
+            state.laser_x,
+            state.player_x + self.consts.PLAYER_SIZE[1] // 2
         )
+        laser_render_y = jax.lax.select(
+            state.laser_active,
+            state.laser_y,
+            self.consts.PLAYER_Y - self.consts.LASER_SIZE[1] + 2
+        )
+        raster = self.jr.render_at(raster, laser_render_x, laser_render_y, laser_mask)
 
         # Render bomb
         bomb_mask = self.SHAPE_MASKS["projectile_demon"]
