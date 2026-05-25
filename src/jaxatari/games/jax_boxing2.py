@@ -321,20 +321,10 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         # New cooldown (always decrement if > 0)
         dec_cooldown = jnp.maximum(curr_cooldown - 1, 0)
         
-        # Determine target arm if we start a punch based on Y relative position
-        # For White (idx 0), facing Right: if above opponent, use bottom arm (1: right)
-        # For Black (idx 1), facing Left: if above opponent, use bottom arm (0: left)
-        # So we invert the arm selection for Black.
-        target_arm = jnp.where(state.pos[idx, 1] < state.pos[opponent_idx, 1], 1, 0)
-        target_arm = jnp.where(idx == 1, 1 - target_arm, target_arm)
-        
-        # Alternating logic: if holding fire, we might want to alternate.
-        # But the original game also allows picking the best arm.
-        # The user said "following the same logic as the other player".
-        # Let's keep it simple and pick the best arm for now, but fix the black boxer's inversion.
-        # To truly follow the original, we should probably toggle.
-        # Let's implement toggling to match the description "automatically alternates".
-        next_arm = 1 - state.punch_arm[idx]
+        # Determine target arm based on Y relative position:
+        # Punch with top most arm (0) if opponent is above (opponent Y < player Y),
+        # bottom arm (1) in the contrary case.
+        target_arm = jnp.where(state.pos[opponent_idx, 1] < state.pos[idx, 1], 0, 1)
         
         def next_state_logic():
             # If idle and ready
@@ -348,10 +338,8 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             new_s = jnp.where(start_punch, 1, 
                              jnp.where(progressing, curr_state + 1, 0))
             
-            # Use next_arm for alternation if we just finished a punch and FIRE is still held,
-            # or just use target_arm for the first punch.
-            # Actually, the simplest alternating logic is to toggle every time a punch starts.
-            new_a = jnp.where(start_punch, next_arm, state.punch_arm[idx])
+            # Use the target arm computed based on the opponent's relative vertical position
+            new_a = jnp.where(start_punch, target_arm, state.punch_arm[idx])
             
             new_h = jnp.where(start_punch, False, state.has_hit[idx])
             
@@ -448,7 +436,13 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         def check_hit(attacker_idx, defender_idx, s):
             a_pos = s.pos[attacker_idx]
             d_pos = s.pos[defender_idx]
-            dist = jnp.linalg.norm(a_pos - d_pos)
+            
+            # Separate horizontal and vertical distance checks for axis-aligned punch geometry
+            h_dist = jnp.abs(a_pos[0] - d_pos[0])
+            
+            # Top arm is at y, bottom arm is at y + 34. Opponent body is [d_pos[1], d_pos[1] + 47].
+            punch_y = jnp.where(s.punch_arm[attacker_idx] == 0, a_pos[1], a_pos[1] + 34)
+            in_vert_range = jnp.logical_and(punch_y >= d_pos[1], punch_y <= d_pos[1] + 47)
             
             p_state = s.punch_state[attacker_idx]
             not_hit_yet = jnp.logical_not(s.has_hit[attacker_idx])
@@ -464,16 +458,16 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             # Power states: (10, 11, 12)
             is_power_state = jnp.isin(p_state, jnp.array([10, 11, 12]))
 
-            # We only register a Jab if we are in the jab range 
+            # We only register a Jab if we are in the horizontal jab range 
             # (and not too close, as that would be a Power Punch opportunity)
             is_jab = jnp.logical_and(is_jab_state, 
-                                     jnp.logical_and(dist < self.consts.JAB_DIST, dist >= self.consts.POWER_DIST))
+                                     jnp.logical_and(h_dist < self.consts.JAB_DIST, h_dist >= self.consts.POWER_DIST))
             
-            # We only register a Power Punch if we are in power range
-            is_power = jnp.logical_and(is_power_state, dist < self.consts.POWER_DIST)
+            # We only register a Power Punch if we are in horizontal power range
+            is_power = jnp.logical_and(is_power_state, h_dist < self.consts.POWER_DIST)
             
             valid_hit = jnp.logical_and(jnp.logical_or(is_jab, is_power), 
-                                        jnp.logical_and(not_hit_yet, d_not_stunned))
+                                         jnp.logical_and(in_vert_range, jnp.logical_and(not_hit_yet, d_not_stunned)))
             
             points = jnp.where(valid_hit, jnp.where(is_power, 2, 1), 0)
             
@@ -560,7 +554,9 @@ class BoxingRenderer(JAXGameRenderer):
         }
         self.black_masks = {
             "body": self.SHAPE_MASKS["black_main_body"],
-            "stunned": self.SHAPE_MASKS["black_stunned"],
+            # black_stunned.npy is saved facing Left by default, so we pre-flip it horizontally
+            # here to make it face Right, consistent with all other boxer assets.
+            "stunned": self.SHAPE_MASKS["black_stunned"][:, ::-1],
             "top_arm": [
                 self.SHAPE_MASKS["black_top_arm_idle"],
                 self.SHAPE_MASKS["black_top_arm_retracted"],
