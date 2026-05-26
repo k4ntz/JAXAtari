@@ -34,3 +34,26 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     # TODO: Returntype needs to be altered to match actual implementation
     def action_space(self) -> spaces.Discrete:
         pass
+
+    # TODO: Returntype needs to be altered to match actual implementation
+    def observation_space(self) -> spaces.Dict:
+        pass
+
+    # TODO: Returntype needs to be altered to match actual implementation
+    def image_space(self) -> spaces.Box:
+        pass 
+
+    def _get_observation(self, state: CrazyClimberState) -> CrazyClimberObservation:
+        pass
+    
+    def obs_to_flat_array(self, obs: CrazyClimberObservation) -> jnp.ndarray:
+        pass
+
+    def _get_info(self, state: CrazyClimberState) -> CrazyClimberInfo:
+        pass
+
+    def _get_reward(self, previous_state: CrazyClimberState, state: CrazyClimberState) -> float:
+        pass
+
+    def _get_done(self, state: CrazyClimberState) -> bool:
+        pass
