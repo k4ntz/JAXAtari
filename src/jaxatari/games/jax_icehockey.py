@@ -19,15 +19,80 @@ from jaxatari.modification import AutoDerivedConstants
 class IceHockeyConstants(AutoDerivedConstants):
     # This structure holds all static, non-learnable parameters of the game, 
     # such as screen dimensions, player speed, or colors.
-    pass
+    MAX_SHOOTING_ANGLE: int
+    PLAYER_SPEED: float
+    PUCK_SPEED: float
+    MIN_VERTICAL_DISTANCE: float
+    FRAMES_TACKLED: int = 60
+    MAX_PUCK_SPEED: float
+    PUCK_SPEED_DECAY: float
+    TIME_LIMIT: int
+    MIN_SHOOTING_INTERVAL: int # = shooting animation
+    FACE_OFF_FRAMES: int # number of frames during which the game is in face-off mode, where players are reset to the center and cannot move
+    MAX_PUSH_DISTANCE: float # front player can onle be pushed until this point
 
 @struct.dataclass
 class IceHockeyState:
-    # This is the most critical component. It holds all dynamic variables that 
-    # define the current state of the game (e.g., player position, score, ball velocity). 
-    # The values inside the state are what changes inside the steps and it is always
-    # part of the input and the return of the step function.
-    pass
+    player_state: PlayerState
+    enemy_state: EnemyState
+    puck_state: PuckState
+    counter: chex.Array
+    animator_state: AnimatorState
+    game_state: GameState
+
+
+@struct.dataclass
+class GameState:
+    pause_counter: chex.Array  # delay between restart of game
+    player_score: chex.Array  # The score line within the current set (goes up in increments of 1, instead of traditional tennis counting)
+    enemy_score: chex.Array
+    is_finished: chex.Array  # True if the game is finished (Player or enemy has won the game)  
+    remaining_time: chex.Array
+    is_faceoff: chex.Array # during the initial frames, the game is freezed
+    goal_scored: chex.Array # True for the frame where a goal is scored, the game is freezed
+    is_finished: chex.Array # True if the game is finished (Player or enemy has won the game)
+
+
+@struct.dataclass
+class PlayerState:
+    player1: CharacterState
+    player2: CharacterState
+    active_character: chex.Array # 0 for player 1, 1 for player 2
+
+
+@struct.dataclass
+class EnemyState:
+    enemy1: CharacterState
+    enemy2: CharacterState
+    active_character: chex.Array # 0 for enemy 1, 1 for enemy 2
+
+
+@struct.dataclass
+class CharacterState:
+    is_tackled: chex.Array
+    position: chex.Array # (x,y) position of player 1
+    orientation: chex.Array # 0 left, 1 right, player 1
+    has_puck: chex.Array # True if the player has the puck
+    shooting_cooldown: chex.Array
+
+
+@struct.dataclass
+class PuckState:
+    position: chex.Array # (x,y) position of the puck
+    velocity: chex.Array # (x,y) velocity of the puck
+    direction: chex.Array # 32 possible directions, between 45 degrees left and 45 degrees right of the stick orientation when shooting
+    position_stick: chex.Array # 32 possible directions (the stick moving from left to right when attached to the stick)
+
+
+@struct.dataclass
+class AnimatorState:
+    player_frame: chex.Array
+    enemy_frame: chex.Array
+    player_stick_frame: chex.Array
+    player_stick_animation: chex.Array
+    enemy_stick_frame: chex.Array
+    enemy_stick_animation: chex.Array
+
 
 @struct.dataclass
 class IceHockeyInfo:
