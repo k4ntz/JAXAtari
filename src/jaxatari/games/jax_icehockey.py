@@ -23,23 +23,13 @@ class IceHockeyConstants(AutoDerivedConstants):
     PLAYER_SPEED: float
     PUCK_SPEED: float
     MIN_VERTICAL_DISTANCE: float
-    FRAMES_TACKLED: int = 60
     MAX_PUCK_SPEED: float
     PUCK_SPEED_DECAY: float
     TIME_LIMIT: int
     MIN_SHOOTING_INTERVAL: int # = shooting animation
     FACE_OFF_FRAMES: int # number of frames during which the game is in face-off mode, where players are reset to the center and cannot move
     MAX_PUSH_DISTANCE: float # front player can onle be pushed until this point
-
-@struct.dataclass
-class IceHockeyState:
-    player_state: PlayerState
-    enemy_state: EnemyState
-    puck_state: PuckState
-    counter: chex.Array
-    animator_state: AnimatorState
-    game_state: GameState
-
+    FRAMES_TACKLED: int = 60
 
 @struct.dataclass
 class GameState:
@@ -51,21 +41,6 @@ class GameState:
     is_faceoff: chex.Array # during the initial frames, the game is freezed
     goal_scored: chex.Array # True for the frame where a goal is scored, the game is freezed
     is_finished: chex.Array # True if the game is finished (Player or enemy has won the game)
-
-
-@struct.dataclass
-class PlayerState:
-    player1: CharacterState
-    player2: CharacterState
-    active_character: chex.Array # 0 for player 1, 1 for player 2
-
-
-@struct.dataclass
-class EnemyState:
-    enemy1: CharacterState
-    enemy2: CharacterState
-    active_character: chex.Array # 0 for enemy 1, 1 for enemy 2
-
 
 @struct.dataclass
 class CharacterState:
@@ -93,6 +68,26 @@ class AnimatorState:
     enemy_stick_frame: chex.Array
     enemy_stick_animation: chex.Array
 
+@struct.dataclass
+class EnemyState:
+    enemy1: CharacterState
+    enemy2: CharacterState
+    active_character: chex.Array # 0 for enemy 1, 1 for enemy 2
+
+@struct.dataclass
+class PlayerState:
+    player1: CharacterState
+    player2: CharacterState
+    active_character: chex.Array # 0 for player 1, 1 for player 2
+
+@struct.dataclass
+class IceHockeyState:
+    player_state: PlayerState
+    enemy_state: EnemyState
+    puck_state: PuckState
+    counter: chex.Array
+    animator_state: AnimatorState
+    game_state: GameState
 
 @struct.dataclass
 class IceHockeyInfo:
