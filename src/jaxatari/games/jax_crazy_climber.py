@@ -1,3 +1,5 @@
+from functools import partial
+
 from flax import struct
 
 import jax
@@ -57,3 +59,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
     def _get_done(self, state: CrazyClimberState) -> bool:
         pass
+
+    class CrazyClimberRenderer(JAXGameRenderer):
+        def __init__(self, consts: CrazyClimberConstants = None, config: render_utils.RendererConfig = None):
+            super().__init__(consts)
+            self.consts = consts or CrazyClimberConstants()
+
+        @partial(jax.jit, static_argnums=(0,))
+        def render(self, state: CrazyClimberState) -> jnp.ndarray:
+            pass
