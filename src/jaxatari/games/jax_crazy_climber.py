@@ -1,10 +1,13 @@
 from functools import partial
+import os
 
 from flax import struct
 
 import jax
 import jax.numpy as jnp
 
+from jaxatari.games.jax_pong import _create_wall_sprite
+from jaxatari.renderers import JAXGameRenderer
 from jaxatari.spaces import spaces
 from jaxatari.environment import JaxEnvironment
 from jaxatari.rendering import jax_rendering_utils as render_utils
@@ -20,10 +23,14 @@ class CrazyClimberObservation(struct.PyTreeNode):
 class CrazyClimberInfo(struct.PyTreeNode):
     pass
 
+def _get_default_asset_config() -> tuple:
+    return (
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+    )
+
 class CrazyClimberConstants(struct.PyTreeNode):
-    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0))
-    PLAYER_X: int = struct.field(pytree_node=False, default=140)
-    PLAYER_Y: int = struct.field(pytree_node=False, default=100)
+    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0)),
+    ASSET_CONFIG: tuple = _get_default_asset_config()
 
 class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation, CrazyClimberInfo, CrazyClimberConstants]):
     def __init__(self, consts: CrazyClimberConstants):
@@ -36,7 +43,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         pass
 
     def render(self, state: CrazyClimberState) -> jnp.ndarray:
-        pass
+        return self.renderer.render(state)
 
     # TODO: Returntype needs to be altered to match actual implementation
     def action_space(self) -> spaces.Discrete:
@@ -69,18 +76,29 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def __init__(self, consts: CrazyClimberConstants = None, config: render_utils.RendererConfig = None):
             super().__init__(consts)
             self.consts = consts or CrazyClimberConstants()
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(210, 160),
+                channels=3,
+                downscale=None
+            )
+            self.jr = render_utils.JaxRenderingUtils(self.config)
+            
+            final_asset_config = list(self.consts.ASSET_CONFIG)
 
-            self.jr = render_utils.JAXRenderingUtils(self.config)
+            sprite_path = os.path.join(os.path.dirname(__file__), "sprites", "crazy_climber")
+
+            (
+                self.PALETTE,
+                self.SHAPE_MASKS,
+                self.BACKGROUND,
+                self.COLOR_TO_ID,
+                self.FLIP_OFFSETS
+            ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
         @partial(jax.jit, static_argnums=(0,))
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
             raster = self.jr.create_object_raster(self.BACKGROUND)
 
-            player_mask = self.SHAPE_MASKS["player"]
-            raster = self.jr.render_at(
-                raster,
-                self.consts.PLAYER_X,
-                self.consts.PLAYER_Y, 
-                jnp.round(state.player_y).astype(jnp.int32),
-                player_mask,
-            )
+            
+
+            return self.jr.render_from_palette(raster, self.PALETTE)
