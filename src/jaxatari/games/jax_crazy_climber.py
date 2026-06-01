@@ -7,6 +7,9 @@ import jax.numpy as jnp
 
 from jaxatari.spaces import spaces
 from jaxatari.environment import JaxEnvironment
+from jaxatari.rendering import jax_rendering_utils as render_utils
+from typing import Tuple
+import jaxatari.spaces as spaces
 
 class CrazyClimberState(struct.PyTreeNode):
     pass
@@ -18,7 +21,9 @@ class CrazyClimberInfo(struct.PyTreeNode):
     pass
 
 class CrazyClimberConstants(struct.PyTreeNode):
-    pass
+    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0))
+    PLAYER_X: int = struct.field(pytree_node=False, default=140)
+    PLAYER_Y: int = struct.field(pytree_node=False, default=100)
 
 class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation, CrazyClimberInfo, CrazyClimberConstants]):
     def __init__(self, consts: CrazyClimberConstants):
@@ -65,6 +70,17 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             super().__init__(consts)
             self.consts = consts or CrazyClimberConstants()
 
+            self.jr = render_utils.JAXRenderingUtils(self.config)
+
         @partial(jax.jit, static_argnums=(0,))
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
-            pass
+            raster = self.jr.create_object_raster(self.BACKGROUND)
+
+            player_mask = self.SHAPE_MASKS["player"]
+            raster = self.jr.render_at(
+                raster,
+                self.consts.PLAYER_X,
+                self.consts.PLAYER_Y, 
+                jnp.round(state.player_y).astype(jnp.int32),
+                player_mask,
+            )
