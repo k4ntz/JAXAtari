@@ -152,6 +152,8 @@ class DemonAttackConstants(struct.PyTreeNode):
     PLAYER_MAX_X: int = struct.field(pytree_node=False, default=136)
     DEMON_MIN_X: int = struct.field(pytree_node=False, default=16)
     DEMON_MAX_X: int = struct.field(pytree_node=False, default=136)
+    DEMON_MIN_Y: int = struct.field(pytree_node=False, default=20)   # AMAN: top boundary for demons
+    DEMON_MAX_Y: int = struct.field(pytree_node=False, default=160)  # AMAN: bottom boundary for demons
 
     # Colors
     BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0))
@@ -173,7 +175,8 @@ class DemonAttackState(struct.PyTreeNode):
 
     demons_x: chex.Array
     demons_y: chex.Array  # Shape: (MAX_DEMONS,)
-    demons_dir: chex.Array  # Shape: (MAX_DEMONS,) 1 for right, -1 for left
+    demons_dir: chex.Array  # Shape: (MAX_DEMONS,) 1 for right, -1 for left 
+    demons_y_dir: chex.Array  # Shape: (MAX_DEMONS,) 1 for down, -1 for up (if we want vertical movement)
     demons_alive: chex.Array  # Shape: (MAX_DEMONS,) bool
 
     bomb_x: chex.Array
@@ -220,6 +223,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_x=jnp.linspace(20, 120, self.consts.MAX_DEMONS, dtype=jnp.int32),
             demons_y=jnp.full((self.consts.MAX_DEMONS,), 40, dtype=jnp.int32),
             demons_dir=jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.int32),
+            demons_y_dir=jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.int32),  # AMAN: all demons start moving down
             demons_alive=jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
             bomb_x=jnp.array(0, dtype=jnp.int32),
             bomb_y=jnp.array(0, dtype=jnp.int32),
@@ -311,20 +315,40 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return state.replace(laser_x=laser_x, laser_y=laser_y, laser_active=laser_active)
 
     def _demons_step(self, state: DemonAttackState) -> DemonAttackState:
-        # Simple demon movement: move horizontally, bounce at edges
+        # AMAN: Horizontal movement (Fabian's original)
         new_x = state.demons_x + state.demons_dir * self.consts.DEMON_SPEED
-
         at_right_edge = new_x >= self.consts.DEMON_MAX_X
         at_left_edge = new_x <= self.consts.DEMON_MIN_X
-
         new_dir = jnp.where(at_right_edge, -1, jnp.where(at_left_edge, 1, state.demons_dir))
         new_x = jnp.clip(new_x, self.consts.DEMON_MIN_X, self.consts.DEMON_MAX_X)
 
-        # Respawn demons if all are dead
-        all_dead = jnp.logical_not(jnp.any(state.demons_alive))
-        demons_alive = jnp.where(all_dead, True, state.demons_alive)
+        # AMAN: Vertical movement — demons bounce between top and bottom boundaries
+        new_y = state.demons_y + state.demons_y_dir * self.consts.DEMON_SPEED
+        at_bottom_edge = new_y >= self.consts.DEMON_MAX_Y
+        at_top_edge = new_y <= self.consts.DEMON_MIN_Y
+        new_y_dir = jnp.where(at_bottom_edge, -1, jnp.where(at_top_edge, 1, state.demons_y_dir))
+        new_y = jnp.clip(new_y, self.consts.DEMON_MIN_Y, self.consts.DEMON_MAX_Y)
 
-        return state.replace(demons_x=new_x, demons_dir=new_dir, demons_alive=demons_alive)
+        # AMAN: Individual respawn — dead demon respawns at random x, bottom of demon area
+        key, spawn_key = jax.random.split(state.key)
+        spawn_x = jax.random.randint(spawn_key, (self.consts.MAX_DEMONS,),
+                                      self.consts.DEMON_MIN_X, self.consts.DEMON_MAX_X)
+
+        new_x = jnp.where(state.demons_alive, new_x, spawn_x)
+        new_y = jnp.where(state.demons_alive, new_y,
+                          jnp.full((self.consts.MAX_DEMONS,), self.consts.DEMON_MAX_Y, dtype=jnp.int32))
+        new_y_dir = jnp.where(state.demons_alive, new_y_dir,
+                               jnp.full((self.consts.MAX_DEMONS,), -1, dtype=jnp.int32))  # AMAN: spawn moving up
+        demons_alive = jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.bool_)  # AMAN: respawn immediately
+
+        return state.replace(
+            demons_x=new_x,
+            demons_y=new_y,
+            demons_dir=new_dir,
+            demons_y_dir=new_y_dir,  # AMAN: update vertical direction
+            demons_alive=demons_alive,
+            key=key
+        )
 
     def _bomb_step(self, state: DemonAttackState) -> DemonAttackState:
         # Drop bomb from a random living demon if no bomb is active
