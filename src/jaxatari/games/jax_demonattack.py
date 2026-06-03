@@ -101,7 +101,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     BOMB_SPEED: int = struct.field(pytree_node=False, default=2)
 
     # Coordinates & Sizes
-    PLAYER_Y: int = struct.field(pytree_node=False, default=182)
+    PLAYER_Y: int = struct.field(pytree_node=False, default=174)
     PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(12, 7)) # (height, width)
     DEMON_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(9, 18)) # (height, width)
     LASER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1)) # (height, width)
