@@ -322,14 +322,15 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         new_dir = jnp.where(at_right_edge, -1, jnp.where(at_left_edge, 1, state.demons_dir))
         new_x = jnp.clip(new_x, self.consts.DEMON_MIN_X, self.consts.DEMON_MAX_X)
 
-        #  Vertical movement — demons bounce between top and bottom boundaries
+        #  Vertical movement
+        
         new_y = state.demons_y + state.demons_y_dir * self.consts.DEMON_SPEED
         at_bottom_edge = new_y >= self.consts.DEMON_MAX_Y
         at_top_edge = new_y <= self.consts.DEMON_MIN_Y
         new_y_dir = jnp.where(at_bottom_edge, -1, jnp.where(at_top_edge, 1, state.demons_y_dir))
         new_y = jnp.clip(new_y, self.consts.DEMON_MIN_Y, self.consts.DEMON_MAX_Y)
 
-        #  Individual respawn — dead demon respawns at random x, bottom of demon area
+        #  Respawning dead demon respawns at random x, bottom of demon area
         key, spawn_key = jax.random.split(state.key)
         spawn_x = jax.random.randint(spawn_key, (self.consts.MAX_DEMONS,),
                                       self.consts.DEMON_MIN_X, self.consts.DEMON_MAX_X)
@@ -345,7 +346,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_x=new_x,
             demons_y=new_y,
             demons_dir=new_dir,
-            demons_y_dir=new_y_dir,  # update vertical direction
+            demons_y_dir=new_y_dir,  
             demons_alive=demons_alive,
             key=key
         )
