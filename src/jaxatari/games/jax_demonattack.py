@@ -272,7 +272,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_x=jnp.asarray(self.consts.WAVE_X_TABLE[0], dtype=jnp.int32),
             demons_y=jnp.asarray(self.consts.WAVE_Y_TABLE[0], dtype=jnp.int32),
             demons_dir=jnp.asarray(self.consts.WAVE_DIR_TABLE[0], dtype=jnp.int32),
-            demons_y_dir=jnp.ones((self.consts.WAVE_DIR_TABLE[0],), dtype=jnp.int32),
+            demons_y_dir=jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.int32),
             demons_alive=slot_ids < initial_alive_count,
             bomb_x=jnp.array(0, dtype=jnp.int32),
             bomb_y=jnp.array(0, dtype=jnp.int32),
@@ -361,7 +361,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         laser_active = jnp.logical_or(should_fire, state.laser_active)
 
         # Move laser
-        laser_y = jax.lax.select(laser_active, laser_y - self.consts.WAVE_LASER_SPEED_TABLE, laser_y)
+        laser_speed = self._wave_int_table(self.consts.WAVE_LASER_SPEED_TABLE, state.wave)
+        laser_y = jax.lax.select(laser_active, laser_y - laser_speed, laser_y)
 
         # Deactivate if out of bounds
         laser_active = jnp.logical_and(laser_active, laser_y > 0)
@@ -378,7 +379,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         new_x = jnp.clip(new_x, self.consts.DEMON_MIN_X, self.consts.DEMON_MAX_X)
 
         # Vertical movement
-        new_y = state.demons_y + state.demons_y_dir * self.consts.WAVE_DEMON_SPEED_TABLE
+        demon_speed = self._wave_int_table(self.consts.WAVE_DEMON_SPEED_TABLE, state.wave)
+        new_y = state.demons_y + state.demons_y_dir * demon_speed
         at_bottom_edge = new_y >= self.consts.DEMON_MAX_Y
         at_top_edge = new_y <= self.consts.DEMON_MIN_Y
         new_y_dir = jnp.where(at_bottom_edge, -1, jnp.where(at_top_edge, 1, state.demons_y_dir))
