@@ -148,12 +148,12 @@ class DemonAttackConstants(struct.PyTreeNode):
     LIVES_SPACING: int = struct.field(pytree_node=False, default=6)
 
     # Boundaries
-    PLAYER_MIN_X: int = struct.field(pytree_node=False, default=16)
-    PLAYER_MAX_X: int = struct.field(pytree_node=False, default=136)
-    DEMON_MIN_X: int = struct.field(pytree_node=False, default=16)
-    DEMON_MAX_X: int = struct.field(pytree_node=False, default=136)
+    PLAYER_MIN_X: int = struct.field(pytree_node=False, default=16) 
+    PLAYER_MAX_X: int = struct.field(pytree_node=False, default=136) 
+    DEMON_MIN_X: int = struct.field(pytree_node=False, default=16) # left boundary for demons
+    DEMON_MAX_X: int = struct.field(pytree_node=False, default=136) # right boundary for demons
     DEMON_MIN_Y: int = struct.field(pytree_node=False, default=20)   # top boundary for demons
-    DEMON_MAX_Y: int = struct.field(pytree_node=False, default=160)  # bottom boundary for demons
+    DEMON_MAX_Y: int = struct.field(pytree_node=False, default=100)  # bottom boundary for demons
 
     # Colors
     BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0))
@@ -223,7 +223,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_x=jnp.linspace(20, 120, self.consts.MAX_DEMONS, dtype=jnp.int32),
             demons_y=jnp.full((self.consts.MAX_DEMONS,), 40, dtype=jnp.int32),
             demons_dir=jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.int32),
-            demons_y_dir=jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.int32),  # all demons start moving down
+            demons_y_dir=jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.int32),  
             demons_alive=jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
             bomb_x=jnp.array(0, dtype=jnp.int32),
             bomb_y=jnp.array(0, dtype=jnp.int32),
@@ -315,22 +315,21 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return state.replace(laser_x=laser_x, laser_y=laser_y, laser_active=laser_active)
 
     def _demons_step(self, state: DemonAttackState) -> DemonAttackState:
-        # Horizontal movement 
+        # Horizontal movement
         new_x = state.demons_x + state.demons_dir * self.consts.DEMON_SPEED
         at_right_edge = new_x >= self.consts.DEMON_MAX_X
         at_left_edge = new_x <= self.consts.DEMON_MIN_X
         new_dir = jnp.where(at_right_edge, -1, jnp.where(at_left_edge, 1, state.demons_dir))
         new_x = jnp.clip(new_x, self.consts.DEMON_MIN_X, self.consts.DEMON_MAX_X)
 
-        #  Vertical movement
-        
+        # Vertical movement
         new_y = state.demons_y + state.demons_y_dir * self.consts.DEMON_SPEED
         at_bottom_edge = new_y >= self.consts.DEMON_MAX_Y
         at_top_edge = new_y <= self.consts.DEMON_MIN_Y
         new_y_dir = jnp.where(at_bottom_edge, -1, jnp.where(at_top_edge, 1, state.demons_y_dir))
         new_y = jnp.clip(new_y, self.consts.DEMON_MIN_Y, self.consts.DEMON_MAX_Y)
 
-        #  Respawning dead demon respawns at random x, bottom of demon area
+        # Respawning dead demon respawns at random x, bottom of demon area
         key, spawn_key = jax.random.split(state.key)
         spawn_x = jax.random.randint(spawn_key, (self.consts.MAX_DEMONS,),
                                       self.consts.DEMON_MIN_X, self.consts.DEMON_MAX_X)
@@ -339,8 +338,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         new_y = jnp.where(state.demons_alive, new_y,
                           jnp.full((self.consts.MAX_DEMONS,), self.consts.DEMON_MAX_Y, dtype=jnp.int32))
         new_y_dir = jnp.where(state.demons_alive, new_y_dir,
-                               jnp.full((self.consts.MAX_DEMONS,), -1, dtype=jnp.int32))  # spawn moving up
-        demons_alive = jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.bool_)  #  respawn immediately
+                               jnp.full((self.consts.MAX_DEMONS,), -1, dtype=jnp.int32)) # spawn moving up
+        demons_alive = jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.bool_) # respawn immediately
 
         return state.replace(
             demons_x=new_x,
