@@ -159,10 +159,10 @@ class DemonAttackConstants(struct.PyTreeNode):
     LASER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
     PLAYER_LASER_DEPTH: int = struct.field(pytree_node=False, default=2)
     BOMB_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
-    MAX_BUNKERS: int = struct.field(pytree_node=False, default=6)
+    MAX_BUNKERS: int = struct.field(pytree_node=False, default=3)
     BUNKER_X: int = struct.field(pytree_node=False, default=16)
     BUNKER_Y: int = struct.field(pytree_node=False, default=188)
-    BUNKER_SPACING: int = struct.field(pytree_node=False, default=22)
+    BUNKER_SPACING: int = struct.field(pytree_node=False, default=7)
 
     # Boundaries
     BOUNDARY = 16
