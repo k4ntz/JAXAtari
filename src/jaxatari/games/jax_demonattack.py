@@ -114,12 +114,10 @@ class DemonAttackConstants(struct.PyTreeNode):
     SPAWN_ANIM_FRAME_DURATION: int = struct.field(pytree_node=False, default=6)
     SPAWN_ANIM_WIDTH: int = struct.field(pytree_node=False, default=32)
     SPAWN_ANIM_X_OFFSET: int = struct.field(pytree_node=False, default=7)
-
-    # completing wave 84 freezes into a blank screen
-    MAX_ROM_WAVES: int = struct.field(pytree_node=False, default=84)
+    WAVE_TOTAL_DEMONS: int = struct.field(pytree_node=False, default=8)
+    MAX_ROM_WAVES: int = struct.field(pytree_node=False, default=84) # completing wave 84 freezes into a blank screen
     FREEZE_AFTER_MAX_ROM_WAVES: bool = struct.field(pytree_node=False, default=False)
     BLANK_SCREEN_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0))
-
     WAVE_X_TABLE: Tuple[Tuple[int, int, int], ...] = struct.field(
         pytree_node=False,
         default=((42, 76, 110), (42, 110, 76), (30, 76, 122),
@@ -134,10 +132,6 @@ class DemonAttackConstants(struct.PyTreeNode):
         pytree_node=False,
         default=((1, -1, 1), (1, -1, 1), (1, -1, 1),
                  (1, -1, 1), (1, 1, -1), (1, -1, 1))
-    )
-    WAVE_TOTAL_TABLE: Tuple[int, ...] = struct.field(
-        pytree_node=False,
-        default=(8, 8, 8, 8, 24, 24)
     )
     WAVE_SPRITE_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
@@ -246,9 +240,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _wave_float_table(self, table: Tuple, wave_pattern: chex.Array) -> chex.Array:
         return jnp.asarray(table, dtype=jnp.float32)[wave_pattern]
 
-    def _wave_total(self, wave_pattern: chex.Array) -> chex.Array:
-        return self._wave_int_table(self.consts.WAVE_TOTAL_TABLE, wave_pattern)
-
     def _wave_sprite_index(self, wave_pattern: chex.Array) -> chex.Array:
         return self._wave_int_table(self.consts.WAVE_SPRITE_TABLE, wave_pattern)
 
@@ -262,7 +253,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _start_wave(self, state: DemonAttackState, wave_number: chex.Array) -> DemonAttackState:
         wave_pattern, demons_x, demons_y, demons_dir = self._spawn_wave_values(wave_number)
 
-        wave_total = self._wave_total(wave_pattern)
+        wave_total = self.consts.WAVE_TOTAL_DEMONS
         spawn_anim_total = jnp.array(
             self.consts.SPAWN_ANIM_FRAMES * self.consts.SPAWN_ANIM_FRAME_DURATION,
             dtype=jnp.int32,
@@ -317,7 +308,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[DemonAttackObservation, DemonAttackState]:
         wave_number = jnp.array(0, dtype=jnp.int32)
         wave_pattern, demons_x, demons_y, demons_dir = self._spawn_wave_values(wave_number)
-        wave_total = self._wave_total(wave_pattern)
+        wave_total = self.consts.WAVE_TOTAL_DEMONS
         initial_alive_count = jnp.minimum(wave_total, jnp.array(1, dtype=jnp.int32))
         slot_ids = jnp.arange(self.consts.MAX_DEMONS)
         demons_alive = slot_ids < initial_alive_count
