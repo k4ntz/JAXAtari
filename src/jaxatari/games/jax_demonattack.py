@@ -236,15 +236,21 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return jnp.where(wave_number < 12, wave_number, 8 + jnp.mod(wave_number, 4))
 
     def _wave_int_table(self, table: Tuple, wave_pattern: chex.Array) -> chex.Array:
+        # Keep all wave-table indexing inside JAX arrays so jitted callers can use
+        # dynamic wave indices.
         return jnp.asarray(table, dtype=jnp.int32)[wave_pattern]
 
     def _wave_float_table(self, table: Tuple, wave_pattern: chex.Array) -> chex.Array:
+        # Float-valued tables are used for probabilities and must stay JAX-traceable.
         return jnp.asarray(table, dtype=jnp.float32)[wave_pattern]
 
     def _wave_sprite_index(self, wave_pattern: chex.Array) -> chex.Array:
+        # Table says which type of Demon Sprite appears in a wave
         return self._wave_int_table(self.consts.WAVE_SPRITE_TABLE, wave_pattern)
 
     def _spawn_wave_values(self, wave_number: chex.Array):
+        # Resolve every per-wave table once so reset, wave advance, and respawn use
+        # the same canonical formation for the current wave.
         wave_pattern = self._wave_pattern(wave_number)
         demons_x = self._wave_int_table(self.consts.WAVE_X_TABLE, wave_pattern)
         demons_y = self._wave_int_table(self.consts.WAVE_Y_TABLE, wave_pattern)
@@ -252,6 +258,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return wave_pattern, demons_x, demons_y, demons_dir
 
     def _start_wave(self, state: DemonAttackState, wave_number: chex.Array) -> DemonAttackState:
+        # A new wave starts with only the first demon visible
         wave_pattern, demons_x, demons_y, demons_dir = self._spawn_wave_values(wave_number)
 
         wave_total = self.consts.WAVE_TOTAL_DEMONS
@@ -260,15 +267,21 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             dtype=jnp.int32,
         )
 
+        # Slot arrays always have MAX_DEMONS entries, but only the first active slot
+        # participates in movement/collisions until later refills activate more.
         initial_alive_count = jnp.minimum(wave_total, jnp.array(1, dtype=jnp.int32))
         slot_ids = jnp.arange(self.consts.MAX_DEMONS)
         demons_alive = slot_ids < initial_alive_count
+
+        # If the wave has more demons queued, start the refill countdown now.
         spawn_timer = jnp.where(
             wave_total > initial_alive_count,
             jnp.array(self.consts.RESPAWN_DELAY, dtype=jnp.int32),
             jnp.array(0, dtype=jnp.int32),
         )
 
+        # Active starting demons play the spawn animation, then remain stationary for
+        # SPAWN_MOVE_PAUSE frames before movement and bomb drops are allowed.
         return state.replace(
             wave_number=wave_number,
             wave_pattern=wave_pattern,
@@ -642,11 +655,15 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return self._refill_or_advance_wave(state)
 
     def _refill_or_advance_wave(self, state: DemonAttackState) -> DemonAttackState:
+        # Called after collision handling: either refill an empty slot from the
+        # current wave queue or advance once every queued demon has been destroyed.
         _, spawn_x, spawn_y, spawn_dir = self._spawn_wave_values(state.wave_number)
 
         live_count = jnp.sum(state.demons_alive.astype(jnp.int32))
         max_living = jnp.array(self.consts.MAX_LIVING_DEMONS, dtype=jnp.int32)
 
+        # Refill is bounded by both the on-screen demon cap and the remaining wave
+        # budget. Only permits one new demon per refill event.
         screen_capacity = jnp.maximum(max_living - live_count, 0)
         wave_capacity = jnp.maximum(state.wave_total - state.wave_spawned, 0)
         can_spawn = state.spawn_timer <= 0
@@ -660,6 +677,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.array(0, dtype=jnp.int32),
         )
 
+        # Select the first dead slot
         eligible_dead_slots = jnp.logical_not(state.demons_alive)
         dead_slot_rank = jnp.cumsum(eligible_dead_slots.astype(jnp.int32)) - 1
         newly_spawned = jnp.logical_and(
@@ -672,6 +690,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             dtype=jnp.int32,
         )
 
+        # Newly refilled demons reset to the wave formation coordinates, replay the
+        # spawn animation, and then wait for the post-spawn movement pause.
         refilled_state = state.replace(
             demons_alive=jnp.logical_or(state.demons_alive, newly_spawned),
             demons_x=jnp.where(newly_spawned, spawn_x, state.demons_x),
@@ -688,6 +708,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             wave_spawned=state.wave_spawned + spawn_count,
         )
 
+        # The wave only finishes once its full demon budget has spawned and no
+        # active demons remain on screen.
         wave_finished = jnp.logical_and(
             refilled_state.wave_spawned >= refilled_state.wave_total,
             jnp.logical_not(jnp.any(refilled_state.demons_alive)),
