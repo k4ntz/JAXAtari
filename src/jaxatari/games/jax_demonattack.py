@@ -529,7 +529,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         bomb_y = jax.lax.select(bomb_active, bomb_y + bomb_speed, bomb_y)
 
         # Deactivate if out of bounds
-        bomb_active = jnp.logical_and(bomb_active, bomb_y < self.consts.HEIGHT)
+        bomb_active = jnp.logical_and(
+            bomb_active,
+            bomb_y < (self.consts.BUNKER_Y - self.consts.BOMB_SIZE[0])
+        )
 
         return state.replace(bomb_x=bomb_x, bomb_y=bomb_y, bomb_active=bomb_active, key=key)
 
