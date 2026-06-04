@@ -153,7 +153,8 @@ class DemonAttackConstants(struct.PyTreeNode):
     LASER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
     PLAYER_LASER_DEPTH: int = struct.field(pytree_node=False, default=2)
     BOMB_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
-    MAX_BUNKERS: int = struct.field(pytree_node=False, default=3)
+    MAX_BUNKERS: int = struct.field(pytree_node=False, default=6)
+    INIT_BUNKERS: int = struct.field(pytree_node=False, default=3)
     BUNKER_X: int = struct.field(pytree_node=False, default=16)
     BUNKER_Y: int = struct.field(pytree_node=False, default=188)
     BUNKER_SPACING: int = struct.field(pytree_node=False, default=7)
@@ -301,7 +302,15 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 laser_active=jnp.array(False, dtype=jnp.bool_),
                 game_frozen=jnp.array(True, dtype=jnp.bool_),
             ),
-            lambda s: self._start_wave(s, next_wave_number),
+            lambda s: self._start_wave(
+                s.replace(
+                    lives=jnp.minimum(
+                        s.lives + 1,
+                        jnp.array(self.consts.MAX_BUNKERS, dtype=jnp.int32)
+                    )
+                ),
+                next_wave_number
+            ),
             operand=state,
         )
 
@@ -336,7 +345,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             bomb_y=jnp.array(0, dtype=jnp.int32),
             bomb_active=jnp.array(False, dtype=jnp.bool_),
             score=jnp.array(0, dtype=jnp.int32),
-            lives=jnp.array(self.consts.MAX_BUNKERS, dtype=jnp.int32),
+            lives=jnp.array(self.consts.INIT_BUNKERS, dtype=jnp.int32),
             player_exploding=jnp.array(False, dtype=jnp.bool_),
             explosion_timer=jnp.array(0, dtype=jnp.int32),
             wave_number=wave_number,
@@ -822,7 +831,7 @@ class DemonAttackRenderer(JAXGameRenderer):
                 lambda: r,
             )
 
-        raster = jax.lax.fori_loop(0, self.consts.MAX_BUNKERS, render_bunker, raster)
+        raster = jax.lax.fori_loop(0, self.consts.INIT_BUNKERS, render_bunker, raster)
 
         # Render player or explosion
         player_mask = jax.lax.select(state.player_exploding, self.SHAPE_MASKS["explosion"], self.SHAPE_MASKS["player"])
