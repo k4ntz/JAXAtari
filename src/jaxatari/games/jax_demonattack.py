@@ -736,8 +736,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         demons = ObjectObservation.create(
             x=state.demons_x,
             y=state.demons_y,
-            width=jnp.array(self.consts.DEMON_SIZE[1]),
-            height=jnp.array(self.consts.DEMON_SIZE[0]),
+            width=jnp.full_like(state.demons_x, self.consts.DEMON_SIZE[1], dtype=jnp.int32),
+            height=jnp.full_like(state.demons_y, self.consts.DEMON_SIZE[0], dtype=jnp.int32),
             active=state.demons_alive
         )
 
@@ -849,8 +849,14 @@ class DemonAttackRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: DemonAttackState):
-        blank = jnp.ones((self.consts.HEIGHT, self.consts.WIDTH, 3), dtype=jnp.uint8)
-        blank = blank * jnp.asarray(self.consts.BLANK_SCREEN_COLOR, dtype=jnp.uint8)
+        blank_color = self.consts.BLANK_SCREEN_COLOR
+        if self.config.channels == 1:
+            blank_color = (
+                int(0.299 * blank_color[0] + 0.587 * blank_color[1] + 0.114 * blank_color[2]),
+            )
+
+        blank = jnp.ones((*self.BACKGROUND.shape, self.config.channels), dtype=jnp.uint8)
+        blank = blank * jnp.asarray(blank_color, dtype=jnp.uint8)
 
         return jax.lax.cond(
             state.game_frozen,
