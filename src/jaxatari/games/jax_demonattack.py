@@ -106,12 +106,11 @@ class DemonAttackConstants(struct.PyTreeNode):
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=2)
     MAX_DEMONS: int = struct.field(pytree_node=False, default=3)
     DEMON_SPEED: int = struct.field(pytree_node=False, default=1)
-    LASER_SPEED: int = struct.field(pytree_node=False, default=4)
-    BOMB_SPEED: int = struct.field(pytree_node=False, default=2)
     RESPAWN_DELAY: int = struct.field(pytree_node=False, default=30)
     MAX_LIVING_DEMONS: int = struct.field(pytree_node=False, default=3)
     SPAWN_ANIM_FRAMES: int = struct.field(pytree_node=False, default=3)
     SPAWN_ANIM_FRAME_DURATION: int = struct.field(pytree_node=False, default=6)
+    SPAWN_MOVE_PAUSE: int = struct.field(pytree_node=False, default=14)
     SPAWN_ANIM_WIDTH: int = struct.field(pytree_node=False, default=32)
     SPAWN_ANIM_X_OFFSET: int = struct.field(pytree_node=False, default=7)
     WAVE_TOTAL_DEMONS: int = struct.field(pytree_node=False, default=8)
@@ -201,6 +200,7 @@ class DemonAttackState(struct.PyTreeNode):
     wave_spawned: chex.Array
     spawn_timer: chex.Array
     spawn_anim_timer: chex.Array
+    spawn_pause_timer: chex.Array
     game_frozen: chex.Array
 
     step_counter: chex.Array
@@ -276,6 +276,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             wave_spawned=initial_alive_count,
             spawn_timer=spawn_timer,
             spawn_anim_timer=jnp.where(demons_alive, spawn_anim_total, 0),
+            spawn_pause_timer=jnp.where(demons_alive, self.consts.SPAWN_MOVE_PAUSE, 0),
             game_frozen=jnp.array(False, dtype=jnp.bool_),
             demons_x=demons_x,
             demons_y=demons_y,
@@ -354,6 +355,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             wave_spawned=initial_alive_count,
             spawn_timer=spawn_timer,
             spawn_anim_timer=jnp.where(demons_alive, spawn_anim_total, 0),
+            spawn_pause_timer=jnp.where(demons_alive, self.consts.SPAWN_MOVE_PAUSE, 0),
             game_frozen=jnp.array(False, dtype=jnp.bool_),
             step_counter=jnp.array(0, dtype=jnp.int32),
             key=key,
@@ -425,8 +427,19 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return state.replace(player_x=new_x)
 
     def _spawn_animation_step(self, state: DemonAttackState) -> DemonAttackState:
+        next_spawn_anim_timer = jnp.maximum(state.spawn_anim_timer - 1, 0)
+        pause_can_tick = jnp.logical_and(
+            state.spawn_anim_timer <= 0,
+            state.spawn_pause_timer > 0,
+        )
+
         return state.replace(
-            spawn_anim_timer=jnp.maximum(state.spawn_anim_timer - 1, 0),
+            spawn_anim_timer=next_spawn_anim_timer,
+            spawn_pause_timer=jnp.where(
+                pause_can_tick,
+                state.spawn_pause_timer - 1,
+                state.spawn_pause_timer,
+            ),
         )
 
     def _laser_step(self, state: DemonAttackState, action: chex.Array) -> DemonAttackState:
@@ -460,7 +473,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def _demons_step(self, state: DemonAttackState) -> DemonAttackState:
         demon_speed = self._wave_int_table(self.consts.WAVE_DEMON_SPEED_TABLE, state.wave_pattern)
-        can_move = jnp.logical_and(state.demons_alive, state.spawn_anim_timer <= 0)
+        can_move = jnp.logical_and(
+            state.demons_alive,
+            jnp.logical_and(state.spawn_anim_timer <= 0, state.spawn_pause_timer <= 0),
+        )
 
         # Horizontal movement
         new_x = jnp.where(
@@ -508,7 +524,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _bomb_step(self, state: DemonAttackState) -> DemonAttackState:
         # Drop bomb from a random living demon if no bomb is active
         key, drop_key, demon_idx_key = jax.random.split(state.key, 3)
-        can_drop_bomb = jnp.logical_and(state.demons_alive, state.spawn_anim_timer <= 0)
+        can_drop_bomb = jnp.logical_and(
+            state.demons_alive,
+            jnp.logical_and(state.spawn_anim_timer <= 0, state.spawn_pause_timer <= 0),
+        )
 
         drop_prob = self._wave_float_table(self.consts.WAVE_BOMB_DROP_PROB_TABLE, state.wave_pattern)
         should_drop = jnp.logical_and(
@@ -660,6 +679,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_dir=jnp.where(newly_spawned, spawn_dir, state.demons_dir),
             demons_y_dir=jnp.where(newly_spawned, spawn_y_dir, state.demons_y_dir),
             spawn_anim_timer=jnp.where(newly_spawned, spawn_anim_total, state.spawn_anim_timer),
+            spawn_pause_timer=jnp.where(newly_spawned, self.consts.SPAWN_MOVE_PAUSE, state.spawn_pause_timer),
             spawn_timer=jnp.where(
                 spawn_count > 0,
                 jnp.array(self.consts.RESPAWN_DELAY, dtype=jnp.int32),
