@@ -195,7 +195,7 @@ class DemonAttackState(struct.PyTreeNode):
     player_exploding: chex.Array
     explosion_timer: chex.Array
     wave_number: chex.Array # Actual attack wave: 0, 1, 2, ...
-    wave_pattern: chex.Array # Table/difficulty index: 0..5, reused after early waves.
+    wave_pattern: chex.Array # Level pattern: 0..11, then repeating 8..11.
     wave_total: chex.Array
     wave_spawned: chex.Array
     spawn_timer: chex.Array
@@ -235,14 +235,18 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         # harder difficulty patterns. The true wave counter remains wave_number.
         return jnp.where(wave_number < 12, wave_number, 8 + jnp.mod(wave_number, 4))
 
+    def _wave_table_index(self, wave_pattern: chex.Array) -> chex.Array:
+        # Each table entry applies to a pair of wave patterns.
+        return wave_pattern // 2
+
     def _wave_int_table(self, table: Tuple, wave_pattern: chex.Array) -> chex.Array:
         # Keep all wave-table indexing inside JAX arrays so jitted callers can use
         # dynamic wave indices.
-        return jnp.asarray(table, dtype=jnp.int32)[wave_pattern]
+        return jnp.asarray(table, dtype=jnp.int32)[self._wave_table_index(wave_pattern)]
 
     def _wave_float_table(self, table: Tuple, wave_pattern: chex.Array) -> chex.Array:
         # Float-valued tables are used for probabilities and must stay JAX-traceable.
-        return jnp.asarray(table, dtype=jnp.float32)[wave_pattern]
+        return jnp.asarray(table, dtype=jnp.float32)[self._wave_table_index(wave_pattern)]
 
     def _spawn_wave_values(self, wave_number: chex.Array):
         # Resolve every per-wave table once so reset, wave advance, and respawn use
@@ -942,7 +946,7 @@ class DemonAttackRenderer(JAXGameRenderer):
         sprite_group_idx = jnp.asarray(
             self.consts.WAVE_SPRITE_TABLE,
             dtype=jnp.int32,
-        )[state.wave_pattern]
+        )[self.game._wave_table_index(state.wave_pattern)]
 
         demon_masks = jax.lax.switch(
             sprite_group_idx,
