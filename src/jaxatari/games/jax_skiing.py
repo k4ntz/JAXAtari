@@ -812,8 +812,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         skier_ori = angles[state.skier_pos]
 
         skier = ObjectObservation.create(
-            x=jnp.clip(jnp.array(state.skier_x, dtype=jnp.int32), 0, w),
-            y=jnp.clip(jnp.array(c.skier_y, dtype=jnp.int32), 0, h),
+            x=jnp.clip(jnp.array(state.skier_x, dtype=jnp.int32) - c.skier_width // 2, 0, w),
+            y=jnp.clip(jnp.array(c.skier_y, dtype=jnp.int32) - c.skier_height // 2, 0, h),
             width=jnp.array(c.skier_width, dtype=jnp.int32),
             height=jnp.array(c.skier_height, dtype=jnp.int32),
             active=jnp.array(1, dtype=jnp.int32),
@@ -826,8 +826,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         flags_active = (flags_xy[:, 1] < h).astype(jnp.int32) # Simple visibility check
         
         flags = ObjectObservation.create(
-            x=jnp.clip(flags_xy[:, 0], 0, w),
-            y=jnp.clip(flags_xy[:, 1], 0, h),
+            x=jnp.clip(flags_xy[:, 0] - c.flag_width // 2, 0, w),
+            y=jnp.clip(flags_xy[:, 1] - c.flag_height // 2, 0, h),
             width=jnp.full((c.max_num_flags,), c.flag_width, dtype=jnp.int32),
             height=jnp.full((c.max_num_flags,), c.flag_height, dtype=jnp.int32),
             active=flags_active,
@@ -839,8 +839,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         trees_active = (trees_xy[:, 1] < h).astype(jnp.int32)
         
         trees = ObjectObservation.create(
-            x=jnp.clip(trees_xy[:, 0], 0, w),
-            y=jnp.clip(trees_xy[:, 1], 0, h),
+            x=jnp.clip(trees_xy[:, 0] - c.tree_width // 2, 0, w),
+            y=jnp.clip(trees_xy[:, 1] - c.tree_height // 2, 0, h),
             width=jnp.full((c.max_num_trees,), c.tree_width, dtype=jnp.int32),
             height=jnp.full((c.max_num_trees,), c.tree_height, dtype=jnp.int32),
             active=trees_active
@@ -851,8 +851,8 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         moguls_active = (moguls_xy[:, 1] < h).astype(jnp.int32)
         
         moguls = ObjectObservation.create(
-            x=jnp.clip(moguls_xy[:, 0], 0, w),
-            y=jnp.clip(moguls_xy[:, 1], 0, h),
+            x=jnp.clip(moguls_xy[:, 0] - c.mogul_width // 2, 0, w),
+            y=jnp.clip(moguls_xy[:, 1] - c.mogul_height // 2, 0, h),
             width=jnp.full((c.max_num_moguls,), c.mogul_width, dtype=jnp.int32),
             height=jnp.full((c.max_num_moguls,), c.mogul_height, dtype=jnp.int32),
             active=moguls_active
