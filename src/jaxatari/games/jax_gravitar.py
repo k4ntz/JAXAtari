@@ -361,6 +361,7 @@ def _jax_rotate(image, angle_deg, reshape=False, order=1, mode='constant', cval=
     return jnp.stack(rotated_channels, axis=-1).astype(image.dtype)
 
 _OBS_MAX_PLANETS = 7
+_OBS_MAX_TERRAIN_BOXES = 32
 _OBS_HUD_DIM = 11
 
 
@@ -761,8 +762,46 @@ def _sprite_wh_vector(
     return w, h
 
 
+def _greedy_terrain_boxes(mask: np.ndarray, max_boxes: int, min_area: int = 2):
+    """Greedy maximal-rectangle cover of a boolean terrain silhouette (H, W).
+
+    Decomposes the axis-aligned silhouette into up to "max_boxes" top-left boxes
+    (x, y, w, h). on jagged terrain it approximates and stops once the largest remaining 
+    rectangle is below `min_area`. Runs once per terrain at init.
+    Returns (boxes_xywh int32 (max_boxes, 4), active int32 (max_boxes,)).
+    """
+    m = np.ascontiguousarray(mask, dtype=bool).copy()
+    H, W = m.shape
+    boxes = np.zeros((max_boxes, 4), dtype=np.int32)
+    active = np.zeros((max_boxes,), dtype=np.int32)
+    for k in range(max_boxes):
+        if not m.any():
+            break
+        heights = np.zeros(W, dtype=np.int32)
+        best = (0, 0, 0, 0, 0)  # (area, x, y, w, h)
+        for r in range(H):
+            heights = np.where(m[r], heights + 1, 0)
+            stack = []  # (start_col, height)
+            for c in range(W + 1):
+                cur = heights[c] if c < W else 0
+                start = c
+                while stack and stack[-1][1] >= cur:
+                    s, hh = stack.pop()
+                    area = hh * (c - s)
+                    if area > best[0]:
+                        best = (area, s, r - hh + 1, c - s, hh)
+                    start = s
+                stack.append((start, cur))
+        area, x, y, w, h = best
+        if area < min_area:
+            break
+        boxes[k] = (x, y, w, h)
+        active[k] = 1
+        m[y:y + h, x:x + w] = False
+    return boxes, active
+
 @jax.jit
-def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> GravitarObservation:
+def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray, terrain_boxes: jnp.ndarray, terrain_boxes_active: jnp.ndarray) -> GravitarObservation:
     ship: ShipState = state.state
     enemies: Enemies = state.enemies
     fuel_tanks: FuelTanks = state.fuel_tanks
@@ -886,13 +925,16 @@ def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> Gr
         state=state.planets_cleared_mask.astype(jnp.int32),
     )
 
-    terrain_active = (state.terrain_sprite_idx >= 0).astype(jnp.int32)
-    terrain_x = jnp.clip(state.terrain_offset[0], 0.0, float(WINDOW_WIDTH)).astype(jnp.int16)
-    terrain_y = jnp.clip(state.terrain_offset[1], 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
-    terrain_visual = jnp.where(state.terrain_sprite_idx >= 0, state.terrain_sprite_idx, jnp.int32(0)).astype(jnp.int16)
-    terrain_w, terrain_h = _sprite_wh_scalar(
-        sprite_dims, terrain_visual, fallback_w=WINDOW_WIDTH, fallback_h=WINDOW_HEIGHT
-    )
+    bank_i = jnp.clip(state.terrain_bank_idx, 0, terrain_boxes.shape[0] - 1)
+    t_boxes = terrain_boxes[bank_i] 
+    terrain_active = terrain_boxes_active[bank_i].astype(jnp.int32)
+    terrain_x = t_boxes[:, 0].astype(jnp.int16)
+    terrain_y = t_boxes[:, 1].astype(jnp.int16)
+    terrain_w = t_boxes[:, 2].astype(jnp.int16)
+    terrain_h = t_boxes[:, 3].astype(jnp.int16)
+    terrain_visual = jnp.where(
+        state.terrain_sprite_idx >= 0, state.terrain_sprite_idx, jnp.int32(0)
+    ).astype(jnp.int16)
 
     terrain_obj = ObjectObservation.create(
         x=terrain_x,
@@ -900,9 +942,9 @@ def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> Gr
         width=terrain_w,
         height=terrain_h,
         active=terrain_active,
-        visual_id=terrain_visual,
-        orientation=jnp.array(0.0, dtype=jnp.float32),
-        state=state.terrain_bank_idx.astype(jnp.int32),
+        visual_id=jnp.full_like(terrain_x, terrain_visual),
+        orientation=jnp.zeros_like(terrain_x, dtype=jnp.float32),
+        state=jnp.full_like(terrain_active, state.terrain_bank_idx.astype(jnp.int32)),
     )
 
     reactor_dest_active = state.reactor_dest_active.astype(jnp.int32)
@@ -2358,6 +2400,8 @@ def step_core_linear(
     terrain_bank: jnp.ndarray,
     terrain_heightmaps: jnp.ndarray,
     obs_sprite_dims: jnp.ndarray,
+    terrain_boxes: jnp.ndarray,
+    terrain_boxes_active: jnp.ndarray,
 ):
     def _game_is_over(state, _):
         info = GravitarInfo(
@@ -2379,7 +2423,7 @@ def step_core_linear(
                 jnp.float32(0.0),
             ], dtype=jnp.float32),
         )
-        obs = _get_observation_from_state(state, obs_sprite_dims)
+        obs = _get_observation_from_state(state, obs_sprite_dims, terrain_boxes, terrain_boxes_active)
         return obs, state, 0.0, jnp.array(True), info, jnp.array(False), jnp.int32(-1)
 
     def _unified_game_loop(state, act):
@@ -2938,7 +2982,7 @@ def step_core_linear(
             map_return_angle_idx=map_return_angle_idx,
         )
 
-        obs = _get_observation_from_state(final_env_state, obs_sprite_dims)
+        obs = _get_observation_from_state(final_env_state, obs_sprite_dims, terrain_boxes, terrain_boxes_active)
 
         # Info: map/arena returns saucer reward; level returns turret/level/ufo rewards
         all_rewards = jnp.where(
@@ -2981,8 +3025,10 @@ def step_core(
     terrain_bank: jnp.ndarray,
     terrain_heightmaps: jnp.ndarray,
     obs_sprite_dims: jnp.ndarray,
+    terrain_boxes: jnp.ndarray,
+    terrain_boxes_active: jnp.ndarray,
 ):
-    return step_core_linear(env_state, action, terrain_bank, terrain_heightmaps, obs_sprite_dims)
+    return step_core_linear(env_state, action, terrain_bank, terrain_heightmaps, obs_sprite_dims, terrain_boxes, terrain_boxes_active)
 
 
 @partial(jax.jit, static_argnums=(2,))
@@ -2997,6 +3043,8 @@ def step_full(env_state: EnvState, action: int, env_instance: 'JaxGravitar'):
         env_instance.terrain_bank,
         env_instance.terrain_heightmaps,
         env_instance.obs_sprite_dims,
+        env_instance.terrain_boxes,
+        env_instance.terrain_boxes_active,
     )
 
     # 2) event detection (branch-free boolean math)
@@ -3203,6 +3251,7 @@ class JaxGravitar(JaxEnvironment):
             _TERRAIN_BANK_CACHE[_tb_key] = self._build_terrain_bank()
         self.terrain_bank = _TERRAIN_BANK_CACHE[_tb_key]
         self.terrain_heightmaps = self._build_heightmaps(self.terrain_bank)
+        self.terrain_boxes, self.terrain_boxes_active = self._build_terrain_boxes(self.terrain_bank)
 
         reactor_override = tuple(self.consts.REACTOR_LEVEL_LAYOUT)
         if reactor_override:
@@ -3294,7 +3343,7 @@ class JaxGravitar(JaxEnvironment):
 
         Returns: A structured observation dataclass containing the vector observation.
         """
-        return _get_observation_from_state(state, self.obs_sprite_dims)
+        return _get_observation_from_state(state, self.obs_sprite_dims, self.terrain_boxes, self.terrain_boxes_active)
     
 
     def _get_info(self, state: EnvState, all_rewards: Optional[jnp.ndarray] = None) -> GravitarInfo:
@@ -3343,8 +3392,7 @@ class JaxGravitar(JaxEnvironment):
             'ufo': spaces.get_object_space(n=None, screen_size=screen_size, orientation_range=orientation_range),
             'planets': spaces.get_object_space(n=_OBS_MAX_PLANETS, screen_size=screen_size, orientation_range=orientation_range),
             'projectiles': spaces.get_object_space(n=MAX_ENEMIES, screen_size=screen_size, orientation_range=orientation_range),
-            'terrain': spaces.get_object_space(n=None, screen_size=screen_size, orientation_range=orientation_range),
-            'reactor_destination': spaces.get_object_space(n=None, screen_size=screen_size, orientation_range=orientation_range),
+            'terrain': spaces.get_object_space(n=_OBS_MAX_TERRAIN_BOXES, screen_size=screen_size, orientation_range=orientation_range),            'reactor_destination': spaces.get_object_space(n=None, screen_size=screen_size, orientation_range=orientation_range),
             'lives': spaces.Box(low=0, high=MAX_LIVES, shape=(), dtype=jnp.int32),
             'fuel': spaces.Box(low=0.0, high=1000000.0, shape=(), dtype=jnp.float32),
         })
@@ -3554,6 +3602,21 @@ class JaxGravitar(JaxEnvironment):
         ground_y = jnp.argmax(is_ground, axis=1)
         has_ground = jnp.any(is_ground, axis=1)
         return jnp.where(has_ground, ground_y, H)
+
+    def _build_terrain_boxes(self, terrain_bank: jnp.ndarray):
+
+        W, H = WINDOW_WIDTH, WINDOW_HEIGHT
+        bank_np = np.asarray(terrain_bank)
+        bg_val = bank_np[0, 0, 0]
+        inner = bank_np[:, _TERRAIN_HIT_RMAX:_TERRAIN_HIT_RMAX + H,
+                           _TERRAIN_HIT_RMAX:_TERRAIN_HIT_RMAX + W]
+        num_banks = inner.shape[0]
+        boxes = np.zeros((num_banks, _OBS_MAX_TERRAIN_BOXES, 4), dtype=np.int32)
+        active = np.zeros((num_banks, _OBS_MAX_TERRAIN_BOXES), dtype=np.int32)
+        for b in range(num_banks):
+            silhouette = inner[b] != bg_val
+            boxes[b], active[b] = _greedy_terrain_boxes(silhouette, _OBS_MAX_TERRAIN_BOXES)
+        return jnp.asarray(boxes, dtype=jnp.int16), jnp.asarray(active, dtype=jnp.int32)
 
     def _build_terrain_bank(self) -> jnp.ndarray:
         W, H = WINDOW_WIDTH, WINDOW_HEIGHT
