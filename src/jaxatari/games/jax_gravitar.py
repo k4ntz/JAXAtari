@@ -776,6 +776,11 @@ def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> Gr
     ufo: UFOState = state.ufo
     enemy_bullets: Bullets = state.enemy_bullets
 
+    # scene gating: only report objects the renderer draws in the current mode
+    is_map = state.mode == 0
+    is_level = state.mode == 1
+    is_arena = state.mode == 2
+
     # --- Ship ---
     sx, sy = _clip_xy_to_screen(ship.x, ship.y)
     ship_active = jnp.array(1, dtype=jnp.int32)
@@ -796,7 +801,7 @@ def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> Gr
     )
 
     # --- Enemies (turrets) ---
-    enemy_present = (enemies.hp > 0) | (enemies.death_timer > 0)
+    enemy_present = ((enemies.hp > 0) | (enemies.death_timer > 0)) & is_level
     enemy_present_i = enemy_present.astype(jnp.int32)
     ex = jnp.clip(enemies.x, 0.0, float(WINDOW_WIDTH)).astype(jnp.int16)
     ey = jnp.clip(enemies.y, 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
@@ -817,7 +822,7 @@ def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> Gr
     )
 
     # --- Fuel tanks (planet pickups) ---
-    tank_present = fuel_tanks.active
+    tank_present = fuel_tanks.active & is_level
     tx = jnp.clip(fuel_tanks.x, 0.0, float(WINDOW_WIDTH)).astype(jnp.int16)
     ty = jnp.clip(fuel_tanks.y, 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
     tw = jnp.clip(fuel_tanks.w, 0.0, float(WINDOW_WIDTH)).astype(jnp.int16)
@@ -837,7 +842,7 @@ def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> Gr
     )
 
     # --- Saucer (single) ---
-    saucer_present = (saucer.alive | (saucer.death_timer > 0))
+    saucer_present = (saucer.alive | (saucer.death_timer > 0)) & (is_map | is_arena)
     saucer_active_i = saucer_present.astype(jnp.int32)
     sax, say = _clip_xy_to_screen(saucer.x, saucer.y)
     saucer_visual_id = jnp.array(int(SpriteIdx.ENEMY_SAUCER), dtype=jnp.int16)
@@ -856,7 +861,7 @@ def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> Gr
     )
 
     # --- UFO (single) ---
-    ufo_present = (ufo.alive | (ufo.death_timer > 0))
+    ufo_present = (ufo.alive | (ufo.death_timer > 0)) & is_level
     ufo_active_i = ufo_present.astype(jnp.int32)
     uax, uay = _clip_xy_to_screen(ufo.x, ufo.y)
     ufo_visual_id = jnp.array(int(SpriteIdx.ENEMY_UFO), dtype=jnp.int16)
@@ -882,7 +887,7 @@ def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> Gr
     bullet_w, bullet_h = _sprite_wh_vector(sprite_dims, p_visual, fallback_w=1, fallback_h=2)
 
     # --- Solar system objects (planets/reactor/obstacle/spawn marker) ---
-    planets_active = (state.planets_pi >= 0).astype(jnp.int32)
+    planets_active = ((state.planets_pi >= 0) & is_map).astype(jnp.int32)
     planet_x = jnp.clip(state.planets_px, 0.0, float(WINDOW_WIDTH)).astype(jnp.int16)
     planet_y = jnp.clip(state.planets_py, 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
     planet_visual = jnp.where(state.planets_pi >= 0, state.planets_pi, jnp.int32(0)).astype(jnp.int16)
@@ -919,7 +924,7 @@ def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> Gr
         state=state.terrain_bank_idx.astype(jnp.int32),
     )
 
-    reactor_dest_active = state.reactor_dest_active.astype(jnp.int32)
+    reactor_dest_active = (state.reactor_dest_active.astype(bool) & is_level).astype(jnp.int32)
     reactor_dest_x = jnp.clip(state.reactor_dest_x, 0.0, float(WINDOW_WIDTH)).astype(jnp.int16)
     reactor_dest_y = jnp.clip(state.reactor_dest_y, 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
     reactor_dest_visual = jnp.where(
