@@ -140,12 +140,39 @@ class JaxJamesBond(
     def reset(
         self, key: chex.PRNGKey = jax.random.PRNGKey(0)
     ) -> Tuple[JamesBondObservation, JamesBondState]:
-        raise NotImplementedError("JamesBond reset is added in a later commit")
+        if key is None:
+            key = jax.random.PRNGKey(0)
+        state_key, _ = jax.random.split(key)
 
-    def step(
-        self, state: JamesBondState, action: chex.Array
-    ) -> Tuple[JamesBondObservation, JamesBondState, chex.Array, chex.Array, JamesBondInfo]:
-        raise NotImplementedError("JamesBond step is added in a later commit")
+        state = JamesBondState(
+            player_x=jnp.array(self.consts.PLAYER_INIT_X, dtype=jnp.float32),
+            player_y=jnp.array(self.consts.PLAYER_INIT_Y, dtype=jnp.float32),
+            player_vx=jnp.array(0.0, dtype=jnp.float32),
+            player_vy=jnp.array(0.0, dtype=jnp.float32),
+            player_direction=jnp.array(1, dtype=jnp.int32),
+            lives=jnp.array(self.consts.MAX_LIVES, dtype=jnp.int32),
+            score=jnp.array(0, dtype=jnp.int32),
+            step_count=jnp.array(0, dtype=jnp.int32),
+            level_progress=jnp.array(0, dtype=jnp.int32),
+            diamond_x=jnp.zeros((self.consts.MAX_DIAMONDS,), dtype=jnp.float32),
+            diamond_y=jnp.zeros((self.consts.MAX_DIAMONDS,), dtype=jnp.float32),
+            diamond_active=jnp.zeros((self.consts.MAX_DIAMONDS,), dtype=jnp.bool_),
+            enemy_x=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.float32),
+            enemy_y=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.float32),
+            enemy_active=jnp.zeros((self.consts.MAX_ENEMIES,), dtype=jnp.bool_),
+            bullet_x=jnp.zeros((self.consts.MAX_BULLETS,), dtype=jnp.float32),
+            bullet_y=jnp.zeros((self.consts.MAX_BULLETS,), dtype=jnp.float32),
+            bullet_vx=jnp.zeros((self.consts.MAX_BULLETS,), dtype=jnp.float32),
+            bullet_active=jnp.zeros((self.consts.MAX_BULLETS,), dtype=jnp.bool_),
+            collision_happened=jnp.array(False, dtype=jnp.bool_),
+            collected_diamond=jnp.array(False, dtype=jnp.bool_),
+            hit_enemy=jnp.array(False, dtype=jnp.bool_),
+            fired_bullet=jnp.array(False, dtype=jnp.bool_),
+            key=state_key,
+        )
+
+        return self._get_observation(state), state
+
 
     def render(self, state: JamesBondState) -> jnp.ndarray:
         raise NotImplementedError("JamesBond renderer is added in a later commit")
@@ -158,3 +185,67 @@ class JaxJamesBond(
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(low=0, high=255, shape=(210, 160, 3), dtype=jnp.uint8)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_observation(self, state: JamesBondState) -> JamesBondObservation:
+        player = ObjectObservation.create(
+            x=state.player_x,
+            y=state.player_y,
+            width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.PLAYER_HEIGHT, dtype=jnp.int32),
+            active=jnp.array(True, dtype=jnp.bool_),
+            orientation=jnp.where(state.player_direction < 0, 270.0, 90.0),
+        )
+        diamonds = self._object_group_observation(
+            state.diamond_x,
+            state.diamond_y,
+            state.diamond_active,
+            self.consts.DIAMOND_WIDTH,
+            self.consts.DIAMOND_HEIGHT,
+        )
+        enemies = self._object_group_observation(
+            state.enemy_x,
+            state.enemy_y,
+            state.enemy_active,
+            self.consts.ENEMY_WIDTH,
+            self.consts.ENEMY_HEIGHT,
+        )
+        bullets = self._object_group_observation(
+            state.bullet_x,
+            state.bullet_y,
+            state.bullet_active,
+            self.consts.BULLET_WIDTH,
+            self.consts.BULLET_HEIGHT,
+            orientation=jnp.where(state.bullet_vx < 0, 270.0, 90.0),
+        )
+        return JamesBondObservation(
+            player=player,
+            diamonds=diamonds,
+            enemies=enemies,
+            bullets=bullets,
+            player_velocity=jnp.stack([state.player_vx, state.player_vy]).astype(
+                jnp.float32
+            ),
+            lives=state.lives,
+            score=state.score,
+            level_progress=state.level_progress,
+        )
+
+    def _object_group_observation(
+        self,
+        x: chex.Array,
+        y: chex.Array,
+        active: chex.Array,
+        width: int,
+        height: int,
+        orientation: chex.Array = None,
+    ) -> ObjectObservation:
+        return ObjectObservation.create(
+            x=x,
+            y=y,
+            width=jnp.full(x.shape, width, dtype=jnp.int32),
+            height=jnp.full(y.shape, height, dtype=jnp.int32),
+            active=active,
+            orientation=orientation,
+        )
+
