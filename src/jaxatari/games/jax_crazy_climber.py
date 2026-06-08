@@ -1,6 +1,7 @@
 from functools import partial
 import os
 
+import chex
 from flax import struct
 
 import jax
@@ -14,7 +15,7 @@ from typing import Tuple
 import jaxatari.spaces as spaces
 
 class CrazyClimberState(struct.PyTreeNode):
-    pass
+    key: chex.PRNGKey
 
 class CrazyClimberObservation(struct.PyTreeNode):
     pass
@@ -37,8 +38,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         super().__init__(consts)
         self.renderer = self.CrazyClimberRenderer(consts)
 
-    def reset(self, key: jax.random.PRNGKey) -> (CrazyClimberObservation, CrazyClimberState):
-        pass
+    def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> (CrazyClimberObservation, CrazyClimberState):
+        state_key, _step_key = jax.random.split(key)
+        state = CrazyClimberState(
+            key=state_key,
+        )
+        initial_obs = self._get_observation(state)
+
+        return initial_obs, state
 
     def step(self, state: CrazyClimberState, action: int) -> (CrazyClimberObservation, CrazyClimberState, float, bool, CrazyClimberInfo):
         pass
