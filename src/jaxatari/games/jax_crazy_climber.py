@@ -47,8 +47,21 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         return initial_obs, state
 
-    def step(self, state: CrazyClimberState, action: int) -> (CrazyClimberObservation, CrazyClimberState, float, bool, CrazyClimberInfo):
-        pass
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: CrazyClimberState, action: chex.Array) -> (CrazyClimberObservation, CrazyClimberState, float, bool, CrazyClimberInfo):
+        #atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+         
+        previous_state = state
+
+        _, next_rng = jax.random.split(state.key)
+        state = state.replace(key=next_rng)
+
+        done = self._get_done(state)
+        env_reward = self._get_reward(previous_state, state)
+        info = self._get_info(state)
+        observation = self._get_observation(state)
+
+        return observation, state, env_reward, done, info
 
     def render(self, state: CrazyClimberState) -> jnp.ndarray:
         return self.renderer.render(state)
