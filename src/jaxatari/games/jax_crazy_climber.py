@@ -165,9 +165,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
             raster = self.jr.create_object_raster(self.BACKGROUND)
 
-            digits = self.jr.int_to_digits(state.score, max_digits=2)
-
-            print("Digits:", self.SHAPE_MASKS)
+            digits = self.jr.int_to_digits(state.score, max_digits=3)
 
             digit_masks = self.SHAPE_MASKS["digits"]
 
