@@ -74,7 +74,30 @@ class JamesBondConstants(struct.PyTreeNode):
 
 @struct.dataclass
 class JamesBondState:
-    pass
+    player_x: chex.Array
+    player_y: chex.Array
+    player_vx: chex.Array
+    player_vy: chex.Array
+    player_direction: chex.Array
+    lives: chex.Array
+    score: chex.Array
+    step_count: chex.Array
+    level_progress: chex.Array
+    diamond_x: chex.Array
+    diamond_y: chex.Array
+    diamond_active: chex.Array
+    enemy_x: chex.Array
+    enemy_y: chex.Array
+    enemy_active: chex.Array
+    bullet_x: chex.Array
+    bullet_y: chex.Array
+    bullet_vx: chex.Array
+    bullet_active: chex.Array
+    collision_happened: chex.Array
+    collected_diamond: chex.Array
+    hit_enemy: chex.Array
+    fired_bullet: chex.Array
+    key: chex.PRNGKey
 
 
 @struct.dataclass
