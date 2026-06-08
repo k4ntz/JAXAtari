@@ -136,6 +136,7 @@ class JaxJamesBond(
     def __init__(self, consts: JamesBondConstants = None):
         consts = consts or JamesBondConstants()
         super().__init__(consts)
+        self.renderer = JamesBondRenderer(self.consts)
 
     def reset(
         self, key: chex.PRNGKey = jax.random.PRNGKey(0)
@@ -202,7 +203,7 @@ class JaxJamesBond(
         return observation, state, reward, done, info
 
     def render(self, state: JamesBondState) -> jnp.ndarray:
-        raise NotImplementedError("JamesBond renderer is added in a later commit")
+        return self.renderer.render(state)
 
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
@@ -396,3 +397,130 @@ class JaxJamesBond(
             state.step_count >= self.consts.MAX_EPISODE_STEPS,
         )
 
+
+class JamesBondRenderer(JAXGameRenderer):
+    def __init__(
+        self,
+        consts: JamesBondConstants = None,
+        config: render_utils.RendererConfig = None,
+    ):
+        self.consts = consts or JamesBondConstants()
+        if config is None:
+            config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+                channels=3,
+                downscale=None,
+            )
+        super().__init__(self.consts, config)
+        self.config = config
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        self.PALETTE = jnp.array(
+            [
+                self.consts.BACKGROUND_COLOR,
+                self.consts.PLAY_AREA_COLOR,
+                self.consts.PLAYER_COLOR,
+                self.consts.DIAMOND_COLOR,
+                self.consts.ENEMY_COLOR,
+                self.consts.BULLET_COLOR,
+            ],
+            dtype=jnp.uint8,
+        )
+        self.BACKGROUND_ID = 0
+        self.PLAY_AREA_ID = 1
+        self.PLAYER_ID = 2
+        self.DIAMOND_ID = 3
+        self.ENEMY_ID = 4
+        self.BULLET_ID = 5
+        self.BACKGROUND = jnp.full(
+            (self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+            self.BACKGROUND_ID,
+            dtype=jnp.uint8,
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state: JamesBondState) -> jnp.ndarray:
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+        raster = self._render_background(raster)
+        raster = self._render_objects(raster, state)
+        raster = self._render_player(raster, state)
+        return self.jr.render_from_palette(raster, self.PALETTE)
+
+    def _render_background(self, raster: jnp.ndarray) -> jnp.ndarray:
+        position = jnp.array(
+            [[self.consts.GAME_AREA_MIN_X, self.consts.GAME_AREA_MIN_Y]],
+            dtype=jnp.int32,
+        )
+        size = jnp.array(
+            [
+                [
+                    self.consts.GAME_AREA_MAX_X - self.consts.GAME_AREA_MIN_X,
+                    self.consts.GAME_AREA_MAX_Y - self.consts.GAME_AREA_MIN_Y,
+                ]
+            ],
+            dtype=jnp.int32,
+        )
+        return self.jr.draw_rects(raster, position, size, self.PLAY_AREA_ID)
+
+    def _render_player(self, raster: jnp.ndarray, state: JamesBondState) -> jnp.ndarray:
+        position = jnp.stack(
+            [
+                jnp.round(state.player_x).astype(jnp.int32),
+                jnp.round(state.player_y).astype(jnp.int32),
+            ]
+        )[None, :]
+        size = jnp.array(
+            [[self.consts.PLAYER_WIDTH, self.consts.PLAYER_HEIGHT]], dtype=jnp.int32
+        )
+        return self.jr.draw_rects(raster, position, size, self.PLAYER_ID)
+
+    def _render_objects(self, raster: jnp.ndarray, state: JamesBondState) -> jnp.ndarray:
+        raster = self._render_object_group(
+            raster,
+            state.diamond_x,
+            state.diamond_y,
+            state.diamond_active,
+            self.consts.DIAMOND_WIDTH,
+            self.consts.DIAMOND_HEIGHT,
+            self.DIAMOND_ID,
+        )
+        raster = self._render_object_group(
+            raster,
+            state.enemy_x,
+            state.enemy_y,
+            state.enemy_active,
+            self.consts.ENEMY_WIDTH,
+            self.consts.ENEMY_HEIGHT,
+            self.ENEMY_ID,
+        )
+        return self._render_object_group(
+            raster,
+            state.bullet_x,
+            state.bullet_y,
+            state.bullet_active,
+            self.consts.BULLET_WIDTH,
+            self.consts.BULLET_HEIGHT,
+            self.BULLET_ID,
+        )
+
+    def _render_object_group(
+        self,
+        raster: jnp.ndarray,
+        x: chex.Array,
+        y: chex.Array,
+        active: chex.Array,
+        width: int,
+        height: int,
+        color_id: int,
+    ) -> jnp.ndarray:
+        draw_x = jnp.where(active, jnp.round(x).astype(jnp.int32), -1)
+        draw_y = jnp.round(y).astype(jnp.int32)
+        positions = jnp.stack([draw_x, draw_y], axis=1)
+        sizes = jnp.stack(
+            [
+                jnp.full(x.shape, width, dtype=jnp.int32),
+                jnp.full(y.shape, height, dtype=jnp.int32),
+            ],
+            axis=1,
+        )
+        return self.jr.draw_rects(raster, positions, sizes, color_id)
