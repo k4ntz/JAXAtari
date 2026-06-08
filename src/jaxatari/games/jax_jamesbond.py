@@ -102,12 +102,26 @@ class JamesBondState:
 
 @struct.dataclass
 class JamesBondObservation:
-    pass
+    player: ObjectObservation
+    diamonds: ObjectObservation
+    enemies: ObjectObservation
+    bullets: ObjectObservation
+    player_velocity: jnp.ndarray
+    lives: jnp.ndarray
+    score: jnp.ndarray
+    level_progress: jnp.ndarray
 
 
 @struct.dataclass
 class JamesBondInfo:
-    pass
+    collision_happened: jnp.ndarray
+    collected_diamond: jnp.ndarray
+    hit_enemy: jnp.ndarray
+    fired_bullet: jnp.ndarray
+    score: jnp.ndarray
+    lives: jnp.ndarray
+    level_progress: jnp.ndarray
+    step_count: jnp.ndarray
 
 
 class JaxJamesBond(
