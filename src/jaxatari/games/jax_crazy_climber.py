@@ -101,8 +101,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
     class CrazyClimberRenderer(JAXGameRenderer):
         def __init__(self, consts: CrazyClimberConstants = None, config: render_utils.RendererConfig = None):
-            super().__init__(consts)
             self.consts = consts or CrazyClimberConstants()
+            super().__init__(consts)
             self.config = render_utils.RendererConfig(
                 game_dimensions=(210, 160),
                 channels=3,
