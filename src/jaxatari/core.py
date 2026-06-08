@@ -49,6 +49,7 @@ GAME_MODULES = {
     # "hangman": "jaxatari.games.jax_hangman",
     "hauntedhouse": "jaxatari.games.jax_hauntedhouse",
     "humancannonball": "jaxatari.games.jax_humancannonball",
+    "jamesbond": "jaxatari.games.jax_jamesbond",
     "kangaroo": "jaxatari.games.jax_kangaroo",
     "kingkong": "jaxatari.games.jax_kingkong",
     # "klax": "jaxatari.games.jax_klax",
