@@ -9,7 +9,7 @@ import jax.numpy as jnp
 
 from jaxatari.games.jax_pong import _create_wall_sprite
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.environment import JaxEnvironment
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from typing import Tuple
 import jaxatari.spaces as spaces
@@ -33,6 +33,12 @@ class CrazyClimberConstants(struct.PyTreeNode):
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
 class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation, CrazyClimberInfo, CrazyClimberConstants]):
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN, Action.UPRIGHT, Action.UPLEFT, Action.DOWNRIGHT, Action.DOWNLEFT],
+        dtype=jnp.int32,
+    )
+
+
     def __init__(self, consts: CrazyClimberConstants = None):
         consts = consts or CrazyClimberConstants()
         super().__init__(consts)
@@ -49,7 +55,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: CrazyClimberState, action: chex.Array) -> (CrazyClimberObservation, CrazyClimberState, float, bool, CrazyClimberInfo):
-        #atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
          
         previous_state = state
 
