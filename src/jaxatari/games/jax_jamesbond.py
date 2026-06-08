@@ -173,55 +173,33 @@ class JaxJamesBond(
 
         return self._get_observation(state), state
 
-
     @partial(jax.jit, static_argnums=(0,))
     def step(
         self, state: JamesBondState, action: chex.Array
     ) -> Tuple[JamesBondObservation, JamesBondState, chex.Array, chex.Array, JamesBondInfo]:
         atari_action = self._decode_action(action)
-        left = atari_action == Action.LEFT
-        right = atari_action == Action.RIGHT
-        up = atari_action == Action.UP
-        down = atari_action == Action.DOWN
+        previous_state = state
 
-        player_vx = (right.astype(jnp.float32) - left.astype(jnp.float32)) * self.consts.PLAYER_SPEED
-        player_vy = (down.astype(jnp.float32) - up.astype(jnp.float32)) * self.consts.PLAYER_SPEED
-        player_x = jnp.clip(
-            state.player_x + player_vx,
-            self.consts.GAME_AREA_MIN_X,
-            self.consts.GAME_AREA_MAX_X - self.consts.PLAYER_WIDTH,
-        )
-        player_y = jnp.clip(
-            state.player_y + player_vy,
-            self.consts.GAME_AREA_MIN_Y,
-            self.consts.GAME_AREA_MAX_Y - self.consts.PLAYER_HEIGHT,
-        )
-        player_direction = jnp.where(
-            left, -1, jnp.where(right, 1, state.player_direction)
-        ).astype(jnp.int32)
-
-        _, next_key = jax.random.split(state.key)
-        new_state = state.replace(
-            player_x=player_x.astype(jnp.float32),
-            player_y=player_y.astype(jnp.float32),
-            player_vx=player_vx.astype(jnp.float32),
-            player_vy=player_vy.astype(jnp.float32),
-            player_direction=player_direction,
+        state = state.replace(
             step_count=state.step_count + 1,
             collision_happened=jnp.array(False, dtype=jnp.bool_),
             collected_diamond=jnp.array(False, dtype=jnp.bool_),
             hit_enemy=jnp.array(False, dtype=jnp.bool_),
             fired_bullet=atari_action == Action.FIRE,
-            key=next_key,
         )
+        state = self._update_player_placeholder(state, atari_action)
+        state = self._update_objects_placeholder(state)
+        state = self._check_collisions_placeholder(state)
 
-        return (
-            self._get_observation(new_state),
-            new_state,
-            jnp.array(self.consts.REWARD_STEP, dtype=jnp.float32),
-            self._is_done(new_state),
-            self._get_info(new_state),
-        )
+        _, next_key = jax.random.split(state.key)
+        state = state.replace(key=next_key)
+
+        observation = self._get_observation(state)
+        reward = self._calculate_reward_placeholder(previous_state, state)
+        done = self._is_done(state)
+        info = self._get_info(state)
+
+        return observation, state, reward, done, info
 
     def render(self, state: JamesBondState) -> jnp.ndarray:
         raise NotImplementedError("JamesBond renderer is added in a later commit")
@@ -356,6 +334,61 @@ class JaxJamesBond(
 
     def _decode_action(self, action: chex.Array) -> chex.Array:
         return jnp.take(self.ACTION_SET, jnp.asarray(action, dtype=jnp.int32))
+
+    def _update_player_placeholder(
+        self, state: JamesBondState, atari_action: chex.Array
+    ) -> JamesBondState:
+        left = atari_action == Action.LEFT
+        right = atari_action == Action.RIGHT
+        up = atari_action == Action.UP
+        down = atari_action == Action.DOWN
+
+        player_vx = (
+            right.astype(jnp.float32) - left.astype(jnp.float32)
+        ) * self.consts.PLAYER_SPEED
+        player_vy = (
+            down.astype(jnp.float32) - up.astype(jnp.float32)
+        ) * self.consts.PLAYER_SPEED
+
+        player_x = jnp.clip(
+            state.player_x + player_vx,
+            self.consts.GAME_AREA_MIN_X,
+            self.consts.GAME_AREA_MAX_X - self.consts.PLAYER_WIDTH,
+        )
+        player_y = jnp.clip(
+            state.player_y + player_vy,
+            self.consts.GAME_AREA_MIN_Y,
+            self.consts.GAME_AREA_MAX_Y - self.consts.PLAYER_HEIGHT,
+        )
+        player_direction = jnp.where(
+            left, -1, jnp.where(right, 1, state.player_direction)
+        ).astype(jnp.int32)
+
+        return state.replace(
+            player_x=player_x.astype(jnp.float32),
+            player_y=player_y.astype(jnp.float32),
+            player_vx=player_vx.astype(jnp.float32),
+            player_vy=player_vy.astype(jnp.float32),
+            player_direction=player_direction,
+        )
+
+    def _update_objects_placeholder(self, state: JamesBondState) -> JamesBondState:
+        # Future object lifecycle logic belongs here.
+        return state
+
+    def _check_collisions_placeholder(self, state: JamesBondState) -> JamesBondState:
+        # Future diamond, enemy, bullet, and life collision logic belongs here.
+        return state.replace(
+            collision_happened=jnp.array(False, dtype=jnp.bool_),
+            collected_diamond=jnp.array(False, dtype=jnp.bool_),
+            hit_enemy=jnp.array(False, dtype=jnp.bool_),
+        )
+
+    def _calculate_reward_placeholder(
+        self, previous_state: JamesBondState, state: JamesBondState
+    ) -> chex.Array:
+        del previous_state, state
+        return jnp.array(self.consts.REWARD_STEP, dtype=jnp.float32)
 
     def _is_done(self, state: JamesBondState) -> chex.Array:
         return jnp.logical_or(
