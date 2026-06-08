@@ -31,6 +31,8 @@ def _get_default_asset_config() -> tuple:
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
+        {'name': 'life', 'type': 'life', 'file': 'life.npy'},
+        {'name': 'life', 'type': 'life', 'pattern': 'player_{}.npy'},
     )
 
 class CrazyClimberConstants(struct.PyTreeNode):
