@@ -100,6 +100,114 @@ def _get_default_asset_config() -> tuple:
             'Enemy_2/Enemy_3.npy',
             'Enemy_2/Enemy_4.npy',
         ]},
+        {'name': 'demon_3', 'type': 'group', 'files': [
+            'Enemy_3/Enemy_1.npy',
+            'Enemy_3/Enemy_2.npy',
+            'Enemy_3/Enemy_3.npy',
+            'Enemy_3/Enemy_4.npy',
+        ]},
+        {'name': 'demon_4', 'type': 'group', 'files': [
+            'Enemy_4/Enemy_1.npy',
+            'Enemy_4/Enemy_2.npy',
+            'Enemy_4/Enemy_3.npy',
+            'Enemy_4/Enemy_4.npy',
+        ]},
+        {'name': 'demon_5', 'type': 'group', 'files': [
+            'Enemy_5/Enemy_1.npy',
+            'Enemy_5/Enemy_2.npy',
+            'Enemy_5/Enemy_3.npy',
+            'Enemy_5/Enemy_4.npy',
+        ]},
+        {'name': 'demon_6', 'type': 'group', 'files': [
+            'Enemy_6/Enemy_1.npy',
+            'Enemy_6/Enemy_2.npy',
+            'Enemy_6/Enemy_3.npy',
+            'Enemy_6/Enemy_4.npy',
+        ]},
+        {'name': 'demon_7', 'type': 'group', 'files': [
+            'Enemy_7/Enemy_1.npy',
+            'Enemy_7/Enemy_2.npy',
+            'Enemy_7/Enemy_3.npy',
+            'Enemy_7/Enemy_4.npy',
+        ]},
+        {'name': 'demon_8', 'type': 'group', 'files': [
+            'Enemy_8/Enemy_1.npy',
+            'Enemy_8/Enemy_2.npy',
+            'Enemy_8/Enemy_3.npy',
+            'Enemy_8/Enemy_4.npy',
+        ]},
+        {'name': 'demon_9', 'type': 'group', 'files': [
+            'Enemy_9/Enemy_1.npy',
+            'Enemy_9/Enemy_2.npy',
+            'Enemy_9/Enemy_3.npy',
+            'Enemy_9/Enemy_4.npy',
+        ]},
+        {'name': 'demon_10', 'type': 'group', 'files': [
+            'Enemy_10/Enemy_1.npy',
+            'Enemy_10/Enemy_2.npy',
+            'Enemy_10/Enemy_3.npy',
+            'Enemy_10/Enemy_4.npy',
+        ]},
+        {'name': 'demon_11', 'type': 'group', 'files': [
+            'Enemy_11/Enemy_1.npy',
+            'Enemy_11/Enemy_2.npy',
+            'Enemy_11/Enemy_3.npy',
+            'Enemy_11/Enemy_4.npy',
+        ]},
+        {'name': 'demon_12', 'type': 'group', 'files': [
+            'Enemy_12/Enemy_1.npy',
+            'Enemy_12/Enemy_2.npy',
+            'Enemy_12/Enemy_3.npy',
+            'Enemy_12/Enemy_4.npy',
+        ]},
+        {'name': 'small_demon_5', 'type': 'group', 'files': [
+            'Enemy_Small_5/Enemy_1.npy',
+            'Enemy_Small_5/Enemy_2.npy',
+            'Enemy_Small_5/Enemy_3.npy',
+            'Enemy_Small_5/Enemy_4.npy',
+        ]},
+        {'name': 'small_demon_6', 'type': 'group', 'files': [
+            'Enemy_Small_6/Enemy_1.npy',
+            'Enemy_Small_6/Enemy_2.npy',
+            'Enemy_Small_6/Enemy_3.npy',
+            'Enemy_Small_6/Enemy_4.npy',
+        ]},
+        {'name': 'small_demon_7', 'type': 'group', 'files': [
+            'Enemy_Small_7/Enemy_1.npy',
+            'Enemy_Small_7/Enemy_2.npy',
+            'Enemy_Small_7/Enemy_3.npy',
+            'Enemy_Small_7/Enemy_4.npy',
+        ]},
+        {'name': 'small_demon_8', 'type': 'group', 'files': [
+            'Enemy_Small_8/Enemy_1.npy',
+            'Enemy_Small_8/Enemy_2.npy',
+            'Enemy_Small_8/Enemy_3.npy',
+            'Enemy_Small_8/Enemy_4.npy',
+        ]},
+        {'name': 'small_demon_9', 'type': 'group', 'files': [
+            'Enemy_Small_9/Enemy_1.npy',
+            'Enemy_Small_9/Enemy_2.npy',
+            'Enemy_Small_9/Enemy_3.npy',
+            'Enemy_Small_9/Enemy_4.npy',
+        ]},
+        {'name': 'small_demon_10', 'type': 'group', 'files': [
+            'Enemy_Small_10/Enemy_1.npy',
+            'Enemy_Small_10/Enemy_2.npy',
+            'Enemy_Small_10/Enemy_3.npy',
+            'Enemy_Small_10/Enemy_4.npy',
+        ]},
+        {'name': 'small_demon_11', 'type': 'group', 'files': [
+            'Enemy_Small_11/Enemy_1.npy',
+            'Enemy_Small_11/Enemy_2.npy',
+            'Enemy_Small_11/Enemy_3.npy',
+            'Enemy_Small_11/Enemy_4.npy',
+        ]},
+        {'name': 'small_demon_12', 'type': 'group', 'files': [
+            'Enemy_Small_12/Enemy_1.npy',
+            'Enemy_Small_12/Enemy_2.npy',
+            'Enemy_Small_12/Enemy_3.npy',
+            'Enemy_Small_12/Enemy_4.npy',
+        ]},
         {'name': 'enemy_spawn_left', 'type': 'group', 'files': [
             'EnemySpawnAnimation/EnemySpawn_left_1.npy',
             'EnemySpawnAnimation/EnemySpawn_left_2.npy',
@@ -109,6 +217,20 @@ def _get_default_asset_config() -> tuple:
             'EnemySpawnAnimation/EnemySpawn_right_1.npy',
             'EnemySpawnAnimation/EnemySpawn_right_2.npy',
             'EnemySpawnAnimation/EnemySpawn_right_3.npy',
+        ]},
+        {'name': 'enemy_death_animation', 'type': 'group', 'files': [
+            'EnemyDeathAnimation/EnemyPart_0.npy',
+            'EnemyDeathAnimation/EnemyPart_1.npy',
+            'EnemyDeathAnimation/EnemyPart_2.npy',
+        ]},
+        {'name': 'player_death_animation', 'type': 'group', 'files': [
+            'PlayerDeathAnimation/Explode_1.npy',
+            'PlayerDeathAnimation/Explode_2.npy',
+            'PlayerDeathAnimation/Explode_3.npy',
+            'PlayerDeathAnimation/Explode_4.npy',
+            'PlayerDeathAnimation/Explode_5.npy',
+            'PlayerDeathAnimation/Explode_6.npy',
+            'PlayerDeathAnimation/Explode_7.npy',
         ]},
         {'name': 'bunker', 'type': 'single', 'file': 'Bunker.npy'},
     )
@@ -148,7 +270,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     )
     WAVE_DEMON_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default=(0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1) # TODO 1..X; change this when adding new demons in wave Y
+        default=(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
     )
 
     WAVE_DEMON_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(1, 1, 2, 2, 3, 3))
