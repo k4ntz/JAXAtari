@@ -1050,6 +1050,7 @@ class DemonAttackRenderer(JAXGameRenderer):
         return self.jr.render_from_palette(raster, self.PALETTE)
 
     def _draw_demons(self, raster, state):
+        # Animation cycle: 4 frames, each for 8 steps. Total = 32 steps
         demon_anim_idx = (state.step_counter % 32) // 8
 
         # Sprite selection is per pattern, unlike pair-shared difficulty tables.
