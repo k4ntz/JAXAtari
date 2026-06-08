@@ -94,7 +94,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         pass
 
     def _get_reward(self, previous_state: CrazyClimberState, state: CrazyClimberState) -> float:
-        pass
+        return 0
 
     def _get_done(self, state: CrazyClimberState) -> bool:
         pass
