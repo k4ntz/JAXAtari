@@ -181,10 +181,53 @@ class JaxJamesBond(
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
-        return spaces.Dict({})
+        screen_size = (self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)
+        return spaces.Dict(
+            {
+                "player": spaces.get_object_space(n=None, screen_size=screen_size),
+                "diamonds": spaces.get_object_space(
+                    n=self.consts.MAX_DIAMONDS, screen_size=screen_size
+                ),
+                "enemies": spaces.get_object_space(
+                    n=self.consts.MAX_ENEMIES, screen_size=screen_size
+                ),
+                "bullets": spaces.get_object_space(
+                    n=self.consts.MAX_BULLETS, screen_size=screen_size
+                ),
+                "player_velocity": spaces.Box(
+                    low=jnp.array([-10.0, -20.0], dtype=jnp.float32),
+                    high=jnp.array([10.0, 20.0], dtype=jnp.float32),
+                    shape=(2,),
+                    dtype=jnp.float32,
+                ),
+                "lives": spaces.Box(
+                    low=0,
+                    high=self.consts.MAX_LIVES,
+                    shape=(),
+                    dtype=jnp.int32,
+                ),
+                "score": spaces.Box(
+                    low=0,
+                    high=1_000_000,
+                    shape=(),
+                    dtype=jnp.int32,
+                ),
+                "level_progress": spaces.Box(
+                    low=0,
+                    high=self.consts.MAX_EPISODE_STEPS,
+                    shape=(),
+                    dtype=jnp.int32,
+                ),
+            }
+        )
 
     def image_space(self) -> spaces.Box:
-        return spaces.Box(low=0, high=255, shape=(210, 160, 3), dtype=jnp.uint8)
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH, 3),
+            dtype=jnp.uint8,
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: JamesBondState) -> JamesBondObservation:
