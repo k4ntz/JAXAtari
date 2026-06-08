@@ -148,7 +148,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     )
     WAVE_SPRITE_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default=(0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1) # TODO 1..12; change this when adding new demons
+        default=(0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1) # TODO 1..X; change this when adding new demons in wave Y
     )
 
     WAVE_DEMON_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(1, 1, 2, 2, 3, 3))
@@ -265,8 +265,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             raise ValueError(
                 f"WAVE_SPRITE_TABLE needs {INITIAL_WAVE_PATTERNS} pattern entries"
             )
-        if min(consts.WAVE_SPRITE_TABLE) < 1:
-            raise ValueError("WAVE_SPRITE_TABLE uses 1-based demon IDs")
 
     def _resolve_wave_pattern(self, wave_number: chex.Array) -> chex.Array:
         """Map the absolute wave number to pattern 0..11, then repeat 8..11."""
