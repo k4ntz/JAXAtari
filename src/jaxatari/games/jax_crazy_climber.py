@@ -8,7 +8,6 @@ import jax.numpy as jnp
 
 from jaxatari.games.jax_pong import _create_wall_sprite
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.spaces import spaces
 from jaxatari.environment import JaxEnvironment
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from typing import Tuple
@@ -33,8 +32,10 @@ class CrazyClimberConstants(struct.PyTreeNode):
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
 class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation, CrazyClimberInfo, CrazyClimberConstants]):
-    def __init__(self, consts: CrazyClimberConstants):
+    def __init__(self, consts: CrazyClimberConstants = None):
+        consts = consts or CrazyClimberConstants()
         super().__init__(consts)
+        self.renderer = self.CrazyClimberRenderer(consts)
 
     def reset(self, key: jax.random.PRNGKey) -> (CrazyClimberObservation, CrazyClimberState):
         pass
