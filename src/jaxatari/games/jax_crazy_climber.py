@@ -32,7 +32,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
 class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation, CrazyClimberInfo, CrazyClimberConstants]):
-    def __init__(self, consts: CrazyClimberConstants = None):
+    def __init__(self, consts: CrazyClimberConstants):
         consts = consts or CrazyClimberConstants()
         super().__init__(consts)
         self.renderer = self.CrazyClimberRenderer(consts)
