@@ -146,7 +146,7 @@ class DemonAttackConstants(struct.PyTreeNode):
         default=((1, -1, 1), (1, -1, 1), (1, -1, 1),
                  (1, -1, 1), (1, 1, -1), (1, -1, 1))
     )
-    WAVE_SPRITE_TABLE: Tuple[int, ...] = struct.field(
+    WAVE_DEMON_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1) # TODO 1..X; change this when adding new demons in wave Y
     )
@@ -261,9 +261,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 f"Difficulty tables need {expected_difficulty_entries} entries: "
                 f"{', '.join(invalid_tables)}"
             )
-        if len(consts.WAVE_SPRITE_TABLE) != INITIAL_WAVE_PATTERNS:
+        if len(consts.WAVE_DEMON_TABLE) != INITIAL_WAVE_PATTERNS:
             raise ValueError(
-                f"WAVE_SPRITE_TABLE needs {INITIAL_WAVE_PATTERNS} pattern entries"
+                f"WAVE_DEMON_TABLE needs {INITIAL_WAVE_PATTERNS} pattern entries"
             )
 
     def _resolve_wave_pattern(self, wave_number: chex.Array) -> chex.Array:
@@ -911,19 +911,19 @@ class DemonAttackRenderer(JAXGameRenderer):
         if not available_demon_ids:
             raise ValueError("ASSET_CONFIG must provide at least one demon sprite group")
 
-        demon_id_to_render_index = {
-            demon_id: index
-            for index, demon_id in enumerate(available_demon_ids)
-        }
-        fallback_render_index = len(available_demon_ids) - 1
         self._demon_sprite_names = tuple(
             f"demon_{demon_id}" for demon_id in available_demon_ids
         )
+        if (
+            min(self.consts.WAVE_DEMON_TABLE) < 0
+            or max(self.consts.WAVE_DEMON_TABLE) >= len(self._demon_sprite_names)
+        ):
+            raise ValueError(
+                "WAVE_DEMON_TABLE uses zero-based indices into the available "
+                f"demon sprite groups (0..{len(self._demon_sprite_names) - 1})"
+            )
         self._pattern_sprite_indices = jnp.asarray(
-            tuple(
-                demon_id_to_render_index.get(demon_id, fallback_render_index)
-                for demon_id in self.consts.WAVE_SPRITE_TABLE
-            ),
+            self.consts.WAVE_DEMON_TABLE,
             dtype=jnp.int32,
         )
 
@@ -1055,7 +1055,7 @@ class DemonAttackRenderer(JAXGameRenderer):
         pattern_index = jnp.clip(
             state.wave_pattern,
             0,
-            len(self.consts.WAVE_SPRITE_TABLE) - 1,
+            len(self.consts.WAVE_DEMON_TABLE) - 1,
         )
         sprite_group_idx = self._pattern_sprite_indices[pattern_index]
 
