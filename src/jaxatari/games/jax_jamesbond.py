@@ -14,7 +14,62 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 
 
 class JamesBondConstants(struct.PyTreeNode):
-    pass
+    SCREEN_WIDTH: int = struct.field(pytree_node=False, default=160)
+    SCREEN_HEIGHT: int = struct.field(pytree_node=False, default=210)
+    GAME_AREA_MIN_X: int = struct.field(pytree_node=False, default=8)
+    GAME_AREA_MAX_X: int = struct.field(pytree_node=False, default=152)
+    GAME_AREA_MIN_Y: int = struct.field(pytree_node=False, default=28)
+    GAME_AREA_MAX_Y: int = struct.field(pytree_node=False, default=196)
+
+    PLAYER_WIDTH: int = struct.field(pytree_node=False, default=10)
+    PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=8)
+    PLAYER_INIT_X: int = struct.field(pytree_node=False, default=32)
+    PLAYER_INIT_Y: int = struct.field(pytree_node=False, default=160)
+    PLAYER_SPEED: float = struct.field(pytree_node=False, default=2.0)
+    GRAVITY: float = struct.field(pytree_node=False, default=0.0)
+    JUMP_VELOCITY: float = struct.field(pytree_node=False, default=0.0)
+
+    MAX_LIVES: int = struct.field(pytree_node=False, default=3)
+    MAX_DIAMONDS: int = struct.field(pytree_node=False, default=8)
+    MAX_ENEMIES: int = struct.field(pytree_node=False, default=8)
+    MAX_BULLETS: int = struct.field(pytree_node=False, default=4)
+    MAX_EPISODE_STEPS: int = struct.field(pytree_node=False, default=5000)
+
+    DIAMOND_WIDTH: int = struct.field(pytree_node=False, default=4)
+    DIAMOND_HEIGHT: int = struct.field(pytree_node=False, default=4)
+    ENEMY_WIDTH: int = struct.field(pytree_node=False, default=10)
+    ENEMY_HEIGHT: int = struct.field(pytree_node=False, default=8)
+    BULLET_WIDTH: int = struct.field(pytree_node=False, default=3)
+    BULLET_HEIGHT: int = struct.field(pytree_node=False, default=2)
+
+    REWARD_STEP: float = struct.field(pytree_node=False, default=0.0)
+    REWARD_DIAMOND: float = struct.field(pytree_node=False, default=1.0)
+    REWARD_HIT_ENEMY: float = struct.field(pytree_node=False, default=-1.0)
+    REWARD_LOST_LIFE: float = struct.field(pytree_node=False, default=-1.0)
+
+    ACTION_MEANINGS: Tuple[str, ...] = struct.field(
+        pytree_node=False,
+        default=("NOOP", "UP", "DOWN", "LEFT", "RIGHT", "FIRE"),
+    )
+
+    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(
+        pytree_node=False, default=(8, 14, 32)
+    )
+    PLAY_AREA_COLOR: Tuple[int, int, int] = struct.field(
+        pytree_node=False, default=(20, 42, 66)
+    )
+    PLAYER_COLOR: Tuple[int, int, int] = struct.field(
+        pytree_node=False, default=(236, 236, 236)
+    )
+    DIAMOND_COLOR: Tuple[int, int, int] = struct.field(
+        pytree_node=False, default=(0, 216, 255)
+    )
+    ENEMY_COLOR: Tuple[int, int, int] = struct.field(
+        pytree_node=False, default=(220, 64, 64)
+    )
+    BULLET_COLOR: Tuple[int, int, int] = struct.field(
+        pytree_node=False, default=(250, 220, 72)
+    )
 
 
 @struct.dataclass
@@ -37,7 +92,7 @@ class JaxJamesBond(
 ):
     # Compact agent action indices map to these ALE-style actions.
     ACTION_SET: jnp.ndarray = jnp.array(
-        [Action.NOOP],
+        [Action.NOOP, Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT, Action.FIRE],
         dtype=jnp.int32,
     )
 
