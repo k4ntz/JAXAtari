@@ -31,8 +31,8 @@ def _get_default_asset_config() -> tuple:
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
-        {'name': 'life', 'type': 'life', 'file': 'life.npy'},
-        {'name': 'life', 'type': 'life', 'pattern': 'player_{}.npy'},
+        #{'name': 'life', 'type': 'life', 'file': 'life.npy'},
+        #{'name': 'player', 'type': 'player', 'pattern': 'player_{}.npy'},
     )
 
 class CrazyClimberConstants(struct.PyTreeNode):
@@ -60,7 +60,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         score = jax.lax.cond(
             score_condition, # cond for score
-            lambda s: s + jnp.array(100),
+            lambda s: s + jnp.array(1),
             lambda s: s,
             operand=state.score,
         )
@@ -87,8 +87,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: CrazyClimberState, action: chex.Array) -> (CrazyClimberObservation, CrazyClimberState, float, bool, CrazyClimberInfo):
         atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
-         
         previous_state = state
+        state = self._score_and_reset(state)
 
         _, next_rng = jax.random.split(state.key)
         state = state.replace(key=next_rng)
@@ -167,17 +167,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
             raster = self.jr.create_object_raster(self.BACKGROUND)
 
-            digits = self.jr.int_to_digits(state.score, max_digits=3)
+            digits = self.jr.int_to_digits(state.score, max_digits=4)
 
             digit_masks = self.SHAPE_MASKS["digits"]
 
-            is_player_single_digit = state.score < 10
-            player_start_index = jax.lax.select(is_player_single_digit, 1, 0)
-            player_num_to_render = jax.lax.select(is_player_single_digit, 1, 2)
-            player_render_x = jax.lax.select(is_player_single_digit,
-                                         120 + 16 // 2,
-                                         120)
+            start_index = 1
+            num_to_render = 10
+            render_x = 60
 
-            raster = self.jr.render_label_selective(raster, player_render_x, 3, digits, digit_masks, player_start_index, player_num_to_render, spacing=16)
+            raster = self.jr.render_label_selective(raster, 60, 5, digits, digit_masks, start_index, num_to_render, spacing=8, max_digits_to_render=6)
 
             return self.jr.render_from_palette(raster, self.PALETTE)
