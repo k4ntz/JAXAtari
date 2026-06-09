@@ -99,6 +99,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         observation = self._get_observation(state)
 
         return observation, state, env_reward, done, info
+    
+    def _player_step(self, state: CrazyClimberState, action: chex.Array) -> CrazyClimberState:
+        up = jnp.logical_or(action == Action.UP, action == Action.RIGHTFIRE)
+        down = jnp.logical_or(action == Action.DOWN, action == Action.LEFTFIRE)
+
+        return state
 
     def render(self, state: CrazyClimberState) -> jnp.ndarray:
         return self.renderer.render(state)
@@ -167,14 +173,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
             raster = self.jr.create_object_raster(self.BACKGROUND)
 
-            digits = self.jr.int_to_digits(state.score, max_digits=4)
+            digits = self.jr.int_to_digits(state.score, max_digits=6)
 
             digit_masks = self.SHAPE_MASKS["digits"]
 
             start_index = 1
-            num_to_render = 10
-            render_x = 60
+            num_to_render = 6
 
-            raster = self.jr.render_label_selective(raster, 60, 5, digits, digit_masks, start_index, num_to_render, spacing=8, max_digits_to_render=6)
+            raster = self.jr.render_label_selective(raster, 55, 20, digits, digit_masks, start_index, num_to_render, spacing=8, max_digits_to_render=6)
 
             return self.jr.render_from_palette(raster, self.PALETTE)
