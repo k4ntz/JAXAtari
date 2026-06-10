@@ -734,6 +734,12 @@ def _clip_xy_to_screen(x: jnp.ndarray, y: jnp.ndarray) -> tuple[jnp.ndarray, jnp
     cy = jnp.clip(y, 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
     return cx, cy
 
+def _center_to_topleft(cx, cy, w, h):
+    # The renderer draws every dynamic sprite centered on (x,y); the overservation must report the box's
+    # TOP-LEFT corner. Shift by  half the reported size so the box stays contered on the orginal center, then re-clip to the screen.
+    x = jnp.clip(cx.astype(jnp.int32) - (w.astype(jnp.int32) // 2), 0, WINDOW_WIDTH).astype(jnp.int16)
+    y = jnp.clip(cy.astype(jnp.int32) - (h.astype(jnp.int32) // 2), 0, WINDOW_HEIGHT).astype(jnp.int16)
+    return x, y
 
 def _sprite_wh_scalar(
     sprite_dims: jnp.ndarray, sprite_idx: jnp.ndarray, fallback_w: int = 0, fallback_h: int = 0
@@ -777,6 +783,7 @@ def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> Gr
     ship_orientation = ship.angle.astype(jnp.float32)
     ship_w, ship_h = _sprite_wh_scalar(sprite_dims, ship_visual_id, fallback_w=3, fallback_h=7)
 
+    sx, sy = _center_to_topleft(sx, sy, ship_w, ship_h)
     ship_obj = ObjectObservation.create(
         x=sx,
         y=sy,
@@ -797,6 +804,7 @@ def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> Gr
     eh = jnp.clip(enemies.h, 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
     e_visual = jnp.where(enemy_present, enemies.sprite_idx, jnp.int32(0)).astype(jnp.int16)
 
+    ex, ey = _center_to_topleft(ex, ey, ew, eh)
     enemies_obj = ObjectObservation.create(
         x=ex,
         y=ey,
@@ -816,6 +824,7 @@ def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> Gr
     th = jnp.clip(fuel_tanks.h, 0.0, float(WINDOW_HEIGHT)).astype(jnp.int16)
     t_visual = jnp.where(tank_present, fuel_tanks.sprite_idx, jnp.int32(0)).astype(jnp.int16)
 
+    tx, ty = _center_to_topleft(tx, ty, tw, th)
     fuel_tanks_obj = ObjectObservation.create(
         x=tx,
         y=ty,
@@ -833,6 +842,8 @@ def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> Gr
     sax, say = _clip_xy_to_screen(saucer.x, saucer.y)
     saucer_visual_id = jnp.array(int(SpriteIdx.ENEMY_SAUCER), dtype=jnp.int16)
     saucer_w, saucer_h = _sprite_wh_scalar(sprite_dims, saucer_visual_id, fallback_w=8, fallback_h=7)
+
+    sax, say = _center_to_topleft(sax, say, saucer_w, saucer_h)
     saucer_obj = ObjectObservation.create(
         x=sax,
         y=say,
@@ -850,6 +861,8 @@ def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> Gr
     uax, uay = _clip_xy_to_screen(ufo.x, ufo.y)
     ufo_visual_id = jnp.array(int(SpriteIdx.ENEMY_UFO), dtype=jnp.int16)
     ufo_w, ufo_h = _sprite_wh_scalar(sprite_dims, ufo_visual_id, fallback_w=7, fallback_h=6)
+    
+    uax, uay = _center_to_topleft(uax, uay, ufo_w, ufo_h)
     ufo_obj = ObjectObservation.create(
         x=uax,
         y=uay,
@@ -875,6 +888,7 @@ def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> Gr
     planet_visual = jnp.where(state.planets_pi >= 0, state.planets_pi, jnp.int32(0)).astype(jnp.int16)
     planet_w, planet_h = _sprite_wh_vector(sprite_dims, planet_visual, fallback_w=0, fallback_h=0)
 
+    planet_x, planet_y = _center_to_topleft(planet_x, planet_y, planet_w, planet_h)
     planets_obj = ObjectObservation.create(
         x=planet_x,
         y=planet_y,
@@ -917,6 +931,7 @@ def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> Gr
         sprite_dims, reactor_dest_visual, fallback_w=5, fallback_h=5
     )
 
+    reactor_dest_x, reactor_dest_y = _center_to_topleft(reactor_dest_x, reactor_dest_y, reactor_dest_w, reactor_dest_h)
     reactor_destination_obj = ObjectObservation.create(
         x=reactor_dest_x,
         y=reactor_dest_y,
@@ -928,6 +943,7 @@ def _get_observation_from_state(state: EnvState, sprite_dims: jnp.ndarray) -> Gr
         state=state.reactor_activated.astype(jnp.int32),
     )
 
+    px, py = _center_to_topleft(px, py, bullet_w, bullet_h)
     projectiles_obj = ObjectObservation.create(
         x=px,
         y=py,
