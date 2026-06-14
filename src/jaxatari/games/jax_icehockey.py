@@ -17,7 +17,7 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.modification import AutoDerivedConstants
 
 class IceHockeyConstants(AutoDerivedConstants):
-    # This structure holds all static, non-learnable parameters of the game, 
+    # This structure holds all static, non-learnable parameters of the game,
     # such as screen dimensions, player speed, or colors.
     MAX_SHOOTING_ANGLE: int
     PLAYER_SPEED: float
@@ -31,12 +31,17 @@ class IceHockeyConstants(AutoDerivedConstants):
     MAX_PUSH_DISTANCE: float # front player can onle be pushed until this point
     FRAMES_TACKLED: int = 60
 
+    FACEOFF_X: float = 78.0          # x the enemy aims at when carrying the puck
+    FACEOFF_Y: float = 103.0         # default pursuit target at reset (rink centre)
+    PLAYER_GOAL_Y: float = 187.0     # y of the goal the enemy attacks
+    MIN_SEPARATION: float = 8.0      # body separation; reused as tackle-contact radius
+
 @struct.dataclass
 class GameState:
     pause_counter: chex.Array  # delay between restart of game
     player_score: chex.Array  # The score line within the current set (goes up in increments of 1, instead of traditional tennis counting)
     enemy_score: chex.Array
-    is_finished: chex.Array  # True if the game is finished (Player or enemy has won the game)  
+    is_finished: chex.Array  # True if the game is finished (Player or enemy has won the game)
     remaining_time: chex.Array
     is_faceoff: chex.Array # during the initial frames, the game is freezed
     goal_scored: chex.Array # True for the frame where a goal is scored, the game is freezed
@@ -73,6 +78,7 @@ class EnemyState:
     enemy1: CharacterState
     enemy2: CharacterState
     active_character: chex.Array # 0 for enemy 1, 1 for enemy 2
+    enemy_target: chex.Array     # float32 [x, y] pursuit target, refreshed every 4 frames
 
 @struct.dataclass
 class PlayerState:
@@ -88,25 +94,26 @@ class IceHockeyState:
     counter: chex.Array
     animator_state: AnimatorState
     game_state: GameState
+    lfsr: chex.Array             # int32, 16-bit Galois LFSR for pursuit-target jitter
 
 @struct.dataclass
 class IceHockeyInfo:
-    # This is used for carrying auxiliary diagnostic information that is not used for 
+    # This is used for carrying auxiliary diagnostic information that is not used for
     # training but might otherwise be relevant, such as the current level.
     pass
 
 @struct.dataclass
 class IceHockeyObservation:
-    # This structure holds the object-centric data exposed to the RL agent. 
-    # Its specific content is game dependent and should contain everything 
+    # This structure holds the object-centric data exposed to the RL agent.
+    # Its specific content is game dependent and should contain everything
     # the environment developer deems necessary knowledge to be able to play the game
     # (position of player, position of enemies, etc).
     pass
 
 class JaxIceHockey(JaxEnvironment):
-    # Each game is a class that inherits from a base JaxEnvironment class, 
+    # Each game is a class that inherits from a base JaxEnvironment class,
     # implementing the core gameplay logic.
-    
+
     def __init__(self, consts: Optional[IceHockeyConstants] = None):
         # The constructor is responsible for all one-time setup of the environment. This logic runs once on the CPU when the class is
         # instantiated and is **not** JIT-compiled. Its primary role is to set up the game’s static constants and instantiate the game-specific renderer.
@@ -128,6 +135,14 @@ class JaxIceHockey(JaxEnvironment):
         #
         # Returns A tuple of(EnvObs, EnvState)containing the initial observation for the agent and the complete initial state of the
         # environment.
+        #
+        # ENEMY MOVEMENT — when you build the initial state, set these two fields:
+        #     enemy_state = EnemyState(
+        #         enemy1=..., enemy2=..., active_character=jnp.array(0, dtype=jnp.int32),
+        #         enemy_target=jnp.array([c.FACEOFF_X, c.FACEOFF_Y], dtype=jnp.float32),
+        #     )
+        #     ... and on the IceHockeyState:
+        #     lfsr=jnp.array(0xACE1, dtype=jnp.int32),   # any non-zero 16-bit seed
         pass
 
     def step(self, state, action):
@@ -145,7 +160,125 @@ class JaxIceHockey(JaxEnvironment):
         # - The scalar reward obtained during this step.
         # - A boolean done flag, which is True if the new state is terminal.
         # - An EnvInfo object for auxiliary data.
+        #
+        # ENEMY MOVEMENT — wire it in like this (the two calls are the only enemy-AI hooks):
+        #
+        #   1) at the TOP, before moving the characters, get the enemy's action:
+        #          enemy_action = self._enemy_policy(state)
+        #      then feed it to your character-movement step alongside the player's action.
+        #
+        #   2) AFTER you have the new puck position + new player/enemy states, refresh the
+        #      pursuit target and advance the LFSR:
+        #          new_lfsr, new_enemy_state = self._update_enemy_target(
+        #              state.counter, state.lfsr, new_puck_state.position,
+        #              new_player_state, new_enemy_state,
+        #          )
+        #      and store new_lfsr / new_enemy_state on the returned IceHockeyState.
         pass
+
+    # ================================================================== #
+    # Enemy movement / AI  (the only part added on top of the skeleton)  #
+    # ================================================================== #
+
+    @staticmethod
+    def _lfsr_step(lfsr: chex.Array) -> chex.Array:
+        """
+
+        Cheap deterministic pseudo-randomness used to add a little zigzag jitter to the
+        enemy's pursuit target, so the opponent doesn't track the puck on a perfectly
+        straight line*
+        """
+        bit = lfsr & 1
+        return jnp.where(bit, (lfsr >> 1) ^ jnp.int32(0xB400), lfsr >> 1).astype(jnp.int32)
+
+    def _update_enemy_target(
+        self,
+        counter: chex.Array,
+        lfsr: chex.Array,
+        puck_position: chex.Array,
+        player_state: PlayerState,
+        enemy_state: EnemyState,
+    ) -> Tuple[chex.Array, EnemyState]:
+        """Refresh the enemy's pursuit target and advance the noise LFSR.
+
+        Called once per frame from ``step`` *after* the new puck/player/enemy states are
+        known. The target only moves every 4th frame and only while the enemy does NOT
+        hold the puck (a carrier heads for the goal instead, handled in ``_enemy_policy``).
+        When the human player carries the puck, a small signed jitter (per axis, range
+        roughly -7..+8) is added so the chase isn't perfectly straight.
+
+        Returns the advanced ``lfsr`` and the ``EnemyState`` with the updated target.
+        """
+        new_lfsr = self._lfsr_step(lfsr)
+
+        enemy_has_puck  = enemy_state.enemy1.has_puck | enemy_state.enemy2.has_puck
+        player_has_puck = player_state.player1.has_puck | player_state.player2.has_puck
+
+        # Two independent 4-bit values -> 0..15, shifted to a signed -7..+8 range.
+        noise = jnp.array([
+            (new_lfsr & jnp.int32(0xF)).astype(jnp.float32) - jnp.float32(7.0),
+            ((new_lfsr >> 4) & jnp.int32(0xF)).astype(jnp.float32) - jnp.float32(7.0),
+        ])
+
+        candidate  = jnp.where(player_has_puck, puck_position + noise, puck_position)
+        new_target = jnp.where(
+            ((counter % 4) == 0) & ~enemy_has_puck,
+            candidate,
+            enemy_state.enemy_target,
+        )
+        return new_lfsr, enemy_state.replace(enemy_target=new_target)
+
+    def _enemy_policy(self, state: IceHockeyState) -> chex.Array:
+        """Pick the controlled enemy skater's action for this frame.
+
+        Pure read-only function of the *current* state; produces a single Atari action
+        integer that you feed into the shared character-movement step exactly like the
+        player's action. Behaviour:
+
+          * carrying the puck   -> drive toward the player's goal; shoot (DOWNFIRE) once
+                                    close enough to it,
+          * not carrying        -> move toward the pursuit target (the jittered puck
+                                    position); tackle (FIRE) when a player is in contact,
+          * otherwise           -> 8-directional move toward the target, else NOOP.
+
+        The controlled skater is whichever enemy is currently ``active_character``.
+        """
+        c   = self.consts
+        es  = state.enemy_state
+        ai  = es.active_character
+        pos = jnp.where(ai == 0, es.enemy1.position, es.enemy2.position)
+        has = es.enemy1.has_puck | es.enemy2.has_puck
+
+        # With puck -> aim at the player's goal; otherwise chase the pursuit target.
+        tgt = jnp.where(
+            has,
+            jnp.array([c.FACEOFF_X, jnp.float32(c.PLAYER_GOAL_Y)], dtype=jnp.float32),
+            es.enemy_target,
+        )
+        dx = tgt[0] - pos[0]; dy = tgt[1] - pos[1]
+        r = dx >  2.0; l = dx < -2.0
+        d = dy >  2.0; u = dy < -2.0
+
+        near_goal    = jnp.abs(pos[1] - jnp.float32(c.PLAYER_GOAL_Y)) < 50.0
+        should_shoot = has & near_goal
+
+        ps = state.player_state
+        thresh2  = jnp.float32(c.MIN_SEPARATION ** 2 + 10.0)   # contact radius (squared)
+        p1_close = jnp.sum((pos - ps.player1.position) ** 2) < thresh2
+        p2_close = jnp.sum((pos - ps.player2.position) ** 2) < thresh2
+        should_tackle = ~has & (p1_close | p2_close)
+
+        return jnp.where(should_shoot,  jnp.int32(Action.DOWNFIRE),
+               jnp.where(should_tackle, jnp.int32(Action.FIRE),
+               jnp.where(r & d,         jnp.int32(Action.DOWNRIGHT),
+               jnp.where(l & d,         jnp.int32(Action.DOWNLEFT),
+               jnp.where(r & u,         jnp.int32(Action.UPRIGHT),
+               jnp.where(l & u,         jnp.int32(Action.UPLEFT),
+               jnp.where(r,             jnp.int32(Action.RIGHT),
+               jnp.where(l,             jnp.int32(Action.LEFT),
+               jnp.where(d,             jnp.int32(Action.DOWN),
+               jnp.where(u,             jnp.int32(Action.UP),
+                                         jnp.int32(Action.NOOP)))))))))))
 
     def render(self, state):
         # Purpose This function generates a single RGB image (as a JAX array) representing the current game state. It is used for visualization
