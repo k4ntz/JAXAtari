@@ -67,14 +67,14 @@ class IceHockeyConstants(struct.PyTreeNode):
     # refine against captured frames once real sprites are in.
     FACEOFF_X: float = struct.field(pytree_node=False, default=78.0)
     FACEOFF_Y: float = struct.field(pytree_node=False, default=103.0)
-    P1_X: float = struct.field(pytree_node=False, default=60.0)
-    P1_Y: float = struct.field(pytree_node=False, default=115.0)
-    P2_X: float = struct.field(pytree_node=False, default=85.0)
-    P2_Y: float = struct.field(pytree_node=False, default=150.0)
-    E1_X: float = struct.field(pytree_node=False, default=85.0)
-    E1_Y: float = struct.field(pytree_node=False, default=89.0)
-    E2_X: float = struct.field(pytree_node=False, default=60.0)
-    E2_Y: float = struct.field(pytree_node=False, default=54.0)
+    PLAYER_SKATER_X: float = struct.field(pytree_node=False, default=60.0)
+    PLAYER_SKATER_Y: float = struct.field(pytree_node=False, default=115.0)
+    PLAYER_GOALIE_X: float = struct.field(pytree_node=False, default=85.0)
+    PLAYER_GOALIE_Y: float = struct.field(pytree_node=False, default=150.0)
+    ENEMY_SKATER_X: float = struct.field(pytree_node=False, default=85.0)
+    ENEMY_SKATER_Y: float = struct.field(pytree_node=False, default=89.0)
+    ENEMY_GOALIE_X: float = struct.field(pytree_node=False, default=60.0)
+    ENEMY_GOALIE_Y: float = struct.field(pytree_node=False, default=54.0)
 
     # Asset manifest lives in the constants so the modding framework can apply
     # asset_overrides before the renderer is constructed.
@@ -113,15 +113,15 @@ class PuckState:
 
 @struct.dataclass
 class PlayerState:
-    player1: CharacterState
-    player2: CharacterState
-    active_character: chex.Array   # 0 = player1 controlled, 1 = player2
+    skater: CharacterState
+    goalie: CharacterState
+    active_character: chex.Array   # 0 = skater controlled, 1 = goalie controlled
 
 
 @struct.dataclass
 class EnemyState:
-    enemy1: CharacterState
-    enemy2: CharacterState
+    skater: CharacterState
+    goalie: CharacterState
     active_character: chex.Array
 
 
@@ -143,10 +143,10 @@ class IceHockeyInfo:
 
 @struct.dataclass
 class IceHockeyObservation:
-    player1: ObjectObservation
-    player2: ObjectObservation
-    enemy1: ObjectObservation
-    enemy2: ObjectObservation
+    player_skater: ObjectObservation
+    player_goalie: ObjectObservation
+    enemy_skater: ObjectObservation
+    enemy_goalie: ObjectObservation
     puck: ObjectObservation
     player_score: chex.Array
     enemy_score: chex.Array
@@ -176,10 +176,10 @@ class JaxIceHockey(JaxEnvironment):
     def observation_space(self) -> spaces.Dict:
         obj = spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
         return spaces.Dict({
-            "player1": obj,
-            "player2": obj,
-            "enemy1": obj,
-            "enemy2": obj,
+            "player_skater": obj,
+            "player_goalie": obj,
+            "enemy_skater": obj,
+            "enemy_goalie": obj,
             "puck": obj,
             "player_score": spaces.Box(0, 99, shape=(), dtype=jnp.int32),
             "enemy_score": spaces.Box(0, 99, shape=(), dtype=jnp.int32),
@@ -207,13 +207,13 @@ class JaxIceHockey(JaxEnvironment):
 
         state = IceHockeyState(
             player_state=PlayerState(
-                player1=char(c.P1_X, c.P1_Y),
-                player2=char(c.P2_X, c.P2_Y),
+                skater=char(c.PLAYER_SKATER_X, c.PLAYER_SKATER_Y),
+                goalie=char(c.PLAYER_GOALIE_X, c.PLAYER_GOALIE_Y),
                 active_character=jnp.array(0, dtype=jnp.int32),
             ),
             enemy_state=EnemyState(
-                enemy1=char(c.E1_X, c.E1_Y),
-                enemy2=char(c.E2_X, c.E2_Y),
+                skater=char(c.ENEMY_SKATER_X, c.ENEMY_SKATER_Y),
+                goalie=char(c.ENEMY_GOALIE_X, c.ENEMY_GOALIE_Y),
                 active_character=jnp.array(0, dtype=jnp.int32),
             ),
             puck_state=PuckState(
@@ -446,11 +446,6 @@ class JaxIceHockey(JaxEnvironment):
 
         Returns the passive teammate's new position. No-op when the gap is already large
         enough.
-
-        NOTE: ``MAX_PUSH_DISTANCE`` ("front player can only be pushed until this point")
-        is NOT modelled here — that coupling (the active skater being blocked once the
-        passive hits its limit) is unverified. For now the passive is clamped to its
-        zone later by ``_resolve_interactions``.
         """
         dy = passive_pos[1] - active_pos[1]
         too_close = jnp.abs(dy) < min_vertical_distance
@@ -470,10 +465,10 @@ class JaxIceHockey(JaxEnvironment):
 
     def _resolve_interactions(
         self,
-        player1: CharacterState,
-        player2: CharacterState,
-        enemy1: CharacterState,
-        enemy2: CharacterState,
+        player_skater: CharacterState,
+        player_goalie: CharacterState,
+        enemy_skater: CharacterState,
+        enemy_goalie: CharacterState,
         player_active: chex.Array,
         enemy_active: chex.Array,
         min_separation: chex.Array,
@@ -498,8 +493,8 @@ class JaxIceHockey(JaxEnvironment):
         triple-contact frames a later step can nudge an earlier constraint sub-pixel,
         which the design guide tolerates.
         """
-        p1, p2 = player1.position, player2.position
-        e1, e2 = enemy1.position, enemy2.position
+        p1, p2 = player_skater.position, player_goalie.position
+        e1, e2 = enemy_skater.position, enemy_goalie.position
 
         # 1) Opponent collisions — both shift along centre-to-centre.
         p1, e1 = self._separate_opponents(p1, e1, min_separation)
@@ -520,10 +515,10 @@ class JaxIceHockey(JaxEnvironment):
         e2 = self._clamp_to_bounds(e2, bounds_e2)
 
         return (
-            player1.replace(position=p1),
-            player2.replace(position=p2),
-            enemy1.replace(position=e1),
-            enemy2.replace(position=e2),
+            player_skater.replace(position=p1),
+            player_goalie.replace(position=p2),
+            enemy_skater.replace(position=e1),
+            enemy_goalie.replace(position=e2),
         )
 
     # ------------------------------------------------------------------ #
@@ -567,21 +562,21 @@ class JaxIceHockey(JaxEnvironment):
 
         # 1) Active-skater resolution (per team, against the shared puck).
         player_active = self._resolve_active_character(
-            player_state.player1, player_state.player2,
+            player_state.skater, player_state.goalie,
             puck_position, player_state.active_character,
         )
         enemy_active = self._resolve_active_character(
-            enemy_state.enemy1, enemy_state.enemy2,
+            enemy_state.skater, enemy_state.goalie,
             puck_position, enemy_state.active_character,
         )
-
+        
         # 2) Phase 1 — intended input movement, uniform over each team's two skaters.
         p1, p2 = self._apply_team_inputs(
-            player_state.player1, player_state.player2,
+            player_state.skater, player_state.goalie,
             player_active, player_action, bounds_p1, bounds_p2, velocity,
         )
         e1, e2 = self._apply_team_inputs(
-            enemy_state.enemy1, enemy_state.enemy2,
+            enemy_state.skater, enemy_state.goalie,
             enemy_active, enemy_action, bounds_e1, bounds_e2, velocity,
         )
 
@@ -594,10 +589,10 @@ class JaxIceHockey(JaxEnvironment):
         )
 
         new_player_state = player_state.replace(
-            player1=p1, player2=p2, active_character=player_active,
+            skater=p1, goalie=p2, active_character=player_active,
         )
         new_enemy_state = enemy_state.replace(
-            enemy1=e1, enemy2=e2, active_character=enemy_active,
+            skater=e1, goalie=e2, active_character=enemy_active,
         )
         return new_player_state, new_enemy_state
 
@@ -617,10 +612,10 @@ class JaxIceHockey(JaxEnvironment):
             )
 
         return IceHockeyObservation(
-            player1=obj(state.player_state.player1.position, c.PLAYER_W, c.PLAYER_H),
-            player2=obj(state.player_state.player2.position, c.PLAYER_W, c.PLAYER_H),
-            enemy1=obj(state.enemy_state.enemy1.position, c.PLAYER_W, c.PLAYER_H),
-            enemy2=obj(state.enemy_state.enemy2.position, c.PLAYER_W, c.PLAYER_H),
+            player_skater=obj(state.player_state.skater.position, c.PLAYER_W, c.PLAYER_H),
+            player_goalie=obj(state.player_state.goalie.position, c.PLAYER_W, c.PLAYER_H),
+            enemy_skater=obj(state.enemy_state.skater.position, c.PLAYER_W, c.PLAYER_H),
+            enemy_goalie=obj(state.enemy_state.goalie.position, c.PLAYER_W, c.PLAYER_H),
             puck=obj(state.puck_state.position, c.PUCK_W, c.PUCK_H),
             player_score=state.game_state.player_score,
             enemy_score=state.game_state.enemy_score,
@@ -634,8 +629,8 @@ class JaxIceHockey(JaxEnvironment):
             return jnp.array([o.x, o.y, o.width, o.height, o.active], dtype=jnp.float32)
 
         return jnp.concatenate([
-            flat(obs.player1), flat(obs.player2),
-            flat(obs.enemy1), flat(obs.enemy2),
+            flat(obs.player_skater), flat(obs.player_goalie),
+            flat(obs.enemy_skater), flat(obs.enemy_goalie),
             flat(obs.puck),
             jnp.array([obs.player_score, obs.enemy_score,
                        obs.remaining_time, obs.active_player], dtype=jnp.float32),
@@ -697,10 +692,10 @@ class IceHockeyRenderer(JAXGameRenderer):
         def row(pos):
             return jnp.round(pos[1]).astype(jnp.int32)
 
-        p1 = state.player_state.player1.position
-        p2 = state.player_state.player2.position
-        e1 = state.enemy_state.enemy1.position
-        e2 = state.enemy_state.enemy2.position
+        p1 = state.player_state.skater.position
+        p2 = state.player_state.goalie.position
+        e1 = state.enemy_state.skater.position
+        e2 = state.enemy_state.goalie.position
         pp = state.puck_state.position
 
         # render_at_clipped because skaters can reach the board pixels at the
