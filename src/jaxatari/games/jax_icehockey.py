@@ -55,6 +55,10 @@ class IceHockeyConstants(struct.PyTreeNode):
 
     PLAYER_SPEED: float = struct.field(pytree_node=False, default=1.5)
 
+    # Phase-2 collision tunables for _characters_step
+    MIN_SEPARATION: float = struct.field(pytree_node=False, default=8.0)
+    MIN_VERTICAL_DISTANCE: float = struct.field(pytree_node=False, default=40.0)
+
     # 3 min * 60 s * 60 fps = 10800 raw frames.
     TIME_LIMIT: int = struct.field(pytree_node=False, default=10800)
     FACE_OFF_FRAMES: int = struct.field(pytree_node=False, default=40)
@@ -233,9 +237,21 @@ class JaxIceHockey(JaxEnvironment):
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: IceHockeyState, action):
-        # Stub: returns the state unchanged with the correct return signature.
-        # Game logic (player/enemy/puck/collision/goal/timer steps) comes next.
         previous_state = state
+
+        new_player_state, new_enemy_state = self._characters_step(
+            state.player_state,
+            state.enemy_state,
+            state.puck_state.position,
+            player_action=action,
+            enemy_action=jnp.array(Action.NOOP, dtype=jnp.int32),
+        )
+        state = state.replace(
+            player_state=new_player_state,
+            enemy_state=new_enemy_state,
+            counter=state.counter + 1,
+        )
+
         obs = self._get_observation(state)
         reward = self._get_reward(previous_state, state)
         done = self._get_done(state)
@@ -520,21 +536,14 @@ class JaxIceHockey(JaxEnvironment):
         puck_position: chex.Array,
         player_action: chex.Array,
         enemy_action: chex.Array,
-        velocity: chex.Array,
-        min_separation: chex.Array,
-        min_vertical_distance: chex.Array,
-        bounds_p1: chex.Array,
-        bounds_p2: chex.Array,
-        bounds_e1: chex.Array,
-        bounds_e2: chex.Array,
     ) -> Tuple[PlayerState, EnemyState]:
         """Advance all four characters one frame: active resolution -> phase 1 -> phase 2.
 
-        This is the character-movement orchestrator shared by both teams. The full
-        ``step`` will call it with ``self.consts`` values for the tunables/zones and with
-        ``enemy_action`` produced by the (future) ``_enemy_policy``; here those are
-        parameters so the wiring runs and is testable before the constants/zones and the
-        opponent policy exist.
+        This is the character-movement orchestrator shared by both teams. The movement
+        speed, collision tunables, and zone bounds are read from ``self.consts``;
+        ``enemy_action`` will come from the (future) ``_enemy_policy`` and is ``NOOP``
+        until then. The lower-level geometry primitives still take these as parameters so
+        they stay generic/unit-testable — only this orchestrator binds them to consts.
 
         Steps:
           1. Resolve each team's active (controlled) skater = closest to the puck.
@@ -546,6 +555,16 @@ class JaxIceHockey(JaxEnvironment):
         Returns the updated ``PlayerState`` and ``EnemyState`` (positions/orientation
         from movement, plus the resolved ``active_character`` for each team).
         """
+        c = self.consts
+        velocity = jnp.float32(c.PLAYER_SPEED)
+        min_separation = jnp.float32(c.MIN_SEPARATION)
+        min_vertical_distance = jnp.float32(c.MIN_VERTICAL_DISTANCE)
+        # No per-team zones defined yet: all four skaters share the full-rink bounds.
+        rink = jnp.array(
+            [c.RINK_LEFT, c.RINK_RIGHT, c.RINK_TOP, c.RINK_BOTTOM], dtype=jnp.float32
+        )
+        bounds_p1 = bounds_p2 = bounds_e1 = bounds_e2 = rink
+
         # 1) Active-skater resolution (per team, against the shared puck).
         player_active = self._resolve_active_character(
             player_state.player1, player_state.player2,
