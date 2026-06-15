@@ -53,6 +53,9 @@ class IceHockeyConstants(struct.PyTreeNode):
     PUCK_H: int = struct.field(pytree_node=False, default=3)
 
     PLAYER_SPEED: float = struct.field(pytree_node=False, default=1.5)
+    
+    # Offset from the goal lines defining zone where goalie/skater can't move
+    ATTACKING_ZONE_OFFSET_Y: int = struct.field(pytree_node=False, default=50)
 
     # Phase-2 collision tunables for _characters_step
     MIN_SEPARATION: float = struct.field(pytree_node=False, default=8.0)
@@ -69,11 +72,11 @@ class IceHockeyConstants(struct.PyTreeNode):
     PLAYER_SKATER_X: float = struct.field(pytree_node=False, default=60.0)
     PLAYER_SKATER_Y: float = struct.field(pytree_node=False, default=80.0)
     PLAYER_GOALIE_X: float = struct.field(pytree_node=False, default=85.0)
-    PLAYER_GOALIE_Y: float = struct.field(pytree_node=False, default=45.0)
+    PLAYER_GOALIE_Y: float = struct.field(pytree_node=False, default=35.0)
     ENEMY_SKATER_X: float = struct.field(pytree_node=False, default=85.0)
-    ENEMY_SKATER_Y: float = struct.field(pytree_node=False, default=121.0)
+    ENEMY_SKATER_Y: float = struct.field(pytree_node=False, default=110.0)
     ENEMY_GOALIE_X: float = struct.field(pytree_node=False, default=60.0)
-    ENEMY_GOALIE_Y: float = struct.field(pytree_node=False, default=156.0)
+    ENEMY_GOALIE_Y: float = struct.field(pytree_node=False, default=155.0)
 
     # Asset manifest lives in the constants so the modding framework can apply
     # asset_overrides before the renderer is constructed.
@@ -191,8 +194,7 @@ class JaxIceHockey(JaxEnvironment):
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey = None) -> Tuple:
-        # Face-off: puck at centre, each team's active skater near the dot and
-        # the second skater back in its zone, everyone frozen for a short while.
+        # Face-off: puck at centre, characters on start positions
         c = self.consts
 
         def char(x, y):
@@ -250,7 +252,7 @@ class JaxIceHockey(JaxEnvironment):
             enemy_state=new_enemy_state,
             counter=state.counter + 1,
         )
-
+        
         obs = self._get_observation(state)
         reward = self._get_reward(previous_state, state)
         done = self._get_done(state)
@@ -557,7 +559,14 @@ class JaxIceHockey(JaxEnvironment):
         rink = jnp.array(
             [c.RINK_LEFT, c.RINK_RIGHT, c.RINK_TOP, c.RINK_BOTTOM], dtype=jnp.float32
         )
-        bounds_p1 = bounds_p2 = bounds_e1 = bounds_e2 = rink
+        # Player defends the top, enemy the bottom. Each goalie is barred from the
+        # opponent's (attacking) zone; each skater is barred from its own crease.
+        bounds_player_skater = bounds_enemy_goalie = jnp.array(
+            [c.RINK_LEFT, c.RINK_RIGHT, c.RINK_TOP+c.ATTACKING_ZONE_OFFSET_Y, c.RINK_BOTTOM], dtype=jnp.float32
+        )
+        bounds_player_goalie = bounds_enemy_skater = jnp.array(
+            [c.RINK_LEFT, c.RINK_RIGHT, c.RINK_TOP, c.RINK_BOTTOM-c.ATTACKING_ZONE_OFFSET_Y], dtype=jnp.float32
+        )
 
         # 1) Active-skater resolution (per team, against the shared puck).
         player_active = self._resolve_active_character(
@@ -572,11 +581,11 @@ class JaxIceHockey(JaxEnvironment):
         # 2) Phase 1 — intended input movement, uniform over each team's two skaters.
         p1, p2 = self._apply_team_inputs(
             player_state.skater, player_state.goalie,
-            player_active, player_action, bounds_p1, bounds_p2, velocity,
+            player_active, player_action, bounds_player_skater, bounds_player_goalie, velocity,
         )
         e1, e2 = self._apply_team_inputs(
             enemy_state.skater, enemy_state.goalie,
-            enemy_active, enemy_action, bounds_e1, bounds_e2, velocity,
+            enemy_active, enemy_action, bounds_enemy_skater, bounds_enemy_goalie, velocity,
         )
 
         # 3) Phase 2 — resolve interactions across all four post-move characters.
@@ -584,7 +593,7 @@ class JaxIceHockey(JaxEnvironment):
             p1, p2, e1, e2,
             player_active, enemy_active,
             min_separation, min_vertical_distance,
-            bounds_p1, bounds_p2, bounds_e1, bounds_e2,
+            bounds_player_skater, bounds_player_goalie, bounds_enemy_skater, bounds_enemy_goalie,
         )
 
         new_player_state = player_state.replace(
