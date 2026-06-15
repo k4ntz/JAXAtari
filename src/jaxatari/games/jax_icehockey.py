@@ -4,7 +4,6 @@ from typing import Tuple, Optional
 
 import jax
 import jax.numpy as jnp
-import jax.random as jrandom
 import chex
 from flax import struct
 
@@ -40,11 +39,11 @@ class IceHockeyConstants(struct.PyTreeNode):
     RINK_TOP: int = struct.field(pytree_node=False, default=20)
     RINK_BOTTOM: int = struct.field(pytree_node=False, default=190)
 
-    # Goals. Player defends the bottom, enemy the top.
+    # Goals. Player defends the top, enemy the bottom.
     GOAL_X0: int = struct.field(pytree_node=False, default=60)
     GOAL_X1: int = struct.field(pytree_node=False, default=100)
-    ENEMY_GOAL_Y: int = struct.field(pytree_node=False, default=20)
-    PLAYER_GOAL_Y: int = struct.field(pytree_node=False, default=187)
+    ENEMY_GOAL_Y: int = struct.field(pytree_node=False, default=187)
+    PLAYER_GOAL_Y: int = struct.field(pytree_node=False, default=20)
     GOAL_HEIGHT: int = struct.field(pytree_node=False, default=7)
 
     # Sprite sizes, used for observation bounding boxes.
@@ -68,13 +67,13 @@ class IceHockeyConstants(struct.PyTreeNode):
     FACEOFF_X: float = struct.field(pytree_node=False, default=78.0)
     FACEOFF_Y: float = struct.field(pytree_node=False, default=103.0)
     PLAYER_SKATER_X: float = struct.field(pytree_node=False, default=60.0)
-    PLAYER_SKATER_Y: float = struct.field(pytree_node=False, default=115.0)
+    PLAYER_SKATER_Y: float = struct.field(pytree_node=False, default=80.0)
     PLAYER_GOALIE_X: float = struct.field(pytree_node=False, default=85.0)
-    PLAYER_GOALIE_Y: float = struct.field(pytree_node=False, default=150.0)
+    PLAYER_GOALIE_Y: float = struct.field(pytree_node=False, default=45.0)
     ENEMY_SKATER_X: float = struct.field(pytree_node=False, default=85.0)
-    ENEMY_SKATER_Y: float = struct.field(pytree_node=False, default=89.0)
+    ENEMY_SKATER_Y: float = struct.field(pytree_node=False, default=121.0)
     ENEMY_GOALIE_X: float = struct.field(pytree_node=False, default=60.0)
-    ENEMY_GOALIE_Y: float = struct.field(pytree_node=False, default=54.0)
+    ENEMY_GOALIE_Y: float = struct.field(pytree_node=False, default=156.0)
 
     # Asset manifest lives in the constants so the modding framework can apply
     # asset_overrides before the renderer is constructed.
