@@ -110,7 +110,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         
         state = self._player_step(state, action)
 
-
         done = self._get_done(state)
         env_reward = self._get_reward(previous_state, state)
         info = self._get_info(state)
@@ -144,20 +143,21 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 operand=s
             )
 
-        up = jnp.logical_or(action == Action.UP, action == Action.RIGHTFIRE)
-        down = jnp.logical_or(action == Action.DOWN, action == Action.LEFTFIRE)
+        up = action == Action.FIRE
+        down = action == Action.LEFT
         action_cancled = ~(jnp.logical_xor(up, down))
 
         player_move_state = state.player_move_state
         action_state_cases = [
-            up & ((player_move_state.main_state == PlayerStableStates.Neutral) | (player_move_state.main_state == PlayerStableStates.HalfPullUp)),
-            down & (player_move_state.main_state == PlayerStableStates.PullUp)
+            up & (player_move_state.main_state != PlayerStableStates.PullUp),
+            down & (player_move_state.main_state == PlayerStableStates.PullUp),
+            down & (player_move_state.main_state != PlayerStableStates.PullUp)
         ]
         
         branch_idx = jnp.select(
             action_state_cases, 
-            [0, 1], 
-            default=2
+            [0, 1, 2], 
+            default=3
         )
         
         next_player_move_state = jax.lax.cond(
@@ -167,6 +167,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                     branch_idx,
                     [
                         lambda s: move_upwards(s),
+                        lambda s: move_upwards(s),
                         lambda s: move_downwards(s),
                         lambda s: s
                     ],
@@ -174,6 +175,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 ),
             operand=player_move_state,
         )
+        
+        jax.debug.print("main state: {s}, sub step: {m}", s=next_player_move_state.main_state, m=next_player_move_state.sub_step)
 
         return state.replace(player_move_state=next_player_move_state)
 
