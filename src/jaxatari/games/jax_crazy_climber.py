@@ -1,6 +1,7 @@
 from encodings.punycode import digits
 from functools import partial
 import os
+from enum import IntEnum
 
 import chex
 from flax import struct
@@ -16,10 +17,23 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 from typing import Tuple
 import jaxatari.spaces as spaces
 
+# Player movement states
+
+class PlayerStableStates(IntEnum):
+    Neutral = 0
+    HalfPullUp = 1
+    PullUp = 2
+    
+@chex.dataclass
+class PlayerMoveState:
+    main_state: chex.Array 
+    sub_step: chex.Array 
+
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
     score: chex.Array
     step_counter: chex.Array
+    player_move_state: PlayerMoveState
 
 class CrazyClimberObservation(struct.PyTreeNode):
     pass
@@ -79,6 +93,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             key=state_key,
             score=jnp.array(0).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
+            player_move_state=PlayerMoveState(main_state=PlayerStableStates.Neutral, sub_step=0)
         )
         initial_obs = self._get_observation(state)
 
@@ -92,6 +107,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         _, next_rng = jax.random.split(state.key)
         state = state.replace(key=next_rng)
+        
+        state = self._player_step(state, action)
+
 
         done = self._get_done(state)
         env_reward = self._get_reward(previous_state, state)
@@ -101,10 +119,63 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         return observation, state, env_reward, done, info
     
     def _player_step(self, state: CrazyClimberState, action: chex.Array) -> CrazyClimberState:
+        def move_upwards(s: PlayerMoveState):
+            transitioning_states = ((((s.main_state == PlayerStableStates.Neutral) | (s.main_state == PlayerStableStates.HalfPullUp)) & (s.sub_step == 4)) |
+                                    ((s.main_state == PlayerStableStates.PullUp) & (s.sub_step == 9)))
+            next_state_on_transition = jnp.array([PlayerStableStates.Neutral, PlayerStableStates.HalfPullUp, PlayerStableStates.PullUp])[(s.main_state + 1) % 3] 
+            return jax.lax.cond(
+                transitioning_states,
+                lambda _: PlayerMoveState(main_state=next_state_on_transition, sub_step=0),
+                lambda s: s.replace(sub_step=s.sub_step + 1),
+                operand=s,
+            )
+
+        def move_downwards(s: PlayerMoveState):
+            is_down_move_possible = (s.sub_step > 0) & (s.main_state != PlayerStableStates.PullUp)
+            return jax.lax.cond(
+                is_down_move_possible,
+                lambda s: jax.lax.cond(
+                    (s.main_state == PlayerStableStates.HalfPullUp) & (s.sub_step == 1),
+                    lambda _: PlayerMoveState(main_state=PlayerStableStates.Neutral, sub_step=0),
+                    lambda s: s.replace(sub_step=s.sub_step - 1),
+                    operand=s
+                ),
+                lambda s: s,
+                operand=s
+            )
+
         up = jnp.logical_or(action == Action.UP, action == Action.RIGHTFIRE)
         down = jnp.logical_or(action == Action.DOWN, action == Action.LEFTFIRE)
+        action_cancled = ~(jnp.logical_xor(up, down))
 
-        return state
+        player_move_state = state.player_move_state
+        action_state_cases = [
+            up & ((player_move_state.main_state == PlayerStableStates.Neutral) | (player_move_state.main_state == PlayerStableStates.HalfPullUp)),
+            down & (player_move_state.main_state == PlayerStableStates.PullUp)
+        ]
+        
+        branch_idx = jnp.select(
+            action_state_cases, 
+            [0, 1], 
+            default=2
+        )
+        
+        next_player_move_state = jax.lax.cond(
+            action_cancled,
+            lambda s: s,
+            lambda s: jax.lax.switch(
+                    branch_idx,
+                    [
+                        lambda s: move_upwards(s),
+                        lambda s: move_downwards(s),
+                        lambda s: s
+                    ],
+                    operand=s
+                ),
+            operand=player_move_state,
+        )
+
+        return state.replace(player_move_state=next_player_move_state)
 
     def render(self, state: CrazyClimberState) -> jnp.ndarray:
         return self.renderer.render(state)
