@@ -222,6 +222,7 @@ class JaxIceHockey(JaxEnvironment):
 
         candidate  = jnp.where(player_has_puck, puck_position + noise, puck_position)
         new_target = jnp.where(
+            #every four frames
             ((counter % 4) == 0) & ~enemy_has_puck,
             candidate,
             enemy_state.enemy_target,
@@ -246,6 +247,8 @@ class JaxIceHockey(JaxEnvironment):
         c   = self.consts
         es  = state.enemy_state
         ai  = es.active_character
+        #0 enemy 1 1 enemy 2
+        #jnp.where( BEDINGUNG , WERT_WENN_JA , WERT_WENN_NEIN )
         pos = jnp.where(ai == 0, es.enemy1.position, es.enemy2.position)
         has = es.enemy1.has_puck | es.enemy2.has_puck
 
