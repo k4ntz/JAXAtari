@@ -249,17 +249,26 @@ class JaxIceHockey(JaxEnvironment):
     def step(self, state: IceHockeyState, action):
         previous_state = state
 
+        enemy_action = self._enemy_policy(state)
         new_player_state, new_enemy_state = self._characters_step(
             state.player_state,
             state.enemy_state,
             state.puck_state.position,
             player_action=action,
-            enemy_action=jnp.array(Action.NOOP, dtype=jnp.int32),
+            enemy_action=enemy_action,
+        )
+        new_lfsr, new_enemy_state = self._update_enemy_target(
+            state.counter + 1,
+            state.lfsr,
+            state.puck_state.position,
+            new_player_state,
+            new_enemy_state,
         )
         state = state.replace(
             player_state=new_player_state,
             enemy_state=new_enemy_state,
             counter=state.counter + 1,
+            lfsr=new_lfsr,
         )
 
         obs = self._get_observation(state)
