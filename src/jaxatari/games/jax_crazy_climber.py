@@ -26,9 +26,10 @@ class PlayerStableStates(IntEnum):
     
 @chex.dataclass
 class PlayerMoveState:
-    main_state: chex.Array 
-    sub_step: chex.Array
-    side_step: chex.Array
+    main_state: int 
+    sub_step: int 
+    side_step: int 
+    hand_dir: int
 
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
@@ -99,7 +100,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             key=state_key,
             score=jnp.array(0).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
-            player_move_state=PlayerMoveState(main_state=PlayerStableStates.Neutral, sub_step=0),
+            player_move_state=PlayerMoveState(main_state=PlayerStableStates.Neutral, sub_step=0, side_step=0, hand_dir=1),
             player_x=jnp.array(96.0, dtype=jnp.float32),
         )
         initial_obs = self._get_observation(state)
@@ -126,76 +127,104 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     
     def _player_step(self, state: CrazyClimberState, action: chex.Array) -> CrazyClimberState:
         def move_upwards(s: PlayerMoveState): 
+            is_up_move_possible = (jax.lax.abs(s.side_step) <= 3)
             transitioning_states = (((s.main_state != PlayerStableStates.PullUp) & (s.sub_step == 4)) |
                                     ((s.main_state == PlayerStableStates.PullUp) & (s.sub_step == 9)))
             next_state_on_transition = jnp.array([PlayerStableStates.Neutral, PlayerStableStates.HalfPullUp, PlayerStableStates.PullUp])[(s.main_state + 1) % 3] 
-            return jax.lax.cond(
-                transitioning_states,
-                lambda _: PlayerMoveState(main_state=next_state_on_transition, sub_step=0),
-                lambda s: s.replace(sub_step=s.sub_step + 1),
-                operand=s,
+            next_hand_dir = jax.lax.select(
+                transitioning_states & (next_state_on_transition == PlayerStableStates.Neutral),
+                s.hand_dir * -1,
+                s.hand_dir
             )
-
-        def move_downwards(s: PlayerMoveState):
-            is_down_move_possible = (s.sub_step > 0) & (s.main_state != PlayerStableStates.PullUp)
             return jax.lax.cond(
-                is_down_move_possible,
+                is_up_move_possible,
                 lambda s: jax.lax.cond(
-                    (s.main_state == PlayerStableStates.HalfPullUp) & (s.sub_step == 1),
-                    lambda _: PlayerMoveState(main_state=PlayerStableStates.Neutral, sub_step=0),
-                    lambda s: s.replace(sub_step=s.sub_step - 1),
-                    operand=s
+                    transitioning_states,
+                    lambda _: s.replace(main_state=next_state_on_transition, sub_step=0, hand_dir=next_hand_dir),
+                    lambda s: s.replace(sub_step=s.sub_step + 1),
+                    operand=s,
                 ),
                 lambda s: s,
                 operand=s
             )
 
+        def move_downwards(s: PlayerMoveState):
+            is_down_move_possible = (jax.lax.abs(s.side_step) <= 3) & (s.sub_step > 0) & (s.main_state != PlayerStableStates.PullUp)
+            next_hand_dir = jax.lax.select(
+                (s.main_state == PlayerStableStates.Neutral) & (s.sub_step == 1),
+                s.hand_dir * -1,
+                s.hand_dir
+            )
+            return jax.lax.cond(
+                is_down_move_possible,
+                lambda s: jax.lax.cond(
+                    (s.main_state == PlayerStableStates.HalfPullUp) & (s.sub_step == 1),
+                    lambda _: s.replace(main_state=PlayerStableStates.Neutral, sub_step=0, hand_dir=s.hand_dir * -1),
+                    lambda s: s.replace(sub_step=s.sub_step - 1, hand_dir=next_hand_dir),
+                    operand=s
+                ),
+                lambda s: s,
+                operand=s
+            )
+        
+        def move_horizontal(s: PlayerMoveState, dir: int):
+            is_right_move_possible = s.sub_step == 0
+            return jax.lax.cond(
+                is_right_move_possible,
+                lambda s: jax.lax.cond(
+                    (jax.lax.abs(s.side_step) >= 12) & (jax.lax.sign(s.side_step) == jax.lax.sign(dir)),
+                    lambda s: s.replace(side_step=0),
+                    lambda s: s.replace(side_step=s.side_step + dir),
+                    operand=s,
+                ),
+                lambda s: s,
+                operand=s,
+            )
+
         up = action == Action.UP
         down = action == Action.DOWN
-        action_cancelled_y = ~(jnp.logical_xor(up, down))
-
         left = action == Action.LEFT
         right = action == Action.RIGHT
-        action_cancelled_x = ~(jnp.logical_xor(left, right))
 
         player_move_state = state.player_move_state
         action_state_cases = [
             up & (player_move_state.main_state != PlayerStableStates.PullUp),
             down & (player_move_state.main_state == PlayerStableStates.PullUp),
-            down & (player_move_state.main_state != PlayerStableStates.PullUp)
+            down & (player_move_state.main_state != PlayerStableStates.PullUp),
+            left,
+            right,
         ]
         
         branch_idx = jnp.select(
             action_state_cases, 
-            [0, 1, 2], 
-            default=3
+            [0, 1, 2, 3, 4], 
+            default=5
         )
         
-        next_player_move_state = jax.lax.cond(
-<<<<<<< Updated upstream
-            action_cancled_y,
-=======
-            action_cancelled,
->>>>>>> Stashed changes
-            lambda s: s,
-            lambda s: jax.lax.switch(
-                    branch_idx,
-                    [
-                        lambda s: move_upwards(s),
-                        lambda s: move_upwards(s),
-                        lambda s: move_downwards(s),
-                        lambda s: s
-                    ],
-                    operand=s
-                ),
-            operand=player_move_state,
+        next_player_move_state = jax.lax.switch(
+            branch_idx,
+            [
+                lambda s: move_upwards(s),
+                lambda s: move_upwards(s),
+                lambda s: move_downwards(s),
+                lambda s: move_horizontal(s, -1),
+                lambda s: move_horizontal(s, 1),
+                lambda s: s
+            ],
+            operand=player_move_state
         )
 
         new_x = jnp.clip(
             state.player_x + 0
         )
         
-        jax.debug.print("main state: {s}, sub step: {m}", s=next_player_move_state.main_state, m=next_player_move_state.sub_step)
+        jax.debug.print(
+            "main state: {x}, sub step: {y}, side step {z}, hand dir: {w}", 
+            x=next_player_move_state.main_state, 
+            y=next_player_move_state.sub_step,
+            z=next_player_move_state.side_step,
+            w=next_player_move_state.hand_dir,
+        )
 
         return state.replace(
             player_move_state=next_player_move_state,
