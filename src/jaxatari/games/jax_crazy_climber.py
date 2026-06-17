@@ -48,7 +48,7 @@ def _get_default_asset_config() -> tuple:
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
-        {'name': 'player_left_first_state_group', 'type': 'group', 'files': [
+        {'name': 'player_left_first_up_state_group', 'type': 'group', 'files': [
             'player_neutral_0.npy',
             'player_neutral_2_l.npy',
             'player_neutral_3_l.npy',
@@ -62,7 +62,21 @@ def _get_default_asset_config() -> tuple:
             'player_pull_up_4.npy',
             'player_pull_up_7.npy',
             ]},
-        {'name': 'player_right_first_state_group', 'type': 'group', 'files': [
+        {'name': 'player_right_first_up_state_group', 'type': 'group', 'files': [
+            'player_neutral_0.npy',
+            'player_neutral_2_r.npy',
+            'player_neutral_3_r.npy',
+            'player_neutral_4_r.npy',
+            'player_half_pull_up_0_r.npy',
+            'player_half_pull_up_2_r.npy',
+            'player_half_pull_up_3_r.npy',
+            'player_half_pull_up_4_r.npy',
+            'player_pull_up_0.npy',
+            'player_pull_up_1.npy',
+            'player_pull_up_4.npy',
+            'player_pull_up_7.npy',
+            ]},
+        {'name': 'player_right_side_state_group', 'type': 'group', 'files': [
             'player_neutral_0.npy',
             'player_neutral_2_r.npy',
             'player_neutral_3_r.npy',
@@ -314,8 +328,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
             self.PLAYER_UPWARDS_SPRITES = jnp.array([
-                self.SHAPE_MASKS["player_left_first_state_group"],
-                self.SHAPE_MASKS["player_right_first_state_group"],
+                self.SHAPE_MASKS["player_left_first_up_state_group"],
+                self.SHAPE_MASKS["player_right_first_up_state_group"],
             ])
 
         @partial(jax.jit, static_argnums=(0,))
