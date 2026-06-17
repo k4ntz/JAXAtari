@@ -232,6 +232,7 @@ class JaxIceHockey(JaxEnvironment):
                 position_stick=jnp.array(0, dtype=jnp.int32),
             ),
             counter=jnp.array(0, dtype=jnp.int32),
+            lfsr=jnp.array(0xACE1, dtype=jnp.int32),
             game_state=GameState(
                 pause_counter=jnp.array(c.FACE_OFF_FRAMES, dtype=jnp.int32),
                 player_score=jnp.array(0, dtype=jnp.int32),
