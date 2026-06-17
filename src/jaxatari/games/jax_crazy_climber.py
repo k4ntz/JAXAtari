@@ -47,9 +47,34 @@ def _get_default_asset_config() -> tuple:
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
-        {'name': 'player_group', 'type': 'group', 'files': [
+        {'name': 'player_left_state_group', 'type': 'group', 'files': [
             'player_basic.npy',
-            'player_half_pullup.npy',
+            #player_l_1.npy
+            #player_l_2.npy
+            #player_l_3.npy
+            #player_l_4.npy
+            #player_l_5.npy
+            #player_l_6.npy
+            #player_l_7.npy
+            #player_l_8.npy
+            #player_l_9.npy
+            ]},
+        {'name': 'player_right_state_group', 'type': 'group', 'files': [
+            'player_basic.npy',
+            #player_r_1.npy
+            #player_r_2.npy
+            #player_r_3.npy
+            #player_r_4.npy
+            #player_r_5.npy
+            #player_r_6.npy
+            #player_r_7.npy
+            #player_r_8.npy
+            #player_r_9.npy
+            ]},
+        {'name': 'player_main_state_group', 'type': 'group', 'files': [
+            'player_basic.npy',
+            #player_half_pullup.npy,
+            'player_full_pullup.npy',
             ]},
     )
 
@@ -172,11 +197,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         )
         
         next_player_move_state = jax.lax.cond(
-<<<<<<< Updated upstream
-            action_cancled_y,
-=======
-            action_cancelled,
->>>>>>> Stashed changes
+            action_cancelled_y,
             lambda s: s,
             lambda s: jax.lax.switch(
                     branch_idx,
@@ -268,14 +289,22 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
             raster = self.jr.create_object_raster(self.BACKGROUND)
 
-            player_masks = self.SHAPE_MASKS["player_group"]
+            player_main_state_masks = self.SHAPE_MASKS["player_main_state_group"]
+            player_left_state_masks = self.SHAPE_MASKS["player_left_state_group"]
+            player_right_state_masks = self.SHAPE_MASKS["player_right_state_group"]
 
-            def map_player_to_sprite(pos):
-                return jax.lax.switch(pos,
-                    [lambda: player_masks[0], lambda: player_masks[1]]
-                )
-            pos = jnp.clip(state.player_move_state.main_state, 0, 1)
-            player_sprite = map_player_to_sprite(pos)
+            def map_player_to_sprite(main_state, sub_state):
+                return jax.lax.switch(main_state, [
+                    jax.lax.switch(sub_state, [
+                        lambda: player_main_state_masks[0],
+                        lambda: player_sub_state_masks[1],
+                        lambda: player_main_state_masks[2] 
+                        ]),
+                    lambda: player_main_state_masks[1]
+                ])
+            main_state = state.player_move_state.main_state
+            sub_state = state.player_move_state.sub_step
+            player_sprite = map_player_to_sprite(main_state, sub_state)
 
             raster = self.jr.render_at(
                 raster,
