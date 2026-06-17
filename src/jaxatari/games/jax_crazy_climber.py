@@ -373,7 +373,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             raster = self.jr.render_at(
                 raster,
                 jnp.round(state.player_move_state.pos_x).astype(jnp.int32),
-                self.consts.PLAYER_Y,
+                jax.lax.cond(
+                    jnp.logical_and(sprite_index >= 5, sprite_index <= 10),
+                    lambda _: self.consts.PLAYER_Y - 2,
+                    lambda _: self.consts.PLAYER_Y,
+                    operand=None),
                 player_sprite,
             )
 
