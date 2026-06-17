@@ -225,6 +225,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             default=5
         )
         
+<<<<<<< HEAD
         next_player_move_state = jax.lax.switch(
             branch_idx,
             [
@@ -236,6 +237,26 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 lambda s: s
             ],
             operand=player_move_state
+=======
+        next_player_move_state = jax.lax.cond(
+            action_cancelled_y,
+            lambda s: s,
+            lambda s: jax.lax.switch(
+                    branch_idx,
+                    [
+                        lambda s: move_upwards(s),
+                        lambda s: move_upwards(s),
+                        lambda s: move_downwards(s),
+                        lambda s: s
+                    ],
+                    operand=s
+                ),
+            operand=player_move_state,
+        )
+
+        new_x = jnp.clip(
+            state.player_x + 0
+>>>>>>> cdf0fbf (first sprite groups)
         )
         
         jax.debug.print(
@@ -322,6 +343,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
             raster = self.jr.create_object_raster(self.BACKGROUND)
 
+<<<<<<< HEAD
             move_state = state.player_move_state
 
             sprite_index = 5 * move_state.main_state + move_state.sub_step
@@ -355,6 +377,24 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 ])
             
             player_sprite = map_player_to_sprite(sprite_index, hand_index)
+=======
+            player_main_state_masks = self.SHAPE_MASKS["player_main_state_group"]
+            player_left_state_masks = self.SHAPE_MASKS["player_left_state_group"]
+            player_right_state_masks = self.SHAPE_MASKS["player_right_state_group"]
+
+            def map_player_to_sprite(main_state, sub_state):
+                return jax.lax.switch(main_state, [
+                    jax.lax.switch(sub_state, [
+                        lambda: player_main_state_masks[0],
+                        lambda: player_sub_state_masks[1],
+                        lambda: player_main_state_masks[2] 
+                        ]),
+                    lambda: player_main_state_masks[1]
+                ])
+            main_state = state.player_move_state.main_state
+            sub_state = state.player_move_state.sub_step
+            player_sprite = map_player_to_sprite(main_state, sub_state)
+>>>>>>> cdf0fbf (first sprite groups)
 
             raster = self.jr.render_at(
                 raster,
