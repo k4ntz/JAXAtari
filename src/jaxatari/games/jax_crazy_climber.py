@@ -78,8 +78,8 @@ def _get_default_asset_config() -> tuple:
             ]},
         {'name': 'player_right_side_state_group', 'type': 'group', 'files': [
             'player_neutral_0.npy',
-            'player_neutral_2_r.npy',
-            'player_neutral_3_r.npy',
+            #'player_neutral_5_sideways_r.npy',
+            #'player_neutral_9_sidewayr.npy',
             'player_neutral_4_r.npy',
             'player_half_pull_up_0_r.npy',
             'player_half_pull_up_2_r.npy',
@@ -373,11 +373,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             raster = self.jr.render_at(
                 raster,
                 jnp.round(state.player_move_state.pos_x).astype(jnp.int32),
-                jax.lax.cond(
-                    jnp.logical_and(sprite_index >= 5, sprite_index <= 10),
-                    lambda _: self.consts.PLAYER_Y - 2,
-                    lambda _: self.consts.PLAYER_Y,
-                    operand=None),
+                self.consts.PLAYER_Y,
                 player_sprite,
             )
 
