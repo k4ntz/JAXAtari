@@ -265,11 +265,13 @@ class JaxIceHockey(JaxEnvironment):
         near_goal    = jnp.abs(pos[1] - jnp.float32(c.PLAYER_GOAL_Y)) < 50.0
         should_shoot = has & near_goal
 
-        ps = state.player_state
-        thresh2  = jnp.float32(c.MIN_SEPARATION ** 2 + 10.0)   # contact radius (squared)
-        p1_close = jnp.sum((pos - ps.player1.position) ** 2) < thresh2
-        p2_close = jnp.sum((pos - ps.player2.position) ** 2) < thresh2
-        should_tackle = ~has & (p1_close | p2_close)
+
+        # tackle mechanic uncommented as we still need do find out a reasonable mechanic
+        # ps = state.player_state
+        # thresh2  = jnp.float32(c.MIN_SEPARATION ** 2)   # contact radius (squared)
+        # p1_close = jnp.sum((pos - ps.player1.position) ** 2) < thresh2
+        # p2_close = jnp.sum((pos - ps.player2.position) ** 2) < thresh2
+        # should_tackle = ~has & (p1_close | p2_close)
 
         return jnp.where(should_shoot,  jnp.int32(Action.DOWNFIRE),
                jnp.where(should_tackle, jnp.int32(Action.FIRE),
