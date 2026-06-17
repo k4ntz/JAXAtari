@@ -46,8 +46,10 @@ def _get_default_asset_config() -> tuple:
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
-        #{'name': 'life', 'type': 'life', 'file': 'life.npy'},
-        {'name': 'player', 'type': 'single', 'file': 'player_basic.npy'},
+        {'name': 'player_group', 'type': 'group', 'files': [
+            'player_basic.npy',
+            'player_half_pullup.npy',
+            ]},
     )
 
 class CrazyClimberConstants(struct.PyTreeNode):
@@ -261,12 +263,20 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
             raster = self.jr.create_object_raster(self.BACKGROUND)
 
-            player_mask = self.SHAPE_MASKS["player"]
+            player_masks = self.SHAPE_MASKS["player_group"]
+
+            def map_player_to_sprite(pos):
+                return jax.lax.switch(pos,
+                    [lambda: player_masks[0], lambda: player_masks[1]]
+                )
+            pos = jnp.clip(state.player_move_state.main_state, 0, 1)
+            player_sprite = map_player_to_sprite(pos)
+
             raster = self.jr.render_at(
                 raster,
                 jnp.round(state.player_x).astype(jnp.int32),
                 self.consts.PLAYER_Y,
-                player_mask,
+                player_sprite,
             )
 
             digits = self.jr.int_to_digits(state.score, max_digits=6)
