@@ -223,6 +223,7 @@ class JaxIceHockey(JaxEnvironment):
                 skater=char(c.ENEMY_SKATER_X, c.ENEMY_SKATER_Y),
                 goalie=char(c.ENEMY_GOALIE_X, c.ENEMY_GOALIE_Y),
                 active_character=jnp.array(0, dtype=jnp.int32),
+                enemy_target=jnp.array([c.FACEOFF_X, c.FACEOFF_Y], dtype=jnp.float32),
             ),
             puck_state=PuckState(
                 position=jnp.array([c.FACEOFF_X, c.FACEOFF_Y], dtype=jnp.float32),
