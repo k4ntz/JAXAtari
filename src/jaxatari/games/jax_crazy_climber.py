@@ -81,6 +81,44 @@ def _get_default_asset_config() -> tuple:
             'player_neutral_5_sideways_r.npy',
             'player_neutral_9_sideways_r.npy',
             ]},
+        {'name': 'player_left_side_neutral_state_group', 'type': 'group', 'files': [
+            'player_neutral_0.npy',
+            'player_neutral_5_sideways_l.npy',
+            'player_neutral_9_sideways_l.npy',
+            ]},
+
+        {'name': 'player_left_hand_right_side_half_pull_up_state_group', 'type': 'group', 'files': [
+            'player_half_pull_up_0_l.npy',
+            'player_half_pull_up_5_l_sideways_r.npy',
+            'player_half_pull_up_9_l_sideways_r.npy',
+            ]},
+        {'name': 'player_left_hand_left_side_half_pull_up_state_group', 'type': 'group', 'files': [
+            'player_half_pull_up_0_l.npy',
+            'player_half_pull_up_5_l_sideways_l.npy',
+            'player_half_pull_up_9_l_sideways_l.npy',
+            ]},
+
+        {'name': 'player_right_hand_right_side_half_pull_up_state_group', 'type': 'group', 'files': [
+            'player_half_pull_up_0_r.npy',
+            'player_half_pull_up_5_r_sideways_r.npy',
+            'player_half_pull_up_9_r_sideways_r.npy',
+            ]},
+        {'name': 'player_right_hand_left_side_half_pull_up_state_group', 'type': 'group', 'files': [
+            'player_half_pull_up_0_r.npy',
+            'player_half_pull_up_5_r_sideways_l.npy',
+            'player_half_pull_up_9_r_sideways_l.npy',
+            ]},
+
+        {'name': 'player_right_side_pull_up_state_group', 'type': 'group', 'files': [
+            'player_pull_up_0.npy',
+            'player_pull_up_5_sideways_r.npy',
+            'player_pull_up_9_sideways_r.npy',
+            ]},
+        {'name': 'player_left_side_pull_up_state_group', 'type': 'group', 'files': [
+            'player_pull_up_0.npy',
+            'player_pull_up_5_sideways_l.npy',
+            'player_pull_up_9_sideways_l.npy',
+            ]},
     )
 
 class CrazyClimberConstants(struct.PyTreeNode):
@@ -91,7 +129,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
     HEIGHT: int = struct.field(pytree_node=False, default=210)
 
     PLAYER_Y: int = struct.field(pytree_node=False, default=140)
-    PLAYER_DELTA_X: float = struct.field(pytree_node=False, default=10)
+    PLAYER_DELTA_X: float = struct.field(pytree_node=False, default=5)
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
 
@@ -325,18 +363,37 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             self.PLAYER_SIDEWAYS_SPRITES = jnp.array([
                 jnp.array([
-                    self.SHAPE_MASKS["player_right_side_neutral_state_group"],
-                    #self.SHAPE_MASKS["player_left_side_neutral_state_group"],
+                    jnp.array([
+                        self.SHAPE_MASKS["player_left_side_neutral_state_group"],
+                        self.SHAPE_MASKS["player_right_side_neutral_state_group"],
+                    ]),
+                    # TODO: Placeholder, to fix dim mismatch. Just a workaround, will be reworked
+                    jnp.array([
+                        self.SHAPE_MASKS["player_left_side_neutral_state_group"],
+                        self.SHAPE_MASKS["player_right_side_neutral_state_group"],
+                    ]),
+                    
                 ]),
                 jnp.array([
-                    self.SHAPE_MASKS["player_right_side_neutral_state_group"],
-                    #self.SHAPE_MASKS["player_right_side_half_pull_up_state_group"],
-                    #self.SHAPE_MASKS["player_left_side_half_pull_up_state_group"],
+                    jnp.array([
+                        self.SHAPE_MASKS["player_left_hand_left_side_half_pull_up_state_group"],
+                        self.SHAPE_MASKS["player_left_hand_right_side_half_pull_up_state_group"],
+                    ]),
+                    jnp.array([
+                        self.SHAPE_MASKS["player_right_hand_left_side_half_pull_up_state_group"],
+                        self.SHAPE_MASKS["player_right_hand_right_side_half_pull_up_state_group"],
+                    ]),
                 ]),
                 jnp.array([
-                    self.SHAPE_MASKS["player_right_side_neutral_state_group"],
-                    #self.SHAPE_MASKS["player_right_side_pull_up_state_group"],
-                    #self.SHAPE_MASKS["player_left_side_pull_up_state_group"],
+                    jnp.array([
+                        self.SHAPE_MASKS["player_left_side_pull_up_state_group"],
+                        self.SHAPE_MASKS["player_right_side_pull_up_state_group"],
+                    ]),
+                    # TODO: Placeholder, to fix dim mismatch. Just a workaround, will be reworked
+                    jnp.array([
+                        self.SHAPE_MASKS["player_left_side_pull_up_state_group"],
+                        self.SHAPE_MASKS["player_right_side_pull_up_state_group"],
+                    ]),
                 ]),
             ])
 
@@ -359,8 +416,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             def map_player_to_sprite(sprite_index_up, sprite_index_side, hand_index, side_index):
                 return jax.lax.cond(
-                    jnp.logical_and(move_state.sub_step == 0, move_state.side_step != 0),
-                    lambda _: self.PLAYER_SIDEWAYS_SPRITES[move_state.main_state][side_index][sprite_index_side],
+                    jnp.logical_and(move_state.sub_step == 0, jnp.abs(move_state.side_step) > 3),
+                    lambda _: self.PLAYER_SIDEWAYS_SPRITES[move_state.main_state][hand_index][side_index][sprite_index_side],
                     lambda _: jnp.pad(self.PLAYER_UPWARDS_SPRITES[hand_index][sprite_index_up], ((0, 0), (0, 2))),
                     operand=None
                 )
