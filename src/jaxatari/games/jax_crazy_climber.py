@@ -26,17 +26,17 @@ class PlayerStableStates(IntEnum):
     
 @chex.dataclass
 class PlayerMoveState:
-    main_state: int 
+    main_state: PlayerStableStates 
     sub_step: int 
     side_step: int 
     hand_dir: int
+    pos_x: float
 
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
     score: chex.Array
     step_counter: chex.Array
     player_move_state: PlayerMoveState
-    player_x: chex.Array
 
 class CrazyClimberObservation(struct.PyTreeNode):
     pass
@@ -100,8 +100,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             key=state_key,
             score=jnp.array(0).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
-            player_move_state=PlayerMoveState(main_state=PlayerStableStates.Neutral, sub_step=0, side_step=0, hand_dir=1),
-            player_x=jnp.array(96.0, dtype=jnp.float32),
+            player_move_state=PlayerMoveState(main_state=PlayerStableStates.Neutral, sub_step=0, side_step=0, hand_dir=1, pos_x=96),
         )
         initial_obs = self._get_observation(state)
 
@@ -173,7 +172,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 is_right_move_possible,
                 lambda s: jax.lax.cond(
                     (jax.lax.abs(s.side_step) >= 12) & (jax.lax.sign(s.side_step) == jax.lax.sign(dir)),
-                    lambda s: s.replace(side_step=0),
+                    lambda s: s.replace(side_step=0, pos_x=s.pos_x + dir * 10),
                     lambda s: s.replace(side_step=s.side_step + dir),
                     operand=s,
                 ),
@@ -213,10 +212,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             ],
             operand=player_move_state
         )
-
-        new_x = jnp.clip(
-            state.player_x + 0
-        )
         
         jax.debug.print(
             "main state: {x}, sub step: {y}, side step {z}, hand dir: {w}", 
@@ -228,7 +223,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         return state.replace(
             player_move_state=next_player_move_state,
-            player_x = new_x)
+        )
 
     def render(self, state: CrazyClimberState) -> jnp.ndarray:
         return self.renderer.render(state)
@@ -308,7 +303,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             raster = self.jr.render_at(
                 raster,
-                jnp.round(state.player_x).astype(jnp.int32),
+                jnp.round(state.player_move_state.pos_x).astype(jnp.int32),
                 self.consts.PLAYER_Y,
                 player_sprite,
             )
