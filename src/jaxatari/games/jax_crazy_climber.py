@@ -79,7 +79,7 @@ def _get_default_asset_config() -> tuple:
         {'name': 'player_right_side_neutral_state_group', 'type': 'group', 'files': [
             'player_neutral_0.npy',
             'player_neutral_5_sideways_r.npy',
-            #'player_neutral_9_sidewayr.npy',
+            'player_neutral_9_sideways_r.npy',
             ]},
     )
 
@@ -323,6 +323,23 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 self.SHAPE_MASKS["player_right_first_up_state_group"],
             ])
 
+            self.PLAYER_SIDEWAYS_SPRITES = jnp.array([
+                jnp.array([
+                    self.SHAPE_MASKS["player_right_side_neutral_state_group"],
+                    #self.SHAPE_MASKS["player_left_side_neutral_state_group"],
+                ]),
+                jnp.array([
+                    self.SHAPE_MASKS["player_right_side_neutral_state_group"],
+                    #self.SHAPE_MASKS["player_right_side_half_pull_up_state_group"],
+                    #self.SHAPE_MASKS["player_left_side_half_pull_up_state_group"],
+                ]),
+                jnp.array([
+                    self.SHAPE_MASKS["player_right_side_neutral_state_group"],
+                    #self.SHAPE_MASKS["player_right_side_pull_up_state_group"],
+                    #self.SHAPE_MASKS["player_left_side_pull_up_state_group"],
+                ]),
+            ])
+
             self.PLAYER_UPWARDS_SPRITE_SEQUENCE = jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 10, 10, 10, 11, 11, 11])
             self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE = jnp.array([0, 0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3])
 
@@ -330,29 +347,25 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
             raster = self.jr.create_object_raster(self.BACKGROUND)
 
-            sideways_sprite_masks_neutral = self.SHAPE_MASKS["player_right_side_neutral_state_group"]
-
             move_state = state.player_move_state
 
-            sprite_index_up = self.PLAYER_UPWARDS_SPRITE_SEQUENCE[5 * move_state.main_state + move_state.sub_step] 
+            sprite_index_up = self.PLAYER_UPWARDS_SPRITE_SEQUENCE[5 * move_state.main_state + move_state.sub_step]
             hand_index = jax.lax.switch(move_state.hand_dir, [
                 lambda: 0,
                 lambda: 1
             ])
+            sprite_index_side = self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE[jnp.abs(move_state.side_step)] 
+            side_index = jnp.where(move_state.side_step > 0, 1, 0)
 
-            def map_player_to_sprite(sprite_index_up, hand_index):
+            def map_player_to_sprite(sprite_index_up, sprite_index_side, hand_index, side_index):
                 return jax.lax.cond(
-                    move_state.side_step == 0,
-                    lambda _: jax.lax.switch(move_state.main_state, [
-                            lambda _: jnp.pad(sideways_sprite_masks_neutral[0], ((0, 2), (0, 0)))
-                        ],
-                        operand=None
-                    ),
-                    lambda _: self.PLAYER_UPWARDS_SPRITES[hand_index][sprite_index_up],
+                    move_state.sub_step == 0,
+                    lambda _: jnp.pad(self.PLAYER_SIDEWAYS_SPRITES[move_state.main_state][side_index][sprite_index_side], ((0, 2), (0, 0))),
+                    lambda _: jnp.pad(self.PLAYER_UPWARDS_SPRITES[hand_index][sprite_index_up], ((0, 0), (0, 2))),
                     operand=None
                 )
             
-            player_sprite = map_player_to_sprite(sprite_index_up, hand_index)
+            player_sprite = map_player_to_sprite(sprite_index_up, sprite_index_side, hand_index, side_index)
 
             raster = self.jr.render_at(
                 raster,
