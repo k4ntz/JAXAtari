@@ -332,42 +332,23 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 self.SHAPE_MASKS["player_right_first_up_state_group"],
             ])
 
+            self.PLAYER_UPWARDS_SPRITE_SEQUENCE = jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 10, 10, 10, 11, 11, 11])
+
         @partial(jax.jit, static_argnums=(0,))
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
             raster = self.jr.create_object_raster(self.BACKGROUND)
 
             move_state = state.player_move_state
 
-            sprite_index = 5 * move_state.main_state + move_state.sub_step
+            sprite_index = self.PLAYER_UPWARDS_SPRITE_SEQUENCE[5 * move_state.main_state + move_state.sub_step] 
             hand_index = jax.lax.switch(move_state.hand_dir, [
                 lambda: 0,
                 lambda: 1
             ])
 
             def map_player_to_sprite(sprite_index, hand_index):
-                return jax.lax.switch(sprite_index, [
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][0],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][0],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][1],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][2],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][3],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][4],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][4],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][5],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][6],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][7],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][8],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][9],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][9],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][9],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][10],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][10],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][10],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][11],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][11],
-                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][11],
-                ])
-              
+                return self.PLAYER_UPWARDS_SPRITES[hand_index][sprite_index]
+            
             player_sprite = map_player_to_sprite(sprite_index, hand_index)
 
             raster = self.jr.render_at(
