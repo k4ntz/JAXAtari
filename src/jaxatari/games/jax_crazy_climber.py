@@ -359,7 +359,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             def map_player_to_sprite(sprite_index_up, sprite_index_side, hand_index, side_index):
                 return jax.lax.cond(
-                    move_state.sub_step == 0,
+                    jnp.logical_and(move_state.sub_step == 0, move_state.side_step != 0),
                     lambda _: self.PLAYER_SIDEWAYS_SPRITES[move_state.main_state][side_index][sprite_index_side],
                     lambda _: jnp.pad(self.PLAYER_UPWARDS_SPRITES[hand_index][sprite_index_up], ((0, 0), (0, 2))),
                     operand=None
