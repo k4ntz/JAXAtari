@@ -27,7 +27,8 @@ class PlayerStableStates(IntEnum):
 @chex.dataclass
 class PlayerMoveState:
     main_state: chex.Array 
-    sub_step: chex.Array 
+    sub_step: chex.Array
+    side_step: chex.Array
 
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
@@ -124,8 +125,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         return observation, state, env_reward, done, info
     
     def _player_step(self, state: CrazyClimberState, action: chex.Array) -> CrazyClimberState:
-        def move_upwards(s: PlayerMoveState):
-            transitioning_states = ((((s.main_state == PlayerStableStates.Neutral) | (s.main_state == PlayerStableStates.HalfPullUp)) & (s.sub_step == 4)) |
+        def move_upwards(s: PlayerMoveState): 
+            transitioning_states = (((s.main_state != PlayerStableStates.PullUp) & (s.sub_step == 4)) |
                                     ((s.main_state == PlayerStableStates.PullUp) & (s.sub_step == 9)))
             next_state_on_transition = jnp.array([PlayerStableStates.Neutral, PlayerStableStates.HalfPullUp, PlayerStableStates.PullUp])[(s.main_state + 1) % 3] 
             return jax.lax.cond(
@@ -151,11 +152,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         up = action == Action.UP
         down = action == Action.DOWN
-        action_cancled_y = ~(jnp.logical_xor(up, down))
+        action_cancelled_y = ~(jnp.logical_xor(up, down))
 
         left = action == Action.LEFT
         right = action == Action.RIGHT
-        action_cancled_x = ~(jnp.logical_xor(left, right))
+        action_cancelled_x = ~(jnp.logical_xor(left, right))
 
         player_move_state = state.player_move_state
         action_state_cases = [
@@ -171,7 +172,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         )
         
         next_player_move_state = jax.lax.cond(
+<<<<<<< Updated upstream
             action_cancled_y,
+=======
+            action_cancelled,
+>>>>>>> Stashed changes
             lambda s: s,
             lambda s: jax.lax.switch(
                     branch_idx,
