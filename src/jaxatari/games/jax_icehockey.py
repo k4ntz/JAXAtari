@@ -613,6 +613,112 @@ class JaxIceHockey(JaxEnvironment):
         )
         return new_player_state, new_enemy_state
 
+
+    @staticmethod
+    def _lfsr_step(lfsr: chex.Array) -> chex.Array:
+        """
+
+        Cheap deterministic pseudo-randomness used to add a little zigzag jitter to the
+        enemy's pursuit target, so the opponent doesn't track the puck on a perfectly
+        straight line*
+        """
+        bit = lfsr & 1
+        return jnp.where(bit, (lfsr >> 1) ^ jnp.int32(0xB400), lfsr >> 1).astype(jnp.int32)
+
+    def _update_enemy_target(
+        self,
+        counter: chex.Array,
+        lfsr: chex.Array,
+        puck_position: chex.Array,
+        player_state: PlayerState,
+        enemy_state: EnemyState,
+    ) -> Tuple[chex.Array, EnemyState]:
+        """Refresh the enemy's pursuit target and advance the noise LFSR.
+
+        Called once per frame from ``step`` *after* the new puck/player/enemy states are
+        known. The target only moves every 4th frame and only while the enemy does NOT
+        hold the puck (a carrier heads for the goal instead, handled in ``_enemy_policy``).
+        When the human player carries the puck, a small signed jitter (per axis, range
+        roughly -7..+8) is added so the chase isn't perfectly straight.
+
+        Returns the advanced ``lfsr`` and the ``EnemyState`` with the updated target.
+        """
+        new_lfsr = self._lfsr_step(lfsr)
+
+        enemy_has_puck  = enemy_state.enemy1.has_puck | enemy_state.enemy2.has_puck
+        player_has_puck = player_state.player1.has_puck | player_state.player2.has_puck
+
+        # Two independent 4-bit values -> 0..15, shifted to a signed -7..+8 range.
+        noise = jnp.array([
+            (new_lfsr & jnp.int32(0xF)).astype(jnp.float32) - jnp.float32(7.0),
+            ((new_lfsr >> 4) & jnp.int32(0xF)).astype(jnp.float32) - jnp.float32(7.0),
+        ])
+
+        candidate  = jnp.where(player_has_puck, puck_position + noise, puck_position)
+        new_target = jnp.where(
+            #every four frames
+            ((counter % 4) == 0) & ~enemy_has_puck,
+            candidate,
+            enemy_state.enemy_target,
+        )
+        return new_lfsr, enemy_state.replace(enemy_target=new_target)
+
+    def _enemy_policy(self, state: IceHockeyState) -> chex.Array:
+        """Pick the controlled enemy skater's action for this frame.
+
+        Pure read-only function of the *current* state; produces a single Atari action
+        integer that you feed into the shared character-movement step exactly like the
+        player's action. Behaviour:
+
+          * carrying the puck   -> drive toward the player's goal; shoot (DOWNFIRE) once
+                                    close enough to it,
+          * not carrying        -> move toward the pursuit target (the jittered puck
+                                    position); tackle (FIRE) when a player is in contact,
+          * otherwise           -> 8-directional move toward the target, else NOOP.
+
+        The controlled skater is whichever enemy is currently ``active_character``.
+        """
+        c   = self.consts
+        es  = state.enemy_state
+        ai  = es.active_character
+        #0 enemy 1 1 enemy 2
+        #jnp.where( BEDINGUNG , WERT_WENN_JA , WERT_WENN_NEIN )
+        pos = jnp.where(ai == 0, es.enemy1.position, es.enemy2.position)
+        has = es.enemy1.has_puck | es.enemy2.has_puck
+
+        # With puck -> aim at the player's goal; otherwise chase the pursuit target.
+        tgt = jnp.where(
+            has,
+            jnp.array([c.FACEOFF_X, jnp.float32(c.PLAYER_GOAL_Y)], dtype=jnp.float32),
+            es.enemy_target,
+        )
+        dx = tgt[0] - pos[0]; dy = tgt[1] - pos[1]
+        r = dx >  2.0; l = dx < -2.0
+        d = dy >  2.0; u = dy < -2.0
+
+        near_goal    = jnp.abs(pos[1] - jnp.float32(c.PLAYER_GOAL_Y)) < 50.0
+        should_shoot = has & near_goal
+
+
+        # tackle mechanic uncommented as we still need do find out a reasonable mechanic
+        # ps = state.player_state
+        # thresh2  = jnp.float32(c.MIN_SEPARATION ** 2)   # contact radius (squared)
+        # p1_close = jnp.sum((pos - ps.player1.position) ** 2) < thresh2
+        # p2_close = jnp.sum((pos - ps.player2.position) ** 2) < thresh2
+        # should_tackle = ~has & (p1_close | p2_close)
+
+        return jnp.where(should_shoot,  jnp.int32(Action.DOWNFIRE),
+               jnp.where(should_tackle, jnp.int32(Action.FIRE),
+               jnp.where(r & d,         jnp.int32(Action.DOWNRIGHT),
+               jnp.where(l & d,         jnp.int32(Action.DOWNLEFT),
+               jnp.where(r & u,         jnp.int32(Action.UPRIGHT),
+               jnp.where(l & u,         jnp.int32(Action.UPLEFT),
+               jnp.where(r,             jnp.int32(Action.RIGHT),
+               jnp.where(l,             jnp.int32(Action.LEFT),
+               jnp.where(d,             jnp.int32(Action.DOWN),
+               jnp.where(u,             jnp.int32(Action.UP),
+                                         jnp.int32(Action.NOOP)))))))))))
+
     def render(self, state: IceHockeyState) -> jnp.ndarray:
         return self.renderer.render(state)
 
