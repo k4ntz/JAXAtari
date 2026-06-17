@@ -76,19 +76,10 @@ def _get_default_asset_config() -> tuple:
             'player_pull_up_4.npy',
             'player_pull_up_7.npy',
             ]},
-        {'name': 'player_right_side_state_group', 'type': 'group', 'files': [
+        {'name': 'player_right_side_arms_down_state_group', 'type': 'group', 'files': [
             'player_neutral_0.npy',
-            #'player_neutral_5_sideways_r.npy',
+            'player_neutral_5_sideways_r.npy',
             #'player_neutral_9_sidewayr.npy',
-            'player_neutral_4_r.npy',
-            'player_half_pull_up_0_r.npy',
-            'player_half_pull_up_2_r.npy',
-            'player_half_pull_up_3_r.npy',
-            'player_half_pull_up_4_r.npy',
-            'player_pull_up_0.npy',
-            'player_pull_up_1.npy',
-            'player_pull_up_4.npy',
-            'player_pull_up_7.npy',
             ]},
     )
 
@@ -333,6 +324,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             ])
 
             self.PLAYER_UPWARDS_SPRITE_SEQUENCE = jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 10, 10, 10, 11, 11, 11])
+            self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE = jnp.array([0, 0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3])
 
         @partial(jax.jit, static_argnums=(0,))
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
