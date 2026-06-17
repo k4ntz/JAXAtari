@@ -48,34 +48,33 @@ def _get_default_asset_config() -> tuple:
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
-        {'name': 'player_left_state_group', 'type': 'group', 'files': [
-            'player_basic.npy',
-            #player_l_1.npy
-            #player_l_2.npy
-            #player_l_3.npy
-            #player_l_4.npy
-            #player_l_5.npy
-            #player_l_6.npy
-            #player_l_7.npy
-            #player_l_8.npy
-            #player_l_9.npy
+        {'name': 'player_left_first_state_group', 'type': 'group', 'files': [
+            'player_neutral_0.npy',
+            'player_neutral_2_l.npy',
+            'player_neutral_3_l.npy',
+            'player_neutral_4_l.npy',
+            'player_half_pull_up_0_l.npy',
+            'player_half_pull_up_2_l.npy',
+            'player_half_pull_up_3_l.npy',
+            'player_half_pull_up_4_l.npy',
+            'player_pull_up_0.npy',
+            'player_pull_up_1.npy',
+            'player_pull_up_4.npy',
+            'player_pull_up_7.npy',
             ]},
-        {'name': 'player_right_state_group', 'type': 'group', 'files': [
-            'player_basic.npy',
-            #player_r_1.npy
-            #player_r_2.npy
-            #player_r_3.npy
-            #player_r_4.npy
-            #player_r_5.npy
-            #player_r_6.npy
-            #player_r_7.npy
-            #player_r_8.npy
-            #player_r_9.npy
-            ]},
-        {'name': 'player_main_state_group', 'type': 'group', 'files': [
-            'player_basic.npy',
-            #player_half_pullup.npy,
-            'player_full_pullup.npy',
+        {'name': 'player_right_first_state_group', 'type': 'group', 'files': [
+            'player_neutral_0.npy',
+            'player_neutral_2_r.npy',
+            'player_neutral_3_r.npy',
+            'player_neutral_4_r.npy',
+            'player_half_pull_up_0_r.npy',
+            'player_half_pull_up_2_r.npy',
+            'player_half_pull_up_3_r.npy',
+            'player_half_pull_up_4_r.npy',
+            'player_pull_up_0.npy',
+            'player_pull_up_1.npy',
+            'player_pull_up_4.npy',
+            'player_pull_up_7.npy',
             ]},
     )
 
@@ -314,26 +313,48 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 self.FLIP_OFFSETS
             ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
+            self.PLAYER_UPWARDS_SPRITES = jnp.array([
+                self.SHAPE_MASKS["player_left_first_state_group"],
+                self.SHAPE_MASKS["player_right_first_state_group"],
+            ])
+
         @partial(jax.jit, static_argnums=(0,))
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
             raster = self.jr.create_object_raster(self.BACKGROUND)
 
-            player_main_state_masks = self.SHAPE_MASKS["player_main_state_group"]
-            player_left_state_masks = self.SHAPE_MASKS["player_left_state_group"]
-            player_right_state_masks = self.SHAPE_MASKS["player_right_state_group"]
+            move_state = state.player_move_state
 
-            def map_player_to_sprite(main_state, sub_state):
-                return jax.lax.switch(main_state, [
-                    jax.lax.switch(sub_state, [
-                        lambda: player_main_state_masks[0],
-                        lambda: player_sub_state_masks[1],
-                        lambda: player_main_state_masks[2] 
-                        ]),
-                    lambda: player_main_state_masks[1]
+            sprite_index = 5 * move_state.main_state + move_state.sub_step
+            hand_index = jax.lax.switch(move_state.hand_dir, [
+                lambda: 0,
+                lambda: 1
+            ])
+
+            def map_player_to_sprite(sprite_index, hand_index):
+                return jax.lax.switch(sprite_index, [
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][0],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][0],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][1],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][2],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][3],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][4],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][4],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][5],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][6],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][7],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][8],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][9],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][9],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][9],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][10],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][10],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][10],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][11],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][11],
+                    lambda: self.PLAYER_UPWARDS_SPRITES[hand_index][11],
                 ])
-            main_state = state.player_move_state.main_state
-            sub_state = state.player_move_state.sub_step
-            player_sprite = map_player_to_sprite(main_state, sub_state)
+            
+            player_sprite = map_player_to_sprite(sprite_index, hand_index)
 
             raster = self.jr.render_at(
                 raster,
