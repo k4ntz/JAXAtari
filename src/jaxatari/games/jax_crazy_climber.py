@@ -62,6 +62,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
     HEIGHT: int = struct.field(pytree_node=False, default=210)
 
     PLAYER_Y: int = struct.field(pytree_node=False, default=140)
+    PLAYER_DELTA_X: float = struct.field(pytree_node=False, default=10)
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
 
@@ -72,8 +73,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     )
 
     def __init__(self, consts: CrazyClimberConstants = None):
-        consts = consts or CrazyClimberConstants()
-        super().__init__(consts)
+        self.consts = consts or CrazyClimberConstants()
+        super().__init__(self.consts)
         self.renderer = self.CrazyClimberRenderer(consts)
 
     def _score_and_reset(self, state: CrazyClimberState) -> CrazyClimberState:
@@ -172,7 +173,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 is_right_move_possible,
                 lambda s: jax.lax.cond(
                     (jax.lax.abs(s.side_step) >= 12) & (jax.lax.sign(s.side_step) == jax.lax.sign(dir)),
-                    lambda s: s.replace(side_step=0, pos_x=s.pos_x + dir * 10),
+                    lambda s: s.replace(side_step=0, pos_x=s.pos_x + dir * self.consts.PLAYER_DELTA_X),
                     lambda s: s.replace(side_step=s.side_step + dir),
                     operand=s,
                 ),
