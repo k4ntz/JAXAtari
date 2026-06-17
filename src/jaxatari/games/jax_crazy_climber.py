@@ -34,6 +34,7 @@ class CrazyClimberState(struct.PyTreeNode):
     score: chex.Array
     step_counter: chex.Array
     player_move_state: PlayerMoveState
+    player_x: chex.Array
 
 class CrazyClimberObservation(struct.PyTreeNode):
     pass
@@ -46,7 +47,7 @@ def _get_default_asset_config() -> tuple:
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
         #{'name': 'life', 'type': 'life', 'file': 'life.npy'},
-        #{'name': 'player', 'type': 'player', 'pattern': 'player_{}.npy'},
+        {'name': 'player', 'type': 'single', 'file': 'player_basic.npy'},
     )
 
 class CrazyClimberConstants(struct.PyTreeNode):
@@ -55,6 +56,8 @@ class CrazyClimberConstants(struct.PyTreeNode):
 
     WIDTH: int = struct.field(pytree_node=False, default=160)
     HEIGHT: int = struct.field(pytree_node=False, default=210)
+
+    PLAYER_Y: int = struct.field(pytree_node=False, default=140)
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
 
@@ -93,7 +96,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             key=state_key,
             score=jnp.array(0).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
-            player_move_state=PlayerMoveState(main_state=PlayerStableStates.Neutral, sub_step=0)
+            player_move_state=PlayerMoveState(main_state=PlayerStableStates.Neutral, sub_step=0),
+            player_x=jnp.array(96.0, dtype=jnp.float32),
         )
         initial_obs = self._get_observation(state)
 
@@ -103,12 +107,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     def step(self, state: CrazyClimberState, action: chex.Array) -> (CrazyClimberObservation, CrazyClimberState, float, bool, CrazyClimberInfo):
         atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         previous_state = state
+        
+        state = self._player_step(state, atari_action)
         state = self._score_and_reset(state)
 
         _, next_rng = jax.random.split(state.key)
         state = state.replace(key=next_rng)
-        
-        state = self._player_step(state, action)
 
         done = self._get_done(state)
         env_reward = self._get_reward(previous_state, state)
@@ -143,9 +147,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 operand=s
             )
 
-        up = action == Action.FIRE
-        down = action == Action.LEFT
-        action_cancled = ~(jnp.logical_xor(up, down))
+        up = action == Action.UP
+        down = action == Action.DOWN
+        action_cancled_y = ~(jnp.logical_xor(up, down))
+
+        left = action == Action.LEFT
+        right = action == Action.RIGHT
+        action_cancled_x = ~(jnp.logical_xor(left, right))
 
         player_move_state = state.player_move_state
         action_state_cases = [
@@ -161,7 +169,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         )
         
         next_player_move_state = jax.lax.cond(
-            action_cancled,
+            action_cancled_y,
             lambda s: s,
             lambda s: jax.lax.switch(
                     branch_idx,
@@ -175,10 +183,16 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 ),
             operand=player_move_state,
         )
+
+        new_x = jnp.clip(
+            state.player_x + 0
+        )
         
         jax.debug.print("main state: {s}, sub step: {m}", s=next_player_move_state.main_state, m=next_player_move_state.sub_step)
 
-        return state.replace(player_move_state=next_player_move_state)
+        return state.replace(
+            player_move_state=next_player_move_state,
+            player_x = new_x)
 
     def render(self, state: CrazyClimberState) -> jnp.ndarray:
         return self.renderer.render(state)
@@ -247,8 +261,15 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
             raster = self.jr.create_object_raster(self.BACKGROUND)
 
-            digits = self.jr.int_to_digits(state.score, max_digits=6)
+            player_mask = self.SHAPE_MASKS["player"]
+            raster = self.jr.render_at(
+                raster,
+                jnp.round(state.player_x).astype(jnp.int32),
+                self.consts.PLAYER_Y,
+                player_mask,
+            )
 
+            digits = self.jr.int_to_digits(state.score, max_digits=6)
             digit_masks = self.SHAPE_MASKS["digits"]
 
             start_index = 1
