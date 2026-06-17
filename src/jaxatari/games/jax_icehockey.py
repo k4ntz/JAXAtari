@@ -645,8 +645,8 @@ class JaxIceHockey(JaxEnvironment):
         """
         new_lfsr = self._lfsr_step(lfsr)
 
-        enemy_has_puck  = enemy_state.enemy1.has_puck | enemy_state.enemy2.has_puck
-        player_has_puck = player_state.player1.has_puck | player_state.player2.has_puck
+        enemy_has_puck  = enemy_state.skater.has_puck | enemy_state.goalie.has_puck
+        player_has_puck = player_state.skater.has_puck | player_state.goalie.has_puck
 
         # Two independent 4-bit values -> 0..15, shifted to a signed -7..+8 range.
         noise = jnp.array([
@@ -683,8 +683,8 @@ class JaxIceHockey(JaxEnvironment):
         ai  = es.active_character
         #0 enemy 1 1 enemy 2
         #jnp.where( BEDINGUNG , WERT_WENN_JA , WERT_WENN_NEIN )
-        pos = jnp.where(ai == 0, es.enemy1.position, es.enemy2.position)
-        has = es.enemy1.has_puck | es.enemy2.has_puck
+        pos = jnp.where(ai == 0, es.skater.position, es.goalie.position)
+        has = es.skater.has_puck | es.goalie.has_puck
 
         # With puck -> aim at the player's goal; otherwise chase the pursuit target.
         tgt = jnp.where(
@@ -707,8 +707,8 @@ class JaxIceHockey(JaxEnvironment):
         # p2_close = jnp.sum((pos - ps.player2.position) ** 2) < thresh2
         # should_tackle = ~has & (p1_close | p2_close)
 
-        return jnp.where(should_shoot,  jnp.int32(Action.DOWNFIRE),
-               jnp.where(should_tackle, jnp.int32(Action.FIRE),
+        return jnp.where(should_shoot, jnp.int32(Action.DOWNFIRE),
+               jnp.where(False,        jnp.int32(Action.FIRE),
                jnp.where(r & d,         jnp.int32(Action.DOWNRIGHT),
                jnp.where(l & d,         jnp.int32(Action.DOWNLEFT),
                jnp.where(r & u,         jnp.int32(Action.UPRIGHT),
