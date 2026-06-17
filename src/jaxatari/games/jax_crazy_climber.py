@@ -76,7 +76,7 @@ def _get_default_asset_config() -> tuple:
             'player_pull_up_4.npy',
             'player_pull_up_7.npy',
             ]},
-        {'name': 'player_right_side_arms_down_state_group', 'type': 'group', 'files': [
+        {'name': 'player_right_side_neutral_state_group', 'type': 'group', 'files': [
             'player_neutral_0.npy',
             'player_neutral_5_sideways_r.npy',
             #'player_neutral_9_sidewayr.npy',
@@ -330,18 +330,29 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
             raster = self.jr.create_object_raster(self.BACKGROUND)
 
+            sideways_sprite_masks_neutral = self.SHAPE_MASKS["player_right_side_neutral_state_group"]
+
             move_state = state.player_move_state
 
-            sprite_index = self.PLAYER_UPWARDS_SPRITE_SEQUENCE[5 * move_state.main_state + move_state.sub_step] 
+            sprite_index_up = self.PLAYER_UPWARDS_SPRITE_SEQUENCE[5 * move_state.main_state + move_state.sub_step] 
             hand_index = jax.lax.switch(move_state.hand_dir, [
                 lambda: 0,
                 lambda: 1
             ])
 
-            def map_player_to_sprite(sprite_index, hand_index):
-                return self.PLAYER_UPWARDS_SPRITES[hand_index][sprite_index]
+            def map_player_to_sprite(sprite_index_up, hand_index):
+                return jax.lax.cond(
+                    move_state.side_step == 0,
+                    lambda _: jax.lax.switch(move_state.main_state, [
+                            lambda _: jnp.pad(sideways_sprite_masks_neutral[0], ((0, 2), (0, 0)))
+                        ],
+                        operand=None
+                    ),
+                    lambda _: self.PLAYER_UPWARDS_SPRITES[hand_index][sprite_index_up],
+                    operand=None
+                )
             
-            player_sprite = map_player_to_sprite(sprite_index, hand_index)
+            player_sprite = map_player_to_sprite(sprite_index_up, hand_index)
 
             raster = self.jr.render_at(
                 raster,
