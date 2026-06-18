@@ -48,9 +48,76 @@ def _get_default_asset_config() -> tuple:
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
-        {'name': 'player_group', 'type': 'group', 'files': [
-            'player_basic.npy',
-            'player_half_pullup.npy',
+        {'name': 'player_left_first_up_state_group', 'type': 'group', 'files': [
+            'player_neutral_0.npy',
+            'player_neutral_2_l.npy',
+            'player_neutral_3_l.npy',
+            'player_neutral_4_l.npy',
+            'player_half_pull_up_0_l.npy',
+            'player_half_pull_up_2_l.npy',
+            'player_half_pull_up_3_l.npy',
+            'player_half_pull_up_4_l.npy',
+            'player_pull_up_0.npy',
+            'player_pull_up_1.npy',
+            'player_pull_up_4.npy',
+            'player_pull_up_7.npy',
+            ]},
+        {'name': 'player_right_first_up_state_group', 'type': 'group', 'files': [
+            'player_neutral_0.npy',
+            'player_neutral_2_r.npy',
+            'player_neutral_3_r.npy',
+            'player_neutral_4_r.npy',
+            'player_half_pull_up_0_r.npy',
+            'player_half_pull_up_2_r.npy',
+            'player_half_pull_up_3_r.npy',
+            'player_half_pull_up_4_r.npy',
+            'player_pull_up_0.npy',
+            'player_pull_up_1.npy',
+            'player_pull_up_4.npy',
+            'player_pull_up_7.npy',
+            ]},
+        {'name': 'player_right_side_neutral_state_group', 'type': 'group', 'files': [
+            'player_neutral_0.npy',
+            'player_neutral_5_sideways_r.npy',
+            'player_neutral_9_sideways_r.npy',
+            ]},
+        {'name': 'player_left_side_neutral_state_group', 'type': 'group', 'files': [
+            'player_neutral_0.npy',
+            'player_neutral_5_sideways_l.npy',
+            'player_neutral_9_sideways_l.npy',
+            ]},
+
+        {'name': 'player_left_hand_right_side_half_pull_up_state_group', 'type': 'group', 'files': [
+            'player_half_pull_up_0_l.npy',
+            'player_half_pull_up_5_l_sideways_r.npy',
+            'player_half_pull_up_9_l_sideways_r.npy',
+            ]},
+        {'name': 'player_left_hand_left_side_half_pull_up_state_group', 'type': 'group', 'files': [
+            'player_half_pull_up_0_l.npy',
+            'player_half_pull_up_5_l_sideways_l.npy',
+            'player_half_pull_up_9_l_sideways_l.npy',
+            ]},
+
+        {'name': 'player_right_hand_right_side_half_pull_up_state_group', 'type': 'group', 'files': [
+            'player_half_pull_up_0_r.npy',
+            'player_half_pull_up_5_r_sideways_r.npy',
+            'player_half_pull_up_9_r_sideways_r.npy',
+            ]},
+        {'name': 'player_right_hand_left_side_half_pull_up_state_group', 'type': 'group', 'files': [
+            'player_half_pull_up_0_r.npy',
+            'player_half_pull_up_5_r_sideways_l.npy',
+            'player_half_pull_up_9_r_sideways_l.npy',
+            ]},
+
+        {'name': 'player_right_side_pull_up_state_group', 'type': 'group', 'files': [
+            'player_pull_up_0.npy',
+            'player_pull_up_5_sideways_r.npy',
+            'player_pull_up_9_sideways_r.npy',
+            ]},
+        {'name': 'player_left_side_pull_up_state_group', 'type': 'group', 'files': [
+            'player_pull_up_0.npy',
+            'player_pull_up_5_sideways_l.npy',
+            'player_pull_up_9_sideways_l.npy',
             ]},
     )
 
@@ -62,7 +129,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
     HEIGHT: int = struct.field(pytree_node=False, default=210)
 
     PLAYER_Y: int = struct.field(pytree_node=False, default=140)
-    PLAYER_DELTA_X: float = struct.field(pytree_node=False, default=10)
+    PLAYER_DELTA_X: float = struct.field(pytree_node=False, default=5)
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
 
@@ -168,7 +235,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
         
         def move_horizontal(s: PlayerMoveState, dir: int):
-            is_right_move_possible = s.sub_step == 0
+            is_right_move_possible = s.sub_step <= 1
             return jax.lax.cond(
                 is_right_move_possible,
                 lambda s: jax.lax.cond(
@@ -289,18 +356,73 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 self.FLIP_OFFSETS
             ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
+            self.PLAYER_UPWARDS_SPRITES = jnp.array([
+                self.SHAPE_MASKS["player_left_first_up_state_group"],
+                self.SHAPE_MASKS["player_right_first_up_state_group"],
+            ])
+
+            self.PLAYER_SIDEWAYS_SPRITES = jnp.array([
+                jnp.array([
+                    jnp.array([
+                        self.SHAPE_MASKS["player_left_side_neutral_state_group"],
+                        self.SHAPE_MASKS["player_right_side_neutral_state_group"],
+                    ]),
+                    # TODO: Placeholder, to fix dim mismatch. Just a workaround, will be reworked
+                    jnp.array([
+                        self.SHAPE_MASKS["player_left_side_neutral_state_group"],
+                        self.SHAPE_MASKS["player_right_side_neutral_state_group"],
+                    ]),
+                    
+                ]),
+                jnp.array([
+                    jnp.array([
+                        self.SHAPE_MASKS["player_left_hand_left_side_half_pull_up_state_group"],
+                        self.SHAPE_MASKS["player_left_hand_right_side_half_pull_up_state_group"],
+                    ]),
+                    jnp.array([
+                        self.SHAPE_MASKS["player_right_hand_left_side_half_pull_up_state_group"],
+                        self.SHAPE_MASKS["player_right_hand_right_side_half_pull_up_state_group"],
+                    ]),
+                ]),
+                jnp.array([
+                    jnp.array([
+                        self.SHAPE_MASKS["player_left_side_pull_up_state_group"],
+                        self.SHAPE_MASKS["player_right_side_pull_up_state_group"],
+                    ]),
+                    # TODO: Placeholder, to fix dim mismatch. Just a workaround, will be reworked
+                    jnp.array([
+                        self.SHAPE_MASKS["player_left_side_pull_up_state_group"],
+                        self.SHAPE_MASKS["player_right_side_pull_up_state_group"],
+                    ]),
+                ]),
+            ])
+
+            self.PLAYER_UPWARDS_SPRITE_SEQUENCE = jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 10, 10, 10, 11, 11, 11])
+            self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE = jnp.array([0, 0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3])
+
         @partial(jax.jit, static_argnums=(0,))
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
             raster = self.jr.create_object_raster(self.BACKGROUND)
 
-            player_masks = self.SHAPE_MASKS["player_group"]
+            move_state = state.player_move_state
 
-            def map_player_to_sprite(pos):
-                return jax.lax.switch(pos,
-                    [lambda: player_masks[0], lambda: player_masks[1]]
+            sprite_index_up = self.PLAYER_UPWARDS_SPRITE_SEQUENCE[5 * move_state.main_state + move_state.sub_step]
+            hand_index = jax.lax.switch(move_state.hand_dir, [
+                lambda: 0,
+                lambda: 1
+            ])
+            sprite_index_side = self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE[jnp.abs(move_state.side_step)] 
+            side_index = jnp.where(move_state.side_step > 0, 1, 0)
+
+            def map_player_to_sprite(sprite_index_up, sprite_index_side, hand_index, side_index):
+                return jax.lax.cond(
+                    jnp.logical_and(move_state.sub_step <= 1, jnp.abs(move_state.side_step) > 3),
+                    lambda _: self.PLAYER_SIDEWAYS_SPRITES[move_state.main_state][hand_index][side_index][sprite_index_side],
+                    lambda _: self.PLAYER_UPWARDS_SPRITES[hand_index][sprite_index_up],
+                    operand=None
                 )
-            pos = jnp.clip(state.player_move_state.main_state, 0, 1)
-            player_sprite = map_player_to_sprite(pos)
+            
+            player_sprite = map_player_to_sprite(sprite_index_up, sprite_index_side, hand_index, side_index)
 
             raster = self.jr.render_at(
                 raster,
