@@ -31,7 +31,7 @@ class PlayerMoveState:
     side_step: int 
     hand_dir: int
     pos_x: float
-
+    
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
     score: chex.Array
@@ -401,16 +401,21 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE = jnp.array([0, 0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3])
 
         @partial(jax.jit, static_argnums=(0,))
-        def render(self, state: CrazyClimberState) -> jnp.ndarray:
-            raster = self.jr.create_object_raster(self.BACKGROUND)
+        def _create_block_sprite(self, color: tuple[int, int, int, int], shape: tuple[int, int]) -> jnp.ndarray:
+            return jnp.tile(jnp.array(color, dtype=jnp.uint8), (*shape[:2], 1))
+
+        @partial(jax.jit, static_argnums=(0,1))
+        def _create_raster(self, shape: tuple[int, int]) -> jnp.ndarray:
+            return jnp.zeros(shape=shape, dtype=jnp.uint8)
+        
+        @partial(jax.jit, static_argnums=(0,))
+        def _render_player(self, state: CrazyClimberState) -> jnp.ndarray:
+            player_raster = self._create_raster((23, 16))
 
             move_state = state.player_move_state
 
             sprite_index_up = self.PLAYER_UPWARDS_SPRITE_SEQUENCE[5 * move_state.main_state + move_state.sub_step]
-            hand_index = jax.lax.switch(move_state.hand_dir, [
-                lambda: 0,
-                lambda: 1
-            ])
+            hand_index = (move_state.hand_dir + 2) % 3 # maps -1 -> 1, and 1 -> 0
             sprite_index_side = self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE[jnp.abs(move_state.side_step)] 
             side_index = jnp.where(move_state.side_step > 0, 1, 0)
 
@@ -423,20 +428,27 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 )
             
             player_sprite = map_player_to_sprite(sprite_index_up, sprite_index_side, hand_index, side_index)
-
-            raster = self.jr.render_at(
-                raster,
-                jnp.round(state.player_move_state.pos_x).astype(jnp.int32),
-                self.consts.PLAYER_Y,
+            player_raster = self.jr.render_at(
+                player_raster, 
+                0, 0,
                 player_sprite,
             )
+            
+            return player_raster
+
+        @partial(jax.jit, static_argnums=(0,))
+        def render(self, state: CrazyClimberState) -> jnp.ndarray:
+            raster = self.jr.create_object_raster(self.BACKGROUND) # can be substituted with self._create_raster((210, 160))
+
+            player_raster = self._render_player(state)
+            raster = self.jr.render_at_clipped(raster, state.player_move_state.pos_x, self.consts.PLAYER_Y, player_raster)
 
             digits = self.jr.int_to_digits(state.score, max_digits=6)
             digit_masks = self.SHAPE_MASKS["digits"]
 
             start_index = 1
             num_to_render = 6
-
+            
             raster = self.jr.render_label_selective(raster, 55, 20, digits, digit_masks, start_index, num_to_render, spacing=8, max_digits_to_render=6)
 
             return self.jr.render_from_palette(raster, self.PALETTE)
