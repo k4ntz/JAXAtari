@@ -47,6 +47,7 @@ GAME_MODULES = {
     "galaxian": "jaxatari.games.jax_galaxian",
     "gravitar": "jaxatari.games.jax_gravitar",
     # "hangman": "jaxatari.games.jax_hangman",
+    "hero": "jaxatari.games.jax_hero",
     "hauntedhouse": "jaxatari.games.jax_hauntedhouse",
     "humancannonball": "jaxatari.games.jax_humancannonball",
     "kangaroo": "jaxatari.games.jax_kangaroo",
