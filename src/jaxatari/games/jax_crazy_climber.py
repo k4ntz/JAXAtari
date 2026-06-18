@@ -418,7 +418,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 return jax.lax.cond(
                     jnp.logical_and(move_state.sub_step == 0, jnp.abs(move_state.side_step) > 3),
                     lambda _: self.PLAYER_SIDEWAYS_SPRITES[move_state.main_state][hand_index][side_index][sprite_index_side],
-                    lambda _: jnp.pad(self.PLAYER_UPWARDS_SPRITES[hand_index][sprite_index_up], ((0, 0), (0, 2))),
+                    lambda _: self.PLAYER_UPWARDS_SPRITES[hand_index][sprite_index_up],
                     operand=None
                 )
             
