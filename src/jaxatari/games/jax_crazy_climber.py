@@ -235,7 +235,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
         
         def move_horizontal(s: PlayerMoveState, dir: int):
-            is_right_move_possible = s.sub_step == 0
+            is_right_move_possible = s.sub_step <= 1
             return jax.lax.cond(
                 is_right_move_possible,
                 lambda s: jax.lax.cond(
