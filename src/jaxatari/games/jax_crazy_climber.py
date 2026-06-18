@@ -10,7 +10,6 @@ from flax.nnx import state
 import jax
 import jax.numpy as jnp
 
-from jaxatari.games.jax_pong import _create_wall_sprite
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 from jaxatari.rendering import jax_rendering_utils as render_utils
@@ -37,6 +36,7 @@ class CrazyClimberState(struct.PyTreeNode):
     score: chex.Array
     step_counter: chex.Array
     player_move_state: PlayerMoveState
+    tower_step: chex.Array
 
 class CrazyClimberObservation(struct.PyTreeNode):
     pass
@@ -44,7 +44,12 @@ class CrazyClimberObservation(struct.PyTreeNode):
 class CrazyClimberInfo(struct.PyTreeNode):
     pass
 
+def _create_block_sprite(color: tuple[int, int, int, int], shape: tuple[int, int]) -> jnp.ndarray:
+    return jnp.tile(jnp.array(color, dtype=jnp.uint8), (*shape[:2], 1))
+
 def _get_default_asset_config() -> tuple:
+    wall_sprite = _create_block_sprite((0, 0, 148, 255), (156, 4))
+    ceiling_sprite = _create_block_sprite((0, 48, 100, 255), (4, 80))
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
@@ -119,6 +124,8 @@ def _get_default_asset_config() -> tuple:
             'player_pull_up_5_sideways_l.npy',
             'player_pull_up_9_sideways_l.npy',
             ]},
+        {'name': 'wall', 'type': 'procedural', 'data': wall_sprite},
+        {'name': 'ceiling', 'type': 'procedural', 'data': ceiling_sprite}
     )
 
 class CrazyClimberConstants(struct.PyTreeNode):
@@ -169,6 +176,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             score=jnp.array(0).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
             player_move_state=PlayerMoveState(main_state=PlayerStableStates.Neutral, sub_step=0, side_step=0, hand_dir=1, pos_x=96),
+            tower_step=0
         )
         initial_obs = self._get_observation(state)
 
@@ -180,6 +188,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         previous_state = state
         
         state = self._player_step(state, atari_action)
+        state = self._tower_step(state)
         state = self._score_and_reset(state)
 
         _, next_rng = jax.random.split(state.key)
@@ -191,6 +200,16 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         observation = self._get_observation(state)
 
         return observation, state, env_reward, done, info
+    
+    def _tower_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        possible_tower_steps = jnp.array([0, 1, 1, 1, 2, 2, 2, 3, 3, 3])
+        tower_step = jax.lax.cond(
+            state.player_move_state.main_state == PlayerStableStates.PullUp,
+            lambda: possible_tower_steps[state.player_move_state.sub_step],
+            lambda: 0,
+        )
+
+        return state.replace(tower_step=tower_step) 
     
     def _player_step(self, state: CrazyClimberState, action: chex.Array) -> CrazyClimberState:
         def move_upwards(s: PlayerMoveState): 
@@ -333,6 +352,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     def _get_done(self, state: CrazyClimberState) -> bool:
         pass
 
+
+
     class CrazyClimberRenderer(JAXGameRenderer):
         def __init__(self, consts: CrazyClimberConstants = None, config: render_utils.RendererConfig = None):
             self.consts = consts or CrazyClimberConstants()
@@ -399,10 +420,35 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             self.PLAYER_UPWARDS_SPRITE_SEQUENCE = jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 10, 10, 10, 11, 11, 11])
             self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE = jnp.array([0, 0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3])
+            
+            self.TOWER_SPRITE = self._render_tower_sprite()
+            
+        def _render_tower_sprite(self) -> jnp.ndarray:
+            tower_raster = self._create_raster((156, 80))
 
-        @partial(jax.jit, static_argnums=(0,))
-        def _create_block_sprite(self, color: tuple[int, int, int, int], shape: tuple[int, int]) -> jnp.ndarray:
-            return jnp.tile(jnp.array(color, dtype=jnp.uint8), (*shape[:2], 1))
+            wall_offset_x = jnp.array([0, 12, 24, 36, 40, 52, 64, 76])
+            wall_offset_y = jnp.array([0,  0,  0,  0,  0,  0,  0,  0])
+            wall_sprite = self.SHAPE_MASKS["wall"]
+            wall_sprite_masks = jnp.repeat(wall_sprite[jnp.newaxis, :, :], len(wall_offset_x), axis=0)
+            tower_raster = self.jr.render_at_batch(
+                tower_raster,
+                wall_offset_x,
+                wall_offset_y,
+                wall_sprite_masks,
+            )
+            
+            ceiling_offset_x = jnp.array([0,  0,  0,  0,  0,  0,  0,  0,  0,   0,   0,   0,   0,   0])
+            ceiling_offset_y = jnp.array([0, 12, 24, 36, 48, 60, 72, 84, 96, 108, 120, 132, 144, 156])
+            ceiling_sprite = self.SHAPE_MASKS["ceiling"]
+            ceiling_sprite_masks = jnp.repeat(ceiling_sprite[jnp.newaxis, :, :], len(ceiling_offset_x), axis=0)
+            tower_raster = self.jr.render_at_batch(
+                tower_raster,
+                ceiling_offset_x,
+                ceiling_offset_y,
+                ceiling_sprite_masks,
+            )
+            
+            return tower_raster
 
         @partial(jax.jit, static_argnums=(0,1))
         def _create_raster(self, shape: tuple[int, int]) -> jnp.ndarray:
@@ -435,12 +481,29 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
             
             return player_raster
+        
+
+        @partial(jax.jit, static_argnums=(0,))
+        def _render_tower(self, state: CrazyClimberState) -> jnp.ndarray:
+            tower_sprite = self.TOWER_SPRITE
+
+            top_clip = (4 - state.tower_step) * 4
+            tower_raster = jax.lax.dynamic_slice_in_dim(
+                tower_sprite,
+                top_clip,
+                144,
+                axis=0
+            )
+            
+            return tower_raster
 
         @partial(jax.jit, static_argnums=(0,))
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
             raster = self.jr.create_object_raster(self.BACKGROUND) # can be substituted with self._create_raster((210, 160))
 
             player_raster = self._render_player(state)
+            tower_raster = self._render_tower(state)
+            raster = self.jr.render_at_clipped(raster, 0, 0, tower_raster)
             raster = self.jr.render_at_clipped(raster, state.player_move_state.pos_x, self.consts.PLAYER_Y, player_raster)
 
             digits = self.jr.int_to_digits(state.score, max_digits=6)
