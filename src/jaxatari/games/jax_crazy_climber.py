@@ -326,7 +326,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     
     @partial(jax.jit, static_argnums=(0,))
     def _bonus_step(self, state: CrazyClimberState) -> CrazyClimberState: 
-        steps = state.step_counter
         bonus_condition = ((state.step_counter - 1229) % 600 == 0) & (state.step_counter > 1228)
 
         bonus = jnp.where(bonus_condition, state.bonus - 100, state.bonus)
