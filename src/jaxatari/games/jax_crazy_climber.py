@@ -1,20 +1,19 @@
-from encodings.punycode import digits
-from functools import partial
 import os
-from enum import IntEnum
 
+from functools import partial
+
+from enum import IntEnum
 import chex
 from flax import struct
+from typing import Tuple
 
-from flax.nnx import state
 import jax
 import jax.numpy as jnp
 
-from jaxatari.renderers import JAXGameRenderer
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
-from jaxatari.rendering import jax_rendering_utils as render_utils
-from typing import Tuple
 import jaxatari.spaces as spaces
+from jaxatari.renderers import JAXGameRenderer
+from jaxatari.rendering import jax_rendering_utils as render_utils
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
 # Player movement states
 
@@ -211,7 +210,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     @partial(jax.jit, static_argnums=(0,))
     def _player_step(self, state: CrazyClimberState, action: chex.Array) -> CrazyClimberState:
         @partial(jax.jit)
-        def move_upwards(s: PlayerMoveState): 
+        def move_upwards(s: PlayerMoveState) -> CrazyClimberState: 
             is_up_move_possible = (jax.lax.abs(s.side_step) <= 3)
             transitioning_states = (((s.main_state != PlayerStableStates.PULL_UP) & (s.sub_step == 4)) |
                                     ((s.main_state == PlayerStableStates.PULL_UP) & (s.sub_step == 9)))
@@ -234,7 +233,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
 
         @partial(jax.jit)
-        def move_downwards(s: PlayerMoveState):
+        def move_downwards(s: PlayerMoveState) -> CrazyClimberState:
             is_down_move_possible = (jax.lax.abs(s.side_step) <= 3) & (s.sub_step > 0) & (s.main_state != PlayerStableStates.PULL_UP)
             next_hand_dir = jax.lax.select(
                 (s.main_state == PlayerStableStates.NEUTRAL) & (s.sub_step == 1),
@@ -254,7 +253,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
         
         @partial(jax.jit)
-        def move_horizontal(s: PlayerMoveState, dir: int):
+        def move_horizontal(s: PlayerMoveState, dir: int) -> CrazyClimberState:
             is_right_move_possible = s.sub_step <= 1
             return jax.lax.cond(
                 is_right_move_possible,
@@ -491,7 +490,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             sprite_index_side = self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE[jnp.abs(move_state.side_step)] 
             side_index = jnp.where(move_state.side_step > 0, 1, 0)
 
-            def map_player_to_sprite(sprite_index_up, sprite_index_side, hand_index, side_index):
+            @partial(jax.jit)
+            def map_player_to_sprite(sprite_index_up: int, sprite_index_side: int, hand_index: int, side_index: int) -> jnp.ndarray:
                 return jax.lax.cond(
                     jnp.logical_and(move_state.sub_step <= 1, jnp.abs(move_state.side_step) > 3),
                     lambda _: jax.lax.cond(
