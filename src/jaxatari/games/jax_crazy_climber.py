@@ -19,9 +19,9 @@ import jaxatari.spaces as spaces
 # Player movement states
 
 class PlayerStableStates(IntEnum):
-    Neutral = 0
-    HalfPullUp = 1
-    PullUp = 2
+    NEUTRAL = 0
+    HALF_PULL_UP = 1
+    PULL_UP = 2
     
 @chex.dataclass
 class PlayerMoveState:
@@ -53,79 +53,80 @@ def _get_default_asset_config() -> tuple:
     wall_sprite = _create_block_sprite((0, 0, 148, 255), (169, 4))
     ceiling_sprite = _create_block_sprite((0, 48, 100, 255), (5, 80))
     return (
-        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-        {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
-        {'name': 'life', 'type': 'single', 'file': 'life.npy'},
-        {'name': 'player_left_first_up_state_group', 'type': 'group', 'files': [
-            'player_neutral_0.npy',
-            'player_neutral_2_l.npy',
-            'player_neutral_3_l.npy',
-            'player_neutral_4_l.npy',
-            'player_half_pull_up_0_l.npy',
-            'player_half_pull_up_2_l.npy',
-            'player_half_pull_up_3_l.npy',
-            'player_half_pull_up_4_l.npy',
-            'player_pull_up_0.npy',
-            'player_pull_up_1.npy',
-            'player_pull_up_4.npy',
-            'player_pull_up_7.npy',
+        {'name': 'background', 'type': 'background', 'file': 'misc/background.npy'},
+        {'name': 'digits', 'type': 'digits', 'pattern': 'numbers/score_{}.npy'},
+        {'name': 'life', 'type': 'single', 'file': 'misc/life.npy'},
+        {'name': 'player_upwards_left_group', 'type': 'group', 'files': [
+            'player/neutral_0.npy',
+            'player/upwards/left_first/neutral_2.npy',
+            'player/upwards/left_first/neutral_3.npy',
+            'player/upwards/left_first/neutral_4.npy',
+            'player/upwards/left_first/half_pull_up_0.npy',
+            'player/upwards/left_first/half_pull_up_2.npy',
+            'player/upwards/left_first/half_pull_up_3.npy',
+            'player/upwards/left_first/half_pull_up_4.npy',
+            'player/upwards/pull_up_0.npy',
+            'player/upwards/pull_up_1.npy',
+            'player/upwards/pull_up_4.npy',
+            'player/upwards/pull_up_7.npy',
             ]},
-        {'name': 'player_right_first_up_state_group', 'type': 'group', 'files': [
-            'player_neutral_0.npy',
-            'player_neutral_2_r.npy',
-            'player_neutral_3_r.npy',
-            'player_neutral_4_r.npy',
-            'player_half_pull_up_0_r.npy',
-            'player_half_pull_up_2_r.npy',
-            'player_half_pull_up_3_r.npy',
-            'player_half_pull_up_4_r.npy',
-            'player_pull_up_0.npy',
-            'player_pull_up_1.npy',
-            'player_pull_up_4.npy',
-            'player_pull_up_7.npy',
-            ]},
-        {'name': 'player_right_side_neutral_state_group', 'type': 'group', 'files': [
-            'player_neutral_0.npy',
-            'player_neutral_5_sideways_r.npy',
-            'player_neutral_9_sideways_r.npy',
-            ]},
-        {'name': 'player_left_side_neutral_state_group', 'type': 'group', 'files': [
-            'player_neutral_0.npy',
-            'player_neutral_5_sideways_l.npy',
-            'player_neutral_9_sideways_l.npy',
+        {'name': 'player_upwards_right_group', 'type': 'group', 'files': [
+            'player/neutral_0.npy',
+            'player/upwards/right_first/neutral_2.npy',
+            'player/upwards/right_first/neutral_3.npy',
+            'player/upwards/right_first/neutral_4.npy',
+            'player/upwards/right_first/half_pull_up_0.npy',
+            'player/upwards/right_first/half_pull_up_2.npy',
+            'player/upwards/right_first/half_pull_up_3.npy',
+            'player/upwards/right_first/half_pull_up_4.npy',
+            'player/upwards/pull_up_0.npy',
+            'player/upwards/pull_up_1.npy',
+            'player/upwards/pull_up_4.npy',
+            'player/upwards/pull_up_7.npy',
             ]},
 
-        {'name': 'player_left_hand_right_side_half_pull_up_state_group', 'type': 'group', 'files': [
-            'player_half_pull_up_0_l.npy',
-            'player_half_pull_up_5_l_sideways_r.npy',
-            'player_half_pull_up_9_l_sideways_r.npy',
+        {'name': 'player_neutral_left_group', 'type': 'group', 'files': [
+            'player/neutral_0.npy',
+            'player/sideways/left/neutral_5.npy',
+            'player/sideways/left/neutral_9.npy',
             ]},
-        {'name': 'player_left_hand_left_side_half_pull_up_state_group', 'type': 'group', 'files': [
-            'player_half_pull_up_0_l.npy',
-            'player_half_pull_up_5_l_sideways_l.npy',
-            'player_half_pull_up_9_l_sideways_l.npy',
-            ]},
-
-        {'name': 'player_right_hand_right_side_half_pull_up_state_group', 'type': 'group', 'files': [
-            'player_half_pull_up_0_r.npy',
-            'player_half_pull_up_5_r_sideways_r.npy',
-            'player_half_pull_up_9_r_sideways_r.npy',
-            ]},
-        {'name': 'player_right_hand_left_side_half_pull_up_state_group', 'type': 'group', 'files': [
-            'player_half_pull_up_0_r.npy',
-            'player_half_pull_up_5_r_sideways_l.npy',
-            'player_half_pull_up_9_r_sideways_l.npy',
+        {'name': 'player_neutral_right_group', 'type': 'group', 'files': [
+            'player/neutral_0.npy',
+            'player/sideways/right/neutral_5.npy',
+            'player/sideways/right/neutral_9.npy',
             ]},
 
-        {'name': 'player_right_side_pull_up_state_group', 'type': 'group', 'files': [
-            'player_pull_up_0.npy',
-            'player_pull_up_5_sideways_r.npy',
-            'player_pull_up_9_sideways_r.npy',
+        {'name': 'player_left_pull_up_left_group', 'type': 'group', 'files': [
+            'player/upwards/left_first/half_pull_up_0.npy',
+            'player/sideways/left/left_up/half_pull_up_5.npy',
+            'player/sideways/left/left_up/half_pull_up_9.npy',
             ]},
-        {'name': 'player_left_side_pull_up_state_group', 'type': 'group', 'files': [
-            'player_pull_up_0.npy',
-            'player_pull_up_5_sideways_l.npy',
-            'player_pull_up_9_sideways_l.npy',
+        {'name': 'player_left_pull_up_right_group', 'type': 'group', 'files': [
+            'player/upwards/left_first/half_pull_up_0.npy',
+            'player/sideways/right/left_up/half_pull_up_5.npy',
+            'player/sideways/right/left_up/half_pull_up_9.npy',
+            ]},
+
+        {'name': 'player_pull_up_left_group', 'type': 'group', 'files': [
+            'player/upwards/pull_up_0.npy',
+            'player/sideways/left/pull_up_5.npy',
+            'player/sideways/left/pull_up_9.npy',
+            ]},
+        {'name': 'player_pull_up_right_group', 'type': 'group', 'files': [
+            'player/upwards/pull_up_0.npy',
+            'player/sideways/right/pull_up_5.npy',
+            'player/sideways/right/pull_up_9.npy',
+            ]},
+
+        {'name': 'player_right_pull_up_left_group', 'type': 'group', 'files': [
+            'player/upwards/right_first/half_pull_up_0.npy',
+            'player/sideways/left/right_up/half_pull_up_5.npy',
+            'player/sideways/left/right_up/half_pull_up_9.npy',
+            ]},
+        {'name': 'player_right_pull_up_right_group', 'type': 'group', 'files': [
+            'player/upwards/right_first/half_pull_up_0.npy',
+            'player/sideways/right/right_up/half_pull_up_5.npy',
+            'player/sideways/right/right_up/half_pull_up_9.npy',
             ]},
         {'name': 'wall', 'type': 'procedural', 'data': wall_sprite},
         {'name': 'ceiling', 'type': 'procedural', 'data': ceiling_sprite}
@@ -162,7 +163,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             score=jnp.array(0).astype(jnp.int32),
             bonus=jnp.array(10000).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
-            player_move_state=PlayerMoveState(main_state=PlayerStableStates.Neutral, sub_step=0, side_step=0, hand_dir=1, pos_x=0),
+            player_move_state=PlayerMoveState(main_state=PlayerStableStates.NEUTRAL, sub_step=0, side_step=0, hand_dir=1, pos_x=0),
             tower_step=0,
             was_at_apex=jnp.array(False),
         )
@@ -200,7 +201,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         possible_tower_steps = jnp.array([0, 1, 1, 1, 2, 2, 2, 3, 3, 3])
             
         tower_step = jax.lax.cond(
-            state.player_move_state.main_state == PlayerStableStates.PullUp,
+            state.player_move_state.main_state == PlayerStableStates.PULL_UP,
             lambda: possible_tower_steps[state.player_move_state.sub_step],
             lambda: 0,
         )
@@ -212,11 +213,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         @partial(jax.jit)
         def move_upwards(s: PlayerMoveState): 
             is_up_move_possible = (jax.lax.abs(s.side_step) <= 3)
-            transitioning_states = (((s.main_state != PlayerStableStates.PullUp) & (s.sub_step == 4)) |
-                                    ((s.main_state == PlayerStableStates.PullUp) & (s.sub_step == 9)))
-            next_state_on_transition = jnp.array([PlayerStableStates.Neutral, PlayerStableStates.HalfPullUp, PlayerStableStates.PullUp])[(s.main_state + 1) % 3] 
+            transitioning_states = (((s.main_state != PlayerStableStates.PULL_UP) & (s.sub_step == 4)) |
+                                    ((s.main_state == PlayerStableStates.PULL_UP) & (s.sub_step == 9)))
+            next_state_on_transition = jnp.array([PlayerStableStates.NEUTRAL, PlayerStableStates.HALF_PULL_UP, PlayerStableStates.PULL_UP])[(s.main_state + 1) % 3] 
             next_hand_dir = jax.lax.select(
-                transitioning_states & (next_state_on_transition == PlayerStableStates.Neutral),
+                transitioning_states & (next_state_on_transition == PlayerStableStates.NEUTRAL),
                 s.hand_dir * -1,
                 s.hand_dir
             )
@@ -234,17 +235,17 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         @partial(jax.jit)
         def move_downwards(s: PlayerMoveState):
-            is_down_move_possible = (jax.lax.abs(s.side_step) <= 3) & (s.sub_step > 0) & (s.main_state != PlayerStableStates.PullUp)
+            is_down_move_possible = (jax.lax.abs(s.side_step) <= 3) & (s.sub_step > 0) & (s.main_state != PlayerStableStates.PULL_UP)
             next_hand_dir = jax.lax.select(
-                (s.main_state == PlayerStableStates.Neutral) & (s.sub_step == 1),
+                (s.main_state == PlayerStableStates.NEUTRAL) & (s.sub_step == 1),
                 s.hand_dir * -1,
                 s.hand_dir
             )
             return jax.lax.cond(
                 is_down_move_possible,
                 lambda s: jax.lax.cond(
-                    (s.main_state == PlayerStableStates.HalfPullUp) & (s.sub_step == 1),
-                    lambda _: s.replace(main_state=PlayerStableStates.Neutral, sub_step=0, hand_dir=s.hand_dir * -1),
+                    (s.main_state == PlayerStableStates.HALF_PULL_UP) & (s.sub_step == 1),
+                    lambda _: s.replace(main_state=PlayerStableStates.NEUTRAL, sub_step=0, hand_dir=s.hand_dir * -1),
                     lambda s: s.replace(sub_step=s.sub_step - 1, hand_dir=next_hand_dir),
                     operand=s
                 ),
@@ -274,9 +275,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         player_move_state = state.player_move_state
         action_state_cases = [
-            up & (player_move_state.main_state != PlayerStableStates.PullUp),
-            down & (player_move_state.main_state == PlayerStableStates.PullUp),
-            down & (player_move_state.main_state != PlayerStableStates.PullUp),
+            up & (player_move_state.main_state != PlayerStableStates.PULL_UP),
+            down & (player_move_state.main_state == PlayerStableStates.PULL_UP),
+            down & (player_move_state.main_state != PlayerStableStates.PULL_UP),
             left,
             right,
         ]
@@ -314,9 +315,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def _score_step(self, state: CrazyClimberState) -> CrazyClimberState:
-        current_at_apex = (state.player_move_state.sub_step == 9) & (state.player_move_state.main_state == PlayerStableStates.PullUp)
+        current_at_apex = (state.player_move_state.sub_step == 9) & (state.player_move_state.main_state == PlayerStableStates.PULL_UP)
 
-        score_triggered = (state.player_move_state.main_state == PlayerStableStates.Neutral) & state.was_at_apex
+        score_triggered = (state.player_move_state.main_state == PlayerStableStates.NEUTRAL) & state.was_at_apex
 
         new_score = jax.lax.select(score_triggered, state.score + 100, state.score)
 
@@ -400,43 +401,29 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
 
             self.PLAYER_UPWARDS_SPRITES = jnp.array([
-                self.SHAPE_MASKS["player_left_first_up_state_group"],
-                self.SHAPE_MASKS["player_right_first_up_state_group"],
+                self.SHAPE_MASKS["player_upwards_left_group"],
+                self.SHAPE_MASKS["player_upwards_right_group"],
             ])
 
             self.PLAYER_SIDEWAYS_SPRITES = jnp.array([
                 jnp.array([
-                    jnp.array([
-                        self.SHAPE_MASKS["player_left_side_neutral_state_group"],
-                        self.SHAPE_MASKS["player_right_side_neutral_state_group"],
-                    ]),
-                    # TODO: Placeholder, to fix dim mismatch. Just a workaround, will be reworked
-                    jnp.array([
-                        self.SHAPE_MASKS["player_left_side_neutral_state_group"],
-                        self.SHAPE_MASKS["player_right_side_neutral_state_group"],
-                    ]),
-                    
+                    self.SHAPE_MASKS["player_neutral_left_group"],
+                    self.SHAPE_MASKS["player_neutral_right_group"],
                 ]),
                 jnp.array([
-                    jnp.array([
-                        self.SHAPE_MASKS["player_left_hand_left_side_half_pull_up_state_group"],
-                        self.SHAPE_MASKS["player_left_hand_right_side_half_pull_up_state_group"],
-                    ]),
-                    jnp.array([
-                        self.SHAPE_MASKS["player_right_hand_left_side_half_pull_up_state_group"],
-                        self.SHAPE_MASKS["player_right_hand_right_side_half_pull_up_state_group"],
-                    ]),
+                    self.SHAPE_MASKS["player_pull_up_left_group"],
+                    self.SHAPE_MASKS["player_pull_up_right_group"],
+                ]),
+            ])
+
+            self.PLAYER_SIDEWAYS_SPRITES_ARM_SPECIFIC = jnp.array([
+                jnp.array([
+                    self.SHAPE_MASKS["player_left_pull_up_left_group"],
+                    self.SHAPE_MASKS["player_left_pull_up_right_group"],
                 ]),
                 jnp.array([
-                    jnp.array([
-                        self.SHAPE_MASKS["player_left_side_pull_up_state_group"],
-                        self.SHAPE_MASKS["player_right_side_pull_up_state_group"],
-                    ]),
-                    # TODO: Placeholder, to fix dim mismatch. Just a workaround, will be reworked
-                    jnp.array([
-                        self.SHAPE_MASKS["player_left_side_pull_up_state_group"],
-                        self.SHAPE_MASKS["player_right_side_pull_up_state_group"],
-                    ]),
+                    self.SHAPE_MASKS["player_right_pull_up_left_group"],
+                    self.SHAPE_MASKS["player_right_pull_up_left_group"],
                 ]),
             ])
 
@@ -507,7 +494,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             def map_player_to_sprite(sprite_index_up, sprite_index_side, hand_index, side_index):
                 return jax.lax.cond(
                     jnp.logical_and(move_state.sub_step <= 1, jnp.abs(move_state.side_step) > 3),
-                    lambda _: self.PLAYER_SIDEWAYS_SPRITES[move_state.main_state][hand_index][side_index][sprite_index_side],
+                    lambda _: jax.lax.cond(
+                        move_state.main_state == PlayerStableStates.HALF_PULL_UP,
+                        lambda _: self.PLAYER_SIDEWAYS_SPRITES_ARM_SPECIFIC[hand_index][side_index][sprite_index_side],
+                        lambda _: self.PLAYER_SIDEWAYS_SPRITES[move_state.main_state][side_index][sprite_index_side],
+                        operand=None),
                     lambda _: self.PLAYER_UPWARDS_SPRITES[hand_index][sprite_index_up],
                     operand=None
                 )
