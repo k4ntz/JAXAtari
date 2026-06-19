@@ -155,6 +155,30 @@ def test_game_over_when_out_of_lives():
     assert bool(done)
 
 
+def test_facing_follows_horizontal_direction():
+    env = _env()
+    _, state = env.reset()
+    # Start mid-air so movement isn't blocked by walls.
+    state = state.replace(player_x=jnp.int32(70), player_y=jnp.int32(58))
+    _, s, _, _, _ = env.step(state, RIGHT)
+    assert int(s.facing) == 1
+    _, s, _, _, _ = env.step(s, LEFT)
+    assert int(s.facing) == -1
+
+
+def test_walk_timer_animates_while_moving():
+    env = _env()
+    _, state = env.reset()
+    state = state.replace(player_x=jnp.int32(70), player_y=jnp.int32(58))
+    # Walking horizontally advances the animation timer.
+    _, s, _, _, _ = env.step(state, RIGHT)
+    _, s, _, _, _ = env.step(s, RIGHT)
+    assert int(s.walk_timer) >= 2
+    # Standing still (no horizontal move) resets it to idle.
+    _, s, _, _, _ = env.step(s, NOOP)
+    assert int(s.walk_timer) == 0
+
+
 def test_render_shape_and_jit():
     env = _env()
     _, state = env.reset()

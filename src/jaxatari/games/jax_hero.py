@@ -101,8 +101,8 @@ class HeroConstants(AutoDerivedConstants):
     laser_duration: int = struct.field(pytree_node=False, default=6)
 
     # --- Dynamite ---
-    dyn_width: int = struct.field(pytree_node=False, default=3)
-    dyn_height: int = struct.field(pytree_node=False, default=6)
+    dyn_width: int = struct.field(pytree_node=False, default=4)
+    dyn_height: int = struct.field(pytree_node=False, default=8)
     dyn_fuse: int = struct.field(pytree_node=False, default=60)
     explosion_frames: int = struct.field(pytree_node=False, default=8)
     explosion_radius: int = struct.field(pytree_node=False, default=14)
@@ -179,6 +179,7 @@ class HeroState:
     player_y: chex.Array
     player_vy: chex.Array
     facing: chex.Array            # -1 left, +1 right
+    walk_timer: chex.Array        # frames spent walking horizontally (0 = idle)
     has_moved: chex.Array         # power only drains after first move
     laser_timer: chex.Array
     power: chex.Array
@@ -263,6 +264,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             player_y=jnp.array(c.player_start_y, dtype=jnp.int32),
             player_vy=jnp.array(0.0, dtype=jnp.float32),
             facing=jnp.array(1, dtype=jnp.int32),
+            walk_timer=jnp.array(0, dtype=jnp.int32),
             has_moved=jnp.array(False, dtype=jnp.bool_),
             laser_timer=jnp.array(0, dtype=jnp.int32),
             power=jnp.array(c.max_power, dtype=jnp.int32),
@@ -347,6 +349,10 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
 
         moved_input = up | left | right | down
         has_moved = state.has_moved | moved_input
+
+        # Walk animation timer: advances while actually moving horizontally.
+        moved_h = new_x != state.player_x
+        walk_timer = jnp.where(moved_h, state.walk_timer + 1, 0).astype(jnp.int32)
 
         # --- dynamite fuse / explosion ---
         new_fuse = jnp.where(dyn_active, dyn_fuse - 1, dyn_fuse).astype(jnp.int32)
@@ -433,6 +439,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         final_y = sel(jnp.array(c.player_start_y, jnp.int32), new_y).astype(jnp.int32)
         final_vy = jnp.where(respawned, 0.0, new_vy).astype(jnp.float32)
         final_facing = sel(jnp.array(1, jnp.int32), new_facing).astype(jnp.int32)
+        final_walk_timer = jnp.where(respawned, 0, walk_timer).astype(jnp.int32)
         final_has_moved = has_moved & (~respawned)
         final_power = sel(jnp.array(c.max_power, jnp.int32), new_power).astype(jnp.int32)
         final_laser = jnp.where(respawned, 0, new_laser_timer).astype(jnp.int32)
@@ -448,6 +455,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             player_y=final_y,
             player_vy=final_vy,
             facing=final_facing,
+            walk_timer=final_walk_timer,
             has_moved=final_has_moved,
             laser_timer=final_laser,
             power=final_power,
@@ -606,6 +614,104 @@ _DIGIT_FONT = {
     9: ["111", "101", "111", "001", "111"],
 }
 
+# --- Pixel-art sprites -----------------------------------------------------
+# Each sprite is a list of equal-length rows; characters map to RGBA colors via
+# _ART_PALETTE ('.' = transparent). Built into (H, W, 4) arrays and fed through
+# the same asset pipeline the other games use for their .npy sprites.
+_ART_PALETTE = {
+    '.': None,                       # transparent
+    'Y': (252, 232, 120),            # prop / fuse spark (yellow)
+    'R': (200, 72, 72),              # helmet / dynamite (red)
+    'B': (72, 108, 200),             # Roderick's suit (blue)
+    'b': (140, 168, 236),            # suit highlight (light blue)
+    'W': (236, 236, 236),            # legs / boots (white)
+    'G': (84, 184, 84),              # miner body (green)
+    'g': (52, 132, 52),              # miner shade (dark green)
+    'P': (224, 156, 168),            # miner head (pink)
+    'O': (196, 112, 60),             # spider body (orange-brown)
+    'o': (230, 150, 92),             # spider highlight
+    'S': (170, 170, 170),            # spider string (gray)
+    'r': (150, 40, 40),              # dynamite shade (dark red)
+}
+
+# Roderick Hero (facing RIGHT; flipped horizontally for facing left).
+# Shared upper body: yellow prop-pack "T", red helmet with a right-facing visor,
+# blue suit with a red laser emitter, then one of three interchangeable leg poses
+# (idle + two walk frames) is appended for the standing / walking animation.
+_PLAYER_TOP = [
+    ".YYYYYYY.",  # rotor blade
+    "....Y....",  # prop shaft
+    "...RRR...",  # helmet top
+    "..RRRRR..",  # helmet
+    "..RRRRRR.",  # helmet + visor (asymmetric -> shows facing direction)
+    "..RRRRR..",  # helmet
+    "...RRR...",  # neck
+    ".BBBBBBB.",  # shoulders
+    "BBBBBBBBB",  # arms out
+    ".BBBBBBR.",  # torso + laser emitter (red)
+    ".BBBBBBB.",  # torso
+]
+_PLAYER_LEGS_IDLE = [
+    "..WWWW...",
+    "..W..W...",
+    "..W..W...",
+    ".WW..WW..",
+]
+_PLAYER_LEGS_WALK0 = [
+    "..WWWW...",
+    "..WW.W...",
+    ".W...WW..",
+    "W....W...",
+]
+_PLAYER_LEGS_WALK1 = [
+    "..WWWW...",
+    "..W.WW...",
+    "..WW..W..",
+    "...W..WW.",
+]
+_PLAYER_IDLE = _PLAYER_TOP + _PLAYER_LEGS_IDLE
+_PLAYER_WALK0 = _PLAYER_TOP + _PLAYER_LEGS_WALK0
+_PLAYER_WALK1 = _PLAYER_TOP + _PLAYER_LEGS_WALK1
+
+# Springing spider hanging from a string.
+_SPIDER_ART = [
+    "...S...",
+    "O.OOO.O",
+    ".OoooO.",
+    "OOoooOO",
+    "O.O.O.O",
+    "O.....O",
+    ".......",
+]
+
+# Trapped miner, seated with a pink head.
+_MINER_ART = [
+    "..PP....",
+    ".PPPP...",
+    ".PPPP...",
+    "..GG....",
+    ".gGGg...",
+    "GGGGGG..",
+    "GGGGGGG.",
+    "gG.gGGg.",
+    "G...GG.G",
+    "....GG..",
+    "...g..g.",
+    "..GG..GG",
+]
+
+# Dynamite stick with a lit fuse.
+_DYN_ART = [
+    ".Y..",
+    ".S..",
+    "rRRr",
+    "RRRR",
+    "RRRR",
+    "RRRR",
+    "RRRR",
+    "rRRr",
+]
+
 
 class HeroRenderer(JAXGameRenderer):
     """
@@ -635,20 +741,24 @@ class HeroRenderer(JAXGameRenderer):
         asset_config = [
             {'name': 'background', 'type': 'background',
              'data': self._build_background(walls_np, breakable_np)},
-            {'name': 'player', 'type': 'procedural',
-             'data': self._solid(c.player_height, c.player_width, c.player_color)},
+            {'name': 'player_idle', 'type': 'procedural',
+             'data': self._sprite_from_art(_PLAYER_IDLE)},
+            {'name': 'player_walk0', 'type': 'procedural',
+             'data': self._sprite_from_art(_PLAYER_WALK0)},
+            {'name': 'player_walk1', 'type': 'procedural',
+             'data': self._sprite_from_art(_PLAYER_WALK1)},
             {'name': 'laser', 'type': 'procedural',
              'data': self._solid(c.laser_height, c.laser_length, c.laser_color)},
             {'name': 'spider', 'type': 'procedural',
-             'data': self._solid(c.spider_height, c.spider_width, c.spider_color)},
+             'data': self._sprite_from_art(_SPIDER_ART)},
             {'name': 'miner', 'type': 'procedural',
-             'data': self._solid(c.miner_height, c.miner_width, c.miner_color)},
+             'data': self._sprite_from_art(_MINER_ART)},
             {'name': 'dynamite', 'type': 'procedural',
-             'data': self._solid(c.dyn_height, c.dyn_width, c.dyn_color)},
+             'data': self._sprite_from_art(_DYN_ART)},
             {'name': 'explosion', 'type': 'procedural',
-             'data': self._solid(2 * c.explosion_radius, 2 * c.explosion_radius, c.explosion_color)},
+             'data': self._build_explosion(c.explosion_radius)},
             {'name': 'breakable', 'type': 'procedural',
-             'data': self._solid(bh, bw, c.breakable_color)},
+             'data': self._build_breakable(bh, bw)},
             {'name': 'power_unit', 'type': 'procedural',
              'data': self._solid(c.power_bar_height, 1, c.power_color)},
             {'name': 'dyn_icon', 'type': 'procedural',
@@ -656,6 +766,7 @@ class HeroRenderer(JAXGameRenderer):
             {'name': 'life_icon', 'type': 'procedural',
              'data': self._solid(8, 4, c.player_color)},
             {'name': 'digits', 'type': 'digits', 'data': self._build_digits(c.text_color)},
+            {'name': 'digits_dark', 'type': 'digits', 'data': self._build_digits((20, 20, 20))},
         ]
         sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "hero")
 
@@ -664,11 +775,56 @@ class HeroRenderer(JAXGameRenderer):
             self.COLOR_TO_ID, self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
+        # Stack player frames [idle, walk0, walk1] for dynamic frame selection.
+        self.PLAYER_FRAMES = jnp.stack([
+            self.SHAPE_MASKS["player_idle"],
+            self.SHAPE_MASKS["player_walk0"],
+            self.SHAPE_MASKS["player_walk1"],
+        ])
+
     # --- procedural asset builders ----------------------------------------
     @staticmethod
     def _solid(h: int, w: int, color: Tuple[int, int, int]) -> jnp.ndarray:
         rgba = np.zeros((h, w, 4), dtype=np.uint8)
         rgba[:, :, 0], rgba[:, :, 1], rgba[:, :, 2], rgba[:, :, 3] = color[0], color[1], color[2], 255
+        return jnp.asarray(rgba)
+
+    @staticmethod
+    def _sprite_from_art(art: List[str]) -> jnp.ndarray:
+        """Build an (H, W, 4) RGBA sprite from a pixel-map using _ART_PALETTE."""
+        h, w = len(art), len(art[0])
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        for r, row in enumerate(art):
+            for col, ch in enumerate(row):
+                color = _ART_PALETTE[ch]
+                if color is not None:
+                    rgba[r, col, 0:3] = np.array(color, dtype=np.uint8)
+                    rgba[r, col, 3] = 255
+        return jnp.asarray(rgba)
+
+    def _build_explosion(self, radius: int) -> jnp.ndarray:
+        """Radial blast: yellow core fading to orange, transparent outside."""
+        c = self.consts
+        size = 2 * radius
+        yy, xx = np.mgrid[0:size, 0:size]
+        dist = np.sqrt((xx - radius + 0.5) ** 2 + (yy - radius + 0.5) ** 2)
+        rgba = np.zeros((size, size, 4), dtype=np.uint8)
+        outer = dist <= radius
+        core = dist <= radius * 0.55
+        rgba[outer, 0:3] = np.array(c.explosion_color, dtype=np.uint8)
+        rgba[outer, 3] = 255
+        rgba[core, 0:3] = np.array((252, 232, 120), dtype=np.uint8)  # yellow core
+        return jnp.asarray(rgba)
+
+    def _build_breakable(self, h: int, w: int) -> jnp.ndarray:
+        """Breakable wall: brick-like fill with a lighter top edge to read as
+        'blastable', distinct from the baked solid walls."""
+        c = self.consts
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        rgba[:, :, 0:3] = np.array(c.breakable_color, dtype=np.uint8)
+        rgba[:, :, 3] = 255
+        rgba[0, :, 0:3] = np.array((210, 150, 96), dtype=np.uint8)  # highlight top edge
+        rgba[:, ::6, 0:3] = np.array(c.wall_color, dtype=np.uint8)  # brick seams
         return jnp.asarray(rgba)
 
     def _build_background(self, walls_np, breakable_np) -> jnp.ndarray:
@@ -734,8 +890,15 @@ class HeroRenderer(JAXGameRenderer):
                        state.dyn_x - c.explosion_radius, state.dyn_y - c.explosion_radius,
                        self.SHAPE_MASKS["explosion"], raster)
 
-        # Player.
-        raster = self.jr.render_at_clipped(raster, state.player_x, state.player_y, self.SHAPE_MASKS["player"])
+        # Player: pick idle/walk frame, flip to face the travel direction, and
+        # bottom/centre-align the (taller/wider) sprite over the collision box.
+        frame = jnp.where(state.walk_timer <= 0, 0, 1 + (state.walk_timer // 4) % 2)
+        player_mask = self.PLAYER_FRAMES[frame]
+        sh, sw = self.PLAYER_FRAMES.shape[1], self.PLAYER_FRAMES.shape[2]
+        px = state.player_x + (c.player_width - sw) // 2
+        py = state.player_y + (c.player_height - sh)
+        raster = self.jr.render_at_clipped(
+            raster, px, py, player_mask, flip_horizontal=(state.facing < 0))
 
         # Laser.
         laser_on = state.laser_timer > 0
@@ -776,6 +939,6 @@ class HeroRenderer(JAXGameRenderer):
         level_digit = self.jr.int_to_digits(state.level + 1, max_digits=1)
         raster = self.jr.render_label_selective(
             raster, c.screen_width // 2 - 1, 5, level_digit,
-            self.SHAPE_MASKS["digits"], 0, 1, spacing=4, max_digits_to_render=1)
+            self.SHAPE_MASKS["digits_dark"], 0, 1, spacing=4, max_digits_to_render=1)
 
         return self.jr.render_from_palette(raster, self.PALETTE)
