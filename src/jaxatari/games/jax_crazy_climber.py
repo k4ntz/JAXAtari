@@ -29,7 +29,7 @@ class PlayerMoveState:
     sub_step: int 
     side_step: int 
     hand_dir: int
-    pos_x: float
+    pos_x: int
     
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
@@ -138,7 +138,8 @@ class CrazyClimberConstants(struct.PyTreeNode):
     HEIGHT: int = struct.field(pytree_node=False, default=210)
 
     PLAYER_Y: int = struct.field(pytree_node=False, default=160)
-    PLAYER_DELTA_X: float = struct.field(pytree_node=False, default=6)
+    PLAYER_POSSIBLE_X: jnp.ndarray = struct.field(pytree_node=False, default=jnp.array([40, 46, 52, 58, 64, 72, 80, 86, 92, 98, 104]))
+    TOWER_POSSIBLE_SPRITE_CLIP: jnp.ndarray = struct.field(pytree_node=False, default=jnp.array([0, 4, 7, 10])) 
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
 
@@ -160,7 +161,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             score=jnp.array(0).astype(jnp.int32),
             bonus=jnp.array(10000).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
-            player_move_state=PlayerMoveState(main_state=PlayerStableStates.Neutral, sub_step=0, side_step=0, hand_dir=1, pos_x=96),
+            player_move_state=PlayerMoveState(main_state=PlayerStableStates.Neutral, sub_step=0, side_step=0, hand_dir=1, pos_x=0),
             tower_step=0,
             was_at_apex=jnp.array(False),
         )
@@ -257,7 +258,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 is_right_move_possible,
                 lambda s: jax.lax.cond(
                     (jax.lax.abs(s.side_step) >= 12) & (jax.lax.sign(s.side_step) == jax.lax.sign(dir)),
-                    lambda s: s.replace(side_step=0, pos_x=s.pos_x + dir * self.consts.PLAYER_DELTA_X),
+                    lambda s: s.replace(side_step=0, pos_x=jnp.clip(s.pos_x + dir, 0, 10)),
                     lambda s: s.replace(side_step=s.side_step + dir),
                     operand=s,
                 ),
@@ -441,7 +442,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 ]),
             ])
 
-            self.PLAYER_UPWARDS_SPRITE_SEQUENCE = jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 10, 10, 10, 11, 11, 11])
+            self.PLAYER_UPWARDS_SPRITE_SEQUENCE = jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 9, 9, 10, 10, 10, 11, 11, 11])
             self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE = jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3])
             
             self.TOWER_SPRITE = self._render_tower_sprite()
@@ -527,7 +528,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def _render_tower(self, state: CrazyClimberState) -> jnp.ndarray:
             tower_sprite = self.TOWER_SPRITE
 
-            top_clip = (4 - state.tower_step) * 4
+            top_clip = 13 - self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.tower_step]
+            jax.debug.print("top clip: {clip}", clip=top_clip)
             tower_raster = jax.lax.dynamic_slice_in_dim(
                 tower_sprite,
                 top_clip,
@@ -544,7 +546,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             player_raster = self._render_player(state)
             tower_raster = self._render_tower(state)
             raster = self._clip_raster(raster, tower_raster, 40, 44) # self.jr.render_at_clipped(raster, 0, 0, tower_raster)
-            raster = self._clip_raster(raster, player_raster, state.player_move_state.pos_x, self.consts.PLAYER_Y) # self.jr.render_at_clipped(raster, state.player_move_state.pos_x, self.consts.PLAYER_Y, player_raster)
+            raster = self._clip_raster(raster, player_raster, self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x], self.consts.PLAYER_Y) # self.jr.render_at_clipped(raster, state.player_move_state.pos_x, self.consts.PLAYER_Y, player_raster)
 
             score_digits = self.jr.int_to_digits(state.score, max_digits=6)
             bonus_digits = self.jr.int_to_digits(state.bonus, max_digits=5)
