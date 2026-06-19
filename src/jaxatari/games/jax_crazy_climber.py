@@ -34,6 +34,7 @@ class PlayerMoveState:
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
     score: chex.Array
+    bonus: chex.Array
     step_counter: chex.Array
     player_move_state: PlayerMoveState
     tower_step: chex.Array
@@ -157,6 +158,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state = CrazyClimberState(
             key=state_key,
             score=jnp.array(0).astype(jnp.int32),
+            bonus=jnp.array(10000).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
             player_move_state=PlayerMoveState(main_state=PlayerStableStates.Neutral, sub_step=0, side_step=0, hand_dir=1, pos_x=96),
             tower_step=0,
@@ -171,9 +173,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         previous_state = state
         
+        state = self._step_counter(state)
         state = self._player_step(state, atari_action)
         state = self._tower_step(state)
         state = self._score_step(state)
+        state = self._bonus_step(state)
 
         _, next_rng = jax.random.split(state.key)
         state = state.replace(key=next_rng)
@@ -185,6 +189,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         return observation, state, env_reward, done, info
     
+    @partial(jax.jit, static_argnums=(0,))
+    def _step_counter(self, state: CrazyClimberState) -> CrazyClimberState:
+        return state.replace(step_counter=state.step_counter + 1)
+
+    @partial(jax.jit, static_argnums=(0,))
     def _tower_step(self, state: CrazyClimberState) -> CrazyClimberState:
         possible_tower_steps = jnp.array([0, 1, 1, 1, 2, 2, 2, 3, 3, 3])
             
@@ -196,8 +205,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         return state.replace(tower_step=tower_step) 
         
-    
+    @partial(jax.jit, static_argnums=(0,))
     def _player_step(self, state: CrazyClimberState, action: chex.Array) -> CrazyClimberState:
+        @partial(jax.jit)
         def move_upwards(s: PlayerMoveState): 
             is_up_move_possible = (jax.lax.abs(s.side_step) <= 3)
             transitioning_states = (((s.main_state != PlayerStableStates.PullUp) & (s.sub_step == 4)) |
@@ -220,6 +230,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 operand=s
             )
 
+        @partial(jax.jit)
         def move_downwards(s: PlayerMoveState):
             is_down_move_possible = (jax.lax.abs(s.side_step) <= 3) & (s.sub_step > 0) & (s.main_state != PlayerStableStates.PullUp)
             next_hand_dir = jax.lax.select(
@@ -239,6 +250,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 operand=s
             )
         
+        @partial(jax.jit)
         def move_horizontal(s: PlayerMoveState, dir: int):
             is_right_move_possible = s.sub_step <= 1
             return jax.lax.cond(
@@ -298,6 +310,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             player_move_state=next_player_move_state,
         )
 
+    @partial(jax.jit, static_argnums=(0,))
     def _score_step(self, state: CrazyClimberState) -> CrazyClimberState:
         current_at_apex = (state.player_move_state.sub_step == 9) & (state.player_move_state.main_state == PlayerStableStates.PullUp)
 
@@ -309,6 +322,18 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             score=new_score,
             was_at_apex=current_at_apex
         )
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _bonus_step(self, state: CrazyClimberState) -> CrazyClimberState: 
+        steps = state.step_counter
+        bonus_condition = ((state.step_counter - 1229) % 600 == 0) & (state.step_counter > 1228)
+
+        bonus = jnp.where(bonus_condition, state.bonus - 100, state.bonus)
+
+        jax.debug.print("Steps: {x}, cond: {y}, eval_cond: {z}", x=steps, y=(steps - 1229) % 600, z=bonus_condition)
+
+        return state.replace(bonus=bonus)
+
     
     def render(self, state: CrazyClimberState) -> jnp.ndarray:
         return self.renderer.render(state)
@@ -521,12 +546,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             raster = self._clip_raster(raster, tower_raster, 40, 44) # self.jr.render_at_clipped(raster, 0, 0, tower_raster)
             raster = self._clip_raster(raster, player_raster, state.player_move_state.pos_x, self.consts.PLAYER_Y) # self.jr.render_at_clipped(raster, state.player_move_state.pos_x, self.consts.PLAYER_Y, player_raster)
 
-            digits = self.jr.int_to_digits(state.score, max_digits=6)
+            score_digits = self.jr.int_to_digits(state.score, max_digits=6)
+            bonus_digits = self.jr.int_to_digits(state.bonus, max_digits=5)
             digit_masks = self.SHAPE_MASKS["digits"]
-
-            start_index = 0
-            num_to_render = 6
             
-            raster = self.jr.render_label_selective(raster, 55, 20, digits, digit_masks, start_index, num_to_render, spacing=8, max_digits_to_render=6)
+            raster = self.jr.render_label_selective(raster, 57, 20, bonus_digits, digit_masks, start_index=0, num_to_render=5, spacing=8, max_digits_to_render=6)
+            raster = self.jr.render_label_selective(raster, 49, 30, score_digits, digit_masks, start_index=0, num_to_render=6, spacing=8, max_digits_to_render=6)
 
             return self.jr.render_from_palette(raster, self.PALETTE)
