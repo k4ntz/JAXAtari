@@ -303,7 +303,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         score_triggered = (state.player_move_state.main_state == PlayerStableStates.Neutral) & state.was_at_apex
 
-        new_score = jax.lax.select(score_triggered, state.score + 10, state.score)
+        new_score = jax.lax.select(score_triggered, state.score + 100, state.score)
 
         return state.replace(
             score=new_score,
@@ -524,7 +524,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             digits = self.jr.int_to_digits(state.score, max_digits=6)
             digit_masks = self.SHAPE_MASKS["digits"]
 
-            start_index = 1
+            start_index = 0
             num_to_render = 6
             
             raster = self.jr.render_label_selective(raster, 55, 20, digits, digit_masks, start_index, num_to_render, spacing=8, max_digits_to_render=6)
