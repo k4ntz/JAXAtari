@@ -331,8 +331,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         bonus = jnp.where(bonus_condition, state.bonus - 100, state.bonus)
 
-        jax.debug.print("Steps: {x}, cond: {y}, eval_cond: {z}", x=steps, y=(steps - 1229) % 600, z=bonus_condition)
-
         return state.replace(bonus=bonus)
 
     
@@ -529,7 +527,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             tower_sprite = self.TOWER_SPRITE
 
             top_clip = 13 - self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.tower_step]
-            jax.debug.print("top clip: {clip}", clip=top_clip)
             tower_raster = jax.lax.dynamic_slice_in_dim(
                 tower_sprite,
                 top_clip,
