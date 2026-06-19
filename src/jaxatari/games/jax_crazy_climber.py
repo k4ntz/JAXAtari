@@ -55,6 +55,7 @@ def _get_default_asset_config() -> tuple:
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'score_{}.npy'},
+        {'name': 'life', 'type': 'single', 'file': 'life.npy'},
         {'name': 'player_left_first_up_state_group', 'type': 'group', 'files': [
             'player_neutral_0.npy',
             'player_neutral_2_l.npy',
@@ -547,6 +548,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             score_digits = self.jr.int_to_digits(state.score, max_digits=6)
             bonus_digits = self.jr.int_to_digits(state.bonus, max_digits=5)
             digit_masks = self.SHAPE_MASKS["digits"]
+
+            life_mask = self.SHAPE_MASKS["life"]
+            raster = self.jr.render_at(raster, 58, 12, life_mask)
+            raster = self.jr.render_at(raster, 74, 12, life_mask)
+            raster = self.jr.render_at(raster, 90, 12, life_mask)
             
             raster = self.jr.render_label_selective(raster, 57, 20, bonus_digits, digit_masks, start_index=0, num_to_render=5, spacing=8, max_digits_to_render=6)
             raster = self.jr.render_label_selective(raster, 49, 30, score_digits, digit_masks, start_index=0, num_to_render=6, spacing=8, max_digits_to_render=6)
