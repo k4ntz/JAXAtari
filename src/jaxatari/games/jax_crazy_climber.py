@@ -105,6 +105,13 @@ def _get_default_asset_config() -> tuple:
             'bird/right/8.npy',
             'bird/right/12.npy',
             'bird/right/16.npy',
+        ]},
+        {'name': 'bird_left', 'type': 'group', 'files': [
+            'left/right/0.npy',
+            'left/right/4.npy',
+            'left/right/8.npy',
+            'left/right/12.npy',
+            'left/right/16.npy',
         ]}
     )
 
