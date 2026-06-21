@@ -20,10 +20,28 @@ def _get_default_asset_config() -> tuple:
     """
     return (
         {"name": "background", "type": "background", "file": "background.npy"},
-        {"name": "player", "type": "single", "file": "player.npy"},
-        {"name": "enemy", "type": "single", "file": "enemy.npy"},
+        # Skater sprites per team, authored facing right (the renderer mirrors them
+        # for left-facing skaters). Per character the renderer picks:
+        #   - "<team>" walk-cycle frames (with stick) when the ACTIVE skater moves,
+        #   - "<team>_idle" (with stick) when the active skater stands still,
+        #   - "<team>_nostick" for the INACTIVE teammate (drawn without a stick).
+        {"name": "player", "type": "group",
+         "files": ["player_0.npy", "player_1.npy"]},
+        {"name": "enemy", "type": "group",
+         "files": ["enemy_0.npy", "enemy_1.npy"]},
+        {"name": "player_idle", "type": "single", "file": "player_idle.npy"},
+        {"name": "enemy_idle", "type": "single", "file": "enemy_idle.npy"},
+        {"name": "player_nostick", "type": "single", "file": "player_nostick.npy"},
+        {"name": "enemy_nostick", "type": "single", "file": "enemy_nostick.npy"},
+        # "<team>_shoot" = the active skater's 2-frame swing animation (wind-up ->
+        # follow-through), played while shooting_cooldown > 0.
+        {"name": "player_shoot", "type": "group",
+         "files": ["player_shoot_0.npy", "player_shoot_1.npy"]},
+        {"name": "enemy_shoot", "type": "group",
+         "files": ["enemy_shoot_0.npy", "enemy_shoot_1.npy"]},
         {"name": "puck", "type": "single", "file": "puck.npy"},
-        {"name": "digits", "type": "digits", "pattern": "digit_{}.npy"},
+        {"name": "digits", "type": "digits", "pattern": "digit_{}.npy",
+         "recolorings": {"gold": (236, 200, 96)}},
     )
 
 
@@ -33,29 +51,43 @@ class IceHockeyConstants(struct.PyTreeNode):
     WIDTH: int = struct.field(pytree_node=False, default=160)
     HEIGHT: int = struct.field(pytree_node=False, default=210)
 
-    # Rink interior in pixels (inside the boards).
-    RINK_LEFT: int = struct.field(pytree_node=False, default=4)
-    RINK_RIGHT: int = struct.field(pytree_node=False, default=155)
-    RINK_TOP: int = struct.field(pytree_node=False, default=20)
-    RINK_BOTTOM: int = struct.field(pytree_node=False, default=190)
+    # Rink interior in pixels (inside the boards)
+    RINK_LEFT: int = struct.field(pytree_node=False, default=32)
+    RINK_RIGHT: int = struct.field(pytree_node=False, default=128)
+    RINK_TOP: int = struct.field(pytree_node=False, default=42)
+    RINK_BOTTOM: int = struct.field(pytree_node=False, default=187)
 
     # Goals. Player defends the top, enemy the bottom.
-    GOAL_X0: int = struct.field(pytree_node=False, default=60)
-    GOAL_X1: int = struct.field(pytree_node=False, default=100)
-    ENEMY_GOAL_Y: int = struct.field(pytree_node=False, default=187)
-    PLAYER_GOAL_Y: int = struct.field(pytree_node=False, default=20)
-    GOAL_HEIGHT: int = struct.field(pytree_node=False, default=7)
+    GOAL_X0: int = struct.field(pytree_node=False, default=64)
+    GOAL_X1: int = struct.field(pytree_node=False, default=96)
+    ENEMY_GOAL_Y: int = struct.field(pytree_node=False, default=186)
+    PLAYER_GOAL_Y: int = struct.field(pytree_node=False, default=42)
+    GOAL_HEIGHT: int = struct.field(pytree_node=False, default=4)
 
-    # Sprite sizes, used for observation bounding boxes.
-    PLAYER_W: int = struct.field(pytree_node=False, default=8)
-    PLAYER_H: int = struct.field(pytree_node=False, default=12)
-    PUCK_W: int = struct.field(pytree_node=False, default=4)
-    PUCK_H: int = struct.field(pytree_node=False, default=3)
+    # Sprite sizes, used for observation bounding boxes
+    PLAYER_W: int = struct.field(pytree_node=False, default=26)
+    PLAYER_H: int = struct.field(pytree_node=False, default=20)
+    PUCK_W: int = struct.field(pytree_node=False, default=2)
+    PUCK_H: int = struct.field(pytree_node=False, default=2)
 
     PLAYER_SPEED: float = struct.field(pytree_node=False, default=1.5)
-    
-    # Offset from the goal lines defining zone where goalie/skater can't move
-    ATTACKING_ZONE_OFFSET_Y: int = struct.field(pytree_node=False, default=50)
+
+    # Skater leg walk-cycle: number of frames in the loop and how many game
+    # frames each phase is shown for. The cycle advances only while a skater has
+    # directional input.
+    ANIM_FRAMES: int = struct.field(pytree_node=False, default=2)
+    ANIM_CADENCE: int = struct.field(pytree_node=False, default=4)
+
+    # Shooting/swing animation: how many game frames the active skater holds the
+    # swing (wind-up) pose after a FIRE press. Drives shooting_cooldown.
+    SHOOT_ANIM_FRAMES: int = struct.field(pytree_node=False, default=8)
+
+    # Offset from the goal lines defining zone where goalie/skater can't move.
+    # A skater is kept out of its own defensive zone (this deep); a goalie is kept
+    # out of the opponent's far zone (this deep).
+    ATTACKING_ZONE_OFFSET_Y: int = struct.field(pytree_node=False, default=30)
+    # How far a goalie may poke into its own goal crease (beyond the rink edge).
+    GOALIE_CREASE_DEPTH: int = struct.field(pytree_node=False, default=6)
 
     # Phase-2 collision tunables for _characters_step
     MIN_SEPARATION: float = struct.field(pytree_node=False, default=8.0)
@@ -65,17 +97,16 @@ class IceHockeyConstants(struct.PyTreeNode):
     TIME_LIMIT: int = struct.field(pytree_node=False, default=10800)
     FACE_OFF_FRAMES: int = struct.field(pytree_node=False, default=40)
 
-    # Face-off layout. [x, y] = [col, row]. Estimated from the ALE screen;
-    # refine against captured frames once real sprites are in.
-    FACEOFF_X: float = struct.field(pytree_node=False, default=78.0)
-    FACEOFF_Y: float = struct.field(pytree_node=False, default=103.0)
-    PLAYER_SKATER_X: float = struct.field(pytree_node=False, default=60.0)
-    PLAYER_SKATER_Y: float = struct.field(pytree_node=False, default=80.0)
-    PLAYER_GOALIE_X: float = struct.field(pytree_node=False, default=85.0)
-    PLAYER_GOALIE_Y: float = struct.field(pytree_node=False, default=35.0)
-    ENEMY_SKATER_X: float = struct.field(pytree_node=False, default=85.0)
-    ENEMY_SKATER_Y: float = struct.field(pytree_node=False, default=110.0)
-    ENEMY_GOALIE_X: float = struct.field(pytree_node=False, default=60.0)
+    # Face-off layout. [x, y] = [col, row].
+    FACEOFF_X: float = struct.field(pytree_node=False, default=79.0)
+    FACEOFF_Y: float = struct.field(pytree_node=False, default=114.0)
+    PLAYER_SKATER_X: float = struct.field(pytree_node=False, default=54.0)
+    PLAYER_SKATER_Y: float = struct.field(pytree_node=False, default=84.0)
+    PLAYER_GOALIE_X: float = struct.field(pytree_node=False, default=62.0)
+    PLAYER_GOALIE_Y: float = struct.field(pytree_node=False, default=36.0)
+    ENEMY_SKATER_X: float = struct.field(pytree_node=False, default=80.0)
+    ENEMY_SKATER_Y: float = struct.field(pytree_node=False, default=105.0)
+    ENEMY_GOALIE_X: float = struct.field(pytree_node=False, default=64.0)
     ENEMY_GOALIE_Y: float = struct.field(pytree_node=False, default=155.0)
 
     # Asset manifest lives in the constants so the modding framework can apply
@@ -103,6 +134,7 @@ class CharacterState:
     orientation: chex.Array     # 0 = left, 1 = right
     has_puck: chex.Array
     shooting_cooldown: chex.Array
+    walk_counter: chex.Array    # leg walk-cycle phase counter (advances while moving)
 
 
 @struct.dataclass
@@ -197,18 +229,19 @@ class JaxIceHockey(JaxEnvironment):
         # Face-off: puck at centre, characters on start positions
         c = self.consts
 
-        def char(x, y):
+        def char(x, y, orientation=0):
             return CharacterState(
                 is_tackled=jnp.array(False),
                 position=jnp.array([x, y], dtype=jnp.float32),
-                orientation=jnp.array(0, dtype=jnp.int32),
+                orientation=jnp.array(orientation, dtype=jnp.int32),
                 has_puck=jnp.array(False),
                 shooting_cooldown=jnp.array(0, dtype=jnp.int32),
+                walk_counter=jnp.array(0, dtype=jnp.int32),
             )
 
         state = IceHockeyState(
             player_state=PlayerState(
-                skater=char(c.PLAYER_SKATER_X, c.PLAYER_SKATER_Y),
+                skater=char(c.PLAYER_SKATER_X, c.PLAYER_SKATER_Y, orientation=1), # oriented right at start
                 goalie=char(c.PLAYER_GOALIE_X, c.PLAYER_GOALIE_Y),
                 active_character=jnp.array(0, dtype=jnp.int32),
             ),
@@ -252,7 +285,7 @@ class JaxIceHockey(JaxEnvironment):
             enemy_state=new_enemy_state,
             counter=state.counter + 1,
         )
-        
+
         obs = self._get_observation(state)
         reward = self._get_reward(previous_state, state)
         done = self._get_done(state)
@@ -355,7 +388,36 @@ class JaxIceHockey(JaxEnvironment):
             movable & right, 1, jnp.where(movable & left, 0, character.orientation)
         )
 
-        return character.replace(position=new_position, orientation=new_orientation)
+        # Leg walk-cycle advances whenever the skater has any directional input 
+        # and freezes on frame 0 when idle (NOOP) or tackled.
+        has_input = movable & (up | down | left | right)
+        new_walk_counter = jnp.where(has_input, character.walk_counter + 1, 0)
+
+        # Shooting/swing animation: a FIRE press starts the swing. 
+        # shooting_cooldown counts the swing pose down to 0; 
+        # a fresh press only (re)starts it when not already
+        # swinging, so holding FIRE replays the full swing.
+        # A tackled character cannot swing.
+        fire = movable & jnp.any(jnp.array([
+            action == Action.FIRE,
+            action == Action.UPFIRE, action == Action.DOWNFIRE,
+            action == Action.LEFTFIRE, action == Action.RIGHTFIRE,
+            action == Action.UPRIGHTFIRE, action == Action.UPLEFTFIRE,
+            action == Action.DOWNRIGHTFIRE, action == Action.DOWNLEFTFIRE,
+        ]))
+        decremented = jnp.maximum(character.shooting_cooldown - 1, 0)
+        new_cooldown = jnp.where(
+            fire & (character.shooting_cooldown == 0),
+            self.consts.SHOOT_ANIM_FRAMES,
+            decremented,
+        )
+
+        return character.replace(
+            position=new_position,
+            orientation=new_orientation,
+            walk_counter=new_walk_counter,
+            shooting_cooldown=new_cooldown,
+        )
 
     # ------------------------------------------------------------------ #
     # Phase 1 — intended input movement (uniform over a team's two skaters)
@@ -555,17 +617,26 @@ class JaxIceHockey(JaxEnvironment):
         velocity = jnp.float32(c.PLAYER_SPEED)
         min_separation = jnp.float32(c.MIN_SEPARATION)
         min_vertical_distance = jnp.float32(c.MIN_VERTICAL_DISTANCE)
-        # No per-team zones defined yet: all four skaters share the full-rink bounds.
-        rink = jnp.array(
-            [c.RINK_LEFT, c.RINK_RIGHT, c.RINK_TOP, c.RINK_BOTTOM], dtype=jnp.float32
+        x_min = c.RINK_LEFT
+        x_max = c.RINK_RIGHT - c.PLAYER_W
+        y_top = c.RINK_TOP
+        y_bot = c.RINK_BOTTOM - c.PLAYER_H
+        off = c.ATTACKING_ZONE_OFFSET_Y     # depth of the restricted zone
+        crease = c.GOALIE_CREASE_DEPTH       # how far a goalie pokes into its goal
+        # Player defends the TOP goal, enemy the BOTTOM. A skater is kept out of its
+        # own defensive zone (so it plays toward the goal it attacks); a goalie stays
+        # in its defensive half but may enter its own goal crease.
+        bounds_player_skater = jnp.array(
+            [x_min, x_max, y_top + off, y_bot], dtype=jnp.float32
         )
-        # Player defends the top, enemy the bottom. Each goalie is barred from the
-        # opponent's (attacking) zone; each skater is barred from its own crease.
-        bounds_player_skater = bounds_enemy_goalie = jnp.array(
-            [c.RINK_LEFT, c.RINK_RIGHT, c.RINK_TOP+c.ATTACKING_ZONE_OFFSET_Y, c.RINK_BOTTOM], dtype=jnp.float32
+        bounds_player_goalie = jnp.array(
+            [x_min, x_max, y_top - crease, y_bot - off], dtype=jnp.float32
         )
-        bounds_player_goalie = bounds_enemy_skater = jnp.array(
-            [c.RINK_LEFT, c.RINK_RIGHT, c.RINK_TOP, c.RINK_BOTTOM-c.ATTACKING_ZONE_OFFSET_Y], dtype=jnp.float32
+        bounds_enemy_skater = jnp.array(
+            [x_min, x_max, y_top, y_bot - off], dtype=jnp.float32
+        )
+        bounds_enemy_goalie = jnp.array(
+            [x_min, x_max, y_top + off, y_bot + crease], dtype=jnp.float32
         )
 
         # 1) Active-skater resolution (per team, against the shared puck).
@@ -690,9 +761,25 @@ class IceHockeyRenderer(JAXGameRenderer):
     def render(self, state: IceHockeyState) -> jnp.ndarray:
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
+        puck_m = self.SHAPE_MASKS["puck"]
+
+        # Skater sprites (all authored facing right; left-facing chars, orientation
+        # 0, are mirrored). Per character the renderer picks one of three poses:
+        #   - inactive teammate              -> "<team>_nostick" (no stick),
+        #   - active skater standing still   -> "<team>_idle"    (with stick),
+        #   - active skater moving           -> "<team>" walk-cycle frame.
         pm = self.SHAPE_MASKS["player"]
         em = self.SHAPE_MASKS["enemy"]
-        puck_m = self.SHAPE_MASKS["puck"]
+        p_idle = self.SHAPE_MASKS["player_idle"]
+        e_idle = self.SHAPE_MASKS["enemy_idle"]
+        p_nostick = self.SHAPE_MASKS["player_nostick"]
+        e_nostick = self.SHAPE_MASKS["enemy_nostick"]
+        p_shoot = self.SHAPE_MASKS["player_shoot"]
+        e_shoot = self.SHAPE_MASKS["enemy_shoot"]
+        p_off = self.FLIP_OFFSETS["player"]
+        e_off = self.FLIP_OFFSETS["enemy"]
+        cadence = self.consts.ANIM_CADENCE
+        nframes = self.consts.ANIM_FRAMES
 
         def col(pos):
             return jnp.round(pos[0]).astype(jnp.int32)
@@ -700,23 +787,45 @@ class IceHockeyRenderer(JAXGameRenderer):
         def row(pos):
             return jnp.round(pos[1]).astype(jnp.int32)
 
-        p1 = state.player_state.skater.position
-        p2 = state.player_state.goalie.position
-        e1 = state.enemy_state.skater.position
-        e2 = state.enemy_state.goalie.position
-        pp = state.puck_state.position
+        def draw(r, char, move_masks, idle_mask, nostick_mask, shoot_masks, off, is_active):
+            flip = char.orientation == 0   # 0 = left; sprites face right
+            frame = (char.walk_counter // cadence) % nframes
+            moving = char.walk_counter > 0
+            shooting = char.shooting_cooldown > 0
+            # Swing animation advances over the cooldown: wind-up (frame 0) then
+            # follow-through (frame 1). Count elapsed frames up from the press.
+            elapsed = self.consts.SHOOT_ANIM_FRAMES - char.shooting_cooldown
+            shoot_frame = (elapsed // cadence) % shoot_masks.shape[0]
+            # active skater: swing animation while shooting, else walk frame while
+            # moving, else idle pose when still.
+            active_mask = jnp.where(
+                shooting, shoot_masks[shoot_frame],
+                jnp.where(moving, move_masks[frame], idle_mask),
+            )
+            # inactive teammate: the stickless pose.
+            mask = jnp.where(is_active, active_mask, nostick_mask)
+            return self.jr.render_at_clipped(
+                r, col(char.position), row(char.position), mask,
+                flip_horizontal=flip, flip_offset=off,
+            )
+
+        # Active character of each team (0 = skater controlled, 1 = goalie).
+        p_act = state.player_state.active_character
+        e_act = state.enemy_state.active_character
 
         # render_at_clipped because skaters can reach the board pixels at the
         # edge; render_at would slice out of bounds there.
-        raster = self.jr.render_at_clipped(raster, col(p2), row(p2), pm)
-        raster = self.jr.render_at_clipped(raster, col(e2), row(e2), em)
-        raster = self.jr.render_at_clipped(raster, col(p1), row(p1), pm)
-        raster = self.jr.render_at_clipped(raster, col(e1), row(e1), em)
-        raster = self.jr.render_at_clipped(raster, col(pp), row(pp), puck_m)
+        raster = draw(raster, state.player_state.goalie, pm, p_idle, p_nostick, p_shoot, p_off, p_act == 1)
+        raster = draw(raster, state.enemy_state.goalie, em, e_idle, e_nostick, e_shoot, e_off, e_act == 1)
+        raster = draw(raster, state.player_state.skater, pm, p_idle, p_nostick, p_shoot, p_off, p_act == 0)
+        raster = draw(raster, state.enemy_state.skater, em, e_idle, e_nostick, e_shoot, e_off, e_act == 0)
+        raster = self.jr.render_at_clipped(raster, col(state.puck_state.position),
+                                           row(state.puck_state.position), puck_m)
 
-        dm = self.SHAPE_MASKS["digits"]
+        dm_blue = self.SHAPE_MASKS["digits"]        # player score (blue team)
+        dm_gold = self.SHAPE_MASKS["digits_gold"]   # enemy score (gold team)
 
-        def draw_score(r, value, x_single, x_double):
+        def draw_score(r, value, x_single, x_double, dm):
             digits = self.jr.int_to_digits(value, max_digits=2)
             is_single = value < 10
             start = jax.lax.select(is_single, jnp.int32(1), jnp.int32(0))
@@ -726,7 +835,8 @@ class IceHockeyRenderer(JAXGameRenderer):
                 r, x, 3, digits, dm, start, count, spacing=7, max_digits_to_render=2
             )
 
-        raster = draw_score(raster, state.game_state.enemy_score, 43, 33)
-        raster = draw_score(raster, state.game_state.player_score, 113, 103)
+        # Blue (player) score on the left, gold (enemy) on the right, as in the ROM.
+        raster = draw_score(raster, state.game_state.player_score, 43, 33, dm_blue)
+        raster = draw_score(raster, state.game_state.enemy_score, 113, 103, dm_gold)
 
         return self.jr.render_from_palette(raster, self.PALETTE)
