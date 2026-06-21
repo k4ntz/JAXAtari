@@ -405,8 +405,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     def _get_done(self, state: CrazyClimberState) -> bool:
         pass
 
-
-
     class CrazyClimberRenderer(JAXGameRenderer):
         def __init__(self, consts: CrazyClimberConstants = None, config: render_utils.RendererConfig = None):
             self.consts = consts or CrazyClimberConstants()
