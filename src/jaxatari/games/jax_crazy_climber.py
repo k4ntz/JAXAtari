@@ -422,7 +422,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 ]),
                 jnp.array([
                     self.SHAPE_MASKS["player_right_pull_up_left_group"],
-                    self.SHAPE_MASKS["player_right_pull_up_left_group"],
+                    self.SHAPE_MASKS["player_right_pull_up_right_group"],
                 ]),
             ])
 
