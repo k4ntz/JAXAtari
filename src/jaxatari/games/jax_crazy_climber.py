@@ -15,36 +15,6 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
-# Player movement states
-
-class PlayerStableStates(IntEnum):
-    NEUTRAL = 0
-    HALF_PULL_UP = 1
-    PULL_UP = 2
-    
-@chex.dataclass
-class PlayerMoveState:
-    main_state: PlayerStableStates 
-    sub_step: int 
-    side_step: int 
-    hand_dir: int
-    pos_x: int
-    
-class CrazyClimberState(struct.PyTreeNode):
-    key: chex.PRNGKey
-    score: chex.Array
-    bonus: chex.Array
-    step_counter: chex.Array
-    player_move_state: PlayerMoveState
-    tower_step: chex.Array
-    was_at_apex: chex.Array
-
-class CrazyClimberObservation(struct.PyTreeNode):
-    pass
-
-class CrazyClimberInfo(struct.PyTreeNode):
-    pass
-
 def _create_block_sprite(color: tuple[int, int, int, int], shape: tuple[int, int]) -> jnp.ndarray:
     return jnp.tile(jnp.array(color, dtype=jnp.uint8), (*shape[:2], 1))
 
@@ -128,8 +98,47 @@ def _get_default_asset_config() -> tuple:
             'player/sideways/right/right_up/half_pull_up_9.npy',
             ]},
         {'name': 'wall', 'type': 'procedural', 'data': wall_sprite},
-        {'name': 'ceiling', 'type': 'procedural', 'data': ceiling_sprite}
+        {'name': 'ceiling', 'type': 'procedural', 'data': ceiling_sprite},
+        {'name': 'bird_right', 'type': 'group', 'files': [
+            'bird/right/0.npy',
+            'bird/right/4.npy',
+            'bird/right/8.npy',
+            'bird/right/12.npy',
+            'bird/right/16.npy',
+        ]}
     )
+
+# Player movement states
+class PlayerStableStates(IntEnum):
+    NEUTRAL = 0
+    HALF_PULL_UP = 1
+    PULL_UP = 2
+    
+@chex.dataclass
+class PlayerMoveState:
+    main_state: PlayerStableStates 
+    sub_step: int 
+    side_step: int 
+    hand_dir: int
+    pos_x: int
+    
+class CrazyClimberState(struct.PyTreeNode):
+    key: chex.PRNGKey
+    step_counter: chex.Array
+
+    score: chex.Array
+    was_at_apex: chex.Array
+    bonus: chex.Array
+    
+    player_move_state: PlayerMoveState
+    tower_step: chex.Array
+
+class CrazyClimberObservation(struct.PyTreeNode):
+    pass
+
+class CrazyClimberInfo(struct.PyTreeNode):
+    pass
+
 
 class CrazyClimberConstants(struct.PyTreeNode):
     BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0)),
@@ -311,6 +320,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         return state.replace(
             player_move_state=next_player_move_state,
         )
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _bird_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        
 
     @partial(jax.jit, static_argnums=(0,))
     def _score_step(self, state: CrazyClimberState) -> CrazyClimberState:
@@ -428,6 +441,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             self.PLAYER_UPWARDS_SPRITE_SEQUENCE = jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 9, 9, 10, 10, 10, 11, 11, 11])
             self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE = jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3])
+
+            self.BIRD_SEQUENCE = jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0])
             
             self.TOWER_SPRITE = self._render_tower_sprite()
             
