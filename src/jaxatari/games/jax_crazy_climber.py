@@ -100,11 +100,11 @@ def _get_default_asset_config() -> tuple:
         {'name': 'wall', 'type': 'procedural', 'data': wall_sprite},
         {'name': 'ceiling', 'type': 'procedural', 'data': ceiling_sprite},
         {'name': 'bird_left', 'type': 'group', 'files': [
-            'bird/right/0.npy',
-            'bird/right/4.npy',
-            'bird/right/8.npy',
-            'bird/right/12.npy',
-            'bird/right/16.npy',
+            'bird/left/0.npy',
+            'bird/left/4.npy',
+            'bird/left/8.npy',
+            'bird/left/12.npy',
+            'bird/left/16.npy',
         ]},
         {'name': 'bird_right', 'type': 'group', 'files': [
             'bird/right/0.npy',
@@ -165,7 +165,12 @@ class CrazyClimberConstants(struct.PyTreeNode):
 
     PLAYER_Y: int = struct.field(pytree_node=False, default=160)
     PLAYER_POSSIBLE_X: jnp.ndarray = struct.field(pytree_node=False, default=jnp.array([40, 46, 52, 58, 64, 72, 80, 86, 92, 98, 104]))
+    PLAYER_WIDTH: int = 16
+    PLAYER_HEIGHT: int = 23
     TOWER_POSSIBLE_SPRITE_CLIP: jnp.ndarray = struct.field(pytree_node=False, default=jnp.array([0, 4, 7, 10])) 
+
+    BIRD_WIDTH: int = 15
+    BIRD_HEIGHT: int = 10
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
 
@@ -196,7 +201,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             tower_step=0,
             bird_state=BirdState(
                 drop_coin=jnp.array(False),
-                pos_x=0,
+                pos_x=self.consts.BIRD_WIDTH,
                 pos_y=40,
                 dir=1),
         )
@@ -212,6 +217,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state = self._step_counter(state)
         state = self._player_step(state, atari_action)
         state = self._tower_step(state)
+        state = self._bird_step(state)
         state = self._score_step(state)
         state = self._bonus_step(state)
 
@@ -349,7 +355,22 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     @partial(jax.jit, static_argnums=(0,))
     def _bird_step(self, state: CrazyClimberState) -> CrazyClimberState:
         bird_state = state.bird_state
-        bird_state.pos_x = bird_state.pos_x + 1
+        
+        hit_right_wall = bird_state.pos_x > self.consts.WIDTH - (self.consts.BIRD_WIDTH * 2)
+        hit_left_wall  = bird_state.pos_x < self.consts.BIRD_WIDTH - 1
+
+        should_move = (state.step_counter % 2 == 0)
+
+        bird_state.dir = jnp.where(
+            should_move & (hit_right_wall | hit_left_wall),
+            bird_state.dir * -1,
+            bird_state.dir
+        )
+        bird_state.pos_x = jnp.where(
+            should_move, 
+            bird_state.pos_x + bird_state.dir, 
+            bird_state.pos_x
+        )
         return state.replace(bird_state = bird_state)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -526,7 +547,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         
         @partial(jax.jit, static_argnums=(0,))
         def _render_player(self, state: CrazyClimberState) -> jnp.ndarray:
-            player_raster = self._create_raster((23, 16))
+            player_raster = self._create_raster((self.consts.PLAYER_HEIGHT, self.consts.PLAYER_WIDTH))
 
             move_state = state.player_move_state
 
@@ -574,10 +595,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         
         @partial(jax.jit, static_argnums=(0,))
         def _render_bird(self, state: CrazyClimberState) -> jnp.ndarray:
-            bird_raster = self._create_raster((23, 16))
+            bird_raster = self._create_raster((self.consts.BIRD_HEIGHT, self.consts.BIRD_WIDTH))
 
-            dir_index = (state.bird_state.dir > 0).astype(int)
-            bird_index = self.BIRD_SEQUENCE[0]
+            bird_state = state.bird_state
+
+            dir_index = (bird_state.dir > 0).astype(int)
+            bird_index = self.BIRD_SEQUENCE[bird_state.pos_x % 40]
 
             bird_sprite = self.BIRD_SPRITES[dir_index][bird_index]
 
@@ -598,7 +621,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             bird_raster = self._render_bird(state)
             raster = self._clip_raster(raster, tower_raster, 40, 44) # self.jr.render_at_clipped(raster, 0, 0, tower_raster)
             raster = self._clip_raster(raster, player_raster, self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x], self.consts.PLAYER_Y) # self.jr.render_at_clipped(raster, state.player_move_state.pos_x, self.consts.PLAYER_Y, player_raster)
-            raster = self._clip_raster(raster, bird_raster, 0, 50)
+            raster = self._clip_raster(raster, bird_raster, state.bird_state.pos_x, state.bird_state.pos_y)
 
             score_digits = self.jr.int_to_digits(state.score, max_digits=6)
             bonus_digits = self.jr.int_to_digits(state.bonus, max_digits=5)
