@@ -127,6 +127,7 @@ class BirdState:
     drop_coin: chex.Array
     pos_x: int
     pos_y: int
+    dir: int
     
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
@@ -189,7 +190,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             bird_state=BirdState(
                 drop_coin=jnp.array(False),
                 pos_x=0,
-                pos_y=40),
+                pos_y=40,
+                dir=1),
         )
         initial_obs = self._get_observation(state)
 
@@ -358,7 +360,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     
     @partial(jax.jit, static_argnums=(0,))
     def _bonus_step(self, state: CrazyClimberState) -> CrazyClimberState: 
-        bonus_condition = ((state.step_counter - 1229) % 600 == 0) & (state.step_counter > 1228)
+        bonus_condition = (state.step_counter > 1228) & ((state.step_counter - 1229) % 600 == 0)
 
         bonus = jnp.where(bonus_condition, state.bonus - 100, state.bonus)
 
@@ -455,6 +457,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 ]),
             ])
 
+            self.BIRD_SPRITES = jnp.array([
+                self.SHAPE_MASKS["bird_left"],
+                self.SHAPE_MASKS["bird_right"],
+            ])
+
             self.PLAYER_UPWARDS_SPRITE_SEQUENCE = jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 9, 9, 10, 10, 10, 11, 11, 11])
             self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE = jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3])
 
@@ -517,9 +524,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             move_state = state.player_move_state
 
             sprite_index_up = self.PLAYER_UPWARDS_SPRITE_SEQUENCE[5 * move_state.main_state + move_state.sub_step]
-            hand_index = (move_state.hand_dir + 2) % 3 # maps -1 -> 1, and 1 -> 0
+            hand_index = int(move_state.hand_dir < 0) # maps -1 -> 1 and 1 -> 0
             sprite_index_side = self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE[jnp.abs(move_state.side_step)] 
-            side_index = jnp.where(move_state.side_step > 0, 1, 0)
+            side_index = int(move_state.side_step > 0) # maps -1 -> 1 and 1 -> 0
 
             @partial(jax.jit)
             def map_player_to_sprite(sprite_index_up: int, sprite_index_side: int, hand_index: int, side_index: int) -> jnp.ndarray:
@@ -560,7 +567,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         
         @partial(jax.jit, static_argnums=(0,))
         def _render_bird(self, state: CrazyClimberState) -> jnp.ndarray:
-            
+            dir_index = int(state.bird_state.dir > 0)
+
+            bird_sprite = jnp.where(state.bird_)
 
         @partial(jax.jit, static_argnums=(0,))
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
