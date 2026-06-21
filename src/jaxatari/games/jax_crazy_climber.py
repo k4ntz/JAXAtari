@@ -29,6 +29,30 @@ class PlayerMoveState:
     side_step: int 
     hand_dir: int
     pos_x: int
+
+    @classmethod
+    def new(cls):
+        return cls(
+            main_state=PlayerStableStates.NEUTRAL,
+            sub_step=0,
+            side_step=0,
+            hand_dir=1,
+            pos_x=0
+        )
+    
+@chex.dataclass
+class TowerState:
+    tower_step: int
+    windows: jnp.ndarray
+
+    @classmethod
+    def new(cls):
+        windows = jnp.tile(jnp.array([0, 1]), (12, 6, 1))
+
+        return cls(
+            tower_step=0,
+            windows=windows
+        )
     
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
@@ -36,8 +60,8 @@ class CrazyClimberState(struct.PyTreeNode):
     bonus: chex.Array
     step_counter: chex.Array
     player_move_state: PlayerMoveState
-    tower_step: chex.Array
-    was_at_apex: chex.Array
+    tower_state: TowerState
+    reached_apex: chex.Array
 
 class CrazyClimberObservation(struct.PyTreeNode):
     pass
@@ -162,9 +186,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             score=jnp.array(0).astype(jnp.int32),
             bonus=jnp.array(10000).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
-            player_move_state=PlayerMoveState(main_state=PlayerStableStates.NEUTRAL, sub_step=0, side_step=0, hand_dir=1, pos_x=0),
-            tower_step=0,
-            was_at_apex=jnp.array(False),
+            player_move_state=PlayerMoveState.new(),
+            tower_state=TowerState.new(),
+            reached_apex=jnp.array(False),
         )
         initial_obs = self._get_observation(state)
 
@@ -205,7 +229,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             lambda: 0,
         )
 
-        return state.replace(tower_step=tower_step) 
+        return state.replace(tower_state=state.tower_state.replace(tower_step=tower_step)) 
         
     @partial(jax.jit, static_argnums=(0,))
     def _player_step(self, state: CrazyClimberState, action: chex.Array) -> CrazyClimberState:
@@ -314,15 +338,15 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def _score_step(self, state: CrazyClimberState) -> CrazyClimberState:
-        current_at_apex = (state.player_move_state.sub_step == 9) & (state.player_move_state.main_state == PlayerStableStates.PULL_UP)
+        currently_at_apex = (state.player_move_state.sub_step == 9) & (state.player_move_state.main_state == PlayerStableStates.PULL_UP)
 
-        score_triggered = (state.player_move_state.main_state == PlayerStableStates.NEUTRAL) & state.was_at_apex
+        score_triggered = (state.player_move_state.main_state == PlayerStableStates.NEUTRAL) & state.reached_apex
 
         new_score = jax.lax.select(score_triggered, state.score + 100, state.score)
 
         return state.replace(
             score=new_score,
-            was_at_apex=current_at_apex
+            reached_apex=currently_at_apex
         )
     
     @partial(jax.jit, static_argnums=(0,))
@@ -517,7 +541,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def _render_tower(self, state: CrazyClimberState) -> jnp.ndarray:
             tower_sprite = self.TOWER_SPRITE
 
-            top_clip = 13 - self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.tower_step]
+            top_clip = 13 - self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.tower_state.tower_step]
             tower_raster = jax.lax.dynamic_slice_in_dim(
                 tower_sprite,
                 top_clip,
