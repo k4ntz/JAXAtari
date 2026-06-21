@@ -99,6 +99,13 @@ def _get_default_asset_config() -> tuple:
             ]},
         {'name': 'wall', 'type': 'procedural', 'data': wall_sprite},
         {'name': 'ceiling', 'type': 'procedural', 'data': ceiling_sprite},
+        {'name': 'bird_left', 'type': 'group', 'files': [
+            'bird/right/0.npy',
+            'bird/right/4.npy',
+            'bird/right/8.npy',
+            'bird/right/12.npy',
+            'bird/right/16.npy',
+        ]},
         {'name': 'bird_right', 'type': 'group', 'files': [
             'bird/right/0.npy',
             'bird/right/4.npy',
@@ -106,13 +113,6 @@ def _get_default_asset_config() -> tuple:
             'bird/right/12.npy',
             'bird/right/16.npy',
         ]},
-        {'name': 'bird_left', 'type': 'group', 'files': [
-            'left/right/0.npy',
-            'left/right/4.npy',
-            'left/right/8.npy',
-            'left/right/12.npy',
-            'left/right/16.npy',
-        ]}
     )
 
 # Player movement states
@@ -531,9 +531,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             move_state = state.player_move_state
 
             sprite_index_up = self.PLAYER_UPWARDS_SPRITE_SEQUENCE[5 * move_state.main_state + move_state.sub_step]
-            hand_index = int(move_state.hand_dir < 0) # maps -1 -> 1 and 1 -> 0
+            hand_index = (move_state.hand_dir < 0).astype(int) # maps -1 -> 1 and 1 -> 0
             sprite_index_side = self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE[jnp.abs(move_state.side_step)] 
-            side_index = int(move_state.side_step > 0) # maps -1 -> 1 and 1 -> 0
+            side_index = (move_state.side_step > 0).astype(int) # maps -1 -> 1 and 1 -> 0
 
             @partial(jax.jit)
             def map_player_to_sprite(sprite_index_up: int, sprite_index_side: int, hand_index: int, side_index: int) -> jnp.ndarray:
@@ -574,9 +574,20 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         
         @partial(jax.jit, static_argnums=(0,))
         def _render_bird(self, state: CrazyClimberState) -> jnp.ndarray:
-            dir_index = int(state.bird_state.dir > 0)
+            bird_raster = self._create_raster((23, 16))
 
-            bird_sprite = jnp.where(state.bird_)
+            dir_index = (state.bird_state.dir > 0).astype(int)
+            bird_index = self.BIRD_SEQUENCE[0]
+
+            bird_sprite = self.BIRD_SPRITES[dir_index][bird_index]
+
+            bird_raster = self.jr.render_at(
+                bird_raster, 
+                0, 0,
+                bird_sprite,
+            )
+            
+            return bird_raster
 
         @partial(jax.jit, static_argnums=(0,))
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
@@ -584,8 +595,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             player_raster = self._render_player(state)
             tower_raster = self._render_tower(state)
+            bird_raster = self._render_bird(state)
             raster = self._clip_raster(raster, tower_raster, 40, 44) # self.jr.render_at_clipped(raster, 0, 0, tower_raster)
             raster = self._clip_raster(raster, player_raster, self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x], self.consts.PLAYER_Y) # self.jr.render_at_clipped(raster, state.player_move_state.pos_x, self.consts.PLAYER_Y, player_raster)
+            raster = self._clip_raster(raster, bird_raster, 0, 50)
 
             score_digits = self.jr.int_to_digits(state.score, max_digits=6)
             bonus_digits = self.jr.int_to_digits(state.bonus, max_digits=5)
