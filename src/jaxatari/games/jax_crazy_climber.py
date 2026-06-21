@@ -121,6 +121,12 @@ class PlayerMoveState:
     side_step: int 
     hand_dir: int
     pos_x: int
+
+@chex.dataclass
+class BirdState:
+    drop_coin: chex.Array
+    pos_x: int
+    pos_y: int
     
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
@@ -132,6 +138,8 @@ class CrazyClimberState(struct.PyTreeNode):
     
     player_move_state: PlayerMoveState
     tower_step: chex.Array
+
+    bird_state: BirdState
 
 class CrazyClimberObservation(struct.PyTreeNode):
     pass
@@ -168,12 +176,20 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state_key, _step_key = jax.random.split(key)
         state = CrazyClimberState(
             key=state_key,
-            score=jnp.array(0).astype(jnp.int32),
-            bonus=jnp.array(10000).astype(jnp.int32),
             step_counter=jnp.array(0).astype(jnp.int32),
-            player_move_state=PlayerMoveState(main_state=PlayerStableStates.NEUTRAL, sub_step=0, side_step=0, hand_dir=1, pos_x=0),
-            tower_step=0,
+            score=jnp.array(0).astype(jnp.int32),
             was_at_apex=jnp.array(False),
+            bonus=jnp.array(10000).astype(jnp.int32),
+            player_move_state=PlayerMoveState(
+                main_state=PlayerStableStates.NEUTRAL, 
+                sub_step=0, side_step=0, 
+                hand_dir=1, 
+                pos_x=0),
+            tower_step=0,
+            bird_state=BirdState(
+                drop_coin=jnp.array(False),
+                pos_x=0,
+                pos_y=40),
         )
         initial_obs = self._get_observation(state)
 
@@ -323,7 +339,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     
     @partial(jax.jit, static_argnums=(0,))
     def _bird_step(self, state: CrazyClimberState) -> CrazyClimberState:
-        
+        bird_state = state.bird_state
+        bird_state.pos_x = bird_state.pos_x + 1
+        return state.replace(bird_state = bird_state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _score_step(self, state: CrazyClimberState) -> CrazyClimberState:
@@ -541,6 +559,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
             
             return tower_raster
+        
+        @partial(jax.jit, static_argnums=(0,))
+        def _render_bird(self, state: CrazyClimberState) -> jnp.ndarray:
+            
 
         @partial(jax.jit, static_argnums=(0,))
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
