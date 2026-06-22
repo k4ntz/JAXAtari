@@ -250,7 +250,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             lambda: 0,
         )
         
-        return state.replace(tower_state=state.tower_state.replace(tower_step=tower_step)) 
+        windows = jax.lax.cond(
+            (state.player_move_state.main_state == PlayerStableStates.NEUTRAL) & state.reached_apex,
+            lambda: jnp.roll(state.tower_state.windows, shift=1, axis=0),
+            lambda: state.tower_state.windows,
+        )
+        
+        return state.replace(tower_state=state.tower_state.replace(tower_step=tower_step, windows=windows)) 
         
     @partial(jax.jit, static_argnums=(0,))
     def _player_step(self, state: CrazyClimberState, action: chex.Array) -> CrazyClimberState:
