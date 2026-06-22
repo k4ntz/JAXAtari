@@ -135,6 +135,7 @@ class BirdState:
     pos_x: int
     pos_y: int
     dir: int
+    rounds: int
     
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
@@ -171,6 +172,9 @@ class CrazyClimberConstants(struct.PyTreeNode):
 
     BIRD_WIDTH: int = 15
     BIRD_HEIGHT: int = 10
+    BIRD_BORDER_LEFT: int = 10
+    BIRD_BORDER_RIGHT: int = 35 + BIRD_WIDTH
+    BIRD_THRESHOLD: int = 100 # should be 5000 for final version
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
 
@@ -201,9 +205,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             tower_step=0,
             bird_state=BirdState(
                 drop_coin=jnp.array(False),
-                pos_x=self.consts.BIRD_WIDTH,
-                pos_y=40,
-                dir=1),
+                pos_x=-self.consts.BIRD_WIDTH,
+                pos_y=49,
+                dir=1,
+                rounds=0),
         )
         initial_obs = self._get_observation(state)
 
@@ -217,7 +222,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state = self._step_counter(state)
         state = self._player_step(state, atari_action)
         state = self._tower_step(state)
-        state = self._bird_step(state)
+        state = jax.lax.cond(state.score >= self.consts.BIRD_THRESHOLD, lambda: self._bird_step(state), lambda: state)
         state = self._score_step(state)
         state = self._bonus_step(state)
 
@@ -356,16 +361,15 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     def _bird_step(self, state: CrazyClimberState) -> CrazyClimberState:
         bird_state = state.bird_state
         
-        hit_right_wall = bird_state.pos_x > self.consts.WIDTH - (self.consts.BIRD_WIDTH * 2)
-        hit_left_wall  = bird_state.pos_x < self.consts.BIRD_WIDTH - 1
+        hit_right_wall = bird_state.pos_x > self.consts.WIDTH - self.consts.BIRD_BORDER_RIGHT
+        hit_left_wall  = bird_state.pos_x < self.consts.BIRD_BORDER_LEFT
 
         should_move = (state.step_counter % 2 == 0)
+        should_flip_dir = should_move & (hit_right_wall | hit_left_wall) & (bird_state.rounds < 3)
 
-        bird_state.dir = jnp.where(
-            should_move & (hit_right_wall | hit_left_wall),
-            bird_state.dir * -1,
-            bird_state.dir
-        )
+        bird_state.dir = jnp.where(should_flip_dir, bird_state.dir * -1, bird_state.dir)
+        bird_state.rounds = jnp.where(should_flip_dir, bird_state.rounds + 1, bird_state.rounds)
+
         bird_state.pos_x = jnp.where(
             should_move, 
             bird_state.pos_x + bird_state.dir, 
