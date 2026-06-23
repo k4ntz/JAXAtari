@@ -44,11 +44,13 @@ class PlayerMoveState:
 class TowerState:
     tower_step: int
     windows: jnp.ndarray
+    initial_p: float = 0.2
+    add_p: float = 0.001
 
     @classmethod
     def new(cls, key):
-        blinds = jax.random.randint(key, (13, 6), 0, 6)
-        blind_direction = jnp.ones((13, 6))
+        blinds = jnp.zeros((11, 6))
+        blind_direction = jax.random.choice(key, jnp.array([0, 1]), (11, 6), p=jnp.array([0.9, 0.1]))
         windows = jnp.stack([blinds, blind_direction], axis=-1)
         windows = windows.at[:, 3:, :].set(jnp.fliplr(windows[:, :3, :]))
 
@@ -250,10 +252,54 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             lambda: 0,
         )
         
+        @partial(jax.jit)
+        def update_blinds(windows: jnp.ndarray) -> jnp.ndarray:
+            new_blinds = jnp.where(
+                windows[:, :, 1] == 1, 
+                jnp.minimum(windows[:, :, 0] + 1, 6), 
+                windows[:, :, 0]
+            )
+
+            new_blinds = jnp.where(
+                windows[:, :, 1] == -1, 
+                jnp.maximum(new_blinds - 1, 0), 
+                new_blinds
+            )
+
+            new_blind_dirs = jnp.where(
+                new_blinds == 6,
+                windows[:, :, 1] * -1,
+                windows[:, :, 1]
+            )
+            
+            new_blind_dirs = jnp.where(
+                new_blinds == 0,
+                jnp.zeros_like(new_blind_dirs),
+                new_blind_dirs
+            )
+            
+            return jnp.stack([new_blinds, new_blind_dirs], axis=-1)
+        
+        windows = jax.lax.cond(
+            state.step_counter % 59 == 0,
+            lambda: update_blinds(state.tower_state.windows),
+            lambda: state.tower_state.windows
+        )
+
+        @partial(jax.jit)
+        def shift_windows(windows: jnp.ndarray, initial_p: float, key) -> jnp.ndarray:
+            windows = jnp.roll(windows, shift=1, axis=0)
+            new_blind_dirs = jax.random.choice(key, jnp.array([0, 1]), (1, 6), p=jnp.array([1 - initial_p, initial_p]))
+            new_blinds = jnp.zeros((1, 6))
+            new_row = jnp.stack([new_blinds, new_blind_dirs], axis=-1)
+            new_row = new_row.at[:, 3:, :].set(jnp.fliplr(new_row[:, :3, :]))
+            windows = windows.at[:1, :, :].set(new_row)
+            return windows
+
         windows = jax.lax.cond(
             (state.player_move_state.main_state == PlayerStableStates.NEUTRAL) & state.reached_apex,
-            lambda: jnp.roll(state.tower_state.windows, shift=1, axis=0),
-            lambda: state.tower_state.windows,
+            lambda: shift_windows(windows, state.tower_state.initial_p, state.key),
+            lambda: windows,
         )
         
         return state.replace(tower_state=state.tower_state.replace(tower_step=tower_step, windows=windows)) 
@@ -351,13 +397,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             operand=player_move_state
         )
         
-        jax.debug.print(
-            "main state: {x}, sub step: {y}, side step {z}, hand dir: {w}", 
-            x=next_player_move_state.main_state, 
-            y=next_player_move_state.sub_step,
-            z=next_player_move_state.side_step,
-            w=next_player_move_state.hand_dir,
-        )
+        # jax.debug.print(
+        #     "main state: {x}, sub step: {y}, side step {z}, hand dir: {w}", 
+        #     x=next_player_move_state.main_state, 
+        #     y=next_player_move_state.sub_step,
+        #     z=next_player_move_state.side_step,
+        #     w=next_player_move_state.hand_dir,
+        # )
 
         return state.replace(
             player_move_state=next_player_move_state,
@@ -568,8 +614,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def _render_tower(self, state: CrazyClimberState) -> jnp.ndarray:
             tower_sprite = self.TOWER_SPRITE
             
-            window_offset_x = jnp.tile(jnp.array([4, 16, 28, 44, 56, 68]), 13)
-            window_offset_y = jnp.repeat(jnp.array([5, 18, 31, 44, 57, 70, 83, 96, 109, 122, 135, 148, 161]), 6)
+            window_offset_x = jnp.tile(jnp.array([4, 16, 28, 44, 56, 68]), 11)
+            window_offset_y = jnp.repeat(jnp.array([5, 18, 31, 44, 57, 70, 83, 96, 109, 122, 135]), 6)
             sprites = self.SHAPE_MASKS["window_blind_group"][state.tower_state.windows[:, :, 0].astype(jnp.int32)]
             sprites = jnp.reshape(sprites, (-1, *sprites.shape[2:]))
             tower_sprite = self.jr.render_at_batch(
