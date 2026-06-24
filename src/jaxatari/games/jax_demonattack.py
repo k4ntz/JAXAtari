@@ -582,8 +582,17 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             new_timer = s.explosion_timer - 1
             exploding = new_timer > 0
             # If timer reaches 0, player hit logic should have already reduced lives.
-            # We just need to stop exploding.
-            return s.replace(explosion_timer=new_timer, player_exploding=exploding)
+            # We just need to stop exploding and teleport the player back to his original x coordinate
+            player_x = jnp.where(
+                exploding,
+                s.player_x,
+                jnp.array(self.consts.PLAYER_X, dtype=jnp.int32),
+            )
+            return s.replace(
+                player_x=player_x,
+                explosion_timer=new_timer,
+                player_exploding=exploding,
+            )
 
         def explosion_step(s):
             s = update_explosion(s)
