@@ -784,7 +784,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.demons_y + jnp.where(target_y >= state.demons_y[selected], 1, -1),
             state.demons_y,
         )
-        lowest_demon = ids == self.consts.MAX_DEMONS - 1
+        lowest_demon_idx = jnp.argmax(jnp.where(can_move, demons_y, -1)).astype(jnp.int32)
+        lowest_demon = ids == lowest_demon_idx
         demon_moving_right = jnp.where(
             selected_active & selected_mask & ~lowest_demon & ((state.demon_random & 7) == 0),
             jnp.logical_not(state.demon_moving_right),
@@ -982,10 +983,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         current rate after the configured interval. The burst source is released
         when all rates have been processed.
         """
-        key, demon_idx_key, burst_length_key = jax.random.split(
-            state.key, 3
+        key, burst_length_key = jax.random.split(
+            state.key, 2
         )
         ready_demons = self._demons_ready(state)
+        lowest_demon_idx = jnp.argmax(jnp.where(ready_demons, state.demons_y, -1)).astype(jnp.int32)
 
         slot_ids = jnp.arange(self.consts.MAX_BOMBS, dtype=jnp.int32)
 
@@ -1028,20 +1030,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         bomb_x = jnp.where(bomb_active, moved_x, state.bomb_x)
         bomb_y = jnp.where(bomb_active, moved_y, state.bomb_y)
 
-        # Second branch: choose a random living / ready demon
-        picked_demon_idx = jax.random.randint(
-            demon_idx_key,
-            (),
-            0,
-            self.consts.MAX_DEMONS,
-            dtype=jnp.int32,
-        )
-        picked_demon_idx = jnp.where(
-            ready_demons[picked_demon_idx],
-            picked_demon_idx,
-            jnp.argmax(ready_demons).astype(jnp.int32),
-        )
-
         # A burst owns one demon until up to all four bomb rates have fired. New bursts wait
         # until the previous bombs have left the screen.
         burst_in_progress = state.bomb_burst_length > 0
@@ -1057,7 +1045,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         source_idx = jnp.where(
             can_start_burst,
-            picked_demon_idx,
+            lowest_demon_idx,
             state.bomb_source_idx,
         )
         source_ready = ready_demons[source_idx]
