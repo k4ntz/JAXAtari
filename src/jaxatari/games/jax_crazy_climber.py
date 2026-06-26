@@ -172,6 +172,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
 
     BIRD_WIDTH: int = 15
     BIRD_HEIGHT: int = 10
+    BIRD_Y: int = 49
     BIRD_BORDER_LEFT: int = 10
     BIRD_BORDER_RIGHT: int = 35 + BIRD_WIDTH
     BIRD_THRESHOLD: int = 100 # should be 5000 for final version
@@ -205,8 +206,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             tower_step=0,
             bird_state=BirdState(
                 drop_coin=jnp.array(False),
-                pos_x=-self.consts.BIRD_WIDTH,
-                pos_y=49,
+                pos_x=self.consts.BIRD_WIDTH,
+                pos_y=self.consts.BIRD_Y,
                 dir=1,
                 rounds=0),
         )
@@ -359,6 +360,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     
     @partial(jax.jit, static_argnums=(0,))
     def _bird_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        possible_bird_steps = jnp.array([0, 4, 4, 4, 7, 7, 7, 10, 10, 10])
+
         bird_state = state.bird_state
         
         hit_right_wall = bird_state.pos_x > self.consts.WIDTH - self.consts.BIRD_BORDER_RIGHT
@@ -375,6 +378,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             bird_state.pos_x + bird_state.dir, 
             bird_state.pos_x
         )
+
+        bird_state.pos_y = jax.lax.cond(
+            state.player_move_state.main_state == PlayerStableStates.PULL_UP,
+            lambda: self.consts.BIRD_Y + possible_bird_steps[state.player_move_state.sub_step],
+            lambda: self.consts.BIRD_Y,
+        )
+
         return state.replace(bird_state = bird_state)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -485,7 +495,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 ]),
                 jnp.array([
                     self.SHAPE_MASKS["player_right_pull_up_left_group"],
-                    self.SHAPE_MASKS["player_right_pull_up_left_group"],
+                    self.SHAPE_MASKS["player_right_pull_up_right_group"],
                 ]),
             ])
 
