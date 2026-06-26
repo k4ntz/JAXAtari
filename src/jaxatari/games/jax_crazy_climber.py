@@ -29,6 +29,7 @@ class PlayerMoveState:
     side_step: int 
     hand_dir: int
     pos_x: int
+    falling_count: int
 
     @classmethod
     def new(cls):
@@ -37,14 +38,16 @@ class PlayerMoveState:
             sub_step=0,
             side_step=0,
             hand_dir=1,
-            pos_x=0
+            pos_x=0,
+            falling_count=0
         )
     
 @chex.dataclass
 class TowerState:
     tower_step: int
     windows: jnp.ndarray
-    initial_p: float = 0.2
+    spawn_probability: float
+    is_falling: bool
 
     @classmethod
     def new(cls, key):
@@ -55,7 +58,9 @@ class TowerState:
 
         return cls(
             tower_step=0,
-            windows=windows
+            windows=windows,
+            spawn_probability=0.2,
+            is_falling=False
         )
     
 class CrazyClimberState(struct.PyTreeNode):
@@ -243,14 +248,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def _tower_step(self, state: CrazyClimberState) -> CrazyClimberState:
-        possible_tower_steps = jnp.array([0, 1, 1, 1, 2, 2, 2, 3, 3, 3])
-            
-        tower_step = jax.lax.cond(
-            state.player_move_state.main_state == PlayerStableStates.PULL_UP,
-            lambda: possible_tower_steps[state.player_move_state.sub_step],
-            lambda: 0,
-        )
-        
         @partial(jax.jit)
         def update_blinds(windows: jnp.ndarray) -> jnp.ndarray:
             blinds_left = windows[:, :3, 0]
@@ -283,34 +280,145 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             windows_left = jnp.stack([new_blinds_left, new_blind_dirs_left], axis=-1)
             return jnp.concatenate([windows_left, jnp.fliplr(windows_left)], axis=1)
         
-        windows = jax.lax.cond(
-            state.step_counter % 59 == 0,
-            lambda: update_blinds(state.tower_state.windows),
-            lambda: state.tower_state.windows
-        )
-
         @partial(jax.jit)
-        def shift_windows(windows: jnp.ndarray, initial_p: float, key) -> jnp.ndarray:
+        def shift_windows(windows: jnp.ndarray, spawn_propability: float, key) -> jnp.ndarray:
             windows = jnp.roll(windows, shift=1, axis=0)
-            new_blind_dirs_left = jax.random.choice(key, jnp.array([0, 1]), (1, 3), p=jnp.array([1 - initial_p, initial_p]))
+            new_blind_dirs_left = jax.random.choice(key, jnp.array([0, 1]), (1, 3), p=jnp.array([1 - spawn_propability, spawn_propability]))
             new_blinds_left = jnp.zeros((1, 3))
             new_row_left = jnp.stack([new_blinds_left, new_blind_dirs_left], axis=2)
             new_row = jnp.concatenate([new_row_left, jnp.fliplr(new_row_left)], axis=1) 
             windows = windows.at[:1, :, :].set(new_row)
             return windows
+        
+        @partial(jax.jit)
+        def update_tower(s: TowerState) -> TowerState:
+            possible_tower_steps = jnp.array([0, 1, 1, 1, 2, 2, 2, 3, 3, 3])
+            
+            tower_step = jax.lax.cond(
+                state.player_move_state.main_state == PlayerStableStates.PULL_UP,
+                lambda: possible_tower_steps[state.player_move_state.sub_step],
+                lambda: 0,
+            )
 
-        windows = jax.lax.cond(
-            (state.player_move_state.main_state == PlayerStableStates.NEUTRAL) & state.reached_apex,
-            lambda: shift_windows(windows, state.tower_state.initial_p, state.key),
-            lambda: windows,
+            windows = jax.lax.cond(
+                state.step_counter % 59 == 0,
+                lambda: update_blinds(state.tower_state.windows),
+                lambda: state.tower_state.windows
+            )
+
+            windows = jax.lax.cond(
+                (state.player_move_state.main_state == PlayerStableStates.NEUTRAL) & state.reached_apex,
+                lambda: shift_windows(windows, state.tower_state.spawn_probability, state.key),
+                lambda: windows,
+            )
+
+            return s.replace(tower_step=tower_step, windows=windows)
+
+        is_falling = (state.player_move_state.falling_count == 160) | (state.tower_state.is_falling & (state.player_move_state.falling_count > 0))
+        update_conds = [
+            (is_falling == False) & (state.tower_state.is_falling == False),
+            (is_falling == False) & (state.tower_state.is_falling == True),
+            (is_falling == True) & (state.tower_state.is_falling == False),
+        ]
+        
+        branch_idx = jnp.select(
+            update_conds, 
+            [0, 1, 2], 
+            default=3
+        )
+
+        tower_state = jax.lax.switch(
+            branch_idx,
+            [
+                lambda: update_tower(state.tower_state),
+                lambda: TowerState.new(state.key),
+                lambda: state.tower_state.replace(is_falling=True),
+                lambda: state.tower_state,
+            ]
         )
         
-        return state.replace(tower_state=state.tower_state.replace(tower_step=tower_step, windows=windows)) 
+        return state.replace(tower_state=tower_state) 
         
     @partial(jax.jit, static_argnums=(0,))
     def _player_step(self, state: CrazyClimberState, action: chex.Array) -> CrazyClimberState:
         @partial(jax.jit)
-        def move_upwards(s: PlayerMoveState) -> CrazyClimberState: 
+        def is_left_hand_safe(state: CrazyClimberState) -> bool:
+            player_state = state.player_move_state
+            left_moving = ((player_state.sub_step > 1) & jnp.any(jnp.array([
+                ((player_state.hand_dir == 1) & 
+                (player_state.main_state == PlayerStableStates.NEUTRAL)),
+                ((player_state.hand_dir == -1) &
+                (player_state.main_state == PlayerStableStates.HALF_PULL_UP)),
+            ])))
+
+            collision_windows = jax.lax.switch(
+                player_state.pos_x,
+                [
+                    lambda: state.tower_state.windows[9:, 0, 0],
+                    lambda: state.tower_state.windows[9:, 0, 0],
+                    lambda: state.tower_state.windows[9:, 1, 0],
+                    lambda: state.tower_state.windows[9:, 1, 0],
+                    lambda: state.tower_state.windows[9:, 2, 0],
+                    lambda: state.tower_state.windows[9:, 2, 0],
+                    lambda: state.tower_state.windows[9:, 3, 0],
+                    lambda: state.tower_state.windows[9:, 3, 0],
+                    lambda: state.tower_state.windows[9:, 4, 0],
+                    lambda: state.tower_state.windows[9:, 4, 0],
+                    lambda: state.tower_state.windows[9:, 5, 0],
+                ],
+            )
+            
+            return jax.lax.cond(
+                left_moving,
+                lambda: False,
+                lambda: jax.lax.cond(
+                    ((player_state.main_state == PlayerStableStates.NEUTRAL) |
+                    ((player_state.main_state == PlayerStableStates.HALF_PULL_UP) & (player_state.hand_dir == -1))),
+                    lambda: collision_windows[1] != 6,
+                    lambda: collision_windows[0] != 6
+                )
+            )
+            
+        @partial(jax.jit)
+        def is_right_hand_safe(state: CrazyClimberState) -> bool:
+            player_state = state.player_move_state
+            right_moving = ((player_state.sub_step > 1) & jnp.any(jnp.array([
+                ((player_state.hand_dir == -1) & 
+                (player_state.main_state == PlayerStableStates.NEUTRAL)),
+                ((player_state.hand_dir == 1) &
+                (player_state.main_state == PlayerStableStates.HALF_PULL_UP)),
+            ])))
+
+            collision_windows = jax.lax.switch(
+                player_state.pos_x,
+                [
+                    lambda: state.tower_state.windows[9:, 0, 0],
+                    lambda: state.tower_state.windows[9:, 1, 0],
+                    lambda: state.tower_state.windows[9:, 1, 0],
+                    lambda: state.tower_state.windows[9:, 2, 0],
+                    lambda: state.tower_state.windows[9:, 2, 0],
+                    lambda: state.tower_state.windows[9:, 3, 0],
+                    lambda: state.tower_state.windows[9:, 3, 0],
+                    lambda: state.tower_state.windows[9:, 4, 0],
+                    lambda: state.tower_state.windows[9:, 4, 0],
+                    lambda: state.tower_state.windows[9:, 5, 0],
+                    lambda: state.tower_state.windows[9:, 5, 0],
+                ],
+            )
+
+            return jax.lax.cond(
+                right_moving,
+                lambda: False,
+                lambda: jax.lax.cond(
+                    ((player_state.main_state == PlayerStableStates.NEUTRAL) |
+                    ((player_state.main_state == PlayerStableStates.HALF_PULL_UP) & (player_state.hand_dir == 1))),
+                    lambda: collision_windows[1] != 6,
+                    lambda: collision_windows[0] != 6
+                )
+            )
+            
+        @partial(jax.jit)
+        def move_upwards(s: PlayerMoveState) -> PlayerMoveState: 
             is_up_move_possible = (jax.lax.abs(s.side_step) <= 3)
             transitioning_states = (((s.main_state != PlayerStableStates.PULL_UP) & (s.sub_step == 4)) |
                                     ((s.main_state == PlayerStableStates.PULL_UP) & (s.sub_step == 9)))
@@ -333,7 +441,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
 
         @partial(jax.jit)
-        def move_downwards(s: PlayerMoveState) -> CrazyClimberState:
+        def move_downwards(s: PlayerMoveState) -> PlayerMoveState:
             is_down_move_possible = (jax.lax.abs(s.side_step) <= 3) & (s.sub_step > 0) & (s.main_state != PlayerStableStates.PULL_UP)
             next_hand_dir = jax.lax.select(
                 (s.main_state == PlayerStableStates.NEUTRAL) & (s.sub_step == 1),
@@ -353,7 +461,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
         
         @partial(jax.jit)
-        def move_horizontal(s: PlayerMoveState, dir: int) -> CrazyClimberState:
+        def move_horizontal(s: PlayerMoveState, dir: int) -> PlayerMoveState:
             is_right_move_possible = s.sub_step <= 1
             return jax.lax.cond(
                 is_right_move_possible,
@@ -366,36 +474,62 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 lambda s: s,
                 operand=s,
             )
+        
+        @partial(jax.jit)
+        def update_player_move_state(s: PlayerMoveState) -> PlayerMoveState:
+            return jax.lax.cond(
+                s.falling_count > 0,
+                lambda: s.replace(falling_count=jnp.maximum(s.falling_count - 1, 0)),
+                lambda: s
+            )
 
         up = action == Action.UP
         down = action == Action.DOWN
         left = action == Action.LEFT
         right = action == Action.RIGHT
 
+        left_hand_safe = is_left_hand_safe(state)
+        right_hand_safe = is_right_hand_safe(state)
+
         player_move_state = state.player_move_state
+        is_falling = player_move_state.falling_count > 0
+
+        falling_conds = jnp.array([
+            (~left_hand_safe) & (~right_hand_safe),
+            (player_move_state.main_state == PlayerStableStates.NEUTRAL) & (player_move_state.hand_dir == 1) & (~right_hand_safe) & up,
+            (player_move_state.main_state == PlayerStableStates.NEUTRAL) & (player_move_state.hand_dir == -1) & (~left_hand_safe) & up,
+            (player_move_state.main_state == PlayerStableStates.HALF_PULL_UP) & (player_move_state.hand_dir == 1) & (~left_hand_safe) & up,
+            (player_move_state.main_state == PlayerStableStates.HALF_PULL_UP) & (player_move_state.hand_dir == -1) & (~right_hand_safe) & up,
+            (player_move_state.main_state == PlayerStableStates.PULL_UP) & (player_move_state.sub_step == 0) & down & (~(left_hand_safe & right_hand_safe))
+        ])
+
+        should_fall = jnp.any(falling_conds)
+
         action_state_cases = [
-            up & (player_move_state.main_state != PlayerStableStates.PULL_UP),
-            down & (player_move_state.main_state == PlayerStableStates.PULL_UP),
-            down & (player_move_state.main_state != PlayerStableStates.PULL_UP),
-            left,
-            right,
+            should_fall & (~is_falling),
+            up & (player_move_state.main_state != PlayerStableStates.PULL_UP) & (~is_falling),
+            down & (player_move_state.main_state == PlayerStableStates.PULL_UP) & (~is_falling),
+            down & (player_move_state.main_state != PlayerStableStates.PULL_UP) & (~is_falling),
+            left & right_hand_safe & (~is_falling),
+            right & left_hand_safe & (~is_falling)
         ]
         
         branch_idx = jnp.select(
             action_state_cases, 
-            [0, 1, 2, 3, 4], 
-            default=5
+            [0, 1, 2, 3, 4, 5], 
+            default=6
         )
         
         next_player_move_state = jax.lax.switch(
             branch_idx,
             [
+                lambda s: PlayerMoveState.new().replace(falling_count=160, pos_x=s.pos_x),
                 lambda s: move_upwards(s),
                 lambda s: move_upwards(s),
                 lambda s: move_downwards(s),
                 lambda s: move_horizontal(s, -1),
                 lambda s: move_horizontal(s, 1),
-                lambda s: s
+                lambda s: update_player_move_state(s)
             ],
             operand=player_move_state
         )
@@ -529,9 +663,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             self.PLAYER_UPWARDS_SPRITE_SEQUENCE = jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 9, 9, 10, 10, 10, 11, 11, 11])
             self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE = jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3])
             
-            self.TOWER_SPRITE = self._render_tower_sprite()
+            self.TOWER_SPRITE = self._generate_tower_sprite()
             
-        def _render_tower_sprite(self) -> jnp.ndarray:
+        def _generate_tower_sprite(self) -> jnp.ndarray:
             tower_raster = self._create_raster((169, 80))
 
             wall_offset_x = jnp.array([0, 12, 24, 36, 40, 52, 64, 76])
@@ -621,14 +755,18 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             window_offset_y = jnp.repeat(jnp.array([5, 18, 31, 44, 57, 70, 83, 96, 109, 122, 135]), 6)
             sprites = self.SHAPE_MASKS["window_blind_group"][state.tower_state.windows[:, :, 0].astype(jnp.int32)]
             sprites = jnp.reshape(sprites, (-1, *sprites.shape[2:]))
-            tower_sprite = self.jr.render_at_batch(
-                tower_sprite,
-                window_offset_x,
-                window_offset_y,
-                sprites
+            tower_sprite = jax.lax.cond(
+                ~state.tower_state.is_falling,
+                lambda: self.jr.render_at_batch(tower_sprite, window_offset_x, window_offset_y, sprites),
+                lambda: tower_sprite
             )
 
-            top_clip = 13 - self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.tower_state.tower_step]
+            top_clip = 13 - jax.lax.cond(
+                ~state.tower_state.is_falling,
+                lambda: self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.tower_state.tower_step],
+                lambda: self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.player_move_state.falling_count % 4]
+            )
+            
             tower_raster = jax.lax.dynamic_slice_in_dim(
                 tower_sprite,
                 top_clip,
