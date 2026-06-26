@@ -131,11 +131,10 @@ class PlayerMoveState:
 
 @chex.dataclass
 class BirdState:
-    drop_coin: chex.Array
+    drop_egg: chex.Array
     pos_x: int
     pos_y: int
     dir: int
-    rounds: int
     
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
@@ -171,11 +170,12 @@ class CrazyClimberConstants(struct.PyTreeNode):
     TOWER_POSSIBLE_SPRITE_CLIP: jnp.ndarray = struct.field(pytree_node=False, default=jnp.array([0, 4, 7, 10])) 
 
     BIRD_WIDTH: int = 15
-    BIRD_HEIGHT: int = 10
+    BIRD_HEIGHT: int = 12
     BIRD_Y: int = 49
     BIRD_BORDER_LEFT: int = 10
     BIRD_BORDER_RIGHT: int = 35 + BIRD_WIDTH
-    BIRD_THRESHOLD: int = 100 # should be 5000 for final version
+    BIRD_BOTTOM_THRESHOLD: int = 100 # should be 5000 for final version
+    BIRD_TOP_THRESHOlD: int = 1500 # should be 8500 for final version
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
 
@@ -205,11 +205,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 pos_x=0),
             tower_step=0,
             bird_state=BirdState(
-                drop_coin=jnp.array(False),
-                pos_x=self.consts.BIRD_WIDTH,
+                drop_egg=jnp.array(False),
+                pos_x=-self.consts.BIRD_WIDTH,
                 pos_y=self.consts.BIRD_Y,
-                dir=1,
-                rounds=0),
+                dir=1),
         )
         initial_obs = self._get_observation(state)
 
@@ -223,7 +222,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state = self._step_counter(state)
         state = self._player_step(state, atari_action)
         state = self._tower_step(state)
-        state = jax.lax.cond(state.score >= self.consts.BIRD_THRESHOLD, lambda: self._bird_step(state), lambda: state)
+        state = jax.lax.cond(state.score >= self.consts.BIRD_BOTTOM_THRESHOLD,
+            lambda: self._bird_step(state), 
+            lambda: state)
         state = self._score_step(state)
         state = self._bonus_step(state)
 
@@ -364,14 +365,17 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         bird_state = state.bird_state
         
-        hit_right_wall = bird_state.pos_x > self.consts.WIDTH - self.consts.BIRD_BORDER_RIGHT
-        hit_left_wall  = bird_state.pos_x < self.consts.BIRD_BORDER_LEFT
+        hit_right_wall = ((bird_state.pos_x > self.consts.WIDTH - self.consts.BIRD_BORDER_RIGHT) 
+            & (bird_state.dir > 0))
+        hit_left_wall  = ((bird_state.pos_x < self.consts.BIRD_BORDER_LEFT) 
+            & (bird_state.dir < 0))
 
         should_move = (state.step_counter % 2 == 0)
-        should_flip_dir = should_move & (hit_right_wall | hit_left_wall) & (bird_state.rounds < 3)
+        should_flip_dir = (should_move 
+            & (hit_right_wall | hit_left_wall) 
+            & jnp.logical_not((state.score > self.consts.BIRD_TOP_THRESHOlD) & (bird_state.dir < 0)))
 
         bird_state.dir = jnp.where(should_flip_dir, bird_state.dir * -1, bird_state.dir)
-        bird_state.rounds = jnp.where(should_flip_dir, bird_state.rounds + 1, bird_state.rounds)
 
         bird_state.pos_x = jnp.where(
             should_move, 
