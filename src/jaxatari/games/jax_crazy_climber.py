@@ -179,6 +179,9 @@ class CrazyClimberConstants(struct.PyTreeNode):
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
 
+    BONUS_DECREASE_THRESHOLD: int = 1229
+    BONUS_DECREASE_INTERVAL: int = 600
+
 class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation, CrazyClimberInfo, CrazyClimberConstants]):
     ACTION_SET: jnp.ndarray = jnp.array(
         [Action.NOOP, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN, Action.UPRIGHT, Action.UPLEFT, Action.DOWNRIGHT, Action.DOWNLEFT],
@@ -362,9 +365,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     @partial(jax.jit, static_argnums=(0,))
     def _bird_step(self, state: CrazyClimberState) -> CrazyClimberState:
         possible_bird_steps = jnp.array([0, 4, 4, 4, 7, 7, 7, 10, 10, 10])
-
         bird_state = state.bird_state
         
+        # border constraints
         hit_right_wall = ((bird_state.pos_x > self.consts.WIDTH - self.consts.BIRD_BORDER_RIGHT) 
             & (bird_state.dir > 0))
         hit_left_wall  = ((bird_state.pos_x < self.consts.BIRD_BORDER_LEFT) 
@@ -406,7 +409,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     
     @partial(jax.jit, static_argnums=(0,))
     def _bonus_step(self, state: CrazyClimberState) -> CrazyClimberState: 
-        bonus_condition = (state.step_counter > 1228) & ((state.step_counter - 1229) % 600 == 0)
+        bonus_condition = ((state.step_counter > (self.consts.BONUS_DECREASE_THRESHOLD - 1)) 
+            & ((state.step_counter - self.consts.BONUS_DECREASE_THRESHOLD) % self.consts.BONUS_DECREASE_INTERVAL == 0))
 
         bonus = jnp.where(bonus_condition, state.bonus - 100, state.bonus)
 
