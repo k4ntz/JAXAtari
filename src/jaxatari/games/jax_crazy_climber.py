@@ -113,6 +113,19 @@ def _get_default_asset_config() -> tuple:
             'bird/right/12.npy',
             'bird/right/16.npy',
         ]},
+        {'name': 'egg_falling', 'type': 'group', 'files': [
+            'egg/0.npy',
+            'egg/1.npy',
+            'egg/2.npy',
+            'egg/3.npy',
+            'egg/4.npy',
+            'egg/5.npy',
+            'egg/6.npy',
+            'egg/7.npy',
+            'egg/8.npy',
+            'egg/9.npy',
+            'egg/10.npy',
+        ]}
     )
 
 # Player movement states
@@ -167,6 +180,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
     PLAYER_POSSIBLE_X: jnp.ndarray = struct.field(pytree_node=False, default=jnp.array([40, 46, 52, 58, 64, 72, 80, 86, 92, 98, 104]))
     PLAYER_WIDTH: int = 16
     PLAYER_HEIGHT: int = 23
+
     TOWER_POSSIBLE_SPRITE_CLIP: jnp.ndarray = struct.field(pytree_node=False, default=jnp.array([0, 4, 7, 10])) 
 
     BIRD_WIDTH: int = 15
@@ -176,6 +190,10 @@ class CrazyClimberConstants(struct.PyTreeNode):
     BIRD_BORDER_RIGHT: int = 35 + BIRD_WIDTH
     BIRD_BOTTOM_THRESHOLD: int = 100 # should be 5000 for final version
     BIRD_TOP_THRESHOlD: int = 1500 # should be 8500 for final version
+
+    EGG_WIDTH: int = 7
+    EGG_HEIGHT: int = 8
+    EGG_BORDER_BOTTOM: int = 210 - EGG_HEIGHT
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
 
@@ -393,6 +411,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         )
 
         return state.replace(bird_state = bird_state)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _egg_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        pass
 
     @partial(jax.jit, static_argnums=(0,))
     def _score_step(self, state: CrazyClimberState) -> CrazyClimberState:
