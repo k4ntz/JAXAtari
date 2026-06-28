@@ -1,5 +1,5 @@
 # experiment params
-NAME_INITIALS: "RE"
+NAME_INITIALS: "TR"
 NUM_SEEDS: 3
 SEED: 0
 
@@ -10,7 +10,7 @@ HYP_TUNE: False
 WANDB_MODE: "online"  # set to online to activate wandb
 ENTITY: "jaxatari"
 # PROJECT: "debug"
-PROJECT: "submission_runs_big"
+PROJECT: "continual_learning_ewc"
 alg:
   WANDB_LOG_ALL_SEEDS: True # will log all the vmapped seeds separetely
 
