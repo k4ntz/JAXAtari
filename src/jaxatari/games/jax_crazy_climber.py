@@ -144,10 +144,10 @@ class PlayerMoveState:
 
 @chex.dataclass
 class BirdState:
-    drop_egg: chex.Array
-    pos_x: int
-    pos_y: int
-    dir: int
+    active_egg: chex.Array
+    pos_x: chex.Array
+    pos_y: chex.Array
+    dir: chex.Array
     
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
@@ -161,6 +161,8 @@ class CrazyClimberState(struct.PyTreeNode):
     tower_step: chex.Array
 
     bird_state: BirdState
+
+    level: chex.Array
 
 class CrazyClimberObservation(struct.PyTreeNode):
     pass
@@ -179,6 +181,8 @@ class CrazyClimberConstants(struct.PyTreeNode):
     PLAYER_Y: int = struct.field(pytree_node=False, default=160)
     PLAYER_POSSIBLE_X: chex.Array = struct.field(pytree_node=False, default=jnp.array([40, 46, 52, 58, 64, 72, 80, 86, 92, 98, 104]))
     PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(23, 16))
+    PLAYER_UPWARDS_SPRITE_SEQUENCE: chex.Array = struct.field(pytree_node=False, default=jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 9, 9, 10, 10, 10, 11, 11, 11]))
+    PLAYER_SIDEWAYS_SPRITE_SEQUENCE: chex.Array = struct.field(pytree_node=False, default=jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3]))
 
     TOWER_POSSIBLE_SPRITE_CLIP: jnp.ndarray = struct.field(pytree_node=False, default=jnp.array([0, 4, 7, 10])) 
 
@@ -188,11 +192,13 @@ class CrazyClimberConstants(struct.PyTreeNode):
     BIRD_SPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=100) # should be 5000 for final version
     BIRD_DESPAWN_THRESHOlD: int = struct.field(pytree_node=False, default=1500) # should be 8500 for final version
     BIRD_POSSIBLE_STEPS: chex.Array = struct.field(pytree_node=False, default=jnp.array([0, 4, 4, 4, 7, 7, 7, 10, 10, 10]))
+    BIRD_SEQUENCE: chex.Array = struct.field(pytree_node=False, default=jnp.array([0, 1, 2, 3, 4, 4, 3, 2, 1, 0]))
 
     EGG_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 7))
     EGG_BORDER_BOTTOM: int = struct.field(pytree_node=False, default=210-EGG_SIZE.default[0])
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
+    SCORE_BASE_VALUE: int = struct.field(pytree_node=False, default=100)
 
     BONUS_DECREASE_THRESHOLD: int = struct.field(pytree_node=False, default=1229)
     BONUS_DECREASE_INTERVAL: int = struct.field(pytree_node=False, default=600)
@@ -231,10 +237,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 pos_x=0),
             tower_step=0,
             bird_state=BirdState(
-                drop_egg=jnp.array(False),
+                active_egg=jnp.array(False),
                 pos_x=-self.consts.BIRD_SIZE[1],
                 pos_y=self.consts.BIRD_Y,
                 dir=1),
+            level=1,
         )
         initial_obs = self._get_observation(state)
 
@@ -397,7 +404,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         should_move = (state.step_counter % 2 == 0)
         fly_away = (bird_state.dir < 0) & (state.score > self.consts.BIRD_DESPAWN_THRESHOlD)
-        
+
         should_flip_dir = (should_move 
             & (hit_right_wall | hit_left_wall) 
             & jnp.logical_not(fly_away))
@@ -428,7 +435,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         score_triggered = (state.player_move_state.main_state == PlayerStableStates.NEUTRAL) & state.was_at_apex
 
-        new_score = jax.lax.select(score_triggered, state.score + 100, state.score)
+        new_score = jax.lax.select(score_triggered, state.score + self.consts.SCORE_BASE_VALUE * state.level, state.score)
 
         return state.replace(
             score=new_score,
@@ -540,10 +547,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 self.SHAPE_MASKS["bird_right"],
             ])
 
-            self.PLAYER_UPWARDS_SPRITE_SEQUENCE = jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 9, 9, 10, 10, 10, 11, 11, 11])
-            self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE = jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3])
-
-            self.BIRD_SEQUENCE = jnp.array([0, 1, 2, 3, 4, 4, 3, 2, 1, 0])
             self.TOWER_SPRITE = self._render_tower_sprite()
             
         def _render_tower_sprite(self) -> jnp.ndarray:
@@ -600,9 +603,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             move_state = state.player_move_state
 
-            sprite_index_up = self.PLAYER_UPWARDS_SPRITE_SEQUENCE[5 * move_state.main_state + move_state.sub_step]
+            sprite_index_up = self.consts.PLAYER_UPWARDS_SPRITE_SEQUENCE[5 * move_state.main_state + move_state.sub_step]
             hand_index = (move_state.hand_dir < 0).astype(int) # maps -1 -> 1 and 1 -> 0
-            sprite_index_side = self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE[jnp.abs(move_state.side_step)] 
+            sprite_index_side = self.consts.PLAYER_SIDEWAYS_SPRITE_SEQUENCE[jnp.abs(move_state.side_step)] 
             side_index = (move_state.side_step > 0).astype(int) # maps -1 -> 1 and 1 -> 0
 
             @partial(jax.jit)
@@ -649,7 +652,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             bird_state = state.bird_state
 
             dir_index = (bird_state.dir > 0).astype(int)
-            bird_index = self.BIRD_SEQUENCE[((((bird_state.pos_x + self.BIRD_SEQUENCE.size) * bird_state.dir) % 40) / 4).astype(int)]
+            bird_index = self.consts.BIRD_SEQUENCE[((((bird_state.pos_x + self.consts.BIRD_SEQUENCE.size) * bird_state.dir) % 40) / 4).astype(int)]
 
             bird_sprite = self.BIRD_SPRITES[dir_index][bird_index]
 
