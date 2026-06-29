@@ -389,9 +389,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             & (bird_state.dir > 0))
 
         should_move = (state.step_counter % 2 == 0)
+        fly_away = (bird_state.dir < 0) & (state.score > self.consts.BIRD_TOP_THRESHOlD)
         should_flip_dir = (should_move 
             & (hit_right_wall | hit_left_wall) 
-            & jnp.logical_not((state.score > self.consts.BIRD_TOP_THRESHOlD) & (bird_state.dir < 0)))
+            & jnp.logical_not(fly_away))
 
         bird_state.dir = jnp.where(should_flip_dir, bird_state.dir * -1, bird_state.dir)
 
@@ -534,8 +535,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             self.PLAYER_UPWARDS_SPRITE_SEQUENCE = jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 9, 9, 10, 10, 10, 11, 11, 11])
             self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE = jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3])
 
-            self.BIRD_SEQUENCE = jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0])
-            
+            self.BIRD_SEQUENCE = jnp.array([0, 1, 2, 3, 4, 4, 3, 2, 1, 0])
             self.TOWER_SPRITE = self._render_tower_sprite()
             
         def _render_tower_sprite(self) -> jnp.ndarray:
@@ -641,7 +641,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             bird_state = state.bird_state
 
             dir_index = (bird_state.dir > 0).astype(int)
-            bird_index = self.BIRD_SEQUENCE[bird_state.pos_x % 40]
+            bird_index = self.BIRD_SEQUENCE[((((bird_state.pos_x + self.BIRD_SEQUENCE.size) * bird_state.dir) % 40) / 4).astype(int)]
 
             bird_sprite = self.BIRD_SPRITES[dir_index][bird_index]
 
