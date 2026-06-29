@@ -177,29 +177,37 @@ class CrazyClimberConstants(struct.PyTreeNode):
     HEIGHT: int = struct.field(pytree_node=False, default=210)
 
     PLAYER_Y: int = struct.field(pytree_node=False, default=160)
-    PLAYER_POSSIBLE_X: jnp.ndarray = struct.field(pytree_node=False, default=jnp.array([40, 46, 52, 58, 64, 72, 80, 86, 92, 98, 104]))
+    PLAYER_POSSIBLE_X: chex.Array = struct.field(pytree_node=False, default=jnp.array([40, 46, 52, 58, 64, 72, 80, 86, 92, 98, 104]))
     PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(23, 16))
 
     TOWER_POSSIBLE_SPRITE_CLIP: jnp.ndarray = struct.field(pytree_node=False, default=jnp.array([0, 4, 7, 10])) 
 
     BIRD_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(12, 15))
     BIRD_Y: int = struct.field(pytree_node=False, default=49)
-    BIRD_BORDERS: Tuple[int, int] = struct.field(pytree_node=False, default=(10, 35 + BIRD_SIZE.default[1]))
-    BIRD_BOTTOM_THRESHOLD: int = 100 # should be 5000 for final version
-    BIRD_TOP_THRESHOlD: int = 1500 # should be 8500 for final version
+    BIRD_BORDERS: Tuple[int, int] = struct.field(pytree_node=False, default=(10, 35+BIRD_SIZE.default[1]))
+    BIRD_SPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=100) # should be 5000 for final version
+    BIRD_DESPAWN_THRESHOlD: int = struct.field(pytree_node=False, default=1500) # should be 8500 for final version
+    BIRD_POSSIBLE_STEPS: chex.Array = struct.field(pytree_node=False, default=jnp.array([0, 4, 4, 4, 7, 7, 7, 10, 10, 10]))
 
-    EGG_WIDTH: int = 7
-    EGG_HEIGHT: int = 8
-    EGG_BORDER_BOTTOM: int = 210 - EGG_HEIGHT
+    EGG_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 7))
+    EGG_BORDER_BOTTOM: int = struct.field(pytree_node=False, default=210-EGG_SIZE.default[0])
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
 
-    BONUS_DECREASE_THRESHOLD: int = 1229
-    BONUS_DECREASE_INTERVAL: int = 600
+    BONUS_DECREASE_THRESHOLD: int = struct.field(pytree_node=False, default=1229)
+    BONUS_DECREASE_INTERVAL: int = struct.field(pytree_node=False, default=600)
 
 class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation, CrazyClimberInfo, CrazyClimberConstants]):
     ACTION_SET: jnp.ndarray = jnp.array(
-        [Action.NOOP, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN, Action.UPRIGHT, Action.UPLEFT, Action.DOWNRIGHT, Action.DOWNLEFT],
+        [Action.NOOP, 
+         Action.UP, 
+         Action.RIGHT, 
+         Action.LEFT, 
+         Action.DOWN, 
+         Action.UPRIGHT, 
+         Action.UPLEFT, 
+         Action.DOWNRIGHT, 
+         Action.DOWNLEFT],
         dtype=jnp.int32,
     )
 
@@ -240,7 +248,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state = self._step_counter(state)
         state = self._player_step(state, atari_action)
         state = self._tower_step(state)
-        state = jax.lax.cond(state.score >= self.consts.BIRD_BOTTOM_THRESHOLD,
+        state = jax.lax.cond(state.score >= self.consts.BIRD_SPAWN_THRESHOLD,
             lambda: self._bird_step(state), 
             lambda: state)
         state = self._score_step(state)
@@ -379,7 +387,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     
     @partial(jax.jit, static_argnums=(0,))
     def _bird_step(self, state: CrazyClimberState) -> CrazyClimberState:
-        possible_bird_steps = jnp.array([0, 4, 4, 4, 7, 7, 7, 10, 10, 10])
         bird_state = state.bird_state
         
         # border constraints
@@ -389,7 +396,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             & (bird_state.dir > 0))
 
         should_move = (state.step_counter % 2 == 0)
-        fly_away = (bird_state.dir < 0) & (state.score > self.consts.BIRD_TOP_THRESHOlD)
+        fly_away = (bird_state.dir < 0) & (state.score > self.consts.BIRD_DESPAWN_THRESHOlD)
+        
         should_flip_dir = (should_move 
             & (hit_right_wall | hit_left_wall) 
             & jnp.logical_not(fly_away))
@@ -402,10 +410,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             bird_state.pos_x
         )
 
-        bird_state.pos_y = jax.lax.cond(
+        bird_state.pos_y = jnp.where(
             state.player_move_state.main_state == PlayerStableStates.PULL_UP,
-            lambda: self.consts.BIRD_Y + possible_bird_steps[state.player_move_state.sub_step],
-            lambda: self.consts.BIRD_Y,
+            self.consts.BIRD_Y + self.consts.BIRD_POSSIBLE_STEPS[state.player_move_state.sub_step],
+            self.consts.BIRD_Y,
         )
 
         return state.replace(bird_state = bird_state)
