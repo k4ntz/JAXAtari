@@ -78,6 +78,8 @@ GAME_MODULES = {
     "mspacman": "jaxatari.games.jax_mspacman",
     "montezumarevenge": "jaxatari.games.jax_montezumarevenge",
     # "pacman": "jaxatari.games.jax_pacman",
+    "boxing": "jaxatari.games.jax_boxing",
+    "boxing2": "jaxatari.games.jax_boxing2",
     # Add new games here
 }
 
@@ -107,7 +109,9 @@ MOD_MODULES = {
     "spaceinvaders": "jaxatari.games.mods.spaceinvaders_mods.SpaceInvadersEnvMod",
     "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod",
     "alien": "jaxatari.games.mods.alien_mods.AlienEnvMod",
-    "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod"
+    "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod",
+    "boxing": "jaxatari.games.mods.boxing_mods.BoxingEnvMod",
+    "boxing2": "jaxatari.games.mods.boxing2_mods.Boxing2EnvMod"
 }
 
 

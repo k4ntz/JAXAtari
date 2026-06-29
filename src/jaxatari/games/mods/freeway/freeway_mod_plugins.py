@@ -232,3 +232,76 @@ class GreenScoreMod(JaxAtariInternalModPlugin):
             'data': _recolored_score
         }
     }
+
+
+class DifficultyEasyMod(JaxAtariInternalModPlugin):
+    """
+    Atari Difficulty B (Easy/Default but tuned easier):
+    The chicken is only knocked back very slightly when hit, and stun/cooldown is halved.
+    """
+    constants_overrides = {
+        "throw_back_frames": 12,
+        "stun_frames": 14,
+    }
+
+
+class DifficultyNormalMod(JaxAtariInternalModPlugin):
+    """
+    Normal / Default Difficulty:
+    Uses the default authentic Atari 2600 settings for knockback and car speeds.
+    """
+    constants_overrides = {
+        "throw_back_frames": 24,
+        "stun_frames": 28,
+    }
+
+
+class DifficultyHardMod(JaxAtariPostStepModPlugin):
+    """
+    Atari Difficulty A (Hard):
+    If the chicken is hit by a car, it gets reset all the way to the bottom starting line.
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: FreewayState, new_state: FreewayState) -> FreewayState:
+        # Detect collision onset (cooldown becomes throw_back_frames + stun_frames)
+        hit_occurred = (new_state.cooldown == self._env.consts.throw_back_frames + self._env.consts.stun_frames)
+        
+        # Start position of chicken at bottom
+        start_y = self._env.consts.bottom_border + self._env.consts.chicken_height - 1
+        
+        new_y = jnp.where(hit_occurred, start_y, new_state.chicken_y)
+        return new_state.replace(chicken_y=new_y)
+
+
+class DifficultyImpossibleMod(JaxAtariPostStepModPlugin):
+    """
+    Impossible Difficulty:
+    When hit, the chicken gets reset all the way to the bottom.
+    Furthermore, all traffic speeds are significantly increased.
+    """
+    constants_overrides = {
+        "CAR_UPDATES": [
+            -3,  # Lane 0
+            -2,  # Lane 1
+            -2,  # Lane 2
+            -1,  # Lane 3
+            -1,  # Lane 4
+            1,   # Lane 5
+            1,   # Lane 6
+            2,   # Lane 7
+            2,   # Lane 8
+            3,   # Lane 9
+        ]
+    }
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: FreewayState, new_state: FreewayState) -> FreewayState:
+        # Detect collision onset (cooldown becomes throw_back_frames + stun_frames)
+        hit_occurred = (new_state.cooldown == self._env.consts.throw_back_frames + self._env.consts.stun_frames)
+        
+        # Start position of chicken at bottom
+        start_y = self._env.consts.bottom_border + self._env.consts.chicken_height - 1
+        
+        new_y = jnp.where(hit_occurred, start_y, new_state.chicken_y)
+        return new_state.replace(chicken_y=new_y)
+
