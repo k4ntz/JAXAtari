@@ -20,6 +20,40 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 
 
 # =============================================================================
+# Difficulty Presets (Exposed Global Configuration)
+# =============================================================================
+
+DEFAULT_DIFFICULTY = "normal"
+
+DIFFICULTY_PRESETS = {
+    "easy": {
+        "CPU_UPDATE_MASK": 7,         # Updates target every ~8 frames (slower reactions)
+        "CPU_AGGR_WINNING": 20,       # Low punch rate when winning
+        "CPU_AGGR_LOSING": 10,        # Very low punch rate when losing
+        "CPU_DANCING_DURATION": 60,   # Retreats for a long time when hit
+    },
+    "normal": {
+        "CPU_UPDATE_MASK": 3,         # Updates target every ~4 frames
+        "CPU_AGGR_WINNING": 40,       # Authentic Atari-like aggressiveness
+        "CPU_AGGR_LOSING": 20,        # Authentic Atari-like aggressiveness
+        "CPU_DANCING_DURATION": 40,   # Authentic Atari-like retreat duration
+    },
+    "hard": {
+        "CPU_UPDATE_MASK": 1,         # Updates target every ~2 frames (extremely fast)
+        "CPU_AGGR_WINNING": 70,       # High pressure, constant punches
+        "CPU_AGGR_LOSING": 50,        # High pressure
+        "CPU_DANCING_DURATION": 20,   # Recovers and fights back very quickly
+    },
+    "impossible": {
+        "CPU_UPDATE_MASK": 0,         # Updates target every frame (instantaneous reactions)
+        "CPU_AGGR_WINNING": 120,      # Maximum pressure
+        "CPU_AGGR_LOSING": 100,       # Aggressive pushback
+        "CPU_DANCING_DURATION": 0,    # Strictly never retreats; fights back instantly
+    }
+}
+
+
+# =============================================================================
 # Asset Config 
 # =============================================================================
 
@@ -105,6 +139,8 @@ class BoxingConstants(struct.PyTreeNode):
     # Boxer dimensions
     W_BOXER: int = 14
     H_BOXER: int = 47
+    FACE_MIN_Y: float = 15.0
+    FACE_MAX_Y: float = 32.0
     
     # Movement
     MOVE_SPEED: float = 0.8
@@ -128,6 +164,13 @@ class BoxingConstants(struct.PyTreeNode):
 
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
+    # CPU Difficulty Parameters
+    DIFFICULTY_PRESET: str = "normal"
+    CPU_UPDATE_MASK: int = 3
+    CPU_AGGR_WINNING: int = 40
+    CPU_AGGR_LOSING: int = 20
+    CPU_DANCING_DURATION: int = 40
+
 
 # =============================================================================
 # State 
@@ -146,6 +189,11 @@ class BoxingState:
     timer: chex.Array        # int32
     done: chex.Array         # bool
     key: chex.PRNGKey
+    cpu_target_x: chex.Array       # Target X position CPU is tracking
+    cpu_target_y: chex.Array       # Target Y position CPU is tracking
+    cpu_horiz_offset: chex.Array   # Random horizontal offset (0-31)
+    cpu_vert_offset: chex.Array    # Random vertical offset (0-63)
+    cpu_dancing_value: chex.Array  # Timer controlling CPU "dancing" behavior
 
 
 @struct.dataclass
@@ -173,8 +221,13 @@ class BoxingInfo:
 # =============================================================================
 
 class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, BoxingConstants]):
-    def __init__(self, consts: BoxingConstants | None = None):
-        consts = consts or BoxingConstants()
+    def __init__(self, consts: BoxingConstants | None = None, difficulty: str | None = None):
+        if consts is None:
+            consts = BoxingConstants()
+            if difficulty is None:
+                difficulty = DEFAULT_DIFFICULTY
+        if difficulty is not None and difficulty != "custom":
+            consts = self._apply_difficulty_preset(consts, difficulty)
         super().__init__(consts)
         self.renderer = BoxingRenderer(self.consts)
         self.action_set = [
@@ -183,6 +236,20 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             Action.UPFIRE, Action.RIGHTFIRE, Action.LEFTFIRE, Action.DOWNFIRE,
             Action.UPRIGHTFIRE, Action.UPLEFTFIRE, Action.DOWNRIGHTFIRE, Action.DOWNLEFTFIRE
         ]
+
+    def _apply_difficulty_preset(self, consts: BoxingConstants, difficulty: str) -> BoxingConstants:
+        if difficulty not in DIFFICULTY_PRESETS:
+            return consts
+            
+        params = DIFFICULTY_PRESETS[difficulty]
+        return replace(
+            consts,
+            DIFFICULTY_PRESET=difficulty,
+            CPU_UPDATE_MASK=params["CPU_UPDATE_MASK"],
+            CPU_AGGR_WINNING=params["CPU_AGGR_WINNING"],
+            CPU_AGGR_LOSING=params["CPU_AGGR_LOSING"],
+            CPU_DANCING_DURATION=params["CPU_DANCING_DURATION"],
+        )
 
     def reset(self, key: chex.PRNGKey) -> Tuple[BoxingObservation, BoxingState]:
         key, subkey = jax.random.split(key)
@@ -203,7 +270,12 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             stun_timer=jnp.array([0, 0], dtype=jnp.int32),
             timer=jnp.array(self.consts.TOTAL_TIME, dtype=jnp.int32),
             done=jnp.array(False),
-            key=subkey
+            key=subkey,
+            cpu_target_x=jnp.array(self.consts.P1_START_X, dtype=jnp.float32),
+            cpu_target_y=jnp.array(self.consts.START_Y, dtype=jnp.float32),
+            cpu_horiz_offset=jnp.array(0, dtype=jnp.int32),
+            cpu_vert_offset=jnp.array(0, dtype=jnp.int32),
+            cpu_dancing_value=jnp.array(0, dtype=jnp.int32),
         )
         return self._get_observation(state), state
 
@@ -354,37 +426,137 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         
         return new_s, new_a, new_h, new_c
 
+    def _update_cpu_state(self, state: BoxingState) -> BoxingState:
+        # Split key for random decisions
+        key, subkey1, subkey2, subkey3 = jax.random.split(state.key, 4)
+        
+        # Periodically update target position (every ~4 frames based on random for higher reaction speed)
+        random_val = jax.random.randint(subkey1, (), 0, 256)
+        update_target = (random_val & self.consts.CPU_UPDATE_MASK) == 0
+        
+        # Generate new random offsets
+        new_horiz_offset = jax.random.randint(subkey2, (), 0, 32)  # 0-31
+        new_vert_offset = jax.random.randint(subkey3, (), 0, 64)   # 0-63
+        
+        # Update target to track player position
+        cpu_target_x = jnp.where(
+            update_target,
+            state.pos[0, 0],
+            state.cpu_target_x
+        ).astype(jnp.float32)
+        cpu_target_y = jnp.where(
+            update_target,
+            state.pos[0, 1],
+            state.cpu_target_y
+        ).astype(jnp.float32)
+        cpu_horiz_offset = jnp.where(
+            update_target,
+            new_horiz_offset,
+            state.cpu_horiz_offset
+        ).astype(jnp.int32)
+        cpu_vert_offset = jnp.where(
+            update_target,
+            new_vert_offset,
+            state.cpu_vert_offset
+        ).astype(jnp.int32)
+        
+        # Decrement dancing value (moves towards 0)
+        new_dancing = jnp.maximum(state.cpu_dancing_value - 1, 0).astype(jnp.int32)
+        
+        return replace(state,
+            cpu_target_x=cpu_target_x,
+            cpu_target_y=cpu_target_y,
+            cpu_horiz_offset=cpu_horiz_offset,
+            cpu_vert_offset=cpu_vert_offset,
+            cpu_dancing_value=new_dancing,
+            key=key
+        )
+
     def _cpu_logic(self, state: BoxingState):
         p1_pos = state.pos[0]
         p2_pos = state.pos[1]
         
-        # Simple AI: Track P1's Y, stay at distance on X
-        target_x = p1_pos[0] + jnp.where(p2_pos[0] > p1_pos[0], 20.0, -20.0)
-        target_y = p1_pos[1]
+        # Calculate comfortable horizontal direction based on relative position
+        is_cpu_on_right = p2_pos[0] >= p1_pos[0]
+        sign_x = jnp.where(is_cpu_on_right, 1.0, -1.0)
         
-        dx = jnp.where(p2_pos[0] < target_x - 2, Action.RIGHT, jnp.where(p2_pos[0] > target_x + 2, Action.LEFT, Action.NOOP))
-        dy = jnp.where(p2_pos[1] < target_y - 2, Action.DOWN, jnp.where(p2_pos[1] > target_y + 2, Action.UP, Action.NOOP))
+        # Target position using the updated target coordinates and randomized offsets
+        target_x = state.cpu_target_x + sign_x * (20.0 + (state.cpu_horiz_offset - 16.0))
+        target_y = state.cpu_target_y + (state.cpu_vert_offset - 32.0)
         
-        # Combine into action
-        # Very simplified action mapping for CPU
-        act = Action.NOOP
-        act = jnp.where(jnp.logical_and(dx == Action.RIGHT, dy == Action.UP), Action.UPRIGHT, act)
-        act = jnp.where(jnp.logical_and(dx == Action.LEFT, dy == Action.UP), Action.UPLEFT, act)
-        act = jnp.where(jnp.logical_and(dx == Action.RIGHT, dy == Action.DOWN), Action.DOWNRIGHT, act)
-        act = jnp.where(jnp.logical_and(dx == Action.LEFT, dy == Action.DOWN), Action.DOWNLEFT, act)
-        act = jnp.where(jnp.logical_and(act == Action.NOOP, dx != Action.NOOP), dx, act)
-        act = jnp.where(jnp.logical_and(act == Action.NOOP, dy != Action.NOOP), dy, act)
+        # Clamp target inside ring boundaries
+        target_x = jnp.clip(target_x, self.consts.XMIN, self.consts.XMAX)
+        target_y = jnp.clip(target_y, self.consts.YMIN, self.consts.YMAX)
         
-        # Punch if close
-        dist = jnp.linalg.norm(p1_pos - p2_pos)
-        should_punch = jnp.logical_and(dist < 30.0, jax.random.uniform(state.key, ()) < 0.1)
-        act = jnp.where(should_punch, Action.FIRE, act)
+        # Determine movement direction towards target
+        move_right = target_x > p2_pos[0]
+        move_left = target_x < p2_pos[0]
+        move_down = target_y > p2_pos[1]
+        move_up = target_y < p2_pos[1]
         
+        # "Dancing" behavior: reverse horizontal movement when dancing and not hit
+        dancing = state.cpu_dancing_value >= 16
+        cpu_not_hit = state.stun_timer[1] == 0
+        reverse_horiz = jnp.logical_and(dancing, cpu_not_hit)
+        
+        move_right_final = jnp.where(reverse_horiz, move_left, move_right)
+        move_left_final = jnp.where(reverse_horiz, move_right, move_left)
+        
+        dx = jnp.where(move_right_final, 1, jnp.where(move_left_final, -1, 0))
+        dy = jnp.where(move_down, 1, jnp.where(move_up, -1, 0))
+        
+        # Strike decision based on proximity and randomness
+        horiz_dist = jnp.abs(p1_pos[0] - p2_pos[0])
+        vert_dist = jnp.abs(p1_pos[1] - p2_pos[1])
+        in_range = jnp.logical_and(horiz_dist <= self.consts.JAB_DIST, vert_dist <= self.consts.H_BOXER)
+        
+        # Don't start a punch while dancing (unless CPU was hit)
+        punch_dancing = state.cpu_dancing_value > 0
+        cpu_was_hit = state.stun_timer[1] > 0
+        can_punch_dancing = jnp.logical_or(~punch_dancing, cpu_was_hit)
+        
+        score_diff = state.score[1] - state.score[0]
+        aggressiveness = jnp.where(score_diff >= 0, self.consts.CPU_AGGR_WINNING, self.consts.CPU_AGGR_LOSING)
+        
+        # Split state.key to make random decision (without updating state.key here)
+        _, subkey = jax.random.split(state.key)
+        random_val = jax.random.randint(subkey, (), 0, 256)
+        should_punch = random_val < aggressiveness
+        
+        is_idle = state.punch_state[1] == 0
+        is_ready = state.punch_cooldown[1] == 0
+        
+        strike_decision = jnp.logical_and(
+            jnp.logical_and(is_idle, is_ready),
+            jnp.logical_and(jnp.logical_and(in_range, can_punch_dancing), should_punch)
+        )
+        
+        # Combine movement and punching into a single action
+        act = jnp.where(
+            strike_decision,
+            jnp.where(dy == -1,
+                jnp.where(dx == 1, Action.UPRIGHTFIRE, jnp.where(dx == -1, Action.UPLEFTFIRE, Action.UPFIRE)),
+                jnp.where(dy == 1,
+                    jnp.where(dx == 1, Action.DOWNRIGHTFIRE, jnp.where(dx == -1, Action.DOWNLEFTFIRE, Action.DOWNFIRE)),
+                    jnp.where(dx == 1, Action.RIGHTFIRE, jnp.where(dx == -1, Action.LEFTFIRE, Action.FIRE))
+                )
+            ),
+            jnp.where(dy == -1,
+                jnp.where(dx == 1, Action.UPRIGHT, jnp.where(dx == -1, Action.UPLEFT, Action.UP)),
+                jnp.where(dy == 1,
+                    jnp.where(dx == 1, Action.DOWNRIGHT, jnp.where(dx == -1, Action.DOWNLEFT, Action.DOWN)),
+                    jnp.where(dx == 1, Action.RIGHT, jnp.where(dx == -1, Action.LEFT, Action.NOOP))
+                )
+            )
+        )
         return act
 
     def step(self, state: BoxingState, action: chex.Array) -> Tuple[BoxingObservation, BoxingState, float, bool, BoxingInfo]:
         key, cpu_key = jax.random.split(state.key)
         state = replace(state, key=cpu_key)
+        
+        # Update CPU targeting, offsets, and dancing countdown
+        state = self._update_cpu_state(state)
         
         # 1. CPU Action
         p2_action = self._cpu_logic(state)
@@ -393,14 +565,23 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         new_p1_pos = self._move_boxer(state.pos[0], action, state.stun_timer[0])
         new_p2_pos = self._move_boxer(state.pos[1], p2_action, state.stun_timer[1])
         
-        # 3. Collision (simple push-out)
-        dist = jnp.linalg.norm(new_p1_pos - new_p2_pos)
-        min_dist = self.consts.W_BOXER
-        overlap = min_dist - dist
-        collision = overlap > 0
-        push_dir = (new_p1_pos - new_p2_pos) / (dist + 1e-5)
-        new_p1_pos = jnp.where(collision, new_p1_pos + push_dir * overlap * 0.5, new_p1_pos)
-        new_p2_pos = jnp.where(collision, new_p2_pos - push_dir * overlap * 0.5, new_p2_pos)
+        # 3. Collision (AABB push-out along the axis of minimum overlap)
+        dx = new_p1_pos[0] - new_p2_pos[0]
+        dy = new_p1_pos[1] - new_p2_pos[1]
+        overlap_x = self.consts.W_BOXER - jnp.abs(dx)
+        overlap_y = self.consts.H_BOXER - jnp.abs(dy)
+        collision = jnp.logical_and(overlap_x > 0, overlap_y > 0)
+        
+        # Determine push direction based on the axis of minimum overlap
+        sign_x = jnp.where(dx >= 0.0, 1.0, -1.0)
+        sign_y = jnp.where(dy >= 0.0, 1.0, -1.0)
+        
+        push_x = jnp.where(overlap_x < overlap_y, sign_x * overlap_x, 0.0)
+        push_y = jnp.where(overlap_x >= overlap_y, sign_y * overlap_y, 0.0)
+        push = jnp.stack([push_x, push_y])
+        
+        new_p1_pos = jnp.where(collision, new_p1_pos + push * 0.5, new_p1_pos)
+        new_p2_pos = jnp.where(collision, new_p2_pos - push * 0.5, new_p2_pos)
         
         # Clamp again after collision push
         new_p1_pos = jnp.clip(new_p1_pos, jnp.array([self.consts.XMIN, self.consts.YMIN]), jnp.array([self.consts.XMAX, self.consts.YMAX]))
@@ -440,9 +621,9 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             # Separate horizontal and vertical distance checks for axis-aligned punch geometry
             h_dist = jnp.abs(a_pos[0] - d_pos[0])
             
-            # Top arm is at y, bottom arm is at y + 34. Opponent body is [d_pos[1], d_pos[1] + 47].
+            # Top arm is at y, bottom arm is at y + 34. Opponent face is [d_pos[1] + FACE_MIN_Y, d_pos[1] + FACE_MAX_Y].
             punch_y = jnp.where(s.punch_arm[attacker_idx] == 0, a_pos[1], a_pos[1] + 34)
-            in_vert_range = jnp.logical_and(punch_y >= d_pos[1], punch_y <= d_pos[1] + 47)
+            in_vert_range = jnp.logical_and(punch_y >= d_pos[1] + self.consts.FACE_MIN_Y, punch_y <= d_pos[1] + self.consts.FACE_MAX_Y)
             
             p_state = s.punch_state[attacker_idx]
             not_hit_yet = jnp.logical_not(s.has_hit[attacker_idx])
@@ -503,6 +684,9 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             (pos_kb[0, 0] > pos_kb[1, 0]).astype(jnp.int32),
             (pos_kb[1, 0] > pos_kb[0, 0]).astype(jnp.int32)
         ])
+        
+        new_dancing = jnp.where(p1_hit, self.consts.CPU_DANCING_DURATION, state.cpu_dancing_value).astype(jnp.int32)
+        
         state = replace(state, 
                         pos=pos_kb,
                         orientation=orientation_kb,
@@ -510,6 +694,7 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
                         has_hit=new_has_hit,
                         stun_timer=new_stun,
                         timer=state.timer - 1,
+                        cpu_dancing_value=new_dancing,
                         key=key)
         
         # 6. Termination

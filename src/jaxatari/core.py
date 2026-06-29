@@ -80,7 +80,10 @@ GAME_MODULES = {
     "wordzapper": "jaxatari.games.jax_wordzapper",
     "mspacman": "jaxatari.games.jax_mspacman",
     "montezumarevenge": "jaxatari.games.jax_montezumarevenge",
+<<<<<<< HEAD
     "pacman": "jaxatari.games.jax_pacman",
+    "boxing": "jaxatari.games.jax_boxing",
+    "boxing2": "jaxatari.games.jax_boxing2",
 }
 
 # Mod modules registry: for each game, provide the Controller class path
@@ -109,6 +112,7 @@ MOD_MODULES = {
     "alien": "jaxatari.games.mods.alien_mods.AlienEnvMod",
     "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod",
     "boxing": "jaxatari.games.mods.boxing_mods.BoxingEnvMod",
+    "boxing2": "jaxatari.games.mods.boxing2_mods.Boxing2EnvMod",
 }
 
 
