@@ -148,6 +148,8 @@ class BirdState:
     pos_x: chex.Array
     pos_y: chex.Array
     dir: chex.Array
+    egg_x: chex.Array
+    egg_y: chex.Array
     
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
@@ -169,7 +171,6 @@ class CrazyClimberObservation(struct.PyTreeNode):
 
 class CrazyClimberInfo(struct.PyTreeNode):
     pass
-
 
 class CrazyClimberConstants(struct.PyTreeNode):
     BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0)),
@@ -237,10 +238,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 pos_x=0),
             tower_step=0,
             bird_state=BirdState(
-                active_egg=jnp.array(False),
+                active_egg=jnp.array(True),
                 pos_x=-self.consts.BIRD_SIZE[1],
                 pos_y=self.consts.BIRD_Y,
-                dir=1),
+                dir=jnp.array(1),
+                egg_x=jnp.array(100),
+                egg_y=jnp.array(20)),
             level=1,
         )
         initial_obs = self._get_observation(state)
@@ -257,6 +260,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state = self._tower_step(state)
         state = jax.lax.cond(state.score >= self.consts.BIRD_SPAWN_THRESHOLD,
             lambda: self._bird_step(state), 
+            lambda: state)
+        state = jax.lax.cond(state.bird_state.active_egg,
+            lambda: self._egg_step(state),
             lambda: state)
         state = self._score_step(state)
         state = self._bonus_step(state)
@@ -427,7 +433,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def _egg_step(self, state: CrazyClimberState) -> CrazyClimberState:
-        pass
+        bird_state = state.bird_state
+        bird_state.egg_y = bird_state.egg_y + 1
+        return state.replace(bird_state = bird_state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _score_step(self, state: CrazyClimberState) -> CrazyClimberState:
@@ -547,6 +555,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 self.SHAPE_MASKS["bird_right"],
             ])
 
+            self.EGG_SPRITES = self.SHAPE_MASKS["egg_falling"]
+
             self.TOWER_SPRITE = self._render_tower_sprite()
             
         def _render_tower_sprite(self) -> jnp.ndarray:
@@ -599,7 +609,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         
         @partial(jax.jit, static_argnums=(0,))
         def _render_player(self, state: CrazyClimberState) -> jnp.ndarray:
-            player_raster = self._create_raster((self.consts.PLAYER_SIZE[0], self.consts.PLAYER_SIZE[1]))
+            player_raster = self._create_raster(self.consts.PLAYER_SIZE)
 
             move_state = state.player_move_state
 
@@ -647,7 +657,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         
         @partial(jax.jit, static_argnums=(0,))
         def _render_bird(self, state: CrazyClimberState) -> jnp.ndarray:
-            bird_raster = self._create_raster((self.consts.BIRD_SIZE[0], self.consts.BIRD_SIZE[1]))
+            bird_raster = self._create_raster(self.consts.BIRD_SIZE)
 
             bird_state = state.bird_state
 
@@ -663,6 +673,22 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
             
             return bird_raster
+        
+        @partial(jax.jit, static_argnums=(0,))
+        def _render_egg(self, state: CrazyClimberState) -> jnp.ndarray:
+            egg_raster = self._create_raster(self.consts.EGG_SIZE)
+            
+            egg_sprite = self.EGG_SPRITES[state.bird_state.egg_y % 11]
+
+            jax.debug.print("POS Y: {x}", x=state.bird_state.egg_y)
+
+            egg_raster = self.jr.render_at(
+                egg_raster,
+                0, 0,
+                egg_sprite
+            )
+
+            return egg_raster
 
         @partial(jax.jit, static_argnums=(0,))
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
@@ -671,9 +697,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             player_raster = self._render_player(state)
             tower_raster = self._render_tower(state)
             bird_raster = self._render_bird(state)
+            egg_raster = self._render_egg(state)
             raster = self._clip_raster(raster, tower_raster, 40, 44) # self.jr.render_at_clipped(raster, 0, 0, tower_raster)
             raster = self._clip_raster(raster, player_raster, self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x], self.consts.PLAYER_Y) # self.jr.render_at_clipped(raster, state.player_move_state.pos_x, self.consts.PLAYER_Y, player_raster)
             raster = self._clip_raster(raster, bird_raster, state.bird_state.pos_x, state.bird_state.pos_y)
+            raster = jax.lax.cond(state.bird_state.active_egg,
+                lambda: self._clip_raster(raster, egg_raster, state.bird_state.egg_x, state.bird_state.egg_y),
+                lambda: raster)
 
             score_digits = self.jr.int_to_digits(state.score, max_digits=6)
             bonus_digits = self.jr.int_to_digits(state.bonus, max_digits=5)
