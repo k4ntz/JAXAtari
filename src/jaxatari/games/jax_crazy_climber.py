@@ -151,6 +151,22 @@ class BirdState:
     egg_x: chex.Array
     egg_y: chex.Array
     egg_dir: chex.Array
+
+@chex.dataclass
+class EggState:
+    pos_x: chex.Array
+    pos_y: chex.Array
+    dir: chex.Array
+    dir_intv: chex.Array
+
+    @classmethod
+    def new(cls, pos_x: int, pos_y: int, dir: int, dir_intv: int) -> EggState:
+        return cls(
+            pos_x = jnp.array(pos_x),
+            pos_y = jnp.array(pos_y),
+            dir = jnp.array(dir),
+            dir_intv = jnp.array(dir_intv)
+        )
     
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
