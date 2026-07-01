@@ -515,6 +515,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         demon_teleport = jnp.where(schedule, scheduled, state.demon_teleport)
 
+        # Refined respawn height rule (Early Waves): maintains exact row height upon death.
+        # Bypass row-balancing redistribution if wave_number < 4.
         demons_y = jnp.where(
             schedule & (ids == scheduled) & (state.wave_number >= 4),
             self._new_demon_y(demons_y, scheduled),
@@ -738,7 +740,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         any_player_hit = jnp.any(player_hit)
 
         state = state.replace(
-            demons_alive=demons_alive, demon_status=d_status, demons_x=d_x, demons_y=d_y, demon_phase=d_phase,
+            demons_alive=demons_alive, demon_status=d_status, demon_x=d_x, demons_y=d_y, demon_phase=d_phase,
             demon_moving_right=d_m_right, demon_moving_down=d_m_down, demon_x_motion_accumulator=d_x_acc,
             demon_y_motion_accumulator=d_y_acc, spawn_anim_timer=d_anim, spawn_pause_timer=d_pause,
             demon_teleport=d_teleport, demon_teleport_timer=jnp.where(demon_killed & jnp.logical_not(is_later_wave), 0,
