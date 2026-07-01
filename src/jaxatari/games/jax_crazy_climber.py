@@ -243,7 +243,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 pos_y=self.consts.BIRD_Y,
                 dir=jnp.array(1),
                 egg_x=jnp.array(100),
-                egg_y=jnp.array(20)),
+                egg_y=jnp.array(69)),
             level=1,
         )
         initial_obs = self._get_observation(state)
@@ -678,9 +678,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def _render_egg(self, state: CrazyClimberState) -> jnp.ndarray:
             egg_raster = self._create_raster(self.consts.EGG_SIZE)
             
-            egg_sprite = self.EGG_SPRITES[state.bird_state.egg_y % 11]
-
-            jax.debug.print("POS Y: {x}", x=state.bird_state.egg_y)
+            #egg_sprite = self.EGG_SPRITES[state.bird_state.egg_y % 11]
+            egg_sprite = self.EGG_SPRITES[9]
 
             egg_raster = self.jr.render_at(
                 egg_raster,
