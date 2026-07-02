@@ -65,3 +65,8 @@ markers = [
   "wrapper_full: tests that should run with the full wrapper recipe matrix",
   "serial: tests that must run without xdist parallel workers",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+]

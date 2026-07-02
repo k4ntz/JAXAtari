@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.seaquest.seaquest_mod_plugins import DisableEnemiesMod, NoDiversMod, EnemyMinesMod, FireBallsMod, UnlimitedOxygenMod, GravityMod, RandomColorEnemiesMod
+from jaxatari.games.mods.seaquest.seaquest_mod_plugins import DisableEnemiesMod, NoDiversMod, EnemyMinesMod, FireBallsMod, UnlimitedOxygenMod, GravityMod, RandomColorEnemiesMod, PenalizeDiverShootingMod
 
 class SeaquestEnvMod(JaxAtariModController):
     """
@@ -20,6 +20,7 @@ class SeaquestEnvMod(JaxAtariModController):
         "unlimited_oxygen": UnlimitedOxygenMod,
         "gravity": GravityMod,
         "random_color_enemies": RandomColorEnemiesMod,
+        "penalize_diver_shooting": PenalizeDiverShootingMod,
         # "polluted_water": PollutedWaterMod,
         "mines": EnemyMinesMod,
         # "fireball": ReplaceTorpedoWithFireBallMod
