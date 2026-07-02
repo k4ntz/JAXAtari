@@ -100,7 +100,6 @@ def _create_block_sprite_with_padding(color: tuple[int, int, int, int], shape: t
 def _get_default_asset_config() -> tuple:
     wall_sprite = _create_block_sprite((0, 0, 148, 255), (169, 4))
     ceiling_sprite = _create_block_sprite((0, 48, 100, 255), (5, 80))
-    floor_sprite = _create_block_sprite((0, 0, 148, 255), (1, 80))
     window_sprites = jnp.array([
         _create_block_sprite_with_padding((0, 0, 148,   0), (2, 8), (8, 8)),
         _create_block_sprite_with_padding((0, 0, 148, 255), (2, 8), (8, 8)),
@@ -189,7 +188,6 @@ def _get_default_asset_config() -> tuple:
             ]},
         {'name': 'wall', 'type': 'procedural', 'data': wall_sprite},
         {'name': 'ceiling', 'type': 'procedural', 'data': ceiling_sprite},
-        {'name': 'floor', 'type': 'procedural', 'data': floor_sprite},
         {'name': 'window_blind_group', 'type': 'procedural', 'data': window_sprites}
     )
 
@@ -609,6 +607,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         can_move_left = can_move_left(state)
         can_move_right = can_move_right(state)
         can_move_up = can_move_up(state)
+        jax.debug.print("can move up: {up}", up=can_move_up)
         delta_x = jnp.where(((~can_move_left) & left) | ((~can_move_right) & right), 0, 1)
 
         should_fall = jnp.any(falling_conds)
@@ -770,23 +769,15 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             self.PLAYER_UPWARDS_SPRITE_SEQUENCE = jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 9, 9, 10, 10, 10, 11, 11, 11])
             self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE = jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3])
             
-            self.TOWER_SPRITE = self._generate_tower_sprite()
-            self.TOWER_CUTOUTS = self._generate_tower_cutouts()
-
-        def _generate_tower_cutouts(self) -> jnp.ndarray:
-            floor_raster = self._create_raster((13, 80))
-            level_full = floor_raster
-            level_middle_cut = level_full.at[:, 28:52].set(0)
-            level_side_cuts = level_full.at[:, 4:24].set(0).at[:, 56:76].set(0)
-            return jnp.array([level_full, level_middle_cut, level_side_cuts])
+            self.TOWER_SPRITES = self._generate_tower_level_sprites()
             
-        def _generate_tower_sprite(self) -> jnp.ndarray:
-            tower_raster = self._create_raster((170, 80))
+        def _generate_tower_level_sprites(self) -> jnp.ndarray:
+            tower_raster = self._create_raster((13, 80))
 
             wall_offset_x = jnp.array([0, 12, 24, 36, 40, 52, 64, 76])
-            wall_offset_y = jnp.repeat(0, 8)
+            wall_offset_y = jnp.array([0,  0,  0,  0,  0,  0,  0,  0])
             wall_sprite = self.SHAPE_MASKS["wall"]
-            wall_sprite_masks = jnp.repeat(wall_sprite[jnp.newaxis, :, :], 8, axis=0)
+            wall_sprite_masks = jnp.repeat(wall_sprite[jnp.newaxis, :, :], len(wall_offset_x), axis=0)
             tower_raster = self.jr.render_at_batch(
                 tower_raster,
                 wall_offset_x,
@@ -794,27 +785,24 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 wall_sprite_masks,
             )
             
-            ceiling_offset_x = jnp.repeat(0, 13)
-            ceiling_offset_y = jnp.array([0, 13, 26, 39, 52, 65, 78, 91, 104, 117, 130, 143, 156])
             ceiling_sprite = self.SHAPE_MASKS["ceiling"]
-            ceiling_sprite_masks = jnp.repeat(ceiling_sprite[jnp.newaxis, :, :], 13, axis=0)
-            tower_raster = self.jr.render_at_batch(
+            tower_raster = self.jr.render_at(
                 tower_raster,
-                ceiling_offset_x,
-                ceiling_offset_y,
-                ceiling_sprite_masks,
+                0, 0,
+                ceiling_sprite,
             )
 
-            floor_sprite = self.SHAPE_MASKS["floor"]
-            tower_raster = self.jr.render_at(tower_raster, 0, 169, floor_sprite)
-
-            return tower_raster
+            level_full = tower_raster
+            level_middle_cut = level_full.at[:, 28:52].set(0)
+            level_side_cuts = level_full.at[:, 4:24].set(0).at[:, 56:76].set(0)
+            
+            return jnp.array([level_full, level_middle_cut, level_side_cuts])
 
         @partial(jax.jit, static_argnums=(0,1))
         def _create_raster(self, shape: tuple[int, int]) -> jnp.ndarray:
             return jnp.tile(255, shape)
         
-        @partial(jax.jit, static_argnums=(0,))
+        @partial(jax.jit, static_argnums=(0,1))
         def _normalize_raster(self, raster: jnp.ndarray) -> jnp.ndarray:
             return jnp.where(raster != 255, raster, 0)
         
@@ -860,59 +848,65 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 )
             
             player_sprite = map_player_to_sprite(sprite_index_up, sprite_index_side, hand_index, side_index)
-            player_raster = self.jr.render_at(player_raster, 0, 0, player_sprite)
+            player_raster = self.jr.render_at(
+                player_raster, 
+                0, 0,
+                player_sprite,
+            )
             
             return player_raster
         
 
         @partial(jax.jit, static_argnums=(0,))
         def _render_tower(self, state: CrazyClimberState) -> jnp.ndarray:
-            def clip_tower_cut(raster: jnp.ndarray, cutouts: jnp.ndarray, y: int, level_type: TowerLevelType) -> jnp.ndarray:
+            tower_raster = self._create_raster((169, 80))
+            falling_tower_raster = self._create_raster((169, 80))
+
+            level_offset_x = jnp.repeat(0, 13)
+            level_offset_y = jnp.array([0, 13, 26, 39, 52, 65, 78, 91, 104, 117, 130, 143, 156])
+            level_indices = jax.lax.dynamic_slice_in_dim(
+                state.tower_state.levels, 
+                state.tower_state.lowest_level, 
+                13, 
+                axis=0
+            )
+            level_sprite_masks = self.TOWER_SPRITES[level_indices][::-1]
+            tower_sprite = self.jr.render_at_batch(tower_raster, level_offset_x, level_offset_y, level_sprite_masks)
+            falling_level_sprite_masks = jnp.repeat(self.TOWER_SPRITES[level_indices[0]][jnp.newaxis, :, :], 13, axis=0)
+            falling_tower_sprite = self.jr.render_at_batch(falling_tower_raster, level_offset_x, level_offset_y, falling_level_sprite_masks)
+            
+            window_offset_x = jnp.tile(jnp.array([4, 16, 28, 44, 56, 68]), 11)
+            window_offset_y = jnp.repeat(jnp.array([5, 18, 31, 44, 57, 70, 83, 96, 109, 122, 135]), 6)
+            sprites = self.SHAPE_MASKS["window_blind_group"][state.tower_state.windows[:, :, 0].astype(jnp.int32)]
+            sprites = jnp.reshape(sprites, (-1, *sprites.shape[2:]))
+            tower_sprite = self.jr.render_at_batch(tower_sprite, window_offset_x, window_offset_y, sprites)
+
+            def clip_tower_cut(raster: jnp.ndarray, y: int, level_type: TowerLevelType) -> jnp.ndarray:
                 raster = jax.lax.dynamic_slice(
                     raster,
                     (y, 0),
                     (13, 80)
                 )
 
-                cutout = cutouts[level_type]
-                return jnp.where(cutout != 255, cutout, raster)
+                return jax.lax.switch(
+                    level_type,
+                    [
+                        lambda: raster,
+                        lambda: raster.at[:, 28:52].set(0),
+                        lambda: raster.at[:, 4:24].set(0).at[:, 56:76].set(0),
+                    ]
+                )
             
-            batched_clip_tower_cut = jax.vmap(clip_tower_cut, in_axes=(None, None, 0, 0))
-
-            tower_raster = jnp.copy(self.TOWER_SPRITE)
-            window_offset_x = jnp.tile(jnp.array([4, 16, 28, 44, 56, 68]), 11)
-            window_offset_y = jnp.repeat(jnp.array([5, 18, 31, 44, 57, 70, 83, 96, 109, 122, 135]), 6)
-            sprites = self.SHAPE_MASKS["window_blind_group"][state.tower_state.windows[:, :, 0].astype(jnp.int32)]
-            sprites = jnp.reshape(sprites, (-1, *sprites.shape[2:]))
-            tower_sprite = self.jr.render_at_batch(tower_raster, window_offset_x, window_offset_y, sprites)
-
-            level_indices = jax.lax.dynamic_slice_in_dim(
-                state.tower_state.levels,
-                state.tower_state.lowest_level,
-                13,
-                axis=0
-            )
-            level_offset_y = jnp.array([1, 14, 27, 40, 53, 66, 79, 92, 105, 118, 131, 144, 157])
-            tower_sprite = jnp.concat(batched_clip_tower_cut(tower_sprite, self.TOWER_CUTOUTS, level_offset_y, level_indices[::-1]), axis=0)
-
-            falling_tower_raster = jnp.copy(self.TOWER_SPRITE)
-            falling_tower_sprite = jnp.concat(
-                batched_clip_tower_cut(
-                    falling_tower_raster, 
-                    self.TOWER_CUTOUTS, 
-                    level_offset_y, 
-                    jnp.repeat(level_indices[0], 13)
-                ), 
-                axis=0
-            )
-
+            batched_clip_tower_cut = jax.vmap(clip_tower_cut, in_axes=(None, 0, 0))
+            tower_sprite = jnp.concat(batched_clip_tower_cut(tower_sprite, level_offset_y, level_indices[::-1]), axis=0)
+            
             tower_sprite = jax.lax.cond(
                 ~state.tower_state.is_falling,
                 lambda: tower_sprite,
                 lambda: falling_tower_sprite
             )
 
-            top_clip = 14 - jax.lax.cond(
+            top_clip = 13 - jax.lax.cond(
                 ~state.tower_state.is_falling,
                 lambda: self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.tower_state.tower_step],
                 lambda: self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.player_move_state.falling_count % 4]
