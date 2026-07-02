@@ -672,26 +672,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.spawn_pause_timer <= 0,
         )
 
-    def _lowest_demon_idx(
-        self,
-        state: DemonAttackState,
-        active_demons: chex.Array,
-        demons_y: chex.Array = None,
-    ) -> chex.Array:
-        """Return slot 3 while replacements remain, otherwise the current lowest active slot."""
-        demons_y = state.demons_y if demons_y is None else demons_y
-        ids = jnp.arange(self.consts.MAX_DEMONS)
-        can_spawn_more = state.wave_spawned_demons < self.consts.WAVE_TOTAL_DEMONS
-        candidates = jnp.logical_or(
-            active_demons,
-            jnp.logical_and(can_spawn_more, ids == self.consts.MAX_DEMONS - 1),
-        )
-        current_candidates = jnp.where(can_spawn_more, candidates, active_demons)
-        return jnp.argmax(
-            jnp.where(current_candidates, demons_y, -1)
-        ).astype(jnp.int32)
+    def _active_demon_idx(self) -> chex.Array:
+        """Return slot 3, the only demon allowed to track or fire."""
+        return jnp.array(self.consts.MAX_DEMONS - 1, dtype=jnp.int32)
 
-    def _track_lowest_demon(
+    def _track_demon(
         self,
         state: DemonAttackState,
         demons_x: chex.Array,
@@ -699,7 +684,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         demon_moving_right: chex.Array,
     ) -> chex.Array:
         """
-        Keep the lowest demon beside the player. Inside the border it keeps
+        Keep the lowest demon slot beside the player. Inside the border it keeps
         its own movement; outside it returns to the nearest border.
         """
         player_left = state.player_x
@@ -803,10 +788,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.demons_y + jnp.where(target_y >= state.demons_y[selected], 1, -1),
             state.demons_y,
         )
-        lowest_demon_idx = self._lowest_demon_idx(state, can_move, demons_y)
-        lowest_demon = ids == lowest_demon_idx
+        tracking_demon = ids == self._active_demon_idx()
         demon_moving_right = jnp.where(
-            selected_active & selected_mask & ~lowest_demon & ((state.demon_random & 7) == 0),
+            selected_active & selected_mask & ~tracking_demon & ((state.demon_random & 7) == 0),
             jnp.logical_not(state.demon_moving_right),
             state.demon_moving_right,
         )
@@ -918,10 +902,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         demon_moving_right = jnp.where(turn, jnp.logical_not(demon_moving_right), demon_moving_right)
         demon_moving_down = jnp.where(turn, True, demon_moving_down)
         demon_phase = jnp.where(turn, 1, demon_phase)
-        demon_moving_right = self._track_lowest_demon(
+        demon_moving_right = self._track_demon(
             state,
             demons_x,
-            can_move & selected_active & selected_mask & lowest_demon,
+            can_move & selected_active & selected_mask & tracking_demon,
             demon_moving_right,
         )
 
@@ -1006,7 +990,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.key, 2
         )
         ready_demons = self._demons_ready(state)
-        lowest_demon_idx = self._lowest_demon_idx(state, ready_demons)
+        shooting_demon_idx = self._active_demon_idx()
 
         slot_ids = jnp.arange(self.consts.MAX_BOMBS, dtype=jnp.int32)
 
@@ -1057,14 +1041,14 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.logical_not(any_bomb_active),
         )
         action_due = action_counter >= action_limit
-        has_ready_demon = ready_demons[lowest_demon_idx]
+        has_ready_demon = ready_demons[shooting_demon_idx]
         can_start_burst = jnp.logical_and(
             scheduler_idle,
             jnp.logical_and(action_due, has_ready_demon),
         )
         source_idx = jnp.where(
             can_start_burst,
-            lowest_demon_idx,
+            shooting_demon_idx,
             state.bomb_source_idx,
         )
         source_ready = ready_demons[source_idx]
@@ -1152,11 +1136,25 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.where(burst_done, 0, action_limit),
             jnp.maximum(burst_timer - 1, 0),
         )
-        release_source = jnp.logical_and(burst_done, jnp.logical_not(jnp.any(bomb_active)))
+        source_lost = jnp.logical_and(active_burst_length > 0, jnp.logical_not(source_ready))
+        release_source = jnp.logical_and(
+            jnp.logical_or(burst_done, source_lost),
+            jnp.logical_not(jnp.any(bomb_active)),
+        )
         next_burst_length = jnp.where(
             release_source,
             jnp.array(0, dtype=jnp.int32),
             active_burst_length,
+        )
+        next_burst_step = jnp.where(
+            release_source,
+            jnp.array(self.consts.BOMB_BURST_RATES, dtype=jnp.int32),
+            next_burst_step,
+        )
+        next_burst_timer = jnp.where(
+            release_source,
+            jnp.array(0, dtype=jnp.int32),
+            next_burst_timer,
         )
         source_idx = jnp.where(
             release_source,
