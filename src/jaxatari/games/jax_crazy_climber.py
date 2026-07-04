@@ -15,6 +15,25 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
+class Level(IntEnum):
+    LEVEL_1 = 1
+    LEVEL_2 = 2
+    LEVEL_3 = 3
+
+@chex.dataclass
+class LevelState:
+    condor_active: chex.Array
+    mad_doctor_active: chex.Array
+    score_increment: chex.Array
+    
+    @classmethod
+    def new(cls, level: Level) -> chex.dataclass:
+        return cls(
+            condor_active = jnp.array(False),
+            mad_doctor_active = jnp.array(False),
+            score_increment = jnp.array(CrazyClimberConstants.SCORE_BASE_VALUE * level)
+        )
+
 # Player movement states
 class PlayerStableStates(IntEnum):
     NEUTRAL = 0
@@ -117,7 +136,7 @@ class CrazyClimberState(struct.PyTreeNode):
     tower_state: TowerState
     bird_state: BirdState
 
-    level: chex.Array
+    level_state: chex.Array
 
 class CrazyClimberObservation(struct.PyTreeNode):
     pass
@@ -341,7 +360,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             player_move_state=PlayerMoveState.new(),
             tower_state=TowerState.new(state_key),
             bird_state=BirdState.new(),
-            level=1,
+            level_state=LevelState.new(Level.LEVEL_1),
         )
         initial_obs = self._get_observation(state)
 
@@ -813,7 +832,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         currently_at_apex = (state.player_move_state.sub_step == 9) & (state.player_move_state.main_state == PlayerStableStates.PULL_UP)
 
         score_triggered = (state.player_move_state.main_state == PlayerStableStates.NEUTRAL) & state.reached_apex
-        new_score = jnp.where(score_triggered, state.score + self.consts.SCORE_BASE_VALUE * state.level, state.score)
+        new_score = jnp.where(score_triggered, state.score + state.level_state.score_increment, state.score)
 
         return state.replace(
             score=new_score,
@@ -1133,7 +1152,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             raster = jax.lax.cond(state.score >= self.consts.BIRD_SPAWN_THRESHOLD,
                 lambda: self._clip_raster(raster, bird_raster, state.bird_state.pos_x, state.bird_state.pos_y),
                 lambda: raster)
-            raster = self._clip_raster(raster, egg_raster, state.bird_state.egg_state.pos_x, state.bird_state.egg_state.pos_y)
+            raster = jax.lax.cond(state.score >= self.consts.BIRD_SPAWN_THRESHOLD,
+                lambda: self._clip_raster(raster, egg_raster, state.bird_state.egg_state.pos_x, state.bird_state.egg_state.pos_y),
+                lambda: raster)
             raster = self._normalize_raster(raster)
 
             score_digits = self.jr.int_to_digits(state.score, max_digits=6)
