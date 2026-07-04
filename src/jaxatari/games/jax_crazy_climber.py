@@ -77,9 +77,17 @@ class BirdState:
     pos_x: chex.Array
     pos_y: chex.Array
     dir: chex.Array
-    egg_x: chex.Array
-    egg_y: chex.Array
-    egg_dir: chex.Array
+    egg_state: chex.dataclass
+
+    @classmethod
+    def new(cls):
+        return cls(
+            drop_egg=jnp.array(True),
+            pos_x=CrazyClimberConstants.BIRD_SIZE[1],
+            pos_y=CrazyClimberConstants.BIRD_Y,
+            dir=jnp.array(1),
+            egg_state=EggState.new()
+        )
 
 @chex.dataclass
 class EggState:
@@ -88,14 +96,14 @@ class EggState:
     dir: chex.Array
     dir_intv: chex.Array
 
-    """@classmethod
-    def new(cls, pos_x: int, pos_y: int, dir: int, dir_intv: int) -> EggState:
+    @classmethod
+    def new(cls):
         return cls(
-            pos_x = jnp.array(pos_x),
-            pos_y = jnp.array(pos_y),
-            dir = jnp.array(dir),
-            dir_intv = jnp.array(dir_intv)
-        )"""
+            pos_x=jnp.array(100),
+            pos_y=jnp.array(69),
+            dir=jnp.array(1),
+            dir_intv=jnp.array(0)
+        )
     
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
@@ -332,14 +340,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             reached_apex=jnp.array(False),
             player_move_state=PlayerMoveState.new(),
             tower_state=TowerState.new(state_key),
-            bird_state=BirdState(
-                drop_egg=jnp.array(True),
-                pos_x=self.consts.BIRD_SIZE[1],
-                pos_y=self.consts.BIRD_Y,
-                dir=jnp.array(1),
-                egg_x=jnp.array(100),
-                egg_y=jnp.array(69),
-                egg_dir=jnp.array(1)),
+            bird_state=BirdState.new(),
             level=1,
         )
         initial_obs = self._get_observation(state)
@@ -787,21 +788,25 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     @partial(jax.jit, static_argnums=(0,))
     def _egg_step(self, state: CrazyClimberState) -> CrazyClimberState:
         bird_state = state.bird_state
+        egg_state = bird_state.egg_state
 
-        egg_currently_active = ((bird_state.egg_y < self.consts.EGG_BORDER_BOTTOM))
+        egg_currently_active = ((egg_state.pos_y < self.consts.EGG_BORDER_BOTTOM))
         bird_state.drop_egg = jnp.logical_not(egg_currently_active)
 
-        bird_state.egg_x, bird_state.egg_y, bird_state.egg_dir = jnp.where(
+        egg_state.pos_x, egg_state.pos_y, egg_state.dir = jnp.where(
             bird_state.drop_egg,
             jnp.array([bird_state.pos_x, 69, bird_state.dir]),
-            jnp.array([bird_state.egg_x, bird_state.egg_y, bird_state.egg_dir])
+            jnp.array([egg_state.pos_x, egg_state.pos_y, egg_state.dir])
         )
         
-        bird_state.egg_y = bird_state.egg_y + 1
-        bird_state.egg_x = jnp.where(((bird_state.egg_y - 69) % 5) == 0, 
-            bird_state.egg_x + bird_state.egg_dir, 
-            bird_state.egg_x)
-        return state.replace(bird_state = bird_state)
+        egg_state.pos_y = egg_state.pos_y + 1
+        egg_state.pos_x = jnp.where(((egg_state.pos_y - 69) % 5) == 0, 
+            egg_state.pos_x + egg_state.dir, 
+            egg_state.pos_x)
+        
+        bird_state.egg_state = egg_state
+        return state.replace(
+            bird_state = bird_state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _score_step(self, state: CrazyClimberState) -> CrazyClimberState:
@@ -1128,7 +1133,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             raster = jax.lax.cond(state.score >= self.consts.BIRD_SPAWN_THRESHOLD,
                 lambda: self._clip_raster(raster, bird_raster, state.bird_state.pos_x, state.bird_state.pos_y),
                 lambda: raster)
-            raster = self._clip_raster(raster, egg_raster, state.bird_state.egg_x, state.bird_state.egg_y)
+            raster = self._clip_raster(raster, egg_raster, state.bird_state.egg_state.pos_x, state.bird_state.egg_state.pos_y)
             raster = self._normalize_raster(raster)
 
             score_digits = self.jr.int_to_digits(state.score, max_digits=6)
