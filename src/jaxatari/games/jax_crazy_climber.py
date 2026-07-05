@@ -113,7 +113,7 @@ class EggState:
     pos_x: chex.Array
     pos_y: chex.Array
     dir: chex.Array
-    dir_intv: chex.Array
+    vel: chex.Array
 
     @classmethod
     def new(cls):
@@ -121,7 +121,7 @@ class EggState:
             pos_x=jnp.array(100),
             pos_y=jnp.array(69),
             dir=jnp.array(1),
-            dir_intv=jnp.array(0)
+            vel=jnp.array(0)
         )
     
 class CrazyClimberState(struct.PyTreeNode):
@@ -375,9 +375,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state = self._player_step(state, atari_action)
         state = self._tower_step(state)
         state = jax.lax.cond(state.score >= self.consts.BIRD_SPAWN_THRESHOLD,
-            lambda: self._bird_step(state), 
+            lambda: self._bird_step(self._egg_step(state)), 
             lambda: state)
-        state = self._egg_step(state)
         state = self._score_step(state)
         state = self._bonus_step(state)
 
@@ -759,13 +758,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             operand=player_move_state
         )
         
-        jax.debug.print(
+        """jax.debug.print(
             "main state: {x}, sub step: {y}, side step {z}, hand dir: {w}", 
             x=next_player_move_state.main_state, 
             y=next_player_move_state.sub_step,
             z=next_player_move_state.side_step,
             w=next_player_move_state.hand_dir,
-        )
+        )"""
 
         return state.replace(
             player_move_state=next_player_move_state,
@@ -806,26 +805,58 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def _egg_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        @partial(jax.jit)
+        def new_egg(state: CrazyClimberState) -> EggState:
+            player_state = state.player_move_state
+            bird_state = state.bird_state
+            egg_state = bird_state.egg_state
+
+            # reset starting coordinates
+            egg_state.pos_x = bird_state.pos_x
+            egg_state.pos_y = 69
+
+            # calc velocity and direction depending on bird and player positions
+            bird_before_player = state.bird_state.pos_x < self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x]
+
+            player_egg_height_diff = self.consts.PLAYER_Y - egg_state.pos_y
+
+            jax.debug.print("Player x: {x}, Bird x: {y}",
+                            x=self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x],
+                            y=bird_state.pos_x)
+            jax.debug.print("y-Diff: {x}, x-Diff: {y}", 
+                            x=player_egg_height_diff,
+                            y=(self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x] - bird_state.pos_x))
+
+            egg_state.dir = jnp.where(bird_before_player, 1, -1)
+            egg_state.vel = jax.lax.cond(bird_before_player, 
+                lambda: jnp.round(player_egg_height_diff / (self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x] - bird_state.pos_x)).astype(jnp.int32),
+                lambda: jnp.round(player_egg_height_diff / (bird_state.pos_x - self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x])).astype(jnp.int32)
+            )
+
+            egg_state.vel = jnp.where(state.bird_state.pos_x == self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x], 0, egg_state.vel)
+            
+            return egg_state
+            
+
         bird_state = state.bird_state
         egg_state = bird_state.egg_state
 
         egg_currently_active = ((egg_state.pos_y < self.consts.EGG_BORDER_BOTTOM))
         bird_state.drop_egg = jnp.logical_not(egg_currently_active)
 
-        egg_state.pos_x, egg_state.pos_y, egg_state.dir = jnp.where(
+        egg_state = jax.lax.cond(
             bird_state.drop_egg,
-            jnp.array([bird_state.pos_x, 69, bird_state.dir]),
-            jnp.array([egg_state.pos_x, egg_state.pos_y, egg_state.dir])
+            lambda: new_egg(state),
+            lambda: egg_state
         )
         
         egg_state.pos_y = egg_state.pos_y + 1
-        egg_state.pos_x = jnp.where(((egg_state.pos_y - 69) % 5) == 0, 
+        egg_state.pos_x = jnp.where((egg_state.vel != 0) &(((egg_state.pos_y - 69) % egg_state.vel) == 0), 
             egg_state.pos_x + egg_state.dir, 
             egg_state.pos_x)
         
         bird_state.egg_state = egg_state
-        return state.replace(
-            bird_state = bird_state)
+        return state.replace(bird_state = bird_state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _score_step(self, state: CrazyClimberState) -> CrazyClimberState:
