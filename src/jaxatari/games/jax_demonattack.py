@@ -12,6 +12,7 @@ import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
+from jaxatari.modification import AutoDerivedConstants
 
 INITIAL_WAVE_PATTERNS = 12
 REPEATING_WAVE_PATTERN_START = 8
@@ -231,7 +232,7 @@ def _bomb_visible_repeat_window(state, consts, bomb_type):
     )
     return visible_repeats, repeat_offset
 
-class DemonAttackConstants(struct.PyTreeNode):
+class DemonAttackConstants(AutoDerivedConstants):
     # Static Configuration
     WIDTH: int = struct.field(pytree_node=False, default=160)
     HEIGHT: int = struct.field(pytree_node=False, default=192)
@@ -288,6 +289,8 @@ class DemonAttackConstants(struct.PyTreeNode):
         pytree_node=False,
         default=(1, 1, 2, 2, 3, 3),
     ) # TODO needs adjustments
+    TRACKING_PROJECTILES_START_WAVE: int = struct.field(pytree_node=False, default=8) # starting in this wave, the demons begin using projectiles that follow the demon
+
     # Coordinates & Sizes. Sizes are (height, width).
     PLAYER_X: int = struct.field(pytree_node=False, default=87)
     PLAYER_Y: int = struct.field(pytree_node=False, default=174)
@@ -320,7 +323,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     )
     BOMB_JITTER_X_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default=(0, 0, 1, 0, 0, -1, 0),
+        default=(0, 0, 0, 0, 0, 0, 0),
     )
     LONG_BOMB_HEIGHT_MULTIPLIER: int = struct.field(pytree_node=False, default=5)
     MAX_BUNKERS: int = struct.field(pytree_node=False, default=6)
@@ -332,9 +335,9 @@ class DemonAttackConstants(struct.PyTreeNode):
     # Boundaries
     BOUNDARY = 25
     PLAYER_MIN_X: int = struct.field(pytree_node=False, default=BOUNDARY) # left boundary for player
-    PLAYER_MAX_X: int = struct.field(pytree_node=False, default=160 - BOUNDARY) # right boundary for player
+    PLAYER_MAX_X: int = struct.field(pytree_node=False, default=None) # right boundary for player, calculated in compute_derived
     DEMON_MIN_X: int = struct.field(pytree_node=False, default=BOUNDARY)  # left boundary for demons
-    DEMON_MAX_X: int = struct.field(pytree_node=False, default=160 - BOUNDARY) # right boundary for demons
+    DEMON_MAX_X: int = struct.field(pytree_node=False, default=None) # right boundary for demons, calculated in compute_derived
     DEMON_MIN_Y: int = struct.field(pytree_node=False, default=20)  # top boundary for demons
     DEMON_MAX_Y: int = struct.field(pytree_node=False, default=100) # bottom boundary for demons
 
@@ -342,6 +345,12 @@ class DemonAttackConstants(struct.PyTreeNode):
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(194, 169, 53))
 
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
+
+    def compute_derived(self):
+        return {
+            'PLAYER_MAX_X': self.WIDTH - self.BOUNDARY,
+            'DEMON_MAX_X': self.WIDTH - self.BOUNDARY,
+        }
 
 class DemonAttackState(struct.PyTreeNode):
     player_x: chex.Array
@@ -1146,6 +1155,18 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             moved_y < bomb_active_limit,
         )
 
+        def _calc_burst_base_x(_source_idx: chex.Array, _state: DemonAttackState) -> chex.Array:
+            """
+            Calculate the center of the demon bomb burst.
+            :param _source_idx: Demon to use as reference for where to place the burst
+            :return:Array with the same x-position for each bomb
+            """
+            return (
+                    _state.demons_x[_source_idx]
+                    + self.consts.DEMON_SIZE[1] // 2
+                    - self.consts.BOMB_SIZE[1] // 2
+            )
+
         # First branch: per-slot jitter logic
         jitter_table = jnp.asarray(
             self.consts.BOMB_JITTER_X_TABLE,
@@ -1157,11 +1178,28 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         jitter_x = self._bomb_jitter_for_type(bomb_type, jitter_table[jitter_phase])
 
-        moved_x = jnp.clip(
-            state.bomb_x + jnp.where(bomb_active, jitter_x, 0),
-            self.consts.BOUNDARY,
-            self.consts.WIDTH - self.consts.BOUNDARY - self.consts.BOMB_SIZE[1],
+        should_use_tracking_projectiles = state.wave_number >= self.consts.TRACKING_PROJECTILES_START_WAVE
+
+        def use_tracking_bombs(s):
+            _base_x = _calc_burst_base_x(s.bomb_source_idx, s)
+            bomb_type = self._bomb_type_for_wave(state.wave_pattern)
+            tracked_x = _base_x + self._bomb_x_offsets_for_type(bomb_type)
+            # Stop tracking once the original source demon is dead/respawning,
+            # otherwise the bomb snaps to whatever new demon reuses that slot.
+            source_still_ready = ready_demons[s.bomb_source_idx]
+            return jnp.where(source_still_ready, tracked_x, s.bomb_x)
+
+        def use_normal_bombs(s):
+            return s.bomb_x
+
+        x_before_jitter = jax.lax.cond(
+            should_use_tracking_projectiles,
+            use_tracking_bombs,
+            use_normal_bombs,
+            operand=state,
         )
+
+        moved_x = x_before_jitter + jnp.where(bomb_active, jitter_x, 0)
         bomb_x = jnp.where(bomb_active, moved_x, state.bomb_x)
         bomb_y = jnp.where(bomb_active, moved_y, state.bomb_y)
 
@@ -1184,11 +1222,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.bomb_source_idx,
         )
         source_ready = ready_demons[source_idx]
-        base_x = (
-            state.demons_x[source_idx]
-            + self.consts.DEMON_SIZE[1] // 2
-            - self.consts.BOMB_SIZE[1] // 2
-        )
+        base_x = _calc_burst_base_x(source_idx, state)
 
         burst_length_idx = jax.random.randint(
             burst_length_key,
@@ -1240,11 +1274,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
         x_offsets = self._bomb_x_offsets_for_type(bomb_type)
-        fired_x = jnp.clip(
-            base_x + x_offsets,
-            self.consts.BOUNDARY,
-            self.consts.WIDTH - self.consts.BOUNDARY - self.consts.BOMB_SIZE[1],
-        )
+        fired_x = base_x + x_offsets
         fired_y = (
             state.demons_y[source_idx]
             + self.consts.DEMON_SIZE[0]
