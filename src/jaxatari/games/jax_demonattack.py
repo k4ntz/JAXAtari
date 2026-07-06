@@ -701,6 +701,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         def explosion_step(s):
             s = update_explosion(s)
+            s = self._laser_step(s, jnp.array(Action.NOOP, dtype=jnp.int32))
             s = self._update_spawn_timers(s)
             return self._demons_step(s)
 
@@ -1725,7 +1726,7 @@ class DemonAttackRenderer(JAXGameRenderer):
             self.consts.PLAYER_Y + self.consts.PLAYER_LASER_DEPTH
         )
         raster = jax.lax.cond(
-            jnp.logical_not(state.player_exploding),
+            jnp.logical_or(state.laser_active, jnp.logical_not(state.player_exploding)),
             lambda: self.jr.render_at(raster, laser_render_x, laser_render_y, laser_mask),
             lambda: raster,
         )
