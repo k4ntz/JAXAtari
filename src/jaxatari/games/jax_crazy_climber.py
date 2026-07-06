@@ -829,6 +829,16 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             
             return egg_state
             
+        # checks if egg hits player
+        def check_for_collision(state: CrazyClimberState) -> bool:
+            player_x = self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x]
+
+            same_x = ((player_x >= state.bird_state.egg_state.pos_x) 
+                & (player_x < (state.bird_state.egg_state.pos_x + self.consts.EGG_SIZE[1])))
+            same_y = ((self.consts.PLAYER_Y >= state.bird_state.egg_state.pos_y)
+                & (self.consts.PLAYER_Y < (state.bird_state.egg_state.pos_y + self.consts.EGG_SIZE[0])))
+            
+            return (same_x & same_y)
 
         bird_state = state.bird_state
         egg_state = bird_state.egg_state
@@ -836,6 +846,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         egg_currently_active = ((egg_state.pos_y < self.consts.EGG_BORDER_BOTTOM))
         bird_state.drop_egg = ~egg_currently_active
 
+        state.tower_state.is_falling = check_for_collision(state)
+        
         egg_state = jax.lax.cond(
             bird_state.drop_egg,
             lambda: new_egg(state),
