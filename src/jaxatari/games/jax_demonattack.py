@@ -242,6 +242,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     SPAWN_ANIM_FRAME_DURATION: int = struct.field(pytree_node=False, default=6)
     SPAWN_MOVE_PAUSE: int = struct.field(pytree_node=False, default=14)
     SPAWN_ANIM_WIDTH: int = struct.field(pytree_node=False, default=32)
+    DEMON_DEATH_ANIMATION_DURATION: int = struct.field(pytree_node=False, default=18)
     WAVE_TOTAL_DEMONS: int = struct.field(pytree_node=False, default=8)
     DEMON_TELEPORT_DURATION: int = struct.field(pytree_node=False, default=44)
     DEMON_VERTICAL_MOTION_TABLE: Tuple[int, ...] = struct.field(
@@ -361,6 +362,7 @@ class DemonAttackState(struct.PyTreeNode):
     demon_teleport_timer: chex.Array  # Countdown controlling delayed appearance
     wave_spawned_demons: chex.Array  # Total demons that have entered the current wave
     demon_random: chex.Array  # Deterministic 8-bit generator used by movement and spawn timing
+    demon_death_anim_timer: chex.Array
 
     bomb_x: chex.Array
     bomb_y: chex.Array
@@ -474,6 +476,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_teleport_timer=jnp.array(self.consts.DEMON_INITIAL_TELEPORT_TIMER, dtype=jnp.int32),
             wave_spawned_demons=jnp.array(0, dtype=jnp.int32),
             demon_random=jnp.array(self.consts.DEMON_INITIAL_RANDOM, dtype=jnp.int32),
+            demon_death_anim_timer=zeros,
         )
 
     def _next_demon_random(self, random: chex.Array) -> chex.Array:
@@ -769,6 +772,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 state.spawn_pause_timer - 1,
                 state.spawn_pause_timer,
             ),
+            demon_death_anim_timer=jnp.maximum(state.demon_death_anim_timer - 1, 0),
         )
 
     def _demons_ready(self, state: DemonAttackState) -> chex.Array:
@@ -949,7 +953,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         can_schedule = (state.demon_teleport_timer == 0) & can_appear
         demon_status = state.demon_status
-        free = demon_status == DEMON_STATUS_FREE
+        free = jnp.logical_and(
+            demon_status == DEMON_STATUS_FREE,
+            state.demon_death_anim_timer <= 0,
+        )
         scheduled = self.consts.MAX_DEMONS - 1 - jnp.argmax(free[::-1].astype(jnp.int32))
         schedule = can_schedule & jnp.any(free)
 
@@ -1432,6 +1439,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_moving_down=jnp.where(killed, True, state.demon_moving_down),
             demon_teleport=jnp.where(demon_killed, jnp.argmax(killed.astype(jnp.int32)), state.demon_teleport),
             demon_teleport_timer=jnp.where(demon_killed, 0, state.demon_teleport_timer),
+            demon_death_anim_timer=jnp.where(
+                killed,
+                self.consts.DEMON_DEATH_ANIMATION_DURATION,
+                state.demon_death_anim_timer,
+            ),
             score=score,
             laser_active=laser_active,
             lives=lives,
@@ -1452,7 +1464,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         """Advance once every scheduled demon has appeared and been destroyed."""
         wave_finished = jnp.logical_and(
             state.wave_spawned_demons >= self.consts.WAVE_TOTAL_DEMONS,
-            jnp.logical_not(jnp.any(state.demons_alive)),
+            jnp.logical_and(
+                jnp.logical_not(jnp.any(state.demons_alive)),
+                jnp.logical_not(jnp.any(state.demon_death_anim_timer > 0)),
+            ),
         )
 
         return jax.lax.cond(
@@ -1852,6 +1867,7 @@ class DemonAttackRenderer(JAXGameRenderer):
 
         def render_demon(i, r):
             is_spawning = state.spawn_anim_timer[i] > 0
+            is_dying = state.demon_death_anim_timer[i] > 0
 
             elapsed = spawn_anim_total - state.spawn_anim_timer[i]
             spawn_frame = jnp.clip(
@@ -1911,6 +1927,24 @@ class DemonAttackRenderer(JAXGameRenderer):
                     demon_mask,
                 )
 
+            def render_death():
+                death_masks = self.SHAPE_MASKS["enemy_death_animation"]
+                death_frame = jnp.clip(
+                    (
+                        (self.consts.DEMON_DEATH_ANIMATION_DURATION - state.demon_death_anim_timer[i])
+                        * death_masks.shape[0]
+                    )
+                    // self.consts.DEMON_DEATH_ANIMATION_DURATION,
+                    0,
+                    death_masks.shape[0] - 1,
+                )
+                return self.jr.render_at_clipped(
+                    r,
+                    state.demons_x[i],
+                    state.demons_y[i],
+                    death_masks[death_frame],
+                )
+
             return jax.lax.cond(
                 state.demons_alive[i],
                 lambda: jax.lax.cond(
@@ -1918,7 +1952,7 @@ class DemonAttackRenderer(JAXGameRenderer):
                     render_spawn,
                     render_normal,
                 ),
-                lambda: r,
+                lambda: jax.lax.cond(is_dying, render_death, lambda: r),
             )
 
         return jax.lax.fori_loop(0, self.consts.MAX_DEMONS, render_demon, raster)
