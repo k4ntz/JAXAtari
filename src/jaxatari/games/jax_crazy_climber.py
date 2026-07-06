@@ -814,7 +814,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             egg_state.pos_x = bird_state.pos_x
             egg_state.pos_y = 69
 
-            # calc velocity and direction depending on bird and player positions
+            # calc egg trajectory
             bird_before_player = state.bird_state.pos_x < (self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x] + 4)
 
             player_egg_height_diff = self.consts.PLAYER_Y - egg_state.pos_y
