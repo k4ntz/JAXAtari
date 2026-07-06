@@ -785,7 +785,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         should_flip_dir = (should_move 
             & (hit_right_wall | hit_left_wall) 
-            & jnp.logical_not(fly_away))
+            & ~fly_away)
 
         bird_state.dir = jnp.where(should_flip_dir, bird_state.dir * -1, bird_state.dir)
 
@@ -807,7 +807,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     def _egg_step(self, state: CrazyClimberState) -> CrazyClimberState:
         @partial(jax.jit)
         def new_egg(state: CrazyClimberState) -> EggState:
-            player_state = state.player_move_state
             bird_state = state.bird_state
             egg_state = bird_state.egg_state
 
@@ -816,24 +815,17 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             egg_state.pos_y = 69
 
             # calc velocity and direction depending on bird and player positions
-            bird_before_player = state.bird_state.pos_x < self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x]
+            bird_before_player = state.bird_state.pos_x < (self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x] + 4)
 
             player_egg_height_diff = self.consts.PLAYER_Y - egg_state.pos_y
 
-            jax.debug.print("Player x: {x}, Bird x: {y}",
-                            x=self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x],
-                            y=bird_state.pos_x)
-            jax.debug.print("y-Diff: {x}, x-Diff: {y}", 
-                            x=player_egg_height_diff,
-                            y=(self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x] - bird_state.pos_x))
-
             egg_state.dir = jnp.where(bird_before_player, 1, -1)
             egg_state.vel = jax.lax.cond(bird_before_player, 
-                lambda: jnp.round(player_egg_height_diff / (self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x] - bird_state.pos_x)).astype(jnp.int32),
-                lambda: jnp.round(player_egg_height_diff / (bird_state.pos_x - self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x])).astype(jnp.int32)
+                lambda: jnp.round(player_egg_height_diff / ((self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x] + 4) - bird_state.pos_x)).astype(jnp.int32),
+                lambda: jnp.round(player_egg_height_diff / (bird_state.pos_x - (self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x] + 4))).astype(jnp.int32)
             )
 
-            egg_state.vel = jnp.where(state.bird_state.pos_x == self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x], 0, egg_state.vel)
+            egg_state.vel = jnp.where(state.bird_state.pos_x == (self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x] + 4), 0, egg_state.vel)
             
             return egg_state
             
@@ -842,7 +834,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         egg_state = bird_state.egg_state
 
         egg_currently_active = ((egg_state.pos_y < self.consts.EGG_BORDER_BOTTOM))
-        bird_state.drop_egg = jnp.logical_not(egg_currently_active)
+        bird_state.drop_egg = ~egg_currently_active
 
         egg_state = jax.lax.cond(
             bird_state.drop_egg,
@@ -851,7 +843,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         )
         
         egg_state.pos_y = egg_state.pos_y + 1
-        egg_state.pos_x = jnp.where((egg_state.vel != 0) &(((egg_state.pos_y - 69) % egg_state.vel) == 0), 
+        egg_state.pos_x = jnp.where((egg_state.vel != 0) & (((egg_state.pos_y - 69) % egg_state.vel) == 0), 
             egg_state.pos_x + egg_state.dir, 
             egg_state.pos_x)
         
