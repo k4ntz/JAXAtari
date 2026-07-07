@@ -30,6 +30,7 @@ class PlayerMoveState:
     hand_dir: int
     pos_x: int
     falling_count: int
+    should_fall: bool
 
     @classmethod
     def new(cls):
@@ -39,7 +40,8 @@ class PlayerMoveState:
             side_step=0,
             hand_dir=1,
             pos_x=0,
-            falling_count=0
+            falling_count=0,
+            should_fall=False
         )
 
 class TowerLevelType(IntEnum):
@@ -611,7 +613,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         can_move_up = can_move_up(state)
         delta_x = jnp.where(((~can_move_left) & left) | ((~can_move_right) & right), 0, 1)
 
-        should_fall = jnp.any(falling_conds)
+        should_fall = jnp.any(falling_conds) | player_move_state.should_fall
         action_state_cases = [
             should_fall & (~is_falling),
             up & (player_move_state.main_state != PlayerStableStates.PULL_UP) & (~is_falling) & can_move_up,
@@ -630,7 +632,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         next_player_move_state = jax.lax.switch(
             branch_idx,
             [
-                lambda s: PlayerMoveState.new().replace(falling_count=160, pos_x=s.pos_x),
+                lambda s: PlayerMoveState.new().replace(falling_count=160, pos_x=s.pos_x, should_fall=False),
                 lambda s: move_upwards(s),
                 lambda s: move_upwards(s),
                 lambda s: move_downwards(s),
