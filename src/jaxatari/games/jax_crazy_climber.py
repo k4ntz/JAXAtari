@@ -629,14 +629,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 operand=s,
             )
         
-        @partial(jax.jit)
-        def update_player_move_state(s: PlayerMoveState) -> PlayerMoveState:
-            return jax.lax.cond(
-                s.falling_count > 0,
-                lambda: s.replace(falling_count=jnp.maximum(s.falling_count - 1, 0)),
-                lambda: s
-            )
-        
         def can_move_left(state: CrazyClimberState) -> bool:
             left_arm_up = (state.player_move_state.hand_dir == 1) & (state.player_move_state.main_state != PlayerStableStates.NEUTRAL)
             hand_offset = jnp.where(left_arm_up, 1, 0)
@@ -753,7 +745,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 lambda s: move_downwards(s),
                 lambda s: move_horizontal(s, -1, delta_x),
                 lambda s: move_horizontal(s, 1, delta_x),
-                lambda s: update_player_move_state(s)
+                lambda s: self.update_player_move_state(s)
             ],
             operand=player_move_state
         )
@@ -769,6 +761,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         return state.replace(
             player_move_state=next_player_move_state,
         )
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def update_player_move_state(self, s: PlayerMoveState) -> PlayerMoveState:
+        return jax.lax.cond(
+            s.falling_count > 0,
+            lambda: s.replace(falling_count=jnp.maximum(s.falling_count - 1, 0)),
+            lambda: s
+    )
     
     @partial(jax.jit, static_argnums=(0,))
     def _bird_step(self, state: CrazyClimberState) -> CrazyClimberState:
@@ -833,10 +833,15 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def check_for_collision(state: CrazyClimberState) -> bool:
             player_x = self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x]
 
-            same_x = ((player_x >= state.bird_state.egg_state.pos_x) 
-                & (player_x < (state.bird_state.egg_state.pos_x + self.consts.EGG_SIZE[1])))
-            same_y = ((self.consts.PLAYER_Y >= state.bird_state.egg_state.pos_y)
-                & (self.consts.PLAYER_Y < (state.bird_state.egg_state.pos_y + self.consts.EGG_SIZE[0])))
+            same_x = jnp.logical_or((((state.bird_state.egg_state.pos_x + self.consts.EGG_SIZE[1]) >= player_x) 
+                & ((state.bird_state.egg_state.pos_x + self.consts.EGG_SIZE[1]) <= (player_x + self.consts.PLAYER_SIZE[1]))), 
+                ((state.bird_state.egg_state.pos_x >= player_x)
+                & (state.bird_state.egg_state.pos_x <= (player_x + self.consts.PLAYER_SIZE[1]))))
+
+            same_y = jnp.logical_or((((state.bird_state.egg_state.pos_y + self.consts.EGG_SIZE[0]) >= self.consts.PLAYER_Y) 
+                & ((state.bird_state.egg_state.pos_y + self.consts.EGG_SIZE[0]) <= (self.consts.PLAYER_Y + self.consts.PLAYER_SIZE[0]))), 
+                ((state.bird_state.egg_state.pos_y >= self.consts.PLAYER_Y)
+                & (state.bird_state.egg_state.pos_y <= (self.consts.PLAYER_Y + self.consts.PLAYER_SIZE[0]))))
             
             return (same_x & same_y)
 
@@ -846,7 +851,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         egg_currently_active = ((egg_state.pos_y < self.consts.EGG_BORDER_BOTTOM))
         bird_state.drop_egg = ~egg_currently_active
 
-        state.tower_state.is_falling = check_for_collision(state)
+        player_move_state = jax.lax.cond(
+            check_for_collision(state) & ~(state.player_move_state.falling_count > 0),
+            lambda s: PlayerMoveState.new().replace(falling_count=160, pos_x=s.pos_x),
+            lambda s: self.update_player_move_state(s),
+            operand=state.player_move_state
+        )
         
         egg_state = jax.lax.cond(
             bird_state.drop_egg,
@@ -860,7 +870,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             egg_state.pos_x)
         
         bird_state.egg_state = egg_state
-        return state.replace(bird_state = bird_state)
+        return state.replace(
+            bird_state = bird_state, 
+            player_move_state=player_move_state
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _score_step(self, state: CrazyClimberState) -> CrazyClimberState:
