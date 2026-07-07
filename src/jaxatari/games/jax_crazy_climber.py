@@ -133,6 +133,7 @@ class CrazyClimberState(struct.PyTreeNode):
     score: chex.Array
     reached_apex: chex.Array
     bonus: chex.Array
+    lifes: chex.Array
     
     player_move_state: PlayerMoveState
     tower_state: TowerState
@@ -358,6 +359,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             step_counter=jnp.array(0).astype(jnp.int32),
             score=jnp.array(0).astype(jnp.int32),
             bonus=jnp.array(10000).astype(jnp.int32),
+            lifes=jnp.array(5),
             reached_apex=jnp.array(False),
             player_move_state=PlayerMoveState.new(),
             tower_state=TowerState.new(state_key),
@@ -853,12 +855,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         egg_currently_active = ((egg_state.pos_y < self.consts.EGG_BORDER_BOTTOM))
         bird_state.drop_egg = ~egg_currently_active
 
-        player_move_state = jax.lax.cond(
-            check_for_collision(state) & ~(state.player_move_state.falling_count > 0),
-            lambda s: PlayerMoveState.new().replace(falling_count=160, pos_x=s.pos_x),
-            lambda s: self.update_player_move_state(s),
-            operand=state.player_move_state
-        )
+        state.player_move_state.should_fall = check_for_collision(state)
         
         egg_state = jax.lax.cond(
             bird_state.drop_egg,
@@ -873,8 +870,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         
         bird_state.egg_state = egg_state
         return state.replace(
-            bird_state = bird_state, 
-            player_move_state=player_move_state
+            bird_state = bird_state
         )
 
     @partial(jax.jit, static_argnums=(0,))
