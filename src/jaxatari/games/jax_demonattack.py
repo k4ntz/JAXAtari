@@ -1461,14 +1461,28 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.explosion_timer,
         )
 
+        teleport_busy = state.demon_teleport_timer > 0
+        reset_teleport_for_kill = jnp.logical_and(
+            demon_killed,
+            jnp.logical_not(teleport_busy),
+        )
+
         state = state.replace(
             demons_alive=demons_alive,
             demon_status=jnp.where(killed, DEMON_STATUS_FREE, state.demon_status),
             demon_phase=jnp.where(killed, 0, state.demon_phase),
             demon_moving_right=jnp.where(killed, False, state.demon_moving_right),
             demon_moving_down=jnp.where(killed, True, state.demon_moving_down),
-            demon_teleport=jnp.where(demon_killed, jnp.argmax(killed.astype(jnp.int32)), state.demon_teleport),
-            demon_teleport_timer=jnp.where(demon_killed, 0, state.demon_teleport_timer),
+            demon_teleport=jnp.where(
+                reset_teleport_for_kill,
+                jnp.argmax(killed.astype(jnp.int32)),
+                state.demon_teleport,
+            ),
+            demon_teleport_timer=jnp.where(
+                reset_teleport_for_kill,
+                0,
+                state.demon_teleport_timer,
+            ),
             demon_death_anim_timer=jnp.where(
                 killed,
                 self.consts.DEMON_DEATH_ANIMATION_DURATION,
