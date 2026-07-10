@@ -1,0 +1,47 @@
+ALG_NAME: "pqn"
+TOTAL_TIMESTEPS: 1e8
+TOTAL_TIMESTEPS_DECAY: 1e8
+NUM_ENVS: 512
+NUM_STEPS: 32
+EPS_START: 1.0
+EPS_FINISH: 0.001
+EPS_DECAY: 0.1
+NUM_EPOCHS: 2
+NUM_MINIBATCHES: 32
+NORM_TYPE: "layer_norm"
+LR: 1e-3
+MAX_GRAD_NORM: 10
+LR_LINEAR_DECAY: False
+GAMMA: 0.99
+LAMBDA: 0.65
+
+# env specific
+ENV_NAME: "mspacman"
+ENV_KWARGS: {}
+OBJECT_CENTRIC: False
+PIXEL_GRAYSCALE: True
+PIXEL_RESIZE: True
+PIXEL_RESIZE_SHAPE: [84, 84]
+USE_NATIVE_DOWNSCALING: True
+
+# Train on the base game, evaluate generalization against every mspacman mod
+TRAIN_MODS: null
+EVAL_MODS:
+  - random_power_pellets
+  - speed_frenzy
+  - fragile_ghosts
+  - greedy_pacman
+  - cozy_start
+  - invisible_dots
+  - ghost_magnetism
+  - teleportation_error
+
+TEST_DURING_TRAINING: False
+TEST_INTERVAL: 0.1
+TEST_NUM_ENVS: 128
+TEST_NUM_STEPS: 10000
+EPS_TEST: 0.0
+RECORD_VIDEO: True
+
+RECORD_FINAL_VIDEO: True
+VIDEO_MAX_STEPS: 1000
