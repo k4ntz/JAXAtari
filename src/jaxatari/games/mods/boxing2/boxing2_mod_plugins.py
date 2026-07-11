@@ -119,9 +119,9 @@ class DifficultyMediumMod(JaxAtariInternalModPlugin):
     constants_overrides = {
         "DIFFICULTY_PRESET": "normal",
         "CPU_UPDATE_MASK": 3,
-        "CPU_AGGR_WINNING": 40,
-        "CPU_AGGR_LOSING": 20,
-        "CPU_DANCING_DURATION": 40,
+        "CPU_AGGR_WINNING": 55,
+        "CPU_AGGR_LOSING": 35,
+        "CPU_DANCING_DURATION": 30,
     }
 
 
@@ -135,9 +135,9 @@ class DifficultyHardMod(JaxAtariInternalModPlugin):
     constants_overrides = {
         "DIFFICULTY_PRESET": "hard",
         "CPU_UPDATE_MASK": 1,
-        "CPU_AGGR_WINNING": 70,
-        "CPU_AGGR_LOSING": 50,
-        "CPU_DANCING_DURATION": 20,
+        "CPU_AGGR_WINNING": 90,
+        "CPU_AGGR_LOSING": 70,
+        "CPU_DANCING_DURATION": 10,
     }
 
 
@@ -155,3 +155,50 @@ class DifficultyImpossibleMod(JaxAtariInternalModPlugin):
         "CPU_AGGR_LOSING": 100,
         "CPU_DANCING_DURATION": 0,
     }
+
+class PeacefulEnemyMod(JaxAtariInternalModPlugin):
+    """
+    Peaceful Enemy Mod:
+    - The CPU never punches. It inherits the base difficulty's movement and targeting behavior, but we intercept its logic to remove the FIRE button without breaking recursion.
+    """
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _cpu_logic(self, state: BoxingState):
+        p1_pos = state.pos[0]
+        p2_pos = state.pos[1]
+        
+        is_cpu_on_right = p2_pos[0] >= p1_pos[0]
+        sign_x = jnp.where(is_cpu_on_right, 1.0, -1.0)
+        
+        target_x = state.cpu_target_x + sign_x * (20.0 + (state.cpu_horiz_offset - 16.0))
+        target_y = state.cpu_target_y + (state.cpu_vert_offset - 32.0)
+        
+        target_x = jnp.clip(target_x, self._env.consts.XMIN, self._env.consts.XMAX)
+        target_y = jnp.clip(target_y, self._env.consts.YMIN, self._env.consts.YMAX)
+        
+        move_right = target_x > p2_pos[0]
+        move_left = target_x < p2_pos[0]
+        move_down = target_y > p2_pos[1]
+        move_up = target_y < p2_pos[1]
+        
+        dancing = state.cpu_dancing_value >= 16
+        cpu_not_hit = state.stun_timer[1] == 0
+        reverse_horiz = jnp.logical_and(dancing, cpu_not_hit)
+        
+        move_right_final = jnp.where(reverse_horiz, move_left, move_right)
+        move_left_final = jnp.where(reverse_horiz, move_right, move_left)
+        
+        dx = jnp.where(move_right_final, 1, jnp.where(move_left_final, -1, 0))
+        dy = jnp.where(move_down, 1, jnp.where(move_up, -1, 0))
+        
+        # We completely strip out the "should_punch" and "strike_decision" blocks,
+        # so the CPU simply returns the movement action.
+        
+        act = jnp.where(dy == -1,
+            jnp.where(dx == 1, Action.UPRIGHT, jnp.where(dx == -1, Action.UPLEFT, Action.UP)),
+            jnp.where(dy == 1,
+                jnp.where(dx == 1, Action.DOWNRIGHT, jnp.where(dx == -1, Action.DOWNLEFT, Action.DOWN)),
+                jnp.where(dx == 1, Action.RIGHT, jnp.where(dx == -1, Action.LEFT, Action.NOOP))
+            )
+        )
+        return act

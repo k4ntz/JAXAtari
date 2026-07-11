@@ -189,6 +189,11 @@ def main():
         action=argparse.BooleanOptionalAction,
         help="Enable profiling.",
     )
+    parser.add_argument(
+        "--debug-render",
+        action="store_true",
+        help="Enable debug rendering (if supported by the game renderer).",
+    )
 
     args = parser.parse_args()
 
@@ -249,7 +254,26 @@ def main():
     reset_counter = 0
     jitted_reset = jax.jit(env.reset)
     jitted_step = jax.jit(env.step)
-    jitted_render = jax.jit(env.render)
+    import inspect
+    try:
+        sig = inspect.signature(env.render)
+        has_debug = "debug" in sig.parameters
+    except Exception:
+        has_debug = False
+
+    jitted_render_normal = jax.jit(env.render)
+    if has_debug:
+        jitted_render_debug = jax.jit(lambda s: env.render(s, debug=True))
+    else:
+        jitted_render_debug = jitted_render_normal
+
+    debug_render_enabled = args.debug_render
+
+    def jitted_render(s):
+        if debug_render_enabled:
+            return jitted_render_debug(s)
+        else:
+            return jitted_render_normal(s)
 
     # initialize the environment with the first reset key (or JSON state if --load-state)
     load_path = args.load_state if not args.replay else None
@@ -403,6 +427,9 @@ def main():
                             frame_by_frame = not frame_by_frame
                         elif event.key == pygame.K_n:
                             next_frame_asked = True
+                        elif event.key == pygame.K_d:
+                            debug_render_enabled = not debug_render_enabled
+                            print(f"Debug rendering: {'ENABLED' if debug_render_enabled else 'DISABLED'}")
 
                 if pause or (frame_by_frame and not next_frame_asked):
                     image = jitted_render(state)
