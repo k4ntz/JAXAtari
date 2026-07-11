@@ -1,7 +1,8 @@
 import os
 from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.boxing2.boxing2_mod_plugins import (
-    CenterEnemyMod, AlwaysPunchEnemyMod, DifficultyEasyMod, DifficultyMediumMod, DifficultyHardMod, DifficultyImpossibleMod, PeacefulEnemyMod
+    CenterEnemyMod, AlwaysPunchEnemyMod, DifficultyEasyMod, DifficultyMediumMod, DifficultyHardMod, DifficultyImpossibleMod,
+    PeacefulEnemyMod
 )
 
 class Boxing2EnvMod(JaxAtariModController):
