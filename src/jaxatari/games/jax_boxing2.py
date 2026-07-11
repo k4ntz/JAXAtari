@@ -143,8 +143,8 @@ class BoxingConstants(struct.PyTreeNode):
     # Boxer dimensions
     W_BOXER: int = 14
     H_BOXER: int = 47
-    FACE_MIN_Y: float = 15.0
-    FACE_MAX_Y: float = 32.0
+    FACE_MIN_Y: float = 9.0
+    FACE_MAX_Y: float = 27.0
     
     # Movement
     MOVE_SPEED: float = 0.8
@@ -181,6 +181,7 @@ class BoxingConstants(struct.PyTreeNode):
     CPU_AGGR_LOSING: int = 20
     CPU_DANCING_DURATION: int = 40
     PLAYER_FACE_SHRINK_Y: float = 1.0
+    ENEMY_PEACEFUL: bool = False
 
 
 # =============================================================================
@@ -411,6 +412,7 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             Action.UPLEFTFIRE, Action.UPRIGHTFIRE, Action.DOWNLEFTFIRE, Action.DOWNRIGHTFIRE
         ], dtype=jnp.int32)
         fire = jnp.any(action_int == fire_actions)
+        fire = jnp.where(jnp.logical_and(idx == 1, self.consts.ENEMY_PEACEFUL), False, fire)
         
         curr_state = state.punch_state[idx]
         curr_cooldown = state.punch_cooldown[idx]
