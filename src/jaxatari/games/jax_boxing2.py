@@ -31,28 +31,28 @@ DIFFICULTY_PRESETS = {
         "CPU_AGGR_WINNING": 20,       # Low punch rate when winning
         "CPU_AGGR_LOSING": 10,        # Very low punch rate when losing
         "CPU_DANCING_DURATION": 60,   # Retreats for a long time when hit
-        "PLAYER_FACE_SHRINK_Y": 0.0,
+        "PLAYER_FACE_SHRINK_Y": -1.0,
     },
     "normal": {
         "CPU_UPDATE_MASK": 3,         # Updates target every ~4 frames
         "CPU_AGGR_WINNING": 55,       # Slightly higher aggressiveness
         "CPU_AGGR_LOSING": 35,        # Slightly higher aggressiveness
         "CPU_DANCING_DURATION": 30,   # Slightly shorter retreat duration
-        "PLAYER_FACE_SHRINK_Y": 1.0,
+        "PLAYER_FACE_SHRINK_Y": 0.0,
     },
     "hard": {
         "CPU_UPDATE_MASK": 1,         # Updates target every ~2 frames (extremely fast)
         "CPU_AGGR_WINNING": 90,       # Very high pressure, constant punches
         "CPU_AGGR_LOSING": 70,        # Very high pressure
         "CPU_DANCING_DURATION": 10,   # Recovers and fights back almost instantly
-        "PLAYER_FACE_SHRINK_Y": 1.0,
+        "PLAYER_FACE_SHRINK_Y": 0.0,
     },
     "impossible": {
         "CPU_UPDATE_MASK": 0,         # Updates target every frame (instantaneous reactions)
         "CPU_AGGR_WINNING": 120,      # Maximum pressure
         "CPU_AGGR_LOSING": 100,       # Aggressive pushback
         "CPU_DANCING_DURATION": 0,    # Strictly never retreats; fights back instantly
-        "PLAYER_FACE_SHRINK_Y": 2.0,
+        "PLAYER_FACE_SHRINK_Y": 1.0,
     }
 }
 
@@ -143,34 +143,37 @@ class BoxingConstants(struct.PyTreeNode):
     # Boxer dimensions
     W_BOXER: int = 14
     H_BOXER: int = 47
-    FACE_MIN_Y: float = 9.0
-    FACE_MAX_Y: float = 27.0
+    FACE_MIN_Y: int = 14
+    FACE_MAX_Y: int = 32
+    TOP_ARM_Y: int = 5
+    BOT_ARM_Y: int = 39
     
     # Movement
-    MOVE_SPEED: float = 0.8
-    KNOCKBACK_DIST: float = 3.0
+    PLAYER_SPEED: int = 1
+    ENEMY_SPEED: int = 1
+    KNOCKBACK_DIST: int = 3
     STUN_DURATION: int = 12
     
     # Hit projection (knockback) animation constants
     HIT_ANIMATION_STEPS: int = 15
-    KNOCKBACK_TOP_ARM_DY: float = -2.0  # Vertical move per step if hit by opponent top arm (up)
-    KNOCKBACK_BOT_ARM_DY: float = 2.0   # Vertical move per step if hit by opponent bottom arm (down)
-    KNOCKBACK_DX: float = 1.0           # Horizontal move (backward) per step
+    KNOCKBACK_TOP_ARM_DY: int = -2  # Vertical move per step if hit by opponent top arm (up)
+    KNOCKBACK_BOT_ARM_DY: int = 2   # Vertical move per step if hit by opponent bottom arm (down)
+    KNOCKBACK_DX: int = 1           # Horizontal move (backward) per step
     
     # Punch Mechanics
     PUNCH_STATE_MAX: int = 4
     PUNCH_COOLDOWN: int = 8   # Delay between punches
-    JAB_DIST: float = 27.0    # Distance for 1pt hit
-    POWER_DIST: float = 16.0  # Distance for 2pt hit
+    JAB_DIST: int = 27    # Distance for 1pt hit
+    POWER_DIST: int = 16  # Distance for 2pt hit
     
     # Game rules
     MAX_SCORE: int = 100
     TOTAL_TIME: int = 7200 # 2 minutes at 60Hz
     
     # Starting positions
-    P1_START_X: float = 95.0
-    P2_START_X: float = 50.0
-    START_Y: float = 82.0
+    P1_START_X: int = 95
+    P2_START_X: int = 50
+    START_Y: int = 82
 
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
@@ -180,8 +183,9 @@ class BoxingConstants(struct.PyTreeNode):
     CPU_AGGR_WINNING: int = 40
     CPU_AGGR_LOSING: int = 20
     CPU_DANCING_DURATION: int = 40
-    PLAYER_FACE_SHRINK_Y: float = 1.0
+    PLAYER_FACE_SHRINK_Y: int = 0
     ENEMY_PEACEFUL: bool = False
+    SHOW_COLLISION_ZONE: bool = False
 
 
 # =============================================================================
@@ -208,8 +212,8 @@ class BoxingState:
     cpu_dancing_value: chex.Array  # Timer controlling CPU "dancing" behavior
     # Hit animation state
     hit_anim_timer: chex.Array     # [2] (int32) remaining steps
-    hit_anim_dx: chex.Array        # [2] (float32) horizontal movement per step
-    hit_anim_dy: chex.Array        # [2] (float32) vertical movement per step
+    hit_anim_dx: chex.Array        # [2] (int32) horizontal movement per step
+    hit_anim_dy: chex.Array        # [2] (int32) vertical movement per step
 
 
 @struct.dataclass
@@ -271,7 +275,7 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
     def reset(self, key: chex.PRNGKey) -> Tuple[BoxingObservation, BoxingState]:
         key, subkey = jax.random.split(key)
         pos = jnp.array([[self.consts.P1_START_X, self.consts.START_Y],
-                         [self.consts.P2_START_X, self.consts.START_Y]], dtype=jnp.float32)
+                         [self.consts.P2_START_X, self.consts.START_Y]], dtype=jnp.int32)
         orientation = jnp.array([
             (pos[0, 0] > pos[1, 0]).astype(jnp.int32),
             (pos[1, 0] > pos[0, 0]).astype(jnp.int32)
@@ -288,14 +292,14 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             timer=jnp.array(self.consts.TOTAL_TIME, dtype=jnp.int32),
             done=jnp.array(False),
             key=subkey,
-            cpu_target_x=jnp.array(self.consts.P1_START_X, dtype=jnp.float32),
-            cpu_target_y=jnp.array(self.consts.START_Y, dtype=jnp.float32),
+            cpu_target_x=jnp.array(self.consts.P1_START_X, dtype=jnp.int32),
+            cpu_target_y=jnp.array(self.consts.START_Y, dtype=jnp.int32),
             cpu_horiz_offset=jnp.array(0, dtype=jnp.int32),
             cpu_vert_offset=jnp.array(0, dtype=jnp.int32),
             cpu_dancing_value=jnp.array(0, dtype=jnp.int32),
             hit_anim_timer=jnp.array([0, 0], dtype=jnp.int32),
-            hit_anim_dx=jnp.array([0.0, 0.0], dtype=jnp.float32),
-            hit_anim_dy=jnp.array([0.0, 0.0], dtype=jnp.float32),
+            hit_anim_dx=jnp.array([0, 0], dtype=jnp.int32),
+            hit_anim_dy=jnp.array([0, 0], dtype=jnp.int32),
         )
         return self._get_observation(state), state
 
@@ -346,7 +350,7 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
     def _get_reward(self, state: BoxingState, new_state: BoxingState) -> jnp.ndarray:
         p1_points = new_state.score[0] - state.score[0]
         p2_points = new_state.score[1] - state.score[1]
-        return (p1_points - p2_points).astype(jnp.float32)
+        return p1_points - p2_points
 
     def _get_done(self, state: BoxingState) -> jnp.ndarray:
         return state.done
@@ -382,20 +386,16 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         left = jnp.isin(action, jnp.array([Action.LEFT, Action.UPLEFT, Action.DOWNLEFT, Action.LEFTFIRE, Action.UPLEFTFIRE, Action.DOWNLEFTFIRE]))
         right = jnp.isin(action, jnp.array([Action.RIGHT, Action.UPRIGHT, Action.DOWNRIGHT, Action.RIGHTFIRE, Action.UPRIGHTFIRE, Action.DOWNRIGHTFIRE]))
         
-        dx = jnp.where(right, 1.0, jnp.where(left, -1.0, 0.0))
-        dy = jnp.where(down, 1.0, jnp.where(up, -1.0, 0.0))
-        
-        # Normalize diagonal movement
-        norm = jnp.sqrt(dx**2 + dy**2 + 1e-8)
-        dx = jnp.where(norm > 1.0, dx / norm, dx)
-        dy = jnp.where(norm > 1.0, dy / norm, dy)
+        dx = jnp.where(right, 1, jnp.where(left, -1, 0))
+        dy = jnp.where(down, 1, jnp.where(up, -1, 0))
         
         # Calculate move velocities
-        move_dx = jnp.where(hit_active, state.hit_anim_dx[idx], dx * self.consts.MOVE_SPEED)
-        move_dy = jnp.where(hit_active, state.hit_anim_dy[idx], dy * self.consts.MOVE_SPEED)
+        speed = jnp.where(idx == 0, self.consts.PLAYER_SPEED, self.consts.ENEMY_SPEED)
+        move_dx = jnp.where(hit_active, state.hit_anim_dx[idx], dx * speed)
+        move_dy = jnp.where(hit_active, state.hit_anim_dy[idx], dy * speed)
         
         can_move = jnp.logical_or(hit_active, state.stun_timer[idx] == 0)
-        new_pos = pos + jnp.where(can_move, jnp.array([move_dx, move_dy]), 0.0)
+        new_pos = pos + jnp.where(can_move, jnp.array([move_dx, move_dy]), 0)
         
         # Boundary clamping
         new_pos = jnp.array([
@@ -581,7 +581,7 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         )
         return act
 
-    def step(self, state: BoxingState, action: chex.Array) -> Tuple[BoxingObservation, BoxingState, float, bool, BoxingInfo]:
+    def step(self, state: BoxingState, action: chex.Array) -> Tuple[BoxingObservation, BoxingState, int, bool, BoxingInfo]:
         key, cpu_key = jax.random.split(state.key)
         state = replace(state, key=cpu_key)
         
@@ -603,15 +603,15 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         collision = jnp.logical_and(overlap_x > 0, overlap_y > 0)
         
         # Determine push direction based on the axis of minimum overlap
-        sign_x = jnp.where(dx >= 0.0, 1.0, -1.0)
-        sign_y = jnp.where(dy >= 0.0, 1.0, -1.0)
+        sign_x = jnp.where(dx >= 0, 1, -1)
+        sign_y = jnp.where(dy >= 0, 1, -1)
         
-        push_x = jnp.where(overlap_x < overlap_y, sign_x * overlap_x, 0.0)
-        push_y = jnp.where(overlap_x >= overlap_y, sign_y * overlap_y, 0.0)
+        push_x = jnp.where(overlap_x < overlap_y, sign_x * overlap_x, 0)
+        push_y = jnp.where(overlap_x >= overlap_y, sign_y * overlap_y, 0)
         push = jnp.stack([push_x, push_y])
         
-        new_p1_pos = jnp.where(collision, new_p1_pos + push * 0.5, new_p1_pos)
-        new_p2_pos = jnp.where(collision, new_p2_pos - push * 0.5, new_p2_pos)
+        new_p1_pos = jnp.where(collision, new_p1_pos + push // 2, new_p1_pos)
+        new_p2_pos = jnp.where(collision, new_p2_pos - push // 2, new_p2_pos)
         
         # Clamp again after collision push
         new_p1_pos = jnp.clip(new_p1_pos, jnp.array([self.consts.XMIN, self.consts.YMIN]), jnp.array([self.consts.XMAX, self.consts.YMAX]))
@@ -648,24 +648,38 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             a_pos = s.pos[attacker_idx]
             d_pos = s.pos[defender_idx]
             
-            # Separate horizontal and vertical distance checks for axis-aligned punch geometry
-            h_dist = jnp.abs(a_pos[0] - d_pos[0])
-            
-            # Top arm is at y, bottom arm is at y + 34. Opponent face is [d_pos[1] + FACE_MIN_Y, d_pos[1] + FACE_MAX_Y].
-            punch_y = jnp.where(s.punch_arm[attacker_idx] == 0, a_pos[1], a_pos[1] + 34)
-            
-            face_shrink = jnp.where(defender_idx == 0, self.consts.PLAYER_FACE_SHRINK_Y, 0.0)
-            min_y = d_pos[1] + self.consts.FACE_MIN_Y + face_shrink
-            max_y = d_pos[1] + self.consts.FACE_MAX_Y - face_shrink
-            in_vert_range = jnp.logical_and(punch_y >= min_y, punch_y <= max_y)
-            
             p_state = s.punch_state[attacker_idx]
             not_hit_yet = jnp.logical_not(s.has_hit[attacker_idx])
             d_not_stunned = s.stun_timer[defender_idx] == 0
             
-            # Per description:
-            # State 3: Almost fully extended -> Long Jab (1pt)
-            # State 4: Fully extended -> Power Punch (2pt)
+            punch_y = jnp.where(s.punch_arm[attacker_idx] == 0, a_pos[1] + self.consts.TOP_ARM_Y, a_pos[1] + self.consts.BOT_ARM_Y)
+            face_shrink = jnp.where(defender_idx == 0, self.consts.PLAYER_FACE_SHRINK_Y, 0)
+            min_y = d_pos[1] + self.consts.FACE_MIN_Y + face_shrink
+            max_y = d_pos[1] + self.consts.FACE_MAX_Y - face_shrink
+            
+            in_power_vert_range = jnp.logical_and(punch_y >= min_y, punch_y <= max_y)
+            in_jab_vert_range = jnp.logical_and(punch_y >= min_y + 6, punch_y <= max_y - 6)
+            
+            face_x_min = d_pos[0]
+            face_x_max = d_pos[0] + self.consts.W_BOXER
+
+            a_orient = s.orientation[attacker_idx]
+            frame_map = jnp.array([0, 0, 0, 1, 1, 1, 0, 0, 2, 2, 3, 3, 3, 2, 2, 0, 0, 0])
+            anim_frame = frame_map[p_state]
+            
+            start_r = jnp.array([10, 10, 14, 14])[anim_frame]
+            start_l = jnp.array([0, 0, -8, -16])[anim_frame]
+            glove_w = jnp.array([4, 4, 8, 16])[anim_frame]
+            
+            glove_x_min = jnp.where(a_orient == 0, a_pos[0] + start_r, a_pos[0] + start_l)
+            glove_x_max = glove_x_min + glove_w
+            
+            in_power_horiz_range = jnp.logical_and(glove_x_max >= face_x_min, glove_x_min <= face_x_max)
+            
+            # Shrink face box horizontally by 4px on each side for Jab
+            jab_face_x_min = face_x_min + 4
+            jab_face_x_max = face_x_max - 4
+            in_jab_horiz_range = jnp.logical_and(glove_x_max >= jab_face_x_min, glove_x_min <= jab_face_x_max)
             
             # Jab states: (8, 9)
             is_jab_state = jnp.isin(p_state, jnp.array([8, 9]))
@@ -673,18 +687,14 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             # Power states: (10, 11) - we remove 12 so that holding the arm extended doesn't register hits
             is_power_state = jnp.isin(p_state, jnp.array([10, 11]))
  
-            # We only register a Jab if we are in the horizontal jab range 
-            # (and not too close, as that would be a Power Punch opportunity)
-            is_jab = jnp.logical_and(is_jab_state, 
-                                     jnp.logical_and(h_dist < self.consts.JAB_DIST, h_dist >= self.consts.POWER_DIST))
-            
-            # We only register a Power Punch if we are in horizontal power range
-            is_power = jnp.logical_and(is_power_state, h_dist < self.consts.POWER_DIST)
+            is_jab = jnp.logical_and(is_jab_state, jnp.logical_and(in_jab_horiz_range, in_jab_vert_range))
+            is_power = jnp.logical_and(is_power_state, jnp.logical_and(in_power_horiz_range, in_power_vert_range))
             
             valid_hit = jnp.logical_and(jnp.logical_or(is_jab, is_power), 
-                                         jnp.logical_and(in_vert_range, jnp.logical_and(not_hit_yet, d_not_stunned)))
+                                         jnp.logical_and(not_hit_yet, d_not_stunned))
             
-            points = jnp.where(valid_hit, jnp.where(is_power, 2, 1), 0)
+            # Jab (short, deep hit) = 2 points, Power/Normal (long, extended hit) = 1 point
+            points = jnp.where(valid_hit, jnp.where(is_jab, 2, 1), 0)
             
             return valid_hit, points
  
@@ -720,12 +730,12 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         new_hit_anim_timer = new_hit_anim_timer.at[1].set(jnp.where(p1_hit, self.consts.HIT_ANIMATION_STEPS, new_hit_anim_timer[1]))
  
         new_hit_anim_dx = state.hit_anim_dx
-        new_hit_anim_dx = new_hit_anim_dx.at[0].set(jnp.where(p2_hit, p1_back_dx, jnp.where(new_hit_anim_timer[0] > 0, state.hit_anim_dx[0], 0.0)))
-        new_hit_anim_dx = new_hit_anim_dx.at[1].set(jnp.where(p1_hit, p2_back_dx, jnp.where(new_hit_anim_timer[1] > 0, state.hit_anim_dx[1], 0.0)))
+        new_hit_anim_dx = new_hit_anim_dx.at[0].set(jnp.where(p2_hit, p1_back_dx, jnp.where(new_hit_anim_timer[0] > 0, state.hit_anim_dx[0], 0)))
+        new_hit_anim_dx = new_hit_anim_dx.at[1].set(jnp.where(p1_hit, p2_back_dx, jnp.where(new_hit_anim_timer[1] > 0, state.hit_anim_dx[1], 0)))
  
         new_hit_anim_dy = state.hit_anim_dy
-        new_hit_anim_dy = new_hit_anim_dy.at[0].set(jnp.where(p2_hit, p1_kb_dy, jnp.where(new_hit_anim_timer[0] > 0, state.hit_anim_dy[0], 0.0)))
-        new_hit_anim_dy = new_hit_anim_dy.at[1].set(jnp.where(p1_hit, p2_kb_dy, jnp.where(new_hit_anim_timer[1] > 0, state.hit_anim_dy[1], 0.0)))
+        new_hit_anim_dy = new_hit_anim_dy.at[0].set(jnp.where(p2_hit, p1_kb_dy, jnp.where(new_hit_anim_timer[0] > 0, state.hit_anim_dy[0], 0)))
+        new_hit_anim_dy = new_hit_anim_dy.at[1].set(jnp.where(p1_hit, p2_kb_dy, jnp.where(new_hit_anim_timer[1] > 0, state.hit_anim_dy[1], 0)))
         
         new_dancing = jnp.where(p1_hit, self.consts.CPU_DANCING_DURATION, state.cpu_dancing_value).astype(jnp.int32)
         
@@ -860,9 +870,9 @@ class BoxingRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0, 2))
     def render(self, state: BoxingState, debug: bool = False) -> jnp.ndarray:
-        raster = self.jr.create_object_raster(self.BACKGROUND)
+        raster_empty = self.jr.create_object_raster(self.BACKGROUND)
         
-        raster = self._render_boxer(raster, state.pos[0].astype(jnp.int32), 
+        raster = self._render_boxer(raster_empty, state.pos[0].astype(jnp.int32), 
                                     state.stun_timer[0] > 0, state.punch_state[0], 
                                     state.punch_arm[0], self.white_masks, state.orientation[0])
                                     
@@ -886,68 +896,114 @@ class BoxingRenderer(JAXGameRenderer):
         raster = self.jr.render_label(raster, 70, 5, min_digit, self.SHAPE_MASKS["digits_time"], spacing=0)
         raster = self.jr.render_label(raster, 82, 5, sec_digits, self.SHAPE_MASKS["digits_time"], spacing=8)
 
-        if debug:
-            # Player 0 (White) glove hitbox calculation
-            p0_state = state.punch_state[0]
-            is_jab0 = jnp.isin(p0_state, jnp.array([8, 9]))
-            is_power0 = jnp.isin(p0_state, jnp.array([10, 11]))
-            is_any_punch0 = jnp.logical_or(is_jab0, is_power0)
-            
-            punch0_y = jnp.where(state.punch_arm[0] == 0, state.pos[0, 1], state.pos[0, 1] + 34.0)
-            
-            x_r0 = jnp.where(is_jab0, state.pos[0, 0] + self.consts.POWER_DIST, state.pos[0, 0])
-            w_r0 = jnp.where(is_jab0, self.consts.JAB_DIST - self.consts.POWER_DIST, self.consts.POWER_DIST)
-            
-            x_l0 = jnp.where(is_jab0, state.pos[0, 0] - self.consts.JAB_DIST, state.pos[0, 0] - self.consts.POWER_DIST)
-            w_l0 = jnp.where(is_jab0, self.consts.JAB_DIST - self.consts.POWER_DIST, self.consts.POWER_DIST)
-            
-            glove0_x = jnp.where(state.orientation[0] == 0, x_r0, x_l0)
-            glove0_w = jnp.where(state.orientation[0] == 0, w_r0, w_l0)
-            glove0_y = punch0_y - 1.0
-            glove0_h = 3.0
-            
-            glove0_pos = jnp.where(is_any_punch0, jnp.array([glove0_x, glove0_y]), jnp.array([-1.0, -1.0]))
-            glove0_size = jnp.where(is_any_punch0, jnp.array([glove0_w, glove0_h]), jnp.array([0.0, 0.0]))
-            
-            # Player 1 (Black) glove hitbox calculation
-            p1_state = state.punch_state[1]
-            is_jab1 = jnp.isin(p1_state, jnp.array([8, 9]))
-            is_power1 = jnp.isin(p1_state, jnp.array([10, 11]))
-            is_any_punch1 = jnp.logical_or(is_jab1, is_power1)
-            
-            punch1_y = jnp.where(state.punch_arm[1] == 0, state.pos[1, 1], state.pos[1, 1] + 34.0)
-            
-            x_r1 = jnp.where(is_jab1, state.pos[1, 0] + self.consts.POWER_DIST, state.pos[1, 0])
-            w_r1 = jnp.where(is_jab1, self.consts.JAB_DIST - self.consts.POWER_DIST, self.consts.POWER_DIST)
-            
-            x_l1 = jnp.where(is_jab1, state.pos[1, 0] - self.consts.JAB_DIST, state.pos[1, 0] - self.consts.POWER_DIST)
-            w_l1 = jnp.where(is_jab1, self.consts.JAB_DIST - self.consts.POWER_DIST, self.consts.POWER_DIST)
-            
-            glove1_x = jnp.where(state.orientation[1] == 0, x_r1, x_l1)
-            glove1_w = jnp.where(state.orientation[1] == 0, w_r1, w_l1)
-            glove1_y = punch1_y - 1.0
-            glove1_h = 3.0
-            
-            glove1_pos = jnp.where(is_any_punch1, jnp.array([glove1_x, glove1_y]), jnp.array([-1.0, -1.0]))
-            glove1_size = jnp.where(is_any_punch1, jnp.array([glove1_w, glove1_h]), jnp.array([0.0, 0.0]))
-            
-            # Draw Face Hitboxes in Red
-            face0_shrink = self.consts.PLAYER_FACE_SHRINK_Y
-            face1_shrink = 0.0
-            
-            face_positions = jnp.array([
-                [state.pos[0, 0], state.pos[0, 1] + self.consts.FACE_MIN_Y + face0_shrink],
-                [state.pos[1, 0], state.pos[1, 1] + self.consts.FACE_MIN_Y + face1_shrink],
-            ])
-            face_sizes = jnp.array([
-                [self.consts.W_BOXER, self.consts.FACE_MAX_Y - self.consts.FACE_MIN_Y - 2 * face0_shrink],
-                [self.consts.W_BOXER, self.consts.FACE_MAX_Y - self.consts.FACE_MIN_Y - 2 * face1_shrink],
-            ])
-            raster = self.jr.draw_rects(raster, face_positions, face_sizes, self.DEBUG_RED_ID)
-            
-            # Draw Glove Hitboxes in Green
-            glove_positions = jnp.stack([glove0_pos, glove1_pos])
-            glove_sizes = jnp.stack([glove0_size, glove1_size])
-            raster = self.jr.draw_rects(raster, glove_positions, glove_sizes, self.DEBUG_GREEN_ID)
+        # Hitbox calculations (always computed, cheap)
+        frame_map = jnp.array([0, 0, 0, 1, 1, 1, 0, 0, 2, 2, 3, 3, 3, 2, 2, 0, 0, 0])
+        
+        # Start offsets from pos[0] and widths for each frame (0=idle, 1=retract, 2=jab, 3=power)
+        start_offsets_r = jnp.array([10.0, 10.0, 14.0, 14.0])
+        widths = jnp.array([4.0, 4.0, 8.0, 16.0])
+        start_offsets_l = jnp.array([0.0, 0.0, -8.0, -16.0])
+        
+        # Player 0
+        p0_state = state.punch_state[0]
+        anim_frame0 = frame_map[p0_state]
+        top_frame0 = jnp.where(jnp.logical_and(p0_state > 0, state.punch_arm[0] == 0), anim_frame0, 0)
+        bot_frame0 = jnp.where(jnp.logical_and(p0_state > 0, state.punch_arm[0] == 1), anim_frame0, 0)
+        
+        y_top0 = state.pos[0, 1] + self.consts.TOP_ARM_Y - 1.0
+        y_bot0 = state.pos[0, 1] + self.consts.BOT_ARM_Y - 1.0
+        
+        w_top0 = widths[top_frame0]
+        x_r_top0 = state.pos[0, 0] + start_offsets_r[top_frame0]
+        x_l_top0 = state.pos[0, 0] + start_offsets_l[top_frame0]
+        x_top0 = jnp.where(state.orientation[0] == 0, x_r_top0, x_l_top0)
+        
+        w_bot0 = widths[bot_frame0]
+        x_r_bot0 = state.pos[0, 0] + start_offsets_r[bot_frame0]
+        x_l_bot0 = state.pos[0, 0] + start_offsets_l[bot_frame0]
+        x_bot0 = jnp.where(state.orientation[0] == 0, x_r_bot0, x_l_bot0)
+        
+        # Player 1
+        p1_state = state.punch_state[1]
+        anim_frame1 = frame_map[p1_state]
+        top_frame1 = jnp.where(jnp.logical_and(p1_state > 0, state.punch_arm[1] == 0), anim_frame1, 0)
+        bot_frame1 = jnp.where(jnp.logical_and(p1_state > 0, state.punch_arm[1] == 1), anim_frame1, 0)
+        
+        y_top1 = state.pos[1, 1] + self.consts.TOP_ARM_Y - 1.0
+        y_bot1 = state.pos[1, 1] + self.consts.BOT_ARM_Y - 1.0
+        
+        w_top1 = widths[top_frame1]
+        x_r_top1 = state.pos[1, 0] + start_offsets_r[top_frame1]
+        x_l_top1 = state.pos[1, 0] + start_offsets_l[top_frame1]
+        x_top1 = jnp.where(state.orientation[1] == 0, x_r_top1, x_l_top1)
+        
+        w_bot1 = widths[bot_frame1]
+        x_r_bot1 = state.pos[1, 0] + start_offsets_r[bot_frame1]
+        x_l_bot1 = state.pos[1, 0] + start_offsets_l[bot_frame1]
+        x_bot1 = jnp.where(state.orientation[1] == 0, x_r_bot1, x_l_bot1)
+        
+        face0_shrink = self.consts.PLAYER_FACE_SHRINK_Y
+        face1_shrink = 0.0
+        face_positions = jnp.array([
+            [state.pos[0, 0], state.pos[0, 1] + self.consts.FACE_MIN_Y + face0_shrink],
+            [state.pos[1, 0], state.pos[1, 1] + self.consts.FACE_MIN_Y + face1_shrink],
+        ])
+        face_sizes = jnp.array([
+            [self.consts.W_BOXER, self.consts.FACE_MAX_Y - self.consts.FACE_MIN_Y - 2 * face0_shrink],
+            [self.consts.W_BOXER, self.consts.FACE_MAX_Y - self.consts.FACE_MIN_Y - 2 * face1_shrink],
+        ])
+        jab_face_positions = jnp.array([
+            [state.pos[0, 0] + 4, state.pos[0, 1] + self.consts.FACE_MIN_Y + face0_shrink + 6],
+            [state.pos[1, 0] + 4, state.pos[1, 1] + self.consts.FACE_MIN_Y + face1_shrink + 6],
+        ])
+        jab_face_sizes = jnp.array([
+            [self.consts.W_BOXER - 8, self.consts.FACE_MAX_Y - self.consts.FACE_MIN_Y - 2 * face0_shrink - 12],
+            [self.consts.W_BOXER - 8, self.consts.FACE_MAX_Y - self.consts.FACE_MIN_Y - 2 * face1_shrink - 12],
+        ])
+        glove_positions = jnp.array([
+            [x_top0, y_top0], [x_bot0, y_bot0],
+            [x_top1, y_top1], [x_bot1, y_bot1]
+        ])
+        glove_sizes = jnp.array([
+            [w_top0, 3.0], [w_bot0, 3.0],
+            [w_top1, 3.0], [w_bot1, 3.0]
+        ])
 
-        return self.jr.render_from_palette(raster, self.PALETTE)
+        def apply_debug_solid(r):
+            r = self.jr.draw_rects(r, face_positions, face_sizes, self.DEBUG_RED_ID)
+            r = self.jr.draw_rects(r, glove_positions, glove_sizes, self.DEBUG_GREEN_ID)
+            return r
+
+        raster = jax.lax.cond(debug, apply_debug_solid, lambda r: r, raster)
+        base_img = self.jr.render_from_palette(raster, self.PALETTE)
+        
+        def blend_hitboxes(img):
+            # Create a blank raster to draw hitboxes
+            hitbox_mask = jnp.zeros_like(raster)
+            
+            # Use 1 to mark outer face pixels and gloves (highly transparent)
+            hitbox_mask = self.jr.draw_rects(hitbox_mask, face_positions, face_sizes, 1)
+            hitbox_mask = self.jr.draw_rects(hitbox_mask, glove_positions, glove_sizes, 1)
+            
+            # Use 2 to mark inner face pixels for Jab (less transparent)
+            hitbox_mask = self.jr.draw_rects(hitbox_mask, jab_face_positions, jab_face_sizes, 2)
+            
+            is_hitbox_1 = jnp.expand_dims(hitbox_mask == 1, axis=-1)
+            is_hitbox_2 = jnp.expand_dims(hitbox_mask == 2, axis=-1)
+            
+            red_color = jnp.array([255, 0, 0], dtype=jnp.float32)
+            # Highly transparent (25% opacity) for normal punch detection zone and gloves
+            blended_1 = (img.astype(jnp.float32) * 0.75 + red_color * 0.25).astype(jnp.uint8)
+            # Less transparent (70% opacity) for jab detection zone
+            blended_2 = (img.astype(jnp.float32) * 0.3 + red_color * 0.7).astype(jnp.uint8)
+            
+            img = jnp.where(is_hitbox_1, blended_1, img)
+            img = jnp.where(is_hitbox_2, blended_2, img)
+            return img
+
+        return jax.lax.cond(
+            self.consts.SHOW_COLLISION_ZONE,
+            blend_hitboxes,
+            lambda x: x,
+            base_img
+        )

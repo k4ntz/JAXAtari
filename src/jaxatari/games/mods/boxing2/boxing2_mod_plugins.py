@@ -166,3 +166,11 @@ class PeacefulEnemyMod(JaxAtariInternalModPlugin):
     constants_overrides = {
         "ENEMY_PEACEFUL": True,
     }
+
+class ShowCollisionZoneMod(JaxAtariInternalModPlugin):
+    """
+    Shows the collision zones (face and gloves) as semi-transparent red boxes.
+    """
+    constants_overrides = {
+        "SHOW_COLLISION_ZONE": True,
+    }
