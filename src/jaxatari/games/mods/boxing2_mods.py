@@ -2,7 +2,7 @@ import os
 from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.boxing2.boxing2_mod_plugins import (
     CenterEnemyMod, AlwaysPunchEnemyMod, DifficultyEasyMod, DifficultyMediumMod, DifficultyHardMod, DifficultyImpossibleMod,
-    PeacefulEnemyMod
+    PeacefulEnemyMod, ShowCollisionZoneMod
 )
 
 class Boxing2EnvMod(JaxAtariModController):
@@ -24,6 +24,7 @@ class Boxing2EnvMod(JaxAtariModController):
         "difficulty_hard": DifficultyHardMod,
         "difficulty_impossible": DifficultyImpossibleMod,
         "peaceful_enemy": PeacefulEnemyMod,
+        "show_collision_zone": ShowCollisionZoneMod,
     }
 
     def __init__(
