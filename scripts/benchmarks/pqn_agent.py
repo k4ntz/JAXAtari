@@ -554,7 +554,7 @@ def make_train(config):
 
     return train
 
-def _generate_single_final_video(
+def _generate_single_video(
     config,
     params,
     batch_stats,
@@ -568,10 +568,11 @@ def _generate_single_final_video(
     env = jaxatari.make(config["ENV_NAME"].lower(), mods=mods_config)
     renderer = env.renderer
 
-    # Apply wrappers
-    env = AtariWrapper(env)
+    # Apply wrappers (mirrors apply_wrappers() in make_train, so eval matches training exactly)
+    env = AtariWrapper(env, sticky_actions=0.0)
     if config.get("OBJECT_CENTRIC", False):
         env = ObjectCentricWrapper(env)
+        env = NormalizeObservationWrapper(env)
         env = FlattenObservationWrapper(env)
     else:
         grayscale = config.get("PIXEL_GRAYSCALE", False)
@@ -579,7 +580,6 @@ def _generate_single_final_video(
         resize_shape = config.get("PIXEL_RESIZE_SHAPE", [84, 84])
         use_native_downscaling = config.get("USE_NATIVE_DOWNSCALING", True)
         env = PixelObsWrapper(env, do_pixel_resize=do_resize, pixel_resize_shape=resize_shape, grayscale=grayscale, use_native_downscaling=use_native_downscaling)
-    env = NormalizeObservationWrapper(env)
     env = LogWrapper(env)
 
     # Create network
@@ -683,7 +683,7 @@ def generate_final_video(config, params, batch_stats, seed_idx=0, env_step=None)
             video_configs.append((mods_config, mod_label))
 
     for video_index, (mods_config, video_label) in enumerate(video_configs):
-        _generate_single_final_video(
+        _generate_single_video(
             config,
             params,
             batch_stats,
