@@ -190,7 +190,7 @@ class EpisodeStatistics:
     returned_episode_lengths: jnp.array
 
 
-def single_run(network: Network | MLP_Network, actor: Actor, critic: Critic, config: dict, task_id: str, agent_state: TrainState, ewc_fisher = None, ewc_params = None, max_D = None):
+def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: Actor, critic: Critic, config: dict, task_id: str, agent_state: TrainState, ewc_fisher = None, ewc_params = None, max_D = None):
     config = {k.upper(): v for k, v in config.items() if k != "alg"}
 
     if isinstance(config.get("TRAIN_MODS"), list):
@@ -199,10 +199,6 @@ def single_run(network: Network | MLP_Network, actor: Actor, critic: Critic, con
         config["EVAL_MODS"] = tuple(config["EVAL_MODS"])
 
     config["ENV_ID"] = task_id
-
-    config["BATCH_SIZE"] = int(config["NUM_ENVS"] * config["NUM_STEPS"])
-    config["MINIBATCH_SIZE"] = int(config["BATCH_SIZE"] // config["NUM_MINIBATCHES"])
-    config["NUM_ITERATIONS"] = int(config["TIMESTEPS_PER_TASK"] // config["BATCH_SIZE"])
 
     run_name = f'{config["ENV_ID"]}_{config["EXP_NAME"]}_{"oc" if not config["PIXEL_BASED"] else "pixel"}_{config["SEED"]}'
 
@@ -214,16 +210,14 @@ def single_run(network: Network | MLP_Network, actor: Actor, critic: Critic, con
             mods=list(config["TRAIN_MODS"]), 
             pixel_based=config["PIXEL_BASED"], 
             native_downscaling=config["NATIVE_DOWNSCALING"], 
-            pixel_resize_shape=config["PIXEL_RESIZE_SHAPE"], 
+            pixel_resize_shape=tuple(config["PIXEL_RESIZE_SHAPE"]), 
             smooth_image=config["SMOOTH_IMAGE"], 
             frame_stack=config["FRAME_STACK"]
         )()
-    
+    padding_width = max_D - env.observation_space().shape[-1] if not config["PIXEL_BASED"] else 0
     def pad_obs(obs):
         """Zero-pad object-centric observations"""
-        # TODO: Don't need to compute pad_width every time
-        pad_width = max_D - obs.shape[-1]
-        return jnp.pad(obs, ((0, 0), (0, 0), (0, pad_width)))
+        return jnp.pad(obs, ((0, 0), (0, padding_width)))
 
     # vmap and squeeze observations in order to get (B, F, H, W, 1) -> (B, F, H, W),
     # where F is the frame stack which becomes the channel for the convolutions
@@ -337,7 +331,8 @@ def single_run(network: Network | MLP_Network, actor: Actor, critic: Critic, con
             # returns the penalty (scalar) for one pytree leaf (array)
             return (f * (p - p_star) ** 2).sum()
         
-        # TODO: params also includes the critic, but we only want to restrict the network and actor params. 
+        # params also includes the critic; we only want to restrict the network and actor params. 
+        # no problem, because ewc_fisher values for all critic params are zero anyways
         penalties = jax.tree.map(param_penalty, params, ewc_params, ewc_fisher) # pytree with shape of params pytree, but leaves are scalars instead of arrays
         return 0.5 * sum(jax.tree.leaves(penalties))    # sum over scalar leaves to get a single scalar penalty
 
@@ -453,6 +448,9 @@ def single_run(network: Network | MLP_Network, actor: Actor, critic: Critic, con
             run_name=f"{run_name}-eval",
             Model=(Network, Actor, Critic) if config["PIXEL_BASED"] else (MLP_Network, Actor, Critic),
             seed=config["SEED"],
+            object_centric=not config["PIXEL_BASED"],
+            padding_width=padding_width,
+
         )
         wandb.log({"eval/episodic_return_mod": np.mean(jax.device_get(episodic_returns)), "step": iteration})
 
@@ -483,7 +481,16 @@ def single_run(network: Network | MLP_Network, actor: Actor, critic: Critic, con
         # Apply wrappers just for the agent's observations, like in pqn_agent.
         fake_env = jaxatari.make(config["ENV_ID"])
         renderer_local = fake_env.renderer
-        env = make_env(config["ENV_ID"], config["SEED"], 1, mods_config, config["PIXEL_BASED"], config["NATIVE_DOWNSCALING"], config["SMOOTH_IMAGE"], eval=True)() 
+        env = make_env(
+            env_id=config["ENV_ID"], 
+            seed=config["SEED"], 
+            num_envs=1, 
+            mods=mods_config, 
+            pixel_based=config["PIXEL_BASED"], 
+            native_downscaling=config["NATIVE_DOWNSCALING"], 
+            pixel_resize_shape=tuple(config["PIXEL_RESIZE_SHAPE"]),
+            smooth_image=config["SMOOTH_IMAGE"], 
+            eval=True)() 
 
         # Reset environment
         rng = jax.random.PRNGKey(config["SEED"] + video_index * 10000)
@@ -498,7 +505,8 @@ def single_run(network: Network | MLP_Network, actor: Actor, critic: Critic, con
         for step in range(max_steps):
             # PPO network expects (B, F, H, W)
             policy_obs = obs[None, ...]
-
+            if not config["PIXEL_BASED"]:
+                policy_obs = jnp.pad(policy_obs, (0, max_D - policy_obs.shape[-1]))
             hidden = network.apply(agent_state.params.network_params, policy_obs)
             logits = actor.apply(agent_state.params.actor_params, hidden)
             action = jnp.argmax(logits, axis=-1)[0]
@@ -724,7 +732,9 @@ def continual_run(config: dict):
         # returns a pytree with the same structure as params, leaf arrays have the same shape as in params, they hold the diagonal fisher information for each parameter
         new_fisher = jax.tree.map(lambda g: jnp.mean(g ** 2, axis=0), per_sample_grads)
 
-        # TODO: I don't think this is correct. We need to store the FIM (and ewc_params) for every task. Completing a task adds another penalty term to the next
+        # TODO: This is Online EWC without decay. For standard EWC, we need to store the FIM (and ewc_params) for every task. Completing a task adds another penalty term to the next.
+        # No decay means the fisher values will keep increasing, leading to reduced plasticity
+        # TODO: Implement actual Online EWC with decay: https://arxiv.org/pdf/1805.06370
         # Accumulate across tasks; sum Fisher diagonals
         if ewc_fisher is not None:
             new_fisher = jax.tree.map(jnp.add, ewc_fisher, new_fisher)
@@ -738,6 +748,10 @@ def continual_run(config: dict):
     key = jax.random.PRNGKey(config["SEED"])
     key, network_key, actor_key, critic_key = jax.random.split(key, 4)
     key, obs_sample_key1, obs_sample_key2, obs_sample_key3 = jax.random.split(key, 4)
+
+    config["BATCH_SIZE"] = int(config["NUM_ENVS"] * config["NUM_STEPS"])
+    config["MINIBATCH_SIZE"] = int(config["BATCH_SIZE"] // config["NUM_MINIBATCHES"])
+    config["NUM_ITERATIONS"] = int(config["TIMESTEPS_PER_TASK"] // config["BATCH_SIZE"])
 
     # dummy observation to initialize the network; shape is (1, F, H, W) for pixel-based or (1, F, D) for object-centric
     # Problem: In object-centric, the observation space is different for each game
@@ -754,7 +768,7 @@ def continual_run(config: dict):
                 mods=list(config["TRAIN_MODS"]), 
                 pixel_based=config["PIXEL_BASED"], 
                 native_downscaling=config["NATIVE_DOWNSCALING"], 
-                pixel_resize_shape=config["PIXEL_RESIZE_SHAPE"], 
+                pixel_resize_shape=tuple(config["PIXEL_RESIZE_SHAPE"]), 
                 smooth_image=config["SMOOTH_IMAGE"], 
                 frame_stack=config["FRAME_STACK"]
             )()
@@ -794,7 +808,7 @@ def continual_run(config: dict):
     ewc_params = None
     for task_id in config["TASKS"]:
         # we get back the updated agent_state and the storage from the rollout
-        agent_state, storage = single_run(network, actor, critic, config, task_id, agent_state, ewc_fisher, ewc_params, max_D)
+        agent_state, storage = single_run(key, network, actor, critic, config, task_id, agent_state, ewc_fisher, ewc_params, max_D)
 
         # EWC: Compute Fisher Information Matrix and snapshot θ* at the end of the task
         # TODO: could the full storage be too large and cause memory issues?

@@ -7,7 +7,7 @@ EVAL_EVERY: 1000
 
 PIXEL_BASED: False
 NATIVE_DOWNSCALING: True
-PIXEL_RESIZE_SHAPE: (84, 84)
+PIXEL_RESIZE_SHAPE: [84, 84]
 SMOOTH_IMAGE: False
 
 FRAME_STACK: 4
@@ -16,8 +16,8 @@ SAVE_MODEL: True
 UPLOAD_MODEL: False
 HF_ENTITY: ""
 
-TASKS: [pong, breakout, space_invaders] # TODO: replaces ENV_ID
-TIMESTEPS_PER_TASK: 10000000  # TODO: replaces TOTAL_TIMESTEPS
+TASKS: [tennis, pong] # replaces ENV_ID
+TIMESTEPS_PER_TASK: 1000000  # replaces TOTAL_TIMESTEPS
 TRAIN_MODS: []  # TODO: how do the mods work? How to allow for continual learning between mods of the same task?
 EVAL_MODS: []
 
