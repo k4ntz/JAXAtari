@@ -21,6 +21,8 @@ DEMON_STATUS_FREE = 0
 DEMON_STATUS_SPAWNING = 1
 DEMON_STATUS_NORMAL = 2
 DEMON_STATUS_SMALL = 3
+BEHAVIOR_NORMAL = 0
+BEHAVIOR_DIVE = 1
 SPLIT_DEATH_NONE = 0
 SPLIT_DEATH_PRIMARY = 1
 SPLIT_DEATH_SECONDARY = 2
@@ -301,6 +303,14 @@ class DemonAttackConstants(AutoDerivedConstants):
     SPLIT_DEMONS_START_WAVE: int = struct.field(pytree_node=False, default=4) # starting in this wave, demons split after a hit
     TRACKING_PROJECTILES_START_WAVE: int = struct.field(pytree_node=False, default=8) # starting in this wave, the demons begin using projectiles that follow the demon
 
+    DIVE_TRIGGER_MASK: int = struct.field(pytree_node=False, default=63)  # controls trigger frequency (trigger policy detail)
+    DIVE_SEGMENT_DURATION: int = struct.field(pytree_node=False, default=50)  # frames per V segment
+    DIVE_WAVE_UP_DURATION: int = struct.field(pytree_node=False, default=20) # how many frames of the segment are for the upward motion (the rest is downward)
+    DIVE_WAVE_AMPLITUDE_PIXELS: int = struct.field(pytree_node=False, default=18)
+    DIVE_X_SPEED_FRAC: int = struct.field(pytree_node=False, default=160) # accumulator change. 255 = 1 pixel/frame net horizontal movement
+    DIVE_NET_DOWN_SPEED_FRAC: int = struct.field(pytree_node=False, default=80) # accumulator change. 255 = 1 pixel/frame net downward movement
+    DIVE_DESPAWN_Y: int = struct.field(pytree_node=False, default=170)  # "slightly above the ground"
+
     # Coordinates & Sizes. Sizes are (height, width).
     PLAYER_X: int = struct.field(pytree_node=False, default=87)
     PLAYER_Y: int = struct.field(pytree_node=False, default=174)
@@ -380,6 +390,7 @@ class DemonAttackState(struct.PyTreeNode):
     demon_split_secondary_alive: chex.Array  # Lower small demon remains independently killable
     demon_status: chex.Array  # Per-slot status: free, spawning, normal, or small
     demon_phase: chex.Array  # Per-slot movement phase, 0..7
+    demon_mode: chex.Array  # int32, BEHAVIOR_NORMAL or BEHAVIOR_DIVE per slot
     demon_moving_right: chex.Array  # Per-slot horizontal direction
     demon_moving_down: chex.Array  # Per-slot vertical direction
     demon_teleport: chex.Array  # Slot currently scheduled for spawn or spawn completion
@@ -388,6 +399,8 @@ class DemonAttackState(struct.PyTreeNode):
     demon_random: chex.Array  # Deterministic 8-bit generator used by movement and spawn timing
     demon_death_anim_timer: chex.Array
     demon_split_death_part: chex.Array
+    demon_dive_segment_step: chex.Array  # int32, frames elapsed in the current V-segment
+    demon_dive_x_dir: chex.Array  # bool, moving right during current segment
 
     bomb_x: chex.Array
     bomb_y: chex.Array
@@ -507,6 +520,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_random=jnp.array(self.consts.DEMON_INITIAL_RANDOM, dtype=jnp.int32),
             demon_death_anim_timer=zeros,
             demon_split_death_part=zeros,
+            demon_mode=zeros,
+            demon_dive_segment_step=zeros,
+            demon_dive_x_dir=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
         )
 
     def _initial_bomb_values(self):
@@ -912,13 +928,17 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 state.demon_split_primary_alive,
             ),
         )
+        not_diving = state.demon_mode == BEHAVIOR_NORMAL
         return jnp.logical_and(
-            lowest,
+            not_diving,
             jnp.logical_and(
-                active,
+                lowest,
                 jnp.logical_and(
-                    state.spawn_pause_timer <= 0,
-                    state.demon_death_anim_timer <= 0,
+                    active,
+                    jnp.logical_and(
+                        state.spawn_pause_timer <= 0,
+                        state.demon_death_anim_timer <= 0,
+                    ),
                 ),
             ),
         )
@@ -969,6 +989,25 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         return tracking_direction
 
+    def _select_dive_starts(self, state: DemonAttackState) -> chex.Array:
+        """Return a boolean mask of which demon slots should switch into dive mode this frame.
+
+        Only the lowest slot is eligible. Only a small (split) demon may dive,
+        and only once its sibling half has died.
+        """
+        ids = jnp.arange(self.consts.MAX_DEMONS)
+        lowest = ids == self.consts.MAX_DEMONS - 1
+        is_small = self._is_small_demon_status(state.demon_status)
+        lone_survivor = jnp.logical_xor(
+            state.demon_split_primary_alive, state.demon_split_secondary_alive
+        )
+        return (
+                lowest
+                & is_small
+                & lone_survivor
+                & (state.demon_mode == BEHAVIOR_NORMAL)
+        )
+
     def _laser_step(self, state: DemonAttackState, action: chex.Array) -> DemonAttackState:
         # Fire laser if not active and FIRE action
         fire = jnp.logical_or(
@@ -1000,8 +1039,125 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         return state.replace(laser_x=laser_x, laser_y=laser_y, laser_active=laser_active)
 
+    def _dive_demons_step(
+            self,
+            state: DemonAttackState,
+            active_mask: chex.Array,
+            can_move: chex.Array,
+    ) -> dict:
+        """Dive-attack movement for BEHAVIOR_DIVE slots.
+        The movement is made up of V-shaped horizontal segments.
+        The movement direction per segment is fixed, so overshoot past the player is
+        expected. Re-targets toward the player's current x only at the end of a segment.
+        The overall downward trend is realized by the net down speed, The wave segments
+        are added on top of that base trajectory.
+        Despawns a diving demon once it reaches DIVE_DESPAWN_Y, freeing its slot for the
+        existing teleport/respawn mechanism.
+        active_mask: a bitmask that defines which demons are supposed to dive
+        can_move: boolean array from check if demons are ready
+        """
+        stepping = can_move & active_mask
+
+        # Constants - must be defined in self.consts
+        SEGMENT_DURATION = self.consts.DIVE_SEGMENT_DURATION
+        X_SPEED_FRAC = self.consts.DIVE_X_SPEED_FRAC
+        NET_DOWN_SPEED_FRAC = self.consts.DIVE_NET_DOWN_SPEED_FRAC
+        WAVE_UP_DURATION = self.consts.DIVE_WAVE_UP_DURATION  # frames for upstroke
+        WAVE_AMPLITUDE_PIXELS = self.consts.DIVE_WAVE_AMPLITUDE_PIXELS  # pixels
+        DESPAWN_Y = self.consts.DIVE_DESPAWN_Y
+
+        # Derived constants
+        WAVE_DOWN_DURATION = SEGMENT_DURATION - WAVE_UP_DURATION
+
+        # Wave speeds: move up by WAVE_AMPLITUDE_PIXELS during upstroke,
+        # then down by WAVE_AMPLITUDE_PIXELS during downstroke (net wave movement = 0)
+        WAVE_UP_SPEED = -WAVE_AMPLITUDE_PIXELS * 256 // WAVE_UP_DURATION
+        WAVE_DOWN_SPEED = WAVE_AMPLITUDE_PIXELS * 256 // WAVE_DOWN_DURATION
+
+        # Current state
+        demons_x = state.demons_x
+        demons_y = state.demons_y
+        demon_x_motion_accumulator = state.demon_x_motion_accumulator
+        demon_y_motion_accumulator = state.demon_y_motion_accumulator
+        demon_dive_x_dir = state.demon_dive_x_dir
+        demon_dive_segment_step = state.demon_dive_segment_step
+        demon_status = state.demon_status
+        demon_mode = state.demon_mode
+
+        # Pass-through state
+        demon_moving_right = state.demon_moving_right
+        demon_moving_down = state.demon_moving_down
+        demon_phase = state.demon_phase
+
+        # Determine wave phase
+        is_up_stroke = demon_dive_segment_step < WAVE_UP_DURATION
+
+        # X speed: direction from dive_x_dir
+        x_speed = jnp.where(demon_dive_x_dir, X_SPEED_FRAC, -X_SPEED_FRAC)
+
+        # Y speed: net down + wave component
+        y_speed = NET_DOWN_SPEED_FRAC + jnp.where(
+            is_up_stroke,
+            WAVE_UP_SPEED,
+            WAVE_DOWN_SPEED
+        )
+
+        # Update motion sums
+        x_motion_sum = demon_x_motion_accumulator + x_speed
+        y_motion_sum = demon_y_motion_accumulator + y_speed
+
+        # Calculate pixels to move (supports >255 speeds)
+        x_pixels = x_motion_sum // 256
+        y_pixels = y_motion_sum // 256
+
+        # Apply movement
+        demons_x = jnp.where(stepping, demons_x + x_pixels, demons_x)
+        demons_y = jnp.where(stepping, demons_y + y_pixels, demons_y)
+
+        # Update accumulators (modulo 256)
+        demon_x_motion_accumulator = jnp.where(
+            stepping, x_motion_sum % 256, demon_x_motion_accumulator)
+        demon_y_motion_accumulator = jnp.where(
+            stepping, y_motion_sum % 256, demon_y_motion_accumulator)
+
+        # Increment segment step
+        demon_dive_segment_step = jnp.where(
+            stepping, demon_dive_segment_step + 1, demon_dive_segment_step)
+
+        # Check for segment end
+        segment_end = stepping & (demon_dive_segment_step >= SEGMENT_DURATION)
+
+        # At segment end: reset step, flip x_dir if overshot
+        player_x = state.player_x
+        overshot = (demon_dive_x_dir & (demons_x > player_x)) | (~demon_dive_x_dir & (demons_x < player_x))
+        demon_dive_x_dir = jnp.where(segment_end & overshot, ~demon_dive_x_dir, demon_dive_x_dir)
+        demon_dive_segment_step = jnp.where(segment_end, 0, demon_dive_segment_step)
+
+        # Despawn check
+        despawn = stepping & (demons_y >= DESPAWN_Y)
+        demon_status = jnp.where(despawn, DEMON_STATUS_FREE, demon_status)
+        demon_mode = jnp.where(despawn, BEHAVIOR_NORMAL, demon_mode)
+
+        # Reset dive state for despawned demons
+        demon_dive_segment_step = jnp.where(despawn, 0, demon_dive_segment_step)
+        demon_dive_x_dir = jnp.where(despawn, True, demon_dive_x_dir)
+
+        return {
+            "demons_x": demons_x,
+            "demons_y": demons_y,
+            "demon_moving_right": demon_moving_right,
+            "demon_moving_down": demon_moving_down,
+            "demon_phase": demon_phase,
+            "demon_x_motion_accumulator": demon_x_motion_accumulator,
+            "demon_y_motion_accumulator": demon_y_motion_accumulator,
+            "demon_dive_x_dir": demon_dive_x_dir,
+            "demon_dive_segment_step": demon_dive_segment_step,
+            "demon_status": demon_status,
+            "demon_mode": demon_mode,
+        }
+
     def _demons_step(self, state: DemonAttackState) -> DemonAttackState:
-        """Advance demon spawn scheduling, movement phases, and movement.
+        """Advance demon spawn scheduling, dive triggering, and movement.
 
         A single selected slot is nudged toward its vertical spacing target each frame,
         free slots are scheduled through ``demon_teleport_timer``, and normal
@@ -1014,6 +1170,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         # Movement is globally paused while demons are not ready, and locally
         # paused for the demon currently emitting a burst.
+        # This check applies to both normal and diving demons.
         can_move = jnp.logical_and(
             self._is_active_demon_status(state.demon_status),
             jnp.logical_and(
@@ -1051,6 +1208,24 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             can_move,
             jnp.logical_not(source_blocks_primary),
         )
+
+        # --- Run dive behavior ---
+
+        # Trigger dive: decide who starts diving this frame.
+        dive_start = self._select_dive_starts(state)
+        state = state.replace(
+            demon_mode=jnp.where(dive_start, BEHAVIOR_DIVE, state.demon_mode),
+            demon_dive_segment_step=jnp.where(dive_start, 0, state.demon_dive_segment_step),
+            demon_dive_x_dir=jnp.where(
+                dive_start, state.demons_x < state.player_x, state.demon_dive_x_dir
+            ),
+        )
+        secondary_is_diver = jnp.logical_and(
+            state.demon_split_secondary_alive,
+            jnp.logical_not(state.demon_split_primary_alive),
+        )
+
+        # --- Run normal behavior ---
 
         # One slot per frame is nudged toward its spacing target. The random
         # direction flip keeps horizontal motion from becoming fully periodic.
@@ -1200,11 +1375,18 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_moving_right,
         )
 
+        # Move small (split) demons: either one tracks while the other sweeps, or dive.
+        not_diving = jnp.logical_and(
+            state.demon_mode == BEHAVIOR_NORMAL,
+            jnp.logical_not(dive_start),
+        )
         primary_split_mask, secondary_sweep_mask = self._split_part_active(
             demon_status,
             state.demon_split_primary_alive,
             state.demon_split_secondary_alive,
         )
+        primary_split_mask = jnp.logical_and(primary_split_mask, not_diving)
+        secondary_sweep_mask = jnp.logical_and(secondary_sweep_mask, not_diving)
         source_paused = jnp.logical_and(burst_in_progress, source_ids)
         primary_split_can_track = jnp.logical_and(
             slot_move,
@@ -1247,26 +1429,60 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             bottom,
         )), self.consts.DEMON_MIN_Y, self.consts.DEMON_MAX_Y).astype(jnp.int32)
 
+        demon_x_motion_accumulator = jnp.where(
+            can_move,
+            x_motion_sum & 255,
+            state.demon_x_motion_accumulator,
+        )
+        demon_y_motion_accumulator = jnp.where(
+            can_move,
+            y_motion_sum & 255,
+            state.demon_y_motion_accumulator,
+        )
+
+        # --- Apply dive or normal behavior, based on each demon's mode ---
+        dive_seed_x = jnp.where(secondary_is_diver, state.demon_split_x, state.demons_x)
+        state = state.replace(
+            demons_x=jnp.where(dive_start, dive_seed_x, state.demons_x),
+            demon_mode=jnp.where(dive_start, BEHAVIOR_DIVE, state.demon_mode),
+            demon_dive_segment_step=jnp.where(dive_start, 0, state.demon_dive_segment_step),
+            demon_dive_x_dir=jnp.where(dive_start, dive_seed_x < state.player_x, state.demon_dive_x_dir),
+        )
+        is_diving = state.demon_mode == BEHAVIOR_DIVE
+        dive = self._dive_demons_step(state, is_diving, can_move)
+
+        demons_x = jnp.where(is_diving, dive["demons_x"], demons_x)
+        demons_y = jnp.where(is_diving, dive["demons_y"], demons_y)
+        demon_moving_right = jnp.where(is_diving, dive["demon_moving_right"], demon_moving_right)
+        demon_moving_down = jnp.where(is_diving, dive["demon_moving_down"], demon_moving_down)
+        demon_phase = jnp.where(is_diving, dive["demon_phase"], demon_phase)
+        demon_x_motion_accumulator = jnp.where(is_diving, dive["demon_x_motion_accumulator"], demon_x_motion_accumulator)
+        demon_y_motion_accumulator = jnp.where(is_diving, dive["demon_y_motion_accumulator"], demon_y_motion_accumulator)
+        demon_dive_x_dir = dive["demon_dive_x_dir"]
+        demon_dive_segment_step = dive["demon_dive_segment_step"]
+        demon_status = jnp.where(is_diving, dive["demon_status"], demon_status)
+        demon_mode = dive["demon_mode"]
+
+        # Copy the x-pos computed by the dive to the secondary demon if it's the one diving
+        demon_split_x = jnp.where(
+            jnp.logical_and(is_diving, secondary_is_diver),
+            demons_x,
+            demon_split_x,
+        )
+
         # Store the state, then derive the public alive mask and wave-spawned count.
         state = state.replace(
             demons_x=demons_x,
-            demon_split_x=demon_split_x,
-            demon_split_moving_right=demon_split_moving_right,
             demons_y=demons_y,
-            demon_x_motion_accumulator=jnp.where(
-                slot_move,
-                x_motion_sum & 255,
-                state.demon_x_motion_accumulator,
-            ),
-            demon_y_motion_accumulator=jnp.where(
-                slot_move,
-                y_motion_sum & 255,
-                state.demon_y_motion_accumulator,
-            ),
+            demon_x_motion_accumulator=demon_x_motion_accumulator,
+            demon_y_motion_accumulator=demon_y_motion_accumulator,
             demon_status=demon_status,
+            demon_mode=demon_mode,
             demon_phase=demon_phase,
             demon_moving_right=demon_moving_right,
             demon_moving_down=demon_moving_down,
+            demon_split_x=demon_split_x,
+            demon_split_moving_right=demon_split_moving_right,
             demon_teleport=demon_teleport,
             demon_teleport_timer=jnp.where(
                 start_spawn,
@@ -1292,6 +1508,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 self.consts.SPAWN_MOVE_PAUSE,
                 state.spawn_pause_timer,
             ),
+            demon_dive_x_dir=demon_dive_x_dir,
+            demon_dive_segment_step=demon_dive_segment_step,
         )
         return self._sync_demon_status(state)
 
@@ -1535,7 +1753,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
     def _handle_collisions(self, state: DemonAttackState) -> DemonAttackState:
-        # Laser vs Demons
+        # --- Laser vs Demons ---
         laser_right = state.laser_x + self.consts.LASER_SIZE[1]
         laser_bottom = state.laser_y + self.consts.LASER_SIZE[0]
 
@@ -1642,6 +1860,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             new_status = s_status.at[i].set(
                 jnp.where(split_demon, DEMON_STATUS_SMALL, status_after_hit)
             )
+            new_status
             new_primary_alive = s_primary_alive.at[i].set(new_primary_alive_value)
             new_secondary_alive = s_secondary_alive.at[i].set(new_secondary_alive_value)
             new_score = jnp.where(demon_hit, s_score + 10 + state.wave_pattern * 2, s_score)
@@ -1699,26 +1918,52 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 self.consts.DEMON_SIZE[1] - self.consts.SMALL_DEMON_SIZE[1]
         )
 
-        # Bomb vs Player
+        # --- Demon sprite vs Player sprite collision ---
+        player_right = state.player_x + self.consts.PLAYER_SIZE[1]
+        player_bottom = self.consts.PLAYER_Y + self.consts.PLAYER_SIZE[0]
+
+        def check_demon_player_collision(i, carry):
+            demon_hit_player = carry
+            # Only check alive demons that have finished spawning
+            demon_can_hit = jnp.logical_and(state.demons_alive[i], state.spawn_anim_timer[i] <= 0)
+
+            demon_right = state.demons_x[i] + self.consts.DEMON_SIZE[1]
+            demon_bottom = state.demons_y[i] + self.consts.DEMON_SIZE[0]
+
+            overlaps_horizontally = jnp.logical_and(
+                state.demons_x[i] < player_right,
+                demon_right > state.player_x,
+            )
+            overlaps_vertically = jnp.logical_and(
+                state.demons_y[i] < player_bottom,
+                demon_bottom > self.consts.PLAYER_Y,
+            )
+            collision = jnp.logical_and(overlaps_horizontally, overlaps_vertically)
+
+            return jnp.logical_or(demon_hit_player, jnp.logical_and(demon_can_hit, collision))
+
+        any_demon_player_contact = jax.lax.fori_loop(
+            0,
+            self.consts.MAX_DEMONS,
+            check_demon_player_collision,
+            False,
+        )
+
+        # Demon Bombs vs Player
         bomb_width, _ = self._bomb_observation_size(state)
         player_right = state.player_x + self.consts.PLAYER_SIZE[1]
         player_bottom = self.consts.PLAYER_Y + self.consts.PLAYER_SIZE[0]
         bomb_right = state.bomb_x + bomb_width
         bomb_top, bomb_bottom = self._bomb_collision_y_bounds(state)
-        player_hit = jnp.logical_and(
-            state.bomb_active,
-            jnp.logical_and(
-                bomb_right > state.player_x,
-                jnp.logical_and(
-                    state.bomb_x < player_right,
-                    jnp.logical_and(
-                        bomb_top < player_bottom,
-                        bomb_bottom > self.consts.PLAYER_Y,
-                    ),
-                )
-            )
-        )
-        any_player_hit = jnp.any(player_hit)
+        bomb_player_hit = jnp.any(state.bomb_active & (
+                (bomb_right > state.player_x) &
+                (state.bomb_x < player_right) &
+                (bomb_top < player_bottom) &
+                (bomb_bottom > self.consts.PLAYER_Y)
+        ))
+
+        # Check if either demons or demon bombs have hit the player
+        any_player_hit = jnp.logical_or(any_demon_player_contact, bomb_player_hit)
 
         bunker_available = state.lives > 0
         lives = jnp.where(
@@ -1773,6 +2018,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_split_primary_alive=jnp.where(killed, False, demon_split_primary_alive),
             demon_split_secondary_alive=jnp.where(killed, False, demon_split_secondary_alive),
             demon_status=demon_status,
+            demon_mode=jnp.where(killed, BEHAVIOR_NORMAL, state.demon_mode),  # <-- add this
             demon_phase=jnp.where(killed, 0, state.demon_phase),
             demon_moving_right=jnp.where(killed, False, state.demon_moving_right),
             demon_moving_down=jnp.where(killed, True, state.demon_moving_down),
