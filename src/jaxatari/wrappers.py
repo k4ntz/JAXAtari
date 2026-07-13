@@ -16,7 +16,6 @@ from jax import flatten_util
 from jaxatari.environment import EnvState, JAXAtariAction as Action
 import jaxatari.spaces as spaces
 import numpy as np
-from jaxatari.rendering.jax_rendering_utils import RendererConfig
 
 class JaxatariWrapper(object):
     """Base class for JAXAtark wrappers."""
@@ -28,6 +27,113 @@ class JaxatariWrapper(object):
     def __getattr__(self, name):
         return getattr(self._env, name)
     
+class NoiseWrapper(JaxatariWrapper):
+    """
+    Adds Gaussian noise and random detection dropping to object-centric observations.
+    Apply this wrapper between AtariWrapper and the observation wrappers
+    (ObjectCentricWrapper, PixelObsWrapper, or PixelAndObjectCentricWrapper).
+
+    Args:
+        env: The environment to wrap (typically AtariWrapper).
+        detect_prob: Probability of keeping a detection leaf. At 1.0, no detections are dropped.
+                     At 0.0, all detections are always zeroed out.
+        std_dev: Standard deviation of Gaussian noise added to each element in the observation pytree.
+                 At 0.0, no noise is added.
+
+    The wrapper operates on the raw pytree observations (before flattening). Each leaf of the
+    pytree represents a semantic object. For each leaf (per step):
+        1. Add Gaussian noise N(0, std_dev) to each element.
+        2. With probability (1 - detect_prob), zero out the entire leaf (simulate missed detection).
+
+    Example:
+        base_env = jaxatari.make("Pong")
+        env = AtariWrapper(base_env)
+        env = NoiseWrapper(env, detect_prob=0.95, std_dev=0.1)
+        env = ObjectCentricWrapper(env, frame_stack_size=4)
+    """
+
+    def __init__(self, env, detect_prob: float = 1.0, std_dev: float = 0.0):
+        super().__init__(env)
+        self.detect_prob = detect_prob
+        self.std_dev = std_dev
+        self._observation_space = self._env.observation_space()
+
+    def observation_space(self) -> spaces.Space:
+        """Pass through the observation space unchanged."""
+        return self._observation_space
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def _add_noise_to_obs(self, obs: chex.ArrayTree, key: chex.PRNGKey) -> chex.ArrayTree:
+        """
+        Add Gaussian noise to each leaf of the observation pytree,
+        then randomly drop entire leaves.
+        """
+        treedef = jax.tree.structure(obs)
+        leaves = jax.tree.leaves(obs)
+        num_leaves = len(leaves)
+
+        # Split keys: two per leaf (one for noise, one for dropping)
+        all_keys = jax.random.split(key, num_leaves * 2 + 1)
+        noise_keys = all_keys[:num_leaves]
+        drop_keys = all_keys[num_leaves:num_leaves * 2]
+
+        def process_leaf(leaf, noise_k, drop_k):
+            leaf = leaf.astype(jnp.float32)
+            # 1. Add Gaussian noise
+            noise = jax.random.normal(noise_k, shape=leaf.shape) * self.std_dev
+            noisy_leaf = leaf + noise
+            # 2. Randomly drop (zero out) the entire leaf
+            keep = jax.random.bernoulli(drop_k, p=self.detect_prob)
+            result = jnp.where(keep, noisy_leaf, jnp.zeros_like(noisy_leaf))
+            return result.astype(leaf.dtype)
+
+        noisy_leaves = [
+            process_leaf(leaf, nk, dk)
+            for leaf, nk, dk in zip(leaves, noise_keys, drop_keys)
+        ]
+        return jax.tree.unflatten(treedef, noisy_leaves)
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def reset(self, key: chex.PRNGKey) -> Tuple[chex.ArrayTree, Any]:
+        """Reset the environment and apply noise to the initial observation."""
+        if self.std_dev > 0.0 or self.detect_prob < 1.0:
+            obs_key, env_key = jax.random.split(key)
+            obs, env_state = self._env.reset(env_key)
+            obs = self._add_noise_to_obs(obs, obs_key)
+        else:
+            obs, env_state = self._env.reset(key)
+        return obs, env_state
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def step(
+        self,
+        state: Any,
+        action: int,
+    ) -> Tuple[chex.ArrayTree, Any, float, bool, bool, Dict[str, Any]]:
+        """
+        Step the environment and apply noise to the observation.
+        When noise is enabled, splits the state's PRNG key:
+        one part for noise, the rest for the inner env.
+        """
+        if self.std_dev > 0.0 or self.detect_prob < 1.0:
+            noise_key, inner_key = jax.random.split(state.key)
+            state_for_inner = AtariState(
+                env_state=state.env_state,
+                key=inner_key,
+                step=state.step,
+                prev_action=state.prev_action,
+            )
+            obs, next_state, reward, terminated, truncated, info = self._env.step(
+                state_for_inner, action
+            )
+            obs = self._add_noise_to_obs(obs, noise_key)
+        else:
+            obs, next_state, reward, terminated, truncated, info = self._env.step(
+                state, action
+            )
+        return obs, next_state, reward, terminated, truncated, info
+
+
 class MultiRewardWrapper(JaxatariWrapper):
     """
     Allows providing multiple reward functions to be computed at every step.
@@ -60,6 +166,17 @@ class MultiRewardWrapper(JaxatariWrapper):
             info = asdict(info)
         info["all_rewards"] = all_rewards
         return obs, new_state, reward, done, info 
+
+
+def _has_atari_wrapper(env) -> bool:
+    """Check whether an AtariWrapper exists anywhere in the wrapper chain."""
+    current = env
+    while isinstance(current, JaxatariWrapper):
+        if isinstance(current, AtariWrapper):
+            return True
+        current = current._env
+    return False
+
 
 @struct.dataclass
 class AtariState:
@@ -244,7 +361,7 @@ class ObjectCentricWrapper(JaxatariWrapper):
 
     def __init__(self, env, frame_stack_size: int = 4, frame_skip: int = 4, clip_reward: bool = True):
         super().__init__(env)
-        assert isinstance(env, AtariWrapper), "ObjectCentricWrapper must be applied after AtariWrapper"
+        assert _has_atari_wrapper(env), "ObjectCentricWrapper must be applied after AtariWrapper"
         self.frame_stack_size = frame_stack_size
         self.frame_skip = frame_skip
         self.clip_reward = clip_reward
@@ -406,7 +523,7 @@ class PixelObsWrapper(JaxatariWrapper):
     # TODO: remove do_pixel_resize and resize whenever a different shape / grayscale is given?
     def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False, use_native_downscaling: bool = False, smooth_image: bool = False, frame_stack_size: int = 4, frame_skip: int = 4, max_pooling: bool = True, clip_reward: bool = True):
         super().__init__(env)
-        assert isinstance(env, AtariWrapper), "PixelObsWrapper has to be applied after AtariWrapper"
+        assert _has_atari_wrapper(env), "PixelObsWrapper must be applied after AtariWrapper"
         self.frame_stack_size = frame_stack_size
         self.frame_skip = frame_skip
         self.max_pooling = max_pooling
@@ -414,8 +531,10 @@ class PixelObsWrapper(JaxatariWrapper):
         self.smooth_image = smooth_image
         self.native_downscaling = False
 
-        # Access the Base Environment
-        base_env = self._env._env if isinstance(self._env, AtariWrapper) else self._env
+        # Walk the wrapper chain to find the base environment
+        base_env = self._env
+        while isinstance(base_env, JaxatariWrapper):
+            base_env = base_env._env
 
         if do_pixel_resize and use_native_downscaling:
             # call helper from modifications to make sure that applied mods remain applied after native downscaling (lazy import to avoid circular dependency)
@@ -525,7 +644,7 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
     
     def __init__(self, env, do_pixel_resize: bool = False, pixel_resize_shape: tuple[int, int] = (84, 84), grayscale: bool = False, use_native_downscaling: bool = False, smooth_image: bool = False, frame_stack_size: int = 4, frame_skip: int = 4, max_pooling: bool = True, clip_reward: bool = True):
         super().__init__(env)
-        assert isinstance(env, AtariWrapper), "PixelAndObjectCentricWrapper must be applied after AtariWrapper"
+        assert _has_atari_wrapper(env), "PixelAndObjectCentricWrapper must be applied after AtariWrapper"
         self.frame_stack_size = frame_stack_size
         self.frame_skip = frame_skip
         self.max_pooling = max_pooling
@@ -533,8 +652,10 @@ class PixelAndObjectCentricWrapper(JaxatariWrapper):
         self.smooth_image = smooth_image
         self.native_downscaling = False
         
-        # Access the Base Environment
-        base_env = self._env._env if isinstance(self._env, AtariWrapper) else self._env
+        # Walk the wrapper chain to find the base environment
+        base_env = self._env
+        while isinstance(base_env, JaxatariWrapper):
+            base_env = base_env._env
 
         if do_pixel_resize and use_native_downscaling:
             # call helper from modifications to make sure that applied mods remain applied after native downscaling (lazy import to avoid circular dependency)
