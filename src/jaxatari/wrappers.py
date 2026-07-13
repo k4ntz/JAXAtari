@@ -461,7 +461,7 @@ class ObjectCentricWrapper(JaxatariWrapper):
 
 
 @functools.partial(jax.jit, static_argnames=('sigma',))
-def _gaussian_blur_2d_nchw(image: chex.Array, sigma: float = 3.0) -> chex.Array:
+def _gaussian_blur_2d_nchw(image: chex.Array, sigma: float = 0.6) -> chex.Array:
     """Depthwise separable Gaussian blur for NCHW images (used by preprocess_image)."""
     # image input: [N, C, H, W]
     c = image.shape[1]

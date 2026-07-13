@@ -16,6 +16,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = n    # NumExpr
 
 
 from ale_py.vector_env import AtariVectorEnv
+from gymnasium.vector import VectorRewardWrapper 
 import gym
 import numpy as np
 import torch
@@ -24,6 +25,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import tyro
 from torch.utils.tensorboard import SummaryWriter
+
 
 
 @dataclass
@@ -38,7 +40,7 @@ class Args:
     """if toggled, cuda will be enabled by default"""
     track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "baselines"
+    wandb_project_name: str = "baselines_new"
     """the wandb's project name"""
     wandb_entity: str = "jaxatari"
     """the entity (team) of wandb's project"""
@@ -52,23 +54,23 @@ class Args:
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
-    num_envs: int = 8
+    num_envs: int = 128
     """the number of parallel game environments"""
-    num_steps: int = 128
+    num_steps: int = 32
     """the number of steps to run in each environment per policy rollout"""
-    anneal_lr: bool = True
+    anneal_lr: bool = False
     """Toggle learning rate annealing for policy and value networks"""
     gamma: float = 0.99
     """the discount factor gamma"""
-    num_minibatches: int = 4
+    num_minibatches: int = 32
     """the number of mini-batches"""
-    update_epochs: int = 4
+    update_epochs: int = 2
     """the K epochs to update the policy"""
     max_grad_norm: float = 10.0
     """the maximum norm for the gradient clipping"""
     start_e: float = 1
     """the starting epsilon for exploration"""
-    end_e: float = 0.01
+    end_e: float = 0.001
     """the ending epsilon for exploration"""
     exploration_fraction: float = 0.10
     """the fraction of `total_timesteps` it takes from start_e to end_e"""
@@ -103,7 +105,7 @@ class RecordEpisodeStatistics(gym.Wrapper):
     def step(self, action):
         observations, rewards, terminations, truncations, infos = super().step(action)
         dones = np.logical_or(terminations, truncations)
-        self.episode_returns += rewards # NOTE: these are clipped :(
+        self.episode_returns += rewards
         self.episode_lengths += 1
         self.returned_episode_returns[:] = self.episode_returns
         self.returned_episode_lengths[:] = self.episode_lengths
@@ -111,14 +113,20 @@ class RecordEpisodeStatistics(gym.Wrapper):
         self.episode_lengths *= 1 - dones
         infos["r"] = self.returned_episode_returns
         infos["l"] = self.returned_episode_lengths
-        # ale-py vector env doesn't auto-reset termination states, wait it does if it's vector env? actually ALE vector env does auto-reset.
-        # we will just return dones for now.
         return (
             observations,
             rewards,
             dones,
             infos,
         )
+
+# Implement own RewardClipWrapper, since recording unclipped rewards in ALE-vecenv is not supported: https://github.com/Farama-Foundation/Arcade-Learning-Environment/issues/687
+# Apply after RecordWrapper to record unclipped rewards, but learn on clipped rewards.
+class ClipRewardsWrapper(gym.Wrapper):
+    def step(self, action):
+        observations, rewards, dones, infos = super().step(action)
+        clipped_rewards = np.clip(rewards, -1, 1)
+        return observations, clipped_rewards, dones, infos
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
@@ -194,9 +202,11 @@ if __name__ == "__main__":
         game=game_name,
         num_envs=args.num_envs,
         episodic_life=True,
-        num_threads=args.num_envs, 
+        num_threads=int(n), 
+        reward_clipping=False,  # we implement our own reward clipping wrapper below
     )
     envs = RecordEpisodeStatistics(envs)
+    envs = ClipRewardsWrapper(envs)
     # assert isinstance(envs.action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
     q_network = QNetwork(envs).to(device)

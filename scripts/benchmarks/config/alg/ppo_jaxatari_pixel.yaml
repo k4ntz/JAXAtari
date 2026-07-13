@@ -7,7 +7,7 @@ EVAL_EVERY: 1000
 
 PIXEL_BASED: True
 NATIVE_DOWNSCALING: True
-SMOOTH_IMAGE: False
+SMOOTH_IMAGE: True #0.6 gaussian blur to mimic natural blurring from bilinear downscaling
 
 SAVE_MODEL: True
 UPLOAD_MODEL: False

@@ -6,19 +6,20 @@ from concurrent.futures import ThreadPoolExecutor
 
 # You can modify this list to include the exact environments you want to run.
 ATARI_ENVS = [
-    "bankheist",
-    "beamrider", # still missing pixel runs
-    "enduro", 
-    "freeway", "frostbite", 
-    "kangaroo",
+    # "bankheist",
+    # "beamrider", # still missing pixel runs
+    # "enduro", 
+    # "freeway", "frostbite", 
+    # "kangaroo",
     "montezumarevenge",
-    "phoenix", "pong", "qbert",
-    "seaquest", "skiing",
-    "tennis",
-    "venture",
-    "timepilot", "asteroids", "breakout", 
-    "gravitar",
-    "mspacman",
+    # "phoenix", "pong", "qbert",
+    # "seaquest", "skiing",
+    # "tennis",
+    # "venture",
+    # "timepilot", "asteroids", "breakout", 
+    # "gravitar",
+    # "mspacman",
+    # "pong"
 ]
 
 # Setting to control how often to rerun an exp (with different seeds)
@@ -27,8 +28,8 @@ N_SEEDS = 1
 WORKERS_PER_GPU = 1
 
 CONFIGS = [
-    "ppo_jaxatari_object_large",
-    "ppo_jaxatari_pixel_large",
+    "ppo_jaxatari_pixel",
+    # "ppo_jaxatari_object_large",
 ]
 
 # game_specific_configs = {
@@ -58,7 +59,7 @@ def worker(gpu_id: str, worker_id: int, task_queue: queue.Queue, extra_args: lis
             "uv", "run", "scripts/benchmarks/ppo_jaxatari_scan.py",
             f"+alg={alg_config}",
             f"alg.ENV_ID={env_id}",
-            f"SEED={seed}"
+            f"SEED={seed}",
         ] + extra_args
         
         try:
