@@ -982,22 +982,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             & drop_collision
         )
 
-        jax.lax.cond(
-            drop_collision,
-            lambda _: jax.debug.print(
-                "flowerpot collision: active {a}, collision {c}, can_deflect {d}, main {m}, sub {s}, side {side}, drop_x_offset {o}",
-                a=collision_active,
-                c=drop_collision,
-                d=can_deflect,
-                m=player_state.main_state,
-                s=player_state.sub_step,
-                side=player_state.side_step,
-                o=state.flowerpot_enemy.drop_x_offset,
-            ),
-            lambda _: None,
-            operand=None,
-        )
-
         def deflect_drop(s: CrazyClimberState) -> CrazyClimberState:
             return s.replace(
                 flowerpot_enemy=s.flowerpot_enemy.replace(
@@ -1007,11 +991,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         def make_player_fall(s: CrazyClimberState) -> CrazyClimberState:
             return s.replace(
-                player_move_state=PlayerMoveState.new().replace(
-                    falling_count=160,
-                    pos_x=s.player_move_state.pos_x,
+                player_move_state=s.player_move_state.replace(
+                    should_fall=True,
                 ),
-                tower_state=s.tower_state.replace(is_falling=True),
             )
 
         return jax.lax.cond(
