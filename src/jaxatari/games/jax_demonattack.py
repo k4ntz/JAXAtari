@@ -285,6 +285,10 @@ class DemonAttackConstants(AutoDerivedConstants):
         pytree_node=False,
         default=(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
     )
+    SCORE_TABLE: Tuple[int, ...] = struct.field(
+        pytree_node=False,
+        default=(10, 10, 15, 15, 20, 20, 25, 25, 30, 30, 35, 35),
+    )
     WAVE_BOMB_TYPE_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(BOMB_TYPE_STANDARD, BOMB_TYPE_STANDARD, BOMB_TYPE_LONG, BOMB_TYPE_LONG,
@@ -476,6 +480,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             raise ValueError(
                 f"WAVE_BOMB_TYPE_TABLE needs {INITIAL_WAVE_PATTERNS} pattern entries"
             )
+        if len(consts.SCORE_TABLE) != INITIAL_WAVE_PATTERNS:
+            raise ValueError(
+                f"SCORE_TABLE needs {INITIAL_WAVE_PATTERNS} pattern entries"
+            )
         if len(consts.ENEMY_SHOT_ACTION_TABLE) != INITIAL_WAVE_PATTERNS:
             raise ValueError(
                 f"ENEMY_SHOT_ACTION_TABLE needs {INITIAL_WAVE_PATTERNS} pattern entries"
@@ -570,6 +578,17 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             values.shape[0] - 1,
         )
         return values[index]
+
+    def _score_value_for_hit(
+        self,
+        wave_pattern: chex.Array,
+        is_small: chex.Array,
+        is_diving: chex.Array,
+    ) -> chex.Array:
+        pattern = jnp.clip(wave_pattern, 0, len(self.consts.SCORE_TABLE) - 1)
+        base_score = jnp.asarray(self.consts.SCORE_TABLE, dtype=jnp.int32)[pattern]
+        multiplier = jnp.where(is_diving, 4, jnp.where(is_small, 2, 1))
+        return base_score * multiplier
 
     def _bomb_type_for_wave(self, wave_pattern: chex.Array) -> chex.Array:
         bomb_types = jnp.asarray(self.consts.WAVE_BOMB_TYPE_TABLE, dtype=jnp.int32)
@@ -1864,10 +1883,14 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             new_status = s_status.at[i].set(
                 jnp.where(split_demon, DEMON_STATUS_SMALL, status_after_hit)
             )
-            new_status
             new_primary_alive = s_primary_alive.at[i].set(new_primary_alive_value)
             new_secondary_alive = s_secondary_alive.at[i].set(new_secondary_alive_value)
-            new_score = jnp.where(demon_hit, s_score + 10 + state.wave_pattern * 2, s_score)
+            hit_score = self._score_value_for_hit(
+                state.wave_pattern,
+                is_small,
+                state.demon_mode[i] == BEHAVIOR_DIVE,
+            )
+            new_score = jnp.where(demon_hit, s_score + hit_score, s_score)
             new_laser_active = jnp.logical_and(l_active, jnp.logical_not(demon_hit))
             return new_status, new_primary_alive, new_secondary_alive, new_score, new_laser_active
 
