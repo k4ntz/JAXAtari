@@ -399,6 +399,8 @@ class DemonAttackState(struct.PyTreeNode):
     demon_random: chex.Array  # Deterministic 8-bit generator used by movement and spawn timing
     demon_death_anim_timer: chex.Array
     demon_split_death_part: chex.Array
+    demon_death_anim_x: chex.Array
+    demon_death_anim_y: chex.Array
     demon_dive_segment_step: chex.Array  # int32, frames elapsed in the current V-segment
     demon_dive_x_dir: chex.Array  # bool, moving right during current segment
 
@@ -520,6 +522,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_random=jnp.array(self.consts.DEMON_INITIAL_RANDOM, dtype=jnp.int32),
             demon_death_anim_timer=zeros,
             demon_split_death_part=zeros,
+            demon_death_anim_x=zeros,
+            demon_death_anim_y=zeros,
             demon_mode=zeros,
             demon_dive_segment_step=zeros,
             demon_dive_x_dir=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
@@ -1913,6 +1917,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.logical_or(killed, split),
             jnp.logical_or(primary_split_killed, secondary_split_killed),
         )
+        death_anim_x = jnp.where(
+            secondary_split_killed,
+            state.demon_split_x,
+            state.demons_x,
+        )
+        death_anim_y = state.demons_y
         center_small_x = state.demons_x
         second_small_x = state.demons_x + (
                 self.consts.DEMON_SIZE[1] - self.consts.SMALL_DEMON_SIZE[1]
@@ -2041,6 +2051,16 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 death_anim_started,
                 split_death_part,
                 state.demon_split_death_part,
+            ),
+            demon_death_anim_x=jnp.where(
+                death_anim_started,
+                death_anim_x,
+                state.demon_death_anim_x,
+            ),
+            demon_death_anim_y=jnp.where(
+                death_anim_started,
+                death_anim_y,
+                state.demon_death_anim_y,
             ),
             score=score,
             laser_active=laser_active,
@@ -2606,12 +2626,8 @@ class DemonAttackRenderer(JAXGameRenderer):
                     0,
                     death_masks.shape[0] - 1,
                 )
-                death_x = jnp.where(
-                    state.demon_split_death_part[i] == SPLIT_DEATH_SECONDARY,
-                    state.demon_split_x[i],
-                    state.demons_x[i],
-                )
-                death_y = state.demons_y[i]
+                death_x = state.demon_death_anim_x[i]
+                death_y = state.demon_death_anim_y[i]
                 death_raster = jax.lax.cond(
                     split_death,
                     render_split,
