@@ -172,7 +172,9 @@ class PhoenixConstants(AutoDerivedConstants):
     # --- Global / shared enemy timing and odds ---
     ENEMY_DEATH_DURATION: int = struct.field(pytree_node=False, default=30)  # ca. 0,25 Sekunden bei 30 FPS
     ENEMY_ANIMATION_SPEED: int = struct.field(pytree_node=False, default=30)  # ca. 0,25 Sekunden bei 30 FPS
-    FIRE_CHANCE: float = struct.field(pytree_node=False, default=0.005)
+    # Per-frame chance to open fire when no bird is under the player (closes gap-camping).
+    # Under-player fire still uses the salvo gap timer at full rate.
+    FIRE_CHANCE: float = struct.field(pytree_node=False, default=0.035)
     LEVEL_TRANSITION_DURATION: int = struct.field(pytree_node=False, default=120)
 
     # --- Phoenix (ship enemies): movement and dive attack AI ---
@@ -1462,7 +1464,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
     def _bat_wave_enemy_fire(
         self, key: jax.random.PRNGKey, state: PhoenixState, not_attacking: chex.Array
     ) -> NonPhoenixEnemyFire:
-        """Levels 3-4 (bats): center-line trigger + top-layer priority + bat-local cooldowns."""
+        """Levels 3-4 (bats): prefer under-player shooters, else baseline off-align fire."""
         alive_bats = (state.enemies_x > -1) & (state.enemies_y < self.consts.HEIGHT + 10) & (~state.bat_dying)
         bat_enemy_cooldowns = jnp.maximum(state.bat_salvo_enemy_cooldowns - 1, 0)
         bat_enemy_shot_counts = state.bat_salvo_enemy_shot_counts
@@ -1474,19 +1476,26 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         intersects_enemy = (player_center_x >= enemy_left) & (player_center_x <= enemy_right)
 
         active_bats = alive_bats & not_attacking & (bat_enemy_cooldowns == 0)
-        candidate_mask = active_bats & intersects_enemy
+        prefer_mask = active_bats & intersects_enemy
+        has_prefer = jnp.any(prefer_mask)
+        # Prefer bats under the player (ALE pressure); otherwise weight by proximity so
+        # center-gap camping still draws fire from the nearest column.
+        candidate_mask = jnp.where(has_prefer, prefer_mask, active_bats)
         has_candidate = jnp.any(candidate_mask)
 
         candidate_y = jnp.where(candidate_mask, state.enemies_y, jnp.inf)
         top_layer_y = jnp.min(candidate_y)
         top_layer_mask = candidate_mask & (state.enemies_y == top_layer_y)
-        top_layer_count = jnp.sum(top_layer_mask.astype(jnp.float32))
+        enemy_centers = state.enemies_x + (self.consts.ENEMY_WIDTH * 0.5)
+        proximity = 1.0 / (1.0 + jnp.abs(enemy_centers - player_center_x.astype(jnp.float32)))
+        top_weights = jnp.where(top_layer_mask, proximity, 0.0)
+        top_weight_sum = jnp.maximum(jnp.sum(top_weights), 1e-6)
         safe_probs = jnp.where(
             has_candidate,
-            top_layer_mask.astype(jnp.float32) / jnp.maximum(top_layer_count, 1.0),
+            top_weights / top_weight_sum,
             jnp.full((8,), 1.0 / 8.0, dtype=jnp.float32),
         )
-        key_pick, _ = jax.random.split(key)
+        key_pick, key_off_align = jax.random.split(key)
         picked_idx = jax.random.choice(key_pick, 8, shape=(), p=safe_probs).astype(jnp.int32)
         picked_idx = jnp.where(has_candidate, picked_idx, jnp.array(-1, dtype=jnp.int32))
 
@@ -1494,7 +1503,10 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         has_free_slot = jnp.any(available_slots)
         slot_idx = jnp.argmax(available_slots.astype(jnp.int32)).astype(jnp.int32)
         shooter_idx = jnp.clip(picked_idx, 0, 7)
-        can_fire_now = has_candidate & has_free_slot & (bat_gap_timer == 0)
+        # Full-rate fire when under a bat; otherwise FIRE_CHANCE so gaps are not silent.
+        off_align_roll = jax.random.uniform(key_off_align, shape=()) < self.consts.FIRE_CHANCE
+        fire_allowed = has_prefer | off_align_roll
+        can_fire_now = has_candidate & has_free_slot & (bat_gap_timer == 0) & fire_allowed
 
         # Spawn into the first free projectile slot (not enemy index slot) to avoid mid-air teleports.
         fire_slot_mask = (jnp.arange(8) == slot_idx) & can_fire_now
@@ -1590,7 +1602,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         pre_step_phoenix_do_attack: chex.Array,
         step_counter: chex.Array,
     ) -> PhoenixSalvoEnemyFire:
-        """Levels 1-2 (small phoenix): edge-intersection trigger + top-layer priority fire."""
+        """Levels 1-2 (small phoenix): prefer under-player fire, else baseline off-align fire."""
         _ = pre_step_phoenix_do_attack  # Kept for interface parity with previous behavior.
 
         def _active_small_birds(enemy_cooldowns: chex.Array) -> chex.Array:
@@ -1603,43 +1615,52 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
                 & (enemy_cooldowns == 0)
             )
 
-        def _pick_trigger_enemy(active_mask: chex.Array) -> Tuple[chex.Array, chex.Array]:
-            # Player trigger is the vertical line through the player's center pixel.
+        def _pick_trigger_enemy(active_mask: chex.Array) -> Tuple[chex.Array, chex.Array, chex.Array]:
+            # Prefer under-player alignment (ALE pressure) but never require it — exclusive
+            # intersection made formation gaps permanently silent safe lanes.
             player_center_x = state.player_x + 2  # Sprite width is 5 in this implementation.
             enemy_left = state.enemies_x
             enemy_right = state.enemies_x + self.consts.ENEMY_WIDTH - 1
             intersects_enemy = (player_center_x >= enemy_left) & (player_center_x <= enemy_right)
-            candidate_mask = active_mask & intersects_enemy
+            prefer_mask = active_mask & intersects_enemy
+            has_prefer = jnp.any(prefer_mask)
+            candidate_mask = jnp.where(has_prefer, prefer_mask, active_mask)
             has_candidate = jnp.any(candidate_mask)
 
             candidate_y = jnp.where(candidate_mask, state.enemies_y, jnp.inf)
             top_layer_y = jnp.min(candidate_y)
             top_layer_mask = candidate_mask & (state.enemies_y == top_layer_y)
 
-            top_layer_count = jnp.sum(top_layer_mask.astype(jnp.float32))
+            enemy_centers = state.enemies_x + (self.consts.ENEMY_WIDTH * 0.5)
+            proximity = 1.0 / (1.0 + jnp.abs(enemy_centers - player_center_x.astype(jnp.float32)))
+            top_weights = jnp.where(top_layer_mask, proximity, 0.0)
+            top_weight_sum = jnp.maximum(jnp.sum(top_weights), 1e-6)
             safe_probs = jnp.where(
                 has_candidate,
-                top_layer_mask.astype(jnp.float32) / jnp.maximum(top_layer_count, 1.0),
+                top_weights / top_weight_sum,
                 jnp.full((8,), 1.0 / 8.0, dtype=jnp.float32),
             )
 
             key_pick = jax.random.PRNGKey(step_counter + 1201)
             picked_idx = jax.random.choice(key_pick, 8, shape=(), p=safe_probs).astype(jnp.int32)
             picked_idx = jnp.where(has_candidate, picked_idx, jnp.array(-1, dtype=jnp.int32))
-            return picked_idx, has_candidate
+            return picked_idx, has_candidate, has_prefer
 
         alive_small_birds = (state.enemies_x > -1) & (~state.phoenix_dying)
         enemy_cooldowns = jnp.maximum(state.phoenix_salvo_enemy_cooldowns - 1, 0)
         enemy_shot_counts = state.phoenix_salvo_enemy_shot_counts
         active_small_birds = _active_small_birds(enemy_cooldowns)
-        trigger_enemy_idx, has_trigger_enemy = _pick_trigger_enemy(active_small_birds)
+        trigger_enemy_idx, has_trigger_enemy, has_prefer = _pick_trigger_enemy(active_small_birds)
 
         available_slots = state.enemy_projectile_y < 0
         has_free_slot = jnp.any(available_slots)
         slot_idx = jnp.argmax(available_slots.astype(jnp.int32)).astype(jnp.int32)
 
         gap_timer = jnp.maximum(state.phoenix_salvo_gap_timer - 1, 0)
-        can_fire_now = has_trigger_enemy & (gap_timer == 0) & has_free_slot
+        key_off_align = jax.random.PRNGKey(step_counter + 2203)
+        off_align_roll = jax.random.uniform(key_off_align, shape=()) < self.consts.FIRE_CHANCE
+        fire_allowed = has_prefer | off_align_roll
+        can_fire_now = has_trigger_enemy & (gap_timer == 0) & has_free_slot & fire_allowed
         new_gap_timer = jnp.where(can_fire_now, self.consts.PHOENIX_SALVO_SHOT_GAP, gap_timer)
 
         salvo_fire_mask = jnp.zeros((8,), dtype=jnp.bool_)
@@ -2078,7 +2099,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         def check_player_hit(projectile_xs, projectile_ys, player_x, player_y):
             def is_hit(px, py):
                 hit_x = (px + self.consts.PROJECTILE_WIDTH > player_x) & (px < player_x + player_body_width)
-                hit_y = (py + self.consts.PROJECTILE_HEIGHT > player_y) & (py < player_y + self.consts.PROJECTILE_HEIGHT)
+                hit_y = (py + self.consts.PROJECTILE_HEIGHT > player_y) & (py < player_y + player_body_height)
                 return hit_x & hit_y
 
             hits = jax.vmap(is_hit)(projectile_xs, projectile_ys)
