@@ -21,6 +21,7 @@ from jaxatari.wrappers import (
     NormalizeObservationWrapper,
     LogWrapper,
     MultiRewardLogWrapper,
+    ContinuousActionWrapper,
 )
 
 CORE_INFRA_GAMES = ("seaquest", "kangaroo", "montezumarevenge", "pong", "phoenix")
@@ -324,6 +325,9 @@ WRAPPER_RECIPES = {
     "MultiRewardLogged": lambda env: MultiRewardLogWrapper(
         PixelAndObjectCentricWrapper(AtariWrapper(env))
     ),
+    "ContinuousAction": lambda env: ContinuousActionWrapper(
+        AtariWrapper(env, full_action_space=True)
+    ),
 }
 
 SMOKE_WRAPPER_RECIPE_NAMES = (
@@ -335,6 +339,7 @@ INTEGRATION_WRAPPER_RECIPE_NAMES = (
     "Pixel",
     "ObjectCentric",
     "LoggedFlattenedPixelAndObject",
+    "ContinuousAction",
 )
 
 def _build_wrapped_env(game_name, wrapper_recipe):

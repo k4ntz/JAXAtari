@@ -1036,3 +1036,104 @@ class MultiRewardLogWrapper(JaxatariWrapper):
         info["returned_episode_lengths"] = state.returned_episode_lengths
         info["returned_episode"] = done_
         return obs, state, reward, terminated, truncated, info
+
+
+class ContinuousActionWrapper(JaxatariWrapper):
+    """
+    A wrapper that converts a continuous 3D action space into discrete Atari actions.
+
+    Input action format:
+        - r: [0, 1]           -> joystick magnitude (distance from center)
+        - theta: [-pi, pi]    -> joystick direction in polar coordinates
+        - fire: [0, 1]        -> binary fire signal
+    Note:
+        This wrapper assumes `full_action_space=True` in the underlying JAXAtari
+        environment so that all 18 ALE actions are available.
+    """
+
+    def __init__(self, env: JaxatariWrapper, tau: float = 0.5):
+        super().__init__(env)
+        assert isinstance(env, AtariWrapper), "ContinuousActionWrapper must be applied after AtariWrapper"
+        if not getattr(env, 'full_action_space', False):
+            raise ValueError(
+                "ContinuousActionWrapper requires full_action_space=True in the wrapped AtariWrapper. "
+                "Please set full_action_space=True when creating the AtariWrapper."
+            )
+        self.tau = tau
+        self.continuous_action_space = spaces.Box(
+            low=np.array([0.0, -np.pi, 0.0], dtype=np.float32),
+            high=np.array([1.0, np.pi, 1.0], dtype=np.float32),
+            dtype=np.float32,
+        )
+        self._lookup = self._build_lookup_table()
+
+    def action_space(self) -> spaces.Box:
+        """Returns the continuous action space."""
+        return self.continuous_action_space
+
+    def _build_lookup_table(self) -> jax.Array:
+        """Constructs a static 3D lookup table mapping joystick states to IDs.
+        Grid dimensions: [Left-Center-Right (3) x Down-Center-Up (3) x Fire
+        OnOff (2)]
+        """
+        lookup = np.zeros((3, 3, 2), dtype=np.int32)
+        lookup[1, 1, 0] = Action.NOOP
+        lookup[1, 1, 1] = Action.FIRE
+
+        lookup[0, 1, 0] = Action.LEFT
+        lookup[2, 1, 0] = Action.RIGHT
+        lookup[1, 0, 0] = Action.DOWN
+        lookup[1, 2, 0] = Action.UP
+
+        lookup[0, 0, 0] = Action.DOWNLEFT
+        lookup[2, 0, 0] = Action.DOWNRIGHT
+        lookup[0, 2, 0] = Action.UPLEFT
+        lookup[2, 2, 0] = Action.UPRIGHT
+
+        lookup[0, 1, 1] = Action.LEFTFIRE
+        lookup[2, 1, 1] = Action.RIGHTFIRE
+        lookup[1, 0, 1] = Action.DOWNFIRE
+        lookup[1, 2, 1] = Action.UPFIRE
+        lookup[0, 0, 1] = Action.DOWNLEFTFIRE
+        lookup[2, 0, 1] = Action.DOWNRIGHTFIRE
+        lookup[0, 2, 1] = Action.UPLEFTFIRE
+        lookup[2, 2, 1] = Action.UPRIGHTFIRE
+
+        return jnp.array(lookup)
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def _convert(self, action: jax.Array) -> jax.Array:
+        """
+        Convert a continuous action (r, theta, fire) into a discrete ALE action index
+        using a 3x3x2 discretization grid.
+        """
+        r, theta, fire = action
+
+        # Calculate Cartesian Coordinates
+        x = r * jnp.cos(theta)
+        y = r * jnp.sin(theta)
+        # Discretize x and y into {-1, 0, 1} based on threshold tau.
+        # Shift values by +1 to translate into valid array indices {0, 1, 2}.
+        x_idx = (
+                (x > self.tau).astype(jnp.int32)
+                - (x < -self.tau).astype(jnp.int32)
+                + 1
+        )
+        y_idx = (
+                (y > self.tau).astype(jnp.int32)
+                - (y < -self.tau).astype(jnp.int32)
+                + 1
+        )
+        # Discretize fire signal into binary state index {0, 1}
+        fire_idx = (fire > self.tau).astype(jnp.int32)
+        # Lookup discrete ALE action
+        return self._lookup[x_idx, y_idx, fire_idx]
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def step(self, state: Any, action: jax.Array) -> Tuple:
+        discrete_action = self._convert(action)
+        return self._env.step(state, discrete_action)
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def reset(self, key: Any) -> Tuple:
+        return self._env.reset(key)
