@@ -147,6 +147,8 @@ class PhoenixConstants(AutoDerivedConstants):
     BLOCK_HEIGHT: int = struct.field(pytree_node=False, default=4)
     BOSS_HALF_WIDTH: int = struct.field(pytree_node=False, default=16)
     BOSS_PROJECTILE_Y_OFFSET: int = struct.field(pytree_node=False, default=21)
+    # Mild cockpit pressure (was 0.55 and collapsed training). Middle ground vs farmable boss.
+    BOSS_AIM_PLAYER_PROB: float = struct.field(pytree_node=False, default=0.22)
 
     # --- Player: spawn, bounds, movement, palette ---
     PLAYER_POSITION: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (79, 173))
@@ -182,9 +184,10 @@ class PhoenixConstants(AutoDerivedConstants):
     PHOENIX_ATTACK_SPEED: float = struct.field(pytree_node=False, default=0.65)
     PHOENIX_ATTACK_TOLERANCE: float = struct.field(pytree_node=False, default=0.5)
     # Per-frame roll while lowest-row phoenixes are eligible; higher = more frequent dives (ALE-like).
-    PHOENIX_ATTACK_CHANCE: float = struct.field(pytree_node=False, default=0.009)
+    # Slightly above the old 0.009 so waves 1-2 pressure Y-movement more without bullet spam.
+    PHOENIX_ATTACK_CHANCE: float = struct.field(pytree_node=False, default=0.013)
     PHOENIX_DRIFT_PROB: float = struct.field(pytree_node=False, default=0.78)
-    PHOENIX_DRIFT_MAX: float = struct.field(pytree_node=False, default=0.42)
+    PHOENIX_DRIFT_MAX: float = struct.field(pytree_node=False, default=0.50)
     # Shorter hold at dive depth before climbing back (was ~0.5–2s; now closer to twitchy ALE pacing).
     PHOENIX_ATTACK_DELAY_MIN: int = struct.field(pytree_node=False, default=6)
     PHOENIX_ATTACK_DELAY_MAX: int = struct.field(pytree_node=False, default=28)
@@ -216,15 +219,20 @@ class PhoenixConstants(AutoDerivedConstants):
     BAT_SALVO_SHOT_GAP: int = struct.field(pytree_node=False, default=12)
     BAT_SALVO_LONG_PAUSE_EVERY: int = struct.field(pytree_node=False, default=5)
     BAT_SALVO_LONG_PAUSE_MULTIPLIER: int = struct.field(pytree_node=False, default=4)
-    BAT_DIVE_INTERVAL: int = struct.field(pytree_node=False, default=120)
+    BAT_DIVE_INTERVAL: int = struct.field(pytree_node=False, default=90)
     BAT_DIVE_FAST_THRESHOLD: int = struct.field(pytree_node=False, default=4)
     BAT_DIVE_HOLD_PIXELS: float = struct.field(pytree_node=False, default=4.0)
     BAT_DIVE_SLOW_INTERVAL: int = struct.field(pytree_node=False, default=4)
     BAT_DIVE_SLOW_STEP: float = struct.field(pytree_node=False, default=1.0)
     BAT_DIVE_FAST_INTERVAL: int = struct.field(pytree_node=False, default=2)
     BAT_DIVE_FAST_STEP: float = struct.field(pytree_node=False, default=2.0)
-    BAT_DIVE_EARLY_PULLUP_FRAMES: int = struct.field(pytree_node=False, default=14)
+    # Was 14 (pulled up well above the player). 8 is a middle ground vs full kamikaze.
+    BAT_DIVE_EARLY_PULLUP_FRAMES: int = struct.field(pytree_node=False, default=8)
     BAT_DIVE_PLAYER_OVERLAP_PX: float = struct.field(pytree_node=False, default=1.0)
+    # Deep player-overlap dives only from the 3rd cycle (after 2 boss kills), when few bats remain.
+    BAT_DIVE_LETHAL_MIN_CYCLE: int = struct.field(pytree_node=False, default=2)
+    BAT_DIVE_LETHAL_ALIVE_MAX: int = struct.field(pytree_node=False, default=2)
+    BAT_DIVE_LETHAL_OVERLAP_PX: float = struct.field(pytree_node=False, default=2.0)
     BAT_DIVE_BOTTOM_MISSING_Y_GAP: float = struct.field(pytree_node=False, default=8.0)
     BAT_DIVE_EXTRA_DEPTH: float = struct.field(pytree_node=False, default=0)
     BAT_DIVE_EXTRA_HOLD_FRAMES: int = struct.field(pytree_node=False, default=4)
@@ -824,7 +832,8 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
 
         # Zielbereich für den Angriff
         min_attack_y = jnp.max(jnp.where(active_enemies & (~state.phoenix_do_attack), state.enemies_y, -jnp.inf)) + 20
-        max_attack_y = jnp.minimum(state.player_y - 10, self.consts.HEIGHT - 50)
+        # Deeper than the soft -10 pullup, still above the player (ALE swoops lower than our old farmable build).
+        max_attack_y = jnp.minimum(state.player_y - 6, self.consts.HEIGHT - 50)
         common_target_y = jax.random.randint(key, (), minval=min_attack_y, maxval=max_attack_y)
 
         new_phoenix_do_attack = jnp.where(attack_trigger, True, state.phoenix_do_attack)
@@ -955,8 +964,8 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         bat_step_size = 1.0
         active_bats = (state.enemies_x > -1) & (state.enemies_y < self.consts.HEIGHT + 10) & (~state.bat_dying)
         proj_pos = jnp.array([state.projectile_x, state.projectile_y])
-        vertical_tick = (state.step_counter % 13) == 0
-        vertical_phase = (state.step_counter // 13) % 10
+        vertical_tick = (state.step_counter % 10) == 0
+        vertical_phase = (state.step_counter // 10) % 10
         shared_vertical_dir = jnp.where(vertical_phase < 5, -1.0, 1.0)
         base_y_move = jnp.where(
             active_bats & vertical_tick,
@@ -985,23 +994,45 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             & (alive_count < valid_slot_count)
             & (lowest_alive_y < (lowest_slot_y - self.consts.BAT_DIVE_BOTTOM_MISSING_Y_GAP))
         )
+        # Late-cycle deep dives: after 2 boss kills, when only a couple of bats remain.
+        wave_type = state.level % 5
+        difficulty_cycle = (state.level - 1) // 5
+        lethal_bat_dive = (
+            ((wave_type == 3) | (wave_type == 4))
+            & (difficulty_cycle >= self.consts.BAT_DIVE_LETHAL_MIN_CYCLE)
+        )
+        few_bats_left = (alive_count > 0) & (
+            alive_count <= self.consts.BAT_DIVE_LETHAL_ALIVE_MAX
+        )
+        dive_gate = jnp.where(lethal_bat_dive & few_bats_left, True, missing_bottom_slots)
         ready_to_start_dive = (
-            (state.bat_dive_phase == 0) & (state.bat_dive_timer <= 0) & missing_bottom_slots
+            (state.bat_dive_phase == 0) & (state.bat_dive_timer <= 0) & dive_gate
         )
         dive_goal = jnp.where(
             ready_to_start_dive,
             (lowest_slot_y - lowest_alive_y) + self.consts.BAT_DIVE_EXTRA_DEPTH,
             state.bat_dive_goal,
         )
-        # Convert the requested early pull-up timing (in frames) into pixels at the current dive speed.
         dive_pixels_per_frame = dive_step_pixels / jnp.maximum(dive_move_interval.astype(jnp.float32), 1.0)
-        early_pullup_px = self.consts.BAT_DIVE_EARLY_PULLUP_FRAMES * dive_pixels_per_frame
-        # Keep a slight overlap budget, but pull up earlier so dives don't heavily enter the player's lane.
-        graze_player_goal = (
-            (state.player_y - self.consts.ENEMY_HEIGHT + self.consts.BAT_DIVE_PLAYER_OVERLAP_PX)
-            - lowest_alive_y
-            - early_pullup_px
+        early_pullup_frames = jnp.where(
+            lethal_bat_dive & few_bats_left,
+            jnp.array(0.0, dtype=jnp.float32),
+            jnp.array(float(self.consts.BAT_DIVE_EARLY_PULLUP_FRAMES), dtype=jnp.float32),
         )
+        early_pullup_px = early_pullup_frames * dive_pixels_per_frame
+        overlap_px = jnp.where(
+            lethal_bat_dive & few_bats_left,
+            jnp.array(self.consts.BAT_DIVE_LETHAL_OVERLAP_PX, dtype=jnp.float32),
+            jnp.array(self.consts.BAT_DIVE_PLAYER_OVERLAP_PX, dtype=jnp.float32),
+        )
+        max_enemy_y = jnp.array(
+            self.consts.FLOOR_Y - self.consts.ENEMY_HEIGHT, dtype=jnp.float32
+        )
+        target_enemy_y = jnp.minimum(
+            state.player_y.astype(jnp.float32) - self.consts.ENEMY_HEIGHT + overlap_px,
+            max_enemy_y,
+        )
+        graze_player_goal = target_enemy_y - lowest_alive_y - early_pullup_px
         dive_goal = jnp.where(
             ready_to_start_dive,
             jnp.maximum(dive_goal, graze_player_goal),
@@ -1558,7 +1589,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         has_free_slot = jnp.any(available_slots)
         slot_idx = jnp.argmax(available_slots.astype(jnp.int32)).astype(jnp.int32)
 
-        key_interval_mix, key_interval_value, key_x_mix, key_x_value = jax.random.split(key, 4)
+        key_interval_mix, key_interval_value, key_x_mix, key_x_value, key_aim = jax.random.split(key, 5)
         interval_mix = jax.random.uniform(key_interval_mix, shape=())
         # Empirical cadence from Phoenix boss logs:
         # 80% in [24,30], 20% in [31,36], clamped by game logic elsewhere.
@@ -1584,6 +1615,10 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         boss_half_width = self.consts.BOSS_HALF_WIDTH
         boss_is_alive = state.enemies_x[0] > -1
         boss_center_x = state.enemies_x[0].astype(jnp.int32)
+        # Mild player bias (0.22): closes center camping without the 0.55 aim that collapsed training.
+        aim_player = jax.random.uniform(key_aim, shape=()) < self.consts.BOSS_AIM_PLAYER_PROB
+        player_aimed_x = state.player_x.astype(jnp.int32) + 2
+        sampled_spawn_x = jnp.where(aim_player, player_aimed_x, sampled_spawn_x)
         sampled_offset = jnp.clip(sampled_spawn_x - boss_center_x, -boss_half_width, boss_half_width)
         proj_offsets = jnp.full((8,), sampled_offset, dtype=jnp.int32)
         eff_enemy_x = jnp.where(boss_is_alive, boss_center_x, state.enemies_x)
@@ -2025,7 +2060,8 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         transition_ended = (state.level_transition_timer > 0) & (new_level_transition_timer == 0)
 
         # 2) Nächstes Level vormerken und erst bei Timerende aktivieren
-        pending_next_level = (state.level % 5) + 1
+        # Monotonic levels so difficulty_cycle / boss_round actually increase (was 1..5 wrap).
+        pending_next_level = state.level + 1
         level = jnp.where(transition_ended, pending_next_level, state.level)
 
         # 3) Gegner-Formationen nur bei Timerende spawnen
