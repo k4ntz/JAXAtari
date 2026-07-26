@@ -32,6 +32,7 @@ DIFFICULTY_PRESETS = {
         "CPU_AGGR_LOSING": 10,        # Very low punch rate when losing
         "CPU_DANCING_DURATION": 60,   # Retreats for a long time when hit
         "PLAYER_FACE_SHRINK_Y": -1.0,
+        "CPU_VERT_OFFSET_MAX": 48,    # Very bad aim
     },
     "normal": {
         "CPU_UPDATE_MASK": 3,         # Updates target every ~4 frames
@@ -39,6 +40,7 @@ DIFFICULTY_PRESETS = {
         "CPU_AGGR_LOSING": 35,        # Slightly higher aggressiveness
         "CPU_DANCING_DURATION": 30,   # Slightly shorter retreat duration
         "PLAYER_FACE_SHRINK_Y": 0.0,
+        "CPU_VERT_OFFSET_MAX": 32,    # Normal aim
     },
     "hard": {
         "CPU_UPDATE_MASK": 1,         # Updates target every ~2 frames (extremely fast)
@@ -46,13 +48,15 @@ DIFFICULTY_PRESETS = {
         "CPU_AGGR_LOSING": 70,        # Very high pressure
         "CPU_DANCING_DURATION": 10,   # Recovers and fights back almost instantly
         "PLAYER_FACE_SHRINK_Y": 0.0,
+        "CPU_VERT_OFFSET_MAX": 16,    # Good aim
     },
     "impossible": {
         "CPU_UPDATE_MASK": 0,         # Updates target every frame (instantaneous reactions)
-        "CPU_AGGR_WINNING": 120,      # Maximum pressure
-        "CPU_AGGR_LOSING": 100,       # Aggressive pushback
+        "CPU_AGGR_WINNING": 255,      # Maximum pressure (100% chance)
+        "CPU_AGGR_LOSING": 255,       # Aggressive pushback (100% chance)
         "CPU_DANCING_DURATION": 0,    # Strictly never retreats; fights back instantly
         "PLAYER_FACE_SHRINK_Y": 1.0,
+        "CPU_VERT_OFFSET_MAX": 0,     # Perfect vertical aim
     }
 }
 
@@ -183,6 +187,7 @@ class BoxingConstants(struct.PyTreeNode):
     CPU_AGGR_WINNING: int = 40
     CPU_AGGR_LOSING: int = 20
     CPU_DANCING_DURATION: int = 40
+    CPU_VERT_OFFSET_MAX: int = 32
     PLAYER_FACE_SHRINK_Y: int = 0
     ENEMY_PEACEFUL: bool = False
     SHOW_COLLISION_ZONE: bool = False
@@ -269,7 +274,8 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             CPU_AGGR_WINNING=params["CPU_AGGR_WINNING"],
             CPU_AGGR_LOSING=params["CPU_AGGR_LOSING"],
             CPU_DANCING_DURATION=params["CPU_DANCING_DURATION"],
-            PLAYER_FACE_SHRINK_Y=params.get("PLAYER_FACE_SHRINK_Y", 0.0),
+            CPU_VERT_OFFSET_MAX=params.get("CPU_VERT_OFFSET_MAX", 32),
+            PLAYER_FACE_SHRINK_Y=params.get("PLAYER_FACE_SHRINK_Y", 0),
         )
 
     def reset(self, key: chex.PRNGKey) -> Tuple[BoxingObservation, BoxingState]:
@@ -466,7 +472,7 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         
         # Generate new random offsets
         new_horiz_offset = jax.random.randint(subkey2, (), 0, 32)  # 0-31
-        new_vert_offset = jax.random.randint(subkey3, (), 0, 64)   # 0-63
+        new_vert_offset = jax.random.randint(subkey3, (), -self.consts.CPU_VERT_OFFSET_MAX, self.consts.CPU_VERT_OFFSET_MAX + 1)
         
         # Update target to track player position
         cpu_target_x = jnp.where(
@@ -511,8 +517,8 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         sign_x = jnp.where(is_cpu_on_right, 1.0, -1.0)
         
         # Target position using the updated target coordinates and randomized offsets
-        target_x = state.cpu_target_x + sign_x * (20.0 + (state.cpu_horiz_offset - 16.0))
-        target_y = state.cpu_target_y + (state.cpu_vert_offset - 32.0)
+        target_x = state.cpu_target_x + sign_x * (20 + (state.cpu_horiz_offset - 16))
+        target_y = state.cpu_target_y + state.cpu_vert_offset
         
         # Clamp target inside ring boundaries
         target_x = jnp.clip(target_x, self.consts.XMIN, self.consts.XMAX)
