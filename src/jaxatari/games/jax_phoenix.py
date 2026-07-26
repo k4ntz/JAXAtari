@@ -147,6 +147,10 @@ class PhoenixConstants(AutoDerivedConstants):
     BLOCK_HEIGHT: int = struct.field(pytree_node=False, default=4)
     BOSS_HALF_WIDTH: int = struct.field(pytree_node=False, default=16)
     BOSS_PROJECTILE_Y_OFFSET: int = struct.field(pytree_node=False, default=21)
+    # Fraction of boss shots aimed at the player's center (rest use a center-heavy random offset).
+    # Needed because the kill lane is under the cockpit; the old absolute-X mixture + half-width
+    # clip piled ~29% of shots onto x=96 and only ~13% were lethal to a centered player.
+    BOSS_AIM_PLAYER_PROB: float = struct.field(pytree_node=False, default=0.55)
 
     # --- Player: spawn, bounds, movement, palette ---
     PLAYER_POSITION: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (79, 173))
@@ -1542,39 +1546,48 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
     def _boss_enemy_fire(
         self, key: jax.random.PRNGKey, state: PhoenixState, not_attacking: chex.Array
     ) -> NonPhoenixEnemyFire:
-        """Boss enemy shooting: sampled interval cadence + empirically fitted spawn-X mixture."""
+        """Boss enemy shooting: cadence + center/player-biased spawn offsets."""
         cooldown = jnp.maximum(state.bat_salvo_gap_timer - 1, 0)
         available_slots = state.enemy_projectile_y < 0
         has_free_slot = jnp.any(available_slots)
         slot_idx = jnp.argmax(available_slots.astype(jnp.int32)).astype(jnp.int32)
 
-        key_interval_mix, key_interval_value, key_x_mix, key_x_value = jax.random.split(key, 4)
+        key_interval_mix, key_interval_value, key_aim, key_x_mix, key_x_value = jax.random.split(key, 5)
         interval_mix = jax.random.uniform(key_interval_mix, shape=())
-        # Empirical cadence from Phoenix boss logs:
-        # 80% in [24,30], 20% in [31,36], clamped by game logic elsewhere.
+        # Slightly faster than the previous 24–36 empirical band so the cockpit lane
+        # cannot be farmed with a single sidestep between sparse shots.
         sampled_interval = jnp.where(
             interval_mix < 0.8,
-            jax.random.randint(key_interval_value, (), 24, 31),
-            jax.random.randint(key_interval_value, (), 31, 37),
-        ).astype(jnp.int32)
-
-        x_mix = jax.random.uniform(key_x_mix, shape=())
-        # Empirical spawn-X mixture from observed boss missile starts:
-        # 35%: [62,79], 45%: [80,99], 20%: [100,108].
-        sampled_spawn_x = jnp.where(
-            x_mix < 0.35,
-            jax.random.randint(key_x_value, (), 62, 80),
-            jnp.where(
-                x_mix < 0.80,
-                jax.random.randint(key_x_value, (), 80, 100),
-                jax.random.randint(key_x_value, (), 100, 109),
-            ),
+            jax.random.randint(key_interval_value, (), 16, 24),
+            jax.random.randint(key_interval_value, (), 24, 30),
         ).astype(jnp.int32)
 
         boss_half_width = self.consts.BOSS_HALF_WIDTH
         boss_is_alive = state.enemies_x[0] > -1
         boss_center_x = state.enemies_x[0].astype(jnp.int32)
-        sampled_offset = jnp.clip(sampled_spawn_x - boss_center_x, -boss_half_width, boss_half_width)
+
+        # Sample offset directly (never absolute screen X then clip) so mass does not
+        # collapse onto ±half_width. Mixture is center-heavy to cover the kill lane.
+        x_mix = jax.random.uniform(key_x_mix, shape=())
+        random_offset = jnp.where(
+            x_mix < 0.50,
+            jax.random.randint(key_x_value, (), -5, 6),   # 50%: tight cockpit band
+            jnp.where(
+                x_mix < 0.85,
+                jax.random.randint(key_x_value, (), -11, 12),  # 35%: near-center
+                jax.random.randint(key_x_value, (), -boss_half_width, boss_half_width + 1),  # 15%: wide
+            ),
+        ).astype(jnp.int32)
+
+        player_offset = jnp.clip(
+            (state.player_x + 2).astype(jnp.int32) - boss_center_x,
+            -boss_half_width,
+            boss_half_width,
+        )
+        aim_at_player = jax.random.uniform(key_aim, shape=()) < self.consts.BOSS_AIM_PLAYER_PROB
+        sampled_offset = jnp.where(aim_at_player, player_offset, random_offset)
+        sampled_offset = jnp.clip(sampled_offset, -boss_half_width, boss_half_width)
+
         proj_offsets = jnp.full((8,), sampled_offset, dtype=jnp.int32)
         eff_enemy_x = jnp.where(boss_is_alive, boss_center_x, state.enemies_x)
         eff_enemy_y = jnp.where(boss_is_alive, state.enemies_y[0], state.enemies_y)
