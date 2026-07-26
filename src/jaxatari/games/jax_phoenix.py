@@ -172,9 +172,7 @@ class PhoenixConstants(AutoDerivedConstants):
     # --- Projectiles ---
     PLAYER_PROJECTILE_SPEED: int = struct.field(pytree_node=False, default=6)
     PLAYER_PROJECTILE_INITIAL_OFFSET: int = struct.field(pytree_node=False, default=-5)
-    # TEMPORARY test spawn: level 13 = 3rd cycle (after 2 boss kills), wave-3 bats with lethal dives.
-    # Set back to 1 when done testing.
-    RESET_START_LEVEL: int = struct.field(pytree_node=False, default=13)
+    RESET_START_LEVEL: int = struct.field(pytree_node=False, default=1)
     ENEMY_PROJECTILE_SPEED: int = struct.field(pytree_node=False, default=2)
 
     # --- Global / shared enemy timing and odds ---
@@ -1446,31 +1444,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         initial_formation_idx = (initial_level - 1) % 5
         initial_enemies_x = self.consts.ENEMY_POSITIONS_X[initial_formation_idx].astype(jnp.float32)
         initial_enemies_y = self.consts.ENEMY_POSITIONS_Y[initial_formation_idx].astype(jnp.float32)
-
-        # TEMPORARY test hook: when RESET_START_LEVEL is a 3rd-cycle bat wave, leave only
-        # BAT_DIVE_LETHAL_ALIVE_MAX bats so the lethal deep dive can arm (ALE: ~2 left).
-        start_wave = initial_level % 5
-        start_cycle = (initial_level - 1) // 5
-        lethal_test_spawn = (
-            ((start_wave == 3) | (start_wave == 4))
-            & (start_cycle >= self.consts.BAT_DIVE_LETHAL_MIN_CYCLE)
-        )
-        valid = initial_enemies_y < (self.consts.HEIGHT + 10)
-        # Keep the top-most N alive bats; remove the rest.
-        keep_n = self.consts.BAT_DIVE_LETHAL_ALIVE_MAX
-        sort_key = jnp.where(valid, initial_enemies_y, jnp.inf)
-        order = jnp.argsort(sort_key)
-        rank = jnp.zeros((8,), dtype=jnp.int32).at[order].set(jnp.arange(8, dtype=jnp.int32))
-        remove = valid & (rank >= keep_n) & lethal_test_spawn
-        initial_enemies_x = jnp.where(remove, -1.0, initial_enemies_x)
-        initial_enemies_y = jnp.where(
-            remove, jnp.asarray(self.consts.HEIGHT + 20, dtype=jnp.float32), initial_enemies_y
-        )
-        initial_dive_timer = jnp.where(
-            lethal_test_spawn,
-            jnp.asarray(0, dtype=jnp.int32),
-            jnp.asarray(self.consts.BAT_DIVE_INTERVAL, dtype=jnp.int32),
-        )
+        initial_dive_timer = jnp.asarray(self.consts.BAT_DIVE_INTERVAL, dtype=jnp.int32)
 
         initial_horizontal_dirs = self._initial_enemy_horizontal_directions(
             initial_level, initial_enemies_x, initial_enemies_y
