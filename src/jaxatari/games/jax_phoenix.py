@@ -156,7 +156,9 @@ class PhoenixConstants(AutoDerivedConstants):
     PLAYER_POSITION: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (79, 173))
     PLAYER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (213, 130, 74))
     PLAYER_BOUNDS: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (0, 155))  # (left, right)
-    PLAYER_EDGE_MARGIN: int = struct.field(pytree_node=False, default=16)  # pixels from each horizontal edge where movement stops
+    PLAYER_EDGE_MARGIN: int = struct.field(pytree_node=False, default=16)  # right-side stop inset
+    # ALE allows ~2px further left than a symmetric margin of 16.
+    PLAYER_EDGE_MARGIN_LEFT: int = struct.field(pytree_node=False, default=14)
     PLAYER_STEP_SIZE: int = struct.field(pytree_node=False, default=1)
     PLAYER_LIVES: int = struct.field(pytree_node=False, default=4)  # Anzahl der Leben
 
@@ -170,7 +172,9 @@ class PhoenixConstants(AutoDerivedConstants):
     # --- Projectiles ---
     PLAYER_PROJECTILE_SPEED: int = struct.field(pytree_node=False, default=6)
     PLAYER_PROJECTILE_INITIAL_OFFSET: int = struct.field(pytree_node=False, default=-5)
-    RESET_START_LEVEL: int = struct.field(pytree_node=False, default=1)
+    # TEMPORARY test spawn: level 13 = 3rd cycle (after 2 boss kills), wave-3 bats with lethal dives.
+    # Set back to 1 when done testing.
+    RESET_START_LEVEL: int = struct.field(pytree_node=False, default=13)
     ENEMY_PROJECTILE_SPEED: int = struct.field(pytree_node=False, default=2)
 
     # --- Global / shared enemy timing and odds ---
@@ -229,6 +233,13 @@ class PhoenixConstants(AutoDerivedConstants):
     BAT_DIVE_FAST_STEP: float = struct.field(pytree_node=False, default=2.0)
     BAT_DIVE_EARLY_PULLUP_FRAMES: int = struct.field(pytree_node=False, default=14)
     BAT_DIVE_PLAYER_OVERLAP_PX: float = struct.field(pytree_node=False, default=1.0)
+    # On bat waves, lethal player-overlap dives unlock after this many completed cycles
+    # (cycle = (level-1)//5). 2 => third difficulty, first bat wave at level 13.
+    BAT_DIVE_LETHAL_MIN_CYCLE: int = struct.field(pytree_node=False, default=2)
+    # How many bats may still be alive before the lethal deep dive arms (~2 observed in ALE).
+    BAT_DIVE_LETHAL_ALIVE_MAX: int = struct.field(pytree_node=False, default=2)
+    # Overlap of bat body into the player sprite at dive bottom (a few px, not below the floor).
+    BAT_DIVE_LETHAL_OVERLAP_PX: float = struct.field(pytree_node=False, default=2.0)
     BAT_DIVE_BOTTOM_MISSING_Y_GAP: float = struct.field(pytree_node=False, default=8.0)
     BAT_DIVE_EXTRA_DEPTH: float = struct.field(pytree_node=False, default=0)
     BAT_DIVE_EXTRA_HOLD_FRAMES: int = struct.field(pytree_node=False, default=4)
@@ -425,6 +436,10 @@ class PhoenixState:
     player_dying: chex.Array = struct.field(default_factory=lambda: jnp.array(False))  # Player dying status, bool
     player_death_timer: chex.Array = struct.field(default_factory=lambda: jnp.array(0))  # Timer for player death animation, int
     player_moving: chex.Array = struct.field(default_factory=lambda: jnp.array(False)) # Player moving status, bool
+    # Last horizontal input dir (-1/0/1). Used for ALE-like 1-frame move inertia on release/reverse.
+    player_prev_input_dir: chex.Array = struct.field(default_factory=lambda: jnp.array(0, dtype=jnp.int32))
+    # True while any FIRE action is held; rising-edge required to shoot (except wave 2 rapid-fire).
+    fire_button_held: chex.Array = struct.field(default_factory=lambda: jnp.array(False))
 
     projectile_x: chex.Array = struct.field(default_factory=lambda: jnp.array(-1))  # Standardwert: kein Projektil
     projectile_y: chex.Array = struct.field(default_factory=lambda: jnp.array(-1))  # Standardwert: kein Projektil # Gegner Y-Positionen
@@ -754,15 +769,27 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
 
         new_cooldown = jnp.where(new_timer == 2, self.consts.ABILITY_COOLDOWN, state.ability_cooldown)
         new_cooldown = jnp.where(new_cooldown > 0, new_cooldown - 1, 0)
-        # movement right/left
+
+        # Desired horizontal input this frame (-1/0/1). Shield locks movement.
+        can_strafe = jnp.logical_not(new_invinsibility)
+        input_dir = jnp.where(
+            right & can_strafe,
+            jnp.array(1, dtype=jnp.int32),
+            jnp.where(left & can_strafe, jnp.array(-1, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32)),
+        )
+        prev_input_dir = state.player_prev_input_dir.astype(jnp.int32)
+        # ALE inertia: on release or instant reverse, keep moving one more frame in the old direction.
+        use_inertia = (prev_input_dir != 0) & (input_dir != prev_input_dir)
+        move_dir = jnp.where(use_inertia, prev_input_dir, input_dir)
+
         player_x = jnp.where(
-            right & jnp.logical_not(new_invinsibility),
+            move_dir > 0,
             state.player_x + step_size,
-            jnp.where(left & jnp.logical_not(new_invinsibility), state.player_x - step_size, state.player_x),
+            jnp.where(move_dir < 0, state.player_x - step_size, state.player_x),
         )
 
         # apply horizontal edge margin
-        left_limit = self.consts.PLAYER_BOUNDS[0] + self.consts.PLAYER_EDGE_MARGIN
+        left_limit = self.consts.PLAYER_BOUNDS[0] + self.consts.PLAYER_EDGE_MARGIN_LEFT
         right_limit = self.consts.PLAYER_BOUNDS[1] - self.consts.PLAYER_EDGE_MARGIN
         player_x = jnp.where(
             player_x < left_limit,
@@ -774,11 +801,13 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         player_moved = jnp.not_equal(player_x.astype(jnp.int32), state.player_x.astype(jnp.int32))
         new_player_moving = player_moved.astype(jnp.bool_)
 
-        state = state.replace(player_x= player_x.astype(jnp.int32),
-                               invincibility=new_invinsibility,
-                               invincibility_timer=new_timer,
-                                player_moving=new_player_moving,
-                                 ability_cooldown=new_cooldown
+        state = state.replace(
+            player_x=player_x.astype(jnp.int32),
+            invincibility=new_invinsibility,
+            invincibility_timer=new_timer,
+            player_moving=new_player_moving,
+            player_prev_input_dir=input_dir.astype(jnp.int32),
+            ability_cooldown=new_cooldown,
         )
 
         return state
@@ -971,23 +1000,46 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             & (alive_count < valid_slot_count)
             & (lowest_alive_y < (lowest_slot_y - self.consts.BAT_DIVE_BOTTOM_MISSING_Y_GAP))
         )
+        # Lethal bat dives only from the 3rd cycle onward (after two boss kills), on bat waves.
+        # cycle 0: levels 1-5, cycle 1: 6-10, cycle 2: 11-15 (bats at 13-14).
+        wave_type = state.level % 5
+        difficulty_cycle = (state.level - 1) // 5
+        lethal_bat_dive = (
+            ((wave_type == 3) | (wave_type == 4))
+            & (difficulty_cycle >= self.consts.BAT_DIVE_LETHAL_MIN_CYCLE)
+        )
+        # ALE: the deep kamikaze swoop shows up when only a couple of bats remain.
+        few_bats_left = (alive_count > 0) & (
+            alive_count <= self.consts.BAT_DIVE_LETHAL_ALIVE_MAX
+        )
+        dive_gate = jnp.where(lethal_bat_dive, few_bats_left, missing_bottom_slots)
         ready_to_start_dive = (
-            (state.bat_dive_phase == 0) & (state.bat_dive_timer <= 0) & missing_bottom_slots
+            (state.bat_dive_phase == 0) & (state.bat_dive_timer <= 0) & dive_gate
         )
         dive_goal = jnp.where(
             ready_to_start_dive,
             (lowest_slot_y - lowest_alive_y) + self.consts.BAT_DIVE_EXTRA_DEPTH,
             state.bat_dive_goal,
         )
-        # Convert the requested early pull-up timing (in frames) into pixels at the current dive speed.
         dive_pixels_per_frame = dive_step_pixels / jnp.maximum(dive_move_interval.astype(jnp.float32), 1.0)
-        early_pullup_px = self.consts.BAT_DIVE_EARLY_PULLUP_FRAMES * dive_pixels_per_frame
-        # Keep a slight overlap budget, but pull up earlier so dives don't heavily enter the player's lane.
-        graze_player_goal = (
-            (state.player_y - self.consts.ENEMY_HEIGHT + self.consts.BAT_DIVE_PLAYER_OVERLAP_PX)
-            - lowest_alive_y
-            - early_pullup_px
+        early_pullup_frames = jnp.where(
+            lethal_bat_dive, jnp.array(0.0, dtype=jnp.float32), jnp.array(float(self.consts.BAT_DIVE_EARLY_PULLUP_FRAMES), dtype=jnp.float32)
         )
+        early_pullup_px = early_pullup_frames * dive_pixels_per_frame
+        overlap_px = jnp.where(
+            lethal_bat_dive,
+            jnp.array(self.consts.BAT_DIVE_LETHAL_OVERLAP_PX, dtype=jnp.float32),
+            jnp.array(self.consts.BAT_DIVE_PLAYER_OVERLAP_PX, dtype=jnp.float32),
+        )
+        # Target y so the bat body overlaps the player by overlap_px, never below the floor.
+        max_enemy_y = jnp.array(
+            self.consts.FLOOR_Y - self.consts.ENEMY_HEIGHT, dtype=jnp.float32
+        )
+        target_enemy_y = jnp.minimum(
+            state.player_y.astype(jnp.float32) - self.consts.ENEMY_HEIGHT + overlap_px,
+            max_enemy_y,
+        )
+        graze_player_goal = target_enemy_y - lowest_alive_y - early_pullup_px
         dive_goal = jnp.where(
             ready_to_start_dive,
             jnp.maximum(dive_goal, graze_player_goal),
@@ -1105,9 +1157,10 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         clipped_x = jnp.clip(proposed_x, bat_x_min.astype(jnp.float32), bat_x_max.astype(jnp.float32))
         new_enemies_x = jnp.where(active_bats, clipped_x, state.enemies_x)
 
-        # Vertikal: nur aktive Bats bewegen und clippen
+        # Vertikal: nur aktive Bats bewegen und clippen (never below the floor line).
         proposed_y = jnp.where(active_bats, state.enemies_y + y_move, state.enemies_y)
-        clipped_y = jnp.clip(proposed_y, 0, self.consts.HEIGHT - self.consts.ENEMY_HEIGHT)
+        y_max = jnp.array(self.consts.FLOOR_Y - self.consts.ENEMY_HEIGHT, dtype=jnp.float32)
+        clipped_y = jnp.clip(proposed_y, 0.0, y_max)
         new_enemies_y = jnp.where(active_bats, clipped_y, state.enemies_y)
 
         # Für Kollisionen die neuen Y-Werte verwenden
@@ -1391,8 +1444,34 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         initial_level = jnp.array(self.consts.RESET_START_LEVEL, dtype=jnp.int32)
         key, bat_anim_key = jax.random.split(key)
         initial_formation_idx = (initial_level - 1) % 5
-        initial_enemies_x = self.consts.ENEMY_POSITIONS_X[initial_formation_idx]
-        initial_enemies_y = self.consts.ENEMY_POSITIONS_Y[initial_formation_idx]
+        initial_enemies_x = self.consts.ENEMY_POSITIONS_X[initial_formation_idx].astype(jnp.float32)
+        initial_enemies_y = self.consts.ENEMY_POSITIONS_Y[initial_formation_idx].astype(jnp.float32)
+
+        # TEMPORARY test hook: when RESET_START_LEVEL is a 3rd-cycle bat wave, leave only
+        # BAT_DIVE_LETHAL_ALIVE_MAX bats so the lethal deep dive can arm (ALE: ~2 left).
+        start_wave = initial_level % 5
+        start_cycle = (initial_level - 1) // 5
+        lethal_test_spawn = (
+            ((start_wave == 3) | (start_wave == 4))
+            & (start_cycle >= self.consts.BAT_DIVE_LETHAL_MIN_CYCLE)
+        )
+        valid = initial_enemies_y < (self.consts.HEIGHT + 10)
+        # Keep the top-most N alive bats; remove the rest.
+        keep_n = self.consts.BAT_DIVE_LETHAL_ALIVE_MAX
+        sort_key = jnp.where(valid, initial_enemies_y, jnp.inf)
+        order = jnp.argsort(sort_key)
+        rank = jnp.zeros((8,), dtype=jnp.int32).at[order].set(jnp.arange(8, dtype=jnp.int32))
+        remove = valid & (rank >= keep_n) & lethal_test_spawn
+        initial_enemies_x = jnp.where(remove, -1.0, initial_enemies_x)
+        initial_enemies_y = jnp.where(
+            remove, jnp.asarray(self.consts.HEIGHT + 20, dtype=jnp.float32), initial_enemies_y
+        )
+        initial_dive_timer = jnp.where(
+            lethal_test_spawn,
+            jnp.asarray(0, dtype=jnp.int32),
+            jnp.asarray(self.consts.BAT_DIVE_INTERVAL, dtype=jnp.int32),
+        )
+
         initial_horizontal_dirs = self._initial_enemy_horizontal_directions(
             initial_level, initial_enemies_x, initial_enemies_y
         )
@@ -1424,6 +1503,8 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             invincibility=jnp.array(False),
             invincibility_timer=jnp.array(0),
             ability_cooldown=jnp.array(0),
+            player_prev_input_dir=jnp.array(0, dtype=jnp.int32),
+            fire_button_held=jnp.array(False),
 
             bat_wings=jnp.full((8,), 2),
             bat_dying=jnp.full((8,), False, dtype=jnp.bool), # Bat dying status, (8,), bool
@@ -1434,7 +1515,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             bat_edge_profile_timer=jnp.full((8,), 0, dtype=jnp.int32),
             bat_motion_tick=jnp.full((8,), 0, dtype=jnp.int32),
             bat_dive_phase=jnp.array(0, dtype=jnp.int32),
-            bat_dive_timer=jnp.array(self.consts.BAT_DIVE_INTERVAL, dtype=jnp.int32),
+            bat_dive_timer=jnp.array(initial_dive_timer, dtype=jnp.int32),
             bat_dive_hold_timer=jnp.array(0, dtype=jnp.int32),
             bat_dive_travelled=jnp.array(0.0, dtype=jnp.float32),
             bat_dive_goal=jnp.array(0.0, dtype=jnp.float32),
@@ -1732,7 +1813,8 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
 
         projectile_active = state.projectile_y >= 0
 
-        # Can fire only if inactive
+        # Can fire only if inactive. ALE requires a fresh press each shot, except wave 2
+        # (level % 5 == 2) which allows hold-to-fire / rapid fire.
         can_fire = (~projectile_active) & (~state.player_dying) & (state.player_respawn_timer <= 0)
         fire_actions = jnp.array([
             atari_action == Action.FIRE,
@@ -1740,7 +1822,11 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             atari_action == Action.RIGHTFIRE,
             atari_action == Action.DOWNFIRE,
         ])
-        firing = jnp.any(fire_actions) & can_fire
+        fire_pressed = jnp.any(fire_actions)
+        allow_hold_fire = (state.level % 5) == 2
+        fire_edge = fire_pressed & (jnp.logical_not(state.fire_button_held) | allow_hold_fire)
+        firing = fire_edge & can_fire
+        new_fire_button_held = fire_pressed
 
         pre_step_phoenix_do_attack = state.phoenix_do_attack
         state, sub_step_score, sub_step_hit = jax.lax.cond(
@@ -2032,7 +2118,7 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         transition_ended = (state.level_transition_timer > 0) & (new_level_transition_timer == 0)
 
         # 2) Nächstes Level vormerken und erst bei Timerende aktivieren
-        pending_next_level = (state.level % 5) + 1
+        pending_next_level = state.level + 1
         level = jnp.where(transition_ended, pending_next_level, state.level)
 
         # 3) Gegner-Formationen nur bei Timerende spawnen
@@ -2165,6 +2251,11 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             jnp.array(False, dtype=jnp.bool_),
             state.player_moving
         )
+        new_player_prev_input_dir = jnp.where(
+            jnp.logical_or(new_player_dying, player_respawn_timer > 0),
+            jnp.array(0, dtype=jnp.int32),
+            state.player_prev_input_dir.astype(jnp.int32),
+        )
 
         #enemy_respawn_x = jax.lax.switch((level - 1) % 5, self.consts.ENEMY_POSITIONS_X_LIST).astype(jnp.float32)
         #enemy_respawn_y = jax.lax.switch((level - 1) % 5, self.consts.ENEMY_POSITIONS_Y_LIST).astype(jnp.float32)
@@ -2248,6 +2339,8 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             player_dying=new_player_dying,
             player_death_timer=new_player_death_timer,
             player_moving=new_player_moving,
+            player_prev_input_dir=new_player_prev_input_dir,
+            fire_button_held=new_fire_button_held,
             level_transition_timer=new_level_transition_timer,
             ability_cooldown=state.ability_cooldown,
             bat_wing_regen_timer=state.bat_wing_regen_timer,
