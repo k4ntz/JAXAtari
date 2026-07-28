@@ -1053,7 +1053,6 @@ class ContinuousActionWrapper(JaxatariWrapper):
 
     def __init__(self, env: JaxatariWrapper, tau: float = 0.5):
         super().__init__(env)
-        assert isinstance(env, AtariWrapper), "ContinuousActionWrapper must be applied after AtariWrapper"
         if not getattr(env, 'full_action_space', False):
             raise ValueError(
                 "ContinuousActionWrapper requires full_action_space=True in the wrapped AtariWrapper. "
@@ -1073,8 +1072,8 @@ class ContinuousActionWrapper(JaxatariWrapper):
 
     def _build_lookup_table(self) -> jax.Array:
         """Constructs a static 3D lookup table mapping joystick states to IDs.
-        Grid dimensions: [Left-Center-Right (3) x Down-Center-Up (3) x Fire
-        OnOff (2)]
+        Grid dimensions (3 x 3 x 2): [Left(0)-Center(1)-Right(2) x Down(0)-Center(1)-Up(2) x Fire
+        Off(0)-On(1)]
         """
         lookup = np.zeros((3, 3, 2), dtype=np.int32)
         lookup[1, 1, 0] = Action.NOOP

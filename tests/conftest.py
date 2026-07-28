@@ -328,6 +328,9 @@ WRAPPER_RECIPES = {
     "ContinuousAction": lambda env: ContinuousActionWrapper(
         AtariWrapper(env, full_action_space=True)
     ),
+    "ContinuousActionLoggedFlattenedPixelAndObject": lambda env: ContinuousActionWrapper(LogWrapper(
+        FlattenObservationWrapper(PixelAndObjectCentricWrapper(AtariWrapper(env))))
+    ),
 }
 
 SMOKE_WRAPPER_RECIPE_NAMES = (
