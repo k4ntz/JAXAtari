@@ -12,7 +12,15 @@ from jaxatari.games.mods.mspacman.mspacman_mod_plugins import (
     Only2GhostMod,
     Only3GhostMod,
     RandomGhostNavigationMod,
-    MatrixMod
+    MatrixMod,
+    RandomPowerPelletsMod,
+    SpeedFrenzyMod,
+    FragileGhostsMod,
+    GreedyPacManMod,
+    CozyStartMod,
+    InvisibleDotsMod,
+    GhostMagnetismMod,
+    TeleportationErrorMod,
 )
 
 class MsPacmanEnvMod(JaxAtariModController):
@@ -32,6 +40,14 @@ class MsPacmanEnvMod(JaxAtariModController):
         "only_3_ghost": Only3GhostMod,
         "random_ghost_navigation": RandomGhostNavigationMod,
         "matrix_theme": MatrixMod,
+        "random_power_pellets": RandomPowerPelletsMod,
+        "speed_frenzy": SpeedFrenzyMod,
+        "fragile_ghosts": FragileGhostsMod,
+        "greedy_pacman": GreedyPacManMod,
+        "cozy_start": CozyStartMod,
+        "invisible_dots": InvisibleDotsMod,
+        "ghost_magnetism": GhostMagnetismMod,
+        "teleportation_error": TeleportationErrorMod,
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "mspacman", "sprites")
