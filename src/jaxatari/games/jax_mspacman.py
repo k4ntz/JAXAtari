@@ -197,8 +197,6 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, MsPac
             Action.DOWNRIGHT,
             Action.DOWNLEFT,
         ]
-        # Overlay / gym wrappers pass an index into action_set, not the ALE Action enum.
-        self.ACTION_SET = jnp.array(self.action_set, dtype=jnp.int32)
         self.renderer = MsPacmanRenderer(self.consts)
 
     def action_space(self) -> spaces.Discrete:
@@ -245,9 +243,6 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, MsPac
         maze_idx = get_level_maze(state.level.id)
         dofmaze = self.consts.DOF_MAZES[maze_idx]
 
-        # Map action-set index → ALE Action enum (player_step expects enum values).
-        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
-
         ( # 2) Pacman handling
             player_position,
             player_action,
@@ -258,7 +253,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, MsPac
             ate_power_pellet,
             pellet_reward,
             level_id
-        ) = self.player_step(state, atari_action, dofmaze, self.consts)
+        ) = self.player_step(state, action, dofmaze, self.consts)
 
         ( # 3) Fruit handling
             fruit_state,
