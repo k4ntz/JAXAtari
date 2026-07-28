@@ -6,8 +6,11 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 # JAX make() key → OCAtari / ALE PascalCase name (from docs comparison map).
 JAX_TO_OC_GAME: Dict[str, str] = {
+    "asteroids": "Asteroids",
     "bankheist": "BankHeist",
     "beamrider": "BeamRider",
+    "breakout": "Breakout",
+    "enduro": "Enduro",
     "freeway": "Freeway",
     "frostbite": "Frostbite",
     "gravitar": "Gravitar",
@@ -37,8 +40,10 @@ TRANSLATOR_DISCLAIMERS: Dict[str, List[str]] = {
     "bankheist": [
         "ASSUMPTION: always inject into JAX map_id=0 / level=0 / difficulty=0 "
         "(do not switch cities in OC if you want a fair visual transfer).",
-        "ASSUMPTION: speed/latches/timers/city_states/portals left at reset defaults; "
-        "player direction inferred from Δx/Δy; fuel scaled from Gas_Tank height.",
+        "ASSUMPTION: speed/timers/city_states/portals left at reset defaults; "
+        "player_move_direction from multi-frame XY lookback (coasts on NOOP / "
+        "half-speed frames); facing + latched_action from OC stick; "
+        "fuel scaled from Gas_Tank height.",
     ],
     "pong": [
         "ASSUMPTION: player/enemy analog speeds from clipped Δy lookback; "
@@ -60,8 +65,13 @@ TRANSLATOR_DISCLAIMERS: Dict[str, List[str]] = {
         "ASSUMPTION: mid-rally move/vz from OC Δ; scores RESET when .value missing.",
     ],
     "seaquest": [
-        "ASSUMPTION: sharks AND Submarine packed by nearest lane Y; facing from dx else orientation.",
-        "ASSUMPTION: spawn timers softened; divers_collected RESET; oxygen from OxygenBar.value.",
+        "ASSUMPTION: sharks AND Submarine packed by nearest lane Y; facing from dx, "
+        "else prev-frame Δx in-lane, else orientation.",
+        "ASSUMPTION: CollectedDiver HUD count → divers_collected; just_surfaced=0 when "
+        "player Y>52 (avoid init oxygen refill); diver_array cleared unless OC shows escort.",
+        "ASSUMPTION: spawn timers softened / oracle-scheduled; oxygen from OxygenBar.value.",
+        "ASSUMPTION: missing OC Player (death blink) → JAX player_x=-100, death_counter=45 "
+        "(hide phase); compare extractors omit hidden player.",
     ],
     "kangaroo": [
         "ASSUMPTION: force current_level=1; platform/ladder geometry kept from JAX.",
@@ -92,6 +102,8 @@ TRANSLATOR_DISCLAIMERS: Dict[str, List[str]] = {
     "montezumarevenge": [
         "ASSUMPTION: force INITIAL_ROOM_ID (start room); keep JAX room geometry.",
         "ASSUMPTION: OC_y = JAX_y + 47 applied on inject; only player/Skull/Key/HUD overlaid.",
+        "ASSUMPTION: is_climbing from OC Ladder overlap using player feet + mid-x (not "
+        "player top); sets last_ladder + snaps X to JAX ladder center when climbing.",
         "ASSUMPTION: trajectories should stay in room one (key collect OK).",
     ],
     "beamrider": [
@@ -99,6 +111,21 @@ TRANSLATOR_DISCLAIMERS: Dict[str, List[str]] = {
         "enemies are visible; steps≥2001 so shooting unlocks. score/lives/sector RESET.",
         "ASSUMPTION: OC only exposes Player+Saucer (often 2×2); player snapped to "
         "BOTTOM_OF_LANES. Soft survival mostly player-lane + saucer XY.",
+    ],
+    "breakout": [
+        "ASSUMPTION: Block runs expand into JAX (6,18) grid via BLOCK_START/SIZE; "
+        "ball vel from dx/dy signs; small_paddle/hit counters RESET.",
+        "ASSUMPTION: Lives category may be 'Live' (singular); score/lives only if .value set.",
+    ],
+    "enduro": [
+        "ASSUMPTION: overlay Player + Cars into visible_opponent_positions (near→far by y); "
+        "base_opponents / track / density / collision FSM RESET.",
+        "ASSUMPTION: next JAX step may rewrite car X from lane+track — soft survival only.",
+    ],
+    "asteroids": [
+        "ASSUMPTION: player screen XY → subpixel via (s//2)*256; rocks packed ≤17 by (y,x); "
+        "size from w×h; missing Player → respawn_timer hide.",
+        "ASSUMPTION: rng_key / side_step / missile speeds RESET; OC may list >17 asteroids.",
     ],
     "phoenix": [
         "ASSUMPTION: force level=1; boss/bat FSM left at RESET.",
@@ -187,6 +214,9 @@ _IMPLEMENTED = [
     "beamrider",
     "phoenix",
     "qbert",
+    "breakout",
+    "enduro",
+    "asteroids",
 ]
 
 
@@ -248,6 +278,18 @@ def get_translator(jax_key: str) -> TranslatorFn:
         from .qbert import oc_frame_to_qbert_state
 
         return oc_frame_to_qbert_state
+    if jax_key == "breakout":
+        from .breakout import oc_frame_to_breakout_state
+
+        return oc_frame_to_breakout_state
+    if jax_key == "enduro":
+        from .enduro import oc_frame_to_enduro_state
+
+        return oc_frame_to_enduro_state
+    if jax_key == "asteroids":
+        from .asteroids import oc_frame_to_asteroids_state
+
+        return oc_frame_to_asteroids_state
     raise SystemExit(
         f"No OC→JAX translator implemented yet for '{jax_key}'. "
         f"Implemented: {', '.join(list_implemented_translators())}."

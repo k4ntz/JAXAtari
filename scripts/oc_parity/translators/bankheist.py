@@ -8,6 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from jaxatari.environment import JAXAtariAction as Action
 from jaxatari.games.jax_bankheist import (
     BankHeistConstants,
     BankHeistState,
@@ -18,6 +19,33 @@ from jaxatari.games.jax_bankheist import (
 
 from .base import find_object, objects_as_dicts
 from .registry import print_disclaimers
+
+# BankHeist DIR_* (matches BankHeistConstants).
+_DIR_DOWN = 0
+_DIR_UP = 1
+_DIR_RIGHT = 2
+_DIR_LEFT = 3
+_DIR_NOOP = 4
+
+# Stick → facing. Diagonals follow player_input_step (vertical component wins).
+_ACTION_TO_DIR = {
+    "UP": _DIR_UP,
+    "DOWN": _DIR_DOWN,
+    "LEFT": _DIR_LEFT,
+    "RIGHT": _DIR_RIGHT,
+    "UPFIRE": _DIR_UP,
+    "DOWNFIRE": _DIR_DOWN,
+    "LEFTFIRE": _DIR_LEFT,
+    "RIGHTFIRE": _DIR_RIGHT,
+    "UPRIGHT": _DIR_UP,
+    "UPLEFT": _DIR_UP,
+    "DOWNRIGHT": _DIR_DOWN,
+    "DOWNLEFT": _DIR_DOWN,
+    "UPRIGHTFIRE": _DIR_UP,
+    "UPLEFTFIRE": _DIR_UP,
+    "DOWNRIGHTFIRE": _DIR_DOWN,
+    "DOWNLEFTFIRE": _DIR_DOWN,
+}
 
 
 def _infer_direction(
@@ -30,8 +58,48 @@ def _infer_direction(
     if dx == 0.0 and dy == 0.0:
         return int(fallback)
     if abs(dx) > abs(dy):
-        return 2 if dx > 0 else 3  # RIGHT / LEFT
-    return 0 if dy > 0 else 1  # DOWN / UP
+        return _DIR_RIGHT if dx > 0 else _DIR_LEFT
+    return _DIR_DOWN if dy > 0 else _DIR_UP
+
+
+def _action_name(action: Optional[int], meanings: Optional[Sequence[str]]) -> str:
+    if action is None:
+        return "NOOP"
+    a = int(action)
+    if meanings is not None and 0 <= a < len(meanings):
+        return str(meanings[a]).upper()
+    # ALE / JAXAtariAction index names when meanings missing.
+    names = [
+        "NOOP",
+        "FIRE",
+        "UP",
+        "RIGHT",
+        "LEFT",
+        "DOWN",
+        "UPRIGHT",
+        "UPLEFT",
+        "DOWNRIGHT",
+        "DOWNLEFT",
+        "UPFIRE",
+        "RIGHTFIRE",
+        "LEFTFIRE",
+        "DOWNFIRE",
+        "UPRIGHTFIRE",
+        "UPLEFTFIRE",
+        "DOWNRIGHTFIRE",
+        "DOWNLEFTFIRE",
+    ]
+    return names[a] if 0 <= a < len(names) else "NOOP"
+
+
+def _dir_from_action_name(name: str, *, fallback: int) -> int:
+    return int(_ACTION_TO_DIR.get(str(name).upper(), fallback))
+
+
+def _atari_action_value(action: Optional[int], meanings: Optional[Sequence[str]]) -> int:
+    """Map OC action index → JAXAtariAction enum int (stored in latched_action)."""
+    name = _action_name(action, meanings)
+    return int(getattr(Action, name, Action.NOOP))
 
 
 def _player_delta(
@@ -49,6 +117,28 @@ def _player_delta(
         dy = y - float(player.get("prev_y", y))
     return dx, dy
 
+
+def _coasting_direction_from_lookback(
+    xy_lookback: Sequence[Tuple[float, float]],
+    *,
+    fallback: int = _DIR_NOOP,
+) -> int:
+    """Most recent nonzero step in ``xy_lookback`` (oldest → newest, incl. current).
+
+    BankHeist often moves on alternate frames (speed 0.5), so a 1-frame Δ is
+    frequently (0,0) even while the car is still coasting after the stick is
+    released — scan further back for the last real displacement.
+    """
+    if len(xy_lookback) < 2:
+        return int(fallback)
+    for i in range(len(xy_lookback) - 1, 0, -1):
+        x1, y1 = xy_lookback[i]
+        x0, y0 = xy_lookback[i - 1]
+        dx = float(x1) - float(x0)
+        dy = float(y1) - float(y0)
+        if dx != 0.0 or dy != 0.0:
+            return _infer_direction(dx, dy, fallback=fallback)
+    return int(fallback)
 
 def _collect_category(objs: Sequence[Mapping[str, Any]], category: str) -> List[Mapping[str, Any]]:
     return [
@@ -110,6 +200,10 @@ def oc_frame_to_bankheist_state(
     seed: int = 0,
     frame_index: int = 0,
     prev_player_xy: Optional[Tuple[float, float]] = None,
+    player_xy_lookback: Optional[Sequence[Tuple[float, float]]] = None,
+    oc_action: Optional[int] = None,
+    prev_oc_action: Optional[int] = None,
+    action_meanings: Optional[Sequence[str]] = None,
     print_assumptions: bool = False,
     **_ignored,
 ) -> BankHeistState:
@@ -119,7 +213,9 @@ def oc_frame_to_bankheist_state(
     - Always ``level/map_id/difficulty_level = 0``
     - Speeds / latches / spawn timers internals → reset defaults (bank timers
       forced inactive when OC banks are placed so reset spawn does not clobber)
-    - Player direction inferred from motion
+    - ``player_move_direction`` from multi-frame position lookback (car coasts
+      on NOOP; single-frame Δ is often 0 at half-speed)
+    - Facing / stick from current (else prev) OC action when directional
     - Fuel scaled from ``Gas_Tank`` sprite height when present
     """
     del frame_index  # reserved for future use / API parity with pong
@@ -149,18 +245,56 @@ def oc_frame_to_bankheist_state(
     updates["spawn_points"] = env.city_spawns[0]
 
     if player is not None:
+        # Build oldest→newest xy history for coasting inference.
+        lookback: List[Tuple[float, float]] = []
+        if player_xy_lookback:
+            lookback.extend(
+                (float(x), float(y)) for x, y in player_xy_lookback if x is not None
+            )
+        cur_xy = (float(player["x"]), float(player["y"]))
+        if not lookback or lookback[-1] != cur_xy:
+            # Ensure current frame is last; seed with single-frame prev if needed.
+            if not lookback and prev_player_xy is not None:
+                lookback.append(
+                    (float(prev_player_xy[0]), float(prev_player_xy[1]))
+                )
+            lookback.append(cur_xy)
+
         dx, dy = _player_delta(player, prev_player_xy)
-        direction = _infer_direction(
-            dx, dy, fallback=int(np.asarray(state.player.direction))
+        move_dir = _coasting_direction_from_lookback(
+            lookback, fallback=_DIR_NOOP
         )
+        if move_dir == _DIR_NOOP:
+            # Fall back to OC dx/dy / 1-frame prev when lookback is flat.
+            move_dir = _infer_direction(dx, dy, fallback=_DIR_NOOP)
+
+        act_name = _action_name(oc_action, action_meanings)
+        face_dir = _dir_from_action_name(act_name, fallback=_DIR_NOOP)
+        if face_dir == _DIR_NOOP:
+            face_dir = _dir_from_action_name(
+                _action_name(prev_oc_action, action_meanings),
+                fallback=move_dir if move_dir != _DIR_NOOP else _DIR_NOOP,
+            )
+        if face_dir == _DIR_NOOP and move_dir != _DIR_NOOP:
+            face_dir = move_dir
+        # If stick says move but we never saw motion, start moving that way.
+        if move_dir == _DIR_NOOP and face_dir != _DIR_NOOP:
+            move_dir = face_dir
+
         updates["player"] = Entity(
             position=jnp.array(
                 [int(player["x"]), int(player["y"])], dtype=jnp.int32
             ),
-            direction=jnp.array(direction, dtype=jnp.int32),
+            direction=jnp.array(face_dir, dtype=jnp.int32),
             visibility=jnp.array(1, dtype=jnp.int32),
         )
-        updates["player_move_direction"] = jnp.array(direction, dtype=jnp.int32)
+        updates["player_move_direction"] = jnp.array(move_dir, dtype=jnp.int32)
+
+        # First post-inject step applies latched_action from the *previous* frame.
+        latch_src = prev_oc_action if prev_oc_action is not None else oc_action
+        updates["latched_action"] = jnp.array(
+            _atari_action_value(latch_src, action_meanings), dtype=jnp.int32
+        )
 
     if banks:
         updates["bank_positions"] = _entity_from_objects(banks)

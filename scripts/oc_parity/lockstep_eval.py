@@ -112,13 +112,26 @@ def _sample_t0s(
 
 
 def _inject_state(env, jax_key: str, traj: Dict[str, Any], t0: int):
+    import inspect
+
     from oc_parity.translators.registry import get_translator
     from oc_parity.translators.base import objects_as_dicts, find_object
 
     translate = get_translator(jax_key)
     objs = traj["objects"][t0]
     seed = int(traj.get("meta", {}).get("seed", 0))
-    kwargs: Dict[str, Any] = {"seed": seed, "frame_index": t0}
+    meanings = traj.get("meta", {}).get("action_meanings")
+    kwargs: Dict[str, Any] = {
+        "seed": seed,
+        "frame_index": t0,
+        "action_meanings": meanings,
+        "oc_action": int(traj["actions"][t0]) if traj.get("actions") is not None else None,
+        "prev_oc_action": (
+            int(traj["actions"][t0 - 1])
+            if t0 > 0 and traj.get("actions") is not None
+            else None
+        ),
+    }
 
     prev_xy = None
     prev_player = None
@@ -131,7 +144,19 @@ def _inject_state(env, jax_key: str, traj: Dict[str, Any], t0: int):
         if prev_player is not None:
             prev_xy = (float(prev_player["x"]), float(prev_player["y"]))
 
-    # Translators accept the kwargs they need and ignore the rest via **_ignored.
+    # Multi-frame player XY lookback (BankHeist coasts on alternate frames).
+    lookback_n = 16
+    xy_lookback: List[Tuple[float, float]] = []
+    t_lo = max(0, t0 - lookback_n + 1)
+    for t in range(t_lo, t0 + 1):
+        d = objects_as_dicts(traj["objects"][t])
+        p = find_object(d, "Player")
+        if p is None:
+            p = find_object(d, "Chicken")
+        if p is not None and int(p.get("w", 1)) > 0:
+            xy_lookback.append((float(p["x"]), float(p["y"])))
+    kwargs["player_xy_lookback"] = xy_lookback
+
     kwargs["prev_player_y"] = None if prev_xy is None else prev_xy[1]
     kwargs["prev_player_xy"] = prev_xy
     kwargs["prev_enemy_y"] = None
@@ -139,8 +164,16 @@ def _inject_state(env, jax_key: str, traj: Dict[str, Any], t0: int):
         prev_enemy = find_object(objects_as_dicts(traj["objects"][t0 - 1]), "Enemy")
         if prev_enemy is not None:
             kwargs["prev_enemy_y"] = float(prev_enemy["y"])
+        kwargs["prev_objects"] = traj["objects"][t0 - 1]
+    else:
+        kwargs["prev_objects"] = None
 
-    return translate(env, objs, **kwargs)
+    # Translators differ in signature; only pass accepted kwargs (or **kwargs).
+    sig = inspect.signature(translate)
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+        return translate(env, objs, **kwargs)
+    filtered = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    return translate(env, objs, **filtered)
 
 
 def _extract_pair(jax_key: str, env, state, oc_objects):
@@ -173,8 +206,12 @@ def run_one_lockstep(
     persist: int,
     keep_strips: bool,
     strip_ks: Sequence[int],
+    oracle_lookahead: bool = False,
+    oracle_horizon: Optional[int] = None,
 ) -> Dict[str, Any]:
     from oc_parity.metrics import (
+        baseline_relative_pixel_metrics,
+        change_maps,
         combine_frame_metrics,
         entity_metrics,
         first_diverge_index,
@@ -184,6 +221,18 @@ def run_one_lockstep(
 
     meanings = traj.get("meta", {}).get("action_meanings")
     state = _inject_state(env, jax_key, traj, t0)
+    if oracle_lookahead:
+        from oc_parity.oracle_lookahead import apply_oracle_lookahead, supports_oracle
+
+        if supports_oracle(jax_key):
+            state = apply_oracle_lookahead(
+                env,
+                state,
+                traj,
+                jax_key=jax_key,
+                t0=t0,
+                horizon=int(oracle_horizon if oracle_horizon is not None else n),
+            )
 
     series: Dict[str, List[float]] = {
         "entity_mean_l1": [],
@@ -193,27 +242,66 @@ def run_one_lockstep(
         "score_max_abs": [],
         "pixel_mae": [],
         "pixel_equal_frac": [],
+        "pixel_mae_excess": [],
+        "pixel_mae_delta": [],
+        "pixel_mae_signed_delta": [],
     }
     strict_flags: List[bool] = []
     soft_flags: List[bool] = []
     strip_frames: List[Optional[Tuple[np.ndarray, np.ndarray]]] = [None] * n
+    change_strip_frames: List[Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]] = [
+        None
+    ] * n
+    # Full timeline for motion heatmaps (t0 → soft-diverge / end).
+    motion_pairs: List[Optional[Tuple[np.ndarray, np.ndarray]]] = [None] * n
+
+    oc0: Optional[np.ndarray] = None
+    jax0: Optional[np.ndarray] = None
+    mae0: Optional[float] = None
+    per_entity_at_0: Optional[Dict[str, Any]] = None
+    per_entity_at_end: Optional[Dict[str, Any]] = None
 
     for k in range(n):
         t = t0 + k
         oc_cmp, jax_cmp = _extract_pair(jax_key, env, state, traj["objects"][t])
         ent = entity_metrics(oc_cmp, jax_cmp, tau=tau, soft_tau=soft_tau)
+        if k == 0:
+            per_entity_at_0 = ent.get("per_entity") or {}
+        if k == n - 1:
+            per_entity_at_end = ent.get("per_entity") or {}
 
         jax_frame = np.asarray(jitted_render(state), dtype=np.uint8)
         if traj["frames"] is not None:
             oc_frame = np.asarray(traj["frames"][t], dtype=np.uint8)
-            pix = pixel_metrics(oc_frame, jax_frame)
-            if keep_strips and k in strip_ks:
-                strip_frames[k] = (oc_frame.copy(), jax_frame.copy())
+            if k == 0:
+                oc0 = oc_frame.copy()
+                jax0 = jax_frame.copy()
+                mae0 = float(pixel_metrics(oc0, jax0)["pixel_mae"])
+                pix = baseline_relative_pixel_metrics(
+                    oc_frame, jax_frame, oc0, jax0, mae0=mae0
+                )
+            else:
+                assert oc0 is not None and jax0 is not None
+                pix = baseline_relative_pixel_metrics(
+                    oc_frame, jax_frame, oc0, jax0, mae0=mae0
+                )
+            if keep_strips:
+                motion_pairs[k] = (oc_frame.copy(), jax_frame.copy())
+                if k in strip_ks:
+                    strip_frames[k] = motion_pairs[k]
+                    if oc0 is not None and jax0 is not None:
+                        change_strip_frames[k] = change_maps(
+                            oc_frame, jax_frame, oc0, jax0
+                        )
         else:
             pix = {
                 "pixel_mae": float("nan"),
                 "pixel_mae_norm": float("nan"),
                 "pixel_equal_frac": float("nan"),
+                "pixel_mae0": float("nan"),
+                "pixel_mae_excess": float("nan"),
+                "pixel_mae_delta": float("nan"),
+                "pixel_mae_signed_delta": float("nan"),
             }
 
         frame = combine_frame_metrics(ent, pix)
@@ -242,8 +330,13 @@ def run_one_lockstep(
         "survived_strict": fd_strict is None,
         "series": series,
         "strip_frames": strip_frames if keep_strips else None,
+        "change_strip_frames": change_strip_frames if keep_strips else None,
+        "motion_pairs": motion_pairs if keep_strips else None,
+        "mae0": mae0,
         "metrics_at_0": {k: series[k][0] for k in series},
         "metrics_at_end": {k: series[k][-1] for k in series},
+        "per_entity_at_0": per_entity_at_0 or {},
+        "per_entity_at_end": per_entity_at_end or {},
     }
 
 
@@ -304,10 +397,26 @@ def aggregate_runs(runs: Sequence[Dict[str, Any]], n: int) -> Dict[str, Any]:
         "mean_pixel_mae_at_end": float(
             np.nanmean([r["metrics_at_end"]["pixel_mae"] for r in runs])
         ),
+        "mean_pixel_mae_excess_at_end": float(
+            np.nanmean([r["metrics_at_end"].get("pixel_mae_excess", np.nan) for r in runs])
+        ),
+        "mean_pixel_mae_delta_at_end": float(
+            np.nanmean([r["metrics_at_end"].get("pixel_mae_delta", np.nan) for r in runs])
+        ),
+        "mean_mae0": float(
+            np.nanmean(
+                [
+                    r.get("mae0", r["metrics_at_0"].get("pixel_mae", np.nan))
+                    for r in runs
+                ]
+            )
+        ),
         "curves": {
             "entity_mean_l1": stack_mean("entity_mean_l1"),
             "score_mean_abs": stack_mean("score_mean_abs"),
             "pixel_mae": stack_mean("pixel_mae"),
+            "pixel_mae_excess": stack_mean("pixel_mae_excess"),
+            "pixel_mae_delta": stack_mean("pixel_mae_delta"),
         },
         "first_diverges": fds_soft,
         "first_diverges_soft": fds_soft,
@@ -372,6 +481,18 @@ def main() -> None:
         default=None,
         help="Optional cap on number of trajectory files",
     )
+    parser.add_argument(
+        "--oracle-lookahead",
+        action="store_true",
+        help="After inject, bake OC-future spawn/movement into JAX latent state "
+        "(seaquest/enduro/asteroids/bankheist/mspacman/venture/beamrider/phoenix)",
+    )
+    parser.add_argument(
+        "--oracle-horizon",
+        type=int,
+        default=None,
+        help="Lookahead frames for oracle (default: same as --n)",
+    )
     args = parser.parse_args()
 
     import jax
@@ -405,7 +526,7 @@ def main() -> None:
         f"Lockstep eval: game={jax_key} (OC={oc_name}) n={args.n} "
         f"t0_mode={args.t0_mode} num_t0={args.num_t0} skip_frames={args.skip_frames} "
         f"soft_tau={args.soft_tau} persist={args.persist} tau_strict={args.tau} "
-        f"trajs={len(paths)}"
+        f"oracle={args.oracle_lookahead} trajs={len(paths)}"
     )
 
     env = jaxatari.make(jax_key)
@@ -457,6 +578,8 @@ def main() -> None:
                 persist=args.persist,
                 keep_strips=True,
                 strip_ks=strip_ks,
+                oracle_lookahead=args.oracle_lookahead,
+                oracle_horizon=args.oracle_horizon,
             )
             run["traj_path"] = path
             runs.append(run)
@@ -467,6 +590,7 @@ def main() -> None:
                 f"(strict={fd_h if fd_h is not None else 'survived'}) "
                 f"entity_l1@0={run['metrics_at_0']['entity_mean_l1']:.2f} "
                 f"pixel_mae@0={run['metrics_at_0']['pixel_mae']:.2f} "
+                f"mae_excess@end={run['metrics_at_end'].get('pixel_mae_excess', float('nan')):.2f} "
                 f"score_abs@0={run['metrics_at_0']['score_mean_abs']:.2f}"
             )
 
@@ -487,6 +611,8 @@ def main() -> None:
         "t0_mode": args.t0_mode,
         "num_t0": args.num_t0,
         "skip_frames": args.skip_frames,
+        "oracle_lookahead": args.oracle_lookahead,
+        "oracle_horizon": args.oracle_horizon if args.oracle_horizon is not None else args.n,
         "aggregate": {k: v for k, v in agg.items() if k != "curves"},
         "runs": [
             {
@@ -499,6 +625,8 @@ def main() -> None:
                 "survived_strict": r["survived_strict"],
                 "metrics_at_0": r["metrics_at_0"],
                 "metrics_at_end": r["metrics_at_end"],
+                "per_entity_at_0": r.get("per_entity_at_0") or {},
+                "per_entity_at_end": r.get("per_entity_at_end") or {},
             }
             for r in runs
         ],
@@ -527,7 +655,23 @@ def main() -> None:
         {"mean": agg["curves"]["pixel_mae"]["mean"],
          "q25": agg["curves"]["pixel_mae"]["q25"],
          "q75": agg["curves"]["pixel_mae"]["q75"]},
-        title=f"{jax_key}: pixel MAE",
+        title=f"{jax_key}: pixel MAE (absolute)",
+        vline=agg["median_first_diverge_soft"],
+    )
+    report_mod.plot_time_series(
+        os.path.join(out_dir, "pixel_mae_excess.png"),
+        {"mean": agg["curves"]["pixel_mae_excess"]["mean"],
+         "q25": agg["curves"]["pixel_mae_excess"]["q25"],
+         "q75": agg["curves"]["pixel_mae_excess"]["q75"]},
+        title=f"{jax_key}: pixel MAE excess vs transfer (mae - mae0)",
+        vline=agg["median_first_diverge_soft"],
+    )
+    report_mod.plot_time_series(
+        os.path.join(out_dir, "pixel_mae_delta.png"),
+        {"mean": agg["curves"]["pixel_mae_delta"]["mean"],
+         "q25": agg["curves"]["pixel_mae_delta"]["q25"],
+         "q75": agg["curves"]["pixel_mae_delta"]["q75"]},
+        title=f"{jax_key}: change-map MAE (|OC-oc0| vs |JAX-jax0|)",
         vline=agg["median_first_diverge_soft"],
     )
     report_mod.plot_diverge_histogram(
@@ -562,7 +706,9 @@ def main() -> None:
     )
     print(
         f"score |Δ| @0={agg['mean_score_abs_at_0']:.2f} @end={agg['mean_score_abs_at_end']:.2f}  "
-        f"pixel MAE @0={agg['mean_pixel_mae_at_0']:.2f} @end={agg['mean_pixel_mae_at_end']:.2f}"
+        f"pixel MAE @0={agg['mean_pixel_mae_at_0']:.2f} @end={agg['mean_pixel_mae_at_end']:.2f}  "
+        f"mae0={agg['mean_mae0']:.2f} excess@end={agg['mean_pixel_mae_excess_at_end']:.2f} "
+        f"delta@end={agg['mean_pixel_mae_delta_at_end']:.2f}"
     )
     print(f"Report written to {out_dir}")
 

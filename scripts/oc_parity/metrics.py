@@ -65,16 +65,23 @@ DEFAULT_SOFT_TAU = 12.0  # mean L1 over primary entities (px)
 DEFAULT_PERSIST = 5  # consecutive soft-breach frames before "diverged"
 
 
+def _crop_pair(a: np.ndarray, b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Crop two frames to a common spatial (and channel) shape."""
+    a = np.asarray(a, dtype=np.float32)
+    b = np.asarray(b, dtype=np.float32)
+    if a.shape == b.shape:
+        return a, b
+    h = min(a.shape[0], b.shape[0])
+    w = min(a.shape[1], b.shape[1])
+    if a.ndim == 3 and b.ndim == 3:
+        c = min(a.shape[2], b.shape[2])
+        return a[:h, :w, :c], b[:h, :w, :c]
+    return a[:h, :w], b[:h, :w]
+
+
 def pixel_metrics(oc_frame: np.ndarray, jax_frame: np.ndarray) -> Dict[str, float]:
     """RGB MAE (0–255 scale and normalized) + exact-equal fraction."""
-    a = np.asarray(oc_frame, dtype=np.float32)
-    b = np.asarray(jax_frame, dtype=np.float32)
-    if a.shape != b.shape:
-        h = min(a.shape[0], b.shape[0])
-        w = min(a.shape[1], b.shape[1])
-        c = min(a.shape[2], b.shape[2]) if a.ndim == 3 else 1
-        a = a[:h, :w, :c] if a.ndim == 3 else a[:h, :w]
-        b = b[:h, :w, :c] if b.ndim == 3 else b[:h, :w]
+    a, b = _crop_pair(oc_frame, jax_frame)
     diff = np.abs(a - b)
     mae = float(diff.mean())
     equal = float(np.mean(a == b))
@@ -83,6 +90,86 @@ def pixel_metrics(oc_frame: np.ndarray, jax_frame: np.ndarray) -> Dict[str, floa
         "pixel_mae_norm": mae / 255.0,
         "pixel_equal_frac": equal,
     }
+
+
+def baseline_relative_pixel_metrics(
+    oc_frame: np.ndarray,
+    jax_frame: np.ndarray,
+    oc0: np.ndarray,
+    jax0: np.ndarray,
+    *,
+    mae0: Optional[float] = None,
+) -> Dict[str, float]:
+    """Pixel metrics relative to the transfer-window (t0) frames.
+
+    Cancels static render mismatch (palette, missing logos, HUD chrome) by
+    comparing *change from inject* rather than absolute frames alone:
+
+    - ``pixel_mae`` / ``mae0``: absolute cross-env MAE at this frame / at t0
+    - ``pixel_mae_excess``: ``MAE(OC_t, JAX_t) - mae0``
+    - ``pixel_mae_delta``: ``MAE(|OC_t-oc0|, |JAX_t-jax0|)`` (change-map agreement)
+    - ``pixel_mae_signed_delta``: ``MAE((OC_t-oc0) - (JAX_t-jax0))``
+    """
+    oc_t, jax_t = _crop_pair(oc_frame, jax_frame)
+    oc_b, jax_b = _crop_pair(oc0, jax0)
+    # Align all four to the tightest crop.
+    h = min(oc_t.shape[0], jax_t.shape[0], oc_b.shape[0], jax_b.shape[0])
+    w = min(oc_t.shape[1], jax_t.shape[1], oc_b.shape[1], jax_b.shape[1])
+    if oc_t.ndim == 3:
+        c = min(oc_t.shape[2], jax_t.shape[2], oc_b.shape[2], jax_b.shape[2])
+        oc_t, jax_t = oc_t[:h, :w, :c], jax_t[:h, :w, :c]
+        oc_b, jax_b = oc_b[:h, :w, :c], jax_b[:h, :w, :c]
+    else:
+        oc_t, jax_t = oc_t[:h, :w], jax_t[:h, :w]
+        oc_b, jax_b = oc_b[:h, :w], jax_b[:h, :w]
+
+    abs_now = float(np.abs(oc_t - jax_t).mean())
+    if mae0 is None:
+        mae0 = float(np.abs(oc_b - jax_b).mean())
+    else:
+        mae0 = float(mae0)
+
+    d_oc = np.abs(oc_t - oc_b)
+    d_jax = np.abs(jax_t - jax_b)
+    mae_delta = float(np.abs(d_oc - d_jax).mean())
+    mae_signed = float(np.abs((oc_t - oc_b) - (jax_t - jax_b)).mean())
+
+    return {
+        "pixel_mae": abs_now,
+        "pixel_mae_norm": abs_now / 255.0,
+        "pixel_equal_frac": float(np.mean(oc_t == jax_t)),
+        "pixel_mae0": mae0,
+        "pixel_mae_excess": abs_now - mae0,
+        "pixel_mae_delta": mae_delta,
+        "pixel_mae_signed_delta": mae_signed,
+    }
+
+
+def change_maps(
+    oc_frame: np.ndarray,
+    jax_frame: np.ndarray,
+    oc0: np.ndarray,
+    jax0: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return ``(d_oc, d_jax, |d_oc-d_jax|)`` as uint8 images for strips."""
+    oc_t, jax_t = _crop_pair(oc_frame, jax_frame)
+    oc_b, jax_b = _crop_pair(oc0, jax0)
+    h = min(oc_t.shape[0], jax_t.shape[0], oc_b.shape[0], jax_b.shape[0])
+    w = min(oc_t.shape[1], jax_t.shape[1], oc_b.shape[1], jax_b.shape[1])
+    if oc_t.ndim == 3:
+        c = min(oc_t.shape[2], jax_t.shape[2], oc_b.shape[2], jax_b.shape[2])
+        oc_t, jax_t = oc_t[:h, :w, :c], jax_t[:h, :w, :c]
+        oc_b, jax_b = oc_b[:h, :w, :c], jax_b[:h, :w, :c]
+    else:
+        oc_t, jax_t = oc_t[:h, :w], jax_t[:h, :w]
+        oc_b, jax_b = oc_b[:h, :w], jax_b[:h, :w]
+
+    d_oc = np.clip(np.abs(oc_t - oc_b), 0, 255).astype(np.uint8)
+    d_jax = np.clip(np.abs(jax_t - jax_b), 0, 255).astype(np.uint8)
+    d_diff = np.clip(np.abs(d_oc.astype(np.int16) - d_jax.astype(np.int16)), 0, 255).astype(
+        np.uint8
+    )
+    return d_oc, d_jax, d_diff
 
 
 def _is_primary_entity(name: str) -> bool:

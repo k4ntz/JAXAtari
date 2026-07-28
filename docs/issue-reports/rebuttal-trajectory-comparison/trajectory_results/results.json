@@ -1,0 +1,993 @@
+{
+  "n": 150,
+  "num_t0": 5,
+  "traj_tag": "play",
+  "oracle": false,
+  "games": [
+    {
+      "game": "freeway",
+      "num_runs": 5,
+      "entity_l1_at_0_mean": 0.0,
+      "entity_l1_at_0_median": 0.0,
+      "entity_l1_at_end_mean": 18.163636363636364,
+      "entity_l1_at_end_median": 0.36363636363636365,
+      "pixel_mae_at_0_mean": 0.38655556440353395,
+      "pixel_mae_at_0_median": 0.39297619462013245,
+      "pixel_mae_at_end_mean": 0.5738611221313477,
+      "pixel_mae_at_end_median": 0.6016666889190674,
+      "per_entity_at_0": {
+        "car_0": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_1": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_2": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_3": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_4": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_5": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_6": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_7": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_8": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_9": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "chicken": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        }
+      },
+      "per_entity_at_end": {
+        "car_0": {
+          "mean_l1": 0.4,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_1": {
+          "mean_l1": 31.8,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_2": {
+          "mean_l1": 0.4,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_3": {
+          "mean_l1": 31.8,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_4": {
+          "mean_l1": 32.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_5": {
+          "mean_l1": 32.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_6": {
+          "mean_l1": 32.8,
+          "median_l1": 1.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_7": {
+          "mean_l1": 0.2,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_8": {
+          "mean_l1": 32.2,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "car_9": {
+          "mean_l1": 0.4,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "chicken": {
+          "mean_l1": 5.8,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        }
+      },
+      "worst_run": {
+        "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/freeway_play01.npz",
+        "t0": 391,
+        "entity_l1_at_0": 0.0,
+        "entity_l1_at_end": 87.36363636363636,
+        "per_entity_at_0": {
+          "car_0": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "car_1": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "car_2": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "car_3": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "car_4": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "car_5": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "car_6": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "car_7": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "car_8": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "car_9": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "chicken": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          }
+        },
+        "per_entity_at_end": {
+          "car_0": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "car_1": {
+            "l1": 159.0,
+            "linf": 159.0,
+            "present_both": 1.0
+          },
+          "car_2": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "car_3": {
+            "l1": 159.0,
+            "linf": 159.0,
+            "present_both": 1.0
+          },
+          "car_4": {
+            "l1": 160.0,
+            "linf": 160.0,
+            "present_both": 1.0
+          },
+          "car_5": {
+            "l1": 160.0,
+            "linf": 160.0,
+            "present_both": 1.0
+          },
+          "car_6": {
+            "l1": 160.0,
+            "linf": 160.0,
+            "present_both": 1.0
+          },
+          "car_7": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "car_8": {
+            "l1": 160.0,
+            "linf": 160.0,
+            "present_both": 1.0
+          },
+          "car_9": {
+            "l1": 1.0,
+            "linf": 1.0,
+            "present_both": 1.0
+          },
+          "chicken": {
+            "l1": 2.0,
+            "linf": 2.0,
+            "present_both": 1.0
+          }
+        }
+      }
+    },
+    {
+      "game": "montezumarevenge",
+      "num_runs": 5,
+      "entity_l1_at_0_mean": 0.06666666666666667,
+      "entity_l1_at_0_median": 0.0,
+      "entity_l1_at_end_mean": 17.2,
+      "entity_l1_at_end_median": 11.333333333333334,
+      "pixel_mae_at_0_mean": 3.8500932693481444,
+      "pixel_mae_at_0_median": 3.947073459625244,
+      "pixel_mae_at_end_mean": 4.464982223510742,
+      "pixel_mae_at_end_median": 4.523025989532471,
+      "per_entity_at_0": {
+        "key": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "player": {
+          "mean_l1": 0.2,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "skull_0": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 4,
+          "n_missing": 1
+        }
+      },
+      "per_entity_at_end": {
+        "key": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "player": {
+          "mean_l1": 38.2,
+          "median_l1": 30.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "skull_0": {
+          "mean_l1": 8.333333333333334,
+          "median_l1": 5.0,
+          "n_finite": 3,
+          "n_missing": 2
+        }
+      },
+      "worst_run": {
+        "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/montezumarevenge_play01.npz",
+        "t0": 1230,
+        "entity_l1_at_0": 0.0,
+        "entity_l1_at_end": 42.0,
+        "per_entity_at_0": {
+          "key": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "player": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "skull_0": {
+            "l1": null,
+            "linf": null,
+            "present_both": 0.0
+          }
+        },
+        "per_entity_at_end": {
+          "key": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "player": {
+            "l1": 84.0,
+            "linf": 80.0,
+            "present_both": 1.0
+          },
+          "skull_0": {
+            "l1": null,
+            "linf": null,
+            "present_both": 0.0
+          }
+        }
+      }
+    },
+    {
+      "game": "pong",
+      "num_runs": 5,
+      "entity_l1_at_0_mean": 0.0,
+      "entity_l1_at_0_median": 0.0,
+      "entity_l1_at_end_mean": 20.188439432779948,
+      "entity_l1_at_end_median": 15.26904042561849,
+      "pixel_mae_at_0_mean": 1.0949682474136353,
+      "pixel_mae_at_0_median": 1.1026190519332886,
+      "pixel_mae_at_end_mean": 1.4124444484710694,
+      "pixel_mae_at_end_median": 1.449920654296875,
+      "per_entity_at_0": {
+        "ball": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "enemy": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "player": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        }
+      },
+      "per_entity_at_end": {
+        "ball": {
+          "mean_l1": 32.4,
+          "median_l1": 25.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "enemy": {
+          "mean_l1": 24.0,
+          "median_l1": 18.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "player": {
+          "mean_l1": 4.165318298339844,
+          "median_l1": 2.7743148803710938,
+          "n_finite": 5,
+          "n_missing": 0
+        }
+      },
+      "worst_run": {
+        "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/pong_play01.npz",
+        "t0": 446,
+        "entity_l1_at_0": 0.0,
+        "entity_l1_at_end": 44.65302530924479,
+        "per_entity_at_0": {
+          "ball": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "enemy": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "player": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          }
+        },
+        "per_entity_at_end": {
+          "ball": {
+            "l1": 74.0,
+            "linf": 74.0,
+            "present_both": 1.0
+          },
+          "enemy": {
+            "l1": 58.0,
+            "linf": 58.0,
+            "present_both": 1.0
+          },
+          "player": {
+            "l1": 1.959075927734375,
+            "linf": 1.959075927734375,
+            "present_both": 1.0
+          }
+        }
+      }
+    },
+    {
+      "game": "bankheist",
+      "num_runs": 5,
+      "entity_l1_at_0_mean": 0.0,
+      "entity_l1_at_0_median": 0.0,
+      "entity_l1_at_end_mean": 0.4333333333333333,
+      "entity_l1_at_end_median": 0.5,
+      "pixel_mae_at_0_mean": 0.4720555543899536,
+      "pixel_mae_at_0_median": 0.48251983523368835,
+      "pixel_mae_at_end_mean": 0.4667222261428833,
+      "pixel_mae_at_end_median": 0.47527778148651123,
+      "per_entity_at_0": {
+        "bank_0": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "bank_1": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "bank_2": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "player": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        }
+      },
+      "per_entity_at_end": {
+        "bank_0": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "bank_1": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "bank_2": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 4,
+          "n_missing": 1
+        },
+        "player": {
+          "mean_l1": 1.6,
+          "median_l1": 2.0,
+          "n_finite": 5,
+          "n_missing": 0
+        }
+      },
+      "worst_run": {
+        "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/bankheist_play01.npz",
+        "t0": 1230,
+        "entity_l1_at_0": 0.0,
+        "entity_l1_at_end": 0.6666666666666666,
+        "per_entity_at_0": {
+          "bank_0": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "bank_1": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "bank_2": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "player": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          }
+        },
+        "per_entity_at_end": {
+          "bank_0": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "bank_1": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "player": {
+            "l1": 2.0,
+            "linf": 2.0,
+            "present_both": 1.0
+          }
+        }
+      }
+    },
+    {
+      "game": "seaquest",
+      "num_runs": 5,
+      "entity_l1_at_0_mean": 1.2666666666666666,
+      "entity_l1_at_0_median": 1.0,
+      "entity_l1_at_end_mean": 10.366666666666667,
+      "entity_l1_at_end_median": 2.3333333333333335,
+      "pixel_mae_at_0_mean": 1.0385079264640809,
+      "pixel_mae_at_0_median": 1.0195337533950806,
+      "pixel_mae_at_end_mean": 1.3943690419197083,
+      "pixel_mae_at_end_median": 1.4279662370681763,
+      "per_entity_at_0": {
+        "diver_2": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 3,
+          "n_missing": 2
+        },
+        "diver_3": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 1,
+          "n_missing": 4
+        },
+        "player": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "shark_0": {
+          "mean_l1": 3.0,
+          "median_l1": 3.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "shark_3": {
+          "mean_l1": 3.0,
+          "median_l1": 3.0,
+          "n_finite": 2,
+          "n_missing": 3
+        },
+        "shark_9": {
+          "mean_l1": 1.0,
+          "median_l1": 1.0,
+          "n_finite": 3,
+          "n_missing": 2
+        }
+      },
+      "per_entity_at_end": {
+        "diver_0": {
+          "mean_l1": null,
+          "median_l1": null,
+          "n_finite": 0,
+          "n_missing": 5
+        },
+        "diver_2": {
+          "mean_l1": 2.0,
+          "median_l1": 2.0,
+          "n_finite": 2,
+          "n_missing": 3
+        },
+        "diver_3": {
+          "mean_l1": 3.0,
+          "median_l1": 3.0,
+          "n_finite": 1,
+          "n_missing": 4
+        },
+        "missile": {
+          "mean_l1": 5.0,
+          "median_l1": 5.0,
+          "n_finite": 1,
+          "n_missing": 4
+        },
+        "player": {
+          "mean_l1": 9.8,
+          "median_l1": 2.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "shark_0": {
+          "mean_l1": null,
+          "median_l1": null,
+          "n_finite": 0,
+          "n_missing": 5
+        },
+        "shark_3": {
+          "mean_l1": null,
+          "median_l1": null,
+          "n_finite": 0,
+          "n_missing": 5
+        },
+        "shark_6": {
+          "mean_l1": null,
+          "median_l1": null,
+          "n_finite": 0,
+          "n_missing": 5
+        },
+        "shark_9": {
+          "mean_l1": null,
+          "median_l1": null,
+          "n_finite": 0,
+          "n_missing": 5
+        }
+      },
+      "worst_run": {
+        "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/seaquest_play01.npz",
+        "t0": 391,
+        "entity_l1_at_0": 1.0,
+        "entity_l1_at_end": 43.0,
+        "per_entity_at_0": {
+          "diver_2": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "player": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "shark_0": {
+            "l1": 2.0,
+            "linf": 2.0,
+            "present_both": 1.0
+          },
+          "shark_9": {
+            "l1": 2.0,
+            "linf": 2.0,
+            "present_both": 1.0
+          }
+        },
+        "per_entity_at_end": {
+          "diver_2": {
+            "l1": null,
+            "linf": null,
+            "present_both": 0.0
+          },
+          "player": {
+            "l1": 43.0,
+            "linf": 23.0,
+            "present_both": 1.0
+          },
+          "shark_0": {
+            "l1": null,
+            "linf": null,
+            "present_both": 0.0
+          },
+          "shark_6": {
+            "l1": null,
+            "linf": null,
+            "present_both": 0.0
+          }
+        }
+      }
+    },
+    {
+      "game": "skiing",
+      "num_runs": 5,
+      "entity_l1_at_0_mean": 6.9642857142857135,
+      "entity_l1_at_0_median": 0.8571428571428571,
+      "entity_l1_at_end_mean": 97.81203209161758,
+      "entity_l1_at_end_median": 111.90936279296875,
+      "pixel_mae_at_0_mean": 24.280331802368163,
+      "pixel_mae_at_0_median": 24.265268325805664,
+      "pixel_mae_at_end_mean": 24.764253616333008,
+      "pixel_mae_at_end_median": 24.72327423095703,
+      "per_entity_at_0": {
+        "flag_0": {
+          "mean_l1": 45.8,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "flag_1": {
+          "mean_l1": null,
+          "median_l1": null,
+          "n_finite": 0,
+          "n_missing": 5
+        },
+        "flag_2": {
+          "mean_l1": null,
+          "median_l1": null,
+          "n_finite": 0,
+          "n_missing": 5
+        },
+        "flag_3": {
+          "mean_l1": null,
+          "median_l1": null,
+          "n_finite": 0,
+          "n_missing": 5
+        },
+        "mogul_0": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "mogul_1": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 4,
+          "n_missing": 1
+        },
+        "skier": {
+          "mean_l1": 6.0,
+          "median_l1": 6.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "tree_0": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "tree_1": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "tree_2": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "tree_3": {
+          "mean_l1": 0.0,
+          "median_l1": 0.0,
+          "n_finite": 3,
+          "n_missing": 2
+        }
+      },
+      "per_entity_at_end": {
+        "flag_0": {
+          "mean_l1": 68.22432708740234,
+          "median_l1": 58.84465789794922,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "flag_1": {
+          "mean_l1": 80.83576583862305,
+          "median_l1": 80.83576583862305,
+          "n_finite": 2,
+          "n_missing": 3
+        },
+        "flag_2": {
+          "mean_l1": null,
+          "median_l1": null,
+          "n_finite": 0,
+          "n_missing": 5
+        },
+        "flag_3": {
+          "mean_l1": null,
+          "median_l1": null,
+          "n_finite": 0,
+          "n_missing": 5
+        },
+        "mogul_0": {
+          "mean_l1": 105.06227350234985,
+          "median_l1": 90.84465789794922,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "mogul_1": {
+          "mean_l1": 220.49798583984375,
+          "median_l1": 220.49798583984375,
+          "n_finite": 1,
+          "n_missing": 4
+        },
+        "skier": {
+          "mean_l1": 23.165058898925782,
+          "median_l1": 26.16675567626953,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "tree_0": {
+          "mean_l1": 126.05842971801758,
+          "median_l1": 145.1553497314453,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "tree_1": {
+          "mean_l1": 98.47559146881103,
+          "median_l1": 83.49800109863281,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "tree_2": {
+          "mean_l1": 116.79282913208007,
+          "median_l1": 121.20017623901367,
+          "n_finite": 5,
+          "n_missing": 0
+        },
+        "tree_3": {
+          "mean_l1": 149.20234298706055,
+          "median_l1": 157.58244705200195,
+          "n_finite": 4,
+          "n_missing": 1
+        }
+      },
+      "worst_run": {
+        "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/skiing_play01.npz",
+        "t0": 922,
+        "entity_l1_at_0": 17.857142857142858,
+        "entity_l1_at_end": 126.20449835062027,
+        "per_entity_at_0": {
+          "flag_0": {
+            "l1": 119.0,
+            "linf": 104.0,
+            "present_both": 1.0
+          },
+          "flag_1": {
+            "l1": null,
+            "linf": null,
+            "present_both": 0.0
+          },
+          "flag_2": {
+            "l1": null,
+            "linf": null,
+            "present_both": 0.0
+          },
+          "flag_3": {
+            "l1": null,
+            "linf": null,
+            "present_both": 0.0
+          },
+          "mogul_0": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "mogul_1": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "skier": {
+            "l1": 6.0,
+            "linf": 6.0,
+            "present_both": 1.0
+          },
+          "tree_0": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "tree_1": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "tree_2": {
+            "l1": 0.0,
+            "linf": 0.0,
+            "present_both": 1.0
+          },
+          "tree_3": {
+            "l1": null,
+            "linf": null,
+            "present_both": 0.0
+          }
+        },
+        "per_entity_at_end": {
+          "flag_0": {
+            "l1": 119.8718376159668,
+            "linf": 105.8718376159668,
+            "present_both": 1.0
+          },
+          "flag_1": {
+            "l1": 20.871726989746094,
+            "linf": 12.0,
+            "present_both": 1.0
+          },
+          "flag_2": {
+            "l1": null,
+            "linf": null,
+            "present_both": 0.0
+          },
+          "flag_3": {
+            "l1": null,
+            "linf": null,
+            "present_both": 0.0
+          },
+          "mogul_0": {
+            "l1": 119.87183046340942,
+            "linf": 105.87183046340942,
+            "present_both": 1.0
+          },
+          "mogul_1": {
+            "l1": null,
+            "linf": null,
+            "present_both": 0.0
+          },
+          "skier": {
+            "l1": 14.76422119140625,
+            "linf": 8.76422119140625,
+            "present_both": 1.0
+          },
+          "tree_0": {
+            "l1": 153.12814331054688,
+            "linf": 115.0,
+            "present_both": 1.0
+          },
+          "tree_1": {
+            "l1": 186.12818908691406,
+            "linf": 108.0,
+            "present_both": 1.0
+          },
+          "tree_2": {
+            "l1": 201.12820434570312,
+            "linf": 142.12820434570312,
+            "present_both": 1.0
+          },
+          "tree_3": {
+            "l1": 193.87183380126953,
+            "linf": 127.87183380126953,
+            "present_both": 1.0
+          }
+        }
+      }
+    }
+  ]
+}

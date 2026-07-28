@@ -51,7 +51,12 @@ def oc_frame_to_montezumarevenge_state(
     player = find_object(objs, "Player")
     if player is not None and int(player.get("w", 0)) > 0:
         px = int(player["x"])
-        py = _jax_y(float(player["y"]))
+        py_oc = float(player["y"])
+        py = _jax_y(py_oc)
+        pw = max(int(player.get("w", 0)), 1)
+        ph = max(int(player.get("h", 0)), int(env.consts.PLAYER_HEIGHT))
+        feet_oc = py_oc + ph - 1.0
+        mid_x = px + pw // 2
         if prev_player_xy is not None:
             vx = int(round(float(player["x"]) - float(prev_player_xy[0])))
             # prev xy is OC space; convert Δy directly.
@@ -66,20 +71,53 @@ def oc_frame_to_montezumarevenge_state(
         if vx != 0:
             updates["player_dir"] = cast_like(1 if vx > 0 else -1, state.player_dir)
 
-        # Climbing heuristic: overlap any Ladder in x and y.
+        # Climbing: use player *feet* + mid-x vs OC Ladder bbox (old code used
+        # player top in JAX y vs ladder top+height, which missed mid-ladder poses).
         climbing = False
+        climb_oc_ladder = None
         for lad in collect_category(objs, "Ladder"):
-            lx, ly, lw, lh = (
-                int(lad["x"]),
-                _jax_y(float(lad["y"])),
-                int(lad["w"]),
-                int(lad["h"]),
-            )
-            if lx - 4 <= px <= lx + lw + 4 and ly - 4 <= py <= ly + lh + 4:
+            if int(lad.get("w", 0)) <= 0:
+                continue
+            lx = int(lad["x"])
+            ly = float(lad["y"])
+            lw = int(lad["w"])
+            lh = int(lad["h"])
+            ladder_mid = lx + lw // 2
+            aligned = abs(mid_x - ladder_mid) <= 6
+            # Strictly inside the shaft (not merely standing on the platform at top).
+            inside = (ly + 3) <= feet_oc <= (ly + lh + 2)
+            near_span = (ly - 6) <= feet_oc <= (ly + lh + 6)
+            moving_vert = abs(vy) >= 1 and abs(vx) <= 1
+            if aligned and (inside or (near_span and moving_vert)):
                 climbing = True
+                climb_oc_ladder = (lx, ly, lw, lh)
                 break
-        # Reset stores is_climbing as int32 (0/1), not bool.
+
         updates["is_climbing"] = cast_like(int(climbing), state.is_climbing)
+        if climbing:
+            updates["is_jumping"] = cast_like(0, state.is_jumping)
+            # Map to JAX room ladder slot by nearest active ladder X; set last_ladder
+            # so the next step keeps the climb instead of dropping.
+            lx_j = np.asarray(state.ladders_x)
+            la = np.asarray(state.ladders_active)
+            best_i = -1
+            best_d = 1e9
+            for i in range(len(la)):
+                if int(la[i]) == 0:
+                    continue
+                d = abs(int(lx_j[i]) - int(climb_oc_ladder[0]))
+                if d < best_d:
+                    best_d = d
+                    best_i = i
+            if best_i >= 0 and best_d <= 12:
+                updates["last_ladder"] = cast_like(best_i, state.last_ladder)
+                # Snap X to ladder center like the JAX climber does.
+                snap_x = int(lx_j[best_i]) + 8 - int(env.consts.PLAYER_WIDTH) // 2
+                updates["player_x"] = cast_like(snap_x, state.player_x)
+            else:
+                updates["last_ladder"] = cast_like(-1, state.last_ladder)
+        else:
+            updates["last_ladder"] = cast_like(-1, state.last_ladder)
 
     # Q2=A: keep JAX room geometry; overlay Skull / Key only.
     skulls = collect_category(objs, "Skull")

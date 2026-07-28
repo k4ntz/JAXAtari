@@ -161,8 +161,23 @@ def _get_rgb(env) -> np.ndarray:
 def _snapshot_step(env, action: int, store_frames: bool) -> Tuple[
     int, float, bool, bool, np.ndarray, List[dict], Optional[np.ndarray]
 ]:
-    obs, reward, terminated, truncated, info = env.step(int(action))
-    del obs, info
+    """Step OCAtari and snapshot RAM/objects/RGB.
+
+    Some OC games (notably Frostbite) can fail inside OCAtari's object-obs
+    buffer packing even though ``detect_objects()`` succeeded. Fall back to
+    the underlying ALE step + ``detect_objects`` so recording can continue.
+    """
+    try:
+        obs, reward, terminated, truncated, info = env.step(int(action))
+        del obs, info
+    except ValueError as exc:
+        # OCAtari ``np.array(self._state_buffer_ns)`` inhomogeneous-shape crash.
+        if "inhomogeneous" not in str(exc) and "sequence" not in str(exc).lower():
+            raise
+        obs, reward, terminated, truncated, info = env._env.step(int(action))
+        del obs, info
+        if hasattr(env, "detect_objects"):
+            env.detect_objects()
     ram = np.asarray(env.get_ram(), dtype=np.uint8)
     objects = serialize_oc_objects(env.objects)
     frame = _get_rgb(env) if store_frames else None
