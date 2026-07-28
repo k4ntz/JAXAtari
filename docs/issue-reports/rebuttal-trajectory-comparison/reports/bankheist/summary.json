@@ -1,0 +1,438 @@
+{
+  "game": "bankheist",
+  "oc_game": "BankHeist",
+  "n": 150,
+  "tau_strict": 2.0,
+  "soft_tau": 12.0,
+  "persist": 5,
+  "t0_mode": "random",
+  "num_t0": 5,
+  "skip_frames": 0,
+  "oracle_lookahead": false,
+  "oracle_horizon": 150,
+  "aggregate": {
+    "num_runs": 5,
+    "n": 150,
+    "survival_at_n": 0.8,
+    "survival_soft_at_n": 0.8,
+    "survival_strict_at_n": 0.6,
+    "median_first_diverge": 150.0,
+    "mean_first_diverge": 137.8,
+    "median_first_diverge_soft": 150.0,
+    "mean_first_diverge_soft": 137.8,
+    "median_first_diverge_strict": 150.0,
+    "mean_first_diverge_strict": 104.4,
+    "mean_entity_l1_at_0": 0.0,
+    "mean_entity_l1_at_end": 0.4333333333333333,
+    "mean_score_abs_at_0": 0.0,
+    "mean_score_abs_at_end": 58.73333333333333,
+    "mean_pixel_mae_at_0": 0.4720555543899536,
+    "mean_pixel_mae_at_end": 0.4667222261428833,
+    "mean_pixel_mae_excess_at_end": -0.005333328247070312,
+    "mean_pixel_mae_delta_at_end": 0.17139682695269584,
+    "mean_mae0": 0.4720555543899536,
+    "first_diverges": [
+      null,
+      null,
+      null,
+      89,
+      null
+    ],
+    "first_diverges_soft": [
+      null,
+      null,
+      null,
+      89,
+      null
+    ],
+    "first_diverges_strict": [
+      null,
+      null,
+      null,
+      57,
+      15
+    ]
+  },
+  "runs": [
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/bankheist_play01.npz",
+      "t0": 391,
+      "traj_seed": 0,
+      "first_diverge_soft": null,
+      "survived_soft": true,
+      "first_diverge_strict": null,
+      "survived_strict": true,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.0,
+        "entity_max_linf": 0.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 0.41857144236564636,
+        "pixel_equal_frac": 0.9957142857142857,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 0.5,
+        "entity_max_linf": 2.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 86.33333333333333,
+        "score_max_abs": 259.0,
+        "pixel_mae": 0.47527778148651123,
+        "pixel_equal_frac": 0.9951190476190476,
+        "pixel_mae_excess": 0.05670633912086487,
+        "pixel_mae_delta": 0.056706350296735764,
+        "pixel_mae_signed_delta": 0.056706350296735764
+      },
+      "per_entity_at_0": {
+        "bank_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "bank_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 2.0,
+          "linf": 2.0,
+          "present_both": 1.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/bankheist_play01.npz",
+      "t0": 446,
+      "traj_seed": 0,
+      "first_diverge_soft": null,
+      "survived_soft": true,
+      "first_diverge_strict": null,
+      "survived_strict": true,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.0,
+        "entity_max_linf": 0.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 0.48251983523368835,
+        "pixel_equal_frac": 0.9950595238095238,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 0.5,
+        "entity_max_linf": 2.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 49.666666666666664,
+        "score_max_abs": 149.0,
+        "pixel_mae": 0.4650793671607971,
+        "pixel_equal_frac": 0.9952380952380953,
+        "pixel_mae_excess": -0.017440468072891235,
+        "pixel_mae_delta": 0.11045634746551514,
+        "pixel_mae_signed_delta": 0.11045634746551514
+      },
+      "per_entity_at_0": {
+        "bank_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "bank_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 2.0,
+          "linf": 2.0,
+          "present_both": 1.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/bankheist_play01.npz",
+      "t0": 740,
+      "traj_seed": 0,
+      "first_diverge_soft": null,
+      "survived_soft": true,
+      "first_diverge_strict": null,
+      "survived_strict": true,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.0,
+        "entity_max_linf": 0.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 0.5057737827301025,
+        "pixel_equal_frac": 0.9948214285714285,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 0.25,
+        "entity_max_linf": 1.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 86.33333333333333,
+        "score_max_abs": 259.0,
+        "pixel_mae": 0.4985317587852478,
+        "pixel_equal_frac": 0.9948809523809524,
+        "pixel_mae_excess": -0.007242023944854736,
+        "pixel_mae_delta": 0.1671627014875412,
+        "pixel_mae_signed_delta": 0.1671627014875412
+      },
+      "per_entity_at_0": {
+        "bank_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "bank_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/bankheist_play01.npz",
+      "t0": 922,
+      "traj_seed": 0,
+      "first_diverge_soft": 89,
+      "survived_soft": false,
+      "first_diverge_strict": 57,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.0,
+        "entity_max_linf": 0.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 0.4883333444595337,
+        "pixel_equal_frac": 0.995,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 0.25,
+        "entity_max_linf": 1.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 18.333333333333332,
+        "score_max_abs": 55.0,
+        "pixel_mae": 0.4985317587852478,
+        "pixel_equal_frac": 0.9948809523809524,
+        "pixel_mae_excess": 0.010198414325714111,
+        "pixel_mae_delta": 0.14972221851348877,
+        "pixel_mae_signed_delta": 0.14972221851348877
+      },
+      "per_entity_at_0": {
+        "bank_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "bank_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/bankheist_play01.npz",
+      "t0": 1230,
+      "traj_seed": 0,
+      "first_diverge_soft": null,
+      "survived_soft": true,
+      "first_diverge_strict": 15,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.0,
+        "entity_max_linf": 0.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 0.4650793671607971,
+        "pixel_equal_frac": 0.9952380952380953,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 0.6666666666666666,
+        "entity_max_linf": 2.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 53.0,
+        "score_max_abs": 149.0,
+        "pixel_mae": 0.39619046449661255,
+        "pixel_equal_frac": 0.9959523809523809,
+        "pixel_mae_excess": -0.06888890266418457,
+        "pixel_mae_delta": 0.37293651700019836,
+        "pixel_mae_signed_delta": 0.37293651700019836
+      },
+      "per_entity_at_0": {
+        "bank_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "bank_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "bank_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 2.0,
+          "linf": 2.0,
+          "present_both": 1.0
+        }
+      }
+    }
+  ]
+}

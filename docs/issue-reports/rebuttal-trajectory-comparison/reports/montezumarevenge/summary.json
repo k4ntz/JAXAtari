@@ -1,0 +1,388 @@
+{
+  "game": "montezumarevenge",
+  "oc_game": "MontezumaRevenge",
+  "n": 150,
+  "tau_strict": 2.0,
+  "soft_tau": 12.0,
+  "persist": 5,
+  "t0_mode": "random",
+  "num_t0": 5,
+  "skip_frames": 0,
+  "oracle_lookahead": false,
+  "oracle_horizon": 150,
+  "aggregate": {
+    "num_runs": 5,
+    "n": 150,
+    "survival_at_n": 0.4,
+    "survival_soft_at_n": 0.4,
+    "survival_strict_at_n": 0.0,
+    "median_first_diverge": 79.0,
+    "mean_first_diverge": 80.2,
+    "median_first_diverge_soft": 79.0,
+    "mean_first_diverge_soft": 80.2,
+    "median_first_diverge_strict": 5.0,
+    "mean_first_diverge_strict": 8.0,
+    "mean_entity_l1_at_0": 0.06666666666666667,
+    "mean_entity_l1_at_end": 17.2,
+    "mean_score_abs_at_0": 0.0,
+    "mean_score_abs_at_end": 0.2,
+    "mean_pixel_mae_at_0": 3.8500932693481444,
+    "mean_pixel_mae_at_end": 4.464982223510742,
+    "mean_pixel_mae_excess_at_end": 0.6148889541625977,
+    "mean_pixel_mae_delta_at_end": 1.6481587290763855,
+    "mean_mae0": 3.8500932693481444,
+    "first_diverges": [
+      null,
+      null,
+      22,
+      79,
+      0
+    ],
+    "first_diverges_soft": [
+      null,
+      null,
+      22,
+      79,
+      0
+    ],
+    "first_diverges_strict": [
+      5,
+      5,
+      2,
+      28,
+      0
+    ]
+  },
+  "runs": [
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/montezumarevenge_play01.npz",
+      "t0": 391,
+      "traj_seed": 0,
+      "first_diverge_soft": null,
+      "survived_soft": true,
+      "first_diverge_strict": 5,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.3333333333333333,
+        "entity_max_linf": 1.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 3.672847270965576,
+        "pixel_equal_frac": 0.9758333333333333,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 5.666666666666667,
+        "entity_max_linf": 16.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 4.523025989532471,
+        "pixel_equal_frac": 0.9711309523809524,
+        "pixel_mae_excess": 0.8501787185668945,
+        "pixel_mae_delta": 1.5242658853530884,
+        "pixel_mae_signed_delta": 1.6087499856948853
+      },
+      "per_entity_at_0": {
+        "key": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        },
+        "skull_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "key": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        },
+        "skull_0": {
+          "l1": 16.0,
+          "linf": 16.0,
+          "present_both": 1.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/montezumarevenge_play01.npz",
+      "t0": 446,
+      "traj_seed": 0,
+      "first_diverge_soft": null,
+      "survived_soft": true,
+      "first_diverge_strict": 5,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.0,
+        "entity_max_linf": 0.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 3.947073459625244,
+        "pixel_equal_frac": 0.9735714285714285,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 11.333333333333334,
+        "entity_max_linf": 23.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 4.720089435577393,
+        "pixel_equal_frac": 0.9685416666666666,
+        "pixel_mae_excess": 0.7730159759521484,
+        "pixel_mae_delta": 1.9120237827301025,
+        "pixel_mae_signed_delta": 1.9120237827301025
+      },
+      "per_entity_at_0": {
+        "key": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "skull_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "key": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 30.0,
+          "linf": 23.0,
+          "present_both": 1.0
+        },
+        "skull_0": {
+          "l1": 4.0,
+          "linf": 4.0,
+          "present_both": 1.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/montezumarevenge_play01.npz",
+      "t0": 740,
+      "traj_seed": 0,
+      "first_diverge_soft": 22,
+      "survived_soft": false,
+      "first_diverge_strict": 2,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.0,
+        "entity_max_linf": 0.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 3.7075297832489014,
+        "pixel_equal_frac": 0.974672619047619,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 27.0,
+        "entity_max_linf": 47.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 1.0,
+        "score_max_abs": 2.0,
+        "pixel_mae": 4.958819389343262,
+        "pixel_equal_frac": 0.9674107142857142,
+        "pixel_mae_excess": 1.2512896060943604,
+        "pixel_mae_delta": 1.9036309719085693,
+        "pixel_mae_signed_delta": 1.9036309719085693
+      },
+      "per_entity_at_0": {
+        "key": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "skull_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "key": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 76.0,
+          "linf": 47.0,
+          "present_both": 1.0
+        },
+        "skull_0": {
+          "l1": 5.0,
+          "linf": 5.0,
+          "present_both": 1.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/montezumarevenge_play01.npz",
+      "t0": 922,
+      "traj_seed": 0,
+      "first_diverge_soft": 79,
+      "survived_soft": false,
+      "first_diverge_strict": 28,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.0,
+        "entity_max_linf": 0.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 3.9681448936462402,
+        "pixel_equal_frac": 0.9734821428571429,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 0.0,
+        "entity_max_linf": 0.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 3.6750893592834473,
+        "pixel_equal_frac": 0.9748511904761905,
+        "pixel_mae_excess": -0.29305553436279297,
+        "pixel_mae_delta": 0.8805158734321594,
+        "pixel_mae_signed_delta": 0.8805158734321594
+      },
+      "per_entity_at_0": {
+        "key": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "skull_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "key": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/montezumarevenge_play01.npz",
+      "t0": 1230,
+      "traj_seed": 0,
+      "first_diverge_soft": 0,
+      "survived_soft": false,
+      "first_diverge_strict": 0,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.0,
+        "entity_max_linf": 0.0,
+        "entity_presence": 0.6666666666666666,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 3.9548709392547607,
+        "pixel_equal_frac": 0.9730952380952381,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 42.0,
+        "entity_max_linf": 80.0,
+        "entity_presence": 0.6666666666666666,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 4.447886943817139,
+        "pixel_equal_frac": 0.9699702380952381,
+        "pixel_mae_excess": 0.49301600456237793,
+        "pixel_mae_delta": 2.020357131958008,
+        "pixel_mae_signed_delta": 2.0746030807495117
+      },
+      "per_entity_at_0": {
+        "key": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "skull_0": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        }
+      },
+      "per_entity_at_end": {
+        "key": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 84.0,
+          "linf": 80.0,
+          "present_both": 1.0
+        },
+        "skull_0": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        }
+      }
+    }
+  ]
+}

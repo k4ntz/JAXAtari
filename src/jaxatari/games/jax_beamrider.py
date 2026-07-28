@@ -6,6 +6,7 @@ import chex
 import jax
 import jax.lax
 import jax.numpy as jnp
+import numpy as np
 from jax.flatten_util import ravel_pytree
 from flax import struct
 
@@ -244,20 +245,44 @@ class BeamriderConstants(struct.PyTreeNode):
     MIN_BLUE_LINE_POS: int = struct.field(pytree_node=False, default=46)
     MAX_BLUE_LINE_POS: int = struct.field(pytree_node=False, default=160)
     WHITE_UFO_RETREAT_DURATION: int = struct.field(pytree_node=False, default=28)
+    # Don't peel at all until roughly mid-upper board.
+    WHITE_UFO_RETREAT_MIN_Y: float = struct.field(pytree_node=False, default=95.0)
+    # Fire peels: available from upper-mid board, common by mid-range.
+    WHITE_UFO_FIRE_MIN_Y: float = struct.field(pytree_node=False, default=95.0)
+    WHITE_UFO_FIRE_FULL_Y: float = struct.field(pytree_node=False, default=125.0)
+    # Unreachable beams 0/6 are approach-only.
+    # Shoot-path merge: cut onto 1/5 around here (mid diagonal).
+    WHITE_UFO_EDGE_MERGE_Y: float = struct.field(pytree_node=False, default=98.0)
+    # Collision/overshoot merge: deeper than shoot-path for a steeper angle, but still
+    # on-screen (lane 0/6 geometry leaves the playfield if this is much past ~120).
+    WHITE_UFO_EDGE_COLLISION_MERGE_Y: float = struct.field(pytree_node=False, default=118.0)
+    # Enemy fire unlocks after ~2 kills (15→13 left). Matches ALE sector-1 play log.
+    WHITE_UFO_SHOOT_UNLOCK_LEFT: int = struct.field(pytree_node=False, default=13)
+    # Fraction of finished deep dives that commit to a full flythrough past the player (~1/6).
+    # Flythroughs happen on reachable beams (1/5), often with a shot, not on 0/6.
+    WHITE_UFO_FLYTHROUGH_P: float = struct.field(pytree_node=False, default=0.17)
+    # Late-sector edge play: approaches via 0/6 then merge to 1/5 (not the whole sector).
+    WHITE_UFO_OUTER_EDGE_UNLOCK_LEFT: int = struct.field(pytree_node=False, default=10)
+    # Lane-switch (DROP_L/R) boost while remaining ≤ this (OC: especially lively near ~10).
+    WHITE_UFO_LANE_SWITCH_LEFT_MAX: int = struct.field(pytree_node=False, default=13)
 
-    ####PATTERNS:  (IDLE) | 0: DROP_STRAIGHT | 1: DROP_RIGHT | 2: DROP_LEFT | (RETREAT) | 3: SHOOT | 4: MOVE_BACK | 5: KAMIKAZE |  6: TRIPLE_SHOT_RIGHT | 7: TRIPLE_SHOT_LEFT
+    ####PATTERNS (matches pattern_choices order): DROP_STRAIGHT, DROP_LEFT, DROP_RIGHT, SHOOT, MOVE_BACK, KAMIKAZE, TRIPLE_SHOT_RIGHT, TRIPLE_SHOT_LEFT
     WHITE_UFO_PATTERN_DURATIONS: Tuple[int, ...] = struct.field(pytree_node=False,
-                                                                default=(0, 42, 42, 42, 28, 0, 42, 100, 123, 123))
+                                                                # DROP_L/R: short enough to settle one adjacent beam, not roam.
+                                                                # SHOOT holds briefly at fire altitude, then always peels into RETREAT.
+                                                                default=(0, 80, 55, 55, 28, 10, 42, 100, 123, 123))
     WHITE_UFO_PATTERN_PROBS: Tuple[float, ...] = struct.field(pytree_node=False,
-                                                              default=(0.3, 0.2, 0.2, 0.1, 0.2, 0.1, 0.2, 0.2)) #these probas are not 1:1, as some patterns have activation conditions
+                                                              # Mostly straight drops; occasional 1-lane (maybe 2) switches.
+                                                              default=(0.34, 0.08, 0.08, 0.26, 0.06, 0.10, 0.15, 0.15)) #these probas are not 1:1, as some patterns have activation conditions
     WHITE_UFO_SPEED_FACTOR: float = struct.field(pytree_node=False, default=0.1)
     WHITE_UFO_SHOT_SPEED_FACTOR: float = struct.field(pytree_node=False, default=0.8)
+    # Faster retreat heat so peels happen across a range of depths (variable fire Y).
     WHITE_UFO_RETREAT_P_MIN: float = struct.field(pytree_node=False, default=0.03)
-    WHITE_UFO_RETREAT_P_MAX: float = struct.field(pytree_node=False, default=0.2)
+    WHITE_UFO_RETREAT_P_MAX: float = struct.field(pytree_node=False, default=0.45)
     WHITE_UFO_RETREAT_ALPHA: float = struct.field(pytree_node=False, default=0.01)
     WHITE_UFO_RETREAT_SPEED_MULT: float = struct.field(pytree_node=False, default=2.5)
-    WHITE_UFO_TOP_LANE_MIN_SPEED: float = struct.field(pytree_node=False, default=0.3)
-    WHITE_UFO_TOP_LANE_TURN_SPEED: float = struct.field(pytree_node=False, default=0.5)
+    WHITE_UFO_TOP_LANE_MIN_SPEED: float = struct.field(pytree_node=False, default=0.55)
+    WHITE_UFO_TOP_LANE_TURN_SPEED: float = struct.field(pytree_node=False, default=0.7)
     WHITE_UFO_ATTACK_P_MIN: float = struct.field(pytree_node=False, default=0.0004)
     WHITE_UFO_ATTACK_P_MAX: float = struct.field(pytree_node=False, default=0.8)
     WHITE_UFO_ATTACK_ALPHA: float = struct.field(pytree_node=False, default=0.0002)
@@ -312,7 +337,7 @@ class BeamriderConstants(struct.PyTreeNode):
     MOTHERSHIP_HEIGHT: int = struct.field(pytree_node=False, default=7)
     MOTHERSHIP_EMERGE_Y: int = struct.field(pytree_node=False, default=44)
 
-    REJUVENATOR_SPAWN_PROB: float = struct.field(pytree_node=False, default=1 / 3000)
+    REJUVENATOR_SPAWN_PROB: float = struct.field(pytree_node=False, default=1 / 2500)
     REJUVENATOR_STAGE_2_Y: float = struct.field(pytree_node=False, default=62.0)
     REJUVENATOR_STAGE_3_Y: float = struct.field(pytree_node=False, default=93.0)
     REJUVENATOR_STAGE_4_Y: float = struct.field(pytree_node=False, default=112.0)
@@ -355,7 +380,7 @@ class BeamriderConstants(struct.PyTreeNode):
                                                                                    default=(43.0, 65.0, 72.0, 95.0))
     # Coin constants
     COIN_MAX: int = struct.field(pytree_node=False, default=3)
-    COIN_SPAWN_PROB: float = struct.field(pytree_node=False, default=1 / 500)
+    COIN_SPAWN_PROB: float = struct.field(pytree_node=False, default=1 / 1500)
     COIN_SPAWN_Y: float = struct.field(pytree_node=False, default=55.0)
     COIN_EXIT_Y: float = struct.field(pytree_node=False, default=95.0)
     COIN_SPAWN_X_LEFT: float = struct.field(pytree_node=False, default=5.0)
@@ -713,10 +738,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             int(WhiteUFOPattern.MOVE_BACK), int(WhiteUFOPattern.KAMIKAZE),
             int(WhiteUFOPattern.TRIPLE_SHOT_RIGHT), int(WhiteUFOPattern.TRIPLE_SHOT_LEFT),
         ], dtype=jnp.int32)
-        self._white_ufo_step_vmapped = jax.vmap(
-            type(self)._white_ufo_step,
-            in_axes=(None, None, 1, 1, 0, 0, 0, 0, 0, 0, 0),
-        )
+        # White UFOs are advanced with lax.scan (not vmap) so each slot can see
+        # sibling lane claims and never dive onto an occupied beam.
 
         # Dynamically calculate actual observation size
         # Create a dummy LevelState to get the initial shapes of all fields
@@ -2183,25 +2206,173 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
     def entropy_heat_prob(self, steps_static, alpha=0.0005, p_min=0.0002, p_max=0.8):
         return JaxBeamrider.entropy_heat_prob_static(steps_static, alpha, p_min, p_max)
 
-    def _advance_white_ufos(self, state: BeamriderState) -> WhiteUFOUpdate:
-        """Advance all white UFOs in lockstep for clearer logic inside step()."""
-
-        # We pass self explicitly to the vmapped function
-        results = self._white_ufo_step_vmapped(
-            self,
-            state.sector,
-            state.level.white_ufo_pos,
-            state.level.white_ufo_vel,
-            state.level.white_ufo_time_on_lane,
-            state.level.white_ufo_attack_time,
-            state.level.white_ufo_already_left,
-            state.level.white_ufo_spawn_delay,
-            state.level.white_ufo_pattern_id,
-            state.level.white_ufo_pattern_timer,
-            state.level.white_ufo_rngs
+    def _white_ufo_claimed_lane(
+        self,
+        pos: chex.Array,
+        pattern_id: chex.Array,
+        pattern_timer: chex.Array,
+    ) -> chex.Array:
+        """Beam a diving UFO is committed to (pattern target), or -1 if idle / offscreen / on top."""
+        offscreen = jnp.all(pos == self.enemy_offscreen)
+        on_top = pos[1] <= self.consts.TOP_CLIP
+        diving = jnp.logical_and.reduce(jnp.array([
+            jnp.logical_not(offscreen),
+            jnp.logical_not(on_top),
+            pattern_id != int(WhiteUFOPattern.IDLE),
+        ]))
+        return jnp.where(
+            diving,
+            self._white_ufo_dive_target_lane(pos, pattern_id, pattern_timer),
+            jnp.int32(-1),
         )
 
+    def _white_ufo_dive_target_lane(
+        self,
+        pos: chex.Array,
+        pattern_id: chex.Array,
+        pattern_timer: chex.Array,
+    ) -> chex.Array:
+        """Lane a UFO is steering toward (same rules as `_white_ufo_normal`)."""
+        x, y = pos[0], pos[1]
+        lane_x_at_y = self.top_lanes_x + self.lane_dx_over_dy * (y - float(self.consts.TOP_CLIP))
+        raw_closest = jnp.argmin(jnp.abs(lane_x_at_y - x)).astype(jnp.int32)
+        lane_offset = jnp.take(self._ufo_lane_offsets, pattern_id)
+        is_side_drop = (pattern_id == int(WhiteUFOPattern.DROP_LEFT)) | (
+            pattern_id == int(WhiteUFOPattern.DROP_RIGHT)
+        )
+        start_lane = (pattern_timer >> 8) & 15
+        base_lane = jnp.where(is_side_drop & (start_lane <= 6), start_lane, raw_closest)
+        is_kamikaze = pattern_id == int(WhiteUFOPattern.KAMIKAZE)
+        actively_merging_from_outer = is_side_drop & (
+            ((start_lane == 0) & (pattern_id == int(WhiteUFOPattern.DROP_RIGHT)))
+            | ((start_lane == 6) & (pattern_id == int(WhiteUFOPattern.DROP_LEFT)))
+        )
+        on_outer_rail = (raw_closest == 0) | (raw_closest == 6)
+        merge_y = jnp.where(
+            is_kamikaze | (on_outer_rail & jnp.logical_not(actively_merging_from_outer)),
+            float(self.consts.WHITE_UFO_EDGE_COLLISION_MERGE_Y),
+            float(self.consts.WHITE_UFO_EDGE_MERGE_Y),
+        )
+        near_merge = y >= merge_y
+        min_lane = jnp.where(near_merge, 1, 0)
+        max_lane = jnp.where(near_merge, 5, 6)
+        target = jnp.clip(base_lane + lane_offset, min_lane, max_lane)
+        target = jnp.where(near_merge & (raw_closest <= 1), 1, target)
+        target = jnp.where(near_merge & (raw_closest >= 5), 5, target)
+        return target.astype(jnp.int32)
+
+    def _white_ufo_resolve_free_lane(
+        self,
+        preferred: chex.Array,
+        occupied_lanes: chex.Array,
+        min_lane: chex.Array,
+        max_lane: chex.Array,
+    ) -> chex.Array:
+        """Pick preferred lane if free, else nearest free beam in [min_lane, max_lane]."""
+        lanes = jnp.arange(7, dtype=jnp.int32)
+        in_range = (lanes >= min_lane) & (lanes <= max_lane)
+        free = in_range & jnp.logical_not(occupied_lanes)
+        preferred_ok = free[preferred]
+        # Prefer playable beams; only land on unreachable 0/6 when that was the preference.
+        prefer_outer = (preferred == 0) | (preferred == 6)
+        outer_penalty = jnp.where(
+            ((lanes == 0) | (lanes == 6)) & jnp.logical_not(prefer_outer),
+            50,
+            0,
+        )
+        dist = jnp.abs(lanes - preferred) + jnp.where(free, 0, 100) + outer_penalty
+        fallback = jnp.argmin(dist).astype(jnp.int32)
+        any_free = jnp.any(free)
+        return jnp.where(preferred_ok, preferred, jnp.where(any_free, fallback, preferred))
+
+    def _advance_white_ufos(self, state: BeamriderState) -> WhiteUFOUpdate:
+        """Advance all white UFOs; scan so siblings never share a dive lane."""
+        n_ufos = 3
+        pos = state.level.white_ufo_pos
+        vel = state.level.white_ufo_vel
+        time_on_lane = state.level.white_ufo_time_on_lane
+        attack_time = state.level.white_ufo_attack_time
+        already_left = state.level.white_ufo_already_left
+        spawn_delay = state.level.white_ufo_spawn_delay
+        pattern_id = state.level.white_ufo_pattern_id
+        pattern_timer = state.level.white_ufo_pattern_timer
+        rngs = state.level.white_ufo_rngs
+
+        claims0 = jax.vmap(self._white_ufo_claimed_lane, in_axes=(1, 0, 0))(
+            pos, pattern_id, pattern_timer
+        )
+
+        def body(claims, i):
+            occupied = jnp.zeros(7, dtype=bool)
+
+            def add_claim(j, occ):
+                c = claims[j]
+                valid = (j != i) & (c >= 0) & (c < 7)
+                # Divers block idlers. Among two divers, the lower slot index keeps the beam.
+                both_diving = (claims[i] >= 0) & (claims[j] >= 0)
+                j_has_priority = jnp.where(both_diving, j < i, True)
+                take = valid & j_has_priority
+                return jnp.where(take, occ.at[c].set(True), occ)
+
+            occupied = jax.lax.fori_loop(0, n_ufos, add_claim, occupied)
+
+            (
+                new_pos, vel_x, vel_y, new_tol, new_atk, new_left, new_delay,
+                new_pid, new_pt, new_key,
+            ) = self._white_ufo_step(
+                state.sector,
+                state.level.white_ufo_left,
+                pos[:, i],
+                vel[:, i],
+                time_on_lane[i],
+                attack_time[i],
+                already_left[i],
+                spawn_delay[i],
+                pattern_id[i],
+                pattern_timer[i],
+                rngs[i],
+                occupied_lanes=occupied,
+            )
+            new_claim = self._white_ufo_claimed_lane(new_pos, new_pid, new_pt)
+            claims = claims.at[i].set(new_claim)
+            return claims, (
+                new_pos, vel_x, vel_y, new_tol, new_atk, new_left, new_delay,
+                new_pid, new_pt, new_key,
+            )
+
+        _, results = jax.lax.scan(body, claims0, jnp.arange(n_ufos, dtype=jnp.int32))
         positions, vel_x, vel_y, time_on_lane, attack_time, already_left, spawn_delay, pattern_id, pattern_timer, new_keys = results
+
+        # Hard guarantee: if two divers still book the same beam, peel the
+        # higher-index UFO — never teleport its X onto another lane.
+        def dedupe(i, carry):
+            pos, pid, pt = carry
+            claims = jax.vmap(self._white_ufo_claimed_lane, in_axes=(0, 0, 0))(pos, pid, pt)
+            c = claims[i]
+            occupied = jnp.zeros(7, dtype=bool)
+
+            def add_prior(j, occ):
+                cj = claims[j]
+                take = (j < i) & (cj >= 0) & (cj < 7)
+                return jnp.where(take, occ.at[cj].set(True), occ)
+
+            occupied = jax.lax.fori_loop(0, n_ufos, add_prior, occupied)
+            conflict = (c >= 0) & occupied[c]
+            already_retreating = pid[i] == int(WhiteUFOPattern.RETREAT)
+            # Yield by peeling upward — never re-arm the retreat timer (that re-fires
+            # a shot every frame while two divers share a beam).
+            pid = jnp.where(conflict, pid.at[i].set(int(WhiteUFOPattern.RETREAT)), pid)
+            silent_retreat_t = jnp.int32(self.consts.WHITE_UFO_RETREAT_DURATION) - 1
+            pt = jnp.where(
+                conflict & jnp.logical_not(already_retreating),
+                pt.at[i].set(silent_retreat_t),
+                pt,
+            )
+            return pos, pid, pt
+
+        positions, pattern_id, pattern_timer = jax.lax.fori_loop(
+            0, n_ufos, dedupe, (positions, pattern_id, pattern_timer)
+        )
 
         return WhiteUFOUpdate(
             pos=positions.T,
@@ -2217,6 +2388,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
     def _white_ufo_step(
         self,
         sector: chex.Array,
+        white_ufo_left: chex.Array,
         white_ufo_position: chex.Array,
         white_ufo_vel: chex.Array,
         time_on_lane: chex.Array,
@@ -2226,6 +2398,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         pattern_id: chex.Array,
         pattern_timer: chex.Array,
         key: chex.Array,
+        occupied_lanes: chex.Array,
     ):
         white_ufo_vel_x = white_ufo_vel[0]
         white_ufo_vel_y = white_ufo_vel[1]
@@ -2234,18 +2407,24 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         is_offscreen = jnp.all(white_ufo_position == offscreen_pos)
 
         key_out, choice_key1, choice_key2, float_key = jax.random.split(key, 4)
-        float_rolls = jax.random.uniform(float_key, shape=(4,))
+        float_rolls = jax.random.uniform(float_key, shape=(5,))
 
         spawn_delay_roll = float_rolls[0]
         motion_roll = float_rolls[1]
         retreat_roll = float_rolls[2]
         start_roll = float_rolls[3]
+        flythrough_roll = float_rolls[4]
 
         spawn_delay = jnp.maximum(spawn_delay - 1, 0)
 
+        can_shoot = white_ufo_left <= self.consts.WHITE_UFO_SHOOT_UNLOCK_LEFT
+        # Late-sector edge flavor (prefer reachable outer beams 1/5) — never stay on 0/6.
+        edge_phase = white_ufo_left <= self.consts.WHITE_UFO_OUTER_EDGE_UNLOCK_LEFT
+
         pattern_id, pattern_timer, time_on_lane, attack_time = self._white_ufo_update_pattern_state(
-            sector, white_ufo_position, time_on_lane, attack_time, already_left, spawn_delay, pattern_id, pattern_timer,
-            retreat_roll, start_roll, choice_key1, choice_key2
+            sector, white_ufo_left, white_ufo_position, time_on_lane, attack_time, already_left, spawn_delay, pattern_id, pattern_timer,
+            retreat_roll, start_roll, flythrough_roll, can_shoot, choice_key1, choice_key2,
+            occupied_lanes=occupied_lanes,
         )
 
         requires_lane_motion = self._white_ufo_pattern_requires_lane_motion(pattern_id)
@@ -2254,8 +2433,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         already_left = already_left | jnp.logical_not(on_top_lane)
 
         def follow_lane(_):
-            return self._white_ufo_normal(white_ufo_position, white_ufo_vel_x, white_ufo_vel_y, pattern_id,
-                                          already_left)
+            return self._white_ufo_normal(
+                white_ufo_position, white_ufo_vel_x, white_ufo_vel_y, pattern_id,
+                pattern_timer, already_left, occupied_lanes=occupied_lanes, edge_phase=edge_phase,
+            )
 
         def stay_on_top(_):
             return self._white_ufo_top_lane(white_ufo_position, white_ufo_vel_x, pattern_id, motion_roll)
@@ -2275,18 +2456,21 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         clipped_x = jnp.clip(new_x, self.consts.LEFT_CLIP_PLAYER, self.consts.RIGHT_CLIP_PLAYER)
         new_x = jnp.where(on_top_lane, clipped_x, new_x)
 
-        new_y = jnp.clip(new_y, self.consts.TOP_CLIP, self.consts.PLAYER_POS_Y + 1.0)
+        # Past EDGE_MERGE_Y, `_white_ufo_normal` steers toward playable beams 1–5.
+        # Keep outer-rail dives inside the visible playfield so late merges don't run
+        # off the side before they can cut in (lane 0/6 geometry goes OOB deep down).
+        diving_off_top = jnp.logical_and(requires_lane_motion, jnp.logical_not(on_top_lane))
+        new_x = jnp.where(diving_off_top, jnp.clip(new_x, 4.0, 155.0), new_x)
 
-        # Only respawn if it was not already offscreen (i.e. it was active)
+        # Soft ceiling: kamikaze/flythrough may pass the ship; others stop just past it.
+        is_kamikaze = pattern_id == int(WhiteUFOPattern.KAMIKAZE)
+        y_ceiling = jnp.where(is_kamikaze, float(self.consts.PLAYER_POS_Y) + 8.0, float(self.consts.PLAYER_POS_Y) + 1.0)
+        new_y = jnp.clip(new_y, float(self.consts.TOP_CLIP), y_ceiling)
+
+        # Despawn only once past the player (not from sideways OOB during the edge pass).
         should_respawn = jnp.logical_and(
             jnp.logical_not(is_offscreen),
-            jnp.logical_or(
-                new_x < 0,
-                jnp.logical_or(
-                    new_x > self.consts.SCREEN_WIDTH,
-                    new_y > self.consts.PLAYER_POS_Y
-                )
-            )
+            new_y > self.consts.PLAYER_POS_Y,
         )
 
         white_ufo_position = jnp.where(should_respawn, jnp.array([81.0, 43.0]), jnp.array([new_x, new_y]))
@@ -2322,6 +2506,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
     def _white_ufo_update_pattern_state(
             self,
             sector: chex.Array,
+            white_ufo_left: chex.Array,
             position: chex.Array,
             time_on_lane: chex.Array,
             attack_time: chex.Array,
@@ -2331,8 +2516,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             pattern_timer: chex.Array,
             retreat_roll: chex.Array,
             start_roll: chex.Array,
+            flythrough_roll: chex.Array,
+            can_shoot: chex.Array,
             key_chain_choice: chex.Array,
-            key_start_choice: chex.Array
+            key_start_choice: chex.Array,
+            occupied_lanes: chex.Array,
     ):
         on_top_lane = position[1] <= self.consts.TOP_CLIP
         time_on_lane = jnp.where(on_top_lane, time_on_lane + 1, 0)
@@ -2364,22 +2552,153 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
             # If we just signaled a shot, clear it
             # If we have shots left and just reached a new lane, signal a shot
-            can_shoot = (shots_left > 0) & is_on_lane & (closest_lane_id != last_lane)
+            can_shoot_lane = (shots_left > 0) & is_on_lane & (closest_lane_id != last_lane)
 
-            new_shoot_now = jnp.where(shoot_now == 1, 0, jnp.where(can_shoot, 1, 0))
-            new_shots_left = jnp.where(can_shoot, shots_left - 1, shots_left)
-            new_last_lane = jnp.where(can_shoot, closest_lane_id, last_lane)
+            new_shoot_now = jnp.where(shoot_now == 1, 0, jnp.where(can_shoot_lane, 1, 0))
+            new_shots_left = jnp.where(can_shoot_lane, shots_left - 1, shots_left)
+            new_last_lane = jnp.where(can_shoot_lane, closest_lane_id, last_lane)
 
             return (new_shoot_now << 7) | (new_last_lane << 3) | new_shots_left
+
+        # Non-triple: low 8 bits = countdown; bits 8+ may store DROP_L/R start lane.
+        def update_normal_timer(t):
+            return ((t >> 8) << 8) | jnp.maximum((t & 255) - 1, 0)
 
         pattern_timer = jnp.where(
             is_triple,
             update_triple(None),
-            jnp.maximum(pattern_timer - 1, jnp.zeros_like(pattern_timer))
+            update_normal_timer(pattern_timer),
         )
+        pattern_countdown = jnp.where(is_triple, pattern_timer & 7, pattern_timer & 255)
+
+        on_outer_now = (closest_lane_id == 0) | (closest_lane_id == 6)
+        past_edge_merge = position[1] >= float(self.consts.WHITE_UFO_EDGE_MERGE_Y)
+        # Also treat "pressed against the visible edge" as merge time — lane 0/6 X goes
+        # off-screen deep down, which caused teleports/despawns on the collision path.
+        screen_edge_pinch = on_outer_now & (
+            (position[0] <= 6.0) | (position[0] >= 153.0)
+        )
+        past_collision_merge = (
+            (position[1] >= float(self.consts.WHITE_UFO_EDGE_COLLISION_MERGE_Y))
+            | screen_edge_pinch
+        )
+        is_kamikaze_pattern = pattern_id == int(WhiteUFOPattern.KAMIKAZE)
+
+        # If a side-drop aims at a sibling-occupied beam, flatten to straight — but NEVER
+        # while on unreachable 0/6 (that traps them on the outer rail).
+        is_side_drop_now = (pattern_id == int(WhiteUFOPattern.DROP_LEFT)) | (
+            pattern_id == int(WhiteUFOPattern.DROP_RIGHT)
+        )
+        side_start = (pattern_timer >> 8) & 15
+        side_offset = jnp.take(self._ufo_lane_offsets, pattern_id)
+        side_target = jnp.clip(side_start + side_offset, 0, 6)
+        side_blocked = (
+            is_side_drop_now
+            & occupied_lanes[side_target]
+            & jnp.logical_not(on_outer_now)
+            & jnp.logical_not((side_target == 0) | (side_target == 6))
+        )
+        pattern_id = jnp.where(side_blocked, int(WhiteUFOPattern.DROP_STRAIGHT), pattern_id)
+        pattern_timer = jnp.where(side_blocked, pattern_countdown, pattern_timer)
+        # Recompute after possible side-block / so outer-approach packing stays consistent.
+        is_side_drop_now = (pattern_id == int(WhiteUFOPattern.DROP_LEFT)) | (
+            pattern_id == int(WhiteUFOPattern.DROP_RIGHT)
+        )
+        side_start = (pattern_timer >> 8) & 15
+        side_offset = jnp.take(self._ufo_lane_offsets, pattern_id)
+        side_target = jnp.clip(side_start + side_offset, 0, 6)
+
+        # Outer approach (1/2→0 or 4/5→6): never expire mid-seek. Expiring while still on
+        # the start beam chained back to DROP_STRAIGHT = a few-pixel fake cross then reverse.
+        chasing_outer = jnp.logical_and.reduce(jnp.array([
+            is_side_drop_now,
+            (side_target == 0) | (side_target == 6),
+            closest_lane_id != side_target,
+            jnp.logical_not(past_edge_merge),
+            jnp.logical_not(on_top_lane),
+        ]))
+        pattern_timer = jnp.where(
+            chasing_outer & (pattern_countdown == 0),
+            (side_start.astype(jnp.int32) << 8) | jnp.int32(45),
+            pattern_timer,
+        )
+        pattern_countdown = jnp.where(is_triple, pattern_timer & 7, pattern_timer & 255)
+
+        already_merge_l = (
+            (pattern_id == int(WhiteUFOPattern.DROP_RIGHT))
+            & (((pattern_timer >> 8) & 15) == 0)
+        )
+        already_merge_r = (
+            (pattern_id == int(WhiteUFOPattern.DROP_LEFT))
+            & (((pattern_timer >> 8) & 15) == 6)
+        )
+        in_shoot_merge = already_merge_l | already_merge_r
+
+        # At the shoot-merge gate on 0/6: either cut in for a mid-board shoot/retreat,
+        # or commit to a deep outer overshoot (kamikaze) that merges much later/sharper.
+        # Decide once from a straight outer ride — never cancel an in-progress DROP merge
+        # (that caused a few-pixel inward fake-cross, then reverse back onto 0/6).
+        edge_phase_early = white_ufo_left <= self.consts.WHITE_UFO_OUTER_EDGE_UNLOCK_LEFT
+        overshoot_p = jnp.where(
+            edge_phase_early,
+            jnp.minimum(self.consts.WHITE_UFO_FLYTHROUGH_P * 1.8, 0.35),
+            self.consts.WHITE_UFO_FLYTHROUGH_P,
+        )
+        commit_outer_overshoot = jnp.logical_and.reduce(jnp.array([
+            on_outer_now,
+            past_edge_merge,
+            jnp.logical_not(past_collision_merge),
+            jnp.logical_not(on_top_lane),
+            jnp.logical_not(is_kamikaze_pattern),
+            jnp.logical_not(in_shoot_merge),
+            pattern_id == int(WhiteUFOPattern.DROP_STRAIGHT),
+            can_shoot,
+            flythrough_roll < overshoot_p,
+        ]))
+        pattern_id = jnp.where(commit_outer_overshoot, int(WhiteUFOPattern.KAMIKAZE), pattern_id)
+        pattern_timer = jnp.where(
+            commit_outer_overshoot,
+            self.ufo_pattern_durations[int(WhiteUFOPattern.KAMIKAZE)],
+            pattern_timer,
+        )
+        is_kamikaze_pattern = pattern_id == int(WhiteUFOPattern.KAMIKAZE)
+
+        # Shoot-path: merge at EDGE_MERGE_Y via DROP_L/R (once fire is unlocked).
+        # Collision/overshoot (kamikaze): stay on outer until COLLISION_MERGE_Y.
+        needs_shoot_merge = jnp.logical_and.reduce(jnp.array([
+            on_outer_now,
+            past_edge_merge,
+            jnp.logical_not(on_top_lane),
+            jnp.logical_not(is_kamikaze_pattern),
+            can_shoot,
+            pattern_id != int(WhiteUFOPattern.IDLE),
+            pattern_id != int(WhiteUFOPattern.RETREAT),
+        ]))
+        # Enter merge once — refreshing the packed timer every frame while on 0/6
+        # permanently stalls countdown and prevents the post-merge peel+shot.
+        merge_from_left = needs_shoot_merge & (closest_lane_id == 0) & jnp.logical_not(already_merge_l)
+        merge_from_right = needs_shoot_merge & (closest_lane_id == 6) & jnp.logical_not(already_merge_r)
+        # If still stuck on 0/6 after countdown dies, extend once so seek can finish.
+        extend_merge_l = needs_shoot_merge & (closest_lane_id == 0) & already_merge_l & (pattern_countdown == 0)
+        extend_merge_r = needs_shoot_merge & (closest_lane_id == 6) & already_merge_r & (pattern_countdown == 0)
+        pattern_id = jnp.where(merge_from_left | extend_merge_l, int(WhiteUFOPattern.DROP_RIGHT), pattern_id)
+        pattern_id = jnp.where(merge_from_right | extend_merge_r, int(WhiteUFOPattern.DROP_LEFT), pattern_id)
+        merge_duration = jnp.maximum(pattern_countdown, jnp.int32(40))
+        packed_merge_l = (jnp.int32(0) << 8) | (merge_duration & 255)
+        packed_merge_r = (jnp.int32(6) << 8) | (merge_duration & 255)
+        pattern_timer = jnp.where(merge_from_left | extend_merge_l, packed_merge_l, pattern_timer)
+        pattern_timer = jnp.where(merge_from_right | extend_merge_r, packed_merge_r, pattern_timer)
 
         shootable_lane = jnp.logical_and(closest_lane_id > 0, closest_lane_id < 6)
-        allow_shoot = jnp.logical_and(jnp.logical_not(on_top_lane), shootable_lane)
+        # Lane-switch shots: also allow fire while crossing between beams once unlocked.
+        # Prefer mid-board fire — far snipes (above FIRE_MIN_Y) are gated off.
+        mid_fire_depth = position[1] >= float(self.consts.WHITE_UFO_FIRE_MIN_Y)
+        allow_shoot = jnp.logical_and.reduce(jnp.array([
+            jnp.logical_not(on_top_lane),
+            can_shoot,
+            mid_fire_depth,
+            jnp.logical_or(shootable_lane, is_on_lane),
+        ]))
 
         is_drop_pattern = jnp.logical_or(
             pattern_id == int(WhiteUFOPattern.DROP_STRAIGHT),
@@ -2425,18 +2744,107 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         pattern_finished_off_top = jnp.logical_and.reduce(jnp.array([
             jnp.logical_not(on_top_lane),
             is_engagement_pattern,
-            jnp.where(is_triple, triple_finished, pattern_timer == 0),
+            jnp.where(is_triple, triple_finished, pattern_countdown == 0),
             is_on_lane,
+            # Still cutting toward 0/6 — not finished until we arrive (or hit merge gate).
+            jnp.logical_not(chasing_outer),
+        ]))
+
+        # After a brief SHOOT hold, always peel back (ALE: fire then instant retreat).
+        shoot_finished = jnp.logical_and.reduce(jnp.array([
+            is_shoot_pattern,
+            pattern_countdown == 0,
+            jnp.logical_not(on_top_lane),
         ]))
 
         retreat_prob = self._white_ufo_retreat_prob(attack_time)
-        retreat_now = jnp.logical_and(pattern_finished_off_top, retreat_roll < retreat_prob)
+        on_outer_lane = (closest_lane_id == 0) | (closest_lane_id == 6)
+        on_reachable_edge = (closest_lane_id == 1) | (closest_lane_id == 5)
+        deep_enough = position[1] >= self.consts.WHITE_UFO_RETREAT_MIN_Y
+        edge_phase = white_ufo_left <= self.consts.WHITE_UFO_OUTER_EDGE_UNLOCK_LEFT
+        ufo_y = position[1]
+        fire_min = float(self.consts.WHITE_UFO_FIRE_MIN_Y)
+        fire_full = float(self.consts.WHITE_UFO_FIRE_FULL_Y)
+        # Fire peels: once unlocked, usually peel+shoot at depth. Late edge-phase may
+        # instead chain nearer (lane-switch) and shoot from deeper — uncommon.
+        fire_depth = jnp.clip((ufo_y - fire_min) / jnp.maximum(fire_full - fire_min, 1.0), 0.0, 1.0)
+        # Base peel chance rises with depth; late sector keeps a small "continue nearer" hole.
+        peel_p = 0.72 + 0.25 * fire_depth
+        continue_nearer = jnp.logical_and.reduce(jnp.array([
+            edge_phase,
+            can_shoot,
+            ufo_y < fire_full,
+            retreat_roll >= peel_p,
+        ]))
+        want_fire_peel = jnp.logical_or.reduce(jnp.array([
+            shoot_finished,
+            ufo_y >= fire_full,
+            jnp.logical_not(continue_nearer),
+        ]))
+
+        # Flythrough only on reachable beams — never while still on unreachable 0/6.
+        # Late edge-phase: prefer overshoot from outermost reachable beams 1/5.
+        flythrough_p = jnp.where(
+            edge_phase & on_reachable_edge,
+            jnp.minimum(self.consts.WHITE_UFO_FLYTHROUGH_P * 1.8, 0.35),
+            self.consts.WHITE_UFO_FLYTHROUGH_P,
+        )
+        flythrough_now = jnp.logical_and.reduce(jnp.array([
+            pattern_finished_off_top,
+            deep_enough,
+            can_shoot,
+            jnp.logical_not(on_outer_lane),
+            flythrough_roll < flythrough_p,
+            jnp.logical_not(is_shoot_pattern),
+            jnp.logical_not(shoot_finished),
+            pattern_id != int(WhiteUFOPattern.KAMIKAZE),
+        ]))
+
+        # Never peel/retreat while on unreachable outer beams — keep merging inward.
+        outer_blocks_retreat = on_outer_lane
+
+        # After fire unlock: peel ⇒ shot ⇒ go back (unless flythrough / rare continue-nearer).
+        # Before unlock: probabilistic silent retreat once deep enough.
+        peel_y_ok = jnp.where(
+            edge_phase & on_reachable_edge & jnp.logical_not(shoot_finished),
+            ufo_y >= float(self.consts.WHITE_UFO_EDGE_MERGE_Y),
+            deep_enough | shoot_finished,
+        )
+        peel_unlocked = jnp.logical_and.reduce(jnp.array([
+            pattern_finished_off_top | shoot_finished,
+            peel_y_ok,
+            can_shoot,
+            want_fire_peel,
+            jnp.logical_not(outer_blocks_retreat),
+            jnp.logical_not(flythrough_now),
+        ]))
+        peel_early = jnp.logical_and.reduce(jnp.array([
+            pattern_finished_off_top,
+            retreat_roll < retreat_prob,
+            deep_enough,
+            jnp.logical_not(can_shoot),
+            jnp.logical_not(outer_blocks_retreat),
+            jnp.logical_not(flythrough_now),
+        ]))
+        retreat_now = peel_unlocked | peel_early
+
+        pattern_id = jnp.where(flythrough_now, int(WhiteUFOPattern.KAMIKAZE), pattern_id)
+        pattern_timer = jnp.where(
+            flythrough_now,
+            self.ufo_pattern_durations[int(WhiteUFOPattern.KAMIKAZE)],
+            pattern_timer,
+        )
 
         pattern_id = jnp.where(retreat_now, int(WhiteUFOPattern.RETREAT), pattern_id)
         pattern_timer = jnp.where(retreat_now, self.consts.WHITE_UFO_RETREAT_DURATION, pattern_timer)
-        attack_time = jnp.where(retreat_now, 0, attack_time)
+        attack_time = jnp.where(retreat_now | flythrough_now, 0, attack_time)
 
-        chain_next = jnp.logical_and(pattern_finished_off_top, jnp.logical_not(retreat_now))
+        chain_next = jnp.logical_and.reduce(jnp.array([
+            pattern_finished_off_top,
+            jnp.logical_not(retreat_now),
+            jnp.logical_not(flythrough_now),
+            jnp.logical_not(shoot_finished),
+        ]))
 
         ufo_stage = _get_index_ufo(position[1])
 
@@ -2450,12 +2858,24 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 sector=sector,
                 stage=ufo_stage,
                 lane=closest_lane_id,
-                is_on_lane=is_on_lane
+                is_on_lane=is_on_lane,
+                white_ufo_left=white_ufo_left,
+                occupied_lanes=occupied_lanes,
+                past_edge_merge=past_edge_merge,
+                on_top=on_top_lane,
             )
             # If pattern is triple shot, initialize bits 3-6 (last_lane) to 15 (all ones)
             # so that it fires on the first lane it is on.
+            # DROP_L/R: pack start lane in bits 8+ so offset is fixed to one adjacent beam
+            # (otherwise closest±1 re-targets every frame and they cascade across the board).
             is_new_triple = (pattern == int(WhiteUFOPattern.TRIPLE_SHOT_RIGHT)) | (pattern == int(WhiteUFOPattern.TRIPLE_SHOT_LEFT))
+            is_side_drop = (pattern == int(WhiteUFOPattern.DROP_LEFT)) | (pattern == int(WhiteUFOPattern.DROP_RIGHT))
             init_timer = jnp.where(is_new_triple, duration | (15 << 3), duration)
+            init_timer = jnp.where(
+                is_side_drop,
+                (closest_lane_id.astype(jnp.int32) << 8) | (init_timer & 255),
+                init_timer,
+            )
             return pattern, init_timer
 
         def keep_after_chain(_):
@@ -2492,11 +2912,21 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 sector=sector,
                 stage=ufo_stage,
                 lane=closest_lane_id,
-                is_on_lane=is_on_lane
+                is_on_lane=is_on_lane,
+                white_ufo_left=white_ufo_left,
+                occupied_lanes=occupied_lanes,
+                past_edge_merge=past_edge_merge,
+                on_top=on_top_lane,
             )
             is_new_triple = (pattern == int(WhiteUFOPattern.TRIPLE_SHOT_RIGHT)) | (
                         pattern == int(WhiteUFOPattern.TRIPLE_SHOT_LEFT))
+            is_side_drop = (pattern == int(WhiteUFOPattern.DROP_LEFT)) | (pattern == int(WhiteUFOPattern.DROP_RIGHT))
             init_timer = jnp.where(is_new_triple, duration | (15 << 3), duration)
+            init_timer = jnp.where(
+                is_side_drop,
+                (closest_lane_id.astype(jnp.int32) << 8) | (init_timer & 255),
+                init_timer,
+            )
             return pattern, init_timer
 
         def keep_pattern(_):
@@ -2529,7 +2959,11 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         sector: chex.Array,
         stage: chex.Array,
         lane: chex.Array,
-        is_on_lane: chex.Array
+        is_on_lane: chex.Array,
+        white_ufo_left: chex.Array,
+        occupied_lanes: chex.Array,
+        past_edge_merge: chex.Array,
+        on_top: chex.Array,
     ):
         pattern_choices = jnp.array(
             [
@@ -2544,7 +2978,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             ],
             dtype=jnp.int32,
         )
-        # Probabilities for IDLE, DROP_STRAIGHT, DROP_RIGHT, DROP_LEFT, RETREAT, SHOOT, MOVE_BACK, KAMIKAZE, TRIPLE_RIGHT, TRIPLE_LEFT
+        # Probabilities for DROP_STRAIGHT, DROP_LEFT, DROP_RIGHT, SHOOT, MOVE_BACK, KAMIKAZE, TRIPLE_RIGHT, TRIPLE_LEFT
         pattern_probs = self.ufo_pattern_probs
 
         # Restriction: Cannot follow MOVE_BACK with DROP_STRAIGHT (idx 0)
@@ -2560,9 +2994,101 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         kamikaze_mask = jnp.array([1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0], dtype=jnp.float32)
         pattern_probs = jnp.where(is_kamikaze_zone, pattern_probs, pattern_probs * kamikaze_mask)
 
-        # Mask out MOVE_BACK (index 4) if stage < 4
+        # Mask out MOVE_BACK (index 4) if stage < 4, or on unhittable outer beams.
+        on_outer_lane = (lane == 0) | (lane == 6)
         move_back_mask = jnp.array([1.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0], dtype=jnp.float32)
-        pattern_probs = jnp.where(stage >= 4, pattern_probs, pattern_probs * move_back_mask)
+        allow_move_back = (stage >= 4) & jnp.logical_not(on_outer_lane)
+        pattern_probs = jnp.where(allow_move_back, pattern_probs, pattern_probs * move_back_mask)
+
+        # Never start / chain onto a beam another white UFO already claims.
+        # Escaping unreachable 0/6 past the merge line always keeps the inward merge.
+        lane_i = lane.astype(jnp.int32)
+        left_t = jnp.clip(lane_i - 1, 0, 6)
+        right_t = jnp.clip(lane_i + 1, 0, 6)
+        lane_busy = occupied_lanes[lane_i]
+        left_busy = occupied_lanes[left_t]
+        right_busy = occupied_lanes[right_t]
+        escaping_outer = on_outer_lane
+        occ_mask = jnp.stack([
+            jnp.where(lane_busy & jnp.logical_not(escaping_outer), 0.0, 1.0),   # DROP_STRAIGHT
+            jnp.where(left_busy & jnp.logical_not(escaping_outer & (lane_i == 6)), 0.0, 1.0),   # DROP_LEFT
+            jnp.where(right_busy & jnp.logical_not(escaping_outer & (lane_i == 0)), 0.0, 1.0),  # DROP_RIGHT
+            jnp.where(lane_busy, 0.0, 1.0),   # SHOOT
+            jnp.where(lane_busy, 0.0, 1.0),   # MOVE_BACK
+            jnp.where(lane_busy, 0.0, 1.0),   # KAMIKAZE
+            jnp.where(lane_busy | right_busy, 0.0, 1.0),  # TRIPLE_RIGHT
+            jnp.where(lane_busy | left_busy, 0.0, 1.0),   # TRIPLE_LEFT
+        ]).astype(jnp.float32)
+        pattern_probs = pattern_probs * occ_mask
+
+        # Past merge on 0/6: only inward merge is legal.
+        # Above merge: allow riding the outer approach beam (DROP_STRAIGHT) mid-dive.
+        # From the top rail: never begin a dive already on 0/6 — cut onto 1/5 instead.
+        outer_escape_mask = jnp.where(
+            (past_edge_merge | on_top) & (lane == 0),
+            jnp.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=jnp.float32),
+            jnp.where(
+                (past_edge_merge | on_top) & (lane == 6),
+                jnp.array([0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=jnp.float32),
+                jnp.ones(8, dtype=jnp.float32),
+            ),
+        )
+        pattern_probs = pattern_probs * outer_escape_mask
+        # Mid-dive on 0/6 (not top, not past merge): ride straight only.
+        # Side-drops / kamikaze here fake a cross or abort into a new pattern.
+        # Overshoot vs shoot-merge is decided at the merge gate from DROP_STRAIGHT.
+        upper_outer_0 = jnp.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=jnp.float32)
+        upper_outer_6 = jnp.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=jnp.float32)
+        mid_outer_ride = jnp.logical_not(past_edge_merge) & jnp.logical_not(on_top)
+        pattern_probs = jnp.where(mid_outer_ride & (lane == 0), pattern_probs * upper_outer_0, pattern_probs)
+        pattern_probs = jnp.where(mid_outer_ride & (lane == 6), pattern_probs * upper_outer_6, pattern_probs)
+
+        # Lane-switch (DROP_L/R): mild late-sector boost; keep switches occasional.
+        in_lane_switch_phase = white_ufo_left <= self.consts.WHITE_UFO_LANE_SWITCH_LEFT_MAX
+        switch_boost = jnp.array([0.95, 1.35, 1.35, 1.1, 1.0, 1.0, 1.0, 1.0], dtype=jnp.float32)
+        pattern_probs = jnp.where(in_lane_switch_phase, pattern_probs * switch_boost, pattern_probs)
+
+        # Discourage chaining the same side-drop immediately (avoids 3+ lane sweeps).
+        same_side_dampen = jnp.ones_like(pattern_probs)
+        same_side_dampen = jnp.where(
+            prev_pattern == int(WhiteUFOPattern.DROP_LEFT),
+            same_side_dampen.at[1].set(0.25),
+            same_side_dampen,
+        )
+        same_side_dampen = jnp.where(
+            prev_pattern == int(WhiteUFOPattern.DROP_RIGHT),
+            same_side_dampen.at[2].set(0.25),
+            same_side_dampen,
+        )
+        pattern_probs = pattern_probs * same_side_dampen
+
+        # Outer approach: occasional late-sector cuts onto 0/6, then merge to 1/5.
+        outer_unlocked = white_ufo_left <= self.consts.WHITE_UFO_OUTER_EDGE_UNLOCK_LEFT
+        # On lane 0: prefer DROP_RIGHT (→1). On lane 6: prefer DROP_LEFT (→5).
+        merge_left_boost = jnp.array([1.0, 0.0, 3.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=jnp.float32)
+        merge_right_boost = jnp.array([1.0, 3.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=jnp.float32)
+        pattern_probs = jnp.where(lane == 0, pattern_probs * merge_left_boost, pattern_probs)
+        pattern_probs = jnp.where(lane == 6, pattern_probs * merge_right_boost, pattern_probs)
+        # Mild push from 1–2 toward 0 / 4–5 toward 6 (not every dive).
+        toward_outer_left = jnp.array([0.9, 1.7, 0.75, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=jnp.float32)
+        toward_outer_right = jnp.array([0.9, 0.75, 1.7, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=jnp.float32)
+        pattern_probs = jnp.where(
+            outer_unlocked & ((lane == 1) | (lane == 2)),
+            pattern_probs * toward_outer_left,
+            pattern_probs,
+        )
+        pattern_probs = jnp.where(
+            outer_unlocked & ((lane == 4) | (lane == 5)),
+            pattern_probs * toward_outer_right,
+            pattern_probs,
+        )
+        reachable_edge_boost = jnp.array([1.1, 1.0, 1.0, 1.3, 0.5, 1.6, 1.0, 1.0], dtype=jnp.float32)
+        on_reachable_edge = (lane == 1) | (lane == 5)
+        pattern_probs = jnp.where(
+            outer_unlocked & on_reachable_edge,
+            pattern_probs * reachable_edge_boost,
+            pattern_probs,
+        )
 
         # Triple shot conditions
         # sector >= 7
@@ -2571,11 +3097,6 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         # triple left: lane in [5, 4, 3]
         can_triple = sector >= 7
         can_triple = can_triple & (stage >= 4) & (stage <= 6) & is_on_lane
-
-        # Further restriction for Stage 6: restricted to lanes 1-5.
-        # If in Stage 6, TRIPLE_SHOT_RIGHT (ends at lane+2) must have lane+2 <= 5 => lane <= 3.
-        # TRIPLE_SHOT_LEFT (ends at lane-2) must have lane-2 >= 1 => lane >= 3.
-        # This matches the requested lanes (1,2,3 for right; 5,4,3 for left).
 
         can_triple_right = can_triple & (lane >= 1) & (lane <= 3)
         can_triple_left = can_triple & (lane >= 3) & (lane <= 5)
@@ -2588,10 +3109,29 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         # Avoid division by zero if all probs masked
         prob_sum = jnp.sum(pattern_probs)
-        pattern_probs = jnp.where(prob_sum > 0, pattern_probs / prob_sum, pattern_probs)
+        safe_probs = jnp.where(
+            prob_sum > 0,
+            pattern_probs / prob_sum,
+            jnp.ones_like(pattern_probs) / pattern_probs.shape[0],
+        )
 
-        pattern = jax.random.choice(key, pattern_choices, shape=(), p=pattern_probs)
+        pattern = jax.random.choice(key, pattern_choices, shape=(), p=safe_probs)
         duration = self.ufo_pattern_durations[pattern]
+        # All engagement beams taken by siblings: peel (on top this instantly becomes IDLE).
+        pattern = jnp.where(prob_sum > 0, pattern, int(WhiteUFOPattern.RETREAT))
+        duration = jnp.where(prob_sum > 0, duration, self.consts.WHITE_UFO_RETREAT_DURATION)
+        # Give outer approaches enough time to actually reach 0/6 (short DROP_L/R used to
+        # abort halfway and chain back onto the starting beam).
+        outer_approach = jnp.logical_or(
+            (pattern == int(WhiteUFOPattern.DROP_LEFT)) & ((lane == 1) | (lane == 2)),
+            (pattern == int(WhiteUFOPattern.DROP_RIGHT)) & ((lane == 4) | (lane == 5)),
+        )
+        outer_ride = (pattern == int(WhiteUFOPattern.DROP_STRAIGHT)) & ((lane == 0) | (lane == 6))
+        duration = jnp.where(
+            outer_approach | outer_ride,
+            jnp.maximum(duration, jnp.int32(95)),
+            duration,
+        )
         return pattern, duration
 
     def _white_ufo_top_lane(self, white_ufo_pos, white_ufo_vel_x, pattern_id, motion_roll: chex.Array):
@@ -2623,54 +3163,140 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         )
         return vx, 0.0
 
-    def _white_ufo_normal(self, white_ufo_pos, white_ufo_vel_x, white_ufo_vel_y, pattern_id, already_left): #velocities not used anymore
+    def _white_ufo_normal(self, white_ufo_pos, white_ufo_vel_x, white_ufo_vel_y, pattern_id, pattern_timer, already_left, occupied_lanes, edge_phase=False): #velocities not used anymore
         speed_factor = self.consts.WHITE_UFO_SPEED_FACTOR
         retreat_mult = self.consts.WHITE_UFO_RETREAT_SPEED_MULT
         x, y = white_ufo_pos[0], white_ufo_pos[1]
 
         lane_x_at_y = self.top_lanes_x + self.lane_dx_over_dy * (y - float(self.consts.TOP_CLIP))
 
-        # 1. Identify the current lane
-        closest_lane_id = jnp.argmin(jnp.abs(lane_x_at_y - x))
-
-        # 2. Determine index offset based on pattern
+        # 1. Identify the current lane (raw, including unhittable outer beams 0 / 6)
+        raw_closest_lane_id = jnp.argmin(jnp.abs(lane_x_at_y - x))
         lane_offset = jnp.take(self._ufo_lane_offsets, pattern_id)
 
-        # 3. Apply offset and clip to valid lane indices (0 to 6)
-        # Stage 6 starts at y=86. When in Stage 6 or 7, restrict to lanes 1-5.
-        in_restricted_stage = y >= 86.0
-        min_lane = jnp.where(in_restricted_stage, 1, 0)
-        max_lane = jnp.where(in_restricted_stage, 5, 6)
-        target_lane_id = jnp.clip(closest_lane_id + lane_offset, min_lane, max_lane)
+        # DROP_L/R: offset is relative to the lane where the pattern started (packed in
+        # pattern_timer bits 8+). Re-applying closest±1 each frame cascades across the board.
+        is_side_drop = (pattern_id == int(WhiteUFOPattern.DROP_LEFT)) | (
+            pattern_id == int(WhiteUFOPattern.DROP_RIGHT)
+        )
+        start_lane = (pattern_timer >> 8) & 15
+        base_lane = jnp.where(is_side_drop & (start_lane <= 6), start_lane, raw_closest_lane_id)
+
+        # Upper dive: may track unreachable 0/6.
+        # Shoot-path DROP from 0/6 merges at EDGE_MERGE_Y; kamikaze / plain outer rides
+        # hold until COLLISION_MERGE_Y for a steeper cut-in near the player.
+        is_kamikaze = pattern_id == int(WhiteUFOPattern.KAMIKAZE)
+        actively_merging_from_outer = is_side_drop & (
+            ((start_lane == 0) & (pattern_id == int(WhiteUFOPattern.DROP_RIGHT)))
+            | ((start_lane == 6) & (pattern_id == int(WhiteUFOPattern.DROP_LEFT)))
+        )
+        on_outer_rail = (raw_closest_lane_id == 0) | (raw_closest_lane_id == 6)
+        merge_y = jnp.where(
+            is_kamikaze | (on_outer_rail & jnp.logical_not(actively_merging_from_outer)),
+            float(self.consts.WHITE_UFO_EDGE_COLLISION_MERGE_Y),
+            float(self.consts.WHITE_UFO_EDGE_MERGE_Y),
+        )
+        near_merge = y >= merge_y
+        is_retreat = pattern_id == int(WhiteUFOPattern.RETREAT)
+        is_move_back = pattern_id == int(WhiteUFOPattern.MOVE_BACK)
+        is_triple = (pattern_id == int(WhiteUFOPattern.TRIPLE_SHOT_RIGHT)) | (
+                    pattern_id == int(WhiteUFOPattern.TRIPLE_SHOT_LEFT))
+        min_lane = jnp.where(near_merge, 1, 0)
+        max_lane = jnp.where(near_merge, 5, 6)
+        target_lane_id = jnp.clip(base_lane + lane_offset, min_lane, max_lane)
+        # Lock outer approaches onto the matching outermost player lane when merging.
+        # Retreats keep their current beam — don't sideways-snap onto 1/5 then back.
+        target_lane_id = jnp.where(
+            near_merge & (raw_closest_lane_id <= 1) & jnp.logical_not(is_retreat),
+            1,
+            target_lane_id,
+        )
+        target_lane_id = jnp.where(
+            near_merge & (raw_closest_lane_id >= 5) & jnp.logical_not(is_retreat),
+            5,
+            target_lane_id,
+        )
+        # Retreating from an outer rail: climb the nearest playable edge beam.
+        retreat_lane = jnp.clip(raw_closest_lane_id, 1, 5)
+        target_lane_id = jnp.where(is_retreat, retreat_lane, target_lane_id)
+        preferred_lane_id = target_lane_id
+        # Outer approaches / merges must always be allowed onto 1/5 even if a sibling
+        # already claims that beam (dedupe peels the other UFO — never trap on 0/6).
+        approach_outer = ((preferred_lane_id == 0) | (preferred_lane_id == 6)) & jnp.logical_not(near_merge)
+        escaping_or_merging_outer = (
+            on_outer_rail
+            | approach_outer
+            | actively_merging_from_outer
+            | (near_merge & ((raw_closest_lane_id <= 1) | (raw_closest_lane_id >= 5)))
+        )
+        effective_occupied = jnp.where(
+            escaping_or_merging_outer | is_retreat,
+            jnp.zeros_like(occupied_lanes),
+            occupied_lanes,
+        )
+        target_lane_id = self._white_ufo_resolve_free_lane(
+            target_lane_id, effective_occupied, min_lane, max_lane
+        )
+        yielding_lane = effective_occupied[preferred_lane_id] & (target_lane_id != preferred_lane_id)
 
         lane_vector = self.lane_vectors_t2b[target_lane_id]
         target_lane_x = lane_x_at_y[target_lane_id]
 
-        is_retreat = pattern_id == int(WhiteUFOPattern.RETREAT)
-        is_move_back = pattern_id == int(WhiteUFOPattern.MOVE_BACK)
-        is_kamikaze = pattern_id == int(WhiteUFOPattern.KAMIKAZE)
-        is_triple = (pattern_id == int(WhiteUFOPattern.TRIPLE_SHOT_RIGHT)) | (
-                    pattern_id == int(WhiteUFOPattern.TRIPLE_SHOT_LEFT))
-
         cross_track = target_lane_x - x
         distance_to_lane = jnp.abs(cross_track)
         direction = jnp.sign(cross_track)
+        # Side drops: gentle lateral crawl.
+        # Shoot-path outer merge: mid diagonal. Collision kamikaze: late sharp cut-in.
+        target_is_outer = (target_lane_id == 0) | (target_lane_id == 6)
+        merging_inward = (
+            (on_outer_rail | actively_merging_from_outer)
+            & jnp.logical_not(target_is_outer)
+            & jnp.logical_not(is_retreat)
+        )
+        sharp_collision_merge = merging_inward & (
+            is_kamikaze | (y >= float(self.consts.WHITE_UFO_EDGE_COLLISION_MERGE_Y) - 1.0)
+        )
+        seek_vx = jnp.where(
+            sharp_collision_merge,
+            2.2,
+            jnp.where(
+                merging_inward | (near_merge & actively_merging_from_outer),
+                1.25,
+                jnp.where(target_is_outer, 1.1, jnp.where(is_side_drop, 0.55, 0.9)),
+            ),
+        )
+        # Never one-frame teleport — cap yield seeks.
+        seek_vx = jnp.where(yielding_lane, jnp.maximum(seek_vx, 1.25), seek_vx)
 
         def seek_lane(_):
             has_dir = (direction != 0).astype(jnp.float32)
-            attack_vx = direction * 0.5 * has_dir
+            # Don't overshoot the beam — step at most onto the lane center.
+            step = jnp.minimum(seek_vx, distance_to_lane)
+            attack_vx = direction * step * has_dir
             retreat_vx = direction * speed_factor * retreat_mult * 2.0 * has_dir
 
-            fast_seek = is_retreat | is_kamikaze | is_triple
+            fast_seek = is_retreat | is_triple | (is_kamikaze & jnp.logical_not(on_outer_rail))
             new_vx = jnp.where(fast_seek, retreat_vx, attack_vx)
+            # Collision cut-in: capped attack step (sharp, not a teleport).
+            new_vx = jnp.where(sharp_collision_merge | merging_inward, attack_vx, new_vx)
 
-            new_vy = (
+            # While still riding the outer rail as kamikaze, use normal dive speed —
+            # full kamikaze vy races off-screen before the late merge can complete.
+            riding_outer = on_outer_rail & jnp.logical_not(near_merge)
+            kamikaze_vy = jnp.where(
+                riding_outer,
+                0.25,
+                lane_vector[1] * speed_factor * retreat_mult,
+            )
+            base_vy = (
                     is_retreat * (-lane_vector[1] * speed_factor * retreat_mult) +
                     is_move_back * (-lane_vector[1] * speed_factor) +
-                    is_kamikaze * (lane_vector[1] * speed_factor * retreat_mult) +
+                    is_kamikaze * kamikaze_vy +
                     is_triple * 0.25 +
                     (~(is_retreat | is_move_back | is_kamikaze | is_triple)) * 0.25
             )
+            merge_vy = jnp.where(sharp_collision_merge, 0.38, 0.32)
+            new_vy = jnp.where(merging_inward & jnp.logical_not(is_retreat), merge_vy, base_vy)
             return new_vx, new_vy
 
         def follow_lane(_):
@@ -2685,6 +3311,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
             kamikaze_vx = lane_vector[0] * speed_factor * retreat_mult
             kamikaze_vy = lane_vector[1] * speed_factor * retreat_mult
+            # Don't race off-screen on 0/6 before the late collision merge.
+            riding_outer = on_outer_rail & jnp.logical_not(near_merge)
+            kamikaze_vx = jnp.where(riding_outer, normal_vx, kamikaze_vx)
+            kamikaze_vy = jnp.where(riding_outer, normal_vy, kamikaze_vy)
 
             new_vx = (
                     is_retreat * retreat_vx +
@@ -2730,14 +3360,17 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         shot_active = shot_pos[1] <= float(self.consts.BOTTOM_CLIP)
         shot_timer = jnp.where(shot_active, shot_timer + 1, 0)
 
-        shoot_duration = self.ufo_pattern_durations[int(WhiteUFOPattern.SHOOT)]
+        retreat_duration = int(self.consts.WHITE_UFO_RETREAT_DURATION)
 
         is_triple = (white_ufo_pattern_id == int(WhiteUFOPattern.TRIPLE_SHOT_RIGHT)) | (white_ufo_pattern_id == int(WhiteUFOPattern.TRIPLE_SHOT_LEFT))
         shoot_now_triple = (white_ufo_pattern_timer >> 7) & 1
 
+        # Fire only when a real fire-peel begins (timer armed at full RETREAT_DURATION).
+        # Silent peels (dedupe yields) use duration-1 so they never shoot.
+        # Kamikaze/flythrough must NOT shoot-on-commit — shot ⇒ go back, not dive nearer.
         wants_spawn = jnp.logical_and(
-            white_ufo_pattern_id == int(WhiteUFOPattern.SHOOT),
-            white_ufo_pattern_timer == shoot_duration,
+            white_ufo_pattern_id == int(WhiteUFOPattern.RETREAT),
+            white_ufo_pattern_timer == retreat_duration,
         )
         wants_spawn = wants_spawn | (is_triple & (shoot_now_triple == 1))
 
@@ -2750,7 +3383,10 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             ufo_y[None, :] - float(self.consts.TOP_CLIP)
         )
         closest_lane = jnp.argmin(jnp.abs(lane_x_at_ufo_y - ufo_x[None, :]), axis=0).astype(jnp.int32)
-        allowed_shot_lane = jnp.logical_and(closest_lane > 0, closest_lane < 6)
+        # Only fire from player-reachable beams — never while still on 0/6 (that spawned
+        # shots on 1/5 while the saucer stayed on the wall: looked like a 1-frame teleport).
+        shot_lane_id = closest_lane
+        allowed_shot_lane = (closest_lane >= 1) & (closest_lane <= 5)
 
         # Each UFO has 3 slots: [3*i, 3*i+1, 3*i+2]
         # We find the first inactive slot for each UFO.
@@ -2758,7 +3394,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
         first_inactive_slot = jnp.argmax(jnp.logical_not(ufo_shot_active), axis=1) # UFO
         has_inactive_slot = jnp.any(jnp.logical_not(ufo_shot_active), axis=1)
 
-        can_shoot = (state.steps > 2000) | state.ufo_killed
+        # Unlock after ~2 kills (enemies remaining ≤ 13), matching ALE sector-1 log.
+        can_shoot = state.level.white_ufo_left <= self.consts.WHITE_UFO_SHOOT_UNLOCK_LEFT
+        # Gate far snipes. Use pre-motion Y so a same-frame retreat step can't drop a
+        # mid-board peel just under the floor.
+        fire_depth_y = jnp.maximum(ufo_y, state.level.white_ufo_pos[1].astype(jnp.float32))
+        deep_enough_to_fire = fire_depth_y >= float(self.consts.WHITE_UFO_FIRE_MIN_Y)
 
         spawn = jnp.logical_and.reduce(
             jnp.array([
@@ -2767,11 +3408,12 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
                 ufo_not_on_top_lane,
                 allowed_shot_lane,
                 has_inactive_slot,
+                deep_enough_to_fire,
             ])
         ) & can_shoot
 
         spawn_y = jnp.clip(ufo_y + 4.0, float(self.consts.TOP_CLIP), float(self.consts.BOTTOM_CLIP))
-        spawn_x = jnp.take(lanes_top_x, closest_lane) + jnp.take(lane_dx_over_dy, closest_lane) * (
+        spawn_x = jnp.take(lanes_top_x, shot_lane_id) + jnp.take(lane_dx_over_dy, shot_lane_id) * (
             spawn_y - float(self.consts.TOP_CLIP)
         )
 
@@ -2786,8 +3428,8 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
 
         shot_pos = jnp.where(spawn_mask[None, :], spawn_pos_expanded, shot_pos)
 
-        closest_lane_expanded = jnp.repeat(closest_lane, 3) # (9,)
-        shot_lane = jnp.where(spawn_mask, closest_lane_expanded, shot_lane)
+        shot_lane_expanded = jnp.repeat(shot_lane_id, 3) # (9,)
+        shot_lane = jnp.where(spawn_mask, shot_lane_expanded, shot_lane)
         shot_timer = jnp.where(spawn_mask, 0, shot_timer)
         shot_active = jnp.logical_or(shot_active, spawn_mask)
 
@@ -4168,6 +4810,12 @@ class BeamriderRenderer(JAXGameRenderer):
         asset_config = self._get_asset_config()
         sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "beamrider")
 
+        # Sparse overlays / lane dots do not survive shared cubic or plain nearest
+        # RGBA/ID downscaling. Anchor exact palette colors, then rebuild those
+        # rasters with detail-preserving nearest sampling.
+        if self.config.downscale:
+            asset_config = asset_config + self._native_downscale_palette_anchors(sprite_path)
+
         # 3. Make a single call to the setup function
         (
             self.PALETTE,
@@ -4176,6 +4824,10 @@ class BeamriderRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+
+        if self.config.downscale:
+            self._fix_native_downscale_masks(sprite_path)
+
         self._enemy_explosion_sprite_seq = jnp.array(
             [0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5],
             dtype=jnp.int32,
@@ -4258,6 +4910,159 @@ class BeamriderRenderer(JAXGameRenderer):
             {'name': 'lila_background', 'type': 'single', 'file': 'colored_backgrounds/Lila_background.npy'},
             {'name': 'blood_orange_background', 'type': 'single', 'file': 'colored_backgrounds/BloodOrange_background.npy'},
         ]
+
+    # Flash overlays + sparse sprites that need nearest ID masks under native downscaling.
+    _NATIVE_DOWNSCALE_COLORED_BACKGROUNDS = (
+        ('yellow_background', 'colored_backgrounds/Yellow_background.npy'),
+        ('light_orange_background', 'colored_backgrounds/LightOrange_background.npy'),
+        ('middle_orange_background', 'colored_backgrounds/MiddleOrange_background.npy'),
+        ('dark_orange_background', 'colored_backgrounds/DarkOrange_background.npy'),
+        ('red_background', 'colored_backgrounds/Red_background.npy'),
+        ('white_background', 'colored_backgrounds/White_background.npy'),
+        ('lila_background', 'colored_backgrounds/Lila_background.npy'),
+        ('blood_orange_background', 'colored_backgrounds/BloodOrange_background.npy'),
+    )
+    _NATIVE_DOWNSCALE_SPRITE_GROUPS = (
+        (
+            'bullet_sprite',
+            (
+                'Laser.npy',
+                'Torpedo/Torpedo_3.npy',
+                'Torpedo/Torpedo_2.npy',
+                'Torpedo/Torpedo_1.npy',
+            ),
+            'laser_sprite',  # also expose first frame as the single laser asset
+        ),
+        (
+            'falling_rocks',
+            (
+                'Falling Rocks/Rock_1.npy',
+                'Falling Rocks/Rock_2.npy',
+                'Falling Rocks/Rock_3.npy',
+                'Falling Rocks/Rock_4.npy',
+            ),
+            None,
+        ),
+        (
+            'white_ufo',
+            (
+                'White_Ufo_Stage_1.npy',
+                'White_Ufo_Stage_2.npy',
+                'White_Ufo_Stage_3.npy',
+                'White_Ufo_Stage_4.npy',
+                'White_Ufo_Stage_5.npy',
+                'White_Ufo_Stage_6.npy',
+                'White_Ufo_Stage_7.npy',
+            ),
+            None,
+        ),
+        (
+            'rejuvenator',
+            (
+                'Rejuvenator/Rejuvenator_1.npy',
+                'Rejuvenator/Rejuvenator_2.npy',
+                'Rejuvenator/Rejuvenator_3.npy',
+                'Rejuvenator/Rejuvenator_4.npy',
+                'Rejuvenator/Rejuvenator_Dead.npy',
+            ),
+            None,
+        ),
+    )
+
+    def _native_downscale_palette_anchors(self, sprite_path: str) -> list:
+        """1x1 swatches so sparse sprite / flash colors stay in COLOR_TO_ID after cubic load."""
+        colors = set()
+        rels = [rel for _, files, _ in self._NATIVE_DOWNSCALE_SPRITE_GROUPS for rel in files]
+        rels += [rel for _, rel in self._NATIVE_DOWNSCALE_COLORED_BACKGROUNDS]
+        for rel in rels:
+            rgba = np.asarray(self.jr.loadFrame(os.path.join(sprite_path, rel)))
+            opaque = rgba[rgba[..., 3] > 128][..., :3]
+            for rgb in np.unique(opaque, axis=0):
+                colors.add((int(rgb[0]), int(rgb[1]), int(rgb[2])))
+
+        anchors = []
+        for i, (r, g, b) in enumerate(sorted(colors)):
+            pixel = jnp.array([[[r, g, b, 255]]], dtype=jnp.uint8)
+            anchors.append({'name': f'_palette_anchor_{i}', 'type': 'procedural', 'data': pixel})
+        return anchors
+
+    def _nearest_downscale_rgba(self, rgba: jnp.ndarray) -> jnp.ndarray:
+        """Nearest / max-alpha block downscale for sparse sprites (setup-time only)."""
+        sprite_np = np.asarray(rgba)
+        original_h, original_w = sprite_np.shape[:2]
+        scaled_h = max(1, int(round(original_h * self.config.height_scaling)))
+        scaled_w = max(1, int(round(original_w * self.config.width_scaling)))
+        if (scaled_h, scaled_w) == (original_h, original_w):
+            return jnp.asarray(sprite_np)
+
+        out = np.zeros((scaled_h, scaled_w, sprite_np.shape[2]), dtype=sprite_np.dtype)
+        for y in range(scaled_h):
+            y0 = int(y * original_h / scaled_h)
+            y1 = max(y0 + 1, int((y + 1) * original_h / scaled_h))
+            for x in range(scaled_w):
+                x0 = int(x * original_w / scaled_w)
+                x1 = max(x0 + 1, int((x + 1) * original_w / scaled_w))
+                block = sprite_np[y0:y1, x0:x1]
+                opaque = block[..., 3] > 128
+                if np.any(opaque):
+                    out[y, x] = block.reshape(-1, sprite_np.shape[2])[np.argmax(opaque)]
+                else:
+                    cy = min(original_h - 1, int(round((y + 0.5) * original_h / scaled_h - 0.5)))
+                    cx = min(original_w - 1, int(round((x + 0.5) * original_w / scaled_w - 0.5)))
+                    out[y, x] = sprite_np[cy, cx]
+        return jnp.asarray(out)
+
+    def _downscale_id_mask_preserve_detail(self, id_mask: jnp.ndarray) -> jnp.ndarray:
+        """Nearest downscale that keeps sparse lane-dot IDs instead of the fill color."""
+        mask_np = np.asarray(id_mask)
+        original_h, original_w = mask_np.shape
+        target_h, target_w = self.config.downscale[0], self.config.downscale[1]
+
+        # Majority color is the sector fill (black normally, flash color during overlays).
+        vals, counts = np.unique(mask_np, return_counts=True)
+        fill_id = int(vals[np.argmax(counts)])
+
+        out = np.empty((target_h, target_w), dtype=mask_np.dtype)
+        for y in range(target_h):
+            y0 = int(y * original_h / target_h)
+            y1 = max(y0 + 1, int((y + 1) * original_h / target_h))
+            for x in range(target_w):
+                x0 = int(x * original_w / target_w)
+                x1 = max(x0 + 1, int((x + 1) * original_w / target_w))
+                block = mask_np[y0:y1, x0:x1].reshape(-1)
+                detail = block[block != fill_id]
+                out[y, x] = detail[0] if detail.size else fill_id
+        return jnp.asarray(out)
+
+    def _raster_from_rgba_preserve_detail(self, rgba: jnp.ndarray) -> jnp.ndarray:
+        """Full-res palette ID mask, then detail-preserving downscale to native size."""
+        id_mask = self.jr._create_id_mask(rgba, self.COLOR_TO_ID)
+        return self._downscale_id_mask_preserve_detail(id_mask)
+
+    def _replace_sprite_group_masks(self, sprite_path: str, mask_name: str, files: tuple, alias_first: Optional[str]) -> None:
+        sprites = [
+            self._nearest_downscale_rgba(self.jr.loadFrame(os.path.join(sprite_path, rel)))
+            for rel in files
+        ]
+        padded, offsets = self.jr.pad_to_match(sprites)
+        masks = [self.jr._create_id_mask(frame, self.COLOR_TO_ID) for frame in padded]
+        self.SHAPE_MASKS[mask_name] = jnp.stack(masks)
+        self.FLIP_OFFSETS[mask_name] = offsets[0]
+        if alias_first is not None:
+            self.SHAPE_MASKS[alias_first] = masks[0]
+
+    def _fix_native_downscale_masks(self, sprite_path: str) -> None:
+        """Replace cubic-damaged backgrounds and sparse sprite masks under native downscale."""
+        # Lane dots are single pixels; plain nearest ID resize drops most of them.
+        bg_rgba = self.jr.loadFrame(os.path.join(sprite_path, 'new_background.npy'))
+        self.BACKGROUND = self._raster_from_rgba_preserve_detail(bg_rgba)
+
+        for name, rel in self._NATIVE_DOWNSCALE_COLORED_BACKGROUNDS:
+            rgba = self.jr.loadFrame(os.path.join(sprite_path, rel))
+            self.SHAPE_MASKS[name] = self._raster_from_rgba_preserve_detail(rgba)
+
+        for mask_name, files, alias_first in self._NATIVE_DOWNSCALE_SPRITE_GROUPS:
+            self._replace_sprite_group_masks(sprite_path, mask_name, files, alias_first)
     
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state:BeamriderState) -> chex.Array:
