@@ -1848,7 +1848,7 @@ class ChopperCommandRenderer(JAXGameRenderer):
         # --- 2. Render Background Scroll (Reverted to original logic) ---
         
         # Calculate the index of the pre-shifted slice to draw
-        frame_idx = jnp.asarray(state.local_player_offset + (-state.player_x % self.consts.WIDTH), dtype=jnp.int32)
+        frame_idx = jnp.asarray((state.local_player_offset + -state.player_x) % self.consts.WIDTH, dtype=jnp.int32)
         frame_idx = jnp.clip(frame_idx, 0, self.anim_len['background_scroll'] - 1)
         
         # Get the pre-shifted background mask from the stack
