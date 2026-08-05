@@ -39,6 +39,7 @@ GAME_MODULES = {
     "breakout": "jaxatari.games.jax_breakout",
     "centipede": "jaxatari.games.jax_centipede",
     "choppercommand": "jaxatari.games.jax_choppercommand",
+    "demonattack": "jaxatari.games.jax_demonattack",
     "enduro": "jaxatari.games.jax_enduro",
     "fishingderby": "jaxatari.games.jax_fishingderby",
     "flagcapture": "jaxatari.games.jax_flagcapture",
@@ -105,7 +106,8 @@ MOD_MODULES = {
     "spaceinvaders": "jaxatari.games.mods.spaceinvaders_mods.SpaceInvadersEnvMod",
     "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod",
     "alien": "jaxatari.games.mods.alien_mods.AlienEnvMod",
-    "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod"
+    "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod",
+    "demonattack": "jaxatari.games.mods.demonattack_mods.DemonAttackEnvMod",
 }
 
 
