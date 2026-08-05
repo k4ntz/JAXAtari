@@ -6,6 +6,13 @@ from jaxatari.games.mods.demonattack.demonattack_mod_plugins import (
     ShortWavesMod,
     NoEnemyShotsMod,
     InfiniteLivesMod,
+    RelentlessWavesMod,
+    LateWaveStartMod,
+    PlayerGuidedLaserMod,
+    HomingLaserMod,
+    TeleportingDemonsMod,
+    SideStepLowestDemonsMod,
+    ZigZagMovementDemonsMod,
 )
 
 
@@ -21,6 +28,20 @@ class DemonAttackEnvMod(JaxAtariModController):
         "short_waves": ShortWavesMod,
         "no_enemy_shots": NoEnemyShotsMod,
         "infinite_lives": InfiniteLivesMod,
+        "relentless_waves": RelentlessWavesMod,
+        "late_wave_start": LateWaveStartMod,
+        "player_guided_laser": PlayerGuidedLaserMod,
+        "homing_laser": HomingLaserMod,
+        "teleporting_demons": TeleportingDemonsMod,
+        "sidestep_lowest_demon": SideStepLowestDemonsMod,
+        "zigzag_movement_demons": ZigZagMovementDemonsMod,
+        "advanced_survival": [
+            "late_wave_start",
+            "relentless_waves",
+            "player_guided_laser",
+            "teleporting_demons",
+            "sidestep_lowest_demon",
+        ],
     }
 
     def __init__(

@@ -257,6 +257,7 @@ class DemonAttackConstants(AutoDerivedConstants):
     DEMON_DEATH_ANIMATION_DURATION: int = struct.field(pytree_node=False, default=18)
     WAVE_TOTAL_DEMONS: int = struct.field(pytree_node=False, default=8)
     DEMON_TELEPORT_DURATION: int = struct.field(pytree_node=False, default=44)
+    DEMON_TELEPORT_BLINK_FRAME_DURATION: int = struct.field(pytree_node=False, default=4)
     DEMON_VERTICAL_MOTION_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(64, 128, 192, 240, 240, 192, 128, 64),
@@ -2539,11 +2540,6 @@ class DemonAttackRenderer(JAXGameRenderer):
         small_demon_mask = small_demon_masks[demon_anim_idx]
 
         spawn_anim_total = self.consts.SPAWN_ANIM_FRAMES * self.consts.SPAWN_ANIM_FRAME_DURATION
-        ids = jnp.arange(self.consts.MAX_DEMONS)
-        spacing = (
-            self.consts.DEMON_MAX_X - self.consts.DEMON_MIN_X
-        ) // (self.consts.MAX_DEMONS + 1)
-        spawn_target_x = self.consts.DEMON_MIN_X + (ids + 1) * spacing
 
         def render_demon(i, r):
             is_spawning = state.spawn_anim_timer[i] > 0
@@ -2566,7 +2562,7 @@ class DemonAttackRenderer(JAXGameRenderer):
                 )
 
                 target_x = jnp.clip(
-                    spawn_target_x[i] - (self.consts.SPAWN_ANIM_WIDTH - self.consts.DEMON_SIZE[1]) // 2,
+                    state.demons_x[i] - (self.consts.SPAWN_ANIM_WIDTH - self.consts.DEMON_SIZE[1]) // 2,
                     self.consts.DEMON_MIN_X,
                     spawn_max_x,
                 )
@@ -2622,15 +2618,28 @@ class DemonAttackRenderer(JAXGameRenderer):
                 )
 
             def render_normal():
+                blink_phase = state.spawn_pause_timer[i] // self.consts.DEMON_TELEPORT_BLINK_FRAME_DURATION & 1
+                blink_visible = (
+                        (state.spawn_pause_timer[i] <= self.consts.SPAWN_MOVE_PAUSE)
+                        | (blink_phase == 0)
+                )
+
+                def render_full_demon():
+                    return jax.lax.cond(
+                        blink_visible,
+                        lambda: self.jr.render_at_clipped(
+                            r,
+                            state.demons_x[i],
+                            state.demons_y[i],
+                            demon_mask,
+                        ),
+                        lambda: r,
+                    )
+
                 return jax.lax.cond(
                     state.demon_status[i] == DEMON_STATUS_SMALL,
-                    render_split,
-                    lambda: self.jr.render_at_clipped(
-                        r,
-                        state.demons_x[i],
-                        state.demons_y[i],
-                        demon_mask,
-                    ),
+                    render_split,  # Always rendered; no blinking
+                    render_full_demon,  # Blinking applies only to non-small demons
                 )
 
             def render_death():
