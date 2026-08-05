@@ -689,6 +689,16 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.logical_and(is_small, secondary_alive),
         )
 
+    def _death_animation_blocks_movement(self, state: DemonAttackState) -> chex.Array:
+        split_part_death = jnp.logical_and(
+            self._is_small_demon_status(state.demon_status),
+            state.demon_split_death_part != SPLIT_DEATH_NONE,
+        )
+        return jnp.logical_and(
+            state.demon_death_anim_timer > 0,
+            jnp.logical_not(split_part_death),
+        )
+
     def _demon_width_size(self, status: chex.Array) -> chex.Array:
         return jnp.where(
             self._is_small_demon_status(status),
@@ -1199,7 +1209,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             self._is_active_demon_status(state.demon_status),
             jnp.logical_and(
                 state.spawn_pause_timer <= 0,
-                state.demon_death_anim_timer <= 0,
+                jnp.logical_not(self._death_animation_blocks_movement(state)),
             ),
         )
         rate_by_slot = jnp.asarray(
