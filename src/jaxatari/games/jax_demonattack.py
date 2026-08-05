@@ -271,7 +271,7 @@ class DemonAttackConstants(AutoDerivedConstants):
     )
     DEMON_INITIAL_Y: Tuple[int, int, int] = struct.field(
         pytree_node=False,
-        default=(26, 41, 56),
+        default=(60, 72, 88),
     )
     DEMON_INITIAL_RANDOM: int = struct.field(pytree_node=False, default=234)
     DEMON_INITIAL_TELEPORT: int = struct.field(pytree_node=False, default=2)
@@ -364,7 +364,7 @@ class DemonAttackConstants(AutoDerivedConstants):
     DEMON_MIN_X: int = struct.field(pytree_node=False, default=BOUNDARY)  # left boundary for demons
     DEMON_MAX_X: int = struct.field(pytree_node=False, default=None) # right boundary for demons, calculated in compute_derived
     DEMON_MIN_Y: int = struct.field(pytree_node=False, default=20)  # top boundary for demons
-    DEMON_MAX_Y: int = struct.field(pytree_node=False, default=100) # bottom boundary for demons
+    DEMON_MAX_Y: int = struct.field(pytree_node=False, default=135) # bottom boundary for demons
 
     # Colors
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(194, 169, 53))
