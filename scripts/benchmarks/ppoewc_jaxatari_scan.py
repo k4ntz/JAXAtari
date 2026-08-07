@@ -190,7 +190,7 @@ class EpisodeStatistics:
     returned_episode_lengths: jnp.array
 
 
-def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: Actor, critic: Critic, config: dict, task_id: str, agent_state: TrainState, ewc_fisher = None, ewc_params = None, max_D = None):
+def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: Actor, critic: Critic, config: dict, task_id: str, agent_state: TrainState, ewc_fisher = None, ewc_params = None, max_D = None, global_step = None, global_iteration = None, global_start_time = None):
     config = {k.upper(): v for k, v in config.items() if k != "alg"}
 
     if isinstance(config.get("TRAIN_MODS"), list):
@@ -415,7 +415,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
         )
         return agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, key
     
-    def eval_and_vid(iteration):
+    def eval_and_vid(iteration, current_global_step):
         model_path = f'runs/{run_name}/{config["EXP_NAME"]}_{iteration}.cleanrl_model'
         os.makedirs(os.path.dirname(model_path), exist_ok=True)
         with open(model_path, "wb") as f:
@@ -452,7 +452,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             padding_width=padding_width,
 
         )
-        wandb.log({"eval/episodic_return_mod": np.mean(jax.device_get(episodic_returns)), "step": iteration})
+        wandb.log({f"{task_id}/eval/episodic_return_mod": np.mean(jax.device_get(episodic_returns))}, step=current_global_step)
 
         if config["CAPTURE_VIDEO"]: 
             # Instantiate a clean renderer immune to the training env's downscaling
@@ -464,15 +464,10 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             # shape: (N, H, W, C) -> (N, C, H, W)
             frames = jnp.transpose(frames, (0, 3, 1, 2))
             video = wandb.Video(np.array(frames), fps=30, format="mp4")
-            wandb.log(
-                {
-                    "eval/video": video,
-                },
-                step=iteration,
-            )
-            print(f"Video (eval) logged to wandb with {frames.shape[0]} frames.")
+            wandb.log({f"{task_id}/eval/video": video,}, step=current_global_step)
+            print(f"Video ({task_id}/eval) logged to wandb with {frames.shape[0]} frames.")
 
-    def _generate_single_final_video(mods_config, video_label, video_index=0):
+    def _generate_single_final_video(mods_config, video_label, video_index=0, current_global_step=None):
         """Generate a single video for the given mod configuration and log it to wandb.
         """
         if not config["CAPTURE_VIDEO"]:
@@ -542,12 +537,13 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
                     f'final_video_seed{config["SEED"]}_{video_label}': video,
                     f'final_return_seed{config["SEED"]}_{video_label}': total_reward,
                 },
+                step=current_global_step
             )
             print(f"Video '{video_label}' logged to wandb.")
 
         return total_reward
 
-    def generate_final_video():
+    def generate_final_video(current_global_step=None):
         """Generate videos of the trained agent: one for train env, one per eval mod.
 
         This mirrors pqn_agent.generate_final_video: first a video on the
@@ -572,12 +568,10 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
                 video_configs.append((mods_config, mod_label))
 
         for video_index, (mods_config, video_label) in enumerate(video_configs):
-            _generate_single_final_video(mods_config, video_label, video_index)
+            _generate_single_final_video(mods_config, video_label, video_index, current_global_step)
 
     # TRY NOT TO MODIFY: start the game
     key, reset_key = jax.random.split(key)
-    global_step = 0
-    start_time = time.time()
     next_obs, env_state = vmap_reset(jax.random.split(reset_key, config["NUM_ENVS"]))
     next_done = jnp.zeros(config["NUM_ENVS"], dtype=jax.numpy.bool_)
 
@@ -609,12 +603,13 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
 
     rtpt = RTPT(name_initials='TR', experiment_name='PPOEWC_JAXAtari', max_iterations=config["NUM_ITERATIONS"])
     rtpt.start()
-    start_time = time.time()
+    task_start_time = time.time()
     compile_time = None
     for iteration in range(1, config["NUM_ITERATIONS"] + 1):
+        global_iteration += 1
         rtpt.step()
         if config["EVAL_DURING_TRAIN"] and iteration > 0 and iteration % config["EVAL_EVERY"] == 0:
-           eval_and_vid(iteration) 
+           eval_and_vid(iteration, global_step) 
 
         iteration_time_start = time.time()
         agent_state, next_obs, next_done, storage, key, env_state, info = rollout(
@@ -631,35 +626,39 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
         )
         if compile_time is None:
             compile_time = time.time()
-            print(f"Compile + first iteration time: {compile_time - start_time:.2f} seconds.")
+            print(f"Compile + first iteration time: {compile_time - task_start_time:.2f} seconds.")
         # print(f"global_step={global_step}, avg_episodic_return={avg_episodic_return}")
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         metrics = {
-            "charts/avg_episodic_return": info["returned_episode_returns"].mean(), 
-            "charts/avg_episodic_length": info["returned_episode_lengths"].mean(),
-            "charts/learning_rate": agent_state.opt_state[1].hyperparams["learning_rate"].item(),
-            "losses/value_loss": v_loss[-1, -1].item(),
-            "losses/policy_loss": pg_loss[-1, -1].item(),
-            "losses/entropy": entropy_loss[-1, -1].item(),
-            "losses/approx_kl": approx_kl[-1, -1].item(),
-            "losses/loss": loss[-1, -1].item(),
-            "charts/SPS": int(global_step / (time.time() - start_time)),
-            "charts/SPS_update": int(config["NUM_ENVS"] * config["NUM_STEPS"] / (time.time() - iteration_time_start)),
-            "charts/time": time.time() - start_time,
-            "charts/global_step": global_step,
+            # task specific metrics
+            f"{task_id}/charts/avg_episodic_return": info["returned_episode_returns"].mean(), 
+            f"{task_id}/charts/avg_episodic_length": info["returned_episode_lengths"].mean(),
+            f"{task_id}/losses/value_loss": v_loss[-1, -1].item(),
+            f"{task_id}/losses/policy_loss": pg_loss[-1, -1].item(),
+            f"{task_id}/losses/entropy": entropy_loss[-1, -1].item(),
+            f"{task_id}/losses/approx_kl": approx_kl[-1, -1].item(),
+            f"{task_id}/losses/loss": loss[-1, -1].item(),
+
+            # global metrics
+            "global/learning_rate": agent_state.opt_state[1].hyperparams["learning_rate"].item(),
+            "global/SPS_update": int(config["NUM_ENVS"] * config["NUM_STEPS"] / (time.time() - iteration_time_start)),
+            "global/charts/SPS": int(global_step / (time.time() - global_start_time)),
+            "global/charts/time": time.time() - global_start_time,
+            "global/global_step": global_step,
+            "global/current_task_index": config["TASKS"].index(task_id),
         }
         # merge metrics and info (under charts/)
-        wandb.log(metrics, step=iteration)
+        wandb.log(metrics, step=global_step)
     end_time = time.time()
     print("Training done.")
     if compile_time is not None:
         print(f"Run time after first iteration: {end_time - compile_time:.2f} seconds.")
-    print(f"Total train time: {end_time - start_time:.2f} seconds / {(end_time - start_time)/60:.2f} minutes.")
-    generate_final_video()
+    print(f"Total train time: {end_time - task_start_time:.2f} seconds / {(end_time - task_start_time)/60:.2f} minutes.")
+    generate_final_video(global_step)
 
     if config["SAVE_MODEL"]:
-        eval_and_vid(iteration)
+        eval_and_vid(iteration, global_step)
         # if config["UPLOAD_MODEL"]:
         #     from cleanrl_utils.huggingface import push_to_hub
 
@@ -669,7 +668,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
 
     # writer.close()
     
-    return agent_state, storage
+    return agent_state, storage, global_step, global_iteration
 
 def continual_run(config: dict):
     if config["TRACK"]:
@@ -806,9 +805,20 @@ def continual_run(config: dict):
 
     ewc_fisher = None
     ewc_params = None
-    for task_id in config["TASKS"]:
+
+    global_step = 0 # tracks total number of environment steps across all tasks
+    global_iteration = 0    # tracks total number of PPO updates
+    global_start_time = time.time()
+
+    for i, task_id in enumerate(config["TASKS"]):
+        # reset the optimizer state (step count & momentum) for new tasks
+        if i > 0:
+            agent_state = agent_state.replace(
+                opt_state=agent_state.tx.init(agent_state.params)
+            )
+
         # we get back the updated agent_state and the storage from the rollout
-        agent_state, storage = single_run(key, network, actor, critic, config, task_id, agent_state, ewc_fisher, ewc_params, max_D)
+        agent_state, storage, global_step, global_iteration = single_run(key, network, actor, critic, config, task_id, agent_state, ewc_fisher, ewc_params, max_D, global_step, global_iteration, global_start_time)
 
         # EWC: Compute Fisher Information Matrix and snapshot θ* at the end of the task
         # TODO: could the full storage be too large and cause memory issues?
