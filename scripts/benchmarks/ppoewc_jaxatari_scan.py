@@ -190,8 +190,11 @@ class EpisodeStatistics:
     returned_episode_lengths: jnp.array
 
 
-def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: Actor, critic: Critic, config: dict, task_id: str, agent_state: TrainState, ewc_fisher = None, ewc_params = None, max_D = None, global_step = None, global_iteration = None, global_start_time = None):
+def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: Actor, critic: Critic, config: dict, task_id: str, agent_state: TrainState, ewc_fisher = None, ewc_params = None, max_D = None, global_step = None, global_iteration = None, global_start_time = None, seen_tasks = None, train_mods = [], eval_mods = []):
     config = {k.upper(): v for k, v in config.items() if k != "alg"}
+
+    config["TRAIN_MODS"] = train_mods
+    config["EVAL_MODS"] = eval_mods
 
     if isinstance(config.get("TRAIN_MODS"), list):
         config["TRAIN_MODS"] = tuple(config["TRAIN_MODS"])
@@ -433,39 +436,62 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             )
         print(f"model saved to {model_path}")
 
-        episodic_returns, env_states = evaluate(
-            model_path,
-            partial(
-                make_env,
-                mods=list(config["EVAL_MODS"]),
-                pixel_based=config["PIXEL_BASED"],
-                native_downscaling=config["NATIVE_DOWNSCALING"],
-                smooth_image=config["SMOOTH_IMAGE"],
-                eval=True,
-            ),
-            config["ENV_ID"],
-            eval_episodes=10,
-            run_name=f"{run_name}-eval",
-            Model=(Network, Actor, Critic) if config["PIXEL_BASED"] else (MLP_Network, Actor, Critic),
-            seed=config["SEED"],
-            object_centric=not config["PIXEL_BASED"],
-            padding_width=padding_width,
+        for eval_task, eval_task_train_mods, eval_task_eval_mods in seen_tasks:
+            # We only want to log videos for the CURRENT task to save time/space
+            capture_video = config["CAPTURE_VIDEO"] and (eval_task == task_id) and (eval_task_train_mods == list(config["TRAIN_MODS"]))
 
-        )
-        wandb.log({f"{task_id}/eval/episodic_return_mod": np.mean(jax.device_get(episodic_returns))}, step=current_global_step)
+            # Object centric: recalculate the padding for every eval task using the fully wrapped environment
+            current_padding = 0
+            if not config["PIXEL_BASED"]:
+                temp_env = make_env(
+                    env_id=eval_task, 
+                    seed=config["SEED"], 
+                    num_envs=1, 
+                    mods=eval_task_eval_mods, 
+                    pixel_based=config["PIXEL_BASED"], 
+                    native_downscaling=config["NATIVE_DOWNSCALING"], 
+                    pixel_resize_shape=tuple(config["PIXEL_RESIZE_SHAPE"]), 
+                    smooth_image=config["SMOOTH_IMAGE"], 
+                    frame_stack=config["FRAME_STACK"],
+                    eval=True
+                )()
+                task_D = temp_env.observation_space().shape[0]
+                current_padding = max_D - task_D
 
-        if config["CAPTURE_VIDEO"]: 
-            # Instantiate a clean renderer immune to the training env's downscaling
-            clean_renderer = jaxatari.make(config["ENV_ID"]).renderer
-            # Mirror the pqn_agent final video behavior: log a video for the
-            # current eval environment under a consistent wandb key.
-            # env_state arrays have shape (N,)
-            frames = jax.vmap(clean_renderer.render)(env_states)
-            # shape: (N, H, W, C) -> (N, C, H, W)
-            frames = jnp.transpose(frames, (0, 3, 1, 2))
-            video = wandb.Video(np.array(frames), fps=30, format="mp4")
-            wandb.log({f"{task_id}/eval/video": video,}, step=current_global_step)
-            print(f"Video ({task_id}/eval) logged to wandb with {frames.shape[0]} frames.")
+            episodic_returns, env_states = evaluate(
+                model_path,
+                partial(
+                    make_env,
+                    mods=list(eval_task_eval_mods),
+                    pixel_based=config["PIXEL_BASED"],
+                    native_downscaling=config["NATIVE_DOWNSCALING"],
+                    smooth_image=config["SMOOTH_IMAGE"],
+                    eval=True,
+                ),
+                eval_task,
+                eval_episodes=10,
+                run_name=f"{run_name}-{eval_task}-{str(list(eval_task_eval_mods))}-eval",
+                Model=(Network, Actor, Critic) if config["PIXEL_BASED"] else (MLP_Network, Actor, Critic),
+                seed=config["SEED"],
+                object_centric=not config["PIXEL_BASED"],
+                padding_width=current_padding,
+                crl=True
+            )
+            assert list(eval_task_train_mods) == list(eval_task_eval_mods)  # TODO: remove
+            wandb.log({f"{eval_task}+{str(list(eval_task_train_mods))}/eval/episodic_return_mod": np.mean(jax.device_get(episodic_returns))}, step=current_global_step)
+
+            if capture_video: 
+                # Instantiate a clean renderer immune to the training env's downscaling
+                clean_renderer = jaxatari.make(eval_task).renderer
+                # Mirror the pqn_agent final video behavior: log a video for the
+                # current eval environment under a consistent wandb key.
+                # env_state arrays have shape (N,)
+                frames = jax.vmap(clean_renderer.render)(env_states)
+                # shape: (N, H, W, C) -> (N, C, H, W)
+                frames = jnp.transpose(frames, (0, 3, 1, 2))
+                video = wandb.Video(np.array(frames), fps=30, format="mp4")
+                wandb.log({f"{eval_task}+{str(list(eval_task_train_mods))}/eval/video": video,}, step=current_global_step)
+                print(f"Video ({eval_task}+{str(list(eval_task_train_mods))}/eval) logged to wandb with {frames.shape[0]} frames.")
 
     def _generate_single_final_video(mods_config, video_label, video_index=0, current_global_step=None):
         """Generate a single video for the given mod configuration and log it to wandb.
@@ -608,7 +634,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
     for iteration in range(1, config["NUM_ITERATIONS"] + 1):
         global_iteration += 1
         rtpt.step()
-        if config["EVAL_DURING_TRAIN"] and iteration > 0 and iteration % config["EVAL_EVERY"] == 0:
+        if config["EVAL_DURING_TRAIN"] and iteration % config["EVAL_EVERY"] == 0: # TODO: and iteration > 0
            eval_and_vid(iteration, global_step) 
 
         iteration_time_start = time.time()
@@ -632,13 +658,13 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         metrics = {
             # task specific metrics
-            f"{task_id}/charts/avg_episodic_return": info["returned_episode_returns"].mean(), 
-            f"{task_id}/charts/avg_episodic_length": info["returned_episode_lengths"].mean(),
-            f"{task_id}/losses/value_loss": v_loss[-1, -1].item(),
-            f"{task_id}/losses/policy_loss": pg_loss[-1, -1].item(),
-            f"{task_id}/losses/entropy": entropy_loss[-1, -1].item(),
-            f"{task_id}/losses/approx_kl": approx_kl[-1, -1].item(),
-            f"{task_id}/losses/loss": loss[-1, -1].item(),
+            f"{task_id}+{str(list(config["TRAIN_MODS"]))}/charts/avg_episodic_return": info["returned_episode_returns"].mean(), 
+            f"{task_id}+{str(list(config["TRAIN_MODS"]))}/charts/avg_episodic_length": info["returned_episode_lengths"].mean(),
+            f"{task_id}+{str(list(config["TRAIN_MODS"]))}/losses/value_loss": v_loss[-1, -1].item(),
+            f"{task_id}+{str(list(config["TRAIN_MODS"]))}/losses/policy_loss": pg_loss[-1, -1].item(),
+            f"{task_id}+{str(list(config["TRAIN_MODS"]))}/losses/entropy": entropy_loss[-1, -1].item(),
+            f"{task_id}+{str(list(config["TRAIN_MODS"]))}/losses/approx_kl": approx_kl[-1, -1].item(),
+            f"{task_id}+{str(list(config["TRAIN_MODS"]))}/losses/loss": loss[-1, -1].item(),
 
             # global metrics
             "global/learning_rate": agent_state.opt_state[1].hyperparams["learning_rate"].item(),
@@ -646,7 +672,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             "global/charts/SPS": int(global_step / (time.time() - global_start_time)),
             "global/charts/time": time.time() - global_start_time,
             "global/global_step": global_step,
-            "global/current_task_index": config["TASKS"].index(task_id),
+            # "global/current_task_index": config["TASKS"].index(task_id),
         }
         # merge metrics and info (under charts/)
         wandb.log(metrics, step=global_step)
@@ -751,6 +777,8 @@ def continual_run(config: dict):
     config["BATCH_SIZE"] = int(config["NUM_ENVS"] * config["NUM_STEPS"])
     config["MINIBATCH_SIZE"] = int(config["BATCH_SIZE"] // config["NUM_MINIBATCHES"])
     config["NUM_ITERATIONS"] = int(config["TIMESTEPS_PER_TASK"] // config["BATCH_SIZE"])
+    all_train_mods = list(config["TRAIN_MODS"]) # list of lists of mods, one list of mods per task
+    all_eval_mods = list(config["EVAL_MODS"]) # list of lists of mods, one list of mods per task
 
     # dummy observation to initialize the network; shape is (1, F, H, W) for pixel-based or (1, F, D) for object-centric
     # Problem: In object-centric, the observation space is different for each game
@@ -759,12 +787,12 @@ def continual_run(config: dict):
     observation_space_shape = None
     if not config["PIXEL_BASED"]:
         max_D = 0
-        for task_id in config["TASKS"]:
+        for i, task_id in enumerate(config["TASKS"]):
             env_ = make_env(
                 env_id=task_id, 
                 seed=config["SEED"], 
                 num_envs=config["NUM_ENVS"], 
-                mods=list(config["TRAIN_MODS"]), 
+                mods=all_train_mods[i] if i < len(all_train_mods) else [], 
                 pixel_based=config["PIXEL_BASED"], 
                 native_downscaling=config["NATIVE_DOWNSCALING"], 
                 pixel_resize_shape=tuple(config["PIXEL_RESIZE_SHAPE"]), 
@@ -809,8 +837,13 @@ def continual_run(config: dict):
     global_step = 0 # tracks total number of environment steps across all tasks
     global_iteration = 0    # tracks total number of PPO updates
     global_start_time = time.time()
+    seen_tasks = [] # tracks tasks that have been trained on so far, for evaluation
 
     for i, task_id in enumerate(config["TASKS"]):
+        train_mods = all_train_mods[i] if i < len(all_train_mods) else []
+        eval_mods = all_eval_mods[i] if i < len(all_eval_mods) else []
+        seen_tasks.append((task_id, train_mods, eval_mods))
+
         # reset the optimizer state (step count & momentum) for new tasks
         if i > 0:
             agent_state = agent_state.replace(
@@ -818,7 +851,11 @@ def continual_run(config: dict):
             )
 
         # we get back the updated agent_state and the storage from the rollout
-        agent_state, storage, global_step, global_iteration = single_run(key, network, actor, critic, config, task_id, agent_state, ewc_fisher, ewc_params, max_D, global_step, global_iteration, global_start_time)
+        agent_state, storage, global_step, global_iteration = single_run(
+            key, network, actor, critic, config, task_id, agent_state, 
+            ewc_fisher, ewc_params, max_D, global_step, global_iteration, 
+            global_start_time, seen_tasks, train_mods, eval_mods
+        )
 
         # EWC: Compute Fisher Information Matrix and snapshot θ* at the end of the task
         # TODO: could the full storage be too large and cause memory issues?
