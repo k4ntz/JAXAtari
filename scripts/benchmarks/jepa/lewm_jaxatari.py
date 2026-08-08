@@ -71,6 +71,7 @@ DEFAULTS = dict(
     ckpt_every=0,
     resume=None,
     max_windows_per_episode=4,
+    action_cond="adaln",
 )
 
 
@@ -139,18 +140,87 @@ class SIGReg(nn.Module):
 # Predictor: Transformer that predicts next embedding given past embeddings + actions
 # ---------------------------------------------------------------------------
 
-class Predictor(nn.Module):
-    def __init__(self, emb_dim: int = 256, n_actions: int = 18,
-                 n_heads: int = 4, n_layers: int = 4, dropout: float = 0.1):
+def modulate(x, shift, scale):
+    """AdaLN modulation: scale and shift a normalised activation."""
+    return x * (1 + scale) + shift
+
+
+class AdaLNBlock(nn.Module):
+    """Causal transformer block with adaptive-LayerNorm action conditioning.
+
+    This is how the paper injects actions (Sec. 3): instead of adding an action
+    embedding to the token, the action produces per-token shift/scale/gate
+    parameters for both sub-layers. The modulation head is **zero-initialised**,
+    so at step 0 the gates are 0 and the block is exactly the identity — the
+    predictor starts as a no-op and learns to use actions rather than having
+    randomly-scaled action noise injected into the residual stream from the start.
+    """
+
+    def __init__(self, dim: int, n_heads: int, mlp_ratio: int = 4,
+                 dropout: float = 0.1):
         super().__init__()
-        self.act_emb = nn.Embedding(n_actions, emb_dim)
-        layer = nn.TransformerEncoderLayer(
-            d_model=emb_dim, nhead=n_heads, dim_feedforward=emb_dim * 4,
-            dropout=dropout, batch_first=True, norm_first=True,
+        self.norm1 = nn.LayerNorm(dim, elementwise_affine=False)
+        self.attn = nn.MultiheadAttention(dim, n_heads, dropout=dropout,
+                                          batch_first=True)
+        self.norm2 = nn.LayerNorm(dim, elementwise_affine=False)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, dim * mlp_ratio), nn.GELU(),
+            nn.Dropout(dropout), nn.Linear(dim * mlp_ratio, dim),
         )
-        self.transformer = nn.TransformerEncoder(layer, num_layers=n_layers)
+        self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(dim, 6 * dim))
+        nn.init.zeros_(self.modulation[-1].weight)   # zero-init: block starts as identity
+        nn.init.zeros_(self.modulation[-1].bias)
+
+    def forward(self, x, cond, attn_mask):
+        """x, cond: (B, T, D); attn_mask: (T, T) causal float mask."""
+        sh_a, sc_a, g_a, sh_m, sc_m, g_m = self.modulation(cond).chunk(6, dim=-1)
+
+        h = modulate(self.norm1(x), sh_a, sc_a)
+        a, _ = self.attn(h, h, h, attn_mask=attn_mask, need_weights=False,
+                         is_causal=True)
+        x = x + g_a * a
+
+        h = modulate(self.norm2(x), sh_m, sc_m)
+        return x + g_m * self.mlp(h)
+
+
+class Predictor(nn.Module):
+    """Causal transformer over frame embeddings, conditioned on actions.
+
+    `action_cond` selects how actions enter:
+      "adaln" — per-token AdaLN modulation, zero-init (what the paper does)
+      "add"   — action embedding added to the token (simpler; kept for ablation)
+
+    The output projector mirrors the encoder's (Linear -> BatchNorm), as the paper
+    specifies, so predictions live in the same normalised space as the targets
+    they are compared against.
+    """
+
+    def __init__(self, emb_dim: int = 256, n_actions: int = 18,
+                 n_heads: int = 4, n_layers: int = 4, dropout: float = 0.1,
+                 action_cond: str = "adaln"):
+        super().__init__()
+        if action_cond not in ("adaln", "add"):
+            raise ValueError(f"action_cond must be 'adaln' or 'add', got {action_cond!r}")
+        self.action_cond = action_cond
+        self.act_emb = nn.Embedding(n_actions, emb_dim)
         self.pos_emb = nn.Parameter(torch.randn(1, 512, emb_dim) * 0.02)
+
+        if action_cond == "adaln":
+            self.blocks = nn.ModuleList([
+                AdaLNBlock(emb_dim, n_heads, dropout=dropout) for _ in range(n_layers)
+            ])
+            self.final_norm = nn.LayerNorm(emb_dim, elementwise_affine=False)
+        else:
+            layer = nn.TransformerEncoderLayer(
+                d_model=emb_dim, nhead=n_heads, dim_feedforward=emb_dim * 4,
+                dropout=dropout, batch_first=True, norm_first=True,
+            )
+            self.transformer = nn.TransformerEncoder(layer, num_layers=n_layers)
+
+        # Projector matching the encoder's, per the paper.
         self.out_proj = nn.Linear(emb_dim, emb_dim)
+        self.out_bn = nn.BatchNorm1d(emb_dim)
 
     def forward(self, emb, actions):
         """
@@ -158,11 +228,22 @@ class Predictor(nn.Module):
         actions: (B, T)    — discrete actions taken at each step
         returns: (B, T, D) — predicted next embeddings
         """
-        T = emb.size(1)
-        x = emb + self.act_emb(actions) + self.pos_emb[:, :T]
+        B, T, D = emb.shape
         mask = nn.Transformer.generate_square_subsequent_mask(T, device=emb.device)
-        x = self.transformer(x, mask=mask, is_causal=True)
-        return self.out_proj(x)
+        act = self.act_emb(actions)
+
+        if self.action_cond == "adaln":
+            x = emb + self.pos_emb[:, :T]
+            for blk in self.blocks:
+                x = blk(x, act, mask)
+            x = self.final_norm(x)
+        else:
+            x = emb + act + self.pos_emb[:, :T]
+            x = self.transformer(x, mask=mask, is_causal=True)
+
+        x = self.out_proj(x)
+        # BatchNorm1d wants (N, C): fold batch and time together.
+        return self.out_bn(x.reshape(B * T, D)).reshape(B, T, D)
 
 
 # ---------------------------------------------------------------------------
@@ -191,10 +272,11 @@ def effective_rank(emb_2d):
 class LeWM(nn.Module):
     def __init__(self, n_actions: int, emb_dim: int = 256, frame_h: int = 84,
                  frame_w: int = 84, sigreg_weight: float = 0.1,
-                 stop_grad: bool = False):
+                 stop_grad: bool = False, action_cond: str = "adaln"):
         super().__init__()
         self.encoder = CNNEncoder(in_channels=3, emb_dim=emb_dim)
-        self.predictor = Predictor(emb_dim=emb_dim, n_actions=n_actions)
+        self.predictor = Predictor(emb_dim=emb_dim, n_actions=n_actions,
+                                   action_cond=action_cond)
         self.sigreg = SIGReg()
         self.sigreg_weight = sigreg_weight
         # Faithful LeWM has NO stop-gradient (the paper's central claim is that
@@ -572,7 +654,10 @@ def train(args):
         emb_dim=args.emb_dim,
         sigreg_weight=args.sigreg_weight,
         stop_grad=args.stop_grad,
+        action_cond=args.action_cond,
     ).to(device)
+    print(f"Action conditioning: {args.action_cond}"
+          f"{' (paper)' if args.action_cond == 'adaln' else ' (ABLATION — paper uses AdaLN)'}")
     if model.stop_grad:
         print("WARNING: stop_grad=True — this is the ablation, NOT faithful LeWM.")
 
@@ -722,6 +807,10 @@ def build_parser():
                    help="skip the learning-curve PNG (written by default)")
     p.add_argument("--plot_every", type=int, default=d["plot_every"],
                    help="refresh the curve every N steps during training (0 = only at the end)")
+    p.add_argument("--action_cond", choices=["adaln", "add"], default=d["action_cond"],
+                   help="how actions enter the predictor: adaln = per-token AdaLN "
+                        "modulation (what the paper does); add = additive action "
+                        "embedding (simpler, kept for ablation)")
     p.add_argument("--stop_grad", action="store_true",
                    help="ABLATION ONLY: stop-gradient on the target. "
                         "Faithful LeWM does NOT use this.")
