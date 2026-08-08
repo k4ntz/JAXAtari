@@ -40,8 +40,14 @@ Usage
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
+
+# JAX (the environment) and PyTorch (the networks) share one GPU here. By default
+# JAX preallocates ~75% of VRAM on first use, which leaves PyTorch unable to
+# allocate and fails with a confusing OOM. Must be set before importing jax.
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 import jax
 import jax.numpy as jnp

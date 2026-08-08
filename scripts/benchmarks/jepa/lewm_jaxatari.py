@@ -32,6 +32,11 @@ import os
 import random
 from pathlib import Path
 
+# JAX (the environment) and PyTorch (the networks) share one GPU here. By default
+# JAX preallocates ~75% of VRAM on first use, which leaves PyTorch unable to
+# allocate and fails with a confusing OOM. Must be set before importing jax.
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+
 import jax
 import numpy as np
 import torch
@@ -468,11 +473,17 @@ def evaluate_rollout(model, env, key, device, n_seq, seq_len, n_actions, context
     Returns a dict, or None if not enough full sequences could be collected.
 
     Note: the model is evaluated with BatchNorm in *batch-statistics* mode (not
-    running stats). Under online training the encoder features are non-stationary,
-    so BN's running averages are stale and inflate the embedding scale ~4x, which
-    would make the predictor's outputs meaningless. Using batch stats keeps eval
-    consistent with training. Dropout is still disabled. (A cleaner long-term fix
-    is recomputing BN stats or a frozen target encoder — noted for the report.)
+    running stats), to stay consistent with how it is trained. Dropout is still
+    disabled.
+
+    This cuts both ways for the predictor's output BatchNorm: during an
+    autoregressive rollout the sequence grows and is increasingly self-generated,
+    so batch statistics are computed partly over the model's own predictions.
+    Measured on a trained Pong model, using fixed running statistics for the
+    predictor's BN instead gives rollout MSE 0.182 vs 0.196 — about 7%, i.e. real
+    but small, and far from explaining architecture-level differences. Batch-stat
+    mode is kept so that every number in these results is comparable; the 7% is
+    the size of the methodological wobble underneath them.
     """
     model.eval()
     for mod in model.modules():           # BN back to batch-stat mode; dropout stays off
