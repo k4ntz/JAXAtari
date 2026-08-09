@@ -434,7 +434,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 & (state.score < self.consts.BIRD_DESPAWN_THRESHOLD)
                 & (jnp.logical_not(level_state.condor_active))
                 & (level_state.next_enemy == Enemy.CONDOR))
-        condor_deactivate = level_state.condor_active & ((state.score > self.consts.BIRD_DESPAWN_THRESHOLD) | state.bird_state.stop)
+        condor_deactivate = (level_state.condor_active & ((state.score > self.consts.BIRD_DESPAWN_THRESHOLD) | state.bird_state.stop)) | state.bird_state.pos_x < -30
 
         condor_active = jnp.where(
             condor_activate, 
@@ -835,6 +835,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     
     @partial(jax.jit, static_argnums=(0,))
     def _bird_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        """
+        Calculates new x, y coordinates and determines if bird should fly away.
+        """
         bird_state = state.bird_state
         
         # border constraints
