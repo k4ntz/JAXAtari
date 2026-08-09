@@ -477,7 +477,6 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
                 padding_width=current_padding,
                 crl=True
             )
-            assert list(eval_task_train_mods) == list(eval_task_eval_mods)  # TODO: remove
             wandb.log({f"{eval_task}+{str(list(eval_task_train_mods))}/eval/episodic_return_mod": np.mean(jax.device_get(episodic_returns))}, step=current_global_step)
 
             if capture_video: 
