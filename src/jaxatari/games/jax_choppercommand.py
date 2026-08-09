@@ -1487,8 +1487,6 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             # Player
             new_px, new_py, new_vx, new_loc_off, new_face = self.player_step(state, action)
 
-            jax.debug.print("{}", state.jet_positions[:,2])
-
             # Enemies + Trucks
             new_jet, new_chop, new_rng = self.step_enemy_movement(
                 state.truck_positions, state.jet_positions, state.chopper_positions,
