@@ -24,6 +24,17 @@ class Enemy(IntEnum):
     NONE = 0
     MAD_DOCTOR_1 = 1
     CONDOR = 2
+    
+class TowerLevelType(IntEnum):
+    FULL = 0
+    MIDDLE_CUT = 1
+    SIDE_CUTS = 2
+
+# Player movement states
+class PlayerStableStates(IntEnum):
+    NEUTRAL = 0
+    HALF_PULL_UP = 1
+    PULL_UP = 2
 
 @chex.dataclass
 class LevelState:
@@ -47,12 +58,6 @@ class LevelState:
                     ]
                 ))
         )
-
-# Player movement states
-class PlayerStableStates(IntEnum):
-    NEUTRAL = 0
-    HALF_PULL_UP = 1
-    PULL_UP = 2
     
 @chex.dataclass
 class PlayerMoveState:
@@ -75,11 +80,6 @@ class PlayerMoveState:
             falling_count=0,
             should_fall=False
         )
-
-class TowerLevelType(IntEnum):
-    FULL = 0
-    MIDDLE_CUT = 1
-    SIDE_CUTS = 2
     
 @chex.dataclass
 class TowerState:
@@ -112,8 +112,8 @@ class BirdState:
     pos_x: chex.Array
     pos_y: chex.Array
     dir: chex.Array
-    egg_state: chex.dataclass
     stop: chex.Array
+    egg_state: chex.dataclass
 
     @classmethod
     def new(cls):
@@ -122,14 +122,15 @@ class BirdState:
             pos_x=CrazyClimberConstants.BIRD_SIZE[1],
             pos_y=CrazyClimberConstants.BIRD_Y,
             dir=jnp.array(1),
-            egg_state=EggState.new(),
-            stop=jnp.array(False)
+            stop=jnp.array(False),
+            egg_state=EggState.new()
         )
 
 @chex.dataclass
 class EggState:
     pos_x: chex.Array
     pos_y: chex.Array
+    dir: chex.Array
     vel: chex.Array
 
     @classmethod
@@ -137,6 +138,7 @@ class EggState:
         return cls(
             pos_x=jnp.array(CrazyClimberConstants.BIRD_SIZE[1]),
             pos_y=jnp.array(CrazyClimberConstants.BIRD_Y),
+            dir=jnp.array(1),
             vel=jnp.array(7)
         )
     
@@ -878,6 +880,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             # reset starting coordinates
             egg_state.pos_x = state.bird_state.pos_x
             egg_state.pos_y = 69
+            egg_state.dir = state.bird_state.dir
             return egg_state
             
         # checks if egg hits player
@@ -931,7 +934,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         )
         
         egg_state.pos_y = egg_state.pos_y + 1
-        egg_state.pos_x = egg_state.pos_x + (((state.step_counter % egg_state.vel) == 0).astype(int) * bird_state.dir)
+        egg_state.pos_x = egg_state.pos_x + (((state.step_counter % egg_state.vel) == 0).astype(int) * egg_state.dir)
         
         bird_state.egg_state = egg_state
         bird_state.drop_egg = drop_egg
