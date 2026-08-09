@@ -837,11 +837,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def check_for_collision(state: CrazyClimberState) -> bool:
             player_x = self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x]
 
+            # checks if x coordinates (widths of sprites) overlap
             same_x = jnp.logical_or((((state.bird_state.egg_state.pos_x + self.consts.EGG_SIZE[1]) >= player_x) 
                 & ((state.bird_state.egg_state.pos_x + self.consts.EGG_SIZE[1]) <= (player_x + self.consts.PLAYER_SIZE[1]))), 
                 ((state.bird_state.egg_state.pos_x >= player_x)
                 & (state.bird_state.egg_state.pos_x <= (player_x + self.consts.PLAYER_SIZE[1]))))
 
+            # checks if y coordinates (heights of sprites) overlap
             same_y = jnp.logical_or((((state.bird_state.egg_state.pos_y + self.consts.EGG_SIZE[0]) >= self.consts.PLAYER_Y) 
                 & ((state.bird_state.egg_state.pos_y + self.consts.EGG_SIZE[0]) <= (self.consts.PLAYER_Y + self.consts.PLAYER_SIZE[0]))), 
                 ((state.bird_state.egg_state.pos_y >= self.consts.PLAYER_Y)
