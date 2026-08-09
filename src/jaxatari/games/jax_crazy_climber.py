@@ -955,6 +955,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 lambda: state.bird_state,
                 lambda: state.bird_state.replace(stop = jnp.array(True)))) 
 
+        # player safe -> pause game and do egg breaking animation
+
     @partial(jax.jit, static_argnums=(0,))
     def _score_step(self, state: CrazyClimberState) -> CrazyClimberState:
         currently_at_apex = (state.player_move_state.sub_step == 9) & (state.player_move_state.main_state == PlayerStableStates.PULL_UP)
