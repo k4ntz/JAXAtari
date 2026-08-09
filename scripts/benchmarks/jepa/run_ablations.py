@@ -7,17 +7,22 @@ that change.
 
     faithful      the paper: AdaLN actions, no stop-gradient, lambda = 0.1
     no_sigreg     lambda = 0 — removes the anti-collapse term entirely
-    stop_grad     stop-gradient on the target (what BYOL-style methods rely on)
+    stop_grad     stop-gradient on the target, on top of SIGReg
+    stop_grad_only  stop-gradient with lambda = 0 — the BYOL-style control
     action_add    additive action embedding instead of AdaLN
     sigreg_0.5    lambda = 0.5
     sigreg_2.0    lambda = 2.0
 
-The two that matter most are `no_sigreg` and `stop_grad`, because together they
-test the paper's central claim: that SIGReg alone prevents representation
-collapse, with no stop-gradient and no EMA target encoder. If the claim holds
-here, `no_sigreg` should collapse (effective rank falling towards 1) while
-`faithful` stays high — and `faithful` should remain healthy despite having no
-stop-gradient at all.
+The ones that matter most are `no_sigreg`, `stop_grad` and `stop_grad_only`,
+because together they test the paper's central claim: that SIGReg alone prevents
+representation collapse, with no stop-gradient and no EMA target encoder.
+
+`no_sigreg` shows SIGReg is needed *given no stop-gradient*. `stop_grad_only` is
+the harder question and the real BYOL-style control: with lambda = 0 and a
+stop-gradient, does the asymmetry alone hold the representation open? Without it
+one can only claim SIGReg is sufficient, not that it does anything a plain
+stop-gradient could not — and this predictor is already asymmetric enough that
+the question is live.
 
 Effective rank is the collapse metric rather than embedding variance: BatchNorm
 pins per-dimension variance to 1, so collapse shows up as the embeddings
@@ -54,6 +59,7 @@ VARIANTS = {
     "faithful":   dict(),
     "no_sigreg":  dict(sigreg_weight=0.0),
     "stop_grad":  dict(stop_grad=True),
+    "stop_grad_only": dict(sigreg_weight=0.0, stop_grad=True),
     "action_add": dict(action_cond="add"),
     "sigreg_0.5": dict(sigreg_weight=0.5),
     "sigreg_2.0": dict(sigreg_weight=2.0),
@@ -63,6 +69,7 @@ STYLE = {
     "faithful":   dict(color="C0", linestyle="-",  linewidth=2),
     "no_sigreg":  dict(color="C3", linestyle="-",  linewidth=2),
     "stop_grad":  dict(color="C1", linestyle="--"),
+    "stop_grad_only": dict(color="C6", linestyle="--", linewidth=2),
     "action_add": dict(color="C2", linestyle="-."),
     "sigreg_0.5": dict(color="C4", linestyle=":"),
     "sigreg_2.0": dict(color="C5", linestyle=":"),

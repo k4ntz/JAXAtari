@@ -5,7 +5,7 @@ Based on: "LeWorldModel: Stable End-to-End Joint-Embedding Predictive Architectu
           Maes, Le Lidec, Scieur, LeCun, Balestriero (2026) — arXiv:2603.19312
 Code reference: https://github.com/lucas-maes/le-wm
 
-Adapted for JAXtari by: [your name here]
+Adapted for JAXtari by: Amirmohammad Raei (TU Darmstadt Praktikum, Topic 30)
 Changes from original:
   - CNN encoder instead of ViT (faster for Atari pixel observations)
   - Discrete action embedding instead of continuous action encoder
@@ -76,6 +76,7 @@ DEFAULTS = dict(
     ckpt_every=0,
     resume=None,
     max_windows_per_episode=4,
+    max_episode_steps=500,
     action_cond="adaln",
 )
 
@@ -367,8 +368,21 @@ class SequenceBuffer:
 # ---------------------------------------------------------------------------
 
 def make_env(game: str, img_size: int = 84):
+    # sticky_actions=0.0 deliberately, overriding AtariWrapper's 0.25 default.
+    # Under stickiness the wrapper executes the *previous* action with probability
+    # 0.25 while the caller only sees the action it requested, so a world model
+    # trained here would learn p(z'|z, a) from action labels that are wrong a
+    # quarter of the time — which corrupts exactly what the action-conditioning
+    # ablation is meant to measure. It also keeps the world model's dynamics
+    # identical to the PPO environment in ppo_lewm.py, which sets 0.0 too.
+    #
+    # episodic_life=False for the same reason: it ends an "episode" at the first
+    # lost life, which is a credit-assignment aid for RL and meaningless for a
+    # reward-free world model. Left on, Breakout episodes end after ~22 random
+    # steps, so the model would never observe a partly-cleared wall no matter how
+    # long the step cap is.
     env = jaxatari.make(game)
-    env = AtariWrapper(env)
+    env = AtariWrapper(env, sticky_actions=0.0, episodic_life=False)
     env = PixelObsWrapper(
         env,
         do_pixel_resize=True,
@@ -405,29 +419,32 @@ def rollout_episode(env, key, n_actions: int, max_steps: int):
     return np.stack(obs_list), np.array(act_list, dtype=np.int64)
 
 
-def episode_windows(obs, acts, seq_len: int, max_windows: int):
+def episode_windows(obs, acts, seq_len: int, max_windows: int, rng=None):
     """Cut an episode into non-overlapping (seq_len+1)-frame windows.
 
     Windows never straddle a reset, so every sequence stays within one episode.
-    Taking *all* windows rather than only the one starting at reset matters: with
-    reset-only sequences the model would never see anything past the first
-    seq_len steps of a game, and on games whose random-policy episodes are
-    shorter than seq_len+1 it would see nothing at all. `max_windows` caps how
-    much a single long episode can dominate the buffer.
+
+    When an episode yields more windows than `max_windows`, the kept ones are
+    sampled uniformly from the whole episode rather than taken from the front.
+    Taking the front is what an earlier version did, and combined with a short
+    episode cap it meant the model only ever saw the opening seconds of a game —
+    it never observed, say, a partly-cleared Breakout wall. That is a coverage
+    limitation strong enough to be confused with a property of the objective, so
+    it is worth avoiding rather than explaining away.
     """
     need = seq_len + 1
-    out = []
-    for start in range(0, len(obs) - need + 1, need):
-        # .copy() so a stored window does not keep the whole episode array alive
-        out.append((obs[start:start + need].copy(), acts[start:start + need].copy()))
-        if len(out) >= max_windows:
-            break
-    return out
+    starts = list(range(0, len(obs) - need + 1, need))
+    if len(starts) > max_windows:
+        rng = rng or np.random
+        starts = sorted(rng.choice(starts, size=max_windows, replace=False))
+    # .copy() so a stored window does not keep the whole episode array alive
+    return [(obs[s:s + need].copy(), acts[s:s + need].copy()) for s in starts]
 
 
 def collect_sequences(env, key, buffer: SequenceBuffer,
                       n_sequences: int, seq_len: int, n_actions: int,
-                      max_windows_per_episode: int = 4):
+                      max_windows_per_episode: int = 4,
+                      max_episode_steps: int = 500):
     """Run a random policy and fill `buffer` with `n_sequences` windows."""
     collected = 0
     episodes = 0
@@ -443,10 +460,7 @@ def collect_sequences(env, key, buffer: SequenceBuffer,
             )
         episodes += 1
         key, rk = jax.random.split(key)
-        obs, acts = rollout_episode(
-            env, rk, n_actions,
-            max_steps=(seq_len + 1) * max_windows_per_episode,
-        )
+        obs, acts = rollout_episode(env, rk, n_actions, max_steps=max_episode_steps)
         for w_obs, w_act in episode_windows(obs, acts, seq_len, max_windows_per_episode):
             buffer.add(w_obs, w_act)
             collected += 1
@@ -461,7 +475,8 @@ def collect_sequences(env, key, buffer: SequenceBuffer,
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def evaluate_rollout(model, env, key, device, n_seq, seq_len, n_actions, context=3):
+def evaluate_rollout(model, env, key, device, n_seq, seq_len, n_actions, context=3,
+                     max_episode_steps=500):
     """Open-loop multi-step prediction error in latent space.
 
     Encode a fresh held-out trajectory, seed the predictor with `context` true
@@ -494,7 +509,7 @@ def evaluate_rollout(model, env, key, device, n_seq, seq_len, n_actions, context
     while collected < n_seq and episodes < n_seq * 20 + 50:
         episodes += 1
         key, rk = jax.random.split(key)
-        ep_obs, ep_act = rollout_episode(env, rk, n_actions, max_steps=(seq_len + 1) * 4)
+        ep_obs, ep_act = rollout_episode(env, rk, n_actions, max_steps=max_episode_steps)
         for w_obs, w_act in episode_windows(ep_obs, ep_act, seq_len, max_windows=4):
             obs_list.append(w_obs)
             act_list.append(w_act)
@@ -691,7 +706,8 @@ def train(args):
     # --- initial data collection (always — buffer is not checkpointed) ---
     print(f"Collecting {args.init_sequences} initial sequences...")
     key = collect_sequences(env, key, buffer, args.init_sequences, args.seq_len,
-                            n_actions, args.max_windows_per_episode)
+                            n_actions, args.max_windows_per_episode,
+                            args.max_episode_steps)
     print(f"Buffer size: {len(buffer)} sequences ({buffer.nbytes() / 1e6:.0f} MB)")
 
     if len(buffer) < args.batch_size:
@@ -705,7 +721,8 @@ def train(args):
         # collect more data every N steps
         if step % args.collect_every == 0:
             key = collect_sequences(env, key, buffer, args.collect_n, args.seq_len,
-                                    n_actions, args.max_windows_per_episode)
+                                    n_actions, args.max_windows_per_episode,
+                                    args.max_episode_steps)
 
         # sample batch and train
         obs_batch, act_batch = buffer.sample(args.batch_size)
@@ -757,7 +774,7 @@ def train(args):
         model, env, ek, device,
         n_seq=args.eval_seq,
         seq_len=args.seq_len, n_actions=n_actions,
-        context=args.eval_context,
+        context=args.eval_context, max_episode_steps=args.max_episode_steps,
     )
     if eval_metrics is None:
         print("  (could not collect eval sequences — skipped)")
@@ -818,6 +835,10 @@ def build_parser():
                    help="skip the learning-curve PNG (written by default)")
     p.add_argument("--plot_every", type=int, default=d["plot_every"],
                    help="refresh the curve every N steps during training (0 = only at the end)")
+    p.add_argument("--max_episode_steps", type=int, default=d["max_episode_steps"],
+                   help="how far into an episode to play before resetting; windows "
+                        "are then sampled across it, so coverage is not limited to "
+                        "the opening seconds of a game")
     p.add_argument("--action_cond", choices=["adaln", "add"], default=d["action_cond"],
                    help="how actions enter the predictor: adaln = per-token AdaLN "
                         "modulation (what the paper does); add = additive action "
