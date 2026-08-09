@@ -226,7 +226,16 @@ def main():
     summary_file = outdir / "summary.json"
 
     jobs = [(g, a) for g in cli.games for a in cli.arms]
-    results, run_start = {}, time.time()
+
+    # Merge with whatever is already in this directory, so re-running one arm
+    # (say after fixing it) does not discard the arms that were fine.
+    results = {}
+    if summary_file.exists():
+        results = json.loads(summary_file.read_text())
+        keep = [k for k in results if k not in {f"{g}/{a}" for g, a in jobs}]
+        if keep:
+            print(f"Keeping {len(keep)} existing run(s): {', '.join(sorted(keep))}")
+    run_start = time.time()
 
     for i, (game, arm) in enumerate(jobs, start=1):
         tag = f"{game}/{arm}"
@@ -266,8 +275,10 @@ def main():
         free_memory()
         summary_file.write_text(json.dumps(results, indent=2))
 
+    # Report on every arm present in the directory, not just the ones re-run.
+    all_arms = [a for a in ARM_STYLE if any(k.endswith(f"/{a}") for k in results)]
     fig = save_comparison(outdir, cli.games, results)
-    save_summary_md(outdir, cli.games, cli.arms, results, cli)
+    save_summary_md(outdir, cli.games, all_arms, results, cli)
 
     n_ok = sum(1 for r in results.values() if r["status"] == "ok")
     print(f"\n{'=' * 64}")

@@ -148,8 +148,19 @@ class LeWMTrunk(nn.Module):
 
     def train(self, mode: bool = True):
         super().train(mode)
-        if self.frozen:
-            self.encoder.eval()      # keep BatchNorm in inference mode
+        # The pretrained encoder's BatchNorm always stays in inference mode, even
+        # when fine-tuning: the weights still receive gradients, only the
+        # normalisation statistics are held fixed.
+        #
+        # This is not cosmetic. PPO stores log-probs during the rollout and
+        # recomputes them during the update to form an importance ratio. With BN
+        # in training mode the two passes normalise by different statistics —
+        # rollout batches are num_envs*frame_stack (64 frames here) while update
+        # minibatches are 2048 — so the ratio compares two different functions,
+        # explodes, and takes the policy and critic with it. Observed directly:
+        # value loss reaching 1e15 and entropy collapsing to 0 within 25
+        # iterations on every game.
+        self.encoder.eval()
         return self
 
     def forward(self, x):
@@ -220,7 +231,26 @@ def train(args):
 
     agent = Agent(trunk, args.hidden, n_actions).to(device)
     params = [p for p in agent.parameters() if p.requires_grad]
-    optimizer = torch.optim.Adam(params, lr=args.lr, eps=1e-5)
+
+    # Fine-tuning uses a smaller step on the pretrained encoder than on the
+    # freshly-initialised heads. With its BatchNorm held in inference mode the
+    # encoder's output scale is no longer renormalised, so at the full learning
+    # rate the embeddings drift in magnitude, the actor logits follow, and the
+    # policy goes deterministic within a few iterations (entropy -> 0 by
+    # iteration 8, measured). A smaller step keeps the encoder near the scale
+    # its BatchNorm statistics were calibrated for.
+    enc_params, head_params = [], []
+    for name, p in agent.named_parameters():
+        if not p.requires_grad:
+            continue
+        (enc_params if name.startswith("trunk.encoder.") else head_params).append(p)
+    groups = [{"params": head_params, "lr": args.lr}]
+    if enc_params:
+        groups.append({"params": enc_params, "lr": args.lr * args.encoder_lr_scale})
+        print(f"Fine-tuning encoder at lr x{args.encoder_lr_scale} "
+              f"({len(enc_params)} tensors)")
+    optimizer = torch.optim.Adam(groups, lr=args.lr, eps=1e-5)
+    base_lrs = [g["lr"] for g in optimizer.param_groups]
 
     @jax.jit
     def vmap_reset(keys):
@@ -261,8 +291,8 @@ def train(args):
     for iteration in range(1, num_iterations + 1):
         if args.anneal_lr:
             frac = 1.0 - (iteration - 1.0) / num_iterations
-            for g in optimizer.param_groups:
-                g["lr"] = frac * args.lr
+            for g, base in zip(optimizer.param_groups, base_lrs):
+                g["lr"] = frac * base
 
         ep_returns = []
         t_iter = time.time()
@@ -424,6 +454,9 @@ def build_parser():
                    default="scratch")
     p.add_argument("--encoder", type=str, default=None,
                    help="a LeWM model.pt (LeWM arms only)")
+    p.add_argument("--encoder_lr_scale", type=float, default=0.1,
+                   help="learning-rate multiplier for pretrained encoder weights "
+                        "(lewm_finetune only)")
     p.add_argument("--recalibrate_frames", type=int, default=4096,
                    help="frames used to refresh the encoder's BatchNorm statistics")
     p.add_argument("--outdir", type=str, default="results/ppo")
