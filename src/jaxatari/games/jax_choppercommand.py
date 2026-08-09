@@ -129,6 +129,7 @@ class ChopperCommandConstants(AutoDerivedConstants):
 
     # Maximum number of objects
     MAX_TRUCKS: int = struct.field(pytree_node=False, default=12) # DEFAULT: 12 | How much trucks are spawned
+    MIDDLE_TRUCK_INDICES: Tuple[int, int, int, int] = struct.field(pytree_node=False, default=(1, 4, 7, 10)) # DEFAULT: (1, 4, 7, 10) | The indices of the middle trucks
     MAX_JETS: int = struct.field(pytree_node=False, default=12) # DEFAULT: 12 | the maximum amount of jets that can be spawned
     MAX_CHOPPERS: int = struct.field(pytree_node=False, default=12) # DEFAULT: 12 | the maximum amount of choppers that can be spawned
     MAX_ENEMIES: int = struct.field(pytree_node=False, default=12) # DEFAULT: 12 | the amount of enemies that are spawned
@@ -836,12 +837,13 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
             def is_out_of_cycle(enemy_pos: chex.Array) -> chex.Array:
                 # Auswahl der X-Positionen der mittleren trucks
+                m0, m1, m2, m3 = self.consts.MIDDLE_TRUCK_INDICES
                 middle_trucks = jnp.array(
                     [
-                        truck_positions[1][0],
-                        truck_positions[4][0],
-                        truck_positions[7][0],
-                        truck_positions[10][0],
+                        truck_positions[m0][0],
+                        truck_positions[m1][0],
+                        truck_positions[m2][0],
+                        truck_positions[m3][0],
                     ]
                 )
 
@@ -1010,12 +1012,13 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
             return jnp.array([pos[0], new_y, pos[2], death_timer_or_lane_flag], dtype=pos.dtype)
 
         def is_in_range_checker(pos: chex.Array) -> chex.Array:
+            m0, m1, m2, m3 = self.consts.MIDDLE_TRUCK_INDICES
             all_middle_trucks_x = jnp.array(
                 [
-                    truck_positions[1][0],
-                    truck_positions[4][0],
-                    truck_positions[7][0],
-                    truck_positions[10][0],
+                    truck_positions[m0][0],
+                    truck_positions[m1][0],
+                    truck_positions[m2][0],
+                    truck_positions[m3][0],
                 ]
             )
 
@@ -1483,6 +1486,8 @@ class JaxChopperCommand(JaxEnvironment[ChopperCommandState, ChopperCommandObserv
 
             # Player
             new_px, new_py, new_vx, new_loc_off, new_face = self.player_step(state, action)
+
+            jax.debug.print("{}", state.jet_positions[:,2])
 
             # Enemies + Trucks
             new_jet, new_chop, new_rng = self.step_enemy_movement(

@@ -1,4 +1,4 @@
-from jaxatari.games.mods.choppercommand.choppercommand_mod_plugins import AlwaysCenteredMod
+from jaxatari.games.mods.choppercommand.choppercommand_mod_plugins import AlwaysCenteredMod, MoreTrucksMod
 from jaxatari.modification import JaxAtariModController
 
 
@@ -10,6 +10,7 @@ class ChopperCommandEnvMod(JaxAtariModController):
 
     REGISTRY = {
         "always_centered": AlwaysCenteredMod,
+        "more_trucks": MoreTrucksMod,
     }
 
     def __init__(self,
