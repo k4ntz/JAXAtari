@@ -634,7 +634,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
     for iteration in range(1, config["NUM_ITERATIONS"] + 1):
         global_iteration += 1
         rtpt.step()
-        if config["EVAL_DURING_TRAIN"] and iteration % config["EVAL_EVERY"] == 0: # TODO: and iteration > 0
+        if config["EVAL_DURING_TRAIN"] and iteration > 0 and iteration % config["EVAL_EVERY"] == 0:
            eval_and_vid(iteration, global_step) 
 
         iteration_time_start = time.time()
