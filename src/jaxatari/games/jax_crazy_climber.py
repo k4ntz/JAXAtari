@@ -1237,8 +1237,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         
         @partial(jax.jit, static_argnums=(0,))
         def _render_bird(self, state: CrazyClimberState) -> jnp.ndarray:
+            """
+            Selects correct sprites for the bird based on the sequence
+            """
             bird_raster = self._create_raster(self.consts.BIRD_SIZE)
-
             bird_state = state.bird_state
 
             dir_index = (bird_state.dir > 0).astype(int)
@@ -1255,7 +1257,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             return bird_raster
         
         @partial(jax.jit, static_argnums=(0,))
-        def _render_egg(self, state: CrazyClimberState) -> jnp.ndarray:
+        def _render_egg(self) -> jnp.ndarray:
+            """
+            Selects correct egg sprites based on the y-position
+            """
             egg_raster = self._create_raster(self.consts.EGG_SIZE)
             
             #egg_sprite = self.EGG_SPRITES[state.bird_state.egg_y % 11]
