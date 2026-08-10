@@ -28,6 +28,9 @@ EVAL_MODS:  # mods applied during evaluation, for each environment
   - [shift_enemy]
   - [lazy_enemy]
 
+EWC_DECAY: 0.9  # Decay for Online EWC
+EWC_LAMBDA: 100.0  # Weight for EWC penalty
+
 LEARNING_RATE: 0.00025
 NUM_ENVS: 8
 NUM_STEPS: 128

@@ -337,6 +337,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
         # params also includes the critic; we only want to restrict the network and actor params. 
         # no problem, because ewc_fisher values for all critic params are zero anyways
         penalties = jax.tree.map(param_penalty, params, ewc_params, ewc_fisher) # pytree with shape of params pytree, but leaves are scalars instead of arrays
+        # TODO: (?) add normalization so the penalty does not grow with the number of parameters
         return 0.5 * sum(jax.tree.leaves(penalties))    # sum over scalar leaves to get a single scalar penalty
 
     def ppo_loss(params, x, a, logp, mb_advantages, mb_returns, ewc_params, ewc_fisher):
@@ -756,12 +757,14 @@ def continual_run(config: dict):
         # returns a pytree with the same structure as params, leaf arrays have the same shape as in params, they hold the diagonal fisher information for each parameter
         new_fisher = jax.tree.map(lambda g: jnp.mean(g ** 2, axis=0), per_sample_grads)
 
-        # TODO: This is Online EWC without decay. For standard EWC, we need to store the FIM (and ewc_params) for every task. Completing a task adds another penalty term to the next.
-        # No decay means the fisher values will keep increasing, leading to reduced plasticity
-        # TODO: Implement actual Online EWC with decay: https://arxiv.org/pdf/1805.06370
-        # Accumulate across tasks; sum Fisher diagonals
         if ewc_fisher is not None:
-            new_fisher = jax.tree.map(jnp.add, ewc_fisher, new_fisher)
+            # "Online EWC without decay, equivalent to "multi" mode from MEAL (https://github.com/TTomilin/MEAL/blob/main/experiments/continual/ewc.py)
+            # new_fisher = jax.tree.map(jnp.add, ewc_fisher, new_fisher)
+            # TODO: implement Standard EWC where we store the fisher for each task
+            # Online EWC with decay: https://arxiv.org/pdf/1805.06370
+            new_fisher = jax.tree.map(
+                lambda f_old, f_new: config["EWC_DECAY"] * f_old + (1. - config["EWC_DECAY"]) * f_new,
+                ewc_fisher, new_fisher)
 
         # new_ewc_params = agent_state.params  # snapshot current weights as θ*
         return new_fisher
