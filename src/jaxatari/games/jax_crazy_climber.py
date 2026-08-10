@@ -921,10 +921,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             return state.replace(
                 player_move_state = jax.lax.cond(player_safe,
                     lambda: state.player_move_state,
-                    lambda: state.player_move_state.replace(should_fall = jnp.array(True))),
-                bird_state = jax.lax.cond(player_safe,
-                    lambda: state.bird_state,
-                    lambda: state.bird_state.replace(stop = jnp.array(True)))) 
+                    lambda: state.player_move_state.replace(should_fall = jnp.array(True)))) 
 
             # player safe -> pause game and do egg breaking animation
         
@@ -950,7 +947,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         
         bird_state.egg_state = egg_state
         bird_state.drop_egg = drop_egg
-        bird_state.stop = state.bird_state.stop
+
+        bird_state.stop = jnp.where(
+            state.player_move_state.should_fall | state.player_move_state.falling_count == 160, 
+            jnp.array(True), 
+            state.bird_state.stop)
 
         return state.replace(
             bird_state = bird_state
