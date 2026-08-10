@@ -52,7 +52,8 @@ ablation rather than deleted.
 ```bash
 # world model: one game, then all 15
 python lewm_jaxatari.py --game pong --total_steps 10000 --outdir results/pong
-python run_all_games.py --outdir results/full --total_steps 5000
+python run_all_games.py --outdir results/full --total_steps 5000 \
+    --init_sequences 600 --collect_every 50 --collect_n 20 --eval_seq 64
 
 # ablations (~1 h)
 python run_ablations.py --outdir results/ablations --total_steps 5000
@@ -85,40 +86,54 @@ it lowers it *more*. Two diagnostics guard against this:
 
 ## Results
 
-All 15 games train without collapse, and every one beats the frozen baseline.
+**14 of 15 games** train without collapse and beat the frozen baseline. MsPacman
+does not (rollout 0.282 vs baseline 0.272) and is reported as a failure rather
+than dropped.
 
-**Ablations** (`results/ablations`, 5000 steps, Pong / Seaquest):
+**Ablations** (`results/ablations`, 5000 steps, Pong / Seaquest). Rollout error is
+given as a **ratio to each variant's own frozen baseline**, because latent MSE has
+no absolute scale and is not comparable across variants that define different
+embedding geometries. Lower is better; 1.0 means no better than assuming nothing
+changes.
 
-| variant | eff. rank | pred loss | beats frozen baseline |
+| variant | eff. rank | pred loss | rollout / frozen |
 |---|---|---|---|
-| faithful | 44.1 / 31.5 | 0.0116 / 0.0149 | yes |
-| no SIGReg | **1.5 / 1.6** | 0.0003 / 0.0002 | **no** |
-| stop-gradient | 140.8 / 78.5 | 0.0728 / 0.0831 | yes |
-| λ = 0.5 | 76.5 / 47.5 | 0.0374 / 0.0290 | yes |
-| λ = 2.0 | 107.3 / 68.1 | 0.0827 / 0.0594 | yes |
+| **faithful** (paper) | 28.4 / 28.5 | **0.0087 / 0.0113** | **0.286 / 0.235** |
+| no SIGReg | **1.7 / 1.9** | 0.0010 / 0.0004 | **1.006** / 0.695 |
+| stop-gradient + SIGReg | 174.4 / 68.6 | 0.0730 / 0.0526 | 0.379 / 0.356 |
+| stop-gradient only | 149.4 / 42.8 | 0.0960 / 0.0942 | 0.430 / 0.689 |
+| additive actions | 21.2 / 21.1 | 0.0092 / 0.0115 | 0.310 / **0.188** |
+| λ = 0.5 | 58.9 / 44.6 | 0.0209 / 0.0225 | 0.289 / 0.305 |
+| λ = 2.0 | 89.9 / 59.5 | 0.0399 / 0.0393 | 0.330 / 0.409 |
 
-Removing SIGReg improves the prediction loss ~39× while the effective rank falls
-to 1.5 and the model then *loses to the trivial baseline*. This is the collapse the
-regularizer exists to prevent, and it is invisible in the training loss.
+**Removing SIGReg collapses the representation.** Effective rank falls to 1.7 / 1.9
+while the prediction loss *improves* 9x / 28x — the collapse is invisible in the
+training loss, which is the entire reason the rank diagnostic exists. On Pong the
+collapsed model then fails to beat even its own trivial baseline.
 
-Stop-gradient does **not** collapse — it gives the highest rank of any variant. It
-simply produces a worse model. So the precise claim supported here is: SIGReg alone
-prevents collapse, and adding stop-gradient costs predictive quality for nothing.
-High rank is not itself good: λ = 2.0 has rank 107 and poor rollout error.
+**But SIGReg is sufficient, not necessary.** The `stop_grad_only` control (λ = 0,
+stop-gradient on) does *not* collapse either: rank 149 / 43. A plain stop-gradient
+prevents collapse on its own here. What SIGReg buys is a much better model — 11x /
+8x lower prediction error and a better rollout ratio than either stop-gradient
+variant. So the claim this work supports is narrower than "SIGReg is what prevents
+collapse": **SIGReg prevents collapse without a stop-gradient, and yields a
+markedly better predictor than a stop-gradient does.** Adding a stop-gradient on
+top of SIGReg only makes things worse.
 
-**Agents** (`results/ppo`, 1M steps, single seed):
+High rank is not itself good — `stop_grad` has the highest rank of any variant
+(174) and a worse rollout ratio than faithful.
 
-| game | PPO from scratch | on frozen LeWM | on fine-tuned LeWM |
-|---|---|---|---|
-| pong | 15.3 | **19.0** | −14.0 |
-| seaquest | **949** | 496 | 552 |
-| breakout | **40.8** | 14.4 | 15.4 |
+**λ = 0.1 is the right setting on Atari.** Raising it monotonically increases rank
+and degrades the rollout ratio on both games (0.286→0.289→0.330 and
+0.235→0.305→0.409).
 
-LeWM features make PPO markedly more sample-efficient on Pong (+19 by 0.4M steps
-while the scratch CNN is still at −20) but plateau below it on Seaquest and
-Breakout. Fine-tuning the encoder does not close that gap, which rules out the
-obvious explanation that the frozen encoder is merely stale with respect to the
-improving policy.
+**AdaLN vs additive action conditioning is a wash at this scale.** AdaLN gives
+slightly lower prediction loss on both games; the additive variant gives a better
+rollout ratio on Seaquest and worse on Pong. This is reported rather than omitted:
+the paper's conditioning scheme shows no measurable benefit here, and is kept for
+fidelity rather than because it helps. (An earlier run had 25% of action labels
+corrupted by sticky actions, which would have masked any difference; these numbers
+are from the corrected pipeline and the conclusion is unchanged.)
 
 ## Known limitations
 
@@ -133,7 +148,13 @@ improving policy.
   rather than a general statement.
 - **Random data-collection policy.** The world model only sees the state space a
   random agent reaches — a small slice on sparse-reward games such as
-  MontezumaRevenge and Gravitar.
+  MontezumaRevenge and Gravitar. Episodes run up to `--max_episode_steps` (500)
+  with `episodic_life=False`, and windows are sampled across the whole episode, so
+  coverage is not confined to the opening seconds; but it is still random-policy
+  coverage.
+- **MsPacman fails.** Its rollout error does not beat the frozen baseline. The
+  ratio table above shows the same variant ordering holds elsewhere, so this looks
+  game-specific rather than systematic, but it is not explained.
 - **BatchNorm at evaluation.** `evaluate_rollout` keeps BatchNorm in
   batch-statistics mode for consistency with training. Using fixed running
   statistics instead changes rollout MSE by ~7% (measured on Pong); that is the
