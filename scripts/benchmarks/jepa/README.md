@@ -25,6 +25,7 @@ That claim is tested rather than assumed — see *Results* below.
 | `run_all_games.py` | trains the world model on all 15 required games |
 | `run_ablations.py` | one-variable-at-a-time variants: SIGReg weight, stop-gradient, action conditioning |
 | `run_ppo_comparison.py` | runs the agent arms per game and plots them together |
+| `aggregate_seeds.py` | pools repeated runs over seeds: mean ± sd, sample efficiency, min/max band |
 | `test_lewm.py` | unit tests (`pytest scripts/benchmarks/jepa/test_lewm.py`, ~1 s) |
 
 The model itself is one self-contained file; the others are experiment runners and
@@ -61,6 +62,10 @@ python run_ablations.py --outdir results/ablations --total_steps 5000
 # agents — needs encoders from run_all_games.py first (~3.5 h)
 python run_ppo_comparison.py --outdir results/ppo \
     --arms scratch lewm_frozen lewm_finetune --total_timesteps 1000000
+
+# pool repeated seeds (after rerunning with --seed 2 / 3 into their own outdirs)
+python aggregate_seeds.py --dirs results/ppo results/ppo_s2 results/ppo_s3 \
+    --game pong --arms scratch lewm_frozen --out results/seeds
 
 # fast sanity check that all 15 games start (~3 min)
 python run_all_games.py --outdir results/smoke --total_steps 60 --init_sequences 48
@@ -135,12 +140,56 @@ fidelity rather than because it helps. (An earlier run had 25% of action labels
 corrupted by sticky actions, which would have masked any difference; these numbers
 are from the corrected pipeline and the conclusion is unchanged.)
 
+**Agents** (`results/ppo`, 1M steps, seed 1). Returns are the mean over the last
+10% of iterations, as unclipped game score.
+
+| game | PPO from scratch | on frozen LeWM | on fine-tuned LeWM |
+|---|---|---|---|
+| pong | 15.3 | **17.2** | −15.6 |
+| seaquest | **949** | 571 | 411 |
+| breakout | **40.8** | 12.2 | 12.0 |
+
+**Pong repeated over 3 seeds** (`results/seeds`, via `aggregate_seeds.py`), because
+a single Atari run says very little:
+
+| | final return | steps to first positive return |
+|---|---|---|
+| PPO from scratch | 12.60 ± 7.27 | 0.61M — [0.63, 0.69, 0.51] |
+| PPO on frozen LeWM | 17.36 ± 1.09 | **0.32M** — [0.27, 0.40, 0.29] |
+
+Those two columns say different things and are kept apart deliberately.
+
+**Final return is not significantly different.** The gap in means is +4.8 while the
+scratch standard deviation alone is 7.3. "LeWM scores higher on Pong" does not
+survive three seeds, and is not claimed here.
+
+**Sample efficiency is a clean result.** LeWM features roughly halve the steps to
+positive play, and the per-seed values do not overlap: the *worst* LeWM seed
+(0.40M) still beats the *best* scratch seed (0.51M). This is the effect a
+pretrained representation is supposed to produce, and it is what this work
+supports.
+
+**Run-to-run variance drops about sevenfold** (1.09 vs 7.27). Every LeWM seed lands
+within a 2-point band; scratch spans 14 points. Pretraining makes the run
+predictable as well as faster.
+
+On Seaquest and Breakout the frozen encoder plateaus well below the scratch CNN,
+and fine-tuning does not close the gap — which rules out the obvious explanation
+that the frozen encoder is merely stale with respect to the improving policy.
+
 ## Known limitations
 
 - **Budget.** Agents are trained for 1M steps against a 200M-step reference. The
   curves show learning trends, not converged performance.
-- **Single seed.** The ablation effects are far too large for seed noise to
-  explain, but the agent gaps (e.g. Pong +3.7) are within plausible seed variance.
+- **Seeds.** Pong uses 3 seeds; every other agent number is a single seed and is
+  indicative only. The Pong result shows why that matters: the final-return gap
+  vanished into the noise once seeds were added, while the sample-efficiency gap
+  survived. Seaquest and Breakout have not had that test.
+- **The agent comparison is not purely a features comparison.** The scratch CNN
+  mixes the four stacked frames convolutionally, while the LeWM trunk encodes each
+  frame independently and concatenates the embeddings — so it has weaker access to
+  precisely localised motion. That is a plausible contributor to the Breakout gap
+  and is not controlled for.
 - **Fine-tuning is constrained.** Pretrained encoder weights use
   `--encoder_lr_scale` (default 0.1). At the full rate training diverges; at this
   rate the encoder barely adapts. Fine-tuning here is caught between the two, so
