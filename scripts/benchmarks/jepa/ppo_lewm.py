@@ -287,6 +287,7 @@ def train(args):
     history, start, global_step = [], time.time(), 0
     print(f"Training for {num_iterations} iterations "
           f"({num_iterations * batch_size} steps)...")
+    rtpt = make_rtpt(f"PPO-{args.game}-{args.features}", num_iterations)
 
     for iteration in range(1, num_iterations + 1):
         if args.anneal_lr:
