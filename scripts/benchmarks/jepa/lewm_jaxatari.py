@@ -81,6 +81,32 @@ DEFAULTS = dict(
 )
 
 
+# ---------------------------------------------------------------------------
+# RTPT — required on the TU Darmstadt student pool
+# ---------------------------------------------------------------------------
+
+def make_rtpt(experiment: str, max_iterations: int, initials: str = "AR"):
+    """Process-title reporter for the shared lab machines.
+
+    The student pool asks every job to run under RTPT so other users can see
+    whose experiment is on a GPU and how long it has left. Optional: if the
+    package is not installed (e.g. running locally) this returns a no-op, so the
+    same script works on a laptop and on the pool without branching.
+    """
+    try:
+        from rtpt import RTPT
+    except ImportError:
+        class _NoRTPT:
+            def start(self): pass
+            def step(self, subtitle=None): pass
+        return _NoRTPT()
+
+    r = RTPT(name_initials=initials, experiment_name=experiment,
+             max_iterations=max(1, max_iterations))
+    r.start()
+    return r
+
+
 def fill_defaults(args):
     """Fill any option `train()` reads but the caller did not set."""
     for k, v in DEFAULTS.items():
@@ -717,6 +743,7 @@ def train(args):
         )
 
     print("Starting training...")
+    rtpt = make_rtpt(f"LeWM-{args.game}", args.total_steps // max(1, args.log_every))
     for step in range(start_step + 1, args.total_steps + 1):
         # collect more data every N steps
         if step % args.collect_every == 0:

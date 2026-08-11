@@ -58,7 +58,7 @@ import torch.nn as nn
 import jaxatari
 from jaxatari.wrappers import AtariWrapper, PixelObsWrapper, LogWrapper
 
-from lewm_jaxatari import pick_device
+from lewm_jaxatari import make_rtpt, pick_device
 from lewm_features import load_frozen_encoder
 
 
@@ -395,6 +395,7 @@ def train(args):
         }
         history.append(entry)
 
+        rtpt.step()
         if iteration % args.log_every == 0 or iteration == num_iterations:
             ret = entry["episodic_return_mean"]
             print(f"iter {iteration:5d} | step {global_step:9d} | "
