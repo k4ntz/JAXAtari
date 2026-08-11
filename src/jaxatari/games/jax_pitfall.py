@@ -436,9 +436,13 @@ class PitfallConstants(struct.PyTreeNode):
     fps: int = 30
     initial_time_seconds: int = 1200  # 20 minutes
     max_lives: int = 3          # Pitfall lives
+    # Room-transition thresholds, from XMIN_HARRY / XMAX_HARRY in pitfall.asm.
+    screen_exit_x_min: int = 8
+    screen_exit_x_max: int = 148
+
     ladder_x: int = 80
     ladder_width: int = 16
-    ladder_hole_fall_width: int = 10  # narrower than full ladder sprite for fall-through detection
+    ladder_opening_inset: int = 4  # px from the ladder sprite's left edge to the opening
     ladder_entry_width: int = 10  # require Harry to be centered over the opening before upper ladder entry
     ladder_top_peek_offset: int = 6  # keep most of Harry in the hole; face/shoulders emerge at top
     initial_score: int = 2000
@@ -449,6 +453,30 @@ class PitfallConstants(struct.PyTreeNode):
     # Side holes beside ladder (underground)
     hole_width: int = 12            # px (from ladder_with_pits sprite, cols 2-13 and 54-65)
     hole_gap_from_ladder: int = 12   # px floor bridge between ladder edge and hole
+
+    # Depth below the upper ground at which a fall switches from the standing
+    # pose to Harry0's open-leg pose. ROM: 60 - JUNGLE_GROUND(32).
+    hole_fall_open_leg_depth: float = 28.0
+
+    # --- Fall-through bounds, ported verbatim from the original ROM ----------
+    # HoleBoundsTab in pitfall.asm. Each row holds up to 4 (left, right) pairs
+    # in xPosHarry coordinates; a left bound of 0 terminates the row.
+    #
+    #   .byte 72, 79,   0,  0,   0,  0,   0,  0    ; single hole
+    #   .byte 44, 55,  72, 79,  96,107,   0,  0    ; triple hole
+    #   .byte 44,107,   0,  0,   0,  0,   0,  0    ; pit
+    #   .byte 44, 55,  64, 71,  80, 87,  96,107    ; closed croco jaws
+    #   .byte 44, 61,  64, 77,  80, 93,  96,107    ; open croco jaws
+    #
+    # The ROM falls when  left < xPosHarry <= right  (see _hole_fall_test).
+    # Rows 3 and 4 are kept for the crocodile work and are not selectable yet.
+    hole_bounds_tab: tuple = (
+        ((72, 79), (0, 0), (0, 0), (0, 0)),      # 0: single hole (plain ladder)
+        ((44, 55), (72, 79), (96, 107), (0, 0)),  # 1: triple hole (ladder + pits)
+        ((44, 107), (0, 0), (0, 0), (0, 0)),      # 2: pit
+        ((44, 55), (64, 71), (80, 87), (96, 107)),  # 3: closed croco jaws
+        ((44, 61), (64, 77), (80, 93), (96, 107)),  # 4: open croco jaws
+    )
 
     # Stationary wood logs (upper ground hazard)
     wood_drain_per_frame: int = 2  # score points drained each frame while touching any log
@@ -525,6 +553,25 @@ class PitfallConstants(struct.PyTreeNode):
     ASSET_CONFIG: tuple = _get_default_pitfall_asset_config()
 
 
+def is_falling_through_hole(state, consts: PitfallConstants) -> chex.Array:
+    """True while Harry is in the forced descent down through an opening.
+
+    Mirrors the ROM, which picks the pattern from height alone: ID_STANDING when
+    yPosHarry is between JUNGLE_GROUND and 60 and not climbing. Here:
+    current_ground_y rules out an underground jump (the ROM's `cmp #60`),
+    player_y > upper rules out a jump over a hole (its arc stays above the
+    line), and vy >= 0 rules out the rising half of a ladder-exit hop.
+    Deliberately not `over_hole`: being above an opening is not a descent.
+    """
+    upper_ground = jnp.asarray(consts.ground_y, dtype=jnp.float32)
+    return (
+        (~state.on_ground)
+        & (~state.on_ladder)
+        & (state.current_ground_y == upper_ground)
+        & (state.player_y > upper_ground)
+        & (state.player_vy >= jnp.asarray(0.0, dtype=jnp.float32))
+    )
+
 
 @struct.dataclass
 class PitfallObservation:
@@ -588,7 +635,14 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         self.left_wall_x_px = jnp.array(clamp_wall_x(LEFT_WALL_X), dtype=jnp.int32)
         self.right_wall_x_px = jnp.array(clamp_wall_x(RIGHT_WALL_X), dtype=jnp.int32)
 
-        ladder_x_px = int(round(140 * W / 300.0))
+        # Anchor the ladder so the *drawn* openings coincide with the ROM's
+        # HoleBoundsTab columns. The ladder art has its opening inset 4px from
+        # the sprite's left edge, and the single-hole row of the table is
+        # (72, 79), so the sprite must start at 72 - 4 = 68. With that value the
+        # ladder_with_pits sprite (drawn at ladder_x - 26) also lands its three
+        # openings on 44-55, 72-79 and 96-107 exactly.
+        single_hole_left = int(consts.hole_bounds_tab[0][0][0])
+        ladder_x_px = single_hole_left - int(consts.ladder_opening_inset)
         ladder_x_px = max(0, min(W - consts.ladder_width, ladder_x_px))
         self.ladder_x_px = jnp.array(ladder_x_px, dtype=jnp.int32)
 
@@ -699,20 +753,20 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         ladder_w = jnp.asarray(consts.ladder_width, dtype=jnp.int32)
         ladder_entry_w = jnp.asarray(consts.ladder_entry_width, dtype=jnp.int32)
         player_w = jnp.asarray(4, dtype=jnp.int32)
-        sprite_w = self.wall_block_player_width_px.astype(jnp.int32)  # actual sprite width (13)
 
         x_int = x.astype(jnp.int32)
         player_right = x_int + player_w
-        player_center = x_int + sprite_w // jnp.int32(2)
         ladder_right = ladder_x + ladder_w
 
         overlap_left = player_right > ladder_x
         overlap_right = x_int < ladder_right
         near_ladder = has_ladder & overlap_left & overlap_right
+        # Entry window centred on the ladder, tested against the same anchor the
+        # hole test uses, so "centred enough to climb" and "over the hole" agree.
         entry_inset = (ladder_w - ladder_entry_w) // jnp.int32(2)
         entry_x0 = ladder_x + entry_inset
         entry_x1 = entry_x0 + ladder_entry_w
-        centered_on_ladder = has_ladder & (player_center >= entry_x0) & (player_center < entry_x1)
+        centered_on_ladder = has_ladder & (x_int >= entry_x0) & (x_int < entry_x1)
 
         upper_ground = jnp.asarray(consts.ground_y, dtype=jnp.float32)
         lower_ground = jnp.asarray(consts.underground_y, dtype=jnp.float32)
@@ -731,8 +785,10 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         entering_ladder = (~state.on_ladder) & (enter_from_upper | enter_from_lower)
 
-        # Snap Harry to the centre of the ladder on entry (+1px right)
-        ladder_center_x = (ladder_x + ladder_w // jnp.int32(2) - sprite_w // jnp.int32(2) + jnp.int32(1)).astype(x.dtype)
+        # Snap Harry to the centre of the ladder on entry. ladder_x + 8 = 76,
+        # which is the ROM's `lda #SCREENWIDTH/2-4 / sta xPosHarry`, and also
+        # the centre of the single-hole falling window (73..79).
+        ladder_center_x = (ladder_x + ladder_w // jnp.int32(2)).astype(x.dtype)
         x = jnp.where(entering_ladder, ladder_center_x, x)
 
         ladder_vertical = (y >= upper_ground) & (y <= lower_ground)
@@ -875,47 +931,53 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             wall_side=wall_side,
         )
 
-    def _side_hole_info(
-        self,
-        room_byte: chex.Array,
-        player_center_x: chex.Array,
-    ) -> tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
+    def _hole_bounds_for_room(self, room_byte: chex.Array) -> tuple[chex.Array, chex.Array]:
+        """Select this room's row of HoleBoundsTab.
+
+        Returns two int32 arrays of shape (4,): the left and right bound of each
+        of the row's up-to-four openings. Unused slots are (0, 0) and are
+        rejected by the `left > 0` guard in _over_hole, mirroring the ROM's
+        `beq .exitBounds` terminator.
         """
-        Two side holes beside the ladder (symmetric about ladder):
-          left hole ends gap px left of ladder
-          right hole starts gap px right of ladder
+        pt = pit_type(room_byte.astype(jnp.uint8)).astype(jnp.int32)
 
-        Returns:
-          has_side_hole (bool),
-          over_side_hole (bool),
-          left_x (int32),
-          right_x (int32),
-          hole_w (int32)
+        # The ROM indexes HoleBoundsTab by sceneType. Our pit_type uses the same
+        # encoding: 0 = plain ladder (single hole), 1 = ladder with side pits
+        # (triple hole). Rows 2..4 (tar pit and crocodile jaws) are in the table
+        # but those scenes are not drawn yet, so they select no opening at all
+        # rather than making Harry fall through solid-looking ground.
+        row = jnp.clip(pt, 0, 1)
+
+        table = jnp.asarray(self.consts.hole_bounds_tab, dtype=jnp.int32)  # (5, 4, 2)
+        bounds = table[row]                                                # (4, 2)
+
+        scene_has_holes = pt <= jnp.int32(1)
+        # Zeroing the left bounds of unimplemented scenes disables every slot.
+        lefts = jnp.where(scene_has_holes, bounds[:, 0], jnp.int32(0))
+        rights = bounds[:, 1]
+        return lefts, rights
+
+    def _over_hole(self, room_byte: chex.Array, x_anchor: chex.Array) -> chex.Array:
+        """True when Harry's anchor is inside one of this room's openings.
+
+        Direct port of the bounds loop in pitfall.asm:
+
+            lda HoleBoundsTab,x   ; left bound
+            beq .exitBounds       ; 0 terminates the list
+            cmp xPosHarry
+            bcs .inBounds         ; left >= x  -> Harry is left of the hole, safe
+            lda HoleBoundsTab+1,x ; right bound
+            cmp xPosHarry
+            bcs .outOfBounds      ; right >= x -> Harry falls in
+
+        so the falling interval is  left < x <= right  (inclusive on the right).
+        The ROM's xPosQuickSand term is omitted: it animates the tar pits
+        opening and closing, which this environment does not implement yet.
         """
-        rb = room_byte.astype(jnp.uint8)
-        pt = pit_type(rb)
-
-        has_side_hole = pt == jnp.uint8(1)
-
-        W = jnp.int32(self.consts.screen_width)
-        ladder_x = self.ladder_x_px.astype(jnp.int32)
-        ladder_w = jnp.int32(self.consts.ladder_width)
-
-        hole_w = jnp.int32(self.consts.hole_width)
-        gap = jnp.int32(self.consts.hole_gap_from_ladder)
-
-        left_x = ladder_x - gap - hole_w
-        right_x = ladder_x + ladder_w + gap
-
-        max_start = jnp.maximum(W - hole_w, jnp.int32(0))
-        left_x = jnp.clip(left_x, 0, max_start)
-        right_x = jnp.clip(right_x, 0, max_start)
-
-        in_left = (player_center_x >= left_x) & (player_center_x < (left_x + hole_w))
-        in_right = (player_center_x >= right_x) & (player_center_x < (right_x + hole_w))
-
-        over_side_hole = has_side_hole & (in_left | in_right)
-        return has_side_hole, over_side_hole, left_x, right_x, hole_w
+        lefts, rights = self._hole_bounds_for_room(room_byte)
+        slot_used = lefts > jnp.int32(0)
+        inside = slot_used & (x_anchor > lefts) & (x_anchor <= rights)
+        return jnp.any(inside)
 
     def step(
         self,
@@ -990,44 +1052,21 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         ladder_x = layout.ladder_x
         has_ladder = layout.has_ladder
         ladder_w = jnp.asarray(consts.ladder_width, dtype=jnp.int32)
-        ladder_fall_w = jnp.asarray(consts.ladder_hole_fall_width, dtype=jnp.int32)
         player_w = jnp.asarray(4, dtype=jnp.int32)
-        sprite_w = self.wall_block_player_width_px.astype(jnp.int32)  # actual sprite width (13)
 
         x_int = x.astype(jnp.int32)
         player_right = x_int + player_w
-        # Collision center: visual sprite center, shifted 1px left when idle
-        is_moving = move_left | move_right
-        idle_shift = jnp.where(is_moving, jnp.int32(0), jnp.int32(-1))
-        player_center = x_int + sprite_w // jnp.int32(2) + idle_shift
         ladder_right = ladder_x + ladder_w
 
         overlap_left = player_right > ladder_x
         overlap_right = x_int < ladder_right
         near_ladder = has_ladder & overlap_left & overlap_right
-        # Fall-through uses the narrower ladder_hole_fall_width
-        fall_inset = (ladder_w - ladder_fall_w) // jnp.int32(2)
-        fall_x0 = ladder_x + fall_inset
-        fall_x1 = fall_x0 + ladder_fall_w
-        over_ladder = has_ladder & (player_center >= fall_x0) & (player_center < fall_x1)
 
-        has_side_hole, over_side_hole, hole_left_x, hole_right_x, hole_w = self._side_hole_info(
-            room_byte=state.room_byte,
-            player_center_x=player_center.astype(jnp.int32),
-        )
-
-        over_any_hole = over_ladder | over_side_hole
-
-        prev_x_int = state.player_x.astype(jnp.int32)
-        prev_is_moving = jnp.abs(state.player_vx) > jnp.asarray(0.0, dtype=jnp.float32)
-        prev_idle_shift = jnp.where(prev_is_moving, jnp.int32(0), jnp.int32(-1))
-        prev_player_center = prev_x_int + sprite_w // jnp.int32(2) + prev_idle_shift
-        prev_over_ladder = has_ladder & (prev_player_center >= fall_x0) & (prev_player_center < fall_x1)
-        _, prev_over_side_hole, _, _, _ = self._side_hole_info(
-            room_byte=state.room_byte,
-            player_center_x=prev_player_center.astype(jnp.int32),
-        )
-        prev_over_any_hole = prev_over_ladder | prev_over_side_hole
+        # Hole test against Harry's single canonical anchor (see _over_hole).
+        # This is only the *pre*-movement value; it exists so that a Harry who
+        # was already falling keeps falling straight down. The value that
+        # decides whether he leaves the ground is recomputed after movement.
+        over_any_hole = self._over_hole(state.room_byte, x_int)
 
         upper_ground = jnp.asarray(consts.ground_y, dtype=jnp.float32)
         lower_ground = jnp.asarray(consts.underground_y, dtype=jnp.float32)
@@ -1126,11 +1165,12 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         x_after_move = x
 
-        screen_width_px = jnp.asarray(consts.screen_width, dtype=jnp.float32)
-        player_width_px = jnp.asarray(4.0, dtype=jnp.float32)
-
-        left_edge = 0.0
-        right_edge_for_left_of_player = screen_width_px - player_width_px
+        # Screen-exit thresholds from the ROM (XMIN_HARRY / XMAX_HARRY). These
+        # are in the same xPosHarry coordinate as the hole bounds, so now that
+        # player_x is that anchor they apply directly. They also keep Harry's
+        # widest pose fully on screen, which a 0..156 range would not.
+        left_edge = jnp.asarray(consts.screen_exit_x_min, dtype=jnp.float32)
+        right_edge_for_left_of_player = jnp.asarray(consts.screen_exit_x_max, dtype=jnp.float32)
 
         exited_left  = x_after_move < left_edge
         exited_right = x_after_move > right_edge_for_left_of_player
@@ -1170,19 +1210,17 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         scorpion_spawn_x = jnp.asarray(consts.scorpion_spawn_x, dtype=jnp.float32)
         scorpion_x = jnp.where(entered_new_room, scorpion_spawn_x, scorpion_x)
 
-        player_w_f = jnp.asarray(4, dtype=jnp.float32)
-        x = jnp.clip(x, 0.0, jnp.asarray(consts.screen_width, dtype=jnp.float32) - player_w_f)
+        x = jnp.clip(x, left_edge, right_edge_for_left_of_player)
+
+        # Recalculate the hole test at Harry's post-movement position, and in
+        # the room he ended up in, so that the ground decision below never uses
+        # a stale pre-movement value.
+        over_any_hole = self._over_hole(new_room_byte, x.astype(jnp.int32))
 
         previous_ground = state.current_ground_y
         clamp_mask = ~state.on_ladder
 
         raw_on_ground_upper = (y >= previous_ground) & (~over_any_hole)
-        # One-frame edge grace: if Harry was grounded and just crossed from
-        # solid ground into a hole this frame, keep him grounded for that
-        # frame only. Next frame he can fall normally.
-        just_entered_hole = over_any_hole & (~prev_over_any_hole)
-        held_by_ground = state.on_ground & (y >= previous_ground) & on_upper_level & just_entered_hole
-        raw_on_ground_upper = raw_on_ground_upper | held_by_ground
 
         falling_to_lower = on_upper_level & over_any_hole & (y >= lower_ground)
 
@@ -1951,7 +1989,9 @@ class PitfallRenderer(JAXGameRenderer):
             right_wall_x_px = jnp.asarray(right_wall_x_px, dtype=jnp.int32)
 
         if ladder_x_px is None:
-            ladder_x_default = int(round(140 * screen_w / 300.0))
+            # Same derivation as JaxPitfall.__init__: put the drawn opening on
+            # the ROM's single-hole bounds.
+            ladder_x_default = int(self.consts.hole_bounds_tab[0][0][0]) - int(self.consts.ladder_opening_inset)
             ladder_x_default = max(0, min(screen_w - int(self.consts.ladder_width), ladder_x_default))
             ladder_x_px = jnp.array(ladder_x_default, dtype=jnp.int32)
         else:
@@ -2390,38 +2430,48 @@ class PitfallRenderer(JAXGameRenderer):
             base_offset = jnp.round(base_offset.astype(jnp.float32) * jnp.asarray(sprite_scale, dtype=jnp.float32)).astype(jnp.int32)
             return _pad_to(masks_3d, max_h, max_w), base_offset + jnp.array([extra_pad_w, extra_pad_h], dtype=jnp.int32)
 
-        self.HARRY_IDLE_MASKS, self.HARRY_IDLE_FLIP_OFFSET = _pad_and_offset('harry_idle', harry_idle)
-        self.HARRY_RUN_MASKS, self.HARRY_RUN_FLIP_OFFSET = _pad_and_offset('harry_run', harry_run)
-        self.HARRY_CLIMB_MASKS, self.HARRY_CLIMB_FLIP_OFFSET = _pad_and_offset('harry_climb', harry_climb)
-        self.HARRY_JUMP_MASKS, self.HARRY_JUMP_FLIP_OFFSET = _pad_and_offset('harry_jump', harry_jump)
+        self.HARRY_IDLE_MASKS, _ = _pad_and_offset('harry_idle', harry_idle)
+        self.HARRY_RUN_MASKS, _ = _pad_and_offset('harry_run', harry_run)
+        self.HARRY_CLIMB_MASKS, _ = _pad_and_offset('harry_climb', harry_climb)
+        self.HARRY_JUMP_MASKS, _ = _pad_and_offset('harry_jump', harry_jump)
 
-        # Run-sprite horizontal alignment (render-only): the raw run frames have
-        # slightly different pixel anchors (especially around the head/upper body),
-        # which can look like the head moves backward between frames.
+        # --- One horizontal anchor for every Harry frame ---------------------
+        # All Harry frames are padded onto a common canvas, but the artwork sits
+        # at a different column in each one (the head block ranges from column 1
+        # to column 6 across the poses). Drawing every frame at player_x would
+        # therefore make Harry jump sideways whenever the animation or facing
+        # changed, and no fixed-width collision box could track him.
         #
-        # Compute a per-frame x offset so the "upper body" x-center stays
-        # constant across all run frames. When rendering flipped, we mirror the
-        # offset so right->left also stays stable.
-        tid = jnp.uint8(int(self.jr.TRANSPARENT_ID))
-        run_masks = self.HARRY_RUN_MASKS
-        run_h = int(run_masks.shape[1])
-        run_w = int(run_masks.shape[2])
-        top_cut = int((run_h * 2) // 5)  # top ~40% rows
+        # Each frame's head is a clean 3px block on its topmost rows, so we take
+        # the midpoint of that block as the frame's anchor column, and draw the
+        # frame at (player_x - anchor). Harry's head axis then sits on player_x
+        # in every pose, which is the same point the hole test uses.
+        tid_np = int(self.jr.TRANSPARENT_ID)
+        harry_w = int(self.HARRY_IDLE_MASKS.shape[2])
 
-        def _anchor_x(mask2d: jnp.ndarray) -> jnp.int32:
-            occ = mask2d != tid
-            occ_top = occ & (jnp.arange(run_h, dtype=jnp.int32)[:, None] < jnp.int32(top_cut))
-            use_top = jnp.any(occ_top)
-            occ_use = jnp.where(use_top, occ_top, occ)
-            weights = occ_use.astype(jnp.int32)
-            total = jnp.sum(weights)
-            xs = jnp.arange(run_w, dtype=jnp.int32)[None, :]
-            sum_x = jnp.sum(weights * xs)
-            return jnp.where(total > jnp.int32(0), sum_x // total, jnp.int32(run_w // 2)).astype(jnp.int32)
+        def _head_anchor_x(mask2d: np.ndarray) -> int:
+            occ = mask2d != tid_np
+            rows = np.where(occ.any(axis=1))[0]
+            if rows.size == 0:
+                return harry_w // 2
+            head = occ[int(rows.min()):int(rows.min()) + 3]
+            cols = np.where(head.any(axis=0))[0]
+            return int((int(cols.min()) + int(cols.max())) // 2)
 
-        anchors = jax.vmap(_anchor_x)(run_masks)
-        ref = ((jnp.min(anchors) + jnp.max(anchors)) // jnp.int32(2)).astype(jnp.int32)
-        self.HARRY_RUN_ALIGN_X = (ref - anchors).astype(jnp.int32)
+        def _anchors_for(stack: jnp.ndarray) -> jnp.ndarray:
+            return jnp.asarray([_head_anchor_x(m) for m in np.array(stack)], dtype=jnp.int32)
+
+        self.HARRY_IDLE_ANCHOR_X = _anchors_for(self.HARRY_IDLE_MASKS)
+        self.HARRY_RUN_ANCHOR_X = _anchors_for(self.HARRY_RUN_MASKS)
+        self.HARRY_CLIMB_ANCHOR_X = _anchors_for(self.HARRY_CLIMB_MASKS)
+        self.HARRY_JUMP_ANCHOR_X = _anchors_for(self.HARRY_JUMP_MASKS)
+
+        # Mirroring a mask of width W maps column c to column W-1-c, so a frame
+        # anchored at `a` ends up anchored at W-1-a. render_at_clipped subtracts
+        # flip_offset[0] from x when flipping, so this value puts the flipped
+        # anchor back on the same screen column: facing left and facing right are
+        # exact mirror images about player_x.
+        self.HARRY_FLIP_OFFSET_X_FOR_ANCHOR = jnp.int32(harry_w - 1)
         scorpion_left = _downscale_mask_stack(self.SHAPE_MASKS['scorpion_left'], scorpion_scale)
         scorpion_right = _downscale_mask_stack(self.SHAPE_MASKS['scorpion_right'], scorpion_scale)
         scorpion_left, scorpion_right = _crop_and_pad_scorpion_stacks(scorpion_left, scorpion_right, margin=1)
@@ -2783,59 +2833,68 @@ class PitfallRenderer(JAXGameRenderer):
         climb_idx = jnp.mod(step_idx, jnp.int32(2)).astype(jnp.int32)
         jump_idx = jnp.where(state.player_vy < jnp.asarray(0.0, dtype=jnp.float32), jnp.int32(0), jnp.int32(1))
 
+        # Each branch returns (mask, anchor column of that mask).
         def _use_climb(_):
-            return self.HARRY_CLIMB_MASKS[climb_idx], self.HARRY_CLIMB_FLIP_OFFSET
+            return self.HARRY_CLIMB_MASKS[climb_idx], self.HARRY_CLIMB_ANCHOR_X[climb_idx]
 
         def _use_jump(_):
-            return self.HARRY_JUMP_MASKS[jump_idx], self.HARRY_JUMP_FLIP_OFFSET
+            return self.HARRY_JUMP_MASKS[jump_idx], self.HARRY_JUMP_ANCHOR_X[jump_idx]
 
         def _use_fall(_):
-            return self.HARRY_JUMP_MASKS[jnp.int32(1)], self.HARRY_JUMP_FLIP_OFFSET
+            return self.HARRY_JUMP_MASKS[jnp.int32(1)], self.HARRY_JUMP_ANCHOR_X[jnp.int32(1)]
 
         def _use_run(_):
-            return self.HARRY_RUN_MASKS[run_idx], self.HARRY_RUN_FLIP_OFFSET
+            return self.HARRY_RUN_MASKS[run_idx], self.HARRY_RUN_ANCHOR_X[run_idx]
 
         def _use_run1(_):
-            return self.HARRY_RUN_MASKS[jnp.int32(0)], self.HARRY_RUN_FLIP_OFFSET
+            return self.HARRY_RUN_MASKS[jnp.int32(0)], self.HARRY_RUN_ANCHOR_X[jnp.int32(0)]
 
         def _use_idle(_):
-            return self.HARRY_IDLE_MASKS[jnp.int32(0)], self.HARRY_IDLE_FLIP_OFFSET
+            return self.HARRY_IDLE_MASKS[jnp.int32(0)], self.HARRY_IDLE_ANCHOR_X[jnp.int32(0)]
+
+        # A drop through an opening shows ID_STANDING (Harry5 / harryidle1) for
+        # the first 28px, then ID_KNEEING (Harry0 / harryjumping2).
+        harry_falling_through_hole = is_falling_through_hole(state, self.consts)
+        harry_fall_depth = state.player_y - jnp.asarray(self.consts.ground_y, dtype=jnp.float32)
+        harry_open_leg_fall = harry_falling_through_hole & (
+            harry_fall_depth >= jnp.asarray(self.consts.hole_fall_open_leg_depth, dtype=jnp.float32)
+        )
+
+        def _use_hole_fall(_):
+            return lax.cond(harry_open_leg_fall, _use_fall, _use_idle, None)
 
         def _non_ladder(_):
             # During airtime (self-initiated jump or any non-ladder airborne state),
             # lock Harry to harryrunning1.
             return lax.cond(
-                ~state.on_ground,
-                _use_run1,
+                harry_falling_through_hole,
+                _use_hole_fall,
                 lambda __: lax.cond(
-                    touching_wood_render,
-                    _use_fall,
-                    lambda ___: lax.cond(moving, _use_run, _use_idle, None),
+                    ~state.on_ground,
+                    _use_run1,
+                    lambda ___: lax.cond(
+                        touching_wood_render,
+                        _use_fall,
+                        lambda ____: lax.cond(moving, _use_run, _use_idle, None),
+                        None,
+                    ),
                     None,
                 ),
                 None,
             )
 
-        harry_mask, flip_offset = lax.cond(state.on_ladder, _use_climb, _non_ladder, None)
+        harry_mask, harry_anchor = lax.cond(state.on_ladder, _use_climb, _non_ladder, None)
+        harry_anchor = harry_anchor.astype(jnp.int32)
 
-        # Render-only x alignment for run frames.
-        x_extra_run = self.HARRY_RUN_ALIGN_X[run_idx]
-        x_extra_run1 = self.HARRY_RUN_ALIGN_X[jnp.int32(0)]
-
-        def _non_ladder_x_extra(_):
-            return lax.cond(
-                ~state.on_ground,
-                lambda __: x_extra_run1,
-                lambda __: lax.cond(
-                    touching_wood_render,
-                    lambda ___: jnp.int32(0),
-                    lambda ___: lax.cond(moving, lambda ____: x_extra_run, lambda ____: jnp.int32(0), None),
-                    None,
-                ),
-                None,
-            )
-
-        x_extra = lax.cond(state.on_ladder, lambda _: jnp.int32(0), _non_ladder_x_extra, None).astype(jnp.int32)
+        # Drawing at (player_x - anchor) puts this frame's anchor column exactly
+        # on player_x; subtracting (w-1 - 2*anchor) when flipped keeps it there.
+        harry_x_draw = state.player_x.astype(jnp.int32) - harry_anchor
+        harry_flip_offset = jnp.stack(
+            [
+                self.HARRY_FLIP_OFFSET_X_FOR_ANCHOR - jnp.int32(2) * harry_anchor,
+                jnp.int32(0),
+            ]
+        )
 
         harry_h = jnp.int32(harry_mask.shape[0])
         y_top = state.player_y.astype(jnp.int32) - harry_h + jnp.int32(1)
@@ -2847,19 +2906,13 @@ class PitfallRenderer(JAXGameRenderer):
         y_top = y_top + jnp.int32(int(self.consts.harry_y_tune)) + underground_tune
 
         def _draw_harry(r: jnp.ndarray) -> jnp.ndarray:
-            x_extra_draw = lax.select(flip, -x_extra, x_extra)
-            x_draw = (
-                state.player_x.astype(jnp.int32)
-                + jnp.where(state.on_ladder, jnp.int32(1), jnp.int32(0))
-                + x_extra_draw
-            )
             return self.jr.render_at_clipped(
                 r,
-                x_draw,
+                harry_x_draw,
                 y_top,
                 harry_mask,
                 flip_horizontal=flip,
-                flip_offset=flip_offset,
+                flip_offset=harry_flip_offset,
             )
 
         # Save raster before Harry+logs for lip occlusion (lip only covers
@@ -2890,11 +2943,10 @@ class PitfallRenderer(JAXGameRenderer):
             yy = jnp.arange(H, dtype=jnp.int32)[:, None]
             xx = jnp.arange(W, dtype=jnp.int32)[None, :]
             harry_w = jnp.int32(harry_mask.shape[1])
-            x_extra_draw = lax.select(flip, -x_extra, x_extra)
-            harry_x0 = (
-                state.player_x.astype(jnp.int32)
-                + jnp.where(state.on_ladder, jnp.int32(1), jnp.int32(0))
-                + x_extra_draw
+            harry_x0 = lax.select(
+                flip,
+                harry_x_draw - (self.HARRY_FLIP_OFFSET_X_FOR_ANCHOR - jnp.int32(2) * harry_anchor),
+                harry_x_draw,
             )
             harry_x1 = harry_x0 + harry_w
             hidden_mask = (
@@ -2944,6 +2996,7 @@ class PitfallRenderer(JAXGameRenderer):
             ladder_x + jnp.int32(self.consts.ladder_width),
         )
         transparent_id = jnp.asarray(self.jr.TRANSPARENT_ID, dtype=raster.dtype)
+        hole_id = jnp.asarray(self.HOLE_ID, dtype=raster.dtype)
 
         def _apply_lip(r: jnp.ndarray) -> jnp.ndarray:
             # For each pixel in the lip bbox, if the base raster (before Harry)
@@ -2953,7 +3006,15 @@ class PitfallRenderer(JAXGameRenderer):
             xx = jnp.arange(W, dtype=jnp.int32)[None, :]
             in_lip = (yy >= lip_y0) & (yy < lip_y1) & (xx >= lip_x0) & (xx < lip_x1)
             base_not_transparent = raster_base != transparent_id
-            mask = in_lip & base_not_transparent
+
+            # While dropping through an opening the occluder must be solid ground
+            # only. HOLE_ID marks where the ground is cut away, so skipping those
+            # pixels keeps Harry visible inside the opening. Left alone otherwise:
+            # the solid black is what makes him rise out of the hole off a ladder.
+            base_is_opening = raster_base == hole_id
+            occludes = base_not_transparent & ~(base_is_opening & harry_falling_through_hole)
+
+            mask = in_lip & occludes
             return jnp.where(mask, raster_base, r)
 
         raster = lax.cond(has_any_ladder, _apply_lip, lambda r: r, raster)
