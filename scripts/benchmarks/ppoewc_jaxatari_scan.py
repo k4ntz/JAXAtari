@@ -325,10 +325,6 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
 
         Returns 0.0 when ewc_params or ewc_fisher are None (first task).
         """
-        # TODO: Having ewc_params and ewc_fisher as None triggers a recompile at the second task when they are populated
-        # Fix: Pass empty pytrees instead (?)
-        if ewc_params is None or ewc_fisher is None:
-            return 0.0
 
         def param_penalty(p, p_star, f):
             # returns the penalty (scalar) for one pytree leaf (array)
@@ -837,8 +833,8 @@ def continual_run(config: dict):
     actor.apply = jax.jit(actor.apply)
     critic.apply = jax.jit(critic.apply)
 
-    ewc_fisher = None
-    ewc_params = None
+    ewc_fisher = jax.tree.map(jnp.zeros_like, agent_state.params)
+    ewc_params = jax.tree.map(jnp.zeros_like, agent_state.params)
 
     global_step = 0 # tracks total number of environment steps across all tasks
     global_iteration = 0    # tracks total number of PPO updates
