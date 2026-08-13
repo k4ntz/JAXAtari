@@ -42,6 +42,7 @@ class LevelState:
     mad_doctor_active: chex.Array
     score_increment: chex.Array
     next_enemy: chex.Array
+    pause_game: chex.Array
     
     @classmethod
     def new(cls, level: Level) -> chex.dataclass:
@@ -56,7 +57,8 @@ class LevelState:
                         lambda: Enemy.NONE,
                         lambda: Enemy.CONDOR
                     ]
-                ))
+                )),
+            pause_game = jnp.array(False)
         )
     
 @chex.dataclass
@@ -67,7 +69,9 @@ class PlayerMoveState:
     hand_dir: int
     pos_x: int
     falling_count: int
+    egg_animation_count: chex.Array
     should_fall: bool
+    flicker: chex.Array
 
     @classmethod
     def new(cls):
@@ -78,7 +82,9 @@ class PlayerMoveState:
             hand_dir=1,
             pos_x=0,
             falling_count=0,
-            should_fall=False
+            egg_animation_count=0,
+            should_fall=False,
+            flicker=jnp.array(False)
         )
     
 @chex.dataclass
@@ -139,7 +145,7 @@ class EggState:
             pos_x=jnp.array(CrazyClimberConstants.BIRD_SIZE[1]),
             pos_y=jnp.array(CrazyClimberConstants.BIRD_Y),
             dir=jnp.array(1),
-            vel=jnp.array(7)
+            vel=jnp.array(8)
         )
     
 class CrazyClimberState(struct.PyTreeNode):
@@ -341,6 +347,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
 
     EGG_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 7))
     EGG_BORDER_BOTTOM: int = struct.field(pytree_node=False, default=210-EGG_SIZE.default[0]*2)
+    EGG_FLICKER: int = struct.field(pytree_node=False, default=130)
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
     SCORE_BASE_VALUE: int = struct.field(pytree_node=False, default=100)
@@ -831,11 +838,21 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     
     @partial(jax.jit, static_argnums=(0,))
     def update_player_move_state(self, s: PlayerMoveState) -> PlayerMoveState:
-        return jax.lax.cond(
+        #fall_count = jnp.where(s.falling_count == 160, s.)
+
+        state = jax.lax.cond(
             s.falling_count > 0,
             lambda: s.replace(falling_count=jnp.maximum(s.falling_count - 1, 0)),
             lambda: s
-    )
+            )
+
+        state = jax.lax.cond(
+            state.egg_animation_count > 0,
+            lambda: state.replace(egg_animation_count=jnp.maximum(state.egg_animation_count - 1, 0)),
+            lambda: state
+        )
+
+        return state
     
     @partial(jax.jit, static_argnums=(0,))
     def _bird_step(self, state: CrazyClimberState) -> CrazyClimberState:
@@ -914,19 +931,33 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             Runs logic if player got hit by egg.
             """
             # check if player is in safe position
-            player_safe = jnp.logical_or(state.player_move_state.main_state == PlayerStableStates.NEUTRAL,
-                state.player_move_state.main_state == PlayerStableStates.PULL_UP)
+            player_safe = jnp.logical_and(
+                jnp.logical_or(state.player_move_state.main_state == PlayerStableStates.NEUTRAL,
+                    state.player_move_state.main_state == PlayerStableStates.PULL_UP),
+                jnp.logical_or(state.player_move_state.side_step < 4, 
+                    state.player_move_state.sub_step < 2))
 
-            # if player not safe -> fall and deactivate bird
+            # if player not safe -> fall and deactivate bird else -> pause game and do egg breaking animation
+            player_state = jax.lax.cond(
+                player_safe,
+                lambda: state.player_move_state,
+                lambda: state.player_move_state.replace(should_fall = jnp.array(True)))
+
+
+
             return state.replace(
-                player_move_state = jax.lax.cond(player_safe,
-                    lambda: state.player_move_state,
-                    lambda: state.player_move_state.replace(should_fall = jnp.array(True)))) 
+                player_move_state = player_state)
 
-            # player safe -> pause game and do egg breaking animation
+        def break_anim(state: CrazyClimberState) -> CrazyClimberState:
+            anim_count = jnp.array(13)
+
+            return state
         
         bird_state = state.bird_state
+        player_state = state.player_move_state
         egg_state = bird_state.egg_state
+
+        player_state.flicker = jnp.logical_and(egg_state.pos_y > self.consts.EGG_FLICKER, (state.step_counter % 2) == 0) 
 
         egg_currently_active = ((egg_state.pos_y < self.consts.EGG_BORDER_BOTTOM))
         drop_egg = ~egg_currently_active
@@ -954,6 +985,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             state.bird_state.stop)
 
         return state.replace(
+            player_move_state = player_state,
             bird_state = bird_state
         )
 
@@ -1283,7 +1315,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             bird_raster = self._render_bird(state)
             egg_raster = self._render_egg(state)
             raster = self._clip_raster(raster, tower_raster, 40, 44) # self.jr.render_at_clipped(raster, 0, 0, tower_raster)
-            raster = self._clip_raster(raster, player_raster, self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x], self.consts.PLAYER_Y) # self.jr.render_at_clipped(raster, state.player_move_state.pos_x, self.consts.PLAYER_Y, player_raster)
+            raster = jax.lax.cond(~state.player_move_state.flicker,
+                lambda: self._clip_raster(raster, player_raster, self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x], self.consts.PLAYER_Y), # self.jr.render_at_clipped(raster, state.player_move_state.pos_x, self.consts.PLAYER_Y, player_raster
+                lambda: raster)
             raster = jax.lax.cond(state.level_state.condor_active,
                 lambda: self._clip_raster(raster, bird_raster, state.bird_state.pos_x, state.bird_state.pos_y),
                 lambda: raster)
