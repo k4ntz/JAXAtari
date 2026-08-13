@@ -724,7 +724,7 @@ def continual_run(config: dict):
         return logprob
     
     @jax.jit
-    def compute_fisher(agent_state, obs_batch, action_batch, ewc_fisher):
+    def compute_fisher(agent_state, obs_batch, action_batch, ewc_fisher, ewc_decay):
         """
         Approximate the diagonal Fisher Information Matrix via squared gradients
         of the log-probability of the actions taken under the current policy.
@@ -737,7 +737,7 @@ def continual_run(config: dict):
                           rollout.
             action_batch: corresponding actions.
             ewc_fisher:   previous task's FIM estimate.
-
+            ewc_decay:    decay factor for EWC.
         Returns:
             new_ewc_fisher: accumulated diagonal FIM.
         """
@@ -757,14 +757,13 @@ def continual_run(config: dict):
         # returns a pytree with the same structure as params, leaf arrays have the same shape as in params, they hold the diagonal fisher information for each parameter
         new_fisher = jax.tree.map(lambda g: jnp.mean(g ** 2, axis=0), per_sample_grads)
 
-        if ewc_fisher is not None:
-            # "Online EWC without decay, equivalent to "multi" mode from MEAL (https://github.com/TTomilin/MEAL/blob/main/experiments/continual/ewc.py)
-            # new_fisher = jax.tree.map(jnp.add, ewc_fisher, new_fisher)
-            # TODO: implement Standard EWC where we store the fisher for each task
-            # Online EWC with decay: https://arxiv.org/pdf/1805.06370
-            new_fisher = jax.tree.map(
-                lambda f_old, f_new: config["EWC_DECAY"] * f_old + (1. - config["EWC_DECAY"]) * f_new,
-                ewc_fisher, new_fisher)
+        # "Online EWC without decay, equivalent to "multi" mode from MEAL (https://github.com/TTomilin/MEAL/blob/main/experiments/continual/ewc.py)
+        # new_fisher = jax.tree.map(jnp.add, ewc_fisher, new_fisher)
+
+        # Online EWC with decay: https://arxiv.org/pdf/1805.06370
+        new_fisher = jax.tree.map(
+            lambda f_old, f_new: ewc_decay * f_old + (1. - ewc_decay) * f_new,
+            ewc_fisher, new_fisher)
 
         # new_ewc_params = agent_state.params  # snapshot current weights as θ*
         return new_fisher
@@ -859,12 +858,15 @@ def continual_run(config: dict):
             global_start_time, seen_tasks, train_mods, eval_mods
         )
 
+        # Set EWC decay to 0 for the first task to ignore the initial zero-value pytree
+        ewc_decay = 0.0 if i == 0 else config["EWC_DECAY"]
+
         # EWC: Compute Fisher Information Matrix and snapshot θ* at the end of the task
         # TODO: could the full storage be too large and cause memory issues?
         ewc_params = agent_state.params
         flat_obs = fisher_storage.obs.reshape((-1,) + fisher_storage.obs.shape[2:])
         flat_actions = fisher_storage.actions.reshape(-1)
-        ewc_fisher = compute_fisher(agent_state, flat_obs, flat_actions, ewc_fisher)
+        ewc_fisher = compute_fisher(agent_state, flat_obs, flat_actions, ewc_fisher, jnp.float32(ewc_decay))
 
     wandb.finish()
 
