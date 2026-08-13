@@ -323,7 +323,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
         """
         Compute the EWC quadratic penalty.
 
-        Returns 0.0 when ewc_params or ewc_fisher are None (first task).
+        ewc_fisher pytree should be initialized with zeros for the first task.
         """
 
         def param_penalty(p, p_star, f):
