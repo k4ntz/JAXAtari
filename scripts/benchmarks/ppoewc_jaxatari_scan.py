@@ -678,6 +678,10 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
         wandb.log(metrics, step=global_step)
     end_time = time.time()
     print("Training done.")
+
+    # Generate new rollout for fisher information compuation
+    _, _, _, fisher_storage, _, _, _ = rollout(agent_state, next_obs, next_done, key, env_state)
+
     if compile_time is not None:
         print(f"Run time after first iteration: {end_time - compile_time:.2f} seconds.")
     print(f"Total train time: {end_time - task_start_time:.2f} seconds / {(end_time - task_start_time)/60:.2f} minutes.")
@@ -694,7 +698,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
 
     # writer.close()
     
-    return agent_state, storage, global_step, global_iteration
+    return agent_state, fisher_storage, global_step, global_iteration
 
 def continual_run(config: dict):
     if config["TRACK"]:
@@ -853,7 +857,7 @@ def continual_run(config: dict):
             )
 
         # we get back the updated agent_state and the storage from the rollout
-        agent_state, storage, global_step, global_iteration = single_run(
+        agent_state, fisher_storage, global_step, global_iteration = single_run(
             key, network, actor, critic, config, task_id, agent_state, 
             ewc_fisher, ewc_params, max_D, global_step, global_iteration, 
             global_start_time, seen_tasks, train_mods, eval_mods
@@ -862,8 +866,8 @@ def continual_run(config: dict):
         # EWC: Compute Fisher Information Matrix and snapshot θ* at the end of the task
         # TODO: could the full storage be too large and cause memory issues?
         ewc_params = agent_state.params
-        flat_obs = storage.obs.reshape((-1,) + storage.obs.shape[2:])
-        flat_actions = storage.actions.reshape(-1)
+        flat_obs = fisher_storage.obs.reshape((-1,) + fisher_storage.obs.shape[2:])
+        flat_actions = fisher_storage.actions.reshape(-1)
         ewc_fisher = compute_fisher(agent_state, flat_obs, flat_actions, ewc_fisher)
 
     wandb.finish()
