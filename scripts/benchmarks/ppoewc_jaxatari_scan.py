@@ -227,19 +227,25 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
     @jax.jit
     def wrapped_reset(key):
         obs, state = jax.vmap(env.reset)(key)
-        obs = obs.squeeze()
-        # pad observations for object-centric environments to have consistent shape across tasks
-        if not config["PIXEL_BASED"]:
+        
+        if config["PIXEL_BASED"]:
+            obs = obs.squeeze(-1)   # (B, F, H, W, 1) -> (B, F, H, W)
+        else:
+            # pad observations for object-centric environments to have consistent shape across tasks
             obs = pad_obs(obs)
+        
         return obs, state
     
     @jax.jit
     def wrapped_step(state, action):
         next_obs, state, reward, terminated, truncated, info = jax.vmap(env.step)(state, action)
-        next_obs = next_obs.squeeze()
-        # pad observations for object-centric environments to have consistent shape across tasks
-        if not config["PIXEL_BASED"]:
+
+        if config["PIXEL_BASED"]:
+            next_obs = next_obs.squeeze(-1)   # (B, F, H, W, 1) -> (B, F, H, W)
+        else:
+            # pad observations for object-centric environments to have consistent shape across tasks
             next_obs = pad_obs(next_obs)
+        
         next_done = jnp.logical_or(terminated, truncated)
         return next_obs, state, reward, next_done, info
 
@@ -265,7 +271,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
         action = jnp.argmax(logits - jnp.log(-jnp.log(u)), axis=1)
         logprob = jax.nn.log_softmax(logits)[jnp.arange(action.shape[0]), action]
         value = critic.apply(agent_state.params.critic_params, hidden)
-        return action, logprob, value.squeeze(1), key
+        return action, logprob, value.squeeze(-1), key
 
     @jax.jit
     def get_action_and_value2(
@@ -282,7 +288,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
         logits = logits.clip(min=jnp.finfo(logits.dtype).min)
         p_log_p = logits * jax.nn.softmax(logits)
         entropy = -p_log_p.sum(-1)
-        value = critic.apply(params.critic_params, hidden).squeeze()
+        value = critic.apply(params.critic_params, hidden).squeeze(-1)
         return logprob, entropy, value
 
     def compute_gae_once(carry, inp, gamma, gae_lambda):
@@ -305,7 +311,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
     ):
         next_value = critic.apply(
             agent_state.params.critic_params, network.apply(agent_state.params.network_params, next_obs)
-        ).squeeze()
+        ).squeeze(-1)
 
         advantages = jnp.zeros((config["NUM_ENVS"],))
         dones = jnp.concatenate([storage.dones, next_done[None, :]], axis=0)

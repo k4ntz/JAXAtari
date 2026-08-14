@@ -1,0 +1,48 @@
+EXP_NAME: ppoewc
+TRACK: True
+CAPTURE_VIDEO: False
+
+EVAL_DURING_TRAIN: True
+EVAL_EVERY: 200
+
+PIXEL_BASED: True
+NATIVE_DOWNSCALING: True
+PIXEL_RESIZE_SHAPE: [84, 84]
+SMOOTH_IMAGE: False
+
+FRAME_STACK: 4
+
+SAVE_MODEL: True
+UPLOAD_MODEL: False
+HF_ENTITY: ""
+
+TASKS: [pong, pong, pong] # replaces ENV_ID
+TIMESTEPS_PER_TASK: 100000  # replaces TOTAL_TIMESTEPS
+
+TRAIN_MODS: # mods applied during training, for each environment
+  - [lazy_enemy]
+  - [shift_enemy]
+  - [shift_player]
+EVAL_MODS:  # mods applied during evaluation, for each environment
+  - [lazy_enemy]
+  - [shift_enemy]
+  - [shift_player]
+
+EWC_DECAY: 0.7  # Decay for Online EWC
+EWC_LAMBDA: 1000.0  # Weight for EWC penalty
+
+LEARNING_RATE: 0.00025
+NUM_ENVS: 1
+NUM_STEPS: 128
+ANNEAL_LR: True
+GAMMA: 0.99
+GAE_LAMBDA: 0.95
+NUM_MINIBATCHES: 4
+UPDATE_EPOCHS: 4
+NORM_ADV: True
+CLIP_COEF: 0.1
+CLIP_VLOSS: False
+ENT_COEF: 0.01
+VF_COEF: 0.5
+MAX_GRAD_NORM: 0.5
+TARGET_KL: null
