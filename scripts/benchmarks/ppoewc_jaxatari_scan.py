@@ -730,10 +730,10 @@ def continual_run(config: dict):
         return logprob
     
     @jax.jit
-    def compute_fisher(agent_state, obs_batch, action_batch, ewc_fisher, ewc_decay):
+    def compute_fisher(agent_state, obs_batch, action_batch, ewc_fisher, ewc_decay, minibatch_size=256):
         """
         Approximate the diagonal Fisher Information Matrix via squared gradients
-        of the log-probability of the actions taken under the current policy.
+        of the log-probability of the actions taken under the current policy in batches.
 
         Call at the end of each task.
 
@@ -744,6 +744,7 @@ def continual_run(config: dict):
             action_batch: corresponding actions.
             ewc_fisher:   previous task's FIM estimate.
             ewc_decay:    decay factor for EWC.
+            minibatch_size:   size of the minibatch.
         Returns:
             new_ewc_fisher: accumulated diagonal FIM.
         """
@@ -753,20 +754,34 @@ def continual_run(config: dict):
             return logprob.squeeze()  # remove batch dimension
 
         per_sample_grad_fn = jax.vmap(jax.grad(log_prob), in_axes=(None, 0, 0))
-        per_sample_grads = per_sample_grad_fn(agent_state.params, obs_batch, action_batch)  # pytree with same structure as params
-        # leaves hold the gradients of all parameters for each sample in the batch
-        # per_sample_grads leaves shape: (B, *params_leaf_shape)
-        # For (461, 512) Dense layer kernel, leaf shape is (B, 461, 512); for (512,) Dense layer bias, leaf shape is (B, 512)
 
-        # Diagonal Fisher
-        # square all leaf arrays of the pytree elementwise, then take the mean across the batch dimension (axis=0)
-        # returns a pytree with the same structure as params, leaf arrays have the same shape as in params, they hold the diagonal fisher information for each parameter
-        new_fisher = jax.tree.map(lambda g: jnp.mean(g ** 2, axis=0), per_sample_grads)
+        total_samples = obs_batch.shape[0]
+        num_batches = total_samples // minibatch_size
+
+        # Truncate to make perfectly sized batches
+        obs_batch = obs_batch[:num_batches * minibatch_size].reshape((num_batches, minibatch_size) + obs_batch.shape[1:])
+        action_batch = action_batch[:num_batches * minibatch_size].reshape((num_batches, minibatch_size) + action_batch.shape[1:])
+
+        # Use jax.lax.scan to accumulate the Fisher information in batches to avoid memory spikes
+        def scan_fn(carry_fisher, minibatch):
+            obs_mini, action_mini = minibatch
+            per_sample_grads_mini = per_sample_grad_fn(agent_state.params, obs_mini, action_mini)    # pytree with same structure as params
+
+            fisher_sum_mini = jax.tree.map(lambda g: jnp.sum(g ** 2, axis=0), per_sample_grads_mini)
+
+            new_carry = jax.tree.map(jnp.add, carry_fisher, fisher_sum_mini)
+            return new_carry, None
+
+        initial_fisher_sum = jax.tree.map(jnp.zeros_like, ewc_fisher)
+        total_fisher_sum, _ = jax.lax.scan(scan_fn, initial_fisher_sum, (obs_batch, action_batch))
+
+        # Average over the total number of samples processed
+        new_fisher = jax.tree.map(lambda f: f / (num_batches * minibatch_size), total_fisher_sum)  # average over all samples
 
         # "Online EWC without decay, equivalent to "multi" mode from MEAL (https://github.com/TTomilin/MEAL/blob/main/experiments/continual/ewc.py)
         # new_fisher = jax.tree.map(jnp.add, ewc_fisher, new_fisher)
 
-        # Online EWC with decay: https://arxiv.org/pdf/1805.06370
+        # Online EWC with decay: https://arxiv.org/pdf/1805.06370 (slightly modified)
         new_fisher = jax.tree.map(
             lambda f_old, f_new: ewc_decay * f_old + (1. - ewc_decay) * f_new,
             ewc_fisher, new_fisher)
