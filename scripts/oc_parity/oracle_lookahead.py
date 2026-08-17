@@ -7,7 +7,7 @@ schedule. This is *not* PRNG inversion — it programs observable outcomes.
 Enable via ``lockstep_eval.py --oracle-lookahead``.
 
 INCLUDE (RNG spawn / movement): seaquest, enduro, asteroids, bankheist,
-mspacman, venture, beamrider, phoenix.
+venture, beamrider, phoenix.
 
 SKIP: kangaroo (deterministic FSM), breakout/pong/etc. (no enemy RNG).
 """
@@ -32,7 +32,6 @@ ORACLE_GAMES = (
     "enduro",
     "asteroids",
     "bankheist",
-    "mspacman",
     "venture",
     "beamrider",
     "phoenix",
@@ -321,50 +320,6 @@ def _oracle_bankheist(env, state, traj, *, t0: int, t1: int):
         return state
 
 
-# ----- MsPacman: ghost actions from near-future facing -----
-
-
-def _oracle_mspacman(env, state, traj, *, t0: int, t1: int):
-    ghosts = getattr(state, "ghosts", None)
-    if ghosts is None:
-        return state
-    try:
-        actions = np.array(ghosts.actions, copy=True)
-    except Exception:
-        return state
-
-    # OC ghost categories vary; collect Ghost / Enemy.
-    def _ghosts(objs):
-        g = collect_category(objs, "Ghost")
-        if not g:
-            g = [o for o in objs if "ghost" in str(o.get("category", "")).lower()]
-        return [o for o in g if int(o.get("w", 0)) > 0]
-
-    # act_to_dir style: use dx/dy → action index if possible.
-    for t in range(t0, min(t1, t0 + 20)):
-        g_list = _ghosts(_objs_at(traj, t))
-        for i, g in enumerate(g_list[: actions.shape[0]]):
-            dx = float(g.get("dx", 0))
-            dy = float(g.get("dy", 0))
-            if dx == 0 and dy == 0:
-                dx = float(g.get("x", 0)) - float(g.get("prev_x", g.get("x", 0)))
-                dy = float(g.get("y", 0)) - float(g.get("prev_y", g.get("y", 0)))
-            if abs(dx) + abs(dy) < 0.5:
-                continue
-            # RIGHT=1 LEFT=2 UP/DOWN common in mspacman translator notes.
-            if abs(dx) >= abs(dy):
-                actions[i] = 1 if dx > 0 else 2
-            else:
-                actions[i] = 3 if dy > 0 else 0
-        if g_list:
-            break
-    try:
-        new_g = ghosts.replace(actions=actions.astype(np.dtype(np.asarray(ghosts.actions).dtype)))
-        return state.replace(ghosts=new_g)
-    except Exception:
-        return state
-
-
 # ----- Venture: monster dx/dy from first future motion -----
 
 
@@ -531,7 +486,6 @@ _ORACLES: Dict[str, OracleFn] = {
     "enduro": _oracle_enduro,
     "asteroids": _oracle_asteroids,
     "bankheist": _oracle_bankheist,
-    "mspacman": _oracle_mspacman,
     "venture": _oracle_venture,
     "beamrider": _oracle_beamrider,
     "phoenix": _oracle_phoenix,

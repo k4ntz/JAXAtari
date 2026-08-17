@@ -16,7 +16,6 @@ JAX_TO_OC_GAME: Dict[str, str] = {
     "gravitar": "Gravitar",
     "kangaroo": "Kangaroo",
     "montezumarevenge": "MontezumaRevenge",
-    "mspacman": "MsPacman",
     "phoenix": "Phoenix",
     "pong": "Pong",
     "qbert": "Qbert",
@@ -86,13 +85,6 @@ TRANSLATOR_DISCLAIMERS: Dict[str, List[str]] = {
         "Monsters keep OC top-left XY; velocity prefers OC dx/dy, else prevΔ, "
         "else a nonzero unit direction (OC often reports dx=dy=0).",
     ],
-    "mspacman": [
-        "ASSUMPTION: OC→JAX actor Y shifted by +3 (reset-calibrated); X 1:1. "
-        "OC Pill grid_ij is (row,col) → JAX pellets[col,row].",
-        "ASSUMPTION: ghost modes/timers RESET; HUD Fruit ignored; lives use OC value as-is "
-        "(possible off-by-one vs JAX). last_horiz_dir uses act_to_dir indices "
-        "(RIGHT=1, LEFT=2), not Action enums.",
-    ],
     "frostbite": [
         "ASSUMPTION: ice white/blue from FloatingBlock rgb; ice_directions from Δx. "
         "Igloo NOT transferred (stays -1) to avoid instant build.",
@@ -150,8 +142,6 @@ def normalize_game_name(game: str) -> Tuple[str, str]:
     key = raw.lower().replace(" ", "").replace("'", "").replace("_", "")
     # Common aliases
     aliases = {
-        "mspacman": "mspacman",
-        "mspacmman": "mspacman",
         "montezuma": "montezumarevenge",
         "montezumarevenge": "montezumarevenge",
         "bankheist": "bankheist",
@@ -208,7 +198,6 @@ _IMPLEMENTED = [
     "seaquest",
     "kangaroo",
     "venture",
-    "mspacman",
     "frostbite",
     "montezumarevenge",
     "beamrider",
@@ -254,10 +243,6 @@ def get_translator(jax_key: str) -> TranslatorFn:
         from .venture import oc_frame_to_venture_state
 
         return oc_frame_to_venture_state
-    if jax_key == "mspacman":
-        from .mspacman import oc_frame_to_mspacman_state
-
-        return oc_frame_to_mspacman_state
     if jax_key == "frostbite":
         from .frostbite import oc_frame_to_frostbite_state
 

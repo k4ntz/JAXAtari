@@ -485,7 +485,7 @@ def main() -> None:
         "--oracle-lookahead",
         action="store_true",
         help="After inject, bake OC-future spawn/movement into JAX latent state "
-        "(seaquest/enduro/asteroids/bankheist/mspacman/venture/beamrider/phoenix)",
+        "(seaquest/enduro/asteroids/bankheist/venture/beamrider/phoenix)",
     )
     parser.add_argument(
         "--oracle-horizon",
