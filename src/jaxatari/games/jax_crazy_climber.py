@@ -83,6 +83,7 @@ class FlowerpotEnemyState:
     window_col: chex.Array
     cycle_row: chex.Array
     drop_x_offset: chex.Array
+    drop_type: chex.Array
 
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
@@ -236,6 +237,60 @@ def _get_default_asset_config() -> tuple:
             'flowerpot_enemy/blue_drop/blue_drop_25.npy',
             'flowerpot_enemy/blue_drop/blue_drop_26.npy',
             'flowerpot_enemy/blue_drop/blue_drop_27.npy',
+            'flowerpot_enemy/purple_drop/purple_drop_1.npy',
+            'flowerpot_enemy/purple_drop/purple_drop_2.npy',
+            'flowerpot_enemy/purple_drop/purple_drop_3.npy',
+            'flowerpot_enemy/purple_drop/purple_drop_4.npy',
+            'flowerpot_enemy/purple_drop/purple_drop_5.npy',
+            'flowerpot_enemy/purple_drop/purple_drop_6.npy',
+            'flowerpot_enemy/purple_drop/purple_drop_7.npy',
+            'flowerpot_enemy/purple_drop/purple_drop_8.npy',
+            'flowerpot_enemy/purple_drop/purple_drop_9.npy',
+            'flowerpot_enemy/purple_drop/purple_drop_10.npy',
+            'flowerpot_enemy/purple_drop/purple_drop_11.npy',
+            'flowerpot_enemy/purple_drop/purple_drop_12.npy',
+            'flowerpot_enemy/purple_drop/purple_drop_13.npy',
+            'flowerpot_enemy/purple_drop/purple_drop_14.npy',
+            'flowerpot_enemy/purple_drop/purple_drop_15.npy',
+            'flowerpot_enemy/purple_drop/purple_drop_16.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_1.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_2.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_3.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_4.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_5.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_6.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_7.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_8.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_9.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_10.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_11.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_12.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_13.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_14.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_15.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_16.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_17.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_18.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_19.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_20.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_21.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_22.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_23.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_24.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_25.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_26.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_27.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_28.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_29.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_30.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_31.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_32.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_33.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_34.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_35.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_36.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_37.npy',
+            'flowerpot_enemy/yellow_drop/yellow_drop_38.npy',
             ]},
         {'name': 'wall', 'type': 'procedural', 'data': wall_sprite},
         {'name': 'ceiling', 'type': 'procedural', 'data': ceiling_sprite},
@@ -259,14 +314,23 @@ class CrazyClimberConstants(struct.PyTreeNode):
         pytree_node=False,
         default_factory=lambda: jnp.array(
             [
-                [200, 5000],
+                [2500, 5000],
                 [10000, 12500],
             ],
             dtype=jnp.int32,
         ),
     )
-    FLOWERPOT_MIN_CLIMBED_FLOORS: int = struct.field(pytree_node=False, default=2)
+    FLOWERPOT_MIN_CLIMBED_FLOORS: int = struct.field(pytree_node=False, default=25)
     FLOWERPOT_PHASE_0_STEPS: int = struct.field(pytree_node=False, default=32)
+    FLOWERPOT_DROP_TYPE_COUNT: int = struct.field(pytree_node=False, default=3)
+    FLOWERPOT_DROP_LOOP_LENGTHS: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([22, 11, 33], dtype=jnp.int32),
+    )
+    FLOWERPOT_DROP_SPRITE_OFFSETS: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([0, 27, 43], dtype=jnp.int32),
+    )
     FLOWERPOT_DROP_DEFLECT_X_OFFSET: int = struct.field(pytree_node=False, default=12)
     FLOWERPOT_DROP_HITBOX_WIDTH: int = struct.field(pytree_node=False, default=7)
     FLOWERPOT_DROP_HITBOX_HEIGHT: int = struct.field(pytree_node=False, default=12)
@@ -338,6 +402,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 window_col=jnp.array(0, dtype=jnp.int32),
                 cycle_row=jnp.array(0, dtype=jnp.int32),
                 drop_x_offset=jnp.array(0, dtype=jnp.int32),
+                drop_type=jnp.array(0, dtype=jnp.int32),
             ),
         )
         initial_obs = self._get_observation(state)
@@ -794,6 +859,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                     window_col=jnp.array(0, dtype=jnp.int32),
                     cycle_row=jnp.array(0, dtype=jnp.int32),
                     drop_x_offset=jnp.array(0, dtype=jnp.int32),
+                    drop_type=jnp.array(0, dtype=jnp.int32),
                 )
             )
 
@@ -880,6 +946,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 masked_random_values = jnp.where(valid_mask, random_values, -1.0)
                 selected_idx = jnp.argmax(masked_random_values)
                 selected_window = candidates[selected_idx]
+                drop_type_key = jax.random.fold_in(s.key, 1)
+                selected_drop_type = jax.random.randint(
+                    drop_type_key,
+                    shape=(),
+                    minval=0,
+                    maxval=self.consts.FLOWERPOT_DROP_TYPE_COUNT,
+                    dtype=jnp.int32,
+                )
                 s = s.replace(
                     flowerpot_enemy=FlowerpotEnemyState(
                         active=jnp.array(True),
@@ -889,6 +963,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                         window_col=selected_window[1],
                         cycle_row=selected_window[0],
                         drop_x_offset=jnp.array(0, dtype=jnp.int32),
+                        drop_type=selected_drop_type,
                     )
                 )
                 return protect_flowerpot_row(s)
@@ -1354,11 +1429,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def _render_flowerpot_drop(self, raster: jnp.ndarray, state: CrazyClimberState) -> jnp.ndarray:
             phase_steps = jnp.maximum(state.flowerpot_enemy.phase_steps, 0)
 
+            drop_type = state.flowerpot_enemy.drop_type
+            loop_length = self.consts.FLOWERPOT_DROP_LOOP_LENGTHS[drop_type]
             sprite_idx = jnp.where(
                 phase_steps < 5,
                 phase_steps,
-                5 + ((phase_steps - 5) % 22),
+                5 + ((phase_steps - 5) % loop_length),
             )
+            sprite_idx = self.consts.FLOWERPOT_DROP_SPRITE_OFFSETS[drop_type] + sprite_idx
 
             first_cycle_offsets = jnp.array(
                 [0, 0, 0, 0, 0, 0, 0, 1, 2, 4, 4, 5, 6, 7, 8, 10, 13, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23],
