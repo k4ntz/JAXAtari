@@ -54,7 +54,7 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   ❌: 2
 | name_this_game               | 🥈       | 0 |
 | phoenix                      | 🥇       | 11 |
 | pitfall                      | ❌       | 0 |
-| pong                         | 🥇       | 9 |
+| pong                         | 🥇       | 10 |
 | private_eye                  | ❌       | 0 |
 | qbert                        | 🥈       | 16 |
 | riverraid                    | 🥈       | 0 |
