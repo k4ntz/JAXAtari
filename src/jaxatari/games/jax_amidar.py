@@ -1,9 +1,9 @@
-# Hacking tips: 
+# Hacking tips:
 # - use scripts\amidar_maze_generator.py to change the maze
 # - to deactivate enemies, set enemy_types[x] to constants.INVALID_ENEMY. This will make the enemy disappear
-# - you can change the number of enemies for the starting levels, the maximal number of enemies and at which level this switch happens in the constants. 
+# - you can change the number of enemies for the starting levels, the maximal number of enemies and at which level this switch happens in the constants.
 # - changing the enemy_types each level works by just overwriting the get_enemy_types function
-# - In general, there are a lot of constants which can be changed in order to change the behavior 
+# - In general, there are a lot of constants which can be changed in order to change the behavior
 
 # remaining Inacuracies:
 # - the bottom path is the same as any other path, in ALE it's thinner and the sprites are further up on the path
@@ -27,7 +27,7 @@ import jaxatari.games.amidar_mazes as chosen_maze # change this to change the ma
 @partial(jax.jit, static_argnames=['WIDTH', 'HEIGHT', 'PATH_THICKNESS_HORIZONTAL', 'PATH_THICKNESS_VERTICAL'])
 def generate_path_mask(WIDTH, HEIGHT, PATH_THICKNESS_HORIZONTAL, PATH_THICKNESS_VERTICAL, horizontal_edges, vertical_edges, corners, horizontal_cond, vertical_cond, corner_cond):
     """Generates a mask for the path edges. Conditions are used so this function can also be used to render only the walked on paths."""
-    # Create an empty mask 
+    # Create an empty mask
     mask = jnp.zeros((WIDTH, HEIGHT), dtype=jnp.int32)
     rendering_mask = jnp.zeros((WIDTH, HEIGHT), dtype=jnp.int32)
 
@@ -56,10 +56,10 @@ def generate_path_mask(WIDTH, HEIGHT, PATH_THICKNESS_HORIZONTAL, PATH_THICKNESS_
 
         coords, coords_rendering = jax.lax.cond(condition, calculate, lambda: (jnp.full((num_points, 2), -1, dtype=jnp.int32), jnp.full((num_points * PATH_THICKNESS_HORIZONTAL, 2), -1, dtype=jnp.int32)))
 
-        return coords, coords_rendering 
+        return coords, coords_rendering
 
     def interpolate_vertical_line(edge, condition, num_points=HEIGHT): # Could use less points if performance is a problem, but this accounts for all valid maze changes
-        
+
         def calculate():
             start, end = edge
 
@@ -83,8 +83,8 @@ def generate_path_mask(WIDTH, HEIGHT, PATH_THICKNESS_HORIZONTAL, PATH_THICKNESS_
 
         coords, coords_rendering = jax.lax.cond(condition, calculate, lambda: (jnp.full((num_points, 2), -1, dtype=jnp.int32), jnp.full((num_points * PATH_THICKNESS_VERTICAL, 2), -1, dtype=jnp.int32)))
 
-        return coords, coords_rendering 
-    
+        return coords, coords_rendering
+
     def render_corner(corner, condition):
         def calculate():
             x, y = corner
@@ -223,14 +223,14 @@ class AmidarConstants(AutoDerivedConstants):
 
     # Player
     PLAYER_SIZE: tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (7, 7))  # Object sizes (width, height)
-    PLAYER_SPRITE_OFFSET: tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (-1, 0)) # Offset for the player sprite in relation to the position in the code (because the top left corner of the player sprite is of the path to the left)
+    PLAYER_SPRITE_OFFSET: tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (0, 0)) # Offset for the player sprite in relation to the position in the code (because the top left corner of the player sprite is of the path to the left)
     INITIAL_PLAYER_POSITION: chex.Array = struct.field(pytree_node=False, default_factory=lambda: chosen_maze.INITIAL_PLAYER_POSITION)
     INITIAL_PLAYER_DIRECTION: int = struct.field(pytree_node=False, default_factory=lambda: 0)
     PLAYER_STARTING_PATH: int = struct.field(pytree_node=False, default_factory=lambda: chosen_maze.PLAYER_STARTING_PATH)
 
     # Jumping
-    # The jumping mechanics are like this to resemble the ALE version. 
-    # There, until frame 477 the jump lasts 30 frames, then it increases and after frame 508 the jumps last 70 frames. 
+    # The jumping mechanics are like this to resemble the ALE version.
+    # There, until frame 477 the jump lasts 30 frames, then it increases and after frame 508 the jumps last 70 frames.
     # The jump frequency is used to mirror that pressing jump only works every x frames. This increases once at frame 508.
     MAX_JUMPS: int = struct.field(pytree_node=False, default_factory=lambda: 4)  # Maximum number of jumps the player can perform per life
     INITIAL_JUMP_FREQUENCY: int = struct.field(pytree_node=False, default_factory=lambda: 2)  # Initial jump frequency (frames)
@@ -306,7 +306,7 @@ class AmidarConstants(AutoDerivedConstants):
             "PATH_SPRITE_BROWN": jnp.where(rendering_path_mask[:, :, None] == 1, path_pattern_brown, jnp.full((self.HEIGHT, self.WIDTH, 4), 0, dtype=jnp.uint8)),
             "PATH_SPRITE_GREEN": jnp.where(rendering_path_mask[:, :, None] == 1, path_pattern_green, jnp.full((self.HEIGHT, self.WIDTH, 4), 0, dtype=jnp.uint8)),
         }
-    
+
 # immutable state container
 @struct.dataclass
 class AmidarState:
@@ -362,20 +362,20 @@ def get_player_speed(frame_counter: chex.Array) -> chex.Array:
     of length 155.
 
     r1 and r2 are chosen such that r1 % 5 and r2 % 5 are both in {1, 4}.
-    In the ALE game, these are different each game, but what the desicion is based on is not clear, 
+    In the ALE game, these are different each game, but what the desicion is based on is not clear,
     so for now they are just set to 66 and 144.
     Here are all the possible combinations of r1 and r2:
-    [[1, 79], [4, 81], [6, 84], [9, 86], [11, 89], [14, 91], [16, 94], [19, 96], [21, 99], [24, 101], 
-    [26, 104], [29, 106], [31, 109], [34, 111], [36, 114], [39, 116], [41, 119], [44, 121], [46, 124], 
-    [49, 126], [51, 129], [54, 131], [56, 134], [59, 136], [61, 139], [64, 141], [66, 144], [69, 146], 
+    [[1, 79], [4, 81], [6, 84], [9, 86], [11, 89], [14, 91], [16, 94], [19, 96], [21, 99], [24, 101],
+    [26, 104], [29, 106], [31, 109], [34, 111], [36, 114], [39, 116], [41, 119], [44, 121], [46, 124],
+    [49, 126], [51, 129], [54, 131], [56, 134], [59, 136], [61, 139], [64, 141], [66, 144], [69, 146],
     [71, 149], [74, 151], [76, 154]]
 
 
     Parameters
     ----------
-    frame_counter : int 
+    frame_counter : int
         The frame in which to check if the player moves.
-    
+
     Returns
     -------
     jax.numpy.ndarray
@@ -447,13 +447,13 @@ def player_step(constants: AmidarConstants, state: AmidarState, action: chex.Arr
         new_x = jnp.where(on_path(new_x, new_y), new_x, state.player_x)
         new_y = jnp.where(on_path(new_x, new_y), new_y, state.player_y)
         return new_x, new_y
-    
+
     has_not_moved = jnp.logical_and(new_x == state.player_x, new_y == state.player_y)
     movement_key_pressed = jnp.logical_or(up, jnp.logical_or(down, jnp.logical_or(left, right)))
     new_x, new_y = jax.lax.cond(jnp.logical_and(has_not_moved, movement_key_pressed), move_in_previous_direction, lambda direction: (new_x, new_y), state.player_direction)
-        
+
     player_direction = jnp.select([new_y < state.player_y, new_x < state.player_x, new_y > state.player_y, new_x > state.player_x],
-                                  [constants.UP,           constants.LEFT,         constants.DOWN,         constants.RIGHT       ], 
+                                  [constants.UP,           constants.LEFT,         constants.DOWN,         constants.RIGHT       ],
                                   default=state.player_direction)
 
     # Check if the new position is a corner, in which case check if a new path edge is walked on
@@ -503,25 +503,25 @@ def player_step(constants: AmidarConstants, state: AmidarState, action: chex.Arr
                     # Check if all edges in this rectangle have been walked on
                     all_edges_walked = jnp.all(jnp.where(rectangle == 1, walked_on_paths, True))
                     return all_edges_walked
-                
+
                 # Check all rectangles to see if they're completed
                 all_rectangle_indices = jnp.arange(constants.RECTANGLES.shape[0])
                 completed_mask = jax.vmap(check_single_rectangle)(all_rectangle_indices)
-                
+
                 # Only consider rectangles that contain this edge
                 relevant_completed_mask = jnp.logical_and(rectangles_containing_edge_mask, completed_mask)
-                
+
                 # Check if any new rectangles are completed (not already marked as completed)
-                new_completions = jnp.logical_and(relevant_completed_mask, 
+                new_completions = jnp.logical_and(relevant_completed_mask,
                                                  jnp.logical_not(completed_rectangles))
-                
+
                 new_rectangle_completed = jnp.any(new_completions)
-                
+
                 # Update completed rectangles
                 completed_rectangles = jnp.logical_or(completed_rectangles, new_completions)
-                
+
                 return new_rectangle_completed, completed_rectangles
-            
+
             # call check_rectangle_completion to check if a rectangle is completed
             new_rectangle_completed, completed_rectangles = check_rectangle_completion(completed_rectangles)
             # Add bonus points for completing a rectangle
@@ -585,7 +585,7 @@ def enemies_step(constants: AmidarConstants, state: AmidarState, random_key: che
         """From the possible movement directions exclude u-turns and the direction the enemy is currently moving in.
         The first enemy(index 0) is the Tracer and only moves along the perimeter, so it's good direction is the current one."""
         opposite_direction = (enemy_direction + 2) % 4
-        possible_directions_without_u_turns = possible_directions.at[opposite_direction].set(False) # Exclude the opposite direction (u-turn) 
+        possible_directions_without_u_turns = possible_directions.at[opposite_direction].set(False) # Exclude the opposite direction (u-turn)
         good_directions = jax.lax.cond(index == 0,
                                         lambda: possible_directions_without_u_turns & jnp.full(possible_directions.shape, False).at[enemy_direction].set(True),  # Tracer should always go in the current direction
                                         lambda: possible_directions_without_u_turns.at[enemy_direction].set(False))  # every other enemy should take every turn it can
@@ -606,15 +606,15 @@ def enemies_step(constants: AmidarConstants, state: AmidarState, random_key: che
                                                              lambda: jax.random.choice(random_key, jnp.arange(4), shape=(), p=jnp.where(possible_directions_without_u_turns, 1/jnp.count_nonzero(possible_directions_without_u_turns), 0)),
                                                              lambda: jax.random.choice(random_key, jnp.arange(4), shape=(), p=jnp.where(possible_directions, 1/jnp.count_nonzero(possible_directions), 0))
                                                             )
-                                            )  
-            # the tracer has to turn left if it can, otherwise it will deviate from the border 
+                                            )
+            # the tracer has to turn left if it can, otherwise it will deviate from the border
             left_turn_direction = (direction + 1) % 4
             chosen_direction = jax.lax.cond(jnp.logical_and(index == 0, possible_directions_without_u_turns[left_turn_direction]), lambda: left_turn_direction, lambda: chosen_direction)
             return chosen_direction
 
         # if no directions are possible stay with the current one
         chosen_direction = jax.lax.cond(jnp.any(possible_directions), choose_direction, lambda: direction)
-        
+
         new_x, new_y = jax.lax.cond(jnp.any(possible_directions),
             lambda: (enemy_x + jnp.where(chosen_direction == constants.LEFT, -1, 0) + jnp.where(chosen_direction == constants.RIGHT, 1, 0),
                      enemy_y + jnp.where(chosen_direction == constants.UP, -1, 0) + jnp.where(chosen_direction == constants.DOWN, 1, 0)),
@@ -704,8 +704,8 @@ def handle_collisions(constants, enemy_types: chex.Array, collisions: chex.Array
 
     def handle_collision(enemy_type, collision):
         """Handles the collision with a single enemy."""
-        
-        def collide(): 
+
+        def collide():
             return jax.lax.cond(enemy_type == 3,  # Chicken
                                 lambda: (constants.SHADOW, constants.BONUS_POINTS_PER_CHICKEN, 0),  # Chicken gives bonus points and does not cost a life
                                 lambda: (enemy_type, 0, 1))
@@ -720,7 +720,7 @@ def handle_collisions(constants, enemy_types: chex.Array, collisions: chex.Array
 
     return enemy_types, points_scored, lost_live
 
-def get_enemy_types(constants, level: chex.Array) -> chex.Array: 
+def get_enemy_types(constants, level: chex.Array) -> chex.Array:
     enemy_type_this_level = jax.lax.cond(level % 2 == 0, lambda: constants.PIG, lambda: constants.WARRIOR)
     enemies = jnp.full_like(constants.INITIAL_ENEMY_DIRECTIONS, enemy_type_this_level, dtype=jnp.int32)
     mask = jnp.arange(enemies.shape[0]) >= constants.START_ENEMIES
@@ -770,7 +770,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: AmidarState) -> bool:
         return state.lives <= 0
-    
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_env_reward(self, previous_state: AmidarState, state: AmidarState):
         return state.score - previous_state.score
@@ -778,7 +778,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: AmidarState, state: AmidarState):
         return self._get_env_reward(previous_state, state)
-    
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: AmidarState) -> AmidarInfo:
         return AmidarInfo(
@@ -811,15 +811,15 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             enemy_types=get_enemy_types(self.constants, level),
             chicken_counter=jnp.array(self.constants.CHICKEN_MODE_DURATION).astype(jnp.int32),  # Initial chicken counter
             jump_counter=jnp.array(-1).astype(jnp.int32),  # Initial jump counter
-            times_jumped=jnp.array(0).astype(jnp.int32), 
+            times_jumped=jnp.array(0).astype(jnp.int32),
         )
         initial_obs = self._get_observation(state)
 
         return initial_obs, state
-    
+
 
     def observation_space(self) -> spaces.Dict:
-        """ 
+        """
         Returns the observation space for Amidar.
         The observation contains:
         - player_gorilla: PlayerEntity (x, y, width, height, active)
@@ -914,7 +914,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             # Jump-handling
             enemy_types, jump_counter, times_jumped = jump(self.constants, state.level, state.frame_counter, action, jump_counter, chicken_mode_active, state.times_jumped, enemy_types)
 
-            # Reset positions if a life is lost 
+            # Reset positions if a life is lost
             enemy_positions, enemy_directions, player_x, player_y, player_direction, lives, freeze_counter, times_jumped = jax.lax.cond(lost_live,
                 lambda: (self.constants.INITIAL_ENEMY_POSITIONS, self.constants.INITIAL_ENEMY_DIRECTIONS, self.constants.INITIAL_PLAYER_POSITION[0], self.constants.INITIAL_PLAYER_POSITION[1], self.constants.INITIAL_PLAYER_DIRECTION, state.lives-1, self.constants.FREEZE_DURATION, 0),  # Reset enemy & player positions and directions, decrement lives
                 lambda: (enemy_positions, enemy_directions, player_x, player_y, player_direction, state.lives, state.freeze_counter, times_jumped))  # Keep the current enemy positions and directions
@@ -963,15 +963,15 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
                 jump_counter=jump_counter,
                 times_jumped=times_jumped,
             )
-            
+
             return new_state
-        
+
         def freeze_game():
             return state.replace(
                 freeze_counter=state.freeze_counter - 1,
                 frame_counter=state.frame_counter + 1,
             )
-        
+
         # Check if the game is frozen
         is_frozen = state.freeze_counter > 0
         # jax.debug.print("Freeze counter: {freeze_counter}", freeze_counter=state.freeze_counter)
@@ -1054,7 +1054,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
                 end[1] - start[1],  # height
                 jnp.array(1),  # Path is always active
             ])
-        
+
         horizontal_edges = jax.vmap(make_path_edge_entity_horizontal, in_axes=0)(self.constants.HORIZONTAL_PATH_EDGES)
         vertical_edges = jax.vmap(make_path_edge_entity_vertical, in_axes=0)(self.constants.VERTICAL_PATH_EDGES)
 
@@ -1103,7 +1103,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             walked_on_paths=walked_on_paths,
             completed_rectangles=completed_rectangles
         )
-        
+
 class AmidarRenderer(JAXGameRenderer):
     """JAX-based Amidar game renderer, optimized with JIT compilation."""
 
@@ -1180,8 +1180,8 @@ class AmidarRenderer(JAXGameRenderer):
             ],
             axis=1,
         )
-        
-        # since the background asset is only a single pixel, we need to tile it to the correct size for rendering 
+
+        # since the background asset is only a single pixel, we need to tile it to the correct size for rendering
         if self.BACKGROUND.shape != (self.RENDER_HEIGHT, self.RENDER_WIDTH):
             bg_fill = self.BACKGROUND[0, 0]
             self.BACKGROUND = jnp.full((self.RENDER_HEIGHT, self.RENDER_WIDTH), bg_fill, dtype=self.BACKGROUND.dtype)
@@ -1294,7 +1294,7 @@ class AmidarRenderer(JAXGameRenderer):
             return new_raster, None
 
         object_raster, _ = jax.lax.scan(scan_render_enemy, object_raster, (state.enemy_positions, state.enemy_types))
-        
+
         # Render player
         player_mask = jax.lax.cond(state.level % 2 == 1, lambda: self.SHAPE_MASKS["player_ghost"], lambda: self.SHAPE_MASKS["player_paint_roller"])
         object_raster = self.jr.render_at(object_raster, state.player_x+self.constants.PLAYER_SPRITE_OFFSET[0], state.player_y+self.constants.PLAYER_SPRITE_OFFSET[1], player_mask)
