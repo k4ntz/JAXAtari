@@ -17,107 +17,598 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 SEED = 0xC4
 
 
-HUD_FONT_16 = jnp.array(
-    [
-        # 0
-        [[1, 1, 1],
-         [1, 0, 1],
-         [1, 0, 1],
-         [1, 0, 1],
-         [1, 1, 1]],
-        # 1
-        [[0, 1, 0],
-         [1, 1, 0],
-         [0, 1, 0],
-         [0, 1, 0],
-         [1, 1, 1]],
-        # 2
-        [[1, 1, 1],
-         [0, 0, 1],
-         [1, 1, 1],
-         [1, 0, 0],
-         [1, 1, 1]],
-        # 3
-        [[1, 1, 1],
-         [0, 0, 1],
-         [1, 1, 1],
-         [0, 0, 1],
-         [1, 1, 1]],
-        # 4
-        [[1, 0, 1],
-         [1, 0, 1],
-         [1, 1, 1],
-         [0, 0, 1],
-         [0, 0, 1]],
-        # 5
-        [[1, 1, 1],
-         [1, 0, 0],
-         [1, 1, 1],
-         [0, 0, 1],
-         [1, 1, 1]],
-        # 6
-        [[1, 1, 1],
-         [1, 0, 0],
-         [1, 1, 1],
-         [1, 0, 1],
-         [1, 1, 1]],
-        # 7
-        [[1, 1, 1],
-         [0, 0, 1],
-         [0, 0, 1],
-         [0, 0, 1],
-         [0, 0, 1]],
-        # 8
-        [[1, 1, 1],
-         [1, 0, 1],
-         [1, 1, 1],
-         [1, 0, 1],
-         [1, 1, 1]],
-        # 9
-        [[1, 1, 1],
-         [1, 0, 1],
-         [1, 1, 1],
-         [0, 0, 1],
-         [1, 1, 1]],
-        # A
-        [[1, 1, 1],
-         [1, 0, 1],
-         [1, 1, 1],
-         [1, 0, 1],
-         [1, 0, 1]],
-        # B
-        [[1, 1, 0],
-         [1, 0, 1],
-         [1, 1, 0],
-         [1, 0, 1],
-         [1, 1, 0]],
-        # C
-        [[1, 1, 1],
-         [1, 0, 0],
-         [1, 0, 0],
-         [1, 0, 0],
-         [1, 1, 1]],
-        # D
-        [[1, 1, 0],
-         [1, 0, 1],
-         [1, 0, 1],
-         [1, 0, 1],
-         [1, 1, 0]],
-        # E
-        [[1, 1, 1],
-         [1, 0, 0],
-         [1, 1, 1],
-         [1, 0, 0],
-         [1, 1, 1]],
-        # F
-        [[1, 1, 1],
-         [1, 0, 0],
-         [1, 1, 1],
-         [1, 0, 0],
-         [1, 0, 0]],
-    ],
-    dtype=jnp.uint8,
+# --- ShowDigits, transcribed from pitfall.asm --------------------------------
+# DIGIT_H is 8 and each glyph is one eight-bit GRP pattern, so a digit occupies
+# eight screen pixels either way. Like every other pattern table in this port
+# the ROM lists the rows bottom first, because the kernel reads `(digitPtr),y`
+# with y counting down from DIGIT_H-1 as the raster descends.
+DIGIT_H = 8
+DIGIT_W = 8
+DIGIT_PATTERNS = (
+    (   # Zero
+        0b00111100, 0b01100110, 0b01100110, 0b01100110,
+        0b01100110, 0b01100110, 0b01100110, 0b00111100,
+    ),
+    (   # One
+        0b00111100, 0b00011000, 0b00011000, 0b00011000,
+        0b00011000, 0b00011000, 0b00111000, 0b00011000,
+    ),
+    (   # Two
+        0b01111110, 0b01100000, 0b01100000, 0b00111100,
+        0b00000110, 0b00000110, 0b01000110, 0b00111100,
+    ),
+    (   # Three
+        0b00111100, 0b01000110, 0b00000110, 0b00001100,
+        0b00001100, 0b00000110, 0b01000110, 0b00111100,
+    ),
+    (   # Four
+        0b00001100, 0b00001100, 0b00001100, 0b01111110,
+        0b01001100, 0b00101100, 0b00011100, 0b00001100,
+    ),
+    (   # Five
+        0b01111100, 0b01000110, 0b00000110, 0b00000110,
+        0b01111100, 0b01100000, 0b01100000, 0b01111110,
+    ),
+    (   # Six
+        0b00111100, 0b01100110, 0b01100110, 0b01100110,
+        0b01111100, 0b01100000, 0b01100010, 0b00111100,
+    ),
+    (   # Seven
+        0b00011000, 0b00011000, 0b00011000, 0b00011000,
+        0b00001100, 0b00000110, 0b01000010, 0b01111110,
+    ),
+    (   # Eight
+        0b00111100, 0b01100110, 0b01100110, 0b00111100,
+        0b00111100, 0b01100110, 0b01100110, 0b00111100,
+    ),
+    (   # Nine
+        0b00111100, 0b01000110, 0b00000110, 0b00111110,
+        0b01100110, 0b01100110, 0b01100110, 0b00111100,
+    ),
+    (   # DoublePoint, the timer colon
+        0b00000000, 0b00011000, 0b00011000, 0b00000000,
+        0b00000000, 0b00011000, 0b00011000, 0b00000000,
+    ),
+    (   # Space
+        0b00000000, 0b00000000, 0b00000000, 0b00000000,
+        0b00000000, 0b00000000, 0b00000000, 0b00000000,
+    ),
 )
+DIGIT_COLON = 10
+DIGIT_SPACE = 11
+
+
+def digit_pattern_bitmap(glyph_index: int) -> np.ndarray:
+    """One ShowDigits glyph as a top-down DIGIT_H x DIGIT_W boolean bitmap."""
+    rows = DIGIT_PATTERNS[glyph_index][::-1]
+    return np.array(
+        [[bool((row >> (DIGIT_W - 1 - col)) & 1) for col in range(DIGIT_W)] for row in rows],
+        dtype=bool,
+    )
+
+
+_DIGIT_GLYPHS = jnp.asarray(
+    np.stack([digit_pattern_bitmap(i) for i in range(len(DIGIT_PATTERNS))])
+)
+
+# ShowDigits sets NUSIZ0 and NUSIZ1 to THREE_COPIES and nudges GRP1 eight pixels
+# with HMP1, so the six slots interleave into one row eight pixels apart. The
+# first slot's column and both row numbers are read off the reference frame.
+HUD_SLOT_X = (21, 29, 37, 45, 53, 61)
+HUD_SCORE_ROW = 9
+HUD_TIMER_ROW = 22
+# `lda colorLst / sta COLUP0 / sta COLUP1`: a light grey, not white.
+HUD_COLOR = (214, 214, 214)
+
+# livesPat is a pattern byte rather than a count - `$a0 = 3, $80 = 2, $00 = 1` -
+# and `ora temp3` folds it into slot 0 of the timer line on all eight rows, so
+# it shows up as one or two full-height bars beside the clock.
+LIVES_PAT = (0x00, 0x00, 0x80, 0xA0)
+
+# Two TIA display artefacts. HMOVE's comb blacks the leftmost eight pixels of
+# every scanline, and the frame ALE hands back opens with six scanlines still in
+# vertical blank. Both hide pixels; neither moves a coordinate.
+HMOVE_BLANK_COLS = 8
+VBLANK_ROWS = 6
+
+
+# The ROM runs at 60 Hz and this port steps at 30, so anything the ROM counts in
+# frames advances twice per JAX step.
+NTSC_FRAMES_PER_STEP = 2
+
+
+# --- KilledHarry: the death and restart state machine ------------------------
+# The fatal frame writes two bytes and nothing else:
+#
+#   KilledHarry SUBROUTINE
+#       lda    #SOUND_DEAD      ; 2
+#       sta    soundIdx         ; 3
+#       lda    #$84             ; 2                 start copyright..
+#       sta    noGameScroll     ; 3                 ..animation
+#       jmp    ProcessObjects   ; 3
+#
+# Harry keeps whatever position he had, because `jmp ProcessObjects` skips the
+# rest of .processHarry and `lda noGameScroll / beq .processHarry` keeps skipping
+# it on every later frame. soundIdx then walks up SoundTab one note every fourth
+# frame, and only when it reaches SOUND_FALLING-1 does the vertical-blank block
+# take the life and put Harry back.
+SOUND_DEAD = 0x31
+SOUND_FALLING = 0x53
+KILLED_HARRY_SCROLL = 0x84
+
+# SoundTab, verbatim. Only the sign bit is load-bearing here: `lda SoundTab-1,x
+# / bpl .contSound / sty soundIdx` ends a tune on the first negative byte, and
+# for the dead tune that byte is entry SOUND_FALLING-1, which is exactly the
+# entry the life-loss test watches for.
+SOUND_TAB = (
+    0x13, 0x13, 0x13, 0x13, 0x13, 0x13, 0x13, 0x09,
+    0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B,
+    0x0B, 0x0B, 0x0B, 0x0B, 0x09, 0x0B, 0x09, 0x0B,
+    0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x8B, 0x06,
+    0x04, 0x03, 0x02, 0x84,
+    0x13, 0x13, 0x0E, 0x0B, 0x09, 0x09, 0x09, 0x0B,
+    0x09, 0x09, 0x09, 0x89,
+    0x1D, 0x1D, 0x1D, 0x1D, 0x1D, 0x1D, 0x1D, 0x1D,
+    0x1D, 0x1A, 0x1A, 0x19, 0x19, 0x19, 0x19, 0x19,
+    0x19, 0x1D, 0x1D, 0x1D, 0x1D, 0x1D, 0x14, 0x15,
+    0x14, 0x15, 0x14, 0x15, 0x14, 0x15, 0x14, 0x15,
+    0x14, 0x95,
+    0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x9F,
+)
+_SOUND_TAB = jnp.asarray(SOUND_TAB, dtype=jnp.int32)
+
+# The life-loss block, reached from the vertical blank once the dead tune ends:
+#
+#   ldy    #$d0|NO_MOVE     ; 2                 upper Harry restart y-position
+#   sty    oldJoystick      ; 3                 clear joystick
+#   lda    #20              ; 2
+#   sta    xPosHarry        ; 3
+#   ldx    #JUMP_LEN        ; 2
+#   lda    yPosHarry        ; 3
+#   cmp    #71              ; 2                 Harry at underground?
+#   bcc    LF5D2            ; 2³                 no, skip
+#   ldy    #64              ; 2                  yes, lower Harry restart y-pos.
+#
+# That one `ldy` is used twice: as the cleared joystick and, on the upper branch,
+# as yPosHarry itself. jumpIndex is JUMP_LEN, whose JumpTab entry is -1, so
+# yPosHarry counts *up* one per frame - from 223 through 255, round to 0, and
+# only from there does Harry drop into view and stop at JUNGLE_GROUND.
+RESTART_X = 20
+RESTART_Y_UPPER = 0xD0 | 0x0F
+RESTART_Y_UNDER = 64
+RESTART_UNDERGROUND_TEST_Y = 71
+JUNGLE_GROUND = 32
+UNDER_GROUND = 86
+
+# The animated copyright, drawn by a third ShowDigits pass after the kernel. Six
+# sixteen-row blocks feed six eight-row slots, so the eight-row window can slide
+# through them; the row is read off the reference frame.
+COPYRIGHT_H = 16
+COPYRIGHT_ROW = 189
+COPYRIGHT_PATTERNS = (
+    (   # CopyRight0
+        0b00000000, 0b00000000, 0b11110111, 0b10010101,
+        0b10000111, 0b10000000, 0b10010000, 0b11110000,
+        0b10101101, 0b10101001, 0b11101001, 0b10101001,
+        0b11101101, 0b01000001, 0b00001111, 0b00000000,
+    ),
+    (   # CopyRight1
+        0b01000111, 0b01000001, 0b01110111, 0b01010101,
+        0b01110101, 0b00000000, 0b00000000, 0b00000000,
+        0b01010000, 0b01011000, 0b01011100, 0b01010110,
+        0b01010011, 0b00010001, 0b11110000, 0b00000000,
+    ),
+    (   # CopyRight2
+        0b00000011, 0b00000000, 0b01001011, 0b01001010,
+        0b01101011, 0b00000000, 0b00001000, 0b00000000,
+        0b10111010, 0b10001010, 0b10111010, 0b10100010,
+        0b00111010, 0b10000000, 0b11111110, 0b00000000,
+    ),
+    (   # CopyRight3
+        0b10000000, 0b10000000, 0b10101010, 0b10101010,
+        0b10111010, 0b00100010, 0b00100111, 0b00000010,
+        0b11101001, 0b10101011, 0b10101111, 0b10101101,
+        0b11101001, 0b00000000, 0b00000000, 0b00000000,
+    ),
+    (   # CopyRight4
+        0b00000000, 0b00000000, 0b00010001, 0b00010001,
+        0b00010111, 0b00010101, 0b00010111, 0b00000000,
+        0b00000000, 0b00000000, 0b00000000, 0b00000000,
+        0b00000000, 0b00000000, 0b00000000, 0b00000000,
+    ),
+    (   # CopyRight5
+        0b00000000, 0b00000000, 0b01110111, 0b01010100,
+        0b01110111, 0b01010001, 0b01110111, 0b00000000,
+        0b00000000, 0b00000000, 0b00000000, 0b00000000,
+        0b00000000, 0b00000000, 0b00000000, 0b00000000,
+    ),
+)
+
+# `Space` immediately precedes CopyRight0 in the ROM, and the pointer arithmetic
+# below runs off the front of CopyRight0 into it. That is not an accident: it is
+# what lets the message scroll in from nothing.
+_COPYRIGHT_STREAM = (0,) * DIGIT_H + tuple(b for block in COPYRIGHT_PATTERNS for b in block)
+
+
+def copyright_slot_bitmap(scroll: int, slot: int) -> np.ndarray:
+    """One copyright slot as a top-down DIGIT_H x DIGIT_W boolean bitmap.
+
+    `.loopCopyright` seeds digitPtr+10 with `CopyRight5 - COPYRIGHT_H/2 + scroll`
+    and walks back COPYRIGHT_H a slot at a time, so slot n reads the eight bytes
+    starting at `CopyRightN - COPYRIGHT_H/2 + scroll`. For n > 0 a low scroll
+    runs that window back into CopyRight(n-1), which is what makes the message
+    travel sideways as it slides; for slot 0 it runs back into Space.
+    """
+    start = COPYRIGHT_H * slot + scroll
+    rows = _COPYRIGHT_STREAM[start:start + DIGIT_H][::-1]
+    return np.array(
+        [[bool((row >> (DIGIT_W - 1 - col)) & 1) for col in range(DIGIT_W)] for row in rows],
+        dtype=bool,
+    )
+
+
+COPYRIGHT_SCROLL_STOPS = COPYRIGHT_H // 2 + 1
+_COPYRIGHT_GLYPHS = jnp.asarray(
+    np.stack([
+        np.stack([copyright_slot_bitmap(s, n) for n in range(len(COPYRIGHT_PATTERNS))])
+        for s in range(COPYRIGHT_SCROLL_STOPS)
+    ])
+)
+
+
+def copyright_scroll(no_game_scroll, sound_idx):
+    """The copyright window offset, 0..COPYRIGHT_H/2.
+
+        ldy    #COPYRIGHT_H/2   ; 2
+        lda    noGameScroll     ; 3
+        ldx    soundIdx         ; 3
+        beq    .noSound0        ; 2³
+        lda    #0               ; 2
+    .noSound0:
+        lsr / lsr / lsr
+        cmp    #20              ; 2                 scroll-animation
+        bcs    .ok              ; 2³
+        ldy    #0               ; 2
+        cmp    #12              ; 2
+        bcc    .ok              ; 2³
+        sbc    #12              ; 2
+        tay                     ; 2
+
+    A tune in progress substitutes 0 for noGameScroll, so the marquee is pinned
+    shut for the whole of the dead tune. It only moves once soundIdx is back to
+    zero *and* noGameScroll is still counting - the intro, and the frames after
+    the last life, where the game-over branch leaves the counter running.
+    """
+    a = jnp.where(sound_idx != jnp.int32(0), jnp.int32(0), no_game_scroll) >> jnp.int32(3)
+    return jnp.where(
+        a >= jnp.int32(20),
+        jnp.int32(COPYRIGHT_H // 2),
+        jnp.where(a < jnp.int32(12), jnp.int32(0), a - jnp.int32(12)),
+    )
+
+
+def advance_death_frame(no_game_scroll, sound_idx, sound_delay):
+    """One NTSC frame of the copyright counter and the sound cadence.
+
+    Ordered as the ROM frame is: the copyright counter sits just before the
+    vertical blank, the soundIdx test just after it, and the sound routine last.
+    `life_loss` therefore reads the soundIdx this frame *started* with, which is
+    why the note that ends the tune and the frame that takes the life are the
+    same frame.
+    """
+    # `dec noGameScroll / bne .endCopyright / dec noGameScroll` - the second dec
+    # steps over zero, so a stopped game can never restart itself by counting.
+    stepped = (no_game_scroll - jnp.int32(1)) & jnp.int32(0xFF)
+    stepped = jnp.where(stepped == jnp.int32(0), jnp.int32(0xFF), stepped)
+    scroll = jnp.where(no_game_scroll != jnp.int32(0), stepped, no_game_scroll)
+
+    # `lda soundIdx / cmp #SOUND_FALLING-1 / bne .slipDecrease`
+    life_loss = sound_idx == jnp.int32(SOUND_FALLING - 1)
+
+    # `ldx soundIdx / beq .noSound / inc soundDelay / lda soundDelay / and #$03 /
+    #  bne .skipNext / inc soundIdx`, then `lda SoundTab-1,x` - X is the index
+    # from *before* the increment, so the tune runs one frame past its last note.
+    playing = sound_idx != jnp.int32(0)
+    delay = jnp.where(playing, (sound_delay + jnp.int32(1)) & jnp.int32(0xFF), sound_delay)
+    idx = jnp.where(
+        playing & ((delay & jnp.int32(3)) == jnp.int32(0)),
+        sound_idx + jnp.int32(1),
+        sound_idx,
+    )
+    note = _SOUND_TAB[jnp.clip(sound_idx - jnp.int32(1), 0, len(SOUND_TAB) - 1)]
+    idx = jnp.where(playing & ((note & jnp.int32(0x80)) != jnp.int32(0)), jnp.int32(0), idx)
+    return scroll, idx, delay, life_loss
+
+
+# --- Static pits: sceneType 2 (tar) and 3 (swamp) ----------------------------
+# GroundTypeTab points both at the same playfield block:
+#
+#   .byte <[Pit - PF2PatTab] ; tar pit
+#   .byte <[Pit - PF2PatTab] ; swamp
+#
+# which is offset 16. Both entries are positive, so `lda GroundTypeTab,x /
+# bpl .noQuickSand` is taken: these two scenes never reach the quicksand code,
+# xPosQuickSand stays 0 and the shape is static. `.loopPF2Lst` then runs with
+# `adc #6` -> Y = 22 and X = 6, filling PF2Lst[6..0] from PF2PatTab[22..16], so
+# PF2Lst[i] is simply the i'th byte of `Pit`.
+PIT_PF2_LST = (0x00, 0x01, 0x03, 0x0F, 0x7F, 0xFF, 0xFF)
+
+# --- Composed-frame scanline budget -----------------------------------------
+# Every kernel from 3 to 9 decrements Harry's Y counter exactly once per
+# scanline - Kernel 6 included, by way of `tya / sec / sbc #8 / sta temp1`, which
+# is why ContKernel resumes with the right value. yPosHarry is therefore a plain
+# scanline counter and the mapping onto composed rows is one continuous line with
+# no per-band term anywhere.
+#
+# The line counts, read off the kernel structure and its own comments:
+KERNEL5_LINES = 7            # `ldx #6 / .loopGround` .. `bpl .loopGround`
+KERNEL6_LINES = 8            # "Kernel 6 (8 lines)", y counting 7 -> 0
+EXIT_HOLES_LINES = 1         # `.exitHoles` runs to its own `sta WSYNC`
+CONT_KERNEL_LINES = 2        # ContKernel's two `sta WSYNC`
+KERNEL7_LINES = 12           # "Kernel 7 (12 lines)", x counting 11 -> 0
+EXIT_LADDER_TOP_LINES = 1    # `.exitLadderTop` likewise
+KERNEL8_LINES = 15           # "Kernel 8 (15 lines)"
+KERNEL9_LINES = 16           # "Kernel 9 (16 lines)"
+
+# Harry standing on the jungle line has yPosHarry = JUNGLE_GROUND, and his feet -
+# pattern byte 0, drawn when the counter reaches 0 - land on the last line Kernel
+# 5 emits. That row is the anchor for the whole mapping; it is measured on the
+# reference frame and it is the only tune in the port.
+HARRY_FEET_OFFSET = -6
+
+# The lines the kernels emit for the ground band, top-down. Kernel 5's first line
+# carries the `ldx #$ff / stx PF0 / stx PF1 / stx PF2` all-solid writes before its
+# own `lda PF2Lst,x / sta PF2` overwrites PF2 further along the same scanline, so
+# those writes never occupy a line of their own: the band is fifteen lines, not
+# sixteen. PF2Lst[6] is $ff in any case, so dropping the synthetic line leaves
+# every rendered row byte-identical.
+#   7 lines  Kernel 5's `lda PF2Lst,x` with x counting 6 -> 0
+#   8 lines  Kernel 6's `lda PF2Lst,x` with x counting 0 -> 6; its last line
+#            exits on `bmi .exitHoles` before writing, so PF2Lst[6] is held.
+PIT_KERNEL5_ROWS = tuple(PIT_PF2_LST[i] for i in (6, 5, 4, 3, 2, 1, 0))
+PIT_KERNEL6_ROWS = tuple(PIT_PF2_LST[i] for i in (0, 1, 2, 3, 4, 5, 6)) + (PIT_PF2_LST[6],)
+PIT_PF2_ROWS = PIT_KERNEL5_ROWS + PIT_KERNEL6_ROWS
+PIT_BAND_H = len(PIT_PF2_ROWS)
+
+# `cpx #54 / tya / bne .endDoJump / jmp KilledHarry`: with ladderFlag zero the
+# fall is fatal at yPosHarry 54, which is JUNGLE_GROUND + 22.
+PIT_KILL_DEPTH = 54 - 32
+
+
+def pf2_open_columns(pf2_byte: int) -> np.ndarray:
+    """Screen columns a single reflected PF2 byte leaves uncovered.
+
+    Kernel 2 sets `lda #%001 / sta CTRLPF`, so the playfield is reflected, and
+    PF0/PF1 are held at $ff for the whole band. Only PF2 can open, and its eight
+    four-pixel groups run bit 0 at columns 48..51 up to bit 7 at 76..79, mirrored
+    back down over 80..111. A set bit is solid ground, a clear bit is pit.
+    """
+    open_columns = np.zeros(160, dtype=bool)
+    for bit in range(8):
+        if not (pf2_byte >> bit) & 1:
+            left = 48 + bit * 4
+            open_columns[left:left + 4] = True
+            right = 108 - bit * 4
+            open_columns[right:right + 4] = True
+    return open_columns
+
+
+PIT_OPEN_MASK = jnp.asarray(np.stack([pf2_open_columns(b) for b in PIT_PF2_ROWS]))
+
+
+def harry_feet_row_for_rom_y(rom_y: int, ground_y: int) -> int:
+    """The one mapping: composed row of Harry's feet for a given yPosHarry.
+
+    `feet_row = K + yPosHarry`, with K pinned by the standing position on the
+    jungle line - yPosHarry JUNGLE_GROUND puts his feet on Kernel 5's last row.
+    K works out to 92 for a ground_y of 130. Nothing about this depends on which
+    band Harry is in, because nothing in the kernels does either.
+    """
+    return int(ground_y) + HARRY_FEET_OFFSET - JUNGLE_GROUND + int(rom_y)
+
+
+def pit_band_top_row(ground_y: int) -> int:
+    """Screen row of the ground band's first line, i.e. Kernel 5's first.
+
+    Kernel 5 ends on the row Harry's feet occupy while standing, so its seven
+    lines are the seven ending there.
+    """
+    return harry_feet_row_for_rom_y(JUNGLE_GROUND, ground_y) - (KERNEL5_LINES - 1)
+
+
+def underground_floor_row(underground_y: int) -> int:
+    """Composed row Harry's feet rest on underground: K + UNDER_GROUND.
+
+    Counting the kernel budget down from Kernel 5's last line puts this two rows
+    above the end of Kernel 9, which is exactly where `K + 86` lands. The two
+    derivations are independent and they agree, which is what fixes the row.
+    """
+    return int(underground_y) + HARRY_FEET_OFFSET
+
+
+def underground_last_row(underground_y: int) -> int:
+    """Kernel 9's final scanline. yPosHarry 86 sits one line above it."""
+    return underground_floor_row(underground_y) + 1
+
+
+def pit_harry_blank_top_row(ground_y: int) -> int:
+    """First scanline on which the kernel stops putting Harry on the screen.
+
+    Kernel 5 runs `jsr DrawHarry` on each of its seven lines, and the setup line
+    above it writes no GRP0 at all, so it holds the latch from the DrawHarry that
+    precedes it. Everything down to the end of Kernel 5 shows Harry.
+
+    Kernel 6 opens every one of its eight iterations with
+
+        .loopHoles:
+            lda    #0               ; 2
+            sta    GRP0             ; 3
+
+    and `.exitHoles` repeats the pair, so GRP0 is zero for all eight lines. Harry
+    is not drawn there whatever the playfield holds, and that is a property of the
+    kernel, not of priority.
+
+    Below the band ContKernel takes over with `lda #$ff / sta PF1` and
+    `stx CTRLPF`, where X came from
+
+            lda    ladderFlag       ; 3                 calculate playfield reflection
+            and    #%000100         ; 2
+            eor    #%100101         ; 2
+
+    so bit 2 - playfield priority - is set for every scene whose ladderFlag is
+    zero. The static pits are exactly those scenes, so from here on a solid PF1
+    sits in front of Harry as well.
+
+    The two mechanisms meet with no gap, which makes this single row the point
+    where a sinking Harry stops being visible.
+    """
+    return pit_band_top_row(ground_y) + KERNEL5_LINES
+
+
+def scene_is_static_pit(room_byte: jnp.ndarray) -> jnp.ndarray:
+    """sceneType 2 (tar pit) and 3 (swamp) - the two static `Pit` scenes."""
+    pt = pit_code_u8(room_byte.astype(jnp.uint8))
+    return (pt == jnp.uint8(2)) | (pt == jnp.uint8(3))
+
+
+# --- Ground objects: logs ----------------------------------------------------
+# `ContRandom` puts every ground object here on entering a scene:
+# `lda #124 / sta xPosObject`. It is the left edge of the GRP1 box.
+ASM_OBJECT_START_X = 124
+ASM_SCREENWIDTH = 160
+
+# objectType ids: 0..3 are rolling logs, 4..5 stationary ones.
+ID_STATIONARY = 4
+
+# NuSize1Tab, resolved into the offsets the TIA's NUSIZ1 replicas land on. The
+# ROM never positions logs individually: it sets one xPosObject and lets the
+# hardware repeat the player, so the spacing is a property of the NUSIZ value.
+NUSIZ1_COPY_OFFSETS = (
+    (0,),          # ONE_COPY          - one rolling log
+    (0, 16),       # TWO_COPIES        - two rolling logs, close
+    (0, 32),       # TWO_WIDE_COPIES   - two rolling logs, medium
+    (0, 32, 64),   # THREE_MED_COPIES  - three rolling logs
+    (0,),          # ONE_COPY          - one stationary log
+    (0, 32, 64),   # THREE_MED_COPIES  - three stationary logs
+)
+LOG_MAX_COPIES = 3
+
+# `lda frameCnt / lsr / bcs .skipLogs` then `dex`: one pixel left every second
+# NTSC frame. One JAX step is two NTSC frames, so that is one pixel per step.
+LOG_MOVE_PX_PER_STEP = 1
+
+
+def log_left_edges(log_xs, logs_are_rolling, steps_elapsed, screen_width):
+    """Left edges of the log copies after `steps_elapsed` steps of rolling.
+
+    `ldx xPosObject / bne .skipResetLogs / ldx #SCREENWIDTH / dex` decrements the
+    shared x and turns 0 into SCREENWIDTH-1, which is a plain modular decrement.
+    Stationary logs never reach that code. The renderer and the collision test
+    both come through here, so the drawn logs are the collidable ones.
+    """
+    width = jnp.int32(screen_width)
+    travelled = steps_elapsed.astype(jnp.int32) * jnp.int32(LOG_MOVE_PX_PER_STEP)
+    base = jnp.mod(log_xs.astype(jnp.int32), width)
+    return jnp.where(logs_are_rolling, jnp.mod(base - travelled, width), base)
+
+
+# --- Ladder ------------------------------------------------------------------
+# climbPos is the ROM variable itself: 0 means "not on the ladder", otherwise it
+# runs from LADDER_TOP at the top rung down to LADDER_BOTTOM at the floor. It is
+# stored as-is here, so no rung counting has to be translated.
+LADDER_TOP = 11
+LADDER_BOTTOM = 22
+
+# `lda xPosHarry / sec / sbc #68 / cmp #15 / bcs .endStartClimb`: an unsigned
+# byte compare, so the window is the fifteen columns 68..82 and nothing else.
+LADDER_ENTRY_X_MIN = 68
+LADDER_ENTRY_X_SPAN = 15
+# `lda #SCREENWIDTH/2-4 / sta xPosHarry` snaps Harry to the ladder on entry.
+LADDER_SNAP_X = 76
+# `lda yPosHarry / cmp #84 / bcc .skipClimbUp`: only this close to the floor may
+# UP put Harry on the ladder from below.
+LADDER_ENTRY_FROM_BELOW_Y = 84
+# `.skipLadderBottom` writes `ldx #SCREENWIDTH/2+6 / stx yPosHarry`, which is 86,
+# the same UNDER_GROUND the climb arithmetic produces for climbPos 21.
+LADDER_BOTTOM_EXIT_Y = 86
+# `.notAtTop` leaves Harry one pixel above the jungle line and lets JumpTab take
+# over from index 1 on the following frame.
+LADDER_EXIT_Y = 31
+# `lda frameCnt / and #$07 / bne .skipAnimClimb`: one rung every eighth frame.
+LADDER_CLIMB_MASK = 0x07
+# `lda frameCnt / and #$03 / tax / lsr / bcs .endHarryId`: the walking block runs
+# when bit 0 of frameCnt is clear, and animates only when both low bits are.
+HARRY_MOVE_MASK = 0x03
+
+
+# --- Underground wall, from the ASM literals ---------------------------------
+# `Wall`, verbatim. All eight hardware bits are kept: bit 0 is clear in every
+# byte, and that always-clear bit is what leaves the one-pixel gap down the
+# column's right side. Trimming it would narrow the sprite.
+WALL_PATTERN = (
+    0b11111110, 0b10111010, 0b10111010, 0b10111010,
+    0b11111110, 0b11101110, 0b11101110, 0b11101110,
+    0b11111110, 0b10111010, 0b10111010, 0b10111010,
+    0b11111110, 0b11101110, 0b11101110, 0b11101110,
+)
+WALL_W = 8
+
+# `WallColor` is only fourteen bytes:
+#
+#   WallColor:
+#       .byte GREY, DARK_RED, DARK_RED, DARK_RED, GREY, DARK_RED, DARK_RED, DARK_RED
+#       .byte GREY, DARK_RED, DARK_RED, DARK_RED, GREY, DARK_RED
+#   RingColor:
+#       .byte DARK_RED, DARK_RED
+#
+# and the kernel's y = 14 and 15 reads run straight on into RingColor, whose two
+# bytes are DARK_RED as well. GREY therefore lands on indices 0, 4, 8 and 12 -
+# exactly the $fe bytes - so every full-width mortar course is grey and every
+# brick row is dark red. The row prepared before Kernel 8 is written DARK_RED
+# outright (`lda #DARK_RED / sta COLUP1`), which agrees with index 15 anyway.
+WALL_COLOR_GREY_INDICES = (0, 4, 8, 12)
+
+# Kernel 8 walks `(wallPatPtr),y` from 15 down to 0 and Kernel 9 walks
+# `(undrPatPtr),y` over the same range. In a ladder scene ContRandom points both
+# at `Wall` (`stx wallPatPtr` and `stx undrPatPtr`), so the column is the same
+# sixteen-row bitmap laid down twice, top-down, with no row repeated or dropped.
+WALL_KERNEL_COPIES = 2
+
+
+def wall_render_rows() -> tuple[tuple[int, bool], ...]:
+    """(pattern byte, row is grey) per screen row, top-down, for the whole wall.
+
+    The kernels count y down as the raster descends, so the first screen row is
+    `Wall[15]` and the last of each copy is `Wall[0]`.
+    """
+    rows = []
+    for _ in range(WALL_KERNEL_COPIES):
+        for y in range(len(WALL_PATTERN) - 1, -1, -1):
+            rows.append((WALL_PATTERN[y], y in WALL_COLOR_GREY_INDICES))
+    return tuple(rows)
+
+
+def climb_pos_to_rom_y(climb_pos):
+    """`lda climbPos / asl / sec / rol / adc #1` - yPosHarry from climbPos.
+
+    `asl` leaves 2c with the old bit 7 in carry, `sec` forces carry, `rol` gives
+    4c+1 and moves bit 7 of 2c into carry, and `adc #1` adds that carry back. For
+    every climbPos the ladder can hold, 2c stays under 128, so the carry into the
+    `adc` is clear and the result is 4c+2 - 46 at LADDER_TOP, 86 at
+    LADDER_BOTTOM-1, which is exactly UNDER_GROUND.
+    """
+    c = climb_pos.astype(jnp.int32) & jnp.int32(0xFF)
+    shifted = (c << jnp.int32(1)) & jnp.int32(0xFF)          # asl  (carry discarded by sec)
+    rolled = ((shifted << jnp.int32(1)) | jnp.int32(1)) & jnp.int32(0xFF)   # sec / rol
+    carry = (shifted >> jnp.int32(7)) & jnp.int32(1)         # rol's carry out
+    return (rolled + jnp.int32(1) + carry) & jnp.int32(0xFF)  # adc #1
+
+
+def rom_y_to_player_y(rom_y, consts):
+    """The Part 3 mapping: player_y = yPosHarry + (ground_y - JUNGLE_GROUND)."""
+    return rom_y.astype(jnp.float32) + jnp.float32(
+        float(consts.ground_y) - float(JUNGLE_GROUND)
+    )
 
 
 def _get_default_pitfall_asset_config() -> tuple:
@@ -162,33 +653,40 @@ def _get_default_pitfall_asset_config() -> tuple:
         {
             'name': 'harry_run',
             'type': 'group',
+            # ROM Harry0..Harry4. Filenames do not match those ids.
             'files': [
-                'harryrunning1.npy',
-                'harryrunning2.npy',
-                'harryrunning3.npy',
-                'harryrunning4.npy',
-                'harryrunning5.npy',
+                'harryrunning1.npy',  # Harry0
+                'harryrunning5.npy',  # Harry1
+                'harryrunning4.npy',  # Harry2
+                'harryrunning3.npy',  # Harry3
+                'harryrunning2.npy',  # Harry4
             ],
+        },
+        {
+            'name': 'harry_swing',
+            'type': 'group',
+            'files': ['harryswinging.npy'],  # Harry6
         },
         {
             'name': 'harry_climb',
             'type': 'group',
-            'files': ['harryclimb1.npy', 'harryclimb2.npy'],
+            'files': ['harryclimb2.npy', 'harryclimb1.npy'],  # Harry7, Harry8
         },
+        # harryjumping1.npy and harryjumping2.npy are byte-identical copies of
+        # harryrunning3 (Harry3) and harryrunning1 (Harry0), so they are not
+        # loaded: HarryPtrTab has no separate jump pattern.
+        # The scorpion has no capture entry: ScorpionColor is WHITE throughout,
+        # so a grab could only contribute shape, and Scorpion0/Scorpion1 give
+        # that exactly. See SCORPION_PATTERNS.
+        # ROM order, which the filenames invert: cobra0.npy captured Cobra1 and
+        # cobra1.npy captured Cobra0. `random2 & AnimateTab[ID_COBRA]` indexes
+        # this list, so listing them the other way round drew the wrong frame of
+        # the pair. Each capture's alpha is the pattern and its RGB is
+        # CobraColor; see COBRA_PATTERNS.
         {
-            'name': 'harry_jump',
+            'name': 'cobra',
             'type': 'group',
-            'files': ['harryjumping1.npy', 'harryjumping2.npy'],
-        },
-        {
-            'name': 'scorpion_left',
-            'type': 'group',
-            'files': ['scorpion_left1_alpha.npy', 'scorpion_left2_alpha.npy'],
-        },
-        {
-            'name': 'scorpion_right',
-            'type': 'group',
-            'files': ['scorpion_right1_alpha.npy', 'scorpion_right2_alpha.npy'],
+            'files': ['cobra1.npy', 'cobra0.npy'],
         },
     )
 
@@ -276,57 +774,35 @@ def room_hazards_from_room_byte(room_byte: jnp.ndarray) -> tuple[
     is_treasure_tar = pit == jnp.uint8(0b101)
     suppress = is_croc_room | is_treasure_tar
 
-    # Object code selects one of a few fixed templates.
-    log_count_u8 = jnp.where(
-        (obj == jnp.uint8(0)) | (obj == jnp.uint8(4)),
-        jnp.uint8(1),
-        jnp.where(
-            (obj == jnp.uint8(1)) | (obj == jnp.uint8(2)),
-            jnp.uint8(2),
-            jnp.where(
-                (obj == jnp.uint8(3)) | (obj == jnp.uint8(5)),
-                jnp.uint8(3),
-                jnp.uint8(0),
-            ),
-        ),
+    # NuSize1Tab decides how many copies of the log the hardware draws, and the
+    # NUSIZ value decides how far apart they sit. Both come from the object code,
+    # and every copy hangs off the one xPosObject that ContRandom set to 124.
+    counts = jnp.asarray(
+        [len(NUSIZ1_COPY_OFFSETS[i]) for i in range(len(NUSIZ1_COPY_OFFSETS))]
+        + [0] * (8 - len(NUSIZ1_COPY_OFFSETS)),
+        dtype=jnp.uint8,
     )
+    log_count_u8 = counts[obj.astype(jnp.int32)]
 
     has_logs = (log_count_u8 > jnp.uint8(0)) & (~suppress)
-    logs_are_rolling = (obj <= jnp.uint8(3)) & has_logs
+    # `cmp #ID_STATIONARY / bcs .skipLogs`: only object types 0..3 roll.
+    logs_are_rolling = (obj < jnp.uint8(ID_STATIONARY)) & has_logs
     log_count = has_logs.astype(jnp.int32) * log_count_u8.astype(jnp.int32)
 
-    # Rolling log templates (tighter two-log spacing).
-    roll_1 = jnp.array([128, 0, 0], dtype=jnp.int32)
-    roll_2_close = jnp.array([52, 75, 0], dtype=jnp.int32)
-    roll_2_wide = jnp.array([38, 122, 0], dtype=jnp.int32)
-    roll_3 = jnp.array([22, 78, 134], dtype=jnp.int32)
-
-    # Stationary log templates (keep unchanged).
-    stat_1 = jnp.array([130, 0, 0], dtype=jnp.int32)
-    stat_3 = jnp.array([16, 90, 130], dtype=jnp.int32)
-
-    log_xs_by_obj = jnp.where(
-        obj == jnp.uint8(0),
-        roll_1,
-        jnp.where(
-            obj == jnp.uint8(1),
-            roll_2_close,
-            jnp.where(
-                obj == jnp.uint8(2),
-                roll_2_wide,
-                jnp.where(
-                    obj == jnp.uint8(3),
-                    roll_3,
-                    jnp.where(
-                        obj == jnp.uint8(4),
-                        stat_1,
-                        jnp.where(obj == jnp.uint8(5), stat_3, jnp.zeros((3,), dtype=jnp.int32)),
-                    ),
-                ),
-            ),
-        ),
+    offsets = jnp.asarray(
+        [
+            list(NUSIZ1_COPY_OFFSETS[i]) + [0] * (LOG_MAX_COPIES - len(NUSIZ1_COPY_OFFSETS[i]))
+            if i < len(NUSIZ1_COPY_OFFSETS)
+            else [0] * LOG_MAX_COPIES
+            for i in range(8)
+        ],
+        dtype=jnp.int32,
     )
-    log_xs = jnp.where(has_logs, log_xs_by_obj, jnp.zeros((3,), dtype=jnp.int32))
+    log_xs_by_obj = jnp.mod(
+        jnp.int32(ASM_OBJECT_START_X) + offsets[obj.astype(jnp.int32)],
+        jnp.int32(ASM_SCREENWIDTH),
+    )
+    log_xs = jnp.where(has_logs, log_xs_by_obj, jnp.zeros((LOG_MAX_COPIES,), dtype=jnp.int32))
 
     has_fire = (obj == jnp.uint8(0b110)) & (~suppress)
     has_snake = (obj == jnp.uint8(0b111)) & (~suppress)
@@ -386,52 +862,77 @@ class PitfallState:
     down_pressed: chex.Array
     on_ladder: chex.Array
     current_ground_y: chex.Array 
+    # ROM xPosScorpion: the left edge of the 8-pixel GRP1 box, held integral.
     scorpion_x: chex.Array
-    scorpion_anim_idx: chex.Array
-    scorpion_anim_timer: chex.Array
     scorpion_facing_right: chex.Array
     touching_wood: chex.Array
     touching_rolling_wood: chex.Array
     rolling_wood_contact_x: chex.Array
     climb_active: chex.Array
-    ladder_step_idx: chex.Array
-    ladder_step_timer: chex.Array
-    run_startup_timer: chex.Array
-    run_anim_phase: chex.Array
-    run_anim_timer: chex.Array
+    # ROM climbPos: 0 off the ladder, else LADDER_TOP..LADDER_BOTTOM-1.
+    climb_pos: chex.Array
+    # ROM patIdHarry / frameCnt. One JAX step is two NTSC frames, so frame_cnt
+    # advances once per step and the run cycle ticks when frame_cnt is odd.
+    pat_id_harry: chex.Array
+    frame_cnt: chex.Array
     facing_left: chex.Array
-    log_push_remaining: chex.Array
-    ladder_exit_frames: chex.Array
+    # 0 while the game runs, 1 for the frozen KilledHarry sequence, 2 for the
+    # restart drop. 1 and 2 are the two halves of `lda noGameScroll / beq
+    # .processHarry`: in 1 Harry is skipped entirely, in 2 he is back under the
+    # jump table with nothing but JumpTab's trailing -1 moving him.
     respawn_phase: chex.Array
-    respawn_timer: chex.Array
-    respawn_target_x: chex.Array
-    respawn_target_y: chex.Array
     respawn_target_ground_y: chex.Array
+
+    # ROM noGameScroll, soundIdx and soundDelay. The first freezes the game and
+    # drives the copyright marquee, the other two time the death sequence.
+    no_game_scroll: chex.Array
+    sound_idx: chex.Array
+    sound_delay: chex.Array
+    # ROM yPosHarry, held only across the death sequence: frozen at the fatal
+    # frame's value so the `cmp #71` branch can read it, then overwritten with
+    # the restart value and counted up as the drop plays out.
+    restart_rom_y: chex.Array
 
     # Jump-only state: used for edge-triggered input and fixed airborne carry.
     jump_pressed_prev: chex.Array
     jump_lock_active: chex.Array
     jump_lock_vx: chex.Array
+    # ROM jumpIndex: 0 when no ground jump is running, else 1..JUMP_LEN.
+    jump_index: chex.Array
+
+    # The liana. lianaPosHi/lianaPosLo are the 16-bit swing oscillator; hmblAdd,
+    # hmblDir and lianaBottom are the three bytes `.swingLiana` derives from it
+    # every NTSC frame and the kernels then read. All five are plain ROM bytes,
+    # written nowhere but `.swingLiana`, so they start from cleared RAM and are
+    # never reset by a scene change or a restart.
+    liana_pos_hi: chex.Array
+    liana_pos_lo: chex.Array
+    hmbl_add: chex.Array
+    hmbl_dir: chex.Array
+    liana_bottom: chex.Array
+    # ROM atLiana (0 off the liana, 1 on it) and jumpMode. Reserved for the grab
+    # and release slices; nothing reads either yet.
+    at_liana: chex.Array
+    jump_mode: chex.Array
 
 class PitfallConstants(struct.PyTreeNode):
     screen_width: int = 160     # Atari 2600 horizontal resolution
     screen_height: int = 210   # Atari vertical resolution used in ALE
     ground_y: int = 130         # approximate ground line in pixels
-    underground_y: int = 180
+    # player_y of Harry's feet at UNDER_GROUND, on the one continuous scale:
+    # ground_y + (86 - 32) = 184. It is a logical coordinate, not a raster row;
+    # underground_floor_row turns it into one.
+    underground_y: int = 184
     player_start_x: int = 20    # where Harry starts (left side)
     player_start_y: int = 130  # same as ground_y (standing on ground)
 
-    # Max horizontal run speed. Tuned to match the rolling-log scroll speed
-    # implied by rolling_log_extra_step_period (1 px/frame + 1 px every N frames).
-    player_speed: float = 1.25  # pixels per frame horizontally
-    jump_velocity: float = -4.0  # (used by ladder-exit jump; keep stable)
+    # Horizontal run speed. NTSC Pitfall moves Harry 1px on even Atari frames
+    # (30 px/s at 60 Hz). One JAX step is two Atari frames, so this is 1 px/step.
+    player_speed: float = 1.0
     gravity: float = 0.55       # (global gravity for falls/ladder-exit; keep stable)
     fall_speed: float = 3.0    # terminal velocity cap on descent
 
-    # Ground-jump tuning (jump-only): longer airtime with similar peak height.
-    ground_jump_velocity: float = -3.62
-    ground_jump_gravity: float = 0.45
-    ground_jump_distance_px: float = 31.0
+    # The ground jump has no tuning constants: it replays JumpTab (see JUMP_TAB).
 
     fps: int = 30
     initial_time_seconds: int = 1200  # 20 minutes
@@ -443,16 +944,17 @@ class PitfallConstants(struct.PyTreeNode):
     ladder_x: int = 80
     ladder_width: int = 16
     ladder_opening_inset: int = 4  # px from the ladder sprite's left edge to the opening
-    ladder_entry_width: int = 10  # require Harry to be centered over the opening before upper ladder entry
-    ladder_top_peek_offset: int = 6  # keep most of Harry in the hole; face/shoulders emerge at top
     initial_score: int = 2000
     tunnel_wall_width: int = 8
-    wall_contact_overlap: int = 0  # keep Harry fully outside tunnel walls on both sides
-    right_wall_block_player_width: int = 9  # lets Harry stand closer when approaching a right-side wall
 
     # Side holes beside ladder (underground)
     hole_width: int = 12            # px (from ladder_with_pits sprite, cols 2-13 and 54-65)
     hole_gap_from_ladder: int = 12   # px floor bridge between ladder edge and hole
+
+    # HoleBoundsTab is tested against xPosHarry (the box's left edge) while the
+    # opening the player sees is centred on that box, so the drawn opening sits
+    # this many columns right of the table. Confirmed by decoding PF2PatTab.
+    hole_visible_offset_px: int = 4
 
     # Depth below the upper ground at which a fall switches from the standing
     # pose to Harry0's open-leg pose. ROM: 60 - JUNGLE_GROUND(32).
@@ -479,13 +981,14 @@ class PitfallConstants(struct.PyTreeNode):
     )
 
     # Stationary wood logs (upper ground hazard)
-    wood_drain_per_frame: int = 2  # score points drained each frame while touching any log
+    # DecScoreLo subtracts one point on every NTSC frame whose CXPPMM latch is
+    # set. A JAX step contains two such frames; the collision block counts them.
+    wood_drain_per_frame: int = 1
     wood_w: int = 6               # log width in px (from log sprite)
     wood_h: int = 14              # log height in px (from log sprite)
     wood_y_offset: int = 0         # fine-tune vertical placement relative to ground
     wood_visual_contact_pad_x: int = 3  # start log interaction pose slightly before full overlap
     wood_visual_contact_shift_x: int = -3  # shift visual slide trigger slightly left
-    rolling_log_extra_step_period: int = 4  # add 1px every N frames (e.g., N=4 => 1.25 px/frame)
 
     # Rolling logs only: use a slightly larger early-contact zone so Harry is
     # forced into the stable freeze/contact pose and can't comfortably pace a
@@ -500,57 +1003,644 @@ class PitfallConstants(struct.PyTreeNode):
     fire_hurt_cooldown_frames: int = 30  # ~1s at 30fps
     fire_respawn_y_offset: int = 20      # respawn above ground so gravity drops player
 
-    # Snake hazard (upper ground)
-    snake_w: int = 12
-    snake_h: int = 6
+    # Ground object x (ASM: lda #124 / sta xPosObject). Left edge of GRP1.
+    object_x: int = 124
+
+    # Snake / cobra hazard (upper ground). Geometry comes from COBRA_PATTERNS;
+    # the sprite files only supply the body colour.
+    snake_w: int = 8
+    snake_h: int = 16
     snake_hurt_cooldown_frames: int = 30
 
-    # Scorpion hazard (underground)
-    scorpion_spawn_x: int = 80
-    scorpion_w: int = 12
-    scorpion_h: int = 6
-    scorpion_y_offset: int = 0
-    scorpion_speed: float = 0.6
-    scorpion_anim_period: int = 6
+    # Scorpion hazard (underground). Geometry, cadence, animation and collision
+    # all come from SCORPION_PATTERNS and the ROM's own rules; the only tunable
+    # left is how long Harry is invulnerable after a hit.
+    # ContRandom: `ldx #SCREENWIDTH/2-4 / stx xPosScorpion` on every scene entry.
+    scorpion_spawn_x: int = 76
     scorpion_hurt_cooldown_frames: int = 30
-    # Additional hitbox shrink (pixels) applied to the tight visible-pixel bbox.
-    # Increasing these values makes scorpion deaths require more explicit contact.
-    scorpion_hit_inset_x: int = 2
-    # Vertical inset is applied from the top only by default, so the hitbox sits
-    # lower while keeping the bottom edge unchanged.
-    scorpion_hit_inset_top: int = 4.5
-    scorpion_hit_inset_bottom: int = 0
-    scorpion_hit_inset_y: int = 2  # backwards compat (unused by default)
+    # `lda frameCnt / and #$07 / bne .endMoveScorpion` moves it one pixel every
+    # eighth NTSC frame, which is one pixel every fourth JAX step.
+    scorpion_move_period_steps: int = 4
 
-    # Scorpion collision (jump-only work is elsewhere; this affects scorpion deaths only)
-    # Use circle-vs-circle collision to avoid corner-overlap deaths from AABBs.
-    # - `player_collision_radius_px` is Harry's collision circle radius
-    # - `scorpion_collision_radius_scale` scales scorpion radius from its hitbox size
-    player_collision_radius_px: float = 2.5
-    scorpion_collision_radius_scale: float = 0.7
-
-    # Log pushback when climbing a ladder
-    log_push_amount: float = 6.0    # total px to push Harry down on log hit
-    log_push_speed: float = 2.0     # px/frame push rate (≈3 frames for full push)
-    ladder_exit_grace_frames: int = 6  # preserve jump-out motion and block instant ladder recapture
-    ladder_exit_jump_speed: float = 1.35  # tuned so the exit arc lands on the inner ground rims near each hole
-    ladder_exit_initial_hop: float = 1.0  # minimal visual nudge to clear the ladder lip without doing the heavy lifting
-    normal_jump_horizontal_scale: float = 0.7  # keep standard jumps to ~70% of run-speed carry
-    death_pause_frames: int = 45  # ~1.5 seconds at 30 FPS
-    respawn_drop_speed: float = 1.0  # gentle deterministic fall during respawn animation
-    respawn_drop_spawn_y_offset: int = 20  # spawn this far above the upper ground line before drop-in
-    underground_respawn_x: int = 20  # left opening area for underground re-entry
-    underground_respawn_spawn_above_reveal: int = 0  # start at reveal edge (avoid visible drop-in)
+    # `lda #20 / sta xPosHarry` is the restart column for both branches, so this
+    # is the same 20 as player_start_x rather than a second tunable.
+    underground_respawn_x: int = 20
     underground_respawn_reveal_from_ground: int = 17  # reveal boundary is this many px below ground
     underground_respawn_reveal_y_offset: int = 1  # clip reveal just below the upper ledge
-    underground_respawn_wall_clearance: int = 2  # start just below the wall top rather than high above ground
 
-    # Rendering tune: negative moves sprite up (player_y is treated as bottom/feet).
-    harry_y_tune: int = -2
-    underground_harry_y_tune: int = 2  # push Harry slightly down only on lower ground
-    debug_render_hitboxes: bool = False  # render scorpion + feet debug overlays when True
-
+    # Visual datum: player_y is Harry's feet, and harry_box_top_row is the only
+    # place it reaches, so the drawing and the collision masks move together.
+    # One offset for the whole screen, because yPosHarry is one scanline counter.
+    harry_y_tune: int = HARRY_FEET_OFFSET
     ASSET_CONFIG: tuple = _get_default_pitfall_asset_config()
+
+
+# ROM Harry pattern ids (HarryPtrTab / ID_* in pitfall.asm).
+ID_KNEEING = 0
+ID_RUNNING4 = 4
+ID_STANDING = 5
+ID_SWINGING = 6
+ID_CLIMBING = 7
+
+
+# Ground-jump vertical profile, verbatim from JUMP_LEN / JumpTab in pitfall.asm.
+# The ROM starts a jump with `lda #1 / sta jumpIndex / dec yPosHarry`, then once
+# per NTSC frame runs `yPosHarry -= JumpTab[jumpIndex-1] / inc jumpIndex`, with
+# jumpIndex clamped at JUMP_LEN so the trailing -1 repeats until Harry is back
+# on the floor and `.stopJump` clears the index.
+JUMP_LEN = 32
+JUMP_TAB = (
+    1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1,
+    -1, 0, 0, 0, -1, 0, 0, -1, 0, -1, -1, -1, -1, -1, -1, -1,
+)
+_JUMP_TAB = jnp.asarray(JUMP_TAB, dtype=jnp.float32)
+
+
+def jump_table_subframe(y, jump_index, ground_y):
+    """Advance one Atari frame of the ROM ground jump.
+
+    `jump_index` is the ROM's jumpIndex: 0 when no jump is running, 1..32 while
+    one is. Returns the new y, the new index, and whether this subframe is the
+    one that put Harry back on `ground_y`.
+
+    An inactive jump passes straight through, which is what makes the second
+    subframe of a JAX step a no-op once the first one has already landed.
+    """
+    running = jump_index > jnp.int32(0)
+    delta = _JUMP_TAB[jnp.clip(jump_index - jnp.int32(1), 0, JUMP_LEN - 1)]
+    y_next = y - delta.astype(y.dtype)
+    landed = y_next >= ground_y
+    y_next = jnp.where(landed, ground_y, y_next)
+    index_next = jnp.where(
+        landed,
+        jnp.int32(0),
+        jnp.minimum(jump_index + jnp.int32(1), jnp.int32(JUMP_LEN)),
+    )
+    return (
+        jnp.where(running, y_next, y),
+        jnp.where(running, index_next, jump_index),
+        running & landed,
+    )
+
+
+# --- The liana ---------------------------------------------------------------
+# LianaTab holds the byte ProcessObjects writes straight into ENABL:
+#     ldy sceneType / lda LianaTab,y / sta ENABL
+# so the two entries are the register's own values, not a flag of this port's.
+LIANA_DISABLE = 0b00
+LIANA_ENABLE = 0b10
+
+# LianaTab, indexed by sceneType, verbatim from pitfall.asm:
+#     .byte DISABLE, DISABLE, ENABLE, ENABLE, ENABLE, DISABLE, ENABLE, DISABLE
+LIANA_TAB = (
+    LIANA_DISABLE,  # 0
+    LIANA_DISABLE,  # 1
+    LIANA_ENABLE,   # 2
+    LIANA_ENABLE,   # 3
+    LIANA_ENABLE,   # 4
+    LIANA_DISABLE,  # 5
+    LIANA_ENABLE,   # 6
+    LIANA_DISABLE,  # 7
+)
+_LIANA_TAB = jnp.asarray(LIANA_TAB, dtype=jnp.uint8)
+
+# `ldy #$f0` / `ldy #$10`: the HMBL nibble the kernels write on the scanlines
+# where the liana accumulator carries. $f0 moves the ball one pixel right, $10
+# one pixel left.
+HMBL_DIR_RIGHT = 0xF0
+HMBL_DIR_LEFT = 0x10
+
+
+def liana_swing_frame(pos_hi, pos_lo):
+    """One NTSC frame of `.swingLiana`, byte for byte.
+
+        lda    lianaPosLo
+        asl
+        lda    lianaPosHi
+        rol
+        bpl    .skipNeg
+        eor    #$ff
+    .skipNeg:
+        sta    hmblAdd
+        ldy    #$f0
+        lda    lianaPosHi
+        bmi    .skipMoveLeft
+        ldy    #$10
+    .skipMoveLeft:
+        sty    hmblDir
+        sec
+        lda    #143
+        sbc    hmblAdd
+        clc
+        adc    lianaPosLo
+        sta    lianaPosLo
+        bcc    .skipAddHi
+        lda    lianaPosHi
+        adc    #3
+        sta    lianaPosHi
+    .skipAddHi:
+        lda    hmblAdd
+        lsr
+        lsr
+        lsr
+        cmp    #6-1
+        bcs    .limitBottom
+        lda    #6
+    .limitBottom:
+        adc    #4
+        sta    lianaBottom
+
+    Both shifts are accumulator shifts, not read-modify-write on the two bytes,
+    so the doubling exists only to make hmblAdd: lianaPosHi and lianaPosLo keep
+    their own values until the `adc` pair below writes them.
+
+    Returns (pos_hi, pos_lo, hmbl_add, hmbl_dir, liana_bottom), all uint8.
+    """
+    hi = pos_hi.astype(jnp.int32) & jnp.int32(0xFF)
+    lo = pos_lo.astype(jnp.int32) & jnp.int32(0xFF)
+
+    # `asl` leaves lianaPosLo's bit 7 in the carry and `rol` shifts it into A,
+    # so this is the top byte of the 16-bit position doubled.
+    doubled = ((hi << jnp.int32(1)) | (lo >> jnp.int32(7))) & jnp.int32(0xFF)
+    # `eor #$ff` is a one's complement, so $80 folds to $7f, not to $80. That
+    # caps hmblAdd at 127 and is why the subtract below can never borrow.
+    hmbl_add = jnp.where(doubled >= jnp.int32(0x80), doubled ^ jnp.int32(0xFF), doubled)
+
+    # `bmi` tests lianaPosHi itself, one bit to the left of the sign the fold
+    # above used, so the direction flips half a swing away from the angle's fold.
+    hmbl_dir = jnp.where(
+        hi >= jnp.int32(0x80), jnp.int32(HMBL_DIR_RIGHT), jnp.int32(HMBL_DIR_LEFT)
+    )
+
+    # `clc` discards the carry the subtract produced, so the only carry that
+    # survives is this addition's.
+    total = (jnp.int32(143) - hmbl_add) + lo
+    lo_next = total & jnp.int32(0xFF)
+    carry = total > jnp.int32(0xFF)
+    # `adc #3` is reached only when that carry is set, and it is still set when
+    # the instruction runs, so the high byte gains four.
+    hi_next = jnp.where(carry, (hi + jnp.int32(4)) & jnp.int32(0xFF), hi)
+
+    # `cmp #6-1` leaves the carry set from 5 upwards, and `lda #6` on the other
+    # path keeps it clear, so `adc #4` is either q+5 or a flat 10.
+    q = hmbl_add >> jnp.int32(3)
+    liana_bottom = jnp.where(q >= jnp.int32(5), q + jnp.int32(5), jnp.int32(10))
+
+    return (
+        hi_next.astype(jnp.uint8),
+        lo_next.astype(jnp.uint8),
+        hmbl_add.astype(jnp.uint8),
+        hmbl_dir.astype(jnp.uint8),
+        liana_bottom.astype(jnp.uint8),
+    )
+
+
+# --- The liana raster, generated across Kernels 1-4 --------------------------
+# The liana is the TIA ball. Nothing gives it an absolute column per frame: the
+# kernels only nudge it, one pixel at a time, through HMBL and HMOVE. Every
+# nudge is driven by the same accumulator, `hmblSum`, which the vertical blank
+# leaves at zero (`stx hmblSum` with x counting down to 0):
+#
+#     clc / lda hmblSum / adc hmblAdd / sta hmblSum
+#     bcc .noMoveN / lda hmblDir
+#     sta HMBL ... sta WSYNC / sta HMOVE
+#
+# so accumulator step i moves the ball on the scanline that step i's HMOVE
+# starts, and the displacement after i steps is just the number of carries,
+# floor(i * hmblAdd / 256). There are 83 accumulator updates spread over an
+# 84-line band - the band's first line shows the ball still on its anchor,
+# because update 1 runs in that line's own body and only lands with the HMOVE
+# that opens the second line:
+#
+#   Kernel 1                      31   .loopBranches, y 31 -> 1
+#   prepare Kernel 2               1   `sty HMBL` at .noMove1
+#   Kernel 2                       4   .loopLianaPos, two updates per iteration
+#   the two `jsr DrawLiana` lines  2
+#   Kernel 3                      21   .loopLianaHarry, x 20 -> 0
+#   Kernel 4                      24   .loopEndLiana, x 23 -> 0
+#                                 --
+#                                 83 updates, landing on band lines 2..84
+#
+# The band's last line is the one before Kernel 5's first. Kernel 5 opens on
+# row 117, not 118: the ground artwork's first bright row is raster row 117
+# (backdrop asset, row 116 is still trunk-and-sky), and the ROM run in ALE puts
+# the ball's last enabled scanline at row 116 - lianaBottom, which is only
+# consistent with the band ending on 116. So the top line is 117 - 84 = 33.
+# ALE confirms the whole mapping directly: with hmblAdd 89 / hmblDir $f0 the
+# real cart draws the rope at column 78 + floor((row-33)*89/256) on every
+# visible row, an exact fit with zero error.
+LIANA_TOP_ROW = 33
+LIANA_ROWS = 84
+
+# `sta RESBL` only ever runs in ContKernel, below the liana, so the ball enters
+# every Kernel 1 at the same column and the anchor is a constant. ContKernel is
+# entered at cycle 6 of its line (`sta HMOVE / jmp ContKernel` after the
+# preceding WSYNC) and runs COLUBK, COLUPF, GRP1, PF1, PF2, CTRLPF, temp1 and
+# the `lda #$90 / sta.w HMBL` pair before `sta RESBL` finishes on cycle 45 =
+# colour clock 135, so the ball's counter latches at screen column 135-68+4 =
+# 71, and the HMOVE that opens the next line applies the $90 nibble, -7,
+# moving the ball seven pixels right: 71 + 7 = 78. Kernel 7's `sta HMCLR`
+# clears the nibble before another HMOVE can repeat it, and nothing else
+# touches the ball's position before the next frame's Kernel 1, so 78 is the
+# anchor. Measured on the real cart in ALE the fit is exact: at hmblAdd 89
+# the rope runs column 92 at row 74 to column 101 at row 100, which is
+# 78 + floor((row-33)*89/256) with zero error on every row.
+#
+# `.skipSwingHarry` puts an attached Harry at `75 +/- (hmblAdd >> 2)` - three
+# columns to the left of the anchor. That offset is the ROM's own: Harry6's
+# raised hand occupies box columns 0-1, so the +3 puts the ball on the hand
+# (the ball sits at box column 1..3 across the phases, touching the hand or
+# one pixel from it, exactly as the original raster draws it).
+LIANA_ANCHOR_X = 78
+
+# `.skipSwingHarry`'s own literal: `adc #75` (both signs share it). Harry's
+# attached column comes from here, not from the ball anchor above.
+LIANA_HARRY_X = 75
+
+# `lda #%101 / sta CTRLPF` and `lda #%001 / sta CTRLPF` both leave the ball-size
+# field (bits 4-5) clear, so the rope is one colour clock wide the whole way down.
+LIANA_W = 1
+
+# The ball takes COLUPF. `.loopColors` leaves it at ColorTab+2, the leaves
+# colour, so the rope is green for the whole of Kernel 1 and the prepare line
+# (band lines 1..32 = rows 33..64). The line that opens Kernel 2 loads
+# ColorTab+5, the branch and log colour (`lda colorLst+5 / sta COLUPF`), which
+# then holds until Kernel 5: brown from row 65 down. ALE confirms both: the
+# real cart's rope pixels are $D2 dark green on rows up to 64 and $10 brown
+# from row 65. In Kernel 1 CTRLPF is %101 - playfield priority on - so the
+# leaves cover the green rope, and the branches (players) sit above the ball
+# as well; the green section only shows where the scanline is bare background.
+LIANA_BROWN_TOP_ROW = 65
+
+# CrocoTab is 1 for sceneType 4 alone, and that branch of ProcessObjects ends
+# with `lda objectType / sta ENABL`, overwriting the LianaTab byte. So a croco
+# scene carries a liana only when objectType has bit 1 set.
+CROCO_SCENE = 4
+
+_LIANA_ROW_STEPS = jnp.arange(LIANA_ROWS, dtype=jnp.int32)
+
+
+def liana_column(step, hmbl_add, hmbl_dir):
+    """Ball column `step` accumulator steps into the band.
+
+    floor(step * hmblAdd / 256) is the carry count, and hmblDir decides which way
+    each carry moves it: $f0 is one pixel right, $10 one pixel left.
+    """
+    displacement = (
+        jnp.maximum(step, jnp.int32(0)) * hmbl_add.astype(jnp.int32)
+    ) >> jnp.int32(8)
+    moving_right = hmbl_dir.astype(jnp.int32) == jnp.int32(HMBL_DIR_RIGHT)
+    return jnp.int32(LIANA_ANCHOR_X) + jnp.where(
+        moving_right, displacement, -displacement
+    )
+
+
+def liana_last_row(liana_bottom):
+    """Last row the ball is still enabled on.
+
+    Kernel 4 counts x from 23 down to 0, its 24 HMOVEs opening rows 93..116, and
+    runs `cpx lianaBottom / bcs .skipDisable / sta ENABL` in each row's blank, so
+    the write lands before the visible part of the row it belongs to and the last
+    row that still shows the ball is 116 - lianaBottom (ALE: lianaBottom 10, 12,
+    13, 16 and 17 end the drawn rope on rows 106, 104, 103, 100 and 99).
+    """
+    return jnp.int32(LIANA_TOP_ROW + LIANA_ROWS - 1) - liana_bottom.astype(jnp.int32)
+
+
+def liana_enabled(room_byte):
+    """ENABL for this scene: LianaTab, then the croco scene's override."""
+    scene = pit_code_u8(room_byte).astype(jnp.int32)
+    from_tab = _LIANA_TAB[scene] != jnp.uint8(0)
+    object_bit = (obj_code_u8(room_byte).astype(jnp.int32) & jnp.int32(0x02)) != 0
+    return jnp.where(scene == jnp.int32(CROCO_SCENE), object_bit, from_tab)
+
+
+# Harry occupies a fixed 8-column x 22-row hardware player box: GRP0 is eight
+# bits wide, NUSIZ0 is ONE_COPY so one bit is one screen pixel, and HARRY_H is
+# the kernel's row budget.
+HARRY_W = 8
+HARRY_H = 22
+
+# Harry0..Harry8, transcribed from pitfall.asm. Each tuple keeps the ROM's own
+# byte order, so index 0 is the BOTTOM row of the pose: the kernel reads the
+# pattern with `dey / cpy #HARRY_H / lda (harryPatPtr),y`, counting the pointer
+# down as the raster counts down the screen. NumPy images are top-down, which
+# is why harry_pattern_bitmap reverses the tuple.
+#
+# Harry8 is only 21 bytes in the ROM; its 22nd row is BranchTab's first byte,
+# which the assembler places immediately after it. That byte is included here.
+HARRY_PATTERNS = (
+    (   # Harry0 - airborne / kneeing
+        0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00110011,
+        0b01110010, 0b11011010, 0b00011110, 0b00011100, 0b00011000, 0b01011000,
+        0b01011000, 0b01111100, 0b00111110, 0b00011010, 0b00011000, 0b00010000,
+        0b00011000, 0b00011000, 0b00011000, 0b00000000,
+    ),
+    (   # Harry1 - running
+        0b00000000, 0b10000000, 0b10000000, 0b11000011, 0b01100010, 0b01100010,
+        0b00110110, 0b00111110, 0b00011100, 0b00011000, 0b00011000, 0b00111100,
+        0b00111110, 0b00111010, 0b00111000, 0b00011000, 0b00011000, 0b00010000,
+        0b00011000, 0b00011000, 0b00011000, 0b00000000,
+    ),
+    (   # Harry2 - running
+        0b00010000, 0b00100000, 0b00100010, 0b00100100, 0b00110100, 0b00110010,
+        0b00010110, 0b00011110, 0b00011100, 0b00011000, 0b00011000, 0b00011100,
+        0b00011100, 0b00011000, 0b00011000, 0b00011000, 0b00011000, 0b00010000,
+        0b00011000, 0b00011000, 0b00011000, 0b00000000,
+    ),
+    (   # Harry3 - running / one pixel above the jungle floor
+        0b00001100, 0b00001000, 0b00101000, 0b00101000, 0b00111110, 0b00001010,
+        0b00001110, 0b00011100, 0b00011000, 0b00011000, 0b00011100, 0b00011100,
+        0b00011000, 0b00011000, 0b00011000, 0b00011000, 0b00011000, 0b00010000,
+        0b00011000, 0b00011000, 0b00011000, 0b00000000,
+    ),
+    (   # Harry4 - running
+        0b00000000, 0b00000010, 0b01000011, 0b01000100, 0b01110100, 0b00010100,
+        0b00011100, 0b00011100, 0b00011000, 0b00011000, 0b00011000, 0b00111100,
+        0b00111110, 0b00111010, 0b00111000, 0b00011000, 0b00011000, 0b00010000,
+        0b00011000, 0b00011000, 0b00011000, 0b00000000,
+    ),
+    (   # Harry5 - standing
+        0b00011000, 0b00010000, 0b00011100, 0b00011000, 0b00011000, 0b00011000,
+        0b00011000, 0b00011000, 0b00011000, 0b00011000, 0b00011000, 0b00011000,
+        0b00011100, 0b00011110, 0b00011010, 0b00011000, 0b00011000, 0b00010000,
+        0b00011000, 0b00011000, 0b00011000, 0b00000000,
+    ),
+    (   # Harry6 - swinging on the liana
+        0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000,
+        0b01100011, 0b11110010, 0b11110110, 0b11011100, 0b11000000, 0b11000000,
+        0b11000000, 0b11000000, 0b11000000, 0b11110000, 0b11010000, 0b10010000,
+        0b11010000, 0b11010000, 0b11000000, 0b00000000,
+    ),
+    (   # Harry7 - climbing
+        0b00110000, 0b00010000, 0b00010000, 0b00010000, 0b00010110, 0b00010100,
+        0b00010100, 0b00010110, 0b00010010, 0b00010110, 0b00011110, 0b00011100,
+        0b00011000, 0b00111000, 0b00111000, 0b00111100, 0b00011110, 0b00011010,
+        0b00000010, 0b00011000, 0b00011000, 0b00011000,
+    ),
+    (   # Harry8 - climbing (last byte is BranchTab[0])
+        0b00001100, 0b00001000, 0b00001000, 0b00001000, 0b01101000, 0b00101000,
+        0b00101000, 0b01101000, 0b01001000, 0b01101000, 0b01111000, 0b00111000,
+        0b00011000, 0b00011100, 0b00011100, 0b00111100, 0b01111000, 0b01011000,
+        0b01000000, 0b00011000, 0b00011000, 0b00011000,
+    ),
+)
+
+
+def harry_pattern_bitmap(pattern_index: int) -> np.ndarray:
+    """One ROM pattern as a top-down HARRY_H x HARRY_W boolean bitmap."""
+    rows = HARRY_PATTERNS[pattern_index][::-1]
+    return np.array(
+        [[bool((row >> (HARRY_W - 1 - col)) & 1) for col in range(HARRY_W)] for row in rows],
+        dtype=bool,
+    )
+
+
+def harry_pattern_bounds(pattern_index: int) -> tuple[int, int, int, int]:
+    """(first_row, last_row, first_col, last_col) of a pose inside its box.
+
+    These are what give each pose its ROM padding: Harry0 for instance ends at
+    row 16, five rows above the baseline, because its jumping legs are drawn
+    tucked up.
+    """
+    bitmap = harry_pattern_bitmap(pattern_index)
+    rows = np.flatnonzero(bitmap.any(axis=1))
+    cols = np.flatnonzero(bitmap.any(axis=0))
+    return int(rows[0]), int(rows[-1]), int(cols[0]), int(cols[-1])
+
+
+def harry_pattern_collision_box(pattern_index: int, reflected: bool = False) -> tuple[int, int, int, int]:
+    """Half-open [x0, x1) x [y0, y1) bounds of a pose's lit pixels in its box.
+
+    Coordinates are local to the 8x22 player box: column 0 is the box's left
+    edge and row 0 its top row. REFP0 maps column c to HARRY_W-1-c without
+    moving the box, so reflecting a span [c0, c1] gives [W-1-c1, W-1-c0] and
+    leaves the rows alone.
+    """
+    row0, row1, col0, col1 = harry_pattern_bounds(pattern_index)
+    if reflected:
+        col0, col1 = HARRY_W - 1 - col1, HARRY_W - 1 - col0
+    return col0, col1 + 1, row0, row1 + 1
+
+
+# [reflected][pattern] -> (x0, x1, y0, y1), all local to the player box.
+HARRY_COLLISION_BOXES = tuple(
+    tuple(harry_pattern_collision_box(i, reflected) for i in range(len(HARRY_PATTERNS)))
+    for reflected in (False, True)
+)
+_HARRY_COLLISION_BOXES = jnp.asarray(HARRY_COLLISION_BOXES, dtype=jnp.int32)
+
+# [reflected][pattern] -> the HARRY_H x HARRY_W lit-pixel mask itself.
+_HARRY_BITMAPS = jnp.asarray(
+    np.stack(
+        [
+            np.stack(
+                [
+                    harry_pattern_bitmap(i)[:, ::-1] if r else harry_pattern_bitmap(i)
+                    for i in range(len(HARRY_PATTERNS))
+                ]
+            )
+            for r in (False, True)
+        ]
+    )
+)
+
+
+def harry_box_top_row(player_y, current_ground_y, consts):
+    """Screen row of Harry's box top row.
+
+    The single place that maps player_y onto the raster. The renderer and the
+    collision masks both go through it, so the pixels a player sees are exactly
+    the pixels that can be hit.
+
+    One offset, HARRY_FEET_OFFSET, for the whole screen: `feet_row = K + yPosHarry`
+    is what the kernels do, so a band change must not move Harry by so much as a
+    row. current_ground_y is accepted and discarded on purpose - branching on it
+    is what used to teleport him twelve rows on the frame he reached the
+    underground floor.
+    """
+    del current_ground_y
+    return player_y.astype(jnp.int32) - jnp.int32(HARRY_H - 1) + jnp.int32(
+        int(consts.harry_y_tune)
+    )
+
+
+def harry_collision_bounds(player_x, box_top, pattern_index, reflected):
+    """Harry's lit pixels in world space, as half-open [x0, x1) x [y0, y1).
+
+    player_x is the ROM's xPosHarry, the left edge of the player box, so a box
+    column c sits at player_x + c. `box_top` comes from harry_box_top_row.
+    """
+    box = _HARRY_COLLISION_BOXES[reflected.astype(jnp.int32), pattern_index]
+    left = player_x.astype(jnp.int32)
+    top = box_top.astype(jnp.int32)
+    return left + box[0], left + box[1], top + box[2], top + box[3]
+
+
+def liana_hit_harry(
+    hmbl_add, hmbl_dir, liana_bottom, enabled, harry_x, box_top, pattern_index, reflected
+):
+    """hitLiana - CXP0FB bit 6 - for one rendered raster.
+
+        jsr    DrawHarry
+        ldx    CXP0FB-$30
+        stx    hitLiana
+
+    The latch is the ball against GRP0, so this walks Harry's own box: for each of
+    its 22 rows it generates that scanline's ball column from the same accumulator
+    the renderer uses and asks whether the pose has a lit pixel there. No radius,
+    no rectangle - one ball pixel against one sprite pixel.
+
+    `sta CXCLR` runs on the line that opens Kernel 3, so the ROM only counts rows
+    71 down. That bound never bites: Harry's box top is 71 + yPosHarry, so it is
+    never above row 71, and the ball is already disabled below row 106.
+    """
+    bitmap = _HARRY_BITMAPS[reflected.astype(jnp.int32), pattern_index]
+    rows = box_top.astype(jnp.int32) + jnp.arange(HARRY_H, dtype=jnp.int32)
+    step = rows - jnp.int32(LIANA_TOP_ROW)
+    column = liana_column(step, hmbl_add, hmbl_dir)
+    lit_rope = (step >= jnp.int32(0)) & (rows <= liana_last_row(liana_bottom))
+    box_column = column - harry_x.astype(jnp.int32)
+    inside_box = (box_column >= jnp.int32(0)) & (box_column < jnp.int32(HARRY_W))
+    lit_harry = bitmap[
+        jnp.arange(HARRY_H, dtype=jnp.int32), jnp.clip(box_column, 0, HARRY_W - 1)
+    ]
+    return enabled & jnp.any(lit_rope & inside_box & lit_harry)
+
+
+def player_object_pixels_collide(harry_bitmap, harry_x, harry_top, object_bitmap, object_x, object_top):
+    """CXPPMM: true when a lit pixel of each object shares a screen coordinate.
+
+    Walks Harry's fixed-size box and samples the object's box at the matching
+    world position, so the shapes stay static for jit and vmap. Anything that
+    falls outside the object's box is masked off rather than wrapped.
+    """
+    dy = harry_top.astype(jnp.int32) - object_top.astype(jnp.int32)
+    dx = harry_x.astype(jnp.int32) - object_x.astype(jnp.int32)
+    object_h, object_w = object_bitmap.shape[-2], object_bitmap.shape[-1]
+
+    rows = jnp.arange(harry_bitmap.shape[-2], dtype=jnp.int32)[:, None] + dy
+    cols = jnp.arange(harry_bitmap.shape[-1], dtype=jnp.int32)[None, :] + dx
+    inside = (rows >= 0) & (rows < object_h) & (cols >= 0) & (cols < object_w)
+    sampled = object_bitmap[
+        jnp.clip(rows, 0, object_h - 1), jnp.clip(cols, 0, object_w - 1)
+    ]
+    return jnp.any(harry_bitmap & sampled & inside)
+
+
+def harry_display_facing_left(state) -> chex.Array:
+    """The facing the renderer will use, so collision can use the same one."""
+    moving = jnp.abs(state.player_vx) > jnp.asarray(0.0, dtype=jnp.float32)
+    return jnp.where(moving, state.player_vx < 0.0, state.facing_left)
+
+
+# The scorpion is a GRP1 object drawn with NUSIZ1 = ONE_COPY in the underground
+# kernel, so it is eight screen pixels wide, inside the 16-row underground
+# object box. Like Harry's, each tuple is the ROM's byte order: index 0 is the
+# bottom row. ScorpionColor is WHITE for all eleven of its rows, so the sprite
+# carries no colour information beyond that.
+SCORPION_W = 8
+SCORPION_H = 16
+SCORPION_PATTERNS = (
+    (   # Scorpion0 - 11 occupied rows
+        0b10000101, 0b00110010, 0b00111101, 0b01111000, 0b11111000, 0b11000110,
+        0b10000010, 0b10010000, 0b10001000, 0b11011000, 0b01110000, 0b00000000,
+        0b00000000, 0b00000000, 0b00000000, 0b00000000,
+    ),
+    (   # Scorpion1 - 10 occupied rows
+        0b01001001, 0b00110011, 0b00111100, 0b01111000, 0b11111010, 0b11000100,
+        0b10010010, 0b10001000, 0b11011000, 0b01110000, 0b00000000, 0b00000000,
+        0b00000000, 0b00000000, 0b00000000, 0b00000000,
+    ),
+)
+
+
+def scorpion_pattern_bitmap(pattern_index: int, reflected: bool = False) -> np.ndarray:
+    """One ROM pattern as a top-down SCORPION_H x SCORPION_W boolean bitmap."""
+    rows = SCORPION_PATTERNS[pattern_index][::-1]
+    bitmap = np.array(
+        [[bool((row >> (SCORPION_W - 1 - col)) & 1) for col in range(SCORPION_W)] for row in rows],
+        dtype=bool,
+    )
+    return bitmap[:, ::-1] if reflected else bitmap
+
+
+_SCORPION_BITMAPS = jnp.asarray(
+    np.stack(
+        [
+            np.stack([scorpion_pattern_bitmap(i, r) for i in range(len(SCORPION_PATTERNS))])
+            for r in (False, True)
+        ]
+    )
+)
+
+
+def scorpion_box_top_row(underground_y: int) -> int:
+    """Screen row of the object box's top row.
+
+    Kernel 9 walks `(undrPatPtr),y` from 15 down to 0 as the raster descends, so
+    pattern index 0 - the bottom row - lands on the underground floor, the same
+    row Harry's feet rest on. That is a raster row, so it comes from
+    underground_floor_row rather than from the logical coordinate.
+    """
+    return underground_floor_row(underground_y) - (SCORPION_H - 1)
+
+
+# The cobra is a GRP1 object drawn with NUSIZ1 = ONE_COPY, so it is eight
+# screen pixels wide inside the 16-row ground-object box. Cobra0/Cobra1 are
+# listed bottom row first, matching Harry and the scorpion. CobraColor notes
+# that only 14 of the 16 rows are occupied.
+COBRA_W = 8
+COBRA_H = 16
+COBRA_PATTERNS = (
+    (   # Cobra0
+        0b00000000, 0b11111110, 0b11111001, 0b11111001, 0b11111001, 0b11111001,
+        0b01100000, 0b00010000, 0b00001000, 0b00001100, 0b00001100, 0b00001000,
+        0b00111000, 0b00110000, 0b01000000, 0b00000000,
+    ),
+    (   # Cobra1
+        0b00000000, 0b11111110, 0b11111001, 0b11111001, 0b11111010, 0b11111010,
+        0b01100000, 0b00010000, 0b00001000, 0b00001100, 0b00001100, 0b00001000,
+        0b00111000, 0b00110000, 0b10000000, 0b00000000,
+    ),
+)
+
+
+def cobra_pattern_bitmap(pattern_index: int) -> np.ndarray:
+    """One ROM pattern as a top-down COBRA_H x COBRA_W boolean bitmap."""
+    rows = COBRA_PATTERNS[pattern_index][::-1]
+    return np.array(
+        [[bool((row >> (COBRA_W - 1 - col)) & 1) for col in range(COBRA_W)] for row in rows],
+        dtype=bool,
+    )
+
+
+_COBRA_BITMAPS = jnp.asarray(
+    np.stack([cobra_pattern_bitmap(i) for i in range(len(COBRA_PATTERNS))])
+)
+
+
+def cobra_box_top_row(ground_y: int) -> int:
+    """Screen row of the 16-row cobra box's top.
+
+    The existing 8x14 draw put the last occupied row on `ground_y` via
+    `ground_y - 14 + 1`. The ROM box adds one empty pattern row above and
+    below that band, so the 16-row origin is one row above the old crop.
+    """
+    return int(ground_y) - (COBRA_H - 2)
+
+
+def cobra_animation_frame(time_left, timer_started, consts, anim_bit4):
+    """Incoming `random2 & OBJECT_H` frame: 0 for Cobra0, 1 for Cobra1.
+
+    The renderer and collision both go through this so CXPPMM sees the same
+    bits that were on screen. `time_left` must be the incoming state's value;
+    decrementing it first would sample the next LFSR step.
+    """
+    total = jnp.int32(int(consts.initial_time_seconds) * int(consts.fps))
+    elapsed = jnp.maximum(total - time_left.astype(jnp.int32), jnp.int32(0))
+    elapsed = elapsed * timer_started.astype(jnp.int32)
+    return anim_bit4[jnp.mod(elapsed, jnp.int32(anim_bit4.shape[0]))]
 
 
 def is_falling_through_hole(state, consts: PitfallConstants) -> chex.Array:
@@ -571,6 +1661,71 @@ def is_falling_through_hole(state, consts: PitfallConstants) -> chex.Array:
         & (state.player_y > upper_ground)
         & (state.player_vy >= jnp.asarray(0.0, dtype=jnp.float32))
     )
+
+
+def harry_display_pat_id(state, consts: PitfallConstants, touching_wood=None) -> chex.Array:
+    """ROM patIdHarry display selection from yPosHarry, not a blanket airborne rule.
+
+    After the run cycle, the ROM does:
+
+      y == 31              -> Harry3   (one pixel above jungle ground)
+      y == 32 or y == 86   -> keep the ground run/stand id
+      y < 32               -> Harry0
+      y >= 60              -> Harry0
+      32 < y < 60, no climb -> Harry5
+
+    Our player_y is feet, ground_y is jungle floor. rel = player_y - ground_y
+    maps onto (yPosHarry - JUNGLE_GROUND), so y==31 is rel in [-1, 0) and
+    y>=60 is rel >= 28. The 32<y<60 band is gated by is_falling_through_hole
+    so a rising ladder-exit hop is not treated as a hole fall.
+    """
+    hit_log = state.touching_wood | state.touching_rolling_wood
+    if touching_wood is not None:
+        hit_log = touching_wood
+
+    moving_h = jnp.abs(state.player_vx) > jnp.asarray(0.0, dtype=jnp.float32)
+    run_pat = state.pat_id_harry.astype(jnp.int32)
+    ground_pat = jnp.where(
+        moving_h & (run_pat >= jnp.int32(ID_KNEEING)) & (run_pat <= jnp.int32(ID_RUNNING4)),
+        run_pat,
+        jnp.int32(ID_STANDING),
+    )
+
+    upper = jnp.asarray(consts.ground_y, dtype=jnp.float32)
+    rel = state.player_y - upper
+    open_leg_depth = jnp.asarray(consts.hole_fall_open_leg_depth, dtype=jnp.float32)
+    at_lip = (
+        (~state.on_ground)
+        & (~state.on_ladder)
+        & (state.current_ground_y == upper)
+        & (rel < jnp.asarray(0.0, dtype=jnp.float32))
+        & (rel >= jnp.asarray(-1.0, dtype=jnp.float32))
+    )
+    falling = is_falling_through_hole(state, consts)
+
+    airborne_pat = jnp.int32(ID_KNEEING)
+    airborne_pat = jnp.where(at_lip, jnp.int32(3), airborne_pat)
+    airborne_pat = jnp.where(
+        falling & (rel < open_leg_depth),
+        jnp.int32(ID_STANDING),
+        airborne_pat,
+    )
+
+    pat = jnp.where(state.on_ground, ground_pat, airborne_pat)
+    # `.contPatId`: `lda atLiana / beq .skipStanding2 / ldx #ID_SWINGING`. It comes
+    # after the whole yPosHarry ladder above and before the climb and kneeing
+    # overrides below, which is where it is put here. Neither of those can fire
+    # while Harry hangs on the rope - climbPos is zero and the collision block
+    # that writes patOfsHarry is the one atLiana skips.
+    pat = jnp.where(state.at_liana != jnp.uint8(0), jnp.int32(ID_SWINGING), pat)
+    # `lda climbPos / and #%1 / clc / adc #ID_CLIMBING`: the pose is the rung's
+    # parity, not a timer, so Harry7 and Harry8 alternate with the climb itself.
+    climb_bit = jnp.bitwise_and(state.climb_pos.astype(jnp.int32), jnp.int32(1))
+    pat = jnp.where(state.on_ladder, jnp.int32(ID_CLIMBING) + climb_bit, pat)
+    # `.hitLogs` only writes patOfsHarry on the non-ladder path. A ladder hit
+    # increments climbPos and keeps the climbing pose.
+    pat = jnp.where(hit_log & (~state.on_ladder), jnp.int32(ID_KNEEING), pat)
+    return pat
 
 
 @struct.dataclass
@@ -635,72 +1790,45 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         self.left_wall_x_px = jnp.array(clamp_wall_x(LEFT_WALL_X), dtype=jnp.int32)
         self.right_wall_x_px = jnp.array(clamp_wall_x(RIGHT_WALL_X), dtype=jnp.int32)
 
-        # Anchor the ladder so the *drawn* openings coincide with the ROM's
-        # HoleBoundsTab columns. The ladder art has its opening inset 4px from
-        # the sprite's left edge, and the single-hole row of the table is
-        # (72, 79), so the sprite must start at 72 - 4 = 68. With that value the
-        # ladder_with_pits sprite (drawn at ladder_x - 26) also lands its three
-        # openings on 44-55, 72-79 and 96-107 exactly.
+        # Gameplay ladder reference, in xPosHarry coordinates. The ROM's climb
+        # test is `lda xPosHarry / sec / sbc #68 / cmp #15 / bcs skip`, so 68 is
+        # where the climbable band starts, and the snap is `lda #SCREENWIDTH/2-4`
+        # = 76, the left edge of an 8px Harry centred on the screen.
         single_hole_left = int(consts.hole_bounds_tab[0][0][0])
         ladder_x_px = single_hole_left - int(consts.ladder_opening_inset)
         ladder_x_px = max(0, min(W - consts.ladder_width, ladder_x_px))
         self.ladder_x_px = jnp.array(ladder_x_px, dtype=jnp.int32)
 
+        # Drawing reference. HoleBoundsTab is compared against xPosHarry, the
+        # box's left edge, while the opening a player sees is centred on the
+        # box, so decoding PF2PatTab puts the artwork four columns right of the
+        # table: OneHole's gap is screen 76-83 against bounds (72, 79), and
+        # ThreeHoles' are 48-59, 76-83 and 100-111 against (44,55), (72,79) and
+        # (96,107). Both ladder captures were grabbed at those screen columns,
+        # so this offset restores each sprite to its own capture origin.
+        self.hole_render_offset_px = jnp.array(
+            int(consts.hole_visible_offset_px), dtype=jnp.int32
+        )
+        self.ladder_render_x_px = self.ladder_x_px + self.hole_render_offset_px
+
         self.renderer = PitfallRenderer(
             consts=self.consts,
-            ladder_x_px=self.ladder_x_px,
+            ladder_x_px=self.ladder_render_x_px,
             left_wall_x_px=self.left_wall_x_px,
             right_wall_x_px=self.right_wall_x_px,
         )
 
-        # Scorpion sprite size used for collision/clip. This is derived from the final
-        # padded scorpion masks to keep render and gameplay boxes consistent.
-        self.scorpion_w_px = jnp.array(int(self.renderer.SCORPION_RIGHT_MASKS.shape[2]), dtype=jnp.int32)
-        self.scorpion_h_px = jnp.array(int(self.renderer.SCORPION_RIGHT_MASKS.shape[1]), dtype=jnp.int32)
+        self.cobra_w_px = jnp.array(COBRA_W, dtype=jnp.int32)
+        self.cobra_h_px = jnp.array(COBRA_H, dtype=jnp.int32)
+        self.cobra_box_top_px = jnp.array(
+            cobra_box_top_row(self.consts.ground_y), dtype=jnp.int32
+        )
 
-        # Scorpion hitbox: use a tight bbox of non-transparent pixels (union across
-        # both directions + both animation frames). This avoids collisions being
-        # driven by the padded render canvas.
-        _tid = int(self.renderer.jr.TRANSPARENT_ID)
-        _sc_l = np.array(self.renderer.SCORPION_LEFT_MASKS)
-        _sc_r = np.array(self.renderer.SCORPION_RIGHT_MASKS)
-        _sc_combined = np.concatenate([_sc_l, _sc_r], axis=0)
-        _occupied = np.any(_sc_combined != _tid, axis=0)
-        _ys, _xs = np.where(_occupied)
-        if _ys.size == 0 or _xs.size == 0:
-            _hit_y0 = 0
-            _hit_x0 = 0
-            _hit_h = int(self.scorpion_h_px)
-            _hit_w = int(self.scorpion_w_px)
-        else:
-            _hit_y0 = int(_ys.min())
-            _hit_x0 = int(_xs.min())
-            _hit_h = int(_ys.max()) - _hit_y0 + 1
-            _hit_w = int(_xs.max()) - _hit_x0 + 1
-
-        _inset_x = max(0, int(self.consts.scorpion_hit_inset_x))
-        _inset_top = max(0, int(getattr(self.consts, "scorpion_hit_inset_top", self.consts.scorpion_hit_inset_y)))
-        _inset_bottom = max(0, int(getattr(self.consts, "scorpion_hit_inset_bottom", self.consts.scorpion_hit_inset_y)))
-        if _hit_w > 1 and _inset_x > 0:
-            _hit_x0 = min(_hit_x0 + _inset_x, int(self.scorpion_w_px) - 1)
-            _hit_w = max(1, _hit_w - 2 * _inset_x)
-        _inset_y_total = _inset_top + _inset_bottom
-        if _hit_h > 1 and _inset_y_total > 0:
-            _hit_y0 = min(_hit_y0 + _inset_top, int(self.scorpion_h_px) - 1)
-            _hit_h = max(1, _hit_h - _inset_y_total)
-
-        self.scorpion_hit_x0_px = jnp.array(_hit_x0, dtype=jnp.int32)
-        self.scorpion_hit_y0_px = jnp.array(_hit_y0, dtype=jnp.int32)
-        self.scorpion_hit_w_px = jnp.array(_hit_w, dtype=jnp.int32)
-        self.scorpion_hit_h_px = jnp.array(_hit_h, dtype=jnp.int32)
-        self.wall_block_player_width_px = jnp.array(
-            max(
-                int(self.renderer.HARRY_IDLE_MASKS.shape[2]),
-                int(self.renderer.HARRY_RUN_MASKS.shape[2]),
-                int(self.renderer.HARRY_CLIMB_MASKS.shape[2]),
-                int(self.renderer.HARRY_JUMP_MASKS.shape[2]),
-            ),
-            dtype=jnp.int32,
+        # The scorpion's box bottom row is the underground floor, the same row
+        # Harry's feet rest on, because kernel 9 walks the object pattern from
+        # index 15 down to 0 as the raster descends.
+        self.scorpion_box_top_px = jnp.array(
+            scorpion_box_top_row(self.consts.underground_y), dtype=jnp.int32
         )
         self.wall_render_height_px = jnp.array(int(self.renderer.WALL_RENDER_MASK.shape[0]), dtype=jnp.int32)
 
@@ -727,6 +1855,8 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         move_right: chex.Array,
         on_ground: chex.Array,
         current_ground_y: chex.Array,
+        log_hits=None,
+        log_push_enabled=None,
     ) -> tuple[
         chex.Array,
         chex.Array,
@@ -740,171 +1870,196 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         chex.Array,
         chex.Array,
     ]:
-        """
-        Handles ladder enter/stay/exit.
+        """`.endStartClimb`, `.endClimbLadder` and `.notAtTop`, in ROM order.
+
+        Two ordered NTSC frames per call. frameCnt is incremented once per JAX
+        step, so this step covers frameCnt 2n-1 and 2n; `frameCnt & 7` therefore
+        only comes up on the second of them, and `frameCnt & 3` likewise, which is
+        what decides whether the walking block moves x before the exit fires.
 
         Returns:
-            x, vx, y, vy, on_ground, on_ladder, current_ground_y, climb_active, exit_top_jump, ladder_step_idx, ladder_step_timer
+            x, vx, y, vy, on_ground, on_ladder, current_ground_y, climb_active,
+            exit_top_jump, climb_pos, ladder_log_frames
         """
         consts = self.consts
         layout = self._screen_layout(room_byte)
-        ladder_x = layout.ladder_x
         has_ladder = layout.has_ladder
-        ladder_w = jnp.asarray(consts.ladder_width, dtype=jnp.int32)
-        ladder_entry_w = jnp.asarray(consts.ladder_entry_width, dtype=jnp.int32)
-        player_w = jnp.asarray(4, dtype=jnp.int32)
-
-        x_int = x.astype(jnp.int32)
-        player_right = x_int + player_w
-        ladder_right = ladder_x + ladder_w
-
-        overlap_left = player_right > ladder_x
-        overlap_right = x_int < ladder_right
-        near_ladder = has_ladder & overlap_left & overlap_right
-        # Entry window centred on the ladder, tested against the same anchor the
-        # hole test uses, so "centred enough to climb" and "over the hole" agree.
-        entry_inset = (ladder_w - ladder_entry_w) // jnp.int32(2)
-        entry_x0 = ladder_x + entry_inset
-        entry_x1 = entry_x0 + ladder_entry_w
-        centered_on_ladder = has_ladder & (x_int >= entry_x0) & (x_int < entry_x1)
 
         upper_ground = jnp.asarray(consts.ground_y, dtype=jnp.float32)
         lower_ground = jnp.asarray(consts.underground_y, dtype=jnp.float32)
-        ladder_top_y = upper_ground + jnp.asarray(consts.ladder_top_peek_offset, dtype=jnp.float32)
+        speed = jnp.asarray(consts.player_speed, dtype=jnp.float32)
 
-        on_upper = current_ground_y == upper_ground
-        on_lower = current_ground_y == lower_ground
-        ladder_exit_active = state.ladder_exit_frames > jnp.int32(0)
+        # yPosHarry, from the one continuous mapping. This is the value every ROM
+        # test below compares against, so the tests are the ROM's own.
+        rom_y0 = (y - (upper_ground - jnp.float32(JUNGLE_GROUND))).astype(jnp.int32)
 
-        enter_from_upper = (
-            on_ground & on_upper & centered_on_ladder & (down_pressed | move_jump) & (~ladder_exit_active)
+        climb_pos = state.climb_pos.astype(jnp.int32)
+        frame_cnt = state.frame_cnt.astype(jnp.int32) + jnp.int32(1)
+
+        climb_active = jnp.array(False, dtype=jnp.bool_)
+        exit_top_jump = jnp.array(False, dtype=jnp.bool_)
+        entered = jnp.array(False, dtype=jnp.bool_)
+        rom_y = rom_y0
+        pat_bottom_exit = jnp.array(False, dtype=jnp.bool_)
+        # How many NTSC frames of this step ran `.hitLogs` with Harry on a rung.
+        # Each one is one `inc climbPos` and one `jsr DecScoreLo`.
+        ladder_log_frames = jnp.int32(0)
+        push_ok = (
+            jnp.array(True, dtype=jnp.bool_) if log_push_enabled is None else log_push_enabled
         )
-        enter_from_lower = (
-            on_ground & on_lower & near_ladder & move_jump & (~ladder_exit_active)
-        )
+        facing_left = harry_display_facing_left(state)
 
-        entering_ladder = (~state.on_ladder) & (enter_from_upper | enter_from_lower)
+        for sub in range(NTSC_FRAMES_PER_STEP):
+            # frameCnt for this NTSC frame: 2n-1 then 2n.
+            ntsc_frame = frame_cnt * jnp.int32(NTSC_FRAMES_PER_STEP) - jnp.int32(
+                NTSC_FRAMES_PER_STEP - 1 - sub
+            )
+            on_ladder_in = climb_pos != jnp.int32(0)
 
-        # Snap Harry to the centre of the ladder on entry. ladder_x + 8 = 76,
-        # which is the ROM's `lda #SCREENWIDTH/2-4 / sta xPosHarry`, and also
-        # the centre of the single-hole falling window (73..79).
-        ladder_center_x = (ladder_x + ladder_w // jnp.int32(2)).astype(x.dtype)
-        x = jnp.where(entering_ladder, ladder_center_x, x)
+            # --- ladder entry, `.endStartClimb` -----------------------------
+            #     lda climbPos / bne .endStartClimb
+            #     lda ladderFlag / beq .endStartClimb
+            #     lda xPosHarry / sec / sbc #68 / cmp #15 / bcs .endStartClimb
+            # The subtract-and-compare is an unsigned byte test, so it passes for
+            # exactly the fifteen columns 68..82.
+            x_window = (x.astype(jnp.int32) - jnp.int32(LADDER_ENTRY_X_MIN)) & jnp.int32(0xFF)
+            in_x_window = has_ladder & (x_window < jnp.int32(LADDER_ENTRY_X_SPAN))
+            eligible = (~on_ladder_in) & in_x_window
 
-        ladder_vertical = (y >= upper_ground) & (y <= lower_ground)
-        still_on_ladder = state.on_ladder & near_ladder & ladder_vertical
+            #     lda yPosHarry / cmp #84 / bcc .skipClimbUp
+            #     lda joystick / lsr / bcs .skipClimbUp      (UP is bit 0)
+            from_below = eligible & (rom_y >= jnp.int32(LADDER_ENTRY_FROM_BELOW_Y)) & move_jump
+            #     lda yPosHarry / cmp #JUNGLE_GROUND / bne .endStartClimb
+            #     lda joystick / and #%10 / bne .endStartClimb   (DOWN is bit 1)
+            # Reached only when the branch above did not take, so UP near the
+            # floor can never fall through into the jungle entry.
+            from_above = (
+                eligible
+                & (~from_below)
+                & (rom_y == jnp.int32(JUNGLE_GROUND))
+                & down_pressed
+            )
+            entering = from_below | from_above
+            climb_pos = jnp.where(
+                entering,
+                jnp.where(from_below, jnp.int32(LADDER_BOTTOM - 1), jnp.int32(LADDER_TOP + 1)),
+                climb_pos,
+            )
+            x = jnp.where(entering, jnp.asarray(LADDER_SNAP_X, dtype=x.dtype), x)
+            entered = entered | entering
 
-        on_ladder_now = entering_ladder | still_on_ladder
+            # --- `.hitLogs`, which the collision block reaches long before the
+            # ladder block below:
+            #
+            #     .hitLogs:
+            #         lda    climbPos         ; 3                 Harry at ladder?
+            #         beq    .notAtLadder     ; 2³                 no, skip push
+            #         inc    climbPos         ; 5                  yes, push down Harry
+            #         bne    .decScore        ; 3
+            #
+            # Taking that branch skips `.notAtLadder` entirely, so patOfsHarry is
+            # never written and the joystick is never forced to NO_MOVE: no
+            # kneeling pose and no lost input while Harry is on a rung. This frame
+            # gets its own CXPPMM read from its own rendered state, so a push that
+            # already carried Harry's pixels clear cannot push him twice.
+            if log_hits is not None:
+                on_rung = climb_pos != jnp.int32(0)
+                pose = jnp.int32(ID_CLIMBING) + (climb_pos & jnp.int32(1))
+                box_top = harry_box_top_row(
+                    rom_y_to_player_y(rom_y, consts), current_ground_y, consts
+                )
+                hit = log_hits(x, box_top, pose, facing_left)
+                # `.contCollision` sends anything at yPosHarry 64 or below to
+                # `.checkWallHit`, so only the rungs above that can be pushed.
+                pushed = (
+                    hit
+                    & on_rung
+                    & push_ok
+                    & (rom_y < jnp.int32(64))
+                )
+                climb_pos = jnp.where(
+                    pushed, (climb_pos + jnp.int32(1)) & jnp.int32(0xFF), climb_pos
+                )
+                rom_y = jnp.where(pushed, climb_pos_to_rom_y(climb_pos), rom_y)
+                ladder_log_frames = ladder_log_frames + pushed.astype(jnp.int32)
 
-        ladder_steps = jnp.int32(11)
-        ladder_step_period = jnp.int32(4)
-        step_size = (lower_ground - ladder_top_y) / ladder_steps.astype(jnp.float32)
+            # --- climbing, `.endClimbLadder` --------------------------------
+            on_ladder_now = climb_pos != jnp.int32(0)
+            #     lda frameCnt / and #$07 / bne .skipAnimClimb
+            climb_tick = on_ladder_now & (
+                (ntsc_frame & jnp.int32(LADDER_CLIMB_MASK)) == jnp.int32(0)
+            )
+            #     lda joystick / lsr / bcs .notClimbUp / dec climbPos
+            #     lsr / bcs .notClimbDown / inc climbPos
+            stepped = climb_pos - move_jump.astype(jnp.int32) + down_pressed.astype(jnp.int32)
+            stepped = jnp.where(climb_tick, stepped, climb_pos)
 
-        ladder_step_idx = state.ladder_step_idx.astype(jnp.int32)
-        ladder_step_timer = state.ladder_step_timer.astype(jnp.int32)
+            #     cmp #LADDER_TOP / bcs .skipLadderTop
+            #     lda #NO_MOVE / sta oldJoystick / lda #LADDER_TOP
+            hit_top = climb_tick & (stepped < jnp.int32(LADDER_TOP))
+            clamped = jnp.where(hit_top, jnp.int32(LADDER_TOP), stepped)
+            #     cmp #LADDER_BOTTOM / bcc .skipLadderBottom
+            #     lda #0 / ldx #ID_STANDING / stx patIdHarry
+            #     ldx #SCREENWIDTH/2+6 / stx yPosHarry
+            hit_bottom = climb_tick & (clamped >= jnp.int32(LADDER_BOTTOM))
+            climb_pos = jnp.where(hit_bottom, jnp.int32(0), clamped)
+            rom_y = jnp.where(hit_bottom, jnp.int32(LADDER_BOTTOM_EXIT_Y), rom_y)
+            pat_bottom_exit = pat_bottom_exit | hit_bottom
+            climb_active = climb_active | (climb_tick & (climb_pos != jnp.int32(0)))
 
-        ladder_step_idx = jnp.where(
-            entering_ladder,
-            jnp.where(enter_from_upper, ladder_steps, jnp.int32(0)),
-            ladder_step_idx,
-        )
-        ladder_step_timer = jnp.where(entering_ladder, jnp.int32(0), ladder_step_timer)
+            #     lda climbPos / beq .endClimbLadder
+            #     asl / sec / rol / adc #1 / sta yPosHarry
+            still_climbing = climb_pos != jnp.int32(0)
+            rom_y = jnp.where(still_climbing, climb_pos_to_rom_y(climb_pos), rom_y)
 
-        climb_dir = jnp.where(
-            move_jump,
-            jnp.int32(1),
-            jnp.where(down_pressed, jnp.int32(-1), jnp.int32(0)),
-        )
+            # --- the walking block, gated the way the ROM gates it ----------
+            #     lda climbPos / cmp #LADDER_TOP+1 / bcs .endHarryId
+            #     lda frameCnt / and #$03 / tax / lsr / bcs .endHarryId
+            # At the top rung climbPos is 11, so this block is live, and on an
+            # even frameCnt it moves xPosHarry one pixel *before* the exit below.
+            walk_live = (
+                (climb_pos < jnp.int32(LADDER_TOP + 1))
+                & ((ntsc_frame & jnp.int32(1)) == jnp.int32(0))
+                & still_climbing
+            )
+            walk_dx = jnp.where(move_left, -speed, jnp.where(move_right, speed, jnp.float32(0.0)))
+            x = jnp.where(walk_live, x + walk_dx.astype(x.dtype), x)
 
-        attempt_step = on_ladder_now & (climb_dir != jnp.int32(0))
-        timer_next = jnp.where(attempt_step, ladder_step_timer + jnp.int32(1), jnp.int32(0))
+            # --- the lateral exit, `.notAtTop` ------------------------------
+            #     lda climbPos / cmp #LADDER_TOP / bne .notAtTop
+            #     lda joystick / and #JOY_HORZ / cmp #JOY_HORZ / beq .notAtTop
+            #     lda joystick / sta oldJoystick
+            #     lda #1 / sta jumpIndex
+            #     lsr / sta climbPos
+            #     lda #31 / sta yPosHarry
+            leaving = (climb_pos == jnp.int32(LADDER_TOP)) & (move_left | move_right)
+            climb_pos = jnp.where(leaving, jnp.int32(0), climb_pos)
+            rom_y = jnp.where(leaving, jnp.int32(LADDER_EXIT_Y), rom_y)
+            exit_top_jump = exit_top_jump | leaving
 
-        ladder_step_candidate = jnp.clip(
-            ladder_step_idx + climb_dir,
-            jnp.int32(0),
-            ladder_steps,
-        )
-        moved = ladder_step_candidate != ladder_step_idx
-        step_now = attempt_step & (timer_next >= ladder_step_period) & moved
+        on_ladder = climb_pos != jnp.int32(0)
+        touched_ladder = on_ladder | exit_top_jump | pat_bottom_exit | entered
 
-        ladder_step_idx = jnp.where(step_now, ladder_step_candidate, ladder_step_idx)
-        ladder_step_timer = jnp.where(
-            on_ladder_now,
-            jnp.where(timer_next >= ladder_step_period, jnp.int32(0), timer_next),
-            jnp.int32(0),
-        )
-
-        y_step = lower_ground - ladder_step_idx.astype(jnp.float32) * step_size
-        y = jnp.where(on_ladder_now, y_step, y)
-        vy = jnp.where(on_ladder_now, 0.0, vy)
+        y = jnp.where(touched_ladder, rom_y_to_player_y(rom_y, consts), y)
+        vy = jnp.where(touched_ladder, jnp.asarray(0.0, dtype=vy.dtype), vy)
+        vx = jnp.where(touched_ladder, jnp.asarray(0.0, dtype=vx.dtype), vx)
+        # `.skipLadderBottom` is the only exit that leaves Harry standing; the
+        # lateral one hands him to JumpTab, so he is airborne.
         on_ground = jnp.where(
-            on_ladder_now,
+            on_ladder | exit_top_jump,
             jnp.array(False, dtype=jnp.bool_),
-            on_ground,   # keep whatever step computed if not on ladder
+            jnp.where(pat_bottom_exit, jnp.array(True, dtype=jnp.bool_), on_ground),
+        )
+        current_ground_y = jnp.where(
+            pat_bottom_exit,
+            lower_ground,
+            jnp.where(exit_top_jump, upper_ground, current_ground_y),
         )
 
-        at_top = on_ladder_now & (ladder_step_idx == ladder_steps)
-        at_bottom = on_ladder_now & (ladder_step_idx == jnp.int32(0))
-
-        jump_dir_input = move_left | move_right
-        exit_top_jump = on_ladder_now & at_top & jump_dir_input
-
-        exit_bottom = on_ladder_now & at_bottom & down_pressed
-
-        exiting = exit_top_jump | exit_bottom
-
-        exit_dir = jnp.where(
-            move_left,
-            jnp.array(-1.0, dtype=jnp.float32),
-            jnp.where(
-                move_right,
-                jnp.array(1.0, dtype=jnp.float32),
-                jnp.array(0.0, dtype=jnp.float32),
-            ),
+        return (
+            x, vx, y, vy, on_ground, on_ladder, current_ground_y, climb_active,
+            exit_top_jump, climb_pos, ladder_log_frames,
         )
-
-        jump_v = jnp.asarray(consts.jump_velocity, dtype=jnp.float32)
-        jump_vx = jnp.asarray(consts.ladder_exit_jump_speed, dtype=jnp.float32) * exit_dir
-
-        # Small visual nudge so Harry clears the ladder lip immediately, while
-        # the arc itself is still carried primarily by the jump velocity.
-        initial_hop_x = jnp.asarray(consts.ladder_exit_initial_hop, dtype=jnp.float32) * exit_dir
-        x = jnp.where(exit_top_jump, x + initial_hop_x, x)
-
-        y = jnp.where(exit_top_jump, ladder_top_y, y)
-        vy = jnp.where(exit_top_jump, jump_v, vy)
-        vx = jnp.where(exit_top_jump, jump_vx, vx)
-        on_ground = jnp.where(
-            exit_top_jump,
-            jnp.array(False, dtype=jnp.bool_),
-            on_ground,
-        )
-
-        max_x = jnp.asarray(consts.screen_width - player_w, dtype=jnp.float32)
-        x = jnp.clip(x, 0.0, max_x)
-
-        new_ground_y = jnp.where(
-            exit_top_jump,
-            upper_ground,
-            jnp.where(exit_bottom, lower_ground, current_ground_y),
-        )
-
-        y = jnp.where(exit_bottom, lower_ground, y)
-        on_ground = jnp.where(
-            exit_bottom,
-            jnp.array(True, dtype=jnp.bool_),
-            on_ground,
-        )
-
-        on_ladder = on_ladder_now & (~exiting)
-        current_ground_y = jnp.where(exiting, new_ground_y, current_ground_y)
-
-        climb_active = on_ladder & step_now
-
-        ladder_step_idx = jnp.where(on_ladder, ladder_step_idx, jnp.int32(0))
-        ladder_step_timer = jnp.where(on_ladder, ladder_step_timer, jnp.int32(0))
-
-        return x, vx, y, vy, on_ground, on_ladder, current_ground_y, climb_active, exit_top_jump, ladder_step_idx, ladder_step_timer
 
     def _screen_layout(self, room_byte: chex.Array) -> ScreenLayout:
         rb = room_byte.astype(jnp.uint8)
@@ -941,17 +2096,23 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         """
         pt = pit_type(room_byte.astype(jnp.uint8)).astype(jnp.int32)
 
-        # The ROM indexes HoleBoundsTab by sceneType. Our pit_type uses the same
-        # encoding: 0 = plain ladder (single hole), 1 = ladder with side pits
-        # (triple hole). Rows 2..4 (tar pit and crocodile jaws) are in the table
-        # but those scenes are not drawn yet, so they select no opening at all
-        # rather than making Harry fall through solid-looking ground.
-        row = jnp.clip(pt, 0, 1)
+        # The ROM indexes HoleBoundsTab by sceneType, after `.noCroco1` clamps
+        # anything from sceneType 3 upwards down to row 2:
+        #
+        #   cpx #HOLE3_SCENE+2 / bcc .contCroco / ldx #HOLE3_SCENE+1
+        #
+        # Our pit_type shares that encoding: 0 = plain ladder (single hole),
+        # 1 = ladder with side pits (triple hole), 2 = tar pit, 3 = swamp. Both
+        # static pits therefore read row 2, `44,107`. Rows 3 and 4 belong to the
+        # crocodile jaws, which are not drawn yet, so scenes 4..7 still select no
+        # opening rather than dropping Harry through solid-looking ground.
+        static_pit = (pt == jnp.int32(2)) | (pt == jnp.int32(3))
+        row = jnp.where(static_pit, jnp.int32(2), jnp.clip(pt, 0, 1))
 
         table = jnp.asarray(self.consts.hole_bounds_tab, dtype=jnp.int32)  # (5, 4, 2)
         bounds = table[row]                                                # (4, 2)
 
-        scene_has_holes = pt <= jnp.int32(1)
+        scene_has_holes = (pt <= jnp.int32(1)) | static_pit
         # Zeroing the left bounds of unimplemented scenes disables every slot.
         lefts = jnp.where(scene_has_holes, bounds[:, 0], jnp.int32(0))
         rights = bounds[:, 1]
@@ -971,8 +2132,10 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             bcs .outOfBounds      ; right >= x -> Harry falls in
 
         so the falling interval is  left < x <= right  (inclusive on the right).
-        The ROM's xPosQuickSand term is omitted: it animates the tar pits
-        opening and closing, which this environment does not implement yet.
+        The ROM's xPosQuickSand term is omitted, which is exact for every scene
+        implemented here: GroundTypeTab is positive for sceneType 0..4, so
+        `bpl .noQuickSand` leaves xPosQuickSand at 0 and both `adc` and `sbc`
+        against it are no-ops. Only the quicksand scenes 5..7 would need it.
         """
         lefts, rights = self._hole_bounds_for_room(room_byte)
         slot_used = lefts > jnp.int32(0)
@@ -993,15 +2156,31 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         vx = state.player_vx
         vy = state.player_vy
         on_ground = state.on_ground
-        ladder_exit_frames = state.ladder_exit_frames
         transition_active = state.respawn_phase != jnp.int32(0)
         gameplay_active = ~transition_active
         time_left = state.time_left
         lives_left = state.lives_left
         hurt_cooldown = state.hurt_cooldown
-        scorpion_x_prev = state.scorpion_x
-        scorpion_x = scorpion_x_prev
+        scorpion_x = state.scorpion_x
         scorpion_facing_right = state.scorpion_facing_right
+
+        # Which Harry pattern to collide with. The ROM reads CXPPMM at the start
+        # of a frame, so the bits it reports were produced by the pattern the
+        # previous kernel drew; taking the pose from the incoming state
+        # reproduces that one-frame latency and, more importantly, keeps the
+        # pose out of the touching_wood cycle it would otherwise close.
+        collision_pat = jnp.clip(
+            harry_display_pat_id(state, consts), jnp.int32(0), jnp.int32(len(HARRY_PATTERNS) - 1)
+        )
+        collision_flip = harry_display_facing_left(state)
+
+        # The ROM's frameCnt, incremented at the top of `.processHarry` and read
+        # later in the same frame by both the run cadence and the scorpion.
+        frame_cnt = jnp.where(
+            gameplay_active,
+            state.frame_cnt + jnp.int32(1),
+            state.frame_cnt,
+        )
 
         down_action = (
             (action == Action.DOWN) |
@@ -1062,20 +2241,47 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         overlap_right = x_int < ladder_right
         near_ladder = has_ladder & overlap_left & overlap_right
 
-        # Hole test against Harry's single canonical anchor (see _over_hole).
-        # This is only the *pre*-movement value; it exists so that a Harry who
-        # was already falling keeps falling straight down. The value that
-        # decides whether he leaves the ground is recomputed after movement.
-        over_any_hole = self._over_hole(state.room_byte, x_int)
-
         upper_ground = jnp.asarray(consts.ground_y, dtype=jnp.float32)
         lower_ground = jnp.asarray(consts.underground_y, dtype=jnp.float32)
         
         on_upper_level = state.current_ground_y == upper_ground
         on_lower_level = state.current_ground_y == lower_ground
-        ladder_exit_active = ladder_exit_frames > jnp.int32(0)
 
-        falling_through_hole = over_any_hole & on_upper_level & (~on_ground) & (~state.on_ladder) & (vy >= 0)
+        # --- The liana, part one: `.exitBounds` -------------------------------
+        # The grab is not in .processHarry at all. It sits in the vertical blank
+        # that follows the kernel which produced the latch, above `.waitTim`:
+        #
+        #     .exitBounds:
+        #         lda    jumpMode         ; 3
+        #         bne    .waitTim         ; 2³
+        #         bit    hitLiana         ; 3                 collison with liana
+        #         bvc    .waitTim         ; 2³                 no, skip
+        #         lda    jumpIndex        ; 3                 currently jumping?
+        #         beq    .waitTim         ; 2³                 no, skip
+        #         ldx    atLiana          ; 3                 Harry already at liana?
+        #         bne    .waitTim         ; 2³                 yes, skip
+        #         stx    jumpIndex        ; 3                  no, stop jump
+        #         inx                     ; 2
+        #         stx    atLiana          ; 3                 enter "liana mode"
+        #         stx    soundIdx         ; 3                 start tarzan sound (=0)
+        #
+        # so it runs before `.doJump` and clears jumpIndex in time to stop the
+        # jump on that same frame. No button is read anywhere in it: touching the
+        # rope with a jumping sprite is the whole condition.
+        liana_present = liana_enabled(state.room_byte)
+        # The latch this step is handed belongs to the raster drawn at the end of
+        # the previous one, so both Harry and the rope come from the incoming
+        # state - never from a position this step is about to produce.
+        hit_liana_sub1 = liana_hit_harry(
+            state.hmbl_add,
+            state.hmbl_dir,
+            state.liana_bottom,
+            liana_present,
+            state.player_x,
+            harry_box_top_row(state.player_y, state.current_ground_y, consts),
+            collision_pat,
+            collision_flip,
+        )
 
         # --- Ground jump ----------------------------------------------------
         # Edge-triggered jump: prevents repeated hops when holding UP.
@@ -1084,54 +2290,121 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         speed = jnp.asarray(consts.player_speed, dtype=jnp.float32)
 
-        # Fixed travel distance independent of run speed.
-        gj_v0 = jnp.asarray(consts.ground_jump_velocity, dtype=jnp.float32)
-        gj_g = jnp.asarray(consts.ground_jump_gravity, dtype=jnp.float32)
-        # This env applies gravity starting the frame *after* takeoff (since the
-        # takeoff frame begins grounded). Add 1 frame to match that cadence.
-        jump_air_frames = jnp.int32(1) + jnp.ceil(
-            (jnp.abs(gj_v0) * jnp.asarray(2.0, dtype=jnp.float32)) / jnp.maximum(gj_g, 1e-6)
-        ).astype(jnp.int32)
-        jump_horiz_speed = jnp.asarray(consts.ground_jump_distance_px, dtype=jnp.float32) / jump_air_frames.astype(jnp.float32)
-
         vx = jnp.where(move_left, -speed, jnp.where(move_right, speed, 0.0))
-        # When airborne, preserve launch momentum (no mid-air steering) so
-        # regular jumps still have enough carry while being shorter than full-speed runs.
+        # ROM jumping uses the same 1px xPosHarry inc/dec, directed by oldJoystick.
         airborne = (~on_ground) & (~state.on_ladder)
         air_vx = jnp.where(
-            state.player_vx < 0,
-            -jnp.minimum(jnp.abs(state.player_vx), jump_horiz_speed),
-            jnp.where(state.player_vx > 0, jnp.minimum(jnp.abs(state.player_vx), jump_horiz_speed), 0.0),
+            state.jump_lock_active,
+            state.jump_lock_vx,
+            jnp.asarray(0.0, dtype=jnp.float32),
         )
-        # If a ground jump is locked, force constant horizontal carry while airborne.
-        air_vx = jnp.where(state.jump_lock_active, state.jump_lock_vx, air_vx)
         vx = jnp.where(airborne, air_vx, vx)
-        vx = jnp.where(airborne & ladder_exit_active, state.player_vx, vx)
         vx = jnp.where(state.on_ladder, 0.0, vx)
-        vx = jnp.where(falling_through_hole & (~ladder_exit_active), 0.0, vx)
+
+        # `lda atLiana / bne .endHarryId` jumps over the whole movement block, so
+        # a Harry on the rope has no joystick horizontal at all - and no room
+        # transition either, since `.oneScene` is inside the part being skipped.
+        on_liana_in = state.at_liana != jnp.uint8(0)
+        vx = jnp.where(on_liana_in, jnp.asarray(0.0, dtype=jnp.float32), vx)
 
         trying_to_enter_ladder = near_ladder & on_lower_level & move_jump
-        jump_mask = on_ground & jump_rise & (~state.on_ladder) & (~trying_to_enter_ladder) & (~ladder_exit_active)
-        jump_launch_vx = jnp.where(move_left, -jump_horiz_speed, jnp.where(move_right, jump_horiz_speed, 0.0))
-        vx = jnp.where(jump_mask, jump_launch_vx, vx)
-        vy = jnp.where(
-            jump_mask,
-            gj_v0,
-            vy,
+        # `.notJumping: ora climbPos / ora patOfsHarry / ora atLiana / bne .noFire`
+        jump_mask = (
+            on_ground
+            & jump_rise
+            & (~state.on_ladder)
+            & (~trying_to_enter_ladder)
+            & (~on_liana_in)
         )
+        jump_launch_vx = jnp.where(move_left, -speed, jnp.where(move_right, speed, 0.0))
+        vx = jnp.where(jump_mask, jump_launch_vx, vx)
 
         jump_lock_active = jnp.where(jump_mask, jnp.array(True, dtype=jnp.bool_), state.jump_lock_active)
         jump_lock_vx = jnp.where(jump_mask, jump_launch_vx, state.jump_lock_vx)
 
-        # Use jump-specific gravity only for ground jumps (so ladder exit and
-        # general falling behavior remain unchanged).
-        gravity = jnp.where(
-            jump_lock_active,
-            gj_g,
-            jnp.asarray(consts.gravity, dtype=jnp.float32),
+        # --- Vertical --------------------------------------------------------
+        # A ground jump follows JumpTab exactly, and so does a descent through an
+        # opening: `.outOfBounds` hands Harry to the same table at its last entry.
+        #
+        # One JAX step is two NTSC frames, so two subframes run per step in
+        # order. The ROM spends the launch frame on `dec yPosHarry`, so the
+        # first step is that decrement plus one table entry, never two entries.
+        #
+        # `.stopJump` is reached from two `beq` tests against fixed values, not
+        # from "the floor Harry left":
+        #
+        #     ldx    yPosHarry        ; 3
+        #     cpx    #JUNGLE_GROUND   ; 2                 Harry at jungle ground?
+        #     beq    .stopJump        ; 2³+1               yes, stop any jump
+        #     ...
+        #     cpx    #UNDER_GROUND    ; 2                 is Harry at underground bottom?
+        #     beq    .stopJump        ; 2³                 yes, stop any jump
+        #
+        # Because they are equalities, a descent walks straight past the jungle
+        # line - yPosHarry goes 33, 34, ... and never equals 32 again - and only
+        # UNDER_GROUND ends it. So while one is running the table's target is the
+        # underground floor, which is also what lets it descend at all.
+        descending_through_opening = is_falling_through_hole(state, consts)
+        jump_floor = jnp.where(
+            descending_through_opening, lower_ground, state.current_ground_y
         )
+        y_start = y
+        jump_index_prev = state.jump_index.astype(jnp.int32)
+
+        # `.exitBounds` is above `.doJump`, so the grab has to clear jumpIndex
+        # before the table gets its turn - that is what stops the jump dead rather
+        # than letting one more entry through.
+        liana_grab_sub1 = (
+            gameplay_active
+            & (state.jump_mode == jnp.uint8(0))
+            & hit_liana_sub1
+            & (jump_index_prev != jnp.int32(0))
+            & (~on_liana_in)
+        )
+        at_liana_sub1 = on_liana_in | liana_grab_sub1
+        jump_index_in = jnp.where(liana_grab_sub1, jnp.int32(0), jump_index_prev)
+
+        y_a, index_a, landed_a = jump_table_subframe(y, jump_index_in, jump_floor)
+        y_a = jnp.where(jump_mask, y - jnp.asarray(1.0, dtype=y.dtype), y_a)
+        index_a = jnp.where(jump_mask, jnp.int32(1), index_a)
+
+        # The second NTSC frame reads the latch the first frame's raster left, so
+        # it sees the rope one `.swingLiana` on and Harry at the y the table just
+        # gave him. His column cannot have changed yet: `lda frameCnt / and #$03 /
+        # lsr / bcs .endHarryId` only lets the movement block run on the even
+        # frame, which is the second of the two this step covers.
+        _, _, hmbl_add_sub1, hmbl_dir_sub1, liana_bottom_sub1 = liana_swing_frame(
+            state.liana_pos_hi, state.liana_pos_lo
+        )
+        hit_liana_sub2 = liana_hit_harry(
+            hmbl_add_sub1,
+            hmbl_dir_sub1,
+            liana_bottom_sub1,
+            liana_present,
+            state.player_x,
+            harry_box_top_row(y_a, state.current_ground_y, consts),
+            collision_pat,
+            collision_flip,
+        )
+        liana_grab_sub2 = (
+            gameplay_active
+            & (state.jump_mode == jnp.uint8(0))
+            & hit_liana_sub2
+            & (index_a != jnp.int32(0))
+            & (~at_liana_sub1)
+        )
+        at_liana_step = at_liana_sub1 | liana_grab_sub2
+        index_a = jnp.where(liana_grab_sub2, jnp.int32(0), index_a)
+
+        y_b, index_b, landed_b = jump_table_subframe(y_a, index_a, jump_floor)
+
+        jumping = (jump_index_in > jnp.int32(0)) | jump_mask
+        jump_index = jnp.where(jumping, index_b, jnp.int32(0))
+        jump_landed = jumping & (landed_a | landed_b)
+
+        gravity = jnp.asarray(consts.gravity, dtype=jnp.float32)
         fall_speed = jnp.asarray(consts.fall_speed, dtype=jnp.float32)
-        apply_gravity = (~on_ground) & (~state.on_ladder)
+        apply_gravity = (~on_ground) & (~state.on_ladder) & (~jumping)
         # Symmetric gravity on both ascent and descent (capped at fall_speed)
         vy = jnp.where(
             apply_gravity,
@@ -1139,29 +2412,66 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             vy,
         )
 
-        y = y + vy
+        y = jnp.where(jumping, y_b, y + vy)
+        # Renderer predicates read the sign of player_vy, so during a table jump
+        # report the motion the table produced rather than a gravity accumulator
+        # that no longer drives anything.
+        vy = jnp.where(jumping, y - y_start, vy)
         x = x + vx
 
+        # The table owns the lock and releases it on the frame it reaches the
+        # floor. The ROM does the same by hand: when the hole-bounds test takes
+        # over from a finished jump it writes oldJoystick = $1f, "no direction".
+        jump_lock_active = jnp.where(
+            jump_landed, jnp.array(False, dtype=jnp.bool_), jump_lock_active
+        )
+
         wall_w = jnp.int32(consts.tunnel_wall_width)
-        wall_block_player_w = self.wall_block_player_width_px.astype(jnp.int32)
-        right_wall_block_player_w = jnp.int32(consts.right_wall_block_player_width)
 
-        block = layout.has_wall & on_lower_level
-
-        wall_left  = layout.wall_x
+        # `.checkWallHit`. The ROM never clamps Harry to a wall edge - it reads the
+        # previous raster's collision latch and nudges him a single pixel away,
+        # then reverses the carried direction:
+        #
+        #     lda    xPosHarry        ; 3                 determine where Harry hit the wall
+        #     cmp    #140             ; 2                 right wall from the right?
+        #     bcs    .hitFromRight    ; 2³                 yes, continue
+        #     cmp    #13              ; 2                 left wall from the left?
+        #     bcc    .hitFromLeft     ; 2³                 yes, continue
+        #     cmp    #80              ; 2                 left or right wall?
+        #     bcs    .hitFromLeft     ; 2³
+        #   .hitFromRight:
+        #     inc    xPosHarry        ; 5                 bounce back one pixel and..
+        #     ldx    #MOVE_RIGHT      ; 2                 ..change direction to right
+        #   .hitFromLeft:
+        #     dec    xPosHarry        ; 5                 bounce back one pixel and..
+        #     ldx    #MOVE_LEFT       ; 2                 ..change direction to left
+        #   .contWallHit:
+        #     stx    oldJoystick      ; 3
+        #
+        # The three compares split the screen at its midpoint and push Harry away
+        # from whichever wall he is beside, so entering at XMAX_HARRY on the right
+        # of a right-hand wall can only ever move him further right.
+        wall_left = layout.wall_x
         wall_right = layout.wall_x + wall_w
+        pat_box = _HARRY_COLLISION_BOXES[collision_flip.astype(jnp.int32), collision_pat]
 
-        x = jnp.where(
-            block & (layout.wall_side == jnp.int32(1)),
-            jnp.minimum(x, (wall_left - right_wall_block_player_w).astype(x.dtype)),
-            x,
+        # CXPPMM reports what the previous kernel drew, and that kernel belonged
+        # to the incoming room, so both the position and the wall come from the
+        # state this step was handed - never from the room just selected.
+        drawn_x = state.player_x.astype(jnp.int32)
+        wall_hit = (
+            layout.has_wall
+            & on_lower_level
+            & ((drawn_x + pat_box[1]) > wall_left)
+            & ((drawn_x + pat_box[0]) < wall_right)
         )
-
-        x = jnp.where(
-            block & (layout.wall_side == jnp.int32(-1)),
-            jnp.maximum(x, wall_right.astype(x.dtype)),
-            x,
+        from_right = (drawn_x >= jnp.int32(140)) | (
+            (drawn_x >= jnp.int32(13)) & (drawn_x < jnp.int32(80))
         )
+        bounce = jnp.where(from_right, jnp.float32(1.0), jnp.float32(-1.0))
+        x = jnp.where(wall_hit, x + bounce.astype(x.dtype), x)
+        # `stx oldJoystick` with MOVE_RIGHT / MOVE_LEFT.
+        jump_lock_vx = jnp.where(wall_hit, bounce, jump_lock_vx)
 
         x_after_move = x
 
@@ -1207,14 +2517,16 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         )
 
         entered_new_room = exited_left | exited_right
-        scorpion_spawn_x = jnp.asarray(consts.scorpion_spawn_x, dtype=jnp.float32)
+        # ContRandom runs on every scene change and writes xPosScorpion = 76.
+        scorpion_spawn_x = jnp.asarray(consts.scorpion_spawn_x, dtype=jnp.int32)
         scorpion_x = jnp.where(entered_new_room, scorpion_spawn_x, scorpion_x)
 
         x = jnp.clip(x, left_edge, right_edge_for_left_of_player)
 
-        # Recalculate the hole test at Harry's post-movement position, and in
-        # the room he ended up in, so that the ground decision below never uses
-        # a stale pre-movement value.
+        # The hole test runs at Harry's post-movement position, in the room he
+        # ended up in, and only feeds the ground decision below. The ROM does
+        # the same: its bounds loop is gated on `yPosHarry == JUNGLE_GROUND`,
+        # so being above an opening never affects an airborne Harry.
         over_any_hole = self._over_hole(new_room_byte, x.astype(jnp.int32))
 
         previous_ground = state.current_ground_y
@@ -1222,11 +2534,20 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         raw_on_ground_upper = (y >= previous_ground) & (~over_any_hole)
 
-        falling_to_lower = on_upper_level & over_any_hole & (y >= lower_ground)
+        # A static pit has no ladder and so no underground floor to arrive on.
+        # `ContRandom` only writes WITHLADDER for sceneType 0 and 1
+        # (`cmp #HOLE3_SCENE+1 / bcs .setFlag`), so the transfer does not apply to
+        # the tar pit or the swamp. The -100 is *not* here: it belongs to the
+        # first frame of the fall, not to the arrival - see `.skipFalling` below.
+        in_static_pit_scene = scene_is_static_pit(new_room_byte)
+        falling_to_lower = (
+            on_upper_level
+            & over_any_hole
+            & (~in_static_pit_scene)
+            & (y >= lower_ground)
+        )
 
         score = state.score
-        score = score + jnp.where(falling_to_lower, jnp.int32(-100), jnp.int32(0))
-        score = jnp.maximum(score, jnp.int32(0))
 
         raw_on_ground_lower = (y >= previous_ground)
 
@@ -1253,7 +2574,139 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         landing_y = jnp.where(falling_to_lower, lower_ground, previous_ground)
         y = jnp.where(clamp_mask & on_ground, landing_y, y)
 
-        x, vx, y, vy, on_ground, on_ladder, current_ground_y, climb_active, started_ladder_exit, ladder_step_idx, ladder_step_timer = self._apply_ladder(
+        # `.outOfBounds` - the one frame that starts a descent, ordinary hole and
+        # fatal pit alike:
+        #
+        #     .outOfBounds:
+        #         inc    yPosHarry        ; 5                 Harry is falling down
+        #         ldx    #JUMP_LEN        ; 2
+        #         stx    jumpIndex        ; 3
+        #         dex                     ; 2
+        #         stx    oldJoystick      ; 3                 x=$1f -> no direction
+        #
+        # It lives in the vertical blank, above `.processHarry`, so the very same
+        # NTSC frame goes on to run `.doJump` and take its first table step. That
+        # is why the entry frame moves two pixels - the `inc` and
+        # JumpTab[JUMP_LEN-1], which is -1 - while every frame after it moves one.
+        # The bounds loop cannot repeat, and the reason is that its gate is an
+        # equality, not a threshold:
+        #
+        #     lda    climbPos         ; 3                 Harry at ladder?
+        #     bne    .exitBounds      ; 2³+1               yes, skip bounds check
+        #     lda    yPosHarry        ; 3
+        #     cmp    #JUNGLE_GROUND   ; 2                 Harry at ground?
+        #     bne    .exitBounds      ; 2³                 no, skip bounds check
+        #
+        # `bne` means the loop is reached on exactly one frame - the one where
+        # Harry is still standing on the jungle line. From frame 2 on, yPosHarry is
+        # 34, 35, ... and never equals JUNGLE_GROUND again, so the `inc` happens
+        # once for the whole fall and the table carries the rest.
+        entering_opening = (
+            clamp_mask
+            & on_upper_level
+            & over_any_hole
+            & (state.player_y == previous_ground)
+        )
+
+        # NTSC frame 1: the `inc`, then .doJump's first table step.
+        y_inc = state.player_y + jnp.asarray(1.0, dtype=y.dtype)
+        y_f1, index_f1, _ = jump_table_subframe(y_inc, jnp.int32(JUMP_LEN), lower_ground)
+        # NTSC frame 2: bounds skipped, .doJump only, fed the whole of frame 1.
+        y_f2, index_f2, _ = jump_table_subframe(y_f1, index_f1, lower_ground)
+
+        # `.doJump` continues straight into the falling branch, still inside the
+        # very frame `.outOfBounds` ran:
+        #
+        #     ldy    ladderFlag       ; 3                 ladder in scene?
+        #     beq    .skipFalling     ; 2³+1               no, skip falling
+        #     cpx    #JUNGLE_GROUND+2 ; 2
+        #     bne    .skipFalling     ; 2³+1
+        #     lda    #SOUND_FALLING   ; 2                 Harry is falling into a hole
+        #     sta    soundIdx         ; 3                 start falling-sound
+        #     lda    #$00             ; 2
+        #     jsr    DecScoreHi       ; 6                 subtract 100 points from score
+        #
+        # X is the yPosHarry the table just produced, and frame 1 always lands on
+        # JUNGLE_GROUND+2 - the `inc` and JumpTab[JUMP_LEN-1] together. So the
+        # deduction is taken on the first frame of the fall and, because no later
+        # frame equals 34 again, exactly once. `ldy ladderFlag / beq` keeps the tar
+        # pit and the swamp out of it entirely.
+        started_falling = (
+            entering_opening
+            & has_ladder
+            & (y_f1 == previous_ground + jnp.asarray(2.0, dtype=y.dtype))
+        )
+        score = score + jnp.where(started_falling, jnp.int32(-100), jnp.int32(0))
+        score = jnp.maximum(score, jnp.int32(0))
+        sound_idx_falling = jnp.where(
+            started_falling, jnp.int32(SOUND_FALLING), state.sound_idx
+        )
+
+        y = jnp.where(entering_opening, y_f2, y)
+        jump_index = jnp.where(entering_opening, index_f2, jump_index)
+        on_ground = jnp.where(entering_opening, jnp.array(False, dtype=jnp.bool_), on_ground)
+        # `stx oldJoystick` with x = $1f is "no direction", so the descent carries
+        # no sideways motion at all; air_vx reads the lock and finds nothing.
+        jump_lock_active = jnp.where(
+            entering_opening, jnp.array(True, dtype=jnp.bool_), jump_lock_active
+        )
+        jump_lock_vx = jnp.where(entering_opening, jnp.asarray(0.0, dtype=jnp.float32), jump_lock_vx)
+        vx = jnp.where(entering_opening, jnp.asarray(0.0, dtype=vx.dtype), vx)
+        # Descriptive only: the renderer reads the sign of player_vy to pick a
+        # falling pose, so report what the table displaced, never the reverse.
+        vy = jnp.where(entering_opening, y - state.player_y, vy)
+
+        has_logs, logs_are_rolling, log_count, log_xs, has_fireplace, has_snake = room_hazards_from_room_byte(new_room_byte)
+
+        # --- Log geometry, needed before the ladder runs ----------------------
+        # `.hitLogs` sits above the ladder block in .processHarry, so each NTSC
+        # frame of the ladder has to be able to read CXPPMM for itself. The log
+        # side of that read depends only on the room and the timer, never on
+        # Harry, so it is computed once here and sampled twice below.
+        screen_w_i = jnp.int32(consts.screen_width)
+        total_frames = jnp.int32(self.consts.initial_time_seconds * self.consts.fps)
+        # The rolling-log move is later in ProcessObjects and only runs on the
+        # even NTSC frame, so both reads in this step see the position the
+        # incoming state rendered.
+        frames_elapsed_at_draw = jnp.maximum(
+            total_frames - state.time_left.astype(jnp.int32), jnp.int32(0)
+        )
+        frames_elapsed_at_draw = (
+            frames_elapsed_at_draw * state.timer_started.astype(jnp.int32)
+        )
+        log_left_x = log_left_edges(
+            log_xs, logs_are_rolling, frames_elapsed_at_draw, consts.screen_width
+        )
+        wood_w = jnp.int32(consts.wood_w)
+        wood_h = jnp.int32(consts.wood_h)
+        wood_top = jnp.int32(consts.ground_y - consts.wood_h + consts.wood_y_offset)
+        wood_y0 = wood_top
+        wood_y1 = wood_top + wood_h
+        active = jnp.arange(LOG_MAX_COPIES, dtype=jnp.int32) < log_count
+        # xPosObject is the left edge of the GRP1 box, the same convention the
+        # renderer draws at, so no centring correction belongs here.
+        seg1_x0 = log_left_x
+        seg1_x1 = jnp.minimum(log_left_x + wood_w, screen_w_i)
+        wraps = (log_left_x + wood_w) > screen_w_i
+        seg2_x0 = jnp.zeros_like(seg1_x0)
+        seg2_x1 = (log_left_x + wood_w) - screen_w_i
+
+        def _log_hits(harry_x, harry_box_top, pattern, flip):
+            """CXPPMM for one raster: this frame's Harry pixels against the logs.
+
+            The bounds come from the pose's own lit pixels, which is the same
+            extent the accepted off-ladder contact uses, so a rung push and a
+            ground hit agree about what touching means.
+            """
+            hx0, hx1, hy0, hy1 = harry_collision_bounds(
+                harry_x, harry_box_top, pattern, flip
+            )
+            hit_y = (hy1 > wood_y0) & (hy0 < wood_y1)
+            hit_s1 = (hx1 > seg1_x0) & (hx0 < seg1_x1)
+            hit_s2 = wraps & (hx1 > seg2_x0) & (hx0 < seg2_x1)
+            return has_logs & jnp.any(active & (hit_s1 | hit_s2) & hit_y)
+
+        x, vx, y, vy, on_ground, on_ladder, current_ground_y, climb_active, started_ladder_exit, climb_pos, ladder_log_frames = self._apply_ladder(
             state=state,
             room_byte=new_room_byte,
             x=x,
@@ -1266,113 +2719,82 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             move_right=move_right,
             on_ground=on_ground,
             current_ground_y=current_ground_y,
+            log_hits=_log_hits,
+            log_push_enabled=gameplay_active,
         )
 
-        ladder_exit_frames = jnp.maximum(ladder_exit_frames - jnp.int32(1), jnp.int32(0))
-        ladder_exit_frames = jnp.where(
-            started_ladder_exit,
-            jnp.int32(consts.ladder_exit_grace_frames),
-            ladder_exit_frames,
+        # `lda #1 / sta jumpIndex` and `sta oldJoystick`: the ladder exit hands
+        # Harry to the ordinary jump, at table index 1, carrying the direction he
+        # was pushing. No grace period is needed to stop him re-grabbing the
+        # ladder, because both entry tests require him to be on the ground.
+        exit_vx = jnp.where(move_left, -speed, jnp.where(move_right, speed, 0.0))
+        vx = jnp.where(started_ladder_exit, exit_vx, vx)
+        jump_index = jnp.where(started_ladder_exit, jnp.int32(1), jump_index)
+        jump_lock_active = jnp.where(
+            started_ladder_exit, jnp.array(True, dtype=jnp.bool_), jump_lock_active
         )
-        ladder_exit_frames = jnp.where(on_ladder, jnp.int32(0), ladder_exit_frames)
+        jump_lock_vx = jnp.where(started_ladder_exit, exit_vx, jump_lock_vx)
 
         # Clear jump lock once grounded (or while on ladder).
         jump_lock_active = jump_lock_active & (~on_ground) & (~on_ladder)
-
-        has_logs, logs_are_rolling, log_count, log_xs, has_fireplace, has_snake = room_hazards_from_room_byte(new_room_byte)
+        jump_index = jnp.where(on_ground | on_ladder, jnp.int32(0), jump_index)
 
         has_scorpion = has_scorpion_from_room_byte(new_room_byte)
         player_is_underground = current_ground_y == lower_ground
 
-        scorpion_speed = jnp.asarray(consts.scorpion_speed, dtype=jnp.float32)
-        player_center_x_f = x + jnp.asarray(2.0, dtype=jnp.float32)
-        dx_scorpion = player_center_x_f - scorpion_x
-        scorpion_step = jnp.clip(dx_scorpion, -scorpion_speed, scorpion_speed)
+        # --- Scorpion movement, ported from "move the scorpion towards harry" --
+        #     lda ladderFlag / bne .noMoveScorpion   (ladder rooms show a wall)
+        #     lda xPosHarry / sec / sbc xPosScorpion
+        #     beq .noMoveScorpion                    (equal: no move, keep facing)
+        #     bcs .rightOfScorpion / ldx #REFLECT    (Harry left -> reflected)
+        #     lda frameCnt / and #$07 / bne .end     (one pixel every 8th frame)
+        #     inc xPosScorpion / bcs .end / dec / dec
+        #
+        # frameCnt is incremented before this block, and one JAX step is two
+        # NTSC frames, so the step covers frameCnt 2*frame_cnt-1 and 2*frame_cnt.
+        # `frameCnt & 7 == 0` needs an even multiple of eight, so it lands on the
+        # step where frame_cnt itself is a multiple of four.
+        # What the previous kernel put on screen, which is what CXPPMM reports:
+        # the ROM reads it at `; check collisions between Harry and object:`,
+        # long before `; move the scorpion towards harry:` runs. Collision uses
+        # these, and this frame's move only shows up in the next state.
+        scorpion_x_at_draw = scorpion_x.astype(jnp.int32)
+        scorpion_facing_at_draw = scorpion_facing_right
+
+        # Base is the post-entry value, so a fresh room's spawn survives.
+        scorpion_x_int = scorpion_x.astype(jnp.int32)
+        harry_delta = x.astype(jnp.int32) - scorpion_x_int
+        harry_is_right = harry_delta > jnp.int32(0)
+        harry_is_left = harry_delta < jnp.int32(0)
+
+        scorpion_active = has_scorpion & gameplay_active
+        move_tick = jnp.mod(frame_cnt, jnp.int32(consts.scorpion_move_period_steps)) == jnp.int32(0)
+        scorpion_step = jnp.where(harry_is_right, jnp.int32(1), jnp.where(harry_is_left, jnp.int32(-1), jnp.int32(0)))
         scorpion_x = jnp.where(
-            has_scorpion & gameplay_active,
-            scorpion_x + scorpion_step,
-            scorpion_x,
+            scorpion_active & move_tick,
+            scorpion_x_int + scorpion_step,
+            scorpion_x_int,
         )
-        scorpion_max_x = jnp.asarray(
-            max(0, consts.screen_width - int(self.scorpion_w_px)),
-            dtype=jnp.float32,
-        )
-        scorpion_x = jnp.clip(scorpion_x, 0.0, scorpion_max_x)
 
-        # Persist scorpion facing direction from its own last nonzero movement.
-        # Must not depend on Harry's position; stopping preserves direction.
-        scorpion_dx = scorpion_x - scorpion_x_prev
+        # Facing tracks Harry's side, and an exactly-equal x keeps the old one
+        # because the ROM branches past `stx reflectScorpion` in that case.
         scorpion_facing_right = jnp.where(
-            scorpion_dx > jnp.asarray(0.0, dtype=jnp.float32),
-            jnp.array(True, dtype=jnp.bool_),
-            jnp.where(
-                scorpion_dx < jnp.asarray(0.0, dtype=jnp.float32),
-                jnp.array(False, dtype=jnp.bool_),
-                scorpion_facing_right,
-            ),
+            scorpion_active & (harry_is_right | harry_is_left),
+            harry_is_right,
+            scorpion_facing_right,
         )
-
-        # Scorpion animation: advance only while the scorpion is actually moving.
-        scorpion_anim_period = jnp.int32(max(1, int(consts.scorpion_anim_period)))
-        scorpion_moved = (scorpion_x != scorpion_x_prev) & has_scorpion & gameplay_active
-        scorpion_anim_timer = jnp.where(
-            scorpion_moved,
-            state.scorpion_anim_timer.astype(jnp.int32) + jnp.int32(1),
-            jnp.int32(0),
-        )
-        scorpion_advance = scorpion_moved & (scorpion_anim_timer >= scorpion_anim_period)
-        scorpion_anim_idx = jnp.where(
-            scorpion_advance,
-            jnp.int32(1) - state.scorpion_anim_idx.astype(jnp.int32),
-            state.scorpion_anim_idx.astype(jnp.int32),
-        )
-        scorpion_anim_timer = jnp.where(scorpion_advance, jnp.int32(0), scorpion_anim_timer)
-        scorpion_anim_idx = jnp.where(has_scorpion, scorpion_anim_idx, jnp.int32(0))
-        scorpion_anim_timer = jnp.where(has_scorpion, scorpion_anim_timer, jnp.int32(0))
-
-        total_frames = jnp.int32(self.consts.initial_time_seconds * self.consts.fps)
-        frames_elapsed = jnp.maximum(total_frames - time_left, jnp.int32(0))
-        frames_elapsed = frames_elapsed * timer_started.astype(jnp.int32)
 
         screen_w_i = jnp.int32(consts.screen_width)
-        speed = jnp.int32(1)
-        direction = jnp.int32(-1)
-        extra_period = jnp.int32(max(1, int(consts.rolling_log_extra_step_period)))
-        base = frames_elapsed * speed
-        extra = frames_elapsed // extra_period
-        dx = jnp.mod((base + extra) * direction, screen_w_i)
-        moving_centers = jnp.mod(log_xs + dx, screen_w_i)
-        log_centers = jnp.where(logs_are_rolling, moving_centers, log_xs)
 
-        player_w_i = jnp.int32(4)
-        player_h_i = jnp.int32(8)
-        x0 = x.astype(jnp.int32)
-        x1 = x0 + player_w_i
-
-        player_bottom = y.astype(jnp.int32)
-        y1 = player_bottom + jnp.int32(1)
-        y0 = player_bottom - player_h_i + jnp.int32(1)
-
-        wood_w = jnp.int32(consts.wood_w)
-        wood_h = jnp.int32(consts.wood_h)
-        wood_top = jnp.int32(consts.ground_y - consts.wood_h + consts.wood_y_offset)
-        wood_y0 = wood_top
-        wood_y1 = wood_top + wood_h
+        # Harry's lit pixels for this frame's pose, from HARRY_PATTERNS. Replaces
+        # the old fixed 4x8 torso, which was neither the ROM's shape nor the
+        # drawn one. harry_box_top is the same origin the renderer draws at, so
+        # collidable pixels and visible pixels are the same pixels.
+        harry_box_top = harry_box_top_row(y, current_ground_y, consts)
+        x0, x1, y0, y1 = harry_collision_bounds(x, harry_box_top, collision_pat, collision_flip)
 
         overlap_y = (y1 > wood_y0) & (y0 < wood_y1)
-        active = jnp.arange(3, dtype=jnp.int32) < log_count
-        W = jnp.int32(consts.screen_width)
-        half_w = wood_w // jnp.int32(2)
-
-        x_left_raw = log_centers.astype(jnp.int32) - half_w
-        x_left = jnp.mod(x_left_raw, W)
-
-        seg1_x0 = x_left
-        seg1_x1 = jnp.minimum(x_left + wood_w, W)
-        wraps = (x_left + wood_w) > W
-
-        seg2_x0 = jnp.zeros_like(seg1_x0)
-        seg2_x1 = (x_left + wood_w) - W
+        W = screen_w_i
 
         overlap_seg1 = (x1 > seg1_x0) & (x0 < seg1_x1)
         overlap_seg2 = wraps & (x1 > seg2_x0) & (x0 < seg2_x1)
@@ -1394,18 +2816,22 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         # would overlap this frame, freeze X at the contact point.
         rolling_active = has_logs & logs_are_rolling & gameplay_active & on_upper_level & on_ground & (~on_ladder)
         rolling_would_overlap = rolling_active & jnp.any(active & roll_overlap_x & overlap_y)
-        started_rolling_contact = rolling_would_overlap & (~state.touching_rolling_wood)
+        # Both the blocking position and the contact flag come from the previous
+        # frame, which is a different room once Harry has just wrapped. Fall back
+        # to the already-wrapped x and drop the stale flag in that case.
+        contact_start_x = jnp.where(entered_new_room, x, state.player_x)
+        previously_touching = state.touching_rolling_wood & (~entered_new_room)
+        started_rolling_contact = rolling_would_overlap & (~previously_touching)
         rolling_contact_x = jnp.where(
             started_rolling_contact,
-            state.player_x,
+            contact_start_x,
             jnp.where(rolling_would_overlap, state.rolling_wood_contact_x, jnp.asarray(0.0, dtype=jnp.float32)),
         )
         x = jnp.where(rolling_would_overlap, rolling_contact_x, x)
         vx = jnp.where(rolling_would_overlap, jnp.asarray(0.0, dtype=jnp.float32), vx)
 
         # Update player bbox after rolling-log contact resolution.
-        x0 = x.astype(jnp.int32)
-        x1 = x0 + player_w_i
+        x0, x1, y0, y1 = harry_collision_bounds(x, harry_box_top, collision_pat, collision_flip)
 
         wood_visual_pad_x = jnp.int32(consts.wood_visual_contact_pad_x)
         wood_visual_shift_x = jnp.int32(consts.wood_visual_contact_shift_x)
@@ -1417,58 +2843,33 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         visual_overlap_seg2 = wraps & (x1 > (visual_seg2_x0 - wood_visual_pad_x)) & (x0 < (visual_seg2_x1 + wood_visual_pad_x))
         visual_overlap_x = visual_overlap_seg1 | visual_overlap_seg2
 
+        # `.contCollision: lda yPosHarry / cmp #64 / bcs .checkWallHit / lda
+        # atLiana / bne .endCollision` - on the rope the whole upper-ground half of
+        # the collision block is jumped over, so no log drain, no kneeing pose and
+        # none of the hazards below.
+        off_liana = ~at_liana_step
         touching_any = jnp.any(active & overlap_x & overlap_y)
-        touching_wood = has_logs & jnp.any(active & visual_overlap_x & overlap_y)
+        touching_wood = has_logs & jnp.any(active & visual_overlap_x & overlap_y) & off_liana
         # Moving logs (rolling): visual slide/contact matches the blocked state.
         touching_rolling_wood = rolling_would_overlap
-        scoring_touching_wood = has_logs & touching_any & gameplay_active
+        log_contact_first = has_logs & touching_any & gameplay_active & off_liana
 
-        drain = jnp.int32(consts.wood_drain_per_frame)
-        score = jnp.where(scoring_touching_wood, score - drain, score)
-        score = jnp.maximum(score, jnp.int32(0))
-
-        # --- Log pushback on ladder -------------------------------------------
-        # Rising-edge: only trigger when touching_wood transitions False→True
-        log_hit_on_ladder = on_ladder & touching_wood & (~state.touching_wood)
-        log_push_remaining = jnp.where(
-            log_hit_on_ladder,
-            jnp.asarray(consts.log_push_amount, dtype=jnp.float32),
-            state.log_push_remaining,
-        )
-        push_speed = jnp.asarray(consts.log_push_speed, dtype=jnp.float32)
-        push_this_frame = jnp.minimum(log_push_remaining, push_speed)
-        push_this_frame = jnp.where(
-            on_ladder & (log_push_remaining > 0), push_this_frame, jnp.float32(0.0)
-        )
-        pushed_y = y + push_this_frame
-        y = jnp.where(
-            on_ladder,
-            jnp.clip(
-                pushed_y,
-                jnp.asarray(consts.ground_y, dtype=jnp.float32),
-                jnp.asarray(consts.underground_y, dtype=jnp.float32),
-            ),
-            y,
-        )
-        log_push_remaining = jnp.maximum(log_push_remaining - push_this_frame, jnp.float32(0.0))
-        # Reset push state when not on ladder
-        log_push_remaining = jnp.where(on_ladder, log_push_remaining, jnp.float32(0.0))
-        # Animate climb sprite during the push
-        climb_active = climb_active | (on_ladder & (push_this_frame > 0))
-
-        # Keep ladder position aligned to discrete steps even if other ladder-only
-        # effects (like log pushback) adjust y.
         upper_ground = jnp.asarray(consts.ground_y, dtype=jnp.float32)
         lower_ground = jnp.asarray(consts.underground_y, dtype=jnp.float32)
-        ladder_top_y = upper_ground + jnp.asarray(consts.ladder_top_peek_offset, dtype=jnp.float32)
-        ladder_steps_f = jnp.asarray(11.0, dtype=jnp.float32)
-        step_size = (lower_ground - ladder_top_y) / ladder_steps_f
-        ladder_step_idx_from_y = jnp.round((lower_ground - y) / step_size).astype(jnp.int32)
-        ladder_step_idx_from_y = jnp.clip(ladder_step_idx_from_y, jnp.int32(0), jnp.int32(11))
-        y_quant = lower_ground - ladder_step_idx_from_y.astype(jnp.float32) * step_size
-        y = jnp.where(on_ladder, y_quant, y)
-        ladder_step_idx = jnp.where(on_ladder, ladder_step_idx_from_y, jnp.int32(0))
-        ladder_step_timer = jnp.where(on_ladder, ladder_step_timer, jnp.int32(0))
+
+        # --- The score drain, `.decScore` -------------------------------------
+        # Both `.hitLogs` paths end at `jsr DecScoreLo`, one call per NTSC frame
+        # that saw a collision. On the ladder that count came out of the ladder
+        # subframe loop above, where each frame read its own raster; off the
+        # ladder this port keeps treating a standing contact as both frames.
+        contact_frames = jnp.where(
+            on_ladder | (ladder_log_frames > jnp.int32(0)),
+            ladder_log_frames,
+            log_contact_first.astype(jnp.int32) * jnp.int32(NTSC_FRAMES_PER_STEP),
+        )
+        drain = contact_frames * jnp.int32(consts.wood_drain_per_frame)
+        score = jnp.maximum(score - drain, jnp.int32(0))
+        climb_active = climb_active | (ladder_log_frames > jnp.int32(0))
         # ----------------------------------------------------------------------
 
         fire_x_center = jnp.int32(132)
@@ -1485,151 +2886,242 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         fire_right = fire_left + fire_w
 
         overlap_fire = (x1 > fire_left) & (x0 < fire_right) & (y1 > fire_y0) & (y0 < fire_y1)
-        can_hurt = (hurt_cooldown == jnp.int32(0)) & gameplay_active
+        can_hurt = (hurt_cooldown == jnp.int32(0)) & gameplay_active & off_liana
         hit_fire = has_fireplace & overlap_fire & can_hurt
 
-        snake_count = has_snake.astype(jnp.int32)
-        snake_x_center = jnp.int32(134)
-
-        snake_w = jnp.int32(consts.snake_w)
-        snake_h = jnp.int32(consts.snake_h)
-        snake_top = jnp.int32(consts.ground_y - consts.snake_h)
-        snake_y0 = snake_top
-        snake_y1 = snake_top + snake_h
-
-        max_snake_start = jnp.maximum(screen_w_i - snake_w, jnp.int32(0))
-        snake_left = jnp.clip(snake_x_center - (snake_w // jnp.int32(2)), 0, max_snake_start)
-        snake_right = snake_left + snake_w
-
-        overlap_snake = (x1 > snake_left) & (x0 < snake_right) & (y1 > snake_y0) & (y0 < snake_y1)
-        hit_snake = has_snake & (snake_count > jnp.int32(0)) & overlap_snake & can_hurt
-
-        scorpion_w = self.scorpion_w_px.astype(jnp.int32)
-        scorpion_h = self.scorpion_h_px.astype(jnp.int32)
-        scorpion_top_render = jnp.int32(consts.underground_y) - scorpion_h + jnp.int32(1) + jnp.int32(consts.scorpion_y_offset)
-
-        hit_x0 = self.scorpion_hit_x0_px.astype(jnp.int32)
-        hit_y0 = self.scorpion_hit_y0_px.astype(jnp.int32)
-        hit_w = self.scorpion_hit_w_px.astype(jnp.int32)
-        hit_h = self.scorpion_hit_h_px.astype(jnp.int32)
-
-        scorpion_y0 = scorpion_top_render + hit_y0
-        scorpion_y1 = scorpion_y0 + hit_h
-
-        max_scorpion_start = jnp.maximum(screen_w_i - hit_w, jnp.int32(0))
-        scorpion_left = jnp.clip(scorpion_x.astype(jnp.int32) + hit_x0, jnp.int32(0), max_scorpion_start)
-        scorpion_right = scorpion_left + hit_w
-
-        # Scorpion collision: use an "oval" (ellipse) around Harry's feet.
-        # This stays visually centered (same center convention as ladder/hole logic)
-        # and avoids boxy-looking debug overlays.
-        harry_w = self.wall_block_player_width_px.astype(jnp.int32)
-        x_int = x.astype(jnp.int32)
-        idle_shift = jnp.where(move_left | move_right, jnp.int32(0), jnp.int32(-1))
-        facing_left_now = jnp.where(move_left | move_right, move_left, state.facing_left)
-        # The raw (unflipped) Harry sprite is a bit front-heavy; shift the feet
-        # oval slightly backward when facing right so it looks centered.
-        facing_shift_x = jnp.where(facing_left_now, jnp.int32(0), jnp.int32(-2))
-        center_x_i = (
-            x_int
-            + (harry_w // jnp.int32(2))
-            + idle_shift
-            + jnp.where(on_ladder, jnp.int32(1), jnp.int32(0))
-            + facing_shift_x
+        # Scorpion and cobra collision are both CXPPMM: a lit GRP0 pixel and a
+        # lit GRP1 pixel on the same screen coordinate. The cobra previously
+        # used Harry's lit-pixel AABB against the 8x14 sprite rectangle, which
+        # killed jumps that never shared a pixel with Cobra0/Cobra1.
+        harry_bitmap = _HARRY_BITMAPS[collision_flip.astype(jnp.int32), collision_pat]
+        scorpion_bitmap = _SCORPION_BITMAPS[
+            (~scorpion_facing_at_draw).astype(jnp.int32),
+            jnp.bitwise_and(scorpion_x_at_draw, jnp.int32(1)),
+        ]
+        overlap_scorpion = player_object_pixels_collide(
+            harry_bitmap,
+            x.astype(jnp.int32),
+            harry_box_top,
+            scorpion_bitmap,
+            scorpion_x_at_draw,
+            self.scorpion_box_top_px,
         )
 
-        # Ellipse radii: match the previous feet-box dimensions.
-        player_vis_w = jnp.maximum(jnp.int32(1), harry_w - jnp.int32(4))
-        # Narrow by 1px on each side vs the previous oval.
-        rx = jnp.maximum(
-            jnp.asarray(1.0, dtype=jnp.float32),
-            (player_vis_w.astype(jnp.float32) * jnp.asarray(0.5, dtype=jnp.float32)) - jnp.asarray(1.0, dtype=jnp.float32),
+        cobra_frame_at_draw = cobra_animation_frame(
+            state.time_left,
+            state.timer_started,
+            consts,
+            self.renderer.COBRA_ANIM_BIT4,
         )
-        ry = jnp.asarray(1.0, dtype=jnp.float32)  # smaller feet region height
-
-        cx = center_x_i.astype(jnp.float32)
-        # Center the oval on the bottom few pixels of Harry.
-        cy = y.astype(jnp.float32) - jnp.asarray(1.5, dtype=jnp.float32)
-
-        # Test ellipse-vs-rect intersection by checking the closest point on the
-        # scorpion hitbox rect to the ellipse center, in normalized space.
-        rect_x0 = scorpion_left.astype(jnp.float32)
-        rect_x1 = scorpion_right.astype(jnp.float32)
-        rect_y0 = scorpion_y0.astype(jnp.float32)
-        rect_y1 = scorpion_y1.astype(jnp.float32)
-
-        px = jnp.clip(cx, rect_x0, rect_x1)
-        py = jnp.clip(cy, rect_y0, rect_y1)
-        dxn = (px - cx) / rx
-        dyn = (py - cy) / ry
-        overlap_scorpion = (dxn * dxn + dyn * dyn) <= jnp.asarray(1.0, dtype=jnp.float32)
+        overlap_snake = player_object_pixels_collide(
+            harry_bitmap,
+            x.astype(jnp.int32),
+            harry_box_top,
+            _COBRA_BITMAPS[cobra_frame_at_draw],
+            jnp.int32(consts.object_x),
+            self.cobra_box_top_px,
+        )
 
         hit_scorpion = has_scorpion & player_is_underground & overlap_scorpion & can_hurt
-        scorpion_x_before_reset = scorpion_x
+        hit_snake = has_snake & overlap_snake & can_hurt
 
-        hit_other_hazard = hit_fire | hit_snake
+        # `cpx #54 / bne .endDoJump / tya / bne .endDoJump / jmp KilledHarry`:
+        # once the sink reaches yPosHarry 54 and there is no ladder in the scene,
+        # Harry is killed. KilledHarry itself only starts the death tune, so the
+        # life and the restart come from the same path every other hazard uses.
+        pit_kill_y = jnp.asarray(
+            float(consts.ground_y + PIT_KILL_DEPTH), dtype=y.dtype
+        )
+        hit_pit = (
+            in_static_pit_scene
+            & on_upper_level
+            & (~on_ground)
+            & (y >= pit_kill_y)
+            & can_hurt
+        )
+
+        hit_other_hazard = hit_fire | hit_snake | hit_pit
         hit_hazard = hit_scorpion | hit_other_hazard
 
-        lives_left = jnp.where(hit_hazard, lives_left - jnp.int32(1), lives_left)
-        lives_left = jnp.maximum(lives_left, jnp.int32(0))
-        lost_final_life = hit_hazard & (lives_left <= jnp.int32(0))
-
-        respawn_x = jnp.asarray(consts.player_start_x, dtype=jnp.float32)
-        scorpion_respawn_x = jnp.asarray(consts.underground_respawn_x, dtype=jnp.float32)
-        respawn_ground_y = jnp.asarray(consts.ground_y, dtype=jnp.float32)
-        respawn_underground_y = jnp.asarray(consts.underground_y, dtype=jnp.float32)
-        respawn_target_x = jnp.where(
-            lost_final_life,
-            respawn_x,
-            jnp.where(hit_scorpion, scorpion_respawn_x, respawn_x),
+        # Every fatal path in the ROM ends at the same three instructions, and
+        # none of them touches livesPat or Harry: the life and the restart come
+        # 133 frames later, when the dead tune reaches SOUND_FALLING-1.
+        no_game_scroll = jnp.where(
+            hit_hazard, jnp.int32(KILLED_HARRY_SCROLL), state.no_game_scroll
         )
-        respawn_target_y = jnp.where(
-            lost_final_life,
-            respawn_ground_y,
-            jnp.where(hit_scorpion, respawn_underground_y, respawn_ground_y),
+        # The collision test sits below `.doJump` in .processHarry, so a hazard on
+        # the same frame overwrites the falling tune with the dead one.
+        sound_idx = jnp.where(hit_hazard, jnp.int32(SOUND_DEAD), sound_idx_falling)
+
+        # yPosHarry is frozen from here, and `cmp #71` reads it at restart time
+        # to pick the branch, so record it against whichever ground band Harry
+        # was standing on.
+        died_underground = current_ground_y >= jnp.asarray(
+            consts.underground_y, dtype=jnp.float32
         )
-        respawn_target_ground_y = respawn_target_y
-
-        # --- Run animation state (render-only) ------------------------------
-        running_now = gameplay_active & (~on_ladder) & on_ground & (jnp.abs(vx) > jnp.asarray(0.0, dtype=jnp.float32))
-        running_prev = (~state.on_ladder) & state.on_ground & (jnp.abs(state.player_vx) > jnp.asarray(0.0, dtype=jnp.float32))
-        started_running = running_now & (~running_prev)
-
-        # Startup lasts 4 frames total: running3 then running4.
-        run_startup_timer = jnp.where(
-            started_running,
-            jnp.int32(4),
-            jnp.where(
-                running_now,
-                jnp.maximum(state.run_startup_timer - jnp.int32(1), jnp.int32(0)),
-                jnp.int32(0),
-            ),
+        rom_y_at_death = jnp.where(
+            died_underground,
+            y - jnp.asarray(consts.underground_y, dtype=jnp.float32) + jnp.float32(UNDER_GROUND),
+            y - jnp.asarray(consts.ground_y, dtype=jnp.float32) + jnp.float32(JUNGLE_GROUND),
+        )
+        restart_rom_y = jnp.where(
+            hit_hazard, rom_y_at_death.astype(jnp.int32), state.restart_rom_y
         )
 
-        steady_running = running_now & (run_startup_timer == jnp.int32(0))
-        run_anim_timer = jnp.where(
-            steady_running,
-            state.run_anim_timer + jnp.int32(1),
-            jnp.int32(0),
+        # --- `.swingLiana` ---------------------------------------------------
+        # `.endCollision / jmp .swingLiana` puts the swing immediately below the
+        # collision block, so this sits where the ROM has it. Two ordered NTSC
+        # frames per step, the second reading everything the first wrote.
+        #
+        # `jmp KilledHarry` leaves .processHarry above this label, so the frame
+        # that kills Harry never swings the liana, and the frozen pause that
+        # follows never reaches .processHarry at all.
+        liana_swings = gameplay_active & (~hit_hazard)
+        liana_pos_hi = state.liana_pos_hi
+        liana_pos_lo = state.liana_pos_lo
+        hmbl_add = state.hmbl_add
+        hmbl_dir = state.hmbl_dir
+        liana_bottom = state.liana_bottom
+        for _ in range(NTSC_FRAMES_PER_STEP):
+            swung = liana_swing_frame(liana_pos_hi, liana_pos_lo)
+            liana_pos_hi = jnp.where(liana_swings, swung[0], liana_pos_hi)
+            liana_pos_lo = jnp.where(liana_swings, swung[1], liana_pos_lo)
+            hmbl_add = jnp.where(liana_swings, swung[2], hmbl_add)
+            hmbl_dir = jnp.where(liana_swings, swung[3], hmbl_dir)
+            liana_bottom = jnp.where(liana_swings, swung[4], liana_bottom)
+
+        # --- `.stopJump` and `.skipJumpOff` -----------------------------------
+        # jumpMode is written in exactly two places. `.stopJump` clears it when the
+        # table puts Harry back on a floor, and the release below sets it, so it is
+        # what keeps a Harry who has just let go from grabbing the rope again on
+        # the way down.
+        jump_mode = jnp.where(jump_landed, jnp.uint8(0), state.jump_mode)
+
+        #     lda    atLiana          ; 3                 Harry at liana?
+        #     beq    .skipJumpOff     ; 2³                 no, skip jump of liana
+        #     lda    joystick         ; 3
+        #     and    #~[$f0|MOVE_DOWN]; 2                 joystick down?
+        #     bne    .skipJumpOff     ; 2³                 no, skip
+        #     sta    atLiana          ; 3                  yes, leave "liana mode"
+        #     lda    #JUMP_LEN/2      ; 2                 start jump down
+        #     sta    jumpIndex        ; 3
+        #     sta    jumpMode         ; 3
+        #     ldy    #MOVE_RIGHT      ; 2
+        #     lda    hmblDir          ; 3                 jump in liana direction
+        #     bmi    .jumpRight       ; 2³
+        #     ldy    #MOVE_LEFT       ; 2
+        #   .jumpRight:
+        #     sty    oldJoystick      ; 3
+        #
+        # The mask leaves bit 1 alone and nothing else, so any DOWN releases -
+        # down, down-left, down-right, down-and-fire alike.
+        releasing = at_liana_step & down_pressed
+        at_liana_out = jnp.where(
+            releasing, jnp.uint8(0), at_liana_step.astype(jnp.uint8)
         )
-        hold_frames = jnp.int32(3)
-        advance_phase = steady_running & (run_anim_timer >= hold_frames)
-        run_anim_timer = jnp.where(advance_phase, jnp.int32(0), run_anim_timer)
-        run_anim_phase = jnp.where(
-            steady_running,
-            jnp.where(
-                advance_phase,
-                jnp.mod(state.run_anim_phase + jnp.int32(1), jnp.int32(4)),
-                state.run_anim_phase,
-            ),
-            jnp.int32(0),
+
+        # `.skipJumpOff` is below `.doJump`, so the release frame writes jumpIndex
+        # after the table has already had its turn and consumes nothing. This step
+        # holds two NTSC frames, so the second one is the first to take an entry -
+        # JumpTab[15], one pixel up - and the arc carries on from index 17.
+        moving_right = hmbl_dir.astype(jnp.int32) == jnp.int32(HMBL_DIR_RIGHT)
+        release_vx = jnp.where(moving_right, speed, -speed)
+        y_release, index_release, landed_release = jump_table_subframe(
+            state.player_y, jnp.int32(JUMP_LEN // 2), jump_floor
         )
+        jump_index = jnp.where(releasing, index_release, jump_index)
+        jump_mode = jnp.where(releasing, jnp.uint8(JUMP_LEN // 2), jump_mode)
+        jump_mode = jnp.where(releasing & landed_release, jnp.uint8(0), jump_mode)
+        # oldJoystick is MOVE_RIGHT or MOVE_LEFT, which is what carries Harry
+        # sideways for the rest of the arc; jump_lock_vx is this port's name for it.
+        jump_lock_active = jnp.where(
+            releasing, jnp.array(True, dtype=jnp.bool_), jump_lock_active
+        )
+        jump_lock_vx = jnp.where(releasing, release_vx, jump_lock_vx)
+
+        # --- `.skipSwingHarry` -------------------------------------------------
+        #     lda    hmblAdd / lsr / lsr        ; A = hmblAdd >> 2
+        #     clc
+        #     ldy    hmblDir / bmi .isNeg
+        #     eor    #$ff / sec                 ; the left-moving branch negates
+        #   .isNeg:
+        #     adc    #75 / sta xPosHarry
+        #     lda    #$29 / sec / sbc lianaBottom / sta yPosHarry
+        #
+        # $f0 is negative, so `bmi` takes the right-moving branch straight to the
+        # add and Harry ends up at 75 + offset; the left branch one's-complements
+        # the offset and sets carry, which is 75 - offset in a byte. Both are
+        # written every frame Harry hangs there, so his x and y are the rope's,
+        # never anything of his own. The 75 is `adc #75`'s own literal - three
+        # columns left of the ball's anchor 78, which is what lays the rope onto
+        # Harry6's raised hand at box columns 0-1.
+        swing_offset = (hmbl_add.astype(jnp.int32) >> jnp.int32(2)) & jnp.int32(0xFF)
+        swing_x = (
+            jnp.int32(LIANA_HARRY_X)
+            + jnp.where(moving_right, swing_offset, -swing_offset)
+        ).astype(jnp.uint8).astype(jnp.float32)
+        swing_rom_y = (jnp.int32(0x29) - liana_bottom.astype(jnp.int32)) & jnp.int32(0xFF)
+        swing_y = (
+            upper_ground - jnp.float32(JUNGLE_GROUND) + swing_rom_y.astype(jnp.float32)
+        )
+
+        attached = at_liana_out != jnp.uint8(0)
+        # The release frame is not a `.skipSwingHarry` frame - atLiana is already
+        # clear by the time it is reached - so Harry lets go from the column and row
+        # the previous frame's placement left him on. `.skipJumpOff` is also above
+        # the movement block, so that block does run on the release frame, and with
+        # jumpIndex nonzero it reads the oldJoystick the release just wrote: one
+        # pixel in the rope's direction, on the even NTSC frame of the two.
+        x = jnp.where(releasing, state.player_x + release_vx, x)
+        x = jnp.where(attached, swing_x, x)
+        y = jnp.where(releasing, y_release, y)
+        y = jnp.where(attached, swing_y, y)
+        # That same movement block writes `ldy #REFLECT / sty reflectHarry` on the
+        # branch it takes, so letting go also turns Harry to face the way he is
+        # thrown. player_vx is what this port's facing and pose predicates read.
+        vx = jnp.where(releasing, release_vx, vx)
+        vx = jnp.where(attached, jnp.asarray(0.0, dtype=jnp.float32), vx)
+        vy = jnp.where(releasing, y_release - state.player_y, vy)
+        vy = jnp.where(attached, jnp.asarray(0.0, dtype=jnp.float32), vy)
+        on_ground = jnp.where(attached, jnp.array(False, dtype=jnp.bool_), on_ground)
+        on_ladder = jnp.where(attached, jnp.array(False, dtype=jnp.bool_), on_ladder)
+        current_ground_y = jnp.where(attached, upper_ground, current_ground_y)
+        jump_index = jnp.where(attached, jnp.int32(0), jump_index)
+        jump_lock_active = jump_lock_active & (~attached)
+        # `stx soundIdx` after `inx`, so the tarzan yell starts at index 1.
+        sound_idx = jnp.where(
+            (liana_grab_sub1 | liana_grab_sub2) & (~releasing), jnp.int32(1), sound_idx
+        )
+
+        # --- ROM running cadence (patIdHarry / frameCnt) --------------------
+        # NTSC: move on frameCnt%4 in {0,2}; dec patId only when %4==0.
+        # One JAX step is two Atari frames, so frame_cnt += 1 per step and the
+        # pose advances when that counter is odd: once every 2 JAX steps, not 4.
+        moving_h = move_left | move_right
+        anim_tick = (frame_cnt & jnp.int32(1)) == jnp.int32(1)
+        can_cycle = (
+            gameplay_active
+            & on_ground
+            & (~on_ladder)
+            & moving_h
+            & anim_tick
+        )
+        pat_id_harry = state.pat_id_harry.astype(jnp.int32)
+        pat_id_harry = jnp.where(can_cycle, pat_id_harry - jnp.int32(1), pat_id_harry)
+        pat_id_harry = jnp.where(pat_id_harry < jnp.int32(0), jnp.int32(ID_RUNNING4), pat_id_harry)
+        pat_id_harry = jnp.where(moving_h, pat_id_harry, jnp.int32(ID_STANDING))
         # --------------------------------------------------------------------
 
-        vx = jnp.where(hit_hazard, jnp.asarray(0.0, dtype=jnp.float32), vx)
+        # `jmp KilledHarry` lands on `jmp ProcessObjects`, and the collision test
+        # it came from sits above both the horizontal-movement block and
+        # `stx patIdHarry`, so the fatal frame leaves Harry's pose and heading
+        # exactly as the frame before drew them. vx is left alone for that reason:
+        # `x = x + vx` has already run this frame, and the frozen branch never
+        # runs it again, so keeping it costs no motion and is what tells the
+        # renderer which run frame and which way round to hold him.
         vy = jnp.where(hit_hazard, jnp.asarray(0.0, dtype=jnp.float32), vy)
+        jump_index = jnp.where(hit_hazard, jnp.int32(0), jump_index)
         on_ladder = jnp.where(hit_hazard, jnp.array(False, dtype=jnp.bool_), on_ladder)
-        ladder_exit_frames = jnp.where(hit_hazard, jnp.int32(0), ladder_exit_frames)
 
         next_hurt_cooldown = jnp.maximum(hurt_cooldown - jnp.int32(1), jnp.int32(0))
         next_hurt_cooldown = jnp.where(
@@ -1644,10 +3136,9 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         )
 
         respawn_phase = jnp.where(hit_hazard, jnp.int32(1), state.respawn_phase)
-        respawn_timer = jnp.where(hit_hazard, jnp.int32(consts.death_pause_frames), state.respawn_timer)
-        stored_respawn_target_x = jnp.where(hit_hazard, respawn_target_x, state.respawn_target_x)
-        stored_respawn_target_y = jnp.where(hit_hazard, respawn_target_y, state.respawn_target_y)
-        stored_respawn_target_ground_y = jnp.where(hit_hazard, respawn_target_ground_y, state.respawn_target_ground_y)
+        stored_respawn_target_ground_y = jnp.where(
+            hit_hazard, current_ground_y, state.respawn_target_ground_y
+        )
 
         done = (time_left <= 0)
 
@@ -1667,132 +3158,210 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             on_ladder=on_ladder,
             current_ground_y=current_ground_y,
             scorpion_x=scorpion_x,
-            scorpion_anim_idx=scorpion_anim_idx,
-            scorpion_anim_timer=scorpion_anim_timer,
             scorpion_facing_right=scorpion_facing_right,
             touching_wood=touching_wood,
             touching_rolling_wood=touching_rolling_wood,
             rolling_wood_contact_x=rolling_contact_x,
             climb_active=climb_active,
-            ladder_step_idx=ladder_step_idx,
-            ladder_step_timer=ladder_step_timer,
-            run_startup_timer=run_startup_timer,
-            run_anim_phase=run_anim_phase,
-            run_anim_timer=run_anim_timer,
+            climb_pos=climb_pos,
+            pat_id_harry=pat_id_harry,
+            frame_cnt=frame_cnt,
+            # `ldy #REFLECT / sty reflectHarry` is inside the block atLiana skips,
+            # so a swinging Harry keeps whichever way round he was when he caught
+            # the rope.
             facing_left=jnp.where(
-                move_left, jnp.array(True, dtype=jnp.bool_),
-                jnp.where(move_right, jnp.array(False, dtype=jnp.bool_), state.facing_left),
+                attached,
+                state.facing_left,
+                jnp.where(
+                    releasing,
+                    release_vx < jnp.float32(0.0),
+                    jnp.where(
+                        move_left, jnp.array(True, dtype=jnp.bool_),
+                        jnp.where(move_right, jnp.array(False, dtype=jnp.bool_), state.facing_left),
+                    ),
+                ),
             ),
-            log_push_remaining=log_push_remaining,
-            ladder_exit_frames=ladder_exit_frames,
             respawn_phase=respawn_phase,
-            respawn_timer=respawn_timer,
-            respawn_target_x=stored_respawn_target_x,
-            respawn_target_y=stored_respawn_target_y,
             respawn_target_ground_y=stored_respawn_target_ground_y,
+            no_game_scroll=no_game_scroll,
+            sound_idx=sound_idx,
+            sound_delay=state.sound_delay,
+            restart_rom_y=restart_rom_y,
 
             jump_pressed_prev=jump_pressed,
             jump_lock_active=jump_lock_active,
             jump_lock_vx=jump_lock_vx,
+            jump_index=jump_index,
+            liana_pos_hi=liana_pos_hi,
+            liana_pos_lo=liana_pos_lo,
+            hmbl_add=hmbl_add,
+            hmbl_dir=hmbl_dir,
+            liana_bottom=liana_bottom,
+            at_liana=at_liana_out,
+            jump_mode=jump_mode,
             screen_id=new_screen_id,
             room_byte=new_room_byte,
         )
 
-        is_pause_phase = state.respawn_phase == jnp.int32(1)
-        is_drop_phase = state.respawn_phase == jnp.int32(2)
-        start_drop = is_pause_phase & (state.respawn_timer <= jnp.int32(1))
-        pause_timer_next = jnp.maximum(state.respawn_timer - jnp.int32(1), jnp.int32(0))
-        underground_respawn = state.respawn_target_ground_y == jnp.asarray(consts.underground_y, dtype=jnp.float32)
-        wall_top_y = jnp.asarray(
-            consts.underground_y - self.wall_render_height_px.astype(jnp.int32) + consts.underground_respawn_wall_clearance,
-            dtype=jnp.float32,
+        # --- the frozen half of the frame ------------------------------------
+        # `lda noGameScroll / beq .processHarry / jmp ProcessObjects` skips the
+        # whole of .processHarry, so nothing below reads the joystick, moves
+        # Harry, animates the quicksand or rolls the logs. One JAX step is two
+        # NTSC frames, so the counters below tick twice.
+        d_phase = state.respawn_phase
+        d_scroll = state.no_game_scroll
+        d_sound = state.sound_idx
+        d_delay = state.sound_delay
+        d_rom_y = state.restart_rom_y
+        d_lives = state.lives_left
+        d_x = state.player_x
+        d_facing = state.facing_left
+        d_scorpion = state.scorpion_x
+        d_jump_index = jnp.int32(0)
+        d_liana_hi = state.liana_pos_hi
+        d_liana_lo = state.liana_pos_lo
+        d_hmbl_add = state.hmbl_add
+        d_hmbl_dir = state.hmbl_dir
+        d_liana_bottom = state.liana_bottom
+        d_jump_mode = state.jump_mode
+
+        for _ in range(NTSC_FRAMES_PER_STEP):
+            frozen = d_phase == jnp.int32(1)
+            scroll_next, sound_next, delay_next, life_loss = advance_death_frame(
+                d_scroll, d_sound, d_delay
+            )
+            d_scroll = jnp.where(frozen, scroll_next, d_scroll)
+            d_sound = jnp.where(frozen, sound_next, d_sound)
+            d_delay = jnp.where(frozen, delay_next, d_delay)
+
+            # `lda livesPat / beq .slipDecrease`: livesPat is $a0 / $80 / $00 for
+            # three, two and one life, so a death on the last life falls straight
+            # through - no decrement, no restart, and noGameScroll left running.
+            take_life = frozen & life_loss & (d_lives > jnp.int32(1))
+            game_over = frozen & life_loss & (d_lives <= jnp.int32(1))
+
+            # `cmp #71 / bcc LF5D2` picks the branch off the frozen yPosHarry.
+            under = d_rom_y >= jnp.int32(RESTART_UNDERGROUND_TEST_Y)
+
+            d_lives = jnp.where(take_life, d_lives - jnp.int32(1), d_lives)
+            d_lives = jnp.where(game_over, jnp.int32(0), d_lives)
+            d_scroll = jnp.where(take_life, jnp.int32(0), d_scroll)
+            # `lda #NOREFLECT / sta reflectHarry`
+            d_facing = jnp.where(take_life, jnp.array(False, dtype=jnp.bool_), d_facing)
+            d_x = jnp.where(take_life, jnp.float32(RESTART_X), d_x)
+            d_jump_index = jnp.where(take_life, jnp.int32(JUMP_LEN), d_jump_index)
+            # `lda #SCREENWIDTH/2-4 / sta xPosScorpion`, underground branch only.
+            d_scorpion = jnp.where(take_life & under, scorpion_spawn_x, d_scorpion)
+            d_rom_y = jnp.where(
+                take_life,
+                jnp.where(under, jnp.int32(RESTART_Y_UNDER), jnp.int32(RESTART_Y_UPPER)),
+                d_rom_y,
+            )
+            d_phase = jnp.where(take_life, jnp.int32(2), d_phase)
+
+            # The restart frame is also the first frame Harry is processed again,
+            # so JumpTab's trailing -1 already applies here. yPosHarry is a byte:
+            # from 223 it counts through 255 and wraps to 0, which is the whole of
+            # the pause before Harry drops back into view.
+            dropping = d_phase == jnp.int32(2)
+            d_rom_y = jnp.where(dropping, (d_rom_y + jnp.int32(1)) & jnp.int32(0xFF), d_rom_y)
+            # `cpx #JUNGLE_GROUND / beq .stopJump` and its UNDER_GROUND twin.
+            stopped = dropping & (
+                (d_rom_y == jnp.int32(JUNGLE_GROUND)) | (d_rom_y == jnp.int32(UNDER_GROUND))
+            )
+            d_phase = jnp.where(stopped, jnp.int32(0), d_phase)
+            d_jump_index = jnp.where(stopped, jnp.int32(0), d_jump_index)
+            # `.stopJump` writes both bytes, so the restart drop's landing is also
+            # what clears a jumpMode left over from a release Harry did not survive.
+            d_jump_mode = jnp.where(stopped, jnp.uint8(0), d_jump_mode)
+
+            # `.swingLiana` again: the restart drop clears noGameScroll, so from
+            # the restart frame on .processHarry runs and the liana swings with
+            # it. Only the frozen pause above it is skipped, and the oscillator
+            # is never reset - it comes out of the death at the phase it went in
+            # at, plus however many frames Harry was falling.
+            liana_frame = d_phase != jnp.int32(1)
+            swung = liana_swing_frame(d_liana_hi, d_liana_lo)
+            d_liana_hi = jnp.where(liana_frame, swung[0], d_liana_hi)
+            d_liana_lo = jnp.where(liana_frame, swung[1], d_liana_lo)
+            d_hmbl_add = jnp.where(liana_frame, swung[2], d_hmbl_add)
+            d_hmbl_dir = jnp.where(liana_frame, swung[3], d_hmbl_dir)
+            d_liana_bottom = jnp.where(liana_frame, swung[4], d_liana_bottom)
+
+        # yPosHarry mapped straight onto the raster, wrap included. The 223..255
+        # run is not flagged as hidden anywhere: carried through the same
+        # arithmetic it simply lands hundreds of rows below the screen, which is
+        # the ROM's own situation - the kernel's Y counter never reaches Harry's
+        # window there either. render_at_clipped drops it for the same reason the
+        # kernel does, so nothing needs to know that a restart is in progress.
+        restart_is_under = (d_rom_y > jnp.int32(JUNGLE_GROUND)) & (
+            d_rom_y <= jnp.int32(UNDER_GROUND)
         )
-        # Render uses a fixed reveal boundary at ground_y (+ offset). Anchor the underground
-        # respawn spawn position to this same boundary so Harry emerges from the tunnel edge
-        # rather than dropping in from above it.
-        underground_reveal_y = jnp.asarray(
-            consts.ground_y + consts.underground_respawn_reveal_from_ground + consts.underground_respawn_reveal_y_offset,
-            dtype=jnp.float32,
+        restart_ground = jnp.where(
+            restart_is_under,
+            jnp.asarray(consts.underground_y, dtype=jnp.float32),
+            jnp.asarray(consts.ground_y, dtype=jnp.float32),
         )
-        respawn_spawn_y = jnp.where(
-            underground_respawn,
-            jnp.asarray(
-                underground_reveal_y - consts.underground_respawn_spawn_above_reveal,
-                dtype=jnp.float32,
-            ),
-            jnp.asarray(
-                consts.ground_y - consts.respawn_drop_spawn_y_offset,
-                dtype=jnp.float32,
-            ),
+        restart_datum = jnp.where(
+            restart_is_under, jnp.float32(UNDER_GROUND), jnp.float32(JUNGLE_GROUND)
         )
-        respawn_drop_speed = jnp.asarray(consts.respawn_drop_speed, dtype=jnp.float32)
-        drop_y = jnp.minimum(state.player_y + respawn_drop_speed, state.respawn_target_y)
-        landed = is_drop_phase & (drop_y >= state.respawn_target_y)
+        restart_y = restart_ground + (d_rom_y.astype(jnp.float32) - restart_datum)
+
+        dropped = state.respawn_phase == jnp.int32(2)
+        restarted = dropped | (d_phase == jnp.int32(2)) | (d_phase == jnp.int32(0))
 
         transition_state = PitfallState(
-            player_x=jnp.where(start_drop | is_drop_phase, state.respawn_target_x, state.player_x),
-            player_y=jnp.where(
-                start_drop,
-                respawn_spawn_y,
-                jnp.where(is_drop_phase, drop_y, state.player_y),
-            ),
-            player_vx=jnp.array(0.0, dtype=jnp.float32),
-            player_vy=jnp.where(
-                start_drop | (is_drop_phase & (~landed)),
-                respawn_drop_speed,
-                jnp.array(0.0, dtype=jnp.float32),
-            ),
-            on_ground=jnp.where(
-                start_drop,
-                jnp.array(False, dtype=jnp.bool_),
-                jnp.where(is_drop_phase, landed, state.on_ground),
-            ),
+            player_x=jnp.where(restarted, d_x, state.player_x),
+            player_y=jnp.where(restarted, restart_y, state.player_y),
+            # Frozen means frozen, not reset: .processHarry is skipped whole, so
+            # every byte describing Harry keeps the value the fatal frame left.
+            # player_vx is what the renderer reads for facing and for the run
+            # pose, so clearing it here would snap a dying Harry to standing.
+            player_vx=jnp.where(restarted, jnp.float32(0.0), state.player_vx),
+            player_vy=jnp.array(0.0, dtype=jnp.float32),
+            on_ground=jnp.where(restarted, d_phase == jnp.int32(0), state.on_ground),
             score=state.score,
             timer_started=state.timer_started,
             time_left=state.time_left,
-            lives_left=state.lives_left,
+            lives_left=d_lives,
             done=state.done,
             hurt_cooldown=state.hurt_cooldown,
             down_pressed=jnp.array(False, dtype=jnp.bool_),
             on_ladder=jnp.array(False, dtype=jnp.bool_),
-            current_ground_y=jnp.where(
-                start_drop | is_drop_phase,
-                state.respawn_target_ground_y,
-                state.current_ground_y,
-            ),
-            scorpion_x=jnp.where(
-                start_drop & underground_respawn,
-                scorpion_spawn_x,
-                state.scorpion_x,
-            ),
-            scorpion_anim_idx=jnp.int32(0),
-            scorpion_anim_timer=jnp.int32(0),
+            current_ground_y=jnp.where(restarted, restart_ground, state.current_ground_y),
+            scorpion_x=d_scorpion,
             scorpion_facing_right=state.scorpion_facing_right,
             touching_wood=jnp.array(False, dtype=jnp.bool_),
             touching_rolling_wood=jnp.array(False, dtype=jnp.bool_),
             rolling_wood_contact_x=jnp.array(0.0, dtype=jnp.float32),
             climb_active=jnp.array(False, dtype=jnp.bool_),
-            ladder_step_idx=jnp.int32(0),
-            ladder_step_timer=jnp.int32(0),
-            run_startup_timer=jnp.int32(0),
-            run_anim_phase=jnp.int32(0),
-            run_anim_timer=jnp.int32(0),
-            facing_left=state.facing_left,
-            log_push_remaining=jnp.array(0.0, dtype=jnp.float32),
-            ladder_exit_frames=jnp.int32(0),
-            respawn_phase=jnp.where(
-                is_pause_phase,
-                jnp.where(start_drop, jnp.int32(2), jnp.int32(1)),
-                jnp.where(is_drop_phase, jnp.where(landed, jnp.int32(0), jnp.int32(2)), jnp.int32(0)),
+            climb_pos=jnp.int32(0),
+            # `stx patIdHarry` lives past the collision check in .processHarry, so
+            # the freeze never reaches it and the impact pose stands until the
+            # restart puts Harry back on his feet.
+            pat_id_harry=jnp.where(restarted, jnp.int32(ID_STANDING), state.pat_id_harry),
+            frame_cnt=jnp.int32(0),
+            facing_left=d_facing,
+            respawn_phase=d_phase,
+            respawn_target_ground_y=jnp.where(
+                restarted, restart_ground, state.respawn_target_ground_y
             ),
-            respawn_timer=jnp.where(is_pause_phase & (~start_drop), pause_timer_next, jnp.int32(0)),
-            respawn_target_x=state.respawn_target_x,
-            respawn_target_y=state.respawn_target_y,
-            respawn_target_ground_y=state.respawn_target_ground_y,
+            no_game_scroll=d_scroll,
+            sound_idx=d_sound,
+            sound_delay=d_delay,
+            restart_rom_y=d_rom_y,
 
             jump_pressed_prev=state.jump_pressed_prev,
             jump_lock_active=jnp.array(False, dtype=jnp.bool_),
             jump_lock_vx=jnp.array(0.0, dtype=jnp.float32),
+            jump_index=d_jump_index,
+            liana_pos_hi=d_liana_hi,
+            liana_pos_lo=d_liana_lo,
+            hmbl_add=d_hmbl_add,
+            hmbl_dir=d_hmbl_dir,
+            liana_bottom=d_liana_bottom,
+            at_liana=state.at_liana,
+            jump_mode=d_jump_mode,
             screen_id=state.screen_id,
             room_byte=state.room_byte,
         )
@@ -1802,7 +3371,9 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             new_state,
             transition_state,
         )
-        final_done = (final_state.time_left <= 0) | ((final_state.lives_left <= 0) & (final_state.respawn_phase == jnp.int32(0)))
+        # livesPat only reaches zero on the game-over branch, and that branch
+        # never restarts Harry, so this is the ROM's "game is stopped" state.
+        final_done = (final_state.time_left <= 0) | (final_state.lives_left <= 0)
         final_state = final_state.replace(done=final_done)
 
         obs = self._get_observation(final_state)
@@ -1928,30 +3499,39 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             down_pressed=jnp.array(False, dtype=jnp.bool_),
             on_ladder=jnp.array(False, dtype=jnp.bool_),
             current_ground_y=jnp.array(consts.ground_y, dtype=jnp.float32),
-            scorpion_x=jnp.array(consts.scorpion_spawn_x, dtype=jnp.float32),
-            scorpion_anim_idx=jnp.int32(0),
-            scorpion_anim_timer=jnp.int32(0),
+            scorpion_x=jnp.array(consts.scorpion_spawn_x, dtype=jnp.int32),
             scorpion_facing_right=jnp.array(True, dtype=jnp.bool_),
             touching_wood=jnp.array(False, dtype=jnp.bool_),
             touching_rolling_wood=jnp.array(False, dtype=jnp.bool_),
             rolling_wood_contact_x=jnp.array(0.0, dtype=jnp.float32),
             climb_active=jnp.array(False, dtype=jnp.bool_),
-            ladder_step_idx=jnp.int32(0),
-            ladder_step_timer=jnp.int32(0),
-            run_startup_timer=jnp.int32(0),
-            run_anim_phase=jnp.int32(0),
-            run_anim_timer=jnp.int32(0),
+            climb_pos=jnp.int32(0),
+            pat_id_harry=jnp.int32(ID_STANDING),
+            frame_cnt=jnp.int32(0),
             facing_left=jnp.array(False, dtype=jnp.bool_),
-            log_push_remaining=jnp.array(0.0, dtype=jnp.float32),
-            ladder_exit_frames=jnp.array(0, dtype=jnp.int32),
             respawn_phase=jnp.array(0, dtype=jnp.int32),
-            respawn_timer=jnp.array(0, dtype=jnp.int32),
-            respawn_target_x=jnp.array(consts.player_start_x, dtype=jnp.float32),
-            respawn_target_y=jnp.array(consts.ground_y, dtype=jnp.float32),
             respawn_target_ground_y=jnp.array(consts.ground_y, dtype=jnp.float32),
+            # InitGame leaves noGameScroll at $ff and waits for the first
+            # joystick nudge to clear it; this port starts on the running game,
+            # so it starts where `stx noGameScroll` would have left it.
+            no_game_scroll=jnp.array(0, dtype=jnp.int32),
+            sound_idx=jnp.array(0, dtype=jnp.int32),
+            sound_delay=jnp.array(0, dtype=jnp.int32),
+            restart_rom_y=jnp.array(JUNGLE_GROUND, dtype=jnp.int32),
             jump_pressed_prev=jnp.array(False, dtype=jnp.bool_),
             jump_lock_active=jnp.array(False, dtype=jnp.bool_),
             jump_lock_vx=jnp.array(0.0, dtype=jnp.float32),
+            jump_index=jnp.int32(0),
+            # Cleared RAM. Reset zeroes the whole page and nothing in the game
+            # ever writes these seven outside `.swingLiana` and the grab and
+            # release, so a new game always starts the swing from a dead centre.
+            liana_pos_hi=jnp.array(0, dtype=jnp.uint8),
+            liana_pos_lo=jnp.array(0, dtype=jnp.uint8),
+            hmbl_add=jnp.array(0, dtype=jnp.uint8),
+            hmbl_dir=jnp.array(0, dtype=jnp.uint8),
+            liana_bottom=jnp.array(0, dtype=jnp.uint8),
+            at_liana=jnp.array(0, dtype=jnp.uint8),
+            jump_mode=jnp.array(0, dtype=jnp.uint8),
             screen_id=jnp.array(0, dtype=jnp.int32),
             room_byte=jnp.array(SEED, dtype=jnp.uint8),
         )
@@ -2008,8 +3588,6 @@ class PitfallRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # Debug (render-only): scorpion collision overlay toggle.
-        self.DEBUG_SCORPION_HITBOX = jnp.array(bool(self.consts.debug_render_hitboxes), dtype=jnp.bool_)
-
         sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sprites', 'pitfall')
         asset_config = list(self.consts.ASSET_CONFIG)
 
@@ -2019,7 +3597,7 @@ class PitfallRenderer(JAXGameRenderer):
         bg = jnp.zeros((h, w, 4), dtype=jnp.uint8)
         bg = bg.at[:, :, 3].set(255)
         ground = int(self.consts.ground_y)
-        underground = int(self.consts.underground_y)
+        underground = underground_floor_row(self.consts.underground_y)
         bg = bg.at[ground:ground + 2, :, 1].set(200)
         bg = bg.at[underground:underground + 2, :, 1].set(120)
 
@@ -2027,72 +3605,6 @@ class PitfallRenderer(JAXGameRenderer):
             {'name': 'background', 'type': 'background', 'data': bg},
             *[a for a in asset_config if a.get('type') != 'background'],
         ]
-
-        def _load_alpha_group(file_names: list[str], rgb: tuple[int, int, int]) -> list[jnp.ndarray]:
-            def _trim_rgba(frame_rgba: jnp.ndarray) -> jnp.ndarray:
-                frame_np = np.array(frame_rgba)
-                alpha = frame_np[:, :, 3] > 0
-                ys, xs = np.where(alpha)
-                if ys.size == 0 or xs.size == 0:
-                    return frame_rgba
-                y0, y1 = int(ys.min()), int(ys.max())
-                x0, x1 = int(xs.min()), int(xs.max())
-                return jnp.asarray(frame_np[y0:y1 + 1, x0:x1 + 1, :], dtype=jnp.uint8)
-
-            frames = []
-            max_h = 1
-            max_w = 1
-            for file_name in file_names:
-                file_path = os.path.join(sprite_path, file_name)
-                frame_np = np.load(file_path)
-                frame = jnp.asarray(frame_np)
-
-                if frame.ndim == 2:
-                    alpha = jnp.where(frame > 0, jnp.uint8(255), jnp.uint8(0))
-                    h_frame, w_frame = alpha.shape
-                    color_rgb = jnp.stack(
-                        [
-                            jnp.full((h_frame, w_frame), jnp.uint8(rgb[0]), dtype=jnp.uint8),
-                            jnp.full((h_frame, w_frame), jnp.uint8(rgb[1]), dtype=jnp.uint8),
-                            jnp.full((h_frame, w_frame), jnp.uint8(rgb[2]), dtype=jnp.uint8),
-                        ],
-                        axis=2,
-                    )
-                    frame_rgba = jnp.concatenate([color_rgb, alpha[:, :, None]], axis=2)
-                elif frame.ndim == 3 and frame.shape[2] in (3, 4):
-                    frame_u8 = frame.astype(jnp.uint8)
-                    if frame_u8.shape[2] == 3:
-                        alpha = jnp.where(jnp.any(frame_u8 != 0, axis=2), jnp.uint8(255), jnp.uint8(0))
-                        frame_rgba = jnp.concatenate([frame_u8, alpha[:, :, None]], axis=2)
-                    else:
-                        frame_rgba = frame_u8
-                else:
-                    raise ValueError(f"Unsupported scorpion frame format for {file_name}: shape={frame.shape}")
-
-                frame_rgba = _trim_rgba(frame_rgba)
-                # IMPORTANT: do not downscale here.
-                # Scorpion masks are downscaled later alongside other sprites; doing it here as
-                # well effectively double-downscales and can delete thin features (tail tip).
-                frames.append(frame_rgba)
-
-                max_h = max(max_h, int(frame_rgba.shape[0]))
-                max_w = max(max_w, int(frame_rgba.shape[1]))
-
-            # Pad to a common size so asset loading can stack frames.
-            # Padding is transparent (alpha=0), so it never crops visible pixels.
-            padded_frames = []
-            for fr in frames:
-                pad_h = max_h - int(fr.shape[0])
-                pad_w = max_w - int(fr.shape[1])
-                padded_frames.append(
-                    jnp.pad(
-                        fr,
-                        ((0, pad_h), (0, pad_w), (0, 0)),
-                        mode='constant',
-                        constant_values=jnp.uint8(0),
-                    )
-                )
-            return padded_frames
 
         def _normalize_to_rgba_u8(image: np.ndarray, asset_name: str) -> np.ndarray:
             if image.ndim == 2:
@@ -2194,20 +3706,18 @@ class PitfallRenderer(JAXGameRenderer):
                 converted_backdrop = _load_fullscreen_backdrop(asset['name'], asset['file'])
                 if converted_backdrop is not None:
                     converted_asset_config.append(converted_backdrop)
-            elif asset.get('name') == 'scorpion_left' and asset.get('type') == 'group' and 'files' in asset:
+            elif asset.get('name') == 'cobra' and asset.get('type') == 'group' and 'files' in asset:
+                # Full-screen captures: crop the 8x14 GRP1 box at xPosObject=124.
+                # Keep black (the cobra body); do not treat it as transparent.
+                cobra_crop = (118, 124, 132, 132)
                 converted_asset_config.append(
                     {
-                        'name': 'scorpion_left',
+                        'name': 'cobra',
                         'type': 'group',
-                        'data': _load_alpha_group(asset['files'], (255, 255, 255)),
-                    }
-                )
-            elif asset.get('name') == 'scorpion_right' and asset.get('type') == 'group' and 'files' in asset:
-                converted_asset_config.append(
-                    {
-                        'name': 'scorpion_right',
-                        'type': 'group',
-                        'data': _load_alpha_group(asset['files'], (255, 255, 255)),
+                        'data': [
+                            _load_trimmed_sprite(file_name, cobra_crop, black_transparent=False)
+                            for file_name in asset['files']
+                        ],
                     }
                 )
             else:
@@ -2222,6 +3732,19 @@ class PitfallRenderer(JAXGameRenderer):
                 {'name': 'color_wood', 'type': 'procedural', 'data': _color_swatch((110, 70, 25))},
                 {'name': 'color_fire', 'type': 'procedural', 'data': _color_swatch((255, 120, 0))},
                 {'name': 'color_snake', 'type': 'procedural', 'data': _color_swatch((20, 200, 0))},
+                # ColorTab+8, the swamp colour, is ROM `BLUE`. This is its ALE
+                # rendering, read out of croc1.npy at rows 125-126 where
+                # Croco1's sparse open-jaw rows let COLUBK show through in a
+                # BLUEPIT scene; it is the only blue in the sprite set.
+                {'name': 'color_swamp', 'type': 'procedural', 'data': _color_swatch((45, 109, 152))},
+                # ScorpionColor is WHITE for every row of the pattern.
+                {'name': 'color_scorpion', 'type': 'procedural', 'data': _color_swatch((255, 255, 255))},
+                # The liana is the ball, and the ball draws in COLUPF. Kernel 2's
+                # opening line loads that from `colorLst+5`, ColorTab+5, which is
+                # ROM BROWN-2 = $10. The palette is not guessed: the log sprite's
+                # own pixels are (105, 105, 15), which is $12 - ROM BROWN, one
+                # luminance step up - so this set renders $10 as (72, 72, 0).
+                {'name': 'color_liana', 'type': 'procedural', 'data': _color_swatch((72, 72, 0))},
                 {'name': 'color_hole', 'type': 'procedural', 'data': _color_swatch((0, 0, 0))},
                 {'name': 'log_left_sprite', 'type': 'single', 'data': log_left_rgba},
                 {'name': 'log_right_sprite', 'type': 'single', 'data': log_right_rgba},
@@ -2241,7 +3764,10 @@ class PitfallRenderer(JAXGameRenderer):
         self.WOOD_ID = self.SHAPE_MASKS['color_wood'][0, 0].astype(self.BACKGROUND.dtype)
         self.FIRE_ID = self.SHAPE_MASKS['color_fire'][0, 0].astype(self.BACKGROUND.dtype)
         self.SNAKE_ID = self.SHAPE_MASKS['color_snake'][0, 0].astype(self.BACKGROUND.dtype)
+        self.SCORPION_ID = self.SHAPE_MASKS['color_scorpion'][0, 0].astype(self.BACKGROUND.dtype)
         self.HOLE_ID = self.SHAPE_MASKS['color_hole'][0, 0].astype(self.BACKGROUND.dtype)
+        self.SWAMP_ID = self.SHAPE_MASKS['color_swamp'][0, 0].astype(self.BACKGROUND.dtype)
+        self.PIT_BAND_TOP = int(pit_band_top_row(self.consts.ground_y))
 
         transparent_pixel = jnp.full((1, 1), int(self.jr.TRANSPARENT_ID), dtype=self.BACKGROUND.dtype)
         self.BACKGROUND_TREE_VARIANT_0 = self.SHAPE_MASKS.get('background_tree_variant_0', transparent_pixel)
@@ -2249,25 +3775,33 @@ class PitfallRenderer(JAXGameRenderer):
         self.BACKGROUND_TREE_VARIANT_2 = self.SHAPE_MASKS.get('background_tree_variant_2', self.BACKGROUND_TREE_VARIANT_1)
         self.BACKGROUND_TREE_VARIANT_3 = self.SHAPE_MASKS.get('background_tree_variant_3', self.BACKGROUND_TREE_VARIANT_2)
         self.BACKDROP_CROCODILEPIT_AND_ROPE = self.SHAPE_MASKS.get('backdrop_crocodilepit_and_rope', transparent_pixel)
-        wall_mask = self.SHAPE_MASKS.get('wall', transparent_pixel)
-        self.WALL_MASK = wall_mask[0] if wall_mask.ndim == 3 else wall_mask
-        wall_extension_rows = min(3, int(self.WALL_MASK.shape[0]))
-        self.WALL_RENDER_MASK = jnp.concatenate(
-            [self.WALL_MASK[:wall_extension_rows], self.WALL_MASK],
-            axis=0,
-        )
-        wall_red_id = jnp.asarray(self.COLOR_TO_ID.get((167, 26, 26), int(self.WOOD_ID)), dtype=self.WALL_RENDER_MASK.dtype)
-        wall_top_row = self.WALL_RENDER_MASK[0]
-        self.WALL_RENDER_MASK = self.WALL_RENDER_MASK.at[0].set(
-            jnp.where(
-                wall_top_row != jnp.asarray(self.jr.TRANSPARENT_ID, dtype=self.WALL_RENDER_MASK.dtype),
-                wall_red_id,
-                wall_top_row,
-            )
-        )
+        # --- The wall, generated from `Wall` and `WallColor` ------------------
+        # The capture was 29 rows and the old code reached 32 by prepending three
+        # of its own rows, which put a duplicated brick course a third of the way
+        # down. Building from the literals gives the two sixteen-row kernel copies
+        # exactly, so the pattern carries across the Kernel 8/9 boundary on its
+        # own. wall.npy is still read, but only to pick up the two palette ids the
+        # rest of the port already uses for this sprite.
+        wall_capture = self.SHAPE_MASKS.get('wall', transparent_pixel)
+        wall_capture = wall_capture[0] if wall_capture.ndim == 3 else wall_capture
+        wall_capture_np = np.asarray(wall_capture)
+        tid_wall = int(self.jr.TRANSPARENT_ID)
+        wall_red_id = int(self.COLOR_TO_ID.get((167, 26, 26), int(self.WOOD_ID)))
+        # A `$fe` row is a full mortar course, so the capture's own top row holds
+        # the grey; taking it from there keeps the wall on the accepted palette.
+        capture_lit = wall_capture_np[wall_capture_np != tid_wall]
+        wall_grey_id = int(capture_lit[0]) if capture_lit.size else wall_red_id
 
-        # Reuse an already-present palette ID for debug overlays.
-        self.DEBUG_HITBOX_ID = wall_red_id.astype(self.BACKGROUND.dtype)
+        wall_rows_np = np.full(
+            (len(wall_render_rows()), WALL_W), tid_wall, dtype=wall_capture_np.dtype
+        )
+        for row_index, (pattern_byte, is_grey) in enumerate(wall_render_rows()):
+            colour = wall_grey_id if is_grey else wall_red_id
+            for col in range(WALL_W):
+                if (pattern_byte >> (WALL_W - 1 - col)) & 1:
+                    wall_rows_np[row_index, col] = colour
+        self.WALL_RENDER_MASK = jnp.asarray(wall_rows_np)
+        self.WALL_MASK = self.WALL_RENDER_MASK
 
         # Log / ladder sprite masks (trimmed from full-screen captures)
         _log_left = self.SHAPE_MASKS.get('log_left_sprite', transparent_pixel)
@@ -2279,6 +3813,69 @@ class PitfallRenderer(JAXGameRenderer):
         _lwp = self.SHAPE_MASKS.get('ladder_with_pits_sprite', transparent_pixel)
         self.LADDER_WITH_PITS_MASK = _lwp[0] if _lwp.ndim == 3 else _lwp
 
+        self.LIANA_ID = self.SHAPE_MASKS['color_liana'][0, 0].astype(self.BACKGROUND.dtype)
+        # Kernel 1's COLUPF is ColorTab+2, the same register value the leaves
+        # playfield draws in, so the green section's colour is the canopy's own
+        # palette entry: (53, 95, 24) in the captured backdrop, ROM DARK_GREEN.
+        # The bare-background test the priority mask needs is the jungle's
+        # (110, 156, 66), ROM GREEN, also taken from the backdrop's palette.
+        self.LIANA_GREEN_ID = jnp.asarray(
+            int(self.COLOR_TO_ID.get((53, 95, 24), int(self.LIANA_ID))),
+            dtype=self.BACKGROUND.dtype,
+        )
+        self.JUNGLE_BG_ID = jnp.asarray(
+            int(self.COLOR_TO_ID.get((110, 156, 66), -1)),
+            dtype=self.BACKGROUND.dtype,
+        )
+
+        # --- Cobra: replay each capture inside the ROM's 16-row GRP1 box ------
+        # The captures are pixel-exact: alpha carries the pattern and RGB
+        # carries CobraColor. They hold only the fourteen occupied rows, so the
+        # two empty box rows have to be put back before the raster and CXPPMM
+        # can agree on a coordinate. The comparison against COBRA_PATTERNS is
+        # the load-time guarantee that drawn pixels are collidable pixels; a
+        # swapped, resized or repainted asset stops the environment here rather
+        # than quietly making the cobra unhittable.
+        cobra_masks = self.SHAPE_MASKS.get('cobra', transparent_pixel)
+        cobra_masks = cobra_masks[None, :, :] if cobra_masks.ndim == 2 else cobra_masks
+        cobra_tid = int(self.jr.TRANSPARENT_ID)
+        cobra_rows = np.flatnonzero(cobra_pattern_bitmap(0).any(axis=1))
+        cobra_captures = np.array(cobra_masks)
+        if cobra_captures.shape[0] != len(COBRA_PATTERNS):
+            raise ValueError(
+                f"cobra: {cobra_captures.shape[0]} frames loaded, "
+                f"{len(COBRA_PATTERNS)} ROM patterns"
+            )
+
+        cobra_boxes = []
+        for index, captured in enumerate(cobra_captures):
+            if captured.shape != (cobra_rows.size, COBRA_W):
+                raise ValueError(
+                    f"cobra frame {index}: capture is {captured.shape}, "
+                    f"ROM Cobra{index} occupies {(cobra_rows.size, COBRA_W)} "
+                    f"of its {COBRA_H}-row box"
+                )
+            box = np.full((COBRA_H, COBRA_W), cobra_tid, dtype=captured.dtype)
+            box[cobra_rows[0]:cobra_rows[-1] + 1] = captured
+            if not np.array_equal(box != cobra_tid, cobra_pattern_bitmap(index)):
+                raise ValueError(
+                    f"cobra frame {index} does not draw ROM Cobra{index}; the "
+                    "raster and CXPPMM would use different pixels"
+                )
+            cobra_boxes.append(box)
+
+        self.COBRA_MASKS = jnp.asarray(np.stack(cobra_boxes), dtype=self.BACKGROUND.dtype)
+        self.COBRA_BOX_TOP = jnp.int32(cobra_box_top_row(self.consts.ground_y))
+        # ASM: objPatPtr = Cobra0 + (random2 & OBJECT_H). OBJECT_H=16 is bit 4.
+        # random2 is the 8-bit LFSR stepped once per running frame from seed 1.
+        r2 = 1
+        anim_bits = []
+        for _ in range(63):
+            anim_bits.append(1 if (r2 & 16) else 0)
+            r2 = (((r2 << 1) | (((r2 >> 6) ^ (r2 >> 7)) & 1)) & 0xFF)
+        self.COBRA_ANIM_BIT4 = jnp.array(anim_bits, dtype=jnp.int32)
+        self.COBRA_ANIM_PERIOD = jnp.int32(len(anim_bits))
+
         self.HAS_BACKDROP_CROCODILEPIT_AND_ROPE = jnp.array(
             'backdrop_crocodilepit_and_rope' in self.SHAPE_MASKS, dtype=jnp.bool_
         )
@@ -2286,234 +3883,87 @@ class PitfallRenderer(JAXGameRenderer):
         def _ensure_3d(mask_stack: jnp.ndarray) -> jnp.ndarray:
             return mask_stack[None, :, :] if mask_stack.ndim == 2 else mask_stack
 
-        def _pad_to(mask_stack: jnp.ndarray, target_h: int, target_w: int) -> jnp.ndarray:
-            mask_stack = _ensure_3d(mask_stack)
-            pad_h = max(0, target_h - int(mask_stack.shape[1]))
-            pad_w = max(0, target_w - int(mask_stack.shape[2]))
-            return jnp.pad(
-                mask_stack,
-                ((0, 0), (0, pad_h), (0, pad_w)),
-                mode='constant',
-                constant_values=int(self.jr.TRANSPARENT_ID),
-            )
-
-        def _downscale_mask_stack(mask_stack: jnp.ndarray, scale: float) -> jnp.ndarray:
-            masks_np = np.array(_ensure_3d(mask_stack))
-            frames_out = []
-            for frame in masks_np:
-                h_frame, w_frame = frame.shape
-                new_h = max(1, int(round(h_frame * scale)))
-                new_w = max(1, int(round(w_frame * scale)))
-                y_idx = np.clip(np.round(np.arange(new_h) / scale).astype(np.int32), 0, h_frame - 1)
-                x_idx = np.clip(np.round(np.arange(new_w) / scale).astype(np.int32), 0, w_frame - 1)
-                resized = frame[y_idx][:, x_idx]
-                frames_out.append(resized.astype(np.uint8))
-            return jnp.asarray(np.stack(frames_out, axis=0), dtype=jnp.uint8)
-
-        def _shrink_mask_stack(mask_stack: jnp.ndarray, border: int = 1) -> jnp.ndarray:
-            mask_stack = _ensure_3d(mask_stack)
-            if int(mask_stack.shape[1]) <= border * 2 or int(mask_stack.shape[2]) <= border * 2:
-                return mask_stack
-            return mask_stack[:, border:-border, border:-border]
-
-        def _trim_transparent_border_stack(mask_stack: jnp.ndarray) -> jnp.ndarray:
-            """Trim only fully-transparent borders per frame (safe, non-destructive).
-
-            This avoids cropping real scorpion pixels (which the fixed 1px shrink can do)
-            while still normalizing padding so frames/directions align.
-            """
-            masks_np = np.array(_ensure_3d(mask_stack))
-            tid = int(self.jr.TRANSPARENT_ID)
-            trimmed = []
-            max_h = 1
-            max_w = 1
-            for frame in masks_np:
-                ys, xs = np.where(frame != tid)
-                if ys.size == 0:
-                    cropped = frame
-                else:
-                    y0, y1 = int(ys.min()), int(ys.max()) + 1
-                    x0, x1 = int(xs.min()), int(xs.max()) + 1
-                    cropped = frame[y0:y1, x0:x1]
-                cropped = cropped.astype(np.uint8)
-                trimmed.append(cropped)
-                max_h = max(max_h, int(cropped.shape[0]))
-                max_w = max(max_w, int(cropped.shape[1]))
-
-            padded = []
-            for cropped in trimmed:
-                pad_h = max_h - int(cropped.shape[0])
-                pad_w = max_w - int(cropped.shape[1])
-                padded.append(
-                    np.pad(
-                        cropped,
-                        ((0, pad_h), (0, pad_w)),
-                        mode='constant',
-                        constant_values=tid,
-                    )
-                )
-            return jnp.asarray(np.stack(padded, axis=0), dtype=jnp.uint8)
-
-        sprite_scale = 0.80
-        scorpion_scale = 0.60
-
-        def _crop_and_pad_scorpion_stacks(
-            left_stack: jnp.ndarray,
-            right_stack: jnp.ndarray,
-            margin: int = 1,
-        ) -> tuple[jnp.ndarray, jnp.ndarray]:
-            """Crop both scorpion directions to the same union bbox (plus margin), then pad.
-
-            This keeps left/right + both animation frames anchored identically and avoids
-            tail loss from over-trimming.
-            """
-            left_np = np.array(_ensure_3d(left_stack))
-            right_np = np.array(_ensure_3d(right_stack))
-            tid = int(self.jr.TRANSPARENT_ID)
-
-            # Ensure both stacks have identical spatial dimensions before union bbox.
-            max_h = max(int(left_np.shape[1]), int(right_np.shape[1]))
-            max_w = max(int(left_np.shape[2]), int(right_np.shape[2]))
-            if int(left_np.shape[1]) != max_h or int(left_np.shape[2]) != max_w:
-                left_np = np.pad(
-                    left_np,
-                    ((0, 0), (0, max_h - int(left_np.shape[1])), (0, max_w - int(left_np.shape[2]))),
-                    mode='constant',
-                    constant_values=tid,
-                )
-            if int(right_np.shape[1]) != max_h or int(right_np.shape[2]) != max_w:
-                right_np = np.pad(
-                    right_np,
-                    ((0, 0), (0, max_h - int(right_np.shape[1])), (0, max_w - int(right_np.shape[2]))),
-                    mode='constant',
-                    constant_values=tid,
-                )
-            combined = np.concatenate([left_np, right_np], axis=0)
-            occupied = np.any(combined != tid, axis=0)
-            ys, xs = np.where(occupied)
-
-            if ys.size == 0 or xs.size == 0:
-                left_out = jnp.asarray(left_np.astype(np.uint8), dtype=jnp.uint8)
-                right_out = jnp.asarray(right_np.astype(np.uint8), dtype=jnp.uint8)
-                h = max(int(left_out.shape[1]), int(right_out.shape[1]))
-                w = max(int(left_out.shape[2]), int(right_out.shape[2]))
-                return _pad_to(left_out, h, w), _pad_to(right_out, h, w)
-
-            h_full = int(combined.shape[1])
-            w_full = int(combined.shape[2])
-            y0 = max(int(ys.min()) - margin, 0)
-            y1 = min(int(ys.max()) + margin + 1, h_full)
-            x0 = max(int(xs.min()) - margin, 0)
-            x1 = min(int(xs.max()) + margin + 1, w_full)
-
-            left_crop = left_np[:, y0:y1, x0:x1].astype(np.uint8)
-            right_crop = right_np[:, y0:y1, x0:x1].astype(np.uint8)
-            left_out = jnp.asarray(left_crop, dtype=jnp.uint8)
-            right_out = jnp.asarray(right_crop, dtype=jnp.uint8)
-            h = max(int(left_out.shape[1]), int(right_out.shape[1]))
-            w = max(int(left_out.shape[2]), int(right_out.shape[2]))
-            return _pad_to(left_out, h, w), _pad_to(right_out, h, w)
-
-        harry_idle = _downscale_mask_stack(self.SHAPE_MASKS['harry_idle'], sprite_scale)
-        harry_run = _downscale_mask_stack(self.SHAPE_MASKS['harry_run'], sprite_scale)
-        harry_climb = _downscale_mask_stack(self.SHAPE_MASKS['harry_climb'], sprite_scale)
-        harry_jump = _downscale_mask_stack(self.SHAPE_MASKS['harry_jump'], sprite_scale)
-
-        max_h = max(int(harry_idle.shape[1]), int(harry_run.shape[1]), int(harry_climb.shape[1]), int(harry_jump.shape[1]))
-        max_w = max(int(harry_idle.shape[2]), int(harry_run.shape[2]), int(harry_climb.shape[2]), int(harry_jump.shape[2]))
-
-        def _pad_and_offset(name: str, masks: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
-            masks_3d = _ensure_3d(masks)
-            extra_pad_w = jnp.int32(max_w - int(masks_3d.shape[2]))
-            extra_pad_h = jnp.int32(max_h - int(masks_3d.shape[1]))
-            base_offset = self.FLIP_OFFSETS.get(name, jnp.array([0, 0], dtype=jnp.int32))
-            base_offset = jnp.round(base_offset.astype(jnp.float32) * jnp.asarray(sprite_scale, dtype=jnp.float32)).astype(jnp.int32)
-            return _pad_to(masks_3d, max_h, max_w), base_offset + jnp.array([extra_pad_w, extra_pad_h], dtype=jnp.int32)
-
-        self.HARRY_IDLE_MASKS, _ = _pad_and_offset('harry_idle', harry_idle)
-        self.HARRY_RUN_MASKS, _ = _pad_and_offset('harry_run', harry_run)
-        self.HARRY_CLIMB_MASKS, _ = _pad_and_offset('harry_climb', harry_climb)
-        self.HARRY_JUMP_MASKS, _ = _pad_and_offset('harry_jump', harry_jump)
-
-        # --- One horizontal anchor for every Harry frame ---------------------
-        # All Harry frames are padded onto a common canvas, but the artwork sits
-        # at a different column in each one (the head block ranges from column 1
-        # to column 6 across the poses). Drawing every frame at player_x would
-        # therefore make Harry jump sideways whenever the animation or facing
-        # changed, and no fixed-width collision box could track him.
-        #
-        # Each frame's head is a clean 3px block on its topmost rows, so we take
-        # the midpoint of that block as the frame's anchor column, and draw the
-        # frame at (player_x - anchor). Harry's head axis then sits on player_x
-        # in every pose, which is the same point the hole test uses.
+        # --- Harry: rebuild every pose inside the ROM's 8x22 player box -------
+        # The captures are 2x horizontally and 1x vertically, and each .npy is
+        # already cropped to its own artwork, so the ROM's blank rows and
+        # columns are missing. Halving the width and replaying the pattern's
+        # own bounds puts every pose back where the hardware drew it. A uniform
+        # rescale cannot do this: it would resample the vertical axis as well
+        # and would still leave every pose bottom-aligned on a shared canvas.
         tid_np = int(self.jr.TRANSPARENT_ID)
-        harry_w = int(self.HARRY_IDLE_MASKS.shape[2])
 
-        def _head_anchor_x(mask2d: np.ndarray) -> int:
-            occ = mask2d != tid_np
-            rows = np.where(occ.any(axis=1))[0]
-            if rows.size == 0:
-                return harry_w // 2
-            head = occ[int(rows.min()):int(rows.min()) + 3]
-            cols = np.where(head.any(axis=0))[0]
-            return int((int(cols.min()) + int(cols.max())) // 2)
+        def _trim_to_artwork(mask2d: np.ndarray) -> np.ndarray:
+            occupied = mask2d != tid_np
+            rows = np.flatnonzero(occupied.any(axis=1))
+            cols = np.flatnonzero(occupied.any(axis=0))
+            return mask2d[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
 
-        def _anchors_for(stack: jnp.ndarray) -> jnp.ndarray:
-            return jnp.asarray([_head_anchor_x(m) for m in np.array(stack)], dtype=jnp.int32)
+        def _halve_width(mask2d: np.ndarray, label: str) -> np.ndarray:
+            """Undo the 2x capture without interpolating: palette IDs are ids.
 
-        self.HARRY_IDLE_ANCHOR_X = _anchors_for(self.HARRY_IDLE_MASKS)
-        self.HARRY_RUN_ANCHOR_X = _anchors_for(self.HARRY_RUN_MASKS)
-        self.HARRY_CLIMB_ANCHOR_X = _anchors_for(self.HARRY_CLIMB_MASKS)
-        self.HARRY_JUMP_ANCHOR_X = _anchors_for(self.HARRY_JUMP_MASKS)
+            Every captured column must be one half of an identical pair, which
+            is what makes dropping the odd columns lossless.
+            """
+            if mask2d.shape[1] % 2 != 0:
+                raise ValueError(f"{label}: capture width {mask2d.shape[1]} is odd")
+            even, odd = mask2d[:, 0::2], mask2d[:, 1::2]
+            if not np.array_equal(even, odd):
+                raise ValueError(f"{label}: capture columns are not doubled pairs")
+            return even
 
-        # Mirroring a mask of width W maps column c to column W-1-c, so a frame
-        # anchored at `a` ends up anchored at W-1-a. render_at_clipped subtracts
-        # flip_offset[0] from x when flipping, so this value puts the flipped
-        # anchor back on the same screen column: facing left and facing right are
-        # exact mirror images about player_x.
-        self.HARRY_FLIP_OFFSET_X_FOR_ANCHOR = jnp.int32(harry_w - 1)
-        scorpion_left = _downscale_mask_stack(self.SHAPE_MASKS['scorpion_left'], scorpion_scale)
-        scorpion_right = _downscale_mask_stack(self.SHAPE_MASKS['scorpion_right'], scorpion_scale)
-        scorpion_left, scorpion_right = _crop_and_pad_scorpion_stacks(scorpion_left, scorpion_right, margin=1)
-        scorpion_h = max(int(scorpion_left.shape[1]), int(scorpion_right.shape[1]))
-        scorpion_w = max(int(scorpion_left.shape[2]), int(scorpion_right.shape[2]))
-        self.SCORPION_LEFT_MASKS = _pad_to(scorpion_left, scorpion_h, scorpion_w)
-        self.SCORPION_RIGHT_MASKS = _pad_to(scorpion_right, scorpion_h, scorpion_w)
+        def _place_in_rom_box(mask2d: np.ndarray, pattern_index: int, label: str) -> np.ndarray:
+            row0, row1, col0, col1 = harry_pattern_bounds(pattern_index)
+            expected = (row1 - row0 + 1, col1 - col0 + 1)
+            if mask2d.shape != expected:
+                raise ValueError(
+                    f"{label}: artwork is {mask2d.shape}, ROM pattern "
+                    f"{pattern_index} occupies {expected}"
+                )
+            canvas = np.full((HARRY_H, HARRY_W), tid_np, dtype=np.uint8)
+            canvas[row0:row1 + 1, col0:col1 + 1] = mask2d
+            return canvas
 
-        # Scorpion collision hitbox (matches gameplay): tight bbox of non-transparent
-        # pixels unioned across both facings/frames + configurable insets.
-        tid_i = int(self.jr.TRANSPARENT_ID)
-        _sc_l = np.array(self.SCORPION_LEFT_MASKS)
-        _sc_r = np.array(self.SCORPION_RIGHT_MASKS)
-        _sc_combined = np.concatenate([_sc_l, _sc_r], axis=0)
-        _occupied = np.any(_sc_combined != tid_i, axis=0)
-        _ys, _xs = np.where(_occupied)
-        if _ys.size == 0 or _xs.size == 0:
-            _hit_y0 = 0
-            _hit_x0 = 0
-            _hit_h = int(_sc_combined.shape[1])
-            _hit_w = int(_sc_combined.shape[2])
-        else:
-            _hit_y0 = int(_ys.min())
-            _hit_x0 = int(_xs.min())
-            _hit_h = int(_ys.max()) - _hit_y0 + 1
-            _hit_w = int(_xs.max()) - _hit_x0 + 1
+        # HarryPtrTab order: the groups already concatenate to Harry0..Harry8.
+        harry_groups = (('harry_run', 5), ('harry_idle', 1), ('harry_swing', 1), ('harry_climb', 2))
+        harry_boxes = []
+        for group_name, frame_count in harry_groups:
+            frames = np.array(_ensure_3d(self.SHAPE_MASKS[group_name]))
+            if int(frames.shape[0]) != frame_count:
+                raise ValueError(f"{group_name}: expected {frame_count} frames, got {frames.shape[0]}")
+            for frame_index, frame in enumerate(frames):
+                pattern_index = len(harry_boxes)
+                label = f"{group_name}[{frame_index}] (Harry{pattern_index})"
+                artwork = _halve_width(_trim_to_artwork(frame), label)
+                harry_boxes.append(_place_in_rom_box(artwork, pattern_index, label))
 
-        _inset_x = max(0, int(self.consts.scorpion_hit_inset_x))
-        _inset_top = max(0, int(getattr(self.consts, 'scorpion_hit_inset_top', self.consts.scorpion_hit_inset_y)))
-        _inset_bottom = max(0, int(getattr(self.consts, 'scorpion_hit_inset_bottom', self.consts.scorpion_hit_inset_y)))
-        if _hit_w > 1 and _inset_x > 0:
-            _hit_x0 = min(_hit_x0 + _inset_x, int(_sc_combined.shape[2]) - 1)
-            _hit_w = max(1, _hit_w - 2 * _inset_x)
-        _inset_y_total = _inset_top + _inset_bottom
-        if _hit_h > 1 and _inset_y_total > 0:
-            _hit_y0 = min(_hit_y0 + _inset_top, int(_sc_combined.shape[1]) - 1)
-            _hit_h = max(1, _hit_h - _inset_y_total)
+        self.HARRY_PAT_MASKS = jnp.asarray(np.stack(harry_boxes, axis=0), dtype=jnp.uint8)
+        # Named views for the poses other code still asks for by role. There are
+        # no per-pose draw anchors: player_x is the box's left edge, so every
+        # pose is drawn at the same place and the artwork moves inside the box,
+        # exactly as the hardware does it.
+        self.HARRY_RUN_MASKS = self.HARRY_PAT_MASKS[0:5]
+        self.HARRY_IDLE_MASKS = self.HARRY_PAT_MASKS[5:6]
+        self.HARRY_SWING_MASKS = self.HARRY_PAT_MASKS[6:7]
+        self.HARRY_CLIMB_MASKS = self.HARRY_PAT_MASKS[7:9]
 
-        self.SCORPION_HIT_X0 = jnp.array(_hit_x0, dtype=jnp.int32)
-        self.SCORPION_HIT_Y0 = jnp.array(_hit_y0, dtype=jnp.int32)
-        self.SCORPION_HIT_W = jnp.array(_hit_w, dtype=jnp.int32)
-        self.SCORPION_HIT_H = jnp.array(_hit_h, dtype=jnp.int32)
+        # --- Scorpion: built from the ROM patterns, not from a capture --------
+        # ScorpionColor is WHITE for every one of its rows, so the sprite has no
+        # colour information to recover; the only thing a capture could supply
+        # is shape, and three of the four scorpion grabs have no duplicated row
+        # or column pairs, so they were never clean 2x captures. Synthesising
+        # the mask from SCORPION_PATTERNS is both exact and simpler, and the
+        # facing comes from reflecting in place the way REFP1 does.
+        self.SCORPION_MASKS = jnp.stack(
+            [
+                jnp.where(
+                    jnp.asarray(scorpion_pattern_bitmap(i)),
+                    jnp.asarray(self.SCORPION_ID, dtype=self.BACKGROUND.dtype),
+                    jnp.asarray(int(self.jr.TRANSPARENT_ID), dtype=self.BACKGROUND.dtype),
+                )
+                for i in range(len(SCORPION_PATTERNS))
+            ]
+        )
+        self.SCORPION_BOX_TOP = jnp.int32(scorpion_box_top_row(self.consts.underground_y))
         self.TREE_VARIANT_TO_ASSET_IDX = jnp.array([0, 1, 2, 3], dtype=jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -2577,6 +4027,28 @@ class PitfallRenderer(JAXGameRenderer):
             raster,
         )
 
+        # --- Static pits: sceneType 2 (tar) and 3 (swamp) ---------------------
+        # PF2Lst carves the pit out of the jungle floor, so only the columns PF2
+        # leaves clear are repainted and the ground the playfield still covers is
+        # left exactly as the floor artwork drew it. LadderTab's bit 7 picks what
+        # shows through: `lda LadderTab,x / bpl .noPit` keeps ColorTab+8 (BLUE)
+        # for the BLUEPIT swamp, while the BLACKPIT tar pit falls through to
+        # `lda colorLst+4 / sta colorLst+8` and shows BLACK, the same colour the
+        # holes already use.
+        is_tar_pit = pt == jnp.uint8(2)
+        is_swamp_pit = pt == jnp.uint8(3)
+        in_static_pit = is_tar_pit | is_swamp_pit
+        pit_color = jnp.where(is_swamp_pit, self.SWAMP_ID, self.HOLE_ID).astype(raster.dtype)
+
+        def _draw_static_pit(r: jnp.ndarray) -> jnp.ndarray:
+            top = self.PIT_BAND_TOP
+            band = r[top:top + PIT_BAND_H]
+            return r.at[top:top + PIT_BAND_H].set(
+                jnp.where(PIT_OPEN_MASK, pit_color, band)
+            )
+
+        raster = lax.cond(in_static_pit, _draw_static_pit, lambda r: r, raster)
+
         has_ladder = (pt == jnp.uint8(0)) | (pt == jnp.uint8(1))
         has_scorpion = has_scorpion_from_room_byte(rb)
         has_croc_rope_backdrop = (
@@ -2607,7 +4079,10 @@ class PitfallRenderer(JAXGameRenderer):
         ladder_w = jnp.int32(self.consts.ladder_width)
         hole_w = jnp.int32(self.consts.hole_width)
         hole_top = jnp.int32(int(self.consts.ground_y))
-        hole_h = jnp.int32(max(0, int(self.consts.underground_y) - int(self.consts.ground_y)))
+        # The shaft fill is a raster rect, so it ends on Kernel 9's last line.
+        hole_h = jnp.int32(
+            max(0, underground_last_row(self.consts.underground_y) + 1 - int(self.consts.ground_y))
+        )
 
         # Center hole for standalone ladder – fill shaft below ground,
         # then the ladder sprite overlays with rungs + hole opening.
@@ -2657,7 +4132,14 @@ class PitfallRenderer(JAXGameRenderer):
         has_wall = has_simple_ladder | has_ladder_with_pits
         wall_x = jnp.where(wall_side_bit == jnp.uint8(1), self.right_wall_x_px, self.left_wall_x_px).astype(jnp.int32)
         wall_h = jnp.int32(int(self.WALL_RENDER_MASK.shape[0]))
-        wall_top = jnp.int32(int(self.consts.underground_y)) - wall_h
+        # Kernel 8 draws `(wallPatPtr),y` and Kernel 9 draws `(undrPatPtr),y` over
+        # the same y 15..0, and in a ladder scene both pointers hold `Wall`, so the
+        # column runs from Kernel 8's first line to Kernel 9's last. Anchoring it
+        # on that last line is what keeps its foot on the floor instead of two rows
+        # short of it.
+        wall_top = (
+            jnp.int32(underground_last_row(self.consts.underground_y)) - wall_h + jnp.int32(1)
+        )
         draw_wall_sprite = has_wall
 
         has_logs, logs_are_rolling, log_count, log_xs, has_fireplace, has_snake = room_hazards_from_room_byte(rb)
@@ -2673,31 +4155,32 @@ class PitfallRenderer(JAXGameRenderer):
         frames_elapsed = frames_elapsed * state.timer_started.astype(jnp.int32)
 
         W = jnp.int32(self.consts.screen_width)
-        speed = jnp.int32(1)
-        direction = jnp.int32(-1)
-        extra_period = jnp.int32(max(1, int(self.consts.rolling_log_extra_step_period)))
-        base = frames_elapsed * speed
-        extra = frames_elapsed // extra_period
-        dx = jnp.mod((base + extra) * direction, W)
-        moving_centers = jnp.mod(log_xs + dx, W)
-        log_centers = jnp.where(logs_are_rolling, moving_centers, log_xs)
+        log_left_x = log_left_edges(
+            log_xs, logs_are_rolling, frames_elapsed, self.consts.screen_width
+        )
 
         wood_top_static = int(self.consts.ground_y - self.consts.wood_h + self.consts.wood_y_offset)
         wood_top = jnp.int32(wood_top_static)
-        log_half_w = jnp.int32(self.consts.wood_w // 2)
 
-        # Moving-log animation: alternate sprite + 1px vertical bobble
-        log_anim_phase = jnp.mod(frames_elapsed // jnp.int32(8), jnp.int32(2))
-        use_right_frame = logs_are_rolling & (log_anim_phase == jnp.int32(1))
-        bobble_y = jnp.where(logs_are_rolling, log_anim_phase, jnp.int32(0))
+        # `lda xPosObject / asl asl asl / and #$30 / cmp #$30 / and #$10 / adc
+        # objPatPtr`: bit 1 of xPosObject swaps Log0 for Log1, and the carry from
+        # bits 1 and 2 both being set nudges the pattern one row, which is the
+        # bounce the ROM's comment describes. Both are functions of position, not
+        # of a timer, so a stationary log neither rolls nor bounces.
+        anim_x = log_left_x[0].astype(jnp.int32)
+        use_right_frame = logs_are_rolling & (jnp.bitwise_and(anim_x, jnp.int32(2)) != 0)
+        bobble_y = jnp.where(
+            logs_are_rolling & (jnp.bitwise_and(anim_x, jnp.int32(6)) == jnp.int32(6)),
+            jnp.int32(1),
+            jnp.int32(0),
+        )
 
         log_mask = jnp.where(use_right_frame, self.LOG_RIGHT_MASK, self.LOG_LEFT_MASK)
 
         def _draw_logs(r: jnp.ndarray) -> jnp.ndarray:
             def body(i, rr):
                 active_i = jnp.int32(i) < log_count
-                cx = log_centers[i].astype(jnp.int32)
-                x = cx - log_half_w
+                x = log_left_x[i].astype(jnp.int32)
                 y = wood_top + bobble_y
                 return lax.cond(
                     active_i,
@@ -2720,32 +4203,18 @@ class PitfallRenderer(JAXGameRenderer):
         fire_size = jnp.array([fire_w, fire_h], dtype=jnp.int32)
         raster = self.jr.draw_rects(raster, fire_pos[None, :], fire_size[None, :], int(self.FIRE_ID))
 
-        snake_x_center = jnp.int32(134)
-        snake_w = jnp.int32(self.consts.snake_w)
-        snake_h = jnp.int32(self.consts.snake_h)
-        snake_top = jnp.int32(int(self.consts.ground_y - self.consts.snake_h))
-        snake_left = jnp.mod(snake_x_center - (snake_w // jnp.int32(2)), W)
-        snake_pos = jnp.where(has_snake, jnp.array([snake_left, snake_top], dtype=jnp.int32), jnp.array([-1, -1], dtype=jnp.int32))
-        snake_size = jnp.array([snake_w, snake_h], dtype=jnp.int32)
-        raster = self.jr.draw_rects(raster, snake_pos[None, :], snake_size[None, :], int(self.SNAKE_ID))
-
-        scorpion_anim_idx = jnp.mod(state.scorpion_anim_idx.astype(jnp.int32), jnp.int32(2)).astype(jnp.int32)
-        scorpion_facing_right = state.scorpion_facing_right.astype(jnp.bool_)
-        scorpion_mask = jnp.where(
-            scorpion_facing_right,
-            self.SCORPION_RIGHT_MASKS[scorpion_anim_idx],
-            self.SCORPION_LEFT_MASKS[scorpion_anim_idx],
+        cobra_frame = cobra_animation_frame(
+            state.time_left, state.timer_started, self.consts, self.COBRA_ANIM_BIT4
         )
-        scorpion_h_sprite = jnp.int32(scorpion_mask.shape[0])
-        scorpion_top = jnp.int32(self.consts.underground_y) - scorpion_h_sprite + jnp.int32(1) + jnp.int32(self.consts.scorpion_y_offset)
-
+        cobra_mask = self.COBRA_MASKS[cobra_frame]
+        cobra_x = jnp.int32(self.consts.object_x)
         raster = lax.cond(
-            has_scorpion,
+            has_snake,
             lambda r: self.jr.render_at_clipped(
                 r,
-                state.scorpion_x.astype(jnp.int32),
-                scorpion_top,
-                scorpion_mask,
+                cobra_x,
+                self.COBRA_BOX_TOP,
+                cobra_mask,
                 flip_horizontal=jnp.array(False, dtype=jnp.bool_),
                 flip_offset=jnp.array([0, 0], dtype=jnp.int32),
             ),
@@ -2753,158 +4222,119 @@ class PitfallRenderer(JAXGameRenderer):
             raster,
         )
 
-        # Debug overlay: scorpion collision hitbox rectangle + Harry feet oval (outline).
-        def _draw_scorpion_hitbox(r: jnp.ndarray) -> jnp.ndarray:
-            x0 = state.scorpion_x.astype(jnp.int32) + self.SCORPION_HIT_X0
-            y0 = scorpion_top + self.SCORPION_HIT_Y0
-            w_box = self.SCORPION_HIT_W
-            h_box = self.SCORPION_HIT_H
-
-            top_pos = jnp.array([x0, y0], dtype=jnp.int32)
-            bot_pos = jnp.array([x0, y0 + h_box - jnp.int32(1)], dtype=jnp.int32)
-            left_pos = jnp.array([x0, y0], dtype=jnp.int32)
-            right_pos = jnp.array([x0 + w_box - jnp.int32(1), y0], dtype=jnp.int32)
-            positions = jnp.stack([top_pos, bot_pos, left_pos, right_pos], axis=0)
-
-            top_size = jnp.array([w_box, jnp.int32(1)], dtype=jnp.int32)
-            bot_size = jnp.array([w_box, jnp.int32(1)], dtype=jnp.int32)
-            left_size = jnp.array([jnp.int32(1), h_box], dtype=jnp.int32)
-            right_size = jnp.array([jnp.int32(1), h_box], dtype=jnp.int32)
-            sizes = jnp.stack([top_size, bot_size, left_size, right_size], axis=0)
-
-            rr = self.jr.draw_rects(r, positions, sizes, int(self.DEBUG_HITBOX_ID))
-
-            harry_w_full = jnp.int32(
-                max(
-                    int(self.HARRY_IDLE_MASKS.shape[2]),
-                    int(self.HARRY_RUN_MASKS.shape[2]),
-                    int(self.HARRY_CLIMB_MASKS.shape[2]),
-                    int(self.HARRY_JUMP_MASKS.shape[2]),
-                )
-            )
-            moving_now = jnp.abs(state.player_vx) > jnp.asarray(0.0, dtype=jnp.float32)
-            flip_now = jnp.where(moving_now, state.player_vx < jnp.asarray(0.0, dtype=jnp.float32), state.facing_left)
-            idle_shift = jnp.where(moving_now, jnp.int32(0), jnp.int32(-1))
-            facing_shift_x = jnp.where(flip_now, jnp.int32(0), jnp.int32(-2))
-            cx_i = (
-                state.player_x.astype(jnp.int32)
-                + (harry_w_full // jnp.int32(2))
-                + idle_shift
-                + jnp.where(state.on_ladder, jnp.int32(1), jnp.int32(0))
-                + facing_shift_x
-            )
-            vis_w = jnp.maximum(jnp.int32(1), harry_w_full - jnp.int32(4))
-            rx = jnp.maximum(jnp.int32(1), (vis_w // jnp.int32(2)) - jnp.int32(1))
-            ry = jnp.asarray(1.0, dtype=jnp.float32)
-            cy_i = state.player_y.astype(jnp.int32) - jnp.int32(2)
-
-            two_pi = jnp.asarray(6.283185307179586, dtype=jnp.float32)
-            angles = (jnp.arange(16, dtype=jnp.float32) * (two_pi / jnp.asarray(16.0, dtype=jnp.float32)))
-            xs = jnp.round(cx_i.astype(jnp.float32) + jnp.cos(angles) * rx.astype(jnp.float32)).astype(jnp.int32)
-            ys = jnp.round(cy_i.astype(jnp.float32) + jnp.sin(angles) * ry).astype(jnp.int32)
-            pts = jnp.stack([xs, ys], axis=1)
-            ones = jnp.ones((pts.shape[0], 2), dtype=jnp.int32)
-            return self.jr.draw_rects(rr, pts, ones, int(self.DEBUG_HITBOX_ID))
+        # The animation frame is bit 0 of xPosScorpion: `lda xPosScorpion / lsr /
+        # bcc .scorpion0`. It is not timed, so a stationary scorpion is still.
+        scorpion_x_i = state.scorpion_x.astype(jnp.int32)
+        scorpion_mask = self.SCORPION_MASKS[jnp.bitwise_and(scorpion_x_i, jnp.int32(1))]
+        # REFP1 reflects inside the box: reflected when Harry is to the left.
+        scorpion_flip = ~state.scorpion_facing_right.astype(jnp.bool_)
 
         raster = lax.cond(
-            self.DEBUG_SCORPION_HITBOX & has_scorpion,
-            _draw_scorpion_hitbox,
+            has_scorpion,
+            lambda r: self.jr.render_at_clipped(
+                r,
+                scorpion_x_i,
+                self.SCORPION_BOX_TOP,
+                scorpion_mask,
+                flip_horizontal=scorpion_flip,
+                flip_offset=jnp.array([0, 0], dtype=jnp.int32),
+            ),
             lambda r: r,
             raster,
         )
 
+        # --- The liana ---------------------------------------------------------
+        # One ball pixel per scanline, its column generated by the same
+        # accumulator the collision test walks, so what is drawn is what can be
+        # caught. The rope is enabled for the whole band: COLUPF just changes
+        # under it. Rows 33..64 (Kernel 1 and the prepare line) draw in
+        # ColorTab+2, the leaves' own dark green; the line that opens Kernel 2
+        # switches COLUPF to ColorTab+5 and rows 65 down are brown. Kernel 1
+        # runs with CTRLPF = %101 - playfield priority on - so the leaves cover
+        # the green section, and the branches (players) sit above the ball too:
+        # a green rope pixel only survives where the scanline is bare
+        # background, which is what the backdrop test below reproduces. From
+        # Kernel 2 down CTRLPF is %001, priority off, so the brown section
+        # draws over the playfield (the trunks) but stays under the players -
+        # drawing it here, above the backdrop and below Harry and the logs, is
+        # that order.
+        liana_rows = jnp.arange(LIANA_ROWS, dtype=jnp.int32)
+        liana_cols = liana_column(liana_rows, state.hmbl_add, state.hmbl_dir)
+        liana_screen_rows = liana_rows + jnp.int32(LIANA_TOP_ROW)
+        liana_row_lit = (
+            liana_enabled(rb)
+            & (liana_screen_rows <= liana_last_row(state.liana_bottom))
+        )
+        liana_band = raster[LIANA_TOP_ROW:LIANA_TOP_ROW + LIANA_ROWS]
+        liana_mask = liana_row_lit[:, None] & (
+            jnp.arange(int(self.consts.screen_width), dtype=jnp.int32)[None, :]
+            == liana_cols[:, None]
+        )
+        liana_is_green_row = (
+            liana_screen_rows < jnp.int32(LIANA_BROWN_TOP_ROW)
+        )[:, None]
+        # Playfield priority: the green section is only visible on bare
+        # background pixels; leaves and branches both cover the ball there.
+        liana_mask = liana_mask & (
+            (~liana_is_green_row) | (liana_band == self.JUNGLE_BG_ID)
+        )
+        liana_colour = jnp.where(liana_is_green_row, self.LIANA_GREEN_ID, self.LIANA_ID)
+        raster = raster.at[LIANA_TOP_ROW:LIANA_TOP_ROW + LIANA_ROWS].set(
+            jnp.where(liana_mask, liana_colour, liana_band)
+        )
+
         moving = jnp.abs(state.player_vx) > jnp.asarray(0.0, dtype=jnp.float32)
-        # Use facing_left for idle/jump sprites so Harry remembers direction
+        # Use facing_left for idle sprites so Harry remembers direction
         flip = jnp.where(moving, state.player_vx < 0.0, state.facing_left)
 
-        steady_cycle = jnp.array([1, 0, 1, 3], dtype=jnp.int32)  # running2 dominates; avoids running3; includes running4
-        steady_run_idx = steady_cycle[jnp.mod(state.run_anim_phase.astype(jnp.int32), jnp.int32(4))]
-        startup_run_idx = jnp.where(
-            state.run_startup_timer > jnp.int32(2),
-            jnp.int32(2),  # running3
-            jnp.int32(3),  # running4
-        )
-        run_idx = jnp.where(
-            state.run_startup_timer > jnp.int32(0),
-            startup_run_idx,
-            steady_run_idx,
-        ).astype(jnp.int32)
-        step_idx = state.ladder_step_idx.astype(jnp.int32)
-        climb_idx = jnp.mod(step_idx, jnp.int32(2)).astype(jnp.int32)
-        jump_idx = jnp.where(state.player_vy < jnp.asarray(0.0, dtype=jnp.float32), jnp.int32(0), jnp.int32(1))
+        harry_pat = harry_display_pat_id(state, self.consts, touching_wood_render)
+        harry_pat = jnp.clip(harry_pat, jnp.int32(0), jnp.int32(8))
+        harry_mask = self.HARRY_PAT_MASKS[harry_pat]
 
-        # Each branch returns (mask, anchor column of that mask).
-        def _use_climb(_):
-            return self.HARRY_CLIMB_MASKS[climb_idx], self.HARRY_CLIMB_ANCHOR_X[climb_idx]
-
-        def _use_jump(_):
-            return self.HARRY_JUMP_MASKS[jump_idx], self.HARRY_JUMP_ANCHOR_X[jump_idx]
-
-        def _use_fall(_):
-            return self.HARRY_JUMP_MASKS[jnp.int32(1)], self.HARRY_JUMP_ANCHOR_X[jnp.int32(1)]
-
-        def _use_run(_):
-            return self.HARRY_RUN_MASKS[run_idx], self.HARRY_RUN_ANCHOR_X[run_idx]
-
-        def _use_run1(_):
-            return self.HARRY_RUN_MASKS[jnp.int32(0)], self.HARRY_RUN_ANCHOR_X[jnp.int32(0)]
-
-        def _use_idle(_):
-            return self.HARRY_IDLE_MASKS[jnp.int32(0)], self.HARRY_IDLE_ANCHOR_X[jnp.int32(0)]
-
-        # A drop through an opening shows ID_STANDING (Harry5 / harryidle1) for
-        # the first 28px, then ID_KNEEING (Harry0 / harryjumping2).
         harry_falling_through_hole = is_falling_through_hole(state, self.consts)
-        harry_fall_depth = state.player_y - jnp.asarray(self.consts.ground_y, dtype=jnp.float32)
-        harry_open_leg_fall = harry_falling_through_hole & (
-            harry_fall_depth >= jnp.asarray(self.consts.hole_fall_open_leg_depth, dtype=jnp.float32)
+
+        # player_x is xPosHarry, the left edge of the player box, so the whole
+        # 8x22 canvas is drawn there for every pose and both facings. REFP0
+        # reverses the bits inside the box without moving it, so the flip needs
+        # no correction, and any sideways motion between poses is the animation.
+        harry_x_draw = state.player_x.astype(jnp.int32)
+        harry_flip_offset = jnp.array([0, 0], dtype=jnp.int32)
+
+        # The same origin the collision masks use, so a change to the visual
+        # datum cannot desynchronise what is drawn from what can be hit.
+        y_top = harry_box_top_row(state.player_y, state.current_ground_y, self.consts)
+
+        # Kernel 6's `lda #0 / sta GRP0`, and the playfield priority ContKernel
+        # turns on below it. Both start at the same row, so blanking Harry's
+        # pattern from there down is the whole of it - the terrain is not redrawn
+        # over him, he is simply never emitted, which is what the hardware does.
+        # A standing Harry's lowest row is the last line Kernel 5 draws, so this
+        # takes nothing off him until he starts to sink.
+        harry_blank_top = jnp.int32(pit_harry_blank_top_row(self.consts.ground_y))
+        harry_sprite_rows = jnp.arange(harry_mask.shape[0], dtype=jnp.int32)
+        harry_row_blanked = (y_top + harry_sprite_rows) >= harry_blank_top
+        harry_mask = jnp.where(
+            (in_static_pit & harry_row_blanked)[:, None],
+            jnp.asarray(self.jr.TRANSPARENT_ID, dtype=harry_mask.dtype),
+            harry_mask,
         )
 
-        def _use_hole_fall(_):
-            return lax.cond(harry_open_leg_fall, _use_fall, _use_idle, None)
-
-        def _non_ladder(_):
-            # During airtime (self-initiated jump or any non-ladder airborne state),
-            # lock Harry to harryrunning1.
-            return lax.cond(
-                harry_falling_through_hole,
-                _use_hole_fall,
-                lambda __: lax.cond(
-                    ~state.on_ground,
-                    _use_run1,
-                    lambda ___: lax.cond(
-                        touching_wood_render,
-                        _use_fall,
-                        lambda ____: lax.cond(moving, _use_run, _use_idle, None),
-                        None,
-                    ),
-                    None,
-                ),
-                None,
-            )
-
-        harry_mask, harry_anchor = lax.cond(state.on_ladder, _use_climb, _non_ladder, None)
-        harry_anchor = harry_anchor.astype(jnp.int32)
-
-        # Drawing at (player_x - anchor) puts this frame's anchor column exactly
-        # on player_x; subtracting (w-1 - 2*anchor) when flipped keeps it there.
-        harry_x_draw = state.player_x.astype(jnp.int32) - harry_anchor
-        harry_flip_offset = jnp.stack(
-            [
-                self.HARRY_FLIP_OFFSET_X_FOR_ANCHOR - jnp.int32(2) * harry_anchor,
-                jnp.int32(0),
-            ]
-        )
-
-        harry_h = jnp.int32(harry_mask.shape[0])
-        y_top = state.player_y.astype(jnp.int32) - harry_h + jnp.int32(1)
-        underground_tune = jnp.where(
-            state.current_ground_y == jnp.asarray(self.consts.underground_y, dtype=jnp.float32),
-            jnp.int32(int(self.consts.underground_harry_y_tune)),
-            jnp.int32(0),
-        )
-        y_top = y_top + jnp.int32(int(self.consts.harry_y_tune)) + underground_tune
-
+        # There is no "dead, so do not draw" rule to apply. This build sets
+        # SCREENSAVER = 1, so the position loop's guard is
+        #
+        #   IF SCREENSAVER
+        #     ldy    SS_Delay         ; 3                 game running?
+        #     bmi    .skipHarryPos    ; 2³                 no, don't draw Harry
+        #   ELSE
+        #     ldy    noGameScroll     ;                   TODO: bugfix, wall isn't drawn
+        #     bne    .skipHarryPos    ; 2³                 no, don't draw Harry
+        #   ENDIF
+        #
+        # and it is SS_Delay - the idle timer that only goes negative after
+        # minutes without input - that suppresses Harry, never noGameScroll. A
+        # frozen Harry keeps his coordinate and the kernel keeps drawing him.
+        # Whether he is actually seen is decided by the raster alone: where he
+        # sits, and what the terrain draws over him.
         def _draw_harry(r: jnp.ndarray) -> jnp.ndarray:
             return self.jr.render_at_clipped(
                 r,
@@ -2942,18 +4372,14 @@ class PitfallRenderer(JAXGameRenderer):
             H, W = r.shape
             yy = jnp.arange(H, dtype=jnp.int32)[:, None]
             xx = jnp.arange(W, dtype=jnp.int32)[None, :]
-            harry_w = jnp.int32(harry_mask.shape[1])
-            harry_x0 = lax.select(
-                flip,
-                harry_x_draw - (self.HARRY_FLIP_OFFSET_X_FOR_ANCHOR - jnp.int32(2) * harry_anchor),
-                harry_x_draw,
-            )
-            harry_x1 = harry_x0 + harry_w
+            # The box never moves, so one span covers both facings.
+            harry_x0 = harry_x_draw
+            harry_x1 = harry_x0 + jnp.int32(harry_mask.shape[1])
             hidden_mask = (
                 (xx >= harry_x0)
                 & (xx < harry_x1)
                 & (yy >= y_top)
-                & (yy < jnp.minimum(y_top + harry_h, reveal_y))
+                & (yy < jnp.minimum(y_top + jnp.int32(harry_mask.shape[0]), reveal_y))
             )
             return jnp.where(hidden_mask, raster_base, r)
 
@@ -3021,110 +4447,89 @@ class PitfallRenderer(JAXGameRenderer):
 
         frame = self.jr.render_from_palette(raster, self.PALETTE)
 
-        font = HUD_FONT_16
+        # --- ShowDigits ------------------------------------------------------
+        # Two lines of six eight-pixel slots, each line a single COLUP colour.
+        # The glyphs come from DIGIT_PATTERNS, so the HUD is the ROM's font
+        # rather than a hand-drawn approximation of it.
+        channels = frame.shape[2]
+        if channels == 1:
+            hud_color = jnp.array([int(round(sum(HUD_COLOR) / 3))], dtype=jnp.uint8)
+        else:
+            hud_color = jnp.asarray(HUD_COLOR, dtype=jnp.uint8)
 
-        roman_i = jnp.ones((5, 1), dtype=jnp.bool_)
+        def _show_digits(f, row: int, glyph_ids, lives_pattern):
+            band = jnp.zeros((DIGIT_H, int(self.consts.screen_width)), dtype=jnp.bool_)
+            glyphs = _DIGIT_GLYPHS[glyph_ids]
+            for slot, left in enumerate(HUD_SLOT_X):
+                band = band.at[:, left:left + DIGIT_W].set(
+                    band[:, left:left + DIGIT_W] | glyphs[slot]
+                )
+            # `lda (digitPtr),y / ora temp3`: livesPat rides on slot 0's pattern
+            # for every row of the line, which is why it reads as vertical bars.
+            bits = jnp.arange(DIGIT_W - 1, -1, -1, dtype=jnp.int32)
+            lives_cols = ((lives_pattern >> bits) & jnp.int32(1)).astype(jnp.bool_)
+            left0 = HUD_SLOT_X[0]
+            band = band.at[:, left0:left0 + DIGIT_W].set(
+                band[:, left0:left0 + DIGIT_W] | lives_cols[None, :]
+            )
+            region = f[row:row + DIGIT_H]
+            return f.at[row:row + DIGIT_H].set(
+                jnp.where(band[:, :, None], hud_color[None, None, :], region)
+            )
 
-        def _draw_digits(
-            f: jnp.ndarray,
-            digits: jnp.ndarray,
-            draw_mask: jnp.ndarray,
-            top: int,
-            left: int,
-            spacing: int,
-            color: jnp.ndarray,
-        ) -> jnp.ndarray:
-            top_i32 = jnp.int32(top)
-            left0_i32 = jnp.int32(left)
-            spacing_i32 = jnp.int32(spacing)
-            channels = f.shape[2]
-
-            color_u8 = color.astype(jnp.uint8)
-            if channels == 1:
-                gray = jnp.mean(color_u8.astype(jnp.float32)).astype(jnp.uint8)
-                draw_color = jnp.array([gray], dtype=jnp.uint8)
-            else:
-                draw_color = color_u8
-
-            def body(i, frame_in):
-                d = digits[i].astype(jnp.int32)
-                glyph = font[d].astype(jnp.bool_) & draw_mask[i]
-                start = (top_i32, left0_i32 + jnp.int32(i) * spacing_i32, jnp.int32(0))
-                region = lax.dynamic_slice(frame_in, start, (5, 3, channels))
-                new_region = jnp.where(glyph[:, :, None], draw_color[None, None, :], region)
-                return lax.dynamic_update_slice(frame_in, new_region, start)
-
-            return lax.fori_loop(0, digits.shape[0], body, f)
-
-        def _draw_mask(
-            f: jnp.ndarray,
-            mask: jnp.ndarray,
-            top: int,
-            left: int,
-            color: jnp.ndarray,
-        ) -> jnp.ndarray:
-            top_i32 = jnp.int32(top)
-            left_i32 = jnp.int32(left)
-            channels = f.shape[2]
-
-            color_u8 = color.astype(jnp.uint8)
-            if channels == 1:
-                gray = jnp.mean(color_u8.astype(jnp.float32)).astype(jnp.uint8)
-                draw_color = jnp.array([gray], dtype=jnp.uint8)
-            else:
-                draw_color = color_u8
-
-            # `lax.dynamic_slice` requires slice sizes to be static (Python ints)
-            # when used under `jit`.
-            h = int(mask.shape[0])
-            w = int(mask.shape[1])
-            start = (top_i32, left_i32, jnp.int32(0))
-            region = lax.dynamic_slice(f, start, (h, w, channels))
-            new_region = jnp.where(mask[:, :, None], draw_color[None, None, :], region)
-            return lax.dynamic_update_slice(f, new_region, start)
-
-        digit_spacing = 4
-        hud_white = jnp.array([255, 255, 255], dtype=jnp.uint8)
-
-        score_row = 2
-        hud_row = 12
-        hud_left = 8
-        score_x = hud_left
-        lives_x = hud_left
-        time_x = hud_left + 10
-
-        lives_i_spacing = 2
-
-        score_digits = self.jr.int_to_digits(state.score.astype(jnp.int32), max_digits=4)
-        score_has_nonzero = score_digits != jnp.int32(0)
-        score_seen = jnp.cumsum(score_has_nonzero.astype(jnp.int32))
-        score_draw_mask = (score_seen > jnp.int32(0)) | (jnp.arange(score_digits.shape[0]) == (score_digits.shape[0] - 1))
+        # `.loopSpace` walks the first five slots replacing leading Zeros with
+        # Space and stops before the last one, so a score of zero still shows a
+        # digit. Zero is page-aligned in the ROM, which is what makes its
+        # pointer test a test for the digit itself.
+        score_digits = self.jr.int_to_digits(
+            state.score.astype(jnp.int32), max_digits=len(HUD_SLOT_X)
+        )
+        leading = jnp.cumsum((score_digits != jnp.int32(0)).astype(jnp.int32)) > jnp.int32(0)
+        is_last = jnp.arange(len(HUD_SLOT_X)) == (len(HUD_SLOT_X) - 1)
+        score_glyphs = jnp.where(leading | is_last, score_digits, jnp.int32(DIGIT_SPACE))
 
         time_seconds = state.time_left.astype(jnp.int32) // jnp.int32(self.consts.fps)
         minutes = time_seconds // jnp.int32(60)
         seconds = time_seconds - minutes * jnp.int32(60)
-        mm_digits = self.jr.int_to_digits(minutes, max_digits=2)
-        ss_digits = self.jr.int_to_digits(seconds, max_digits=2)
+        mm = self.jr.int_to_digits(minutes, max_digits=2)
+        ss = self.jr.int_to_digits(seconds, max_digits=2)
+        # `ldy digitPtr+2 / bne .noSpace`: only the minutes tens digit blanks.
+        mm_tens = jnp.where(mm[0] == jnp.int32(0), jnp.int32(DIGIT_SPACE), mm[0])
+        timer_glyphs = jnp.stack(
+            [
+                jnp.int32(DIGIT_SPACE),   # slot 0 carries livesPat instead
+                mm_tens,
+                mm[1].astype(jnp.int32),
+                jnp.int32(DIGIT_COLON),
+                ss[0].astype(jnp.int32),
+                ss[1].astype(jnp.int32),
+            ]
+        )
 
-        time_draw_mask = jnp.ones_like(mm_digits, dtype=jnp.bool_)
+        lives = jnp.clip(state.lives_left.astype(jnp.int32), jnp.int32(0), jnp.int32(3))
+        lives_pattern = jnp.asarray(LIVES_PAT, dtype=jnp.int32)[lives]
 
-        frame = _draw_digits(frame, score_digits, score_draw_mask, score_row, score_x, digit_spacing, hud_white)
+        frame = _show_digits(frame, HUD_SCORE_ROW, score_glyphs, jnp.int32(0))
+        frame = _show_digits(frame, HUD_TIMER_ROW, timer_glyphs, lives_pattern)
 
-        frame = _draw_digits(frame, mm_digits, time_draw_mask, hud_row, time_x, digit_spacing, hud_white)
-        if frame.shape[2] == 1:
-            dot_color = jnp.array([jnp.uint8(255)], dtype=jnp.uint8)
-        else:
-            dot_color = hud_white
-        colon_x = time_x + 2 * digit_spacing - 1
-        frame = frame.at[hud_row + 1, colon_x, :].set(dot_color)
-        frame = frame.at[hud_row + 3, colon_x, :].set(dot_color)
-        frame = _draw_digits(frame, ss_digits, time_draw_mask, hud_row, time_x + 2 * digit_spacing + 2, digit_spacing, hud_white)
+        # The third ShowDigits pass. It runs on every frame of a running game
+        # too, where the offset is nailed to zero and the window sits in Space,
+        # so the row is blank unless the game is stopped and the tune is over.
+        scroll = copyright_scroll(state.no_game_scroll, state.sound_idx)
+        copyright_slots = _COPYRIGHT_GLYPHS[scroll]
+        copyright_band = jnp.zeros((DIGIT_H, int(self.consts.screen_width)), dtype=jnp.bool_)
+        for slot, left in enumerate(HUD_SLOT_X):
+            copyright_band = copyright_band.at[:, left:left + DIGIT_W].set(
+                copyright_band[:, left:left + DIGIT_W] | copyright_slots[slot]
+            )
+        copyright_region = frame[COPYRIGHT_ROW:COPYRIGHT_ROW + DIGIT_H]
+        frame = frame.at[COPYRIGHT_ROW:COPYRIGHT_ROW + DIGIT_H].set(
+            jnp.where(copyright_band[:, :, None], hud_color[None, None, :], copyright_region)
+        )
 
-        lives_n = jnp.clip(state.lives_left.astype(jnp.int32), jnp.int32(0), jnp.int32(3))
-        def _draw_one_i(i, fr):
-            left = lives_x + i * lives_i_spacing
-            return _draw_mask(fr, roman_i, hud_row, left, hud_white)
-
-        frame = lax.fori_loop(0, lives_n, _draw_one_i, frame)
+        # TIA blanking, applied last because it does not care what was drawn.
+        black = jnp.zeros((), dtype=frame.dtype)
+        frame = frame.at[:, :HMOVE_BLANK_COLS, :].set(black)
+        frame = frame.at[:VBLANK_ROWS, :, :].set(black)
 
         return frame
