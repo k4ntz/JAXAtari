@@ -519,17 +519,19 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
         rng = jax.random.PRNGKey(config["SEED"] + video_index * 10000)
         rng, reset_rng = jax.random.split(rng)
         obs, env_state = env.reset(reset_rng)
-        obs = obs.squeeze()  # (F, H, W)
+        if config["PIXEL_BASED"]:
+            obs = obs.squeeze(-1)  # pixel-based: (F, H, W, 1) -> (F, H, W)
+        # object-centric: (D,) already, no need to squeeze
 
         frames = []
         total_reward = 0.0
         max_steps = 5000
 
         for step in range(max_steps):
-            # PPO network expects (B, F, H, W)
+            # Pixel-based: PPO network expects (B, F, H, W)
             policy_obs = obs[None, ...]
             if not config["PIXEL_BASED"]:
-                policy_obs = jnp.pad(policy_obs, (0, max_D - policy_obs.shape[-1]))
+                policy_obs = jnp.pad(policy_obs, ((0, 0), (0, max_D - policy_obs.shape[-1])))
             hidden = network.apply(agent_state.params.network_params, policy_obs)
             logits = actor.apply(agent_state.params.actor_params, hidden)
             action = jnp.argmax(logits, axis=-1)[0]
@@ -537,7 +539,9 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             rng, step_rng = jax.random.split(rng)
             obs, env_state, reward, terminated, truncated, info = env.step(env_state, action)
             done = jnp.logical_or(terminated, truncated)
-            obs = obs.squeeze()
+            if config["PIXEL_BASED"]:
+                obs = obs.squeeze(-1)  # pixel-based: (F, H, W, 1) -> (F, H, W)
+            # object-centric: (D,)
             total_reward += float(reward)
 
             # Render frame from the underlying base Atari state, using the original renderer.
