@@ -190,8 +190,9 @@ class EpisodeStatistics:
     returned_episode_lengths: jnp.array
 
 
-def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: Actor, critic: Critic, config: dict, task_id: str, agent_state: TrainState, ewc_fisher = None, ewc_params = None, max_D = None, global_step = None, global_iteration = None, global_start_time = None, seen_tasks = None, train_mods = [], eval_mods = []):
-    config = {k.upper(): v for k, v in config.items() if k != "alg"}
+def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: Actor, critic: Critic, config: dict, task_id: str, agent_state: TrainState, ewc_fisher = None, ewc_params = None, max_D = None, global_step = None, global_iteration = None, global_start_time = None, seen_tasks = None, train_mods = [], eval_mods = [], get_action_and_value_fn = None, compute_gae_fn = None, update_ppo_fn = None):
+    # shallow copy the config to avoid changing the original across tasks
+    config = config.copy()
 
     config["TRAIN_MODS"] = train_mods
     config["EVAL_MODS"] = eval_mods
@@ -204,9 +205,6 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
     config["ENV_ID"] = task_id
 
     run_name = f'{config["ENV_ID"]}_{config["EXP_NAME"]}_{"oc" if not config["PIXEL_BASED"] else "pixel"}_{config["SEED"]}'
-
-    # number of parameters that are restricted by EWC penalty (network + actor)
-    num_restrict_params = sum(x.size for x in jax.tree_util.tree_leaves(ewc_params))
 
     # env setup
     env = make_env(
@@ -258,173 +256,6 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
     assert isinstance(env.action_space(), spaces.Discrete), "only discrete action space is supported"
     # assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
-    @jax.jit
-    def get_action_and_value(
-        agent_state: TrainState,
-        next_obs: np.ndarray,
-        key: jax.random.PRNGKey,
-    ):
-        """sample action, calculate value, logprob, entropy, and update storage"""
-        hidden = network.apply(agent_state.params.network_params, next_obs)
-        logits = actor.apply(agent_state.params.actor_params, hidden)
-        # sample action: Gumbel-softmax trick
-        # see https://stats.stackexchange.com/questions/359442/sampling-from-a-categorical-distribution
-        key, subkey = jax.random.split(key)
-        u = jax.random.uniform(subkey, shape=logits.shape)
-        action = jnp.argmax(logits - jnp.log(-jnp.log(u)), axis=1)
-        logprob = jax.nn.log_softmax(logits)[jnp.arange(action.shape[0]), action]
-        value = critic.apply(agent_state.params.critic_params, hidden)
-        return action, logprob, value.squeeze(-1), key
-
-    @jax.jit
-    def get_action_and_value2(
-        params: flax.core.FrozenDict,
-        x: np.ndarray,
-        action: np.ndarray,
-    ):
-        """calculate value, logprob of supplied `action`, and entropy"""
-        hidden = network.apply(params.network_params, x)
-        logits = actor.apply(params.actor_params, hidden)
-        logprob = jax.nn.log_softmax(logits)[jnp.arange(action.shape[0]), action]
-        # normalize the logits https://gregorygundersen.com/blog/2020/02/09/log-sum-exp/
-        logits = logits - jax.scipy.special.logsumexp(logits, axis=-1, keepdims=True)
-        logits = logits.clip(min=jnp.finfo(logits.dtype).min)
-        p_log_p = logits * jax.nn.softmax(logits)
-        entropy = -p_log_p.sum(-1)
-        value = critic.apply(params.critic_params, hidden).squeeze(-1)
-        return logprob, entropy, value
-
-    def compute_gae_once(carry, inp, gamma, gae_lambda):
-        advantages = carry
-        nextdone, nextvalues, curvalues, reward = inp
-        nextnonterminal = 1.0 - nextdone
-
-        delta = reward + gamma * nextvalues * nextnonterminal - curvalues
-        advantages = delta + gamma * gae_lambda * nextnonterminal * advantages
-        return advantages, advantages
-
-    compute_gae_once = partial(compute_gae_once, gamma=config["GAMMA"], gae_lambda=config["GAE_LAMBDA"])
-
-    @jax.jit
-    def compute_gae(
-        agent_state: TrainState,
-        next_obs: np.ndarray,
-        next_done: np.ndarray,
-        storage: Storage,
-    ):
-        next_value = critic.apply(
-            agent_state.params.critic_params, network.apply(agent_state.params.network_params, next_obs)
-        ).squeeze(-1)
-
-        advantages = jnp.zeros((config["NUM_ENVS"],))
-        dones = jnp.concatenate([storage.dones, next_done[None, :]], axis=0)
-        values = jnp.concatenate([storage.values, next_value[None, :]], axis=0)
-        _, advantages = jax.lax.scan(
-            compute_gae_once, advantages, (dones[1:], values[1:], values[:-1], storage.rewards), reverse=True
-        )
-        storage = storage.replace(
-            advantages=advantages,
-            returns=advantages + storage.values,
-        )
-        return storage
-
-    def ewc_penalty(params, ewc_params, ewc_fisher):
-        """
-        Compute the EWC quadratic penalty.
-
-        ewc_fisher pytree should be initialized with zeros for the first task.
-        """
-
-        def param_penalty(p, p_star, f):
-            # returns the penalty (scalar) for one pytree leaf (array)
-            return (f * (p - p_star) ** 2).sum()
-        
-        # params also includes the critic; we only want to restrict the network and actor params
-        net_penalties = jax.tree.map(param_penalty, params.network_params, ewc_params["network"], ewc_fisher["network"])
-        act_penalties = jax.tree.map(param_penalty, params.actor_params, ewc_params["actor"], ewc_fisher["actor"])
-        total_penalty = sum(jax.tree.leaves(net_penalties)) + sum(jax.tree.leaves(act_penalties))
-        # normalize by number of parameters to avoid the penalty scaling with model size
-        return 0.5 * total_penalty / num_restrict_params   # sum over scalar leaves to get a single scalar penalty
-
-    def ppo_loss(params, x, a, logp, mb_advantages, mb_returns, ewc_params, ewc_fisher):
-        newlogprob, entropy, newvalue = get_action_and_value2(params, x, a)
-        logratio = newlogprob - logp
-        ratio = jnp.exp(logratio)
-        approx_kl = ((ratio - 1) - logratio).mean()
-
-        if config["NORM_ADV"]:
-            mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
-
-        # Policy loss
-        pg_loss1 = -mb_advantages * ratio
-        pg_loss2 = -mb_advantages * jnp.clip(ratio, 1 - config["CLIP_COEF"], 1 + config["CLIP_COEF"])
-        pg_loss = jnp.maximum(pg_loss1, pg_loss2).mean()
-
-        # Value loss
-        v_loss = 0.5 * ((newvalue - mb_returns) ** 2).mean()
-
-        entropy_loss = entropy.mean()
-
-        ewc_loss = ewc_penalty(params, ewc_params, ewc_fisher)
-
-        loss = (
-            pg_loss
-            - config["ENT_COEF"] * entropy_loss
-            + v_loss * config["VF_COEF"]
-            + config.get("EWC_LAMBDA", 0.0) * ewc_loss
-        )
-        return loss, (pg_loss, v_loss, entropy_loss, jax.lax.stop_gradient(approx_kl))
-
-    ppo_loss_grad_fn = jax.value_and_grad(ppo_loss, has_aux=True)
-
-    @jax.jit
-    def update_ppo(
-        agent_state: TrainState,
-        storage: Storage,
-        key: jax.random.PRNGKey,
-        ewc_params,
-        ewc_fisher,
-    ):
-        def update_epoch(carry, unused_inp):
-            agent_state, key = carry
-            key, subkey = jax.random.split(key)
-
-            def flatten(x):
-                return x.reshape((-1,) + x.shape[2:])
-
-            # taken from: https://github.com/google/brax/blob/main/brax/training/agents/ppo/train.py
-            def convert_data(x: jnp.ndarray):
-                x = jax.random.permutation(subkey, x)
-                x = jnp.reshape(x, (config["NUM_MINIBATCHES"], -1) + x.shape[1:])
-                return x
-
-            flatten_storage = jax.tree.map(flatten, storage)
-            shuffled_storage = jax.tree.map(convert_data, flatten_storage)
-
-            def update_minibatch(agent_state, minibatch):
-                (loss, (pg_loss, v_loss, entropy_loss, approx_kl)), grads = ppo_loss_grad_fn(
-                    agent_state.params,
-                    minibatch.obs,
-                    minibatch.actions,
-                    minibatch.logprobs,
-                    minibatch.advantages,
-                    minibatch.returns,
-                    ewc_params,
-                    ewc_fisher,
-                )
-                agent_state = agent_state.apply_gradients(grads=grads)
-                return agent_state, (loss, pg_loss, v_loss, entropy_loss, approx_kl, grads)
-
-            agent_state, (loss, pg_loss, v_loss, entropy_loss, approx_kl, grads) = jax.lax.scan(
-                update_minibatch, agent_state, shuffled_storage
-            )
-            return (agent_state, key), (loss, pg_loss, v_loss, entropy_loss, approx_kl, grads)
-
-        (agent_state, key), (loss, pg_loss, v_loss, entropy_loss, approx_kl, grads) = jax.lax.scan(
-            update_epoch, (agent_state, key), (), length=config["UPDATE_EPOCHS"]
-        )
-        return agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, key
-    
     def eval_and_vid(iteration, current_global_step):
         model_path = f'runs/{run_name}/{config["EXP_NAME"]}_{iteration}.cleanrl_model'
         os.makedirs(os.path.dirname(model_path), exist_ok=True)
@@ -614,7 +445,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
     # based on https://github.dev/google/evojax/blob/0625d875262011d8e1b6aa32566b236f44b4da66/evojax/sim_mgr.py
     def step_once(carry, step, env_step_fn):
         agent_state, obs, done, key, env_state = carry
-        action, logprob, value, key = get_action_and_value(agent_state, obs, key)
+        action, logprob, value, key = get_action_and_value_fn(agent_state, obs, key)
 
         next_obs, env_state, reward, next_done, info = env_step_fn(env_state, action)
         storage = Storage(
@@ -652,8 +483,8 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             agent_state, next_obs, next_done, key, env_state
         )
         global_step += config["NUM_STEPS"] * config["NUM_ENVS"]
-        storage = compute_gae(agent_state, next_obs, next_done, storage)
-        agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, key = update_ppo(
+        storage = compute_gae_fn(agent_state, next_obs, next_done, storage)
+        agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, key = update_ppo_fn(
             agent_state,
             storage,
             key,
@@ -699,18 +530,12 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
 
     if config["SAVE_MODEL"]:
         eval_and_vid(iteration, global_step)
-        # if config["UPLOAD_MODEL"]:
-        #     from cleanrl_utils.huggingface import push_to_hub
 
-        #     repo_name = f'{config["ENV_ID"]}-{config["EXP_NAME"]}-seed{config["SEED"]}'
-        #     repo_id = f'{config["HF_ENTITY"]}/{repo_name}' if config["HF_ENTITY"] else repo_name
-        #     push_to_hub(config, episodic_returns, repo_id, "PPO", f"runs/{run_name}", f"videos/{run_name}-eval")
-
-    # writer.close()
-    
     return agent_state, fisher_storage, global_step, global_iteration
 
 def continual_run(config: dict):
+    config = {k.upper(): v for k, v in config.items() if k != "alg"}
+
     if config["TRACK"]:
         wandb.init(
             project=config["PROJECT"],
@@ -743,21 +568,7 @@ def continual_run(config: dict):
         """
         Approximate the diagonal Fisher Information Matrix via squared gradients
         of the log-probability of the actions taken under the current policy in batches.
-
-        Call at the end of each task.
-
-        Args:
-            agent_state:  current TrainState after task training is complete.
-            obs_batch:    a batch of observations collected during the final
-                          rollout.
-            action_batch: corresponding actions.
-            ewc_fisher:   previous task's FIM estimate.
-            ewc_decay:    decay factor for EWC.
-            minibatch_size:   size of the minibatch.
-        Returns:
-            new_ewc_fisher: accumulated diagonal FIM.
         """
-        
         def log_prob(net_params, act_params, obs, action):
             logprob = compute_logprob(net_params, act_params, obs[None, ...], action[None, ...])  # add batch dimension
             return logprob.squeeze()  # remove batch dimension
@@ -798,7 +609,6 @@ def continual_run(config: dict):
             lambda f_old, f_new: ewc_decay * f_old + (1. - ewc_decay) * f_new,
             ewc_fisher, new_fisher)
 
-        # new_ewc_params = agent_state.params  # snapshot current weights as θ*
         return new_fisher
 
     # TRY NOT TO MODIFY: seeding
@@ -873,6 +683,167 @@ def continual_run(config: dict):
         "network": jax.tree.map(jnp.zeros_like, agent_state.params.network_params),
         "actor": jax.tree.map(jnp.zeros_like, agent_state.params.actor_params)
     }
+
+    # JIT-compiled functions in outer scope to compile them only once before the loop
+
+    # number of parameters that are restricted by EWC penalty (network + actor)
+    num_restrict_params = sum(x.size for x in jax.tree_util.tree_leaves(ewc_params))
+
+    @jax.jit
+    def get_action_and_value(
+        agent_state: TrainState,
+        next_obs: np.ndarray,
+        key: jax.random.PRNGKey,
+    ):
+        """sample action, calculate value, logprob, entropy, and update storage"""
+        hidden = network.apply(agent_state.params.network_params, next_obs)
+        logits = actor.apply(agent_state.params.actor_params, hidden)
+        
+        key, subkey = jax.random.split(key)
+        u = jax.random.uniform(subkey, shape=logits.shape)
+        action = jnp.argmax(logits - jnp.log(-jnp.log(u)), axis=1)
+        logprob = jax.nn.log_softmax(logits)[jnp.arange(action.shape[0]), action]
+        value = critic.apply(agent_state.params.critic_params, hidden)
+        return action, logprob, value.squeeze(-1), key
+
+    @jax.jit
+    def get_action_and_value2(
+        params: flax.core.FrozenDict,
+        x: np.ndarray,
+        action: np.ndarray,
+    ):
+        """calculate value, logprob of supplied `action`, and entropy"""
+        hidden = network.apply(params.network_params, x)
+        logits = actor.apply(params.actor_params, hidden)
+        logprob = jax.nn.log_softmax(logits)[jnp.arange(action.shape[0]), action]
+        
+        logits = logits - jax.scipy.special.logsumexp(logits, axis=-1, keepdims=True)
+        logits = logits.clip(min=jnp.finfo(logits.dtype).min)
+        p_log_p = logits * jax.nn.softmax(logits)
+        entropy = -p_log_p.sum(-1)
+        value = critic.apply(params.critic_params, hidden).squeeze(-1)
+        return logprob, entropy, value
+
+    def compute_gae_once(carry, inp, gamma, gae_lambda):
+        advantages = carry
+        nextdone, nextvalues, curvalues, reward = inp
+        nextnonterminal = 1.0 - nextdone
+
+        delta = reward + gamma * nextvalues * nextnonterminal - curvalues
+        advantages = delta + gamma * gae_lambda * nextnonterminal * advantages
+        return advantages, advantages
+
+    compute_gae_once_partial = partial(compute_gae_once, gamma=config["GAMMA"], gae_lambda=config["GAE_LAMBDA"])
+
+    @jax.jit
+    def compute_gae(
+        agent_state: TrainState,
+        next_obs: np.ndarray,
+        next_done: np.ndarray,
+        storage: Storage,
+    ):
+        next_value = critic.apply(
+            agent_state.params.critic_params, network.apply(agent_state.params.network_params, next_obs)
+        ).squeeze(-1)
+
+        advantages = jnp.zeros((config["NUM_ENVS"],))
+        dones = jnp.concatenate([storage.dones, next_done[None, :]], axis=0)
+        values = jnp.concatenate([storage.values, next_value[None, :]], axis=0)
+        _, advantages = jax.lax.scan(
+            compute_gae_once_partial, advantages, (dones[1:], values[1:], values[:-1], storage.rewards), reverse=True
+        )
+        storage = storage.replace(
+            advantages=advantages,
+            returns=advantages + storage.values,
+        )
+        return storage
+
+    def ewc_penalty(params, ewc_params, ewc_fisher):
+        def param_penalty(p, p_star, f):
+            return (f * (p - p_star) ** 2).sum()
+        
+        net_penalties = jax.tree.map(param_penalty, params.network_params, ewc_params["network"], ewc_fisher["network"])
+        act_penalties = jax.tree.map(param_penalty, params.actor_params, ewc_params["actor"], ewc_fisher["actor"])
+        total_penalty = sum(jax.tree.leaves(net_penalties)) + sum(jax.tree.leaves(act_penalties))
+        
+        return 0.5 * total_penalty / num_restrict_params
+
+    def ppo_loss(params, x, a, logp, mb_advantages, mb_returns, ewc_params, ewc_fisher):
+        newlogprob, entropy, newvalue = get_action_and_value2(params, x, a)
+        logratio = newlogprob - logp
+        ratio = jnp.exp(logratio)
+        approx_kl = ((ratio - 1) - logratio).mean()
+
+        if config["NORM_ADV"]:
+            mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
+
+        # Policy loss
+        pg_loss1 = -mb_advantages * ratio
+        pg_loss2 = -mb_advantages * jnp.clip(ratio, 1 - config["CLIP_COEF"], 1 + config["CLIP_COEF"])
+        pg_loss = jnp.maximum(pg_loss1, pg_loss2).mean()
+
+        # Value loss
+        v_loss = 0.5 * ((newvalue - mb_returns) ** 2).mean()
+        entropy_loss = entropy.mean()
+        ewc_loss = ewc_penalty(params, ewc_params, ewc_fisher)
+
+        loss = (
+            pg_loss
+            - config["ENT_COEF"] * entropy_loss
+            + v_loss * config["VF_COEF"]
+            + config.get("EWC_LAMBDA", 0.0) * ewc_loss
+        )
+        return loss, (pg_loss, v_loss, entropy_loss, jax.lax.stop_gradient(approx_kl))
+
+    ppo_loss_grad_fn = jax.value_and_grad(ppo_loss, has_aux=True)
+
+    @jax.jit
+    def update_ppo(
+        agent_state: TrainState,
+        storage: Storage,
+        key: jax.random.PRNGKey,
+        ewc_params,
+        ewc_fisher,
+    ):
+        def update_epoch(carry, unused_inp):
+            agent_state, key = carry
+            key, subkey = jax.random.split(key)
+
+            def flatten(x):
+                return x.reshape((-1,) + x.shape[2:])
+
+            def convert_data(x: jnp.ndarray):
+                x = jax.random.permutation(subkey, x)
+                x = jnp.reshape(x, (config["NUM_MINIBATCHES"], -1) + x.shape[1:])
+                return x
+
+            flatten_storage = jax.tree.map(flatten, storage)
+            shuffled_storage = jax.tree.map(convert_data, flatten_storage)
+
+            def update_minibatch(agent_state, minibatch):
+                (loss, (pg_loss, v_loss, entropy_loss, approx_kl)), grads = ppo_loss_grad_fn(
+                    agent_state.params,
+                    minibatch.obs,
+                    minibatch.actions,
+                    minibatch.logprobs,
+                    minibatch.advantages,
+                    minibatch.returns,
+                    ewc_params,
+                    ewc_fisher,
+                )
+                agent_state = agent_state.apply_gradients(grads=grads)
+                return agent_state, (loss, pg_loss, v_loss, entropy_loss, approx_kl, grads)
+
+            agent_state, (loss, pg_loss, v_loss, entropy_loss, approx_kl, grads) = jax.lax.scan(
+                update_minibatch, agent_state, shuffled_storage
+            )
+            return (agent_state, key), (loss, pg_loss, v_loss, entropy_loss, approx_kl, grads)
+
+        (agent_state, key), (loss, pg_loss, v_loss, entropy_loss, approx_kl, grads) = jax.lax.scan(
+            update_epoch, (agent_state, key), (), length=config["UPDATE_EPOCHS"]
+        )
+        return agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, key
+
     global_step = 0 # tracks total number of environment steps across all tasks
     global_iteration = 0    # tracks total number of PPO updates
     global_start_time = time.time()
@@ -893,7 +864,8 @@ def continual_run(config: dict):
         agent_state, fisher_storage, global_step, global_iteration = single_run(
             key, network, actor, critic, config, task_id, agent_state, 
             ewc_fisher, ewc_params, max_D, global_step, global_iteration, 
-            global_start_time, seen_tasks, train_mods, eval_mods
+            global_start_time, seen_tasks, train_mods, eval_mods,
+            get_action_and_value, compute_gae, update_ppo
         )
 
         # Set EWC decay to 0 for the first task to ignore the initial zero-value pytree
