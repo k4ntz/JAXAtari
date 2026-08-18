@@ -3587,7 +3587,6 @@ class PitfallRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # Debug (render-only): scorpion collision overlay toggle.
         sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sprites', 'pitfall')
         asset_config = list(self.consts.ASSET_CONFIG)
 
