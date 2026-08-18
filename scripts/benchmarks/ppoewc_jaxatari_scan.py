@@ -205,6 +205,8 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
 
     run_name = f'{config["ENV_ID"]}_{config["EXP_NAME"]}_{"oc" if not config["PIXEL_BASED"] else "pixel"}_{config["SEED"]}'
 
+    num_params = sum(x.size for x in jax.tree_util.tree_leaves(ewc_params))
+
     # env setup
     env = make_env(
             env_id=config["ENV_ID"], 
@@ -339,8 +341,8 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
         # params also includes the critic; we only want to restrict the network and actor params. 
         # no problem, because ewc_fisher values for all critic params are zero anyways
         penalties = jax.tree.map(param_penalty, params, ewc_params, ewc_fisher) # pytree with shape of params pytree, but leaves are scalars instead of arrays
-        # TODO: (?) add normalization so the penalty does not grow with the number of parameters
-        return 0.5 * sum(jax.tree.leaves(penalties))    # sum over scalar leaves to get a single scalar penalty
+        # normalizing by the number of parameters so the penalty does not grow with model size
+        return 0.5 * sum(jax.tree.leaves(penalties)) / num_params   # sum over scalar leaves to get a single scalar penalty
 
     def ppo_loss(params, x, a, logp, mb_advantages, mb_returns, ewc_params, ewc_fisher):
         newlogprob, entropy, newvalue = get_action_and_value2(params, x, a)
