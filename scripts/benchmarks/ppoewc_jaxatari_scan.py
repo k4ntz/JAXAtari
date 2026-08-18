@@ -205,7 +205,8 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
 
     run_name = f'{config["ENV_ID"]}_{config["EXP_NAME"]}_{"oc" if not config["PIXEL_BASED"] else "pixel"}_{config["SEED"]}'
 
-    num_params = sum(x.size for x in jax.tree_util.tree_leaves(ewc_params))
+    # number of parameters that are restricted by EWC penalty (network + actor)
+    num_restrict_params = sum(x.size for x in jax.tree_util.tree_leaves(ewc_params))
 
     # env setup
     env = make_env(
@@ -338,11 +339,12 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             # returns the penalty (scalar) for one pytree leaf (array)
             return (f * (p - p_star) ** 2).sum()
         
-        # params also includes the critic; we only want to restrict the network and actor params. 
-        # no problem, because ewc_fisher values for all critic params are zero anyways
-        penalties = jax.tree.map(param_penalty, params, ewc_params, ewc_fisher) # pytree with shape of params pytree, but leaves are scalars instead of arrays
-        # normalizing by the number of parameters so the penalty does not grow with model size
-        return 0.5 * sum(jax.tree.leaves(penalties)) / num_params   # sum over scalar leaves to get a single scalar penalty
+        # params also includes the critic; we only want to restrict the network and actor params
+        net_penalties = jax.tree.map(param_penalty, params.network_params, ewc_params["network"], ewc_fisher["network"])
+        act_penalties = jax.tree.map(param_penalty, params.actor_params, ewc_params["actor"], ewc_fisher["actor"])
+        total_penalty = sum(jax.tree.leaves(net_penalties)) + sum(jax.tree.leaves(act_penalties))
+        # normalize by number of parameters to avoid the penalty scaling with model size
+        return 0.5 * total_penalty / num_restrict_params   # sum over scalar leaves to get a single scalar penalty
 
     def ppo_loss(params, x, a, logp, mb_advantages, mb_returns, ewc_params, ewc_fisher):
         newlogprob, entropy, newvalue = get_action_and_value2(params, x, a)
@@ -725,13 +727,14 @@ def continual_run(config: dict):
     
     @jax.jit
     def compute_logprob(
-        params: flax.core.FrozenDict,
+        network_params, 
+        actor_params,
         x: np.ndarray,
         action: np.ndarray,
     ):
         """calculate logprob of supplied `action`"""
-        hidden = network.apply(params.network_params, x)
-        logits = actor.apply(params.actor_params, hidden)
+        hidden = network.apply(network_params, x)
+        logits = actor.apply(actor_params, hidden)
         logprob = jax.nn.log_softmax(logits)[jnp.arange(action.shape[0]), action]
         return logprob
     
@@ -755,11 +758,11 @@ def continual_run(config: dict):
             new_ewc_fisher: accumulated diagonal FIM.
         """
         
-        def log_prob(params, obs, action):
-            logprob = compute_logprob(params, obs[None, ...], action[None, ...])  # add batch dimension
+        def log_prob(net_params, act_params, obs, action):
+            logprob = compute_logprob(net_params, act_params, obs[None, ...], action[None, ...])  # add batch dimension
             return logprob.squeeze()  # remove batch dimension
 
-        per_sample_grad_fn = jax.vmap(jax.grad(log_prob), in_axes=(None, 0, 0))
+        per_sample_grad_fn = jax.vmap(jax.grad(log_prob, argnums=(0, 1)), in_axes=(None, None, 0, 0))
 
         total_samples = obs_batch.shape[0]
         num_batches = total_samples // minibatch_size
@@ -771,9 +774,12 @@ def continual_run(config: dict):
         # Use jax.lax.scan to accumulate the Fisher information in batches to avoid memory spikes
         def scan_fn(carry_fisher, minibatch):
             obs_mini, action_mini = minibatch
-            per_sample_grads_mini = per_sample_grad_fn(agent_state.params, obs_mini, action_mini)    # pytree with same structure as params
+            grads_network, grads_actor = per_sample_grad_fn(agent_state.params.network_params, agent_state.params.actor_params, obs_mini, action_mini)
 
-            fisher_sum_mini = jax.tree.map(lambda g: jnp.sum(g ** 2, axis=0), per_sample_grads_mini)
+            fisher_sum_mini = {
+                "network": jax.tree.map(lambda g: jnp.sum(g ** 2, axis=0), grads_network),
+                "actor": jax.tree.map(lambda g: jnp.sum(g ** 2, axis=0), grads_actor)
+            }
 
             new_carry = jax.tree.map(jnp.add, carry_fisher, fisher_sum_mini)
             return new_carry, None
@@ -859,9 +865,14 @@ def continual_run(config: dict):
     actor.apply = jax.jit(actor.apply)
     critic.apply = jax.jit(critic.apply)
 
-    ewc_fisher = jax.tree.map(jnp.zeros_like, agent_state.params)
-    ewc_params = jax.tree.map(jnp.zeros_like, agent_state.params)
-
+    ewc_fisher = {
+        "network": jax.tree.map(jnp.zeros_like, agent_state.params.network_params),
+        "actor": jax.tree.map(jnp.zeros_like, agent_state.params.actor_params)
+    }
+    ewc_params = {
+        "network": jax.tree.map(jnp.zeros_like, agent_state.params.network_params),
+        "actor": jax.tree.map(jnp.zeros_like, agent_state.params.actor_params)
+    }
     global_step = 0 # tracks total number of environment steps across all tasks
     global_iteration = 0    # tracks total number of PPO updates
     global_start_time = time.time()
@@ -889,8 +900,10 @@ def continual_run(config: dict):
         ewc_decay = 0.0 if i == 0 else config["EWC_DECAY"]
 
         # EWC: Compute Fisher Information Matrix and snapshot θ* at the end of the task
-        # TODO: could the full storage be too large and cause memory issues?
-        ewc_params = agent_state.params
+        ewc_params = {
+            "network": agent_state.params.network_params,
+            "actor": agent_state.params.actor_params
+        }
         flat_obs = fisher_storage.obs.reshape((-1,) + fisher_storage.obs.shape[2:])
         flat_actions = fisher_storage.actions.reshape(-1)
         ewc_fisher = compute_fisher(agent_state, flat_obs, flat_actions, ewc_fisher, jnp.float32(ewc_decay))
