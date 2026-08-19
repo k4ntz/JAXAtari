@@ -134,6 +134,8 @@ NTSC_FRAMES_PER_STEP = 2
 # take the life and put Harry back.
 SOUND_DEAD = 0x31
 SOUND_FALLING = 0x53
+# `lda #SOUND_TREASURE / sta soundIdx` in `.incScore`: the treasure tune index.
+SOUND_TREASURE = 0x25
 KILLED_HARRY_SCROLL = 0x84
 
 # SoundTab, verbatim. Only the sign bit is load-bearing here: `lda SoundTab-1,x
@@ -673,6 +675,150 @@ def croc_jaws_open(frame_cnt_ntsc) -> jnp.ndarray:
     return (f & jnp.int32(0x80)) == jnp.int32(0)
 
 
+# --- Surface objects: fire and treasures (the Kernel 5/6 GRP1 object) --------
+# Fire, the cobra and the four treasures all reach the screen through the same
+# path: ProcessObjects points objPatPtr/objColPtr at a pattern and a color
+# table, and Kernels 5/6 draw object rows 14..0 on the fifteen ground-band
+# lines, so object pattern row r lands on band line 15 - r. The sixteenth
+# pattern row is never emitted, and the box's top line sits one row above the
+# band. xPosObject (= 124, set by ContRandom) is the box's left edge; NUSIZ1 is
+# ONE_COPY for all of them, so each is one eight-pixel-wide player.
+OBJECT_BOX_H = 16
+
+
+def object_box_top_row(ground_y: int) -> int:
+    """Screen row of the GRP1 object box's top line (pattern row 15)."""
+    return pit_band_top_row(ground_y) - 1
+
+
+# Atari color byte -> RGB, read off raw ALE frames of the objects concerned.
+OBJ_COLOR_RGB = {
+    0x04: (111, 111, 111),   # GREY-2      (money bag)
+    0x06: (142, 142, 142),   # GREY        (silver bar)
+    0x0E: (236, 236, 236),   # WHITE       (bar/ring sparkle)
+    0x10: (72, 72, 0),       # BROWN-2     (fire logs)
+    0x12: (105, 105, 15),    # BROWN       (money bag tie)
+    0x1E: (252, 252, 84),    # YELLOW      (gold bar, ring)
+    0x2E: (236, 200, 96),    # fire flame (a literal in the ASM's FireColor)
+    0x3E: (252, 188, 116),   # ORANGE      (fire body)
+    0x42: (167, 26, 26),     # DARK_RED    (RingColor's two real bytes; unseen)
+}
+
+# Fire0 and Fire1, verbatim; index 0 is the bottom row. The flame leans right in
+# Fire1. FireColor is indexed by the same pattern row.
+FIRE_PATTERNS = (
+    (   # Fire0
+        0b00000000, 0b11000011, 0b11100111, 0b01111110, 0b00111100, 0b00011000,
+        0b00111100, 0b01111100, 0b01111100, 0b01111000, 0b00111000, 0b00111000,
+        0b00110000, 0b00110000, 0b00010000, 0b00010000,
+    ),
+    (   # Fire1
+        0b00000000, 0b11000011, 0b11100111, 0b01111110, 0b00111100, 0b00011000,
+        0b00111100, 0b00111110, 0b00111110, 0b00011110, 0b00011100, 0b00011100,
+        0b00001100, 0b00001100, 0b00001000, 0b00001000,
+    ),
+)
+FIRE_COLOR_ROWS = (
+    0x10, 0x10, 0x10, 0x10, 0x10, 0x3E, 0x3E, 0x3E,
+    0x2E, 0x2E, 0x2E, 0x2E, 0x2E, 0x2E, 0x2E, 0x2E,
+)
+
+# Treasure patterns, verbatim; index 0 is the bottom row. Bar0/Bar1 are the two
+# sparkle frames shared by the silver and gold bars.
+MONEY_BAG_PATTERN = (
+    0b00000000, 0b00111110, 0b01110111, 0b01110111, 0b01100011, 0b01111011,
+    0b01100011, 0b01101111, 0b01100011, 0b00110110, 0b00110110, 0b00011100,
+    0b00001000, 0b00011100, 0b00110110, 0b00000000,
+)
+BAR0_PATTERN = (
+    0b00000000, 0b11111000, 0b11111100, 0b11111110, 0b11111110, 0b01111110,
+    0b00111110, 0b00000000, 0b00010000, 0b00000000, 0b01010100, 0b00000000,
+    0b10010010, 0b00000000, 0b00010000, 0b00000000,
+)
+BAR1_PATTERN = (
+    0b00000000, 0b11111000, 0b11111100, 0b11111110, 0b11111110, 0b01111110,
+    0b00111110, 0b00000000, 0b00000000, 0b00101000, 0b00000000, 0b01010100,
+    0b00000000, 0b00010000, 0b00000000, 0b00000000,
+)
+RING_PATTERN = (
+    0b00000000, 0b00000000, 0b00111000, 0b01101100, 0b01000100, 0b01000100,
+    0b01000100, 0b01101100, 0b00111000, 0b00010000, 0b00111000, 0b01111100,
+    0b00111000, 0b00000000, 0b00000000, 0b00000000,
+)
+
+# Treasure color rows, per object row, verbatim. MoneyBagColor is GREY-2 with a
+# single BROWN tie row; SilverBarColor is a grey bar under white sparkles;
+# Color1PtrTab points the gold bar at GoldBarColor+1, so its rows are shifted by
+# one; RingColor has only two real bytes (DARK_RED, on the empty top rows) and
+# the kernel's reads run straight on into GoldBarColor, giving a yellow band and
+# a white gem.
+MONEY_BAG_COLOR_ROWS = (0x04,) * 8 + (0x04, 0x04, 0x04, 0x04, 0x12, 0x04, 0x04, 0x04)
+SILVER_BAR_COLOR_ROWS = (0x06,) * 7 + (0x0E,) * 9
+_GOLD_BAR_COLOR_TABLE = (0x1E,) * 8 + (0x0E,) * 9
+GOLD_BAR_COLOR_ROWS = _GOLD_BAR_COLOR_TABLE[1:17]  # GoldBarColor+1
+RING_COLOR_ROWS = (0x42, 0x42) + _GOLD_BAR_COLOR_TABLE[0:14]
+
+# The four treasure identities, indexed by objectType & 3 (ProcessObjects:
+# `lda objectType / and #$03 / ora #$08 / tax`). AnimateTab is OBJECT_H for the
+# two bars (they shimmer between Bar0 and Bar1 on random2 bit 4) and 0 for the
+# money bag and the ring (static).
+TREASURE_PATTERNS = (MONEY_BAG_PATTERN, (BAR0_PATTERN, BAR1_PATTERN), (BAR0_PATTERN, BAR1_PATTERN), RING_PATTERN)
+TREASURE_COLOR_ROWS = (
+    MONEY_BAG_COLOR_ROWS,
+    SILVER_BAR_COLOR_ROWS,
+    GOLD_BAR_COLOR_ROWS,
+    RING_COLOR_ROWS,
+)
+TREASURE_ANIMATED = (False, True, True, False)
+_TREASURE_ANIMATED = jnp.asarray(TREASURE_ANIMATED, dtype=jnp.bool_)
+
+# TreasureMask, verbatim: the persistence bit for objectType y is 1 << (7 - y).
+TREASURE_MASK = tuple(1 << (7 - i) for i in range(8))
+
+# `.incScore`: `lda objectType / and #$03 / asl x4 / adc #$20 / sed / adc
+# scoreMed`. (ti*16 + 32) read as a BCD byte is 20/30/40/50 for ti = 0..3, and
+# scoreMed is the thousands:hundreds pair, so each treasure adds (ti+2) * 1000.
+TREASURE_SCORES = (2000, 3000, 4000, 5000)
+_TREASURE_SCORES = jnp.asarray(TREASURE_SCORES, dtype=jnp.int32)
+
+# `lda #31 / sta treasureCnt` in InitGame: 32 treasures, counted down to -1.
+TREASURE_COUNT_INIT = 31
+
+
+def object_band_bitmap(pattern, color_rows, color_id_by_atari, transparent_id):
+    """One GRP1 object frame as a top-down 16x8 palette-id bitmap.
+
+    Box row j shows object row 15 - j (the kernels count the pointer down as the
+    raster descends), and object row 15 is never drawn, so box row 0 is left
+    transparent. Each lit pixel takes that object row's color-table entry.
+    """
+    rows = np.full((OBJECT_BOX_H, 8), transparent_id, dtype=np.int32)
+    for j in range(OBJECT_BOX_H):
+        r = (OBJECT_BOX_H - 1) - j
+        if r == OBJECT_BOX_H - 1:
+            continue  # row 15 is never drawn
+        byte = pattern[r]
+        color_id = color_id_by_atari[color_rows[r]]
+        for c in range(8):
+            if (byte >> (7 - c)) & 1:
+                rows[j, c] = color_id
+    return rows
+
+
+def treasure_collected(room_byte, treasure_bits) -> jnp.ndarray:
+    """CheckTreasures: is this room's treasure bit already set?
+
+        lda random / rol / rol / rol / and #$03 / tax   ; x = bits 6..7 (treePat)
+        ldy objectType / lda TreasureMask,y / tay
+        and treasureBits,x                              ; Z set iff not collected
+    """
+    rb = room_byte.astype(jnp.uint8)
+    tree = tree_variant_u8(rb).astype(jnp.int32)
+    obj = obj_code_u8(rb).astype(jnp.int32)
+    mask = jnp.asarray(TREASURE_MASK, dtype=jnp.uint8)[obj]
+    return (treasure_bits[tree] & mask) != jnp.uint8(0)
+
+
 # --- Ground objects: logs ----------------------------------------------------
 # `ContRandom` puts every ground object here on entering a scene:
 # `lda #124 / sta xPosObject`. It is the left edge of the GRP1 box.
@@ -959,8 +1105,9 @@ def room_hazards_from_room_byte(room_byte: jnp.ndarray) -> tuple[
       111: snake
 
     Overrides:
-      pit==100 (croc room): no objects/hazards
-      pit==101 (treasure+tar): no hazards for now
+      pit==100 (croc room): no objects/hazards (crocodiles instead)
+      pit==101 (treasure+quicksand): no logs/fire/snake (a treasure instead,
+        rendered and collected through the CheckTreasures path, not here)
 
     """
     rb = room_byte.astype(jnp.uint8)
@@ -1120,6 +1267,15 @@ class PitfallState:
     # derive from this one byte, so they can never disagree.
     x_pos_quicksand: chex.Array
 
+    # ROM treasureBits (4 bytes) and treasureCnt. Each of the 32 treasure rooms
+    # is identified by its room byte's treePat (bits 6..7, picking the byte) and
+    # objectType (bits 0..2, picking the bit via TreasureMask = 1 << (7 - obj)).
+    # Cleared RAM at reset; a set bit means that treasure was already collected
+    # and ProcessObjects draws Nothing in its place. treasureCnt starts at 31
+    # (remaining - 1) and the 32nd collection ends the game (`dec noGameScroll`).
+    treasure_bits: chex.Array  # (4,) uint8
+    treasure_cnt: chex.Array
+
 class PitfallConstants(struct.PyTreeNode):
     screen_width: int = 160     # Atari 2600 horizontal resolution
     screen_height: int = 210   # Atari vertical resolution used in ALE
@@ -1201,12 +1357,10 @@ class PitfallConstants(struct.PyTreeNode):
     rolling_wood_contact_pad_x: int = 6
     rolling_wood_contact_shift_x: int = -3
 
-    # Fireplace hazard (upper ground)
-    fire_w: int = 7
-    fire_h: int = 7
-    fire_y_offset: int = 0
-    fire_hurt_cooldown_frames: int = 30  # ~1s at 30fps
-    fire_respawn_y_offset: int = 20      # respawn above ground so gravity drops player
+    # Fire hazard (upper ground). Geometry, cadence, position and the fatal
+    # collision all come from FIRE_PATTERNS / FIRE_COLOR_ROWS and the ROM's
+    # object pipeline; like the cobra, it kills through KilledHarry, so it needs
+    # no fire-specific size, position, cooldown or respawn constants.
 
     # Ground object x (ASM: lda #124 / sta xPosObject). Left edge of GRP1.
     object_x: int = 124
@@ -3118,22 +3272,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         climb_active = climb_active | (ladder_log_frames > jnp.int32(0))
         # ----------------------------------------------------------------------
 
-        fire_x_center = jnp.int32(132)
-
-        fire_w = jnp.int32(consts.fire_w)
-        fire_h = jnp.int32(consts.fire_h)
-        fire_top = jnp.int32(consts.ground_y - consts.fire_h + consts.fire_y_offset)
-        fire_y0 = fire_top
-        fire_y1 = fire_top + fire_h
-
-        screen_w_i = jnp.int32(consts.screen_width)
-        max_fire_start = jnp.maximum(screen_w_i - fire_w, jnp.int32(0))
-        fire_left = jnp.clip(fire_x_center - (fire_w // jnp.int32(2)), 0, max_fire_start)
-        fire_right = fire_left + fire_w
-
-        overlap_fire = (x1 > fire_left) & (x0 < fire_right) & (y1 > fire_y0) & (y0 < fire_y1)
         can_hurt = (hurt_cooldown == jnp.int32(0)) & gameplay_active & off_liana
-        hit_fire = has_fireplace & overlap_fire & can_hurt
 
         # Scorpion and cobra collision are both CXPPMM: a lit GRP0 pixel and a
         # lit GRP1 pixel on the same screen coordinate. The cobra previously
@@ -3168,8 +3307,22 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             self.cobra_box_top_px,
         )
 
+        # Fire is the same CXPPMM read as the cobra, over the same GRP1 object
+        # box, and shares the cobra's random2 bit-4 animation source (AnimateTab
+        # gives both OBJECT_H). The collision reads the incoming raster's frame
+        # and position, exactly like the cobra and the scorpion.
+        overlap_fire = player_object_pixels_collide(
+            harry_bitmap,
+            x.astype(jnp.int32),
+            harry_box_top,
+            self.renderer.FIRE_BITMAPS[cobra_frame_at_draw],
+            jnp.int32(consts.object_x),
+            self.renderer.object_box_top_px,
+        )
+
         hit_scorpion = has_scorpion & player_is_underground & overlap_scorpion & can_hurt
         hit_snake = has_snake & overlap_snake & can_hurt
+        hit_fire = has_fireplace & overlap_fire & can_hurt
 
         # `cpx #54 / bne .endDoJump / tya / bne .endDoJump / jmp KilledHarry`:
         # once the sink reaches yPosHarry 54 and there is no ladder in the scene,
@@ -3216,6 +3369,56 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         restart_rom_y = jnp.where(
             hit_hazard, rom_y_at_death.astype(jnp.int32), state.restart_rom_y
         )
+
+        # --- Treasure collection: `.contCollision` -> CheckTreasures -> .incScore
+        # The same CXPPMM bit-7 latch the fire and cobra read, with the incoming
+        # raster's Harry pose and object frame. The ROM collects when Harry's
+        # pixels meet the treasure's, on the surface (yPosHarry < 64), not on the
+        # liana, in a treasure scene whose persistence bit is still clear.
+        obj_type = obj_code_u8(new_room_byte).astype(jnp.int32)
+        treasure_type = obj_type & jnp.int32(3)
+        is_treasure_scene = pit_code_u8(new_room_byte) == jnp.uint8(5)
+        already_collected = treasure_collected(new_room_byte, state.treasure_bits)
+        bar_frame = cobra_animation_frame(
+            state.time_left, state.timer_started, consts, self.renderer.COBRA_ANIM_BIT4
+        )
+        treasure_frame = jnp.where(
+            _TREASURE_ANIMATED[treasure_type], bar_frame, jnp.int32(0)
+        )
+        overlap_treasure = player_object_pixels_collide(
+            harry_bitmap,
+            x.astype(jnp.int32),
+            harry_box_top,
+            self.renderer.TREASURE_BITMAPS[treasure_type, treasure_frame],
+            jnp.int32(consts.object_x),
+            self.renderer.object_box_top_px,
+        )
+        collect = (
+            is_treasure_scene
+            & (~already_collected)
+            & overlap_treasure
+            & gameplay_active
+            & off_liana
+            & (~player_is_underground)
+        )
+
+        # `sta treasureBits,x` - set the bit, so the treasure stays collected.
+        tree = tree_variant_u8(new_room_byte).astype(jnp.int32)
+        tmask = jnp.asarray(TREASURE_MASK, dtype=jnp.uint8)[obj_type]
+        tb = state.treasure_bits
+        treasure_bits = tb.at[tree].set(jnp.where(collect, tb[tree] | tmask, tb[tree]))
+        # `.incScore`: the treasure's value lands on the collection frame only,
+        # and the now-set bit keeps any later overlap from scoring again.
+        score = score + jnp.where(
+            collect, _TREASURE_SCORES[treasure_type], jnp.int32(0)
+        )
+        # `dec treasureCnt / bpl .incScore / dec noGameScroll`: the 32nd
+        # collection ends the game.
+        treasure_cnt = state.treasure_cnt - collect.astype(jnp.int32)
+        game_won = collect & (treasure_cnt < jnp.int32(0))
+        # `lda #SOUND_TREASURE / sta soundIdx` - record the tune. The death sound
+        # takes priority where both could fire; in a treasure scene they cannot.
+        sound_idx = jnp.where(collect & (~hit_hazard), jnp.int32(SOUND_TREASURE), sound_idx)
 
         # --- `.swingLiana` ---------------------------------------------------
         # `.endCollision / jmp .swingLiana` puts the swing immediately below the
@@ -3380,7 +3583,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         )
         next_hurt_cooldown = jnp.where(
             hit_other_hazard,
-            jnp.int32(max(consts.fire_hurt_cooldown_frames, consts.snake_hurt_cooldown_frames)),
+            jnp.int32(consts.snake_hurt_cooldown_frames),
             next_hurt_cooldown,
         )
 
@@ -3449,6 +3652,8 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             at_liana=at_liana_out,
             jump_mode=jump_mode,
             x_pos_quicksand=x_pos_quicksand,
+            treasure_bits=treasure_bits,
+            treasure_cnt=treasure_cnt,
             screen_id=new_screen_id,
             room_byte=new_room_byte,
         )
@@ -3617,6 +3822,11 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             # update), and the restart drop cannot re-animate it because this
             # abstraction holds frameCnt for the whole sequence - so it is held.
             x_pos_quicksand=state.x_pos_quicksand,
+            # treasureBits and treasureCnt are never touched by KilledHarry or
+            # the restart; only Reset clears them. So they ride through death
+            # unchanged and a collected treasure stays collected.
+            treasure_bits=state.treasure_bits,
+            treasure_cnt=state.treasure_cnt,
             screen_id=state.screen_id,
             room_byte=state.room_byte,
         )
@@ -3628,7 +3838,8 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         )
         # livesPat only reaches zero on the game-over branch, and that branch
         # never restarts Harry, so this is the ROM's "game is stopped" state.
-        final_done = (final_state.time_left <= 0) | (final_state.lives_left <= 0)
+        # The 32nd treasure's `dec noGameScroll` is the other way the game stops.
+        final_done = (final_state.time_left <= 0) | (final_state.lives_left <= 0) | game_won
         final_state = final_state.replace(done=final_done)
 
         obs = self._get_observation(final_state)
@@ -3678,7 +3889,9 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, prev: PitfallState, new: PitfallState) -> float:
-        return 0.0
+        # Score-delta, the framework-wide convention: the treasure's ROM score
+        # value (and the log drain and hole penalty) flow through automatically.
+        return new.score - prev.score
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: PitfallState) -> bool:
@@ -3791,6 +4004,10 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             # (SEED $c4 -> sceneType 0) is not a quicksand scene anyway, so the
             # first MainLoop would write 0 regardless.
             x_pos_quicksand=jnp.array(0, dtype=jnp.uint8),
+            # Cleared RAM: Reset zeroes treasureBits, and InitGame writes
+            # `lda #31 / sta treasureCnt` (32 treasures, counted down to -1).
+            treasure_bits=jnp.zeros((4,), dtype=jnp.uint8),
+            treasure_cnt=jnp.array(TREASURE_COUNT_INIT, dtype=jnp.int32),
             screen_id=jnp.array(0, dtype=jnp.int32),
             room_byte=jnp.array(SEED, dtype=jnp.uint8),
         )
@@ -3987,7 +4204,6 @@ class PitfallRenderer(JAXGameRenderer):
         asset_config.extend(
             [
                 {'name': 'color_wood', 'type': 'procedural', 'data': _color_swatch((110, 70, 25))},
-                {'name': 'color_fire', 'type': 'procedural', 'data': _color_swatch((255, 120, 0))},
                 {'name': 'color_snake', 'type': 'procedural', 'data': _color_swatch((20, 200, 0))},
                 # ColorTab+8, the swamp colour, is ROM `BLUE`. This is its ALE
                 # rendering, read out of croc1.npy at rows 125-126 where
@@ -4008,6 +4224,10 @@ class PitfallRenderer(JAXGameRenderer):
                 # luminance step up - so this set renders $10 as (72, 72, 0).
                 {'name': 'color_liana', 'type': 'procedural', 'data': _color_swatch((72, 72, 0))},
                 {'name': 'color_hole', 'type': 'procedural', 'data': _color_swatch((0, 0, 0))},
+                # The fire and treasure per-row colors, one swatch per Atari
+                # color byte used by FireColor / the treasure color tables.
+                *[{'name': f'objcol_{k:02x}', 'type': 'procedural', 'data': _color_swatch(v)}
+                  for k, v in OBJ_COLOR_RGB.items()],
                 {'name': 'log_left_sprite', 'type': 'single', 'data': log_left_rgba},
                 {'name': 'log_right_sprite', 'type': 'single', 'data': log_right_rgba},
                 {'name': 'ladder_sprite', 'type': 'single', 'data': ladder_rgba},
@@ -4024,13 +4244,40 @@ class PitfallRenderer(JAXGameRenderer):
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
         self.WOOD_ID = self.SHAPE_MASKS['color_wood'][0, 0].astype(self.BACKGROUND.dtype)
-        self.FIRE_ID = self.SHAPE_MASKS['color_fire'][0, 0].astype(self.BACKGROUND.dtype)
         self.SNAKE_ID = self.SHAPE_MASKS['color_snake'][0, 0].astype(self.BACKGROUND.dtype)
         self.SCORPION_ID = self.SHAPE_MASKS['color_scorpion'][0, 0].astype(self.BACKGROUND.dtype)
         self.HOLE_ID = self.SHAPE_MASKS['color_hole'][0, 0].astype(self.BACKGROUND.dtype)
         self.SWAMP_ID = self.SHAPE_MASKS['color_swamp'][0, 0].astype(self.BACKGROUND.dtype)
         self.CROC_ID = self.SHAPE_MASKS['color_croc'][0, 0].astype(self.BACKGROUND.dtype)
         self.PIT_BAND_TOP = int(pit_band_top_row(self.consts.ground_y))
+        self.object_box_top_px = jnp.int32(object_box_top_row(self.consts.ground_y))
+
+        # Fire and the four treasures: masks generated from the ROM patterns and
+        # per-row color tables (no captures exist for these, and none are needed
+        # - the pattern bytes are the whole artwork). The palette-id masks drive
+        # the raster; the boolean lit masks (FIRE_BITMAPS, TREASURE_BITMAPS) are
+        # the same pixels for CXPPMM, so the drawn and collidable shapes agree.
+        obj_color_id = {
+            k: int(self.SHAPE_MASKS[f'objcol_{k:02x}'][0, 0]) for k in OBJ_COLOR_RGB
+        }
+        tid = int(self.jr.TRANSPARENT_ID)
+
+        def _obj_mask(pattern, color_rows):
+            return object_band_bitmap(pattern, color_rows, obj_color_id, tid)
+
+        fire_masks = np.stack([_obj_mask(p, FIRE_COLOR_ROWS) for p in FIRE_PATTERNS])
+        self.FIRE_MASKS = jnp.asarray(fire_masks, dtype=self.BACKGROUND.dtype)
+        self.FIRE_BITMAPS = jnp.asarray(fire_masks != tid)
+
+        treasure_masks = np.stack([
+            np.stack([
+                _obj_mask(p, TREASURE_COLOR_ROWS[t])
+                for p in (TREASURE_PATTERNS[t] if TREASURE_ANIMATED[t] else (TREASURE_PATTERNS[t], TREASURE_PATTERNS[t]))
+            ])
+            for t in range(4)
+        ])
+        self.TREASURE_MASKS = jnp.asarray(treasure_masks, dtype=self.BACKGROUND.dtype)
+        self.TREASURE_BITMAPS = jnp.asarray(treasure_masks != tid)
 
         transparent_pixel = jnp.full((1, 1), int(self.jr.TRANSPARENT_ID), dtype=self.BACKGROUND.dtype)
         self.BACKGROUND_TREE_VARIANT_0 = self.SHAPE_MASKS.get('background_tree_variant_0', transparent_pixel)
@@ -4482,18 +4729,54 @@ class PitfallRenderer(JAXGameRenderer):
                 )
             return lax.fori_loop(0, 3, body, r)
 
-        fire_x_center = jnp.int32(132)
-        fire_w = jnp.int32(self.consts.fire_w)
-        fire_h = jnp.int32(self.consts.fire_h)
-        fire_top = jnp.int32(int(self.consts.ground_y - self.consts.fire_h + self.consts.fire_y_offset))
-        fire_left = jnp.mod(fire_x_center - (fire_w // jnp.int32(2)), W)
-        fire_pos = jnp.where(has_fireplace, jnp.array([fire_left, fire_top], dtype=jnp.int32), jnp.array([-1, -1], dtype=jnp.int32))
-        fire_size = jnp.array([fire_w, fire_h], dtype=jnp.int32)
-        raster = self.jr.draw_rects(raster, fire_pos[None, :], fire_size[None, :], int(self.FIRE_ID))
-
-        cobra_frame = cobra_animation_frame(
+        # Fire and the four treasures share the cobra's GRP1 object path: one
+        # eight-pixel player at xPosObject = 124, drawn over the ground band.
+        # All three animate off the same random2 bit-4 source (AnimateTab gives
+        # fire, cobra and the two bars OBJECT_H; the money bag and the ring are
+        # static). A collected treasure is Nothing - ProcessObjects draws it only
+        # while its treasureBits bit is still clear.
+        obj_anim_frame = cobra_animation_frame(
             state.time_left, state.timer_started, self.consts, self.COBRA_ANIM_BIT4
         )
+        fire_mask = self.FIRE_MASKS[obj_anim_frame]
+        raster = lax.cond(
+            has_fireplace,
+            lambda r: self.jr.render_at_clipped(
+                r,
+                jnp.int32(self.consts.object_x),
+                self.object_box_top_px,
+                fire_mask,
+                flip_horizontal=jnp.array(False, dtype=jnp.bool_),
+                flip_offset=jnp.array([0, 0], dtype=jnp.int32),
+            ),
+            lambda r: r,
+            raster,
+        )
+
+        obj_type = obj_code_u8(rb).astype(jnp.int32)
+        treasure_type = obj_type & jnp.int32(3)
+        treasure_visible = (pt == jnp.uint8(5)) & (
+            ~treasure_collected(rb, state.treasure_bits)
+        )
+        treasure_frame = jnp.where(
+            _TREASURE_ANIMATED[treasure_type], obj_anim_frame, jnp.int32(0)
+        )
+        treasure_mask = self.TREASURE_MASKS[treasure_type, treasure_frame]
+        raster = lax.cond(
+            treasure_visible,
+            lambda r: self.jr.render_at_clipped(
+                r,
+                jnp.int32(self.consts.object_x),
+                self.object_box_top_px,
+                treasure_mask,
+                flip_horizontal=jnp.array(False, dtype=jnp.bool_),
+                flip_offset=jnp.array([0, 0], dtype=jnp.int32),
+            ),
+            lambda r: r,
+            raster,
+        )
+
+        cobra_frame = obj_anim_frame
         cobra_mask = self.COBRA_MASKS[cobra_frame]
         cobra_x = jnp.int32(self.consts.object_x)
         raster = lax.cond(
