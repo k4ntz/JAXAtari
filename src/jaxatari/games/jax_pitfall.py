@@ -1290,6 +1290,10 @@ class PitfallConstants(struct.PyTreeNode):
     # Horizontal run speed. NTSC Pitfall moves Harry 1px on even Atari frames
     # (30 px/s at 60 Hz). One JAX step is two Atari frames, so this is 1 px/step.
     player_speed: float = 1.0
+    # Temporary testing flag (NOT part of the ROM). When True, Harry cannot die
+    # (hazards and pits never trigger KilledHarry) and he runs at 1.5x speed.
+    # Default False gives the normal, ROM-accurate game.
+    debug_god_mode: bool = False
     gravity: float = 0.55       # (global gravity for falls/ladder-exit; keep stable)
     fall_speed: float = 3.0    # terminal velocity cap on descent
 
@@ -2661,7 +2665,11 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         jump_pressed = move_jump
         jump_rise = jump_pressed & (~state.jump_pressed_prev)
 
-        speed = jnp.asarray(consts.player_speed, dtype=jnp.float32)
+        # debug_god_mode is a static consts field, so this is a trace-time choice.
+        speed = jnp.asarray(
+            consts.player_speed * (1.5 if consts.debug_god_mode else 1.0),
+            dtype=jnp.float32,
+        )
 
         vx = jnp.where(move_left, -speed, jnp.where(move_right, speed, 0.0))
         # ROM jumping uses the same 1px xPosHarry inc/dec, directed by oldJoystick.
@@ -3344,6 +3352,11 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         hit_other_hazard = hit_fire | hit_snake | hit_pit
         hit_hazard = hit_scorpion | hit_other_hazard
+        # debug_god_mode (a static consts flag, so a trace-time choice): no
+        # hazard or pit is fatal. Harry still falls into openings and lands on
+        # the underground floor; he just is never killed.
+        if consts.debug_god_mode:
+            hit_hazard = jnp.array(False, dtype=jnp.bool_)
 
         # Every fatal path in the ROM ends at the same three instructions, and
         # none of them touches livesPat or Harry: the life and the restart come
@@ -4881,11 +4894,21 @@ class PitfallRenderer(JAXGameRenderer):
         # over him, he is simply never emitted, which is what the hardware does.
         # A standing Harry's lowest row is the last line Kernel 5 draws, so this
         # takes nothing off him until he starts to sink.
+        #
+        # This is Kernel 6's band, which only ever draws the *surface* ground.
+        # An underground Harry is drawn by Kernels 8/9 instead and is never
+        # blanked - so the blank applies only while Harry is on the upper level
+        # (sinking into a surface pit), never to a Harry walking a tunnel. His
+        # rows there (157..178) all sit below harry_blank_top, so without the
+        # level gate a pit-scene room would erase him entirely.
+        on_upper_level = state.current_ground_y == jnp.asarray(
+            self.consts.ground_y, dtype=jnp.float32
+        )
         harry_blank_top = jnp.int32(pit_harry_blank_top_row(self.consts.ground_y))
         harry_sprite_rows = jnp.arange(harry_mask.shape[0], dtype=jnp.int32)
         harry_row_blanked = (y_top + harry_sprite_rows) >= harry_blank_top
         harry_mask = jnp.where(
-            (in_pit & harry_row_blanked)[:, None],
+            (in_pit & on_upper_level & harry_row_blanked)[:, None],
             jnp.asarray(self.jr.TRANSPARENT_ID, dtype=harry_mask.dtype),
             harry_mask,
         )
