@@ -471,6 +471,208 @@ def scene_is_static_pit(room_byte: jnp.ndarray) -> jnp.ndarray:
     return (pt == jnp.uint8(2)) | (pt == jnp.uint8(3))
 
 
+# --- Dynamic ground: GroundTypeTab / PF2PatTab / the quicksand ---------------
+# GroundTypeTab, indexed by sceneType, verbatim from pitfall.asm:
+#
+#     .byte <[OneHole    - PF2PatTab] ; one hole                sceneType 0
+#     .byte <[ThreeHoles - PF2PatTab] ; three holes             sceneType 1
+#     .byte <[Pit        - PF2PatTab] ; tar pit                 sceneType 2
+#     .byte <[Pit        - PF2PatTab] ; swamp                   sceneType 3
+#     .byte <[Pit        - PF2PatTab] ; swamp with crocodiles   sceneType 4
+#     .byte $80                       ; black quicksand with treasure  5
+#     .byte $80                       ; black quicksand         sceneType 6
+#     .byte $80                       ; blue quicksand          sceneType 7
+#
+# The first five entries are positive, so `lda GroundTypeTab,x / bpl
+# .noQuickSand` takes the static branch: xPosQuickSand is pinned at 0 and PF2Lst
+# is refilled from the table every frame. The $80 entries are negative, which
+# routes scenes 5..7 through `.doQuickSand`, where both the PF2Lst window and
+# xPosQuickSand become functions of frameCnt. So scenes 2, 3 and 4 share the one
+# static `Pit` shape and only scenes 5..7 move.
+GROUND_TYPE_PIT = 16          # <[Pit - PF2PatTab]
+GROUND_TYPE_QUICKSAND = 0x80  # the negative entry shared by scenes 5..7
+
+# PF2PatTab, verbatim. OneHole at offset 0, ThreeHoles at 8, Pit at 16, and the
+# ROM pads the rest with $ff bytes that the sliding quicksand window reads.
+PF2_PAT_TAB = (
+    0x7F, 0x7F, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  # OneHole
+    0x78, 0x78, 0x78, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  # ThreeHoles
+    0x00, 0x01, 0x03, 0x0F, 0x7F, 0xFF, 0xFF, 0xFF,  # Pit
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  # $ff padding
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  # $ff padding
+)
+
+# QuickSandTab, verbatim. The loop reads QuickSandTab+2,x and QuickSandTab,x
+# with x = frameCnt>>6 in 0..3, so index 5 is reached; the ROM's own comment
+# ("next byte (0) overlaps") marks that read, which lands on LadderTab[0] =
+# BLACKPIT|DISABLE = $80. Its bit 7 is masked off by the AND, so the value
+# behaves as 0 there.
+QUICK_SAND_TAB = (0x00, 0x0F, 0x0F, 0x00, 0x0F, 0x80)
+
+# QuickSandSize is only five bytes (0, 4, 8, 16, 28). The index y produced by
+# `.doQuickSand` runs 0..15, and entries 5..15 read straight into ClimbColTab,
+# whose first eleven bytes are all DARK_GREEN = GREEN-$04 = $d2. That large
+# value is what closes the pit: 44+210 = 254 >= xPosHarry always, so the bounds
+# loop's first compare reports "in bounds" for every column.
+DARK_GREEN_NTSC = 0xD2
+QUICK_SAND_SIZE = (0, 4, 8, 16, 28) + (DARK_GREEN_NTSC,) * 11
+
+_QUICK_SAND_TAB = jnp.asarray(QUICK_SAND_TAB, dtype=jnp.int32)
+_QUICK_SAND_SIZE = jnp.asarray(QUICK_SAND_SIZE, dtype=jnp.int32)
+
+
+def quicksand_index(frame_cnt_ntsc) -> jnp.ndarray:
+    """The quicksand window index y (0..15) for one NTSC frame.
+
+        lda    frameCnt
+        lsr / lsr / pha / lsr / lsr / lsr / lsr / tax   ; x = frameCnt>>6
+        pla / and QuickSandTab+2,x / eor QuickSandTab,x / tay
+
+    Only bits 2..5 of frameCnt survive the AND, so y changes every fourth NTSC
+    frame - every second JAX step.
+    """
+    f = frame_cnt_ntsc.astype(jnp.int32) & jnp.int32(0xFF)
+    x = f >> jnp.int32(6)
+    a = f >> jnp.int32(2)
+    return (a & _QUICK_SAND_TAB[x + 2]) ^ _QUICK_SAND_TAB[x]
+
+
+def quicksand_border(frame_cnt_ntsc) -> jnp.ndarray:
+    """xPosQuickSand for one NTSC frame: `lda QuickSandSize,y`."""
+    return _QUICK_SAND_SIZE[quicksand_index(frame_cnt_ntsc)]
+
+
+def pit_band_pf2_bytes(window: int) -> tuple:
+    """The fifteen PF2 bytes of the ground band for a PF2PatTab window.
+
+    `.loopPF2Lst` fills PF2Lst[i] = PF2PatTab[window+i] for i in 0..6. Kernel 5
+    then writes PF2Lst[6..0] down its seven lines and Kernel 6 writes
+    PF2Lst[0..6], holding PF2Lst[6] on its eighth (`dey / bmi .exitHoles` exits
+    before the last write). Static scenes sit on window 16 (`Pit`); the
+    quicksand slides the window to 16+y.
+    """
+    lst = [PF2_PAT_TAB[window + i] for i in range(7)]
+    kernel5 = [lst[6], lst[5], lst[4], lst[3], lst[2], lst[1], lst[0]]
+    kernel6 = [lst[0], lst[1], lst[2], lst[3], lst[4], lst[5], lst[6], lst[6]]
+    return tuple(kernel5 + kernel6)
+
+
+# The six reachable windows are 16..21 (y = 0..5); y >= 5 all read the $ff
+# padding, so window 21 stands for every closed phase. The renderer reads this
+# table (indexed by the quicksand state), and the collision bounds read
+# HoleBoundsTab displaced by the same xPosQuickSand, so the drawn opening and
+# the falling interval are always two views of the one ROM byte.
+PIT_OPEN_MASKS = jnp.asarray(
+    np.stack([
+        np.stack([pf2_open_columns(b) for b in pit_band_pf2_bytes(GROUND_TYPE_PIT + y)])
+        for y in range(6)
+    ])
+)
+
+
+def quicksand_window_index(x_pos_quicksand) -> jnp.ndarray:
+    """Recover the quicksand index y (clamped to 5) from the xPosQuickSand byte.
+
+    QuickSandSize is a bijection over the reachable values 0/4/8/16/28, and the
+    closed phases all share DARK_GREEN ($d2), which maps to the all-$ff window.
+    """
+    x = x_pos_quicksand.astype(jnp.int32) & jnp.int32(0xFF)
+    return jnp.where(
+        x == jnp.int32(0), jnp.int32(0),
+        jnp.where(x == jnp.int32(4), jnp.int32(1),
+                  jnp.where(x == jnp.int32(8), jnp.int32(2),
+                            jnp.where(x == jnp.int32(16), jnp.int32(3),
+                                      jnp.where(x == jnp.int32(28), jnp.int32(4),
+                                                jnp.int32(5))))),
+    )
+
+
+def scene_is_quicksand(room_byte: jnp.ndarray) -> jnp.ndarray:
+    """sceneType 5, 6, 7 - the negative GroundTypeTab entries ($80)."""
+    pt = pit_code_u8(room_byte.astype(jnp.uint8))
+    return pt >= jnp.uint8(5)
+
+
+def scene_is_pit(room_byte: jnp.ndarray) -> jnp.ndarray:
+    """sceneType 2..7 - every scene built on the `Pit` playfield block.
+
+    These are exactly the no-ladder scenes, so they are also the scenes where a
+    fall through the opening is fatal (`cpx #54 / tya / bne / jmp KilledHarry`).
+    """
+    pt = pit_code_u8(room_byte.astype(jnp.uint8))
+    return pt >= jnp.uint8(2)
+
+
+# LadderTab, indexed by sceneType, verbatim. Only bit 7 matters here: it is the
+# BLACKPIT/BLUEPIT selector read by `lda LadderTab,x / bpl .noPit` - a negative
+# entry (BLACKPIT) makes MainLoop overwrite colorLst+8 with colorLst+4 (BLACK),
+# a positive one (BLUEPIT) leaves the swamp's BLUE in place.
+LADDER_TAB = (
+    0x80, 0x80, 0x82, 0x02,  # BLACKPIT|DIS, BLACKPIT|DIS, BLACKPIT|EN, BLUEPIT|EN
+    0x02, 0x80, 0x82, 0x02,  # BLUEPIT|DIS, BLACKPIT|DIS, BLACKPIT|EN, BLUEPIT|EN
+)
+_LADDER_TAB = jnp.asarray(LADDER_TAB, dtype=jnp.uint8)
+
+
+def pit_is_blue(room_byte: jnp.ndarray) -> jnp.ndarray:
+    """LadderTab bit 7 clear -> the pit shows the BLUE swamp colour, not BLACK."""
+    scene = pit_code_u8(room_byte).astype(jnp.int32)
+    return (_LADDER_TAB[scene] & jnp.uint8(0x80)) == jnp.uint8(0)
+
+
+# --- Crocodiles (sceneType 4) -------------------------------------------------
+# CrocoTab is 1 for sceneType 4 alone (`.ds CROCO_SCENE,0 / .byte 1 / ...`), so
+# the crocodile branch of ProcessObjects runs only there. ContRandom then puts
+# xPosObject at 60 (`lda #60 / sta xPosObject`) and ProcessObjects forces
+# NUSIZ1 = THREE_COPIES, so the hardware draws three copies of the one GRP1
+# pattern, 16 pixels apart: boxes at 60, 76 and 92.
+CROCO_X = 60
+CROCO_COPY_SPACING = 16
+CROCO_XS = (CROCO_X, CROCO_X + CROCO_COPY_SPACING, CROCO_X + 2 * CROCO_COPY_SPACING)
+CROCO_W = 8
+
+# Croco0 (jaws open) and Croco1 (jaws closed), verbatim. As with every pattern
+# table in this port, index 0 is the BOTTOM row: Kernel 5 draws object rows
+# 14..8 and Kernel 6 rows 7..0, so band line j shows pattern row 14-j. Row 15
+# is never drawn and is empty in both frames. CrocoColor is DARK_GREEN-2 ($d0)
+# for all nine occupied rows, so the crocodile is one flat dark green.
+CROCO_PATTERNS = (
+    (   # Croco0 - jaws open
+        0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b11111111,
+        0b10101011, 0b00000011, 0b00000011, 0b00001011, 0b00101110, 0b10111010,
+        0b11100000, 0b10000000, 0b00000000, 0b00000000,
+    ),
+    (   # Croco1 - jaws closed
+        0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b11111111,
+        0b10101011, 0b01010101, 0b11111111, 0b00000110, 0b00000100, 0b00000000,
+        0b00000000, 0b00000000, 0b00000000, 0b00000000,
+    ),
+)
+CROCO_BAND_ROWS = 15  # the ground band's line count; pattern rows 14..0
+
+
+def croc_band_bitmap(pattern_index: int) -> np.ndarray:
+    """One crocodile as a top-down 15x8 bitmap positioned inside the band."""
+    pattern = CROCO_PATTERNS[pattern_index]
+    return np.array(
+        [[bool((pattern[14 - j] >> (7 - i)) & 1) for i in range(CROCO_W)] for j in range(CROCO_BAND_ROWS)],
+        dtype=bool,
+    )
+
+
+def croc_jaws_open(frame_cnt_ntsc) -> jnp.ndarray:
+    """`bit frameCnt / bpl`: jaws hang on bit 7 of frameCnt alone.
+
+    ProcessObjects picks Croco0 while bit 7 is clear (`bpl .skipClosed`,
+    "open croco jaws? yes") and Croco1 while it is set, and the bounds loop's
+    `.noCroco1` applies the same bit to pick HoleBoundsTab row 4 (open) or row 3
+    (closed). So the mouth is open for frameCnt 0..127 and closed for 128..255 -
+    128 NTSC frames (~2.1s) each way, and every crocodile switches together.
+    """
+    f = frame_cnt_ntsc.astype(jnp.int32) & jnp.int32(0xFF)
+    return (f & jnp.int32(0x80)) == jnp.int32(0)
+
+
 # --- Ground objects: logs ----------------------------------------------------
 # `ContRandom` puts every ground object here on entering a scene:
 # `lda #124 / sta xPosObject`. It is the left edge of the GRP1 box.
@@ -634,11 +836,6 @@ def _get_default_pitfall_asset_config() -> tuple:
             'name': 'background_tree_variant_3',
             'type': 'single',
             'file': 'background_tree_variant_3.npy',
-        },
-        {
-            'name': 'backdrop_crocodilepit_and_rope',
-            'type': 'single',
-            'file': 'backdrop_crocodilepit_and_rope.npy',
         },
         {
             'name': 'wall',
@@ -914,6 +1111,14 @@ class PitfallState:
     # and release slices; nothing reads either yet.
     at_liana: chex.Array
     jump_mode: chex.Array
+
+    # ROM xPosQuickSand: the quicksand pit's border byte. Recomputed from
+    # frameCnt every frame in a quicksand scene (5..7) while Harry is not
+    # falling into the pit and the game is running, pinned to 0 in every other
+    # scene, and frozen in place while Harry sinks (33 <= yPosHarry <= 54) or
+    # the game is stopped. The rendered PF2 window and the collision bounds both
+    # derive from this one byte, so they can never disagree.
+    x_pos_quicksand: chex.Array
 
 class PitfallConstants(struct.PyTreeNode):
     screen_width: int = 160     # Atari 2600 horizontal resolution
@@ -2086,60 +2291,74 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             wall_side=wall_side,
         )
 
-    def _hole_bounds_for_room(self, room_byte: chex.Array) -> tuple[chex.Array, chex.Array]:
+    def _hole_bounds_for_room(
+        self, room_byte: chex.Array, croc_open: chex.Array
+    ) -> tuple[chex.Array, chex.Array]:
         """Select this room's row of HoleBoundsTab.
 
-        Returns two int32 arrays of shape (4,): the left and right bound of each
-        of the row's up-to-four openings. Unused slots are (0, 0) and are
-        rejected by the `left > 0` guard in _over_hole, mirroring the ROM's
-        `beq .exitBounds` terminator.
+        The ROM's row select, from the bounds loop in pitfall.asm:
+
+            ldx sceneType
+            cpx #CROCO_SCENE      / bne .noCroco1
+            bit frameCnt          / bpl .contCroco   ; jaws open -> keep row 4
+            dex                   / bne .contCroco   ; jaws closed -> row 3
+        .noCroco1:
+            cpx #HOLE3_SCENE+2    / bcc .contCroco
+            ldx #HOLE3_SCENE+1                         ; clamp scenes >= 3 to row 2
+        .contCroco:
+
+        So the rows are 0 (single hole), 1 (triple hole), 2 (pit - also every
+        non-crocodile scene from 3 up, quicksand included), 3 (closed jaws) and
+        4 (open jaws). Returns two int32 arrays of shape (4,): the left and
+        right bound of each of the row's up-to-four openings. Unused slots are
+        (0, 0) and are rejected by the `left > 0` guard in _over_hole, mirroring
+        the ROM's `beq .exitBounds` terminator.
         """
         pt = pit_type(room_byte.astype(jnp.uint8)).astype(jnp.int32)
-
-        # The ROM indexes HoleBoundsTab by sceneType, after `.noCroco1` clamps
-        # anything from sceneType 3 upwards down to row 2:
-        #
-        #   cpx #HOLE3_SCENE+2 / bcc .contCroco / ldx #HOLE3_SCENE+1
-        #
-        # Our pit_type shares that encoding: 0 = plain ladder (single hole),
-        # 1 = ladder with side pits (triple hole), 2 = tar pit, 3 = swamp. Both
-        # static pits therefore read row 2, `44,107`. Rows 3 and 4 belong to the
-        # crocodile jaws, which are not drawn yet, so scenes 4..7 still select no
-        # opening rather than dropping Harry through solid-looking ground.
-        static_pit = (pt == jnp.int32(2)) | (pt == jnp.int32(3))
-        row = jnp.where(static_pit, jnp.int32(2), jnp.clip(pt, 0, 1))
+        row = jnp.where(
+            pt == jnp.int32(CROCO_SCENE),
+            jnp.where(croc_open, jnp.int32(4), jnp.int32(3)),
+            jnp.where(pt < jnp.int32(3), pt, jnp.int32(2)),
+        )
 
         table = jnp.asarray(self.consts.hole_bounds_tab, dtype=jnp.int32)  # (5, 4, 2)
         bounds = table[row]                                                # (4, 2)
+        return bounds[:, 0], bounds[:, 1]
 
-        scene_has_holes = (pt <= jnp.int32(1)) | static_pit
-        # Zeroing the left bounds of unimplemented scenes disables every slot.
-        lefts = jnp.where(scene_has_holes, bounds[:, 0], jnp.int32(0))
-        rights = bounds[:, 1]
-        return lefts, rights
-
-    def _over_hole(self, room_byte: chex.Array, x_anchor: chex.Array) -> chex.Array:
+    def _over_hole(
+        self,
+        room_byte: chex.Array,
+        x_anchor: chex.Array,
+        x_pos_quicksand: chex.Array,
+        croc_open: chex.Array,
+    ) -> chex.Array:
         """True when Harry's anchor is inside one of this room's openings.
 
         Direct port of the bounds loop in pitfall.asm:
 
             lda HoleBoundsTab,x   ; left bound
             beq .exitBounds       ; 0 terminates the list
+            clc / adc xPosQuickSand
             cmp xPosHarry
-            bcs .inBounds         ; left >= x  -> Harry is left of the hole, safe
+            bcs .inBounds         ; left+xqs >= x -> Harry is left of the hole, safe
             lda HoleBoundsTab+1,x ; right bound
+            sec / sbc xPosQuickSand
             cmp xPosHarry
-            bcs .outOfBounds      ; right >= x -> Harry falls in
+            bcs .outOfBounds      ; right-xqs >= x -> Harry falls in
 
-        so the falling interval is  left < x <= right  (inclusive on the right).
-        The ROM's xPosQuickSand term is omitted, which is exact for every scene
-        implemented here: GroundTypeTab is positive for sceneType 0..4, so
-        `bpl .noQuickSand` leaves xPosQuickSand at 0 and both `adc` and `sbc`
-        against it are no-ops. Only the quicksand scenes 5..7 would need it.
+        so the falling interval is  left+xqs < x <= right-xqs. The add, the
+        subtract and both compares are 6502 byte operations, so the bounds are
+        masked to 0..255 and the comparisons are unsigned. That is what closes a
+        quicksand pit: xPosQuickSand = DARK_GREEN = $d2 gives 44+210 = 254,
+        which is >= every reachable xPosHarry, so the loop reports "in bounds"
+        for the whole row without ever reaching the right-hand compare.
         """
-        lefts, rights = self._hole_bounds_for_room(room_byte)
+        lefts, rights = self._hole_bounds_for_room(room_byte, croc_open)
+        xqs = x_pos_quicksand.astype(jnp.int32) & jnp.int32(0xFF)
+        left_plus = (lefts + xqs) & jnp.int32(0xFF)
+        right_minus = (rights - xqs) & jnp.int32(0xFF)
         slot_used = lefts > jnp.int32(0)
-        inside = slot_used & (x_anchor > lefts) & (x_anchor <= rights)
+        inside = slot_used & (x_anchor > left_plus) & (x_anchor <= right_minus)
         return jnp.any(inside)
 
     def step(
@@ -2523,27 +2742,54 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         x = jnp.clip(x, left_edge, right_edge_for_left_of_player)
 
+        # --- xPosQuickSand: MainLoop's "calculate pits, quicksand etc." -------
+        # The ROM recomputes the border from frameCnt on every frame of a
+        # quicksand scene, pins it to 0 in every other scene, and freezes it
+        # (along with PF2Lst) while Harry is falling into the pit -
+        # `cmp #55 / bcs .doQuickSand` then `cmp #JUNGLE_GROUND+1 / bcs
+        # .stopQuickSand` - or the game is stopped. One JAX step is two NTSC
+        # frames and the end-of-step frame is 2*frame_cnt; that is the frame the
+        # renderer shows, so the bounds below and the raster read one value.
+        rom_y_start = (state.player_y - (upper_ground - jnp.float32(JUNGLE_GROUND))).astype(jnp.int32)
+        quicksand_falling = (rom_y_start >= jnp.int32(JUNGLE_GROUND + 1)) & (
+            rom_y_start < jnp.int32(55)
+        )
+        quicksand_scene = scene_is_quicksand(new_room_byte)
+        x_pos_quicksand = jnp.where(
+            quicksand_scene,
+            jnp.where(
+                quicksand_falling,
+                state.x_pos_quicksand,
+                quicksand_border(jnp.int32(2) * frame_cnt).astype(jnp.uint8),
+            ),
+            jnp.array(0, dtype=jnp.uint8),
+        )
+        # `bit frameCnt / bpl`: the crocodile jaws hang on bit 7 of the same
+        # end-of-step frame, so the drawn mouth and the bounds always agree.
+        croc_open = croc_jaws_open(jnp.int32(2) * frame_cnt)
+
         # The hole test runs at Harry's post-movement position, in the room he
         # ended up in, and only feeds the ground decision below. The ROM does
         # the same: its bounds loop is gated on `yPosHarry == JUNGLE_GROUND`,
         # so being above an opening never affects an airborne Harry.
-        over_any_hole = self._over_hole(new_room_byte, x.astype(jnp.int32))
+        over_any_hole = self._over_hole(new_room_byte, x.astype(jnp.int32), x_pos_quicksand, croc_open)
 
         previous_ground = state.current_ground_y
         clamp_mask = ~state.on_ladder
 
         raw_on_ground_upper = (y >= previous_ground) & (~over_any_hole)
 
-        # A static pit has no ladder and so no underground floor to arrive on.
-        # `ContRandom` only writes WITHLADDER for sceneType 0 and 1
-        # (`cmp #HOLE3_SCENE+1 / bcs .setFlag`), so the transfer does not apply to
-        # the tar pit or the swamp. The -100 is *not* here: it belongs to the
-        # first frame of the fall, not to the arrival - see `.skipFalling` below.
-        in_static_pit_scene = scene_is_static_pit(new_room_byte)
+        # No pit scene has a ladder and so none has an underground floor to
+        # arrive on. `ContRandom` only writes WITHLADDER for sceneType 0 and 1
+        # (`cmp #HOLE3_SCENE+1 / bcs .setFlag`), so the transfer does not apply
+        # to the tar pit, the swamp, the crocodiles or any quicksand. The -100
+        # is *not* here: it belongs to the first frame of the fall, not to the
+        # arrival - see `.skipFalling` below.
+        in_pit_scene = scene_is_pit(new_room_byte)
         falling_to_lower = (
             on_upper_level
             & over_any_hole
-            & (~in_static_pit_scene)
+            & (~in_pit_scene)
             & (y >= lower_ground)
         )
 
@@ -2927,13 +3173,16 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         # `cpx #54 / bne .endDoJump / tya / bne .endDoJump / jmp KilledHarry`:
         # once the sink reaches yPosHarry 54 and there is no ladder in the scene,
-        # Harry is killed. KilledHarry itself only starts the death tune, so the
-        # life and the restart come from the same path every other hazard uses.
+        # Harry is killed. `tya` is ladderFlag, which ContRandom leaves NOLADDER
+        # for every sceneType from 2 up, so the tar pit, the swamp, the
+        # crocodile jaws and every quicksand share this one fatal depth.
+        # KilledHarry itself only starts the death tune, so the life and the
+        # restart come from the same path every other hazard uses.
         pit_kill_y = jnp.asarray(
             float(consts.ground_y + PIT_KILL_DEPTH), dtype=y.dtype
         )
         hit_pit = (
-            in_static_pit_scene
+            in_pit_scene
             & on_upper_level
             & (~on_ground)
             & (y >= pit_kill_y)
@@ -3199,6 +3448,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             liana_bottom=liana_bottom,
             at_liana=at_liana_out,
             jump_mode=jump_mode,
+            x_pos_quicksand=x_pos_quicksand,
             screen_id=new_screen_id,
             room_byte=new_room_byte,
         )
@@ -3362,6 +3612,11 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             liana_bottom=d_liana_bottom,
             at_liana=state.at_liana,
             jump_mode=d_jump_mode,
+            # The frozen pause leaves xPosQuickSand exactly where the fatal
+            # frame put it (`.doQuickSand` reads noGameScroll and skips the
+            # update), and the restart drop cannot re-animate it because this
+            # abstraction holds frameCnt for the whole sequence - so it is held.
+            x_pos_quicksand=state.x_pos_quicksand,
             screen_id=state.screen_id,
             room_byte=state.room_byte,
         )
@@ -3532,6 +3787,10 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             liana_bottom=jnp.array(0, dtype=jnp.uint8),
             at_liana=jnp.array(0, dtype=jnp.uint8),
             jump_mode=jnp.array(0, dtype=jnp.uint8),
+            # Cleared RAM: Reset zeroes the whole page, and the first scene
+            # (SEED $c4 -> sceneType 0) is not a quicksand scene anyway, so the
+            # first MainLoop would write 0 regardless.
+            x_pos_quicksand=jnp.array(0, dtype=jnp.uint8),
             screen_id=jnp.array(0, dtype=jnp.int32),
             room_byte=jnp.array(SEED, dtype=jnp.uint8),
         )
@@ -3698,7 +3957,6 @@ class PitfallRenderer(JAXGameRenderer):
                     'background_tree_variant_1',
                     'background_tree_variant_2',
                     'background_tree_variant_3',
-                    'backdrop_crocodilepit_and_rope',
                 }
                 and 'file' in asset
             ):
@@ -3738,6 +3996,11 @@ class PitfallRenderer(JAXGameRenderer):
                 {'name': 'color_swamp', 'type': 'procedural', 'data': _color_swatch((45, 109, 152))},
                 # ScorpionColor is WHITE for every row of the pattern.
                 {'name': 'color_scorpion', 'type': 'procedural', 'data': _color_swatch((255, 255, 255))},
+                # CrocoColor is DARK_GREEN-2 = $d0 for every one of the nine
+                # occupied rows. (20, 60, 0) is its ALE rendering, verified
+                # against the croc0/croc1 captures, whose crocodile pixels are
+                # exactly this colour.
+                {'name': 'color_croc', 'type': 'procedural', 'data': _color_swatch((20, 60, 0))},
                 # The liana is the ball, and the ball draws in COLUPF. Kernel 2's
                 # opening line loads that from `colorLst+5`, ColorTab+5, which is
                 # ROM BROWN-2 = $10. The palette is not guessed: the log sprite's
@@ -3766,6 +4029,7 @@ class PitfallRenderer(JAXGameRenderer):
         self.SCORPION_ID = self.SHAPE_MASKS['color_scorpion'][0, 0].astype(self.BACKGROUND.dtype)
         self.HOLE_ID = self.SHAPE_MASKS['color_hole'][0, 0].astype(self.BACKGROUND.dtype)
         self.SWAMP_ID = self.SHAPE_MASKS['color_swamp'][0, 0].astype(self.BACKGROUND.dtype)
+        self.CROC_ID = self.SHAPE_MASKS['color_croc'][0, 0].astype(self.BACKGROUND.dtype)
         self.PIT_BAND_TOP = int(pit_band_top_row(self.consts.ground_y))
 
         transparent_pixel = jnp.full((1, 1), int(self.jr.TRANSPARENT_ID), dtype=self.BACKGROUND.dtype)
@@ -3773,7 +4037,6 @@ class PitfallRenderer(JAXGameRenderer):
         self.BACKGROUND_TREE_VARIANT_1 = self.SHAPE_MASKS.get('background_tree_variant_1', self.BACKGROUND_TREE_VARIANT_0)
         self.BACKGROUND_TREE_VARIANT_2 = self.SHAPE_MASKS.get('background_tree_variant_2', self.BACKGROUND_TREE_VARIANT_1)
         self.BACKGROUND_TREE_VARIANT_3 = self.SHAPE_MASKS.get('background_tree_variant_3', self.BACKGROUND_TREE_VARIANT_2)
-        self.BACKDROP_CROCODILEPIT_AND_ROPE = self.SHAPE_MASKS.get('backdrop_crocodilepit_and_rope', transparent_pixel)
         # --- The wall, generated from `Wall` and `WallColor` ------------------
         # The capture was 29 rows and the old code reached 32 by prepending three
         # of its own rows, which put a duplicated brick course a third of the way
@@ -3875,10 +4138,6 @@ class PitfallRenderer(JAXGameRenderer):
         self.COBRA_ANIM_BIT4 = jnp.array(anim_bits, dtype=jnp.int32)
         self.COBRA_ANIM_PERIOD = jnp.int32(len(anim_bits))
 
-        self.HAS_BACKDROP_CROCODILEPIT_AND_ROPE = jnp.array(
-            'backdrop_crocodilepit_and_rope' in self.SHAPE_MASKS, dtype=jnp.bool_
-        )
-
         def _ensure_3d(mask_stack: jnp.ndarray) -> jnp.ndarray:
             return mask_stack[None, :, :] if mask_stack.ndim == 2 else mask_stack
 
@@ -3963,6 +4222,24 @@ class PitfallRenderer(JAXGameRenderer):
             ]
         )
         self.SCORPION_BOX_TOP = jnp.int32(scorpion_box_top_row(self.consts.underground_y))
+
+        # --- Crocodiles: built from Croco0/Croco1, not from a capture --------
+        # CrocoColor is DARK_GREEN-2 for every occupied row, so like the
+        # scorpion the ROM pattern is the whole artwork. The croc0/croc1
+        # captures verified the shapes, the three NUSIZ copies at 60/76/92 and
+        # the colour; they are not loaded as assets. Each frame is the fifteen
+        # rows the ground band draws (pattern rows 14..0), so the mask's top row
+        # sits on the band's first line.
+        self.CROCO_MASKS = jnp.stack(
+            [
+                jnp.where(
+                    jnp.asarray(croc_band_bitmap(i)),
+                    jnp.asarray(self.CROC_ID, dtype=self.BACKGROUND.dtype),
+                    jnp.asarray(int(self.jr.TRANSPARENT_ID), dtype=self.BACKGROUND.dtype),
+                )
+                for i in range(len(CROCO_PATTERNS))
+            ]
+        )
         self.TREE_VARIANT_TO_ASSET_IDX = jnp.array([0, 1, 2, 3], dtype=jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -4026,49 +4303,61 @@ class PitfallRenderer(JAXGameRenderer):
             raster,
         )
 
-        # --- Static pits: sceneType 2 (tar) and 3 (swamp) ---------------------
+        # --- The pit band: sceneType 2..7 (tar, swamp, crocodiles, quicksand) --
         # PF2Lst carves the pit out of the jungle floor, so only the columns PF2
         # leaves clear are repainted and the ground the playfield still covers is
         # left exactly as the floor artwork drew it. LadderTab's bit 7 picks what
         # shows through: `lda LadderTab,x / bpl .noPit` keeps ColorTab+8 (BLUE)
-        # for the BLUEPIT swamp, while the BLACKPIT tar pit falls through to
-        # `lda colorLst+4 / sta colorLst+8` and shows BLACK, the same colour the
-        # holes already use.
-        is_tar_pit = pt == jnp.uint8(2)
-        is_swamp_pit = pt == jnp.uint8(3)
-        in_static_pit = is_tar_pit | is_swamp_pit
-        pit_color = jnp.where(is_swamp_pit, self.SWAMP_ID, self.HOLE_ID).astype(raster.dtype)
+        # for the BLUEPIT scenes (swamp, crocodile swamp, blue quicksand), while
+        # the BLACKPIT scenes (tar, both black quicksands) fall through to `lda
+        # colorLst+4 / sta colorLst+8` and show BLACK, the holes' own colour.
+        #
+        # The opening's shape is the same PF2PatTab window the collision bounds
+        # read: static scenes sit on `Pit` (window 16) and the quicksand slides
+        # the window to 16+y as xPosQuickSand moves. PIT_OPEN_MASKS holds the
+        # decoded band for every reachable window, so the drawn opening and the
+        # falling bounds are always the same bytes.
+        in_pit = pt >= jnp.uint8(2)
+        pit_color = jnp.where(pit_is_blue(rb), self.SWAMP_ID, self.HOLE_ID).astype(raster.dtype)
+        pit_open_mask = PIT_OPEN_MASKS[quicksand_window_index(state.x_pos_quicksand)]
 
-        def _draw_static_pit(r: jnp.ndarray) -> jnp.ndarray:
+        def _draw_pit(r: jnp.ndarray) -> jnp.ndarray:
             top = self.PIT_BAND_TOP
             band = r[top:top + PIT_BAND_H]
             return r.at[top:top + PIT_BAND_H].set(
-                jnp.where(PIT_OPEN_MASK, pit_color, band)
+                jnp.where(pit_open_mask, pit_color, band)
             )
 
-        raster = lax.cond(in_static_pit, _draw_static_pit, lambda r: r, raster)
+        raster = lax.cond(in_pit, _draw_pit, lambda r: r, raster)
+
+        # --- Crocodiles: sceneType 4 ------------------------------------------
+        # GRP1 with NUSIZ1 = THREE_COPIES off xPosObject = 60, so the three
+        # crocodiles sit at 60, 76 and 92 and are drawn in the ground band over
+        # the water. The pattern is Croco0 while frameCnt bit 7 is clear (jaws
+        # open) and Croco1 while it is set, and the bounds loop reads the same
+        # bit - so the mouth Harry sees is the mouth that can swallow him. With
+        # CTRLPF = %001 in this kernel the players sit above the playfield, so
+        # the crocodiles draw over both the ground and the water.
+        has_crocs = pt == jnp.uint8(CROCO_SCENE)
+        croc_open = croc_jaws_open(jnp.int32(2) * state.frame_cnt)
+        croc_mask = self.CROCO_MASKS[jnp.where(croc_open, jnp.int32(0), jnp.int32(1))]
+
+        def _draw_crocs(r: jnp.ndarray) -> jnp.ndarray:
+            for cx in CROCO_XS:
+                r = self.jr.render_at_clipped(
+                    r,
+                    jnp.int32(cx),
+                    jnp.int32(self.PIT_BAND_TOP),
+                    croc_mask,
+                    flip_horizontal=jnp.array(False, dtype=jnp.bool_),
+                    flip_offset=jnp.array([0, 0], dtype=jnp.int32),
+                )
+            return r
+
+        raster = lax.cond(has_crocs, _draw_crocs, lambda r: r, raster)
 
         has_ladder = (pt == jnp.uint8(0)) | (pt == jnp.uint8(1))
         has_scorpion = has_scorpion_from_room_byte(rb)
-        has_croc_rope_backdrop = (
-            (pt == jnp.uint8(0b100))
-            & has_vine_from_room_byte(rb)
-            & self.HAS_BACKDROP_CROCODILEPIT_AND_ROPE
-        )
-
-        raster = lax.cond(
-            has_croc_rope_backdrop,
-            lambda r: self.jr.render_at_clipped(
-                r,
-                jnp.int32(0),
-                jnp.int32(0),
-                self.BACKDROP_CROCODILEPIT_AND_ROPE,
-                flip_horizontal=jnp.array(False, dtype=jnp.bool_),
-                flip_offset=jnp.array([0, 0], dtype=jnp.int32),
-            ),
-            lambda r: r,
-            raster,
-        )
 
         # ---- Underground elements: holes + ladder sprites ----
         has_simple_ladder = pt == jnp.uint8(0)
@@ -4313,7 +4602,7 @@ class PitfallRenderer(JAXGameRenderer):
         harry_sprite_rows = jnp.arange(harry_mask.shape[0], dtype=jnp.int32)
         harry_row_blanked = (y_top + harry_sprite_rows) >= harry_blank_top
         harry_mask = jnp.where(
-            (in_static_pit & harry_row_blanked)[:, None],
+            (in_pit & harry_row_blanked)[:, None],
             jnp.asarray(self.jr.TRANSPARENT_ID, dtype=harry_mask.dtype),
             harry_mask,
         )
