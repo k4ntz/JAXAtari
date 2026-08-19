@@ -28,12 +28,12 @@ def get_object_centric_obs_size(space: spaces.Dict) -> int:
     return size
 
 @pytest.mark.smoke
-def test_pixel_obs_wrapper_with_stacked_frames(raw_env):
+def test_pixel_obs_wrapper_with_stacked_frames(fresh_raw_env):
     """Test that PixelObsWrapper correctly handles stacked frames."""
     key = jax.random.PRNGKey(0)
     
     # Create environment with wrappers
-    base_env = raw_env
+    base_env = fresh_raw_env
     env = PixelObsWrapper(AtariWrapper(base_env))
     
     # Get initial observation
@@ -59,11 +59,11 @@ def test_pixel_obs_wrapper_with_stacked_frames(raw_env):
     # Verify that frames are in the correct range (0-255 for uint8)
     assert jnp.all(obs >= 0) and jnp.all(obs <= 255), "Pixel values should be in range [0, 255]"
 
-def test_pixel_and_object_centric_wrapper(raw_env):
+def test_pixel_and_object_centric_wrapper(fresh_raw_env):
     """Test that PixelAndObjectCentricWrapper returns both pixel and flattened object-centric observations."""
     key = jax.random.PRNGKey(0)
     stack_size = 4
-    base_env = raw_env
+    base_env = fresh_raw_env
     atari_env = AtariWrapper(base_env)
     env = PixelAndObjectCentricWrapper(atari_env, frame_stack_size=stack_size)
 
@@ -105,10 +105,10 @@ def test_pixel_and_object_centric_wrapper(raw_env):
     assert space.contains(obs), "Runtime observation is not contained in the defined space"
 
 
-def test_object_centric_wrapper(raw_env):
+def test_object_centric_wrapper(fresh_raw_env):
     """Test ObjectCentricWrapper returns a 2D stacked observation and its space is correct."""
     key = jax.random.PRNGKey(0)
-    base_env = raw_env
+    base_env = fresh_raw_env
     atari_env = AtariWrapper(base_env)
     env = ObjectCentricWrapper(atari_env, frame_stack_size=4)
 
@@ -129,10 +129,10 @@ def test_object_centric_wrapper(raw_env):
     assert obs.shape == space.shape
 
 
-def test_flatten_observation_wrapper(raw_env):
+def test_flatten_observation_wrapper(fresh_raw_env):
     """Test that FlattenObservationWrapper correctly flattens each observation type."""
     key = jax.random.PRNGKey(0)
-    base_env = raw_env
+    base_env = fresh_raw_env
     atari_env = AtariWrapper(base_env)
 
     # --- Test 1: Wrapping ObjectCentricWrapper ---
@@ -189,10 +189,10 @@ def test_flatten_observation_wrapper(raw_env):
     assert jnp.array_equal(oc_part[:int(get_object_centric_obs_size(base_env.observation_space()))], unwrapped_obs_both[1][0])
 
 
-def test_log_wrapper_with_flatten_observation(raw_env):
+def test_log_wrapper_with_flatten_observation(fresh_raw_env):
     """Test that LogWrapper works correctly with FlattenObservationWrapper."""
     key = jax.random.PRNGKey(0)
-    base_env = raw_env
+    base_env = fresh_raw_env
     atari_env = AtariWrapper(base_env)
     
     # Test with a complex observation stack
@@ -222,13 +222,15 @@ def test_log_wrapper_with_flatten_observation(raw_env):
 
 
 @pytest.mark.smoke
-def test_native_downscaling_hot_swap(raw_env):
+@pytest.mark.serial
+def test_native_downscaling_hot_swap(fresh_raw_env, isolate_jit_cache):
     """
     Verifies that enabling use_native_downscaling correctly hot-swaps the 
     renderer configuration and produces downscaled observations natively.
     """
     # 1. Setup: Load raw env and basic wrappers
-    env = AtariWrapper(raw_env)
+    # noop_max=0 keeps the reset JIT small; this test is about the renderer swap.
+    env = AtariWrapper(fresh_raw_env, noop_max=0, first_fire=False)
     
     # Define target shape
     TARGET_H, TARGET_W = 84, 84
@@ -285,11 +287,12 @@ def test_native_downscaling_hot_swap(raw_env):
 
 
 @pytest.mark.smoke
-def test_native_downscaling_grayscale(raw_env):
+@pytest.mark.serial
+def test_native_downscaling_grayscale(fresh_raw_env, isolate_jit_cache):
     """
     Specific test to ensure Native Downscaling handles Grayscale channel reduction correctly.
     """
-    env = AtariWrapper(raw_env)
+    env = AtariWrapper(fresh_raw_env, noop_max=0, first_fire=False)
     TARGET_H, TARGET_W = 84, 84
 
     # Enable Grayscale + Native

@@ -7,7 +7,8 @@ from jaxatari.games.mods.pacman.pacman_mod_plugins import (
     Only1GhostMod,
     Only2GhostMod,
     Only3GhostMod,
-    RandomGhostNavigationMod
+    RandomGhostNavigationMod,
+    DisableFlickerMod,
 )
 
 class PacmanEnvMod(JaxAtariModController):
@@ -22,6 +23,7 @@ class PacmanEnvMod(JaxAtariModController):
         "only_2_ghost": Only2GhostMod,
         "only_3_ghost": Only3GhostMod,
         "random_ghost_navigation": RandomGhostNavigationMod,
+        "disable_flicker": DisableFlickerMod,
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "pacman", "sprites")

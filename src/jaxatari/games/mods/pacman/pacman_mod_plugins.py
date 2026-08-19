@@ -8,7 +8,7 @@ class CagedGhostsMod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         new_state = self._cage_ghosts(state)
-        new_obs = JaxPacman.get_observation(new_state)
+        new_obs = self._env._get_observation(new_state)
         return new_obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -19,10 +19,13 @@ class CagedGhostsMod(JaxAtariPostStepModPlugin):
     def _cage_ghosts(self, state):
         ghosts = state.ghosts
         new_modes = jnp.full_like(ghosts.modes, GhostMode.ENJAILED.value)
-        new_positions = jnp.full_like(ghosts.positions, jnp.array(CONSTS.JAIL_POSITION, dtype=jnp.uint8))
+        new_positions = jnp.broadcast_to(
+            jnp.asarray(CONSTS.JAIL_POSITION, dtype=ghosts.positions.dtype),
+            ghosts.positions.shape,
+        )
         new_timers = jnp.full_like(ghosts.timers, 9999)
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
-        return state._replace(ghosts=new_ghosts)
+        return state.replace(ghosts=new_ghosts)
 
 
 class OftenVitaminsMod(JaxAtariPostStepModPlugin):
@@ -33,23 +36,23 @@ class OftenVitaminsMod(JaxAtariPostStepModPlugin):
         new_fruit = new_state.fruit._replace(
             spawn=jnp.where(should_spawn, True, new_state.fruit.spawn)
         )
-        return new_state._replace(fruit=new_fruit)
+        return new_state.replace(fruit=new_fruit)
 
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         new_fruit = state.fruit._replace(
             spawn=jnp.array(True, dtype=jnp.bool_)
         )
-        new_state = state._replace(fruit=new_fruit)
-        new_obs = JaxPacman.get_observation(new_state)
+        new_state = state.replace(fruit=new_fruit)
+        new_obs = self._env._get_observation(new_state)
         return new_obs, new_state
 
 class SetMaze2Mod(JaxAtariPostStepModPlugin):
     level_id = 2
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
-        new_state = reset_game(jnp.array(self.level_id, dtype=jnp.uint8), state.lives, state.score, state.key)
-        new_obs = JaxPacman.get_observation(new_state)
+        new_state = reset_game(CONSTS, jnp.array(self.level_id, dtype=jnp.uint8), state.lives, state.score, state.key)
+        new_obs = self._env._get_observation(new_state)
         return new_obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -57,7 +60,7 @@ class SetMaze2Mod(JaxAtariPostStepModPlugin):
         transitioned = new_state.level.id != prev_state.level.id
         return jax.lax.cond(
             transitioned,
-            lambda: reset_game(jnp.array(self.level_id, dtype=jnp.uint8), new_state.lives, new_state.score, new_state.key),
+            lambda: reset_game(CONSTS, jnp.array(self.level_id, dtype=jnp.uint8), new_state.lives, new_state.score, new_state.key),
             lambda: new_state
         )
 
@@ -67,7 +70,7 @@ class Only1GhostMod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         new_state = self._initialize_ghosts(state)
-        new_obs = JaxPacman.get_observation(new_state)
+        new_obs = self._env._get_observation(new_state)
         return new_obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -111,7 +114,7 @@ class Only1GhostMod(JaxAtariPostStepModPlugin):
             jnp.array(9999, dtype=jnp.float16)
         )
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
-        return state._replace(ghosts=new_ghosts, key=key)
+        return state.replace(ghosts=new_ghosts, key=key)
 
     def _maintain_ghosts(self, state):
         ghosts = state.ghosts
@@ -121,7 +124,7 @@ class Only1GhostMod(JaxAtariPostStepModPlugin):
         new_positions = jnp.where(is_inactive[:, None], jnp.array(CONSTS.JAIL_POSITION, dtype=jnp.uint8), ghosts.positions)
         new_timers = jnp.where(is_inactive, jnp.array(9999, dtype=jnp.float16), ghosts.timers)
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
-        return state._replace(ghosts=new_ghosts)
+        return state.replace(ghosts=new_ghosts)
 
 class Only2GhostMod(JaxAtariPostStepModPlugin):
     num_ghosts = 2
@@ -129,7 +132,7 @@ class Only2GhostMod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         new_state = self._initialize_ghosts(state)
-        new_obs = JaxPacman.get_observation(new_state)
+        new_obs = self._env._get_observation(new_state)
         return new_obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -171,7 +174,7 @@ class Only2GhostMod(JaxAtariPostStepModPlugin):
             jnp.array(9999, dtype=jnp.float16)
         )
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
-        return state._replace(ghosts=new_ghosts, key=key)
+        return state.replace(ghosts=new_ghosts, key=key)
 
     def _maintain_ghosts(self, state):
         ghosts = state.ghosts
@@ -180,7 +183,7 @@ class Only2GhostMod(JaxAtariPostStepModPlugin):
         new_positions = jnp.where(is_inactive[:, None], jnp.array(CONSTS.JAIL_POSITION, dtype=jnp.uint8), ghosts.positions)
         new_timers = jnp.where(is_inactive, jnp.array(9999, dtype=jnp.float16), ghosts.timers)
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
-        return state._replace(ghosts=new_ghosts)
+        return state.replace(ghosts=new_ghosts)
 
 class Only3GhostMod(JaxAtariPostStepModPlugin):
     num_ghosts = 3
@@ -188,7 +191,7 @@ class Only3GhostMod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         new_state = self._initialize_ghosts(state)
-        new_obs = JaxPacman.get_observation(new_state)
+        new_obs = self._env._get_observation(new_state)
         return new_obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -230,7 +233,7 @@ class Only3GhostMod(JaxAtariPostStepModPlugin):
             jnp.array(9999, dtype=jnp.float16)
         )
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
-        return state._replace(ghosts=new_ghosts, key=key)
+        return state.replace(ghosts=new_ghosts, key=key)
 
     def _maintain_ghosts(self, state):
         ghosts = state.ghosts
@@ -239,7 +242,7 @@ class Only3GhostMod(JaxAtariPostStepModPlugin):
         new_positions = jnp.where(is_inactive[:, None], jnp.array(CONSTS.JAIL_POSITION, dtype=jnp.uint8), ghosts.positions)
         new_timers = jnp.where(is_inactive, jnp.array(9999, dtype=jnp.float16), ghosts.timers)
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
-        return state._replace(ghosts=new_ghosts)
+        return state.replace(ghosts=new_ghosts)
 
 
 class RandomGhostNavigationMod(JaxAtariPostStepModPlugin):
@@ -250,7 +253,7 @@ class RandomGhostNavigationMod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         new_state = self._randomize_ghosts(state)
-        new_obs = JaxPacman.get_observation(new_state)
+        new_obs = self._env._get_observation(new_state)
         return new_obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -266,4 +269,16 @@ class RandomGhostNavigationMod(JaxAtariPostStepModPlugin):
             ghosts.modes
         )
         new_ghosts = ghosts._replace(modes=new_modes)
-        return state._replace(ghosts=new_ghosts)
+        return state.replace(ghosts=new_ghosts)
+
+
+class DisableFlickerMod(JaxAtariPostStepModPlugin):
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        # Render-only toggle: keep gameplay unchanged, disable flicker visuals.
+        self._env.renderer.force_no_flicker = True
+        return obs, state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state, new_state):
+        return new_state

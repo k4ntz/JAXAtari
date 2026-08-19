@@ -37,7 +37,9 @@ GAME_MODULES = {
     "berzerk": "jaxatari.games.jax_berzerk",
     "blackjack": "jaxatari.games.jax_blackjack",
     "breakout": "jaxatari.games.jax_breakout",
-    "casino": "jaxatari.games.jax_casino",
+    "casinoblackjack": "jaxatari.games.jax_casino_blackjack",
+    "casinofivestudpoker": "jaxatari.games.jax_casino_five_stud_poker",
+    "casinopokersolitaire": "jaxatari.games.jax_casino_poker_solitaire",
     "centipede": "jaxatari.games.jax_centipede",
     "choppercommand": "jaxatari.games.jax_choppercommand",
     "donkeykong": "jaxatari.games.jax_donkeykong",
@@ -80,6 +82,12 @@ GAME_MODULES = {
     "mspacman": "jaxatari.games.jax_mspacman",
     "montezumarevenge": "jaxatari.games.jax_montezumarevenge",
     "pacman": "jaxatari.games.jax_pacman",
+    # Add new games here
+}
+
+# ALE / Gymnasium names that differ from the JAXAtari registry key.
+GAME_ALIASES = {
+    "trondead": "tron",
 }
 
 # Mod modules registry: for each game, provide the Controller class path
@@ -106,7 +114,8 @@ MOD_MODULES = {
     "spaceinvaders": "jaxatari.games.mods.spaceinvaders_mods.SpaceInvadersEnvMod",
     "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod",
     "alien": "jaxatari.games.mods.alien_mods.AlienEnvMod",
-    "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod"
+    "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod",
+    "pacman": "jaxatari.games.mods.pacman_mods.PacmanEnvMod",
 }
 
 
@@ -147,6 +156,7 @@ def make(game_name: str,
 
     if isinstance(game_name, str):
         game_name_clean = game_name.lower().replace("_", "").replace("-", "")
+        game_name_clean = GAME_ALIASES.get(game_name_clean, game_name_clean)
         for key in GAME_MODULES:
             if key.lower().replace("_", "").replace("-", "") == game_name_clean:
                 game_name = key

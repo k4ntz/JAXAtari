@@ -1,10 +1,9 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
 from jaxatari.games.montezuma_revenge.rooms import load_room
 
-def test_torch_darkness_rendering():
-    env = JaxMontezumaRevenge()
+def test_torch_darkness_rendering(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -45,8 +44,8 @@ def test_torch_darkness_rendering():
     # Ladder color is orange in Room 31 (ORANGE_LADDER_ID)
     assert jnp.any(img_dark_lava[53:91, 72:88] != 0)
 
-def test_dark_room_doors_and_platforms_hidden():
-    env = JaxMontezumaRevenge()
+def test_dark_room_doors_and_platforms_hidden(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -79,8 +78,8 @@ def test_dark_room_doors_and_platforms_hidden():
     # Platform SHOULD be rendered even in the dark room without a torch
     assert jnp.any(img_dark_plat[94:98, 32:128] != 0)
 
-def test_dark_room_gem_hidden():
-    env = JaxMontezumaRevenge()
+def test_dark_room_gem_hidden(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     

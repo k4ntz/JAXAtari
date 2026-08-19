@@ -11,7 +11,7 @@ from jaxatari.modification import AutoDerivedConstants
 import jaxatari.spaces as spaces
 from flax import struct
 
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
@@ -49,8 +49,8 @@ class HangmanConstants(AutoDerivedConstants):
     UND_W: int = struct.field(pytree_node=False, default=20)
     UND_H: int = struct.field(pytree_node=False, default=8)
     UND_GAP: int = struct.field(pytree_node=False, default=4)
-    UND_Y: int = struct.field(pytree_node=False, default=181)
-    UND_START_X: int = struct.field(pytree_node=False, default=9)
+    UND_Y: int = struct.field(pytree_node=False, default=180)
+    UND_START_X: int = struct.field(pytree_node=False, default=8)
     LETTER_DIST: int = struct.field(pytree_node=False, default=8)  # Distance between underscore top and letter bottom
 
     # Layout - Hangman
@@ -58,14 +58,18 @@ class HangmanConstants(AutoDerivedConstants):
     HANGMAN_Y: int = struct.field(pytree_node=False, default=37)
 
     # Layout - Score
-    SCORE_Y: int = struct.field(pytree_node=False, default=7)
-    SCORE_P_X: int = struct.field(pytree_node=False, default=33)
+    SCORE_Y: int = struct.field(pytree_node=False, default=6)
+    SCORE_P_X: int = struct.field(pytree_node=False, default=32)
     SCORE_C_X: int = struct.field(pytree_node=False, default=112)
     SCORE_DIGITS: int = struct.field(pytree_node=False, default=1)
 
     # Layout - Preview Letters
     PREVIEW_X: int = struct.field(pytree_node=False, default=108)
-    PREVIEW_Y: int = struct.field(pytree_node=False, default=72)
+    PREVIEW_Y: int = struct.field(pytree_node=False, default=68)
+    LETTER_WIDTH: int = struct.field(pytree_node=False, default=12)
+    LETTER_HEIGHT: int = struct.field(pytree_node=False, default=16)
+    HANGMAN_WIDTH: int = struct.field(pytree_node=False, default=80)
+    HANGMAN_HEIGHT: int = struct.field(pytree_node=False, default=120)
 
     RAW_WORDS: tuple[str, ...] = struct.field(pytree_node=False, default_factory=lambda: (
         "ABLE", "ABOUT", "ABOVE", "ABSORB", "ABUSE", "ACADEMY", "ACTION", "ACTOR", "ACUTE", "ADAPT", "ADDER", "ADDON",
@@ -247,12 +251,14 @@ class HangmanState:
 
 @struct.dataclass
 class HangmanObservation:
-    revealed: chex.Array
-    mask: chex.Array
+    letters: ObjectObservation  # n=L_MAX; visual_id=letter index; active when revealed
+    cursor: ObjectObservation  # preview letter / separator; visual_id=cursor_idx
+    hangman: ObjectObservation  # visual_id=miss count (sprite stage)
     guessed: chex.Array
     misses: chex.Array
     lives: chex.Array
-    cursor_idx: chex.Array
+    score: chex.Array
+    cpu_score: chex.Array
 
 
 @struct.dataclass
@@ -300,7 +306,7 @@ def _action_commit(action: chex.Array) -> chex.Array:
 
 
 # environment
-class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, Action]):
+class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, HangmanConstants]):
     # Full action set (all 18 actions)
     ACTION_SET: jnp.ndarray = jnp.array([
         Action.NOOP,
@@ -348,8 +354,6 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
         self.words_enc = filtered_enc[:, :self.consts.L_MAX]
         self.words_len = raw_lens[valid_mask]
         self.n_words = self.words_enc.shape[0]
-        # obs size depends on L_MAX
-        self.obs_size = self.consts.L_MAX + self.consts.L_MAX + self.consts.ALPHABET_SIZE + 3
 
         # Compute derived values from constants
         self.timed = 1 if str(self.consts.DIFFICULTY_MODE).upper() == "A" else 0
@@ -400,13 +404,9 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
         return key
 
     @partial(jax.jit, static_argnums=(0,))
-    def reset(self, key=None) -> Tuple[HangmanObservation, HangmanState]:
-        if key is None:
-            key = self._rng_key
-
+    def reset(self, key: chex.PRNGKey = jrandom.PRNGKey(0)) -> Tuple[HangmanObservation, HangmanState]:
         key, word, length = self._sample_word(key)
 
-        self._rng_key = key
         # init round timer
         time0 = jnp.array(self.timer_steps if self.timed == 1 else 0, dtype=jnp.int32)
         tmax = jnp.array(self.timer_steps if self.timed == 1 else 0, dtype=jnp.int32)
@@ -593,13 +593,16 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces:
+        screen_size = (self.consts.HEIGHT, self.consts.WIDTH)
         return spaces.Dict({
-            "revealed": spaces.Box(low=0, high=self.consts.PAD_TOKEN, shape=(self.consts.L_MAX,), dtype=jnp.int32),
-            "mask": spaces.Box(low=0, high=1, shape=(self.consts.L_MAX,), dtype=jnp.int32),
+            "letters": spaces.get_object_space(n=self.consts.L_MAX, screen_size=screen_size),
+            "cursor": spaces.get_object_space(n=None, screen_size=screen_size),
+            "hangman": spaces.get_object_space(n=None, screen_size=screen_size),
             "guessed": spaces.Box(low=0, high=1, shape=(self.consts.ALPHABET_SIZE,), dtype=jnp.int32),
             "misses": spaces.Box(low=0, high=self.consts.MAX_MISSES, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=self.consts.MAX_MISSES, shape=(), dtype=jnp.int32),
-            "cursor_idx": spaces.Box(low=0, high=self.consts.ALPHABET_SIZE, shape=(), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
+            "cpu_score": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
@@ -607,10 +610,45 @@ class JaxHangman(JaxEnvironment[HangmanState, HangmanObservation, HangmanInfo, A
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: HangmanState) -> HangmanObservation:
-        revealed = self._compute_revealed(state.word, state.mask)
+        slot = jnp.arange(self.consts.L_MAX, dtype=jnp.int32)
+        letter_x = self.consts.UND_START_X + slot * (self.consts.UND_W + self.consts.UND_GAP)
+        letter_y = jnp.full(
+            (self.consts.L_MAX,),
+            self.consts.UND_Y - self.consts.LETTER_DIST - self.consts.LETTER_HEIGHT,
+            dtype=jnp.int32,
+        )
+        letters = ObjectObservation.create(
+            x=jnp.clip(letter_x, 0, self.consts.WIDTH),
+            y=jnp.clip(letter_y, 0, self.consts.HEIGHT),
+            width=jnp.full((self.consts.L_MAX,), self.consts.LETTER_WIDTH, dtype=jnp.int32),
+            height=jnp.full((self.consts.L_MAX,), self.consts.LETTER_HEIGHT, dtype=jnp.int32),
+            visual_id=state.word.astype(jnp.int32),
+            active=jnp.logical_and(slot < state.length, state.mask == 1).astype(jnp.int32),
+        )
+        cursor = ObjectObservation.create(
+            x=jnp.array(self.consts.PREVIEW_X, dtype=jnp.int32),
+            y=jnp.array(self.consts.PREVIEW_Y, dtype=jnp.int32),
+            width=jnp.array(self.consts.LETTER_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.LETTER_HEIGHT, dtype=jnp.int32),
+            visual_id=state.cursor_idx.astype(jnp.int32),
+        )
+        hangman = ObjectObservation.create(
+            x=jnp.array(self.consts.HANGMAN_X, dtype=jnp.int32),
+            y=jnp.array(self.consts.HANGMAN_Y, dtype=jnp.int32),
+            width=jnp.array(self.consts.HANGMAN_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.HANGMAN_HEIGHT, dtype=jnp.int32),
+            visual_id=state.misses.astype(jnp.int32),
+            active=(state.misses > 0).astype(jnp.int32),
+        )
         return HangmanObservation(
-            revealed=revealed, mask=state.mask, guessed=state.guessed,
-            misses=state.misses, lives=state.lives, cursor_idx=state.cursor_idx,
+            letters=letters,
+            cursor=cursor,
+            hangman=hangman,
+            guessed=state.guessed,
+            misses=state.misses,
+            lives=state.lives,
+            score=state.score,
+            cpu_score=state.cpu_score,
         )
 
     @partial(jax.jit, static_argnums=(0,))

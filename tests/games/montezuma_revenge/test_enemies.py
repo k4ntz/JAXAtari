@@ -1,9 +1,8 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
 
-def test_enemy_bounce_bounds():
-    env = JaxMontezumaRevenge()
+def test_enemy_bounce_bounds(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -29,8 +28,8 @@ def test_enemy_bounce_bounds():
     # Enemy direction should have reversed to -1
     assert state.enemies_direction[0] == -1
 
-def test_jump_over_enemy():
-    env = JaxMontezumaRevenge()
+def test_jump_over_enemy(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -49,8 +48,8 @@ def test_jump_over_enemy():
     # Player should NOT die because they are vertically clear
     assert state.death_timer == 0
 
-def test_skulls_synchronization():
-    env = JaxMontezumaRevenge()
+def test_skulls_synchronization(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     

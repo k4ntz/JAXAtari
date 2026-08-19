@@ -18,6 +18,10 @@ The main entry point is the ``make()`` function:
    available_games = jaxatari.list_available_games()
    print(f"Available games: {available_games}")
 
+The Atari *Casino* cartridge is registered as three separate environments
+(``casinoblackjack``, ``casinofivestudpoker``, ``casinopokersolitaire``)
+rather than a single ``casino`` ID with a mode switch. See :doc:`Environments/casino`.
+
 Using Modifications
 -------------------
 

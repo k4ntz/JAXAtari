@@ -1,9 +1,8 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
 
-def test_enemies_freeze_during_death():
-    env = JaxMontezumaRevenge()
+def test_enemies_freeze_during_death(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -34,8 +33,8 @@ def test_enemies_freeze_during_death():
     # I'll check if it moved
     assert state.enemies_x[0] == enemy_x_at_death, f"Enemy moved during death! {enemy_x_at_death} -> {state.enemies_x[0]}"
 
-def test_lasers_freeze_during_death():
-    env = JaxMontezumaRevenge()
+def test_lasers_freeze_during_death(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     

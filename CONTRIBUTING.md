@@ -125,7 +125,7 @@ MOD_MODULES = {
 
 ### Testing
 
-Once registered in `MOD_MODULES`, `tests/test_all_mods.py` picks up your mod automatically — no changes to test files needed. Run targeted mod tests with:
+Once registered in `MOD_MODULES`, `tests/test_all_mods.py` picks up your mod automatically — no changes to test files needed. PR smoke runs a short reset/step for each mod. Native-downscaling coverage for every mod is in the slow lane:
 
 ```bash
 pytest tests/test_all_mods.py --game pong --slow

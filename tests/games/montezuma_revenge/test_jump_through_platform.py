@@ -1,9 +1,8 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
 
-def test_jump_through_dynamic_platform():
-    env = JaxMontezumaRevenge()
+def test_jump_through_dynamic_platform(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
 
@@ -54,8 +53,8 @@ def test_jump_through_dynamic_platform():
     assert state.player_y == 46
     assert state.player_y + 19 == 65 # Feet just above platform 1
 
-def test_jump_through_static_platform():
-    env = JaxMontezumaRevenge()
+def test_jump_through_static_platform(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
 

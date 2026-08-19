@@ -50,7 +50,7 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   ❌: 2
 | krull                        | ❌       | 0 |
 | kung_fu_master               | ❌       | 0 |
 | montezuma_revenge            | 🥇       | 15 |
-| ms_pacman                    | 🥈       | 12 |
+| ms_pacman                    | 🥈       | 13 |
 | name_this_game               | 🥈       | 0 |
 | phoenix                      | 🥇       | 11 |
 | pitfall                      | ❌       | 0 |
@@ -65,7 +65,7 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   ❌: 2
 | solaris                      | ❌       | 0 |
 | space_invaders               | 🥈       | 6 |
 | star_gunner                  | ❌       | 0 |
-| surround                     | ❌       | 0 |
+| surround                     | 🥇       | 0 |
 | tennis                       | 🥇       | 13 |
 | time_pilot                   | 🥈       | 0 |
 | tutankham                    | ❌       | 0 |
@@ -76,13 +76,19 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   ❌: 2
 | yars_revenge                 | ❌       | 0 |
 | zaxxon                       | ❌       | 0 |
 
-Total:  🥇: 16   |   🥈: 15   |   🥉: 3   |   ❌: 23
+Total:  🥇: 17   |   🥈: 15   |   🥉: 3   |   ❌: 22
 
 ## Remaining ALE games
+
+The ALE *Casino* environment is listed as `casino` below. JAXtari does not
+register a combined `casino` environment: the three sub-environments are
+`casinoblackjack`, `casinofivestudpoker`, and `casinopokersolitaire`.
+These are distinct from `blackjack`, the separate ALE Blackjack environment.
+
 | Game                         | Status  | Mods available |
 |------------------------------|---------|----------------|
 | adventure                    | ❌       | 0 |
-| airraid                     | 🥉       | 0 |
+| airraid                     | 🥈       | 0 |
 | atlantis2                    | ❌       | 0 |
 | backgammon                   | 🥉       | 0 |
 | basic_math                   | ❌       | 0 |
@@ -99,14 +105,14 @@ Total:  🥇: 16   |   🥈: 15   |   🥉: 3   |   ❌: 23
 | flag_capture                 | 🥇       | 0 |
 | frogger                      | ❌       | 0 |
 | galaxian                     | 🥈       | 0 |
-| hangman                      | 🥉       | 0 |
+| hangman                      | 🥇       | 0 |
 | haunted_house                | 🥇       | 0 |
 | human_cannonball             | 🥈       | 0 |
 | journey_escape               | ❌       | 0 |
 | kaboom                       | ❌       | 0 |
 | keystone_kapers              | ❌       | 0 |
 | king_kong                    | 🥈       | 0 |
-| klax                         | 🥉       | 0 |
+| klax                         | 🥈       | 0 |
 | koolaid                      | ❌       | 0 |
 | laser_gates                  | 🥈       | 0 |
 | lost_luggage                 | ❌       | 0 |
@@ -114,7 +120,7 @@ Total:  🥇: 16   |   🥈: 15   |   🥉: 3   |   ❌: 23
 | miniature_golf               | ❌       | 0 |
 | mr_do                        | ❌       | 0 |
 | othello                      | 🥉       | 0 |
-| pacman                       | 🥉       | 7 |
+| pacman                       | 🥈       | 7 |
 | pitfall2                     | ❌       | 0 |
 | pooyan                       | ❌       | 0 |
 | sir_lancelot                 | 🥈       | 0 |
@@ -125,9 +131,9 @@ Total:  🥇: 16   |   🥈: 15   |   🥉: 3   |   ❌: 23
 | tic_tac_toe_3d               | ❌       | 0 |
 | tron                         | 🥈       | 0 |
 | turmoil                      | 🥈       | 0 |
-| video_checkers               | 🥉       | 0 |
+| video_checkers               | 🥈       | 0 |
 | video_chess                  | ❌       | 0 |
 | video_cube                   | 🥈       | 0 |
 | word_zapper                  | 🥈       | 0 |
 
-Total:  🥇: 3   |   🥈: 14   |   🥉: 8   |   ❌: 23
+Total:  🥇: 4   |   🥈: 18   |   🥉: 3   |   ❌: 23

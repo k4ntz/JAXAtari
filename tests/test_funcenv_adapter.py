@@ -150,14 +150,15 @@ class TestJaxTransforms:
     """Tests if the underlying functional environment is compatible with JAX transforms."""
 
     @pytest.mark.smoke
-    def test_jittable_transition(self, func_env):
+    def test_jittable_transition(self, func_env, isolate_jit_cache):
         """Tests that the core transition function can be JIT-compiled."""
-        jit_transition = jax.jit(func_env.transition)
         try:
             key = jax.random.PRNGKey(0)
             initial_state = func_env.initial(key)
             action = func_env.action_space.sample(key) # Sample a valid action
-            _ = jit_transition(initial_state, action, key)
+            # transition is already a class-level jit. A second jax.jit() nested-
+            # compiles the env's static `self` and hangs after renderer swaps.
+            _ = func_env.transition(initial_state, action, key)
         except Exception as e:
             pytest.fail(f"JIT compilation of the functional transition failed: {e}")
 

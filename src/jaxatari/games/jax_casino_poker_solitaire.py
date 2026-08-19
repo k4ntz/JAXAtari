@@ -7,16 +7,13 @@
 #
 
 from functools import partial
-from typing import NamedTuple, Tuple
+from typing import Tuple
 
 import chex
 import jax
 import jax.numpy as jnp
 from flax import struct
-try:
-    from jaxatari.games.jax_casino import CasinoRenderer
-except ImportError:
-    from jax_casino import CasinoRenderer
+from jaxatari.games.casino.renderer import CasinoRenderer
 
 from jaxatari.environment import JAXAtariAction as Action
 from jaxatari.environment import JaxEnvironment
@@ -46,7 +43,7 @@ class CasinoPokerSolitaireConstants(struct.PyTreeNode):
     """
 
 
-class CasinoPokerSolitaireState(NamedTuple):
+class CasinoPokerSolitaireState(struct.PyTreeNode):
     # colors:   D -> diamonds ♦
     #           C -> clubs ♣
     #           H -> hearts ♥
@@ -85,7 +82,7 @@ class CasinoPokerSolitaireState(NamedTuple):
     cursor_pos_y: jnp.ndarray
 
 
-class CasinoPokerSolitaireObservation(NamedTuple):
+class CasinoPokerSolitaireObservation(struct.PyTreeNode):
     player_score: jnp.ndarray
     player_round_score: jnp.ndarray
     current_card: jnp.ndarray
@@ -94,7 +91,7 @@ class CasinoPokerSolitaireObservation(NamedTuple):
     cursor_pos_y: jnp.ndarray
 
 
-class CasinoPokerSolitaireInfo(NamedTuple):
+class CasinoPokerSolitaireInfo(struct.PyTreeNode):
     time: jnp.ndarray
 
 
@@ -215,12 +212,12 @@ def step_controls(state: CasinoPokerSolitaireState, action: chex.Array, consts: 
     # if 24 cards are placed, move to final scoring state
     state = jax.lax.cond(
         (dealt_cards >= 24) & (state.state_counter == 0),
-        lambda s: s._replace(state_counter=1),
+        lambda s: s.replace(state_counter=1),
         lambda s: s,
         state,
     )
 
-    return state._replace(
+    return state.replace(
         cursor_pos_x=cursor_pos_x,
         cursor_pos_y=cursor_pos_y,
         board=board,
@@ -250,7 +247,7 @@ def step_finish_game(state: CasinoPokerSolitaireState, action: chex.Array, const
     cursor_pos = jnp.array([-1, -1])  # hide cursor
     state_counter = 2  # game over
 
-    state = state._replace(
+    state = state.replace(
         board=board,
         current_card=current_card,
         state_counter=state_counter,
@@ -266,7 +263,7 @@ def step_finish_game(state: CasinoPokerSolitaireState, action: chex.Array, const
 def step_end_game(state: CasinoPokerSolitaireState, action: chex.Array, consts: CasinoPokerSolitaireConstants) -> CasinoPokerSolitaireState:
     """ Additional end game state to wait for reset """
     state = jax.lax.cond(
-        action == Action.FIRE, lambda s: s._replace(state_counter=3), lambda s: s, state
+        action == Action.FIRE, lambda s: s.replace(state_counter=3), lambda s: s, state
     )
 
     return state
@@ -286,6 +283,8 @@ class JaxCasinoPokerSolitaire(JaxEnvironment[CasinoPokerSolitaireState, CasinoPo
 
     def reset(self, key=None) -> Tuple[CasinoPokerSolitaireObservation, CasinoPokerSolitaireState]:
         # Resets the game state to the initial state, reset score, sample cards
+        if key is None:
+            key = jax.random.PRNGKey(0)
         key1, subkey1 = jax.random.split(key)
         deck = jnp.arange(1, self.consts.NUM_CARDS_IN_DECK + 1, dtype=jnp.int32)
         deck = jax.random.permutation(subkey1, deck)
@@ -323,7 +322,7 @@ class JaxCasinoPokerSolitaire(JaxEnvironment[CasinoPokerSolitaireState, CasinoPo
         # 2: game over, wait for reset
 
         previous_state = state
-        state = state._replace(
+        state = state.replace(
             step_counter=state.step_counter + 1
         )  # increment step counter
         # state machine
@@ -363,7 +362,6 @@ class JaxCasinoPokerSolitaire(JaxEnvironment[CasinoPokerSolitaireState, CasinoPo
     def _get_reward(self, previous_state: CasinoPokerSolitaireState, state: CasinoPokerSolitaireState):
         return state.player_score - previous_state.player_score
 
-    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: CasinoPokerSolitaireState) -> jnp.ndarray:
         return self.renderer.render(state)
 

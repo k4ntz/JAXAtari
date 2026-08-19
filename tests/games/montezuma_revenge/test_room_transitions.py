@@ -1,10 +1,9 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
 from jaxatari.games.montezuma_revenge.rooms import load_room
 
-def test_room_transitions_horizontal():
-    env = JaxMontezumaRevenge()
+def test_room_transitions_horizontal(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -36,8 +35,8 @@ def test_room_transitions_horizontal():
     assert state.room_id == 11
     assert state.player_x >= 140
 
-def test_room_transitions_vertical():
-    env = JaxMontezumaRevenge()
+def test_room_transitions_vertical(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -84,8 +83,8 @@ def test_room_transitions_vertical():
     assert state.room_id == 11
     assert state.player_y >= 125
 
-def test_room_3_8_transition():
-    env = JaxMontezumaRevenge()
+def test_room_3_8_transition(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -119,8 +118,8 @@ def test_room_3_8_transition():
     assert state.room_id == 31
     assert state.player_x <= 10
 
-def test_room_2_6_to_3_6_transition():
-    env = JaxMontezumaRevenge()
+def test_room_2_6_to_3_6_transition(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -139,8 +138,8 @@ def test_room_2_6_to_3_6_transition():
     assert state.room_id == 22
     assert state.player_y >= 125
 
-def test_all_implemented_rooms_loadable():
-    env = JaxMontezumaRevenge()
+def test_all_implemented_rooms_loadable(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     _, state = env.reset(key)
     

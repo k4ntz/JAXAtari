@@ -15,6 +15,7 @@ Controls:
 -   Pause: P
 -   Frame-by-Frame Toggle: F
 -   Next Frame: N (when frame-by-frame is on)
+-   Frame Timer: T (start counting; press again to print the count and reset)
 -   Reset: R
 -   Quit: ESCAPE (or Q in record mode)
 
@@ -25,6 +26,12 @@ Requires `jaxatari`, `gymnasium[atari]`, `ale-py`, `pygame`, and `numpy`.
 import argparse
 import sys
 import os
+
+# Force JAX on CPU before importing jax (must run before `import jax`).
+if "--cpu" in sys.argv:
+    os.environ.setdefault("JAX_PLATFORMS", "cpu")
+    os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+
 import time
 import pickle as pkl
 from typing import Tuple, Dict, Any, Optional, List
@@ -48,16 +55,21 @@ except ImportError:
 
 
 # --- Constants ---
-# Single playback cadence for the whole script: every paced tick advances JAX and ALE
-# by exactly one emulated frame each (when stepping), so wall-clock speed matches between panes.
-DEFAULT_PLAYBACK_FPS = 30
+# Single playback cadence: NTSC Atari is 60 Hz. Each paced tick advances JAX and ALE
+# by exactly one emulated frame (ALE frameskip=1), so both panes stay in lockstep.
+DEFAULT_PLAYBACK_FPS = 60
 
 # Use a smaller upscale factor to fit 3 screens
 UPSCALE_FACTOR = 3
-# Standard Atari resolution
+# Default Atari resolution; overwritten from actual JAX/ALE frames (Pac-Man is 250x160).
 NATIVE_H, NATIVE_W = 210, 160
 SCALED_W = NATIVE_W * UPSCALE_FACTOR
 SCALED_H = NATIVE_H * UPSCALE_FACTOR
+
+# JAXAtari registry keys whose ALE ROM title differs (e.g. tron -> Trondead).
+ALE_GAME_TITLES = {
+    "tron": "Trondead",
+}
 
 # Colors
 COLOR_WHITE = (255, 255, 255)
@@ -91,6 +103,13 @@ def pace_paired_emulation_frame(clock: pygame.time.Clock, playback_hz: int) -> N
     clock.tick(max(1, playback_hz))
 
 
+def resolve_comparison_game_names(name: str) -> Tuple[str, str]:
+    """Map a CLI game name to (JAXAtari registry key, ALE ROM title)."""
+    jax_name = core.GAME_ALIASES.get(name.lower(), name.lower())
+    ale_name = ALE_GAME_TITLES.get(jax_name, name)
+    return jax_name, ale_name
+
+
 def setup_ale_env(game_name: str, seed: int) -> gym.Env:
     """Initializes the Gymnasium ALE environment."""
     print(f"Initializing ALE env: 'ALE/{game_name}-v5'")
@@ -99,12 +118,13 @@ def setup_ale_env(game_name: str, seed: int) -> gym.Env:
         env = gym.make(
             f"ALE/{game_name}-v5",
             render_mode="rgb_array",
-            frameskip=1,
+            frameskip=1,  # 1 ALE step == 1 NTSC frame == 1 JAXAtari step
             repeat_action_probability=0.0,  # Deterministic
             full_action_space=False,  # Minimal action set; matches typical JAXAtari ACTION_SET sizing
         )
         env.reset(seed=seed)
-        print("ALE environment initialized.")
+        frameskip = getattr(env.unwrapped, "frameskip", None)
+        print(f"ALE environment initialized (frameskip={frameskip}).")
         return env
     except Exception as e:
         print(f"Error creating ALE environment: {e}")
@@ -268,6 +288,26 @@ def get_semantic_action_from_keys(pressed_keys: pygame.key.ScancodeWrapper) -> s
 
 # --- Pygame Rendering ---
 
+def configure_native_resolution(jax_frame: np.ndarray, ale_frame: np.ndarray) -> None:
+    """Size comparison panes from the actual env frames so 250-tall games are not squashed."""
+    global NATIVE_H, NATIVE_W, SCALED_W, SCALED_H
+    NATIVE_H = max(int(jax_frame.shape[0]), int(ale_frame.shape[0]))
+    NATIVE_W = max(int(jax_frame.shape[1]), int(ale_frame.shape[1]))
+    SCALED_W = NATIVE_W * UPSCALE_FACTOR
+    SCALED_H = NATIVE_H * UPSCALE_FACTOR
+
+
+def _scale_frame_to_pane(frame: np.ndarray, pane_wh: Tuple[int, int]) -> pygame.Surface:
+    """Scale a frame by UPSCALE_FACTOR without stretching, then blit into a pane."""
+    pane = pygame.Surface(pane_wh)
+    pane.fill(COLOR_BG)
+    surf = pygame.surfarray.make_surface(np.transpose(frame, (1, 0, 2)))
+    h, w = frame.shape[:2]
+    scaled = pygame.transform.scale(surf, (w * UPSCALE_FACTOR, h * UPSCALE_FACTOR))
+    pane.blit(scaled, (0, 0))
+    return pane
+
+
 def create_comparison_surface(
     jax_frame: np.ndarray,
     ale_frame: np.ndarray,
@@ -285,19 +325,13 @@ def create_comparison_surface(
 
     # --- 1. JAX Frame ---
     try:
-        # JAX frame is (H, W, 3), transpose to (W, H, 3) for make_surface
-        jax_surf = pygame.surfarray.make_surface(np.transpose(jax_frame, (1, 0, 2)))
-        jax_surf_scaled = pygame.transform.scale(jax_surf, scaled_size_wh)
-        total_surface.blit(jax_surf_scaled, (0, 0))
+        total_surface.blit(_scale_frame_to_pane(jax_frame, scaled_size_wh), (0, 0))
     except Exception as e:
         print(f"JAX render error: {e}")
 
     # --- 2. ALE Frame ---
     try:
-        # ALE frame is (H, W, 3), transpose to (W, H, 3)
-        ale_surf = pygame.surfarray.make_surface(np.transpose(ale_frame, (1, 0, 2)))
-        ale_surf_scaled = pygame.transform.scale(ale_surf, scaled_size_wh)
-        total_surface.blit(ale_surf_scaled, (SCALED_W, 0))
+        total_surface.blit(_scale_frame_to_pane(ale_frame, scaled_size_wh), (SCALED_W, 0))
     except Exception as e:
         print(f"ALE render error: {e}")
 
@@ -309,9 +343,7 @@ def create_comparison_surface(
             # Clip to 255 and cast to uint8
             diff = np.clip(diff, 0, 255).astype(np.uint8)
             
-            diff_surf = pygame.surfarray.make_surface(np.transpose(diff, (1, 0, 2)))
-            diff_surf_scaled = pygame.transform.scale(diff_surf, scaled_size_wh)
-            total_surface.blit(diff_surf_scaled, (SCALED_W * 2, 0))
+            total_surface.blit(_scale_frame_to_pane(diff, scaled_size_wh), (SCALED_W * 2, 0))
         else:
             # Handle shape mismatch
             text = font.render("SHAPE MISMATCH", True, COLOR_WHITE)
@@ -344,12 +376,9 @@ def render_single_frame(
     """Renders just one game screen, for the recording phase."""
     surface = pygame.Surface((SCALED_W, SCALED_H))
     surface.fill(COLOR_BG)
-    scaled_size_wh = (SCALED_W, SCALED_H)
     
     try:
-        frame_surf = pygame.surfarray.make_surface(np.transpose(frame, (1, 0, 2)))
-        frame_surf_scaled = pygame.transform.scale(frame_surf, scaled_size_wh)
-        surface.blit(frame_surf_scaled, (0, 0))
+        surface.blit(_scale_frame_to_pane(frame, (SCALED_W, SCALED_H)), (0, 0))
     except Exception as e:
         print(f"Single frame render error: {e}")
 
@@ -366,6 +395,28 @@ def render_single_frame(
     return surface
 
 # --- Game Loops ---
+
+class FrameTimer:
+    """Count emulated frames between two 'T' presses."""
+
+    def __init__(self) -> None:
+        self.counting = False
+        self.count = 0
+
+    def toggle(self) -> None:
+        if self.counting:
+            print(f"Frame timer: {self.count} frames")
+            self.count = 0
+            self.counting = False
+        else:
+            self.count = 0
+            self.counting = True
+            print("Frame timer started")
+
+    def tick(self) -> None:
+        if self.counting:
+            self.count += 1
+
 
 def run_parallel_mode(
     screen: pygame.Surface,
@@ -385,6 +436,7 @@ def run_parallel_mode(
     pause = False
     frame_by_frame = False
     next_frame_asked = False
+    frame_timer = FrameTimer()
 
     jax_state = jax_data["state"]
     jitted_step = jax_data["jitted_step"]
@@ -410,6 +462,8 @@ def run_parallel_mode(
                     print(f"Frame-by-frame: {frame_by_frame}")
                 elif event.key == pygame.K_n:
                     next_frame_asked = True
+                elif event.key == pygame.K_t:
+                    frame_timer.toggle()
                 elif event.key == pygame.K_r:
                     print("Resetting environments by user request...")
                     ale_obs, ale_info = ale_env.reset(seed=seed)
@@ -449,6 +503,7 @@ def run_parallel_mode(
         jax_obs, jax_state, jax_reward, jax_done, jax_info = jitted_step(jax_state, jax_action_index)
         ale_obs, ale_reward, ale_term, ale_trunc, ale_info = ale_env.step(ale_action)
         ale_done = ale_term or ale_trunc
+        frame_timer.tick()
 
         # --- Render Frames ---
         jax_frame = np.array(jitted_render(jax_state))
@@ -511,6 +566,7 @@ def run_record_replay_mode(
     pause = False
     frame_by_frame = False
     next_frame_asked = False
+    frame_timer = FrameTimer()
     
     while recording:
         # --- Handle Input ---
@@ -528,6 +584,8 @@ def run_record_replay_mode(
                     print(f"Frame-by-frame: {frame_by_frame}")
                 elif event.key == pygame.K_n:
                     next_frame_asked = True
+                elif event.key == pygame.K_t:
+                    frame_timer.toggle()
                 elif event.key == pygame.K_r:
                     print("Resetting JAX environment (clearing actions)...")
                     jax_obs, jax_state = jax_data["env"].reset(jrandom.PRNGKey(seed))
@@ -556,6 +614,7 @@ def run_record_replay_mode(
         jax_action_constant = jax_action_map.get(semantic_action, JAXAtariAction.NOOP)
         jax_action_index = map_action_to_index(jax_data["env"], jax_action_constant)
         jax_obs, jax_state, jax_reward, jax_done, jax_info = jitted_step(jax_state, jax_action_index)
+        frame_timer.tick()
         
         # --- Render JAX ---
         jax_frame = np.array(jitted_render(jax_state))
@@ -600,6 +659,7 @@ def run_record_replay_mode(
     pause = False
     frame_by_frame = False
     next_frame_asked = False
+    frame_timer = FrameTimer()
      
     while replay_idx < len(recorded_actions):
         # Check for quit event during replay
@@ -618,6 +678,8 @@ def run_record_replay_mode(
                     print(f"Frame-by-frame: {frame_by_frame}")
                 elif event.key == pygame.K_n:
                     next_frame_asked = True
+                elif event.key == pygame.K_t:
+                    frame_timer.toggle()
                 elif event.key == pygame.K_r:
                     print("Restarting replay from beginning...")
                     ale_obs, jax_state, jax_frame, ale_frame = reset_for_replay()
@@ -658,6 +720,7 @@ def run_record_replay_mode(
         # 4. Execute (Both will now move Left simultaneously)
         jax_obs, jax_state, jax_reward, jax_done, jax_info = jitted_step(jax_state, jax_action_index)
         ale_obs, ale_reward, ale_term, ale_trunc, ale_info = ale_env.step(ale_action)
+        frame_timer.tick()
         # --- Render Frames ---
         jax_frame = np.array(jitted_render(jax_state))
         ale_frame = ale_env.render()
@@ -712,9 +775,9 @@ def main():
         type=int,
         default=DEFAULT_PLAYBACK_FPS,
         help=(
-            "Wall-clock Hz for the pygame loop. Each tick shows one paired frame: "
-            "exactly one JAXAtari step and one ALE step (when not paused), so both "
-            "panes advance in lockstep at this rate."
+            "Wall-clock Hz for the pygame loop (NTSC Atari is 60). Each tick is one "
+            "paired emulated frame: exactly one JAXAtari step and one ALE step with "
+            "frameskip=1 (when not paused)."
         ),
     )
     parser.add_argument(
@@ -727,21 +790,19 @@ def main():
             "Loads ALE from that state before starting."
         ),
     )
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Run JAX on CPU (sets JAX_PLATFORMS=cpu before backend init).",
+    )
     args = parser.parse_args()
     playback_hz = max(1, int(args.fps))
-    
-    # Capitalize game name for ALE (e.g., 'pong' -> 'Pong')
-    #ale_game_name = args.game.capitalize()
-    ale_game_name = args.game
+    jax_game_name, ale_game_name = resolve_comparison_game_names(args.game)
 
     # --- Setup ---
     pygame.init()
     pygame.font.init()
     font = pygame.font.SysFont("Arial", 18)
-    
-    # Set initial window size (will be resized by mode)
-    window_width = SCALED_W * 3 if args.mode == "parallel" else SCALED_W
-    screen = pygame.display.set_mode((window_width, SCALED_H))
     pygame.display.set_caption(f"JAXAtari vs ALE Comparison: {args.game}")
     clock = pygame.time.Clock()
 
@@ -753,7 +814,15 @@ def main():
             "Note: ALE was loaded from checkpoint; JAXAtari still starts from "
             "its standard reset state."
         )
-    jax_data = setup_jax_env(args.game.lower(), args.seed)
+    jax_data = setup_jax_env(jax_game_name, args.seed)
+
+    jax_probe = np.array(jax_data["jitted_render"](jax_data["state"]))
+    ale_probe = ale_env.render()
+    configure_native_resolution(jax_probe, ale_probe)
+    print(f"Comparison pane size: {NATIVE_H}x{NATIVE_W} (display {SCALED_W}x{SCALED_H})")
+
+    window_width = SCALED_W * 3 if args.mode == "parallel" else SCALED_W
+    screen = pygame.display.set_mode((window_width, SCALED_H))
 
     # Build universal action maps
     jax_action_map = build_jax_action_map()
@@ -778,12 +847,13 @@ def main():
     print("  Fire:      Space / Enter")
     print("  Pause:     P")
     print("  Frame Step:F (Toggle), N (Next Frame)")
+    print("  Frame Timer: T (start; press again to print and reset)")
     print("  Reset:     R")
     print("  Quit:      ESCAPE (Q in Record mode)")
     print("="*44)
     print(
         f"Paired playback: {playback_hz} Hz — one JAX + one ALE emulated frame per tick "
-        f"(ALE frameskip=1); both use the same pygame clock."
+        f"(ALE frameskip=1, 1 JAX step == 1 NTSC frame); both use the same pygame clock."
     )
     print(f"Starting in '{args.mode}' mode in 3 seconds...\n")
     time.sleep(3)

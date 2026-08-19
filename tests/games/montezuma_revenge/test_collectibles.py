@@ -1,9 +1,8 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
 
-def test_collect_key():
-    env = JaxMontezumaRevenge()
+def test_collect_key(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -26,8 +25,8 @@ def test_collect_key():
     assert state.items_active[0] == 0
     assert reward == 100
 
-def test_open_door():
-    env = JaxMontezumaRevenge()
+def test_open_door(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -52,8 +51,8 @@ def test_open_door():
     assert state.doors_active[0] == 0
     assert reward == 300
 
-def test_collect_sword():
-    env = JaxMontezumaRevenge()
+def test_collect_sword(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -71,8 +70,8 @@ def test_collect_sword():
     assert state.inventory[1] == 1
     assert reward == 1000
 
-def test_kill_enemy_with_sword():
-    env = JaxMontezumaRevenge()
+def test_kill_enemy_with_sword(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -105,8 +104,8 @@ def test_kill_enemy_with_sword():
     # Score should INCREASE
     assert reward >= 100
 
-def test_door_without_key():
-    env = JaxMontezumaRevenge()
+def test_door_without_key(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -131,8 +130,8 @@ def test_door_without_key():
     assert state.doors_active[0] == 1
     assert state.player_x == 50 # Blocked by wall logic
 
-def test_collect_torch():
-    env = JaxMontezumaRevenge()
+def test_collect_torch(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     

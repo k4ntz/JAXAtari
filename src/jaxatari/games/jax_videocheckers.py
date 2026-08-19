@@ -60,7 +60,16 @@ class VideoCheckersConstants(AutoDerivedConstants):
     SCALING_FACTOR: int = struct.field(pytree_node=False, default=3)
 
     OFFSET_X_BOARD: int = struct.field(pytree_node=False, default=12)
-    OFFSET_Y_BOARD: int = struct.field(pytree_node=False, default=50)
+    OFFSET_Y_BOARD: int = struct.field(pytree_node=False, default=17)
+    CELL_WIDTH: int = struct.field(pytree_node=False, default=16)
+    CELL_HEIGHT: int = struct.field(pytree_node=False, default=22)
+    PIECE_INSET_X: int = struct.field(pytree_node=False, default=0)
+    PIECE_INSET_Y: int = struct.field(pytree_node=False, default=4)
+    BOARD_DRAW_HEIGHT: int = struct.field(pytree_node=False, default=176)  # 8 * 22
+    BOARD_DRAW_WIDTH: int = struct.field(pytree_node=False, default=128)  # 8 * 16
+    HUD_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (24, 59, 157))
+    PIECE_WHITE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (214, 214, 214))
+    PIECE_DARK_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (198, 108, 58))
 
     # MOVES array order: 0=DownRight, 1=UpRight, 2=UpLeft, 3=DownLeft
     # This order is used by AI heuristics and must match the order expected by get_global_legality
@@ -1282,7 +1291,7 @@ class VideoCheckersRenderer(JAXGameRenderer):
         final_asset_config = list(self.consts.ASSET_CONFIG)
         
         # 4. Create procedural assets using modded constants
-        background_sprite = jnp.array([[[160, 96, 64, 255]]], dtype=jnp.uint8)
+        background_sprite = jnp.array([[[181, 83, 40, 255]]], dtype=jnp.uint8)
         
         # 5. Append procedural assets
         final_asset_config.insert(0, {'name': 'background', 'type': 'background', 'data': background_sprite})
@@ -1311,24 +1320,71 @@ class VideoCheckersRenderer(JAXGameRenderer):
             self.BACKGROUND = jnp.full((target_h, target_w), bg_color_id, dtype=self.BACKGROUND.dtype)
         
         # 7. Pre-compute/cache values for rendering
+        # Align sprite colors with ALE: light squares are the background brown,
+        # pieces are off-white / tan rather than pure white / orange.
+        palette = self.PALETTE
+        def _recolor(pal, src, dst):
+            src_a = jnp.asarray(src, dtype=pal.dtype)
+            dst_a = jnp.asarray(dst, dtype=pal.dtype)
+            return jnp.where(jnp.all(pal == src_a, axis=-1, keepdims=True), dst_a, pal)
+        palette = _recolor(palette, (160, 96, 64), (181, 83, 40))
+        palette = _recolor(palette, (255, 255, 255), self.consts.PIECE_WHITE_COLOR)
+        palette = _recolor(palette, (192, 104, 72), self.consts.PIECE_DARK_COLOR)
+        self.PALETTE = palette
+
+        self.PALETTE, hud_id = self.jr.add_palette_color(self.PALETTE, self.consts.HUD_COLOR)
+        self.COLOR_TO_ID[self.consts.HUD_COLOR] = int(hud_id)
+        self.HUD_COLOR_ID = int(hud_id)
+        self.PALETTE, black_id = self.jr.add_palette_color(self.PALETTE, (0, 0, 0))
+        self.COLOR_TO_ID[(0, 0, 0)] = int(black_id)
+        self.BLACK_ID = int(black_id)
         self._cache_sprite_stacks()
         self.PRE_RENDERED_BOARD = self._precompute_static_board()
 
     def _cache_sprite_stacks(self):
         """Caches the sprite stacks for easy access."""
-        self.PIECE_STACK = self.SHAPE_MASKS['pieces']
+        piece_stack = self.SHAPE_MASKS['pieces']
+        # ALE pieces are 8x16 ovals on 16x22 squares.
+        piece_h, piece_w = 16, 8
+        self.PIECE_STACK = jax.vmap(
+            lambda m: jax.image.resize(m.astype(jnp.float32), (piece_h, piece_w), method="nearest").astype(m.dtype)
+        )(piece_stack)
         self.TEXT_STACK = self.SHAPE_MASKS['text']
+        trans = self.jr.TRANSPARENT_ID
+        # Digit sprites use a two-color opaque mask; only the original blue is the glyph.
+        fg_id = self.COLOR_TO_ID.get((28, 56, 144), trans)
+        hud_text = jnp.where(self.TEXT_STACK == fg_id, jnp.int32(self.HUD_COLOR_ID), trans)
+        self.HUD_TEXT = jax.vmap(
+            lambda m: jax.image.resize(m.astype(jnp.float32), (10, 8), method="nearest").astype(m.dtype)
+        )(hud_text)
 
     def _precompute_static_board(self) -> jnp.ndarray:
-        """Pre-renders the static board onto the solid background color."""
-        # self.BACKGROUND is already the solid color ID mask
-        board_mask = self.SHAPE_MASKS['board']
-        return self.jr.render_at(
-            self.BACKGROUND,
-            self.consts.OFFSET_X_BOARD,
-            self.consts.OFFSET_Y_BOARD,
-            board_mask
+        """Checkerboard of 16x22 rectangles so ranks match ALE (no sprite scaling)."""
+        raster = self.BACKGROUND
+        raster = self.jr.draw_rects(
+            raster,
+            jnp.array([[0, 0]], dtype=jnp.int32),
+            jnp.array([[self.consts.WIDTH, 3]], dtype=jnp.int32),
+            self.BLACK_ID,
         )
+        rows, cols = jnp.indices((self.consts.NUM_FIELDS_Y, self.consts.NUM_FIELDS_X))
+        dark = ((rows + cols) % 2 == 1).reshape(-1)
+        xs = (self.consts.OFFSET_X_BOARD + cols * self.consts.CELL_WIDTH).astype(jnp.int32).reshape(-1)
+        ys = (self.consts.OFFSET_Y_BOARD + rows * self.consts.CELL_HEIGHT).astype(jnp.int32).reshape(-1)
+        pos = jnp.stack([xs, ys], axis=1)
+        pos = jnp.where(dark[:, None], pos, -1)
+        sizes = jnp.tile(
+            jnp.array([[self.consts.CELL_WIDTH, self.consts.CELL_HEIGHT]], dtype=jnp.int32),
+            (self.consts.NUM_FIELDS_Y * self.consts.NUM_FIELDS_X, 1),
+        )
+        raster = self.jr.draw_rects(raster, pos, sizes, self.BLACK_ID)
+        n = self.consts.NUM_FIELDS_Y
+        y0 = self.consts.OFFSET_Y_BOARD + jnp.arange(n) * self.consts.CELL_HEIGHT
+        y1 = y0 + self.consts.CELL_HEIGHT - 2
+        tick_y = jnp.concatenate([y0, y1])
+        tick_pos = jnp.stack([jnp.zeros((n * 2,), dtype=jnp.int32), tick_y], axis=1)
+        tick_size = jnp.tile(jnp.array([8, 2], dtype=jnp.int32), (n * 2, 1))
+        return self.jr.draw_rects(raster, tick_pos, tick_size, self.BLACK_ID)
 
     # --- Vectorized Logic for Piece Calculation ---
     
@@ -1412,8 +1468,8 @@ class VideoCheckersRenderer(JAXGameRenderer):
             should_draw = dark_squares[i] & (piece_idx != self.consts.EMPTY_TILE)
             
             def perform_draw(r):
-                x = self.consts.OFFSET_X_BOARD + 4 + col * 17
-                y = self.consts.OFFSET_Y_BOARD + 2 + row * 13
+                x = self.consts.OFFSET_X_BOARD + self.consts.PIECE_INSET_X + col * self.consts.CELL_WIDTH
+                y = self.consts.OFFSET_Y_BOARD + self.consts.PIECE_INSET_Y + row * self.consts.CELL_HEIGHT
                 return self.jr.render_at(r, x, y, self.PIECE_STACK[piece_idx])
             
             return jax.lax.cond(should_draw, perform_draw, lambda r: r, current_raster)
@@ -1456,6 +1512,13 @@ class VideoCheckersRenderer(JAXGameRenderer):
         
         # 4. Render the jump indicator (read from state instead of recalculating)
         raster = self._render_jump_indicator(state.must_jump, raster)
+
+        # Default variation digits ("1  11  1") in ALE blue.
+        one = self.HUD_TEXT[1]
+        raster = self.jr.render_at(raster, 32, 4, one)
+        raster = self.jr.render_at(raster, 71, 4, one)
+        raster = self.jr.render_at(raster, 79, 4, one)
+        raster = self.jr.render_at(raster, 128, 4, one)
 
         # 5. Final conversion from palette IDs to RGB
         return self.jr.render_from_palette(raster, self.PALETTE)

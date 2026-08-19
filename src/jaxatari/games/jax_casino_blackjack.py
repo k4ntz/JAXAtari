@@ -6,10 +6,9 @@
 # Simulates the Atari Casino Blackjack game
 #
 
-from typing import NamedTuple, Tuple
+from typing import Tuple
 from functools import partial
 
-import os
 import chex
 import jax
 import jax.numpy as jnp
@@ -18,10 +17,7 @@ from flax import struct
 from jaxatari.environment import JAXAtariAction as Action
 from jaxatari.environment import JaxEnvironment
 from jaxatari.spaces import Space, Discrete, Box, Dict
-try:
-    from jaxatari.games.jax_casino import CasinoRenderer
-except ImportError:
-    from jax_casino import CasinoRenderer
+from jaxatari.games.casino.renderer import CasinoRenderer
 
 
 class CasinoBlackjackConstants(struct.PyTreeNode):
@@ -52,7 +48,7 @@ class CasinoBlackjackConstants(struct.PyTreeNode):
     Computer dealer must stay on 17 or more points
     """
 
-class CasinoBlackjackState(NamedTuple):
+class CasinoBlackjackState(struct.PyTreeNode):
     # colors:   D -> diamonds ♦
     #           C -> clubs ♣
     #           H -> hearts ♥
@@ -114,7 +110,7 @@ class CasinoBlackjackState(NamedTuple):
     current_hand: chex.Numeric
     """ Tells whether the main hand or the split hand is selected: 0 = main hand, 1 = split hand """
 
-class CasinoBlackjackObservation(NamedTuple):
+class CasinoBlackjackObservation(struct.PyTreeNode):
     player_score: jnp.ndarray
     """ The score of the player """
     player_main_bet: jnp.ndarray
@@ -134,7 +130,7 @@ class CasinoBlackjackObservation(NamedTuple):
     char: jnp.ndarray
     """ Shows an i when the insurance action can be selected, and a question mark, when the bet can be selected """
 
-class CasinoBlackjackInfo(NamedTuple):
+class CasinoBlackjackInfo(struct.PyTreeNode):
     time: jnp.ndarray
 
 @jax.jit
@@ -995,8 +991,10 @@ class JaxCasinoBlackjack(JaxEnvironment[CasinoBlackjackState, CasinoBlackjackObs
         super().__init__(consts)
         self.renderer = CasinoRenderer(self.consts)
 
-    def reset(self, key=jax.random.PRNGKey(int.from_bytes(os.urandom(3), byteorder='big'))) -> Tuple[CasinoBlackjackObservation, CasinoBlackjackState]:
+    def reset(self, key=None) -> Tuple[CasinoBlackjackObservation, CasinoBlackjackState]:
         # Resets the game state to the initial state.
+        if key is None:
+            key = jax.random.PRNGKey(0)
         key1, subkey1 = jax.random.split(key)
         key2, subkey2 = jax.random.split(key1)
         state = CasinoBlackjackState(
@@ -1047,7 +1045,6 @@ class JaxCasinoBlackjack(JaxEnvironment[CasinoBlackjackState, CasinoBlackjackObs
     def _get_reward(self, previous_state: CasinoBlackjackState, state: CasinoBlackjackState):
         return state.player_score - previous_state.player_score
 
-    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: CasinoBlackjackState) -> jnp.ndarray:
         return self.renderer.render(state)
 
