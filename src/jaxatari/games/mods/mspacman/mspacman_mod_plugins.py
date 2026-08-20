@@ -12,7 +12,7 @@ class FruitGhostBonusMod(JaxAtariInternalModPlugin):
     constants_overrides = {
         "PELLET_POINTS": 0,
         "POWER_PELLET_POINTS": 0,
-        "FRUIT_REWARDS": jnp.array([400, 800, 2000, 2800, 4000, 8000, 20000]),
+        "FRUIT_REWARDS": (400, 800, 2000, 2800, 4000, 8000, 20000),
         "EAT_GHOSTS_BASE_POINTS": 800,
     }
 
