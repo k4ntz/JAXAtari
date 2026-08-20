@@ -1323,10 +1323,22 @@ class VideoCheckersRenderer(JAXGameRenderer):
         # Align sprite colors with ALE: light squares are the background brown,
         # pieces are off-white / tan rather than pure white / orange.
         palette = self.PALETTE
+        def _to_palette_color(color):
+            color_arr = jnp.asarray(color, dtype=palette.dtype)
+            if self.config.channels == 1 and color_arr.shape[0] == 3:
+                gray = int(
+                    0.299 * int(color_arr[0])
+                    + 0.587 * int(color_arr[1])
+                    + 0.114 * int(color_arr[2])
+                )
+                return jnp.asarray([gray], dtype=palette.dtype)
+            return color_arr
+
         def _recolor(pal, src, dst):
-            src_a = jnp.asarray(src, dtype=pal.dtype)
-            dst_a = jnp.asarray(dst, dtype=pal.dtype)
+            src_a = _to_palette_color(src)
+            dst_a = _to_palette_color(dst)
             return jnp.where(jnp.all(pal == src_a, axis=-1, keepdims=True), dst_a, pal)
+
         palette = _recolor(palette, (160, 96, 64), (181, 83, 40))
         palette = _recolor(palette, (255, 255, 255), self.consts.PIECE_WHITE_COLOR)
         palette = _recolor(palette, (192, 104, 72), self.consts.PIECE_DARK_COLOR)

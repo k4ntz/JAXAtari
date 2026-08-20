@@ -36,13 +36,17 @@ def test_torch_darkness_rendering(montezuma_env):
     # Check lava (Room 31 has lava, let's switch to Room 31 for this check)
     state = load_room(jnp.array(31, dtype=jnp.int32), state, env.consts)
     state = state.replace(inventory=state.inventory.at[2].set(0))
+    # Move player away from the ladder so sprite pixels do not pollute geometry checks
+    state = state.replace(player_x=jnp.array(10, dtype=jnp.int32), player_y=jnp.array(100, dtype=jnp.int32))
     img_dark_lava = env.render(state)
     # Lava is at y=123 to 171
     assert jnp.any(img_dark_lava[123:171, :] != 0)
-    
-    # Room 31 has a ladder at x=72, y=6+47=53 to 44+47=91
-    # Ladder color is orange in Room 31 (ORANGE_LADDER_ID)
-    assert jnp.any(img_dark_lava[53:91, 72:88] != 0)
+
+    # Room 31 has a ladder at x=72, y=6+47=53 to 44+47=91 (ORANGE_LADDER_ID).
+    # Ladders are static room geometry and are hidden without a torch, like doors/gems.
+    assert jnp.all(img_dark_lava[53:91, 72:88] == 0)
+    img_light_ladder = env.render(state.replace(inventory=state.inventory.at[2].set(1)))
+    assert jnp.any(img_light_ladder[53:91, 72:88] != 0)
 
 def test_dark_room_doors_and_platforms_hidden(montezuma_env):
     env = montezuma_env

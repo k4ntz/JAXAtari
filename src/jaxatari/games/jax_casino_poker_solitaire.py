@@ -23,13 +23,10 @@ from jaxatari.spaces import Box, Dict, Discrete, Space
 class CasinoPokerSolitaireConstants(struct.PyTreeNode):
     WIDTH: int = struct.field(pytree_node=False, default=160)
     HEIGHT: int = struct.field(pytree_node=False, default=210)
-    INITIAL_PLAYER_SCORE: jnp.ndarray = struct.field(
+    INITIAL_PLAYER_SCORE: int = struct.field(pytree_node=False, default=0)
+    CARD_VALUES: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default_factory=lambda: jnp.array(0, dtype=jnp.int32),
-    )
-    CARD_VALUES: jnp.ndarray = struct.field(
-        pytree_node=False,
-        default_factory=lambda: jnp.array([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14], dtype=jnp.int32),
+        default=(2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
     )
     NUM_CARDS_IN_DECK: int = struct.field(pytree_node=False, default=52)
     """
@@ -102,7 +99,7 @@ def calculate_hand_value(hand: chex.Array, consts):
     # check for flush
     # check for straight (-> straight flush -> royal flush)
 
-    hand_values = consts.CARD_VALUES[(hand - 1) % 13]  # values without color
+    hand_values = jnp.asarray(consts.CARD_VALUES)[(hand - 1) % 13]  # values without color
     counts = jnp.array(
         [jnp.sum(hand_values == v) for v in range(0, 13)]
     )  # count occurrences of each value
@@ -292,7 +289,7 @@ class JaxCasinoPokerSolitaire(JaxEnvironment[CasinoPokerSolitaireState, CasinoPo
             key=key if key is not None else jax.random.PRNGKey(0),
             step_counter=jnp.array(0, dtype=jnp.int32),
             state_counter=jnp.array(0, dtype=jnp.int32),
-            player_score=self.consts.INITIAL_PLAYER_SCORE,
+            player_score=jnp.asarray(self.consts.INITIAL_PLAYER_SCORE, dtype=jnp.int32),
             player_round_score=jnp.array(0, dtype=jnp.int32),
             staple=deck,
             current_card=jnp.array(deck[0], dtype=jnp.int32),
