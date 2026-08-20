@@ -110,7 +110,7 @@ These are distinct from `blackjack`, the separate ALE Blackjack environment.
 | human_cannonball             | 🥈       | 0 |
 | journey_escape               | ❌       | 0 |
 | kaboom                       | ❌       | 0 |
-| keystone_kapers              | ❌       | 0 |
+| keystone_kapers              | 🥉       | 0 |
 | king_kong                    | 🥈       | 0 |
 | klax                         | 🥈       | 0 |
 | koolaid                      | ❌       | 0 |
