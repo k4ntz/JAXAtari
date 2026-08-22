@@ -618,12 +618,19 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             lan[:, 0]].max(lan_hit)
 
         # --- player death conditions (creatures can't kill during the brief
-        # post-respawn grace) ---
+        # post-respawn grace). Touch boxes per kind: spiders/bats use the
+        # 7x5 body; torches only their 3x4 flame core (playability tuning —
+        # the ROM's torch-guarded gaps are threadable by hugging their edge,
+        # measured on L5R5: deaths at ram-x 70-82, survival beside them). ---
+        kind_l = c.SPIDER_KIND[lvl]
+        tb_x = jnp.where(kind_l == 2, sp_x + 2, sp_x)
+        tb_y = jnp.where(kind_l == 2, sp_y + c.spider_body_top + 1, body_y)
+        tb_w = jnp.where(kind_l == 2, 3, c.spider_width)
+        tb_h = jnp.where(kind_l == 2, 4, c.spider_height - c.spider_body_top)
         died_spider = ((state.invuln_timer <= 0) &
                        jnp.any(sp_here & (~spider_kill) &
                                self._aabb(new_x, new_y, c.player_width, c.player_height,
-                                          sp_x, body_y, c.spider_width,
-                                          c.spider_height - c.spider_body_top)))
+                                          tb_x, tb_y, tb_w, tb_h)))
         died_blast = blast_here & self._aabb(new_x, new_y, c.player_width, c.player_height,
                                              ex, ey, ew, eh)
 
