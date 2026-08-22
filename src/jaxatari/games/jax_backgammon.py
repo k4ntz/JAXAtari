@@ -3,17 +3,19 @@ import chex
 import jax
 import jax.numpy as jnp
 from functools import partial
-from typing import NamedTuple, Tuple, Any, List, Optional
+from typing import Tuple, Any, List, Optional
 from jax import Array
 import os
 from pathlib import Path
 from enum import IntEnum
+from flax import struct
 
 # Project imports
 from jaxatari.environment import JaxEnvironment, JAXAtariAction
 from jaxatari.renderers import JAXGameRenderer
-from jaxatari.rendering import jax_rendering_utils as jr
+from jaxatari.rendering import jax_rendering_utils as render_utils
 import jaxatari.spaces as spaces
+from jaxatari.modification import AutoDerivedConstants
 
 """
 Contributors: Ayush Bansal, Mahta Mollaeian, Anh Tuan Nguyen, Abdallah Siwar  
@@ -25,54 +27,65 @@ It includes the environment class, state structures, move validation and executi
 """
 
 
-class BackgammonConstants(NamedTuple):
+def _get_default_asset_config() -> tuple:
+    """
+    Backgammon uses procedural rendering only (no disk sprites).
+    Return empty tuple since renderer is fully procedural.
+    """
+    return ()
+
+class BackgammonConstants(AutoDerivedConstants):
     """Constants for game Environment"""
-    NUM_POINTS = 24
-    NUM_CHECKERS = 15
-    BAR_INDEX = 24
-    HOME_INDEX = 25
-    MAX_DICE = 2
-    WHITE_HOME = jnp.array(range(18, 24))
-    BLACK_HOME = jnp.array(range(0, 6))
-    WHITE = 1
-    BLACK = -1
-    DOUBLING_CUBE = 1  # 1x by default; set to 2, 4, 8... if you add a doubling cube UI
+    NUM_POINTS: int = struct.field(pytree_node=False, default=24)
+    NUM_CHECKERS: int = struct.field(pytree_node=False, default=15)
+    BAR_INDEX: int = struct.field(pytree_node=False, default=24)
+    HOME_INDEX: int = struct.field(pytree_node=False, default=25)
+    MAX_DICE: int = struct.field(pytree_node=False, default=2)
+    WHITE_HOME: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(range(18, 24)))
+    BLACK_HOME: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(range(0, 6)))
+    WHITE: int = struct.field(pytree_node=False, default=1)
+    BLACK: int = struct.field(pytree_node=False, default=-1)
+    DOUBLING_CUBE: int = struct.field(pytree_node=False, default=1)  # 1x by default; set to 2, 4, 8... if you add a doubling cube UI
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
 
-class BackgammonState(NamedTuple):
+@struct.dataclass
+class BackgammonState:
     """Represents the complete state of a backgammon game."""
-    board: jnp.ndarray  # (2, 26)
-    dice: jnp.ndarray  # (4,)
+    board: chex.Array  # (2, 26)
+    dice: chex.Array  # (4,)
     current_player: int
     is_game_over: bool
-    key: jax.random.PRNGKey
-    last_move: Tuple[int, int] = (-1, -1)
-    last_dice: int = -1
-    cursor_position: int = 0
-    picked_checker_from: int = -1
-    game_phase: int = 0  # 0=WAITING_FOR_ROLL, 1=SELECTING_CHECKER, 2=MOVING_CHECKER
-    last_action: int = JAXAtariAction.NOOP  # Store last action for keyup handling
-    await_keyup: bool = False
-    last_valid_drop: int = -1  # -1 means no persistent highlight
-    picked_bar_side: int = -1  # 24 (left), 26 (right), or -1 if not from bar
+    key: chex.PRNGKey
+    last_move: Tuple[int, int]
+    last_dice: int
+    cursor_position: int
+    picked_checker_from: int
+    game_phase: int  # 0=WAITING_FOR_ROLL, 1=SELECTING_CHECKER, 2=MOVING_CHECKER
+    last_action: int  # Store last action for keyup handling
+    await_keyup: bool
+    last_valid_drop: int  # -1 means no persistent highlight
+    picked_bar_side: int  # 24 (left), 26 (right), or -1 if not from bar
 
 
 
-class BackgammonInfo(NamedTuple):
+@struct.dataclass
+class BackgammonInfo:
     """Contains auxiliary information about the environment (e.g., timing or metadata)."""
-    player: jnp.ndarray
-    dice: jnp.ndarray
+    player: chex.Array
+    dice: chex.Array
     all_rewards: chex.Array
 
 
-class BackgammonObservation(NamedTuple):
+@struct.dataclass
+class BackgammonObservation:
     """Complete backgammon observation structure for object-centric observations."""
-    board: jnp.ndarray  # (2, 26) - full board state [white_checkers, black_checkers]
-    dice: jnp.ndarray  # (4,) - available dice values
-    current_player: jnp.ndarray  # (1,) - current player (-1 for black, 1 for white)
-    is_game_over: jnp.ndarray  # (1,) - game over flag
-    bar_counts: jnp.ndarray  # (2,) - checkers on bar [white, black]
-    home_counts: jnp.ndarray  # (2,) - checkers borne off [white, black]
+    board: chex.Array  # (2, 26) - full board state [white_checkers, black_checkers]
+    dice: chex.Array  # (4,) - available dice values
+    current_player: chex.Array  # (1,) - current player (-1 for black, 1 for white)
+    is_game_over: chex.Array  # (1,) - game over flag
+    bar_counts: chex.Array  # (2,) - checkers on bar [white, black]
+    home_counts: chex.Array  # (2,) - checkers borne off [white, black]
 
 
 class GamePhase(IntEnum):
@@ -83,24 +96,29 @@ class GamePhase(IntEnum):
     TURN_COMPLETE = 3  # All moves done, waiting for space to end turn
 
 
-class InteractiveState(NamedTuple):
-    """State for interactive gameplay."""
-    game_phase: int
-    cursor_position: int  # Current cursor position (0-25)
-    picked_checker_from: int  # Where we picked up a checker from (-1 if none)
-    current_die_index: int  # Which die we're using (0-3)
-    moves_made: jnp.ndarray  # Track which dice have been used
+# Removed InteractiveState - now part of BackgammonState
 
 
 WHITE_PATH = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
 BLACK_PATH = [23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 24, 25]
 
 
-class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, BackgammonConstants]):
+class JaxBackgammon(JaxEnvironment[BackgammonState, BackgammonObservation, BackgammonInfo, BackgammonConstants]):
     """
     JAX-based backgammon environment supporting JIT compilation and vectorized operations.
     Provides functionality for state initialization, step transitions, valid move evaluation, and observation generation.
     """
+
+    # Class-level ACTION_SET for jaxatari compatibility
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
+            JAXAtariAction.LEFT,  # Move cursor left
+            JAXAtariAction.RIGHT,  # Move cursor right
+            JAXAtariAction.FIRE,  # Space (select/drop/roll)
+            JAXAtariAction.NOOP  # No-op (do nothing)
+        ],
+        dtype=jnp.int32,
+    )
 
     def __init__(self, consts: BackgammonConstants = None, reward_funcs: list[callable] = None):
         consts = consts or BackgammonConstants()
@@ -112,18 +130,10 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         # Special action indices for interactive play
         self._roll_action_index = self._action_pairs.shape[0]
 
-        self.renderer = BackgammonRenderer(self)
+        self.renderer = BackgammonRenderer(self.consts)
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
-
-        # Define action set for jaxatari compatibility
-        self.action_set = [
-            JAXAtariAction.LEFT,  # Move cursor left
-            JAXAtariAction.RIGHT,  # Move cursor right
-            JAXAtariAction.FIRE,  # Space (select/drop/roll)
-            JAXAtariAction.NOOP  # No-op (do nothing)
-        ]
 
     @partial(jax.jit, static_argnums=(0,))
     def init_state(self, key) -> BackgammonState:
@@ -191,12 +201,11 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             last_action=JAXAtariAction.NOOP,
             await_keyup=False,
             last_valid_drop=-1,
+            picked_bar_side=-1,
         )
 
-    def reset(self, key: jax.random.PRNGKey = None) -> Tuple[jnp.ndarray, BackgammonState]:
+    def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(0)) -> Tuple[BackgammonObservation, BackgammonState]:
         """Reset the environment. The initial roll happens inside init_state now."""
-        if key is None:
-            key = jax.random.PRNGKey(0)
         state = self.init_state(key)   # already rolled & selected starter
         return self._get_observation(state), state
 
@@ -313,7 +322,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
     @partial(jax.jit, static_argnums=(0,))
     def _any_move_with_single_die(self, state: BackgammonState, die_value) -> bool:
         die = jnp.asarray(die_value, dtype=jnp.int32)
-        test_state = state._replace(dice=jnp.array([die, 0, 0, 0], dtype=jnp.int32))
+        test_state = state.replace(dice=jnp.array([die, 0, 0, 0], dtype=jnp.int32))
         mask = jax.vmap(lambda mv: self._is_valid_move_basic(test_state, mv))(self._action_pairs)
         return jnp.any(mask)
 
@@ -335,7 +344,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             need_rule = has_two & can_hi & (~can_lo)
 
             def must_use_hi(_):
-                state_hi = state._replace(dice=jnp.array([hi, 0, 0, 0], dtype=jnp.int32))
+                state_hi = state.replace(dice=jnp.array([hi, 0, 0, 0], dtype=jnp.int32))
                 return self._is_valid_move_basic(state_hi, move)
 
             ok2 = jax.lax.cond(need_rule, must_use_hi, lambda __: jnp.bool_(True), operand=None)
@@ -382,7 +391,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             next_cursor = jax.lax.cond(
                 next_player == self.consts.WHITE, lambda _: jnp.int32(0), lambda _: jnp.int32(23), operand=None
             )
-            return state._replace(
+            return state.replace(
                 dice=next_dice,
                 key=new_key,
                 current_player=next_player,
@@ -594,12 +603,12 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
         used_dice = find_dice(state.dice, distance)
 
-        new_dice = JaxBackgammonEnv.update_dice(state.dice, is_valid, distance, allow_oversized)
+        new_dice = JaxBackgammon.update_dice(state.dice, is_valid, distance, allow_oversized)
 
         all_dice_used = jnp.all(new_dice == 0)
 
         def next_turn(k):
-            next_dice, new_key = JaxBackgammonEnv.roll_dice(k)
+            next_dice, new_key = JaxBackgammon.roll_dice(k)
             return next_dice, -state.current_player, new_key
 
         def same_turn(k):
@@ -611,7 +620,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         black_won = new_board[1, self.consts.HOME_INDEX] == self.consts.NUM_CHECKERS
         game_over = white_won | black_won
 
-        new_state = BackgammonState(
+        new_state = state.replace(
             board=new_board,
             dice=next_dice,
             current_player=next_player,
@@ -628,17 +637,21 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         all_rewards = self._get_all_reward(state, new_state)
         done = self._get_done(new_state)
         info = self._get_info(new_state, all_rewards)
-        return obs, new_state, reward, done, info, new_key
+        return obs, new_state, reward, done, info
 
 
-    def step(self, state: BackgammonState, action: jnp.ndarray):
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: BackgammonState, action: chex.Array) -> Tuple[BackgammonObservation, BackgammonState, float, bool, BackgammonInfo]:
         """Interactive step with JAX-safe debounce: each press triggers once; holding does nothing until NOOP arrives."""
+        
+        # Translate compact agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
 
         # Action flags (JAX bool scalars)
-        is_left  = action == JAXAtariAction.LEFT
-        is_right = action == JAXAtariAction.RIGHT
-        is_fire  = action == JAXAtariAction.FIRE
-        is_noop  = action == JAXAtariAction.NOOP
+        is_left  = atari_action == JAXAtariAction.LEFT
+        is_right = atari_action == JAXAtariAction.RIGHT
+        is_fire  = atari_action == JAXAtariAction.FIRE
+        is_noop  = atari_action == JAXAtariAction.NOOP
 
         # ---------- helpers (JAX-safe) ----------
         def handle_cursor_move(s, direction):
@@ -741,14 +754,14 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             )
 
             new_cursor = jax.lax.cond(can_move, lambda _: target_if_move, lambda _: pos, operand=None)
-            ns = s._replace(cursor_position=new_cursor)
+            ns = s.replace(cursor_position=new_cursor)
             return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
 
 
         def handle_space(s):
             def do_roll(ss):
                 dice, key = self.roll_dice(ss.key)
-                ns = ss._replace(dice=dice, key=key, game_phase=1)  # SELECTING_CHECKER
+                ns = ss.replace(dice=dice, key=key, game_phase=1)  # SELECTING_CHECKER
                 # Auto-pass if no legal move with these dice
                 ns = self._auto_pass_if_stuck(ns)
                 return self._get_observation(ns), ns, 0.0, False, self._get_info(ns)
@@ -771,7 +784,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
                 ns = jax.lax.cond(
                     has_checker,
                     # enter MOVING and remember which bar half we picked from
-                    lambda s2: s2._replace(
+                    lambda s2: s2.replace(
                         picked_checker_from=picked_from,
                         picked_bar_side=picked_bar_side,
                         game_phase=2
@@ -786,7 +799,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
                 is_valid = self.is_valid_move(ss, move)
 
                 def execute_valid_move(s2):
-                    obs, ns, reward, done, info, key = self.step_impl(s2, move, s2.key)
+                    obs, ns, reward, done, info = self.step_impl(s2, move, s2.key)
                     all_dice_used = jnp.all(ns.dice == 0)
                     next_phase = jax.lax.cond(all_dice_used, lambda _: 0, lambda _: 1, operand=None)
                     next_cursor = jax.lax.cond(
@@ -795,19 +808,18 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
                         lambda _: s2.cursor_position,
                         operand=None
                     )
-                    fs = ns._replace(
+                    fs = ns.replace(
                         picked_checker_from=-1,
                         picked_bar_side=-1,                   
                         game_phase=next_phase,
                         cursor_position=next_cursor,
-                        key=key,
                         last_valid_drop=s2.cursor_position
                     )
                     return obs, fs, reward, done, info
 
                 def invalid_drop(s2):
                     # Checker jumps back: move cursor to origin, return to SELECTING phase
-                    ns = s2._replace(
+                    ns = s2.replace(
                         picked_checker_from=-1,
                         picked_bar_side=-1,                   
                         game_phase=1,
@@ -844,7 +856,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         def handle_when_blocked(s):
             ns = jax.lax.cond(
                 is_noop,
-                lambda _: s._replace(await_keyup=False, last_action=JAXAtariAction.NOOP),
+                lambda _: s.replace(await_keyup=False, last_action=JAXAtariAction.NOOP),
                 lambda _: s,
                 operand=None
             )
@@ -856,7 +868,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
             should_arm = jnp.logical_or(jnp.logical_or(is_left, is_right), is_fire)  # arm for left/right/space
             ns2 = jax.lax.cond(
                 should_arm,
-                lambda _: ns._replace(await_keyup=True, last_action=action),
+                lambda _: ns.replace(await_keyup=True, last_action=atari_action),
                 lambda _: ns,
                 operand=None
             )
@@ -865,17 +877,7 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         return jax.lax.cond(state.await_keyup, handle_when_blocked, handle_when_free, operand=state)
 
 
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: BackgammonObservation) -> jnp.ndarray:
-        """Convert object-centric observation to flat array."""
-        return jnp.concatenate([
-            obs.board.flatten(),
-            obs.dice.flatten(),
-            obs.current_player.flatten(),
-            obs.is_game_over.flatten(),
-            obs.bar_counts.flatten(),  # 2 elements
-            obs.home_counts.flatten()
-        ]).astype(jnp.int32)
+    # Removed obs_to_flat_array - no longer needed in modern framework
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_all_reward(self, previous_state: BackgammonState, state: BackgammonState):
@@ -896,8 +898,8 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
         )
 
     def action_space(self) -> spaces.Discrete:
-        """Return the discrete action space (scalar index into move list)."""
-        return spaces.Discrete(self._action_pairs.shape[0] + 1)  # +1 for roll action
+        """Return the discrete action space (scalar index into ACTION_SET)."""
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
         """Return the observation space for the environment."""
@@ -1003,9 +1005,19 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, jnp.ndarray, dict, Backga
 
 
 class BackgammonRenderer(JAXGameRenderer):
-    def __init__(self, env=None):
-        super().__init__()
-        self.env = env
+    def __init__(self, consts: BackgammonConstants = None, config: render_utils.RendererConfig = None):
+        self.consts = consts or BackgammonConstants()
+        super().__init__(self.consts)
+        
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(210, 160),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
         # Initialize all rendering parameters
         self.frame_height = 210
         self.frame_width = 160
@@ -1323,13 +1335,13 @@ class BackgammonRenderer(JAXGameRenderer):
 
         # player-colored background, contrasting pips
         die_bg = jax.lax.cond(
-            current_player == self.env.consts.WHITE,
+            current_player == self.consts.WHITE,
             lambda _: self.color_white_checker,   # white
             lambda _: self.color_black_checker,   # red
             operand=None
         )
         pip = jax.lax.cond(
-            current_player == self.env.consts.WHITE,
+            current_player == self.consts.WHITE,
             lambda _: jnp.array([0, 0, 0], dtype=jnp.uint8),       # black pips on white
             lambda _: jnp.array([255, 255, 255], dtype=jnp.uint8), # white pips on red
             operand=None
@@ -1400,12 +1412,12 @@ class BackgammonRenderer(JAXGameRenderer):
                 # When MOVING, highlight the origin. If origin is BAR (24), use the remembered bar half (24 or 26).
                 def moving_origin(_):
                     return jax.lax.cond(
-                        state.picked_checker_from == jnp.int32(self.env.consts.BAR_INDEX),
+                        state.picked_checker_from == jnp.int32(self.consts.BAR_INDEX),
                         # If we picked from bar, choose left(24) or right(26) based on picked_bar_side.
                         lambda __: jax.lax.select(
                             state.picked_bar_side == jnp.int32(26),
                             jnp.int32(26),
-                            jnp.int32(self.env.consts.BAR_INDEX)
+                            jnp.int32(self.consts.BAR_INDEX)
                         ),
                         # Otherwise just highlight the original triangle index.
                         lambda __: jnp.int32(state.picked_checker_from),
@@ -1459,7 +1471,7 @@ class BackgammonRenderer(JAXGameRenderer):
                     hi < jnp.int32(24),
                     on_triangle,
                     lambda fr2: jax.lax.cond(
-                        hi == jnp.int32(self.env.consts.BAR_INDEX), on_bar_left,
+                        hi == jnp.int32(self.consts.BAR_INDEX), on_bar_left,
                         lambda fr3: jax.lax.cond(hi == jnp.int32(26), on_bar_right, noop, operand=fr3),
                         operand=fr2
                     ),
@@ -1473,7 +1485,11 @@ class BackgammonRenderer(JAXGameRenderer):
 
         # Draw checkers (with one removed if picked)
         def draw_point_checkers(point_idx, fr):
-            player_idx = self.env.get_player_index(state.current_player)
+            # Need to access consts through self since we're in a closure
+            def get_player_idx(player):
+                return jax.lax.cond(player == self.consts.WHITE, lambda _: 0, lambda _: 1, operand=None)
+            
+            player_idx = get_player_idx(state.current_player)
             white_count = state.board[0, point_idx]
             black_count = state.board[1, point_idx]
 
@@ -1497,12 +1513,12 @@ class BackgammonRenderer(JAXGameRenderer):
         frame = jax.lax.fori_loop(0, 24, draw_point_checkers, frame)
 
         # Bar and home stacks
-        player_idx = self.env.get_player_index(state.current_player)
-        picked_from_bar = (state.game_phase == 2) & (state.picked_checker_from == self.env.consts.BAR_INDEX)
+        player_idx = self.get_player_index(state.current_player)
+        picked_from_bar = (state.game_phase == 2) & (state.picked_checker_from == self.consts.BAR_INDEX)
 
         # subtract 1 from the current player's bar if we picked the checker from BAR
-        white_bar = state.board[0, self.env.consts.BAR_INDEX] - jnp.where(picked_from_bar & (player_idx == 0), 1, 0)
-        black_bar = state.board[1, self.env.consts.BAR_INDEX] - jnp.where(picked_from_bar & (player_idx == 1), 1, 0)
+        white_bar = state.board[0, self.consts.BAR_INDEX] - jnp.where(picked_from_bar & (player_idx == 0), 1, 0)
+        black_bar = state.board[1, self.consts.BAR_INDEX] - jnp.where(picked_from_bar & (player_idx == 1), 1, 0)
 
         white_bar = jnp.maximum(white_bar, 0)
         black_bar = jnp.maximum(black_bar, 0)
@@ -1510,7 +1526,7 @@ class BackgammonRenderer(JAXGameRenderer):
         frame = self._draw_bar_checkers(frame, white_bar, black_bar)
 
         def draw_floating_checker(f):
-            player_idx = self.env.get_player_index(state.current_player)
+            player_idx = self.get_player_index(state.current_player)
             color = jax.lax.cond(
                 player_idx == 0,
                 lambda _: self.color_white_checker,
@@ -1519,8 +1535,8 @@ class BackgammonRenderer(JAXGameRenderer):
             )
 
             pos = state.cursor_position
-            is_home      = (pos == self.env.consts.HOME_INDEX)                 # 25
-            is_bar_left  = (pos == jnp.int32(self.env.consts.BAR_INDEX))       # 24
+            is_home      = (pos == self.consts.HOME_INDEX)                 # 25
+            is_bar_left  = (pos == jnp.int32(self.consts.BAR_INDEX))       # 24
             is_bar_right = (pos == jnp.int32(26))                               # split-bar right half (cursor-only)
 
             # Choose edge triangle for HOME anchor:
@@ -1609,3 +1625,7 @@ class BackgammonRenderer(JAXGameRenderer):
 
         frame = self._draw_dice(frame, state.dice, state.current_player)
         return frame
+
+    @partial(jax.jit, static_argnums=(0,))
+    def get_player_index(self, player: int) -> int:
+        return jax.lax.cond(player == self.consts.WHITE, lambda _: 0, lambda _: 1, operand=None)

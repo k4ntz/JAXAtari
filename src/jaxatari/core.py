@@ -80,6 +80,9 @@ GAME_MODULES = {
     "videopinball": "jaxatari.games.jax_videopinball",
     "wordzapper": "jaxatari.games.jax_wordzapper",
     "wizardofwor": "jaxatari.games.jax_wizardofwor",
+    "assault": "jaxatari.games.jax_assault",
+    "backgammon": "jaxatari.games.jax_backgammon",
+    "othello": "jaxatari.games.jax_othello",
     "mspacman": "jaxatari.games.jax_mspacman",
     "montezumarevenge": "jaxatari.games.jax_montezumarevenge",
     "pacman": "jaxatari.games.jax_pacman",
@@ -117,6 +120,8 @@ MOD_MODULES = {
     "alien": "jaxatari.games.mods.alien_mods.AlienEnvMod",
     "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod",
     "pacman": "jaxatari.games.mods.pacman_mods.PacmanEnvMod",
+    "othello": "jaxatari.games.mods.othello_mods.OthelloEnvMod",
+    "wizardofwor": "jaxatari.games.mods.wizardofwor_mods.WizardOfWorEnvMod",
 }
 
 

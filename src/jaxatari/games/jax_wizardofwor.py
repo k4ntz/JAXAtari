@@ -5,6 +5,7 @@ from typing import Tuple, NamedTuple
 import jax
 import jax.lax
 import jax.numpy as jnp
+import numpy as np
 import chex
 from flax import struct
 
@@ -12,6 +13,7 @@ import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
+from jaxatari.modification import AutoDerivedConstants
 
 def _get_default_asset_config() -> tuple:
     return (
@@ -89,13 +91,14 @@ class EntityPosition(NamedTuple):
     y: int
     width: int
     height: int
-    direction: int  # Richtung aus UP, DOWN, LEFT, RIGHT
+    direction: int  # NONE, UP, DOWN, LEFT, RIGHT
 
 
-class WizardOfWorConstants(struct.PyTreeNode):
+class WizardOfWorConstants(AutoDerivedConstants):
     # Window size
     WINDOW_WIDTH: int = struct.field(pytree_node=False, default=160)
     WINDOW_HEIGHT: int = struct.field(pytree_node=False, default=210)
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
     # 4 tuples for each direction
     BULLET_ORIGIN_UP: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
@@ -103,16 +106,26 @@ class WizardOfWorConstants(struct.PyTreeNode):
     BULLET_ORIGIN_LEFT: Tuple[int, int] = struct.field(pytree_node=False, default=(1, 4))
     BULLET_ORIGIN_RIGHT: Tuple[int, int] = struct.field(pytree_node=False, default=(7, 4))
 
-    # Enemy Speed Up Timers
+    # Enemy speed-up thresholds (frames spent alive). Tier timings themselves are approximate.
     SPEED_TIMER_1: int = struct.field(pytree_node=False, default=1500)
     SPEED_TIMER_2: int = struct.field(pytree_node=False, default=3000)
     SPEED_TIMER_3: int = struct.field(pytree_node=False, default=4500)
     SPEED_TIMER_MAX: int = struct.field(pytree_node=False, default=6000)
-    SPEED_TIMER_BASE_MOD: int = struct.field(pytree_node=False, default=20)
-    SPEED_TIMER_1_MOD: int = struct.field(pytree_node=False, default=16)
-    SPEED_TIMER_2_MOD: int = struct.field(pytree_node=False, default=8)
-    SPEED_TIMER_3_MOD: int = struct.field(pytree_node=False, default=4)
-    SPEED_TIMER_MAX_MOD: int = struct.field(pytree_node=False, default=2)
+    # Move every N frames. Tuned so early-game Burwor screen speed matches ALE
+    # (~2 TIA px every 24 frames); later tiers keep the same relative ratios.
+    SPEED_TIMER_BASE_MOD: int = struct.field(pytree_node=False, default=14)
+    SPEED_TIMER_1_MOD: int = struct.field(pytree_node=False, default=11)
+    SPEED_TIMER_2_MOD: int = struct.field(pytree_node=False, default=6)
+    SPEED_TIMER_3_MOD: int = struct.field(pytree_node=False, default=3)
+    SPEED_TIMER_MAX_MOD: int = struct.field(pytree_node=False, default=1)
+
+    # ALE stays frozen ~210 NTSC frames after reset before entities appear / move.
+    STARTUP_FREEZE_FRAMES: int = struct.field(pytree_node=False, default=210)
+    # ALE: player stays out of the maze until a non-NOOP action is pressed.
+    REQUIRE_SPAWN_INPUT: bool = struct.field(pytree_node=False, default=True)
+    # Player / bullet step cadence (ALE: player every 2 frames, bullets every frame).
+    PLAYER_MOVE_MODULO: int = struct.field(pytree_node=False, default=2)
+    BULLET_MOVE_MODULO: int = struct.field(pytree_node=False, default=1)
 
     # Enemy invisibility timers
     MAX_LAST_SEEN: int = struct.field(pytree_node=False, default=200)
@@ -133,6 +146,20 @@ class WizardOfWorConstants(struct.PyTreeNode):
     ENEMY_THORWOR: int = 3
     ENEMY_WORLUK: int = 4
     ENEMY_WIZARD: int = 5
+
+    # Fixed level-1 Burwor spawns measured from ALE (identical across seeds / resets).
+    # Tuples are (x, y, direction) in logical board coords.
+    ENEMY_START_POSITIONS: Tuple = struct.field(
+        pytree_node=False,
+        default=(
+            (0, 0, DOWN),
+            (50, 0, RIGHT),
+            (80, 0, RIGHT),
+            (90, 0, RIGHT),
+            (0, 20, DOWN),
+            (80, 30, LEFT),
+        ),
+    )
 
     # POINTS
     POINTS_BURWOR: int = 100
@@ -204,6 +231,11 @@ class WizardOfWorConstants(struct.PyTreeNode):
     BOARD_SIZE: Tuple[int, int] = (110, 60)  # Size of the game board in tiles
     
     # Rendering
+    # Sprites/logic use a half-height authoring space (TILE 8x8, board ~86x128).
+    # ALE is ~2x taller and ~152/128 wider; apply that only at render time.
+    RENDER_SCALE_Y: int = struct.field(pytree_node=False, default=2)
+    RENDER_SCALE_X_NUM: int = struct.field(pytree_node=False, default=19)  # 19/16 = 1.1875 = 152/128
+    RENDER_SCALE_X_DEN: int = struct.field(pytree_node=False, default=16)
     DEATH_ANIMATION_STEPS = [10, 20]
     PLAYER_SIZE: Tuple[int, int] = (8, 8)
     ENEMY_SIZE: Tuple[int, int] = (8, 8)
@@ -212,16 +244,24 @@ class WizardOfWorConstants(struct.PyTreeNode):
     RADAR_BLIP_SIZE: Tuple[int, int] = (2, 2)
     WALL_THICKNESS: int = 2
     RADAR_BLIP_GAP: int = 0
-    BOARD_POSITION: Tuple[int, int] = (16, 64)
-    GAME_AREA_OFFSET: Tuple[int, int] = (
-        BOARD_POSITION[0] + WALL_THICKNESS + TILE_SIZE[0], BOARD_POSITION[1] + WALL_THICKNESS) # 
-    LIVES_OFFSET: Tuple[int, int] = (100, 60)  # Offset for lives display
-    LIVES_GAP: int = 5  # Gap between lives icons
-    RADAR_OFFSET: Tuple[int, int] = (BOARD_POSITION[0] + 53, BOARD_POSITION[1] + 72)  # Offset for radar display
+    # ALE-aligned top-left of the (scaled) board artwork
+    BOARD_POSITION: Tuple[int, int] = (4, 20)
+    # Logical local offsets (unscaled), then converted with RENDER_SCALE_* below.
+    # game-area local = (WALL + TILE_X, WALL) = (10, 2) → scaled (12, 4)
+    GAME_AREA_OFFSET: Tuple[int, int] = (4 + 12, 20 + 4)  # (16, 24)
+    LIVES_OFFSET: Tuple[int, int] = (100, 60)  # logical game-area coords (scaled in renderer)
+    LIVES_GAP: int = 5  # logical gap; scaled in renderer
+    # Radar is drawn procedurally at ALE size (bg radar region is wrong aspect after non-uniform scale).
+    # ALE radar box ≈ (56,162)-(107,193) with 4px borders; blip grid 11×6 at 4×4 px.
+    RADAR_BOX_POSITION: Tuple[int, int] = (56, 162)
+    RADAR_BOX_SIZE: Tuple[int, int] = (52, 32)
+    RADAR_BORDER_THICKNESS: int = 4
+    RADAR_BLIP_RENDER_SIZE: int = 4
+    RADAR_OFFSET: Tuple[int, int] = (60, 166)  # interior top-left for blip (0,0)
     SCORE_DIGIT_SPACING: int = 8
-    SCORE_OFFSET: Tuple[int, int] = (BOARD_POSITION[0] + 80, BOARD_POSITION[1] - 16)  # Offset for score display
+    # Score sits just above the board in ALE (~y=3), not BOARD_Y - 16*scale
+    SCORE_OFFSET: Tuple[int, int] = (108, 3)
 
-    @partial(jax.jit, static_argnums=(0,))
     def _get_wall_position(self, x: int, y: int, horizontal: bool) -> EntityPosition:
         """Returns the position of a wall based on its coordinates.
         :param x: The x-coordinate of the wall.
@@ -276,10 +316,10 @@ class WizardOfWorConstants(struct.PyTreeNode):
 
 @struct.dataclass
 class WizardOfWorObservation:
-    player: EntityPosition
-    enemies: chex.Array
-    bullet: EntityPosition
-    enemy_bullet: EntityPosition
+    player: ObjectObservation
+    enemies: ObjectObservation
+    bullet: ObjectObservation
+    enemy_bullet: ObjectObservation
     score: chex.Array
     lives: chex.Array
 
@@ -308,49 +348,9 @@ class WizardOfWorState:
     teleporter: bool  # Flag to indicate if the teleporter is active.
 
 
-def update_state(state: WizardOfWorState, player: EntityPosition = None, enemies: chex.Array = None,
-                 gameboard: int = None, bullet: EntityPosition = None, enemy_bullet: EntityPosition = None,
-                 score: chex.Array = None, idx_enemy_bullet_shot_by: int = None,
-                 lives: int = None, doubled: bool = None, frame_counter: int = None, rng_key: chex.PRNGKey = None,
-                 level: int = None, game_over: bool = None, teleporter: bool = None,
-                 player_death_animation: int = None) -> WizardOfWorState:
-    """
-    Updates the state of the game. Only this method should be used to mutate the State object.
-    Parameters not passed will be taken from the current state.
-    :param state: The current state of the game.
-    :param player: New position of the player character.
-    :param enemies: New positions of the enemies.
-    :param gameboard: New gameboard.
-    :param bullet: New position of the shot.
-    :param enemy_bullet: New position of the enemy bullet.
-    :param idx_enemy_bullet_shot_by: Index of the enemy that shot the bullet.
-    :param score: New score.
-    :param lives: New number of lives.
-    :param doubled: Flag indicating whether the player has the double score power-up.
-    :param frame_counter: Counter for animations, e.g. player walking animation.
-    :param rng_key: Random key for JAX operations.
-    :param level: The current level of the game.
-    :param game_over: Flag indicating whether the game is over.
-    :param teleporter: Flag indicating whether the teleporter is active.
-    :return: A new state of the game with the updated values.
-    """
-    return WizardOfWorState(
-        player=player if player is not None else state.player,
-        player_death_animation=player_death_animation if player_death_animation is not None else state.player_death_animation,
-        enemies=enemies if enemies is not None else state.enemies,
-        gameboard=gameboard if gameboard is not None else state.gameboard,
-        bullet=bullet if bullet is not None else state.bullet,
-        enemy_bullet=enemy_bullet if enemy_bullet is not None else state.enemy_bullet,
-        idx_enemy_bullet_shot_by=idx_enemy_bullet_shot_by if idx_enemy_bullet_shot_by is not None else state.idx_enemy_bullet_shot_by,
-        score=score if score is not None else state.score,
-        lives=lives if lives is not None else state.lives,
-        doubled=doubled if doubled is not None else state.doubled,
-        frame_counter=frame_counter if frame_counter is not None else state.frame_counter,
-        rng_key=rng_key if rng_key is not None else state.rng_key,
-        level=level if level is not None else state.level,
-        game_over=game_over if game_over is not None else state.game_over,
-        teleporter=teleporter if teleporter is not None else state.teleporter
-    )
+def update_state(state: WizardOfWorState, **updates) -> WizardOfWorState:
+    """Thin wrapper around state.replace that skips None values (legacy call sites)."""
+    return state.replace(**{k: v for k, v in updates.items() if v is not None})
 
 
 class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, WizardOfWorInfo, WizardOfWorConstants]):
@@ -369,43 +369,57 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key=None) -> Tuple[WizardOfWorObservation, WizardOfWorState]:
         """Reset the game to the initial state."""
-        state = WizardOfWorState(
-            player=EntityPosition(
-                x=self.consts.PLAYER_SPAWN_POSITION[0],
-                y=self.consts.PLAYER_SPAWN_POSITION[1],
+        if key is None:
+            key = jax.random.PRNGKey(0)
+        enemy_key, state_key = jax.random.split(key)
+
+        # ALE default: waiting for a spawn press. auto_spawn mod sets REQUIRE_SPAWN_INPUT=False.
+        spawn = self.consts.PLAYER_SPAWN_POSITION
+        if self.consts.REQUIRE_SPAWN_INPUT:
+            player = EntityPosition(
+                x=-100, y=-100,
                 width=self.consts.PLAYER_SIZE[0],
                 height=self.consts.PLAYER_SIZE[1],
-                direction=self.consts.PLAYER_SPAWN_POSITION[2]
-            ),
-            player_death_animation=self.consts.DEATH_ANIMATION_STEPS[1] + 1,
-            enemies=jnp.zeros(
-                (self.consts.MAX_ENEMIES, 7),  # [x, y, direction, type, death_animation,timer,last_seen]
-                dtype=jnp.int32
-            ),
+                direction=self.consts.NONE,
+            )
+            death_anim = self.consts.DEATH_ANIMATION_STEPS[1] + 1
+        else:
+            player = EntityPosition(
+                x=spawn[0], y=spawn[1],
+                width=self.consts.PLAYER_SIZE[0],
+                height=self.consts.PLAYER_SIZE[1],
+                direction=spawn[2],
+            )
+            death_anim = 0
+
+        state = WizardOfWorState(
+            player=player,
+            player_death_animation=death_anim,
+            enemies=self._get_start_enemies(enemy_key),
             gameboard=1,
             bullet=EntityPosition(
-                x=-100,
-                y=-100,
+                x=-100, y=-100,
                 width=self.consts.BULLET_SIZE[0],
                 height=self.consts.BULLET_SIZE[1],
-                direction=self.consts.NONE
+                direction=self.consts.NONE,
             ),
             enemy_bullet=EntityPosition(
-                x=-100,
-                y=-100,
+                x=-100, y=-100,
                 width=self.consts.BULLET_SIZE[0],
                 height=self.consts.BULLET_SIZE[1],
-                direction=self.consts.NONE
+                direction=self.consts.NONE,
             ),
             score=jnp.array(0),
-            lives=self.consts.MAX_LIVES + 1,
+            # 3 lives including the active one once spawned (indicator shows lives while waiting,
+            # lives-1 while alive).
+            lives=self.consts.MAX_LIVES,
             doubled=False,
             frame_counter=0,
-            rng_key=jax.random.PRNGKey(666),  # Initialisiere den RNG
-            level=0,
+            rng_key=state_key,
+            level=1,
             game_over=False,
             teleporter=False,
-            idx_enemy_bullet_shot_by=-1  # No enemy has shot a bullet yet
+            idx_enemy_bullet_shot_by=-1,
         )
         return self._get_observation(state), state
 
@@ -422,21 +436,26 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
         previous_state = state
         new_state = update_state(
             state=state,
-            frame_counter=(state.frame_counter + 1) % 360,
+            frame_counter=state.frame_counter + 1,
             rng_key=jax.random.fold_in(state.rng_key, atari_action),
-            # Teleporter is true if the frame_counter is below 180
-            teleporter=(state.frame_counter < 180)
+            # Teleporter duty cycle over a 360-frame window
+            teleporter=((state.frame_counter % 360) < 180)
         )
-        new_state = self._step_level_change(state=new_state)
-        new_state = self._step_player_movement(state=new_state, action=atari_action)
-        new_state = self._step_bullet_movement(state=new_state)
-        new_state = self._step_enemy_movement(state=new_state)
-        new_state = self._step_collision_detection(state=new_state)
-        new_state = self._step_enemy_level_progression(state=new_state)
+
+        def _play_frame(s):
+            s = self._step_level_change(state=s)
+            s = self._step_player_movement(state=s, action=atari_action)
+            s = self._step_bullet_movement(state=s)
+            s = self._step_enemy_movement(state=s)
+            s = self._step_collision_detection(state=s)
+            s = self._step_enemy_level_progression(state=s)
+            return jax.lax.cond(state.game_over, lambda: state, lambda: s)
+
+        # ALE: no entity motion for the first ~210 NTSC frames after reset.
         new_state = jax.lax.cond(
-            state.game_over,
-            lambda: state,
-            lambda: new_state
+            state.frame_counter < self.consts.STARTUP_FREEZE_FRAMES,
+            lambda: new_state,
+            lambda: _play_frame(new_state),
         )
         done = self._get_done(state=new_state)
         env_reward = self._get_reward(previous_state=previous_state, state=new_state)
@@ -482,68 +501,59 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
         """Calculates the reward based on the previous and current state."""
         return state.score - previous_state.score
 
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: WizardOfWorObservation) -> jnp.ndarray:
-        return jnp.concatenate([
-            jnp.array(obs.player.x).flatten(),
-            jnp.array(obs.player.y).flatten(),
-            jnp.array(obs.player.width).flatten(),
-            jnp.array(obs.player.height).flatten(),
-            jnp.array(obs.player.direction).flatten(),
-            obs.enemies.flatten(),
-            jnp.array(obs.bullet.x).flatten(),
-            jnp.array(obs.bullet.y).flatten(),
-            jnp.array(obs.bullet.width).flatten(),
-            jnp.array(obs.bullet.height).flatten(),
-            jnp.array(obs.bullet.direction).flatten(),
-            jnp.array(obs.enemy_bullet.x).flatten(),
-            jnp.array(obs.enemy_bullet.y).flatten(),
-            jnp.array(obs.enemy_bullet.width).flatten(),
-            jnp.array(obs.enemy_bullet.height).flatten(),
-            jnp.array(obs.enemy_bullet.direction).flatten(),
-            obs.score.flatten(),
-            obs.lives.flatten()
-        ]).astype(jnp.int32)
-
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space of the game."""
+        screen = (self.consts.WINDOW_HEIGHT, self.consts.WINDOW_WIDTH)
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=-100, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=-100, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=-100, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=-100, high=210, shape=(), dtype=jnp.int32),
-                "direction": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),  # NONE, UP, DOWN, LEFT, RIGHT
-            }),
-            "enemies": spaces.Box(low=-100, high=999999, shape=(6, 7), dtype=jnp.int32),
-            "bullet": spaces.Dict({
-                "x": spaces.Box(low=-100, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=-100, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=-100, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=-100, high=210, shape=(), dtype=jnp.int32),
-                "direction": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),  # NONE, UP, DOWN, LEFT, RIGHT
-            }),
-            "enemy_bullet": spaces.Dict({
-                "x": spaces.Box(low=-100, high=160, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=-100, high=210, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=-100, high=160, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=-100, high=210, shape=(), dtype=jnp.int32),
-                "direction": spaces.Box(low=-1, high=4, shape=(), dtype=jnp.int32),  # NONE, UP, DOWN, LEFT, RIGHT
-            }),
+            "player": spaces.get_object_space(n=None, screen_size=screen, orientation_range=(-1.0, 4.0), xy_low=-100),
+            "enemies": spaces.get_object_space(n=self.consts.MAX_ENEMIES, screen_size=screen, orientation_range=(-1.0, 4.0), xy_low=-100),
+            "bullet": spaces.get_object_space(n=None, screen_size=screen, orientation_range=(-1.0, 4.0), xy_low=-100),
+            "enemy_bullet": spaces.get_object_space(n=None, screen_size=screen, orientation_range=(-1.0, 4.0), xy_low=-100),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=-1, high=10, shape=(), dtype=jnp.int32),
         })
 
+    @staticmethod
+    def _entity_to_object(entity: EntityPosition, active: jnp.ndarray = None) -> ObjectObservation:
+        x = jnp.asarray(entity.x, dtype=jnp.int32)
+        y = jnp.asarray(entity.y, dtype=jnp.int32)
+        w = jnp.asarray(entity.width, dtype=jnp.int32)
+        h = jnp.asarray(entity.height, dtype=jnp.int32)
+        orientation = jnp.asarray(entity.direction, dtype=jnp.float32)
+        if active is None:
+            active = jnp.asarray(entity.direction != 0, dtype=jnp.int32)
+        return ObjectObservation.create(
+            x=x, y=y, width=w, height=h, active=active, orientation=orientation,
+        )
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: WizardOfWorState) -> WizardOfWorObservation:
         """Converts the game state into an observation."""
+        enemies = state.enemies
+        enemy_active = (enemies[:, 3] != 0).astype(jnp.int32)
+        enemy_obs = ObjectObservation.create(
+            x=enemies[:, 0].astype(jnp.int32),
+            y=enemies[:, 1].astype(jnp.int32),
+            width=jnp.full((self.consts.MAX_ENEMIES,), self.consts.ENEMY_SIZE[0], dtype=jnp.int32),
+            height=jnp.full((self.consts.MAX_ENEMIES,), self.consts.ENEMY_SIZE[1], dtype=jnp.int32),
+            active=enemy_active,
+            visual_id=enemies[:, 3].astype(jnp.int32),
+            state=enemies[:, 4].astype(jnp.int32),
+            orientation=enemies[:, 2].astype(jnp.float32),
+        )
         return WizardOfWorObservation(
-            player=state.player,
-            enemies=state.enemies,
-            bullet=state.bullet,
-            enemy_bullet=state.enemy_bullet,
+            player=self._entity_to_object(
+                state.player,
+                active=jnp.asarray(
+                    (state.player_death_animation == 0) & (state.player.direction != self.consts.NONE),
+                    dtype=jnp.int32,
+                ),
+            ),
+            enemies=enemy_obs,
+            bullet=self._entity_to_object(state.bullet),
+            enemy_bullet=self._entity_to_object(state.enemy_bullet),
             score=state.score,
-            lives=jnp.array(state.lives, dtype=jnp.int32)
+            lives=jnp.array(state.lives, dtype=jnp.int32),
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -559,18 +569,17 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_start_enemies(self, rng_key) -> chex.Array:
-        """Generates the starting enemies for the game."""
+        """Return fixed ALE level-1 Burwor spawns.
 
-        def _generate_single_enemy(rng_key) -> chex.Array:
-            x = jax.random.randint(rng_key, shape=(), minval=0, maxval=11) * (
-                    self.consts.TILE_SIZE[0] + self.consts.WALL_THICKNESS)
-            y = jax.random.randint(rng_key, shape=(), minval=0, maxval=6) * (
-                    self.consts.TILE_SIZE[1] + self.consts.WALL_THICKNESS)
-            direction = jax.random.choice(rng_key, jnp.array(
-                [self.consts.UP, self.consts.DOWN, self.consts.LEFT, self.consts.RIGHT]))
-            return jnp.array([x, y, direction, self.consts.ENEMY_BURWOR, 0, 0, 0], dtype=jnp.int32)
-
-        return jax.vmap(_generate_single_enemy)(jax.random.split(rng_key, self.consts.MAX_ENEMIES))
+        ``rng_key`` is unused (kept so call sites stay compatible); ALE does not
+        randomize these positions.
+        """
+        del rng_key
+        positions = jnp.asarray(self.consts.ENEMY_START_POSITIONS, dtype=jnp.int32)  # (N, 3)
+        n = self.consts.MAX_ENEMIES
+        types = jnp.full((n,), self.consts.ENEMY_BURWOR, dtype=jnp.int32)
+        zeros = jnp.zeros((n, 3), dtype=jnp.int32)  # death_animation, timer, last_seen
+        return jnp.concatenate([positions[:n], types[:, None], zeros], axis=1)
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_bullet_origin_for_direction(self, direction: int) -> Tuple[int, int]:
@@ -771,7 +780,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
                         height=self.consts.BULLET_SIZE[1],
                         direction=self.consts.NONE
                     ),
-                    lives=jnp.minimum(state.lives + 1, self.consts.MAX_LIVES + 1),
+                    lives=jnp.minimum(state.lives + 1, self.consts.MAX_LIVES),
                     enemies=self._get_start_enemies(rng_key),
                     idx_enemy_bullet_shot_by=-1,
                     player_death_animation=21,
@@ -803,7 +812,6 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
                     height=self.consts.PLAYER_SIZE[1],
                     direction=spawn_pos[2]
                 ),
-                lives=state.lives - 1,  # Reduce lives on respawn
                 player_death_animation=0,
             )
 
@@ -1017,7 +1025,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
 
         def handle_spawn():
             return jax.lax.cond(
-                (state.lives - 1) <= 0,
+                state.lives <= 0,
                 lambda: handle_game_over(),
                 lambda: jax.lax.cond(
                     _is_spawn_action(action),
@@ -1033,7 +1041,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
                 state.player_death_animation > 0,
                 lambda: handle_death(),
                 lambda: jax.lax.cond(
-                    (state.frame_counter % 4 == 0),
+                    (state.frame_counter % self.consts.PLAYER_MOVE_MODULO == 0),
                     lambda: handle_alive(),
                     lambda: state,  # No movement if not the right frame
                 )
@@ -1095,7 +1103,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
         new_bullet = move_bullet(state.bullet)
         new_enemy_bullet = move_bullet(state.enemy_bullet)
         return jax.lax.cond(
-            state.frame_counter % 2 == 0,
+            state.frame_counter % self.consts.BULLET_MOVE_MODULO == 0,
             lambda: update_state(
                 state=state,
                 bullet=new_bullet,
@@ -1657,7 +1665,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
         player_enemy_collision = jnp.any(player_enemy_collisions)
 
         def handle_player_enemy_collision(state: WizardOfWorState) -> WizardOfWorState:
-            # If player collides with an enemy, set death_animation to 1
+            # If player collides with an enemy, set death_animation to 1 and spend a life.
             new_player = EntityPosition(
                 x=state.player.x,
                 y=state.player.y,
@@ -1668,7 +1676,8 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
             return update_state(
                 state=state,
                 player=new_player,
-                player_death_animation=1
+                player_death_animation=1,
+                lives=state.lives - 1,
             )
 
         # Handle player vs enemy collision
@@ -1722,7 +1731,8 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
                 state=state,
                 player=new_player,
                 player_death_animation=1,
-                enemy_bullet=new_bullet
+                enemy_bullet=new_bullet,
+                lives=state.lives - 1,
             )
 
         # Handle player vs enemy bullet collision
@@ -1835,11 +1845,10 @@ class WizardOfWorRenderer(JAXGameRenderer):
 
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "wizardofwor")
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}"
-        sprite_path = os.path.join(sprite_path, "sprites", "wizardofwor")
-
-        final_asset_config = list(_get_default_asset_config())
+        sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites", "wizardofwor")
+        final_asset_config = self._asset_config_with_ale_colors(
+            list(self.consts.ASSET_CONFIG), sprite_path
+        )
 
         (
             self.PALETTE,
@@ -1848,6 +1857,27 @@ class WizardOfWorRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+
+        # Upscale authored (half-height) assets to ALE pixel scale.
+        # Score digits stay 1:1 — ALE keeps them single-line (~7px), not double-height.
+        # Radar blips use uniform 2× (square cells); non-uniform bg scale warps the radar box.
+        self.BACKGROUND = self._scale_mask(self.BACKGROUND)
+        scaled_masks = {}
+        for name, mask in self.SHAPE_MASKS.items():
+            if name == "digits":
+                scaled_masks[name] = mask
+            elif name == "radar_blip":
+                scaled_masks[name] = self._scale_mask_uniform(mask, factor=2)
+            else:
+                scaled_masks[name] = self._scale_mask(mask)
+        self.SHAPE_MASKS = scaled_masks
+        self.FLIP_OFFSETS = {
+            name: (
+                jnp.asarray(off).astype(jnp.int32) if name in ("digits", "radar_blip")
+                else jnp.stack([self._sx(off[0]), self._sy(off[1])]).astype(jnp.int32)
+            )
+            for name, off in self.FLIP_OFFSETS.items()
+        }
 
         bg_h, bg_w = self.BACKGROUND.shape
         board_x, board_y = self.consts.BOARD_POSITION
@@ -1860,7 +1890,137 @@ class WizardOfWorRenderer(JAXGameRenderer):
             board_y:board_y + bg_h, board_x:board_x + bg_w
         ].set(jnp.asarray(self.BACKGROUND))
 
+        # Non-uniform scale turns the authored radar into a near-square; clear it and
+        # redraw at ALE proportions in _render_radar / baked into BACKGROUND below.
+        self.BACKGROUND = self._clear_and_bake_radar_box(self.BACKGROUND)
+
         self._cache_sprite_references()
+
+    def _sx(self, x):
+        """Scale a logical X offset/size to ALE render pixels."""
+        x = jnp.asarray(x)
+        return jnp.round(x * self.consts.RENDER_SCALE_X_NUM / self.consts.RENDER_SCALE_X_DEN).astype(jnp.int32)
+
+    def _sy(self, y):
+        """Scale a logical Y offset/size to ALE render pixels."""
+        return (jnp.asarray(y) * self.consts.RENDER_SCALE_Y).astype(jnp.int32)
+
+    def _scale_mask_uniform(self, mask: jnp.ndarray, factor: int = 2) -> jnp.ndarray:
+        """Nearest-neighbor upsample equally on H and W (for radar blips)."""
+        mask = jnp.asarray(mask)
+        if mask.ndim == 2:
+            return jnp.repeat(jnp.repeat(mask, factor, axis=0), factor, axis=1)
+        if mask.ndim == 3:
+            return jnp.repeat(jnp.repeat(mask, factor, axis=1), factor, axis=2)
+        return mask
+
+    def _scale_mask(self, mask: jnp.ndarray) -> jnp.ndarray:
+        """Nearest-neighbor resize of an ID mask to render scale. Supports (H,W) or (N,H,W)."""
+        mask = jnp.asarray(mask)
+        sy, sx_num, sx_den = (
+            self.consts.RENDER_SCALE_Y,
+            self.consts.RENDER_SCALE_X_NUM,
+            self.consts.RENDER_SCALE_X_DEN,
+        )
+        if mask.ndim == 2:
+            h, w = int(mask.shape[0]), int(mask.shape[1])
+            new_h, new_w = h * sy, int(round(w * sx_num / sx_den))
+            if (new_h, new_w) == (h, w):
+                return mask
+            return jax.image.resize(mask.astype(jnp.float32), (new_h, new_w), method="nearest").astype(mask.dtype)
+        if mask.ndim == 3:
+            n, h, w = int(mask.shape[0]), int(mask.shape[1]), int(mask.shape[2])
+            new_h, new_w = h * sy, int(round(w * sx_num / sx_den))
+            if (new_h, new_w) == (h, w):
+                return mask
+            resized = [
+                jax.image.resize(mask[i].astype(jnp.float32), (new_h, new_w), method="nearest").astype(mask.dtype)
+                for i in range(n)
+            ]
+            return jnp.stack(resized)
+        return mask
+
+    def _clear_and_bake_radar_box(self, background: jnp.ndarray) -> jnp.ndarray:
+        """Replace the warped bg radar with an ALE-sized rectangular frame."""
+        # Clear the scaled-in radar region (logical box ~51..76 x 72..85 on the 86x128 bg).
+        board_x, board_y = self.consts.BOARD_POSITION
+        old_x0 = int(board_x + round(51 * self.consts.RENDER_SCALE_X_NUM / self.consts.RENDER_SCALE_X_DEN))
+        old_y0 = int(board_y + 72 * self.consts.RENDER_SCALE_Y)
+        old_x1 = int(board_x + round(77 * self.consts.RENDER_SCALE_X_NUM / self.consts.RENDER_SCALE_X_DEN))
+        old_y1 = int(board_y + 86 * self.consts.RENDER_SCALE_Y)
+        bg = background.at[old_y0:old_y1, old_x0:old_x1].set(self.jr.TRANSPARENT_ID)
+
+        # Wall blue ID from the horizontal wall sprite (first non-transparent pixel).
+        wall = jnp.asarray(self.SHAPE_MASKS["wall_horizontal"])
+        flat = wall.reshape(-1)
+        wall_id = flat[jnp.argmax(flat != self.jr.TRANSPARENT_ID)]
+
+        rx, ry = self.consts.RADAR_BOX_POSITION
+        rw, rh = self.consts.RADAR_BOX_SIZE
+        t = self.consts.RADAR_BORDER_THICKNESS
+        # Ensure the destination box is empty before drawing the frame.
+        bg = bg.at[ry:ry + rh, rx:rx + rw].set(self.jr.TRANSPARENT_ID)
+        # Top / bottom edges
+        bg = bg.at[ry:ry + t, rx:rx + rw].set(wall_id)
+        bg = bg.at[ry + rh - t:ry + rh, rx:rx + rw].set(wall_id)
+        # Left / right edges
+        bg = bg.at[ry:ry + rh, rx:rx + t].set(wall_id)
+        bg = bg.at[ry:ry + rh, rx + rw - t:rx + rw].set(wall_id)
+        return bg
+
+    @staticmethod
+    def _remap_rgba_colors(rgba: jnp.ndarray) -> jnp.ndarray:
+        """Map authored sprite colors onto measured ALE NTSC RGB values."""
+        # (source) -> (ALE target)
+        remaps = (
+            ((104, 116, 208), (84, 92, 214)),    # walls / background
+            ((144, 164, 236), (117, 128, 240)),  # burwor (+ radar/bullet)
+            ((188, 140, 76), (195, 144, 61)),    # player / garwor
+            ((220, 180, 104), (223, 183, 85)),   # score digits / worluk
+        )
+        out = np.array(rgba, copy=True)
+        alpha = out[..., 3] > 0 if out.shape[-1] == 4 else np.ones(out.shape[:-1], dtype=bool)
+        for src, dst in remaps:
+            match = alpha & (out[..., 0] == src[0]) & (out[..., 1] == src[1]) & (out[..., 2] == src[2])
+            out[..., 0] = np.where(match, dst[0], out[..., 0])
+            out[..., 1] = np.where(match, dst[1], out[..., 1])
+            out[..., 2] = np.where(match, dst[2], out[..., 2])
+        return jnp.asarray(out)
+
+    def _asset_config_with_ale_colors(self, asset_config: list, sprite_path: str) -> list:
+        """Load sprite files and rewrite RGB to ALE-matched values before palette build."""
+        remapped = []
+        for asset in asset_config:
+            asset = dict(asset)
+            atype = asset.get("type")
+            if atype == "background" and "file" in asset:
+                path = os.path.join(sprite_path, asset["file"])
+                rgba = self.jr.loadFrame(path)
+                asset.pop("file", None)
+                asset["data"] = self._remap_rgba_colors(rgba)
+            elif atype == "single" and "file" in asset:
+                path = os.path.join(sprite_path, asset["file"])
+                rgba = self.jr.loadFrame(path)
+                asset.pop("file", None)
+                asset["data"] = self._remap_rgba_colors(rgba)
+            elif atype == "group" and "files" in asset:
+                frames = [
+                    self._remap_rgba_colors(self.jr.loadFrame(os.path.join(sprite_path, f)))
+                    for f in asset["files"]
+                ]
+                asset.pop("files", None)
+                asset["data"] = frames
+            elif atype == "digits" and "pattern" in asset:
+                frames = []
+                for i in range(10):
+                    path = os.path.join(sprite_path, asset["pattern"].format(i))
+                    frames.append(self._remap_rgba_colors(self.jr.loadFrame(path)))
+                # digits loader expects stacked data via pattern OR we pass padded stack
+                padded, _ = self.jr.pad_to_match(frames)
+                asset.pop("pattern", None)
+                asset["data"] = jnp.stack(padded)
+            remapped.append(asset)
+        return remapped
 
     def _cache_sprite_references(self):
         # Character stacks: each (7, H, W) — frames 0-3 walk, 4-6 death
@@ -1903,11 +2063,39 @@ class WizardOfWorRenderer(JAXGameRenderer):
     def render(self, state: WizardOfWorState):
         raster = self.jr.create_object_raster(self.BACKGROUND)
         raster = self._render_gameboard(raster, state)
-        raster = self._render_radar(raster, state)
-        raster = self._render_player(raster, state)
-        raster = self._render_enemies(raster, state)
-        raster = self._render_player_bullet(raster, state)
-        raster = self._render_enemy_bullet(raster, state)
+        # During ALE startup freeze the maze is empty (no player / enemies / blips).
+        in_startup = state.frame_counter < self.consts.STARTUP_FREEZE_FRAMES
+        waiting_to_spawn = state.player_death_animation > self.consts.DEATH_ANIMATION_STEPS[1]
+        raster = jax.lax.cond(
+            in_startup,
+            lambda r: r,
+            lambda r: self._render_radar(r, state),
+            raster,
+        )
+        raster = jax.lax.cond(
+            in_startup | waiting_to_spawn,
+            lambda r: r,
+            lambda r: self._render_player(r, state),
+            raster,
+        )
+        raster = jax.lax.cond(
+            in_startup,
+            lambda r: r,
+            lambda r: self._render_enemies(r, state),
+            raster,
+        )
+        raster = jax.lax.cond(
+            in_startup | waiting_to_spawn,
+            lambda r: r,
+            lambda r: self._render_player_bullet(r, state),
+            raster,
+        )
+        raster = jax.lax.cond(
+            in_startup,
+            lambda r: r,
+            lambda r: self._render_enemy_bullet(r, state),
+            raster,
+        )
         raster = self._render_score(raster, state)
         raster = self._render_lives(raster, state)
         return self.jr.render_from_palette(raster, self.PALETTE)
@@ -1918,10 +2106,10 @@ class WizardOfWorRenderer(JAXGameRenderer):
             walls_horizontal, walls_vertical = self.consts.get_walls_for_gameboard(gameboard=state.gameboard)
 
             def _render_horizontal_wall(raster, x, y, is_wall):
-                wall_x = self.consts.GAME_AREA_OFFSET[0] + (
+                wall_x = self.consts.GAME_AREA_OFFSET[0] + self._sx(
                     x * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[0]))
-                wall_y = self.consts.GAME_AREA_OFFSET[1] + self.consts.TILE_SIZE[1] + (
-                    y * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[1]))
+                wall_y = self.consts.GAME_AREA_OFFSET[1] + self._sy(
+                    self.consts.TILE_SIZE[1] + y * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[1]))
                 return jax.lax.cond(
                     is_wall > 0,
                     lambda _: self.jr.render_at(raster, wall_x, wall_y, self.WALL_H_MASK),
@@ -1931,9 +2119,9 @@ class WizardOfWorRenderer(JAXGameRenderer):
                 )
 
             def _render_vertical_wall(raster, x, y, is_wall):
-                wall_x = self.consts.GAME_AREA_OFFSET[0] + self.consts.TILE_SIZE[0] + (
-                    x * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[0]))
-                wall_y = self.consts.GAME_AREA_OFFSET[1] + (
+                wall_x = self.consts.GAME_AREA_OFFSET[0] + self._sx(
+                    self.consts.TILE_SIZE[0] + x * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[0]))
+                wall_y = self.consts.GAME_AREA_OFFSET[1] + self._sy(
                     y * (self.consts.WALL_THICKNESS + self.consts.TILE_SIZE[1]))
                 return jax.lax.cond(
                     is_wall > 0,
@@ -1984,14 +2172,14 @@ class WizardOfWorRenderer(JAXGameRenderer):
             def _render_both_teleporter_walls(raster):
                 raster = self.jr.render_at(
                     raster,
-                    self.consts.GAME_AREA_OFFSET[0] + self.consts.TELEPORTER_LEFT_POSITION[0],
-                    self.consts.GAME_AREA_OFFSET[1] + self.consts.TELEPORTER_LEFT_POSITION[1],
+                    self.consts.GAME_AREA_OFFSET[0] + self._sx(self.consts.TELEPORTER_LEFT_POSITION[0]),
+                    self.consts.GAME_AREA_OFFSET[1] + self._sy(self.consts.TELEPORTER_LEFT_POSITION[1]),
                     self.WALL_V_MASK
                 )
                 raster = self.jr.render_at(
                     raster,
-                    self.consts.GAME_AREA_OFFSET[0] + self.consts.TELEPORTER_RIGHT_POSITION[0],
-                    self.consts.GAME_AREA_OFFSET[1] + self.consts.TELEPORTER_RIGHT_POSITION[1],
+                    self.consts.GAME_AREA_OFFSET[0] + self._sx(self.consts.TELEPORTER_RIGHT_POSITION[0]),
+                    self.consts.GAME_AREA_OFFSET[1] + self._sy(self.consts.TELEPORTER_RIGHT_POSITION[1]),
                     self.WALL_V_MASK
                 )
                 return raster
@@ -2010,6 +2198,8 @@ class WizardOfWorRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_radar(self, raster, state: WizardOfWorState):
+        blip_pitch = self.consts.RADAR_BLIP_RENDER_SIZE
+
         def body(carry, enemy):
             r = carry
             x, y, direction, enemy_type, death_animation, timer, last_seen = enemy
@@ -2025,8 +2215,8 @@ class WizardOfWorRenderer(JAXGameRenderer):
                 lambda: jnp.floor(y / (self.consts.TILE_SIZE[1] + self.consts.WALL_THICKNESS))
             )
 
-            blip_x = (self.consts.RADAR_OFFSET[0] + radar_x * self.consts.RADAR_BLIP_SIZE[0]).astype(jnp.int32)
-            blip_y = (self.consts.RADAR_OFFSET[1] + radar_y * self.consts.RADAR_BLIP_SIZE[1]).astype(jnp.int32)
+            blip_x = (self.consts.RADAR_OFFSET[0] + radar_x * blip_pitch).astype(jnp.int32)
+            blip_y = (self.consts.RADAR_OFFSET[1] + radar_y * blip_pitch).astype(jnp.int32)
             blip_mask = self.RADAR_BLIP_STACK[enemy_type]
 
             r = jax.lax.cond(
@@ -2044,8 +2234,8 @@ class WizardOfWorRenderer(JAXGameRenderer):
     def _render_character(self, raster, sprite_stack, flip_offset, entity: EntityPosition,
                           death_animation, is_worluk=False):
         direction = entity.direction
-        render_x = self.consts.GAME_AREA_OFFSET[0] + entity.x
-        render_y = self.consts.GAME_AREA_OFFSET[1] + entity.y
+        render_x = self.consts.GAME_AREA_OFFSET[0] + self._sx(entity.x)
+        render_y = self.consts.GAME_AREA_OFFSET[1] + self._sy(entity.y)
 
         def render_death_animation(raster):
             frame_index = jax.lax.cond(
@@ -2156,8 +2346,8 @@ class WizardOfWorRenderer(JAXGameRenderer):
             state.bullet.x >= 0,
             lambda _: self.jr.render_at_clipped(
                 raster,
-                self.consts.GAME_AREA_OFFSET[0] + state.bullet.x,
-                self.consts.GAME_AREA_OFFSET[1] + state.bullet.y,
+                self.consts.GAME_AREA_OFFSET[0] + self._sx(state.bullet.x),
+                self.consts.GAME_AREA_OFFSET[1] + self._sy(state.bullet.y),
                 self.BULLET_MASK
             ),
             lambda _: raster,
@@ -2177,8 +2367,8 @@ class WizardOfWorRenderer(JAXGameRenderer):
             state.enemy_bullet.x >= 0,
             lambda r: self.jr.render_at(
                 r,
-                self.consts.GAME_AREA_OFFSET[0] + state.enemy_bullet.x,
-                self.consts.GAME_AREA_OFFSET[1] + state.enemy_bullet.y,
+                self.consts.GAME_AREA_OFFSET[0] + self._sx(state.enemy_bullet.x),
+                self.consts.GAME_AREA_OFFSET[1] + self._sy(state.enemy_bullet.y),
                 bullet_mask
             ),
             lambda r: r,
@@ -2202,10 +2392,15 @@ class WizardOfWorRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_lives(self, raster, state: WizardOfWorState):
+        # While waiting to spawn, all remaining lives sit in the bay. Once alive, the
+        # controlled worrior is one of those lives, so the bay shows lives - 1.
+        waiting = state.player_death_animation > self.consts.DEATH_ANIMATION_STEPS[1]
+        icons = jax.lax.select(waiting, state.lives, state.lives - 1)
+
         def render_life(carry, i):
             r = carry
             r = jax.lax.cond(
-                (state.lives - 1) > i,
+                icons > i,
                 lambda r: self._render_character(
                     raster=r,
                     sprite_stack=self.PLAYER_STACK,

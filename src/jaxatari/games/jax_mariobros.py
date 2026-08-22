@@ -2,13 +2,16 @@
 
 import os
 from functools import partial
-from typing import NamedTuple, Tuple
+from typing import Tuple
 import jax
 import jax.numpy as jnp
 import chex
 from jax import lax, debug
+from flax import struct
 import jaxatari.spaces as spaces
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
+from jaxatari.modification import AutoDerivedConstants
+from jaxatari.rendering import jax_rendering_utils as render_utils
 
 # --- Screen params---
 SCREEN_WIDTH = 160
@@ -16,24 +19,25 @@ SCREEN_HEIGHT = 210
 WINDOW_SCALE = 3
 
 # --- Physik params ---
-MOVE_SPEED = 0.5
-ASCEND_VY = -1.0  # ↑ 2 px / frame
-DESCEND_VY = 1.0  # ↓ 2 px / frame
-ASCEND_FRAMES = 21 * 2  # 42 px tall jump (21 × 2)
+# Speeds are per NTSC frame (lockstep with ALE frameskip=1). Do not halve for "60 FPS".
+MOVE_SPEED = 1.0
+ASCEND_VY = -1.0  # ↑ 1 px / frame while ascending
+DESCEND_VY = 1.0  # ↓ 1 px / frame while falling
+ASCEND_FRAMES = 18  # ALE jump peak ~18 px
 # Enemy horizontal speed in pixels per frame (1 px every 8 frames = 0.125 px/frame)
 ENEMY_MOVE_SPEED = 0.125
 
 # -------- Movement params ----------------------------------
+# Same 7/11 cadence as ALE Mario walk (1 px on '1' frames).
 movement_pattern = jnp.array([1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0], dtype=jnp.float32)
 pat_len = movement_pattern.shape[0]
-# -------- Break params ----------------------------------
-BRAKE_DURATION = 10 * 2# in Frames
-BRAKE_TOTAL_DISTANCE = 7.0 * 2# in Pixels
-BRAKE_SPEED = jnp.array(BRAKE_TOTAL_DISTANCE / BRAKE_DURATION, dtype=jnp.float32)  # ≈ 0.7 px/frame
+# Coast after key release: keep the gait pattern going for one full cycle (~7 px).
+COAST_FRAMES = int(pat_len)
 
 # --- Player params ---------------
+# Initial positions from OCAtari MarioBros RAM objects at reset.
 PLAYER_SIZE = (9, 21)  # w, h
-PLAYER_START_X, PLAYER_START_Y = 15, 140
+PLAYER_START_X, PLAYER_START_Y = 29, 149
 PLAYER_RESPWAN_XY = jnp.array([78, 36], dtype=jnp.float32)
 PALETTE = jnp.array([
     [0,   0,   0],    # 0: transparent
@@ -41,7 +45,7 @@ PALETTE = jnp.array([
     [252, 188, 116],  # 2: skin
     [181, 83,  40],   # 3: brown (mario overalls)
     [134, 106, 38],   # 4: greenish-brown (mario shoes)
-    [152, 163, 74],   # 5: enemy olive
+    [136, 146, 62],   # 5: enemy olive (ALE shellcreeper)
     [227, 151, 89],   # 6: fireball orange
 
     [181, 83,  40],   # 7: orange   (same RGB as idx 3, used by reward1–4 top band)
@@ -535,96 +539,89 @@ REWARD8 = jnp.array([  # width 9 (no padding)
 
 
 # --- Enemies params ---
-ENEMY_SIZE = (8, 8)  # w, h
-ENEMY_HOLD    = jnp.int32(16) # number of frames to hold each enemy walking frame
+# ALE Pest / shellcreeper is 8×10 (wh from OCAtari); olive body with a sparse "head".
+ENEMY_SIZE = (8, 10)  # w, h
+ENEMY_HOLD = jnp.int32(16)  # frames to hold each walking frame
 
-ENEMY_WALK_RIGHT_1= jnp.array([
-    [0,0,0,0,0,0,5,0],
-    [0,0,0,0,0,5,0,5],
-    [0,0,0,0,0,5,5,0],
-    [0,0,0,0,0,0,5,5],
-    [0,0,5,5,0,0,5,0],
-    [0,5,5,5,5,0,5,0],
-    [5,5,5,5,5,5,5,0],
-    [5,5,5,5,5,5,0,0],
-    [0,5,0,0,5,0,0,0],
-    [0,5,0,0,5,0,0,0],
+# Extracted from ALE MarioBros shellcreeper (facing right). Left frames are mirrors.
+ENEMY_WALK_RIGHT_1 = jnp.array([
+    [0, 0, 0, 0, 0, 0, 5, 0],
+    [0, 0, 0, 0, 0, 5, 0, 5],
+    [0, 0, 0, 0, 0, 5, 5, 0],
+    [0, 0, 0, 0, 0, 0, 5, 5],
+    [0, 0, 5, 5, 0, 0, 5, 0],
+    [0, 5, 5, 5, 5, 0, 5, 0],
+    [5, 5, 5, 5, 5, 5, 5, 0],
+    [5, 5, 5, 5, 5, 5, 0, 0],
+    [0, 5, 0, 0, 5, 0, 0, 0],
+    [0, 5, 0, 0, 5, 0, 0, 0],
 ], dtype=jnp.uint8)
 
 ENEMY_WALK_RIGHT_2 = jnp.array([
-    [0,0,0,0,0,0,5,0],
-    [0,0,0,0,0,5,0,5],
-    [0,0,5,5,0,5,5,5],
-    [0,5,5,5,5,0,5,0],
-    [5,5,5,5,5,5,0,0],
-    [5,5,5,5,5,5,0,0],
-    [0,5,5,5,5,0,0,0],
-    [0,5,0,0,5,0,0,0],
-    [5,0,0,5,0,0,0,0],
+    [0, 0, 0, 0, 0, 0, 5, 0],
+    [0, 0, 0, 0, 0, 5, 0, 5],
+    [0, 0, 5, 5, 0, 5, 5, 5],
+    [0, 5, 5, 5, 5, 0, 5, 0],
+    [5, 5, 5, 5, 5, 5, 0, 0],
+    [5, 5, 5, 5, 5, 5, 0, 0],
+    [0, 5, 5, 5, 5, 0, 0, 0],
+    [0, 5, 0, 0, 5, 0, 0, 0],
+    [5, 0, 0, 5, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0],
 ], dtype=jnp.uint8)
 
-ENEMY_WALK_LEFT_1 = jnp.array([
-    [0,5,0,0,0,0,0,0],
-    [5,0,5,0,0,0,0,0],
-    [0, 5, 5, 0, 0, 0, 0, 0],
-    [5, 5, 0, 0, 0, 0, 0, 0],
-    [0, 5, 0, 0, 5, 5, 0, 0],
-    [0, 5, 0, 5, 5, 5, 5, 0],
-    [0, 5, 5, 5, 5, 5, 5, 5],
-    [0, 0, 5, 5, 5, 5, 5, 5],
-    [0, 0, 0, 5, 0, 0, 5, 0],
-    [0, 0, 0, 5, 0, 0, 5, 0]], jnp.uint8)
-
-ENEMY_WALK_LEFT_2 = jnp.array([
-    [0, 5, 0, 0, 0, 0, 0, 0],
-       [5, 0, 5, 0, 0, 0, 0, 0],
-       [5, 5, 5, 0, 5, 5, 0, 0],
-       [0, 5, 0, 5, 5, 5, 5, 0],
-       [0, 0, 5, 5, 5, 5, 5, 5],
-       [0, 0, 5, 5, 5, 5, 5, 5],
-       [0, 0, 0, 5, 5, 5, 5, 0],
-       [0, 0, 0, 5, 0, 0, 5, 0],
-       [0, 0, 0, 0, 5, 0, 0, 5]], jnp.uint8)
+ENEMY_WALK_LEFT_1 = ENEMY_WALK_RIGHT_1[:, ::-1]
+ENEMY_WALK_LEFT_2 = ENEMY_WALK_RIGHT_2[:, ::-1]
 
 ENEMY_STUNNED_1 = jnp.array([
-    [0,0,0,0,5,0,0,0],
-    [0,0,0,0,5,0,0,0],
-    [0,5,0,0,5,0,0,0],
-    [0,5,0,0,5,0,0,0],
-    [0,5,0,5,5,0,5,5],
-    [0,5,5,5,5,5,5,0],
-    [5,5,5,5,0,5,0,5],
-    [5,5,5,5,5,0,5,0],
-    [5,5,5,5,5,0,0,0],
-    [0,5,5,5,0,0,0,0],
+    [0, 0, 0, 0, 5, 0, 0, 0],
+    [0, 0, 0, 0, 5, 0, 0, 0],
+    [0, 5, 0, 0, 5, 0, 0, 0],
+    [0, 5, 0, 0, 5, 0, 0, 0],
+    [0, 5, 0, 5, 5, 0, 5, 5],
+    [0, 5, 5, 5, 5, 5, 5, 0],
+    [5, 5, 5, 5, 0, 5, 0, 5],
+    [5, 5, 5, 5, 5, 0, 5, 0],
+    [5, 5, 5, 5, 5, 0, 0, 0],
+    [0, 5, 5, 5, 0, 0, 0, 0],
 ], dtype=jnp.uint8)
 
 ENEMY_STUNNED_2 = jnp.array([
-    [0,0,5,5,5,0,0,0],
-    [0,0,5,0,5,0,0,0],
-    [0,0,0,5,0,0,0,0],
-    [5,0,0,5,0,0,5,0],
-    [0,0,5,5,5,0,0,0],
-    [0,5,5,5,5,5,0,0],
-    [0,5,5,5,5,5,0,0],
-    [0,5,5,5,5,5,0,0],
-    [0,0,5,5,5,0,0,0],
-    [0,0,5,0,5,0,0,0],
-    [0,0,5,0,5,0,0,0],
-    [0,5,5,0,5,5,0,0],
+    [0, 0, 5, 5, 5, 0, 0, 0],
+    [0, 0, 5, 0, 5, 0, 0, 0],
+    [0, 0, 0, 5, 0, 0, 0, 0],
+    [5, 0, 0, 5, 0, 0, 5, 0],
+    [0, 0, 5, 5, 5, 0, 0, 0],
+    [0, 5, 5, 5, 5, 5, 0, 0],
+    [0, 5, 5, 5, 5, 5, 0, 0],
+    [0, 5, 5, 5, 5, 5, 0, 0],
+    [0, 0, 5, 5, 5, 0, 0, 0],
+    [0, 0, 5, 0, 5, 0, 0, 0],
+    [0, 0, 5, 0, 5, 0, 0, 0],
+    [0, 5, 5, 0, 5, 5, 0, 0],
 ], dtype=jnp.uint8)
 
 
 # --- Fireball params ---
+# Start pattern: frames to wait before each of the first N wind-up pixels (ALE ~18,16,14,13).
+# Move pattern: frames between cruise pixels (mean ~1.2 → mostly 1s with occasional 2).
+# Lanes observed in ALE: 108 / 68 / 30 only (never ground level).
 FIREBALL_SIZE = (9, 14)
-FIREBALL_MOVEMENT_Start = jnp.array([32, 32, 32, 24], dtype=jnp.float32)
-FIREBALL_MOVEMENT = jnp.array([4, 6, 6], dtype=jnp.float32)
+FIREBALL_MOVEMENT_Start = jnp.array([18.0, 16.0, 14.0, 13.0], dtype=jnp.float32)
+FIREBALL_MOVEMENT = jnp.array([1.0, 1.0, 1.0, 1.0, 2.0], dtype=jnp.float32)
 FIREBALL_RESTART = 120
-FIREBALL_Y = jnp.array([175 - 28, 135 - 28, 95 - 28, 57 - 28])
-FIREBALL_X = jnp.array([4, 142])
-FIREBALL_INIT_XY = jnp.array([FIREBALL_X[1], FIREBALL_Y[1]])
-FIREBALL_DIR = jnp.array([1, -1])
-FIREBALL_HOLD = jnp.int32(4)  # change to taste
+# ALE early lanes are 108 / 68. Top lane y=30 appears only very late and should not be used.
+FIREBALL_Y = jnp.array([108.0, 68.0], dtype=jnp.float32)
+FIREBALL_X = jnp.array([1.0, 148.0], dtype=jnp.float32)
+FIREBALL_INIT_XY = jnp.array([FIREBALL_X[1], FIREBALL_Y[0]], dtype=jnp.float32)
+FIREBALL_DIR = jnp.array([1, -1], dtype=jnp.int32)  # left spawn → +1, right spawn → -1
+FIREBALL_HOLD = jnp.int32(4)
+FIREBALL_RIGHT_MAX = 153  # ALE reaches x=153 before wrapping / lane change
+# state: 0=start(spawn), 1=cruise, 2=start(bounce→teleport), 3=inactive
+FIREBALL_STATE_START = 0
+FIREBALL_STATE_MOVE = 1
+FIREBALL_STATE_BOUNCE = 2
+FIREBALL_STATE_INACTIVE = 3
 
 
 # --- Reward params ---
@@ -660,6 +657,23 @@ REWARD_COLOR = jnp.array([128, 0, 128], dtype=jnp.uint8)
 PLATFORM_COLOR = jnp.array([228, 111, 111], dtype=jnp.uint8)
 GROUND_COLOR = jnp.array([181, 83, 40], dtype=jnp.uint8)
 POW_COLOR = jnp.array([201, 164, 74], dtype=jnp.uint8)
+PIPE_COLOR = jnp.array([50, 132, 50], dtype=jnp.uint8)  # ALE corner pipe green
+
+# Corner pipes (ALE geometry). Each entry is one axis-aligned rect: x, y, w, h.
+# Top pipes are L-shaped (cap + stem + ledge onto the top platforms).
+PIPE_RECTS = jnp.array([
+    # Top-left
+    [4, 25, 12, 13],   # cap
+    [4, 38, 8, 6],     # stem
+    [0, 44, 12, 13],   # ledge onto platform
+    # Top-right (mirrored)
+    [144, 25, 12, 13],
+    [148, 38, 8, 6],
+    [148, 44, 12, 13],
+    # Bottom-left / bottom-right floor pipes
+    [0, 162, 12, 12],
+    [148, 162, 12, 12],
+], dtype=jnp.int32)
 
 # --- Platform params---
 PLATFORMS = jnp.array([
@@ -703,7 +717,8 @@ DIGIT_SEGMENTS = jnp.array([
 ], dtype=jnp.int32)
 
 
-class Fireball(NamedTuple):
+@struct.dataclass
+class Fireball:
     pos: chex.Array
     start_pat: chex.Array
     move_pat: chex.Array
@@ -713,7 +728,8 @@ class Fireball(NamedTuple):
     rnd: chex.Array
     ani: chex.Array
 
-class Enemy(NamedTuple):
+@struct.dataclass
+class Enemy:
     enemy_pos: chex.Array  # shape (N,2): x/y positions
     enemy_vel: chex.Array  # shape (N,2): x/y velocities
     enemy_platform_idx: chex.Array  # shape (N,): index of current platform the enemy is on
@@ -724,7 +740,8 @@ class Enemy(NamedTuple):
     enemy_init_positions: chex.Array  # shape (N,2): prototype spawn positions for enemies (use [0]=right, [1]=left)
     enemy_status: chex.Array  # shape (N,)
 
-class Reward(NamedTuple):
+@struct.dataclass
+class Reward:
     reward_pos: chex.Array  # shape (N,2): x/y positions
     reward_vel: chex.Array  # shape (N,2): x/y velocities
     reward_platform_idx: chex.Array  # shape (N,): index of current platform
@@ -733,8 +750,9 @@ class Reward(NamedTuple):
     reward_active: chex.Array  # shape (N,): 1=active, 0=inactive
     reward_init_positions: chex.Array  # shape (N,2): prototype spawn positions
 
-class GameState(NamedTuple):  # Enemy movement + global game fields
-    enemy: chex.Array
+@struct.dataclass
+class GameState:  # Enemy movement + global game fields
+    enemy: Enemy
     pow_block_counter: chex.Array
     score: chex.Array
     fireball: Fireball
@@ -745,7 +763,8 @@ class GameState(NamedTuple):  # Enemy movement + global game fields
     coin_phase_timer: chex.Array   # frames remaining
     coins_collected: chex.Array  # which coins have been collected (boolean array)
 
-class PlayerState(NamedTuple):  # Player movement
+@struct.dataclass
+class PlayerState:  # Player movement
     pos: chex.Array
     vel: chex.Array
     on_ground: chex.Array
@@ -767,22 +786,23 @@ class PlayerState(NamedTuple):  # Player movement
 
 
 
-class MarioBrosState(NamedTuple):
+@struct.dataclass
+class MarioBrosState:
     player: PlayerState
     game: GameState
     lives: chex.Array
+    key: chex.PRNGKey
 
 
-class MarioBrosObservation(NamedTuple):  # Copied from jax_kangaroo.py ln.166-168
-    player_pos: chex.Array
+@struct.dataclass
+class MarioBrosObservation:
+    player: ObjectObservation
+    enemies: ObjectObservation
+    fireball: ObjectObservation
+    rewards: ObjectObservation
     player_on_ground: chex.Array
     player_brake_frames_left: chex.Array
     player_lives: chex.Array
-    enemy_active: chex.Array
-    enemy_pos: chex.Array
-    enemy_state: chex.Array
-    fireball_pos: chex.Array
-    fireball_dir: chex.Array
     pow_block_counter: chex.Array
     pow_block_pos: chex.Array
     plattforms_pos: chex.Array
@@ -790,13 +810,20 @@ class MarioBrosObservation(NamedTuple):  # Copied from jax_kangaroo.py ln.166-16
     coin_active: chex.Array
 
 
-class MarioBrosInfo(NamedTuple):  # Copied from jax_kangaroo.py ln.186-187
+@struct.dataclass
+class MarioBrosInfo:
     score: chex.Array
     all_rewards: chex.Array
 
-class MarioBrosConstants(NamedTuple):
-    SCREEN_WIDTH: int = 160
-    SCREEN_HEIGHT: int = 210
+def _get_default_asset_config() -> tuple:
+    # Inline/procedural sprites live in module-level arrays; no disk assets yet.
+    return ()
+
+
+class MarioBrosConstants(AutoDerivedConstants):
+    SCREEN_WIDTH: int = struct.field(pytree_node=False, default=160)
+    SCREEN_HEIGHT: int = struct.field(pytree_node=False, default=210)
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
 
 def check_collision(pos: jnp.ndarray, vel: jnp.ndarray, platforms: jnp.ndarray, pow_block: jnp.ndarray, pow_block_counter:int):
@@ -919,100 +946,168 @@ def check_if_on_ground(player_pos, platforms):
     
     return on_ground
 
-def fireball_new_start_pos(rng):
+def fireball_new_start_pos(rng, current_y):
+    """Pick a lane/side spawn, biased away from current_y."""
+    n_lanes = FIREBALL_Y.shape[0]
     rng, subkey1 = jax.random.split(rng)
-    height = jax.random.randint(subkey1, (), 0, 4)
+    height = jax.random.randint(subkey1, (), 0, n_lanes)
+    same = FIREBALL_Y[height] == current_y
+    rng, subkey1b = jax.random.split(rng)
+    height_alt = jax.random.randint(subkey1b, (), 0, n_lanes)
+    height = jnp.where(same, height_alt, height)
 
     rng, subkey2 = jax.random.split(rng)
     side = jax.random.randint(subkey2, (), 0, 2)
-    return jnp.array([FIREBALL_X[side], FIREBALL_Y[height]]), FIREBALL_DIR[side], rng
+    return (
+        jnp.array([FIREBALL_X[side], FIREBALL_Y[height]], dtype=jnp.float32),
+        FIREBALL_DIR[side],
+        rng,
+    )
 
-def fireball_step(fb:Fireball):
-    def start(f: Fireball):
-        arr = f.start_pat
-        first_nonzero_index = jnp.argmax(arr != 0)
-        arr = arr.at[first_nonzero_index].set(arr[first_nonzero_index] - 1)
+
+def _fireball_advance_pattern(arr, reset_template):
+    """Countdown first nonzero slot; on step, mark moved. Reset template when fully spent."""
+    idx = jnp.argmax(arr != 0)
+    has = jnp.any(arr != 0)
+    arr2 = arr.at[idx].set(jnp.where(has, arr[idx] - 1, arr[idx]))
+    stepped = has & (arr2[idx] == 0)
+    exhausted = stepped & jnp.all(arr2 == 0)
+    arr3 = jnp.where(exhausted, reset_template, arr2)
+    return arr3, stepped, exhausted
+
+
+def fireball_step(fb: Fireball):
+    def _apply_step(f, stepped):
         new_x = f.pos[0] + f.dir
-        last_is_zero = arr[first_nonzero_index] == 0
-    
-        new_pos= jnp.array([jnp.where(arr[first_nonzero_index] == 0, new_x, f.pos[0]), f.pos[1]]) 
-        new_state= jnp.where(last_is_zero, 1, 0)
-        new_start_pat= jnp.where(last_is_zero, FIREBALL_MOVEMENT_Start, arr)
-        return Fireball(
-            pos= new_pos,
-            start_pat= new_start_pat,
-            move_pat= f.move_pat,
-            count= f.count,
-            state= new_state,
-            dir= f.dir,
-            rnd= f.rnd,
-            ani= f.ani
+        return jnp.array(
+            [jnp.where(stepped, new_x, f.pos[0]), f.pos[1]], dtype=jnp.float32
         )
-        
+
+    def start_spawn(f: Fireball):
+        # Wind-up after spawn/teleport → then cruise on this lane.
+        arr, stepped, exhausted = _fireball_advance_pattern(
+            f.start_pat, FIREBALL_MOVEMENT_Start
+        )
+        new_pos = _apply_step(f, stepped)
+        new_state = jnp.where(exhausted, jnp.int32(FIREBALL_STATE_MOVE), jnp.int32(FIREBALL_STATE_START))
+        return Fireball(
+            pos=new_pos,
+            start_pat=arr,
+            move_pat=f.move_pat,
+            count=f.count,
+            state=new_state,
+            dir=f.dir,
+            rnd=f.rnd,
+            ani=jnp.where(stepped, (f.ani % 3) + 1, f.ani),
+        )
+
     def move(f: Fireball):
-        arr = f.move_pat
-        first_nonzero_index = jnp.argmax(arr != 0)
-        arr = arr.at[first_nonzero_index].set(arr[first_nonzero_index] - 1)
+        arr, stepped, exhausted = _fireball_advance_pattern(
+            f.move_pat, FIREBALL_MOVEMENT
+        )
         new_x = f.pos[0] + f.dir
-        last_is_zero = arr[first_nonzero_index] == 0
-        
-        new_pos= jnp.array([jnp.where(arr[first_nonzero_index] == 0, new_x, f.pos[0]), f.pos[1]])
-        new_state = jnp.where(
-            (new_pos[0] < 4) | (new_pos[0] > SCREEN_WIDTH - 18),
-            2,  # despawn
-            1   # bewegen
-        )
-        new_move_pat= jnp.where(last_is_zero, FIREBALL_MOVEMENT, arr)
-        changed = jnp.any(f.pos != new_pos)
-        return Fireball(
-            pos= new_pos,
-            start_pat= f.start_pat,
-            move_pat= new_move_pat,
-            count= f.count,
-            state= new_state,
-            dir= f.dir,
-            rnd= f.rnd,
-            ani= lax.cond(changed, lambda _: (f.ani % 3) + 1, lambda _: f.ani, operand=None)
-        )
-    def wait(f: Fireball):
-        def stay(ff: Fireball):
+        # Edge hit: bounce (reverse + wind-up), then teleport after wind-up.
+        hit_left = (f.dir < 0) & (new_x < 0)
+        hit_right = (f.dir > 0) & (new_x > FIREBALL_RIGHT_MAX)
+        hit = hit_left | hit_right
+
+        def do_bounce(ff):
             return Fireball(
-            pos= ff.pos,
-            start_pat= ff.start_pat,
-            move_pat= ff.move_pat,
-            count= ff.count - 1,
-            state= ff.state,
-            dir= ff.dir,
-            rnd= ff.rnd,
-            ani= ff.ani
-        )
-        def end(ff: Fireball):
-            new_pos, new_dir, rng = fireball_new_start_pos(ff.rnd)
+                pos=ff.pos.astype(jnp.float32),
+                start_pat=FIREBALL_MOVEMENT_Start,
+                move_pat=FIREBALL_MOVEMENT,
+                count=ff.count,
+                state=jnp.int32(FIREBALL_STATE_BOUNCE),
+                dir=jnp.int32(-ff.dir),
+                rnd=ff.rnd,
+                ani=ff.ani,
+            )
+
+        def do_cruise(ff):
+            new_pos = jnp.array(
+                [jnp.where(stepped, new_x, ff.pos[0]), ff.pos[1]], dtype=jnp.float32
+            )
             return Fireball(
-            pos= new_pos,
-            start_pat= ff.start_pat,
-            move_pat= ff.move_pat,
-            count= 60,
-            state= 0,
-            dir= new_dir,
-            rnd= rng,
-            ani= ff.ani
+                pos=new_pos,
+                start_pat=ff.start_pat,
+                move_pat=arr,
+                count=ff.count,
+                state=jnp.int32(FIREBALL_STATE_MOVE),
+                dir=ff.dir,
+                rnd=ff.rnd,
+                ani=jnp.where(stepped, (ff.ani % 3) + 1, ff.ani),
+            )
+
+        return lax.cond(hit, do_bounce, do_cruise, f)
+
+    def start_bounce(f: Fireball):
+        # After edge bounce: short wind-up, then wrap/lane-change teleport.
+        arr, stepped, exhausted = _fireball_advance_pattern(
+            f.start_pat, FIREBALL_MOVEMENT_Start
         )
-        return lax.cond(f.count > 0, stay, end, f)
+        new_pos = _apply_step(f, stepped)
+
+        def do_teleport(ff):
+            rng, key_wrap = jax.random.split(ff.rnd)
+            # ALE often wraps on the same lane once before changing lanes.
+            wrap_same = jax.random.bernoulli(key_wrap, 0.35)
+
+            def same_lane(rr):
+                at_left = ff.pos[0] < (SCREEN_WIDTH // 2)
+                new_x = jnp.where(at_left, FIREBALL_X[1], FIREBALL_X[0])
+                new_dir = jnp.where(at_left, jnp.int32(-1), jnp.int32(1))
+                return (
+                    jnp.array([new_x, ff.pos[1]], dtype=jnp.float32),
+                    new_dir,
+                    rr,
+                )
+
+            def new_lane(rr):
+                return fireball_new_start_pos(rr, current_y=ff.pos[1])
+
+            pos, direction, rng2 = lax.cond(wrap_same, same_lane, new_lane, rng)
+            return Fireball(
+                pos=pos,
+                start_pat=FIREBALL_MOVEMENT_Start,
+                move_pat=FIREBALL_MOVEMENT,
+                count=jnp.int32(FIREBALL_RESTART),
+                state=jnp.int32(FIREBALL_STATE_START),
+                dir=jnp.asarray(direction, dtype=jnp.int32),
+                rnd=rng2,
+                ani=ff.ani,
+            )
+
+        def keep_winding(ff):
+            return Fireball(
+                pos=new_pos,
+                start_pat=arr,
+                move_pat=ff.move_pat,
+                count=ff.count,
+                state=jnp.int32(FIREBALL_STATE_BOUNCE),
+                dir=ff.dir,
+                rnd=ff.rnd,
+                ani=jnp.where(stepped, (ff.ani % 3) + 1, ff.ani),
+            )
+
+        return lax.cond(exhausted, do_teleport, keep_winding, f)
+
     def inactive(f: Fireball):
-        # Inactive state - fireball doesn't move during coin phase
         return Fireball(
-            pos=f.pos,
+            pos=f.pos.astype(jnp.float32),
             start_pat=f.start_pat,
             move_pat=f.move_pat,
             count=f.count,
-            state=f.state,  # Stay in inactive state
+            state=f.state,
             dir=f.dir,
             rnd=f.rnd,
-            ani= f.ani
+            ani=f.ani,
         )
-    
-    return lax.switch(fb.state, [start, move, wait, inactive], fb)
+
+    return lax.switch(
+        fb.state,
+        [start_spawn, move, start_bounce, inactive],
+        fb,
+    )
 
 @jax.jit
 def enemy_step(
@@ -1376,7 +1471,7 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
         press_left = (action == Action.LEFT) | (action == Action.LEFTFIRE)
 
         cond = (press_fire | press_right | press_left) & jnp.all(state.pos == PLAYER_RESPWAN_XY)
-        state = state._replace(safe=jnp.where(cond, False, state.safe))
+        state = state.replace(safe=jnp.where(cond, False, state.safe))
 
         
         pos = state.pos
@@ -1387,7 +1482,7 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
             lambda _: pos,
             operand=None
         )
-        state = state._replace(pos= new_pos)
+        state = state.replace(pos= new_pos)
         
         return state
 
@@ -1397,11 +1492,11 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
         press_right = (action == Action.RIGHT) | (action == Action.RIGHTFIRE)
         press_left = (action == Action.LEFT) | (action == Action.LEFTFIRE)
 
-        state = state._replace(safe=jnp.where((press_fire | press_right | press_left), False, state.safe))
-        # 2) reset horizontal/jump input on ground
+        state = state.replace(safe=jnp.where((press_fire | press_right | press_left), False, state.safe))
+        # 2) clear jump flags on ground (keep move/last_dir so coast can start)
         state0 = lax.cond(
             state.on_ground,
-            lambda s: s._replace(move=0.0, jump=0, jumpL=False, jumpR=False),
+            lambda s: s.replace(jump=0, jumpL=False, jumpR=False),
             lambda s: s,
             state
         )
@@ -1414,13 +1509,13 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
         
 
         # 3) set jump flag
-        state1 = state0._replace(jump=jnp.where(press_fire, 1, state0.jump))
+        state1 = state0.replace(jump=jnp.where(press_fire, 1, state0.jump))
 
-        # 4) walking/braking vs. jumping
+        # 4) walking/coasting vs. jumping
         def walk_or_brake(s):
             # move right
             def mr(ss):
-                return ss._replace(
+                return ss.replace(
                     move=movement_pattern[ss.idx_right],
                     idx_right=(ss.idx_right + 1) % pat_len,
                     idx_left=0,
@@ -1430,7 +1525,7 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
 
             # move left
             def ml(ss):
-                return ss._replace(
+                return ss.replace(
                     move=-movement_pattern[ss.idx_left],
                     idx_left=(ss.idx_left + 1) % pat_len,
                     idx_right=0,
@@ -1438,22 +1533,31 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
                     brake_frames_left=0
                 )
 
-            # apply brake
+            # Coast: keep gait pattern for one full cycle after key release (ALE slide).
             def br(ss):
-                ss2 = ss._replace(
-                    brake_frames_left=jnp.where((jnp.abs(ss.move) > 0) & (ss.brake_frames_left == 0),
-                                                BRAKE_DURATION, ss.brake_frames_left)
-                )
+                initiate = (ss.brake_frames_left == 0) & (ss.last_dir != 0)
+                bf = jnp.where(initiate, jnp.int32(COAST_FRAMES), ss.brake_frames_left)
+                ss2 = ss.replace(brake_frames_left=bf)
 
-                def do_brake(x):
+                def do_coast(x):
+                    use_right = x.last_dir > 0
+                    idx = jnp.where(use_right, x.idx_right, x.idx_left)
+                    step = movement_pattern[idx]
+                    new_idx = (idx + 1) % pat_len
                     nb = x.brake_frames_left - 1
-                    return x._replace(
-                        move=x.last_dir * BRAKE_SPEED,
+                    done = nb <= 0
+                    return x.replace(
+                        move=x.last_dir * step,
+                        idx_right=jnp.where(use_right, new_idx, jnp.int32(0)),
+                        idx_left=jnp.where(use_right, jnp.int32(0), new_idx),
                         brake_frames_left=nb,
-                        last_dir=x.last_dir
+                        last_dir=jnp.where(done, jnp.int32(0), x.last_dir),
                     )
 
-                return lax.cond(ss2.brake_frames_left > 0, do_brake, lambda x: x._replace(move=0.0), ss2)
+                def idle(x):
+                    return x.replace(move=0.0)
+
+                return lax.cond(ss2.brake_frames_left > 0, do_coast, idle, ss2)
 
             return lax.cond(press_right, mr,
                             lambda ss: lax.cond(press_left, ml, br, ss), s)
@@ -1461,7 +1565,7 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
         def jump_move(s):
             # mid-air jumping momentum
             def jr(ss):
-                return ss._replace(
+                return ss.replace(
                     move=movement_pattern[ss.idx_right],
                     idx_right=(ss.idx_right + 1) % pat_len,
                     idx_left=0,
@@ -1471,7 +1575,7 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
                 )
 
             def jl(ss):
-                return ss._replace(
+                return ss.replace(
                     move=-movement_pattern[ss.idx_left],
                     idx_left=(ss.idx_left + 1) % pat_len,
                     idx_right=0,
@@ -1481,7 +1585,7 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
                 )
 
             def js(ss):
-                return ss._replace(
+                return ss.replace(
                     idx_left=0,
                     idx_right=0,
                     brake_frames_left=0,
@@ -1503,7 +1607,7 @@ def player_step(state: PlayerState, action: chex.Array, game_state: GameState) -
         is_walking = walking_intent & s_phys.on_ground & (s_phys.jump == 0)
         next_walk_anim = jnp.where(is_walking, (state.walk_anim + 1) % 8, jnp.int32(0))
 
-        new_state = s_phys._replace(walk_anim=next_walk_anim, is_walking=is_walking)
+        new_state = s_phys.replace(walk_anim=next_walk_anim, is_walking=is_walking)
         return new_state
     cond = state.safe & jnp.any(state.pos != PLAYER_RESPWAN_XY)
     return lax.cond(cond, death_step, step, state)
@@ -1819,8 +1923,18 @@ def draw_score(image, score):
 
 
 class MarioBrosRenderer(JAXGameRenderer):
-    def __init__(self):
-        pass
+    def __init__(self, consts: MarioBrosConstants = None, config: render_utils.RendererConfig = None):
+        self.consts = consts or MarioBrosConstants()
+        super().__init__(self.consts)
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+                channels=3,
+                downscale=None,
+            )
+        else:
+            self.config = config
+        self.jr = render_utils.JaxRenderingUtils(self.config)
 
     def render(self, state: MarioBrosState) -> jnp.ndarray:
         def white_screen(_: any) -> jnp.ndarray:
@@ -1850,7 +1964,7 @@ class MarioBrosRenderer(JAXGameRenderer):
                     timer  = state.game.enemy.enemy_timer[i]
                     status = state.game.enemy.enemy_status[i]
                     wtime  = state.game.enemy.enemy_weak_timer[i]
-                    return draw_enemy_by_state(img, ex, ey-2, vx, timer, status, wtime)
+                    return draw_enemy_by_state(img, ex, ey, vx, timer, status, wtime)
 
                 def skip_draw(_):
                     return img
@@ -1885,6 +1999,13 @@ class MarioBrosRenderer(JAXGameRenderer):
                 skip_fireball,
                 image
             )
+            # --- Draw corner pipes (supports) before platforms so ledges sit under floors ---
+            def draw_pipe(i, img):
+                x, y, w, h = PIPE_RECTS[i]
+                return draw_rect(img, x, y, w, h, PIPE_COLOR)
+
+            image = lax.fori_loop(0, PIPE_RECTS.shape[0], draw_pipe, image)
+
             # --- Draw platforms ---
             def draw_platform(i, img):
                 plat = PLATFORMS[i]
@@ -1980,13 +2101,10 @@ class MarioBrosRenderer(JAXGameRenderer):
         return lax.cond(state.game.game_over, white_screen, continue_render, operand=None)
 
 class JaxMarioBros(JaxEnvironment[
-                       MarioBrosState, MarioBrosObservation, MarioBrosInfo, MarioBrosConstants]):  # copied and adapted from jax_kangaroo.py ln.1671
-    # holds reset and main step function
-
-    def __init__(self, reward_funcs: list[callable]=None):
-        self.renderer = MarioBrosRenderer()
-        self.reward_funcs = reward_funcs
-        self.action_set = [
+                       MarioBrosState, MarioBrosObservation, MarioBrosInfo, MarioBrosConstants]):
+    
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [
             Action.NOOP,
             Action.FIRE,
             Action.UP,
@@ -2005,162 +2123,84 @@ class JaxMarioBros(JaxEnvironment[
             Action.UPLEFTFIRE,
             Action.DOWNRIGHTFIRE,
             Action.DOWNLEFTFIRE
-        ]
+        ],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: MarioBrosConstants = None, reward_funcs: list[callable]=None):
+        consts = consts or MarioBrosConstants()
+        super().__init__(consts)
+        self.renderer = MarioBrosRenderer(self.consts)
+        self.reward_funcs = reward_funcs
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(len(self.action_set))
-
-    def get_action_space(self) -> jnp.ndarray:
-        return jnp.array(self.action_set)
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def _get_observation(self, state: MarioBrosState) -> MarioBrosObservation:
-        obs = MarioBrosObservation(
-            player_pos = jnp.array(state.player.pos, dtype=jnp.float32),
-            player_on_ground = jnp.array([state.player.on_ground], dtype=jnp.float32),
-            player_brake_frames_left = jnp.array([state.player.brake_frames_left], dtype=jnp.float32),
-            player_lives = jnp.array([state.lives], dtype=jnp.float32),
-
-            enemy_active = jnp.array(state.game.enemy.enemy_active, dtype=jnp.float32),
-            enemy_pos = jnp.array(state.game.enemy.enemy_pos, dtype=jnp.float32),
-            enemy_state = jnp.array(state.game.enemy.enemy_status, dtype=jnp.float32),
-
-            fireball_pos = jnp.array(state.game.fireball.pos, dtype=jnp.float32),
-            fireball_dir = jnp.array([state.game.fireball.dir], dtype=jnp.float32),
-
-            pow_block_counter = jnp.array([state.game.pow_block_counter], dtype=jnp.float32),
-            pow_block_pos = jnp.array(POW_BLOCK, dtype=jnp.float32),
-            plattforms_pos = jnp.array(PLATFORMS, dtype=jnp.float32),
-            coin_pos= jnp.array(COIN_POSITIONS, dtype=jnp.float32),
-            coin_active= jnp.array(state.game.coin_phase_active, dtype=jnp.float32)
+        pw, ph = PLAYER_SIZE
+        ew, eh = ENEMY_SIZE
+        player = ObjectObservation.create(
+            x=jnp.asarray(state.player.pos[0], dtype=jnp.int32),
+            y=jnp.asarray(state.player.pos[1], dtype=jnp.int32),
+            width=jnp.asarray(pw, dtype=jnp.int32),
+            height=jnp.asarray(ph, dtype=jnp.int32),
+            active=jnp.asarray(1, dtype=jnp.int32),
         )
-        return obs
-
-    def obs_to_flat_array(self, obs: MarioBrosObservation) -> chex.Array:
-        return jnp.concatenate(
-            [
-            obs.player_pos.flatten(),
-            jnp.array(obs.player_on_ground, dtype=jnp.float32),
-            obs.player_brake_frames_left.flatten(),
-            obs.player_lives.flatten(),
-            obs.enemy_active.flatten(),
-            obs.enemy_pos.flatten(),
-            obs.enemy_state.flatten(),
-            obs.fireball_pos.flatten(),
-            obs.fireball_dir.flatten(),
-            obs.pow_block_counter.flatten(),
-            obs.pow_block_pos.flatten(),
-            obs.plattforms_pos.flatten(),
-            obs.coin_pos.flatten(),
-            obs.coin_active.flatten()
-            ]
+        enemies = ObjectObservation.create(
+            x=state.game.enemy.enemy_pos[:, 0].astype(jnp.int32),
+            y=state.game.enemy.enemy_pos[:, 1].astype(jnp.int32),
+            width=jnp.full((3,), ew, dtype=jnp.int32),
+            height=jnp.full((3,), eh, dtype=jnp.int32),
+            active=state.game.enemy.enemy_active.astype(jnp.int32),
+            state=state.game.enemy.enemy_status.astype(jnp.int32),
         )
+        fireball = ObjectObservation.create(
+            x=jnp.asarray(state.game.fireball.pos[0], dtype=jnp.int32),
+            y=jnp.asarray(state.game.fireball.pos[1], dtype=jnp.int32),
+            width=jnp.asarray(8, dtype=jnp.int32),
+            height=jnp.asarray(8, dtype=jnp.int32),
+            active=jnp.asarray(1, dtype=jnp.int32),
+            orientation=jnp.asarray(state.game.fireball.dir, dtype=jnp.float32),
+        )
+        rewards = ObjectObservation.create(
+            x=state.game.reward.reward_pos[:, 0].astype(jnp.int32),
+            y=state.game.reward.reward_pos[:, 1].astype(jnp.int32),
+            width=jnp.full((3,), ew, dtype=jnp.int32),
+            height=jnp.full((3,), eh, dtype=jnp.int32),
+            active=state.game.reward.reward_active.astype(jnp.int32),
+        )
+        return MarioBrosObservation(
+            player=player,
+            enemies=enemies,
+            fireball=fireball,
+            rewards=rewards,
+            player_on_ground=jnp.array([state.player.on_ground], dtype=jnp.float32),
+            player_brake_frames_left=jnp.array([state.player.brake_frames_left], dtype=jnp.float32),
+            player_lives=jnp.array([state.lives], dtype=jnp.float32),
+            pow_block_counter=jnp.array([state.game.pow_block_counter], dtype=jnp.float32),
+            pow_block_pos=jnp.array(POW_BLOCK, dtype=jnp.float32),
+            plattforms_pos=jnp.array(PLATFORMS, dtype=jnp.float32),
+            coin_pos=jnp.array(COIN_POSITIONS, dtype=jnp.float32),
+            coin_active=jnp.array(state.game.coin_phase_active, dtype=jnp.float32),
+        )
+
 
     def observation_space(self) -> spaces.Dict:
+        screen = (SCREEN_HEIGHT, SCREEN_WIDTH)
         return spaces.Dict({
-            # --- Player ---
-            "player_pos": spaces.Box(
-                low=0,
-                high=jnp.array([SCREEN_WIDTH, SCREEN_HEIGHT], dtype=jnp.float32),
-                shape=(2,),
-                dtype=jnp.float32,
-            ),
-            "player_on_ground": spaces.Box(
-                low=0,
-                high=1,
-                shape=(1,),
-                dtype=jnp.float32,
-            ),  # 0=False, 1=True
-            "player_brake_frames_left": spaces.Box(
-                low=0,
-                high=20,
-                shape=(1,),
-                dtype=jnp.float32,
-            ),  # max Brake Frames ggf. anpassen
-            "player_lives": spaces.Box(
-                low=0,
-                high=4,
-                shape=(1,),
-                dtype=jnp.float32,
-            ),
-
-            # --- Enemy ---
-            "enemy_active": spaces.Box(
-                low=0,
-                high=2,
-                shape=(3,),
-                dtype=jnp.float32,
-            ),  # 0=inactive,1=active,2=pending
-            "enemy_pos": spaces.Box(
-                low=0,
-                high=jnp.array([SCREEN_WIDTH, SCREEN_HEIGHT], dtype=jnp.float32),
-                shape=(3, 2),
-                dtype=jnp.float32,
-            ),
-            "enemy_state": spaces.Box(
-                low=0,
-                high=3,
-                shape=(3,),
-                dtype=jnp.float32,
-            ),  # 1=weak,2=strong,3=dead
-
-            # --- Fireball ---
-            "fireball_pos": spaces.Box(
-                low=0,
-                high=jnp.array([SCREEN_WIDTH, SCREEN_HEIGHT], dtype=jnp.float32),
-                shape=(2,),
-                dtype=jnp.float32,
-            ),
-            "fireball_dir": spaces.Box(
-                low=-1,
-                high=1,
-                shape=(1,),
-                dtype=jnp.float32,
-            ),
-
-            # --- POW block ---
-            "pow_block_counter": spaces.Box(
-                low=0,
-                high=3,
-                shape=(1,),
-                dtype=jnp.float32,
-            ),
-            "pow_block_pos": spaces.Box(
-                low=jnp.zeros((1, 4), dtype=jnp.float32),
-                high=jnp.broadcast_to(
-                    jnp.array([SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_HEIGHT], dtype=jnp.float32),
-                    (1, 4)
-                ),
-                shape=(1, 4),
-                dtype=jnp.float32,
-            ),
-
-            # --- Platforms ---
-            "plattforms_pos": spaces.Box(
-                low=jnp.zeros((PLATFORMS.shape[0], 4), dtype=jnp.float32),
-                high=jnp.broadcast_to(
-                    jnp.array([SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_HEIGHT], dtype=jnp.float32),
-                    (PLATFORMS.shape[0], 4)
-                ),
-                shape=(PLATFORMS.shape[0], 4),
-                dtype=jnp.float32,
-            ),
-            "coin_pos": spaces.Box(
-                low=jnp.zeros((COIN_POSITIONS.shape[0], 2), dtype=jnp.float32),
-                high=jnp.broadcast_to(
-                    jnp.array([SCREEN_WIDTH, SCREEN_HEIGHT], dtype=jnp.float32),
-                    (COIN_POSITIONS.shape[0], 2)
-                ),
-                shape=(COIN_POSITIONS.shape[0], 2),
-                dtype=jnp.float32,
-            ),
-            "coin_active": spaces.Box(
-                low=0,
-                high=1,
-                shape=(),
-                dtype=jnp.float32
-            ),
+            "player": spaces.get_object_space(n=None, screen_size=screen),
+            "enemies": spaces.get_object_space(n=3, screen_size=screen),
+            "fireball": spaces.get_object_space(n=None, screen_size=screen, orientation_range=(-1.0, 1.0)),
+            "rewards": spaces.get_object_space(n=3, screen_size=screen),
+            "player_on_ground": spaces.Box(low=0, high=1, shape=(1,), dtype=jnp.float32),
+            "player_brake_frames_left": spaces.Box(low=0, high=255, shape=(1,), dtype=jnp.float32),
+            "player_lives": spaces.Box(low=-1, high=99, shape=(1,), dtype=jnp.float32),
+            "pow_block_counter": spaces.Box(low=0, high=3, shape=(1,), dtype=jnp.float32),
+            "pow_block_pos": spaces.Box(low=0, high=max(SCREEN_WIDTH, SCREEN_HEIGHT), shape=(1, 4), dtype=jnp.float32),
+            "plattforms_pos": spaces.Box(low=0, high=max(SCREEN_WIDTH, SCREEN_HEIGHT), shape=PLATFORMS.shape, dtype=jnp.float32),
+            "coin_pos": spaces.Box(low=0, high=max(SCREEN_WIDTH, SCREEN_HEIGHT), shape=COIN_POSITIONS.shape, dtype=jnp.float32),
+            "coin_active": spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32),
         })
-
 
     def image_space(self) -> spaces.Box:
         return spaces.Box(
@@ -2197,18 +2237,21 @@ class JaxMarioBros(JaxEnvironment[
     def render(self, state: MarioBrosState) -> jnp.ndarray:
         return self.renderer.render(state)
 
-    def reset(self, key=None) -> Tuple[MarioBrosObservation, MarioBrosState]:
-        game = self.reset_game()
+    def reset(self, key: chex.PRNGKey = None) -> Tuple[MarioBrosObservation, MarioBrosState]:
+        if key is None:
+            key = jax.random.PRNGKey(0)
+        state_key, fireball_key = jax.random.split(key)
+        game = self.reset_game(fireball_key)
         obs = self._get_observation(game)
         return obs, game
 
-    def reset_game(self) -> MarioBrosState:
+    def reset_game(self, key: chex.PRNGKey) -> MarioBrosState:
         p1_y = PLATFORMS[1, 1]
         p2_y = PLATFORMS[2, 1]
         enemy_status = jnp.array([2, 2, 2])
 
-        # Enemy 1 position (used also for enemy 3)
-        enemy1_pos = jnp.array([5.0, p1_y - ENEMY_SIZE[1]])
+        # Enemy spawn tops (OCAtari Pest lands ~y=47 on top platforms; x~13 from pipe)
+        enemy1_pos = jnp.array([13.0, p1_y - ENEMY_SIZE[1]])
         enemy2_pos = jnp.array([130.0, p2_y - ENEMY_SIZE[1]])
         reward_init_pos = jnp.array([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
         new_state = MarioBrosState(
@@ -2247,14 +2290,14 @@ class JaxMarioBros(JaxEnvironment[
                 pow_block_counter=jnp.int32(3),
                 score = jnp.int32(0),
                 fireball=Fireball(
-                    pos= jnp.array(FIREBALL_INIT_XY),
+                    pos=jnp.asarray(FIREBALL_INIT_XY, dtype=jnp.float32),
                     start_pat= FIREBALL_MOVEMENT_Start,
                     move_pat= FIREBALL_MOVEMENT,
-                    count= FIREBALL_RESTART,
-                    state= 0,
-                    dir= -1,
-                    rnd= jax.random.PRNGKey(0),
-                    ani= 1
+                    count= jnp.int32(FIREBALL_RESTART),
+                    state= jnp.int32(0),
+                    dir= jnp.int32(-1),
+                    rnd= key,
+                    ani= jnp.int32(1)
                 ),
                 coin_phase_active=jnp.int32(0),
                 coin_phase_timer=jnp.int32(0),
@@ -2271,31 +2314,12 @@ class JaxMarioBros(JaxEnvironment[
                     reward_init_positions=reward_init_pos
                 ),  
         ),
-            lives=jnp.int32(4)
+            lives=jnp.int32(4),
+            key=key
         )
 
         return new_state
-
     
-
-    def old_step(self, state: MarioBrosState, action: chex.Array) -> Tuple[
-        MarioBrosObservation, MarioBrosState, float, bool, MarioBrosInfo]:
-        # calls player_step function and check for collision with enemy
-        def enemy_collision(s):
-            obs, rS = self.reset()
-            return obs, rS, 0.0, True, self._get_info(rS)
-
-        def no_enemy_collision(s):
-            return self._get_observation(state), MarioBrosState(
-                player=s,
-                game=state.game,
-                lives=state.lives
-            ), 0.0, True, self._get_info(state)
-
-        return jax.lax.cond(check_enemy_collision(state.player.pos, state.game.enemy.enemy_pos), enemy_collision,
-                            no_enemy_collision, player_step(state.player, action))
-
-    from functools import partial
     @partial(jax.jit, static_argnums=0)
     def step(self, state: MarioBrosState, action: chex.Array) -> Tuple[
         MarioBrosObservation, MarioBrosState, float, bool, MarioBrosInfo]:
@@ -2315,9 +2339,11 @@ class JaxMarioBros(JaxEnvironment[
             done: Boolean flag if episode ended.
             info: MarioBrosInfo.
         """
+        # Translate compact agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
 
         def game_over(state: MarioBrosState) -> MarioBrosState:
-            obs, new_state = self.reset()
+            obs, new_state = self.reset(state.key)
             obs = self._get_observation(state)
             all_rewards = self._get_all_rewards(state, new_state)
             info = self._get_info(new_state, all_rewards)
@@ -2326,6 +2352,9 @@ class JaxMarioBros(JaxEnvironment[
            
 
         def step(_) -> MarioBrosState:
+            # Split key for this step
+            step_key, next_key = jax.random.split(state.key)
+            
             # 1) Check if we should start a coin phase
             should_start_coin_phase = jnp.logical_and(
                 state.game.score >= COIN_PHASE_SCORE_THRESHOLD,
@@ -2339,12 +2368,12 @@ class JaxMarioBros(JaxEnvironment[
             
             def handle_coin_phase(_):
                 # Update player movement during coin phase - use the actual game state
-                temp_game_state = state.game._replace(
+                temp_game_state = state.game.replace(
                     coin_phase_active=1,  # Mark as coin phase for any special handling
                     coin_phase_timer=state.game.coin_phase_timer
                 )
                 
-                new_player = player_step(state.player, action, temp_game_state)
+                new_player = player_step(state.player, atari_action, temp_game_state)
                 
                 # Decrement timer
                 new_timer = state.game.coin_phase_timer - 1
@@ -2408,7 +2437,7 @@ class JaxMarioBros(JaxEnvironment[
 
             # Reset player movement state when coin phase starts
             def reset_player_movement(player):
-                return player._replace(
+                return player.replace(
                     pos=jnp.array([PLAYER_START_X, PLAYER_START_Y], dtype=jnp.float32),
                     move=0.0,
                     jump=0,
@@ -2433,7 +2462,7 @@ class JaxMarioBros(JaxEnvironment[
                 p1_y = PLATFORMS[1, 1]
                 p2_y = PLATFORMS[2, 1]
                 enemy_status = jnp.array([2, 2, 2])
-                enemy1_pos = jnp.array([5.0, p1_y - ENEMY_SIZE[1]])
+                enemy1_pos = jnp.array([13.0, p1_y - ENEMY_SIZE[1]])
                 enemy2_pos = jnp.array([130.0, p2_y - ENEMY_SIZE[1]])
                 reward_init_pos = jnp.array([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
                 
@@ -2463,7 +2492,7 @@ class JaxMarioBros(JaxEnvironment[
                 
                 # After coin phase ends, spawn fresh enemies and fireball
                 def get_fresh_enemy(_):
-                    enemy1_pos = jnp.array([5.0, p1_y - ENEMY_SIZE[1]])
+                    enemy1_pos = jnp.array([13.0, p1_y - ENEMY_SIZE[1]])
                     enemy2_pos = jnp.array([130.0, p2_y - ENEMY_SIZE[1]])
                     return Enemy(
                         enemy_pos=jnp.array([enemy1_pos, enemy2_pos, enemy1_pos]),
@@ -2482,11 +2511,11 @@ class JaxMarioBros(JaxEnvironment[
 
                 # During coin phase, keep fireball inactive
                 fireball = Fireball(
-                    pos=jnp.array([-100.0, -100.0], dtype=jnp.int32),  # Off-screen
+                    pos=jnp.array([-100.0, -100.0], dtype=jnp.float32),  # Off-screen
                     start_pat=state.game.fireball.start_pat,
                     move_pat=state.game.fireball.move_pat,
                     count=state.game.fireball.count,
-                    state=3,  # Inactive state
+                    state=jnp.int32(FIREBALL_STATE_INACTIVE),  # Inactive state
                     dir=state.game.fireball.dir,
                     rnd=state.game.fireball.rnd,
                     ani=state.game.fireball.ani
@@ -2517,7 +2546,8 @@ class JaxMarioBros(JaxEnvironment[
                 new_state_obj = MarioBrosState(
                     player=new_player,
                     game=new_game,
-                    lives=state.lives
+                    lives=state.lives,
+                    key=next_key
                 )
 
                 obs = self._get_observation(new_state_obj)
@@ -2530,7 +2560,7 @@ class JaxMarioBros(JaxEnvironment[
             def normal_game_logic(_):
                 
                 # 1) Advance player state given action
-                new_player = player_step(state.player, action, state.game)
+                new_player = player_step(state.player, atari_action, state.game)
                 bumped_idx = new_player.bumped_idx
                 pow_bumped = new_player.pow_bumped
                 
@@ -2539,18 +2569,18 @@ class JaxMarioBros(JaxEnvironment[
                 # Reactivate fireball if we just exited coin phase
                 def reactivate_fireball_on_exit(_):
                     new_rng = jax.random.split(state.game.fireball.rnd)[0]
-                    new_pos, new_dir, new_rnd = fireball_new_start_pos(new_rng)
+                    new_pos, new_dir, new_rnd = fireball_new_start_pos(new_rng, current_y=jnp.array(-1.0))
                     
                     
                     return Fireball(
-                        pos=new_pos,
+                        pos=jnp.asarray(new_pos, dtype=jnp.float32),
                         start_pat=FIREBALL_MOVEMENT_Start,
                         move_pat=FIREBALL_MOVEMENT,
-                        count=FIREBALL_RESTART,
-                        state=0,  # Active state
-                        dir=new_dir,
+                        count=jnp.int32(FIREBALL_RESTART),
+                        state=jnp.int32(0),  # Active state
+                        dir=jnp.asarray(new_dir, dtype=jnp.int32),
                         rnd=new_rnd,
-                        ani= 1
+                        ani=jnp.int32(1)
                     )
 
                 def keep_current_fireball(_):
@@ -2564,12 +2594,9 @@ class JaxMarioBros(JaxEnvironment[
                     operand=None
                 )
                 
-                new_fireball = jax.lax.cond(
-                    just_exited_coin_phase,
-                    lambda fb: fb,  # If just reactivated, return as-is (don't step)
-                    lambda fb: fireball_step(fb),  # Otherwise, step normally
-                    fireball_after_reactivation
-                )
+                # Do not step here — on_no_hit steps the fireball once per frame.
+                # (Previously this stepped and on_no_hit stepped again → 2× speed.)
+                new_fireball = fireball_after_reactivation
                 
                 # 2) Detect collisions between player and enemies
                 def check_enemy_collision_per_enemy(player_pos, enemy_positions):
@@ -2604,15 +2631,16 @@ class JaxMarioBros(JaxEnvironment[
                     # Spielerleben um 1 reduzieren
                     new_lives = state.lives - 1
                     # Mario an Respawn-Position setzen, falls Leben >= 0
-                    new_player_updated = new_player._replace(safe= True, jump_phase= jnp.int32(0))
+                    new_player_updated = new_player.replace(safe= True, jump_phase= jnp.int32(0))
                     
                     # Neuer Zustand mit reduziertem Leben und neuer Position
-                    new_game = state.game._replace(game_over=jnp.where(state.lives > 0, False, True))
+                    new_game = state.game.replace(game_over=jnp.where(state.lives > 0, False, True))
 
                     new_state = MarioBrosState(
                         player=new_player_updated,
                         game=new_game,
-                        lives=new_lives
+                        lives=new_lives,
+                        key=next_key
                     )
                     
                     
@@ -2721,8 +2749,13 @@ class JaxMarioBros(JaxEnvironment[
                     # Deactivate permanently-dead enemies (status == 3)
                     new_enemy_active = jnp.where(status == 3, jnp.int32(0), new_enemy_active)
 
-                    # 4) Update fireball AFTER enemy_step
-                    new_fireball = fireball_step(fireball_to_step)  # Use the updated fireball, not the old one
+                    # 4) Update fireball AFTER enemy_step (once per frame; skip if just reactivated)
+                    new_fireball = jax.lax.cond(
+                        just_exited_coin_phase,
+                        lambda fb: fb,
+                        lambda fb: fireball_step(fb),
+                        fireball_to_step,
+                    )
                     # 5) POW hit logic and platform bump detection (unchanged)
                     pow_hit = pow_bumped & (state.game.pow_block_counter > 0)
                     new_pow_block_counter = jnp.maximum(state.game.pow_block_counter - pow_hit, 0)
@@ -2904,7 +2937,8 @@ class JaxMarioBros(JaxEnvironment[
                     new_state = MarioBrosState(
                         player=new_player,
                         game=new_game,
-                        lives=state.lives
+                        lives=state.lives,
+                        key=next_key
                     )
 
                     obs = self._get_observation(new_state)

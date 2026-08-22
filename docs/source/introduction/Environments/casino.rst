@@ -30,3 +30,6 @@ Casino Poker Solitaire
 ----------------------
 
 ``jaxatari.make("casinopokersolitaire")``
+
+Known issues
+------------

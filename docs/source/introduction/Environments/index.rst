@@ -70,11 +70,6 @@ Environments
        <div class="env-name">Q*bert</div>
      </a>
 
-     <a class="env-card" href="battlezone.html">
-       <img src="../../_static/gifs/battlezone.gif" alt="Battlezone" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-       <div class="env-placeholder" style="display:none">🕹</div>
-       <div class="env-name">Battlezone</div>
-     </a>
 
    </div>
    <div class="env-load-more" id="env-load-more">
@@ -98,6 +93,12 @@ Environments
        <img data-src="../../_static/gifs/amidar.gif" alt="Amidar" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Amidar</div>
+     </a>
+
+     <a class="env-card" href="assault.html">
+       <img data-src="../../_static/gifs/assault.gif" alt="Assault" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Assault</div>
      </a>
 
      <a class="env-card" href="asterix.html">
@@ -232,6 +233,12 @@ Environments
        <div class="env-name">Laser Gates</div>
      </a>
 
+     <a class="env-card" href="mariobros.html">
+       <img data-src="../../_static/gifs/mariobros.gif" alt="Mario Bros" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Mario Bros</div>
+     </a>
+
      <a class="env-card" href="namethisgame.html">
        <img data-src="../../_static/gifs/namethisgame.gif" alt="Name This Game" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
@@ -322,6 +329,12 @@ Environments
        <div class="env-name">Video Pinball</div>
      </a>
 
+     <a class="env-card" href="wizardofwor.html">
+       <img data-src="../../_static/gifs/wizardofwor.gif" alt="Wizard of Wor" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Wizard of Wor</div>
+     </a>
+
      <a class="env-card" href="wordzapper.html">
        <img data-src="../../_static/gifs/wordzapper.gif" alt="Word Zapper" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
@@ -334,5 +347,8 @@ Environments
    :maxdepth: 1
    :hidden:
 
+   assault
+   mariobros
    seaquest
    casino
+   wizardofwor

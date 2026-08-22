@@ -72,7 +72,7 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   ❌: 2
 | up_n_down                    | ❌       | 0 |
 | venture                      | 🥈       | 9 |
 | video_pinball                | 🥈       | 4 |
-| wizard_of_wor                | 🥉       | 0 |
+| wizard_of_wor                | 🥉       | 3 |
 | yars_revenge                 | ❌       | 0 |
 | zaxxon                       | ❌       | 0 |
 
@@ -116,7 +116,7 @@ These are distinct from `blackjack`, the separate ALE Blackjack environment.
 | koolaid                      | ❌       | 0 |
 | laser_gates                  | 🥈       | 0 |
 | lost_luggage                 | ❌       | 0 |
-| mario_bros                   | 🥉       | 0 |
+| mario_bros                   | ❌       | 0 |
 | miniature_golf               | ❌       | 0 |
 | mr_do                        | ❌       | 0 |
 | othello                      | 🥉       | 0 |
@@ -136,4 +136,4 @@ These are distinct from `blackjack`, the separate ALE Blackjack environment.
 | video_cube                   | 🥈       | 0 |
 | word_zapper                  | 🥈       | 0 |
 
-Total:  🥇: 4   |   🥈: 18   |   🥉: 3   |   ❌: 23
+Total:  🥇: 4   |   🥈: 18   |   🥉: 2   |   ❌: 24
