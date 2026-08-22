@@ -122,6 +122,7 @@ MOD_MODULES = {
     "pacman": "jaxatari.games.mods.pacman_mods.PacmanEnvMod",
     "othello": "jaxatari.games.mods.othello_mods.OthelloEnvMod",
     "wizardofwor": "jaxatari.games.mods.wizardofwor_mods.WizardOfWorEnvMod",
+    "backgammon": "jaxatari.games.mods.backgammon_mods.BackgammonEnvMod",
 }
 
 
