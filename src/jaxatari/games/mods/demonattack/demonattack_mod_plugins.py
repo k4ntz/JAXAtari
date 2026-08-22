@@ -11,7 +11,13 @@ from jaxatari.games.jax_demonattack import (
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
 
 
-def _demon_ids(env) -> jax.Array:
+def _demon_slot_ids(env) -> jax.Array:
+    """All state slots, including the detached split-demon overflow slot."""
+    return jnp.arange(env.consts.DEMON_SLOTS, dtype=jnp.int32)
+
+
+def _formation_demon_ids(env) -> jax.Array:
+    """Only slots that belong to the three-demon formation."""
     return jnp.arange(env.consts.MAX_DEMONS, dtype=jnp.int32)
 
 
@@ -181,7 +187,8 @@ class TeleportingDemonsMod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state: DemonAttackState, new_state: DemonAttackState) -> DemonAttackState:
         consts = self._env.consts
-        ids = _demon_ids(self._env)
+        slot_ids = _demon_slot_ids(self._env)
+        formation_ids = _formation_demon_ids(self._env)
         warning_active = new_state.spawn_pause_timer > consts.SPAWN_MOVE_PAUSE
         finish_warning = jnp.logical_and(
             prev_state.spawn_pause_timer > consts.SPAWN_MOVE_PAUSE,
@@ -196,20 +203,24 @@ class TeleportingDemonsMod(JaxAtariPostStepModPlugin):
             eligible,
             new_state.demon_status != DEMON_STATUS_SMALL,
         )
+        eligible = jnp.logical_and(
+            eligible,
+            slot_ids < consts.MAX_DEMONS,
+        )
         eligible = jnp.logical_and(eligible, jnp.logical_not(teleport_busy))
         due = jnp.mod(new_state.step_counter, self.TELEPORT_INTERVAL) == 0
         desired_slot = jnp.mod(
             new_state.step_counter // self.TELEPORT_INTERVAL + new_state.wave_number,
             consts.MAX_DEMONS,
         )
-        candidate_order = jnp.mod(desired_slot + ids, consts.MAX_DEMONS)
+        candidate_order = jnp.mod(desired_slot + formation_ids, consts.MAX_DEMONS)
         ordered_eligible = eligible[candidate_order]
         first_ordered_idx = jnp.argmax(ordered_eligible.astype(jnp.int32))
         selected_slot = candidate_order[first_ordered_idx]
         has_target = jnp.any(eligible)
         start_warning = jnp.logical_and(
             due,
-            jnp.logical_and(has_target, ids == selected_slot),
+            jnp.logical_and(has_target, slot_ids == selected_slot),
         )
 
         # When interrupted, it doesnt teleport anymore and only spawns split demons like before
@@ -239,13 +250,19 @@ class TeleportingDemonsMod(JaxAtariPostStepModPlugin):
             (new_state.demons_y[0] + new_state.demons_y[2]) // 2,
             (new_state.demons_y[1] + consts.DEMON_MAX_Y) // 2,
         ), dtype=jnp.int32)
-        seed = new_state.step_counter + new_state.wave_number * 13 + ids * 29
-        target_x = consts.DEMON_MIN_X + jnp.mod(seed * 11, x_span)
-        target_y = jnp.clip(
-            lane_center_y + jnp.mod(seed * 7, 5) - 2,
+        formation_seed = (
+            new_state.step_counter
+            + new_state.wave_number * 13
+            + formation_ids * 29
+        )
+        formation_target_x = consts.DEMON_MIN_X + jnp.mod(formation_seed * 11, x_span)
+        formation_target_y = jnp.clip(
+            lane_center_y + jnp.mod(formation_seed * 7, 5) - 2,
             lane_min_y,
             lane_max_y,
         )
+        target_x = new_state.demons_x.at[:consts.MAX_DEMONS].set(formation_target_x)
+        target_y = new_state.demons_y.at[:consts.MAX_DEMONS].set(formation_target_y)
         return new_state.replace(
             demons_x=jnp.where(teleport, target_x, new_state.demons_x),
             demons_y=jnp.where(teleport, target_y, new_state.demons_y),
@@ -269,7 +286,7 @@ class SideStepLowestDemonsMod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state: DemonAttackState, new_state: DemonAttackState) -> DemonAttackState:
         consts = self._env.consts
-        ids = _demon_ids(self._env)
+        ids = _demon_slot_ids(self._env)
         active = _normal_active_demons(new_state)
         multiple_demons_alive = jnp.sum(new_state.demons_alive.astype(jnp.int32)) > 1
         bottom_slot = jnp.asarray(consts.MAX_DEMONS - 1, dtype=jnp.int32)
@@ -317,7 +334,7 @@ class ZigZagMovementDemonsMod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state: DemonAttackState, new_state: DemonAttackState) -> DemonAttackState:
         consts = self._env.consts
-        ids = _demon_ids(self._env)
+        ids = _demon_slot_ids(self._env)
         normal_active = _normal_active_demons(new_state)
         source_firing = jnp.logical_and(
             ids == new_state.bomb_source_idx,
