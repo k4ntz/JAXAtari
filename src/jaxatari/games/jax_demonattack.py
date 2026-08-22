@@ -221,8 +221,7 @@ def _get_default_asset_config() -> tuple:
 
 def _bomb_visible_repeat_window(state, consts, bomb_type):
     """Return visible repeat count and leading-repeat offset for enemy shots."""
-    source_y = state.demons_y[state.bomb_source_idx] + consts.DEMON_SIZE[0]
-    fallen_repeats = (state.bomb_y - source_y) // consts.BOMB_SIZE[0]
+    fallen_repeats = (state.bomb_y - state.bomb_spawn_y) // consts.BOMB_SIZE[0]
     visible_repeats = jnp.where(
         bomb_type == BOMB_TYPE_LONG,
         jnp.clip(
@@ -349,7 +348,11 @@ class DemonAttackConstants(AutoDerivedConstants):
     )
     BOMB_JITTER_X_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default=(0, 0, 0, 0, 0, 0, 0),
+        default=(0, 1, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0),
+    )
+    BOMB_JITTER_Y_TABLE: Tuple[int, ...] = struct.field(
+        pytree_node=False,
+        default=(-3, 0, 0, 6, 0, 0, 6, 0, 0),
     )
     LONG_BOMB_HEIGHT_MULTIPLIER: int = struct.field(pytree_node=False, default=5)
     MAX_BUNKERS: int = struct.field(pytree_node=False, default=6)
@@ -411,6 +414,7 @@ class DemonAttackState(struct.PyTreeNode):
 
     bomb_x: chex.Array
     bomb_y: chex.Array
+    bomb_spawn_y: chex.Array
     bomb_active: chex.Array
     bomb_source_idx: chex.Array
     bomb_burst_step: chex.Array
@@ -542,6 +546,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return dict(
             bomb_x=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
             bomb_y=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
+            bomb_spawn_y=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
             bomb_active=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.bool_),
             bomb_source_idx=jnp.array(0, dtype=jnp.int32),
             bomb_burst_step=jnp.array(self.consts.BOMB_BURST_RATES, dtype=jnp.int32),
@@ -1550,9 +1555,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _bomb_step(self, state: DemonAttackState) -> DemonAttackState:
         """Advance enemy bomb movement and burst-firing state by one frame.
 
-        Existing bombs move downward at the speed selected for the current wave
-        pattern and receive their slot-specific horizontal jitter. Bombs that
-        reach the bunker boundary are deactivated.
+        Standard bombs share the ALE-style one-step-back, two-steps-forward
+        vertical cadence and retain their slot-specific horizontal jitter. Long
+        bombs move steadily at the speed selected for the current wave. Bombs
+        that reach the bunker boundary are deactivated.
 
         The method also advances the enemy firing scheduler. Once the wave's
         action delay has elapsed, no previous bombs remain active, and at least
@@ -1584,7 +1590,33 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             self.consts.ENEMY_SHOT_SPEED_TABLE,
             state.wave_pattern,
         )
-        moved_y = state.bomb_y + jnp.where(state.bomb_active, bomb_speed, 0)
+        jitter_y_table = jnp.asarray(
+            self.consts.BOMB_JITTER_Y_TABLE,
+            dtype=jnp.int32,
+        )
+        jitter_y_phase = jnp.mod(
+            state.step_counter,
+            len(self.consts.BOMB_JITTER_Y_TABLE),
+        )
+        bomb_delta_y = jnp.where(
+            bomb_type == BOMB_TYPE_LONG,
+            bomb_speed,
+            jitter_y_table[jitter_y_phase],
+        )
+        source_bottom_y = (
+            state.demons_y[state.bomb_source_idx]
+            + self._demon_height_size(state.demon_status[state.bomb_source_idx])
+        )
+        minimum_bomb_y = jnp.maximum(state.bomb_spawn_y, source_bottom_y)
+        # Never rise above the firing position or the source demon's current bottom edge
+        moved_y = jnp.maximum(
+            state.bomb_y + jnp.where(
+                state.bomb_active,
+                bomb_delta_y,
+                0,
+            ),
+            minimum_bomb_y,
+        )
         bomb_despawn_y = self.consts.BUNKER_Y - self.consts.BOMB_SIZE[0]
         bomb_active_limit = jnp.where(
             bomb_type == BOMB_TYPE_LONG,
@@ -1618,15 +1650,18 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             )
 
         # First branch: per-slot jitter logic
-        jitter_table = jnp.asarray(
+        jitter_x_table = jnp.asarray(
             self.consts.BOMB_JITTER_X_TABLE,
             dtype=jnp.int32,
         )
-        jitter_phase = jnp.mod(
+        jitter_x_phase = jnp.mod(
             state.step_counter + slot_ids,
             len(self.consts.BOMB_JITTER_X_TABLE),
         )
-        jitter_x = self._bomb_jitter_for_type(bomb_type, jitter_table[jitter_phase])
+        jitter_x = self._bomb_jitter_for_type(
+            bomb_type,
+            jitter_x_table[jitter_x_phase],
+        )
 
         should_use_tracking_projectiles = state.wave_number >= self.consts.TRACKING_PROJECTILES_START_WAVE
 
@@ -1737,6 +1772,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         bomb_x = jnp.where(should_activate_slot, fired_x, bomb_x)
         bomb_y = jnp.where(should_activate_slot, fired_y, bomb_y)
+        bomb_spawn_y = jnp.where(
+            should_activate_slot,
+            fired_y,
+            state.bomb_spawn_y,
+        )
         bomb_active = jnp.logical_or(bomb_active, should_activate_slot)
 
         # After firing, arm the delay before the next shot in the same burst.
@@ -1778,6 +1818,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             key=key,
             bomb_x=bomb_x,
             bomb_y=bomb_y,
+            bomb_spawn_y=bomb_spawn_y,
             bomb_active=bomb_active,
             bomb_source_idx=source_idx,
             bomb_burst_step=next_burst_step,
