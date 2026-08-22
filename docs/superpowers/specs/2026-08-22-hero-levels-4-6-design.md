@@ -33,12 +33,16 @@ implemented.
   measured laser-melt).
 - **Wall-breaking convention carries over:** any wall blocking the descent
   path is dynamite-breakable (`dynamite_ok=1`); the laser never harms walls.
-- **Capture tooling is committed** (`scripts/hero_capture_auto.py`) so it
-  survives for future levels 7+, unlike the lost scratchpad scripts.
+- **Nothing extra lands in the repo** (user decision): the capture tooling
+  lives in the session scratchpad only (its method is documented in project
+  memory for rebuilding), and this spec file itself is removed before the
+  branch is finished. The final diff touches only
+  `src/jaxatari/games/jax_hero.py`, `src/jaxatari/games/hero_levels.py`, and
+  `tests/games/test_hero.py`.
 
-## Phase 1 — Capture tooling (`scripts/hero_capture_auto.py`)
+## Phase 1 — Capture tooling (scratchpad)
 
-Rebuild the automated pipeline from the documented method:
+Rebuilt in the session scratchpad (not committed) from the documented method:
 
 - RAM map: `player_x=27`, `player_y=31` (y = 145 − screen_y, wraps 137→1 per
   room), `room=28`, `power=43`, `lives=51`, `level=117`, `dynamite=50`.
