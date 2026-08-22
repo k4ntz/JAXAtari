@@ -639,10 +639,19 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         tb_y = jnp.where(kind_l == 2, sp_y + c.spider_body_top + 1, body_y)
         tb_w = jnp.where(kind_l == 2, 3, c.spider_width)
         tb_h = jnp.where(kind_l == 2, 4, c.spider_height - c.spider_body_top)
+        touching = (sp_here &
+                    self._aabb(new_x, new_y, c.player_width, c.player_height,
+                               tb_x, tb_y, tb_w, tb_h))
+        # ROM-measured rule: while the laser is firing, a contact with a
+        # killable creature kills the CREATURE, not the player ("the kill is
+        # processed before the touch") — this is how the real game's shaft
+        # guards are cleared by firing while falling onto them.
+        contact_kill = touching & laser_on & killable
+        spider_kill = spider_kill | contact_kill
+        spider_alive = state.spider_alive & (~spider_kill)
+        creatures_killed = jnp.sum(spider_kill.astype(jnp.int32))
         died_spider = ((state.invuln_timer <= 0) &
-                       jnp.any(sp_here & (~spider_kill) &
-                               self._aabb(new_x, new_y, c.player_width, c.player_height,
-                                          tb_x, tb_y, tb_w, tb_h)))
+                       jnp.any(touching & (~spider_kill)))
         died_blast = blast_here & self._aabb(new_x, new_y, c.player_width, c.player_height,
                                              ex, ey, ew, eh)
 

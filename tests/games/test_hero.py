@@ -263,6 +263,40 @@ def test_downleft_plants_and_moves():
     assert int(s.player_x) == x0 - 1                # and still moving
 
 
+def test_firing_through_a_shaft_guard_kills_it_not_the_player():
+    """ROM-measured rule: contact with a killable creature while the laser
+    is firing kills the CREATURE ("the kill is processed before the touch").
+    This is how the shaft guards below descent gaps are cleared — falling
+    onto one while holding fire. Without firing, the touch kills the player.
+    Uses L4 room 6's guard spider under the right entry shaft (132,69)."""
+    env = _env()
+    c = env.consts
+    slot = next(i for i in range(c.num_spiders)
+                if bool(c.SPIDER_VALID[3, i])
+                and int(c.SPIDER_X[3, i]) == 132 and int(c.SPIDER_Y[3, i]) == 69)
+    _, state = env.reset()
+    base = state.replace(level=jnp.int32(3), room=jnp.int32(6),
+                         player_x=jnp.int32(133), player_y=jnp.int32(40),
+                         spider_alive=c.SPIDER_VALID[3])
+    # falling while firing: guard dies, player lives (+50)
+    s = base
+    score0 = int(s.score)
+    for _ in range(50):
+        _, s, _, _, _ = env.step(s, FIRE)
+        if not bool(s.spider_alive[slot]):
+            break
+    assert not bool(s.spider_alive[slot])
+    assert int(s.lives) == c.starting_lives
+    assert int(s.score) - score0 == c.creature_points
+    # falling without firing: the guard kills the player
+    s = base
+    for _ in range(50):
+        _, s, _, _, _ = env.step(s, NOOP)
+        if int(s.lives) < c.starting_lives:
+            break
+    assert int(s.lives) == c.starting_lives - 1
+
+
 def test_laser_does_not_break_walls():
     """The laser is for enemies only; sustained fire never harms a wall."""
     env = _env()
