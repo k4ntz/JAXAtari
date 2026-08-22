@@ -581,8 +581,20 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         dyn_break = (d_solid & (dw[:, 5] > 0) & explode_now & (d_room == dyn_room) &
                      self._aabb(ex, ey, ew, eh, d_x, d_y, d_w, d_h))
         wall_stage = jnp.where(dyn_break, 2, state.wall_stage).astype(jnp.int32)
-        # a wall removed this frame scores once (+75)
+        # a wall removed this frame scores once (+75) — twins below are the
+        # same physical wall and do not score again
         walls_broken = jnp.sum(((state.wall_stage < 2) & (wall_stage >= 2)).astype(jnp.int32))
+        # Shared band walls: the screen flip splits one wall across two
+        # rooms (a room's floor band IS the next room's top band on the real
+        # console). Breaking a floor-band slot therefore also opens the
+        # x-overlapping top-band slot of the room below.
+        broke_now = (state.wall_stage < 2) & (wall_stage >= 2)
+        d_x0, d_x1 = dw[:, 1], dw[:, 1] + dw[:, 3]
+        twin = (broke_now[:, None] & (dw[:, 2][:, None] >= 99) &
+                (dw[:, 2][None, :] < 60) &
+                (dw[:, 0][None, :] == dw[:, 0][:, None] + 1) &
+                (d_x0[None, :] < d_x1[:, None]) & (d_x1[None, :] > d_x0[:, None]))
+        wall_stage = jnp.where(twin.any(axis=0), 2, wall_stage).astype(jnp.int32)
 
         # --- creatures: killed by laser or blast — except torches (kind 2),
         # which are immune to both (measured) ---

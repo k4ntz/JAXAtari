@@ -500,6 +500,13 @@ def test_l5r1_floor_blast_opens_the_way_down():
         if int(state.room) == 2:
             break
     assert int(state.room) == 2
+    # the blast opened the SAME wall as seen from room 2 (the screen flip
+    # splits one wall across both rooms): the fall continues through room
+    # 2's ceiling band instead of bouncing off it
+    for _ in range(70):
+        _, state, _, _, _ = env.step(state, NOOP)
+    assert int(state.room) == 2
+    assert int(state.player_y) > 60
 
 
 def test_opening_pillar_breakable_on_deep_levels():
