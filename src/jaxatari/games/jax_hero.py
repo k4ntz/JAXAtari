@@ -80,12 +80,14 @@ from jaxatari.games import hero_levels as HL
 _NUM_LEVELS = HL.NUM_LEVELS
 _ROOMS = HL.ROOMS_PER_LEVEL
 _MAX_ROOMS = max(_ROOMS)
-_RECTS = [HL.WALL_RECTS_L1, HL.WALL_RECTS_L2, HL.WALL_RECTS_L3]
+_RECTS = [HL.WALL_RECTS_L1, HL.WALL_RECTS_L2, HL.WALL_RECTS_L3,
+          HL.WALL_RECTS_L4, HL.WALL_RECTS_L5, HL.WALL_RECTS_L6]
 # +2 spare slots: carving the destructible zones out of the static rects can
 # split one rect into two (see _build_level_arrays)
 _MAX_WALLS = max(len(r) for lv in _RECTS for r in lv) + 2
 _MAX_SPIDERS = max(len(s) for s in HL.SPIDERS)
 _MAX_DWALLS = max(len(d) for d in HL.DESTRUCTIBLE)
+_MAX_LANTERNS = max(1, max(len(l) for l in HL.LANTERNS))
 
 
 def _build_level_arrays():
@@ -98,10 +100,14 @@ def _build_level_arrays():
     sp_x = np.zeros((nL, nS), np.int32)
     sp_y = np.zeros((nL, nS), np.int32)
     sp_patrol = np.zeros((nL, nS), np.int32)
+    sp_kind = np.zeros((nL, nS), np.int32)
     sp_valid = np.zeros((nL, nS), bool)
     nD = _MAX_DWALLS
     dw = np.zeros((nL, nD, 6), np.int32)          # room, x, y, w, h, dyn_ok
     dw_valid = np.zeros((nL, nD), bool)
+    nLan = _MAX_LANTERNS
+    lan = np.zeros((nL, nLan, 3), np.int32)       # room, x, y
+    lan_valid = np.zeros((nL, nLan), bool)
     for li in range(nL):
         rooms_n[li] = _ROOMS[li]
         for ri, rects in enumerate(_RECTS[li]):
@@ -109,10 +115,14 @@ def _build_level_arrays():
                 walls[li, ri, wi] = (x, y, w, h)
                 wall_valid[li, ri, wi] = True
         miner[li] = HL.MINER_POS[li]
-        for si, (rm, x, y, patrol) in enumerate(HL.SPIDERS[li]):
+        for si, (rm, x, y, patrol, kind) in enumerate(HL.SPIDERS[li]):
             sp_room[li, si], sp_x[li, si], sp_y[li, si] = rm, x, y
             sp_patrol[li, si] = patrol
+            sp_kind[li, si] = kind
             sp_valid[li, si] = True
+        for gi, (rm, x, y) in enumerate(HL.LANTERNS[li]):
+            lan[li, gi] = (rm, x, y)
+            lan_valid[li, gi] = True
         for di, (rm, x, y, w, h, dyn_ok) in enumerate(HL.DESTRUCTIBLE[li]):
             dw[li, di] = (rm, x, y, w, h, dyn_ok)
             dw_valid[li, di] = True
@@ -142,7 +152,8 @@ def _build_level_arrays():
                     wall_valid[li, rm, free] = True
     return dict(walls=walls, wall_valid=wall_valid, rooms_n=rooms_n, miner=miner,
                 sp_room=sp_room, sp_x=sp_x, sp_y=sp_y, sp_patrol=sp_patrol,
-                sp_valid=sp_valid, dw=dw, dw_valid=dw_valid)
+                sp_kind=sp_kind, sp_valid=sp_valid, dw=dw, dw_valid=dw_valid,
+                lan=lan, lan_valid=lan_valid)
 
 
 _LV = _build_level_arrays()
@@ -208,15 +219,25 @@ class HeroConstants(AutoDerivedConstants):
     wall_points: int = struct.field(pytree_node=False, default=75)
     miner_points: int = struct.field(pytree_node=False, default=1000)
 
-    # --- Spiders (sprite 7x11: 6 thread rows + 5 body rows; bob +-5;
-    # level-3 critters additionally patrol horizontally, measured range) ---
+    # --- Creatures (the "spiders" arrays hold every creature kind):
+    # kind 0 spider: sprite 7x11 (6 thread rows + 5 body rows), bobs +-5;
+    # kind 1 bat: X-wing critter, small bob, patrols horizontally (measured
+    #   patrol range per creature);
+    # kind 2 torch: static, kills on touch, immune to laser and blast
+    #   (measured on the ROM in the dark level-5 rooms). ---
     num_spiders: int = struct.field(pytree_node=False, default=_MAX_SPIDERS)
     spider_width: int = struct.field(pytree_node=False, default=7)
     spider_height: int = struct.field(pytree_node=False, default=11)
     spider_body_top: int = struct.field(pytree_node=False, default=6)
     spider_bob_amp: int = struct.field(pytree_node=False, default=5)
+    bat_bob_amp: int = struct.field(pytree_node=False, default=2)
     spider_bob_half_period: int = struct.field(pytree_node=False, default=20)
     spider_patrol_half_period: int = struct.field(pytree_node=False, default=40)
+
+    # --- Lanterns (3x4 lamp; touch or blast darkens the room, measured) ---
+    num_lanterns: int = struct.field(pytree_node=False, default=_MAX_LANTERNS)
+    lantern_width: int = struct.field(pytree_node=False, default=4)
+    lantern_height: int = struct.field(pytree_node=False, default=5)
 
     # --- Miner (sprite 8x12) ---
     miner_width: int = struct.field(pytree_node=False, default=8)
@@ -241,8 +262,14 @@ class HeroConstants(AutoDerivedConstants):
         default_factory=lambda: jnp.array(_LV["sp_y"], dtype=jnp.int32))
     SPIDER_PATROL: jnp.ndarray = struct.field(pytree_node=False,
         default_factory=lambda: jnp.array(_LV["sp_patrol"], dtype=jnp.int32))
+    SPIDER_KIND: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["sp_kind"], dtype=jnp.int32))
     SPIDER_VALID: jnp.ndarray = struct.field(pytree_node=False,
         default_factory=lambda: jnp.array(_LV["sp_valid"], dtype=jnp.bool_))
+    LANTERN: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["lan"], dtype=jnp.int32))
+    LANTERN_VALID: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["lan_valid"], dtype=jnp.bool_))
     # Destructible walls: (room, x, y, w, h, dynamite_ok) per slot. A dynamite
     # blast destroys a dyn_ok wall outright (the laser does not affect walls).
     num_dwalls: int = struct.field(pytree_node=False, default=_MAX_DWALLS)
@@ -307,6 +334,7 @@ class HeroState:
     explosion_timer: chex.Array
     spider_alive: chex.Array      # (num_spiders,)
     wall_stage: chex.Array        # (num_dwalls,) 0 intact / 2 blasted away
+    room_dark: chex.Array         # (max_rooms,) lantern destroyed -> dark
     invuln_timer: chex.Array      # creature-proof frames after a respawn
     miner_rescued: chex.Array
     level_complete: chex.Array
@@ -323,6 +351,7 @@ class HeroObservation:
     miner: ObjectObservation
     dynamite: ObjectObservation
     walls: ObjectObservation
+    lanterns: ObjectObservation
     power: chex.Array
     lives: chex.Array
     score: chex.Array
@@ -399,6 +428,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             explosion_timer=jnp.array(0, dtype=jnp.int32),
             spider_alive=self.consts.SPIDER_VALID[0],
             wall_stage=jnp.zeros((c.num_dwalls,), dtype=jnp.int32),
+            room_dark=jnp.zeros((c.max_rooms,), dtype=jnp.bool_),
             invuln_timer=jnp.array(0, dtype=jnp.int32),
             miner_rescued=jnp.array(False, dtype=jnp.bool_),
             level_complete=jnp.array(False, dtype=jnp.bool_),
@@ -415,14 +445,17 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
                 (ay < by + bh) & (ay + ah > by))
 
     def _spider_pos(self, state):
-        """Current (x, y) of every spider slot of the level: the measured
-        vertical bob on the thread plus the measured horizontal patrol for
-        the level-3 critters (patrol halfwidth 0 = pure bobber)."""
+        """Current (x, y) of every creature slot of the level: vertical bob
+        (amplitude by kind: spiders +-5, bats +-2, torches static) plus the
+        measured horizontal patrol (halfwidth 0 = pure bobber)."""
         c = self.consts
         lvl = state.level
+        kind = c.SPIDER_KIND[lvl]
+        amp = jnp.where(kind == 0, c.spider_bob_amp,
+                        jnp.where(kind == 1, c.bat_bob_amp, 0))
         t = state.step_counter % (2 * c.spider_bob_half_period)
-        bob = jnp.abs(t - c.spider_bob_half_period) * (2 * c.spider_bob_amp) \
-            // c.spider_bob_half_period - c.spider_bob_amp
+        bob = jnp.abs(t - c.spider_bob_half_period) * (2 * amp) \
+            // c.spider_bob_half_period - amp
         tp = state.step_counter % (2 * c.spider_patrol_half_period)
         tri = jnp.abs(tp - c.spider_patrol_half_period) * 2 \
             - c.spider_patrol_half_period          # -P .. +P triangle
@@ -551,20 +584,38 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         # a wall removed this frame scores once (+75)
         walls_broken = jnp.sum(((state.wall_stage < 2) & (wall_stage >= 2)).astype(jnp.int32))
 
-        # --- spiders: bob on their thread; killed by laser or blast ---
+        # --- creatures: killed by laser or blast — except torches (kind 2),
+        # which are immune to both (measured) ---
         sp_x, sp_y = self._spider_pos(state)
         sp_room = c.SPIDER_ROOM[lvl]
+        killable = c.SPIDER_KIND[lvl] < 2
         sp_here = state.spider_alive & (sp_room == new_room)
         body_y = sp_y + c.spider_body_top
-        spider_laser = (laser_on & sp_here &
+        spider_laser = (laser_on & sp_here & killable &
                         self._aabb(lx, ly, laser_len, c.laser_height,
                                    sp_x, body_y, c.spider_width, c.spider_height - c.spider_body_top))
-        spider_blast = (state.spider_alive & (sp_room == dyn_room) & explode_now &
+        spider_blast = (state.spider_alive & killable & (sp_room == dyn_room) & explode_now &
                         self._aabb(ex, ey, ew, eh, sp_x, body_y,
                                    c.spider_width, c.spider_height - c.spider_body_top))
         spider_kill = spider_laser | spider_blast
         spider_alive = state.spider_alive & (~spider_kill)
         creatures_killed = jnp.sum(spider_kill.astype(jnp.int32))
+
+        # --- lanterns: touching one (or catching it in a blast) plunges the
+        # room into darkness for the rest of the level (measured; the laser
+        # does not affect lanterns) ---
+        lan = c.LANTERN[lvl]                              # (nLan, 3)
+        lan_alive = c.LANTERN_VALID[lvl] & (~state.room_dark[lan[:, 0]])
+        lan_touch = (lan_alive & (lan[:, 0] == new_room) &
+                     self._aabb(new_x, new_y, c.player_width, c.player_height,
+                                lan[:, 1], lan[:, 2],
+                                c.lantern_width, c.lantern_height))
+        lan_blast = (lan_alive & (lan[:, 0] == dyn_room) & explode_now &
+                     self._aabb(ex, ey, ew, eh, lan[:, 1], lan[:, 2],
+                                c.lantern_width, c.lantern_height))
+        lan_hit = lan_touch | lan_blast
+        room_dark = state.room_dark | jnp.zeros_like(state.room_dark).at[
+            lan[:, 0]].max(lan_hit)
 
         # --- player death conditions (creatures can't kill during the brief
         # post-respawn grace) ---
@@ -638,6 +689,8 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         final_spider_alive = jnp.where(advance, c.SPIDER_VALID[next_lvl], spider_alive)
         # walls reset intact on a new level; a respawn keeps a blasted wall gone
         final_wall_stage = jnp.where(advance, 0, wall_stage).astype(jnp.int32)
+        # darkness lasts until the end of the level (a respawn keeps it)
+        final_room_dark = jnp.where(advance, False, room_dark)
         final_invuln = jnp.where(respawned, c.respawn_invuln,
                                  jnp.maximum(0, state.invuln_timer - 1)).astype(jnp.int32)
 
@@ -671,6 +724,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             explosion_timer=final_explosion,
             spider_alive=final_spider_alive,
             wall_stage=final_wall_stage,
+            room_dark=final_room_dark,
             invuln_timer=final_invuln,
             miner_rescued=final_miner_rescued,
             level_complete=level_complete,
@@ -743,9 +797,18 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             active=c.ROOM_WALL_VALID[lvl, state.room],
         )
 
+        lan = c.LANTERN[lvl]
+        lanterns = ObjectObservation.create(
+            x=lan[:, 1], y=lan[:, 2],
+            width=jnp.full((c.num_lanterns,), c.lantern_width, jnp.int32),
+            height=jnp.full((c.num_lanterns,), c.lantern_height, jnp.int32),
+            active=(c.LANTERN_VALID[lvl] & (lan[:, 0] == state.room) &
+                    (~state.room_dark[lan[:, 0]])),
+        )
+
         return HeroObservation(
             player=player, laser=laser, spiders=spiders,
-            miner=miner, dynamite=dynamite, walls=walls,
+            miner=miner, dynamite=dynamite, walls=walls, lanterns=lanterns,
             power=state.power, lives=state.lives, score=state.score,
             dynamite_count=state.dynamite_count, level=state.level, room=state.room,
         )
@@ -785,6 +848,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             "miner": spaces.get_object_space(n=None, screen_size=screen),
             "dynamite": spaces.get_object_space(n=None, screen_size=screen),
             "walls": spaces.get_object_space(n=c.num_walls, screen_size=screen),
+            "lanterns": spaces.get_object_space(n=c.num_lanterns, screen_size=screen),
             "power": spaces.Box(low=0, high=c.max_power, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=c.max_lives, shape=(), dtype=jnp.int32),
             "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
@@ -917,6 +981,47 @@ _SPIDER_ART = [
     "5.....5",
 ]
 
+# Bat (levels 4-6 guard critter): silver X wings, warm body (measured crop).
+_BAT_ART = [
+    "S.....S",
+    ".S...S.",
+    "..3.3..",
+    ".33333.",
+    "..444..",
+    ".33333.",
+    "..3.3..",
+    ".S...S.",
+    "S.....S",
+    ".......",
+    ".......",
+]
+
+# Torch (dark level-5 rooms): silver pole, warm flame. Static, deadly on
+# touch, immune to the laser (measured on the ROM).
+_TORCH_ART = [
+    "...S...",
+    "...S...",
+    "...S...",
+    "...S...",
+    "...S...",
+    "...S...",
+    ".2.Y.2.",
+    "..3Y3..",
+    ".33433.",
+    "..444..",
+    "...4...",
+]
+
+# Lantern lamp (lit rooms): silver bracket over a bright yellow lamp.
+# Touching it (or blasting it) darkens the room.
+_LANTERN_ART = [
+    ".SS.",
+    "Syy.",
+    "yyyy",
+    ".yy.",
+    "..y.",
+]
+
 # Trapped miner, 8 wide x 12 tall (measured).
 _MINER_ART = [
     "...y....",
@@ -1019,8 +1124,10 @@ class HeroRenderer(JAXGameRenderer):
             self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        palettes = [HL.PALETTE_L1, HL.PALETTE_L2, HL.PALETTE_L3]
-        blobs = [HL.BG_RLE_L1, HL.BG_RLE_L2, HL.BG_RLE_L3]
+        palettes = [HL.PALETTE_L1, HL.PALETTE_L2, HL.PALETTE_L3,
+                    HL.PALETTE_L4, HL.PALETTE_L5, HL.PALETTE_L6]
+        blobs = [HL.BG_RLE_L1, HL.BG_RLE_L2, HL.BG_RLE_L3,
+                 HL.BG_RLE_L4, HL.BG_RLE_L5, HL.BG_RLE_L6]
 
         asset_config = [
             {'name': 'background', 'type': 'background', 'data': self._build_background()},
@@ -1030,6 +1137,9 @@ class HeroRenderer(JAXGameRenderer):
             {'name': 'player_fly0', 'type': 'procedural', 'data': self._sprite(_PLAYER_FLY0)},
             {'name': 'player_fly1', 'type': 'procedural', 'data': self._sprite(_PLAYER_FLY1)},
             {'name': 'spider', 'type': 'procedural', 'data': self._sprite(_SPIDER_ART)},
+            {'name': 'bat', 'type': 'procedural', 'data': self._sprite(_BAT_ART)},
+            {'name': 'torch', 'type': 'procedural', 'data': self._sprite(_TORCH_ART)},
+            {'name': 'lantern', 'type': 'procedural', 'data': self._sprite(_LANTERN_ART)},
             {'name': 'miner', 'type': 'procedural', 'data': self._sprite(_MINER_ART)},
             {'name': 'dynamite', 'type': 'procedural', 'data': self._sprite(_DYN_ART)},
             {'name': 'explosion', 'type': 'procedural', 'data': self._build_explosion(c.explosion_radius)},
@@ -1077,6 +1187,19 @@ class HeroRenderer(JAXGameRenderer):
             self.SHAPE_MASKS["player_fly0"],
             self.SHAPE_MASKS["player_fly1"],
         ])
+        # creature sprite per kind: 0 spider, 1 bat, 2 torch (all 7x11)
+        self.CREATURE_FRAMES = jnp.stack([
+            self.SHAPE_MASKS["spider"],
+            self.SHAPE_MASKS["bat"],
+            self.SHAPE_MASKS["torch"],
+        ])
+        # rows still drawn when a room is dark: the 4px band-edge slivers
+        # the ROM renders at the top and bottom (measured)
+        row_ids = np.arange(c.cave_bottom)
+        self.DARK_ROW_KEEP = jnp.asarray(
+            ((row_ids >= 16) & (row_ids < 20)) |
+            ((row_ids >= 138) & (row_ids < 142)))[:, None]
+        self.BLACK_ID = jnp.asarray(self.COLOR_TO_ID[(0, 0, 0)])
         self.BGS = jnp.stack([
             jnp.stack([self.SHAPE_MASKS[f"bg_{li}_{ri}"] for ri in range(c.max_rooms)])
             for li in range(c.num_levels)
@@ -1179,6 +1302,10 @@ class HeroRenderer(JAXGameRenderer):
 
         raster = self.jr.create_object_raster(self.BACKGROUND)
         cave = self.BGS[lvl, room]
+        # a room whose lantern was destroyed renders black except the 4px
+        # band-edge slivers (exactly what the ROM shows)
+        cave = jnp.where(state.room_dark[room] & (~self.DARK_ROW_KEEP),
+                         self.BLACK_ID.astype(cave.dtype), cave)
         raster = jax.lax.dynamic_update_slice(raster, cave, (0, 0))
 
         def maybe(cond, x, y, mask, ras, flip=False):
@@ -1204,18 +1331,28 @@ class HeroRenderer(JAXGameRenderer):
         raster = maybe((~state.miner_rescued) & (room == m[0]),
                        m[1], m[2], self.SHAPE_MASKS["miner"], raster)
 
-        # spiders: bob on their threads (+ measured horizontal patrol on L3)
+        # creatures: bob/patrol per kind; sprite selected by kind
+        kind = c.SPIDER_KIND[lvl]
+        amp = jnp.where(kind == 0, c.spider_bob_amp,
+                        jnp.where(kind == 1, c.bat_bob_amp, 0))
         t = state.step_counter % (2 * c.spider_bob_half_period)
-        bob = jnp.abs(t - c.spider_bob_half_period) * (2 * c.spider_bob_amp) \
-            // c.spider_bob_half_period - c.spider_bob_amp
+        bob = jnp.abs(t - c.spider_bob_half_period) * (2 * amp) \
+            // c.spider_bob_half_period - amp
         tp = state.step_counter % (2 * c.spider_patrol_half_period)
         tri = jnp.abs(tp - c.spider_patrol_half_period) * 2 - c.spider_patrol_half_period
         sweep = (c.SPIDER_PATROL[lvl] * tri) // c.spider_patrol_half_period
         sp_room = c.SPIDER_ROOM[lvl]
         for i in range(c.num_spiders):
             raster = maybe(state.spider_alive[i] & (sp_room[i] == room),
-                           c.SPIDER_X[lvl, i] + sweep[i], c.SPIDER_Y[lvl, i] + bob,
-                           self.SHAPE_MASKS["spider"], raster)
+                           c.SPIDER_X[lvl, i] + sweep[i], c.SPIDER_Y[lvl, i] + bob[i],
+                           jnp.take(self.CREATURE_FRAMES, kind[i], axis=0), raster)
+
+        # lanterns (alive while their room is still lit)
+        lan = c.LANTERN[lvl]
+        for i in range(c.num_lanterns):
+            raster = maybe(c.LANTERN_VALID[lvl, i] & (lan[i, 0] == room) &
+                           (~state.room_dark[lan[i, 0]]),
+                           lan[i, 1], lan[i, 2], self.SHAPE_MASKS["lantern"], raster)
 
         # dynamite + explosion flash
         dyn_here = state.dyn_room == room

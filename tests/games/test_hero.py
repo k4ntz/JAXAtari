@@ -390,6 +390,154 @@ def test_spiders_only_active_in_their_room():
     assert bool(obs.spiders.active.any())
 
 
+def test_levels_4_to_6_data_present():
+    """Six measured levels: room counts, creature 5-tuples, lantern tables,
+    and every background blob decodes."""
+    from jaxatari.games import hero_levels as HL
+    assert HL.NUM_LEVELS == 6
+    assert HL.ROOMS_PER_LEVEL == [2, 4, 6, 8, 8, 10]
+    for lv in range(6):
+        assert all(len(t) == 5 for t in HL.SPIDERS[lv])
+        assert all(len(t) == 3 for t in HL.LANTERNS[lv])
+    assert HL.LANTERNS[0] == HL.LANTERNS[1] == HL.LANTERNS[2] == []
+    for blobs, pal, n in [(HL.BG_RLE_L4, HL.PALETTE_L4, 8),
+                          (HL.BG_RLE_L5, HL.PALETTE_L5, 8),
+                          (HL.BG_RLE_L6, HL.PALETTE_L6, 10)]:
+        assert len(blobs) == n
+        for b in blobs:
+            assert HL.decode_bg(b, pal).shape == (142, 160, 3)
+
+
+def test_bat_killed_by_laser():
+    """The level-4 bats die to the beam like spiders (+50). Bat 0 lives in
+    L4 room 2 at (120,68) with no patrol."""
+    env = _env()
+    c = env.consts
+    _, state = env.reset()
+    state = state.replace(level=jnp.int32(3), room=jnp.int32(2),
+                          player_x=jnp.int32(100), player_y=jnp.int32(76),
+                          spider_alive=c.SPIDER_VALID[3])
+    score0 = int(state.score)
+    killed = False
+    for _ in range(8):
+        _, state, _, _, _ = env.step(state, FIRE)
+        if not bool(state.spider_alive[0]):
+            killed = True
+            break
+    assert killed
+    assert int(state.score) - score0 == c.creature_points
+
+
+def test_torch_is_laser_proof_and_deadly():
+    """The dark level-5 rooms hold torches: the laser never kills one, and
+    touching it costs a life (both measured on the ROM)."""
+    env = _env()
+    c = env.consts
+    _, state = env.reset()
+    # torch slot 9 of level 5 (index 4): room 5 at (76,71)
+    assert int(c.SPIDER_KIND[4, 9]) == 2
+    base = state.replace(level=jnp.int32(4), room=jnp.int32(5),
+                         spider_alive=c.SPIDER_VALID[4])
+    s = base.replace(player_x=jnp.int32(56), player_y=jnp.int32(78))
+    for _ in range(10):
+        _, s, _, _, _ = env.step(s, FIRE)
+    assert bool(s.spider_alive[9])              # torch survives the beam
+    s = base.replace(player_x=jnp.int32(74), player_y=jnp.int32(72))
+    _, s, _, _, _ = env.step(s, NOOP)
+    assert int(s.lives) == c.starting_lives - 1  # touch kills
+
+
+def test_lantern_touch_darkens_room_until_next_level():
+    """Touching a lantern darkens its room for the rest of the level
+    (measured: brightness collapses; the laser does not affect lanterns).
+    Advancing to the next level restores the light."""
+    env = _env()
+    c = env.consts
+    _, state = env.reset()
+    # L4 lantern 0: room 4 at (28,39)
+    state = state.replace(level=jnp.int32(3), room=jnp.int32(4),
+                          player_x=jnp.int32(26), player_y=jnp.int32(24),
+                          spider_alive=jnp.zeros_like(state.spider_alive))
+    obs = env._get_observation(state)
+    assert bool(obs.lanterns.active[0])
+    _, s, _, _, _ = env.step(state, NOOP)        # falls onto the lantern
+    for _ in range(20):
+        if bool(s.room_dark[4]):
+            break
+        _, s, _, _, _ = env.step(s, NOOP)
+    assert bool(s.room_dark[4])                  # room went dark
+    assert int(s.lives) == c.starting_lives      # touching does not kill
+    obs = env._get_observation(s.replace(room=jnp.int32(4)))
+    assert not bool(obs.lanterns.active[0])      # lamp gone
+    env.render(s.replace(room=jnp.int32(4)))     # dark room renders
+    # rescue the miner -> next level restores light
+    m = c.LEVEL_MINER[3]
+    s = s.replace(room=m[0], player_x=m[1], player_y=m[2])
+    _, s, _, _, _ = env.step(s, NOOP)
+    assert int(s.level) == 4
+    assert not bool(s.room_dark.any())
+
+
+def test_l5r1_floor_blast_opens_the_way_down():
+    """Level 5 room 1 has no floor gap (measured): dynamite blasts a hole
+    through the floor band and the player falls through to room 2."""
+    env = _env()
+    c = env.consts
+    _, state = env.reset()
+    state = state.replace(level=jnp.int32(4), room=jnp.int32(1),
+                          player_x=jnp.int32(48), player_y=jnp.int32(75),
+                          spider_alive=jnp.zeros_like(state.spider_alive))
+    _, state, _, _, _ = env.step(state, DOWN)
+    assert bool(state.dyn_active)
+    for _ in range(c.dyn_fuse + 6):
+        _, state, _, _, _ = env.step(state, LEFT)   # flee along the floor
+    assert int(state.lives) == c.starting_lives
+    assert bool((state.wall_stage >= 2).any())      # floor segment(s) gone
+    # walk back over the hole and fall through
+    state = state.replace(player_x=jnp.int32(48), player_y=jnp.int32(75))
+    for _ in range(80):
+        _, state, _, _, _ = env.step(state, NOOP)
+        if int(state.room) == 2:
+            break
+    assert int(state.room) == 2
+
+
+def test_opening_pillar_breakable_on_deep_levels():
+    """Every level's opening pillar is dynamite-breakable (convention)."""
+    env = _env()
+    c = env.consts
+    for lvl in (3, 4, 5):
+        _, state = env.reset()
+        state = state.replace(level=jnp.int32(lvl),
+                              player_x=jnp.int32(48), player_y=jnp.int32(75),
+                              spider_alive=jnp.zeros_like(state.spider_alive))
+        _, state, _, _, _ = env.step(state, DOWN)
+        for _ in range(c.dyn_fuse + 6):
+            _, state, _, _, _ = env.step(state, LEFT)
+        assert int(state.wall_stage[0]) == 2, f"pillar not broken on level {lvl}"
+
+
+def test_advance_chain_levels_1_to_6():
+    """Rescuing each miner walks the level counter 1->6; the last rescue
+    completes the episode."""
+    env = _env()
+    c = env.consts
+    _, state = env.reset()
+    for lvl in range(6):
+        m = c.LEVEL_MINER[lvl]
+        state = state.replace(level=jnp.int32(lvl), room=m[0],
+                              player_x=m[1], player_y=m[2],
+                              spider_alive=jnp.zeros_like(state.spider_alive),
+                              miner_rescued=jnp.bool_(False))
+        _, state, _, done, _ = env.step(state, NOOP)
+        if lvl < 5:
+            assert int(state.level) == lvl + 1
+            assert not bool(done)
+        else:
+            assert bool(state.level_complete)
+            assert bool(done)
+
+
 def test_render_shape_and_jit():
     env = _env()
     _, state = env.reset()
