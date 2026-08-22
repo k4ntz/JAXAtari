@@ -190,7 +190,7 @@ class EpisodeStatistics:
     returned_episode_lengths: jnp.array
 
 
-def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: Actor, critic: Critic, config: dict, task_id: str, agent_state: TrainState, ewc_fisher = None, ewc_params = None, max_D = None, global_step = None, global_iteration = None, global_start_time = None, seen_tasks = None, train_mods = [], eval_mods = [], get_action_and_value_fn = None, compute_gae_fn = None, update_ppo_fn = None):
+def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: Actor, critic: Critic, config: dict, task_id: str, agent_state: TrainState, ewc_fisher = None, ewc_params = None, max_D = None, global_step = None, global_iteration = None, global_start_time = None, seen_tasks = None, train_mods = [], eval_mods = [], crl_state = None, get_action_and_value_fn = None, compute_gae_fn = None, update_ppo_fn = None):
     # shallow copy the config to avoid changing the original across tasks
     config = config.copy()
 
@@ -256,7 +256,9 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
     assert isinstance(env.action_space(), spaces.Discrete), "only discrete action space is supported"
     # assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
-    def eval_and_vid(iteration, current_global_step):
+    def eval_and_vid(iteration, current_global_step, is_end_of_task=False):
+        # TODO: The SAVE_MODEL config option doesn't decide if a model is saved, but it decides wether we enter 
+        # the evaluation loop at the very end of training on a task.
         model_path = f'runs/{run_name}/{config["EXP_NAME"]}_{iteration}.cleanrl_model'
         os.makedirs(os.path.dirname(model_path), exist_ok=True)
         with open(model_path, "wb") as f:
@@ -274,7 +276,11 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             )
         print(f"model saved to {model_path}")
 
+        current_performances = {}
+        current_task_key = f"{task_id}+{str(list(config['TRAIN_MODS']))}"
+
         for eval_task, eval_task_train_mods, eval_task_eval_mods in seen_tasks:
+            eval_task_key = f"{eval_task}+{str(list(eval_task_train_mods))}"
             # We only want to log videos for the CURRENT task to save time/space
             capture_video = config["CAPTURE_VIDEO"] and (eval_task == task_id) and (eval_task_train_mods == list(config["TRAIN_MODS"]))
 
@@ -315,7 +321,11 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
                 padding_width=current_padding,
                 crl=True
             )
-            wandb.log({f"{eval_task}+{str(list(eval_task_train_mods))}/eval/episodic_return_mod": np.mean(jax.device_get(episodic_returns))}, step=current_global_step)
+
+            current_perf = np.mean(jax.device_get(episodic_returns))
+            current_performances[eval_task_key] = current_perf
+
+            wandb.log({f"{eval_task_key}/eval/episodic_return_mod": current_perf}, step=current_global_step)
 
             if capture_video: 
                 # Instantiate a clean renderer immune to the training env's downscaling
@@ -327,8 +337,49 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
                 # shape: (N, H, W, C) -> (N, C, H, W)
                 frames = jnp.transpose(frames, (0, 3, 1, 2))
                 video = wandb.Video(np.array(frames), fps=30, format="mp4")
-                wandb.log({f"{eval_task}+{str(list(eval_task_train_mods))}/eval/video": video,}, step=current_global_step)
-                print(f"Video ({eval_task}+{str(list(eval_task_train_mods))}/eval) logged to wandb with {frames.shape[0]} frames.")
+                wandb.log({f"{eval_task_key}/eval/video": video,}, step=current_global_step)
+                print(f"Video ({eval_task_key}/eval) logged to wandb with {frames.shape[0]} frames.")
+
+        # log crl metrics at the end of task
+        if is_end_of_task:
+            k = len(seen_tasks)
+            wandb.log({"crl_metrics/Average_Performance": sum(current_performances.values()) / k}, step=current_global_step)
+
+            if k > 1:
+                bwt_sum, fm_sum, past_tasks_count = 0, 0, 0
+                for eval_task, eval_task_train_mods, _ in seen_tasks:
+                    eval_task_key = f"{eval_task}+{str(list(eval_task_train_mods))}"
+                    if eval_task_key != current_task_key:
+                        a_k_j = current_performances[eval_task_key]
+                        a_j_j = crl_state["a_j_j"][eval_task_key]
+                        max_a_j = crl_state["max_performances"][eval_task_key]
+
+                        print(f"Step: {current_global_step} | Task: {eval_task_key}")
+                        print(f"   Max: {max_a_j:.2f} | Current: {a_k_j:.2f} | Forgetting: {(max_a_j - a_k_j):.2f}")
+                        print(f"   Current: {a_k_j:.2f} | Baseline: {a_j_j:.2f} | Backward Transfer: {(a_k_j - a_j_j):.2f}")
+                        
+                        bwt_sum += (a_k_j - a_j_j)
+                        fm_sum += (max_a_j - a_k_j) 
+                        past_tasks_count += 1
+                
+                wandb.log({
+                    "crl_metrics/Backward_Transfer": bwt_sum / past_tasks_count,
+                    "crl_metrics/Forgetting_Measure": fm_sum / past_tasks_count
+                }, step=current_global_step)
+
+        for eval_task, eval_task_train_mods, _ in seen_tasks:
+            eval_task_key = f"{eval_task}+{str(list(eval_task_train_mods))}"
+            current_perf = current_performances[eval_task_key]
+            # update max performance (FM)
+            if eval_task_key not in crl_state["max_performances"]:
+                crl_state["max_performances"][eval_task_key] = current_perf
+            else:
+                crl_state["max_performances"][eval_task_key] = max(crl_state["max_performances"][eval_task_key], current_perf)
+            
+            # lock in baseline (BWT)
+            if eval_task_key == current_task_key:
+                crl_state["a_j_j"][eval_task_key] = current_perf
+            
 
     def _generate_single_final_video(mods_config, video_label, video_index=0, current_global_step=None):
         """Generate a single video for the given mod configuration and log it to wandb.
@@ -468,6 +519,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
 
     rollout = partial(rollout, step_once_fn=partial(step_once, env_step_fn=vmap_step), max_steps=config["NUM_STEPS"])
 
+    # TODO: move this to continual run
     rtpt = RTPT(name_initials='TR', experiment_name='PPOEWC_JAXAtari', max_iterations=config["NUM_ITERATIONS"])
     rtpt.start()
     task_start_time = time.time()
@@ -529,7 +581,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
     generate_final_video(global_step)
 
     if config["SAVE_MODEL"]:
-        eval_and_vid(iteration, global_step)
+        eval_and_vid(iteration, global_step, is_end_of_task=True)
 
     return agent_state, fisher_storage, global_step, global_iteration
 
@@ -849,10 +901,17 @@ def continual_run(config: dict):
     global_start_time = time.time()
     seen_tasks = [] # tracks tasks that have been trained on so far, for evaluation
 
+    # dictionary for tracking Continual Learning metrics
+    crl_state = {
+        "max_performances": {},
+        "a_j_j": {},
+    }
+
     for i, task_id in enumerate(config["TASKS"]):
         train_mods = all_train_mods[i] if i < len(all_train_mods) else []
         eval_mods = all_eval_mods[i] if i < len(all_eval_mods) else []
-        seen_tasks.append((task_id, train_mods, eval_mods))
+        if (task_id, train_mods, eval_mods) not in seen_tasks:
+            seen_tasks.append((task_id, train_mods, eval_mods))
 
         # reset the optimizer state (step count & momentum) for new tasks
         if i > 0:
@@ -864,7 +923,7 @@ def continual_run(config: dict):
         agent_state, fisher_storage, global_step, global_iteration = single_run(
             key, network, actor, critic, config, task_id, agent_state, 
             ewc_fisher, ewc_params, max_D, global_step, global_iteration, 
-            global_start_time, seen_tasks, train_mods, eval_mods,
+            global_start_time, seen_tasks, train_mods, eval_mods, crl_state,
             get_action_and_value, compute_gae, update_ppo
         )
 
