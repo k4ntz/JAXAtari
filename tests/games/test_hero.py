@@ -424,19 +424,28 @@ def test_spiders_only_active_in_their_room():
     assert bool(obs.spiders.active.any())
 
 
-def test_levels_4_to_6_data_present():
-    """Six measured levels: room counts, creature 5-tuples, lantern tables,
-    and every background blob decodes."""
+def test_levels_4_to_10_data_present():
+    """Ten measured levels: room counts, creature 5-tuples, lantern tables,
+    deadly/flare tables, and every background blob decodes."""
     from jaxatari.games import hero_levels as HL
-    assert HL.NUM_LEVELS == 6
-    assert HL.ROOMS_PER_LEVEL == [2, 4, 6, 8, 8, 10]
-    for lv in range(6):
+    assert HL.NUM_LEVELS == 10
+    assert HL.ROOMS_PER_LEVEL == [2, 4, 6, 8, 8, 10, 12, 14, 16, 16]
+    for lv in range(10):
         assert all(len(t) == 5 for t in HL.SPIDERS[lv])
         assert all(len(t) == 3 for t in HL.LANTERNS[lv])
+        assert all(len(t) == 5 for t in HL.DEADLY[lv])
+        assert all(len(t) == 7 for t in HL.FLARES[lv])
     assert HL.LANTERNS[0] == HL.LANTERNS[1] == HL.LANTERNS[2] == []
+    # deadly water strips + flare-ups only exist in the deep levels
+    assert all(HL.DEADLY[lv] == [] for lv in range(6))
+    assert all(HL.FLARES[lv] == [] for lv in range(6))
     for blobs, pal, n in [(HL.BG_RLE_L4, HL.PALETTE_L4, 8),
                           (HL.BG_RLE_L5, HL.PALETTE_L5, 8),
-                          (HL.BG_RLE_L6, HL.PALETTE_L6, 10)]:
+                          (HL.BG_RLE_L6, HL.PALETTE_L6, 10),
+                          (HL.BG_RLE_L7, HL.PALETTE_L7, 12),
+                          (HL.BG_RLE_L8, HL.PALETTE_L8, 14),
+                          (HL.BG_RLE_L9, HL.PALETTE_L9, 16),
+                          (HL.BG_RLE_L10, HL.PALETTE_L10, 16)]:
         assert len(blobs) == n
         for b in blobs:
             assert HL.decode_bg(b, pal).shape == (142, 160, 3)
@@ -558,25 +567,73 @@ def test_opening_pillar_breakable_on_deep_levels():
         assert int(state.wall_stage[0]) == 2, f"pillar not broken on level {lvl}"
 
 
-def test_advance_chain_levels_1_to_6():
-    """Rescuing each miner walks the level counter 1->6; the last rescue
+def test_advance_chain_levels_1_to_10():
+    """Rescuing each miner walks the level counter 1->10; the last rescue
     completes the episode."""
     env = _env()
     c = env.consts
     _, state = env.reset()
-    for lvl in range(6):
+    for lvl in range(10):
         m = c.LEVEL_MINER[lvl]
         state = state.replace(level=jnp.int32(lvl), room=m[0],
                               player_x=m[1], player_y=m[2],
                               spider_alive=jnp.zeros_like(state.spider_alive),
                               miner_rescued=jnp.bool_(False))
         _, state, _, done, _ = env.step(state, NOOP)
-        if lvl < 5:
+        if lvl < 9:
             assert int(state.level) == lvl + 1
             assert not bool(done)
         else:
             assert bool(state.level_complete)
             assert bool(done)
+
+
+def test_water_strip_kills_when_stood_in():
+    """Level 9's flooded floors (measured): the water strip is deadly under
+    standable columns; the strips are clipped so a fall through a floor gap
+    never touches them."""
+    env = _env()
+    c = env.consts
+    from jaxatari.games import hero_levels as HL
+    rm, wx, wy, ww, wh = HL.DEADLY[8][0]
+    _, state = env.reset()
+    s = state.replace(level=jnp.int32(8), room=jnp.int32(rm),
+                      player_x=jnp.int32(wx + 1),
+                      player_y=jnp.int32(wy + wh - c.player_height + 2),
+                      spider_alive=c.SPIDER_VALID[8])
+    _, s, _, _, _ = env.step(s, NOOP)
+    assert int(s.lives) == c.starting_lives - 1
+    assert int(s.power) == c.max_power          # respawn refills power
+
+
+def test_flare_kills_only_while_its_cycle_is_on():
+    """Levels 7-10 gap-mouth flare-ups (measured eruptions, recreated as
+    periodic cycles): deadly during the on-window, harmless while off."""
+    env = _env()
+    c = env.consts
+    from jaxatari.games import hero_levels as HL
+    rm, fx, fy, fw, fh, period, duty = HL.FLARES[6][0]
+    _, state = env.reset()
+    base = state.replace(level=jnp.int32(6), room=jnp.int32(rm),
+                         player_x=jnp.int32(fx + 1),
+                         player_y=jnp.int32(fy - c.player_height + fh - 1),
+                         spider_alive=c.SPIDER_VALID[6])
+    on = base.replace(step_counter=jnp.int32(0))          # cycle on
+    _, s, _, _, _ = env.step(on, NOOP)
+    assert int(s.lives) == c.starting_lives - 1
+    off = base.replace(step_counter=jnp.int32(duty + 1))  # cycle off
+    _, s, _, _, _ = env.step(off, NOOP)
+    assert int(s.lives) == c.starting_lives
+
+
+def test_levels_7_to_10_miners_on_the_measured_ledges():
+    """The deep-level miners sit at the classic side positions (measured by
+    RAM-teleport room scans): L7 R11, L8 R13, L9 R15, L10 R15."""
+    from jaxatari.games import hero_levels as HL
+    assert HL.MINER_POS[6] == (11, 129, 86)
+    assert HL.MINER_POS[7] == (13, 23, 86)
+    assert HL.MINER_POS[8] == (15, 129, 86)
+    assert HL.MINER_POS[9] == (15, 23, 86)
 
 
 def test_render_shape_and_jit():

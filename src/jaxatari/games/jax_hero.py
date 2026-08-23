@@ -81,13 +81,17 @@ _NUM_LEVELS = HL.NUM_LEVELS
 _ROOMS = HL.ROOMS_PER_LEVEL
 _MAX_ROOMS = max(_ROOMS)
 _RECTS = [HL.WALL_RECTS_L1, HL.WALL_RECTS_L2, HL.WALL_RECTS_L3,
-          HL.WALL_RECTS_L4, HL.WALL_RECTS_L5, HL.WALL_RECTS_L6]
+          HL.WALL_RECTS_L4, HL.WALL_RECTS_L5, HL.WALL_RECTS_L6,
+          HL.WALL_RECTS_L7, HL.WALL_RECTS_L8, HL.WALL_RECTS_L9,
+          HL.WALL_RECTS_L10]
 # +2 spare slots: carving the destructible zones out of the static rects can
 # split one rect into two (see _build_level_arrays)
 _MAX_WALLS = max(len(r) for lv in _RECTS for r in lv) + 2
 _MAX_SPIDERS = max(len(s) for s in HL.SPIDERS)
 _MAX_DWALLS = max(len(d) for d in HL.DESTRUCTIBLE)
 _MAX_LANTERNS = max(1, max(len(l) for l in HL.LANTERNS))
+_MAX_DEADLY = max(1, max(len(d) for d in HL.DEADLY))
+_MAX_FLARES = max(1, max(len(f) for f in HL.FLARES))
 
 
 def _build_level_arrays():
@@ -108,6 +112,12 @@ def _build_level_arrays():
     nLan = _MAX_LANTERNS
     lan = np.zeros((nL, nLan, 3), np.int32)       # room, x, y
     lan_valid = np.zeros((nL, nLan), bool)
+    nDe = _MAX_DEADLY
+    de = np.zeros((nL, nDe, 5), np.int32)         # room, x, y, w, h
+    de_valid = np.zeros((nL, nDe), bool)
+    nFl = _MAX_FLARES
+    fl = np.zeros((nL, nFl, 7), np.int32)         # room,x,y,w,h,period,duty
+    fl_valid = np.zeros((nL, nFl), bool)
     for li in range(nL):
         rooms_n[li] = _ROOMS[li]
         for ri, rects in enumerate(_RECTS[li]):
@@ -123,6 +133,12 @@ def _build_level_arrays():
         for gi, (rm, x, y) in enumerate(HL.LANTERNS[li]):
             lan[li, gi] = (rm, x, y)
             lan_valid[li, gi] = True
+        for gi, (rm, x, y, w, h) in enumerate(HL.DEADLY[li]):
+            de[li, gi] = (rm, x, y, w, h)
+            de_valid[li, gi] = True
+        for gi, (rm, x, y, w, h, per, duty) in enumerate(HL.FLARES[li]):
+            fl[li, gi] = (rm, x, y, w, h, per, duty)
+            fl_valid[li, gi] = True
         for di, (rm, x, y, w, h, dyn_ok) in enumerate(HL.DESTRUCTIBLE[li]):
             dw[li, di] = (rm, x, y, w, h, dyn_ok)
             dw_valid[li, di] = True
@@ -153,7 +169,8 @@ def _build_level_arrays():
     return dict(walls=walls, wall_valid=wall_valid, rooms_n=rooms_n, miner=miner,
                 sp_room=sp_room, sp_x=sp_x, sp_y=sp_y, sp_patrol=sp_patrol,
                 sp_kind=sp_kind, sp_valid=sp_valid, dw=dw, dw_valid=dw_valid,
-                lan=lan, lan_valid=lan_valid)
+                lan=lan, lan_valid=lan_valid, de=de, de_valid=de_valid,
+                fl=fl, fl_valid=fl_valid)
 
 
 _LV = _build_level_arrays()
@@ -270,6 +287,22 @@ class HeroConstants(AutoDerivedConstants):
         default_factory=lambda: jnp.array(_LV["lan"], dtype=jnp.int32))
     LANTERN_VALID: jnp.ndarray = struct.field(pytree_node=False,
         default_factory=lambda: jnp.array(_LV["lan_valid"], dtype=jnp.bool_))
+    # --- Deadly zones (L7-10, measured): water strips kill when stood in
+    # (clipped to non-gap columns so falling through a floor gap is safe,
+    # exactly like the ROM's slow-sink drowning). ---
+    num_deadly: int = struct.field(pytree_node=False, default=_MAX_DEADLY)
+    DEADLY_R: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["de"], dtype=jnp.int32))
+    DEADLY_VALID: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["de_valid"], dtype=jnp.bool_))
+    # --- Flare-ups (L7-10, measured at gap mouths): the ROM erupts them on
+    # approach; recreated as readable periodic cycles — deadly while
+    # (step_counter % period) < duty. ---
+    num_flares: int = struct.field(pytree_node=False, default=_MAX_FLARES)
+    FLARES_T: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["fl"], dtype=jnp.int32))
+    FLARES_VALID: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["fl_valid"], dtype=jnp.bool_))
     # Destructible walls: (room, x, y, w, h, dynamite_ok) per slot. A dynamite
     # blast destroys a dyn_ok wall outright (the laser does not affect walls).
     num_dwalls: int = struct.field(pytree_node=False, default=_MAX_DWALLS)
@@ -655,6 +688,23 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         died_blast = blast_here & self._aabb(new_x, new_y, c.player_width, c.player_height,
                                              ex, ey, ew, eh)
 
+        # --- deadly zones (water strips) + periodic flare-ups (L7-10) ---
+        de = c.DEADLY_R[lvl]
+        died_deadly = ((state.invuln_timer <= 0) &
+                       jnp.any(c.DEADLY_VALID[lvl] & (de[:, 0] == new_room) &
+                               self._aabb(new_x, new_y, c.player_width,
+                                          c.player_height, de[:, 1], de[:, 2],
+                                          de[:, 3], de[:, 4])))
+        flr = c.FLARES_T[lvl]
+        flare_period = jnp.maximum(1, flr[:, 5])
+        flare_active = (state.step_counter % flare_period) < flr[:, 6]
+        died_flare = ((state.invuln_timer <= 0) &
+                      jnp.any(c.FLARES_VALID[lvl] & flare_active &
+                              (flr[:, 0] == new_room) &
+                              self._aabb(new_x, new_y, c.player_width,
+                                         c.player_height, flr[:, 1], flr[:, 2],
+                                         flr[:, 3], flr[:, 4])))
+
         # --- power drain (starts after the first move) ---
         drain = jnp.where(has_moved, c.power_drain_per_frame, 0)
         new_power = jnp.maximum(0, state.power - drain).astype(jnp.int32)
@@ -680,7 +730,8 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         extra_lives = (new_score // c.extra_life_score - state.score // c.extra_life_score).astype(jnp.int32)
 
         # --- death / lives / respawn (top of the CURRENT room, measured) ---
-        died = (died_blast | died_spider | died_power) & (~touch_miner)
+        died = (died_blast | died_spider | died_power | died_deadly |
+                died_flare) & (~touch_miner)
         new_lives = jnp.clip(state.lives - died.astype(jnp.int32) + extra_lives,
                              0, c.max_lives).astype(jnp.int32)
         respawned = died & (new_lives > 0)
@@ -1153,9 +1204,13 @@ class HeroRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         palettes = [HL.PALETTE_L1, HL.PALETTE_L2, HL.PALETTE_L3,
-                    HL.PALETTE_L4, HL.PALETTE_L5, HL.PALETTE_L6]
+                    HL.PALETTE_L4, HL.PALETTE_L5, HL.PALETTE_L6,
+                    HL.PALETTE_L7, HL.PALETTE_L8, HL.PALETTE_L9,
+                    HL.PALETTE_L10]
         blobs = [HL.BG_RLE_L1, HL.BG_RLE_L2, HL.BG_RLE_L3,
-                 HL.BG_RLE_L4, HL.BG_RLE_L5, HL.BG_RLE_L6]
+                 HL.BG_RLE_L4, HL.BG_RLE_L5, HL.BG_RLE_L6,
+                 HL.BG_RLE_L7, HL.BG_RLE_L8, HL.BG_RLE_L9,
+                 HL.BG_RLE_L10]
 
         asset_config = [
             {'name': 'background', 'type': 'background', 'data': self._build_background()},
@@ -1201,6 +1256,19 @@ class HeroRenderer(JAXGameRenderer):
                         stamp[:h, :w, 3] = 255          # opaque black over the wall
                     asset_config.append({'name': f'dwall_{li}_{di}_{stage}',
                                          'type': 'procedural', 'data': jnp.asarray(stamp)})
+        # flare flames (L7-10): a solid warm stamp per (level, slot), padded
+        max_fl_h = max(1, max(int(v) for v in _LV["fl"][:, :, 4].flatten()))
+        max_fl_w = max(1, max(int(v) for v in _LV["fl"][:, :, 3].flatten()))
+        for li in range(c.num_levels):
+            for fi in range(c.num_flares):
+                _, _, _, w, h, _, _ = (int(v) for v in _LV["fl"][li, fi])
+                stamp = np.zeros((max_fl_h, max_fl_w, 4), np.uint8)
+                if _LV["fl_valid"][li, fi]:
+                    stamp[:h, :w, 0:3] = np.array((252, 232, 120), np.uint8)
+                    stamp[:h, 1:max(2, w - 1), 0:3] = np.array((184, 50, 50), np.uint8)
+                    stamp[:h, :w, 3] = 255
+                asset_config.append({'name': f'flare_{li}_{fi}',
+                                     'type': 'procedural', 'data': jnp.asarray(stamp)})
 
         sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "hero")
         (
@@ -1238,6 +1306,11 @@ class HeroRenderer(JAXGameRenderer):
                 for di in range(c.num_dwalls)])
             for li in range(c.num_levels)
         ])  # (nL, nD, 3, H, W)
+        self.FLARE_STAMPS = jnp.stack([
+            jnp.stack([self.SHAPE_MASKS[f"flare_{li}_{fi}"]
+                       for fi in range(c.num_flares)])
+            for li in range(c.num_levels)
+        ])  # (nL, nF, H, W)
 
     # --- procedural asset builders ----------------------------------------
     @staticmethod
@@ -1381,6 +1454,15 @@ class HeroRenderer(JAXGameRenderer):
             raster = maybe(c.LANTERN_VALID[lvl, i] & (lan[i, 0] == room) &
                            (~state.room_dark[lan[i, 0]]),
                            lan[i, 1], lan[i, 2], self.SHAPE_MASKS["lantern"], raster)
+
+        # flare-ups (L7-10): drawn while their cycle is on
+        flr = c.FLARES_T[lvl]
+        fl_period = jnp.maximum(1, flr[:, 5])
+        fl_on = (state.step_counter % fl_period) < flr[:, 6]
+        for i in range(c.num_flares):
+            raster = maybe(c.FLARES_VALID[lvl, i] & fl_on[i] &
+                           (flr[i, 0] == room),
+                           flr[i, 1], flr[i, 2], self.FLARE_STAMPS[lvl, i], raster)
 
         # dynamite + explosion flash
         dyn_here = state.dyn_room == room
