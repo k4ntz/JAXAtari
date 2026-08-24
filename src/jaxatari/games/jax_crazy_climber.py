@@ -956,6 +956,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             return next_state
 
         def break_anim(state: CrazyClimberState) -> CrazyClimberState:
+            """
+            logic for the egg breaking animation and freezing of the game
+            """
             anim_count = jnp.array(13)
             pause = jnp.array(True)
 
