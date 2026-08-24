@@ -15,12 +15,51 @@ from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
 
-# Player movement states
+class Level(IntEnum):
+    LEVEL_1 = 1
+    LEVEL_2 = 2
+    LEVEL_3 = 3
 
+class Enemy(IntEnum):
+    NONE = 0
+    MAD_DOCTOR_1 = 1
+    CONDOR = 2
+    
+class TowerLevelType(IntEnum):
+    FULL = 0
+    MIDDLE_CUT = 1
+    SIDE_CUTS = 2
+
+# Player movement states
 class PlayerStableStates(IntEnum):
     NEUTRAL = 0
     HALF_PULL_UP = 1
     PULL_UP = 2
+
+@chex.dataclass
+class LevelState:
+    condor_active: chex.Array
+    mad_doctor_active: chex.Array
+    score_increment: chex.Array
+    next_enemy: chex.Array
+    pause_game: chex.Array
+    
+    @classmethod
+    def new(cls, level: Level) -> chex.dataclass:
+        return cls(
+            condor_active = jnp.array(False),
+            mad_doctor_active = jnp.array(False),
+            score_increment = jnp.array(CrazyClimberConstants.SCORE_BASE_VALUE * level),
+            next_enemy = jnp.array(
+                jax.lax.switch(
+                    level,
+                    [
+                        lambda: Enemy.NONE,
+                        lambda: Enemy.CONDOR
+                    ]
+                )),
+            pause_game = jnp.array(False)
+        )
     
 @chex.dataclass
 class PlayerMoveState:
@@ -30,7 +69,9 @@ class PlayerMoveState:
     hand_dir: int
     pos_x: int
     falling_count: int
+    egg_animation_count: chex.Array
     should_fall: bool
+    flicker: chex.Array
 
     @classmethod
     def new(cls):
@@ -41,13 +82,10 @@ class PlayerMoveState:
             hand_dir=1,
             pos_x=0,
             falling_count=0,
-            should_fall=False
+            egg_animation_count=0,
+            should_fall=False,
+            flicker=jnp.array(False)
         )
-
-class TowerLevelType(IntEnum):
-    FULL = 0
-    MIDDLE_CUT = 1
-    SIDE_CUTS = 2
     
 @chex.dataclass
 class TowerState:
@@ -75,6 +113,43 @@ class TowerState:
         )
 
 @chex.dataclass
+class BirdState:
+    drop_egg: chex.Array
+    pos_x: chex.Array
+    pos_y: chex.Array
+    dir: chex.Array
+    stop: chex.Array
+    egg_state: chex.dataclass
+
+    @classmethod
+    def new(cls):
+        return cls(
+            drop_egg=jnp.array(True),
+            pos_x=CrazyClimberConstants.BIRD_SIZE[1],
+            pos_y=CrazyClimberConstants.BIRD_Y,
+            dir=jnp.array(1),
+            stop=jnp.array(False),
+            egg_state=EggState.new()
+        )
+
+@chex.dataclass
+class EggState:
+    pos_x: chex.Array
+    pos_y: chex.Array
+    dir: chex.Array
+    vel: chex.Array
+    flicker: chex.Array
+
+    @classmethod
+    def new(cls):
+        return cls(
+            pos_x=jnp.array(CrazyClimberConstants.BIRD_SIZE[1]),
+            pos_y=jnp.array(CrazyClimberConstants.BIRD_Y),
+            dir=jnp.array(1),
+            vel=jnp.array(8),
+            flicker=jnp.array(False)
+        )
+    
 class FlowerpotEnemyState:
     active: chex.Array
     phase: chex.Array
@@ -87,12 +162,20 @@ class FlowerpotEnemyState:
 
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
-    score: chex.Array
-    bonus: chex.Array
     step_counter: chex.Array
+
+    score: chex.Array
+    reached_apex: chex.Array
+    bonus: chex.Array
+    lifes: chex.Array
+    
     player_move_state: PlayerMoveState
     tower_state: TowerState
-    reached_apex: chex.Array
+
+    bird_state: BirdState
+
+    level_state: chex.Array
+
     climbed_floors: chex.Array
     flowerpot_enemy: FlowerpotEnemyState
 
@@ -295,7 +378,34 @@ def _get_default_asset_config() -> tuple:
         {'name': 'wall', 'type': 'procedural', 'data': wall_sprite},
         {'name': 'ceiling', 'type': 'procedural', 'data': ceiling_sprite},
         {'name': 'floor', 'type': 'procedural', 'data': floor_sprite},
-        {'name': 'window_blind_group', 'type': 'procedural', 'data': window_sprites}
+        {'name': 'window_blind_group', 'type': 'procedural', 'data': window_sprites},
+        {'name': 'bird_left', 'type': 'group', 'files': [
+            'bird/left/0.npy',
+            'bird/left/4.npy',
+            'bird/left/8.npy',
+            'bird/left/12.npy',
+            'bird/left/16.npy',
+        ]},
+        {'name': 'bird_right', 'type': 'group', 'files': [
+            'bird/right/0.npy',
+            'bird/right/4.npy',
+            'bird/right/8.npy',
+            'bird/right/12.npy',
+            'bird/right/16.npy',
+        ]},
+        {'name': 'egg_falling', 'type': 'group', 'files': [
+            'egg/0.npy',
+            'egg/1.npy',
+            'egg/2.npy',
+            'egg/3.npy',
+            'egg/4.npy',
+            'egg/5.npy',
+            'egg/6.npy',
+            'egg/7.npy',
+            'egg/8.npy',
+            'egg/9.npy',
+            'egg/10.npy',
+        ]}
     )
 
 class CrazyClimberConstants(struct.PyTreeNode):
@@ -306,7 +416,11 @@ class CrazyClimberConstants(struct.PyTreeNode):
     HEIGHT: int = struct.field(pytree_node=False, default=210)
 
     PLAYER_Y: int = struct.field(pytree_node=False, default=160)
-    PLAYER_POSSIBLE_X: jnp.ndarray = struct.field(pytree_node=False, default=jnp.array([40, 46, 52, 58, 64, 72, 80, 86, 92, 98, 104]))
+    PLAYER_POSSIBLE_X: chex.Array = struct.field(pytree_node=False, default=jnp.array([40, 46, 52, 58, 64, 72, 80, 86, 92, 98, 104]))
+    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(23, 16))
+    PLAYER_UPWARDS_SPRITE_SEQUENCE: chex.Array = struct.field(pytree_node=False, default=jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 9, 9, 10, 10, 10, 11, 11, 11]))
+    PLAYER_SIDEWAYS_SPRITE_SEQUENCE: chex.Array = struct.field(pytree_node=False, default=jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3]))
+
     TOWER_POSSIBLE_SPRITE_CLIP: jnp.ndarray = struct.field(pytree_node=False, default=jnp.array([0, 4, 7, 10])) 
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
@@ -351,6 +465,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
             dtype=jnp.int32,
         ),
     )
+
     TOWER1: jnp.ndarray = struct.field(
         pytree_node=False, 
         default=jnp.concat([
@@ -372,9 +487,36 @@ class CrazyClimberConstants(struct.PyTreeNode):
         )
     )
 
+    BIRD_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(12, 15))
+    BIRD_Y: int = struct.field(pytree_node=False, default=49)
+    BIRD_BORDERS: Tuple[int, int] = struct.field(pytree_node=False, default=(10, 35+BIRD_SIZE.default[1]))
+    BIRD_SPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=100) # should be 5000 for final version
+    BIRD_DESPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=1500) # should be 8500 for final version
+    BIRD_POSSIBLE_STEPS: chex.Array = struct.field(pytree_node=False, default=jnp.array([0, 4, 4, 4, 7, 7, 7, 10, 10, 10]))
+    BIRD_SEQUENCE: chex.Array = struct.field(pytree_node=False, default=jnp.array([0, 1, 2, 3, 4, 4, 3, 2, 1, 0]))
+
+    EGG_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 7))
+    EGG_BORDER_BOTTOM: int = struct.field(pytree_node=False, default=210-EGG_SIZE.default[0]*2)
+    EGG_FLICKER: int = struct.field(pytree_node=False, default=130)
+
+    SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
+    SCORE_BASE_VALUE: int = struct.field(pytree_node=False, default=100)
+
+    BONUS_DECREASE_THRESHOLD: int = struct.field(pytree_node=False, default=1229)
+    BONUS_DECREASE_INTERVAL: int = struct.field(pytree_node=False, default=600)
+
+
 class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation, CrazyClimberInfo, CrazyClimberConstants]):
     ACTION_SET: jnp.ndarray = jnp.array(
-        [Action.NOOP, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN, Action.UPRIGHT, Action.UPLEFT, Action.DOWNRIGHT, Action.DOWNLEFT],
+        [Action.NOOP, 
+         Action.UP, 
+         Action.RIGHT, 
+         Action.LEFT, 
+         Action.DOWN, 
+         Action.UPRIGHT, 
+         Action.UPLEFT, 
+         Action.DOWNRIGHT, 
+         Action.DOWNLEFT],
         dtype=jnp.int32,
     )
 
@@ -387,12 +529,17 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state_key, _step_key = jax.random.split(key)
         state = CrazyClimberState(
             key=state_key,
+            step_counter=jnp.array(0).astype(jnp.int32),
             score=jnp.array(0).astype(jnp.int32),
             bonus=jnp.array(10000).astype(jnp.int32),
-            step_counter=jnp.array(0).astype(jnp.int32),
+            lifes=jnp.array(5),
+            reached_apex=jnp.array(False),
             player_move_state=PlayerMoveState.new(),
             tower_state=TowerState.new(state_key),
-            reached_apex=jnp.array(False),
+
+            bird_state=BirdState.new(),
+            level_state=LevelState.new(Level.LEVEL_1),
+
             climbed_floors=jnp.array(0, dtype=jnp.int32),
             flowerpot_enemy=FlowerpotEnemyState(
                 active=jnp.array(False),
@@ -404,6 +551,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 drop_x_offset=jnp.array(0, dtype=jnp.int32),
                 drop_type=jnp.array(0, dtype=jnp.int32),
             ),
+
         )
         initial_obs = self._get_observation(state)
 
@@ -413,10 +561,16 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     def step(self, state: CrazyClimberState, action: chex.Array) -> (CrazyClimberObservation, CrazyClimberState, float, bool, CrazyClimberInfo):
         atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         previous_state = state
-        
+
         state = self._step_counter(state)
+        state = self._level_step(state)
         state = self._player_step(state, atari_action)
         state = self._tower_step(state)
+
+        state = jax.lax.cond(state.level_state.condor_active,
+            lambda: self._bird_step(self._egg_step(state)), 
+            lambda: state)
+        
         state = self._climbed_floors_step(state)
         state = self._flowerpot_enemy_step(state)
         state = self._flowerpot_collision_step(state)
@@ -432,6 +586,52 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         observation = self._get_observation(state)
 
         return observation, state, env_reward, done, info
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _level_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        """
+        Runs the correct level step method for each level
+        """
+        return self._level_1_step(state)
+
+    @partial(jax.jit, static_argnums=(0,))  
+    def _level_1_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        """
+        Runs the logic for Level 1 enemy activations.
+        Enemies:
+            - Mad Doctor Round 1
+            - Condor: 
+                Activation: if player between threshholds and not active
+                Deactivation: if player hit by egg; player outside thresholds; player fell in general
+            - Mad Doctor Round 2
+        """
+        level_state = state.level_state
+
+        # mad doctor logic
+
+        # condor logic
+        condor_activate = ((state.score >= self.consts.BIRD_SPAWN_THRESHOLD)
+                & (state.score < self.consts.BIRD_DESPAWN_THRESHOLD)
+                & (jnp.logical_not(level_state.condor_active))
+                & (level_state.next_enemy == Enemy.CONDOR))
+        condor_deactivate = level_state.condor_active & ((state.score > self.consts.BIRD_DESPAWN_THRESHOLD) | state.bird_state.stop)
+
+        condor_active = jnp.where(
+            condor_activate, 
+            True, 
+            jnp.where(condor_deactivate, False, level_state.condor_active)
+        )
+        
+        next_enemy = jnp.where(condor_deactivate, level_state.next_enemy + 1, level_state.next_enemy)
+
+        # mad doctor second round logic
+
+        new_level_state = level_state.replace(
+            condor_active = condor_active,
+            next_enemy = next_enemy
+        )
+
+        return state.replace(level_state=new_level_state)
     
     @partial(jax.jit, static_argnums=(0,))
     def _step_counter(self, state: CrazyClimberState) -> CrazyClimberState:
@@ -672,14 +872,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 operand=s,
             )
         
-        @partial(jax.jit)
-        def update_player_move_state(s: PlayerMoveState) -> PlayerMoveState:
-            return jax.lax.cond(
-                s.falling_count > 0,
-                lambda: s.replace(falling_count=jnp.maximum(s.falling_count - 1, 0)),
-                lambda: s
-            )
-        
         def can_move_left(state: CrazyClimberState) -> bool:
             left_arm_up = (state.player_move_state.hand_dir == 1) & (state.player_move_state.main_state != PlayerStableStates.NEUTRAL)
             hand_offset = jnp.where(left_arm_up, 1, 0)
@@ -772,18 +964,20 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         delta_x = jnp.where(((~can_move_left) & left) | ((~can_move_right) & right), 0, 1)
 
         should_fall = jnp.any(falling_conds) | player_move_state.should_fall
+        pause = state.level_state.pause_game
         action_state_cases = [
             should_fall & (~is_falling),
             up & (player_move_state.main_state != PlayerStableStates.PULL_UP) & (~is_falling) & can_move_up,
             down & (player_move_state.main_state == PlayerStableStates.PULL_UP) & (~is_falling),
             down & (player_move_state.main_state != PlayerStableStates.PULL_UP) & (~is_falling),
             left & right_hand_safe & (~is_falling),
-            right & left_hand_safe & (~is_falling)
+            right & left_hand_safe & (~is_falling),
+            pause,
         ]
         
         branch_idx = jnp.select(
             action_state_cases, 
-            [0, 1, 2, 3, 4, 5], 
+            [0, 1, 2, 3, 4, 5, 6], 
             default=6
         )
         
@@ -796,7 +990,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 lambda s: move_downwards(s),
                 lambda s: move_horizontal(s, -1, delta_x),
                 lambda s: move_horizontal(s, 1, delta_x),
-                lambda s: update_player_move_state(s)
+                lambda s: self.update_player_move_state(s)
             ],
             operand=player_move_state
         )
@@ -811,6 +1005,172 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         return state.replace(
             player_move_state=next_player_move_state,
+        )
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def update_player_move_state(self, s: PlayerMoveState) -> PlayerMoveState:
+        #fall_count = jnp.where(s.falling_count == 160, s.)
+
+        jax.debug.print("{x}", x=s.falling_count)
+        state = jax.lax.cond(
+            s.falling_count > 0,
+            lambda: s.replace(falling_count=jnp.maximum(s.falling_count - 1, 0)),
+            lambda: s
+            )
+
+        state1 = jax.lax.cond(
+            state.egg_animation_count > 0,
+            lambda: state.replace(egg_animation_count=jnp.maximum(state.egg_animation_count - 1, 0)),
+            lambda: state
+        )
+
+        return state1
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _bird_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        """
+        Calculates new x, y coordinates and determines if bird should fly away.
+        """
+        bird_state = state.bird_state
+        
+        # border constraints
+        hit_left_wall  = ((bird_state.pos_x < self.consts.BIRD_BORDERS[0]) 
+            & (bird_state.dir < 0))
+        hit_right_wall = ((bird_state.pos_x > self.consts.WIDTH - self.consts.BIRD_BORDERS[1]) 
+            & (bird_state.dir > 0))
+
+        should_move = (state.step_counter % 2 == 0)
+        fly_away = (bird_state.dir < 0) & (state.score > self.consts.BIRD_DESPAWN_THRESHOLD)
+
+        should_flip_dir = (should_move 
+            & (hit_right_wall | hit_left_wall) 
+            & ~fly_away)
+
+        bird_state.dir = jnp.where(should_flip_dir, bird_state.dir * -1, bird_state.dir)
+
+        bird_state.pos_x = jnp.where(
+            should_move, 
+            bird_state.pos_x + bird_state.dir, 
+            bird_state.pos_x
+        )
+
+        bird_state.pos_y = jnp.where(
+            state.player_move_state.main_state == PlayerStableStates.PULL_UP,
+            self.consts.BIRD_Y + self.consts.BIRD_POSSIBLE_STEPS[state.player_move_state.sub_step],
+            self.consts.BIRD_Y,
+        )
+
+        return state.replace(bird_state = bird_state)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _egg_step(self, state: CrazyClimberState) -> CrazyClimberState: 
+        """
+        Calculates new coordinates for the egg and if new egg should be dropped
+        """   
+        def new_egg(state: CrazyClimberState) -> EggState:
+            """
+            Resets egg coordinates
+            """
+            egg_state = state.bird_state.egg_state
+            egg_state.pos_x = state.bird_state.pos_x
+            egg_state.pos_y = 69
+            egg_state.dir = state.bird_state.dir
+            return egg_state
+
+        def check_for_collision(state: CrazyClimberState) -> bool:
+            """
+            Checks for a collision betwenn the player and the egg
+            """
+            player_x = self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x]
+    
+            # checks if x coordinates (widths of sprites) overlap
+            same_x = jnp.logical_or((((state.bird_state.egg_state.pos_x + self.consts.EGG_SIZE[1]) >= player_x) 
+                & ((state.bird_state.egg_state.pos_x + self.consts.EGG_SIZE[1]) <= (player_x + self.consts.PLAYER_SIZE[1]))), 
+                ((state.bird_state.egg_state.pos_x >= player_x)
+                & (state.bird_state.egg_state.pos_x <= (player_x + self.consts.PLAYER_SIZE[1]))))
+            
+            # checks if y coordinates (heights of sprites) overlap
+            same_y = jnp.logical_or((((state.bird_state.egg_state.pos_y + self.consts.EGG_SIZE[0]) >= self.consts.PLAYER_Y) 
+                & ((state.bird_state.egg_state.pos_y + self.consts.EGG_SIZE[0]) <= (self.consts.PLAYER_Y + self.consts.PLAYER_SIZE[0]))), 
+                ((state.bird_state.egg_state.pos_y >= self.consts.PLAYER_Y)
+                & (state.bird_state.egg_state.pos_y <= (self.consts.PLAYER_Y + self.consts.PLAYER_SIZE[0]))))
+            
+            return jnp.logical_and(same_x, same_y)
+
+        @partial(jax.jit)
+        def egg_hit(state: CrazyClimberState) -> CrazyClimberState:
+            """
+            Runs logic if player got hit by egg.
+            """
+            # check if player is in safe position
+            player_safe = jnp.logical_and(
+                jnp.logical_or(state.player_move_state.main_state == PlayerStableStates.NEUTRAL,
+                    state.player_move_state.main_state == PlayerStableStates.PULL_UP),
+                jnp.logical_or(state.player_move_state.side_step < 4, 
+                    state.player_move_state.sub_step < 2))
+
+            # if player not safe -> fall and deactivate bird else -> pause game and do egg breaking animation
+            new_state = state
+            new_player_state = new_state.player_move_state.replace(
+                should_fall = jnp.array(True),
+                flicker = jnp.array(False))
+            
+            next_state = jax.lax.cond(
+                player_safe,
+                lambda: break_anim(state),
+                lambda: new_state.replace(player_move_state=new_player_state))
+
+            return next_state
+
+        def break_anim(state: CrazyClimberState) -> CrazyClimberState:
+            """
+            logic for the egg breaking animation and freezing of the game
+            """
+            anim_count = jnp.array(13)
+            pause = jnp.array(True)
+
+            level_state = state.level_state.replace(pause_game=pause)
+            player_state = state.player_move_state.replace(egg_animation_count=anim_count)
+            return state.replace(level_state=level_state, player_move_state=player_state)
+        
+        bird_state = state.bird_state
+        egg_state = bird_state.egg_state
+
+        egg_currently_active = ((egg_state.pos_y < self.consts.EGG_BORDER_BOTTOM))
+        drop_egg = ~egg_currently_active
+
+        state = jax.lax.cond(
+            check_for_collision(state),
+            lambda: egg_hit(state),
+            lambda: state)
+
+        player_state = state.player_move_state
+
+        egg_state = jax.lax.cond(
+            drop_egg,
+            lambda: new_egg(state),
+            lambda: egg_state
+        )
+
+        player_state.flicker = jnp.logical_and(egg_state.pos_y > self.consts.EGG_FLICKER, (state.step_counter % 2) == 0) & state.level_state.condor_active
+        egg_state.flicker = jnp.logical_and(~player_state.flicker, egg_state.pos_y > self.consts.EGG_FLICKER) & state.level_state.condor_active
+        
+        egg_state.pos_y = egg_state.pos_y + 1
+        egg_state.pos_x = egg_state.pos_x + (((state.step_counter % egg_state.vel) == 0).astype(int) * egg_state.dir)
+        
+        bird_state.egg_state = egg_state
+        bird_state.drop_egg = drop_egg
+
+        bird_state.stop = jnp.where(
+            state.player_move_state.should_fall | state.player_move_state.falling_count == 160, 
+            jnp.array(True), 
+            state.bird_state.stop)
+
+        jax.debug.print("{x}", x=player_state.should_fall)
+
+        return state.replace(
+            player_move_state = player_state,
+            bird_state = bird_state
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -829,8 +1189,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         currently_at_apex = (state.player_move_state.sub_step == 9) & (state.player_move_state.main_state == PlayerStableStates.PULL_UP)
 
         score_triggered = (state.player_move_state.main_state == PlayerStableStates.NEUTRAL) & state.reached_apex
-
-        new_score = jax.lax.select(score_triggered, state.score + 100, state.score)
+        new_score = jnp.where(score_triggered, state.score + state.level_state.score_increment, state.score)
 
         return state.replace(
             score=new_score,
@@ -1080,10 +1439,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     
     @partial(jax.jit, static_argnums=(0,))
     def _bonus_step(self, state: CrazyClimberState) -> CrazyClimberState: 
-        bonus_condition = ((state.step_counter - 1229) % 600 == 0) & (state.step_counter > 1228)
+        bonus_condition = ((state.step_counter > (self.consts.BONUS_DECREASE_THRESHOLD - 1)) 
+            & ((state.step_counter - self.consts.BONUS_DECREASE_THRESHOLD) % self.consts.BONUS_DECREASE_INTERVAL == 0))
 
         bonus = jnp.where(bonus_condition, state.bonus - 100, state.bonus)
-
         return state.replace(bonus=bonus)
 
     
@@ -1126,8 +1485,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
     def _get_done(self, state: CrazyClimberState) -> bool:
         pass
-
-
 
     class CrazyClimberRenderer(JAXGameRenderer):
         def __init__(self, consts: CrazyClimberConstants = None, config: render_utils.RendererConfig = None):
@@ -1179,8 +1536,18 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 ]),
             ])
 
+            self.BIRD_SPRITES = jnp.array([
+                self.SHAPE_MASKS["bird_left"],
+                self.SHAPE_MASKS["bird_right"],
+            ])
+            self.EGG_SPRITES = self.SHAPE_MASKS["egg_falling"]
+
+            self.TOWER_SPRITE = self._generate_tower_sprite()
+            self.TOWER_CUTOUTS = self._generate_tower_cutouts()
+
             self.PLAYER_UPWARDS_SPRITE_SEQUENCE = jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 9, 9, 10, 10, 10, 11, 11, 11])
             self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE = jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3])
+
             self.FLOWERPOT_THROWER_SPRITES = self.SHAPE_MASKS["flowerpot_thrower_group"]
             _, self.FLOWERPOT_THROWER_BOTTOM_Y_OFFSETS = self._get_visible_sprite_anchors(
                 self.FLOWERPOT_THROWER_SPRITES
@@ -1192,6 +1559,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             self.TOWER_SPRITE = self._generate_tower_sprite()
             self.TOWER_CUTOUTS = self._generate_tower_cutouts()
+
 
         def _get_visible_sprite_anchors(self, sprites: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
             visible = sprites != self.jr.TRANSPARENT_ID
@@ -1269,14 +1637,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         
         @partial(jax.jit, static_argnums=(0,))
         def _render_player(self, state: CrazyClimberState) -> jnp.ndarray:
-            player_raster = self._create_raster((23, 16))
+            player_raster = self._create_raster(self.consts.PLAYER_SIZE)
 
             move_state = state.player_move_state
 
-            sprite_index_up = self.PLAYER_UPWARDS_SPRITE_SEQUENCE[5 * move_state.main_state + move_state.sub_step]
-            hand_index = (move_state.hand_dir + 2) % 3 # maps -1 -> 1, and 1 -> 0
-            sprite_index_side = self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE[jnp.abs(move_state.side_step)] 
-            side_index = jnp.where(move_state.side_step > 0, 1, 0)
+            sprite_index_up = self.consts.PLAYER_UPWARDS_SPRITE_SEQUENCE[5 * move_state.main_state + move_state.sub_step]
+            hand_index = (move_state.hand_dir < 0).astype(int) # maps -1 -> 1 and 1 -> 0
+            sprite_index_side = self.consts.PLAYER_SIDEWAYS_SPRITE_SEQUENCE[jnp.abs(move_state.side_step)] 
+            side_index = (move_state.side_step > 0).astype(int) # maps -1 -> 1 and 1 -> 0
 
             @partial(jax.jit)
             def map_player_to_sprite(sprite_index_up: int, sprite_index_side: int, hand_index: int, side_index: int) -> jnp.ndarray:
@@ -1358,6 +1726,45 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
             
             return tower_raster
+        
+        @partial(jax.jit, static_argnums=(0,))
+        def _render_bird(self, state: CrazyClimberState) -> jnp.ndarray:
+            """
+            Selects correct sprites for the bird based on the sequence
+            """
+            bird_raster = self._create_raster(self.consts.BIRD_SIZE)
+            bird_state = state.bird_state
+
+            dir_index = (bird_state.dir > 0).astype(int)
+            bird_index = self.consts.BIRD_SEQUENCE[((((bird_state.pos_x + self.consts.BIRD_SEQUENCE.size) * bird_state.dir) % 40) / 4).astype(int)]
+
+            bird_sprite = self.BIRD_SPRITES[dir_index][bird_index]
+
+            bird_raster = self.jr.render_at(
+                bird_raster, 
+                0, 0,
+                bird_sprite,
+            )
+            
+            return bird_raster
+        
+        @partial(jax.jit, static_argnums=(0,))
+        def _render_egg(self, state: CrazyClimberState) -> jnp.ndarray:
+            """
+            Selects correct egg sprites based on the y-position
+            """
+            egg_raster = self._create_raster(self.consts.EGG_SIZE)
+            
+            #egg_sprite = self.EGG_SPRITES[state.bird_state.egg_y % 11]
+            egg_sprite = self.EGG_SPRITES[9]
+
+            egg_raster = self.jr.render_at(
+                egg_raster,
+                0, 0,
+                egg_sprite
+            )
+
+            return egg_raster
 
         @partial(jax.jit, static_argnums=(0,))
         def _get_window_screen_position(
@@ -1490,10 +1897,22 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             player_raster = self._render_player(state)
             tower_raster = self._render_tower(state)
+            bird_raster = self._render_bird(state)
+            egg_raster = self._render_egg(state)
             raster = self._clip_raster(raster, tower_raster, 40, 44) # self.jr.render_at_clipped(raster, 0, 0, tower_raster)
-            raster = self._clip_raster(raster, player_raster, self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x], self.consts.PLAYER_Y) # self.jr.render_at_clipped(raster, state.player_move_state.pos_x, self.consts.PLAYER_Y, player_raster)
+
+            raster = jax.lax.cond(~state.player_move_state.flicker,
+                lambda: self._clip_raster(raster, player_raster, self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x], self.consts.PLAYER_Y), # self.jr.render_at_clipped(raster, state.player_move_state.pos_x, self.consts.PLAYER_Y, player_raster
+                lambda: raster)
+            raster = jax.lax.cond(state.level_state.condor_active,
+                lambda: self._clip_raster(raster, bird_raster, state.bird_state.pos_x, state.bird_state.pos_y),
+                lambda: raster)
+            raster = jax.lax.cond(state.level_state.condor_active & ~state.bird_state.egg_state.flicker,
+                lambda: self._clip_raster(raster, egg_raster, state.bird_state.egg_state.pos_x, state.bird_state.egg_state.pos_y),
+                lambda: raster)
             raster = self._render_flowerpot_thrower(raster, state)
             raster = self._render_flowerpot_drop(raster, state)
+
             raster = self._normalize_raster(raster)
 
             score_digits = self.jr.int_to_digits(state.score, max_digits=6)
