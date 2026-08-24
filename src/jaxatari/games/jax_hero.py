@@ -761,9 +761,12 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         final_dyn_active = dyn_active & (~reset_pose)
         final_explosion = jnp.where(reset_pose, 0, explosion_timer).astype(jnp.int32)
         final_dyn_fuse = jnp.where(reset_pose, 0, new_fuse).astype(jnp.int32)
-        # Power refills on respawn or advance; dynamite refills on a new level.
+        # Power and dynamite refill on respawn or advance (as on the console:
+        # every new life carries six fresh sticks — the deep levels' sealed
+        # rooms need more than one life's worth of dynamite, and trading a
+        # life for sticks is the intended economy there).
         final_power = jnp.where(reset_pose, c.max_power, new_power).astype(jnp.int32)
-        final_dyn_count = jnp.where(advance, c.starting_dynamite, dynamite_count).astype(jnp.int32)
+        final_dyn_count = jnp.where(reset_pose, c.starting_dynamite, dynamite_count).astype(jnp.int32)
 
         final_spider_alive = jnp.where(advance, c.SPIDER_VALID[next_lvl], spider_alive)
         # walls reset intact on a new level; a respawn keeps a blasted wall gone
