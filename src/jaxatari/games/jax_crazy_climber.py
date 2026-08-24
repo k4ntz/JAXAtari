@@ -149,7 +149,8 @@ class EggState:
             vel=jnp.array(8),
             flicker=jnp.array(False)
         )
-    
+
+@chex.dataclass
 class FlowerpotEnemyState:
     active: chex.Array
     phase: chex.Array
@@ -159,6 +160,19 @@ class FlowerpotEnemyState:
     cycle_row: chex.Array
     drop_x_offset: chex.Array
     drop_type: chex.Array
+
+    @classmethod
+    def new(cls, active: bool, phase_steps: int, window_row, window_col, cycle_row, drop_type):
+        return cls(
+            active=jnp.array(active),
+            phase=jnp.array(0, dtype=jnp.int32),
+            phase_steps=jnp.array(phase_steps, dtype=jnp.int32),
+            window_row=window_row,
+            window_col=window_col,
+            cycle_row=cycle_row,
+            drop_x_offset=jnp.array(0, dtype=jnp.int32),
+            drop_type=drop_type,
+        )
 
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
@@ -170,14 +184,12 @@ class CrazyClimberState(struct.PyTreeNode):
     lifes: chex.Array
     
     player_move_state: PlayerMoveState
-    tower_state: TowerState
-
     bird_state: BirdState
-
+    flowerpot_enemy_state: FlowerpotEnemyState
+    tower_state: TowerState
     level_state: chex.Array
 
     climbed_floors: chex.Array
-    flowerpot_enemy: FlowerpotEnemyState
 
 class CrazyClimberObservation(struct.PyTreeNode):
     pass
@@ -285,6 +297,7 @@ def _get_default_asset_config() -> tuple:
             'player/sideways/right/right_up/half_pull_up_5.npy',
             'player/sideways/right/right_up/half_pull_up_9.npy',
             ]},
+
         {'name': 'flowerpot_thrower_group', 'type': 'group', 'files': [
             'flowerpot_enemy/red_enemy/red_enemy_1.npy',
             'flowerpot_enemy/red_enemy/red_enemy_2.npy',
@@ -375,10 +388,12 @@ def _get_default_asset_config() -> tuple:
             'flowerpot_enemy/yellow_drop/yellow_drop_37.npy',
             'flowerpot_enemy/yellow_drop/yellow_drop_38.npy',
             ]},
+
         {'name': 'wall', 'type': 'procedural', 'data': wall_sprite},
         {'name': 'ceiling', 'type': 'procedural', 'data': ceiling_sprite},
         {'name': 'floor', 'type': 'procedural', 'data': floor_sprite},
         {'name': 'window_blind_group', 'type': 'procedural', 'data': window_sprites},
+
         {'name': 'bird_left', 'type': 'group', 'files': [
             'bird/left/0.npy',
             'bird/left/4.npy',
@@ -393,6 +408,7 @@ def _get_default_asset_config() -> tuple:
             'bird/right/12.npy',
             'bird/right/16.npy',
         ]},
+
         {'name': 'egg_falling', 'type': 'group', 'files': [
             'egg/0.npy',
             'egg/1.npy',
@@ -424,6 +440,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
     TOWER_POSSIBLE_SPRITE_CLIP: jnp.ndarray = struct.field(pytree_node=False, default=jnp.array([0, 4, 7, 10])) 
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
+
     FLOWERPOT_SCORE_RANGES: jnp.ndarray = struct.field(
         pytree_node=False,
         default_factory=lambda: jnp.array(
@@ -490,8 +507,8 @@ class CrazyClimberConstants(struct.PyTreeNode):
     BIRD_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(12, 15))
     BIRD_Y: int = struct.field(pytree_node=False, default=49)
     BIRD_BORDERS: Tuple[int, int] = struct.field(pytree_node=False, default=(10, 35+BIRD_SIZE.default[1]))
-    BIRD_SPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=100) # should be 5000 for final version
-    BIRD_DESPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=1500) # should be 8500 for final version
+    BIRD_SPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=5000) # should be 5000 for final version
+    BIRD_DESPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=8500) # should be 8500 for final version
     BIRD_POSSIBLE_STEPS: chex.Array = struct.field(pytree_node=False, default=jnp.array([0, 4, 4, 4, 7, 7, 7, 10, 10, 10]))
     BIRD_SEQUENCE: chex.Array = struct.field(pytree_node=False, default=jnp.array([0, 1, 2, 3, 4, 4, 3, 2, 1, 0]))
 
@@ -541,7 +558,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             level_state=LevelState.new(Level.LEVEL_1),
 
             climbed_floors=jnp.array(0, dtype=jnp.int32),
-            flowerpot_enemy=FlowerpotEnemyState(
+            flowerpot_enemy_state=FlowerpotEnemyState(
                 active=jnp.array(False),
                 phase=jnp.array(0, dtype=jnp.int32),
                 phase_steps=jnp.array(0, dtype=jnp.int32),
@@ -1223,7 +1240,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
 
         def protect_flowerpot_row(s: CrazyClimberState) -> CrazyClimberState:
-            row = s.flowerpot_enemy.window_row
+            row = s.flowerpot_enemy_state.window_row
             windows = s.tower_state.windows
             windows = windows.at[row, :, 0].set(0)
             windows = windows.at[row, :, 1].set(0)
@@ -1231,36 +1248,36 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         def update_active_flowerpot_enemy(s: CrazyClimberState) -> CrazyClimberState:
             climbed_triggered = (s.player_move_state.main_state == PlayerStableStates.NEUTRAL) & s.reached_apex
-            phase_zero = s.flowerpot_enemy.phase == 0
-            phase_zero_done = phase_zero & (s.flowerpot_enemy.phase_steps == self.consts.FLOWERPOT_PHASE_0_STEPS - 1)
-            phase_one = s.flowerpot_enemy.phase == 1
+            phase_zero = s.flowerpot_enemy_state.phase == 0
+            phase_zero_done = phase_zero & (s.flowerpot_enemy_state.phase_steps == self.consts.FLOWERPOT_PHASE_0_STEPS - 1)
+            phase_one = s.flowerpot_enemy_state.phase == 1
             phase_one_steps = (
-                self.consts.FLOWERPOT_CYCLE_STEPS_BY_ROW[s.flowerpot_enemy.cycle_row]
+                self.consts.FLOWERPOT_CYCLE_STEPS_BY_ROW[s.flowerpot_enemy_state.cycle_row]
                 - self.consts.FLOWERPOT_PHASE_0_STEPS
             )
-            phase_one_done = phase_one & (s.flowerpot_enemy.phase_steps == phase_one_steps - 1)
+            phase_one_done = phase_one & (s.flowerpot_enemy_state.phase_steps == phase_one_steps - 1)
             next_cycle_row = jnp.where(
                 phase_zero_done,
-                s.flowerpot_enemy.window_row,
-                s.flowerpot_enemy.cycle_row,
+                s.flowerpot_enemy_state.window_row,
+                s.flowerpot_enemy_state.cycle_row,
             )
             next_phase = jnp.where(
                 phase_zero_done,
                 1,
-                s.flowerpot_enemy.phase,
+                s.flowerpot_enemy_state.phase,
             )
             next_phase_steps = jnp.where(
                 phase_zero_done,
                 0,
-                s.flowerpot_enemy.phase_steps + 1,
+                s.flowerpot_enemy_state.phase_steps + 1,
             )
             next_window_row = jnp.where(
                 climbed_triggered,
-                s.flowerpot_enemy.window_row + 1,
-                s.flowerpot_enemy.window_row,
+                s.flowerpot_enemy_state.window_row + 1,
+                s.flowerpot_enemy_state.window_row,
             )
             s = s.replace(
-                flowerpot_enemy=s.flowerpot_enemy.replace(
+                flowerpot_enemy=s.flowerpot_enemy_state.replace(
                     phase=next_phase,
                     phase_steps=next_phase_steps,
                     window_row=next_window_row,
@@ -1336,7 +1353,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         def run_flowerpot_area_logic(s: CrazyClimberState) -> CrazyClimberState:
             return jax.lax.cond(
-                s.flowerpot_enemy.active,
+                s.flowerpot_enemy_state.active,
                 update_active_flowerpot_enemy,
                 try_spawn_flowerpot_enemy,
                 s,
@@ -1351,7 +1368,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def _flowerpot_collision_step(self, state: CrazyClimberState) -> CrazyClimberState:
-        phase_steps = jnp.maximum(state.flowerpot_enemy.phase_steps, 0)
+        phase_steps = jnp.maximum(state.flowerpot_enemy_state.phase_steps, 0)
 
         first_cycle_offsets = jnp.array(
             [0, 0, 0, 0, 0, 0, 0, 1, 2, 4, 4, 5, 6, 7, 8, 10, 13, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23],
@@ -1367,8 +1384,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             23 + ((phase_steps - 27) // 22) * 23 + loop_offsets[(phase_steps - 27) % 22],
         )
 
-        window_local_x = jnp.array([4, 16, 28, 44, 56, 68], dtype=jnp.int32)[state.flowerpot_enemy.window_col]
-        window_local_y = jnp.array([5, 18, 31, 44, 57, 70, 83, 96, 109, 122, 135], dtype=jnp.int32)[state.flowerpot_enemy.window_row]
+        window_local_x = jnp.array([4, 16, 28, 44, 56, 68], dtype=jnp.int32)[state.flowerpot_enemy_state.window_col]
+        window_local_y = jnp.array([5, 18, 31, 44, 57, 70, 83, 96, 109, 122, 135], dtype=jnp.int32)[state.flowerpot_enemy_state.window_row]
         tower_scroll_offset = jax.lax.cond(
             ~state.tower_state.is_falling,
             lambda: self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.tower_state.tower_step],
@@ -1378,7 +1395,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         window_center_x = 40 + window_local_x + 4
         window_top_y = 44 + window_local_y - top_clip
 
-        drop_center_x = window_center_x + state.flowerpot_enemy.drop_x_offset
+        drop_center_x = window_center_x + state.flowerpot_enemy_state.drop_x_offset
         drop_x = drop_center_x - (self.consts.FLOWERPOT_DROP_HITBOX_WIDTH // 2)
         drop_y = window_top_y + 6 + 4 + drop_y_offset
 
@@ -1410,15 +1427,15 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         ) & (jnp.abs(player_state.side_step) <= 3)
 
         collision_active = (
-            state.flowerpot_enemy.active
-            & (state.flowerpot_enemy.phase == 1)
-            & (state.flowerpot_enemy.drop_x_offset == 0)
+            state.flowerpot_enemy_state.active
+            & (state.flowerpot_enemy_state.phase == 1)
+            & (state.flowerpot_enemy_state.drop_x_offset == 0)
             & drop_collision
         )
 
         def deflect_drop(s: CrazyClimberState) -> CrazyClimberState:
             return s.replace(
-                flowerpot_enemy=s.flowerpot_enemy.replace(
+                flowerpot_enemy=s.flowerpot_enemy_state.replace(
                     drop_x_offset=jnp.array(self.consts.FLOWERPOT_DROP_DEFLECT_X_OFFSET, dtype=jnp.int32),
                 )
             )
@@ -1800,8 +1817,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         @partial(jax.jit, static_argnums=(0,))
         def _render_flowerpot_thrower(self, raster: jnp.ndarray, state: CrazyClimberState) -> jnp.ndarray:
-            phase = state.flowerpot_enemy.phase
-            phase_steps = state.flowerpot_enemy.phase_steps
+            phase = state.flowerpot_enemy_state.phase
+            phase_steps = state.flowerpot_enemy_state.phase_steps
 
             phase_zero_sprite_idx = jnp.minimum(phase_steps // 8, 3)
             phase_one_segment = jnp.minimum(phase_steps // 8, 4)
@@ -1813,15 +1830,15 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             window_left_x, window_top_y = self._get_window_screen_position(
                 state,
-                state.flowerpot_enemy.window_row,
-                state.flowerpot_enemy.window_col,
+                state.flowerpot_enemy_state.window_row,
+                state.flowerpot_enemy_state.window_col,
             )
             draw_x = window_left_x + x_offsets[sprite_idx]
             draw_y = window_top_y + y_offsets[sprite_idx]
             thrower_sprite = self.FLOWERPOT_THROWER_SPRITES[sprite_idx]
 
             thrower_visible = (
-                state.flowerpot_enemy.active
+                state.flowerpot_enemy_state.active
                 & ((phase == 0) | ((phase == 1) & (phase_steps < 40)))
             )
 
@@ -1834,9 +1851,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         @partial(jax.jit, static_argnums=(0,))
         def _render_flowerpot_drop(self, raster: jnp.ndarray, state: CrazyClimberState) -> jnp.ndarray:
-            phase_steps = jnp.maximum(state.flowerpot_enemy.phase_steps, 0)
+            phase_steps = jnp.maximum(state.flowerpot_enemy_state.phase_steps, 0)
 
-            drop_type = state.flowerpot_enemy.drop_type
+            drop_type = state.flowerpot_enemy_state.drop_type
             loop_length = self.consts.FLOWERPOT_DROP_LOOP_LENGTHS[drop_type]
             sprite_idx = jnp.where(
                 phase_steps < 5,
@@ -1861,13 +1878,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             window_center_x, _ = self._get_window_bottom_center(
                 state,
-                state.flowerpot_enemy.window_row,
-                state.flowerpot_enemy.window_col,
+                state.flowerpot_enemy_state.window_row,
+                state.flowerpot_enemy_state.window_col,
             )
             _, window_top_y = self._get_window_screen_position(
                 state,
-                state.flowerpot_enemy.window_row,
-                state.flowerpot_enemy.window_col,
+                state.flowerpot_enemy_state.window_row,
+                state.flowerpot_enemy_state.window_col,
             )
             drop_sprite = self.FLOWERPOT_DROP_SPRITES[sprite_idx]
             thrower_y_offsets = jnp.array([6, 5, 3, 2, 1], dtype=jnp.int32)
@@ -1876,12 +1893,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 + thrower_y_offsets[4]
                 + self.FLOWERPOT_THROWER_BOTTOM_Y_OFFSETS[4]
             )
-            draw_x = window_center_x + state.flowerpot_enemy.drop_x_offset - self.FLOWERPOT_DROP_CENTER_X_OFFSETS[sprite_idx]
+            draw_x = window_center_x + state.flowerpot_enemy_state.drop_x_offset - self.FLOWERPOT_DROP_CENTER_X_OFFSETS[sprite_idx]
             draw_y = thrower_bottom_y + 4 + y_offset
 
             drop_visible = (
-                state.flowerpot_enemy.active
-                & (state.flowerpot_enemy.phase == 1)
+                state.flowerpot_enemy_state.active
+                & (state.flowerpot_enemy_state.phase == 1)
             )
 
             return jax.lax.cond(
