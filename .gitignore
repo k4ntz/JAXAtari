@@ -10,3 +10,6 @@ results/
 docs/build/
 .python-version
 
+# local H.E.R.O. level-completability certifier + diagnostics (not shipped)
+tools/
+
