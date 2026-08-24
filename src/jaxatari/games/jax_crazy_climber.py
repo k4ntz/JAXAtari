@@ -844,6 +844,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     def update_player_move_state(self, s: PlayerMoveState) -> PlayerMoveState:
         #fall_count = jnp.where(s.falling_count == 160, s.)
 
+        jax.debug.print("{x}", x=s.falling_count)
         state = jax.lax.cond(
             s.falling_count > 0,
             lambda: s.replace(falling_count=jnp.maximum(s.falling_count - 1, 0)),
@@ -943,7 +944,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             # if player not safe -> fall and deactivate bird else -> pause game and do egg breaking animation
             new_state = state
-            new_player_state = new_state.player_move_state.replace(should_fall = jnp.array(True))
+            new_player_state = new_state.player_move_state.replace(
+                should_fall = jnp.array(True),
+                flicker = jnp.array(False))
             
             next_state = jax.lax.cond(
                 player_safe,
@@ -961,7 +964,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             return state.replace(level_state=level_state, player_move_state=player_state)
         
         bird_state = state.bird_state
-        player_state = state.player_move_state
         egg_state = bird_state.egg_state
 
         egg_currently_active = ((egg_state.pos_y < self.consts.EGG_BORDER_BOTTOM))
@@ -972,14 +974,16 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             lambda: egg_hit(state),
             lambda: state)
 
+        player_state = state.player_move_state
+
         egg_state = jax.lax.cond(
             drop_egg,
             lambda: new_egg(state),
             lambda: egg_state
         )
 
-        player_state.flicker = jnp.logical_and(egg_state.pos_y > self.consts.EGG_FLICKER, (state.step_counter % 2) == 0) 
-        egg_state.flicker = jnp.logical_and(~player_state.flicker, egg_state.pos_y > self.consts.EGG_FLICKER)
+        player_state.flicker = jnp.logical_and(egg_state.pos_y > self.consts.EGG_FLICKER, (state.step_counter % 2) == 0) & state.level_state.condor_active
+        egg_state.flicker = jnp.logical_and(~player_state.flicker, egg_state.pos_y > self.consts.EGG_FLICKER) & state.level_state.condor_active
         
         egg_state.pos_y = egg_state.pos_y + 1
         egg_state.pos_x = egg_state.pos_x + (((state.step_counter % egg_state.vel) == 0).astype(int) * egg_state.dir)
@@ -991,6 +995,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             state.player_move_state.should_fall | state.player_move_state.falling_count == 160, 
             jnp.array(True), 
             state.bird_state.stop)
+
+        jax.debug.print("{x}", x=player_state.should_fall)
 
         return state.replace(
             player_move_state = player_state,
