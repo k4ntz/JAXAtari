@@ -30,7 +30,6 @@ class TowerLevelType(IntEnum):
     MIDDLE_CUT = 1
     SIDE_CUTS = 2
 
-# Player movement states
 class PlayerStableStates(IntEnum):
     NEUTRAL = 0
     HALF_PULL_UP = 1
@@ -508,7 +507,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
     BIRD_Y: int = struct.field(pytree_node=False, default=49)
     BIRD_BORDERS: Tuple[int, int] = struct.field(pytree_node=False, default=(10, 35+BIRD_SIZE.default[1]))
     BIRD_SPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=5000) # should be 5000 for final version
-    BIRD_DESPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=8500) # should be 8500 for final version
+    BIRD_DESPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=7500) # should be 8500 for final version
     BIRD_POSSIBLE_STEPS: chex.Array = struct.field(pytree_node=False, default=jnp.array([0, 4, 4, 4, 7, 7, 7, 10, 10, 10]))
     BIRD_SEQUENCE: chex.Array = struct.field(pytree_node=False, default=jnp.array([0, 1, 2, 3, 4, 4, 3, 2, 1, 0]))
 
@@ -558,17 +557,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             level_state=LevelState.new(Level.LEVEL_1),
 
             climbed_floors=jnp.array(0, dtype=jnp.int32),
-            flowerpot_enemy_state=FlowerpotEnemyState(
-                active=jnp.array(False),
-                phase=jnp.array(0, dtype=jnp.int32),
-                phase_steps=jnp.array(0, dtype=jnp.int32),
-                window_row=jnp.array(0, dtype=jnp.int32),
-                window_col=jnp.array(0, dtype=jnp.int32),
-                cycle_row=jnp.array(0, dtype=jnp.int32),
-                drop_x_offset=jnp.array(0, dtype=jnp.int32),
-                drop_type=jnp.array(0, dtype=jnp.int32),
-            ),
-
+            flowerpot_enemy_state=FlowerpotEnemyState.new(
+                False, 
+                0, 
+                jnp.array(0, dtype=jnp.int32), 
+                jnp.array(0, dtype=jnp.int32), 
+                jnp.array(0, dtype=jnp.int32),
+                jnp.array(0, dtype=jnp.int32),
+            )
         )
         initial_obs = self._get_observation(state)
 
@@ -1012,22 +1008,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             operand=player_move_state
         )
 
-        # jax.debug.print(
-        #    "main state: {x}, sub step: {y}, side step {z}, hand dir: {w}",
-        #    x=next_player_move_state.main_state,
-        #    y=next_player_move_state.sub_step,
-        #    z=next_player_move_state.side_step,
-        #    w=next_player_move_state.hand_dir,
-        #)
-
         return state.replace(
             player_move_state=next_player_move_state,
         )
     
     @partial(jax.jit, static_argnums=(0,))
     def update_player_move_state(self, s: PlayerMoveState) -> PlayerMoveState:
-        #fall_count = jnp.where(s.falling_count == 160, s.)
-
         jax.debug.print("{x}", x=s.falling_count)
         state = jax.lax.cond(
             s.falling_count > 0,
@@ -1183,8 +1169,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             jnp.array(True), 
             state.bird_state.stop)
 
-        jax.debug.print("{x}", x=player_state.should_fall)
-
         return state.replace(
             player_move_state = player_state,
             bird_state = bird_state
@@ -1227,15 +1211,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         def reset_flowerpot_enemy(s: CrazyClimberState) -> CrazyClimberState:
             return s.replace(
-                flowerpot_enemy=FlowerpotEnemyState(
-                    active=jnp.array(False),
-                    phase=jnp.array(0, dtype=jnp.int32),
-                    phase_steps=jnp.array(-1, dtype=jnp.int32),
-                    window_row=jnp.array(0, dtype=jnp.int32),
-                    window_col=jnp.array(0, dtype=jnp.int32),
-                    cycle_row=jnp.array(0, dtype=jnp.int32),
-                    drop_x_offset=jnp.array(0, dtype=jnp.int32),
-                    drop_type=jnp.array(0, dtype=jnp.int32),
+                flowerpot_enemy=FlowerpotEnemyState.new(
+                    False,
+                    -1,
+                    jnp.array(0, dtype=jnp.int32),
+                    jnp.array(0, dtype=jnp.int32),
+                    jnp.array(0, dtype=jnp.int32),
+                    jnp.array(0, dtype=jnp.int32),
                 )
             )
 
@@ -1331,15 +1313,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                     dtype=jnp.int32,
                 )
                 s = s.replace(
-                    flowerpot_enemy=FlowerpotEnemyState(
-                        active=jnp.array(True),
-                        phase=jnp.array(0, dtype=jnp.int32),
-                        phase_steps=jnp.array(0, dtype=jnp.int32),
-                        window_row=selected_window[0],
-                        window_col=selected_window[1],
-                        cycle_row=selected_window[0],
-                        drop_x_offset=jnp.array(0, dtype=jnp.int32),
-                        drop_type=selected_drop_type,
+                    flowerpot_enemy=FlowerpotEnemyState.new(
+                        True,
+                        0,
+                        selected_window[0],
+                        selected_window[1],
+                        selected_window[0],
+                        selected_drop_type,
                     )
                 )
                 return protect_flowerpot_row(s)
