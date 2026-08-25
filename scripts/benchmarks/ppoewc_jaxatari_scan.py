@@ -190,7 +190,7 @@ class EpisodeStatistics:
     returned_episode_lengths: jnp.array
 
 
-def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: Actor, critic: Critic, config: dict, task_id: str, agent_state: TrainState, ewc_fisher = None, ewc_params = None, max_D = None, global_step = None, global_iteration = None, global_start_time = None, seen_tasks = None, train_mods = [], eval_mods = [], eval_envs_cache = {}, eval_renderers_cache = {}, eval_fns_cache = {}, crl_state = None, get_action_and_value_fn = None, compute_gae_fn = None, update_ppo_fn = None):
+def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: Actor, critic: Critic, config: dict, task_id: str, agent_state: TrainState, ewc_fisher = None, ewc_params = None, max_D = None, global_step = None, global_iteration = None, global_start_time = None, seen_tasks = None, train_mods = [], eval_mods = [], eval_envs_cache = {}, eval_renderers_cache = {}, eval_fns_cache = {}, crl_state = None, get_action_and_value_fn = None, compute_gae_fn = None, update_ppo_fn = None, rtpt = None):
     # shallow copy the config to avoid changing the original across tasks
     config = config.copy()
 
@@ -528,9 +528,6 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
 
     rollout = partial(rollout, step_once_fn=partial(step_once, env_step_fn=vmap_step), max_steps=config["NUM_STEPS"])
 
-    # TODO: move this to continual run
-    rtpt = RTPT(name_initials='TR', experiment_name='PPOEWC_JAXAtari', max_iterations=config["NUM_ITERATIONS"])
-    rtpt.start()
     task_start_time = time.time()
     compile_time = None
     for iteration in range(1, config["NUM_ITERATIONS"] + 1):
@@ -918,6 +915,9 @@ def continual_run(config: dict):
         "a_j_j": {},
     }
 
+    rtpt = RTPT(name_initials='TR', experiment_name='PPOEWC_JAXAtari', max_iterations=config["NUM_ITERATIONS"]*len(config["TASKS"]))
+    rtpt.start()
+
     for i, task_id in enumerate(config["TASKS"]):
         train_mods = all_train_mods[i] if i < len(all_train_mods) else []
         eval_mods = all_eval_mods[i] if i < len(all_eval_mods) else []
@@ -936,7 +936,7 @@ def continual_run(config: dict):
             ewc_fisher, ewc_params, max_D, global_step, global_iteration, 
             global_start_time, seen_tasks, train_mods, eval_mods, eval_envs_cache, 
             eval_renderers_cache, eval_fns_cache, crl_state, 
-            get_action_and_value, compute_gae, update_ppo
+            get_action_and_value, compute_gae, update_ppo, rtpt
         )
 
         # Set EWC decay to 0 for the first task to ignore the initial zero-value pytree
