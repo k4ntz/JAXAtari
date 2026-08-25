@@ -9,6 +9,9 @@ from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepMod
 
 
 class AlwaysCenteredMod(JaxAtariPostStepModPlugin):
+    constants_overrides = {
+        "DISTANCE_WHEN_FLYING": 0,
+    }
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state, new_state):
         pause = jnp.where(jnp.equal(prev_state.pause_timer, self._env.consts.DEATH_PAUSE_FRAMES + 2), self._env.consts.DEATH_PAUSE_FRAMES + 1, new_state.pause_timer)
@@ -220,3 +223,7 @@ class HomingPlayerMissileMod(JaxAtariInternalModPlugin):
         new_cooldown = jnp.where(did_spawn, self._env.consts.MISSILE_COOLDOWN_FRAMES, cooldown)
 
         return updated_missiles, new_cooldown
+
+class RemoveAnimationsMod(JaxAtariPostStepModPlugin):
+    def run(self, prev_state, new_state):
+        return new_state.replace(pause_timer=self._env.consts.DEATH_PAUSE_FRAMES + 1)

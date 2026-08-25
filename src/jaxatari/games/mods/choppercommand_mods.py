@@ -1,5 +1,5 @@
 from jaxatari.games.mods.choppercommand.choppercommand_mod_plugins import AlwaysCenteredMod, MoreTrucksMod, \
-    HomingPlayerMissileMod
+    HomingPlayerMissileMod, RemoveAnimationsMod
 from jaxatari.modification import JaxAtariModController
 
 
@@ -13,6 +13,7 @@ class ChopperCommandEnvMod(JaxAtariModController):
         "always_centered": AlwaysCenteredMod,
         "more_trucks": MoreTrucksMod,
         "homing_player_missile": HomingPlayerMissileMod,
+        "remove_animations": RemoveAnimationsMod,
     }
 
     def __init__(self,
