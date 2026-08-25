@@ -35,7 +35,7 @@ from rtpt import RTPT
 
 
 
-def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, native_downscaling=True, pixel_resize_shape=(84, 84), smooth_image=True, frame_stack=4, eval=False):
+def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, native_downscaling=True, pixel_resize_shape=(84, 84), smooth_image=True, frame_stack=4, eval=False, full_action_space=False):
     def thunk():
         # For training (eval=False), avoid applying multiple potentially conflicting
         # mods at once. In that case, fall back to the base environment.
@@ -58,7 +58,7 @@ def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, native_downscali
                 episodic_life=not eval, # only active during training 
                 first_fire=True,
                 noop_max=30,
-                full_action_space=True, # TODO: maybe change (only when different games); use full action space (18 actions) to have consistent Actor output across tasks
+                full_action_space=full_action_space,
         )
         if pixel_based:
             env = PixelObsWrapper(
@@ -216,7 +216,8 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             native_downscaling=config["NATIVE_DOWNSCALING"], 
             pixel_resize_shape=tuple(config["PIXEL_RESIZE_SHAPE"]), 
             smooth_image=config["SMOOTH_IMAGE"], 
-            frame_stack=config["FRAME_STACK"]
+            frame_stack=config["FRAME_STACK"],
+            full_action_space=config["IS_MULTI_GAME"]
         )()
     padding_width = max_D - env.observation_space().shape[-1] if not config["PIXEL_BASED"] else 0
     def pad_obs(obs):
@@ -295,6 +296,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
                     pixel_resize_shape=tuple(config["PIXEL_RESIZE_SHAPE"]), 
                     smooth_image=config["SMOOTH_IMAGE"], 
                     frame_stack=config["FRAME_STACK"],
+                    full_action_space=config["IS_MULTI_GAME"],
                     eval=True
                 )()
                 eval_renderers_cache[eval_task_key] = jaxatari.make(eval_task).renderer
@@ -402,6 +404,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             native_downscaling=config["NATIVE_DOWNSCALING"], 
             pixel_resize_shape=tuple(config["PIXEL_RESIZE_SHAPE"]),
             smooth_image=config["SMOOTH_IMAGE"], 
+            full_action_space=config["IS_MULTI_GAME"],
             eval=True)() 
 
         # Reset environment
@@ -678,8 +681,9 @@ def continual_run(config: dict):
     config["BATCH_SIZE"] = int(config["NUM_ENVS"] * config["NUM_STEPS"])
     config["MINIBATCH_SIZE"] = int(config["BATCH_SIZE"] // config["NUM_MINIBATCHES"])
     config["NUM_ITERATIONS"] = int(config["TIMESTEPS_PER_TASK"] // config["BATCH_SIZE"])
+    config["IS_MULTI_GAME"] = len(set(config["TASKS"])) > 1
     all_train_mods = list(config["TRAIN_MODS"]) # list of lists of mods, one list of mods per task
-    all_eval_mods = list(config["EVAL_MODS"]) # list of lists of mods, one list of mods per task
+    all_eval_mods = list(config["EVAL_MODS"]) # list of lists of mods, one list of mods per task 
 
     # dummy observation to initialize the network; shape is (1, F, H, W) for pixel-based or (1, F, D) for object-centric
     # Problem: In object-centric, the observation space is different for each game
@@ -698,7 +702,8 @@ def continual_run(config: dict):
                 native_downscaling=config["NATIVE_DOWNSCALING"], 
                 pixel_resize_shape=tuple(config["PIXEL_RESIZE_SHAPE"]), 
                 smooth_image=config["SMOOTH_IMAGE"], 
-                frame_stack=config["FRAME_STACK"]
+                frame_stack=config["FRAME_STACK"],
+                full_action_space=config["IS_MULTI_GAME"]
             )()
             D = env_.observation_space().shape[0]
             max_D = max(max_D, D)
@@ -709,7 +714,12 @@ def continual_run(config: dict):
 
     # initialize the network, actor, and critic
     network = Network() if config["PIXEL_BASED"] else MLP_Network()
-    actor = Actor(action_dim=18)  # full action space (18 actions) for all Atari games
+    if config["IS_MULTI_GAME"]:
+        action_dim = 18
+    else:
+        first_env = jaxatari.make(config["TASKS"][0])
+        action_dim = first_env.action_space().n
+    actor = Actor(action_dim=action_dim)
     critic = Critic()
     # network_params = network.init(network_key, env.observation_space().sample(obs_sample_key1).squeeze()[None, ...])
     # Init shape is (1,4,84,84) (which will be transposed inside the network to (1,84,84,4))
