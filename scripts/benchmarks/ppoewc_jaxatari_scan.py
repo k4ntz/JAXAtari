@@ -29,7 +29,7 @@ import hydra
 from omegaconf import OmegaConf
 from jaxatari.wrappers import NormalizeObservationWrapper, ObjectCentricWrapper, PixelObsWrapper, AtariWrapper, LogWrapper, FlattenObservationWrapper
 from jaxatari import spaces
-from ppo_jaxatari_vmap_eval import evaluate
+from ppoewc_jaxatari_vmap_eval import make_eval_step_fns, evaluate_cached
 
 from rtpt import RTPT
 
@@ -58,7 +58,7 @@ def make_env(env_id, seed, num_envs, mods=[], pixel_based=True, native_downscali
                 episodic_life=not eval, # only active during training 
                 first_fire=True,
                 noop_max=30,
-                full_action_space=True, # use full action space (18 actions) to have consistent Actor output across tasks
+                full_action_space=True, # TODO: maybe change (only when different games); use full action space (18 actions) to have consistent Actor output across tasks
         )
         if pixel_based:
             env = PixelObsWrapper(
@@ -190,7 +190,7 @@ class EpisodeStatistics:
     returned_episode_lengths: jnp.array
 
 
-def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: Actor, critic: Critic, config: dict, task_id: str, agent_state: TrainState, ewc_fisher = None, ewc_params = None, max_D = None, global_step = None, global_iteration = None, global_start_time = None, seen_tasks = None, train_mods = [], eval_mods = [], crl_state = None, get_action_and_value_fn = None, compute_gae_fn = None, update_ppo_fn = None):
+def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: Actor, critic: Critic, config: dict, task_id: str, agent_state: TrainState, ewc_fisher = None, ewc_params = None, max_D = None, global_step = None, global_iteration = None, global_start_time = None, seen_tasks = None, train_mods = [], eval_mods = [], eval_envs_cache = {}, eval_renderers_cache = {}, eval_fns_cache = {}, crl_state = None, get_action_and_value_fn = None, compute_gae_fn = None, update_ppo_fn = None):
     # shallow copy the config to avoid changing the original across tasks
     config = config.copy()
 
@@ -257,24 +257,23 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
     # assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
     def eval_and_vid(iteration, current_global_step, is_end_of_task=False):
-        # TODO: The SAVE_MODEL config option doesn't decide if a model is saved, but it decides wether we enter 
-        # the evaluation loop at the very end of training on a task.
-        model_path = f'runs/{run_name}/{config["EXP_NAME"]}_{iteration}.cleanrl_model'
-        os.makedirs(os.path.dirname(model_path), exist_ok=True)
-        with open(model_path, "wb") as f:
-            f.write(
-                flax.serialization.to_bytes(
-                    [
-                        config,
+        if config["SAVE_MODEL"] and is_end_of_task:
+            model_path = f'runs/{run_name}/{config["EXP_NAME"]}/{task_id}+{train_mods}_{iteration}.cleanrl_model'
+            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+            with open(model_path, "wb") as f:
+                f.write(
+                    flax.serialization.to_bytes(
                         [
-                            agent_state.params.network_params,
-                            agent_state.params.actor_params,
-                            agent_state.params.critic_params,
-                        ],
-                    ]
+                            config,
+                            [
+                                agent_state.params.network_params,
+                                agent_state.params.actor_params,
+                                agent_state.params.critic_params,
+                            ],
+                        ]
+                    )
                 )
-            )
-        print(f"model saved to {model_path}")
+            print(f"model saved to {model_path}")
 
         current_performances = {}
         current_task_key = f"{task_id}+{str(list(config['TRAIN_MODS']))}"
@@ -284,13 +283,12 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             # We only want to log videos for the CURRENT task to save time/space
             capture_video = config["CAPTURE_VIDEO"] and (eval_task == task_id) and (eval_task_train_mods == list(config["TRAIN_MODS"]))
 
-            # Object centric: recalculate the padding for every eval task using the fully wrapped environment
-            current_padding = 0
-            if not config["PIXEL_BASED"]:
-                temp_env = make_env(
+            # use cached envs and renderers to avoid dynamically reinstantiating them at every evaluation step (can cause memory leaks)
+            if eval_task_key not in eval_envs_cache:
+                eval_envs_cache[eval_task_key] = make_env(
                     env_id=eval_task, 
                     seed=config["SEED"], 
-                    num_envs=1, 
+                    num_envs=1, # Eval needs num_envs=1
                     mods=eval_task_eval_mods, 
                     pixel_based=config["PIXEL_BASED"], 
                     native_downscaling=config["NATIVE_DOWNSCALING"], 
@@ -299,27 +297,34 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
                     frame_stack=config["FRAME_STACK"],
                     eval=True
                 )()
-                task_D = temp_env.observation_space().shape[0]
-                current_padding = max_D - task_D
+                eval_renderers_cache[eval_task_key] = jaxatari.make(eval_task).renderer
 
-            episodic_returns, env_states = evaluate(
-                model_path,
-                partial(
-                    make_env,
-                    mods=list(eval_task_eval_mods),
-                    pixel_based=config["PIXEL_BASED"],
-                    native_downscaling=config["NATIVE_DOWNSCALING"],
-                    smooth_image=config["SMOOTH_IMAGE"],
-                    eval=True,
-                ),
-                eval_task,
+                cached_env = eval_envs_cache[eval_task_key]
+                # Object centric: recalculate the padding for every eval task using the fully wrapped environment
+                current_padding = 0
+                if not config["PIXEL_BASED"]:
+                    task_D = cached_env.observation_space().shape[0]
+                    current_padding = max_D - task_D
+
+                # COMPILE AND CACHE THE EVAL FUNCTIONS ONCE
+                reset_fn, rollout_fn = make_eval_step_fns(
+                    env=cached_env, network=network, actor=actor,
+                    object_centric=not config["PIXEL_BASED"], padding_width=current_padding,
+                    capture_video=capture_video
+                )
+                eval_fns_cache[eval_task_key] = (reset_fn, rollout_fn)
+
+            cached_renderer = eval_renderers_cache[eval_task_key]
+            reset_fn, rollout_fn = eval_fns_cache[eval_task_key]
+
+            episodic_returns, env_states = evaluate_cached(
+                compiled_reset=reset_fn,
+                compiled_rollout=rollout_fn,
+                network_params=agent_state.params.network_params,
+                actor_params=agent_state.params.actor_params,
                 eval_episodes=10,
-                run_name=f"{run_name}-{eval_task}-{str(list(eval_task_eval_mods))}-eval",
-                Model=(Network, Actor, Critic) if config["PIXEL_BASED"] else (MLP_Network, Actor, Critic),
-                seed=config["SEED"],
-                object_centric=not config["PIXEL_BASED"],
-                padding_width=current_padding,
-                crl=True
+                capture_video=capture_video,
+                seed=config["SEED"]
             )
 
             current_perf = np.mean(jax.device_get(episodic_returns))
@@ -328,12 +333,10 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             wandb.log({f"{eval_task_key}/eval/episodic_return_mod": current_perf}, step=current_global_step)
 
             if capture_video: 
-                # Instantiate a clean renderer immune to the training env's downscaling
-                clean_renderer = jaxatari.make(eval_task).renderer
                 # Mirror the pqn_agent final video behavior: log a video for the
                 # current eval environment under a consistent wandb key.
                 # env_state arrays have shape (N,)
-                frames = jax.vmap(clean_renderer.render)(env_states)
+                frames = jax.vmap(cached_renderer.render)(env_states)
                 # shape: (N, H, W, C) -> (N, C, H, W)
                 frames = jnp.transpose(frames, (0, 3, 1, 2))
                 video = wandb.Video(np.array(frames), fps=30, format="mp4")
@@ -509,13 +512,19 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             returns=jnp.zeros_like(reward),
             advantages=jnp.zeros_like(reward),
         )
-        return ((agent_state, next_obs, next_done, key, env_state), (storage, info))
+        step_metrics = {
+            "returned_episode_returns": info["returned_episode_returns"],
+            "returned_episode_lengths": info["returned_episode_lengths"]
+        }
 
+        return ((agent_state, next_obs, next_done, key, env_state), (storage, step_metrics))
+
+    @partial(jax.jit, static_argnames=["step_once_fn", "max_steps"])
     def rollout(agent_state, next_obs, next_done, key, env_state, step_once_fn, max_steps):
-        (agent_state, next_obs, next_done, key, env_state), (storage, info) = jax.lax.scan(
+        (agent_state, next_obs, next_done, key, env_state), (storage, step_metrics) = jax.lax.scan(
             step_once_fn, (agent_state, next_obs, next_done, key, env_state), (), max_steps
         )
-        return agent_state, next_obs, next_done, storage, key, env_state, info
+        return agent_state, next_obs, next_done, storage, key, env_state, step_metrics
 
     rollout = partial(rollout, step_once_fn=partial(step_once, env_step_fn=vmap_step), max_steps=config["NUM_STEPS"])
 
@@ -531,7 +540,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
            eval_and_vid(iteration, global_step) 
 
         iteration_time_start = time.time()
-        agent_state, next_obs, next_done, storage, key, env_state, info = rollout(
+        agent_state, next_obs, next_done, storage, key, env_state, step_metrics = rollout(
             agent_state, next_obs, next_done, key, env_state
         )
         global_step += config["NUM_STEPS"] * config["NUM_ENVS"]
@@ -551,8 +560,8 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         metrics = {
             # task specific metrics
-            f"{task_id}+{str(list(config["TRAIN_MODS"]))}/charts/avg_episodic_return": info["returned_episode_returns"].mean(), 
-            f"{task_id}+{str(list(config["TRAIN_MODS"]))}/charts/avg_episodic_length": info["returned_episode_lengths"].mean(),
+            f"{task_id}+{str(list(config["TRAIN_MODS"]))}/charts/avg_episodic_return": step_metrics["returned_episode_returns"].mean().item(), 
+            f"{task_id}+{str(list(config["TRAIN_MODS"]))}/charts/avg_episodic_length": step_metrics["returned_episode_lengths"].mean().item(),
             f"{task_id}+{str(list(config["TRAIN_MODS"]))}/losses/value_loss": v_loss[-1, -1].item(),
             f"{task_id}+{str(list(config["TRAIN_MODS"]))}/losses/policy_loss": pg_loss[-1, -1].item(),
             f"{task_id}+{str(list(config["TRAIN_MODS"]))}/losses/entropy": entropy_loss[-1, -1].item(),
@@ -580,8 +589,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
     print(f"Total train time: {end_time - task_start_time:.2f} seconds / {(end_time - task_start_time)/60:.2f} minutes.")
     generate_final_video(global_step)
 
-    if config["SAVE_MODEL"]:
-        eval_and_vid(iteration, global_step, is_end_of_task=True)
+    eval_and_vid(iteration, global_step, is_end_of_task=True)
 
     return agent_state, fisher_storage, global_step, global_iteration
 
@@ -900,6 +908,9 @@ def continual_run(config: dict):
     global_iteration = 0    # tracks total number of PPO updates
     global_start_time = time.time()
     seen_tasks = [] # tracks tasks that have been trained on so far, for evaluation
+    eval_envs_cache = {}
+    eval_renderers_cache = {}
+    eval_fns_cache = {}
 
     # dictionary for tracking Continual Learning metrics
     crl_state = {
@@ -923,7 +934,8 @@ def continual_run(config: dict):
         agent_state, fisher_storage, global_step, global_iteration = single_run(
             key, network, actor, critic, config, task_id, agent_state, 
             ewc_fisher, ewc_params, max_D, global_step, global_iteration, 
-            global_start_time, seen_tasks, train_mods, eval_mods, crl_state,
+            global_start_time, seen_tasks, train_mods, eval_mods, eval_envs_cache, 
+            eval_renderers_cache, eval_fns_cache, crl_state, 
             get_action_and_value, compute_gae, update_ppo
         )
 
