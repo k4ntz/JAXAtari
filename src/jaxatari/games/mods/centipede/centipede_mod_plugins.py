@@ -40,11 +40,10 @@ class RandomMushroomsMod(JaxAtariPostStepModPlugin):
         self._env.initialize_mushroom_positions = self.initialize_mushroom_positions.__get__(self._env)"""
 
     @partial(jax.jit, static_argnums=(0,))
-    def spawn_mushrooms(self, p: jnp.ndarray = jnp.array(0.0888)) -> chex.Array:
+    def spawn_mushrooms(self, key, centipede, p: jnp.ndarray = jnp.array(0.0888)) -> chex.Array:
         # Overrides the default function from the env
         rows = jnp.arange(self._env.consts.MUSHROOM_NUMBER_OF_ROWS) # 19
         cols = jnp.arange(self._env.consts.MUSHROOM_NUMBER_OF_COLS) # 16
-        key = jax.random.PRNGKey(time.time_ns() % (2 ** 32))
 
         spawn = jax.random.bernoulli(key, p, (19,16))
 
@@ -65,7 +64,39 @@ class RandomMushroomsMod(JaxAtariPostStepModPlugin):
         grid = jax.vmap(lambda r: jax.vmap(lambda c: cell_fn(r, c))(cols))(rows)
 
         # Flatten to (N*M, 4)
-        return grid.reshape(-1, 4)
+        mushrooms = grid.reshape(-1, 4)
+
+        # Remove mushrooms that would spawn overlapping any centipede segment.
+        # centipede: (9,5) -> use first two columns as positions, and column 3 as 'alive' flag
+        centipede_pos = centipede[:, :2]
+        centipede_alive = centipede[:, 3]
+
+        # single mushroom vs single segment collision check
+        def check_against_segment(m_pos, seg_pos, seg_alive):
+            return jnp.where(
+                seg_alive != 0,
+                self._env.check_collision_single(
+                    pos1=m_pos,
+                    size1=self._env.consts.MUSHROOM_SIZE,
+                    pos2=seg_pos,
+                    size2=self._env.consts.SEGMENT_SIZE,
+                ),
+                False,
+            )
+
+        # for a single mushroom, check collision against all segments and any collision -> True
+        def mushroom_collides(mush):
+            m_pos = mush[:2]
+            collisions = jax.vmap(lambda seg_pos, seg_alive: check_against_segment(m_pos, seg_pos, seg_alive))(centipede_pos, centipede_alive)
+            return jnp.any(collisions)
+
+        colliding_mask = jax.vmap(mushroom_collides)(mushrooms)
+
+        # Set lives to 0 for mushrooms that collide with the centipede (i.e., remove them)
+        new_lives = jnp.where(colliding_mask, 0, mushrooms[:, 3])
+        mushrooms = mushrooms.at[:, 3].set(new_lives.astype(jnp.int32))
+
+        return mushrooms
 
     def run(self, prev_state, new_state):
         """
@@ -77,7 +108,8 @@ class RandomMushroomsMod(JaxAtariPostStepModPlugin):
 
         num_mushrooms = jnp.sum(new_state.mushroom_positions[:, 3] > 0)
         p = num_mushrooms / 304  # Adjust probability based on current number of mushrooms
-        new_mushroom_positions = self.spawn_mushrooms(p=p)
+        mush_key, rng_key = jax.random.split(new_state.rng_key)
+        new_mushroom_positions = self.spawn_mushrooms(mush_key, new_state.centipede_position, p=p)
 
         cond = jnp.logical_or(
             jnp.equal(prev_state.step_counter, 0),
@@ -89,41 +121,25 @@ class RandomMushroomsMod(JaxAtariPostStepModPlugin):
 
         return jax.lax.cond(
             cond,
-            lambda: new_state.replace(mushroom_positions=new_mushroom_positions),
+            lambda: new_state.replace(mushroom_positions=new_mushroom_positions, rng_key=rng_key),
             lambda: new_state,
         )
 
-_ORIGINAL_PLAYER_STEP = JaxCentipede.player_step
-
-class RandomPlayerMovementMod(JaxAtariInternalModPlugin):
-    """Overwrites player movement with a random action with probability RANDOM_ACTION_PROB."""
-
-    RANDOM_ACTION_PROB: float = 0.5
-
-    @partial(jax.jit, static_argnums=(0,))
-    def player_step(
-        self,
-        player_x: chex.Array,
-        player_y: chex.Array,
-        player_velocity_x: chex.Array,
-        action: chex.Array,
-    ) -> tuple[chex.Array, chex.Array, chex.Array]:
-        # Fold traced values into the key so it varies every actual call,
-        # instead of being a Python-level constant baked in at trace time.
-        key = jax.random.PRNGKey(time.time_ns() % (2 ** 32))
-        key = jax.random.fold_in(key, player_x.astype(jnp.int32))
-        key = jax.random.fold_in(key, player_y.astype(jnp.int32))
-        key = jax.random.fold_in(
-            key, jax.lax.bitcast_convert_type(player_velocity_x.astype(jnp.float32), jnp.int32)
+class RandomPlayerMovementMod(JaxAtariPostStepModPlugin):
+    def run(self, prev_state, new_state):
+        act_key, ber_key, rng_key = jax.random.split(new_state.rng_key, 3)
+        new_action = jax.random.choice(act_key, 17)
+        new_player_x, _, new_vel_x = self._env.player_step(
+            prev_state.player_x,
+            prev_state.player_y,
+            prev_state.player_velocity_x,
+            new_action
         )
-        key = jax.random.fold_in(key, action.astype(jnp.int32))
-        move_key, action_key = jax.random.split(key)
-
-        use_random_action = jax.random.bernoulli(move_key, self.RANDOM_ACTION_PROB)
-        random_action = jax.random.randint(action_key, (), 0, 18)
-        new_action = jnp.where(use_random_action, random_action, action)
-
-        return _ORIGINAL_PLAYER_STEP(self._env, player_x, player_y, player_velocity_x, new_action)
+        return jax.lax.cond(
+            jax.random.bernoulli(ber_key, p=0.5),
+            lambda: new_state,
+            lambda: new_state.replace(player_x=new_player_x, player_velocity_x=new_vel_x)
+        )
 
 class DeadlyMushroomsMod(JaxAtariPostStepModPlugin):
     """Mushrooms are deadly to the player on contact, instead of just being obstacles."""
