@@ -283,6 +283,8 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             eval_task_key = f"{eval_task}+{str(list(eval_task_train_mods))}"
             # We only want to log videos for the CURRENT task to save time/space
             capture_video = config["CAPTURE_VIDEO"] and (eval_task == task_id) and (eval_task_train_mods == list(config["TRAIN_MODS"]))
+            if capture_video and config["VIDEO_AT_END"]:
+                capture_video = is_end_of_task
 
             # use cached envs and renderers to avoid dynamically reinstantiating them at every evaluation step (can cause memory leaks)
             if eval_task_key not in eval_envs_cache:
@@ -301,23 +303,27 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
                 )()
                 eval_renderers_cache[eval_task_key] = jaxatari.make(eval_task).renderer
 
-                cached_env = eval_envs_cache[eval_task_key]
-                # Object centric: recalculate the padding for every eval task using the fully wrapped environment
-                current_padding = 0
-                if not config["PIXEL_BASED"]:
-                    task_D = cached_env.observation_space().shape[0]
-                    current_padding = max_D - task_D
+            cached_env = eval_envs_cache[eval_task_key]
+            cached_renderer = eval_renderers_cache[eval_task_key]
 
-                # COMPILE AND CACHE THE EVAL FUNCTIONS ONCE
+            # Object centric: recalculate the padding for every eval task using the fully wrapped environment
+            current_padding = 0
+            if not config["PIXEL_BASED"]:
+                task_D = cached_env.observation_space().shape[0]
+                current_padding = max_D - task_D
+
+            # COMPILE AND CACHE THE EVAL FUNCTIONS ONCE
+            # functions with and without video capturing need to be compiled separately
+            eval_fn_key = f"{eval_task_key}+vid:{capture_video}"   
+            if eval_fn_key not in eval_fns_cache: 
                 reset_fn, rollout_fn = make_eval_step_fns(
                     env=cached_env, network=network, actor=actor,
                     object_centric=not config["PIXEL_BASED"], padding_width=current_padding,
                     capture_video=capture_video
                 )
-                eval_fns_cache[eval_task_key] = (reset_fn, rollout_fn)
+                eval_fns_cache[eval_fn_key] = (reset_fn, rollout_fn)
 
-            cached_renderer = eval_renderers_cache[eval_task_key]
-            reset_fn, rollout_fn = eval_fns_cache[eval_task_key]
+            reset_fn, rollout_fn = eval_fns_cache[eval_fn_key]
 
             episodic_returns, env_states = evaluate_cached(
                 compiled_reset=reset_fn,
@@ -587,7 +593,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
     if compile_time is not None:
         print(f"Run time after first iteration: {end_time - compile_time:.2f} seconds.")
     print(f"Total train time: {end_time - task_start_time:.2f} seconds / {(end_time - task_start_time)/60:.2f} minutes.")
-    generate_final_video(global_step)
+    # generate_final_video(global_step)
 
     eval_and_vid(iteration, global_step, is_end_of_task=True)
 
