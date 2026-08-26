@@ -12,6 +12,7 @@ import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.modification import AutoDerivedConstants
 
 def _create_background_sprite(consts: "BasicMathConstants", dim: Tuple, gameMode: int) -> jnp.ndarray:
     bg_color_rgba = (*consts.COLOR_CODES[gameMode][0], 255)
@@ -30,7 +31,7 @@ def _get_default_asset_config() -> tuple:
         {'name': 'underscore', 'type': 'group', 'files': underscore_files}
     )
 
-class BasicMathConstants(struct.PyTreeNode):
+class BasicMathConstants(AutoDerivedConstants):
     SCREEN_WIDTH: int = struct.field(pytree_node=False, default=160)
     SCREEN_HEIGHT: int = struct.field(pytree_node=False, default=210)
 

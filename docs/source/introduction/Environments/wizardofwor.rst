@@ -36,15 +36,13 @@ Registered via ``WizardOfWorEnvMod``:
 Known issues
 ------------
 
-Living ALE-parity checklist (update as items are fixed or newly found).
-
 * **Sprite / entity flickering** — ALE draws several objects on alternating
   frames (player, enemies, radar blips). JAX renders them solid every frame;
-  flicker is not implemented yet.
+  flicker is not reproduced.
 * **Radar** — box and blip layout were retuned toward ALE, but blip timing,
   flicker, and occasional alignment vs the maze grid may still diverge.
 * **Level progression (not ALE-faithful)** — dungeon 1 Burwor→Garwor→Thorwor
-  promotion is only approximate; full multi-dungeon progression needs a pass.
+  promotion is only approximate; full multi-dungeon progression is incomplete.
   Known gaps:
   - Enemy **speed** scales with time-in-level (``SPEED_TIMER_*``), not dungeon
     number as in ALE.
@@ -70,7 +68,7 @@ Living ALE-parity checklist (update as items are fixed or newly found).
   look slightly different from ALE (authored / scaled assets vs the original
   playfield and TIA graphics), even when layout and colors are close. Render
   also uses a non-uniform upscale of half-resolution sprites plus a procedural
-  radar; small color, thickness, or HUD mismatches can remain. Re-check with
+  radar; small color, thickness, or HUD mismatches can remain. Compare with
   ``scripts/gameplay_comparison.py -g WizardOfWor``.
 * **Teleporter duty cycle** — open/closed timing uses a simple
   ``frame_counter % 360 < 180`` window; may not match ALE exactly.

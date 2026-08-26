@@ -20,7 +20,7 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   ❌: 2
 |------------------------------|---------|----------------|
 | alien                        | 🥈       | 8 |
 | amidar                       | 🥇       | 0 |
-| assault                      | 🥉       | 0 |
+| assault                      | 🥈       | 0 |
 | asterix                      | 🥇       | 0 |
 | asteroids                    | 🥇       | 4 |
 | atlantis                     | 🥈       | 6 |
@@ -73,10 +73,10 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   ❌: 2
 | venture                      | 🥈       | 9 |
 | video_pinball                | 🥈       | 4 |
 | wizard_of_wor                | 🥉       | 3 |
-| yars_revenge                 | ❌       | 0 |
+| yars_revenge                 | 🥇       | 8 |
 | zaxxon                       | ❌       | 0 |
 
-Total:  🥇: 17   |   🥈: 15   |   🥉: 3   |   ❌: 22
+Total:  🥇: 18   |   🥈: 16   |   🥉: 2   |   ❌: 21
 
 ## Remaining ALE games
 
@@ -90,8 +90,8 @@ These are distinct from `blackjack`, the separate ALE Blackjack environment.
 | adventure                    | ❌       | 0 |
 | airraid                     | 🥈       | 0 |
 | atlantis2                    | ❌       | 0 |
-| backgammon                   | 🥉       | 0 |
-| basic_math                   | ❌       | 0 |
+| backgammon                   | 🥈       | 10 |
+| basic_math                   | 🥈       | 4 |
 | blackjack                    | 🥈       | 0 |
 | carnival                     | ❌       | 0 |
 | casino                       | 🥈       | 0 |
@@ -109,7 +109,7 @@ These are distinct from `blackjack`, the separate ALE Blackjack environment.
 | haunted_house                | 🥇       | 0 |
 | human_cannonball             | 🥈       | 0 |
 | journey_escape               | ❌       | 0 |
-| kaboom                       | ❌       | 0 |
+| kaboom                       | 🥇       | 4 |
 | keystone_kapers              | ❌       | 0 |
 | king_kong                    | 🥈       | 0 |
 | klax                         | 🥈       | 0 |
@@ -117,9 +117,9 @@ These are distinct from `blackjack`, the separate ALE Blackjack environment.
 | laser_gates                  | 🥈       | 0 |
 | lost_luggage                 | ❌       | 0 |
 | mario_bros                   | ❌       | 0 |
-| miniature_golf               | ❌       | 0 |
+| miniature_golf               | 🥇       | 19 |
 | mr_do                        | ❌       | 0 |
-| othello                      | 🥉       | 0 |
+| othello                      | 🥈       | 1 |
 | pacman                       | 🥈       | 7 |
 | pitfall2                     | ❌       | 0 |
 | pooyan                       | ❌       | 0 |
@@ -136,4 +136,4 @@ These are distinct from `blackjack`, the separate ALE Blackjack environment.
 | video_cube                   | 🥈       | 0 |
 | word_zapper                  | 🥈       | 0 |
 
-Total:  🥇: 4   |   🥈: 18   |   🥉: 2   |   ❌: 24
+Total:  🥇: 6   |   🥈: 21   |   🥉: 0   |   ❌: 21

@@ -1,7 +1,7 @@
 from jax._src.pjit import JitWrapped
 import os
 from functools import partial
-from typing import Tuple, NamedTuple
+from typing import Tuple
 import jax
 import jax.lax
 import jax.numpy as jnp
@@ -86,12 +86,27 @@ def _get_default_asset_config() -> tuple:
 #
 
 
-class EntityPosition(NamedTuple):
-    x: int
-    y: int
-    width: int
-    height: int
-    direction: int  # NONE, UP, DOWN, LEFT, RIGHT
+@struct.dataclass
+class EntityPosition:
+    x: chex.Array
+    y: chex.Array
+    width: chex.Array
+    height: chex.Array
+    direction: chex.Array
+
+
+def _entity_position_to_vec(pos: EntityPosition) -> chex.Array:
+    return jnp.array([pos.x, pos.y, pos.width, pos.height, pos.direction], dtype=jnp.int32)
+
+
+def _entity_position_from_vec(vec: chex.Array) -> EntityPosition:
+    return EntityPosition(x=vec[0], y=vec[1], width=vec[2], height=vec[3], direction=vec[4])
+
+
+def _pick_entity_position(rng_key: chex.PRNGKey, options: tuple[EntityPosition, ...]) -> chex.Array:
+    stacked = jnp.stack([_entity_position_to_vec(option) for option in options])
+    idx = jax.random.randint(rng_key, (), 0, stacked.shape[0])
+    return stacked[idx]
 
 
 class WizardOfWorConstants(AutoDerivedConstants):
@@ -504,11 +519,12 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space of the game."""
         screen = (self.consts.WINDOW_HEIGHT, self.consts.WINDOW_WIDTH)
+        ori_range = (-1.0, float(Action.DOWN))
         return spaces.Dict({
-            "player": spaces.get_object_space(n=None, screen_size=screen, orientation_range=(-1.0, 4.0), xy_low=-100),
-            "enemies": spaces.get_object_space(n=self.consts.MAX_ENEMIES, screen_size=screen, orientation_range=(-1.0, 4.0), xy_low=-100),
-            "bullet": spaces.get_object_space(n=None, screen_size=screen, orientation_range=(-1.0, 4.0), xy_low=-100),
-            "enemy_bullet": spaces.get_object_space(n=None, screen_size=screen, orientation_range=(-1.0, 4.0), xy_low=-100),
+            "player": spaces.get_object_space(n=None, screen_size=screen, orientation_range=ori_range, xy_low=-100),
+            "enemies": spaces.get_object_space(n=self.consts.MAX_ENEMIES, screen_size=screen, orientation_range=ori_range, xy_low=-100),
+            "bullet": spaces.get_object_space(n=None, screen_size=screen, orientation_range=ori_range, xy_low=-100),
+            "enemy_bullet": spaces.get_object_space(n=None, screen_size=screen, orientation_range=ori_range, xy_low=-100),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=-1, high=10, shape=(), dtype=jnp.int32),
         })
@@ -1320,35 +1336,35 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
                         return jax.lax.cond(
                             jnp.logical_and(jnp.logical_and(moved_forward, moved_left), moved_right),
                             # All three directions possible
-                            lambda: jax.random.choice(
+                            lambda: _pick_entity_position(
                                 rng_key,
-                                jnp.array([valid_position_forward, valid_position_left, valid_position_right])
+                                (valid_position_forward, valid_position_left, valid_position_right),
                             ),
                             lambda: jax.lax.cond(
                                 jnp.logical_and(moved_forward, moved_left),  # Forward and left possible
-                                lambda: jax.random.choice(
-                                    rng_key, jnp.array([valid_position_forward, valid_position_left])
+                                lambda: _pick_entity_position(
+                                    rng_key, (valid_position_forward, valid_position_left)
                                 ),
                                 lambda: jax.lax.cond(
                                     jnp.logical_and(moved_forward, moved_right),  # Forward and right possible
-                                    lambda: jax.random.choice(
-                                        rng_key, jnp.array([valid_position_forward, valid_position_right])
+                                    lambda: _pick_entity_position(
+                                        rng_key, (valid_position_forward, valid_position_right)
                                     ),
                                     lambda: jax.lax.cond(
                                         jnp.logical_and(moved_left, moved_right),  # Left and right possible
-                                        lambda: jax.random.choice(
-                                            rng_key, jnp.array([valid_position_left, valid_position_right])
+                                        lambda: _pick_entity_position(
+                                            rng_key, (valid_position_left, valid_position_right)
                                         ),
                                         lambda: jax.lax.cond(
                                             moved_forward,  # Only forward possible
-                                            lambda: jnp.array(valid_position_forward),
+                                            lambda: _entity_position_to_vec(valid_position_forward),
                                             lambda: jax.lax.cond(
                                                 moved_left,  # Only left possible
-                                                lambda: jnp.array(valid_position_left),
+                                                lambda: _entity_position_to_vec(valid_position_left),
                                                 lambda: jax.lax.cond(
                                                     moved_right,  # Only right possible
-                                                    lambda: jnp.array(valid_position_right),
-                                                    lambda: jnp.array(valid_position_back)
+                                                    lambda: _entity_position_to_vec(valid_position_right),
+                                                    lambda: _entity_position_to_vec(valid_position_back),
                                                 )
                                             )
                                         )
@@ -1357,8 +1373,7 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
                             )
                         )
 
-                    new_position = select_state()
-                    new_position = EntityPosition(*new_position)
+                    new_position = _entity_position_from_vec(select_state())
                     new_enemy = jnp.array([
                         new_position.x,
                         new_position.y,

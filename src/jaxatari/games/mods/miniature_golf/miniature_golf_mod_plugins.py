@@ -97,7 +97,6 @@ class MovingHoleMod(JaxAtariInternalModPlugin):
             obstacle_dir=state.obstacle_dir,
             shot_count=state.shot_count,
             level=state.level,
-            wall_layout=state.wall_layout,
             acceleration_threshold=state.acceleration_threshold,
             acceleration_counter=state.acceleration_counter,
             mod_4_counter=state.mod_4_counter,
@@ -197,7 +196,6 @@ class SecondHoleMod(JaxAtariInternalModPlugin):
             obstacle_dir=state.obstacle_dir,
             shot_count=state.shot_count,
             level=state.level,
-            wall_layout=state.wall_layout,
             acceleration_threshold=state.acceleration_threshold,
             acceleration_counter=state.acceleration_counter,
             mod_4_counter=state.mod_4_counter,
@@ -299,7 +297,6 @@ class PermeableObstacleMod(JaxAtariInternalModPlugin):
             obstacle_dir=obstacle_dir_new,
             shot_count=state.shot_count,
             level=state.level,
-            wall_layout=state.wall_layout,
             acceleration_threshold=state.acceleration_threshold,
             acceleration_counter=state.acceleration_counter,
             mod_4_counter=state.mod_4_counter,
@@ -335,7 +332,6 @@ class PermeableWallMod(JaxAtariInternalModPlugin):
             obstacle_dir=state.obstacle_dir,
             shot_count=state.shot_count,
             level=state.level,
-            wall_layout=state.wall_layout,
             acceleration_threshold=state.acceleration_threshold,
             acceleration_counter=state.acceleration_counter,
             mod_4_counter=state.mod_4_counter,
@@ -382,3 +378,45 @@ class AlwaysZeroShotsMod(JaxAtariPostStepModPlugin):
         return new_state.replace(
             shot_count=jnp.array(0, dtype=jnp.int32),
         )
+
+
+class ManhattanRewardMod(JaxAtariInternalModPlugin):
+    """Opt-in distance-based reward shaping (legacy training signal)."""
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: MiniatureGolfState, state: MiniatureGolfState):
+        current = self._env._manhattan_reward_potential(state)
+        previous = self._env._manhattan_reward_potential(previous_state)
+        return (current - previous).astype(jnp.float32)
+
+
+class DiagonalMovementMod(JaxAtariInternalModPlugin):
+    """True diagonal movement. Default ALE behavior maps diagonals to left/right only."""
+
+    constants_overrides = {
+        "ALLOW_DIAGONAL_MOVEMENT": True,
+    }
+
+
+def _start_level_mod(level_index: int):
+    """Build a mod that starts on the given 0-indexed hole."""
+
+    class _StartLevelMod(JaxAtariInternalModPlugin):
+        constants_overrides = {
+            "START_LEVEL": level_index,
+        }
+
+    _StartLevelMod.__name__ = f"StartLevel{level_index + 1}Mod"
+    _StartLevelMod.__qualname__ = _StartLevelMod.__name__
+    return _StartLevelMod
+
+
+StartLevel1Mod = _start_level_mod(0)
+StartLevel2Mod = _start_level_mod(1)
+StartLevel3Mod = _start_level_mod(2)
+StartLevel4Mod = _start_level_mod(3)
+StartLevel5Mod = _start_level_mod(4)
+StartLevel6Mod = _start_level_mod(5)
+StartLevel7Mod = _start_level_mod(6)
+StartLevel8Mod = _start_level_mod(7)
+StartLevel9Mod = _start_level_mod(8)

@@ -32,8 +32,6 @@ None registered.
 Known issues
 ------------
 
-Living ALE-parity checklist (update as items are fixed or newly found).
-
 * **Enemy sprites** — only the first enemy type has proper sprites
   (``enemy_0`` / ``enemy_1`` / tiny). Later stage enemy types appear to be
   simple palette recolors of that same shape rather than distinct ALE artwork.
@@ -52,5 +50,5 @@ Living ALE-parity checklist (update as items are fixed or newly found).
 * **Enemy fire timing** — ``ENEMY_FIRE_INTERVAL`` is approximate; may still
   diverge from ALE cadence under longer play.
 * **Visual / UI leftovers** — residual sprite, heat-bar, or HUD mismatches vs
-  ALE may remain after the recent parity pass; re-check with
+  ALE may remain. Compare with
   ``scripts/gameplay_comparison.py -g assault``.

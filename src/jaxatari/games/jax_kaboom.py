@@ -109,8 +109,13 @@ class KaboomConstants(AutoDerivedConstants):
     )
     SCREEN_WIDTH: int = struct.field(pytree_node=False, default=160)
     SCREEN_HEIGHT: int = struct.field(pytree_node=False, default=210)
-    BUCKET_SPEED_X: int = struct.field(pytree_node=False, default=5)  # in px
-    BUCKET_X_OFFSET: int = struct.field(pytree_node=False, default=40)  # in px
+    # ALE discrete LEFT/RIGHT steps the emulated paddle by this many units/frame.
+    # Measured against ALE/Kaboom-v5 (bucketHorizPosition chase; MAE ≈ 1.6 px).
+    PADDLE_DELTA: int = struct.field(pytree_node=False, default=5)
+    # Kaboom ASM: target = max(0, paddleValue - 5) before the half-delta chase.
+    PADDLE_TARGET_OFFSET: int = struct.field(pytree_node=False, default=5)
+    # Screen X = bucketHorizPosition + offset (settled frames; ALE xmin ∈ [18, 126]).
+    BUCKET_X_OFFSET: int = struct.field(pytree_node=False, default=18)
     BOMB_FUSE_STATES: int = struct.field(pytree_node=False, default=3)  # bomb fuse animations count
     BOMB_EXPLODE_STATES: int = struct.field(pytree_node=False, default=11)  # bomb animations count 4 + 4 + 3
     BOMB_BUCKET_EXPLODE_STATES: int = struct.field(pytree_node=False, default=12)  # bomb animations count 4 + 4 + 4
@@ -159,7 +164,13 @@ class KaboomConstants(AutoDerivedConstants):
     BUCKET_ONE_POS_X: int = struct.field(pytree_node=False, default=73)
     BUCKET_ONE_POS_Y: int = struct.field(pytree_node=False, default=148)
     BUCKET_MIN_ALLOWED_POS_X: int = struct.field(pytree_node=False, default=18)
-    BUCKET_MAX_ALLOWED_POS_X: int = struct.field(pytree_node=False, default=128)
+    # paddleRangeMax (108) + BUCKET_X_OFFSET → right-edge screen xmin in ALE.
+    BUCKET_MAX_ALLOWED_POS_X: int = struct.field(pytree_node=False, default=126)
+    # Paddle in screen space: RAM paddle fitted to ALE (delta=5, pmax≈135, pmin=0).
+    PADDLE_MIN_POS_X: int = struct.field(pytree_node=False, default=18)
+    PADDLE_MAX_POS_X: int = struct.field(pytree_node=False, default=153)
+    # Start centered: bucket RAM 55 / paddle RAM 60 → screen 73 / 78.
+    PADDLE_START_POS_X: int = struct.field(pytree_node=False, default=78)
 
 
 @struct.dataclass
@@ -177,9 +188,8 @@ class KaboomState:
     mad_bomber_motion_counter: chex.Array
     bombs_states: chex.Array
     buckets_pos: chex.Array
-    buckets_moving_state: chex.Array
+    paddle_pos_x: chex.Array  # ALE-style paddle target (screen space); buckets chase it
     buckets_jitter_state: chex.Array
-    buckets_were_moving_right: chex.Array
     score: chex.Array
     lives: chex.Array
     level: chex.Array
@@ -229,9 +239,8 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
             buckets_pos=jnp.array([(self.consts.BUCKET_THREE_POS_X, self.consts.BUCKET_THREE_POS_Y, 1),
                                    (self.consts.BUCKET_TWO_POS_X, self.consts.BUCKET_TWO_POS_Y, 1),
                                    (self.consts.BUCKET_ONE_POS_X, self.consts.BUCKET_ONE_POS_Y, 1)], dtype=jnp.int32), # (x, y, is_active)
+            paddle_pos_x=jnp.array(self.consts.PADDLE_START_POS_X, dtype=jnp.int32),
             buckets_jitter_state=jnp.array(self.consts.DEFAULT_STATE, dtype=jnp.int32),
-            buckets_moving_state=jnp.array(self.consts.DEFAULT_STATE, dtype=jnp.int32),
-            buckets_were_moving_right=jnp.array(False),
             score=jnp.array(0, dtype=jnp.int32),
             lives=jnp.array(3, dtype=jnp.int32),
             level=jnp.array(1, dtype=jnp.int32),
@@ -283,44 +292,53 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         return obs
 
     @partial(jax.jit, static_argnums=(0,))
-    def update_bucket_step(self, state, action, bucket_pos, buckets_moving_state,
-                           buckets_were_moving_right, buckets_jitter_state,
-                           frames_counter, key):
+    def update_bucket_step(self, state, action, bucket_pos, paddle_pos_x,
+                           buckets_jitter_state, frames_counter, key):
+        """Bucket movement from Kaboom ASM CalculateBucketPosition + ALE paddle Δ.
+
+        Original (Dennis Debro disassembly):
+          target = max(0, paddleValue - 5)
+          bucket += ASR(target - bucket)   # arithmetic shift right (= floor div 2)
+          bucket = min(bucket, paddleRangeMax)
+
+        ALE maps discrete LEFT/RIGHT onto ±PADDLE_DELTA paddle steps each frame.
+        Coordinates here are screen-space (bucketHorizPosition + BUCKET_X_OFFSET).
+        """
 
         def do_update(operand):
-            buckets_pos, buckets_moving_state, buckets_were_moving_right, buckets_jitter_state, frames_counter, key = operand
-            # Input + stickiness
-            buckets_moving_state = jnp.where(
-                (action == Action.LEFT) | (action == Action.RIGHT),
-                jnp.minimum(5,
-                            jnp.where(buckets_moving_state == self.consts.DEFAULT_STATE, 1, buckets_moving_state + 1)),
-                jnp.maximum(0, buckets_moving_state - 1)
-            )
+            buckets_pos, paddle_pos_x, buckets_jitter_state, frames_counter, key = operand
 
-            # Update movement direction
-            buckets_were_moving_right = jnp.where(action == Action.RIGHT, True,
-                                                jnp.where(action == Action.LEFT, False, buckets_were_moving_right))
+            # ALE discrete paddle: hold LEFT/RIGHT to step the paddle pot.
+            paddle_pos_x = jnp.where(
+                action == Action.RIGHT,
+                jnp.minimum(self.consts.PADDLE_MAX_POS_X, paddle_pos_x + self.consts.PADDLE_DELTA),
+                jnp.where(
+                    action == Action.LEFT,
+                    jnp.maximum(self.consts.PADDLE_MIN_POS_X, paddle_pos_x - self.consts.PADDLE_DELTA),
+                    paddle_pos_x,
+                ),
+            ).astype(jnp.int32)
 
-            # Current speed
-            cur_speed = jnp.where(
-                buckets_moving_state == self.consts.DEFAULT_STATE,
-                0,
-                (self.consts.BUCKET_SPEED_X * (buckets_moving_state / 5)) * jnp.where(buckets_were_moving_right, 1, -1)
-            ).astype(int)
+            # ASM: lda paddleValue; sbc #5; bpl ...; else 0
+            target_x = jnp.maximum(
+                self.consts.BUCKET_MIN_ALLOWED_POS_X,
+                paddle_pos_x - self.consts.PADDLE_TARGET_OFFSET,
+            ).astype(jnp.int32)
 
-            # Tentative new_x
-            new_x = jnp.where(
-                buckets_were_moving_right,
-                jnp.minimum(self.consts.BUCKET_MAX_ALLOWED_POS_X, buckets_pos[0, 0] + cur_speed),
-                jnp.maximum(self.consts.BUCKET_MIN_ALLOWED_POS_X, buckets_pos[0, 0] + cur_speed)
-            )
+            # ASM: signed half-delta chase toward target, then clamp to paddleRangeMax.
+            bucket_x = buckets_pos[0, 0].astype(jnp.int32)
+            diff = target_x - bucket_x
+            half = (diff >> 1).astype(jnp.int32)  # arithmetic shift on signed int32
+            new_x = bucket_x + half
+            new_x = jnp.minimum(self.consts.BUCKET_MAX_ALLOWED_POS_X, new_x)
+            new_x = jnp.maximum(self.consts.BUCKET_MIN_ALLOWED_POS_X, new_x)
 
             # Bucket jittering
             key, subkey = jax.random.split(key)
 
             jitter_state_equals_default_state = (buckets_jitter_state == self.consts.DEFAULT_STATE)
             buckets_jitter_state = jnp.where(
-                jitter_state_equals_default_state & (frames_counter % 100 == 0),
+                jitter_state_equals_default_state & (frames_counter > 0) & (frames_counter % 100 == 0),
                 jnp.where(jax.random.randint(subkey, (), 1, 4) == 3, 0, buckets_jitter_state),
                 buckets_jitter_state
             )
@@ -336,14 +354,19 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
                 apply_jitter(buckets_jitter_state),
                 new_x
             )
+            new_x = jnp.clip(
+                new_x,
+                self.consts.BUCKET_MIN_ALLOWED_POS_X,
+                self.consts.BUCKET_MAX_ALLOWED_POS_X,
+            )
             buckets_jitter_state = jnp.where(~jitter_state_equals_default_state & frame_counter_even, buckets_jitter_state + 1, buckets_jitter_state)
             buckets_jitter_state = jnp.where(buckets_jitter_state == 29, self.consts.DEFAULT_STATE, buckets_jitter_state)
 
             buckets_pos = buckets_pos.at[:, 0].set(new_x)
-            return buckets_pos, buckets_moving_state, buckets_were_moving_right, buckets_jitter_state, frames_counter, key
+            return buckets_pos, paddle_pos_x, buckets_jitter_state, frames_counter, key
 
         return jax.lax.cond(state.bombs_exploding, lambda x: x, do_update,
-                            (bucket_pos, buckets_moving_state, buckets_were_moving_right, buckets_jitter_state,
+                            (bucket_pos, paddle_pos_x, buckets_jitter_state,
                              frames_counter, key))
 
     @partial(jax.jit, static_argnums=(0,))
@@ -804,9 +827,8 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
                 mad_bomber_motion_counter=state.mad_bomber_motion_counter,
                 bombs_states=state.bombs_states,
                 buckets_pos=state.buckets_pos,
+                paddle_pos_x=state.paddle_pos_x,
                 buckets_jitter_state=state.buckets_jitter_state,
-                buckets_moving_state=state.buckets_moving_state,
-                buckets_were_moving_right=state.buckets_were_moving_right,
                 score=state.score,
                 lives=state.lives,
                 level=state.level,
@@ -826,9 +848,9 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
             return state.replace(frames_counter=state.frames_counter + 1)
 
         def normal_step():
-            buckets_pos, buckets_moving_state, buckets_were_moving_right, buckets_jitter_state, frames_counter, key \
-                = self.update_bucket_step(state, atari_action, state.buckets_pos, state.buckets_moving_state,
-                                          state.buckets_were_moving_right, state.buckets_jitter_state, state.frames_counter,
+            buckets_pos, paddle_pos_x, buckets_jitter_state, frames_counter, key \
+                = self.update_bucket_step(state, atari_action, state.buckets_pos, state.paddle_pos_x,
+                                          state.buckets_jitter_state, state.frames_counter,
                                           state.key)
 
             bombs, buckets_pos, mad_bomber_pos, level, bombs_dropped, score, level_finished, level_success, frames_counter, bombs_falling_and_exploding, bombs_should_explode, key \
@@ -853,9 +875,8 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
                 mad_bomber_motion_counter=mad_bomber_motion_counter,
                 bombs_states=bombs,
                 buckets_pos=buckets_pos,
+                paddle_pos_x=paddle_pos_x,
                 buckets_jitter_state=buckets_jitter_state,
-                buckets_moving_state=buckets_moving_state,
-                buckets_were_moving_right=buckets_were_moving_right,
                 score=score,
                 lives=lives,
                 level=level,

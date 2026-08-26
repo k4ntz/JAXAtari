@@ -84,7 +84,7 @@ class OthelloConstants(AutoDerivedConstants):
 
     # ALE cursor movement: hold a direction this many frames before the cursor steps.
     # Set to 1 (via the instant_movement mod) for one step per held frame.
-    CURSOR_MOVE_DELAY: int = struct.field(pytree_node=False, default=8)
+    CURSOR_MOVE_DELAY: int = struct.field(pytree_node=False, default=10)
 
     # Asset config
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)

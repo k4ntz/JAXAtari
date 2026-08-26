@@ -34,8 +34,8 @@ None registered.
 Known issues
 ------------
 
-Living ALE-parity checklist. Gaps below are why this env is marked ❌ and
-kept out of ``core.py`` until a fuller pass.
+This environment is experimental and not registered in ``core.py``.
+Current limitations relative to ALE:
 
 * **Sprites missing / incomplete** — no on-disk sprite pack under
   ``games/sprites/mariobros/``. Rendering is mostly procedural (palette-index
@@ -49,8 +49,8 @@ kept out of ``core.py`` until a fuller pass.
   - Platforms are flat color bars (no ALE brick / ice patterning).
   - HUD differs: lives are red squares; ALE life / score icons and the
     bottom-center level digits (``01``, ``02``, …) are not rendered.
-  - Re-check visuals with ``scripts/gameplay_comparison.py -g mariobros``
-    (requires loading the draft module directly; not via ``core``).
+  - Compare visuals with ``scripts/gameplay_comparison.py -g mariobros``
+    (requires loading the module directly; not via ``core``).
 
 * **Level / stage progression (not ALE-faithful)** — ALE advances a numeric
   **level** (RAM ``5``, HUD at bottom center) when the current round’s pests

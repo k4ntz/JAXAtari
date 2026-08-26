@@ -86,6 +86,10 @@ GAME_MODULES = {
     "mspacman": "jaxatari.games.jax_mspacman",
     "montezumarevenge": "jaxatari.games.jax_montezumarevenge",
     "pacman": "jaxatari.games.jax_pacman",
+    "kaboom": "jaxatari.games.jax_kaboom",
+    "basicmath": "jaxatari.games.jax_basicmath",
+    "miniaturegolf": "jaxatari.games.jax_miniature_golf",
+    "yarsrevenge": "jaxatari.games.jax_yarsrevenge",
     # Add new games here
 }
 
@@ -123,6 +127,10 @@ MOD_MODULES = {
     "othello": "jaxatari.games.mods.othello_mods.OthelloEnvMod",
     "wizardofwor": "jaxatari.games.mods.wizardofwor_mods.WizardOfWorEnvMod",
     "backgammon": "jaxatari.games.mods.backgammon_mods.BackgammonEnvMod",
+    "kaboom": "jaxatari.games.mods.kaboom_mods.KaboomEnvMod",
+    "basicmath": "jaxatari.games.mods.basicmath_mods.BasicmathEnvMod",
+    "miniaturegolf": "jaxatari.games.mods.miniature_golf_mods.MiniatureGolfEnvMod",
+    "yarsrevenge": "jaxatari.games.mods.yarsrevenge_mods.YarsRevengeEnvMod",
 }
 
 

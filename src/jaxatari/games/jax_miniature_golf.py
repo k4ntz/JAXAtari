@@ -1,38 +1,27 @@
+from collections import deque
 from functools import partial
 import os
-from typing import Tuple, NamedTuple
+from typing import Tuple
 import jax.lax
 import jax.numpy as jnp
 import chex
 import numpy as np
-from queue import Queue
 from flax import struct
 
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
+from jaxatari.modification import AutoDerivedConstants
 
 
-LEVEL_1: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_1.npy")
-LEVEL_2: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_2.npy")
-LEVEL_3: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_3.npy")
-LEVEL_4: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_4.npy")
-LEVEL_5: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_5.npy")
-LEVEL_6: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_6.npy")
-LEVEL_7: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_7.npy")
-LEVEL_8: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_8.npy")
-LEVEL_9: chex.Array = jnp.load(f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf/level_9.npy")
+_SPRITE_DIR = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf"
+_WALL_RGB = np.array([210, 210, 64], dtype=np.int32)
 
-WALL_LAYOUT_LEVEL_1: chex.Array = (LEVEL_1[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
-WALL_LAYOUT_LEVEL_2: chex.Array = (LEVEL_2[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
-WALL_LAYOUT_LEVEL_3: chex.Array = (LEVEL_3[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
-WALL_LAYOUT_LEVEL_4: chex.Array = (LEVEL_4[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
-WALL_LAYOUT_LEVEL_5: chex.Array = (LEVEL_5[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
-WALL_LAYOUT_LEVEL_6: chex.Array = (LEVEL_6[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
-WALL_LAYOUT_LEVEL_7: chex.Array = (LEVEL_7[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
-WALL_LAYOUT_LEVEL_8: chex.Array = (LEVEL_8[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
-WALL_LAYOUT_LEVEL_9: chex.Array = (LEVEL_9[:,:,:3] == jnp.array([210, 210, 64]))[:,:,0].astype(jnp.int32)
+HOLE_X: Tuple[int, int, int, int, int, int, int, int, int] = (8, 83, 83, 82, 148, 148, 153, 29, 19)
+HOLE_Y: Tuple[int, int, int, int, int, int, int, int, int] = (190, 49, 123, 89, 189, 111, 55, 111, 46)
+HOLE_SIZE: Tuple[int, int] = (3, 4)
+BALL_SIZE: Tuple[int, int] = (2, 4)
 
 
 def _get_default_asset_config() -> tuple:
@@ -57,65 +46,64 @@ def _get_default_asset_config() -> tuple:
     )
 
 
-def get_score_mask(wall_layout: chex.Array, hole: ObjectObservation, ball_width: int, ball_height: int) -> chex.Array:
-    dist = np.zeros_like(wall_layout) + np.inf
-    q: Queue[Tuple[int, int]] = Queue(maxsize=int(np.prod(wall_layout.shape)))
-    for y in range(hole.y - ball_height + 1, hole.y + hole.height):
-        for x in range(hole.x - ball_width + 1, hole.x + hole.width):
+def _get_score_mask(
+    wall_layout: np.ndarray,
+    hole_x: int,
+    hole_y: int,
+    hole_w: int,
+    hole_h: int,
+    ball_width: int,
+    ball_height: int,
+) -> np.ndarray:
+    """CPU BFS distance-to-hole potential used by ManhattanRewardMod."""
+    wall_layout = np.asarray(wall_layout)
+    dist = np.full(wall_layout.shape, np.inf, dtype=np.float64)
+    q: deque[Tuple[int, int]] = deque()
+    for y in range(hole_y - ball_height + 1, hole_y + hole_h):
+        for x in range(hole_x - ball_width + 1, hole_x + hole_w):
             dist[y, x] = 0
-            q.put((x, y))
+            q.append((x, y))
 
-    while q.qsize() > 0:
-        x, y = q.get()
-        if x > 0 and dist[y, x - 1] > dist[y, x] + 1 and wall_layout[y, x - 1] != 1:
-            dist[y, x - 1] = dist[y, x] + 1
-            q.put((x - 1, y))
-        if x + 1 < wall_layout.shape[1] and dist[y, x + 1] > dist[y, x] + 1 and wall_layout[y, x + 1] != 1:
-            dist[y, x + 1] = dist[y, x] + 1
-            q.put((x + 1, y))
-        if y > 0 and dist[y - 1, x] > dist[y, x] + 1 and wall_layout[y - 1, x] != 1:
-            dist[y - 1, x] = dist[y, x] + 1
-            q.put((x, y - 1))
-        if y + 1 < wall_layout.shape[0] and dist[y + 1, x] > dist[y, x] + 1 and wall_layout[y + 1, x] != 1:
-            dist[y + 1, x] = dist[y, x] + 1
-            q.put((x, y + 1))
+    height, width = wall_layout.shape
+    while q:
+        x, y = q.popleft()
+        for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+            if 0 <= nx < width and 0 <= ny < height and dist[ny, nx] > dist[y, x] + 1 and wall_layout[ny, nx] != 1:
+                dist[ny, nx] = dist[y, x] + 1
+                q.append((nx, ny))
 
-    return 1 / (1 + jnp.array(dist))
+    return (1.0 / (1.0 + dist)).astype(np.float32)
 
 
-HOLE_X: Tuple[int, int, int, int, int, int, int, int, int] = (8, 83, 83, 82, 148, 148, 153, 29, 19)
-HOLE_Y: Tuple[int, int, int, int, int, int, int, int, int] = (190, 49, 123, 89, 189, 111, 55, 111, 46)
-HOLE_SIZE: Tuple[int, int] = (3, 4)
-BALL_SIZE: Tuple[int, int] = (2, 4)
-
-SCORE_MASK_LEVEL_1: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_1, ObjectObservation.create(HOLE_X[0], HOLE_Y[0], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
-SCORE_MASK_LEVEL_2: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_2, ObjectObservation.create(HOLE_X[1], HOLE_Y[1], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
-SCORE_MASK_LEVEL_3: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_3, ObjectObservation.create(HOLE_X[2], HOLE_Y[2], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
-SCORE_MASK_LEVEL_4: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_4, ObjectObservation.create(HOLE_X[3], HOLE_Y[3], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
-SCORE_MASK_LEVEL_5: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_5, ObjectObservation.create(HOLE_X[4], HOLE_Y[4], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
-SCORE_MASK_LEVEL_6: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_6, ObjectObservation.create(HOLE_X[5], HOLE_Y[5], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
-SCORE_MASK_LEVEL_7: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_7, ObjectObservation.create(HOLE_X[6], HOLE_Y[6], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
-SCORE_MASK_LEVEL_8: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_8, ObjectObservation.create(HOLE_X[7], HOLE_Y[7], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
-SCORE_MASK_LEVEL_9: chex.Array = get_score_mask(WALL_LAYOUT_LEVEL_9, ObjectObservation.create(HOLE_X[8], HOLE_Y[8], HOLE_SIZE[0], HOLE_SIZE[1]), BALL_SIZE[0], BALL_SIZE[1])
-
-
-class LevelConstants(NamedTuple):
-    wall_layout: chex.Array
-    score_mask: chex.Array
-
-
-LEVEL_1_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_1, score_mask=SCORE_MASK_LEVEL_1)
-LEVEL_2_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_2, score_mask=SCORE_MASK_LEVEL_2)
-LEVEL_3_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_3, score_mask=SCORE_MASK_LEVEL_3)
-LEVEL_4_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_4, score_mask=SCORE_MASK_LEVEL_4)
-LEVEL_5_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_5, score_mask=SCORE_MASK_LEVEL_5)
-LEVEL_6_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_6, score_mask=SCORE_MASK_LEVEL_6)
-LEVEL_7_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_7, score_mask=SCORE_MASK_LEVEL_7)
-LEVEL_8_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_8, score_mask=SCORE_MASK_LEVEL_8)
-LEVEL_9_CONSTANTS: LevelConstants = LevelConstants(wall_layout=WALL_LAYOUT_LEVEL_9, score_mask=SCORE_MASK_LEVEL_9)
+def _load_level_collision_data() -> Tuple[chex.Array, chex.Array]:
+    """Load wall layouts / score masks on CPU, then upload once as stacked arrays."""
+    walls = []
+    for i in range(1, 10):
+        level = np.load(f"{_SPRITE_DIR}/level_{i}.npy")
+        walls.append(np.all(level[:, :, :3] == _WALL_RGB, axis=-1).astype(np.int32))
+    wall_layouts_np = np.stack(walls, axis=0)
+    score_masks_np = np.stack(
+        [
+            _get_score_mask(
+                wall_layouts_np[i],
+                HOLE_X[i],
+                HOLE_Y[i],
+                HOLE_SIZE[0],
+                HOLE_SIZE[1],
+                BALL_SIZE[0],
+                BALL_SIZE[1],
+            )
+            for i in range(9)
+        ],
+        axis=0,
+    )
+    return jnp.asarray(wall_layouts_np), jnp.asarray(score_masks_np)
 
 
-class MiniatureGolfConstants(struct.PyTreeNode):
+_WALL_LAYOUTS, _SCORE_MASKS = _load_level_collision_data()
+
+
+class MiniatureGolfConstants(AutoDerivedConstants):
     WIDTH: int = struct.field(pytree_node=False, default=160)
     HEIGHT: int = struct.field(pytree_node=False, default=210)
     BALL_START_X: Tuple[int, int, int, int, int, int, int, int, int] = struct.field(pytree_node=False, default=(133, 78, 6, 8, 26, 8, 8, 138, 128))
@@ -147,16 +135,14 @@ class MiniatureGolfConstants(struct.PyTreeNode):
     SCORE_POS_ONES_DIGIT: Tuple[int, int] = struct.field(pytree_node=False, default=(32, 9))
     PAR_POS: Tuple[int, int] = struct.field(pytree_node=False, default=(112, 9))
     NUM_LEVELS: int = struct.field(pytree_node=False, default=9)
+    # 0-indexed hole to start on (0 = hole 1). Overridable via consts or start_level_* mods.
+    START_LEVEL: int = struct.field(pytree_node=False, default=0)
+    # ALE exposes diagonal actions but resolves them to horizontal only; True enables true diagonals.
+    ALLOW_DIAGONAL_MOVEMENT: bool = struct.field(pytree_node=False, default=False)
 
-    LEVEL_1_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_1_CONSTANTS)
-    LEVEL_2_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_2_CONSTANTS)
-    LEVEL_3_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_3_CONSTANTS)
-    LEVEL_4_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_4_CONSTANTS)
-    LEVEL_5_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_5_CONSTANTS)
-    LEVEL_6_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_6_CONSTANTS)
-    LEVEL_7_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_7_CONSTANTS)
-    LEVEL_8_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_8_CONSTANTS)
-    LEVEL_9_CONSTANTS: LevelConstants = struct.field(pytree_node=False, default=LEVEL_9_CONSTANTS)
+    # Stacked (NUM_LEVELS, H, W) for O(1) level lookup instead of select_n over 9 large arrays.
+    WALL_LAYOUTS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: _WALL_LAYOUTS)
+    SCORE_MASKS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: _SCORE_MASKS)
 
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
@@ -178,7 +164,6 @@ class MiniatureGolfState(struct.PyTreeNode):
     obstacle_dir: chex.Array
     shot_count: chex.Array
     level: chex.Array
-    wall_layout: chex.Array
     acceleration_threshold: chex.Array
     acceleration_counter: chex.Array
     mod_4_counter: chex.Array
@@ -192,7 +177,6 @@ class MiniatureGolfObservation(struct.PyTreeNode):
     ball: ObjectObservation
     obstacle: ObjectObservation
     shot_count: chex.Array
-    wall_layout: chex.Array
 
 
 class MiniatureGolfInfo(struct.PyTreeNode):
@@ -200,8 +184,14 @@ class MiniatureGolfInfo(struct.PyTreeNode):
 
 
 class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservation, MiniatureGolfInfo, MiniatureGolfConstants]):
+    # Full ALE action set. Diagonals exist but move horizontally only unless ALLOW_DIAGONAL_MOVEMENT.
     ACTION_SET: jnp.ndarray = jnp.array(
-        [Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN],
+        [
+            Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN,
+            Action.UPRIGHT, Action.UPLEFT, Action.DOWNRIGHT, Action.DOWNLEFT,
+            Action.UPFIRE, Action.RIGHTFIRE, Action.LEFTFIRE, Action.DOWNFIRE,
+            Action.UPRIGHTFIRE, Action.UPLEFTFIRE, Action.DOWNRIGHTFIRE, Action.DOWNLEFTFIRE,
+        ],
         dtype=jnp.int32,
     )
 
@@ -212,6 +202,26 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         if reward_funcs is not None:
             reward_funcs = tuple(reward_funcs)
         self.reward_funcs = reward_funcs
+
+    def _wall_layout_for_level(self, level: chex.Array) -> chex.Array:
+        return self.consts.WALL_LAYOUTS[jnp.clip(level, max=self.consts.NUM_LEVELS - 1)]
+
+    def _score_mask_for_level(self, level: chex.Array) -> chex.Array:
+        return self.consts.SCORE_MASKS[jnp.clip(level, max=self.consts.NUM_LEVELS - 1)]
+
+    @staticmethod
+    def _is_fire_action(action: chex.Array) -> chex.Array:
+        return (
+            (action == Action.FIRE)
+            | (action == Action.UPFIRE)
+            | (action == Action.RIGHTFIRE)
+            | (action == Action.LEFTFIRE)
+            | (action == Action.DOWNFIRE)
+            | (action == Action.UPRIGHTFIRE)
+            | (action == Action.UPLEFTFIRE)
+            | (action == Action.DOWNRIGHTFIRE)
+            | (action == Action.DOWNLEFTFIRE)
+        )
 
     def _overlaps_wall(self, wall_layout: chex.Array, x: chex.Array, y: chex.Array):
         return wall_layout[y, x] == 1
@@ -247,10 +257,12 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         ball_x_new = state.ball_x + ball_delta_x
         ball_y_new = state.ball_y + ball_delta_y * 2
 
-        overlap_top_left_corner = self._overlaps_wall(state.wall_layout, ball_x_new, ball_y_new)
-        overlap_top_right_corner = self._overlaps_wall(state.wall_layout, ball_x_new + self.consts.BALL_SIZE[0] - 1, ball_y_new)
-        overlap_bottom_left_corner = self._overlaps_wall(state.wall_layout, ball_x_new, ball_y_new + self.consts.BALL_SIZE[1] - 1)
-        overlap_bottom_right_corner = self._overlaps_wall(state.wall_layout, ball_x_new + self.consts.BALL_SIZE[0] - 1, ball_y_new + self.consts.BALL_SIZE[1] - 1)
+        wall_layout = self._wall_layout_for_level(state.level)
+
+        overlap_top_left_corner = self._overlaps_wall(wall_layout, ball_x_new, ball_y_new)
+        overlap_top_right_corner = self._overlaps_wall(wall_layout, ball_x_new + self.consts.BALL_SIZE[0] - 1, ball_y_new)
+        overlap_bottom_left_corner = self._overlaps_wall(wall_layout, ball_x_new, ball_y_new + self.consts.BALL_SIZE[1] - 1)
+        overlap_bottom_right_corner = self._overlaps_wall(wall_layout, ball_x_new + self.consts.BALL_SIZE[0] - 1, ball_y_new + self.consts.BALL_SIZE[1] - 1)
 
         collision_x = jnp.logical_or(
             jnp.logical_and(overlap_top_left_corner, overlap_bottom_left_corner),
@@ -285,8 +297,8 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             )
         )
 
-        overlap_only_x_change = self._any_corners_overlap_wall(state.wall_layout, ball_x_new, state.ball_y)
-        overlap_only_y_change = self._any_corners_overlap_wall(state.wall_layout, state.ball_x, ball_y_new)
+        overlap_only_x_change = self._any_corners_overlap_wall(wall_layout, ball_x_new, state.ball_y)
+        overlap_only_y_change = self._any_corners_overlap_wall(wall_layout, state.ball_x, ball_y_new)
 
         collision_x = jnp.logical_or(
             collision_x,
@@ -322,7 +334,7 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         x_positions_to_check = ball_x_new + jnp.arange(self.consts.BALL_SIZE[0])
         y_positions_to_check = ball_y_new + jnp.arange(self.consts.BALL_SIZE[1])
         vmap = jax.vmap(jax.vmap(self._overlaps_wall, in_axes=(None, None, 0)), in_axes=(None, 0, None))
-        no_overlap = jnp.logical_not(vmap(state.wall_layout, x_positions_to_check, y_positions_to_check))
+        no_overlap = jnp.logical_not(vmap(wall_layout, x_positions_to_check, y_positions_to_check))
         x_no_overlap, y_no_overlap = jnp.nonzero(no_overlap, size=self.consts.BALL_SIZE[0] * self.consts.BALL_SIZE[1],
                                                  fill_value=jnp.nan)
         x_min = jnp.nanmin(x_no_overlap).astype(jnp.int32)
@@ -333,7 +345,7 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         def get_x_when_stuck_in_wall():
             # since the ball's width is only 2, it gets stuck in the wall within a single frame occasionally
             x_positions_to_check_ = ball_x_new + jnp.arange(-2, self.consts.BALL_SIZE[0] + 2)
-            no_overlap_ = jnp.logical_not(vmap(state.wall_layout, x_positions_to_check_, y_positions_to_check))
+            no_overlap_ = jnp.logical_not(vmap(wall_layout, x_positions_to_check_, y_positions_to_check))
             x_no_overlap_, _ = jnp.nonzero(
                 no_overlap_, size=(4 + self.consts.BALL_SIZE[0]) * self.consts.BALL_SIZE[1], fill_value=jnp.nan
             )
@@ -368,7 +380,6 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             obstacle_dir=state.obstacle_dir,
             shot_count=state.shot_count,
             level=state.level,
-            wall_layout=state.wall_layout,
             acceleration_threshold=state.acceleration_threshold,
             acceleration_counter=state.acceleration_counter,
             mod_4_counter=state.mod_4_counter,
@@ -409,7 +420,6 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             obstacle_dir=state.obstacle_dir,
             shot_count=state.shot_count,
             level=state.level,
-            wall_layout=state.wall_layout,
             acceleration_threshold=acceleration_threshold_new,
             acceleration_counter=acceleration_counter_new,
             mod_4_counter=state.mod_4_counter,
@@ -419,10 +429,41 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
 
 
     def _player_step(self, state: MiniatureGolfState, action: chex.Array) -> MiniatureGolfState:
-        up = jnp.equal(action, Action.UP)
-        down = jnp.equal(action, Action.DOWN)
-        right = jnp.equal(action, Action.RIGHT)
-        left = jnp.equal(action, Action.LEFT)
+        # Cardinal vertical / horizontal (+ fire combos).
+        up = (action == Action.UP) | (action == Action.UPFIRE)
+        down = (action == Action.DOWN) | (action == Action.DOWNFIRE)
+        right = (
+            (action == Action.RIGHT)
+            | (action == Action.RIGHTFIRE)
+            | (action == Action.UPRIGHT)
+            | (action == Action.UPRIGHTFIRE)
+            | (action == Action.DOWNRIGHT)
+            | (action == Action.DOWNRIGHTFIRE)
+        )
+        left = (
+            (action == Action.LEFT)
+            | (action == Action.LEFTFIRE)
+            | (action == Action.UPLEFT)
+            | (action == Action.UPLEFTFIRE)
+            | (action == Action.DOWNLEFT)
+            | (action == Action.DOWNLEFTFIRE)
+        )
+        # ALE: diagonal inputs only affect the horizontal axis. Opt-in true diagonals via mod.
+        up_diag = (
+            (action == Action.UPLEFT)
+            | (action == Action.UPLEFTFIRE)
+            | (action == Action.UPRIGHT)
+            | (action == Action.UPRIGHTFIRE)
+        )
+        down_diag = (
+            (action == Action.DOWNLEFT)
+            | (action == Action.DOWNLEFTFIRE)
+            | (action == Action.DOWNRIGHT)
+            | (action == Action.DOWNRIGHTFIRE)
+        )
+        allow_diag = self.consts.ALLOW_DIAGONAL_MOVEMENT
+        up = up | (up_diag & allow_diag)
+        down = down | (down_diag & allow_diag)
         # as in the original game, only move every fourth frame when player is close to the ball
         player_close_to_ball = jnp.logical_and(
             jnp.abs(state.ball_x - state.player_x) < 0x15,
@@ -438,7 +479,8 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         temporary_state = self._update_velocity(state)
         ball_vel_x_new = jnp.where(ball_stationary, 0, temporary_state.ball_vel_x)
         ball_vel_y_new = jnp.where(ball_stationary, 0, temporary_state.ball_vel_y)
-        fire = jnp.logical_and(ball_stationary, jnp.equal(action, Action.FIRE))
+        fire_pressed = self._is_fire_action(action)
+        fire = jnp.logical_and(ball_stationary, fire_pressed)
         # only count FIRE if not pressed the previous frame
         fire = jnp.logical_and(fire, jnp.logical_not(state.fire_prev))
 
@@ -481,11 +523,10 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             obstacle_dir=state.obstacle_dir,
             shot_count=shot_count_new,
             level=state.level,
-            wall_layout=state.wall_layout,
             acceleration_threshold=acceleration_threshold_new,
             acceleration_counter=acceleration_counter_new,
             mod_4_counter=state.mod_4_counter,
-            fire_prev=jnp.equal(action, Action.FIRE),
+            fire_prev=fire_pressed,
             right_number=jnp.where(fire_had_effect, 0, state.right_number),
         )
 
@@ -618,20 +659,6 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
 
         obstacle_dir_new = jnp.where(player_goal, 0, state.obstacle_dir)
 
-        wall_layout_new = jax.lax.select_n(
-            level_new,
-            self.consts.LEVEL_1_CONSTANTS.wall_layout,
-            self.consts.LEVEL_2_CONSTANTS.wall_layout,
-            self.consts.LEVEL_3_CONSTANTS.wall_layout,
-            self.consts.LEVEL_4_CONSTANTS.wall_layout,
-            self.consts.LEVEL_5_CONSTANTS.wall_layout,
-            self.consts.LEVEL_6_CONSTANTS.wall_layout,
-            self.consts.LEVEL_7_CONSTANTS.wall_layout,
-            self.consts.LEVEL_8_CONSTANTS.wall_layout,
-            self.consts.LEVEL_9_CONSTANTS.wall_layout,
-        )
-        wall_layout_new = jnp.where(player_goal, wall_layout_new, state.wall_layout)
-
         right_number_new = jax.lax.select_n(
             level_new,
             self.consts.PAR_VALUES[0],
@@ -663,7 +690,6 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             obstacle_dir=obstacle_dir_new,
             shot_count=shot_count_new,
             level=level_new,
-            wall_layout=wall_layout_new,
             acceleration_threshold=state.acceleration_threshold,
             acceleration_counter=state.acceleration_counter,
             mod_4_counter=jnp.mod(state.mod_4_counter + 1, 4),
@@ -821,7 +847,6 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             obstacle_dir=obstacle_dir_new,
             shot_count=state.shot_count,
             level=state.level,
-            wall_layout=state.wall_layout,
             acceleration_threshold=state.acceleration_threshold,
             acceleration_counter=state.acceleration_counter,
             mod_4_counter=state.mod_4_counter,
@@ -834,28 +859,32 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         return state
 
     def reset(self, key=None) -> Tuple[MiniatureGolfObservation, MiniatureGolfState]:
+        level = int(self.consts.START_LEVEL)
+        level = max(0, min(level, self.consts.NUM_LEVELS - 1))
+        obstacle_y0 = self.consts.OBSTACLE_MIN_Y[level]
+        if level == 7:
+            obstacle_y0 = self.consts.OBSTACLE_MIN_Y[7] + 221  # matches _score_and_reset special case
         state = MiniatureGolfState(
-            player_x=jnp.array(self.consts.PLAYER_START_X[0]).astype(jnp.int32),
-            player_y=jnp.array(self.consts.PLAYER_START_Y[0]).astype(jnp.int32),
-            ball_x=jnp.array(self.consts.BALL_START_X[0]).astype(jnp.int32),
-            ball_y=jnp.array(self.consts.BALL_START_Y[0]).astype(jnp.int32),
+            player_x=jnp.array(self.consts.PLAYER_START_X[level]).astype(jnp.int32),
+            player_y=jnp.array(self.consts.PLAYER_START_Y[level]).astype(jnp.int32),
+            ball_x=jnp.array(self.consts.BALL_START_X[level]).astype(jnp.int32),
+            ball_y=jnp.array(self.consts.BALL_START_Y[level]).astype(jnp.int32),
             ball_x_subpixel=jnp.array(0),
             ball_y_subpixel=jnp.array(0),
             ball_vel_x=jnp.array(0),
             ball_vel_y=jnp.array(0),
-            hole_x=jnp.array(self.consts.HOLE_X[0]).astype(jnp.int32),
-            hole_y=jnp.array(self.consts.HOLE_Y[0]).astype(jnp.int32),
-            obstacle_x=jnp.array(self.consts.OBSTACLE_MIN_X[0]).astype(jnp.int32),
-            obstacle_y=jnp.array(self.consts.OBSTACLE_MIN_Y[0]).astype(jnp.int32),
+            hole_x=jnp.array(self.consts.HOLE_X[level]).astype(jnp.int32),
+            hole_y=jnp.array(self.consts.HOLE_Y[level]).astype(jnp.int32),
+            obstacle_x=jnp.array(self.consts.OBSTACLE_MIN_X[level]).astype(jnp.int32),
+            obstacle_y=jnp.array(obstacle_y0).astype(jnp.int32),
             obstacle_dir=jnp.array(0),
             shot_count=jnp.array(0),
-            level=jnp.array(0),
-            wall_layout=self.consts.LEVEL_1_CONSTANTS.wall_layout,
+            level=jnp.array(level),
             acceleration_threshold=jnp.array(0),
             acceleration_counter=jnp.array(0),
             mod_4_counter=jnp.array(0),
             fire_prev=jnp.array(False),
-            right_number=jnp.array(self.consts.PAR_VALUES[0]).astype(jnp.int32),
+            right_number=jnp.array(self.consts.PAR_VALUES[level]).astype(jnp.int32),
         )
         initial_obs = self._get_observation(state)
 
@@ -863,9 +892,10 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: MiniatureGolfState, action: chex.Array) -> Tuple[MiniatureGolfObservation, MiniatureGolfState, float, bool, MiniatureGolfInfo]:
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         previous_state = state
         state = self._ball_step(state)
-        state = self._player_step(state, action)
+        state = self._player_step(state, atari_action)
         state = self._obstacle_step(state)
         state = self._hole_step(state)
         state = self._score_and_reset(state)
@@ -915,11 +945,10 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             ball=ball,
             obstacle=obstacle,
             shot_count=state.shot_count,
-            wall_layout=state.wall_layout,
         )
 
     def action_space(self) -> spaces.Discrete:
-        return spaces.Discrete(6)
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces:
         object_space = spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
@@ -930,7 +959,6 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
             "ball": object_space,
             "obstacle": object_space,
             "shot_count": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
-            "wall_layout": spaces.Box(low=0, high=1, shape=(self.consts.HEIGHT, self.consts.WIDTH), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
@@ -942,18 +970,8 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _reward(self, state: MiniatureGolfState):
-        score_mask = jax.lax.select_n(jnp.clip(state.level, max=self.consts.NUM_LEVELS - 1),
-            self.consts.LEVEL_1_CONSTANTS.score_mask,
-            self.consts.LEVEL_2_CONSTANTS.score_mask,
-            self.consts.LEVEL_3_CONSTANTS.score_mask,
-            self.consts.LEVEL_4_CONSTANTS.score_mask,
-            self.consts.LEVEL_5_CONSTANTS.score_mask,
-            self.consts.LEVEL_6_CONSTANTS.score_mask,
-            self.consts.LEVEL_7_CONSTANTS.score_mask,
-            self.consts.LEVEL_8_CONSTANTS.score_mask,
-            self.consts.LEVEL_9_CONSTANTS.score_mask,
-        )
+    def _manhattan_reward_potential(self, state: MiniatureGolfState):
+        score_mask = self._score_mask_for_level(state.level)
         return state.level * 1e4 + score_mask[state.ball_y, state.ball_x]
 
     @partial(jax.jit, static_argnums=(0,))
@@ -962,7 +980,21 @@ class JaxMiniatureGolf(JaxEnvironment[MiniatureGolfState, MiniatureGolfObservati
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: MiniatureGolfState, state: MiniatureGolfState):
-        return self._reward(state) - self._reward(previous_state)
+        level_completed = state.level > previous_state.level
+        par = jax.lax.select_n(
+            previous_state.level,
+            self.consts.PAR_VALUES[0],
+            self.consts.PAR_VALUES[1],
+            self.consts.PAR_VALUES[2],
+            self.consts.PAR_VALUES[3],
+            self.consts.PAR_VALUES[4],
+            self.consts.PAR_VALUES[5],
+            self.consts.PAR_VALUES[6],
+            self.consts.PAR_VALUES[7],
+            self.consts.PAR_VALUES[8],
+        )
+        reward = (par - previous_state.shot_count).astype(jnp.float32)
+        return jnp.where(level_completed, reward, jnp.array(0.0, dtype=jnp.float32))
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: MiniatureGolfState) -> bool:
@@ -995,19 +1027,15 @@ class MiniatureGolfRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(self.consts.ASSET_CONFIG, sprite_path)
+        self.LEVEL_MASKS = jnp.stack(
+            [self.SHAPE_MASKS[f"level_{i}"] for i in range(1, 10)],
+            axis=0,
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
-        raster = self.jr.create_object_raster(jax.lax.select_n(state.level,
-                                                               self.SHAPE_MASKS["level_1"],
-                                                               self.SHAPE_MASKS["level_2"],
-                                                               self.SHAPE_MASKS["level_3"],
-                                                               self.SHAPE_MASKS["level_4"],
-                                                               self.SHAPE_MASKS["level_5"],
-                                                               self.SHAPE_MASKS["level_6"],
-                                                               self.SHAPE_MASKS["level_7"],
-                                                               self.SHAPE_MASKS["level_8"],
-                                                               self.SHAPE_MASKS["level_9"]))
+        level_idx = jnp.clip(state.level, max=self.consts.NUM_LEVELS - 1)
+        raster = self.jr.create_object_raster(self.LEVEL_MASKS[level_idx])
 
         ball_mask = self.SHAPE_MASKS["ball"]
         raster = self.jr.render_at(raster, state.ball_x, state.ball_y, ball_mask)

@@ -35,7 +35,7 @@ COOLDOWN_STEPS = 32  # ALE cools by one segment every 32 frames
 HEAT_GAIN = 1  # one bar segment per shot
 HEAT_BAR_SEGMENT = 4
 HEAT_BAR_BASE = 8
-MAX_LIVES = 3
+MAX_LIVES = 4
 LIVES_Y = 193
 LIFE_ONE_X = 15
 LIFE_OFFSET = 16
@@ -941,7 +941,9 @@ class JaxAssault(JaxEnvironment[AssaultState, AssaultObservation, AssaultInfo, A
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Dict:
-        object_space = spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
+        object_space = spaces.get_object_space(
+            n=None, screen_size=(self.consts.HEIGHT + 1, self.consts.WIDTH), xy_low=-1
+        )
         return spaces.Dict({
             "player": object_space,
             "mothership": object_space,

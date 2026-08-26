@@ -414,6 +414,7 @@ class JaxYarsRevenge(
         YarsRevengeConstants,
     ]
 ):
+    ACTION_SET: jnp.ndarray = Action.get_all_values()
 
     def __init__(
         self,
@@ -1519,6 +1520,7 @@ class JaxYarsRevenge(
         instance that contains everything the agent needs to decide on the
         next action.
         """
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
 
         new_state = jax.lax.switch(
             state.game_state,
@@ -1528,7 +1530,7 @@ class JaxYarsRevenge(
                 self._animation_step,
                 self._animation_step,
             ],
-            operand=(state, action),
+            operand=(state, atari_action),
         )
 
         # Increment the step counter
@@ -1549,7 +1551,7 @@ class JaxYarsRevenge(
 
     def action_space(self):
         """Return the available number of actions."""
-        return spaces.Discrete(18)
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self):
         """
@@ -1802,6 +1804,19 @@ class YarsRevengeRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+
+        # Dedicated palette slot for animated qotile hue (avoid mutating shared index 1 used by yar).
+        self.qotile_dynamic_palette_id = jnp.array(self.PALETTE.shape[0], dtype=jnp.uint8)
+        self.PALETTE = jnp.concatenate(
+            [self.PALETTE, jnp.zeros((1, self.PALETTE.shape[1]), dtype=self.PALETTE.dtype)],
+            axis=0,
+        )
+        qotile_mask = self.SHAPE_MASKS["qotile"]
+        self.SHAPE_MASKS["qotile"] = jnp.where(
+            qotile_mask == 1,
+            self.qotile_dynamic_palette_id,
+            qotile_mask,
+        )
 
         neutral_zone_data_list = [ord(c) for c in self.consts.NEUTRAL_ZONE_DATA]
         self.neutral_zone_data = jnp.tile(
@@ -2281,7 +2296,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
         # Render qotile color in background
         qotile_color_mask = jnp.ones((self.scaled_height, self.scaled_width))
         qotile_color_mask = jnp.where(
-            transparent[:, None], self.jr.TRANSPARENT_ID, qotile_color_mask
+            transparent[:, None], self.jr.TRANSPARENT_ID, self.qotile_dynamic_palette_id
         )
         raster = self.jr.render_at(
             raster,
@@ -2429,7 +2444,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
 
         modified_palette = jax.lax.cond(
             state.game_state != YarsRevengeGameState.SCOREBOARD,
-            lambda: modified_palette.at[1].set(color),
+            lambda: modified_palette.at[self.qotile_dynamic_palette_id].set(color),
             lambda: modified_palette,
         )
 
