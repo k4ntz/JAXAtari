@@ -319,7 +319,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
                 reset_fn, rollout_fn = make_eval_step_fns(
                     env=cached_env, network=network, actor=actor,
                     object_centric=not config["PIXEL_BASED"], padding_width=current_padding,
-                    capture_video=capture_video
+                    capture_video=capture_video, max_steps=2500
                 )
                 eval_fns_cache[eval_fn_key] = (reset_fn, rollout_fn)
 
@@ -543,7 +543,9 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
         global_iteration += 1
         rtpt.step()
         if config["EVAL_DURING_TRAIN"] and (iteration % config["EVAL_EVERY"] == 0 or iteration == 1):
-           eval_and_vid(iteration, global_step) 
+            eval_start_time = time.time()
+            eval_and_vid(iteration, global_step)
+            print(f"Iteration: {iteration} | Eval Time: {time.time() - eval_start_time:.2f}")
 
         iteration_time_start = time.time()
         agent_state, next_obs, next_done, storage, key, env_state, step_metrics = rollout(
@@ -588,7 +590,9 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
     print("Training done.")
 
     # Generate new rollout for fisher information compuation
+    fisher_rollout_start_time = time.time()
     _, _, _, fisher_storage, _, _, _ = rollout(agent_state, next_obs, next_done, key, env_state)
+    print(f"Fisher Rollout Time: {time.time() - fisher_rollout_start_time:.2f}")
 
     if compile_time is not None:
         print(f"Run time after first iteration: {end_time - compile_time:.2f} seconds.")
@@ -965,7 +969,9 @@ def continual_run(config: dict):
         }
         flat_obs = fisher_storage.obs.reshape((-1,) + fisher_storage.obs.shape[2:])
         flat_actions = fisher_storage.actions.reshape(-1)
+        fisher_start_time = time.time()
         ewc_fisher = compute_fisher(agent_state, flat_obs, flat_actions, ewc_fisher, jnp.float32(ewc_decay))
+        print(f"Task: {i} | Fisher Computation Time: {time.time() - fisher_start_time:.2f}")
 
     wandb.finish()
 
