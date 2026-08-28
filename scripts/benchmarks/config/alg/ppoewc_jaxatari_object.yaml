@@ -29,6 +29,7 @@ EVAL_MODS: # mods applied during evaluation, for each environment
   - [no_monkey]
   - [no_danger]
 
+CL_METHOD: ewc
 EWC_DECAY: 0.9  # Decay for Online EWC
 EWC_LAMBDA: 500000.0  # Weight for EWC penalty
 

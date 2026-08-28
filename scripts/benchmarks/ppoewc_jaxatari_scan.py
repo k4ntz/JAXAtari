@@ -190,7 +190,97 @@ class EpisodeStatistics:
     returned_episode_lengths: jnp.array
 
 
-def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: Actor, critic: Critic, config: dict, task_id: str, agent_state: TrainState, ewc_fisher = None, ewc_params = None, max_D = None, global_step = None, global_iteration = None, global_start_time = None, seen_tasks = None, train_mods = [], eval_mods = [], eval_envs_cache = {}, eval_renderers_cache = {}, eval_fns_cache = {}, crl_state = None, get_action_and_value_fn = None, compute_gae_fn = None, update_ppo_fn = None, rtpt = None):
+# ---------------------------------------------------------
+# CONTINUAL LEARNING FUNCTIONS
+# ---------------------------------------------------------
+
+def init_cl_state(config, agent_state):
+    """Initializes tracking variables based on the chosen CL method."""
+    cl_method = config["CL_METHOD"].lower()
+    
+    if cl_method == "ewc":
+        return {
+            "fisher": {
+                "network": jax.tree.map(jnp.zeros_like, agent_state.params.network_params),
+                "actor": jax.tree.map(jnp.zeros_like, agent_state.params.actor_params)
+            },
+            "params": {
+                "network": jax.tree.map(jnp.zeros_like, agent_state.params.network_params),
+                "actor": jax.tree.map(jnp.zeros_like, agent_state.params.actor_params)
+            }
+        }
+    elif cl_method == "agem":
+        # TODO
+        pass
+    elif cl_method == "packnet":
+        # TODO
+        pass
+    
+    return {}
+
+def modify_loss_fn(loss, params, cl_state, config):
+    """Adds regularization penalties to the loss (used by EWC)."""
+    cl_method = config["CL_METHOD"].lower()
+    
+    if cl_method == "ewc":
+        def param_penalty(p, p_star, f):
+            return (f * (p - p_star) ** 2).sum()
+        
+        net_penalties = jax.tree.map(param_penalty, params.network_params, cl_state["params"]["network"], cl_state["fisher"]["network"])
+        act_penalties = jax.tree.map(param_penalty, params.actor_params, cl_state["params"]["actor"], cl_state["fisher"]["actor"])
+        total_penalty = sum(jax.tree.leaves(net_penalties)) + sum(jax.tree.leaves(act_penalties))
+        
+        num_restrict_params = sum(x.size for x in jax.tree_util.tree_leaves(cl_state["params"]))
+        ewc_loss = 0.5 * total_penalty / num_restrict_params
+        
+        return loss + config["EWC_LAMBDA"] * ewc_loss, ewc_loss
+        
+    return loss, 0.0
+
+def modify_gradients_fn(grads, cl_state, agent_state, minibatch, config):
+    """Alters gradients before optimizer application (used by A-GEM, PackNet)."""
+    cl_method = config["CL_METHOD"].lower()
+    
+    if cl_method == "agem":
+        # TODO
+        pass 
+    elif cl_method == "packnet":
+        # TODO
+        pass 
+        
+    return grads
+
+def on_task_end(task_idx, task_id, cl_state, agent_state, fisher_storage, compute_fisher_fn, config):
+    """Updates CL state at the end of a task."""
+    cl_method = config["CL_METHOD"].lower()
+    
+    if cl_method == "ewc":
+        ewc_decay = 0.0 if task_idx == 0 else config["EWC_DECAY"]
+        flat_obs = fisher_storage.obs.reshape((-1,) + fisher_storage.obs.shape[2:])
+        flat_actions = fisher_storage.actions.reshape(-1)
+        
+        fisher_start_time = time.time()
+        new_fisher = compute_fisher_fn(agent_state, flat_obs, flat_actions, cl_state["fisher"], jnp.float32(ewc_decay))
+        print(f"Task: {task_idx} | Fisher Computation Time: {time.time() - fisher_start_time:.2f}")
+        
+        cl_state["fisher"] = new_fisher
+        cl_state["params"] = {
+            "network": agent_state.params.network_params,
+            "actor": agent_state.params.actor_params
+        }
+        
+    elif cl_method == "agem":
+        # TODO
+        pass 
+    elif cl_method == "packnet":
+        # TODO
+        pass 
+        
+    return cl_state
+
+# ---------------------------------------------------------
+
+def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: Actor, critic: Critic, config: dict, task_id: str, agent_state: TrainState, cl_state: dict, max_D = None, global_step = None, global_iteration = None, global_start_time = None, seen_tasks = None, train_mods = [], eval_mods = [], eval_envs_cache = {}, eval_renderers_cache = {}, eval_fns_cache = {}, crl_state = None, get_action_and_value_fn = None, compute_gae_fn = None, update_ppo_fn = None, rtpt = None):
     # shallow copy the config to avoid changing the original across tasks
     config = config.copy()
 
@@ -277,7 +367,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             print(f"model saved to {model_path}")
 
         current_performances = {}
-        current_task_key = f"{task_id}+{str(list(config['TRAIN_MODS']))}"
+        current_task_key = f"{task_id}+{str(list(config["TRAIN_MODS"]))}"
 
         for eval_task, eval_task_train_mods, eval_task_eval_mods in seen_tasks:
             eval_task_key = f"{eval_task}+{str(list(eval_task_train_mods))}"
@@ -553,13 +643,14 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
         )
         global_step += config["NUM_STEPS"] * config["NUM_ENVS"]
         storage = compute_gae_fn(agent_state, next_obs, next_done, storage)
-        agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, key = update_ppo_fn(
+        
+        agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, cl_loss, key = update_ppo_fn(
             agent_state,
             storage,
             key,
-            ewc_params,
-            ewc_fisher,
+            cl_state,
         )
+        
         if compile_time is None:
             compile_time = time.time()
             print(f"Compile + first iteration time: {compile_time - task_start_time:.2f} seconds.")
@@ -574,6 +665,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             f"{task_id}+{str(list(config["TRAIN_MODS"]))}/losses/policy_loss": pg_loss[-1, -1].item(),
             f"{task_id}+{str(list(config["TRAIN_MODS"]))}/losses/entropy": entropy_loss[-1, -1].item(),
             f"{task_id}+{str(list(config["TRAIN_MODS"]))}/losses/approx_kl": approx_kl[-1, -1].item(),
+            f"{task_id}+{str(list(config["TRAIN_MODS"]))}/losses/cl_loss": cl_loss[-1, -1].item(),
             f"{task_id}+{str(list(config["TRAIN_MODS"]))}/losses/loss": loss[-1, -1].item(),
 
             # global metrics
@@ -611,7 +703,7 @@ def continual_run(config: dict):
             project=config["PROJECT"],
             entity=config["ENTITY"],
             config=config,
-            name=f'CL_EWC_{config["TASKS"]}_{config["EXP_NAME"]}_{"oc" if not config["PIXEL_BASED"] else "pixel"}_{config["SEED"]}'
+            name=f'CL_{config["CL_METHOD"].upper()}_{config["TASKS"]}_{config["EXP_NAME"]}_{"oc" if not config["PIXEL_BASED"] else "pixel"}_{config["SEED"]}'
         )
 
     def linear_schedule(count):
@@ -634,7 +726,7 @@ def continual_run(config: dict):
         return logprob
     
     @jax.jit
-    def compute_fisher(agent_state, obs_batch, action_batch, ewc_fisher, ewc_decay, minibatch_size=256):
+    def compute_fisher(agent_state, obs_batch, action_batch, cl_fisher, ewc_decay, minibatch_size=256):
         """
         Approximate the diagonal Fisher Information Matrix via squared gradients
         of the log-probability of the actions taken under the current policy in batches.
@@ -665,19 +757,16 @@ def continual_run(config: dict):
             new_carry = jax.tree.map(jnp.add, carry_fisher, fisher_sum_mini)
             return new_carry, None
 
-        initial_fisher_sum = jax.tree.map(jnp.zeros_like, ewc_fisher)
+        initial_fisher_sum = jax.tree.map(jnp.zeros_like, cl_fisher)
         total_fisher_sum, _ = jax.lax.scan(scan_fn, initial_fisher_sum, (obs_batch, action_batch))
 
         # Average over the total number of samples processed
         new_fisher = jax.tree.map(lambda f: f / (num_batches * minibatch_size), total_fisher_sum)  # average over all samples
 
-        # "Online EWC without decay, equivalent to "multi" mode from MEAL (https://github.com/TTomilin/MEAL/blob/main/experiments/continual/ewc.py)
-        # new_fisher = jax.tree.map(jnp.add, ewc_fisher, new_fisher)
-
         # Online EWC with decay: https://arxiv.org/pdf/1805.06370 (slightly modified)
         new_fisher = jax.tree.map(
             lambda f_old, f_new: ewc_decay * f_old + (1. - ewc_decay) * f_new,
-            ewc_fisher, new_fisher)
+            cl_fisher, new_fisher)
 
         return new_fisher
 
@@ -752,19 +841,7 @@ def continual_run(config: dict):
     actor.apply = jax.jit(actor.apply)
     critic.apply = jax.jit(critic.apply)
 
-    ewc_fisher = {
-        "network": jax.tree.map(jnp.zeros_like, agent_state.params.network_params),
-        "actor": jax.tree.map(jnp.zeros_like, agent_state.params.actor_params)
-    }
-    ewc_params = {
-        "network": jax.tree.map(jnp.zeros_like, agent_state.params.network_params),
-        "actor": jax.tree.map(jnp.zeros_like, agent_state.params.actor_params)
-    }
-
-    # JIT-compiled functions in outer scope to compile them only once before the loop
-
-    # number of parameters that are restricted by EWC penalty (network + actor)
-    num_restrict_params = sum(x.size for x in jax.tree_util.tree_leaves(ewc_params))
+    cl_state = init_cl_state(config, agent_state)
 
     @jax.jit
     def get_action_and_value(
@@ -835,17 +912,7 @@ def continual_run(config: dict):
         )
         return storage
 
-    def ewc_penalty(params, ewc_params, ewc_fisher):
-        def param_penalty(p, p_star, f):
-            return (f * (p - p_star) ** 2).sum()
-        
-        net_penalties = jax.tree.map(param_penalty, params.network_params, ewc_params["network"], ewc_fisher["network"])
-        act_penalties = jax.tree.map(param_penalty, params.actor_params, ewc_params["actor"], ewc_fisher["actor"])
-        total_penalty = sum(jax.tree.leaves(net_penalties)) + sum(jax.tree.leaves(act_penalties))
-        
-        return 0.5 * total_penalty / num_restrict_params
-
-    def ppo_loss(params, x, a, logp, mb_advantages, mb_returns, ewc_params, ewc_fisher):
+    def ppo_loss(params, x, a, logp, mb_advantages, mb_returns, cl_state):
         newlogprob, entropy, newvalue = get_action_and_value2(params, x, a)
         logratio = newlogprob - logp
         ratio = jnp.exp(logratio)
@@ -862,15 +929,16 @@ def continual_run(config: dict):
         # Value loss
         v_loss = 0.5 * ((newvalue - mb_returns) ** 2).mean()
         entropy_loss = entropy.mean()
-        ewc_loss = ewc_penalty(params, ewc_params, ewc_fisher)
 
-        loss = (
+        base_loss = (
             pg_loss
             - config["ENT_COEF"] * entropy_loss
             + v_loss * config["VF_COEF"]
-            + config.get("EWC_LAMBDA", 0.0) * ewc_loss
         )
-        return loss, (pg_loss, v_loss, entropy_loss, jax.lax.stop_gradient(approx_kl))
+        
+        total_loss, cl_loss = modify_loss_fn(base_loss, params, cl_state, config)
+        
+        return total_loss, (pg_loss, v_loss, entropy_loss, jax.lax.stop_gradient(approx_kl), cl_loss)
 
     ppo_loss_grad_fn = jax.value_and_grad(ppo_loss, has_aux=True)
 
@@ -879,8 +947,7 @@ def continual_run(config: dict):
         agent_state: TrainState,
         storage: Storage,
         key: jax.random.PRNGKey,
-        ewc_params,
-        ewc_fisher,
+        cl_state,
     ):
         def update_epoch(carry, unused_inp):
             agent_state, key = carry
@@ -898,28 +965,30 @@ def continual_run(config: dict):
             shuffled_storage = jax.tree.map(convert_data, flatten_storage)
 
             def update_minibatch(agent_state, minibatch):
-                (loss, (pg_loss, v_loss, entropy_loss, approx_kl)), grads = ppo_loss_grad_fn(
+                (loss, (pg_loss, v_loss, entropy_loss, approx_kl, cl_loss)), grads = ppo_loss_grad_fn(
                     agent_state.params,
                     minibatch.obs,
                     minibatch.actions,
                     minibatch.logprobs,
                     minibatch.advantages,
                     minibatch.returns,
-                    ewc_params,
-                    ewc_fisher,
+                    cl_state,
                 )
+                
+                grads = modify_gradients_fn(grads, cl_state, agent_state, minibatch, config)
+                
                 agent_state = agent_state.apply_gradients(grads=grads)
-                return agent_state, (loss, pg_loss, v_loss, entropy_loss, approx_kl, grads)
+                return agent_state, (loss, pg_loss, v_loss, entropy_loss, approx_kl, cl_loss, grads)
 
-            agent_state, (loss, pg_loss, v_loss, entropy_loss, approx_kl, grads) = jax.lax.scan(
+            agent_state, (loss, pg_loss, v_loss, entropy_loss, approx_kl, cl_loss, grads) = jax.lax.scan(
                 update_minibatch, agent_state, shuffled_storage
             )
-            return (agent_state, key), (loss, pg_loss, v_loss, entropy_loss, approx_kl, grads)
+            return (agent_state, key), (loss, pg_loss, v_loss, entropy_loss, approx_kl, cl_loss, grads)
 
-        (agent_state, key), (loss, pg_loss, v_loss, entropy_loss, approx_kl, grads) = jax.lax.scan(
+        (agent_state, key), (loss, pg_loss, v_loss, entropy_loss, approx_kl, cl_loss, grads) = jax.lax.scan(
             update_epoch, (agent_state, key), (), length=config["UPDATE_EPOCHS"]
         )
-        return agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, key
+        return agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, cl_loss, key
 
     global_step = 0 # tracks total number of environment steps across all tasks
     global_iteration = 0    # tracks total number of PPO updates
@@ -953,28 +1022,15 @@ def continual_run(config: dict):
         # we get back the updated agent_state and the storage from the rollout
         agent_state, fisher_storage, global_step, global_iteration = single_run(
             key, network, actor, critic, config, task_id, agent_state, 
-            ewc_fisher, ewc_params, max_D, global_step, global_iteration, 
+            cl_state, max_D, global_step, global_iteration, 
             global_start_time, seen_tasks, train_mods, eval_mods, eval_envs_cache, 
             eval_renderers_cache, eval_fns_cache, crl_state, 
             get_action_and_value, compute_gae, update_ppo, rtpt
         )
 
-        # Set EWC decay to 0 for the first task to ignore the initial zero-value pytree
-        ewc_decay = 0.0 if i == 0 else config["EWC_DECAY"]
-
-        # EWC: Compute Fisher Information Matrix and snapshot θ* at the end of the task
-        ewc_params = {
-            "network": agent_state.params.network_params,
-            "actor": agent_state.params.actor_params
-        }
-        flat_obs = fisher_storage.obs.reshape((-1,) + fisher_storage.obs.shape[2:])
-        flat_actions = fisher_storage.actions.reshape(-1)
-        fisher_start_time = time.time()
-        ewc_fisher = compute_fisher(agent_state, flat_obs, flat_actions, ewc_fisher, jnp.float32(ewc_decay))
-        print(f"Task: {i} | Fisher Computation Time: {time.time() - fisher_start_time:.2f}")
+        cl_state = on_task_end(i, task_id, cl_state, agent_state, fisher_storage, compute_fisher, config)
 
     wandb.finish()
-
 
 @hydra.main(version_base=None, config_path="./config", config_name="config")
 def main(config):

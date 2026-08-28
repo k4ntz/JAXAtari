@@ -28,6 +28,7 @@ EVAL_MODS:  # mods applied during evaluation, for each environment
   - [shift_enemy]
   - [shift_player]
 
+CL_METHOD: ewc
 EWC_DECAY: 0.7  # Decay for Online EWC
 EWC_LAMBDA: 1000.0  # Weight for EWC penalty
 
