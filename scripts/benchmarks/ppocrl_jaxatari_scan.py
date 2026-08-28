@@ -29,7 +29,7 @@ import hydra
 from omegaconf import OmegaConf
 from jaxatari.wrappers import NormalizeObservationWrapper, ObjectCentricWrapper, PixelObsWrapper, AtariWrapper, LogWrapper, FlattenObservationWrapper
 from jaxatari import spaces
-from ppoewc_jaxatari_vmap_eval import make_eval_step_fns, evaluate_cached
+from ppocrl_jaxatari_vmap_eval import make_eval_step_fns, evaluate_cached
 
 from rtpt import RTPT
 
