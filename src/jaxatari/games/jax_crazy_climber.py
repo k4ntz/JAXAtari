@@ -739,7 +739,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             branch_idx,
             [
                 lambda: update_tower(state.tower_state),
-                lambda: TowerState.new(state.key),
+                lambda: TowerState.new(state.key).replace(lowest_level=state.tower_state.lowest_level),
                 lambda: state.tower_state.replace(is_falling=True),
                 lambda: state.tower_state,
             ]
@@ -1013,7 +1013,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             s.falling_count > 0,
             lambda: s.replace(falling_count=jnp.maximum(s.falling_count - 1, 0)),
             lambda: s
-            )
+        )
 
         state1 = jax.lax.cond(
             state.egg_animation_count > 0,
