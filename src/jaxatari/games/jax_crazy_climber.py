@@ -827,7 +827,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             
         @partial(jax.jit)
         def move_upwards(s: PlayerMoveState) -> PlayerMoveState: 
-            is_up_move_possible = (jax.lax.abs(s.side_step) <= 3)
+            # is_up_move_possible = (jax.lax.abs(s.side_step) <= 3)
             transitioning_states = (((s.main_state != PlayerStableStates.PULL_UP) & (s.sub_step == 4)) |
                                     ((s.main_state == PlayerStableStates.PULL_UP) & (s.sub_step == 9)))
             next_state_on_transition = jnp.array([PlayerStableStates.NEUTRAL, PlayerStableStates.HALF_PULL_UP, PlayerStableStates.PULL_UP])[(s.main_state + 1) % 3] 
@@ -837,20 +837,16 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 s.hand_dir
             )
             return jax.lax.cond(
-                is_up_move_possible,
-                lambda s: jax.lax.cond(
-                    transitioning_states,
-                    lambda _: s.replace(main_state=next_state_on_transition, sub_step=0, hand_dir=next_hand_dir),
-                    lambda s: s.replace(sub_step=s.sub_step + 1),
-                    operand=s,
-                ),
-                lambda s: s,
-                operand=s
+                transitioning_states,
+                lambda _: s.replace(main_state=next_state_on_transition, sub_step=0, hand_dir=next_hand_dir, side_step=0),
+                lambda s: s.replace(sub_step=s.sub_step + 1, side_step=0),
+                operand=s,
             )
 
         @partial(jax.jit)
         def move_downwards(s: PlayerMoveState) -> PlayerMoveState:
-            is_down_move_possible = (jax.lax.abs(s.side_step) <= 3) & (s.sub_step > 0) & (s.main_state != PlayerStableStates.PULL_UP)
+            # is_down_move_possible = (jax.lax.abs(s.side_step) <= 3) & (s.sub_step > 0) & (s.main_state != PlayerStableStates.PULL_UP)
+            is_down_move_possible = (s.sub_step > 0) & (s.main_state != PlayerStableStates.PULL_UP)
             next_hand_dir = jax.lax.select(
                 (s.main_state == PlayerStableStates.NEUTRAL) & (s.sub_step == 1),
                 s.hand_dir * -1,
@@ -860,8 +856,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 is_down_move_possible,
                 lambda s: jax.lax.cond(
                     (s.main_state == PlayerStableStates.HALF_PULL_UP) & (s.sub_step == 1),
-                    lambda _: s.replace(main_state=PlayerStableStates.NEUTRAL, sub_step=0, hand_dir=s.hand_dir * -1),
-                    lambda s: s.replace(sub_step=s.sub_step - 1, hand_dir=next_hand_dir),
+                    lambda _: s.replace(main_state=PlayerStableStates.NEUTRAL, sub_step=0, hand_dir=s.hand_dir * -1, side_step=0),
+                    lambda s: s.replace(sub_step=s.sub_step - 1, hand_dir=next_hand_dir, side_step=0),
                     operand=s
                 ),
                 lambda s: s,
