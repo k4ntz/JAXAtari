@@ -24,6 +24,7 @@ import optax
 import wandb
 from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
+import flashbax as fbx
 import jaxatari
 import hydra
 from omegaconf import OmegaConf
@@ -194,12 +195,12 @@ class EpisodeStatistics:
 # CONTINUAL LEARNING FUNCTIONS
 # ---------------------------------------------------------
 
-def init_cl_state(config, agent_state):
+def init_cl_state(config, agent_state, dummy_obs):
     """Initializes tracking variables based on the chosen CL method."""
     cl_method = config["CL_METHOD"].lower()
     
     if cl_method == "ewc":
-        return {
+        cl_state = {
             "fisher": {
                 "network": jax.tree.map(jnp.zeros_like, agent_state.params.network_params),
                 "actor": jax.tree.map(jnp.zeros_like, agent_state.params.actor_params)
@@ -209,16 +210,38 @@ def init_cl_state(config, agent_state):
                 "actor": jax.tree.map(jnp.zeros_like, agent_state.params.actor_params)
             }
         }
+        return cl_state, {}
     elif cl_method == "agem":
-        # TODO
-        pass
+        fake_item = {
+            "observations": jnp.zeros_like(dummy_obs[0]),   # strip batch dimension from dummy_obs
+            "actions": jnp.zeros((), dtype=jnp.int32),
+            "value_targets": jnp.zeros((), dtype=jnp.float32) 
+        }
+        config["BUFFER_LENGTH"] = len(config["TASKS"]) * config["NUM_ENVS"] * config["NUM_STEPS"]
+        print(f"AGEM BUFFER LENGTH: {config["BUFFER_LENGTH"]}")
+        buffer =  fbx.make_item_buffer(
+            max_length=config["BUFFER_LENGTH"], 
+            min_length=config["MINIBATCH_SIZE"],
+            sample_batch_size=config["MINIBATCH_SIZE"],
+            add_batches=True
+        )
+        buffer_state = buffer.init(fake_item)
+        cl_state = {
+            "buffer_state": buffer_state    # the data (PyTree)
+        }
+        cl_static = {
+            "buffer": buffer,    # the logic (static)
+            "buffer_add_fn": jax.jit(buffer.add)
+        }
+        # buffer_state: the data; buffer: the logic 
+        return cl_state, cl_static
     elif cl_method == "packnet":
         # TODO
         pass
     
-    return {}
+    return {}, {}
 
-def modify_loss_fn(loss, params, cl_state, config):
+def modify_loss_fn(loss, params, cl_state, cl_static, config):
     """Adds regularization penalties to the loss (used by EWC)."""
     cl_method = config["CL_METHOD"].lower()
     
@@ -237,7 +260,7 @@ def modify_loss_fn(loss, params, cl_state, config):
         
     return loss, 0.0
 
-def modify_gradients_fn(grads, cl_state, agent_state, minibatch, config):
+def modify_gradients_fn(grads, cl_state, cl_static, agent_state, minibatch, config):
     """Alters gradients before optimizer application (used by A-GEM, PackNet)."""
     cl_method = config["CL_METHOD"].lower()
     
@@ -250,7 +273,7 @@ def modify_gradients_fn(grads, cl_state, agent_state, minibatch, config):
         
     return grads
 
-def on_task_end(task_idx, task_id, cl_state, agent_state, fisher_storage, compute_fisher_fn, config):
+def on_task_end(task_idx, task_id, cl_state, cl_static, agent_state, fisher_storage, compute_fisher_fn, config):
     """Updates CL state at the end of a task."""
     cl_method = config["CL_METHOD"].lower()
     
@@ -270,8 +293,18 @@ def on_task_end(task_idx, task_id, cl_state, agent_state, fisher_storage, comput
         }
         
     elif cl_method == "agem":
-        # TODO
-        pass 
+        flat_obs = fisher_storage.obs.reshape((-1,) + fisher_storage.obs.shape[2:])
+        flat_actions = fisher_storage.actions.reshape(-1)
+        flat_returns = fisher_storage.returns.reshape(-1)
+
+        batch = {
+            "observations": flat_obs,
+            "actions": flat_actions,
+            "value_targets": flat_returns 
+        }
+        cl_state["buffer_state"] = cl_static["buffer_add_fn"](cl_state["buffer_state"], batch)
+
+        print(f"Task: {task_idx} | A-GEM buffer updated. Current buffer size: {cl_state["buffer_state"].current_index}")
     elif cl_method == "packnet":
         # TODO
         pass 
@@ -683,7 +716,8 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
 
     # Generate new rollout for fisher information compuation
     fisher_rollout_start_time = time.time()
-    _, _, _, fisher_storage, _, _, _ = rollout(agent_state, next_obs, next_done, key, env_state)
+    _, fisher_next_obs, fisher_next_done, fisher_storage, _, _, _ = rollout(agent_state, next_obs, next_done, key, env_state)
+    fisher_storage = compute_gae_fn(agent_state, fisher_next_obs, fisher_next_done, fisher_storage)
     print(f"Fisher Rollout Time: {time.time() - fisher_rollout_start_time:.2f}")
 
     if compile_time is not None:
@@ -806,7 +840,7 @@ def continual_run(config: dict):
             )()
             D = env_.observation_space().shape[0]
             max_D = max(max_D, D)
-        observation_space_shape = (config["FRAME_STACK"], max_D)    # (F, D) for object-centric
+        observation_space_shape = (max_D,)    # (D,) for object-centric
     else:
         observation_space_shape = (config["FRAME_STACK"], *config["PIXEL_RESIZE_SHAPE"])    # (F, H, W) for pixel-based
     dummy_obs = jnp.zeros((1, *observation_space_shape))  # (1, F, H, W) or (1, F, D)
@@ -841,7 +875,7 @@ def continual_run(config: dict):
     actor.apply = jax.jit(actor.apply)
     critic.apply = jax.jit(critic.apply)
 
-    cl_state = init_cl_state(config, agent_state)
+    cl_state, cl_static = init_cl_state(config, agent_state, dummy_obs)
 
     @jax.jit
     def get_action_and_value(
@@ -936,7 +970,7 @@ def continual_run(config: dict):
             + v_loss * config["VF_COEF"]
         )
         
-        total_loss, cl_loss = modify_loss_fn(base_loss, params, cl_state, config)
+        total_loss, cl_loss = modify_loss_fn(base_loss, params, cl_state, cl_static, config)
         
         return total_loss, (pg_loss, v_loss, entropy_loss, jax.lax.stop_gradient(approx_kl), cl_loss)
 
@@ -975,7 +1009,7 @@ def continual_run(config: dict):
                     cl_state,
                 )
                 
-                grads = modify_gradients_fn(grads, cl_state, agent_state, minibatch, config)
+                grads = modify_gradients_fn(grads, cl_state, cl_static, agent_state, minibatch, config)
                 
                 agent_state = agent_state.apply_gradients(grads=grads)
                 return agent_state, (loss, pg_loss, v_loss, entropy_loss, approx_kl, cl_loss, grads)
@@ -1028,7 +1062,7 @@ def continual_run(config: dict):
             get_action_and_value, compute_gae, update_ppo, rtpt
         )
 
-        cl_state = on_task_end(i, task_id, cl_state, agent_state, fisher_storage, compute_fisher, config)
+        cl_state = on_task_end(i, task_id, cl_state, cl_static, agent_state, fisher_storage, compute_fisher, config)
 
     wandb.finish()
 
