@@ -217,6 +217,7 @@ def init_cl_state(config, agent_state, dummy_obs):
             "actions": jnp.zeros((), dtype=jnp.int32),
             "value_targets": jnp.zeros((), dtype=jnp.float32) 
         }
+        # TODO: What if tasks repeat? Should they overwrite their previous memory?
         config["BUFFER_LENGTH"] = len(config["TASKS"]) * config["NUM_ENVS"] * config["NUM_STEPS"]
         print(f"AGEM BUFFER LENGTH: {config["BUFFER_LENGTH"]}")
         buffer =  fbx.make_item_buffer(
@@ -260,13 +261,45 @@ def modify_loss_fn(loss, params, cl_state, cl_static, config):
         
     return loss, 0.0
 
-def modify_gradients_fn(grads, cl_state, cl_static, agent_state, minibatch, config):
+def modify_gradients_fn(grads, cl_state, cl_static, agent_state, minibatch, config, key):
     """Alters gradients before optimizer application (used by A-GEM, PackNet)."""
     cl_method = config["CL_METHOD"].lower()
     
     if cl_method == "agem":
-        # TODO
-        pass 
+        # Only perform projection if the buffer has data (i.e., we are past task 1)
+        buffer_has_data = cl_state["buffer_state"].current_index > 0
+        
+        def perform_projection(current_grads):
+            # Sample a batch from the memory buffer
+            batch = cl_static["buffer"].sample(cl_state["buffer_state"], key)
+            
+            # Compute reference gradients on the batch
+            ref_grads = cl_static["compute_agem_ref_grads_fn"](
+                agent_state.params, 
+                batch.experience["observations"], 
+                batch.experience["actions"], 
+                batch.experience["value_targets"]
+            )
+            # Flatten the gradients into 1D vectors
+            flat_current, unravel_fn = jax.flatten_util.ravel_pytree(current_grads)
+            flat_ref, _ = jax.flatten_util.ravel_pytree(ref_grads)
+
+            # Calculate dot product and reference magnitude directly
+            dot_product = jnp.dot(flat_current, flat_ref)
+            ref_mag = jnp.dot(flat_ref, flat_ref) + 1e-12
+
+            # Project the gradients if necessary
+            def project():
+                flat_projected = flat_current - (dot_product / ref_mag) * flat_ref
+                return unravel_fn(flat_projected)
+            
+            def keep():
+                return current_grads
+
+            return jax.lax.cond(dot_product < 0, project, keep)
+        
+        return jax.lax.cond(buffer_has_data, perform_projection, lambda g: g, grads)
+
     elif cl_method == "packnet":
         # TODO
         pass 
@@ -804,6 +837,27 @@ def continual_run(config: dict):
 
         return new_fisher
 
+    @jax.jit
+    def compute_agem_ref_grads(params, mem_obs, mem_actions, mem_returns):
+        """Computes reference gradients on the A-GEM buffer batch."""
+        def ref_loss_fn(params):
+            hidden = network.apply(params.network_params, mem_obs)
+            logits = actor.apply(params.actor_params, hidden)
+            values = critic.apply(params.critic_params, hidden).squeeze(-1)
+
+            # Behavioral Cloning
+            # Actor Loss
+            logprob = jax.nn.log_softmax(logits)[jnp.arange(mem_actions.shape[0]), mem_actions]
+            actor_loss = -logprob.mean()
+            
+            # Critic Loss
+            critic_loss = 0.5 * ((values - mem_returns) ** 2).mean()
+            
+            # TODO: MEAL uses entropy term, should we too?
+            return actor_loss + config["VF_COEF"] * critic_loss
+        
+        return jax.grad(ref_loss_fn)(params)
+
     # TRY NOT TO MODIFY: seeding
     random.seed(config["SEED"])
     np.random.seed(config["SEED"])
@@ -876,6 +930,7 @@ def continual_run(config: dict):
     critic.apply = jax.jit(critic.apply)
 
     cl_state, cl_static = init_cl_state(config, agent_state, dummy_obs)
+    cl_static["compute_agem_ref_grads_fn"] = compute_agem_ref_grads
 
     @jax.jit
     def get_action_and_value(
@@ -998,7 +1053,10 @@ def continual_run(config: dict):
             flatten_storage = jax.tree.map(flatten, storage)
             shuffled_storage = jax.tree.map(convert_data, flatten_storage)
 
-            def update_minibatch(agent_state, minibatch):
+            def update_minibatch(carry, minibatch):
+                agent_state, current_key = carry
+                current_key, subkey = jax.random.split(current_key)
+
                 (loss, (pg_loss, v_loss, entropy_loss, approx_kl, cl_loss)), grads = ppo_loss_grad_fn(
                     agent_state.params,
                     minibatch.obs,
@@ -1009,13 +1067,13 @@ def continual_run(config: dict):
                     cl_state,
                 )
                 
-                grads = modify_gradients_fn(grads, cl_state, cl_static, agent_state, minibatch, config)
+                grads = modify_gradients_fn(grads, cl_state, cl_static, agent_state, minibatch, config, subkey)
                 
                 agent_state = agent_state.apply_gradients(grads=grads)
-                return agent_state, (loss, pg_loss, v_loss, entropy_loss, approx_kl, cl_loss, grads)
+                return (agent_state, current_key), (loss, pg_loss, v_loss, entropy_loss, approx_kl, cl_loss, grads)
 
-            agent_state, (loss, pg_loss, v_loss, entropy_loss, approx_kl, cl_loss, grads) = jax.lax.scan(
-                update_minibatch, agent_state, shuffled_storage
+            (agent_state, key), (loss, pg_loss, v_loss, entropy_loss, approx_kl, cl_loss, grads) = jax.lax.scan(
+                update_minibatch, (agent_state, key), shuffled_storage
             )
             return (agent_state, key), (loss, pg_loss, v_loss, entropy_loss, approx_kl, cl_loss, grads)
 
