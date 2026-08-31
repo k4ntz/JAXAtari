@@ -103,10 +103,12 @@ class DifficultyEasyMod(JaxAtariInternalModPlugin):
     """
     constants_overrides = {
         "DIFFICULTY_PRESET": "easy",
-        "CPU_UPDATE_MASK": 7,
-        "CPU_AGGR_WINNING": 20,
-        "CPU_AGGR_LOSING": 10,
+        "CPU_TRACKING_INTERVAL": 48,
+        "CPU_AGGR_WINNING": 2,
+        "CPU_AGGR_LOSING": 1,
         "CPU_DANCING_DURATION": 60,
+        "CPU_AIM_NOISE_SCALE": 1.5,
+        "PLAYER_FACE_SHRINK_Y": -1.0,
     }
 
 
@@ -118,10 +120,12 @@ class DifficultyMediumMod(JaxAtariInternalModPlugin):
     """
     constants_overrides = {
         "DIFFICULTY_PRESET": "normal",
-        "CPU_UPDATE_MASK": 3,
-        "CPU_AGGR_WINNING": 55,
-        "CPU_AGGR_LOSING": 35,
-        "CPU_DANCING_DURATION": 30,
+        "CPU_TRACKING_INTERVAL": -1,
+        "CPU_AGGR_WINNING": 4,
+        "CPU_AGGR_LOSING": 4,
+        "CPU_DANCING_DURATION": 40,
+        "CPU_AIM_NOISE_SCALE": 1.0,
+        "PLAYER_FACE_SHRINK_Y": 0.0,
     }
 
 
@@ -134,10 +138,12 @@ class DifficultyHardMod(JaxAtariInternalModPlugin):
     """
     constants_overrides = {
         "DIFFICULTY_PRESET": "hard",
-        "CPU_UPDATE_MASK": 1,
-        "CPU_AGGR_WINNING": 90,
-        "CPU_AGGR_LOSING": 70,
-        "CPU_DANCING_DURATION": 10,
+        "CPU_TRACKING_INTERVAL": 8,
+        "CPU_AGGR_WINNING": 12,
+        "CPU_AGGR_LOSING": 8,
+        "CPU_DANCING_DURATION": 15,
+        "CPU_AIM_NOISE_SCALE": 0.5,
+        "PLAYER_FACE_SHRINK_Y": 0.0,
     }
 
 
@@ -150,10 +156,12 @@ class DifficultyImpossibleMod(JaxAtariInternalModPlugin):
     """
     constants_overrides = {
         "DIFFICULTY_PRESET": "impossible",
-        "CPU_UPDATE_MASK": 0,
-        "CPU_AGGR_WINNING": 120,
-        "CPU_AGGR_LOSING": 100,
+        "CPU_TRACKING_INTERVAL": 1,
+        "CPU_AGGR_WINNING": 255,
+        "CPU_AGGR_LOSING": 255,
         "CPU_DANCING_DURATION": 0,
+        "CPU_AIM_NOISE_SCALE": 0.4,
+        "PLAYER_FACE_SHRINK_Y": 1.0,
     }
 
 
