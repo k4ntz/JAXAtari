@@ -1,254 +1,184 @@
-"""
-Boxing mod plugins.
-
-Simple mods (constant overrides / no-ops):
-- StaticEnemyMod: CPU opponent stands still (no movement AI)
-- FastStunMod: Stun duration halved (recover faster from hits)
-- SlowStunMod: Stun duration doubled (longer knockback animation)
-- InfiniteTimeMod: Clock never counts down – the round goes on forever
-- OneHitKOMod: A single landed punch triggers a KO
-- DoubleSpeedMod: Both boxers move at double speed
-
-Hard mods (method overrides with custom logic):
-- RandomWalkEnemyMod: CPU wanders randomly instead of tracking the player
-- MirrorEnemyMod: CPU mirrors the player's vertical position and slowly
-  closes the horizontal gap
-- BodyHitsScoreMod: All hits score (removes the fine vertical alignment
-  check so body hits count, not just head-level)
-"""
-
 import jax
 import jax.numpy as jnp
 from dataclasses import replace
 from functools import partial
 
+from jaxatari.environment import JAXAtariAction as Action
 from jaxatari.games.jax_boxing import BoxingState
-from jaxatari.modification import (
-    JaxAtariInternalModPlugin,
-    JaxAtariPostStepModPlugin,
-)
+from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
 
-
-# ──────────────────────────────────────────────────────────────────────
-# 1. CPU movement mods
-# ──────────────────────────────────────────────────────────────────────
-
-class StaticEnemyMod(JaxAtariInternalModPlugin):
-    """CPU boxer does not move at all – only punches."""
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _cpu_movement_step(self, state: BoxingState) -> BoxingState:
-        # No-op: return state unchanged (CPU stays where it is)
-        return state
-
-
-class RandomWalkEnemyMod(JaxAtariInternalModPlugin):
-    """CPU walks randomly instead of tracking the player."""
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _cpu_movement_step(self, state: BoxingState) -> BoxingState:
-        is_stunned = jnp.logical_and(
-            state.hit_boxer_stun_timer > 0,
-            state.hit_boxer_index == 1,
-        )
-
-        key, k1, k2 = jax.random.split(state.key, 3)
-        dx = jax.random.randint(k1, (), -1, 2)  # -1, 0, or 1
-        dy = jax.random.randint(k2, (), -1, 2)
-
-        consts = self._env.consts
-        new_x = jnp.clip(
-            state.right_boxer_x + dx, consts.XMIN_BOXER, consts.XMAX_BOXER
-        ).astype(jnp.int32)
-        new_y = jnp.clip(
-            state.right_boxer_y + dy, consts.YMIN, consts.YMAX
-        ).astype(jnp.int32)
-
-        # Block movement while stunned
-        new_x = jnp.where(is_stunned, state.right_boxer_x, new_x)
-        new_y = jnp.where(is_stunned, state.right_boxer_y, new_y)
-
-        return replace(state, right_boxer_x=new_x, right_boxer_y=new_y, key=key)
-
-
-class MirrorEnemyMod(JaxAtariInternalModPlugin):
-    """CPU mirrors the player's vertical position and slowly closes the
-    horizontal gap, creating a "shadow boxer" that tracks vertically
-    but advances at a fixed pace."""
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _cpu_movement_step(self, state: BoxingState) -> BoxingState:
-        is_stunned = jnp.logical_and(
-            state.hit_boxer_stun_timer > 0,
-            state.hit_boxer_index == 1,
-        )
-        consts = self._env.consts
-
-        # Vertical: snap to player's Y position
-        mirror_y = jnp.clip(
-            state.left_boxer_y, consts.YMIN, consts.YMAX
-        ).astype(jnp.int32)
-
-        # Horizontal: slowly creep toward the player (1 px every 4 frames)
-        should_advance = (state.step_counter % 4 == 0)
-        dx = jnp.sign(state.left_boxer_x - state.right_boxer_x).astype(jnp.int32)
-        new_x = jnp.where(
-            should_advance,
-            state.right_boxer_x + dx,
-            state.right_boxer_x,
-        )
-        new_x = jnp.clip(new_x, consts.XMIN_BOXER, consts.XMAX_BOXER).astype(jnp.int32)
-
-        # Block movement while stunned
-        new_x = jnp.where(is_stunned, state.right_boxer_x, new_x)
-        mirror_y = jnp.where(is_stunned, state.right_boxer_y, mirror_y)
-
-        return replace(state, right_boxer_x=new_x, right_boxer_y=mirror_y)
-
-
-# ──────────────────────────────────────────────────────────────────────
-# 2. Stun-timing mods (constant overrides – no method patches needed)
-# ──────────────────────────────────────────────────────────────────────
-
-class FastStunMod(JaxAtariInternalModPlugin):
-    """Halve the stun duration so boxers recover faster."""
-    constants_overrides = {"STUN_DURATION": 7}
-
-
-class SlowStunMod(JaxAtariInternalModPlugin):
-    """Double the stun duration for a longer knockback animation."""
-    constants_overrides = {"STUN_DURATION": 30}
-
-
-# ──────────────────────────────────────────────────────────────────────
-# 3. Timer / round mods
-# ──────────────────────────────────────────────────────────────────────
-
-class InfiniteTimeMod(JaxAtariInternalModPlugin):
-    """Clock never counts down – the round goes on forever."""
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _timer_step(self, state: BoxingState) -> BoxingState:
-        return state  # no-op
-
-
-# ──────────────────────────────────────────────────────────────────────
-# 4. KO threshold mods
-# ──────────────────────────────────────────────────────────────────────
-
-class OneHitKOMod(JaxAtariInternalModPlugin):
-    """A single landed punch triggers a KO."""
-    constants_overrides = {"MAX_SCORE": 1}
-
-
-# ──────────────────────────────────────────────────────────────────────
-# 5. Movement speed mods
-# ──────────────────────────────────────────────────────────────────────
-
-class DoubleSpeedMod(JaxAtariInternalModPlugin):
-    """Both boxers move at double speed."""
-    constants_overrides = {"MOVE_SPEED": 2}
-
-
-# ──────────────────────────────────────────────────────────────────────
-# 6. Scoring mods
-# ──────────────────────────────────────────────────────────────────────
-
-class BodyHitsScoreMod(JaxAtariInternalModPlugin):
+class CenterEnemyMod(JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin):
     """
-    Remove the fine vertical-alignment requirement so *any* body-level
-    hit scores, not just head-level punches.
-
-    Overrides both _hit_detection_step (player → CPU) and
-    _cpu_hit_detection_step (CPU → player).
+    Forces the enemy (black boxer) to stay at the center of the ring.
+    The enemy cannot move, but can only punch.
     """
 
     @partial(jax.jit, static_argnums=(0,))
-    def _hit_detection_step(self, state: BoxingState) -> BoxingState:
-        """Player hit detection – body hits score."""
-        horiz_dist = jnp.abs(state.left_boxer_x - state.right_boxer_x)
-        vert_dist = jnp.abs(state.left_boxer_y - state.right_boxer_y)
-
-        in_horiz_range = horiz_dist <= self._env.consts.HIT_DISTANCE_HORIZONTAL
-        in_vert_range = vert_dist < self._env.consts.HIT_DISTANCE_VERTICAL
-
-        just_reached_max = state.extended_arm_maximum[0] == 1
-        punch_active = state.left_boxer_punch_active > 0
-        punch_not_landed_yet = state.left_boxer_punch_landed == 0
-
-        # No fine_vert_aligned check – all body hits count
-        hit_landed = jnp.logical_and(
-            jnp.logical_and(punch_active, just_reached_max),
-            jnp.logical_and(
-                jnp.logical_and(in_horiz_range, in_vert_range),
-                punch_not_landed_yet,
-            ),
-        )
-
-        opponent_not_stunned = jnp.logical_or(
-            state.hit_boxer_stun_timer == 0,
-            state.hit_boxer_index != 1,
-        )
-        valid_hit = jnp.logical_and(hit_landed, opponent_not_stunned)
-
-        new_punch_landed = jnp.where(valid_hit, 1, state.left_boxer_punch_landed).astype(jnp.int32)
-        new_score = jnp.where(valid_hit, state.left_boxer_score + 1, state.left_boxer_score).astype(jnp.int32)
-        new_stun_timer = jnp.where(valid_hit, self._env.consts.STUN_DURATION, state.hit_boxer_stun_timer).astype(jnp.int32)
-        new_hit_index = jnp.where(valid_hit, 1, state.hit_boxer_index).astype(jnp.int32)
-        new_punching_arm = jnp.where(valid_hit, state.left_boxer_last_arm, state.punching_arm_index).astype(jnp.int32)
-        new_dancing = jnp.where(valid_hit, 57, state.cpu_dancing_value).astype(jnp.int32)
-
-        return replace(
-            state,
-            left_boxer_score=new_score,
-            hit_boxer_stun_timer=new_stun_timer,
-            hit_boxer_index=new_hit_index,
-            left_boxer_punch_landed=new_punch_landed,
-            punching_arm_index=new_punching_arm,
-            cpu_dancing_value=new_dancing,
-        )
+    def _cpu_logic(self, state: BoxingState):
+        """
+        Replace the CPU logic to ONLY punch, without moving.
+        """
+        p1_pos = state.pos[0]
+        p2_pos = state.pos[1]
+        
+        # Punch if close
+        dist = jnp.linalg.norm(p1_pos - p2_pos)
+        should_punch = jnp.logical_and(dist < 30.0, jax.random.uniform(state.key, ()) < 0.1)
+        act = jnp.where(should_punch, Action.FIRE, Action.NOOP)
+        
+        return act
 
     @partial(jax.jit, static_argnums=(0,))
-    def _cpu_hit_detection_step(self, state: BoxingState) -> BoxingState:
-        """CPU hit detection – body hits score."""
-        horiz_dist = jnp.abs(state.left_boxer_x - state.right_boxer_x)
-        vert_dist = jnp.abs(state.left_boxer_y - state.right_boxer_y)
+    def after_reset(self, obs, state: BoxingState):
+        """
+        Snap the enemy to the center immediately after reset.
+        """
+        center_x = (self._env.consts.XMIN + self._env.consts.XMAX) / 2.0
+        center_y = (self._env.consts.YMIN + self._env.consts.YMAX) / 2.0
+        
+        new_pos = state.pos.at[1].set(jnp.array([center_x, center_y]))
+        state = replace(state, pos=new_pos)
+        
+        # The wrapper doesn't auto-recompute obs after after_reset, so we must do it
+        # Actually JaxAtariModWrapper's after_reset might just return what we return
+        # so let's update obs.
+        new_obs = self._env._get_observation(state)
+        
+        return new_obs, state
 
-        in_horiz_range = horiz_dist <= self._env.consts.HIT_DISTANCE_HORIZONTAL
-        in_vert_range = vert_dist < self._env.consts.HIT_DISTANCE_VERTICAL
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: BoxingState, new_state: BoxingState):
+        """
+        Snap the enemy back to the center after every step, neutralizing knockback.
+        """
+        center_x = (self._env.consts.XMIN + self._env.consts.XMAX) / 2.0
+        center_y = (self._env.consts.YMIN + self._env.consts.YMAX) / 2.0
+        
+        new_pos = new_state.pos.at[1].set(jnp.array([center_x, center_y]))
+        modified_state = replace(new_state, pos=new_pos)
+        
+        return modified_state
 
-        just_reached_max = state.extended_arm_maximum[1] == 1
-        punch_active = state.right_boxer_punch_active > 0
-        punch_not_landed_yet = state.right_boxer_punch_landed == 0
 
-        # No fine_vert_aligned check
-        hit_landed = jnp.logical_and(
-            jnp.logical_and(punch_active, just_reached_max),
-            jnp.logical_and(
-                jnp.logical_and(in_horiz_range, in_vert_range),
-                punch_not_landed_yet,
-            ),
-        )
+class AlwaysPunchEnemyMod(JaxAtariInternalModPlugin):
+    """
+    Forces the enemy (black boxer) to constantly punch while maintaining its regular movement logic.
+    """
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def _cpu_logic(self, state: BoxingState):
+        """
+        Replace the CPU logic to perform regular movement but ALWAYS include FIRE.
+        """
+        p1_pos = state.pos[0]
+        p2_pos = state.pos[1]
+        
+        # Simple AI: Track P1's Y, stay at distance on X
+        target_x = p1_pos[0] + jnp.where(p2_pos[0] > p1_pos[0], 20.0, -20.0)
+        target_y = p1_pos[1]
+        
+        dx = jnp.where(p2_pos[0] < target_x - 2, Action.RIGHT, jnp.where(p2_pos[0] > target_x + 2, Action.LEFT, Action.NOOP))
+        dy = jnp.where(p2_pos[1] < target_y - 2, Action.DOWN, jnp.where(p2_pos[1] > target_y + 2, Action.UP, Action.NOOP))
+        
+        # Combine into action and append FIRE
+        act = Action.FIRE
+        act = jnp.where(jnp.logical_and(dx == Action.RIGHT, dy == Action.UP), Action.UPRIGHTFIRE, act)
+        act = jnp.where(jnp.logical_and(dx == Action.LEFT, dy == Action.UP), Action.UPLEFTFIRE, act)
+        act = jnp.where(jnp.logical_and(dx == Action.RIGHT, dy == Action.DOWN), Action.DOWNRIGHTFIRE, act)
+        act = jnp.where(jnp.logical_and(dx == Action.LEFT, dy == Action.DOWN), Action.DOWNLEFTFIRE, act)
+        act = jnp.where(jnp.logical_and(act == Action.FIRE, dx == Action.RIGHT), Action.RIGHTFIRE, act)
+        act = jnp.where(jnp.logical_and(act == Action.FIRE, dx == Action.LEFT), Action.LEFTFIRE, act)
+        act = jnp.where(jnp.logical_and(act == Action.FIRE, dy == Action.UP), Action.UPFIRE, act)
+        act = jnp.where(jnp.logical_and(act == Action.FIRE, dy == Action.DOWN), Action.DOWNFIRE, act)
+        
+        return act
 
-        player_not_stunned = jnp.logical_or(
-            state.hit_boxer_stun_timer == 0,
-            state.hit_boxer_index != 0,
-        )
-        valid_hit = jnp.logical_and(hit_landed, player_not_stunned)
 
-        new_punch_landed = jnp.where(valid_hit, 1, state.right_boxer_punch_landed).astype(jnp.int32)
-        new_score = jnp.where(valid_hit, state.right_boxer_score + 1, state.right_boxer_score).astype(jnp.int32)
-        new_stun_timer = jnp.where(valid_hit, self._env.consts.STUN_DURATION, state.hit_boxer_stun_timer).astype(jnp.int32)
-        new_hit_index = jnp.where(valid_hit, 0, state.hit_boxer_index).astype(jnp.int32)
-        new_punching_arm = jnp.where(valid_hit, state.right_boxer_last_arm + 2, state.punching_arm_index).astype(jnp.int32)
-        new_dancing = jnp.where(valid_hit, 57, state.cpu_dancing_value).astype(jnp.int32)
+class DifficultyEasyMod(JaxAtariInternalModPlugin):
+    """
+    Easy Difficulty Mod:
+    - Target updates slowly (every ~8 frames on average).
+    - Low punching probability.
+    - Long retreat/dancing phase.
+    """
+    constants_overrides = {
+        "DIFFICULTY_PRESET": "easy",
+        "CPU_TRACKING_INTERVAL": 48,
+        "CPU_AGGR_WINNING": 2,
+        "CPU_AGGR_LOSING": 1,
+        "CPU_DANCING_DURATION": 60,
+        "CPU_AIM_NOISE_SCALE": 1.5,
+        "PLAYER_FACE_SHRINK_Y": -1.0,
+    }
 
-        return replace(
-            state,
-            right_boxer_score=new_score,
-            hit_boxer_stun_timer=new_stun_timer,
-            hit_boxer_index=new_hit_index,
-            right_boxer_punch_landed=new_punch_landed,
-            punching_arm_index=new_punching_arm,
-            cpu_dancing_value=new_dancing,
-        )
+
+class DifficultyMediumMod(JaxAtariInternalModPlugin):
+    """
+    Medium / Normal Difficulty Mod:
+    - Moderate reaction speed and punching probability.
+    - Standard defensive/dancing behavior.
+    """
+    constants_overrides = {
+        "DIFFICULTY_PRESET": "normal",
+        "CPU_TRACKING_INTERVAL": -1,
+        "CPU_AGGR_WINNING": 4,
+        "CPU_AGGR_LOSING": 4,
+        "CPU_DANCING_DURATION": 40,
+        "CPU_AIM_NOISE_SCALE": 1.0,
+        "PLAYER_FACE_SHRINK_Y": 0.0,
+    }
+
+
+class DifficultyHardMod(JaxAtariInternalModPlugin):
+    """
+    Hard Difficulty Mod:
+    - Fast target updates (~2 frames).
+    - High punching probability.
+    - Brief retreat/dancing phase.
+    """
+    constants_overrides = {
+        "DIFFICULTY_PRESET": "hard",
+        "CPU_TRACKING_INTERVAL": 8,
+        "CPU_AGGR_WINNING": 12,
+        "CPU_AGGR_LOSING": 8,
+        "CPU_DANCING_DURATION": 15,
+        "CPU_AIM_NOISE_SCALE": 0.5,
+        "PLAYER_FACE_SHRINK_Y": 0.0,
+    }
+
+
+class DifficultyImpossibleMod(JaxAtariInternalModPlugin):
+    """
+    Impossible Difficulty Mod:
+    - Instant target updates (every frame).
+    - Relentless pressure and punching.
+    - No retreat/dancing phase at all.
+    """
+    constants_overrides = {
+        "DIFFICULTY_PRESET": "impossible",
+        "CPU_TRACKING_INTERVAL": 1,
+        "CPU_AGGR_WINNING": 255,
+        "CPU_AGGR_LOSING": 255,
+        "CPU_DANCING_DURATION": 0,
+        "CPU_AIM_NOISE_SCALE": 0.4,
+        "PLAYER_FACE_SHRINK_Y": 1.0,
+    }
+
+
+class PeacefulEnemyMod(JaxAtariInternalModPlugin):
+    """
+    Peaceful Enemy Mod:
+    - The enemy (black boxer) is strictly not allowed to punch.
+    - Compatible with all other movement or logic mods.
+    """
+    constants_overrides = {
+        "ENEMY_PEACEFUL": True,
+    }
+
+class ShowCollisionZoneMod(JaxAtariInternalModPlugin):
+    """
+    Shows the collision zones (face and gloves) as semi-transparent red boxes.
+    """
+    constants_overrides = {
+        "SHOW_COLLISION_ZONE": True,
+    }
