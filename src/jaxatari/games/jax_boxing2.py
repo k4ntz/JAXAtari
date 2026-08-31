@@ -27,36 +27,36 @@ DEFAULT_DIFFICULTY = "normal"
 
 DIFFICULTY_PRESETS = {
     "easy": {
-        "CPU_UPDATE_MASK": 7,         # Updates target every ~8 frames (slower reactions)
-        "CPU_AGGR_WINNING": 20,       # Low punch rate when winning
-        "CPU_AGGR_LOSING": 10,        # Very low punch rate when losing
-        "CPU_DANCING_DURATION": 60,   # Retreats for a long time when hit
+        "CPU_TRACKING_INTERVAL": 48,  # Fixed slow reaction
+        "CPU_AGGR_WINNING": 2,        
+        "CPU_AGGR_LOSING": 1,         
+        "CPU_DANCING_DURATION": 60,   
+        "CPU_AIM_NOISE_SCALE": 1.5,   
         "PLAYER_FACE_SHRINK_Y": -1.0,
-        "CPU_VERT_OFFSET_MAX": 48,    # Very bad aim
     },
     "normal": {
-        "CPU_UPDATE_MASK": 3,         # Updates target every ~4 frames
-        "CPU_AGGR_WINNING": 55,       # Slightly higher aggressiveness
-        "CPU_AGGR_LOSING": 35,        # Slightly higher aggressiveness
-        "CPU_DANCING_DURATION": 30,   # Slightly shorter retreat duration
+        "CPU_TRACKING_INTERVAL": -1,  # -1 triggers authentic Atari dynamic 16/32 logic
+        "CPU_AGGR_WINNING": 4,        # Authentic ~1.5% chance per frame
+        "CPU_AGGR_LOSING": 4,         # Authentic ~1.5% chance per frame
+        "CPU_DANCING_DURATION": 40,   # Authentic 40 frames of retreat
+        "CPU_AIM_NOISE_SCALE": 1.0,   # Authentic offset ranges
         "PLAYER_FACE_SHRINK_Y": 0.0,
-        "CPU_VERT_OFFSET_MAX": 32,    # Normal aim
     },
     "hard": {
-        "CPU_UPDATE_MASK": 1,         # Updates target every ~2 frames (extremely fast)
-        "CPU_AGGR_WINNING": 90,       # Very high pressure, constant punches
-        "CPU_AGGR_LOSING": 70,        # Very high pressure
-        "CPU_DANCING_DURATION": 10,   # Recovers and fights back almost instantly
+        "CPU_TRACKING_INTERVAL": 8,   # Fast reaction
+        "CPU_AGGR_WINNING": 12,       
+        "CPU_AGGR_LOSING": 8,         
+        "CPU_DANCING_DURATION": 15,   
+        "CPU_AIM_NOISE_SCALE": 0.5,   # Tighter aim
         "PLAYER_FACE_SHRINK_Y": 0.0,
-        "CPU_VERT_OFFSET_MAX": 16,    # Good aim
     },
     "impossible": {
-        "CPU_UPDATE_MASK": 0,         # Updates target every frame (instantaneous reactions)
-        "CPU_AGGR_WINNING": 255,      # Maximum pressure (100% chance)
-        "CPU_AGGR_LOSING": 255,       # Aggressive pushback (100% chance)
-        "CPU_DANCING_DURATION": 0,    # Strictly never retreats; fights back instantly
+        "CPU_TRACKING_INTERVAL": 1,   # Instant reaction
+        "CPU_AGGR_WINNING": 255,      # Always punch when in range
+        "CPU_AGGR_LOSING": 255,       # Always punch when in range
+        "CPU_DANCING_DURATION": 0,    # Never retreats
+        "CPU_AIM_NOISE_SCALE": 0.4,   # Slightly more noise to prevent stalemates
         "PLAYER_FACE_SHRINK_Y": 1.0,
-        "CPU_VERT_OFFSET_MAX": 0,     # Perfect vertical aim
     }
 }
 
@@ -159,10 +159,10 @@ class BoxingConstants(struct.PyTreeNode):
     STUN_DURATION: int = 12
     
     # Hit projection (knockback) animation constants
-    HIT_ANIMATION_STEPS: int = 15
-    KNOCKBACK_TOP_ARM_DY: int = -2  # Vertical move per step if hit by opponent top arm (up)
-    KNOCKBACK_BOT_ARM_DY: int = 2   # Vertical move per step if hit by opponent bottom arm (down)
-    KNOCKBACK_DX: int = 1           # Horizontal move (backward) per step
+    HIT_ANIMATION_STEPS: int = 15   # Matches Atari RAM 92
+    KNOCKBACK_TOP_ARM_DY: int = -1  # Matches Atari dy exactly
+    KNOCKBACK_BOT_ARM_DY: int = 1   # Matches Atari dy exactly
+    KNOCKBACK_DX: int = 1           # Matches Atari dx exactly
     
     # Punch Mechanics
     PUNCH_STATE_MAX: int = 4
@@ -183,12 +183,12 @@ class BoxingConstants(struct.PyTreeNode):
 
     # CPU Difficulty Parameters
     DIFFICULTY_PRESET: str = "normal"
-    CPU_UPDATE_MASK: int = 3
-    CPU_AGGR_WINNING: int = 40
-    CPU_AGGR_LOSING: int = 20
+    CPU_TRACKING_INTERVAL: int = -1
+    CPU_AGGR_WINNING: int = 4
+    CPU_AGGR_LOSING: int = 4
     CPU_DANCING_DURATION: int = 40
-    CPU_VERT_OFFSET_MAX: int = 32
-    PLAYER_FACE_SHRINK_Y: int = 0
+    CPU_AIM_NOISE_SCALE: float = 1.0
+    PLAYER_FACE_SHRINK_Y: float = 0.0
     ENEMY_PEACEFUL: bool = False
     SHOW_COLLISION_ZONE: bool = False
 
@@ -214,6 +214,7 @@ class BoxingState:
     cpu_target_y: chex.Array       # Target Y position CPU is tracking
     cpu_horiz_offset: chex.Array   # Random horizontal offset (0-31)
     cpu_vert_offset: chex.Array    # Random vertical offset (0-63)
+    cpu_inertia: chex.Array        # RAM_15 inertia state (int32)
     cpu_dancing_value: chex.Array  # Timer controlling CPU "dancing" behavior
     # Hit animation state
     hit_anim_timer: chex.Array     # [2] (int32) remaining steps
@@ -270,12 +271,12 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         return replace(
             consts,
             DIFFICULTY_PRESET=difficulty,
-            CPU_UPDATE_MASK=params["CPU_UPDATE_MASK"],
+            CPU_TRACKING_INTERVAL=params["CPU_TRACKING_INTERVAL"],
             CPU_AGGR_WINNING=params["CPU_AGGR_WINNING"],
             CPU_AGGR_LOSING=params["CPU_AGGR_LOSING"],
             CPU_DANCING_DURATION=params["CPU_DANCING_DURATION"],
-            CPU_VERT_OFFSET_MAX=params.get("CPU_VERT_OFFSET_MAX", 32),
-            PLAYER_FACE_SHRINK_Y=params.get("PLAYER_FACE_SHRINK_Y", 0),
+            CPU_AIM_NOISE_SCALE=params.get("CPU_AIM_NOISE_SCALE", 1.0),
+            PLAYER_FACE_SHRINK_Y=params.get("PLAYER_FACE_SHRINK_Y", 0.0),
         )
 
     def reset(self, key: chex.PRNGKey) -> Tuple[BoxingObservation, BoxingState]:
@@ -302,6 +303,7 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             cpu_target_y=jnp.array(self.consts.START_Y, dtype=jnp.int32),
             cpu_horiz_offset=jnp.array(0, dtype=jnp.int32),
             cpu_vert_offset=jnp.array(0, dtype=jnp.int32),
+            cpu_inertia=jnp.array(48, dtype=jnp.int32),
             cpu_dancing_value=jnp.array(0, dtype=jnp.int32),
             hit_anim_timer=jnp.array([0, 0], dtype=jnp.int32),
             hit_anim_dx=jnp.array([0, 0], dtype=jnp.int32),
@@ -466,25 +468,42 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         # Split key for random decisions
         key, subkey1, subkey2, subkey3 = jax.random.split(state.key, 4)
         
-        # Periodically update target position (every ~4 frames based on random for higher reaction speed)
-        random_val = jax.random.randint(subkey1, (), 0, 256)
-        update_target = (random_val & self.consts.CPU_UPDATE_MASK) == 0
+        # Periodically update target position based on frame timer
+        # First minute = 16, Second minute = 32 (if authentic)
+        game_seconds = state.timer // 60
+        is_first_minute = game_seconds > 60
+        authentic_interval = jnp.where(is_first_minute, 16, 32)
+        update_interval = jnp.where(self.consts.CPU_TRACKING_INTERVAL == -1, authentic_interval, self.consts.CPU_TRACKING_INTERVAL)
+        
+        # Frame counter (0-255)
+        frame_counter = (self.consts.TOTAL_TIME - state.timer) % 256
+        
+        # Target updates when frame_counter % interval == 1
+        update_target = jnp.logical_or(update_interval == 1, (frame_counter % update_interval) == 1)
         
         # Generate new random offsets
-        new_horiz_offset = jax.random.randint(subkey2, (), 0, 32)  # 0-31
-        new_vert_offset = jax.random.randint(subkey3, (), -self.consts.CPU_VERT_OFFSET_MAX, self.consts.CPU_VERT_OFFSET_MAX + 1)
+        # Base horizontal noise is 0-31 (shifted to -16 to +15 later)
+        base_h_noise = jax.random.randint(subkey2, (), 0, 32).astype(jnp.float32)
+        h_noise = (base_h_noise - 16.0) * self.consts.CPU_AIM_NOISE_SCALE
+        
+        # Base vertical noise is 0-63 (shifted to -32 to +31 later)
+        base_v_noise = jax.random.randint(subkey3, (), 0, 64).astype(jnp.float32)
+        v_noise = (base_v_noise - 32.0) * self.consts.CPU_AIM_NOISE_SCALE
+        
+        new_horiz_offset = (h_noise + 16.0).astype(jnp.int32)
+        new_vert_offset = (v_noise + 32.0).astype(jnp.int32)
         
         # Update target to track player position
         cpu_target_x = jnp.where(
             update_target,
             state.pos[0, 0],
             state.cpu_target_x
-        ).astype(jnp.float32)
+        ).astype(jnp.int32)
         cpu_target_y = jnp.where(
             update_target,
             state.pos[0, 1],
             state.cpu_target_y
-        ).astype(jnp.float32)
+        ).astype(jnp.int32)
         cpu_horiz_offset = jnp.where(
             update_target,
             new_horiz_offset,
@@ -496,6 +515,34 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             state.cpu_vert_offset
         ).astype(jnp.int32)
         
+        # Calculate inertia
+        cpu_x = state.pos[1, 0]
+        sign_x = jnp.where(cpu_x >= state.pos[0, 0], 1, -1)
+        computed_target_x = cpu_target_x + sign_x * (20 + cpu_horiz_offset - 16)
+        
+        dist_x = jnp.abs(cpu_x - computed_target_x)
+        
+        is_moving_right = jnp.isin(state.cpu_inertia, jnp.array([80, 96, 112]))
+        is_moving_left = jnp.isin(state.cpu_inertia, jnp.array([144, 160, 176]))
+        is_horiz_idle = jnp.logical_not(jnp.logical_or(is_moving_right, is_moving_left))
+        
+        new_inertia = state.cpu_inertia
+        
+        # If already moving right, turn left only if overshoot by 8
+        turn_left = jnp.logical_and(jnp.logical_and(cpu_x > computed_target_x, is_moving_right), dist_x >= 8)
+        # If already moving left, turn right only if overshoot by 8
+        turn_right = jnp.logical_and(jnp.logical_and(cpu_x < computed_target_x, is_moving_left), dist_x >= 8)
+        
+        # If idle horizontally, move immediately towards target
+        start_left = jnp.logical_and(is_horiz_idle, cpu_x > computed_target_x)
+        start_right = jnp.logical_and(is_horiz_idle, cpu_x < computed_target_x)
+        
+        go_left = jnp.logical_or(turn_left, start_left)
+        go_right = jnp.logical_or(turn_right, start_right)
+        
+        new_inertia = jnp.where(go_left, 144, new_inertia)
+        new_inertia = jnp.where(go_right, 80, new_inertia)
+        
         # Decrement dancing value (moves towards 0)
         new_dancing = jnp.maximum(state.cpu_dancing_value - 1, 0).astype(jnp.int32)
         
@@ -504,6 +551,7 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
             cpu_target_y=cpu_target_y,
             cpu_horiz_offset=cpu_horiz_offset,
             cpu_vert_offset=cpu_vert_offset,
+            cpu_inertia=new_inertia,
             cpu_dancing_value=new_dancing,
             key=key
         )
@@ -512,60 +560,42 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         p1_pos = state.pos[0]
         p2_pos = state.pos[1]
         
-        # Calculate comfortable horizontal direction based on relative position
-        is_cpu_on_right = p2_pos[0] >= p1_pos[0]
-        sign_x = jnp.where(is_cpu_on_right, 1.0, -1.0)
+        # 1. Evaluate Trajectory
+        computed_target_y = state.cpu_target_y + state.cpu_vert_offset - 32
         
-        # Target position using the updated target coordinates and randomized offsets
-        target_x = state.cpu_target_x + sign_x * (20 + (state.cpu_horiz_offset - 16))
-        target_y = state.cpu_target_y + state.cpu_vert_offset
-        
-        # Clamp target inside ring boundaries
-        target_x = jnp.clip(target_x, self.consts.XMIN, self.consts.XMAX)
-        target_y = jnp.clip(target_y, self.consts.YMIN, self.consts.YMAX)
-        
-        # Determine movement direction towards target
-        move_right = target_x > p2_pos[0]
-        move_left = target_x < p2_pos[0]
-        move_down = target_y > p2_pos[1]
-        move_up = target_y < p2_pos[1]
-        
-        # "Dancing" behavior: reverse horizontal movement when dancing and not hit
+        dy = jnp.where(p2_pos[1] > computed_target_y, -1, jnp.where(p2_pos[1] < computed_target_y, 1, 0))
+        dx = jnp.where(jnp.isin(state.cpu_inertia, jnp.array([80, 96, 112])), 1, 
+               jnp.where(jnp.isin(state.cpu_inertia, jnp.array([144, 160, 176])), -1, 0))
+               
+        # 2. Dancing Modifier
         dancing = state.cpu_dancing_value >= 16
-        cpu_not_hit = state.stun_timer[1] == 0
-        reverse_horiz = jnp.logical_and(dancing, cpu_not_hit)
+        dx = jnp.where(dancing, -dx, dx)
         
-        move_right_final = jnp.where(reverse_horiz, move_left, move_right)
-        move_left_final = jnp.where(reverse_horiz, move_right, move_left)
-        
-        dx = jnp.where(move_right_final, 1, jnp.where(move_left_final, -1, 0))
-        dy = jnp.where(move_down, 1, jnp.where(move_up, -1, 0))
-        
-        # Strike decision based on proximity and randomness
+        # 3. Strike Decision (from Bounding Box + Random LFSR representation)
         horiz_dist = jnp.abs(p1_pos[0] - p2_pos[0])
         vert_dist = jnp.abs(p1_pos[1] - p2_pos[1])
-        in_range = jnp.logical_and(horiz_dist <= self.consts.JAB_DIST, vert_dist <= self.consts.H_BOXER)
         
-        # Don't start a punch while dancing (unless CPU was hit)
-        punch_dancing = state.cpu_dancing_value > 0
-        cpu_was_hit = state.stun_timer[1] > 0
-        can_punch_dancing = jnp.logical_or(~punch_dancing, cpu_was_hit)
+        in_strike_zone = jnp.logical_and(horiz_dist <= 47, vert_dist <= 40)
+        is_stunned = state.stun_timer[1] > 0
+        is_punching = state.punch_state[1] > 0
         
-        score_diff = state.score[1] - state.score[0]
-        aggressiveness = jnp.where(score_diff >= 0, self.consts.CPU_AGGR_WINNING, self.consts.CPU_AGGR_LOSING)
+        can_punch = jnp.logical_and(in_strike_zone, jnp.logical_and(~is_stunned, jnp.logical_and(~dancing, ~is_punching)))
         
-        # Split state.key to make random decision (without updating state.key here)
+        # Splitting PRNGKey for the 1.5% chance per frame.
+        # We simulate the difficulty presets by scaling this probability.
+        # Normal = ~1.5% chance. 
+        # (256 * 0.015 = ~4)
         _, subkey = jax.random.split(state.key)
         random_val = jax.random.randint(subkey, (), 0, 256)
-        should_punch = random_val < aggressiveness
         
-        is_idle = state.punch_state[1] == 0
-        is_ready = state.punch_cooldown[1] == 0
+        score_diff = state.score[1] - state.score[0]
+        base_aggr = jnp.where(score_diff >= 0, self.consts.CPU_AGGR_WINNING, self.consts.CPU_AGGR_LOSING)
+        # Using a normalized aggr out of 255 where 4 represents normal 1.5%
+        should_punch = random_val < base_aggr
         
-        strike_decision = jnp.logical_and(
-            jnp.logical_and(is_idle, is_ready),
-            jnp.logical_and(jnp.logical_and(in_range, can_punch_dancing), should_punch)
-        )
+        strike_decision = jnp.logical_and(can_punch, should_punch)
+        
+        # When punching, dx/dy are effectively halted by the engine (unless moving into punch state)
         
         # Combine movement and punching into a single action
         act = jnp.where(
@@ -743,7 +773,9 @@ class JaxBoxing2(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxi
         new_hit_anim_dy = new_hit_anim_dy.at[0].set(jnp.where(p2_hit, p1_kb_dy, jnp.where(new_hit_anim_timer[0] > 0, state.hit_anim_dy[0], 0)))
         new_hit_anim_dy = new_hit_anim_dy.at[1].set(jnp.where(p1_hit, p2_kb_dy, jnp.where(new_hit_anim_timer[1] > 0, state.hit_anim_dy[1], 0)))
         
-        new_dancing = jnp.where(p1_hit, self.consts.CPU_DANCING_DURATION, state.cpu_dancing_value).astype(jnp.int32)
+        # When hit, CPU dances for CPU_DANCING_DURATION frames.
+        # Since dancing active is value >= 16, setting to D + 16 dances for exactly D frames.
+        new_dancing = jnp.where(p1_hit, self.consts.CPU_DANCING_DURATION + 16, state.cpu_dancing_value).astype(jnp.int32)
         
         state = replace(state, 
                         score=new_scores,
