@@ -534,18 +534,18 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
                     "crl_metrics/Forgetting_Measure": fm_sum / past_tasks_count
                 }, step=current_global_step)
 
-        for eval_task, eval_task_train_mods, _ in seen_tasks:
-            eval_task_key = f"{eval_task}+{str(list(eval_task_train_mods))}"
-            current_perf = current_performances[eval_task_key]
-            # update max performance (FM)
-            if eval_task_key not in crl_state["max_performances"]:
-                crl_state["max_performances"][eval_task_key] = current_perf
-            else:
-                crl_state["max_performances"][eval_task_key] = max(crl_state["max_performances"][eval_task_key], current_perf)
-            
-            # lock in baseline (BWT)
-            if eval_task_key == current_task_key:
-                crl_state["a_j_j"][eval_task_key] = current_perf
+            for eval_task, eval_task_train_mods, _ in seen_tasks:
+                eval_task_key = f"{eval_task}+{str(list(eval_task_train_mods))}"
+                current_perf = current_performances[eval_task_key]
+                # update max performance (FM)
+                if eval_task_key not in crl_state["max_performances"]:
+                    crl_state["max_performances"][eval_task_key] = current_perf
+                else:
+                    crl_state["max_performances"][eval_task_key] = max(crl_state["max_performances"][eval_task_key], current_perf)
+                
+                # lock in baseline (BWT)
+                if eval_task_key == current_task_key:
+                    crl_state["a_j_j"][eval_task_key] = current_perf
             
 
     def _generate_single_final_video(mods_config, video_label, video_index=0, current_global_step=None):
