@@ -1,6 +1,6 @@
 """
-Boxing - JAXAtari Implementation 
-A GPU-accelerated, JAX-based implementation of the Atari 2600 Boxing game.
+Boxing - JAXAtari Implementation (v2)
+A high-fidelity, GPU-accelerated implementation of Atari 2600 Boxing.
 """
 
 import os
@@ -20,23 +20,77 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 
 
 # =============================================================================
+# Difficulty Presets (Exposed Global Configuration)
+# =============================================================================
+
+DEFAULT_DIFFICULTY = "normal"
+
+DIFFICULTY_PRESETS = {
+    "easy": {
+        "CPU_TRACKING_INTERVAL": 48,  # Fixed slow reaction
+        "CPU_AGGR_WINNING": 2,        
+        "CPU_AGGR_LOSING": 1,         
+        "CPU_DANCING_DURATION": 60,   
+        "CPU_AIM_NOISE_SCALE": 1.5,   
+        "PLAYER_FACE_SHRINK_Y": -1.0,
+    },
+    "normal": {
+        "CPU_TRACKING_INTERVAL": -1,  # -1 triggers authentic Atari dynamic 16/32 logic
+        "CPU_AGGR_WINNING": 4,        # Authentic ~1.5% chance per frame
+        "CPU_AGGR_LOSING": 4,         # Authentic ~1.5% chance per frame
+        "CPU_DANCING_DURATION": 40,   # Authentic 40 frames of retreat
+        "CPU_AIM_NOISE_SCALE": 1.0,   # Authentic offset ranges
+        "PLAYER_FACE_SHRINK_Y": 0.0,
+    },
+    "hard": {
+        "CPU_TRACKING_INTERVAL": 8,   # Fast reaction
+        "CPU_AGGR_WINNING": 12,       
+        "CPU_AGGR_LOSING": 8,         
+        "CPU_DANCING_DURATION": 15,   
+        "CPU_AIM_NOISE_SCALE": 0.5,   # Tighter aim
+        "PLAYER_FACE_SHRINK_Y": 0.0,
+    },
+    "impossible": {
+        "CPU_TRACKING_INTERVAL": 1,   # Instant reaction
+        "CPU_AGGR_WINNING": 255,      # Always punch when in range
+        "CPU_AGGR_LOSING": 255,       # Always punch when in range
+        "CPU_DANCING_DURATION": 0,    # Never retreats
+        "CPU_AIM_NOISE_SCALE": 0.4,   # Slightly more noise to prevent stalemates
+        "PLAYER_FACE_SHRINK_Y": 1.0,
+    }
+}
+
+
+# =============================================================================
 # Asset Config 
 # =============================================================================
 
 def _get_default_asset_config() -> tuple:
-    """
-    Returns the default declarative asset manifest for Boxing.
-    Kept immutable (tuple of dicts) to fit immutable constants defaults.
-    """
     return (
         {'name': 'background', 'type': 'background', 'file': 'background.npy'},
-        # Idle sprites
+        {'name': 'white_main_body', 'type': 'single', 'file': 'body_white/main_body.npy'},
+        {'name': 'white_top_arm_idle', 'type': 'single', 'file': 'body_white/top_arm_idle.npy'},
+        {'name': 'white_top_arm_retracted', 'type': 'single', 'file': 'body_white/top_arm_retracted.npy'},
+        {'name': 'white_top_arm_stretched', 'type': 'single', 'file': 'body_white/top_arm_stretched.npy'},
+        {'name': 'white_top_arm_extended', 'type': 'single', 'file': 'body_white/top_arm_extended.npy'},
+        {'name': 'white_bottom_arm_idle', 'type': 'single', 'file': 'body_white/bottom_arm_idle.npy'},
+        {'name': 'white_bottom_arm_retracted', 'type': 'single', 'file': 'body_white/bottom_arm_retracted.npy'},
+        {'name': 'white_bottom_arm_stretched', 'type': 'single', 'file': 'body_white/bottom_arm_stretched.npy'},
+        {'name': 'white_bottom_arm_extended', 'type': 'single', 'file': 'body_white/bottom_arm_extended.npy'},
+        {'name': 'black_main_body', 'type': 'single', 'file': 'body_black/main_body.npy'},
+        {'name': 'black_top_arm_idle', 'type': 'single', 'file': 'body_black/top_arm_idle.npy'},
+        {'name': 'black_top_arm_retracted', 'type': 'single', 'file': 'body_black/top_arm_retracted.npy'},
+        {'name': 'black_top_arm_stretched', 'type': 'single', 'file': 'body_black/top_arm_stretched.npy'},
+        {'name': 'black_top_arm_extended', 'type': 'single', 'file': 'body_black/top_arm_extended.npy'},
+        {'name': 'black_bottom_arm_idle', 'type': 'single', 'file': 'body_black/bottom_arm_idle.npy'},
+        {'name': 'black_bottom_arm_retracted', 'type': 'single', 'file': 'body_black/bottom_arm_retracted.npy'},
+        {'name': 'black_bottom_arm_stretched', 'type': 'single', 'file': 'body_black/bottom_arm_stretched.npy'},
+        {'name': 'black_bottom_arm_extended', 'type': 'single', 'file': 'body_black/bottom_arm_extended.npy'},
         {'name': 'white_idle', 'type': 'single', 'file': 'white_idle.npy'},
         {'name': 'black_idle', 'type': 'single', 'file': 'black_idle.npy'},
-        # Stunned/hit sprites (squished head)
         {'name': 'white_stunned', 'type': 'single', 'file': 'white_stunned.npy'},
         {'name': 'black_stunned', 'type': 'single', 'file': 'black_stunned.npy'},
-        # White boxer punch animation (left and right direction)
+        # Animation frames
         {'name': 'white_punch_left_0', 'type': 'single', 'file': 'white_boxing_animation_left/0.npy'},
         {'name': 'white_punch_left_1', 'type': 'single', 'file': 'white_boxing_animation_left/1.npy'},
         {'name': 'white_punch_left_2', 'type': 'single', 'file': 'white_boxing_animation_left/2.npy'},
@@ -45,7 +99,6 @@ def _get_default_asset_config() -> tuple:
         {'name': 'white_punch_right_1', 'type': 'single', 'file': 'white_boxing_animation_right/1.npy'},
         {'name': 'white_punch_right_2', 'type': 'single', 'file': 'white_boxing_animation_right/2.npy'},
         {'name': 'white_punch_right_3', 'type': 'single', 'file': 'white_boxing_animation_right/3.npy'},
-        # Black boxer punch animation (left and right direction)
         {'name': 'black_punch_left_0', 'type': 'single', 'file': 'black_boxing_animation_left/0.npy'},
         {'name': 'black_punch_left_1', 'type': 'single', 'file': 'black_boxing_animation_left/1.npy'},
         {'name': 'black_punch_left_2', 'type': 'single', 'file': 'black_boxing_animation_left/2.npy'},
@@ -54,7 +107,23 @@ def _get_default_asset_config() -> tuple:
         {'name': 'black_punch_right_1', 'type': 'single', 'file': 'black_boxing_animation_right/1.npy'},
         {'name': 'black_punch_right_2', 'type': 'single', 'file': 'black_boxing_animation_right/2.npy'},
         {'name': 'black_punch_right_3', 'type': 'single', 'file': 'black_boxing_animation_right/3.npy'},
-        # Digit sprites for HUD
+        # Arm sprites
+        {'name': 'white_arm_left_0', 'type': 'single', 'file': 'arms/white_boxing_animation_left/0.npy'},
+        {'name': 'white_arm_left_1', 'type': 'single', 'file': 'arms/white_boxing_animation_left/1.npy'},
+        {'name': 'white_arm_left_2', 'type': 'single', 'file': 'arms/white_boxing_animation_left/2.npy'},
+        {'name': 'white_arm_left_3', 'type': 'single', 'file': 'arms/white_boxing_animation_left/3.npy'},
+        {'name': 'white_arm_right_0', 'type': 'single', 'file': 'arms/white_boxing_animation_right/0.npy'},
+        {'name': 'white_arm_right_1', 'type': 'single', 'file': 'arms/white_boxing_animation_right/1.npy'},
+        {'name': 'white_arm_right_2', 'type': 'single', 'file': 'arms/white_boxing_animation_right/2.npy'},
+        {'name': 'white_arm_right_3', 'type': 'single', 'file': 'arms/white_boxing_animation_right/3.npy'},
+        {'name': 'black_arm_left_0', 'type': 'single', 'file': 'arms/black_boxing_animation_left/0.npy'},
+        {'name': 'black_arm_left_1', 'type': 'single', 'file': 'arms/black_boxing_animation_left/1.npy'},
+        {'name': 'black_arm_left_2', 'type': 'single', 'file': 'arms/black_boxing_animation_left/2.npy'},
+        {'name': 'black_arm_left_3', 'type': 'single', 'file': 'arms/black_boxing_animation_left/3.npy'},
+        {'name': 'black_arm_right_0', 'type': 'single', 'file': 'arms/black_boxing_animation_right/0.npy'},
+        {'name': 'black_arm_right_1', 'type': 'single', 'file': 'arms/black_boxing_animation_right/1.npy'},
+        {'name': 'black_arm_right_2', 'type': 'single', 'file': 'arms/black_boxing_animation_right/2.npy'},
+        {'name': 'black_arm_right_3', 'type': 'single', 'file': 'arms/black_boxing_animation_right/3.npy'},
         {'name': 'digits_white', 'type': 'digits', 'pattern': 'digits_white/{}.npy'},
         {'name': 'digits_black', 'type': 'digits', 'pattern': 'digits_black/{}.npy'},
         {'name': 'digits_time', 'type': 'digits', 'pattern': 'digits_time/{}.npy'},
@@ -66,83 +135,59 @@ def _get_default_asset_config() -> tuple:
 # =============================================================================
 
 class BoxingConstants(struct.PyTreeNode):
-    """
-    Immutable game constants derived from the Boxing Technical Specification.
-    
-    Boundaries:
-        XMIN_BOXER (30) to XMAX_BOXER (109) for horizontal movement
-        YMIN (3) to YMAX (87) for vertical movement
-    """
-    # Screen dimensions (standard Atari)
     WIDTH: int = 160
     HEIGHT: int = 210
     
-    # Boxer boundaries - based on actual ring in background sprite
-    # Ring inner area: X from ~32 to ~127, Y from ~34 to ~178
-    # Boxer sprite: 14 wide, 47 tall
-    XMIN_BOXER: int = 32   # Left edge of playable ring
-    XMAX_BOXER: int = 113  # 127 - 14 = 113 so right edge of sprite at 127
-    YMIN: int = 34         # Top edge of playable ring
-    YMAX: int = 131        # 178 - 47 = 131 so bottom edge of sprite at 178
+    # Ring boundaries
+    XMIN: int = 32
+    XMAX: int = 113
+    YMIN: int = 34
+    YMAX: int = 131
     
-    # Boxer dimensions from spec (sprite is 47x14, but game uses 48 for collision)
-    H_BOXER: int = 48  # Boxer height (3 sections × 16 pixels)
-    W_BOXER: int = 14  # Sprite width
-    SPRITE_HEIGHT: int = 47  # Actual sprite height
+    # Boxer dimensions
+    W_BOXER: int = 14
+    H_BOXER: int = 47
+    FACE_MIN_Y: int = 14
+    FACE_MAX_Y: int = 32
+    TOP_ARM_Y: int = 5
+    BOT_ARM_Y: int = 39
     
-    # Movement speed (fixed for Phase 1)
-    MOVE_SPEED: int = 1
+    # Movement
+    PLAYER_SPEED: int = 1
+    ENEMY_SPEED: int = 1
+    KNOCKBACK_DIST: int = 3
+    STUN_DURATION: int = 12
     
-    # Initial positions - centered in ring, boxers facing each other
-    LEFT_BOXER_START_X: int = 40   # Left side of ring
-    RIGHT_BOXER_START_X: int = 105 # Right side of ring
-    BOXER_START_Y: int = 82        # Centered vertically: (34 + 131) / 2 ≈ 82
+    # Hit projection (knockback) animation constants
+    HIT_ANIMATION_STEPS: int = 15   # Matches Atari RAM 92
+    KNOCKBACK_TOP_ARM_DY: int = -1  # Matches Atari dy exactly
+    KNOCKBACK_BOT_ARM_DY: int = 1   # Matches Atari dy exactly
+    KNOCKBACK_DX: int = 1           # Matches Atari dx exactly
     
-    # Timer settings (for future phases)
-    CLOCK_MINUTES_START: int = 2
-    CLOCK_SECONDS_START: int = 0
-    FRAMES_PER_SECOND: int = 60  # NTSC
+    # Punch Mechanics
+    PUNCH_COOLDOWN: int = 8   # Delay between punches
     
-    # Scoring
-    MAX_SCORE: int = 100  # KO score
+    # Game rules
+    MAX_SCORE: int = 100
+    TOTAL_TIME: int = 7200 # 2 minutes at 60Hz
     
-    # Hit detection thresholds from spec
-    HIT_DISTANCE_HORIZONTAL: int = 29  # (8 * 3) + 5 pixels
-    HIT_DISTANCE_VERTICAL: int = 48    # H_BOXER
-    STUN_DURATION: int = 15            # Frames boxer is stunned after hit
+    # Starting positions
+    P1_START_X: int = 95
+    P2_START_X: int = 50
+    START_Y: int = 82
 
-    # Precise vertical hit geometry (sprite-local rows).
-    # Hits count when the opponent nose row falls within the top or bottom fist band.
-    TOP_FIST_ROW_OFFSET: int = 11
-    BOTTOM_FIST_ROW_OFFSET: int = 29
-    FIST_ROW_HALF_HEIGHT: int = 2
-    NOSE_ROW_OFFSET: int = SPRITE_HEIGHT // 2
-    
-    # Punch animation settings (matching original assembly)
-    # Animation values range 0-72, increment by 8 for extension, -2 for retraction
-    PUNCH_EXTEND_RATE: int = 8     # +8 per frame while button held
-    PUNCH_RETRACT_RATE: int = 2    # -2 per frame when button released
-    MAX_PUNCH_EXTENSION_FAR: int = 72    # 9*8: full extension when far apart
-    MAX_PUNCH_EXTENSION_MED: int = 56    # 7*8: medium extension
-    MAX_PUNCH_EXTENSION_SHORT: int = 40  # 5*8: short extension when close
-    # Sprite frame = animation_value / 8, indexes into offset table
-    # Frames 0-5: idle/returning, 6-7: punch stage 2, 8-9: full extension
-    
-    # Colors from boxing.asm (NTSC palette approximations)
-    BACKGROUND_COLOR: Tuple[int, int, int] = (0, 100, 0)  # Dark green ring
-    LEFT_BOXER_COLOR: Tuple[int, int, int] = (236, 236, 236)  # White/light gray
-    RIGHT_BOXER_COLOR: Tuple[int, int, int] = (0, 0, 0)  # Black
-    RING_COLOR: Tuple[int, int, int] = (200, 72, 72)  # Red ring posts
-    
-    # HUD positions (approximate based on original game)
-    SCORE_Y: int = 5
-    LEFT_SCORE_X: int = 20
-    RIGHT_SCORE_X: int = 130
-    TIMER_X: int = 70
-    DIGIT_SPACING: int = 8  # Space between digits
-    
-    # Asset config (immutable default for asset overrides)
     ASSET_CONFIG: tuple = _get_default_asset_config()
+
+    # CPU Difficulty Parameters
+    DIFFICULTY_PRESET: str = "normal"
+    CPU_TRACKING_INTERVAL: int = -1
+    CPU_AGGR_WINNING: int = 4
+    CPU_AGGR_LOSING: int = 4
+    CPU_DANCING_DURATION: int = 40
+    CPU_AIM_NOISE_SCALE: float = 1.0
+    PLAYER_FACE_SHRINK_Y: float = 0.0
+    ENEMY_PEACEFUL: bool = False
+    SHOW_COLLISION_ZONE: bool = False
 
 
 # =============================================================================
@@ -151,72 +196,33 @@ class BoxingConstants(struct.PyTreeNode):
 
 @struct.dataclass
 class BoxingState:
-    """
-    Complete game state for Boxing, structured per Technical Specification.
-    """
-    # Left boxer (player 1) position
-    left_boxer_x: chex.Array
-    left_boxer_y: chex.Array
-    
-    # Right boxer (player 2 / CPU) position - placeholder for future phases
-    right_boxer_x: chex.Array
-    right_boxer_y: chex.Array
-    
-    # Scores (BCD 0-99, or 100 for KO)
-    left_boxer_score: chex.Array
-    right_boxer_score: chex.Array
-    
-    # Timer (BCD format)
-    clock_minutes: chex.Array
-    clock_seconds: chex.Array
-    frame_count: chex.Array  # Frames within current second
-    
-    # Combat state - placeholder for future phases
-    hit_boxer_stun_timer: chex.Array
-    hit_boxer_index: chex.Array  # 0 = left, 1 = right
-    punching_arm_index: chex.Array  # Index into PunchedBoxerOffsetValues (0-3)
-    
-    # Animation state - placeholder for future phases
-    boxer_animation_values: chex.Array  # 8-element array
-    
-    # Punch state (animation values 0-72, not frame indices)
-    extended_arm_maximum: chex.Array  # 2-element array: current max extension per boxer
-    left_boxer_punch_active: chex.Array  # 1 if punching, 0 if not
-    right_boxer_punch_active: chex.Array  # 1 if punching, 0 if not
-    left_boxer_animation_value: chex.Array  # Current animation value (0-72)
-    right_boxer_animation_value: chex.Array  # Current animation value (0-72)
-    left_boxer_punch_landed: chex.Array  # 1 if punch already scored this extension
-    right_boxer_punch_landed: chex.Array  # 1 if punch already scored this extension
-    left_boxer_last_arm: chex.Array  # 0 = left arm, 1 = right arm (for alternating)
-    right_boxer_last_arm: chex.Array  # 0 = left arm, 1 = right arm
-    
-    # CPU AI state
-    cpu_target_x: chex.Array  # Target X position CPU is tracking
-    cpu_target_y: chex.Array  # Target Y position CPU is tracking
-    cpu_horiz_offset: chex.Array  # Random horizontal offset (0-31)
-    cpu_vert_offset: chex.Array  # Random vertical offset (0-63)
-    cpu_dancing_value: chex.Array  # Timer controlling CPU "dancing" behavior
-    cpu_retracting: chex.Array  # 1 if CPU punch is committed to retracting back to 0
-    
-    # Game flow
-    game_state: chex.Array  # 0 = active, 0xFF = game over
-    step_counter: chex.Array
-    
-    # PRNG key for randomness
+    pos: chex.Array          # [2, 2] (P1/P2, X/Y)
+    orientation: chex.Array  # [2] (0: Right, 1: Left)
+    score: chex.Array        # [2]
+    punch_state: chex.Array  # [2] (0-4)
+    punch_arm: chex.Array    # [2] (0: left, 1: right)
+    punch_cooldown: chex.Array # [2] (frames until next punch allowed)
+    has_hit: chex.Array      # [2] (bool)
+    stun_timer: chex.Array   # [2]
+    timer: chex.Array        # int32
+    done: chex.Array         # bool
     key: chex.PRNGKey
+    cpu_target_x: chex.Array       # Target X position CPU is tracking
+    cpu_target_y: chex.Array       # Target Y position CPU is tracking
+    cpu_horiz_offset: chex.Array   # Random horizontal offset (0-31)
+    cpu_vert_offset: chex.Array    # Random vertical offset (0-63)
+    cpu_inertia: chex.Array        # RAM_15 inertia state (int32)
+    cpu_dancing_value: chex.Array  # Timer controlling CPU "dancing" behavior
+    # Hit animation state
+    hit_anim_timer: chex.Array     # [2] (int32) remaining steps
+    hit_anim_dx: chex.Array        # [2] (int32) horizontal movement per step
+    hit_anim_dy: chex.Array        # [2] (int32) vertical movement per step
 
-
-# =============================================================================
-# Observation (for agent)
-# =============================================================================
 
 @struct.dataclass
 class BoxingObservation:
     """
     Observable game state for Boxing.
-    
-    Includes both boxer positions and game state information
-    for object-centric reinforcement learning.
     """
     left_boxer: ObjectObservation
     right_boxer: ObjectObservation
@@ -226,626 +232,273 @@ class BoxingObservation:
     clock_seconds: chex.Array
 
 
-# =============================================================================
-# Info 
-# =============================================================================
-
 @struct.dataclass
 class BoxingInfo:
-    """
-    Auxiliary info returned with each step.
-    """
-    time: chex.Array  # Total frames elapsed
+    time: chex.Array
     clock_minutes: chex.Array
     clock_seconds: chex.Array
 
 
 # =============================================================================
-# Main Environment Class
+# Environment
 # =============================================================================
 
 class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, BoxingConstants]):
-    """
-    JAX-based Boxing environment.
-    Responds to directional input and respects boundary constraints.
-    """
-    
-    def __init__(self, consts: BoxingConstants | None = None):
-        consts = consts or BoxingConstants()
+    def __init__(self, consts: BoxingConstants | None = None, difficulty: str | None = None):
+        if consts is None:
+            consts = BoxingConstants()
+            if difficulty is None:
+                difficulty = DEFAULT_DIFFICULTY
+        if difficulty is not None and difficulty != "custom":
+            consts = self._apply_difficulty_preset(consts, difficulty)
         super().__init__(consts)
         self.renderer = BoxingRenderer(self.consts)
-        
-        # Full action set for Boxing (all directions + punch combinations)
         self.action_set = [
-            Action.NOOP,
-            Action.FIRE,          # Punch
-            Action.UP,
-            Action.RIGHT,
-            Action.LEFT,
-            Action.DOWN,
-            Action.UPRIGHT,
-            Action.UPLEFT,
-            Action.DOWNRIGHT,
-            Action.DOWNLEFT,
-            Action.UPFIRE,        # Move + punch combinations
-            Action.RIGHTFIRE,
-            Action.LEFTFIRE,
-            Action.DOWNFIRE,
-            Action.UPRIGHTFIRE,
-            Action.UPLEFTFIRE,
-            Action.DOWNRIGHTFIRE,
-            Action.DOWNLEFTFIRE,
+            Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN,
+            Action.UPRIGHT, Action.UPLEFT, Action.DOWNRIGHT, Action.DOWNLEFT,
+            Action.UPFIRE, Action.RIGHTFIRE, Action.LEFTFIRE, Action.DOWNFIRE,
+            Action.UPRIGHTFIRE, Action.UPLEFTFIRE, Action.DOWNRIGHTFIRE, Action.DOWNLEFTFIRE
         ]
-    
-    def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[BoxingObservation, BoxingState]:
-        """
-        Initialize game state per Technical Specification.
-        """
-        state_key, _step_key = jax.random.split(key)
-        
+
+    def _apply_difficulty_preset(self, consts: BoxingConstants, difficulty: str) -> BoxingConstants:
+        if difficulty not in DIFFICULTY_PRESETS:
+            return consts
+            
+        params = DIFFICULTY_PRESETS[difficulty]
+        return replace(
+            consts,
+            DIFFICULTY_PRESET=difficulty,
+            CPU_TRACKING_INTERVAL=params["CPU_TRACKING_INTERVAL"],
+            CPU_AGGR_WINNING=params["CPU_AGGR_WINNING"],
+            CPU_AGGR_LOSING=params["CPU_AGGR_LOSING"],
+            CPU_DANCING_DURATION=params["CPU_DANCING_DURATION"],
+            CPU_AIM_NOISE_SCALE=params.get("CPU_AIM_NOISE_SCALE", 1.0),
+            PLAYER_FACE_SHRINK_Y=params.get("PLAYER_FACE_SHRINK_Y", 0.0),
+        )
+
+    def reset(self, key: chex.PRNGKey) -> Tuple[BoxingObservation, BoxingState]:
+        key, subkey = jax.random.split(key)
+        pos = jnp.array([[self.consts.P1_START_X, self.consts.START_Y],
+                         [self.consts.P2_START_X, self.consts.START_Y]], dtype=jnp.int32)
+        orientation = jnp.array([
+            (pos[0, 0] > pos[1, 0]).astype(jnp.int32),
+            (pos[1, 0] > pos[0, 0]).astype(jnp.int32)
+        ])
         state = BoxingState(
-            # Left boxer starts at left side, centered vertically
-            left_boxer_x=jnp.array(self.consts.LEFT_BOXER_START_X, dtype=jnp.int32),
-            left_boxer_y=jnp.array(self.consts.BOXER_START_Y, dtype=jnp.int32),
-            
-            # Right boxer starts at right side (placeholder for future)
-            right_boxer_x=jnp.array(self.consts.RIGHT_BOXER_START_X, dtype=jnp.int32),
-            right_boxer_y=jnp.array(self.consts.BOXER_START_Y, dtype=jnp.int32),
-            
-            # Scores start at 0
-            left_boxer_score=jnp.array(0, dtype=jnp.int32),
-            right_boxer_score=jnp.array(0, dtype=jnp.int32),
-            
-            # Timer starts at 2:00
-            clock_minutes=jnp.array(self.consts.CLOCK_MINUTES_START, dtype=jnp.int32),
-            clock_seconds=jnp.array(self.consts.CLOCK_SECONDS_START, dtype=jnp.int32),
-            frame_count=jnp.array(0, dtype=jnp.int32),
-            
-            # Combat state (inactive)
-            hit_boxer_stun_timer=jnp.array(0, dtype=jnp.int32),
-            hit_boxer_index=jnp.array(0, dtype=jnp.int32),
-            punching_arm_index=jnp.array(0, dtype=jnp.int32),
-            
-            # Animation state (idle)
-            boxer_animation_values=jnp.zeros(8, dtype=jnp.int32),
-            
-            # Punch state (animation values 0-72)
-            extended_arm_maximum=jnp.zeros(2, dtype=jnp.int32),
-            left_boxer_punch_active=jnp.array(0, dtype=jnp.int32),
-            right_boxer_punch_active=jnp.array(0, dtype=jnp.int32),
-            left_boxer_animation_value=jnp.array(0, dtype=jnp.int32),  # 0-72 range
-            right_boxer_animation_value=jnp.array(0, dtype=jnp.int32),
-            left_boxer_punch_landed=jnp.array(0, dtype=jnp.int32),  # Debounce: 1 if scored
-            right_boxer_punch_landed=jnp.array(0, dtype=jnp.int32),
-            left_boxer_last_arm=jnp.array(0, dtype=jnp.int32),  # Alternating arms
-            right_boxer_last_arm=jnp.array(0, dtype=jnp.int32),
-            
-            # CPU AI state
-            cpu_target_x=jnp.array(self.consts.LEFT_BOXER_START_X, dtype=jnp.int32),
-            cpu_target_y=jnp.array(self.consts.BOXER_START_Y, dtype=jnp.int32),
+            pos=pos,
+            orientation=orientation,
+            score=jnp.array([0, 0], dtype=jnp.int32),
+            punch_state=jnp.array([0, 0], dtype=jnp.int32),
+            punch_arm=jnp.array([0, 0], dtype=jnp.int32),
+            punch_cooldown=jnp.array([0, 0], dtype=jnp.int32),
+            has_hit=jnp.array([False, False], dtype=jnp.bool_),
+            stun_timer=jnp.array([0, 0], dtype=jnp.int32),
+            timer=jnp.array(self.consts.TOTAL_TIME, dtype=jnp.int32),
+            done=jnp.array(False),
+            key=subkey,
+            cpu_target_x=jnp.array(self.consts.P1_START_X, dtype=jnp.int32),
+            cpu_target_y=jnp.array(self.consts.START_Y, dtype=jnp.int32),
             cpu_horiz_offset=jnp.array(0, dtype=jnp.int32),
             cpu_vert_offset=jnp.array(0, dtype=jnp.int32),
+            cpu_inertia=jnp.array(48, dtype=jnp.int32),
             cpu_dancing_value=jnp.array(0, dtype=jnp.int32),
-            cpu_retracting=jnp.array(0, dtype=jnp.int32),
-            
-            # Game active
-            game_state=jnp.array(0, dtype=jnp.int32),
-            step_counter=jnp.array(0, dtype=jnp.int32),
-            
-            key=state_key,
+            hit_anim_timer=jnp.array([0, 0], dtype=jnp.int32),
+            hit_anim_dx=jnp.array([0, 0], dtype=jnp.int32),
+            hit_anim_dy=jnp.array([0, 0], dtype=jnp.int32),
         )
-        
-        initial_obs = self._get_observation(state)
-        return initial_obs, state
-    
-    def _player_step(self, state: BoxingState, action: chex.Array) -> BoxingState:
-        """
-        Handle player movement based on joystick input.
-        Movement is blocked if stunned.
-        """
-        # Check if player is stunned (hit_boxer_index == 0 means left boxer was hit)
-        is_stunned = jnp.logical_and(
-            state.hit_boxer_stun_timer > 0,
-            state.hit_boxer_index == 0
-        )
-        
-        speed = self.consts.MOVE_SPEED
-        
-        # Decode directional input from action
-        up = jnp.isin(action, jnp.array([
-            Action.UP, Action.UPRIGHT, Action.UPLEFT,
-            Action.UPFIRE, Action.UPRIGHTFIRE, Action.UPLEFTFIRE
-        ]))
-        down = jnp.isin(action, jnp.array([
-            Action.DOWN, Action.DOWNRIGHT, Action.DOWNLEFT,
-            Action.DOWNFIRE, Action.DOWNRIGHTFIRE, Action.DOWNLEFTFIRE
-        ]))
-        left = jnp.isin(action, jnp.array([
-            Action.LEFT, Action.UPLEFT, Action.DOWNLEFT,
-            Action.LEFTFIRE, Action.UPLEFTFIRE, Action.DOWNLEFTFIRE
-        ]))
-        right = jnp.isin(action, jnp.array([
-            Action.RIGHT, Action.UPRIGHT, Action.DOWNRIGHT,
-            Action.RIGHTFIRE, Action.UPRIGHTFIRE, Action.DOWNRIGHTFIRE
-        ]))
-        
-        # Calculate movement deltas
-        dx = jnp.where(right, speed, jnp.where(left, -speed, 0))
-        dy = jnp.where(down, speed, jnp.where(up, -speed, 0))
-        
-        # Apply movement with boundary clamping (blocked if stunned)
-        new_x = jnp.where(
-            is_stunned,
-            state.left_boxer_x,
-            jnp.clip(
-                state.left_boxer_x + dx,
-                self.consts.XMIN_BOXER,
-                self.consts.XMAX_BOXER
-            )
-        )
-        new_y = jnp.where(
-            is_stunned,
-            state.left_boxer_y,
-            jnp.clip(
-                state.left_boxer_y + dy,
-                self.consts.YMIN,
-                self.consts.YMAX
-            )
-        )
-        
-        return replace(state,
-            left_boxer_x=new_x.astype(jnp.int32),
-            left_boxer_y=new_y.astype(jnp.int32),
-        )
-    
-    def _calculate_max_extension(self, horiz_dist: chex.Array, vert_dist: chex.Array) -> chex.Array:
-        """
-        Calculate maximum punch extension value based on distance between boxers.
-        
-        Per boxing.asm lines 703-729:
-        - Far apart (horiz > 26): full extension (72 = 9*8)
-        - Medium distance (horiz > 18): check vertical
-        - Close (horiz <= 18): short extension (40 = 5*8)
-        
-        Returns maximum animation value (40, 56, or 72).
-        """
-        # Far apart: full extension
-        far_apart = horiz_dist > 26  # (8 * 3) + 2
-        
-        # Medium distance  
-        medium_dist = horiz_dist > 18  # (8 * 2) + 2
-        
-        # Vertical distance thresholds
-        vert_close = vert_dist < 7   # H_KERNEL_SECTION / 2 - 1
-        vert_medium = vert_dist < 28  # (H_KERNEL_SECTION * 2) - 4
-        vert_far = vert_dist >= 47   # (H_KERNEL_SECTION * 3) - 1
-        
-        # Per assembly logic:
-        # If horiz > 26: max = 72 (full)
-        # Else if horiz > 18:
-        #   Start with 56
-        #   If vert < 7: stay at 56 (will become 40 after adjustment? Actually no increment)
-        #   If vert < 28: increment to 72
-        #   If vert < 47: stay at 56
-        #   Else: increment to 72
-        # Else (close):
-        #   Start with 40
-        #   If vert < 7: stay at 40
-        #   If vert < 28: increment to 56
-        #   Else: stay at 40
-        
-        max_extension = jnp.where(
-            far_apart,
-            self.consts.MAX_PUNCH_EXTENSION_FAR,  # 72
-            jnp.where(
-                medium_dist,
-                # Medium horizontal distance
-                jnp.where(
-                    vert_close,
-                    self.consts.MAX_PUNCH_EXTENSION_SHORT,  # 40 - vert < 7
-                    jnp.where(
-                        vert_medium,
-                        self.consts.MAX_PUNCH_EXTENSION_FAR,  # 72 - vert < 28, increment
-                        jnp.where(
-                            vert_far,
-                            self.consts.MAX_PUNCH_EXTENSION_FAR,  # 72 - vert >= 47
-                            self.consts.MAX_PUNCH_EXTENSION_MED  # 56 - middle range
-                        )
-                    )
-                ),
-                # Close horizontal distance
-                jnp.where(
-                    vert_close,
-                    self.consts.MAX_PUNCH_EXTENSION_SHORT,  # 40 - vert < 7
-                    jnp.where(
-                        vert_medium,
-                        self.consts.MAX_PUNCH_EXTENSION_MED,  # 56 - vert < 28
-                        self.consts.MAX_PUNCH_EXTENSION_SHORT  # 40 - far vertically
-                    )
-                )
-            )
-        ).astype(jnp.int32)
-        
-        return max_extension
+        return self._get_observation(state), state
 
-    def _punch_step(self, state: BoxingState, action: chex.Array) -> BoxingState:
-        """
-        Handle punch action with button-driven animation per original assembly.
+    def _get_observation(self, state: BoxingState) -> BoxingObservation:
+        total_sec = state.timer // 60
+        minutes = total_sec // 60
+        seconds = total_sec % 60
         
-        Per boxing.asm:
-        - Animation value ranges 0-72
-        - While FIRE held: value += 8 (fast extension)
-        - When FIRE released: value -= 2 (slow retraction)
-        - Value capped at extendedArmMaximum (which adjusts toward maximumPunchExtension)
-        - Hit detection triggers once when first reaching max extension
-        """
-        # Check if FIRE is pressed (any action containing FIRE)
-        fire_pressed = jnp.isin(action, jnp.array([
-            Action.FIRE,
-            Action.UPFIRE, Action.DOWNFIRE, Action.LEFTFIRE, Action.RIGHTFIRE,
+        left_boxer = ObjectObservation(
+            x=state.pos[0, 0].astype(jnp.int32),
+            y=state.pos[0, 1].astype(jnp.int32),
+            width=jnp.array(self.consts.W_BOXER),
+            height=jnp.array(self.consts.H_BOXER),
+            active=jnp.array(True),
+            visual_id=jnp.array(0),
+            state=state.punch_state[0],
+            orientation=state.orientation[0],
+        )
+        
+        right_boxer = ObjectObservation(
+            x=state.pos[1, 0].astype(jnp.int32),
+            y=state.pos[1, 1].astype(jnp.int32),
+            width=jnp.array(self.consts.W_BOXER),
+            height=jnp.array(self.consts.H_BOXER),
+            active=jnp.array(True),
+            visual_id=jnp.array(1),
+            state=state.punch_state[1],
+            orientation=state.orientation[1],
+        )
+        
+        return BoxingObservation(
+            left_boxer=left_boxer,
+            right_boxer=right_boxer,
+            score_left=state.score[0],
+            score_right=state.score[1],
+            clock_minutes=minutes.astype(jnp.int32),
+            clock_seconds=seconds.astype(jnp.int32)
+        )
+
+    def _get_info(self, state: BoxingState) -> BoxingInfo:
+        total_sec = state.timer // 60
+        return BoxingInfo(
+            time=self.consts.TOTAL_TIME - state.timer,
+            clock_minutes=(total_sec // 60).astype(jnp.int32),
+            clock_seconds=(total_sec % 60).astype(jnp.int32)
+        )
+
+    def _get_reward(self, state: BoxingState, new_state: BoxingState) -> jnp.ndarray:
+        p1_points = new_state.score[0] - state.score[0]
+        p2_points = new_state.score[1] - state.score[1]
+        return p1_points - p2_points
+
+    def _get_done(self, state: BoxingState) -> jnp.ndarray:
+        return state.done
+
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(len(self.action_set))
+
+    def observation_space(self) -> spaces.Dict:
+        c = self.consts
+        h = int(c.HEIGHT)
+        w = int(c.WIDTH)
+        screen_size = (h, w)
+        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
+        return spaces.Dict({
+            "left_boxer": single_obj,
+            "right_boxer": single_obj,
+            "score_left": spaces.Box(low=0, high=100, shape=(), dtype=jnp.int32),
+            "score_right": spaces.Box(low=0, high=100, shape=(), dtype=jnp.int32),
+            "clock_minutes": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
+            "clock_seconds": spaces.Box(low=0, high=59, shape=(), dtype=jnp.int32),
+        })
+
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(low=0, high=255, shape=(210, 160, 3), dtype=jnp.uint8)
+
+    def _move_boxer(self, state: BoxingState, idx: int, action: chex.Array):
+        pos = state.pos[idx]
+        hit_active = state.hit_anim_timer[idx] > 0
+        
+        # Decode action
+        up = jnp.isin(action, jnp.array([Action.UP, Action.UPRIGHT, Action.UPLEFT, Action.UPFIRE, Action.UPRIGHTFIRE, Action.UPLEFTFIRE]))
+        down = jnp.isin(action, jnp.array([Action.DOWN, Action.DOWNRIGHT, Action.DOWNLEFT, Action.DOWNFIRE, Action.DOWNRIGHTFIRE, Action.DOWNLEFTFIRE]))
+        left = jnp.isin(action, jnp.array([Action.LEFT, Action.UPLEFT, Action.DOWNLEFT, Action.LEFTFIRE, Action.UPLEFTFIRE, Action.DOWNLEFTFIRE]))
+        right = jnp.isin(action, jnp.array([Action.RIGHT, Action.UPRIGHT, Action.DOWNRIGHT, Action.RIGHTFIRE, Action.UPRIGHTFIRE, Action.DOWNRIGHTFIRE]))
+        
+        dx = jnp.where(right, 1, jnp.where(left, -1, 0))
+        dy = jnp.where(down, 1, jnp.where(up, -1, 0))
+        
+        # Calculate move velocities
+        speed = jnp.where(idx == 0, self.consts.PLAYER_SPEED, self.consts.ENEMY_SPEED)
+        move_dx = jnp.where(hit_active, state.hit_anim_dx[idx], dx * speed)
+        move_dy = jnp.where(hit_active, state.hit_anim_dy[idx], dy * speed)
+        
+        can_move = jnp.logical_or(hit_active, state.stun_timer[idx] == 0)
+        new_pos = pos + jnp.where(can_move, jnp.array([move_dx, move_dy]), 0)
+        
+        # Boundary clamping
+        new_pos = jnp.array([
+            jnp.clip(new_pos[0], self.consts.XMIN, self.consts.XMAX),
+            jnp.clip(new_pos[1], self.consts.YMIN, self.consts.YMAX)
+        ])
+        return new_pos
+
+    def _update_punch(self, state: BoxingState, action, idx, opponent_idx):
+        # Explicitly convert action to int for comparison
+        action_int = jnp.asarray(action, dtype=jnp.int32)
+        fire_actions = jnp.array([
+            Action.FIRE, Action.UPFIRE, Action.DOWNFIRE, Action.LEFTFIRE, Action.RIGHTFIRE,
             Action.UPLEFTFIRE, Action.UPRIGHTFIRE, Action.DOWNLEFTFIRE, Action.DOWNRIGHTFIRE
-        ]))
+        ], dtype=jnp.int32)
+        fire = jnp.any(action_int == fire_actions)
+        fire = jnp.where(jnp.logical_and(idx == 1, self.consts.ENEMY_PEACEFUL), False, fire)
         
-        # Calculate maximum punch extension based on distance to opponent
-        horiz_dist = jnp.abs(state.left_boxer_x - state.right_boxer_x)
-        vert_dist = jnp.abs(state.left_boxer_y - state.right_boxer_y)
-        max_extension = self._calculate_max_extension(horiz_dist, vert_dist)
+        curr_state = state.punch_state[idx]
+        curr_cooldown = state.punch_cooldown[idx]
+        is_stunned = jnp.logical_or(state.stun_timer[idx] > 0, state.hit_anim_timer[idx] > 0)
         
-        # Get current extended arm maximum (per-boxer cap that adjusts over time)
-        # For simplicity, we'll use the calculated max_extension directly
-        # (original uses gradual adjustment, but this captures the key behavior)
-        current_max = max_extension
+        # New cooldown (always decrement if > 0)
+        dec_cooldown = jnp.maximum(curr_cooldown - 1, 0)
         
-        # Calculate new animation value based on button state
-        current_anim = state.left_boxer_animation_value
+        # Determine target arm based on Y relative position:
+        # Punch with top most arm (0) if opponent is above (opponent Y < player Y),
+        # bottom arm (1) in the contrary case.
+        target_arm = jnp.where(state.pos[opponent_idx, 1] < state.pos[idx, 1], 0, 1)
         
-        new_anim = jnp.where(
-            fire_pressed,
-            # Button held: extend (+8 per frame, capped at max)
-            jnp.minimum(current_anim + self.consts.PUNCH_EXTEND_RATE, current_max),
-            # Button released: retract (-2 per frame, min 0)
-            jnp.maximum(current_anim - self.consts.PUNCH_RETRACT_RATE, 0)
-        ).astype(jnp.int32)
-        
-        # Punch is active when animation value > 0
-        punch_active = jnp.where(new_anim > 0, 1, 0).astype(jnp.int32)
-        
-        # Detect when punch FIRST reaches max extension (for hit detection trigger)
-        # This is when: current < max AND new >= max (transition to max)
-        just_reached_max = jnp.logical_and(
-            current_anim < current_max,
-            new_anim >= current_max
-        )
-        
-        # Reset punch_landed when animation goes to 0 (allows new punch cycle)
-        animation_reset = new_anim == 0
-        new_punch_landed = jnp.where(
-            animation_reset,
-            0,  # Reset debounce when fully retracted
-            state.left_boxer_punch_landed
-        ).astype(jnp.int32)
-        
-        # Toggle arm when starting a new punch (transition from 0 to > 0)
-        starting_punch = jnp.logical_and(current_anim == 0, new_anim > 0)
-        new_last_arm = jnp.where(
-            starting_punch,
-            1 - state.left_boxer_last_arm,  # Toggle: 0 -> 1 or 1 -> 0
-            state.left_boxer_last_arm
-        ).astype(jnp.int32)
-        
-        # Store whether we just reached max (for hit detection in next step)
-        # We'll use extended_arm_maximum[0] to track this
-        new_extended_arm_max = state.extended_arm_maximum.at[0].set(
-            jnp.where(just_reached_max, 1, 0).astype(jnp.int32)
-        )
-        
-        return replace(state,
-            left_boxer_punch_active=punch_active,
-            left_boxer_animation_value=new_anim,
-            left_boxer_punch_landed=new_punch_landed,
-            left_boxer_last_arm=new_last_arm,
-            extended_arm_maximum=new_extended_arm_max,
-        )
-    
-    def _hit_detection_step(self, state: BoxingState) -> BoxingState:
-        """
-        Check if player's punch hits the opponent.
-        
-        Per boxing.asm (CheckToScoreBoxerForPunch):
-        - Hit only triggers ONCE when punch FIRST reaches max extension
-        - Horizontal distance <= (8*3)+5 = 29 pixels
-        - Vertical distance < H_BOXER (48 pixels)
-        - Vertical alignment requires top or bottom fist band to overlap nose row
-        - Opponent must not already be stunned
-        - Punch must not have already landed this cycle (debounce)
-        
-        Key: Hit detection uses the just_reached_max flag from _punch_step.
-        """
-        # Calculate distances
-        horiz_dist = jnp.abs(state.left_boxer_x - state.right_boxer_x)
-        vert_dist = jnp.abs(state.left_boxer_y - state.right_boxer_y)
-        
-        # Check horizontal range: must be within (8*3)+5 = 29 pixels
-        in_horiz_range = horiz_dist <= self.consts.HIT_DISTANCE_HORIZONTAL
-        
-        # Check vertical range: must be less than H_BOXER (48 pixels)
-        in_vert_range = vert_dist < self.consts.HIT_DISTANCE_VERTICAL
-        
-        # Vertical alignment check: hit only when opponent nose row overlaps
-        # the top or bottom fist vertical band.
-        player_top_fist_y = state.left_boxer_y + self.consts.TOP_FIST_ROW_OFFSET
-        player_bottom_fist_y = state.left_boxer_y + self.consts.BOTTOM_FIST_ROW_OFFSET
-        opponent_nose_y = state.right_boxer_y + self.consts.NOSE_ROW_OFFSET
-        top_fist_hits_nose = jnp.logical_and(
-            opponent_nose_y >= (player_top_fist_y - self.consts.FIST_ROW_HALF_HEIGHT),
-            opponent_nose_y <= (player_top_fist_y + self.consts.FIST_ROW_HALF_HEIGHT),
-        )
-        bottom_fist_hits_nose = jnp.logical_and(
-            opponent_nose_y >= (player_bottom_fist_y - self.consts.FIST_ROW_HALF_HEIGHT),
-            opponent_nose_y <= (player_bottom_fist_y + self.consts.FIST_ROW_HALF_HEIGHT),
-        )
-        fist_hits_nose = jnp.logical_or(top_fist_hits_nose, bottom_fist_hits_nose)
-        
-        # Hit only triggers on the frame when punch FIRST reaches max extension
-        # extended_arm_maximum[0] is set to 1 by _punch_step when this happens
-        just_reached_max = state.extended_arm_maximum[0] == 1
-        
-        punch_active = state.left_boxer_punch_active > 0
-        
-        # Check debounce - only score if this punch hasn't already landed
-        punch_not_landed_yet = state.left_boxer_punch_landed == 0
-        
-        # Per original assembly: hit requires:
-        # 1. Punch active and just reached max extension
-        # 2. Horizontal distance <= 29 (in punching range)
-        # 3. Vertical distance < 48 (H_BOXER)
-        # 4. Either top or bottom fist band overlaps opponent nose row
-        # 5. Haven't already scored on this punch
-        hit_landed = jnp.logical_and(
-            jnp.logical_and(punch_active, just_reached_max),
-            jnp.logical_and(
-                jnp.logical_and(in_horiz_range, in_vert_range),
-                jnp.logical_and(fist_hits_nose, punch_not_landed_yet)
-            )
-        )
-        
-        # Only register hit if opponent is not already stunned
-        opponent_not_stunned = jnp.logical_or(
-            state.hit_boxer_stun_timer == 0,
-            state.hit_boxer_index != 1  # 1 = right boxer
-        )
-        valid_hit = jnp.logical_and(hit_landed, opponent_not_stunned)
-        
-        # Set debounce flag if hit landed (prevents multiple hits per punch)
-        new_punch_landed = jnp.where(
-            valid_hit,
-            1,  # Mark as landed
-            state.left_boxer_punch_landed
-        ).astype(jnp.int32)
-        
-        # Increment score if hit (1 point per hit)
-        new_score = jnp.where(
-            valid_hit,
-            state.left_boxer_score + 1,
-            state.left_boxer_score
-        ).astype(jnp.int32)
-        
-        # Set stun timer for opponent (right boxer = index 1)
-        new_stun_timer = jnp.where(
-            valid_hit,
-            self.consts.STUN_DURATION,
-            state.hit_boxer_stun_timer
-        ).astype(jnp.int32)
-        
-        new_hit_index = jnp.where(
-            valid_hit,
-            1,  # Right boxer got hit
-            state.hit_boxer_index
-        ).astype(jnp.int32)
-        
-        # Set punching arm index (left boxer's last_arm: 0 or 1)
-        new_punching_arm = jnp.where(
-            valid_hit,
-            state.left_boxer_last_arm,
-            state.punching_arm_index
-        ).astype(jnp.int32)
-        
-        # Set dancing value when player scores (affects CPU behavior)
-        new_dancing = jnp.where(
-            valid_hit,
-            57,  # Per spec: cpuBoxerDancingValue = 57
-            state.cpu_dancing_value
-        ).astype(jnp.int32)
-        
-        return replace(state,
-            left_boxer_score=new_score,
-            hit_boxer_stun_timer=new_stun_timer,
-            hit_boxer_index=new_hit_index,
-            left_boxer_punch_landed=new_punch_landed,
-            punching_arm_index=new_punching_arm,
-            cpu_dancing_value=new_dancing,
-        )
-    
-    def _timer_step(self, state: BoxingState) -> BoxingState:
-        """
-        Decrement the game clock.
-        
-        Clock counts down from 2:00 to 0:00 at 60 frames per second.
-        Game ends when timer reaches 0:00.
-        """
-        # Increment frame count
-        new_frame_count = state.frame_count + 1
-        
-        # Check if a second has passed (60 frames = 1 second for NTSC)
-        second_passed = new_frame_count >= self.consts.FRAMES_PER_SECOND
-        
-        # Reset frame count if second passed
-        new_frame_count = jnp.where(second_passed, 0, new_frame_count)
-        
-        # Decrement seconds if a second passed
-        new_seconds = jnp.where(
-            second_passed,
-            state.clock_seconds - 1,
-            state.clock_seconds
-        )
-        
-        # Handle seconds underflow (59 -> 0 -> wrap to 59, decrement minute)
-        seconds_underflow = jnp.logical_and(second_passed, state.clock_seconds == 0)
-        new_seconds = jnp.where(seconds_underflow, 59, new_seconds)
-        
-        # Decrement minutes on seconds underflow
-        new_minutes = jnp.where(
-            seconds_underflow,
-            state.clock_minutes - 1,
-            state.clock_minutes
-        )
-        
-        # Check for timer expired (would go below 0:00)
-        timer_expired = jnp.logical_and(
-            seconds_underflow,
-            state.clock_minutes == 0
-        )
-        
-        # Set game over if timer expired
-        new_game_state = jnp.where(
-            timer_expired,
-            0xFF,  # Game over
-            state.game_state
-        ).astype(jnp.int32)
-        
-        # Clamp values to valid ranges
-        new_minutes = jnp.maximum(new_minutes, 0).astype(jnp.int32)
-        new_seconds = jnp.clip(new_seconds, 0, 59).astype(jnp.int32)
-        
-        return replace(state,
-            frame_count=new_frame_count.astype(jnp.int32),
-            clock_seconds=new_seconds,
-            clock_minutes=new_minutes,
-            game_state=new_game_state,
-        )
-    
-    def _collision_step(self, state: BoxingState, prev_left_x: chex.Array, prev_left_y: chex.Array,
-                        prev_right_x: chex.Array, prev_right_y: chex.Array) -> BoxingState:
-        """
-        Check for boxer-boxer collision and revert positions if overlapping.
-        
-        Per spec: Boxers cannot overlap. If collision detected, revert to previous position.
-        Collision box: W_BOXER (14) wide, H_BOXER (48) tall
-        """
-        # Calculate current distances
-        horiz_dist = jnp.abs(state.left_boxer_x - state.right_boxer_x)
-        vert_dist = jnp.abs(state.left_boxer_y - state.right_boxer_y)
-        
-        # Check if boxers are overlapping
-        horiz_overlap = horiz_dist < self.consts.W_BOXER
-        vert_overlap = vert_dist < self.consts.H_BOXER
-        collision = jnp.logical_and(horiz_overlap, vert_overlap)
-        
-        # Revert both boxers to previous positions on collision
-        new_left_x = jnp.where(collision, prev_left_x, state.left_boxer_x).astype(jnp.int32)
-        new_left_y = jnp.where(collision, prev_left_y, state.left_boxer_y).astype(jnp.int32)
-        new_right_x = jnp.where(collision, prev_right_x, state.right_boxer_x).astype(jnp.int32)
-        new_right_y = jnp.where(collision, prev_right_y, state.right_boxer_y).astype(jnp.int32)
-        
-        return replace(state,
-            left_boxer_x=new_left_x,
-            left_boxer_y=new_left_y,
-            right_boxer_x=new_right_x,
-            right_boxer_y=new_right_y,
-        )
-    
-    def _knockback_step(self, state: BoxingState) -> BoxingState:
-        """
-        Apply knockback to the stunned boxer per boxing.asm PunchedBoxerOffsetValues.
+        def next_state_logic():
+            # If idle and ready
+            start_punch = jnp.logical_and(curr_state == 0, jnp.logical_and(dec_cooldown == 0, fire))
+            
+            # Progress punch state
+            max_state = 17
+            holding_extension = jnp.logical_and(curr_state == 12, fire)
+            progressing = jnp.logical_and(jnp.logical_and(curr_state > 0, curr_state < max_state), ~holding_extension)
+            finishing = curr_state == max_state
+            
+            new_s = jnp.where(start_punch, 1, 
+                             jnp.where(holding_extension, 12,
+                                       jnp.where(progressing, curr_state + 1, 0)))
+            
+            # Use the target arm computed based on the opponent's relative vertical position
+            new_a = jnp.where(start_punch, target_arm, state.punch_arm[idx])
+            
+            new_h = jnp.where(start_punch, False, state.has_hit[idx])
+            
+            new_c = jnp.where(finishing, self.consts.PUNCH_COOLDOWN, dec_cooldown)
+            
+            return new_s, new_a, new_h, new_c
 
-        Offset table (interleaved vert, horiz pairs indexed by punchingArmIndex):
-            [+2, +1, -2, +1, +2, -1, -2, -1]
-
-        Horizontal is further negated when boxerIndexFacingRight >= 1
-        (i.e. the right boxer faces right, meaning left_x > right_x).
-        """
-        is_stunned = state.hit_boxer_stun_timer > 0
-        left_is_hit  = state.hit_boxer_index == 0
-        right_is_hit = state.hit_boxer_index == 1
-
-        # PunchedBoxerOffsetValues from boxing.asm (4 pairs of vert, horiz)
-        vert_offsets  = jnp.array([ 2, -2,  2, -2], dtype=jnp.int32)
-        horiz_offsets = jnp.array([ 1,  1, -1, -1], dtype=jnp.int32)
-
-        arm_idx = jnp.clip(state.punching_arm_index, 0, 3)
-        vert_offset  = vert_offsets[arm_idx]
-        horiz_offset = horiz_offsets[arm_idx]
-
-        # Per assembly: negate horizontal when boxerIndexFacingRight >= 1
-        # boxerIndexFacingRight == 1 means the right boxer faces right,
-        # which is when left_boxer_x > right_boxer_x.
-        right_faces_right = state.left_boxer_x > state.right_boxer_x
-        horiz_offset = jnp.where(right_faces_right, -horiz_offset, horiz_offset)
-
-        # Apply to left boxer if it was hit
-        new_left_x = jnp.where(
-            jnp.logical_and(is_stunned, left_is_hit),
-            jnp.clip(state.left_boxer_x + horiz_offset, self.consts.XMIN_BOXER, self.consts.XMAX_BOXER),
-            state.left_boxer_x
-        ).astype(jnp.int32)
-        new_left_y = jnp.where(
-            jnp.logical_and(is_stunned, left_is_hit),
-            jnp.clip(state.left_boxer_y + vert_offset, self.consts.YMIN, self.consts.YMAX),
-            state.left_boxer_y
-        ).astype(jnp.int32)
-
-        # Apply to right boxer if it was hit
-        new_right_x = jnp.where(
-            jnp.logical_and(is_stunned, right_is_hit),
-            jnp.clip(state.right_boxer_x + horiz_offset, self.consts.XMIN_BOXER, self.consts.XMAX_BOXER),
-            state.right_boxer_x
-        ).astype(jnp.int32)
-        new_right_y = jnp.where(
-            jnp.logical_and(is_stunned, right_is_hit),
-            jnp.clip(state.right_boxer_y + vert_offset, self.consts.YMIN, self.consts.YMAX),
-            state.right_boxer_y
-        ).astype(jnp.int32)
-
-        return replace(state,
-            left_boxer_x=new_left_x,
-            left_boxer_y=new_left_y,
-            right_boxer_x=new_right_x,
-            right_boxer_y=new_right_y,
-        )
-
-    def _cpu_movement_step(self, state: BoxingState) -> BoxingState:
-        """
-        CPU AI movement logic based on Technical Specification.
+        # If stunned, reset state but keep decrementing cooldown
+        new_s, new_a, new_h, new_c = jax.lax.cond(is_stunned, 
+                                                 lambda: (0, state.punch_arm[idx], False, dec_cooldown), 
+                                                 next_state_logic)
         
-        The CPU tracks the player with some randomized offset and moves toward them.
-        Has "dancing" behavior after scoring or being hit.
-        """
-        # Check if CPU is stunned (hit_boxer_index == 1 means right/CPU boxer was hit)
-        is_stunned = jnp.logical_and(
-            state.hit_boxer_stun_timer > 0,
-            state.hit_boxer_index == 1
-        )
-        
+        return new_s, new_a, new_h, new_c
+
+    def _update_cpu_state(self, state: BoxingState) -> BoxingState:
         # Split key for random decisions
         key, subkey1, subkey2, subkey3 = jax.random.split(state.key, 4)
         
-        # Periodically update target position (every ~8 frames based on random)
-        random_val = jax.random.randint(subkey1, (), 0, 256)
-        update_target = (random_val & 0x07) == 0  # ~1/8 chance per frame
+        # Periodically update target position based on frame timer
+        # First minute = 16, Second minute = 32 (if authentic)
+        game_seconds = state.timer // 60
+        is_first_minute = game_seconds > 60
+        authentic_interval = jnp.where(is_first_minute, 16, 32)
+        update_interval = jnp.where(self.consts.CPU_TRACKING_INTERVAL == -1, authentic_interval, self.consts.CPU_TRACKING_INTERVAL)
+        
+        # Frame counter (0-255)
+        frame_counter = (self.consts.TOTAL_TIME - state.timer) % 256
+        
+        # Target updates when frame_counter % interval == 1
+        update_target = jnp.logical_or(update_interval == 1, (frame_counter % update_interval) == 1)
         
         # Generate new random offsets
-        new_horiz_offset = jax.random.randint(subkey2, (), 0, 32)  # 0-31
-        new_vert_offset = jax.random.randint(subkey3, (), 0, 64)   # 0-63
+        # Base horizontal noise is 0-31 (shifted to -16 to +15 later)
+        base_h_noise = jax.random.randint(subkey2, (), 0, 32).astype(jnp.float32)
+        h_noise = (base_h_noise - 16.0) * self.consts.CPU_AIM_NOISE_SCALE
+        
+        # Base vertical noise is 0-63 (shifted to -32 to +31 later)
+        base_v_noise = jax.random.randint(subkey3, (), 0, 64).astype(jnp.float32)
+        v_noise = (base_v_noise - 32.0) * self.consts.CPU_AIM_NOISE_SCALE
+        
+        new_horiz_offset = (h_noise + 16.0).astype(jnp.int32)
+        new_vert_offset = (v_noise + 32.0).astype(jnp.int32)
         
         # Update target to track player position
         cpu_target_x = jnp.where(
             update_target,
-            state.left_boxer_x,
+            state.pos[0, 0],
             state.cpu_target_x
         ).astype(jnp.int32)
         cpu_target_y = jnp.where(
             update_target,
-            state.left_boxer_y,
+            state.pos[0, 1],
             state.cpu_target_y
         ).astype(jnp.int32)
         cpu_horiz_offset = jnp.where(
@@ -859,492 +512,287 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             state.cpu_vert_offset
         ).astype(jnp.int32)
         
-        # Calculate target position with offset
-        # CPU tries to stay at a fighting distance from player
-        target_x = cpu_target_x + 20 + (cpu_horiz_offset - 16)  # Offset from player
-        target_y = cpu_target_y + (cpu_vert_offset - 32)
+        # Calculate inertia
+        cpu_x = state.pos[1, 0]
+        sign_x = jnp.where(cpu_x >= state.pos[0, 0], 1, -1)
+        computed_target_x = cpu_target_x + sign_x * (20 + cpu_horiz_offset - 16)
         
-        # Clamp target to ring boundaries
-        target_x = jnp.clip(target_x, self.consts.XMIN_BOXER, self.consts.XMAX_BOXER)
-        target_y = jnp.clip(target_y, self.consts.YMIN, self.consts.YMAX)
+        dist_x = jnp.abs(cpu_x - computed_target_x)
         
-        # Determine movement direction
-        move_right = target_x > state.right_boxer_x
-        move_left = target_x < state.right_boxer_x
-        move_down = target_y > state.right_boxer_y
-        move_up = target_y < state.right_boxer_y
+        is_moving_right = jnp.isin(state.cpu_inertia, jnp.array([80, 96, 112]))
+        is_moving_left = jnp.isin(state.cpu_inertia, jnp.array([144, 160, 176]))
+        is_horiz_idle = jnp.logical_not(jnp.logical_or(is_moving_right, is_moving_left))
         
-        # "Dancing" behavior - reverse horizontal movement when dancing and not hit
-        dancing = state.cpu_dancing_value >= 16
-        cpu_not_hit = state.hit_boxer_index != 1
-        reverse_horiz = jnp.logical_and(dancing, cpu_not_hit)
+        new_inertia = state.cpu_inertia
         
-        # Apply reversal
-        move_right_final = jnp.where(reverse_horiz, move_left, move_right)
-        move_left_final = jnp.where(reverse_horiz, move_right, move_left)
+        # If already moving right, turn left only if overshoot by 8
+        turn_left = jnp.logical_and(jnp.logical_and(cpu_x > computed_target_x, is_moving_right), dist_x >= 8)
+        # If already moving left, turn right only if overshoot by 8
+        turn_right = jnp.logical_and(jnp.logical_and(cpu_x < computed_target_x, is_moving_left), dist_x >= 8)
         
-        # Calculate deltas
-        dx = jnp.where(move_right_final, 1, jnp.where(move_left_final, -1, 0))
-        dy = jnp.where(move_down, 1, jnp.where(move_up, -1, 0))
+        # If idle horizontally, move immediately towards target
+        start_left = jnp.logical_and(is_horiz_idle, cpu_x > computed_target_x)
+        start_right = jnp.logical_and(is_horiz_idle, cpu_x < computed_target_x)
         
-        # Apply movement (blocked if stunned)
-        new_x = jnp.where(
-            is_stunned,
-            state.right_boxer_x,
-            jnp.clip(
-                state.right_boxer_x + dx,
-                self.consts.XMIN_BOXER,
-                self.consts.XMAX_BOXER
-            )
-        ).astype(jnp.int32)
-        new_y = jnp.where(
-            is_stunned,
-            state.right_boxer_y,
-            jnp.clip(
-                state.right_boxer_y + dy,
-                self.consts.YMIN,
-                self.consts.YMAX
-            )
-        ).astype(jnp.int32)
+        go_left = jnp.logical_or(turn_left, start_left)
+        go_right = jnp.logical_or(turn_right, start_right)
         
-        # Decrement dancing value
+        new_inertia = jnp.where(go_left, 144, new_inertia)
+        new_inertia = jnp.where(go_right, 80, new_inertia)
+        
+        # Decrement dancing value (moves towards 0)
         new_dancing = jnp.maximum(state.cpu_dancing_value - 1, 0).astype(jnp.int32)
         
         return replace(state,
-            right_boxer_x=new_x,
-            right_boxer_y=new_y,
             cpu_target_x=cpu_target_x,
             cpu_target_y=cpu_target_y,
             cpu_horiz_offset=cpu_horiz_offset,
             cpu_vert_offset=cpu_vert_offset,
+            cpu_inertia=new_inertia,
             cpu_dancing_value=new_dancing,
-            key=key,
+            key=key
         )
-    
-    def _cpu_punch_step(self, state: BoxingState) -> BoxingState:
-        """
-        CPU punch decision and animation logic (combined for CPU).
+
+    def _cpu_logic(self, state: BoxingState):
+        p1_pos = state.pos[0]
+        p2_pos = state.pos[1]
         
-        CPU decides when to START a punch based on range and randomness.
-        Once started, CPU holds fire until reaching max extension, then releases.
-        Uses same animation value system as player (+8/-2).
-        """
-        # Calculate distances for punch decision
-        horiz_dist = jnp.abs(state.left_boxer_x - state.right_boxer_x)
-        vert_dist = jnp.abs(state.left_boxer_y - state.right_boxer_y)
+        # 1. Evaluate Trajectory
+        computed_target_y = state.cpu_target_y + state.cpu_vert_offset - 32
         
-        # Get current animation value and max extension
-        current_anim = state.right_boxer_animation_value
-        max_extension = self._calculate_max_extension(horiz_dist, vert_dist)
+        dy = jnp.where(p2_pos[1] > computed_target_y, -1, jnp.where(p2_pos[1] < computed_target_y, 1, 0))
+        dx = jnp.where(jnp.isin(state.cpu_inertia, jnp.array([80, 96, 112])), 1, 
+               jnp.where(jnp.isin(state.cpu_inertia, jnp.array([144, 160, 176])), -1, 0))
+               
+        # 2. Dancing Modifier
+        dancing = state.cpu_dancing_value >= 16
+        dx = jnp.where(dancing, -dx, dx)
         
-        # Check if in punching range
-        in_horiz_range = horiz_dist <= self.consts.HIT_DISTANCE_HORIZONTAL + 10
-        in_vert_range = vert_dist < self.consts.H_BOXER
-        in_range = jnp.logical_and(in_horiz_range, in_vert_range)
+        # 3. Strike Decision (from Bounding Box + Random LFSR representation)
+        horiz_dist = jnp.abs(p1_pos[0] - p2_pos[0])
+        vert_dist = jnp.abs(p1_pos[1] - p2_pos[1])
         
-        # Random punch decision (only matters when NOT already punching)
-        key, subkey = jax.random.split(state.key)
+        in_strike_zone = jnp.logical_and(horiz_dist <= 47, vert_dist <= 40)
+        is_stunned = state.stun_timer[1] > 0
+        is_punching = state.punch_state[1] > 0
+        
+        can_punch = jnp.logical_and(in_strike_zone, jnp.logical_and(~is_stunned, jnp.logical_and(~dancing, ~is_punching)))
+        
+        # Splitting PRNGKey for the 1.5% chance per frame.
+        # We simulate the difficulty presets by scaling this probability.
+        # Normal = ~1.5% chance. 
+        # (256 * 0.015 = ~4)
+        _, subkey = jax.random.split(state.key)
         random_val = jax.random.randint(subkey, (), 0, 256)
         
-        # More aggressive when losing, less when winning
-        score_diff = state.right_boxer_score - state.left_boxer_score
-        aggressiveness = jnp.where(score_diff >= 0, 40, 20)
+        score_diff = state.score[1] - state.score[0]
+        base_aggr = jnp.where(score_diff >= 0, self.consts.CPU_AGGR_WINNING, self.consts.CPU_AGGR_LOSING)
+        # Using a normalized aggr out of 255 where 4 represents normal 1.5%
+        should_punch = random_val < base_aggr
         
-        # Random threshold check for STARTING a punch
-        should_start_punch = random_val < aggressiveness
+        strike_decision = jnp.logical_and(can_punch, should_punch)
         
-        # Don't start a punch while dancing (unless CPU was hit)
-        dancing = state.cpu_dancing_value > 0
-        cpu_was_hit = state.hit_boxer_index == 1
-        can_punch_dancing = jnp.logical_or(~dancing, cpu_was_hit)
+        # When punching, dx/dy are effectively halted by the engine (unless moving into punch state)
         
-        # Determine if CPU should "hold fire":
-        # 1. If already punching (anim > 0) and hasn't reached max yet, keep holding
-        # 2. If already punching AND retracting, keep retracting to avoid oscillation
-        # 3. If not punching, start if in range and random says so
-        already_punching = current_anim > 0
-        reached_max = current_anim >= max_extension
-        is_retracting = state.cpu_retracting > 0
-        
-        cpu_fire_held = jnp.where(
-            already_punching,
-            # Already punching: keep holding only if not yet at max AND not committed to retracting
-            jnp.logical_and(~reached_max, ~is_retracting),
-            # Not punching: decide whether to start
-            jnp.logical_and(
-                jnp.logical_and(in_range, should_start_punch),
-                can_punch_dancing
+        # Combine movement and punching into a single action
+        act = jnp.where(
+            strike_decision,
+            jnp.where(dy == -1,
+                jnp.where(dx == 1, Action.UPRIGHTFIRE, jnp.where(dx == -1, Action.UPLEFTFIRE, Action.UPFIRE)),
+                jnp.where(dy == 1,
+                    jnp.where(dx == 1, Action.DOWNRIGHTFIRE, jnp.where(dx == -1, Action.DOWNLEFTFIRE, Action.DOWNFIRE)),
+                    jnp.where(dx == 1, Action.RIGHTFIRE, jnp.where(dx == -1, Action.LEFTFIRE, Action.FIRE))
+                )
+            ),
+            jnp.where(dy == -1,
+                jnp.where(dx == 1, Action.UPRIGHT, jnp.where(dx == -1, Action.UPLEFT, Action.UP)),
+                jnp.where(dy == 1,
+                    jnp.where(dx == 1, Action.DOWNRIGHT, jnp.where(dx == -1, Action.DOWNLEFT, Action.DOWN)),
+                    jnp.where(dx == 1, Action.RIGHT, jnp.where(dx == -1, Action.LEFT, Action.NOOP))
+                )
             )
         )
-        
-        # Calculate new animation value based on CPU decision
-        new_anim = jnp.where(
-            cpu_fire_held,
-            # "Fire held": extend (+8 per frame, capped at max)
-            jnp.minimum(current_anim + self.consts.PUNCH_EXTEND_RATE, max_extension),
-            # "Fire released": retract (-2 per frame, min 0)
-            jnp.maximum(current_anim - self.consts.PUNCH_RETRACT_RATE, 0)
-        ).astype(jnp.int32)
-        
-        # Punch is active when animation value > 0
-        punch_active = jnp.where(new_anim > 0, 1, 0).astype(jnp.int32)
-        
-        # Detect when punch FIRST reaches max extension
-        just_reached_max = jnp.logical_and(
-            current_anim < max_extension,
-            new_anim >= max_extension
-        )
-        
-        # Reset punch_landed when animation goes to 0
-        animation_reset = new_anim == 0
-        new_punch_landed = jnp.where(
-            animation_reset,
-            0,
-            state.right_boxer_punch_landed
-        ).astype(jnp.int32)
-        
-        # Toggle arm when starting a new punch
-        starting_punch = jnp.logical_and(current_anim == 0, new_anim > 0)
-        new_last_arm = jnp.where(
-            starting_punch,
-            1 - state.right_boxer_last_arm,
-            state.right_boxer_last_arm
-        ).astype(jnp.int32)
-        
-        # Store whether we just reached max (for hit detection)
-        new_extended_arm_max = state.extended_arm_maximum.at[1].set(
-            jnp.where(just_reached_max, 1, 0).astype(jnp.int32)
-        )
-        
-        # Update retracting flag:
-        # - Set to 1 when punch first reaches max extension
-        # - Clear to 0 when animation fully resets to 0
-        new_retracting = jnp.where(
-            animation_reset,
-            0,
-            jnp.where(just_reached_max, 1, state.cpu_retracting)
-        ).astype(jnp.int32)
-        
-        return replace(state,
-            right_boxer_punch_active=punch_active,
-            right_boxer_animation_value=new_anim,
-            right_boxer_punch_landed=new_punch_landed,
-            right_boxer_last_arm=new_last_arm,
-            extended_arm_maximum=new_extended_arm_max,
-            cpu_retracting=new_retracting,
-            key=key,
-        )
-    
-    def _cpu_hit_detection_step(self, state: BoxingState) -> BoxingState:
-        """
-        Check if CPU's punch hits the player.
-        
-        Per boxing.asm (CheckToScoreBoxerForPunch):
-        - Hit only triggers ONCE when punch FIRST reaches max extension
-        - Horizontal distance <= (8*3)+5 = 29 pixels
-        - Vertical distance < H_BOXER (48 pixels)
-        - Vertical alignment requires top or bottom fist band to overlap nose row
-        - Opponent must not already be stunned
-        """
-        # Calculate distances
-        horiz_dist = jnp.abs(state.left_boxer_x - state.right_boxer_x)
-        vert_dist = jnp.abs(state.left_boxer_y - state.right_boxer_y)
-        
-        # Check horizontal range
-        in_horiz_range = horiz_dist <= self.consts.HIT_DISTANCE_HORIZONTAL
-        
-        # Check vertical range
-        in_vert_range = vert_dist < self.consts.HIT_DISTANCE_VERTICAL
-        
-        # Vertical alignment check: hit only when opponent nose row overlaps
-        # the top or bottom fist vertical band.
-        cpu_top_fist_y = state.right_boxer_y + self.consts.TOP_FIST_ROW_OFFSET
-        cpu_bottom_fist_y = state.right_boxer_y + self.consts.BOTTOM_FIST_ROW_OFFSET
-        player_nose_y = state.left_boxer_y + self.consts.NOSE_ROW_OFFSET
-        top_fist_hits_nose = jnp.logical_and(
-            player_nose_y >= (cpu_top_fist_y - self.consts.FIST_ROW_HALF_HEIGHT),
-            player_nose_y <= (cpu_top_fist_y + self.consts.FIST_ROW_HALF_HEIGHT),
-        )
-        bottom_fist_hits_nose = jnp.logical_and(
-            player_nose_y >= (cpu_bottom_fist_y - self.consts.FIST_ROW_HALF_HEIGHT),
-            player_nose_y <= (cpu_bottom_fist_y + self.consts.FIST_ROW_HALF_HEIGHT),
-        )
-        fist_hits_nose = jnp.logical_or(top_fist_hits_nose, bottom_fist_hits_nose)
-        
-        # Hit only triggers on the frame when punch FIRST reaches max extension
-        just_reached_max = state.extended_arm_maximum[1] == 1
-        
-        punch_active = state.right_boxer_punch_active > 0
-        punch_not_landed_yet = state.right_boxer_punch_landed == 0
-        
-        # Per original assembly: hit requires:
-        # 1. Punch active and just reached max extension
-        # 2. Horizontal distance <= 29 (in punching range)
-        # 3. Vertical distance < 48 (H_BOXER)
-        # 4. Either top or bottom fist band overlaps opponent nose row
-        # 5. Haven't already scored on this punch
-        hit_landed = jnp.logical_and(
-            jnp.logical_and(punch_active, just_reached_max),
-            jnp.logical_and(
-                jnp.logical_and(in_horiz_range, in_vert_range),
-                jnp.logical_and(fist_hits_nose, punch_not_landed_yet)
-            )
-        )
-        
-        # Only register hit if player is not already stunned
-        player_not_stunned = jnp.logical_or(
-            state.hit_boxer_stun_timer == 0,
-            state.hit_boxer_index != 0  # 0 = left boxer
-        )
-        valid_hit = jnp.logical_and(hit_landed, player_not_stunned)
-        
-        # Set debounce flag
-        new_punch_landed = jnp.where(
-            valid_hit,
-            1,
-            state.right_boxer_punch_landed
-        ).astype(jnp.int32)
-        
-        # Increment CPU score
-        new_score = jnp.where(
-            valid_hit,
-            state.right_boxer_score + 1,
-            state.right_boxer_score
-        ).astype(jnp.int32)
-        
-        # Set stun timer for player (left boxer = index 0)
-        new_stun_timer = jnp.where(
-            valid_hit,
-            self.consts.STUN_DURATION,
-            state.hit_boxer_stun_timer
-        ).astype(jnp.int32)
-        
-        new_hit_index = jnp.where(
-            valid_hit,
-            0,  # Left boxer got hit
-            state.hit_boxer_index
-        ).astype(jnp.int32)
-        
-        # Set punching arm index (right boxer's last_arm + 2 for CPU arms)
-        new_punching_arm = jnp.where(
-            valid_hit,
-            state.right_boxer_last_arm + 2,
-            state.punching_arm_index
-        ).astype(jnp.int32)
-        
-        # Set dancing value when CPU scores
-        new_dancing = jnp.where(
-            valid_hit,
-            57,  # Per spec: cpuBoxerDancingValue = 57
-            state.cpu_dancing_value
-        ).astype(jnp.int32)
-        
-        return replace(state,
-            right_boxer_score=new_score,
-            hit_boxer_stun_timer=new_stun_timer,
-            hit_boxer_index=new_hit_index,
-            right_boxer_punch_landed=new_punch_landed,
-            punching_arm_index=new_punching_arm,
-            cpu_dancing_value=new_dancing,
-        )
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: BoxingState, action: chex.Array) -> Tuple[BoxingObservation, BoxingState, float, bool, BoxingInfo]:
-        """Execute one game step."""
-        # Split PRNG key
-        new_state_key, step_key = jax.random.split(state.key)
-        previous_state = state
-        
-        # Store previous positions for collision detection
-        prev_left_x = state.left_boxer_x
-        prev_left_y = state.left_boxer_y
-        prev_right_x = state.right_boxer_x
-        prev_right_y = state.right_boxer_y
-        
-        # Update key for this step
-        state = replace(state, key=step_key)
-        
-        # Process player movement
-        state = self._player_step(state, action)
-        
-        # Process player punch
-        state = self._punch_step(state, action)
-        
-        # Process CPU movement
-        state = self._cpu_movement_step(state)
-        
-        # Check for boxer-boxer collision (revert positions if overlapping)
-        state = self._collision_step(state, prev_left_x, prev_left_y, prev_right_x, prev_right_y)
-        
-        # Process CPU punch decision and animation
-        state = self._cpu_punch_step(state)
-        
-        # Check for player hits on CPU
-        state = self._hit_detection_step(state)
-        
-        # Check for CPU hits on player
-        state = self._cpu_hit_detection_step(state)
+        return act
 
-        # Apply knockback to the stunned boxer
-        state = self._knockback_step(state)
-
-        # Decrement stun timer
-        new_stun = jnp.maximum(state.hit_boxer_stun_timer - 1, 0).astype(jnp.int32)
-        state = replace(state, hit_boxer_stun_timer=new_stun)
+    def step(self, state: BoxingState, action: chex.Array) -> Tuple[BoxingObservation, BoxingState, int, bool, BoxingInfo]:
+        key, cpu_key = jax.random.split(state.key)
+        state = replace(state, key=cpu_key)
         
-        # Update game timer
-        state = self._timer_step(state)
+        # Update CPU targeting, offsets, and dancing countdown
+        state = self._update_cpu_state(state)
         
-        # Increment step counter
-        state = replace(
-            state,
-            step_counter=state.step_counter + 1,
-            key=new_state_key,
-        )
+        # 1. CPU Action
+        p2_action = self._cpu_logic(state)
         
-        # Get outputs
-        done = self._get_done(state)
-        reward = self._get_reward(previous_state, state)
-        info = self._get_info(state)
-        observation = self._get_observation(state)
+        # 2. Movement
+        new_p1_pos = self._move_boxer(state, 0, action)
+        new_p2_pos = self._move_boxer(state, 1, p2_action)
         
-        return observation, state, reward, done, info
-    
-    def render(self, state: BoxingState) -> jnp.ndarray:
-        """Render the current game state to an image."""
-        return self.renderer.render(state)
-    
-    def _get_observation(self, state: BoxingState) -> BoxingObservation:
-        """Extract observable state."""
-        left_boxer = ObjectObservation(
-            x=state.left_boxer_x,
-            y=state.left_boxer_y,
-            width=jnp.array(self.consts.W_BOXER),
-            height=jnp.array(self.consts.SPRITE_HEIGHT),
-            active=jnp.array(1),
-            visual_id=jnp.array(0),
-            state=jnp.array(0),
-            orientation=jnp.array(0),
-        )
+        # 3. Collision (AABB push-out along the axis of minimum overlap)
+        dx = new_p1_pos[0] - new_p2_pos[0]
+        dy = new_p1_pos[1] - new_p2_pos[1]
+        overlap_x = self.consts.W_BOXER - jnp.abs(dx)
+        overlap_y = self.consts.H_BOXER - jnp.abs(dy)
+        collision = jnp.logical_and(overlap_x > 0, overlap_y > 0)
         
-        right_boxer = ObjectObservation(
-            x=state.right_boxer_x,
-            y=state.right_boxer_y,
-            width=jnp.array(self.consts.W_BOXER),
-            height=jnp.array(self.consts.SPRITE_HEIGHT),
-            active=jnp.array(1),
-            visual_id=jnp.array(0),
-            state=jnp.array(0),
-            orientation=jnp.array(0),
-        )
+        # Determine push direction based on the axis of minimum overlap
+        sign_x = jnp.where(dx >= 0, 1, -1)
+        sign_y = jnp.where(dy >= 0, 1, -1)
         
-        return BoxingObservation(
-            left_boxer=left_boxer,
-            right_boxer=right_boxer,
-            score_left=state.left_boxer_score,
-            score_right=state.right_boxer_score,
-            clock_minutes=state.clock_minutes,
-            clock_seconds=state.clock_seconds,
-        )
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def obs_to_flat_array(self, obs: BoxingObservation) -> jnp.ndarray:
-        """Flatten observation for neural network input."""
-        return jnp.concatenate([
-            obs.left_boxer.x.flatten(),
-            obs.left_boxer.y.flatten(),
-            obs.left_boxer.width.flatten(),
-            obs.left_boxer.height.flatten(),
-            obs.left_boxer.active.flatten(),
-            obs.left_boxer.visual_id.flatten(),
-            obs.left_boxer.state.flatten(),
-            obs.left_boxer.orientation.flatten(),
-            obs.right_boxer.x.flatten(),
-            obs.right_boxer.y.flatten(),
-            obs.right_boxer.width.flatten(),
-            obs.right_boxer.height.flatten(),
-            obs.right_boxer.active.flatten(),
-            obs.right_boxer.visual_id.flatten(),
-            obs.right_boxer.state.flatten(),
-            obs.right_boxer.orientation.flatten(),
-            obs.score_left.flatten(),
-            obs.score_right.flatten(),
-            obs.clock_minutes.flatten(),
-            obs.clock_seconds.flatten(),
+        push_x = jnp.where(overlap_x < overlap_y, sign_x * overlap_x, 0)
+        push_y = jnp.where(overlap_x >= overlap_y, sign_y * overlap_y, 0)
+        push = jnp.stack([push_x, push_y])
+        
+        new_p1_pos = jnp.where(collision, new_p1_pos + push // 2, new_p1_pos)
+        new_p2_pos = jnp.where(collision, new_p2_pos - push // 2, new_p2_pos)
+        
+        # Clamp again after collision push
+        new_p1_pos = jnp.clip(new_p1_pos, jnp.array([self.consts.XMIN, self.consts.YMIN]), jnp.array([self.consts.XMAX, self.consts.YMAX]))
+        new_p2_pos = jnp.clip(new_p2_pos, jnp.array([self.consts.XMIN, self.consts.YMIN]), jnp.array([self.consts.XMAX, self.consts.YMAX]))
+        
+        pos = jnp.stack([new_p1_pos, new_p2_pos])
+        orientation = jnp.array([
+            (pos[0, 0] > pos[1, 0]).astype(jnp.int32),
+            (pos[1, 0] > pos[0, 0]).astype(jnp.int32)
         ])
-    
-    def action_space(self) -> spaces.Discrete:
-        """Return the action space (18 actions for Boxing)."""
-        return spaces.Discrete(18)
-    
-    def observation_space(self) -> spaces.Dict:
-        """Return the observation space structure."""
-        c = self.consts
-        h = int(c.HEIGHT)
-        w = int(c.WIDTH)
-        screen_size = (h, w)
-
-        single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
-
-        return spaces.Dict({
-            "left_boxer": single_obj,
-            "right_boxer": single_obj,
-            "score_left": spaces.Box(low=0, high=100, shape=(), dtype=jnp.int32),
-            "score_right": spaces.Box(low=0, high=100, shape=(), dtype=jnp.int32),
-            "clock_minutes": spaces.Box(low=0, high=2, shape=(), dtype=jnp.int32),
-            "clock_seconds": spaces.Box(low=0, high=59, shape=(), dtype=jnp.int32),
-        })
-    
-    def image_space(self) -> spaces.Box:
-        """Return the image observation space."""
-        return spaces.Box(
-            low=0,
-            high=255,
-            shape=(210, 160, 3),
-            dtype=jnp.uint8
-        )
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_info(self, state: BoxingState) -> BoxingInfo:
-        """Get auxiliary info."""
-        return BoxingInfo(
-            time=state.step_counter,
-            clock_minutes=state.clock_minutes,
-            clock_seconds=state.clock_seconds,
-        )
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_reward(self, previous_state: BoxingState, state: BoxingState) -> float:
-        """
-        Calculate reward based on score difference.
+        state = replace(state, pos=pos, orientation=orientation)
         
-        Positive reward for landing punches, negative for getting hit.
-        """
-        prev_diff = previous_state.left_boxer_score - previous_state.right_boxer_score
-        curr_diff = state.left_boxer_score - state.right_boxer_score
-        return (curr_diff - prev_diff).astype(jnp.float32)
-    
-    @partial(jax.jit, static_argnums=(0,))
-    def _get_done(self, state: BoxingState) -> bool:
-        """
-        Check if game is over.
+        # 4. Punch State Update
+        s0, a0, h0, c0 = self._update_punch(state, action, 0, 1)
+        s1, a1, h1, c1 = self._update_punch(state, p2_action, 1, 0)
         
-        Game ends when:
-        - Either boxer reaches 100 points (KO)
-        - Timer reaches 0:00
-        - game_state set to 0xFF
-        """
-        ko_left = jnp.greater_equal(state.left_boxer_score, self.consts.MAX_SCORE)
-        ko_right = jnp.greater_equal(state.right_boxer_score, self.consts.MAX_SCORE)
-        game_over_flag = jnp.equal(state.game_state, 0xFF)
-        timer_expired = jnp.logical_and(
-            state.clock_minutes == 0,
-            state.clock_seconds == 0
-        )
-        return jnp.logical_or(
-            jnp.logical_or(ko_left, ko_right),
-            jnp.logical_or(game_over_flag, timer_expired)
-        )
+        def print_idle(operand):
+            jax.debug.print("White Player: Idle")
+ 
+        def print_punching(operand):
+            state_val, arm_val = operand
+            jax.debug.print("White Player: Punching - Arm (0=Top, 1=Bottom): {arm}, State: {state}", arm=arm_val, state=state_val)
+ 
+        jax.lax.cond(s0 == 0, print_idle, print_punching, (s0, a0))
+        
+        state = replace(state, 
+                        punch_state=jnp.array([s0, s1]), 
+                        punch_arm=jnp.array([a0, a1]), 
+                        has_hit=jnp.array([h0, h1]),
+                        punch_cooldown=jnp.array([c0, c1]))
+        
+        # 5. Hit Detection & Scoring & Knockback
+        def check_hit(attacker_idx, defender_idx, s):
+            a_pos = s.pos[attacker_idx]
+            d_pos = s.pos[defender_idx]
+            
+            p_state = s.punch_state[attacker_idx]
+            not_hit_yet = jnp.logical_not(s.has_hit[attacker_idx])
+            d_not_stunned = s.stun_timer[defender_idx] == 0
+            
+            punch_y = jnp.where(s.punch_arm[attacker_idx] == 0, a_pos[1] + self.consts.TOP_ARM_Y, a_pos[1] + self.consts.BOT_ARM_Y)
+            face_shrink = jnp.where(defender_idx == 0, self.consts.PLAYER_FACE_SHRINK_Y, 0)
+            min_y = d_pos[1] + self.consts.FACE_MIN_Y + face_shrink
+            max_y = d_pos[1] + self.consts.FACE_MAX_Y - face_shrink
+            
+            in_power_vert_range = jnp.logical_and(punch_y >= min_y, punch_y <= max_y)
+            in_jab_vert_range = jnp.logical_and(punch_y >= min_y + 6, punch_y <= max_y - 6)
+            
+            face_x_min = d_pos[0]
+            face_x_max = d_pos[0] + self.consts.W_BOXER
+
+            a_orient = s.orientation[attacker_idx]
+            frame_map = jnp.array([0, 0, 0, 1, 1, 1, 0, 0, 2, 2, 3, 3, 3, 2, 2, 0, 0, 0])
+            anim_frame = frame_map[p_state]
+            
+            start_r = jnp.array([10, 10, 14, 14])[anim_frame]
+            start_l = jnp.array([0, 0, -8, -16])[anim_frame]
+            glove_w = jnp.array([4, 4, 8, 16])[anim_frame]
+            
+            glove_x_min = jnp.where(a_orient == 0, a_pos[0] + start_r, a_pos[0] + start_l)
+            glove_x_max = glove_x_min + glove_w
+            
+            in_power_horiz_range = jnp.logical_and(glove_x_max >= face_x_min, glove_x_min <= face_x_max)
+            
+            # Shrink face box horizontally by 4px on each side for Jab
+            jab_face_x_min = face_x_min + 4
+            jab_face_x_max = face_x_max - 4
+            in_jab_horiz_range = jnp.logical_and(glove_x_max >= jab_face_x_min, glove_x_min <= jab_face_x_max)
+            
+            # Jab states: (8, 9)
+            is_jab_state = jnp.isin(p_state, jnp.array([8, 9]))
+            
+            # Power states: (10, 11) - we remove 12 so that holding the arm extended doesn't register hits
+            is_power_state = jnp.isin(p_state, jnp.array([10, 11]))
+ 
+            is_jab = jnp.logical_and(is_jab_state, jnp.logical_and(in_jab_horiz_range, in_jab_vert_range))
+            is_power = jnp.logical_and(is_power_state, jnp.logical_and(in_power_horiz_range, in_power_vert_range))
+            
+            valid_hit = jnp.logical_and(jnp.logical_or(is_jab, is_power), 
+                                         jnp.logical_and(not_hit_yet, d_not_stunned))
+            
+            # Jab (short, deep hit) = 2 points, Power/Normal (long, extended hit) = 1 point
+            points = jnp.where(valid_hit, jnp.where(is_jab, 2, 1), 0)
+            
+            return valid_hit, points
+ 
+        # P1 hits P2
+        p1_hit, p1_points = check_hit(0, 1, state)
+        # P2 hits P1
+        p2_hit, p2_points = check_hit(1, 0, state)
+        
+        # Apply hits
+        new_scores = state.score + jnp.array([p1_points, p2_points])
+        new_has_hit = state.has_hit.at[0].set(jnp.logical_or(state.has_hit[0], p1_hit)).at[1].set(jnp.logical_or(state.has_hit[1], p2_hit))
+        
+        # Apply Stun
+        new_stun = jnp.maximum(state.stun_timer - 1, 0)
+        new_stun = new_stun.at[1].set(jnp.where(p1_hit, self.consts.STUN_DURATION, new_stun[1]))
+        new_stun = new_stun.at[0].set(jnp.where(p2_hit, self.consts.STUN_DURATION, new_stun[0]))
+        
+        # Trigger hit projection animation
+        p1_arm = state.punch_arm[0]
+        p2_arm = state.punch_arm[1]
+ 
+        # Horizontal backward direction for each player if they get hit
+        p1_back_dx = jnp.where(state.orientation[0] == 0, -self.consts.KNOCKBACK_DX, self.consts.KNOCKBACK_DX)
+        p2_back_dx = jnp.where(state.orientation[1] == 0, -self.consts.KNOCKBACK_DX, self.consts.KNOCKBACK_DX)
+ 
+        # Vertical direction depending on opponent's punch arm
+        p1_kb_dy = jnp.where(p2_arm == 0, self.consts.KNOCKBACK_TOP_ARM_DY, self.consts.KNOCKBACK_BOT_ARM_DY)
+        p2_kb_dy = jnp.where(p1_arm == 0, self.consts.KNOCKBACK_TOP_ARM_DY, self.consts.KNOCKBACK_BOT_ARM_DY)
+ 
+        # Decrement hit animation timer and update with new hits if any
+        new_hit_anim_timer = jnp.maximum(state.hit_anim_timer - 1, 0)
+        new_hit_anim_timer = new_hit_anim_timer.at[0].set(jnp.where(p2_hit, self.consts.HIT_ANIMATION_STEPS, new_hit_anim_timer[0]))
+        new_hit_anim_timer = new_hit_anim_timer.at[1].set(jnp.where(p1_hit, self.consts.HIT_ANIMATION_STEPS, new_hit_anim_timer[1]))
+ 
+        new_hit_anim_dx = state.hit_anim_dx
+        new_hit_anim_dx = new_hit_anim_dx.at[0].set(jnp.where(p2_hit, p1_back_dx, jnp.where(new_hit_anim_timer[0] > 0, state.hit_anim_dx[0], 0)))
+        new_hit_anim_dx = new_hit_anim_dx.at[1].set(jnp.where(p1_hit, p2_back_dx, jnp.where(new_hit_anim_timer[1] > 0, state.hit_anim_dx[1], 0)))
+ 
+        new_hit_anim_dy = state.hit_anim_dy
+        new_hit_anim_dy = new_hit_anim_dy.at[0].set(jnp.where(p2_hit, p1_kb_dy, jnp.where(new_hit_anim_timer[0] > 0, state.hit_anim_dy[0], 0)))
+        new_hit_anim_dy = new_hit_anim_dy.at[1].set(jnp.where(p1_hit, p2_kb_dy, jnp.where(new_hit_anim_timer[1] > 0, state.hit_anim_dy[1], 0)))
+        
+        # When hit, CPU dances for CPU_DANCING_DURATION frames.
+        # Since dancing active is value >= 16, setting to D + 16 dances for exactly D frames.
+        new_dancing = jnp.where(p1_hit, self.consts.CPU_DANCING_DURATION + 16, state.cpu_dancing_value).astype(jnp.int32)
+        
+        state = replace(state, 
+                        score=new_scores,
+                        has_hit=new_has_hit,
+                        stun_timer=new_stun,
+                        timer=state.timer - 1,
+                        cpu_dancing_value=new_dancing,
+                        hit_anim_timer=new_hit_anim_timer,
+                        hit_anim_dx=new_hit_anim_dx,
+                        hit_anim_dy=new_hit_anim_dy,
+                        key=key)
+        
+        # 6. Termination
+        done = jnp.logical_or(jnp.any(state.score >= self.consts.MAX_SCORE), state.timer <= 0)
+        state = replace(state, done=done)
+        
+        return self._get_observation(state), state, (p1_points - p2_points).astype(jnp.float32), done, self._get_info(state)
+
+    def render(self, state: BoxingState, debug: bool = False) -> jnp.ndarray:
+        return self.renderer.render(state, debug=debug)
 
 
 # =============================================================================
@@ -1352,274 +800,245 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
 # =============================================================================
 
 class BoxingRenderer(JAXGameRenderer):
-    """
-    Renderer for Boxing game using proper sprite assets.
-    
-    Uses extracted sprites from the original Atari game including:
-    - Background with boxing ring
-    - White and black boxer idle sprites
-    - Punch animation frames (4 frames per direction per boxer)
-    - Digit sprites for score and timer display
-    """
-    
     def __init__(self, consts: BoxingConstants | None = None, config: render_utils.RendererConfig | None = None):
         self.consts = consts or BoxingConstants()
         super().__init__(self.consts)
-
-        if config is None:
-            self.config = render_utils.RendererConfig(
-                game_dimensions=(210, 160),
-                channels=3,
-            )
-        else:
-            self.config = config
-
+        self.config = config or render_utils.RendererConfig(game_dimensions=(210, 160), channels=3)
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
-        # Load sprites from asset config
-        final_asset_config = list(self.consts.ASSET_CONFIG)
-        
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/boxing"
-        (
-            self.PALETTE,
-            self.SHAPE_MASKS,
-            self.BACKGROUND,
-            self.COLOR_TO_ID,
-            self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+        (self.PALETTE, self.SHAPE_MASKS, self.BACKGROUND, self.COLOR_TO_ID, _) = self.jr.load_and_setup_assets(list(self.consts.ASSET_CONFIG), sprite_path)
         
-        # Pre-build arrays of punch animation masks for efficient indexed lookup
-        # White boxer punch animations (left direction = punching toward left side of screen)
-        self.white_punch_left_masks = [
-            self.SHAPE_MASKS["white_punch_left_0"],
-            self.SHAPE_MASKS["white_punch_left_1"],
-            self.SHAPE_MASKS["white_punch_left_2"],
-            self.SHAPE_MASKS["white_punch_left_3"],
-        ]
-        self.white_punch_right_masks = [
-            self.SHAPE_MASKS["white_punch_right_0"],
-            self.SHAPE_MASKS["white_punch_right_1"],
-            self.SHAPE_MASKS["white_punch_right_2"],
-            self.SHAPE_MASKS["white_punch_right_3"],
-        ]
-        # Black boxer punch animations
-        self.black_punch_left_masks = [
-            self.SHAPE_MASKS["black_punch_left_0"],
-            self.SHAPE_MASKS["black_punch_left_1"],
-            self.SHAPE_MASKS["black_punch_left_2"],
-            self.SHAPE_MASKS["black_punch_left_3"],
-        ]
-        self.black_punch_right_masks = [
-            self.SHAPE_MASKS["black_punch_right_0"],
-            self.SHAPE_MASKS["black_punch_right_1"],
-            self.SHAPE_MASKS["black_punch_right_2"],
-            self.SHAPE_MASKS["black_punch_right_3"],
-        ]
+        # Custom debug colors appended to palette
+        self.DEBUG_RED_ID = self.PALETTE.shape[0]
+        self.DEBUG_GREEN_ID = self.DEBUG_RED_ID + 1
+        red_rgb = jnp.array([[255, 0, 0]], dtype=self.PALETTE.dtype)
+        green_rgb = jnp.array([[0, 255, 0]], dtype=self.PALETTE.dtype)
+        self.PALETTE = jnp.concatenate([self.PALETTE, red_rgb, green_rgb], axis=0)
+        
+        self.white_masks = {
+            "body": self.SHAPE_MASKS["white_main_body"],
+            "stunned": self.SHAPE_MASKS["white_stunned"],
+            "top_arm": [
+                self.SHAPE_MASKS["white_top_arm_idle"],
+                self.SHAPE_MASKS["white_top_arm_retracted"],
+                self.SHAPE_MASKS["white_top_arm_stretched"],
+                self.SHAPE_MASKS["white_top_arm_extended"],
+            ],
+            "bottom_arm": [
+                self.SHAPE_MASKS["white_bottom_arm_idle"],
+                self.SHAPE_MASKS["white_bottom_arm_retracted"],
+                self.SHAPE_MASKS["white_bottom_arm_stretched"],
+                self.SHAPE_MASKS["white_bottom_arm_extended"],
+            ],
+        }
+        self.black_masks = {
+            "body": self.SHAPE_MASKS["black_main_body"],
+            # black_stunned.npy is saved facing Left by default, so we pre-flip it horizontally
+            # here to make it face Right, consistent with all other boxer assets.
+            "stunned": self.SHAPE_MASKS["black_stunned"][:, ::-1],
+            "top_arm": [
+                self.SHAPE_MASKS["black_top_arm_idle"],
+                self.SHAPE_MASKS["black_top_arm_retracted"],
+                self.SHAPE_MASKS["black_top_arm_stretched"],
+                self.SHAPE_MASKS["black_top_arm_extended"],
+            ],
+            "bottom_arm": [
+                self.SHAPE_MASKS["black_bottom_arm_idle"],
+                self.SHAPE_MASKS["black_bottom_arm_retracted"],
+                self.SHAPE_MASKS["black_bottom_arm_stretched"],
+                self.SHAPE_MASKS["black_bottom_arm_extended"],
+            ],
+        }
 
-    @partial(jax.jit, static_argnums=(0,))
-    def render(self, state: BoxingState) -> jnp.ndarray:
-        """Render the game state to a 210x160x3 RGB image."""
-        # Start with background
-        raster = self.jr.create_object_raster(self.BACKGROUND)
+    def _render_boxer(self, raster, pos, is_stunned, p_state, arm_idx, masks, orientation):
+        x = pos[0]
+        y = pos[1]
         
-        # Determine facing direction based on relative positions
-        # White boxer (left) faces right toward opponent by default
-        # When white is to the right of black, white faces left
-        white_faces_left = state.left_boxer_x > state.right_boxer_x
-        
-        # --- Render left boxer (white) ---
-        is_punching_left = state.left_boxer_punch_active > 0
-        # Convert animation value (0-72) to sprite frame (0-3)
-        # animation_value / 8 gives index into sprite table
-        punch_frame_left = jnp.clip(state.left_boxer_animation_value // 8, 0, 3).astype(jnp.int32)
-        
-        # Use last_arm to determine which arm is punching (alternates between punches)
-        # 0 = left arm (uses "left" sprites), 1 = right arm (uses "right" sprites)
-        white_use_left_arm = state.left_boxer_last_arm == 0
-        
-        # Select appropriate sprite based on punch state and arm (alternating)
-        # Note: We use jax.lax.switch for frame selection within direction
-        def render_white_idle(raster):
-            return self.jr.render_at(
-                raster, state.left_boxer_x, state.left_boxer_y,
-                self.SHAPE_MASKS["white_idle"]
-            )
-        
-        def render_white_punch_left(raster):
-            # Select frame based on punch_frame_left
-            raster = jax.lax.switch(
-                punch_frame_left,
-                [
-                    lambda r: self.jr.render_at(r, state.left_boxer_x, state.left_boxer_y, self.white_punch_left_masks[0]),
-                    lambda r: self.jr.render_at(r, state.left_boxer_x, state.left_boxer_y, self.white_punch_left_masks[1]),
-                    lambda r: self.jr.render_at(r, state.left_boxer_x, state.left_boxer_y, self.white_punch_left_masks[2]),
-                    lambda r: self.jr.render_at(r, state.left_boxer_x, state.left_boxer_y, self.white_punch_left_masks[3]),
-                ],
-                raster
-            )
-            return raster
-        
-        def render_white_punch_right(raster):
-            raster = jax.lax.switch(
-                punch_frame_left,
-                [
-                    lambda r: self.jr.render_at(r, state.left_boxer_x, state.left_boxer_y, self.white_punch_right_masks[0]),
-                    lambda r: self.jr.render_at(r, state.left_boxer_x, state.left_boxer_y, self.white_punch_right_masks[1]),
-                    lambda r: self.jr.render_at(r, state.left_boxer_x, state.left_boxer_y, self.white_punch_right_masks[2]),
-                    lambda r: self.jr.render_at(r, state.left_boxer_x, state.left_boxer_y, self.white_punch_right_masks[3]),
-                ],
-                raster
-            )
-            return raster
-        
-        def render_white_stunned(raster):
-            return self.jr.render_at(
-                raster, state.left_boxer_x, state.left_boxer_y,
-                self.SHAPE_MASKS["white_stunned"]
-            )
+        def render_stunned(r):
+            mask = masks["stunned"]
+            # If oriented Left (1), flip
+            mask = jnp.where(orientation == 1, mask[:, ::-1], mask)
+            return self.jr.render_at(r, x, y, mask)
+            
+        def render_normal(r):
+            # Map punch state (0-17) to arm animation frame (0=idle, 1=retract, 2=stretch, 3=extend)
+            frame_map = jnp.array([0, 0, 0, 1, 1, 1, 0, 0, 2, 2, 3, 3, 3, 2, 2, 0, 0, 0])
+            anim_frame = frame_map[p_state]
+            
+            top_frame = jnp.where(jnp.logical_and(p_state > 0, arm_idx == 0), anim_frame, 0)
+            bot_frame = jnp.where(jnp.logical_and(p_state > 0, arm_idx == 1), anim_frame, 0)
+            
+            def render_arm(op, i, is_top):
+                mask_key = "top_arm" if is_top else "bottom_arm"
+                mask = masks[mask_key][i]
+                
+                # Flip if facing Left (1)
+                mask = jnp.where(orientation == 1, mask[:, ::-1], mask)
+                
+                arm_w = mask.shape[1]
+                
+                # Logic for Right (orientation 0)
+                arm_x_right = x - (arm_w - 14)
+                arm_x_right = jnp.where(i == 2, arm_x_right + 8, arm_x_right)
+                arm_x_right = jnp.where(i == 3, arm_x_right + 16, arm_x_right)
+                
+                # Logic for Left (orientation 1)
+                arm_x_left = jnp.where(i == 2, x - 8, x)
+                arm_x_left = jnp.where(i == 3, x - 16, arm_x_left)
+                
+                arm_x = jnp.where(orientation == 0, arm_x_right, arm_x_left)
+                arm_y = y if is_top else y + 34
+                return self.jr.render_at(op, arm_x, arm_y, mask)
+                
+            r = jax.lax.switch(top_frame, [lambda op, i=i: render_arm(op, i, True) for i in range(4)], r)
+            
+            body_mask = masks["body"]
+            # If oriented Left (1), flip
+            body_mask = jnp.where(orientation == 1, body_mask[:, ::-1], body_mask)
+            r = self.jr.render_at(r, x, y + 12, body_mask)
+            
+            r = jax.lax.switch(bot_frame, [lambda op, i=i: render_arm(op, i, False) for i in range(4)], r)
+            return r
 
-        # Render white boxer: stunned pose overrides everything else
-        white_is_stunned = jnp.logical_and(
-            state.hit_boxer_stun_timer > 0,
-            state.hit_boxer_index == 0
-        )
-        raster = jax.lax.cond(
-            white_is_stunned,
-            render_white_stunned,
-            lambda r: jax.lax.cond(
-                is_punching_left,
-                lambda r2: jax.lax.cond(
-                    white_use_left_arm,
-                    render_white_punch_left,
-                    render_white_punch_right,
-                    r2
-                ),
-                render_white_idle,
-                r
-            ),
-            raster
-        )
-        
-        # --- Render right boxer (black) ---
-        # Black faces left toward white by default
-        black_faces_right = state.right_boxer_x < state.left_boxer_x
-        is_punching_right = state.right_boxer_punch_active > 0
-        # Convert animation value (0-72) to sprite frame (0-3)
-        punch_frame_right = jnp.clip(state.right_boxer_animation_value // 8, 0, 3).astype(jnp.int32)
-        
-        # Use last_arm to determine which arm is punching (alternates between punches)
-        black_use_left_arm = state.right_boxer_last_arm == 0
-        
-        # Black boxer punch sprites extend to the LEFT (arm goes toward player)
-        # We need to offset x position to keep body in place
-        # Offsets: frame 0=0, frame 1=8, frame 2=17, frame 3=8
-        punch_x_offsets = jnp.array([0, 8, 17, 8])
-        black_punch_x_offset = punch_x_offsets[punch_frame_right]
-        black_punch_x = state.right_boxer_x - black_punch_x_offset
-        
-        def render_black_idle(raster):
-            return self.jr.render_at(
-                raster, state.right_boxer_x, state.right_boxer_y,
-                self.SHAPE_MASKS["black_idle"]
-            )
-        
-        def render_black_punch_left(raster):
-            raster = jax.lax.switch(
-                punch_frame_right,
-                [
-                    lambda r: self.jr.render_at(r, black_punch_x, state.right_boxer_y, self.black_punch_left_masks[0]),
-                    lambda r: self.jr.render_at(r, black_punch_x, state.right_boxer_y, self.black_punch_left_masks[1]),
-                    lambda r: self.jr.render_at(r, black_punch_x, state.right_boxer_y, self.black_punch_left_masks[2]),
-                    lambda r: self.jr.render_at(r, black_punch_x, state.right_boxer_y, self.black_punch_left_masks[3]),
-                ],
-                raster
-            )
-            return raster
-        
-        def render_black_punch_right(raster):
-            raster = jax.lax.switch(
-                punch_frame_right,
-                [
-                    lambda r: self.jr.render_at(r, black_punch_x, state.right_boxer_y, self.black_punch_right_masks[0]),
-                    lambda r: self.jr.render_at(r, black_punch_x, state.right_boxer_y, self.black_punch_right_masks[1]),
-                    lambda r: self.jr.render_at(r, black_punch_x, state.right_boxer_y, self.black_punch_right_masks[2]),
-                    lambda r: self.jr.render_at(r, black_punch_x, state.right_boxer_y, self.black_punch_right_masks[3]),
-                ],
-                raster
-            )
-            return raster
-        
-        def render_black_stunned(raster):
-            return self.jr.render_at(
-                raster, state.right_boxer_x, state.right_boxer_y,
-                self.SHAPE_MASKS["black_stunned"]
-            )
+        return jax.lax.cond(is_stunned, render_stunned, render_normal, raster)
 
-        # Render black boxer: stunned pose overrides everything else
-        black_is_stunned = jnp.logical_and(
-            state.hit_boxer_stun_timer > 0,
-            state.hit_boxer_index == 1
-        )
-        raster = jax.lax.cond(
-            black_is_stunned,
-            render_black_stunned,
-            lambda r: jax.lax.cond(
-                is_punching_right,
-                lambda r2: jax.lax.cond(
-                    black_use_left_arm,
-                    render_black_punch_left,
-                    render_black_punch_right,
-                    r2
-                ),
-                render_black_idle,
-                r
-            ),
-            raster
-        )
+    @partial(jax.jit, static_argnums=(0, 2))
+    def render(self, state: BoxingState, debug: bool = False) -> jnp.ndarray:
+        raster_empty = self.jr.create_object_raster(self.BACKGROUND)
         
-        # --- Render HUD (scores and timer) using digit sprites ---
+        raster = self._render_boxer(raster_empty, state.pos[0].astype(jnp.int32), 
+                                    state.stun_timer[0] > 0, state.punch_state[0], 
+                                    state.punch_arm[0], self.white_masks, state.orientation[0])
+                                    
+        raster = self._render_boxer(raster, state.pos[1].astype(jnp.int32), 
+                                    state.stun_timer[1] > 0, state.punch_state[1], 
+                                    state.punch_arm[1], self.black_masks, state.orientation[1])
         
-        # Left boxer score (white digits) - top left
-        white_digit_masks = self.SHAPE_MASKS["digits_white"]
-        left_score_digits = self.jr.int_to_digits(
-            jnp.clip(state.left_boxer_score, 0, 99), max_digits=2
-        )
-        raster = self.jr.render_label(
-            raster, self.consts.LEFT_SCORE_X, self.consts.SCORE_Y,
-            left_score_digits, white_digit_masks, spacing=self.consts.DIGIT_SPACING
-        )
+        # HUD: Scores
+        white_digits = self.jr.int_to_digits(state.score[0], max_digits=2)
+        raster = self.jr.render_label(raster, 20, 5, white_digits, self.SHAPE_MASKS["digits_white"], spacing=8)
         
-        # Right boxer score (black digits) - top right
-        black_digit_masks = self.SHAPE_MASKS["digits_black"]
-        right_score_digits = self.jr.int_to_digits(
-            jnp.clip(state.right_boxer_score, 0, 99), max_digits=2
-        )
-        raster = self.jr.render_label(
-            raster, self.consts.RIGHT_SCORE_X, self.consts.SCORE_Y,
-            right_score_digits, black_digit_masks, spacing=self.consts.DIGIT_SPACING
-        )
+        black_digits = self.jr.int_to_digits(state.score[1], max_digits=2)
+        raster = self.jr.render_label(raster, 130, 5, black_digits, self.SHAPE_MASKS["digits_black"], spacing=8)
         
-        # Timer (time digits) - center top
-        time_digit_masks = self.SHAPE_MASKS["digits_time"]
+        # HUD: Timer (M:SS)
+        total_sec = jnp.maximum(state.timer, 0) // 60
+        minutes = total_sec // 60
+        seconds = total_sec % 60
+        min_digit = self.jr.int_to_digits(minutes, max_digits=1)
+        sec_digits = self.jr.int_to_digits(seconds, max_digits=2)
+        raster = self.jr.render_label(raster, 70, 5, min_digit, self.SHAPE_MASKS["digits_time"], spacing=0)
+        raster = self.jr.render_label(raster, 82, 5, sec_digits, self.SHAPE_MASKS["digits_time"], spacing=8)
+
+        # Hitbox calculations (always computed, cheap)
+        frame_map = jnp.array([0, 0, 0, 1, 1, 1, 0, 0, 2, 2, 3, 3, 3, 2, 2, 0, 0, 0])
         
-        # Format timer as M:SS (minutes + 2-digit seconds)
-        # First render minutes (single digit)
-        minutes_digit = self.jr.int_to_digits(
-            jnp.clip(state.clock_minutes, 0, 9), max_digits=1
-        )
-        raster = self.jr.render_label(
-            raster, self.consts.TIMER_X, self.consts.SCORE_Y,
-            minutes_digit, time_digit_masks, spacing=0
-        )
+        # Start offsets from pos[0] and widths for each frame (0=idle, 1=retract, 2=jab, 3=power)
+        start_offsets_r = jnp.array([10.0, 10.0, 14.0, 14.0])
+        widths = jnp.array([4.0, 4.0, 8.0, 16.0])
+        start_offsets_l = jnp.array([0.0, 0.0, -8.0, -16.0])
         
-        # Note: Colon would need a separate sprite - for now we skip it
-        # and just render seconds after a gap
-        seconds_digits = self.jr.int_to_digits(
-            jnp.clip(state.clock_seconds, 0, 59), max_digits=2
-        )
-        raster = self.jr.render_label(
-            raster, self.consts.TIMER_X + 12, self.consts.SCORE_Y,
-            seconds_digits, time_digit_masks, spacing=self.consts.DIGIT_SPACING
-        )
+        # Player 0
+        p0_state = state.punch_state[0]
+        anim_frame0 = frame_map[p0_state]
+        top_frame0 = jnp.where(jnp.logical_and(p0_state > 0, state.punch_arm[0] == 0), anim_frame0, 0)
+        bot_frame0 = jnp.where(jnp.logical_and(p0_state > 0, state.punch_arm[0] == 1), anim_frame0, 0)
         
-        return self.jr.render_from_palette(raster, self.PALETTE)
+        y_top0 = state.pos[0, 1] + self.consts.TOP_ARM_Y - 1.0
+        y_bot0 = state.pos[0, 1] + self.consts.BOT_ARM_Y - 1.0
+        
+        w_top0 = widths[top_frame0]
+        x_r_top0 = state.pos[0, 0] + start_offsets_r[top_frame0]
+        x_l_top0 = state.pos[0, 0] + start_offsets_l[top_frame0]
+        x_top0 = jnp.where(state.orientation[0] == 0, x_r_top0, x_l_top0)
+        
+        w_bot0 = widths[bot_frame0]
+        x_r_bot0 = state.pos[0, 0] + start_offsets_r[bot_frame0]
+        x_l_bot0 = state.pos[0, 0] + start_offsets_l[bot_frame0]
+        x_bot0 = jnp.where(state.orientation[0] == 0, x_r_bot0, x_l_bot0)
+        
+        # Player 1
+        p1_state = state.punch_state[1]
+        anim_frame1 = frame_map[p1_state]
+        top_frame1 = jnp.where(jnp.logical_and(p1_state > 0, state.punch_arm[1] == 0), anim_frame1, 0)
+        bot_frame1 = jnp.where(jnp.logical_and(p1_state > 0, state.punch_arm[1] == 1), anim_frame1, 0)
+        
+        y_top1 = state.pos[1, 1] + self.consts.TOP_ARM_Y - 1.0
+        y_bot1 = state.pos[1, 1] + self.consts.BOT_ARM_Y - 1.0
+        
+        w_top1 = widths[top_frame1]
+        x_r_top1 = state.pos[1, 0] + start_offsets_r[top_frame1]
+        x_l_top1 = state.pos[1, 0] + start_offsets_l[top_frame1]
+        x_top1 = jnp.where(state.orientation[1] == 0, x_r_top1, x_l_top1)
+        
+        w_bot1 = widths[bot_frame1]
+        x_r_bot1 = state.pos[1, 0] + start_offsets_r[bot_frame1]
+        x_l_bot1 = state.pos[1, 0] + start_offsets_l[bot_frame1]
+        x_bot1 = jnp.where(state.orientation[1] == 0, x_r_bot1, x_l_bot1)
+        
+        face0_shrink = self.consts.PLAYER_FACE_SHRINK_Y
+        face1_shrink = 0.0
+        face_positions = jnp.array([
+            [state.pos[0, 0], state.pos[0, 1] + self.consts.FACE_MIN_Y + face0_shrink],
+            [state.pos[1, 0], state.pos[1, 1] + self.consts.FACE_MIN_Y + face1_shrink],
+        ])
+        face_sizes = jnp.array([
+            [self.consts.W_BOXER, self.consts.FACE_MAX_Y - self.consts.FACE_MIN_Y - 2 * face0_shrink],
+            [self.consts.W_BOXER, self.consts.FACE_MAX_Y - self.consts.FACE_MIN_Y - 2 * face1_shrink],
+        ])
+        jab_face_positions = jnp.array([
+            [state.pos[0, 0] + 4, state.pos[0, 1] + self.consts.FACE_MIN_Y + face0_shrink + 6],
+            [state.pos[1, 0] + 4, state.pos[1, 1] + self.consts.FACE_MIN_Y + face1_shrink + 6],
+        ])
+        jab_face_sizes = jnp.array([
+            [self.consts.W_BOXER - 8, self.consts.FACE_MAX_Y - self.consts.FACE_MIN_Y - 2 * face0_shrink - 12],
+            [self.consts.W_BOXER - 8, self.consts.FACE_MAX_Y - self.consts.FACE_MIN_Y - 2 * face1_shrink - 12],
+        ])
+        glove_positions = jnp.array([
+            [x_top0, y_top0], [x_bot0, y_bot0],
+            [x_top1, y_top1], [x_bot1, y_bot1]
+        ])
+        glove_sizes = jnp.array([
+            [w_top0, 3.0], [w_bot0, 3.0],
+            [w_top1, 3.0], [w_bot1, 3.0]
+        ])
+
+        def apply_debug_solid(r):
+            r = self.jr.draw_rects(r, face_positions, face_sizes, self.DEBUG_RED_ID)
+            r = self.jr.draw_rects(r, glove_positions, glove_sizes, self.DEBUG_GREEN_ID)
+            return r
+
+        raster = jax.lax.cond(debug, apply_debug_solid, lambda r: r, raster)
+        base_img = self.jr.render_from_palette(raster, self.PALETTE)
+        
+        def blend_hitboxes(img):
+            # Create a blank raster to draw hitboxes
+            hitbox_mask = jnp.zeros_like(raster)
+            
+            # Use 1 to mark outer face pixels and gloves (highly transparent)
+            hitbox_mask = self.jr.draw_rects(hitbox_mask, face_positions, face_sizes, 1)
+            hitbox_mask = self.jr.draw_rects(hitbox_mask, glove_positions, glove_sizes, 1)
+            
+            # Use 2 to mark inner face pixels for Jab (less transparent)
+            hitbox_mask = self.jr.draw_rects(hitbox_mask, jab_face_positions, jab_face_sizes, 2)
+            
+            is_hitbox_1 = jnp.expand_dims(hitbox_mask == 1, axis=-1)
+            is_hitbox_2 = jnp.expand_dims(hitbox_mask == 2, axis=-1)
+            
+            red_color = jnp.array([255, 0, 0], dtype=jnp.float32)
+            # Highly transparent (25% opacity) for normal punch detection zone and gloves
+            blended_1 = (img.astype(jnp.float32) * 0.75 + red_color * 0.25).astype(jnp.uint8)
+            # Less transparent (70% opacity) for jab detection zone
+            blended_2 = (img.astype(jnp.float32) * 0.3 + red_color * 0.7).astype(jnp.uint8)
+            
+            img = jnp.where(is_hitbox_1, blended_1, img)
+            img = jnp.where(is_hitbox_2, blended_2, img)
+            return img
+
+        return jax.lax.cond(
+            self.consts.SHOW_COLLISION_ZONE,
+            blend_hitboxes,
+            lambda x: x,
+            base_img
+        )

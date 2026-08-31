@@ -1,17 +1,9 @@
 import os
 from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.boxing.boxing_mod_plugins import (
-    StaticEnemyMod,
-    RandomWalkEnemyMod,
-    MirrorEnemyMod,
-    FastStunMod,
-    SlowStunMod,
-    BodyHitsScoreMod,
-    InfiniteTimeMod,
-    OneHitKOMod,
-    DoubleSpeedMod,
+    CenterEnemyMod, AlwaysPunchEnemyMod, DifficultyEasyMod, DifficultyMediumMod, DifficultyHardMod, DifficultyImpossibleMod,
+    PeacefulEnemyMod, ShowCollisionZoneMod
 )
-
 
 class BoxingEnvMod(JaxAtariModController):
     """
@@ -19,18 +11,21 @@ class BoxingEnvMod(JaxAtariModController):
     """
 
     REGISTRY = {
-        "static_enemy": StaticEnemyMod,
-        "random_walk_enemy": RandomWalkEnemyMod,
-        "mirror_enemy": MirrorEnemyMod,
-        "fast_stun": FastStunMod,
-        "slow_stun": SlowStunMod,
-        "body_hits_score": BodyHitsScoreMod,
-        "infinite_time": InfiniteTimeMod,
-        "one_hit_ko": OneHitKOMod,
-        "double_speed": DoubleSpeedMod,
+        "center_enemy": CenterEnemyMod,
+        "always_punch": AlwaysPunchEnemyMod,
+        "easy": DifficultyEasyMod,
+        "medium": DifficultyMediumMod,
+        "normal": DifficultyMediumMod,
+        "hard": DifficultyHardMod,
+        "impossible": DifficultyImpossibleMod,
+        "difficulty_easy": DifficultyEasyMod,
+        "difficulty_medium": DifficultyMediumMod,
+        "difficulty_normal": DifficultyMediumMod,
+        "difficulty_hard": DifficultyHardMod,
+        "difficulty_impossible": DifficultyImpossibleMod,
+        "peaceful_enemy": PeacefulEnemyMod,
+        "show_collision_zone": ShowCollisionZoneMod,
     }
-
-    _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "boxing", "sprites")
 
     def __init__(
         self,
