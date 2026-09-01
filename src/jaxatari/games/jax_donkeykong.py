@@ -22,6 +22,32 @@ class DonkeyKongConstants(AutoDerivedConstants):
     WINDOW_WIDTH: int = struct.field(pytree_node=False, default=160 * 3)
     WINDOW_HEIGHT: int = struct.field(pytree_node=False, default=210 * 3)
 
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default=(
+        {"name": "background", "type": "background", "file": "donkeyKong_background_level_1.npy"},
+        {"name": "background_level_2", "type": "single", "file": "donkeyKong_background_level_2.npy"},
+        {"name": "donkeykong", "type": "group", "files": ["donkeyKong1.npy", "donkeyKong2.npy"]},
+        {"name": "girlfriend", "type": "single", "file": "girlfriend.npy"},
+        {"name": "lifebar_level_1", "type": "single", "file": "level_1_life_bar.npy"},
+        {"name": "lifebar_level_2", "type": "single", "file": "level_2_life_bar.npy"},
+        {"name": "mario_standing", "type": "group", "files": ["mario_standing_right.npy", "mario_standing_left.npy"]},
+        {"name": "mario_jumping", "type": "group", "files": ["mario_jumping_right.npy", "mario_jumping_left.npy"]},
+        {"name": "mario_walking_1", "type": "group", "files": ["mario_walking_1_right.npy", "mario_walking_1_left.npy"]},
+        {"name": "mario_walking_2", "type": "group", "files": ["mario_walking_2_right.npy", "mario_walking_2_left.npy"]},
+        {"name": "mario_climbing", "type": "group", "files": ["mario_climbing_left.npy", "mario_climbing_right.npy"]},
+        {"name": "hammer_up_level_1", "type": "single", "file": "hammer_up_level_1.npy"},
+        {"name": "hammer_up_level_2", "type": "single", "file": "hammer_up_level_2.npy"},
+        {"name": "hammer_down_right_level_1", "type": "single", "file": "hammer_down_right_level_1.npy"},
+        {"name": "hammer_down_left_level_1", "type": "single", "file": "hammer_down_left_level_1.npy"},
+        {"name": "hammer_down_right_level_2", "type": "single", "file": "hammer_down_right_level_2.npy"},
+        {"name": "hammer_down_left_level_2", "type": "single", "file": "hammer_down_left_level_2.npy"},
+        {"name": "fire", "type": "single", "file": "fire.npy"},
+        {"name": "drop_pit", "type": "single", "file": "drop_pit.npy"},
+        {"name": "barrel", "type": "group", "files": ["barrel0.npy", "barrel1.npy", "barrel2.npy"]},
+        {"name": "blue_digits", "type": "digits", "pattern": "digits/blue_score_{}.npy"},
+        {"name": "yellow_digits", "type": "digits", "pattern": "digits/yellow_score_{}.npy"},
+    ))
+
+
     # Frame rate
     FRAME_RATE: int = struct.field(pytree_node=False, default=30) # if more frame rate is provided, one needs to change the game behaviour
 
@@ -2265,30 +2291,7 @@ class DonkeyKongRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "donkeykong")
-        asset_config = [
-            {"name": "background", "type": "background", "file": "donkeyKong_background_level_1.npy"},
-            {"name": "background_level_2", "type": "single", "file": "donkeyKong_background_level_2.npy"},
-            {"name": "donkeykong", "type": "group", "files": ["donkeyKong1.npy", "donkeyKong2.npy"]},
-            {"name": "girlfriend", "type": "single", "file": "girlfriend.npy"},
-            {"name": "lifebar_level_1", "type": "single", "file": "level_1_life_bar.npy"},
-            {"name": "lifebar_level_2", "type": "single", "file": "level_2_life_bar.npy"},
-            {"name": "mario_standing", "type": "group", "files": ["mario_standing_right.npy", "mario_standing_left.npy"]},
-            {"name": "mario_jumping", "type": "group", "files": ["mario_jumping_right.npy", "mario_jumping_left.npy"]},
-            {"name": "mario_walking_1", "type": "group", "files": ["mario_walking_1_right.npy", "mario_walking_1_left.npy"]},
-            {"name": "mario_walking_2", "type": "group", "files": ["mario_walking_2_right.npy", "mario_walking_2_left.npy"]},
-            {"name": "mario_climbing", "type": "group", "files": ["mario_climbing_left.npy", "mario_climbing_right.npy"]},
-            {"name": "hammer_up_level_1", "type": "single", "file": "hammer_up_level_1.npy"},
-            {"name": "hammer_up_level_2", "type": "single", "file": "hammer_up_level_2.npy"},
-            {"name": "hammer_down_right_level_1", "type": "single", "file": "hammer_down_right_level_1.npy"},
-            {"name": "hammer_down_left_level_1", "type": "single", "file": "hammer_down_left_level_1.npy"},
-            {"name": "hammer_down_right_level_2", "type": "single", "file": "hammer_down_right_level_2.npy"},
-            {"name": "hammer_down_left_level_2", "type": "single", "file": "hammer_down_left_level_2.npy"},
-            {"name": "fire", "type": "single", "file": "fire.npy"},
-            {"name": "drop_pit", "type": "single", "file": "drop_pit.npy"},
-            {"name": "barrel", "type": "group", "files": ["barrel0.npy", "barrel1.npy", "barrel2.npy"]},
-            {"name": "blue_digits", "type": "digits", "pattern": "digits/blue_score_{}.npy"},
-            {"name": "yellow_digits", "type": "digits", "pattern": "digits/yellow_score_{}.npy"},
-        ]
+        asset_config = self.consts.ASSET_CONFIG
 
         (
             self.PALETTE,
