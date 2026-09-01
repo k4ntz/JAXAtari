@@ -878,22 +878,22 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 lambda s: s,
                 operand=s,
             )
+
+        POSSIBLE_X_FULL = jnp.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+        POSSIBLE_X_MIDDLE_CUT = jnp.array([0, 1, 2, 8, 9, 10])
+        POSSIBLE_X_SIDE_CUTS = jnp.array([4, 5, 6])
         
         def can_move_left(state: CrazyClimberState) -> bool:
             left_arm_up = (state.player_move_state.hand_dir == 1) & (state.player_move_state.main_state != PlayerStableStates.NEUTRAL)
             hand_offset = jnp.where(left_arm_up, 1, 0)
             next_pos_x = state.player_move_state.pos_x - 1
             
-            possible_x_full = jnp.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
-            possible_x_middle_cut = jnp.array([0, 1, 2, 8, 9, 10])
-            possible_x_side_cuts = jnp.array([4, 5, 6])
-
             can_move_left = jax.lax.switch(
                 state.tower_state.levels[state.tower_state.lowest_level + 2 + hand_offset],
                 [
-                    lambda: jnp.any(possible_x_full == next_pos_x),
-                    lambda: jnp.any(possible_x_middle_cut == next_pos_x),
-                    lambda: jnp.any(possible_x_side_cuts == next_pos_x),
+                    lambda: jnp.any(POSSIBLE_X_FULL == next_pos_x),
+                    lambda: jnp.any(POSSIBLE_X_MIDDLE_CUT == next_pos_x),
+                    lambda: jnp.any(POSSIBLE_X_SIDE_CUTS == next_pos_x),
                 ]
             )
 
@@ -906,16 +906,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             hand_offset = jnp.where(right_arm_up, 1, 0)
             next_pos_x = state.player_move_state.pos_x + 1
             
-            possible_x_full = jnp.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
-            possible_x_middle_cut = jnp.array([0, 1, 2, 8, 9, 10])
-            possible_x_side_cuts = jnp.array([4, 5, 6])
-
             can_move_right = jax.lax.switch(
                 state.tower_state.levels[state.tower_state.lowest_level + 2 + hand_offset],
                 [
-                    lambda: jnp.any(possible_x_full == next_pos_x),
-                    lambda: jnp.any(possible_x_middle_cut == next_pos_x),
-                    lambda: jnp.any(possible_x_side_cuts == next_pos_x),
+                    lambda: jnp.any(POSSIBLE_X_FULL == next_pos_x),
+                    lambda: jnp.any(POSSIBLE_X_MIDDLE_CUT == next_pos_x),
+                    lambda: jnp.any(POSSIBLE_X_SIDE_CUTS == next_pos_x),
                 ]
             )
 
@@ -924,16 +920,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             return can_move_right
         
         def can_move_up(state: CrazyClimberState) -> bool:
-            possible_up_full = jnp.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
-            possible_up_middle_cut = jnp.array([0, 1, 2, 8, 9, 10])
-            possible_up_side_cuts = jnp.array([4, 5, 6])
-
             can_move_up = jax.lax.switch(
                 state.tower_state.levels[state.tower_state.lowest_level + 3],
                 [
-                    lambda: jnp.any(possible_up_full == state.player_move_state.pos_x),
-                    lambda: jnp.any(possible_up_middle_cut == state.player_move_state.pos_x),
-                    lambda: jnp.any(possible_up_side_cuts == state.player_move_state.pos_x),
+                    lambda: jnp.any(POSSIBLE_X_FULL == state.player_move_state.pos_x),
+                    lambda: jnp.any(POSSIBLE_X_MIDDLE_CUT == state.player_move_state.pos_x),
+                    lambda: jnp.any(POSSIBLE_X_SIDE_CUTS == state.player_move_state.pos_x),
                 ]
             )
             
