@@ -424,19 +424,19 @@ def _get_default_asset_config() -> tuple:
     )
 
 class CrazyClimberConstants(struct.PyTreeNode):
-    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0)),
+    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0))
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
     WIDTH: int = struct.field(pytree_node=False, default=160)
     HEIGHT: int = struct.field(pytree_node=False, default=210)
 
     PLAYER_Y: int = struct.field(pytree_node=False, default=160)
-    PLAYER_POSSIBLE_X: chex.Array = struct.field(pytree_node=False, default=jnp.array([40, 46, 52, 58, 64, 72, 80, 86, 92, 98, 104]))
+    PLAYER_POSSIBLE_X: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([40, 46, 52, 58, 64, 72, 80, 86, 92, 98, 104]))
     PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(23, 16))
-    PLAYER_UPWARDS_SPRITE_SEQUENCE: chex.Array = struct.field(pytree_node=False, default=jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 9, 9, 10, 10, 10, 11, 11, 11]))
-    PLAYER_SIDEWAYS_SPRITE_SEQUENCE: chex.Array = struct.field(pytree_node=False, default=jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3]))
+    PLAYER_UPWARDS_SPRITE_SEQUENCE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 9, 9, 10, 10, 10, 11, 11, 11]))
+    PLAYER_SIDEWAYS_SPRITE_SEQUENCE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3]))
 
-    TOWER_POSSIBLE_SPRITE_CLIP: jnp.ndarray = struct.field(pytree_node=False, default=jnp.array([0, 4, 7, 10])) 
+    TOWER_POSSIBLE_SPRITE_CLIP: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 4, 7, 10])) 
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
 
@@ -482,9 +482,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
         ),
     )
 
-    TOWER1: jnp.ndarray = struct.field(
-        pytree_node=False, 
-        default=jnp.concat([
+    TOWER1 = jnp.concat([
                 jnp.repeat(TowerLevelType.MIDDLE_CUT, 5),
                 jnp.repeat(TowerLevelType.FULL, 9),
                 jnp.repeat(TowerLevelType.MIDDLE_CUT, 13),
@@ -501,15 +499,15 @@ class CrazyClimberConstants(struct.PyTreeNode):
                 jnp.repeat(TowerLevelType.FULL, 18),
             ]
         )
-    )
+    
 
     BIRD_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(12, 15))
     BIRD_Y: int = struct.field(pytree_node=False, default=49)
     BIRD_BORDERS: Tuple[int, int] = struct.field(pytree_node=False, default=(10, 35+BIRD_SIZE.default[1]))
     BIRD_SPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=5000) # should be 5000 for final version
     BIRD_DESPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=7500) # should be 8500 for final version
-    BIRD_POSSIBLE_STEPS: chex.Array = struct.field(pytree_node=False, default=jnp.array([0, 4, 4, 4, 7, 7, 7, 10, 10, 10]))
-    BIRD_SEQUENCE: chex.Array = struct.field(pytree_node=False, default=jnp.array([0, 1, 2, 3, 4, 4, 3, 2, 1, 0]))
+    BIRD_POSSIBLE_STEPS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 4, 4, 4, 7, 7, 7, 10, 10, 10]))
+    BIRD_SEQUENCE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 1, 2, 3, 4, 4, 3, 2, 1, 0]))
 
     EGG_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 7))
     EGG_BORDER_BOTTOM: int = struct.field(pytree_node=False, default=210-EGG_SIZE.default[0]*2)
@@ -741,7 +739,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             branch_idx,
             [
                 lambda: update_tower(state.tower_state),
-                lambda: TowerState.new(state.key),
+                lambda: TowerState.new(state.key).replace(lowest_level=state.tower_state.lowest_level),
                 lambda: state.tower_state.replace(is_falling=True),
                 lambda: state.tower_state,
             ]
@@ -829,7 +827,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             
         @partial(jax.jit)
         def move_upwards(s: PlayerMoveState) -> PlayerMoveState: 
-            is_up_move_possible = (jax.lax.abs(s.side_step) <= 3)
+            # is_up_move_possible = (jax.lax.abs(s.side_step) <= 3)
             transitioning_states = (((s.main_state != PlayerStableStates.PULL_UP) & (s.sub_step == 4)) |
                                     ((s.main_state == PlayerStableStates.PULL_UP) & (s.sub_step == 9)))
             next_state_on_transition = jnp.array([PlayerStableStates.NEUTRAL, PlayerStableStates.HALF_PULL_UP, PlayerStableStates.PULL_UP])[(s.main_state + 1) % 3] 
@@ -839,20 +837,16 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 s.hand_dir
             )
             return jax.lax.cond(
-                is_up_move_possible,
-                lambda s: jax.lax.cond(
-                    transitioning_states,
-                    lambda _: s.replace(main_state=next_state_on_transition, sub_step=0, hand_dir=next_hand_dir),
-                    lambda s: s.replace(sub_step=s.sub_step + 1),
-                    operand=s,
-                ),
-                lambda s: s,
-                operand=s
+                transitioning_states,
+                lambda _: s.replace(main_state=next_state_on_transition, sub_step=0, hand_dir=next_hand_dir, side_step=0),
+                lambda s: s.replace(sub_step=s.sub_step + 1, side_step=0),
+                operand=s,
             )
 
         @partial(jax.jit)
         def move_downwards(s: PlayerMoveState) -> PlayerMoveState:
-            is_down_move_possible = (jax.lax.abs(s.side_step) <= 3) & (s.sub_step > 0) & (s.main_state != PlayerStableStates.PULL_UP)
+            # is_down_move_possible = (jax.lax.abs(s.side_step) <= 3) & (s.sub_step > 0) & (s.main_state != PlayerStableStates.PULL_UP)
+            is_down_move_possible = (s.sub_step > 0) & (s.main_state != PlayerStableStates.PULL_UP)
             next_hand_dir = jax.lax.select(
                 (s.main_state == PlayerStableStates.NEUTRAL) & (s.sub_step == 1),
                 s.hand_dir * -1,
@@ -862,8 +856,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 is_down_move_possible,
                 lambda s: jax.lax.cond(
                     (s.main_state == PlayerStableStates.HALF_PULL_UP) & (s.sub_step == 1),
-                    lambda _: s.replace(main_state=PlayerStableStates.NEUTRAL, sub_step=0, hand_dir=s.hand_dir * -1),
-                    lambda s: s.replace(sub_step=s.sub_step - 1, hand_dir=next_hand_dir),
+                    lambda _: s.replace(main_state=PlayerStableStates.NEUTRAL, sub_step=0, hand_dir=s.hand_dir * -1, side_step=0),
+                    lambda s: s.replace(sub_step=s.sub_step - 1, hand_dir=next_hand_dir, side_step=0),
                     operand=s
                 ),
                 lambda s: s,
@@ -892,7 +886,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             
             possible_x_full = jnp.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
             possible_x_middle_cut = jnp.array([0, 1, 2, 8, 9, 10])
-            possible_x_side_cuts = jnp.array([5, 6, 7])
+            possible_x_side_cuts = jnp.array([4, 5, 6])
 
             can_move_left = jax.lax.switch(
                 state.tower_state.levels[state.tower_state.lowest_level + 2 + hand_offset],
@@ -914,7 +908,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             
             possible_x_full = jnp.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
             possible_x_middle_cut = jnp.array([0, 1, 2, 8, 9, 10])
-            possible_x_side_cuts = jnp.array([5, 6, 7])
+            possible_x_side_cuts = jnp.array([4, 5, 6])
 
             can_move_right = jax.lax.switch(
                 state.tower_state.levels[state.tower_state.lowest_level + 2 + hand_offset],
@@ -932,7 +926,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def can_move_up(state: CrazyClimberState) -> bool:
             possible_up_full = jnp.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
             possible_up_middle_cut = jnp.array([0, 1, 2, 8, 9, 10])
-            possible_up_side_cuts = jnp.array([5, 6, 7])
+            possible_up_side_cuts = jnp.array([4, 5, 6])
 
             can_move_up = jax.lax.switch(
                 state.tower_state.levels[state.tower_state.lowest_level + 3],
@@ -1019,7 +1013,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             s.falling_count > 0,
             lambda: s.replace(falling_count=jnp.maximum(s.falling_count - 1, 0)),
             lambda: s
-            )
+        )
 
         state1 = jax.lax.cond(
             state.egg_animation_count > 0,
@@ -1211,7 +1205,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         def reset_flowerpot_enemy(s: CrazyClimberState) -> CrazyClimberState:
             return s.replace(
-                flowerpot_enemy=FlowerpotEnemyState.new(
+                flowerpot_enemy_state=FlowerpotEnemyState.new(
                     False,
                     -1,
                     jnp.array(0, dtype=jnp.int32),
@@ -1259,7 +1253,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 s.flowerpot_enemy_state.window_row,
             )
             s = s.replace(
-                flowerpot_enemy=s.flowerpot_enemy_state.replace(
+                flowerpot_enemy_state = s.flowerpot_enemy_state.replace(
                     phase=next_phase,
                     phase_steps=next_phase_steps,
                     window_row=next_window_row,
@@ -1313,7 +1307,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                     dtype=jnp.int32,
                 )
                 s = s.replace(
-                    flowerpot_enemy=FlowerpotEnemyState.new(
+                    flowerpot_enemy_state=FlowerpotEnemyState.new(
                         True,
                         0,
                         selected_window[0],
@@ -1415,7 +1409,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         def deflect_drop(s: CrazyClimberState) -> CrazyClimberState:
             return s.replace(
-                flowerpot_enemy=s.flowerpot_enemy_state.replace(
+                flowerpot_enemy_state=s.flowerpot_enemy_state.replace(
                     drop_x_offset=jnp.array(self.consts.FLOWERPOT_DROP_DEFLECT_X_OFFSET, dtype=jnp.int32),
                 )
             )
