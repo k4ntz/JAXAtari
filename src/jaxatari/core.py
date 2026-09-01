@@ -100,6 +100,7 @@ GAME_ALIASES = {
 
 # Mod modules registry: for each game, provide the Controller class path
 MOD_MODULES = {
+    "donkeykong": "jaxatari.games.mods.donkeykong_mods.DonkeyKongEnvMod",
     "pong": "jaxatari.games.mods.pong_mods.PongEnvMod",
     "kangaroo": "jaxatari.games.mods.kangaroo_mods.KangarooEnvMod",
     "freeway": "jaxatari.games.mods.freeway_mods.FreewayEnvMod",
