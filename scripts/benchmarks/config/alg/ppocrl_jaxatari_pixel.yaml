@@ -1,9 +1,11 @@
 EXP_NAME: ppoewc
 TRACK: True
 CAPTURE_VIDEO: False
+VIDEO_AT_END: True  # True: capture videos only at the end of training on a task
 
-EVAL_DURING_TRAIN: True
+EVAL_DURING_TRAIN: False
 EVAL_EVERY: 200
+EVAL_EPISODES: 10
 
 PIXEL_BASED: True
 NATIVE_DOWNSCALING: True
@@ -12,7 +14,7 @@ SMOOTH_IMAGE: False
 
 FRAME_STACK: 4
 
-SAVE_MODEL: True
+SAVE_MODEL: False
 UPLOAD_MODEL: False
 HF_ENTITY: ""
 
@@ -28,12 +30,15 @@ EVAL_MODS:  # mods applied during evaluation, for each environment
   - [shift_enemy]
   - [shift_player]
 
-CL_METHOD: ewc
-EWC_DECAY: 0.7  # Decay for Online EWC
-EWC_LAMBDA: 1000.0  # Weight for EWC penalty
+CL_METHOD: packnet  # ewc, agem, packnet
+
+EWC_DECAY: 0.9  # Decay for Online EWC
+EWC_LAMBDA: 500000.0  # Weight for EWC penalty
+
+PRUNE_ITERATION_FRAC: 0.5  # Percentage of training at which the PackNet pruning is performed
 
 LEARNING_RATE: 0.00025
-NUM_ENVS: 1
+NUM_ENVS: 8
 NUM_STEPS: 128
 ANNEAL_LR: True
 GAMMA: 0.99
