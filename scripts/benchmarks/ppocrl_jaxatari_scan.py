@@ -237,8 +237,15 @@ def init_cl_state(config, agent_state, dummy_obs):
         # buffer_state: the data; buffer: the logic 
         return cl_state, cl_static
     elif cl_method == "packnet":
-        # TODO
-        pass
+        # all parameters are free intitially (=0)
+        cl_state = {
+            "param_task_ids": {
+                "network": jax.tree.map(jnp.zeros_like, agent_state.params.network_params),
+                "actor": jax.tree.map(jnp.zeros_like, agent_state.params.actor_params)
+            },
+            "current_task_idx": 1
+        }
+        return cl_state, {}
     
     return {}, {}
 
@@ -301,8 +308,18 @@ def modify_gradients_fn(grads, cl_state, cl_static, agent_state, minibatch, conf
         return jax.lax.cond(buffer_has_data, perform_projection, lambda g: g, grads)
 
     elif cl_method == "packnet":
-        # TODO
-        pass 
+        current_idx = cl_state["current_task_idx"]
+        
+        def apply_grad_mask(grad, task_ids):
+            # 1 if free (task_id==0) or active for current task, 0 if frozen by older tasks
+            active_mask = jnp.logical_or(task_ids == 0, task_ids == current_idx)
+            return grad * active_mask
+        
+        masked_net_grads = jax.tree.map(apply_grad_mask, grads.network_params, cl_state["param_task_ids"]["network"])
+        masked_act_grads = jax.tree.map(apply_grad_mask, grads.actor_params, cl_state["param_task_ids"]["actor"])
+        
+        grads = grads._replace(network_params=masked_net_grads, actor_params=masked_act_grads)
+        return grads
         
     return grads
 
@@ -338,9 +355,9 @@ def on_task_end(task_idx, task_id, cl_state, cl_static, agent_state, fisher_stor
         cl_state["buffer_state"] = cl_static["buffer_add_fn"](cl_state["buffer_state"], batch)
 
         print(f"Task: {task_idx} | A-GEM buffer updated. Current buffer size: {cl_state["buffer_state"].current_index}")
+
     elif cl_method == "packnet":
-        # TODO
-        pass 
+        cl_state["current_task_idx"] += 1
         
     return cl_state
 
@@ -435,7 +452,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
         current_performances = {}
         current_task_key = f"{task_id}+{str(list(config["TRAIN_MODS"]))}"
 
-        for eval_task, eval_task_train_mods, eval_task_eval_mods in seen_tasks:
+        for idx, (eval_task, eval_task_train_mods, eval_task_eval_mods) in enumerate(seen_tasks):
             eval_task_key = f"{eval_task}+{str(list(eval_task_train_mods))}"
             # We only want to log videos for the CURRENT task to save time/space
             capture_video = config["CAPTURE_VIDEO"] and (eval_task == task_id) and (eval_task_train_mods == list(config["TRAIN_MODS"]))
@@ -481,12 +498,31 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
 
             reset_fn, rollout_fn = eval_fns_cache[eval_fn_key]
 
+            eval_net_params = agent_state.params.network_params
+            eval_act_params = agent_state.params.actor_params
+
+            if config["CL_METHOD"].lower() == "packnet":
+                eval_task_idx = idx + 1
+
+                def apply_inference_mask(param, task_ids):
+                    # only keep weights belonging to tasks up to eval_task_idx
+                    # also keep free weights (task_id==0) if eval_task is the current task and hasn't been pruned yet
+                    valid_mask = jnp.logical_and(task_ids > 0, task_ids <= eval_task_idx)
+                    
+                    if eval_task_idx == cl_state["current_task_idx"]:
+                        valid_mask = jnp.logical_or(valid_mask, task_ids == 0)
+                        
+                    return param * valid_mask
+
+                eval_net_params = jax.tree.map(apply_inference_mask, agent_state.params.network_params, cl_state["param_task_ids"]["network"])
+                eval_act_params = jax.tree.map(apply_inference_mask, agent_state.params.actor_params, cl_state["param_task_ids"]["actor"])
+
             episodic_returns, env_states = evaluate_cached(
                 compiled_reset=reset_fn,
                 compiled_rollout=rollout_fn,
-                network_params=agent_state.params.network_params,
-                actor_params=agent_state.params.actor_params,
-                eval_episodes=10,
+                network_params=eval_net_params,
+                actor_params=eval_act_params,
+                eval_episodes=config["EVAL_EPISODES"],
                 capture_video=capture_video,
                 seed=config["SEED"]
             )
@@ -702,6 +738,67 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             eval_start_time = time.time()
             eval_and_vid(iteration, global_step)
             print(f"Iteration: {iteration} | Eval Time: {time.time() - eval_start_time:.2f}")
+
+        if iteration == int(config["PRUNE_ITERATION_FRAC"] * config["NUM_ITERATIONS"]):
+            print("--- Executing PackNet Pruning ---")
+            
+            def prune_tree(params, task_ids, prune_fraction=0.5):
+                # flatten the trees into lists of arrays
+                flat_params, tree_def = jax.tree_util.tree_flatten(params)
+                flat_ids, _ = jax.tree_util.tree_flatten(task_ids)
+                
+                new_flat_params = []
+                new_flat_ids = []
+                
+                # prune layer by layer
+                for param_layer, id_layer in zip(flat_params, flat_ids):
+                    free_mask = (id_layer == 0)
+                    active_weights = jnp.abs(param_layer * free_mask)
+                    
+                    # replace frozen weights with infinity so they get sorted to the back of the array
+                    masked_for_percentile = jnp.where(free_mask, active_weights, jnp.inf)
+                    flat_masked = masked_for_percentile.flatten()
+                    
+                    # sort and find the index of the threshold among the free params
+                    num_free = jnp.sum(free_mask)
+                    sorted_weights = jnp.sort(flat_masked)
+                    prune_idx = jnp.clip(jnp.astype(prune_fraction * num_free, jnp.int32), 0, flat_masked.size - 1)
+                    threshold = sorted_weights[prune_idx]
+                    
+                    keep_mask = active_weights >= threshold
+
+                    # params that are free and are kept now belong to the current task
+                    updated_id_layer = jnp.where(
+                        jnp.logical_and(free_mask, keep_mask), 
+                        cl_state["current_task_idx"], 
+                        id_layer
+                    )
+                    # free parameters that are free and not kept are pruned (set to 0)
+                    updated_param_layer = jnp.where(
+                        jnp.logical_and(free_mask, ~keep_mask), 
+                        0.0, 
+                        param_layer
+                    )
+                    
+                    new_flat_params.append(updated_param_layer)
+                    new_flat_ids.append(updated_id_layer)
+                
+                # reconstruct the trees
+                new_params = jax.tree_util.tree_unflatten(tree_def, new_flat_params)
+                new_task_ids = jax.tree_util.tree_unflatten(tree_def, new_flat_ids)
+                
+                return new_params, new_task_ids
+            
+            pruned_net, new_net_ids = prune_tree(agent_state.params.network_params, cl_state["param_task_ids"]["network"])
+            pruned_act, new_act_ids = prune_tree(agent_state.params.actor_params, cl_state["param_task_ids"]["actor"])
+            
+            # update agent_state and cl_state
+            agent_state = agent_state.replace(
+                params=agent_state.params._replace(network_params=pruned_net, actor_params=pruned_act),
+                opt_state=agent_state.tx.init(agent_state.params) # reset optimizer for retraining
+            )
+            cl_state["param_task_ids"]["network"] = new_net_ids
+            cl_state["param_task_ids"]["actor"] = new_act_ids
 
         iteration_time_start = time.time()
         agent_state, next_obs, next_done, storage, key, env_state, step_metrics = rollout(
