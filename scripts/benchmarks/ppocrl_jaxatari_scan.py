@@ -243,7 +243,8 @@ def init_cl_state(config, agent_state, dummy_obs):
                 "network": jax.tree.map(jnp.zeros_like, agent_state.params.network_params),
                 "actor": jax.tree.map(jnp.zeros_like, agent_state.params.actor_params)
             },
-            "current_task_idx": 1
+            "current_task_idx": 1,
+            "is_retraining": jnp.array(False, dtype=bool)
         }
         return cl_state, {}
     
@@ -311,8 +312,11 @@ def modify_gradients_fn(grads, cl_state, cl_static, agent_state, minibatch, conf
         current_idx = cl_state["current_task_idx"]
         
         def apply_grad_mask(grad, task_ids):
-            # 1 if free (task_id==0) or active for current task, 0 if frozen by older tasks
-            active_mask = jnp.logical_or(task_ids == 0, task_ids == current_idx)
+            # 1 if active for current task or free (task_id==0) if we haven't pruned yet, 0 if frozen by older tasks
+            active_mask = jnp.logical_or(
+                task_ids == current_idx, 
+                jnp.logical_and(task_ids == 0, jnp.logical_not(cl_state["is_retraining"]))
+            )
             return grad * active_mask
         
         masked_net_grads = jax.tree.map(apply_grad_mask, grads.network_params, cl_state["param_task_ids"]["network"])
@@ -358,6 +362,7 @@ def on_task_end(task_idx, task_id, cl_state, cl_static, agent_state, fisher_stor
 
     elif cl_method == "packnet":
         cl_state["current_task_idx"] += 1
+        cl_state["is_retraining"] = jnp.array(False, dtype=bool)    # unlock the pruned weights for the next task
         
     return cl_state
 
@@ -509,7 +514,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
                     # also keep free weights (task_id==0) if eval_task is the current task and hasn't been pruned yet
                     valid_mask = jnp.logical_and(task_ids > 0, task_ids <= eval_task_idx)
                     
-                    if eval_task_idx == cl_state["current_task_idx"]:
+                    if eval_task_idx == cl_state["current_task_idx"] and not cl_state["is_retraining"]:
                         valid_mask = jnp.logical_or(valid_mask, task_ids == 0)
                         
                     return param * valid_mask
@@ -529,7 +534,6 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
 
             current_perf = np.mean(jax.device_get(episodic_returns))
             current_performances[eval_task_key] = current_perf
-
             wandb.log({f"{eval_task_key}/eval/episodic_return_mod": current_perf}, step=current_global_step)
 
             if capture_video: 
@@ -742,30 +746,43 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
         if iteration == int(config["PRUNE_ITERATION_FRAC"] * config["NUM_ITERATIONS"]):
             print("--- Executing PackNet Pruning ---")
             
-            def prune_tree(params, task_ids, prune_fraction=0.5):
+            def prune_tree(params, task_ids, prune_fraction):
                 # flatten the trees into lists of arrays
-                flat_params, tree_def = jax.tree_util.tree_flatten(params)
+                flat_params_with_paths, tree_def = jax.tree_util.tree_flatten_with_path(params)
                 flat_ids, _ = jax.tree_util.tree_flatten(task_ids)
                 
                 new_flat_params = []
                 new_flat_ids = []
                 
                 # prune layer by layer
-                for param_layer, id_layer in zip(flat_params, flat_ids):
+                for (path, param_layer), id_layer in zip(flat_params_with_paths, flat_ids):
+                    path_str = "".join([str(p.key) for p in path])
+
+                    # skip biases
+                    if "bias" in path_str.lower():
+                        new_flat_params.append(param_layer)
+                        # all bias weights belong to task 1
+                        updated_ids = jnp.where(id_layer == 0, 1, id_layer)
+                        new_flat_ids.append(updated_ids)
+                        continue
+
                     free_mask = (id_layer == 0)
-                    active_weights = jnp.abs(param_layer * free_mask)
+
+                    # if this layer has no free weights or shouldn't be pruned
+                    if not jnp.any(free_mask) or prune_fraction == 0.0:
+                        new_flat_params.append(param_layer)
+                        # if prune_fraction=0.0, we still need to assign the free weights to the current task (happens at last task)
+                        updated_id_layer = jnp.where(free_mask, cl_state["current_task_idx"], id_layer)
+                        new_flat_ids.append(updated_id_layer)
+                        continue
+
+                    # mask frozen weights with NaN
+                    masked_weights = jnp.where(free_mask, jnp.abs(param_layer), jnp.nan)
+
+                    # use nanquantile to find the threshold, ignoring NaNs
+                    threshold = jnp.nanquantile(masked_weights, prune_fraction)
                     
-                    # replace frozen weights with infinity so they get sorted to the back of the array
-                    masked_for_percentile = jnp.where(free_mask, active_weights, jnp.inf)
-                    flat_masked = masked_for_percentile.flatten()
-                    
-                    # sort and find the index of the threshold among the free params
-                    num_free = jnp.sum(free_mask)
-                    sorted_weights = jnp.sort(flat_masked)
-                    prune_idx = jnp.clip(jnp.astype(prune_fraction * num_free, jnp.int32), 0, flat_masked.size - 1)
-                    threshold = sorted_weights[prune_idx]
-                    
-                    keep_mask = active_weights >= threshold
+                    keep_mask = jnp.abs(param_layer) >= threshold
 
                     # params that are free and are kept now belong to the current task
                     updated_id_layer = jnp.where(
@@ -789,8 +806,17 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
                 
                 return new_params, new_task_ids
             
-            pruned_net, new_net_ids = prune_tree(agent_state.params.network_params, cl_state["param_task_ids"]["network"])
-            pruned_act, new_act_ids = prune_tree(agent_state.params.actor_params, cl_state["param_task_ids"]["actor"])
+            # calculate pruning fractions
+            seq_length = len(config["TASKS"])
+            num_tasks_left = seq_length - cl_state["current_task_idx"]
+            if num_tasks_left > 0:
+                prune_fraction = num_tasks_left / (num_tasks_left + 1)
+            else:
+                prune_fraction = 0.0
+            print(f"Pruning fraction for task {cl_state['current_task_idx']}: {prune_fraction:.4f}")
+
+            pruned_net, new_net_ids = prune_tree(agent_state.params.network_params, cl_state["param_task_ids"]["network"], prune_fraction)
+            pruned_act, new_act_ids = prune_tree(agent_state.params.actor_params, cl_state["param_task_ids"]["actor"], prune_fraction)
             
             # update agent_state and cl_state
             agent_state = agent_state.replace(
@@ -799,6 +825,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             )
             cl_state["param_task_ids"]["network"] = new_net_ids
             cl_state["param_task_ids"]["actor"] = new_act_ids
+            cl_state["is_retraining"] = jnp.array(True, dtype=bool) # flag to lock the pruned weights during retraining
 
         iteration_time_start = time.time()
         agent_state, next_obs, next_done, storage, key, env_state, step_metrics = rollout(
