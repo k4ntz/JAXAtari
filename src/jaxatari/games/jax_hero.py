@@ -83,7 +83,8 @@ _MAX_ROOMS = max(_ROOMS)
 _RECTS = [HL.WALL_RECTS_L1, HL.WALL_RECTS_L2, HL.WALL_RECTS_L3,
           HL.WALL_RECTS_L4, HL.WALL_RECTS_L5, HL.WALL_RECTS_L6,
           HL.WALL_RECTS_L7, HL.WALL_RECTS_L8, HL.WALL_RECTS_L9,
-          HL.WALL_RECTS_L10]
+          HL.WALL_RECTS_L10, HL.WALL_RECTS_L11, HL.WALL_RECTS_L12,
+          HL.WALL_RECTS_L13]
 # +2 spare slots: carving the destructible zones out of the static rects can
 # split one rect into two (see _build_level_arrays)
 _MAX_WALLS = max(len(r) for lv in _RECTS for r in lv) + 2
@@ -1209,11 +1210,13 @@ class HeroRenderer(JAXGameRenderer):
         palettes = [HL.PALETTE_L1, HL.PALETTE_L2, HL.PALETTE_L3,
                     HL.PALETTE_L4, HL.PALETTE_L5, HL.PALETTE_L6,
                     HL.PALETTE_L7, HL.PALETTE_L8, HL.PALETTE_L9,
-                    HL.PALETTE_L10]
+                    HL.PALETTE_L10, HL.PALETTE_L11, HL.PALETTE_L12,
+                    HL.PALETTE_L13]
         blobs = [HL.BG_RLE_L1, HL.BG_RLE_L2, HL.BG_RLE_L3,
                  HL.BG_RLE_L4, HL.BG_RLE_L5, HL.BG_RLE_L6,
                  HL.BG_RLE_L7, HL.BG_RLE_L8, HL.BG_RLE_L9,
-                 HL.BG_RLE_L10]
+                 HL.BG_RLE_L10, HL.BG_RLE_L11, HL.BG_RLE_L12,
+                 HL.BG_RLE_L13]
 
         asset_config = [
             {'name': 'background', 'type': 'background', 'data': self._build_background()},

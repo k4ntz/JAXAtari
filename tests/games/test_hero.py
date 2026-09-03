@@ -424,13 +424,14 @@ def test_spiders_only_active_in_their_room():
     assert bool(obs.spiders.active.any())
 
 
-def test_levels_4_to_10_data_present():
-    """Ten measured levels: room counts, creature 5-tuples, lantern tables,
-    deadly/flare tables, and every background blob decodes."""
+def test_levels_4_to_13_data_present():
+    """Thirteen measured levels: room counts, creature 5-tuples, lantern
+    tables, deadly/flare tables, and every background blob decodes."""
     from jaxatari.games import hero_levels as HL
-    assert HL.NUM_LEVELS == 10
-    assert HL.ROOMS_PER_LEVEL == [2, 4, 6, 8, 8, 10, 12, 14, 16, 16]
-    for lv in range(10):
+    assert HL.NUM_LEVELS == 13
+    assert HL.ROOMS_PER_LEVEL == [2, 4, 6, 8, 8, 10, 12, 14, 16, 16,
+                                  16, 16, 16]
+    for lv in range(13):
         assert all(len(t) == 5 for t in HL.SPIDERS[lv])
         assert all(len(t) == 3 for t in HL.LANTERNS[lv])
         assert all(len(t) == 5 for t in HL.DEADLY[lv])
@@ -445,10 +446,17 @@ def test_levels_4_to_10_data_present():
                           (HL.BG_RLE_L7, HL.PALETTE_L7, 12),
                           (HL.BG_RLE_L8, HL.PALETTE_L8, 14),
                           (HL.BG_RLE_L9, HL.PALETTE_L9, 16),
-                          (HL.BG_RLE_L10, HL.PALETTE_L10, 16)]:
+                          (HL.BG_RLE_L10, HL.PALETTE_L10, 16),
+                          (HL.BG_RLE_L11, HL.PALETTE_L11, 16),
+                          (HL.BG_RLE_L12, HL.PALETTE_L12, 16),
+                          (HL.BG_RLE_L13, HL.PALETTE_L13, 16)]:
         assert len(blobs) == n
         for b in blobs:
             assert HL.decode_bg(b, pal).shape == (142, 160, 3)
+    # every level's way down starts with the room-0 central pillar
+    for lv in range(13):
+        assert (0, 60, 19, 8, 80, 1) in HL.DESTRUCTIBLE[lv]
+        assert HL.MINER_POS[lv][0] < HL.ROOMS_PER_LEVEL[lv]
 
 
 def test_bat_killed_by_laser():
