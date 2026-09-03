@@ -818,14 +818,17 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             pruned_net, new_net_ids = prune_tree(agent_state.params.network_params, cl_state["param_task_ids"]["network"], prune_fraction)
             pruned_act, new_act_ids = prune_tree(agent_state.params.actor_params, cl_state["param_task_ids"]["actor"], prune_fraction)
             
-            # update agent_state and cl_state
-            agent_state = agent_state.replace(
-                params=agent_state.params._replace(network_params=pruned_net, actor_params=pruned_act),
-                opt_state=agent_state.tx.init(agent_state.params) # reset optimizer for retraining
-            )
+            if prune_fraction > 0.0:
+                # not last task
+                # update agent_state and cl_state
+                agent_state = agent_state.replace(
+                    params=agent_state.params._replace(network_params=pruned_net, actor_params=pruned_act),
+                    opt_state=agent_state.tx.init(agent_state.params) # reset optimizer for retraining
+                )
+                cl_state["is_retraining"] = jnp.array(True, dtype=bool) # flag to lock the pruned weights during retraining
+
             cl_state["param_task_ids"]["network"] = new_net_ids
             cl_state["param_task_ids"]["actor"] = new_act_ids
-            cl_state["is_retraining"] = jnp.array(True, dtype=bool) # flag to lock the pruned weights during retraining
 
         iteration_time_start = time.time()
         agent_state, next_obs, next_done, storage, key, env_state, step_metrics = rollout(
