@@ -575,21 +575,23 @@ def test_opening_pillar_breakable_on_deep_levels():
         assert int(state.wall_stage[0]) == 2, f"pillar not broken on level {lvl}"
 
 
-def test_advance_chain_levels_1_to_10():
-    """Rescuing each miner walks the level counter 1->10; the last rescue
-    completes the episode."""
+def test_advance_chain_walks_every_level():
+    """Rescuing each miner walks the level counter through the whole measured
+    set; the last rescue completes the episode. Driven off the level data so
+    adding measured levels does not need this test rewritten."""
     env = _env()
     c = env.consts
+    n = int(c.num_levels)
     _, state = env.reset()
-    for lvl in range(10):
+    for lvl in range(n):
         m = c.LEVEL_MINER[lvl]
         state = state.replace(level=jnp.int32(lvl), room=m[0],
                               player_x=m[1], player_y=m[2],
                               spider_alive=jnp.zeros_like(state.spider_alive),
                               miner_rescued=jnp.bool_(False))
         _, state, _, done, _ = env.step(state, NOOP)
-        if lvl < 9:
-            assert int(state.level) == lvl + 1
+        if lvl < n - 1:
+            assert int(state.level) == lvl + 1, f"level {lvl} did not advance"
             assert not bool(done)
         else:
             assert bool(state.level_complete)
