@@ -586,115 +586,6 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
                 # lock in baseline (BWT)
                 if eval_task_key == current_task_key:
                     crl_state["a_j_j"][eval_task_key] = current_perf
-            
-
-    def _generate_single_final_video(mods_config, video_label, video_index=0, current_global_step=None):
-        """Generate a single video for the given mod configuration and log it to wandb.
-        """
-        if not config["CAPTURE_VIDEO"]:
-            return None
-
-        # Apply wrappers just for the agent's observations, like in pqn_agent.
-        fake_env = jaxatari.make(config["ENV_ID"])
-        renderer_local = fake_env.renderer
-        env = make_env(
-            env_id=config["ENV_ID"], 
-            seed=config["SEED"], 
-            num_envs=1, 
-            mods=mods_config, 
-            pixel_based=config["PIXEL_BASED"], 
-            native_downscaling=config["NATIVE_DOWNSCALING"], 
-            pixel_resize_shape=tuple(config["PIXEL_RESIZE_SHAPE"]),
-            smooth_image=config["SMOOTH_IMAGE"], 
-            full_action_space=config["IS_MULTI_GAME"],
-            eval=True)() 
-
-        # Reset environment
-        rng = jax.random.PRNGKey(config["SEED"] + video_index * 10000)
-        rng, reset_rng = jax.random.split(rng)
-        obs, env_state = env.reset(reset_rng)
-        if config["PIXEL_BASED"]:
-            obs = obs.squeeze(-1)  # pixel-based: (F, H, W, 1) -> (F, H, W)
-        # object-centric: (D,) already, no need to squeeze
-
-        frames = []
-        total_reward = 0.0
-        max_steps = 5000
-
-        for step in range(max_steps):
-            # Pixel-based: PPO network expects (B, F, H, W)
-            policy_obs = obs[None, ...]
-            if not config["PIXEL_BASED"]:
-                policy_obs = jnp.pad(policy_obs, ((0, 0), (0, max_D - policy_obs.shape[-1])))
-            hidden = network.apply(agent_state.params.network_params, policy_obs)
-            logits = actor.apply(agent_state.params.actor_params, hidden)
-            action = jnp.argmax(logits, axis=-1)[0]
-
-            rng, step_rng = jax.random.split(rng)
-            obs, env_state, reward, terminated, truncated, info = env.step(env_state, action)
-            done = jnp.logical_or(terminated, truncated)
-            if config["PIXEL_BASED"]:
-                obs = obs.squeeze(-1)  # pixel-based: (F, H, W, 1) -> (F, H, W)
-            # object-centric: (D,)
-            total_reward += float(reward)
-
-            # Render frame from the underlying base Atari state, using the original renderer.
-            state_for_render = env_state
-            while hasattr(state_for_render, "atari_state"):
-                state_for_render = state_for_render.atari_state
-            if hasattr(state_for_render, "env_state"):
-                state_for_render = state_for_render.env_state
-
-            frame = renderer_local.render(state_for_render)
-            frames.append(np.array(frame, dtype=np.uint8))
-
-            if bool(done):
-                break
-
-        print(f"Final video ({video_label}): {len(frames)} frames, total reward: {total_reward:.1f}")
-
-        if len(frames) > 0:
-            frames = np.stack(frames, axis=0)
-            # (N, H, W, 3) -> (N, 3, H, W) for wandb
-            frames = np.transpose(frames, (0, 3, 1, 2))
-            video = wandb.Video(frames, fps=30, format="mp4")
-            wandb.log(
-                {
-                    f'final_video_seed{config["SEED"]}_{video_label}': video,
-                    f'final_return_seed{config["SEED"]}_{video_label}': total_reward,
-                },
-                step=current_global_step
-            )
-            print(f"Video '{video_label}' logged to wandb.")
-
-        return total_reward
-
-    def generate_final_video(current_global_step=None):
-        """Generate videos of the trained agent: one for train env, one per eval mod.
-
-        This mirrors pqn_agent.generate_final_video: first a video on the
-        training environment (no mods), then one per entry in eval_mods (or mods).
-        """
-        if not config["CAPTURE_VIDEO"]:
-            return
-
-        print(f'Generating final videos for seed {config["SEED"]}...')
-
-        video_configs = []
-        # Always add train env (no mods)
-        video_configs.append(([], "train"))
-
-        # Prefer eval_mods, fall back to mods
-        eval_mods = config["EVAL_MODS"] if len(config["EVAL_MODS"]) > 0 else config["TRAIN_MODS"]
-        if len(eval_mods) > 0:
-            mods_list = list(eval_mods)
-            for mod in mods_list:
-                mods_config = [mod] if not isinstance(mod, (list, tuple)) else list(mod)
-                mod_label = mod if isinstance(mod, str) else "_".join(str(m) for m in mods_config)
-                video_configs.append((mods_config, mod_label))
-
-        for video_index, (mods_config, video_label) in enumerate(video_configs):
-            _generate_single_final_video(mods_config, video_label, video_index, current_global_step)
 
     # TRY NOT TO MODIFY: start the game
     key, reset_key = jax.random.split(key)
@@ -884,7 +775,6 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
     if compile_time is not None:
         print(f"Run time after first iteration: {end_time - compile_time:.2f} seconds.")
     print(f"Total train time: {end_time - task_start_time:.2f} seconds / {(end_time - task_start_time)/60:.2f} minutes.")
-    # generate_final_video(global_step)
 
     eval_and_vid(iteration, global_step, is_end_of_task=True)
 
