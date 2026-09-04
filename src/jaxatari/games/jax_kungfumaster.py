@@ -1407,8 +1407,30 @@ class KungFuMasterRenderer(JAXGameRenderer):
 
         self.has_assets = os.path.exists(os.path.join(asset_dir, "background.npy"))
 
-    @partial(jax.jit, static_argnums=(0,))
+        # Build a fresh jit closure bound to THIS instance's config every
+        # time __init__ runs. Previously `render` itself was decorated with
+        # @partial(jax.jit, static_argnums=(0,)) at the class level, which
+        # keys its cache off id(self). Wrappers that "hot swap" native
+        # downscaling by mutating/re-initializing an existing renderer
+        # instance never change that identity, so JAX kept returning the
+        # stale trace compiled with the original config.downscale=None,
+        # silently ignoring the patched downscale target. Rebuilding the
+        # jit here means any re-init (or call to set_config below) gets a
+        # brand-new trace reflecting the current self.config.
+        self._render_jit = jax.jit(self._render_impl)
+
+    def set_config(self, config):
+        """Swap the renderer config (e.g. for native downscaling) and
+        rebuild the jitted render function so the change actually takes
+        effect instead of hitting a stale jit cache."""
+        self.config = config
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+        self._render_jit = jax.jit(self._render_impl)
+
     def render(self, state):
+        return self._render_jit(state)
+
+    def _render_impl(self, state):
         cfg = self.consts
 
         # custom fast rectangle fill for jax
@@ -1486,19 +1508,14 @@ class KungFuMasterRenderer(JAXGameRenderer):
         framebuffer = jax.lax.fori_loop(0, 5, draw_bracket, framebuffer)
 
         # HUD CLEARING
-        # Clear baked timer
         framebuffer = fill_rectangle(framebuffer, 28, 8, 52, 12, hud_bg_color)
-        # Clear baked green score
         framebuffer = fill_rectangle(framebuffer, 45, 20, 50, 12, hud_bg_color)
-        # Clear baked '3' lives text
         framebuffer = fill_rectangle(framebuffer, 85, 28, 25, 14, hud_bg_color)
-        # Clear baked energy bars
         framebuffer = fill_rectangle(framebuffer, 48, 32, 85, 20, hud_bg_color)
-        # Clear the old tiny baked-in blue life squares above PLAYER with updated wider bounds
         framebuffer = fill_rectangle(framebuffer, 24, 22, 35, 10, hud_bg_color)
 
         # HUD DRAWING
-        
+
         # Timer
         def draw_timer_digit(idx, buffer):
             divisor = jnp.array([1000, 100, 10, 1], dtype=jnp.int32)[idx]
@@ -1533,7 +1550,7 @@ class KungFuMasterRenderer(JAXGameRenderer):
         life_blue = jnp.array([80, 120, 220], dtype=jnp.uint8)
         dark_border = jnp.array([20, 30, 60], dtype=jnp.uint8)
         def draw_life_square(l_idx, canvas):
-            lx = 70 + l_idx * 10 
+            lx = 70 + l_idx * 10
             ly = 20
             is_visible = l_idx < state.lives
             c = fill_rectangle(canvas, lx, ly, 8, 8, dark_border)
@@ -1567,7 +1584,7 @@ class KungFuMasterRenderer(JAXGameRenderer):
         framebuffer = fill_rectangle(framebuffer, 50, 44, enemy_bar_w, 8, enemy_red)
 
         # ENTITY DRAWING
-        
+
         # Player Animation & Sprites
         walk_frame = (state.step_count // 6) % 2 == 0
         base_spr = jnp.where(walk_frame, self.spr_player_walk, self.spr_player_stand)
@@ -1606,6 +1623,23 @@ class KungFuMasterRenderer(JAXGameRenderer):
             return jnp.where(state.pr_active[idx], rendered, buffer)
 
         framebuffer = jax.lax.fori_loop(0, cfg.MAX_PROJ, draw_single_proj, framebuffer)
+
+        # Apply native downscaling / channel config if requested, so that
+        # observations coming out of render() already match the configured
+        # output shape (used by wrappers with use_native_downscaling=True).
+        if self.config.downscale:
+            target_h, target_w = self.config.downscale
+            framebuffer = jax.image.resize(
+                framebuffer.astype(jnp.float32),
+                (target_h, target_w, framebuffer.shape[-1]),
+                method="linear",
+            )
+            framebuffer = jnp.clip(framebuffer, 0, 255).astype(jnp.uint8)
+
+        if self.config.channels == 1 and framebuffer.shape[-1] != 1:
+            weights = jnp.array([0.299, 0.587, 0.114], dtype=jnp.float32)
+            framebuffer = jnp.sum(framebuffer.astype(jnp.float32) * weights, axis=-1, keepdims=True)
+            framebuffer = jnp.clip(framebuffer, 0, 255).astype(jnp.uint8)
 
         return framebuffer
 
