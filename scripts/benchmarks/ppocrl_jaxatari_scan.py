@@ -1229,7 +1229,7 @@ def continual_run(config: dict):
 
     for i, task_id in enumerate(config["TASKS"]):
         train_mods = all_train_mods[i] if i < len(all_train_mods) else []
-        eval_mods = all_eval_mods[i] if i < len(all_eval_mods) else []
+        eval_mods = all_eval_mods[i] if i < len(all_eval_mods) else train_mods
         if (task_id, train_mods, eval_mods) not in seen_tasks:
             seen_tasks.append((task_id, train_mods, eval_mods))
 
